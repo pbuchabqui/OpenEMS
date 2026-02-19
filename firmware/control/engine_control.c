@@ -153,6 +153,7 @@ typedef struct {
     float eoit_normal_used;
     float eoi_target_deg;
     float eoi_fallback_deg;
+    float vbat_v;              // C10 fix: actual battery voltage in volts
     sync_data_t sync_data;
     uint32_t planned_at_us;
 } engine_plan_cmd_t;
@@ -649,7 +650,8 @@ static void schedule_semi_seq_injection(uint16_t rpm,
     mcpwm_injection_hp_schedule_one_shot_absolute(2, delay180, pw_us, counter);
 }
 
-static void schedule_wasted_spark(uint16_t advance_deg10, uint16_t rpm, const sync_data_t *sync) {
+static void schedule_wasted_spark(uint16_t advance_deg10, uint16_t rpm,
+                                   const sync_data_t *sync, float vbat_v) {
     sync_config_t sync_cfg = {0};
     if (sync_get_config(&sync_cfg) != ESP_OK || sync_cfg.tooth_count == 0) {
         return;
@@ -666,14 +668,15 @@ static void schedule_wasted_spark(uint16_t advance_deg10, uint16_t rpm, const sy
     float delta0 = spark0 - current_angle;
     uint32_t delay0 = angle_delta_to_delay_us(delta0, 360.0f, us_per_deg);
     uint32_t counter = mcpwm_ignition_hp_get_counter(0);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(1, delay0, rpm, 13.5f, counter);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(4, delay0, rpm, 13.5f, counter);
+    // C10 fix: use actual vbat_v instead of hardcoded 13.5V
+    mcpwm_ignition_hp_schedule_one_shot_absolute(1, delay0, rpm, vbat_v, counter);
+    mcpwm_ignition_hp_schedule_one_shot_absolute(4, delay0, rpm, vbat_v, counter);
 
     float spark180 = wrap_angle_360(180.0f - advance_deg);
     float delta180 = spark180 - current_angle;
     uint32_t delay180 = angle_delta_to_delay_us(delta180, 360.0f, us_per_deg);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(2, delay180, rpm, 13.5f, counter);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(3, delay180, rpm, 13.5f, counter);
+    mcpwm_ignition_hp_schedule_one_shot_absolute(2, delay180, rpm, vbat_v, counter);
+    mcpwm_ignition_hp_schedule_one_shot_absolute(3, delay180, rpm, vbat_v, counter);
 }
 
 static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
@@ -796,6 +799,8 @@ static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
     cmd->eoit_normal_used = eoit_normal_used;
     cmd->eoi_target_deg = eoit_target_from_calibration(g_eoit_boundary, eoit_normal_used);
     cmd->eoi_fallback_deg = eoit_target_from_calibration(g_eoit_boundary, g_eoit_fallback_normal);
+    // C10 fix: store actual battery voltage (in volts) for dwell calculation
+    cmd->vbat_v = (float)sensor_data.vbat_dv / 10.0f;
     cmd->sync_data = sync_data;
     cmd->planned_at_us = (uint32_t)esp_timer_get_time();
     return ESP_OK;
@@ -839,7 +844,7 @@ static void engine_control_execute_plan(const engine_plan_cmd_t *cmd) {
     } else {
         LOG_SAFETY_W("Sync partial: fallback to semi-sequential + wasted spark");
         schedule_semi_seq_injection(cmd->rpm, cmd->load, cmd->pw_us, &exec_sync, cmd->eoi_fallback_deg);
-        schedule_wasted_spark(cmd->advance_deg10, cmd->rpm, &exec_sync);
+        schedule_wasted_spark(cmd->advance_deg10, cmd->rpm, &exec_sync, cmd->vbat_v);
 
         sync_config_t sync_cfg = {0};
         if (sync_get_config(&sync_cfg) == ESP_OK && sync_cfg.tooth_count > 0) {
@@ -1090,7 +1095,14 @@ esp_err_t engine_control_init(void) {
         map_mutex_created_here = true;
     }
 
-    if (map_storage_load(&g_maps) != ESP_OK) {
+    // C11 fix: validate individual table checksums after loading.
+    // map_storage_load() only verifies the outer CRC32 over the blob bytes;
+    // if a table's own 16-bit checksum is stale, the blob CRC still passes
+    // but table_16x16_interpolate() may produce corrupt results.
+    if (map_storage_load(&g_maps) != ESP_OK
+            || !table_16x16_validate(&g_maps.fuel_table)
+            || !table_16x16_validate(&g_maps.ignition_table)
+            || !table_16x16_validate(&g_maps.lambda_table)) {
         fuel_calc_init_defaults(&g_maps);
         map_storage_save(&g_maps);
     } else {

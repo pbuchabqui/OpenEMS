@@ -214,6 +214,9 @@ static const uint16_t DEFAULT_LOAD_BINS[16] = {
 #define WARMUP_TEMP_MIN         WARMUP_TEMP_MIN_C
 #define WARMUP_TEMP_MAX         WARMUP_TEMP_MAX_C
 #define WARMUP_ENRICH_MAX       WARMUP_ENRICH_MAX_PCT
+// C12 fix: TPS_DOT_ENRICH_MAX was referenced in fuel_calc.c and fault_manager.c
+// but never defined — only TPS_DOT_ENRICH_MAX_PCT existed.
+#define TPS_DOT_ENRICH_MAX      TPS_DOT_ENRICH_MAX_PCT
 #define PW_MAX_US               18000
 #define PW_MIN_US               500
 #define RPM_MAX_SAFE            12000
