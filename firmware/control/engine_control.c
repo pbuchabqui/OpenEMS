@@ -629,12 +629,18 @@ static void schedule_semi_seq_injection(uint16_t rpm,
                                         uint16_t load,
                                         uint32_t pw_us,
                                         const sync_data_t *sync,
-                                        float eoi_base_deg) {
+                                        float eoi_base_deg,
+                                        float battery_voltage) {
     (void)rpm;
     (void)load;
     sync_config_t sync_cfg = {0};
     if (sync_get_config(&sync_cfg) != ESP_OK || sync_cfg.tooth_count == 0) {
         return;
+    }
+
+    // C10 fix: validate battery voltage
+    if (battery_voltage < 8.0f || battery_voltage > 18.0f) {
+        battery_voltage = 13.5f;
     }
 
     float current_angle = compute_current_angle_360(sync, sync_cfg.tooth_count);
@@ -643,7 +649,10 @@ static void schedule_semi_seq_injection(uint16_t rpm,
         return;
     }
 
-    float pw_deg = pw_us / us_per_deg;
+    float compensated_pw = (float)pw_us;
+    mcpwm_injection_hp_apply_latency_compensation(&compensated_pw, battery_voltage, 25.0f);
+
+    float pw_deg = compensated_pw / us_per_deg;
     // Pair 1: cylinders 1 & 4 at 0°
     float eoi0 = wrap_angle_360(eoi_base_deg);
     float soi0 = wrap_angle_360(eoi0 - pw_deg);
@@ -843,7 +852,8 @@ static void engine_control_execute_plan(const engine_plan_cmd_t *cmd) {
         bool scheduling_ok = true;
         for (uint8_t cyl = 1; cyl <= 4; cyl++) {
             fuel_injection_schedule_info_t info = {0};
-            bool inj_ok = fuel_injection_schedule_eoi_ex(cyl, cmd->eoi_target_deg, cmd->pw_us, &exec_sync, &info);
+            // C10 fix: pass actual battery voltage from sensor
+            bool inj_ok = fuel_injection_schedule_eoi_ex(cyl, cmd->eoi_target_deg, cmd->pw_us, &exec_sync, &info, cmd->vbat_v);
             scheduling_ok = scheduling_ok && inj_ok;
             diag.soi_deg[cyl - 1] = info.soi_deg;
             diag.delay_us[cyl - 1] = info.delay_us;
@@ -855,7 +865,8 @@ static void engine_control_execute_plan(const engine_plan_cmd_t *cmd) {
         }
     } else {
         LOG_SAFETY_W("Sync partial: fallback to semi-sequential + wasted spark");
-        schedule_semi_seq_injection(cmd->rpm, cmd->load, cmd->pw_us, &exec_sync, cmd->eoi_fallback_deg);
+        // C10 fix: pass actual battery voltage
+        schedule_semi_seq_injection(cmd->rpm, cmd->load, cmd->pw_us, &exec_sync, cmd->eoi_fallback_deg, cmd->vbat_v);
         schedule_wasted_spark(cmd->advance_deg10, cmd->rpm, &exec_sync, cmd->vbat_v);
 
         sync_config_t sync_cfg = {0};
