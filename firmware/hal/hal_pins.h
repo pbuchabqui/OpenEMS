@@ -57,8 +57,17 @@
 #define HAL_PIN_BRAKE       GPIO_NUM_29   // Brake switch
 
 // ── Knock sensors ────────────────────────────────────────────────────────────
-#define HAL_PIN_KNOCK_1     GPIO_NUM_30   // Knock sensor 1 (ADC2_CH9)
-#define HAL_PIN_KNOCK_2     GPIO_NUM_31   // Knock sensor 2 (ADC2_CH10) — optional
+// S1-05 WARNING: GPIO 30/31 map to ADC2_CH9/CH10 on ESP32-S3.
+// ADC2 is shared with the Wi-Fi/ESP-NOW RF subsystem. Concurrent ADC2 reads
+// while ESP-NOW is active will fail with ESP_ERR_TIMEOUT or return garbage.
+// Mitigation options (choose one):
+//   A) Disable ESP-NOW entirely if knock sensing is required at all times.
+//   B) Gate ADC2 reads to windows where ESP-NOW is known idle (e.g., between TX slots).
+//   C) Re-spin PCB to route knock inputs to ADC1-capable pins (GPIO 1-10).
+// Currently option B is used: knock sampling is suspended during ESP-NOW TX.
+// See espnow_link.c:espnow_pre_tx_hook() and sensor_processing.c:knock_adc_gate().
+#define HAL_PIN_KNOCK_1     GPIO_NUM_30   // Knock sensor 1 (ADC2_CH9)  — see warning above
+#define HAL_PIN_KNOCK_2     GPIO_NUM_31   // Knock sensor 2 (ADC2_CH10) — see warning above
 
 // ── PWM outputs (auxiliary) ──────────────────────────────────────────────────
 #define HAL_PIN_VVT_INTAKE  GPIO_NUM_38   // VVT intake solenoid PWM
@@ -68,8 +77,11 @@
 
 // ── Digital outputs ──────────────────────────────────────────────────────────
 #define HAL_PIN_CEL         GPIO_NUM_42   // Check Engine Light
-#define HAL_PIN_FUEL_PUMP   GPIO_NUM_43   // Fuel pump relay
-#define HAL_PIN_FAN         GPIO_NUM_44   // Cooling fan relay
+// S1-01 fix: GPIO 43 and 44 are UART0 TX/RX on ESP32-S3 (used by HAL_UART_TX/RX).
+// Remapped fuel pump and fan to unused GPIOs 35 and 34 to eliminate the conflict.
+// Original: HAL_PIN_FUEL_PUMP=43, HAL_PIN_FAN=44 (both overlapped with UART).
+#define HAL_PIN_FUEL_PUMP   GPIO_NUM_35   // Fuel pump relay  (was 43 — UART conflict)
+#define HAL_PIN_FAN         GPIO_NUM_34   // Cooling fan relay (was 44 — UART conflict)
 #define HAL_PIN_AUX_1       GPIO_NUM_48   // Auxiliary output 1
 #define HAL_PIN_AUX_2       GPIO_NUM_47   // Auxiliary output 2
 

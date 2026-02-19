@@ -10,6 +10,7 @@
 
 #include "ignition_timing.h"
 #include "logger.h"
+#include "engine_config.h"
 #include "mcpwm_ignition.h"
 #include "mcpwm_ignition_hp.h"
 #include "mcpwm_injection.h"
@@ -127,7 +128,21 @@ void ignition_apply_timing(uint16_t advance_deg10, uint16_t rpm, float vbat_v) {
             // Calcular target absoluto
             uint32_t delay_us = (uint32_t)(compensated_delay + 0.5f);
             uint32_t target_us = current_counter + delay_us;
-            
+
+            // S1-04: Dwell-timing conflict guard.
+            // If the spark target is so close that even the minimum dwell (IGN_DWELL_MS_MIN)
+            // cannot be completed, skip this cylinder rather than firing with a dangerously
+            // short coil charge. This protects the coil from thermal damage.
+            // DWELL_GUARD_US provides a small margin for scheduling overhead (~200 µs).
+            static const uint32_t DWELL_GUARD_US = 200U;
+            static const uint32_t MIN_DWELL_US = (uint32_t)(IGN_DWELL_MS_MIN * 1000.0f);
+            if (delay_us < (MIN_DWELL_US + DWELL_GUARD_US)) {
+                LOG_IGNITION_W("Cyl %u: spark in %lu µs < min dwell %lu µs — skipping",
+                               (unsigned)cylinder, (unsigned long)delay_us,
+                               (unsigned long)(MIN_DWELL_US + DWELL_GUARD_US));
+                continue;
+            }
+
             // Agendar com compare absoluto HP
             mcpwm_ignition_hp_schedule_one_shot_absolute(
                 cylinder, target_us, rpm, battery_voltage, current_counter);

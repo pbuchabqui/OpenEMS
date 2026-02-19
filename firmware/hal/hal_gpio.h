@@ -17,10 +17,61 @@
 #include "hal_pins.h"
 #include "soc/gpio_reg.h"
 #include "esp_attr.h"
+#include "driver/gpio.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/**
+ * @brief S1-02: Safe GPIO initialisation — must be called BEFORE any MCPWM driver init.
+ *
+ * Configures all high-side actuator outputs (injectors, ignition coils, relays)
+ * as outputs driven LOW with internal pull-down resistors enabled.
+ * This guarantees that, during the window between power-on and the MCPWM peripheral
+ * taking ownership of the pins, no injector or coil can be inadvertently energised
+ * by a floating output.
+ *
+ * Call sequence in engine_control_init():
+ *   1. hal_gpio_safe_init()       ← sets all actuators LOW first
+ *   2. mcpwm_ignition_hp_init()   ← MCPWM claims the ign pins
+ *   3. mcpwm_injection_hp_init()  ← MCPWM claims the inj pins
+ *   4. (MCPWM overrides pull-down with its own drive — that is fine)
+ */
+static inline esp_err_t hal_gpio_safe_init(void) {
+    // Pins that must be forced LOW at boot (active-HIGH actuators).
+    static const gpio_num_t actuator_pins[] = {
+        HAL_PIN_INJ_1, HAL_PIN_INJ_2, HAL_PIN_INJ_3, HAL_PIN_INJ_4,
+        HAL_PIN_IGN_1, HAL_PIN_IGN_2, HAL_PIN_IGN_3, HAL_PIN_IGN_4,
+        HAL_PIN_FUEL_PUMP, HAL_PIN_FAN, HAL_PIN_CEL,
+        HAL_PIN_AUX_1, HAL_PIN_AUX_2,
+    };
+
+    gpio_config_t io_conf = {
+        .mode       = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type  = GPIO_INTR_DISABLE,
+        .pin_bit_mask = 0ULL,
+    };
+
+    for (int i = 0; i < (int)(sizeof(actuator_pins) / sizeof(actuator_pins[0])); i++) {
+        io_conf.pin_bit_mask |= (1ULL << actuator_pins[i]);
+    }
+
+    esp_err_t ret = gpio_config(&io_conf);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Drive all pins explicitly LOW (pull-down alone is not enough if the
+    // output register holds a 1 from a previous power cycle).
+    for (int i = 0; i < (int)(sizeof(actuator_pins) / sizeof(actuator_pins[0])); i++) {
+        gpio_set_level(actuator_pins[i], 0);
+    }
+
+    return ESP_OK;
+}
 
 /**
  * @brief Set GPIO high (direct register write, no API overhead)

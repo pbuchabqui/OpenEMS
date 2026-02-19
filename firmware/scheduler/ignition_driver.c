@@ -170,6 +170,13 @@ IRAM_ATTR bool mcpwm_ignition_hp_schedule_one_shot_absolute(
     mcpwm_ign_channel_hp_t *ch = &g_channels_hp[cylinder_id - 1];
     float dwell_time_ms = calculate_dwell_time_hp(battery_voltage);
     dwell_time_ms = adjust_dwell_for_rpm_hp(dwell_time_ms, rpm);
+    // S1-03: clamp dwell to the hardware-safe maximum AFTER RPM adjustment.
+    // adjust_dwell_for_rpm_hp() can multiply base dwell by up to 1.15, pushing
+    // a 4.5 ms base to 5.175 ms — exceeding IGN_DWELL_MS_MAX (5.0 ms) and
+    // risking coil saturation / overheating.
+    if (dwell_time_ms > IGN_DWELL_MS_MAX) {
+        dwell_time_ms = IGN_DWELL_MS_MAX;
+    }
     uint32_t dwell_ticks = (uint32_t)(dwell_time_ms * 1000.0f);
 
     uint32_t dwell_start_ticks = (target_us > dwell_ticks) ? (target_us - dwell_ticks) : 0;

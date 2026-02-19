@@ -1,5 +1,6 @@
 #include "engine_control.h"
 #include "logger.h"
+#include "hal_gpio.h"
 #include "sensor_processing.h"
 #include "sync.h"
 #include "fuel_calc.h"
@@ -1086,6 +1087,20 @@ esp_err_t engine_control_init(void) {
     if (g_engine_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
+
+    // S1-02: Force all actuator outputs LOW before any MCPWM or task initialisation.
+    // This prevents inadvertent injector/coil energisation during the boot window
+    // when GPIO outputs are in an undefined state.
+    {
+        esp_err_t gpio_err = hal_gpio_safe_init();
+        if (gpio_err != ESP_OK) {
+            ESP_LOGE("ENGINE_CONTROL", "hal_gpio_safe_init failed: %s — aborting boot",
+                     esp_err_to_name(gpio_err));
+            return gpio_err;
+        }
+        ESP_LOGI("ENGINE_CONTROL", "Actuator GPIO pins secured LOW");
+    }
+
     bool config_initialized_here = false;
     bool map_mutex_created_here = false;
     bool sensor_initialized_here = false;
