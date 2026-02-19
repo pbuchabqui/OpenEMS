@@ -8,16 +8,16 @@
  * - Compensação de latência física
  */
 
-#include ignition_timing.h"
-#include logger.h"
-#include mcpwm_ignition.h"
-#include mcpwm_ignition_hp.h"
-#include mcpwm_injection.h"
-#include mcpwm_injection_hp.h"
-#include sensor_processing.h"
-#include sync.h"
-#include hp_state.h"
-#include math_utils.h"
+#include "ignition_timing.h
+#include "logger.h
+#include "mcpwm_ignition.h
+#include "mcpwm_ignition_hp.h
+#include "mcpwm_injection.h
+#include "mcpwm_injection_hp.h
+#include "sensor_processing.h
+#include "sync.h
+#include "hp_state.h
+#include "math_utils.h
 
 static const float g_cyl_tdc_deg[4] = {0.0f, 180.0f, 360.0f, 540.0f};
 
