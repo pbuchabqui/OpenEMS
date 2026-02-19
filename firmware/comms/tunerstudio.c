@@ -229,10 +229,20 @@ static esp_err_t handle_param_get(const uint8_t *payload, uint16_t len)
     tuning_param_msg_t *resp = (tuning_param_msg_t *)response;
     resp->param_id = param_id;
     resp->param_size = sizeof(response) - sizeof(tuning_param_msg_t);
-    
+
     esp_err_t ret = ESP_OK;
     if (g_tuning.param_read_cb != NULL) {
-        ret = g_tuning.param_read_cb(param_id, resp->param_value, (size_t *)&resp->param_size);
+        // C12 fix: param_read_cb takes a (size_t *) output parameter, but
+        // resp->param_size is uint16_t (2 bytes).  Casting its address to
+        // (size_t *) caused the callback to write 4 bytes into a 2-byte field,
+        // silently corrupting resp->param_value[0..1].
+        // Use a properly-sized local variable and truncate back afterwards.
+        size_t actual_size = (size_t)resp->param_size;
+        ret = g_tuning.param_read_cb(param_id, resp->param_value, &actual_size);
+        if (actual_size > (size_t)UINT16_MAX) {
+            actual_size = (size_t)UINT16_MAX;
+        }
+        resp->param_size = (uint16_t)actual_size;
     } else {
         // Default handler - return error
         resp->param_size = 0;
@@ -435,8 +445,13 @@ esp_err_t tuning_process_message(const uint8_t *data, size_t len)
         return ESP_ERR_INVALID_ARG;
     }
     
-    // Verify checksum
-    uint8_t calc = calc_checksum(data, sizeof(tuning_msg_header_t));
+    // C11 fix: Verify checksum only over the header bytes BEFORE the checksum field.
+    // The transmission side sets header->checksum = 0 then computes XOR over the
+    // full header (so the stored value = XOR of all other bytes).  On the receive
+    // side, if we recompute over all bytes INCLUDING the stored checksum, the result
+    // is always 0 (XOR of a value with itself cancels out), making the check
+    // vacuous.  Computing over only sizeof(header)-1 bytes matches the send path.
+    uint8_t calc = calc_checksum(data, sizeof(tuning_msg_header_t) - 1u);
     if (calc != header->checksum) {
         g_tuning.stats.msg_errors++;
         return tuning_send_error(TUNING_ERR_CHECKSUM, header->msg_id);

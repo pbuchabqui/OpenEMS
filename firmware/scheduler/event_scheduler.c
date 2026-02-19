@@ -31,6 +31,7 @@
 #include "esp_log.h"
 #include <string.h>
 #include <math.h>
+#include <float.h>
 
 static const char *TAG = "SCHED";
 
@@ -51,10 +52,19 @@ static float s_deg_per_tooth   = 6.0f;
 #define FIRE_WINDOW_DEG  (s_deg_per_tooth * 1.5f)
 
 // ── Helper: normalize angle to [0, 720) ───────────────────────────────────────
-
+// H3 fix: replaced while-loops with fmodf + clamp.
+// The previous while-loops ran forever when 'a' was NaN, +Inf, or -Inf because
+// the loop conditions would never be satisfied, hanging the ISR.
+// fmodf handles finite values in one step; the isfinite guard short-circuits
+// any non-finite input and returns 0.0f, which is safe for downstream callers.
 __attribute__((always_inline)) static inline float normalize_angle(float a) {
-    while (a >= 720.0f) a -= 720.0f;
-    while (a <    0.0f) a += 720.0f;
+    if (!isfinite(a)) {
+        return 0.0f;
+    }
+    a = fmodf(a, 720.0f);
+    if (a < 0.0f) {
+        a += 720.0f;
+    }
     return a;
 }
 

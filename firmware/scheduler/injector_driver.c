@@ -27,6 +27,68 @@
 
 static const char* TAG = "MCPWM_INJECTION_HP";
 
+// H8: Resource budget check ─────────────────────────────────────────────────
+// ESP32-S3 MCPWM provides SOC_MCPWM_GROUPS × SOC_MCPWM_TIMERS_PER_GROUP
+// timers and the same number of operators.  For a 4-cylinder engine running
+// sequential injection (4 channels) + direct ignition (4 channels), the
+// firmware needs 8 timers and 8 operators.  The hardware only has 6 of each.
+//
+// ROOT CAUSE: Both this driver and ignition_driver each allocate one timer and
+// one operator per channel using the formula:
+//   group_id = channel_index / SOC_MCPWM_TIMERS_PER_GROUP
+// Injection fills groups 0 (ch 0-2) and 1 (ch 3). Ignition then tries to
+// allocate in the same groups, which are already exhausted, causing
+// mcpwm_new_timer/mcpwm_new_operator to fail silently.
+//
+// IDEAL ARCHITECTURE (target design, requires driver redesign):
+// ─────────────────────────────────────────────────────────────
+// Use one shared timer per MCPWM peripheral and two operators per function,
+// with generators A and B serving paired cylinders:
+//
+//   MCPWM0 — Injection (1 Timer, 2 Operators)
+//     Op0 Gen A → Cyl1 (  0° TDC offset)   cmp_start / cmp_end
+//     Op0 Gen B → Cyl3 (180° TDC offset)   cmp_start / cmp_end
+//     Op1 Gen A → Cyl4 (360° TDC offset)   cmp_start / cmp_end
+//     Op1 Gen B → Cyl2 (540° TDC offset)   cmp_start / cmp_end
+//
+//   MCPWM1 — Ignition (1 Timer, 2 Operators)
+//     Op0 Gen A → Cyl1 cmp_dwell / cmp_spark
+//     Op0 Gen B → Cyl3 cmp_dwell / cmp_spark
+//     Op1 Gen A → Cyl4 cmp_dwell / cmp_spark
+//     Op1 Gen B → Cyl2 cmp_dwell / cmp_spark
+//
+// Hardware constraint: each operator has exactly 2 comparators shared by
+// both generators A and B.  For truly independent start+end timing per
+// generator, the two cylinders sharing an operator must fire at different
+// points in the engine cycle (≥180° apart) so comparator values can be
+// reprogrammed between events without overlap.  This is naturally satisfied
+// for a 4-cylinder firing order {1,3,4,2} where paired cylinders are 360°
+// apart (Op0: Cyl1 @ 0° / Cyl3 @ 180° — 180° separation; Op1 similar).
+// Generator actions: HIGH on cmp_start (CMPR0 direction UP), LOW on cmp_end
+// (CMPR1 direction UP).  Comparator values are updated atomically from the
+// tooth ISR before each cylinder's event window opens.
+//
+// WORKAROUND OPTIONS (in order of preference):
+//   A) Shared-timer redesign as above — cleanest MCPWM-only solution,
+//      requires reprogramming comparator values on each tooth ISR.
+//      Saves 6 of 8 timer slots (uses 2 timers, not 8).
+//
+//   B) Move injection to ESP32-S3 General Purpose Timers (gptimer).
+//      gptimer has 4 groups × 4 timers = up to 16 independent alarms.
+//      Keep MCPWM exclusively for ignition (4 channels fit in 4 operator
+//      slots: MCPWM0 Op0+Op1 + MCPWM1 Op0+Op1, 1 shared timer each group).
+//
+//   C) Use bank injection (2 banks × 2 cylinders) → 2 injection channels.
+//      4 ignition + 2 injection = 6 total, fits in MCPWM budget.
+//
+// CURRENT STATUS: The runtime check below aborts init cleanly if the hardware
+// limit is hit, preventing silent misfires.  Option A is the recommended
+// next step; Option B is the fallback if comparator-reuse timing is too tight.
+#if (SOC_MCPWM_TIMERS_PER_GROUP * SOC_MCPWM_GROUPS) < (ENGINE_CYLINDERS * 2)
+#warning "H8: MCPWM timer budget insufficient for sequential injection + direct ignition. " \
+         "See injector_driver.c for workaround options."
+#endif
+
 // Forward declaration
 bool mcpwm_injection_hp_deinit(void);
 
@@ -78,7 +140,14 @@ bool mcpwm_injection_hp_init(void) {
     for (int i = 0; i < 4; i++) {
         int group_id = i / SOC_MCPWM_TIMERS_PER_GROUP;
         if (group_id >= SOC_MCPWM_GROUPS) {
-            ESP_LOGE(TAG, "No MCPWM group available for injector %d", i);
+            // H8: exceeded available MCPWM groups.
+            // See the H8 comment at the top of this file for workaround options.
+            ESP_LOGE(TAG, "H8: MCPWM group %d unavailable for injection channel %d "
+                         "(hardware limit: %d groups × %d timers = %d total). "
+                         "Requires driver refactor — see H8 comment.",
+                     group_id, i,
+                     SOC_MCPWM_GROUPS, SOC_MCPWM_TIMERS_PER_GROUP,
+                     SOC_MCPWM_GROUPS * SOC_MCPWM_TIMERS_PER_GROUP);
             mcpwm_injection_hp_deinit();
             return false;
         }

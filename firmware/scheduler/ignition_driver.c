@@ -28,6 +28,18 @@
 
 static const char* TAG = "MCPWM_IGNITION_HP";
 
+// H8: Resource budget check ─────────────────────────────────────────────────
+// See full analysis and ideal shared-timer architecture in injector_driver.c.
+// Short version: injection driver exhausts MCPWM timer/operator slots before
+// ignition driver gets a chance to allocate, so channels 2+ will fail here.
+// Target fix (Option A): 1 Timer + 2 Operators for MCPWM1 ignition, with
+// Op0 Gen A/B driving Cyl1/Cyl3 and Op1 Gen A/B driving Cyl4/Cyl2.
+// Requires comparator values to be reprogrammed from the tooth ISR each cycle.
+#if (SOC_MCPWM_TIMERS_PER_GROUP * SOC_MCPWM_GROUPS) < (ENGINE_CYLINDERS * 2)
+#warning "H8: MCPWM timer budget insufficient for sequential injection + direct ignition. " \
+         "See injector_driver.c for workaround options."
+#endif
+
 // Forward declaration
 bool mcpwm_ignition_hp_deinit(void);
 
@@ -86,7 +98,12 @@ bool mcpwm_ignition_hp_init(void) {
     for (int i = 0; i < 4; i++) {
         int group_id = i / SOC_MCPWM_TIMERS_PER_GROUP;
         if (group_id >= SOC_MCPWM_GROUPS) {
-            ESP_LOGE(TAG, "No MCPWM group available for ignition %d", i);
+            // H8: injection driver already consumed all MCPWM groups.
+            // See the H8 comment at the top of this file for workaround options.
+            ESP_LOGE(TAG, "H8: MCPWM group %d unavailable for ignition channel %d "
+                         "(all %d groups exhausted by injection driver). "
+                         "Requires driver refactor — see H8 comment.",
+                     group_id, i, SOC_MCPWM_GROUPS);
             mcpwm_ignition_hp_deinit();
             return false;
         }
