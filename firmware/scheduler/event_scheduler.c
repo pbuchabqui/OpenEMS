@@ -24,6 +24,8 @@
 #include "event_scheduler.h"
 #include "injector_driver.h"
 #include "ignition_driver.h"
+#include "mcpwm_injection_hp.h"
+#include "mcpwm_ignition_hp.h"
 #include "freertos/FreeRTOS.h"
 #include "esp_attr.h"
 #include "esp_log.h"
@@ -80,22 +82,43 @@ IRAM_ATTR static void fire_event(engine_event_t *evt,
                                  uint32_t base_time_us,
                                  float    angle_from_now_deg,
                                  uint32_t tooth_period_us) {
-    uint32_t delay_us = angle_to_us(angle_from_now_deg, tooth_period_us);
-    uint32_t fire_abs = base_time_us + delay_us;
+    uint32_t delay_us  = angle_to_us(angle_from_now_deg, tooth_period_us);
+    uint32_t fire_abs  = base_time_us + delay_us;
 
     switch (evt->type) {
         case EVT_INJECTOR_OPEN:
-            mcpwm_injection_hp_schedule_open(evt->cylinder, fire_abs);
+            // EVT_INJECTOR_OPEN: schedule a one-shot injection pulse.
+            // param_us carries the pulsewidth.  current_counter = base_time_us.
+            mcpwm_injection_hp_schedule_one_shot_absolute(
+                evt->cylinder,
+                delay_us,
+                evt->param_us,
+                base_time_us);
             break;
+
         case EVT_INJECTOR_CLOSE:
-            mcpwm_injection_hp_schedule_close(evt->cylinder, fire_abs);
+            // EVT_INJECTOR_CLOSE is redundant when using one-shot API (close is
+            // implicit at open + pulsewidth). Stop the injector explicitly as
+            // a safety measure in case the open event was missed.
+            mcpwm_injection_hp_stop(evt->cylinder);
             break;
+
         case EVT_IGNITION_DWELL:
-            mcpwm_ignition_hp_schedule_dwell(evt->cylinder, fire_abs);
+            // EVT_IGNITION_DWELL: schedule dwell + spark in one call.
+            // rpm_snap and vbat_snap carry engine state captured at schedule time.
+            mcpwm_ignition_hp_schedule_one_shot_absolute(
+                evt->cylinder,
+                fire_abs,
+                evt->rpm_snap,
+                evt->vbat_snap,
+                base_time_us);
             break;
+
         case EVT_IGNITION_SPARK:
-            mcpwm_ignition_hp_schedule_spark(evt->cylinder, fire_abs);
+            // EVT_IGNITION_SPARK is redundant — dwell+spark are issued together
+            // by EVT_IGNITION_DWELL.  Nothing to do here.
             break;
+
         default:
             break;
     }
@@ -130,10 +153,14 @@ IRAM_ATTR void evt_scheduler_on_tooth(uint32_t tooth_time_us,
     s_state.rpm              = rpm;
     s_state.revolution_index = revolution_idx;
 
-    // Compute current absolute crank angle
-    // tooth_index 0 = first tooth after gap = s_tdc_offset_deg before TDC
+    // Compute current absolute crank angle.
+    // tooth_index 0 = first tooth after gap.  The gap is s_tdc_offset_deg
+    // *before* TDC of cylinder 1, so we add the offset to convert from
+    // gap-relative to TDC-relative angle.
     float rev_offset = (revolution_idx == 0) ? 0.0f : 360.0f;
-    float tooth_angle = rev_offset + (float)tooth_index * s_deg_per_tooth;
+    float tooth_angle = rev_offset
+                      + (float)tooth_index * s_deg_per_tooth
+                      + s_tdc_offset_deg;        // C4 fix: apply TDC offset
     s_state.current_angle_deg = normalize_angle(tooth_angle);
 
     if (!s_state.sync_valid || tooth_period_us == 0) {
@@ -160,7 +187,8 @@ IRAM_ATTR void evt_scheduler_on_tooth(uint32_t tooth_time_us,
 
 // ── Public: schedule event (Core 1) ───────────────────────────────────────────
 
-bool evt_schedule(evt_type_t type, uint8_t cylinder, float angle_deg) {
+bool evt_schedule(evt_type_t type, uint8_t cylinder, float angle_deg,
+                  uint32_t param_us, uint16_t rpm_snap, float vbat_snap) {
     if (cylinder >= EVT_NUM_CYLINDERS) return false;
     if (type >= EVT_TYPE_COUNT)        return false;
 
@@ -179,10 +207,13 @@ bool evt_schedule(evt_type_t type, uint8_t cylinder, float angle_deg) {
         return false;  // Queue full
     }
 
-    s_queue[slot].type         = type;
-    s_queue[slot].cylinder     = cylinder;
-    s_queue[slot].angle_deg    = angle_deg;
-    s_queue[slot].armed        = true;
+    s_queue[slot].type      = type;
+    s_queue[slot].cylinder  = cylinder;
+    s_queue[slot].angle_deg = angle_deg;
+    s_queue[slot].param_us  = param_us;
+    s_queue[slot].rpm_snap  = rpm_snap;
+    s_queue[slot].vbat_snap = vbat_snap;
+    s_queue[slot].armed     = true;
 
     portEXIT_CRITICAL(&s_lock);
     return true;

@@ -1,21 +1,22 @@
-#include "engine_control.h
-#include "logger.h
-#include "sensor_processing.h
-#include "sync.h
-#include "fuel_calc.h
+#include "engine_control.h"
+#include "logger.h"
+#include "sensor_processing.h"
+#include "sync.h"
+#include "fuel_calc.h"
 #include table_16x16.h"
-#include "lambda_pid.h
+#include "lambda_pid.h"
 #include s3_control_config.h"
-#include "fuel_injection.h
-#include "ignition_timing.h
-#include "config_manager.h
-#include "map_storage.h
-#include "safety_monitor.h
-#include "twai_lambda.h
-#include "math_utils.h
-#include "espnow_link.h
-#include "mcpwm_injection_hp.h
-#include "mcpwm_ignition_hp.h
+#include "fuel_injection.h"
+#include "ignition_timing.h"
+#include "config_manager.h"
+#include "map_storage.h"
+#include "safety_monitor.h"
+#include "twai_lambda.h"
+#include "math_utils.h"
+#include "espnow_link.h"
+#include "mcpwm_injection_hp.h"
+#include "mcpwm_ignition_hp.h"
+#include "event_scheduler.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -1318,12 +1319,31 @@ esp_err_t engine_control_start(void) {
     return ESP_OK;
 }
 
-// Stop engine control
+// Stop engine control — fail-safe shutdown of all actuators
 esp_err_t engine_control_stop(void) {
     if (!g_engine_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
-    ESP_LOGI("ENGINE_CONTROL", "Engine control stopped");
+
+    // 1. Unregister tooth callback so no new plans are triggered
+    sync_unregister_tooth_callback();
+
+    // 2. Immediately cut fuel to all injectors
+    mcpwm_injection_hp_stop_all();
+
+    // 3. Immediately cut ignition to all cylinders (1-indexed in driver)
+    for (uint8_t cyl = 1; cyl <= EVT_NUM_CYLINDERS; cyl++) {
+        mcpwm_ignition_hp_stop_cylinder(cyl);
+    }
+
+    // 4. Cancel any angle-based events still queued in the scheduler
+    evt_cancel_all();
+
+    // 5. Mark sync as invalid so the scheduler won't fire even if a stale
+    //    tooth interrupt arrives before the unregister takes effect
+    evt_set_sync_valid(false);
+
+    ESP_LOGI("ENGINE_CONTROL", "Engine control stopped: all actuators cut");
     return ESP_OK;
 }
 

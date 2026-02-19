@@ -60,6 +60,10 @@ typedef struct {
     float       angle_deg;          // Crank angle to fire (0–720, absolute per cycle)
     uint32_t    schedule_rev;       // Revolution counter when event was scheduled
     bool        armed;              // Set when queued, cleared after firing
+    // Extra parameters forwarded to driver APIs
+    uint32_t    param_us;           // Injection: pulsewidth_us; Ignition: unused
+    uint16_t    rpm_snap;           // Ignition: RPM at schedule time (for dwell calc)
+    float       vbat_snap;          // Ignition: battery voltage at schedule time
 } engine_event_t;
 
 // ── Engine state (updated by decoder on every tooth) ─────────────────────────
@@ -108,9 +112,13 @@ IRAM_ATTR void evt_scheduler_on_tooth(uint32_t tooth_time_us,
  * @param type       Event type (injector open/close, ignition dwell/spark)
  * @param cylinder   Cylinder index 0-3
  * @param angle_deg  Absolute crank angle (0–720) at which to fire
+ * @param param_us   For injection events: pulsewidth in µs. Ignored for ignition.
+ * @param rpm_snap   For ignition events: current RPM (used for dwell calculation).
+ * @param vbat_snap  For ignition events: current battery voltage in volts.
  * @return           true if event was queued, false if queue full
  */
-bool evt_schedule(evt_type_t type, uint8_t cylinder, float angle_deg);
+bool evt_schedule(evt_type_t type, uint8_t cylinder, float angle_deg,
+                  uint32_t param_us, uint16_t rpm_snap, float vbat_snap);
 
 /**
  * @brief Cancel all pending events for a cylinder (e.g., limp mode).
@@ -140,6 +148,26 @@ uint8_t evt_pending_count(void);
  * Copies state atomically via spinlock.
  */
 void evt_get_engine_state(scheduler_engine_state_t *out);
+
+/**
+ * @brief Set sync_valid flag (called by decoder after successful sync).
+ * Thread-safe.
+ */
+void evt_set_sync_valid(bool valid);
+
+/**
+ * @brief Set the TDC offset — angular distance from the missing-tooth gap to TDC cyl.1.
+ * Default 114° (60-2 wheel with common gap position).
+ * Thread-safe.
+ */
+void evt_set_tdc_offset(float offset_deg);
+
+/**
+ * @brief Set total tooth count of the trigger wheel (including missing teeth).
+ * E.g., 60 for a 60-2 wheel. Recomputes deg_per_tooth.
+ * Thread-safe.
+ */
+void evt_set_trigger_teeth(uint8_t total_teeth);
 
 #ifdef __cplusplus
 }

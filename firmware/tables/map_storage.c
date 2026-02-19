@@ -1,5 +1,5 @@
-#include "map_storage.h
-#include "config_manager.h
+#include "map_storage.h"
+#include "config_manager.h"
 #include "esp_err.h"
 #include "esp_rom_crc.h"
 

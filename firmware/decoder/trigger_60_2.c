@@ -1,5 +1,5 @@
-#include "sync.h
-#include "logger.h
+#include "sync.h"
+#include "logger.h"
 #include s3_control_config.h"
 #include "driver/pulse_cnt.h"
 #include "driver/gptimer.h"
