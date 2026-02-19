@@ -294,10 +294,16 @@ BaseType_t hp_create_critical_task(TaskFunction_t pvTaskCode,
  * @param current_cycles Tempo atual em ciclos
  * @return Delay restante em ciclos
  */
+// H4 fix: use unsigned modular subtraction then signed comparison to detect
+// "already past" events.  The old code cast both operands to int32_t before
+// subtracting, which gives wrong results when either value crosses 2^31
+// (e.g. current_cycles near UINT32_MAX wraps to a large negative int32).
+// The correct approach: subtract as uint32 (naturally wrap-safe at 2^32), then
+// treat the result as signed — values in (0, 2^31) are "in the future".
 IRAM_ATTR static inline uint32_t hp_calculate_schedule_delay(uint32_t target_us, uint32_t current_cycles) {
     uint32_t target_cycles = hp_us_to_cycles(target_us);
-    int32_t delay_cycles = (int32_t)target_cycles - (int32_t)current_cycles;
-    return (delay_cycles > 0) ? (uint32_t)delay_cycles : 0;
+    uint32_t diff = target_cycles - current_cycles;  // unsigned modular arithmetic
+    return ((int32_t)diff > 0) ? diff : 0U;
 }
 
 /**

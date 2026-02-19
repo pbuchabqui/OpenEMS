@@ -97,11 +97,14 @@ void evt_scheduler_init(void);
  * @param revolution_idx  0 = first revolution, 1 = second revolution of cycle
  * @param rpm             Current RPM (computed by decoder)
  */
+// H1 fix: added sync_acquired so the ISR can propagate sync state into the
+// scheduler without a separate non-ISR-safe evt_set_sync_valid() call.
 IRAM_ATTR void evt_scheduler_on_tooth(uint32_t tooth_time_us,
                                       uint32_t tooth_period_us,
                                       uint8_t  tooth_index,
                                       uint8_t  revolution_idx,
-                                      uint16_t rpm);
+                                      uint16_t rpm,
+                                      bool     sync_acquired);
 
 /**
  * @brief Schedule an engine event (call from Core 1 control task).

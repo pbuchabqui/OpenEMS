@@ -1,4 +1,4 @@
-#include "lambda_pid.h"
+#include "closed_loop_fuel.h"
 
 void lambda_pid_init(lambda_pid_t *pid, float kp, float ki, float kd, float output_min, float output_max) {
     if (!pid) {

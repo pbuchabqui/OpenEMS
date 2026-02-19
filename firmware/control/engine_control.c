@@ -3,9 +3,9 @@
 #include "sensor_processing.h"
 #include "sync.h"
 #include "fuel_calc.h"
-#include table_16x16.h"
-#include "lambda_pid.h"
-#include s3_control_config.h"
+#include "table_16x16.h"
+#include "closed_loop_fuel.h"
+#include "engine_config.h"
 #include "fuel_injection.h"
 #include "ignition_timing.h"
 #include "config_manager.h"
@@ -601,8 +601,20 @@ static bool injection_diag_read(engine_injection_diag_t *out) {
     return false;
 }
 
-IRAM_ATTR static void engine_sync_tooth_callback(void *ctx) {
+// H1 fix: callback now receives tooth data from the decoder and feeds the
+// angle-based event scheduler before waking the planner task.
+IRAM_ATTR static void engine_sync_tooth_callback(uint32_t tooth_time_us,
+                                                  uint32_t tooth_period_us,
+                                                  uint8_t  tooth_index,
+                                                  uint8_t  revolution_idx,
+                                                  uint16_t rpm,
+                                                  bool     sync_acquired,
+                                                  void    *ctx) {
     (void)ctx;
+    // Feed the angle-based event scheduler on every tooth (time-critical, Core 0).
+    evt_scheduler_on_tooth(tooth_time_us, tooth_period_us,
+                           tooth_index, revolution_idx, rpm, sync_acquired);
+
     if (g_planner_task_handle == NULL) {
         return;
     }
@@ -836,7 +848,7 @@ static void engine_control_execute_plan(const engine_plan_cmd_t *cmd) {
             diag.soi_deg[cyl - 1] = info.soi_deg;
             diag.delay_us[cyl - 1] = info.delay_us;
         }
-        ignition_apply_timing(cmd->advance_deg10, cmd->rpm);
+        ignition_apply_timing(cmd->advance_deg10, cmd->rpm, cmd->vbat_v);  // H2 fix: pass plan vbat
         if (!scheduling_ok) {
             LOG_SAFETY_E("Injection scheduling failure on synced path");
             safety_activate_limp_mode();
@@ -1219,6 +1231,13 @@ esp_err_t engine_control_init(void) {
                                      config_initialized_here);
         return err;
     }
+
+    // H1 fix: initialize event scheduler and configure trigger wheel geometry
+    // before registering the tooth callback so the first tooth event is handled
+    // with correct deg_per_tooth and TDC offset already in place.
+    evt_scheduler_init();
+    evt_set_trigger_teeth(TRIGGER_WHEEL_TEETH);        // 60 for 60-2 wheel
+    evt_set_tdc_offset(TRIGGER_TDC_OFFSET_DEG);        // 114° default
 
     fuel_injection_init(NULL);
     if (!ignition_init()) {
