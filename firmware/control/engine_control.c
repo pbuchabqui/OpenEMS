@@ -707,10 +707,23 @@ static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
 
     uint16_t rpm = (uint16_t)sync_data.rpm;
     uint16_t load = sensor_data.map_kpa10;
-    if (safety_check_over_rev(rpm) ||
-        safety_check_overheat(sensor_data.clt_c) ||
-        safety_check_battery_voltage(sensor_data.vbat_dv)) {
-        return ESP_FAIL;
+
+    // C6 fix: distinguish between hard cut (over-rev) and limp mode conditions.
+    // Over-rev causes a hard fuel cut — no plan generated.
+    // Overheat / bad battery voltage activate limp mode but let the engine
+    // keep running at reduced power so the driver can maneuver to safety.
+    if (safety_check_over_rev(rpm)) {
+        return ESP_FAIL;   // Hard fuel cut — engine too fast, no plan
+    }
+    bool overheat = safety_check_overheat(sensor_data.clt_c);
+    bool bat_fault = safety_check_battery_voltage(sensor_data.vbat_dv);
+    (void)overheat;   // activate_limp called inside; we continue with plan
+    (void)bat_fault;
+
+    // If limp mode is active, apply rpm ceiling before building the plan
+    bool is_limp = safety_is_limp_mode_active();
+    if (is_limp && rpm > LIMP_RPM_LIMIT) {
+        return ESP_FAIL;   // Fuel cut at limp RPM limit
     }
 
     if (g_map_mutex == NULL || xSemaphoreTake(g_map_mutex, portMAX_DELAY) != pdTRUE) {
@@ -725,6 +738,26 @@ static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
         eoit_normal_used = clamp_eoit_normal(eoit_normal_from_table(normal_raw));
     }
     xSemaphoreGive(g_map_mutex);
+
+    // C6 fix: clamp VE and timing to limp mode limits when active
+    if (is_limp) {
+        if (ve_x10 > (uint16_t)(LIMP_VE_VALUE * 10U)) {
+            ve_x10 = (uint16_t)(LIMP_VE_VALUE * 10U);
+        }
+        if (advance_deg10 > (uint16_t)(LIMP_TIMING_DEG * 10U)) {
+            advance_deg10 = (uint16_t)(LIMP_TIMING_DEG * 10U);
+        }
+    }
+
+    // C8 fix: subtract knock timing retard from computed advance
+    {
+        uint16_t knock_retard = safety_get_knock_retard_deg10();
+        if (advance_deg10 > knock_retard) {
+            advance_deg10 -= knock_retard;
+        } else {
+            advance_deg10 = 0;
+        }
+    }
 
     float lambda_corr = 0.0f;
     if (g_engine_math_ready && g_closed_loop_enabled) {

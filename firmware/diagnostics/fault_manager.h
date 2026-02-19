@@ -179,12 +179,29 @@ bool safety_watchdog_check(void);
 
 /**
  * @brief Handle knock detection
- * 
+ *
  * Processes knock detection events and applies timing retard
- * 
+ *
  * @param knock_prot Pointer to knock protection structure
  */
 void safety_handle_knock(knock_protection_t *knock_prot);
+
+/**
+ * @brief Report a knock event, updating the persistent global knock state.
+ *
+ * @param knock_detected true if knock was detected this cycle, false otherwise
+ */
+void safety_knock_event(bool knock_detected);
+
+/**
+ * @brief Get current knock timing retard in 0.1-degree units.
+ *
+ * Returns the accumulated retard from the global knock state.
+ * Subtract this from advance_deg10 before scheduling ignition.
+ *
+ * @return uint16_t Retard in units of 0.1° (e.g., 50 = 5.0°)
+ */
+uint16_t safety_get_knock_retard_deg10(void);
 
 /**
  * @brief Log safety event
