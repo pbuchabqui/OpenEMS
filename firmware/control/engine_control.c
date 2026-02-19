@@ -1,21 +1,22 @@
-#include engine_control.h"
-#include logger.h"
-#include sensor_processing.h"
-#include sync.h"
-#include fuel_calc.h"
+#include "engine_control.h"
+#include "logger.h"
+#include "sensor_processing.h"
+#include "sync.h"
+#include "fuel_calc.h"
 #include table_16x16.h"
-#include lambda_pid.h"
+#include "lambda_pid.h"
 #include s3_control_config.h"
-#include fuel_injection.h"
-#include ignition_timing.h"
-#include config_manager.h"
-#include map_storage.h"
-#include safety_monitor.h"
-#include twai_lambda.h"
-#include math_utils.h"
-#include espnow_link.h"
-#include mcpwm_injection_hp.h"
-#include mcpwm_ignition_hp.h"
+#include "fuel_injection.h"
+#include "ignition_timing.h"
+#include "config_manager.h"
+#include "map_storage.h"
+#include "safety_monitor.h"
+#include "twai_lambda.h"
+#include "math_utils.h"
+#include "espnow_link.h"
+#include "mcpwm_injection_hp.h"
+#include "mcpwm_ignition_hp.h"
+#include "event_scheduler.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -152,6 +153,7 @@ typedef struct {
     float eoit_normal_used;
     float eoi_target_deg;
     float eoi_fallback_deg;
+    float vbat_v;              // C10 fix: actual battery voltage in volts
     sync_data_t sync_data;
     uint32_t planned_at_us;
 } engine_plan_cmd_t;
@@ -648,7 +650,8 @@ static void schedule_semi_seq_injection(uint16_t rpm,
     mcpwm_injection_hp_schedule_one_shot_absolute(2, delay180, pw_us, counter);
 }
 
-static void schedule_wasted_spark(uint16_t advance_deg10, uint16_t rpm, const sync_data_t *sync) {
+static void schedule_wasted_spark(uint16_t advance_deg10, uint16_t rpm,
+                                   const sync_data_t *sync, float vbat_v) {
     sync_config_t sync_cfg = {0};
     if (sync_get_config(&sync_cfg) != ESP_OK || sync_cfg.tooth_count == 0) {
         return;
@@ -665,14 +668,15 @@ static void schedule_wasted_spark(uint16_t advance_deg10, uint16_t rpm, const sy
     float delta0 = spark0 - current_angle;
     uint32_t delay0 = angle_delta_to_delay_us(delta0, 360.0f, us_per_deg);
     uint32_t counter = mcpwm_ignition_hp_get_counter(0);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(1, delay0, rpm, 13.5f, counter);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(4, delay0, rpm, 13.5f, counter);
+    // C10 fix: use actual vbat_v instead of hardcoded 13.5V
+    mcpwm_ignition_hp_schedule_one_shot_absolute(1, delay0, rpm, vbat_v, counter);
+    mcpwm_ignition_hp_schedule_one_shot_absolute(4, delay0, rpm, vbat_v, counter);
 
     float spark180 = wrap_angle_360(180.0f - advance_deg);
     float delta180 = spark180 - current_angle;
     uint32_t delay180 = angle_delta_to_delay_us(delta180, 360.0f, us_per_deg);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(2, delay180, rpm, 13.5f, counter);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(3, delay180, rpm, 13.5f, counter);
+    mcpwm_ignition_hp_schedule_one_shot_absolute(2, delay180, rpm, vbat_v, counter);
+    mcpwm_ignition_hp_schedule_one_shot_absolute(3, delay180, rpm, vbat_v, counter);
 }
 
 static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
@@ -706,10 +710,23 @@ static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
 
     uint16_t rpm = (uint16_t)sync_data.rpm;
     uint16_t load = sensor_data.map_kpa10;
-    if (safety_check_over_rev(rpm) ||
-        safety_check_overheat(sensor_data.clt_c) ||
-        safety_check_battery_voltage(sensor_data.vbat_dv)) {
-        return ESP_FAIL;
+
+    // C6 fix: distinguish between hard cut (over-rev) and limp mode conditions.
+    // Over-rev causes a hard fuel cut — no plan generated.
+    // Overheat / bad battery voltage activate limp mode but let the engine
+    // keep running at reduced power so the driver can maneuver to safety.
+    if (safety_check_over_rev(rpm)) {
+        return ESP_FAIL;   // Hard fuel cut — engine too fast, no plan
+    }
+    bool overheat = safety_check_overheat(sensor_data.clt_c);
+    bool bat_fault = safety_check_battery_voltage(sensor_data.vbat_dv);
+    (void)overheat;   // activate_limp called inside; we continue with plan
+    (void)bat_fault;
+
+    // If limp mode is active, apply rpm ceiling before building the plan
+    bool is_limp = safety_is_limp_mode_active();
+    if (is_limp && rpm > LIMP_RPM_LIMIT) {
+        return ESP_FAIL;   // Fuel cut at limp RPM limit
     }
 
     if (g_map_mutex == NULL || xSemaphoreTake(g_map_mutex, portMAX_DELAY) != pdTRUE) {
@@ -724,6 +741,26 @@ static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
         eoit_normal_used = clamp_eoit_normal(eoit_normal_from_table(normal_raw));
     }
     xSemaphoreGive(g_map_mutex);
+
+    // C6 fix: clamp VE and timing to limp mode limits when active
+    if (is_limp) {
+        if (ve_x10 > (uint16_t)(LIMP_VE_VALUE * 10U)) {
+            ve_x10 = (uint16_t)(LIMP_VE_VALUE * 10U);
+        }
+        if (advance_deg10 > (uint16_t)(LIMP_TIMING_DEG * 10U)) {
+            advance_deg10 = (uint16_t)(LIMP_TIMING_DEG * 10U);
+        }
+    }
+
+    // C8 fix: subtract knock timing retard from computed advance
+    {
+        uint16_t knock_retard = safety_get_knock_retard_deg10();
+        if (advance_deg10 > knock_retard) {
+            advance_deg10 -= knock_retard;
+        } else {
+            advance_deg10 = 0;
+        }
+    }
 
     float lambda_corr = 0.0f;
     if (g_engine_math_ready && g_closed_loop_enabled) {
@@ -762,6 +799,8 @@ static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
     cmd->eoit_normal_used = eoit_normal_used;
     cmd->eoi_target_deg = eoit_target_from_calibration(g_eoit_boundary, eoit_normal_used);
     cmd->eoi_fallback_deg = eoit_target_from_calibration(g_eoit_boundary, g_eoit_fallback_normal);
+    // C10 fix: store actual battery voltage (in volts) for dwell calculation
+    cmd->vbat_v = (float)sensor_data.vbat_dv / 10.0f;
     cmd->sync_data = sync_data;
     cmd->planned_at_us = (uint32_t)esp_timer_get_time();
     return ESP_OK;
@@ -805,7 +844,7 @@ static void engine_control_execute_plan(const engine_plan_cmd_t *cmd) {
     } else {
         LOG_SAFETY_W("Sync partial: fallback to semi-sequential + wasted spark");
         schedule_semi_seq_injection(cmd->rpm, cmd->load, cmd->pw_us, &exec_sync, cmd->eoi_fallback_deg);
-        schedule_wasted_spark(cmd->advance_deg10, cmd->rpm, &exec_sync);
+        schedule_wasted_spark(cmd->advance_deg10, cmd->rpm, &exec_sync, cmd->vbat_v);
 
         sync_config_t sync_cfg = {0};
         if (sync_get_config(&sync_cfg) == ESP_OK && sync_cfg.tooth_count > 0) {
@@ -1056,7 +1095,14 @@ esp_err_t engine_control_init(void) {
         map_mutex_created_here = true;
     }
 
-    if (map_storage_load(&g_maps) != ESP_OK) {
+    // C11 fix: validate individual table checksums after loading.
+    // map_storage_load() only verifies the outer CRC32 over the blob bytes;
+    // if a table's own 16-bit checksum is stale, the blob CRC still passes
+    // but table_16x16_interpolate() may produce corrupt results.
+    if (map_storage_load(&g_maps) != ESP_OK
+            || !table_16x16_validate(&g_maps.fuel_table)
+            || !table_16x16_validate(&g_maps.ignition_table)
+            || !table_16x16_validate(&g_maps.lambda_table)) {
         fuel_calc_init_defaults(&g_maps);
         map_storage_save(&g_maps);
     } else {
@@ -1318,12 +1364,31 @@ esp_err_t engine_control_start(void) {
     return ESP_OK;
 }
 
-// Stop engine control
+// Stop engine control — fail-safe shutdown of all actuators
 esp_err_t engine_control_stop(void) {
     if (!g_engine_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
-    ESP_LOGI("ENGINE_CONTROL", "Engine control stopped");
+
+    // 1. Unregister tooth callback so no new plans are triggered
+    sync_unregister_tooth_callback();
+
+    // 2. Immediately cut fuel to all injectors
+    mcpwm_injection_hp_stop_all();
+
+    // 3. Immediately cut ignition to all cylinders (1-indexed in driver)
+    for (uint8_t cyl = 1; cyl <= EVT_NUM_CYLINDERS; cyl++) {
+        mcpwm_ignition_hp_stop_cylinder(cyl);
+    }
+
+    // 4. Cancel any angle-based events still queued in the scheduler
+    evt_cancel_all();
+
+    // 5. Mark sync as invalid so the scheduler won't fire even if a stale
+    //    tooth interrupt arrives before the unregister takes effect
+    evt_set_sync_valid(false);
+
+    ESP_LOGI("ENGINE_CONTROL", "Engine control stopped: all actuators cut");
     return ESP_OK;
 }
 

@@ -1,4 +1,4 @@
-#include table_16x16.h"
+#include "table_16x16.h"
 #include <string.h>
 
 static uint8_t find_bin_index(const uint16_t *bins, uint16_t value) {
@@ -52,13 +52,21 @@ uint16_t table_16x16_interpolate(const table_16x16_t *table, uint16_t rpm, uint1
     uint16_t y0 = table->load_bins[y];
     uint16_t y1 = table->load_bins[y + 1];
 
+    // C9 fix: clamp dx/dy to [0, 1] to prevent extrapolation when the input
+    // value is outside the table range (below first bin or above last bin).
+    // Without clamping, rpm < rpm_bins[0] produces dx < 0 and the bilinear
+    // interpolation extrapolates in the wrong direction.
     float dx = 0.0f;
     float dy = 0.0f;
     if (x1 > x0) {
         dx = (float)(rpm - x0) / (float)(x1 - x0);
+        if (dx < 0.0f) dx = 0.0f;
+        if (dx > 1.0f) dx = 1.0f;
     }
     if (y1 > y0) {
         dy = (float)(load - y0) / (float)(y1 - y0);
+        if (dy < 0.0f) dy = 0.0f;
+        if (dy > 1.0f) dy = 1.0f;
     }
 
     float v00 = (float)table->values[y][x];

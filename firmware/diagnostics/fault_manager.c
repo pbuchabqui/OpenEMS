@@ -1,6 +1,6 @@
-#include safety_monitor.h"
-#include s3_control_config.h"
-#include logger.h"
+#include "safety_monitor.h"
+#include "engine_config.h"
+#include "logger.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
@@ -28,6 +28,14 @@ static limp_mode_t g_limp_mode = {
 
 static uint32_t g_limp_recovery_start_ms = 0;  // When conditions became safe
 static bool g_limp_conditions_safe = false;
+
+// Persistent knock protection state — shared across cycles
+// timing_retard stored in units of 0.1° (multiply by 10 to convert from degrees)
+static knock_protection_t g_knock_prot = {
+    .knock_count    = 0,
+    .timing_retard  = 0,
+    .knock_detected = false,
+};
 
 static watchdog_config_t g_watchdog = {
     .enabled = false,
@@ -65,7 +73,9 @@ bool safety_check_over_rev(uint16_t rpm) {
 }
 
 bool safety_check_overheat(int16_t temp) {
-    if (temp > (int16_t)CLT_SENSOR_MAX) {
+    // C7 fix: use CLT_OVERHEAT_C (105°C) as the overheat threshold, not
+    // CLT_SENSOR_MAX (120°C) which is the ADC range limit, not an overheat point.
+    if (temp > (int16_t)CLT_OVERHEAT_C) {
         safety_log_event("OVERHEAT", (uint32_t)temp);
         safety_activate_limp_mode();
         return true;
@@ -208,19 +218,41 @@ void safety_handle_knock(knock_protection_t *knock_prot) {
         return;
     }
 
+    // C8 fix: steps now match engine_config.h constants:
+    //   KNOCK_RETARD_STEP_DEG   = 1.0° → 10 in 0.1° units   ✓ (unchanged)
+    //   KNOCK_RECOVER_STEP_DEG  = 0.2° → 2 in 0.1° units    (was 5 — too fast)
+    //   KNOCK_RETARD_MAX_DEG    = 10°  → 100 in 0.1° units   ✓ (unchanged)
     if (knock_prot->knock_detected) {
         knock_prot->knock_count++;
+        // Retard up to KNOCK_RETARD_MAX_DEG (100 × 0.1°)
         if (knock_prot->timing_retard < 100) {
-            knock_prot->timing_retard += 10;
+            knock_prot->timing_retard += 10;  // +1.0°
         }
     } else {
-        if (knock_prot->timing_retard > 0) {
-            knock_prot->timing_retard -= 5;
+        // Recover at KNOCK_RECOVER_STEP_DEG = 0.2° per event
+        if (knock_prot->timing_retard >= 2) {
+            knock_prot->timing_retard -= 2;   // -0.2°  (was -5 = -0.5°, too fast)
+        } else {
+            knock_prot->timing_retard = 0;
         }
         if (knock_prot->knock_count > 0) {
             knock_prot->knock_count--;
         }
     }
+}
+
+void safety_knock_event(bool knock_detected) {
+    portENTER_CRITICAL(&g_safety_spinlock);
+    g_knock_prot.knock_detected = knock_detected;
+    portEXIT_CRITICAL(&g_safety_spinlock);
+    safety_handle_knock(&g_knock_prot);
+}
+
+uint16_t safety_get_knock_retard_deg10(void) {
+    portENTER_CRITICAL(&g_safety_spinlock);
+    uint16_t retard = g_knock_prot.timing_retard;
+    portEXIT_CRITICAL(&g_safety_spinlock);
+    return retard;
 }
 
 void safety_log_event(const char* event_type, uint32_t value) {

@@ -1,6 +1,6 @@
-#include fuel_calc.h"
-#include table_16x16.h"
-#include s3_control_config.h"
+#include "fuel_calc.h"
+#include "table_16x16.h"
+#include "engine_config.h"
 #include "esp_timer.h"
 #include <math.h>
 #include <string.h>

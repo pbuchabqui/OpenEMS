@@ -7,12 +7,12 @@
  * - Compensação de latência de injetor
  */
 
-#include fuel_injection.h"
-#include mcpwm_injection.h"
-#include mcpwm_injection_hp.h"
-#include sync.h"
-#include hp_state.h"
-#include math_utils.h"
+#include "fuel_injection.h"
+#include "mcpwm_injection.h"
+#include "mcpwm_injection_hp.h"
+#include "sync.h"
+#include "hp_state.h"
+#include "math_utils.h"
 
 static fuel_injection_config_t g_fuel_cfg = {
     .cyl_tdc_deg = {0.0f, 180.0f, 360.0f, 540.0f},
