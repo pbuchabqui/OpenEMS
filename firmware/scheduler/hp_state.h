@@ -92,10 +92,10 @@ float hp_state_get_injector_latency(float battery_voltage, float temperature);
 /**
  * @brief Registra medição de jitter
  * 
- * @param expected_us Tempo esperado em microssegundos
- * @param actual_us Tempo real em microssegundos
+ * @param expected_cycles Expected timestamp in CPU cycles
+ * @param actual_cycles   Actual timestamp in CPU cycles
  */
-void hp_state_record_jitter(uint32_t expected_us, uint32_t actual_us);
+void hp_state_record_jitter(uint32_t expected_cycles, uint32_t actual_cycles);
 
 /**
  * @brief Obtém estatísticas de jitter

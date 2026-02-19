@@ -38,7 +38,15 @@ typedef struct {
     uint32_t latency_us;         // Estimated latency between capture and update
 } sync_data_t;
 
-typedef void (*sync_tooth_callback_t)(void *ctx);
+// H1 fix: pass tooth data directly from ISR to avoid re-acquiring spinlock in callback.
+// All parameters are snapshotted from g_sync_data before invoking the callback.
+typedef void (*sync_tooth_callback_t)(uint32_t tooth_time_us,
+                                      uint32_t tooth_period_us,
+                                      uint8_t  tooth_index,
+                                      uint8_t  revolution_idx,
+                                      uint16_t rpm,
+                                      bool     sync_acquired,
+                                      void    *ctx);
 
 // Function prototypes
 esp_err_t sync_init(void);

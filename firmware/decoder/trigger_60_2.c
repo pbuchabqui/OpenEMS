@@ -598,7 +598,21 @@ static bool IRAM_ATTR sync_pcnt_on_reach(pcnt_unit_handle_t unit,
     sync_tooth_callback_t cb = g_tooth_cb;
     void *cb_ctx = g_tooth_cb_ctx;
     if (cb != NULL) {
-        cb(cb_ctx);
+        // H1 fix: snapshot tooth data under spinlock and pass to callback so it
+        // can call evt_scheduler_on_tooth() without needing to re-acquire the lock.
+        uint32_t t_time, t_period;
+        uint8_t  t_index, t_rev;
+        uint16_t t_rpm;
+        bool     t_sync;
+        portENTER_CRITICAL_ISR(&g_sync_spinlock);
+        t_time   = g_sync_data.last_tooth_time;
+        t_period = g_sync_data.tooth_period;
+        t_index  = (uint8_t)(g_sync_data.tooth_index & 0xFFU);
+        t_rev    = g_sync_data.revolution_index;
+        t_rpm    = (uint16_t)(g_sync_data.rpm > 0xFFFFU ? 0xFFFFU : g_sync_data.rpm);
+        t_sync   = g_sync_data.sync_acquired;
+        portEXIT_CRITICAL_ISR(&g_sync_spinlock);
+        cb(t_time, t_period, t_index, t_rev, t_rpm, t_sync, cb_ctx);
     }
     return false;
 }

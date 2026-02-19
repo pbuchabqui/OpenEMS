@@ -22,6 +22,12 @@ static volatile uint32_t g_sensor_seq = 0;
 static uint32_t map_filter_buffer[16];
 static uint8_t map_filter_index = 0;
 static uint8_t low_rate_decimator = 0;
+// H3 fix: filter state variables moved to file scope to avoid declaring
+// 'static' inside switch cases, which is technically implementation-defined
+// in C99/C11 and triggers warnings on some compilers.
+static float tps_filtered = 0.0f;
+static float clt_filtered = 0.0f;
+static float iat_filtered = 0.0f;
 
 static void process_sensors_task(void *pvParameters);
 static float adc_to_range(uint32_t adc, float min_val, float max_val);
@@ -272,31 +278,28 @@ void process_sensors_task(void *pvParameters) {
                             
                         case SENSOR_TPS:
                             // Filtro passa-baixas de 1ª ordem
-                            static float tps_filtered = 0.0f;
-                            tps_filtered = (tps_filtered * (1.0f - g_sensor_config.tps_filter_alpha)) + 
-                                          (val * g_sensor_config.tps_filter_alpha);
+                            tps_filtered = (tps_filtered * (1.0f - g_sensor_config.tps_filter_alpha)) +
+                                           (val * g_sensor_config.tps_filter_alpha);
                             g_sensor_data.tps_percent = (uint16_t)(adc_to_range((uint32_t)tps_filtered, TPS_SENSOR_MIN, TPS_SENSOR_MAX));
                             break;
-                            
+
                         case SENSOR_CLT:
                             if ((low_rate_decimator & 0x03) != 0) {
                                 break;
                             }
                             // Filtro exponencial forte
-                            static float clt_filtered = 0.0f;
-                            clt_filtered = (clt_filtered * (1.0f - g_sensor_config.temp_filter_alpha)) + 
-                                          (val * g_sensor_config.temp_filter_alpha);
+                            clt_filtered = (clt_filtered * (1.0f - g_sensor_config.temp_filter_alpha)) +
+                                           (val * g_sensor_config.temp_filter_alpha);
                             g_sensor_data.clt_c = (int16_t)(adc_to_range((uint32_t)clt_filtered, CLT_SENSOR_MIN, CLT_SENSOR_MAX));
                             break;
-                            
+
                         case SENSOR_IAT:
                             if ((low_rate_decimator & 0x03) != 0) {
                                 break;
                             }
                             // Filtro exponencial forte
-                            static float iat_filtered = 0.0f;
-                            iat_filtered = (iat_filtered * (1.0f - g_sensor_config.temp_filter_alpha)) + 
-                                          (val * g_sensor_config.temp_filter_alpha);
+                            iat_filtered = (iat_filtered * (1.0f - g_sensor_config.temp_filter_alpha)) +
+                                           (val * g_sensor_config.temp_filter_alpha);
                             g_sensor_data.iat_c = (int16_t)(adc_to_range((uint32_t)iat_filtered, IAT_SENSOR_MIN, IAT_SENSOR_MAX));
                             break;
 

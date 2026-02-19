@@ -142,9 +142,15 @@ IRAM_ATTR void evt_scheduler_on_tooth(uint32_t tooth_time_us,
                                       uint32_t tooth_period_us,
                                       uint8_t  tooth_index,
                                       uint8_t  revolution_idx,
-                                      uint16_t rpm) {
+                                      uint16_t rpm,
+                                      bool     sync_acquired) {
 
     portENTER_CRITICAL_ISR(&s_lock);
+
+    // H1 fix: propagate decoder sync state so events fire only when fully synced.
+    // evt_set_sync_valid(false) from engine_control_stop() overrides this when
+    // the engine is shut down, since the tooth callback is unregistered first.
+    s_state.sync_valid = sync_acquired;
 
     // Update engine state
     s_state.tooth_time_us    = tooth_time_us;

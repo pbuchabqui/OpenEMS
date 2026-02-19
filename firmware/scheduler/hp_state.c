@@ -61,9 +61,11 @@ float hp_state_get_injector_latency(float battery_voltage, float temperature) {
     return hp_get_injector_latency(&g_hw_latency, battery_voltage, temperature);
 }
 
-void hp_state_record_jitter(uint32_t expected_us, uint32_t actual_us) {
-    int32_t jitter = (int32_t)actual_us - (int32_t)expected_us;
-    hp_record_jitter(&g_jitter_measurer, (float)jitter);
+void hp_state_record_jitter(uint32_t expected_cycles, uint32_t actual_cycles) {
+    // H4 fix: hp_record_jitter takes (measurer, target_cycles, actual_cycles).
+    // The old code computed a float jitter and passed it as the 2nd arg, which
+    // was both the wrong type and missing the 3rd argument — compilation error.
+    hp_record_jitter(&g_jitter_measurer, expected_cycles, actual_cycles);
 }
 
 void hp_state_get_jitter_stats(float *avg_us, float *max_us, float *min_us) {

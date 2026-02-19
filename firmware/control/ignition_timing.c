@@ -71,19 +71,17 @@ bool ignition_init(void) {
     return false;
 }
 
-void ignition_apply_timing(uint16_t advance_deg10, uint16_t rpm) {
+void ignition_apply_timing(uint16_t advance_deg10, uint16_t rpm, float vbat_v) {
     float advance_degrees = advance_deg10 / 10.0f;
-    float battery_voltage = 13.5f;
+    // H2 fix: use caller-supplied battery voltage (from plan snapshot) for
+    // consistent dwell calculation. Still read CLT for temperature bias.
+    float battery_voltage = (vbat_v > 0.0f) ? vbat_v : 13.5f;
 
     sensor_data_t sensors = {0};
     if (sensor_get_data_fast(&sensors) == ESP_OK) {
-        if (sensors.vbat_dv > 0) {
-            battery_voltage = sensors.vbat_dv / 10.0f;
-        }
         battery_voltage = apply_temp_dwell_bias(battery_voltage, sensors.clt_c);
-    } else {
-        battery_voltage = clamp_float(battery_voltage, 8.0f, 16.5f);
     }
+    battery_voltage = clamp_float(battery_voltage, 8.0f, 16.5f);
 
     sync_data_t sync_data = {0};
     sync_config_t sync_cfg = {0};
