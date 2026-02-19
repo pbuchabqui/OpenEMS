@@ -43,7 +43,8 @@ bool fuel_injection_schedule_eoi_ex(uint8_t cylinder_id,
                                       float target_eoi_deg,
                                       uint32_t pulsewidth_us,
                                       const sync_data_t *sync,
-                                      fuel_injection_schedule_info_t *info) {
+                                      fuel_injection_schedule_info_t *info,
+                                      float battery_voltage) {
     if (!sync || cylinder_id < 1 || cylinder_id > 4) {
         return false;
     }
@@ -60,13 +61,15 @@ bool fuel_injection_schedule_eoi_ex(uint8_t cylinder_id,
     float current_angle = compute_current_angle_deg(sync, sync_cfg.tooth_count);
     float eoi_deg = wrap_angle_720(target_eoi_deg + g_fuel_cfg.cyl_tdc_deg[cylinder_id - 1]);
     
-    // Calcular pulso width compensado
-    float compensated_pw = (float)pulsewidth_us;
-    float battery_voltage = 13.5f;
-    float temperature = 25.0f;
+    // C10 fix: Use actual battery voltage from sensor instead of hardcoded 13.5V
+    // Default to 13.5V only if invalid voltage provided
+    if (battery_voltage < 8.0f || battery_voltage > 18.0f) {
+        battery_voltage = 13.5f;
+    }
     
-    // Aplicar compensação de latência do injetor usando estado centralizado
-    mcpwm_injection_hp_apply_latency_compensation(&compensated_pw, battery_voltage, temperature);
+    // Apply injector latency compensation using actual battery voltage
+    float compensated_pw = (float)pulsewidth_us;
+    mcpwm_injection_hp_apply_latency_compensation(&compensated_pw, battery_voltage, 25.0f);
     
     float pw_deg = compensated_pw / us_per_deg;
     float soi_deg = wrap_angle_720(eoi_deg - pw_deg);
@@ -96,12 +99,14 @@ bool fuel_injection_schedule_eoi(uint8_t cylinder_id,
                                    float target_eoi_deg,
                                    uint32_t pulsewidth_us,
                                    const sync_data_t *sync) {
-    return fuel_injection_schedule_eoi_ex(cylinder_id, target_eoi_deg, pulsewidth_us, sync, NULL);
+    // Default battery voltage if caller doesn't provide
+    return fuel_injection_schedule_eoi_ex(cylinder_id, target_eoi_deg, pulsewidth_us, sync, NULL, 13.5f);
 }
 
 bool fuel_injection_schedule_sequential(uint32_t pulsewidth_us[4],
                                           float target_eoi_deg[4],
-                                          const sync_data_t *sync) {
+                                          const sync_data_t *sync,
+                                          float battery_voltage) {
     if (!sync || !pulsewidth_us || !target_eoi_deg) {
         return false;
     }
@@ -111,13 +116,18 @@ bool fuel_injection_schedule_sequential(uint32_t pulsewidth_us[4],
         return false;
     }
     
+    // C10 fix: Validate battery voltage
+    if (battery_voltage < 8.0f || battery_voltage > 18.0f) {
+        battery_voltage = 13.5f;
+    }
+    
     uint32_t offsets[4];
     // Obter contador atual do timer MCPWM (valor real, não sintético)
     uint32_t current_counter = mcpwm_injection_hp_get_counter(0);
     
     for (int i = 0; i < 4; i++) {
         fuel_injection_schedule_info_t info;
-        if (!fuel_injection_schedule_eoi_ex(i + 1, target_eoi_deg[i], pulsewidth_us[i], sync, &info)) {
+        if (!fuel_injection_schedule_eoi_ex(i + 1, target_eoi_deg[i], pulsewidth_us[i], sync, &info, battery_voltage)) {
             return false;
         }
         offsets[i] = info.delay_us;

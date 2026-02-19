@@ -49,8 +49,13 @@ __attribute__((always_inline)) static inline void HAL_GPIO_Low(uint32_t gpio_num
  * @brief Write injector state (active HIGH, low-side driver)
  * @param channel Injector channel 0-3
  * @param active  true = inject, false = off
+ * H16 fix: Added bounds checking to prevent out-of-bounds access
  */
 __attribute__((always_inline)) static inline void HAL_Injector_Set(uint8_t channel, bool active) {
+    // H16 fix: bounds check - ignore invalid channel
+    if (channel >= 4) {
+        return;
+    }
     static const uint32_t pins[4] = {
         HAL_PIN_INJ_1, HAL_PIN_INJ_2, HAL_PIN_INJ_3, HAL_PIN_INJ_4
     };
@@ -62,8 +67,13 @@ __attribute__((always_inline)) static inline void HAL_Injector_Set(uint8_t chann
  * @brief Write ignition coil state (active HIGH = charge / dwell)
  * @param channel Ignition channel 0-3
  * @param charge  true = charging coil (dwell), false = fire (spark)
+ * H16 fix: Added bounds checking to prevent out-of-bounds access
  */
 __attribute__((always_inline)) static inline void HAL_Ignition_Set(uint8_t channel, bool charge) {
+    // H16 fix: bounds check - ignore invalid channel
+    if (channel >= 4) {
+        return;
+    }
     static const uint32_t pins[4] = {
         HAL_PIN_IGN_1, HAL_PIN_IGN_2, HAL_PIN_IGN_3, HAL_PIN_IGN_4
     };

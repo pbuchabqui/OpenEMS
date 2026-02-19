@@ -37,19 +37,23 @@ typedef struct {
 
 /**
  * @brief Write new data (Core 0 / ISR safe, no blocking)
+ * H9 fix: Added proper memory barriers using __sync_synchronize() for
+ * cross-core data exchange on ESP32-S3 dual-core system.
  */
 IRAM_ATTR static inline void atomic_buf_write(atomic_buf_t *buf,
                                                const void   *src,
                                                size_t        len) {
     buf->sequence++;                          // Mark write in progress (odd)
-    __asm__ volatile("" ::: "memory");        // Compiler barrier
+    __sync_synchronize();                    // H9 fix: memory barrier before data write
     memcpy(buf->data, src, len);
-    __asm__ volatile("" ::: "memory");
+    __sync_synchronize();                    // H9 fix: memory barrier after data write
     buf->sequence++;                          // Mark write done (even)
 }
 
 /**
  * @brief Read a consistent snapshot (Core 1, may spin briefly)
+ * H9 fix: Added proper memory barriers using __sync_synchronize() for
+ * cross-core data exchange on ESP32-S3 dual-core system.
  */
 static inline void atomic_buf_read(atomic_buf_t *buf,
                                     void         *dst,
@@ -58,9 +62,9 @@ static inline void atomic_buf_read(atomic_buf_t *buf,
     do {
         seq0 = buf->sequence;
         if (seq0 & 1U) continue;             // Write in progress — retry
-        __asm__ volatile("" ::: "memory");
+        __sync_synchronize();                // H9 fix: memory barrier before data read
         memcpy(dst, buf->data, len);
-        __asm__ volatile("" ::: "memory");
+        __sync_synchronize();                // H9 fix: memory barrier after data read
         seq1 = buf->sequence;
     } while (seq0 != seq1);
 }
