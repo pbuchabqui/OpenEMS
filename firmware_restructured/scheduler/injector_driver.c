@@ -47,6 +47,9 @@ typedef struct {
 static mcpwm_injection_channel_hp_t g_channels_hp[4];
 static bool g_initialized_hp = false;
 
+// Hard safety limit: cut injector if pulsewidth exceeds this.
+#define INJECTOR_MAX_ON_US   PW_MAX_US
+
 static mcpwm_injection_config_t g_cfg = {
     .base_frequency_hz = 1000000,
     .timer_resolution_bits = 20,
@@ -171,10 +174,20 @@ IRAM_ATTR bool mcpwm_injection_hp_schedule_one_shot_absolute(
 
     mcpwm_injection_channel_hp_t *ch = &g_channels_hp[cylinder_id];
     uint32_t pw = clamp_u32_hp(pulsewidth_us, g_cfg.min_pulsewidth_us, g_cfg.max_pulsewidth_us);
+    if (pw > INJECTOR_MAX_ON_US) {
+        mcpwm_injection_hp_stop(cylinder_id);
+        return false;
+    }
 
     // Calcular valores ABSOLUTOS
     uint32_t start_ticks = delay_us;
     uint32_t end_ticks = delay_us + pw;
+
+    // Enforce max on-time in absolute domain as well
+    if ((end_ticks - start_ticks) > INJECTOR_MAX_ON_US) {
+        mcpwm_injection_hp_stop(cylinder_id);
+        return false;
+    }
 
     // Verificar se o target já passou
     if (delay_us <= current_counter) {

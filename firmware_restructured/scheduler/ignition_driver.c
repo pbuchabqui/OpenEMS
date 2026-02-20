@@ -34,6 +34,9 @@ bool mcpwm_ignition_hp_deinit(void);
 // Configuração de período absoluto para janelas de timing
 #define HP_ABS_PERIOD_TICKS 30000000UL  // 30 segundos em ticks de 1us
 
+// Hard safety limits for dwell
+#define IGN_DWELL_MAX_MS_LIMIT  IGN_DWELL_MS_MAX
+
 typedef struct {
     mcpwm_timer_handle_t timer;
     mcpwm_oper_handle_t oper;
@@ -170,6 +173,9 @@ IRAM_ATTR bool mcpwm_ignition_hp_schedule_one_shot_absolute(
     mcpwm_ign_channel_hp_t *ch = &g_channels_hp[cylinder_id - 1];
     float dwell_time_ms = calculate_dwell_time_hp(battery_voltage);
     dwell_time_ms = adjust_dwell_for_rpm_hp(dwell_time_ms, rpm);
+    if (dwell_time_ms > IGN_DWELL_MAX_MS_LIMIT) {
+        dwell_time_ms = IGN_DWELL_MAX_MS_LIMIT;
+    }
     uint32_t dwell_ticks = (uint32_t)(dwell_time_ms * 1000.0f);
 
     uint32_t dwell_start_ticks = (target_us > dwell_ticks) ? (target_us - dwell_ticks) : 0;

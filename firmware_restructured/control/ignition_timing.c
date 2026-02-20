@@ -73,6 +73,7 @@ bool ignition_init(void) {
 
 void ignition_apply_timing(uint16_t advance_deg10, uint16_t rpm, float vbat_v) {
     float advance_degrees = advance_deg10 / 10.0f;
+    advance_degrees = clamp_float(advance_degrees, IGN_ADVANCE_MIN_DEG, IGN_ADVANCE_MAX_DEG);
     // H2 fix: use caller-supplied battery voltage (from plan snapshot) for
     // consistent dwell calculation. Still read CLT for temperature bias.
     float battery_voltage = (vbat_v > 0.0f) ? vbat_v : 13.5f;

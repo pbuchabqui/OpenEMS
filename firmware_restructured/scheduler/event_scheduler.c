@@ -53,9 +53,25 @@ static float s_deg_per_tooth   = 6.0f;
 // ── Helper: normalize angle to [0, 720) ───────────────────────────────────────
 
 __attribute__((always_inline)) static inline float normalize_angle(float a) {
-    while (a >= 720.0f) a -= 720.0f;
-    while (a <    0.0f) a += 720.0f;
-    return a;
+    if (!isfinite(a)) {
+        return 0.0f;
+    }
+
+    if (a >= 0.0f && a < 720.0f) {
+        return a;
+    }
+    if (a >= 720.0f && a < 1440.0f) {
+        return a - 720.0f;
+    }
+    if (a < 0.0f && a >= -720.0f) {
+        return a + 720.0f;
+    }
+
+    float r = fmodf(a, 720.0f);
+    if (r < 0.0f) {
+        r += 720.0f;
+    }
+    return r;
 }
 
 // ── Helper: angular distance from 'from' to 'to' in forward direction ─────────

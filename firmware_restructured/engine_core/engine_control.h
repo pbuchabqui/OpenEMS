@@ -2,7 +2,7 @@
 #define ENGINE_CONTROL_H
 
 #include "esp_err.h"
-#include "sensor_processing.h"
+#include "sensors/sensor_processing.h"
 
 // Engine parameters
 typedef struct {

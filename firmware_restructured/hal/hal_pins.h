@@ -27,14 +27,14 @@
 // ── Injectors (low-side, active HIGH) ────────────────────────────────────────
 #define HAL_PIN_INJ_1       GPIO_NUM_12   // Injector 1 (MCPWM)
 #define HAL_PIN_INJ_2       GPIO_NUM_13   // Injector 2 (MCPWM)
-#define HAL_PIN_INJ_3       GPIO_NUM_15   // Injector 3 (MCPWM)
-#define HAL_PIN_INJ_4       GPIO_NUM_16   // Injector 4 (MCPWM)
+#define HAL_PIN_INJ_3       GPIO_NUM_14   // Injector 3 (MCPWM)
+#define HAL_PIN_INJ_4       GPIO_NUM_15   // Injector 4 (MCPWM)
 
 // ── Ignition (logic-level COP, active HIGH) ──────────────────────────────────
-#define HAL_PIN_IGN_1       GPIO_NUM_17   // Ignition 1 (MCPWM)
-#define HAL_PIN_IGN_2       GPIO_NUM_18   // Ignition 2 (MCPWM)
-#define HAL_PIN_IGN_3       GPIO_NUM_19   // Ignition 3 (MCPWM)
-#define HAL_PIN_IGN_4       GPIO_NUM_20   // Ignition 4 (MCPWM)
+#define HAL_PIN_IGN_1       GPIO_NUM_16   // Ignition 1 (MCPWM)
+#define HAL_PIN_IGN_2       GPIO_NUM_17   // Ignition 2 (MCPWM)
+#define HAL_PIN_IGN_3       GPIO_NUM_18   // Ignition 3 (MCPWM)
+#define HAL_PIN_IGN_4       GPIO_NUM_21   // Ignition 4 (MCPWM)
 
 // ── CAN / TWAI ───────────────────────────────────────────────────────────────
 #define HAL_PIN_CAN_TX      GPIO_NUM_10   // CAN TX
@@ -51,8 +51,8 @@
 #define HAL_PIN_VBAT        GPIO_NUM_9    // Battery voltage divider (ADC1_CH8)
 
 // ── Digital inputs ───────────────────────────────────────────────────────────
-#define HAL_PIN_FLEX        GPIO_NUM_26   // Flex fuel sensor (frequency input)
-#define HAL_PIN_VSS         GPIO_NUM_27   // Vehicle speed (pulse input)
+#define HAL_PIN_FLEX        GPIO_NUM_27   // Flex fuel sensor (frequency input)
+#define HAL_PIN_VSS         GPIO_NUM_32   // Vehicle speed (pulse input)
 #define HAL_PIN_CLUTCH      GPIO_NUM_28   // Clutch switch
 #define HAL_PIN_BRAKE       GPIO_NUM_29   // Brake switch
 
@@ -75,7 +75,7 @@
 
 // ── SD card (SPI) ────────────────────────────────────────────────────────────
 // Standard ESP32 VSPI (FSPI on S3):
-#define HAL_PIN_SD_CS       GPIO_NUM_21   // Chip Select (GPIO 21)
+#define HAL_PIN_SD_CS       GPIO_NUM_26   // Chip Select (GPIO 26)
 #define HAL_PIN_SD_CLK      GPIO_NUM_14   // Clock (GPIO 14)
 #define HAL_PIN_SD_MOSI     GPIO_NUM_37   // MOSI (GPIO 37)
 #define HAL_PIN_SD_MISO     GPIO_NUM_36   // MISO (GPIO 36)
