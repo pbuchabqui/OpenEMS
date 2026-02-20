@@ -47,8 +47,7 @@ bool mcpwm_ignition_hp_deinit(void);
 #define HP_ABS_PERIOD_TICKS 30000000UL  // 30 segundos em ticks de 1us
 
 typedef struct {
-    mcpwm_timer_handle_t timer;
-    mcpwm_oper_handle_t oper;
+    mcpwm_oper_handle_t oper;        // operator in shared timer (NOT per-channel timer!)
     mcpwm_cmpr_handle_t cmp_dwell;
     mcpwm_cmpr_handle_t cmp_spark;
     mcpwm_gen_handle_t gen;
@@ -57,6 +56,9 @@ typedef struct {
     bool is_active;
     uint32_t last_counter_value;
 } mcpwm_ign_channel_hp_t;
+
+// Shared timers (one per MCPWM group)
+static mcpwm_timer_handle_t g_ign_timer[2];  // [0]=MCPWM0 group 0, [1]=MCPWM1 group 1
 
 static mcpwm_ign_channel_hp_t g_channels_hp[4];
 static bool g_initialized_hp = false;
@@ -90,31 +92,35 @@ IRAM_ATTR static uint32_t calculate_spark_ticks_hp(uint16_t rpm, float advance_d
 bool mcpwm_ignition_hp_init(void) {
     if (g_initialized_hp) return true;
 
-    // NOTA: O estado HP centralizado é inicializado por ignition_init()
-    // Este driver apenas configura o hardware MCPWM
+    // H8 FIX (Option B): Shared-timer architecture
+    // ────────────────────────────────────────────────────────────────────────
+    // MCPWM0 (group 0):
+    //   Timer0 (shared) → Op0 (Cyl1) + Op1 (Cyl3) + Op2 (Cyl4)
+    // MCPWM1 (group 1):
+    //   Timer0 (shared) → Op0 (Cyl2)
+    // ────────────────────────────────────────────────────────────────────────
 
     const gpio_num_t gpios[4] = {IGNITION_GPIO_1, IGNITION_GPIO_2, IGNITION_GPIO_3, IGNITION_GPIO_4};
 
-    for (int i = 0; i < 4; i++) {
-        int group_id = i / SOC_MCPWM_TIMERS_PER_GROUP;
-        if (group_id >= SOC_MCPWM_GROUPS) {
-            // H8: injection driver already consumed all MCPWM groups.
-            // See the H8 comment at the top of this file for workaround options.
-            ESP_LOGE(TAG, "H8: MCPWM group %d unavailable for ignition channel %d "
-                         "(all %d groups exhausted by injection driver). "
-                         "Requires driver refactor — see H8 comment.",
-                     group_id, i, SOC_MCPWM_GROUPS);
-            mcpwm_ignition_hp_deinit();
-            return false;
-        }
+    // Cylinder → MCPWM group and operator index mapping
+    // Cyl1: group 0, op 0
+    // Cyl2: group 1, op 0
+    // Cyl3: group 0, op 1
+    // Cyl4: group 0, op 2
+    const struct {
+        int group_id;
+        int op_index;
+    } cyl_config[4] = {
+        {0, 0},  // Cyl1 → MCPWM0 Op0
+        {1, 0},  // Cyl2 → MCPWM1 Op0
+        {0, 1},  // Cyl3 → MCPWM0 Op1
+        {0, 2},  // Cyl4 → MCPWM0 Op2
+    };
 
-        g_channels_hp[i].coil_pin = gpios[i];
-        g_channels_hp[i].current_dwell_ms = 3.0f;
-        g_channels_hp[i].is_active = false;
-        g_channels_hp[i].last_counter_value = 0;
-
+    // STEP 1: Create shared timers (one per group)
+    for (int g = 0; g < SOC_MCPWM_GROUPS; g++) {
         mcpwm_timer_config_t timer_cfg = {
-            .group_id = group_id,
+            .group_id = g,
             .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
             .resolution_hz = 1000000,
             .count_mode = MCPWM_TIMER_COUNT_MODE_UP,
@@ -122,14 +128,29 @@ bool mcpwm_ignition_hp_init(void) {
             .intr_priority = 0,
             .flags = {.update_period_on_empty = 0},
         };
-        if (!mcpwm_ok_hp(mcpwm_new_timer(&timer_cfg, &g_channels_hp[i].timer), "new_timer", i)) {
+        if (!mcpwm_ok_hp(mcpwm_new_timer(&timer_cfg, &g_ign_timer[g]), "new_timer", g)) {
+            mcpwm_ignition_hp_deinit();
+            return false;
+        }
+    }
+
+    // STEP 2: Create operators and connect to shared timers
+    for (int i = 0; i < 4; i++) {
+        int group_id = cyl_config[i].group_id;
+
+        g_channels_hp[i].coil_pin = gpios[i];
+        g_channels_hp[i].current_dwell_ms = 3.0f;
+        g_channels_hp[i].is_active = false;
+        g_channels_hp[i].last_counter_value = 0;
+
+        mcpwm_operator_config_t oper_cfg = {.group_id = group_id};
+        if (!mcpwm_ok_hp(mcpwm_new_operator(&oper_cfg, &g_channels_hp[i].oper), "new_operator", i)) {
             mcpwm_ignition_hp_deinit();
             return false;
         }
 
-        mcpwm_operator_config_t oper_cfg = {.group_id = group_id};
-        if (!mcpwm_ok_hp(mcpwm_new_operator(&oper_cfg, &g_channels_hp[i].oper), "new_operator", i) ||
-            !mcpwm_ok_hp(mcpwm_operator_connect_timer(g_channels_hp[i].oper, g_channels_hp[i].timer), "connect_timer", i)) {
+        // Connect operator to shared timer for this group
+        if (!mcpwm_ok_hp(mcpwm_operator_connect_timer(g_channels_hp[i].oper, g_ign_timer[group_id]), "connect_timer", i)) {
             mcpwm_ignition_hp_deinit();
             return false;
         }
@@ -151,24 +172,33 @@ bool mcpwm_ignition_hp_init(void) {
                 g_channels_hp[i].gen,
                 MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, g_channels_hp[i].cmp_dwell, MCPWM_GEN_ACTION_HIGH),
                 MCPWM_GEN_COMPARE_EVENT_ACTION(MCPWM_TIMER_DIRECTION_UP, g_channels_hp[i].cmp_spark, MCPWM_GEN_ACTION_LOW),
-                MCPWM_GEN_COMPARE_EVENT_ACTION_END()), "set_actions_compare", i) ||
-            !mcpwm_ok_hp(mcpwm_timer_enable(g_channels_hp[i].timer), "timer_enable", i)) {
+                MCPWM_GEN_COMPARE_EVENT_ACTION_END()), "set_actions_compare", i)) {
             mcpwm_ignition_hp_deinit();
             return false;
         }
     }
 
-    for (int i = 0; i < 4; i++) {
-        if (!mcpwm_ok_hp(mcpwm_timer_start_stop(g_channels_hp[i].timer, MCPWM_TIMER_START_NO_STOP), "timer_start_continuous", i)) {
+    // STEP 3: Enable timers (must be after all operators are connected)
+    for (int g = 0; g < SOC_MCPWM_GROUPS; g++) {
+        if (!mcpwm_ok_hp(mcpwm_timer_enable(g_ign_timer[g]), "timer_enable", g)) {
+            mcpwm_ignition_hp_deinit();
+            return false;
+        }
+    }
+
+    // STEP 4: Start timers in continuous mode
+    for (int g = 0; g < SOC_MCPWM_GROUPS; g++) {
+        if (!mcpwm_ok_hp(mcpwm_timer_start_stop(g_ign_timer[g], MCPWM_TIMER_START_NO_STOP), "timer_start_continuous", g)) {
             mcpwm_ignition_hp_deinit();
             return false;
         }
     }
 
     g_initialized_hp = true;
-    ESP_LOGI(TAG, "MCPWM ignition HP initialized with absolute compare");
-    ESP_LOGI(TAG, "  Timer resolution: 1 MHz (1us per tick)");
-    ESP_LOGI(TAG, "  Using centralized HP state");
+    ESP_LOGI(TAG, "MCPWM ignition HP initialized with shared-timer architecture (H8 fix)");
+    ESP_LOGI(TAG, "  MCPWM0: 1 Timer shared by Op0(Cyl1) + Op1(Cyl3) + Op2(Cyl4)");
+    ESP_LOGI(TAG, "  MCPWM1: 1 Timer shared by Op0(Cyl2)");
+    ESP_LOGI(TAG, "  Resources: 2 timers + 4 operators (of 6 available)");
     return true;
 }
 
@@ -239,12 +269,22 @@ void mcpwm_ignition_hp_apply_latency_compensation(float *timing_us, float batter
 }
 
 IRAM_ATTR uint32_t mcpwm_ignition_hp_get_counter(uint8_t cylinder_id) {
-    if (cylinder_id >= 4 || !g_initialized_hp || !g_channels_hp[cylinder_id].timer) {
+    if (!g_initialized_hp || cylinder_id >= 4) {
         return 0;
     }
+
+    // Map cylinder to its group's shared timer
+    // Cyl1, Cyl3, Cyl4 → MCPWM0 group
+    // Cyl2 → MCPWM1 group
+    int group_id = (cylinder_id == 1) ? 1 : 0;  // Cyl2 (id=1) is in group 1, others in group 0
+
+    if (!g_ign_timer[group_id]) {
+        return 0;
+    }
+
     uint32_t counter = 0;
     mcpwm_timer_direction_t direction;
-    esp_err_t err = mcpwm_timer_get_phase(g_channels_hp[cylinder_id].timer, &counter, &direction);
+    esp_err_t err = mcpwm_timer_get_phase(g_ign_timer[group_id], &counter, &direction);
     if (err != ESP_OK) {
         return 0;
     }
@@ -252,14 +292,45 @@ IRAM_ATTR uint32_t mcpwm_ignition_hp_get_counter(uint8_t cylinder_id) {
 }
 
 bool mcpwm_ignition_hp_deinit(void) {
+    // H8 FIX: CRITICAL deinit order for shared timers:
+    // 1. Delete generators (children of operators)
+    // 2. Delete comparators (children of operators)
+    // 3. Delete operators (connected to shared timers)
+    // 4. THEN delete timers (after all operators are disconnected)
+
+    // Step 1-3: Delete channel resources (gen, cmpr, oper)
     for (int i = 0; i < 4; i++) {
-        if (g_channels_hp[i].timer) { mcpwm_timer_disable(g_channels_hp[i].timer); mcpwm_del_timer(g_channels_hp[i].timer); g_channels_hp[i].timer = NULL; }
-        if (g_channels_hp[i].gen) { mcpwm_del_generator(g_channels_hp[i].gen); g_channels_hp[i].gen = NULL; }
-        if (g_channels_hp[i].cmp_dwell) { mcpwm_del_comparator(g_channels_hp[i].cmp_dwell); g_channels_hp[i].cmp_dwell = NULL; }
-        if (g_channels_hp[i].cmp_spark) { mcpwm_del_comparator(g_channels_hp[i].cmp_spark); g_channels_hp[i].cmp_spark = NULL; }
-        if (g_channels_hp[i].oper) { mcpwm_del_operator(g_channels_hp[i].oper); g_channels_hp[i].oper = NULL; }
+        if (g_channels_hp[i].gen) {
+            mcpwm_del_generator(g_channels_hp[i].gen);
+            g_channels_hp[i].gen = NULL;
+        }
+        if (g_channels_hp[i].cmp_dwell) {
+            mcpwm_del_comparator(g_channels_hp[i].cmp_dwell);
+            g_channels_hp[i].cmp_dwell = NULL;
+        }
+        if (g_channels_hp[i].cmp_spark) {
+            mcpwm_del_comparator(g_channels_hp[i].cmp_spark);
+            g_channels_hp[i].cmp_spark = NULL;
+        }
+        if (g_channels_hp[i].oper) {
+            mcpwm_del_operator(g_channels_hp[i].oper);
+            g_channels_hp[i].oper = NULL;
+        }
     }
+
+    // Step 4: Delete shared timers (NOW that all operators are disconnected)
+    for (int g = 0; g < SOC_MCPWM_GROUPS; g++) {
+        if (g_ign_timer[g]) {
+            mcpwm_timer_disable(g_ign_timer[g]);
+            mcpwm_del_timer(g_ign_timer[g]);
+            g_ign_timer[g] = NULL;
+        }
+    }
+
     g_initialized_hp = false;
-    for (int i = 0; i < 4; i++) { g_channels_hp[i].current_dwell_ms = 0.0f; g_channels_hp[i].is_active = false; }
+    for (int i = 0; i < 4; i++) {
+        g_channels_hp[i].current_dwell_ms = 0.0f;
+        g_channels_hp[i].is_active = false;
+    }
     return true;
 }
