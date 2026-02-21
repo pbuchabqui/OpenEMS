@@ -1,0 +1,34 @@
+# Build outputs
+*.o
+*.obj
+*.exe
+*.a
+*.lib
+*.so
+*.dylib
+
+# ESP-IDF build outputs
+build/
+sdkconfig
+sdkconfig.old
+
+# Test executables
+test_*
+simple_test
+
+# IDE files
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
