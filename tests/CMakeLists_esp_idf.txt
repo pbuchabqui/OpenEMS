@@ -1,0 +1,66 @@
+# OpenEMS Test Framework - ESP-IDF Integration
+# CMakeLists.txt para integração completa com ESP-IDF
+
+cmake_minimum_required(VERSION 3.16)
+
+# Incluir ESP-IDF project
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+# Projeto OpenEMS com testes
+project(openems_tests VERSION 1.0.0 LANGUAGES C CXX)
+
+# Componente principal do OpenEMS
+set(COMPONENT_SRCS
+    ../firmware_restructured/sensors/trigger_60_2.c
+    ../firmware_restructured/scheduler/event_scheduler.c
+    ../firmware_restructured/drivers/mcpwm_injection_hp.c
+    ../firmware_restructured/utils/atomic_buffer.c
+)
+
+# Componente de testes
+set(TEST_COMPONENT_SRCS
+    unit/sensors/test_trigger_60_2.c
+    unit/scheduler/test_event_scheduler.c
+    unit/drivers/test_mcpwm_injection.c
+    integration/test_core_communication.c
+    mocks/mock_hal_timer.c
+    mocks/mock_hal_gpio.c
+    fixtures/engine_test_data.c
+)
+
+# Registrar componente principal
+idf_component_register(
+    SRCS ${COMPONENT_SRCS}
+    INCLUDE_DIRS
+        ../firmware_restructured
+        ../firmware_restructured/hal
+        ../firmware_restructured/sensors
+        ../firmware_restructured/scheduler
+        ../firmware_restructured/drivers
+        ../firmware_restructured/utils
+    REQUIRES
+        driver
+        esp_timer
+        freertos
+        unity
+)
+
+# Registrar componente de testes
+idf_component_register(
+    openems_tests
+    SRCS ${TEST_COMPONENT_SRCS}
+    INCLUDE_DIRS
+        .
+        mocks
+        fixtures
+        ../firmware_restructured
+    REQUIRES
+        openems
+        unity
+        esp_timer
+        freertos
+)
+
+# Configuração de testes
+enable_testing()
+add_subdirectory(tests)

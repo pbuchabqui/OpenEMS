@@ -12,8 +12,8 @@
  */
 
 #include "mcpwm_injection_hp.h"
+#include "../scheduler/precision_manager.h"
 #include "driver/mcpwm_timer.h"
-#include "driver/mcpwm_oper.h"
 #include "driver/mcpwm_cmpr.h"
 #include "driver/mcpwm_gen.h"
 #include "driver/gpio.h"
@@ -21,9 +21,7 @@
 #include "esp_err.h"
 #include "esp_private/mcpwm.h"
 #include "esp_rom_sys.h"
-#include "soc/soc_caps.h"
-#include "config/engine_config.h"
-#include "scheduler/hp_state.h"
+#include <math.h>
 
 static const char* TAG = "MCPWM_INJECTION_HP";
 

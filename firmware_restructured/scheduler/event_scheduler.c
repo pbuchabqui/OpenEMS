@@ -26,9 +26,10 @@
 #include "ignition_driver.h"
 #include "mcpwm_injection_hp.h"
 #include "mcpwm_ignition_hp.h"
+#include "../utils/logger.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_attr.h"
-#include "esp_log.h"
 #include "../utils/latency_benchmark.h"
 #include <string.h>
 #include <math.h>
@@ -69,7 +70,7 @@ static uint8_t s_tooth_lut_size = 0;
 static uint32_t s_fire_window_q = (uint32_t)(6.0f * 1.5f * (float)ANGLE_Q_ONE);
 
 // OPTIMIZATION: Precomputed lookup tables for angle->delay conversion
-#define RPM_BINS 32
+#define RPM_BINS 64                    // Aumentado para maior precisão em baixa rotação
 #define ANGLE_BINS 720
 static uint32_t s_angle_delay_lut[RPM_BINS][ANGLE_BINS]; // Q16.16 delays
 static uint16_t s_rpm_bin_edges[RPM_BINS];
@@ -126,9 +127,31 @@ static void evt_init_lookup_tables(void) {
         return;
     }
     
-    // Initialize RPM bin edges (250 RPM per bin, 0-8000 RPM)
-    for (int i = 0; i < RPM_BINS; i++) {
-        s_rpm_bin_edges[i] = (uint16_t)(i * 250);
+    // Initialize RPM bin edges - distribuição logarítmica para maior precisão em baixa rotação
+    // 64 bins totais com distribuição:
+    // - 0-1000 RPM: 20 bins (50 RPM cada)
+    // - 1000-2000 RPM: 16 bins (62.5 RPM cada)
+    // - 2000-4000 RPM: 16 bins (125 RPM cada)
+    // - 4000-8000 RPM: 12 bins (333 RPM cada)
+    
+    // Primeiros 20 bins: 0-1000 RPM (50 RPM cada)
+    for (int i = 0; i < 20; i++) {
+        s_rpm_bin_edges[i] = (uint16_t)(i * 50);
+    }
+    
+    // Próximos 16 bins: 1000-2000 RPM (62.5 RPM cada)
+    for (int i = 20; i < 36; i++) {
+        s_rpm_bin_edges[i] = 1000 + (uint16_t)((i - 20) * 62.5f);
+    }
+    
+    // Próximos 16 bins: 2000-4000 RPM (125 RPM cada)
+    for (int i = 36; i < 52; i++) {
+        s_rpm_bin_edges[i] = 2000 + (uint16_t)((i - 36) * 125);
+    }
+    
+    // Últimos 12 bins: 4000-8000 RPM (333 RPM cada)
+    for (int i = 52; i < 64; i++) {
+        s_rpm_bin_edges[i] = 4000 + (uint16_t)((i - 52) * 333);
     }
     
     // Precompute angle->delay for each RPM bin
@@ -146,7 +169,10 @@ static void evt_init_lookup_tables(void) {
     }
     
     s_lut_initialized = true;
-    ESP_LOGI(TAG, "Lookup tables initialized for fast angle conversion");
+    LOG_SYSTEM_I("Lookup tables initialized for fast angle conversion");
+    LOG_SYSTEM_I("  RPM bins: %d (logarithmic distribution)", RPM_BINS);
+    LOG_SYSTEM_I("  Angle bins: %d", ANGLE_BINS);
+    LOG_SYSTEM_I("  Memory usage: %d bytes", RPM_BINS * ANGLE_BINS * sizeof(uint32_t));
 }
 
 // ── OPTIMIZATION: Fast angle->delay using lookup tables ───────────────────────
