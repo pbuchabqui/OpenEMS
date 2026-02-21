@@ -67,25 +67,33 @@ Core 0 ↔ Core 1 data exchange via `utils/atomic_buffer.h` (seqlock, no mutex).
 
 ```
 openems/
-├── firmware_restructured/
+├── firmware_restructured/       Main firmware source code
 │   ├── hal/                    HAL — zero-latency inline wrappers
 │   ├── decoder/                Trigger wheel decoder (Core 0)
-│   ├── scheduler/                Angle-based event scheduler (Core 0)
-│   ├── drivers/                  High-precision MCPWM drivers
-│   ├── sensors/                  Sensor reading and processing
-│   ├── control/                  Control loops (fuel, ignition, VVT, idle, boost)
-│   ├── config/                   Engine parameters, NVS persistence
-│   ├── comms/                   CAN, ESP-NOW, TunerStudio, OBD2
-│   ├── diagnostics/               Fault manager, limp mode, DTC
-│   ├── data_logging/              SD card logger
-│   ├── integration/               ESP32-S3 competitive enhancements
-│   ├── main/                     Main entry points
-│   └── utils/                    Math, logger, CLI, atomic buffer
-├── examples/                    Example implementations
+│   ├── scheduler/              Angle-based event scheduler (Core 0)
+│   ├── drivers/                High-precision MCPWM drivers
+│   ├── sensors/                Sensor reading and processing
+│   ├── control/                Control loops (fuel, ignition, VVT, idle, boost)
+│   ├── config/                 Engine parameters, NVS persistence
+│   ├── comms/                  CAN, ESP-NOW, TunerStudio, OBD2
+│   ├── diagnostics/            Fault manager, limp mode, DTC
+│   ├── data_logging/           SD card logger
+│   ├── integration/            ESP32-S3 competitive enhancements
+│   ├── main/                   Main entry points
+│   └── utils/                  Math, logger, CLI, atomic buffer
+├── tests/                      Complete test framework
+│   ├── unit/                   Unit tests for critical modules
+│   ├── integration/            Integration tests
+│   ├── fixtures/               Test data and scenarios
+│   ├── mocks/                  HAL and ESP-IDF mocks
+│   └── scripts/                Test automation scripts
+├── examples/                   Example implementations
+├── scripts/                    Utility and build scripts
+├── docs/                       Documentation and reports
 ├── ESP32-S3_GUIDE.md           Comprehensive implementation guide
-├── CMakeLists.txt               Build configuration
-├── sdkconfig.defaults             ESP-IDF defaults
-└── partitions.csv               Partition table
+├── CMakeLists.txt              Build configuration
+├── sdkconfig.defaults          ESP-IDF defaults
+└── partitions.csv              Partition table
 ```
 
 ## Building
@@ -148,17 +156,18 @@ See `ESP32-S3_GUIDE.md` for complete implementation details and performance metr
 
 ## Recent Improvements
 
-### ✅ Repository Cleanup (Latest)
-- **Empty Directories:** Removed unused `interfaces/` directory
-- **File Organization:** Consolidated duplicate drivers, moved examples to proper location
-- **Documentation:** Merged redundant guides into comprehensive single guide
-- **Build System:** Updated CMakeLists.txt with correct file paths
+### ✅ Repository Cleanup Complete (Latest)
+- **Clean Structure**: Reduced root directory from ~80 to ~10 essential files
+- **Build Artifacts**: Removed all compiled binaries and temporary test files
+- **Documentation**: Consolidated into organized docs/ directory with changelog
+- **Test Framework**: All tests properly organized under /tests/ structure
+- **Scripts**: Utility scripts moved to dedicated scripts/ directory
 
 ### ✅ HAL Integration Complete
-- **Timer HAL:** All 89 timing calls converted to zero-overhead HAL functions
-- **GPIO HAL:** Ready for high-performance operations when needed
-- **PWM HAL:** Available for actuator control implementation
-- **Performance:** 2-5x improvement in critical timing paths
+- **Timer HAL**: All 89 timing calls converted to zero-overhead HAL functions
+- **GPIO HAL**: Ready for high-performance operations when needed
+- **PWM HAL**: Available for actuator control implementation
+- **Performance**: 2-5x improvement in critical timing paths
 
 ## License
 

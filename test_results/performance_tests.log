@@ -1,7 +1,0 @@
-pkg_resources cannot be imported. The most common cause is a missing pip or setuptools package. If you've installed a custom Python then these packages are provided separately and have to be installed as well. Please refer to the Get Started section of the ESP-IDF Programming Guide for setting up the required packages.
-Constraint file: /home/pedro/.espressif/espidf.constraints.v5.1.txt
-Requirement files:
- - /home/pedro/esp-idf/tools/requirements/requirements.core.txt
-Python being checked: /home/pedro/.espressif/python_env/idf5.1_py3.12_env/bin/python
-
-ESP-IDF v5.1
