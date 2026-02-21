@@ -8,65 +8,78 @@ project(openems VERSION 0.1.0 LANGUAGES C CXX)
 # Collect all firmware source subdirectories as a single component
 set(COMPONENT_SRCS
     # Decoder (Core 0 — time critical)
-    firmware/decoder/trigger_60_2.c
+    firmware_restructured/sensors/trigger_60_2.c
 
     # Scheduler (Core 0 — time critical)
-    firmware/scheduler/event_scheduler.c
-    firmware/scheduler/hp_timing.c
-    firmware/scheduler/hp_state.c
-    firmware/scheduler/injector_driver.c
-    firmware/scheduler/ignition_driver.c
+    firmware_restructured/scheduler/event_scheduler.c
+    firmware_restructured/scheduler/hp_timing.c
+    firmware_restructured/engine_core/hp_state.c
+
+    # High-Precision Drivers (Core 0 — time critical)
+    firmware_restructured/drivers/mcpwm_injection_hp.c
+    firmware_restructured/drivers/mcpwm_ignition_hp.c
 
     # Sensors (Core 1)
-    firmware/sensors/sensor_processing.c
+    firmware_restructured/sensors/sensor_processing.c
+    firmware_restructured/sensors/dsp_sensor_processing.c
+    firmware_restructured/sensors/optimized_sensor_processing.c
+    firmware_restructured/sensors/map_tps_filters.c
+    firmware_restructured/sensors/ulp_monitor.c
 
     # Control loops (Core 1)
-    firmware/control/engine_control.c
-    firmware/control/fuel_calc.c
-    firmware/control/fuel_injection.c
-    firmware/control/ignition_timing.c
-    firmware/control/closed_loop_fuel.c
+    firmware_restructured/engine_core/engine_control.c
+    firmware_restructured/control/fuel_calc.c
+    firmware_restructured/control/fuel_injection.c
+    firmware_restructured/control/ignition_timing.c
+    firmware_restructured/control/closed_loop_fuel.c
 
     # Tables
-    firmware/tables/table_16x16.c
-    firmware/tables/map_storage.c
+    firmware_restructured/config/table_16x16.c
+    firmware_restructured/config/map_storage.c
 
     # Communications (Core 1)
-    firmware/comms/can_wideband.c
-    firmware/comms/espnow_link.c
-    firmware/comms/tunerstudio.c
+    firmware_restructured/comms/can_wideband.c
+    firmware_restructured/comms/espnow_link.c
+    firmware_restructured/comms/espnow_compression.c
+    firmware_restructured/comms/tunerstudio.c
 
     # Diagnostics (Core 1)
-    firmware/diagnostics/fault_manager.c
+    firmware_restructured/diagnostics/fault_manager.c
 
     # Logging (Core 1)
-    firmware/logging/sd_logger.c
+    firmware_restructured/data_logging/sd_logger.c
 
     # Config
-    firmware/config/config_manager.c
+    firmware_restructured/config/config_manager.c
 
     # Utils
-    firmware/utils/logger.c
-    firmware/utils/cli_interface.c
-    firmware/utils/test_framework.c
+    firmware_restructured/utils/logger.c
+    firmware_restructured/utils/cli_interface.c
+    firmware_restructured/utils/latency_benchmark.c
+    firmware_restructured/utils/vector_math.c
+
+    # ESP32-S3 Integration
+    firmware_restructured/integration/esp32s3_integration.c
 
     # Main entry point
-    firmware/main/main.c
+    firmware_restructured/main/esp32s3_main_integration.c
 )
 
 set(COMPONENT_ADD_INCLUDEDIRS
-    firmware
-    firmware/hal
-    firmware/decoder
-    firmware/scheduler
-    firmware/sensors
-    firmware/control
-    firmware/tables
-    firmware/comms
-    firmware/diagnostics
-    firmware/logging
-    firmware/config
-    firmware/utils
+    firmware_restructured
+    firmware_restructured/hal
+    firmware_restructured/sensors
+    firmware_restructured/scheduler
+    firmware_restructured/control
+    firmware_restructured/config
+    firmware_restructured/comms
+    firmware_restructured/diagnostics
+    firmware_restructured/data_logging
+    firmware_restructured/utils
+    firmware_restructured/integration
+    firmware_restructured/main
+    firmware_restructured/drivers
+    firmware_restructured/engine_core
 )
 
 # ESP-IDF component registration
@@ -88,6 +101,8 @@ idf_component_register(
         hal
         esp_rom
         esp_hw_support
+        esp_dsp
+        esp_nn
 )
 
 # Compiler flags

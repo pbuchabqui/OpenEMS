@@ -8,7 +8,7 @@
 
 #include "logging/sd_logger.h"
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "hal/hal_timer.h"
 #include "esp_crc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -233,7 +233,7 @@ static void logger_task(void *arg)
     uint32_t interval_ms = 1000 / g_logger.config.sample_rate_hz;
     
     while (g_logger.logging) {
-        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        uint32_t now_ms = (uint32_t)(HAL_Time_us() / 1000);
         
         if (now_ms - last_capture_ms >= interval_ms) {
             last_capture_ms = now_ms;
@@ -406,7 +406,7 @@ esp_err_t data_logger_start(const char *name)
     
     // Initialize session
     memset(&g_logger.session, 0, sizeof(log_session_header_t));
-    g_logger.session.session_id = (uint32_t)(esp_timer_get_time() / 1000);
+    g_logger.session.session_id = (uint32_t)(HAL_Time_us() / 1000);
     g_logger.session.start_time = g_logger.session.session_id;
     g_logger.session.sample_rate_hz = g_logger.config.sample_rate_hz;
     g_logger.session.format = g_logger.config.format;
@@ -444,7 +444,7 @@ esp_err_t data_logger_start(const char *name)
     }
     
     g_logger.logging = true;
-    g_logger.session_start_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    g_logger.session_start_ms = (uint32_t)(HAL_Time_us() / 1000);
     g_logger.stats.total_sessions++;
     
     ESP_LOGI(TAG, "Logging started: %s", g_logger.session.name);
@@ -464,7 +464,7 @@ esp_err_t data_logger_stop(bool export)
     g_logger.logger_task = NULL;
     
     // Finalize session
-    g_logger.session.end_time = (uint32_t)(esp_timer_get_time() / 1000);
+    g_logger.session.end_time = (uint32_t)(HAL_Time_us() / 1000);
     
     // Calculate CRC
     g_logger.session.crc32 = esp_crc32_le(0, (const uint8_t *)g_logger.buffer_memory, 
@@ -492,7 +492,7 @@ esp_err_t data_logger_capture(void)
     }
     
     log_entry_t entry = {0};
-    entry.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    entry.timestamp_ms = (uint32_t)(HAL_Time_us() / 1000);
     
     // Get engine state
     engine_runtime_state_t state;

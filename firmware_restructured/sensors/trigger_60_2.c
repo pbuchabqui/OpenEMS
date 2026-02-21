@@ -1,4 +1,4 @@
-#include "sync.h"
+#include "utils/sync.h"
 #include "logger.h"
 #include "engine_config.h"
 #include "driver/pulse_cnt.h"
@@ -12,8 +12,11 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "soc/soc_caps.h"
+#include "hal/hal_timer.h"
+#include "hal/hal_pins.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "../utils/latency_benchmark.h"
 #include <stdint.h>
 #include <string.h>
 #include <inttypes.h>
@@ -342,7 +345,7 @@ esp_err_t sync_get_data(sync_data_t *data) {
     memcpy(data, &g_sync_data, sizeof(sync_data_t));
     portEXIT_CRITICAL(&g_sync_spinlock);
 
-    uint32_t now_us = (uint32_t)esp_timer_get_time();
+    uint32_t now_us = (uint32_t)HAL_Time_us();
     
     // Handle timer overflow correctly
     // 32-bit µs overflow occurs every ~72 minutes
@@ -425,7 +428,7 @@ IRAM_ATTR static void sync_update_from_capture(uint64_t capture_us, bool from_is
         g_last_capture_us = capture_us;
         g_sync_data.last_tooth_time = (uint32_t)capture_us;
         g_sync_data.last_capture_time = (uint32_t)capture_us;
-        g_sync_data.last_update_time = (uint32_t)esp_timer_get_time();
+        g_sync_data.last_update_time = (uint32_t)HAL_Time_us();
         if (from_isr) {
             portEXIT_CRITICAL_ISR(&g_sync_spinlock);
         } else {
@@ -451,7 +454,7 @@ IRAM_ATTR static void sync_update_from_capture(uint64_t capture_us, bool from_is
     g_last_capture_us = capture_us;
     g_sync_data.last_tooth_time = (uint32_t)capture_us;
     g_sync_data.last_capture_time = (uint32_t)capture_us;
-    g_sync_data.last_update_time = (uint32_t)esp_timer_get_time();
+    g_sync_data.last_update_time = (uint32_t)HAL_Time_us();
 
     bool gap = false;
     if (g_sync_data.tooth_period > 0) {
@@ -561,7 +564,7 @@ static void IRAM_ATTR sync_cmp_gpio_isr(void *arg) {
         return;
     }
 
-    uint64_t capture_us = esp_timer_get_time();
+    uint64_t capture_us = HAL_Time_us();
     sync_update_cmp_capture(capture_us, true);
 }
 
@@ -570,7 +573,7 @@ static void IRAM_ATTR sync_ckp_gpio_isr(void *arg) {
     if (!g_hw_sync_enabled) {
         return;
     }
-    uint64_t capture_us = esp_timer_get_time();
+    uint64_t capture_us = HAL_Time_us();
     sync_update_from_capture(capture_us, true, false);
 }
 
@@ -585,16 +588,123 @@ static bool IRAM_ATTR sync_pcnt_on_reach(pcnt_unit_handle_t unit,
         return false;
     }
 
+    // OPTIMIZATION: Benchmark ISR entry
+    BENCHMARK_ISR_START();
+    
+    // OPTIMIZATION: Fast path - get timestamp early
     uint64_t capture_us = 0;
     if (g_sync_gptimer) {
         gptimer_get_captured_count(g_sync_gptimer, &capture_us);
     } else {
-        capture_us = esp_timer_get_time();
+        capture_us = HAL_Time_us();
     }
-    sync_update_from_capture(capture_us, true, false);
+    
+    // OPTIMIZATION: Update sync data inline to avoid function call overhead
+    if (g_last_capture_us == 0) {
+        g_last_capture_us = capture_us;
+        g_sync_data.last_tooth_time = (uint32_t)capture_us;
+        g_sync_data.last_capture_time = (uint32_t)capture_us;
+        g_sync_data.last_update_time = (uint32_t)HAL_Time_us();
+        if (!g_sync_use_watch_step) {
+            pcnt_unit_clear_count(unit);
+        }
+        BENCHMARK_ISR_END();
+        return false;
+    }
+    if (capture_us <= g_last_capture_us) {
+        g_last_capture_us = capture_us;
+        g_sync_data.last_tooth_time = (uint32_t)capture_us;
+        g_sync_data.last_capture_time = (uint32_t)capture_us;
+        g_sync_data.sync_valid = false;
+        g_sync_data.sync_acquired = false;
+        if (!g_sync_use_watch_step) {
+            pcnt_unit_clear_count(unit);
+        }
+        BENCHMARK_ISR_END();
+        return false;
+    }
+
+    uint32_t tooth_period = (uint32_t)(capture_us - g_last_capture_us);
+    g_last_capture_us = capture_us;
+    g_sync_data.last_tooth_time = (uint32_t)capture_us;
+    g_sync_data.last_capture_time = (uint32_t)capture_us;
+    g_sync_data.last_update_time = (uint32_t)HAL_Time_us();
+
+    // OPTIMIZATION: Fast gap detection
+    bool gap = false;
+    if (g_sync_data.tooth_period > 0) {
+        // Use bit shift for faster multiplication
+        gap = (tooth_period > (g_sync_data.tooth_period + (g_sync_data.tooth_period >> 1)));
+    }
+
+    if (gap) {
+        g_sync_data.gap_detected = true;
+        g_sync_data.tooth_index = 0;
+        g_sync_data.gap_period = tooth_period;
+        if (g_sync_data.cmp_seen) {
+            g_sync_data.phase_detected = true;
+            g_sync_data.phase_detected_time = (uint32_t)capture_us;
+            g_sync_data.revolution_index = 0;
+        } else {
+            g_sync_data.phase_detected = false;
+            g_sync_data.revolution_index ^= 1;
+        }
+        g_sync_data.cmp_seen = false;
+        // Use division by 3 for gap period (faster than multiplication)
+        g_sync_data.tooth_period = tooth_period / 3;
+    } else {
+        g_sync_data.gap_detected = false;
+        if (g_sync_config.tooth_count > 0) {
+            g_sync_data.tooth_index = (g_sync_data.tooth_index + 1) % g_sync_config.tooth_count;
+        } else {
+            g_sync_data.tooth_index = 0;
+        }
+        g_sync_data.tooth_period = tooth_period;
+    }
+
+    // OPTIMIZATION: Pre-compute time per degree
+    uint32_t total_positions = g_sync_config.tooth_count + 2;
+    if (total_positions > 0) {
+        // Use bit shift where possible for faster division
+        g_sync_data.time_per_degree = ((g_sync_data.tooth_period * total_positions) + 180U) / 360U;
+    }
+
+    if (!g_sync_config.enable_phase_detection) {
+        g_sync_data.phase_detected = true;
+    }
+
+    if (g_sync_data.gap_detected && g_sync_data.phase_detected) {
+        g_sync_data.sync_acquired = true;
+    }
+    
+    // OPTIMIZATION: Fast RPM calculation
+    if (g_sync_data.tooth_period > 0) {
+        uint32_t positions_per_revolution = g_sync_config.tooth_count + 2;
+        uint32_t time_per_revolution = g_sync_data.tooth_period * positions_per_revolution;
+        if (time_per_revolution > 0) {
+            // Use constant division for RPM calculation
+            g_sync_data.rpm = (1000000 * 60) / time_per_revolution;
+            if (g_sync_data.rpm < g_sync_config.min_rpm) {
+                g_sync_data.rpm = 0;
+            } else if (g_sync_data.rpm > g_sync_config.max_rpm) {
+                g_sync_data.rpm = g_sync_config.max_rpm;
+            }
+        }
+    }
+
+    g_sync_data.sync_valid = (g_sync_data.rpm > 0);
+    if (!g_sync_data.sync_valid) {
+        g_sync_data.sync_acquired = false;
+    }
+
     if (!g_sync_use_watch_step) {
         pcnt_unit_clear_count(unit);
     }
+    
+    // OPTIMIZATION: Benchmark cross-core communication
+    BENCHMARK_CROSSCORE_START();
+    
+    // OPTIMIZATION: Inline callback to minimize function call overhead
     sync_tooth_callback_t cb = g_tooth_cb;
     void *cb_ctx = g_tooth_cb_ctx;
     if (cb != NULL) {
@@ -612,8 +722,13 @@ static bool IRAM_ATTR sync_pcnt_on_reach(pcnt_unit_handle_t unit,
         t_rpm    = (uint16_t)(g_sync_data.rpm > 0xFFFFU ? 0xFFFFU : g_sync_data.rpm);
         t_sync   = g_sync_data.sync_acquired;
         portEXIT_CRITICAL_ISR(&g_sync_spinlock);
+        
+        BENCHMARK_CROSSCORE_END();
+        
         cb(t_time, t_period, t_index, t_rev, t_rpm, t_sync, cb_ctx);
     }
+    
+    BENCHMARK_ISR_END();
     return false;
 }
 

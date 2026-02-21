@@ -8,13 +8,14 @@
 
 #include "cli_interface.h"
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "hal/hal_timer.h"
 #include "esp_system.h"
 #include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "latency_benchmark.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -130,6 +131,7 @@ static const cli_command_t default_commands[] = {
     {"stream",  "Data streaming", "<subcommand>", cli_cmd_stream, stream_subcommands, CLI_FLAG_STREAMING},
     {"reset",   "Reset operations", "<subcommand>", cli_cmd_reset, reset_subcommands, CLI_FLAG_CONFIRM | CLI_FLAG_ADMIN},
     {"version", "Show version", NULL, cli_cmd_version, NULL, CLI_FLAG_NONE},
+    {"benchmark", "Latency benchmarking", "[start|stop|reset|summary]", cli_cmd_benchmark, NULL, CLI_FLAG_NONE},
     {NULL, NULL, NULL, NULL, NULL, CLI_FLAG_NONE}
 };
 
@@ -522,7 +524,7 @@ static int cli_cmd_diag(int argc, char **argv)
     }
     
     // General diagnostics
-    uint32_t uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
+    uint32_t uptime_s = (uint32_t)(HAL_Time_us() / 1000000);
     uint32_t hours = uptime_s / 3600;
     uint32_t minutes = (uptime_s % 3600) / 60;
     uint32_t seconds = uptime_s % 60;
@@ -579,10 +581,10 @@ static int cli_cmd_stream(int argc, char **argv)
         cli_println("Streaming at %lu ms interval (Ctrl+C to stop)", interval);
         cli_println("time,rpm,map,tps,clt,iat,advance,pw,lambda");
         
-        uint32_t start_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        uint32_t start_ms = (uint32_t)(HAL_Time_us() / 1000);
         
         while (g_cli.streaming) {
-            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            uint32_t now_ms = (uint32_t)(HAL_Time_us() / 1000);
             
             engine_runtime_state_t state;
             uint32_t seq;
@@ -1045,4 +1047,47 @@ void cli_exit_admin(void)
 bool cli_is_admin(void)
 {
     return g_cli.admin_mode;
+}
+
+/*============================================================================
+ * Benchmark Command Implementation
+ *============================================================================*/
+
+static esp_err_t cli_cmd_benchmark(int argc, char **argv)
+{
+    if (argc == 0) {
+        cli_println("Usage: benchmark [start|stop|reset|summary]");
+        cli_println("  start   - Start latency benchmarking");
+        cli_println("  stop    - Stop latency benchmarking");
+        cli_println("  reset   - Reset benchmark statistics");
+        cli_println("  summary - Print benchmark summary");
+        return ESP_OK;
+    }
+    
+    if (strcmp(argv[0], "start") == 0) {
+        latency_benchmark_init();
+        latency_benchmark_enable(true);
+        cli_println("Latency benchmark started");
+        return ESP_OK;
+    }
+    
+    if (strcmp(argv[0], "stop") == 0) {
+        latency_benchmark_enable(false);
+        cli_println("Latency benchmark stopped");
+        return ESP_OK;
+    }
+    
+    if (strcmp(argv[0], "reset") == 0) {
+        latency_benchmark_reset();
+        cli_println("Benchmark statistics reset");
+        return ESP_OK;
+    }
+    
+    if (strcmp(argv[0], "summary") == 0) {
+        latency_benchmark_print_summary();
+        return ESP_OK;
+    }
+    
+    cli_println("Unknown benchmark subcommand: %s", argv[0]);
+    return ESP_ERR_INVALID_ARG;
 }

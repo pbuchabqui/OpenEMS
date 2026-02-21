@@ -1,7 +1,7 @@
 #include "safety_monitor.h"
 #include "engine_config.h"
 #include "logger.h"
-#include "esp_timer.h"
+#include "hal/hal_timer.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -97,7 +97,7 @@ void safety_activate_limp_mode(void) {
     portENTER_CRITICAL(&g_safety_spinlock);
     if (!g_limp_mode.active) {
         g_limp_mode.active = true;
-        g_limp_mode.activation_time = (uint32_t)(esp_timer_get_time() / 1000);
+        g_limp_mode.activation_time = (uint32_t)(HAL_Time_us() / 1000);
         portEXIT_CRITICAL(&g_safety_spinlock);
         LOG_SAFETY_W("Limp mode activated");
     } else {
@@ -112,7 +112,7 @@ void safety_deactivate_limp_mode(void) {
         return;  // Already inactive
     }
     
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t now_ms = (uint32_t)(HAL_Time_us() / 1000);
     uint32_t time_in_limp = now_ms - g_limp_mode.activation_time;
     
     // Check minimum duration
@@ -187,7 +187,7 @@ bool safety_watchdog_init(uint32_t timeout_ms) {
 
     g_watchdog.enabled = true;
     g_watchdog.timeout_ms = timeout_ms;
-    g_watchdog.last_feed_time = (uint32_t)(esp_timer_get_time() / 1000);
+    g_watchdog.last_feed_time = (uint32_t)(HAL_Time_us() / 1000);
     return true;
 }
 
@@ -200,7 +200,7 @@ bool safety_watchdog_feed(void) {
         return false;
     }
 
-    g_watchdog.last_feed_time = (uint32_t)(esp_timer_get_time() / 1000);
+    g_watchdog.last_feed_time = (uint32_t)(HAL_Time_us() / 1000);
     return true;
 }
 
@@ -209,7 +209,7 @@ bool safety_watchdog_check(void) {
         return true;
     }
 
-    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t now = (uint32_t)(HAL_Time_us() / 1000);
     return (now - g_watchdog.last_feed_time) <= g_watchdog.timeout_ms;
 }
 

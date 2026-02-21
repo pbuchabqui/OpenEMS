@@ -8,9 +8,9 @@
  */
 
 #include "fuel_injection.h"
-#include "mcpwm_injection.h"
 #include "mcpwm_injection_hp.h"
-#include "sync.h"
+#include "utils/sync.h"
+#include "config/engine_config.h"
 #include "hp_state.h"
 #include "math_utils.h"
 
@@ -20,7 +20,9 @@ static fuel_injection_config_t g_fuel_cfg = {
 
 static float compute_current_angle_deg(const sync_data_t *sync, uint32_t tooth_count) {
     float degrees_per_tooth = 360.0f / (float)(tooth_count + 2);
-    float current_angle = (sync->revolution_index * 360.0f) + (sync->tooth_index * degrees_per_tooth);
+    float current_angle = (sync->revolution_index * 360.0f)
+        + (sync->tooth_index * degrees_per_tooth)
+        + TRIGGER_TDC_OFFSET_DEG;
     return wrap_angle_720(current_angle);
 }
 
@@ -39,12 +41,14 @@ void fuel_injection_init(const fuel_injection_config_t *config) {
     // Drivers HP já inicializados em ignition_init()
 }
 
-bool fuel_injection_schedule_eoi_ex(uint8_t cylinder_id,
-                                      float target_eoi_deg,
-                                      uint32_t pulsewidth_us,
-                                      const sync_data_t *sync,
-                                      fuel_injection_schedule_info_t *info,
-                                      float battery_voltage) {
+static bool fuel_injection_compute_eoi_info(uint8_t cylinder_id,
+                                            float target_eoi_deg,
+                                            uint32_t pulsewidth_us,
+                                            const sync_data_t *sync,
+                                            fuel_injection_schedule_info_t *info,
+                                            float battery_voltage,
+                                            float *out_compensated_pw,
+                                            uint32_t *out_delay_us) {
     if (!sync || cylinder_id < 1 || cylinder_id > 4) {
         return false;
     }
@@ -81,18 +85,74 @@ bool fuel_injection_schedule_eoi_ex(uint8_t cylinder_id,
 
     uint32_t delay_us = (uint32_t)((delta_deg * us_per_deg) + 0.5f);
     
-    // Obter contador atual do timer MCPWM (valor real, não sintético)
-    uint32_t current_counter = mcpwm_injection_hp_get_counter((uint8_t)(cylinder_id - 1));
-    
     if (info) {
         info->eoi_deg = eoi_deg;
         info->soi_deg = soi_deg;
         info->delay_us = delay_us;
     }
-    
+
+    if (out_compensated_pw) {
+        *out_compensated_pw = compensated_pw;
+    }
+    if (out_delay_us) {
+        *out_delay_us = delay_us;
+    }
+
+    return true;
+}
+
+bool fuel_injection_schedule_eoi_ex(uint8_t cylinder_id,
+                                      float target_eoi_deg,
+                                      uint32_t pulsewidth_us,
+                                      const sync_data_t *sync,
+                                      fuel_injection_schedule_info_t *info,
+                                      float battery_voltage) {
+    float compensated_pw = 0.0f;
+    uint32_t delay_us = 0;
+    if (!fuel_injection_compute_eoi_info(cylinder_id,
+                                         target_eoi_deg,
+                                         pulsewidth_us,
+                                         sync,
+                                         info,
+                                         battery_voltage,
+                                         &compensated_pw,
+                                         &delay_us)) {
+        return false;
+    }
+
+    // Obter contador atual do timer MCPWM (valor real, não sintético)
+    uint32_t current_counter = mcpwm_injection_hp_get_counter((uint8_t)(cylinder_id - 1));
+    uint32_t target_us = current_counter + delay_us;
+
     // Usar scheduling absoluto HP
     return mcpwm_injection_hp_schedule_one_shot_absolute(
-        (uint8_t)(cylinder_id - 1), delay_us, (uint32_t)compensated_pw, current_counter);
+        (uint8_t)(cylinder_id - 1), target_us, (uint32_t)compensated_pw, current_counter);
+}
+
+bool fuel_injection_prepare_event(uint8_t cylinder_id,
+                                  float target_eoi_deg,
+                                  uint32_t pulsewidth_us,
+                                  const sync_data_t *sync,
+                                  fuel_injection_schedule_info_t *info,
+                                  float battery_voltage,
+                                  uint32_t *pulsewidth_us_out) {
+    float compensated_pw = 0.0f;
+    if (!fuel_injection_compute_eoi_info(cylinder_id,
+                                         target_eoi_deg,
+                                         pulsewidth_us,
+                                         sync,
+                                         info,
+                                         battery_voltage,
+                                         &compensated_pw,
+                                         NULL)) {
+        return false;
+    }
+
+    if (pulsewidth_us_out) {
+        *pulsewidth_us_out = (uint32_t)(compensated_pw + 0.5f);
+    }
+
+    return true;
 }
 
 bool fuel_injection_schedule_eoi(uint8_t cylinder_id,
@@ -121,17 +181,34 @@ bool fuel_injection_schedule_sequential(uint32_t pulsewidth_us[4],
         battery_voltage = 13.5f;
     }
     
-    uint32_t offsets[4];
+    uint32_t offsets[4] = {0};
+    float compensated_pw = 0.0f;
+
     // Obter contador atual do timer MCPWM (valor real, não sintético)
     uint32_t current_counter = mcpwm_injection_hp_get_counter(0);
     
     for (int i = 0; i < 4; i++) {
         fuel_injection_schedule_info_t info;
-        if (!fuel_injection_schedule_eoi_ex(i + 1, target_eoi_deg[i], pulsewidth_us[i], sync, &info, battery_voltage)) {
+        uint32_t delay_us = 0;
+        float pw = 0.0f;
+        if (!fuel_injection_compute_eoi_info(i + 1,
+                                             target_eoi_deg[i],
+                                             pulsewidth_us[i],
+                                             sync,
+                                             &info,
+                                             battery_voltage,
+                                             &pw,
+                                             &delay_us)) {
             return false;
         }
-        offsets[i] = info.delay_us;
+        offsets[i] = delay_us;
+        if (i == 0) {
+            compensated_pw = pw;
+        }
     }
     
-    return mcpwm_injection_hp_schedule_sequential_absolute(0, pulsewidth_us[0], offsets, current_counter);
+    return mcpwm_injection_hp_schedule_sequential_absolute(current_counter,
+                                                           (uint32_t)compensated_pw,
+                                                           offsets,
+                                                           current_counter);
 }

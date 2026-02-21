@@ -1,7 +1,7 @@
 #include "fuel_calc.h"
 #include "table_16x16.h"
 #include "engine_config.h"
-#include "esp_timer.h"
+#include "hal/hal_timer.h"
 #include <math.h>
 #include <string.h>
 
@@ -152,7 +152,7 @@ uint32_t fuel_calc_pulsewidth_us(const sensor_data_t *sensors,
     float warmup_factor = warmup / 100.0f;
 
     // Acceleration enrichment
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t now_ms = (uint32_t)(HAL_Time_us() / 1000);
     uint16_t accel = fuel_calc_accel_enrichment(sensors->map_kpa10, now_ms);
     float accel_factor = accel / 100.0f;
 

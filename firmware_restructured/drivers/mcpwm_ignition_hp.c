@@ -12,7 +12,7 @@
  * - Usa hp_state.h para estado compartilhado de alta precisão
  */
 
-#include "mcpwm_ignition.h"
+#include "mcpwm_ignition_hp.h"
 #include "driver/mcpwm_timer.h"
 #include "driver/mcpwm_oper.h"
 #include "driver/mcpwm_cmpr.h"

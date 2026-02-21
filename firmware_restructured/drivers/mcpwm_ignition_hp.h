@@ -15,12 +15,17 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "mcpwm_ignition.h"
 #include "esp_attr.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct {
+    uint32_t timer_resolution_hz;
+    uint32_t max_dwell_us;
+    uint8_t cylinder_count;
+} mcpwm_ignition_config_t;
 
 /**
  * @brief Inicializa o driver de ignição de alta precisão

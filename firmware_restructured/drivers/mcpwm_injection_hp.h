@@ -14,12 +14,17 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "mcpwm_injection.h"
 #include "esp_attr.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct {
+    uint32_t timer_resolution_hz;
+    uint32_t max_pulsewidth_us;
+    uint8_t cylinder_count;
+} mcpwm_injection_config_t;
 
 /**
  * @brief Inicializa o driver de injeção de alta precisão
@@ -43,14 +48,14 @@ bool mcpwm_injection_hp_configure(const mcpwm_injection_config_t *config);
  * @note IRAM_ATTR - função crítica de timing, pode ser chamada em ISR context
  * 
  * @param cylinder_id ID do injetor (0-3)
- * @param delay_us Delay absoluto desde o início da janela (em microssegundos)
+ * @param target_us Tempo absoluto no contador MCPWM (em microssegundos)
  * @param pulsewidth_us Largura de pulso desejada
  * @param current_counter Valor atual do contador do timer
  * @return true se bem-sucedido
  */
 IRAM_ATTR bool mcpwm_injection_hp_schedule_one_shot_absolute(
     uint8_t cylinder_id,
-    uint32_t delay_us,
+    uint32_t target_us,
     uint32_t pulsewidth_us,
     uint32_t current_counter);
 
@@ -58,14 +63,14 @@ IRAM_ATTR bool mcpwm_injection_hp_schedule_one_shot_absolute(
  * @brief Agenda múltiplos injetores sequencialmente
  * @note IRAM_ATTR - função crítica de timing
  * 
- * @param base_delay_us Delay base em microssegundos
+ * @param base_time_us Tempo base absoluto em microssegundos (contador MCPWM)
  * @param pulsewidth_us Largura de pulso em microssegundos
  * @param cylinder_offsets Array de offsets por cilindro
  * @param current_counter Valor atual do contador
  * @return true se todos agendados com sucesso
  */
 IRAM_ATTR bool mcpwm_injection_hp_schedule_sequential_absolute(
-    uint32_t base_delay_us,
+    uint32_t base_time_us,
     uint32_t pulsewidth_us,
     uint32_t cylinder_offsets[4],
     uint32_t current_counter);

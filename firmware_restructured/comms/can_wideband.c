@@ -1,7 +1,7 @@
 #include "twai_lambda.h"
 #include "driver/twai.h"
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "hal/hal_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "engine_config.h"
@@ -122,7 +122,7 @@ bool twai_lambda_get_latest(float *out_lambda, uint32_t *out_age_ms) {
     if (ts_ms == 0) {
         return false;
     }
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t now_ms = (uint32_t)(HAL_Time_us() / 1000);
     if (out_age_ms) {
         *out_age_ms = (now_ms >= ts_ms) ? (now_ms - ts_ms) : 0U;
     }
@@ -175,7 +175,7 @@ static void can_rx_task(void *arg) {
         }
 
         float new_lambda = afr_raw / 14.7f;
-        uint32_t ts_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        uint32_t ts_ms = (uint32_t)(HAL_Time_us() / 1000);
         twai_lambda_callback_t cb = NULL;
         void *cb_ctx = NULL;
 

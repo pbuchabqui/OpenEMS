@@ -10,14 +10,14 @@
 
 #include "ignition_timing.h"
 #include "logger.h"
-#include "mcpwm_ignition.h"
 #include "mcpwm_ignition_hp.h"
-#include "mcpwm_injection.h"
 #include "mcpwm_injection_hp.h"
 #include "sensor_processing.h"
-#include "sync.h"
+#include "utils/sync.h"
 #include "hp_state.h"
 #include "math_utils.h"
+#include "scheduler/event_scheduler.h"
+#include "config/engine_config.h"
 
 static const float g_cyl_tdc_deg[4] = {0.0f, 180.0f, 360.0f, 540.0f};
 
@@ -36,7 +36,9 @@ static float apply_temp_dwell_bias(float battery_voltage, int16_t clt_c) {
 
 static float compute_current_angle_deg(const sync_data_t *sync, uint32_t tooth_count) {
     float degrees_per_tooth = 360.0f / (float)(tooth_count + 2);
-    float current_angle = (sync->revolution_index * 360.0f) + (sync->tooth_index * degrees_per_tooth);
+    float current_angle = (sync->revolution_index * 360.0f)
+        + (sync->tooth_index * degrees_per_tooth)
+        + TRIGGER_TDC_OFFSET_DEG;
     return wrap_angle_720(current_angle);
 }
 
@@ -71,11 +73,12 @@ bool ignition_init(void) {
     return false;
 }
 
-void ignition_apply_timing(uint16_t advance_deg10, uint16_t rpm, float vbat_v) {
+bool ignition_schedule_events(uint16_t advance_deg10, uint16_t rpm, float vbat_v) {
+    if (rpm == 0) {
+        return false;
+    }
     float advance_degrees = advance_deg10 / 10.0f;
     advance_degrees = clamp_float(advance_degrees, IGN_ADVANCE_MIN_DEG, IGN_ADVANCE_MAX_DEG);
-    // H2 fix: use caller-supplied battery voltage (from plan snapshot) for
-    // consistent dwell calculation. Still read CLT for temperature bias.
     float battery_voltage = (vbat_v > 0.0f) ? vbat_v : 13.5f;
 
     sensor_data_t sensors = {0};
@@ -84,81 +87,18 @@ void ignition_apply_timing(uint16_t advance_deg10, uint16_t rpm, float vbat_v) {
     }
     battery_voltage = clamp_float(battery_voltage, 8.0f, 16.5f);
 
-    sync_data_t sync_data = {0};
-    sync_config_t sync_cfg = {0};
-    bool have_sync = (sync_get_data(&sync_data) == ESP_OK) &&
-                     (sync_get_config(&sync_cfg) == ESP_OK) &&
-                     sync_data.sync_valid &&
-                     sync_data.sync_acquired &&
-                     (sync_cfg.tooth_count > 0);
-    
-    float us_per_deg = 0.0f;
-    uint32_t current_counter = 0;
-
-    if (have_sync) {
-        us_per_deg = sync_us_per_degree(&sync_data, &sync_cfg);
-        if (us_per_deg <= 0.0f) {
-            have_sync = false;
-        } else {
-            // Obter contador atual do timer MCPWM (valor real, não sintético)
-            // Usa cilindro 0 como referência (todos os timers estão sincronizados)
-            current_counter = mcpwm_ignition_hp_get_counter(0);
-        }
-    }
-
-    if (have_sync) {
-        float current_angle = compute_current_angle_deg(&sync_data, sync_cfg.tooth_count);
-        
-        for (uint8_t cylinder = 1; cylinder <= 4; cylinder++) {
-            float spark_deg = wrap_angle_720(g_cyl_tdc_deg[cylinder - 1] - advance_degrees);
-            float delta_deg = spark_deg - current_angle;
-            if (delta_deg < 0.0f) {
-                delta_deg += 720.0f;
-            }
-            
-            // Calcular delay usando predição de fase centralizada
-            float predicted_period = hp_state_predict_next_period(0);
-            float base_delay = delta_deg * us_per_deg;
-            
-            // Aplicar compensação de latência física centralizada
-            float compensated_delay = base_delay;
-            float latency = hp_state_get_latency(battery_voltage, (float)sensors.clt_c);
-            compensated_delay += latency;
-            
-            // Calcular target absoluto
-            uint32_t delay_us = (uint32_t)(compensated_delay + 0.5f);
-            uint32_t target_us = current_counter + delay_us;
-            
-            // Agendar com compare absoluto HP
-            mcpwm_ignition_hp_schedule_one_shot_absolute(
-                cylinder, target_us, rpm, battery_voltage, current_counter);
-        }
-        
-        // Atualizar preditor de fase centralizado
-        float measured_period = sync_data.tooth_period;
-        hp_state_update_phase_predictor(measured_period, hp_get_cycle_count());
-        
-        LOG_IGNITION_D("HP Scheduled ignition (sync): %u deg10, %u RPM", advance_deg10, rpm);
-        return;
-    }
-    
-    // Fallback: usar predição de fase centralizada
-    float predicted_period = hp_state_predict_next_period(0);
-    uint32_t period_us = (uint32_t)(predicted_period + 0.5f);
-    
+    bool ok = true;
     for (uint8_t cylinder = 1; cylinder <= 4; cylinder++) {
         float spark_deg = wrap_angle_720(g_cyl_tdc_deg[cylinder - 1] - advance_degrees);
-        float delay_deg = (spark_deg >= 0.0f) ? spark_deg : spark_deg + 720.0f;
-        
-        float us_per_rev = period_us * 2;  // Uma revolução = 2 períodos de 360°
-        float delay_us_f = (delay_deg / 720.0f) * us_per_rev;
-        uint32_t delay_us = (uint32_t)(delay_us_f + 0.5f);
-        
-        mcpwm_ignition_hp_schedule_one_shot_absolute(
-            cylinder, delay_us, rpm, battery_voltage, 0);
+        bool evt_ok = evt_schedule(EVT_IGNITION_DWELL,
+                                   (uint8_t)(cylinder - 1),
+                                   spark_deg,
+                                   0,
+                                   rpm,
+                                   battery_voltage);
+        ok = ok && evt_ok;
     }
-    
-    LOG_IGNITION_D("HP Applied ignition timing (fallback): %u deg10, %u RPM", advance_deg10, rpm);
+    return ok;
 }
 
 void ignition_get_jitter_stats(float *avg_us, float *max_us, float *min_us) {

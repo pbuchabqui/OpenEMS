@@ -57,7 +57,7 @@ typedef enum {
 typedef struct {
     evt_type_t  type;               // What to do
     uint8_t     cylinder;           // Which cylinder (0-3)
-    float       angle_deg;          // Crank angle to fire (0–720, absolute per cycle)
+    uint32_t    angle_q;            // Crank angle to fire (0–720, Q16.16)
     uint32_t    schedule_rev;       // Revolution counter when event was scheduled
     bool        armed;              // Set when queued, cleared after firing
     // Extra parameters forwarded to driver APIs
@@ -71,12 +71,33 @@ typedef struct {
 typedef struct {
     volatile uint32_t tooth_time_us;        // Timestamp of last tooth (µs)
     volatile uint32_t tooth_period_us;      // Time between last two teeth (µs)
-    volatile float    deg_per_tooth;        // Degrees per tooth (= 360 / total_teeth)
-    volatile float    current_angle_deg;    // Current crank angle (0–720)
+    volatile uint32_t deg_per_tooth_q;      // Degrees per tooth (Q16.16)
+    volatile uint32_t current_angle_q;      // Current crank angle (0–720, Q16.16)
     volatile uint16_t rpm;                  // Last computed RPM
     volatile uint32_t revolution_index;     // 0 or 1 (which half-cycle)
     volatile bool     sync_valid;           // True if fully synchronized
 } scheduler_engine_state_t;
+
+// ── Fixed-point angle helpers (Q16.16) ───────────────────────────────────────
+
+#define EVT_ANGLE_Q_SHIFT 16U
+#define EVT_ANGLE_Q_ONE   (1U << EVT_ANGLE_Q_SHIFT)
+#define EVT_ANGLE_Q_720   (720U * EVT_ANGLE_Q_ONE)
+#define EVT_ANGLE_Q_360   (360U * EVT_ANGLE_Q_ONE)
+
+static inline uint32_t evt_angle_deg_to_q(float a) {
+    if (!isfinite(a)) {
+        return 0U;
+    }
+    if (a <= 0.0f) {
+        return 0U;
+    }
+    float q = a * (float)EVT_ANGLE_Q_ONE;
+    if (q >= (float)EVT_ANGLE_Q_720) {
+        q -= (float)EVT_ANGLE_Q_720;
+    }
+    return (uint32_t)(q + 0.5f);
+}
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
@@ -107,6 +128,19 @@ IRAM_ATTR void evt_scheduler_on_tooth(uint32_t tooth_time_us,
                                       bool     sync_acquired);
 
 /**
+ * @brief Update engine state from tooth interrupt with explicit MCPWM timebase.
+ *
+ * @param mcpwm_now_us Current MCPWM counter in microseconds (absolute).
+ */
+IRAM_ATTR void evt_scheduler_on_tooth_mcpwm(uint32_t tooth_time_us,
+                                            uint32_t tooth_period_us,
+                                            uint8_t  tooth_index,
+                                            uint8_t  revolution_idx,
+                                            uint16_t rpm,
+                                            bool     sync_acquired,
+                                            uint32_t mcpwm_now_us);
+
+/**
  * @brief Schedule an engine event (call from Core 1 control task).
  *
  * Thread-safe — uses spinlock internally.
@@ -122,6 +156,14 @@ IRAM_ATTR void evt_scheduler_on_tooth(uint32_t tooth_time_us,
  */
 bool evt_schedule(evt_type_t type, uint8_t cylinder, float angle_deg,
                   uint32_t param_us, uint16_t rpm_snap, float vbat_snap);
+
+/**
+ * @brief Schedule an engine event using precomputed Q16.16 angle.
+ *
+ * @param angle_q  Absolute crank angle (0–720, Q16.16)
+ */
+bool evt_schedule_q(evt_type_t type, uint8_t cylinder, uint32_t angle_q,
+                    uint32_t param_us, uint16_t rpm_snap, float vbat_snap);
 
 /**
  * @brief Cancel all pending events for a cylinder (e.g., limp mode).
@@ -171,6 +213,11 @@ void evt_set_tdc_offset(float offset_deg);
  * Thread-safe.
  */
 void evt_set_trigger_teeth(uint8_t total_teeth);
+
+/**
+ * @brief Get count of MCPWM/timebase mismatches (diagnostic).
+ */
+uint32_t evt_get_mcpwm_mismatch_count(void);
 
 #ifdef __cplusplus
 }

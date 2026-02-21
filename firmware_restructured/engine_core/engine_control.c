@@ -1,7 +1,8 @@
 #include "engine_control.h"
 #include "utils/logger.h"
 #include "sensors/sensor_processing.h"
-#include "sync.h"
+#include "utils/sync.h"
+#include "hal/hal_timer.h"
 #include "control/fuel_calc.h"
 #include "config/table_16x16.h"
 #include "control/closed_loop_fuel.h"
@@ -201,6 +202,7 @@ static portMUX_TYPE g_perf_spinlock = portMUX_INITIALIZER_UNLOCKED;
 static engine_injection_diag_t g_injection_diag = {0};
 static volatile uint32_t g_injection_diag_seq = 0;
 static bool g_engine_initialized = false;
+static volatile bool g_engine_running = false;
 
 static float compute_current_angle_360(const sync_data_t *sync, uint32_t tooth_count);
 static float sync_us_per_degree(const sync_data_t *sync, const sync_config_t *cfg);
@@ -297,7 +299,7 @@ static void eoit_map_config_apply(const eoit_map_config_blob_t *cfg) {
 
 static float compute_current_angle_360(const sync_data_t *sync, uint32_t tooth_count) {
     float degrees_per_tooth = 360.0f / (float)(tooth_count + 2);
-    float current_angle = sync->tooth_index * degrees_per_tooth;
+    float current_angle = (sync->tooth_index * degrees_per_tooth) + TRIGGER_TDC_OFFSET_DEG;
     return wrap_angle_360(current_angle);
 }
 
@@ -440,17 +442,45 @@ static uint32_t perf_percentile(const uint32_t *arr, uint16_t n, uint8_t pct) {
     }
     memcpy(copy, arr, sizeof(uint32_t) * n);
 
-    for (uint16_t i = 0; i < n; i++) {
-        for (uint16_t j = i + 1; j < n; j++) {
-            if (copy[j] < copy[i]) {
+    uint16_t idx = (uint16_t)(((uint32_t)(n - 1) * pct) / 100U);
+    uint16_t left = 0;
+    uint16_t right = (uint16_t)(n - 1);
+
+    while (left < right) {
+        uint32_t pivot = copy[(uint16_t)(left + (right - left) / 2U)];
+        uint16_t i = left;
+        uint16_t j = right;
+        while (i <= j) {
+            while (copy[i] < pivot) {
+                i++;
+            }
+            while (copy[j] > pivot) {
+                if (j == 0) {
+                    break;
+                }
+                j--;
+            }
+            if (i <= j) {
                 uint32_t t = copy[i];
                 copy[i] = copy[j];
                 copy[j] = t;
+                i++;
+                if (j == 0) {
+                    break;
+                }
+                j--;
             }
+        }
+
+        if (j < idx) {
+            left = i;
+        } else if (idx < i) {
+            right = j;
+        } else {
+            break;
         }
     }
 
-    uint16_t idx = (uint16_t)(((uint32_t)(n - 1) * pct) / 100U);
     return copy[idx];
 }
 
@@ -461,6 +491,13 @@ static uint8_t plan_ring_depth(void) {
         return (uint8_t)(head - tail);
     }
     return (uint8_t)(PLAN_RING_SIZE - tail + head);
+}
+
+static void plan_ring_clear(void) {
+    portENTER_CRITICAL(&g_plan_ring.mux);
+    g_plan_ring.head = 0U;
+    g_plan_ring.tail = 0U;
+    portEXIT_CRITICAL(&g_plan_ring.mux);
 }
 
 static void plan_ring_push(const engine_plan_cmd_t *cmd) {
@@ -479,7 +516,9 @@ static void plan_ring_push(const engine_plan_cmd_t *cmd) {
     }
     g_plan_ring.items[head] = *cmd;
     g_plan_ring.head = next;
-    uint8_t depth = plan_ring_depth();
+    uint8_t depth = (head >= g_plan_ring.tail)
+        ? (uint8_t)(head - g_plan_ring.tail)
+        : (uint8_t)(PLAN_RING_SIZE - g_plan_ring.tail + head);
     portEXIT_CRITICAL(&g_plan_ring.mux);
 
     portENTER_CRITICAL(&g_perf_spinlock);
@@ -530,7 +569,7 @@ static void perf_record_executor(uint32_t elapsed_us, uint32_t queue_age_us) {
     if (elapsed_us > g_perf_stats.executor_max_us) {
         g_perf_stats.executor_max_us = elapsed_us;
     }
-    if (queue_age_us > PLANNER_DEADLINE_US) {
+    if (queue_age_us > EXECUTOR_MAX_PLAN_AGE_US) {
         g_perf_stats.executor_deadline_miss++;
     }
 
@@ -612,9 +651,10 @@ IRAM_ATTR static void engine_sync_tooth_callback(uint32_t tooth_time_us,
                                                   void    *ctx) {
     (void)ctx;
     // Feed the angle-based event scheduler on every tooth (time-critical, Core 0).
-    evt_scheduler_on_tooth(tooth_time_us, tooth_period_us,
-                           tooth_index, revolution_idx, rpm, sync_acquired);
-
+    uint32_t mcpwm_now_us = mcpwm_injection_hp_get_counter(0);
+    evt_scheduler_on_tooth_mcpwm(tooth_time_us, tooth_period_us,
+                                 tooth_index, revolution_idx, rpm, sync_acquired,
+                                 mcpwm_now_us);
     if (g_planner_task_handle == NULL) {
         return;
     }
@@ -659,16 +699,19 @@ static void schedule_semi_seq_injection(uint16_t rpm,
     float delta0 = soi0 - current_angle;
     uint32_t delay0 = angle_delta_to_delay_us(delta0, 360.0f, us_per_deg);
     uint32_t counter = mcpwm_injection_hp_get_counter(0);
-    mcpwm_injection_hp_schedule_one_shot_absolute(0, delay0, pw_us, counter);
-    mcpwm_injection_hp_schedule_one_shot_absolute(3, delay0, pw_us, counter);
+    uint32_t target0 = counter + delay0;
+    uint32_t pw_sched = (uint32_t)(compensated_pw + 0.5f);
+    mcpwm_injection_hp_schedule_one_shot_absolute(0, target0, pw_sched, counter);
+    mcpwm_injection_hp_schedule_one_shot_absolute(3, target0, pw_sched, counter);
 
     // Pair 2: cylinders 2 & 3 at 180°
     float eoi180 = wrap_angle_360(eoi_base_deg + 180.0f);
     float soi180 = wrap_angle_360(eoi180 - pw_deg);
     float delta180 = soi180 - current_angle;
     uint32_t delay180 = angle_delta_to_delay_us(delta180, 360.0f, us_per_deg);
-    mcpwm_injection_hp_schedule_one_shot_absolute(1, delay180, pw_us, counter);
-    mcpwm_injection_hp_schedule_one_shot_absolute(2, delay180, pw_us, counter);
+    uint32_t target180 = counter + delay180;
+    mcpwm_injection_hp_schedule_one_shot_absolute(1, target180, pw_sched, counter);
+    mcpwm_injection_hp_schedule_one_shot_absolute(2, target180, pw_sched, counter);
 }
 
 static void schedule_wasted_spark(uint16_t advance_deg10, uint16_t rpm,
@@ -690,19 +733,24 @@ static void schedule_wasted_spark(uint16_t advance_deg10, uint16_t rpm,
     uint32_t delay0 = angle_delta_to_delay_us(delta0, 360.0f, us_per_deg);
     uint32_t counter = mcpwm_ignition_hp_get_counter(0);
     // C10 fix: use actual vbat_v instead of hardcoded 13.5V
-    mcpwm_ignition_hp_schedule_one_shot_absolute(1, delay0, rpm, vbat_v, counter);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(4, delay0, rpm, vbat_v, counter);
+    uint32_t target0 = counter + delay0;
+    mcpwm_ignition_hp_schedule_one_shot_absolute(1, target0, rpm, vbat_v, counter);
+    mcpwm_ignition_hp_schedule_one_shot_absolute(4, target0, rpm, vbat_v, counter);
 
     float spark180 = wrap_angle_360(180.0f - advance_deg);
     float delta180 = spark180 - current_angle;
     uint32_t delay180 = angle_delta_to_delay_us(delta180, 360.0f, us_per_deg);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(2, delay180, rpm, vbat_v, counter);
-    mcpwm_ignition_hp_schedule_one_shot_absolute(3, delay180, rpm, vbat_v, counter);
+    uint32_t target180 = counter + delay180;
+    mcpwm_ignition_hp_schedule_one_shot_absolute(2, target180, rpm, vbat_v, counter);
+    mcpwm_ignition_hp_schedule_one_shot_absolute(3, target180, rpm, vbat_v, counter);
 }
 
 static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
     if (!cmd) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!g_engine_running) {
+        return ESP_FAIL;
     }
 
     sync_data_t sync_data = {0};
@@ -711,7 +759,7 @@ static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
     }
 
     sensor_data_t sensor_data = {0};
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t now_ms = (uint32_t)(HAL_Time_us() / 1000);
     if (sensor_get_data_fast(&sensor_data) != ESP_OK) {
         if (!g_last_sensor_valid) {
             return ESP_FAIL;
@@ -800,7 +848,7 @@ static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
         if (lambda_valid) {
             float stft = lambda_pid_update(&g_lambda_pid, lambda_target, lambda_measured, 0.01f);
             g_stft = clamp_float(stft, -STFT_LIMIT, STFT_LIMIT);
-            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            uint32_t now_ms = (uint32_t)(HAL_Time_us() / 1000);
             if (ltft_can_update(rpm, load, now_ms)) {
                 g_ltft += LTFT_ALPHA * (g_stft - g_ltft);
                 g_ltft = clamp_float(g_ltft, -LTFT_LIMIT, LTFT_LIMIT);
@@ -823,12 +871,15 @@ static esp_err_t engine_control_build_plan(engine_plan_cmd_t *cmd) {
     // C10 fix: store actual battery voltage (in volts) for dwell calculation
     cmd->vbat_v = (float)sensor_data.vbat_dv / 10.0f;
     cmd->sync_data = sync_data;
-    cmd->planned_at_us = (uint32_t)esp_timer_get_time();
+    cmd->planned_at_us = (uint32_t)HAL_Time_us();
     return ESP_OK;
 }
 
 static void engine_control_execute_plan(const engine_plan_cmd_t *cmd) {
     if (!cmd) {
+        return;
+    }
+    if (!g_engine_running) {
         return;
     }
 
@@ -853,14 +904,31 @@ static void engine_control_execute_plan(const engine_plan_cmd_t *cmd) {
         for (uint8_t cyl = 1; cyl <= 4; cyl++) {
             fuel_injection_schedule_info_t info = {0};
             // C10 fix: pass actual battery voltage from sensor
-            bool inj_ok = fuel_injection_schedule_eoi_ex(cyl, cmd->eoi_target_deg, cmd->pw_us, &exec_sync, &info, cmd->vbat_v);
+            uint32_t pw_us = 0;
+            bool inj_ok = fuel_injection_prepare_event(cyl,
+                                                       cmd->eoi_target_deg,
+                                                       cmd->pw_us,
+                                                       &exec_sync,
+                                                       &info,
+                                                       cmd->vbat_v,
+                                                       &pw_us);
+            if (inj_ok) {
+                bool evt_ok = evt_schedule(EVT_INJECTOR_OPEN,
+                                           (uint8_t)(cyl - 1),
+                                           info.soi_deg,
+                                           pw_us,
+                                           cmd->rpm,
+                                           cmd->vbat_v);
+                inj_ok = evt_ok;
+            }
             scheduling_ok = scheduling_ok && inj_ok;
             diag.soi_deg[cyl - 1] = info.soi_deg;
             diag.delay_us[cyl - 1] = info.delay_us;
         }
-        ignition_apply_timing(cmd->advance_deg10, cmd->rpm, cmd->vbat_v);  // H2 fix: pass plan vbat
+        bool ign_ok = ignition_schedule_events(cmd->advance_deg10, cmd->rpm, cmd->vbat_v);
+        scheduling_ok = scheduling_ok && ign_ok;
         if (!scheduling_ok) {
-            LOG_SAFETY_E("Injection scheduling failure on synced path");
+            LOG_SAFETY_E("Scheduling failure on synced path");
             safety_activate_limp_mode();
         }
     } else {
@@ -896,7 +964,7 @@ static void engine_control_execute_plan(const engine_plan_cmd_t *cmd) {
             }
         }
     }
-    diag.updated_at_us = (uint32_t)esp_timer_get_time();
+    diag.updated_at_us = (uint32_t)HAL_Time_us();
     injection_diag_publish(&diag);
     runtime_state_publish(cmd);
     safety_watchdog_feed();
@@ -905,43 +973,67 @@ static void engine_control_execute_plan(const engine_plan_cmd_t *cmd) {
 static void engine_planner_task(void *arg) {
     (void)arg;
     while (1) {
-        uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+        // OPTIMIZATION: Reduced timeout for faster response
+        uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
         if (notified == 0) {
             continue;
         }
-        uint32_t t0 = (uint32_t)esp_timer_get_time();
+        uint32_t t0 = (uint32_t)HAL_Time_us();
 
         engine_plan_cmd_t cmd = {0};
         if (engine_control_build_plan(&cmd) == ESP_OK) {
             plan_ring_push(&cmd);
             if (g_executor_task_handle != NULL) {
-                xTaskNotifyGive(g_executor_task_handle);
+                // OPTIMIZATION: Direct task notification without delay
+                BaseType_t hp_woken = pdFALSE;
+                vTaskNotifyGiveFromISR(g_executor_task_handle, &hp_woken);
+                if (hp_woken == pdTRUE) {
+                    portYIELD_FROM_ISR();
+                }
             }
         }
 
-        uint32_t elapsed = (uint32_t)esp_timer_get_time() - t0;
+        uint32_t elapsed = (uint32_t)HAL_Time_us() - t0;
         perf_record_planner(elapsed);
+        
+        // OPTIMIZATION: Yield if we're taking too long
+        if (elapsed > PLANNER_DEADLINE_US) {
+            taskYIELD();
+        }
     }
 }
 
 static void engine_executor_task(void *arg) {
     (void)arg;
     while (1) {
-        uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(50));
+        // OPTIMIZATION: Reduced timeout for faster response
+        uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));
         if (notified == 0) {
             continue;
         }
+        
+        // OPTIMIZATION: Batch process multiple commands
+        uint32_t processed_count = 0;
+        const uint32_t max_batch = 4; // Process max 4 commands per cycle
+        
         engine_plan_cmd_t cmd = {0};
-        while (plan_ring_pop_latest(&cmd)) {
-            uint32_t t0 = (uint32_t)esp_timer_get_time();
+        while (plan_ring_pop_latest(&cmd) && processed_count < max_batch) {
+            uint32_t t0 = (uint32_t)HAL_Time_us();
             uint32_t queue_age = t0 - cmd.planned_at_us;
             if (queue_age > EXECUTOR_MAX_PLAN_AGE_US) {
                 perf_record_executor(0U, queue_age);
+                processed_count++;
                 continue;
             }
             engine_control_execute_plan(&cmd);
-            uint32_t elapsed = (uint32_t)esp_timer_get_time() - t0;
+            uint32_t elapsed = (uint32_t)HAL_Time_us() - t0;
             perf_record_executor(elapsed, queue_age);
+            processed_count++;
+        }
+        
+        // OPTIMIZATION: Yield if we processed many commands
+        if (processed_count >= 2) {
+            taskYIELD();
         }
     }
 }
@@ -953,7 +1045,7 @@ static void engine_monitor_task(void *arg) {
     uint32_t last_espnow_diag_ms = 0;
     
     while (1) {
-        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        uint32_t now_ms = (uint32_t)(HAL_Time_us() / 1000);
         maybe_persist_maps(now_ms);
         
         // Publish ESP-NOW messages if initialized
@@ -1243,9 +1335,7 @@ esp_err_t engine_control_init(void) {
         return err;
     }
 
-    // H1 fix: initialize event scheduler and configure trigger wheel geometry
-    // before registering the tooth callback so the first tooth event is handled
-    // with correct deg_per_tooth and TDC offset already in place.
+    // Initialize event scheduler before registering the tooth callback.
     evt_scheduler_init();
     evt_set_trigger_teeth(TRIGGER_WHEEL_TEETH);        // 60 for 60-2 wheel
     evt_set_tdc_offset(TRIGGER_TDC_OFFSET_DEG);        // 114° default
@@ -1380,6 +1470,7 @@ esp_err_t engine_control_init(void) {
     sync_register_tooth_callback(engine_sync_tooth_callback, NULL);
     callback_registered = true;
     g_engine_initialized = true;
+    g_engine_running = true;
 
     ESP_LOGI("ENGINE_CONTROL", "Engine control system initialized");
     return ESP_OK;
@@ -1390,6 +1481,7 @@ esp_err_t engine_control_start(void) {
     if (!g_engine_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
+    g_engine_running = true;
     ESP_LOGI("ENGINE_CONTROL", "Engine control started");
     return ESP_OK;
 }
@@ -1399,6 +1491,8 @@ esp_err_t engine_control_stop(void) {
     if (!g_engine_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
+    g_engine_running = false;
+    plan_ring_clear();
 
     // 1. Unregister tooth callback so no new plans are triggered
     sync_unregister_tooth_callback();
@@ -1407,15 +1501,12 @@ esp_err_t engine_control_stop(void) {
     mcpwm_injection_hp_stop_all();
 
     // 3. Immediately cut ignition to all cylinders (1-indexed in driver)
-    for (uint8_t cyl = 1; cyl <= EVT_NUM_CYLINDERS; cyl++) {
+    for (uint8_t cyl = 1; cyl <= ENGINE_CYLINDERS; cyl++) {
         mcpwm_ignition_hp_stop_cylinder(cyl);
     }
 
     // 4. Cancel any angle-based events still queued in the scheduler
     evt_cancel_all();
-
-    // 5. Mark sync as invalid so the scheduler won't fire even if a stale
-    //    tooth interrupt arrives before the unregister takes effect
     evt_set_sync_valid(false);
 
     ESP_LOGI("ENGINE_CONTROL", "Engine control stopped: all actuators cut");
@@ -1429,6 +1520,7 @@ esp_err_t engine_control_deinit(void) {
     }
     ESP_LOGI("ENGINE_CONTROL", "Deinitializing engine control system");
 
+    g_engine_running = false;
     sync_unregister_tooth_callback();
     if (g_planner_task_handle != NULL) {
         vTaskDelete(g_planner_task_handle);

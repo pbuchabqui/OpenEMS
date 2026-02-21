@@ -11,7 +11,7 @@
  * - Usa hp_state.h para estado compartilhado de alta precisão
  */
 
-#include "mcpwm_injection.h"
+#include "mcpwm_injection_hp.h"
 #include "driver/mcpwm_timer.h"
 #include "driver/mcpwm_oper.h"
 #include "driver/mcpwm_cmpr.h"
@@ -166,7 +166,7 @@ bool mcpwm_injection_hp_configure(const mcpwm_injection_config_t *config) {
  */
 IRAM_ATTR bool mcpwm_injection_hp_schedule_one_shot_absolute(
     uint8_t cylinder_id,
-    uint32_t delay_us,
+    uint32_t target_us,
     uint32_t pulsewidth_us,
     uint32_t current_counter)
 {
@@ -180,8 +180,8 @@ IRAM_ATTR bool mcpwm_injection_hp_schedule_one_shot_absolute(
     }
 
     // Calcular valores ABSOLUTOS
-    uint32_t start_ticks = delay_us;
-    uint32_t end_ticks = delay_us + pw;
+    uint32_t start_ticks = target_us;
+    uint32_t end_ticks = target_us + pw;
 
     // Enforce max on-time in absolute domain as well
     if ((end_ticks - start_ticks) > INJECTOR_MAX_ON_US) {
@@ -190,7 +190,7 @@ IRAM_ATTR bool mcpwm_injection_hp_schedule_one_shot_absolute(
     }
 
     // Verificar se o target já passou
-    if (delay_us <= current_counter) {
+    if (target_us <= current_counter) {
         return false;
     }
 
@@ -205,7 +205,7 @@ IRAM_ATTR bool mcpwm_injection_hp_schedule_one_shot_absolute(
     ch->last_counter_value = current_counter;
 
     // Registra jitter usando estado centralizado
-    hp_state_record_jitter(delay_us, delay_us);
+    hp_state_record_jitter(target_us, target_us);
 
     return true;
 }
@@ -215,7 +215,7 @@ IRAM_ATTR bool mcpwm_injection_hp_schedule_one_shot_absolute(
  * @note IRAM_ATTR - função crítica de timing
  */
 IRAM_ATTR bool mcpwm_injection_hp_schedule_sequential_absolute(
-    uint32_t base_delay_us,
+    uint32_t base_time_us,
     uint32_t pulsewidth_us,
     uint32_t cylinder_offsets[4],
     uint32_t current_counter)
@@ -224,7 +224,7 @@ IRAM_ATTR bool mcpwm_injection_hp_schedule_sequential_absolute(
 
     bool all_success = true;
     for (int i = 0; i < 4; i++) {
-        uint32_t delay_us = base_delay_us + cylinder_offsets[i];
+        uint32_t delay_us = base_time_us + cylinder_offsets[i];
         if (!mcpwm_injection_hp_schedule_one_shot_absolute((uint8_t)i, delay_us, pulsewidth_us, current_counter)) {
             all_success = false;
         }

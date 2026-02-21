@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "decoder/trigger_60_2.h"
+#include "utils/sync.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,6 +34,15 @@ bool fuel_injection_schedule_eoi_ex(uint8_t cylinder_id,
                                      const sync_data_t *sync,
                                      fuel_injection_schedule_info_t *info,
                                      float battery_voltage);
+
+// Prepare an injection event for the angle-based scheduler (no hardware I/O)
+bool fuel_injection_prepare_event(uint8_t cylinder_id,
+                                  float target_eoi_deg,
+                                  uint32_t pulsewidth_us,
+                                  const sync_data_t *sync,
+                                  fuel_injection_schedule_info_t *info,
+                                  float battery_voltage,
+                                  uint32_t *pulsewidth_us_out);
 
 // Schedule sequential injection for all cylinders
 bool fuel_injection_schedule_sequential(uint32_t pulsewidth_us[4],

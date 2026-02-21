@@ -8,7 +8,7 @@
 
 #include "comms/tunerstudio.h"
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "hal/hal_timer.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -173,7 +173,7 @@ static esp_err_t handle_hello(const uint8_t *payload, uint16_t len)
     generate_challenge(g_tuning.session.challenge);
     g_tuning.session.active = true;
     g_tuning.session.authenticated = false;
-    g_tuning.session.last_activity_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    g_tuning.session.last_activity_ms = (uint32_t)(HAL_Time_us() / 1000);
     
     // Build response
     tuning_hello_ack_t ack = {0};
@@ -300,7 +300,23 @@ static void stream_task(void *arg)
         uint8_t payload[64];
         uint16_t len = 0;
         
-        // TODO: Get actual engine data and format
+        // Get actual engine data and format
+        engine_params_t params;
+        esp_err_t err = engine_control_get_engine_parameters(&params);
+        
+        if (err == ESP_OK) {
+            // Format engine data for streaming
+            len = 0;
+            payload[len++] = (params.rpm >> 8) & 0xFF;
+            payload[len++] = params.rpm & 0xFF;
+            payload[len++] = (params.load >> 8) & 0xFF;
+            payload[len++] = params.load & 0xFF;
+            payload[len++] = (params.advance_deg10 >> 8) & 0xFF;
+            payload[len++] = params.advance_deg10 & 0xFF;
+            payload[len++] = (params.fuel_enrichment >> 8) & 0xFF;
+            payload[len++] = params.fuel_enrichment & 0xFF;
+            payload[len++] = params.is_limp_mode ? 1 : 0;
+        }
         
         build_and_send(TUNING_MSG_STREAM_DATA, payload, len, 0);
         
@@ -449,7 +465,7 @@ esp_err_t tuning_process_message(const uint8_t *data, size_t len)
     }
     
     // Update activity
-    g_tuning.last_activity_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    g_tuning.last_activity_ms = (uint32_t)(HAL_Time_us() / 1000);
     if (g_tuning.session.active) {
         g_tuning.session.last_activity_ms = g_tuning.last_activity_ms;
     }
