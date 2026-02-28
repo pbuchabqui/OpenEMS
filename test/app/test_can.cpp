@@ -1,0 +1,148 @@
+#include <cstdint>
+#include <cstdio>
+
+#define EMS_HOST_TEST 1
+#include "app/can_stack.h"
+#include "hal/can.h"
+
+namespace {
+
+int g_tests_run = 0;
+int g_tests_failed = 0;
+
+#define TEST_ASSERT_TRUE(cond) do { \
+    ++g_tests_run; \
+    if (!(cond)) { \
+        ++g_tests_failed; \
+        std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+    } \
+} while (0)
+
+#define TEST_ASSERT_EQ_U32(exp, act) do { \
+    ++g_tests_run; \
+    const uint32_t _e = static_cast<uint32_t>(exp); \
+    const uint32_t _a = static_cast<uint32_t>(act); \
+    if (_e != _a) { \
+        ++g_tests_failed; \
+        std::printf("FAIL %s:%d: expected %u got %u\n", __FILE__, __LINE__, (unsigned)_e, (unsigned)_a); \
+    } \
+} while (0)
+
+ems::drv::CkpSnapshot make_ckp(uint32_t rpm_x10) {
+    return ems::drv::CkpSnapshot{0u, 0u, 0u, rpm_x10, ems::drv::SyncState::SYNCED, false};
+}
+
+ems::drv::SensorData make_sensors() {
+    return ems::drv::SensorData{
+        998u,   // map_kpa_x10
+        0u,     // maf_gps_x100
+        457u,   // tps_pct_x10
+        930,    // clt_degc_x10
+        250,    // iat_degc_x10
+        720u,   // o2_mv
+        3510u,  // fuel_press_kpa_x10
+        4020u,  // oil_press_kpa_x10
+        13800u, // vbatt_mv
+        0u      // fault_bits
+    };
+}
+
+void test_can_init_programs_bit_timing() {
+    ems::app::can_stack_test_reset();
+    const uint32_t ctrl1 = ems::hal::can_test_ctrl1();
+    TEST_ASSERT_EQ_U32(5u, (ctrl1 >> 24u) & 0xFFu);
+    TEST_ASSERT_EQ_U32(6u, ctrl1 & 0x7u);
+    TEST_ASSERT_EQ_U32(7u, (ctrl1 >> 19u) & 0x7u);
+    TEST_ASSERT_EQ_U32(4u, (ctrl1 >> 16u) & 0x7u);
+}
+
+void test_tx_0x400_serialization() {
+    ems::app::can_stack_test_reset();
+    const ems::drv::CkpSnapshot ckp = make_ckp(32150u);
+    const ems::drv::SensorData sensors = make_sensors();
+
+    ems::app::can_stack_process(
+        10u, ckp, sensors,
+        12,   // advance_deg
+        45u,  // pw_ms_x10
+        0,    // stft_pct
+        0u,   // vvt intake
+        0u,   // vvt exhaust
+        0xA5u // status bits
+    );
+
+    ems::hal::CanFrame out = {};
+    TEST_ASSERT_TRUE(ems::hal::can_test_pop_tx(out));
+    TEST_ASSERT_EQ_U32(0x400u, out.id);
+    TEST_ASSERT_EQ_U32(8u, out.dlc);
+    TEST_ASSERT_EQ_U32(3215u & 0xFFu, out.data[0]);
+    TEST_ASSERT_EQ_U32((3215u >> 8u) & 0xFFu, out.data[1]);
+    TEST_ASSERT_EQ_U32(99u, out.data[2]);
+    TEST_ASSERT_EQ_U32(45u, out.data[3]);
+    TEST_ASSERT_EQ_U32(133u, out.data[4]);  // 93 + 40
+    TEST_ASSERT_EQ_U32(52u, out.data[5]);   // 12 + 40
+    TEST_ASSERT_EQ_U32(45u, out.data[6]);
+    TEST_ASSERT_EQ_U32(0xA5u, out.data[7]);
+}
+
+void test_tx_0x401_serialization() {
+    ems::app::can_stack_test_reset();
+    const ems::drv::CkpSnapshot ckp = make_ckp(10000u);
+    const ems::drv::SensorData sensors = make_sensors();
+
+    ems::app::can_stack_process(100u, ckp, sensors, 0, 0u, -7, 32u, 64u, 0u);
+
+    ems::hal::CanFrame out0 = {};
+    ems::hal::CanFrame out1 = {};
+    TEST_ASSERT_TRUE(ems::hal::can_test_pop_tx(out0));
+    TEST_ASSERT_TRUE(ems::hal::can_test_pop_tx(out1));
+
+    const ems::hal::CanFrame& slow = (out0.id == 0x401u) ? out0 : out1;
+    TEST_ASSERT_EQ_U32(0x401u, slow.id);
+    TEST_ASSERT_EQ_U32(8u, slow.dlc);
+    TEST_ASSERT_EQ_U32(3510u & 0xFFu, slow.data[0]);
+    TEST_ASSERT_EQ_U32((3510u >> 8u) & 0xFFu, slow.data[1]);
+    TEST_ASSERT_EQ_U32(4020u & 0xFFu, slow.data[2]);
+    TEST_ASSERT_EQ_U32((4020u >> 8u) & 0xFFu, slow.data[3]);
+    TEST_ASSERT_EQ_U32(65u, slow.data[4]);   // 25 + 40
+    TEST_ASSERT_EQ_U32(93u, slow.data[5]);   // -7 + 100
+    TEST_ASSERT_EQ_U32(32u, slow.data[6]);
+    TEST_ASSERT_EQ_U32(64u, slow.data[7]);
+}
+
+void test_rx_wbo2_and_timeout_fallback() {
+    ems::app::can_stack_test_reset();
+    const ems::drv::CkpSnapshot ckp = make_ckp(9000u);
+    const ems::drv::SensorData sensors = make_sensors();
+
+    ems::hal::CanFrame in = {};
+    in.id = 0x180u;
+    in.dlc = 8u;
+    in.extended = false;
+    in.data[0] = 0x1Au;
+    in.data[1] = 0x04u;  // 1050 lambda_milli
+    in.data[2] = 0x55u;
+    TEST_ASSERT_TRUE(ems::hal::can_test_inject_rx(in));
+
+    ems::app::can_stack_process(100u, ckp, sensors, 0, 0u, 0, 0u, 0u, 0u);
+
+    TEST_ASSERT_EQ_U32(1050u, ems::app::can_stack_lambda_milli());
+    TEST_ASSERT_EQ_U32(0x55u, ems::app::can_stack_wbo2_status());
+    TEST_ASSERT_TRUE(ems::app::can_stack_wbo2_fresh(550u));
+    TEST_ASSERT_EQ_U32(416u, ems::app::can_stack_o2_mv_effective(550u, sensors));
+    TEST_ASSERT_TRUE(!ems::app::can_stack_wbo2_fresh(601u));
+    TEST_ASSERT_EQ_U32(sensors.o2_mv, ems::app::can_stack_o2_mv_effective(601u, sensors));
+}
+
+}  // namespace
+
+int main() {
+    test_can_init_programs_bit_timing();
+    test_tx_0x400_serialization();
+    test_tx_0x401_serialization();
+    test_rx_wbo2_and_timeout_fallback();
+
+    std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
+    return (g_tests_failed == 0) ? 0 : 1;
+}
+
