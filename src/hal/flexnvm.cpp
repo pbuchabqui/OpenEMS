@@ -8,6 +8,11 @@ namespace {
 constexpr uint8_t kLtftRows = 16u;
 constexpr uint8_t kLtftCols = 16u;
 constexpr uint16_t kLtftSize = static_cast<uint16_t>(kLtftRows * kLtftCols);
+constexpr uint8_t kKnockRows = 8u;
+constexpr uint8_t kKnockCols = 8u;
+constexpr uint16_t kKnockSize = static_cast<uint16_t>(kKnockRows * kKnockCols);
+// knock_map offset in FlexRAM: logo após os 256 bytes do LTFT
+constexpr uint16_t kKnockEeeOffset = kLtftSize;
 constexpr uint16_t kCalPageSize = 4096u;
 constexpr uint8_t kCalPages = 32u;
 constexpr uint32_t kCcifTimeoutPolls = 1'200'000u;  // ~10 ms @ 120 MHz
@@ -17,6 +22,7 @@ constexpr uint32_t kCcifTimeoutPolls = 1'200'000u;  // ~10 ms @ 120 MHz
 constexpr uint8_t kFstatCcif = (1u << 7u);
 static uint8_t g_fstat = kFstatCcif;
 static int8_t g_ltft[kLtftSize] = {};
+static int8_t g_knock[kKnockSize] = {};
 static uint8_t g_cal[kCalPages][kCalPageSize] = {};
 static uint32_t g_busy_polls_remaining = 0u;
 static uint32_t g_erase_count = 0u;
@@ -39,6 +45,10 @@ static bool wait_ccif_ready() noexcept {
 
 static inline uint16_t ltft_index(uint8_t rpm_i, uint8_t load_i) noexcept {
     return static_cast<uint16_t>(static_cast<uint16_t>(rpm_i) * kLtftCols + load_i);
+}
+
+static inline uint16_t knock_index(uint8_t rpm_i, uint8_t load_i) noexcept {
+    return static_cast<uint16_t>(static_cast<uint16_t>(rpm_i) * kKnockCols + load_i);
 }
 
 #else
@@ -114,6 +124,10 @@ static inline uint16_t ltft_index(uint8_t rpm_i, uint8_t load_i) noexcept {
     return static_cast<uint16_t>(static_cast<uint16_t>(rpm_i) * kLtftCols + load_i);
 }
 
+static inline uint16_t knock_index(uint8_t rpm_i, uint8_t load_i) noexcept {
+    return static_cast<uint16_t>(static_cast<uint16_t>(rpm_i) * kKnockCols + load_i);
+}
+
 #endif
 
 }  // namespace
@@ -149,6 +163,58 @@ int8_t nvm_read_ltft(uint8_t rpm_i, uint8_t load_i) noexcept {
 #else
     const volatile int8_t* const eee = reinterpret_cast<const volatile int8_t*>(kEeeBase);
     return eee[idx];
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// knock_map[8×8] — FlexRAM (EEPROM emulada), offset 256 bytes após LTFT
+// Unidade: 0,1° de avanço (valor negativo = retardo de ignição)
+// Range: –12,7° .. +12,7° (int8_t: –127 .. +127 × 0,1°)
+// ---------------------------------------------------------------------------
+
+bool nvm_write_knock(uint8_t rpm_i, uint8_t load_i, int8_t retard_deci_deg) noexcept {
+    if (rpm_i >= kKnockRows || load_i >= kKnockCols) {
+        return false;
+    }
+    if (!wait_ccif_ready()) {
+        return false;
+    }
+
+    const uint16_t idx = knock_index(rpm_i, load_i);
+#if defined(EMS_HOST_TEST)
+    g_knock[idx] = retard_deci_deg;
+#else
+    // FlexRAM mapeado como EEPROM: offset kKnockEeeOffset (256) após LTFT
+    volatile int8_t* const eee = reinterpret_cast<volatile int8_t*>(kEeeBase + kKnockEeeOffset);
+    eee[idx] = retard_deci_deg;
+#endif
+    return true;
+}
+
+int8_t nvm_read_knock(uint8_t rpm_i, uint8_t load_i) noexcept {
+    if (rpm_i >= kKnockRows || load_i >= kKnockCols) {
+        return 0;
+    }
+
+    const uint16_t idx = knock_index(rpm_i, load_i);
+#if defined(EMS_HOST_TEST)
+    return g_knock[idx];
+#else
+    const volatile int8_t* const eee =
+        reinterpret_cast<const volatile int8_t*>(kEeeBase + kKnockEeeOffset);
+    return eee[idx];
+#endif
+}
+
+void nvm_reset_knock_map() noexcept {
+#if defined(EMS_HOST_TEST)
+    std::memset(g_knock, 0, sizeof(g_knock));
+#else
+    // Escreve zero célula a célula via EEPROM emulada (wear-leveling por HW)
+    volatile int8_t* const eee = reinterpret_cast<volatile int8_t*>(kEeeBase + kKnockEeeOffset);
+    for (uint16_t i = 0u; i < kKnockSize; ++i) {
+        eee[i] = 0;
+    }
 #endif
 }
 
@@ -216,6 +282,7 @@ void nvm_test_reset() noexcept {
     g_erase_count = 0u;
     g_program_count = 0u;
     std::memset(g_ltft, 0, sizeof(g_ltft));
+    std::memset(g_knock, 0, sizeof(g_knock));
     std::memset(g_cal, 0xFF, sizeof(g_cal));
 }
 

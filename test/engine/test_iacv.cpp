@@ -56,26 +56,30 @@ ems::drv::SensorData  g_sensors = {};
 uint16_t g_ftm1_duty[2] = {};
 uint16_t g_ftm2_duty[2] = {};
 
-void reset_fixture(int16_t clt_x10, uint16_t rpm_x10) {
+void reset_fixture(int16_t clt_x10, uint32_t rpm_x10) {
     g_snap = ems::drv::CkpSnapshot{
-        500000u,            // period_us
-        8u,                 // tooth_index
-        0u,                 // tooth_count
-        rpm_x10,
+        500000u,                          // tooth_period_ns
+        8u,                               // tooth_index
+        0u,                               // last_ftm3_capture
+        static_cast<uint32_t>(rpm_x10),  // rpm_x10 (uint32_t)
         ems::drv::SyncState::SYNCED,
-        true                // phase_A
+        true                              // phase_A
     };
     g_sensors = ems::drv::SensorData{
+        350u,    // map_kpa_x10
+        0u,      // maf_gps_x100
         0u,      // tps_pct_x10
-        0u,      // afr_x10
-        0u,      // ect_temp_x10
         clt_x10, // clt_degc_x10
         250,     // iat_degc_x10
-        1013u,   // baro_kpa_x10
-        350u,    // map_kpa_x10
-        0u,      // fuel_pres_kpa_x10
-        13500u,  // vbat_mv
-        0u,      // knock_raw
+        0u,      // o2_mv
+        0u,      // fuel_press_kpa_x10
+        0u,      // oil_press_kpa_x10
+        13500u,  // vbatt_mv
+        0u,      // fault_bits
+        0u,      // an1_raw
+        0u,      // an2_raw
+        0u,      // an3_raw
+        0u,      // an4_raw
     };
     g_ftm1_duty[0] = g_ftm1_duty[1] = 0u;
     g_ftm2_duty[0] = g_ftm2_duty[1] = 0u;
@@ -97,7 +101,7 @@ void plant_step() {
     int32_t next = rpm + (ss - rpm) / 16;
     if (next < 0)     next = 0;
     if (next > 20000) next = 20000;
-    g_snap.rpm_x10 = static_cast<uint16_t>(next);
+    g_snap.rpm_x10 = static_cast<uint32_t>(next);
 }
 
 void tick_with_plant(uint32_t n) {
@@ -174,13 +178,13 @@ void test_drpmdt_inhibits_pid() {
     tick_with_plant(60u);  // settle
 
     // Sharp drop: 200 rpm_x10 in one tick → drpm_dt = 200*50 = 10000 > 2000
-    const uint16_t rpm_before = g_snap.rpm_x10;
-    g_snap.rpm_x10 = static_cast<uint16_t>(rpm_before > 200u ? rpm_before - 200u : 0u);
+    const uint32_t rpm_before = g_snap.rpm_x10;
+    g_snap.rpm_x10 = static_cast<uint32_t>(rpm_before > 200u ? rpm_before - 200u : 0u);
     tick_open(1u);
     TEST_ASSERT_TRUE(iac_duty() <= 1000u);
 
     // Sharp rise
-    g_snap.rpm_x10 = static_cast<uint16_t>(rpm_before + 200u);
+    g_snap.rpm_x10 = static_cast<uint32_t>(rpm_before + 200u);
     tick_open(1u);
     TEST_ASSERT_TRUE(iac_duty() <= 1000u);
 
@@ -235,10 +239,10 @@ void test_closed_loop_step_direction() {
     reset_fixture(900, 8200u);
     tick_with_plant(300u);  // 6 s settle with calibrated plant
     const uint16_t duty_settled = iac_duty();
-    const uint16_t rpm_settled  = g_snap.rpm_x10;
+    const uint32_t rpm_settled  = g_snap.rpm_x10;
 
     // Drop RPM by 200 (rpm now below target)
-    g_snap.rpm_x10 = static_cast<uint16_t>(rpm_settled > 200u ? rpm_settled - 200u : 0u);
+    g_snap.rpm_x10 = static_cast<uint32_t>(rpm_settled > 200u ? rpm_settled - 200u : 0u);
     tick_open(1u);  // one tick to let PID react
     const uint16_t duty_after_drop = iac_duty();
 
@@ -249,9 +253,9 @@ void test_closed_loop_step_direction() {
     reset_fixture(900, 8200u);
     tick_with_plant(300u);
     const uint16_t duty_settled2 = iac_duty();
-    const uint16_t rpm_settled2  = g_snap.rpm_x10;
+    const uint32_t rpm_settled2  = g_snap.rpm_x10;
 
-    g_snap.rpm_x10 = static_cast<uint16_t>(rpm_settled2 + 200u);
+    g_snap.rpm_x10 = static_cast<uint32_t>(rpm_settled2 + 200u);
     tick_open(1u);
     const uint16_t duty_after_rise = iac_duty();
 
