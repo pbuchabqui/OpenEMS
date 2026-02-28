@@ -204,8 +204,10 @@ uint32_t calc_base_pw_us(uint16_t req_fuel_us,
         return 0u;
     }
 
+    // VE é percentual direto (0–100 = 0%–100%, >100 = sobrealimentado).
+    // Denominador 100 mantém a semântica: VE=100 + MAP=MAP_ref → pw = req_fuel_us.
     const uint32_t prod = static_cast<uint32_t>(req_fuel_us) * ve * map_kpa;
-    const uint32_t den = static_cast<uint32_t>(255u) * map_ref_kpa;
+    const uint32_t den = static_cast<uint32_t>(100u) * map_ref_kpa;
     return prod / den;
 }
 

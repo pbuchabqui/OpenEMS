@@ -28,13 +28,18 @@ int g_tests_failed = 0;
 } while (0)
 
 void test_base_pw_nominal() {
+    // VE=128%, MAP=MAP_ref=100 kPa → pw = 8000 × 128/100 = 10240 µs
     const uint32_t pw = ems::engine::calc_base_pw_us(8000u, 128u, 100u, 100u);
-    TEST_ASSERT_TRUE(pw >= 4010u && pw <= 4016u);
+    TEST_ASSERT_TRUE(pw >= 10237u && pw <= 10243u);
 }
 
 void test_base_pw_limits() {
+    // VE=0 → pw=0
     TEST_ASSERT_EQ_U32(0u, ems::engine::calc_base_pw_us(8000u, 0u, 100u, 100u));
-    TEST_ASSERT_EQ_U32(8000u, ems::engine::calc_base_pw_us(8000u, 255u, 100u, 100u));
+    // VE=100 (100%), MAP=MAP_ref → pw = req_fuel_us exato
+    TEST_ASSERT_EQ_U32(8000u, ems::engine::calc_base_pw_us(8000u, 100u, 100u, 100u));
+    // VE=255 (255%) → pw = 8000 × 255/100 = 20400 µs
+    TEST_ASSERT_EQ_U32(20400u, ems::engine::calc_base_pw_us(8000u, 255u, 100u, 100u));
 }
 
 void test_ae_positive_on_tps_step() {
