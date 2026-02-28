@@ -21,16 +21,16 @@ int g_tests_failed = 0;
 
 ems::drv::CkpSnapshot g_snap = {1000000u, 0u, 0u, 3000u, ems::drv::SyncState::SYNCED, true};
 ems::drv::SensorData g_sensors = {
-    1000u,
-    0u,
-    700u,
-    900,
-    250,
-    450u,
-    3000u,
-    2500u,
-    13500u,
-    0u,
+    1000u,   // map_kpa_x10
+    0u,      // maf_gps_x100
+    700u,    // tps_pct_x10
+    900,     // clt_degc_x10
+    250,     // iat_degc_x10
+    // o2_mv REMOVIDO
+    3000u,   // fuel_press_kpa_x10
+    2500u,   // oil_press_kpa_x10
+    13500u,  // vbatt_mv
+    0u,      // fault_bits
 };
 
 uint32_t g_ftm1_init_hz = 0u;
@@ -41,7 +41,7 @@ uint16_t g_ftm2_duty[2] = {0u, 0u};
 void reset_fixture() {
     g_snap = ems::drv::CkpSnapshot{1000000u, 8u, 0u, 3000u, ems::drv::SyncState::SYNCED, true};
     g_sensors = ems::drv::SensorData{
-        1000u, 0u, 700u, 900, 250, 450u, 3000u, 2500u, 13500u, 0u,
+        1000u, 0u, 700u, 900, 250, 3000u, 2500u, 13500u, 0u,
     };
     g_ftm1_init_hz = 0u;
     g_ftm2_init_hz = 0u;

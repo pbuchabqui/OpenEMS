@@ -65,7 +65,9 @@ run_test test_knock \
 
 run_test test_ts_protocol \
   test/app/test_ts_protocol.cpp \
-  src/app/tuner_studio.cpp
+  src/app/tuner_studio.cpp \
+  src/app/can_stack.cpp \
+  src/hal/can.cpp
 
 run_test test_can \
   test/app/test_can.cpp \

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "app/can_stack.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
 
@@ -149,7 +150,8 @@ inline void update_realtime_page() noexcept {
     rt.clt_p40 = static_cast<int8_t>(clamp_i16((static_cast<int32_t>(s.clt_degc_x10) / 10) + 40, -128, 127));
     rt.iat_p40 = static_cast<int8_t>(clamp_i16((static_cast<int32_t>(s.iat_degc_x10) / 10) + 40, -128, 127));
 
-    rt.o2_mv_d4 = clamp_u8(s.o2_mv / 4u);
+    // WBO2 via CAN (lambda × 1000); ÷4 para caber em uint8_t (0..375 range típico)
+    rt.o2_mv_d4 = clamp_u8(ems::app::can_stack_lambda_milli() / 4u);
     rt.pw1_ms_x10 = 0u;
     rt.advance_p40 = 40u;
     rt.ve = g_page1_ve[0];
