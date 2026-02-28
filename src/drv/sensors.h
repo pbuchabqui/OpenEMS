@@ -10,24 +10,29 @@ struct SensorData {
     uint16_t map_kpa_x10;
     uint16_t maf_gps_x100;
     uint16_t tps_pct_x10;
-    int16_t clt_degc_x10;
-    int16_t iat_degc_x10;
+    int16_t  clt_degc_x10;
+    int16_t  iat_degc_x10;
     uint16_t o2_mv;
     uint16_t fuel_press_kpa_x10;
     uint16_t oil_press_kpa_x10;
     uint16_t vbatt_mv;
-    uint8_t fault_bits;
+    uint8_t  fault_bits;
+    // Expansão AN1-4 — passthrough, atualizados em sensors_tick_100ms()
+    uint16_t an1_raw;
+    uint16_t an2_raw;
+    uint16_t an3_raw;
+    uint16_t an4_raw;
 };
 
 enum class SensorId : uint8_t {
-    MAP = 0,
-    MAF = 1,
-    TPS = 2,
-    CLT = 3,
-    IAT = 4,
-    O2 = 5,
+    MAP        = 0,
+    MAF        = 1,
+    TPS        = 2,
+    CLT        = 3,
+    IAT        = 4,
+    O2         = 5,
     FUEL_PRESS = 6,
-    OIL_PRESS = 7,
+    OIL_PRESS  = 7,
 };
 
 struct SensorRange {

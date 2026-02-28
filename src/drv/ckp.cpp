@@ -131,7 +131,10 @@ CkpSnapshot ckp_snapshot() noexcept {
 }
 
 uint16_t ckp_angle_to_ticks(uint16_t angle_x10, uint16_t ref_capture) noexcept {
-    const uint32_t tooth_period_ticks = (g_state.snap.tooth_period_ns * 120u) / 1000u;
+    // FTM3: 120 MHz system clock / prescaler 2 = 60 MHz efetivo = 16.667 ns/tick
+    // ticks = ns / 16.667 = ns * 60 / 1000
+    // Bug original: usava fator 120 (implicava 120 MHz sem prescaler) — erro 2×
+    const uint32_t tooth_period_ticks = (g_state.snap.tooth_period_ns * 60u) / 1000u;
     const uint32_t delta = (static_cast<uint32_t>(angle_x10) * tooth_period_ticks) /
                            kToothAngleX1000;
     return static_cast<uint16_t>(ref_capture + static_cast<uint16_t>(delta));

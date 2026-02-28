@@ -82,7 +82,9 @@
 #define FTM_SC_CPWMS    (1u << 5)   // Center-aligned PWM Select
 // CLKS[4:3]: 00=nenhum, 01=system, 10=fixed, 11=externo
 #define FTM_SC_CLKS_SYSTEM  (0x1u << 3)
-#define FTM_SC_CLKS_BUS     (0x1u << 3)   // bus clock = system/2, usa mesmo bit via sysclk
+// NOTA: FTM1/FTM2 usam CLKS_SYSTEM (01) também — CLKS=01 no MK64F seleciona sempre
+// system clock (120 MHz). A compensação para bus clock (60 MHz) é feita via
+// kFtmBusClockHz = 60000000 na fórmula calc_pwm_params, não via seleção de clock diferente.
 // PS[2:0]: prescaler 1/2/4/8/16/32/64/128
 #define FTM_SC_PS_1     (0x0u)
 #define FTM_SC_PS_2     (0x1u)

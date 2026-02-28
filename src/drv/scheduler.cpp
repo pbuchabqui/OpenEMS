@@ -222,20 +222,23 @@ void sched_cancel_all() noexcept {
 void sched_isr() noexcept {
     const uint16_t now = ems::hal::ftm0_count();
 
-    while (q_size > 0u) {
-        const Event ev = queue_read(0u);
-        if (!ev.valid || ev.ftm0_ticks > now) {
+    for (uint8_t i = 0u; i < q_size; ++i) {
+        const Event ev = queue_read(i);
+        if (!ev.valid) {
+            continue;
+        }
+        // A fila está ordenada; ao encontrar evento futuro, os demais também são futuros.
+        if (ev.ftm0_ticks > now) {
             break;
         }
 
         execute_gpio(ev.channel, ev.action);
         ems::hal::ftm0_clear_chf(to_ch(ev.channel));
         disable_compare_irq(to_ch(ev.channel));
-
-        queue[0].valid = false;
-        compact_and_sort();
+        queue[i].valid = false;
     }
 
+    compact_and_sort();
     program_next_compare();
 }
 

@@ -266,6 +266,20 @@ static void test_reusefi_1488_scenario(void) {
     TEST_ASSERT_EQUAL_UINT16(23880u, delta_wrong);
 }
 
+/**
+ * @brief Casos literais exigidos pelo Prompt 1, Entregável #3.
+ * Valores em decimal conforme especificado no contrato do módulo HAL.
+ *
+ *   now=10,    prev=65530  → delta deve ser 16    (overflow: 65536 - 65530 + 10 = 16)
+ *   now=1000,  prev=500    → delta deve ser 500   (normal, sem overflow)
+ *   now=0,     prev=65535  → delta deve ser 1     (overflow exato na borda)
+ */
+static void test_delta_prompt_required_cases(void) {
+    TEST_ASSERT_EQUAL_UINT16(16u,  ftm_delta_ticks(10u,   65530u));
+    TEST_ASSERT_EQUAL_UINT16(500u, ftm_delta_ticks(1000u, 500u));
+    TEST_ASSERT_EQUAL_UINT16(1u,   ftm_delta_ticks(0u,    65535u));
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Runner principal
 // ──────────────────────────────────────────────────────────────────────────────
@@ -275,6 +289,7 @@ int main(void) {
     printf(" Target: host x86_64 | FTM prescaler 2 @ 120 MHz sys clock\n");
     printf("═══════════════════════════════════════════════════════════════\n\n");
 
+    RUN_TEST(test_delta_prompt_required_cases);
     RUN_TEST(test_delta_no_overflow);
     RUN_TEST(test_delta_single_overflow);
     RUN_TEST(test_delta_overflow_at_zero);
