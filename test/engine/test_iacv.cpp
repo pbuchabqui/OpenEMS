@@ -71,7 +71,7 @@ void reset_fixture(int16_t clt_x10, uint32_t rpm_x10) {
         0u,      // tps_pct_x10
         clt_x10, // clt_degc_x10
         250,     // iat_degc_x10
-        0u,      // o2_mv
+        // o2_mv REMOVIDO
         0u,      // fuel_press_kpa_x10
         0u,      // oil_press_kpa_x10
         13500u,  // vbatt_mv

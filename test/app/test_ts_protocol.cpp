@@ -119,16 +119,16 @@ void test_a_returns_64_bytes_realtime() {
         true,
     };
     ems::drv::g_sensors = ems::drv::SensorData{
-        987u,
-        0u,
-        321u,
-        850,
-        250,
-        800u,
-        0u,
-        0u,
-        0u,
-        1u,
+        987u,  // map_kpa_x10
+        0u,    // maf_gps_x100
+        321u,  // tps_pct_x10
+        850,   // clt_degc_x10
+        250,   // iat_degc_x10
+        // o2_mv REMOVIDO
+        0u,    // fuel_press_kpa_x10
+        0u,    // oil_press_kpa_x10
+        0u,    // vbatt_mv
+        1u,    // fault_bits
     };
 
     const uint8_t cmd = static_cast<uint8_t>('A');
@@ -144,7 +144,8 @@ void test_a_returns_64_bytes_realtime() {
     TEST_ASSERT_EQ_U32(32u, out[3]);
     TEST_ASSERT_EQ_U32(125u, out[4]);
     TEST_ASSERT_EQ_U32(65u, out[5]);
-    TEST_ASSERT_EQ_U32(200u, out[6]);
+    // o2_mv_d4 agora vem do WBO2 via CAN: WBO2_SAFE_LAMBDA_MILLI(1050)/4 = 262 → clamp → 255
+    TEST_ASSERT_EQ_U32(255u, out[6]);
     TEST_ASSERT_EQ_U32(40u, out[8]);
     TEST_ASSERT_EQ_U32(100u, out[9]);
     TEST_ASSERT_EQ_U32(0u, static_cast<int8_t>(out[10]));

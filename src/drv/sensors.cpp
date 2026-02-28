@@ -293,7 +293,8 @@ inline void sample_fast_channels() noexcept {
                          ? kFallbackTpsPctX10
                          : tps_raw_to_pct_x10(avg4(g_tps_buf));
 
-    g_data.o2_mv = raw_to_mv(g_o2_filt);
+    // o2_mv removido de SensorData — WBO2 lido via CAN (ID 0x180)
+    // g_o2_filt mantido apenas para fault tracking (apply_fault acima)
 
     // MAF combinado: média entre estimativa por frequência e por tensão
     // FTM3 CH1 captura MAF no mesmo clock: 120 MHz / prescaler 2 = 60 MHz
