@@ -7,14 +7,14 @@
 
 namespace {
 
-int g_tests_run = 0;
+int g_tests_run    = 0;
 int g_tests_failed = 0;
 
 #define TEST_ASSERT_TRUE(cond) do { \
     ++g_tests_run; \
     if (!(cond)) { \
         ++g_tests_failed; \
-        std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+        std::printf("FAIL %s:%d  cond: %s\n", __FILE__, __LINE__, #cond); \
     } \
 } while (0)
 
@@ -24,71 +24,83 @@ int g_tests_failed = 0;
     const uint32_t _a = static_cast<uint32_t>(act); \
     if (_e != _a) { \
         ++g_tests_failed; \
-        std::printf("FAIL %s:%d: expected %u got %u\n", __FILE__, __LINE__, (unsigned)_e, (unsigned)_a); \
+        std::printf("FAIL %s:%d  expected=%u  got=%u\n", \
+                    __FILE__, __LINE__, (unsigned)_e, (unsigned)_a); \
     } \
 } while (0)
 
+// ─── helpers ────────────────────────────────────────────────────────────────
+
 ems::drv::CkpSnapshot make_ckp(uint32_t rpm_x10) {
-    return ems::drv::CkpSnapshot{0u, 0u, 0u, rpm_x10, ems::drv::SyncState::SYNCED, false};
+    return ems::drv::CkpSnapshot{0u, 0u, 0u, rpm_x10,
+                                  ems::drv::SyncState::SYNCED, false};
 }
 
+// SensorData sem o campo o2_mv
 ems::drv::SensorData make_sensors() {
     return ems::drv::SensorData{
-        998u,   // map_kpa_x10
-        0u,     // maf_gps_x100
-        457u,   // tps_pct_x10
-        930,    // clt_degc_x10
-        250,    // iat_degc_x10
-        720u,   // o2_mv
-        3510u,  // fuel_press_kpa_x10
-        4020u,  // oil_press_kpa_x10
-        13800u, // vbatt_mv
-        0u      // fault_bits
+        998u,    // map_kpa_x10
+        0u,      // maf_gps_x100
+        457u,    // tps_pct_x10
+        930,     // clt_degc_x10   →  93 °C
+        250,     // iat_degc_x10   →  25 °C
+        // o2_mv REMOVIDO
+        3510u,   // fuel_press_kpa_x10
+        4020u,   // oil_press_kpa_x10
+        13800u,  // vbatt_mv
+        0u       // fault_bits
     };
 }
+
+// ─── test 1: bit timing ──────────────────────────────────────────────────────
 
 void test_can_init_programs_bit_timing() {
     ems::app::can_stack_test_reset();
     const uint32_t ctrl1 = ems::hal::can_test_ctrl1();
-    TEST_ASSERT_EQ_U32(5u, (ctrl1 >> 24u) & 0xFFu);
-    TEST_ASSERT_EQ_U32(6u, ctrl1 & 0x7u);
-    TEST_ASSERT_EQ_U32(7u, (ctrl1 >> 19u) & 0x7u);
-    TEST_ASSERT_EQ_U32(4u, (ctrl1 >> 16u) & 0x7u);
+    TEST_ASSERT_EQ_U32(5u, (ctrl1 >> 24u) & 0xFFu);  // PRESDIV
+    TEST_ASSERT_EQ_U32(6u,  ctrl1         & 0x07u);   // PROPSEG
+    TEST_ASSERT_EQ_U32(7u, (ctrl1 >> 19u) & 0x07u);   // PSEG1
+    TEST_ASSERT_EQ_U32(4u, (ctrl1 >> 16u) & 0x07u);   // PSEG2
 }
+
+// ─── test 2: serialização 0x400 ──────────────────────────────────────────────
 
 void test_tx_0x400_serialization() {
     ems::app::can_stack_test_reset();
-    const ems::drv::CkpSnapshot ckp = make_ckp(32150u);
-    const ems::drv::SensorData sensors = make_sensors();
+    const ems::drv::CkpSnapshot ckp     = make_ckp(32150u);
+    const ems::drv::SensorData  sensors = make_sensors();
 
-    ems::app::can_stack_process(
-        10u, ckp, sensors,
-        12,   // advance_deg
-        45u,  // pw_ms_x10
-        0,    // stft_pct
-        0u,   // vvt intake
-        0u,   // vvt exhaust
-        0xA5u // status bits
+    // WBO2 nunca recebeu frame → fault deve estar ativo
+    ems::app::can_stack_process(10u, ckp, sensors,
+        12,    // advance_deg
+        45u,   // pw_ms_x10
+        0,     // stft_pct
+        0u, 0u,
+        0x25u  // status_bits do chamador (sem bit7)
     );
 
     ems::hal::CanFrame out = {};
     TEST_ASSERT_TRUE(ems::hal::can_test_pop_tx(out));
     TEST_ASSERT_EQ_U32(0x400u, out.id);
-    TEST_ASSERT_EQ_U32(8u, out.dlc);
-    TEST_ASSERT_EQ_U32(3215u & 0xFFu, out.data[0]);
-    TEST_ASSERT_EQ_U32((3215u >> 8u) & 0xFFu, out.data[1]);
-    TEST_ASSERT_EQ_U32(99u, out.data[2]);
-    TEST_ASSERT_EQ_U32(45u, out.data[3]);
-    TEST_ASSERT_EQ_U32(133u, out.data[4]);  // 93 + 40
-    TEST_ASSERT_EQ_U32(52u, out.data[5]);   // 12 + 40
-    TEST_ASSERT_EQ_U32(45u, out.data[6]);
-    TEST_ASSERT_EQ_U32(0xA5u, out.data[7]);
+    TEST_ASSERT_EQ_U32(8u,     out.dlc);
+    TEST_ASSERT_EQ_U32(3215u & 0xFFu,       out.data[0]); // RPM LSB
+    TEST_ASSERT_EQ_U32((3215u >> 8u) & 0xFFu, out.data[1]); // RPM MSB
+    TEST_ASSERT_EQ_U32(99u,  out.data[2]);   // MAP: 998/10 = 99
+    TEST_ASSERT_EQ_U32(45u,  out.data[3]);   // TPS: 457/10 = 45
+    TEST_ASSERT_EQ_U32(133u, out.data[4]);   // CLT: 93 + 40 = 133
+    TEST_ASSERT_EQ_U32(52u,  out.data[5]);   // avanço: 12 + 40 = 52
+    TEST_ASSERT_EQ_U32(45u,  out.data[6]);   // PW
+    // bit7 (STATUS_WBO2_FAULT) deve estar SETADO pois WBO2 nunca recebeu frame
+    TEST_ASSERT_TRUE((out.data[7] & ems::app::STATUS_WBO2_FAULT) != 0u);
+    TEST_ASSERT_EQ_U32(0x25u | ems::app::STATUS_WBO2_FAULT, out.data[7]);
 }
+
+// ─── test 3: serialização 0x401 ──────────────────────────────────────────────
 
 void test_tx_0x401_serialization() {
     ems::app::can_stack_test_reset();
-    const ems::drv::CkpSnapshot ckp = make_ckp(10000u);
-    const ems::drv::SensorData sensors = make_sensors();
+    const ems::drv::CkpSnapshot ckp     = make_ckp(10000u);
+    const ems::drv::SensorData  sensors = make_sensors();
 
     ems::app::can_stack_process(100u, ckp, sensors, 0, 0u, -7, 32u, 64u, 0u);
 
@@ -99,50 +111,99 @@ void test_tx_0x401_serialization() {
 
     const ems::hal::CanFrame& slow = (out0.id == 0x401u) ? out0 : out1;
     TEST_ASSERT_EQ_U32(0x401u, slow.id);
-    TEST_ASSERT_EQ_U32(8u, slow.dlc);
-    TEST_ASSERT_EQ_U32(3510u & 0xFFu, slow.data[0]);
-    TEST_ASSERT_EQ_U32((3510u >> 8u) & 0xFFu, slow.data[1]);
-    TEST_ASSERT_EQ_U32(4020u & 0xFFu, slow.data[2]);
-    TEST_ASSERT_EQ_U32((4020u >> 8u) & 0xFFu, slow.data[3]);
-    TEST_ASSERT_EQ_U32(65u, slow.data[4]);   // 25 + 40
-    TEST_ASSERT_EQ_U32(93u, slow.data[5]);   // -7 + 100
-    TEST_ASSERT_EQ_U32(32u, slow.data[6]);
-    TEST_ASSERT_EQ_U32(64u, slow.data[7]);
+    TEST_ASSERT_EQ_U32(8u,     slow.dlc);
+    TEST_ASSERT_EQ_U32(3510u & 0xFFu,         slow.data[0]); // fuel LSB
+    TEST_ASSERT_EQ_U32((3510u >> 8u) & 0xFFu, slow.data[1]); // fuel MSB
+    TEST_ASSERT_EQ_U32(4020u & 0xFFu,         slow.data[2]); // oil LSB
+    TEST_ASSERT_EQ_U32((4020u >> 8u) & 0xFFu, slow.data[3]); // oil MSB
+    TEST_ASSERT_EQ_U32(65u,  slow.data[4]);   // IAT: 25 + 40 = 65
+    TEST_ASSERT_EQ_U32(93u,  slow.data[5]);   // STFT: -7 + 100 = 93
+    TEST_ASSERT_EQ_U32(32u,  slow.data[6]);   // VVT intake
+    TEST_ASSERT_EQ_U32(64u,  slow.data[7]);   // VVT exhaust
 }
 
-void test_rx_wbo2_and_timeout_fallback() {
-    ems::app::can_stack_test_reset();
-    const ems::drv::CkpSnapshot ckp = make_ckp(9000u);
-    const ems::drv::SensorData sensors = make_sensors();
+// ─── test 4: RX WBO2 + safe lambda + timeout ─────────────────────────────────
 
+void test_rx_wbo2_safe_lambda_and_timeout() {
+    ems::app::can_stack_test_reset();
+    const ems::drv::CkpSnapshot ckp     = make_ckp(9000u);
+    const ems::drv::SensorData  sensors = make_sensors();
+
+    // Estado inicial: nenhum frame recebido → fault ativo, lambda seguro
+    TEST_ASSERT_TRUE(ems::app::can_stack_wbo2_fault());
+    TEST_ASSERT_EQ_U32(ems::app::WBO2_SAFE_LAMBDA_MILLI,
+                       ems::app::can_stack_lambda_milli_safe(0u));
+
+    // Injeta frame WBO2: lambda = 0x041A = 1050
     ems::hal::CanFrame in = {};
-    in.id = 0x180u;
-    in.dlc = 8u;
+    in.id       = 0x180u;
+    in.dlc      = 8u;
     in.extended = false;
-    in.data[0] = 0x1Au;
-    in.data[1] = 0x04u;  // 1050 lambda_milli
-    in.data[2] = 0x55u;
+    in.data[0]  = 0x1Au;
+    in.data[1]  = 0x04u;   // 1050 little-endian
+    in.data[2]  = 0x55u;   // status WBO2 externo
     TEST_ASSERT_TRUE(ems::hal::can_test_inject_rx(in));
 
+    // Processa em t=100 ms
     ems::app::can_stack_process(100u, ckp, sensors, 0, 0u, 0, 0u, 0u, 0u);
 
+    // Sensor fresco → lambda raw = 1050, safe = 1050, sem fault
     TEST_ASSERT_EQ_U32(1050u, ems::app::can_stack_lambda_milli());
+    TEST_ASSERT_EQ_U32(1050u, ems::app::can_stack_lambda_milli_safe(100u));
     TEST_ASSERT_EQ_U32(0x55u, ems::app::can_stack_wbo2_status());
-    TEST_ASSERT_TRUE(ems::app::can_stack_wbo2_fresh(550u));
-    TEST_ASSERT_EQ_U32(416u, ems::app::can_stack_o2_mv_effective(550u, sensors));
+    TEST_ASSERT_TRUE(ems::app::can_stack_wbo2_fresh(100u));
+    TEST_ASSERT_TRUE(!ems::app::can_stack_wbo2_fault());
+
+    // Ainda fresco em t=600 ms (600 - 100 = 500 ms, não excede)
+    TEST_ASSERT_TRUE(ems::app::can_stack_wbo2_fresh(600u));
+    TEST_ASSERT_EQ_U32(1050u, ems::app::can_stack_lambda_milli_safe(600u));
+
+    // Timeout em t=601 ms (601 - 100 = 501 ms > 500 ms)
     TEST_ASSERT_TRUE(!ems::app::can_stack_wbo2_fresh(601u));
-    TEST_ASSERT_EQ_U32(sensors.o2_mv, ems::app::can_stack_o2_mv_effective(601u, sensors));
+    // Sem fallback para narrow: retorna lambda fixo de segurança
+    TEST_ASSERT_EQ_U32(ems::app::WBO2_SAFE_LAMBDA_MILLI,
+                       ems::app::can_stack_lambda_milli_safe(601u));
 }
 
-}  // namespace
+// ─── test 5: status_bits — bit7 WBO2_FAULT reflete estado real ───────────────
+
+void test_status_bits_wbo2_fault_flag() {
+    ems::app::can_stack_test_reset();
+    const ems::drv::CkpSnapshot ckp     = make_ckp(5000u);
+    const ems::drv::SensorData  sensors = make_sensors();
+
+    // t=10: sem frame → fault forçado no data[7]
+    ems::app::can_stack_process(10u, ckp, sensors, 0, 0u, 0, 0u, 0u, 0x00u);
+    ems::hal::CanFrame f = {};
+    TEST_ASSERT_TRUE(ems::hal::can_test_pop_tx(f));
+    TEST_ASSERT_EQ_U32(0x400u, f.id);
+    TEST_ASSERT_TRUE((f.data[7] & ems::app::STATUS_WBO2_FAULT) != 0u);
+
+    // Injeta frame WBO2 e processa em t=20
+    ems::hal::CanFrame in = {};
+    in.id = 0x180u; in.dlc = 3u; in.extended = false;
+    in.data[0] = 0xE8u; in.data[1] = 0x03u; // 1000 = λ1.00
+    in.data[2] = 0x01u;
+    ems::hal::can_test_inject_rx(in);
+
+    ems::app::can_stack_process(20u, ckp, sensors, 0, 0u, 0, 0u, 0u, 0x00u);
+    while (ems::hal::can_test_pop_tx(f)) {
+        if (f.id == 0x400u) { break; }
+    }
+    TEST_ASSERT_EQ_U32(0x400u, f.id);
+    // Sensor fresco → bit7 deve estar LIMPO
+    TEST_ASSERT_TRUE((f.data[7] & ems::app::STATUS_WBO2_FAULT) == 0u);
+}
+
+} // namespace
 
 int main() {
     test_can_init_programs_bit_timing();
     test_tx_0x400_serialization();
     test_tx_0x401_serialization();
-    test_rx_wbo2_and_timeout_fallback();
+    test_rx_wbo2_safe_lambda_and_timeout();
+    test_status_bits_wbo2_fault_flag();
 
-    std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
+    std::printf("\ntests=%d  failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;
 }
-
