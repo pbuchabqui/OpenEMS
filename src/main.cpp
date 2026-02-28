@@ -91,6 +91,14 @@ static uint32_t g_t50ms  = 0u;
 static uint32_t g_t100ms = 0u;
 static uint32_t g_t500ms = 0u;
 
+// Últimos valores calculados de avanço e PW — publicados no frame CAN 0x400
+static int8_t  g_last_advance_deg = 0;
+static uint8_t g_last_pw_ms_x10   = 0u;
+
+// Parâmetros de referência para cálculo de PW (a ser configurável via NVM)
+static constexpr uint16_t kDefaultReqFuelUs = 8000u;  // 8 ms a VE=100%, MAP=MAP_ref
+static constexpr uint16_t kMapRefKpa        = 100u;   // MAP de referência (100 kPa ≈ atmosfera)
+
 // =============================================================================
 // Utilitários de infraestrutura — sem lógica de domínio
 // =============================================================================
@@ -205,9 +213,18 @@ void setup() {
     pit_init();     // PIT0 (timestamp) + PIT1 (watchdog 100 ms)
 
     // 10) Aguardar sincronismo CKP antes de habilitar sched_event()
-    while (ems::drv::ckp_snapshot().state != ems::drv::SyncState::SYNCED) {
-        ts_service();
-        pit1_kick();
+    // Timeout de 5 s: se a roda fônica não girar (motor parado, sensor ausente),
+    // continua em modo degradado sem injeção/ignição em vez de travar para sempre.
+    {
+        constexpr uint32_t kCkpSyncTimeoutMs = 5000u;
+        const uint32_t t_sync_start = millis();
+        while (ems::drv::ckp_snapshot().state != ems::drv::SyncState::SYNCED) {
+            ts_service();
+            pit1_kick();
+            if (static_cast<uint32_t>(millis() - t_sync_start) >= kCkpSyncTimeoutMs) {
+                break;  // modo degradado: sem CKP sync, sem injeção/ignição
+            }
+        }
     }
 
     const uint32_t now = millis();
@@ -227,36 +244,50 @@ void loop() {
     const ems::drv::CkpSnapshot ckp     = ems::drv::ckp_snapshot();
     const ems::drv::SensorData& sensors = ems::drv::sensors_get();
 
-    // ── 5 ms: fuel_calc + ign_calc → sched_event para próximos ciclos ────────
+    // ── 5 ms: sched_recalc + cálculo de avanço/PW para telemetria ────────────
     if (elapsed(now, g_t5ms, 5u)) {
-        g_t5ms = now;
+        g_t5ms += 5u;
         ems::drv::sched_recalc(ckp);
+
+        // Avanço e PW calculados aqui para alimentar o frame CAN 0x400 (50 ms).
+        // TODO: integrar ao scheduler de injeção/ignição quando implementado.
+        const int16_t base_adv = ems::engine::get_advance(
+            static_cast<uint16_t>(ckp.rpm_x10), sensors.map_kpa_x10 / 10u);
+        g_last_advance_deg = static_cast<int8_t>(ems::engine::clamp_advance_deg(base_adv));
+
+        const uint8_t ve = ems::engine::get_ve(
+            static_cast<uint16_t>(ckp.rpm_x10), sensors.map_kpa_x10 / 10u);
+        const uint32_t base_pw_us = ems::engine::calc_base_pw_us(
+            kDefaultReqFuelUs, ve, sensors.map_kpa_x10 / 10u, kMapRefKpa);
+        const uint32_t pw_ms_x10_raw = base_pw_us / 100u;  // µs → ms×10
+        g_last_pw_ms_x10 = static_cast<uint8_t>(
+            pw_ms_x10_raw > 255u ? 255u : pw_ms_x10_raw);
     }
 
     // ── 10 ms: IACV PID, VVT PID, Boost PID ──────────────────────────────────
     if (elapsed(now, g_t10ms, 10u)) {
-        g_t10ms = now;
+        g_t10ms += 10u;
         ems::engine::auxiliaries_tick_10ms();
     }
 
     // ── 20 ms: buffer TunerStudio RX/TX + auxiliares 20 ms ───────────────────
     if (elapsed(now, g_t20ms, 20u)) {
-        g_t20ms = now;
+        g_t20ms += 20u;
         ts_service();
         ems::engine::auxiliaries_tick_20ms();
     }
 
     // ── 50 ms: sensores lentos + CAN 0x400 ───────────────────────────────────
     if (elapsed(now, g_t50ms, 50u)) {
-        g_t50ms = now;
+        g_t50ms += 50u;
         ems::drv::sensors_tick_50ms();
         ems::app::can_stack_process(
             now, ckp, sensors,
-            /*adv_i8*/  0,
-            /*egt*/     0u,
-            /*stft_i8*/ static_cast<int8_t>(ems::engine::fuel_get_stft_pct_x10() / 10),
-            /*ltft_i8*/ 0,
-            /*boost*/   0u,
+            g_last_advance_deg,
+            g_last_pw_ms_x10,
+            /*stft_pct*/      static_cast<int8_t>(ems::engine::fuel_get_stft_pct_x10() / 10),
+            /*vvt_intake_pct*/  0u,
+            /*vvt_exhaust_pct*/ 0u,
             /*status*/  static_cast<uint8_t>(
                 (ckp.state == ems::drv::SyncState::SYNCED ? 0x01u : 0u) |
                 (ckp.phase_A                               ? 0x02u : 0u) |
@@ -265,7 +296,7 @@ void loop() {
 
     // ── 100 ms: sensores muito lentos + CAN 0x401 + LTFT ─────────────────────
     if (elapsed(now, g_t100ms, 100u)) {
-        g_t100ms = now;
+        g_t100ms += 100u;
         ems::drv::sensors_tick_100ms();
         static_cast<void>(ems::engine::fuel_update_stft(
             static_cast<uint16_t>(ckp.rpm_x10),
@@ -280,7 +311,7 @@ void loop() {
 
     // ── 500 ms: flush calibração → FlexNVM se dirty ──────────────────────────
     if (elapsed(now, g_t500ms, 500u)) {
-        g_t500ms = now;
+        g_t500ms += 500u;
         if (g_calib_dirty) {
             static_cast<void>(
                 ems::hal::nvm_save_calibration(0u, g_calib_page0, kCalibPageBytes));

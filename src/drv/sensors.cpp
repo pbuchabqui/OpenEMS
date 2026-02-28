@@ -283,6 +283,11 @@ inline void sample_fast_channels() noexcept {
     apply_fault(SensorId::MAP, map_raw);
     apply_fault(SensorId::MAF, mafv_raw);
     apply_fault(SensorId::TPS, tps_raw);
+    // [FIX-5] apply_fault(O2) detecta apenas saúde do hardware ADC (fio aberto/curto).
+    // fault_bits bit-5 = 1 indica falha elétrica no sensor de banda estreita.
+    // O valor o2_raw NÃO é usado para controle de combustível: lambda é lido
+    // exclusivamente via WBO2 CAN ID 0x180 → can_stack_lambda_milli().
+    // SensorData.o2_mv foi removido; fuel_update_stft() usa can_stack_lambda_milli().
     apply_fault(SensorId::O2,  o2_raw);
 
     g_data.map_kpa_x10 = g_fault[static_cast<uint8_t>(SensorId::MAP)].active
@@ -294,7 +299,6 @@ inline void sample_fast_channels() noexcept {
                          : tps_raw_to_pct_x10(avg4(g_tps_buf));
 
     // o2_mv removido de SensorData — WBO2 lido via CAN (ID 0x180)
-    // g_o2_filt mantido apenas para fault tracking (apply_fault acima)
 
     // MAF combinado: média entre estimativa por frequência e por tensão
     // FTM3 CH1 captura MAF no mesmo clock: 120 MHz / prescaler 2 = 60 MHz

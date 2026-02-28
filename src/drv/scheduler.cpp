@@ -227,9 +227,11 @@ void sched_isr() noexcept {
         if (!ev.valid) {
             continue;
         }
-        // A fila está ordenada; ao encontrar evento futuro, os demais também são futuros.
-        if (ev.ftm0_ticks > now) {
-            break;
+        // Aritmética circular: dist pequena (1..kPastThresholdTicks) → evento ainda futuro.
+        // Substitui comparação linear "ev > now" que falha em cruzamentos de wrap do FTM0.
+        const uint16_t dist = static_cast<uint16_t>(ev.ftm0_ticks - now);
+        if (dist != 0u && dist <= kPastThresholdTicks) {
+            continue;
         }
 
         execute_gpio(ev.channel, ev.action);
@@ -267,7 +269,9 @@ void sched_recalc(const CkpSnapshot& snap) noexcept {
         }
 
         const uint16_t old_delta = static_cast<uint16_t>(ev.ftm0_ticks - g_last_snap.last_ftm3_capture);
-        const uint32_t scaled = (static_cast<uint32_t>(old_delta) * g_last_snap.rpm_x10) / snap.rpm_x10;
+        // uint64 evita overflow: old_delta(≤65535) × rpm_x10(≤120000) = max ~7.9×10⁹ > uint32_max
+        const uint32_t scaled = static_cast<uint32_t>(
+            (static_cast<uint64_t>(old_delta) * g_last_snap.rpm_x10) / snap.rpm_x10);
         queue[i].ftm0_ticks = static_cast<uint16_t>(snap.last_ftm3_capture + static_cast<uint16_t>(scaled));
     }
 
