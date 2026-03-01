@@ -82,5 +82,15 @@ run_test test_flexnvm \
   test/hal/test_flexnvm.cpp \
   src/hal/flexnvm.cpp
 
+run_test test_cycle_sched \
+  test/engine/test_cycle_sched.cpp \
+  src/engine/cycle_sched.cpp \
+  src/engine/ign_calc.cpp \
+  src/engine/table3d.cpp \
+  src/drv/ckp.cpp \
+  src/drv/scheduler.cpp \
+  src/drv/sensors.cpp \
+  src/hal/adc.cpp
+
 echo ""
 echo "All host tests passed."

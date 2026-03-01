@@ -18,6 +18,12 @@ struct CkpSnapshot {
 CkpSnapshot ckp_snapshot() noexcept;
 uint16_t ckp_angle_to_ticks(uint16_t angle_x10, uint16_t ref_capture) noexcept;
 
+// Hooks chamados a cada dente pela ISR do CKP (símbolos fracos — sobrescreva para adicionar
+// comportamento). sensors_on_tooth: amostragem de sensores (drv/sensors.cpp).
+// schedule_on_tooth: agendamento de injeção/ignição (engine/cycle_sched.cpp).
+void sensors_on_tooth(const CkpSnapshot& snap) noexcept;
+void schedule_on_tooth(const CkpSnapshot& snap) noexcept;
+
 void ckp_ftm3_ch0_isr() noexcept;
 void ckp_ftm3_ch1_isr() noexcept;
 
