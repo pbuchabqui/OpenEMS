@@ -57,8 +57,9 @@ ems::drv::SensorData make_sensors() {
 void test_can_init_programs_bit_timing() {
     ems::app::can_stack_test_reset();
     const uint32_t ctrl1 = ems::hal::can_test_ctrl1();
+    // 500 kbps: PRESDIV=5 → Tq=100ns, PROPSEG=5(6Tq)+PSEG1=7(8Tq)+PSEG2=4(5Tq)+SYNC(1)=20Tq→2µs/bit
     TEST_ASSERT_EQ_U32(5u, (ctrl1 >> 24u) & 0xFFu);  // PRESDIV
-    TEST_ASSERT_EQ_U32(6u,  ctrl1         & 0x07u);   // PROPSEG
+    TEST_ASSERT_EQ_U32(5u,  ctrl1         & 0x07u);   // PROPSEG (P5: 6→5 para exatos 500 kbps)
     TEST_ASSERT_EQ_U32(7u, (ctrl1 >> 19u) & 0x07u);   // PSEG1
     TEST_ASSERT_EQ_U32(4u, (ctrl1 >> 16u) & 0x07u);   // PSEG2
 }

@@ -24,6 +24,7 @@ static_assert(sizeof(TsRealtimeData) == 64u, "TsRealtimeData must be 64 bytes");
 void ts_init() noexcept;
 void ts_uart0_rx_isr_byte(uint8_t byte) noexcept;
 void ts_process() noexcept;
+void ts_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p100) noexcept;
 
 bool ts_tx_pop(uint8_t& byte) noexcept;
 uint16_t ts_tx_available() noexcept;

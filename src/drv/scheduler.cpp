@@ -221,8 +221,11 @@ void sched_cancel_all() noexcept {
 
 void sched_isr() noexcept {
     const uint16_t now = ems::hal::ftm0_count();
+    // Snapshot de q_size antes de qualquer modificação: evita re-leituras voláteis
+    // no loop enquanto compact_and_sort() (chamado abaixo) altera o valor.
+    const uint8_t sz = q_size;
 
-    for (uint8_t i = 0u; i < q_size; ++i) {
+    for (uint8_t i = 0u; i < sz; ++i) {
         const Event ev = queue_read(i);
         if (!ev.valid) {
             continue;

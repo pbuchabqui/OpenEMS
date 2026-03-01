@@ -61,13 +61,17 @@ run_test test_iacv \
 
 run_test test_knock \
   test/engine/test_knock.cpp \
-  src/engine/knock.cpp
+  src/engine/knock.cpp \
+  src/hal/flexnvm.cpp
 
 run_test test_ts_protocol \
   test/app/test_ts_protocol.cpp \
   src/app/tuner_studio.cpp \
   src/app/can_stack.cpp \
-  src/hal/can.cpp
+  src/hal/can.cpp \
+  src/engine/fuel_calc.cpp \
+  src/engine/ign_calc.cpp \
+  src/engine/table3d.cpp
 
 run_test test_can \
   test/app/test_can.cpp \

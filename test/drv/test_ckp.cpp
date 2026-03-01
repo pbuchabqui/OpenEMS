@@ -109,6 +109,46 @@ void test_tooth_count_over_60_goes_syncing() {
     TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::SYNCING);
 }
 
+// P7: RPM deve ser zero antes de qualquer dente
+void test_rpm_zero_before_sync() {
+    test_reset();
+    const auto snap = ems::drv::ckp_snapshot();
+    TEST_ASSERT_EQ_U32(0u, snap.rpm_x10);
+    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::WAIT);
+}
+
+// P7: phase_A deve alternar a cada disparo de CH1 (cam sensor)
+void test_phase_a_toggles_on_ch1() {
+    test_reset();
+    sync_with_two_gaps();
+
+    const auto snap0 = ems::drv::ckp_snapshot();
+    TEST_ASSERT_TRUE(snap0.state == ems::drv::SyncState::SYNCED);
+    const bool phase_initial = snap0.phase_A;
+
+    // Simular rising edge no cam sensor (CH1, bit 1 de GPIOD)
+    ems_test_gpiod_pdir = (1u << 1u);
+    ems::drv::ckp_ftm3_ch1_isr();
+
+    const auto snap1 = ems::drv::ckp_snapshot();
+    TEST_ASSERT_TRUE(snap1.phase_A != phase_initial);
+
+    // Segundo disparo: deve voltar ao valor original
+    ems::drv::ckp_ftm3_ch1_isr();
+    const auto snap2 = ems::drv::ckp_snapshot();
+    TEST_ASSERT_TRUE(snap2.phase_A == phase_initial);
+}
+
+// P7: tooth_period_ns deve ser não-zero após ao menos um par de dentes
+void test_tooth_period_nonzero_after_two_teeth() {
+    test_reset();
+    feed_ckp(1000u);  // primeiro dente — sem período ainda
+    feed_ckp(1000u);  // segundo dente — período calculado
+
+    const auto snap = ems::drv::ckp_snapshot();
+    TEST_ASSERT_TRUE(snap.tooth_period_ns > 0u);
+}
+
 }  // namespace
 
 int main() {
@@ -117,6 +157,9 @@ int main() {
     test_rpm_formula();
     test_circular_subtraction();
     test_tooth_count_over_60_goes_syncing();
+    test_rpm_zero_before_sync();
+    test_phase_a_toggles_on_ch1();
+    test_tooth_period_nonzero_after_two_teeth();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;

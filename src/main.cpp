@@ -95,6 +95,13 @@ static uint32_t g_t500ms = 0u;
 static int8_t  g_last_advance_deg = 0;
 static uint8_t g_last_pw_ms_x10   = 0u;
 
+// Modo limp: ativo quando sensor crítico (MAP ou CLT) está em fault
+// Rev-cut acima de kLimpRpmLimit_x10 para proteger o motor
+static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;  // 3000 RPM
+static constexpr uint8_t  kFaultBitMap = (1u << 0u);   // SensorId::MAP
+static constexpr uint8_t  kFaultBitClt = (1u << 3u);   // SensorId::CLT
+static bool g_limp_active = false;
+
 // Parâmetros de referência para cálculo de PW (a ser configurável via NVM)
 static constexpr uint16_t kDefaultReqFuelUs = 8000u;  // 8 ms a VE=100%, MAP=MAP_ref
 static constexpr uint16_t kMapRefKpa        = 100u;   // MAP de referência (100 kPa ≈ atmosfera)
@@ -247,6 +254,13 @@ void loop() {
     // ── 5 ms: sched_recalc + cálculo de avanço/PW para telemetria ────────────
     if (elapsed(now, g_t5ms, 5u)) {
         g_t5ms += 5u;
+
+        // Limp mode: sensores MAP ou CLT em fault → rev-cut acima de 3000 RPM
+        const uint8_t critical_faults =
+            static_cast<uint8_t>(sensors.fault_bits & (kFaultBitMap | kFaultBitClt));
+        g_limp_active = (critical_faults != 0u) &&
+                        (ckp.rpm_x10 > kLimpRpmLimit_x10);
+
         ems::drv::sched_recalc(ckp);
 
         // Avanço e PW calculados aqui para alimentar o frame CAN 0x400 (50 ms).
@@ -257,11 +271,16 @@ void loop() {
 
         const uint8_t ve = ems::engine::get_ve(
             static_cast<uint16_t>(ckp.rpm_x10), sensors.map_kpa_x10 / 10u);
-        const uint32_t base_pw_us = ems::engine::calc_base_pw_us(
+        const uint32_t base_pw_us = g_limp_active ? 0u : ems::engine::calc_base_pw_us(
             kDefaultReqFuelUs, ve, sensors.map_kpa_x10 / 10u, kMapRefKpa);
         const uint32_t pw_ms_x10_raw = base_pw_us / 100u;  // µs → ms×10
         g_last_pw_ms_x10 = static_cast<uint8_t>(
             pw_ms_x10_raw > 255u ? 255u : pw_ms_x10_raw);
+
+        ems::app::ts_update_rt_metrics(
+            g_last_pw_ms_x10,
+            g_last_advance_deg,
+            static_cast<int8_t>(ems::engine::fuel_get_stft_pct_x10() / 10));
     }
 
     // ── 10 ms: IACV PID, VVT PID, Boost PID ──────────────────────────────────
@@ -291,7 +310,8 @@ void loop() {
             /*status*/  static_cast<uint8_t>(
                 (ckp.state == ems::drv::SyncState::SYNCED ? 0x01u : 0u) |
                 (ckp.phase_A                               ? 0x02u : 0u) |
-                (sensors.fault_bits != 0u                  ? 0x04u : 0u)));
+                (sensors.fault_bits != 0u                  ? 0x04u : 0u) |
+                (g_limp_active                             ? 0x08u : 0u)));
     }
 
     // ── 100 ms: sensores muito lentos + CAN 0x401 + LTFT ─────────────────────
@@ -306,10 +326,10 @@ void loop() {
             sensors.clt_degc_x10,
             ems::app::can_stack_wbo2_fresh(now),
             /*ae_active*/ false,
-            /*rev_cut*/   false));
+            /*rev_cut*/   g_limp_active));
     }
 
-    // ── 500 ms: flush calibração → FlexNVM se dirty ──────────────────────────
+    // ── 500 ms: flush calibração → FlexNVM se dirty + knock NVM ─────────────
     if (elapsed(now, g_t500ms, 500u)) {
         g_t500ms += 500u;
         if (g_calib_dirty) {
@@ -317,6 +337,7 @@ void loop() {
                 ems::hal::nvm_save_calibration(0u, g_calib_page0, kCalibPageBytes));
             g_calib_dirty = false;
         }
+        ems::engine::knock_save_to_nvm();
     }
 }
 

@@ -65,6 +65,7 @@ uint16_t normalize_7200(int32_t deg_x10) noexcept {
 }
 
 int16_t lerp_q8_i16(int16_t a, int16_t b, uint8_t frac_q8) noexcept {
+    if (frac_q8 == 255u) { return b; }
     return static_cast<int16_t>(a + (((b - a) * static_cast<int16_t>(frac_q8)) >> 8u));
 }
 

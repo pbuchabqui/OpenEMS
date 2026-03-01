@@ -147,7 +147,8 @@ void test_a_returns_64_bytes_realtime() {
     // o2_mv_d4 agora vem do WBO2 via CAN: WBO2_SAFE_LAMBDA_MILLI(1050)/4 = 262 → clamp → 255
     TEST_ASSERT_EQ_U32(255u, out[6]);
     TEST_ASSERT_EQ_U32(40u, out[8]);
-    TEST_ASSERT_EQ_U32(100u, out[9]);
+    // ve = g_page1_ve[0] inicializado de ve_table[0][0] = 50 (P1: páginas ligadas às tabelas reais)
+    TEST_ASSERT_EQ_U32(50u, out[9]);
     TEST_ASSERT_EQ_U32(0u, static_cast<int8_t>(out[10]));
     TEST_ASSERT_EQ_U32(0x07u, out[11]);
 }
