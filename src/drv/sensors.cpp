@@ -91,7 +91,6 @@ static uint16_t g_tps_raw_min = 200u;
 static uint16_t g_tps_raw_max = 3895u;
 
 static uint16_t g_map_filt  = 0u;
-static uint16_t g_mafv_filt = 0u;
 static uint16_t g_o2_filt   = 0u;
 
 static uint16_t g_tps_buf[4]  = {};
@@ -122,7 +121,6 @@ inline void reset_state() noexcept {
     g_data = SensorData{};
 
     g_map_filt  = 0u;
-    g_mafv_filt = 0u;
     g_o2_filt   = 0u;
 
     for (uint8_t i = 0u; i < 4u; ++i) {
@@ -273,9 +271,8 @@ inline void sample_fast_channels() noexcept {
     const uint16_t tps_raw  = ems::hal::adc0_read(ems::hal::Adc0Channel::TPS_SE12);
     const uint16_t o2_raw   = ems::hal::adc0_read(ems::hal::Adc0Channel::O2_SE4B);
 
-    g_map_filt  = iir_alpha_03(g_map_filt,  map_raw);
-    g_mafv_filt = iir_alpha_03(g_mafv_filt, mafv_raw);
-    g_o2_filt   = iir_alpha_01(g_o2_filt,   o2_raw);
+    g_map_filt = iir_alpha_03(g_map_filt, map_raw);
+    g_o2_filt  = iir_alpha_01(g_o2_filt,  o2_raw);
 
     g_tps_buf[g_tps_pos] = tps_raw;
     g_tps_pos = static_cast<uint8_t>((g_tps_pos + 1u) & 0x3u);
@@ -283,11 +280,6 @@ inline void sample_fast_channels() noexcept {
     apply_fault(SensorId::MAP, map_raw);
     apply_fault(SensorId::MAF, mafv_raw);
     apply_fault(SensorId::TPS, tps_raw);
-    // [FIX-5] apply_fault(O2) detecta apenas saúde do hardware ADC (fio aberto/curto).
-    // fault_bits bit-5 = 1 indica falha elétrica no sensor de banda estreita.
-    // O valor o2_raw NÃO é usado para controle de combustível: lambda é lido
-    // exclusivamente via WBO2 CAN ID 0x180 → can_stack_lambda_milli().
-    // SensorData.o2_mv foi removido; fuel_update_stft() usa can_stack_lambda_milli().
     apply_fault(SensorId::O2,  o2_raw);
 
     g_data.map_kpa_x10 = g_fault[static_cast<uint8_t>(SensorId::MAP)].active
@@ -298,19 +290,11 @@ inline void sample_fast_channels() noexcept {
                          ? kFallbackTpsPctX10
                          : tps_raw_to_pct_x10(avg4(g_tps_buf));
 
-    // o2_mv removido de SensorData — WBO2 lido via CAN (ID 0x180)
-
-    // MAF combinado: média entre estimativa por frequência e por tensão
-    // FTM3 CH1 captura MAF no mesmo clock: 120 MHz / prescaler 2 = 60 MHz
+    // MAF: estimativa por frequência via FTM3 CH1 (120 MHz / prescaler 2 = 60 MHz)
     const uint16_t maf_avg_period = maf_period_avg4();
-    uint32_t maf_from_freq_x100 = 0u;
-    if (maf_avg_period > 0u) {
-        maf_from_freq_x100 = kMafFtm3ClockHz / maf_avg_period;
-    }
-    const uint32_t maf_from_v_x100 =
-        (static_cast<uint32_t>(g_mafv_filt) * 10000u) / 4095u;
-    g_data.maf_gps_x100 = static_cast<uint16_t>(
-        (maf_from_freq_x100 + maf_from_v_x100) / 2u);
+    g_data.maf_gps_x100 = (maf_avg_period > 0u)
+                          ? static_cast<uint16_t>(kMafFtm3ClockHz / maf_avg_period)
+                          : 0u;
 }
 
 }  // namespace

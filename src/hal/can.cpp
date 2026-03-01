@@ -94,7 +94,7 @@ void can0_init() noexcept {
     can_test_reset();
     g_ctrl1 = 0u;
     g_ctrl1 |= (5u << 24);
-    g_ctrl1 |= (6u << 0);
+    g_ctrl1 |= (5u << 0);
     g_ctrl1 |= (7u << 19);
     g_ctrl1 |= (4u << 16);
 #else
@@ -116,7 +116,8 @@ void can0_init() noexcept {
     while ((CAN0_MCR & CAN_MCR_FRZACK) == 0u) {
     }
 
-    CAN0_CTRL1 = CAN_CTRL1_CLKSRC | CAN_CTRL1_PRESDIV(5u) | CAN_CTRL1_PROPSEG(6u) |
+    // 500 kbps: F_bus=60MHz, PRESDIV+1=6 → Tq=100ns, TotalTq=1+6+8+5=20 → 2µs/bit
+    CAN0_CTRL1 = CAN_CTRL1_CLKSRC | CAN_CTRL1_PRESDIV(5u) | CAN_CTRL1_PROPSEG(5u) |
                  CAN_CTRL1_PSEG1(7u) | CAN_CTRL1_PSEG2(4u) | CAN_CTRL1_RJW(3u);
 
     CAN0_RXMGMASK = 0x1FFFFFFFu;

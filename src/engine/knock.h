@@ -11,6 +11,7 @@ constexpr uint8_t kKnockCylinders = 4u;
 extern volatile uint16_t knock_retard_x10[kKnockCylinders];
 
 void knock_init() noexcept;
+void knock_save_to_nvm() noexcept;
 void knock_set_event_threshold(uint8_t threshold) noexcept;
 
 // Janela de knock por cilindro (tipicamente 10-90 ATDC, agendada por FTM0).

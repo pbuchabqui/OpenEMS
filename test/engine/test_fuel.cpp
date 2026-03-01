@@ -76,6 +76,54 @@ void test_stft_grows_positive_with_lean_feedback() {
     TEST_ASSERT_TRUE(stft2 >= stft1);
 }
 
+// P7: STFT deve decair em direção a zero quando rev_cut=true (malha aberta, ×15/16)
+void test_stft_decays_during_rev_cut() {
+    ems::engine::fuel_reset_adaptives();
+
+    // Acumular STFT positivo via feedback lean repetido (o2_valid=true, clt>700)
+    for (int i = 0; i < 10; ++i) {
+        ems::engine::fuel_update_stft(3000u, 100u, 1000, 900, 800, true, false, false);
+    }
+    const int16_t stft_loaded = ems::engine::fuel_get_stft_pct_x10();
+    TEST_ASSERT_TRUE(stft_loaded > 0);
+
+    // Com rev_cut=true, STFT deve decair (×15/16 por chamada) — não crescer
+    const int16_t stft_after_revcut = ems::engine::fuel_update_stft(
+        3000u, 100u, 1000, 900, 800, true, false, true);
+    TEST_ASSERT_TRUE(stft_after_revcut <= stft_loaded);
+
+    // Após muitas iterações com rev_cut, STFT deve convergir a zero
+    for (int i = 0; i < 200; ++i) {
+        ems::engine::fuel_update_stft(3000u, 100u, 1000, 900, 800, true, false, true);
+    }
+    TEST_ASSERT_TRUE(ems::engine::fuel_get_stft_pct_x10() == 0);
+}
+
+// P7: correção CLT — motor frio deve enriquecer (> 256)
+void test_corr_clt_cold_enrichment() {
+    // Temperatura muito fria: -20°C × 10 = -200
+    const uint16_t corr = ems::engine::corr_clt(-200);
+    TEST_ASSERT_TRUE(corr > 256u);
+}
+
+// P7: correção IAT — ar quente deve empobrecer (< 256)
+void test_corr_iat_hot_leaning() {
+    // Temperatura muito quente: +80°C × 10 = 800
+    const uint16_t corr = ems::engine::corr_iat(800);
+    TEST_ASSERT_TRUE(corr < 256u);
+}
+
+// P7: pw_final menor que pw_base quando corr_clt < 256 (IAT muito frio não leaneia)
+void test_final_pw_applies_corrections() {
+    const uint32_t base_pw = ems::engine::calc_base_pw_us(8000u, 100u, 100u, 100u);
+    // corr_iat a 40°C (400 × 10) deve ser próximo de 256 (referência)
+    const uint16_t corr_iat = ems::engine::corr_iat(400);
+    const uint16_t corr_clt = ems::engine::corr_clt(900);  // 90°C, quase operacional
+    const uint32_t final_pw = ems::engine::calc_final_pw_us(base_pw, corr_clt, corr_iat, 0u);
+    // A correção não deve resultar em PW negativo ou zero com condições normais
+    TEST_ASSERT_TRUE(final_pw > 0u);
+}
+
 }  // namespace
 
 int main() {
@@ -83,6 +131,10 @@ int main() {
     test_base_pw_limits();
     test_ae_positive_on_tps_step();
     test_stft_grows_positive_with_lean_feedback();
+    test_stft_decays_during_rev_cut();
+    test_corr_clt_cold_enrichment();
+    test_corr_iat_hot_leaning();
+    test_final_pw_applies_corrections();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;

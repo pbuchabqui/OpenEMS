@@ -7,6 +7,8 @@
 #include "app/can_stack.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
+#include "engine/fuel_calc.h"
+#include "engine/ign_calc.h"
 
 namespace {
 
@@ -43,6 +45,10 @@ static volatile bool g_rx_flag = false;
 static uint8_t g_tx_buf[kTxSize] = {};
 static uint16_t g_tx_head = 0u;
 static uint16_t g_tx_tail = 0u;
+
+static uint8_t  g_rt_pw_ms_x10   = 0u;
+static int8_t   g_rt_advance_deg  = 0;
+static int8_t   g_rt_stft_p100   = 0;
 
 static ParseState g_state = ParseState::IDLE;
 static uint8_t g_cmd_page = 0u;
@@ -152,10 +158,10 @@ inline void update_realtime_page() noexcept {
 
     // WBO2 via CAN (lambda × 1000); ÷4 para caber em uint8_t (0..375 range típico)
     rt.o2_mv_d4 = clamp_u8(ems::app::can_stack_lambda_milli() / 4u);
-    rt.pw1_ms_x10 = 0u;
-    rt.advance_p40 = 40u;
-    rt.ve = g_page1_ve[0];
-    rt.stft_p100 = 0;
+    rt.pw1_ms_x10  = g_rt_pw_ms_x10;
+    rt.advance_p40 = static_cast<uint8_t>(static_cast<int16_t>(g_rt_advance_deg) + 40);
+    rt.ve          = g_page1_ve[0];
+    rt.stft_p100   = g_rt_stft_p100;
 
     uint8_t status = 0u;
     if (c.state == ems::drv::SyncState::SYNCED) {
@@ -195,6 +201,22 @@ inline bool command_bounds_ok() noexcept {
     return true;
 }
 
+inline void sync_page_from_table(uint8_t page) noexcept {
+    if (page == 0x01u) {
+        std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
+    } else if (page == 0x02u) {
+        std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));
+    }
+}
+
+inline void sync_table_from_page(uint8_t page) noexcept {
+    if (page == 0x01u) {
+        std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
+    } else if (page == 0x02u) {
+        std::memcpy(ems::engine::spark_table, g_page2_spark, sizeof(g_page2_spark));
+    }
+}
+
 inline void handle_read_done() noexcept {
     if (!command_bounds_ok()) {
         tx_push(kAckErr);
@@ -204,6 +226,8 @@ inline void handle_read_done() noexcept {
 
     if (g_cmd_page == 0x03u) {
         update_realtime_page();
+    } else {
+        sync_page_from_table(g_cmd_page);
     }
 
     const uint8_t* ptr = page_ptr(g_cmd_page);
@@ -218,6 +242,7 @@ inline void handle_write_done() noexcept {
         return;
     }
 
+    sync_table_from_page(g_cmd_page);
     tx_push(kAckOk);
     reset_parser();
 }
@@ -338,8 +363,8 @@ inline void parse_byte(uint8_t b) noexcept {
 
 inline void reset_pages() noexcept {
     std::memset(g_page0, 0, sizeof(g_page0));
-    std::memset(g_page1_ve, 100, sizeof(g_page1_ve));
-    std::memset(g_page2_spark, 0, sizeof(g_page2_spark));
+    std::memcpy(g_page1_ve,    ems::engine::ve_table,    sizeof(g_page1_ve));
+    std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));
     std::memset(g_page3_rt, 0, sizeof(g_page3_rt));
 }
 
@@ -391,6 +416,12 @@ bool ts_tx_pop(uint8_t& byte) noexcept {
 
 uint16_t ts_tx_available() noexcept {
     return static_cast<uint16_t>((g_tx_head - g_tx_tail) & kTxMask);
+}
+
+void ts_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p100) noexcept {
+    g_rt_pw_ms_x10  = pw_ms_x10;
+    g_rt_advance_deg = advance_deg;
+    g_rt_stft_p100  = stft_p100;
 }
 
 #if defined(EMS_HOST_TEST)

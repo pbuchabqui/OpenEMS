@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "hal/flexnvm.h"
+
 namespace {
 
 constexpr uint8_t kDefaultEventThreshold = 3u;
@@ -73,12 +75,34 @@ volatile uint16_t knock_retard_x10[kKnockCylinders] = {};
 void knock_init() noexcept {
     g = {};
     g.event_threshold = kDefaultEventThreshold;
-    cmp0_set_vosel(kVoselDefault);
-    cmp0_set_enabled(false);
 
+    // Carrega retard persistido do NVM: rpm_i=0, load_i=cyl (4 células)
+    // nvm_read_knock retorna int8_t em deci-graus (0.1°); knock_retard_x10 usa ×10.
     for (uint8_t i = 0u; i < kKnockCylinders; ++i) {
-        knock_retard_x10[i] = 0u;
+        const int8_t stored = ems::hal::nvm_read_knock(0u, i);
+        knock_retard_x10[i] = (stored > 0)
+            ? clamp_u16(static_cast<uint16_t>(stored), 0u, kRetardMaxX10)
+            : 0u;
     }
+
+    // Restaurar vosel salvo (rpm_i=1, load_i=0) se válido
+    const int8_t saved_vosel = ems::hal::nvm_read_knock(1u, 0u);
+    const uint8_t vosel = (saved_vosel > 0 && static_cast<uint8_t>(saved_vosel) <= kVoselMax)
+        ? static_cast<uint8_t>(saved_vosel)
+        : kVoselDefault;
+    cmp0_set_vosel(vosel);
+    cmp0_set_enabled(false);
+}
+
+void knock_save_to_nvm() noexcept {
+    for (uint8_t i = 0u; i < kKnockCylinders; ++i) {
+        // knock_retard_x10 está em ×10 (0.1°). nvm_write_knock espera int8_t deci-graus.
+        const int8_t val = static_cast<int8_t>(
+            knock_retard_x10[i] > 127u ? 127u : knock_retard_x10[i]);
+        ems::hal::nvm_write_knock(0u, i, val);
+    }
+    // Persiste vosel atual (rpm_i=1, load_i=0)
+    ems::hal::nvm_write_knock(1u, 0u, static_cast<int8_t>(g.vosel));
 }
 
 void knock_set_event_threshold(uint8_t threshold) noexcept {
