@@ -56,11 +56,15 @@ int g_tests_failed = 0;
 
 static uint16_t g_capture = 0u;
 
-// Alimenta um dente normal ao CKP (período de 1000 ticks)
+// Alimenta um dente normal ao CKP (período de 1000 ticks).
+// Sincroniza g_ftm0_count com g_capture antes da ISR para que is_event_in_past()
+// enxergue eventos futuros como futuros (igual ao comportamento real onde
+// FTM0 e FTM3 correm na mesma base de clock).
 void feed_ckp(uint16_t period_ticks = 1000u) {
     ems_test_gpiod_pdir = (1u << 0u);
     g_capture = static_cast<uint16_t>(g_capture + period_ticks);
     ems_test_ftm3_c0v = g_capture;
+    ems::hal::g_ftm0_count = g_capture;
     ems::drv::ckp_ftm3_ch0_isr();
 }
 
@@ -201,8 +205,10 @@ void test_schedule_fires_at_trigger_tooth() {
     // Sem cam pulse, phase permanece false. Alimenta exatamente 15 dentes.
     for (int i = 0; i < 15; ++i) { feed_ckp(); }
 
-    // Verifica que 2 eventos foram agendados (INJ_SET e INJ_CLR para cyl2)
-    TEST_ASSERT_EQ_U32(2u, ems::drv::sched_test_size());
+    // Verifica que 3 eventos foram agendados:
+    //   IGN2 SET (tooth=2, ticks grandes) + INJ2 SET + INJ2 CLEAR (tooth=15, ticks pequenos).
+    // A fila é ordenada por ticks crescentes → event[0]=INJ2 SET, [1]=INJ2 CLEAR, [2]=IGN2 SET.
+    TEST_ASSERT_EQ_U32(3u, ems::drv::sched_test_size());
 
     // Verifica que o primeiro evento é INJ2 SET
     uint16_t ticks = 0u;
@@ -227,7 +233,106 @@ void test_schedule_fires_at_trigger_tooth() {
     TEST_ASSERT_TRUE(ticks2 != ticks);
 }
 
-// T5: dentes antes do primeiro trigger (tooth=15) não disparam eventos
+// T6: cycle_sched_update calcula g_ign_set_trigger e g_ign_clr_trigger corretamente.
+//     Para cada slot, verifica que os triggers de ignição são kIgnLeadTeeth dentes
+//     antes de dwell_start e spark, respectivamente.
+void test_ign_trigger_teeth_computed() {
+    test_reset();
+    ems::engine::cycle_sched_init();
+
+    // advance_x10 = 300 (30° BTDC), dwell_x10 = 1080 (108°).
+    // Usando kIgnLeadTeeth=4 implícito na implementação.
+    ems::engine::cycle_sched_update(
+        60000u,   // pw_ticks
+        600u,     // dead_ticks
+        620u,     // soi_lead_x10
+        300,      // advance_x10 (30° BTDC)
+        1080u);   // dwell_x10 (108°)
+
+    // Para slot 3 (cyl2, TDC=180°):
+    //   spark_x10     = (1800 - 300 + 7200) % 7200 = 1500 (150°)
+    //   dwell_abs_x10 = (1500 + 7200 - 1080) % 7200 = 420  (42°)
+    //   ign_clr trig = angle_to_tp(sub_teeth(150, 4))
+    //     offset = (4×360)/58 = 24°   → 150-24 = 126°
+    //     tooth = (126×58)/360 = 20, phase=false
+    //   ign_set trig = angle_to_tp(sub_teeth(42, 4))
+    //     offset = 24°   → 42-24 = 18°
+    //     tooth = (18×58)/360 = 2, phase=false
+    {
+        uint8_t tooth = 255u;
+        bool    phase = true;
+        TEST_ASSERT_TRUE(ems::engine::cycle_sched_test_ign_clr_trigger(3u, tooth, phase));
+        TEST_ASSERT_EQ_U32(20u, tooth);
+        TEST_ASSERT_TRUE(phase == false);
+    }
+    {
+        uint8_t tooth = 255u;
+        bool    phase = true;
+        TEST_ASSERT_TRUE(ems::engine::cycle_sched_test_ign_set_trigger(3u, tooth, phase));
+        TEST_ASSERT_EQ_U32(2u, tooth);
+        TEST_ASSERT_TRUE(phase == false);
+    }
+}
+
+// T7: ao atingir o dente ign_set_trigger (slot 3, tooth=6, phase=false),
+//     deve ser agendado 1 evento IGN2 SET.
+void test_ign_set_scheduled_at_trigger_tooth() {
+    test_reset();
+    ems::engine::cycle_sched_init();
+    ems::engine::cycle_sched_enable(true);
+
+    ems::engine::cycle_sched_update(
+        60000u, 600u, 620u, 300, 1080u);
+
+    sync_with_two_gaps();
+    // phase=false. Alimenta 2 dentes → tooth_index=2 (ign_set_trigger[3]).
+    for (int i = 0; i < 2; ++i) { feed_ckp(); }
+
+    // Deve haver exatamente 1 evento IGN2 SET na fila
+    TEST_ASSERT_EQ_U32(1u, ems::drv::sched_test_size());
+
+    uint16_t ticks = 0u;
+    ems::drv::Channel ch  = ems::drv::Channel::INJ1;
+    ems::drv::Action  act = ems::drv::Action::CLEAR;
+    bool valid = false;
+    TEST_ASSERT_TRUE(ems::drv::sched_test_event(0u, ticks, ch, act, valid));
+    TEST_ASSERT_TRUE(valid);
+    TEST_ASSERT_TRUE(ch  == ems::drv::Channel::IGN2);
+    TEST_ASSERT_TRUE(act == ems::drv::Action::SET);
+}
+
+// T8: ao atingir o dente ign_clr_trigger (slot 3, tooth=20, phase=false),
+//     deve ser agendado 1 evento IGN2 CLEAR.
+void test_ign_clr_scheduled_at_trigger_tooth() {
+    test_reset();
+    ems::engine::cycle_sched_init();
+    ems::engine::cycle_sched_enable(true);
+
+    ems::engine::cycle_sched_update(
+        60000u, 600u, 620u, 300, 1080u);
+
+    sync_with_two_gaps();
+    // Alimenta até tooth=20 (sem cam pulse, phase=false).
+    for (int i = 0; i < 20; ++i) { feed_ckp(); }
+
+    // Deve haver pelo menos 1 evento IGN2 CLEAR na fila
+    // (mais os 2 eventos INJ2 do trigger de injeção em tooth=15)
+    bool found_ign_clr = false;
+    const uint8_t sz = ems::drv::sched_test_size();
+    for (uint8_t i = 0u; i < sz; ++i) {
+        uint16_t t = 0u;
+        ems::drv::Channel c  = ems::drv::Channel::INJ1;
+        ems::drv::Action  a  = ems::drv::Action::SET;
+        bool v = false;
+        if (ems::drv::sched_test_event(i, t, c, a, v) && v &&
+            c == ems::drv::Channel::IGN2 && a == ems::drv::Action::CLEAR) {
+            found_ign_clr = true;
+        }
+    }
+    TEST_ASSERT_TRUE(found_ign_clr);
+}
+
+// T5: tooth=1 (antes de qualquer trigger) não dispara nenhum evento
 void test_no_spurious_events_between_triggers() {
     test_reset();
     ems::engine::cycle_sched_init();
@@ -236,10 +341,10 @@ void test_no_spurious_events_between_triggers() {
     ems::engine::cycle_sched_update(60000u, 600u, 620u, 300, 1080u);
 
     sync_with_two_gaps();
-    // tooth_index=0, phase=false. Alimenta 10 dentes (antes do primeiro trigger em 15)
-    for (int i = 0; i < 10; ++i) { feed_ckp(); }
+    // Alimenta 1 dente → tooth_index=1, antes do primeiro trigger de qualquer tipo.
+    // (ign_set_trigger[3] dispara em tooth=2, inj_trigger em tooth=15 e 44)
+    feed_ckp();
 
-    // Ainda não chegou ao dente 15 → sem eventos
     TEST_ASSERT_EQ_U32(0u, ems::drv::sched_test_size());
 }
 
@@ -251,6 +356,9 @@ int main() {
     test_no_schedule_invalid_params();
     test_schedule_fires_at_trigger_tooth();
     test_no_spurious_events_between_triggers();
+    test_ign_trigger_teeth_computed();
+    test_ign_set_scheduled_at_trigger_tooth();
+    test_ign_clr_scheduled_at_trigger_tooth();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;

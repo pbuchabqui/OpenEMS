@@ -39,6 +39,11 @@ static constexpr uint8_t kSoiTeeth = 10u;
 // Total de dentes antes do TDC no qual o trigger de injeção ocorre
 static constexpr uint8_t kTrigLeadTeeth = kSoiTeeth + kInjLeadTeeth;
 
+// Dentes de lead do trigger de ignição antes do evento alvo.
+// LIMITAÇÃO: mesmo que a injeção, o delta em ticks excede 65535 do FTM0
+// a baixas rotações (< ~1500 RPM). Solução futura: PIT one-shot ou prescaler 128.
+static constexpr uint8_t kIgnLeadTeeth = 4u;
+
 // kToothAngleX1000: ângulo de um dente em miligraus (360°/58 × 1000 = 6207)
 // Mesmo valor usado em ckp.cpp e ckp_angle_to_ticks().
 static constexpr uint16_t kToothMillideg = 6207u;
@@ -52,6 +57,12 @@ struct TriggerPoint {
 
 // Dente-gatilho de injeção por slot de disparo (0..3 em firing_order)
 static TriggerPoint g_inj_trigger[kNCyl];
+
+// Dente-gatilho de ignição: SET = kIgnLeadTeeth antes do dwell_start,
+//                            CLR = kIgnLeadTeeth antes da faísca.
+// Actualizados em cycle_sched_update() dentro da janela valid=false.
+static TriggerPoint g_ign_set_trigger[kNCyl];
+static TriggerPoint g_ign_clr_trigger[kNCyl];
 
 // Parâmetros pré-calculados por cilindro (cyl_idx 0..3).
 // Escrito pelo loop de background; lido pela ISR do CKP.
@@ -72,6 +83,14 @@ static constexpr ems::drv::Channel kInjCh[kNCyl] = {
     ems::drv::Channel::INJ2,  // cyl_idx 1 (cilindro 2)
     ems::drv::Channel::INJ3,  // cyl_idx 2 (cilindro 3)
     ems::drv::Channel::INJ4,  // cyl_idx 3 (cilindro 4)
+};
+
+// Mapeamento cyl_idx (0..3) → canal de ignição
+static constexpr ems::drv::Channel kIgnCh[kNCyl] = {
+    ems::drv::Channel::IGN1,  // cyl_idx 0 (cilindro 1)
+    ems::drv::Channel::IGN2,  // cyl_idx 1 (cilindro 2)
+    ems::drv::Channel::IGN3,  // cyl_idx 2 (cilindro 3)
+    ems::drv::Channel::IGN4,  // cyl_idx 3 (cilindro 4)
 };
 
 // Subtrai N dentes do ângulo absoluto no domínio de 720°.
@@ -106,7 +125,9 @@ void cycle_sched_init() noexcept {
         const uint8_t  cyl_idx  = static_cast<uint8_t>(firing_order[slot] - 1u);
         const uint16_t tdc_deg  = cylinder_offset_deg[cyl_idx];
         const uint16_t trig_deg = sub_teeth(tdc_deg, kTrigLeadTeeth);
-        g_inj_trigger[slot] = angle_to_tp(trig_deg);
+        g_inj_trigger[slot]     = angle_to_tp(trig_deg);
+        g_ign_set_trigger[slot] = TriggerPoint{0u, false};
+        g_ign_clr_trigger[slot] = TriggerPoint{0u, false};
         g_pending[cyl_idx].valid = false;
     }
 }
@@ -147,6 +168,14 @@ void cycle_sched_update(uint32_t pw_ticks,
         g_pending[cyl_idx].soi_abs_x10  = soi_x10;
         g_pending[cyl_idx].spark_abs_x10 = spark_x10;
         g_pending[cyl_idx].dwell_abs_x10 = dwell_x10_abs;
+
+        // Dentes-gatilho de ignição (actualizados dentro da janela valid=false).
+        // Se a ISR ler g_ign_{set,clr}_trigger e encontrar valid=false, irá ignorar.
+        const uint16_t dwell_deg = dwell_x10_abs / 10u;
+        const uint16_t spark_deg = spark_x10       / 10u;
+        g_ign_set_trigger[slot] = angle_to_tp(sub_teeth(dwell_deg, kIgnLeadTeeth));
+        g_ign_clr_trigger[slot] = angle_to_tp(sub_teeth(spark_deg, kIgnLeadTeeth));
+
         g_pending[cyl_idx].valid        = true;
     }
 }
@@ -155,7 +184,9 @@ void cycle_sched_update(uint32_t pw_ticks,
 void cycle_sched_test_reset() noexcept {
     g_enabled = false;
     for (uint8_t i = 0u; i < kNCyl; ++i) {
-        g_pending[i].valid = false;
+        g_pending[i].valid      = false;
+        g_ign_set_trigger[i]    = TriggerPoint{0u, false};
+        g_ign_clr_trigger[i]    = TriggerPoint{0u, false};
     }
 }
 
@@ -163,6 +194,20 @@ bool cycle_sched_test_trigger(uint8_t slot, uint8_t& tooth, bool& phase) noexcep
     if (slot >= kNCyl) { return false; }
     tooth = g_inj_trigger[slot].tooth;
     phase = g_inj_trigger[slot].phase;
+    return true;
+}
+
+bool cycle_sched_test_ign_set_trigger(uint8_t slot, uint8_t& tooth, bool& phase) noexcept {
+    if (slot >= kNCyl) { return false; }
+    tooth = g_ign_set_trigger[slot].tooth;
+    phase = g_ign_set_trigger[slot].phase;
+    return true;
+}
+
+bool cycle_sched_test_ign_clr_trigger(uint8_t slot, uint8_t& tooth, bool& phase) noexcept {
+    if (slot >= kNCyl) { return false; }
+    tooth = g_ign_clr_trigger[slot].tooth;
+    phase = g_ign_clr_trigger[slot].phase;
     return true;
 }
 #endif
@@ -232,6 +277,70 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept {
             soi_ticks + static_cast<uint16_t>(pw_ticks + dead_ticks));
         static_cast<void>(
             ems::drv::sched_event(kInjCh[cyl_idx], eoi_ticks, Action::CLEAR));
+    }
+
+    // ── Ignição: SET (início de dwell) ────────────────────────────────────────
+    // Disparado kIgnLeadTeeth dentes antes do início de dwell.
+    for (uint8_t slot = 0u; slot < kNCyl; ++slot) {
+        if (snap.tooth_index != g_ign_set_trigger[slot].tooth ||
+            snap.phase_A     != g_ign_set_trigger[slot].phase) {
+            continue;
+        }
+
+        const uint8_t cyl_idx = static_cast<uint8_t>(
+            ems::engine::firing_order[slot] - 1u);
+
+        if (!g_pending[cyl_idx].valid) {
+            continue;
+        }
+
+        const uint16_t dwell_x10 = g_pending[cyl_idx].dwell_abs_x10;
+
+        // Delta em graus×10 do dente actual até o início do dwell
+        const uint16_t delta_x10 = static_cast<uint16_t>(
+            (dwell_x10 + 7200u - curr_x10) % 7200u);
+        const uint32_t delta_mg_u32 = static_cast<uint32_t>(delta_x10) * 100u;
+        const uint16_t delta_mg = (delta_mg_u32 > 65535u)
+            ? 65535u
+            : static_cast<uint16_t>(delta_mg_u32);
+
+        const uint16_t dwell_ticks =
+            ems::drv::ckp_angle_to_ticks(delta_mg, snap.last_ftm3_capture);
+
+        static_cast<void>(
+            ems::drv::sched_event(kIgnCh[cyl_idx], dwell_ticks, Action::SET));
+    }
+
+    // ── Ignição: CLEAR (faísca) ───────────────────────────────────────────────
+    // Disparado kIgnLeadTeeth dentes antes do ângulo de faísca (advance BTDC).
+    for (uint8_t slot = 0u; slot < kNCyl; ++slot) {
+        if (snap.tooth_index != g_ign_clr_trigger[slot].tooth ||
+            snap.phase_A     != g_ign_clr_trigger[slot].phase) {
+            continue;
+        }
+
+        const uint8_t cyl_idx = static_cast<uint8_t>(
+            ems::engine::firing_order[slot] - 1u);
+
+        if (!g_pending[cyl_idx].valid) {
+            continue;
+        }
+
+        const uint16_t spark_x10 = g_pending[cyl_idx].spark_abs_x10;
+
+        // Delta em graus×10 do dente actual até a faísca
+        const uint16_t delta_x10 = static_cast<uint16_t>(
+            (spark_x10 + 7200u - curr_x10) % 7200u);
+        const uint32_t delta_mg_u32 = static_cast<uint32_t>(delta_x10) * 100u;
+        const uint16_t delta_mg = (delta_mg_u32 > 65535u)
+            ? 65535u
+            : static_cast<uint16_t>(delta_mg_u32);
+
+        const uint16_t spark_ticks =
+            ems::drv::ckp_angle_to_ticks(delta_mg, snap.last_ftm3_capture);
+
+        static_cast<void>(
+            ems::drv::sched_event(kIgnCh[cyl_idx], spark_ticks, Action::CLEAR));
     }
 }
 

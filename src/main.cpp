@@ -265,8 +265,6 @@ void loop() {
         g_limp_active = (critical_faults != 0u) &&
                         (ckp.rpm_x10 > kLimpRpmLimit_x10);
 
-        ems::drv::sched_recalc(ckp);
-
         // Avanço e PW calculados a cada 5 ms para telemetria e agendamento.
         const int16_t base_adv = ems::engine::get_advance(
             static_cast<uint16_t>(ckp.rpm_x10), sensors.map_kpa_x10 / 10u);

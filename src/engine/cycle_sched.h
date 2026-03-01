@@ -32,6 +32,10 @@ void cycle_sched_update(uint32_t pw_ticks,
 void cycle_sched_test_reset() noexcept;
 // Retorna o dente-gatilho de injeção para um slot de disparo (0..3).
 bool cycle_sched_test_trigger(uint8_t slot, uint8_t& tooth, bool& phase) noexcept;
+// Retorna o dente-gatilho de ignição SET (início de dwell) para um slot (0..3).
+bool cycle_sched_test_ign_set_trigger(uint8_t slot, uint8_t& tooth, bool& phase) noexcept;
+// Retorna o dente-gatilho de ignição CLR (faísca) para um slot (0..3).
+bool cycle_sched_test_ign_clr_trigger(uint8_t slot, uint8_t& tooth, bool& phase) noexcept;
 #endif
 
 }  // namespace ems::engine
