@@ -118,6 +118,13 @@ __attribute__((weak))
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
     static_cast<void>(snap);
 }
+
+#if defined(__GNUC__)
+__attribute__((weak))
+#endif
+void schedule_on_tooth(const CkpSnapshot& snap) noexcept {
+    static_cast<void>(snap);
+}
 }  // namespace ems::drv
 
 namespace ems::drv {
@@ -158,6 +165,7 @@ void ckp_ftm3_ch0_isr() noexcept {
         g_state.snap.tooth_period_ns = period_ns;
         g_state.snap.rpm_x10 = rpm_x10_from_period_ns(period_ns);
         sensors_on_tooth(g_state.snap);
+        schedule_on_tooth(g_state.snap);
         return;
     }
 
@@ -167,6 +175,7 @@ void ckp_ftm3_ch0_isr() noexcept {
     if (gap_ok && g_state.tooth_count >= kGapThresholdToothCount) {
         handle_gap();
         sensors_on_tooth(g_state.snap);
+        schedule_on_tooth(g_state.snap);
         return;
     }
 
@@ -188,6 +197,7 @@ void ckp_ftm3_ch0_isr() noexcept {
         }
     }
     sensors_on_tooth(g_state.snap);
+    schedule_on_tooth(g_state.snap);
 }
 
 void ckp_ftm3_ch1_isr() noexcept {

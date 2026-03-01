@@ -22,6 +22,7 @@ int main() { return 0; }
 #include "drv/scheduler.h"
 #include "drv/sensors.h"
 #include "engine/auxiliaries.h"
+#include "engine/cycle_sched.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/knock.h"
@@ -205,6 +206,7 @@ void setup() {
     ems::engine::auxiliaries_init();       // aux_init
     ems::engine::knock_init();
     // ign_init: tabelas estáticas, sem init dedicado
+    ems::engine::cycle_sched_init();       // pré-computa dentes-gatilho por cilindro
 
     // 8) Camada de aplicação
     ems::app::ts_init();
@@ -233,6 +235,8 @@ void setup() {
             }
         }
     }
+    // Habilita agendamento por ângulo de virabrequim (ativo somente com CKP SYNCED)
+    ems::engine::cycle_sched_enable(true);
 
     const uint32_t now = millis();
     g_t5ms = g_t10ms = g_t20ms = g_t50ms = g_t100ms = g_t500ms = now;
@@ -263,8 +267,7 @@ void loop() {
 
         ems::drv::sched_recalc(ckp);
 
-        // Avanço e PW calculados aqui para alimentar o frame CAN 0x400 (50 ms).
-        // TODO: integrar ao scheduler de injeção/ignição quando implementado.
+        // Avanço e PW calculados a cada 5 ms para telemetria e agendamento.
         const int16_t base_adv = ems::engine::get_advance(
             static_cast<uint16_t>(ckp.rpm_x10), sensors.map_kpa_x10 / 10u);
         g_last_advance_deg = static_cast<int8_t>(ems::engine::clamp_advance_deg(base_adv));
@@ -276,6 +279,20 @@ void loop() {
         const uint32_t pw_ms_x10_raw = base_pw_us / 100u;  // µs → ms×10
         g_last_pw_ms_x10 = static_cast<uint8_t>(
             pw_ms_x10_raw > 255u ? 255u : pw_ms_x10_raw);
+
+        // Publica parâmetros para o agendador de ciclo (schedule_on_tooth via ISR CKP).
+        // SOI_LEAD_X10: kSoiTeeth dentes antes do TDC = kSoiTeeth × 360 × 10 / 58
+        static constexpr uint16_t kSoiLeadX10 = (10u * 3600u) / 58u;  // ≈ 620 (62,0°)
+        const uint16_t dead_time_us   = ems::engine::corr_vbatt(sensors.vbatt_mv);
+        const uint16_t dwell_ms_x10   = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
+        const uint16_t dwell_angle_x10 = ems::engine::calc_dwell_angle_x10(
+            dwell_ms_x10, static_cast<uint16_t>(ckp.rpm_x10));
+        ems::engine::cycle_sched_update(
+            ems::engine::inj_pw_us_to_ftm0_ticks(base_pw_us),
+            static_cast<uint16_t>(static_cast<uint32_t>(dead_time_us) * 60u),
+            kSoiLeadX10,
+            static_cast<int16_t>(g_last_advance_deg * 10),
+            dwell_angle_x10);
 
         ems::app::ts_update_rt_metrics(
             g_last_pw_ms_x10,
