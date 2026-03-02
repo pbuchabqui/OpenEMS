@@ -33,7 +33,7 @@ int g_tests_failed = 0;
 
 ems::drv::CkpSnapshot make_ckp(uint32_t rpm_x10) {
     return ems::drv::CkpSnapshot{0u, 0u, 0u, rpm_x10,
-                                  ems::drv::SyncState::SYNCED, false};
+                                  ems::drv::SyncState::FULL_SYNC, false};
 }
 
 // SensorData sem o campo o2_mv

@@ -456,7 +456,7 @@ void run_vvt_control(const ems::drv::CkpSnapshot& snap,
     }
 
     const bool confirmed =
-        (snap.state == ems::drv::SyncState::SYNCED) &&
+        (snap.state == ems::drv::SyncState::FULL_SYNC) &&
         ((g.time_ms - g.vvt_last_phase_toggle_ms) <= kVvtConfirmTimeoutMs);
 
     if (!confirmed) {

@@ -19,7 +19,7 @@ int g_tests_failed = 0;
     } \
 } while (0)
 
-ems::drv::CkpSnapshot g_snap = {1000000u, 0u, 0u, 3000u, ems::drv::SyncState::SYNCED, true};
+ems::drv::CkpSnapshot g_snap = {1000000u, 0u, 0u, 3000u, ems::drv::SyncState::FULL_SYNC, true};
 ems::drv::SensorData g_sensors = {
     1000u,   // map_kpa_x10
     0u,      // maf_gps_x100
@@ -39,7 +39,7 @@ uint16_t g_ftm1_duty[2] = {0u, 0u};
 uint16_t g_ftm2_duty[2] = {0u, 0u};
 
 void reset_fixture() {
-    g_snap = ems::drv::CkpSnapshot{1000000u, 8u, 0u, 3000u, ems::drv::SyncState::SYNCED, true};
+    g_snap = ems::drv::CkpSnapshot{1000000u, 8u, 0u, 3000u, ems::drv::SyncState::FULL_SYNC, true};
     g_sensors = ems::drv::SensorData{
         1000u, 0u, 700u, 900, 250, 3000u, 2500u, 13500u, 0u,
     };
@@ -121,7 +121,7 @@ void test_vvt_failsafe_when_no_phase_confirm_for_200ms() {
 
     g_sensors.map_kpa_x10 = 1000u;
     g_snap.rpm_x10 = 3500u;
-    g_snap.state = ems::drv::SyncState::SYNCED;
+    g_snap.state = ems::drv::SyncState::FULL_SYNC;
     g_snap.phase_A = true;
 
     ems::engine::auxiliaries_tick_10ms();

@@ -46,7 +46,7 @@ ems::drv::CkpSnapshot mk_snap() {
         0u,                             // tooth_index
         10000u,                         // last_ftm3_capture
         0u,                             // rpm_x10
-        ems::drv::SyncState::SYNCED,
+        ems::drv::SyncState::FULL_SYNC,
         false
     };
 }

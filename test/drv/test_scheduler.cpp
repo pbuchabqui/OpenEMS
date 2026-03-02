@@ -28,11 +28,17 @@ void ftm0_set_compare(uint8_t ch, uint16_t ticks) noexcept {
 void ftm0_clear_chf(uint8_t ch) noexcept {
     g_clear_chf_last = ch;
 }
+
+void ftm0_arm_ignition(uint8_t ch, uint16_t ticks) noexcept {
+    // Mock: reutiliza set_compare para capturar o tick alvo em testes
+    g_last_compare_ch = ch;
+    g_last_compare_ticks = ticks;
+}
 }  // namespace ems::hal
 
 namespace ems::drv {
 CkpSnapshot ckp_snapshot() noexcept {
-    return CkpSnapshot{0u, 0u, 0u, 0u, SyncState::WAIT, false};
+    return CkpSnapshot{0u, 0u, 0u, 0u, SyncState::WAIT_GAP, false};
 }
 }  // namespace ems::drv
 

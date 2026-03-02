@@ -61,7 +61,7 @@ void test_sync_after_two_gaps() {
     test_reset();
     sync_with_two_gaps();
     const auto snap = ems::drv::ckp_snapshot();
-    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::SYNCED);
+    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::FULL_SYNC);
 }
 
 void test_false_gap_ignored_before_tooth55() {
@@ -72,7 +72,7 @@ void test_false_gap_ignored_before_tooth55() {
     feed_ckp(1600u);
 
     const auto snap = ems::drv::ckp_snapshot();
-    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::WAIT);
+    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::WAIT_GAP);
 }
 
 void test_rpm_formula() {
@@ -99,14 +99,14 @@ void test_tooth_count_over_60_goes_syncing() {
     sync_with_two_gaps();
 
     auto snap = ems::drv::ckp_snapshot();
-    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::SYNCED);
+    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::FULL_SYNC);
 
     for (int i = 0; i < 61; ++i) {
         feed_ckp(1000u);
     }
 
     snap = ems::drv::ckp_snapshot();
-    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::SYNCING);
+    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::LOSS_OF_SYNC);
 }
 
 // P7: RPM deve ser zero antes de qualquer dente
@@ -114,7 +114,7 @@ void test_rpm_zero_before_sync() {
     test_reset();
     const auto snap = ems::drv::ckp_snapshot();
     TEST_ASSERT_EQ_U32(0u, snap.rpm_x10);
-    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::WAIT);
+    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::WAIT_GAP);
 }
 
 // P7: phase_A deve alternar a cada disparo de CH1 (cam sensor)
@@ -123,7 +123,7 @@ void test_phase_a_toggles_on_ch1() {
     sync_with_two_gaps();
 
     const auto snap0 = ems::drv::ckp_snapshot();
-    TEST_ASSERT_TRUE(snap0.state == ems::drv::SyncState::SYNCED);
+    TEST_ASSERT_TRUE(snap0.state == ems::drv::SyncState::FULL_SYNC);
     const bool phase_initial = snap0.phase_A;
 
     // Simular rising edge no cam sensor (CH1, bit 1 de GPIOD)

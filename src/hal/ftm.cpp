@@ -431,6 +431,60 @@ void ftm2_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
 
 
 // ──────────────────────────────────────────────────────────────────────────────
+// FTM0 — Output Compare para ignição (pino acionado por hardware)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @brief Arma canal FTM0 para disparo de ignição por hardware (Output Compare).
+ *
+ * Configura FTM0_CnSC para Output Compare / Clear on match: o pino do canal
+ * vai LOW no exato ciclo em que FTM0_CNT == CnV, sem qualquer ação de CPU.
+ *
+ * Detalhes dos bits de FTM_CnSC (K64 RM §43.3.5 Table 43-8):
+ *   ┌─────────────────────────────────────────────────────────────────────┐
+ *   │  Bit │ Nome   │ Valor │ Significado                                 │
+ *   ├─────────────────────────────────────────────────────────────────────┤
+ *   │   7  │ CHF    │  0    │ Limpa flag anterior (W0C — write-0-to-clear)│
+ *   │   6  │ CHIE   │  1    │ Habilita interrupção para cleanup pós-match │
+ *   │   5  │ MSnB   │  1    │ Mode Select B = 1 (Output Compare)         │
+ *   │   4  │ MSnA   │  0    │ Mode Select A = 0 (Output Compare)         │
+ *   │   3  │ ELSnB  │  0    │ Edge/Level B = 0 (Clear on match)          │
+ *   │   2  │ ELSnA  │  1    │ Edge/Level A = 1 (Clear on match)          │
+ *   │   1  │  —     │  0    │ Reservado                                  │
+ *   │   0  │ DMA    │  0    │ Sem DMA request                            │
+ *   └─────────────────────────────────────────────────────────────────────┘
+ *   CnSC = 0x64 = (CHIE | MSnB | ELSnA)
+ *
+ * Convenção de polaridade do pino de ignição:
+ *   HIGH → bobina carregando (dwell)
+ *   LOW  → corte de corrente → faísca (disparo)
+ *
+ * Eliminação de jitter:
+ *   Comparação FTM0_CNT == CnV é testada pelo periférico a cada ciclo de
+ *   clock do FTM (16,67 ns). A transição acontece nesse mesmo ciclo,
+ *   independente de IRQ pendentes, pipeline do Cortex-M4 ou DMA.
+ *   Jitter residual: 0 ciclos de FTM = 0 ns (hardware determinístico).
+ */
+void ftm0_arm_ignition(uint8_t ch, uint16_t ticks) noexcept {
+#if !defined(EMS_HOST_TEST)
+    // 1. Configura canal para Output Compare / Clear on match + CHIE
+    //    Escrever CHF=0 aqui limpa flag residual de evento anterior (W0C).
+    //    MSnB=1, ELSnA=1, CHIE=1 → CnSC = FTM_CnSC_CHIE | FTM_CnSC_MSB | FTM_CnSC_ELSA
+    FTM_CnSC(FTM0_BASE, ch) = FTM_CnSC_CHIE | FTM_CnSC_MSB | FTM_CnSC_ELSA;
+
+    // 2. Programa o valor alvo do comparador.
+    //    O FTM0 dispara quando CNT (16-bit, free-running) == CnV.
+    //    Aritmética de wrap: se ticks < FTM0_CNT atual, o evento ocorre na
+    //    próxima volta do contador (≈1,09 ms após o wrap — max 1 overflow).
+    FTM_CnV(FTM0_BASE, ch) = ticks;
+#else
+    // Em ambiente host, simula a programação via mock do HAL.
+    ems::hal::ftm0_set_compare(ch, ticks);
+#endif
+}
+
+
+// ──────────────────────────────────────────────────────────────────────────────
 // ISR Handlers
 // ──────────────────────────────────────────────────────────────────────────────
 

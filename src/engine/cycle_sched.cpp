@@ -44,9 +44,10 @@ static constexpr uint8_t kTrigLeadTeeth = kSoiTeeth + kInjLeadTeeth;
 // a baixas rotações (< ~1500 RPM). Solução futura: PIT one-shot ou prescaler 128.
 static constexpr uint8_t kIgnLeadTeeth = 4u;
 
-// kToothAngleX1000: ângulo de um dente em miligraus (360°/58 × 1000 = 6207)
-// Mesmo valor usado em ckp.cpp e ckp_angle_to_ticks().
-static constexpr uint16_t kToothMillideg = 6207u;
+// kToothMillideg: ângulo inter-dente em miligraus para roda 60-2.
+// Roda 60-2: 60 posições × 6°/posição → 1 dente normal = 6,0° = 6000 mg.
+// Deve coincidir com kToothAngleX1000 em ckp.cpp (ambos = 6000).
+static constexpr uint16_t kToothMillideg = 6000u;
 
 static bool g_enabled = false;
 
@@ -222,7 +223,7 @@ bool cycle_sched_test_ign_clr_trigger(uint8_t slot, uint8_t& tooth, bool& phase)
 namespace ems::drv {
 
 void schedule_on_tooth(const CkpSnapshot& snap) noexcept {
-    if (!g_enabled || snap.state != SyncState::SYNCED) {
+    if (!g_enabled || snap.state != SyncState::FULL_SYNC) {
         return;
     }
 
