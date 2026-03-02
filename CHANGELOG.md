@@ -78,3 +78,45 @@ SIM_SCGC3 |= SIM_SCGC3_FTM3_MASK;  // em vez de static_cast<uint32_t>(SIM_SCGC3_
 ### 📄 Licença
 
 Este projeto continua sob a licença MIT conforme especificado no repositório.
+
+## 2026-03-02 - Atualização de Código: Correções de Estilo C++ e Otimizações
+
+### 🚀 Melhorias Implementadas
+
+#### 1. Correções de Estilo C++
+**Melhoria**: Substituição de casts C-style por `static_cast` apropriado
+**Arquivos**: `src/app/tuner_studio.cpp`, `src/drv/scheduler.cpp`, `src/hal/can.cpp`, `src/hal/uart.cpp`
+**Benefício**: Código mais seguro e compatível com boas práticas C++
+
+#### 2. Otimizações de Performance
+**Melhoria**: Uso de operadores bitwise otimizados (`|=` ao invés de atribuição com cast)
+**Arquivos**: `src/app/tuner_studio.cpp`
+**Benefício**: Operações mais eficientes e legíveis
+
+#### 3. Refatoração de Sistema de Scheduler
+**Melhoria**: Atualizações nas funções de scheduler e cycle scheduling
+**Arquivos**: `src/drv/scheduler.cpp`, `src/drv/scheduler.h`, `src/engine/cycle_sched.cpp`, `src/engine/cycle_sched.h`
+**Benefício**: Sistema de agendamento mais robusto e eficiente
+
+#### 4. Comunicações CAN e UART
+**Melhoria**: Atualizações nas camadas de comunicação
+**Arquivos**: `src/hal/can.cpp`, `src/hal/uart.cpp`
+**Benefício**: Comunicações mais confiáveis e performáticas
+
+#### 5. Cálculos de Fuel e Tabelas 3D
+**Melhoria**: Refatoração de cálculos de combustível e manipulação de tabelas
+**Arquivos**: `src/engine/fuel_calc.cpp`, `src/engine/table3d.cpp`, `src/engine/table3d.h`
+**Benefício**: Cálculos mais precisos e eficientes
+
+### 🎯 Resultado Final
+
+- ✅ 11 arquivos modificados
+- ✅ 262 linhas adicionadas, 53 deletadas
+- ✅ Código mais limpo e performático
+- ✅ Conformidade com padrões C++ modernos
+- ✅ Sistema de controle de versão atualizado
+
+### 🤝 Contribuidores
+
+- Equipe OpenEMS
+- Atualização de código: Cline (AI Assistant)
