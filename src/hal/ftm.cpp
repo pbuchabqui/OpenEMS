@@ -12,10 +12,11 @@
  *   FTM0/FTM3: system clock (120 MHz) / prescaler 2 = 60 MHz → 16.67 ns/tick
  *   FTM1/FTM2: bus clock (60 MHz) / prescaler calculado = freq PWM
  *
- * Callbacks registrados externamente (definidos em drv/ckp.cpp e drv/scheduler.cpp):
+ * Callbacks registrados externamente (definidos em drv/ckp.cpp):
  *   ems::drv::ckp_ftm3_ch0_isr()  — chamado pela FTM3_IRQHandler no evento CKP
  *   ems::drv::ckp_ftm3_ch1_isr()  — chamado pela FTM3_IRQHandler no evento CMP
- *   ems::drv::sched_isr()         — chamado pela FTM0_IRQHandler
+ *
+ * FTM0_IRQHandler é definido em engine/ecu_sched.c (módulo C MISRA-C:2012).
  *
  * REGRA INEGOCIÁVEL: Nenhuma lógica de motor aqui. Apenas registradores.
  */
@@ -167,7 +168,6 @@ static constexpr uint32_t kFtmBusClockHz    =  60'000'000u;
 namespace ems::drv {
   void ckp_ftm3_ch0_isr() noexcept;   // evento CKP rising edge
   void ckp_ftm3_ch1_isr() noexcept;   // evento CMP/fase rising edge
-  void sched_isr()        noexcept;   // scheduler de ignição/injeção
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -523,16 +523,9 @@ extern "C" void FTM3_IRQHandler(void) {
     }
 }
 
-/**
- * @brief ISR do FTM0 — eventos de output compare (ignição e injeção).
- *
- * Delega inteiramente para o scheduler. O scheduler verifica qual canal
- * gerou a interrupção e executa a ação programada (SET ou CLEAR de pino).
- *
- * REGRA: sem lógica de motor aqui — apenas despacho para drv::sched_isr().
- */
-extern "C" void FTM0_IRQHandler(void) {
-    ems::drv::sched_isr();
-}
+// FTM0_IRQHandler is defined in src/engine/ecu_sched.c (C module).
+// That handler manages the 32-bit timer extension (g_overflow_count) and
+// hardware output-compare scheduling. Removing the C++ definition here
+// avoids a multiple-definition linker error.
 
 } // namespace ems::hal
