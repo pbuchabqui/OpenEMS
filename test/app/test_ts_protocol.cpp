@@ -9,7 +9,7 @@
 
 namespace ems::drv {
 
-static CkpSnapshot g_ckp = {0u, 0u, 0u, 0u, SyncState::WAIT, false};
+static CkpSnapshot g_ckp = {0u, 0u, 0u, 0u, SyncState::WAIT_GAP, false};
 static SensorData g_sensors = {0u, 0u, 0u, 0, 0, 0u, 0u, 0u, 0u, 0u};
 
 CkpSnapshot ckp_snapshot() noexcept {
@@ -115,7 +115,7 @@ void test_a_returns_64_bytes_realtime() {
         0u,
         0u,
         12340u,
-        ems::drv::SyncState::SYNCED,
+        ems::drv::SyncState::FULL_SYNC,
         true,
     };
     ems::drv::g_sensors = ems::drv::SensorData{

@@ -25,6 +25,7 @@ static uint16_t g_ftm0_count = 0u;
 uint16_t ftm0_count() noexcept { return g_ftm0_count; }
 void ftm0_set_compare(uint8_t, uint16_t) noexcept {}
 void ftm0_clear_chf(uint8_t) noexcept {}
+void ftm0_arm_ignition(uint8_t, uint16_t) noexcept {}
 }  // namespace ems::hal
 
 // ── Infra de teste ────────────────────────────────────────────────────────────

@@ -164,7 +164,7 @@ inline void update_realtime_page() noexcept {
     rt.stft_p100   = g_rt_stft_p100;
 
     uint8_t status = 0u;
-    if (c.state == ems::drv::SyncState::SYNCED) {
+    if (c.state == ems::drv::SyncState::FULL_SYNC) {
         status = static_cast<uint8_t>(status | 0x01u);
     }
     if (c.phase_A) {

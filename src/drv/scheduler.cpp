@@ -30,7 +30,7 @@ struct Event {
 
 static volatile Event queue[QUEUE_SIZE] = {};
 static volatile uint8_t q_size = 0u;
-static ems::drv::CkpSnapshot g_last_snap = {0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT, false};
+static ems::drv::CkpSnapshot g_last_snap = {0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false};
 static bool g_have_last_snap = false;
 
 #if defined(EMS_HOST_TEST)
@@ -285,6 +285,121 @@ void sched_recalc(const CkpSnapshot& snap) noexcept {
     exit_critical();
 }
 
+// ── Módulo 3: SCHEDULE via FTM Output Compare ────────────────────────────────
+/**
+ * @brief Agenda disparo de ignição em domínio angular, usando Output Compare
+ *        de hardware no FTM0.
+ *
+ * CONVERSÃO ÂNGULO → TEMPO:
+ *   Para roda fônica 60-2, cada dente normal representa 6,0° de crank.
+ *   current_tooth_delta_ticks fornece a duração (em ticks FTM3) desse
+ *   intervalo de 6° medido no último dente capturado.
+ *
+ *   ticks_por_miligrau = current_tooth_delta_ticks / kToothAngleMg
+ *                      = current_tooth_delta_ticks / 6000
+ *
+ *   Ângulos em miligraus (×1000):
+ *     - current_tooth_angle_x10: posição atual desde TDC (0° = TDC, gira positivo)
+ *     - target_angle_btdc_x10: ângulo de ignição, expresso como BTDC (before TDC)
+ *     - Posição do evento = 360000 mg - target_btdc_mg (no referencial 0=TDC)
+ *
+ *   Ângulo restante até o disparo:
+ *     Se current < ignition_pos: remaining = ignition_pos - current
+ *     Se current > ignition_pos: remaining = (360000 - current) + ignition_pos
+ *
+ *   Ticks restantes:
+ *     ticks = (remaining_mg × current_tooth_delta_ticks) / 6000
+ *
+ *   Tick alvo no FTM0:
+ *     target_ticks = snap.last_ftm3_capture + ticks
+ *     (FTM0 e FTM3 compartilham o mesmo clock → ticks são diretamente somáveis)
+ *
+ * OUTPUT COMPARE HARDWARE (sem jitter de ISR):
+ *   ftm0_arm_ignition() configura FTM0_CnSC para Output Compare / Clear on
+ *   match: o pino do canal vai LOW exatamente quando FTM0_CNT == CnV,
+ *   independente do estado da CPU.
+ *   Jitter hardware = 0 ns (determinístico, resolução de 1 tick = 16,67 ns).
+ *
+ * @param target_angle_btdc_x10    Ângulo de ignição em miligraus BTDC.
+ *                                  Ex: 20000 = 20,0° BTDC.
+ * @param current_tooth_angle_x10  Posição do dente atual em miligraus desde TDC.
+ *                                  Ex: 60000 = 60,0° ATDC.
+ * @param current_tooth_delta_ticks Ticks FTM entre os dois últimos dentes (6° @ 60-2).
+ */
+void Schedule_Ignition_Event(uint16_t target_angle_btdc_x10,
+                              uint16_t current_tooth_angle_x10,
+                              uint32_t current_tooth_delta_ticks) noexcept {
+    // ── 1. Conversão ângulo → ticks ───────────────────────────────────────
+    //
+    // Convenção angular: 0 = TDC, cresce no sentido de rotação.
+    // BTDC: o disparo deve ocorrer ANTES do TDC.
+    // Em 0–360° (× 1000 = miligraus 0–360000):
+    //   ignition_pos_mg = 360000 - target_angle_btdc_x10
+    //
+    // Exemplo: target = 20000 mg (20° BTDC) → ignition_pos = 340000 mg (340° ATDC)
+
+    // Roda 60-2: 1 dente normal = 6° = 6000 miligraus
+    // kToothAngleMg: constante usada na conversão (miligraus por dente)
+    static constexpr uint32_t kToothAngleMg = 6000u;   // 6,0° × 1000
+
+    // Posição angular do evento de ignição no referencial 0=TDC [0, 360000)
+    const uint32_t ignition_pos_mg =
+        360000u - static_cast<uint32_t>(target_angle_btdc_x10);
+
+    // Ângulo restante desde o dente atual até o ponto de ignição (miligraus)
+    const uint32_t curr_mg = static_cast<uint32_t>(current_tooth_angle_x10);
+    uint32_t remaining_mg;
+    if (curr_mg <= ignition_pos_mg) {
+        remaining_mg = ignition_pos_mg - curr_mg;
+    } else {
+        // Já passamos do ponto nesta revolução → evento na próxima revolução
+        // (ou margem mínima de dwell insuficiente — o scheduler hardware
+        //  dispará no próximo wrap do contador FTM0, ≈1,09 ms)
+        remaining_mg = 360000u - curr_mg + ignition_pos_mg;
+    }
+
+    // ticks = remaining_mg × delta_ticks_por_dente / miligraus_por_dente
+    //       = remaining_mg × current_tooth_delta_ticks / 6000
+    //
+    // uint64 garante sem overflow:
+    //   max: remaining_mg(360000) × delta_ticks(65535) = 23,6×10⁹ > 2³²
+    const uint32_t ticks_to_fire = static_cast<uint32_t>(
+        (static_cast<uint64_t>(remaining_mg) * current_tooth_delta_ticks)
+        / kToothAngleMg);
+
+    // ── 2. Tick-alvo no contador FTM0 ─────────────────────────────────────
+    //
+    // FTM0 e FTM3 usam o mesmo clock (120 MHz / PS2 = 60 MHz) → ticks são
+    // diretamente comparáveis. O snapshot mais recente do CKP fornece o
+    // timestamp FTM3 do último dente (= ponto de referência de ângulo).
+    //
+    // Embora os contadores FTM0 e FTM3 sejam independentes (podem ter
+    // valores diferentes a qualquer instante), a DIFERENÇA entre eles é
+    // estável: o FTM0 avança na mesma taxa que o FTM3. Portanto somamos
+    // ticks_to_fire ao último timestamp conhecido para obter o momento
+    // correto no contador FTM0.
+    const CkpSnapshot snap = ckp_snapshot();
+    const uint16_t target_ftm0_ticks =
+        static_cast<uint16_t>(snap.last_ftm3_capture
+                               + static_cast<uint16_t>(ticks_to_fire));
+
+    // ── 3. Programar FTM0 Output Compare (hardware puro) ──────────────────
+    //
+    // IGN1 = Canal 7 do FTM0 (PTD7, configurado em ftm0_init).
+    // ftm0_arm_ignition() escreve FTM0_CnSC = 0x64 (OC/Clear on match + CHIE)
+    // e FTM0_CnV = target_ftm0_ticks.
+    //
+    // A partir deste ponto, o periférico FTM0 monitora CNT. Quando
+    // CNT == CnV, o pino PTD7 vai LOW e CHF é setado (disparando FTM0_IRQ
+    // para o scheduler fazer o cleanup via sched_isr).
+    //
+    // Não há nenhuma ação adicional da CPU até o instante do disparo.
+    // A bobina de ignição "vê" a borda de descida com jitter = 0 (hardware).
+    ems::hal::ftm0_arm_ignition(static_cast<uint8_t>(Channel::IGN1),
+                                 target_ftm0_ticks);
+}
+
+
 #if defined(EMS_HOST_TEST)
 void sched_test_reset() noexcept {
     enter_critical();
@@ -292,7 +407,7 @@ void sched_test_reset() noexcept {
         queue_write(i, Event{0u, Channel::INJ3, Action::SET, false});
     }
     q_size = 0u;
-    g_last_snap = CkpSnapshot{0u, 0u, 0u, 0u, SyncState::WAIT, false};
+    g_last_snap = CkpSnapshot{0u, 0u, 0u, 0u, SyncState::WAIT_GAP, false};
     g_have_last_snap = false;
     ems_test_fgpio_c_psor = 0u;
     ems_test_fgpio_c_pcor = 0u;

@@ -158,6 +158,42 @@ void ftm2_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept;
 
 
 // ──────────────────────────────────────────────────────────────────────────────
+// FTM0 — Output Compare para ignição com acionamento PURO por hardware
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @brief Arma um canal FTM0 para disparar o pino de ignição por hardware.
+ *
+ * Configura FTM0_CnSC para Output Compare, Clear on match: o pino do canal
+ * vai LOW automaticamente quando FTM0_CNT == CnV, sem intervenção da CPU.
+ * Habilita CHIE para que a ISR FTM0 execute cleanup pós-disparo (re-arm
+ * de dwell, log de evento, etc.).
+ *
+ * SETUP dos bits FTM0_CnSC (K64 RM §43.3.5):
+ *   Bit 7 (CHF)  = 0  → Clear flag anterior (W0C)
+ *   Bit 6 (CHIE) = 1  → Channel Interrupt Enable (cleanup pós-match)
+ *   Bit 5 (MSnB) = 1  → Output Compare mode (MSnB:MSnA = 10)
+ *   Bit 4 (MSnA) = 0
+ *   Bit 3 (ELSnB)= 0  → Clear output on match (ELSnB:ELSnA = 01)
+ *   Bit 2 (ELSnA)= 1
+ *   CnSC = 0x64 (CHIE | MSnB | ELSnA)
+ *
+ * ATENÇÃO: o pino deve estar configurado como FTM output (mux ALT4) para
+ *   que a transição de hardware seja visível externamente. Se configurado
+ *   como GPIO, apenas a interrupção é gerada (sem ação de pino).
+ *
+ * JITTER ELIMINADO:
+ *   A transição do pino ocorre no ciclo exato em que FTM0_CNT atinge CnV,
+ *   independente do estado da CPU (ISR em execução, pipeline stall, etc.).
+ *   Resolução: 1 tick = 16,67 ns ≈ 0,006° a 6000 RPM.
+ *
+ * @param ch    Canal FTM0 (0–7). Para ignição: IGN1=CH7, IGN2=CH6, IGN3=CH5, IGN4=CH4.
+ * @param ticks Valor absoluto do contador FTM0 onde o disparo deve ocorrer.
+ */
+void ftm0_arm_ignition(uint8_t ch, uint16_t ticks) noexcept;
+
+
+// ──────────────────────────────────────────────────────────────────────────────
 // ISR Handlers — declarados aqui para linkagem, NÃO chamar diretamente
 // ──────────────────────────────────────────────────────────────────────────────
 

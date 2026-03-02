@@ -108,6 +108,11 @@ void adc_init() noexcept {
     ADC1_CFG1 = ADC_CFG1_12B_DIV2;
     ADC1_CFG2 = ADC_CFG2_MUXA;
 
+    // Hardware averaging: 4 amostras para ADC0 (K64 RM §31.3.5)
+    // ADC_SC3: AVGE=bit2=1, AVGS=bits[1:0]=00 → 4 samples
+    // Melhora relacao sinal/ruido do MAP sem custo de CPU.
+    (*reinterpret_cast<volatile uint32_t*>(0x4003B024u)) = (1u << 2u);
+
     // PDB: acionado por FTM3, dispara ADC0 e ADC1 simultaneamente no mesmo
     // ângulo de virabrequim; DLY0=0 → amostragem imediata no trigger.
     PDB0_SC      = 0u;

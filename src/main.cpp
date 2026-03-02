@@ -227,7 +227,7 @@ void setup() {
     {
         constexpr uint32_t kCkpSyncTimeoutMs = 5000u;
         const uint32_t t_sync_start = millis();
-        while (ems::drv::ckp_snapshot().state != ems::drv::SyncState::SYNCED) {
+        while (ems::drv::ckp_snapshot().state != ems::drv::SyncState::FULL_SYNC) {
             ts_service();
             pit1_kick();
             if (static_cast<uint32_t>(millis() - t_sync_start) >= kCkpSyncTimeoutMs) {
@@ -323,7 +323,7 @@ void loop() {
             /*vvt_intake_pct*/  0u,
             /*vvt_exhaust_pct*/ 0u,
             /*status*/  static_cast<uint8_t>(
-                (ckp.state == ems::drv::SyncState::SYNCED ? 0x01u : 0u) |
+                (ckp.state == ems::drv::SyncState::FULL_SYNC ? 0x01u : 0u) |
                 (ckp.phase_A                               ? 0x02u : 0u) |
                 (sensors.fault_bits != 0u                  ? 0x04u : 0u) |
                 (g_limp_active                             ? 0x08u : 0u)));

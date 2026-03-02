@@ -62,7 +62,7 @@ void reset_fixture(int16_t clt_x10, uint32_t rpm_x10) {
         8u,                               // tooth_index
         0u,                               // last_ftm3_capture
         static_cast<uint32_t>(rpm_x10),  // rpm_x10 (uint32_t)
-        ems::drv::SyncState::SYNCED,
+        ems::drv::SyncState::FULL_SYNC,
         true                              // phase_A
     };
     g_sensors = ems::drv::SensorData{
