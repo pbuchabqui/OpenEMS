@@ -85,6 +85,7 @@ static bool                g_calib_dirty  = false;
 volatile uint32_t g_datalog_us = 0u;
 
 // Marca de tempo de cada tarefa de background
+static uint32_t g_t2ms   = 0u;     // NEW: 2ms strategy loop
 static uint32_t g_t5ms   = 0u;
 static uint32_t g_t10ms  = 0u;
 static uint32_t g_t20ms  = 0u;
@@ -106,6 +107,12 @@ static bool g_limp_active = false;
 // Parâmetros de referência para cálculo de PW (a ser configurável via NVM)
 static constexpr uint16_t kDefaultReqFuelUs = 8000u;  // 8 ms a VE=100%, MAP=MAP_ref
 static constexpr uint16_t kMapRefKpa        = 100u;   // MAP de referência (100 kPa ≈ atmosfera)
+
+// Global variables from ecu_sched.c for unified timing system
+extern volatile uint32_t g_overflow_count;
+extern volatile uint32_t g_ticks_per_rev;
+extern volatile uint32_t g_advance_deg;
+extern volatile uint32_t g_dwell_ticks;
 
 // =============================================================================
 // Utilitários de infraestrutura — sem lógica de domínio
@@ -255,9 +262,9 @@ void loop() {
     const ems::drv::CkpSnapshot ckp     = ems::drv::ckp_snapshot();
     const ems::drv::SensorData& sensors = ems::drv::sensors_get();
 
-    // ── 5 ms: sched_recalc + cálculo de avanço/PW para telemetria ────────────
-    if (elapsed(now, g_t5ms, 5u)) {
-        g_t5ms += 5u;
+    // ── 2 ms: Estratégia (Massa de Ar, VE, Tempo de Injeção/Ignição) ─────────
+    if (elapsed(now, g_t2ms, 2u)) {
+        g_t2ms += 2u;
 
         // Limp mode: sensores MAP ou CLT em fault → rev-cut acima de 3000 RPM
         const uint8_t critical_faults =
@@ -265,37 +272,54 @@ void loop() {
         g_limp_active = (critical_faults != 0u) &&
                         (ckp.rpm_x10 > kLimpRpmLimit_x10);
 
-        // Avanço e PW calculados a cada 5 ms para telemetria e agendamento.
-        const int16_t base_adv = ems::engine::get_advance(
-            static_cast<uint16_t>(ckp.rpm_x10), sensors.map_kpa_x10 / 10u);
-        g_last_advance_deg = static_cast<int8_t>(ems::engine::clamp_advance_deg(base_adv));
-
+        // Cálculo de Massa de Ar (VE) - estratégia principal
         const uint8_t ve = ems::engine::get_ve(
             static_cast<uint16_t>(ckp.rpm_x10), sensors.map_kpa_x10 / 10u);
+
+        // Cálculo de Tempo de Injeção (PW) - estratégia principal
         const uint32_t base_pw_us = g_limp_active ? 0u : ems::engine::calc_base_pw_us(
             kDefaultReqFuelUs, ve, sensors.map_kpa_x10 / 10u, kMapRefKpa);
         const uint32_t pw_ms_x10_raw = base_pw_us / 100u;  // µs → ms×10
         g_last_pw_ms_x10 = static_cast<uint8_t>(
             pw_ms_x10_raw > 255u ? 255u : pw_ms_x10_raw);
 
-        // Publica parâmetros para o agendador de ciclo (schedule_on_tooth via ISR CKP).
-        // SOI_LEAD_X10: kSoiTeeth dentes antes do TDC = kSoiTeeth × 360 × 10 / 58
-        static constexpr uint16_t kSoiLeadX10 = (10u * 3600u) / 58u;  // ≈ 620 (62,0°)
-        const uint16_t dead_time_us   = ems::engine::corr_vbatt(sensors.vbatt_mv);
-        const uint16_t dwell_ms_x10   = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
-        const uint16_t dwell_angle_x10 = ems::engine::calc_dwell_angle_x10(
-            dwell_ms_x10, static_cast<uint16_t>(ckp.rpm_x10));
-        ems::engine::cycle_sched_update(
-            ems::engine::inj_pw_us_to_ftm0_ticks(base_pw_us),
-            static_cast<uint16_t>(static_cast<uint32_t>(dead_time_us) * 60u),
-            kSoiLeadX10,
-            static_cast<int16_t>(g_last_advance_deg * 10),
-            dwell_angle_x10);
+        // Cálculo de Tempo de Ignição em Graus - estratégia principal
+        const int16_t base_adv = ems::engine::get_advance(
+            static_cast<uint16_t>(ckp.rpm_x10), sensors.map_kpa_x10 / 10u);
+        g_last_advance_deg = static_cast<int8_t>(ems::engine::clamp_advance_deg(base_adv));
 
+        // Atualiza parâmetros para o scheduler angular
+        
+        // Calculate ticks per revolution based on current RPM
+        if (ckp.rpm_x10 > 0u) {
+            // 120 MHz / PS_128 = 937.5 kHz ≈ 1.067 μs/tick
+            // Ticks per revolution = (937.5 ticks/μs * 60000000 μs/min) / RPM
+            g_ticks_per_rev = (93750000u * 60u) / ckp.rpm_x10;
+        }
+        
+        g_advance_deg = static_cast<uint32_t>(g_last_advance_deg);
+        
+        // Convert dwell time from ms to ticks
+        const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
+        g_dwell_ticks = (dwell_ms_x10 * 9375u) / 100u;  // Convert ms to ticks
+
+        // Atualiza métricas de tempo real
         ems::app::ts_update_rt_metrics(
             g_last_pw_ms_x10,
             g_last_advance_deg,
             static_cast<int8_t>(ems::engine::fuel_get_stft_pct_x10() / 10));
+    }
+
+    // ── 5 ms: sched_recalc + cálculo de avanço/PW para telemetria ────────────
+    if (elapsed(now, g_t5ms, 5u)) {
+        g_t5ms += 5u;
+
+        // Use unified scheduling system with 32-bit timestamps
+        // Calculate current timestamp for scheduling
+        const uint32_t current_timestamp = (g_overflow_count << 16) | ems::hal::ftm0_count();
+        
+        // Schedule the complete 720° cycle using unified system
+        ems::engine::Calculate_Sequential_Cycle(current_timestamp);
     }
 
     // ── 10 ms: IACV PID, VVT PID, Boost PID ──────────────────────────────────

@@ -168,6 +168,13 @@ static constexpr uint32_t kFtmBusClockHz    =  60'000'000u;
 namespace ems::drv {
   void ckp_ftm3_ch0_isr() noexcept;   // evento CKP rising edge
   void ckp_ftm3_ch1_isr() noexcept;   // evento CMP/fase rising edge
+  struct CkpSnapshot;                 // forward declaration for ckp_snapshot
+  CkpSnapshot ckp_snapshot() noexcept; // forward declaration
+}
+
+// Forward declaration for gap detection function
+namespace ems::engine {
+  void cycle_sched_force_update() noexcept;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -185,12 +192,12 @@ namespace ems::drv {
 static void nvic_enable(uint32_t irq, uint8_t priority) {
     // IPR[n] = 4 bytes, cada byte para uma IRQ
     // Byte index = irq / 4, bit offset dentro do byte = (irq % 4) * 8
-    volatile uint32_t* ipr = (volatile uint32_t*)(0xE000E400u + (irq / 4u) * 4u);
+    volatile uint32_t* ipr = reinterpret_cast<volatile uint32_t*>(0xE000E400u + (irq / 4u) * 4u);
     uint32_t shift = (irq % 4u) * 8u;
     // Limpa prioridade anterior e escreve nova (bits [7:4] do byte)
-    *ipr = (*ipr & ~(0xFFu << shift)) | ((uint32_t)(priority << 4u) << shift);
+    *ipr = (*ipr & ~(0xFFu << shift)) | (static_cast<uint32_t>(priority << 4u) << shift);
     // Habilita a IRQ no ISER (interrupt set-enable register)
-    NVIC_ISER(irq / 32u) = (1u << (irq % 32u));
+    NVIC_ISER(irq / 32u) = static_cast<uint32_t>(1u << (irq % 32u));
 }
 
 /**
@@ -225,63 +232,24 @@ static void calc_pwm_params(uint32_t clock_hz, uint32_t freq_hz,
 namespace ems::hal {
 
 // ─── FTM0 — Output Compare (Ignição + Injeção) ───────────────────────────────
+// NOTE: FTM0 hardware initialization is now handled by the unified
+// ecu_sched.c module to avoid prescaler conflicts. This module only provides
+// runtime functions for setting compare values and reading the counter.
 
 void ftm0_init(void) {
-    // 1. Habilita clock gating para FTM0 (SIM_SCGC6 §12.2.13)
-    SIM_SCGC6 |= SIM_SCGC6_FTM0_MASK;
-
-    // 2. Desabilita write-protect ANTES de qualquer escrita de config
-    //    §43.3.12: WPDIS=1 permite escrever em todos os registradores
-    FTM0_MODE = FTM_MODE_WPDIS | FTM_MODE_FTMEN;
-
-    // 3. Para o contador para configuração segura
-    FTM0_SC = 0u;
-
-    // 4. Zera o contador e configura MOD para free-running (0xFFFF)
-    FTM0_CNT = 0u;
-    FTM0_MOD = 0xFFFFu;   // contador livre de 16 bits, overflow ~1.09 ms a 60 MHz efetivo
-
-    // 5. COMBINE = 0 — todos os canais operam independentemente
-    FTM0_COMBINE = 0u;
-
-    // 6. Configura pinos IGN1-IGN4 (PTD7-PTD4 → CH7-CH4) como output compare
-    //    MUX=4 → FTM0_CH (§11.4.1 Signal Multiplexing PTD)
-    PORT_PCR(PORTD_BASE, 7u) = PCR_MUX(4u);  // IGN1 CH7
-    PORT_PCR(PORTD_BASE, 6u) = PCR_MUX(4u);  // IGN2 CH6
-    PORT_PCR(PORTD_BASE, 5u) = PCR_MUX(4u);  // IGN3 CH5
-    PORT_PCR(PORTD_BASE, 4u) = PCR_MUX(4u);  // IGN4 CH4
-
-    // 7. Configura pinos INJ1-INJ4 (PTC1-PTC4 → CH0-CH3) como output compare
-    //    MUX=4 → FTM0_CH (§11.4.1 Signal Multiplexing PTC)
-    //    Todos os 4 injetores em Port C contíguo — scheduler uniforme, sem código especial.
-    //    INJ3/INJ4 em PTC1/PTC2 (FTM0_CH0/CH1): escolhidos sobre PTD2/PTD3 para evitar
-    //    risco de spurious output via FTM3_CH2/CH3 (ALT4 em PTD2/PTD3) durante debug.
-    //    PIT fica 100% disponível para datalog timestamp e watchdog software.
-    PORT_PCR(PORTC_BASE, 1u) = PCR_MUX(4u);  // INJ3 CH0
-    PORT_PCR(PORTC_BASE, 2u) = PCR_MUX(4u);  // INJ4 CH1
-    PORT_PCR(PORTC_BASE, 3u) = PCR_MUX(4u);  // INJ1 CH2
-    PORT_PCR(PORTC_BASE, 4u) = PCR_MUX(4u);  // INJ2 CH3
-
-    // 8. Configura CH0-CH7 como output compare "set on match"
-    //    §43.4.2.3: MSB:MSA=10 (output compare mode), ELSB:ELSA=10 (set output on match)
-    //    Todos os 8 canais com lógica idêntica — scheduler não precisa distinguir INJ de IGN.
-    for (uint8_t ch = 0u; ch <= 7u; ++ch) {
-        FTM_CnSC(FTM0_BASE, ch) = FTM_CnSC_OUTPUT_SET;
-        FTM_CnV(FTM0_BASE, ch)  = 0u;
-    }
-
-    // 9. Inicia o contador: system clock, prescaler 2 → 16.67 ns/tick
-    //    NÃO habilitar TOIE aqui — overflow do FTM0 não é usado por este módulo
-    FTM0_SC = FTM_SC_CLKS_SYSTEM | FTM_SC_PS_2;
-
-    // 10. NVIC: FTM0 prioridade 2 (abaixo de FTM3/CKP que é prio 1)
-    nvic_enable(IRQ_FTM0, 2u);
+    // FTM0 initialization is now handled by ECU_Hardware_Init() in ecu_sched.c
+    // to ensure unified prescaler configuration (PS=128) and 32-bit timestamp extension.
+    // This prevents conflicts between the C and C++ timing systems.
+    // 
+    // IMPORTANT: This function should only be called after ECU_Hardware_Init()
+    // has been executed. Calling this function before ECU_Hardware_Init() will
+    // result in undefined behavior as FTM0 will not be properly configured.
 }
 
 void ftm0_set_compare(uint8_t ch, uint16_t ticks) noexcept {
     // Escreve o valor de comparação diretamente no canal
     // O evento ocorre quando FTM0_CNT == ticks (com wrap-around natural uint16_t)
-    FTM_CnV(FTM0_BASE, ch) = ticks;
+    FTM_CnV(FTM0_BASE, ch) = static_cast<uint32_t>(ticks);
     // Re-arma a interrupção do canal limpando CHF e garantindo CHIE=1
     // Nota: CHF é limpo escrevendo 0 no bit 7 — padrão "write 0 to clear"
     FTM_CnSC(FTM0_BASE, ch) = FTM_CnSC_OUTPUT_SET;  // preserva config, limpa CHF implicitamente
@@ -476,7 +444,7 @@ void ftm0_arm_ignition(uint8_t ch, uint16_t ticks) noexcept {
     //    O FTM0 dispara quando CNT (16-bit, free-running) == CnV.
     //    Aritmética de wrap: se ticks < FTM0_CNT atual, o evento ocorre na
     //    próxima volta do contador (≈1,09 ms após o wrap — max 1 overflow).
-    FTM_CnV(FTM0_BASE, ch) = ticks;
+    FTM_CnV(FTM0_BASE, ch) = static_cast<uint32_t>(ticks);
 #else
     // Em ambiente host, simula a programação via mock do HAL.
     ems::hal::ftm0_set_compare(ch, ticks);
@@ -497,6 +465,7 @@ void ftm0_arm_ignition(uint8_t ch, uint16_t ticks) noexcept {
  *   3. Verifica estado atual do pino via PTD_PDIR (anti-glitch, RusEFI #1488)
  *   4. Limpa CHF (write 0 no bit 7)
  *   5. Despacha para callback de camada superior
+ *   6. Gap detection: força update do scheduler para compensação de aceleração
  *
  * REGRA: Nenhuma lógica de motor aqui. Apenas despacho.
  * REGRA: Nenhum Serial.print(), nenhuma alocação, nenhum float.
@@ -508,6 +477,14 @@ extern "C" void FTM3_IRQHandler(void) {
         // PTD_PDIR bit 0 = estado atual de PTD0
         if (PTD_PDIR & (1u << 0u)) {
             ems::drv::ckp_ftm3_ch0_isr();
+            
+            // Gap detection for 60-2 wheel
+            // Gap occurs when tooth_index == 0 (missing tooth position)
+            // Force schedule update to compensate for acceleration
+            if (ems::drv::ckp_snapshot().tooth_index == 0) {
+                // Gap detected - force angular execution loop update
+                ems::engine::cycle_sched_force_update();
+            }
         }
         // Limpa CHF independentemente (mesmo em borda espúria, deve limpar para não re-entrar)
         FTM_CnSC(FTM3_BASE, 0u) &= ~FTM_CnSC_CHF;
