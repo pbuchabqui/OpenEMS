@@ -127,11 +127,11 @@ inline void compact_and_sort() noexcept {
     for (uint8_t i = 1u; i < n; ++i) {
         Event key = tmp[i];
         int8_t j = static_cast<int8_t>(i) - 1;
-        while (j >= 0 && tmp[(uint8_t)j].ftm0_ticks > key.ftm0_ticks) {
-            tmp[(uint8_t)j + 1u] = tmp[(uint8_t)j];
+        while (j >= 0 && tmp[j].ftm0_ticks > key.ftm0_ticks) {
+            tmp[j + 1] = tmp[j];
             --j;
         }
-        tmp[(uint8_t)j + 1u] = key;
+        tmp[j + 1] = key;
     }
 
     for (uint8_t i = 0u; i < n; ++i) {
@@ -219,33 +219,6 @@ void sched_cancel_all() noexcept {
     exit_critical();
 }
 
-void sched_isr() noexcept {
-    const uint16_t now = ems::hal::ftm0_count();
-    // Snapshot de q_size antes de qualquer modificação: evita re-leituras voláteis
-    // no loop enquanto compact_and_sort() (chamado abaixo) altera o valor.
-    const uint8_t sz = q_size;
-
-    for (uint8_t i = 0u; i < sz; ++i) {
-        const Event ev = queue_read(i);
-        if (!ev.valid) {
-            continue;
-        }
-        // Aritmética circular: dist pequena (1..kPastThresholdTicks) → evento ainda futuro.
-        // Substitui comparação linear "ev > now" que falha em cruzamentos de wrap do FTM0.
-        const uint16_t dist = static_cast<uint16_t>(ev.ftm0_ticks - now);
-        if (dist != 0u && dist <= kPastThresholdTicks) {
-            continue;
-        }
-
-        execute_gpio(ev.channel, ev.action);
-        ems::hal::ftm0_clear_chf(to_ch(ev.channel));
-        disable_compare_irq(to_ch(ev.channel));
-        queue[i].valid = false;
-    }
-
-    compact_and_sort();
-    program_next_compare();
-}
 
 void sched_recalc(const CkpSnapshot& snap) noexcept {
     enter_critical();

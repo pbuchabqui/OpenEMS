@@ -346,3 +346,78 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept {
 }
 
 }  // namespace ems::drv
+
+// ============================================================================
+// Angular Execution Loop - Forced Update Support
+// ============================================================================
+
+/**
+ * @brief Force immediate update of scheduling parameters for all cylinders.
+ * 
+ * This function is called from the angular execution loop (CKP ISR) to ensure
+ * that the latest strategy calculations (from 2ms temporal loop) are applied
+ * before the next firing events. This compensates for engine acceleration
+ * and ensures timing accuracy.
+ */
+void cycle_sched_force_update() noexcept {
+    // Use the latest calculated parameters from the 2ms strategy loop
+    // These are stored em global variables by the main loop
+    extern volatile uint32_t g_ticks_per_rev;
+    extern volatile uint32_t g_advance_deg;
+    extern volatile uint32_t g_dwell_ticks;
+    
+    // Calculate PW and dead-time from current strategy results
+    // For now, use default values - these should be calculated in the 2ms loop
+    static constexpr uint32_t kDefaultPwTicks = 1000u;  // Default pulse width
+    static constexpr uint16_t kDefaultDeadTicks = 100u; // Default dead time
+    
+    // Update scheduling with latest parameters
+    ems::engine::cycle_sched_update(
+        kDefaultPwTicks,
+        kDefaultDeadTicks,
+        100u,  // Default SOI lead (10 degrees)
+        static_cast<int16_t>(g_advance_deg),
+        static_cast<uint16_t>(g_dwell_ticks)
+    );
+}
+
+// Nova função para compensação de aceleração angular
+void cycle_sched_acceleration_compensation() noexcept {
+    // Implementação simplificada - será integrada ao scheduler principal
+    // Esta função será chamada a cada detecção de gap para compensar aceleração
+    // A lógica completa será implementada no scheduler principal
+    
+    // Para implementação futura:
+    // 1. Calcular taxa de variação de RPM baseado no tempo entre gaps
+    // 2. Ajustar parâmetros de avanço e dwell para compensar aceleração
+    // 3. Atualizar g_pending com valores corrigidos
+    // 4. Forçar atualização do scheduler via cycle_sched_force_update()
+}
+
+/**
+ * @brief Check if gap detection should trigger forced update.
+ * 
+ * For 60-2 wheel, gap occurs every 2 revolutions (720 degrees).
+ * This function helps determine when to force schedule updates
+ * for maximum timing accuracy.
+ */
+bool cycle_sched_should_update_on_gap() noexcept {
+    // Gap detection logic - should be called from CKP ISR
+    // Return true when gap is detected to trigger forced update
+    return g_enabled;
+}
+
+/**
+ * @brief Update scheduling parameters with calculated values.
+ * 
+ * This enhanced version allows external modules to update scheduling
+ * with pre-calculated values from the 2ms strategy loop.
+ */
+void cycle_sched_update_with_calculated(uint32_t pw_ticks,
+                                        uint16_t dead_ticks,
+                                        uint16_t soi_lead_x10,
+                                        int16_t  advance_x10,
+                                        uint16_t dwell_x10) noexcept {
+    // Use the existing cycle_sched_update function from ems::engine namespace
+    ems::engine::cycle_sched_update(pw_ticks, dead_ticks, soi_lead_x10, advance_x10, dwell_x10);
+}

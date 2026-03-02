@@ -93,6 +93,56 @@ uint8_t table3d_lookup_u8(const uint8_t table[kTableAxisSize][kTableAxisSize],
     return static_cast<uint8_t>(v);
 }
 
+// Nova função otimizada para VE lookup com Q8 arithmetic
+uint16_t table3d_lookup_ve_q8(const uint8_t ve_table[kTableAxisSize][kTableAxisSize],
+                             const uint16_t* x_axis,
+                             const uint16_t* y_axis,
+                             uint16_t x,
+                             uint16_t y) noexcept {
+    const uint8_t xi = table_axis_index(x_axis, kTableAxisSize, x);
+    const uint8_t yi = table_axis_index(y_axis, kTableAxisSize, y);
+    const uint8_t fx = table_axis_frac_q8(x_axis, xi, x);
+    const uint8_t fy = table_axis_frac_q8(y_axis, yi, y);
+
+    // Carrega valores da tabela (já em Q8 scale)
+    const uint16_t v00 = static_cast<uint16_t>(ve_table[yi][xi]) << 8;
+    const uint16_t v10 = static_cast<uint16_t>(ve_table[yi][xi + 1]) << 8;
+    const uint16_t v01 = static_cast<uint16_t>(ve_table[yi + 1][xi]) << 8;
+    const uint16_t v11 = static_cast<uint16_t>(ve_table[yi + 1][xi + 1]) << 8;
+
+    // Interpolação Q8 otimizada
+    const uint16_t v0 = v00 + (((v10 - v00) * fx) >> 8);
+    const uint16_t v1 = v01 + (((v11 - v01) * fx) >> 8);
+    const uint16_t v = v0 + (((v1 - v0) * fy) >> 8);
+
+    return v;  // Resultado em Q8
+}
+
+// Função para advance lookup com Q10
+int32_t table3d_lookup_advance_q10(const int16_t advance_table[kTableAxisSize][kTableAxisSize],
+                                 const uint16_t* x_axis,
+                                 const uint16_t* y_axis,
+                                 uint16_t x,
+                                 uint16_t y) noexcept {
+    const uint8_t xi = table_axis_index(x_axis, kTableAxisSize, x);
+    const uint8_t yi = table_axis_index(y_axis, kTableAxisSize, y);
+    const uint8_t fx = table_axis_frac_q8(x_axis, xi, x);
+    const uint8_t fy = table_axis_frac_q8(y_axis, yi, y);
+
+    // Carrega valores da tabela (converte para Q10)
+    const int32_t v00 = static_cast<int32_t>(advance_table[yi][xi]) << 10;
+    const int32_t v10 = static_cast<int32_t>(advance_table[yi][xi + 1]) << 10;
+    const int32_t v01 = static_cast<int32_t>(advance_table[yi + 1][xi]) << 10;
+    const int32_t v11 = static_cast<int32_t>(advance_table[yi + 1][xi + 1]) << 10;
+
+    // Interpolação Q10 otimizada
+    const int32_t v0 = v00 + (((v10 - v00) * static_cast<int32_t>(fx)) >> 8);
+    const int32_t v1 = v01 + (((v11 - v01) * static_cast<int32_t>(fx)) >> 8);
+    const int32_t v = v0 + (((v1 - v0) * static_cast<int32_t>(fy)) >> 8);
+
+    return v;  // Resultado em Q10 (150 = 15.0° BTDC)
+}
+
 int16_t table3d_lookup_s16(const int16_t table[kTableAxisSize][kTableAxisSize],
                            const uint16_t* x_axis,
                            const uint16_t* y_axis,

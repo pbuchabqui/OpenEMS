@@ -43,9 +43,6 @@ bool uart0_tx_ready() noexcept {
 }
 
 bool uart0_tx_byte(uint8_t byte) noexcept {
-    if (!uart0_tx_ready()) {
-        return false;
-    }
     const size_t written = Serial.write(&byte, 1u);
     return written == 1u;
 }

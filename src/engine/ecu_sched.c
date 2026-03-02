@@ -1,12 +1,17 @@
 /**
  * @file engine/ecu_sched.c
- * @brief ECU Scheduling Core v2 — implementation (C / MISRA-C:2012)
+ * @brief ECU Scheduling Core v3 — Unified Deterministic Timing System (C / MISRA-C:2012)
  *
- * Implements ECU_Hardware_Init, Add_Event, FTM0_IRQHandler, and
- * Calculate_Sequential_Cycle for the OpenEMS engine management system.
+ * Implements unified ECU timing system with 32-bit timestamp extension,
+ * hardware output compare for all 8 channels (4 INJ + 4 IGN), and PDB-ADC
+ * MAP windowing. Resolves prescaler conflicts, dual scheduling paths,
+ * low-RPM overflow issues, and orphaned ISR problems.
  *
- * Clock: FTM0 @ 120 MHz / PS_128 = 937.5 kHz ~ 1.067 us/tick.
- * 32-bit timestamp: bits[31:16] = g_overflow_count, bits[15:0] = CnV.
+ * Hardware Architecture:
+ *   FTM0: 120 MHz / PS_128 = 937.5 kHz ~ 1.067 us/tick (1us resolution)
+ *   32-bit timestamp: bits[31:16] = g_overflow_count, bits[15:0] = CnV
+ *   PDB0: Triggered by FTM0_CH5 for MAP windowing at 120° ATDC
+ *   ADC0: Hardware averaging 4 samples for MAP reading
  *
  * MISRA-C:2012 compliance notes:
  *   - No dynamic memory allocation (Rule 21.3).
@@ -56,6 +61,16 @@ static volatile uint32_t g_mock_sim_scgc6;
 #define ECU_QUEUE_SIZE  16U   /* Maximum scheduled events in flight */
 #define ECU_CHANNELS    8U    /* FTM0 channels */
 
+/* Channel assignments for unified system */
+#define ECU_CH_INJ1   0U  /* FTM0_CH0 — Injector 1 */
+#define ECU_CH_INJ2   1U  /* FTM0_CH1 — Injector 2 */
+#define ECU_CH_INJ3   2U  /* FTM0_CH2 — Injector 3 */
+#define ECU_CH_INJ4   3U  /* FTM0_CH3 — Injector 4 */
+#define ECU_CH_IGN1   7U  /* FTM0_CH7 — Ignition 1 */
+#define ECU_CH_IGN2   6U  /* FTM0_CH6 — Ignition 2 */
+#define ECU_CH_IGN3   5U  /* FTM0_CH5 — Ignition 3 (also MAP trigger) */
+#define ECU_CH_IGN4   4U  /* FTM0_CH4 — Ignition 4 */
+
 /* First ignition channel index */
 #define ECU_IGN_CH_FIRST  4U
 
@@ -64,6 +79,15 @@ static volatile uint32_t g_mock_sim_scgc6;
 
 /* Number of cylinders */
 #define ECU_NUM_CYL  4U
+
+/* Firing order: 1-3-4-2 */
+#define ECU_FIRING_ORDER {1U, 3U, 4U, 2U}
+
+/* TDC compression angles for firing order (degrees in 720° cycle) */
+#define ECU_TDC_DEG {0U, 180U, 360U, 540U}
+
+/* MAP windowing: trigger PDB at 120° ATDC for MAP reading */
+#define ECU_MAP_TRIGGER_DEG  120U
 
 /* ============================================================================
  * Event queue

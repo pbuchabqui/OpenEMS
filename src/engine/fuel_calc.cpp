@@ -35,18 +35,12 @@ int16_t g_stft_pct_x10 = 0;
 int32_t g_stft_integrator_x10 = 0;
 int16_t g_ltft_pct_x10[ems::engine::kTableAxisSize][ems::engine::kTableAxisSize] = {};
 
-#if defined(__GNUC__)
-__attribute__((weak))
-#endif
 int16_t fuel_ltft_load_cell(uint8_t map_idx, uint8_t rpm_idx) noexcept {
     (void)map_idx;
     (void)rpm_idx;
     return 0;
 }
 
-#if defined(__GNUC__)
-__attribute__((weak))
-#endif
 void fuel_ltft_store_cell(uint8_t map_idx, uint8_t rpm_idx, int16_t value_x10) noexcept {
     (void)map_idx;
     (void)rpm_idx;
@@ -204,11 +198,21 @@ uint32_t calc_base_pw_us(uint16_t req_fuel_us,
         return 0u;
     }
 
-    // VE é percentual direto (0–100 = 0%–100%, >100 = sobrealimentado).
-    // Denominador 100 mantém a semântica: VE=100 + MAP=MAP_ref → pw = req_fuel_us.
-    const uint32_t prod = static_cast<uint32_t>(req_fuel_us) * ve * map_kpa;
-    const uint32_t den = static_cast<uint32_t>(100u) * map_ref_kpa;
-    return prod / den;
+    // Otimização: Converte para Q8 arithmetic para evitar divisões lentas
+    // PW = (REQ_FUEL * VE * MAP) >> 16 (para Q8)
+    // Onde 100 é convertido para 25600 em Q8 (100 << 8)
+    
+    const uint32_t req_q8 = static_cast<uint32_t>(req_fuel_us) << 8;
+    const uint32_t ve_q8 = static_cast<uint32_t>(ve) << 8;
+    const uint32_t map_q8 = static_cast<uint32_t>(map_kpa) << 8;
+    
+    // Q8 multiplication: (a * b) >> 8
+    uint32_t temp = (req_q8 * ve_q8) >> 8;     // REQ_FUEL * VE em Q8
+    temp = (temp * map_q8) >> 8;               // * MAP em Q8
+    temp = (temp * 25600) >> 8;                // / 100 (25600 = 100 << 8)
+    temp = (temp >> 8) / map_ref_kpa;          // / MAP_REF (shift + div)
+    
+    return temp;
 }
 
 uint16_t corr_clt(int16_t clt_x10) noexcept {
@@ -274,6 +278,36 @@ int32_t calc_ae_pw_us(uint16_t tps_now_x10,
 
     g_ae_pulse_us = 0;
     return 0;
+}
+
+// Nova função para 2ms loop - Transient detection
+void check_transient_2ms(uint16_t tps_current, uint16_t tps_previous) noexcept {
+    // Calcula taxa de variação instantânea (2ms loop = 500Hz)
+    int16_t delta_tps = static_cast<int16_t>(tps_current) - static_cast<int16_t>(tps_previous);
+    int16_t tpsdot_x10 = delta_tps * 5;  // 2ms loop = 500Hz
+    
+    // Threshold fixo para detecção de transientes
+    uint16_t threshold = 10;  // Base threshold
+    
+    if (tpsdot_x10 > static_cast<int16_t>(threshold)) {
+        // Trigger async injection
+        schedule_async_injection_immediate(tpsdot_x10);
+    }
+}
+
+// Async injection scheduling
+void schedule_async_injection_immediate(int16_t tpsdot_x10) noexcept {
+    // Usa CLT global do sistema (assumindo que está disponível)
+    extern int16_t g_clt_x10;
+    
+    // Calcula pulso baseado na taxa de TPS
+    const uint8_t bucket = clt_bucket(g_clt_x10);
+    int32_t pulse_us = tpsdot_x10 * static_cast<int32_t>(kAeSens[bucket]);
+    
+    // Esta função será implementada no scheduler principal
+    // Por enquanto, apenas armazena o pulso para ser usado no próximo ciclo
+    g_ae_pulse_us = pulse_us;
+    g_ae_decay_cycles = g_ae_taper_cycles;
 }
 
 void fuel_reset_adaptives() noexcept {

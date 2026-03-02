@@ -24,4 +24,17 @@ int16_t table3d_lookup_s16(const int16_t table[kTableAxisSize][kTableAxisSize],
                            uint16_t x,
                            uint16_t y) noexcept;
 
+// Funções otimizadas para VE e Advance lookup com fixed-point arithmetic
+uint16_t table3d_lookup_ve_q8(const uint8_t ve_table[kTableAxisSize][kTableAxisSize],
+                             const uint16_t* x_axis,
+                             const uint16_t* y_axis,
+                             uint16_t x,
+                             uint16_t y) noexcept;
+
+int32_t table3d_lookup_advance_q10(const int16_t advance_table[kTableAxisSize][kTableAxisSize],
+                                 const uint16_t* x_axis,
+                                 const uint16_t* y_axis,
+                                 uint16_t x,
+                                 uint16_t y) noexcept;
+
 }  // namespace ems::engine

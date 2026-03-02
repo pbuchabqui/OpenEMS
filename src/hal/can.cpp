@@ -76,7 +76,7 @@ inline bool q_push(ems::hal::CanFrame* q, uint8_t& head, uint8_t tail, const ems
     return true;
 }
 
-inline bool q_pop(ems::hal::CanFrame* q, uint8_t& tail, uint8_t head, ems::hal::CanFrame& out) noexcept {
+inline bool q_pop(const ems::hal::CanFrame* q, uint8_t& tail, uint8_t head, ems::hal::CanFrame& out) noexcept {
     if (tail == head) {
         return false;
     }

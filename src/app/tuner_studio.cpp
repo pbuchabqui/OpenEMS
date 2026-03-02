@@ -165,7 +165,7 @@ inline void update_realtime_page() noexcept {
 
     uint8_t status = 0u;
     if (c.state == ems::drv::SyncState::FULL_SYNC) {
-        status = static_cast<uint8_t>(status | 0x01u);
+        status |= 0x01u;
     }
     if (c.phase_A) {
         status = static_cast<uint8_t>(status | 0x02u);
