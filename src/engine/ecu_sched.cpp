@@ -107,6 +107,9 @@ typedef struct {
 
 static volatile EcuEvent_t g_queue[ECU_QUEUE_SIZE];
 static volatile uint8_t    g_queue_count;
+static volatile uint8_t    g_next_valid[ECU_CHANNELS];
+static volatile uint32_t   g_next_ts[ECU_CHANNELS];
+static volatile uint8_t    g_next_action[ECU_CHANNELS];
 
 /* ============================================================================
  * Module globals (exported via header)
@@ -193,6 +196,45 @@ static void queue_remove(uint8_t index)
     }
 }
 
+static void recompute_next_per_channel(void)
+{
+    uint8_t ch;
+    uint8_t i;
+
+    for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
+        g_next_valid[ch] = 0U;
+        g_next_ts[ch] = 0U;
+        g_next_action[ch] = 0U;
+    }
+
+    for (i = 0U; i < g_queue_count; ++i) {
+        if (g_queue[i].valid == 0U) {
+            continue;
+        }
+
+        ch = g_queue[i].channel;
+        if ((ch >= ECU_CHANNELS) ||
+            ((g_next_valid[ch] != 0U) && (g_queue[i].timestamp32 >= g_next_ts[ch]))) {
+            continue;
+        }
+
+        g_next_valid[ch] = 1U;
+        g_next_ts[ch] = g_queue[i].timestamp32;
+        g_next_action[ch] = g_queue[i].action;
+    }
+}
+
+static void arm_due_channels(void)
+{
+    uint8_t ch;
+    for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
+        if ((g_next_valid[ch] != 0U) &&
+            ((g_next_ts[ch] >> 16U) == g_overflow_count)) {
+            arm_channel(ch, g_next_ts[ch], g_next_action[ch]);
+        }
+    }
+}
+
 /* ============================================================================
  * ECU_Hardware_Init
  * ========================================================================= */
@@ -275,6 +317,7 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
                 --i; /* Adjust index after removal */
             }
         }
+        recompute_next_per_channel();
         force_output(channel, action);
         ++g_late_event_count;
         return;
@@ -289,6 +332,7 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
                 --i; /* Adjust index after removal */
             }
         }
+        recompute_next_per_channel();
         force_output(channel, action);
         ++g_late_event_count;
         return;
@@ -320,8 +364,11 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
     g_queue[insert_pos]._pad        = 0U;
     ++g_queue_count;
 
-    /* If the event epoch matches the current overflow count, arm it now */
-    if (ev_hi == g_overflow_count) {
+    /* Keep one authoritative "next event" per channel and only arm due ones. */
+    recompute_next_per_channel();
+    if ((g_next_valid[channel] != 0U) &&
+        (g_next_ts[channel] == timestamp32) &&
+        (ev_hi == g_overflow_count)) {
         arm_channel(channel, timestamp32, action);
     }
 }
@@ -349,25 +396,20 @@ void FTM0_IRQHandler(void)
         /* Memory barrier to prevent compiler reordering */
         __asm__ volatile("" ::: "memory");
 
-        /* Arm events that are due in this new overflow epoch */
-        /* CRITICAL FIX: Process queue backwards to avoid race condition */
+        /* Remove events that are still late after overflow advancement. */
         for (i = g_queue_count; i > 0U; --i) {
             uint8_t idx = i - 1U;
             uint32_t ev_hi = (g_queue[idx].timestamp32 >> 16U);
-            if (ev_hi == g_overflow_count) {
-                arm_channel(g_queue[idx].channel,
-                            g_queue[idx].timestamp32,
-                            g_queue[idx].action);
-            } else if (ev_hi < g_overflow_count) {
+            if (ev_hi < g_overflow_count) {
                 /* Still late even after increment — force and count */
                 force_output(g_queue[idx].channel, g_queue[idx].action);
                 ++g_late_event_count;
                 queue_remove(idx);
-                /* No index adjustment needed when processing backwards */
-            } else {
-                /* Future epoch — nothing to do yet */
             }
         }
+
+        recompute_next_per_channel();
+        arm_due_channels();
     }
 
     /* ── 2. Channel match (CHF set): cleanup fired events ───────────────── */
@@ -378,14 +420,36 @@ void FTM0_IRQHandler(void)
             FTM0->CONTROLS[ch].CnSC = (cnsc & ~FTM_CnSC_CHF_MASK);
 
             /* Remove the corresponding event from the queue */
-            /* CRITICAL FIX: Process backwards to avoid race condition */
-            for (i = g_queue_count; i > 0U; --i) {
-                uint8_t idx = i - 1U;
-                if ((g_queue[idx].valid != 0U) &&
-                    (g_queue[idx].channel == ch)) {
-                    queue_remove(idx);
-                    break;
+            /* Remove the armed event for this channel (fallback: first by channel). */
+            uint8_t removed = 0U;
+            if ((ch < ECU_CHANNELS) && (g_next_valid[ch] != 0U)) {
+                uint32_t armed_ts = g_next_ts[ch];
+                for (i = 0U; i < g_queue_count; ++i) {
+                    if ((g_queue[i].valid != 0U) &&
+                        (g_queue[i].channel == ch) &&
+                        (g_queue[i].timestamp32 == armed_ts)) {
+                        queue_remove(i);
+                        removed = 1U;
+                        break;
+                    }
                 }
+            }
+
+            if (removed == 0U) {
+                for (i = 0U; i < g_queue_count; ++i) {
+                    if ((g_queue[i].valid != 0U) &&
+                        (g_queue[i].channel == ch)) {
+                        queue_remove(i);
+                        break;
+                    }
+                }
+            }
+
+            recompute_next_per_channel();
+            if ((ch < ECU_CHANNELS) &&
+                (g_next_valid[ch] != 0U) &&
+                ((g_next_ts[ch] >> 16U) == g_overflow_count)) {
+                arm_channel(ch, g_next_ts[ch], g_next_action[ch]);
             }
         }
     }
@@ -499,6 +563,11 @@ void ecu_sched_test_reset(void)
         g_queue[i].action      = 0U;
         g_queue[i].valid       = 0U;
         g_queue[i]._pad        = 0U;
+    }
+    for (i = 0U; i < ECU_CHANNELS; ++i) {
+        g_next_valid[i] = 0U;
+        g_next_ts[i] = 0U;
+        g_next_action[i] = 0U;
     }
 }
 
