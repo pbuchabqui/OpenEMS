@@ -12,6 +12,8 @@
 
 #define EMS_HOST_TEST 1
 #include "drv/sensors.h"
+#include "drv/ckp.h"
+#include "hal/adc.h"
 
 namespace {
 int g_tests_run = 0;
@@ -182,17 +184,22 @@ void test_get_sensor_health_status_map_fault() {
     ems::drv::sensors_init();
     ems::drv::sensors_test_reset();
     
-    // Simulate MAP sensor fault by setting out-of-range values
+    // Simulate MAP sensor fault by setting a narrow range and feeding
+    // three fast-sampling rounds with out-of-range MAP values.
     ems::drv::sensors_set_range(ems::drv::SensorId::MAP, {100u, 200u});
-    
-    // This would normally be called by the sensor reading process
-    // For testing, we'll manipulate the internal state directly
-    // Note: This test would need access to internal fault tracking
-    // For now, we test the interface exists and returns reasonable values
-    
+
+    ems::hal::adc_test_set_raw_adc0(ems::hal::Adc0Channel::MAP_SE10, 4000u);
+    ems::hal::adc_test_set_raw_adc0(ems::hal::Adc0Channel::MAF_V_SE11, 1000u);
+    ems::hal::adc_test_set_raw_adc0(ems::hal::Adc0Channel::TPS_SE12, 1000u);
+    ems::hal::adc_test_set_raw_adc0(ems::hal::Adc0Channel::O2_SE4B, 1000u);
+
+    ems::drv::CkpSnapshot snap = {100000u, 0u, 0u, 0u, ems::drv::SyncState::FULL_SYNC, false};
+    for (int i = 0; i < 15; ++i) {
+        ems::drv::sensors_on_tooth(snap);
+    }
+
     uint8_t status = ems::drv::get_sensor_health_status();
-    // Status should indicate some fault (exact bits depend on implementation)
-    TEST_ASSERT_TRUE(status != 0u);
+    TEST_ASSERT_TRUE((status & (1u << 0u)) != 0u);
 }
 
 // =============================================================================

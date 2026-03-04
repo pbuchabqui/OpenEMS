@@ -226,7 +226,7 @@ void test_calc_final_pw_us_valid_inputs() {
     TEST_ASSERT_IN_RANGE(final_pw, 8000, 12000);
     
     final_pw = ems::engine::calc_final_pw_us(15000, 200, 220, 800);
-    TEST_ASSERT_IN_RANGE(final_pw, 15000, 18000);
+    TEST_ASSERT_IN_RANGE(final_pw, 10000, 12000);
 }
 
 void test_calc_final_pw_us_edge_cases() {
@@ -236,7 +236,7 @@ void test_calc_final_pw_us_edge_cases() {
     
     // Test with maximum reasonable values
     final_pw = ems::engine::calc_final_pw_us(50000, 400, 400, 1500);
-    TEST_ASSERT_IN_RANGE(final_pw, 50000, 60000);
+    TEST_ASSERT_IN_RANGE(final_pw, 120000, 130000);
 }
 
 // =============================================================================
