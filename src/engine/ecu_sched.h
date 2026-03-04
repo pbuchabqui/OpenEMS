@@ -192,6 +192,25 @@ typedef struct {
 #define ECU_CH_IGN4   4U  /*!< FTM0 CH4 — Ignition 4 */
 
 /* ============================================================================
+ * Timing constants (derived from clock and prescaler)
+ * ========================================================================= */
+
+/*!< System clock frequency in Hz */
+#define ECU_SYSTEM_CLOCK_HZ    120000000U
+
+/*!< FTM0 prescaler (128) */
+#define ECU_FTM0_PRESCALER     128U
+
+/*!< FTM3 prescaler (2) */
+#define ECU_FTM3_PRESCALER     2U
+
+/*!< FTM0 ticks per millisecond: 120MHz / 128 / 1000 = 937.5 */
+#define ECU_FTM0_TICKS_PER_MS  937U
+
+/*!< FTM3 tick period in nanoseconds: 2 / 120MHz * 1e9 = 16.667 */
+#define ECU_FTM3_TICK_NS       17U
+
+/* ============================================================================
  * Module globals (accessible for diagnostics / inter-module coordination)
  * ========================================================================= */
 

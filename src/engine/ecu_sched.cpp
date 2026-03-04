@@ -1,5 +1,5 @@
 /**
- * @file engine/ecu_sched.c
+ * @file engine/ecu_sched.cpp
  * @brief ECU Scheduling Core v3 — Unified Deterministic Timing System (C / MISRA-C:2012)
  *
  * Implements unified ECU timing system with 32-bit timestamp extension,
@@ -26,6 +26,20 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <cassert>
+
+// CRITICAL FIX: Add debug assertions for safety-critical parameters
+#ifndef NDEBUG
+#define ASSERT_VALID_CHANNEL(ch) assert((ch) < ECU_CHANNELS)
+#define ASSERT_VALID_ACTION(act) assert((act) <= ECU_ACT_SPARK)
+#define ASSERT_VALID_TIMESTAMP(ts) assert((ts) != 0)
+#define ASSERT_VALID_QUEUE_COUNT(count) assert((count) <= ECU_QUEUE_SIZE)
+#else
+#define ASSERT_VALID_CHANNEL(ch) ((void)0)
+#define ASSERT_VALID_ACTION(act) ((void)0)
+#define ASSERT_VALID_TIMESTAMP(ts) ((void)0)
+#define ASSERT_VALID_QUEUE_COUNT(count) ((void)0)
+#endif
 
 /* ============================================================================
  * Host-test peripheral mocks
@@ -62,16 +76,6 @@ static volatile uint32_t g_mock_sim_scgc6;
 #define ECU_CHANNELS    8U    /* FTM0 channels */
 
 /* Channel assignments for unified system */
-#define ECU_CH_INJ1   0U  /* FTM0_CH0 — Injector 1 */
-#define ECU_CH_INJ2   1U  /* FTM0_CH1 — Injector 2 */
-#define ECU_CH_INJ3   2U  /* FTM0_CH2 — Injector 3 */
-#define ECU_CH_INJ4   3U  /* FTM0_CH3 — Injector 4 */
-#define ECU_CH_IGN1   7U  /* FTM0_CH7 — Ignition 1 */
-#define ECU_CH_IGN2   6U  /* FTM0_CH6 — Ignition 2 */
-#define ECU_CH_IGN3   5U  /* FTM0_CH5 — Ignition 3 (also MAP trigger) */
-#define ECU_CH_IGN4   4U  /* FTM0_CH4 — Ignition 4 */
-
-/* First ignition channel index */
 #define ECU_IGN_CH_FIRST  4U
 
 /* Degrees in one 4-stroke cycle */
@@ -171,6 +175,11 @@ static void arm_channel(uint8_t ch, uint32_t timestamp32, uint8_t action)
 static void queue_remove(uint8_t index)
 {
     uint8_t i;
+    
+    // CRITICAL FIX: Validate queue index
+    ASSERT_VALID_QUEUE_COUNT(g_queue_count);
+    assert(index < g_queue_count);
+    
     for (i = index; i < (g_queue_count - 1U); ++i) {
         g_queue[i].timestamp32 = g_queue[i + 1U].timestamp32;
         g_queue[i].channel     = g_queue[i + 1U].channel;
@@ -249,11 +258,23 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
     uint8_t  insert_pos;
     uint8_t  i;
 
+    // CRITICAL FIX: Validate input parameters
+    ASSERT_VALID_TIMESTAMP(timestamp32);
+    ASSERT_VALID_CHANNEL(channel);
+    ASSERT_VALID_ACTION(action);
+
     /* Compute overflow epoch of this event */
     ev_hi = (timestamp32 >> 16U);
 
     /* Late event: already past */
     if (ev_hi < g_overflow_count) {
+        /* CRITICAL FIX: Remove any existing events for this channel before forcing */
+        for (i = 0U; i < g_queue_count; ++i) {
+            if (g_queue[i].channel == channel) {
+                queue_remove(i);
+                --i; /* Adjust index after removal */
+            }
+        }
         force_output(channel, action);
         ++g_late_event_count;
         return;
@@ -261,6 +282,13 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
 
     /* Queue full: treat as late event */
     if (g_queue_count >= ECU_QUEUE_SIZE) {
+        /* CRITICAL FIX: Remove any existing events for this channel before forcing */
+        for (i = 0U; i < g_queue_count; ++i) {
+            if (g_queue[i].channel == channel) {
+                queue_remove(i);
+                --i; /* Adjust index after removal */
+            }
+        }
         force_output(channel, action);
         ++g_late_event_count;
         return;
@@ -312,26 +340,30 @@ void FTM0_IRQHandler(void)
 
     /* ── 1. Timer Overflow (TOF): extend 32-bit counter ─────────────────── */
     if ((sc & FTM_SC_TOF_MASK) != 0U) {
-        /* Clear TOF (W0C: write 0 to the bit, preserve other bits) */
+        /* Clear TOF (W0C: write 0 to bit, preserve other bits) */
         FTM0->SC = (sc & ~FTM_SC_TOF_MASK);
+        
         ++g_overflow_count;
+        
+        /* Ensure overflow increment is complete before queue processing */
+        /* Memory barrier to prevent compiler reordering */
+        __asm__ volatile("" ::: "memory");
 
         /* Arm events that are due in this new overflow epoch */
-        for (i = 0U; i < g_queue_count; ++i) {
-            uint32_t ev_hi = (g_queue[i].timestamp32 >> 16U);
+        /* CRITICAL FIX: Process queue backwards to avoid race condition */
+        for (i = g_queue_count; i > 0U; --i) {
+            uint8_t idx = i - 1U;
+            uint32_t ev_hi = (g_queue[idx].timestamp32 >> 16U);
             if (ev_hi == g_overflow_count) {
-                arm_channel(g_queue[i].channel,
-                            g_queue[i].timestamp32,
-                            g_queue[i].action);
+                arm_channel(g_queue[idx].channel,
+                            g_queue[idx].timestamp32,
+                            g_queue[idx].action);
             } else if (ev_hi < g_overflow_count) {
                 /* Still late even after increment — force and count */
-                force_output(g_queue[i].channel, g_queue[i].action);
+                force_output(g_queue[idx].channel, g_queue[idx].action);
                 ++g_late_event_count;
-                queue_remove(i);
-                /* Adjust index after removal */
-                if (i > 0U) {
-                    --i;
-                }
+                queue_remove(idx);
+                /* No index adjustment needed when processing backwards */
             } else {
                 /* Future epoch — nothing to do yet */
             }
@@ -346,10 +378,12 @@ void FTM0_IRQHandler(void)
             FTM0->CONTROLS[ch].CnSC = (cnsc & ~FTM_CnSC_CHF_MASK);
 
             /* Remove the corresponding event from the queue */
-            for (i = 0U; i < g_queue_count; ++i) {
-                if ((g_queue[i].valid != 0U) &&
-                    (g_queue[i].channel == ch)) {
-                    queue_remove(i);
+            /* CRITICAL FIX: Process backwards to avoid race condition */
+            for (i = g_queue_count; i > 0U; --i) {
+                uint8_t idx = i - 1U;
+                if ((g_queue[idx].valid != 0U) &&
+                    (g_queue[idx].channel == ch)) {
+                    queue_remove(idx);
                     break;
                 }
             }

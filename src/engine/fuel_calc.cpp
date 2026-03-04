@@ -1,6 +1,22 @@
 #include "engine/fuel_calc.h"
 
 #include <cstdint>
+#include <cassert>
+
+// CRITICAL FIX: Add debug assertions for safety-critical parameters
+#ifndef NDEBUG
+#define ASSERT_VALID_RPM_X10(rpm) assert((rpm) >= 0 && (rpm) <= 20000)  // 0-2000 RPM ×10
+#define ASSERT_VALID_MAP_KPA(map) assert((map) >= 10 && (map) <= 250)   // 10-250 kPa
+#define ASSERT_VALID_TEMP_X10(temp) assert((temp) >= -400 && (temp) <= 1500)  // -40°C to +150°C ×10
+#define ASSERT_VALID_VE(ve) assert((ve) >= 50 && (ve) <= 250)  // VE 50-250%
+#define ASSERT_VALID_VOLTAGE_MV(v) assert((v) >= 6000 && (v) <= 18000)  // 6-18V
+#else
+#define ASSERT_VALID_RPM_X10(rpm) ((void)0)
+#define ASSERT_VALID_MAP_KPA(map) ((void)0)
+#define ASSERT_VALID_TEMP_X10(temp) ((void)0)
+#define ASSERT_VALID_VE(ve) ((void)0)
+#define ASSERT_VALID_VOLTAGE_MV(v) ((void)0)
+#endif
 
 namespace {
 
@@ -187,6 +203,10 @@ uint8_t ve_table[kTableAxisSize][kTableAxisSize] = {
 };
 
 uint8_t get_ve(uint16_t rpm_x10, uint16_t map_kpa) noexcept {
+    // CRITICAL FIX: Validate input parameters
+    ASSERT_VALID_RPM_X10(rpm_x10);
+    ASSERT_VALID_MAP_KPA(map_kpa);
+    
     return table3d_lookup_u8(ve_table, kRpmAxisX10, kLoadAxisKpa, rpm_x10, map_kpa);
 }
 
@@ -194,6 +214,12 @@ uint32_t calc_base_pw_us(uint16_t req_fuel_us,
                          uint8_t ve,
                          uint16_t map_kpa,
                          uint16_t map_ref_kpa) noexcept {
+    // CRITICAL FIX: Validate input parameters
+    ASSERT_VALID_MAP_KPA(map_kpa);
+    ASSERT_VALID_MAP_KPA(map_ref_kpa);
+    ASSERT_VALID_VE(ve);
+    assert(req_fuel_us > 0 && req_fuel_us <= 50000);  // 0-50ms reasonable range
+    
     if (map_ref_kpa == 0u || ve == 0u) {
         return 0u;
     }
@@ -212,23 +238,38 @@ uint32_t calc_base_pw_us(uint16_t req_fuel_us,
     temp = (temp * 25600) >> 8;                // / 100 (25600 = 100 << 8)
     temp = (temp >> 8) / map_ref_kpa;          // / MAP_REF (shift + div)
     
+    // CRITICAL FIX: Validate result
+    assert(temp <= 100000);  // Max 100ms pulse width
+    
     return temp;
 }
 
 uint16_t corr_clt(int16_t clt_x10) noexcept {
+    // CRITICAL FIX: Validate temperature input
+    ASSERT_VALID_TEMP_X10(clt_x10);
+    
     return interp_u16_8pt(kCltAxisX10, kCorrCltX256, clt_x10);
 }
 
 uint16_t corr_iat(int16_t iat_x10) noexcept {
+    // CRITICAL FIX: Validate temperature input
+    ASSERT_VALID_TEMP_X10(iat_x10);
+    
     return interp_u16_8pt(kIatAxisX10, kCorrIatX256, iat_x10);
 }
 
 uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept {
+    // CRITICAL FIX: Validate voltage input
+    ASSERT_VALID_VOLTAGE_MV(vbatt_mv);
+    
     const uint16_t v = clamp_u16(vbatt_mv, 7000u, 17000u);
     return interp_u16_8pt_u16x(kVbattAxisMv, kDeadTimeUs, v);
 }
 
 uint16_t corr_warmup(int16_t clt_x10) noexcept {
+    // CRITICAL FIX: Validate temperature input
+    ASSERT_VALID_TEMP_X10(clt_x10);
+    
     return interp_u16_8pt(kWarmupAxisX10, kWarmupX256, clt_x10);
 }
 
@@ -279,6 +320,9 @@ int32_t calc_ae_pw_us(uint16_t tps_now_x10,
     g_ae_pulse_us = 0;
     return 0;
 }
+
+// Forward declaration for function defined later
+void schedule_async_injection_immediate(int16_t tpsdot_x10) noexcept;
 
 // Nova função para 2ms loop - Transient detection
 void check_transient_2ms(uint16_t tps_current, uint16_t tps_previous) noexcept {

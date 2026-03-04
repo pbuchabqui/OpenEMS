@@ -52,6 +52,11 @@ void sensors_set_tps_cal(uint16_t raw_min, uint16_t raw_max) noexcept;
 void sensors_set_range(SensorId id, SensorRange range) noexcept;
 const SensorData& sensors_get() noexcept;
 
+// CRITICAL FIX: Sensor validation functions
+bool validate_sensor_range(SensorId id, uint16_t raw_value) noexcept;
+bool validate_sensor_values(const SensorData& data) noexcept;
+uint8_t get_sensor_health_status() noexcept;
+
 #if defined(EMS_HOST_TEST)
 void sensors_test_reset() noexcept;
 void sensors_test_set_clt_table_entry(uint8_t idx, int16_t degc_x10) noexcept;

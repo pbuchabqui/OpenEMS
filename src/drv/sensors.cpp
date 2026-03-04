@@ -304,6 +304,68 @@ inline void sample_fast_channels() noexcept {
 // =============================================================================
 namespace ems::drv {
 
+// CRITICAL FIX: Sensor validation implementation
+bool validate_sensor_range(SensorId id, uint16_t raw_value) noexcept {
+    const FaultTracker& f = g_fault[static_cast<uint8_t>(id)];
+    return (raw_value >= f.range.min_raw) && (raw_value <= f.range.max_raw);
+}
+
+bool validate_sensor_values(const SensorData& data) noexcept {
+    // Validate MAP: 10 kPa to 250 kPa (×10)
+    if ((data.map_kpa_x10 < 100u) || (data.map_kpa_x10 > 2500u)) {
+        return false;
+    }
+    
+    // Validate CLT: -40°C to +150°C (×10)
+    if ((data.clt_degc_x10 < -400) || (data.clt_degc_x10 > 1500)) {
+        return false;
+    }
+    
+    // Validate IAT: -40°C to +150°C (×10)
+    if ((data.iat_degc_x10 < -400) || (data.iat_degc_x10 > 1500)) {
+        return false;
+    }
+    
+    // Validate TPS: 0% to 100% (×10)
+    if (data.tps_pct_x10 > 1000u) {
+        return false;
+    }
+    
+    // Validate battery voltage: 6V to 18V
+    if ((data.vbatt_mv < 6000u) || (data.vbatt_mv > 18000u)) {
+        return false;
+    }
+    
+    // Validate fuel pressure: 0 kPa to 500 kPa (×10)
+    if (data.fuel_press_kpa_x10 > 5000u) {
+        return false;
+    }
+    
+    // Validate oil pressure: 0 kPa to 1000 kPa (×10)
+    if (data.oil_press_kpa_x10 > 10000u) {
+        return false;
+    }
+    
+    return true;
+}
+
+uint8_t get_sensor_health_status() noexcept {
+    uint8_t status = 0u;
+    
+    // Check critical sensors for limp mode
+    if (g_fault[static_cast<uint8_t>(SensorId::MAP)].active) {
+        status |= (1u << 0u);
+    }
+    if (g_fault[static_cast<uint8_t>(SensorId::CLT)].active) {
+        status |= (1u << 1u);
+    }
+    if (g_fault[static_cast<uint8_t>(SensorId::TPS)].active) {
+        status |= (1u << 2u);
+    }
+    
+    return status;
+}
+
 void sensors_init() noexcept {
     ems::hal::adc_init();
     init_tables();

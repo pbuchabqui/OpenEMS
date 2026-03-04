@@ -93,7 +93,7 @@ int8_t spark_table[kTableAxisSize][kTableAxisSize] = {
 };
 
 uint8_t firing_order[4] = {1u, 3u, 4u, 2u};
-uint16_t cylinder_offset_deg[4] = {0u, 180u, 540u, 360u};
+uint16_t cylinder_offset_deg[4] = {0u, 180u, 360u, 540u};
 
 int16_t get_advance(uint16_t rpm_x10, uint16_t load_kpa) noexcept {
     const uint8_t xi = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);

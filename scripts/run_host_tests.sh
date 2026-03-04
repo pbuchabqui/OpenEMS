@@ -92,12 +92,12 @@ run_test test_cycle_sched \
   src/drv/sensors.cpp \
   src/hal/adc.cpp
 
-# test_ecu_sched: compiled as C (MISRA-C:2012 module), not C++
+# test_ecu_sched: compiled as C++ (was MISRA-C module)
 echo ""
 echo "==> [test_ecu_sched] build"
-gcc -std=c11 -DEMS_HOST_TEST -Isrc \
+g++ -std=c++17 -DEMS_HOST_TEST -Isrc \
   test/engine/test_ecu_sched.c \
-  src/engine/ecu_sched.c \
+  src/engine/ecu_sched.cpp \
   -o "${BUILD_DIR}/test_ecu_sched"
 echo "==> [test_ecu_sched] run"
 "${BUILD_DIR}/test_ecu_sched"
