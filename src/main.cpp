@@ -322,7 +322,7 @@ void loop() {
         const uint32_t dwell_ticks = (static_cast<uint32_t>(dwell_ms_x10) * ECU_FTM0_TICKS_PER_MS) / 100u;
         ::ecu_sched_set_dwell_ticks(dwell_ticks);
 
-        // Convert injector pulse width to FTM0 ticks at PS=128:
+        // Convert injector pulse width to FTM0 ticks at PS=8:
         // ticks = us * (ticks/ms) / 1000
         const uint32_t inj_pw_ticks = (base_pw_us * ECU_FTM0_TICKS_PER_MS) / 1000u;
         ::ecu_sched_set_inj_pw_ticks(inj_pw_ticks);

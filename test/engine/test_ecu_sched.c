@@ -98,11 +98,11 @@ static void test_init_ftm0_sc(void)
     test_reset();
     ECU_Hardware_Init();
 
-    /* SC must have CLKS=system, TOIE=1, PS=128 */
+    /* SC must have CLKS=system, TOIE=1, PS=8 */
     uint32_t sc = FTM0->SC;
     TEST_ASSERT_TRUE((sc & FTM_SC_CLKS_SYSTEM) != 0U);
     TEST_ASSERT_TRUE((sc & FTM_SC_TOIE_MASK)   != 0U);
-    TEST_ASSERT_TRUE((sc & 0x7U) == FTM_SC_PS_128);
+    TEST_ASSERT_TRUE((sc & 0x7U) == FTM_SC_PS_8);
 }
 
 static void test_init_ftm0_mod(void)
@@ -328,7 +328,7 @@ static void test_calc_sequential_cycle_event_count(void)
     ECU_Hardware_Init();
 
     /* Set a known ticks_per_rev to make timestamps deterministic */
-    ecu_sched_test_set_ticks_per_rev(56250U);  /* ~1000 RPM at 1.067 us/tick */
+    ecu_sched_test_set_ticks_per_rev(900000U);  /* ~1000 RPM at 66.7 ns/tick */
     ecu_sched_test_set_advance_deg(10U);
     ecu_sched_test_set_dwell_ticks(2813U);
 
@@ -345,7 +345,7 @@ static void test_calc_sequential_cycle_sorted(void)
 
     test_reset();
     ECU_Hardware_Init();
-    ecu_sched_test_set_ticks_per_rev(56250U);
+    ecu_sched_test_set_ticks_per_rev(900000U);
     ecu_sched_test_set_advance_deg(10U);
     ecu_sched_test_set_dwell_ticks(2813U);
 
@@ -366,7 +366,7 @@ static void test_calc_sequential_cycle_alternating_actions(void)
     uint8_t  i;
     test_reset();
     ECU_Hardware_Init();
-    ecu_sched_test_set_ticks_per_rev(56250U);
+    ecu_sched_test_set_ticks_per_rev(900000U);
     ecu_sched_test_set_advance_deg(10U);
     ecu_sched_test_set_dwell_ticks(2813U);
 

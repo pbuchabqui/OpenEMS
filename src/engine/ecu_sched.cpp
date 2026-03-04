@@ -8,7 +8,7 @@
  * low-RPM overflow issues, and orphaned ISR problems.
  *
  * Hardware Architecture:
- *   FTM0: 120 MHz / PS_128 = 937.5 kHz ~ 1.067 us/tick (1us resolution)
+ *   FTM0: 120 MHz / PS_8 = 15 MHz ~ 66.7 ns/tick
  *   32-bit timestamp: bits[31:16] = g_overflow_count, bits[15:0] = CnV
  *   PDB0: Triggered by FTM0_CH5 for MAP windowing at 120° ATDC
  *   ADC0: Hardware averaging 4 samples for MAP reading
@@ -125,10 +125,10 @@ volatile uint32_t g_late_event_count = 0U;
  * Module-private configuration (set by test helpers or calibration layer)
  * ========================================================================= */
 
-static volatile uint32_t g_ticks_per_rev  = 56250U; /* Default: 1000 RPM */
+static volatile uint32_t g_ticks_per_rev  = 900000U; /* Default: 1000 RPM @ PS=8 */
 static volatile uint32_t g_advance_deg    = 10U;    /* Spark advance, degrees BTDC */
-static volatile uint32_t g_dwell_ticks    = 2813U;  /* ~3 ms at 1.067 us/tick */
-static volatile uint32_t g_inj_pw_ticks   = 2808U;  /* ~3 ms at 0.9375 tick/us */
+static volatile uint32_t g_dwell_ticks    = 45000U; /* ~3 ms at 15 tick/us */
+static volatile uint32_t g_inj_pw_ticks   = 45000U; /* ~3 ms at 15 tick/us */
 static volatile uint32_t g_soi_lead_deg   = 62U;    /* SOI lead before TDC */
 
 /* ============================================================================
@@ -376,8 +376,8 @@ void ECU_Hardware_Init(void)
         FTM0->CONTROLS[ch].CnV  = 0U;
     }
 
-    /* 2f. Start FTM0: system clock, PS=128, TOIE=1 (overflow interrupt) */
-    FTM0->SC = (FTM_SC_CLKS_SYSTEM | FTM_SC_TOIE_MASK | FTM_SC_PS_128);
+    /* 2f. Start FTM0: system clock, PS=8, TOIE=1 (overflow interrupt) */
+    FTM0->SC = (FTM_SC_CLKS_SYSTEM | FTM_SC_TOIE_MASK | FTM_SC_PS_8);
 
     /* 3. PDB0 configuration */
     /* Trigger source = FTM0 output trigger (TRGSEL=0x8), CH0 for ADC0 */
@@ -732,10 +732,10 @@ void ecu_sched_test_reset(void)
     g_overflow_count   = 0U;
     g_late_event_count = 0U;
     g_queue_count      = 0U;
-    g_ticks_per_rev    = 56250U;
+    g_ticks_per_rev    = 900000U;
     g_advance_deg      = 10U;
-    g_dwell_ticks      = 2813U;
-    g_inj_pw_ticks     = 2808U;
+    g_dwell_ticks      = 45000U;
+    g_inj_pw_ticks     = 45000U;
     g_soi_lead_deg     = 62U;
     for (i = 0U; i < ECU_QUEUE_SIZE; ++i) {
         g_queue[i].timestamp32 = 0U;

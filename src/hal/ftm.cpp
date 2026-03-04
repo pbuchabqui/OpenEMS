@@ -233,7 +233,7 @@ namespace ems::hal {
 
 void ftm0_init(void) {
     // FTM0 initialization is now handled by ECU_Hardware_Init() in ecu_sched.c
-    // to ensure unified prescaler configuration (PS=128) and 32-bit timestamp extension.
+    // to ensure unified prescaler configuration (PS=8) and 32-bit timestamp extension.
     // This prevents conflicts between the C and C++ timing systems.
     // 
     // IMPORTANT: This function should only be called after ECU_Hardware_Init()

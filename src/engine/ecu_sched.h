@@ -6,7 +6,7 @@
  * e ignicao via FTM0 com extensao de 32 bits por contagem de overflow.
  *
  * Arquitetura:
- *   FTM0 @ 120 MHz / PS_128 = 937,5 kHz ~ 1,067 us/tick, free-running 16-bit.
+ *   FTM0 @ 120 MHz / PS_8 = 15 MHz ~ 66,7 ns/tick, free-running 16-bit.
  *   g_overflow_count estende o contador para 32 bits logicos:
  *     timestamp32 = (g_overflow_count << 16) | FTM0->CNT
  *
@@ -123,6 +123,7 @@ typedef struct {
 #define FTM_SC_TOF_MASK     (1UL << 7U)  /*!< Timer Overflow Flag (W0C)      */
 #define FTM_SC_TOIE_MASK    (1UL << 6U)  /*!< Timer Overflow Interrupt Enable */
 #define FTM_SC_CLKS_SYSTEM  (1UL << 3U)  /*!< Clock Source: system clock      */
+#define FTM_SC_PS_8         (3UL)        /*!< Prescaler 8                     */
 #define FTM_SC_PS_128       (7UL)        /*!< Prescaler 128                   */
 
 /* FTM_MODE bits */
@@ -198,14 +199,14 @@ typedef struct {
 /*!< System clock frequency in Hz */
 #define ECU_SYSTEM_CLOCK_HZ    120000000U
 
-/*!< FTM0 prescaler (128) */
-#define ECU_FTM0_PRESCALER     128U
+/*!< FTM0 prescaler (8) */
+#define ECU_FTM0_PRESCALER     8U
 
 /*!< FTM3 prescaler (2) */
 #define ECU_FTM3_PRESCALER     2U
 
-/*!< FTM0 ticks per millisecond: 120MHz / 128 / 1000 = 937.5 */
-#define ECU_FTM0_TICKS_PER_MS  937U
+/*!< FTM0 ticks per millisecond: 120MHz / 8 / 1000 = 15000 */
+#define ECU_FTM0_TICKS_PER_MS  15000U
 
 /*!< FTM3 tick period in nanoseconds: 2 / 120MHz * 1e9 = 16.667 */
 #define ECU_FTM3_TICK_NS       17U
@@ -229,7 +230,7 @@ extern volatile uint32_t g_late_event_count;
  *
  * Performs in order:
  *   1. Clock gating: FTM0, PDB0, ADC0 via SIM_SCGC6.
- *   2. FTM0: write-protect disable, free-running, MOD=0xFFFF, PS=128,
+ *   2. FTM0: write-protect disable, free-running, MOD=0xFFFF, PS=8,
  *      TOIE=1 (overflow IRQ for 32-bit extension).
  *      CH0-CH3: Output Compare Set-on-match (injectors).
  *      CH4-CH7: Output Compare Clear-on-match (ignition coils).
