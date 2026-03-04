@@ -189,6 +189,37 @@ bool sched_event(Channel ch, uint16_t ftm0_ticks, Action act) noexcept {
     return true;
 }
 
+void sched_isr() noexcept {
+    enter_critical();
+
+    if (q_size == 0u) {
+        exit_critical();
+        return;
+    }
+
+    const uint16_t now = ems::hal::ftm0_count();
+    bool executed = false;
+
+    while (q_size > 0u) {
+        const Event ev = queue_read(0u);
+        if (!ev.valid || ev.ftm0_ticks != now) {
+            break;
+        }
+
+        execute_gpio(ev.channel, ev.action);
+        ems::hal::ftm0_clear_chf(to_ch(ev.channel));
+        queue[0u].valid = false;
+        compact_and_sort();
+        executed = true;
+    }
+
+    if (executed) {
+        program_next_compare();
+    }
+
+    exit_critical();
+}
+
 void sched_cancel(Channel ch) noexcept {
     enter_critical();
 

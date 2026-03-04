@@ -22,6 +22,7 @@ enum class Action : uint8_t { SET, CLEAR };
 
 // Retorna false se fila cheia ou evento já passou.
 bool sched_event(Channel ch, uint16_t ftm0_ticks, Action act) noexcept;
+void sched_isr() noexcept;
 void sched_cancel(Channel ch) noexcept;
 void sched_cancel_all() noexcept;
 void sched_recalc(const CkpSnapshot& snap) noexcept;
