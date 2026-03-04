@@ -77,6 +77,11 @@ struct CylPending {
 };
 
 static volatile CylPending g_pending[kNCyl];
+static volatile uint32_t g_last_pw_ticks = 1000u;
+static volatile uint16_t g_last_dead_ticks = 100u;
+static volatile uint16_t g_last_soi_lead_x10 = 100u;
+static volatile int16_t g_last_advance_x10 = 100;
+static volatile uint16_t g_last_dwell_x10 = 1000u;
 
 // Mapeamento cyl_idx (0..3) → canal de injeção
 static constexpr ems::drv::Channel kInjCh[kNCyl] = {
@@ -142,6 +147,12 @@ void cycle_sched_update(uint32_t pw_ticks,
                         uint16_t soi_lead_x10,
                         int16_t  advance_x10,
                         uint16_t dwell_x10) noexcept {
+    g_last_pw_ticks = pw_ticks;
+    g_last_dead_ticks = dead_ticks;
+    g_last_soi_lead_x10 = soi_lead_x10;
+    g_last_advance_x10 = advance_x10;
+    g_last_dwell_x10 = dwell_x10;
+
     for (uint8_t slot = 0u; slot < kNCyl; ++slot) {
         const uint8_t  cyl_idx  = static_cast<uint8_t>(firing_order[slot] - 1u);
         const uint16_t tdc_x10  = static_cast<uint16_t>(cylinder_offset_deg[cyl_idx] * 10u);
@@ -351,6 +362,8 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept {
 // Angular Execution Loop - Forced Update Support
 // ============================================================================
 
+namespace ems::engine {
+
 /**
  * @brief Force immediate update of scheduling parameters for all cylinders.
  * 
@@ -360,25 +373,12 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept {
  * and ensures timing accuracy.
  */
 void cycle_sched_force_update() noexcept {
-    // Use the latest calculated parameters from the 2ms strategy loop
-    // These are stored em global variables by the main loop
-    extern volatile uint32_t g_ticks_per_rev;
-    extern volatile uint32_t g_advance_deg;
-    extern volatile uint32_t g_dwell_ticks;
-    
-    // Calculate PW and dead-time from current strategy results
-    // For now, use default values - these should be calculated in the 2ms loop
-    static constexpr uint32_t kDefaultPwTicks = 1000u;  // Default pulse width
-    static constexpr uint16_t kDefaultDeadTicks = 100u; // Default dead time
-    
-    // Update scheduling with latest parameters
-    ems::engine::cycle_sched_update(
-        kDefaultPwTicks,
-        kDefaultDeadTicks,
-        100u,  // Default SOI lead (10 degrees)
-        static_cast<int16_t>(g_advance_deg),
-        static_cast<uint16_t>(g_dwell_ticks)
-    );
+    cycle_sched_update(
+        g_last_pw_ticks,
+        g_last_dead_ticks,
+        g_last_soi_lead_x10,
+        g_last_advance_x10,
+        g_last_dwell_x10);
 }
 
 // Nova função para compensação de aceleração angular
@@ -418,6 +418,7 @@ void cycle_sched_update_with_calculated(uint32_t pw_ticks,
                                         uint16_t soi_lead_x10,
                                         int16_t  advance_x10,
                                         uint16_t dwell_x10) noexcept {
-    // Use the existing cycle_sched_update function from ems::engine namespace
-    ems::engine::cycle_sched_update(pw_ticks, dead_ticks, soi_lead_x10, advance_x10, dwell_x10);
+    cycle_sched_update(pw_ticks, dead_ticks, soi_lead_x10, advance_x10, dwell_x10);
 }
+
+}  // namespace ems::engine

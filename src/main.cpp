@@ -108,12 +108,6 @@ static bool g_limp_active = false;
 static constexpr uint16_t kDefaultReqFuelUs = 8000u;  // 8 ms a VE=100%, MAP=MAP_ref
 static constexpr uint16_t kMapRefKpa        = 100u;   // MAP de referência (100 kPa ≈ atmosfera)
 
-// Global variables from ecu_sched.cpp for unified timing system
-extern volatile uint32_t g_overflow_count;
-extern volatile uint32_t g_ticks_per_rev;
-extern volatile uint32_t g_advance_deg;
-extern volatile uint32_t g_dwell_ticks;
-
 // =============================================================================
 // Utilitários de infraestrutura — sem lógica de domínio
 // =============================================================================
@@ -193,7 +187,7 @@ void setup() {
     ems::hal::ftm2_pwm_init(150u);
 
     // 2a) Initialize unified scheduling system (FTM0, PDB, ADC)
-    ems::engine::ECU_Hardware_Init();
+    ::ECU_Hardware_Init();
 
     // 3) ADC + PDB  (PDB embutido em adc_init)
     ems::hal::adc_init();
@@ -311,17 +305,21 @@ void loop() {
             // ticks_per_rev = (clock / prescaler) * 60s / rpm
             // = (ECU_SYSTEM_CLOCK_HZ / ECU_FTM0_PRESCALER) * 60 * 10 / rpm_x10
             // = (ECU_SYSTEM_CLOCK_HZ * 600) / (ECU_FTM0_PRESCALER * rpm_x10)
-            g_ticks_per_rev = static_cast<uint32_t>(
+            ::ecu_sched_set_ticks_per_rev(static_cast<uint32_t>(
                 (static_cast<uint64_t>(ECU_SYSTEM_CLOCK_HZ) * 60U * 10U) 
                 / (static_cast<uint64_t>(ECU_FTM0_PRESCALER) * ckp.rpm_x10)
-            );
+            ));
         }
-        
-        g_advance_deg = static_cast<uint32_t>(g_last_advance_deg);
+
+        const uint32_t advance_deg = (g_last_advance_deg > 0)
+            ? static_cast<uint32_t>(g_last_advance_deg)
+            : 0u;
+        ::ecu_sched_set_advance_deg(advance_deg);
         
         // Convert dwell time from ms to ticks
         const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
-        g_dwell_ticks = (dwell_ms_x10 * ECU_FTM0_TICKS_PER_MS) / 100u;
+        const uint32_t dwell_ticks = (static_cast<uint32_t>(dwell_ms_x10) * ECU_FTM0_TICKS_PER_MS) / 100u;
+        ::ecu_sched_set_dwell_ticks(dwell_ticks);
 
         // Atualiza métricas de tempo real
         ems::app::ts_update_rt_metrics(
@@ -331,10 +329,10 @@ void loop() {
 
         // Use unified scheduling system with 32-bit timestamps
         // Calculate current timestamp for scheduling
-        const uint32_t current_timestamp = (g_overflow_count << 16) | ems::hal::ftm0_count();
+        const uint32_t current_timestamp = (::g_overflow_count << 16) | ems::hal::ftm0_count();
         
         // Schedule the complete 720° cycle using unified system
-        ems::engine::Calculate_Sequential_Cycle(current_timestamp);
+        ::Calculate_Sequential_Cycle(current_timestamp);
     }
 
     // ── 10 ms: IACV PID, VVT PID, Boost PID ──────────────────────────────────

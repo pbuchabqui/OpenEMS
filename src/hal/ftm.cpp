@@ -22,6 +22,8 @@
  */
 
 #include "hal/ftm.h"
+#include "drv/ckp.h"
+#include "engine/cycle_sched.h"
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Registradores MK64F — acesso direto, sem abstração Arduino
@@ -168,13 +170,6 @@ static constexpr uint32_t kFtmBusClockHz    =  60'000'000u;
 namespace ems::drv {
   void ckp_ftm3_ch0_isr() noexcept;   // evento CKP rising edge
   void ckp_ftm3_ch1_isr() noexcept;   // evento CMP/fase rising edge
-  struct CkpSnapshot;                 // forward declaration for ckp_snapshot
-  CkpSnapshot ckp_snapshot() noexcept; // forward declaration
-}
-
-// Forward declaration for gap detection function
-namespace ems::engine {
-  void cycle_sched_force_update() noexcept;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -481,7 +476,8 @@ extern "C" void FTM3_IRQHandler(void) {
             // Gap detection for 60-2 wheel
             // Gap occurs when tooth_index == 0 (missing tooth position)
             // Force schedule update to compensate for acceleration
-            if (ems::drv::ckp_snapshot().tooth_index == 0) {
+            if (ems::engine::cycle_sched_should_update_on_gap() &&
+                ems::drv::ckp_snapshot().tooth_index == 0) {
                 // Gap detected - force angular execution loop update
                 ems::engine::cycle_sched_force_update();
             }

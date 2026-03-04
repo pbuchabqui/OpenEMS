@@ -463,6 +463,21 @@ void Calculate_Sequential_Cycle(uint32_t current_timestamp)
     }
 }
 
+void ecu_sched_set_ticks_per_rev(uint32_t tpr)
+{
+    g_ticks_per_rev = tpr;
+}
+
+void ecu_sched_set_advance_deg(uint32_t adv)
+{
+    g_advance_deg = adv;
+}
+
+void ecu_sched_set_dwell_ticks(uint32_t dwell)
+{
+    g_dwell_ticks = dwell;
+}
+
 /* ============================================================================
  * Test-only API
  * ========================================================================= */
@@ -506,17 +521,17 @@ uint8_t ecu_sched_test_get_event(uint8_t index, uint32_t *ts,
 
 void ecu_sched_test_set_ticks_per_rev(uint32_t tpr)
 {
-    g_ticks_per_rev = tpr;
+    ecu_sched_set_ticks_per_rev(tpr);
 }
 
 void ecu_sched_test_set_advance_deg(uint32_t adv)
 {
-    g_advance_deg = adv;
+    ecu_sched_set_advance_deg(adv);
 }
 
 void ecu_sched_test_set_dwell_ticks(uint32_t dwell)
 {
-    g_dwell_ticks = dwell;
+    ecu_sched_set_dwell_ticks(dwell);
 }
 
 #endif /* EMS_HOST_TEST */

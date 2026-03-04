@@ -275,6 +275,21 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action);
  */
 void Calculate_Sequential_Cycle(uint32_t current_timestamp);
 
+/**
+ * @brief Set ticks-per-revolution used by Calculate_Sequential_Cycle().
+ */
+void ecu_sched_set_ticks_per_rev(uint32_t tpr);
+
+/**
+ * @brief Set spark advance angle in degrees BTDC.
+ */
+void ecu_sched_set_advance_deg(uint32_t adv);
+
+/**
+ * @brief Set dwell duration in FTM0 ticks.
+ */
+void ecu_sched_set_dwell_ticks(uint32_t dwell);
+
 /* ============================================================================
  * FTM0 interrupt handler (defined in ecu_sched.c, replaces C++ handler)
  * ========================================================================= */
