@@ -25,6 +25,14 @@
 #include "drv/ckp.h"
 #include "drv/scheduler.h"
 
+namespace ems::engine {
+#if defined(__GNUC__)
+void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept __attribute__((weak));
+#else
+void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept;
+#endif
+}
+
 namespace {
 
 static constexpr uint8_t kNCyl = 4u;
@@ -234,7 +242,14 @@ bool cycle_sched_test_ign_clr_trigger(uint8_t slot, uint8_t& tooth, bool& phase)
 namespace ems::drv {
 
 void schedule_on_tooth(const CkpSnapshot& snap) noexcept {
-    if (!g_enabled || snap.state != SyncState::FULL_SYNC) {
+    if (!g_enabled) {
+        if (ems::engine::ecu_sched_on_tooth_hook != nullptr) {
+            ems::engine::ecu_sched_on_tooth_hook(snap);
+        }
+        return;
+    }
+
+    if (snap.state != SyncState::FULL_SYNC) {
         return;
     }
 

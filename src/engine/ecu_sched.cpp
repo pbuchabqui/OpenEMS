@@ -23,6 +23,7 @@
  */
 
 #include "engine/ecu_sched.h"
+#include "drv/ckp.h"
 
 #include <stdint.h>
 #include <stddef.h>
@@ -672,6 +673,52 @@ void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg)
 {
     g_soi_lead_deg = soi_lead_deg;
 }
+
+namespace ems::engine {
+
+void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
+{
+    static uint8_t  s_prev_full_sync = 0U;
+    static uint8_t  s_prev_valid = 0U;
+    static uint16_t s_prev_tooth = 0U;
+    static uint8_t  s_schedule_this_gap = 1U;
+
+    if (snap.state != ems::drv::SyncState::FULL_SYNC) {
+        s_prev_full_sync = 0U;
+        s_prev_valid = 0U;
+        s_prev_tooth = 0U;
+        s_schedule_this_gap = 1U;
+        return;
+    }
+
+    s_prev_full_sync = 1U;
+
+    /* Detect boundary once per revolution when tooth index wraps to zero. */
+    uint8_t rev_boundary = 0U;
+    if (s_prev_valid == 0U) {
+        rev_boundary = (snap.tooth_index == 0U) ? 1U : 0U;
+        s_prev_valid = 1U;
+    } else if ((snap.tooth_index == 0U) && (s_prev_tooth != 0U)) {
+        rev_boundary = 1U;
+    }
+    s_prev_tooth = snap.tooth_index;
+
+    if (rev_boundary == 0U) {
+        return;
+    }
+
+    if (s_schedule_this_gap == 0U) {
+        s_schedule_this_gap = 1U;
+        return;
+    }
+    s_schedule_this_gap = 0U;
+
+    const uint32_t current_timestamp =
+        (::g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
+    ::Calculate_Sequential_Cycle(current_timestamp);
+}
+
+}  // namespace ems::engine
 
 /* ============================================================================
  * Test-only API

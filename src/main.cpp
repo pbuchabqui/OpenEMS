@@ -334,12 +334,8 @@ void loop() {
             g_last_advance_deg,
             static_cast<int8_t>(ems::engine::fuel_get_stft_pct_x10() / 10));
 
-        // Use unified scheduling system with 32-bit timestamps
-        // Calculate current timestamp for scheduling
-        const uint32_t current_timestamp = (::g_overflow_count << 16) | ems::hal::ftm0_count();
-        
-        // Schedule the complete 720° cycle using unified system
-        ::Calculate_Sequential_Cycle(current_timestamp);
+        // The ecu_sched queue is filled on CKP tooth hook (schedule_on_tooth),
+        // aligned to sync boundaries to avoid duplicate cycle insertion.
     }
 
     // ── 10 ms: IACV PID, VVT PID, Boost PID ──────────────────────────────────
