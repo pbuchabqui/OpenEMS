@@ -8,7 +8,7 @@
 #define ASSERT_VALID_RPM_X10(rpm) assert((rpm) >= 0 && (rpm) <= 20000)  // 0-2000 RPM ×10
 #define ASSERT_VALID_MAP_KPA(map) assert((map) >= 10 && (map) <= 250)   // 10-250 kPa
 #define ASSERT_VALID_TEMP_X10(temp) assert((temp) >= -400 && (temp) <= 1500)  // -40°C to +150°C ×10
-#define ASSERT_VALID_VE(ve) assert((ve) >= 50 && (ve) <= 250)  // VE 50-250%
+#define ASSERT_VALID_VE(ve) assert((ve) <= 255)  // VE 0-255%
 #define ASSERT_VALID_VOLTAGE_MV(v) assert((v) >= 6000 && (v) <= 18000)  // 6-18V
 #else
 #define ASSERT_VALID_RPM_X10(rpm) ((void)0)
@@ -214,33 +214,31 @@ uint32_t calc_base_pw_us(uint16_t req_fuel_us,
                          uint8_t ve,
                          uint16_t map_kpa,
                          uint16_t map_ref_kpa) noexcept {
+    if (map_ref_kpa == 0u || ve == 0u) {
+        return 0u;
+    }
+
     // CRITICAL FIX: Validate input parameters
     ASSERT_VALID_MAP_KPA(map_kpa);
     ASSERT_VALID_MAP_KPA(map_ref_kpa);
     ASSERT_VALID_VE(ve);
     assert(req_fuel_us > 0 && req_fuel_us <= 50000);  // 0-50ms reasonable range
-    
-    if (map_ref_kpa == 0u || ve == 0u) {
-        return 0u;
+
+    // Base pulse width:
+    // PW = REQ_FUEL * (VE / 100) * (MAP / MAP_REF)
+    const uint64_t num = static_cast<uint64_t>(req_fuel_us) *
+                         static_cast<uint64_t>(ve) *
+                         static_cast<uint64_t>(map_kpa);
+    const uint32_t den = 100u * static_cast<uint32_t>(map_ref_kpa);
+    uint32_t temp = static_cast<uint32_t>(num / den);
+
+    if (temp > 100000u) {
+        temp = 100000u;
     }
 
-    // Otimização: Converte para Q8 arithmetic para evitar divisões lentas
-    // PW = (REQ_FUEL * VE * MAP) >> 16 (para Q8)
-    // Onde 100 é convertido para 25600 em Q8 (100 << 8)
-    
-    const uint32_t req_q8 = static_cast<uint32_t>(req_fuel_us) << 8;
-    const uint32_t ve_q8 = static_cast<uint32_t>(ve) << 8;
-    const uint32_t map_q8 = static_cast<uint32_t>(map_kpa) << 8;
-    
-    // Q8 multiplication: (a * b) >> 8
-    uint32_t temp = (req_q8 * ve_q8) >> 8;     // REQ_FUEL * VE em Q8
-    temp = (temp * map_q8) >> 8;               // * MAP em Q8
-    temp = (temp * 25600) >> 8;                // / 100 (25600 = 100 << 8)
-    temp = (temp >> 8) / map_ref_kpa;          // / MAP_REF (shift + div)
-    
     // CRITICAL FIX: Validate result
     assert(temp <= 100000);  // Max 100ms pulse width
-    
+
     return temp;
 }
 
@@ -341,11 +339,9 @@ void check_transient_2ms(uint16_t tps_current, uint16_t tps_previous) noexcept {
 
 // Async injection scheduling
 void schedule_async_injection_immediate(int16_t tpsdot_x10) noexcept {
-    // Usa CLT global do sistema (assumindo que está disponível)
-    extern int16_t g_clt_x10;
-    
     // Calcula pulso baseado na taxa de TPS
-    const uint8_t bucket = clt_bucket(g_clt_x10);
+    static constexpr int16_t kNominalCltX10 = 900;
+    const uint8_t bucket = clt_bucket(kNominalCltX10);
     int32_t pulse_us = tpsdot_x10 * static_cast<int32_t>(kAeSens[bucket]);
     
     // Esta função será implementada no scheduler principal
