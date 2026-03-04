@@ -237,6 +237,31 @@ void test_overflow_events_still_late() {
     TEST_ASSERT_EQ_U32(1U, g_overflow_count);
 }
 
+void test_chf_rearm_forces_next_if_now_past() {
+    test_reset();
+    ECU_Hardware_Init();
+
+    g_overflow_count = 2U;
+    FTM0->CNT = 0x2000U;
+
+    // Two events same channel and epoch; both are initially future.
+    Add_Event(0x00022500UL, ECU_CH_IGN1, ECU_ACT_DWELL_START);
+    Add_Event(0x00022600UL, ECU_CH_IGN1, ECU_ACT_SPARK);
+    TEST_ASSERT_EQ_U8(2U, ecu_sched_test_queue_size());
+
+    // Simulate time advancing beyond second timestamp before CHF cleanup.
+    FTM0->CNT = 0x2700U;
+    uint32_t late_before = g_late_event_count;
+
+    // First event fired -> CHF set for channel.
+    FTM0->CONTROLS[ECU_CH_IGN1].CnSC |= FTM_CnSC_CHF_MASK;
+    FTM0_IRQHandler();
+
+    // Next event is now past and must be forced/removed immediately.
+    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
+    TEST_ASSERT_EQ_U32(late_before + 1U, g_late_event_count);
+}
+
 // =============================================================================
 // Test: Input Parameter Validation
 // =============================================================================
@@ -338,6 +363,7 @@ int main() {
     test_overflow_handling_atomic();
     test_overflow_multiple_events_same_epoch();
     test_overflow_events_still_late();
+    test_chf_rearm_forces_next_if_now_past();
     
     // Input validation tests
     test_add_event_invalid_channel();

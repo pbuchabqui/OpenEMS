@@ -222,6 +222,20 @@ static void test_add_event_not_late_same_epoch(void)
     TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
 }
 
+static void test_add_event_late_same_epoch_low16_past(void)
+{
+    test_reset();
+    ECU_Hardware_Init();
+    g_overflow_count = 3U;
+    FTM0->CNT = 0x4000U;
+
+    /* Same epoch, but target tick already passed (0x3FFF < CNT=0x4000). */
+    Add_Event(0x00033FFFUL, ECU_CH_IGN1, ECU_ACT_SPARK);
+
+    TEST_ASSERT_EQ_U32(1U, g_late_event_count);
+    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
+}
+
 /* ============================================================================
  * Test: FTM0_IRQHandler increments g_overflow_count on TOF
  * ========================================================================= */
@@ -413,6 +427,7 @@ int main(void)
     test_add_event_sorted();
     test_add_event_late();
     test_add_event_not_late_same_epoch();
+    test_add_event_late_same_epoch_low16_past();
 
     /* FTM0_IRQHandler tests */
     test_isr_tof_increments_overflow();

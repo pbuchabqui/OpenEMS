@@ -224,14 +224,77 @@ static void recompute_next_per_channel(void)
     }
 }
 
+static uint32_t current_timestamp32(void)
+{
+    return (g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
+}
+
+static uint8_t is_timestamp_late(uint32_t timestamp32)
+{
+    return (timestamp32 < current_timestamp32()) ? 1U : 0U;
+}
+
+static uint8_t remove_event_for_channel_ts(uint8_t ch, uint32_t ts)
+{
+    uint8_t i;
+    for (i = 0U; i < g_queue_count; ++i) {
+        if ((g_queue[i].valid != 0U) &&
+            (g_queue[i].channel == ch) &&
+            (g_queue[i].timestamp32 == ts)) {
+            queue_remove(i);
+            return 1U;
+        }
+    }
+    return 0U;
+}
+
+static void process_channel_ready_event(uint8_t ch)
+{
+    for (;;) {
+        uint8_t removed;
+        uint32_t ts;
+        uint8_t act;
+
+        if ((ch >= ECU_CHANNELS) || (g_next_valid[ch] == 0U)) {
+            return;
+        }
+
+        ts = g_next_ts[ch];
+        act = g_next_action[ch];
+        if ((ts >> 16U) != g_overflow_count) {
+            return;
+        }
+
+        if (is_timestamp_late(ts) != 0U) {
+            removed = remove_event_for_channel_ts(ch, ts);
+            if (removed == 0U) {
+                uint8_t i;
+                for (i = 0U; i < g_queue_count; ++i) {
+                    if ((g_queue[i].valid != 0U) && (g_queue[i].channel == ch)) {
+                        queue_remove(i);
+                        removed = 1U;
+                        break;
+                    }
+                }
+            }
+            if (removed != 0U) {
+                force_output(ch, act);
+                ++g_late_event_count;
+            }
+            recompute_next_per_channel();
+            continue;
+        }
+
+        arm_channel(ch, ts, act);
+        return;
+    }
+}
+
 static void arm_due_channels(void)
 {
     uint8_t ch;
     for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
-        if ((g_next_valid[ch] != 0U) &&
-            ((g_next_ts[ch] >> 16U) == g_overflow_count)) {
-            arm_channel(ch, g_next_ts[ch], g_next_action[ch]);
-        }
+        process_channel_ready_event(ch);
     }
 }
 
@@ -308,8 +371,8 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
     /* Compute overflow epoch of this event */
     ev_hi = (timestamp32 >> 16U);
 
-    /* Late event: already past */
-    if (ev_hi < g_overflow_count) {
+    /* Late event: already past. */
+    if ((ev_hi < g_overflow_count) || (is_timestamp_late(timestamp32) != 0U)) {
         /* CRITICAL FIX: Remove any existing events for this channel before forcing */
         for (i = 0U; i < g_queue_count; ++i) {
             if (g_queue[i].channel == channel) {
@@ -399,8 +462,7 @@ void FTM0_IRQHandler(void)
         /* Remove events that are still late after overflow advancement. */
         for (i = g_queue_count; i > 0U; --i) {
             uint8_t idx = i - 1U;
-            uint32_t ev_hi = (g_queue[idx].timestamp32 >> 16U);
-            if (ev_hi < g_overflow_count) {
+            if (is_timestamp_late(g_queue[idx].timestamp32) != 0U) {
                 /* Still late even after increment — force and count */
                 force_output(g_queue[idx].channel, g_queue[idx].action);
                 ++g_late_event_count;
@@ -423,16 +485,7 @@ void FTM0_IRQHandler(void)
             /* Remove the armed event for this channel (fallback: first by channel). */
             uint8_t removed = 0U;
             if ((ch < ECU_CHANNELS) && (g_next_valid[ch] != 0U)) {
-                uint32_t armed_ts = g_next_ts[ch];
-                for (i = 0U; i < g_queue_count; ++i) {
-                    if ((g_queue[i].valid != 0U) &&
-                        (g_queue[i].channel == ch) &&
-                        (g_queue[i].timestamp32 == armed_ts)) {
-                        queue_remove(i);
-                        removed = 1U;
-                        break;
-                    }
-                }
+                removed = remove_event_for_channel_ts(ch, g_next_ts[ch]);
             }
 
             if (removed == 0U) {
@@ -446,11 +499,7 @@ void FTM0_IRQHandler(void)
             }
 
             recompute_next_per_channel();
-            if ((ch < ECU_CHANNELS) &&
-                (g_next_valid[ch] != 0U) &&
-                ((g_next_ts[ch] >> 16U) == g_overflow_count)) {
-                arm_channel(ch, g_next_ts[ch], g_next_action[ch]);
-            }
+            process_channel_ready_event(ch);
         }
     }
 }
