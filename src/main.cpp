@@ -107,6 +107,7 @@ static bool g_limp_active = false;
 // Parâmetros de referência para cálculo de PW (a ser configurável via NVM)
 static constexpr uint16_t kDefaultReqFuelUs = 8000u;  // 8 ms a VE=100%, MAP=MAP_ref
 static constexpr uint16_t kMapRefKpa        = 100u;   // MAP de referência (100 kPa ≈ atmosfera)
+static constexpr uint32_t kDefaultSoiLeadDeg = 62u;   // SOI lead before TDC
 
 // =============================================================================
 // Utilitários de infraestrutura — sem lógica de domínio
@@ -320,6 +321,12 @@ void loop() {
         const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
         const uint32_t dwell_ticks = (static_cast<uint32_t>(dwell_ms_x10) * ECU_FTM0_TICKS_PER_MS) / 100u;
         ::ecu_sched_set_dwell_ticks(dwell_ticks);
+
+        // Convert injector pulse width to FTM0 ticks at PS=128:
+        // ticks = us * (ticks/ms) / 1000
+        const uint32_t inj_pw_ticks = (base_pw_us * ECU_FTM0_TICKS_PER_MS) / 1000u;
+        ::ecu_sched_set_inj_pw_ticks(inj_pw_ticks);
+        ::ecu_sched_set_soi_lead_deg(kDefaultSoiLeadDeg);
 
         // Atualiza métricas de tempo real
         ems::app::ts_update_rt_metrics(

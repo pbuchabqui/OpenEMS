@@ -258,11 +258,13 @@ void ECU_Hardware_Init(void);
 void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action);
 
 /**
- * @brief Schedule one complete 720-degree ignition cycle.
+ * @brief Schedule one complete 720-degree cycle (ignition + injection).
  *
  * Uses firing order 1-3-4-2. For each cylinder, adds:
  *   - ECU_ACT_DWELL_START at (TDC - advance - dwell_ticks)
  *   - ECU_ACT_SPARK        at (TDC - advance)
+ *   - ECU_ACT_INJ_ON       at (TDC - soi_lead_deg)
+ *   - ECU_ACT_INJ_OFF      at (INJ_ON + inj_pw_ticks)
  *
  * TDC compression angles (720-degree cycle):
  *   Cyl 1 = 0 deg, Cyl 3 = 180 deg, Cyl 4 = 360 deg, Cyl 2 = 540 deg.
@@ -289,6 +291,16 @@ void ecu_sched_set_advance_deg(uint32_t adv);
  * @brief Set dwell duration in FTM0 ticks.
  */
 void ecu_sched_set_dwell_ticks(uint32_t dwell);
+
+/**
+ * @brief Set injector pulse width duration in FTM0 ticks.
+ */
+void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
+
+/**
+ * @brief Set SOI lead angle in degrees before TDC.
+ */
+void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg);
 
 /* ============================================================================
  * FTM0 interrupt handler (defined in ecu_sched.c, replaces C++ handler)
@@ -319,6 +331,12 @@ void ecu_sched_test_set_advance_deg(uint32_t adv);
 
 /** Set the dwell duration (ticks) used by Calculate_Sequential_Cycle. */
 void ecu_sched_test_set_dwell_ticks(uint32_t dwell);
+
+/** Set injector pulse width (ticks) used by Calculate_Sequential_Cycle. */
+void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks);
+
+/** Set SOI lead (degrees) used by Calculate_Sequential_Cycle. */
+void ecu_sched_test_set_soi_lead_deg(uint32_t soi_lead_deg);
 #endif /* EMS_HOST_TEST */
 
 #ifdef __cplusplus

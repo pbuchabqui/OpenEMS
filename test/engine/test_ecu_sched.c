@@ -319,7 +319,7 @@ static void test_isr_removes_event_on_chf(void)
 }
 
 /* ============================================================================
- * Test: Calculate_Sequential_Cycle adds 8 events (2 per cylinder x 4)
+ * Test: Calculate_Sequential_Cycle adds 16 events (4 per cylinder x 4)
  * ========================================================================= */
 
 static void test_calc_sequential_cycle_event_count(void)
@@ -334,8 +334,8 @@ static void test_calc_sequential_cycle_event_count(void)
 
     Calculate_Sequential_Cycle(0U);
 
-    /* 4 cylinders x 2 events (DWELL_START + SPARK) = 8 */
-    TEST_ASSERT_EQ_U8(8U, ecu_sched_test_queue_size());
+    /* 4 cylinders x 4 events (DWELL_START + SPARK + INJ_ON + INJ_OFF) = 16 */
+    TEST_ASSERT_EQ_U8(16U, ecu_sched_test_queue_size());
 }
 
 static void test_calc_sequential_cycle_sorted(void)
@@ -376,15 +376,21 @@ static void test_calc_sequential_cycle_alternating_actions(void)
     /* Check that SPARK events all use ECU_ACT_SPARK action code */
     uint8_t spark_count = 0U;
     uint8_t dwell_count = 0U;
+    uint8_t inj_on_count = 0U;
+    uint8_t inj_off_count = 0U;
     for (i = 0U; i < ecu_sched_test_queue_size(); ++i) {
         uint32_t ts;
         uint8_t  ch, act;
         ecu_sched_test_get_event(i, &ts, &ch, &act);
         if (act == ECU_ACT_SPARK)        { ++spark_count; }
         if (act == ECU_ACT_DWELL_START)  { ++dwell_count; }
+        if (act == ECU_ACT_INJ_ON)       { ++inj_on_count; }
+        if (act == ECU_ACT_INJ_OFF)      { ++inj_off_count; }
     }
     TEST_ASSERT_EQ_U8(4U, spark_count);
     TEST_ASSERT_EQ_U8(4U, dwell_count);
+    TEST_ASSERT_EQ_U8(4U, inj_on_count);
+    TEST_ASSERT_EQ_U8(4U, inj_off_count);
 }
 
 /* ============================================================================

@@ -127,6 +127,8 @@ volatile uint32_t g_late_event_count = 0U;
 static volatile uint32_t g_ticks_per_rev  = 56250U; /* Default: 1000 RPM */
 static volatile uint32_t g_advance_deg    = 10U;    /* Spark advance, degrees BTDC */
 static volatile uint32_t g_dwell_ticks    = 2813U;  /* ~3 ms at 1.067 us/tick */
+static volatile uint32_t g_inj_pw_ticks   = 2808U;  /* ~3 ms at 0.9375 tick/us */
+static volatile uint32_t g_soi_lead_deg   = 62U;    /* SOI lead before TDC */
 
 /* ============================================================================
  * Internal helpers
@@ -575,16 +577,23 @@ void Calculate_Sequential_Cycle(uint32_t current_timestamp)
     static const uint8_t  k_ign_ch[ECU_NUM_CYL]  = {
         ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4
     };
+    /* Injection channel per cylinder (0-indexed cyl -> INJ channel) */
+    static const uint8_t  k_inj_ch[ECU_NUM_CYL]  = {
+        ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4
+    };
 
     uint32_t seq;
     uint32_t ticks_per_rev  = g_ticks_per_rev;
     uint32_t advance_deg    = g_advance_deg;
     uint32_t dwell_ticks    = g_dwell_ticks;
+    uint32_t inj_pw_ticks   = g_inj_pw_ticks;
+    uint32_t soi_lead_deg   = g_soi_lead_deg;
 
     for (seq = 0U; seq < ECU_NUM_CYL; ++seq) {
         uint8_t  cyl_idx    = k_fire_order[seq];
         uint32_t tdc_deg    = k_tdc_deg[seq];
         uint8_t  ign_ch     = k_ign_ch[cyl_idx];
+        uint8_t  inj_ch     = k_inj_ch[cyl_idx];
 
         /* Degrees from current position to TDC of this cylinder minus advance */
         uint32_t spark_deg;
@@ -593,6 +602,10 @@ void Calculate_Sequential_Cycle(uint32_t current_timestamp)
         uint32_t dwell_start_ticks;
         uint32_t ts_spark;
         uint32_t ts_dwell;
+        uint32_t soi_deg;
+        uint32_t soi_ticks;
+        uint32_t ts_inj_on;
+        uint32_t ts_inj_off;
 
         /* spark angle offset from "now" (0 reference) */
         if (tdc_deg >= advance_deg) {
@@ -613,11 +626,25 @@ void Calculate_Sequential_Cycle(uint32_t current_timestamp)
         ts_spark = current_timestamp + spark_ticks;
         ts_dwell = current_timestamp + dwell_start_ticks;
 
+        if (tdc_deg >= soi_lead_deg) {
+            soi_deg = tdc_deg - soi_lead_deg;
+        } else {
+            soi_deg = (ECU_CYCLE_DEG + tdc_deg) - soi_lead_deg;
+        }
+        soi_ticks = (soi_deg * ticks_per_rev) / ECU_CYCLE_DEG;
+        ts_inj_on = current_timestamp + soi_ticks;
+        ts_inj_off = ts_inj_on + inj_pw_ticks;
+
         /* Schedule dwell start (coil energise) */
         Add_Event(ts_dwell, ign_ch, ECU_ACT_DWELL_START);
 
         /* Schedule spark (coil cut) */
         Add_Event(ts_spark, ign_ch, ECU_ACT_SPARK);
+
+        if (inj_pw_ticks > 0U) {
+            Add_Event(ts_inj_on, inj_ch, ECU_ACT_INJ_ON);
+            Add_Event(ts_inj_off, inj_ch, ECU_ACT_INJ_OFF);
+        }
     }
 }
 
@@ -636,6 +663,16 @@ void ecu_sched_set_dwell_ticks(uint32_t dwell)
     g_dwell_ticks = dwell;
 }
 
+void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks)
+{
+    g_inj_pw_ticks = pw_ticks;
+}
+
+void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg)
+{
+    g_soi_lead_deg = soi_lead_deg;
+}
+
 /* ============================================================================
  * Test-only API
  * ========================================================================= */
@@ -651,6 +688,8 @@ void ecu_sched_test_reset(void)
     g_ticks_per_rev    = 56250U;
     g_advance_deg      = 10U;
     g_dwell_ticks      = 2813U;
+    g_inj_pw_ticks     = 2808U;
+    g_soi_lead_deg     = 62U;
     for (i = 0U; i < ECU_QUEUE_SIZE; ++i) {
         g_queue[i].timestamp32 = 0U;
         g_queue[i].channel     = 0U;
@@ -696,6 +735,16 @@ void ecu_sched_test_set_advance_deg(uint32_t adv)
 void ecu_sched_test_set_dwell_ticks(uint32_t dwell)
 {
     ecu_sched_set_dwell_ticks(dwell);
+}
+
+void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks)
+{
+    ecu_sched_set_inj_pw_ticks(pw_ticks);
+}
+
+void ecu_sched_test_set_soi_lead_deg(uint32_t soi_lead_deg)
+{
+    ecu_sched_set_soi_lead_deg(soi_lead_deg);
 }
 
 #endif /* EMS_HOST_TEST */
