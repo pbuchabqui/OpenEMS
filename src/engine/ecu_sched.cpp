@@ -34,11 +34,13 @@
 #define ASSERT_VALID_ACTION(act) assert((act) <= ECU_ACT_SPARK)
 #define ASSERT_VALID_TIMESTAMP(ts) assert((ts) != 0)
 #define ASSERT_VALID_QUEUE_COUNT(count) assert((count) <= ECU_QUEUE_SIZE)
+#define ASSERT_INVARIANTS() assert_invariants()
 #else
 #define ASSERT_VALID_CHANNEL(ch) ((void)0)
 #define ASSERT_VALID_ACTION(act) ((void)0)
 #define ASSERT_VALID_TIMESTAMP(ts) ((void)0)
 #define ASSERT_VALID_QUEUE_COUNT(count) ((void)0)
+#define ASSERT_INVARIANTS() ((void)0)
 #endif
 
 /* ============================================================================
@@ -224,6 +226,42 @@ static void recompute_next_per_channel(void)
     }
 }
 
+#ifndef NDEBUG
+static void assert_invariants(void)
+{
+    uint8_t ch;
+    uint8_t i;
+
+    ASSERT_VALID_QUEUE_COUNT(g_queue_count);
+    for (i = 1U; i < g_queue_count; ++i) {
+        assert(g_queue[i - 1U].timestamp32 <= g_queue[i].timestamp32);
+    }
+
+    for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
+        uint8_t found = 0U;
+        uint32_t min_ts = 0U;
+        uint8_t min_act = 0U;
+        for (i = 0U; i < g_queue_count; ++i) {
+            if ((g_queue[i].valid != 0U) && (g_queue[i].channel == ch)) {
+                if ((found == 0U) || (g_queue[i].timestamp32 < min_ts)) {
+                    found = 1U;
+                    min_ts = g_queue[i].timestamp32;
+                    min_act = g_queue[i].action;
+                }
+            }
+        }
+
+        if (found == 0U) {
+            assert(g_next_valid[ch] == 0U);
+        } else {
+            assert(g_next_valid[ch] != 0U);
+            assert(g_next_ts[ch] == min_ts);
+            assert(g_next_action[ch] == min_act);
+        }
+    }
+}
+#endif
+
 static uint32_t current_timestamp32(void)
 {
     return (g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
@@ -256,12 +294,14 @@ static void process_channel_ready_event(uint8_t ch)
         uint8_t act;
 
         if ((ch >= ECU_CHANNELS) || (g_next_valid[ch] == 0U)) {
+            ASSERT_INVARIANTS();
             return;
         }
 
         ts = g_next_ts[ch];
         act = g_next_action[ch];
         if ((ts >> 16U) != g_overflow_count) {
+            ASSERT_INVARIANTS();
             return;
         }
 
@@ -286,6 +326,7 @@ static void process_channel_ready_event(uint8_t ch)
         }
 
         arm_channel(ch, ts, act);
+        ASSERT_INVARIANTS();
         return;
     }
 }
@@ -383,6 +424,7 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
         recompute_next_per_channel();
         force_output(channel, action);
         ++g_late_event_count;
+        ASSERT_INVARIANTS();
         return;
     }
 
@@ -398,6 +440,7 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
         recompute_next_per_channel();
         force_output(channel, action);
         ++g_late_event_count;
+        ASSERT_INVARIANTS();
         return;
     }
 
@@ -434,6 +477,7 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
         (ev_hi == g_overflow_count)) {
         arm_channel(channel, timestamp32, action);
     }
+    ASSERT_INVARIANTS();
 }
 
 /* ============================================================================
@@ -502,6 +546,7 @@ void FTM0_IRQHandler(void)
             process_channel_ready_event(ch);
         }
     }
+    ASSERT_INVARIANTS();
 }
 
 /* ============================================================================
@@ -618,6 +663,7 @@ void ecu_sched_test_reset(void)
         g_next_ts[i] = 0U;
         g_next_action[i] = 0U;
     }
+    ASSERT_INVARIANTS();
 }
 
 uint8_t ecu_sched_test_queue_size(void)
