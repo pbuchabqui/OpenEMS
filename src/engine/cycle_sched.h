@@ -12,9 +12,9 @@ void cycle_sched_init() noexcept;
 void cycle_sched_enable(bool en) noexcept;
 
 // Atualiza os parâmetros pré-calculados para todos os cilindros.
-// Chamado pelo loop de background a cada 5 ms com os valores mais recentes.
+// Chamado pelo loop de background periódico com os valores mais recentes.
 //
-// pw_ticks     : largura de pulso de injeção em ticks FTM0 (60 ticks/µs)
+// pw_ticks     : largura de pulso de injeção em ticks FTM0
 // dead_ticks   : dead-time do injetor em ticks FTM0
 // soi_lead_x10 : avanço do SOI em relação ao TDC compressão (graus × 10)
 // advance_x10  : avanço total de ignição (graus × 10, positivo = avanço BTDC)

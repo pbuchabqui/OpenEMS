@@ -6,11 +6,15 @@
 // o atraso de até 5 ms entre o recálculo e o disparo real dos eventos.
 //
 // ARQUITETURA (duplo buffer):
-//   Loop background (5 ms):
+//   Loop background:
 //     Calcula PW e ângulos para todos os cilindros → escreve em g_pending[cyl]
 //
 //   ISR CKP (a cada dente, via schedule_on_tooth):
 //     Lê g_pending[cyl] → chama sched_event(INJ, SOI_ticks, SET/CLEAR)
+//
+// Runtime atual:
+//   Em firmware alvo, o backend ativo é o ecu_sched unificado.
+//   O caminho legacy via drv/scheduler é mantido somente para testes host.
 //
 // LIMITAÇÃO CONHECIDA — EOI e ignição:
 //   O FTM0 opera a 60 MHz com contador de 16 bits (overflow ~1,09 ms).
@@ -252,6 +256,13 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept {
     if (snap.state != SyncState::FULL_SYNC) {
         return;
     }
+
+#if !defined(EMS_HOST_TEST)
+    if (ems::engine::ecu_sched_on_tooth_hook != nullptr) {
+        ems::engine::ecu_sched_on_tooth_hook(snap);
+    }
+    return;
+#endif
 
     // Ângulo absoluto do dente atual em graus × 10 (domínio 0-7199)
     const uint16_t curr_x10 = static_cast<uint16_t>(

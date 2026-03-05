@@ -19,7 +19,6 @@ int main() { return 0; }
 #include "app/can_stack.h"
 #include "app/tuner_studio.h"
 #include "drv/ckp.h"
-#include "drv/scheduler.h"
 #include "drv/sensors.h"
 #include "engine/auxiliaries.h"
 #include "engine/cycle_sched.h"
@@ -202,7 +201,6 @@ void setup() {
         ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes));
 
     // 6) Drivers de sistema
-    ems::drv::sched_cancel_all();   // limpa fila do scheduler (sched_init)
     ems::drv::sensors_init();
     // ckp_init: estado zero-inicializado; pino e NVIC configurados em ftm3_init()
 
