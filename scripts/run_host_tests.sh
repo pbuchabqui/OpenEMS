@@ -116,4 +116,18 @@ echo "==> [test_ecu_sched_fixes] run"
 "${BUILD_DIR}/test_ecu_sched_fixes"
 
 echo ""
+echo "==> [test_pipeline_backbone] build"
+g++ -std=c++17 -DEMS_HOST_TEST -Isrc \
+  test/engine/test_pipeline_backbone.cpp \
+  src/drv/ckp.cpp \
+  src/engine/cycle_sched.cpp \
+  src/engine/ecu_sched.cpp \
+  src/engine/fuel_calc.cpp \
+  src/engine/ign_calc.cpp \
+  src/engine/table3d.cpp \
+  -o "${BUILD_DIR}/test_pipeline_backbone"
+echo "==> [test_pipeline_backbone] run"
+"${BUILD_DIR}/test_pipeline_backbone"
+
+echo ""
 echo "All host tests passed."
