@@ -10,11 +10,7 @@
 //     Calcula PW e ângulos para todos os cilindros → escreve em g_pending[cyl]
 //
 //   ISR CKP (a cada dente, via schedule_on_tooth):
-//     Lê g_pending[cyl] → chama sched_event(INJ, SOI_ticks, SET/CLEAR)
-//
-// Runtime atual:
-//   Em firmware alvo, o backend ativo é o ecu_sched unificado.
-//   O caminho legacy via drv/scheduler é mantido somente para testes host.
+//     Encaminha para o backend unificado ecu_sched.
 //
 // LIMITAÇÃO CONHECIDA — EOI e ignição:
 //   O FTM0 opera a 60 MHz com contador de 16 bits (overflow ~1,09 ms).
@@ -27,7 +23,6 @@
 #include "engine/cycle_sched.h"
 #include "engine/ign_calc.h"
 #include "drv/ckp.h"
-#include "drv/scheduler.h"
 
 namespace ems::engine {
 #if defined(__GNUC__)
@@ -42,7 +37,7 @@ namespace {
 static constexpr uint8_t kNCyl = 4u;
 
 // Dentes de lead do trigger antes do SOI
-// (tempo necessário para a ISR e sched_event processar o evento)
+// (tempo necessário para a ISR processar o evento)
 static constexpr uint8_t kInjLeadTeeth = 4u;
 
 // SOI N dentes antes do TDC compressão
@@ -94,22 +89,6 @@ static volatile uint16_t g_last_dead_ticks = 100u;
 static volatile uint16_t g_last_soi_lead_x10 = 100u;
 static volatile int16_t g_last_advance_x10 = 100;
 static volatile uint16_t g_last_dwell_x10 = 1000u;
-
-// Mapeamento cyl_idx (0..3) → canal de injeção
-static constexpr ems::drv::Channel kInjCh[kNCyl] = {
-    ems::drv::Channel::INJ1,  // cyl_idx 0 (cilindro 1)
-    ems::drv::Channel::INJ2,  // cyl_idx 1 (cilindro 2)
-    ems::drv::Channel::INJ3,  // cyl_idx 2 (cilindro 3)
-    ems::drv::Channel::INJ4,  // cyl_idx 3 (cilindro 4)
-};
-
-// Mapeamento cyl_idx (0..3) → canal de ignição
-static constexpr ems::drv::Channel kIgnCh[kNCyl] = {
-    ems::drv::Channel::IGN1,  // cyl_idx 0 (cilindro 1)
-    ems::drv::Channel::IGN2,  // cyl_idx 1 (cilindro 2)
-    ems::drv::Channel::IGN3,  // cyl_idx 2 (cilindro 3)
-    ems::drv::Channel::IGN4,  // cyl_idx 3 (cilindro 4)
-};
 
 // Subtrai N dentes do ângulo absoluto no domínio de 720°.
 // 1 dente = 360/58 °. N dentes = N×360/58 °.
@@ -246,139 +225,8 @@ bool cycle_sched_test_ign_clr_trigger(uint8_t slot, uint8_t& tooth, bool& phase)
 namespace ems::drv {
 
 void schedule_on_tooth(const CkpSnapshot& snap) noexcept {
-    if (!g_enabled) {
-        if (ems::engine::ecu_sched_on_tooth_hook != nullptr) {
-            ems::engine::ecu_sched_on_tooth_hook(snap);
-        }
-        return;
-    }
-
-    if (snap.state != SyncState::FULL_SYNC) {
-        return;
-    }
-
-#if !defined(EMS_HOST_TEST)
     if (ems::engine::ecu_sched_on_tooth_hook != nullptr) {
         ems::engine::ecu_sched_on_tooth_hook(snap);
-    }
-    return;
-#endif
-
-    // Ângulo absoluto do dente atual em graus × 10 (domínio 0-7199)
-    const uint16_t curr_x10 = static_cast<uint16_t>(
-        (static_cast<uint32_t>(snap.tooth_index) * 3600u) / 58u +
-        (snap.phase_A ? 3600u : 0u));
-
-    for (uint8_t slot = 0u; slot < kNCyl; ++slot) {
-        if (snap.tooth_index != g_inj_trigger[slot].tooth ||
-            snap.phase_A     != g_inj_trigger[slot].phase) {
-            continue;
-        }
-
-        const uint8_t cyl_idx = static_cast<uint8_t>(
-            ems::engine::firing_order[slot] - 1u);
-
-        if (!g_pending[cyl_idx].valid) {
-            continue;
-        }
-
-        // Snapshot dos parâmetros (leitura de voláteis individuais — sem lock,
-        // safe porque background invalida g_pending.valid antes de reescrever)
-        const uint32_t pw_ticks   = g_pending[cyl_idx].pw_ticks;
-        const uint16_t dead_ticks = g_pending[cyl_idx].dead_ticks;
-        const uint16_t soi_x10   = g_pending[cyl_idx].soi_abs_x10;
-
-        // Delta em graus × 10 do dente atual até o SOI
-        // Esperado: kInjLeadTeeth × (3600/58) ≈ kInjLeadTeeth × 62 unidades
-        const uint16_t delta_x10 = static_cast<uint16_t>(
-            (soi_x10 + 7200u - curr_x10) % 7200u);
-
-        // Converte para miligraus para ckp_angle_to_ticks()
-        // Máximo esperado: 4 dentes × 6207 miligraus = 24828 < 65535 (cabe em uint16)
-        const uint32_t delta_mg_u32 = static_cast<uint32_t>(delta_x10) * 100u;
-        const uint16_t delta_mg     = (delta_mg_u32 > 65535u)
-            ? 65535u
-            : static_cast<uint16_t>(delta_mg_u32);
-
-        const uint16_t soi_ticks =
-            ems::drv::ckp_angle_to_ticks(delta_mg, snap.last_ftm3_capture);
-
-        // Agenda abertura do injetor no SOI
-        static_cast<void>(
-            ems::drv::sched_event(kInjCh[cyl_idx], soi_ticks, Action::SET));
-
-        // Agenda fechamento do injetor no EOI (SOI + pw + dead-time).
-        // uint16_t wrapping é intencional — o comparador FTM0 dispara no valor
-        // correto desde que pw_ticks × 16,67 ns < 1,09 ms (65535 ticks).
-        // Para pw > 1 ms, o FTM0 dispara prematuramente; ver comentário no topo.
-        const uint16_t eoi_ticks = static_cast<uint16_t>(
-            soi_ticks + static_cast<uint16_t>(pw_ticks + dead_ticks));
-        static_cast<void>(
-            ems::drv::sched_event(kInjCh[cyl_idx], eoi_ticks, Action::CLEAR));
-    }
-
-    // ── Ignição: SET (início de dwell) ────────────────────────────────────────
-    // Disparado kIgnLeadTeeth dentes antes do início de dwell.
-    for (uint8_t slot = 0u; slot < kNCyl; ++slot) {
-        if (snap.tooth_index != g_ign_set_trigger[slot].tooth ||
-            snap.phase_A     != g_ign_set_trigger[slot].phase) {
-            continue;
-        }
-
-        const uint8_t cyl_idx = static_cast<uint8_t>(
-            ems::engine::firing_order[slot] - 1u);
-
-        if (!g_pending[cyl_idx].valid) {
-            continue;
-        }
-
-        const uint16_t dwell_x10 = g_pending[cyl_idx].dwell_abs_x10;
-
-        // Delta em graus×10 do dente actual até o início do dwell
-        const uint16_t delta_x10 = static_cast<uint16_t>(
-            (dwell_x10 + 7200u - curr_x10) % 7200u);
-        const uint32_t delta_mg_u32 = static_cast<uint32_t>(delta_x10) * 100u;
-        const uint16_t delta_mg = (delta_mg_u32 > 65535u)
-            ? 65535u
-            : static_cast<uint16_t>(delta_mg_u32);
-
-        const uint16_t dwell_ticks =
-            ems::drv::ckp_angle_to_ticks(delta_mg, snap.last_ftm3_capture);
-
-        static_cast<void>(
-            ems::drv::sched_event(kIgnCh[cyl_idx], dwell_ticks, Action::SET));
-    }
-
-    // ── Ignição: CLEAR (faísca) ───────────────────────────────────────────────
-    // Disparado kIgnLeadTeeth dentes antes do ângulo de faísca (advance BTDC).
-    for (uint8_t slot = 0u; slot < kNCyl; ++slot) {
-        if (snap.tooth_index != g_ign_clr_trigger[slot].tooth ||
-            snap.phase_A     != g_ign_clr_trigger[slot].phase) {
-            continue;
-        }
-
-        const uint8_t cyl_idx = static_cast<uint8_t>(
-            ems::engine::firing_order[slot] - 1u);
-
-        if (!g_pending[cyl_idx].valid) {
-            continue;
-        }
-
-        const uint16_t spark_x10 = g_pending[cyl_idx].spark_abs_x10;
-
-        // Delta em graus×10 do dente actual até a faísca
-        const uint16_t delta_x10 = static_cast<uint16_t>(
-            (spark_x10 + 7200u - curr_x10) % 7200u);
-        const uint32_t delta_mg_u32 = static_cast<uint32_t>(delta_x10) * 100u;
-        const uint16_t delta_mg = (delta_mg_u32 > 65535u)
-            ? 65535u
-            : static_cast<uint16_t>(delta_mg_u32);
-
-        const uint16_t spark_ticks =
-            ems::drv::ckp_angle_to_ticks(delta_mg, snap.last_ftm3_capture);
-
-        static_cast<void>(
-            ems::drv::sched_event(kIgnCh[cyl_idx], spark_ticks, Action::CLEAR));
     }
 }
 

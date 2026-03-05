@@ -27,10 +27,6 @@ run_test test_ckp \
   test/drv/test_ckp.cpp \
   src/drv/ckp.cpp
 
-run_test test_scheduler \
-  test/drv/test_scheduler.cpp \
-  src/drv/scheduler.cpp
-
 run_test test_sensors \
   test/drv/test_sensors.cpp \
   src/drv/sensors.cpp \
@@ -98,16 +94,6 @@ run_test test_can \
 run_test test_flexnvm \
   test/hal/test_flexnvm.cpp \
   src/hal/flexnvm.cpp
-
-run_test test_cycle_sched \
-  test/engine/test_cycle_sched.cpp \
-  src/engine/cycle_sched.cpp \
-  src/engine/ign_calc.cpp \
-  src/engine/table3d.cpp \
-  src/drv/ckp.cpp \
-  src/drv/scheduler.cpp \
-  src/drv/sensors.cpp \
-  src/hal/adc.cpp
 
 # test_ecu_sched: compiled as C++ (was MISRA-C module)
 echo ""

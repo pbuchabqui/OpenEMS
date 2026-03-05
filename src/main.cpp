@@ -224,7 +224,7 @@ void setup() {
 
     pit_init();     // PIT0 (timestamp) + PIT1 (watchdog 100 ms)
 
-    // 10) Aguardar sincronismo CKP antes de habilitar sched_event()
+    // 10) Aguardar sincronismo CKP antes de habilitar o agendamento angular
     // Timeout de 5 s: se a roda fônica não girar (motor parado, sensor ausente),
     // continua em modo degradado sem injeção/ignição em vez de travar para sempre.
     {
