@@ -4,6 +4,7 @@
 
 #define EMS_HOST_TEST 1
 #include "hal/flexnvm.h"
+#include "hal/runtime_seed.h"
 
 namespace {
 
@@ -167,6 +168,57 @@ void test_knock_timeout_when_ccif_busy() {
     TEST_ASSERT_TRUE(!ems::hal::nvm_write_knock(1u, 1u, static_cast<int8_t>(-20)));
 }
 
+void test_runtime_seed_save_load_roundtrip() {
+    test_reset();
+    ems::hal::RuntimeSyncSeed in{};
+    in.flags = static_cast<uint8_t>(
+        ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC |
+        ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A);
+    in.tooth_index = 37u;
+
+    TEST_ASSERT_TRUE(ems::hal::nvm_save_runtime_seed(&in));
+
+    ems::hal::RuntimeSyncSeed out{};
+    TEST_ASSERT_TRUE(ems::hal::nvm_load_runtime_seed(&out));
+    TEST_ASSERT_EQ_I32(ems::hal::RUNTIME_SYNC_SEED_MAGIC, out.magic);
+    TEST_ASSERT_EQ_I32(ems::hal::RUNTIME_SYNC_SEED_VERSION, out.version);
+    TEST_ASSERT_TRUE((out.flags & ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC) != 0u);
+    TEST_ASSERT_TRUE((out.flags & ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A) != 0u);
+    TEST_ASSERT_EQ_I32(37, out.tooth_index);
+}
+
+void test_runtime_seed_latest_slot_wins() {
+    test_reset();
+    ems::hal::RuntimeSyncSeed s0{};
+    s0.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
+    s0.tooth_index = 10u;
+    TEST_ASSERT_TRUE(ems::hal::nvm_save_runtime_seed(&s0));
+
+    ems::hal::RuntimeSyncSeed s1{};
+    s1.flags = static_cast<uint8_t>(
+        ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC |
+        ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A);
+    s1.tooth_index = 42u;
+    TEST_ASSERT_TRUE(ems::hal::nvm_save_runtime_seed(&s1));
+
+    ems::hal::RuntimeSyncSeed out{};
+    TEST_ASSERT_TRUE(ems::hal::nvm_load_runtime_seed(&out));
+    TEST_ASSERT_EQ_I32(42, out.tooth_index);
+    TEST_ASSERT_TRUE((out.flags & ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A) != 0u);
+}
+
+void test_runtime_seed_clear() {
+    test_reset();
+    ems::hal::RuntimeSyncSeed s{};
+    s.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
+    s.tooth_index = 5u;
+    TEST_ASSERT_TRUE(ems::hal::nvm_save_runtime_seed(&s));
+    TEST_ASSERT_TRUE(ems::hal::nvm_clear_runtime_seed());
+
+    ems::hal::RuntimeSyncSeed out{};
+    TEST_ASSERT_TRUE(!ems::hal::nvm_load_runtime_seed(&out));
+}
+
 }  // namespace
 
 int main() {
@@ -182,6 +234,9 @@ int main() {
     test_knock_isolated_from_ltft();
     test_knock_reset_clears_map();
     test_knock_timeout_when_ccif_busy();
+    test_runtime_seed_save_load_roundtrip();
+    test_runtime_seed_latest_slot_wins();
+    test_runtime_seed_clear();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;

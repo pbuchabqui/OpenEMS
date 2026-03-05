@@ -57,6 +57,13 @@ void sync_with_two_gaps() {
     feed_ckp(1600u);
 }
 
+void sync_with_one_gap() {
+    for (int i = 0; i < 58; ++i) {
+        feed_ckp(1000u);
+    }
+    feed_ckp(1600u);
+}
+
 void test_sync_after_two_gaps() {
     test_reset();
     sync_with_two_gaps();
@@ -149,6 +156,15 @@ void test_tooth_period_nonzero_after_two_teeth() {
     TEST_ASSERT_TRUE(snap.tooth_period_ns > 0u);
 }
 
+void test_seeded_fast_reacquire_promotes_on_first_gap() {
+    test_reset();
+    ems::drv::ckp_seed_arm(true);
+    sync_with_one_gap();
+    const auto snap = ems::drv::ckp_snapshot();
+    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::FULL_SYNC);
+    TEST_ASSERT_TRUE(snap.phase_A == true);
+}
+
 }  // namespace
 
 int main() {
@@ -160,6 +176,7 @@ int main() {
     test_rpm_zero_before_sync();
     test_phase_a_toggles_on_ch1();
     test_tooth_period_nonzero_after_two_teeth();
+    test_seeded_fast_reacquire_promotes_on_first_gap();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;

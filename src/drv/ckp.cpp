@@ -159,6 +159,8 @@ static DecoderState g_state = {
     0u,
     0u,
 };
+static bool g_seed_armed = false;
+static bool g_seed_phase_a = false;
 
 // ── Utilitários inline ────────────────────────────────────────────────────────
 
@@ -242,7 +244,13 @@ inline bool process_gap_event(uint16_t capture_now) noexcept {
             // Em qualquer estado de "não sincronizado", o primeiro gap detectado
             // (sem exigência de contagem mínima) inicia a tentativa de sync.
             // A confirmação virá no 2º gap (estado HALF_SYNC).
-            g_state.snap.state          = ems::drv::SyncState::HALF_SYNC;
+            if (g_seed_armed) {
+                g_state.snap.state = ems::drv::SyncState::FULL_SYNC;
+                g_state.snap.phase_A = g_seed_phase_a;
+                g_seed_armed = false;
+            } else {
+                g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
+            }
             g_state.tooth_count         = 0u;
             g_state.snap.tooth_index    = 0u;
             g_state.snap.last_ftm3_capture = capture_now;
@@ -473,6 +481,11 @@ void ckp_ftm3_ch1_isr() noexcept {
     }
 }
 
+void ckp_seed_arm(bool phase_A) noexcept {
+    g_seed_armed = true;
+    g_seed_phase_a = phase_A;
+}
+
 // ── API de teste (host only) ──────────────────────────────────────────────────
 #if defined(EMS_HOST_TEST)
 void ckp_test_reset() noexcept {
@@ -487,6 +500,8 @@ void ckp_test_reset() noexcept {
     ems_test_ftm3_c0v   = 0u;
     ems_test_ftm3_c1v   = 0u;
     ems_test_gpiod_pdir = 0u;
+    g_seed_armed = false;
+    g_seed_phase_a = false;
 }
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {

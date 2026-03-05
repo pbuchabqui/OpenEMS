@@ -30,6 +30,7 @@ int main() { return 0; }
 #include "hal/adc.h"
 #include "hal/can.h"
 #include "hal/flexnvm.h"
+#include "hal/runtime_seed.h"
 #include "hal/ftm.h"
 #include "hal/uart.h"
 
@@ -103,6 +104,15 @@ static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;  // 3000 RPM
 static constexpr uint8_t  kFaultBitMap = (1u << 0u);   // SensorId::MAP
 static constexpr uint8_t  kFaultBitClt = (1u << 3u);   // SensorId::CLT
 static bool g_limp_active = false;
+static bool g_engine_was_running = false;
+static bool g_runtime_seed_saved_for_stop = false;
+static uint32_t g_prev_rpm_x10 = 0u;
+static uint32_t g_zero_rpm_since_ms = 0u;
+static bool g_have_last_full_sync = false;
+static ems::drv::CkpSnapshot g_last_full_sync_snapshot = {
+    0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
+};
+static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
 
 // Parâmetros de referência para cálculo de PW (a ser configurável via NVM)
 static constexpr uint16_t kDefaultReqFuelUs = 8000u;  // 8 ms a VE=100%, MAP=MAP_ref
@@ -200,6 +210,15 @@ void setup() {
     // 5) FlexNVM → carrega calibração page-0 em RAM
     static_cast<void>(
         ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes));
+    {
+        ems::hal::RuntimeSyncSeed seed = {};
+        if (ems::hal::nvm_load_runtime_seed(&seed) &&
+            ((seed.flags & ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC) != 0u)) {
+            const bool phase_a =
+                ((seed.flags & ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A) != 0u);
+            ems::drv::ckp_seed_arm(phase_a);
+        }
+    }
 
     // 6) Drivers de sistema
     ems::drv::sensors_init();
@@ -260,6 +279,21 @@ void loop() {
     const uint32_t              now     = millis();
     const ems::drv::CkpSnapshot ckp     = ems::drv::ckp_snapshot();
     const ems::drv::SensorData& sensors = ems::drv::sensors_get();
+
+    if (ckp.state == ems::drv::SyncState::FULL_SYNC) {
+        g_last_full_sync_snapshot = ckp;
+        g_have_last_full_sync = true;
+    }
+    if (ckp.rpm_x10 > 800u) {
+        g_engine_was_running = true;
+        g_runtime_seed_saved_for_stop = false;
+    }
+    if ((g_prev_rpm_x10 > 0u) && (ckp.rpm_x10 == 0u)) {
+        g_zero_rpm_since_ms = now;
+    } else if (ckp.rpm_x10 > 0u) {
+        g_zero_rpm_since_ms = now;
+    }
+    g_prev_rpm_x10 = ckp.rpm_x10;
 
     // ── 2 ms: Estratégia (Massa de Ar, VE, Tempo de Injeção/Ignição) ─────────
     if (elapsed(now, g_t2ms, 2u)) {
@@ -397,6 +431,24 @@ void loop() {
             ems::app::can_stack_wbo2_fresh(now),
             /*ae_active*/ false,
             /*rev_cut*/   g_limp_active));
+
+        if (!g_runtime_seed_saved_for_stop &&
+            g_engine_was_running &&
+            g_have_last_full_sync &&
+            (ckp.rpm_x10 == 0u) &&
+            elapsed(now, g_zero_rpm_since_ms, kRuntimeSeedSaveDelayMs)) {
+            ems::hal::RuntimeSyncSeed seed = {};
+            seed.flags = static_cast<uint8_t>(
+                ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC |
+                (g_last_full_sync_snapshot.phase_A
+                    ? ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A
+                    : 0u));
+            seed.tooth_index = g_last_full_sync_snapshot.tooth_index;
+            if (ems::hal::nvm_save_runtime_seed(&seed)) {
+                g_runtime_seed_saved_for_stop = true;
+                g_engine_was_running = false;
+            }
+        }
     }
 
     // ── 500 ms: flush calibração → FlexNVM se dirty + knock NVM ─────────────

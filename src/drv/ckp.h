@@ -93,6 +93,14 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept;
 void ckp_ftm3_ch0_isr() noexcept;   ///< CKP rising edge (FTM3 CH0 / PTD0)
 void ckp_ftm3_ch1_isr() noexcept;   ///< Cam sensor rising edge (FTM3 CH1 / PTD1)
 
+/**
+ * @brief Arm a persisted sync seed for fast reacquire on next valid gap.
+ *
+ * Safety note: this does not bypass gap validation; it only allows promotion
+ * WAIT_GAP/LOSS_OF_SYNC -> FULL_SYNC at the first accepted gap.
+ */
+void ckp_seed_arm(bool phase_A) noexcept;
+
 // ── API de teste (somente em build host) ──────────────────────────────────────
 #if defined(EMS_HOST_TEST)
 void     ckp_test_reset() noexcept;
