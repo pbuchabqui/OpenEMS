@@ -148,8 +148,12 @@ static uint32_t near_time_window_ticks(void)
 
     if (win < 1024U) {
         win = 1024U;
-    } else if (win > 60000U) {
-        win = 60000U;
+    } else if (win > 65535U) {
+        /*
+         * Never arm farther than one 16-bit timer cycle ahead. This preserves
+         * CnV semantics while avoiding artificial late events at low RPM.
+         */
+        win = 65535U;
     }
     return win;
 }
@@ -363,6 +367,33 @@ static void arm_due_channels(void)
     uint8_t ch;
     for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
         process_channel_ready_event(ch);
+    }
+}
+
+static void clear_all_events_and_drive_safe_outputs(void)
+{
+    uint8_t ch;
+    uint8_t i;
+
+    for (i = 0U; i < ECU_QUEUE_SIZE; ++i) {
+        g_queue[i].timestamp32 = 0U;
+        g_queue[i].channel     = 0U;
+        g_queue[i].action      = 0U;
+        g_queue[i].valid       = 0U;
+        g_queue[i]._pad        = 0U;
+    }
+    g_queue_count = 0U;
+
+    for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
+        g_next_valid[ch] = 0U;
+        g_next_ts[ch] = 0U;
+        g_next_action[ch] = 0U;
+    }
+
+    /* Safe state: injectors closed, coils de-energised. */
+    for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
+        uint8_t safe_action = (ch < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK;
+        force_output(ch, safe_action);
     }
 }
 
@@ -707,6 +738,9 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     static uint8_t  s_schedule_this_gap = 1U;
 
     if (snap.state != ems::drv::SyncState::FULL_SYNC) {
+        if (s_prev_full_sync != 0U) {
+            clear_all_events_and_drive_safe_outputs();
+        }
         s_prev_full_sync = 0U;
         s_prev_valid = 0U;
         s_prev_tooth = 0U;

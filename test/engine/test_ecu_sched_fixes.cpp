@@ -13,6 +13,11 @@
 #include <string.h>
 
 #include "engine/ecu_sched.h"
+#include "drv/ckp.h"
+
+namespace ems::engine {
+void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept;
+}
 
 /* Mock peripheral backing storage */
 FTM_Type g_mock_ftm0;
@@ -347,6 +352,30 @@ void test_queue_remove_index_bounds() {
     TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
 }
 
+void test_sync_loss_clears_queue_and_drives_safe_outputs() {
+    test_reset();
+    ECU_Hardware_Init();
+
+    g_overflow_count = 2U;
+    Add_Event(0x00021000UL, ECU_CH_INJ1, ECU_ACT_INJ_ON);
+    Add_Event(0x00021100UL, ECU_CH_IGN1, ECU_ACT_DWELL_START);
+    TEST_ASSERT_EQ_U8(2U, ecu_sched_test_queue_size());
+
+    ems::drv::CkpSnapshot full_sync{
+        1000u, 0u, 0u, 10000u, ems::drv::SyncState::FULL_SYNC, false
+    };
+    ems::engine::ecu_sched_on_tooth_hook(full_sync);
+
+    ems::drv::CkpSnapshot loss_sync{
+        1000u, 1u, 0u, 10000u, ems::drv::SyncState::LOSS_OF_SYNC, false
+    };
+    ems::engine::ecu_sched_on_tooth_hook(loss_sync);
+
+    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
+    TEST_ASSERT_EQ_U32(FTM_CnSC_OC_CLEAR, FTM0->CONTROLS[ECU_CH_INJ1].CnSC);
+    TEST_ASSERT_EQ_U32(FTM_CnSC_OC_CLEAR, FTM0->CONTROLS[ECU_CH_IGN1].CnSC);
+}
+
 // =============================================================================
 // Main Test Runner
 // =============================================================================
@@ -373,6 +402,7 @@ int main() {
     // Race condition prevention tests
     test_isr_queue_processing_backwards();
     test_queue_remove_index_bounds();
+    test_sync_loss_clears_queue_and_drives_safe_outputs();
     
     printf("ECU scheduler fixes tests completed: %d run, %d failed\n", 
            g_tests_run, g_tests_failed);
