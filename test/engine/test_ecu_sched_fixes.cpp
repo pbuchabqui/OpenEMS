@@ -80,6 +80,24 @@ static void test_reset(void) {
     ecu_sched_test_reset();
 }
 
+static uint8_t find_event(uint8_t ch, uint8_t act, uint32_t* ts_out) {
+    const uint8_t n = ecu_sched_test_queue_size();
+    for (uint8_t i = 0U; i < n; ++i) {
+        uint32_t ts = 0U;
+        uint8_t ech = 0U;
+        uint8_t eact = 0U;
+        if ((ecu_sched_test_get_event(i, &ts, &ech, &eact) != 0U) &&
+            (ech == ch) &&
+            (eact == act)) {
+            if (ts_out != nullptr) {
+                *ts_out = ts;
+            }
+            return 1U;
+        }
+    }
+    return 0U;
+}
+
 } // namespace
 
 // =============================================================================
@@ -505,6 +523,60 @@ void test_calibration_atomic_commit_updates_coherently() {
     TEST_ASSERT_EQ_U32(55U, ecu_sched_test_get_soi_lead_deg());
 }
 
+void test_tooth_accel_comp_retimes_far_events() {
+    test_reset();
+    ECU_Hardware_Init();
+
+    // Prepare a slow model and schedule one cycle.
+    ecu_sched_commit_calibration(400000U, 10U, 15000U, 20000U, 62U);
+    g_overflow_count = 2U;
+    FTM0->CNT = 2000U;
+    const uint32_t now = (g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
+    Calculate_Sequential_Cycle(now);
+
+    uint32_t spark_before = 0U;
+    TEST_ASSERT_TRUE(find_event(ECU_CH_IGN1, ECU_ACT_SPARK, &spark_before) != 0U);
+    TEST_ASSERT_TRUE(spark_before > now);
+
+    ems::drv::CkpSnapshot fast{
+        1000u, 5u, 0u, 45000u, ems::drv::SyncState::FULL_SYNC, false
+    };
+    ems::engine::ecu_sched_on_tooth_hook(fast);
+
+    uint32_t spark_after = 0U;
+    TEST_ASSERT_TRUE(find_event(ECU_CH_IGN1, ECU_ACT_SPARK, &spark_after) != 0U);
+    TEST_ASSERT_TRUE(spark_after < spark_before);
+}
+
+void test_tooth_accel_comp_preserves_near_time_events() {
+    test_reset();
+    ECU_Hardware_Init();
+
+    ecu_sched_commit_calibration(400000U, 10U, 15000U, 20000U, 62U);
+    g_overflow_count = 3U;
+    FTM0->CNT = 5000U;
+    const uint32_t now = (g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
+
+    const uint32_t near_win = (400000U / 58U) * 2U;
+    const uint32_t near_event_ts = now + (near_win / 2U);
+    const uint32_t far_event_ts = now + (near_win * 4U);
+
+    Add_Event(near_event_ts, ECU_CH_IGN1, ECU_ACT_SPARK);
+    Add_Event(far_event_ts, ECU_CH_IGN2, ECU_ACT_SPARK);
+
+    ems::drv::CkpSnapshot fast{
+        1000u, 7u, 0u, 45000u, ems::drv::SyncState::FULL_SYNC, false
+    };
+    ems::engine::ecu_sched_on_tooth_hook(fast);
+
+    uint32_t near_after = 0U;
+    uint32_t far_after = 0U;
+    TEST_ASSERT_TRUE(find_event(ECU_CH_IGN1, ECU_ACT_SPARK, &near_after) != 0U);
+    TEST_ASSERT_TRUE(find_event(ECU_CH_IGN2, ECU_ACT_SPARK, &far_after) != 0U);
+    TEST_ASSERT_EQ_U32(near_event_ts, near_after);
+    TEST_ASSERT_TRUE(far_after < far_event_ts);
+}
+
 // =============================================================================
 // Main Test Runner
 // =============================================================================
@@ -537,6 +609,8 @@ int main() {
     test_cycle_fill_drop_when_queue_lacks_capacity();
     test_calibration_setters_clamp_and_cross_sanity();
     test_calibration_atomic_commit_updates_coherently();
+    test_tooth_accel_comp_retimes_far_events();
+    test_tooth_accel_comp_preserves_near_time_events();
     
     printf("ECU scheduler fixes tests completed: %d run, %d failed\n", 
            g_tests_run, g_tests_failed);

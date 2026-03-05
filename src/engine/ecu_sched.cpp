@@ -138,6 +138,14 @@ static volatile uint32_t g_inj_pw_ticks   = 45000U; /* ~3 ms at 15 tick/us */
 static volatile uint32_t g_soi_lead_deg   = 62U;    /* SOI lead before TDC */
 static volatile uint8_t g_cycle_fill_active = 0U;
 static volatile uint8_t g_cycle_fill_peak = 0U;
+static volatile uint8_t g_hook_prev_full_sync = 0U;
+static volatile uint8_t g_hook_prev_valid = 0U;
+static volatile uint16_t g_hook_prev_tooth = 0U;
+static volatile uint8_t g_hook_schedule_this_gap = 1U;
+
+static uint32_t near_time_window_ticks(void);
+static uint32_t current_timestamp32(void);
+static void recompute_next_per_channel(void);
 
 static void enter_critical(void)
 {
@@ -195,6 +203,92 @@ static void sanitize_runtime_calibration(void)
     if (clamped != 0U) {
         ++g_calibration_clamp_count;
     }
+}
+
+static uint32_t ticks_per_rev_from_rpm_x10(uint32_t rpm_x10)
+{
+    if (rpm_x10 == 0U) {
+        return g_ticks_per_rev;
+    }
+    return static_cast<uint32_t>(
+        (static_cast<uint64_t>(ECU_SYSTEM_CLOCK_HZ) * 60ULL * 10ULL) /
+        (static_cast<uint64_t>(ECU_FTM0_PRESCALER) * rpm_x10));
+}
+
+static uint32_t clamp_tpr_step(uint32_t current_tpr, uint32_t target_tpr)
+{
+    /*
+     * Tooth-to-tooth slew limit to avoid phase noise and timestamp thrashing
+     * under noisy instantaneous RPM samples.
+     */
+    const uint32_t min_tpr = current_tpr - (current_tpr / 5U); /* -20% */
+    const uint32_t max_tpr = current_tpr + (current_tpr / 4U); /* +25% */
+    if (target_tpr < min_tpr) {
+        return min_tpr;
+    }
+    if (target_tpr > max_tpr) {
+        return max_tpr;
+    }
+    return target_tpr;
+}
+
+static void retime_far_events_from_tooth_rpm(uint32_t rpm_x10)
+{
+    uint32_t now;
+    uint32_t model_tpr;
+    uint32_t target_tpr;
+    uint32_t effective_tpr;
+    uint32_t near_win;
+    uint8_t i;
+
+    if (rpm_x10 == 0U) {
+        return;
+    }
+
+    now = current_timestamp32();
+    model_tpr = g_ticks_per_rev;
+    if (model_tpr == 0U) {
+        return;
+    }
+
+    target_tpr = ticks_per_rev_from_rpm_x10(rpm_x10);
+    effective_tpr = clamp_tpr_step(model_tpr, target_tpr);
+    near_win = near_time_window_ticks();
+
+    /*
+     * Apply compensation only for far-time events. Near-time events are left
+     * untouched to preserve edge determinism and minimize jitter.
+     */
+    for (i = 0U; i < g_queue_count; ++i) {
+        uint32_t ts;
+        uint32_t delta;
+        uint32_t new_delta;
+        uint32_t new_ts;
+
+        if (g_queue[i].valid == 0U) {
+            continue;
+        }
+
+        ts = g_queue[i].timestamp32;
+        if (ts <= now) {
+            continue;
+        }
+
+        delta = ts - now;
+        if (delta <= near_win) {
+            continue;
+        }
+
+        new_delta = static_cast<uint32_t>(
+            ((static_cast<uint64_t>(delta) * effective_tpr) + (model_tpr / 2U)) / model_tpr);
+        if (new_delta < near_win) {
+            new_delta = near_win;
+        }
+        new_ts = now + new_delta;
+        g_queue[i].timestamp32 = new_ts;
+    }
+
+    recompute_next_per_channel();
 }
 
 /* ============================================================================
@@ -866,46 +960,43 @@ namespace ems::engine {
 
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
-    static uint8_t  s_prev_full_sync = 0U;
-    static uint8_t  s_prev_valid = 0U;
-    static uint16_t s_prev_tooth = 0U;
-    static uint8_t  s_schedule_this_gap = 1U;
-
     if (snap.state != ems::drv::SyncState::FULL_SYNC) {
-        if (s_prev_full_sync != 0U) {
+        if (g_hook_prev_full_sync != 0U) {
             clear_all_events_and_drive_safe_outputs();
         }
-        s_prev_full_sync = 0U;
-        s_prev_valid = 0U;
-        s_prev_tooth = 0U;
-        s_schedule_this_gap = 1U;
+        g_hook_prev_full_sync = 0U;
+        g_hook_prev_valid = 0U;
+        g_hook_prev_tooth = 0U;
+        g_hook_schedule_this_gap = 1U;
         return;
     }
+
+    retime_far_events_from_tooth_rpm(snap.rpm_x10);
 
     /* Poll near-time queue on each valid CKP tooth for low-latency arming. */
     arm_due_channels();
 
-    s_prev_full_sync = 1U;
+    g_hook_prev_full_sync = 1U;
 
     /* Detect boundary once per revolution when tooth index wraps to zero. */
     uint8_t rev_boundary = 0U;
-    if (s_prev_valid == 0U) {
+    if (g_hook_prev_valid == 0U) {
         rev_boundary = (snap.tooth_index == 0U) ? 1U : 0U;
-        s_prev_valid = 1U;
-    } else if ((snap.tooth_index == 0U) && (s_prev_tooth != 0U)) {
+        g_hook_prev_valid = 1U;
+    } else if ((snap.tooth_index == 0U) && (g_hook_prev_tooth != 0U)) {
         rev_boundary = 1U;
     }
-    s_prev_tooth = snap.tooth_index;
+    g_hook_prev_tooth = snap.tooth_index;
 
     if (rev_boundary == 0U) {
         return;
     }
 
-    if (s_schedule_this_gap == 0U) {
-        s_schedule_this_gap = 1U;
+    if (g_hook_schedule_this_gap == 0U) {
+        g_hook_schedule_this_gap = 1U;
         return;
     }
-    s_schedule_this_gap = 0U;
+    g_hook_schedule_this_gap = 0U;
 
     const uint32_t current_timestamp =
         (::g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
@@ -934,6 +1025,10 @@ void ecu_sched_test_reset(void)
     g_calibration_clamp_count = 0U;
     g_cycle_fill_active = 0U;
     g_cycle_fill_peak = 0U;
+    g_hook_prev_full_sync = 0U;
+    g_hook_prev_valid = 0U;
+    g_hook_prev_tooth = 0U;
+    g_hook_schedule_this_gap = 1U;
     g_queue_count      = 0U;
     g_ticks_per_rev    = 900000U;
     g_advance_deg      = 10U;
