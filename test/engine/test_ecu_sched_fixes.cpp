@@ -463,6 +463,37 @@ void test_cycle_fill_drop_when_queue_lacks_capacity() {
     TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
 }
 
+void test_calibration_setters_clamp_and_cross_sanity() {
+    test_reset();
+    ECU_Hardware_Init();
+
+    const uint32_t clamps_before = ecu_sched_test_get_calibration_clamp_count();
+
+    // Out-of-range values must be clamped.
+    ecu_sched_test_set_ticks_per_rev(0U);
+    ecu_sched_test_set_dwell_ticks(0xFFFFFFFFU);
+    ecu_sched_test_set_inj_pw_ticks(0xFFFFFFFFU);
+    ecu_sched_test_set_soi_lead_deg(9999U);
+
+    TEST_ASSERT_TRUE(ecu_sched_test_get_ticks_per_rev() >= 50000U);
+    TEST_ASSERT_TRUE(ecu_sched_test_get_ticks_per_rev() <= 6000000U);
+    TEST_ASSERT_EQ_U32(719U, ecu_sched_test_get_soi_lead_deg());
+
+    // Cross-sanity: dwell/pw limited by current ticks_per_rev * 2.
+    const uint32_t tpr = ecu_sched_test_get_ticks_per_rev();
+    TEST_ASSERT_TRUE(ecu_sched_test_get_dwell_ticks() <= (tpr * 2U));
+    TEST_ASSERT_TRUE(ecu_sched_test_get_inj_pw_ticks() <= (tpr * 2U));
+
+    // Changing ticks_per_rev after large dwell/pw must re-clamp both.
+    ecu_sched_test_set_dwell_ticks(1000000U);
+    ecu_sched_test_set_inj_pw_ticks(1000000U);
+    ecu_sched_test_set_ticks_per_rev(100000U);  // max_span = 200000
+    TEST_ASSERT_TRUE(ecu_sched_test_get_dwell_ticks() <= 200000U);
+    TEST_ASSERT_TRUE(ecu_sched_test_get_inj_pw_ticks() <= 200000U);
+
+    TEST_ASSERT_TRUE(ecu_sched_test_get_calibration_clamp_count() > clamps_before);
+}
+
 // =============================================================================
 // Main Test Runner
 // =============================================================================
@@ -493,6 +524,7 @@ int main() {
     test_metrics_late_delay_and_queue_depth();
     test_stress_200_to_8500rpm_with_sync_noise();
     test_cycle_fill_drop_when_queue_lacks_capacity();
+    test_calibration_setters_clamp_and_cross_sanity();
     
     printf("ECU scheduler fixes tests completed: %d run, %d failed\n", 
            g_tests_run, g_tests_failed);

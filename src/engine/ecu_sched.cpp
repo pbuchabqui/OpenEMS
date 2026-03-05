@@ -125,6 +125,7 @@ volatile uint32_t g_late_delay_max_ticks = 0U;
 volatile uint8_t g_queue_depth_peak = 0U;
 volatile uint8_t g_queue_depth_last_cycle_peak = 0U;
 volatile uint32_t g_cycle_schedule_drop_count = 0U;
+volatile uint32_t g_calibration_clamp_count = 0U;
 
 /* ============================================================================
  * Module-private configuration (set by test helpers or calibration layer)
@@ -137,6 +138,50 @@ static volatile uint32_t g_inj_pw_ticks   = 45000U; /* ~3 ms at 15 tick/us */
 static volatile uint32_t g_soi_lead_deg   = 62U;    /* SOI lead before TDC */
 static volatile uint8_t g_cycle_fill_active = 0U;
 static volatile uint8_t g_cycle_fill_peak = 0U;
+
+static void sanitize_runtime_calibration(void)
+{
+    static const uint32_t kMinTicksPerRev = 50000U;
+    static const uint32_t kMaxTicksPerRev = 6000000U;
+    static const uint32_t kMinPulseTicks  = 1U;
+    uint32_t max_span_ticks;
+    uint8_t clamped = 0U;
+
+    if (g_ticks_per_rev < kMinTicksPerRev) {
+        g_ticks_per_rev = kMinTicksPerRev;
+        clamped = 1U;
+    } else if (g_ticks_per_rev > kMaxTicksPerRev) {
+        g_ticks_per_rev = kMaxTicksPerRev;
+        clamped = 1U;
+    }
+
+    max_span_ticks = g_ticks_per_rev * 2U; /* 720-degree span in scheduler domain */
+
+    if ((g_dwell_ticks > 0U) && (g_dwell_ticks < kMinPulseTicks)) {
+        g_dwell_ticks = kMinPulseTicks;
+        clamped = 1U;
+    } else if (g_dwell_ticks > max_span_ticks) {
+        g_dwell_ticks = max_span_ticks;
+        clamped = 1U;
+    }
+
+    if ((g_inj_pw_ticks > 0U) && (g_inj_pw_ticks < kMinPulseTicks)) {
+        g_inj_pw_ticks = kMinPulseTicks;
+        clamped = 1U;
+    } else if (g_inj_pw_ticks > max_span_ticks) {
+        g_inj_pw_ticks = max_span_ticks;
+        clamped = 1U;
+    }
+
+    if (g_soi_lead_deg >= ECU_CYCLE_DEG) {
+        g_soi_lead_deg = ECU_CYCLE_DEG - 1U;
+        clamped = 1U;
+    }
+
+    if (clamped != 0U) {
+        ++g_calibration_clamp_count;
+    }
+}
 
 /* ============================================================================
  * Internal helpers
@@ -760,6 +805,7 @@ void Calculate_Sequential_Cycle(uint32_t current_timestamp)
 void ecu_sched_set_ticks_per_rev(uint32_t tpr)
 {
     g_ticks_per_rev = tpr;
+    sanitize_runtime_calibration();
 }
 
 void ecu_sched_set_advance_deg(uint32_t adv)
@@ -770,16 +816,19 @@ void ecu_sched_set_advance_deg(uint32_t adv)
 void ecu_sched_set_dwell_ticks(uint32_t dwell)
 {
     g_dwell_ticks = dwell;
+    sanitize_runtime_calibration();
 }
 
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks)
 {
     g_inj_pw_ticks = pw_ticks;
+    sanitize_runtime_calibration();
 }
 
 void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg)
 {
     g_soi_lead_deg = soi_lead_deg;
+    sanitize_runtime_calibration();
 }
 
 namespace ems::engine {
@@ -851,6 +900,7 @@ void ecu_sched_test_reset(void)
     g_queue_depth_peak = 0U;
     g_queue_depth_last_cycle_peak = 0U;
     g_cycle_schedule_drop_count = 0U;
+    g_calibration_clamp_count = 0U;
     g_cycle_fill_active = 0U;
     g_cycle_fill_peak = 0U;
     g_queue_count      = 0U;
@@ -944,6 +994,31 @@ uint8_t ecu_sched_test_get_queue_depth_last_cycle_peak(void)
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void)
 {
     return g_cycle_schedule_drop_count;
+}
+
+uint32_t ecu_sched_test_get_ticks_per_rev(void)
+{
+    return g_ticks_per_rev;
+}
+
+uint32_t ecu_sched_test_get_dwell_ticks(void)
+{
+    return g_dwell_ticks;
+}
+
+uint32_t ecu_sched_test_get_inj_pw_ticks(void)
+{
+    return g_inj_pw_ticks;
+}
+
+uint32_t ecu_sched_test_get_soi_lead_deg(void)
+{
+    return g_soi_lead_deg;
+}
+
+uint32_t ecu_sched_test_get_calibration_clamp_count(void)
+{
+    return g_calibration_clamp_count;
 }
 
 #endif /* EMS_HOST_TEST */

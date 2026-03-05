@@ -248,6 +248,9 @@ extern volatile uint8_t g_queue_depth_last_cycle_peak;
 /*!< Number of cycle scheduling attempts dropped due to insufficient queue room. */
 extern volatile uint32_t g_cycle_schedule_drop_count;
 
+/*!< Number of calibration setter calls that required clamping/sanitization. */
+extern volatile uint32_t g_calibration_clamp_count;
+
 /* ============================================================================
  * Public API
  * ========================================================================= */
@@ -383,6 +386,21 @@ uint8_t ecu_sched_test_get_queue_depth_last_cycle_peak(void);
 
 /** Return number of dropped cycle scheduling attempts. */
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
+
+/** Return current sanitized ticks-per-rev calibration. */
+uint32_t ecu_sched_test_get_ticks_per_rev(void);
+
+/** Return current sanitized dwell ticks calibration. */
+uint32_t ecu_sched_test_get_dwell_ticks(void);
+
+/** Return current sanitized injection pulse-width ticks calibration. */
+uint32_t ecu_sched_test_get_inj_pw_ticks(void);
+
+/** Return current sanitized SOI lead calibration (degrees). */
+uint32_t ecu_sched_test_get_soi_lead_deg(void);
+
+/** Return number of calibration clamp events. */
+uint32_t ecu_sched_test_get_calibration_clamp_count(void);
 #endif /* EMS_HOST_TEST */
 
 #ifdef __cplusplus
