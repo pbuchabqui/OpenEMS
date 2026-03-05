@@ -138,6 +138,10 @@ static volatile uint32_t g_inj_pw_ticks   = 45000U; /* ~3 ms at 15 tick/us */
 static volatile uint32_t g_soi_lead_deg   = 62U;    /* SOI lead before TDC */
 static volatile uint8_t g_cycle_fill_active = 0U;
 static volatile uint8_t g_cycle_fill_peak = 0U;
+static volatile uint8_t g_presync_enable = 1U;
+static volatile uint8_t g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
+static volatile uint8_t g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
+static volatile uint8_t g_presync_bank_toggle = 0U;
 static volatile uint8_t g_hook_prev_full_sync = 0U;
 static volatile uint8_t g_hook_prev_valid = 0U;
 static volatile uint16_t g_hook_prev_tooth = 0U;
@@ -146,6 +150,8 @@ static volatile uint8_t g_hook_schedule_this_gap = 1U;
 static uint32_t near_time_window_ticks(void);
 static uint32_t current_timestamp32(void);
 static void recompute_next_per_channel(void);
+
+static void calculate_presync_revolution(uint32_t current_timestamp);
 
 static void enter_critical(void)
 {
@@ -197,6 +203,15 @@ static void sanitize_runtime_calibration(void)
 
     if (g_soi_lead_deg >= ECU_CYCLE_DEG) {
         g_soi_lead_deg = ECU_CYCLE_DEG - 1U;
+        clamped = 1U;
+    }
+
+    if (g_presync_inj_mode > ECU_PRESYNC_INJ_SEMI_SEQUENTIAL) {
+        g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
+        clamped = 1U;
+    }
+    if (g_presync_ign_mode > ECU_PRESYNC_IGN_WASTED_SPARK) {
+        g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
         clamped = 1U;
     }
 
@@ -800,6 +815,87 @@ void FTM0_IRQHandler(void)
 }
 
 /* ============================================================================
+ * Pre-sync 360-degree fallback scheduling (HALF_SYNC)
+ * ========================================================================= */
+
+static void calculate_presync_revolution(uint32_t current_timestamp)
+{
+    static const uint8_t k_ign_pair_a[2] = {ECU_CH_IGN1, ECU_CH_IGN4}; /* cyl 1+4 */
+    static const uint8_t k_ign_pair_b[2] = {ECU_CH_IGN2, ECU_CH_IGN3}; /* cyl 2+3 */
+    static const uint8_t k_inj_bank_a[2] = {ECU_CH_INJ1, ECU_CH_INJ4}; /* cyl 1+4 */
+    static const uint8_t k_inj_bank_b[2] = {ECU_CH_INJ2, ECU_CH_INJ3}; /* cyl 2+3 */
+
+    uint32_t ticks_per_rev = g_ticks_per_rev;
+    uint32_t advance_deg = g_advance_deg;
+    uint32_t dwell_ticks = g_dwell_ticks;
+    uint32_t inj_pw_ticks = g_inj_pw_ticks;
+    uint32_t soi_lead_deg = g_soi_lead_deg;
+    uint8_t required_slots = 8U; /* wasted spark only */
+
+    if (inj_pw_ticks > 0U) {
+        required_slots = (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) ? 16U : 12U;
+    }
+    if (g_queue_count > (uint8_t)(ECU_QUEUE_SIZE - required_slots)) {
+        ++g_cycle_schedule_drop_count;
+        return;
+    }
+
+    /* Ignition: wasted spark (pairs every 360-degree revolution). */
+    if (g_presync_ign_mode == ECU_PRESYNC_IGN_WASTED_SPARK) {
+        uint32_t adv = advance_deg % 360U;
+        uint32_t spark_a_deg = (360U - adv) % 360U;
+        uint32_t spark_b_deg = (180U + 360U - adv) % 360U;
+        uint32_t spark_a_ticks = (spark_a_deg * ticks_per_rev) / 360U;
+        uint32_t spark_b_ticks = (spark_b_deg * ticks_per_rev) / 360U;
+        uint32_t dwell_a_ticks = (spark_a_ticks >= dwell_ticks) ? (spark_a_ticks - dwell_ticks) : 0U;
+        uint32_t dwell_b_ticks = (spark_b_ticks >= dwell_ticks) ? (spark_b_ticks - dwell_ticks) : 0U;
+        uint32_t ts_dwell_a = current_timestamp + dwell_a_ticks;
+        uint32_t ts_spark_a = current_timestamp + spark_a_ticks;
+        uint32_t ts_dwell_b = current_timestamp + dwell_b_ticks;
+        uint32_t ts_spark_b = current_timestamp + spark_b_ticks;
+
+        Add_Event(ts_dwell_a, k_ign_pair_a[0], ECU_ACT_DWELL_START);
+        Add_Event(ts_dwell_a, k_ign_pair_a[1], ECU_ACT_DWELL_START);
+        Add_Event(ts_spark_a, k_ign_pair_a[0], ECU_ACT_SPARK);
+        Add_Event(ts_spark_a, k_ign_pair_a[1], ECU_ACT_SPARK);
+
+        Add_Event(ts_dwell_b, k_ign_pair_b[0], ECU_ACT_DWELL_START);
+        Add_Event(ts_dwell_b, k_ign_pair_b[1], ECU_ACT_DWELL_START);
+        Add_Event(ts_spark_b, k_ign_pair_b[0], ECU_ACT_SPARK);
+        Add_Event(ts_spark_b, k_ign_pair_b[1], ECU_ACT_SPARK);
+    }
+
+    if (inj_pw_ticks == 0U) {
+        return;
+    }
+
+    /* Injection fallback timing: one anchor per revolution in 360-degree domain. */
+    uint32_t soi = soi_lead_deg % 360U;
+    uint32_t inj_deg = (360U - soi) % 360U;
+    uint32_t inj_ticks = (inj_deg * ticks_per_rev) / 360U;
+    uint32_t ts_inj_on = current_timestamp + inj_ticks;
+    uint32_t ts_inj_off = ts_inj_on + inj_pw_ticks;
+
+    if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
+        Add_Event(ts_inj_on, ECU_CH_INJ1, ECU_ACT_INJ_ON);
+        Add_Event(ts_inj_on, ECU_CH_INJ2, ECU_ACT_INJ_ON);
+        Add_Event(ts_inj_on, ECU_CH_INJ3, ECU_ACT_INJ_ON);
+        Add_Event(ts_inj_on, ECU_CH_INJ4, ECU_ACT_INJ_ON);
+        Add_Event(ts_inj_off, ECU_CH_INJ1, ECU_ACT_INJ_OFF);
+        Add_Event(ts_inj_off, ECU_CH_INJ2, ECU_ACT_INJ_OFF);
+        Add_Event(ts_inj_off, ECU_CH_INJ3, ECU_ACT_INJ_OFF);
+        Add_Event(ts_inj_off, ECU_CH_INJ4, ECU_ACT_INJ_OFF);
+    } else {
+        const uint8_t* bank = (g_presync_bank_toggle == 0U) ? k_inj_bank_a : k_inj_bank_b;
+        Add_Event(ts_inj_on, bank[0], ECU_ACT_INJ_ON);
+        Add_Event(ts_inj_on, bank[1], ECU_ACT_INJ_ON);
+        Add_Event(ts_inj_off, bank[0], ECU_ACT_INJ_OFF);
+        Add_Event(ts_inj_off, bank[1], ECU_ACT_INJ_OFF);
+        g_presync_bank_toggle ^= 1U;
+    }
+}
+
+/* ============================================================================
  * Calculate_Sequential_Cycle
  * ========================================================================= */
 
@@ -940,6 +1036,29 @@ void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg)
         g_ticks_per_rev, g_advance_deg, g_dwell_ticks, g_inj_pw_ticks, soi_lead_deg);
 }
 
+void ecu_sched_set_presync_enable(uint8_t enable)
+{
+    enter_critical();
+    g_presync_enable = (enable != 0U) ? 1U : 0U;
+    exit_critical();
+}
+
+void ecu_sched_set_presync_inj_mode(uint8_t mode)
+{
+    enter_critical();
+    g_presync_inj_mode = mode;
+    sanitize_runtime_calibration();
+    exit_critical();
+}
+
+void ecu_sched_set_presync_ign_mode(uint8_t mode)
+{
+    enter_critical();
+    g_presync_ign_mode = mode;
+    sanitize_runtime_calibration();
+    exit_critical();
+}
+
 void ecu_sched_commit_calibration(uint32_t tpr,
                                   uint32_t advance_deg,
                                   uint32_t dwell_ticks,
@@ -960,7 +1079,8 @@ namespace ems::engine {
 
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
-    if (snap.state != ems::drv::SyncState::FULL_SYNC) {
+    if ((snap.state != ems::drv::SyncState::FULL_SYNC) &&
+        (snap.state != ems::drv::SyncState::HALF_SYNC)) {
         if (g_hook_prev_full_sync != 0U) {
             clear_all_events_and_drive_safe_outputs();
         }
@@ -976,7 +1096,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     /* Poll near-time queue on each valid CKP tooth for low-latency arming. */
     arm_due_channels();
 
-    g_hook_prev_full_sync = 1U;
+    g_hook_prev_full_sync = (snap.state == ems::drv::SyncState::FULL_SYNC) ? 1U : 0U;
 
     /* Detect boundary once per revolution when tooth index wraps to zero. */
     uint8_t rev_boundary = 0U;
@@ -989,6 +1109,14 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     g_hook_prev_tooth = snap.tooth_index;
 
     if (rev_boundary == 0U) {
+        return;
+    }
+
+    if ((snap.state == ems::drv::SyncState::HALF_SYNC) &&
+        (g_presync_enable != 0U)) {
+        const uint32_t current_timestamp =
+            (::g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
+        calculate_presync_revolution(current_timestamp);
         return;
     }
 
@@ -1025,6 +1153,10 @@ void ecu_sched_test_reset(void)
     g_calibration_clamp_count = 0U;
     g_cycle_fill_active = 0U;
     g_cycle_fill_peak = 0U;
+    g_presync_enable = 1U;
+    g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
+    g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
+    g_presync_bank_toggle = 0U;
     g_hook_prev_full_sync = 0U;
     g_hook_prev_valid = 0U;
     g_hook_prev_tooth = 0U;

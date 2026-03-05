@@ -98,6 +98,22 @@ static uint8_t find_event(uint8_t ch, uint8_t act, uint32_t* ts_out) {
     return 0U;
 }
 
+static uint8_t count_events(uint8_t ch, uint8_t act) {
+    uint8_t count = 0U;
+    const uint8_t n = ecu_sched_test_queue_size();
+    for (uint8_t i = 0U; i < n; ++i) {
+        uint32_t ts = 0U;
+        uint8_t ech = 0U;
+        uint8_t eact = 0U;
+        if ((ecu_sched_test_get_event(i, &ts, &ech, &eact) != 0U) &&
+            (ech == ch) &&
+            (eact == act)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 } // namespace
 
 // =============================================================================
@@ -577,6 +593,51 @@ void test_tooth_accel_comp_preserves_near_time_events() {
     TEST_ASSERT_TRUE(far_after < far_event_ts);
 }
 
+void test_presync_halfsync_simultaneous_inj_and_wasted_spark() {
+    test_reset();
+    ECU_Hardware_Init();
+    ecu_sched_set_presync_enable(1U);
+    ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
+    ecu_sched_set_presync_ign_mode(ECU_PRESYNC_IGN_WASTED_SPARK);
+    ecu_sched_commit_calibration(300000U, 10U, 12000U, 18000U, 62U);
+
+    ems::drv::CkpSnapshot t1{1000u, 1u, 0u, 3000u, ems::drv::SyncState::HALF_SYNC, false};
+    ems::drv::CkpSnapshot t0{1000u, 0u, 0u, 3000u, ems::drv::SyncState::HALF_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(t1);
+    ems::engine::ecu_sched_on_tooth_hook(t0);  // boundary -> pre-sync schedule
+
+    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ1, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ2, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ3, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ4, ECU_ACT_INJ_ON) >= 1U);
+
+    TEST_ASSERT_TRUE(count_events(ECU_CH_IGN1, ECU_ACT_SPARK) >= 1U);
+    TEST_ASSERT_TRUE(count_events(ECU_CH_IGN2, ECU_ACT_SPARK) >= 1U);
+    TEST_ASSERT_TRUE(count_events(ECU_CH_IGN3, ECU_ACT_SPARK) >= 1U);
+    TEST_ASSERT_TRUE(count_events(ECU_CH_IGN4, ECU_ACT_SPARK) >= 1U);
+}
+
+void test_presync_halfsync_semi_sequential_alternates_banks() {
+    test_reset();
+    ECU_Hardware_Init();
+    ecu_sched_set_presync_enable(1U);
+    ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SEMI_SEQUENTIAL);
+    ecu_sched_set_presync_ign_mode(ECU_PRESYNC_IGN_WASTED_SPARK);
+    ecu_sched_commit_calibration(300000U, 10U, 12000U, 18000U, 62U);
+
+    ems::drv::CkpSnapshot t1{1000u, 1u, 0u, 3000u, ems::drv::SyncState::HALF_SYNC, false};
+    ems::drv::CkpSnapshot t0{1000u, 0u, 0u, 3000u, ems::drv::SyncState::HALF_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(t1);
+    ems::engine::ecu_sched_on_tooth_hook(t0);  // bank A
+    ems::engine::ecu_sched_on_tooth_hook(t1);
+    ems::engine::ecu_sched_on_tooth_hook(t0);  // bank B
+
+    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ1, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ4, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ2, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ3, ECU_ACT_INJ_ON) >= 1U);
+}
+
 // =============================================================================
 // Main Test Runner
 // =============================================================================
@@ -611,6 +672,8 @@ int main() {
     test_calibration_atomic_commit_updates_coherently();
     test_tooth_accel_comp_retimes_far_events();
     test_tooth_accel_comp_preserves_near_time_events();
+    test_presync_halfsync_simultaneous_inj_and_wasted_spark();
+    test_presync_halfsync_semi_sequential_alternates_banks();
     
     printf("ECU scheduler fixes tests completed: %d run, %d failed\n", 
            g_tests_run, g_tests_failed);

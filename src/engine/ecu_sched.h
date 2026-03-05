@@ -178,6 +178,11 @@ typedef struct {
 #define ECU_ACT_DWELL_START  2U  /*!< Coil dwell start (CH4-CH7 set HIGH) */
 #define ECU_ACT_SPARK        3U  /*!< Spark / coil cut (CH4-CH7 set LOW)  */
 
+/* Pre-sync fallback modes (used before FULL_SYNC) */
+#define ECU_PRESYNC_INJ_SIMULTANEOUS   0U
+#define ECU_PRESYNC_INJ_SEMI_SEQUENTIAL 1U
+#define ECU_PRESYNC_IGN_WASTED_SPARK   0U
+
 /* ============================================================================
  * Channel assignments (matches FTM0 channel wiring)
  * ========================================================================= */
@@ -344,6 +349,15 @@ void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
  * @brief Set SOI lead angle in degrees before TDC.
  */
 void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg);
+
+/** Enable/disable fallback scheduling while in HALF_SYNC. */
+void ecu_sched_set_presync_enable(uint8_t enable);
+
+/** Select pre-sync injection mode (ECU_PRESYNC_INJ_*). */
+void ecu_sched_set_presync_inj_mode(uint8_t mode);
+
+/** Select pre-sync ignition mode (ECU_PRESYNC_IGN_*). */
+void ecu_sched_set_presync_ign_mode(uint8_t mode);
 
 /* ============================================================================
  * FTM0 interrupt handler (defined in ecu_sched.cpp, unified scheduler handler)
