@@ -309,6 +309,18 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action);
 void Calculate_Sequential_Cycle(uint32_t current_timestamp);
 
 /**
+ * @brief Atomically commit scheduler calibration for one control cycle.
+ *
+ * Applies all timing parameters in one critical section so ISR-side cycle fill
+ * observes a consistent snapshot (no mixed old/new fields).
+ */
+void ecu_sched_commit_calibration(uint32_t tpr,
+                                  uint32_t advance_deg,
+                                  uint32_t dwell_ticks,
+                                  uint32_t inj_pw_ticks,
+                                  uint32_t soi_lead_deg);
+
+/**
  * @brief Set ticks-per-revolution used by Calculate_Sequential_Cycle().
  */
 void ecu_sched_set_ticks_per_rev(uint32_t tpr);

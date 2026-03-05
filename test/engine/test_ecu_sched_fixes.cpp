@@ -494,6 +494,17 @@ void test_calibration_setters_clamp_and_cross_sanity() {
     TEST_ASSERT_TRUE(ecu_sched_test_get_calibration_clamp_count() > clamps_before);
 }
 
+void test_calibration_atomic_commit_updates_coherently() {
+    test_reset();
+    ECU_Hardware_Init();
+
+    ::ecu_sched_commit_calibration(123456U, 22U, 3333U, 4444U, 55U);
+    TEST_ASSERT_EQ_U32(123456U, ecu_sched_test_get_ticks_per_rev());
+    TEST_ASSERT_EQ_U32(3333U, ecu_sched_test_get_dwell_ticks());
+    TEST_ASSERT_EQ_U32(4444U, ecu_sched_test_get_inj_pw_ticks());
+    TEST_ASSERT_EQ_U32(55U, ecu_sched_test_get_soi_lead_deg());
+}
+
 // =============================================================================
 // Main Test Runner
 // =============================================================================
@@ -525,6 +536,7 @@ int main() {
     test_stress_200_to_8500rpm_with_sync_noise();
     test_cycle_fill_drop_when_queue_lacks_capacity();
     test_calibration_setters_clamp_and_cross_sanity();
+    test_calibration_atomic_commit_updates_coherently();
     
     printf("ECU scheduler fixes tests completed: %d run, %d failed\n", 
            g_tests_run, g_tests_failed);

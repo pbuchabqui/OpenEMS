@@ -299,32 +299,27 @@ void loop() {
 
         // Atualiza parâmetros para o scheduler angular
         
-        // Calculate ticks per revolution based on current RPM
-        if (ckp.rpm_x10 > 0u) {
-            // ticks_per_rev = (clock / prescaler) * 60s / rpm
-            // = (ECU_SYSTEM_CLOCK_HZ / ECU_FTM0_PRESCALER) * 60 * 10 / rpm_x10
-            // = (ECU_SYSTEM_CLOCK_HZ * 600) / (ECU_FTM0_PRESCALER * rpm_x10)
-            ::ecu_sched_set_ticks_per_rev(static_cast<uint32_t>(
-                (static_cast<uint64_t>(ECU_SYSTEM_CLOCK_HZ) * 60U * 10U) 
-                / (static_cast<uint64_t>(ECU_FTM0_PRESCALER) * ckp.rpm_x10)
-            ));
-        }
-
         const uint32_t advance_deg = (g_last_advance_deg > 0)
             ? static_cast<uint32_t>(g_last_advance_deg)
             : 0u;
-        ::ecu_sched_set_advance_deg(advance_deg);
         
         // Convert dwell time from ms to ticks
         const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
         const uint32_t dwell_ticks = (static_cast<uint32_t>(dwell_ms_x10) * ECU_FTM0_TICKS_PER_MS) / 100u;
-        ::ecu_sched_set_dwell_ticks(dwell_ticks);
 
         // Convert injector pulse width to FTM0 ticks at PS=8:
         // ticks = us * (ticks/ms) / 1000
         const uint32_t inj_pw_ticks = (base_pw_us * ECU_FTM0_TICKS_PER_MS) / 1000u;
-        ::ecu_sched_set_inj_pw_ticks(inj_pw_ticks);
-        ::ecu_sched_set_soi_lead_deg(kDefaultSoiLeadDeg);
+
+        // Atomically commit a coherent scheduler calibration snapshot once per cycle.
+        if (ckp.rpm_x10 > 0u) {
+            const uint32_t ticks_per_rev = static_cast<uint32_t>(
+                (static_cast<uint64_t>(ECU_SYSTEM_CLOCK_HZ) * 60U * 10U)
+                / (static_cast<uint64_t>(ECU_FTM0_PRESCALER) * ckp.rpm_x10)
+            );
+            ::ecu_sched_commit_calibration(
+                ticks_per_rev, advance_deg, dwell_ticks, inj_pw_ticks, kDefaultSoiLeadDeg);
+        }
 
         // Atualiza métricas de tempo real
         ems::app::ts_update_rt_metrics(

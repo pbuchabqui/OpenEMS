@@ -139,6 +139,20 @@ static volatile uint32_t g_soi_lead_deg   = 62U;    /* SOI lead before TDC */
 static volatile uint8_t g_cycle_fill_active = 0U;
 static volatile uint8_t g_cycle_fill_peak = 0U;
 
+static void enter_critical(void)
+{
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("cpsid i" ::: "memory");
+#endif
+}
+
+static void exit_critical(void)
+{
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("cpsie i" ::: "memory");
+#endif
+}
+
 static void sanitize_runtime_calibration(void)
 {
     static const uint32_t kMinTicksPerRev = 50000U;
@@ -804,31 +818,48 @@ void Calculate_Sequential_Cycle(uint32_t current_timestamp)
 
 void ecu_sched_set_ticks_per_rev(uint32_t tpr)
 {
-    g_ticks_per_rev = tpr;
-    sanitize_runtime_calibration();
+    ecu_sched_commit_calibration(
+        tpr, g_advance_deg, g_dwell_ticks, g_inj_pw_ticks, g_soi_lead_deg);
 }
 
 void ecu_sched_set_advance_deg(uint32_t adv)
 {
-    g_advance_deg = adv;
+    ecu_sched_commit_calibration(
+        g_ticks_per_rev, adv, g_dwell_ticks, g_inj_pw_ticks, g_soi_lead_deg);
 }
 
 void ecu_sched_set_dwell_ticks(uint32_t dwell)
 {
-    g_dwell_ticks = dwell;
-    sanitize_runtime_calibration();
+    ecu_sched_commit_calibration(
+        g_ticks_per_rev, g_advance_deg, dwell, g_inj_pw_ticks, g_soi_lead_deg);
 }
 
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks)
 {
-    g_inj_pw_ticks = pw_ticks;
-    sanitize_runtime_calibration();
+    ecu_sched_commit_calibration(
+        g_ticks_per_rev, g_advance_deg, g_dwell_ticks, pw_ticks, g_soi_lead_deg);
 }
 
 void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg)
 {
+    ecu_sched_commit_calibration(
+        g_ticks_per_rev, g_advance_deg, g_dwell_ticks, g_inj_pw_ticks, soi_lead_deg);
+}
+
+void ecu_sched_commit_calibration(uint32_t tpr,
+                                  uint32_t advance_deg,
+                                  uint32_t dwell_ticks,
+                                  uint32_t inj_pw_ticks,
+                                  uint32_t soi_lead_deg)
+{
+    enter_critical();
+    g_ticks_per_rev = tpr;
+    g_advance_deg = advance_deg;
+    g_dwell_ticks = dwell_ticks;
+    g_inj_pw_ticks = inj_pw_ticks;
     g_soi_lead_deg = soi_lead_deg;
     sanitize_runtime_calibration();
+    exit_critical();
 }
 
 namespace ems::engine {
