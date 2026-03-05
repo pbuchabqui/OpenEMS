@@ -114,6 +114,10 @@ static bool g_have_last_full_sync = false;
 static ems::drv::CkpSnapshot g_last_full_sync_snapshot = {
     0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
 };
+static bool g_have_last_gap_sync = false;
+static ems::drv::CkpSnapshot g_last_gap_sync_snapshot = {
+    0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
+};
 static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
 static constexpr uint32_t kRuntimeSeedArmWindowMs = 2000u;
 
@@ -216,7 +220,7 @@ void setup() {
     {
         ems::hal::RuntimeSyncSeed seed = {};
         if (ems::hal::nvm_load_runtime_seed(&seed) &&
-            ems::hal::runtime_seed_boot_compatible_60_2(seed)) {
+            ems::hal::runtime_seed_fast_reacquire_compatible_60_2(seed)) {
             const bool phase_a =
                 ((seed.flags & ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A) != 0u);
             ems::drv::ckp_seed_arm(phase_a);
@@ -290,6 +294,10 @@ void loop() {
     if (ckp.state == ems::drv::SyncState::FULL_SYNC) {
         g_last_full_sync_snapshot = ckp;
         g_have_last_full_sync = true;
+        if (ckp.tooth_index == 0u) {
+            g_last_gap_sync_snapshot = ckp;
+            g_have_last_gap_sync = true;
+        }
         g_runtime_seed_arm_window_active = false;
     } else if (g_runtime_seed_arm_window_active &&
                elapsed(now, g_runtime_seed_arm_window_start_ms, kRuntimeSeedArmWindowMs)) {
@@ -454,12 +462,14 @@ void loop() {
             (ckp.rpm_x10 == 0u) &&
             elapsed(now, g_zero_rpm_since_ms, kRuntimeSeedSaveDelayMs)) {
             ems::hal::RuntimeSyncSeed seed = {};
+            const ems::drv::CkpSnapshot seed_snap =
+                g_have_last_gap_sync ? g_last_gap_sync_snapshot : g_last_full_sync_snapshot;
             seed.flags = static_cast<uint8_t>(
                 ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC |
-                (g_last_full_sync_snapshot.phase_A
+                (seed_snap.phase_A
                     ? ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A
                     : 0u));
-            seed.tooth_index = g_last_full_sync_snapshot.tooth_index;
+            seed.tooth_index = seed_snap.tooth_index;
             seed.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
             if (ems::hal::nvm_save_runtime_seed(&seed)) {
                 g_runtime_seed_saved_for_stop = true;

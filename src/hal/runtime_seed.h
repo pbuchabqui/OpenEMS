@@ -36,6 +36,14 @@ inline bool runtime_seed_boot_compatible_60_2(const RuntimeSyncSeed& seed) noexc
     return (seed.decoder_tag == RUNTIME_SYNC_SEED_DECODER_TAG_60_2);
 }
 
+inline bool runtime_seed_fast_reacquire_compatible_60_2(const RuntimeSyncSeed& seed) noexcept {
+    if (!runtime_seed_boot_compatible_60_2(seed)) {
+        return false;
+    }
+    // Fast-gap promotion path anchors at the next detected gap; require a gap-aligned seed.
+    return (seed.tooth_index == 0u);
+}
+
 #if defined(EMS_HOST_TEST)
 bool nvm_test_runtime_seed_inject_slot(uint8_t slot,
                                        const RuntimeSyncSeed* seed,

@@ -301,6 +301,18 @@ void test_runtime_seed_boot_compatibility_checks() {
     TEST_ASSERT_TRUE(!ems::hal::runtime_seed_boot_compatible_60_2(seed));
 }
 
+void test_runtime_seed_fast_reacquire_requires_gap_alignment() {
+    ems::hal::RuntimeSyncSeed seed{};
+    seed.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
+    seed.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
+
+    seed.tooth_index = 0u;
+    TEST_ASSERT_TRUE(ems::hal::runtime_seed_fast_reacquire_compatible_60_2(seed));
+
+    seed.tooth_index = 7u;
+    TEST_ASSERT_TRUE(!ems::hal::runtime_seed_fast_reacquire_compatible_60_2(seed));
+}
+
 }  // namespace
 
 int main() {
@@ -323,6 +335,7 @@ int main() {
     test_runtime_seed_sequence_wrap_prefers_newer();
     test_runtime_seed_ignores_invalid_latest_slot();
     test_runtime_seed_boot_compatibility_checks();
+    test_runtime_seed_fast_reacquire_requires_gap_alignment();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;
