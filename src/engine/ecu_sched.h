@@ -2,7 +2,7 @@
  * @file engine/ecu_sched.h
  * @brief ECU Scheduling Core v2 — 32-bit timer + hardware Output Compare
  *
- * Modulo C (MISRA-C:2012) para agendamento angular de eventos de injecao
+ * Modulo C/C++ (estilo MISRA) para agendamento angular de eventos de injecao
  * e ignicao via FTM0 com extensao de 32 bits por contagem de overflow.
  *
  * Arquitetura:
@@ -19,9 +19,8 @@
  *
  * Coexistencia com C++17:
  *   Este header envolve todas as declaracoes em extern "C" quando compilado
- *   como C++. O FTM0_IRQHandler e definido em ecu_sched.c e substitui o
- *   handler C++ em hal/ftm.cpp (que deve ser removido para evitar conflito
- *   de multipla definicao).
+ *   como C++. O FTM0_IRQHandler e definido em ecu_sched.cpp e substitui o
+ *   handler genérico em hal/ftm.cpp.
  *
  * Referencia: K64P144M120SF5 Reference Manual, Rev. 2
  *   Cap. 43 — FlexTimer Module (FTM)
@@ -322,7 +321,7 @@ void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
 void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg);
 
 /* ============================================================================
- * FTM0 interrupt handler (defined in ecu_sched.c, replaces C++ handler)
+ * FTM0 interrupt handler (defined in ecu_sched.cpp, unified scheduler handler)
  * ========================================================================= */
 
 void FTM0_IRQHandler(void);

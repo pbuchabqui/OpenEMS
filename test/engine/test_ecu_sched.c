@@ -3,13 +3,13 @@
  * @brief Host unit tests for engine/ecu_sched (C / EMS_HOST_TEST build).
  *
  * Compiled with:
- *   gcc -std=c11 -DEMS_HOST_TEST -Isrc \
- *       test/engine/test_ecu_sched.c src/engine/ecu_sched.c -o test_ecu_sched
+ *   g++ -std=c++17 -DEMS_HOST_TEST -Isrc \
+ *       test/engine/test_ecu_sched.c src/engine/ecu_sched.cpp -o test_ecu_sched
  *
  * Mock strategy:
  *   FTM0, PDB0, ADC0 are backed by global structs defined here.
- *   The macros FTM0/PDB0/ADC0 in ecu_sched.c are redirected via the
- *   #undef / #define block in ecu_sched.c's host-test section.
+ *   The macros FTM0/PDB0/ADC0 in ecu_sched.cpp are redirected via the
+ *   #undef / #define block in ecu_sched.cpp host-test section.
  */
 
 #define EMS_HOST_TEST 1
@@ -20,7 +20,7 @@
 
 /* ============================================================================
  * Mock peripheral structs (must be declared before including ecu_sched.h
- * so the extern declarations in ecu_sched.c can link against them).
+ * so the extern declarations in ecu_sched.cpp can link against them).
  * ========================================================================= */
 
 #include "engine/ecu_sched.h"
@@ -30,7 +30,7 @@ FTM_Type g_mock_ftm0;
 PDB_Type g_mock_pdb0;
 ADC_Type g_mock_adc0;
 
-/* Redirect macros for this translation unit (matches ecu_sched.c redirection) */
+/* Redirect macros for this translation unit (matches ecu_sched.cpp redirection) */
 #define FTM0  (&g_mock_ftm0)
 #define PDB0  (&g_mock_pdb0)
 #define ADC0  (&g_mock_adc0)

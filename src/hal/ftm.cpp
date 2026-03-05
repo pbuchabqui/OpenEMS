@@ -16,7 +16,7 @@
  *   ems::drv::ckp_ftm3_ch0_isr()  — chamado pela FTM3_IRQHandler no evento CKP
  *   ems::drv::ckp_ftm3_ch1_isr()  — chamado pela FTM3_IRQHandler no evento CMP
  *
- * FTM0_IRQHandler é definido em engine/ecu_sched.c (módulo C MISRA-C:2012).
+ * FTM0_IRQHandler é definido em engine/ecu_sched.cpp (módulo de scheduler unificado).
  *
  * REGRA INEGOCIÁVEL: Nenhuma lógica de motor aqui. Apenas registradores.
  */
@@ -228,11 +228,11 @@ namespace ems::hal {
 
 // ─── FTM0 — Output Compare (Ignição + Injeção) ───────────────────────────────
 // NOTE: FTM0 hardware initialization is now handled by the unified
-// ecu_sched.c module to avoid prescaler conflicts. This module only provides
+// ecu_sched unified module to avoid prescaler conflicts. This module only provides
 // runtime functions for setting compare values and reading the counter.
 
 void ftm0_init(void) {
-    // FTM0 initialization is now handled by ECU_Hardware_Init() in ecu_sched.c
+    // FTM0 initialization is now handled by ECU_Hardware_Init() in ecu_sched.cpp
     // to ensure unified prescaler configuration (PS=8) and 32-bit timestamp extension.
     // This prevents conflicts between the C and C++ timing systems.
     // 
@@ -496,7 +496,7 @@ extern "C" void FTM3_IRQHandler(void) {
     }
 }
 
-// FTM0_IRQHandler is defined in src/engine/ecu_sched.c (C module).
+// FTM0_IRQHandler is defined in src/engine/ecu_sched.cpp (unified scheduler).
 // That handler manages the 32-bit timer extension (g_overflow_count) and
 // hardware output-compare scheduling. Removing the C++ definition here
 // avoids a multiple-definition linker error.
