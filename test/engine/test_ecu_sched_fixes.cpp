@@ -113,11 +113,11 @@ void test_queue_full_removes_existing_channel_events() {
     test_reset();
     ECU_Hardware_Init();
     
-    // Fill queue to capacity (16 events)
-    for (uint8_t i = 0U; i < 16U; ++i) {
+    // Fill queue to capacity (ECU_QUEUE_SIZE events)
+    for (uint8_t i = 0U; i < ECU_QUEUE_SIZE; ++i) {
         Add_Event(0x00010000UL + i, ECU_CH_IGN1, ECU_ACT_SPARK);
     }
-    TEST_ASSERT_EQ_U8(16U, ecu_sched_test_queue_size());
+    TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
     
     // Try to add another event for the same channel
     // This should be treated as late and remove existing events
@@ -445,6 +445,24 @@ void test_stress_200_to_8500rpm_with_sync_noise() {
     TEST_ASSERT_EQ_U32(FTM_CnSC_OC_CLEAR, FTM0->CONTROLS[ECU_CH_INJ1].CnSC);
 }
 
+void test_cycle_fill_drop_when_queue_lacks_capacity() {
+    test_reset();
+    ECU_Hardware_Init();
+
+    for (uint8_t i = 0U; i < ECU_QUEUE_SIZE; ++i) {
+        Add_Event(0x00010000UL + i, ECU_CH_IGN1, ECU_ACT_SPARK);
+    }
+    TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
+
+    const uint32_t drops_before = ecu_sched_test_get_cycle_schedule_drop_count();
+    const uint32_t late_before = g_late_event_count;
+    Calculate_Sequential_Cycle(0U);
+
+    TEST_ASSERT_EQ_U32(drops_before + 1U, ecu_sched_test_get_cycle_schedule_drop_count());
+    TEST_ASSERT_EQ_U32(late_before, g_late_event_count);
+    TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
+}
+
 // =============================================================================
 // Main Test Runner
 // =============================================================================
@@ -474,6 +492,7 @@ int main() {
     test_sync_loss_clears_queue_and_drives_safe_outputs();
     test_metrics_late_delay_and_queue_depth();
     test_stress_200_to_8500rpm_with_sync_noise();
+    test_cycle_fill_drop_when_queue_lacks_capacity();
     
     printf("ECU scheduler fixes tests completed: %d run, %d failed\n", 
            g_tests_run, g_tests_failed);

@@ -192,6 +192,13 @@ typedef struct {
 #define ECU_CH_IGN4   4U  /*!< FTM0 CH4 — Ignition 4 */
 
 /* ============================================================================
+ * Queue and sizing constants
+ * ========================================================================= */
+
+/*!< Maximum scheduled events in flight. */
+#define ECU_QUEUE_SIZE  32U
+
+/* ============================================================================
  * Timing constants (derived from clock and prescaler)
  * ========================================================================= */
 
@@ -237,6 +244,9 @@ extern volatile uint8_t g_queue_depth_peak;
 
 /*!< Peak queue depth observed during the last Calculate_Sequential_Cycle call. */
 extern volatile uint8_t g_queue_depth_last_cycle_peak;
+
+/*!< Number of cycle scheduling attempts dropped due to insufficient queue room. */
+extern volatile uint32_t g_cycle_schedule_drop_count;
 
 /* ============================================================================
  * Public API
@@ -370,6 +380,9 @@ uint8_t ecu_sched_test_get_queue_depth_peak(void);
 
 /** Return peak queue depth during last cycle fill. */
 uint8_t ecu_sched_test_get_queue_depth_last_cycle_peak(void);
+
+/** Return number of dropped cycle scheduling attempts. */
+uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 #endif /* EMS_HOST_TEST */
 
 #ifdef __cplusplus

@@ -404,11 +404,11 @@ static void test_queue_full_counts_as_late(void)
     ECU_Hardware_Init();
     g_overflow_count = 0U;
 
-    /* Fill queue to maximum (16 slots) */
-    for (i = 0U; i < 16U; ++i) {
+    /* Fill queue to maximum (ECU_QUEUE_SIZE slots) */
+    for (i = 0U; i < ECU_QUEUE_SIZE; ++i) {
         Add_Event((uint32_t)(0x1000U + i), ECU_CH_IGN1, ECU_ACT_SPARK);
     }
-    TEST_ASSERT_EQ_U8(16U, ecu_sched_test_queue_size());
+    TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
 
     /* One more event: should be treated as late (queue full) */
     Add_Event(0x9999U, ECU_CH_IGN2, ECU_ACT_SPARK);

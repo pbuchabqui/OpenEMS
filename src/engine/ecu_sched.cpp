@@ -75,7 +75,6 @@ static volatile uint32_t g_mock_sim_scgc6;
  * Internal constants
  * ========================================================================= */
 
-#define ECU_QUEUE_SIZE  16U   /* Maximum scheduled events in flight */
 #define ECU_CHANNELS    8U    /* FTM0 channels */
 
 /* Channel assignments for unified system */
@@ -125,6 +124,7 @@ volatile uint32_t g_late_delay_sum_ticks = 0U;
 volatile uint32_t g_late_delay_max_ticks = 0U;
 volatile uint8_t g_queue_depth_peak = 0U;
 volatile uint8_t g_queue_depth_last_cycle_peak = 0U;
+volatile uint32_t g_cycle_schedule_drop_count = 0U;
 
 /* ============================================================================
  * Module-private configuration (set by test helpers or calibration layer)
@@ -183,7 +183,11 @@ static void record_late_delay(uint32_t now, uint32_t ts)
     }
     delay = now - ts;
     ++g_late_delay_samples;
-    g_late_delay_sum_ticks += delay;
+    if ((0xFFFFFFFFU - g_late_delay_sum_ticks) < delay) {
+        g_late_delay_sum_ticks = 0xFFFFFFFFU;
+    } else {
+        g_late_delay_sum_ticks += delay;
+    }
     if (delay > g_late_delay_max_ticks) {
         g_late_delay_max_ticks = delay;
     }
@@ -679,6 +683,14 @@ void Calculate_Sequential_Cycle(uint32_t current_timestamp)
     uint32_t dwell_ticks    = g_dwell_ticks;
     uint32_t inj_pw_ticks   = g_inj_pw_ticks;
     uint32_t soi_lead_deg   = g_soi_lead_deg;
+    uint8_t events_per_cyl = (inj_pw_ticks > 0U) ? 4U : 2U;
+    uint8_t required_slots = (uint8_t)(ECU_NUM_CYL * events_per_cyl);
+
+    if (g_queue_count > (uint8_t)(ECU_QUEUE_SIZE - required_slots)) {
+        ++g_cycle_schedule_drop_count;
+        g_cycle_fill_active = 0U;
+        return;
+    }
 
     g_cycle_fill_active = 1U;
     g_cycle_fill_peak = g_queue_count;
@@ -838,6 +850,7 @@ void ecu_sched_test_reset(void)
     g_late_delay_max_ticks = 0U;
     g_queue_depth_peak = 0U;
     g_queue_depth_last_cycle_peak = 0U;
+    g_cycle_schedule_drop_count = 0U;
     g_cycle_fill_active = 0U;
     g_cycle_fill_peak = 0U;
     g_queue_count      = 0U;
@@ -926,6 +939,11 @@ uint8_t ecu_sched_test_get_queue_depth_peak(void)
 uint8_t ecu_sched_test_get_queue_depth_last_cycle_peak(void)
 {
     return g_queue_depth_last_cycle_peak;
+}
+
+uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void)
+{
+    return g_cycle_schedule_drop_count;
 }
 
 #endif /* EMS_HOST_TEST */
