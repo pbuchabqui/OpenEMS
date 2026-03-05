@@ -135,6 +135,25 @@ static volatile uint32_t g_soi_lead_deg   = 62U;    /* SOI lead before TDC */
  * Internal helpers
  * ========================================================================= */
 
+static uint32_t near_time_window_ticks(void)
+{
+    /*
+     * Dynamic near-time window from current engine speed:
+     *   window ~= 2 tooth periods (60-2 wheel => 58 teeth/rev)
+     * Clamp to keep deterministic ISR cost and avoid over-arming far events.
+     */
+    uint32_t tpr = g_ticks_per_rev;
+    uint32_t tooth_ticks = (tpr / 58U);
+    uint32_t win = tooth_ticks * 2U;
+
+    if (win < 1024U) {
+        win = 1024U;
+    } else if (win > 60000U) {
+        win = 60000U;
+    }
+    return win;
+}
+
 /**
  * Force an output on channel ch according to action using software control.
  * Used for late events that can no longer be scheduled via CnV.
@@ -295,6 +314,8 @@ static void process_channel_ready_event(uint8_t ch)
         uint8_t removed;
         uint32_t ts;
         uint8_t act;
+        uint32_t now;
+        uint32_t delta;
 
         if ((ch >= ECU_CHANNELS) || (g_next_valid[ch] == 0U)) {
             ASSERT_INVARIANTS();
@@ -303,12 +324,9 @@ static void process_channel_ready_event(uint8_t ch)
 
         ts = g_next_ts[ch];
         act = g_next_action[ch];
-        if ((ts >> 16U) != g_overflow_count) {
-            ASSERT_INVARIANTS();
-            return;
-        }
+        now = current_timestamp32();
 
-        if (is_timestamp_late(ts) != 0U) {
+        if (ts < now) {
             removed = remove_event_for_channel_ts(ch, ts);
             if (removed == 0U) {
                 uint8_t i;
@@ -326,6 +344,12 @@ static void process_channel_ready_event(uint8_t ch)
             }
             recompute_next_per_channel();
             continue;
+        }
+
+        delta = ts - now;
+        if (delta > near_time_window_ticks()) {
+            ASSERT_INVARIANTS();
+            return;
         }
 
         arm_channel(ch, ts, act);
@@ -476,9 +500,8 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
     /* Keep one authoritative "next event" per channel and only arm due ones. */
     recompute_next_per_channel();
     if ((g_next_valid[channel] != 0U) &&
-        (g_next_ts[channel] == timestamp32) &&
-        (ev_hi == g_overflow_count)) {
-        arm_channel(channel, timestamp32, action);
+        (g_next_ts[channel] == timestamp32)) {
+        process_channel_ready_event(channel);
     }
     ASSERT_INVARIANTS();
 }
@@ -690,6 +713,9 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         s_schedule_this_gap = 1U;
         return;
     }
+
+    /* Poll near-time queue on each valid CKP tooth for low-latency arming. */
+    arm_due_channels();
 
     s_prev_full_sync = 1U;
 
