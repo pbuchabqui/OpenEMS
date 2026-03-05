@@ -150,7 +150,65 @@ void test_a_returns_64_bytes_realtime() {
     // ve = g_page1_ve[0] inicializado de ve_table[0][0] = 50 (P1: páginas ligadas às tabelas reais)
     TEST_ASSERT_EQ_U32(50u, out[9]);
     TEST_ASSERT_EQ_U32(0u, static_cast<int8_t>(out[10]));
-    TEST_ASSERT_EQ_U32(0x07u, out[11]);
+    TEST_ASSERT_EQ_U32(0x87u, out[11]);
+    TEST_ASSERT_EQ_U32(0u, out[12]);  // late_events LSB
+    TEST_ASSERT_EQ_U32(0u, out[13]);
+    TEST_ASSERT_EQ_U32(0u, out[14]);
+    TEST_ASSERT_EQ_U32(0u, out[15]);  // late_events MSB
+}
+
+void test_a_packs_scheduler_diag_in_reserved() {
+    ems::app::ts_test_reset();
+    ems::drv::g_ckp = ems::drv::CkpSnapshot{
+        0u,
+        0u,
+        0u,
+        0u,
+        ems::drv::SyncState::WAIT_GAP,
+        false,
+    };
+    ems::drv::g_sensors = ems::drv::SensorData{
+        0u, 0u, 0u, 0, 0, 0u, 0u, 0u, 0u, 0u,
+    };
+    ems::app::ts_update_rt_sched_diag(
+        3u,          // late events
+        1500u,       // late max delay ticks
+        18u,         // queue depth peak
+        12u,         // queue depth last-cycle peak
+        2u,          // cycle schedule drops
+        1u);         // calibration clamps
+
+    const uint8_t cmd = static_cast<uint8_t>('A');
+    ts_send_bytewise(&cmd, 1u);
+
+    uint8_t out[128] = {};
+    const uint16_t n = ts_drain(out, sizeof(out));
+    TEST_ASSERT_EQ_U32(64u, n);
+    TEST_ASSERT_EQ_U32(0xF0u, out[11]);  // WBO2 + scheduler diag flags
+
+    // reserved[0..3] late_events = 3
+    TEST_ASSERT_EQ_U32(3u, out[12]);
+    TEST_ASSERT_EQ_U32(0u, out[13]);
+    TEST_ASSERT_EQ_U32(0u, out[14]);
+    TEST_ASSERT_EQ_U32(0u, out[15]);
+    // reserved[4..7] late_max_delay_ticks = 1500 (0x05DC)
+    TEST_ASSERT_EQ_U32(0xDCu, out[16]);
+    TEST_ASSERT_EQ_U32(0x05u, out[17]);
+    TEST_ASSERT_EQ_U32(0u, out[18]);
+    TEST_ASSERT_EQ_U32(0u, out[19]);
+    // reserved[8..9] queue peaks
+    TEST_ASSERT_EQ_U32(18u, out[20]);
+    TEST_ASSERT_EQ_U32(12u, out[21]);
+    // reserved[10..13] cycle drops = 2
+    TEST_ASSERT_EQ_U32(2u, out[22]);
+    TEST_ASSERT_EQ_U32(0u, out[23]);
+    TEST_ASSERT_EQ_U32(0u, out[24]);
+    TEST_ASSERT_EQ_U32(0u, out[25]);
+    // reserved[14..17] clamp count = 1
+    TEST_ASSERT_EQ_U32(1u, out[26]);
+    TEST_ASSERT_EQ_U32(0u, out[27]);
+    TEST_ASSERT_EQ_U32(0u, out[28]);
+    TEST_ASSERT_EQ_U32(0u, out[29]);
 }
 
 void test_h_returns_signature() {
@@ -242,6 +300,7 @@ int main() {
     test_ignores_reset_probe_byte_f0();
     test_write_then_read_page_roundtrip();
     test_a_returns_64_bytes_realtime();
+    test_a_packs_scheduler_diag_in_reserved();
     test_o_aliases_a_realtime();
     test_write_realtime_page_rejected();
 

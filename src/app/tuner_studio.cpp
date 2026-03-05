@@ -49,6 +49,12 @@ static uint16_t g_tx_tail = 0u;
 static uint8_t  g_rt_pw_ms_x10   = 0u;
 static int8_t   g_rt_advance_deg  = 0;
 static int8_t   g_rt_stft_p100   = 0;
+static uint32_t g_rt_sched_late_events = 0u;
+static uint32_t g_rt_sched_late_max_delay_ticks = 0u;
+static uint8_t  g_rt_sched_queue_depth_peak = 0u;
+static uint8_t  g_rt_sched_queue_depth_last_cycle_peak = 0u;
+static uint32_t g_rt_sched_cycle_schedule_drop_count = 0u;
+static uint32_t g_rt_sched_calibration_clamp_count = 0u;
 
 static ParseState g_state = ParseState::IDLE;
 static uint8_t g_cmd_page = 0u;
@@ -144,6 +150,13 @@ inline uint8_t clamp_u8(uint32_t v) noexcept {
     return static_cast<uint8_t>((v > 255u) ? 255u : v);
 }
 
+inline void write_u32_le(uint8_t* dst, uint32_t v) noexcept {
+    dst[0] = static_cast<uint8_t>(v & 0xFFu);
+    dst[1] = static_cast<uint8_t>((v >> 8u) & 0xFFu);
+    dst[2] = static_cast<uint8_t>((v >> 16u) & 0xFFu);
+    dst[3] = static_cast<uint8_t>((v >> 24u) & 0xFFu);
+}
+
 inline void update_realtime_page() noexcept {
     ems::app::TsRealtimeData rt = {};
     const ems::drv::CkpSnapshot c = ems::drv::ckp_snapshot();
@@ -173,7 +186,25 @@ inline void update_realtime_page() noexcept {
     if (s.fault_bits != 0u) {
         status = static_cast<uint8_t>(status | 0x04u);
     }
+    if (g_rt_sched_late_events != 0u) {
+        status = static_cast<uint8_t>(status | 0x10u);
+    }
+    if (g_rt_sched_cycle_schedule_drop_count != 0u) {
+        status = static_cast<uint8_t>(status | 0x20u);
+    }
+    if (g_rt_sched_calibration_clamp_count != 0u) {
+        status = static_cast<uint8_t>(status | 0x40u);
+    }
+    if (ems::app::can_stack_wbo2_fault()) {
+        status = static_cast<uint8_t>(status | ems::app::STATUS_WBO2_FAULT);
+    }
     rt.status_bits = status;
+    write_u32_le(&rt.reserved[0], g_rt_sched_late_events);
+    write_u32_le(&rt.reserved[4], g_rt_sched_late_max_delay_ticks);
+    rt.reserved[8] = g_rt_sched_queue_depth_peak;
+    rt.reserved[9] = g_rt_sched_queue_depth_last_cycle_peak;
+    write_u32_le(&rt.reserved[10], g_rt_sched_cycle_schedule_drop_count);
+    write_u32_le(&rt.reserved[14], g_rt_sched_calibration_clamp_count);
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }
@@ -383,6 +414,8 @@ void ts_init() noexcept {
 
     reset_pages();
     reset_parser();
+    ts_update_rt_metrics(0u, 0, 0);
+    ts_update_rt_sched_diag(0u, 0u, 0u, 0u, 0u, 0u);
 }
 
 void ts_uart0_rx_isr_byte(uint8_t byte) noexcept {
@@ -422,6 +455,20 @@ void ts_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p10
     g_rt_pw_ms_x10  = pw_ms_x10;
     g_rt_advance_deg = advance_deg;
     g_rt_stft_p100  = stft_p100;
+}
+
+void ts_update_rt_sched_diag(uint32_t late_events,
+                             uint32_t late_max_delay_ticks,
+                             uint8_t queue_depth_peak,
+                             uint8_t queue_depth_last_cycle_peak,
+                             uint32_t cycle_schedule_drop_count,
+                             uint32_t calibration_clamp_count) noexcept {
+    g_rt_sched_late_events = late_events;
+    g_rt_sched_late_max_delay_ticks = late_max_delay_ticks;
+    g_rt_sched_queue_depth_peak = queue_depth_peak;
+    g_rt_sched_queue_depth_last_cycle_peak = queue_depth_last_cycle_peak;
+    g_rt_sched_cycle_schedule_drop_count = cycle_schedule_drop_count;
+    g_rt_sched_calibration_clamp_count = calibration_clamp_count;
 }
 
 #if defined(EMS_HOST_TEST)

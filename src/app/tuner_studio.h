@@ -25,6 +25,12 @@ void ts_init() noexcept;
 void ts_uart0_rx_isr_byte(uint8_t byte) noexcept;
 void ts_process() noexcept;
 void ts_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p100) noexcept;
+void ts_update_rt_sched_diag(uint32_t late_events,
+                             uint32_t late_max_delay_ticks,
+                             uint8_t queue_depth_peak,
+                             uint8_t queue_depth_last_cycle_peak,
+                             uint32_t cycle_schedule_drop_count,
+                             uint32_t calibration_clamp_count) noexcept;
 
 bool ts_tx_pop(uint8_t& byte) noexcept;
 uint16_t ts_tx_available() noexcept;
