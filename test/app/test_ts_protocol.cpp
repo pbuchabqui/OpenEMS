@@ -176,7 +176,11 @@ void test_a_packs_scheduler_diag_in_reserved() {
         18u,         // queue depth peak
         12u,         // queue depth last-cycle peak
         2u,          // cycle schedule drops
-        1u);         // calibration clamps
+        1u,          // calibration clamps
+        7u,          // seed loaded
+        5u,          // seed confirmed
+        2u,          // seed rejected
+        3u);         // sync state raw (FULL_SYNC)
 
     const uint8_t cmd = static_cast<uint8_t>('A');
     ts_send_bytewise(&cmd, 1u);
@@ -209,6 +213,23 @@ void test_a_packs_scheduler_diag_in_reserved() {
     TEST_ASSERT_EQ_U32(0u, out[27]);
     TEST_ASSERT_EQ_U32(0u, out[28]);
     TEST_ASSERT_EQ_U32(0u, out[29]);
+    // reserved[18..21] seed_loaded = 7
+    TEST_ASSERT_EQ_U32(7u, out[30]);
+    TEST_ASSERT_EQ_U32(0u, out[31]);
+    TEST_ASSERT_EQ_U32(0u, out[32]);
+    TEST_ASSERT_EQ_U32(0u, out[33]);
+    // reserved[22..25] seed_confirmed = 5
+    TEST_ASSERT_EQ_U32(5u, out[34]);
+    TEST_ASSERT_EQ_U32(0u, out[35]);
+    TEST_ASSERT_EQ_U32(0u, out[36]);
+    TEST_ASSERT_EQ_U32(0u, out[37]);
+    // reserved[26..29] seed_rejected = 2
+    TEST_ASSERT_EQ_U32(2u, out[38]);
+    TEST_ASSERT_EQ_U32(0u, out[39]);
+    TEST_ASSERT_EQ_U32(0u, out[40]);
+    TEST_ASSERT_EQ_U32(0u, out[41]);
+    // reserved[30] sync state raw
+    TEST_ASSERT_EQ_U32(3u, out[42]);
 }
 
 void test_h_returns_signature() {

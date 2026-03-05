@@ -55,6 +55,10 @@ static uint8_t  g_rt_sched_queue_depth_peak = 0u;
 static uint8_t  g_rt_sched_queue_depth_last_cycle_peak = 0u;
 static uint32_t g_rt_sched_cycle_schedule_drop_count = 0u;
 static uint32_t g_rt_sched_calibration_clamp_count = 0u;
+static uint32_t g_rt_seed_loaded_count = 0u;
+static uint32_t g_rt_seed_confirmed_count = 0u;
+static uint32_t g_rt_seed_rejected_count = 0u;
+static uint8_t  g_rt_sync_state_raw = 0u;
 
 static ParseState g_state = ParseState::IDLE;
 static uint8_t g_cmd_page = 0u;
@@ -205,6 +209,10 @@ inline void update_realtime_page() noexcept {
     rt.reserved[9] = g_rt_sched_queue_depth_last_cycle_peak;
     write_u32_le(&rt.reserved[10], g_rt_sched_cycle_schedule_drop_count);
     write_u32_le(&rt.reserved[14], g_rt_sched_calibration_clamp_count);
+    write_u32_le(&rt.reserved[18], g_rt_seed_loaded_count);
+    write_u32_le(&rt.reserved[22], g_rt_seed_confirmed_count);
+    write_u32_le(&rt.reserved[26], g_rt_seed_rejected_count);
+    rt.reserved[30] = g_rt_sync_state_raw;
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }
@@ -415,7 +423,7 @@ void ts_init() noexcept {
     reset_pages();
     reset_parser();
     ts_update_rt_metrics(0u, 0, 0);
-    ts_update_rt_sched_diag(0u, 0u, 0u, 0u, 0u, 0u);
+    ts_update_rt_sched_diag(0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
 }
 
 void ts_uart0_rx_isr_byte(uint8_t byte) noexcept {
@@ -462,13 +470,21 @@ void ts_update_rt_sched_diag(uint32_t late_events,
                              uint8_t queue_depth_peak,
                              uint8_t queue_depth_last_cycle_peak,
                              uint32_t cycle_schedule_drop_count,
-                             uint32_t calibration_clamp_count) noexcept {
+                             uint32_t calibration_clamp_count,
+                             uint32_t seed_loaded_count,
+                             uint32_t seed_confirmed_count,
+                             uint32_t seed_rejected_count,
+                             uint8_t sync_state_raw) noexcept {
     g_rt_sched_late_events = late_events;
     g_rt_sched_late_max_delay_ticks = late_max_delay_ticks;
     g_rt_sched_queue_depth_peak = queue_depth_peak;
     g_rt_sched_queue_depth_last_cycle_peak = queue_depth_last_cycle_peak;
     g_rt_sched_cycle_schedule_drop_count = cycle_schedule_drop_count;
     g_rt_sched_calibration_clamp_count = calibration_clamp_count;
+    g_rt_seed_loaded_count = seed_loaded_count;
+    g_rt_seed_confirmed_count = seed_confirmed_count;
+    g_rt_seed_rejected_count = seed_rejected_count;
+    g_rt_sync_state_raw = sync_state_raw;
 }
 
 #if defined(EMS_HOST_TEST)

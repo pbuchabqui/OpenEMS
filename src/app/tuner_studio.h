@@ -30,7 +30,11 @@ void ts_update_rt_sched_diag(uint32_t late_events,
                              uint8_t queue_depth_peak,
                              uint8_t queue_depth_last_cycle_peak,
                              uint32_t cycle_schedule_drop_count,
-                             uint32_t calibration_clamp_count) noexcept;
+                             uint32_t calibration_clamp_count,
+                             uint32_t seed_loaded_count,
+                             uint32_t seed_confirmed_count,
+                             uint32_t seed_rejected_count,
+                             uint8_t sync_state_raw) noexcept;
 
 bool ts_tx_pop(uint8_t& byte) noexcept;
 uint16_t ts_tx_available() noexcept;

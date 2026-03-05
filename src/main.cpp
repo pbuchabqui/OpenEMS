@@ -378,7 +378,11 @@ void loop() {
             g_queue_depth_peak,
             g_queue_depth_last_cycle_peak,
             g_cycle_schedule_drop_count,
-            g_calibration_clamp_count);
+            g_calibration_clamp_count,
+            ems::drv::ckp_seed_loaded_count(),
+            ems::drv::ckp_seed_confirmed_count(),
+            ems::drv::ckp_seed_rejected_count(),
+            static_cast<uint8_t>(ckp.state));
 
         // The ecu_sched queue is filled on CKP tooth hook (schedule_on_tooth),
         // aligned to sync boundaries to avoid duplicate cycle insertion.
