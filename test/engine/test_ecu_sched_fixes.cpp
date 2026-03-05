@@ -376,6 +376,75 @@ void test_sync_loss_clears_queue_and_drives_safe_outputs() {
     TEST_ASSERT_EQ_U32(FTM_CnSC_OC_CLEAR, FTM0->CONTROLS[ECU_CH_IGN1].CnSC);
 }
 
+void test_metrics_late_delay_and_queue_depth() {
+    test_reset();
+    ECU_Hardware_Init();
+
+    g_overflow_count = 5U;
+    FTM0->CNT = 0x1234U;
+
+    Add_Event(0x00030000UL, ECU_CH_IGN1, ECU_ACT_SPARK);  // forced late
+
+    TEST_ASSERT_TRUE(ecu_sched_test_get_late_delay_samples() >= 1U);
+    TEST_ASSERT_TRUE(ecu_sched_test_get_late_delay_sum_ticks() > 0U);
+    TEST_ASSERT_TRUE(ecu_sched_test_get_late_delay_max_ticks() > 0U);
+
+    ecu_sched_test_reset();
+    ECU_Hardware_Init();
+    ecu_sched_test_set_ticks_per_rev(900000U);
+    Calculate_Sequential_Cycle(0U);
+
+    TEST_ASSERT_TRUE(ecu_sched_test_get_queue_depth_peak() >= 16U);
+    TEST_ASSERT_TRUE(ecu_sched_test_get_queue_depth_last_cycle_peak() >= 16U);
+}
+
+void test_stress_200_to_8500rpm_with_sync_noise() {
+    test_reset();
+    ECU_Hardware_Init();
+
+    // 200 rpm on FTM0 PS=8: ticks/rev = (120e6*600)/(8*2000) = 4,500,000
+    ecu_sched_test_set_ticks_per_rev(4500000U);
+    ecu_sched_test_set_dwell_ticks(45000U);
+    ecu_sched_test_set_inj_pw_ticks(30000U);
+    ecu_sched_test_set_advance_deg(10U);
+    ecu_sched_test_set_soi_lead_deg(62U);
+
+    // Preload one far event (> 16-bit horizon) and ensure no immediate late force.
+    g_overflow_count = 0U;
+    FTM0->CNT = 0U;
+    Add_Event(100000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
+    const uint32_t late_before = g_late_event_count;
+
+    ems::drv::CkpSnapshot full_sync{
+        1000u, 10u, 0u, 2000u, ems::drv::SyncState::FULL_SYNC, false
+    };
+    ems::engine::ecu_sched_on_tooth_hook(full_sync);
+    TEST_ASSERT_EQ_U32(late_before, g_late_event_count);
+
+    // Advance logical time near event and poll near-time arming.
+    g_overflow_count = 1U;
+    FTM0->CNT = static_cast<uint32_t>(70000U - 65536U);
+    ems::engine::ecu_sched_on_tooth_hook(full_sync);
+    TEST_ASSERT_EQ_U32(late_before, g_late_event_count);
+
+    // Accelerate to 8500 rpm and schedule a cycle via boundary tooth wrap.
+    // ticks/rev ~= (120e6*600)/(8*85000) = 105,882
+    ecu_sched_test_set_ticks_per_rev(105882U);
+    ems::drv::CkpSnapshot t1{1000u, 1u, 0u, 85000u, ems::drv::SyncState::FULL_SYNC, false};
+    ems::drv::CkpSnapshot t0{1000u, 0u, 0u, 85000u, ems::drv::SyncState::FULL_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(t1);
+    ems::engine::ecu_sched_on_tooth_hook(t0);  // cycle boundary
+    TEST_ASSERT_TRUE(ecu_sched_test_queue_size() > 0U);
+
+    // Inject sync noise/loss: queue must be cleared and outputs driven safe.
+    ems::drv::CkpSnapshot noise{
+        1000u, 2u, 0u, 85000u, ems::drv::SyncState::LOSS_OF_SYNC, false
+    };
+    ems::engine::ecu_sched_on_tooth_hook(noise);
+    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
+    TEST_ASSERT_EQ_U32(FTM_CnSC_OC_CLEAR, FTM0->CONTROLS[ECU_CH_INJ1].CnSC);
+}
+
 // =============================================================================
 // Main Test Runner
 // =============================================================================
@@ -403,6 +472,8 @@ int main() {
     test_isr_queue_processing_backwards();
     test_queue_remove_index_bounds();
     test_sync_loss_clears_queue_and_drives_safe_outputs();
+    test_metrics_late_delay_and_queue_depth();
+    test_stress_200_to_8500rpm_with_sync_noise();
     
     printf("ECU scheduler fixes tests completed: %d run, %d failed\n", 
            g_tests_run, g_tests_failed);

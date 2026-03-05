@@ -208,6 +208,9 @@ typedef struct {
 /*!< FTM0 ticks per millisecond: 120MHz / 8 / 1000 = 15000 */
 #define ECU_FTM0_TICKS_PER_MS  15000U
 
+/*!< FTM0 ticks per microsecond: 120MHz / 8 / 1e6 = 15 */
+#define ECU_FTM0_TICKS_PER_US  15U
+
 /*!< FTM3 tick period in nanoseconds: 2 / 120MHz * 1e9 = 16.667 */
 #define ECU_FTM3_TICK_NS       17U
 
@@ -220,6 +223,21 @@ extern volatile uint32_t g_overflow_count;
 
 /*!< Cumulative count of events that arrived too late for scheduling. */
 extern volatile uint32_t g_late_event_count;
+
+/*!< Number of late events with measured delay (ticks). */
+extern volatile uint32_t g_late_delay_samples;
+
+/*!< Accumulated late-event delay in FTM0 ticks (for average computation). */
+extern volatile uint32_t g_late_delay_sum_ticks;
+
+/*!< Maximum single late-event delay observed in FTM0 ticks. */
+extern volatile uint32_t g_late_delay_max_ticks;
+
+/*!< Maximum queue depth observed since boot/reset. */
+extern volatile uint8_t g_queue_depth_peak;
+
+/*!< Peak queue depth observed during the last Calculate_Sequential_Cycle call. */
+extern volatile uint8_t g_queue_depth_last_cycle_peak;
 
 /* ============================================================================
  * Public API
@@ -338,6 +356,21 @@ void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks);
 
 /** Set SOI lead (degrees) used by Calculate_Sequential_Cycle. */
 void ecu_sched_test_set_soi_lead_deg(uint32_t soi_lead_deg);
+
+/** Return late delay samples count. */
+uint32_t ecu_sched_test_get_late_delay_samples(void);
+
+/** Return accumulated late delay (ticks). */
+uint32_t ecu_sched_test_get_late_delay_sum_ticks(void);
+
+/** Return maximum late delay (ticks). */
+uint32_t ecu_sched_test_get_late_delay_max_ticks(void);
+
+/** Return peak queue depth since reset. */
+uint8_t ecu_sched_test_get_queue_depth_peak(void);
+
+/** Return peak queue depth during last cycle fill. */
+uint8_t ecu_sched_test_get_queue_depth_last_cycle_peak(void);
 #endif /* EMS_HOST_TEST */
 
 #ifdef __cplusplus

@@ -120,6 +120,11 @@ static volatile uint8_t    g_next_action[ECU_CHANNELS];
 
 volatile uint32_t g_overflow_count  = 0U;
 volatile uint32_t g_late_event_count = 0U;
+volatile uint32_t g_late_delay_samples = 0U;
+volatile uint32_t g_late_delay_sum_ticks = 0U;
+volatile uint32_t g_late_delay_max_ticks = 0U;
+volatile uint8_t g_queue_depth_peak = 0U;
+volatile uint8_t g_queue_depth_last_cycle_peak = 0U;
 
 /* ============================================================================
  * Module-private configuration (set by test helpers or calibration layer)
@@ -130,6 +135,8 @@ static volatile uint32_t g_advance_deg    = 10U;    /* Spark advance, degrees BT
 static volatile uint32_t g_dwell_ticks    = 45000U; /* ~3 ms at 15 tick/us */
 static volatile uint32_t g_inj_pw_ticks   = 45000U; /* ~3 ms at 15 tick/us */
 static volatile uint32_t g_soi_lead_deg   = 62U;    /* SOI lead before TDC */
+static volatile uint8_t g_cycle_fill_active = 0U;
+static volatile uint8_t g_cycle_fill_peak = 0U;
 
 /* ============================================================================
  * Internal helpers
@@ -156,6 +163,30 @@ static uint32_t near_time_window_ticks(void)
         win = 65535U;
     }
     return win;
+}
+
+static void update_queue_depth_metrics(void)
+{
+    if (g_queue_count > g_queue_depth_peak) {
+        g_queue_depth_peak = g_queue_count;
+    }
+    if ((g_cycle_fill_active != 0U) && (g_queue_count > g_cycle_fill_peak)) {
+        g_cycle_fill_peak = g_queue_count;
+    }
+}
+
+static void record_late_delay(uint32_t now, uint32_t ts)
+{
+    uint32_t delay;
+    if (now <= ts) {
+        return;
+    }
+    delay = now - ts;
+    ++g_late_delay_samples;
+    g_late_delay_sum_ticks += delay;
+    if (delay > g_late_delay_max_ticks) {
+        g_late_delay_max_ticks = delay;
+    }
 }
 
 /**
@@ -343,6 +374,7 @@ static void process_channel_ready_event(uint8_t ch)
                 }
             }
             if (removed != 0U) {
+                record_late_delay(now, ts);
                 force_output(ch, act);
                 ++g_late_event_count;
             }
@@ -383,6 +415,7 @@ static void clear_all_events_and_drive_safe_outputs(void)
         g_queue[i]._pad        = 0U;
     }
     g_queue_count = 0U;
+    update_queue_depth_metrics();
 
     for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
         g_next_valid[ch] = 0U;
@@ -480,6 +513,7 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
             }
         }
         recompute_next_per_channel();
+        record_late_delay(current_timestamp32(), timestamp32);
         force_output(channel, action);
         ++g_late_event_count;
         ASSERT_INVARIANTS();
@@ -527,6 +561,7 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
     g_queue[insert_pos].valid       = 1U;
     g_queue[insert_pos]._pad        = 0U;
     ++g_queue_count;
+    update_queue_depth_metrics();
 
     /* Keep one authoritative "next event" per channel and only arm due ones. */
     recompute_next_per_channel();
@@ -565,6 +600,7 @@ void FTM0_IRQHandler(void)
             uint8_t idx = i - 1U;
             if (is_timestamp_late(g_queue[idx].timestamp32) != 0U) {
                 /* Still late even after increment — force and count */
+                record_late_delay(current_timestamp32(), g_queue[idx].timestamp32);
                 force_output(g_queue[idx].channel, g_queue[idx].action);
                 ++g_late_event_count;
                 queue_remove(idx);
@@ -644,6 +680,9 @@ void Calculate_Sequential_Cycle(uint32_t current_timestamp)
     uint32_t inj_pw_ticks   = g_inj_pw_ticks;
     uint32_t soi_lead_deg   = g_soi_lead_deg;
 
+    g_cycle_fill_active = 1U;
+    g_cycle_fill_peak = g_queue_count;
+
     for (seq = 0U; seq < ECU_NUM_CYL; ++seq) {
         uint8_t  cyl_idx    = k_fire_order[seq];
         uint32_t tdc_deg    = k_tdc_deg[seq];
@@ -701,6 +740,9 @@ void Calculate_Sequential_Cycle(uint32_t current_timestamp)
             Add_Event(ts_inj_off, inj_ch, ECU_ACT_INJ_OFF);
         }
     }
+
+    g_queue_depth_last_cycle_peak = g_cycle_fill_peak;
+    g_cycle_fill_active = 0U;
 }
 
 void ecu_sched_set_ticks_per_rev(uint32_t tpr)
@@ -791,6 +833,13 @@ void ecu_sched_test_reset(void)
     uint8_t i;
     g_overflow_count   = 0U;
     g_late_event_count = 0U;
+    g_late_delay_samples = 0U;
+    g_late_delay_sum_ticks = 0U;
+    g_late_delay_max_ticks = 0U;
+    g_queue_depth_peak = 0U;
+    g_queue_depth_last_cycle_peak = 0U;
+    g_cycle_fill_active = 0U;
+    g_cycle_fill_peak = 0U;
     g_queue_count      = 0U;
     g_ticks_per_rev    = 900000U;
     g_advance_deg      = 10U;
@@ -852,6 +901,31 @@ void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks)
 void ecu_sched_test_set_soi_lead_deg(uint32_t soi_lead_deg)
 {
     ecu_sched_set_soi_lead_deg(soi_lead_deg);
+}
+
+uint32_t ecu_sched_test_get_late_delay_samples(void)
+{
+    return g_late_delay_samples;
+}
+
+uint32_t ecu_sched_test_get_late_delay_sum_ticks(void)
+{
+    return g_late_delay_sum_ticks;
+}
+
+uint32_t ecu_sched_test_get_late_delay_max_ticks(void)
+{
+    return g_late_delay_max_ticks;
+}
+
+uint8_t ecu_sched_test_get_queue_depth_peak(void)
+{
+    return g_queue_depth_peak;
+}
+
+uint8_t ecu_sched_test_get_queue_depth_last_cycle_peak(void)
+{
+    return g_queue_depth_last_cycle_peak;
 }
 
 #endif /* EMS_HOST_TEST */
