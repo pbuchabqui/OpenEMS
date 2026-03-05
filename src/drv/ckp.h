@@ -100,6 +100,7 @@ void ckp_ftm3_ch1_isr() noexcept;   ///< Cam sensor rising edge (FTM3 CH1 / PTD1
  * WAIT_GAP/LOSS_OF_SYNC -> FULL_SYNC at the first accepted gap.
  */
 void ckp_seed_arm(bool phase_A) noexcept;
+void ckp_seed_disarm() noexcept;
 
 uint32_t ckp_seed_loaded_count() noexcept;
 uint32_t ckp_seed_confirmed_count() noexcept;

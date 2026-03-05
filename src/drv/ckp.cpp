@@ -512,6 +512,10 @@ void ckp_seed_arm(bool phase_A) noexcept {
     ++g_seed_loaded_count;
 }
 
+void ckp_seed_disarm() noexcept {
+    g_seed_armed = false;
+}
+
 uint32_t ckp_seed_loaded_count() noexcept {
     return g_seed_loaded_count;
 }

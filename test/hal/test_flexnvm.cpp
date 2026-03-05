@@ -175,6 +175,7 @@ void test_runtime_seed_save_load_roundtrip() {
         ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC |
         ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A);
     in.tooth_index = 37u;
+    in.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
 
     TEST_ASSERT_TRUE(ems::hal::nvm_save_runtime_seed(&in));
 
@@ -192,6 +193,7 @@ void test_runtime_seed_latest_slot_wins() {
     ems::hal::RuntimeSyncSeed s0{};
     s0.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
     s0.tooth_index = 10u;
+    s0.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
     TEST_ASSERT_TRUE(ems::hal::nvm_save_runtime_seed(&s0));
 
     ems::hal::RuntimeSyncSeed s1{};
@@ -199,6 +201,7 @@ void test_runtime_seed_latest_slot_wins() {
         ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC |
         ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A);
     s1.tooth_index = 42u;
+    s1.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
     TEST_ASSERT_TRUE(ems::hal::nvm_save_runtime_seed(&s1));
 
     ems::hal::RuntimeSyncSeed out{};
@@ -212,6 +215,7 @@ void test_runtime_seed_clear() {
     ems::hal::RuntimeSyncSeed s{};
     s.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
     s.tooth_index = 5u;
+    s.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
     TEST_ASSERT_TRUE(ems::hal::nvm_save_runtime_seed(&s));
     TEST_ASSERT_TRUE(ems::hal::nvm_clear_runtime_seed());
 
@@ -227,6 +231,7 @@ void test_runtime_seed_rotates_across_all_slots() {
         ems::hal::RuntimeSyncSeed s{};
         s.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
         s.tooth_index = static_cast<uint16_t>(i % 60u);
+        s.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
         TEST_ASSERT_TRUE(ems::hal::nvm_save_runtime_seed(&s));
     }
     ems::hal::RuntimeSyncSeed out{};
@@ -243,6 +248,7 @@ void test_runtime_seed_sequence_wrap_prefers_newer() {
     old_s.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_VALID |
                   ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
     old_s.tooth_index = 11u;
+    old_s.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
     old_s.sequence = 0xFFFFFFFEu;
     TEST_ASSERT_TRUE(ems::hal::nvm_test_runtime_seed_inject_slot(0u, &old_s, true));
 
@@ -265,6 +271,7 @@ void test_runtime_seed_ignores_invalid_latest_slot() {
     good.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_VALID |
                  ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
     good.tooth_index = 19u;
+    good.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
     good.sequence = 100u;
     TEST_ASSERT_TRUE(ems::hal::nvm_test_runtime_seed_inject_slot(0u, &good, true));
 
@@ -277,6 +284,21 @@ void test_runtime_seed_ignores_invalid_latest_slot() {
     ems::hal::RuntimeSyncSeed out{};
     TEST_ASSERT_TRUE(ems::hal::nvm_load_runtime_seed(&out));
     TEST_ASSERT_EQ_I32(19, out.tooth_index);
+}
+
+void test_runtime_seed_boot_compatibility_checks() {
+    ems::hal::RuntimeSyncSeed seed{};
+    seed.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
+    seed.tooth_index = 12u;
+    seed.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
+    TEST_ASSERT_TRUE(ems::hal::runtime_seed_boot_compatible_60_2(seed));
+
+    seed.decoder_tag = 0u;
+    TEST_ASSERT_TRUE(!ems::hal::runtime_seed_boot_compatible_60_2(seed));
+
+    seed.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
+    seed.tooth_index = 58u;
+    TEST_ASSERT_TRUE(!ems::hal::runtime_seed_boot_compatible_60_2(seed));
 }
 
 }  // namespace
@@ -300,6 +322,7 @@ int main() {
     test_runtime_seed_rotates_across_all_slots();
     test_runtime_seed_sequence_wrap_prefers_newer();
     test_runtime_seed_ignores_invalid_latest_slot();
+    test_runtime_seed_boot_compatibility_checks();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;

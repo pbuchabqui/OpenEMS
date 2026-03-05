@@ -193,6 +193,16 @@ void test_seeded_fast_reacquire_rejects_without_cam() {
     TEST_ASSERT_EQ_U32(1u, ems::drv::ckp_seed_rejected_count());
 }
 
+void test_seed_disarm_blocks_seeded_promotion() {
+    test_reset();
+    ems::drv::ckp_seed_arm(true);
+    ems::drv::ckp_seed_disarm();
+    sync_with_one_gap();
+    const auto snap = ems::drv::ckp_snapshot();
+    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::HALF_SYNC);
+    TEST_ASSERT_EQ_U32(1u, ems::drv::ckp_seed_loaded_count());
+}
+
 }  // namespace
 
 int main() {
@@ -207,6 +217,7 @@ int main() {
     test_seeded_fast_reacquire_promotes_on_first_gap();
     test_seeded_fast_reacquire_confirms_on_cam_edge();
     test_seeded_fast_reacquire_rejects_without_cam();
+    test_seed_disarm_blocks_seeded_promotion();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;

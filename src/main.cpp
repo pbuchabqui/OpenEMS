@@ -106,13 +106,16 @@ static constexpr uint8_t  kFaultBitClt = (1u << 3u);   // SensorId::CLT
 static bool g_limp_active = false;
 static bool g_engine_was_running = false;
 static bool g_runtime_seed_saved_for_stop = false;
+static bool g_runtime_seed_arm_window_active = false;
 static uint32_t g_prev_rpm_x10 = 0u;
 static uint32_t g_zero_rpm_since_ms = 0u;
+static uint32_t g_runtime_seed_arm_window_start_ms = 0u;
 static bool g_have_last_full_sync = false;
 static ems::drv::CkpSnapshot g_last_full_sync_snapshot = {
     0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
 };
 static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
+static constexpr uint32_t kRuntimeSeedArmWindowMs = 2000u;
 
 // Parâmetros de referência para cálculo de PW (a ser configurável via NVM)
 static constexpr uint16_t kDefaultReqFuelUs = 8000u;  // 8 ms a VE=100%, MAP=MAP_ref
@@ -213,10 +216,14 @@ void setup() {
     {
         ems::hal::RuntimeSyncSeed seed = {};
         if (ems::hal::nvm_load_runtime_seed(&seed) &&
-            ((seed.flags & ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC) != 0u)) {
+            ems::hal::runtime_seed_boot_compatible_60_2(seed)) {
             const bool phase_a =
                 ((seed.flags & ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A) != 0u);
             ems::drv::ckp_seed_arm(phase_a);
+            g_runtime_seed_arm_window_active = true;
+            g_runtime_seed_arm_window_start_ms = millis();
+            // One-shot policy: avoid reusing stale seed across repeated power cycles.
+            static_cast<void>(ems::hal::nvm_clear_runtime_seed());
         }
     }
 
@@ -283,6 +290,11 @@ void loop() {
     if (ckp.state == ems::drv::SyncState::FULL_SYNC) {
         g_last_full_sync_snapshot = ckp;
         g_have_last_full_sync = true;
+        g_runtime_seed_arm_window_active = false;
+    } else if (g_runtime_seed_arm_window_active &&
+               elapsed(now, g_runtime_seed_arm_window_start_ms, kRuntimeSeedArmWindowMs)) {
+        ems::drv::ckp_seed_disarm();
+        g_runtime_seed_arm_window_active = false;
     }
     if (ckp.rpm_x10 > 800u) {
         g_engine_was_running = true;
@@ -448,6 +460,7 @@ void loop() {
                     ? ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A
                     : 0u));
             seed.tooth_index = g_last_full_sync_snapshot.tooth_index;
+            seed.decoder_tag = ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
             if (ems::hal::nvm_save_runtime_seed(&seed)) {
                 g_runtime_seed_saved_for_stop = true;
                 g_engine_was_running = false;
