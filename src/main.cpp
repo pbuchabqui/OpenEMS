@@ -101,13 +101,6 @@ static uint8_t g_last_pw_ms_x10   = 0u;
 static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;  // 3000 RPM
 static constexpr uint8_t  kFaultBitMap = (1u << 0u);   // SensorId::MAP
 static constexpr uint8_t  kFaultBitClt = (1u << 3u);   // SensorId::CLT
-static constexpr uint8_t  kStatusSync      = (1u << 0u);
-static constexpr uint8_t  kStatusPhaseA    = (1u << 1u);
-static constexpr uint8_t  kStatusSensorFault = (1u << 2u);
-static constexpr uint8_t  kStatusLimp      = (1u << 3u);
-static constexpr uint8_t  kStatusSchedLate = (1u << 4u);
-static constexpr uint8_t  kStatusSchedDrop = (1u << 5u);
-static constexpr uint8_t  kStatusSchedClamp = (1u << 6u);
 static bool g_limp_active = false;
 
 // Parâmetros de referência para cálculo de PW (a ser configurável via NVM)
@@ -370,13 +363,13 @@ void loop() {
             /*vvt_intake_pct*/  0u,
             /*vvt_exhaust_pct*/ 0u,
             /*status*/  static_cast<uint8_t>(
-                (ckp.state == ems::drv::SyncState::FULL_SYNC ? kStatusSync : 0u) |
-                (ckp.phase_A                                  ? kStatusPhaseA : 0u) |
-                (sensors.fault_bits != 0u                     ? kStatusSensorFault : 0u) |
-                (g_limp_active                                ? kStatusLimp : 0u) |
-                (g_late_event_count != 0u                     ? kStatusSchedLate : 0u) |
-                (g_cycle_schedule_drop_count != 0u            ? kStatusSchedDrop : 0u) |
-                (g_calibration_clamp_count != 0u              ? kStatusSchedClamp : 0u)));
+                (ckp.state == ems::drv::SyncState::FULL_SYNC ? ems::app::STATUS_SYNC_FULL : 0u) |
+                (ckp.phase_A                                  ? ems::app::STATUS_PHASE_A : 0u) |
+                (sensors.fault_bits != 0u                     ? ems::app::STATUS_SENSOR_FAULT : 0u) |
+                (g_limp_active                                ? ems::app::STATUS_LIMP_MODE : 0u) |
+                (g_late_event_count != 0u                     ? ems::app::STATUS_SCHED_LATE : 0u) |
+                (g_cycle_schedule_drop_count != 0u            ? ems::app::STATUS_SCHED_DROP : 0u) |
+                (g_calibration_clamp_count != 0u              ? ems::app::STATUS_SCHED_CLAMP : 0u)));
     }
 
     // ── 100 ms: sensores muito lentos + CAN 0x401 + LTFT ─────────────────────

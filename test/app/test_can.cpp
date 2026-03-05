@@ -196,6 +196,34 @@ void test_status_bits_wbo2_fault_flag() {
     TEST_ASSERT_TRUE((f.data[7] & ems::app::STATUS_WBO2_FAULT) == 0u);
 }
 
+void test_status_bits_scheduler_flags_passthrough() {
+    ems::app::can_stack_test_reset();
+    const ems::drv::CkpSnapshot ckp     = make_ckp(5000u);
+    const ems::drv::SensorData  sensors = make_sensors();
+
+    const uint8_t status = static_cast<uint8_t>(
+        ems::app::STATUS_SYNC_FULL |
+        ems::app::STATUS_SCHED_LATE |
+        ems::app::STATUS_SCHED_DROP |
+        ems::app::STATUS_SCHED_CLAMP);
+
+    // Provide a fresh WBO2 frame so bit7 is not auto-forced.
+    ems::hal::CanFrame in = {};
+    in.id = 0x180u; in.dlc = 3u; in.extended = false;
+    in.data[0] = 0xE8u; in.data[1] = 0x03u;
+    in.data[2] = 0x01u;
+    ems::hal::can_test_inject_rx(in);
+
+    ems::app::can_stack_process(10u, ckp, sensors, 0, 0u, 0, 0u, 0u, status);
+
+    ems::hal::CanFrame f = {};
+    while (ems::hal::can_test_pop_tx(f)) {
+        if (f.id == 0x400u) { break; }
+    }
+    TEST_ASSERT_EQ_U32(0x400u, f.id);
+    TEST_ASSERT_EQ_U32(status, f.data[7]);
+}
+
 } // namespace
 
 int main() {
@@ -204,6 +232,7 @@ int main() {
     test_tx_0x401_serialization();
     test_rx_wbo2_safe_lambda_and_timeout();
     test_status_bits_wbo2_fault_flag();
+    test_status_bits_scheduler_flags_passthrough();
 
     std::printf("\ntests=%d  failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;

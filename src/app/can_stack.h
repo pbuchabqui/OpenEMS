@@ -4,14 +4,12 @@
 
 #include "drv/ckp.h"
 #include "drv/sensors.h"
+#include "app/status_bits.h"
 
 namespace ems::app {
 
 // Valor de lambda fixo retornado em caso de timeout do WBO2 (λ = 1.05)
 static constexpr uint16_t WBO2_SAFE_LAMBDA_MILLI = 1050u;
-
-// Bit em status_bits que indica falha/timeout do WBO2
-static constexpr uint8_t STATUS_WBO2_FAULT = (1u << 7);
 
 void can_stack_init(uint16_t wbo2_rx_id = 0x180u) noexcept;
 void can_stack_set_wbo2_rx_id(uint16_t id) noexcept;
