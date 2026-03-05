@@ -45,6 +45,11 @@ void feed_ckp(uint16_t period_ticks) {
     ems::drv::ckp_ftm3_ch0_isr();
 }
 
+void feed_cam_edge() {
+    ems_test_gpiod_pdir = (1u << 1u);
+    ems::drv::ckp_ftm3_ch1_isr();
+}
+
 void sync_with_two_gaps() {
     for (int i = 0; i < 58; ++i) {
         feed_ckp(1000u);
@@ -163,6 +168,29 @@ void test_seeded_fast_reacquire_promotes_on_first_gap() {
     const auto snap = ems::drv::ckp_snapshot();
     TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::FULL_SYNC);
     TEST_ASSERT_TRUE(snap.phase_A == true);
+    TEST_ASSERT_EQ_U32(1u, ems::drv::ckp_seed_loaded_count());
+}
+
+void test_seeded_fast_reacquire_confirms_on_cam_edge() {
+    test_reset();
+    ems::drv::ckp_seed_arm(false);
+    sync_with_one_gap();
+    TEST_ASSERT_EQ_U32(0u, ems::drv::ckp_seed_confirmed_count());
+    feed_cam_edge();
+    TEST_ASSERT_EQ_U32(1u, ems::drv::ckp_seed_confirmed_count());
+    TEST_ASSERT_EQ_U32(0u, ems::drv::ckp_seed_rejected_count());
+}
+
+void test_seeded_fast_reacquire_rejects_without_cam() {
+    test_reset();
+    ems::drv::ckp_seed_arm(false);
+    sync_with_one_gap();
+    for (int i = 0; i < 71; ++i) {
+        feed_ckp(1000u);
+    }
+    const auto snap = ems::drv::ckp_snapshot();
+    TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::HALF_SYNC);
+    TEST_ASSERT_EQ_U32(1u, ems::drv::ckp_seed_rejected_count());
 }
 
 }  // namespace
@@ -177,6 +205,8 @@ int main() {
     test_phase_a_toggles_on_ch1();
     test_tooth_period_nonzero_after_two_teeth();
     test_seeded_fast_reacquire_promotes_on_first_gap();
+    test_seeded_fast_reacquire_confirms_on_cam_edge();
+    test_seeded_fast_reacquire_rejects_without_cam();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;

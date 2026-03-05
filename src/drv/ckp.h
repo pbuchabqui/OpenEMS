@@ -101,6 +101,10 @@ void ckp_ftm3_ch1_isr() noexcept;   ///< Cam sensor rising edge (FTM3 CH1 / PTD1
  */
 void ckp_seed_arm(bool phase_A) noexcept;
 
+uint32_t ckp_seed_loaded_count() noexcept;
+uint32_t ckp_seed_confirmed_count() noexcept;
+uint32_t ckp_seed_rejected_count() noexcept;
+
 // ── API de teste (somente em build host) ──────────────────────────────────────
 #if defined(EMS_HOST_TEST)
 void     ckp_test_reset() noexcept;

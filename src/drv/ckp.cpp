@@ -161,6 +161,12 @@ static DecoderState g_state = {
 };
 static bool g_seed_armed = false;
 static bool g_seed_phase_a = false;
+static bool g_seed_probation = false;
+static uint16_t g_seed_probation_teeth = 0u;
+static uint32_t g_seed_loaded_count = 0u;
+static uint32_t g_seed_confirmed_count = 0u;
+static uint32_t g_seed_rejected_count = 0u;
+static constexpr uint16_t kSeedCamConfirmMaxTeeth = 70u;
 
 // ── Utilitários inline ────────────────────────────────────────────────────────
 
@@ -248,6 +254,8 @@ inline bool process_gap_event(uint16_t capture_now) noexcept {
                 g_state.snap.state = ems::drv::SyncState::FULL_SYNC;
                 g_state.snap.phase_A = g_seed_phase_a;
                 g_seed_armed = false;
+                g_seed_probation = true;
+                g_seed_probation_teeth = 0u;
             } else {
                 g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
             }
@@ -462,6 +470,18 @@ void ckp_ftm3_ch0_isr() noexcept {
     }
 
     // ── 8. Hooks ──────────────────────────────────────────────────────────
+    if (g_seed_probation) {
+        ++g_seed_probation_teeth;
+        if (g_seed_probation_teeth > kSeedCamConfirmMaxTeeth) {
+            // Seed could not be validated by cam edge in time: fallback to safe sync path.
+            g_seed_probation = false;
+            g_seed_probation_teeth = 0u;
+            ++g_seed_rejected_count;
+            g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
+            g_state.tooth_count = 0u;
+            g_state.snap.tooth_index = 0u;
+        }
+    }
     sensors_on_tooth(g_state.snap);
     schedule_on_tooth(g_state.snap);
 }
@@ -476,6 +496,11 @@ void ckp_ftm3_ch1_isr() noexcept {
     }
     static_cast<void>(FTM3_C1V);   // leitura limpa o CHF do canal
     g_state.snap.phase_A = !g_state.snap.phase_A;
+    if (g_seed_probation) {
+        g_seed_probation = false;
+        g_seed_probation_teeth = 0u;
+        ++g_seed_confirmed_count;
+    }
     if (g_state.cmp_confirms < 2u) {
         ++g_state.cmp_confirms;
     }
@@ -484,6 +509,19 @@ void ckp_ftm3_ch1_isr() noexcept {
 void ckp_seed_arm(bool phase_A) noexcept {
     g_seed_armed = true;
     g_seed_phase_a = phase_A;
+    ++g_seed_loaded_count;
+}
+
+uint32_t ckp_seed_loaded_count() noexcept {
+    return g_seed_loaded_count;
+}
+
+uint32_t ckp_seed_confirmed_count() noexcept {
+    return g_seed_confirmed_count;
+}
+
+uint32_t ckp_seed_rejected_count() noexcept {
+    return g_seed_rejected_count;
 }
 
 // ── API de teste (host only) ──────────────────────────────────────────────────
@@ -502,6 +540,11 @@ void ckp_test_reset() noexcept {
     ems_test_gpiod_pdir = 0u;
     g_seed_armed = false;
     g_seed_phase_a = false;
+    g_seed_probation = false;
+    g_seed_probation_teeth = 0u;
+    g_seed_loaded_count = 0u;
+    g_seed_confirmed_count = 0u;
+    g_seed_rejected_count = 0u;
 }
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {
