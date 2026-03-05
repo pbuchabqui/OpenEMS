@@ -24,4 +24,11 @@ bool nvm_save_runtime_seed(const RuntimeSyncSeed* seed) noexcept;
 bool nvm_load_runtime_seed(RuntimeSyncSeed* seed_out) noexcept;
 bool nvm_clear_runtime_seed() noexcept;
 
+#if defined(EMS_HOST_TEST)
+bool nvm_test_runtime_seed_inject_slot(uint8_t slot,
+                                       const RuntimeSyncSeed* seed,
+                                       bool recompute_crc) noexcept;
+uint8_t nvm_test_runtime_seed_slot_count() noexcept;
+#endif
+
 }  // namespace ems::hal

@@ -15,7 +15,7 @@ constexpr uint16_t kKnockSize = static_cast<uint16_t>(kKnockRows * kKnockCols);
 // knock_map offset in FlexRAM: logo após os 256 bytes do LTFT
 constexpr uint16_t kKnockEeeOffset = kLtftSize;
 constexpr uint16_t kRuntimeSeedOffset = static_cast<uint16_t>(kKnockEeeOffset + kKnockSize);
-constexpr uint8_t kRuntimeSeedSlots = 2u;
+constexpr uint8_t kRuntimeSeedSlots = 8u;
 constexpr uint16_t kRuntimeSeedSlotBytes = 32u;
 constexpr uint16_t kRuntimeSeedStorageBytes = static_cast<uint16_t>(
     static_cast<uint16_t>(kRuntimeSeedSlots) * kRuntimeSeedSlotBytes);
@@ -167,6 +167,10 @@ bool runtime_seed_is_valid(const ems::hal::RuntimeSyncSeed& seed) noexcept {
         return false;
     }
     return (runtime_seed_crc32(seed) == seed.crc32);
+}
+
+bool runtime_seed_sequence_newer(uint32_t seq_a, uint32_t seq_b) noexcept {
+    return static_cast<int32_t>(seq_a - seq_b) > 0;
 }
 
 bool runtime_seed_read_slot(uint8_t slot, ems::hal::RuntimeSyncSeed* out) noexcept {
@@ -360,27 +364,24 @@ bool nvm_save_runtime_seed(const RuntimeSyncSeed* seed) noexcept {
     if (seed == nullptr) {
         return false;
     }
-    RuntimeSyncSeed a{};
-    RuntimeSyncSeed b{};
+    RuntimeSyncSeed slot_seed{};
     RuntimeSyncSeed write = *seed;
     uint8_t target_slot = 0u;
-    const bool a_ok = runtime_seed_read_slot(0u, &a) && runtime_seed_is_valid(a);
-    const bool b_ok = runtime_seed_read_slot(1u, &b) && runtime_seed_is_valid(b);
+    uint8_t best_slot = 0u;
+    bool have_best = false;
     uint32_t last_seq = 0u;
-    if (a_ok && b_ok) {
-        if (b.sequence >= a.sequence) {
-            last_seq = b.sequence;
-            target_slot = 0u;
-        } else {
-            last_seq = a.sequence;
-            target_slot = 1u;
+    for (uint8_t s = 0u; s < kRuntimeSeedSlots; ++s) {
+        if (!runtime_seed_read_slot(s, &slot_seed) || !runtime_seed_is_valid(slot_seed)) {
+            continue;
         }
-    } else if (a_ok) {
-        last_seq = a.sequence;
-        target_slot = 1u;
-    } else if (b_ok) {
-        last_seq = b.sequence;
-        target_slot = 0u;
+        if (!have_best || runtime_seed_sequence_newer(slot_seed.sequence, last_seq)) {
+            have_best = true;
+            last_seq = slot_seed.sequence;
+            best_slot = s;
+        }
+    }
+    if (have_best) {
+        target_slot = static_cast<uint8_t>((best_slot + 1u) % kRuntimeSeedSlots);
     } else {
         target_slot = 0u;
     }
@@ -397,19 +398,23 @@ bool nvm_load_runtime_seed(RuntimeSyncSeed* seed_out) noexcept {
     if (seed_out == nullptr) {
         return false;
     }
-    RuntimeSyncSeed a{};
-    RuntimeSyncSeed b{};
-    const bool a_ok = runtime_seed_read_slot(0u, &a) && runtime_seed_is_valid(a);
-    const bool b_ok = runtime_seed_read_slot(1u, &b) && runtime_seed_is_valid(b);
-    if (!a_ok && !b_ok) {
+    RuntimeSyncSeed slot_seed{};
+    RuntimeSyncSeed best{};
+    bool have_best = false;
+    for (uint8_t s = 0u; s < kRuntimeSeedSlots; ++s) {
+        if (!runtime_seed_read_slot(s, &slot_seed) || !runtime_seed_is_valid(slot_seed)) {
+            continue;
+        }
+        if (!have_best || runtime_seed_sequence_newer(slot_seed.sequence, best.sequence)) {
+            have_best = true;
+            best = slot_seed;
+        }
+    }
+    if (!have_best) {
         std::memset(seed_out, 0, sizeof(*seed_out));
         return false;
     }
-    if (a_ok && b_ok) {
-        *seed_out = (b.sequence >= a.sequence) ? b : a;
-    } else {
-        *seed_out = a_ok ? a : b;
-    }
+    *seed_out = best;
     return true;
 }
 
@@ -421,12 +426,31 @@ bool nvm_clear_runtime_seed() noexcept {
     cleared.tooth_index = 0u;
     cleared.sequence = 0u;
     cleared.crc32 = runtime_seed_crc32(cleared);
-    const bool a = runtime_seed_write_slot(0u, cleared);
-    const bool b = runtime_seed_write_slot(1u, cleared);
-    return a && b;
+    bool ok = true;
+    for (uint8_t s = 0u; s < kRuntimeSeedSlots; ++s) {
+        ok = runtime_seed_write_slot(s, cleared) && ok;
+    }
+    return ok;
 }
 
 #if defined(EMS_HOST_TEST)
+bool nvm_test_runtime_seed_inject_slot(uint8_t slot,
+                                       const RuntimeSyncSeed* seed,
+                                       bool recompute_crc) noexcept {
+    if (seed == nullptr || slot >= kRuntimeSeedSlots) {
+        return false;
+    }
+    RuntimeSyncSeed write = *seed;
+    if (recompute_crc) {
+        write.crc32 = runtime_seed_crc32(write);
+    }
+    return runtime_seed_write_slot(slot, write);
+}
+
+uint8_t nvm_test_runtime_seed_slot_count() noexcept {
+    return kRuntimeSeedSlots;
+}
+
 void nvm_test_reset() noexcept {
     g_fstat = kFstatCcif;
     g_busy_polls_remaining = 0u;

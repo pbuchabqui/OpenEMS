@@ -219,6 +219,66 @@ void test_runtime_seed_clear() {
     TEST_ASSERT_TRUE(!ems::hal::nvm_load_runtime_seed(&out));
 }
 
+void test_runtime_seed_rotates_across_all_slots() {
+    test_reset();
+    const uint8_t slots = ems::hal::nvm_test_runtime_seed_slot_count();
+    const uint16_t writes = static_cast<uint16_t>(slots * 3u);
+    for (uint16_t i = 0u; i < writes; ++i) {
+        ems::hal::RuntimeSyncSeed s{};
+        s.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
+        s.tooth_index = static_cast<uint16_t>(i % 60u);
+        TEST_ASSERT_TRUE(ems::hal::nvm_save_runtime_seed(&s));
+    }
+    ems::hal::RuntimeSyncSeed out{};
+    TEST_ASSERT_TRUE(ems::hal::nvm_load_runtime_seed(&out));
+    TEST_ASSERT_EQ_I32((writes - 1u) % 60u, out.tooth_index);
+}
+
+void test_runtime_seed_sequence_wrap_prefers_newer() {
+    test_reset();
+
+    ems::hal::RuntimeSyncSeed old_s{};
+    old_s.magic = ems::hal::RUNTIME_SYNC_SEED_MAGIC;
+    old_s.version = ems::hal::RUNTIME_SYNC_SEED_VERSION;
+    old_s.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_VALID |
+                  ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
+    old_s.tooth_index = 11u;
+    old_s.sequence = 0xFFFFFFFEu;
+    TEST_ASSERT_TRUE(ems::hal::nvm_test_runtime_seed_inject_slot(0u, &old_s, true));
+
+    ems::hal::RuntimeSyncSeed new_s = old_s;
+    new_s.tooth_index = 42u;
+    new_s.sequence = 2u;
+    TEST_ASSERT_TRUE(ems::hal::nvm_test_runtime_seed_inject_slot(1u, &new_s, true));
+
+    ems::hal::RuntimeSyncSeed out{};
+    TEST_ASSERT_TRUE(ems::hal::nvm_load_runtime_seed(&out));
+    TEST_ASSERT_EQ_I32(42, out.tooth_index);
+}
+
+void test_runtime_seed_ignores_invalid_latest_slot() {
+    test_reset();
+
+    ems::hal::RuntimeSyncSeed good{};
+    good.magic = ems::hal::RUNTIME_SYNC_SEED_MAGIC;
+    good.version = ems::hal::RUNTIME_SYNC_SEED_VERSION;
+    good.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_VALID |
+                 ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC;
+    good.tooth_index = 19u;
+    good.sequence = 100u;
+    TEST_ASSERT_TRUE(ems::hal::nvm_test_runtime_seed_inject_slot(0u, &good, true));
+
+    ems::hal::RuntimeSyncSeed bad = good;
+    bad.tooth_index = 57u;
+    bad.sequence = 101u;
+    bad.crc32 = 0u;  // intentionally invalid
+    TEST_ASSERT_TRUE(ems::hal::nvm_test_runtime_seed_inject_slot(1u, &bad, false));
+
+    ems::hal::RuntimeSyncSeed out{};
+    TEST_ASSERT_TRUE(ems::hal::nvm_load_runtime_seed(&out));
+    TEST_ASSERT_EQ_I32(19, out.tooth_index);
+}
+
 }  // namespace
 
 int main() {
@@ -237,6 +297,9 @@ int main() {
     test_runtime_seed_save_load_roundtrip();
     test_runtime_seed_latest_slot_wins();
     test_runtime_seed_clear();
+    test_runtime_seed_rotates_across_all_slots();
+    test_runtime_seed_sequence_wrap_prefers_newer();
+    test_runtime_seed_ignores_invalid_latest_slot();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;
