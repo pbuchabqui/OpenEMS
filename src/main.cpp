@@ -26,6 +26,7 @@ int main() { return 0; }
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/knock.h"
+#include "engine/quick_crank.h"
 #include "hal/adc.h"
 #include "hal/can.h"
 #include "hal/flexnvm.h"
@@ -208,6 +209,7 @@ void setup() {
     ems::engine::fuel_reset_adaptives();   // fuel_init
     ems::engine::auxiliaries_init();       // aux_init
     ems::engine::knock_init();
+    ems::engine::quick_crank_reset();
     // ign_init: tabelas estáticas, sem init dedicado
     ems::engine::cycle_sched_init();       // pré-computa dentes-gatilho por cilindro
 
@@ -288,14 +290,24 @@ void loop() {
             base_pw_us = ems::engine::calc_base_pw_us(
                 kDefaultReqFuelUs, ve, map_kpa, kMapRefKpa);
         }
-        const uint32_t pw_ms_x10_raw = base_pw_us / 100u;  // µs → ms×10
-        g_last_pw_ms_x10 = static_cast<uint8_t>(
-            pw_ms_x10_raw > 255u ? 255u : pw_ms_x10_raw);
 
         // Cálculo de Tempo de Ignição em Graus - estratégia principal
         const int16_t base_adv = ems::engine::get_advance(
             static_cast<uint16_t>(ckp.rpm_x10), sensors.map_kpa_x10 / 10u);
-        g_last_advance_deg = static_cast<int8_t>(ems::engine::clamp_advance_deg(base_adv));
+        const bool full_sync = (ckp.state == ems::drv::SyncState::FULL_SYNC);
+        const ems::engine::QuickCrankOutput qc = ems::engine::quick_crank_update(
+            now, ckp.rpm_x10, full_sync, sensors.clt_degc_x10, base_adv);
+
+        if (!g_limp_active) {
+            base_pw_us = ems::engine::quick_crank_apply_pw_us(
+                base_pw_us, qc.fuel_mult_x256, qc.min_pw_us);
+        }
+
+        g_last_advance_deg = static_cast<int8_t>(
+            ems::engine::clamp_advance_deg(qc.spark_deg));
+        const uint32_t pw_ms_x10_raw = base_pw_us / 100u;  // µs → ms×10
+        g_last_pw_ms_x10 = static_cast<uint8_t>(
+            pw_ms_x10_raw > 255u ? 255u : pw_ms_x10_raw);
 
         // Atualiza parâmetros para o scheduler angular
         

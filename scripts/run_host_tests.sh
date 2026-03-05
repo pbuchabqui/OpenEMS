@@ -62,6 +62,10 @@ run_test test_ign \
   src/engine/ign_calc.cpp \
   src/engine/table3d.cpp
 
+run_test test_quick_crank \
+  test/engine/test_quick_crank.cpp \
+  src/engine/quick_crank.cpp
+
 run_test test_auxiliaries \
   test/engine/test_auxiliaries.cpp \
   src/engine/auxiliaries.cpp \
