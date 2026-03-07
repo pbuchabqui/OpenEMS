@@ -23,7 +23,6 @@
 
 #include "hal/ftm.h"
 #include "drv/ckp.h"
-#include "engine/cycle_sched.h"
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Registradores MK64F — acesso direto, sem abstração Arduino
@@ -296,8 +295,20 @@ void ftm3_init(void) {
     // 8. Inicia: system clock, prescaler 2 (mesma base do FTM0 para correlação de timestamps)
     FTM3_SC = FTM_SC_CLKS_SYSTEM | FTM_SC_PS_2;
 
-    // 9. NVIC: FTM3/CKP = prioridade 1 (máxima do sistema, abaixo apenas de hard fault)
-    //          FTM3 não tem IRQ separada por canal — toda a lógica na ISR abaixo
+    // 9. NVIC: FTM3 = prioridade 1 (máxima do sistema, abaixo apenas de hard fault).
+    //
+    // REGRA DE SEGURANÇA — NUNCA ALTERAR INDEPENDENTEMENTE:
+    //   FTM3 tem uma única IRQ compartilhada por todos os canais (IRQ_FTM3 = 71).
+    //   CH0 (CKP) e CH1 (cam sensor) são despachados dentro do mesmo ISR handler.
+    //   Ambos acessam g_seed_probation / g_seed_probation_teeth em drv/ckp.cpp.
+    //   Como usam a mesma IRQ, são naturalmente não-reentrantes — não há race condition.
+    //   Se no futuro CH1 for movido para outro periférico (FTM diferente), os dois
+    //   ISRs deverão ter prioridade idêntica OU g_seed_probation deverá ser protegido
+    //   com seção crítica explícita.
+    //
+    // static_assert garante que esta constante não mude acidentalmente.
+    static_assert(IRQ_FTM3 == 71u,
+        "FTM3 IRQ number changed — review CKP/cam shared-state safety in drv/ckp.cpp");
     nvic_enable(IRQ_FTM3, 1u);
 }
 
@@ -472,15 +483,11 @@ extern "C" void FTM3_IRQHandler(void) {
         // PTD_PDIR bit 0 = estado atual de PTD0
         if (PTD_PDIR & (1u << 0u)) {
             ems::drv::ckp_ftm3_ch0_isr();
-            
-            // Gap detection for 60-2 wheel
-            // Gap occurs when tooth_index == 0 (missing tooth position)
-            // Force schedule update to compensate for acceleration
-            if (ems::engine::cycle_sched_should_update_on_gap() &&
-                ems::drv::ckp_snapshot().tooth_index == 0) {
-                // Gap detected - force angular execution loop update
-                ems::engine::cycle_sched_force_update();
-            }
+            // NOTA (CYC-01): cycle_sched_force_update() foi removido daqui.
+            // Chamá-la de dentro da ISR causava race condition com o loop background
+            // que também escreve g_pending[] via cycle_sched_update(). As
+            // actualizações de parâmetros ocorrem apenas no loop background (5 ms)
+            // onde é seguro reescrever os buffers voláteis.
         }
         // Limpa CHF independentemente (mesmo em borda espúria, deve limpar para não re-entrar)
         FTM_CnSC(FTM3_BASE, 0u) &= ~FTM_CnSC_CHF;

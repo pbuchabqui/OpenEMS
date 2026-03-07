@@ -21,6 +21,7 @@
 // =============================================================================
 
 #include "engine/cycle_sched.h"
+#include "engine/ecu_sched.h"
 #include "engine/ign_calc.h"
 #include "drv/ckp.h"
 
@@ -138,6 +139,20 @@ void cycle_sched_update(uint32_t pw_ticks,
                         uint16_t soi_lead_x10,
                         int16_t  advance_x10,
                         uint16_t dwell_x10) noexcept {
+    // CYC-04: proteção de saturação para pw_ticks.
+    // FTM0 opera com contador de 16 bits (PS=8, 15 ticks/µs).
+    // Pulsos > 65535 ticks (≈4,369 ms) causam o comparador INJ_OFF a disparar
+    // na PRIMEIRA correspondência após o wrap, injectando por uma revolução inteira.
+    // Mitigação interim: saturar a 65000 ticks (≈4,333 ms) e incrementar o
+    // contador de saturação de calibração para diagnóstico.
+    // Solução definitiva pendente: migrar INJ_OFF para PIT one-shot (ver LIMITAÇÃO
+    // CONHECIDA no topo deste ficheiro).
+    static constexpr uint32_t kMaxPwTicks = 65000u;
+    if (pw_ticks > kMaxPwTicks) {
+        pw_ticks = kMaxPwTicks;
+        ++g_calibration_clamp_count;
+    }
+
     g_last_pw_ticks = pw_ticks;
     g_last_dead_ticks = dead_ticks;
     g_last_soi_lead_x10 = soi_lead_x10;
@@ -236,17 +251,19 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept {
 // Angular Execution Loop - Forced Update Support
 // ============================================================================
 
+// ============================================================================
+// cycle_sched_force_update / cycle_sched_update_with_calculated
+// Estas funções são chamadas APENAS do loop background (nunca da ISR).
+// Ver CYC-01 na revisão de código — ciclo_sched_force_update foi removido
+// do caminho da ISR em hal/ftm.cpp para evitar race condition.
+// ============================================================================
+
 namespace ems::engine {
 
-/**
- * @brief Force immediate update of scheduling parameters for all cylinders.
- * 
- * This function is called from the angular execution loop (CKP ISR) to ensure
- * that the latest strategy calculations (from 2ms temporal loop) are applied
- * before the next firing events. This compensates for engine acceleration
- * and ensures timing accuracy.
- */
 void cycle_sched_force_update() noexcept {
+    // Chamada apenas do loop background (5 ms). Thread-safe porque o loop
+    // background não é preemptido por si mesmo e g_pending usa protocolo
+    // valid=false → escreve → valid=true para proteção face à ISR CKP.
     cycle_sched_update(
         g_last_pw_ticks,
         g_last_dead_ticks,
@@ -255,38 +272,10 @@ void cycle_sched_force_update() noexcept {
         g_last_dwell_x10);
 }
 
-// Nova função para compensação de aceleração angular
-void cycle_sched_acceleration_compensation() noexcept {
-    // Implementação simplificada - será integrada ao scheduler principal
-    // Esta função será chamada a cada detecção de gap para compensar aceleração
-    // A lógica completa será implementada no scheduler principal
-    
-    // Para implementação futura:
-    // 1. Calcular taxa de variação de RPM baseado no tempo entre gaps
-    // 2. Ajustar parâmetros de avanço e dwell para compensar aceleração
-    // 3. Atualizar g_pending com valores corrigidos
-    // 4. Forçar atualização do scheduler via cycle_sched_force_update()
-}
-
-/**
- * @brief Check if gap detection should trigger forced update.
- * 
- * For 60-2 wheel, gap occurs every 2 revolutions (720 degrees).
- * This function helps determine when to force schedule updates
- * for maximum timing accuracy.
- */
 bool cycle_sched_should_update_on_gap() noexcept {
-    // Gap detection logic - should be called from CKP ISR
-    // Return true when gap is detected to trigger forced update
     return g_enabled;
 }
 
-/**
- * @brief Update scheduling parameters with calculated values.
- * 
- * This enhanced version allows external modules to update scheduling
- * with pre-calculated values from the 2ms strategy loop.
- */
 void cycle_sched_update_with_calculated(uint32_t pw_ticks,
                                         uint16_t dead_ticks,
                                         uint16_t soi_lead_x10,
@@ -294,5 +283,10 @@ void cycle_sched_update_with_calculated(uint32_t pw_ticks,
                                         uint16_t dwell_x10) noexcept {
     cycle_sched_update(pw_ticks, dead_ticks, soi_lead_x10, advance_x10, dwell_x10);
 }
+
+// CYC-03: cycle_sched_acceleration_compensation() removida.
+// Era um stub sem implementação que criava falsa expectativa de comportamento.
+// Compensação de aceleração será implementada como feature real quando necessário,
+// com algoritmo documentado e testado (derivada de RPM entre gaps + ajuste de advance).
 
 }  // namespace ems::engine

@@ -96,14 +96,17 @@ void test_rpm_formula() {
 void test_circular_subtraction() {
     test_reset();
     ems_test_gpiod_pdir = (1u << 0u);
-    ems_test_ftm3_c0v = 65530u;
+    // Wrap test: de 65500 para 64 = delta de 100 ticks (> kMinToothTicks=50).
+    // (uint16_t)(64 - 65500) = (64 + 65536 - 65500) = 100 ✓
+    // Testa que a aritmética circular uint16_t funciona correctamente no wrap.
+    ems_test_ftm3_c0v = 65500u;
     ems::drv::ckp_ftm3_ch0_isr();
 
-    ems_test_ftm3_c0v = 10u;
+    ems_test_ftm3_c0v = 64u;
     ems::drv::ckp_ftm3_ch0_isr();
 
     const auto snap = ems::drv::ckp_snapshot();
-    TEST_ASSERT_EQ_U32((16u * 16667u) / 1000u, snap.tooth_period_ns);
+    TEST_ASSERT_EQ_U32((100u * 16667u) / 1000u, snap.tooth_period_ns);
 }
 
 void test_tooth_count_over_60_goes_syncing() {
@@ -113,7 +116,9 @@ void test_tooth_count_over_60_goes_syncing() {
     auto snap = ems::drv::ckp_snapshot();
     TEST_ASSERT_TRUE(snap.state == ems::drv::SyncState::FULL_SYNC);
 
-    for (int i = 0; i < 61; ++i) {
+    // kMaxTeethBeforeLoss aumentado de 60 para 63 (SCH-04 / margem de desaceleração).
+    // Precisa de 64 dentes sem gap para disparar LOSS_OF_SYNC.
+    for (int i = 0; i < 64; ++i) {
         feed_ckp(1000u);
     }
 

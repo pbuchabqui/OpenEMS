@@ -123,78 +123,90 @@ static uint8_t count_events(uint8_t ch, uint8_t act) {
 void test_late_event_removes_existing_channel_events() {
     test_reset();
     ECU_Hardware_Init();
-    
+
     // Set overflow count to simulate time progression
     g_overflow_count = 5U;
-    
-    // Add an event for channel 1 in the future
+
+    // Add a future event for IGN1
     Add_Event(0x00050000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
     TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
-    
-    // Now add a late event for the same channel (epoch < current overflow)
-    // This should remove the existing event and force immediate execution
+
+    // Add a late event for the same channel (epoch < current overflow).
+    // SCH-05: o slot físico permanece na queue (sem remoção O(n²)), mas o
+    // canal é marcado como dirty — não será armado pela ISR até receber um
+    // novo evento futuro válido. O late_event_count é incrementado.
     uint32_t late_events_before = g_late_event_count;
     Add_Event(0x00030000UL, ECU_CH_IGN1, ECU_ACT_DWELL_START);
-    
-    // Queue should be empty (existing event removed)
-    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
-    
-    // Late event count should be incremented
+
+    // Slot físico ainda presente (dirty flag, não remoção imediata)
+    TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
+
+    // Late event count incrementado
     TEST_ASSERT_EQ_U32(late_events_before + 1U, g_late_event_count);
+
+    // Após inserir um evento futuro válido para o mesmo canal, dirty é limpo
+    Add_Event(0x00060000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
+    TEST_ASSERT_EQ_U8(2U, ecu_sched_test_queue_size());
 }
 
 void test_queue_full_removes_existing_channel_events() {
     test_reset();
     ECU_Hardware_Init();
-    
-    // Fill queue to capacity (ECU_QUEUE_SIZE events)
+
+    // Enche a queue até a capacidade com eventos de IGN1
     for (uint8_t i = 0U; i < ECU_QUEUE_SIZE; ++i) {
         Add_Event(0x00010000UL + i, ECU_CH_IGN1, ECU_ACT_SPARK);
     }
     TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
-    
-    // Try to add another event for the same channel
-    // This should be treated as late and remove existing events
+
+    // Tentar inserir mais um quando a queue está cheia: tratado como late.
+    // SCH-05: marca o canal como dirty (O(1)), não remove slots (O(n²)).
+    // A queue continua cheia fisicamente.
     uint32_t late_events_before = g_late_event_count;
     Add_Event(0x00020000UL, ECU_CH_IGN1, ECU_ACT_DWELL_START);
-    
-    // Queue should be empty (all existing events removed)
-    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
-    
-    // Late event count should be incremented
+
+    // Queue ainda cheia fisicamente (dirty flag, sem remoção)
+    TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
+
+    // Late event count incrementado
     TEST_ASSERT_EQ_U32(late_events_before + 1U, g_late_event_count);
 }
 
 void test_late_event_different_channels_preserved() {
     test_reset();
     ECU_Hardware_Init();
-    
+
     g_overflow_count = 5U;
-    
-    // Add events for different channels
+
+    // Adiciona eventos em três canais diferentes
     Add_Event(0x00050000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
     Add_Event(0x00050001UL, ECU_CH_IGN2, ECU_ACT_SPARK);
     Add_Event(0x00050002UL, ECU_CH_IGN3, ECU_ACT_SPARK);
     TEST_ASSERT_EQ_U8(3U, ecu_sched_test_queue_size());
-    
-    // Add a late event for channel 2 only
+
+    // Late event apenas para IGN2 — apenas IGN2 fica dirty
     uint32_t late_events_before = g_late_event_count;
     Add_Event(0x00030000UL, ECU_CH_IGN2, ECU_ACT_DWELL_START);
-    
-    // Queue should have 2 events (channels 1 and 3 preserved)
-    TEST_ASSERT_EQ_U8(2U, ecu_sched_test_queue_size());
-    
-    // Verify remaining events are for channels 1 and 3
-    uint32_t ts1, ts2;
-    uint8_t ch1, ch2, act1, act2;
+
+    // SCH-05: queue física inalterada (3 slots), mas IGN2 está dirty
+    TEST_ASSERT_EQ_U8(3U, ecu_sched_test_queue_size());
+
+    // Late event count incrementado em exactamente 1
+    TEST_ASSERT_EQ_U32(late_events_before + 1U, g_late_event_count);
+
+    // IGN1 e IGN3 continuam válidos (não dirty) — verificar via queue
+    uint32_t ts1, ts2, ts3;
+    uint8_t ch1, ch2, ch3, act1, act2, act3;
     ecu_sched_test_get_event(0U, &ts1, &ch1, &act1);
     ecu_sched_test_get_event(1U, &ts2, &ch2, &act2);
-    
-    TEST_ASSERT_TRUE((ch1 == ECU_CH_IGN1 && ch2 == ECU_CH_IGN3) ||
-                    (ch1 == ECU_CH_IGN3 && ch2 == ECU_CH_IGN1));
-    
-    // Late event count should be incremented
-    TEST_ASSERT_EQ_U32(late_events_before + 1U, g_late_event_count);
+    ecu_sched_test_get_event(2U, &ts3, &ch3, &act3);
+
+    // Os três slots físicos existem; IGN2 ainda está na queue mas será ignorado
+    // pela ISR (dirty). Os outros dois pertencem a IGN1 e IGN3.
+    bool ign1_present = (ch1 == ECU_CH_IGN1 || ch2 == ECU_CH_IGN1 || ch3 == ECU_CH_IGN1);
+    bool ign3_present = (ch1 == ECU_CH_IGN3 || ch2 == ECU_CH_IGN3 || ch3 == ECU_CH_IGN3);
+    TEST_ASSERT_TRUE(ign1_present);
+    TEST_ASSERT_TRUE(ign3_present);
 }
 
 // =============================================================================

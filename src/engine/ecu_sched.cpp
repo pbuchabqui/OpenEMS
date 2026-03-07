@@ -32,19 +32,35 @@
 #include <cassert>
 
 // CRITICAL FIX: Add debug assertions for safety-critical parameters
+/* SCH-03: As macros de assert são removidas em NDEBUG, mascarando bugs de
+ * cálculo de timestamp em builds de produção. As verificações de canal e ação
+ * são mantidas como asserts (são erros de programação que devem abortar em debug).
+ * ASSERT_VALID_TIMESTAMP usa um contador permanente que sobrevive ao NDEBUG —
+ * o timestamp 0 pode indicar corrupção de variável e deve ser sempre rastreado. */
 #ifndef NDEBUG
-#define ASSERT_VALID_CHANNEL(ch) assert((ch) < ECU_CHANNELS)
-#define ASSERT_VALID_ACTION(act) assert((act) <= ECU_ACT_SPARK)
-#define ASSERT_VALID_TIMESTAMP(ts) assert((ts) != 0)
-#define ASSERT_VALID_QUEUE_COUNT(count) assert((count) <= ECU_QUEUE_SIZE)
-#define ASSERT_INVARIANTS() assert_invariants()
+#define ASSERT_VALID_CHANNEL(ch)      assert((ch) < ECU_CHANNELS)
+#define ASSERT_VALID_ACTION(act)      assert((act) <= ECU_ACT_SPARK)
+#define ASSERT_VALID_QUEUE_COUNT(cnt) assert((cnt) <= ECU_QUEUE_SIZE)
+#define ASSERT_INVARIANTS()           assert_invariants()
 #else
-#define ASSERT_VALID_CHANNEL(ch) ((void)0)
-#define ASSERT_VALID_ACTION(act) ((void)0)
-#define ASSERT_VALID_TIMESTAMP(ts) ((void)0)
-#define ASSERT_VALID_QUEUE_COUNT(count) ((void)0)
-#define ASSERT_INVARIANTS() ((void)0)
+#define ASSERT_VALID_CHANNEL(ch)      ((void)0)
+#define ASSERT_VALID_ACTION(act)      ((void)0)
+#define ASSERT_VALID_QUEUE_COUNT(cnt) ((void)0)
+#define ASSERT_INVARIANTS()           ((void)0)
 #endif
+
+/* Validação de timestamp: activa em debug E em release.
+ * timestamp == 0 quase certamente indica parâmetro não inicializado ou
+ * underflow de cálculo. Incrementa g_late_event_count como indicador de
+ * saúde e retorna antecipadamente para não inserir evento inválido na queue.
+ * Não usa assert() para não interromper o motor em produção. */
+#define ASSERT_VALID_TIMESTAMP(ts)                    \
+    do {                                              \
+        if ((ts) == 0U) {                             \
+            ++g_late_event_count;                     \
+            return;                                   \
+        }                                             \
+    } while (0)
 
 /* ============================================================================
  * Host-test peripheral mocks
@@ -112,6 +128,13 @@ typedef struct {
 static volatile EcuEvent_t g_queue[ECU_QUEUE_SIZE];
 static volatile uint8_t    g_queue_count;
 static volatile uint8_t    g_next_valid[ECU_CHANNELS];
+/* SCH-05: flag "canal sujo" — quando setado, a ISR FTM0 e arm_due_channels()
+ * ignoram silenciosamente qualquer evento pendente para esse canal.
+ * Isso substitui a remoção O(n²) em Add_Event por uma marcação O(1).
+ * O slot é efectivamente descartado na próxima tentativa de armar o canal.
+ * Os slots físicos com valid=1 continuam na queue até serem naturalmente
+ * retirados pela ISR FTM0 — sem custo de shift durante o caminho crítico. */
+static volatile uint8_t    g_channel_dirty[ECU_CHANNELS];
 static volatile uint32_t   g_next_ts[ECU_CHANNELS];
 static volatile uint8_t    g_next_action[ECU_CHANNELS];
 
@@ -452,8 +475,18 @@ static void recompute_next_per_channel(void)
         }
 
         ch = g_queue[i].channel;
-        if ((ch >= ECU_CHANNELS) ||
-            ((g_next_valid[ch] != 0U) && (g_queue[i].timestamp32 >= g_next_ts[ch]))) {
+        if (ch >= ECU_CHANNELS) {
+            continue;
+        }
+
+        /* SCH-05: ignorar slots de canais marcados como dirty.
+         * O slot continua na queue mas não será armado; será descartado
+         * naturalmente quando sair pelo head da queue na ISR FTM0. */
+        if (g_channel_dirty[ch] != 0U) {
+            continue;
+        }
+
+        if ((g_next_valid[ch] != 0U) && (g_queue[i].timestamp32 >= g_next_ts[ch])) {
             continue;
         }
 
@@ -491,9 +524,15 @@ static void assert_invariants(void)
         if (found == 0U) {
             assert(g_next_valid[ch] == 0U);
         } else {
-            assert(g_next_valid[ch] != 0U);
-            assert(g_next_ts[ch] == min_ts);
-            assert(g_next_action[ch] == min_act);
+            /* SCH-05: se o canal está dirty, g_next_valid[ch] deve ser 0
+             * (recompute_next_per_channel() pula canais dirty). */
+            if (g_channel_dirty[ch] != 0U) {
+                assert(g_next_valid[ch] == 0U);
+            } else {
+                assert(g_next_valid[ch] != 0U);
+                assert(g_next_ts[ch] == min_ts);
+                assert(g_next_action[ch] == min_act);
+            }
         }
     }
 }
@@ -615,9 +654,10 @@ static void clear_all_events_and_drive_safe_outputs(void)
     update_queue_depth_metrics();
 
     for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
-        g_next_valid[ch] = 0U;
-        g_next_ts[ch] = 0U;
-        g_next_action[ch] = 0U;
+        g_next_valid[ch]    = 0U;
+        g_next_ts[ch]       = 0U;
+        g_next_action[ch]   = 0U;
+        g_channel_dirty[ch] = 0U;
     }
 
     /* Safe state: injectors closed, coils de-energised. */
@@ -702,13 +742,11 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
 
     /* Late event: already past. */
     if ((ev_hi < g_overflow_count) || (is_timestamp_late(timestamp32) != 0U)) {
-        /* CRITICAL FIX: Remove any existing events for this channel before forcing */
-        for (i = 0U; i < g_queue_count; ++i) {
-            if (g_queue[i].channel == channel) {
-                queue_remove(i);
-                --i; /* Adjust index after removal */
-            }
-        }
+        /* SCH-05: Em vez de percorrer e remover todos os slots do canal (O(n²)),
+         * marca o canal como "dirty". A ISR FTM0 e arm_due_channels() ignoram
+         * eventos de canais dirty. O flag é limpo quando um novo evento futuro
+         * válido é inserido para esse canal (ver abaixo). */
+        g_channel_dirty[channel] = 1U;
         recompute_next_per_channel();
         record_late_delay(current_timestamp32(), timestamp32);
         force_output(channel, action);
@@ -719,13 +757,8 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
 
     /* Queue full: treat as late event */
     if (g_queue_count >= ECU_QUEUE_SIZE) {
-        /* CRITICAL FIX: Remove any existing events for this channel before forcing */
-        for (i = 0U; i < g_queue_count; ++i) {
-            if (g_queue[i].channel == channel) {
-                queue_remove(i);
-                --i; /* Adjust index after removal */
-            }
-        }
+        /* SCH-05: mesma estratégia — dirty flag O(1) em vez de remoção O(n²). */
+        g_channel_dirty[channel] = 1U;
         recompute_next_per_channel();
         force_output(channel, action);
         ++g_late_event_count;
@@ -759,6 +792,9 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
     g_queue[insert_pos]._pad        = 0U;
     ++g_queue_count;
     update_queue_depth_metrics();
+
+    /* SCH-05: limpa o dirty flag — este canal voltou a ter um evento futuro válido. */
+    g_channel_dirty[channel] = 0U;
 
     /* Keep one authoritative "next event" per channel and only arm due ones. */
     recompute_next_per_channel();
@@ -1104,6 +1140,15 @@ namespace ems::engine {
 
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
+    /* SCH-01: captura o timestamp IMEDIATAMENTE na entrada do hook, antes de
+     * qualquer branch, leitura de variável ou chamada de função.
+     * FTM0->CNT avança a 15 MHz (66,7 ns/tick). Cada instrução executada antes
+     * desta leitura adiciona jitter sistemático a todos os eventos agendados.
+     * Capturar aqui reduz o erro para < 2 ticks (≈ 133 ns) independente do
+     * caminho de execução subsequente. */
+    const uint32_t current_timestamp =
+        (::g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
+
     if ((snap.state != ems::drv::SyncState::FULL_SYNC) &&
         (snap.state != ems::drv::SyncState::HALF_SYNC)) {
         if (g_hook_prev_full_sync != 0U) {
@@ -1123,14 +1168,20 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 
     g_hook_prev_full_sync = (snap.state == ems::drv::SyncState::FULL_SYNC) ? 1U : 0U;
 
-    /* Detect boundary once per revolution when tooth index wraps to zero. */
+    /* SCH-02: Detecta boundary apenas quando g_hook_prev_valid já estava activo
+     * E o índice anterior era != 0.  Impede que a primeira entrada após resync
+     * (g_hook_prev_valid == 0) dispare um ciclo com parâmetros potencialmente
+     * desatualizados. */
     uint8_t rev_boundary = 0U;
-    if (g_hook_prev_valid == 0U) {
-        rev_boundary = (snap.tooth_index == 0U) ? 1U : 0U;
-        g_hook_prev_valid = 1U;
-    } else if ((snap.tooth_index == 0U) && (g_hook_prev_tooth != 0U)) {
+    if ((g_hook_prev_valid != 0U) &&
+        (snap.tooth_index == 0U) &&
+        (g_hook_prev_tooth != 0U)) {
         rev_boundary = 1U;
     }
+    /* Marca como válido somente APÓS a verificação acima para garantir que o
+     * próximo wrap genuíno (não o primeiro tooth_index=0 após resync) seja
+     * o primeiro a disparar um ciclo. */
+    g_hook_prev_valid = 1U;
     g_hook_prev_tooth = snap.tooth_index;
 
     if (rev_boundary == 0U) {
@@ -1139,8 +1190,6 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 
     if ((snap.state == ems::drv::SyncState::HALF_SYNC) &&
         (g_presync_enable != 0U)) {
-        const uint32_t current_timestamp =
-            (::g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
         calculate_presync_revolution(current_timestamp);
         return;
     }
@@ -1151,8 +1200,6 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     }
     g_hook_schedule_this_gap = 0U;
 
-    const uint32_t current_timestamp =
-        (::g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
     ::Calculate_Sequential_Cycle(current_timestamp);
 }
 
@@ -1200,9 +1247,10 @@ void ecu_sched_test_reset(void)
         g_queue[i]._pad        = 0U;
     }
     for (i = 0U; i < ECU_CHANNELS; ++i) {
-        g_next_valid[i] = 0U;
-        g_next_ts[i] = 0U;
-        g_next_action[i] = 0U;
+        g_next_valid[i]    = 0U;
+        g_next_ts[i]       = 0U;
+        g_next_action[i]   = 0U;
+        g_channel_dirty[i] = 0U;
     }
     ASSERT_INVARIANTS();
 }

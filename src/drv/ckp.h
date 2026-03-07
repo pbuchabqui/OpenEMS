@@ -70,14 +70,15 @@ CkpSnapshot ckp_snapshot() noexcept;
 /**
  * @brief Converte ângulo de crank em tick-alvo do FTM3 (para agendamento).
  *
- * @param angle_x10   Ângulo em miligraus (× 1000). Ex: 6000 = 6,0°; 60000 = 60,0°.
- *                    ATENÇÃO: o nome "angle_x10" é legado — o parâmetro é em miligraus.
+ * @param angle_mdeg  Ângulo em miligraus. Ex: 6000 = 6,0°; 60000 = 60,0°.
+ *                    ATENÇÃO: o parâmetro é em MILIGRAUS (×1000 em relação a graus
+ *                    inteiros). Passar graus inteiros causará erro de 1000×.
  * @param ref_capture Timestamp FTM3 do dente de referência (geralmente snap.last_ftm3_capture).
  * @return            Valor de CnV para FTM0/FTM3 onde o evento deve ser armado.
  *
- * Fórmula: ticks = (angle_mg × tooth_period_ticks) / kToothAngleMillideg
+ * Fórmula: ticks = (angle_mdeg × tooth_period_ticks) / kToothAngleMillideg
  */
-uint16_t ckp_angle_to_ticks(uint16_t angle_x10, uint16_t ref_capture) noexcept;
+uint16_t ckp_angle_to_ticks(uint16_t angle_mdeg, uint16_t ref_capture) noexcept;
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 // Chamados pela ISR de CKP a cada dente (símbolos fracos — sobrescreva para

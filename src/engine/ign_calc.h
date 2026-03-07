@@ -8,8 +8,12 @@ namespace ems::engine {
 
 extern int8_t spark_table[kTableAxisSize][kTableAxisSize];
 
-extern uint8_t firing_order[4];
-extern uint16_t cylinder_offset_deg[4];
+// CYC-02: ordem de disparo e ângulos TDC são constantes de calibração do motor —
+// nunca devem ser modificados em runtime. Definidos inline aqui para garantir
+// que qualquer TU que inclua este header tenha a definição completa.
+// (extern constexpr não é válido em C++17; inline constexpr é a forma correcta.)
+inline constexpr uint8_t  firing_order[4]        = {1u, 3u, 4u, 2u};
+inline constexpr uint16_t cylinder_offset_deg[4] = {0u, 180u, 360u, 540u};
 
 struct IgnScheduleParams {
     uint16_t dwell_start_x10;
