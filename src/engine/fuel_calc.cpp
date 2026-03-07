@@ -5,7 +5,7 @@
 
 // CRITICAL FIX: Add debug assertions for safety-critical parameters
 #ifndef NDEBUG
-#define ASSERT_VALID_RPM_X10(rpm) assert((rpm) >= 0 && (rpm) <= 20000)  // 0-2000 RPM ×10
+#define ASSERT_VALID_RPM_X10(rpm) assert((rpm) >= 0 && (rpm) <= 200000)  // 0-20000 RPM ×10
 #define ASSERT_VALID_MAP_KPA(map) assert((map) >= 10 && (map) <= 250)   // 10-250 kPa
 #define ASSERT_VALID_TEMP_X10(temp) assert((temp) >= -400 && (temp) <= 1500)  // -40°C to +150°C ×10
 #define ASSERT_VALID_VE(ve) assert((ve) <= 255)  // VE 0-255%
@@ -214,15 +214,21 @@ uint32_t calc_base_pw_us(uint16_t req_fuel_us,
                          uint8_t ve,
                          uint16_t map_kpa,
                          uint16_t map_ref_kpa) noexcept {
-    if (map_ref_kpa == 0u || ve == 0u) {
+    // Verificações de produção (ativas mesmo em release): retorno seguro 0
+    // evita divisão por zero e overflow de uint64_t na fórmula abaixo.
+    if (map_ref_kpa == 0u || ve == 0u || req_fuel_us == 0u) {
         return 0u;
     }
+    if (map_kpa > 300u) {
+        return 0u;  // MAP > 300 kPa: sensor em fault, não calcular PW
+    }
+    if (req_fuel_us > 50000u) {
+        return 0u;  // REQ_FUEL > 50 ms: valor absurdo, não calcular PW
+    }
 
-    // CRITICAL FIX: Validate input parameters
     ASSERT_VALID_MAP_KPA(map_kpa);
     ASSERT_VALID_MAP_KPA(map_ref_kpa);
     ASSERT_VALID_VE(ve);
-    assert(req_fuel_us > 0 && req_fuel_us <= 50000);  // 0-50ms reasonable range
 
     // Base pulse width:
     // PW = REQ_FUEL * (VE / 100) * (MAP / MAP_REF)
@@ -257,10 +263,15 @@ uint16_t corr_iat(int16_t iat_x10) noexcept {
 }
 
 uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept {
-    // CRITICAL FIX: Validate voltage input
     ASSERT_VALID_VOLTAGE_MV(vbatt_mv);
-    
-    const uint16_t v = clamp_u16(vbatt_mv, 7000u, 17000u);
+    // Clamp ao range da tabela kVbattAxisMv [9000, 16000] mV.
+    // Abaixo de 9V: usa dead-time máximo da tabela (injetor mais lento).
+    // Acima de 16V: usa dead-time mínimo (tensão de carga alta).
+    // Range do assert (6–18V) é mais amplo para aceitar leituras de sensor
+    // ruidosas sem assert falso; o clamp garante interpolação dentro da tabela.
+    const uint16_t v = clamp_u16(vbatt_mv,
+                                  kVbattAxisMv[0],
+                                  kVbattAxisMv[kCorrPoints - 1u]);
     return interp_u16_8pt_u16x(kVbattAxisMv, kDeadTimeUs, v);
 }
 
@@ -319,36 +330,6 @@ int32_t calc_ae_pw_us(uint16_t tps_now_x10,
     return 0;
 }
 
-// Forward declaration for function defined later
-void schedule_async_injection_immediate(int16_t tpsdot_x10) noexcept;
-
-// Nova função para 2ms loop - Transient detection
-void check_transient_2ms(uint16_t tps_current, uint16_t tps_previous) noexcept {
-    // Calcula taxa de variação instantânea (2ms loop = 500Hz)
-    int16_t delta_tps = static_cast<int16_t>(tps_current) - static_cast<int16_t>(tps_previous);
-    int16_t tpsdot_x10 = delta_tps * 5;  // 2ms loop = 500Hz
-    
-    // Threshold fixo para detecção de transientes
-    uint16_t threshold = 10;  // Base threshold
-    
-    if (tpsdot_x10 > static_cast<int16_t>(threshold)) {
-        // Trigger async injection
-        schedule_async_injection_immediate(tpsdot_x10);
-    }
-}
-
-// Async injection scheduling
-void schedule_async_injection_immediate(int16_t tpsdot_x10) noexcept {
-    // Calcula pulso baseado na taxa de TPS
-    static constexpr int16_t kNominalCltX10 = 900;
-    const uint8_t bucket = clt_bucket(kNominalCltX10);
-    int32_t pulse_us = tpsdot_x10 * static_cast<int32_t>(kAeSens[bucket]);
-    
-    // Esta função será implementada no scheduler principal
-    // Por enquanto, apenas armazena o pulso para ser usado no próximo ciclo
-    g_ae_pulse_us = pulse_us;
-    g_ae_decay_cycles = g_ae_taper_cycles;
-}
 
 void fuel_reset_adaptives() noexcept {
     g_stft_pct_x10 = 0;
@@ -395,6 +376,9 @@ int16_t fuel_update_stft(uint16_t rpm_x10,
 
     int16_t& cell = g_ltft_pct_x10[map_idx][rpm_idx];
     cell = static_cast<int16_t>(cell + (g_stft_pct_x10 - cell) / 64);
+    // Clamp explícito: impede acumulação ilimitada quando fuel_ltft_store_cell
+    // é no-op (implementação futura). Limite igual ao do STFT para consistência.
+    cell = clamp_i16(cell, -kStftClampX10, kStftClampX10);
     fuel_ltft_store_cell(map_idx, rpm_idx, cell);
 
     return g_stft_pct_x10;

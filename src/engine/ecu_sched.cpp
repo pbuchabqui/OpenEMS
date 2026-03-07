@@ -1,6 +1,6 @@
 /**
  * @file engine/ecu_sched.cpp
- * @brief ECU Scheduling Core v3 — Unified Deterministic Timing System (C / MISRA-C:2012)
+ * @brief ECU Scheduling Core v3 — Unified Deterministic Timing System (C++17 / MISRA-inspired)
  *
  * Implements unified ECU timing system with 32-bit timestamp extension,
  * hardware output compare for all 8 channels (4 INJ + 4 IGN), and PDB-ADC
@@ -13,13 +13,15 @@
  *   PDB0: Triggered by FTM0_CH5 for MAP windowing at 120° ATDC
  *   ADC0: Hardware averaging 4 samples for MAP reading
  *
- * MISRA-C:2012 compliance notes:
- *   - No dynamic memory allocation (Rule 21.3).
- *   - All variables explicitly typed with stdint.h types (Rule 4.6).
- *   - No recursion (Rule 17.2).
- *   - Integer constants use U/UL suffix (Rule 7.2).
+ * Coding conventions (MISRA-C:2012 inspired, C++17 compilation):
+ *   - No dynamic memory allocation (MISRA Rule 21.3).
+ *   - All variables explicitly typed with stdint.h types (MISRA Rule 4.6).
+ *   - No recursion (MISRA Rule 17.2).
+ *   - Integer constants use U/UL suffix (MISRA Rule 7.2).
  *   - Compound assignment on volatile not used for read-modify-write
- *     of multi-bit fields — explicit masking applied (Rule 12.1).
+ *     of multi-bit fields — explicit masking applied (MISRA Rule 12.1).
+ *   - Arquivo compilado como C++17: usa namespace ems::engine, static_cast<>
+ *     e cassert. Não é C puro — o label "C / MISRA" era incorreto.
  */
 
 #include "engine/ecu_sched.h"
@@ -350,11 +352,17 @@ static void record_late_delay(uint32_t now, uint32_t ts)
         return;
     }
     delay = now - ts;
-    ++g_late_delay_samples;
+    /* Saturar soma e amostras juntos: quando a soma transborda, a média
+     * calculada externamente (sum / samples) ficaria incorreta se samples
+     * continuasse incrementando além do ponto de saturação da soma.
+     * Congelar ambos preserva a última média válida antes da saturação. */
     if ((0xFFFFFFFFU - g_late_delay_sum_ticks) < delay) {
         g_late_delay_sum_ticks = 0xFFFFFFFFU;
+        /* samples também satura: mantém denominador coerente com a soma */
+        g_late_delay_samples = 0xFFFFFFFFU;
     } else {
         g_late_delay_sum_ticks += delay;
+        ++g_late_delay_samples;
     }
     if (delay > g_late_delay_max_ticks) {
         g_late_delay_max_ticks = delay;
@@ -493,7 +501,24 @@ static void assert_invariants(void)
 
 static uint32_t current_timestamp32(void)
 {
-    return (g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
+    /*
+     * Leitura atômica do timestamp de 32 bits.
+     * g_overflow_count e FTM0->CNT devem ser lidos na mesma janela sem
+     * preempção: se o TOF disparar entre as duas leituras, o epoch ficaria
+     * inconsistente (overflow epoch N+1 + CNT do início do ciclo N+1 combinado
+     * com overflow epoch N). A seção crítica garante a coerência.
+     *
+     * Custo: ~4 ciclos (CPSID + CPSIE) — aceitável fora de ISR.
+     * Dentro de ISR (FTM0_IRQHandler) a chamada já está protegida pelo
+     * próprio contexto de interrupção (preempção de mesma prioridade bloqueada).
+     */
+    uint32_t overflow;
+    uint32_t cnt;
+    enter_critical();
+    overflow = g_overflow_count;
+    cnt      = FTM0->CNT & 0xFFFFU;
+    exit_critical();
+    return (overflow << 16U) | cnt;
 }
 
 static uint8_t is_timestamp_late(uint32_t timestamp32)

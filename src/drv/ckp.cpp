@@ -172,7 +172,11 @@ static constexpr uint16_t kSeedCamConfirmMaxTeeth = 70u;
 
 // Converte delta de ticks FTM3 para nanossegundos.
 // FTM3: 120 MHz / prescaler 2 = 60 MHz → 1 tick = 16,667 ns
-// Evita float: (ticks × 16667) / 1000  (equivalente exato a ticks / 60000 µs)
+// Evita float: (ticks × 16667) / 1000  (equivalente exato a ticks × 16.667 ns)
+// Análise de overflow: max delta_ticks = 65535 (uint16_t)
+//   65535 × 16667 = 1,092,534,045 < 2^32 (4,294,967,295) → seguro em uint32_t.
+// Margem restante: ~3× antes de overflow. Se o prescaler do FTM3 mudar para
+// valores maiores que 2, recalcular com o novo fator de conversão.
 inline uint32_t ticks_to_ns(uint16_t ticks) noexcept {
     return (static_cast<uint32_t>(ticks) * 16667u) / 1000u;
 }
@@ -358,24 +362,30 @@ uint16_t ckp_angle_to_ticks(uint16_t angle_x10, uint16_t ref_capture) noexcept {
 //   vários ciclos depois — o timestamp em C0V permanece válido.
 //   Isso é impossível com GPIO/EXTI onde a CPU leria o contador atual (atrasado).
 void ckp_ftm3_ch0_isr() noexcept {
-    // ── 1. Verificação anti-glitch ────────────────────────────────────────
-    // FTM3 CH0 configurado para rising edge. Ruído EMC (cabos de ignição, bobinas)
-    // pode gerar eventos espúrios. Verificar o nível atual do pino filtra a maioria.
-    // Bit 0 de PTD_PDIR = estado lógico atual de PTD0 (CKP).
-    if ((GPIOD_PDIR & (1u << 0u)) == 0u) {
-        return;  // pino está LOW → captura espúria, descartar
-    }
-
-    // ── 2. Timestamp sem jitter de ISR ────────────────────────────────────
-    // Lemos FTM3_C0V (registrador de CAPTURA), não FTM3_CNT.
-    // FTM3_C0V foi travado pelo HW no instante exato da borda de subida.
-    // Limitamos a 16 bits pois o contador FTM3 é 16 bits (MOD = 0xFFFF).
+    // ── 1. Timestamp sem jitter de ISR ────────────────────────────────────
+    // CRÍTICO: lemos FTM3_C0V ANTES de qualquer outra operação.
+    // O registrador de captura foi travado pelo HW no instante exato da borda;
+    // leituras posteriores (GPIOD_PDIR, etc.) não afetam o valor capturado.
+    // NÃO ler FTM3_CNT: o contador avançou durante a latência de IRQ.
     const uint16_t capture_now = static_cast<uint16_t>(FTM3_C0V & 0xFFFFu);
 
-    // ── 3. Delta de ticks (aritmética circular uint16_t) ──────────────────
+    // ── 2. Delta de ticks (aritmética circular uint16_t) ──────────────────
     // Subtração circular: correto mesmo se o contador passou por 0xFFFF→0x0000
     // durante o período do dente. Ex: 0x0005 - 0xFFFD = 0x0008 (delta = 8) ✓
     const uint16_t delta_ticks = static_cast<uint16_t>(capture_now - g_state.prev_capture);
+
+    // ── 3. Anti-glitch por período mínimo ────────────────────────────────
+    // Estratégia preferida a checar GPIOD_PDIR depois da captura: a 120 MHz
+    // o pino pode ter retornado LOW antes da CPU ler o registrador de GPIO,
+    // descartando capturas legítimas em alta rotação (> 4000 RPM).
+    // Período mínimo aceitável: dente a 20000 RPM → 60 MHz / (58 * 20000/60)
+    //   = ~3103 ticks; usamos 50 como limite inferior conservador para
+    //   rejeitar glitches de EMC (< ~833 ns) sem afetar operação normal.
+    static constexpr uint16_t kMinToothTicks = 50u;
+    if (delta_ticks < kMinToothTicks) {
+        return;  // pulso muito curto → ruído EMC, descartar
+    }
+
     g_state.prev_capture                = capture_now;
     g_state.snap.last_ftm3_capture      = capture_now;
 

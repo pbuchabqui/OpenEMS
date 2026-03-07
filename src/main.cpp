@@ -122,9 +122,21 @@ static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
 static constexpr uint32_t kRuntimeSeedArmWindowMs = 2000u;
 
 // Parâmetros de referência para cálculo de PW (a ser configurável via NVM)
-static constexpr uint16_t kDefaultReqFuelUs = 8000u;  // 8 ms a VE=100%, MAP=MAP_ref
-static constexpr uint16_t kMapRefKpa        = 100u;   // MAP de referência (100 kPa ≈ atmosfera)
-static constexpr uint32_t kDefaultSoiLeadDeg = 62u;   // SOI lead before TDC
+// REQ_FUEL: tempo de injeção base a VE=100% e MAP=MAP_ref.
+// Derivação: REQ_FUEL [µs] = (displacement_cc / cylinders) * BSFC / (injector_cc_per_min / 60e6)
+// Exemplo: 1600cc / 4 cyl = 400cc; BSFC ~250g/kWh; injetor 240cc/min → ~8000 µs
+// Ajustar via calibração em bancada após medição de lambda em regime estacionário.
+static constexpr uint16_t kDefaultReqFuelUs  = 8000u;
+
+// MAP de referência usado na fórmula PW = REQ_FUEL × VE × (MAP / MAP_REF).
+// 100 kPa = pressão atmosférica ao nível do mar (ponto de calibração do REQ_FUEL).
+static constexpr uint16_t kMapRefKpa         = 100u;
+
+// SOI lead: ângulo antes do TDC compressão em que o injetor abre.
+// 62° BTDC = ~60° antes do TDC, típico para injeção port-fuel com tempo de
+// voo de ~3 ms a 3000 RPM (3 ms × 3000/60 × 360° = 54° — arredondado com margem).
+// Ajustar conforme diâmetro de válvula e pressão de injeção do motor específico.
+static constexpr uint32_t kDefaultSoiLeadDeg = 62u;
 
 // =============================================================================
 // Utilitários de infraestrutura — sem lógica de domínio
@@ -179,7 +191,9 @@ static inline void ts_service() noexcept {
 // =============================================================================
 
 extern "C" void ADC0_IRQHandler(void) {
-    // Pipeline ADC por interrupção — reservado para implementação futura
+    // Pipeline ADC por interrupção — não deve ser chamada enquanto NVIC
+    // estiver desabilitado para ADC0. Implementação futura: ler ADC0->RA,
+    // publicar resultado via fila lock-free para sensors_tick_50ms().
 }
 
 extern "C" void PIT0_IRQHandler(void) {
@@ -250,7 +264,10 @@ void setup() {
     // 9) NVIC — prioridades conforme Prompt 11
     nvic_set_priority_enable(kIrqFtm3, 1u);   // CKP — maior prioridade
     nvic_set_priority_enable(kIrqFtm0, 4u);   // scheduler
-    nvic_set_priority_enable(kIrqAdc0, 5u);   // ADC0 EOC
+    // ADC0 IRQ: prioridade configurada mas NVIC não habilitado até a ISR
+    // ser implementada. Habilitar com nvic_set_priority_enable(kIrqAdc0, 5u)
+    // quando o pipeline de ADC por interrupção estiver pronto.
+    // nvic_set_priority_enable(kIrqAdc0, 5u);
     nvic_set_priority_enable(kIrqPit0, 11u);  // timestamp µs
     nvic_set_priority_enable(kIrqPit1, 12u);  // watchdog
 
@@ -308,9 +325,10 @@ void loop() {
         g_engine_was_running = true;
         g_runtime_seed_saved_for_stop = false;
     }
+    // Marca o instante em que o RPM passou de >0 para 0 (borda de descida).
+    // Atualiza APENAS nessa transição — não enquanto o motor está girando,
+    // pois isso apagaria a referência temporal usada pelo runtime seed save.
     if ((g_prev_rpm_x10 > 0u) && (ckp.rpm_x10 == 0u)) {
-        g_zero_rpm_since_ms = now;
-    } else if (ckp.rpm_x10 > 0u) {
         g_zero_rpm_since_ms = now;
     }
     g_prev_rpm_x10 = ckp.rpm_x10;
@@ -343,6 +361,14 @@ void loop() {
         } else {
             base_pw_us = ems::engine::calc_base_pw_us(
                 kDefaultReqFuelUs, ve, map_kpa, kMapRefKpa);
+
+            // Aplica correções de temperatura (CLT, IAT) e dead-time de bateria.
+            // Essencial para partida a frio e compensação de tensão do injetor.
+            const uint16_t corr_clt_x256  = ems::engine::corr_clt(sensors.clt_degc_x10);
+            const uint16_t corr_iat_x256  = ems::engine::corr_iat(sensors.iat_degc_x10);
+            const uint16_t dead_time_us   = ems::engine::corr_vbatt(sensors.vbatt_mv);
+            base_pw_us = ems::engine::calc_final_pw_us(
+                base_pw_us, corr_clt_x256, corr_iat_x256, dead_time_us);
         }
 
         // Cálculo de Tempo de Ignição em Graus - estratégia principal
@@ -363,11 +389,17 @@ void loop() {
         g_last_pw_ms_x10 = static_cast<uint8_t>(
             pw_ms_x10_raw > 255u ? 255u : pw_ms_x10_raw);
 
-        // Atualiza parâmetros para o scheduler angular
-        
-        const uint32_t advance_deg = (g_last_advance_deg > 0)
-            ? static_cast<uint32_t>(g_last_advance_deg)
-            : 0u;
+        // Atualiza parâmetros para o scheduler angular.
+        // advance_deg é BTDC em graus. Valores negativos indicam retardo
+        // (after TDC) — válidos em knock retard ou cold-start. O scheduler
+        // recebe uint32_t, então representamos retardo como offset em cima
+        // de ECU_CYCLE_DEG para que o wrap aritmético produza o ângulo correto.
+        // Faixa válida de clamp_advance_deg: [-10, +35] graus.
+        const uint32_t advance_deg =
+            (g_last_advance_deg >= 0)
+                ? static_cast<uint32_t>(g_last_advance_deg)
+                : static_cast<uint32_t>(static_cast<int32_t>(ECU_CYCLE_DEG)
+                                        + g_last_advance_deg);
         
         // Convert dwell time from ms to ticks
         const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);

@@ -18,7 +18,10 @@ int16_t clamp_i16(int16_t v, int16_t lo, int16_t hi) noexcept {
     return v;
 }
 
-uint16_t interp_u16_8pt(uint16_t x) noexcept {
+// Interpolação especializada para a tabela de dwell por tensão de bateria.
+// Separada da interp_u16_8pt genérica de fuel_calc.cpp (assinatura diferente:
+// eixo embutido vs eixo externo). Renomeada para evitar ambiguidade.
+static uint16_t interp_dwell_by_vbatt(uint16_t x) noexcept {
     if (x <= kDwellVbattAxisMv[0]) {
         return kDwellTableMsX10[0];
     }
@@ -113,7 +116,11 @@ int16_t get_advance(uint16_t rpm_x10, uint16_t load_kpa) noexcept {
 }
 
 int16_t clamp_advance_deg(int16_t advance_deg) noexcept {
-    return clamp_i16(advance_deg, -10, 55);
+    // Limite máximo: 35° BTDC — proteção contra tabela placeholder com valores
+    // excessivos (linha de alta carga chega a 70° na tabela de desenvolvimento).
+    // 35° é seguro para motores normalmente aspirados em qualquer condição de carga.
+    // Ajustar para o motor específico após calibração em bancada.
+    return clamp_i16(advance_deg, -10, 35);
 }
 
 int16_t calc_total_advance(int16_t base_advance_deg,
@@ -125,7 +132,7 @@ int16_t calc_total_advance(int16_t base_advance_deg,
 }
 
 uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv) noexcept {
-    return interp_u16_8pt(vbatt_mv);
+    return interp_dwell_by_vbatt(vbatt_mv);
 }
 
 uint16_t calc_dwell_angle_x10(uint16_t dwell_ms_x10, uint16_t rpm) noexcept {

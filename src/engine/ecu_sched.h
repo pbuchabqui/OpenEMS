@@ -12,7 +12,11 @@
  *
  *   CH0-CH3 (INJ1-4): Output Compare, Set on match (HIGH = injetor energizado).
  *   CH4-CH7 (IGN4-1): Output Compare, Clear on match (LOW  = disparo de bobina).
- *   CH5:              reservado para trigger do PDB0 (MAP windowing a 120 ATDC).
+ *   CH5 (IGN3):       Output Compare para ignição do cilindro 3.
+ *                     NOTA: O PDB0 é disparado pelo trigger de saída do FTM0
+ *                     (TRGSEL=0x8), que é independente de qualquer canal CnV.
+ *                     NÃO há conflito de hardware entre IGN3 e o trigger PDB.
+ *                     O comentário anterior 'reservado para PDB' estava incorreto.
  *
  *   PDB0: disparado por FTM0 output trigger (TRGSEL=0x8).
  *   ADC0: hardware averaging 4 amostras (SC3: AVGE=1, AVGS=00).
@@ -193,7 +197,10 @@ typedef struct {
 #define ECU_CH_INJ4   1U  /*!< FTM0 CH1 — Injector 4 */
 #define ECU_CH_IGN1   7U  /*!< FTM0 CH7 — Ignition 1 */
 #define ECU_CH_IGN2   6U  /*!< FTM0 CH6 — Ignition 2 */
-#define ECU_CH_IGN3   5U  /*!< FTM0 CH5 — Ignition 3 (also MAP trigger) */
+#define ECU_CH_IGN3   5U  /*!< FTM0 CH5 — Ignition 3.
+                             * O PDB0 usa o trigger de saída global do FTM0
+                             * (TRGSEL=0x8), independente deste canal CnV.
+                             * Não há conflito de hardware com o MAP windowing. */
 #define ECU_CH_IGN4   4U  /*!< FTM0 CH4 — Ignition 4 */
 
 /* ============================================================================

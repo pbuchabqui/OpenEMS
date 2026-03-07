@@ -6,8 +6,13 @@
 
 namespace ems::drv {
 
-// Bit mask para fault_bits
-static constexpr uint8_t FAULT_WBO2_TIMEOUT = (1u << 0);
+// fault_bits: bitmask de falhas ativas em SensorData.
+// Cada bit corresponde ao valor numérico do SensorId (SensorId::MAP=0, CLT=3, etc.)
+// conforme o padrão em sensors.cpp:  fault_bits |= (1u << static_cast<uint8_t>(id))
+//
+// ATENÇÃO: FAULT_WBO2_TIMEOUT foi removido — WBO2 é monitorado via STATUS_WBO2_FAULT
+// no can_stack (app/can_stack.h), não via fault_bits de sensores analógicos.
+// Usar (1u << 0u) para MAP fault e (1u << 3u) para CLT fault (ver main.cpp).
 
 struct SensorData {
     uint16_t map_kpa_x10;         // MAP kPa × 10
