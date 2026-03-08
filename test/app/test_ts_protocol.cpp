@@ -16,7 +16,7 @@ CkpSnapshot ckp_snapshot() noexcept {
     return g_ckp;
 }
 
-const SensorData& sensors_get() noexcept {
+SensorData sensors_get() noexcept {
     return g_sensors;
 }
 

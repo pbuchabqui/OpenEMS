@@ -152,7 +152,9 @@ void knock_cycle_complete(uint8_t cyl) noexcept {
         if (g.clean_cycles[c] < 255u) {
             ++g.clean_cycles[c];
         }
-        if ((g.clean_cycles[c] >= kRecoveryDelayCycles) && (knock_retard_x10[c] > 0u)) {
+        // FIX-4: guard >= kRecoveryStepX10 em vez de > 0u — se a constante mudar
+        // para > 1 no futuro, a subtração unsigned não causa underflow para 65535.
+        if ((g.clean_cycles[c] >= kRecoveryDelayCycles) && (knock_retard_x10[c] >= kRecoveryStepX10)) {
             knock_retard_x10[c] = static_cast<uint16_t>(knock_retard_x10[c] - kRecoveryStepX10);
         }
 

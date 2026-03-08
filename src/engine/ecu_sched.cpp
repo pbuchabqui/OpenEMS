@@ -412,9 +412,17 @@ static void force_output(uint8_t ch, uint8_t action)
         /* Set output (HIGH) */
         cnsc_val = FTM_CnSC_OC_SET;
     }
-    /* Program CnV to current counter + 1 to fire as soon as possible */
-    FTM0->CONTROLS[ch].CnV  = (uint32_t)((FTM0->CNT + 1U) & 0xFFFFU);
+    /* FIX-11: CnSC ANTES de CnV — garante que a ação (polaridade) está
+     * configurada antes de armar o comparador. Se CnV fosse escrito primeiro,
+     * FTM0->CNT poderia atingir CnV antes de CnSC ser atualizado, disparando
+     * a saída com a polaridade anterior (injeção/ignição no estado errado).
+     * CNT + 2 em vez de + 1 fornece 2 ticks (~33 ns @ 60 MHz) para o bus
+     * completar a escrita de CnSC antes do disparo do comparador. */
     FTM0->CONTROLS[ch].CnSC = cnsc_val;
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("dmb" ::: "memory");  /* barreira de memória — garante ordem de escrita */
+#endif
+    FTM0->CONTROLS[ch].CnV  = (uint32_t)((FTM0->CNT + 2U) & 0xFFFFU);
 }
 
 /**
@@ -429,8 +437,12 @@ static void arm_channel(uint8_t ch, uint32_t timestamp32, uint8_t action)
     } else {
         cnsc_val = FTM_CnSC_OC_SET;
     }
-    FTM0->CONTROLS[ch].CnV  = (uint32_t)(timestamp32 & 0xFFFFU);
+    /* FIX-11: CnSC antes de CnV para garantir ação configurada antes do disparo. */
     FTM0->CONTROLS[ch].CnSC = cnsc_val;
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("dmb" ::: "memory");
+#endif
+    FTM0->CONTROLS[ch].CnV  = (uint32_t)(timestamp32 & 0xFFFFU);
 }
 
 /**
@@ -547,16 +559,27 @@ static uint32_t current_timestamp32(void)
      * inconsistente (overflow epoch N+1 + CNT do início do ciclo N+1 combinado
      * com overflow epoch N). A seção crítica garante a coerência.
      *
-     * Custo: ~4 ciclos (CPSID + CPSIE) — aceitável fora de ISR.
-     * Dentro de ISR (FTM0_IRQHandler) a chamada já está protegida pelo
-     * próprio contexto de interrupção (preempção de mesma prioridade bloqueada).
+     * FIX-7 (nested-safe): usa PRIMASK save/restore em vez de CPSID/CPSIE puro.
+     * Se esta função for chamada de dentro de uma seção crítica já ativa (PRIMASK=1),
+     * o restore devolve PRIMASK=1 — IRQs permanecem desabilitados.
+     * Com CPSID/CPSIE simples, o CPSIE interno re-habilitaria IRQs prematuramente,
+     * quebrando a seção crítica externa (ex: Add_Event()).
      */
+    uint32_t primask;
     uint32_t overflow;
     uint32_t cnt;
-    enter_critical();
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("mrs %0, primask" : "=r"(primask) :: "memory");
+    __asm__ volatile("cpsid i" ::: "memory");
     overflow = g_overflow_count;
     cnt      = FTM0->CNT & 0xFFFFU;
-    exit_critical();
+    __asm__ volatile("msr primask, %0" :: "r"(primask) : "memory");
+#else
+    primask  = 0u;
+    overflow = g_overflow_count;
+    cnt      = FTM0->CNT & 0xFFFFU;
+    (void)primask;
+#endif
     return (overflow << 16U) | cnt;
 }
 
@@ -737,6 +760,14 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
     ASSERT_VALID_CHANNEL(channel);
     ASSERT_VALID_ACTION(action);
 
+    /* FIX-7: Proteção CPSID/CPSIE em toda a manipulação da fila.
+     * Add_Event() é chamado do background (slot 2ms). A ISR FTM0 (prio 4) pode
+     * preemptar e modificar g_queue[], g_queue_count, g_next_ts[], g_next_valid[]
+     * via arm_due_channels() → queue_remove(). Sem seção crítica, a fila pode
+     * ser corrompida durante a busca e inserção ordenada.
+     * Duração típica da seção crítica: ~1–3 µs (fila de 32 entradas). */
+    enter_critical();
+
     /* Compute overflow epoch of this event */
     ev_hi = (timestamp32 >> 16U);
 
@@ -751,6 +782,7 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
         record_late_delay(current_timestamp32(), timestamp32);
         force_output(channel, action);
         ++g_late_event_count;
+        exit_critical();
         ASSERT_INVARIANTS();
         return;
     }
@@ -762,6 +794,7 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
         recompute_next_per_channel();
         force_output(channel, action);
         ++g_late_event_count;
+        exit_critical();
         ASSERT_INVARIANTS();
         return;
     }
@@ -802,6 +835,8 @@ void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
         (g_next_ts[channel] == timestamp32)) {
         process_channel_ready_event(channel);
     }
+
+    exit_critical();
     ASSERT_INVARIANTS();
 }
 

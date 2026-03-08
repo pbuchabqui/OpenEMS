@@ -138,7 +138,11 @@ uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv) noexcept {
 uint16_t calc_dwell_angle_x10(uint16_t dwell_ms_x10, uint16_t rpm) noexcept {
     const uint64_t num = static_cast<uint64_t>(dwell_ms_x10) * rpm * 360u * 10u;
     const uint64_t den = 600000ULL;
-    return static_cast<uint16_t>(num / den);
+    // FIX-2: clamp antes do cast para uint16_t — sem clamp, RPM alto com dwell
+    // longo overflow para valor mínimo e dispara ignição no ponto errado.
+    // Limite de 3599 = 359,9° (mais de uma rotação inteira não tem sentido físico).
+    const uint64_t raw = num / den;
+    return static_cast<uint16_t>(raw > 3599u ? 3599u : raw);
 }
 
 int32_t calc_dwell_start_deg_x10(int16_t spark_deg_x10,

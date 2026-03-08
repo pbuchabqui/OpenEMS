@@ -110,10 +110,15 @@ uint16_t table3d_lookup_ve_q8(const uint8_t ve_table[kTableAxisSize][kTableAxisS
     const uint16_t v01 = static_cast<uint16_t>(ve_table[yi + 1][xi]) << 8;
     const uint16_t v11 = static_cast<uint16_t>(ve_table[yi + 1][xi + 1]) << 8;
 
-    // Interpolação Q8 otimizada
-    const uint16_t v0 = v00 + (((v10 - v00) * fx) >> 8);
-    const uint16_t v1 = v01 + (((v11 - v01) * fx) >> 8);
-    const uint16_t v = v0 + (((v1 - v0) * fy) >> 8);
+    // Interpolação Q8 com aritmética signed explícita (FIX-1: evita right-shift
+    // em valor negativo — implementation-defined em C++17; int32_t garante
+    // comportamento correto em tabelas decrescentes).
+    const int32_t d0  = (static_cast<int32_t>(v10) - static_cast<int32_t>(v00)) * static_cast<int32_t>(fx);
+    const uint16_t v0 = static_cast<uint16_t>(static_cast<int32_t>(v00) + (d0 >> 8));
+    const int32_t d1  = (static_cast<int32_t>(v11) - static_cast<int32_t>(v01)) * static_cast<int32_t>(fx);
+    const uint16_t v1 = static_cast<uint16_t>(static_cast<int32_t>(v01) + (d1 >> 8));
+    const int32_t dv  = (static_cast<int32_t>(v1) - static_cast<int32_t>(v0)) * static_cast<int32_t>(fy);
+    const uint16_t v  = static_cast<uint16_t>(static_cast<int32_t>(v0) + (dv >> 8));
 
     return v;  // Resultado em Q8
 }

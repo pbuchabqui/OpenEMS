@@ -79,7 +79,10 @@ constexpr FaultTracker kDefaultFault[8] = {
     {{  50u, 4050u}, 0u, false},  // OIL_PRESS
 };
 
-static SensorData g_data = {};
+// FIX-6: volatile — escrita por sensors_on_tooth() (ISR FTM3, prio 1),
+// lida pelo background via sensors_get(). volatile + CPSID em sensors_get()
+// garantem snapshot consistente sem torn read.
+static volatile SensorData g_data = {};
 
 // [FIX-1] inicialização estática agora usa kDefaultFault — idêntico ao reset
 static FaultTracker g_fault[8] = {
@@ -118,7 +121,7 @@ static uint16_t g_fast_sample_accum = 0u;
 // reset_state — estado canônico usando kDefaultFault [FIX-1]
 // -----------------------------------------------------------------------------
 inline void reset_state() noexcept {
-    g_data = SensorData{};
+    const_cast<SensorData&>(g_data) = SensorData{};  // safe: reset antes de ISRs ativas
 
     g_map_filt  = 0u;
     g_o2_filt   = 0u;
@@ -459,8 +462,32 @@ void sensors_set_range(SensorId id, SensorRange range) noexcept {
     g_fault[static_cast<uint8_t>(id)].range = range;
 }
 
-const SensorData& sensors_get() noexcept {
-    return g_data;
+SensorData sensors_get() noexcept {
+    // FIX-6: snapshot atômico — CPSID impede preempção pela ISR FTM3 durante
+    // a cópia de 26 bytes, garantindo que todos os campos pertencem ao mesmo
+    // instante de amostragem. Sem este critical section, um torn read pode
+    // combinar map_kpa_x10 de antes da ISR com clt_degc_x10 de depois.
+    SensorData out;
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("cpsid i" ::: "memory");
+#endif
+    out.map_kpa_x10        = g_data.map_kpa_x10;
+    out.maf_gps_x100       = g_data.maf_gps_x100;
+    out.tps_pct_x10        = g_data.tps_pct_x10;
+    out.clt_degc_x10       = g_data.clt_degc_x10;
+    out.iat_degc_x10       = g_data.iat_degc_x10;
+    out.fuel_press_kpa_x10 = g_data.fuel_press_kpa_x10;
+    out.oil_press_kpa_x10  = g_data.oil_press_kpa_x10;
+    out.vbatt_mv           = g_data.vbatt_mv;
+    out.fault_bits         = g_data.fault_bits;
+    out.an1_raw            = g_data.an1_raw;
+    out.an2_raw            = g_data.an2_raw;
+    out.an3_raw            = g_data.an3_raw;
+    out.an4_raw            = g_data.an4_raw;
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("cpsie i" ::: "memory");
+#endif
+    return out;
 }
 
 #if defined(EMS_HOST_TEST)
