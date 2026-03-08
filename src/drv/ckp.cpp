@@ -368,6 +368,7 @@ CkpSnapshot ckp_snapshot() noexcept {
 }
 
 uint16_t ckp_angle_to_ticks(uint16_t angle_mdeg, uint16_t ref_capture) noexcept {
+    // RESERVADA: sem callers em produção. Domínio FTM3 (60 MHz/PS=2). Ver header.
     // FTM3: 120 MHz / prescaler 2 = 60 MHz → 16,667 ns/tick
     // tooth_period_ticks = tooth_period_ns × (60 ticks/µs) / 1000
     // ticks_para_angulo  = (angle_mdeg × tooth_period_ticks) / kToothAngleX1000

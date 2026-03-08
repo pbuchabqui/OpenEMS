@@ -1120,6 +1120,21 @@ void ecu_sched_set_presync_ign_mode(uint8_t mode)
     exit_critical();
 }
 
+void ecu_sched_reset_diagnostic_counters(void)
+{
+    enter_critical();
+    g_calibration_clamp_count   = 0U;
+    g_late_event_count          = 0U;
+    g_late_delay_samples        = 0U;
+    g_late_delay_sum_ticks      = 0U;
+    g_late_delay_max_ticks      = 0U;
+    g_cycle_schedule_drop_count = 0U;
+    g_queue_depth_peak          = 0U;
+    exit_critical();
+    // Nota: g_queue_depth_last_cycle_peak NÃO é zerado —
+    // serve como snapshot por ciclo para o TunerStudio.
+}
+
 void ecu_sched_commit_calibration(uint32_t tpr,
                                   uint32_t advance_deg,
                                   uint32_t dwell_ticks,

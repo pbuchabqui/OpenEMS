@@ -1,0 +1,28 @@
+# Build outputs — host tests
+/tmp/openems_host_tests/
+
+# Arduino / Teensyduino build artefacts
+build/
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+
+# Patch files gerados por git format-patch
+*.patch
+
+# Logs de execução de testes
+*.log
+test_output.log
+
+# Editor metadata
+.vscode/
+.idea/
+*.swp
+*~
+
+# macOS / Linux
+.DS_Store
+*.o
+*.a

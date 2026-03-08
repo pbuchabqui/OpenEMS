@@ -107,7 +107,7 @@ cooperative scheduler:
 
 | Period  | Tasks |
 |---------|-------|
-| 5 ms    | Fuel and ignition recalculation (`sched_recalc`) |
+| 2 ms    | Fuel and ignition recalculation + `ecu_sched_commit_calibration` |
 | 10 ms   | IACV, VVT, wastegate PID updates |
 | 20 ms   | TunerStudio protocol service + auxiliary 20 ms tasks |
 | 50 ms   | Slow sensors + CAN 0x400 diagnostic frame |

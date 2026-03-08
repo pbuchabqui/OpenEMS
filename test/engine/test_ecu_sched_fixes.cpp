@@ -651,6 +651,68 @@ void test_presync_halfsync_semi_sequential_alternates_banks() {
 }
 
 // =============================================================================
+// CYC-01: Cobertura — guard SCH-02 bloqueia 1ª fronteira de revolução após sync
+// =============================================================================
+
+void test_cyc01_sch02_guard_blocks_first_boundary() {
+    // Verifica que o guard SCH-02 (g_hook_prev_valid == 0) impede scheduling
+    // na 1ª vez que tooth_index=0 aparece após o hook ficar válido.
+    // Isso protege contra eventos com calibração default/stale antes de
+    // ecu_sched_commit_calibration() ser chamado pelo background loop.
+    test_reset();
+    ECU_Hardware_Init();
+
+    // Primeiro tooth_index=0 sem nenhum dente anterior:
+    // g_hook_prev_valid=0 → rev_boundary=0 → sem schedule.
+    ems::drv::CkpSnapshot snap0{1000u, 0u, 0u, 10000u,
+                                ems::drv::SyncState::FULL_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(snap0);
+    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
+
+    // Dente intermediário: g_hook_prev_valid=1, g_hook_prev_tooth=5.
+    ems::drv::CkpSnapshot snap5{1000u, 5u, 0u, 10000u,
+                                ems::drv::SyncState::FULL_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(snap5);
+
+    // Segundo tooth_index=0: prev_valid=1, prev_tooth=5 ≠ 0 → rev_boundary=1
+    // → ciclo é agendado com calibração default (não zero).
+    ems::drv::CkpSnapshot snap0b{1000u, 0u, 0u, 10000u,
+                                 ems::drv::SyncState::FULL_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(snap0b);
+    TEST_ASSERT_TRUE(ecu_sched_test_queue_size() > 0U);
+}
+
+void test_cyc01_default_calibration_produces_nonzero_events() {
+    // Verifica que a calibração default (g_ticks_per_rev=900000,
+    // g_inj_pw_ticks=45000) produz eventos com timestamp != 0.
+    // Timestamp zero causaria disparo imediato ao armar o output-compare.
+    // Simula o cenário: sync achievido, background loop ainda não executou
+    // ecu_sched_commit_calibration().
+    test_reset();
+    ECU_Hardware_Init();
+    // NÃO chamar ecu_sched_commit_calibration() — calibração default em vigor.
+
+    // Dente intermediário para ativar g_hook_prev_valid.
+    ems::drv::CkpSnapshot snap1{1000u, 1u, 0u, 10000u,
+                                ems::drv::SyncState::FULL_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(snap1);
+
+    // Segundo tooth_index=0: dispara Calculate_Sequential_Cycle().
+    ems::drv::CkpSnapshot snap0{1000u, 0u, 0u, 10000u,
+                                ems::drv::SyncState::FULL_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(snap0);
+
+    const uint8_t n = ecu_sched_test_queue_size();
+    TEST_ASSERT_TRUE(n > 0U);
+    for (uint8_t i = 0U; i < n; ++i) {
+        uint32_t ts = 0U; uint8_t ch = 0U, act = 0U;
+        ecu_sched_test_get_event(i, &ts, &ch, &act);
+        // Nenhum evento pode ter timestamp zero.
+        TEST_ASSERT_TRUE(ts != 0U);
+    }
+}
+
+// =============================================================================
 // Main Test Runner
 // =============================================================================
 
@@ -686,8 +748,12 @@ int main() {
     test_tooth_accel_comp_preserves_near_time_events();
     test_presync_halfsync_simultaneous_inj_and_wasted_spark();
     test_presync_halfsync_semi_sequential_alternates_banks();
-    
-    printf("ECU scheduler fixes tests completed: %d run, %d failed\n", 
+
+    // CYC-01 coverage: guard SCH-02 e calibração default segura
+    test_cyc01_sch02_guard_blocks_first_boundary();
+    test_cyc01_default_calibration_produces_nonzero_events();
+
+    printf("ECU scheduler fixes tests completed: %d run, %d failed\n",
            g_tests_run, g_tests_failed);
     
     return (g_tests_failed == 0) ? 0 : 1;
