@@ -1,27 +1,23 @@
 /**
  * @file engine/ecu_sched.cpp
- * @brief ECU Scheduling Core v3 — Unified Deterministic Timing System (C++17 / MISRA-inspired)
+ * @brief ECU Scheduling Core v3 — Domínio Angular (Angle-Domain Scheduling)
  *
- * Implements unified ECU timing system with 32-bit timestamp extension,
- * hardware output compare for all 8 channels (4 INJ + 4 IGN), and PDB-ADC
- * MAP windowing. Resolves prescaler conflicts, dual scheduling paths,
- * low-RPM overflow issues, and orphaned ISR problems.
+ * Eventos de injeção e ignição são armazenados como (tooth_index, sub_frac_x256,
+ * phase_A). Na ISR CKP de cada dente, o offset FTM0 é calculado usando o
+ * período do dente ATUAL — correto para o RPM instântaneo, sem queue, sem
+ * overflow count, sem retimestamping.
  *
- * Hardware Architecture:
- *   FTM0: 120 MHz / PS_8 = 15 MHz ~ 66.7 ns/tick
- *   32-bit timestamp: bits[31:16] = g_overflow_count, bits[15:0] = CnV
- *   PDB0: Triggered by FTM0_CH5 for MAP windowing at 120° ATDC
- *   ADC0: Hardware averaging 4 samples for MAP reading
+ * Hardware:
+ *   FTM0 @ 120 MHz / PS_16 = 7,5 MHz ~ 133,3 ns/tick, free-running 16-bit.
+ *   FTM3 @ 120 MHz / PS_2  = 60 MHz  ~ 16,7 ns/tick  (input capture CKP).
+ *   PDB0: disparado por FTM0 output trigger (TRGSEL=0x8).
+ *   ADC0: hardware averaging 4 amostras.
  *
- * Coding conventions (MISRA-C:2012 inspired, C++17 compilation):
- *   - No dynamic memory allocation (MISRA Rule 21.3).
- *   - All variables explicitly typed with stdint.h types (MISRA Rule 4.6).
- *   - No recursion (MISRA Rule 17.2).
- *   - Integer constants use U/UL suffix (MISRA Rule 7.2).
- *   - Compound assignment on volatile not used for read-modify-write
- *     of multi-bit fields — explicit masking applied (MISRA Rule 12.1).
- *   - Arquivo compilado como C++17: usa namespace ems::engine, static_cast<>
- *     e cassert. Não é C puro — o label "C / MISRA" era incorreto.
+ * Convenções MISRA-C:2012 (inspired):
+ *   - Sem alocação dinâmica.
+ *   - Tipos explícitos stdint.h.
+ *   - Sem recursão.
+ *   - Sufixos U/UL em constantes inteiras.
  */
 
 #include "engine/ecu_sched.h"
@@ -29,51 +25,15 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <cassert>
-
-// CRITICAL FIX: Add debug assertions for safety-critical parameters
-/* SCH-03: As macros de assert são removidas em NDEBUG, mascarando bugs de
- * cálculo de timestamp em builds de produção. As verificações de canal e ação
- * são mantidas como asserts (são erros de programação que devem abortar em debug).
- * ASSERT_VALID_TIMESTAMP usa um contador permanente que sobrevive ao NDEBUG —
- * o timestamp 0 pode indicar corrupção de variável e deve ser sempre rastreado. */
-#ifndef NDEBUG
-#define ASSERT_VALID_CHANNEL(ch)      assert((ch) < ECU_CHANNELS)
-#define ASSERT_VALID_ACTION(act)      assert((act) <= ECU_ACT_SPARK)
-#define ASSERT_VALID_QUEUE_COUNT(cnt) assert((cnt) <= ECU_QUEUE_SIZE)
-#define ASSERT_INVARIANTS()           assert_invariants()
-#else
-#define ASSERT_VALID_CHANNEL(ch)      ((void)0)
-#define ASSERT_VALID_ACTION(act)      ((void)0)
-#define ASSERT_VALID_QUEUE_COUNT(cnt) ((void)0)
-#define ASSERT_INVARIANTS()           ((void)0)
-#endif
-
-/* Validação de timestamp: activa em debug E em release.
- * timestamp == 0 quase certamente indica parâmetro não inicializado ou
- * underflow de cálculo. Incrementa g_late_event_count como indicador de
- * saúde e retorna antecipadamente para não inserir evento inválido na queue.
- * Não usa assert() para não interromper o motor em produção. */
-#define ASSERT_VALID_TIMESTAMP(ts)                    \
-    do {                                              \
-        if ((ts) == 0U) {                             \
-            ++g_late_event_count;                     \
-            return;                                   \
-        }                                             \
-    } while (0)
 
 /* ============================================================================
  * Host-test peripheral mocks
- * In target builds FTM0/PDB0/ADC0 are defined in the header via base address.
- * In host tests the macros are defined externally in the test file.
  * ========================================================================= */
 
 #if defined(EMS_HOST_TEST)
-/* Defined by the test translation unit — no redefinition here. */
 extern FTM_Type  g_mock_ftm0;
 extern PDB_Type  g_mock_pdb0;
 extern ADC_Type  g_mock_adc0;
-/* Redefine peripheral macros to point at mock structs */
 #undef  FTM0
 #define FTM0  (&g_mock_ftm0)
 #undef  PDB0
@@ -81,7 +41,6 @@ extern ADC_Type  g_mock_adc0;
 #undef  ADC0
 #define ADC0  (&g_mock_adc0)
 
-/* SIM_SCGC6 mock */
 static volatile uint32_t g_mock_sim_scgc6;
 #undef  SIM_SCGC6_ADDR
 #define SIM_SCGC6_REG  g_mock_sim_scgc6
@@ -93,90 +52,57 @@ static volatile uint32_t g_mock_sim_scgc6;
  * Internal constants
  * ========================================================================= */
 
-#define ECU_CHANNELS    8U    /* FTM0 channels */
+#define ECU_CHANNELS    8U
+#define ECU_IGN_CH_FIRST 4U
+#define ECU_CYCLE_DEG   720U
+#define ECU_NUM_CYL     4U
 
-/* Channel assignments for unified system */
-#define ECU_IGN_CH_FIRST  4U
-
-/* Degrees in one 4-stroke cycle */
-#define ECU_CYCLE_DEG  720U
-
-/* Number of cylinders */
-#define ECU_NUM_CYL  4U
-
-/* Firing order: 1-3-4-2 */
-#define ECU_FIRING_ORDER {1U, 3U, 4U, 2U}
-
-/* TDC compression angles for firing order (degrees in 720° cycle) */
-#define ECU_TDC_DEG {0U, 180U, 360U, 540U}
-
-/* MAP windowing: trigger PDB at 120° ATDC for MAP reading */
-#define ECU_MAP_TRIGGER_DEG  120U
+/* Conversão tooth_period_ns → ticks FTM0 (PS=16: 133,33 ns/tick)
+ * tooth_ftm0 = tooth_period_ns / 133,33 ≈ tooth_period_ns * 3 / 400
+ * Análise: max tooth_period_ns @ 115 RPM = ~8 700 000 ns
+ *   8 700 000 * 3 / 400 = 65 250 ticks → cabe em uint16_t (< 65535) ✓ */
+#define TOOTH_NS_TO_FTM0(ns)  ((uint32_t)((ns) * 3U) / 400U)
 
 /* ============================================================================
- * Event queue
+ * Angle-domain event table (substitui a fila de timestamps)
  * ========================================================================= */
 
-typedef struct {
-    uint32_t timestamp32; /* Target 32-bit timestamp                   */
-    uint8_t  channel;     /* FTM0 channel (0-7)                        */
-    uint8_t  action;      /* ECU_ACT_* code                            */
-    uint8_t  valid;       /* Non-zero if slot is occupied               */
-    uint8_t  _pad;        /* Explicit padding for MISRA struct alignment */
-} EcuEvent_t;
-
-static volatile EcuEvent_t g_queue[ECU_QUEUE_SIZE];
-static volatile uint8_t    g_queue_count;
-static volatile uint8_t    g_next_valid[ECU_CHANNELS];
-/* SCH-05: flag "canal sujo" — quando setado, a ISR FTM0 e arm_due_channels()
- * ignoram silenciosamente qualquer evento pendente para esse canal.
- * Isso substitui a remoção O(n²) em Add_Event por uma marcação O(1).
- * O slot é efectivamente descartado na próxima tentativa de armar o canal.
- * Os slots físicos com valid=1 continuam na queue até serem naturalmente
- * retirados pela ISR FTM0 — sem custo de shift durante o caminho crítico. */
-static volatile uint8_t    g_channel_dirty[ECU_CHANNELS];
-static volatile uint32_t   g_next_ts[ECU_CHANNELS];
-static volatile uint8_t    g_next_action[ECU_CHANNELS];
+static AngleEvent_t g_angle_table[ECU_ANGLE_TABLE_SIZE];
+static uint8_t      g_angle_table_count;
 
 /* ============================================================================
  * Module globals (exported via header)
  * ========================================================================= */
 
-volatile uint32_t g_overflow_count  = 0U;
-volatile uint32_t g_late_event_count = 0U;
-volatile uint32_t g_late_delay_samples = 0U;
-volatile uint32_t g_late_delay_sum_ticks = 0U;
-volatile uint32_t g_late_delay_max_ticks = 0U;
-volatile uint8_t g_queue_depth_peak = 0U;
-volatile uint8_t g_queue_depth_last_cycle_peak = 0U;
+volatile uint32_t g_late_event_count        = 0U;
 volatile uint32_t g_cycle_schedule_drop_count = 0U;
-volatile uint32_t g_calibration_clamp_count = 0U;
+volatile uint32_t g_calibration_clamp_count  = 0U;
 
 /* ============================================================================
- * Module-private configuration (set by test helpers or calibration layer)
+ * Module-private configuration
  * ========================================================================= */
 
-static volatile uint32_t g_ticks_per_rev  = 900000U; /* Default: 1000 RPM @ PS=8 */
-static volatile uint32_t g_advance_deg    = 10U;    /* Spark advance, degrees BTDC */
-static volatile uint32_t g_dwell_ticks    = 45000U; /* ~3 ms at 15 tick/us */
-static volatile uint32_t g_inj_pw_ticks   = 45000U; /* ~3 ms at 15 tick/us */
-static volatile uint32_t g_soi_lead_deg   = 62U;    /* SOI lead before TDC */
-static volatile uint8_t g_cycle_fill_active = 0U;
-static volatile uint8_t g_cycle_fill_peak = 0U;
-static volatile uint8_t g_presync_enable = 1U;
-static volatile uint8_t g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
-static volatile uint8_t g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
-static volatile uint8_t g_presync_bank_toggle = 0U;
-static volatile uint8_t g_hook_prev_full_sync = 0U;
-static volatile uint8_t g_hook_prev_valid = 0U;
-static volatile uint16_t g_hook_prev_tooth = 0U;
-static volatile uint8_t g_hook_schedule_this_gap = 1U;
+static volatile uint32_t g_advance_deg      = 10U;
+static volatile uint32_t g_dwell_ticks      = 22500U; /* ~3 ms @ PS=16 (7500 tick/ms) */
+static volatile uint32_t g_inj_pw_ticks     = 22500U; /* ~3 ms @ PS=16 */
+static volatile uint32_t g_soi_lead_deg     = 62U;
+static volatile uint8_t  g_presync_enable   = 1U;
+static volatile uint8_t  g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
+static volatile uint8_t  g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
+static volatile uint8_t  g_presync_bank_toggle = 0U;
+static volatile uint8_t  g_hook_prev_valid  = 0U;
+static volatile uint16_t g_hook_prev_tooth  = 0U;
+static volatile uint8_t  g_hook_schedule_this_gap = 1U;
 
-static uint32_t near_time_window_ticks(void);
-static uint32_t current_timestamp32(void);
-static void recompute_next_per_channel(void);
+/* ============================================================================
+ * Forward declarations
+ * ========================================================================= */
 
-static void calculate_presync_revolution(uint32_t current_timestamp);
+static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap);
+
+/* ============================================================================
+ * Critical section helpers
+ * ========================================================================= */
 
 static void enter_critical(void)
 {
@@ -192,37 +118,41 @@ static void exit_critical(void)
 #endif
 }
 
+/* ============================================================================
+ * sanitize_runtime_calibration
+ * Limites em domínio angular (PS=16, 7 500 ticks/ms):
+ *   dwell   : máx 75 000 ticks (10 ms) — bobina nunca deve carregar mais que isso
+ *   inj_pw  : máx 150 000 ticks (20 ms) — PW máxima razoável em marcha lenta
+ *   advance : máx 60° BTDC
+ *   soi_lead: máx 359°
+ * ========================================================================= */
+
 static void sanitize_runtime_calibration(void)
 {
-    static const uint32_t kMinTicksPerRev = 50000U;
-    static const uint32_t kMaxTicksPerRev = 6000000U;
+    static const uint32_t kMaxDwellTicks  = 75000U;
+    static const uint32_t kMaxInjPwTicks  = 150000U;
     static const uint32_t kMinPulseTicks  = 1U;
-    uint32_t max_span_ticks;
+    static const uint32_t kMaxAdvanceDeg  = 60U;
     uint8_t clamped = 0U;
 
-    if (g_ticks_per_rev < kMinTicksPerRev) {
-        g_ticks_per_rev = kMinTicksPerRev;
-        clamped = 1U;
-    } else if (g_ticks_per_rev > kMaxTicksPerRev) {
-        g_ticks_per_rev = kMaxTicksPerRev;
+    if (g_advance_deg > kMaxAdvanceDeg) {
+        g_advance_deg = kMaxAdvanceDeg;
         clamped = 1U;
     }
-
-    max_span_ticks = g_ticks_per_rev * 2U; /* 720-degree span in scheduler domain */
 
     if ((g_dwell_ticks > 0U) && (g_dwell_ticks < kMinPulseTicks)) {
         g_dwell_ticks = kMinPulseTicks;
         clamped = 1U;
-    } else if (g_dwell_ticks > max_span_ticks) {
-        g_dwell_ticks = max_span_ticks;
+    } else if (g_dwell_ticks > kMaxDwellTicks) {
+        g_dwell_ticks = kMaxDwellTicks;
         clamped = 1U;
     }
 
     if ((g_inj_pw_ticks > 0U) && (g_inj_pw_ticks < kMinPulseTicks)) {
         g_inj_pw_ticks = kMinPulseTicks;
         clamped = 1U;
-    } else if (g_inj_pw_ticks > max_span_ticks) {
-        g_inj_pw_ticks = max_span_ticks;
+    } else if (g_inj_pw_ticks > kMaxInjPwTicks) {
+        g_inj_pw_ticks = kMaxInjPwTicks;
         clamped = 1U;
     }
 
@@ -245,449 +175,137 @@ static void sanitize_runtime_calibration(void)
     }
 }
 
-static uint32_t ticks_per_rev_from_rpm_x10(uint32_t rpm_x10)
-{
-    if (rpm_x10 == 0U) {
-        return g_ticks_per_rev;
-    }
-    return static_cast<uint32_t>(
-        (static_cast<uint64_t>(ECU_SYSTEM_CLOCK_HZ) * 60ULL * 10ULL) /
-        (static_cast<uint64_t>(ECU_FTM0_PRESCALER) * rpm_x10));
-}
-
-static uint32_t clamp_tpr_step(uint32_t current_tpr, uint32_t target_tpr)
-{
-    /*
-     * Tooth-to-tooth slew limit to avoid phase noise and timestamp thrashing
-     * under noisy instantaneous RPM samples.
-     */
-    const uint32_t min_tpr = current_tpr - (current_tpr / 5U); /* -20% */
-    const uint32_t max_tpr = current_tpr + (current_tpr / 4U); /* +25% */
-    if (target_tpr < min_tpr) {
-        return min_tpr;
-    }
-    if (target_tpr > max_tpr) {
-        return max_tpr;
-    }
-    return target_tpr;
-}
-
-static void retime_far_events_from_tooth_rpm(uint32_t rpm_x10)
-{
-    uint32_t now;
-    uint32_t model_tpr;
-    uint32_t target_tpr;
-    uint32_t effective_tpr;
-    uint32_t near_win;
-    uint8_t i;
-
-    if (rpm_x10 == 0U) {
-        return;
-    }
-
-    now = current_timestamp32();
-    model_tpr = g_ticks_per_rev;
-    if (model_tpr == 0U) {
-        return;
-    }
-
-    target_tpr = ticks_per_rev_from_rpm_x10(rpm_x10);
-    effective_tpr = clamp_tpr_step(model_tpr, target_tpr);
-    near_win = near_time_window_ticks();
-
-    /*
-     * Apply compensation only for far-time events. Near-time events are left
-     * untouched to preserve edge determinism and minimize jitter.
-     */
-    for (i = 0U; i < g_queue_count; ++i) {
-        uint32_t ts;
-        uint32_t delta;
-        uint32_t new_delta;
-        uint32_t new_ts;
-
-        if (g_queue[i].valid == 0U) {
-            continue;
-        }
-
-        ts = g_queue[i].timestamp32;
-        if (ts <= now) {
-            continue;
-        }
-
-        delta = ts - now;
-        if (delta <= near_win) {
-            continue;
-        }
-
-        new_delta = static_cast<uint32_t>(
-            ((static_cast<uint64_t>(delta) * effective_tpr) + (model_tpr / 2U)) / model_tpr);
-        if (new_delta < near_win) {
-            new_delta = near_win;
-        }
-        new_ts = now + new_delta;
-        g_queue[i].timestamp32 = new_ts;
-    }
-
-    recompute_next_per_channel();
-}
-
 /* ============================================================================
- * Internal helpers
+ * force_output: força saída de canal via output compare de zero atraso.
+ * Usado para colocar canais em estado seguro ao perder sincronia.
  * ========================================================================= */
 
-static uint32_t near_time_window_ticks(void)
-{
-    /*
-     * Dynamic near-time window from current engine speed:
-     *   window ~= 2 tooth periods (60-2 wheel: 60 positions × 6°/position)
-     * Clamp to keep deterministic ISR cost and avoid over-arming far events.
-     */
-    uint32_t tpr = g_ticks_per_rev;
-    uint32_t tooth_ticks = (tpr / 60U);
-    uint32_t win = tooth_ticks * 2U;
-
-    if (win < 1024U) {
-        win = 1024U;
-    } else if (win > 65535U) {
-        /*
-         * Never arm farther than one 16-bit timer cycle ahead. This preserves
-         * CnV semantics while avoiding artificial late events at low RPM.
-         */
-        win = 65535U;
-    }
-    return win;
-}
-
-static void update_queue_depth_metrics(void)
-{
-    if (g_queue_count > g_queue_depth_peak) {
-        g_queue_depth_peak = g_queue_count;
-    }
-    if ((g_cycle_fill_active != 0U) && (g_queue_count > g_cycle_fill_peak)) {
-        g_cycle_fill_peak = g_queue_count;
-    }
-}
-
-static void record_late_delay(uint32_t now, uint32_t ts)
-{
-    uint32_t delay;
-    if (now <= ts) {
-        return;
-    }
-    delay = now - ts;
-    /* Saturar soma e amostras juntos: quando a soma transborda, a média
-     * calculada externamente (sum / samples) ficaria incorreta se samples
-     * continuasse incrementando além do ponto de saturação da soma.
-     * Congelar ambos preserva a última média válida antes da saturação. */
-    if ((0xFFFFFFFFU - g_late_delay_sum_ticks) < delay) {
-        g_late_delay_sum_ticks = 0xFFFFFFFFU;
-        /* samples também satura: mantém denominador coerente com a soma */
-        g_late_delay_samples = 0xFFFFFFFFU;
-    } else {
-        g_late_delay_sum_ticks += delay;
-        ++g_late_delay_samples;
-    }
-    if (delay > g_late_delay_max_ticks) {
-        g_late_delay_max_ticks = delay;
-    }
-}
-
-/**
- * Force an output on channel ch according to action using software control.
- * Used for late events that can no longer be scheduled via CnV.
- *
- * Note: On real hardware SWOC (Software Output Control) requires setting
- * FTM0->MODE[WPDIS] and using the FTM0_SWOCTRL register. For this
- * implementation we force by toggling CnSC mode and immediately clearing/
- * setting via a zero-delay compare. In host tests the mock registers accept
- * arbitrary writes.
- */
 static void force_output(uint8_t ch, uint8_t action)
 {
     uint32_t cnsc_val;
-    if (action == ECU_ACT_SPARK || action == ECU_ACT_INJ_OFF) {
-        /* Clear output (LOW) */
-        cnsc_val = FTM_CnSC_OC_CLEAR;
-    } else {
-        /* Set output (HIGH) */
-        cnsc_val = FTM_CnSC_OC_SET;
-    }
-    /* FIX-11: CnSC ANTES de CnV — garante que a ação (polaridade) está
-     * configurada antes de armar o comparador. Se CnV fosse escrito primeiro,
-     * FTM0->CNT poderia atingir CnV antes de CnSC ser atualizado, disparando
-     * a saída com a polaridade anterior (injeção/ignição no estado errado).
-     * CNT + 2 em vez de + 1 fornece 2 ticks (~33 ns @ 60 MHz) para o bus
-     * completar a escrita de CnSC antes do disparo do comparador. */
-    FTM0->CONTROLS[ch].CnSC = cnsc_val;
-#if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("dmb" ::: "memory");  /* barreira de memória — garante ordem de escrita */
-#endif
-    FTM0->CONTROLS[ch].CnV  = (uint32_t)((FTM0->CNT + 2U) & 0xFFFFU);
-}
-
-/**
- * Arm channel ch to fire at the tick given by the low 16 bits of timestamp32.
- * The hardware will drive the pin autonomously when FTM0->CNT == CnV.
- */
-static void arm_channel(uint8_t ch, uint32_t timestamp32, uint8_t action)
-{
-    uint32_t cnsc_val;
-    if (action == ECU_ACT_SPARK || action == ECU_ACT_INJ_OFF) {
+    if ((action == ECU_ACT_SPARK) || (action == ECU_ACT_INJ_OFF)) {
         cnsc_val = FTM_CnSC_OC_CLEAR;
     } else {
         cnsc_val = FTM_CnSC_OC_SET;
     }
-    /* FIX-11: CnSC antes de CnV para garantir ação configurada antes do disparo. */
-    FTM0->CONTROLS[ch].CnSC = cnsc_val;
+    /* FIX-11: CnSC antes de CnV — ação configurada antes do disparo do comparador. */
+    FTM0->CH[ch].CnSC = cnsc_val;
 #if defined(__arm__) || defined(__thumb__)
     __asm__ volatile("dmb" ::: "memory");
 #endif
-    FTM0->CONTROLS[ch].CnV  = (uint32_t)(timestamp32 & 0xFFFFU);
+    FTM0->CH[ch].CnV = (uint32_t)((FTM0->CNT + 2U) & 0xFFFFU);
 }
 
-/**
- * Remove one event from the queue by shifting tail entries down.
- * index must be < g_queue_count.
- */
-static void queue_remove(uint8_t index)
+/* ============================================================================
+ * arm_channel: arma canal FTM0 para disparar em target_cnv (16 bits).
+ * O hardware aciona o pino autonomamente quando FTM0->CNT == CnV.
+ * ========================================================================= */
+
+static void arm_channel(uint8_t ch, uint16_t target_cnv, uint8_t action)
 {
-    uint8_t i;
-    
-    // CRITICAL FIX: Validate queue index
-    ASSERT_VALID_QUEUE_COUNT(g_queue_count);
-    assert(index < g_queue_count);
-    
-    for (i = index; i < (g_queue_count - 1U); ++i) {
-        g_queue[i].timestamp32 = g_queue[i + 1U].timestamp32;
-        g_queue[i].channel     = g_queue[i + 1U].channel;
-        g_queue[i].action      = g_queue[i + 1U].action;
-        g_queue[i].valid       = g_queue[i + 1U].valid;
-        g_queue[i]._pad        = 0U;
+    uint32_t cnsc_val;
+    if ((action == ECU_ACT_SPARK) || (action == ECU_ACT_INJ_OFF)) {
+        cnsc_val = FTM_CnSC_OC_CLEAR;
+    } else {
+        cnsc_val = FTM_CnSC_OC_SET;
     }
-    g_queue[g_queue_count - 1U].valid = 0U;
-    if (g_queue_count > 0U) {
-        --g_queue_count;
-    }
-}
-
-static void recompute_next_per_channel(void)
-{
-    uint8_t ch;
-    uint8_t i;
-
-    for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
-        g_next_valid[ch] = 0U;
-        g_next_ts[ch] = 0U;
-        g_next_action[ch] = 0U;
-    }
-
-    for (i = 0U; i < g_queue_count; ++i) {
-        if (g_queue[i].valid == 0U) {
-            continue;
-        }
-
-        ch = g_queue[i].channel;
-        if (ch >= ECU_CHANNELS) {
-            continue;
-        }
-
-        /* SCH-05: ignorar slots de canais marcados como dirty.
-         * O slot continua na queue mas não será armado; será descartado
-         * naturalmente quando sair pelo head da queue na ISR FTM0. */
-        if (g_channel_dirty[ch] != 0U) {
-            continue;
-        }
-
-        if ((g_next_valid[ch] != 0U) && (g_queue[i].timestamp32 >= g_next_ts[ch])) {
-            continue;
-        }
-
-        g_next_valid[ch] = 1U;
-        g_next_ts[ch] = g_queue[i].timestamp32;
-        g_next_action[ch] = g_queue[i].action;
-    }
-}
-
-#ifndef NDEBUG
-static void assert_invariants(void)
-{
-    uint8_t ch;
-    uint8_t i;
-
-    ASSERT_VALID_QUEUE_COUNT(g_queue_count);
-    for (i = 1U; i < g_queue_count; ++i) {
-        assert(g_queue[i - 1U].timestamp32 <= g_queue[i].timestamp32);
-    }
-
-    for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
-        uint8_t found = 0U;
-        uint32_t min_ts = 0U;
-        uint8_t min_act = 0U;
-        for (i = 0U; i < g_queue_count; ++i) {
-            if ((g_queue[i].valid != 0U) && (g_queue[i].channel == ch)) {
-                if ((found == 0U) || (g_queue[i].timestamp32 < min_ts)) {
-                    found = 1U;
-                    min_ts = g_queue[i].timestamp32;
-                    min_act = g_queue[i].action;
-                }
-            }
-        }
-
-        if (found == 0U) {
-            assert(g_next_valid[ch] == 0U);
-        } else {
-            /* SCH-05: se o canal está dirty, g_next_valid[ch] deve ser 0
-             * (recompute_next_per_channel() pula canais dirty). */
-            if (g_channel_dirty[ch] != 0U) {
-                assert(g_next_valid[ch] == 0U);
-            } else {
-                assert(g_next_valid[ch] != 0U);
-                assert(g_next_ts[ch] == min_ts);
-                assert(g_next_action[ch] == min_act);
-            }
-        }
-    }
-}
-#endif
-
-static uint32_t current_timestamp32(void)
-{
-    /*
-     * Leitura atômica do timestamp de 32 bits.
-     * g_overflow_count e FTM0->CNT devem ser lidos na mesma janela sem
-     * preempção: se o TOF disparar entre as duas leituras, o epoch ficaria
-     * inconsistente (overflow epoch N+1 + CNT do início do ciclo N+1 combinado
-     * com overflow epoch N). A seção crítica garante a coerência.
-     *
-     * FIX-7 (nested-safe): usa PRIMASK save/restore em vez de CPSID/CPSIE puro.
-     * Se esta função for chamada de dentro de uma seção crítica já ativa (PRIMASK=1),
-     * o restore devolve PRIMASK=1 — IRQs permanecem desabilitados.
-     * Com CPSID/CPSIE simples, o CPSIE interno re-habilitaria IRQs prematuramente,
-     * quebrando a seção crítica externa (ex: Add_Event()).
-     */
-    uint32_t primask;
-    uint32_t overflow;
-    uint32_t cnt;
+    /* FIX-11: CnSC antes de CnV. */
+    FTM0->CH[ch].CnSC = cnsc_val;
 #if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("mrs %0, primask" : "=r"(primask) :: "memory");
-    __asm__ volatile("cpsid i" ::: "memory");
-    overflow = g_overflow_count;
-    cnt      = FTM0->CNT & 0xFFFFU;
-    __asm__ volatile("msr primask, %0" :: "r"(primask) : "memory");
-#else
-    primask  = 0u;
-    overflow = g_overflow_count;
-    cnt      = FTM0->CNT & 0xFFFFU;
-    (void)primask;
+    __asm__ volatile("dmb" ::: "memory");
 #endif
-    return (overflow << 16U) | cnt;
+    FTM0->CH[ch].CnV = (uint32_t)target_cnv;
 }
 
-static uint8_t is_timestamp_late(uint32_t timestamp32)
-{
-    return (timestamp32 < current_timestamp32()) ? 1U : 0U;
-}
-
-static uint8_t remove_event_for_channel_ts(uint8_t ch, uint32_t ts)
-{
-    uint8_t i;
-    for (i = 0U; i < g_queue_count; ++i) {
-        if ((g_queue[i].valid != 0U) &&
-            (g_queue[i].channel == ch) &&
-            (g_queue[i].timestamp32 == ts)) {
-            queue_remove(i);
-            return 1U;
-        }
-    }
-    return 0U;
-}
-
-static void process_channel_ready_event(uint8_t ch)
-{
-    for (;;) {
-        uint8_t removed;
-        uint32_t ts;
-        uint8_t act;
-        uint32_t now;
-        uint32_t delta;
-
-        if ((ch >= ECU_CHANNELS) || (g_next_valid[ch] == 0U)) {
-            ASSERT_INVARIANTS();
-            return;
-        }
-
-        ts = g_next_ts[ch];
-        act = g_next_action[ch];
-        now = current_timestamp32();
-
-        if (ts < now) {
-            removed = remove_event_for_channel_ts(ch, ts);
-            if (removed == 0U) {
-                uint8_t i;
-                for (i = 0U; i < g_queue_count; ++i) {
-                    if ((g_queue[i].valid != 0U) && (g_queue[i].channel == ch)) {
-                        queue_remove(i);
-                        removed = 1U;
-                        break;
-                    }
-                }
-            }
-            if (removed != 0U) {
-                record_late_delay(now, ts);
-                force_output(ch, act);
-                ++g_late_event_count;
-            }
-            recompute_next_per_channel();
-            continue;
-        }
-
-        delta = ts - now;
-        if (delta > near_time_window_ticks()) {
-            ASSERT_INVARIANTS();
-            return;
-        }
-
-        arm_channel(ch, ts, act);
-        ASSERT_INVARIANTS();
-        return;
-    }
-}
-
-static void arm_due_channels(void)
-{
-    uint8_t ch;
-    for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
-        process_channel_ready_event(ch);
-    }
-}
+/* ============================================================================
+ * clear_all_events_and_drive_safe_outputs
+ * Chamada em LOSS_OF_SYNC / WAIT_GAP: zera tabela angular e coloca pinos
+ * em estado seguro (injetores fechados, bobinas de-energizadas).
+ * ========================================================================= */
 
 static void clear_all_events_and_drive_safe_outputs(void)
 {
-    uint8_t ch;
     uint8_t i;
 
-    for (i = 0U; i < ECU_QUEUE_SIZE; ++i) {
-        g_queue[i].timestamp32 = 0U;
-        g_queue[i].channel     = 0U;
-        g_queue[i].action      = 0U;
-        g_queue[i].valid       = 0U;
-        g_queue[i]._pad        = 0U;
+    /* Zera tabela angular */
+    for (i = 0U; i < ECU_ANGLE_TABLE_SIZE; ++i) {
+        g_angle_table[i].valid = 0U;
     }
-    g_queue_count = 0U;
-    update_queue_depth_metrics();
+    g_angle_table_count = 0U;
 
-    for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
-        g_next_valid[ch]    = 0U;
-        g_next_ts[ch]       = 0U;
-        g_next_action[ch]   = 0U;
-        g_channel_dirty[ch] = 0U;
+    /* Estado seguro: injetores fechados (LOW), bobinas de-energizadas (LOW) */
+    for (i = 0U; i < ECU_CHANNELS; ++i) {
+        uint8_t safe_action = (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK;
+        force_output(i, safe_action);
+    }
+}
+
+/* ============================================================================
+ * angle_to_tooth_event
+ * Converte ângulo no ciclo de 720° para (tooth_index, sub_frac_x256, phase_A).
+ *
+ * Mapeamento:
+ *   0–359°   → phase_A = ECU_PHASE_A (primeira revolução)
+ *   360–719° → phase_A = ECU_PHASE_B (segunda revolução)
+ *
+ * Dentro de cada revolução (0–359°):
+ *   60 posições de 6° cada (roda fônica 60-2)
+ *   pos_x256 = (angle_in_rev * 256) / 6
+ *   tooth    = pos_x256 >> 8           (0–59, clamped a 57 — dentes 58-59 ausentes)
+ *   sub_frac = pos_x256 & 0xFF         (fração × 256 do período do dente)
+ * ========================================================================= */
+
+static void angle_to_tooth_event(uint32_t angle_deg,
+                                  uint8_t *out_tooth,
+                                  uint8_t *out_sub_frac,
+                                  uint8_t *out_phase_A)
+{
+    uint32_t ang;
+    uint32_t pos_x256;
+    uint8_t  tooth;
+    uint8_t  sub_frac;
+
+    *out_phase_A = (angle_deg < 360U) ? ECU_PHASE_A : ECU_PHASE_B;
+    ang = angle_deg % 360U;
+
+    /* 60 posições × 6°/posição: pos = ang / 6, frac = (ang % 6) / 6 em Q8 */
+    pos_x256 = (ang * 256U) / 6U;
+    tooth    = (uint8_t)(pos_x256 >> 8U);
+    sub_frac = (uint8_t)(pos_x256 & 0xFFU);
+
+    /* Clamp: posições 58 e 59 são os dentes ausentes (gap).
+     * Eventos nessa região são atribuídos ao último dente real (57). */
+    if (tooth > 57U) {
+        tooth    = 57U;
+        sub_frac = 255U;
     }
 
-    /* Safe state: injectors closed, coils de-energised. */
-    for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
-        uint8_t safe_action = (ch < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK;
-        force_output(ch, safe_action);
+    *out_tooth    = tooth;
+    *out_sub_frac = sub_frac;
+}
+
+/* ============================================================================
+ * table_add: insere evento na tabela angular.
+ * Se a tabela estiver cheia, incrementa g_cycle_schedule_drop_count e ignora.
+ * ========================================================================= */
+
+static void table_add(uint8_t tooth, uint8_t sub_frac, uint8_t phase_A,
+                       uint8_t channel, uint8_t action)
+{
+    AngleEvent_t *e;
+
+    if (g_angle_table_count >= ECU_ANGLE_TABLE_SIZE) {
+        ++g_cycle_schedule_drop_count;
+        return;
     }
+    e               = &g_angle_table[g_angle_table_count];
+    e->tooth_index  = tooth;
+    e->sub_frac_x256 = sub_frac;
+    e->phase_A      = phase_A;
+    e->channel      = channel;
+    e->action       = action;
+    e->valid        = 1U;
+    ++g_angle_table_count;
 }
 
 /* ============================================================================
@@ -702,434 +320,278 @@ void ECU_Hardware_Init(void)
     SIM_SCGC6_REG |= (SIM_SCGC6_FTM0_MASK | SIM_SCGC6_PDB_MASK | SIM_SCGC6_ADC0_MASK);
 
     /* 2. FTM0 configuration */
-    /* 2a. Write-protect disable + FTMEN (must be first write) */
+    /* 2a. Write-protect disable + FTMEN (deve ser a primeira escrita) */
     FTM0->MODE = (FTM_MODE_WPDIS | FTM_MODE_FTMEN);
 
-    /* 2b. Stop counter for safe configuration */
+    /* 2b. Para o contador para configuração segura */
     FTM0->SC = 0U;
 
-    /* 2c. Free-running, MOD = 0xFFFF (maximum 16-bit range) */
+    /* 2c. Free-running, MOD = 0xFFFF (range máximo 16-bit) */
     FTM0->CNT = 0U;
     FTM0->MOD = 0xFFFFU;
 
-    /* 2d. CH0-CH3 (injectors): Output Compare, Set on match (HIGH = open) */
+    /* 2d. CH0-CH3 (injetores): Output Compare, Set on match (HIGH = aberto) */
     for (ch = 0U; ch < ECU_IGN_CH_FIRST; ++ch) {
-        FTM0->CONTROLS[ch].CnSC = FTM_CnSC_OC_SET;
-        FTM0->CONTROLS[ch].CnV  = 0U;
+        FTM0->CH[ch].CnSC = FTM_CnSC_OC_SET;
+        FTM0->CH[ch].CnV  = 0U;
     }
 
-    /* 2e. CH4-CH7 (ignition coils): Output Compare, Clear on match (LOW = spark) */
+    /* 2e. CH4-CH7 (bobinas ignição): Output Compare, Clear on match (LOW = faísca) */
     for (ch = ECU_IGN_CH_FIRST; ch < ECU_CHANNELS; ++ch) {
-        FTM0->CONTROLS[ch].CnSC = FTM_CnSC_OC_CLEAR;
-        FTM0->CONTROLS[ch].CnV  = 0U;
+        FTM0->CH[ch].CnSC = FTM_CnSC_OC_CLEAR;
+        FTM0->CH[ch].CnV  = 0U;
     }
 
-    /* 2f. Start FTM0: system clock, PS=8, TOIE=1 (overflow interrupt) */
-    FTM0->SC = (FTM_SC_CLKS_SYSTEM | FTM_SC_TOIE_MASK | FTM_SC_PS_8);
+    /* 2f. Inicia FTM0: system clock, PS=16.
+     * Sem TOIE — no domínio angular, overflow do FTM0 é irrelevante.
+     * Cada CnV é programado com offset relativo ao CNT atual (< 1 tooth period),
+     * portanto nunca excede 65535 ticks para RPM >= 115. */
+    FTM0->SC = (FTM_SC_CLKS_SYSTEM | FTM_SC_PS_16);
 
-    /* 3. PDB0 configuration */
-    /* Trigger source = FTM0 output trigger (TRGSEL=0x8), CH0 for ADC0 */
-    PDB0->SC     = 0U;
-    PDB0->IDLY   = 0U;
-    PDB0->MOD    = 0xFFFFU;
-    PDB0->CH0C1  = PDB_CHnC1_EN0_MASK;
+    /* 3. PDB0: trigger source = FTM0 output trigger (TRGSEL=0x8), CH0 para ADC0 */
+    PDB0->SC      = 0U;
+    PDB0->IDLY    = 0U;
+    PDB0->MOD     = 0xFFFFU;
+    PDB0->CH0C1   = PDB_CHnC1_EN0_MASK;
     PDB0->CH0DLY0 = 0U;
-    PDB0->SC     = (PDB_SC_PDBEN_MASK | PDB_SC_TRGSEL_FTM0 | PDB_SC_LDOK_MASK);
+    PDB0->SC      = (PDB_SC_PDBEN_MASK | PDB_SC_TRGSEL_FTM0 | PDB_SC_LDOK_MASK);
 
-    /* 4. ADC0 configuration */
-    /* 4a. 12-bit resolution, bus clock / 2 */
+    /* 4. ADC0: 12-bit, bus clock / 2; hardware averaging 4 samples */
     ADC0->CFG1 = ADC_CFG1_12B_DIV2;
-    ADC0->CFG2 = 0U; /* Side-A, no high-speed */
-
-    /* 4b. Hardware averaging: 4 samples (AVGE=1, AVGS=00) */
-    ADC0->SC3 = ADC_SC3_AVG4;
-}
-
-/* ============================================================================
- * Add_Event
- * ========================================================================= */
-
-void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action)
-{
-    uint32_t ev_hi;
-    uint8_t  insert_pos;
-    uint8_t  i;
-
-    // CRITICAL FIX: Validate input parameters
-    ASSERT_VALID_TIMESTAMP(timestamp32);
-    ASSERT_VALID_CHANNEL(channel);
-    ASSERT_VALID_ACTION(action);
-
-    /* FIX-7: Proteção CPSID/CPSIE em toda a manipulação da fila.
-     * Add_Event() é chamado do background (slot 2ms). A ISR FTM0 (prio 4) pode
-     * preemptar e modificar g_queue[], g_queue_count, g_next_ts[], g_next_valid[]
-     * via arm_due_channels() → queue_remove(). Sem seção crítica, a fila pode
-     * ser corrompida durante a busca e inserção ordenada.
-     * Duração típica da seção crítica: ~1–3 µs (fila de 32 entradas). */
-    enter_critical();
-
-    /* Compute overflow epoch of this event */
-    ev_hi = (timestamp32 >> 16U);
-
-    /* Late event: already past. */
-    if ((ev_hi < g_overflow_count) || (is_timestamp_late(timestamp32) != 0U)) {
-        /* SCH-05: Em vez de percorrer e remover todos os slots do canal (O(n²)),
-         * marca o canal como "dirty". A ISR FTM0 e arm_due_channels() ignoram
-         * eventos de canais dirty. O flag é limpo quando um novo evento futuro
-         * válido é inserido para esse canal (ver abaixo). */
-        g_channel_dirty[channel] = 1U;
-        recompute_next_per_channel();
-        record_late_delay(current_timestamp32(), timestamp32);
-        force_output(channel, action);
-        ++g_late_event_count;
-        exit_critical();
-        ASSERT_INVARIANTS();
-        return;
-    }
-
-    /* Queue full: treat as late event */
-    if (g_queue_count >= ECU_QUEUE_SIZE) {
-        /* SCH-05: mesma estratégia — dirty flag O(1) em vez de remoção O(n²). */
-        g_channel_dirty[channel] = 1U;
-        recompute_next_per_channel();
-        force_output(channel, action);
-        ++g_late_event_count;
-        exit_critical();
-        ASSERT_INVARIANTS();
-        return;
-    }
-
-    /* Find insertion position (ascending sort by timestamp32) */
-    insert_pos = g_queue_count;
-    for (i = 0U; i < g_queue_count; ++i) {
-        if (timestamp32 < g_queue[i].timestamp32) {
-            insert_pos = i;
-            break;
-        }
-    }
-
-    /* Shift tail entries up to make room */
-    for (i = g_queue_count; i > insert_pos; --i) {
-        g_queue[i].timestamp32 = g_queue[i - 1U].timestamp32;
-        g_queue[i].channel     = g_queue[i - 1U].channel;
-        g_queue[i].action      = g_queue[i - 1U].action;
-        g_queue[i].valid       = g_queue[i - 1U].valid;
-        g_queue[i]._pad        = 0U;
-    }
-
-    /* Insert new event */
-    g_queue[insert_pos].timestamp32 = timestamp32;
-    g_queue[insert_pos].channel     = channel;
-    g_queue[insert_pos].action      = action;
-    g_queue[insert_pos].valid       = 1U;
-    g_queue[insert_pos]._pad        = 0U;
-    ++g_queue_count;
-    update_queue_depth_metrics();
-
-    /* SCH-05: limpa o dirty flag — este canal voltou a ter um evento futuro válido. */
-    g_channel_dirty[channel] = 0U;
-
-    /* Keep one authoritative "next event" per channel and only arm due ones. */
-    recompute_next_per_channel();
-    if ((g_next_valid[channel] != 0U) &&
-        (g_next_ts[channel] == timestamp32)) {
-        process_channel_ready_event(channel);
-    }
-
-    exit_critical();
-    ASSERT_INVARIANTS();
+    ADC0->CFG2 = 0U;
+    ADC0->SC3  = ADC_SC3_AVG4;
 }
 
 /* ============================================================================
  * FTM0_IRQHandler
+ * Simplificado: sem bloco TOF (g_overflow_count eliminado).
+ * Apenas limpa CHF por canal — o pino já mudou em hardware via output compare.
  * ========================================================================= */
 
 void FTM0_IRQHandler(void)
 {
-    uint32_t sc;
-    uint8_t  ch;
-    uint8_t  i;
+    uint8_t ch;
 
-    sc = FTM0->SC;
-
-    /* ── 1. Timer Overflow (TOF): extend 32-bit counter ─────────────────── */
-    if ((sc & FTM_SC_TOF_MASK) != 0U) {
-        /* Clear TOF (W0C: write 0 to bit, preserve other bits) */
-        FTM0->SC = (sc & ~FTM_SC_TOF_MASK);
-        
-        ++g_overflow_count;
-        
-        /* Ensure overflow increment is complete before queue processing */
-        /* Memory barrier to prevent compiler reordering */
-        __asm__ volatile("" ::: "memory");
-
-        /* Remove events that are still late after overflow advancement. */
-        for (i = g_queue_count; i > 0U; --i) {
-            uint8_t idx = i - 1U;
-            if (is_timestamp_late(g_queue[idx].timestamp32) != 0U) {
-                /* Still late even after increment — force and count */
-                record_late_delay(current_timestamp32(), g_queue[idx].timestamp32);
-                force_output(g_queue[idx].channel, g_queue[idx].action);
-                ++g_late_event_count;
-                queue_remove(idx);
-            }
-        }
-
-        recompute_next_per_channel();
-        arm_due_channels();
-    }
-
-    /* ── 2. Channel match (CHF set): cleanup fired events ───────────────── */
     for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
-        uint32_t cnsc = FTM0->CONTROLS[ch].CnSC;
+        uint32_t cnsc = FTM0->CH[ch].CnSC;
         if ((cnsc & FTM_CnSC_CHF_MASK) != 0U) {
-            /* Clear CHF (W0C) and disable further interrupts on this channel */
-            FTM0->CONTROLS[ch].CnSC = (cnsc & ~FTM_CnSC_CHF_MASK);
-
-            /* Remove the corresponding event from the queue */
-            /* Remove the armed event for this channel (fallback: first by channel). */
-            uint8_t removed = 0U;
-            if ((ch < ECU_CHANNELS) && (g_next_valid[ch] != 0U)) {
-                removed = remove_event_for_channel_ts(ch, g_next_ts[ch]);
-            }
-
-            if (removed == 0U) {
-                for (i = 0U; i < g_queue_count; ++i) {
-                    if ((g_queue[i].valid != 0U) &&
-                        (g_queue[i].channel == ch)) {
-                        queue_remove(i);
-                        break;
-                    }
-                }
-            }
-
-            recompute_next_per_channel();
-            process_channel_ready_event(ch);
+            /* Limpa CHF (W0C: escreve 0 no bit, preserva os demais) */
+            FTM0->CH[ch].CnSC = (cnsc & ~FTM_CnSC_CHF_MASK);
+            /* Nenhuma lógica adicional: transição de pino já ocorreu em hardware.
+             * Set-on-match para INJ, Clear-on-match para IGN. */
         }
     }
-    ASSERT_INVARIANTS();
 }
 
 /* ============================================================================
- * Pre-sync 360-degree fallback scheduling (HALF_SYNC)
+ * Calculate_Sequential_Cycle (domínio angular)
+ * Chamada uma vez por revolução (tooth_index==0, FULL_SYNC).
+ * Preenche g_angle_table[] com 16 eventos (4 cil × 4 ações).
  * ========================================================================= */
 
-static void calculate_presync_revolution(uint32_t current_timestamp)
+static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
 {
-    static const uint8_t k_ign_pair_a[2] = {ECU_CH_IGN1, ECU_CH_IGN4}; /* cyl 1+4 */
-    static const uint8_t k_ign_pair_b[2] = {ECU_CH_IGN2, ECU_CH_IGN3}; /* cyl 2+3 */
-    static const uint8_t k_inj_bank_a[2] = {ECU_CH_INJ1, ECU_CH_INJ4}; /* cyl 1+4 */
-    static const uint8_t k_inj_bank_b[2] = {ECU_CH_INJ2, ECU_CH_INJ3}; /* cyl 2+3 */
+    /* Firing order: 1-3-4-2 (cylinder 0-indexed: 0,2,3,1) */
+    static const uint8_t  k_fire_order[ECU_NUM_CYL] = {0U, 2U, 3U, 1U};
+    /* TDC compression angles (degrees in 720° cycle) */
+    static const uint32_t k_tdc_deg[ECU_NUM_CYL]    = {0U, 180U, 360U, 540U};
+    /* Ignition channel per cylinder (0-indexed) */
+    static const uint8_t  k_ign_ch[ECU_NUM_CYL] = {
+        ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4
+    };
+    /* Injection channel per cylinder (0-indexed) */
+    static const uint8_t  k_inj_ch[ECU_NUM_CYL] = {
+        ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4
+    };
 
-    uint32_t ticks_per_rev = g_ticks_per_rev;
-    uint32_t advance_deg = g_advance_deg;
-    uint32_t dwell_ticks = g_dwell_ticks;
+    uint32_t seq;
+    uint32_t advance_deg  = g_advance_deg;
+    uint32_t dwell_ticks  = g_dwell_ticks;
     uint32_t inj_pw_ticks = g_inj_pw_ticks;
     uint32_t soi_lead_deg = g_soi_lead_deg;
-    uint8_t required_slots = 8U; /* wasted spark only */
 
-    if (inj_pw_ticks > 0U) {
-        required_slots = (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) ? 16U : 12U;
+    /* Converte dwell e PW (tempo em ticks FTM0) para ângulo no ciclo de 720°.
+     * tooth_period_ftm0 = tooth_period_ns / 133,33 ≈ tooth_period_ns * 3 / 400
+     * ticks_per_rev_720 = tooth_period_ftm0 * 60 posições × 2 revoluções
+     * dwell_deg = dwell_ticks * 720 / ticks_per_rev_720 */
+    uint32_t tooth_ftm0      = TOOTH_NS_TO_FTM0(snap.tooth_period_ns);
+    uint32_t ticks_per_rev720 = tooth_ftm0 * 120U; /* 60 posições × 2 revoluções */
+
+    uint32_t dwell_deg  = 0U;
+    uint32_t inj_pw_deg = 0U;
+    if (ticks_per_rev720 > 0U) {
+        dwell_deg  = (dwell_ticks  * ECU_CYCLE_DEG) / ticks_per_rev720;
+        inj_pw_deg = (inj_pw_ticks * ECU_CYCLE_DEG) / ticks_per_rev720;
     }
-    if (g_queue_count > (uint8_t)(ECU_QUEUE_SIZE - required_slots)) {
-        ++g_cycle_schedule_drop_count;
-        return;
+
+    g_angle_table_count = 0U;
+
+    for (seq = 0U; seq < ECU_NUM_CYL; ++seq) {
+        uint8_t  cyl     = k_fire_order[seq];
+        uint32_t tdc_deg = k_tdc_deg[seq];
+        uint8_t  ign_ch  = k_ign_ch[cyl];
+        uint8_t  inj_ch  = k_inj_ch[cyl];
+        uint8_t  tooth, sf, phase;
+
+        /* Ângulos no ciclo de 720°, todos positivos (mod 720) */
+        uint32_t spark_deg   = (tdc_deg + ECU_CYCLE_DEG - advance_deg)  % ECU_CYCLE_DEG;
+        uint32_t dwell_start = (spark_deg + ECU_CYCLE_DEG - dwell_deg)  % ECU_CYCLE_DEG;
+        uint32_t inj_on_deg  = (tdc_deg + ECU_CYCLE_DEG - soi_lead_deg) % ECU_CYCLE_DEG;
+        uint32_t inj_off_deg = (inj_on_deg + inj_pw_deg)                % ECU_CYCLE_DEG;
+
+        /* Converte para (tooth, sub_frac, phase_A) e insere na tabela */
+        angle_to_tooth_event(dwell_start, &tooth, &sf, &phase);
+        table_add(tooth, sf, phase, ign_ch, ECU_ACT_DWELL_START);
+
+        angle_to_tooth_event(spark_deg, &tooth, &sf, &phase);
+        table_add(tooth, sf, phase, ign_ch, ECU_ACT_SPARK);
+
+        if (inj_pw_ticks > 0U) {
+            angle_to_tooth_event(inj_on_deg, &tooth, &sf, &phase);
+            table_add(tooth, sf, phase, inj_ch, ECU_ACT_INJ_ON);
+
+            angle_to_tooth_event(inj_off_deg, &tooth, &sf, &phase);
+            table_add(tooth, sf, phase, inj_ch, ECU_ACT_INJ_OFF);
+        }
+    }
+}
+
+/* ============================================================================
+ * calculate_presync_revolution (domínio angular, HALF_SYNC)
+ * Wasted spark em toda revolução (phase_A = ECU_PHASE_ANY).
+ * Injeção simultânea ou semi-sequencial, também em toda revolução.
+ * ========================================================================= */
+
+static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
+{
+    static const uint8_t k_ign_pair_a[2] = {ECU_CH_IGN1, ECU_CH_IGN4}; /* cil 1+4 */
+    static const uint8_t k_ign_pair_b[2] = {ECU_CH_IGN2, ECU_CH_IGN3}; /* cil 2+3 */
+    static const uint8_t k_inj_bank_a[2] = {ECU_CH_INJ1, ECU_CH_INJ4};
+    static const uint8_t k_inj_bank_b[2] = {ECU_CH_INJ2, ECU_CH_INJ3};
+
+    uint32_t advance_deg  = g_advance_deg % 360U;
+    uint32_t dwell_ticks  = g_dwell_ticks;
+    uint32_t inj_pw_ticks = g_inj_pw_ticks;
+    uint32_t soi_lead_deg = g_soi_lead_deg % 360U;
+
+    /* Converte dwell para ângulo (domínio 360°, uma revolução) */
+    uint32_t tooth_ftm0      = TOOTH_NS_TO_FTM0(snap.tooth_period_ns);
+    uint32_t ticks_per_rev360 = tooth_ftm0 * 60U;
+    uint32_t dwell_deg  = 0U;
+    uint32_t inj_pw_deg = 0U;
+    if (ticks_per_rev360 > 0U) {
+        dwell_deg  = (dwell_ticks  * 360U) / ticks_per_rev360;
+        inj_pw_deg = (inj_pw_ticks * 360U) / ticks_per_rev360;
     }
 
-    /* Ignition: wasted spark (pairs every 360-degree revolution). */
-    if (g_presync_ign_mode == ECU_PRESYNC_IGN_WASTED_SPARK) {
-        uint32_t adv = advance_deg % 360U;
-        uint32_t spark_a_deg = (360U - adv) % 360U;
-        uint32_t spark_b_deg = (180U + 360U - adv) % 360U;
-        uint32_t spark_a_ticks = (spark_a_deg * ticks_per_rev) / 360U;
-        uint32_t spark_b_ticks = (spark_b_deg * ticks_per_rev) / 360U;
-        uint32_t dwell_a_ticks = (spark_a_ticks >= dwell_ticks) ? (spark_a_ticks - dwell_ticks) : 0U;
-        uint32_t dwell_b_ticks = (spark_b_ticks >= dwell_ticks) ? (spark_b_ticks - dwell_ticks) : 0U;
-        uint32_t ts_dwell_a = current_timestamp + dwell_a_ticks;
-        uint32_t ts_spark_a = current_timestamp + spark_a_ticks;
-        uint32_t ts_dwell_b = current_timestamp + dwell_b_ticks;
-        uint32_t ts_spark_b = current_timestamp + spark_b_ticks;
+    /* Ângulos no ciclo de 360° (HALF_SYNC não conhece a fase) */
+    uint32_t spark_a = (360U - advance_deg) % 360U;
+    uint32_t spark_b = (180U + 360U - advance_deg) % 360U;
+    uint32_t dwell_a = (spark_a + 360U - dwell_deg) % 360U;
+    uint32_t dwell_b = (spark_b + 360U - dwell_deg) % 360U;
 
-        Add_Event(ts_dwell_a, k_ign_pair_a[0], ECU_ACT_DWELL_START);
-        Add_Event(ts_dwell_a, k_ign_pair_a[1], ECU_ACT_DWELL_START);
-        Add_Event(ts_spark_a, k_ign_pair_a[0], ECU_ACT_SPARK);
-        Add_Event(ts_spark_a, k_ign_pair_a[1], ECU_ACT_SPARK);
+    g_angle_table_count = 0U;
 
-        Add_Event(ts_dwell_b, k_ign_pair_b[0], ECU_ACT_DWELL_START);
-        Add_Event(ts_dwell_b, k_ign_pair_b[1], ECU_ACT_DWELL_START);
-        Add_Event(ts_spark_b, k_ign_pair_b[0], ECU_ACT_SPARK);
-        Add_Event(ts_spark_b, k_ign_pair_b[1], ECU_ACT_SPARK);
+    /* Wasted spark: dispara em toda revolução (ECU_PHASE_ANY) */
+    {
+        uint8_t p, tooth, sf, phase_ignored;
+
+        /* Par A (cil 1+4) */
+        angle_to_tooth_event(dwell_a, &tooth, &sf, &phase_ignored);
+        for (p = 0U; p < 2U; ++p) {
+            table_add(tooth, sf, ECU_PHASE_ANY, k_ign_pair_a[p], ECU_ACT_DWELL_START);
+        }
+        angle_to_tooth_event(spark_a, &tooth, &sf, &phase_ignored);
+        for (p = 0U; p < 2U; ++p) {
+            table_add(tooth, sf, ECU_PHASE_ANY, k_ign_pair_a[p], ECU_ACT_SPARK);
+        }
+
+        /* Par B (cil 2+3) */
+        angle_to_tooth_event(dwell_b, &tooth, &sf, &phase_ignored);
+        for (p = 0U; p < 2U; ++p) {
+            table_add(tooth, sf, ECU_PHASE_ANY, k_ign_pair_b[p], ECU_ACT_DWELL_START);
+        }
+        angle_to_tooth_event(spark_b, &tooth, &sf, &phase_ignored);
+        for (p = 0U; p < 2U; ++p) {
+            table_add(tooth, sf, ECU_PHASE_ANY, k_ign_pair_b[p], ECU_ACT_SPARK);
+        }
     }
 
     if (inj_pw_ticks == 0U) {
         return;
     }
 
-    /* Injection fallback timing: one anchor per revolution in 360-degree domain. */
-    uint32_t soi = soi_lead_deg % 360U;
-    uint32_t inj_deg = (360U - soi) % 360U;
-    uint32_t inj_ticks = (inj_deg * ticks_per_rev) / 360U;
-    uint32_t ts_inj_on = current_timestamp + inj_ticks;
-    uint32_t ts_inj_off = ts_inj_on + inj_pw_ticks;
+    /* Injeção presync */
+    {
+        uint32_t soi    = (360U - soi_lead_deg) % 360U;
+        uint32_t inj_off_deg = (soi + inj_pw_deg) % 360U;
+        uint8_t  tooth_on, sf_on, tooth_off, sf_off, phase_ignored;
 
-    if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
-        Add_Event(ts_inj_on, ECU_CH_INJ1, ECU_ACT_INJ_ON);
-        Add_Event(ts_inj_on, ECU_CH_INJ2, ECU_ACT_INJ_ON);
-        Add_Event(ts_inj_on, ECU_CH_INJ3, ECU_ACT_INJ_ON);
-        Add_Event(ts_inj_on, ECU_CH_INJ4, ECU_ACT_INJ_ON);
-        Add_Event(ts_inj_off, ECU_CH_INJ1, ECU_ACT_INJ_OFF);
-        Add_Event(ts_inj_off, ECU_CH_INJ2, ECU_ACT_INJ_OFF);
-        Add_Event(ts_inj_off, ECU_CH_INJ3, ECU_ACT_INJ_OFF);
-        Add_Event(ts_inj_off, ECU_CH_INJ4, ECU_ACT_INJ_OFF);
-    } else {
-        const uint8_t* bank = (g_presync_bank_toggle == 0U) ? k_inj_bank_a : k_inj_bank_b;
-        Add_Event(ts_inj_on, bank[0], ECU_ACT_INJ_ON);
-        Add_Event(ts_inj_on, bank[1], ECU_ACT_INJ_ON);
-        Add_Event(ts_inj_off, bank[0], ECU_ACT_INJ_OFF);
-        Add_Event(ts_inj_off, bank[1], ECU_ACT_INJ_OFF);
-        g_presync_bank_toggle ^= 1U;
+        angle_to_tooth_event(soi,         &tooth_on,  &sf_on,  &phase_ignored);
+        angle_to_tooth_event(inj_off_deg, &tooth_off, &sf_off, &phase_ignored);
+
+        if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
+            uint8_t ch;
+            static const uint8_t k_all_inj[4] = {
+                ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4
+            };
+            for (ch = 0U; ch < 4U; ++ch) {
+                table_add(tooth_on,  sf_on,  ECU_PHASE_ANY, k_all_inj[ch], ECU_ACT_INJ_ON);
+                table_add(tooth_off, sf_off, ECU_PHASE_ANY, k_all_inj[ch], ECU_ACT_INJ_OFF);
+            }
+        } else {
+            /* Semi-sequencial: alterna bancos a cada revolução */
+            const uint8_t *bank = (g_presync_bank_toggle == 0U)
+                                  ? k_inj_bank_a : k_inj_bank_b;
+            table_add(tooth_on,  sf_on,  ECU_PHASE_ANY, bank[0], ECU_ACT_INJ_ON);
+            table_add(tooth_on,  sf_on,  ECU_PHASE_ANY, bank[1], ECU_ACT_INJ_ON);
+            table_add(tooth_off, sf_off, ECU_PHASE_ANY, bank[0], ECU_ACT_INJ_OFF);
+            table_add(tooth_off, sf_off, ECU_PHASE_ANY, bank[1], ECU_ACT_INJ_OFF);
+            g_presync_bank_toggle ^= 1U;
+        }
     }
 }
 
 /* ============================================================================
- * Calculate_Sequential_Cycle
+ * ecu_sched_commit_calibration
  * ========================================================================= */
 
-void Calculate_Sequential_Cycle(uint32_t current_timestamp)
+void ecu_sched_commit_calibration(uint32_t advance_deg,
+                                  uint32_t dwell_ticks,
+                                  uint32_t inj_pw_ticks,
+                                  uint32_t soi_lead_deg)
 {
-    /*
-     * Firing order: 1-3-4-2 (0-indexed cylinders: 0, 2, 3, 1).
-     * TDC compression angles in a 720-degree 4-stroke cycle:
-     *   Cyl 1 = 0 deg, Cyl 3 = 180 deg, Cyl 4 = 360 deg, Cyl 2 = 540 deg.
-     *
-     * For each cylinder in firing order, schedule:
-     *   ECU_ACT_DWELL_START at TDC_angle - advance_deg - dwell_ticks_as_angle
-     *   ECU_ACT_SPARK        at TDC_angle - advance_deg
-     *
-     * Angle to ticks: delta_ticks = (angle_deg * g_ticks_per_rev) / ECU_CYCLE_DEG
-     */
-
-    /* Firing order: cylinder indices 0-based, firing sequence 1,3,4,2 */
-    static const uint8_t  k_fire_order[ECU_NUM_CYL]  = {0U, 2U, 3U, 1U};
-    /* TDC compression offset per cylinder (degrees in 720-deg cycle) */
-    static const uint32_t k_tdc_deg[ECU_NUM_CYL] = {0U, 180U, 360U, 540U};
-    /* Ignition channel per cylinder (0-indexed cyl -> IGN channel) */
-    static const uint8_t  k_ign_ch[ECU_NUM_CYL]  = {
-        ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4
-    };
-    /* Injection channel per cylinder (0-indexed cyl -> INJ channel) */
-    static const uint8_t  k_inj_ch[ECU_NUM_CYL]  = {
-        ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4
-    };
-
-    uint32_t seq;
-    uint32_t ticks_per_rev  = g_ticks_per_rev;
-    uint32_t advance_deg    = g_advance_deg;
-    uint32_t dwell_ticks    = g_dwell_ticks;
-    uint32_t inj_pw_ticks   = g_inj_pw_ticks;
-    uint32_t soi_lead_deg   = g_soi_lead_deg;
-    uint8_t events_per_cyl = (inj_pw_ticks > 0U) ? 4U : 2U;
-    uint8_t required_slots = (uint8_t)(ECU_NUM_CYL * events_per_cyl);
-
-    if (g_queue_count > (uint8_t)(ECU_QUEUE_SIZE - required_slots)) {
-        ++g_cycle_schedule_drop_count;
-        g_cycle_fill_active = 0U;
-        return;
-    }
-
-    g_cycle_fill_active = 1U;
-    g_cycle_fill_peak = g_queue_count;
-
-    for (seq = 0U; seq < ECU_NUM_CYL; ++seq) {
-        uint8_t  cyl_idx    = k_fire_order[seq];
-        uint32_t tdc_deg    = k_tdc_deg[seq];
-        uint8_t  ign_ch     = k_ign_ch[cyl_idx];
-        uint8_t  inj_ch     = k_inj_ch[cyl_idx];
-
-        /* Degrees from current position to TDC of this cylinder minus advance */
-        uint32_t spark_deg;
-        uint32_t dwell_deg;
-        uint32_t spark_ticks;
-        uint32_t dwell_start_ticks;
-        uint32_t ts_spark;
-        uint32_t ts_dwell;
-        uint32_t soi_deg;
-        uint32_t soi_ticks;
-        uint32_t ts_inj_on;
-        uint32_t ts_inj_off;
-
-        /* spark angle offset from "now" (0 reference) */
-        if (tdc_deg >= advance_deg) {
-            spark_deg = tdc_deg - advance_deg;
-        } else {
-            spark_deg = (ECU_CYCLE_DEG + tdc_deg) - advance_deg;
-        }
-
-        /* Convert angular offset to ticks (integer division, no float) */
-        spark_ticks = (spark_deg * ticks_per_rev) / ECU_CYCLE_DEG;
-
-        /* Dwell start is dwell_ticks before the spark */
-        dwell_start_ticks = (spark_ticks >= dwell_ticks)
-                            ? (spark_ticks - dwell_ticks)
-                            : 0U;
-
-        /* Build 32-bit timestamps relative to current_timestamp */
-        ts_spark = current_timestamp + spark_ticks;
-        ts_dwell = current_timestamp + dwell_start_ticks;
-
-        if (tdc_deg >= soi_lead_deg) {
-            soi_deg = tdc_deg - soi_lead_deg;
-        } else {
-            soi_deg = (ECU_CYCLE_DEG + tdc_deg) - soi_lead_deg;
-        }
-        soi_ticks = (soi_deg * ticks_per_rev) / ECU_CYCLE_DEG;
-        ts_inj_on = current_timestamp + soi_ticks;
-        ts_inj_off = ts_inj_on + inj_pw_ticks;
-
-        /* Schedule dwell start (coil energise) */
-        Add_Event(ts_dwell, ign_ch, ECU_ACT_DWELL_START);
-
-        /* Schedule spark (coil cut) */
-        Add_Event(ts_spark, ign_ch, ECU_ACT_SPARK);
-
-        if (inj_pw_ticks > 0U) {
-            Add_Event(ts_inj_on, inj_ch, ECU_ACT_INJ_ON);
-            Add_Event(ts_inj_off, inj_ch, ECU_ACT_INJ_OFF);
-        }
-    }
-
-    g_queue_depth_last_cycle_peak = g_cycle_fill_peak;
-    g_cycle_fill_active = 0U;
+    enter_critical();
+    g_advance_deg  = advance_deg;
+    g_dwell_ticks  = dwell_ticks;
+    g_inj_pw_ticks = inj_pw_ticks;
+    g_soi_lead_deg = soi_lead_deg;
+    sanitize_runtime_calibration();
+    exit_critical();
 }
 
-void ecu_sched_set_ticks_per_rev(uint32_t tpr)
-{
-    ecu_sched_commit_calibration(
-        tpr, g_advance_deg, g_dwell_ticks, g_inj_pw_ticks, g_soi_lead_deg);
-}
+/* ============================================================================
+ * Individual setters (mantidos para compatibilidade com callers existentes)
+ * ========================================================================= */
 
 void ecu_sched_set_advance_deg(uint32_t adv)
 {
-    ecu_sched_commit_calibration(
-        g_ticks_per_rev, adv, g_dwell_ticks, g_inj_pw_ticks, g_soi_lead_deg);
+    ecu_sched_commit_calibration(adv, g_dwell_ticks, g_inj_pw_ticks, g_soi_lead_deg);
 }
 
 void ecu_sched_set_dwell_ticks(uint32_t dwell)
 {
-    ecu_sched_commit_calibration(
-        g_ticks_per_rev, g_advance_deg, dwell, g_inj_pw_ticks, g_soi_lead_deg);
+    ecu_sched_commit_calibration(g_advance_deg, dwell, g_inj_pw_ticks, g_soi_lead_deg);
 }
 
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks)
 {
-    ecu_sched_commit_calibration(
-        g_ticks_per_rev, g_advance_deg, g_dwell_ticks, pw_ticks, g_soi_lead_deg);
+    ecu_sched_commit_calibration(g_advance_deg, g_dwell_ticks, pw_ticks, g_soi_lead_deg);
 }
 
 void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg)
 {
-    ecu_sched_commit_calibration(
-        g_ticks_per_rev, g_advance_deg, g_dwell_ticks, g_inj_pw_ticks, soi_lead_deg);
+    ecu_sched_commit_calibration(g_advance_deg, g_dwell_ticks, g_inj_pw_ticks, soi_lead_deg);
 }
 
 void ecu_sched_set_presync_enable(uint8_t enable)
@@ -1160,97 +622,94 @@ void ecu_sched_reset_diagnostic_counters(void)
     enter_critical();
     g_calibration_clamp_count   = 0U;
     g_late_event_count          = 0U;
-    g_late_delay_samples        = 0U;
-    g_late_delay_sum_ticks      = 0U;
-    g_late_delay_max_ticks      = 0U;
     g_cycle_schedule_drop_count = 0U;
-    g_queue_depth_peak          = 0U;
     exit_critical();
-    // Nota: g_queue_depth_last_cycle_peak NÃO é zerado —
-    // serve como snapshot por ciclo para o TunerStudio.
 }
 
-void ecu_sched_commit_calibration(uint32_t tpr,
-                                  uint32_t advance_deg,
-                                  uint32_t dwell_ticks,
-                                  uint32_t inj_pw_ticks,
-                                  uint32_t soi_lead_deg)
-{
-    enter_critical();
-    g_ticks_per_rev = tpr;
-    g_advance_deg = advance_deg;
-    g_dwell_ticks = dwell_ticks;
-    g_inj_pw_ticks = inj_pw_ticks;
-    g_soi_lead_deg = soi_lead_deg;
-    sanitize_runtime_calibration();
-    exit_critical();
-}
+/* ============================================================================
+ * ecu_sched_on_tooth_hook (domínio angular)
+ * Chamada pela ISR CKP (FTM3, prioridade 1) a cada dente detectado.
+ *
+ * Operações por dente:
+ *   1. Filtro de estado (só processa em HALF_SYNC ou FULL_SYNC)
+ *   2. Loop na tabela angular: para cada evento com tooth_index == snap.tooth_index
+ *      e phase compatível, calcula offset e arma canal FTM0
+ *   3. Detecção de boundary de revolução (tooth_index == 0)
+ *   4. No boundary: recalcula tabela para próximo ciclo
+ * ========================================================================= */
 
 namespace ems::engine {
 
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
-    /* SCH-01: captura o timestamp IMEDIATAMENTE na entrada do hook, antes de
-     * qualquer branch, leitura de variável ou chamada de função.
-     * FTM0->CNT avança a 15 MHz (66,7 ns/tick). Cada instrução executada antes
-     * desta leitura adiciona jitter sistemático a todos os eventos agendados.
-     * Capturar aqui reduz o erro para < 2 ticks (≈ 133 ns) independente do
-     * caminho de execução subsequente. */
-    const uint32_t current_timestamp =
-        (::g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
+    uint8_t i;
 
+    /* ── 1. Filtro de estado ─────────────────────────────────────────────── */
     if ((snap.state != ems::drv::SyncState::FULL_SYNC) &&
         (snap.state != ems::drv::SyncState::HALF_SYNC)) {
-        if (g_hook_prev_full_sync != 0U) {
+        if (g_hook_prev_valid != 0U) {
             clear_all_events_and_drive_safe_outputs();
         }
-        g_hook_prev_full_sync = 0U;
         g_hook_prev_valid = 0U;
         g_hook_prev_tooth = 0U;
         g_hook_schedule_this_gap = 1U;
         return;
     }
 
-    retime_far_events_from_tooth_rpm(snap.rpm_x10);
+    /* ── 2. Disparo de eventos que correspondem ao dente atual ───────────── */
+    /* Calcula período do dente em ticks FTM0 (PS=16: 133,33 ns/tick)
+     * tooth_ftm0 = tooth_period_ns * 3 / 400
+     * Clamp a 0xFFFF para cranking muito lento (< ~115 RPM): aceita pequeno
+     * erro de timing nessa condição extrema em vez de overflow. */
+    uint32_t tooth_ftm0 = TOOTH_NS_TO_FTM0(snap.tooth_period_ns);
+    if (tooth_ftm0 > 0xFFFFU) { tooth_ftm0 = 0xFFFFU; }
 
-    /* Poll near-time queue on each valid CKP tooth for low-latency arming. */
-    arm_due_channels();
+    uint16_t ftm0_now = (uint16_t)(FTM0->CNT & 0xFFFFU);
 
-    g_hook_prev_full_sync = (snap.state == ems::drv::SyncState::FULL_SYNC) ? 1U : 0U;
+    uint8_t current_phase = snap.phase_A ? ECU_PHASE_A : ECU_PHASE_B;
 
-    /* SCH-02: Detecta boundary apenas quando g_hook_prev_valid já estava activo
-     * E o índice anterior era != 0.  Impede que a primeira entrada após resync
-     * (g_hook_prev_valid == 0) dispare um ciclo com parâmetros potencialmente
-     * desatualizados. */
+    for (i = 0U; i < g_angle_table_count; ++i) {
+        const AngleEvent_t *e = &g_angle_table[i];
+        if (e->valid == 0U) { continue; }
+        if (e->tooth_index != (uint8_t)snap.tooth_index) { continue; }
+        /* ECU_PHASE_ANY dispara em toda revolução (HALF_SYNC wasted spark) */
+        if ((e->phase_A != ECU_PHASE_ANY) && (e->phase_A != current_phase)) { continue; }
+
+        uint16_t offset = (uint16_t)((e->sub_frac_x256 * tooth_ftm0) >> 8U);
+        uint16_t target = (uint16_t)(ftm0_now + offset);
+        arm_channel(e->channel, target, e->action);
+    }
+
+    /* ── 3. Detecção de boundary de revolução ────────────────────────────── */
+    /* SCH-02: detecta wrap genuíno (tooth_index 57→0) descartando o primeiro
+     * tooth_index=0 após resync (g_hook_prev_valid==0). */
     uint8_t rev_boundary = 0U;
     if ((g_hook_prev_valid != 0U) &&
         (snap.tooth_index == 0U) &&
         (g_hook_prev_tooth != 0U)) {
         rev_boundary = 1U;
     }
-    /* Marca como válido somente APÓS a verificação acima para garantir que o
-     * próximo wrap genuíno (não o primeiro tooth_index=0 após resync) seja
-     * o primeiro a disparar um ciclo. */
     g_hook_prev_valid = 1U;
     g_hook_prev_tooth = snap.tooth_index;
 
-    if (rev_boundary == 0U) {
-        return;
-    }
+    if (rev_boundary == 0U) { return; }
 
+    /* ── 4. Boundary: recalcula tabela angular para próxima revolução ───── */
     if ((snap.state == ems::drv::SyncState::HALF_SYNC) &&
         (g_presync_enable != 0U)) {
-        calculate_presync_revolution(current_timestamp);
+        calculate_presync_revolution(snap);
         return;
     }
 
+    /* SCH-02 guard: descarta o primeiro ciclo após FULL_SYNC para evitar
+     * disparar com parâmetros potencialmente desatualizados. */
     if (g_hook_schedule_this_gap == 0U) {
         g_hook_schedule_this_gap = 1U;
         return;
     }
     g_hook_schedule_this_gap = 0U;
 
-    ::Calculate_Sequential_Cycle(current_timestamp);
+    Calculate_Sequential_Cycle(snap);
 }
 
 }  // namespace ems::engine
@@ -1264,67 +723,52 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 void ecu_sched_test_reset(void)
 {
     uint8_t i;
-    g_overflow_count   = 0U;
-    g_late_event_count = 0U;
-    g_late_delay_samples = 0U;
-    g_late_delay_sum_ticks = 0U;
-    g_late_delay_max_ticks = 0U;
-    g_queue_depth_peak = 0U;
-    g_queue_depth_last_cycle_peak = 0U;
+
+    g_late_event_count          = 0U;
     g_cycle_schedule_drop_count = 0U;
-    g_calibration_clamp_count = 0U;
-    g_cycle_fill_active = 0U;
-    g_cycle_fill_peak = 0U;
-    g_presync_enable = 1U;
-    g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
-    g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
-    g_presync_bank_toggle = 0U;
-    g_hook_prev_full_sync = 0U;
-    g_hook_prev_valid = 0U;
-    g_hook_prev_tooth = 0U;
-    g_hook_schedule_this_gap = 1U;
-    g_queue_count      = 0U;
-    g_ticks_per_rev    = 900000U;
-    g_advance_deg      = 10U;
-    g_dwell_ticks      = 45000U;
-    g_inj_pw_ticks     = 45000U;
-    g_soi_lead_deg     = 62U;
-    for (i = 0U; i < ECU_QUEUE_SIZE; ++i) {
-        g_queue[i].timestamp32 = 0U;
-        g_queue[i].channel     = 0U;
-        g_queue[i].action      = 0U;
-        g_queue[i].valid       = 0U;
-        g_queue[i]._pad        = 0U;
+    g_calibration_clamp_count   = 0U;
+    g_presync_enable            = 1U;
+    g_presync_inj_mode          = ECU_PRESYNC_INJ_SIMULTANEOUS;
+    g_presync_ign_mode          = ECU_PRESYNC_IGN_WASTED_SPARK;
+    g_presync_bank_toggle       = 0U;
+    g_hook_prev_valid           = 0U;
+    g_hook_prev_tooth           = 0U;
+    g_hook_schedule_this_gap    = 1U;
+    g_advance_deg               = 10U;
+    g_dwell_ticks               = 22500U;
+    g_inj_pw_ticks              = 22500U;
+    g_soi_lead_deg              = 62U;
+    g_angle_table_count         = 0U;
+
+    for (i = 0U; i < ECU_ANGLE_TABLE_SIZE; ++i) {
+        g_angle_table[i].valid = 0U;
     }
-    for (i = 0U; i < ECU_CHANNELS; ++i) {
-        g_next_valid[i]    = 0U;
-        g_next_ts[i]       = 0U;
-        g_next_action[i]   = 0U;
-        g_channel_dirty[i] = 0U;
-    }
-    ASSERT_INVARIANTS();
 }
 
-uint8_t ecu_sched_test_queue_size(void)
+uint8_t ecu_sched_test_angle_table_size(void)
 {
-    return g_queue_count;
+    return g_angle_table_count;
 }
 
-uint8_t ecu_sched_test_get_event(uint8_t index, uint32_t *ts,
-                                  uint8_t *ch, uint8_t *act)
+uint8_t ecu_sched_test_get_angle_event(uint8_t index,
+                                        uint8_t *tooth,
+                                        uint8_t *sub_frac,
+                                        uint8_t *ch,
+                                        uint8_t *action,
+                                        uint8_t *phase)
 {
-    if ((index >= g_queue_count) || (ts == NULL) || (ch == NULL) || (act == NULL)) {
+    if ((index >= g_angle_table_count) ||
+        (tooth == NULL) || (sub_frac == NULL) ||
+        (ch == NULL) || (action == NULL) || (phase == NULL)) {
         return 0U;
     }
-    *ts  = g_queue[index].timestamp32;
-    *ch  = g_queue[index].channel;
-    *act = g_queue[index].action;
-    return g_queue[index].valid;
-}
-
-void ecu_sched_test_set_ticks_per_rev(uint32_t tpr)
-{
-    ecu_sched_set_ticks_per_rev(tpr);
+    if (g_angle_table[index].valid == 0U) { return 0U; }
+    *tooth    = g_angle_table[index].tooth_index;
+    *sub_frac = g_angle_table[index].sub_frac_x256;
+    *ch       = g_angle_table[index].channel;
+    *action   = g_angle_table[index].action;
+    *phase    = g_angle_table[index].phase_A;
+    return 1U;
 }
 
 void ecu_sched_test_set_advance_deg(uint32_t adv)
@@ -1347,39 +791,9 @@ void ecu_sched_test_set_soi_lead_deg(uint32_t soi_lead_deg)
     ecu_sched_set_soi_lead_deg(soi_lead_deg);
 }
 
-uint32_t ecu_sched_test_get_late_delay_samples(void)
+uint32_t ecu_sched_test_get_advance_deg(void)
 {
-    return g_late_delay_samples;
-}
-
-uint32_t ecu_sched_test_get_late_delay_sum_ticks(void)
-{
-    return g_late_delay_sum_ticks;
-}
-
-uint32_t ecu_sched_test_get_late_delay_max_ticks(void)
-{
-    return g_late_delay_max_ticks;
-}
-
-uint8_t ecu_sched_test_get_queue_depth_peak(void)
-{
-    return g_queue_depth_peak;
-}
-
-uint8_t ecu_sched_test_get_queue_depth_last_cycle_peak(void)
-{
-    return g_queue_depth_last_cycle_peak;
-}
-
-uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void)
-{
-    return g_cycle_schedule_drop_count;
-}
-
-uint32_t ecu_sched_test_get_ticks_per_rev(void)
-{
-    return g_ticks_per_rev;
+    return g_advance_deg;
 }
 
 uint32_t ecu_sched_test_get_dwell_ticks(void)
@@ -1400,6 +814,16 @@ uint32_t ecu_sched_test_get_soi_lead_deg(void)
 uint32_t ecu_sched_test_get_calibration_clamp_count(void)
 {
     return g_calibration_clamp_count;
+}
+
+uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void)
+{
+    return g_cycle_schedule_drop_count;
+}
+
+uint32_t ecu_sched_test_get_late_event_count(void)
+{
+    return g_late_event_count;
 }
 
 #endif /* EMS_HOST_TEST */

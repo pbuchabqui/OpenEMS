@@ -68,12 +68,11 @@ void feed_revolution_pattern(uint16_t tooth_ticks, uint16_t gap_ticks) {
 }
 
 bool queue_contains_action(uint8_t action) {
-    const uint8_t n = ecu_sched_test_queue_size();
+    const uint8_t n = ecu_sched_test_angle_table_size();
     for (uint8_t i = 0u; i < n; ++i) {
-        uint32_t ts = 0u;
-        uint8_t ch = 0u;
-        uint8_t act = 0u;
-        if (ecu_sched_test_get_event(i, &ts, &ch, &act) != 0u && act == action) {
+        uint8_t tooth = 0u, sf = 0u, ch = 0u, act = 0u, phase = 0u;
+        if (ecu_sched_test_get_angle_event(i, &tooth, &sf, &ch, &act, &phase) != 0u
+            && act == action) {
             return true;
         }
     }
@@ -118,26 +117,21 @@ void test_backbone_decode_sync_calc_schedule() {
     const uint32_t dwell_ticks =
         (static_cast<uint32_t>(dwell_ms_x10) * ECU_FTM0_TICKS_PER_MS) / 100u;
     const uint32_t inj_pw_ticks = (base_pw_us * ECU_FTM0_TICKS_PER_MS) / 1000u;
-    const uint32_t ticks_per_rev = static_cast<uint32_t>(
-        (static_cast<uint64_t>(ECU_SYSTEM_CLOCK_HZ) * 60ULL * 10ULL) /
-        (static_cast<uint64_t>(ECU_FTM0_PRESCALER) * sync_snap.rpm_x10));
 
-    ecu_sched_commit_calibration(
-        ticks_per_rev, advance_deg, dwell_ticks, inj_pw_ticks, kSoiLeadDeg);
+    /* ticks_per_rev removed: calculated internally from tooth_period_ns in angle domain */
+    ecu_sched_commit_calibration(advance_deg, dwell_ticks, inj_pw_ticks, kSoiLeadDeg);
 
-    TEST_ASSERT_EQ_U32(ticks_per_rev, ecu_sched_test_get_ticks_per_rev());
     TEST_ASSERT_EQ_U32(inj_pw_ticks, ecu_sched_test_get_inj_pw_ticks());
     TEST_ASSERT_EQ_U32(dwell_ticks, ecu_sched_test_get_dwell_ticks());
 
     // Scheduling through CKP hook path (decode/sync -> schedule_on_tooth -> ecu_sched).
-    const uint8_t q_before = ecu_sched_test_queue_size();
     feed_revolution_pattern(kToothTicks, kGapTicks);
     feed_revolution_pattern(kToothTicks, kGapTicks);
     feed_revolution_pattern(kToothTicks, kGapTicks);
     feed_revolution_pattern(kToothTicks, kGapTicks);
-    const uint8_t q_after = ecu_sched_test_queue_size();
+    const uint8_t q_after = ecu_sched_test_angle_table_size();
 
-    TEST_ASSERT_TRUE(q_after >= q_before);
+    TEST_ASSERT_TRUE(q_after > 0u);
     TEST_ASSERT_TRUE(queue_contains_action(ECU_ACT_INJ_ON));
     TEST_ASSERT_TRUE(queue_contains_action(ECU_ACT_INJ_OFF));
     TEST_ASSERT_TRUE(queue_contains_action(ECU_ACT_DWELL_START));
