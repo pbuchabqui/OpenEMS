@@ -306,7 +306,7 @@ void loop() {
 
     const uint32_t              now     = millis();
     const ems::drv::CkpSnapshot ckp     = ems::drv::ckp_snapshot();
-    const ems::drv::SensorData& sensors = ems::drv::sensors_get();
+    const ems::drv::SensorData sensors = ems::drv::sensors_get();  // cópia atômica
 
     if (ckp.state == ems::drv::SyncState::FULL_SYNC) {
         g_last_full_sync_snapshot = ckp;
@@ -424,17 +424,35 @@ void loop() {
             g_last_pw_ms_x10,
             g_last_advance_deg,
             static_cast<int8_t>(ems::engine::fuel_get_stft_pct_x10() / 10));
-        ems::app::ts_update_rt_sched_diag(
-            g_late_event_count,
-            g_late_delay_max_ticks,
-            g_queue_depth_peak,
-            g_queue_depth_last_cycle_peak,
-            g_cycle_schedule_drop_count,
-            g_calibration_clamp_count,
-            ems::drv::ckp_seed_loaded_count(),
-            ems::drv::ckp_seed_confirmed_count(),
-            ems::drv::ckp_seed_rejected_count(),
-            static_cast<uint8_t>(ckp.state));
+        // FIX-8: snapshot atômico dos contadores de diagnóstico — todos escritos
+        // pela ISR FTM0 (prio 4). Sem CPSID, os valores lidos pertencem a
+        // instantes de tempo diferentes (mix de antes/depois de uma preempção).
+        // O snapshot garante consistência temporal do painel TunerStudio.
+        {
+#if defined(__arm__) || defined(__thumb__)
+            __asm__ volatile("cpsid i" ::: "memory");
+#endif
+            const uint32_t snap_late_ev    = g_late_event_count;
+            const uint32_t snap_late_max   = g_late_delay_max_ticks;
+            const uint8_t  snap_qdp        = g_queue_depth_peak;
+            const uint8_t  snap_qdp_cyc    = g_queue_depth_last_cycle_peak;
+            const uint32_t snap_drop       = g_cycle_schedule_drop_count;
+            const uint32_t snap_clamp      = g_calibration_clamp_count;
+#if defined(__arm__) || defined(__thumb__)
+            __asm__ volatile("cpsie i" ::: "memory");
+#endif
+            ems::app::ts_update_rt_sched_diag(
+                snap_late_ev,
+                snap_late_max,
+                snap_qdp,
+                snap_qdp_cyc,
+                snap_drop,
+                snap_clamp,
+                ems::drv::ckp_seed_loaded_count(),
+                ems::drv::ckp_seed_confirmed_count(),
+                ems::drv::ckp_seed_rejected_count(),
+                static_cast<uint8_t>(ckp.state));
+        }
 
         // The ecu_sched queue is filled on CKP tooth hook (schedule_on_tooth),
         // aligned to sync boundaries to avoid duplicate cycle insertion.

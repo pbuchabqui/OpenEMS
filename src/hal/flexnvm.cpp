@@ -339,6 +339,20 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
             return false;
         }
     }
+
+    // FIX-10: readback verify — detecta falha silenciosa de célula flash
+    // (célula desgastada, glitch de tensão, ou erro de programação não reportado
+    // por FSTAT). Sem esta verificação, calibrações corrompidas podem ser usadas
+    // nas próximas n ignições sem diagnóstico de falha.
+    {
+        const volatile uint8_t* const base_rd =
+            reinterpret_cast<const volatile uint8_t*>(base_addr);
+        for (uint16_t off = 0u; off < len; ++off) {
+            if (base_rd[off] != data[off]) {
+                return false;  // verify falhou — escrita não foi correta
+            }
+        }
+    }
     return true;
 #endif
 }

@@ -60,8 +60,20 @@ inline uint16_t adc_read_blocking(volatile uint32_t& sc1a,
                                   volatile uint32_t& ra,
                                   uint8_t channel_code) noexcept {
     sc1a = static_cast<uint32_t>(channel_code & 0x1Fu);
-    while ((sc1a & ADC_SC1_COCO) == 0u) {}
-    return static_cast<uint16_t>(ra & 0xFFFFu);
+    // FIX-12: loop de espera com timeout — sem limite, uma falha de hardware
+    // no ADC (clock parado, overrun, curto no canal) trava o CPU indefinidamente
+    // até o watchdog PIT1 resetar (100 ms), perdendo o diagnóstico de falha.
+    // 4000 iterações ≈ 33 µs @ 120 MHz; ADC 12-bit com ADCK=30 MHz
+    // leva tipicamente 25 ciclos ADCK ≈ 0,83 µs — timeout é 40× superior.
+    constexpr uint32_t kMaxPolls = 4000u;
+    for (uint32_t i = 0u; i < kMaxPolls; ++i) {
+        if ((sc1a & ADC_SC1_COCO) != 0u) {
+            return static_cast<uint16_t>(ra & 0xFFFFu);
+        }
+    }
+    // Timeout: retorna 0 como valor de fallback seguro.
+    // sensors.cpp detectará o valor 0 como fora do range e ativará fault bit.
+    return 0u;
 }
 
 inline uint8_t adc0_code(ems::hal::Adc0Channel ch) noexcept {

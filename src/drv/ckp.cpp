@@ -77,6 +77,14 @@ volatile uint32_t ems_test_ftm3_c1v  = 0u;
 volatile uint32_t ems_test_gpiod_pdir = 0u;
 #endif
 
+// ── FIX-15: FASTRUN — coloca ISRs críticas em SRAM (zero cache miss) ─────────
+// Em Teensyduino, FASTRUN = __attribute__((section(".fastrun"))) — definido em
+// WProgram.h / core_pins.h. Em host tests a macro é indefinida; defini-la vazia
+// garante que o código compile sem modificações.
+#if !defined(FASTRUN)
+#define FASTRUN
+#endif
+
 namespace {
 
 // ── Constantes da roda fônica 60-2 ───────────────────────────────────────────
@@ -178,13 +186,17 @@ static DecoderState g_state = {
     0u,
     0u,
 };
-static bool g_seed_armed = false;
-static bool g_seed_phase_a = false;
-static bool g_seed_probation = false;
-static uint16_t g_seed_probation_teeth = 0u;
-static uint32_t g_seed_loaded_count = 0u;
-static uint32_t g_seed_confirmed_count = 0u;
-static uint32_t g_seed_rejected_count = 0u;
+// FIX-5: volatile nas variáveis escritas pela ISR FTM3 (prio 1) e lidas pelo
+// background loop sem seção crítica. Sem volatile, o compilador pode elevar
+// as leituras para fora de loops ou cacheá-las em registradores, observando
+// valores desatualizados. volatile força um fresh load de memória a cada acesso.
+static volatile bool g_seed_armed = false;
+static volatile bool g_seed_phase_a = false;
+static volatile bool g_seed_probation = false;
+static volatile uint16_t g_seed_probation_teeth = 0u;
+static volatile uint32_t g_seed_loaded_count = 0u;
+static volatile uint32_t g_seed_confirmed_count = 0u;
+static volatile uint32_t g_seed_rejected_count = 0u;
 static constexpr uint16_t kSeedCamConfirmMaxTeeth = 70u;
 
 // ── Utilitários inline ────────────────────────────────────────────────────────
@@ -400,7 +412,7 @@ uint16_t ckp_angle_to_ticks(uint16_t angle_mdeg, uint16_t ref_capture) noexcept 
 //   instante da borda de subida, em hardware. A CPU pode atender a IRQ
 //   vários ciclos depois — o timestamp em C0V permanece válido.
 //   Isso é impossível com GPIO/EXTI onde a CPU leria o contador atual (atrasado).
-void ckp_ftm3_ch0_isr() noexcept {
+FASTRUN void ckp_ftm3_ch0_isr() noexcept {
     // ── 1. Timestamp sem jitter de ISR ────────────────────────────────────
     // CRÍTICO: lemos FTM3_C0V ANTES de qualquer outra operação.
     // O registrador de captura foi travado pelo HW no instante exato da borda;
@@ -534,7 +546,7 @@ void ckp_ftm3_ch0_isr() noexcept {
 // Cada borda de subida do cam sensor indica meio ciclo de motor (180° de virabrequim).
 // phase_A alterna para permitir ao agendador identificar qual par de cilindros está
 // no tempo de injeção (cilindros 1/4 vs 2/3 para motor 4 cilindros em linha).
-void ckp_ftm3_ch1_isr() noexcept {
+FASTRUN void ckp_ftm3_ch1_isr() noexcept {
     if ((GPIOD_PDIR & (1u << 1u)) == 0u) {
         return;  // anti-glitch: apenas rising edges reais
     }

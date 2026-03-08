@@ -58,7 +58,7 @@ CkpSnapshot ckp_snapshot() noexcept {
     return g_snap;
 }
 
-const SensorData& sensors_get() noexcept {
+SensorData sensors_get() noexcept {
     return g_sensors;
 }
 }  // namespace ems::drv

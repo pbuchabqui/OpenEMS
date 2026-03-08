@@ -55,7 +55,10 @@ void sensors_tick_100ms() noexcept;
 void sensors_maf_freq_capture_isr(uint16_t period_ticks) noexcept;
 void sensors_set_tps_cal(uint16_t raw_min, uint16_t raw_max) noexcept;
 void sensors_set_range(SensorId id, SensorRange range) noexcept;
-const SensorData& sensors_get() noexcept;
+// FIX-6: retorna por valor (snapshot atômico com CPSID/CPSIE) em vez de
+// referência. Previne torn read: ISR FTM3 (prio 1) pode atualizar g_data entre
+// acessos sucessivos a campos diferentes via referência.
+SensorData sensors_get() noexcept;
 
 // CRITICAL FIX: Sensor validation functions
 bool validate_sensor_range(SensorId id, uint16_t raw_value) noexcept;

@@ -131,7 +131,10 @@ struct AuxState {
     bool fan_on;
     bool pump_on;
 
-    uint32_t time_ms;
+    // FIX-9: volatile — incrementado nos slots periódicos do background loop;
+    // sem volatile, o compilador pode elevar leituras para fora de estruturas
+    // de controle, observando sempre o mesmo valor em comparações de timeout.
+    volatile uint32_t time_ms;
     uint32_t key_on_ms;
     uint32_t rpm_zero_since_ms;
 
@@ -567,7 +570,7 @@ void auxiliaries_tick_10ms() noexcept {
     g.time_ms += kTick10ms;
 
     const ems::drv::CkpSnapshot snap = ems::drv::ckp_snapshot();
-    const ems::drv::SensorData& s = ems::drv::sensors_get();
+    const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
     run_vvt_control(snap, s);
     run_fan_control(s.clt_degc_x10);
@@ -578,7 +581,7 @@ void auxiliaries_tick_20ms() noexcept {
     g.time_ms += kTick20ms;
 
     const ems::drv::CkpSnapshot snap = ems::drv::ckp_snapshot();
-    const ems::drv::SensorData& s = ems::drv::sensors_get();
+    const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
     run_iac_control(snap, s);
     run_wastegate_control(snap, s);

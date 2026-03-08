@@ -164,7 +164,7 @@ inline void write_u32_le(uint8_t* dst, uint32_t v) noexcept {
 inline void update_realtime_page() noexcept {
     ems::app::TsRealtimeData rt = {};
     const ems::drv::CkpSnapshot c = ems::drv::ckp_snapshot();
-    const ems::drv::SensorData& s = ems::drv::sensors_get();
+    const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
     rt.rpm = static_cast<uint16_t>((c.rpm_x10 > 655350u) ? 65535u : (c.rpm_x10 / 10u));
     rt.map_kpa = clamp_u8(s.map_kpa_x10 / 10u);
@@ -392,6 +392,14 @@ inline void parse_byte(uint8_t b) noexcept {
 
     if (g_state == ParseState::WRITE_DATA) {
         uint8_t* ptr = page_ptr(g_cmd_page);
+        // FIX-3: guarda defensiva — page_ptr() retorna nullptr para page inválida.
+        // Em teoria g_cmd_page já foi validado em WRITE_ARGS, mas a guarda aqui
+        // protege contra refatorações futuras que criem caminhos alternativos para
+        // WRITE_DATA sem validação prévia.
+        if (ptr == nullptr) {
+            reset_parser();
+            return;
+        }
         ptr[g_cmd_off + g_write_pos] = b;
         ++g_write_pos;
         if (g_write_pos >= g_cmd_len) {
