@@ -339,11 +339,11 @@ static uint32_t near_time_window_ticks(void)
 {
     /*
      * Dynamic near-time window from current engine speed:
-     *   window ~= 2 tooth periods (60-2 wheel => 58 teeth/rev)
+     *   window ~= 2 tooth periods (60-2 wheel: 60 positions × 6°/position)
      * Clamp to keep deterministic ISR cost and avoid over-arming far events.
      */
     uint32_t tpr = g_ticks_per_rev;
-    uint32_t tooth_ticks = (tpr / 58U);
+    uint32_t tooth_ticks = (tpr / 60U);
     uint32_t win = tooth_ticks * 2U;
 
     if (win < 1024U) {

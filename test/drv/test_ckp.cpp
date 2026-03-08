@@ -89,7 +89,9 @@ void test_false_gap_ignored_before_tooth55() {
 
 void test_rpm_formula() {
     test_reset();
-    const uint32_t rpm_x10 = ems::drv::ckp_test_rpm_x10_from_period_ns(1293103u);
+    // 800 RPM × 10 = 8000. Período correto: 600e9 / (60 × 8000) = 1250000 ns
+    // (roda 60-2: 60 posições × 6°; 1 dente = 1/60 rev)
+    const uint32_t rpm_x10 = ems::drv::ckp_test_rpm_x10_from_period_ns(1250000u);
     TEST_ASSERT_TRUE(rpm_x10 >= 7990u && rpm_x10 <= 8010u);
 }
 
