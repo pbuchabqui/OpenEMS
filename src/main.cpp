@@ -506,6 +506,7 @@ void loop() {
             if (ems::hal::nvm_save_runtime_seed(&seed)) {
                 g_runtime_seed_saved_for_stop = true;
                 g_engine_was_running = false;
+                ems::engine::ecu_sched_reset_diagnostic_counters();
             }
         }
     }

@@ -68,15 +68,23 @@ struct CkpSnapshot {
 CkpSnapshot ckp_snapshot() noexcept;
 
 /**
- * @brief Converte ângulo de crank em tick-alvo do FTM3 (para agendamento).
+ * @brief Converte ângulo de virabrequim em tick-alvo no domínio FTM3.
  *
- * @param angle_mdeg  Ângulo em miligraus. Ex: 6000 = 6,0°; 60000 = 60,0°.
- *                    ATENÇÃO: o parâmetro é em MILIGRAUS (×1000 em relação a graus
- *                    inteiros). Passar graus inteiros causará erro de 1000×.
- * @param ref_capture Timestamp FTM3 do dente de referência (geralmente snap.last_ftm3_capture).
- * @return            Valor de CnV para FTM0/FTM3 onde o evento deve ser armado.
+ * @param angle_mdeg  Ângulo em MILIGRAUS (×1000 de graus inteiros).
+ *                    Ex: 6000 = 6,0°; 60000 = 60,0°.
+ *                    ATENÇÃO: passar graus inteiros causa erro de 1000×.
+ * @param ref_capture Timestamp FTM3 do dente de referência
+ *                    (tipicamente snap.last_ftm3_capture).
+ * @return            Valor CnV para FTM3 — NÃO compatível com FTM0.
  *
- * Fórmula: ticks = (angle_mdeg × tooth_period_ticks) / kToothAngleMillideg
+ * DOMÍNIO DE CLOCK: FTM3 @ 60 MHz (PS=2, 16,7 ns/tick).
+ * FTM0 @ 15 MHz (PS=8, 66,7 ns/tick). Para converter o delta para ticks
+ * FTM0 divida por 4 (60 MHz / 15 MHz).
+ *
+ * STATUS (2026-03): Sem callers em produção. O pipeline ecu_sched deriva
+ * ângulo→ticks no domínio FTM0 via g_ticks_per_rev (ecu_sched.cpp,
+ * Calculate_Sequential_Cycle). Reservada para uso futuro em saídas
+ * CKP-síncronas (tach-out, came via FTM3 output-compare).
  */
 uint16_t ckp_angle_to_ticks(uint16_t angle_mdeg, uint16_t ref_capture) noexcept;
 

@@ -366,6 +366,21 @@ void ecu_sched_set_presync_inj_mode(uint8_t mode);
 /** Select pre-sync ignition mode (ECU_PRESYNC_IGN_*). */
 void ecu_sched_set_presync_ign_mode(uint8_t mode);
 
+/**
+ * @brief Zera contadores de diagnóstico por ciclo de motor.
+ *
+ * Zera: g_calibration_clamp_count, g_late_event_count, g_late_delay_samples,
+ * g_late_delay_sum_ticks, g_late_delay_max_ticks, g_cycle_schedule_drop_count,
+ * g_queue_depth_peak.
+ *
+ * Deve ser chamada uma vez por stop de motor (rpm_x10=0 por >= 100 ms).
+ * Os contadores passam a refletir apenas o período de marcha mais recente,
+ * e não se acumulam como odômetro lifetime.
+ *
+ * Thread-safe: usa seção crítica. Segura para chamar do loop background.
+ */
+void ecu_sched_reset_diagnostic_counters(void);
+
 /* ============================================================================
  * FTM0 interrupt handler (defined in ecu_sched.cpp, unified scheduler handler)
  * ========================================================================= */
