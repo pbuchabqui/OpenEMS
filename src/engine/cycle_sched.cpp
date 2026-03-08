@@ -92,10 +92,10 @@ static volatile int16_t g_last_advance_x10 = 100;
 static volatile uint16_t g_last_dwell_x10 = 1000u;
 
 // Subtrai N dentes do ângulo absoluto no domínio de 720°.
-// 1 dente = 360/58 °. N dentes = N×360/58 °.
+// 1 dente = 360/60 = 6°. N dentes = N×6°.
 static uint16_t sub_teeth(uint16_t abs_deg, uint8_t teeth) noexcept {
     const uint16_t offset = static_cast<uint16_t>(
-        (static_cast<uint32_t>(teeth) * 360u) / 58u);
+        (static_cast<uint32_t>(teeth) * 360u) / 60u);
     return (abs_deg >= offset)
         ? static_cast<uint16_t>(abs_deg - offset)
         : static_cast<uint16_t>(abs_deg + 720u - offset);
@@ -106,7 +106,7 @@ static TriggerPoint angle_to_tp(uint16_t abs_deg) noexcept {
     const bool    phase = (abs_deg >= 360u);
     const uint16_t local = abs_deg % 360u;
     const uint8_t  tooth = static_cast<uint8_t>(
-        (static_cast<uint32_t>(local) * 58u) / 360u);
+        (static_cast<uint32_t>(local) * 60u) / 360u);
     return TriggerPoint{tooth, phase};
 }
 

@@ -92,7 +92,8 @@ namespace {
 // 60-2: 60 posições, 2 dentes ausentes consecutivos = 58 dentes reais.
 // Espaçamento por posição: 360°/60 = 6,0°.
 // Gap: 3 posições ausentes × 6° = 18° ≈ 3× período normal.
-static constexpr uint16_t kRealTeethPerRev = 58u;
+static constexpr uint16_t kRealTeethPerRev    = 58u;  // dentes físicos — uso exclusivo da máquina de estados (gap detection)
+static constexpr uint16_t kTeethPositionsPerRev = 60u; // posições angulares uniformes — uso em cálculos de RPM e ângulo
 
 // Ângulo por dente normal em miligraus (× 1000).
 // 6,0° × 1000 = 6000. Usado em ckp_angle_to_ticks().
@@ -213,13 +214,13 @@ inline uint32_t ticks_to_ns(uint16_t ticks) noexcept {
 }
 
 // Calcula RPM × 10 a partir do período de um dente (nanossegundos).
-// Uma revolução completa tem kRealTeethPerRev períodos de dente.
-// rpm × 10 = (60 s/min × 10⁹ ns/s × 10) / (58 × tooth_period_ns)
-//           = 600.000.000.000 / (58 × tooth_period_ns)
+// Cada dente ocupa 6° = 1/60 de revolução (roda 60-2: 60 posições uniformes).
+// rpm × 10 = (60 s/min × 10⁹ ns/s × 10) / (60 × tooth_period_ns)
+//           = 600.000.000.000 / (60 × tooth_period_ns)
 inline uint32_t rpm_x10_from_period_ns(uint32_t period_ns) noexcept {
     if (period_ns == 0u) { return 0u; }
     return static_cast<uint32_t>(
-        600000000000ULL / (static_cast<uint64_t>(kRealTeethPerRev) * period_ns));
+        600000000000ULL / (static_cast<uint64_t>(kTeethPositionsPerRev) * period_ns));
 }
 
 // Insere novo período na janela deslizante (shift FIFO).

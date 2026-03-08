@@ -318,7 +318,8 @@ void set_pump(bool on) noexcept {
 }
 
 uint16_t calc_cam_pos_est_x10(const ems::drv::CkpSnapshot& snap) noexcept {
-    const uint16_t crank_deg_x10 = static_cast<uint16_t>((static_cast<uint32_t>(snap.tooth_index) * 6207u) / 100u);
+    // tooth_index × 6,0° × 10 = tooth_index × 60 (roda 60-2: 360°/60 posições = 6°/dente)
+    const uint16_t crank_deg_x10 = static_cast<uint16_t>(static_cast<uint32_t>(snap.tooth_index) * 60u);
     const uint16_t cycle_deg_x10 = snap.phase_A ? crank_deg_x10 : static_cast<uint16_t>(crank_deg_x10 + 3600u);
     return static_cast<uint16_t>(cycle_deg_x10 / 2u);
 }

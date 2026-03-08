@@ -585,7 +585,7 @@ void test_tooth_accel_comp_preserves_near_time_events() {
     FTM0->CNT = 5000U;
     const uint32_t now = (g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
 
-    const uint32_t near_win = (400000U / 58U) * 2U;
+    const uint32_t near_win = (400000U / 60U) * 2U;
     const uint32_t near_event_ts = now + (near_win / 2U);
     const uint32_t far_event_ts = now + (near_win * 4U);
 
