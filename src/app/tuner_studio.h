@@ -36,6 +36,10 @@ void ts_update_rt_sched_diag(uint32_t late_events,
                              uint32_t seed_rejected_count,
                              uint8_t sync_state_raw) noexcept;
 
+/// Atualiza o contador de clamp IVC para o bloco de dados em tempo real.
+/// Chamado do loop de fundo (20 ms) junto com ts_update_rt_sched_diag.
+void ts_update_ivc_diag(uint32_t ivc_clamp_count) noexcept;
+
 bool ts_tx_pop(uint8_t& byte) noexcept;
 uint16_t ts_tx_available() noexcept;
 

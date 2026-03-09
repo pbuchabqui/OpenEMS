@@ -375,8 +375,18 @@ void loop() {
         const int16_t base_adv = ems::engine::get_advance(
             static_cast<uint16_t>(ckp.rpm_x10), sensors.map_kpa_x10 / 10u);
         const bool full_sync = (ckp.state == ems::drv::SyncState::FULL_SYNC);
+        ems::engine::quick_crank_set_clt(sensors.clt_degc_x10);
         const ems::engine::QuickCrankOutput qc = ems::engine::quick_crank_update(
             now, ckp.rpm_x10, full_sync, sensors.clt_degc_x10, base_adv);
+
+        // Prime pulse: disparado no 5º dente de cranking via ISR CKP.
+        // quick_crank_consume_prime() lê atomicamente e retorna PW se pendente.
+        {
+            const uint32_t prime_pw = ems::engine::quick_crank_consume_prime();
+            if (prime_pw > 0u && !g_limp_active) {
+                ::ecu_sched_fire_prime_pulse(prime_pw);
+            }
+        }
 
         if (!g_limp_active) {
             base_pw_us = ems::engine::quick_crank_apply_pw_us(
@@ -447,6 +457,7 @@ void loop() {
                 ems::drv::ckp_seed_confirmed_count(),
                 ems::drv::ckp_seed_rejected_count(),
                 static_cast<uint8_t>(ckp.state));
+            ems::app::ts_update_ivc_diag(::ecu_sched_ivc_clamp_count());
         }
 
         // The ecu_sched queue is filled on CKP tooth hook (schedule_on_tooth),

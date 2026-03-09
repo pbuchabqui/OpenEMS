@@ -79,6 +79,10 @@ volatile uint32_t g_late_event_count        = 0U;
 volatile uint32_t g_cycle_schedule_drop_count = 0U;
 volatile uint32_t g_calibration_clamp_count  = 0U;
 
+/* Prime pulse OFF tracking (set by ecu_sched_fire_prime_pulse, consumed by FTM0 ISR) */
+static volatile uint16_t g_prime_off_cnv[4U]; /*!< OFF target CnV por canal injetor (0-3) */
+static volatile uint8_t  g_prime_off_pending;  /*!< Bitmask: bit i = canal i aguarda OFF   */
+
 /* ============================================================================
  * Module-private configuration
  * ========================================================================= */
@@ -92,6 +96,8 @@ static volatile uint8_t  g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
 static volatile uint8_t  g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
 static volatile uint8_t  g_presync_bank_toggle = 0U;
 static volatile uint8_t  g_hook_prev_valid  = 0U;
+static uint8_t  g_ivc_abdc_deg   = 50U;   /* IVC em graus ABDC; padrão: 50° */
+static uint32_t g_ivc_clamp_count = 0U;   /* eventos onde EOI foi clampeado ao IVC */
 static volatile uint16_t g_hook_prev_tooth  = 0U;
 static volatile uint8_t  g_hook_schedule_this_gap = 1U;
 
@@ -376,10 +382,20 @@ void FTM0_IRQHandler(void)
     for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
         uint32_t cnsc = FTM0->CH[ch].CnSC;
         if ((cnsc & FTM_CnSC_CHF_MASK) != 0U) {
-            /* Limpa CHF (W0C: escreve 0 no bit, preserva os demais) */
+            /* Canais de injeção (0-3): checar prime pulse OFF pendente.
+             * Se pendente, re-armar em CLEAR mode — isso limpa CHF implicitamente
+             * (bit 7 ausente em FTM_CnSC_OC_CLEAR; W0C se escreve 0). */
+            if (ch < ECU_IGN_CH_FIRST) {
+                const uint8_t bit = (uint8_t)(1U << ch);
+                if ((g_prime_off_pending & bit) != 0U) {
+                    FTM0->CH[ch].CnSC = FTM_CnSC_OC_CLEAR;
+                    FTM0->CH[ch].CnV  = (uint32_t)g_prime_off_cnv[ch];
+                    g_prime_off_pending = (uint8_t)(g_prime_off_pending & (uint8_t)(~bit));
+                    continue;
+                }
+            }
+            /* Normal: limpa CHF (W0C: escreve 0 no bit, preserva os demais) */
             FTM0->CH[ch].CnSC = (cnsc & ~FTM_CnSC_CHF_MASK);
-            /* Nenhuma lógica adicional: transição de pino já ocorreu em hardware.
-             * Set-on-match para INJ, Clear-on-match para IGN. */
         }
     }
 }
@@ -438,7 +454,25 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
         uint32_t spark_deg   = (tdc_deg + ECU_CYCLE_DEG - advance_deg)  % ECU_CYCLE_DEG;
         uint32_t dwell_start = (spark_deg + ECU_CYCLE_DEG - dwell_deg)  % ECU_CYCLE_DEG;
         uint32_t inj_on_deg  = (tdc_deg + ECU_CYCLE_DEG - soi_lead_deg) % ECU_CYCLE_DEG;
-        uint32_t inj_off_deg = (inj_on_deg + inj_pw_deg)                % ECU_CYCLE_DEG;
+
+        /* IVC constraint — limita EOI ao ângulo de fechamento da válvula de admissão.
+         * IVC no ciclo de 720°: tdc_deg + 540° (BDC admissão) + ivc_abdc_deg.
+         * Clamp ativo APENAS em open-valve injection (SOI antes do IVC):
+         *   soi_to_ivc < 360° implica que o IVC está na janela de admissão à frente do SOI.
+         * Em closed-valve injection (padrão, soi_lead_deg=62), soi_to_ivc ≥ 360° → sem clamp. */
+        uint32_t eff_inj_pw_deg = inj_pw_deg;
+        {
+            const uint32_t ivc_cycle_deg =
+                (tdc_deg + 540U + (uint32_t)g_ivc_abdc_deg) % ECU_CYCLE_DEG;
+            const uint32_t soi_to_ivc =
+                (ivc_cycle_deg + ECU_CYCLE_DEG - inj_on_deg) % ECU_CYCLE_DEG;
+            if ((soi_to_ivc < (ECU_CYCLE_DEG / 2U)) && (eff_inj_pw_deg > soi_to_ivc)) {
+                eff_inj_pw_deg = soi_to_ivc;
+                ++g_ivc_clamp_count;
+            }
+        }
+
+        uint32_t inj_off_deg = (inj_on_deg + eff_inj_pw_deg)            % ECU_CYCLE_DEG;
 
         /* Converte para (tooth, sub_frac, phase_A) e insere na tabela */
         angle_to_tooth_event(dwell_start, &tooth, &sf, &phase);
@@ -525,7 +559,22 @@ static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
     /* Injeção presync */
     {
         uint32_t soi    = (360U - soi_lead_deg) % 360U;
-        uint32_t inj_off_deg = (soi + inj_pw_deg) % 360U;
+
+        /* IVC constraint (domínio 360°) — mesmo critério da função sequencial.
+         * IVC presync: usa tdc=0 como referência (360° de 720° equivalem a 180°+offset).
+         * Simplificação: IVC em 360° = (180U + ivc_abdc_deg) % 360U
+         * Guarda: soi_to_ivc < 180° → open-valve → clamp ativo. */
+        uint32_t eff_inj_pw_deg = inj_pw_deg;
+        {
+            const uint32_t ivc_360 = (180U + (uint32_t)g_ivc_abdc_deg) % 360U;
+            const uint32_t soi_to_ivc = (ivc_360 + 360U - soi) % 360U;
+            if ((soi_to_ivc < 180U) && (eff_inj_pw_deg > soi_to_ivc)) {
+                eff_inj_pw_deg = soi_to_ivc;
+                ++g_ivc_clamp_count;
+            }
+        }
+
+        uint32_t inj_off_deg = (soi + eff_inj_pw_deg) % 360U;
         uint8_t  tooth_on, sf_on, tooth_off, sf_off, phase_ignored;
 
         angle_to_tooth_event(soi,         &tooth_on,  &sf_on,  &phase_ignored);
@@ -624,6 +673,49 @@ void ecu_sched_reset_diagnostic_counters(void)
     g_calibration_clamp_count   = 0U;
     g_late_event_count          = 0U;
     g_cycle_schedule_drop_count = 0U;
+    exit_critical();
+}
+
+void ecu_sched_set_ivc(uint8_t ivc_abdc_deg)
+{
+    enter_critical();
+    g_ivc_abdc_deg = ivc_abdc_deg;
+    exit_critical();
+}
+
+uint32_t ecu_sched_ivc_clamp_count(void)
+{
+    return g_ivc_clamp_count;
+}
+
+void ecu_sched_fire_prime_pulse(uint32_t pw_us)
+{
+    static const uint32_t kPrimePwMaxUs  = 30000U;
+    static const uint8_t  kInjChannels[] = {
+        ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4  /* CH2,CH3,CH0,CH1 */
+    };
+    uint8_t i;
+
+    if (pw_us == 0U) { return; }
+    if (pw_us > kPrimePwMaxUs) { pw_us = kPrimePwMaxUs; }
+
+    const uint32_t pw_ticks = (pw_us * ECU_FTM0_TICKS_PER_MS) / 1000U;
+    const uint16_t on_cnv   = (uint16_t)((FTM0->CNT + 20U) & 0xFFFFU);
+    const uint16_t off_cnv  = (uint16_t)((on_cnv + pw_ticks) & 0xFFFFU);
+
+    enter_critical();
+
+    /* Prepara OFF targets indexados pelo número de canal FTM0 (0-3) */
+    for (i = 0U; i < 4U; ++i) {
+        g_prime_off_cnv[kInjChannels[i]] = off_cnv;
+    }
+    g_prime_off_pending = 0x0FU;  /* CH0,CH1,CH2,CH3 aguardam OFF */
+
+    /* Arma todos os injetores para abrir simultaneamente */
+    for (i = 0U; i < 4U; ++i) {
+        arm_channel(kInjChannels[i], on_cnv, ECU_ACT_INJ_ON);
+    }
+
     exit_critical();
 }
 
@@ -744,6 +836,14 @@ void ecu_sched_test_reset(void)
     for (i = 0U; i < ECU_ANGLE_TABLE_SIZE; ++i) {
         g_angle_table[i].valid = 0U;
     }
+
+    g_prime_off_pending = 0U;
+    for (i = 0U; i < 4U; ++i) {
+        g_prime_off_cnv[i] = 0U;
+    }
+
+    g_ivc_abdc_deg    = 50U;
+    g_ivc_clamp_count = 0U;
 }
 
 uint8_t ecu_sched_test_angle_table_size(void)
@@ -825,6 +925,16 @@ uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void)
 uint32_t ecu_sched_test_get_late_event_count(void)
 {
     return g_late_event_count;
+}
+
+void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg)
+{
+    ecu_sched_set_ivc(ivc_abdc_deg);
+}
+
+uint32_t ecu_sched_test_get_ivc_clamp_count(void)
+{
+    return g_ivc_clamp_count;
 }
 
 #endif /* EMS_HOST_TEST */

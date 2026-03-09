@@ -3,6 +3,7 @@
 
 #define EMS_HOST_TEST 1
 #include "engine/quick_crank.h"
+#include "drv/ckp.h"
 
 namespace {
 
@@ -70,12 +71,97 @@ void test_pw_application_with_floor_and_clamp() {
     TEST_ASSERT_EQ_U32(100000u, saturated);  // hard cap
 }
 
+// Helper: simula chegada de N dentes com RPM de cranking.
+static void sim_teeth(uint32_t n, uint32_t rpm_x10) {
+    ems::drv::CkpSnapshot snap{};
+    snap.rpm_x10 = rpm_x10;
+    snap.state   = ems::drv::SyncState::WAIT_GAP;
+    for (uint32_t i = 0u; i < n; ++i) {
+        ems::drv::prime_on_tooth(snap);
+    }
+}
+
+void test_prime_pulse_fires_on_5th_tooth() {
+    ems::engine::quick_crank_reset();
+    ems::engine::quick_crank_set_clt(200);  // 20°C
+
+    // 4 primeiros dentes — sem prime ainda
+    sim_teeth(4u, 3000u);
+    TEST_ASSERT_EQ_U32(0u, ems::engine::quick_crank_consume_prime());
+
+    // 5º dente — prime deve ser pendente
+    sim_teeth(1u, 3000u);
+    const uint32_t pw = ems::engine::quick_crank_consume_prime();
+    TEST_ASSERT_TRUE(pw > 0u);
+
+    // Segundo consume: one-shot
+    TEST_ASSERT_EQ_U32(0u, ems::engine::quick_crank_consume_prime());
+}
+
+void test_prime_pulse_no_sync_required() {
+    ems::engine::quick_crank_reset();
+    ems::engine::quick_crank_set_clt(0);  // 0°C
+
+    // WAIT_GAP state (snap.state = WAIT_GAP) — deve disparar mesmo assim
+    ems::drv::CkpSnapshot snap{};
+    snap.rpm_x10 = 2000u;
+    snap.state   = ems::drv::SyncState::WAIT_GAP;
+    for (uint8_t i = 0u; i < 5u; ++i) {
+        ems::drv::prime_on_tooth(snap);
+    }
+    TEST_ASSERT_TRUE(ems::engine::quick_crank_consume_prime() > 0u);
+}
+
+void test_prime_pulse_not_fired_outside_cranking() {
+    ems::engine::quick_crank_reset();
+    ems::engine::quick_crank_set_clt(200);
+
+    // RPM >= kCrankExitRpmX10 (7000) → não é cranking
+    sim_teeth(10u, 8000u);
+    TEST_ASSERT_EQ_U32(0u, ems::engine::quick_crank_consume_prime());
+}
+
+void test_prime_pulse_reset_allows_refiring() {
+    ems::engine::quick_crank_reset();
+    ems::engine::quick_crank_set_clt(200);
+
+    sim_teeth(5u, 3000u);
+    TEST_ASSERT_TRUE(ems::engine::quick_crank_consume_prime() > 0u);
+
+    // Após reset (key-off), prime deve poder disparar novamente
+    ems::engine::quick_crank_reset();
+    ems::engine::quick_crank_set_clt(200);
+    sim_teeth(5u, 3000u);
+    TEST_ASSERT_TRUE(ems::engine::quick_crank_consume_prime() > 0u);
+}
+
+void test_prime_pw_scales_with_clt() {
+    // Prime PW a -40°C deve ser maior do que a 80°C
+    ems::engine::quick_crank_reset();
+    ems::engine::quick_crank_set_clt(-400);  // -40°C
+    sim_teeth(5u, 3000u);
+    const uint32_t pw_cold = ems::engine::quick_crank_consume_prime();
+
+    ems::engine::quick_crank_reset();
+    ems::engine::quick_crank_set_clt(800);  // 80°C
+    sim_teeth(5u, 3000u);
+    const uint32_t pw_hot = ems::engine::quick_crank_consume_prime();
+
+    TEST_ASSERT_TRUE(pw_cold > pw_hot);
+    TEST_ASSERT_TRUE(pw_hot > 0u);
+}
+
 }  // namespace
 
 int main() {
     test_cranking_enrichment_and_spark_override();
     test_afterstart_decay_after_crank_exit();
     test_pw_application_with_floor_and_clamp();
+    test_prime_pulse_fires_on_5th_tooth();
+    test_prime_pulse_no_sync_required();
+    test_prime_pulse_not_fired_outside_cranking();
+    test_prime_pulse_reset_allows_refiring();
+    test_prime_pw_scales_with_clt();
 
     std::printf("tests=%d failed=%d\n", g_tests_run, g_tests_failed);
     return (g_tests_failed == 0) ? 0 : 1;

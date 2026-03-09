@@ -367,6 +367,11 @@ __attribute__((weak))
 #endif
 void schedule_on_tooth(const CkpSnapshot& snap) noexcept { static_cast<void>(snap); }
 
+#if defined(__GNUC__)
+__attribute__((weak))
+#endif
+void prime_on_tooth(const CkpSnapshot& snap) noexcept { static_cast<void>(snap); }
+
 }  // namespace ems::drv
 
 // ── API pública ───────────────────────────────────────────────────────────────
@@ -541,6 +546,7 @@ FASTRUN void ckp_ftm3_ch0_isr() noexcept {
     }
     sensors_on_tooth(g_state.snap);
     schedule_on_tooth(g_state.snap);
+    prime_on_tooth(g_state.snap);
 }
 
 // ── ISR do cam sensor: FTM3 Canal 1 (PTD1, rising edge) ──────────────────────
