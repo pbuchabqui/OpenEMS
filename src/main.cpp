@@ -405,19 +405,14 @@ void loop() {
         const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
         const uint32_t dwell_ticks = (static_cast<uint32_t>(dwell_ms_x10) * ECU_FTM0_TICKS_PER_MS) / 100u;
 
-        // Convert injector pulse width to FTM0 ticks at PS=8:
+        // Convert injector pulse width to FTM0 ticks at PS=16:
         // ticks = us * (ticks/ms) / 1000
         const uint32_t inj_pw_ticks = (base_pw_us * ECU_FTM0_TICKS_PER_MS) / 1000u;
 
         // Atomically commit a coherent scheduler calibration snapshot once per cycle.
-        if (ckp.rpm_x10 > 0u) {
-            const uint32_t ticks_per_rev = static_cast<uint32_t>(
-                (static_cast<uint64_t>(ECU_SYSTEM_CLOCK_HZ) * 60U * 10U)
-                / (static_cast<uint64_t>(ECU_FTM0_PRESCALER) * ckp.rpm_x10)
-            );
-            ::ecu_sched_commit_calibration(
-                ticks_per_rev, advance_deg, dwell_ticks, inj_pw_ticks, kDefaultSoiLeadDeg);
-        }
+        // ticks_per_rev removido: calculado internamente no domínio angular a partir
+        // de snap.tooth_period_ns em ecu_sched_on_tooth_hook().
+        ::ecu_sched_commit_calibration(advance_deg, dwell_ticks, inj_pw_ticks, kDefaultSoiLeadDeg);
 
         // Atualiza métricas de tempo real
         ems::app::ts_update_rt_metrics(
@@ -433,9 +428,9 @@ void loop() {
             __asm__ volatile("cpsid i" ::: "memory");
 #endif
             const uint32_t snap_late_ev    = g_late_event_count;
-            const uint32_t snap_late_max   = g_late_delay_max_ticks;
-            const uint8_t  snap_qdp        = g_queue_depth_peak;
-            const uint8_t  snap_qdp_cyc    = g_queue_depth_last_cycle_peak;
+            const uint32_t snap_late_max   = 0U;   /* removido no domínio angular */
+            const uint8_t  snap_qdp        = 0U;   /* removido no domínio angular */
+            const uint8_t  snap_qdp_cyc    = 0U;   /* removido no domínio angular */
             const uint32_t snap_drop       = g_cycle_schedule_drop_count;
             const uint32_t snap_clamp      = g_calibration_clamp_count;
 #if defined(__arm__) || defined(__thumb__)

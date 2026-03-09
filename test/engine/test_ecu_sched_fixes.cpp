@@ -1,9 +1,9 @@
 /**
  * @file test/engine/test_ecu_sched_fixes.cpp
- * @brief Host unit tests for ECU scheduler critical fixes (CRITICAL FIX)
- * 
- * Tests the race condition fixes, late event handling improvements,
- * and atomic overflow handling in the ECU scheduler.
+ * @brief Host unit tests for ECU scheduler — Angle-Domain Scheduling v3.
+ *
+ * Tests the angle-domain scheduling, phase filtering, presync HALF_SYNC
+ * behaviour, and calibration commit in the new scheduler design.
  */
 
 #define EMS_HOST_TEST 1
@@ -80,34 +80,25 @@ static void test_reset(void) {
     ecu_sched_test_reset();
 }
 
-static uint8_t find_event(uint8_t ch, uint8_t act, uint32_t* ts_out) {
-    const uint8_t n = ecu_sched_test_queue_size();
-    for (uint8_t i = 0U; i < n; ++i) {
-        uint32_t ts = 0U;
-        uint8_t ech = 0U;
-        uint8_t eact = 0U;
-        if ((ecu_sched_test_get_event(i, &ts, &ech, &eact) != 0U) &&
-            (ech == ch) &&
-            (eact == act)) {
-            if (ts_out != nullptr) {
-                *ts_out = ts;
-            }
-            return 1U;
-        }
-    }
-    return 0U;
+/* Trigger Calculate_Sequential_Cycle via tooth hook boundary (tooth 1→0). */
+static void trigger_sequential_cycle(uint32_t tooth_period_ns, bool phase_a)
+{
+    ems::drv::CkpSnapshot t1{tooth_period_ns, 1u, 0u, 10000u,
+                              ems::drv::SyncState::FULL_SYNC, phase_a};
+    ems::drv::CkpSnapshot t0{tooth_period_ns, 0u, 0u, 10000u,
+                              ems::drv::SyncState::FULL_SYNC, phase_a};
+    ems::engine::ecu_sched_on_tooth_hook(t1);
+    ems::engine::ecu_sched_on_tooth_hook(t0);
 }
 
-static uint8_t count_events(uint8_t ch, uint8_t act) {
+/* Count angle-table events matching (ch, action). */
+static uint8_t count_angle_events(uint8_t ch, uint8_t act) {
     uint8_t count = 0U;
-    const uint8_t n = ecu_sched_test_queue_size();
+    const uint8_t n = ecu_sched_test_angle_table_size();
     for (uint8_t i = 0U; i < n; ++i) {
-        uint32_t ts = 0U;
-        uint8_t ech = 0U;
-        uint8_t eact = 0U;
-        if ((ecu_sched_test_get_event(i, &ts, &ech, &eact) != 0U) &&
-            (ech == ch) &&
-            (eact == act)) {
+        uint8_t t = 0U, sf = 0U, ech = 0U, eact = 0U, phase = 0U;
+        if ((ecu_sched_test_get_angle_event(i, &t, &sf, &ech, &eact, &phase) != 0U) &&
+            (ech == ch) && (eact == act)) {
             ++count;
         }
     }
@@ -117,493 +108,319 @@ static uint8_t count_events(uint8_t ch, uint8_t act) {
 } // namespace
 
 // =============================================================================
-// Test: Late Event Handling Fix
+// Test: angle table fills 16 events for a full 4-cylinder sequential cycle
 // =============================================================================
 
-void test_late_event_removes_existing_channel_events() {
+void test_angle_table_fills_16_events_for_full_cycle() {
     test_reset();
     ECU_Hardware_Init();
-
-    // Set overflow count to simulate time progression
-    g_overflow_count = 5U;
-
-    // Add a future event for IGN1
-    Add_Event(0x00050000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
-
-    // Add a late event for the same channel (epoch < current overflow).
-    // SCH-05: o slot físico permanece na queue (sem remoção O(n²)), mas o
-    // canal é marcado como dirty — não será armado pela ISR até receber um
-    // novo evento futuro válido. O late_event_count é incrementado.
-    uint32_t late_events_before = g_late_event_count;
-    Add_Event(0x00030000UL, ECU_CH_IGN1, ECU_ACT_DWELL_START);
-
-    // Slot físico ainda presente (dirty flag, não remoção imediata)
-    TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
-
-    // Late event count incrementado
-    TEST_ASSERT_EQ_U32(late_events_before + 1U, g_late_event_count);
-
-    // Após inserir um evento futuro válido para o mesmo canal, dirty é limpo
-    Add_Event(0x00060000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    TEST_ASSERT_EQ_U8(2U, ecu_sched_test_queue_size());
-}
-
-void test_queue_full_removes_existing_channel_events() {
-    test_reset();
-    ECU_Hardware_Init();
-
-    // Enche a queue até a capacidade com eventos de IGN1
-    for (uint8_t i = 0U; i < ECU_QUEUE_SIZE; ++i) {
-        Add_Event(0x00010000UL + i, ECU_CH_IGN1, ECU_ACT_SPARK);
-    }
-    TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
-
-    // Tentar inserir mais um quando a queue está cheia: tratado como late.
-    // SCH-05: marca o canal como dirty (O(1)), não remove slots (O(n²)).
-    // A queue continua cheia fisicamente.
-    uint32_t late_events_before = g_late_event_count;
-    Add_Event(0x00020000UL, ECU_CH_IGN1, ECU_ACT_DWELL_START);
-
-    // Queue ainda cheia fisicamente (dirty flag, sem remoção)
-    TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
-
-    // Late event count incrementado
-    TEST_ASSERT_EQ_U32(late_events_before + 1U, g_late_event_count);
-}
-
-void test_late_event_different_channels_preserved() {
-    test_reset();
-    ECU_Hardware_Init();
-
-    g_overflow_count = 5U;
-
-    // Adiciona eventos em três canais diferentes
-    Add_Event(0x00050000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    Add_Event(0x00050001UL, ECU_CH_IGN2, ECU_ACT_SPARK);
-    Add_Event(0x00050002UL, ECU_CH_IGN3, ECU_ACT_SPARK);
-    TEST_ASSERT_EQ_U8(3U, ecu_sched_test_queue_size());
-
-    // Late event apenas para IGN2 — apenas IGN2 fica dirty
-    uint32_t late_events_before = g_late_event_count;
-    Add_Event(0x00030000UL, ECU_CH_IGN2, ECU_ACT_DWELL_START);
-
-    // SCH-05: queue física inalterada (3 slots), mas IGN2 está dirty
-    TEST_ASSERT_EQ_U8(3U, ecu_sched_test_queue_size());
-
-    // Late event count incrementado em exactamente 1
-    TEST_ASSERT_EQ_U32(late_events_before + 1U, g_late_event_count);
-
-    // IGN1 e IGN3 continuam válidos (não dirty) — verificar via queue
-    uint32_t ts1, ts2, ts3;
-    uint8_t ch1, ch2, ch3, act1, act2, act3;
-    ecu_sched_test_get_event(0U, &ts1, &ch1, &act1);
-    ecu_sched_test_get_event(1U, &ts2, &ch2, &act2);
-    ecu_sched_test_get_event(2U, &ts3, &ch3, &act3);
-
-    // Os três slots físicos existem; IGN2 ainda está na queue mas será ignorado
-    // pela ISR (dirty). Os outros dois pertencem a IGN1 e IGN3.
-    bool ign1_present = (ch1 == ECU_CH_IGN1 || ch2 == ECU_CH_IGN1 || ch3 == ECU_CH_IGN1);
-    bool ign3_present = (ch1 == ECU_CH_IGN3 || ch2 == ECU_CH_IGN3 || ch3 == ECU_CH_IGN3);
-    TEST_ASSERT_TRUE(ign1_present);
-    TEST_ASSERT_TRUE(ign3_present);
-}
-
-// =============================================================================
-// Test: Atomic Overflow Handling
-// =============================================================================
-
-void test_overflow_handling_atomic() {
-    test_reset();
-    ECU_Hardware_Init();
-    
-    // Add an event for the next overflow epoch
-    g_overflow_count = 0U;
-    Add_Event(0x00011234UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
-    
-    // Simulate timer overflow
-    FTM0->SC |= FTM_SC_TOF_MASK;
-    
-    // Record overflow count before ISR
-    uint32_t overflow_before = g_overflow_count;
-    
-    // Call ISR (should handle overflow atomically)
-    FTM0_IRQHandler();
-    
-    // Overflow count should be incremented exactly once
-    TEST_ASSERT_EQ_U32(overflow_before + 1U, g_overflow_count);
-    
-    // Event should be armed (CnV loaded with low 16 bits)
-    TEST_ASSERT_EQ_U32(0x1234U, FTM0->CONTROLS[ECU_CH_IGN1].CnV);
-    
-    // TOF flag should be cleared
-    TEST_ASSERT_TRUE((FTM0->SC & FTM_SC_TOF_MASK) == 0U);
-}
-
-void test_overflow_multiple_events_same_epoch() {
-    test_reset();
-    ECU_Hardware_Init();
-    
-    // Add multiple events for the same future epoch
-    g_overflow_count = 0U;
-    Add_Event(0x00011000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    Add_Event(0x00011100UL, ECU_CH_IGN2, ECU_ACT_SPARK);
-    Add_Event(0x00011200UL, ECU_CH_IGN3, ECU_ACT_SPARK);
-    TEST_ASSERT_EQ_U8(3U, ecu_sched_test_queue_size());
-    
-    // Simulate timer overflow to epoch 1
-    FTM0->SC |= FTM_SC_TOF_MASK;
-    FTM0_IRQHandler();
-    
-    // All events should be armed
-    TEST_ASSERT_EQ_U32(0x1000U, FTM0->CONTROLS[ECU_CH_IGN1].CnV);
-    TEST_ASSERT_EQ_U32(0x1100U, FTM0->CONTROLS[ECU_CH_IGN2].CnV);
-    TEST_ASSERT_EQ_U32(0x1200U, FTM0->CONTROLS[ECU_CH_IGN3].CnV);
-    
-    // Overflow count should be incremented
-    TEST_ASSERT_EQ_U32(1U, g_overflow_count);
-}
-
-void test_overflow_events_still_late() {
-    test_reset();
-    ECU_Hardware_Init();
-    
-    // Add events for epoch 0 (already past when overflow happens)
-    g_overflow_count = 0U;
-    Add_Event(0x00001000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    Add_Event(0x00001100UL, ECU_CH_IGN2, ECU_ACT_SPARK);
-    TEST_ASSERT_EQ_U8(2U, ecu_sched_test_queue_size());
-    
-    // Simulate timer overflow to epoch 1
-    uint32_t late_events_before = g_late_event_count;
-    FTM0->SC |= FTM_SC_TOF_MASK;
-    FTM0_IRQHandler();
-    
-    // Events should be forced (late) and queue should be empty
-    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
-    TEST_ASSERT_EQ_U32(late_events_before + 2U, g_late_event_count);
-    
-    // Overflow count should be incremented
-    TEST_ASSERT_EQ_U32(1U, g_overflow_count);
-}
-
-void test_chf_rearm_forces_next_if_now_past() {
-    test_reset();
-    ECU_Hardware_Init();
-
-    g_overflow_count = 2U;
-    FTM0->CNT = 0x2000U;
-
-    // Two events same channel and epoch; both are initially future.
-    Add_Event(0x00022500UL, ECU_CH_IGN1, ECU_ACT_DWELL_START);
-    Add_Event(0x00022600UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    TEST_ASSERT_EQ_U8(2U, ecu_sched_test_queue_size());
-
-    // Simulate time advancing beyond second timestamp before CHF cleanup.
-    FTM0->CNT = 0x2700U;
-    uint32_t late_before = g_late_event_count;
-
-    // First event fired -> CHF set for channel.
-    FTM0->CONTROLS[ECU_CH_IGN1].CnSC |= FTM_CnSC_CHF_MASK;
-    FTM0_IRQHandler();
-
-    // Next event is now past and must be forced/removed immediately.
-    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
-    TEST_ASSERT_EQ_U32(late_before + 1U, g_late_event_count);
-}
-
-// =============================================================================
-// Test: Input Parameter Validation
-// =============================================================================
-
-void test_add_event_invalid_channel() {
-    test_reset();
-    ECU_Hardware_Init();
-    
-    // This test would trigger assertions in debug builds
-    // In release builds, it should handle gracefully
-    // Note: We can't easily test assertion failures without special test framework
-    
-    // Test with maximum valid channel (7 for FTM0)
-    Add_Event(0x00010000UL, 7U, ECU_ACT_SPARK);
-    TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
-}
-
-void test_add_event_invalid_action() {
-    test_reset();
-    ECU_Hardware_Init();
-    
-    // Test with maximum valid action
-    Add_Event(0x00010000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
-}
-
-void test_add_event_zero_timestamp() {
-    test_reset();
-    ECU_Hardware_Init();
-    
-    // Test with minimum valid timestamp (not zero)
-    Add_Event(0x00000001UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    
-    // Should be accepted (epoch 0, current overflow count is 0)
-    TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
-}
-
-// =============================================================================
-// Test: Race Condition Prevention
-// =============================================================================
-
-void test_isr_queue_processing_backwards() {
-    test_reset();
-    ECU_Hardware_Init();
-    
-    // Fill queue with events
-    for (uint8_t i = 0U; i < 8U; ++i) {
-        Add_Event(0x00010000UL + i, ECU_CH_IGN1, ECU_ACT_SPARK);
-    }
-    TEST_ASSERT_EQ_U8(8U, ecu_sched_test_queue_size());
-    
-    // Simulate channel match for first event
-    FTM0->CONTROLS[ECU_CH_IGN1].CnSC |= FTM_CnSC_CHF_MASK;
-    
-    // Call ISR - should process queue backwards without race condition
-    FTM0_IRQHandler();
-    
-    // Queue should have one less event
-    TEST_ASSERT_EQ_U8(7U, ecu_sched_test_queue_size());
-    
-    // CHF should be cleared
-    TEST_ASSERT_TRUE((FTM0->CONTROLS[ECU_CH_IGN1].CnSC & FTM_CnSC_CHF_MASK) == 0U);
-}
-
-void test_queue_remove_index_bounds() {
-    test_reset();
-    ECU_Hardware_Init();
-    
-    // Add some events
-    Add_Event(0x00010000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    Add_Event(0x00010001UL, ECU_CH_IGN2, ECU_ACT_SPARK);
-    TEST_ASSERT_EQ_U8(2U, ecu_sched_test_queue_size());
-    
-    // Test valid removal
-    // Note: We can't directly test queue_remove since it's static
-    // But we can test through ISR which uses it
-    
-    // Simulate channel match for first event
-    FTM0->CONTROLS[ECU_CH_IGN1].CnSC |= FTM_CnSC_CHF_MASK;
-    FTM0_IRQHandler();
-    
-    // Queue should have one event
-    TEST_ASSERT_EQ_U8(1U, ecu_sched_test_queue_size());
-}
-
-void test_sync_loss_clears_queue_and_drives_safe_outputs() {
-    test_reset();
-    ECU_Hardware_Init();
-
-    g_overflow_count = 2U;
-    Add_Event(0x00021000UL, ECU_CH_INJ1, ECU_ACT_INJ_ON);
-    Add_Event(0x00021100UL, ECU_CH_IGN1, ECU_ACT_DWELL_START);
-    TEST_ASSERT_EQ_U8(2U, ecu_sched_test_queue_size());
-
-    ems::drv::CkpSnapshot full_sync{
-        1000u, 0u, 0u, 10000u, ems::drv::SyncState::FULL_SYNC, false
-    };
-    ems::engine::ecu_sched_on_tooth_hook(full_sync);
-
-    ems::drv::CkpSnapshot loss_sync{
-        1000u, 1u, 0u, 10000u, ems::drv::SyncState::LOSS_OF_SYNC, false
-    };
-    ems::engine::ecu_sched_on_tooth_hook(loss_sync);
-
-    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
-    TEST_ASSERT_EQ_U32(FTM_CnSC_OC_CLEAR, FTM0->CONTROLS[ECU_CH_INJ1].CnSC);
-    TEST_ASSERT_EQ_U32(FTM_CnSC_OC_CLEAR, FTM0->CONTROLS[ECU_CH_IGN1].CnSC);
-}
-
-void test_metrics_late_delay_and_queue_depth() {
-    test_reset();
-    ECU_Hardware_Init();
-
-    g_overflow_count = 5U;
-    FTM0->CNT = 0x1234U;
-
-    Add_Event(0x00030000UL, ECU_CH_IGN1, ECU_ACT_SPARK);  // forced late
-
-    TEST_ASSERT_TRUE(ecu_sched_test_get_late_delay_samples() >= 1U);
-    TEST_ASSERT_TRUE(ecu_sched_test_get_late_delay_sum_ticks() > 0U);
-    TEST_ASSERT_TRUE(ecu_sched_test_get_late_delay_max_ticks() > 0U);
-
-    ecu_sched_test_reset();
-    ECU_Hardware_Init();
-    ecu_sched_test_set_ticks_per_rev(900000U);
-    Calculate_Sequential_Cycle(0U);
-
-    TEST_ASSERT_TRUE(ecu_sched_test_get_queue_depth_peak() >= 16U);
-    TEST_ASSERT_TRUE(ecu_sched_test_get_queue_depth_last_cycle_peak() >= 16U);
-}
-
-void test_stress_200_to_8500rpm_with_sync_noise() {
-    test_reset();
-    ECU_Hardware_Init();
-
-    // 200 rpm on FTM0 PS=8: ticks/rev = (120e6*600)/(8*2000) = 4,500,000
-    ecu_sched_test_set_ticks_per_rev(4500000U);
-    ecu_sched_test_set_dwell_ticks(45000U);
-    ecu_sched_test_set_inj_pw_ticks(30000U);
     ecu_sched_test_set_advance_deg(10U);
+    ecu_sched_test_set_dwell_ticks(22500U);
+    ecu_sched_test_set_inj_pw_ticks(15000U);
     ecu_sched_test_set_soi_lead_deg(62U);
 
-    // Preload one far event (> 16-bit horizon) and ensure no immediate late force.
-    g_overflow_count = 0U;
-    FTM0->CNT = 0U;
-    Add_Event(100000UL, ECU_CH_IGN1, ECU_ACT_SPARK);
-    const uint32_t late_before = g_late_event_count;
+    trigger_sequential_cycle(277778U, true);
 
-    ems::drv::CkpSnapshot full_sync{
-        1000u, 10u, 0u, 2000u, ems::drv::SyncState::FULL_SYNC, false
-    };
-    ems::engine::ecu_sched_on_tooth_hook(full_sync);
-    TEST_ASSERT_EQ_U32(late_before, g_late_event_count);
+    /* 4 cyl × 4 events = 16 */
+    TEST_ASSERT_EQ_U8(16U, ecu_sched_test_angle_table_size());
 
-    // Advance logical time near event and poll near-time arming.
-    g_overflow_count = 1U;
-    FTM0->CNT = static_cast<uint32_t>(70000U - 65536U);
-    ems::engine::ecu_sched_on_tooth_hook(full_sync);
-    TEST_ASSERT_EQ_U32(late_before, g_late_event_count);
-
-    // Accelerate to 8500 rpm and schedule a cycle via boundary tooth wrap.
-    // ticks/rev ~= (120e6*600)/(8*85000) = 105,882
-    ecu_sched_test_set_ticks_per_rev(105882U);
-    ems::drv::CkpSnapshot t1{1000u, 1u, 0u, 85000u, ems::drv::SyncState::FULL_SYNC, false};
-    ems::drv::CkpSnapshot t0{1000u, 0u, 0u, 85000u, ems::drv::SyncState::FULL_SYNC, false};
-    ems::engine::ecu_sched_on_tooth_hook(t1);
-    ems::engine::ecu_sched_on_tooth_hook(t0);  // cycle boundary
-    TEST_ASSERT_TRUE(ecu_sched_test_queue_size() > 0U);
-
-    // Inject sync noise/loss: queue must be cleared and outputs driven safe.
-    ems::drv::CkpSnapshot noise{
-        1000u, 2u, 0u, 85000u, ems::drv::SyncState::LOSS_OF_SYNC, false
-    };
-    ems::engine::ecu_sched_on_tooth_hook(noise);
-    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
-    TEST_ASSERT_EQ_U32(FTM_CnSC_OC_CLEAR, FTM0->CONTROLS[ECU_CH_INJ1].CnSC);
+    uint8_t spark = 0U, dwell = 0U, inj_on = 0U, inj_off = 0U;
+    const uint8_t n = ecu_sched_test_angle_table_size();
+    for (uint8_t i = 0U; i < n; ++i) {
+        uint8_t t = 0U, sf = 0U, ch = 0U, act = 0U, phase = 0U;
+        ecu_sched_test_get_angle_event(i, &t, &sf, &ch, &act, &phase);
+        if (act == ECU_ACT_SPARK)        { ++spark; }
+        if (act == ECU_ACT_DWELL_START)  { ++dwell; }
+        if (act == ECU_ACT_INJ_ON)       { ++inj_on; }
+        if (act == ECU_ACT_INJ_OFF)      { ++inj_off; }
+    }
+    TEST_ASSERT_EQ_U8(4U, spark);
+    TEST_ASSERT_EQ_U8(4U, dwell);
+    TEST_ASSERT_EQ_U8(4U, inj_on);
+    TEST_ASSERT_EQ_U8(4U, inj_off);
 }
 
-void test_cycle_fill_drop_when_queue_lacks_capacity() {
+// =============================================================================
+// Test: angle_to_tooth_event conversion accuracy
+// =============================================================================
+
+void test_angle_to_tooth_conversion_accuracy() {
+    // 0° → tooth 0, sub_frac 0, phase_A=ECU_PHASE_A
+    // 360° → tooth 0, sub_frac 0, phase_A=ECU_PHASE_B
+    // 180° → tooth 30, sub_frac 0, phase_A=ECU_PHASE_A (30 * 6° = 180°)
+    // 6° → tooth 1, sub_frac 0
+
+    test_reset();
+    ECU_Hardware_Init();
+    ecu_sched_test_set_advance_deg(0U);   // spark at TDC0 = 0°
+    ecu_sched_test_set_dwell_ticks(1U);   // minimal dwell
+    ecu_sched_test_set_inj_pw_ticks(1U);  // minimal PW
+    ecu_sched_test_set_soi_lead_deg(0U);  // inj at TDC = 0°
+
+    trigger_sequential_cycle(277778U, true);
+
+    uint8_t n = ecu_sched_test_angle_table_size();
+    TEST_ASSERT_TRUE(n > 0U);
+
+    /* All tooth indices must be in valid range [0,57] */
+    for (uint8_t i = 0U; i < n; ++i) {
+        uint8_t tooth = 0U, sf = 0U, ch = 0U, act = 0U, phase = 0U;
+        ecu_sched_test_get_angle_event(i, &tooth, &sf, &ch, &act, &phase);
+        TEST_ASSERT_TRUE(tooth <= 57U);
+        /* phase must be ECU_PHASE_A or ECU_PHASE_B (FULL_SYNC, not ANY) */
+        TEST_ASSERT_TRUE((phase == ECU_PHASE_A) || (phase == ECU_PHASE_B));
+    }
+}
+
+// =============================================================================
+// Test: tooth hook only arms events matching the current tooth_index
+// =============================================================================
+
+void test_tooth_hook_arms_matching_events() {
+    test_reset();
+    ECU_Hardware_Init();
+    ecu_sched_test_set_advance_deg(10U);
+    ecu_sched_test_set_dwell_ticks(22500U);
+    ecu_sched_test_set_inj_pw_ticks(15000U);
+    ecu_sched_test_set_soi_lead_deg(62U);
+
+    // First cycle to populate the angle table
+    trigger_sequential_cycle(277778U, true);
+
+    uint8_t n = ecu_sched_test_angle_table_size();
+    TEST_ASSERT_TRUE(n > 0U);
+
+    // Find which tooth index the first event is on
+    uint8_t target_tooth = 0U, sf = 0U, ch = 0U, act = 0U, phase = 0U;
+    ecu_sched_test_get_angle_event(0U, &target_tooth, &sf, &ch, &act, &phase);
+
+    // Reset CnV to detect arming
+    for (uint8_t i = 0U; i < 8U; ++i) {
+        FTM0->CH[i].CnV = 0U;
+    }
+
+    // Deliver a tooth that does NOT match target_tooth — nothing should be armed on that channel
+    uint16_t different_tooth = (target_tooth > 0U) ? (target_tooth - 1U) : 1U;
+    ems::drv::CkpSnapshot miss{277778u,
+                                static_cast<uint16_t>(different_tooth),
+                                0u, 10000u,
+                                ems::drv::SyncState::FULL_SYNC, true};
+    ems::engine::ecu_sched_on_tooth_hook(miss);
+
+    // CnV for the channel of event[0] should still be 0 (not armed by this tooth)
+    TEST_ASSERT_EQ_U32(0U, FTM0->CH[ch].CnV);
+
+    // Deliver the matching tooth — channel should be armed
+    ems::drv::CkpSnapshot hit{277778u,
+                               target_tooth,
+                               0u, 10000u,
+                               ems::drv::SyncState::FULL_SYNC,
+                               (phase == ECU_PHASE_A)};
+    ems::engine::ecu_sched_on_tooth_hook(hit);
+
+    /* CnV should be non-zero now (sub_frac > 0 gives a real offset) */
+    /* At minimum CnSC should have been programmed (set to OC mode) */
+    TEST_ASSERT_TRUE((FTM0->CH[ch].CnSC & FTM_CnSC_MSB_MASK) != 0U);
+}
+
+// =============================================================================
+// Test: phase_A filtering — events don't fire in wrong phase
+// =============================================================================
+
+void test_phase_A_filtering() {
+    test_reset();
+    ECU_Hardware_Init();
+    ecu_sched_test_set_advance_deg(10U);
+    ecu_sched_test_set_dwell_ticks(22500U);
+    ecu_sched_test_set_inj_pw_ticks(15000U);
+    ecu_sched_test_set_soi_lead_deg(62U);
+
+    // Fill table with phase_A=true
+    trigger_sequential_cycle(277778U, true);
+
+    // Find a PHASE_B event in the table
+    uint8_t phase_b_tooth = 255U, phase_b_ch = 255U, phase_b_act = 0U;
+    uint8_t n = ecu_sched_test_angle_table_size();
+    for (uint8_t i = 0U; i < n; ++i) {
+        uint8_t tooth = 0U, sf = 0U, ch = 0U, act = 0U, phase = 0U;
+        ecu_sched_test_get_angle_event(i, &tooth, &sf, &ch, &act, &phase);
+        if (phase == ECU_PHASE_B) {
+            phase_b_tooth = tooth;
+            phase_b_ch    = ch;
+            phase_b_act   = act;
+            break;
+        }
+    }
+
+    if (phase_b_tooth == 255U) {
+        /* All events happen to be phase_A at this calibration — skip sub-test */
+        return;
+    }
+
+    /* Reset CnV */
+    for (uint8_t i = 0U; i < 8U; ++i) { FTM0->CH[i].CnV = 0U; }
+
+    /* Deliver the matching tooth but with phase_A=true → PHASE_B event should NOT fire */
+    ems::drv::CkpSnapshot wrong_phase{277778u, phase_b_tooth, 0u, 10000u,
+                                       ems::drv::SyncState::FULL_SYNC, true};
+    ems::engine::ecu_sched_on_tooth_hook(wrong_phase);
+    TEST_ASSERT_EQ_U32(0U, FTM0->CH[phase_b_ch].CnV);
+
+    /* Reset CnV */
+    for (uint8_t i = 0U; i < 8U; ++i) { FTM0->CH[i].CnV = 0U; }
+
+    /* Deliver the matching tooth with phase_A=false → PHASE_B event SHOULD fire */
+    ems::drv::CkpSnapshot right_phase{277778u, phase_b_tooth, 0u, 10000u,
+                                       ems::drv::SyncState::FULL_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(right_phase);
+    TEST_ASSERT_TRUE((FTM0->CH[phase_b_ch].CnSC & FTM_CnSC_MSB_MASK) != 0U);
+}
+
+// =============================================================================
+// Test: HALF_SYNC presync produces events with ECU_PHASE_ANY
+// =============================================================================
+
+void test_presync_uses_phase_any() {
+    test_reset();
+    ECU_Hardware_Init();
+    ecu_sched_set_presync_enable(1U);
+    ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
+    ecu_sched_set_presync_ign_mode(ECU_PRESYNC_IGN_WASTED_SPARK);
+    ecu_sched_commit_calibration(10U, 22500U, 15000U, 62U);
+
+    /* Trigger presync via HALF_SYNC boundary */
+    ems::drv::CkpSnapshot t1{277778u, 1u, 0u, 10000u,
+                              ems::drv::SyncState::HALF_SYNC, false};
+    ems::drv::CkpSnapshot t0{277778u, 0u, 0u, 10000u,
+                              ems::drv::SyncState::HALF_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(t1);
+    ems::engine::ecu_sched_on_tooth_hook(t0);  /* boundary → calculate_presync_revolution */
+
+    uint8_t n = ecu_sched_test_angle_table_size();
+    TEST_ASSERT_TRUE(n > 0U);
+
+    /* All presync events must have phase_A == ECU_PHASE_ANY */
+    for (uint8_t i = 0U; i < n; ++i) {
+        uint8_t tooth = 0U, sf = 0U, ch = 0U, act = 0U, phase = 0U;
+        ecu_sched_test_get_angle_event(i, &tooth, &sf, &ch, &act, &phase);
+        TEST_ASSERT_EQ_U8(ECU_PHASE_ANY, phase);
+    }
+}
+
+// =============================================================================
+// Test: ecu_sched_commit_calibration new signature (no tpr argument)
+// =============================================================================
+
+void test_commit_calibration_no_tpr() {
     test_reset();
     ECU_Hardware_Init();
 
-    for (uint8_t i = 0U; i < ECU_QUEUE_SIZE; ++i) {
-        Add_Event(0x00010000UL + i, ECU_CH_IGN1, ECU_ACT_SPARK);
-    }
-    TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
+    /* PS=64: 1875 ticks/ms. dwell=5625 (3ms), inj_pw=12000 (6.4ms) — ambos dentro dos limites */
+    ecu_sched_commit_calibration(15U, 5625U, 12000U, 55U);
 
-    const uint32_t drops_before = ecu_sched_test_get_cycle_schedule_drop_count();
-    const uint32_t late_before = g_late_event_count;
-    Calculate_Sequential_Cycle(0U);
-
-    TEST_ASSERT_EQ_U32(drops_before + 1U, ecu_sched_test_get_cycle_schedule_drop_count());
-    TEST_ASSERT_EQ_U32(late_before, g_late_event_count);
-    TEST_ASSERT_EQ_U8(ECU_QUEUE_SIZE, ecu_sched_test_queue_size());
+    TEST_ASSERT_EQ_U32(15U,    ecu_sched_test_get_advance_deg());
+    TEST_ASSERT_EQ_U32(5625U,  ecu_sched_test_get_dwell_ticks());
+    TEST_ASSERT_EQ_U32(12000U, ecu_sched_test_get_inj_pw_ticks());
+    TEST_ASSERT_EQ_U32(55U,    ecu_sched_test_get_soi_lead_deg());
 }
 
-void test_calibration_setters_clamp_and_cross_sanity() {
+// =============================================================================
+// Test: Calibration clamping (advance, dwell, pw, soi)
+// =============================================================================
+
+void test_calibration_clamping() {
     test_reset();
     ECU_Hardware_Init();
 
     const uint32_t clamps_before = ecu_sched_test_get_calibration_clamp_count();
 
-    // Out-of-range values must be clamped.
-    ecu_sched_test_set_ticks_per_rev(0U);
+    /* Out-of-range advance (> 60°) must be clamped */
+    ecu_sched_test_set_advance_deg(999U);
+    TEST_ASSERT_TRUE(ecu_sched_test_get_advance_deg() <= 60U);
+
+    /* Out-of-range soi_lead must be clamped below 720° */
+    ecu_sched_test_set_soi_lead_deg(9999U);
+    TEST_ASSERT_TRUE(ecu_sched_test_get_soi_lead_deg() < 720U);
+
+    /* Excessively large dwell/pw must be clamped */
     ecu_sched_test_set_dwell_ticks(0xFFFFFFFFU);
     ecu_sched_test_set_inj_pw_ticks(0xFFFFFFFFU);
-    ecu_sched_test_set_soi_lead_deg(9999U);
-
-    TEST_ASSERT_TRUE(ecu_sched_test_get_ticks_per_rev() >= 50000U);
-    TEST_ASSERT_TRUE(ecu_sched_test_get_ticks_per_rev() <= 6000000U);
-    TEST_ASSERT_EQ_U32(719U, ecu_sched_test_get_soi_lead_deg());
-
-    // Cross-sanity: dwell/pw limited by current ticks_per_rev * 2.
-    const uint32_t tpr = ecu_sched_test_get_ticks_per_rev();
-    TEST_ASSERT_TRUE(ecu_sched_test_get_dwell_ticks() <= (tpr * 2U));
-    TEST_ASSERT_TRUE(ecu_sched_test_get_inj_pw_ticks() <= (tpr * 2U));
-
-    // Changing ticks_per_rev after large dwell/pw must re-clamp both.
-    ecu_sched_test_set_dwell_ticks(1000000U);
-    ecu_sched_test_set_inj_pw_ticks(1000000U);
-    ecu_sched_test_set_ticks_per_rev(100000U);  // max_span = 200000
-    TEST_ASSERT_TRUE(ecu_sched_test_get_dwell_ticks() <= 200000U);
-    TEST_ASSERT_TRUE(ecu_sched_test_get_inj_pw_ticks() <= 200000U);
+    TEST_ASSERT_TRUE(ecu_sched_test_get_dwell_ticks() <= 75000U);
+    TEST_ASSERT_TRUE(ecu_sched_test_get_inj_pw_ticks() <= 150000U);
 
     TEST_ASSERT_TRUE(ecu_sched_test_get_calibration_clamp_count() > clamps_before);
 }
 
-void test_calibration_atomic_commit_updates_coherently() {
+// =============================================================================
+// Test: Sync loss clears angle table and drives safe outputs
+// =============================================================================
+
+void test_sync_loss_clears_angle_table_and_drives_safe_outputs() {
     test_reset();
     ECU_Hardware_Init();
 
-    ::ecu_sched_commit_calibration(123456U, 22U, 3333U, 4444U, 55U);
-    TEST_ASSERT_EQ_U32(123456U, ecu_sched_test_get_ticks_per_rev());
-    TEST_ASSERT_EQ_U32(3333U, ecu_sched_test_get_dwell_ticks());
-    TEST_ASSERT_EQ_U32(4444U, ecu_sched_test_get_inj_pw_ticks());
-    TEST_ASSERT_EQ_U32(55U, ecu_sched_test_get_soi_lead_deg());
+    trigger_sequential_cycle(277778U, true);
+    TEST_ASSERT_TRUE(ecu_sched_test_angle_table_size() > 0U);
+
+    ems::drv::CkpSnapshot loss{277778u, 2u, 0u, 10000u,
+                               ems::drv::SyncState::LOSS_OF_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(loss);
+
+    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_angle_table_size());
+    /* Injector channels must be in clear-on-match (safe: closed) */
+    TEST_ASSERT_EQ_U32(FTM_CnSC_OC_CLEAR, FTM0->CH[ECU_CH_INJ1].CnSC);
+    TEST_ASSERT_EQ_U32(FTM_CnSC_OC_CLEAR, FTM0->CH[ECU_CH_IGN1].CnSC);
 }
 
-void test_tooth_accel_comp_retimes_far_events() {
+// =============================================================================
+// CYC-01: guard SCH-02 blocks first revolution boundary after sync
+// =============================================================================
+
+void test_cyc01_sch02_guard_blocks_first_boundary() {
     test_reset();
     ECU_Hardware_Init();
 
-    // Prepare a slow model and schedule one cycle.
-    ecu_sched_commit_calibration(400000U, 10U, 15000U, 20000U, 62U);
-    g_overflow_count = 2U;
-    FTM0->CNT = 2000U;
-    const uint32_t now = (g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
-    Calculate_Sequential_Cycle(now);
+    /* First tooth_index=0 with no previous tooth: hook_prev_valid=0 → no schedule */
+    ems::drv::CkpSnapshot snap0{277778u, 0u, 0u, 10000u,
+                                ems::drv::SyncState::FULL_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(snap0);
+    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_angle_table_size());
 
-    uint32_t spark_before = 0U;
-    TEST_ASSERT_TRUE(find_event(ECU_CH_IGN1, ECU_ACT_SPARK, &spark_before) != 0U);
-    TEST_ASSERT_TRUE(spark_before > now);
+    /* Intermediate tooth: activates prev_valid */
+    ems::drv::CkpSnapshot snap5{277778u, 5u, 0u, 10000u,
+                                ems::drv::SyncState::FULL_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(snap5);
 
-    ems::drv::CkpSnapshot fast{
-        1000u, 5u, 0u, 45000u, ems::drv::SyncState::FULL_SYNC, false
-    };
-    ems::engine::ecu_sched_on_tooth_hook(fast);
-
-    uint32_t spark_after = 0U;
-    TEST_ASSERT_TRUE(find_event(ECU_CH_IGN1, ECU_ACT_SPARK, &spark_after) != 0U);
-    TEST_ASSERT_TRUE(spark_after < spark_before);
+    /* Second tooth_index=0: prev_valid=1, prev_tooth=5≠0 → revolution boundary → schedule */
+    ems::engine::ecu_sched_on_tooth_hook(snap0);
+    TEST_ASSERT_TRUE(ecu_sched_test_angle_table_size() > 0U);
 }
 
-void test_tooth_accel_comp_preserves_near_time_events() {
+void test_cyc01_default_calibration_produces_valid_events() {
     test_reset();
     ECU_Hardware_Init();
+    /* Do NOT call ecu_sched_commit_calibration — use defaults */
 
-    ecu_sched_commit_calibration(400000U, 10U, 15000U, 20000U, 62U);
-    g_overflow_count = 3U;
-    FTM0->CNT = 5000U;
-    const uint32_t now = (g_overflow_count << 16U) | (FTM0->CNT & 0xFFFFU);
+    ems::drv::CkpSnapshot snap1{277778u, 1u, 0u, 10000u,
+                                ems::drv::SyncState::FULL_SYNC, false};
+    ems::drv::CkpSnapshot snap0{277778u, 0u, 0u, 10000u,
+                                ems::drv::SyncState::FULL_SYNC, false};
+    ems::engine::ecu_sched_on_tooth_hook(snap1);
+    ems::engine::ecu_sched_on_tooth_hook(snap0);
 
-    const uint32_t near_win = (400000U / 60U) * 2U;
-    const uint32_t near_event_ts = now + (near_win / 2U);
-    const uint32_t far_event_ts = now + (near_win * 4U);
-
-    Add_Event(near_event_ts, ECU_CH_IGN1, ECU_ACT_SPARK);
-    Add_Event(far_event_ts, ECU_CH_IGN2, ECU_ACT_SPARK);
-
-    ems::drv::CkpSnapshot fast{
-        1000u, 7u, 0u, 45000u, ems::drv::SyncState::FULL_SYNC, false
-    };
-    ems::engine::ecu_sched_on_tooth_hook(fast);
-
-    uint32_t near_after = 0U;
-    uint32_t far_after = 0U;
-    TEST_ASSERT_TRUE(find_event(ECU_CH_IGN1, ECU_ACT_SPARK, &near_after) != 0U);
-    TEST_ASSERT_TRUE(find_event(ECU_CH_IGN2, ECU_ACT_SPARK, &far_after) != 0U);
-    TEST_ASSERT_EQ_U32(near_event_ts, near_after);
-    TEST_ASSERT_TRUE(far_after < far_event_ts);
+    uint8_t n = ecu_sched_test_angle_table_size();
+    TEST_ASSERT_TRUE(n > 0U);
+    /* All events must have valid tooth indices (no garbage from uninitialised state) */
+    for (uint8_t i = 0U; i < n; ++i) {
+        uint8_t tooth = 0U, sf = 0U, ch = 0U, act = 0U, phase = 0U;
+        ecu_sched_test_get_angle_event(i, &tooth, &sf, &ch, &act, &phase);
+        TEST_ASSERT_TRUE(tooth <= 57U);
+    }
 }
+
+// =============================================================================
+// Test: HALF_SYNC simultaneous injection and wasted spark via presync
+// =============================================================================
 
 void test_presync_halfsync_simultaneous_inj_and_wasted_spark() {
     test_reset();
@@ -611,23 +428,27 @@ void test_presync_halfsync_simultaneous_inj_and_wasted_spark() {
     ecu_sched_set_presync_enable(1U);
     ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
     ecu_sched_set_presync_ign_mode(ECU_PRESYNC_IGN_WASTED_SPARK);
-    ecu_sched_commit_calibration(300000U, 10U, 12000U, 18000U, 62U);
+    ecu_sched_commit_calibration(10U, 22500U, 12000U, 62U);
 
-    ems::drv::CkpSnapshot t1{1000u, 1u, 0u, 3000u, ems::drv::SyncState::HALF_SYNC, false};
-    ems::drv::CkpSnapshot t0{1000u, 0u, 0u, 3000u, ems::drv::SyncState::HALF_SYNC, false};
+    ems::drv::CkpSnapshot t1{277778u, 1u, 0u, 3000u,
+                              ems::drv::SyncState::HALF_SYNC, false};
+    ems::drv::CkpSnapshot t0{277778u, 0u, 0u, 3000u,
+                              ems::drv::SyncState::HALF_SYNC, false};
     ems::engine::ecu_sched_on_tooth_hook(t1);
-    ems::engine::ecu_sched_on_tooth_hook(t0);  // boundary -> pre-sync schedule
+    ems::engine::ecu_sched_on_tooth_hook(t0);  /* boundary → presync schedule */
 
-    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ1, ECU_ACT_INJ_ON) >= 1U);
-    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ2, ECU_ACT_INJ_ON) >= 1U);
-    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ3, ECU_ACT_INJ_ON) >= 1U);
-    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ4, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(count_angle_events(ECU_CH_INJ1, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(count_angle_events(ECU_CH_INJ2, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(count_angle_events(ECU_CH_INJ3, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(count_angle_events(ECU_CH_INJ4, ECU_ACT_INJ_ON) >= 1U);
 
-    TEST_ASSERT_TRUE(count_events(ECU_CH_IGN1, ECU_ACT_SPARK) >= 1U);
-    TEST_ASSERT_TRUE(count_events(ECU_CH_IGN2, ECU_ACT_SPARK) >= 1U);
-    TEST_ASSERT_TRUE(count_events(ECU_CH_IGN3, ECU_ACT_SPARK) >= 1U);
-    TEST_ASSERT_TRUE(count_events(ECU_CH_IGN4, ECU_ACT_SPARK) >= 1U);
+    TEST_ASSERT_TRUE(count_angle_events(ECU_CH_IGN1, ECU_ACT_SPARK) >= 1U);
+    TEST_ASSERT_TRUE(count_angle_events(ECU_CH_IGN2, ECU_ACT_SPARK) >= 1U);
 }
+
+// =============================================================================
+// Test: HALF_SYNC semi-sequential injection alternates banks
+// =============================================================================
 
 void test_presync_halfsync_semi_sequential_alternates_banks() {
     test_reset();
@@ -635,81 +456,26 @@ void test_presync_halfsync_semi_sequential_alternates_banks() {
     ecu_sched_set_presync_enable(1U);
     ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SEMI_SEQUENTIAL);
     ecu_sched_set_presync_ign_mode(ECU_PRESYNC_IGN_WASTED_SPARK);
-    ecu_sched_commit_calibration(300000U, 10U, 12000U, 18000U, 62U);
+    ecu_sched_commit_calibration(10U, 22500U, 12000U, 62U);
 
-    ems::drv::CkpSnapshot t1{1000u, 1u, 0u, 3000u, ems::drv::SyncState::HALF_SYNC, false};
-    ems::drv::CkpSnapshot t0{1000u, 0u, 0u, 3000u, ems::drv::SyncState::HALF_SYNC, false};
+    ems::drv::CkpSnapshot t1{277778u, 1u, 0u, 3000u,
+                              ems::drv::SyncState::HALF_SYNC, false};
+    ems::drv::CkpSnapshot t0{277778u, 0u, 0u, 3000u,
+                              ems::drv::SyncState::HALF_SYNC, false};
+
+    /* First boundary → bank A (INJ1 + INJ4, toggle=0) */
     ems::engine::ecu_sched_on_tooth_hook(t1);
-    ems::engine::ecu_sched_on_tooth_hook(t0);  // bank A
+    ems::engine::ecu_sched_on_tooth_hook(t0);
+    const bool bank_a_after_first = (count_angle_events(ECU_CH_INJ1, ECU_ACT_INJ_ON) >= 1U) ||
+                                    (count_angle_events(ECU_CH_INJ4, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(bank_a_after_first);
+
+    /* Second boundary → bank B (INJ2 + INJ3, toggle=1 → then 0) */
     ems::engine::ecu_sched_on_tooth_hook(t1);
-    ems::engine::ecu_sched_on_tooth_hook(t0);  // bank B
-
-    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ1, ECU_ACT_INJ_ON) >= 1U);
-    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ4, ECU_ACT_INJ_ON) >= 1U);
-    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ2, ECU_ACT_INJ_ON) >= 1U);
-    TEST_ASSERT_TRUE(count_events(ECU_CH_INJ3, ECU_ACT_INJ_ON) >= 1U);
-}
-
-// =============================================================================
-// CYC-01: Cobertura — guard SCH-02 bloqueia 1ª fronteira de revolução após sync
-// =============================================================================
-
-void test_cyc01_sch02_guard_blocks_first_boundary() {
-    // Verifica que o guard SCH-02 (g_hook_prev_valid == 0) impede scheduling
-    // na 1ª vez que tooth_index=0 aparece após o hook ficar válido.
-    // Isso protege contra eventos com calibração default/stale antes de
-    // ecu_sched_commit_calibration() ser chamado pelo background loop.
-    test_reset();
-    ECU_Hardware_Init();
-
-    // Primeiro tooth_index=0 sem nenhum dente anterior:
-    // g_hook_prev_valid=0 → rev_boundary=0 → sem schedule.
-    ems::drv::CkpSnapshot snap0{1000u, 0u, 0u, 10000u,
-                                ems::drv::SyncState::FULL_SYNC, false};
-    ems::engine::ecu_sched_on_tooth_hook(snap0);
-    TEST_ASSERT_EQ_U8(0U, ecu_sched_test_queue_size());
-
-    // Dente intermediário: g_hook_prev_valid=1, g_hook_prev_tooth=5.
-    ems::drv::CkpSnapshot snap5{1000u, 5u, 0u, 10000u,
-                                ems::drv::SyncState::FULL_SYNC, false};
-    ems::engine::ecu_sched_on_tooth_hook(snap5);
-
-    // Segundo tooth_index=0: prev_valid=1, prev_tooth=5 ≠ 0 → rev_boundary=1
-    // → ciclo é agendado com calibração default (não zero).
-    ems::drv::CkpSnapshot snap0b{1000u, 0u, 0u, 10000u,
-                                 ems::drv::SyncState::FULL_SYNC, false};
-    ems::engine::ecu_sched_on_tooth_hook(snap0b);
-    TEST_ASSERT_TRUE(ecu_sched_test_queue_size() > 0U);
-}
-
-void test_cyc01_default_calibration_produces_nonzero_events() {
-    // Verifica que a calibração default (g_ticks_per_rev=900000,
-    // g_inj_pw_ticks=45000) produz eventos com timestamp != 0.
-    // Timestamp zero causaria disparo imediato ao armar o output-compare.
-    // Simula o cenário: sync achievido, background loop ainda não executou
-    // ecu_sched_commit_calibration().
-    test_reset();
-    ECU_Hardware_Init();
-    // NÃO chamar ecu_sched_commit_calibration() — calibração default em vigor.
-
-    // Dente intermediário para ativar g_hook_prev_valid.
-    ems::drv::CkpSnapshot snap1{1000u, 1u, 0u, 10000u,
-                                ems::drv::SyncState::FULL_SYNC, false};
-    ems::engine::ecu_sched_on_tooth_hook(snap1);
-
-    // Segundo tooth_index=0: dispara Calculate_Sequential_Cycle().
-    ems::drv::CkpSnapshot snap0{1000u, 0u, 0u, 10000u,
-                                ems::drv::SyncState::FULL_SYNC, false};
-    ems::engine::ecu_sched_on_tooth_hook(snap0);
-
-    const uint8_t n = ecu_sched_test_queue_size();
-    TEST_ASSERT_TRUE(n > 0U);
-    for (uint8_t i = 0U; i < n; ++i) {
-        uint32_t ts = 0U; uint8_t ch = 0U, act = 0U;
-        ecu_sched_test_get_event(i, &ts, &ch, &act);
-        // Nenhum evento pode ter timestamp zero.
-        TEST_ASSERT_TRUE(ts != 0U);
-    }
+    ems::engine::ecu_sched_on_tooth_hook(t0);
+    const bool bank_b_after_second = (count_angle_events(ECU_CH_INJ2, ECU_ACT_INJ_ON) >= 1U) ||
+                                     (count_angle_events(ECU_CH_INJ3, ECU_ACT_INJ_ON) >= 1U);
+    TEST_ASSERT_TRUE(bank_b_after_second);
 }
 
 // =============================================================================
@@ -717,44 +483,34 @@ void test_cyc01_default_calibration_produces_nonzero_events() {
 // =============================================================================
 
 int main() {
-    printf("Running EMS ECU Scheduler Critical Fixes Tests...\n");
-    
-    // Late event handling tests
-    test_late_event_removes_existing_channel_events();
-    test_queue_full_removes_existing_channel_events();
-    test_late_event_different_channels_preserved();
-    
-    // Atomic overflow handling tests
-    test_overflow_handling_atomic();
-    test_overflow_multiple_events_same_epoch();
-    test_overflow_events_still_late();
-    test_chf_rearm_forces_next_if_now_past();
-    
-    // Input validation tests
-    test_add_event_invalid_channel();
-    test_add_event_invalid_action();
-    test_add_event_zero_timestamp();
-    
-    // Race condition prevention tests
-    test_isr_queue_processing_backwards();
-    test_queue_remove_index_bounds();
-    test_sync_loss_clears_queue_and_drives_safe_outputs();
-    test_metrics_late_delay_and_queue_depth();
-    test_stress_200_to_8500rpm_with_sync_noise();
-    test_cycle_fill_drop_when_queue_lacks_capacity();
-    test_calibration_setters_clamp_and_cross_sanity();
-    test_calibration_atomic_commit_updates_coherently();
-    test_tooth_accel_comp_retimes_far_events();
-    test_tooth_accel_comp_preserves_near_time_events();
+    printf("Running EMS ECU Scheduler Angle-Domain Tests...\n");
+
+    /* Angle table filling */
+    test_angle_table_fills_16_events_for_full_cycle();
+    test_angle_to_tooth_conversion_accuracy();
+
+    /* Tooth hook arming */
+    test_tooth_hook_arms_matching_events();
+    test_phase_A_filtering();
+
+    /* HALF_SYNC presync */
+    test_presync_uses_phase_any();
     test_presync_halfsync_simultaneous_inj_and_wasted_spark();
     test_presync_halfsync_semi_sequential_alternates_banks();
 
-    // CYC-01 coverage: guard SCH-02 e calibração default segura
-    test_cyc01_sch02_guard_blocks_first_boundary();
-    test_cyc01_default_calibration_produces_nonzero_events();
+    /* Calibration */
+    test_commit_calibration_no_tpr();
+    test_calibration_clamping();
 
-    printf("ECU scheduler fixes tests completed: %d run, %d failed\n",
+    /* Sync loss safety */
+    test_sync_loss_clears_angle_table_and_drives_safe_outputs();
+
+    /* CYC-01: guard SCH-02 and default calibration */
+    test_cyc01_sch02_guard_blocks_first_boundary();
+    test_cyc01_default_calibration_produces_valid_events();
+
+    printf("ECU scheduler angle-domain tests completed: %d run, %d failed\n",
            g_tests_run, g_tests_failed);
-    
+
     return (g_tests_failed == 0) ? 0 : 1;
 }

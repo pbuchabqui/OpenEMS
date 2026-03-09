@@ -1,32 +1,31 @@
 /**
  * @file engine/ecu_sched.h
- * @brief ECU Scheduling Core v2 — 32-bit timer + hardware Output Compare
+ * @brief ECU Scheduling Core v3 — Domínio Angular (Angle-Domain Scheduling)
  *
- * Modulo C/C++ (estilo MISRA) para agendamento angular de eventos de injecao
- * e ignicao via FTM0 com extensao de 32 bits por contagem de overflow.
+ * Módulo C/C++ para agendamento de eventos de injeção e ignição no domínio
+ * angular. Cada evento é armazenado como (tooth_index, sub_frac_x256, phase_A)
+ * e disparado na ISR CKP do dente correspondente, calculando o offset FTM0
+ * com o período do dente ATUAL — correto para o RPM instântaneo.
+ *
+ * Vantagens vs scheduling no domínio do tempo (v2):
+ *   - Elimina race condition g_overflow_count (FTM3 prio 1 vs FTM0 prio 4)
+ *   - Elimina retime_far_events_from_tooth_rpm() O(n) por dente na ISR CKP
+ *   - Timing exato em variação de RPM (usa período atual, não aproximação)
+ *   - FTM0_IRQHandler simplificado: sem TOF, sem gestão de fila
  *
  * Arquitetura:
- *   FTM0 @ 120 MHz / PS_8 = 15 MHz ~ 66,7 ns/tick, free-running 16-bit.
- *   g_overflow_count estende o contador para 32 bits logicos:
- *     timestamp32 = (g_overflow_count << 16) | FTM0->CNT
- *
+ *   FTM0 @ 120 MHz / PS_64 = 1,875 MHz ~ 533,3 ns/tick, free-running 16-bit.
  *   CH0-CH3 (INJ1-4): Output Compare, Set on match (HIGH = injetor energizado).
- *   CH4-CH7 (IGN4-1): Output Compare, Clear on match (LOW  = disparo de bobina).
- *   CH5 (IGN3):       Output Compare para ignição do cilindro 3.
- *                     NOTA: O PDB0 é disparado pelo trigger de saída do FTM0
- *                     (TRGSEL=0x8), que é independente de qualquer canal CnV.
- *                     NÃO há conflito de hardware entre IGN3 e o trigger PDB.
- *                     O comentário anterior 'reservado para PDB' estava incorreto.
+ *   CH4-CH7 (IGN4-1): Output Compare, Clear on match (LOW = disparo de bobina).
  *
  *   PDB0: disparado por FTM0 output trigger (TRGSEL=0x8).
  *   ADC0: hardware averaging 4 amostras (SC3: AVGE=1, AVGS=00).
  *
- * Coexistencia com C++17:
- *   Este header envolve todas as declaracoes em extern "C" quando compilado
- *   como C++. O FTM0_IRQHandler e definido em ecu_sched.cpp e substitui o
- *   handler genérico em hal/ftm.cpp.
+ * Coexistência com C++17:
+ *   Este header envolve todas as declarações em extern "C" quando compilado
+ *   como C++. O FTM0_IRQHandler é definido em ecu_sched.cpp.
  *
- * Referencia: K64P144M120SF5 Reference Manual, Rev. 2
+ * Referência: K64P144M120SF5 Reference Manual, Rev. 2
  *   Cap. 43 — FlexTimer Module (FTM)
  *   Cap. 36 — Programmable Delay Block (PDB)
  *   Cap. 31 — Analog-to-Digital Converter (ADC)
@@ -62,7 +61,7 @@ typedef struct {
     volatile uint32_t SC;           /*!< 0x00: Status and Control      */
     volatile uint32_t CNT;          /*!< 0x04: Counter                 */
     volatile uint32_t MOD;          /*!< 0x08: Modulo                  */
-    FTM_Channel_t     CONTROLS[8];  /*!< 0x0C-0x48: Channels 0-7      */
+    FTM_Channel_t     CH[8];        /*!< 0x0C-0x48: Channels 0-7      */
     volatile uint32_t CNTIN;        /*!< 0x4C: Counter Initial Value   */
     volatile uint32_t STATUS;       /*!< 0x50: Capture and Compare Status */
     volatile uint32_t MODE;         /*!< 0x54: Features Mode Selection */
@@ -71,8 +70,6 @@ typedef struct {
 /**
  * Programmable Delay Block (PDB) register map.
  * Base address: PDB0=0x40036000 (K64 RM Table 3-1).
- * Only the fields used by this module are mapped; reserved gaps are
- * represented as padding arrays to maintain correct offsets.
  */
 typedef struct {
     volatile uint32_t SC;           /*!< 0x00: Status and Control      */
@@ -90,7 +87,6 @@ typedef struct {
 /**
  * Analog-to-Digital Converter (ADC) register map.
  * Base address: ADC0=0x4003B000 (K64 RM Table 3-1).
- * Only the fields used by this module are mapped.
  */
 typedef struct {
     volatile uint32_t SC1A;  /*!< 0x00: Status and Control 1 (channel A) */
@@ -126,7 +122,9 @@ typedef struct {
 #define FTM_SC_TOF_MASK     (1UL << 7U)  /*!< Timer Overflow Flag (W0C)      */
 #define FTM_SC_TOIE_MASK    (1UL << 6U)  /*!< Timer Overflow Interrupt Enable */
 #define FTM_SC_CLKS_SYSTEM  (1UL << 3U)  /*!< Clock Source: system clock      */
-#define FTM_SC_PS_8         (3UL)        /*!< Prescaler 8                     */
+#define FTM_SC_PS_8         (3UL)        /*!< Prescaler 8   (legacy, não usado) */
+#define FTM_SC_PS_16        (4UL)        /*!< Prescaler 16  (PS[2:0]=100b)    */
+#define FTM_SC_PS_64        (6UL)        /*!< Prescaler 64  (PS[2:0]=110b)    */
 #define FTM_SC_PS_128       (7UL)        /*!< Prescaler 128                   */
 
 /* FTM_MODE bits */
@@ -183,9 +181,17 @@ typedef struct {
 #define ECU_ACT_SPARK        3U  /*!< Spark / coil cut (CH4-CH7 set LOW)  */
 
 /* Pre-sync fallback modes (used before FULL_SYNC) */
-#define ECU_PRESYNC_INJ_SIMULTANEOUS   0U
+#define ECU_PRESYNC_INJ_SIMULTANEOUS    0U
 #define ECU_PRESYNC_INJ_SEMI_SEQUENTIAL 1U
-#define ECU_PRESYNC_IGN_WASTED_SPARK   0U
+#define ECU_PRESYNC_IGN_WASTED_SPARK    0U
+
+/* ============================================================================
+ * Phase constants (domínio angular)
+ * ========================================================================= */
+
+#define ECU_PHASE_A    1U  /*!< Primeira revolução do ciclo de 720° (phase_A=true)  */
+#define ECU_PHASE_B    0U  /*!< Segunda revolução do ciclo de 720° (phase_A=false)  */
+#define ECU_PHASE_ANY  2U  /*!< Dispara em toda revolução — usado em HALF_SYNC      */
 
 /* ============================================================================
  * Channel assignments (matches FTM0 channel wiring)
@@ -197,18 +203,31 @@ typedef struct {
 #define ECU_CH_INJ4   1U  /*!< FTM0 CH1 — Injector 4 */
 #define ECU_CH_IGN1   7U  /*!< FTM0 CH7 — Ignition 1 */
 #define ECU_CH_IGN2   6U  /*!< FTM0 CH6 — Ignition 2 */
-#define ECU_CH_IGN3   5U  /*!< FTM0 CH5 — Ignition 3.
-                             * O PDB0 usa o trigger de saída global do FTM0
-                             * (TRGSEL=0x8), independente deste canal CnV.
-                             * Não há conflito de hardware com o MAP windowing. */
+#define ECU_CH_IGN3   5U  /*!< FTM0 CH5 — Ignition 3 */
 #define ECU_CH_IGN4   4U  /*!< FTM0 CH4 — Ignition 4 */
 
 /* ============================================================================
- * Queue and sizing constants
+ * Angle-domain event table
  * ========================================================================= */
 
-/*!< Maximum scheduled events in flight. */
-#define ECU_QUEUE_SIZE  32U
+/*!< Maximum events in the angle table: 4 cyl × 4 eventos + margem presync */
+#define ECU_ANGLE_TABLE_SIZE  20U
+
+/**
+ * @brief Evento de scheduling no domínio angular.
+ *
+ * Armazenado como posição angular (tooth_index + sub_frac_x256) em vez de
+ * timestamp absoluto. O offset FTM0 é calculado na ISR CKP usando o período
+ * do dente ATUAL — imune a variações de RPM entre scheduling e disparo.
+ */
+typedef struct {
+    uint8_t tooth_index;     /*!< Dente que dispara este evento (0–57)             */
+    uint8_t sub_frac_x256;   /*!< Fração do período do dente × 256 (0=borda, 255≈próximo) */
+    uint8_t channel;         /*!< Canal FTM0 0–7 (use ECU_CH_*)                   */
+    uint8_t action;          /*!< Código da ação (ECU_ACT_*)                       */
+    uint8_t phase_A;         /*!< ECU_PHASE_A, ECU_PHASE_B ou ECU_PHASE_ANY        */
+    uint8_t valid;           /*!< Não-zero se o slot está ocupado                  */
+} AngleEvent_t;
 
 /* ============================================================================
  * Timing constants (derived from clock and prescaler)
@@ -217,51 +236,39 @@ typedef struct {
 /*!< System clock frequency in Hz */
 #define ECU_SYSTEM_CLOCK_HZ    120000000U
 
-/*!< FTM0 prescaler (8) */
-#define ECU_FTM0_PRESCALER     8U
+/*!< FTM0 prescaler = 64 → 1,875 MHz → 533,3 ns/tick */
+#define ECU_FTM0_PRESCALER     64U
 
-/*!< FTM3 prescaler (2) */
+/*!< FTM3 prescaler (unchanged: 2 → 60 MHz → 16,67 ns/tick) */
 #define ECU_FTM3_PRESCALER     2U
 
-/*!< FTM0 ticks per millisecond: 120MHz / 8 / 1000 = 15000 */
-#define ECU_FTM0_TICKS_PER_MS  15000U
+/*!< FTM0 effective clock: 120 MHz / 64 = 1 875 000 Hz */
+#define ECU_FTM0_CLOCK_HZ      1875000U
 
-/*!< FTM0 ticks per microsecond: 120MHz / 8 / 1e6 = 15 */
-#define ECU_FTM0_TICKS_PER_US  15U
+/*!< FTM0 ticks per millisecond: 1 875 000 / 1000 = 1875 */
+#define ECU_FTM0_TICKS_PER_MS  1875U
 
-/*!< FTM3 tick period in nanoseconds: 2 / 120MHz * 1e9 = 16.667 */
+/*!< FTM0 ticks per microsecond: 1 875 000 / 1 000 000 ≈ 2 (arredondado; use TICKS_PER_MS/1000 para precisão) */
+#define ECU_FTM0_TICKS_PER_US  2U
+
+/*!< FTM0 nanoseconds per tick: 1e9 / 1 875 000 ≈ 533 ns */
+#define ECU_FTM0_NS_PER_TICK   533U
+
+/*!< FTM3 tick period in nanoseconds: 2 / 120MHz * 1e9 ≈ 17 ns */
 #define ECU_FTM3_TICK_NS       17U
 
 /* ============================================================================
- * Module globals (accessible for diagnostics / inter-module coordination)
+ * Module globals (accessible for diagnostics)
  * ========================================================================= */
 
-/*!< 32-bit overflow extension for FTM0 counter (high 16 bits of timestamp). */
-extern volatile uint32_t g_overflow_count;
-
-/*!< Cumulative count of events that arrived too late for scheduling. */
+/*!< Cumulative count of events that could not be armed (tooth already past). */
 extern volatile uint32_t g_late_event_count;
-
-/*!< Number of late events with measured delay (ticks). */
-extern volatile uint32_t g_late_delay_samples;
-
-/*!< Accumulated late-event delay in FTM0 ticks (for average computation). */
-extern volatile uint32_t g_late_delay_sum_ticks;
-
-/*!< Maximum single late-event delay observed in FTM0 ticks. */
-extern volatile uint32_t g_late_delay_max_ticks;
-
-/*!< Maximum queue depth observed since boot/reset. */
-extern volatile uint8_t g_queue_depth_peak;
-
-/*!< Peak queue depth observed during the last Calculate_Sequential_Cycle call. */
-extern volatile uint8_t g_queue_depth_last_cycle_peak;
-
-/*!< Number of cycle scheduling attempts dropped due to insufficient queue room. */
-extern volatile uint32_t g_cycle_schedule_drop_count;
 
 /*!< Number of calibration setter calls that required clamping/sanitization. */
 extern volatile uint32_t g_calibration_clamp_count;
+
+/*!< Number of cycle scheduling attempts dropped (angle table full). */
+extern volatile uint32_t g_cycle_schedule_drop_count;
 
 /* ============================================================================
  * Public API
@@ -272,70 +279,38 @@ extern volatile uint32_t g_calibration_clamp_count;
  *
  * Performs in order:
  *   1. Clock gating: FTM0, PDB0, ADC0 via SIM_SCGC6.
- *   2. FTM0: write-protect disable, free-running, MOD=0xFFFF, PS=8,
- *      TOIE=1 (overflow IRQ for 32-bit extension).
+ *   2. FTM0: write-protect disable, free-running, MOD=0xFFFF, PS=64.
+ *      Sem TOIE — overflow não precisa ser tratado no domínio angular.
  *      CH0-CH3: Output Compare Set-on-match (injectors).
  *      CH4-CH7: Output Compare Clear-on-match (ignition coils).
  *   3. PDB0: trigger source = FTM0 (TRGSEL=0x8), CH0 enabled for ADC0.
  *   4. ADC0: 12-bit, bus-clock/2; SC3 = hardware averaging 4 samples.
  *
  * Must be called once during system initialisation, before any interrupts
- * are enabled and before Add_Event() or Calculate_Sequential_Cycle().
+ * are enabled and before ecu_sched_commit_calibration().
  */
 void ECU_Hardware_Init(void);
-
-/**
- * @brief Schedule a single output-compare event.
- *
- * Inserts the event into the sorted queue (ascending by timestamp32).
- * If timestamp32 is already in the past (ts >> 16 < g_overflow_count),
- * the event is executed immediately by software force and
- * g_late_event_count is incremented.
- *
- * @param timestamp32  Target 32-bit timestamp:
- *                     bits[31:16] = required value of g_overflow_count,
- *                     bits[15:0]  = value to load into FTM0->CONTROLS[ch].CnV.
- * @param channel      FTM0 channel index 0-7 (use ECU_CH_* constants).
- * @param action       Event action code (ECU_ACT_* constants).
- */
-void Add_Event(uint32_t timestamp32, uint8_t channel, uint8_t action);
-
-/**
- * @brief Schedule one complete 720-degree cycle (ignition + injection).
- *
- * Uses firing order 1-3-4-2. For each cylinder, adds:
- *   - ECU_ACT_DWELL_START at (TDC - advance - dwell_ticks)
- *   - ECU_ACT_SPARK        at (TDC - advance)
- *   - ECU_ACT_INJ_ON       at (TDC - soi_lead_deg)
- *   - ECU_ACT_INJ_OFF      at (INJ_ON + inj_pw_ticks)
- *
- * TDC compression angles (720-degree cycle):
- *   Cyl 1 = 0 deg, Cyl 3 = 180 deg, Cyl 4 = 360 deg, Cyl 2 = 540 deg.
- *
- * Timestamps are relative to current_timestamp plus the angular offset
- * converted to ticks using the module-level g_ticks_per_rev value.
- *
- * @param current_timestamp  Current 32-bit FTM0 timestamp (from
- *                           (g_overflow_count << 16) | FTM0->CNT).
- */
-void Calculate_Sequential_Cycle(uint32_t current_timestamp);
 
 /**
  * @brief Atomically commit scheduler calibration for one control cycle.
  *
  * Applies all timing parameters in one critical section so ISR-side cycle fill
  * observes a consistent snapshot (no mixed old/new fields).
+ *
+ * Nota: tpr (ticks_per_rev) foi removido desta assinatura. O período por
+ * revolução é calculado internamente a partir de snap.tooth_period_ns no
+ * momento do scheduling (ecu_sched_on_tooth_hook), garantindo uso do RPM
+ * instântaneo e eliminando o parâmetro obsoleto do domínio do tempo.
+ *
+ * @param advance_deg  Avanço de ignição em graus BTDC.
+ * @param dwell_ticks  Duração do dwell em ticks FTM0 (PS=64).
+ * @param inj_pw_ticks Largura de pulso do injetor em ticks FTM0 (PS=64).
+ * @param soi_lead_deg Ângulo SOI em graus antes do TDC.
  */
-void ecu_sched_commit_calibration(uint32_t tpr,
-                                  uint32_t advance_deg,
+void ecu_sched_commit_calibration(uint32_t advance_deg,
                                   uint32_t dwell_ticks,
                                   uint32_t inj_pw_ticks,
                                   uint32_t soi_lead_deg);
-
-/**
- * @brief Set ticks-per-revolution used by Calculate_Sequential_Cycle().
- */
-void ecu_sched_set_ticks_per_rev(uint32_t tpr);
 
 /**
  * @brief Set spark advance angle in degrees BTDC.
@@ -343,12 +318,12 @@ void ecu_sched_set_ticks_per_rev(uint32_t tpr);
 void ecu_sched_set_advance_deg(uint32_t adv);
 
 /**
- * @brief Set dwell duration in FTM0 ticks.
+ * @brief Set dwell duration in FTM0 ticks (PS=64).
  */
 void ecu_sched_set_dwell_ticks(uint32_t dwell);
 
 /**
- * @brief Set injector pulse width duration in FTM0 ticks.
+ * @brief Set injector pulse width duration in FTM0 ticks (PS=64).
  */
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
 
@@ -369,20 +344,12 @@ void ecu_sched_set_presync_ign_mode(uint8_t mode);
 /**
  * @brief Zera contadores de diagnóstico por ciclo de motor.
  *
- * Zera: g_calibration_clamp_count, g_late_event_count, g_late_delay_samples,
- * g_late_delay_sum_ticks, g_late_delay_max_ticks, g_cycle_schedule_drop_count,
- * g_queue_depth_peak.
- *
- * Deve ser chamada uma vez por stop de motor (rpm_x10=0 por >= 100 ms).
- * Os contadores passam a refletir apenas o período de marcha mais recente,
- * e não se acumulam como odômetro lifetime.
- *
  * Thread-safe: usa seção crítica. Segura para chamar do loop background.
  */
 void ecu_sched_reset_diagnostic_counters(void);
 
 /* ============================================================================
- * FTM0 interrupt handler (defined in ecu_sched.cpp, unified scheduler handler)
+ * FTM0 interrupt handler (defined in ecu_sched.cpp)
  * ========================================================================= */
 
 void FTM0_IRQHandler(void);
@@ -392,18 +359,22 @@ void FTM0_IRQHandler(void);
  * ========================================================================= */
 
 #if defined(EMS_HOST_TEST)
-/** Reset all module state (queue, counters, globals) for test isolation. */
+/** Reset all module state for test isolation. */
 void ecu_sched_test_reset(void);
 
-/** Return the number of events currently in the queue. */
-uint8_t ecu_sched_test_queue_size(void);
+/** Return the number of valid events in the angle table. */
+uint8_t ecu_sched_test_angle_table_size(void);
 
-/** Return a copy of one queue entry (0-indexed). Returns 0 if out of range. */
-uint8_t ecu_sched_test_get_event(uint8_t index, uint32_t *ts,
-                                  uint8_t *ch, uint8_t *act);
-
-/** Set the ticks-per-revolution value used by Calculate_Sequential_Cycle. */
-void ecu_sched_test_set_ticks_per_rev(uint32_t tpr);
+/**
+ * Return a copy of one angle table entry (0-indexed).
+ * Returns 0 if out of range or slot not valid.
+ */
+uint8_t ecu_sched_test_get_angle_event(uint8_t index,
+                                        uint8_t *tooth,
+                                        uint8_t *sub_frac,
+                                        uint8_t *ch,
+                                        uint8_t *action,
+                                        uint8_t *phase);
 
 /** Set the advance angle (degrees) used by Calculate_Sequential_Cycle. */
 void ecu_sched_test_set_advance_deg(uint32_t adv);
@@ -417,26 +388,8 @@ void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks);
 /** Set SOI lead (degrees) used by Calculate_Sequential_Cycle. */
 void ecu_sched_test_set_soi_lead_deg(uint32_t soi_lead_deg);
 
-/** Return late delay samples count. */
-uint32_t ecu_sched_test_get_late_delay_samples(void);
-
-/** Return accumulated late delay (ticks). */
-uint32_t ecu_sched_test_get_late_delay_sum_ticks(void);
-
-/** Return maximum late delay (ticks). */
-uint32_t ecu_sched_test_get_late_delay_max_ticks(void);
-
-/** Return peak queue depth since reset. */
-uint8_t ecu_sched_test_get_queue_depth_peak(void);
-
-/** Return peak queue depth during last cycle fill. */
-uint8_t ecu_sched_test_get_queue_depth_last_cycle_peak(void);
-
-/** Return number of dropped cycle scheduling attempts. */
-uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
-
-/** Return current sanitized ticks-per-rev calibration. */
-uint32_t ecu_sched_test_get_ticks_per_rev(void);
+/** Return current sanitized advance angle calibration. */
+uint32_t ecu_sched_test_get_advance_deg(void);
 
 /** Return current sanitized dwell ticks calibration. */
 uint32_t ecu_sched_test_get_dwell_ticks(void);
@@ -449,6 +402,12 @@ uint32_t ecu_sched_test_get_soi_lead_deg(void);
 
 /** Return number of calibration clamp events. */
 uint32_t ecu_sched_test_get_calibration_clamp_count(void);
+
+/** Return number of dropped cycle scheduling attempts. */
+uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
+
+/** Return cumulative late event count. */
+uint32_t ecu_sched_test_get_late_event_count(void);
 #endif /* EMS_HOST_TEST */
 
 #ifdef __cplusplus
