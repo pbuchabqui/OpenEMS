@@ -94,9 +94,11 @@ uint16_t ckp_angle_to_ticks(uint16_t angle_mdeg, uint16_t ref_capture) noexcept;
 //
 // sensors_on_tooth  → drv/sensors.cpp  (amostragem sincronizada ao dente)
 // schedule_on_tooth → engine/cycle_sched.cpp (agendamento injeção/ignição)
+// prime_on_tooth    → engine/quick_crank.cpp (prime pulse — 5º dente de cranking)
 
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept;
 void schedule_on_tooth(const CkpSnapshot& snap) noexcept;
+void prime_on_tooth(const CkpSnapshot& snap) noexcept;
 
 // ── ISR handlers (chamados de hal/ftm.cpp) ────────────────────────────────────
 void ckp_ftm3_ch0_isr() noexcept;   ///< CKP rising edge (FTM3 CH0 / PTD0)

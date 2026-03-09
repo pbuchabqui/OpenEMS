@@ -348,6 +348,23 @@ void ecu_sched_set_presync_ign_mode(uint8_t mode);
  */
 void ecu_sched_reset_diagnostic_counters(void);
 
+/**
+ * @brief Dispara um prime pulse simultâneo em todos os 4 injetores.
+ *
+ * Projetado para ser chamado UMA VEZ por partida, no 5º dente CKP, pelo loop
+ * de fundo após quick_crank_consume_prime() retornar valor > 0.
+ *
+ * Comportamento:
+ *   - Arma CH0-CH3 (INJ3-4, INJ1-2) em SET mode com CnV = CNT+20 (ON imediato).
+ *   - Registra CnV de OFF em g_prime_off_cnv[]; FTM0_IRQHandler re-arma CLEAR
+ *     quando CHF dispara para cada canal.
+ *   - pw_us é saturado em 30 000 µs para prevenir afogamento.
+ *   - Segura para chamar do loop background (usa seção crítica internamente).
+ *
+ * @param pw_us  Largura de pulso em microssegundos (0 = nenhuma ação).
+ */
+void ecu_sched_fire_prime_pulse(uint32_t pw_us);
+
 /* ============================================================================
  * FTM0 interrupt handler (defined in ecu_sched.cpp)
  * ========================================================================= */

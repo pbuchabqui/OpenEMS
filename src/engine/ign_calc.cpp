@@ -116,11 +116,11 @@ int16_t get_advance(uint16_t rpm_x10, uint16_t load_kpa) noexcept {
 }
 
 int16_t clamp_advance_deg(int16_t advance_deg) noexcept {
-    // Limite máximo: 35° BTDC — proteção contra tabela placeholder com valores
-    // excessivos (linha de alta carga chega a 70° na tabela de desenvolvimento).
-    // 35° é seguro para motores normalmente aspirados em qualquer condição de carga.
-    // Ajustar para o motor específico após calibração em bancada.
-    return clamp_i16(advance_deg, -10, 35);
+    // Limite máximo: 40° BTDC — margem para motores de alta compressão e
+    // combustíveis com maior octanagem (ex.: E30). Linha de alta carga da
+    // tabela de desenvolvimento chega a 70°; o clamp protege contra valores
+    // excessivos. Ajustar após calibração em bancada.
+    return clamp_i16(advance_deg, -10, 40);
 }
 
 int16_t calc_total_advance(int16_t base_advance_deg,

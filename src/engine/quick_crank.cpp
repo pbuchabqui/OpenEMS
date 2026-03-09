@@ -1,4 +1,5 @@
 #include "engine/quick_crank.h"
+#include "drv/ckp.h"
 
 #include <cstdint>
 
@@ -13,6 +14,9 @@ constexpr uint32_t kCrankEnterRpmX10 = 4500u;
 constexpr uint32_t kCrankExitRpmX10 = 7000u;
 constexpr int16_t kCrankSparkDeg = 8;
 constexpr uint32_t kCrankMinPwUs = 2500u;
+constexpr uint32_t kDefaultReqFuelUs = 8000u;
+constexpr uint32_t kPrimePwMaxUs = 30000u;
+constexpr uint8_t  kPrimeToothTarget = 5u;  // 5º dente desde o início do cranking
 
 constexpr P2 kCrankFuelMult[] = {
     {-400, 768},  // 3.00x
@@ -47,6 +51,13 @@ constexpr P2 kAfterstartDurationMs[] = {
 bool g_prev_cranking = false;
 uint32_t g_afterstart_start_ms = 0u;
 uint32_t g_afterstart_duration_ms = 0u;
+
+// ── Estado do prime pulse (ISR-safe) ──────────────────────────────────────────
+volatile uint8_t  g_prime_tooth_count = 0u;   ///< Dentes contados desde cranking
+volatile bool     g_prime_done        = false; ///< Já disparado neste ciclo de partida
+volatile bool     g_prime_pending     = false; ///< Sinaliza loop de fundo
+volatile uint32_t g_prime_pw_us       = 0u;   ///< PW calculada para disparo
+int16_t           g_prime_clt_x10    = 900;   ///< CLT mais recente (do loop de fundo)
 
 uint16_t interp_u16(const P2* table, uint8_t n, int16_t x) noexcept {
     if (x <= table[0].x) {
@@ -106,7 +117,52 @@ uint16_t afterstart_mult_x256(uint32_t now_ms, int16_t clt_x10) noexcept {
     return clamp_u16(mult, 256u, 512u);
 }
 
+static inline void enter_critical() noexcept {
+#if defined(__arm__) || defined(__thumb__)
+    asm volatile("cpsid i" ::: "memory");
+#endif
+}
+
+static inline void exit_critical() noexcept {
+#if defined(__arm__) || defined(__thumb__)
+    asm volatile("cpsie i" ::: "memory");
+#endif
+}
+
 }  // namespace
+
+// ── Override do hook de dente (ISR de CKP, prioridade 1) ────────────────────
+// Conta os primeiros kPrimeToothTarget dentes recebidos durante cranking.
+// Quando o 5º dente chega, calcula a PW e sinaliza o loop de fundo via
+// g_prime_pending. Não requer sincronização — opera em qualquer SyncState.
+namespace ems::drv {
+
+void prime_on_tooth(const CkpSnapshot& snap) noexcept {
+    using namespace ems::engine;  // acessa g_prime_* e constantes
+
+    if (g_prime_done) { return; }
+
+    // Só conta enquanto RPM indica cranking (< 700 RPM)
+    if (snap.rpm_x10 == 0u || snap.rpm_x10 >= kCrankExitRpmX10) { return; }
+
+    ++g_prime_tooth_count;
+    if (g_prime_tooth_count < kPrimeToothTarget) { return; }
+
+    // 5º dente: calcula PW usando a tabela de enriquecimento de cranking e
+    // o CLT mais recente atualizado pelo loop de fundo.
+    const uint32_t mult = interp_u16(
+        kCrankFuelMult,
+        static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
+        g_prime_clt_x10);
+    uint32_t pw = (kDefaultReqFuelUs * static_cast<uint32_t>(mult)) >> 8u;
+    if (pw > kPrimePwMaxUs) { pw = kPrimePwMaxUs; }
+
+    g_prime_pw_us  = pw;
+    g_prime_pending = true;
+    g_prime_done   = true;
+}
+
+}  // namespace ems::drv
 
 namespace ems::engine {
 
@@ -114,6 +170,10 @@ void quick_crank_reset() noexcept {
     g_prev_cranking = false;
     g_afterstart_start_ms = 0u;
     g_afterstart_duration_ms = 0u;
+    g_prime_tooth_count = 0u;
+    g_prime_done        = false;
+    g_prime_pending     = false;
+    g_prime_pw_us       = 0u;
 }
 
 QuickCrankOutput quick_crank_update(uint32_t now_ms,
@@ -125,6 +185,7 @@ QuickCrankOutput quick_crank_update(uint32_t now_ms,
     out.spark_deg = base_spark_deg;
     out.fuel_mult_x256 = 256u;
     out.min_pw_us = 0u;
+    out.prime_pw_us = g_prime_pw_us;  // informativo — disparo é feito via consume_prime()
 
     const bool cranking = detect_cranking(rpm_x10, full_sync);
     out.cranking = cranking;
@@ -166,6 +227,22 @@ uint32_t quick_crank_apply_pw_us(uint32_t base_pw_us,
         out = 100000u;
     }
     return out;
+}
+
+void quick_crank_set_clt(int16_t clt_x10) noexcept {
+    // Escrita atômica de int16_t em Cortex-M4 (single instrução STRH).
+    g_prime_clt_x10 = clt_x10;
+}
+
+uint32_t quick_crank_consume_prime() noexcept {
+    enter_critical();
+    uint32_t pw = 0u;
+    if (g_prime_pending) {
+        pw = g_prime_pw_us;
+        g_prime_pending = false;
+    }
+    exit_critical();
+    return pw;
 }
 
 }  // namespace ems::engine

@@ -79,6 +79,10 @@ volatile uint32_t g_late_event_count        = 0U;
 volatile uint32_t g_cycle_schedule_drop_count = 0U;
 volatile uint32_t g_calibration_clamp_count  = 0U;
 
+/* Prime pulse OFF tracking (set by ecu_sched_fire_prime_pulse, consumed by FTM0 ISR) */
+static volatile uint16_t g_prime_off_cnv[4U]; /*!< OFF target CnV por canal injetor (0-3) */
+static volatile uint8_t  g_prime_off_pending;  /*!< Bitmask: bit i = canal i aguarda OFF   */
+
 /* ============================================================================
  * Module-private configuration
  * ========================================================================= */
@@ -376,10 +380,20 @@ void FTM0_IRQHandler(void)
     for (ch = 0U; ch < ECU_CHANNELS; ++ch) {
         uint32_t cnsc = FTM0->CH[ch].CnSC;
         if ((cnsc & FTM_CnSC_CHF_MASK) != 0U) {
-            /* Limpa CHF (W0C: escreve 0 no bit, preserva os demais) */
+            /* Canais de injeção (0-3): checar prime pulse OFF pendente.
+             * Se pendente, re-armar em CLEAR mode — isso limpa CHF implicitamente
+             * (bit 7 ausente em FTM_CnSC_OC_CLEAR; W0C se escreve 0). */
+            if (ch < ECU_IGN_CH_FIRST) {
+                const uint8_t bit = (uint8_t)(1U << ch);
+                if ((g_prime_off_pending & bit) != 0U) {
+                    FTM0->CH[ch].CnSC = FTM_CnSC_OC_CLEAR;
+                    FTM0->CH[ch].CnV  = (uint32_t)g_prime_off_cnv[ch];
+                    g_prime_off_pending = (uint8_t)(g_prime_off_pending & (uint8_t)(~bit));
+                    continue;
+                }
+            }
+            /* Normal: limpa CHF (W0C: escreve 0 no bit, preserva os demais) */
             FTM0->CH[ch].CnSC = (cnsc & ~FTM_CnSC_CHF_MASK);
-            /* Nenhuma lógica adicional: transição de pino já ocorreu em hardware.
-             * Set-on-match para INJ, Clear-on-match para IGN. */
         }
     }
 }
@@ -627,6 +641,37 @@ void ecu_sched_reset_diagnostic_counters(void)
     exit_critical();
 }
 
+void ecu_sched_fire_prime_pulse(uint32_t pw_us)
+{
+    static const uint32_t kPrimePwMaxUs  = 30000U;
+    static const uint8_t  kInjChannels[] = {
+        ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4  /* CH2,CH3,CH0,CH1 */
+    };
+    uint8_t i;
+
+    if (pw_us == 0U) { return; }
+    if (pw_us > kPrimePwMaxUs) { pw_us = kPrimePwMaxUs; }
+
+    const uint32_t pw_ticks = (pw_us * ECU_FTM0_TICKS_PER_MS) / 1000U;
+    const uint16_t on_cnv   = (uint16_t)((FTM0->CNT + 20U) & 0xFFFFU);
+    const uint16_t off_cnv  = (uint16_t)((on_cnv + pw_ticks) & 0xFFFFU);
+
+    enter_critical();
+
+    /* Prepara OFF targets indexados pelo número de canal FTM0 (0-3) */
+    for (i = 0U; i < 4U; ++i) {
+        g_prime_off_cnv[kInjChannels[i]] = off_cnv;
+    }
+    g_prime_off_pending = 0x0FU;  /* CH0,CH1,CH2,CH3 aguardam OFF */
+
+    /* Arma todos os injetores para abrir simultaneamente */
+    for (i = 0U; i < 4U; ++i) {
+        arm_channel(kInjChannels[i], on_cnv, ECU_ACT_INJ_ON);
+    }
+
+    exit_critical();
+}
+
 /* ============================================================================
  * ecu_sched_on_tooth_hook (domínio angular)
  * Chamada pela ISR CKP (FTM3, prioridade 1) a cada dente detectado.
@@ -743,6 +788,11 @@ void ecu_sched_test_reset(void)
 
     for (i = 0U; i < ECU_ANGLE_TABLE_SIZE; ++i) {
         g_angle_table[i].valid = 0U;
+    }
+
+    g_prime_off_pending = 0U;
+    for (i = 0U; i < 4U; ++i) {
+        g_prime_off_cnv[i] = 0U;
     }
 }
 
