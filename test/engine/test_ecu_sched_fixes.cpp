@@ -479,6 +479,83 @@ void test_presync_halfsync_semi_sequential_alternates_banks() {
 }
 
 // =============================================================================
+// IVC Clamp Tests
+// =============================================================================
+
+/* tooth_period_ns = 1 000 000 ns → 1000 RPM (60-tooth wheel)
+ * tooth_ftm0 = 1 875 ticks; ticks_per_rev720 = 225 000 ticks
+ * 1° = 312.5 ticks; 100° = 31 250 ticks; 50° = 15 625 ticks */
+static constexpr uint32_t kToothPeriodNs1000Rpm = 1000000U;
+
+/* Standard closed-valve scenario: soi_lead_deg=62 → SOI after IVC → no clamp. */
+void test_ivc_no_clamp_closed_valve() {
+    test_reset();
+    ECU_Hardware_Init();
+    ecu_sched_test_set_ivc(50U);           /* IVC = 50° ABDC */
+    ecu_sched_test_set_soi_lead_deg(62U);  /* closed-valve: SOI after IVC */
+    ecu_sched_test_set_inj_pw_ticks(31250U);  /* ~100° at 1000 RPM — large PW */
+    ecu_sched_test_set_dwell_ticks(3750U);
+    ecu_sched_test_set_advance_deg(10U);
+
+    trigger_sequential_cycle(kToothPeriodNs1000Rpm, true);
+
+    TEST_ASSERT_EQ_U32(0U, ecu_sched_test_get_ivc_clamp_count());
+}
+
+/* Open-valve injection (soi_lead_deg=180 → SOI=540°, before IVC=590° for cyl1)
+ * with PW > soi_to_ivc (50°) → clamp fires once per cylinder = 4 total. */
+void test_ivc_clamp_open_valve() {
+    test_reset();
+    ECU_Hardware_Init();
+    ecu_sched_test_set_ivc(50U);            /* IVC = 50° ABDC → cycle 590°,50°,230°,410° */
+    ecu_sched_test_set_soi_lead_deg(180U);  /* open-valve: SOI = BDC intake */
+    ecu_sched_test_set_inj_pw_ticks(31250U);  /* ~100° > soi_to_ivc(50°) → clamp */
+    ecu_sched_test_set_dwell_ticks(3750U);
+    ecu_sched_test_set_advance_deg(10U);
+
+    trigger_sequential_cycle(kToothPeriodNs1000Rpm, true);
+
+    /* Each of the 4 cylinders triggers the clamp (all have soi_to_ivc=50°) */
+    TEST_ASSERT_EQ_U32(4U, ecu_sched_test_get_ivc_clamp_count());
+    /* Injection events must still exist (eff_inj_pw_deg = 50° > 0) */
+    TEST_ASSERT_EQ_U8(4U, count_angle_events(ECU_CH_INJ1, ECU_ACT_INJ_ON) +
+                          count_angle_events(ECU_CH_INJ2, ECU_ACT_INJ_ON) +
+                          count_angle_events(ECU_CH_INJ3, ECU_ACT_INJ_ON) +
+                          count_angle_events(ECU_CH_INJ4, ECU_ACT_INJ_ON));
+}
+
+/* SOI exactly at IVC (soi_to_ivc = 0): eff_inj_pw_deg = 0; clamp fires.
+ * For cyl1 tdc=0, IVC=590°: soi_lead_deg = 720-590 = 130° → inj_on_deg=590°=IVC. */
+void test_ivc_exact_boundary() {
+    test_reset();
+    ECU_Hardware_Init();
+    ecu_sched_test_set_ivc(50U);             /* IVC cyl1 = 590° */
+    ecu_sched_test_set_soi_lead_deg(130U);   /* inj_on_deg = (0+720-130)%720 = 590° = IVC */
+    ecu_sched_test_set_inj_pw_ticks(15625U); /* > 0 so clamp evaluates */
+    ecu_sched_test_set_dwell_ticks(3750U);
+    ecu_sched_test_set_advance_deg(10U);
+
+    trigger_sequential_cycle(kToothPeriodNs1000Rpm, true);
+
+    /* soi_to_ivc=0 < 360 and inj_pw_deg > 0 → clamp fires (4 cylinders) */
+    TEST_ASSERT_EQ_U32(4U, ecu_sched_test_get_ivc_clamp_count());
+}
+
+/* After reset, clamp count is 0 and default ivc = 50° (closed-valve produces no clamp). */
+void test_ivc_default_state_after_reset() {
+    test_reset();
+    ECU_Hardware_Init();
+    /* Default ivc=50 and soi_lead=62 (closed-valve) → no clamp */
+    ecu_sched_test_set_inj_pw_ticks(31250U);
+    ecu_sched_test_set_dwell_ticks(3750U);
+    ecu_sched_test_set_advance_deg(10U);
+
+    trigger_sequential_cycle(kToothPeriodNs1000Rpm, true);
+
+    TEST_ASSERT_EQ_U32(0U, ecu_sched_test_get_ivc_clamp_count());
+}
+
+// =============================================================================
 // Main Test Runner
 // =============================================================================
 
@@ -508,6 +585,12 @@ int main() {
     /* CYC-01: guard SCH-02 and default calibration */
     test_cyc01_sch02_guard_blocks_first_boundary();
     test_cyc01_default_calibration_produces_valid_events();
+
+    /* IVC clamp */
+    test_ivc_no_clamp_closed_valve();
+    test_ivc_clamp_open_valve();
+    test_ivc_exact_boundary();
+    test_ivc_default_state_after_reset();
 
     printf("ECU scheduler angle-domain tests completed: %d run, %d failed\n",
            g_tests_run, g_tests_failed);

@@ -457,6 +457,7 @@ void loop() {
                 ems::drv::ckp_seed_confirmed_count(),
                 ems::drv::ckp_seed_rejected_count(),
                 static_cast<uint8_t>(ckp.state));
+            ems::app::ts_update_ivc_diag(::ecu_sched_ivc_clamp_count());
         }
 
         // The ecu_sched queue is filled on CKP tooth hook (schedule_on_tooth),

@@ -7,6 +7,7 @@
 #include "app/can_stack.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
+#include "engine/ecu_sched.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 
@@ -59,6 +60,7 @@ static uint32_t g_rt_seed_loaded_count = 0u;
 static uint32_t g_rt_seed_confirmed_count = 0u;
 static uint32_t g_rt_seed_rejected_count = 0u;
 static uint8_t  g_rt_sync_state_raw = 0u;
+static uint32_t g_rt_ivc_clamp_count = 0u;
 
 static ParseState g_state = ParseState::IDLE;
 static uint8_t g_cmd_page = 0u;
@@ -213,6 +215,7 @@ inline void update_realtime_page() noexcept {
     write_u32_le(&rt.reserved[22], g_rt_seed_confirmed_count);
     write_u32_le(&rt.reserved[26], g_rt_seed_rejected_count);
     rt.reserved[30] = g_rt_sync_state_raw;
+    write_u32_le(&rt.reserved[31], g_rt_ivc_clamp_count);
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }
@@ -249,7 +252,10 @@ inline void sync_page_from_table(uint8_t page) noexcept {
 }
 
 inline void sync_table_from_page(uint8_t page) noexcept {
-    if (page == 0x01u) {
+    if (page == 0x00u) {
+        /* Page 0, byte 0: ivc_abdc_deg */
+        ::ecu_sched_set_ivc(g_page0[0]);
+    } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
         std::memcpy(ems::engine::spark_table, g_page2_spark, sizeof(g_page2_spark));
@@ -410,6 +416,8 @@ inline void parse_byte(uint8_t b) noexcept {
 
 inline void reset_pages() noexcept {
     std::memset(g_page0, 0, sizeof(g_page0));
+    g_page0[0] = 50u;  /* ivc_abdc_deg padrão: 50° ABDC */
+    ::ecu_sched_set_ivc(g_page0[0]);
     std::memcpy(g_page1_ve,    ems::engine::ve_table,    sizeof(g_page1_ve));
     std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));
     std::memset(g_page3_rt, 0, sizeof(g_page3_rt));
@@ -493,6 +501,10 @@ void ts_update_rt_sched_diag(uint32_t late_events,
     g_rt_seed_confirmed_count = seed_confirmed_count;
     g_rt_seed_rejected_count = seed_rejected_count;
     g_rt_sync_state_raw = sync_state_raw;
+}
+
+void ts_update_ivc_diag(uint32_t ivc_clamp_count) noexcept {
+    g_rt_ivc_clamp_count = ivc_clamp_count;
 }
 
 #if defined(EMS_HOST_TEST)

@@ -349,6 +349,25 @@ void ecu_sched_set_presync_ign_mode(uint8_t mode);
 void ecu_sched_reset_diagnostic_counters(void);
 
 /**
+ * @brief Define o ângulo de fechamento da válvula de admissão em graus ABDC.
+ *
+ * O IVC clamp é aplicado apenas em modo open-valve injection (SOI antes do IVC).
+ * Com a estratégia padrão closed-valve (soi_lead_deg=62), o clamp nunca atua.
+ *
+ * @param ivc_abdc_deg  Ângulo IVC em graus após BDC (padrão: 50, faixa: 0–180).
+ */
+void ecu_sched_set_ivc(uint8_t ivc_abdc_deg);
+
+/**
+ * @brief Retorna o número acumulado de eventos onde o IVC clampeou o EOI.
+ *
+ * Incrementado em Calculate_Sequential_Cycle() e calculate_presync_revolution()
+ * sempre que inj_pw_deg for reduzido para respeitar o IVC.
+ * Resetado por ecu_sched_test_reset() em testes de host.
+ */
+uint32_t ecu_sched_ivc_clamp_count(void);
+
+/**
  * @brief Dispara um prime pulse simultâneo em todos os 4 injetores.
  *
  * Projetado para ser chamado UMA VEZ por partida, no 5º dente CKP, pelo loop
@@ -425,6 +444,12 @@ uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 
 /** Return cumulative late event count. */
 uint32_t ecu_sched_test_get_late_event_count(void);
+
+/** Set IVC angle in degrees ABDC for test purposes. */
+void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg);
+
+/** Return cumulative IVC clamp event count. */
+uint32_t ecu_sched_test_get_ivc_clamp_count(void);
 #endif /* EMS_HOST_TEST */
 
 #ifdef __cplusplus

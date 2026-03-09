@@ -718,23 +718,57 @@ offset_ftm0 = (sub_frac × tooth_period_ftm0) >> 8
 | Evento tardio | Dente já passou ao armar | Não arma; incrementa `g_late_event_count` |
 | Perda de sincronização | LOSS_OF_SYNC | Limpa tabela de ângulos; saídas passivas |
 
-### Estratégia de fim de injeção (EOI)
+### Estratégia de fim de injeção (EOI) e IVC
 
-O EOI (End of Injection) é calculado puramente como:
+O EOI (End of Injection) é calculado como:
 
 ```
-EOI_deg = SOI_deg + PW_deg   (mod 720°)
+EOI_deg = SOI_deg + PW_deg_efetivo   (mod 720°)
 ```
 
-**Não há parâmetro de IVC (Intake Valve Closing) implementado.** O scheduler não verifica se o EOI ultrapassa o ângulo de fechamento de admissão.
+onde `PW_deg_efetivo` pode ser menor que `PW_deg` caso o clamp de IVC esteja ativo.
 
-| Implicação | Descrição |
-|------------|-----------|
-| PW curta (< 5 ms @ 1500 RPM) | EOI tipicamente antes do IVC — injeção sobre válvula aberta |
-| PW longa (cranking, carga alta) | EOI pode ultrapassar IVC — injeção parcialmente no coletor fechado |
-| Efeito prático | Aceitável em motores com MAP; leve perda de eficiência de mistura em alta carga |
+#### Parâmetro `ivc_abdc_deg` (page 0, byte 0)
 
-**Ponto de extensão futuro:** adicionar parâmetro de calibração `ivc_deg` e validação `assert(EOI_deg ≤ ivc_deg + margem)` no `cycle_sched.cpp`.
+| Campo | Valor |
+|-------|-------|
+| Tipo | `uint8_t` |
+| Faixa prática | 0 – 180° ABDC |
+| Padrão | 50° ABDC |
+| API | `ecu_sched_set_ivc(uint8_t)` |
+| Persistência | Page 0 da calibração TunerStudio |
+
+O IVC no domínio angular de 720° é calculado por cilindro como:
+
+```
+IVC_cycle_deg = (tdc_deg + 540 + ivc_abdc_deg) % 720
+```
+
+#### Regra de clamp
+
+```c
+soi_to_ivc = (IVC_cycle_deg + 720 - SOI_deg) % 720;
+
+// Clamp ativo apenas em open-valve injection (SOI antes do IVC):
+if (soi_to_ivc < 360 && PW_deg > soi_to_ivc):
+    PW_deg_efetivo = soi_to_ivc   // EOI = IVC
+    g_ivc_clamp_count++
+```
+
+#### Comportamento por modo de injeção
+
+| Modo | Condição | Comportamento |
+|------|----------|---------------|
+| Closed-valve (padrão, `soi_lead_deg` = 62) | `soi_to_ivc ≥ 360°` | Clamp **inativo** — injeção no coletor fechado é intencional |
+| Open-valve (`soi_lead_deg` ≥ 180) | `soi_to_ivc < 360°` | Clamp **ativo** quando `PW_deg > soi_to_ivc` |
+
+A estratégia padrão é *closed-valve*: SOI ocorre 62° antes do TDC de compressão, depois do IVC. O combustível deposita-se no coletor e é aspirado no próximo evento de admissão. O clamp de IVC só entra em ação se o usuário configurar injeção *open-valve* (SOI antes de IVC).
+
+#### Diagnóstico
+
+| Contador | Localização RT | Descrição |
+|----------|---------------|-----------|
+| `ecu_sched_ivc_clamp_count()` | `reserved[31–34]` (uint32_t LE) | Eventos onde EOI foi limitado ao IVC |
 
 ### Double-buffering
 

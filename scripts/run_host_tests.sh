@@ -83,6 +83,7 @@ run_test test_knock \
 
 run_test test_ts_protocol \
   test/app/test_ts_protocol.cpp \
+  test/app/stub_ecu_sched_ivc.cpp \
   src/app/tuner_studio.cpp \
   src/app/can_stack.cpp \
   src/hal/can.cpp \
