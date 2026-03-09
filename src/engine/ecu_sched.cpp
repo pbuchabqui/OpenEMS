@@ -8,7 +8,7 @@
  * overflow count, sem retimestamping.
  *
  * Hardware:
- *   FTM0 @ 120 MHz / PS_16 = 7,5 MHz ~ 133,3 ns/tick, free-running 16-bit.
+ *   FTM0 @ 120 MHz / PS_64 = 1,875 MHz ~ 533,3 ns/tick, free-running 16-bit.
  *   FTM3 @ 120 MHz / PS_2  = 60 MHz  ~ 16,7 ns/tick  (input capture CKP).
  *   PDB0: disparado por FTM0 output trigger (TRGSEL=0x8).
  *   ADC0: hardware averaging 4 amostras.
@@ -57,11 +57,12 @@ static volatile uint32_t g_mock_sim_scgc6;
 #define ECU_CYCLE_DEG   720U
 #define ECU_NUM_CYL     4U
 
-/* Conversão tooth_period_ns → ticks FTM0 (PS=16: 133,33 ns/tick)
- * tooth_ftm0 = tooth_period_ns / 133,33 ≈ tooth_period_ns * 3 / 400
- * Análise: max tooth_period_ns @ 115 RPM = ~8 700 000 ns
- *   8 700 000 * 3 / 400 = 65 250 ticks → cabe em uint16_t (< 65535) ✓ */
-#define TOOTH_NS_TO_FTM0(ns)  ((uint32_t)((ns) * 3U) / 400U)
+/* Conversão tooth_period_ns → ticks FTM0 (PS=64: 533,33 ns/tick)
+ * tooth_ftm0 = tooth_period_ns / 533,33 ≈ tooth_period_ns * 3 / 1600
+ * Análise: max tooth_period_ns @ 29 RPM = ~34 480 000 ns
+ *   34 480 000 * 3 / 1600 = 64 650 ticks → cabe em uint16_t (< 65535) ✓
+ * Piso operacional seguro: 90 RPM → ~11 111 111 ns → 20 833 ticks (margem 3×) */
+#define TOOTH_NS_TO_FTM0(ns)  ((uint32_t)((ns) * 3U) / 1600U)
 
 /* ============================================================================
  * Angle-domain event table (substitui a fila de timestamps)
@@ -83,8 +84,8 @@ volatile uint32_t g_calibration_clamp_count  = 0U;
  * ========================================================================= */
 
 static volatile uint32_t g_advance_deg      = 10U;
-static volatile uint32_t g_dwell_ticks      = 22500U; /* ~3 ms @ PS=16 (7500 tick/ms) */
-static volatile uint32_t g_inj_pw_ticks     = 22500U; /* ~3 ms @ PS=16 */
+static volatile uint32_t g_dwell_ticks      = 5625U;  /* ~3 ms @ PS=64 (1875 tick/ms) */
+static volatile uint32_t g_inj_pw_ticks     = 5625U;  /* ~3 ms @ PS=64 */
 static volatile uint32_t g_soi_lead_deg     = 62U;
 static volatile uint8_t  g_presync_enable   = 1U;
 static volatile uint8_t  g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
@@ -120,17 +121,17 @@ static void exit_critical(void)
 
 /* ============================================================================
  * sanitize_runtime_calibration
- * Limites em domínio angular (PS=16, 7 500 ticks/ms):
- *   dwell   : máx 75 000 ticks (10 ms) — bobina nunca deve carregar mais que isso
- *   inj_pw  : máx 150 000 ticks (20 ms) — PW máxima razoável em marcha lenta
+ * Limites em domínio angular (PS=64, 1 875 ticks/ms):
+ *   dwell   : máx 18 750 ticks (10 ms) — bobina nunca deve carregar mais que isso
+ *   inj_pw  : máx 37 500 ticks (20 ms) — PW máxima razoável em marcha lenta
  *   advance : máx 60° BTDC
  *   soi_lead: máx 359°
  * ========================================================================= */
 
 static void sanitize_runtime_calibration(void)
 {
-    static const uint32_t kMaxDwellTicks  = 75000U;
-    static const uint32_t kMaxInjPwTicks  = 150000U;
+    static const uint32_t kMaxDwellTicks  = 18750U;   /* 10 ms × 1875 ticks/ms */
+    static const uint32_t kMaxInjPwTicks  = 37500U;   /* 20 ms × 1875 ticks/ms */
     static const uint32_t kMinPulseTicks  = 1U;
     static const uint32_t kMaxAdvanceDeg  = 60U;
     uint8_t clamped = 0U;
@@ -342,11 +343,11 @@ void ECU_Hardware_Init(void)
         FTM0->CH[ch].CnV  = 0U;
     }
 
-    /* 2f. Inicia FTM0: system clock, PS=16.
+    /* 2f. Inicia FTM0: system clock, PS=64.
      * Sem TOIE — no domínio angular, overflow do FTM0 é irrelevante.
      * Cada CnV é programado com offset relativo ao CNT atual (< 1 tooth period),
-     * portanto nunca excede 65535 ticks para RPM >= 115. */
-    FTM0->SC = (FTM_SC_CLKS_SYSTEM | FTM_SC_PS_16);
+     * portanto nunca excede 65535 ticks para RPM >= 29 (piso operacional: 90 RPM). */
+    FTM0->SC = (FTM_SC_CLKS_SYSTEM | FTM_SC_PS_64);
 
     /* 3. PDB0: trigger source = FTM0 output trigger (TRGSEL=0x8), CH0 para ADC0 */
     PDB0->SC      = 0U;
@@ -411,7 +412,7 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
     uint32_t soi_lead_deg = g_soi_lead_deg;
 
     /* Converte dwell e PW (tempo em ticks FTM0) para ângulo no ciclo de 720°.
-     * tooth_period_ftm0 = tooth_period_ns / 133,33 ≈ tooth_period_ns * 3 / 400
+     * tooth_period_ftm0 = tooth_period_ns / 533,33 ≈ tooth_period_ns * 3 / 1600
      * ticks_per_rev_720 = tooth_period_ftm0 * 60 posições × 2 revoluções
      * dwell_deg = dwell_ticks * 720 / ticks_per_rev_720 */
     uint32_t tooth_ftm0      = TOOTH_NS_TO_FTM0(snap.tooth_period_ns);
@@ -657,9 +658,9 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     }
 
     /* ── 2. Disparo de eventos que correspondem ao dente atual ───────────── */
-    /* Calcula período do dente em ticks FTM0 (PS=16: 133,33 ns/tick)
-     * tooth_ftm0 = tooth_period_ns * 3 / 400
-     * Clamp a 0xFFFF para cranking muito lento (< ~115 RPM): aceita pequeno
+    /* Calcula período do dente em ticks FTM0 (PS=64: 533,33 ns/tick)
+     * tooth_ftm0 = tooth_period_ns * 3 / 1600
+     * Clamp a 0xFFFF para cranking muito lento (< ~29 RPM): aceita pequeno
      * erro de timing nessa condição extrema em vez de overflow. */
     uint32_t tooth_ftm0 = TOOTH_NS_TO_FTM0(snap.tooth_period_ns);
     if (tooth_ftm0 > 0xFFFFU) { tooth_ftm0 = 0xFFFFU; }

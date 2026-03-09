@@ -110,11 +110,11 @@ static void test_init_ftm0_sc(void)
     test_reset();
     ECU_Hardware_Init();
 
-    /* SC must have CLKS=system, PS=16, NO TOIE (angle domain: overflow not managed) */
+    /* SC must have CLKS=system, PS=64, NO TOIE (angle domain: overflow not managed) */
     uint32_t sc = FTM0->SC;
     TEST_ASSERT_TRUE((sc & FTM_SC_CLKS_SYSTEM) != 0U);
     TEST_ASSERT_TRUE((sc & FTM_SC_TOIE_MASK)   == 0U);   /* no overflow interrupt */
-    TEST_ASSERT_TRUE((sc & 0x7U) == FTM_SC_PS_16);
+    TEST_ASSERT_TRUE((sc & 0x7U) == FTM_SC_PS_64);
 }
 
 static void test_init_ftm0_mod(void)
@@ -275,10 +275,11 @@ static void test_commit_calibration_no_tpr(void)
     test_reset();
     ECU_Hardware_Init();
 
-    ecu_sched_commit_calibration(20U, 22500U, 15000U, 62U);
+    /* PS=64: 1875 ticks/ms. dwell=5625 (3ms), inj_pw=15000 (8ms) — ambos dentro dos limites */
+    ecu_sched_commit_calibration(20U, 5625U, 15000U, 62U);
 
     TEST_ASSERT_EQ_U32(20U,    ecu_sched_test_get_advance_deg());
-    TEST_ASSERT_EQ_U32(22500U, ecu_sched_test_get_dwell_ticks());
+    TEST_ASSERT_EQ_U32(5625U,  ecu_sched_test_get_dwell_ticks());
     TEST_ASSERT_EQ_U32(15000U, ecu_sched_test_get_inj_pw_ticks());
     TEST_ASSERT_EQ_U32(62U,    ecu_sched_test_get_soi_lead_deg());
 }

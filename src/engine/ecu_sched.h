@@ -14,7 +14,7 @@
  *   - FTM0_IRQHandler simplificado: sem TOF, sem gestão de fila
  *
  * Arquitetura:
- *   FTM0 @ 120 MHz / PS_16 = 7,5 MHz ~ 133,3 ns/tick, free-running 16-bit.
+ *   FTM0 @ 120 MHz / PS_64 = 1,875 MHz ~ 533,3 ns/tick, free-running 16-bit.
  *   CH0-CH3 (INJ1-4): Output Compare, Set on match (HIGH = injetor energizado).
  *   CH4-CH7 (IGN4-1): Output Compare, Clear on match (LOW = disparo de bobina).
  *
@@ -124,6 +124,7 @@ typedef struct {
 #define FTM_SC_CLKS_SYSTEM  (1UL << 3U)  /*!< Clock Source: system clock      */
 #define FTM_SC_PS_8         (3UL)        /*!< Prescaler 8   (legacy, não usado) */
 #define FTM_SC_PS_16        (4UL)        /*!< Prescaler 16  (PS[2:0]=100b)    */
+#define FTM_SC_PS_64        (6UL)        /*!< Prescaler 64  (PS[2:0]=110b)    */
 #define FTM_SC_PS_128       (7UL)        /*!< Prescaler 128                   */
 
 /* FTM_MODE bits */
@@ -235,23 +236,23 @@ typedef struct {
 /*!< System clock frequency in Hz */
 #define ECU_SYSTEM_CLOCK_HZ    120000000U
 
-/*!< FTM0 prescaler = 16 → 7,5 MHz → 133,3 ns/tick */
-#define ECU_FTM0_PRESCALER     16U
+/*!< FTM0 prescaler = 64 → 1,875 MHz → 533,3 ns/tick */
+#define ECU_FTM0_PRESCALER     64U
 
 /*!< FTM3 prescaler (unchanged: 2 → 60 MHz → 16,67 ns/tick) */
 #define ECU_FTM3_PRESCALER     2U
 
-/*!< FTM0 effective clock: 120 MHz / 16 = 7 500 000 Hz */
-#define ECU_FTM0_CLOCK_HZ      7500000U
+/*!< FTM0 effective clock: 120 MHz / 64 = 1 875 000 Hz */
+#define ECU_FTM0_CLOCK_HZ      1875000U
 
-/*!< FTM0 ticks per millisecond: 7 500 000 / 1000 = 7500 */
-#define ECU_FTM0_TICKS_PER_MS  7500U
+/*!< FTM0 ticks per millisecond: 1 875 000 / 1000 = 1875 */
+#define ECU_FTM0_TICKS_PER_MS  1875U
 
-/*!< FTM0 ticks per microsecond: 7 500 000 / 1 000 000 ≈ 8 (arredondado para clamping) */
-#define ECU_FTM0_TICKS_PER_US  8U
+/*!< FTM0 ticks per microsecond: 1 875 000 / 1 000 000 ≈ 2 (arredondado; use TICKS_PER_MS/1000 para precisão) */
+#define ECU_FTM0_TICKS_PER_US  2U
 
-/*!< FTM0 nanoseconds per tick: 1e9 / 7 500 000 ≈ 133 ns */
-#define ECU_FTM0_NS_PER_TICK   133U
+/*!< FTM0 nanoseconds per tick: 1e9 / 1 875 000 ≈ 533 ns */
+#define ECU_FTM0_NS_PER_TICK   533U
 
 /*!< FTM3 tick period in nanoseconds: 2 / 120MHz * 1e9 ≈ 17 ns */
 #define ECU_FTM3_TICK_NS       17U
@@ -278,7 +279,7 @@ extern volatile uint32_t g_cycle_schedule_drop_count;
  *
  * Performs in order:
  *   1. Clock gating: FTM0, PDB0, ADC0 via SIM_SCGC6.
- *   2. FTM0: write-protect disable, free-running, MOD=0xFFFF, PS=16.
+ *   2. FTM0: write-protect disable, free-running, MOD=0xFFFF, PS=64.
  *      Sem TOIE — overflow não precisa ser tratado no domínio angular.
  *      CH0-CH3: Output Compare Set-on-match (injectors).
  *      CH4-CH7: Output Compare Clear-on-match (ignition coils).
@@ -302,8 +303,8 @@ void ECU_Hardware_Init(void);
  * instântaneo e eliminando o parâmetro obsoleto do domínio do tempo.
  *
  * @param advance_deg  Avanço de ignição em graus BTDC.
- * @param dwell_ticks  Duração do dwell em ticks FTM0 (PS=16).
- * @param inj_pw_ticks Largura de pulso do injetor em ticks FTM0 (PS=16).
+ * @param dwell_ticks  Duração do dwell em ticks FTM0 (PS=64).
+ * @param inj_pw_ticks Largura de pulso do injetor em ticks FTM0 (PS=64).
  * @param soi_lead_deg Ângulo SOI em graus antes do TDC.
  */
 void ecu_sched_commit_calibration(uint32_t advance_deg,
@@ -317,12 +318,12 @@ void ecu_sched_commit_calibration(uint32_t advance_deg,
 void ecu_sched_set_advance_deg(uint32_t adv);
 
 /**
- * @brief Set dwell duration in FTM0 ticks (PS=16).
+ * @brief Set dwell duration in FTM0 ticks (PS=64).
  */
 void ecu_sched_set_dwell_ticks(uint32_t dwell);
 
 /**
- * @brief Set injector pulse width duration in FTM0 ticks (PS=16).
+ * @brief Set injector pulse width duration in FTM0 ticks (PS=64).
  */
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
 

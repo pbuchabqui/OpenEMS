@@ -315,10 +315,11 @@ void test_commit_calibration_no_tpr() {
     test_reset();
     ECU_Hardware_Init();
 
-    ecu_sched_commit_calibration(15U, 22500U, 12000U, 55U);
+    /* PS=64: 1875 ticks/ms. dwell=5625 (3ms), inj_pw=12000 (6.4ms) — ambos dentro dos limites */
+    ecu_sched_commit_calibration(15U, 5625U, 12000U, 55U);
 
     TEST_ASSERT_EQ_U32(15U,    ecu_sched_test_get_advance_deg());
-    TEST_ASSERT_EQ_U32(22500U, ecu_sched_test_get_dwell_ticks());
+    TEST_ASSERT_EQ_U32(5625U,  ecu_sched_test_get_dwell_ticks());
     TEST_ASSERT_EQ_U32(12000U, ecu_sched_test_get_inj_pw_ticks());
     TEST_ASSERT_EQ_U32(55U,    ecu_sched_test_get_soi_lead_deg());
 }
