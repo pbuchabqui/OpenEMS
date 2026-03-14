@@ -28,12 +28,19 @@ uint8_t table_axis_index(const uint16_t* axis, uint8_t size, uint16_t value) noe
         return static_cast<uint8_t>(last - 1u);
     }
 
-    for (uint8_t i = 0u; i < static_cast<uint8_t>(size - 1u); ++i) {
-        if (value <= axis[i + 1u]) {
-            return i;
+    // Busca binária O(log n): eixos são sempre ordenados crescentes.
+    // Retorna i tal que axis[i] < value <= axis[i+1].
+    uint8_t lo = 0u;
+    uint8_t hi = static_cast<uint8_t>(size - 2u);
+    while (lo < hi) {
+        const uint8_t mid = static_cast<uint8_t>(lo + ((hi - lo) >> 1u));
+        if (value > axis[mid + 1u]) {
+            lo = static_cast<uint8_t>(mid + 1u);
+        } else {
+            hi = mid;
         }
     }
-    return static_cast<uint8_t>(size - 2u);
+    return lo;
 }
 
 uint8_t table_axis_frac_q8(const uint16_t* axis, uint8_t idx, uint16_t value) noexcept {
@@ -60,7 +67,7 @@ uint8_t table_axis_frac_q8(const uint16_t* axis, uint8_t idx, uint16_t value) no
     return static_cast<uint8_t>(frac);
 }
 
-static int32_t lerp_q8_s32(int32_t a, int32_t b, uint8_t frac_q8) noexcept {
+static __attribute__((always_inline)) int32_t lerp_q8_s32(int32_t a, int32_t b, uint8_t frac_q8) noexcept {
     if (frac_q8 == 255u) { return b; }
     return a + (((b - a) * static_cast<int32_t>(frac_q8)) >> 8u);
 }
