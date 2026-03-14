@@ -71,13 +71,11 @@
 #endif
 
 // ── Remapeamento de registradores para STM32H562 ─────────────────────────────
-// Quando TARGET_STM32H562 está definido (mas não EMS_HOST_TEST), inclui
-// ckp_regs_stm32.h que redefine FTM3_C0V → TIM5_CCR1, FTM3_C1V → TIM5_CCR2,
-// GPIOD_PDIR → GPIOA_IDR e TICKS_TO_NS_FACTOR para 62.5 MHz.
-// Em modo EMS_HOST_TEST os mocks definidos abaixo têm prioridade.
-#if defined(TARGET_STM32H562) && !defined(EMS_HOST_TEST)
-#include "drv/ckp_regs_stm32.h"
-#endif
+// FTM3_C0V → TIM5_CCR1 (0x40000C34), FTM3_C1V → TIM5_CCR2 (0x40000C38)
+// GPIOD_PDIR → GPIOA_IDR (0x42020010)
+// TIM5 @ 62.5 MHz (250 MHz / prescaler 4) → 16 ns/tick
+#define TICKS_TO_NS_FACTOR  16000u
+#define TICKS_TO_NS_DIVISOR 1000u
 
 // ── Mock de registradores para testes host ───────────────────────────────────
 #if defined(EMS_HOST_TEST)
@@ -157,12 +155,12 @@ static constexpr uint8_t kHistSize = 3u;
 #define FTM3_C1V      ems_test_ftm3_c1v
 #define GPIOD_PDIR    ems_test_gpiod_pdir
 #else
-#define FTM3_C0V      (*reinterpret_cast<volatile uint32_t*>(0x400B9010u))
-#define FTM3_C1V      (*reinterpret_cast<volatile uint32_t*>(0x400B9018u))
-// PTD_PDIR (§55.2.6): estado atual do pino PTD0 — verificação anti-glitch.
-// FTM3 captura rising edges, mas ruído EMC pode gerar capturas falsas.
-// Verificar que o pino ainda está HIGH garante que é uma borda real.
-#define GPIOD_PDIR    (*reinterpret_cast<volatile uint32_t*>(0x400FF0C0u))
+// STM32H562: TIM5_CCR1 (TIM5 base 0x40000C00, CCR1 offset 0x34)
+#define FTM3_C0V      (*reinterpret_cast<volatile uint32_t*>(0x40000C34u))
+// STM32H562: TIM5_CCR2 (CCR2 offset 0x38)
+#define FTM3_C1V      (*reinterpret_cast<volatile uint32_t*>(0x40000C38u))
+// GPIOA_IDR (GPIOA base 0x42020000, IDR offset 0x10) — verificação anti-glitch PA0
+#define GPIOD_PDIR    (*reinterpret_cast<volatile uint32_t*>(0x42020010u))
 #endif
 
 // ── Estado interno do decodificador ──────────────────────────────────────────
