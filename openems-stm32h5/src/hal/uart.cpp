@@ -1,12 +1,13 @@
 /**
  * @file hal/stm32h562/uart.cpp
- * @brief USART2 @ 115200 baud para STM32H562RGT6
+ * @brief USART3 @ 115200 baud para STM32H562RGT6
  *        Substitui hal/uart.cpp da versão Kinetis (Serial Teensyduino).
  *
- * Pinos: PA2 (USART2_TX), PA3 (USART2_RX) — AF7
+ * Pinos: PB10 (USART3_TX), PB11 (USART3_RX) — AF7
+ * (PA2/PA3 reservados para ADC1_IN3/IN4 — sensores MAP e MAF)
  * (USART1/PA9/PA10 liberados para TIM1_CH2/CH3 — ignição IGN2/IGN3)
  *
- * Clock USART2: APB1 = 125 MHz (HCLK/2)
+ * Clock USART3: APB1 = 125 MHz (HCLK/2)
  * BRR = APB1_CLK / baud = 125,000,000 / 115,200 = 1085
  *   Erro: 125,000,000 / 1085 = 115,207 bps → erro < 0.01%
  *
@@ -31,31 +32,32 @@ static volatile uint8_t g_rx_tail = 0u;
 namespace ems::hal {
 
 void uart0_init(uint32_t baud) noexcept {
-    // ── 1. Habilitar clock USART2 (APB1) ────────────────────────────────
-    RCC_APB1LENR |= RCC_APB1LENR_USART2EN;
+    // ── 1. Habilitar clock USART3 (APB1) ────────────────────────────────
+    RCC_APB1LENR |= RCC_APB1LENR_USART3EN;
 
-    // ── 2. Configurar pinos PA2 (TX) e PA3 (RX) — AF7 ───────────────────
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 2u, GPIO_AF7);
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 3u, GPIO_AF7);
+    // ── 2. Configurar pinos PB10 (TX) e PB11 (RX) — AF7 ─────────────────
+    // PA2/PA3 são ADC1_IN3/IN4 (MAP/MAF); PB10/PB11 sem conflito
+    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 10u, GPIO_AF7);
+    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 11u, GPIO_AF7);
 
-    // ── 3. Configurar USART2 ─────────────────────────────────────────────
-    USART2_CR1 = 0u;   // desabilita durante config
+    // ── 3. Configurar USART3 ─────────────────────────────────────────────
+    USART3_CR1 = 0u;   // desabilita durante config
 
     // BRR: divisão direta (OVER8=0 → 16× oversampling, padrão)
-    USART2_BRR = kApb1ClockHz / baud;
+    USART3_BRR = kApb1ClockHz / baud;
 
-    USART2_CR2 = 0u;   // 1 stop bit, sem LIN, sem clock síncrono
-    USART2_CR3 = 0u;   // sem hardware flow control
+    USART3_CR2 = 0u;   // 1 stop bit, sem LIN, sem clock síncrono
+    USART3_CR3 = 0u;   // sem hardware flow control
 
     // Habilitar RX, TX e periférico
-    USART2_CR1 = USART_CR1_UE | USART_CR1_RE | USART_CR1_TE;
+    USART3_CR1 = USART_CR1_UE | USART_CR1_RE | USART_CR1_TE;
 }
 
 void uart0_poll_rx(uint16_t max_bytes) noexcept {
-    // Drena os bytes disponíveis no USART2 para o buffer circular
+    // Drena os bytes disponíveis no USART3 para o buffer circular
     for (uint16_t i = 0u; i < max_bytes; ++i) {
-        if ((USART2_ISR & USART_ISR_RXNE) == 0u) { break; }
-        const uint8_t byte = static_cast<uint8_t>(USART2_RDR & 0xFFu);
+        if ((USART3_ISR & USART_ISR_RXNE) == 0u) { break; }
+        const uint8_t byte = static_cast<uint8_t>(USART3_RDR & 0xFFu);
         const uint8_t next = static_cast<uint8_t>((g_rx_tail + 1u) % kRxBufSize);
         if (next != g_rx_head) {  // não sobrescreve se buffer cheio
             g_rx_buf[g_rx_tail] = byte;
@@ -65,15 +67,15 @@ void uart0_poll_rx(uint16_t max_bytes) noexcept {
 }
 
 bool uart0_tx_ready() noexcept {
-    return (USART2_ISR & USART_ISR_TXE) != 0u;
+    return (USART3_ISR & USART_ISR_TXE) != 0u;
 }
 
 bool uart0_tx_byte(uint8_t byte) noexcept {
     // Aguarda TXE (transmit register empty) — bloqueante com timeout
     constexpr uint32_t kTimeout = 100000u;
     for (uint32_t i = 0u; i < kTimeout; ++i) {
-        if (USART2_ISR & USART_ISR_TXE) {
-            USART2_TDR = static_cast<uint32_t>(byte);
+        if (USART3_ISR & USART_ISR_TXE) {
+            USART3_TDR = static_cast<uint32_t>(byte);
             return true;
         }
     }

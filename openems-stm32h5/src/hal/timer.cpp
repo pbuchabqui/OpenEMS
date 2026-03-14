@@ -174,12 +174,12 @@ void ftm0_arm_ignition(uint8_t ch, uint16_t ticks) noexcept {
     if (tim_ch == 1u || tim_ch == 2u) {
         uint32_t ccmr = TIM1_CCMR1;
         if (tim_ch == 1u) {
-            ccmr &= ~(0x70u << 4);             // limpa OC1M
+            ccmr &= ~0x70u;                    // limpa OC1M bits [6:4]
             ccmr |= TIM_CCMR1_OC1M_INACTIVE;  // OC1M = 010 (inactive on match)
             TIM1_CCMR1 = ccmr;
             TIM1_CCR1 = ticks;
         } else {
-            ccmr &= ~(0x70u << 12);
+            ccmr &= ~0x7000u;                  // limpa OC2M bits [14:12]
             ccmr |= (2u << 12);                // OC2M = 010
             TIM1_CCMR1 = ccmr;
             TIM1_CCR2 = ticks;

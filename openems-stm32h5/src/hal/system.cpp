@@ -102,11 +102,10 @@ void system_stm32_init(void) noexcept {
     while ((RCC_CFGR1 & (7u << 3)) != RCC_CFGR1_SWS_PLL1) { /* aguarda */ }
 
     // ── 7. Habilitar clocks dos GPIOs ────────────────────────────────────
+    // STM32H562RGT6 (LQFP64): apenas GPIOA/B/C disponíveis no package
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN
                   | RCC_AHB2ENR1_GPIOBEN
-                  | RCC_AHB2ENR1_GPIOCEN
-                  | RCC_AHB2ENR1_GPIODEN
-                  | RCC_AHB2ENR1_GPIOEEN;
+                  | RCC_AHB2ENR1_GPIOCEN;
 
     // ── 8. Configurar SysTick @ 1 ms ─────────────────────────────────────
     // ARM SysTick registers (CMSIS):

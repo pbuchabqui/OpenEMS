@@ -353,6 +353,13 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define ADC_ISR_EOC    (1u << 2)
 #define ADC_ISR_EOS    (1u << 3)
 
+// ADC_IER — interrupt enable register (offset 0x04)
+#define ADC_IER_OFF    0x04UL
+#define ADC_IER_EOCIE  (1u << 2)   // End of conversion interrupt enable
+#define ADC_IER_EOSIE  (1u << 3)   // End of sequence interrupt enable
+#define ADC1_IER  STM32_REG32(ADC1_BASE + ADC_IER_OFF)
+#define ADC2_IER  STM32_REG32(ADC2_BASE + ADC_IER_OFF)
+
 // ADC_CFGR1 bits
 #define ADC_CFGR1_RES_12BIT  (0u << 2)
 #define ADC_CFGR1_RES_10BIT  (1u << 2)
@@ -424,7 +431,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define USART1_RDR STM32_REG32(USART1_BASE + USART_RDR_OFF)
 #define USART1_TDR STM32_REG32(USART1_BASE + USART_TDR_OFF)
 
-// USART2 — TunerStudio UART (PA2=TX, PA3=RX, AF7) — PA9/PA10 liberados para TIM1_CH2/CH3
+// USART2 — registradores (reservado, não usado para TunerStudio — PA2/PA3 são ADC)
 #define USART2_CR1 STM32_REG32(USART2_BASE + USART_CR1_OFF)
 #define USART2_CR2 STM32_REG32(USART2_BASE + USART_CR2_OFF)
 #define USART2_CR3 STM32_REG32(USART2_BASE + USART_CR3_OFF)
@@ -433,6 +440,18 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define USART2_ICR STM32_REG32(USART2_BASE + USART_ICR_OFF)
 #define USART2_RDR STM32_REG32(USART2_BASE + USART_RDR_OFF)
 #define USART2_TDR STM32_REG32(USART2_BASE + USART_TDR_OFF)
+
+// USART3 — TunerStudio UART (PB10=TX, PB11=RX, AF7) — PA2/PA3 livres para ADC1 MAP/MAF
+#define USART3_BASE  0x40004800UL
+#define RCC_APB1LENR_USART3EN  (1u << 18)
+#define USART3_CR1 STM32_REG32(USART3_BASE + USART_CR1_OFF)
+#define USART3_CR2 STM32_REG32(USART3_BASE + USART_CR2_OFF)
+#define USART3_CR3 STM32_REG32(USART3_BASE + USART_CR3_OFF)
+#define USART3_BRR STM32_REG32(USART3_BASE + USART_BRR_OFF)
+#define USART3_ISR STM32_REG32(USART3_BASE + USART_ISR_OFF)
+#define USART3_ICR STM32_REG32(USART3_BASE + USART_ICR_OFF)
+#define USART3_RDR STM32_REG32(USART3_BASE + USART_RDR_OFF)
+#define USART3_TDR STM32_REG32(USART3_BASE + USART_TDR_OFF)
 
 // USART_CR1 bits
 #define USART_CR1_UE    (1u << 0)
