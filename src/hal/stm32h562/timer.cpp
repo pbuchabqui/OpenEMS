@@ -111,9 +111,9 @@ void ftm0_init(void) {
     TIM1_ARR = 0xFFFFu;                    // 16-bit free-running (compat. com FTM0)
     TIM1_EGR = 1u;                         // UG: aplica PSC
 
-    // CH1-CH4: Output Compare, sem saída por padrão (modo frozen até arm_ignition)
+    // CH1-CH4: Output Compare, modo frozen até ftm0_arm_ignition() ser chamado
     TIM1_CCMR1 = TIM_CCMR1_OC1M_FROZEN | TIM_CCMR1_OC2M_FROZEN;
-    TIM1_CCMR2 = TIM_CCMR2_OC3M_PWM1   | TIM_CCMR2_OC4M_PWM1;  // PH: config PWM inicial
+    TIM1_CCMR2 = 0u;   // OC3M=FROZEN, OC4M=FROZEN (0 = frozen em todos os campos)
     // Saídas habilitadas, polaridade ativa-alta
     TIM1_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E;
     // MOE: main output enable (TIM1 advanced requer este bit)
@@ -184,13 +184,13 @@ void ftm0_arm_ignition(uint8_t ch, uint16_t ticks) noexcept {
     } else {
         uint32_t ccmr = TIM1_CCMR2;
         if (tim_ch == 3u) {
-            ccmr &= ~(0x70u << 4);
-            ccmr |= (2u << 4);                 // OC3M = 010
+            ccmr &= ~0x70u;                    // limpa OC3M bits [6:4]
+            ccmr |= (2u << 4);                 // OC3M = 010 (inactive on match)
             TIM1_CCMR2 = ccmr;
             TIM1_CCR3 = ticks;
         } else {
-            ccmr &= ~(0x70u << 12);
-            ccmr |= (2u << 12);                // OC4M = 010
+            ccmr &= ~0x7000u;                  // limpa OC4M bits [14:12]
+            ccmr |= (2u << 12);                // OC4M = 010 (inactive on match)
             TIM1_CCMR2 = ccmr;
             TIM1_CCR4 = ticks;
         }
@@ -309,8 +309,9 @@ extern "C" void TIM5_IRQHandler(void) {
 extern "C" void FTM0_IRQHandler(void);   // implementado em ecu_sched.cpp
 
 extern "C" void TIM1_CC_IRQHandler(void) {
+    const uint32_t sr = TIM1_SR;
+    TIM1_SR = ~sr;       // limpa apenas os flags que dispararam esta IRQ (W0C)
     FTM0_IRQHandler();   // delega para o scheduler existente
-    TIM1_SR = 0u;        // limpa todos os flags de canal
 }
 
 // Stub para FTM3_IRQHandler — não usado no STM32 (substituído por TIM5_IRQHandler)
