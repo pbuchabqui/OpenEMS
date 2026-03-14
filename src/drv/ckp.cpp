@@ -70,6 +70,15 @@
 #include "ftm.h"
 #endif
 
+// ── Remapeamento de registradores para STM32H562 ─────────────────────────────
+// Quando TARGET_STM32H562 está definido (mas não EMS_HOST_TEST), inclui
+// ckp_regs_stm32.h que redefine FTM3_C0V → TIM5_CCR1, FTM3_C1V → TIM5_CCR2,
+// GPIOD_PDIR → GPIOA_IDR e TICKS_TO_NS_FACTOR para 62.5 MHz.
+// Em modo EMS_HOST_TEST os mocks definidos abaixo têm prioridade.
+#if defined(TARGET_STM32H562) && !defined(EMS_HOST_TEST)
+#include "drv/ckp_regs_stm32.h"
+#endif
+
 // ── Mock de registradores para testes host ───────────────────────────────────
 #if defined(EMS_HOST_TEST)
 volatile uint32_t ems_test_ftm3_c0v  = 0u;
@@ -210,7 +219,13 @@ static constexpr uint16_t kSeedCamConfirmMaxTeeth = 70u;
 // Margem restante: ~3× antes de overflow. Se o prescaler do FTM3 mudar para
 // valores maiores que 2, recalcular com o novo fator de conversão.
 inline uint32_t ticks_to_ns(uint16_t ticks) noexcept {
+    // Kinetis FTM3: 120 MHz / PS=2 = 60.0 MHz → 16.667 ns/tick → factor = 16667
+    // STM32H562 TIM5: 250 MHz / PS=4 = 62.5 MHz → 16.000 ns/tick → factor = 16000
+#if defined(TICKS_TO_NS_FACTOR)
+    return (static_cast<uint32_t>(ticks) * TICKS_TO_NS_FACTOR) / TICKS_TO_NS_DIVISOR;
+#else
     return (static_cast<uint32_t>(ticks) * 16667u) / 1000u;
+#endif
 }
 
 // Calcula RPM × 10 a partir do período de um dente (nanossegundos).
