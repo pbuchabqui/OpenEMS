@@ -89,7 +89,11 @@ volatile uint32_t ems_test_gpiod_pdir = 0u;
 // WProgram.h / core_pins.h. Em host tests a macro é indefinida; defini-la vazia
 // garante que o código compile sem modificações.
 #if !defined(FASTRUN)
-#define FASTRUN
+#  if defined(TARGET_STM32H562) && !defined(EMS_HOST_TEST)
+#    define FASTRUN  __attribute__((optimize("O3")))
+#  else
+#    define FASTRUN
+#  endif
 #endif
 
 namespace {
@@ -230,10 +234,11 @@ inline uint32_t ticks_to_ns(uint16_t ticks) noexcept {
 // Cada dente ocupa 6° = 1/60 de revolução (roda 60-2: 60 posições uniformes).
 // rpm × 10 = (60 s/min × 10⁹ ns/s × 10) / (60 × tooth_period_ns)
 //           = 600.000.000.000 / (60 × tooth_period_ns)
+//           = 10.000.000.000 / tooth_period_ns   ← pré-calculado para evitar mul 64-bit na ISR
+static constexpr uint64_t kRpmNumerator = 10000000000ULL;
 inline uint32_t rpm_x10_from_period_ns(uint32_t period_ns) noexcept {
     if (period_ns == 0u) { return 0u; }
-    return static_cast<uint32_t>(
-        600000000000ULL / (static_cast<uint64_t>(kTeethPositionsPerRev) * period_ns));
+    return static_cast<uint32_t>(kRpmNumerator / period_ns);
 }
 
 // Insere novo período na janela deslizante (shift FIFO).

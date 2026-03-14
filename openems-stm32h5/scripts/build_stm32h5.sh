@@ -54,7 +54,7 @@ if command -v "${ARM_CXX}" &>/dev/null; then
         -mthumb \
         -mfpu=fpv5-sp-d16 \
         -mfloat-abi=hard \
-        -Os \
+        -O2 \
         -c \
         "${STM32_SRCS[@]}" \
         -o /dev/null 2>&1 || {

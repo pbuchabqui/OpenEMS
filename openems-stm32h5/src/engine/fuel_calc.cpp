@@ -287,7 +287,7 @@ uint32_t calc_final_pw_us(uint32_t base_pw_us,
                           uint16_t corr_iat_x256,
                           uint16_t dead_time_us) noexcept {
     const uint64_t num = static_cast<uint64_t>(base_pw_us) * corr_clt_x256 * corr_iat_x256;
-    const uint32_t corrected = static_cast<uint32_t>(num / (256u * 256u));
+    const uint32_t corrected = static_cast<uint32_t>(num >> 16u);  // ÷(256×256) via shift garantido
     return corrected + dead_time_us;
 }
 
