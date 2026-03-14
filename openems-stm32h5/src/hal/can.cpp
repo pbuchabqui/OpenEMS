@@ -23,7 +23,8 @@
  *   Para 500 kbps exato: NBRP+1 = 5, total Tq = 25
  *   NTSEG1 = 18, NTSEG2 = 6: 25 × 80 ns = 2000 ns → 500 kbps ✓
  *
- * Pinos: PA11 (FDCAN1_RX), PA12 (FDCAN1_TX) — AF9
+ * Pinos: PB8 (FDCAN1_RX), PB9 (FDCAN1_TX) — AF9
+ * (PA11 liberado para TIM1_CH4 — ignição IGN4)
  *
  * Message RAM layout (FDCAN_SRAM @ 0x4000AC00):
  *   Offset 0x000: Std ID filters  (2 × 4 bytes)
@@ -82,9 +83,10 @@ void can0_init() noexcept {
     // ── 1. Habilitar clock FDCAN1 ────────────────────────────────────────
     RCC_APB1LENR |= RCC_APB1LENR_FDCAN1EN;
 
-    // ── 2. Configurar pinos PA11 (RX) e PA12 (TX) — AF9 ─────────────────
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 11u, GPIO_AF9);
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 12u, GPIO_AF9);
+    // ── 2. Configurar pinos PB8 (RX) e PB9 (TX) — AF9 ───────────────────
+    // PA11 liberado para TIM1_CH4 (IGN4); FDCAN1 em PB8/PB9 (sem conflito)
+    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 8u, GPIO_AF9);
+    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 9u, GPIO_AF9);
 
     // ── 3. Entrar em modo de inicialização ───────────────────────────────
     FDCAN1_CCCR |= FDCAN_CCCR_INIT;
@@ -92,11 +94,13 @@ void can0_init() noexcept {
     FDCAN1_CCCR |= FDCAN_CCCR_CCE;   // habilita configuração
 
     // ── 4. Bit timing 500 kbps a 62.5 MHz ────────────────────────────────
-    // NBRP+1=5, Tq=80ns, NTSEG1=18 (19 Tq), NTSEG2=5 (6 Tq) → 25 Tq → 500 kbps
+    // NBRP+1=5, Tq=80ns, NTSEG1=17 (18 Tq), NTSEG2=5 (6 Tq) → 25 Tq → 500 kbps
+    // Bit time = 1(sync) + 18(TSEG1) + 6(TSEG2) = 25 Tq × 80 ns = 2000 ns → 500 kbps ✓
+    // Sample point = (1+18)/25 = 76% (dentro do range CAN spec 75–87.5%)
     // FDCAN_NBTP: NSJW[6:0] @ [31:25], NBRP[8:0] @ [24:16], NTSEG1[7:0] @ [15:8], NTSEG2[6:0] @ [6:0]
     FDCAN1_NBTP = ((4u  & 0x7Fu) << 25)   // NSJW = 4 (SJW = 4 Tq)
                | ((4u  & 0x1FFu) << 16)   // NBRP = 4 (prescaler = NBRP+1 = 5)
-               | ((18u & 0xFFu)  << 8)    // NTSEG1 = 18 (Phase_Seg1+Prop = 19 Tq)
+               | ((17u & 0xFFu)  << 8)    // NTSEG1 = 17 (TSEG1 = 18 Tq) → 500 kbps
                | ((5u  & 0x7Fu)  << 0);   // NTSEG2 = 5 (Phase_Seg2 = 6 Tq)
 
     // ── 5. Configurar Message RAM ─────────────────────────────────────────

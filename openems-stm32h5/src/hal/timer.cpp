@@ -11,8 +11,10 @@
  *     NVIC FTM3 prio 1    → NVIC TIM5 prio 1
  *
  *   FTM0 (OC ignição/injeção) → TIM1 (advanced, AF1)
- *     CH4-CH7 (IGN1-4)    → TIM1_CH1-CH4 (PE9,PE11,PE13,PE14, AF1)
+ *     CH4-CH7 (IGN1-4)    → TIM1_CH1-CH4 (PA8,PA9,PA10,PA11, AF1)
  *     NVIC FTM0 prio 4    → NVIC TIM1_CC prio 4
+ *     (PA9/PA10 liberados: USART movido USART1→USART2 em PA2/PA3)
+ *     (PA11 liberado: FDCAN1 movido para PB8/PB9)
  *
  *   FTM1 (PWM IACV + WG)  → TIM3 (AF2)
  *     CH0 (PTA8 → IACV)   → TIM3_CH1 (PA6, AF2)
@@ -98,12 +100,13 @@ void ftm0_init(void) {
     // ── 1. Habilitar clock TIM1 ─────────────────────────────────────────
     RCC_APB2ENR |= RCC_APB2ENR_TIM1EN;
 
-    // ── 2. Configurar pinos TIM1_CH1-CH4 em PE9, PE11, PE13, PE14 ──────
-    // AF1 = TIM1/TIM2 em PE9, PE11, PE13, PE14
-    gpio_set_af(&GPIOE_MODER, nullptr, &GPIOE_AFRH, &GPIOE_OSPEEDR,  9u, GPIO_AF1);
-    gpio_set_af(&GPIOE_MODER, nullptr, &GPIOE_AFRH, &GPIOE_OSPEEDR, 11u, GPIO_AF1);
-    gpio_set_af(&GPIOE_MODER, nullptr, &GPIOE_AFRH, &GPIOE_OSPEEDR, 13u, GPIO_AF1);
-    gpio_set_af(&GPIOE_MODER, nullptr, &GPIOE_AFRH, &GPIOE_OSPEEDR, 14u, GPIO_AF1);
+    // ── 2. Configurar pinos TIM1_CH1-CH4 em PA8, PA9, PA10, PA11 ───────
+    // AF1 = TIM1 em PA8 (CH1), PA9 (CH2), PA10 (CH3), PA11 (CH4)
+    // NOTA: USART movido para USART2 (PA2/PA3); FDCAN1 movido para PB8/PB9
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR,  8u, GPIO_AF1);
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR,  9u, GPIO_AF1);
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 10u, GPIO_AF1);
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 11u, GPIO_AF1);
 
     // ── 3. Configurar TIM1 ───────────────────────────────────────────────
     TIM1_CR1 = 0u;
@@ -111,9 +114,9 @@ void ftm0_init(void) {
     TIM1_ARR = 0xFFFFu;                    // 16-bit free-running (compat. com FTM0)
     TIM1_EGR = 1u;                         // UG: aplica PSC
 
-    // CH1-CH4: Output Compare, sem saída por padrão (modo frozen até arm_ignition)
+    // CH1-CH4: Output Compare, modo frozen até ftm0_arm_ignition() ser chamado
     TIM1_CCMR1 = TIM_CCMR1_OC1M_FROZEN | TIM_CCMR1_OC2M_FROZEN;
-    TIM1_CCMR2 = TIM_CCMR2_OC3M_PWM1   | TIM_CCMR2_OC4M_PWM1;  // PH: config PWM inicial
+    TIM1_CCMR2 = 0u;   // OC3M=FROZEN, OC4M=FROZEN (0 = frozen em todos os campos)
     // Saídas habilitadas, polaridade ativa-alta
     TIM1_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E;
     // MOE: main output enable (TIM1 advanced requer este bit)
@@ -171,12 +174,12 @@ void ftm0_arm_ignition(uint8_t ch, uint16_t ticks) noexcept {
     if (tim_ch == 1u || tim_ch == 2u) {
         uint32_t ccmr = TIM1_CCMR1;
         if (tim_ch == 1u) {
-            ccmr &= ~(0x70u << 4);             // limpa OC1M
+            ccmr &= ~0x70u;                    // limpa OC1M bits [6:4]
             ccmr |= TIM_CCMR1_OC1M_INACTIVE;  // OC1M = 010 (inactive on match)
             TIM1_CCMR1 = ccmr;
             TIM1_CCR1 = ticks;
         } else {
-            ccmr &= ~(0x70u << 12);
+            ccmr &= ~0x7000u;                  // limpa OC2M bits [14:12]
             ccmr |= (2u << 12);                // OC2M = 010
             TIM1_CCMR1 = ccmr;
             TIM1_CCR2 = ticks;
@@ -184,13 +187,13 @@ void ftm0_arm_ignition(uint8_t ch, uint16_t ticks) noexcept {
     } else {
         uint32_t ccmr = TIM1_CCMR2;
         if (tim_ch == 3u) {
-            ccmr &= ~(0x70u << 4);
-            ccmr |= (2u << 4);                 // OC3M = 010
+            ccmr &= ~0x70u;                    // limpa OC3M bits [6:4]
+            ccmr |= (2u << 4);                 // OC3M = 010 (inactive on match)
             TIM1_CCMR2 = ccmr;
             TIM1_CCR3 = ticks;
         } else {
-            ccmr &= ~(0x70u << 12);
-            ccmr |= (2u << 12);                // OC4M = 010
+            ccmr &= ~0x7000u;                  // limpa OC4M bits [14:12]
+            ccmr |= (2u << 12);                // OC4M = 010 (inactive on match)
             TIM1_CCMR2 = ccmr;
             TIM1_CCR4 = ticks;
         }
@@ -309,8 +312,9 @@ extern "C" void TIM5_IRQHandler(void) {
 extern "C" void FTM0_IRQHandler(void);   // implementado em ecu_sched.cpp
 
 extern "C" void TIM1_CC_IRQHandler(void) {
+    const uint32_t sr = TIM1_SR;
+    TIM1_SR = ~sr;       // limpa apenas os flags que dispararam esta IRQ (W0C)
     FTM0_IRQHandler();   // delega para o scheduler existente
-    TIM1_SR = 0u;        // limpa todos os flags de canal
 }
 
 // Stub para FTM3_IRQHandler — não usado no STM32 (substituído por TIM5_IRQHandler)

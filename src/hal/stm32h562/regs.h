@@ -33,6 +33,7 @@
 #define TIM4_BASE    0x40000800UL
 #define TIM5_BASE    0x40000C00UL
 #define TIM6_BASE    0x40001000UL
+#define USART2_BASE  0x40004400UL
 
 // AHB1
 #define ADC1_BASE    0x42028000UL
@@ -352,6 +353,13 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define ADC_ISR_EOC    (1u << 2)
 #define ADC_ISR_EOS    (1u << 3)
 
+// ADC_IER — interrupt enable register (offset 0x04)
+#define ADC_IER_OFF    0x04UL
+#define ADC_IER_EOCIE  (1u << 2)   // End of conversion interrupt enable
+#define ADC_IER_EOSIE  (1u << 3)   // End of sequence interrupt enable
+#define ADC1_IER  STM32_REG32(ADC1_BASE + ADC_IER_OFF)
+#define ADC2_IER  STM32_REG32(ADC2_BASE + ADC_IER_OFF)
+
 // ADC_CFGR1 bits
 #define ADC_CFGR1_RES_12BIT  (0u << 2)
 #define ADC_CFGR1_RES_10BIT  (1u << 2)
@@ -404,7 +412,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define FDCAN_CCCR_FDOE  (1u << 8)    // FD Operation Enable
 #define FDCAN_CCCR_BRSE  (1u << 9)    // Bit Rate Switch Enable
 
-// ─── USART1 (RM0481 §49) ──────────────────────────────────────────────────────
+// ─── USART1 / USART2 (RM0481 §49) ────────────────────────────────────────────
 #define USART_CR1_OFF  0x00UL
 #define USART_CR2_OFF  0x04UL
 #define USART_CR3_OFF  0x08UL
@@ -422,6 +430,28 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define USART1_ICR STM32_REG32(USART1_BASE + USART_ICR_OFF)
 #define USART1_RDR STM32_REG32(USART1_BASE + USART_RDR_OFF)
 #define USART1_TDR STM32_REG32(USART1_BASE + USART_TDR_OFF)
+
+// USART2 — registradores (reservado, não usado para TunerStudio — PA2/PA3 são ADC)
+#define USART2_CR1 STM32_REG32(USART2_BASE + USART_CR1_OFF)
+#define USART2_CR2 STM32_REG32(USART2_BASE + USART_CR2_OFF)
+#define USART2_CR3 STM32_REG32(USART2_BASE + USART_CR3_OFF)
+#define USART2_BRR STM32_REG32(USART2_BASE + USART_BRR_OFF)
+#define USART2_ISR STM32_REG32(USART2_BASE + USART_ISR_OFF)
+#define USART2_ICR STM32_REG32(USART2_BASE + USART_ICR_OFF)
+#define USART2_RDR STM32_REG32(USART2_BASE + USART_RDR_OFF)
+#define USART2_TDR STM32_REG32(USART2_BASE + USART_TDR_OFF)
+
+// USART3 — TunerStudio UART (PB10=TX, PB11=RX, AF7) — PA2/PA3 livres para ADC1 MAP/MAF
+#define USART3_BASE  0x40004800UL
+#define RCC_APB1LENR_USART3EN  (1u << 18)
+#define USART3_CR1 STM32_REG32(USART3_BASE + USART_CR1_OFF)
+#define USART3_CR2 STM32_REG32(USART3_BASE + USART_CR2_OFF)
+#define USART3_CR3 STM32_REG32(USART3_BASE + USART_CR3_OFF)
+#define USART3_BRR STM32_REG32(USART3_BASE + USART_BRR_OFF)
+#define USART3_ISR STM32_REG32(USART3_BASE + USART_ISR_OFF)
+#define USART3_ICR STM32_REG32(USART3_BASE + USART_ICR_OFF)
+#define USART3_RDR STM32_REG32(USART3_BASE + USART_RDR_OFF)
+#define USART3_TDR STM32_REG32(USART3_BASE + USART_TDR_OFF)
 
 // USART_CR1 bits
 #define USART_CR1_UE    (1u << 0)
@@ -515,11 +545,13 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
     *ipr = (*ipr & ~(0xFFu << sh)) | (static_cast<uint32_t>(prio) << (sh + 4u));
 }
 
-// IRQ numbers — STM32H562 (RM0481 §Table 87)
-#define IRQ_TIM5         50u   // TIM5 global (CKP input capture)
-#define IRQ_TIM1_CC      27u   // TIM1 capture/compare (ignição/injeção)
-#define IRQ_TIM3         29u   // TIM3 (PWM IACV/wastegate — não usa IRQ)
-#define IRQ_TIM4         30u   // TIM4 (PWM VVT — não usa IRQ)
-#define IRQ_ADC1_2       18u   // ADC1 e ADC2
-#define IRQ_FDCAN1_IT0   19u   // FDCAN1 interrupt line 0
-#define IRQ_SysTick      15u   // SysTick (fixo, ARM core)
+// IRQ numbers — STM32H562 (RM0481 §Table 87 / cmsis-device-h5 stm32h562xx.h)
+// Valores confirmados contra TIM5_IRQn=48, TIM1_CC_IRQn=44, etc.
+#define IRQ_TIM5         48u   // TIM5 global (CKP input capture)
+#define IRQ_TIM1_CC      44u   // TIM1 capture/compare (ignição/injeção)
+#define IRQ_TIM3         46u   // TIM3 (PWM IACV/wastegate — não usa IRQ)
+#define IRQ_TIM4         47u   // TIM4 (PWM VVT — não usa IRQ)
+#define IRQ_ADC1         37u   // ADC1 (IRQ separado do ADC2)
+#define IRQ_ADC2         69u   // ADC2 (IRQ separado do ADC1)
+#define IRQ_FDCAN1_IT0   39u   // FDCAN1 interrupt line 0
+// SysTick não usa NVIC — configurado via SCB->SHP diretamente (ARM core)
