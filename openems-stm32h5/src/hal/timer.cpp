@@ -11,8 +11,10 @@
  *     NVIC FTM3 prio 1    → NVIC TIM5 prio 1
  *
  *   FTM0 (OC ignição/injeção) → TIM1 (advanced, AF1)
- *     CH4-CH7 (IGN1-4)    → TIM1_CH1-CH4 (PE9,PE11,PE13,PE14, AF1)
+ *     CH4-CH7 (IGN1-4)    → TIM1_CH1-CH4 (PA8,PA9,PA10,PA11, AF1)
  *     NVIC FTM0 prio 4    → NVIC TIM1_CC prio 4
+ *     (PA9/PA10 liberados: USART movido USART1→USART2 em PA2/PA3)
+ *     (PA11 liberado: FDCAN1 movido para PB8/PB9)
  *
  *   FTM1 (PWM IACV + WG)  → TIM3 (AF2)
  *     CH0 (PTA8 → IACV)   → TIM3_CH1 (PA6, AF2)
@@ -98,12 +100,13 @@ void ftm0_init(void) {
     // ── 1. Habilitar clock TIM1 ─────────────────────────────────────────
     RCC_APB2ENR |= RCC_APB2ENR_TIM1EN;
 
-    // ── 2. Configurar pinos TIM1_CH1-CH4 em PE9, PE11, PE13, PE14 ──────
-    // AF1 = TIM1/TIM2 em PE9, PE11, PE13, PE14
-    gpio_set_af(&GPIOE_MODER, nullptr, &GPIOE_AFRH, &GPIOE_OSPEEDR,  9u, GPIO_AF1);
-    gpio_set_af(&GPIOE_MODER, nullptr, &GPIOE_AFRH, &GPIOE_OSPEEDR, 11u, GPIO_AF1);
-    gpio_set_af(&GPIOE_MODER, nullptr, &GPIOE_AFRH, &GPIOE_OSPEEDR, 13u, GPIO_AF1);
-    gpio_set_af(&GPIOE_MODER, nullptr, &GPIOE_AFRH, &GPIOE_OSPEEDR, 14u, GPIO_AF1);
+    // ── 2. Configurar pinos TIM1_CH1-CH4 em PA8, PA9, PA10, PA11 ───────
+    // AF1 = TIM1 em PA8 (CH1), PA9 (CH2), PA10 (CH3), PA11 (CH4)
+    // NOTA: USART movido para USART2 (PA2/PA3); FDCAN1 movido para PB8/PB9
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR,  8u, GPIO_AF1);
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR,  9u, GPIO_AF1);
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 10u, GPIO_AF1);
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 11u, GPIO_AF1);
 
     // ── 3. Configurar TIM1 ───────────────────────────────────────────────
     TIM1_CR1 = 0u;
