@@ -63,22 +63,22 @@ optimized specifically for the STM32H562RGT6 microcontroller.
 Strict layering ensures modularity and testability:
 
 ```
-┌──────────────────────────────┐
-│  APP (app/)                   │  Protocols, communication
-│  - TunerStudio (UART + USB)   │
-│  - CAN FD stack               │
-├──────────────────────────────┤
-│  ENGINE (engine/)             │  Control algorithms
-│  - Fuel, ignition, knock      │
-│  - Auxiliaries, calibration   │
-├──────────────────────────────┤
-│  DRV (drv/)                   │  Drivers
-│  - CKP decode, sensors        │
-│  - Scheduler (angle-domain)   │
-├──────────────────────────────┤
-│  HAL (hal/)                   │  Hardware abstraction
-│  - STM32H562-specific impl.   │
-└──────────────────────────────┘
+┌────────────────────────────────────┐
+│  APP (app/)                         │  Protocols, communication
+│  - TunerStudio (UART + USB)         │
+│  - CAN FD stack                     │
+├────────────────────────────────────┤
+│  ENGINE (engine/)                   │  Control algorithms
+│  - Fuel, ignition, knock            │
+│  - Auxiliaries, calibration         │
+├────────────────────────────────────┤
+│  DRV (drv/)                         │  Drivers
+│  - CKP decode, sensors              │
+│  - Scheduler (angle-domain)         │
+├────────────────────────────────────┤
+│  HAL (hal/)                         │  Hardware abstraction
+│  - STM32H562-specific impl.         │
+└────────────────────────────────────┘
          ↓
    STM32H562RGT6 Hardware
 ```
@@ -93,7 +93,7 @@ Strict layering ensures modularity and testability:
 ### Hardware Peripherals
 
 | Peripheral | Purpose | IRQ/Priority |
-|-----------|---------|--------------|
+|-----------|---------|---------------|
 | **TIM1** | Injection/Ignition events (output compare) | Configured |
 | **TIM5** | CKP input capture (60-2 wheel decode) | High |
 | **FDCAN1** | CAN FD bus (WBO2 RX, diagnostics TX) | Normal |
@@ -244,7 +244,7 @@ namespace ems::hal { ... }
 ### Variable Prefixes
 
 | Prefix | Meaning | Example |
-|--------|---------|---------|
+|--------|---------|----------|
 | `g_` | File-scope global | `g_fuel_correction_x256` |
 | `k` | Compile-time constant | `kMaxTableRows` |
 | `s_` | Static local (rare) | `s_init_done` |
@@ -254,7 +254,7 @@ namespace ems::hal { ... }
 **Always suffix physical quantities**:
 
 | Suffix | Meaning | Example |
-|--------|---------|---------|
+|--------|---------|----------|
 | `_x10` | Value × 10 | `rpm_x10 = 6000` (600.0 RPM) |
 | `_x100` | Value × 100 | `battery_x100 = 1320` (13.2V) |
 | `_x256` | Value × 256 (Q8.8) | `corr_x256 = 256` (1.0 ratio) |
