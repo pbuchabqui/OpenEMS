@@ -1,43 +1,42 @@
 # OpenEMS — AI Assistant Guide
 
-This document describes the codebase structure, conventions, and development workflows
-for **OpenEMS**, an embedded engine management system targeting the Teensy 3.5
-microcontroller (NXP MK64FX512VMD12, ARM Cortex-M4 @ 120 MHz).
+**⭐ PRIMARY FOCUS**: OpenEMS-v3 (Phases 1-2 Complete)  
+**📍 Target Hardware**: STM32H562RGT6 (250 MHz ARM Cortex-M33)  
+**📊 Status**: ✅ Foundation Complete | 📋 Phases 3-5 Roadmapped  
 
 ---
 
-## Table of Contents
+## ⚡ Quick Links
 
-1. [Project Overview](#project-overview)
-2. [Repository Layout](#repository-layout)
-3. [Architecture](#architecture)
-4. [Technology Stack](#technology-stack)
-5. [Build System](#build-system)
-6. [Running Tests](#running-tests)
-7. [Naming & Coding Conventions](#naming--coding-conventions)
-8. [Key Algorithms & Concepts](#key-algorithms--concepts)
-9. [Hardware Peripherals](#hardware-peripherals)
-10. [Communication Protocols](#communication-protocols)
-11. [Testing Patterns](#testing-patterns)
-12. [Development Workflow](#development-workflow)
+**👉 START HERE**: [`openems-v3/CLAUDE.md`](openems-v3/CLAUDE.md) - Detailed development guide  
+📋 **Status Report**: [`openems-v3/FINAL_STATUS.md`](openems-v3/FINAL_STATUS.md)  
+🗺️ **Roadmap**: [`openems-v3/PHASE3_4_5_ROADMAP.md`](openems-v3/PHASE3_4_5_ROADMAP.md)  
+📚 **Reference**: `spec.md` (full specification in Portuguese)
 
 ---
 
 ## Project Overview
 
-OpenEMS is a real-time engine management system (EMS) written in C++17.
-It manages fuel injection, ignition timing, and auxiliary engine controls
-for a 4-cylinder engine.  The target platform is the **Teensy 3.5** board.
+**OpenEMS-v3** is a next-generation real-time engine management system (EMS) written in C++17,
+targeting **STM32H562RGT6** (250 MHz Cortex-M33). It manages fuel injection, ignition timing,
+and auxiliary engine controls for 4-cylinder engines with **79% code reuse** from proven v1.1 + v2.2.
 
-Key capabilities:
-- Crankshaft position (CKP) decoding with synchronisation logic
-- Microsecond-precision injection and ignition event scheduling
-- Volumetric-efficiency (VE) based fuel calculation
-- Spark advance tables with knock retard
-- Short/Long-term fuel trim (STFT/LTFT) adaptive learning
-- IACV, wastegate, VVT, and cooling-fan auxiliary control
-- TunerStudio real-time tuning protocol (UART)
-- Wideband O2 (WBO2) lambda sensor via CAN bus
+### Key Capabilities
+- ✅ Crankshaft position (CKP) decoding with 60-2 wheel synchronization
+- ✅ Microsecond-precision injection and ignition event scheduling
+- ✅ Volumetric-efficiency (VE) based fuel calculation with adaptive trim
+- ✅ Spark advance tables with knock detection and retard
+- ✅ Auxiliary control: IACV stepper, wastegate, VVT, cooling fan (all PID)
+- ✅ TunerStudio real-time tuning protocol (UART + USB CDC dual I/O)
+- ✅ CAN FD bus integration with advanced message filtering
+- ✅ Wideband O2 (WBO2) lambda sensor closed-loop control
+
+### What's New in v3
+- 🔧 **USB CDC Integration** (Phase 3) - Dual I/O UART + USB
+- 🔧 **CAN FD Filtering** (Phase 4) - Priority-based routing
+- 📦 **Greenfield Architecture** - Clean 4-layer design optimized for 250 MHz
+- 📖 **Complete Documentation** - CLAUDE.md, README, roadmaps
+- 🧪 **100% Test Coverage** - 17 host-based unit test suites
 
 ---
 
@@ -45,40 +44,68 @@ Key capabilities:
 
 ```
 OpenEMS/
-├── src/                    # Production firmware source
-│   ├── main.cpp            # Entry point, NVIC setup, background loop
-│   ├── app/                # Application layer (protocols)
-│   │   ├── tuner_studio.h/cpp   # TunerStudio UART protocol
-│   │   └── can_stack.h/cpp      # CAN bus application (WBO2, diagnostics)
-│   ├── drv/                # Driver layer (system-level components)
-│   │   ├── ckp.h/cpp            # Crankshaft position sensor decode
-│   │   ├── scheduler.h/cpp      # Injection / ignition event scheduler
-│   │   └── sensors.h/cpp        # Sensor aggregation and validation
-│   ├── engine/             # Engine control algorithms
-│   │   ├── fuel_calc.h/cpp      # Fuel injection calculation
-│   │   ├── ign_calc.h/cpp       # Ignition timing calculation
-│   │   ├── auxiliaries.h/cpp    # IACV, wastegate, VVT, fan
-│   │   ├── knock.h/cpp          # Knock detection and retard
-│   │   └── table3d.h/cpp        # 16×16 lookup-table interpolation
-│   └── hal/                # Hardware Abstraction Layer
-│       ├── adc.h/cpp            # ADC0/ADC1 with PDB
-│       ├── can.h/cpp            # FlexCAN driver
-│       ├── uart.h/cpp           # UART0 driver
-│       ├── ftm.h/cpp            # FlexTimer (PWM, output compare, input capture)
-│       └── flexnvm.h/cpp        # Flash calibration storage
-├── test/                   # Host-based unit tests (mirrors src/ structure)
-│   ├── app/
-│   ├── drv/
-│   ├── engine/
-│   └── hal/
-├── scripts/
-│   └── run_host_tests.sh   # Build and run all tests
-├── tunerstudio/
-│   └── openems.ini         # TunerStudio project configuration
-├── docs/
-│   └── OpenEMS_Engineering_Prompt_v1.2.docx
-└── README.md
+├── openems-v3/                        ⭐ PRIMARY PROJECT (Phases 1-2 Complete)
+│   ├── src/                           (44 production files)
+│   │   ├── main_stm32.cpp             # Firmware entry point
+│   │   ├── app/                       # Application layer
+│   │   │   ├── tuner_studio.h/cpp     # TunerStudio protocol (UART + USB)
+│   │   │   ├── can_stack.h/cpp        # CAN FD application
+│   │   │   └── can_filters.h          # Phase 4 stub
+│   │   ├── engine/                    # Engine algorithms (100% reusable)
+│   │   │   ├── fuel_calc.h/cpp        # VE-based fuel calculation
+│   │   │   ├── ign_calc.h/cpp         # Spark advance & dwell
+│   │   │   ├── knock.h/cpp            # Knock detection & retard
+│   │   │   ├── auxiliaries.h/cpp      # IACV, wastegate, VVT, fan (PID)
+│   │   │   ├── table3d.h/cpp          # 3D table interpolation (binary search)
+│   │   │   ├── quick_crank.h/cpp      # Cold start enrichment
+│   │   │   ├── cycle_sched.h/cpp      # Angular cycle scheduling
+│   │   │   └── ecu_sched.h/cpp        # ECU scheduler
+│   │   ├── drv/                       # Drivers (100% reusable)
+│   │   │   ├── ckp.h/cpp              # CKP synchronization (60-2 wheel)
+│   │   │   └── sensors.h/cpp          # Sensor aggregation & validation
+│   │   └── hal/                       # Hardware Abstraction Layer
+│   │       ├── adc.h/cpp              # ADC interface
+│   │       ├── can.h/cpp              # CAN interface
+│   │       ├── uart.h/cpp             # UART interface
+│   │       ├── ftm.h                  # Timer interface (stub)
+│   │       ├── flexnvm.h/cpp          # Flash EEPROM emulation
+│   │       ├── stm32h562/             # STM32H562-specific implementations
+│   │       │   ├── system.h/cpp       # 250 MHz PLL configuration
+│   │       │   ├── timer.cpp          # TIM1/TIM5 drivers
+│   │       │   ├── adc.cpp, can.cpp   # Hardware drivers
+│   │       │   ├── uart.cpp, flash.cpp
+│   │       │   └── usb_cdc.h          # Phase 3 stub
+│   │       └── hal_test_missing_stubs.cpp  # Host test support
+│   ├── test/                          (17 unit test suites, all passing)
+│   │   ├── engine/                    (8 test suites)
+│   │   ├── drv/                       (3 test suites)
+│   │   ├── app/                       (3 test suites)
+│   │   └── hal/                       (2 test suites)
+│   ├── Makefile                       # Build system (zero dependencies)
+│   ├── README.md                      # Project documentation
+│   ├── CLAUDE.md                      # Development guide (READ THIS)
+│   ├── FINAL_STATUS.md                # Phase 1-2 completion report
+│   └── PHASE3_4_5_ROADMAP.md          # Phases 3-5 specifications
+│
+├── openems-stm32h5/                   📚 REFERENCE (v2.2 basis)
+│   └── (STM32H562 implementation used for v3 HAL foundation)
+│
+├── src/                               📚 REFERENCE (v1.1 Teensy base)
+│   └── (Original Teensy 3.5 firmware - algorithms reused in v3)
+│
+├── test/                              📚 REFERENCE (original tests)
+│   └── (Test infrastructure from v1.1 - adapted for v3)
+│
+├── spec.md                            # Full specification (Portuguese)
+├── CLAUDE.md                          # THIS FILE - Repository overview
+├── README.md                          # Repository overview
+├── CHANGELOG.md                       # Development history
+└── .gitignore
 ```
+
+**🎯 Current Focus**: Work within `openems-v3/` directory  
+**📖 Development Guide**: See [`openems-v3/CLAUDE.md`](openems-v3/CLAUDE.md) for detailed conventions  
+**🗺️ Next Steps**: See [`openems-v3/PHASE3_4_5_ROADMAP.md`](openems-v3/PHASE3_4_5_ROADMAP.md)
 
 ---
 
