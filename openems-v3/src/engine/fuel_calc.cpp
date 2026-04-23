@@ -303,8 +303,8 @@ int32_t calc_ae_pw_us(uint16_t tps_now_x10,
                       uint16_t tps_prev_x10,
                       uint16_t dt_ms,
                       int16_t clt_x10) noexcept {
-    if (dt_ms == 0u) {
-        return 0;
+    if (dt_ms == 0u || dt_ms < 5u) {
+        return 0;  // Skip anomalously fast sample (protect against tpsdot overflow)
     }
 
     int16_t delta_tps_x10 = static_cast<int16_t>(tps_now_x10) - static_cast<int16_t>(tps_prev_x10);

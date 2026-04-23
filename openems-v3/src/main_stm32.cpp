@@ -263,6 +263,12 @@ int main() {
                 const int16_t advance_deg10 =
                     ems::engine::calc_advance(snap.rpm_x10, map_kpa,
                                               sensors.clt_x10, sensors.iat_x10);
+
+                // Safety guard: reject extreme negative timing (post-TDC)
+                if (advance_deg10 < -50) {  // -5.0° ATDC is extreme limit
+                    continue;  // Skip scheduler update, use previous timing
+                }
+
                 g_last_advance_deg = static_cast<int8_t>(advance_deg10 / 10);
 
                 ems::engine::ecu_sched_commit_calibration(
