@@ -1,4 +1,16 @@
 #pragma once
+/**
+ * @file hal/uart.h
+ * @brief UART interface para STM32H562
+ *
+ * Exporta:
+ *   uart0_init()       — inicializa UART a 115200 baud
+ *   uart0_poll_rx()    — polifica RX (non-blocking)
+ *   uart0_tx_ready()   — verifica se TX buffer está vazio
+ *   uart0_tx_byte()    — transmite byte pela UART
+ *
+ * Uso: TunerStudio protocol communication
+ */
 
 #include <cstdint>
 

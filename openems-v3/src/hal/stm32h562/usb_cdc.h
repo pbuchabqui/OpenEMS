@@ -1,10 +1,23 @@
 #pragma once
+/**
+ * @file hal/stm32h562/usb_cdc.h
+ * @brief USB CDC Device Driver para STM32H562
+ *
+ * Exporta:
+ *   usb_cdc_init()        — inicializa USB FS como CDC-ACM device
+ *   usb_cdc_poll()        — processa eventos USB (non-blocking)
+ *   usb_cdc_send_byte()   — transmite byte único
+ *   usb_cdc_send_bytes()  — transmite múltiplos bytes
+ *   usb_cdc_available()   — verifica se dados RX estão disponíveis
+ *   usb_cdc_read_byte()   — lê byte único
+ *   usb_cdc_read_bytes()  — lê múltiplos bytes
+ *   usb_cdc_dtr()         — verifica Data Terminal Ready
+ *   usb_cdc_rts()         — verifica Request To Send
+ *
+ * Uso: TunerStudio protocol via USB (Phase 3 feature)
+ */
 
 #include <cstdint>
-
-// USB CDC Device Driver for STM32H562
-// Implements CDC-ACM (Abstract Control Model)
-// Purpose: TunerStudio communication via USB (Phase 3 feature)
 
 namespace ems::hal {
 

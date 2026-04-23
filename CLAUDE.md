@@ -15,6 +15,18 @@
 
 ---
 
+## ⚠️ Legacy Versions (Reference Only)
+
+**For all active development, work in `openems-v3/` directory only.**
+
+- **`src/`** (OpenEMS v1.1) — Original Teensy 3.5 implementation. **DEPRECATED**. Code reuse basis only.
+- **`openems-stm32h5/`** (OpenEMS v2.2) — STM32H562 port. **DEPRECATED**. STM32H562 HAL foundation reused in v3, but all active development is in v3.
+- **`test/`** — Legacy tests from v1.1. **Not actively maintained**. All tests migrated to `openems-v3/test/`.
+
+**Do NOT commit changes to v1.1 or v2.2 directories.** These are frozen references for code archaeology only.
+
+---
+
 ## Project Overview
 
 **OpenEMS-v3** is a next-generation real-time engine management system (EMS) written in C++17,

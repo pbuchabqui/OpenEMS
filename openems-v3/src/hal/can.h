@@ -1,4 +1,15 @@
 #pragma once
+/**
+ * @file hal/can.h
+ * @brief CAN FD interface para STM32H562
+ *
+ * Exporta:
+ *   can0_init()        — inicializa FDCAN1 em 500 kbps
+ *   can0_tx()          — transmite frame CAN
+ *   can0_rx_pop()      — recebe frame CAN (FIFO)
+ *
+ * Protocolos: WBO2 lambda RX (0x180), diagnósticos TX (0x400, 0x401)
+ */
 
 #include <cstdint>
 
