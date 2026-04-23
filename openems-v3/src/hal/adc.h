@@ -1,4 +1,14 @@
 #pragma once
+/**
+ * @file hal/adc.h
+ * @brief ADC interface para STM32H562
+ *
+ * Exporta:
+ *   adc_init()          — inicializa ADC0 (MAP/MAF/TPS/O2/AN1-4) e ADC1 (CLT/IAT/FUEL/OIL)
+ *   adc0_read()         — lê canal de ADC0
+ *   adc1_read()         — lê canal de ADC1
+ *   adc_pdb_on_tooth()  — configura trigger PDB para sincronização com CKP
+ */
 
 #include <cstdint>
 

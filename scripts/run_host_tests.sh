@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# OpenEMS-v3 Host-Based Unit Test Runner
+# Runs all 17 test suites for the active v3 project (openems-v3/)
+# Legacy v1.1 and v2.2 tests are NOT run (reference versions only)
+
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +25,7 @@ run_test() {
 
 cd "${ROOT_DIR}"
 
-echo "Running all host tests with ${CXX_BIN}"
+echo "Running OpenEMS-v3 host tests (17 suites) with ${CXX_BIN}"
 
 run_test test_ckp \
   test/drv/test_ckp.cpp \
