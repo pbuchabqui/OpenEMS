@@ -442,13 +442,18 @@ void ts_init() noexcept {
     ts_update_rt_sched_diag(0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
 }
 
-void ts_uart0_rx_isr_byte(uint8_t byte) noexcept {
+void ts_rx_byte(uint8_t byte) noexcept {
     const uint16_t next = static_cast<uint16_t>((g_rx_head + 1u) & kRxMask);
     if (next != g_rx_tail) {
         g_rx_buf[g_rx_head] = byte;
         g_rx_head = next;
         g_rx_flag = true;
     }
+}
+
+
+void ts_uart0_rx_isr_byte(uint8_t byte) noexcept {
+    ts_rx_byte(byte);
 }
 
 void ts_process() noexcept {

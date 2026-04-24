@@ -22,7 +22,8 @@ struct TsRealtimeData {
 static_assert(sizeof(TsRealtimeData) == 64u, "TsRealtimeData must be 64 bytes");
 
 void ts_init() noexcept;
-void ts_uart0_rx_isr_byte(uint8_t byte) noexcept;
+void ts_rx_byte(uint8_t byte) noexcept;
+void ts_uart0_rx_isr_byte(uint8_t byte) noexcept;  // compat wrapper
 void ts_process() noexcept;
 void ts_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p100) noexcept;
 void ts_update_rt_sched_diag(uint32_t late_events,
