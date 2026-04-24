@@ -28,10 +28,10 @@ OpenEMS-v3 is a next-generation real-time engine management system (EMS) for 4-c
 - **Auxiliary Control**: IACV stepper, wastegate, VVT, cooling fan (PID loops)
 
 ### Real-Time Communication
-- **TunerStudio Protocol**: Live tuning over UART or USB CDC
+- **TunerStudio Protocol**: Live tuning over USB CDC only
 - **CAN FD Bus**: WBO2 lambda sensor input, diagnostic frames
 - **Advanced CAN Filtering**: Priority-based message routing (v3 enhancement)
-- **Dual I/O**: UART + USB simultaneous operation
+- **Single I/O (Tuning)**: USB CDC only
 
 ### Hardware Integration
 - **STM32H562RGT6**: 250 MHz ARM Cortex-M33
@@ -74,11 +74,6 @@ openems-v3/
 │           ├── timer.h/cpp         # TIM1, TIM5, PWM
 │           ├── flash.h/cpp         # Flash EEPROM emulation
 │           └── regs.h              # STM32H562 register definitions
-├── test/                           # Host-based unit tests
-│   ├── engine/                     # Engine algorithm tests (8 suites)
-│   ├── drv/                        # Driver tests (3 suites)
-│   ├── app/                        # Application protocol tests (3 suites)
-│   └── hal/                        # HAL tests (2 suites)
 ├── docs/                           # Documentation
 │   ├── architecture.md             # Architecture overview
 │   ├── stm32h5-patterns.md         # Implementation patterns
@@ -129,26 +124,11 @@ openems-v3/
 
 ---
 
-## Building & Testing
+## Building
 
-### Host-Based Unit Tests (Recommended for Development)
+### Test Status
 
-```bash
-make host-test
-```
-
-Runs all 17 unit test suites on your development machine (x86/x64). No hardware required.
-
-**Tests Included**:
-- ✅ Fuel calculation (VE, corrections, trim)
-- ✅ Ignition timing (spark advance, dwell, knock)
-- ✅ Knock detection & retard
-- ✅ Auxiliary control (IACV, VVT, boost)
-- ✅ CKP synchronization (60-2 wheel)
-- ✅ Sensor validation & calibration
-- ✅ TunerStudio protocol parsing
-- ✅ CAN frame handling
-- ✅ Flash storage & retrieval
+The host-based unit test suite was intentionally removed and will be reintroduced in a future development phase.
 
 ### STM32H562 Firmware Build
 
@@ -178,12 +158,10 @@ make clean
 vim src/engine/fuel_calc.cpp
 ```
 
-### 2. Run Host Tests
+### 2. Build Firmware
 ```bash
-make host-test
+make firmware
 ```
-
-All tests must pass before committing.
 
 ### 3. Commit with Descriptive Message
 ```bash
@@ -207,7 +185,7 @@ git push origin openems-v3-dev
 | v1.1 ENGINE | 8 | ✅ Direct copy (100% agnóstic) |
 | v1.1 DRV | 2 | ✅ Direct copy (CKP, sensors) |
 | v1.1 APP | 3 | ✅ Direct copy (protocols) |
-| v1.1 Tests | 17 | ✅ Direct copy (all suites) |
+| v1.1 Tests | 17 | ⏸️ Removed from repository for now |
 | v2.2 HAL | 6 | ⚠️ Adapted (STM32H562-specific) |
 | v3 NEW | 5 | 🆕 USB CDC, CAN FD enhancements |
 
@@ -239,14 +217,14 @@ Example: `rpm_x10 = 6000` represents 600.0 RPM
 | **USB CDC** | Pending | ✅ Complete |
 | **CAN FD Filtering** | Basic | ✅ Advanced |
 | **Documentation** | Minimal | ✅ Complete |
-| **Test Coverage** | Partial | ✅ 100% (17 suites) |
+| **Test Coverage** | Partial | ⏸️ Deferred (suite removed) |
 
 ---
 
 ## Contributing
 
 1. **Branch**: Always develop on `openems-v3-dev` (or feature branches from it)
-2. **Tests**: Ensure `make host-test` passes before pushing
+2. **Validation**: Record manual/bench validation steps in PR before pushing
 3. **Style**: Follow C++17 conventions; see CLAUDE.md for details
 4. **Messages**: Write clear, descriptive commit messages
 

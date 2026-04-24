@@ -26,6 +26,7 @@ int main() { return 0; }
 
 #include "hal/stm32h562/system.h"
 #include "hal/stm32h562/regs.h"
+#include "hal/stm32h562/usb_cdc.h"
 
 #include "app/can_stack.h"
 #include "app/tuner_studio.h"
@@ -43,7 +44,6 @@ int main() { return 0; }
 #include "hal/flexnvm.h"
 #include "hal/runtime_seed.h"
 #include "hal/ftm.h"
-#include "hal/uart.h"
 
 // =============================================================================
 // Estado de background (idêntico ao main.cpp Kinetis)
@@ -108,13 +108,26 @@ static inline bool elapsed(uint32_t now, uint32_t last, uint32_t period) noexcep
 }
 
 static inline void ts_service() noexcept {
-    ems::hal::uart0_poll_rx(64u);
+    ems::hal::usb_cdc_poll();
+    if (!ems::hal::usb_cdc_dtr()) {
+        return;
+    }
+
+    uint8_t rx_buf[64] = {};
+    const uint16_t rx_n = ems::hal::usb_cdc_read_bytes(rx_buf, 64u);
+    for (uint16_t i = 0u; i < rx_n; ++i) {
+        ems::app::ts_rx_byte(rx_buf[i]);
+    }
+
     ems::app::ts_process();
-    uint8_t b = 0u;
-    for (uint16_t n = 0u;
-         n < 96u && ems::hal::uart0_tx_ready() && ems::app::ts_tx_pop(b);
-         ++n) {
-        if (!ems::hal::uart0_tx_byte(b)) { break; }
+
+    uint8_t tx_buf[96] = {};
+    uint16_t tx_n = 0u;
+    while (tx_n < 96u && ems::app::ts_tx_pop(tx_buf[tx_n])) {
+        ++tx_n;
+    }
+    if (tx_n != 0u) {
+        ems::hal::usb_cdc_send_bytes(tx_buf, tx_n);
     }
 }
 
@@ -138,9 +151,9 @@ static void openems_init() noexcept {
     // 3) ADC (ADC1/ADC2 + TIM6 trigger)
     ems::hal::adc_init();
 
-    // 4) CAN + UART
+    // 4) CAN + USB CDC (TunerStudio only via USB)
     ems::hal::can0_init();
-    ems::hal::uart0_init();
+    ems::hal::usb_cdc_init();
 
     // 5) Flash Bank2 → carrega calibração page-0
     static_cast<void>(
