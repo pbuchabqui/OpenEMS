@@ -93,6 +93,10 @@ static constexpr uint16_t kDefaultReqFuelUs = 8000u;
 static constexpr uint16_t kMapRefKpa        = 100u;
 static constexpr uint32_t kDefaultSoiLeadDeg = 62u;
 static constexpr uint32_t kFtm0TicksPerMs = 1875u;
+static constexpr uint16_t kMapMinKpa = 10u;
+static constexpr uint16_t kMapMaxKpa = 250u;
+static constexpr uint16_t kLambdaMinMilli = 700u;
+static constexpr uint16_t kLambdaMaxMilli = 1400u;
 
 // =============================================================================
 // Utilitários
@@ -122,6 +126,18 @@ static inline uint8_t build_status_bits(const ems::drv::CkpSnapshot& snap,
         status = static_cast<uint8_t>(status | ems::app::STATUS_SENSOR_FAULT);
     }
     return status;
+}
+
+static inline uint16_t clamp_u16(uint16_t v, uint16_t lo, uint16_t hi) noexcept {
+    if (v < lo) { return lo; }
+    if (v > hi) { return hi; }
+    return v;
+}
+
+static inline int8_t clamp_i8(int16_t v, int8_t lo, int8_t hi) noexcept {
+    if (v < lo) { return lo; }
+    if (v > hi) { return hi; }
+    return static_cast<int8_t>(v);
 }
 
 static inline void ts_service() noexcept {
@@ -270,7 +286,8 @@ int main() {
             const bool rev_cut = g_limp_active &&
                 (snap.rpm_x10 > kLimpRpmLimit_x10);
 
-            const uint16_t map_kpa = static_cast<uint16_t>(sensors.map_kpa_x10 / 10u);
+            const uint16_t map_kpa_raw = static_cast<uint16_t>(sensors.map_kpa_x10 / 10u);
+            const uint16_t map_kpa = clamp_u16(map_kpa_raw, kMapMinKpa, kMapMaxKpa);
             ems::engine::quick_crank_set_clt(sensors.clt_degc_x10);
 
             if (synced && !rev_cut) {
@@ -302,7 +319,7 @@ int main() {
                                                          qc.min_pw_us);
                 g_last_pw_ms_x10 = static_cast<uint8_t>(
                     (final_pw_us / 100u) > 255u ? 255u : (final_pw_us / 100u));
-                g_last_advance_deg = static_cast<int8_t>(advance_deg);
+                g_last_advance_deg = clamp_i8(advance_deg, -10, 40);
 
                 const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_ftm0_ticks(final_pw_us);
                 const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
@@ -338,13 +355,6 @@ int main() {
             g_t20ms_ = now;
             ts_service();
             ems::engine::auxiliaries_tick_20ms();
-        }
-
-        // ── 50ms: sensores lentos + CAN stack ─────────────────────────────
-        if (elapsed(now, g_t50ms_, 50u)) {
-            g_t50ms_ = now;
-            g_datalog_us = micros();
-            ems::drv::sensors_tick_50ms();
             const auto snap = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
             ems::app::can_stack_process(now, snap, sensors,
@@ -355,6 +365,13 @@ int main() {
                                         build_status_bits(snap, sensors));
         }
 
+        // ── 50ms: sensores lentos ──────────────────────────────────────────
+        if (elapsed(now, g_t50ms_, 50u)) {
+            g_t50ms_ = now;
+            g_datalog_us = micros();
+            ems::drv::sensors_tick_50ms();
+        }
+
         // ── 100ms: sensores + STFT ───────────────────────────────────────
         if (elapsed(now, g_t100ms_, 100u)) {
             g_t100ms_ = now;
@@ -363,16 +380,19 @@ int main() {
             const auto sensors = ems::drv::sensors_get();
 
             if (snap.state == ems::drv::SyncState::FULL_SYNC) {
-                const uint16_t map_kpa = static_cast<uint16_t>(sensors.map_kpa_x10 / 10u);
-                const uint16_t lambda_measured =
-                    ems::app::can_stack_lambda_milli_safe(now);
+                const uint16_t map_kpa = clamp_u16(
+                    static_cast<uint16_t>(sensors.map_kpa_x10 / 10u), kMapMinKpa, kMapMaxKpa);
+                const uint16_t lambda_measured = clamp_u16(
+                    ems::app::can_stack_lambda_milli_safe(now), kLambdaMinMilli, kLambdaMaxMilli);
                 const bool lambda_valid = ems::app::can_stack_wbo2_fresh(now);
                 const int16_t stft = ems::engine::fuel_update_stft(
                     snap.rpm_x10, map_kpa,
                     1000, static_cast<int16_t>(lambda_measured),
                     sensors.clt_degc_x10, lambda_valid,
                     false, false);
-                g_last_stft_pct = static_cast<int8_t>(stft / 10);
+                g_last_stft_pct = clamp_i8(static_cast<int16_t>(stft / 10), -25, 25);
+            } else {
+                g_last_stft_pct = 0;
             }
 
             // Runtime seed — salva posição para re-sincronização rápida
