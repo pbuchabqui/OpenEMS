@@ -30,6 +30,16 @@ OpenEMS/
 
 ```
 
+### Why legacy reference folders still exist
+
+`src/` (v1.1 Teensy) and `openems-stm32h5/` (v2.2) are intentionally kept as **read-only reference baselines** for:
+
+- algorithm traceability (fuel/ignition/CKP behavior provenance),
+- migration audits during v3 stabilization,
+- regression triage when field behavior differs from legacy implementations.
+
+They are not active development targets.
+
 ---
 
 ## 🎯 What is OpenEMS-v3?

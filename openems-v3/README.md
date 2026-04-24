@@ -233,6 +233,7 @@ Example: `rpm_x10 = 6000` represents 600.0 RPM
 ## References
 
 - **CLAUDE.md** - AI development guide & architecture details
+- **PIPELINE_DEEP_REVIEW.md** - Revisão profunda do pipeline do motor (cranking→sync→fuel→ign→scheduler→trim)
 - **docs/** - Implementation patterns and API reference
 - **OpenEMS v1.1** - Reference architecture (proven algorithms)
 - **OpenEMS v2.2** - Production optimizations (HAL for STM32H562)
