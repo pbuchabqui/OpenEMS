@@ -10,7 +10,6 @@
 OpenEMS/
 ├── openems-v3/                    ⭐ MAIN PROJECT (Phases 1-2 Complete)
 │   ├── src/                       (44 files, ~6,000 LoC)
-│   ├── test/                      (17 test suites, all passing)
 │   ├── docs/                      (architecture, specifications)
 │   ├── Makefile                   (zero external dependencies)
 │   ├── README.md                  (project documentation)
@@ -31,6 +30,16 @@ OpenEMS/
 
 ```
 
+### Why legacy reference folders still exist
+
+`src/` (v1.1 Teensy) and `openems-stm32h5/` (v2.2) are intentionally kept as **read-only reference baselines** for:
+
+- algorithm traceability (fuel/ignition/CKP behavior provenance),
+- migration audits during v3 stabilization,
+- regression triage when field behavior differs from legacy implementations.
+
+They are not active development targets.
+
 ---
 
 ## 🎯 What is OpenEMS-v3?
@@ -42,7 +51,7 @@ OpenEMS/
 ✅ **Fuel Injection** - Volumetric efficiency (VE) based calculation  
 ✅ **Ignition Timing** - Spark advance tables with knock retard  
 ✅ **Auxiliary Control** - IACV, wastegate, VVT, cooling fan (PID)  
-✅ **TunerStudio Protocol** - Real-time tuning (UART + USB CDC dual I/O)  
+✅ **TunerStudio Protocol** - Real-time tuning (USB CDC only)
 ✅ **CAN FD Bus** - Advanced message filtering with priority queue  
 ✅ **Adaptive Trim** - STFT/LTFT closed-loop lambda control  
 
@@ -50,7 +59,7 @@ OpenEMS/
 - **Language**: C++17 (no STL, no exceptions, no dynamic allocation)
 - **Architecture**: Strict 4-layer (APP → ENGINE → DRV → HAL)
 - **Code Reuse**: 79% from v1.1 (algorithms) + v2.2 (STM32H5 HAL)
-- **Test Coverage**: 17 unit test suites (all passing)
+- **Test Coverage**: deferred (test suite temporarily removed; to be reintroduced later)
 - **Build**: Makefile (zero external dependencies)
 - **Memory**: Fixed-width types, Q8.8 fixed-point math
 
@@ -64,7 +73,7 @@ OpenEMS/
 | **Phase 2** | ✅ COMPLETE | Complete | - | HAL system integration |
 | **Phase 3** | 📋 Spec'd | 1 week | ~800 | USB CDC integration |
 | **Phase 4** | 📋 Spec'd | 1 week | ~650 | CAN FD filtering |
-| **Phase 5** | 📋 Spec'd | 0.5 weeks | ~600 | Polish & production docs |
+| **Phase 5** | 📋 Spec'd | 0.5 weeks | ~600 | Polish & production docs + test strategy rebuild |
 
 **Target Completion**: May 6, 2026
 
@@ -78,9 +87,6 @@ OpenEMS/
 cd openems-v3
 
 # Run all unit tests (host-based)
-make host-test
-
-# Build STM32H562 firmware
 make firmware
 
 # Clean build artifacts
@@ -96,8 +102,8 @@ git checkout -b feature/your-feature-name
 # Make changes
 vim src/engine/fuel_calc.cpp
 
-# Test locally
-make host-test
+# Build locally
+make firmware
 
 # Commit with clear message
 git commit -m "engine/fuel: implement feature"
@@ -110,6 +116,7 @@ git push origin openems-v3-dev
 
 ## 📚 Documentation
 
+- **[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)** - Execution plan, weekly gates, and delivery tracking (single source of truth)
 - **[openems-v3/README.md](openems-v3/README.md)** - Complete project overview
 - **[openems-v3/CLAUDE.md](openems-v3/CLAUDE.md)** - Development guide & conventions
 - **[openems-v3/FINAL_STATUS.md](openems-v3/FINAL_STATUS.md)** - Phase 1-2 completion report
@@ -138,7 +145,7 @@ git push origin openems-v3-dev
 
 **Key Properties**:
 - Strict unidirectional dependencies (no circular refs)
-- 100% testable on host (no hardware required)
+- Host test suite temporarily removed (planned reintroduction in later phase)
 - Platform-agnostic ENGINE/DRV layers
 - STM32H562-specific HAL layer
 
@@ -153,7 +160,7 @@ OpenEMS-v3 reuses proven, battle-tested components:
 | **Engine algorithms** | v1.1 | 100% | ✅ Complete |
 | **Driver layer** | v1.1 | 100% | ✅ Complete |
 | **STM32H5 HAL** | v2.2 | 80% | ✅ Complete |
-| **Test infrastructure** | v1.1 | 100% | ✅ Complete |
+| **Test infrastructure** | v1.1 | 100% | ⏸️ Removed for now |
 
 **Total**: **79% code reuse** from proven implementations
 
@@ -167,7 +174,7 @@ OpenEMS-v3 reuses proven, battle-tested components:
 | **Standard Library** | None (embedded constraints) |
 | **Target Platform** | STM32H562RGT6 (ARM Cortex-M33 @ 250 MHz) |
 | **Build System** | GNU Make |
-| **Testing** | Host-based unit tests (g++ -DEMS_HOST_TEST) |
+| **Testing** | Temporarily deferred (suite removed) |
 | **Version Control** | Git |
 | **Tuning Software** | TunerStudio / MegaTune protocol |
 
@@ -195,26 +202,8 @@ OpenEMS-v3 reuses proven, battle-tested components:
 
 ## 🧪 Test Infrastructure
 
-### Host-Based Unit Tests
-All 17 test suites run on any Linux/macOS machine with `g++`:
-
-```bash
-make host-test
-# [1/7] Testing fuel calculation...    ✓
-# [2/7] Testing ignition timing...     ✓
-# [3/7] Testing knock detection...     ✓
-# [4/7] Testing auxiliaries...         ✓
-# [5/7] Testing CKP synchronization... ✓
-# [6/7] Testing sensors...             ✓
-# [7/7] Running remaining tests...     ✓
-# ✅ Phase 2: All host-based tests completed!
-```
-
-### Test Coverage
-- **Engine layer**: 8 suites (fuel, ignition, knock, auxiliaries, quick-crank, ecu-sched, pipeline, iacv)
-- **Driver layer**: 3 suites (CKP, sensors, sensor-validation)
-- **App layer**: 3 suites (TunerStudio, CAN, ecu-sched-ivc)
-- **HAL layer**: 2 suites (FlexNVM, FTM arithmetic)
+### Tests
+The legacy host-based test suite was intentionally removed to reduce repository noise and will be redesigned in a later phase.
 
 ---
 
@@ -231,10 +220,10 @@ make host-test
 ## 📞 Contributing
 
 ### Coding Standards
-1. ✅ `make host-test` must pass (all 17 suites)
+1. ✅ `make firmware` must build successfully
 2. ✅ No compiler warnings (`-Wall -Wextra`)
 3. ✅ Follow naming conventions (unit suffixes, prefixes)
-4. ✅ Add test coverage for new code
+4. ✅ Document validation strategy for changed code
 5. ✅ Update documentation (CLAUDE.md if architectural changes)
 
 ### Commit Message Format
