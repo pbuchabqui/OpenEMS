@@ -26,6 +26,7 @@ int main() { return 0; }
 
 #include "hal/stm32h562/system.h"
 #include "hal/stm32h562/regs.h"
+#include "hal/stm32h562/usb_cdc.h"
 
 #include "app/can_stack.h"
 #include "app/tuner_studio.h"
@@ -43,7 +44,6 @@ int main() { return 0; }
 #include "hal/flexnvm.h"
 #include "hal/runtime_seed.h"
 #include "hal/ftm.h"
-#include "hal/uart.h"
 
 // =============================================================================
 // Estado de background (idêntico ao main.cpp Kinetis)
@@ -66,6 +66,7 @@ static uint32_t g_t500ms = 0u;
 
 static int8_t  g_last_advance_deg = 0;
 static uint8_t g_last_pw_ms_x10   = 0u;
+static int8_t  g_last_stft_pct    = 0;
 
 static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
 static constexpr uint8_t  kFaultBitMap = (1u << 0u);
@@ -91,6 +92,7 @@ static constexpr uint32_t kRuntimeSeedArmWindowMs = 2000u;
 static constexpr uint16_t kDefaultReqFuelUs = 8000u;
 static constexpr uint16_t kMapRefKpa        = 100u;
 static constexpr uint32_t kDefaultSoiLeadDeg = 62u;
+static constexpr uint32_t kFtm0TicksPerMs = 1875u;
 
 // =============================================================================
 // Utilitários
@@ -107,14 +109,42 @@ static inline bool elapsed(uint32_t now, uint32_t last, uint32_t period) noexcep
     return static_cast<uint32_t>(now - last) >= period;
 }
 
+static inline uint8_t build_status_bits(const ems::drv::CkpSnapshot& snap,
+                                        const ems::drv::SensorData& sensors) noexcept {
+    uint8_t status = 0u;
+    if (snap.state == ems::drv::SyncState::FULL_SYNC) {
+        status |= ems::app::STATUS_SYNC_FULL;
+    }
+    if (snap.phase_A) {
+        status = static_cast<uint8_t>(status | ems::app::STATUS_PHASE_A);
+    }
+    if (sensors.fault_bits != 0u) {
+        status = static_cast<uint8_t>(status | ems::app::STATUS_SENSOR_FAULT);
+    }
+    return status;
+}
+
 static inline void ts_service() noexcept {
-    ems::hal::uart0_poll_rx(64u);
+    ems::hal::usb_cdc_poll();
+    if (!ems::hal::usb_cdc_dtr()) {
+        return;
+    }
+
+    uint8_t rx_buf[64] = {};
+    const uint16_t rx_n = ems::hal::usb_cdc_read_bytes(rx_buf, 64u);
+    for (uint16_t i = 0u; i < rx_n; ++i) {
+        ems::app::ts_rx_byte(rx_buf[i]);
+    }
+
     ems::app::ts_process();
-    uint8_t b = 0u;
-    for (uint16_t n = 0u;
-         n < 96u && ems::hal::uart0_tx_ready() && ems::app::ts_tx_pop(b);
-         ++n) {
-        if (!ems::hal::uart0_tx_byte(b)) { break; }
+
+    uint8_t tx_buf[96] = {};
+    uint16_t tx_n = 0u;
+    while (tx_n < 96u && ems::app::ts_tx_pop(tx_buf[tx_n])) {
+        ++tx_n;
+    }
+    if (tx_n != 0u) {
+        ems::hal::usb_cdc_send_bytes(tx_buf, tx_n);
     }
 }
 
@@ -138,9 +168,9 @@ static void openems_init() noexcept {
     // 3) ADC (ADC1/ADC2 + TIM6 trigger)
     ems::hal::adc_init();
 
-    // 4) CAN + UART
+    // 4) CAN + USB CDC (TunerStudio only via USB)
     ems::hal::can0_init();
-    ems::hal::uart0_init();
+    ems::hal::usb_cdc_init();
 
     // 5) Flash Bank2 → carrega calibração page-0
     static_cast<void>(
@@ -240,40 +270,55 @@ int main() {
             const bool rev_cut = g_limp_active &&
                 (snap.rpm_x10 > kLimpRpmLimit_x10);
 
+            const uint16_t map_kpa = static_cast<uint16_t>(sensors.map_kpa_x10 / 10u);
+            ems::engine::quick_crank_set_clt(sensors.clt_degc_x10);
+
             if (synced && !rev_cut) {
-                const uint16_t map_kpa = sensors.map_kpa;
                 const uint8_t  ve = ems::engine::get_ve(snap.rpm_x10, map_kpa);
                 const uint32_t base_pw_us =
                     ems::engine::calc_base_pw_us(kDefaultReqFuelUs, ve,
                                                   map_kpa, kMapRefKpa);
                 const uint16_t corr_clt_x256 =
-                    ems::engine::corr_clt(sensors.clt_x10);
+                    ems::engine::corr_clt(sensors.clt_degc_x10);
                 const uint16_t corr_iat_x256 =
-                    ems::engine::corr_iat(sensors.iat_x10);
+                    ems::engine::corr_iat(sensors.iat_degc_x10);
                 const uint16_t dead_time_us =
                     ems::engine::corr_vbatt(sensors.vbatt_mv);
-                const uint32_t final_pw_us =
+                const uint32_t final_pw_us_base =
                     ems::engine::calc_final_pw_us(base_pw_us,
                                                    corr_clt_x256,
                                                    corr_iat_x256,
                                                    dead_time_us);
+                const int16_t base_advance_deg = ems::engine::get_advance(snap.rpm_x10, map_kpa);
+                const uint16_t knock_retard_x10 = ems::engine::knock_get_retard_x10(0u);
+                const int16_t advance_deg = ems::engine::calc_total_advance(
+                    base_advance_deg, 0, 0, static_cast<int16_t>(knock_retard_x10 / 10u));
+
+                const auto qc = ems::engine::quick_crank_update(
+                    now, snap.rpm_x10, synced, sensors.clt_degc_x10, advance_deg);
+                const uint32_t final_pw_us =
+                    ems::engine::quick_crank_apply_pw_us(final_pw_us_base,
+                                                         qc.fuel_mult_x256,
+                                                         qc.min_pw_us);
                 g_last_pw_ms_x10 = static_cast<uint8_t>(
                     (final_pw_us / 100u) > 255u ? 255u : (final_pw_us / 100u));
+                g_last_advance_deg = static_cast<int8_t>(advance_deg);
 
-                const int16_t advance_deg10 =
-                    ems::engine::calc_advance(snap.rpm_x10, map_kpa,
-                                              sensors.clt_x10, sensors.iat_x10);
+                const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_ftm0_ticks(final_pw_us);
+                const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
+                const uint32_t dwell_ticks =
+                    (static_cast<uint32_t>(dwell_ms_x10) * kFtm0TicksPerMs) / 10u;
 
-                // Safety guard: reject extreme negative timing (post-TDC)
-                if (advance_deg10 < -50) {  // -5.0° ATDC is extreme limit
-                    continue;  // Skip scheduler update, use previous timing
-                }
+                ::ecu_sched_commit_calibration(
+                    static_cast<uint32_t>(advance_deg < 0 ? 0 : advance_deg),
+                    dwell_ticks,
+                    inj_pw_ticks,
+                    kDefaultSoiLeadDeg);
+            }
 
-                g_last_advance_deg = static_cast<int8_t>(advance_deg10 / 10);
-
-                ems::engine::ecu_sched_commit_calibration(
-                    final_pw_us, static_cast<uint16_t>(advance_deg10),
-                    kDefaultSoiLeadDeg, snap);
+            const uint32_t prime_pw = ems::engine::quick_crank_consume_prime();
+            if (prime_pw != 0u) {
+                ::ecu_sched_fire_prime_pulse(prime_pw);
             }
 
             // Limp mode: MAP ou CLT em fault
@@ -285,47 +330,49 @@ int main() {
         // ── 10ms: IACV, VVT, wastegate PID ───────────────────────────────
         if (elapsed(now, g_t10ms_, 10u)) {
             g_t10ms_ = now;
-            const auto sensors = ems::drv::sensors_get();
-            const auto snap    = ems::drv::ckp_snapshot();
-            ems::engine::auxiliaries_tick_10ms(sensors, snap.rpm_x10);
+            ems::engine::auxiliaries_tick_10ms();
         }
 
         // ── 20ms: TunerStudio + aux tasks ────────────────────────────────
         if (elapsed(now, g_t20ms_, 20u)) {
             g_t20ms_ = now;
             ts_service();
-            const auto sensors = ems::drv::sensors_get();
-            const auto snap    = ems::drv::ckp_snapshot();
-            ems::engine::auxiliaries_tick_20ms(sensors, snap.rpm_x10);
+            ems::engine::auxiliaries_tick_20ms();
         }
 
-        // ── 50ms: sensores lentos + CAN 0x400 ────────────────────────────
+        // ── 50ms: sensores lentos + CAN stack ─────────────────────────────
         if (elapsed(now, g_t50ms_, 50u)) {
             g_t50ms_ = now;
             g_datalog_us = micros();
             ems::drv::sensors_tick_50ms();
             const auto snap = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
-            ems::app::can_stack_tick_50ms(snap, sensors,
-                                           g_last_advance_deg,
-                                           g_last_pw_ms_x10,
-                                           g_datalog_us);
+            ems::app::can_stack_process(now, snap, sensors,
+                                        g_last_advance_deg,
+                                        g_last_pw_ms_x10,
+                                        g_last_stft_pct,
+                                        0u, 0u,
+                                        build_status_bits(snap, sensors));
         }
 
-        // ── 100ms: sensores + CAN 0x401 + STFT ───────────────────────────
+        // ── 100ms: sensores + STFT ───────────────────────────────────────
         if (elapsed(now, g_t100ms_, 100u)) {
             g_t100ms_ = now;
             ems::drv::sensors_tick_100ms();
             const auto snap    = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
-            ems::app::can_stack_tick_100ms(snap, sensors);
 
             if (snap.state == ems::drv::SyncState::FULL_SYNC) {
-                ems::engine::fuel_update_stft(
-                    snap.rpm_x10, sensors.map_kpa,
-                    1000, sensors.o2_mv,
-                    sensors.clt_x10, sensors.o2_valid,
+                const uint16_t map_kpa = static_cast<uint16_t>(sensors.map_kpa_x10 / 10u);
+                const uint16_t lambda_measured =
+                    ems::app::can_stack_lambda_milli_safe(now);
+                const bool lambda_valid = ems::app::can_stack_wbo2_fresh(now);
+                const int16_t stft = ems::engine::fuel_update_stft(
+                    snap.rpm_x10, map_kpa,
+                    1000, static_cast<int16_t>(lambda_measured),
+                    sensors.clt_degc_x10, lambda_valid,
                     false, false);
+                g_last_stft_pct = static_cast<int8_t>(stft / 10);
             }
 
             // Runtime seed — salva posição para re-sincronização rápida
@@ -366,14 +413,8 @@ int main() {
                                                     kCalibPageBytes));
                 g_calib_dirty = false;
             }
-            // Flush LTFT + knock maps para Flash Bank2 (STM32-specific)
-            static_cast<void>(ems::hal::nvm_flush_adaptive_maps());
-        }
-
-        // ── CAN RX (polling contínuo) ─────────────────────────────────────
-        ems::hal::CanFrame rx_frame{};
-        while (ems::hal::can0_rx_pop(rx_frame)) {
-            ems::app::can_stack_rx(rx_frame);
+            // Persistência de adaptativos adicionais deve ser integrada aqui
+            // quando o backend NVM correspondente estiver disponível.
         }
     }
 }
