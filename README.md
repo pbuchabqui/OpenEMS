@@ -147,6 +147,24 @@ Limitacoes de placa/pino:
 
 Comunicacao nao deve bloquear decode, sync, scheduling ou atuadores.
 
+## Errata STM32H562 ES0565
+
+Referencia local revisada: `es0565-stm32h562xx563xx573xx-device-errata-stmicroelectronics.pdf`, Rev 8, January 2026.
+
+Impactos diretos no projeto:
+
+- Revisao de silicio deve ser identificada antes de teste real. O documento lista marcacoes A/Z/X/W e `REV_ID` em `DBGMCU_IDCODE`. Registrar a revisao fisica da MCU da placa antes de liberar ensaio com atuadores.
+- PA1 tem errata de histerese na revisao A: a histerese de entrada de PA1 so e habilitada quando PA0 esta configurado como entrada. Como CMP usa `PA1/TIM5_CH2`, revisao A exige condicionamento externo robusto ou troca de pino/placa. Em revisoes Z/X/W a limitacao consta como ausente.
+- Flash tem limitacao de endurance de 1 kcycle nas revisoes A/Z. NVM/calibracao/seed de sincronismo nao podem gravar com alta frequencia. Para teste real, tratar Flash como recurso de baixa taxa e preferir commit explicito/event-driven.
+- A primeira operacao de erase/program apos power-on ou Standby pode congelar fetch/read de Flash por cerca de 120 us. O caminho critico de CKP/scheduler nao deve depender de escrita Flash durante motor girando. Workaround completo exige vetor/handlers criticos e rotina da primeira escrita em SRAM.
+- Read-while-write em Flash aumenta latencia em revisoes A/Z. Nao executar erase/program em Bank2 durante janela critica de injecao/ignicao/CKP.
+- FDCAN: nao habilitar edge filtering (`EFBI`) e evitar mistura de dedicated Tx buffer com Tx FIFO em prioridades diferentes. O backend atual deve permanecer simples: sem edge filtering e com disciplina de fila unica/buffer unico.
+- USB: em transferencias OUT, a SRAM USB pode ainda estar sendo atualizada quando o CTR dispara. Driver USB real deve inserir atraso minimo antes de ler buffer OUT: 800 ns em Full Speed.
+- TIM: conexao de USB SOF para TIM2/TIM5 ITR12 pode falhar; o projeto nao deve usar USB SOF como referencia temporal de motor. TIM5 CKP e TIM2/TIM8 scheduler permanecem independentes.
+- IWDG nao acorda o sistema de Stop mode. O projeto de ECU nao deve depender de Stop mode para recuperacao por watchdog.
+
+Conclusao operacional: placa WeAct e firmware atual seguem adequados para bancada sem atuadores energizados. Teste real de motor exige confirmar revisao do silicio, resolver PA1/CMP se a MCU for Rev A, limitar escrita Flash durante motor girando e validar USB/FDCAN com os workarounds acima.
+
 ## Build
 
 Compilar objetos do firmware:
