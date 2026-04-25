@@ -1,270 +1,187 @@
-# OpenEMS - Engine Management System
+# OpenEMS
 
-**Status**: 🟢 **OpenEMS-v3 Phases 1-2 Complete** | **Development Focus: STM32H562RGT6**
+Fonte unica da verdade do projeto OpenEMS.
 
----
+## Objetivo
 
-## 📦 Project Structure
+OpenEMS e uma ECU para motores a combustao interna, atualmente focada no STM32H562RGT6. O codigo deve priorizar baixa latencia, baixo jitter e previsibilidade temporal para controle de injecao, ignicao, sensores e comunicacao de calibracao.
 
-```
-OpenEMS/
-├── openems-v3/                    ⭐ MAIN PROJECT (Phases 1-2 Complete)
-│   ├── src/                       (44 files, ~6,000 LoC)
-│   ├── docs/                      (architecture, specifications)
-│   ├── Makefile                   (zero external dependencies)
-│   ├── README.md                  (project documentation)
-│   ├── CLAUDE.md                  (development guide)
-│   ├── FINAL_STATUS.md            (Phase 1-2 completion report)
-│   └── PHASE3_4_5_ROADMAP.md      (next phases specification)
-│
-├── openems-stm32h5/               📚 REFERENCE (v2.2 architecture)
-│   └── (STM32H562 optimized port, used for v3 foundation)
-│
-├── src/                           📚 REFERENCE (v1.1 Teensy base)
-│   └── (Original Teensy 3.5 implementation)
-│
-├── spec.md                        📋 Project specification (Portuguese)
-├── CLAUDE.md                      📖 AI development guide
-├── CHANGELOG.md                   📜 Development history
-└── .gitignore
+Este documento substitui os documentos historicos de plano, status e revisao. Qualquer decisao tecnica duravel deve ser atualizada aqui, nao em novos arquivos Markdown paralelos.
 
+## Plataforma Alvo
+
+- MCU: STM32H562RGT6, Cortex-M33.
+- Linguagem: C++17 embarcado.
+- Restricoes: sem STL em caminho critico, sem alocacao dinamica em runtime, sem excecoes.
+- Build atual: compilacao de objetos via `make firmware`.
+- Status do link final: ainda requer startup/linker script definitivos para imagem completa gravavel.
+
+## Regras De Arquitetura
+
+O fluxo de dependencias e descendente:
+
+```text
+APP     protocolos, calibracao, diagnostico
+ENGINE  calculos de motor, agendamento angular, tabelas
+DRV     decodificacao CKP/CMP, sensores, servicos independentes de MCU
+HAL     registradores e perifericos STM32H562
+HW      timers, ADC, GPIO, USB, CAN
 ```
 
-### Why legacy reference folders still exist
+Regras praticas:
 
-`src/` (v1.1 Teensy) and `openems-stm32h5/` (v2.2) are intentionally kept as **read-only reference baselines** for:
+- `APP` nao deve entrar no caminho critico de captura/agendamento.
+- `ENGINE` decide tempo, angulo, pulso, dwell e estrategia.
+- `DRV` transforma sinais fisicos em eventos de motor confiaveis.
+- `HAL` contem apenas detalhe de periferico.
+- Codigo legado Kinetis/FTM/PDB nao deve retornar ao codigo ativo.
+- Novos documentos Markdown paralelos nao devem ser criados; atualize este `README.md`.
 
-- algorithm traceability (fuel/ignition/CKP behavior provenance),
-- migration audits during v3 stabilization,
-- regression triage when field behavior differs from legacy implementations.
+## Pipeline De Controle Do Motor
 
-They are not active development targets.
+### 1. Captura CKP/CMP
 
----
+- Modulo principal: `src/drv/ckp.cpp`.
+- Backend STM32: `src/hal/stm32h562/timer.cpp`.
+- Timer usado: TIM5.
+- Canais:
+  - CKP: TIM5 CH1 em PA0.
+  - CMP: TIM5 CH2 em PA1.
 
-## 🎯 What is OpenEMS-v3?
+A captura mede bordas do virabrequim e comando, detecta dente faltante e alimenta a maquina de sincronismo.
 
-**OpenEMS-v3** is a next-generation **real-time engine management system** targeting **STM32H562RGT6** (250 MHz ARM Cortex-M33).
+Estados principais:
 
-### Core Capabilities
-✅ **CKP Decoding** - 60-2 missing-tooth wheel synchronization  
-✅ **Fuel Injection** - Volumetric efficiency (VE) based calculation  
-✅ **Ignition Timing** - Spark advance tables with knock retard  
-✅ **Auxiliary Control** - IACV, wastegate, VVT, cooling fan (PID)  
-✅ **TunerStudio Protocol** - Real-time tuning (USB CDC only)
-✅ **CAN FD Bus** - Advanced message filtering with priority queue  
-✅ **Adaptive Trim** - STFT/LTFT closed-loop lambda control  
+- `WAIT_GAP`: aguardando padrao confiavel de gap.
+- `HALF_SYNC`: fase angular parcial suficiente para estrategias de partida rapida.
+- `FULL_SYNC`: fase e ciclo conhecidos para injecao sequencial e ignicao correta.
+- `LOSS_OF_SYNC`: falha de coerencia, ruido, timeout ou perda de padrao.
 
-### Key Metrics
-- **Language**: C++17 (no STL, no exceptions, no dynamic allocation)
-- **Architecture**: Strict 4-layer (APP → ENGINE → DRV → HAL)
-- **Code Reuse**: 79% from v1.1 (algorithms) + v2.2 (STM32H5 HAL)
-- **Test Coverage**: deferred (test suite temporarily removed; to be reintroduced later)
-- **Build**: Makefile (zero external dependencies)
-- **Memory**: Fixed-width types, Q8.8 fixed-point math
+### 2. Quick Crank E Pre-Sync
 
----
+- Modulos principais: `src/engine/quick_crank.cpp`, `src/engine/ecu_sched.cpp`.
+- Objetivo: permitir primeira combustao antes do full sync quando tecnicamente seguro.
 
-## 📊 Development Status
+Estrategias permitidas antes de full sync:
 
-| Phase | Status | Timeline | LoC | Details |
-|-------|--------|----------|-----|---------|
-| **Phase 1** | ✅ COMPLETE | Complete | 9,250 | Greenfield foundation |
-| **Phase 2** | ✅ COMPLETE | Complete | - | HAL system integration |
-| **Phase 3** | 📋 Spec'd | 1 week | ~800 | USB CDC integration |
-| **Phase 4** | 📋 Spec'd | 1 week | ~650 | CAN FD filtering |
-| **Phase 5** | 📋 Spec'd | 0.5 weeks | ~600 | Polish & production docs + test strategy rebuild |
+- Injecao simultanea durante cranking.
+- Injecao semi-sequencial quando a fase parcial permitir.
+- Ignicao wasted spark antes da confirmacao completa de fase.
+- Uso de posicao/fase persistida apenas quando valida, recente e coerente com o novo padrao CKP/CMP.
 
-**Target Completion**: May 6, 2026
+A estrategia pre-sync deve degradar para modo conservador se houver duvida de fase. Partida rapida nao pode vencer seguranca de sincronismo.
 
----
+### 3. Calculos De Combustivel E Ignicao
 
-## 🚀 Quick Start
+- Combustivel: `src/engine/fuel_calc.cpp`.
+- Ignicao: `src/engine/ign_calc.cpp`.
+- Tabelas: `src/engine/table3d.cpp`.
+- Sensores: `src/drv/sensors.cpp`.
 
-### Build & Test
+Fluxo esperado:
+
+```text
+ADC/TIM6 -> sensors -> fuel_calc/ign_calc -> ecu_sched -> TIM2/TIM8 -> atuadores
+```
+
+Os calculos usam RPM, MAP, TPS, CLT, IAT, lambda e calibracoes. Tabelas devem operar com interpolacao deterministica e sem custo imprevisivel no caminho critico.
+
+Aceleracoes repentinas apos o calculo principal devem ser tratadas por atualizacao near-time quando disponivel, especialmente para largura de pulso, SOI, dwell e avanco. O objetivo e reduzir erro entre o ultimo calculo e o evento fisico.
+
+### 4. Scheduling De Injecao E Ignicao
+
+- Modulo principal: `src/engine/ecu_sched.cpp`.
+- Injecao: TIM2 output compare.
+- Ignicao: TIM8 output compare.
+- Base temporal: 10 MHz, 100 ns por tick.
+
+Premissa de projeto:
+
+- O caminho critico deve ser agendado por hardware output compare.
+- ISR deve armar eventos e atualizar estado, nao bit-bangar saidas criticas.
+- Janelas longas devem lidar com limite de contador por rearmamento/near-time, sem perder precisao perto do evento.
+- Eventos vencidos devem ser tratados explicitamente, nunca silenciosamente aceitos.
+
+Eventos de injecao ficam codificados no scheduler do motor, nao em um driver legado. O scheduler recebe dentes/angulo do CKP, calcula quando cada canal deve abrir/fechar e programa TIM2.
+
+Eventos de ignicao usam o mesmo conceito, mas programam TIM8 para dwell e centelha.
+
+### 5. Atuadores
+
+Mapeamento atual pretendido:
+
+| Funcao | Timer/Canal | Pino |
+|---|---:|---|
+| INJ1 | TIM2 CH1 | PA15 |
+| INJ2 | TIM2 CH2 | PB3 |
+| INJ3 | TIM2 CH3 | PB10 |
+| INJ4 | TIM2 CH4 | PB11 |
+| IGN1 | TIM8 CH1 | PC6 |
+| IGN2 | TIM8 CH2 | PC7 |
+| IGN3 | TIM8 CH3 | PC8 |
+| IGN4 | TIM8 CH4 | PC9 |
+| CKP | TIM5 CH1 | PA0 |
+| CMP | TIM5 CH2 | PA1 |
+| AUX PWM 1 | TIM3 CH1 | PA6 |
+| AUX PWM 2 | TIM3 CH2 | PA7 |
+| AUX PWM 3 | TIM4 CH1 | PB6 |
+| AUX PWM 4 | TIM4 CH2 | PB7 |
+
+Limitacoes de placa/pino:
+
+- PC8/PC9 podem conflitar com microSD em algumas placas WeAct.
+- PA15/PB3 compartilham funcoes de debug JTAG/SWJ; a configuracao de debug deve preservar SWD funcional ou liberar esses pinos conscientemente.
+- PB10/PB11 nao devem ser reutilizados por perifericos concorrentes se TIM2 CH3/CH4 estiver ativo.
+
+## ADC E Sensores
+
+- Modulos: `src/hal/adc.cpp`, `src/hal/stm32h562/adc.cpp`, `src/drv/sensors.cpp`.
+- ADC primario/secundario representam ADC1/ADC2 no STM32.
+- TIM6 deve ser o gatilho periodico de amostragem.
+- Validacao de sensores deve bloquear valores absurdos e preservar estado de falha para diagnostico.
+
+## Comunicacao
+
+- TunerStudio: camada em `src/app/tuner_studio.cpp`.
+- USB CDC: alvo principal para calibracao e telemetria.
+- CAN/FDCAN: diagnostico e integracao com sensores externos.
+
+Comunicacao nao deve bloquear decode, sync, scheduling ou atuadores.
+
+## Build
+
+Compilar objetos do firmware:
 
 ```bash
-cd openems-v3
-
-# Run all unit tests (host-based)
 make firmware
+```
 
-# Clean build artifacts
+Limpar artefatos:
+
+```bash
 make clean
 ```
 
-### Development Workflow
+A suite host foi removida/adiada durante a migracao STM32-only. O proximo ciclo de hardening deve reintroduzir testes focados no pipeline critico: CKP, sync, quick crank, scheduler, tabelas, limites de calibracao e atuadores.
 
-```bash
-# Create feature branch
-git checkout -b feature/your-feature-name
+## Estado Atual
 
-# Make changes
-vim src/engine/fuel_calc.cpp
+- Codigo ativo direcionado ao STM32H562.
+- Backend de timers STM32 presente para TIM2/TIM3/TIM4/TIM5/TIM8.
+- Scheduler principal consolidado em `src/engine/ecu_sched.cpp`.
+- Fonte ativa nao deve conter aliases legados de Kinetis, FTM ou PDB.
+- `make firmware` deve continuar passando antes de qualquer entrega.
+- Esta pagina e a unica fonte de verdade documental do projeto.
 
-# Build locally
-make firmware
+## Proximos Passos De Hardening
 
-# Commit with clear message
-git commit -m "engine/fuel: implement feature"
+1. Fechar startup/linker script para gerar imagem gravavel completa.
+2. Validar TIM2/TIM8 em bancada com osciloscopio, medindo latencia e jitter reais.
+3. Validar TIM5 com sinal CKP/CMP sintetico de 200 a 8500 rpm.
+4. Endurecer USB CDC real com IRQ/endpoints e sem bloqueio do caminho critico.
+5. Reintroduzir testes host ou HIL para decode, sync, quick crank, scheduler, fuel/ignition e sensores.
+6. Validar conflitos de pinos na placa final antes de congelar pinout.
 
-# Push to openems-v3-dev
-git push origin openems-v3-dev
-```
+## Politica Documental
 
----
-
-## 📚 Documentation
-
-- **[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)** - Execution plan, weekly gates, and delivery tracking (single source of truth)
-- **[openems-v3/README.md](openems-v3/README.md)** - Complete project overview
-- **[openems-v3/CLAUDE.md](openems-v3/CLAUDE.md)** - Development guide & conventions
-- **[openems-v3/FINAL_STATUS.md](openems-v3/FINAL_STATUS.md)** - Phase 1-2 completion report
-- **[openems-v3/PHASE3_4_5_ROADMAP.md](openems-v3/PHASE3_4_5_ROADMAP.md)** - Detailed roadmap for remaining phases
-- **[spec.md](spec.md)** - Full functional specification (Portuguese)
-
----
-
-## 🏗️ Architecture
-
-### 4-Layer Dependency Model
-
-```
-┌──────────────────────────────────┐
-│ APP (TunerStudio, CAN stack)     │ ← Protocols, communication
-├──────────────────────────────────┤
-│ ENGINE (Fuel, ignition, knock)   │ ← Control algorithms
-├──────────────────────────────────┤
-│ DRV (CKP, sensors, scheduler)    │ ← Drivers
-├──────────────────────────────────┤
-│ HAL (STM32H562-optimized)        │ ← Hardware abstraction
-└──────────────────────────────────┘
-         ↓
-   STM32H562RGT6
-```
-
-**Key Properties**:
-- Strict unidirectional dependencies (no circular refs)
-- Host test suite temporarily removed (planned reintroduction in later phase)
-- Platform-agnostic ENGINE/DRV layers
-- STM32H562-specific HAL layer
-
----
-
-## 🔄 Code Reuse Strategy
-
-OpenEMS-v3 reuses proven, battle-tested components:
-
-| Component | Version | Reuse % | Status |
-|-----------|---------|---------|--------|
-| **Engine algorithms** | v1.1 | 100% | ✅ Complete |
-| **Driver layer** | v1.1 | 100% | ✅ Complete |
-| **STM32H5 HAL** | v2.2 | 80% | ✅ Complete |
-| **Test infrastructure** | v1.1 | 100% | ⏸️ Removed for now |
-
-**Total**: **79% code reuse** from proven implementations
-
----
-
-## 🛠️ Technology Stack
-
-| Component | Technology |
-|-----------|------------|
-| **Language** | C++17 (ISO/IEC 14882:2017) |
-| **Standard Library** | None (embedded constraints) |
-| **Target Platform** | STM32H562RGT6 (ARM Cortex-M33 @ 250 MHz) |
-| **Build System** | GNU Make |
-| **Testing** | Temporarily deferred (suite removed) |
-| **Version Control** | Git |
-| **Tuning Software** | TunerStudio / MegaTune protocol |
-
----
-
-## 📝 Naming Conventions
-
-### Variable Prefixes
-- `g_` - File-scope globals
-- `k` - Compile-time constants
-- `s_` - Static locals (rare)
-
-### Unit Suffixes (Physical Quantities)
-- `_x10` - Value × 10 (e.g., `rpm_x10 = 6000` → 600.0 RPM)
-- `_x100` - Value × 100
-- `_x256` - Fixed-point Q8.8
-- `_kpa` - Kilopascals
-- `_degc` - Degrees Celsius
-- `_mv` - Millivolts
-- `_ms` / `_us` - Milliseconds / Microseconds
-- `_pct` - Percentage
-- `_rpm` - RPM (not scaled)
-
----
-
-## 🧪 Test Infrastructure
-
-### Tests
-The legacy host-based test suite was intentionally removed to reduce repository noise and will be redesigned in a later phase.
-
----
-
-## 🌳 Repository History
-
-| Date | Version | Status | Target |
-|------|---------|--------|--------|
-| 2026-02-28 | v1.1 | ✅ Production | Teensy 3.5 |
-| 2026-03-14 | v2.2 | 🟡 Beta | STM32H562 |
-| 2026-04-22 | v3.0-rc1 | 🟢 Phases 1-2 | STM32H562 |
-
----
-
-## 📞 Contributing
-
-### Coding Standards
-1. ✅ `make firmware` must build successfully
-2. ✅ No compiler warnings (`-Wall -Wextra`)
-3. ✅ Follow naming conventions (unit suffixes, prefixes)
-4. ✅ Document validation strategy for changed code
-5. ✅ Update documentation (CLAUDE.md if architectural changes)
-
-### Commit Message Format
-```
-<layer>/<component>: <description>
-
-Example:
-  engine/fuel: fix CLT enrichment at cold start
-  drv/ckp: improve RPM calculation precision
-  hal/stm32h562: optimize timer ISR latency
-```
-
----
-
-## 📈 Performance Targets (STM32H562)
-
-| Metric | Target | Status |
-|--------|--------|--------|
-| **Clock Speed** | 250 MHz | ✅ Configured |
-| **CKP Latency** | < 1 µs | ✅ Target |
-| **Injection Precision** | µs-level | ✅ Achieved |
-| **CAN Throughput** | 1 Mbps (classic) / 5 Mbps (FD) | ✅ Supported |
-| **Memory Usage** | < 50% Flash, < 50% RAM | ✅ Estimated |
-
----
-
-## 📄 License & Attribution
-
-This project builds upon:
-- **OpenEMS v1.1** - Core algorithms and architecture
-- **OpenEMS v2.2** - STM32H5 optimization learnings
-- **Teensy 3.5 firmware** - Reference implementation
-
-**Created**: 2026-02-28  
-**Last Updated**: 2026-04-22  
-**Maintainer**: OpenEMS Development Team
-
----
-
-**Development Status**: ✅ Phases 1-2 Complete | 📋 Phases 3-5 Roadmapped | 🚀 Ready for Phase 3 Implementation
-
-**Repository**: https://github.com/pbuchabqui/OpenEMS  
-**Current Focus**: openems-v3-dev branch  
-**Next Milestone**: Phase 3 USB CDC Integration (1 week)
+Este `README.md` e a fonte unica da verdade. Nao criar `STATUS.md`, `ROADMAP.md`, `PLAN.md`, `CLAUDE.md`, `spec.md` ou documentos similares paralelos. Se uma informacao precisa persistir, ela entra aqui ou vira comentario tecnico proximo ao codigo que a executa.

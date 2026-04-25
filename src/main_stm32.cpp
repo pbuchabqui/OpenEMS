@@ -1,0 +1,433 @@
+// =============================================================================
+// OpenEMS — src/main_stm32.cpp
+// STM32H562RGT6 (ARM Cortex-M33 @ 250 MHz)
+//
+// Entry point para a versão STM32H562 do firmware.
+// Substitui src/main.cpp da versão STM32.
+//
+// Diferenças em relação ao main.cpp original:
+//   - Sem #include <Arduino.h> / STM32 runtime
+//   - PLL 250 MHz via system_stm32_init() (em vez de runtime STM32 runtime)
+//   - millis() provido por SysTick_Handler em system.cpp
+//   - pit1_kick() → iwdg_kick() (IWDG em vez de PIT1)
+//   - SysTick fornece millis()/micros()
+//   - NVIC setup usa IRQs do STM32H562 (TIM5 para CKP; TIM2/TIM8 são OC por hardware)
+//   - Sem pit_init() — SysTick e IWDG já inicializados em system_stm32_init()
+//   - nvm_flush_adaptive_maps() no slot 500ms (Flash Bank2)
+// =============================================================================
+
+#if defined(EMS_HOST_TEST)
+
+int main() { return 0; }
+
+#elif defined(TARGET_STM32H562)  // ── target STM32H562 ─────────────────────
+
+#include <cstdint>
+
+#include "hal/stm32h562/system.h"
+#include "hal/stm32h562/regs.h"
+#include "hal/stm32h562/usb_cdc.h"
+
+#include "app/can_stack.h"
+#include "app/tuner_studio.h"
+#include "drv/ckp.h"
+#include "drv/sensors.h"
+#include "engine/auxiliaries.h"
+#include "engine/ecu_sched.h"
+#include "engine/fuel_calc.h"
+#include "engine/ign_calc.h"
+#include "engine/knock.h"
+#include "engine/quick_crank.h"
+#include "hal/adc.h"
+#include "hal/can.h"
+#include "hal/flexnvm.h"
+#include "hal/runtime_seed.h"
+#include "hal/timer.h"
+
+// =============================================================================
+// Estado de background (do firmware)
+// =============================================================================
+
+static constexpr uint16_t kCalibPageBytes = 512u;
+alignas(4) static uint8_t g_calib_page0[kCalibPageBytes];
+static bool                g_calib_dirty  = false;
+
+// g_datalog_us: no STM32 usa micros() de system.cpp em vez de ISR PIT0
+// Mantemos a variável para compatibilidade com o frame CAN 0x400
+volatile uint32_t g_datalog_us = 0u;
+
+
+static int8_t  g_last_advance_deg = 0;
+static uint8_t g_last_pw_ms_x10   = 0u;
+static int8_t  g_last_stft_pct    = 0;
+
+static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
+static constexpr uint8_t  kFaultBitMap = (1u << 0u);
+static constexpr uint8_t  kFaultBitClt = (1u << 3u);
+static bool g_limp_active = false;
+static bool g_engine_was_running = false;
+static bool g_runtime_seed_saved_for_stop = false;
+static bool g_runtime_seed_arm_window_active = false;
+static uint32_t g_zero_rpm_since_ms = 0u;
+static uint32_t g_runtime_seed_arm_window_start_ms = 0u;
+static bool g_have_last_full_sync = false;
+static ems::drv::CkpSnapshot g_last_full_sync_snapshot = {
+    0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
+};
+static bool g_have_last_gap_sync = false;
+static ems::drv::CkpSnapshot g_last_gap_sync_snapshot = {
+    0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
+};
+
+static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
+static constexpr uint32_t kRuntimeSeedArmWindowMs = 2000u;
+static constexpr uint16_t kDefaultReqFuelUs = 8000u;
+static constexpr uint16_t kMapRefKpa        = 100u;
+static constexpr uint32_t kDefaultSoiLeadDeg = 62u;
+static constexpr uint32_t kFtm0TicksPerMs = 10000u;
+static constexpr uint16_t kMapMinKpa = 10u;
+static constexpr uint16_t kMapMaxKpa = 250u;
+static constexpr uint16_t kLambdaMinMilli = 700u;
+static constexpr uint16_t kLambdaMaxMilli = 1400u;
+
+// =============================================================================
+// Utilitários
+// =============================================================================
+
+[[noreturn]] static inline void system_reset() noexcept {
+    // ARM Cortex-M33: AIRCR reset (idêntico ao M4)
+    *reinterpret_cast<volatile uint32_t*>(0xE000ED0Cu) =
+        (0x5FAu << 16u) | (1u << 2u);
+    for (;;) {}
+}
+
+static inline bool elapsed(uint32_t now, uint32_t last, uint32_t period) noexcept {
+    return static_cast<uint32_t>(now - last) >= period;
+}
+
+static inline uint8_t build_status_bits(const ems::drv::CkpSnapshot& snap,
+                                        const ems::drv::SensorData& sensors) noexcept {
+    uint8_t status = 0u;
+    if (snap.state == ems::drv::SyncState::FULL_SYNC) {
+        status |= ems::app::STATUS_SYNC_FULL;
+    }
+    if (snap.phase_A) {
+        status = static_cast<uint8_t>(status | ems::app::STATUS_PHASE_A);
+    }
+    if (sensors.fault_bits != 0u) {
+        status = static_cast<uint8_t>(status | ems::app::STATUS_SENSOR_FAULT);
+    }
+    return status;
+}
+
+static inline uint16_t clamp_u16(uint16_t v, uint16_t lo, uint16_t hi) noexcept {
+    if (v < lo) { return lo; }
+    if (v > hi) { return hi; }
+    return v;
+}
+
+static inline int8_t clamp_i8(int16_t v, int8_t lo, int8_t hi) noexcept {
+    if (v < lo) { return lo; }
+    if (v > hi) { return hi; }
+    return static_cast<int8_t>(v);
+}
+
+static inline void ts_service() noexcept {
+    ems::hal::usb_cdc_poll();
+    if (!ems::hal::usb_cdc_dtr()) {
+        return;
+    }
+
+    uint8_t rx_buf[64] = {};
+    const uint16_t rx_n = ems::hal::usb_cdc_read_bytes(rx_buf, 64u);
+    for (uint16_t i = 0u; i < rx_n; ++i) {
+        ems::app::ts_rx_byte(rx_buf[i]);
+    }
+
+    ems::app::ts_process();
+
+    uint8_t tx_buf[96] = {};
+    uint16_t tx_n = 0u;
+    while (tx_n < 96u && ems::app::ts_tx_pop(tx_buf[tx_n])) {
+        ++tx_n;
+    }
+    if (tx_n != 0u) {
+        ems::hal::usb_cdc_send_bytes(tx_buf, tx_n);
+    }
+}
+
+// =============================================================================
+// Inicialização — sequência idêntica ao main.cpp
+// =============================================================================
+
+static void openems_init() noexcept {
+    // 1) PLL → 250 MHz + SysTick 1ms + IWDG 100ms
+    system_stm32_init();
+
+    // 2) Timers (TIM5=CKP IC, TIM2/TIM8=OC injeção/ignição, TIM3/TIM4=PWM)
+    // ECU_Hardware_Init() owns TIM2/TIM8 for injection/ignition scheduling.
+    ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
+    ems::hal::tim3_pwm_init(125u);  // → TIM3 PWM (IACV + Wastegate)
+    ems::hal::tim4_pwm_init(150u);  // → TIM4 PWM (VVT)
+
+    // 2a) Scheduler unificado
+    ::ECU_Hardware_Init();
+
+    // 3) ADC (ADC1/ADC2 + TIM6 trigger)
+    ems::hal::adc_init();
+
+    // 4) CAN + USB CDC (TunerStudio only via USB)
+    ems::hal::can0_init();
+    ems::hal::usb_cdc_init();
+
+    // 5) Flash Bank2 → carrega calibração page-0
+    static_cast<void>(
+        ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes));
+    {
+        ems::hal::RuntimeSyncSeed seed = {};
+        if (ems::hal::nvm_load_runtime_seed(&seed) &&
+            ems::hal::runtime_seed_fast_reacquire_compatible_60_2(seed)) {
+            const bool phase_a =
+                ((seed.flags & ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A) != 0u);
+            ems::drv::ckp_seed_arm(phase_a);
+            g_runtime_seed_arm_window_active = true;
+            g_runtime_seed_arm_window_start_ms = millis();
+            static_cast<void>(ems::hal::nvm_clear_runtime_seed());
+        }
+    }
+
+    // 6) Drivers
+    ems::drv::sensors_init();
+
+    // 7) Engine
+    ems::engine::fuel_reset_adaptives();
+    ems::engine::auxiliaries_init();
+    ems::engine::knock_init();
+    ems::engine::quick_crank_reset();
+
+    // 8) Aplicação
+    ems::app::ts_init();
+    ems::app::can_stack_init();
+
+    // 9) NVIC — CKP fica com prioridade máxima. Injeção/ignição em TIM2/TIM8
+    //    usam output compare direto por hardware, sem ISR no caminho crítico.
+    //    SysTick configurado em system_stm32_init() com prio 11.
+    nvic_set_priority(IRQ_TIM5, 1u);
+    nvic_enable_irq(IRQ_TIM5);
+
+    // 10) Aguardar CKP sync (timeout 5 s)
+    const uint32_t sync_deadline = millis() + 5000u;
+    while (millis() < sync_deadline) {
+        iwdg_kick();
+        const auto snap = ems::drv::ckp_snapshot();
+        if (snap.state == ems::drv::SyncState::FULL_SYNC) { break; }
+    }
+}
+
+// =============================================================================
+// main() — substituição do setup()/loop() do STM32 runtime
+// =============================================================================
+
+int main() {
+    openems_init();
+
+    uint32_t g_t2ms_   = millis();
+    uint32_t g_t10ms_  = g_t2ms_;
+    uint32_t g_t20ms_  = g_t2ms_;
+    uint32_t g_t50ms_  = g_t2ms_;
+    uint32_t g_t100ms_ = g_t2ms_;
+    uint32_t g_t500ms_ = g_t2ms_;
+
+    for (;;) {
+        // ── Watchdog kick (primeiro statement) ───────────────────────────
+        iwdg_kick();
+        g_datalog_us = micros();
+
+        const uint32_t now = millis();
+
+        // ── 2ms: fuel + ign recalc + commit calibration ───────────────────
+        if (elapsed(now, g_t2ms_, 2u)) {
+            g_t2ms_ = now;
+
+            const auto snap    = ems::drv::ckp_snapshot();
+            const auto sensors = ems::drv::sensors_get();
+            const bool full_sync = (snap.state == ems::drv::SyncState::FULL_SYNC);
+            const bool sched_sync = (snap.state == ems::drv::SyncState::HALF_SYNC || full_sync);
+
+            if (g_runtime_seed_arm_window_active) {
+                if (elapsed(now, g_runtime_seed_arm_window_start_ms,
+                            kRuntimeSeedArmWindowMs)) {
+                    ems::drv::ckp_seed_disarm();
+                    g_runtime_seed_arm_window_active = false;
+                }
+            }
+
+            if (snap.state == ems::drv::SyncState::FULL_SYNC) {
+                g_have_last_full_sync = true;
+                g_last_full_sync_snapshot = snap;
+            }
+            if ((snap.state == ems::drv::SyncState::HALF_SYNC ||
+                 snap.state == ems::drv::SyncState::FULL_SYNC) &&
+                snap.tooth_index == 0u) {
+                g_have_last_gap_sync = true;
+                g_last_gap_sync_snapshot = snap;
+            }
+
+            const bool rev_cut = g_limp_active &&
+                (snap.rpm_x10 > kLimpRpmLimit_x10);
+
+            const uint16_t map_kpa_raw = static_cast<uint16_t>(sensors.map_kpa_x10 / 10u);
+            const uint16_t map_kpa = clamp_u16(map_kpa_raw, kMapMinKpa, kMapMaxKpa);
+            ems::engine::quick_crank_set_clt(sensors.clt_degc_x10);
+
+            if (sched_sync && !rev_cut) {
+                const uint8_t  ve = ems::engine::get_ve(snap.rpm_x10, map_kpa);
+                const uint32_t base_pw_us =
+                    ems::engine::calc_base_pw_us(kDefaultReqFuelUs, ve,
+                                                  map_kpa, kMapRefKpa);
+                const uint16_t corr_clt_x256 =
+                    ems::engine::corr_clt(sensors.clt_degc_x10);
+                const uint16_t corr_iat_x256 =
+                    ems::engine::corr_iat(sensors.iat_degc_x10);
+                const uint16_t dead_time_us =
+                    ems::engine::corr_vbatt(sensors.vbatt_mv);
+                const uint32_t final_pw_us_base =
+                    ems::engine::calc_final_pw_us(base_pw_us,
+                                                   corr_clt_x256,
+                                                   corr_iat_x256,
+                                                   dead_time_us);
+                const int16_t base_advance_deg = ems::engine::get_advance(snap.rpm_x10, map_kpa);
+                const uint16_t knock_retard_x10 = ems::engine::knock_get_retard_x10(0u);
+                const int16_t advance_deg = ems::engine::calc_total_advance(
+                    base_advance_deg, 0, 0, static_cast<int16_t>(knock_retard_x10 / 10u));
+
+                const auto qc = ems::engine::quick_crank_update(
+                    now, snap.rpm_x10, sched_sync, sensors.clt_degc_x10, advance_deg);
+                const uint32_t final_pw_us =
+                    ems::engine::quick_crank_apply_pw_us(final_pw_us_base,
+                                                         qc.fuel_mult_x256,
+                                                         qc.min_pw_us);
+                g_last_pw_ms_x10 = static_cast<uint8_t>(
+                    (final_pw_us / 100u) > 255u ? 255u : (final_pw_us / 100u));
+                g_last_advance_deg = clamp_i8(qc.spark_deg, -10, 40);
+
+                const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
+                const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
+                const uint32_t dwell_ticks =
+                    (static_cast<uint32_t>(dwell_ms_x10) * kFtm0TicksPerMs) / 10u;
+
+                ::ecu_sched_commit_calibration(
+                    static_cast<uint32_t>(qc.spark_deg < 0 ? 0 : qc.spark_deg),
+                    dwell_ticks,
+                    inj_pw_ticks,
+                    kDefaultSoiLeadDeg);
+            }
+
+            const uint32_t prime_pw = ems::engine::quick_crank_consume_prime();
+            if (prime_pw != 0u) {
+                ::ecu_sched_fire_prime_pulse(prime_pw);
+            }
+
+            // Limp mode: MAP ou CLT em fault
+            const bool map_fault = (sensors.fault_bits & kFaultBitMap) != 0u;
+            const bool clt_fault = (sensors.fault_bits & kFaultBitClt) != 0u;
+            g_limp_active = map_fault || clt_fault;
+        }
+
+        // ── 10ms: IACV, VVT, wastegate PID ───────────────────────────────
+        if (elapsed(now, g_t10ms_, 10u)) {
+            g_t10ms_ = now;
+            ems::engine::auxiliaries_tick_10ms();
+        }
+
+        // ── 20ms: TunerStudio + aux tasks ────────────────────────────────
+        if (elapsed(now, g_t20ms_, 20u)) {
+            g_t20ms_ = now;
+            ts_service();
+            ems::engine::auxiliaries_tick_20ms();
+            const auto snap = ems::drv::ckp_snapshot();
+            const auto sensors = ems::drv::sensors_get();
+            ems::app::can_stack_process(now, snap, sensors,
+                                        g_last_advance_deg,
+                                        g_last_pw_ms_x10,
+                                        g_last_stft_pct,
+                                        0u, 0u,
+                                        build_status_bits(snap, sensors));
+        }
+
+        // ── 50ms: sensores lentos ──────────────────────────────────────────
+        if (elapsed(now, g_t50ms_, 50u)) {
+            g_t50ms_ = now;
+            g_datalog_us = micros();
+            ems::drv::sensors_tick_50ms();
+        }
+
+        // ── 100ms: sensores + STFT ───────────────────────────────────────
+        if (elapsed(now, g_t100ms_, 100u)) {
+            g_t100ms_ = now;
+            ems::drv::sensors_tick_100ms();
+            const auto snap    = ems::drv::ckp_snapshot();
+            const auto sensors = ems::drv::sensors_get();
+
+            if (snap.state == ems::drv::SyncState::FULL_SYNC) {
+                const uint16_t map_kpa = clamp_u16(
+                    static_cast<uint16_t>(sensors.map_kpa_x10 / 10u), kMapMinKpa, kMapMaxKpa);
+                const uint16_t lambda_measured = clamp_u16(
+                    ems::app::can_stack_lambda_milli_safe(now), kLambdaMinMilli, kLambdaMaxMilli);
+                const bool lambda_valid = ems::app::can_stack_wbo2_fresh(now);
+                const int16_t stft = ems::engine::fuel_update_stft(
+                    snap.rpm_x10, map_kpa,
+                    1000, static_cast<int16_t>(lambda_measured),
+                    sensors.clt_degc_x10, lambda_valid,
+                    false, false);
+                g_last_stft_pct = clamp_i8(static_cast<int16_t>(stft / 10), -25, 25);
+            } else {
+                g_last_stft_pct = 0;
+            }
+
+            // Runtime seed — salva posição para re-sincronização rápida
+            const uint32_t rpm = snap.rpm_x10;
+            if (rpm > 0u) {
+                g_engine_was_running = true;
+                g_zero_rpm_since_ms  = 0u;
+                g_runtime_seed_saved_for_stop = false;
+            } else {
+                if (g_engine_was_running && g_zero_rpm_since_ms == 0u) {
+                    g_zero_rpm_since_ms = now;
+                }
+                if (g_engine_was_running && !g_runtime_seed_saved_for_stop &&
+                    g_zero_rpm_since_ms != 0u &&
+                    elapsed(now, g_zero_rpm_since_ms, kRuntimeSeedSaveDelayMs) &&
+                    g_have_last_gap_sync) {
+                    const auto seed_snap = g_last_gap_sync_snapshot;
+                    ems::hal::RuntimeSyncSeed seed = {};
+                    seed.flags = static_cast<uint8_t>(
+                        ems::hal::RUNTIME_SYNC_SEED_FLAG_VALID |
+                        ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC |
+                        (seed_snap.phase_A
+                             ? ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A : 0u));
+                    seed.tooth_index = seed_snap.tooth_index;
+                    seed.decoder_tag =
+                        ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
+                    static_cast<void>(ems::hal::nvm_save_runtime_seed(&seed));
+                    g_runtime_seed_saved_for_stop = true;
+                }
+            }
+        }
+
+        // ── 500ms: flush Flash (LTFT + knock + calibração) ────────────────
+        if (elapsed(now, g_t500ms_, 500u)) {
+            g_t500ms_ = now;
+            if (g_calib_dirty) {
+                static_cast<void>(
+                    ems::hal::nvm_save_calibration(0u, g_calib_page0,
+                                                    kCalibPageBytes));
+                g_calib_dirty = false;
+            }
+            // Persistência de adaptativos adicionais deve ser integrada aqui
+            // quando o backend NVM correspondente estiver disponível.
+        }
+    }
+}
+
+#endif  // TARGET_STM32H562
