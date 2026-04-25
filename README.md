@@ -13,8 +13,7 @@ Este documento substitui os documentos historicos de plano, status e revisao. Qu
 - MCU: STM32H562RGT6, Cortex-M33.
 - Linguagem: C++17 embarcado.
 - Restricoes: sem STL em caminho critico, sem alocacao dinamica em runtime, sem excecoes.
-- Build atual: compilacao de objetos via `make firmware`.
-- Status do link final: ainda requer startup/linker script definitivos para imagem completa gravavel.
+- Build atual: `make firmware` gera `.elf`, `.hex` e `.bin` em `/tmp/openems-build`.
 
 ## Regras De Arquitetura
 
@@ -175,7 +174,7 @@ A suite host foi removida/adiada durante a migracao STM32-only. O proximo ciclo 
 
 ## Proximos Passos De Hardening
 
-1. Fechar startup/linker script para gerar imagem gravavel completa.
+1. Validar imagem `.bin` em bancada com ST-Link, sem bobinas/injetores energizados no primeiro boot.
 2. Validar TIM2/TIM8 em bancada com osciloscopio, medindo latencia e jitter reais.
 3. Validar TIM5 com sinal CKP/CMP sintetico de 200 a 8500 rpm.
 4. Endurecer USB CDC real com IRQ/endpoints e sem bloqueio do caminho critico.

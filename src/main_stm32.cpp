@@ -51,7 +51,7 @@ alignas(4) static uint8_t g_calib_page0[kCalibPageBytes];
 static bool                g_calib_dirty  = false;
 
 // g_datalog_us: no STM32 usa micros() de system.cpp em vez de SysTick
-// Mantemos a variável para compatibilidade com o frame CAN 0x400
+// Mantemos a variável para quadro CAN 0x400
 volatile uint32_t g_datalog_us = 0u;
 
 
