@@ -15,9 +15,9 @@
 //         em ambos os locais (MAP/TPS/MAF: max 4095; FUEL/OIL: max 4050).
 //
 // [FIX-2] sensors_on_tooth() converte snap.tooth_period_ns -> ticks TIM5 com
-//         fator correto (*60/1000), pois TIM5 opera a 60 MHz efetivo
-//         (120 MHz system / prescaler 2, confirmado em hal/timer.h).
-//         Codigo original usava fator 120 (erro 2x). CkpSnapshot nao expoe
+//         fator correto (*625/10000), pois TIM5 opera a 62.5 MHz efetivo
+//         (250 MHz / prescaler 4, confirmado em hal/timer.h).
+//         CkpSnapshot nao expoe
 //         tooth_period_tim5_ticks -- tooth_period_ns e o campo canonico.
 //
 // [FIX-3] AN1-4 (ADC primary_SE6b..9b) amostrados em sensors_tick_100ms() como
@@ -26,8 +26,8 @@
 // [FIX-4] ADC primary e ADC1 configurados em 12-bit (MODE=01). Codigo original
 //         usava 16-bit (MODE=11) para todos os canais -- incorreto.
 //
-// [FIX-5] kMafTim5ClockHz corrigido para 60_000_000 Hz.
-//         TIM5 CH1 captura MAF no mesmo timer: 120 MHz / prescaler 2 = 60 MHz.
+// [FIX-5] kMafTim5ClockHz corrigido para 62_500_000 Hz.
+//         TIM5 CH1 captura MAF no mesmo timer: 250 MHz / prescaler 4 = 62.5 MHz.
 //         Valores anteriores (24 MHz) estavam incorretos.
 // =============================================================================
 
@@ -46,11 +46,11 @@ constexpr uint16_t kFallbackTpsPctX10  = 0u;
 constexpr int16_t  kFallbackCltDegcX10 = 900;
 constexpr int16_t  kFallbackIatDegcX10 = 250;
 
-// TIM5: 120 MHz system clock / prescaler 2 = 60 MHz efetivo = 16.667 ns/tick
-// TIM6 trigger:  bus clock = 60 MHz
+// TIM5: 250 MHz / prescaler 4 = 62.5 MHz efetivo = 16 ns/tick
+// TIM6 trigger: mesmo clock efetivo usado no cálculo
 // Razão 1:1 — nenhuma conversão de escala necessária.
 // Confirmado por TIM5 input-capture clock
-constexpr uint32_t kMafTim5ClockHz = 60000000u;
+constexpr uint32_t kMafTim5ClockHz = 62500000u;
 
 struct FaultTracker {
     SensorRange range;
@@ -250,6 +250,11 @@ inline uint16_t raw_to_mv(uint16_t raw) noexcept {
     return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 1000u) / 4095u);
 }
 
+// VBATT via AN4: divisor externo dimensionado para 0..18V em 0..3.3V ADC.
+inline uint16_t vbatt_raw_to_mv(uint16_t raw) noexcept {
+    return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 18000u) / 4095u);
+}
+
 // TPS: calibração dinâmica min/max → 0..100.0% (×10)
 inline uint16_t tps_raw_to_pct_x10(uint16_t raw) noexcept {
     if (g_tps_raw_max <= g_tps_raw_min) { return 0u; }
@@ -293,7 +298,7 @@ inline void sample_fast_channels() noexcept {
                          ? kFallbackTpsPctX10
                          : tps_raw_to_pct_x10(avg4(g_tps_buf));
 
-    // MAF: estimativa por frequência via TIM5 CH1 (120 MHz / prescaler 2 = 60 MHz)
+    // MAF: estimativa por frequência via TIM5 CH1 (250 MHz / prescaler 4 = 62.5 MHz)
     const uint16_t maf_avg_period = maf_period_avg4();
     g_data.maf_gps_x100 = (maf_avg_period > 0u)
                           ? static_cast<uint16_t>(kMafTim5ClockHz / maf_avg_period)
@@ -377,12 +382,12 @@ void sensors_init() noexcept {
 
 // FIX-2 (revisado): CkpSnapshot não expõe tooth_period_tim5_ticks.
 // Converte tooth_period_ns → ticks usando o clock efetivo do TIM5.
-// TIM5: 120 MHz / prescaler 2 = 60 MHz → 1 tick = 16.667 ns
-//   ticks = ns * 60 / 1000
-// TIM6 trigger opera no mesmo clock (bus clock = 60 MHz) → razão 1:1,
+// TIM5: 250 MHz / prescaler 4 = 62.5 MHz -> 1 tick = 16 ns
+//   ticks = ns * 625 / 10000
+// TIM6 trigger opera no mesmo clock efetivo → razão 1:1,
 // adc_trigger_on_tooth usa o valor diretamente sem nova conversão.
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
-    const uint16_t ticks = static_cast<uint16_t>((snap.tooth_period_ns * 60u) / 1000u);
+    const uint32_t ticks = (snap.tooth_period_ns * 625u) / 10000u;
     ems::hal::adc_trigger_on_tooth(ticks);
 
     g_fast_sample_accum = static_cast<uint16_t>(
@@ -444,8 +449,9 @@ void sensors_tick_100ms() noexcept {
     g_data.an3_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN3_SE8B);
     g_data.an4_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN4_SE9B);
 
-    // TODO: VBATT via canal dedicado quando mapeamento elétrico for definido.
-    g_data.vbatt_mv = 12000u;
+    const uint16_t vbatt_raw = g_data.an4_raw;
+    const uint16_t vbatt_mv = vbatt_raw_to_mv(vbatt_raw);
+    g_data.vbatt_mv = (vbatt_mv >= 6000u && vbatt_mv <= 18000u) ? vbatt_mv : 12000u;
 }
 
 void sensors_maf_freq_capture_isr(uint16_t period_ticks) noexcept {

@@ -72,10 +72,8 @@ void tim5_ic_init(void) {
     TIM5_CR1 = TIM_CR1_CEN;
 }
 
-uint16_t tim5_count() noexcept {
-    // TIM5 é 32-bit; retorna os 16 bits inferiores para compatibilidade
-    // com a aritmética circular uint16_t do ckp.cpp
-    return static_cast<uint16_t>(TIM5_CNT & 0xFFFFu);
+uint32_t tim5_count() noexcept {
+    return TIM5_CNT;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -185,13 +183,13 @@ extern "C" void TIM5_IRQHandler(void) {
 
 #include "hal/timer.h"
 namespace ems::hal {
-static uint16_t g_mock_tim5_cnt = 0u;
+static uint32_t g_mock_tim5_cnt = 0u;
 void tim5_ic_init(void) {}
 void tim3_pwm_init(uint32_t) {}
 void tim4_pwm_init(uint32_t) {}
 void tim3_set_duty(uint8_t, uint16_t) noexcept {}
 void tim4_set_duty(uint8_t, uint16_t) noexcept {}
-uint16_t tim5_count() noexcept { return g_mock_tim5_cnt; }
+uint32_t tim5_count() noexcept { return g_mock_tim5_cnt; }
 } // namespace ems::hal
 
 #endif  // EMS_HOST_TEST

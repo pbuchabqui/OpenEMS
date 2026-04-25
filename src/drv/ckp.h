@@ -20,7 +20,7 @@
  *       └──────────── gap detected ───────────┘
  *                       (re-sync)
  *
- * HARDWARE: TIM5 Canal 0 (PTD0/CKP) em modo Input Capture, rising edge.
+ * HARDWARE: TIM5 CH1 (PA0/CKP) em modo Input Capture, rising edge.
  *   ISR: ckp_tim5_ch1_isr() — chamada por TIM5_IRQHandler() em hal/stm32h562/timer.cpp
  *   Prioridade NVIC: 1 (mais alta do sistema) — §CLAUDE.md tabela IRQ
  */
@@ -53,7 +53,7 @@ enum class SyncState : uint8_t {
 struct CkpSnapshot {
     uint32_t tooth_period_ns;    ///< Período do último dente normal (ns); 0 antes de HALF_SYNC
     uint16_t tooth_index;        ///< Índice do dente (0–57) contado desde o último gap; válido em FULL_SYNC
-    uint16_t last_tim5_capture;  ///< Timestamp TIM5 (ticks) do último dente — para angle-to-ticks
+    uint32_t last_tim5_capture;  ///< Timestamp TIM5 (ticks) do último dente — para angle-to-ticks
     uint32_t rpm_x10;            ///< RPM × 10 (ex: 8000 = 800,0 RPM); 0 antes de dados suficientes
     SyncState state;             ///< Estado corrente da máquina de sincronismo
     bool phase_A;                ///< Fase do ciclo de 4 tempos — alterna a cada evento no cam sensor (CH1)
@@ -77,16 +77,15 @@ CkpSnapshot ckp_snapshot() noexcept;
  *                    (tipicamente snap.last_tim5_capture).
  * @return            Valor CnV para TIM5 — NÃO compatível com scheduler.
  *
- * DOMÍNIO DE CLOCK: TIM5 @ 60 MHz (PS=2, 16,7 ns/tick).
- * scheduler @ 15 MHz (PS=8, 66,7 ns/tick). Para converter o delta para ticks
- * scheduler divida por 4 (60 MHz / 15 MHz).
+ * DOMÍNIO DE CLOCK: TIM5 @ 62.5 MHz (PS=4, 16 ns/tick).
+ * scheduler usa TIM2/TIM8 e deve converter explicitamente entre dominios.
  *
  * STATUS (2026-03): Sem callers em produção. O pipeline ecu_sched deriva
  * ângulo→ticks no domínio scheduler via g_ticks_per_rev (ecu_sched.cpp,
  * Calculate_Sequential_Cycle). Reservada para uso futuro em saídas
  * CKP-síncronas (tach-out, came via TIM5 output-compare).
  */
-uint16_t ckp_angle_to_ticks(uint16_t angle_mdeg, uint16_t ref_capture) noexcept;
+uint32_t ckp_angle_to_ticks(uint32_t angle_mdeg, uint32_t ref_capture) noexcept;
 
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 // Chamados pela ISR de CKP a cada dente (símbolos fracos — sobrescreva para
@@ -101,8 +100,8 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept;
 void prime_on_tooth(const CkpSnapshot& snap) noexcept;
 
 // ── ISR handlers (chamados de hal/stm32h562/timer.cpp) ────────────────────────────────────
-void ckp_tim5_ch1_isr() noexcept;   ///< CKP rising edge (TIM5 CH0 / PTD0)
-void ckp_tim5_ch2_isr() noexcept;   ///< Cam sensor rising edge (TIM5 CH1 / PTD1)
+void ckp_tim5_ch1_isr() noexcept;   ///< CKP rising edge (TIM5 CH1 / PA0)
+void ckp_tim5_ch2_isr() noexcept;   ///< Cam sensor rising edge (TIM5 CH2 / PA1)
 
 /**
  * @brief Arm a persisted sync seed for fast reacquire on next valid gap.

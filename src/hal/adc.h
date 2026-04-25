@@ -45,7 +45,7 @@ enum class AdcSecondaryChannel : uint8_t {
 };
 
 void     adc_init() noexcept;
-void     adc_trigger_on_tooth(uint16_t tooth_period_ticks) noexcept;
+void     adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept;
 
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept;
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept;
@@ -53,7 +53,7 @@ uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept;
 #if defined(EMS_HOST_TEST)
 void     adc_test_set_raw_primary(AdcPrimaryChannel ch, uint16_t raw) noexcept;
 void     adc_test_set_raw_secondary(AdcSecondaryChannel ch, uint16_t raw) noexcept;
-uint16_t adc_test_last_trigger_mod() noexcept;
+uint32_t adc_test_last_trigger_mod() noexcept;
 #endif
 
 }  // namespace ems::hal

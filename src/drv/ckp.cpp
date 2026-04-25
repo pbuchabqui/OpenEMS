@@ -5,29 +5,28 @@
  * ═══════════════════════════════════════════════════════════════════════════
  * MÓDULO 1: DECODE via TIM5 input capture (Crank)
  * ───────────────────────────────────────────────
- *   Hardware: TIM5 Canal 0 (PTD0), rising edge capture.
+ *   Hardware: TIM5 CH1 (PA0/CKP), rising edge input capture.
  *             Em targets embarcados o TIM5 é mapeado via hal/stm32h562/timer.cpp.
  *             Em host tests, TIM5_CKP_CAPTURE e TIM5_CAM_CAPTURE sao mocks volateis.
  *
  *   Fluxo da ISR (ckp_tim5_ch1_isr):
- *     1. Verificação anti-glitch: pino PTD0 ainda HIGH? (não é noise falling edge)
- *     2. Leitura de TIM5_CKP_CAPTURE (registrador de captura — travado pelo HW)
+ *     1. Leitura de TIM5_CKP_CAPTURE (registrador de captura — travado pelo HW)
  *        ► NÃO lemos TIM5_CNT: o contador avançou enquanto a CPU atendia a IRQ.
  *          TIM5_CKP_CAPTURE contém o timestamp EXATO da borda de subida (RusEFI #1488).
- *     3. delta_ticks = (uint16_t)(capture_now - prev_capture)  ← aritmética circular
- *        Correto mesmo em overflow do contador de 16 bits (≈1,09 ms @ 60 MHz).
- *     4. Conversão para nanossegundos: period_ns = (delta_ticks × 16667) / 1000
- *        TIM5: 120 MHz / prescaler 2 = 60 MHz → 16,667 ns/tick
- *     5. Cálculo de médias → classificação: GAP | NORMAL_TOOTH | NOISE
- *     6. Atualização da máquina de estados (Módulo 2)
- *     7. Disparo dos hooks sensors_on_tooth() / schedule_on_tooth()
+ *     2. delta_ticks = capture_now - prev_capture com aritmetica circular uint32_t.
+ *        Correto mesmo em overflow do TIM5 de 32 bits.
+ *     3. Conversao para nanossegundos: period_ns = delta_ticks * 16
+ *        TIM5: 62.5 MHz no STM32H562 -> 16 ns/tick
+ *     4. Calculo de médias → classificação: GAP | NORMAL_TOOTH | NOISE
+ *     5. Atualizacao da máquina de estados (Módulo 2)
+ *     6. Disparo dos hooks sensors_on_tooth() / schedule_on_tooth()
  *
  * VANTAGEM DO INPUT CAPTURE vs GPIO/EXTI:
  *   O periférico TIM5 registra o timestamp da borda em hardware no exato
  *   instante do evento, independente do atraso de atendimento da IRQ
- *   (tipicamente 12–20 ciclos = 0,1–0,17 µs @ 120 MHz no Cortex-M4).
+ *   (tipicamente dezenas de ciclos no Cortex-M33).
  *   A 6000 RPM, 0,2 µs de jitter ≈ 0,07° — inaceitável sem input capture.
- *   Com input capture: resolução = 1 tick = 16,67 ns ≈ 0,006° @ 6000 RPM.
+ *   Com input capture: resolução = 1 tick = 16 ns ≈ 0,006° @ 6000 RPM.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * MÓDULO 2: SYNC — Máquina de Estados
@@ -132,10 +131,9 @@ static constexpr uint32_t kTolDenHigh = 5u;
 // 3 amostras são suficientes para filtrar ruído transitório.
 static constexpr uint8_t kHistSize = 3u;
 
-// ── Acesso a registradores TIM5 ──────────────────────────────────────────────
-// TIM5 Base: 0x400B9000 (K64P144M120SF5 RM, Table 3-1)
-// CnSC CH0:  base + 0x0C + 0*8 = 0x400B900C  (Status and Control — §43.3.5)
-// CnV  CH0:  base + 0x0C + 0*8 + 4 = 0x400B9010 (Channel Value — §43.3.6)
+// ---- Acesso a registradores TIM5 ------------------------------------------------
+// STM32H562 TIM5 e GPIO sao configurados em hal/stm32h562/timer.cpp.
+// O modulo usa aliases HAL para manter o decode desacoplado de offsets.
 //
 // CRÍTICO: Lemos TIM5_CKP_CAPTURE (registrador de CAPTURA travado pelo hardware),
 //   não TIM5_CNT (contador livre que avançou durante o atendimento da ISR).
@@ -174,7 +172,7 @@ static constexpr uint8_t kHistSize = 3u;
 //   revisão cuidadosa das implicações de latência para as demais ISRs).
 struct DecoderState {
     ems::drv::CkpSnapshot snap;
-    uint16_t prev_capture;              // último timestamp TIM5_CKP_CAPTURE (para delta circular)
+    uint32_t prev_capture;              // último timestamp TIM5_CKP_CAPTURE (para delta circular)
     uint32_t tooth_hist[kHistSize];     // janela deslizante de períodos (ticks) — dentes normais
     uint8_t  hist_ready;                // quantas entradas válidas em tooth_hist (máx kHistSize)
     uint16_t tooth_count;               // dentes desde o último gap aceito
@@ -205,20 +203,9 @@ static constexpr uint16_t kSeedCamConfirmMaxTeeth = 70u;
 // ── Utilitários inline ────────────────────────────────────────────────────────
 
 // Converte delta de ticks TIM5 para nanossegundos.
-// TIM5: 120 MHz / prescaler 2 = 60 MHz → 1 tick = 16,667 ns
-// Evita float: (ticks × 16667) / 1000  (equivalente exato a ticks × 16.667 ns)
-// Análise de overflow: max delta_ticks = 65535 (uint16_t)
-//   65535 × 16667 = 1,092,534,045 < 2^32 (4,294,967,295) → seguro em uint32_t.
-// Margem restante: ~3× antes de overflow. Se o prescaler do TIM5 mudar para
-// valores maiores que 2, recalcular com o novo fator de conversão.
-inline uint32_t ticks_to_ns(uint16_t ticks) noexcept {
-    // TIM5: 120 MHz / PS=2 = 60.0 MHz → 16.667 ns/tick → factor = 16667
-    // STM32H562 TIM5: 250 MHz / PS=4 = 62.5 MHz → 16.000 ns/tick → factor = 16000
-#if defined(TICKS_TO_NS_FACTOR)
-    return (static_cast<uint32_t>(ticks) * TICKS_TO_NS_FACTOR) / TICKS_TO_NS_DIVISOR;
-#else
-    return (static_cast<uint32_t>(ticks) * 16667u) / 1000u;
-#endif
+// STM32H562 TIM5: 62.5 MHz -> 1 tick = 16 ns.
+inline uint32_t ticks_to_ns(uint32_t ticks) noexcept {
+    return ticks * 16u;
 }
 
 // Calcula RPM × 10 a partir do período de um dente (nanossegundos).
@@ -286,7 +273,7 @@ inline void exit_critical() noexcept {
 // ── Processamento de gap na máquina de estados ───────────────────────────────
 // Chamado pela ISR quando period > 1,5 × avg E tooth_count satisfaz a condição.
 // Retorna true se o gap foi aceito (transição válida).
-inline bool process_gap_event(uint16_t capture_now) noexcept {
+inline bool process_gap_event(uint32_t capture_now) noexcept {
     switch (g_state.snap.state) {
 
         case ems::drv::SyncState::WAIT_GAP:
@@ -393,10 +380,9 @@ CkpSnapshot ckp_snapshot() noexcept {
     return out;
 }
 
-uint16_t ckp_angle_to_ticks(uint16_t angle_mdeg, uint16_t ref_capture) noexcept {
-    // RESERVADA: sem callers em produção. Domínio TIM5 (60 MHz/PS=2). Ver header.
-    // TIM5: 120 MHz / prescaler 2 = 60 MHz → 16,667 ns/tick
-    // tooth_period_ticks = tooth_period_ns × (60 ticks/µs) / 1000
+uint32_t ckp_angle_to_ticks(uint32_t angle_mdeg, uint32_t ref_capture) noexcept {
+    // RESERVADA: sem callers em producao. Dominio TIM5 @ 62.5 MHz. Ver header.
+    // tooth_period_ticks = tooth_period_ns * 62.5 ticks/us / 1000
     // ticks_para_angulo  = (angle_mdeg × tooth_period_ticks) / kToothAngleX1000
     //
     // Verificação dimensional (angle_mdeg em miligraus, kToothAngleX1000 = 6000 mg/dente):
@@ -404,21 +390,21 @@ uint16_t ckp_angle_to_ticks(uint16_t angle_mdeg, uint16_t ref_capture) noexcept 
     //   Para 1°:           angle_mdeg = 1000 → ticks = 1000 × T / 6000 = T/6 ✓
     //
     // ATENÇÃO: não passar graus inteiros (ex: 6) — causará erro de 1000×.
-    const uint32_t tooth_period_ticks = (g_state.snap.tooth_period_ns * 60u) / 1000u;
-    const uint32_t delta = (static_cast<uint32_t>(angle_mdeg) * tooth_period_ticks)
+    const uint32_t tooth_period_ticks = (g_state.snap.tooth_period_ns * 625u) / 10000u;
+    const uint32_t delta = (angle_mdeg * tooth_period_ticks)
                            / kToothAngleX1000;
-    return static_cast<uint16_t>(ref_capture + static_cast<uint16_t>(delta));
+    return ref_capture + delta;
 }
 
-// ── ISR do CKP: TIM5 Canal 0 (PTD0, rising edge) ─────────────────────────────
+// ── ISR do CKP: TIM5 CH1 (PA0/CKP, rising edge) ─────────────────────────────
 //
 // CONTEXTO: chamada por TIM5_IRQHandler() em hal/stm32h562/timer.cpp, NVIC prioridade 1.
 // Não há chamada direta por código de usuário.
 //
-// SETUP do TIM5_CnSC (Canal 0) — K64 RM §43.3.5:
-//   CnSC[5:4] MSnB:MSnA = 00  → modo Input Capture (não Output Compare)
-//   CnSC[3:2] ELSnB:ELSnA = 01 → Rising Edge Capture
-//   CnSC[6]   CHIE = 1        → Interrupt Enable
+// SETUP do TIM5 CH1 no STM32H562:
+//   CCMR1.CC1S = 01 -> TI1 input capture
+//   CCER.CC1P  = 0  -> rising edge
+//   DIER.CC1IE = 1  -> interrupt enable
 //   Configurado em hal/stm32h562/timer.cpp → tim5_ic_init() durante boot.
 //
 // VANTAGEM vs GPIO/EXTI:
@@ -432,21 +418,19 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     // O registrador de captura foi travado pelo HW no instante exato da borda;
     // leituras posteriores (CKP_CAM_GPIO_IDR, etc.) não afetam o valor capturado.
     // NÃO ler TIM5_CNT: o contador avançou durante a latência de IRQ.
-    const uint16_t capture_now = static_cast<uint16_t>(TIM5_CKP_CAPTURE & 0xFFFFu);
+    const uint32_t capture_now = TIM5_CKP_CAPTURE;
 
-    // ── 2. Delta de ticks (aritmética circular uint16_t) ──────────────────
-    // Subtração circular: correto mesmo se o contador passou por 0xFFFF→0x0000
-    // durante o período do dente. Ex: 0x0005 - 0xFFFD = 0x0008 (delta = 8) ✓
-    const uint16_t delta_ticks = static_cast<uint16_t>(capture_now - g_state.prev_capture);
+    // -- 2. Delta de ticks (aritmetica circular uint32_t) -------------------
+    // Subtracao circular: correta mesmo se o contador passou por 0xFFFFFFFF -> 0.
+    const uint32_t delta_ticks = capture_now - g_state.prev_capture;
 
     // ── 3. Anti-glitch por período mínimo ────────────────────────────────
-    // Estratégia preferida a checar CKP_CAM_GPIO_IDR depois da captura: a 120 MHz
+    // Estrategia preferida a checar GPIO depois da captura:
     // o pino pode ter retornado LOW antes da CPU ler o registrador de GPIO,
     // descartando capturas legítimas em alta rotação (> 4000 RPM).
-    // Período mínimo aceitável: dente a 20000 RPM → 60 MHz / (58 * 20000/60)
-    //   = ~3103 ticks; usamos 50 como limite inferior conservador para
-    //   rejeitar glitches de EMC (< ~833 ns) sem afetar operação normal.
-    static constexpr uint16_t kMinToothTicks = 50u;
+    // usamos 50 ticks como limite inferior conservador para rejeitar glitches
+    // de EMC (< 800 ns) sem afetar operacao normal.
+    static constexpr uint32_t kMinToothTicks = 50u;
     if (delta_ticks < kMinToothTicks) {
         return;  // pulso muito curto → ruído EMC, descartar
     }
@@ -557,7 +541,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     prime_on_tooth(g_state.snap);
 }
 
-// ── ISR do cam sensor: TIM5 Canal 1 (PTD1, rising edge) ──────────────────────
+// ── ISR do cam sensor: TIM5 CH2 (PA1/CMP, rising edge) ──────────────────────
 // Cada borda de subida do cam sensor indica meio ciclo de motor (180° de virabrequim).
 // phase_A alterna para permitir ao agendador identificar qual par de cilindros está
 // no tempo de injeção (cilindros 1/4 vs 2/3 para motor 4 cilindros em linha).

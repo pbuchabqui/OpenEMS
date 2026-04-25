@@ -209,7 +209,7 @@ void adc_init() noexcept {
     ADC2_CR |= ADC_CR_ADSTART;
 }
 
-void adc_trigger_on_tooth(uint16_t tooth_period_ticks) noexcept {
+void adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept {
     // Equivalente ao adc_trigger_on_tooth() do STM32:
     // Ajusta período do TIM6 para que o ADC seja amostrado a cada dente CKP.
     // tooth_period_ticks está em ticks de 62.5 MHz (TIM5).
@@ -277,14 +277,14 @@ extern "C" void ADC1_2_IRQHandler(void) {
 namespace ems::hal {
 static uint16_t g_adc_primary[8] = {};
 static uint16_t g_adc_secondary[4] = {};
-static uint16_t g_last_trigger_mod = 0u;
+static uint32_t g_last_trigger_mod = 0u;
 void     adc_init() noexcept {}
-void     adc_trigger_on_tooth(uint16_t t) noexcept { g_last_trigger_mod = t; }
+void     adc_trigger_on_tooth(uint32_t t) noexcept { g_last_trigger_mod = t; }
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept { return g_adc_primary[static_cast<uint8_t>(ch)]; }
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept { return g_adc_secondary[static_cast<uint8_t>(ch)]; }
 void adc_test_set_raw_primary(AdcPrimaryChannel ch, uint16_t v) noexcept { g_adc_primary[static_cast<uint8_t>(ch)] = v; }
 void adc_test_set_raw_secondary(AdcSecondaryChannel ch, uint16_t v) noexcept { g_adc_secondary[static_cast<uint8_t>(ch)] = v; }
-uint16_t adc_test_last_trigger_mod() noexcept { return g_last_trigger_mod; }
+uint32_t adc_test_last_trigger_mod() noexcept { return g_last_trigger_mod; }
 } // namespace ems::hal
 
 #endif  // EMS_HOST_TEST

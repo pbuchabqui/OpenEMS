@@ -48,9 +48,9 @@ static inline void exit_critical(void)
 #endif
 }
 
-static inline uint16_t scheduler_counter(void)
+static inline uint32_t scheduler_counter(void)
 {
-    return (uint16_t)(TIM2_CNT & 0xFFFFU);
+    return TIM2_CNT;
 }
 
 static inline uint8_t stm32_inj_tim_ch(uint8_t ch)
@@ -148,16 +148,17 @@ static void force_output(uint8_t ch, uint8_t action)
     if (tim_ch != 0U) { stm32_force_oc(is_inj, tim_ch, high); }
 }
 
-static void arm_channel(uint8_t ch, uint16_t target_cnv, uint8_t action)
+static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 {
     const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
     const uint8_t tim_ch = (is_inj != 0U) ? stm32_inj_tim_ch(ch) : stm32_ign_tim_ch(ch);
-    const uint16_t now = scheduler_counter();
-    const uint16_t delta = (uint16_t)(target_cnv - now);
-    const uint16_t timer_now = (is_inj != 0U) ? (uint16_t)(TIM2_CNT & 0xFFFFU) : (uint16_t)(TIM8_CNT & 0xFFFFU);
+    const uint32_t now = scheduler_counter();
+    const uint32_t delta = target_cnv - now;
+    const uint32_t timer_now = (is_inj != 0U) ? TIM2_CNT : (uint16_t)(TIM8_CNT & 0xFFFFU);
     volatile uint32_t *ccr;
 
     if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
+    if ((is_inj == 0U) && (delta > 0xFFFFU)) { ++g_cycle_schedule_drop_count; return; }
     if (delta < STM32_MIN_COMPARE_LEAD_TICKS) { ++g_late_event_count; force_output(ch, action); return; }
 
     stm32_set_oc_mode(is_inj, tim_ch, ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U);
@@ -165,7 +166,7 @@ static void arm_channel(uint8_t ch, uint16_t target_cnv, uint8_t action)
     __asm__ volatile("dmb" ::: "memory");
 #endif
     ccr = stm32_tim_ccr(is_inj, tim_ch);
-    *ccr = (uint16_t)(timer_now + delta);
+    *ccr = (is_inj != 0U) ? (timer_now + delta) : (uint16_t)(timer_now + delta);
     if (is_inj != 0U) { TIM2_SR = ~stm32_tim_cc_flag(tim_ch); }
     else { TIM8_SR = ~stm32_tim_cc_flag(tim_ch); }
 }
@@ -221,7 +222,7 @@ void ECU_Hardware_Init(void)
     TIM8_CCMR2 = TIM_CCMR2_OC3M_FORCE_INACTIVE | TIM_CCMR2_OC4M_FORCE_INACTIVE;
     TIM8_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E; TIM8_BDTR = (1U << 15); TIM8_EGR = 1U;
 
-    TIM2_CR1 = 0U; TIM2_DIER = 0U; TIM2_SR = 0U; TIM2_PSC = STM32_TIM_PSC_10MHZ; TIM2_CNT = 0U; TIM2_ARR = 0xFFFFU;
+    TIM2_CR1 = 0U; TIM2_DIER = 0U; TIM2_SR = 0U; TIM2_PSC = STM32_TIM_PSC_10MHZ; TIM2_CNT = 0U; TIM2_ARR = 0xFFFFFFFFU;
     TIM2_CCMR1 = TIM_CCMR1_OC1M_FORCE_INACTIVE | TIM_CCMR1_OC2M_FORCE_INACTIVE;
     TIM2_CCMR2 = TIM_CCMR2_OC3M_FORCE_INACTIVE | TIM_CCMR2_OC4M_FORCE_INACTIVE;
     TIM2_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E; TIM2_EGR = 1U;
@@ -330,7 +331,7 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us)
     static const uint8_t inj[4U] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
     if (pw_us == 0U) { return; }
     if (pw_us > 30000U) { pw_us = 30000U; }
-    const uint16_t off_cnv = (uint16_t)(scheduler_counter() + ((pw_us * ECU_SCHED_TICKS_PER_MS) / 1000U));
+    const uint32_t off_cnv = scheduler_counter() + ((pw_us * ECU_SCHED_TICKS_PER_MS) / 1000U);
     enter_critical();
     for (uint8_t i = 0U; i < 4U; ++i) { force_output(inj[i], ECU_ACT_INJ_ON); }
     for (uint8_t i = 0U; i < 4U; ++i) { arm_channel(inj[i], off_cnv, ECU_ACT_INJ_OFF); }
@@ -346,14 +347,13 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     }
 
     uint32_t tooth_ticks = TOOTH_NS_TO_SCHED(snap.tooth_period_ns);
-    if (tooth_ticks > 0xFFFFU) { tooth_ticks = 0xFFFFU; }
-    const uint16_t now = scheduler_counter();
+    const uint32_t now = scheduler_counter();
     const uint8_t current_phase = snap.phase_A ? ECU_PHASE_A : ECU_PHASE_B;
     for (uint8_t i = 0U; i < g_angle_table_count; ++i) {
         const AngleEvent_t *e = &g_angle_table[i];
         if ((e->valid == 0U) || (e->tooth_index != (uint8_t)snap.tooth_index)) { continue; }
         if ((e->phase_A != ECU_PHASE_ANY) && (e->phase_A != current_phase)) { continue; }
-        arm_channel(e->channel, (uint16_t)(now + (uint16_t)((e->sub_frac_x256 * tooth_ticks) >> 8U)), e->action);
+        arm_channel(e->channel, now + ((e->sub_frac_x256 * tooth_ticks) >> 8U), e->action);
     }
 
     const uint8_t rev_boundary = ((g_hook_prev_valid != 0U) && (snap.tooth_index == 0U) && (g_hook_prev_tooth != 0U)) ? 1U : 0U;
