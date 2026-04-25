@@ -93,7 +93,7 @@ static inline volatile uint32_t *stm32_tim_ccr(uint8_t is_inj, uint8_t tim_ch)
     }
 }
 
-static inline uint32_t stm32_ccif(uint8_t tim_ch)
+static inline uint32_t stm32_tim_cc_flag(uint8_t tim_ch)
 {
     return (uint32_t)(TIM_SR_CC1IF << (tim_ch - 1U));
 }
@@ -166,8 +166,8 @@ static void arm_channel(uint8_t ch, uint16_t target_cnv, uint8_t action)
 #endif
     ccr = stm32_tim_ccr(is_inj, tim_ch);
     *ccr = (uint16_t)(timer_now + delta);
-    if (is_inj != 0U) { TIM2_SR = ~stm32_ccif(tim_ch); }
-    else { TIM8_SR = ~stm32_ccif(tim_ch); }
+    if (is_inj != 0U) { TIM2_SR = ~stm32_tim_cc_flag(tim_ch); }
+    else { TIM8_SR = ~stm32_tim_cc_flag(tim_ch); }
 }
 
 static void clear_all_events_and_drive_safe_outputs(void)

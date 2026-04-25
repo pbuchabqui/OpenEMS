@@ -2,17 +2,15 @@
 // OpenEMS — src/main_stm32.cpp
 // STM32H562RGT6 (ARM Cortex-M33 @ 250 MHz)
 //
-// Entry point para a versão STM32H562 do firmware.
-// Substitui src/main.cpp da versão STM32.
+// Entry point STM32H562 do firmware.
 //
-// Diferenças em relação ao main.cpp original:
-//   - Sem #include <Arduino.h> / STM32 runtime
-//   - PLL 250 MHz via system_stm32_init() (em vez de runtime STM32 runtime)
+// Configuracao principal:
+//   - PLL 250 MHz via system_stm32_init()
 //   - millis() provido por SysTick_Handler em system.cpp
-//   - pit1_kick() → iwdg_kick() (IWDG em vez de PIT1)
+//   - iwdg_kick() alimenta o watchdog IWDG
 //   - SysTick fornece millis()/micros()
 //   - NVIC setup usa IRQs do STM32H562 (TIM5 para CKP; TIM2/TIM8 são OC por hardware)
-//   - Sem pit_init() — SysTick e IWDG já inicializados em system_stm32_init()
+//   - SysTick e IWDG já inicializados em system_stm32_init()
 //   - nvm_flush_adaptive_maps() no slot 500ms (Flash Bank2)
 // =============================================================================
 
@@ -40,7 +38,7 @@ int main() { return 0; }
 #include "engine/quick_crank.h"
 #include "hal/adc.h"
 #include "hal/can.h"
-#include "hal/flexnvm.h"
+#include "hal/flash.h"
 #include "hal/runtime_seed.h"
 #include "hal/timer.h"
 
@@ -52,7 +50,7 @@ static constexpr uint16_t kCalibPageBytes = 512u;
 alignas(4) static uint8_t g_calib_page0[kCalibPageBytes];
 static bool                g_calib_dirty  = false;
 
-// g_datalog_us: no STM32 usa micros() de system.cpp em vez de ISR PIT0
+// g_datalog_us: no STM32 usa micros() de system.cpp em vez de SysTick
 // Mantemos a variável para compatibilidade com o frame CAN 0x400
 volatile uint32_t g_datalog_us = 0u;
 
@@ -84,7 +82,7 @@ static constexpr uint32_t kRuntimeSeedArmWindowMs = 2000u;
 static constexpr uint16_t kDefaultReqFuelUs = 8000u;
 static constexpr uint16_t kMapRefKpa        = 100u;
 static constexpr uint32_t kDefaultSoiLeadDeg = 62u;
-static constexpr uint32_t kFtm0TicksPerMs = 10000u;
+static constexpr uint32_t kSchedulerTicksPerMs = 10000u;
 static constexpr uint16_t kMapMinKpa = 10u;
 static constexpr uint16_t kMapMaxKpa = 250u;
 static constexpr uint16_t kLambdaMinMilli = 700u;
@@ -314,7 +312,7 @@ int main() {
                 const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
                 const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
                 const uint32_t dwell_ticks =
-                    (static_cast<uint32_t>(dwell_ms_x10) * kFtm0TicksPerMs) / 10u;
+                    (static_cast<uint32_t>(dwell_ms_x10) * kSchedulerTicksPerMs) / 10u;
 
                 ::ecu_sched_commit_calibration(
                     static_cast<uint32_t>(qc.spark_deg < 0 ? 0 : qc.spark_deg),

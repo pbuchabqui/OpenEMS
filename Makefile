@@ -28,7 +28,7 @@ DRV_SRC = $(SRC_DIR)/drv/ckp.cpp $(SRC_DIR)/drv/sensors.cpp
 APP_SRC = $(SRC_DIR)/app/tuner_studio.cpp $(SRC_DIR)/app/can_stack.cpp
 
 HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp $(SRC_DIR)/hal/uart.cpp \
-                 $(SRC_DIR)/hal/flexnvm.cpp
+                 $(SRC_DIR)/hal/flash.cpp
 
 
 # STM32H562 HAL implementations

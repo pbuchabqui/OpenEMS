@@ -34,7 +34,7 @@ Regras praticas:
 - `ENGINE` decide tempo, angulo, pulso, dwell e estrategia.
 - `DRV` transforma sinais fisicos em eventos de motor confiaveis.
 - `HAL` contem apenas detalhe de periferico.
-- Codigo legado Kinetis/FTM/PDB nao deve retornar ao codigo ativo.
+- O codigo ativo deve usar somente perifericos e nomes STM32H562 reais, sem aliases de compatibilidade.
 - Novos documentos Markdown paralelos nao devem ser criados; atualize este `README.md`.
 
 ## Pipeline De Controle Do Motor
@@ -169,7 +169,7 @@ A suite host foi removida/adiada durante a migracao STM32-only. O proximo ciclo 
 - Codigo ativo direcionado ao STM32H562.
 - Backend de timers STM32 presente para TIM2/TIM3/TIM4/TIM5/TIM8.
 - Scheduler principal consolidado em `src/engine/ecu_sched.cpp`.
-- Fonte ativa nao deve conter aliases legados de Kinetis, FTM ou PDB.
+- Fonte ativa nao deve conter aliases de compatibilidade herdados de outras plataformas.
 - `make firmware` deve continuar passando antes de qualquer entrega.
 - Esta pagina e a unica fonte de verdade documental do projeto.
 

@@ -7,7 +7,7 @@
  *   system_stm32_init()  — configura PLL → 250 MHz, SysTick 1 ms, IWDG 100 ms
  *   millis()             — equivalente STM32 runtime (contagem SysTick em ms)
  *   micros()             — contagem µs via SysTick
- *   iwdg_kick()          — pit1_kick() do STM32
+ *   iwdg_kick()          — iwdg_kick() alimenta o watchdog IWDG
  */
 
 #include <cstdint>

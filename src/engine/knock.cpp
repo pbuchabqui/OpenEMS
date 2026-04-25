@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "hal/flexnvm.h"
+#include "hal/flash.h"
 
 namespace {
 

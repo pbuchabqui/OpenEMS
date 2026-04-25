@@ -121,7 +121,7 @@ void system_stm32_init(void) noexcept {
     // CLKSRC=1 (processor clock), TICKINT=1 (interrupt enable), ENABLE=1
     *stk_ctrl = (1u << 2) | (1u << 1) | (1u << 0);
 
-    // SysTick priority: PIT0 do STM32 (prio 11)
+    // SysTick priority: prio 11
     // ARM: SCB->SHP[11] = priority for SysTick (offset 0xE000ED23)
     *reinterpret_cast<volatile uint8_t*>(0xE000ED23u) = static_cast<uint8_t>(11u << 4u);
 

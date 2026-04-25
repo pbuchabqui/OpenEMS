@@ -1,7 +1,6 @@
 /**
  * @file hal/stm32h562/flash.cpp
  * @brief Emulação de EEPROM via Flash Bank2 para STM32H562RGT6
- *        Substitui hal/flexnvm.cpp da versão STM32.
  *
  * Layout da Flash Bank2 (base 0x08100000):
  *   Setor 0 (0x08100000, 8 KB): LTFT map + Knock map (página quente)
@@ -10,9 +9,8 @@
  *   Setor 3 (0x08106000, 8 KB): Calibração página 2 (256 bytes)
  *   Setores 4-7: reservados para wear leveling de calibração
  *
- * Emulação de FlexRAM:
- *   No STM32, LTFT e knock maps vivem em FlexRAM (SRAM dedicada 0x14000000).
- *   No STM32, usamos um buffer em SRAM normal (g_ltft_ram / g_knock_ram)
+ * Emulação de SRAM:
+ *   LTFT e knock maps usam buffer em SRAM (g_ltft_ram / g_knock_ram)
  *   e escrevemos na Flash periodicamente (quando dirty bit ativo).
  *
  * Procedimento de escrita:
@@ -25,14 +23,14 @@
 
 #ifndef EMS_HOST_TEST
 
-#include "hal/flexnvm.h"
+#include "hal/flash.h"
 #include "hal/regs.h"
 #include <cstring>
 
 // ── Buffers SRAM para LTFT e Knock maps ─────────────────────────────────────
 // Espelham os dados da Flash; modificados em RAM e flushed periodicamente.
-static int8_t  g_ltft_ram[16][16] = {};     // 256 bytes (equivale FlexRAM 0x14000000)
-static int8_t  g_knock_ram[8][8]  = {};     // 64 bytes  (equivale FlexRAM 0x14000100)
+static int8_t  g_ltft_ram[16][16] = {};     // 256 bytes
+static int8_t  g_knock_ram[8][8]  = {};     // 64 bytes
 static bool    g_ltft_dirty  = false;
 static bool    g_knock_dirty = false;
 
@@ -175,7 +173,7 @@ bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept {
 }
 
 // ── Flush LTFT + Knock para Flash ─────────────────────────────────────────────
-// Chamado a cada 500 ms do loop principal (flexnvm flush do STM32)
+// Chamado a cada 500 ms do loop principal (flash flush do STM32)
 
 bool nvm_flush_adaptive_maps() noexcept {
     if (!g_ltft_dirty && !g_knock_dirty) { return true; }
@@ -244,7 +242,7 @@ bool nvm_clear_runtime_seed() noexcept {
 
 #else  // EMS_HOST_TEST ─────────────────────────────────────────────────────
 
-#include "hal/flexnvm.h"
+#include "hal/flash.h"
 #include "hal/runtime_seed.h"
 #include <cstring>
 
@@ -278,9 +276,9 @@ static int8_t g_knock[8][8]  = {};
 static uint8_t g_cal[3][512]  = {};
 static uint32_t g_erase_cnt   = 0u, g_prog_cnt = 0u;
 static bool     g_flash_busy      = false;  // simulates flash BSY timeout when set
-static uint32_t g_ccif_busy_polls = 0u;     // non-zero → simulate timeout on next op
+static uint32_t g_flash_busy_polls = 0u;     // non-zero → simulate timeout on next op
 
-// Runtime seed: slot array (mirrors STM32 FlexRAM layout for test compatibility)
+// Runtime seed: slot array (mirrors the STM32 flash-backed slot layout)
 static RuntimeSyncSeed g_seed_slots[kTestSeedSlots] = {};
 static bool g_seed_slot_valid[kTestSeedSlots] = {};
 
@@ -377,12 +375,12 @@ void nvm_test_reset() noexcept {
     std::memset(g_cal, 0, sizeof(g_cal));
     g_erase_cnt = g_prog_cnt = 0u;
     g_flash_busy = false;
-    g_ccif_busy_polls = 0u;
+    g_flash_busy_polls = 0u;
     std::memset(g_seed_slots, 0, sizeof(g_seed_slots));
     std::memset(g_seed_slot_valid, 0, sizeof(g_seed_slot_valid));
 }
-void nvm_test_set_ccif_busy_polls(uint32_t polls) noexcept {
-    g_ccif_busy_polls = polls;
+void flash_test_set_busy_polls(uint32_t polls) noexcept {
+    g_flash_busy_polls = polls;
     g_flash_busy = (polls > 0u);
 }
 uint32_t nvm_test_erase_count() noexcept { return g_erase_cnt; }
