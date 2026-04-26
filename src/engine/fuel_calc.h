@@ -6,9 +6,6 @@
 
 namespace ems::engine {
 
-extern uint8_t ve_table[kTableAxisSize][kTableAxisSize];
-extern int16_t lambda_target_table_x1000[kTableAxisSize][kTableAxisSize];
-
 uint8_t get_ve(uint16_t rpm_x10, uint16_t map_kpa) noexcept;
 uint16_t get_lambda_target_x1000(uint16_t rpm_x10, uint16_t map_kpa) noexcept;
 
