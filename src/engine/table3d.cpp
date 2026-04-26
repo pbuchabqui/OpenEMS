@@ -12,8 +12,8 @@ const uint16_t kRpmAxisX10[kTableAxisSize] = {
 const uint16_t kLoadAxisKpa[kTableAxisSize] = {
     20u,  30u,  40u,  50u,
     60u,  70u,  80u,  90u,
-    100u, 110u, 120u, 130u,
-    140u, 150u, 175u, 200u,
+    100u, 115u, 130u, 145u,
+    160u, 180u, 215u, 250u,
 };
 
 uint8_t table_axis_index(const uint16_t* axis, uint8_t size, uint16_t value) noexcept {

@@ -127,6 +127,10 @@ static constexpr uint32_t kTolDenLow  = 5u;
 static constexpr uint32_t kTolNumHigh = 6u;   // 120% = 6/5
 static constexpr uint32_t kTolDenHigh = 5u;
 
+// Preditor conservador para agendamento intra-dente:
+// usa a tendência do último período aceito, limitada a ±12,5%/dente.
+static constexpr uint32_t kPredictionClampDen = 8u;
+
 // Tamanho da janela deslizante de histórico (em número de períodos).
 // 3 amostras são suficientes para filtrar ruído transitório.
 static constexpr uint8_t kHistSize = 3u;
@@ -173,6 +177,7 @@ static constexpr uint8_t kHistSize = 3u;
 struct DecoderState {
     ems::drv::CkpSnapshot snap;
     uint32_t prev_capture;              // último timestamp TIM5_CKP_CAPTURE (para delta circular)
+    uint32_t prev_period_ticks;         // último período normal aceito, para predição dente-a-dente
     uint32_t tooth_hist[kHistSize];     // janela deslizante de períodos (ticks) — dentes normais
     uint8_t  hist_ready;                // quantas entradas válidas em tooth_hist (máx kHistSize)
     uint16_t tooth_count;               // dentes desde o último gap aceito
@@ -180,7 +185,8 @@ struct DecoderState {
 };
 
 static DecoderState g_state = {
-    ems::drv::CkpSnapshot{0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false},
+    ems::drv::CkpSnapshot{0u, 0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false},
+    0u,
     0u,
     {0u, 0u, 0u},
     0u,
@@ -216,6 +222,19 @@ inline uint32_t rpm_x10_from_period_ns(uint32_t period_ns) noexcept {
     if (period_ns == 0u) { return 0u; }
     return static_cast<uint32_t>(
         600000000000ULL / (static_cast<uint64_t>(kTeethPositionsPerRev) * period_ns));
+}
+
+inline uint32_t predict_next_period_ticks(uint32_t current_ticks) noexcept {
+    const uint32_t prev = g_state.prev_period_ticks;
+    if (prev == 0u) { return current_ticks; }
+
+    int32_t trend = static_cast<int32_t>(current_ticks) - static_cast<int32_t>(prev);
+    const int32_t limit = static_cast<int32_t>(prev / kPredictionClampDen);
+    if (trend > limit) { trend = limit; }
+    if (trend < -limit) { trend = -limit; }
+
+    const int32_t predicted = static_cast<int32_t>(current_ticks) + trend;
+    return (predicted > 0) ? static_cast<uint32_t>(predicted) : current_ticks;
 }
 
 // Insere novo período na janela deslizante (shift FIFO).
@@ -448,7 +467,9 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
         hist_push(delta_ticks);
         ++g_state.tooth_count;
         g_state.snap.tooth_period_ns = period_ns;
+        g_state.snap.predicted_tooth_period_ns = period_ns;
         g_state.snap.rpm_x10 = rpm_x10_from_period_ns(period_ns);
+        g_state.prev_period_ticks = delta_ticks;
         sensors_on_tooth(g_state.snap);
         schedule_on_tooth(g_state.snap);
         return;
@@ -492,10 +513,13 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     }
 
     // ── 6. Processamento de dente normal ──────────────────────────────────
+    const uint32_t predicted_ticks = predict_next_period_ticks(delta_ticks);
     hist_push(delta_ticks);
 
     g_state.snap.tooth_period_ns = period_ns;
+    g_state.snap.predicted_tooth_period_ns = ticks_to_ns(predicted_ticks);
     g_state.snap.rpm_x10 = rpm_x10_from_period_ns(period_ns);
+    g_state.prev_period_ticks = delta_ticks;
 
     // Incrementa tooth_count e tooth_index apenas em estados sincronizados/tentando.
     if (g_state.snap.state != ems::drv::SyncState::WAIT_GAP &&
@@ -587,7 +611,8 @@ uint32_t ckp_seed_rejected_count() noexcept {
 #if defined(EMS_HOST_TEST)
 void ckp_test_reset() noexcept {
     g_state = DecoderState{
-        CkpSnapshot{0u, 0u, 0u, 0u, SyncState::WAIT_GAP, false},
+        CkpSnapshot{0u, 0u, 0u, 0u, 0u, SyncState::WAIT_GAP, false},
+        0u,
         0u,
         {0u, 0u, 0u},
         0u,

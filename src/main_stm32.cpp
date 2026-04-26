@@ -70,16 +70,15 @@ static uint32_t g_zero_rpm_since_ms = 0u;
 static uint32_t g_runtime_seed_arm_window_start_ms = 0u;
 static bool g_have_last_full_sync = false;
 static ems::drv::CkpSnapshot g_last_full_sync_snapshot = {
-    0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
+    0u, 0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
 };
 static bool g_have_last_gap_sync = false;
 static ems::drv::CkpSnapshot g_last_gap_sync_snapshot = {
-    0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
+    0u, 0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
 };
 
 static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
 static constexpr uint32_t kRuntimeSeedArmWindowMs = 2000u;
-static constexpr uint16_t kDefaultReqFuelUs = 8000u;
 static constexpr uint16_t kMapRefKpa        = 100u;
 static constexpr uint32_t kDefaultSoiLeadDeg = 62u;
 static constexpr uint32_t kSchedulerTicksPerMs = 10000u;
@@ -280,9 +279,15 @@ int main() {
 
             if (sched_sync && !rev_cut) {
                 const uint8_t  ve = ems::engine::get_ve(snap.rpm_x10, map_kpa);
+                const uint16_t lambda_target_x1000 =
+                    ems::engine::get_lambda_target_x1000(snap.rpm_x10, map_kpa);
+                const uint32_t req_fuel_us = ems::engine::default_req_fuel_us();
                 const uint32_t base_pw_us =
-                    ems::engine::calc_base_pw_us(kDefaultReqFuelUs, ve,
+                    ems::engine::calc_base_pw_us(static_cast<uint16_t>(req_fuel_us), ve,
                                                   map_kpa, kMapRefKpa);
+                const uint32_t lambda_pw_us =
+                    ems::engine::apply_lambda_target_pw_us(base_pw_us,
+                                                           lambda_target_x1000);
                 const uint16_t corr_clt_x256 =
                     ems::engine::corr_clt(sensors.clt_degc_x10);
                 const uint16_t corr_iat_x256 =
@@ -290,7 +295,7 @@ int main() {
                 const uint16_t dead_time_us =
                     ems::engine::corr_vbatt(sensors.vbatt_mv);
                 const uint32_t final_pw_us_base =
-                    ems::engine::calc_final_pw_us(base_pw_us,
+                    ems::engine::calc_final_pw_us(lambda_pw_us,
                                                    corr_clt_x256,
                                                    corr_iat_x256,
                                                    dead_time_us);
@@ -373,9 +378,12 @@ int main() {
                 const uint16_t lambda_measured = clamp_u16(
                     ems::app::can_stack_lambda_milli_safe(now), kLambdaMinMilli, kLambdaMaxMilli);
                 const bool lambda_valid = ems::app::can_stack_wbo2_fresh(now);
+                const uint16_t lambda_target_x1000 =
+                    ems::engine::get_lambda_target_x1000(snap.rpm_x10, map_kpa);
                 const int16_t stft = ems::engine::fuel_update_stft(
                     snap.rpm_x10, map_kpa,
-                    1000, static_cast<int16_t>(lambda_measured),
+                    static_cast<int16_t>(lambda_target_x1000),
+                    static_cast<int16_t>(lambda_measured),
                     sensors.clt_degc_x10, lambda_valid,
                     false, false);
                 g_last_stft_pct = clamp_i8(static_cast<int16_t>(stft / 10), -25, 25);

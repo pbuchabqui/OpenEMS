@@ -1,5 +1,6 @@
 #include "engine/quick_crank.h"
 #include "drv/ckp.h"
+#include "engine/fuel_calc.h"
 
 #include <cstdint>
 
@@ -14,7 +15,6 @@ constexpr uint32_t kCrankEnterRpmX10 = 4500u;
 constexpr uint32_t kCrankExitRpmX10 = 7000u;
 constexpr int16_t kCrankSparkDeg = 8;
 constexpr uint32_t kCrankMinPwUs = 2500u;
-constexpr uint32_t kDefaultReqFuelUs = 8000u;
 constexpr uint32_t kPrimePwMaxUs = 30000u;
 constexpr uint8_t  kPrimeToothTarget = 5u;  // 5º dente desde o início do cranking
 
@@ -154,7 +154,7 @@ void prime_on_tooth(const CkpSnapshot& snap) noexcept {
         kCrankFuelMult,
         static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
         g_prime_clt_x10);
-    uint32_t pw = (kDefaultReqFuelUs * static_cast<uint32_t>(mult)) >> 8u;
+    uint32_t pw = (ems::engine::default_req_fuel_us() * static_cast<uint32_t>(mult)) >> 8u;
     if (pw > kPrimePwMaxUs) { pw = kPrimePwMaxUs; }
 
     g_prime_pw_us  = pw;

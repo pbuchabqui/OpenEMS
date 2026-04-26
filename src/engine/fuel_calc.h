@@ -7,13 +7,24 @@
 namespace ems::engine {
 
 extern uint8_t ve_table[kTableAxisSize][kTableAxisSize];
+extern int16_t lambda_target_table_x1000[kTableAxisSize][kTableAxisSize];
 
 uint8_t get_ve(uint16_t rpm_x10, uint16_t map_kpa) noexcept;
+uint16_t get_lambda_target_x1000(uint16_t rpm_x10, uint16_t map_kpa) noexcept;
+
+uint32_t calc_req_fuel_us(uint16_t displacement_cc,
+                          uint8_t cylinders,
+                          uint16_t injector_flow_cc_min,
+                          uint16_t stoich_afr_x100) noexcept;
+uint32_t default_req_fuel_us() noexcept;
 
 uint32_t calc_base_pw_us(uint16_t req_fuel_us,
                          uint8_t ve,
                          uint16_t map_kpa,
                          uint16_t map_ref_kpa) noexcept;
+
+uint32_t apply_lambda_target_pw_us(uint32_t base_pw_us,
+                                   uint16_t lambda_target_x1000) noexcept;
 
 uint16_t corr_clt(int16_t clt_x10) noexcept;
 uint16_t corr_iat(int16_t iat_x10) noexcept;
