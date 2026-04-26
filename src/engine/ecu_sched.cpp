@@ -1,5 +1,6 @@
 #include "engine/ecu_sched.h"
 #include "drv/ckp.h"
+#include "engine/engine_config.h"
 #include "hal/regs.h"
 
 #include <stddef.h>
@@ -8,7 +9,6 @@
 #define ECU_CHANNELS      8U
 #define ECU_IGN_CH_FIRST  4U
 #define ECU_CYCLE_DEG     720U
-#define ECU_NUM_CYL       4U
 #define STM32_TIM_PSC_10MHZ 24U
 #define STM32_MIN_COMPARE_LEAD_TICKS 20U
 #define TOOTH_NS_TO_SCHED(ns) ((uint32_t)((ns) / ECU_SCHED_NS_PER_TICK))
@@ -31,7 +31,7 @@ static volatile uint8_t g_presync_bank_toggle = 0U;
 static volatile uint8_t g_hook_prev_valid = 0U;
 static volatile uint16_t g_hook_prev_tooth = 0U;
 static volatile uint8_t g_hook_schedule_this_gap = 1U;
-static uint8_t g_ivc_abdc_deg = 50U;
+static uint8_t g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg;
 static uint32_t g_ivc_clamp_count = 0U;
 
 static inline void enter_critical(void)
@@ -249,10 +249,8 @@ static uint32_t clamp_inj_pw_to_ivc(uint32_t tdc_deg, uint32_t inj_on_deg, uint3
 
 static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
 {
-    static const uint8_t fire_order[ECU_NUM_CYL] = {0U, 2U, 3U, 1U};
-    static const uint32_t tdc_deg[ECU_NUM_CYL] = {0U, 180U, 360U, 540U};
-    static const uint8_t ign_ch[ECU_NUM_CYL] = {ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
-    static const uint8_t inj_ch[ECU_NUM_CYL] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
+    static const uint8_t ign_ch[ems::engine::cfg::kCylinderCount] = {ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
+    static const uint8_t inj_ch[ems::engine::cfg::kCylinderCount] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
 
     sanitize_runtime_calibration();
     g_angle_table_count = 0U;
@@ -261,9 +259,9 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
     const uint32_t dwell_deg = ticks_to_cycle_degrees(g_dwell_ticks, snap.tooth_period_ns, ECU_CYCLE_DEG);
     const uint32_t base_inj_pw_deg = ticks_to_cycle_degrees(g_inj_pw_ticks, snap.tooth_period_ns, ECU_CYCLE_DEG);
 
-    for (uint8_t seq = 0U; seq < ECU_NUM_CYL; ++seq) {
-        const uint8_t cyl = fire_order[seq];
-        const uint32_t tdc = tdc_deg[cyl];
+    for (uint8_t seq = 0U; seq < ems::engine::cfg::kCylinderCount; ++seq) {
+        const uint8_t cyl = ems::engine::cfg::kFiringOrder[seq];
+        const uint32_t tdc = ems::engine::cfg::kCylinderTdcDeg[cyl];
         const uint32_t spark = (tdc + ECU_CYCLE_DEG - g_advance_deg) % ECU_CYCLE_DEG;
         const uint32_t dwell = (spark + ECU_CYCLE_DEG - dwell_deg) % ECU_CYCLE_DEG;
         const uint32_t inj_on = (tdc + ECU_CYCLE_DEG - g_soi_lead_deg) % ECU_CYCLE_DEG;
@@ -381,7 +379,7 @@ void ecu_sched_test_reset(void)
     g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
     g_advance_deg = 10U; g_dwell_ticks = 22500U; g_inj_pw_ticks = 22500U; g_soi_lead_deg = 62U;
     g_angle_table_count = 0U; for (uint8_t i = 0U; i < ECU_ANGLE_TABLE_SIZE; ++i) { g_angle_table[i].valid = 0U; }
-    g_ivc_abdc_deg = 50U; g_ivc_clamp_count = 0U;
+    g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg; g_ivc_clamp_count = 0U;
 }
 uint8_t ecu_sched_test_angle_table_size(void) { return g_angle_table_count; }
 uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *sub_frac, uint8_t *ch, uint8_t *action, uint8_t *phase)

@@ -32,6 +32,7 @@ int main() { return 0; }
 #include "drv/sensors.h"
 #include "engine/auxiliaries.h"
 #include "engine/ecu_sched.h"
+#include "engine/engine_config.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/knock.h"
@@ -79,8 +80,6 @@ static ems::drv::CkpSnapshot g_last_gap_sync_snapshot = {
 
 static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
 static constexpr uint32_t kRuntimeSeedArmWindowMs = 2000u;
-static constexpr uint16_t kMapRefKpa        = 100u;
-static constexpr uint32_t kDefaultSoiLeadDeg = 62u;
 static constexpr uint32_t kSchedulerTicksPerMs = 10000u;
 static constexpr uint16_t kMapMinKpa = 10u;
 static constexpr uint16_t kMapMaxKpa = 250u;
@@ -284,7 +283,7 @@ int main() {
                 const uint32_t req_fuel_us = ems::engine::default_req_fuel_us();
                 const uint32_t base_pw_us =
                     ems::engine::calc_base_pw_us(static_cast<uint16_t>(req_fuel_us), ve,
-                                                  map_kpa, kMapRefKpa);
+                                                  map_kpa, ems::engine::cfg::kMapRefKpa);
                 const uint32_t lambda_pw_us =
                     ems::engine::apply_lambda_target_pw_us(base_pw_us,
                                                            lambda_target_x1000);
@@ -323,7 +322,7 @@ int main() {
                     static_cast<uint32_t>(qc.spark_deg < 0 ? 0 : qc.spark_deg),
                     dwell_ticks,
                     inj_pw_ticks,
-                    kDefaultSoiLeadDeg);
+                    ems::engine::cfg::kDefaultSoiLeadDeg);
             }
 
             const uint32_t prime_pw = ems::engine::quick_crank_consume_prime();

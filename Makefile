@@ -24,7 +24,8 @@ LDFLAGS_ARM = -mcpu=cortex-m33 -mthumb -nostartfiles \
               -Wl,--gc-sections -Wl,-Map=$(ELF_DIR)/openems.map \
               -T$(LINKER_SCRIPT)
 
-ENGINE_SRC = $(SRC_DIR)/engine/fuel_calc.cpp $(SRC_DIR)/engine/ign_calc.cpp \
+ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
+             $(SRC_DIR)/engine/fuel_calc.cpp $(SRC_DIR)/engine/ign_calc.cpp \
              $(SRC_DIR)/engine/knock.cpp $(SRC_DIR)/engine/auxiliaries.cpp \
              $(SRC_DIR)/engine/table3d.cpp $(SRC_DIR)/engine/quick_crank.cpp \
              $(SRC_DIR)/engine/ecu_sched.cpp
