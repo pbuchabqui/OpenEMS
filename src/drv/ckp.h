@@ -52,6 +52,7 @@ enum class SyncState : uint8_t {
  */
 struct CkpSnapshot {
     uint32_t tooth_period_ns;    ///< Período do último dente normal (ns); 0 antes de HALF_SYNC
+    uint32_t predicted_tooth_period_ns; ///< Próximo período estimado para agendamento intra-dente
     uint16_t tooth_index;        ///< Índice do dente (0–57) contado desde o último gap; válido em FULL_SYNC
     uint32_t last_tim5_capture;  ///< Timestamp TIM5 (ticks) do último dente — para angle-to-ticks
     uint32_t rpm_x10;            ///< RPM × 10 (ex: 8000 = 800,0 RPM); 0 antes de dados suficientes

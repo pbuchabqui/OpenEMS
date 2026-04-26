@@ -346,7 +346,10 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U; return;
     }
 
-    uint32_t tooth_ticks = TOOTH_NS_TO_SCHED(snap.tooth_period_ns);
+    const uint32_t period_ns = (snap.predicted_tooth_period_ns != 0U)
+        ? snap.predicted_tooth_period_ns
+        : snap.tooth_period_ns;
+    uint32_t tooth_ticks = TOOTH_NS_TO_SCHED(period_ns);
     const uint32_t now = scheduler_counter();
     const uint8_t current_phase = snap.phase_A ? ECU_PHASE_A : ECU_PHASE_B;
     for (uint8_t i = 0U; i < g_angle_table_count; ++i) {

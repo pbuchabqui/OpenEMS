@@ -42,6 +42,13 @@ constexpr int16_t kStftKiNum = 1;     // 0.005 por amostra
 constexpr int16_t kStftKiDen = 200;
 constexpr int16_t kStftClampX10 = 250;
 
+constexpr uint16_t kDefaultDisplacementCc = 2000u;
+constexpr uint8_t kDefaultCylinders = 4u;
+constexpr uint16_t kDefaultInjectorFlowCcMin = 450u;
+constexpr uint16_t kE30StoichAfrX100 = 1300u;  // lambda 1.00 para gasolina E30 ~= AFR 13.0
+constexpr uint16_t kAirDensityMgPerCcX1000 = 1184u;  // 1.184 mg/cc @ ~25 C, 100 kPa
+constexpr uint16_t kE30FuelDensityMgPerCc = 755u;
+
 uint16_t g_ae_threshold_tpsdot_x10 = 5u;
 uint8_t g_ae_taper_cycles = 8u;
 uint8_t g_ae_decay_cycles = 0u;
@@ -184,22 +191,41 @@ bool closed_loop_allowed(int16_t clt_x10,
 namespace ems::engine {
 
 uint8_t ve_table[kTableAxisSize][kTableAxisSize] = {
-    {50u, 50u, 50u, 50u, 50u, 50u, 50u, 50u, 50u, 50u, 50u, 50u, 50u, 50u, 50u, 50u},
-    {54u, 54u, 54u, 54u, 54u, 54u, 54u, 54u, 54u, 54u, 54u, 54u, 54u, 54u, 54u, 54u},
-    {58u, 58u, 58u, 58u, 58u, 58u, 58u, 58u, 58u, 58u, 58u, 58u, 58u, 58u, 58u, 58u},
-    {62u, 62u, 62u, 62u, 62u, 62u, 62u, 62u, 62u, 62u, 62u, 62u, 62u, 62u, 62u, 62u},
-    {66u, 66u, 66u, 66u, 66u, 66u, 66u, 66u, 66u, 66u, 66u, 66u, 66u, 66u, 66u, 66u},
-    {70u, 70u, 70u, 70u, 70u, 70u, 70u, 70u, 70u, 70u, 70u, 70u, 70u, 70u, 70u, 70u},
-    {74u, 74u, 74u, 74u, 74u, 74u, 74u, 74u, 74u, 74u, 74u, 74u, 74u, 74u, 74u, 74u},
-    {78u, 78u, 78u, 78u, 78u, 78u, 78u, 78u, 78u, 78u, 78u, 78u, 78u, 78u, 78u, 78u},
-    {82u, 82u, 82u, 82u, 82u, 82u, 82u, 82u, 82u, 82u, 82u, 82u, 82u, 82u, 82u, 82u},
-    {86u, 86u, 86u, 86u, 86u, 86u, 86u, 86u, 86u, 86u, 86u, 86u, 86u, 86u, 86u, 86u},
-    {90u, 90u, 90u, 90u, 90u, 90u, 90u, 90u, 90u, 90u, 90u, 90u, 90u, 90u, 90u, 90u},
-    {94u, 94u, 94u, 94u, 94u, 94u, 94u, 94u, 94u, 94u, 94u, 94u, 94u, 94u, 94u, 94u},
-    {98u, 98u, 98u, 98u, 98u, 98u, 98u, 98u, 98u, 98u, 98u, 98u, 98u, 98u, 98u, 98u},
-    {102u, 102u, 102u, 102u, 102u, 102u, 102u, 102u, 102u, 102u, 102u, 102u, 102u, 102u, 102u, 102u},
-    {106u, 106u, 106u, 106u, 106u, 106u, 106u, 106u, 106u, 106u, 106u, 106u, 106u, 106u, 106u, 106u},
-    {110u, 110u, 110u, 110u, 110u, 110u, 110u, 110u, 110u, 110u, 110u, 110u, 110u, 110u, 110u, 110u},
+    {45u, 47u, 50u, 52u, 53u, 54u, 55u, 56u, 58u, 60u, 62u, 63u, 64u, 66u, 68u, 70u},
+    {48u, 52u, 55u, 57u, 58u, 59u, 60u, 61u, 63u, 65u, 67u, 68u, 70u, 72u, 74u, 76u},
+    {52u, 56u, 60u, 62u, 63u, 64u, 65u, 66u, 68u, 70u, 72u, 74u, 76u, 78u, 80u, 82u},
+    {56u, 61u, 64u, 66u, 67u, 68u, 69u, 70u, 72u, 74u, 76u, 78u, 80u, 82u, 84u, 86u},
+    {60u, 65u, 68u, 70u, 72u, 73u, 74u, 75u, 77u, 79u, 81u, 83u, 85u, 87u, 89u, 91u},
+    {64u, 68u, 72u, 75u, 77u, 79u, 80u, 81u, 83u, 85u, 87u, 89u, 91u, 93u, 95u, 96u},
+    {68u, 72u, 76u, 79u, 81u, 83u, 84u, 85u, 87u, 89u, 91u, 93u, 95u, 97u, 99u, 100u},
+    {70u, 75u, 79u, 82u, 84u, 86u, 87u, 88u, 90u, 92u, 94u, 96u, 98u, 100u, 102u, 103u},
+    {73u, 78u, 82u, 85u, 88u, 90u, 91u, 92u, 94u, 96u, 98u, 100u, 102u, 104u, 106u, 107u},
+    {90u, 96u, 102u, 107u, 111u, 114u, 116u, 118u, 121u, 124u, 127u, 130u, 133u, 136u, 139u, 142u},
+    {105u, 113u, 120u, 126u, 131u, 135u, 138u, 141u, 145u, 149u, 153u, 157u, 161u, 165u, 169u, 173u},
+    {120u, 130u, 138u, 146u, 152u, 157u, 161u, 165u, 170u, 175u, 180u, 185u, 190u, 195u, 200u, 205u},
+    {135u, 146u, 156u, 165u, 173u, 179u, 184u, 189u, 195u, 201u, 207u, 213u, 219u, 225u, 231u, 237u},
+    {150u, 163u, 175u, 186u, 195u, 203u, 209u, 215u, 222u, 229u, 236u, 243u, 250u, 252u, 253u, 254u},
+    {165u, 180u, 194u, 207u, 218u, 227u, 235u, 242u, 250u, 252u, 253u, 254u, 254u, 254u, 254u, 254u},
+    {180u, 197u, 213u, 228u, 241u, 250u, 252u, 253u, 254u, 254u, 254u, 254u, 254u, 254u, 254u, 254u},
+};
+
+int16_t lambda_target_table_x1000[kTableAxisSize][kTableAxisSize] = {
+    {1050u, 1050u, 1050u, 1050u, 1050u, 1050u, 1050u, 1050u, 1050u, 1050u, 1050u, 1050u, 1050u, 1050u, 1050u, 1050u},
+    {1030u, 1030u, 1030u, 1030u, 1030u, 1030u, 1030u, 1030u, 1030u, 1030u, 1030u, 1030u, 1030u, 1030u, 1030u, 1030u},
+    {1010u, 1010u, 1010u, 1010u, 1010u, 1010u, 1010u, 1010u, 1010u, 1010u, 1010u, 1010u, 1010u, 1010u, 1010u, 1010u},
+    {1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u},
+    {1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u},
+    {1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u},
+    {1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u, 1000u},
+    {990u, 990u, 990u, 990u, 990u, 990u, 990u, 990u, 990u, 990u, 990u, 990u, 990u, 990u, 990u, 990u},
+    {970u, 970u, 970u, 970u, 960u, 950u, 940u, 930u, 920u, 920u, 920u, 920u, 920u, 930u, 940u, 950u},
+    {930u, 930u, 925u, 920u, 915u, 910u, 900u, 895u, 890u, 890u, 890u, 895u, 900u, 905u, 910u, 920u},
+    {900u, 900u, 895u, 890u, 885u, 880u, 870u, 865u, 860u, 860u, 865u, 870u, 875u, 885u, 895u, 905u},
+    {880u, 880u, 875u, 870u, 865u, 855u, 845u, 840u, 835u, 835u, 840u, 845u, 855u, 865u, 875u, 890u},
+    {860u, 860u, 855u, 850u, 845u, 835u, 825u, 820u, 815u, 815u, 820u, 830u, 840u, 850u, 865u, 880u},
+    {845u, 845u, 840u, 835u, 830u, 820u, 810u, 805u, 800u, 800u, 805u, 815u, 825u, 840u, 855u, 875u},
+    {825u, 825u, 820u, 815u, 810u, 800u, 790u, 785u, 780u, 780u, 785u, 795u, 810u, 830u, 850u, 870u},
+    {810u, 810u, 805u, 800u, 795u, 785u, 775u, 770u, 765u, 765u, 775u, 790u, 805u, 825u, 850u, 870u},
 };
 
 uint8_t get_ve(uint16_t rpm_x10, uint16_t map_kpa) noexcept {
@@ -208,6 +234,51 @@ uint8_t get_ve(uint16_t rpm_x10, uint16_t map_kpa) noexcept {
     ASSERT_VALID_MAP_KPA(map_kpa);
     
     return table3d_lookup_u8(ve_table, kRpmAxisX10, kLoadAxisKpa, rpm_x10, map_kpa);
+}
+
+uint16_t get_lambda_target_x1000(uint16_t rpm_x10, uint16_t map_kpa) noexcept {
+    ASSERT_VALID_RPM_X10(rpm_x10);
+    ASSERT_VALID_MAP_KPA(map_kpa);
+
+    const int16_t target = table3d_lookup_s16(
+        lambda_target_table_x1000, kRpmAxisX10, kLoadAxisKpa, rpm_x10, map_kpa);
+    return static_cast<uint16_t>(clamp_i16(target, 650, 1200));
+}
+
+uint32_t calc_req_fuel_us(uint16_t displacement_cc,
+                          uint8_t cylinders,
+                          uint16_t injector_flow_cc_min,
+                          uint16_t stoich_afr_x100) noexcept {
+    if (displacement_cc == 0u || cylinders == 0u ||
+        injector_flow_cc_min == 0u || stoich_afr_x100 == 0u) {
+        return 0u;
+    }
+
+    // REQ_FUEL @ 100 kPa, 100% VE, lambda 1.00:
+    // air/cyl = (displacement / cylinders) * air_density
+    // fuel/cyl = air/cyl / stoich_afr
+    // pulse = fuel/cyl / injector_mass_flow
+    const uint64_t num = static_cast<uint64_t>(displacement_cc) *
+                         kAirDensityMgPerCcX1000 *
+                         100u *
+                         60000000u;
+    const uint64_t den = static_cast<uint64_t>(cylinders) *
+                         stoich_afr_x100 *
+                         injector_flow_cc_min *
+                         kE30FuelDensityMgPerCc *
+                         1000u;
+    uint32_t req = static_cast<uint32_t>(num / den);
+    if (req > 50000u) {
+        req = 50000u;
+    }
+    return req;
+}
+
+uint32_t default_req_fuel_us() noexcept {
+    return calc_req_fuel_us(kDefaultDisplacementCc,
+                            kDefaultCylinders,
+                            kDefaultInjectorFlowCcMin,
+                            kE30StoichAfrX100);
 }
 
 uint32_t calc_base_pw_us(uint16_t req_fuel_us,
@@ -246,6 +317,23 @@ uint32_t calc_base_pw_us(uint16_t req_fuel_us,
     assert(temp <= 100000);  // Max 100ms pulse width
 
     return temp;
+}
+
+uint32_t apply_lambda_target_pw_us(uint32_t base_pw_us,
+                                   uint16_t lambda_target_x1000) noexcept {
+    if (base_pw_us == 0u) {
+        return 0u;
+    }
+    if (lambda_target_x1000 < 650u || lambda_target_x1000 > 1200u) {
+        return 0u;
+    }
+
+    uint32_t out = static_cast<uint32_t>(
+        (static_cast<uint64_t>(base_pw_us) * 1000u) / lambda_target_x1000);
+    if (out > 100000u) {
+        out = 100000u;
+    }
+    return out;
 }
 
 uint16_t corr_clt(int16_t clt_x10) noexcept {
