@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "engine/table3d.h"
+
 #if __has_include("drv/ckp.h")
 #include "drv/ckp.h"
 #elif __has_include("ckp.h")
@@ -30,6 +32,8 @@ constexpr int16_t kIacKp_num = 2;
 constexpr int16_t kIacKd_num = 5;
 constexpr int16_t kIacKd_den = 2;
 constexpr int16_t kIacIClampX10 = 300;
+constexpr uint16_t kIacOpenStepX10 = 100u;
+constexpr uint16_t kIacCloseStepX10 = 20u;
 
 constexpr uint32_t kOverboostDurationMs = 500u;
 constexpr uint16_t kOverboostMarginKpaX10 = 200u;
@@ -48,7 +52,7 @@ constexpr uint16_t kIacWarmupDutyX10[kWarmupPts] = {620u, 560u, 500u, 440u, 360u
 constexpr uint16_t kIdleTargetRpmX10[kWarmupPts] = {12000u, 11500u, 10800u, 10000u, 9200u, 8500u, 8200u, 8000u};
 
 constexpr uint8_t kBoostPts = 8u;
-constexpr uint16_t kBoostRpmAxisX10[kBoostPts] = {1500u, 2000u, 2500u, 3000u, 4000u, 5000u, 6500u, 8000u};
+constexpr uint32_t kBoostRpmAxisX10[kBoostPts] = {15000u, 20000u, 25000u, 30000u, 40000u, 50000u, 65000u, 80000u};
 constexpr uint16_t kBoostTpsAxisX10[kBoostPts] = {100u, 200u, 300u, 450u, 600u, 750u, 900u, 1000u};
 constexpr uint16_t kBoostTargetKpaX10[kBoostPts][kBoostPts] = {
     {1050u, 1100u, 1150u, 1200u, 1250u, 1300u, 1350u, 1400u},
@@ -62,7 +66,7 @@ constexpr uint16_t kBoostTargetKpaX10[kBoostPts][kBoostPts] = {
 };
 
 constexpr uint8_t kVvtPts = 12u;
-constexpr uint16_t kVvtRpmAxisX10[kVvtPts] = {1000u, 1500u, 2000u, 2500u, 3000u, 3500u, 4000u, 4500u, 5000u, 6000u, 7000u, 8000u};
+constexpr uint32_t kVvtRpmAxisX10[kVvtPts] = {10000u, 15000u, 20000u, 25000u, 30000u, 35000u, 40000u, 45000u, 50000u, 60000u, 70000u, 80000u};
 constexpr uint16_t kVvtLoadAxisKpaX10[kVvtPts] = {300u, 400u, 500u, 600u, 700u, 800u, 900u, 1000u, 1100u, 1200u, 1400u, 1700u};
 
 constexpr int16_t kVvtAdmTargetDegX10[kVvtPts][kVvtPts] = {
@@ -177,12 +181,9 @@ uint8_t axis_index_u16(const uint16_t* axis, uint8_t size, uint16_t x) noexcept 
     if (x >= axis[last]) {
         return static_cast<uint8_t>(last - 1u);
     }
-    for (uint8_t i = 0u; i < last; ++i) {
-        if (x <= axis[i + 1u]) {
-            return i;
-        }
-    }
-    return static_cast<uint8_t>(size - 2u);
+    uint8_t idx = 0u;
+    while (idx < static_cast<uint8_t>(size - 2u) && x > axis[idx + 1u]) { ++idx; }
+    return idx;
 }
 
 uint8_t axis_frac_q8_u16(const uint16_t* axis, uint8_t idx, uint16_t x) noexcept {
@@ -209,6 +210,7 @@ uint8_t axis_frac_q8_u16(const uint16_t* axis, uint8_t idx, uint16_t x) noexcept
     return static_cast<uint8_t>(frac);
 }
 
+
 int32_t lerp_q8_s32(int32_t a, int32_t b, uint8_t fq8) noexcept {
     return a + (((b - a) * static_cast<int32_t>(fq8)) >> 8u);
 }
@@ -222,12 +224,7 @@ uint16_t interp1_u16_8(const int16_t* axis, const uint16_t* values, int16_t x) n
     }
 
     uint8_t idx = 0u;
-    for (uint8_t i = 0u; i < (kWarmupPts - 1u); ++i) {
-        if (x <= axis[i + 1u]) {
-            idx = i;
-            break;
-        }
-    }
+    while (idx < (kWarmupPts - 2u) && x > axis[idx + 1u]) { ++idx; }
 
     const int16_t x0 = axis[idx];
     const int16_t x1 = axis[idx + 1u];
@@ -251,10 +248,10 @@ uint16_t interp1_u16_8(const int16_t* axis, const uint16_t* values, int16_t x) n
     return static_cast<uint16_t>(y);
 }
 
-uint16_t lookup_boost_target(uint16_t rpm_x10, uint16_t tps_x10) noexcept {
-    const uint8_t xi = axis_index_u16(kBoostRpmAxisX10, kBoostPts, rpm_x10);
+uint16_t lookup_boost_target(uint32_t rpm_x10, uint16_t tps_x10) noexcept {
+    const uint8_t xi = ems::engine::table_axis_index(kBoostRpmAxisX10, kBoostPts, rpm_x10);
     const uint8_t yi = axis_index_u16(kBoostTpsAxisX10, kBoostPts, tps_x10);
-    const uint8_t fx = axis_frac_q8_u16(kBoostRpmAxisX10, xi, rpm_x10);
+    const uint8_t fx = ems::engine::table_axis_frac_q8(kBoostRpmAxisX10, xi, rpm_x10);
     const uint8_t fy = axis_frac_q8_u16(kBoostTpsAxisX10, yi, tps_x10);
 
     const int32_t v00 = static_cast<int32_t>(kBoostTargetKpaX10[yi][xi]);
@@ -276,11 +273,11 @@ uint16_t lookup_boost_target(uint16_t rpm_x10, uint16_t tps_x10) noexcept {
 }
 
 int16_t lookup_vvt_target(const int16_t table[kVvtPts][kVvtPts],
-                          uint16_t rpm_x10,
+                          uint32_t rpm_x10,
                           uint16_t load_kpa_x10) noexcept {
-    const uint8_t xi = axis_index_u16(kVvtRpmAxisX10, kVvtPts, rpm_x10);
+    const uint8_t xi = ems::engine::table_axis_index(kVvtRpmAxisX10, kVvtPts, rpm_x10);
     const uint8_t yi = axis_index_u16(kVvtLoadAxisKpaX10, kVvtPts, load_kpa_x10);
-    const uint8_t fx = axis_frac_q8_u16(kVvtRpmAxisX10, xi, rpm_x10);
+    const uint8_t fx = ems::engine::table_axis_frac_q8(kVvtRpmAxisX10, xi, rpm_x10);
     const uint8_t fy = axis_frac_q8_u16(kVvtLoadAxisKpaX10, yi, load_kpa_x10);
 
     const int32_t v00 = table[yi][xi];
@@ -328,6 +325,16 @@ uint16_t iac_warmup_duty_x10(int16_t clt_x10) noexcept {
     return interp1_u16_8(kWarmupCltAxisX10, kIacWarmupDutyX10, clt_x10);
 }
 
+uint16_t slew_iac_duty_x10(uint16_t current, uint16_t target) noexcept {
+    if (target > current) {
+        const uint16_t delta = static_cast<uint16_t>(target - current);
+        return static_cast<uint16_t>(current + (delta > kIacOpenStepX10 ? kIacOpenStepX10 : delta));
+    }
+
+    const uint16_t delta = static_cast<uint16_t>(current - target);
+    return static_cast<uint16_t>(current - (delta > kIacCloseStepX10 ? kIacCloseStepX10 : delta));
+}
+
 void run_iac_control(const ems::drv::CkpSnapshot& snap,
                      const ems::drv::SensorData& s) noexcept {
     const int32_t rpm_now = static_cast<int32_t>(snap.rpm_x10);
@@ -357,9 +364,6 @@ void run_iac_control(const ems::drv::CkpSnapshot& snap,
     }
 
     int32_t out_x10 = static_cast<int32_t>(duty_base);
-    if (g.iac_duty_x10 > static_cast<uint16_t>(out_x10)) {
-        out_x10 = g.iac_duty_x10;
-    }
 
     if (pid_enabled) {
         const int32_t p_x10 = static_cast<int32_t>(kIacKp_num) * error_x10;
@@ -371,7 +375,8 @@ void run_iac_control(const ems::drv::CkpSnapshot& snap,
         const int32_t de_x10 = error_x10 - static_cast<int32_t>(g.iac_prev_error_x10);
         const int32_t d_x10 = (de_x10 * kIacKd_num) / kIacKd_den;
 
-        g.iac_prev_error_x10 = static_cast<int16_t>(clamp_i16(static_cast<int16_t>(error_x10), -12000, 12000));
+        const int32_t err_clamped = error_x10 < -12000 ? -12000 : (error_x10 > 12000 ? 12000 : error_x10);
+        g.iac_prev_error_x10 = static_cast<int16_t>(err_clamped);
         out_x10 += p_x10 + g.iac_integrator_x10 + d_x10;
     }
 
@@ -382,7 +387,7 @@ void run_iac_control(const ems::drv::CkpSnapshot& snap,
         out_x10 = 1000;
     }
 
-    g.iac_duty_x10 = static_cast<uint16_t>(out_x10);
+    g.iac_duty_x10 = slew_iac_duty_x10(g.iac_duty_x10, static_cast<uint16_t>(out_x10));
     ems::hal::tim3_set_duty(0u, g.iac_duty_x10);
 }
 
@@ -488,7 +493,7 @@ void run_fan_control(int16_t clt_x10) noexcept {
     }
 }
 
-void run_pump_control(uint16_t rpm_x10) noexcept {
+void run_pump_control(uint32_t rpm_x10) noexcept {
     if (!g.key_on) {
         set_pump(false);
         g.rpm_zero_since_ms = g.time_ms;
@@ -520,6 +525,10 @@ void reset_state() noexcept {
 }  // namespace
 
 namespace ems::engine {
+
+uint16_t auxiliaries_idle_target_rpm_x10(int16_t clt_x10) noexcept {
+    return iac_target_rpm_x10(clt_x10);
+}
 
 void auxiliaries_init() noexcept {
     reset_state();
@@ -575,8 +584,6 @@ void auxiliaries_tick_10ms() noexcept {
 }
 
 void auxiliaries_tick_20ms() noexcept {
-    g.time_ms += kTick20ms;
-
     const ems::drv::CkpSnapshot snap = ems::drv::ckp_snapshot();
     const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 

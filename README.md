@@ -126,12 +126,15 @@ Mapeamento atual pretendido:
 | AUX PWM 2 | TIM3 CH2 | PA7 |
 | AUX PWM 3 | TIM4 CH1 | PB6 |
 | AUX PWM 4 | TIM4 CH2 | PB7 |
+| UI proprietaria UART TX | USART1 TX | PA9 |
+| UI proprietaria UART RX | USART1 RX | PA10 |
 
 Limitacoes de placa/pino:
 
 - PC8/PC9 podem conflitar com microSD em algumas placas WeAct.
 - PA15/PB3 compartilham funcoes de debug JTAG/SWJ; a configuracao de debug deve preservar SWD funcional ou liberar esses pinos conscientemente.
 - PB10/PB11 nao devem ser reutilizados por perifericos concorrentes se TIM2 CH3/CH4 estiver ativo.
+- USART3 em PB10/PB11 nao e permitido no MVP de bancada porque conflita com INJ3/INJ4; usar USART1 em PA9/PA10.
 
 ## ADC E Sensores
 
@@ -142,8 +145,9 @@ Limitacoes de placa/pino:
 
 ## Comunicacao
 
-- TunerStudio: camada em `src/app/tuner_studio.cpp`.
-- USB CDC: alvo principal para calibracao e telemetria.
+- UI proprietaria: protocolo em `src/app/ui_protocol.cpp`, servido pelo bridge `scripts/bridge.py` e pela interface em `scripts/ui/`.
+- MVP de bancada: UI proprietaria via UART 115200 8N1 em `USART1` (`PA9=TX`, `PA10=RX`).
+- USB CDC: pos-MVP; o backend atual permanece stub/no-op e nao deve ser tratado como transporte validado.
 - CAN/FDCAN: diagnostico e integracao com sensores externos.
 
 Comunicacao nao deve bloquear decode, sync, scheduling ou atuadores.
@@ -175,13 +179,35 @@ Compilar objetos do firmware:
 make firmware
 ```
 
+Executar regressao host minima do MVP de bancada:
+
+```bash
+make host-test
+```
+
 Limpar artefatos:
 
 ```bash
 make clean
 ```
 
-A suite host foi removida/adiada durante a migracao STM32-only. O proximo ciclo de hardening deve reintroduzir testes focados no pipeline critico: CKP, sync, quick crank, scheduler, tabelas, limites de calibracao e atuadores.
+## MVP Bancada Segura
+
+Definicao de pronto para o MVP de bancada:
+
+- `make firmware` gera `.elf`, `.hex` e `.bin`.
+- `make host-test` cobre regressao minima de CKP 60-2, quick crank, scheduler, tabelas e protocolo da UI proprietaria.
+- Firmware sobe na STM32H562 com ST-Link, sem bobinas/injetores energizados, sem reset loop ou hard fault.
+- TIM5 recebe CKP/CMP sintetico de 200 a 8500 rpm e telemetria mostra transicoes `WAIT_GAP`, `HALF_SYNC`, `FULL_SYNC`, perda e retomada de sync.
+- TIM2/TIM8 geram sinais verificaveis em osciloscopio para cranking, half-sync, full-sync, loss-of-sync e zero RPM.
+- UI bridge usa UART `PA9/PA10` a 115200 8N1 para assinatura, realtime data e escrita pequena de calibracao.
+- Durante ensaio, registrar `loop2_last`, `loop2_max`, `late_event_count`, `cycle_schedule_drop_count` e `calibration_clamp_count`.
+
+Fora do MVP de bancada:
+
+- Primeira partida de motor real.
+- USB CDC real.
+- Operacao com atuadores reais energizados sem validacao previa de pinout, polaridade, cargas dummy e limites de Flash.
 
 ## Estado Atual
 
@@ -189,7 +215,7 @@ A suite host foi removida/adiada durante a migracao STM32-only. O proximo ciclo 
 - Backend de timers STM32 presente para TIM2/TIM3/TIM4/TIM5/TIM8.
 - Scheduler principal consolidado em `src/engine/ecu_sched.cpp`.
 - Fonte ativa nao deve conter aliases de compatibilidade herdados de outras plataformas.
-- `make firmware` deve continuar passando antes de qualquer entrega.
+- `make firmware` e `make host-test` devem continuar passando antes de qualquer entrega de MVP de bancada.
 - Esta pagina e a unica fonte de verdade documental do projeto.
 
 ## Proximos Passos De Hardening

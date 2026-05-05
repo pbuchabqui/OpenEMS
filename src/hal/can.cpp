@@ -28,8 +28,8 @@
  *
  * Message RAM layout (FDCAN_SRAM @ 0x4000AC00):
  *   Offset 0x000: Std ID filters  (2 × 4 bytes)
- *   Offset 0x008: RX FIFO0        (3 elementos × 18 bytes = 54 bytes)
- *   Offset 0x03E: TX Buffer       (2 elementos × 18 bytes = 36 bytes)
+ *   Offset 0x008: RX FIFO0        (3 elementos × 16 bytes)
+ *   Offset 0x038: TX Buffer       (2 elementos × 16 bytes)
  */
 
 #ifndef EMS_HOST_TEST
@@ -40,11 +40,9 @@
 // ── Message RAM layout ────────────────────────────────────────────────────────
 // Endereços offset dentro do FDCAN_SRAM (0x4000AC00)
 static constexpr uint32_t kSramStdFilters = 0x000u;  // 2 filtros × 4 bytes
-static constexpr uint32_t kSramRxFifo0    = 0x008u;  // 3 elem × 18 bytes
-static constexpr uint32_t kSramTxBuf      = 0x03Eu;  // 2 elem × 18 bytes
+static constexpr uint32_t kSramRxFifo0    = 0x008u;  // 3 elem × 16 bytes
+static constexpr uint32_t kSramTxBuf      = 0x038u;  // 2 elem × 16 bytes
 
-// Tamanho de elemento FDCAN (CAN 2.0B classic: header 8 bytes + data 8 bytes = 18 bytes)
-// NOTA: estrutura real tem 2 words de header + até 2 data words para CAN FD
 // Para 8-byte CAN classic: 2 words header + 2 words data = 4 words = 16 bytes
 static constexpr uint32_t kElemSizeWords = 4u;  // 4 × 32-bit words por elemento
 
@@ -110,23 +108,22 @@ void can0_init() noexcept {
     }
 
     // Std ID Filter: aceitar 0x180 (WBO2 RX) — passar para RX FIFO0
-    // Elemento de filtro padrão: [31:30]=tipo, [28:16]=SFID1, [12:0]=SFID2
+    // Elemento de filtro padrão: [31:30]=SFT, [29:27]=SFEC, [26:16]=SFID1, [10:0]=SFID2
     // Tipo 010 = Classic filter, SFID1=ID, SFID2=ID (exact match)
     sram_word(kSramStdFilters + 0u) =
         (0x2u << 30)       // SFT = 010 (classic filter)
-      | (0u << 27)         // SFEC = 000 (disable — aceitar para RX FIFO depois)
+      | (0x1u << 27)       // SFEC = 001 (store in RX FIFO0 on match)
       | (0x180u << 16)     // SFID1 = 0x180
       | (0x180u << 0);     // SFID2 = 0x180
 
-    // Global filter: aceitar tudo no RX FIFO0 (simplificado — pode filtrar se necessário)
-    FDCAN1_RXGFC = (0u << 8)   // LSS = 0 (sem filtros Ext ID)
-                 | (2u << 0);  // LSE = 2 (2 filtros Std ID)
+    // Global filter: 2 filtros standard; frames não casados continuam aceitos em FIFO0.
+    FDCAN1_RXGFC = (2u << 16);  // LSS = 2, LSE = 0, ANFS/ANFE = accept FIFO0
 
-    // RX FIFO0: 3 elementos de 18 bytes cada
+    // RX FIFO0: 3 elementos de 16 bytes cada
     FDCAN1_RXF0C = (kSramRxFifo0 / 4u)   // F0SA: start address em words
                  | (3u << 16);             // F0S: 3 elementos
 
-    // TX Buffer: 2 elementos de 18 bytes cada
+    // TX Buffer: 2 elementos de 16 bytes cada
     FDCAN1_TXBC = (kSramTxBuf / 4u)      // TBSA: start address em words
                | (2u << 16);              // NDTB: 2 Dedicated TX Buffers
 
@@ -140,9 +137,9 @@ void can0_init() noexcept {
 // ── Transmissão ───────────────────────────────────────────────────────────────
 
 bool can0_tx(const CanFrame& frame) noexcept {
-    // Verifica se TX Buffer 0 está livre (TXFQS: TFQ bit indica que há espaço)
-    if (FDCAN1_TXFQS & (1u << 21)) {
-        return false;  // TX FIFO cheio
+    // Buffer dedicado 0: não sobrescrever enquanto a requisição estiver pendente.
+    if (FDCAN1_TXBRP & (1u << 0)) {
+        return false;
     }
 
     // Endereço do elemento TX Buffer 0 na Message RAM

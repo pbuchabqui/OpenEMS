@@ -5,17 +5,21 @@
 
 COMPILER_ARM = arm-none-eabi-g++
 OBJCOPY_ARM = arm-none-eabi-objcopy
+CXX_HOST ?= g++
 
 CFLAGS_COMMON = -std=c++17 -Wall -Wextra
 CFLAGS_ARM = $(CFLAGS_COMMON) -DTARGET_STM32H562 -DNDEBUG -mcpu=cortex-m33 -mthumb \
              -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections \
              -g0 -O2 -I./src
+CFLAGS_HOST = $(CFLAGS_COMMON) -DEMS_HOST_TEST -O2 -g -I./src
 
 SRC_DIR = src
+TEST_DIR = test
 BUILD_DIR = /tmp/openems-build
 BIN_DIR = $(BUILD_DIR)/bin
 OBJ_DIR = $(BUILD_DIR)/obj
 ELF_DIR = $(BUILD_DIR)/elf
+HOST_DIR = $(BUILD_DIR)/host
 LINKER_SCRIPT = linker/stm32h562.ld
 FIRMWARE_ELF = $(ELF_DIR)/openems.elf
 FIRMWARE_HEX = $(BIN_DIR)/openems.hex
@@ -28,10 +32,11 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/fuel_calc.cpp $(SRC_DIR)/engine/ign_calc.cpp \
              $(SRC_DIR)/engine/knock.cpp $(SRC_DIR)/engine/auxiliaries.cpp \
              $(SRC_DIR)/engine/table3d.cpp $(SRC_DIR)/engine/quick_crank.cpp \
+             $(SRC_DIR)/engine/transient_fuel.cpp \
              $(SRC_DIR)/engine/ecu_sched.cpp
 
 DRV_SRC = $(SRC_DIR)/drv/ckp.cpp $(SRC_DIR)/drv/sensors.cpp
-APP_SRC = $(SRC_DIR)/app/tuner_studio.cpp $(SRC_DIR)/app/can_stack.cpp
+APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp $(SRC_DIR)/app/can_stack.cpp
 HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp \
                  $(SRC_DIR)/hal/uart.cpp $(SRC_DIR)/hal/flash.cpp
 HAL_STM32H562_SRC = $(SRC_DIR)/hal/stm32h562/system.cpp \
@@ -42,6 +47,10 @@ FIRMWARE_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                $(HAL_STM32H562_SRC) $(SRC_DIR)/main_stm32.cpp \
                $(SRC_DIR)/startup_stm32h562.cpp
 FIRMWARE_OBJ = $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(FIRMWARE_SRC))
+HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
+                $(SRC_DIR)/hal/stm32h562/timer.cpp \
+                $(TEST_DIR)/mvp_bench_tests.cpp
+HOST_TEST_BIN = $(HOST_DIR)/mvp_bench_tests
 
 all: help
 
@@ -51,7 +60,7 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Host Testing:"
-	@echo "  host-test      Temporarily disabled"
+	@echo "  host-test      Run MVP bench regression harness"
 	@echo ""
 	@echo "STM32H562 Firmware:"
 	@echo "  firmware       Build firmware (.elf/.hex/.bin)"
@@ -60,8 +69,10 @@ help:
 	@echo "  clean          Remove build artifacts"
 
 host-test:
-	@echo "Host test suite temporarily disabled."
-	@echo "Use: make firmware"
+	@mkdir -p $(HOST_DIR)
+	@echo "  HOST $(HOST_TEST_BIN)"
+	@$(CXX_HOST) $(CFLAGS_HOST) $(HOST_TEST_SRC) -o $(HOST_TEST_BIN)
+	@$(HOST_TEST_BIN)
 
 firmware: $(OBJ_DIR) $(ELF_DIR) $(BIN_DIR) $(FIRMWARE_ELF) $(FIRMWARE_HEX) $(FIRMWARE_BIN)
 	@echo "Building STM32H562 firmware..."

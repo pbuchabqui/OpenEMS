@@ -149,7 +149,7 @@ static void gpdma_arm(uint32_t ch_base, uint32_t reqsel,
     GPDMA_REG(ch_base, GPDMA_CBR2_OFF) = 0u;
     GPDMA_REG(ch_base, GPDMA_CLLR_OFF) = 0u;
     GPDMA_REG(ch_base, GPDMA_CCR_OFF) = GPDMA_CCR_PRIO_HIGH | GPDMA_CCR_TCIE |
-                                         GPDMA_CCR_DTEIE | GPDMA_CCR_USEIE | GPDMA_CCR_EN;
+                                         GPDMA_CCR_DTEIE | GPDMA_CCR_USEIE | GPDMA_CCR_CIRC | GPDMA_CCR_EN;
 }
 
 static void gpdma_adc1_arm() noexcept {

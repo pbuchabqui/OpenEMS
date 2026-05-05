@@ -168,11 +168,11 @@ extern "C" void TIM5_IRQHandler(void) {
     const uint32_t sr = TIM5_SR;
 
     if (sr & TIM_SR_CC1IF) {
-        TIM5_SR = ~TIM_SR_CC1IF;   // Clear CC1IF (W0C)
+        TIM5_SR &= ~TIM_SR_CC1IF;
         ems::drv::ckp_tim5_ch1_isr();
     }
     if (sr & TIM_SR_CC2IF) {
-        TIM5_SR = ~TIM_SR_CC2IF;
+        TIM5_SR &= ~TIM_SR_CC2IF;
         ems::drv::ckp_tim5_ch2_isr();
     }
 }

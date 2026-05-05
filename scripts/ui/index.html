@@ -1,0 +1,2019 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenEMS Calibration</title>
+<style>
+
+:root {
+  color-scheme: dark;
+  --bg-main: #070a0f;
+  --bg-panel: rgba(15, 23, 42, 0.86);
+  --bg-panel-solid: #0f172a;
+  --bg-surface: rgba(30, 41, 59, 0.78);
+  --bg-surface-hover: rgba(51, 65, 85, 0.92);
+  --bg-elevated: rgba(17, 24, 39, 0.92);
+  --border-light: rgba(148, 163, 184, 0.18);
+  --border-dark: rgba(15, 23, 42, 0.92);
+  --border-focus: rgba(56, 189, 248, 0.85);
+
+  --text-main: #e5edf7;
+  --text-muted: #93a4b8;
+  --text-dark: #64748b;
+
+  --accent-blue: #38bdf8;
+  --accent-blue-hover: #0ea5e9;
+  --accent-green: #34d399;
+  --danger-red: #fb7185;
+  --warn-orange: #fbbf24;
+  --burn-orange: #fb923c;
+  --burn-orange-hover: #f97316;
+
+  --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.22);
+  --shadow-md: 0 14px 40px rgba(0, 0, 0, 0.34);
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+
+  --font-ui: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Fira Code', Consolas, Courier, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { min-height: 100%; background: var(--bg-main); }
+body {
+  min-height: 100vh;
+  font-family: var(--font-ui);
+  color: var(--text-main);
+  font-size: 13px;
+  padding-bottom: 46px;
+  background:
+    radial-gradient(circle at 12% -8%, rgba(56, 189, 248, 0.15), transparent 28%),
+    radial-gradient(circle at 88% 2%, rgba(52, 211, 153, 0.10), transparent 30%),
+    linear-gradient(180deg, #0b1120 0%, #070a0f 42%, #05070b 100%);
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+  background-size: 36px 36px;
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent 72%);
+}
+
+/* Header */
+#header {
+  position: sticky;
+  top: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 22px;
+  background: rgba(8, 13, 23, 0.86);
+  backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--border-light);
+  box-shadow: 0 10px 36px rgba(0,0,0,0.28);
+}
+#header .title {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 132px;
+  font-size: 20px;
+  font-weight: 800;
+  color: #f8fafc;
+  letter-spacing: 0.35px;
+}
+#header .title::before {
+  content: '';
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+  box-shadow: 0 0 22px rgba(56,189,248,0.65);
+}
+#conn-status {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 6px 11px;
+  border-radius: 999px;
+  letter-spacing: 0.8px;
+  white-space: nowrap;
+}
+#conn-status.online { background: rgba(52, 211, 153, 0.12); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.34); }
+#conn-status.offline { background: rgba(251, 113, 133, 0.12); color: var(--danger-red); border: 1px solid rgba(251, 113, 133, 0.34); }
+#ws-url {
+  background: rgba(2, 6, 23, 0.72);
+  border: 1px solid var(--border-light);
+  color: var(--text-main);
+  padding: 8px 11px;
+  border-radius: 10px;
+  width: min(280px, 28vw);
+  min-width: 190px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+}
+#ws-url:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(56,189,248,0.12); background: rgba(2, 6, 23, 0.94); }
+#header button,
+.toolbar button,
+.dlog-toolbar button {
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  color: #dff6ff;
+  background: linear-gradient(180deg, rgba(14, 165, 233, 0.18), rgba(14, 165, 233, 0.08));
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 12px;
+  transition: transform 0.15s, border-color 0.18s, background 0.18s, box-shadow 0.18s, opacity 0.18s;
+}
+#header button:hover,
+.toolbar button:hover,
+.dlog-toolbar button:hover { transform: translateY(-1px); border-color: rgba(56, 189, 248, 0.58); box-shadow: 0 8px 22px rgba(14, 165, 233, 0.12); }
+#header button:active,
+.toolbar button:active,
+.dlog-toolbar button:active { transform: translateY(0); }
+.live-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 9px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.55);
+}
+.live-label input { accent-color: var(--accent-green); width: 15px; height: 15px; cursor: pointer; }
+
+/* Gauges */
+#gauges {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 14px;
+  padding: 20px 22px 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.10);
+}
+.gauge {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.86), rgba(15, 23, 42, 0.54));
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 15px 12px;
+  text-align: left;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  min-height: 96px;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: transform 0.18s, border-color 0.18s, box-shadow 0.18s;
+}
+.gauge::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.08), transparent 38%);
+  pointer-events: none;
+}
+.gauge:hover { transform: translateY(-2px); border-color: rgba(56, 189, 248, 0.28); box-shadow: var(--shadow-md); }
+.gauge .label { font-size: 10px; color: var(--text-muted); font-weight: 800; text-transform: uppercase; letter-spacing: 1.1px; margin-bottom: 6px; }
+.gauge .value { font-family: var(--font-mono); font-size: clamp(22px, 2.1vw, 30px); font-weight: 850; color: #f8fafc; line-height: 1.05; margin-bottom: 4px; letter-spacing: -0.8px; }
+.gauge .unit { font-size: 11px; color: var(--text-dark); font-weight: 700; }
+.gauge.warn { border-color: rgba(251, 191, 36, 0.62); box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.10), var(--shadow-sm); }
+.gauge.warn .value { color: var(--warn-orange); text-shadow: 0 0 18px rgba(251, 191, 36, 0.25); }
+.gauge.crit { border-color: rgba(251, 113, 133, 0.72); box-shadow: 0 0 0 1px rgba(251, 113, 133, 0.12), var(--shadow-sm); }
+.gauge.crit .value { color: var(--danger-red); text-shadow: 0 0 18px rgba(251, 113, 133, 0.28); }
+
+/* Tabs */
+#tabs {
+  position: sticky;
+  top: 62px;
+  z-index: 70;
+  display: flex;
+  gap: 8px;
+  padding: 12px 22px 0;
+  background: rgba(8, 13, 23, 0.76);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border-light);
+  flex-wrap: wrap;
+}
+.tab-btn {
+  padding: 10px 15px;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  font-weight: 800;
+  font-size: 12px;
+  transition: all 0.18s;
+  margin-bottom: -1px;
+  border-radius: 10px 10px 0 0;
+}
+.tab-btn:hover { color: #f8fafc; background: rgba(148,163,184,0.08); }
+.tab-btn.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); background: rgba(56, 189, 248, 0.08); }
+
+/* Content */
+.tab-pane { padding: 20px 22px 34px; display: none; animation: fadeIn 0.22s ease; }
+.tab-pane.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+.toolbar, .dlog-toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.62);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+.toolbar button.burn { background: linear-gradient(180deg, rgba(251, 146, 60, 0.20), rgba(251, 146, 60, 0.08)); border-color: rgba(251, 146, 60, 0.42); color: #fed7aa; }
+.toolbar button.burn:hover { background: linear-gradient(180deg, rgba(251, 146, 60, 0.32), rgba(251, 146, 60, 0.14)); border-color: var(--burn-orange); color: #fff; }
+.toolbar .sel-count, #dlog-info { font-size: 12px; color: var(--text-muted); min-width: 52px; font-weight: 800; font-family: var(--font-mono); }
+.status-msg { font-size: 12px; color: var(--accent-green); font-weight: 800; margin-left: 8px; }
+
+/* Tables */
+.tbl-wrap {
+  overflow: auto;
+  background: rgba(8, 13, 23, 0.78);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 6px;
+  box-shadow: var(--shadow-md);
+}
+table.cal, table.corr { border-collapse: separate; border-spacing: 0; font-family: var(--font-mono); font-size: 12px; width: max-content; }
+table.cal th, table.corr th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: rgba(15, 23, 42, 0.96);
+  color: var(--text-muted);
+  padding: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.78);
+  min-width: 44px;
+  text-align: center;
+  font-weight: 850;
+}
+table.cal th:first-child { left: 0; z-index: 4; }
+table.cal th.axis-label, table.corr th.row-label { color: var(--accent-blue); background: rgba(8, 13, 23, 0.98); }
+table.cal td[data-ri][data-ci], table.corr td {
+  padding: 6px 8px;
+  border: 1px solid rgba(255,255,255,0.035);
+  text-align: right;
+  cursor: crosshair;
+  min-width: 44px;
+  transition: filter 0.12s, outline 0.08s, transform 0.08s;
+}
+table.cal td[data-ri][data-ci]:hover, table.corr td:hover { outline: 2px solid rgba(248,250,252,0.82); outline-offset: -2px; z-index: 5; position: relative; filter: brightness(1.2) saturate(1.08); }
+table.cal td[data-ri][data-ci].selected-cell { outline: 2px solid var(--accent-blue); outline-offset: -2px; filter: brightness(1.24) saturate(1.1); z-index: 6; position: relative; box-shadow: inset 0 0 0 1px rgba(2, 6, 23, 0.45); }
+table.cal td[data-ri][data-ci].active-region { box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.45); filter: brightness(1.15); }
+table.cal td[data-ri][data-ci].active-cell { outline: 2px solid #fef08a; outline-offset: -2px; z-index: 7; position: relative; box-shadow: 0 0 16px rgba(250, 204, 21, 0.34), inset 0 0 0 1px rgba(2,6,23,0.38); }
+
+/* Correction and config cards */
+.corr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.corr-section, .cfg-item, .ch-selector {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.84), rgba(15, 23, 42, 0.58));
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  box-shadow: var(--shadow-sm);
+}
+.corr-title, .lambda-delay-title { font-size: 12px; color: var(--accent-blue); font-weight: 850; margin-bottom: 11px; text-transform: uppercase; letter-spacing: 0.8px; }
+table.corr th { min-width: 62px; }
+table.corr th.row-label { color: var(--text-muted); min-width: 92px; text-align: right; }
+.lambda-delay-wrap { margin-top: 20px; }
+.cfg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.cfg-item { border-radius: var(--radius-md); padding: 15px 16px; transition: transform 0.18s, border-color 0.18s, background 0.18s; }
+.cfg-item.editable { cursor: pointer; border-left: 3px solid var(--accent-blue); }
+.cfg-item.editable:hover { border-color: rgba(56,189,248,0.55); background: rgba(30,41,59,0.88); transform: translateY(-2px); }
+.cfg-item .cfg-name { font-size: 10px; color: var(--text-muted); font-weight: 850; text-transform: uppercase; letter-spacing: 0.8px; }
+.cfg-item .cfg-val { font-family: var(--font-mono); font-size: 20px; color: #f8fafc; font-weight: 850; margin: 6px 0 3px; }
+.cfg-item .cfg-unit { font-size: 11px; color: var(--text-dark); font-weight: 700; }
+
+/* Datalog */
+.dlog-toolbar button.rec-active { background: linear-gradient(180deg, rgba(251, 113, 133, 0.34), rgba(251, 113, 133, 0.16)); border-color: var(--danger-red); color: #fff; animation: pulseRed 1.5s infinite; }
+.dlog-toolbar button:disabled { opacity: 0.45; cursor: not-allowed; border-color: var(--border-light); color: var(--text-muted); background: rgba(15, 23, 42, 0.32); transform: none; box-shadow: none; }
+@keyframes pulseRed { 0% { box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.34); } 70% { box-shadow: 0 0 0 8px rgba(251, 113, 133, 0); } 100% { box-shadow: 0 0 0 0 rgba(251, 113, 133, 0); } }
+.dlog-select { background: rgba(15, 23, 42, 0.9); border: 1px solid var(--border-light); color: var(--text-main); padding: 7px 9px; border-radius: 10px; outline: none; }
+.ch-selector { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.ch-label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font-size: 12px; font-weight: 750; user-select: none; padding: 7px 10px; border: 1px solid rgba(148,163,184,0.12); border-radius: 999px; background: rgba(2,6,23,0.34); transition: opacity 0.18s, background 0.18s; }
+.ch-label input { display: none; }
+.ch-swatch { width: 13px; height: 13px; border-radius: 4px; flex-shrink: 0; opacity: 1; transition: transform 0.12s, opacity 0.12s; box-shadow: 0 0 12px rgba(255,255,255,0.12); }
+.ch-label:hover { background: rgba(30,41,59,0.72); }
+.ch-label:hover .ch-swatch { transform: scale(1.12); }
+.ch-label.off .ch-swatch { opacity: 0.22; transform: scale(0.9); }
+.ch-label.off { color: var(--text-dark); opacity: 0.72; }
+#dlog-canvas { display: block; background: rgba(2, 6, 23, 0.66); border: 1px solid var(--border-light); border-radius: var(--radius-md); cursor: crosshair; width: 100%; box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), var(--shadow-sm); }
+#dlog-readout { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); padding: 10px 2px; min-height: 26px; display: flex; flex-wrap: wrap; gap: 14px; }
+
+/* Status bar */
+#statusbar {
+  padding: 8px 22px;
+  background: rgba(8, 13, 23, 0.90);
+  backdrop-filter: blur(18px);
+  border-top: 1px solid var(--border-light);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  box-shadow: 0 -10px 28px rgba(0,0,0,0.28);
+}
+.flag { padding: 4px 8px; border-radius: 999px; font-weight: 850; background: rgba(2,6,23,0.58); border: 1px solid rgba(148,163,184,0.12); }
+.flag.on { background: rgba(251, 113, 133, 0.13); color: var(--danger-red); border-color: rgba(251, 113, 133, 0.36); }
+.flag.off { color: var(--text-dark); border-color: rgba(15,23,42,0.85); }
+#f-loop { margin-left: auto; color: var(--text-muted); }
+code { color: #bae6fd; background: rgba(2, 6, 23, 0.55); padding: 2px 5px; border-radius: 6px; }
+
+@media (max-width: 860px) {
+  #header { align-items: stretch; flex-wrap: wrap; }
+  #header .title { min-width: auto; }
+  #ws-url { width: 100%; flex: 1 1 220px; }
+  .live-label { margin-left: 0 !important; }
+  #tabs { top: 108px; }
+  #gauges { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-inline: 14px; }
+  .tab-pane { padding-inline: 14px; }
+  #statusbar { overflow-x: auto; }
+}
+
+@media (max-width: 520px) {
+  #gauges { grid-template-columns: 1fr; }
+  .toolbar, .dlog-toolbar { align-items: stretch; }
+  .toolbar button, .dlog-toolbar button { flex: 1 1 auto; }
+}
+
+
+
+/* Pro Tuner Mode: visual-only calibration enhancements */
+.pro-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #dbeafe;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 10px;
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.16), rgba(15, 23, 42, 0.55));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+}
+.pro-label input { accent-color: var(--accent-blue); width: 15px; height: 15px; cursor: pointer; }
+body.pro-tuner .tbl-wrap {
+  border-color: rgba(56, 189, 248, 0.26);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+body.pro-tuner table.cal { border-spacing: 0; }
+body.pro-tuner table.cal th {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(2, 6, 23, 0.96));
+  color: #dbeafe;
+  border-color: rgba(148, 163, 184, 0.20);
+  text-shadow: 0 1px 2px rgba(0,0,0,0.65);
+}
+body.pro-tuner table.cal th.axis-label {
+  left: 0;
+  z-index: 5;
+  color: #7dd3fc;
+  box-shadow: 2px 0 0 rgba(56, 189, 248, 0.10);
+}
+body.pro-tuner table.cal td[data-ri][data-ci] {
+  position: relative;
+  min-width: 48px;
+  height: 31px;
+  font-weight: 850;
+  letter-spacing: -0.15px;
+  border-color: rgba(2, 6, 23, 0.50);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08), inset 0 -12px 20px rgba(0,0,0,0.16);
+  transition: transform 0.08s, filter 0.12s, box-shadow 0.12s, outline 0.08s;
+}
+body.pro-tuner table.cal td[data-ri][data-ci]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(255,255,255,0.18), transparent 42%, rgba(0,0,0,0.18));
+  mix-blend-mode: soft-light;
+}
+body.pro-tuner table.cal td[data-ri][data-ci]:hover {
+  transform: scale(1.04);
+  outline: 2px solid #f8fafc;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.28), 0 0 16px rgba(56,189,248,0.28), inset 0 0 0 1px rgba(255,255,255,0.12);
+}
+body.pro-tuner table.cal td[data-ri][data-ci].selected-cell {
+  outline: 2px solid #22d3ee;
+  box-shadow: 0 0 0 1px rgba(34,211,238,0.35), 0 0 18px rgba(34,211,238,0.38), inset 0 0 0 1px rgba(255,255,255,0.14);
+  filter: saturate(1.22) brightness(1.10);
+}
+body.pro-tuner table.cal td[data-ri][data-ci].active-cell {
+  outline: 2px solid #facc15;
+  box-shadow: 0 0 0 1px rgba(250,204,21,0.50), 0 0 22px rgba(250,204,21,0.48), inset 0 0 0 1px rgba(255,255,255,0.18);
+  filter: saturate(1.35) brightness(1.18);
+}
+body.pro-tuner #pane-ve::before,
+body.pro-tuner #pane-lambda::before {
+  display: block;
+  width: fit-content;
+  margin: 0 0 12px 0;
+  padding: 7px 11px;
+  border-radius: 999px;
+  color: #dbeafe;
+  background: rgba(56, 189, 248, 0.10);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+body.pro-tuner #pane-ve::before { content: 'PRO TUNER · VE high-contrast heatmap'; }
+body.pro-tuner #pane-lambda::before { content: 'PRO TUNER · Lambda rich / stoich / lean zones'; }
+
+/* ── Pro Tuner: dashboard reorder ── */
+.gauge { cursor: grab; user-select: none; }
+.gauge:active { cursor: grabbing; }
+.gauge.dragging { opacity: 0.52; transform: scale(0.985); }
+.gauge.drag-over { outline: 2px dashed rgba(56, 189, 248, 0.75); outline-offset: 3px; }
+
+/* Texto das células sempre preto, conforme solicitado */
+table.cal td[data-ri][data-ci] { color: #000 !important; text-shadow: none !important; font-weight: 800; }
+@media (max-width: 760px) { .pro-label { margin-left: 0; } }
+
+</style>
+</head>
+<body class="pro-tuner">
+
+<div id="header">
+  <span class="title">OpenEMS</span>
+  <span id="conn-status" class="offline">● OFFLINE</span>
+  <input id="ws-url" type="text" value="ws://localhost:8765" placeholder="WebSocket URL">
+  <button id="conn-btn" onclick="toggleConnect()">Conectar</button>
+  <label class="live-label" style="margin-left: auto;">
+    <input id="live-toggle" type="checkbox" onchange="setLive(this.checked)"> Live Tuning
+  </label>
+</div>
+
+<div id="gauges">
+  <div class="gauge" id="g-rpm">   <div class="label">RPM</div>   <div class="value" id="v-rpm">—</div>   <div class="unit">rpm</div></div>
+  <div class="gauge" id="g-map">   <div class="label">MAP</div>   <div class="value" id="v-map">—</div>   <div class="unit">kPa</div></div>
+  <div class="gauge" id="g-tps">   <div class="label">TPS</div>   <div class="value" id="v-tps">—</div>   <div class="unit">%</div></div>
+  <div class="gauge" id="g-clt">   <div class="label">CLT</div>   <div class="value" id="v-clt">—</div>   <div class="unit">°C</div></div>
+  <div class="gauge" id="g-iat">   <div class="label">IAT</div>   <div class="value" id="v-iat">—</div>   <div class="unit">°C</div></div>
+  <div class="gauge" id="g-lam">   <div class="label">λ</div>     <div class="value" id="v-lam">—</div>   <div class="unit">lambda</div></div>
+  <div class="gauge" id="g-pw">    <div class="label">PW</div>    <div class="value" id="v-pw">—</div>    <div class="unit">ms</div></div>
+  <div class="gauge" id="g-adv">   <div class="label">AVANÇO</div><div class="value" id="v-adv">—</div>   <div class="unit">° BTDC</div></div>
+  <div class="gauge" id="g-ve">    <div class="label">VE</div>    <div class="value" id="v-ve">—</div>    <div class="unit">%</div></div>
+  <div class="gauge" id="g-stft">  <div class="label">STFT</div>  <div class="value" id="v-stft">—</div>  <div class="unit">%</div></div>
+  <div class="gauge" id="g-ltft">  <div class="label">LTFT</div>  <div class="value" id="v-ltft">—</div>  <div class="unit">%</div></div>
+</div>
+
+<div id="tabs">
+  <button class="tab-btn active" data-tab="ve"     onclick="showTab('ve')">Tabela VE</button>
+  <button class="tab-btn"        data-tab="spark"  onclick="showTab('spark')">Tabela Spark</button>
+  <button class="tab-btn"        data-tab="lambda" onclick="showTab('lambda')">Lambda Target</button>
+  <button class="tab-btn"        data-tab="corr"   onclick="showTab('corr')">Correções 1D</button>
+  <button class="tab-btn"        data-tab="cfg"    onclick="showTab('cfg')">Engine Config</button>
+  <button class="tab-btn"        data-tab="dlog"   onclick="showTab('dlog')">Datalog</button>
+</div>
+
+<div id="pane-ve" class="tab-pane active">
+  <div class="toolbar">
+    <button onclick="loadTable('ve')">⬇ Carregar da ECU</button>
+    <button onclick="sendTableRam('ve')">↑ Enviar Dados</button>
+    <button class="burn" onclick="burnTable('ve')">🔥 Burn Flash</button>
+    <div style="width: 1px; height: 20px; background: var(--border-light); margin: 0 6px;"></div>
+    <button onclick="bulkApply('ve','add')">+1%</button>
+    <button onclick="bulkApply('ve','sub')">-1%</button>
+    <button onclick="clearSelection('ve')">Limpar Seleção</button>
+    <span id="sel-ve" class="sel-count">0 sel.</span>
+    <span id="status-ve" class="status-msg"></span>
+  </div>
+  <div class="tbl-wrap"><table id="ve-table" class="cal"></table></div>
+</div>
+
+<div id="pane-spark" class="tab-pane">
+  <div class="toolbar">
+    <button onclick="loadTable('spark')">⬇ Carregar da ECU</button>
+    <button onclick="sendTableRam('spark')">↑ Enviar Dados</button>
+    <button class="burn" onclick="burnTable('spark')">🔥 Burn Flash</button>
+    <div style="width: 1px; height: 20px; background: var(--border-light); margin: 0 6px;"></div>
+    <button onclick="bulkApply('spark','add')">+1°</button>
+    <button onclick="bulkApply('spark','sub')">-1°</button>
+    <button onclick="clearSelection('spark')">Limpar Seleção</button>
+    <span id="sel-spark" class="sel-count">0 sel.</span>
+    <span id="status-spark" class="status-msg"></span>
+  </div>
+  <div class="tbl-wrap"><table id="spark-table" class="cal"></table></div>
+</div>
+
+<div id="pane-lambda" class="tab-pane">
+  <div class="toolbar">
+    <button onclick="loadTable('lambda')">⬇ Carregar da ECU</button>
+    <button onclick="sendTableRam('lambda')">↑ Enviar Dados</button>
+    <button class="burn" onclick="burnTable('lambda')">🔥 Burn Flash</button>
+    <div style="width: 1px; height: 20px; background: var(--border-light); margin: 0 6px;"></div>
+    <button onclick="bulkApply('lambda','add')">+0,01</button>
+    <button onclick="bulkApply('lambda','sub')">-0,01</button>
+    <button onclick="clearSelection('lambda')">Limpar Seleção</button>
+    <span id="sel-lambda" class="sel-count">0 sel.</span>
+    <span id="status-lambda" class="status-msg"></span>
+  </div>
+  <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px; font-weight: 500;">
+    Valores ×1000 (ex: 1000 = λ 1.00 stoich, 870 = λ 0.87 rico, 1050 = λ 1.05 pobre)
+  </div>
+  <div class="tbl-wrap"><table id="lambda-table" class="cal"></table></div>
+</div>
+
+<div id="pane-corr" class="tab-pane">
+  <div class="toolbar">
+    <button onclick="loadCorr()">⬇ Carregar da ECU</button>
+    <button onclick="sendCorrRam()">↑ Enviar Dados</button>
+    <button class="burn" onclick="burnCorr()">🔥 Gravar na ECU</button>
+    <span id="status-corr" class="status-msg"></span>
+  </div>
+  <div id="corr-content">
+    <div style="color:var(--text-dark); font-size:13px; font-style: italic;">Clique em "Carregar da ECU" para visualizar as tabelas de correção.</div>
+  </div>
+</div>
+
+<div id="pane-cfg" class="tab-pane">
+  <div class="toolbar">
+    <button onclick="loadCfg()">⬇ Carregar da ECU</button>
+    <button onclick="sendCfgRam()">↑ Enviar Dados</button>
+    <span id="status-cfg" class="status-msg"></span>
+  </div>
+  <div style="font-size:12px; color:var(--text-muted); margin-bottom:16px; font-weight: 500;">
+    O IVC ABDC é aplicado em runtime pela página 0. As demais constantes vêm da compilação do <code>engine_config.h</code>.
+  </div>
+  <div class="cfg-grid">
+    <div class="cfg-item"><div class="cfg-name">Cilindros</div><div class="cfg-val">4</div><div class="cfg-unit">cilindros</div></div>
+    <div class="cfg-item"><div class="cfg-name">Cilindrada</div><div class="cfg-val">2000</div><div class="cfg-unit">cc</div></div>
+    <div class="cfg-item"><div class="cfg-name">Injetores</div><div class="cfg-val">450</div><div class="cfg-unit">cc/min @ 3 bar</div></div>
+    <div class="cfg-item"><div class="cfg-name">AFR Stoich (E30)</div><div class="cfg-val">13.00</div><div class="cfg-unit">:1  (kStoichAfrX100=1300)</div></div>
+    <div class="cfg-item"><div class="cfg-name">Densid. Combustível</div><div class="cfg-val">755</div><div class="cfg-unit">mg/cc</div></div>
+    <div class="cfg-item"><div class="cfg-name">Densidade Ar</div><div class="cfg-val">1.184</div><div class="cfg-unit">mg/cc  (×1000)</div></div>
+    <div class="cfg-item"><div class="cfg-name">MAP Referência</div><div class="cfg-val">100</div><div class="cfg-unit">kPa</div></div>
+    <div class="cfg-item"><div class="cfg-name">SOI Lead padrão</div><div class="cfg-val">62</div><div class="cfg-unit">°</div></div>
+    <div class="cfg-item editable" onclick="editIvc()"><div class="cfg-name">IVC ABDC</div><div id="cfg-ivc" class="cfg-val">50</div><div class="cfg-unit">° ABDC runtime</div></div>
+    <div class="cfg-item"><div class="cfg-name">Trigger Tooth 0</div><div class="cfg-val">0</div><div class="cfg-unit">° motor</div></div>
+    <div class="cfg-item"><div class="cfg-name">Ordem de Ignição</div><div class="cfg-val">1-3-4-2</div><div class="cfg-unit">kFiringOrder = {0,2,3,1}</div></div>
+    <div class="cfg-item"><div class="cfg-name">TDC dos cilindros</div><div class="cfg-val">0°, 180°, 360°, 540°</div><div class="cfg-unit">kCylinderTdcDeg</div></div>
+  </div>
+</div>
+
+<div id="pane-dlog" class="tab-pane">
+  <div class="dlog-toolbar">
+    <button id="dlog-btn-rec"  onclick="dlogRec()">● Iniciar Gravação</button>
+    <button id="dlog-btn-stop" onclick="dlogStop()" disabled>■ Parar</button>
+    <div style="width: 1px; height: 20px; background: var(--border-light); margin: 0 6px;"></div>
+    <button onclick="dlogClear()">🗑 Limpar Buffer</button>
+    <button onclick="dlogExport()">⬇ Exportar CSV</button>
+    <label style="font-size:12px; color:var(--text-muted); display:flex; align-items:center; gap:6px; margin-left: 8px;">
+      Janela Visual:
+      <select class="dlog-select" id="dlog-win" onchange="dlogWindow=+this.value">
+        <option value="10000">10 s</option>
+        <option value="30000">30 s</option>
+        <option value="60000" selected>60 s</option>
+        <option value="120000">2 min</option>
+        <option value="300000">5 min</option>
+      </select>
+    </label>
+    <span id="dlog-info" style="margin-left:auto">0 amostras</span>
+  </div>
+  <div class="ch-selector" id="dlog-ch-sel"></div>
+  <canvas id="dlog-canvas" height="350"></canvas>
+  <div id="dlog-readout"></div>
+</div>
+
+<div id="statusbar">
+  <span id="f-sync"  class="flag off">SYNC</span>
+  <span id="f-phase" class="flag off">PHASE</span>
+  <span id="f-sfault"class="flag off">SENSOR_FAULT</span>
+  <span id="f-late"  class="flag off">SCHED_LATE</span>
+  <span id="f-drop"  class="flag off">DROP</span>
+  <span id="f-clamp" class="flag off">CLAMP</span>
+  <span id="f-wbo2"  class="flag off">WBO2_FAULT</span>
+  <span id="f-loop"  style="margin-left:auto; color:var(--text-muted);">loop2ms: —</span>
+</div>
+
+<script>
+'use strict';
+
+// ── Constantes de eixo ─────────────────────────────────────────────────────
+const RPM_AXIS  = [500,750,1000,1250,1500,2000,2500,3000,4000,5000,6000,7000,8000,9000,10000,12000];
+const LOAD_AXIS = [20,30,40,50,60,70,80,90,100,115,130,145,160,180,215,300];
+const N = 16;
+
+// ── Definição das tabelas 2D ───────────────────────────────────────────────
+const tables = {
+  ve:     { page: 1, data: new Uint8Array(256),  signed: false, min: 0,   max: 254,  byteLen: 256  },
+  spark:  { page: 2, data: new Int8Array(256),   signed: true,  min: -12, max: 40,   byteLen: 256  },
+  lambda: { page: 4, data: new Int16Array(256),  signed: true,  min: 650, max: 1200, byteLen: 512  },
+};
+
+const tableSteps = { ve: 1, spark: 1, lambda: 10 };
+const selectedCells = { ve: new Set(), spark: new Set(), lambda: new Set() };
+const cfgPage = { page: 0, data: new Uint8Array(512), loaded: false };
+cfgPage.data[0] = 50;
+
+// ── Estrutura das tabelas 1D (página 5, 256 bytes) ─────────────────────────
+const CORR_TABLES = [
+  { id: 'clt',    name: 'CLT Correction',      axisOff:   0, valOff:  16, n: 8, axisType: 'i16', valType: 'u16', axisUnit: '°C×10', valUnit: '×256 (256=1.0×)', axisColorFn: tempAxisColor, valColorFn: multColor    },
+  { id: 'iat',    name: 'IAT Correction',       axisOff:  32, valOff:  48, n: 8, axisType: 'i16', valType: 'u16', axisUnit: '°C×10', valUnit: '×256 (256=1.0×)', axisColorFn: tempAxisColor, valColorFn: multColor    },
+  { id: 'warmup', name: 'Warmup Correction',    axisOff:  64, valOff:  80, n: 8, axisType: 'i16', valType: 'u16', axisUnit: '°C×10', valUnit: '×256 (256=1.0×)', axisColorFn: tempAxisColor, valColorFn: multColor    },
+  { id: 'vbatt',  name: 'Vbatt / Dead Time',    axisOff:  96, valOff: 112, n: 8, axisType: 'u16', valType: 'u16', axisUnit: 'mV',    valUnit: 'µs injector dead', axisColorFn: voltAxisColor, valColorFn: deadTimeColor },
+  { id: 'aeclt',  name: 'AE-CLT Sensitivity',   axisOff: 128, valOff: 144, n: 8, axisType: 'i16', valType: 'u16', axisUnit: '°C×10', valUnit: 'count',            axisColorFn: tempAxisColor, valColorFn: aeSensColor   },
+  { id: 'dwell',  name: 'Dwell Time',            axisOff: 160, valOff: 176, n: 8, axisType: 'u16', valType: 'u16', axisUnit: 'mV',    valUnit: '×10ms',            axisColorFn: voltAxisColor, valColorFn: dwellColor    },
+];
+const DELAY_RPM_OFF  = 192;
+const DELAY_LOAD_OFF = 204;
+const DELAY_VAL_OFF  = 216;
+const AE_FIELDS = [
+  { off: 234, type: 'u16', name: 'TPSdot threshold', unit: '%×10/ms', hint: 'gatilho' },
+  { off: 236, type: 'u16', name: 'Taper', unit: 'ciclos 2ms', hint: 'decaimento' },
+  { off: 238, type: 'u16', name: 'Pulso máximo', unit: 'µs', hint: 'limite' },
+];
+const IDLE_SPARK_FIELDS = [
+  { off: 240, type: 'u16', name: 'TPS máximo', unit: '%×10', hint: 'habilitação' },
+  { off: 242, type: 'u16', name: 'MAP máximo', unit: 'kPa', hint: 'habilitação' },
+  { off: 244, type: 'u16', name: 'RPM mínimo', unit: 'RPM×10', hint: 'habilitação' },
+  { off: 246, type: 'u16', name: 'Janela acima alvo', unit: 'RPM×10', hint: 'habilitação' },
+  { off: 248, type: 'u16', name: 'Deadband', unit: 'RPM×10', hint: 'erro sem correção' },
+  { off: 250, type: 'u16', name: 'RPM por grau', unit: 'RPM×10/°', hint: 'ganho' },
+  { off: 252, type: 'i16', name: 'Retardo limite', unit: '°', hint: 'mínimo' },
+  { off: 254, type: 'i16', name: 'Avanço limite', unit: '°', hint: 'máximo' },
+];
+
+let corrBuf = new Uint8Array(256);
+let corrLoaded = false;
+let xtauBuf = new Uint8Array(64);
+let xtauLoaded = false;
+
+// ── Protocolo ─────────────────────────────────────────────────────────────
+class EmsProtocol {
+  constructor() {
+    this.ws = null;
+    this.rxBuf = new Uint8Array(0);
+    this.pending = null;
+    this.queue = Promise.resolve();
+  }
+
+  connect(url) {
+    return new Promise((resolve, reject) => {
+      this.ws = new WebSocket(url);
+      this.ws.binaryType = 'arraybuffer';
+      this.ws.onopen  = resolve;
+      this.ws.onerror = reject;
+      this.ws.onclose = () => onDisconnect();
+      this.ws.onmessage = (e) => this._onData(new Uint8Array(e.data));
+    });
+  }
+
+  _onData(bytes) {
+    const merged = new Uint8Array(this.rxBuf.length + bytes.length);
+    merged.set(this.rxBuf);
+    merged.set(bytes, this.rxBuf.length);
+    this.rxBuf = merged;
+    if (this.pending && this.rxBuf.length >= this.pending.expect) {
+      const result = this.rxBuf.slice(0, this.pending.expect);
+      this.rxBuf = this.rxBuf.slice(this.pending.expect);
+      const resolve = this.pending.resolve;
+      this.pending = null;
+      resolve(result);
+    }
+  }
+
+  _transact(tx, expect) {
+    const run = () => new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error('offline'));
+        return;
+      }
+      const tid = setTimeout(() => {
+        this.pending = null;
+        this.rxBuf = new Uint8Array(0);
+        reject(new Error('timeout'));
+      }, 3000);
+      this.pending = {
+        expect,
+        resolve: (d) => { clearTimeout(tid); resolve(d); },
+      };
+      this.ws.send(tx);
+    });
+    const next = this.queue.then(run, run);
+    this.queue = next.catch(() => {});
+    return next;
+  }
+
+  readRealtime() { return this._transact(new Uint8Array([0x4F]), 64); }
+  readPage(page, offset, len) {
+    const cmd = new Uint8Array([0x72, page, offset & 0xFF, offset >> 8, len & 0xFF, len >> 8]);
+    return this._transact(cmd, len);
+  }
+  async writePage(page, offset, data) {
+    const cmd = new Uint8Array(6 + data.length);
+    cmd[0] = 0x77; cmd[1] = page; cmd[2] = offset & 0xFF; cmd[3] = offset >> 8;
+    cmd[4] = data.length & 0xFF; cmd[5] = data.length >> 8;
+    cmd.set(data, 6);
+    const ack = await this._transact(cmd, 1);
+    return ack[0] === 0x00;
+  }
+  async writeRam(page, offset, data) {
+    const cmd = new Uint8Array(6 + data.length);
+    cmd[0] = 0x78; cmd[1] = page; cmd[2] = offset & 0xFF; cmd[3] = offset >> 8;
+    cmd[4] = data.length & 0xFF; cmd[5] = data.length >> 8;
+    cmd.set(data, 6);
+    const ack = await this._transact(cmd, 1);
+    return ack[0] === 0x00;
+  }
+  async burnFlash(page) {
+    const ack = await this._transact(new Uint8Array([0x62, page]), 1);
+    return ack[0] === 0x00;
+  }
+  async dirtyMask() {
+    const d = await this._transact(new Uint8Array([0x64]), 1);
+    return d[0];
+  }
+  ping() { return this._transact(new Uint8Array([0x51]), 12); }
+}
+
+const proto = new EmsProtocol();
+let rtInterval = null;
+let currentRpm = 0, currentMap = 0;
+let liveTuning = false;
+const PRO_TUNER = true;
+
+function setLive(on) { liveTuning = on; }
+
+
+// ── Conexão ────────────────────────────────────────────────────────────────
+async function toggleConnect() {
+  const btn = document.getElementById('conn-btn');
+  if (proto.ws && proto.ws.readyState === WebSocket.OPEN) {
+    proto.ws.close();
+    return;
+  }
+  const url = document.getElementById('ws-url').value.trim();
+  btn.textContent = 'Conectando...';
+  try {
+    await proto.connect(url);
+    onConnect();
+  } catch {
+    setConnStatus('offline', '● OFFLINE');
+    btn.textContent = 'Conectar';
+    showMsg('status-ve', 'Falha na conexão');
+  }
+}
+
+function onConnect() {
+  setConnStatus('online', '● ONLINE');
+  document.getElementById('conn-btn').textContent = 'Desconectar';
+  rtInterval = setInterval(pollRealtime, 100);
+}
+
+function onDisconnect() {
+  setConnStatus('offline', '● OFFLINE');
+  document.getElementById('conn-btn').textContent = 'Conectar';
+  if (rtInterval) { clearInterval(rtInterval); rtInterval = null; }
+  resetGauges();
+}
+
+function setConnStatus(cls, text) {
+  const el = document.getElementById('conn-status');
+  el.className = cls;
+  el.textContent = text;
+}
+
+// ── Realtime ───────────────────────────────────────────────────────────────
+async function pollRealtime() {
+  try {
+    const buf = await proto.readRealtime();
+    const dv = new DataView(buf.buffer, buf.byteOffset);
+    const rt = {
+      rpm:      dv.getUint16(0, true),
+      map_kpa:  buf[2],
+      tps_pct:  buf[3],
+      clt_c:    buf[4] - 40,
+      iat_c:    buf[5] - 40,
+      lambda:   buf[6] * 0.004,
+      pw_ms:    buf[7] / 10,
+      adv_deg:  buf[8] - 40,
+      ve_pct:   buf[9],
+      stft_pct: new Int8Array(buf.buffer, buf.byteOffset + 10, 1)[0],
+      ltft_pct: new Int8Array(buf.buffer, buf.byteOffset + 12, 1)[0],
+      status:   buf[11],
+    };
+    const loop2ms = dv.getUint32(47, true);
+
+    currentRpm = rt.rpm;
+    currentMap = rt.map_kpa;
+    updateGauges(rt, loop2ms);
+    updateStatus(rt.status);
+    highlightActiveCell();
+    if (dlogActive) {
+      dlog.push({ t: Date.now() - dlogStart, ...rt });
+      updateDlogInfo();
+    }
+  } catch { /* timeout ou desconectado */ }
+}
+
+function updateGauges(rt, loop2ms) {
+  setText('v-rpm',  rt.rpm);
+  setText('v-map',  rt.map_kpa);
+  setText('v-tps',  rt.tps_pct);
+  setText('v-clt',  rt.clt_c);
+  setText('v-iat',  rt.iat_c);
+  setText('v-lam',  rt.lambda.toFixed(3));
+  setText('v-pw',   rt.pw_ms.toFixed(1));
+  setText('v-adv',  rt.adv_deg);
+  setText('v-ve',   rt.ve_pct);
+  setText('v-stft', rt.stft_pct);
+  setText('v-ltft', rt.ltft_pct);
+  document.getElementById('f-loop').textContent = `loop2ms: ${loop2ms} µs`;
+
+  colorGauge('g-lam',  rt.lambda,  0.85, 1.15);
+  colorGauge('g-clt',  rt.clt_c,   -40,  100);
+  colorGauge('g-stft', Math.abs(rt.stft_pct), 0, 20);
+  colorGauge('g-ltft', Math.abs(rt.ltft_pct), 0, 20);
+}
+
+function colorGauge(id, v, warnLo, warnHi) {
+  const el = document.getElementById(id);
+  el.classList.remove('warn', 'crit');
+  if (v < warnLo || v > warnHi) el.classList.add('warn');
+}
+
+function resetGauges() {
+  ['rpm','map','tps','clt','iat','lam','pw','adv','ve','stft','ltft']
+    .forEach(k => setText('v-' + k, '—'));
+}
+
+function setText(id, val) { document.getElementById(id).textContent = val; }
+
+function updateStatus(bits) {
+  const flags = [
+    ['f-sync',   0x01], ['f-phase',  0x02], ['f-sfault', 0x04],
+    ['f-late',   0x10], ['f-drop',   0x20], ['f-clamp',  0x40],
+    ['f-wbo2',   0x80],
+  ];
+  for (const [id, mask] of flags) {
+    const el = document.getElementById(id);
+    const on = (bits & mask) !== 0;
+    el.className = 'flag ' + (on ? 'on' : 'off');
+  }
+}
+
+// ── Abas ───────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('pane-' + name).classList.add('active');
+  document.querySelector(`.tab-btn[data-tab="${name}"]`).classList.add('active');
+  if (name === 'dlog') resizeDlogCanvas();
+}
+
+// ── Cores das células ──────────────────────────────────────────────────────
+function veColor(v) {
+  const t = Math.min(1, Math.max(0, (v - 35) / 195));
+  let r, g, b;
+  if (t < 0.34) {
+    const x = t / 0.34;
+    r = Math.round(8 + 18 * x);
+    g = Math.round(70 + 150 * x);
+    b = Math.round(190 + 45 * x);
+  } else if (t < 0.68) {
+    const x = (t - 0.34) / 0.34;
+    r = Math.round(26 + 224 * x);
+    g = Math.round(220 + 20 * x);
+    b = Math.round(235 * (1 - x));
+  } else {
+    const x = (t - 0.68) / 0.32;
+    r = 255;
+    g = Math.round(240 - 150 * x);
+    b = Math.round(10 * (1 - x));
+  }
+  return `rgb(${r},${g},${b})`;
+}
+function sparkColor(v) {
+  const t = (v + 12) / 52;
+  if (t < 0.5) {
+    const b = Math.round(255 * (1 - t * 2));
+    const rg = Math.round(160 * t * 2);
+    return `rgb(${rg},${rg},${b})`;
+  }
+  const g = Math.round(200 * (1 - (t - 0.5) * 2));
+  return `rgb(255,${g},0)`;
+}
+
+function lambdaColor(v) {
+  if (Math.abs(v - 1000) <= 8) return 'rgb(34,197,94)';
+  if (v < 1000) {
+    const t = Math.min(1, Math.max(0, (1000 - v) / 350));
+    const r = 255;
+    const g = Math.round(205 * (1 - t) + 34 * t);
+    const b = Math.round(72 * (1 - t) + 32 * t);
+    return `rgb(${r},${g},${b})`;
+  }
+  const t = Math.min(1, Math.max(0, (v - 1000) / 220));
+  const r = Math.round(34 + 118 * t);
+  const g = Math.round(211 * (1 - t) + 92 * t);
+  const b = Math.round(238 + 17 * t);
+  return `rgb(${r},${g},${b})`;
+}
+function tempAxisColor(v) {
+  const c = v / 10;
+  const t = Math.min(1, Math.max(0, (c + 40) / 155));
+  const r = Math.round(15 + 220 * t);
+  const g = Math.round(15 + 100 * Math.sin(Math.PI * t));
+  const b = Math.round(220 * (1 - t) + 15);
+  return `rgb(${r},${g},${b})`;
+}
+
+function voltAxisColor(v) {
+  const t = Math.min(1, Math.max(0, (v - 9000) / 7000));
+  const r = Math.round(200 * (1 - t) + 15);
+  const g = Math.round(15 + 180 * t);
+  const b = Math.round(15 + 40 * t);
+  return `rgb(${r},${g},${b})`;
+}
+
+function multColor(v) {
+  if (Math.abs(v - 256) <= 1) return 'var(--bg-surface)';
+  if (v > 256) {
+    const t = Math.min(1, (v - 256) / 180);
+    return `rgb(${Math.round(30 + 210*t)},${Math.round(30 + 80*(1-t))},20)`;
+  }
+  const t = Math.min(1, (256 - v) / 80);
+  return `rgb(20,${Math.round(30*(1-t))},${Math.round(30 + 190*t)})`;
+}
+
+function deadTimeColor(v) {
+  const t = Math.min(1, Math.max(0, (v - 600) / 800));
+  return `rgb(${Math.round(20+210*t)},${Math.round(90*(1-t)+20)},${Math.round(20+200*(1-t))})`;
+}
+
+function aeSensColor(v) {
+  const t = Math.min(1, Math.max(0, (v - 3) / 9));
+  return `rgb(${Math.round(20+210*t)},${Math.round(90*(1-t)+20)},${Math.round(20+200*(1-t))})`;
+}
+
+function dwellColor(v) {
+  const t = Math.min(1, Math.max(0, (v - 20) / 25));
+  return `rgb(${Math.round(20+210*t)},${Math.round(90*(1-t)+20)},${Math.round(20+200*(1-t))})`;
+}
+
+function lambdaDelayMsColor(v) {
+  const t = Math.min(1, Math.max(0, (v - 50) / 1100));
+  return `rgb(${Math.round(20+210*t)},${Math.round(100*(1-t)+20)},${Math.round(20+180*(1-t))})`;
+}
+
+function paintCell(td, color) {
+  td.style.background = color;
+  td.style.color = '#000';
+  td.style.textShadow = 'none';
+  td.style.fontWeight = '800';
+}
+
+
+function cellColor(type, val) {
+  if (type === 've')     return veColor(val);
+  if (type === 'spark')  return sparkColor(val);
+  if (type === 'lambda') return lambdaColor(val);
+  return 'var(--bg-surface)';
+}
+
+function cellKey(ri, ci) { return `${ri}:${ci}`; }
+function parseCellKey(key) {
+  const [ri, ci] = key.split(':').map(Number);
+  return { ri, ci };
+}
+
+function clampValue(type, value) {
+  const t = tables[type];
+  return Math.max(t.min, Math.min(t.max, value));
+}
+
+function coerceTableValue(type, value) {
+  if (type === 'lambda') return clampValue(type, Math.round(value));
+  return clampValue(type, Math.round(value));
+}
+
+function parseUserValue(type, raw) {
+  const n = Number(String(raw).replace(',', '.'));
+  if (!Number.isFinite(n)) return null;
+  if (type === 'lambda' && Math.abs(n) <= 2) return Math.round(n * 1000);
+  return n;
+}
+
+function setCellValue(type, ri, ci, value) {
+  const t = tables[type];
+  const v = coerceTableValue(type, value);
+  t.data[ri * N + ci] = v;
+  const td = document.querySelector(`#${type}-table td[data-ri="${ri}"][data-ci="${ci}"]`);
+  if (td) {
+    td.textContent = v;
+    paintCell(td, cellColor(type, v));
+  }
+  return v;
+}
+
+function tableOffset(type, ri, ci) {
+  const idx = ri * N + ci;
+  return type === 'lambda' ? idx * 2 : idx;
+}
+
+function tableBytes(type, value) {
+  if (type === 'lambda') {
+    const v = value & 0xFFFF;
+    return new Uint8Array([v & 0xFF, (v >> 8) & 0xFF]);
+  }
+  return new Uint8Array([value & 0xFF]);
+}
+
+function flatTableBytes(type) {
+  const t = tables[type];
+  if (type === 'lambda') {
+    return new Uint8Array(t.data.buffer);
+  }
+  const flat = new Uint8Array(t.byteLen);
+  for (let i = 0; i < t.byteLen; i++) flat[i] = t.data[i] & 0xFF;
+  return flat;
+}
+
+async function sendCellRam(type, ri, ci) {
+  if (!proto.ws || proto.ws.readyState !== WebSocket.OPEN) return false;
+  const value = tables[type].data[ri * N + ci];
+  const ok = await proto.writeRam(tables[type].page, tableOffset(type, ri, ci), tableBytes(type, value));
+  return ok;
+}
+
+function updateSelectionStatus(type) {
+  const el = document.getElementById('sel-' + type);
+  if (el) el.textContent = `${selectedCells[type].size} sel.`;
+}
+
+function toggleCellSelection(type, td, ri, ci) {
+  const key = cellKey(ri, ci);
+  if (selectedCells[type].has(key)) {
+    selectedCells[type].delete(key);
+    td.classList.remove('selected-cell');
+  } else {
+    selectedCells[type].add(key);
+    td.classList.add('selected-cell');
+  }
+  updateSelectionStatus(type);
+}
+
+function clearSelection(type) {
+  for (const key of selectedCells[type]) {
+    const { ri, ci } = parseCellKey(key);
+    const td = document.querySelector(`#${type}-table td[data-ri="${ri}"][data-ci="${ci}"]`);
+    if (td) td.classList.remove('selected-cell');
+  }
+  selectedCells[type].clear();
+  updateSelectionStatus(type);
+}
+
+function restoreSelection(type) {
+  for (const key of selectedCells[type]) {
+    const { ri, ci } = parseCellKey(key);
+    const td = document.querySelector(`#${type}-table td[data-ri="${ri}"][data-ci="${ci}"]`);
+    if (td) td.classList.add('selected-cell');
+  }
+  updateSelectionStatus(type);
+}
+
+// ── Construção das tabelas 2D no DOM ───────────────────────────────────────
+function buildTable(type) {
+  const table = document.getElementById(type + '-table');
+  table.innerHTML = '';
+  const t = tables[type];
+
+  // Cabeçalho: eixo RPM
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  let th = document.createElement('th');
+  th.className = 'axis-label';
+  th.textContent = 'kPa\\RPM';
+  hr.appendChild(th);
+  for (let c = 0; c < N; c++) {
+    th = document.createElement('th');
+    th.textContent = RPM_AXIS[c];
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  // Corpo: eixo de carga (alta carga no topo)
+  const tbody = document.createElement('tbody');
+  for (let r = N - 1; r >= 0; r--) {
+    const tr = document.createElement('tr');
+    th = document.createElement('th');
+    th.className = 'axis-label';
+    th.textContent = LOAD_AXIS[r];
+    tr.appendChild(th);
+    for (let c = 0; c < N; c++) {
+      const td = document.createElement('td');
+      td.dataset.ri = r;
+      td.dataset.ci = c;
+      const v = t.data[r * N + c];
+      td.textContent = v;
+      paintCell(td, cellColor(type, v));
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  restoreSelection(type);
+}
+
+// ── Seleção retangular (drag) + edição por duplo clique ────────────────────
+const dragState = { active: false, type: null, start: null, additive: false };
+
+function selectRect(type, r0, c0, r1, c1) {
+  const rmin = Math.min(r0, r1), rmax = Math.max(r0, r1);
+  const cmin = Math.min(c0, c1), cmax = Math.max(c0, c1);
+  for (let r = rmin; r <= rmax; r++) {
+    for (let c = cmin; c <= cmax; c++) {
+      const key = cellKey(r, c);
+      if (!selectedCells[type].has(key)) {
+        selectedCells[type].add(key);
+        const td = document.querySelector(`#${type}-table td[data-ri="${r}"][data-ci="${c}"]`);
+        if (td) td.classList.add('selected-cell');
+      }
+    }
+  }
+  updateSelectionStatus(type);
+}
+
+function promptCellEdit(type, ri, ci) {
+  const current = tables[type].data[ri * N + ci];
+  const display = type === 'lambda' ? (current / 1000).toFixed(3) : current;
+  const raw = prompt(`Novo valor para [${LOAD_AXIS[ri]} kPa, ${RPM_AXIS[ci]} rpm]:`, display);
+  if (raw === null) return;
+  const parsed = parseUserValue(type, raw);
+  if (parsed === null) return;
+  setCellValue(type, ri, ci, parsed);
+  if (liveTuning) sendCellRam(type, ri, ci);
+  if (selectedCells[type].has(cellKey(ri, ci))) {
+    const td = document.querySelector(`#${type}-table td[data-ri="${ri}"][data-ci="${ci}"]`);
+    if (td) td.classList.add('selected-cell');
+  }
+}
+
+function setupTableEvents(type) {
+  const table = document.getElementById(type + '-table');
+
+  table.addEventListener('mousedown', (e) => {
+    const td = e.target.closest('td[data-ri]');
+    if (!td) return;
+    e.preventDefault();
+    const ri = +td.dataset.ri, ci = +td.dataset.ci;
+    dragState.active = true;
+    dragState.type = type;
+    dragState.start = { ri, ci };
+    dragState.additive = e.shiftKey || e.ctrlKey || e.metaKey;
+    if (!dragState.additive) clearSelection(type);
+    selectRect(type, ri, ci, ri, ci);
+  });
+
+  table.addEventListener('mouseover', (e) => {
+    if (!dragState.active || dragState.type !== type) return;
+    const td = e.target.closest('td[data-ri]');
+    if (!td) return;
+    const ri = +td.dataset.ri, ci = +td.dataset.ci;
+    if (!dragState.additive) clearSelection(type);
+    selectRect(type, dragState.start.ri, dragState.start.ci, ri, ci);
+  });
+
+  table.addEventListener('dblclick', (e) => {
+    const td = e.target.closest('td[data-ri]');
+    if (!td) return;
+    promptCellEdit(type, +td.dataset.ri, +td.dataset.ci);
+  });
+}
+
+window.addEventListener('mouseup', () => { dragState.active = false; });
+
+// ── Operações em massa ─────────────────────────────────────────────────────
+async function bulkApply(type, op) {
+  const step = tableSteps[type];
+  const delta = op === 'add' ? step : -step;
+  const updated = [];
+  for (const key of selectedCells[type]) {
+    const { ri, ci } = parseCellKey(key);
+    const cur = tables[type].data[ri * N + ci];
+    setCellValue(type, ri, ci, cur + delta);
+    updated.push({ ri, ci });
+  }
+  restoreSelection(type);
+  if (liveTuning && proto.ws && proto.ws.readyState === WebSocket.OPEN) {
+    for (const { ri, ci } of updated) await sendCellRam(type, ri, ci);
+    showMsg('status-' + type, `${updated.length} células enviadas (live)`);
+  }
+}
+
+// ── Helpers de UI / mensagens ──────────────────────────────────────────────
+function showMsg(elId, text, isError) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = isError ? 'var(--danger-red)' : 'var(--accent-green)';
+  clearTimeout(el._tmr);
+  el._tmr = setTimeout(() => { el.textContent = ''; }, 3500);
+}
+
+// ── Carga / envio / burn de tabelas 2D ─────────────────────────────────────
+async function loadTable(type) {
+  const t = tables[type];
+  try {
+    const buf = await proto.readPage(t.page, 0, t.byteLen);
+    if (type === 'lambda') {
+      const dv = new DataView(buf.buffer, buf.byteOffset);
+      for (let i = 0; i < 256; i++) t.data[i] = dv.getInt16(i * 2, true);
+    } else if (type === 'spark') {
+      const i8 = new Int8Array(buf.buffer, buf.byteOffset, 256);
+      for (let i = 0; i < 256; i++) t.data[i] = i8[i];
+    } else {
+      for (let i = 0; i < 256; i++) t.data[i] = buf[i];
+    }
+    clearSelection(type);
+    buildTable(type);
+    showMsg('status-' + type, '⬇ Carregado da ECU');
+  } catch (e) {
+    showMsg('status-' + type, 'Erro: ' + e.message, true);
+  }
+}
+
+async function sendTableRam(type) {
+  const t = tables[type];
+  const bytes = flatTableBytes(type);
+  try {
+    const ok = await proto.writeRam(t.page, 0, bytes);
+    showMsg('status-' + type, ok ? '↑ Dados enviados' : 'NAK da ECU', !ok);
+  } catch (e) {
+    showMsg('status-' + type, 'Erro: ' + e.message, true);
+  }
+}
+
+async function burnTable(type) {
+  if (!confirm(`Gravar tabela ${type.toUpperCase()} na flash da ECU?`)) return;
+  const t = tables[type];
+  try {
+    const okRam = await proto.writeRam(t.page, 0, flatTableBytes(type));
+    if (!okRam) { showMsg('status-' + type, 'NAK no writeRam', true); return; }
+    const ok = await proto.burnFlash(t.page);
+    showMsg('status-' + type, ok ? '🔥 Gravado em flash' : 'Falha no burn', !ok);
+  } catch (e) {
+    showMsg('status-' + type, 'Erro: ' + e.message, true);
+  }
+}
+
+// ── Active cell tracking (RPM/MAP em tempo real) ───────────────────────────
+function findAxisIndex(axis, value) {
+  let bestIdx = 0, bestDist = Infinity;
+  for (let i = 0; i < axis.length; i++) {
+    const d = Math.abs(axis[i] - value);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
+const lastActiveCell = { ve: null, spark: null, lambda: null };
+
+function highlightActiveCell() {
+  const ri = findAxisIndex(LOAD_AXIS, currentMap);
+  const ci = findAxisIndex(RPM_AXIS, currentRpm);
+  for (const type of ['ve', 'spark', 'lambda']) {
+    const prev = lastActiveCell[type];
+    if (prev && (prev.ri !== ri || prev.ci !== ci)) {
+      const old = document.querySelector(`#${type}-table td[data-ri="${prev.ri}"][data-ci="${prev.ci}"]`);
+      if (old) old.classList.remove('active-cell');
+    }
+    const td = document.querySelector(`#${type}-table td[data-ri="${ri}"][data-ci="${ci}"]`);
+    if (td) td.classList.add('active-cell');
+    lastActiveCell[type] = { ri, ci };
+  }
+}
+
+// ── Correções 1D (página 5) ────────────────────────────────────────────────
+function readField(off, type) {
+  return readTypedField(corrBuf, off, type);
+}
+
+function writeField(off, type, val) {
+  writeTypedField(corrBuf, off, type, val);
+}
+
+function readXtauField(off, type) {
+  return readTypedField(xtauBuf, off, type);
+}
+
+function writeXtauField(off, type, val) {
+  writeTypedField(xtauBuf, off, type, val);
+}
+
+function readTypedField(buf, off, type) {
+  const dv = new DataView(buf.buffer, buf.byteOffset);
+  if (type === 'i16') return dv.getInt16(off, true);
+  if (type === 'u16') return dv.getUint16(off, true);
+  return buf[off];
+}
+
+function writeTypedField(buf, off, type, val) {
+  const dv = new DataView(buf.buffer, buf.byteOffset);
+  if (type === 'i16') dv.setInt16(off, val | 0, true);
+  else if (type === 'u16') dv.setUint16(off, val & 0xFFFF, true);
+  else buf[off] = val & 0xFF;
+}
+
+async function loadCorr() {
+  try {
+    const [corr, xtau] = await Promise.all([
+      proto.readPage(5, 0, 256),
+      proto.readPage(6, 0, 64),
+    ]);
+    corrBuf = new Uint8Array(corr);
+    xtauBuf = new Uint8Array(xtau);
+    corrLoaded = true;
+    xtauLoaded = true;
+    renderCorr();
+    showMsg('status-corr', '⬇ Correções carregadas');
+  } catch (e) {
+    showMsg('status-corr', 'Erro: ' + e.message, true);
+  }
+}
+
+function editCorrField(off, type, label) {
+  const cur = readField(off, type);
+  const raw = prompt(`${label}:`, cur);
+  if (raw === null) return;
+  const n = Number(String(raw).replace(',', '.'));
+  if (!Number.isFinite(n)) return;
+  writeField(off, type, Math.round(n));
+  renderCorr();
+}
+
+function editXtauField(off, type, label) {
+  const cur = readXtauField(off, type);
+  const raw = prompt(`${label}:`, cur);
+  if (raw === null) return;
+  const n = Number(String(raw).replace(',', '.'));
+  if (!Number.isFinite(n)) return;
+  writeXtauField(off, type, Math.round(n));
+  renderCorr();
+}
+
+function renderCorr() {
+  const root = document.getElementById('corr-content');
+  root.innerHTML = '';
+  if (!corrLoaded || !xtauLoaded) {
+    root.innerHTML = '<div style="color:var(--text-dark); font-size:13px; font-style: italic;">Clique em "Carregar da ECU" para visualizar as tabelas de correção.</div>';
+    return;
+  }
+
+  // Tabelas 1D (axis + valores)
+  const grid = document.createElement('div');
+  grid.className = 'corr-grid';
+
+  for (const cfg of CORR_TABLES) {
+    const sec = document.createElement('div');
+    sec.className = 'corr-section';
+
+    const title = document.createElement('div');
+    title.className = 'corr-title';
+    title.textContent = cfg.name;
+    sec.appendChild(title);
+
+    const table = document.createElement('table');
+    table.className = 'corr';
+
+    // Linha eixo
+    const trA = document.createElement('tr');
+    const thA = document.createElement('th');
+    thA.className = 'row-label';
+    thA.textContent = cfg.axisUnit;
+    trA.appendChild(thA);
+    for (let i = 0; i < cfg.n; i++) {
+      const off = cfg.axisOff + i * 2;
+      const v = readField(off, cfg.axisType);
+      const td = document.createElement('td');
+      td.textContent = v;
+      td.style.background = cfg.axisColorFn(v);
+      td.style.color = '#fff';
+      td.addEventListener('click', () => editCorrField(off, cfg.axisType, `${cfg.name} eixo[${i}] (${cfg.axisUnit})`));
+      trA.appendChild(td);
+    }
+    table.appendChild(trA);
+
+    // Linha valores
+    const trV = document.createElement('tr');
+    const thV = document.createElement('th');
+    thV.className = 'row-label';
+    thV.textContent = cfg.valUnit;
+    trV.appendChild(thV);
+    for (let i = 0; i < cfg.n; i++) {
+      const off = cfg.valOff + i * 2;
+      const v = readField(off, cfg.valType);
+      const td = document.createElement('td');
+      td.textContent = v;
+      td.style.background = cfg.valColorFn(v);
+      td.style.color = '#fff';
+      td.addEventListener('click', () => editCorrField(off, cfg.valType, `${cfg.name} val[${i}] (${cfg.valUnit})`));
+      trV.appendChild(td);
+    }
+    table.appendChild(trV);
+
+    sec.appendChild(table);
+    grid.appendChild(sec);
+  }
+  root.appendChild(grid);
+
+  // Lambda delay 2D (3 RPM × 3 Load)
+  const wrap = document.createElement('div');
+  wrap.className = 'lambda-delay-wrap';
+  const dt = document.createElement('div');
+  dt.className = 'lambda-delay-title';
+  dt.textContent = 'Lambda Delay (ms) — 3 RPM × 3 Load';
+  wrap.appendChild(dt);
+
+  const dTable = document.createElement('table');
+  dTable.className = 'corr';
+
+  // Header com eixo RPM
+  const dhr = document.createElement('tr');
+  const dhTh = document.createElement('th');
+  dhTh.className = 'row-label';
+  dhTh.textContent = 'kPa\\RPM';
+  dhr.appendChild(dhTh);
+  for (let c = 0; c < 3; c++) {
+    const off = DELAY_RPM_OFF + c * 2;
+    const v = readField(off, 'u16');
+    const th = document.createElement('th');
+    th.textContent = v;
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => editCorrField(off, 'u16', `Delay RPM eixo[${c}]`));
+    dhr.appendChild(th);
+  }
+  dTable.appendChild(dhr);
+
+  // Corpo: load alto no topo
+  for (let r = 2; r >= 0; r--) {
+    const tr = document.createElement('tr');
+    const offLoad = DELAY_LOAD_OFF + r * 2;
+    const vLoad = readField(offLoad, 'u16');
+    const th = document.createElement('th');
+    th.className = 'row-label';
+    th.textContent = vLoad;
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => editCorrField(offLoad, 'u16', `Delay Load eixo[${r}]`));
+    tr.appendChild(th);
+    for (let c = 0; c < 3; c++) {
+      const off = DELAY_VAL_OFF + (r * 3 + c) * 2;
+      const v = readField(off, 'u16');
+      const td = document.createElement('td');
+      td.textContent = v;
+      td.style.background = lambdaDelayMsColor(v);
+      td.style.color = '#fff';
+      td.addEventListener('click', () => editCorrField(off, 'u16', `Delay [load=${vLoad},rpm=${readField(DELAY_RPM_OFF + c * 2, 'u16')}] ms`));
+      tr.appendChild(td);
+    }
+    dTable.appendChild(tr);
+  }
+  wrap.appendChild(dTable);
+  root.appendChild(wrap);
+
+  const aeWrap = document.createElement('div');
+  aeWrap.className = 'lambda-delay-wrap';
+  const aeTitle = document.createElement('div');
+  aeTitle.className = 'lambda-delay-title';
+  aeTitle.textContent = 'Acceleration Enrichment';
+  aeWrap.appendChild(aeTitle);
+
+  const aeTable = document.createElement('table');
+  aeTable.className = 'corr';
+  const aeHead = document.createElement('tr');
+  ['Parâmetro', 'Valor', 'Unidade', 'Uso'].forEach((txt) => {
+    const th = document.createElement('th');
+    th.textContent = txt;
+    aeHead.appendChild(th);
+  });
+  aeTable.appendChild(aeHead);
+
+  for (const field of AE_FIELDS) {
+    const tr = document.createElement('tr');
+    const name = document.createElement('th');
+    name.className = 'row-label';
+    name.textContent = field.name;
+    tr.appendChild(name);
+
+    const value = document.createElement('td');
+    const v = readField(field.off, field.type);
+    value.textContent = v;
+    value.style.background = field.name.includes('Pulso') ? deadTimeColor(v) : aeSensColor(v);
+    value.style.color = '#fff';
+    value.addEventListener('click', () => editCorrField(field.off, field.type, `${field.name} (${field.unit})`));
+    tr.appendChild(value);
+
+    const unit = document.createElement('td');
+    unit.textContent = field.unit;
+    tr.appendChild(unit);
+
+    const hint = document.createElement('td');
+    hint.textContent = field.hint;
+    tr.appendChild(hint);
+
+    aeTable.appendChild(tr);
+  }
+  aeWrap.appendChild(aeTable);
+  root.appendChild(aeWrap);
+
+  const xtauWrap = document.createElement('div');
+  xtauWrap.className = 'lambda-delay-wrap';
+  const xtauTitle = document.createElement('div');
+  xtauTitle.className = 'lambda-delay-title';
+  xtauTitle.textContent = 'X-Tau Wall Fuel';
+  xtauWrap.appendChild(xtauTitle);
+
+  const xtauTable = document.createElement('table');
+  xtauTable.className = 'corr';
+  const xtauRows = [
+    { label: 'CLT °C×10', off: 0, type: 'i16', color: tempAxisColor },
+    { label: 'X Q8', off: 16, type: 'u16', color: aeSensColor },
+    { label: 'Tau ciclos', off: 32, type: 'u16', color: lambdaDelayMsColor },
+  ];
+  for (const row of xtauRows) {
+    const tr = document.createElement('tr');
+    const th = document.createElement('th');
+    th.className = 'row-label';
+    th.textContent = row.label;
+    tr.appendChild(th);
+    for (let i = 0; i < 8; i++) {
+      const off = row.off + i * 2;
+      const v = readXtauField(off, row.type);
+      const td = document.createElement('td');
+      td.textContent = v;
+      td.style.background = row.color(v);
+      td.style.color = '#fff';
+      td.addEventListener('click', () => editXtauField(off, row.type, `X-Tau ${row.label}[${i}]`));
+      tr.appendChild(td);
+    }
+    xtauTable.appendChild(tr);
+  }
+  xtauWrap.appendChild(xtauTable);
+  root.appendChild(xtauWrap);
+
+  const idleWrap = document.createElement('div');
+  idleWrap.className = 'lambda-delay-wrap';
+  const idleTitle = document.createElement('div');
+  idleTitle.className = 'lambda-delay-title';
+  idleTitle.textContent = 'Idle Spark Correction';
+  idleWrap.appendChild(idleTitle);
+
+  const idleTable = document.createElement('table');
+  idleTable.className = 'corr';
+  const idleHead = document.createElement('tr');
+  ['Parâmetro', 'Valor', 'Unidade', 'Uso'].forEach((txt) => {
+    const th = document.createElement('th');
+    th.textContent = txt;
+    idleHead.appendChild(th);
+  });
+  idleTable.appendChild(idleHead);
+
+  for (const field of IDLE_SPARK_FIELDS) {
+    const tr = document.createElement('tr');
+    const name = document.createElement('th');
+    name.className = 'row-label';
+    name.textContent = field.name;
+    tr.appendChild(name);
+
+    const value = document.createElement('td');
+    const v = readField(field.off, field.type);
+    value.textContent = v;
+    value.style.background = field.type === 'i16' ? sparkColor(v) : '#1d4ed8';
+    value.style.color = '#fff';
+    value.addEventListener('click', () => editCorrField(field.off, field.type, `${field.name} (${field.unit})`));
+    tr.appendChild(value);
+
+    const unit = document.createElement('td');
+    unit.textContent = field.unit;
+    tr.appendChild(unit);
+
+    const hint = document.createElement('td');
+    hint.textContent = field.hint;
+    tr.appendChild(hint);
+
+    idleTable.appendChild(tr);
+  }
+  idleWrap.appendChild(idleTable);
+  root.appendChild(idleWrap);
+}
+
+async function writeCorrRamPages() {
+  const ok = await proto.writeRam(5, 0, corrBuf);
+  if (!ok) { showMsg('status-corr', 'NAK no writeRam corr', true); return false; }
+  const okX = await proto.writeRam(6, 0, xtauBuf);
+  if (!okX) { showMsg('status-corr', 'NAK no writeRam X-Tau', true); return false; }
+  return true;
+}
+
+async function sendCorrRam() {
+  if (!corrLoaded || !xtauLoaded) { showMsg('status-corr', 'Carregue da ECU primeiro', true); return; }
+  try {
+    if (await writeCorrRamPages()) showMsg('status-corr', '↑ Dados enviados');
+  } catch (e) {
+    showMsg('status-corr', 'Erro: ' + e.message, true);
+  }
+}
+
+async function burnCorr() {
+  if (!corrLoaded || !xtauLoaded) { showMsg('status-corr', 'Carregue da ECU primeiro', true); return; }
+  if (!confirm('Gravar correções 1D + lambda delay + AE + X-Tau + idle spark na flash?')) return;
+  try {
+    if (!await writeCorrRamPages()) return;
+    const ok = await proto.burnFlash(5);
+    if (!ok) { showMsg('status-corr', 'Falha no burn corr', true); return; }
+    const okXtau = await proto.burnFlash(6);
+    showMsg('status-corr', okXtau ? '🔥 Gravado em flash' : 'Falha no burn X-Tau', !okXtau);
+  } catch (e) {
+    showMsg('status-corr', 'Erro: ' + e.message, true);
+  }
+}
+
+// ── Engine Config (página 0) ───────────────────────────────────────────────
+async function loadCfg() {
+  try {
+    const buf = await proto.readPage(0, 0, 64);
+    cfgPage.data.set(buf);
+    cfgPage.loaded = true;
+    document.getElementById('cfg-ivc').textContent = cfgPage.data[0];
+    showMsg('status-cfg', '⬇ Config carregada');
+  } catch (e) {
+    showMsg('status-cfg', 'Erro: ' + e.message, true);
+  }
+}
+
+async function sendCfgRam() {
+  try {
+    const ok = await proto.writeRam(0, 0, new Uint8Array([cfgPage.data[0]]));
+    showMsg('status-cfg', ok ? '↑ Dados enviados' : 'NAK', !ok);
+  } catch (e) {
+    showMsg('status-cfg', 'Erro: ' + e.message, true);
+  }
+}
+
+function editIvc() {
+  const cur = cfgPage.data[0];
+  const raw = prompt('IVC ABDC (graus, 0-180):', cur);
+  if (raw === null) return;
+  const n = Math.round(Number(String(raw).replace(',', '.')));
+  if (!Number.isFinite(n) || n < 0 || n > 180) {
+    alert('Valor inválido. Use um inteiro entre 0 e 180.');
+    return;
+  }
+  cfgPage.data[0] = n;
+  document.getElementById('cfg-ivc').textContent = n;
+  if (liveTuning) sendCfgRam();
+}
+
+// ── Datalog ────────────────────────────────────────────────────────────────
+let dlogActive = false;
+let dlog = [];
+let dlogStart = 0;
+let dlogWindow = 60000;
+
+const DLOG_CHANNELS = [
+  { id: 'rpm',      label: 'RPM',     color: '#3b82f6', range: [0, 8000]    },
+  { id: 'map_kpa',  label: 'MAP',     color: '#10b981', range: [20, 110]    },
+  { id: 'tps_pct',  label: 'TPS',     color: '#f59e0b', range: [0, 100]     },
+  { id: 'clt_c',    label: 'CLT',     color: '#ef4444', range: [-40, 130]   },
+  { id: 'iat_c',    label: 'IAT',     color: '#8b5cf6', range: [-40, 80]    },
+  { id: 'lambda',   label: 'Lambda',  color: '#06b6d4', range: [0.6, 1.4]   },
+  { id: 'pw_ms',    label: 'PW',      color: '#ec4899', range: [0, 25]      },
+  { id: 'adv_deg',  label: 'Avanço',  color: '#84cc16', range: [-10, 50]    },
+  { id: 've_pct',   label: 'VE',      color: '#f97316', range: [40, 200]    },
+  { id: 'stft_pct', label: 'STFT',    color: '#a3a3a3', range: [-25, 25]    },
+  { id: 'ltft_pct', label: 'LTFT',    color: '#facc15', range: [-25, 25]    },
+];
+
+const dlogChEnabled = {};
+DLOG_CHANNELS.forEach(c => dlogChEnabled[c.id] = ['rpm', 'map_kpa', 'lambda', 'adv_deg'].includes(c.id));
+
+function buildDlogChSelector() {
+  const root = document.getElementById('dlog-ch-sel');
+  root.innerHTML = '';
+  for (const c of DLOG_CHANNELS) {
+    const lbl = document.createElement('label');
+    lbl.className = 'ch-label' + (dlogChEnabled[c.id] ? '' : ' off');
+    const sw = document.createElement('span');
+    sw.className = 'ch-swatch';
+    sw.style.background = c.color;
+    const txt = document.createElement('span');
+    txt.textContent = c.label;
+    lbl.appendChild(sw);
+    lbl.appendChild(txt);
+    lbl.addEventListener('click', () => {
+      dlogChEnabled[c.id] = !dlogChEnabled[c.id];
+      lbl.classList.toggle('off', !dlogChEnabled[c.id]);
+      drawDlog();
+    });
+    root.appendChild(lbl);
+  }
+}
+
+function dlogRec() {
+  dlogActive = true;
+  dlogStart = Date.now();
+  dlog = [];
+  document.getElementById('dlog-btn-rec').classList.add('rec-active');
+  document.getElementById('dlog-btn-stop').disabled = false;
+  document.getElementById('dlog-btn-rec').disabled = true;
+  document.getElementById('dlog-btn-rec').textContent = '● Gravando…';
+  updateDlogInfo();
+}
+
+function dlogStop() {
+  dlogActive = false;
+  const btnRec = document.getElementById('dlog-btn-rec');
+  btnRec.classList.remove('rec-active');
+  btnRec.disabled = false;
+  btnRec.textContent = '● Iniciar Gravação';
+  document.getElementById('dlog-btn-stop').disabled = true;
+}
+
+function dlogClear() {
+  dlog = [];
+  drawDlog();
+  updateDlogInfo();
+}
+
+function dlogExport() {
+  if (dlog.length === 0) { alert('Buffer vazio'); return; }
+  const headers = ['t_ms', ...DLOG_CHANNELS.map(c => c.id)];
+  const lines = [headers.join(',')];
+  for (const s of dlog) {
+    const row = [s.t, ...DLOG_CHANNELS.map(c => {
+      const v = s[c.id];
+      return typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(4) : v;
+    })];
+    lines.push(row.join(','));
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.href = url;
+  a.download = `openems_dlog_${ts}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function updateDlogInfo() {
+  const info = document.getElementById('dlog-info');
+  if (!info) return;
+  if (dlog.length === 0) { info.textContent = '0 amostras'; return; }
+  const dur = ((dlog[dlog.length - 1].t - dlog[0].t) / 1000).toFixed(1);
+  info.textContent = `${dlog.length} amostras / ${dur}s`;
+}
+
+function resizeDlogCanvas() {
+  const canvas = document.getElementById('dlog-canvas');
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.offsetWidth;
+  const cssH = 350;
+  canvas.width  = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawDlog();
+}
+
+function drawDlog() {
+  const canvas = document.getElementById('dlog-canvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.width / dpr;
+  const H = canvas.height / dpr;
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 10; i++) {
+    const x = (W * i) / 10;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let i = 0; i <= 5; i++) {
+    const y = (H * i) / 5;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  if (dlog.length < 2) {
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = '12px var(--font-mono)';
+    ctx.textAlign = 'center';
+    ctx.fillText('Aguardando amostras…', W / 2, H / 2);
+    return;
+  }
+
+  const tEnd = dlog[dlog.length - 1].t;
+  const tStart = Math.max(dlog[0].t, tEnd - dlogWindow);
+  const tSpan = (tEnd - tStart) || 1;
+
+  for (const c of DLOG_CHANNELS) {
+    if (!dlogChEnabled[c.id]) continue;
+    const [lo, hi] = c.range;
+    const span = (hi - lo) || 1;
+
+    ctx.strokeStyle = c.color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let started = false;
+    for (const s of dlog) {
+      if (s.t < tStart) continue;
+      const x = ((s.t - tStart) / tSpan) * W;
+      const v = s[c.id];
+      const y = H - ((v - lo) / span) * H;
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // Time labels
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '10px var(--font-mono)';
+  ctx.textAlign = 'left';
+  ctx.fillText(`-${(dlogWindow / 1000).toFixed(0)}s`, 4, H - 4);
+  ctx.textAlign = 'right';
+  ctx.fillText('agora', W - 4, H - 4);
+}
+
+function setupDlogHover() {
+  const canvas = document.getElementById('dlog-canvas');
+  const readout = document.getElementById('dlog-readout');
+  canvas.addEventListener('mousemove', (e) => {
+    if (dlog.length < 2) { readout.innerHTML = ''; return; }
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const W = rect.width;
+    const tEnd = dlog[dlog.length - 1].t;
+    const tStart = Math.max(dlog[0].t, tEnd - dlogWindow);
+    const tSpan = (tEnd - tStart) || 1;
+    const tCursor = tStart + (x / W) * tSpan;
+
+    let best = dlog[0], bestDist = Infinity;
+    for (const s of dlog) {
+      const d = Math.abs(s.t - tCursor);
+      if (d < bestDist) { bestDist = d; best = s; }
+    }
+
+    const parts = [`<span style="color:var(--text-main)">t=${(best.t / 1000).toFixed(2)}s</span>`];
+    for (const c of DLOG_CHANNELS) {
+      if (!dlogChEnabled[c.id]) continue;
+      const v = best[c.id];
+      const fmt = (typeof v === 'number' && !Number.isInteger(v)) ? v.toFixed(2) : v;
+      parts.push(`<span style="color:${c.color}">${c.label}=${fmt}</span>`);
+    }
+    readout.innerHTML = parts.join(' · ');
+  });
+  canvas.addEventListener('mouseleave', () => { readout.innerHTML = ''; });
+}
+
+// Redraw periódico enquanto grava (taxa baixa pra não consumir CPU à toa)
+setInterval(() => {
+  if (dlogActive && document.getElementById('pane-dlog').classList.contains('active')) {
+    drawDlog();
+  }
+}, 250);
+
+
+// ── Dashboard: reordenação dos gauges por arrastar ───────────────────────
+const GAUGE_ORDER_KEY = 'openemsGaugeOrderV1';
+
+function setupGaugeDrag() {
+  const root = document.getElementById('gauges');
+  if (!root) return;
+
+  restoreGaugeOrder();
+
+  root.querySelectorAll('.gauge').forEach(g => {
+    g.draggable = true;
+    g.title = 'Arraste para reordenar';
+
+    g.addEventListener('dragstart', (e) => {
+      g.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', g.id);
+    });
+
+    g.addEventListener('dragend', () => {
+      g.classList.remove('dragging');
+      root.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      saveGaugeOrder();
+    });
+
+    g.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      const dragging = root.querySelector('.gauge.dragging');
+      if (!dragging || dragging === g) return;
+      g.classList.add('drag-over');
+      const rect = g.getBoundingClientRect();
+      const before = e.clientX < rect.left + rect.width / 2 || e.clientY < rect.top + rect.height / 2;
+      root.insertBefore(dragging, before ? g : g.nextSibling);
+    });
+
+    g.addEventListener('dragleave', () => g.classList.remove('drag-over'));
+    g.addEventListener('drop', (e) => {
+      e.preventDefault();
+      g.classList.remove('drag-over');
+      saveGaugeOrder();
+    });
+  });
+}
+
+function saveGaugeOrder() {
+  const ids = [...document.querySelectorAll('#gauges .gauge')].map(g => g.id);
+  try { localStorage.setItem(GAUGE_ORDER_KEY, JSON.stringify(ids)); } catch { /* ignore */ }
+}
+
+function restoreGaugeOrder() {
+  const root = document.getElementById('gauges');
+  if (!root) return;
+  try {
+    const ids = JSON.parse(localStorage.getItem(GAUGE_ORDER_KEY) || '[]');
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el && el.parentElement === root) root.appendChild(el);
+    }
+  } catch { /* ignore */ }
+}
+
+// ── Inicialização ─────────────────────────────────────────────────────────
+function seedDefaults() {
+  // VE inicial: gradiente leve com a carga
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < N; c++) {
+      tables.ve.data[r * N + c] = Math.min(254, 65 + Math.round((r / (N - 1)) * 30));
+    }
+  }
+  // Spark inicial: avança com RPM, recua um pouco com carga alta
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < N; c++) {
+      const adv = 8 + Math.round((c / (N - 1)) * 28) - Math.round((r / (N - 1)) * 6);
+      tables.spark.data[r * N + c] = Math.max(-12, Math.min(40, adv));
+    }
+  }
+  // Lambda inicial: enriquece em alta carga
+  for (let r = 0; r < N; r++) {
+    const load = LOAD_AXIS[r];
+    let lam;
+    if (load >= 130)      lam = 850;
+    else if (load >= 90)  lam = 880;
+    else if (load >= 60)  lam = 970;
+    else                  lam = 1000;
+    for (let c = 0; c < N; c++) tables.lambda.data[r * N + c] = lam;
+  }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  seedDefaults();
+  for (const type of ['ve', 'spark', 'lambda']) {
+    buildTable(type);
+    setupTableEvents(type);
+    updateSelectionStatus(type);
+  }
+  buildDlogChSelector();
+  setupDlogHover();
+  setupGaugeDrag();
+  window.addEventListener('resize', resizeDlogCanvas);
+  requestAnimationFrame(resizeDlogCanvas);
+});
+</script>
+</body>
+</html>

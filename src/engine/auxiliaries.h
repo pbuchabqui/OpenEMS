@@ -8,6 +8,7 @@ void auxiliaries_init() noexcept;
 void auxiliaries_set_key_on(bool key_on) noexcept;
 void auxiliaries_tick_10ms() noexcept;
 void auxiliaries_tick_20ms() noexcept;
+uint16_t auxiliaries_idle_target_rpm_x10(int16_t clt_x10) noexcept;
 
 #if defined(EMS_HOST_TEST)
 void auxiliaries_test_reset() noexcept;

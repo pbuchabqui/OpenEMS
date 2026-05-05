@@ -3,11 +3,11 @@
  * @file hal/stm32h562/regs.h
  * @brief Definições de registradores do STM32H562RGT6 (ARM Cortex-M33 @ 250 MHz)
  *
- * Cobertura: RCC, GPIO, TIM2/TIM3/TIM4/TIM5/TIM6/TIM8, ADC1/ADC2, FDCAN1,
- *            USART1, IWDG, SysTick (via CMSIS), Flash OPTCR/SR, NVIC helpers.
+ * Cobertura: RCC, GPIO, TIM2/TIM3/TIM4/TIM5/TIM6/TIM8, ADC1/ADC2, GPDMA1,
+ *            FDCAN1, USART1, IWDG, SysTick (via CMSIS), Flash OPTCR/SR, NVIC helpers.
  *
  * Todos os endereços baseados em:
- *   RM0481 — STM32H562/H563/H573 Reference Manual Rev 2 (ST Microelectronics)
+ *   RM0481 — STM32H523/33xx, STM32H562/63xx e STM32H573xx Reference Manual Rev 4
  */
 
 #include <cstdint>
@@ -31,16 +31,20 @@
 #define TIM5_BASE    0x40000C00UL
 #define TIM6_BASE    0x40001000UL
 #define TIM8_BASE    0x40013400UL
+#define USART1_BASE  0x40013800UL
 #define USART2_BASE  0x40004400UL
 
 // AHB1
-#define ADC1_BASE    0x42028000UL
-#define ADC2_BASE    0x42028100UL
-#define ADC12_COMMON 0x42028300UL
+#define ADC1_BASE    0x42022400UL
+#define ADC2_BASE    0x42022500UL
+#define ADC12_COMMON 0x42022700UL
 
 // APB1 — FDCAN
 #define FDCAN1_BASE  0x4000A400UL
 #define FDCAN_SRAM   0x4000AC00UL   // Message RAM
+
+// AHB1 — GPDMA
+#define GPDMA1_BASE  0x40020000UL
 
 // APB1 — IWDG
 #define IWDG_BASE    0x40003000UL
@@ -79,6 +83,7 @@
 #define RCC_AHB2ENR1_GPIOCEN  (1u << 2)
 #define RCC_AHB2ENR1_GPIODEN  (1u << 3)
 #define RCC_AHB2ENR1_GPIOEEN  (1u << 4)
+#define RCC_AHB1ENR_GPDMA1EN  (1u << 0)
 #define RCC_AHB1ENR_ADC12EN   (1u << 5)
 #define RCC_APB1LENR_TIM2EN   (1u << 0)
 #define RCC_APB1LENR_TIM3EN   (1u << 1)
@@ -203,6 +208,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM_CR1_CEN   (1u << 0)   // Counter enable
 #define TIM_CR1_UDIS  (1u << 1)   // Update disable
 #define TIM_CR1_URS   (1u << 2)   // Update request source
+#define TIM_CR1_OPM   (1u << 3)   // One-pulse mode
 #define TIM_CR1_ARPE  (1u << 7)   // Auto-reload preload enable
 
 // TIM_SR bits
@@ -342,6 +348,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM6_CR1   STM32_REG32(TIM6_BASE + TIM_CR1_OFF)
 #define TIM6_CR2   STM32_REG32(TIM6_BASE + TIM_CR2_OFF)
 #define TIM6_SR    STM32_REG32(TIM6_BASE + TIM_SR_OFF)
+#define TIM6_CNT   STM32_REG32(TIM6_BASE + TIM_CNT_OFF)
 #define TIM6_PSC   STM32_REG32(TIM6_BASE + TIM_PSC_OFF)
 #define TIM6_ARR   STM32_REG32(TIM6_BASE + TIM_ARR_OFF)
 #define TIM6_EGR   STM32_REG32(TIM6_BASE + TIM_EGR_OFF)
@@ -408,6 +415,8 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define ADC2_IER  STM32_REG32(ADC2_BASE + ADC_IER_OFF)
 
 // ADC_CFGR1 bits
+#define ADC_CFGR1_DMAEN (1u << 0)
+#define ADC_CFGR1_DMACFG (1u << 1)
 #define ADC_CFGR1_RES_12BIT  (0u << 2)
 #define ADC_CFGR1_RES_10BIT  (1u << 2)
 #define ADC_CFGR1_EXTEN_RISING (1u << 10)
@@ -417,15 +426,79 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define ADC_CFGR1_DISCEN (1u << 16)
 
 // ADC12_CCR bits
-#define ADC12_CCR_PRESC_DIV4 (2u << 18)  // PRESC[3:0] = 0010 → /4
+#define ADC12_CCR_CKMODE_HCLK_DIV4 (3u << 16)  // CKMODE[1:0] = 11 → adc_hclk/4
+#define ADC12_CCR_PRESC_DIV4       (2u << 18)  // Async PRESC /4 (unused with CKMODE != 0)
+
+// ─── GPDMA1 (RM0481 §16) ─────────────────────────────────────────────────────
+#define GPDMA_CH_STRIDE 0x80UL
+#define GPDMA_CH0_BASE  (GPDMA1_BASE + 0x050UL)
+#define GPDMA_CH1_BASE  (GPDMA1_BASE + 0x0D0UL)
+
+#define GPDMA_CLLBAR_OFF 0x00UL
+#define GPDMA_CFCR_OFF   0x0CUL
+#define GPDMA_CSR_OFF    0x10UL
+#define GPDMA_CCR_OFF    0x14UL
+#define GPDMA_CTR1_OFF   0x40UL
+#define GPDMA_CTR2_OFF   0x44UL
+#define GPDMA_CBR1_OFF   0x48UL
+#define GPDMA_CSAR_OFF   0x4CUL
+#define GPDMA_CDAR_OFF   0x50UL
+#define GPDMA_CTR3_OFF   0x54UL
+#define GPDMA_CBR2_OFF   0x58UL
+#define GPDMA_CLLR_OFF   0x7CUL
+
+#define GPDMA_REG(ch_base, off) STM32_REG32((ch_base) + (off))
+#define GPDMA1_CH0_CFCR GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CFCR_OFF)
+#define GPDMA1_CH0_CSR  GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CSR_OFF)
+#define GPDMA1_CH0_CCR  GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CCR_OFF)
+#define GPDMA1_CH0_CTR1 GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CTR1_OFF)
+#define GPDMA1_CH0_CTR2 GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CTR2_OFF)
+#define GPDMA1_CH0_CBR1 GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CBR1_OFF)
+#define GPDMA1_CH0_CSAR GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CSAR_OFF)
+#define GPDMA1_CH0_CDAR GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CDAR_OFF)
+#define GPDMA1_CH0_CTR3 GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CTR3_OFF)
+#define GPDMA1_CH0_CBR2 GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CBR2_OFF)
+#define GPDMA1_CH0_CLLR GPDMA_REG(GPDMA_CH0_BASE, GPDMA_CLLR_OFF)
+
+#define GPDMA1_CH1_CFCR GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CFCR_OFF)
+#define GPDMA1_CH1_CSR  GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CSR_OFF)
+#define GPDMA1_CH1_CCR  GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CCR_OFF)
+#define GPDMA1_CH1_CTR1 GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CTR1_OFF)
+#define GPDMA1_CH1_CTR2 GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CTR2_OFF)
+#define GPDMA1_CH1_CBR1 GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CBR1_OFF)
+#define GPDMA1_CH1_CSAR GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CSAR_OFF)
+#define GPDMA1_CH1_CDAR GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CDAR_OFF)
+#define GPDMA1_CH1_CTR3 GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CTR3_OFF)
+#define GPDMA1_CH1_CBR2 GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CBR2_OFF)
+#define GPDMA1_CH1_CLLR GPDMA_REG(GPDMA_CH1_BASE, GPDMA_CLLR_OFF)
+
+#define GPDMA_CCR_EN      (1u << 0)
+#define GPDMA_CCR_RESET   (1u << 1)
+#define GPDMA_CCR_TCIE    (1u << 8)
+#define GPDMA_CCR_DTEIE   (1u << 10)
+#define GPDMA_CCR_USEIE   (1u << 12)
+#define GPDMA_CCR_CIRC    (1u << 4)  // Circular mode (RM0481 §16.4.2)
+#define GPDMA_CCR_PRIO_HIGH (2u << 22)
+
+#define GPDMA_CSR_TCF     (1u << 8)
+#define GPDMA_CSR_DTEF    (1u << 10)
+#define GPDMA_CSR_USEF    (1u << 12)
+#define GPDMA_CFCR_ALL    (GPDMA_CSR_TCF | (1u << 9) | GPDMA_CSR_DTEF | (1u << 11) | GPDMA_CSR_USEF | (1u << 13) | (1u << 14))
+
+#define GPDMA_CTR1_HALFWORD_TO_HALFWORD_INC_DEST \
+    ((1u << 0) | (1u << 16) | (1u << 19))
+#define GPDMA_CTR2_REQSEL_ADC1 0u
+#define GPDMA_CTR2_REQSEL_ADC2 1u
+#define GPDMA_CTR2_TCEM_BLOCK  0u
 
 // ─── FDCAN1 (RM0481 §51) ──────────────────────────────────────────────────────
 #define FDCAN_CCCR_OFF   0x018UL   // CC Control Register
 #define FDCAN_NBTP_OFF   0x01CUL   // Nominal Bit Timing
 #define FDCAN_DBTP_OFF   0x00CUL   // Data Bit Timing
 #define FDCAN_RXGFC_OFF  0x080UL   // Global Filter Config
-#define FDCAN_TXBC_OFF   0x0C4UL   // TX Buffer Config
-#define FDCAN_TXFQS_OFF  0x0C8UL   // TX FIFO/Queue Status
+#define FDCAN_TXBC_OFF   0x0C0UL   // TX Buffer Config
+#define FDCAN_TXFQS_OFF  0x0C4UL   // TX FIFO/Queue Status
+#define FDCAN_TXBRP_OFF  0x0CCUL   // TX Buffer Request Pending
 #define FDCAN_TXBAR_OFF  0x0D0UL   // TX Buffer Add Request
 #define FDCAN_RXF0C_OFF  0x0A0UL   // RX FIFO0 Config
 #define FDCAN_RXF0S_OFF  0x0A4UL   // RX FIFO0 Status
@@ -440,6 +513,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define FDCAN1_RXGFC STM32_REG32(FDCAN1_BASE + FDCAN_RXGFC_OFF)
 #define FDCAN1_TXBC  STM32_REG32(FDCAN1_BASE + FDCAN_TXBC_OFF)
 #define FDCAN1_TXFQS STM32_REG32(FDCAN1_BASE + FDCAN_TXFQS_OFF)
+#define FDCAN1_TXBRP STM32_REG32(FDCAN1_BASE + FDCAN_TXBRP_OFF)
 #define FDCAN1_TXBAR STM32_REG32(FDCAN1_BASE + FDCAN_TXBAR_OFF)
 #define FDCAN1_RXF0C STM32_REG32(FDCAN1_BASE + FDCAN_RXF0C_OFF)
 #define FDCAN1_RXF0S STM32_REG32(FDCAN1_BASE + FDCAN_RXF0S_OFF)
@@ -478,7 +552,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define USART1_RDR STM32_REG32(USART1_BASE + USART_RDR_OFF)
 #define USART1_TDR STM32_REG32(USART1_BASE + USART_TDR_OFF)
 
-// USART2 — registradores (reservado, não usado para TunerStudio — PA2/PA3 são ADC)
+// USART2 — registradores (reservado; PA2/PA3 são ADC)
 #define USART2_CR1 STM32_REG32(USART2_BASE + USART_CR1_OFF)
 #define USART2_CR2 STM32_REG32(USART2_BASE + USART_CR2_OFF)
 #define USART2_CR3 STM32_REG32(USART2_BASE + USART_CR3_OFF)
@@ -488,7 +562,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define USART2_RDR STM32_REG32(USART2_BASE + USART_RDR_OFF)
 #define USART2_TDR STM32_REG32(USART2_BASE + USART_TDR_OFF)
 
-// USART3 — TunerStudio UART (PB10=TX, PB11=RX, AF7) — PA2/PA3 livres para ADC1 MAP/MAF
+// USART3 — nao usado no MVP; PB10/PB11 pertencem a TIM2_CH3/CH4
 #define USART3_BASE  0x40004800UL
 #define RCC_APB1LENR_USART3EN  (1u << 18)
 #define USART3_CR1 STM32_REG32(USART3_BASE + USART_CR1_OFF)
@@ -600,5 +674,7 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 #define IRQ_TIM4         47u   // TIM4 (PWM VVT — não usa IRQ)
 #define IRQ_ADC1         37u   // ADC1 (IRQ separado do ADC2)
 #define IRQ_ADC2         69u   // ADC2 (IRQ separado do ADC1)
+#define IRQ_GPDMA1_CH0   27u   // GPDMA1 channel 0
+#define IRQ_GPDMA1_CH1   28u   // GPDMA1 channel 1
 #define IRQ_FDCAN1_IT0   39u   // FDCAN1 interrupt line 0
 // SysTick não usa NVIC — configurado via SCB->SHP diretamente (ARM core)
