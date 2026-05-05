@@ -28,7 +28,7 @@
  *
  * Resolução: 12 bits (RES=00)
  * Amostragem: 47.5 ciclos ADC (melhor SNR para sensores de temperatura)
- * Clock ADC: HCLK/4 = 62.5 MHz (PRESC[3:0] = 0010)
+ * Clock ADC: HCLK/4 = 62.5 MHz (CKMODE[1:0] = 11, síncrono ao timer)
  */
 
 #ifndef EMS_HOST_TEST
@@ -40,9 +40,8 @@
 static volatile uint16_t g_adc_secondary_raw[8] = {};  // canais ADC1 IN3-IN10
 static volatile uint16_t g_adc2_raw[4] = {};  // canais ADC2 IN1-IN4
 
-// Índice de canal para ISR com EOC por conversão
-static volatile uint8_t g_adc_secondary_idx = 0u;
-static volatile uint8_t g_adc2_idx = 0u;
+static volatile uint32_t g_adc_dma_faults = 0u;
+static volatile uint32_t g_adc_init_faults = 0u;  // FIX: Fault counter para adc_wait_ready timeout
 
 // ── Mapeamento AdcPrimaryChannel → índice do array g_adc_secondary_raw ─────────────────────
 static constexpr uint8_t kAdc1ChMap[8] = {
@@ -92,15 +91,20 @@ namespace ems::hal {
 
 // ── Funções auxiliares ───────────────────────────────────────────────────────
 
-static void adc_wait_ready(volatile uint32_t& isr) noexcept {
+static bool adc_wait_ready(volatile uint32_t& isr) noexcept {
+    // FIX BUG-11: o loop anterior não tratava timeout. Se o ADC não ficava
+    // ready, o busy-wait consumia ~4 ms com PRIMASK ativo (interrupções
+    // desabilitadas), bloqueando o main loop. Agora retorna false e计
+    // incrementa fault counter para diagnóstico.
     constexpr uint32_t kTimeout = 1000000u;
     for (uint32_t i = 0u; i < kTimeout; ++i) {
-        if (isr & ADC_ISR_ADRDY) { break; }
+        if (isr & ADC_ISR_ADRDY) { return true; }
     }
+    ++g_adc_init_faults;
+    return false;
 }
 
-static void adc_calibrate_and_enable(volatile uint32_t& cr,
-                                      volatile uint32_t& isr) noexcept {
+static void adc_prepare_for_config(volatile uint32_t& cr) noexcept {
     // 1. Sair de deep power-down e habilitar regulador interno
     cr &= ~ADC_CR_DEEPPWD;
     cr |= ADC_CR_ADVREGEN;
@@ -112,18 +116,64 @@ static void adc_calibrate_and_enable(volatile uint32_t& cr,
     cr |= ADC_CR_ADCAL;
     while (cr & ADC_CR_ADCAL) { /* aguarda */ }
 
-    // 3. Habilitar ADC
+}
+
+static void adc_enable(volatile uint32_t& cr, volatile uint32_t& isr) noexcept {
     isr = ADC_ISR_ADRDY;     // limpa ADRDY antes de habilitar
     cr |= ADC_CR_ADEN;
-    adc_wait_ready(isr);
+    if (!adc_wait_ready(isr)) {
+        // FIX BUG-11: se ADC não ficou ready, tenta reset via deep-power-down
+        // e re-habilita. O fault counter já foi incrementado por adc_wait_ready.
+        cr |= ADC_CR_DEEPPWD;
+        cr &= ~ADC_CR_ADEN;
+        for (volatile uint32_t i = 0u; i < 1000u; ++i) { (void)i; }
+        cr &= ~ADC_CR_DEEPPWD;
+        cr |= ADC_CR_ADEN;
+        (void)adc_wait_ready(isr);  // resultado já em fault counter se falhar novamente
+    }
+}
+
+static void gpdma_arm(uint32_t ch_base, uint32_t reqsel,
+                      uint32_t buf_bytes, uint32_t src_dr, uint32_t dest_buf) noexcept {
+    GPDMA_REG(ch_base, GPDMA_CCR_OFF) = GPDMA_CCR_RESET;
+    for (uint32_t i = 0u; i < 128u; ++i) {
+        if ((GPDMA_REG(ch_base, GPDMA_CCR_OFF) & GPDMA_CCR_RESET) == 0u) { break; }
+    }
+    GPDMA_REG(ch_base, GPDMA_CFCR_OFF) = GPDMA_CFCR_ALL;
+    GPDMA_REG(ch_base, GPDMA_CTR1_OFF) = GPDMA_CTR1_HALFWORD_TO_HALFWORD_INC_DEST;
+    GPDMA_REG(ch_base, GPDMA_CTR2_OFF) = reqsel | GPDMA_CTR2_TCEM_BLOCK;
+    GPDMA_REG(ch_base, GPDMA_CBR1_OFF) = buf_bytes;
+    GPDMA_REG(ch_base, GPDMA_CSAR_OFF) = src_dr;
+    GPDMA_REG(ch_base, GPDMA_CDAR_OFF) = dest_buf;
+    GPDMA_REG(ch_base, GPDMA_CTR3_OFF) = 0u;
+    GPDMA_REG(ch_base, GPDMA_CBR2_OFF) = 0u;
+    GPDMA_REG(ch_base, GPDMA_CLLR_OFF) = 0u;
+    GPDMA_REG(ch_base, GPDMA_CCR_OFF) = GPDMA_CCR_PRIO_HIGH | GPDMA_CCR_TCIE |
+                                         GPDMA_CCR_DTEIE | GPDMA_CCR_USEIE | GPDMA_CCR_EN;
+}
+
+static void gpdma_adc1_arm() noexcept {
+    gpdma_arm(GPDMA_CH0_BASE, GPDMA_CTR2_REQSEL_ADC1,
+              sizeof(g_adc_secondary_raw),
+              reinterpret_cast<uint32_t>(&ADC1_DR),
+              reinterpret_cast<uint32_t>(&g_adc_secondary_raw[0]));
+}
+
+static void gpdma_adc2_arm() noexcept {
+    gpdma_arm(GPDMA_CH1_BASE, GPDMA_CTR2_REQSEL_ADC2,
+              sizeof(g_adc2_raw),
+              reinterpret_cast<uint32_t>(&ADC2_DR),
+              reinterpret_cast<uint32_t>(&g_adc2_raw[0]));
 }
 
 // ── API pública ───────────────────────────────────────────────────────────────
 
 void adc_init() noexcept {
     // ── 1. Habilitar clocks ADC e GPIOs ─────────────────────────────────
-    RCC_AHB1ENR |= RCC_AHB1ENR_ADC12EN;
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOCEN;  // GPIOC para PC0-PC5
+    RCC_AHB1ENR |= RCC_AHB1ENR_ADC12EN | RCC_AHB1ENR_GPDMA1EN;
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN
+                  | RCC_AHB2ENR1_GPIOBEN
+                  | RCC_AHB2ENR1_GPIOCEN;
 
     // ── 2. Configurar pinos analógicos (MODER = 11b = ANALOG) ────────────
     // ADC1: PA2(IN3), PA3(IN4), PA4(IN5), PA5(IN6), PB0(IN7), PB1(IN8)
@@ -140,11 +190,11 @@ void adc_init() noexcept {
         gpio_set_analog(gpioc_moder, p);
     }
 
-    // ── 3. Clock ADC: HCLK/4 = 62.5 MHz ─────────────────────────────────
-    ADC12_CCR = ADC12_CCR_PRESC_DIV4;
+    // ── 3. Clock ADC: HCLK/4 = 62.5 MHz, síncrono ao trigger de timer ───
+    ADC12_CCR = ADC12_CCR_CKMODE_HCLK_DIV4;
 
-    // ── 4. Calibrar e habilitar ADC1 ─────────────────────────────────────
-    adc_calibrate_and_enable(ADC1_CR, ADC1_ISR);
+    // ── 4. Calibrar e configurar ADC1 ainda desabilitado ────────────────
+    adc_prepare_for_config(ADC1_CR);
 
     // Tempo de amostragem: 47.5 ciclos para todos os canais (SMPR1 bits [29:0])
     ADC1_SMPR1 = (kSmpr)       // IN1
@@ -162,13 +212,15 @@ void adc_init() noexcept {
     ADC1_SQR1 = kAdc1Sqr1;
     ADC1_SQR2 = kAdc1Sqr2;
 
-    // CFGR1: 12-bit, trigger externo TIM6_TRGO, rising edge
+    // CFGR1: 12-bit, trigger externo TIM6_TRGO, rising edge, DMA por sequência
     ADC1_CFGR1 = ADC_CFGR1_RES_12BIT
+               | ADC_CFGR1_DMAEN
+               | ADC_CFGR1_DMACFG
                | ADC_CFGR1_EXTSEL_TIM6_TRGO
                | ADC_CFGR1_EXTEN_RISING;
 
-    // ── 5. Calibrar e habilitar ADC2 ─────────────────────────────────────
-    adc_calibrate_and_enable(ADC2_CR, ADC2_ISR);
+    // ── 5. Calibrar e configurar ADC2 ainda desabilitado ────────────────
+    adc_prepare_for_config(ADC2_CR);
 
     ADC2_SMPR1 = (kSmpr)
                | (kSmpr << 3)  // IN1 (CLT)
@@ -183,6 +235,8 @@ void adc_init() noexcept {
 
     // ADC2: trigger TIM6_TRGO simultâneo
     ADC2_CFGR1 = ADC_CFGR1_RES_12BIT
+               | ADC_CFGR1_DMAEN
+               | ADC_CFGR1_DMACFG
                | ADC_CFGR1_EXTSEL_TIM6_TRGO
                | ADC_CFGR1_EXTEN_RISING;
 
@@ -194,17 +248,22 @@ void adc_init() noexcept {
     TIM6_PSC = 0u;
     TIM6_ARR = static_cast<uint32_t>(kTimClockHz / 1000u) - 1u;  // ~1 ms
     TIM6_EGR = 1u;
-    TIM6_CR1 = TIM_CR1_CEN | TIM_CR1_URS;  // URS: apenas overflow gera TRGO
+    TIM6_SR = 0u;
+    TIM6_CR1 = TIM_CR1_OPM | TIM_CR1_URS;
 
-    // ── 7. Habilitar interrupções EOC + EOS e NVIC ───────────────────────
-    // Sem IER configurado, o ISR nunca dispara mesmo com NVIC habilitado.
-    ADC1_IER = ADC_IER_EOCIE | ADC_IER_EOSIE;
-    ADC2_IER = ADC_IER_EOCIE | ADC_IER_EOSIE;
-    // IRQ_ADC1 = 37 (shared ADC1+ADC2); prioridade 5 (ADC primary STM32)
-    nvic_set_priority(IRQ_ADC1, 5u);
-    nvic_enable_irq(IRQ_ADC1);
+    // ── 7. GPDMA por sequência ADC; reduz ISR de EOC/EOS por canal ───────
+    ADC1_IER = 0u;
+    ADC2_IER = 0u;
+    ems::hal::gpdma_adc1_arm();
+    ems::hal::gpdma_adc2_arm();
+    nvic_set_priority(IRQ_GPDMA1_CH0, 5u);
+    nvic_set_priority(IRQ_GPDMA1_CH1, 5u);
+    nvic_enable_irq(IRQ_GPDMA1_CH0);
+    nvic_enable_irq(IRQ_GPDMA1_CH1);
 
-    // ── 8. Primeira conversão para popular o cache ───────────────────────
+    // ── 8. Habilitar ADCs e armar hardware trigger ──────────────────────
+    adc_enable(ADC1_CR, ADC1_ISR);
+    adc_enable(ADC2_CR, ADC2_ISR);
     ADC1_CR |= ADC_CR_ADSTART;
     ADC2_CR |= ADC_CR_ADSTART;
 }
@@ -218,8 +277,11 @@ void adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept {
     // Amostrar na metade do período do dente (delay do TIM6 trigger)
     const uint32_t arr = (tooth_period_ticks / 2u);
     if (arr > 0u) {
+        TIM6_CR1 = TIM_CR1_OPM | TIM_CR1_URS;
+        TIM6_SR = 0u;
         TIM6_ARR = arr - 1u;
-        TIM6_EGR = 1u;  // UG: força reload imediato
+        TIM6_CNT = 0u;
+        TIM6_CR1 = TIM_CR1_OPM | TIM_CR1_URS | TIM_CR1_CEN;
     }
 }
 
@@ -237,38 +299,18 @@ uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept {
 
 } // namespace ems::hal
 
-// ── ISR ADC — processa resultado das conversões sequenciais ──────────────────
-// EOC dispara uma vez por canal convertido; leitura de ADC_DR limpa EOC (RM0481 §25.6.3).
-// EOS dispara após o último canal da sequência.
-extern "C" void ADC1_2_IRQHandler(void) {
-    const uint32_t sr1 = ADC1_ISR;
-    const uint32_t sr2 = ADC2_ISR;
+extern "C" void GPDMA1_Channel0_IRQHandler(void) {
+    const uint32_t sr = GPDMA1_CH0_CSR;
+    GPDMA1_CH0_CFCR = GPDMA_CFCR_ALL;
+    if ((sr & (GPDMA_CSR_DTEF | GPDMA_CSR_USEF)) != 0u) { ++g_adc_dma_faults; }
+    ems::hal::gpdma_adc1_arm();
+}
 
-    // ADC1: acumula 1 canal por EOC (8 canais no total)
-    if (sr1 & ADC_ISR_EOC) {
-        if (g_adc_secondary_idx < 8u) {
-            g_adc_secondary_raw[g_adc_secondary_idx++] =
-                static_cast<uint16_t>(ADC1_DR & 0xFFFu);  // leitura limpa EOC
-        }
-    }
-    if (sr1 & ADC_ISR_EOS) {
-        g_adc_secondary_idx = 0u;
-        ADC1_ISR = ADC_ISR_EOS;   // W1C: limpa EOS
-        ADC1_CR |= ADC_CR_ADSTART;  // re-arm
-    }
-
-    // ADC2: acumula 1 canal por EOC (4 canais no total)
-    if (sr2 & ADC_ISR_EOC) {
-        if (g_adc2_idx < 4u) {
-            g_adc2_raw[g_adc2_idx++] =
-                static_cast<uint16_t>(ADC2_DR & 0xFFFu);
-        }
-    }
-    if (sr2 & ADC_ISR_EOS) {
-        g_adc2_idx = 0u;
-        ADC2_ISR = ADC_ISR_EOS;
-        ADC2_CR |= ADC_CR_ADSTART;
-    }
+extern "C" void GPDMA1_Channel1_IRQHandler(void) {
+    const uint32_t sr = GPDMA1_CH1_CSR;
+    GPDMA1_CH1_CFCR = GPDMA_CFCR_ALL;
+    if ((sr & (GPDMA_CSR_DTEF | GPDMA_CSR_USEF)) != 0u) { ++g_adc_dma_faults; }
+    ems::hal::gpdma_adc2_arm();  // FIX: era gpdma_adc1_arm() — Channel1 gerencia ADC2
 }
 
 #else  // EMS_HOST_TEST ─────────────────────────────────────────────────────

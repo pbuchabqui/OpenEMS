@@ -1,17 +1,23 @@
 #include "engine/fuel_calc.h"
 #include "engine/calibration.h"
 #include "engine/engine_config.h"
+#include "engine/math_utils.h"
+#include "hal/flash.h"
 
 #include <cstdint>
 #include <cassert>
 
-// CRITICAL FIX: Add debug assertions for safety-critical parameters
+// FIX BUG-10: fault counter para falhas de escrita NVM.
+// nvm_write_ltft/knock retornam false apenas quando os índices estão fora do
+// intervalo válido — indica erro de programação, mas contamos para diagnóstico.
+static volatile uint32_t g_nvm_write_faults = 0u;
+
 #ifndef NDEBUG
-#define ASSERT_VALID_RPM_X10(rpm) assert((rpm) >= 0 && (rpm) <= 200000)  // 0-20000 RPM ×10
-#define ASSERT_VALID_MAP_KPA(map) assert((map) >= 10 && (map) <= 250)   // 10-250 kPa
-#define ASSERT_VALID_TEMP_X10(temp) assert((temp) >= -400 && (temp) <= 1500)  // -40°C to +150°C ×10
-#define ASSERT_VALID_VE(ve) assert((ve) <= 255)  // VE 0-255%
-#define ASSERT_VALID_VOLTAGE_MV(v) assert((v) >= 6000 && (v) <= 18000)  // 6-18V
+#define ASSERT_VALID_RPM_X10(rpm) assert((rpm) <= 200000)
+#define ASSERT_VALID_MAP_KPA(map) assert((map) >= 10 && (map) <= 300)
+#define ASSERT_VALID_TEMP_X10(temp) assert((temp) >= -400 && (temp) <= 1500)
+#define ASSERT_VALID_VE(ve) assert((ve) <= 255)
+#define ASSERT_VALID_VOLTAGE_MV(v) assert((v) >= 6000 && (v) <= 18000)
 #else
 #define ASSERT_VALID_RPM_X10(rpm) ((void)0)
 #define ASSERT_VALID_MAP_KPA(map) ((void)0)
@@ -22,152 +28,145 @@
 
 namespace {
 
-constexpr uint8_t kCorrPoints = 8u;
+using ems::engine::clamp_i16;
+using ems::engine::clamp_u16;
+using ems::engine::interp_u16_8pt;
 
-constexpr int16_t kCltAxisX10[kCorrPoints] = {-400, -100, 0, 200, 400, 700, 900, 1100};
-constexpr uint16_t kCorrCltX256[kCorrPoints] = {384u, 352u, 320u, 288u, 272u, 256u, 248u, 240u};
-
-constexpr int16_t kIatAxisX10[kCorrPoints] = {-200, 0, 200, 400, 600, 800, 1000, 1200};
-constexpr uint16_t kCorrIatX256[kCorrPoints] = {272u, 264u, 256u, 248u, 240u, 232u, 224u, 216u};
-
-constexpr int16_t kWarmupAxisX10[kCorrPoints] = {-400, -100, 0, 200, 400, 700, 900, 1100};
-constexpr uint16_t kWarmupX256[kCorrPoints] = {420u, 380u, 350u, 320u, 290u, 256u, 256u, 256u};
-
-constexpr uint16_t kVbattAxisMv[kCorrPoints] = {9000u, 10000u, 11000u, 12000u, 13000u, 14000u, 15000u, 16000u};
-constexpr uint16_t kDeadTimeUs[kCorrPoints] = {1400u, 1200u, 1050u, 900u, 800u, 700u, 650u, 600u};
-
-constexpr int16_t kAeCltAxisX10[kCorrPoints] = {-400, -100, 0, 200, 400, 700, 900, 1100};
-constexpr uint16_t kAeSens[kCorrPoints] = {11u, 10u, 9u, 8u, 7u, 6u, 5u, 4u};
+constexpr uint8_t kCorrPoints = ems::engine::kCorrectionTableSize;
 
 constexpr int16_t kStftKpNum = 3;     // 0.03 por erro_x1000 -> x10
 constexpr int16_t kStftKiNum = 1;     // 0.005 por amostra
 constexpr int16_t kStftKiDen = 200;
 constexpr int16_t kStftClampX10 = 250;
+constexpr uint8_t kLambdaHistorySize = 16u;
 
-uint16_t g_ae_threshold_tpsdot_x10 = 5u;
-uint8_t g_ae_taper_cycles = 8u;
+struct LambdaHistorySample {
+    uint32_t time_ms;
+    uint32_t rpm_x10;
+    uint16_t map_kpa;
+    int16_t lambda_target_x1000;
+    bool valid;
+};
+
 uint8_t g_ae_decay_cycles = 0u;
 int32_t g_ae_pulse_us = 0;
 
 int16_t g_stft_pct_x10 = 0;
 int32_t g_stft_integrator_x10 = 0;
 int16_t g_ltft_pct_x10[ems::engine::kTableAxisSize][ems::engine::kTableAxisSize] = {};
+LambdaHistorySample g_lambda_history[kLambdaHistorySize] = {};
+uint8_t g_lambda_history_pos = 0u;
 
 int16_t fuel_ltft_load_cell(uint8_t map_idx, uint8_t rpm_idx) noexcept {
-    (void)map_idx;
-    (void)rpm_idx;
-    return 0;
+    const int8_t stored_pct = ems::hal::nvm_read_ltft(rpm_idx, map_idx);
+    return static_cast<int16_t>(stored_pct) * 10;
 }
 
 void fuel_ltft_store_cell(uint8_t map_idx, uint8_t rpm_idx, int16_t value_x10) noexcept {
-    (void)map_idx;
-    (void)rpm_idx;
-    (void)value_x10;
+    const int16_t clamped_x10 = clamp_i16(value_x10, -250, 250);
+    const int16_t rounded_pct = (clamped_x10 >= 0)
+        ? static_cast<int16_t>((clamped_x10 + 5) / 10)
+        : static_cast<int16_t>((clamped_x10 - 5) / 10);
+    // FIX BUG-10: verifica retorno de nvm_write — false significa índice inválido
+    // (erro de programação). Em release, o fault counter capta o problema.
+    if (!ems::hal::nvm_write_ltft(rpm_idx, map_idx, static_cast<int8_t>(rounded_pct))) {
+        ++g_nvm_write_faults;
+    }
 }
 
-uint16_t clamp_u16(uint16_t v, uint16_t lo, uint16_t hi) noexcept {
-    if (v < lo) {
-        return lo;
-    }
-    if (v > hi) {
-        return hi;
-    }
-    return v;
-}
-
-int16_t clamp_i16(int16_t v, int16_t lo, int16_t hi) noexcept {
-    if (v < lo) {
-        return lo;
-    }
-    if (v > hi) {
-        return hi;
-    }
-    return v;
-}
-
-uint16_t interp_u16_8pt(const int16_t* x_axis,
-                        const uint16_t* table,
-                        int16_t x) noexcept {
-    if (x <= x_axis[0]) {
-        return table[0];
-    }
-    if (x >= x_axis[kCorrPoints - 1u]) {
-        return table[kCorrPoints - 1u];
-    }
-
-    uint8_t idx = 0u;
-    for (uint8_t i = 0u; i < (kCorrPoints - 1u); ++i) {
-        if (x <= x_axis[i + 1u]) {
-            idx = i;
-            break;
-        }
-    }
-
-    const int16_t x0 = x_axis[idx];
-    const int16_t x1 = x_axis[idx + 1u];
-    const uint16_t y0 = table[idx];
-    const uint16_t y1 = table[idx + 1u];
-
-    const int32_t dx = static_cast<int32_t>(x) - x0;
-    const int32_t span = static_cast<int32_t>(x1) - x0;
-    if (span <= 0) {
-        return y0;
-    }
-
-    const int32_t dy = static_cast<int32_t>(y1) - y0;
-    const int32_t y = static_cast<int32_t>(y0) + ((dy * dx) / span);
-    if (y <= 0) {
-        return 0u;
-    }
-    if (y >= 65535) {
-        return 65535u;
-    }
-    return static_cast<uint16_t>(y);
-}
-
-uint16_t interp_u16_8pt_u16x(const uint16_t* x_axis,
+uint16_t interp_u16_4pt_u16x(const uint16_t* x_axis,
                              const uint16_t* table,
                              uint16_t x) noexcept {
+    constexpr uint8_t n = ems::engine::kAeRateTableSize;
     if (x <= x_axis[0]) {
         return table[0];
     }
-    if (x >= x_axis[kCorrPoints - 1u]) {
-        return table[kCorrPoints - 1u];
+    if (x >= x_axis[n - 1u]) {
+        return table[n - 1u];
     }
 
     uint8_t idx = 0u;
-    for (uint8_t i = 0u; i < (kCorrPoints - 1u); ++i) {
-        if (x <= x_axis[i + 1u]) {
-            idx = i;
-            break;
-        }
-    }
+    while (idx < (n - 2u) && x > x_axis[idx + 1u]) { ++idx; }
 
     const uint16_t x0 = x_axis[idx];
     const uint16_t x1 = x_axis[idx + 1u];
     const uint16_t y0 = table[idx];
     const uint16_t y1 = table[idx + 1u];
-
-    const uint32_t dx = static_cast<uint32_t>(x - x0);
-    const uint32_t span = static_cast<uint32_t>(x1 - x0);
+    const uint16_t span = static_cast<uint16_t>(x1 - x0);
     if (span == 0u) {
         return y0;
     }
 
-    const int32_t dy = static_cast<int32_t>(y1) - static_cast<int32_t>(y0);
-    const int32_t y = static_cast<int32_t>(y0) + static_cast<int32_t>((dy * static_cast<int32_t>(dx)) / static_cast<int32_t>(span));
-    if (y <= 0) {
-        return 0u;
+    const uint32_t y = static_cast<uint32_t>(y0) +
+        ((static_cast<uint32_t>(y1 - y0) * static_cast<uint32_t>(x - x0)) / span);
+    return static_cast<uint16_t>(y > 65535u ? 65535u : y);
+}
+
+uint16_t interp_lambda_delay_3x3(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
+    const uint8_t xi = ems::engine::table_axis_index(
+        ems::engine::lambda_delay_rpm_axis_x10,
+        ems::engine::kLambdaDelayTableSize,
+        rpm_x10);
+    const uint8_t yi = ems::engine::table_axis_index(
+        ems::engine::lambda_delay_load_axis_kpa,
+        ems::engine::kLambdaDelayTableSize,
+        map_kpa);
+    const uint8_t fx = ems::engine::table_axis_frac_q8(
+        ems::engine::lambda_delay_rpm_axis_x10, xi, rpm_x10);
+    const uint8_t fy = ems::engine::table_axis_frac_q8(
+        ems::engine::lambda_delay_load_axis_kpa, yi, map_kpa);
+
+    const int32_t v00 = ems::engine::lambda_delay_ms_table[yi][xi];
+    const int32_t v10 = ems::engine::lambda_delay_ms_table[yi][xi + 1u];
+    const int32_t v01 = ems::engine::lambda_delay_ms_table[yi + 1u][xi];
+    const int32_t v11 = ems::engine::lambda_delay_ms_table[yi + 1u][xi + 1u];
+
+    const int32_t v0 = v00 + (((v10 - v00) * static_cast<int32_t>(fx)) >> 8u);
+    const int32_t v1 = v01 + (((v11 - v01) * static_cast<int32_t>(fx)) >> 8u);
+    const int32_t v = v0 + (((v1 - v0) * static_cast<int32_t>(fy)) >> 8u);
+    return static_cast<uint16_t>(clamp_i16(static_cast<int16_t>(v), 0, 2000));
+}
+
+void lambda_history_push(uint32_t now_ms,
+                         uint32_t rpm_x10,
+                         uint16_t map_kpa,
+                         int16_t lambda_target_x1000) noexcept {
+    LambdaHistorySample& sample = g_lambda_history[g_lambda_history_pos];
+    sample.time_ms = now_ms;
+    sample.rpm_x10 = rpm_x10;
+    sample.map_kpa = map_kpa;
+    sample.lambda_target_x1000 = lambda_target_x1000;
+    sample.valid = true;
+    g_lambda_history_pos = static_cast<uint8_t>((g_lambda_history_pos + 1u) % kLambdaHistorySize);
+}
+
+bool lambda_history_get_delayed(uint32_t now_ms,
+                                uint16_t delay_ms,
+                                LambdaHistorySample& out) noexcept {
+    const uint32_t target_ms = now_ms - delay_ms;
+    bool found = false;
+    uint32_t best_age = 0xFFFFFFFFu;
+
+    for (uint8_t i = 0u; i < kLambdaHistorySize; ++i) {
+        const LambdaHistorySample& sample = g_lambda_history[i];
+        if (!sample.valid) {
+            continue;
+        }
+        if (sample.time_ms > target_ms) { continue; }
+        const uint32_t age = target_ms - sample.time_ms;
+        if (age <= 2000u && age < best_age) {
+            best_age = age;
+            out = sample;
+            found = true;
+        }
     }
-    if (y >= 65535) {
-        return 65535u;
-    }
-    return static_cast<uint16_t>(y);
+
+    return found;
 }
 
 uint8_t clt_bucket(int16_t clt_x10) noexcept {
     for (uint8_t i = 0u; i < (kCorrPoints - 1u); ++i) {
-        if (clt_x10 < kAeCltAxisX10[i + 1u]) {
+        if (clt_x10 < ems::engine::ae_clt_corr_axis_x10[i + 1u]) {
             return i;
         }
     }
@@ -185,20 +184,27 @@ bool closed_loop_allowed(int16_t clt_x10,
 
 namespace ems::engine {
 
-uint8_t get_ve(uint16_t rpm_x10, uint16_t map_kpa) noexcept {
-    // CRITICAL FIX: Validate input parameters
+uint8_t get_ve(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
     ASSERT_VALID_RPM_X10(rpm_x10);
     ASSERT_VALID_MAP_KPA(map_kpa);
-    
     return table3d_lookup_u8(ve_table, kRpmAxisX10, kLoadAxisKpa, rpm_x10, map_kpa);
 }
 
-uint16_t get_lambda_target_x1000(uint16_t rpm_x10, uint16_t map_kpa) noexcept {
+uint8_t get_ve_prepared(const Table2dLookup& lookup) noexcept {
+    return table3d_lookup_u8_prepared(ve_table, lookup);
+}
+
+uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
     ASSERT_VALID_RPM_X10(rpm_x10);
     ASSERT_VALID_MAP_KPA(map_kpa);
 
     const int16_t target = table3d_lookup_s16(
         lambda_target_table_x1000, kRpmAxisX10, kLoadAxisKpa, rpm_x10, map_kpa);
+    return static_cast<uint16_t>(clamp_i16(target, 650, 1200));
+}
+
+uint16_t get_lambda_target_x1000_prepared(const Table2dLookup& lookup) noexcept {
+    const int16_t target = table3d_lookup_s16_prepared(lambda_target_table_x1000, lookup);
     return static_cast<uint16_t>(clamp_i16(target, 650, 1200));
 }
 
@@ -232,10 +238,7 @@ uint32_t calc_req_fuel_us(uint16_t displacement_cc,
 }
 
 uint32_t default_req_fuel_us() noexcept {
-    return calc_req_fuel_us(cfg::kDisplacementCc,
-                            cfg::kCylinderCount,
-                            cfg::kInjectorFlowCcMin,
-                            cfg::kStoichAfrX100);
+    return kDefaultReqFuelUs;
 }
 
 uint32_t calc_base_pw_us(uint16_t req_fuel_us,
@@ -258,35 +261,66 @@ uint32_t calc_base_pw_us(uint16_t req_fuel_us,
     ASSERT_VALID_MAP_KPA(map_ref_kpa);
     ASSERT_VALID_VE(ve);
 
-    // Base pulse width:
     // PW = REQ_FUEL * (VE / 100) * (MAP / MAP_REF)
     const uint64_t num = static_cast<uint64_t>(req_fuel_us) *
                          static_cast<uint64_t>(ve) *
                          static_cast<uint64_t>(map_kpa);
     const uint32_t den = 100u * static_cast<uint32_t>(map_ref_kpa);
     uint32_t temp = static_cast<uint32_t>(num / den);
-
     if (temp > 100000u) {
         temp = 100000u;
     }
-
-    // CRITICAL FIX: Validate result
-    assert(temp <= 100000);  // Max 100ms pulse width
-
     return temp;
 }
 
+uint32_t calc_base_pw_us_default(uint8_t ve,
+                                 uint16_t map_kpa) noexcept {
+    if (ve == 0u) {
+        return 0u;
+    }
+    if (map_kpa > 300u) {
+        return 0u;
+    }
+
+    const uint32_t num = static_cast<uint32_t>(kDefaultReqFuelUs) *
+                         static_cast<uint32_t>(ve) *
+                         static_cast<uint32_t>(map_kpa);
+    uint32_t out = num / (100u * static_cast<uint32_t>(cfg::kMapRefKpa));
+    if (out > 100000u) {
+        out = 100000u;
+    }
+    return out;
+}
+
 uint32_t apply_lambda_target_pw_us(uint32_t base_pw_us,
-                                   uint16_t lambda_target_x1000) noexcept {
+                                        uint16_t lambda_target_x1000) noexcept {
     if (base_pw_us == 0u) {
         return 0u;
     }
     if (lambda_target_x1000 < 650u || lambda_target_x1000 > 1200u) {
+        return base_pw_us;
+    }
+
+    uint32_t out = (base_pw_us * 1000u) / lambda_target_x1000;
+    if (out > 100000u) {
+        out = 100000u;
+    }
+    return out;
+}
+
+uint32_t apply_fuel_trim_pw_us(uint32_t base_pw_us,
+                                    int16_t trim_pct_x10) noexcept {
+    if (base_pw_us == 0u) {
         return 0u;
     }
 
-    uint32_t out = static_cast<uint32_t>(
-        (static_cast<uint64_t>(base_pw_us) * 1000u) / lambda_target_x1000);
+    const int16_t trim = clamp_i16(trim_pct_x10, -500, 500);
+    const int32_t mult_x1000 = 1000 + static_cast<int32_t>(trim);
+    if (mult_x1000 <= 0) {
+        return 0u;
+    }
+
+    uint32_t out = (base_pw_us * static_cast<uint32_t>(mult_x1000)) / 1000u;
     if (out > 100000u) {
         out = 100000u;
     }
@@ -294,62 +328,105 @@ uint32_t apply_lambda_target_pw_us(uint32_t base_pw_us,
 }
 
 uint16_t corr_clt(int16_t clt_x10) noexcept {
-    // CRITICAL FIX: Validate temperature input
     ASSERT_VALID_TEMP_X10(clt_x10);
-    
-    return interp_u16_8pt(kCltAxisX10, kCorrCltX256, clt_x10);
+    return interp_u16_8pt(clt_corr_axis_x10, clt_corr_x256, kCorrPoints, clt_x10);
 }
 
 uint16_t corr_iat(int16_t iat_x10) noexcept {
-    // CRITICAL FIX: Validate temperature input
     ASSERT_VALID_TEMP_X10(iat_x10);
-    
-    return interp_u16_8pt(kIatAxisX10, kCorrIatX256, iat_x10);
+    return interp_u16_8pt(iat_corr_axis_x10, iat_corr_x256, kCorrPoints, iat_x10);
 }
 
 uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept {
     ASSERT_VALID_VOLTAGE_MV(vbatt_mv);
-    // Clamp ao range da tabela kVbattAxisMv [9000, 16000] mV.
+    // Clamp ao range da tabela vbatt_corr_axis_mv [9000, 16000] mV.
     // Abaixo de 9V: usa dead-time máximo da tabela (injetor mais lento).
     // Acima de 16V: usa dead-time mínimo (tensão de carga alta).
     // Range do assert (6–18V) é mais amplo para aceitar leituras de sensor
     // ruidosas sem assert falso; o clamp garante interpolação dentro da tabela.
     const uint16_t v = clamp_u16(vbatt_mv,
-                                  kVbattAxisMv[0],
-                                  kVbattAxisMv[kCorrPoints - 1u]);
-    return interp_u16_8pt_u16x(kVbattAxisMv, kDeadTimeUs, v);
+                                  vbatt_corr_axis_mv[0],
+                                  vbatt_corr_axis_mv[kCorrPoints - 1u]);
+    return interp_u16_8pt_u16x(vbatt_corr_axis_mv, injector_dead_time_us, kCorrPoints, v);
 }
 
 uint16_t corr_warmup(int16_t clt_x10) noexcept {
-    // CRITICAL FIX: Validate temperature input
     ASSERT_VALID_TEMP_X10(clt_x10);
-    
-    return interp_u16_8pt(kWarmupAxisX10, kWarmupX256, clt_x10);
+    return interp_u16_8pt(warmup_corr_axis_x10, warmup_corr_x256, kCorrPoints, clt_x10);
 }
 
 uint32_t calc_final_pw_us(uint32_t base_pw_us,
                           uint16_t corr_clt_x256,
                           uint16_t corr_iat_x256,
                           uint16_t dead_time_us) noexcept {
+    if (base_pw_us == 0u) {
+        return 0u;
+    }
     const uint64_t num = static_cast<uint64_t>(base_pw_us) * corr_clt_x256 * corr_iat_x256;
     const uint32_t corrected = static_cast<uint32_t>(num / (256u * 256u));
     return corrected + dead_time_us;
 }
 
+uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
+                                      uint16_t map_kpa,
+                                      uint16_t lambda_target_x1000,
+                                      int16_t trim_pct_x10,
+                                      uint16_t corr_clt_x256,
+                                      uint16_t corr_iat_x256,
+                                      uint16_t dead_time_us) noexcept {
+    uint32_t base_pw_us = 0u;
+    if (ve != 0u && map_kpa <= 300u) {
+        const uint32_t num = static_cast<uint32_t>(kDefaultReqFuelUs) *
+                             static_cast<uint32_t>(ve) *
+                             static_cast<uint32_t>(map_kpa);
+        base_pw_us = num / (100u * static_cast<uint32_t>(cfg::kMapRefKpa));
+        if (base_pw_us > 100000u) {
+            base_pw_us = 100000u;
+        }
+    }
+
+    uint32_t lambda_pw_us = 0u;
+    if (base_pw_us != 0u &&
+        lambda_target_x1000 >= 650u &&
+        lambda_target_x1000 <= 1200u) {
+        lambda_pw_us = (base_pw_us * 1000u) / lambda_target_x1000;
+        if (lambda_pw_us > 100000u) {
+            lambda_pw_us = 100000u;
+        }
+    }
+
+    uint32_t trimmed_pw_us = 0u;
+    if (lambda_pw_us != 0u) {
+        const int16_t trim = clamp_i16(trim_pct_x10, -500, 500);
+        const int32_t mult_x1000 = 1000 + static_cast<int32_t>(trim);
+        if (mult_x1000 > 0) {
+            trimmed_pw_us = (lambda_pw_us * static_cast<uint32_t>(mult_x1000)) / 1000u;
+            if (trimmed_pw_us > 100000u) {
+                trimmed_pw_us = 100000u;
+            }
+        }
+    }
+
+    if (trimmed_pw_us == 0u) {
+        return 0u;
+    }
+    return calc_final_pw_us(trimmed_pw_us, corr_clt_x256, corr_iat_x256, dead_time_us);
+}
+
 void fuel_ae_set_threshold(uint16_t threshold_tpsdot_x10) noexcept {
-    g_ae_threshold_tpsdot_x10 = threshold_tpsdot_x10;
+    ae_tpsdot_threshold_x10 = threshold_tpsdot_x10;
 }
 
 void fuel_ae_set_taper(uint8_t taper_cycles) noexcept {
-    g_ae_taper_cycles = (taper_cycles == 0u) ? 1u : taper_cycles;
+    ae_taper_cycles = (taper_cycles == 0u) ? 1u : taper_cycles;
 }
 
 int32_t calc_ae_pw_us(uint16_t tps_now_x10,
                       uint16_t tps_prev_x10,
                       uint16_t dt_ms,
                       int16_t clt_x10) noexcept {
-    if (dt_ms == 0u || dt_ms < 5u) {
-        return 0;  // Skip anomalously fast sample (protect against tpsdot overflow)
+    if (dt_ms == 0u) {
+        return 0;
     }
 
     int16_t delta_tps_x10 = static_cast<int16_t>(tps_now_x10) - static_cast<int16_t>(tps_prev_x10);
@@ -359,16 +436,31 @@ int32_t calc_ae_pw_us(uint16_t tps_now_x10,
 
     const int32_t tpsdot_x10 = static_cast<int32_t>(delta_tps_x10) / dt_ms;
 
-    if (tpsdot_x10 > static_cast<int32_t>(g_ae_threshold_tpsdot_x10)) {
+    if (tpsdot_x10 > static_cast<int32_t>(ae_tpsdot_threshold_x10)) {
         const uint8_t b = clt_bucket(clt_x10);
-        g_ae_pulse_us = tpsdot_x10 * static_cast<int32_t>(kAeSens[b]);
-        g_ae_decay_cycles = g_ae_taper_cycles;
+        const uint16_t taper = ae_taper_cycles > 255u
+            ? 255u
+            : (ae_taper_cycles == 0u ? 1u : ae_taper_cycles);
+        const uint16_t tpsdot_u16 = static_cast<uint16_t>(
+            tpsdot_x10 > 65535 ? 65535 : tpsdot_x10);
+        const uint16_t base_pw_us =
+            interp_u16_4pt_u16x(ae_tpsdot_axis_x10, ae_pw_adder_us, tpsdot_u16);
+        g_ae_pulse_us =
+            (static_cast<int32_t>(base_pw_us) * static_cast<int32_t>(ae_clt_sens[b])) / 8;
+        if (g_ae_pulse_us > static_cast<int32_t>(ae_max_pw_us)) {
+            g_ae_pulse_us = static_cast<int32_t>(ae_max_pw_us);
+        }
+        g_ae_decay_cycles = static_cast<uint8_t>(taper);
         return g_ae_pulse_us;
     }
 
-    if (g_ae_decay_cycles > 0u && g_ae_taper_cycles > 0u) {
+    if (g_ae_decay_cycles > 0u) {
+        const uint16_t taper = ae_taper_cycles > 255u
+            ? 255u
+            : (ae_taper_cycles == 0u ? 1u : ae_taper_cycles);
         --g_ae_decay_cycles;
-        return (g_ae_pulse_us * g_ae_decay_cycles) / g_ae_taper_cycles;
+        return (g_ae_pulse_us * g_ae_decay_cycles) /
+               static_cast<int32_t>(taper);
     }
 
     g_ae_pulse_us = 0;
@@ -381,6 +473,7 @@ void fuel_reset_adaptives() noexcept {
     g_stft_integrator_x10 = 0;
     g_ae_decay_cycles = 0u;
     g_ae_pulse_us = 0;
+    fuel_lambda_delay_reset();
 
     for (uint8_t y = 0u; y < kTableAxisSize; ++y) {
         for (uint8_t x = 0u; x < kTableAxisSize; ++x) {
@@ -389,7 +482,19 @@ void fuel_reset_adaptives() noexcept {
     }
 }
 
-int16_t fuel_update_stft(uint16_t rpm_x10,
+void fuel_lambda_delay_reset() noexcept {
+    for (uint8_t i = 0u; i < kLambdaHistorySize; ++i) {
+        g_lambda_history[i] = {};
+    }
+    g_lambda_history_pos = 0u;
+}
+
+uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
+                                       uint16_t map_kpa) noexcept {
+    return interp_lambda_delay_3x3(rpm_x10, map_kpa);
+}
+
+int16_t fuel_update_stft(uint32_t rpm_x10,
                          uint16_t map_kpa,
                          int16_t lambda_target_x1000,
                          int16_t lambda_measured_x1000,
@@ -403,7 +508,7 @@ int16_t fuel_update_stft(uint16_t rpm_x10,
         return g_stft_pct_x10;
     }
 
-    const int16_t error_x1000 = static_cast<int16_t>(lambda_target_x1000 - lambda_measured_x1000);
+    const int16_t error_x1000 = static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
     const int32_t p_x10 = (static_cast<int32_t>(error_x1000) * kStftKpNum) / 100;
     g_stft_integrator_x10 += (static_cast<int32_t>(error_x1000) * kStftKiNum) / kStftKiDen;
 
@@ -427,6 +532,40 @@ int16_t fuel_update_stft(uint16_t rpm_x10,
     fuel_ltft_store_cell(map_idx, rpm_idx, cell);
 
     return g_stft_pct_x10;
+}
+
+int16_t fuel_update_stft_delayed(uint32_t now_ms,
+                                 uint32_t rpm_x10,
+                                 uint16_t map_kpa,
+                                 int16_t lambda_target_x1000,
+                                 int16_t lambda_measured_x1000,
+                                 int16_t clt_x10,
+                                 bool o2_valid,
+                                 bool ae_active,
+                                 bool rev_cut) noexcept {
+    lambda_history_push(now_ms, rpm_x10, map_kpa, lambda_target_x1000);
+
+    const uint16_t delay_ms = lambda_delay_ms_from_rpm_load(rpm_x10, map_kpa);
+    LambdaHistorySample delayed{};
+    if (!lambda_history_get_delayed(now_ms, delay_ms, delayed)) {
+        return fuel_update_stft(rpm_x10,
+                                map_kpa,
+                                lambda_target_x1000,
+                                lambda_measured_x1000,
+                                clt_x10,
+                                false,
+                                ae_active,
+                                rev_cut);
+    }
+
+    return fuel_update_stft(delayed.rpm_x10,
+                            delayed.map_kpa,
+                            delayed.lambda_target_x1000,
+                            lambda_measured_x1000,
+                            clt_x10,
+                            o2_valid,
+                            ae_active,
+                            rev_cut);
 }
 
 int16_t fuel_get_stft_pct_x10() noexcept {

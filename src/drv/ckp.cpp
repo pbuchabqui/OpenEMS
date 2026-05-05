@@ -60,9 +60,8 @@
  */
 
 #include "drv/ckp.h"
-
 #include <cstdint>
-
+#include <cstring>
 #include "hal/timer.h"
 #if defined(TARGET_STM32H562) && !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
@@ -75,10 +74,9 @@ volatile uint32_t ems_test_tim5_ccr2  = 0u;
 volatile uint32_t ems_test_cam_gpio_idr = 0u;
 #endif
 
-// ── FIX-15: FASTRUN — coloca ISRs críticas em SRAM (zero cache miss) ─────────
-// Em host/embedded, FASTRUN = __attribute__((section(".fastrun"))) — definido em
-// WProgram.h / core_pins.h. Em host tests a macro é indefinida; defini-la vazia
-// garante que o código compile sem modificações.
+// FASTRUN coloca ISRs críticas em SRAM (zero cache miss).
+// Em host/embedded: __attribute__((section(".fastrun"))) via WProgram.h / core_pins.h.
+// Em host tests: indefinida — defini-la vazia garante compilação sem modificações.
 #if !defined(FASTRUN)
 #define FASTRUN
 #endif
@@ -96,7 +94,6 @@ static constexpr uint16_t kTeethPositionsPerRev = 60u; // posições angulares u
 // Ângulo por dente normal em miligraus (× 1000).
 // 6,0° × 1000 = 6000. Usado em ckp_angle_to_ticks().
 // NOTA: o nome kToothAngleX1000 sugere ×1000, que é "miligraus".
-//   angle_x10 passado à função é TAMBÉM em miligraus (não em ×10 como o nome diz).
 static constexpr uint16_t kToothAngleX1000 = 6000u;
 
 // Mínimo de dentes contados desde o último gap para aceitar novo gap.
@@ -134,6 +131,9 @@ static constexpr uint32_t kPredictionClampDen = 8u;
 // Tamanho da janela deslizante de histórico (em número de períodos).
 // 3 amostras são suficientes para filtrar ruído transitório.
 static constexpr uint8_t kHistSize = 3u;
+
+// Mínimo de ticks entre bordas para descartar glitches de EMC (<800 ns @ 62.5 MHz).
+static constexpr uint32_t kMinToothTicks = 50u;
 
 // ---- Acesso a registradores TIM5 ------------------------------------------------
 // STM32H562 TIM5 e GPIO sao configurados em hal/stm32h562/timer.cpp.
@@ -197,6 +197,9 @@ static DecoderState g_state = {
 // background loop sem seção crítica. Sem volatile, o compilador pode elevar
 // as leituras para fora de loops ou cacheá-las em registradores, observando
 // valores desatualizados. volatile força um fresh load de memória a cada acesso.
+// NOTA: g_state NÃO é volatile porque é usada diretamente dentro de ISRs,
+// onde o acesso volatileness é desnecessário (a ISR não pode ser interrompida
+// por si mesma). A proteção de snapshot usa critical section + memcpy.
 static volatile bool g_seed_armed = false;
 static volatile bool g_seed_phase_a = false;
 static volatile bool g_seed_probation = false;
@@ -222,6 +225,13 @@ inline uint32_t rpm_x10_from_period_ns(uint32_t period_ns) noexcept {
     if (period_ns == 0u) { return 0u; }
     return static_cast<uint32_t>(
         600000000000ULL / (static_cast<uint64_t>(kTeethPositionsPerRev) * period_ns));
+}
+
+// Caminho quente do ISR: period_ns = period_ticks * 16 ns, entao:
+// rpm x10 = 600000000000 / (60 * 16 * period_ticks) = 625000000 / period_ticks.
+inline uint32_t rpm_x10_from_period_ticks(uint32_t period_ticks) noexcept {
+    if (period_ticks == 0u) { return 0u; }
+    return 625000000u / period_ticks;
 }
 
 inline uint32_t predict_next_period_ticks(uint32_t current_ticks) noexcept {
@@ -267,10 +277,11 @@ inline bool is_gap(uint32_t period, uint32_t avg) noexcept {
 
 // Teste de dente normal dentro da janela de tolerância ±20%.
 // 0,8×avg ≤ period ≤ 1,2×avg → dente aceito para atualização do histórico.
+// Multiplica ambos os lados por kTolDen (5) para eliminar as divisões da ISR.
+// kTolDenLow == kTolDenHigh == 5, então period×5 substitui period/den em ambas as comparações.
 inline bool is_normal_tooth(uint32_t period, uint32_t avg) noexcept {
-    const uint32_t lo = (avg * kTolNumLow)  / kTolDenLow;   // 80% de avg
-    const uint32_t hi = (avg * kTolNumHigh) / kTolDenHigh;  // 120% de avg
-    return (period >= lo && period <= hi);
+    const uint32_t p5 = period * kTolDenLow;
+    return (p5 >= avg * kTolNumLow) && (p5 <= avg * kTolNumHigh);
 }
 
 // ── Seção crítica ARM Cortex-M4 ──────────────────────────────────────────────
@@ -292,58 +303,43 @@ inline void exit_critical() noexcept {
 // ── Processamento de gap na máquina de estados ───────────────────────────────
 // Chamado pela ISR quando period > 1,5 × avg E tooth_count satisfaz a condição.
 // Retorna true se o gap foi aceito (transição válida).
-inline bool process_gap_event(uint32_t capture_now) noexcept {
+// last_tim5_capture já foi escrito pela ISR (linha antes de is_gap) para todos os
+// eventos válidos — não precisa ser repetido aqui. process_gap_event foca apenas
+// nas transições de estado e nos resets de contagem/índice.
+inline bool process_gap_event() noexcept {
     switch (g_state.snap.state) {
 
         case ems::drv::SyncState::WAIT_GAP:
         case ems::drv::SyncState::LOSS_OF_SYNC:
-            // Em qualquer estado de "não sincronizado", um gap inicia a tentativa de sync.
-            //
             // CORREÇÃO CKP-02: exigir tooth_count >= kGapThresholdTooth mesmo aqui.
-            // Durante os primeiros kHistSize dentes (bootstrap do histórico), o filtro
-            // de razão ainda não está activo e tooth_count pode ser < 55. Um spike de
-            // EMC que gere um período longo (aparentemente gap) sem que tenham passado
-            // dentes suficientes não deve avançar o estado — seria uma sincronização falsa.
-            //
-            // Excepção: no estado puro WAIT_GAP com histórico ainda não preenchido
-            // (hist_ready < kHistSize), a ISR retorna antes de chegar aqui, portanto
-            // qualquer gap que chegue a process_gap_event() já passou pelo filtro externo
-            // ou é o primeiro evento após hist_ready == kHistSize. A guarda abaixo cobre
-            // o caso em que tooth_count foi incrementado mas ainda está abaixo do limiar.
+            // Protege contra spikes de EMC que gerem período longo (aparentemente gap)
+            // antes de dentes suficientes — evitaria sincronização falsa.
             if (g_state.tooth_count < kGapThresholdTooth) {
-                // Gap prematuro: < 55 dentes desde o último reset de contagem.
-                // Pode ser spike de EMC, ruído mecânico ou arranque com histórico parcial.
-                // Reseta a contagem mas mantém o estado — aguarda gap legítimo.
                 g_state.tooth_count = 0u;
                 return false;
             }
             if (g_seed_armed) {
-                g_state.snap.state = ems::drv::SyncState::FULL_SYNC;
-                g_state.snap.phase_A = g_seed_phase_a;
-                g_seed_armed = false;
-                g_seed_probation = true;
-                g_seed_probation_teeth = 0u;
+                g_state.snap.state       = ems::drv::SyncState::FULL_SYNC;
+                g_state.snap.phase_A     = g_seed_phase_a;
+                g_seed_armed             = false;
+                g_seed_probation         = true;
+                g_seed_probation_teeth   = 0u;
             } else {
                 g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
             }
-            g_state.tooth_count         = 0u;
-            g_state.snap.tooth_index    = 0u;
-            g_state.snap.last_tim5_capture = capture_now;
+            g_state.tooth_count      = 0u;
+            g_state.snap.tooth_index = 0u;
             return true;
 
         case ems::drv::SyncState::HALF_SYNC:
             if (g_state.tooth_count >= kGapThresholdTooth) {
                 // 2º gap na posição correta → sincronismo completo.
-                // A partir deste ponto, tooth_index rastreia a posição angular
-                // com resolução de 6° por dente.
-                g_state.snap.state          = ems::drv::SyncState::FULL_SYNC;
-                g_state.tooth_count         = 0u;
-                g_state.snap.tooth_index    = 0u;
-                g_state.snap.last_tim5_capture = capture_now;
+                g_state.snap.state       = ems::drv::SyncState::FULL_SYNC;
+                g_state.tooth_count      = 0u;
+                g_state.snap.tooth_index = 0u;
                 return true;
             }
-            // Gap antes de kGapThresholdTooth dentes: pulso espúrio (EMC, dente danificado).
-            // Cai para LOSS_OF_SYNC e aguarda novo gap para tentar outra vez.
+            // Gap prematuro: pulso espúrio (EMC, dente danificado).
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
             return false;
@@ -351,9 +347,8 @@ inline bool process_gap_event(uint32_t capture_now) noexcept {
         case ems::drv::SyncState::FULL_SYNC:
             if (g_state.tooth_count >= kGapThresholdTooth) {
                 // Gap na posição esperada → mantém FULL_SYNC, reinicia contagem.
-                g_state.tooth_count         = 0u;
-                g_state.snap.tooth_index    = 0u;
-                g_state.snap.last_tim5_capture = capture_now;
+                g_state.tooth_count      = 0u;
+                g_state.snap.tooth_index = 0u;
                 return true;
             }
             // Gap inesperado: wheel slip, dente duplo, interferência severa.
@@ -394,14 +389,18 @@ namespace ems::drv {
 CkpSnapshot ckp_snapshot() noexcept {
     CkpSnapshot out;
     enter_critical();
-    out = g_state.snap;
+    // memcpy garante cópia byte-a-byte determinística; enter_critical()
+    // desabilita interrupções, impedindo que a ISR TIM5 modifique g_state.snap
+    // durante a cópia. Sem volatile + critical section, o compilador poderia
+    // reordenar ou cachear leituras de campos individuais de g_state.snap.
+    std::memcpy(&out, &g_state.snap, sizeof(out));
     exit_critical();
     return out;
 }
 
 uint32_t ckp_angle_to_ticks(uint32_t angle_mdeg, uint32_t ref_capture) noexcept {
     // RESERVADA: sem callers em producao. Dominio TIM5 @ 62.5 MHz. Ver header.
-    // tooth_period_ticks = tooth_period_ns * 62.5 ticks/us / 1000
+    // tooth_period_ticks = tooth_period_ns / 16 ns por tick
     // ticks_para_angulo  = (angle_mdeg × tooth_period_ticks) / kToothAngleX1000
     //
     // Verificação dimensional (angle_mdeg em miligraus, kToothAngleX1000 = 6000 mg/dente):
@@ -409,7 +408,7 @@ uint32_t ckp_angle_to_ticks(uint32_t angle_mdeg, uint32_t ref_capture) noexcept 
     //   Para 1°:           angle_mdeg = 1000 → ticks = 1000 × T / 6000 = T/6 ✓
     //
     // ATENÇÃO: não passar graus inteiros (ex: 6) — causará erro de 1000×.
-    const uint32_t tooth_period_ticks = (g_state.snap.tooth_period_ns * 625u) / 10000u;
+    const uint32_t tooth_period_ticks = g_state.snap.tooth_period_ns >> 4u;
     const uint32_t delta = (angle_mdeg * tooth_period_ticks)
                            / kToothAngleX1000;
     return ref_capture + delta;
@@ -449,7 +448,6 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     // descartando capturas legítimas em alta rotação (> 4000 RPM).
     // usamos 50 ticks como limite inferior conservador para rejeitar glitches
     // de EMC (< 800 ns) sem afetar operacao normal.
-    static constexpr uint32_t kMinToothTicks = 50u;
     if (delta_ticks < kMinToothTicks) {
         return;  // pulso muito curto → ruído EMC, descartar
     }
@@ -468,7 +466,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
         ++g_state.tooth_count;
         g_state.snap.tooth_period_ns = period_ns;
         g_state.snap.predicted_tooth_period_ns = period_ns;
-        g_state.snap.rpm_x10 = rpm_x10_from_period_ns(period_ns);
+        g_state.snap.rpm_x10 = rpm_x10_from_period_ticks(delta_ticks);
         g_state.prev_period_ticks = delta_ticks;
         sensors_on_tooth(g_state.snap);
         schedule_on_tooth(g_state.snap);
@@ -493,7 +491,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     if (is_gap(delta_ticks, avg)) {
         // Delega para a máquina de estados — a validação de tooth_count
         // e todas as transições estão encapsuladas em process_gap_event().
-        static_cast<void>(process_gap_event(capture_now));
+        static_cast<void>(process_gap_event());
         // Dispara hooks mesmo após gap: permite ao agendador / sensores reagir
         // à mudança de estado (ex: cancelar eventos pendentes após LOSS_OF_SYNC).
         sensors_on_tooth(g_state.snap);
@@ -518,22 +516,19 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
 
     g_state.snap.tooth_period_ns = period_ns;
     g_state.snap.predicted_tooth_period_ns = ticks_to_ns(predicted_ticks);
-    g_state.snap.rpm_x10 = rpm_x10_from_period_ns(period_ns);
+    g_state.snap.rpm_x10 = rpm_x10_from_period_ticks(delta_ticks);
     g_state.prev_period_ticks = delta_ticks;
 
-    // Incrementa tooth_count e tooth_index apenas em estados sincronizados/tentando.
+    // tooth_count incrementa em todos os estados — alimenta o limiar de gap e
+    // a detecção de LOSS_OF_SYNC por excesso de dentes sem gap.
+    ++g_state.tooth_count;
+    // tooth_index só avança quando há referência angular (HALF_SYNC / FULL_SYNC).
     if (g_state.snap.state != ems::drv::SyncState::WAIT_GAP &&
         g_state.snap.state != ems::drv::SyncState::LOSS_OF_SYNC) {
-        ++g_state.tooth_count;
-        // tooth_index: posição angular dentro da revolução (0 = após gap, 57 = último dente)
         g_state.snap.tooth_index =
             (g_state.snap.tooth_index < (kRealTeethPerRev - 1u))
                 ? static_cast<uint16_t>(g_state.snap.tooth_index + 1u)
                 : 0u;
-    } else {
-        // Em WAIT_GAP / LOSS_OF_SYNC: incrementa tooth_count para detectar
-        // o limiar mínimo de dentes antes de aceitar o próximo gap.
-        ++g_state.tooth_count;
     }
 
     // ── 7. Verificação de perda de sincronia por contagem excessiva ───────
