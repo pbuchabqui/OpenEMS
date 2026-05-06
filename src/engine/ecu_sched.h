@@ -29,7 +29,7 @@ extern "C" {
 #define ECU_CH_IGN3   5U
 #define ECU_CH_IGN4   4U
 
-#define ECU_ANGLE_TABLE_SIZE  20U
+#define ECU_ANGLE_TABLE_SIZE  32U
 
 typedef struct {
     uint8_t tooth_index;

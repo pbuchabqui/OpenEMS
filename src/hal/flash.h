@@ -6,6 +6,8 @@ namespace ems::hal {
 
 bool nvm_write_ltft(uint8_t rpm_i, uint8_t load_i, int8_t val) noexcept;
 int8_t nvm_read_ltft(uint8_t rpm_i, uint8_t load_i) noexcept;
+bool nvm_load_adaptive_maps() noexcept;
+bool nvm_flush_adaptive_maps() noexcept;
 
 // knock_map[8×8]: retraso de ignição por cilindro (unidade: 0.1°, range –12.7°..+12.7°)
 // Mapeado em SRAM (EEPROM emulada) logo após o LTFT, offset 256 bytes.

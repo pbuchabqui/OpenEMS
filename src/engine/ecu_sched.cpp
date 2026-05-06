@@ -296,18 +296,22 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     if ((is_inj == 0U) && (delta > 0xFFFFU)) { ++g_cycle_schedule_drop_count; exit_critical(); return; }
     if (delta < STM32_MIN_COMPARE_LEAD_TICKS) { ++g_late_event_count; force_output(ch, action); exit_critical(); return; }
 
-    stm32_set_oc_mode(is_inj, tim_ch, ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U);
+	stm32_set_oc_mode(is_inj, tim_ch, ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U);
+	// Clear any pending match flag BEFORE programming CCR to avoid missing an edge
+	if (is_inj != 0U) {
+		TIM2_SR &= ~stm32_tim_cc_flag(tim_ch);
+	} else {
+		TIM8_SR &= ~stm32_tim_cc_flag(tim_ch);
+	}
 #if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("dmb" ::: "memory");
+	__asm__ volatile("dmb" ::: "memory"); // Ensure OC mode + flag clear complete before CCR update
 #endif
-    ccr = stm32_tim_ccr(is_inj, tim_ch);
-    if (is_inj != 0U) {
-        *ccr = target_cnv;
-        TIM2_SR &= ~stm32_tim_cc_flag(tim_ch);
-    } else {
-        *ccr = (uint16_t)((TIM8_CNT & 0xFFFFU) + delta);
-        TIM8_SR &= ~stm32_tim_cc_flag(tim_ch);
-    }
+	ccr = stm32_tim_ccr(is_inj, tim_ch);
+	if (is_inj != 0U) {
+		*ccr = target_cnv;
+	} else {
+		*ccr = (uint16_t)((TIM8_CNT & 0xFFFFU) + delta);
+	}
     exit_critical();
 }
 

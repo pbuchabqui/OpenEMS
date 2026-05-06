@@ -8,29 +8,6 @@
 #include "adc.h"
 #endif
 
-// =============================================================================
-// CORRECOES APLICADAS
-// =============================================================================
-// [FIX-1] g_fault[] estatico sincronizado com reset_state() -- ranges identicos
-//         em ambos os locais (MAP/TPS/MAF: max 4095; FUEL/OIL: max 4050).
-//
-// [FIX-2] sensors_on_tooth() converte snap.tooth_period_ns -> ticks TIM5 com
-//         fator correto (*625/10000), pois TIM5 opera a 62.5 MHz efetivo
-//         (250 MHz / prescaler 4, confirmado em hal/timer.h).
-//         CkpSnapshot nao expoe
-//         tooth_period_tim5_ticks -- tooth_period_ns e o campo canonico.
-//
-// [FIX-3] AN1-4 (ADC primary_SE6b..9b) amostrados em sensors_tick_100ms() como
-//         passthrough, publicados em SensorData.an1_raw..an4_raw.
-//
-// [FIX-4] ADC primary e ADC1 configurados em 12-bit (MODE=01). Codigo original
-//         usava 16-bit (MODE=11) para todos os canais -- incorreto.
-//
-// [FIX-5] kMafTim5ClockHz corrigido para 62_500_000 Hz.
-//         TIM5 CH1 captura MAF no mesmo timer: 250 MHz / prescaler 4 = 62.5 MHz.
-//         Valores anteriores (24 MHz) estavam incorretos.
-// =============================================================================
-
 namespace {
 
 using ems::drv::SensorData;
@@ -116,6 +93,11 @@ static int16_t g_clt_table[128] = {};
 static int16_t g_iat_table[128] = {};
 
 static uint16_t g_fast_sample_accum = 0u;
+static bool     g_tps_pct_cache_valid = false;
+static uint16_t g_tps_pct_cache_raw = 0u;
+static uint16_t g_tps_pct_cache_min = 0u;
+static uint16_t g_tps_pct_cache_max = 0u;
+static uint16_t g_tps_pct_cache_x10 = 0u;
 
 // -----------------------------------------------------------------------------
 // reset_state — estado canônico usando kDefaultFault [FIX-1]
@@ -144,6 +126,7 @@ inline void reset_state() noexcept {
     g_oil_pos        = 0u;
     g_maf_period_pos = 0u;
     g_fast_sample_accum = 0u;
+    g_tps_pct_cache_valid = false;
 
     g_tps_raw_min = 200u;
     g_tps_raw_max = 3895u;
@@ -191,13 +174,13 @@ inline uint8_t sensor_bit(SensorId id) noexcept {
 
 inline uint16_t avg4(const uint16_t* v) noexcept {
     return static_cast<uint16_t>(
-        (static_cast<uint32_t>(v[0]) + v[1] + v[2] + v[3]) / 4u);
+        (static_cast<uint32_t>(v[0]) + v[1] + v[2] + v[3]) >> 2u);
 }
 
 inline uint16_t avg8(const uint16_t* v) noexcept {
     uint32_t sum = 0u;
     for (uint8_t i = 0u; i < 8u; ++i) { sum += v[i]; }
-    return static_cast<uint16_t>(sum / 8u);
+    return static_cast<uint16_t>(sum >> 3u);
 }
 
 // -----------------------------------------------------------------------------
@@ -217,11 +200,9 @@ inline void apply_fault(SensorId id, uint16_t raw) noexcept {
 
     const uint8_t bit = sensor_bit(id);
     if (f.active) {
-        g_data.fault_bits = static_cast<uint8_t>(
-            g_data.fault_bits | static_cast<uint8_t>(1u << bit));
+        g_data.fault_bits = static_cast<uint8_t>(g_data.fault_bits |  (1u << bit));
     } else {
-        g_data.fault_bits = static_cast<uint8_t>(
-            g_data.fault_bits & static_cast<uint8_t>(~(1u << bit)));
+        g_data.fault_bits = static_cast<uint8_t>(g_data.fault_bits & ~(1u << bit));
     }
 }
 
@@ -240,9 +221,9 @@ inline void init_tables() noexcept {
     }
 }
 
-// MAP: 0-5V linear → 0..250.0 kPa (×10)
+// MAP: 0-5V linear → 0..300.0 kPa (×10)
 inline uint16_t map_raw_to_kpa_x10(uint16_t raw) noexcept {
-    return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 2500u) / 4095u);
+    return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 3000u) / 4095u);
 }
 
 // O2: 0-5V linear → 0..1000 mV
@@ -263,6 +244,20 @@ inline uint16_t tps_raw_to_pct_x10(uint16_t raw) noexcept {
     const uint32_t num = static_cast<uint32_t>(raw - g_tps_raw_min) * 1000u;
     const uint32_t den = static_cast<uint32_t>(g_tps_raw_max - g_tps_raw_min);
     return static_cast<uint16_t>(num / den);
+}
+
+inline uint16_t tps_raw_to_pct_x10_cached(uint16_t raw) noexcept {
+    if (!g_tps_pct_cache_valid ||
+        g_tps_pct_cache_raw != raw ||
+        g_tps_pct_cache_min != g_tps_raw_min ||
+        g_tps_pct_cache_max != g_tps_raw_max) {
+        g_tps_pct_cache_valid = true;
+        g_tps_pct_cache_raw = raw;
+        g_tps_pct_cache_min = g_tps_raw_min;
+        g_tps_pct_cache_max = g_tps_raw_max;
+        g_tps_pct_cache_x10 = tps_raw_to_pct_x10(raw);
+    }
+    return g_tps_pct_cache_x10;
 }
 
 inline uint16_t maf_period_avg4() noexcept {
@@ -296,13 +291,13 @@ inline void sample_fast_channels() noexcept {
 
     g_data.tps_pct_x10 = g_fault[static_cast<uint8_t>(SensorId::TPS)].active
                          ? kFallbackTpsPctX10
-                         : tps_raw_to_pct_x10(avg4(g_tps_buf));
+                         : tps_raw_to_pct_x10_cached(avg4(g_tps_buf));
 
     // MAF: estimativa por frequência via TIM5 CH1 (250 MHz / prescaler 4 = 62.5 MHz)
     const uint16_t maf_avg_period = maf_period_avg4();
     g_data.maf_gps_x100 = (maf_avg_period > 0u)
-                          ? static_cast<uint16_t>(kMafTim5ClockHz / maf_avg_period)
-                          : 0u;
+                         ? kMafTim5ClockHz / static_cast<uint32_t>(maf_avg_period)
+                         : 0u;
 }
 
 }  // namespace
@@ -312,15 +307,14 @@ inline void sample_fast_channels() noexcept {
 // =============================================================================
 namespace ems::drv {
 
-// CRITICAL FIX: Sensor validation implementation
 bool validate_sensor_range(SensorId id, uint16_t raw_value) noexcept {
     const FaultTracker& f = g_fault[static_cast<uint8_t>(id)];
     return (raw_value >= f.range.min_raw) && (raw_value <= f.range.max_raw);
 }
 
 bool validate_sensor_values(const SensorData& data) noexcept {
-    // Validate MAP: 10 kPa to 250 kPa (×10)
-    if ((data.map_kpa_x10 < 100u) || (data.map_kpa_x10 > 2500u)) {
+    // Validate MAP: 10 kPa to 300 kPa (×10)
+    if ((data.map_kpa_x10 < 100u) || (data.map_kpa_x10 > 3000u)) {
         return false;
     }
     
@@ -383,11 +377,11 @@ void sensors_init() noexcept {
 // FIX-2 (revisado): CkpSnapshot não expõe tooth_period_tim5_ticks.
 // Converte tooth_period_ns → ticks usando o clock efetivo do TIM5.
 // TIM5: 250 MHz / prescaler 4 = 62.5 MHz -> 1 tick = 16 ns
-//   ticks = ns * 625 / 10000
+//   ticks = ns / 16
 // TIM6 trigger opera no mesmo clock efetivo → razão 1:1,
 // adc_trigger_on_tooth usa o valor diretamente sem nova conversão.
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
-    const uint32_t ticks = (snap.tooth_period_ns * 625u) / 10000u;
+    const uint32_t ticks = snap.tooth_period_ns >> 4u;
     ems::hal::adc_trigger_on_tooth(ticks);
 
     g_fast_sample_accum = static_cast<uint16_t>(
@@ -447,9 +441,9 @@ void sensors_tick_100ms() noexcept {
     g_data.an1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN1_SE6B);
     g_data.an2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN2_SE7B);
     g_data.an3_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN3_SE8B);
-    g_data.an4_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN4_SE9B);
+    const uint16_t vbatt_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN4_SE9B);
+    g_data.an4_raw = vbatt_raw;
 
-    const uint16_t vbatt_raw = g_data.an4_raw;
     const uint16_t vbatt_mv = vbatt_raw_to_mv(vbatt_raw);
     g_data.vbatt_mv = (vbatt_mv >= 6000u && vbatt_mv <= 18000u) ? vbatt_mv : 12000u;
 }

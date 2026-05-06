@@ -59,4 +59,55 @@ int8_t spark_table[kTableAxisSize][kTableAxisSize] = {
     {0, 1, 1, 2, 4, 6, 7, 6, 8, 9, 12, 14, 14, 13, 11, 9},
 };
 
+int16_t clt_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
+uint16_t clt_corr_x256[kCorrectionTableSize] = {384u, 352u, 320u, 288u, 272u, 256u, 256u, 256u};
+
+int16_t iat_corr_axis_x10[kCorrectionTableSize] = {-200, 0, 200, 400, 600, 800, 1000, 1200};
+uint16_t iat_corr_x256[kCorrectionTableSize] = {272u, 264u, 256u, 256u, 264u, 272u, 280u, 288u};
+
+int16_t warmup_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
+uint16_t warmup_corr_x256[kCorrectionTableSize] = {420u, 380u, 350u, 320u, 290u, 256u, 256u, 256u};
+
+uint16_t vbatt_corr_axis_mv[kCorrectionTableSize] = {9000u, 10000u, 11000u, 12000u, 13000u, 14000u, 15000u, 16000u};
+uint16_t injector_dead_time_us[kCorrectionTableSize] = {1400u, 1200u, 1050u, 900u, 800u, 700u, 650u, 600u};
+
+int16_t ae_clt_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
+uint16_t ae_clt_sens[kCorrectionTableSize] = {11u, 10u, 9u, 8u, 7u, 6u, 5u, 4u};
+uint16_t ae_tpsdot_threshold_x10 = 5u;
+uint16_t ae_taper_cycles = 8u;
+uint16_t ae_max_pw_us = 5000u;
+uint16_t ae_tpsdot_axis_x10[kAeRateTableSize] = {5u, 20u, 50u, 100u};
+uint16_t ae_pw_adder_us[kAeRateTableSize] = {300u, 800u, 1500u, 2500u};
+
+int16_t xtau_clt_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
+uint16_t xtau_x_fraction_q8[kCorrectionTableSize] = {77u, 70u, 64u, 54u, 45u, 35u, 28u, 24u};
+uint16_t xtau_tau_cycles[kCorrectionTableSize] = {32u, 28u, 24u, 20u, 16u, 12u, 10u, 8u};
+
+uint16_t crank_enter_rpm_x10 = 4500u;
+uint16_t crank_exit_rpm_x10 = 7000u;
+int16_t crank_spark_deg = 8;
+uint16_t crank_min_pw_us = 2500u;
+uint16_t crank_prime_tooth = 3u;
+uint16_t crank_prime_max_pw_us = 30000u;
+
+uint16_t dwell_vbatt_axis_mv[kIgnitionDwellTableSize] = {9000u, 10000u, 11000u, 12000u, 13000u, 14000u, 15000u, 16000u};
+uint16_t dwell_ms_x10_table[kIgnitionDwellTableSize] = {42u, 38u, 35u, 30u, 28u, 25u, 23u, 22u};
+
+uint32_t lambda_delay_rpm_axis_x10[kLambdaDelayTableSize] = {10000u, 25500u, 80000u};
+uint32_t lambda_delay_load_axis_kpa[kLambdaDelayTableSize] = {10u, 91u, 300u};
+uint16_t lambda_delay_ms_table[kLambdaDelayTableSize][kLambdaDelayTableSize] = {
+    {1100u, 550u, 200u},
+    {600u, 400u, 150u},
+    {300u, 150u, 80u},
+};
+
+uint16_t idle_spark_tps_max_x10 = 25u;
+uint16_t idle_spark_map_max_kpa = 80u;
+uint16_t idle_spark_rpm_min_x10 = 5000u;
+uint16_t idle_spark_window_above_target_x10 = 4000u;
+uint16_t idle_spark_deadband_rpm_x10 = 500u;
+uint16_t idle_spark_rpm_per_deg_x10 = 500u;
+int16_t idle_spark_retard_limit_deg = -8;
+int16_t idle_spark_advance_limit_deg = 12;
+
 }  // namespace ems::engine

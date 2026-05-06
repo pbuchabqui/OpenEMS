@@ -16,10 +16,10 @@ static uint16_t g_rx_tail = 0u;
 static uint16_t g_tx_head = 0u;
 static uint16_t g_tx_tail = 0u;
 
-// Phase-3 placeholder policy:
-// - USB transport is now the only TunerStudio path.
+// Pos-MVP placeholder policy:
+// - USB transport is not validated for the bench MVP.
 // - Until low-level USB FS driver is finalized, DTR is treated as true
-//   to keep protocol service path active.
+//   to keep the protocol service path harmlessly active.
 static bool g_dtr = true;
 static bool g_rts = true;
 

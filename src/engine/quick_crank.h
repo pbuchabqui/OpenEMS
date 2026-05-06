@@ -26,8 +26,13 @@ uint32_t quick_crank_apply_pw_us(uint32_t base_pw_us,
                                  uint32_t min_pw_us) noexcept;
 
 /**
- * @brief Atualiza o valor de CLT usado pelo hook de dente para calcular o
+ * @brief Atualiza CLT e dead time usados pelo hook de dente para calcular o
  *        prime pulse. Chamar do loop de fundo (2 ms); seguro para ISR-side.
+ */
+void quick_crank_set_prime_context(int16_t clt_x10, uint16_t dead_time_us) noexcept;
+
+/**
+ * @brief Compatibilidade: atualiza apenas CLT do contexto de prime.
  */
 void quick_crank_set_clt(int16_t clt_x10) noexcept;
 

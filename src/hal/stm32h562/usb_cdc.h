@@ -14,7 +14,7 @@
  *   usb_cdc_dtr()         — verifica Data Terminal Ready
  *   usb_cdc_rts()         — verifica Request To Send
  *
- * Uso: TunerStudio protocol via USB (Phase 3 feature)
+ * Uso: transporte USB da UI proprietaria (pos-MVP)
  */
 
 #include <cstdint>

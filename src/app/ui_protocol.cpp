@@ -1,4 +1,4 @@
-#include "app/tuner_studio.h"
+#include "app/ui_protocol.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -7,9 +7,12 @@
 #include "app/can_stack.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
+#include "engine/calibration.h"
 #include "engine/ecu_sched.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
+#include "engine/math_utils.h"
+#include "hal/flash.h"
 
 namespace {
 
@@ -31,12 +34,16 @@ enum class ParseState : uint8_t {
     READ_ARGS = 1u,
     WRITE_ARGS = 2u,
     WRITE_DATA = 3u,
+    BURN_ARGS = 4u,
 };
 
 alignas(4) static uint8_t g_page0[512] = {};
 alignas(4) static uint8_t g_page1_ve[256] = {};
 alignas(4) static uint8_t g_page2_spark[256] = {};
-alignas(4) static uint8_t g_page3_rt[64] = {};
+alignas(4) static uint8_t g_page3_rt[64]      = {};
+alignas(4) static uint8_t g_page4_lambda[512] = {};   // lambda_target_table_x1000
+alignas(4) static uint8_t g_page5_corr[256]   = {};   // tabelas de correção 1D
+alignas(4) static uint8_t g_page6_xtau[80]    = {};   // X-Tau, AE rate curve, quick crank
 
 static volatile uint8_t g_rx_buf[kRxSize] = {};
 static volatile uint16_t g_rx_head = 0u;
@@ -51,9 +58,6 @@ static uint8_t  g_rt_pw_ms_x10   = 0u;
 static int8_t   g_rt_advance_deg  = 0;
 static int8_t   g_rt_stft_p100   = 0;
 static uint32_t g_rt_sched_late_events = 0u;
-static uint32_t g_rt_sched_late_max_delay_ticks = 0u;
-static uint8_t  g_rt_sched_queue_depth_peak = 0u;
-static uint8_t  g_rt_sched_queue_depth_last_cycle_peak = 0u;
 static uint32_t g_rt_sched_cycle_schedule_drop_count = 0u;
 static uint32_t g_rt_sched_calibration_clamp_count = 0u;
 static uint32_t g_rt_seed_loaded_count = 0u;
@@ -61,6 +65,8 @@ static uint32_t g_rt_seed_confirmed_count = 0u;
 static uint32_t g_rt_seed_rejected_count = 0u;
 static uint8_t  g_rt_sync_state_raw = 0u;
 static uint32_t g_rt_ivc_clamp_count = 0u;
+static uint32_t g_rt_loop2ms_last_us = 0u;
+static uint32_t g_rt_loop2ms_max_us = 0u;
 
 static ParseState g_state = ParseState::IDLE;
 static uint8_t g_cmd_page = 0u;
@@ -68,6 +74,8 @@ static uint16_t g_cmd_off = 0u;
 static uint16_t g_cmd_len = 0u;
 static uint8_t g_arg_pos = 0u;
 static uint16_t g_write_pos = 0u;
+static bool g_write_ram_only = false;
+static uint8_t g_dirty_page_mask = 0u;
 
 inline void enter_critical() noexcept {
 #if defined(__arm__) || defined(__thumb__)
@@ -82,32 +90,35 @@ inline void exit_critical() noexcept {
 }
 
 inline uint16_t page_size(uint8_t page) noexcept {
-    if (page == 0x00u) {
+    if (page == 0x00u || page == 0x04u) {
         return 512u;
     }
-    if (page == 0x01u || page == 0x02u) {
+    if (page == 0x01u || page == 0x02u || page == 0x05u) {
         return 256u;
     }
     if (page == 0x03u) {
         return 64u;
     }
+    if (page == 0x06u) { return static_cast<uint16_t>(sizeof(g_page6_xtau)); }
     return 0u;
 }
 
 inline uint8_t* page_ptr(uint8_t page) noexcept {
-    if (page == 0x00u) {
-        return g_page0;
-    }
-    if (page == 0x01u) {
-        return g_page1_ve;
-    }
-    if (page == 0x02u) {
-        return g_page2_spark;
-    }
-    if (page == 0x03u) {
-        return g_page3_rt;
-    }
+    if (page == 0x00u) { return g_page0; }
+    if (page == 0x01u) { return g_page1_ve; }
+    if (page == 0x02u) { return g_page2_spark; }
+    if (page == 0x03u) { return g_page3_rt; }
+    if (page == 0x04u) { return g_page4_lambda; }
+    if (page == 0x05u) { return g_page5_corr; }
+    if (page == 0x06u) { return g_page6_xtau; }
     return nullptr;
+}
+
+inline uint8_t normalize_page_id(uint8_t page) noexcept {
+    if (page >= static_cast<uint8_t>('0') && page <= static_cast<uint8_t>('6')) {
+        return static_cast<uint8_t>(page - static_cast<uint8_t>('0'));
+    }
+    return page;
 }
 
 inline bool tx_push(uint8_t byte) noexcept {
@@ -142,20 +153,6 @@ inline bool rx_pop(uint8_t& byte) noexcept {
     return ok;
 }
 
-inline int16_t clamp_i16(int32_t v, int16_t lo, int16_t hi) noexcept {
-    if (v < lo) {
-        return lo;
-    }
-    if (v > hi) {
-        return hi;
-    }
-    return static_cast<int16_t>(v);
-}
-
-inline uint8_t clamp_u8(uint32_t v) noexcept {
-    return static_cast<uint8_t>((v > 255u) ? 255u : v);
-}
-
 inline void write_u32_le(uint8_t* dst, uint32_t v) noexcept {
     dst[0] = static_cast<uint8_t>(v & 0xFFu);
     dst[1] = static_cast<uint8_t>((v >> 8u) & 0xFFu);
@@ -164,19 +161,19 @@ inline void write_u32_le(uint8_t* dst, uint32_t v) noexcept {
 }
 
 inline void update_realtime_page() noexcept {
-    ems::app::TsRealtimeData rt = {};
+    ems::app::UiRealtimeData rt = {};
     const ems::drv::CkpSnapshot c = ems::drv::ckp_snapshot();
     const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
     rt.rpm = static_cast<uint16_t>((c.rpm_x10 > 655350u) ? 65535u : (c.rpm_x10 / 10u));
-    rt.map_kpa = clamp_u8(s.map_kpa_x10 / 10u);
-    rt.tps_pct = clamp_u8(s.tps_pct_x10 / 10u);
+    rt.map_kpa = ems::engine::clamp_u8(s.map_kpa_x10 / 10u);
+    rt.tps_pct = ems::engine::clamp_u8(s.tps_pct_x10 / 10u);
 
-    rt.clt_p40 = static_cast<int8_t>(clamp_i16((static_cast<int32_t>(s.clt_degc_x10) / 10) + 40, -128, 127));
-    rt.iat_p40 = static_cast<int8_t>(clamp_i16((static_cast<int32_t>(s.iat_degc_x10) / 10) + 40, -128, 127));
+    rt.clt_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.clt_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
+    rt.iat_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.iat_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
 
     // WBO2 via CAN (lambda × 1000); ÷4 para caber em uint8_t (0..375 range típico)
-    rt.o2_mv_d4 = clamp_u8(ems::app::can_stack_lambda_milli() / 4u);
+    rt.o2_mv_d4 = ems::engine::clamp_u8(ems::app::can_stack_lambda_milli() / 4u);
     rt.pw1_ms_x10  = g_rt_pw_ms_x10;
     rt.advance_p40 = static_cast<uint8_t>(static_cast<int16_t>(g_rt_advance_deg) + 40);
     rt.ve          = g_page1_ve[0];
@@ -206,9 +203,9 @@ inline void update_realtime_page() noexcept {
     }
     rt.status_bits = status;
     write_u32_le(&rt.reserved[0], g_rt_sched_late_events);
-    write_u32_le(&rt.reserved[4], g_rt_sched_late_max_delay_ticks);
-    rt.reserved[8] = g_rt_sched_queue_depth_peak;
-    rt.reserved[9] = g_rt_sched_queue_depth_last_cycle_peak;
+    write_u32_le(&rt.reserved[4], 0u);   // late_max_delay_ticks: not yet tracked
+    rt.reserved[8] = 0u;                 // queue_depth_peak: not yet tracked
+    rt.reserved[9] = 0u;                 // queue_depth_last_cycle_peak: not yet tracked
     write_u32_le(&rt.reserved[10], g_rt_sched_cycle_schedule_drop_count);
     write_u32_le(&rt.reserved[14], g_rt_sched_calibration_clamp_count);
     write_u32_le(&rt.reserved[18], g_rt_seed_loaded_count);
@@ -216,6 +213,8 @@ inline void update_realtime_page() noexcept {
     write_u32_le(&rt.reserved[26], g_rt_seed_rejected_count);
     rt.reserved[30] = g_rt_sync_state_raw;
     write_u32_le(&rt.reserved[31], g_rt_ivc_clamp_count);
+    write_u32_le(&rt.reserved[35], g_rt_loop2ms_last_us);
+    write_u32_le(&rt.reserved[39], g_rt_loop2ms_max_us);
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }
@@ -227,6 +226,7 @@ inline void reset_parser() noexcept {
     g_cmd_len = 0u;
     g_arg_pos = 0u;
     g_write_pos = 0u;
+    g_write_ram_only = false;
 }
 
 inline bool command_bounds_ok() noexcept {
@@ -248,18 +248,150 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
         std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));
+    } else if (page == 0x04u) {
+        std::memcpy(g_page4_lambda, ems::engine::lambda_target_table_x1000, 512u);
+    } else if (page == 0x05u) {
+        uint8_t* p = g_page5_corr;
+        std::memcpy(p +   0, ems::engine::clt_corr_axis_x10,          16u);
+        std::memcpy(p +  16, ems::engine::clt_corr_x256,              16u);
+        std::memcpy(p +  32, ems::engine::iat_corr_axis_x10,          16u);
+        std::memcpy(p +  48, ems::engine::iat_corr_x256,              16u);
+        std::memcpy(p +  64, ems::engine::warmup_corr_axis_x10,       16u);
+        std::memcpy(p +  80, ems::engine::warmup_corr_x256,           16u);
+        std::memcpy(p +  96, ems::engine::vbatt_corr_axis_mv,         16u);
+        std::memcpy(p + 112, ems::engine::injector_dead_time_us,      16u);
+        std::memcpy(p + 128, ems::engine::ae_clt_corr_axis_x10,       16u);
+        std::memcpy(p + 144, ems::engine::ae_clt_sens,                16u);
+        std::memcpy(p + 160, ems::engine::dwell_vbatt_axis_mv,        16u);
+        std::memcpy(p + 176, ems::engine::dwell_ms_x10_table,         16u);
+        std::memcpy(p + 192, ems::engine::lambda_delay_rpm_axis_x10,  12u);
+        std::memcpy(p + 204, ems::engine::lambda_delay_load_axis_kpa, 12u);
+        std::memcpy(p + 216, ems::engine::lambda_delay_ms_table,      18u);
+        std::memcpy(p + 234, &ems::engine::ae_tpsdot_threshold_x10, 2u);
+        std::memcpy(p + 236, &ems::engine::ae_taper_cycles,         2u);
+        std::memcpy(p + 238, &ems::engine::ae_max_pw_us,            2u);
+        std::memcpy(p + 240, &ems::engine::idle_spark_tps_max_x10,             2u);
+        std::memcpy(p + 242, &ems::engine::idle_spark_map_max_kpa,             2u);
+        std::memcpy(p + 244, &ems::engine::idle_spark_rpm_min_x10,             2u);
+        std::memcpy(p + 246, &ems::engine::idle_spark_window_above_target_x10, 2u);
+        std::memcpy(p + 248, &ems::engine::idle_spark_deadband_rpm_x10,        2u);
+        std::memcpy(p + 250, &ems::engine::idle_spark_rpm_per_deg_x10,         2u);
+        std::memcpy(p + 252, &ems::engine::idle_spark_retard_limit_deg,        2u);
+        std::memcpy(p + 254, &ems::engine::idle_spark_advance_limit_deg,       2u);
+    } else if (page == 0x06u) {
+        uint8_t* p = g_page6_xtau;
+        std::memset(p, 0, sizeof(g_page6_xtau));
+        std::memcpy(p +  0, ems::engine::xtau_clt_axis_x10,     16u);
+        std::memcpy(p + 16, ems::engine::xtau_x_fraction_q8,    16u);
+        std::memcpy(p + 32, ems::engine::xtau_tau_cycles,       16u);
+        std::memcpy(p + 48, ems::engine::ae_tpsdot_axis_x10,     8u);
+        std::memcpy(p + 56, ems::engine::ae_pw_adder_us,         8u);
+        std::memcpy(p + 64, &ems::engine::crank_enter_rpm_x10,    2u);
+        std::memcpy(p + 66, &ems::engine::crank_exit_rpm_x10,     2u);
+        std::memcpy(p + 68, &ems::engine::crank_spark_deg,        2u);
+        std::memcpy(p + 70, &ems::engine::crank_min_pw_us,        2u);
+        std::memcpy(p + 72, &ems::engine::crank_prime_tooth,      2u);
+        std::memcpy(p + 74, &ems::engine::crank_prime_max_pw_us,  2u);
     }
 }
 
 inline void sync_table_from_page(uint8_t page) noexcept {
     if (page == 0x00u) {
-        /* Page 0, byte 0: ivc_abdc_deg */
         ::ecu_sched_set_ivc(g_page0[0]);
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
         std::memcpy(ems::engine::spark_table, g_page2_spark, sizeof(g_page2_spark));
+    } else if (page == 0x04u) {
+        std::memcpy(ems::engine::lambda_target_table_x1000, g_page4_lambda, 512u);
+    } else if (page == 0x05u) {
+        const uint8_t* p = g_page5_corr;
+        std::memcpy(ems::engine::clt_corr_axis_x10,          p +   0, 16u);
+        std::memcpy(ems::engine::clt_corr_x256,              p +  16, 16u);
+        std::memcpy(ems::engine::iat_corr_axis_x10,          p +  32, 16u);
+        std::memcpy(ems::engine::iat_corr_x256,              p +  48, 16u);
+        std::memcpy(ems::engine::warmup_corr_axis_x10,       p +  64, 16u);
+        std::memcpy(ems::engine::warmup_corr_x256,           p +  80, 16u);
+        std::memcpy(ems::engine::vbatt_corr_axis_mv,         p +  96, 16u);
+        std::memcpy(ems::engine::injector_dead_time_us,      p + 112, 16u);
+        std::memcpy(ems::engine::ae_clt_corr_axis_x10,       p + 128, 16u);
+        std::memcpy(ems::engine::ae_clt_sens,                p + 144, 16u);
+        std::memcpy(ems::engine::dwell_vbatt_axis_mv,        p + 160, 16u);
+        std::memcpy(ems::engine::dwell_ms_x10_table,         p + 176, 16u);
+        std::memcpy(ems::engine::lambda_delay_rpm_axis_x10,  p + 192, 12u);
+        std::memcpy(ems::engine::lambda_delay_load_axis_kpa, p + 204, 12u);
+        std::memcpy(ems::engine::lambda_delay_ms_table,      p + 216, 18u);
+        std::memcpy(&ems::engine::ae_tpsdot_threshold_x10, p + 234, 2u);
+        std::memcpy(&ems::engine::ae_taper_cycles,         p + 236, 2u);
+        std::memcpy(&ems::engine::ae_max_pw_us,            p + 238, 2u);
+        std::memcpy(&ems::engine::idle_spark_tps_max_x10,             p + 240, 2u);
+        std::memcpy(&ems::engine::idle_spark_map_max_kpa,             p + 242, 2u);
+        std::memcpy(&ems::engine::idle_spark_rpm_min_x10,             p + 244, 2u);
+        std::memcpy(&ems::engine::idle_spark_window_above_target_x10, p + 246, 2u);
+        std::memcpy(&ems::engine::idle_spark_deadband_rpm_x10,        p + 248, 2u);
+        std::memcpy(&ems::engine::idle_spark_rpm_per_deg_x10,         p + 250, 2u);
+        std::memcpy(&ems::engine::idle_spark_retard_limit_deg,        p + 252, 2u);
+        std::memcpy(&ems::engine::idle_spark_advance_limit_deg,       p + 254, 2u);
+    } else if (page == 0x06u) {
+        const uint8_t* p = g_page6_xtau;
+        std::memcpy(ems::engine::xtau_clt_axis_x10,  p +  0, 16u);
+        std::memcpy(ems::engine::xtau_x_fraction_q8, p + 16, 16u);
+        std::memcpy(ems::engine::xtau_tau_cycles,    p + 32, 16u);
+        std::memcpy(ems::engine::ae_tpsdot_axis_x10, p + 48,  8u);
+        std::memcpy(ems::engine::ae_pw_adder_us,     p + 56,  8u);
+        std::memcpy(&ems::engine::crank_enter_rpm_x10,   p + 64, 2u);
+        std::memcpy(&ems::engine::crank_exit_rpm_x10,    p + 66, 2u);
+        std::memcpy(&ems::engine::crank_spark_deg,       p + 68, 2u);
+        std::memcpy(&ems::engine::crank_min_pw_us,       p + 70, 2u);
+        std::memcpy(&ems::engine::crank_prime_tooth,     p + 72, 2u);
+        std::memcpy(&ems::engine::crank_prime_max_pw_us, p + 74, 2u);
     }
+}
+
+inline uint8_t editable_page_bit(uint8_t page) noexcept {
+    if (page == 0x01u) { return 0x01u; }
+    if (page == 0x02u) { return 0x02u; }
+    if (page == 0x04u) { return 0x04u; }
+    if (page == 0x05u) { return 0x08u; }
+    if (page == 0x06u) { return 0x10u; }
+    return 0u;
+}
+
+inline void mark_page_dirty(uint8_t page) noexcept {
+    g_dirty_page_mask = static_cast<uint8_t>(g_dirty_page_mask | editable_page_bit(page));
+}
+
+inline void clear_page_dirty(uint8_t page) noexcept {
+    g_dirty_page_mask = static_cast<uint8_t>(g_dirty_page_mask & static_cast<uint8_t>(~editable_page_bit(page)));
+}
+
+inline bool burn_page_to_flash(uint8_t page) noexcept {
+    if (page == 0x01u) {
+        ems::hal::nvm_save_calibration(1u, g_page1_ve, static_cast<uint16_t>(sizeof(g_page1_ve)));
+        clear_page_dirty(page);
+        return true;
+    }
+    if (page == 0x02u) {
+        ems::hal::nvm_save_calibration(2u, g_page2_spark, static_cast<uint16_t>(sizeof(g_page2_spark)));
+        clear_page_dirty(page);
+        return true;
+    }
+    if (page == 0x04u) {
+        ems::hal::nvm_save_calibration(3u, g_page4_lambda, 512u);
+        clear_page_dirty(page);
+        return true;
+    }
+    if (page == 0x05u) {
+        ems::hal::nvm_save_calibration(4u, g_page5_corr, static_cast<uint16_t>(sizeof(g_page5_corr)));
+        clear_page_dirty(page);
+        return true;
+    }
+    if (page == 0x06u) {
+        ems::hal::nvm_save_calibration(5u, g_page6_xtau, static_cast<uint16_t>(sizeof(g_page6_xtau)));
+        clear_page_dirty(page);
+        return true;
+    }
+    return false;
 }
 
 inline void handle_read_done() noexcept {
@@ -288,6 +420,10 @@ inline void handle_write_done() noexcept {
     }
 
     sync_table_from_page(g_cmd_page);
+    mark_page_dirty(g_cmd_page);
+    if (!g_write_ram_only) {
+        (void)burn_page_to_flash(g_cmd_page);
+    }
     tx_push(kAckOk);
     reset_parser();
 }
@@ -344,14 +480,47 @@ inline void parse_byte(uint8_t b) noexcept {
             g_cmd_off = 0u;
             g_cmd_len = 0u;
             g_write_pos = 0u;
+            g_write_ram_only = false;
+            return;
         }
+        if (b == static_cast<uint8_t>('x')) {
+            g_state = ParseState::WRITE_ARGS;
+            g_arg_pos = 0u;
+            g_cmd_page = 0u;
+            g_cmd_off = 0u;
+            g_cmd_len = 0u;
+            g_write_pos = 0u;
+            g_write_ram_only = true;
+            return;
+        }
+        if (b == static_cast<uint8_t>('b')) {
+            g_state = ParseState::BURN_ARGS;
+            g_arg_pos = 0u;
+            g_cmd_page = 0u;
+            return;
+        }
+        if (b == static_cast<uint8_t>('d')) {
+            tx_push(g_dirty_page_mask);
+            return;
+        }
+        return;
+    }
+
+    if (g_state == ParseState::BURN_ARGS) {
+        g_cmd_page = normalize_page_id(b);
+        if (burn_page_to_flash(g_cmd_page)) {
+            tx_push(kAckOk);
+        } else {
+            tx_push(kAckErr);
+        }
+        reset_parser();
         return;
     }
 
     if (g_state == ParseState::READ_ARGS || g_state == ParseState::WRITE_ARGS) {
         switch (g_arg_pos) {
             case 0u:
-                g_cmd_page = b;
+                g_cmd_page = normalize_page_id(b);
                 break;
             case 1u:
                 g_cmd_off = b;
@@ -421,13 +590,17 @@ inline void reset_pages() noexcept {
     std::memcpy(g_page1_ve,    ems::engine::ve_table,    sizeof(g_page1_ve));
     std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));
     std::memset(g_page3_rt, 0, sizeof(g_page3_rt));
+    sync_page_from_table(0x04u);
+    sync_page_from_table(0x05u);
+    sync_page_from_table(0x06u);
+    g_dirty_page_mask = 0u;
 }
 
 }  // namespace
 
 namespace ems::app {
 
-void ts_init() noexcept {
+void ui_init() noexcept {
     enter_critical();
     g_rx_head = 0u;
     g_rx_tail = 0u;
@@ -438,11 +611,11 @@ void ts_init() noexcept {
 
     reset_pages();
     reset_parser();
-    ts_update_rt_metrics(0u, 0, 0);
-    ts_update_rt_sched_diag(0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
+    ui_update_rt_metrics(0u, 0, 0);
+    ui_update_rt_sched_diag(0u, 0u, 0u, 0u, 0u, 0u, 0u);
 }
 
-void ts_rx_byte(uint8_t byte) noexcept {
+void ui_rx_byte(uint8_t byte) noexcept {
     const uint16_t next = static_cast<uint16_t>((g_rx_head + 1u) & kRxMask);
     if (next != g_rx_tail) {
         g_rx_buf[g_rx_head] = byte;
@@ -452,11 +625,11 @@ void ts_rx_byte(uint8_t byte) noexcept {
 }
 
 
-void ts_uart0_rx_isr_byte(uint8_t byte) noexcept {
-    ts_rx_byte(byte);
+void ui_uart0_rx_isr_byte(uint8_t byte) noexcept {
+    ui_rx_byte(byte);
 }
 
-void ts_process() noexcept {
+void ui_process() noexcept {
     if (!g_rx_flag && g_rx_head == g_rx_tail) {
         return;
     }
@@ -467,7 +640,7 @@ void ts_process() noexcept {
     }
 }
 
-bool ts_tx_pop(uint8_t& byte) noexcept {
+bool ui_tx_pop(uint8_t& byte) noexcept {
     if (g_tx_head == g_tx_tail) {
         return false;
     }
@@ -476,20 +649,17 @@ bool ts_tx_pop(uint8_t& byte) noexcept {
     return true;
 }
 
-uint16_t ts_tx_available() noexcept {
+uint16_t ui_tx_available() noexcept {
     return static_cast<uint16_t>((g_tx_head - g_tx_tail) & kTxMask);
 }
 
-void ts_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p100) noexcept {
+void ui_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p100) noexcept {
     g_rt_pw_ms_x10  = pw_ms_x10;
     g_rt_advance_deg = advance_deg;
     g_rt_stft_p100  = stft_p100;
 }
 
-void ts_update_rt_sched_diag(uint32_t late_events,
-                             uint32_t late_max_delay_ticks,
-                             uint8_t queue_depth_peak,
-                             uint8_t queue_depth_last_cycle_peak,
+void ui_update_rt_sched_diag(uint32_t late_events,
                              uint32_t cycle_schedule_drop_count,
                              uint32_t calibration_clamp_count,
                              uint32_t seed_loaded_count,
@@ -497,9 +667,6 @@ void ts_update_rt_sched_diag(uint32_t late_events,
                              uint32_t seed_rejected_count,
                              uint8_t sync_state_raw) noexcept {
     g_rt_sched_late_events = late_events;
-    g_rt_sched_late_max_delay_ticks = late_max_delay_ticks;
-    g_rt_sched_queue_depth_peak = queue_depth_peak;
-    g_rt_sched_queue_depth_last_cycle_peak = queue_depth_last_cycle_peak;
     g_rt_sched_cycle_schedule_drop_count = cycle_schedule_drop_count;
     g_rt_sched_calibration_clamp_count = calibration_clamp_count;
     g_rt_seed_loaded_count = seed_loaded_count;
@@ -508,13 +675,19 @@ void ts_update_rt_sched_diag(uint32_t late_events,
     g_rt_sync_state_raw = sync_state_raw;
 }
 
-void ts_update_ivc_diag(uint32_t ivc_clamp_count) noexcept {
+void ui_update_loop_diag(uint32_t loop2ms_last_us,
+                         uint32_t loop2ms_max_us) noexcept {
+    g_rt_loop2ms_last_us = loop2ms_last_us;
+    g_rt_loop2ms_max_us = loop2ms_max_us;
+}
+
+void ui_update_ivc_diag(uint32_t ivc_clamp_count) noexcept {
     g_rt_ivc_clamp_count = ivc_clamp_count;
 }
 
 #if defined(EMS_HOST_TEST)
-void ts_test_reset() noexcept {
-    ts_init();
+void ui_test_reset() noexcept {
+    ui_init();
 }
 #endif
 

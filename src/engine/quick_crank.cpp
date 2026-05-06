@@ -1,4 +1,6 @@
 #include "engine/quick_crank.h"
+#include "engine/calibration.h"
+#include "engine/math_utils.h"
 #include "drv/ckp.h"
 #include "engine/fuel_calc.h"
 
@@ -11,12 +13,9 @@ struct P2 {
     uint16_t y;
 };
 
-constexpr uint32_t kCrankEnterRpmX10 = 4500u;
-constexpr uint32_t kCrankExitRpmX10 = 7000u;
-constexpr int16_t kCrankSparkDeg = 8;
-constexpr uint32_t kCrankMinPwUs = 2500u;
-constexpr uint32_t kPrimePwMaxUs = 30000u;
-constexpr uint8_t  kPrimeToothTarget = 5u;  // 5º dente desde o início do cranking
+constexpr uint16_t kCrankExitRpmMinX10 = 5000u;
+constexpr uint16_t kCrankExitRpmMaxX10 = 12000u;
+constexpr uint16_t kPrimePwMaxClampUs = 30000u;
 
 constexpr P2 kCrankFuelMult[] = {
     {-400, 768},  // 3.00x
@@ -58,6 +57,7 @@ volatile bool     g_prime_done        = false; ///< Já disparado neste ciclo de
 volatile bool     g_prime_pending     = false; ///< Sinaliza loop de fundo
 volatile uint32_t g_prime_pw_us       = 0u;   ///< PW calculada para disparo
 int16_t           g_prime_clt_x10    = 900;   ///< CLT mais recente (do loop de fundo)
+uint16_t          g_prime_dead_time_us = 900u; ///< Dead time mais recente, corr. por Vbatt
 
 uint16_t interp_u16(const P2* table, uint8_t n, int16_t x) noexcept {
     if (x <= table[0].x) {
@@ -80,14 +80,27 @@ uint16_t interp_u16(const P2* table, uint8_t n, int16_t x) noexcept {
     return table[n - 1u].y;
 }
 
-uint16_t clamp_u16(uint32_t v, uint16_t lo, uint16_t hi) noexcept {
-    if (v < lo) {
-        return lo;
+uint16_t sanitized_crank_exit_rpm_x10() noexcept {
+    uint16_t exit_rpm = ems::engine::crank_exit_rpm_x10;
+    if (exit_rpm < kCrankExitRpmMinX10) {
+        exit_rpm = kCrankExitRpmMinX10;
     }
-    if (v > hi) {
-        return hi;
+    if (exit_rpm > kCrankExitRpmMaxX10) {
+        exit_rpm = kCrankExitRpmMaxX10;
     }
-    return static_cast<uint16_t>(v);
+    return exit_rpm;
+}
+
+uint16_t sanitized_crank_enter_rpm_x10() noexcept {
+    uint16_t enter_rpm = ems::engine::crank_enter_rpm_x10;
+    if (enter_rpm < 1000u) {
+        enter_rpm = 1000u;
+    }
+    const uint16_t exit_rpm = sanitized_crank_exit_rpm_x10();
+    if (enter_rpm > exit_rpm) {
+        enter_rpm = exit_rpm;
+    }
+    return enter_rpm;
 }
 
 bool detect_cranking(uint32_t rpm_x10, bool sync_available) noexcept {
@@ -95,9 +108,31 @@ bool detect_cranking(uint32_t rpm_x10, bool sync_available) noexcept {
         return false;
     }
     if (g_prev_cranking) {
-        return rpm_x10 < kCrankExitRpmX10;
+        return rpm_x10 < sanitized_crank_exit_rpm_x10();
     }
-    return rpm_x10 <= kCrankEnterRpmX10;
+    return rpm_x10 <= sanitized_crank_enter_rpm_x10();
+}
+
+uint8_t sanitized_prime_tooth() noexcept {
+    const uint16_t tooth = ems::engine::crank_prime_tooth;
+    if (tooth < 1u) {
+        return 1u;
+    }
+    if (tooth > 20u) {
+        return 20u;
+    }
+    return static_cast<uint8_t>(tooth);
+}
+
+uint16_t sanitized_prime_max_pw_us() noexcept {
+    const uint16_t max_pw = ems::engine::crank_prime_max_pw_us;
+    if (max_pw < 1000u) {
+        return 1000u;
+    }
+    if (max_pw > kPrimePwMaxClampUs) {
+        return kPrimePwMaxClampUs;
+    }
+    return max_pw;
 }
 
 uint16_t afterstart_mult_x256(uint32_t now_ms, int16_t clt_x10) noexcept {
@@ -114,7 +149,7 @@ uint16_t afterstart_mult_x256(uint32_t now_ms, int16_t clt_x10) noexcept {
         clt_x10);
     const uint32_t decay = static_cast<uint32_t>(start - 256u) * elapsed;
     const uint32_t mult = static_cast<uint32_t>(start) - (decay / g_afterstart_duration_ms);
-    return clamp_u16(mult, 256u, 512u);
+    return static_cast<uint16_t>(ems::engine::clamp_u32(mult, 256u, 512u));
 }
 
 static inline void enter_critical() noexcept {
@@ -132,8 +167,8 @@ static inline void exit_critical() noexcept {
 }  // namespace
 
 // ── Override do hook de dente (ISR de CKP, prioridade 1) ────────────────────
-// Conta os primeiros kPrimeToothTarget dentes recebidos durante cranking.
-// Quando o 5º dente chega, calcula a PW e sinaliza o loop de fundo via
+// Conta os primeiros dentes recebidos durante cranking.
+// Quando o dente-alvo chega, calcula a PW e sinaliza o loop de fundo via
 // g_prime_pending. Não requer sincronização — opera em qualquer SyncState.
 namespace ems::drv {
 
@@ -142,20 +177,22 @@ void prime_on_tooth(const CkpSnapshot& snap) noexcept {
 
     if (g_prime_done) { return; }
 
-    // Só conta enquanto RPM indica cranking (< 700 RPM)
-    if (snap.rpm_x10 == 0u || snap.rpm_x10 >= kCrankExitRpmX10) { return; }
+    // Só conta enquanto RPM indica cranking.
+    if (snap.rpm_x10 == 0u || snap.rpm_x10 >= sanitized_crank_exit_rpm_x10()) { return; }
 
     ++g_prime_tooth_count;
-    if (g_prime_tooth_count < kPrimeToothTarget) { return; }
+    if (g_prime_tooth_count < sanitized_prime_tooth()) { return; }
 
-    // 5º dente: calcula PW usando a tabela de enriquecimento de cranking e
-    // o CLT mais recente atualizado pelo loop de fundo.
+    // Dente-alvo: calcula PW usando a tabela de enriquecimento de cranking,
+    // CLT e dead time mais recentes atualizados pelo loop de fundo.
     const uint32_t mult = interp_u16(
         kCrankFuelMult,
         static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
         g_prime_clt_x10);
-    uint32_t pw = (ems::engine::default_req_fuel_us() * static_cast<uint32_t>(mult)) >> 8u;
-    if (pw > kPrimePwMaxUs) { pw = kPrimePwMaxUs; }
+    uint32_t pw = ((ems::engine::kDefaultReqFuelUs * static_cast<uint32_t>(mult)) >> 8u) +
+        static_cast<uint32_t>(g_prime_dead_time_us);
+    const uint16_t prime_max_pw_us = sanitized_prime_max_pw_us();
+    if (pw > prime_max_pw_us) { pw = prime_max_pw_us; }
 
     g_prime_pw_us  = pw;
     g_prime_pending = true;
@@ -190,16 +227,23 @@ QuickCrankOutput quick_crank_update(uint32_t now_ms,
     const bool cranking = detect_cranking(rpm_x10, sync_available);
     out.cranking = cranking;
 
+    if (rpm_x10 == 0u) {
+        g_prime_tooth_count = 0u;
+        g_prime_done = false;
+        g_prime_pending = false;
+        g_prime_pw_us = 0u;
+    }
+
     if (cranking) {
-        out.spark_deg = kCrankSparkDeg;
-        out.min_pw_us = kCrankMinPwUs;
+        out.spark_deg = crank_spark_deg;
+        out.min_pw_us = crank_min_pw_us;
         out.fuel_mult_x256 = interp_u16(
             kCrankFuelMult,
             static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
             clt_x10);
         g_afterstart_duration_ms = 0u;
     } else {
-        if (g_prev_cranking && rpm_x10 >= kCrankExitRpmX10) {
+        if (g_prev_cranking && rpm_x10 >= sanitized_crank_exit_rpm_x10()) {
             g_afterstart_start_ms = now_ms;
             g_afterstart_duration_ms = interp_u16(
                 kAfterstartDurationMs,
@@ -229,8 +273,14 @@ uint32_t quick_crank_apply_pw_us(uint32_t base_pw_us,
     return out;
 }
 
-void quick_crank_set_clt(int16_t clt_x10) noexcept {
+void quick_crank_set_prime_context(int16_t clt_x10, uint16_t dead_time_us) noexcept {
     // Escrita atômica de int16_t em Cortex-M4 (single instrução STRH).
+    g_prime_clt_x10 = clt_x10;
+    g_prime_dead_time_us = dead_time_us;
+}
+
+void quick_crank_set_clt(int16_t clt_x10) noexcept {
+    // Mantém compatibilidade com chamadas antigas.
     g_prime_clt_x10 = clt_x10;
 }
 

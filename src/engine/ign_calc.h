@@ -7,19 +7,6 @@
 
 namespace ems::engine {
 
-inline constexpr uint8_t firing_order[cfg::kCylinderCount] = {
-    static_cast<uint8_t>(cfg::kFiringOrder[0] + 1u),
-    static_cast<uint8_t>(cfg::kFiringOrder[1] + 1u),
-    static_cast<uint8_t>(cfg::kFiringOrder[2] + 1u),
-    static_cast<uint8_t>(cfg::kFiringOrder[3] + 1u),
-};
-inline constexpr uint16_t cylinder_offset_deg[cfg::kCylinderCount] = {
-    cfg::kCylinderTdcDeg[0],
-    cfg::kCylinderTdcDeg[1],
-    cfg::kCylinderTdcDeg[2],
-    cfg::kCylinderTdcDeg[3],
-};
-
 struct IgnScheduleParams {
     uint16_t dwell_start_x10;
     uint16_t spark_x10;
@@ -32,13 +19,22 @@ struct InjScheduleParams {
     uint8_t cyl;
 };
 
-int16_t get_advance(uint16_t rpm_x10, uint16_t load_kpa) noexcept;
+struct AdvanceCorrections {
+    int16_t iat_deg;
+    int16_t clt_deg;
+    int16_t knock_retard_deg;
+};
+
+int16_t get_advance(uint32_t rpm_x10, uint16_t load_kpa) noexcept;
+int16_t get_advance_prepared(const Table2dLookup& lookup) noexcept;
 int16_t clamp_advance_deg(int16_t advance_deg) noexcept;
 
 int16_t calc_total_advance(int16_t base_advance_deg,
-                           int16_t corr_iat_deg,
-                           int16_t corr_clt_deg,
-                           int16_t knock_retard_deg) noexcept;
+                           AdvanceCorrections corr) noexcept;
+int16_t calc_idle_spark_correction_deg(uint32_t rpm_x10,
+                                       uint16_t idle_target_rpm_x10,
+                                       uint16_t tps_pct_x10,
+                                       uint16_t map_kpa) noexcept;
 
 uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv) noexcept;
 uint16_t calc_dwell_angle_x10(uint16_t dwell_ms_x10, uint16_t rpm) noexcept;
