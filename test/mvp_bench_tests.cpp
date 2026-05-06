@@ -3,16 +3,21 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "app/can_stack.h"
 #include "app/ui_protocol.h"
 #include "drv/ckp.h"
+#include "drv/sensors.h"
+#include "engine/auxiliaries.h"
 #include "engine/calibration.h"
 #include "engine/ecu_sched.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
+#include "engine/knock.h"
 #include "engine/quick_crank.h"
 #include "engine/table3d.h"
 #include "engine/transient_fuel.h"
 #include "hal/adc.h"
+#include "hal/can.h"
 #include "hal/flash.h"
 
 extern volatile uint32_t ems_test_tim5_ccr1;
