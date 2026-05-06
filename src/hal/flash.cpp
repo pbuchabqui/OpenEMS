@@ -181,10 +181,21 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
 
     // Arredondar len para múltiplo de 4
     const uint32_t len32 = (static_cast<uint32_t>(len) + 3u) & ~3u;
+    if (len32 > kSectorSize) { return false; }
+
+    const uint32_t whole_len = static_cast<uint32_t>(len) & ~3u;
+    const uint32_t tail_len = static_cast<uint32_t>(len) - whole_len;
 
     flash_unlock_bank2();
-    const bool ok = flash_erase_sector(sector) &&
-                    flash_write_words(dest, data, len32);
+    bool ok = flash_erase_sector(sector);
+    if (ok && whole_len != 0u) {
+        ok = flash_write_words(dest, data, whole_len);
+    }
+    if (ok && tail_len != 0u) {
+        uint8_t tail[4] = {0xFFu, 0xFFu, 0xFFu, 0xFFu};
+        std::memcpy(tail, data + whole_len, tail_len);
+        ok = flash_write_words(dest + whole_len, tail, sizeof(tail));
+    }
     flash_lock_bank2();
     return ok;
 }

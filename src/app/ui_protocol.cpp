@@ -367,27 +367,32 @@ inline void clear_page_dirty(uint8_t page) noexcept {
 
 inline bool burn_page_to_flash(uint8_t page) noexcept {
     if (page == 0x01u) {
-        ems::hal::nvm_save_calibration(1u, g_page1_ve, static_cast<uint16_t>(sizeof(g_page1_ve)));
+        const bool ok = ems::hal::nvm_save_calibration(1u, g_page1_ve, static_cast<uint16_t>(sizeof(g_page1_ve)));
+        if (!ok) { return false; }
         clear_page_dirty(page);
         return true;
     }
     if (page == 0x02u) {
-        ems::hal::nvm_save_calibration(2u, g_page2_spark, static_cast<uint16_t>(sizeof(g_page2_spark)));
+        const bool ok = ems::hal::nvm_save_calibration(2u, g_page2_spark, static_cast<uint16_t>(sizeof(g_page2_spark)));
+        if (!ok) { return false; }
         clear_page_dirty(page);
         return true;
     }
     if (page == 0x04u) {
-        ems::hal::nvm_save_calibration(3u, g_page4_lambda, 512u);
+        const bool ok = ems::hal::nvm_save_calibration(3u, g_page4_lambda, 512u);
+        if (!ok) { return false; }
         clear_page_dirty(page);
         return true;
     }
     if (page == 0x05u) {
-        ems::hal::nvm_save_calibration(4u, g_page5_corr, static_cast<uint16_t>(sizeof(g_page5_corr)));
+        const bool ok = ems::hal::nvm_save_calibration(4u, g_page5_corr, static_cast<uint16_t>(sizeof(g_page5_corr)));
+        if (!ok) { return false; }
         clear_page_dirty(page);
         return true;
     }
     if (page == 0x06u) {
-        ems::hal::nvm_save_calibration(5u, g_page6_xtau, static_cast<uint16_t>(sizeof(g_page6_xtau)));
+        const bool ok = ems::hal::nvm_save_calibration(5u, g_page6_xtau, static_cast<uint16_t>(sizeof(g_page6_xtau)));
+        if (!ok) { return false; }
         clear_page_dirty(page);
         return true;
     }
@@ -422,7 +427,11 @@ inline void handle_write_done() noexcept {
     sync_table_from_page(g_cmd_page);
     mark_page_dirty(g_cmd_page);
     if (!g_write_ram_only) {
-        (void)burn_page_to_flash(g_cmd_page);
+        if (!burn_page_to_flash(g_cmd_page)) {
+            tx_push(kAckErr);
+            reset_parser();
+            return;
+        }
     }
     tx_push(kAckOk);
     reset_parser();

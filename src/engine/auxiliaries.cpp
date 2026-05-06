@@ -17,6 +17,17 @@
 #endif
 
 #include "hal/timer.h"
+#include "hal/regs.h"
+
+#if defined(EMS_HOST_TEST)
+volatile uint32_t ems_test_aux_rcc_ahb2enr1 = 0u;
+volatile uint32_t ems_test_aux_gpiob_moder = 0u;
+volatile uint32_t ems_test_aux_gpiob_bsrr = 0u;
+#define RCC_AHB2ENR1 ems_test_aux_rcc_ahb2enr1
+#define RCC_AHB2ENR1_GPIOBEN (1u << 1u)
+#define GPIOB_MODER ems_test_aux_gpiob_moder
+#define GPIOB_BSRR ems_test_aux_gpiob_bsrr
+#endif
 
 namespace {
 
@@ -99,32 +110,10 @@ constexpr int16_t kVvtEscTargetDegX10[kVvtPts][kVvtPts] = {
     {160, 160, 170, 180, 190, 200, 205, 210, 215, 220, 225, 230},
 };
 
-#if defined(EMS_HOST_TEST)
-volatile uint32_t ems_test_portb_pddr = 0u;
-volatile uint32_t ems_test_fgpiob_psor = 0u;
-volatile uint32_t ems_test_fgpiob_pcor = 0u;
-volatile uint32_t ems_test_sim_scgc5 = 0u;
-volatile uint32_t ems_test_portb_pcr16 = 0u;
-volatile uint32_t ems_test_portb_pcr17 = 0u;
-#define GPIOB_PDDR ems_test_portb_pddr
-#define FGPIOB_PSOR ems_test_fgpiob_psor
-#define FGPIOB_PCOR ems_test_fgpiob_pcor
-#define SIM_SCGC5 ems_test_sim_scgc5
-#define PORTB_PCR16 ems_test_portb_pcr16
-#define PORTB_PCR17 ems_test_portb_pcr17
-#else
-#define GPIOB_PDDR (*reinterpret_cast<volatile uint32_t*>(0xF80FF054u))
-#define FGPIOB_PSOR (*reinterpret_cast<volatile uint32_t*>(0xF80FF044u))
-#define FGPIOB_PCOR (*reinterpret_cast<volatile uint32_t*>(0xF80FF048u))
-#define SIM_SCGC5 (*reinterpret_cast<volatile uint32_t*>(0x40048038u))
-#define PORTB_PCR16 (*reinterpret_cast<volatile uint32_t*>(0x4004A040u))
-#define PORTB_PCR17 (*reinterpret_cast<volatile uint32_t*>(0x4004A044u))
-#endif
-
-constexpr uint32_t SIM_SCGC5_PORTB_MASK = (1u << 10u);
-constexpr uint32_t PCR_MUX_GPIO = (1u << 8u);
-constexpr uint32_t kFanBit = (1u << 16u);
-constexpr uint32_t kPumpBit = (1u << 17u);
+constexpr uint8_t kFanPin = 12u;
+constexpr uint8_t kPumpPin = 13u;
+constexpr uint32_t kFanBit = (1u << kFanPin);
+constexpr uint32_t kPumpBit = (1u << kPumpPin);
 
 struct AuxState {
     bool key_on;
@@ -295,18 +284,18 @@ int16_t lookup_vvt_target(const int16_t table[kVvtPts][kVvtPts],
 void set_fan(bool on) noexcept {
     g.fan_on = on;
     if (on) {
-        FGPIOB_PSOR = kFanBit;
+        GPIOB_BSRR = kFanBit;
     } else {
-        FGPIOB_PCOR = kFanBit;
+        GPIOB_BSRR = (kFanBit << 16u);
     }
 }
 
 void set_pump(bool on) noexcept {
     g.pump_on = on;
     if (on) {
-        FGPIOB_PSOR = kPumpBit;
+        GPIOB_BSRR = kPumpBit;
     } else {
-        FGPIOB_PCOR = kPumpBit;
+        GPIOB_BSRR = (kPumpBit << 16u);
     }
 }
 
@@ -547,10 +536,9 @@ void auxiliaries_init() noexcept {
     ems::hal::tim4_set_duty(0u, 0u);
     ems::hal::tim4_set_duty(1u, 0u);
 
-    SIM_SCGC5 |= SIM_SCGC5_PORTB_MASK;
-    PORTB_PCR16 = PCR_MUX_GPIO;
-    PORTB_PCR17 = PCR_MUX_GPIO;
-    GPIOB_PDDR |= (kFanBit | kPumpBit);
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOBEN;
+    GPIOB_MODER = (GPIOB_MODER & ~(3u << (kFanPin * 2u))) | (1u << (kFanPin * 2u));
+    GPIOB_MODER = (GPIOB_MODER & ~(3u << (kPumpPin * 2u))) | (1u << (kPumpPin * 2u));
 
     set_fan(false);
     set_pump(false);

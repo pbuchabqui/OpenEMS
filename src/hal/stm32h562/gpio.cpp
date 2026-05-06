@@ -6,11 +6,8 @@ void gpio_set_af(volatile uint32_t* moder, volatile uint32_t* afrl, volatile uin
 {
     // Speed: high speed (11b) if ospeedr provided
     if (ospeedr) {
-        if (pin < 8u) {
-            *ospeedr |= (3u << (pin * 4u));  // OSPEEDR pin bits
-        } else {
-            *ospeedr |= (3u << ((pin - 8u) * 4u));
-        }
+        const uint32_t shift = static_cast<uint32_t>(pin) * 2u;
+        *ospeedr = (*ospeedr & ~(3u << shift)) | (3u << shift);
     }
 
     // Alternate function selection
