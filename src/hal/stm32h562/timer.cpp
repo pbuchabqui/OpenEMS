@@ -81,6 +81,7 @@ uint32_t tim5_count() noexcept {
 // ════════════════════════════════════════════════════════════════════════════
 
 void tim3_pwm_init(uint32_t freq_hz) {
+    if (freq_hz == 0u) { return; }
     RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
 
     // PA6 = TIM3_CH1 (IACV), PA7 = TIM3_CH2 (Wastegate) — AF2
@@ -107,6 +108,7 @@ void tim3_pwm_init(uint32_t freq_hz) {
 }
 
 void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
+    if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
     const uint32_t arr = TIM3_ARR;
     // CCR = (ARR+1) * duty_pct_x10 / 1000
     const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
@@ -122,6 +124,7 @@ void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
 // ════════════════════════════════════════════════════════════════════════════
 
 void tim4_pwm_init(uint32_t freq_hz) {
+    if (freq_hz == 0u) { return; }
     RCC_APB1LENR |= RCC_APB1LENR_TIM4EN;
 
     // PB6 = TIM4_CH1 (VVT Exhaust), PB7 = TIM4_CH2 (VVT Intake) — AF2
@@ -145,6 +148,7 @@ void tim4_pwm_init(uint32_t freq_hz) {
 }
 
 void tim4_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
+    if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
     const uint32_t arr = TIM4_ARR;
     const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
     if (ch == 0u) {

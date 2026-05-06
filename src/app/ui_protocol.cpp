@@ -413,6 +413,7 @@ inline void handle_read_done() noexcept {
     }
 
     const uint8_t* ptr = page_ptr(g_cmd_page);
+    if (ptr == nullptr) { tx_push(kAckErr); reset_parser(); return; }
     tx_push_bytes(ptr + g_cmd_off, g_cmd_len);
     reset_parser();
 }

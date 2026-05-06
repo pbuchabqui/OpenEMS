@@ -187,7 +187,9 @@ inline uint16_t avg8(const uint16_t* v) noexcept {
 // Detecção de falha — 3 amostras consecutivas fora do range → fault ativo
 // -----------------------------------------------------------------------------
 inline void apply_fault(SensorId id, uint16_t raw) noexcept {
-    FaultTracker& f = g_fault[static_cast<uint8_t>(id)];
+    const uint8_t idx = static_cast<uint8_t>(id);
+    if (idx >= 8u) { return; }
+    FaultTracker& f = g_fault[idx];
     const bool bad = (raw < f.range.min_raw) || (raw > f.range.max_raw);
 
     if (bad) {
@@ -199,6 +201,7 @@ inline void apply_fault(SensorId id, uint16_t raw) noexcept {
     }
 
     const uint8_t bit = sensor_bit(id);
+    if (bit >= 8u) { return; }
     if (f.active) {
         g_data.fault_bits = static_cast<uint8_t>(g_data.fault_bits |  (1u << bit));
     } else {
