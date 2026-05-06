@@ -111,10 +111,20 @@ static void adc_prepare_for_config(volatile uint32_t& cr) noexcept {
     // Aguardar estabilização do regulador (~20 µs)
     for (volatile uint32_t i = 0u; i < 5000u; ++i) { (void)i; }
 
-    // 2. Calibração single-ended
-    cr &= ~ADC_CR_ADCALDIF;  // single-ended (não diferencial)
-    cr |= ADC_CR_ADCAL;
-    while (cr & ADC_CR_ADCAL) { /* aguarda */ }
+	// 2. Calibração single-ended
+	cr &= ~ADC_CR_ADCALDIF; // single-ended (não diferencial)
+	cr |= ADC_CR_ADCAL;
+	// FIX: timeout na espera de ADCAL — sem isso, firmware congela se calibração falhar
+	{
+		uint32_t cal_to = 0u;
+		constexpr uint32_t kCalTimeout = 1000000u;
+		while ((cr & ADC_CR_ADCAL) != 0u) {
+			if (++cal_to >= kCalTimeout) {
+				++g_adc_init_faults;
+				break;
+			}
+		}
+	}
 
 }
 
@@ -122,14 +132,18 @@ static void adc_enable(volatile uint32_t& cr, volatile uint32_t& isr) noexcept {
     isr = ADC_ISR_ADRDY;     // limpa ADRDY antes de habilitar
     cr |= ADC_CR_ADEN;
     if (!adc_wait_ready(isr)) {
-        // FIX BUG-11: se ADC não ficou ready, tenta reset via deep-power-down
-        // e re-habilita. O fault counter já foi incrementado por adc_wait_ready.
-        cr |= ADC_CR_DEEPPWD;
-        cr &= ~ADC_CR_ADEN;
-        for (volatile uint32_t i = 0u; i < 1000u; ++i) { (void)i; }
-        cr &= ~ADC_CR_DEEPPWD;
-        cr |= ADC_CR_ADEN;
-        (void)adc_wait_ready(isr);  // resultado já em fault counter se falhar novamente
+	// FIX BUG-11: se ADC não ficou ready, tenta recovery via deep-power-down
+	// Sequência RM0481 §25.4.2: ADEN=0 PRIMEIRO, depois DEEPPWD=1
+	// O fault counter já foi incrementado por adc_wait_ready.
+	cr &= ~ADC_CR_ADEN;       // 1. Desabilitar ADC
+	for (volatile uint32_t i = 0u; i < 100u; ++i) { (void)i; } // aguarda
+	cr |= ADC_CR_DEEPPWD;     // 2. Deep power-down
+	for (volatile uint32_t i = 0u; i < 1000u; ++i) { (void)i; } // aguarda T_pwrup
+	cr &= ~ADC_CR_DEEPPWD;    // 3. Sair de deep-power-down
+	cr |= ADC_CR_ADVREGEN;    // 4. Re-ativar regulador interno
+	for (volatile uint32_t i = 0u; i < 5000u; ++i) { (void)i; } // aguarda estabilização
+	cr |= ADC_CR_ADEN;        // 5. Re-habilitar ADC
+	(void)adc_wait_ready(isr); // resultado já em fault counter se falhar novamente
     }
 }
 
@@ -148,8 +162,8 @@ static void gpdma_arm(uint32_t ch_base, uint32_t reqsel,
     GPDMA_REG(ch_base, GPDMA_CTR3_OFF) = 0u;
     GPDMA_REG(ch_base, GPDMA_CBR2_OFF) = 0u;
     GPDMA_REG(ch_base, GPDMA_CLLR_OFF) = 0u;
-    GPDMA_REG(ch_base, GPDMA_CCR_OFF) = GPDMA_CCR_PRIO_HIGH | GPDMA_CCR_TCIE |
-                                         GPDMA_CCR_DTEIE | GPDMA_CCR_USEIE | GPDMA_CCR_CIRC | GPDMA_CCR_EN;
+	GPDMA_REG(ch_base, GPDMA_CCR_OFF) = GPDMA_CCR_PRIO_HIGH | GPDMA_CCR_TCIE |
+		GPDMA_CCR_DTEIE | GPDMA_CCR_USEIE | GPDMA_CCR_EN; // FIX: removido GPDMA_CCR_CIRC — one-shot com re-arm no ISR
 }
 
 static void gpdma_adc1_arm() noexcept {
@@ -196,28 +210,28 @@ void adc_init() noexcept {
     // ── 4. Calibrar e configurar ADC1 ainda desabilitado ────────────────
     adc_prepare_for_config(ADC1_CR);
 
-    // Tempo de amostragem: 47.5 ciclos para todos os canais (SMPR1 bits [29:0])
-    ADC1_SMPR1 = (kSmpr)       // IN1
-               | (kSmpr << 3)  // IN2
-               | (kSmpr << 6)  // IN3 (MAP)
-               | (kSmpr << 9)  // IN4 (MAF)
-               | (kSmpr << 12) // IN5 (TPS)
-               | (kSmpr << 15) // IN6 (O2)
-               | (kSmpr << 18) // IN7 (AN1)
-               | (kSmpr << 21) // IN8 (AN2)
-               | (kSmpr << 24) // IN9 (AN3)
-               | (kSmpr << 27);// IN10 (AN4)
+// Tempo de amostragem: 47.5 ciclos para canais IN1-IN9 (SMPR1 cobre IN0-IN9)
+ADC1_SMPR1 = (kSmpr) // IN1
+	| (kSmpr << 3) // IN2
+	| (kSmpr << 6) // IN3 (MAP)
+	| (kSmpr << 9) // IN4 (MAF)
+	| (kSmpr << 12) // IN5 (TPS)
+	| (kSmpr << 15) // IN6 (O2)
+	| (kSmpr << 18) // IN7 (AN1)
+	| (kSmpr << 21) // IN8 (AN2)
+	| (kSmpr << 24); // IN9 (AN3)
+// FIX: IN10 está em SMPR2, não em SMPR1 (SMPR1 cobre IN0-IN9, SMPR2 cobre IN10-IN18)
+ADC1_SMPR2 = (kSmpr << 0); // IN10 (AN4) — bits [(10-10)*3] = bit 0
 
     // Sequência de conversão ADC1
     ADC1_SQR1 = kAdc1Sqr1;
     ADC1_SQR2 = kAdc1Sqr2;
 
-    // CFGR1: 12-bit, trigger externo TIM6_TRGO, rising edge, DMA por sequência
-    ADC1_CFGR1 = ADC_CFGR1_RES_12BIT
-               | ADC_CFGR1_DMAEN
-               | ADC_CFGR1_DMACFG
-               | ADC_CFGR1_EXTSEL_TIM6_TRGO
-               | ADC_CFGR1_EXTEN_RISING;
+	// CFGR1: 12-bit, trigger externo TIM6_TRGO, rising edge, DMA one-shot por sequência
+	ADC1_CFGR1 = ADC_CFGR1_RES_12BIT
+		| ADC_CFGR1_DMAEN
+		| ADC_CFGR1_EXTSEL_TIM6_TRGO
+		| ADC_CFGR1_EXTEN_RISING; // FIX: removido DMACFG — one-shot DMA, re-arm no ISR
 
     // ── 5. Calibrar e configurar ADC2 ainda desabilitado ────────────────
     adc_prepare_for_config(ADC2_CR);
@@ -233,12 +247,11 @@ void adc_init() noexcept {
 
     ADC2_SQR1 = kAdc2Sqr1;
 
-    // ADC2: trigger TIM6_TRGO simultâneo
-    ADC2_CFGR1 = ADC_CFGR1_RES_12BIT
-               | ADC_CFGR1_DMAEN
-               | ADC_CFGR1_DMACFG
-               | ADC_CFGR1_EXTSEL_TIM6_TRGO
-               | ADC_CFGR1_EXTEN_RISING;
+// ADC2: trigger TIM6_TRGO simultâneo
+ADC2_CFGR1 = ADC_CFGR1_RES_12BIT
+	| ADC_CFGR1_DMAEN
+	| ADC_CFGR1_EXTSEL_TIM6_TRGO
+	| ADC_CFGR1_EXTEN_RISING; // FIX: removido DMACFG — one-shot DMA, re-arm no ISR
 
     // ── 6. Configurar TIM6 como gerador de TRGO ───────────────────────────
     RCC_APB1LENR |= RCC_APB1LENR_TIM6EN;

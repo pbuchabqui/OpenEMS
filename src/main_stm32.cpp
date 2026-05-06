@@ -60,6 +60,7 @@ static bool                g_calib_dirty  = false;
 // g_datalog_us: no STM32 usa micros() de system.cpp em vez de SysTick
 // Mantemos a variável para quadro CAN 0x400
 volatile uint32_t g_datalog_us = 0u;
+volatile uint32_t g_flash_write_faults = 0u; // FIX: fault counter para falhas de escrita NVM
 
 
 static int8_t  g_last_advance_deg = 0;
@@ -317,12 +318,15 @@ static void openems_init() noexcept {
     ems::hal::uart0_init(115200u);
     ems::hal::usb_cdc_init();
 
-    // 5) Flash Bank2 → carrega calibrações persistidas
-    static_cast<void>(
-        ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes));
-    load_corr_calibration_from_nvm();
-    load_xtau_calibration_from_nvm();
-    static_cast<void>(ems::hal::nvm_load_adaptive_maps());
+	// 5) Flash Bank2 → carrega calibrações persistidas
+	if (!ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes)) {
+		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
+	}
+	load_corr_calibration_from_nvm();
+	load_xtau_calibration_from_nvm();
+	if (!ems::hal::nvm_load_adaptive_maps()) {
+		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
+	}
     {
         ems::hal::RuntimeSyncSeed seed = {};
         if (ems::hal::nvm_load_runtime_seed(&seed) &&
@@ -332,7 +336,9 @@ static void openems_init() noexcept {
             ems::drv::ckp_seed_arm(phase_a);
             g_runtime_seed_arm_window_active = true;
             g_runtime_seed_arm_window_start_ms = millis();
-            static_cast<void>(ems::hal::nvm_clear_runtime_seed());
+	if (!ems::hal::nvm_clear_runtime_seed()) {
+		++g_flash_write_faults; // FIX: rastrear falha de limpeza NVM
+	}
         }
     }
 
@@ -623,8 +629,11 @@ int main() {
                     seed.tooth_index = seed_snap.tooth_index;
                     seed.decoder_tag =
                         ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
-                    static_cast<void>(ems::hal::nvm_save_runtime_seed(&seed));
-                    g_runtime_seed_saved_for_stop = true;
+	if (!ems::hal::nvm_save_runtime_seed(&seed)) {
+		// FIX: não descartar retorno — falha de flash deve ser rastreada
+		++g_flash_write_faults; // fault counter para diagnóstico
+	}
+	g_runtime_seed_saved_for_stop = true;
                 }
             }
         }
