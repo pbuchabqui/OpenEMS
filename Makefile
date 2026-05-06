@@ -29,6 +29,7 @@ LDFLAGS_ARM = -mcpu=cortex-m33 -mthumb -nostartfiles \
               -T$(LINKER_SCRIPT)
 
 ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
+             $(SRC_DIR)/engine/engine_config.cpp \
              $(SRC_DIR)/engine/fuel_calc.cpp $(SRC_DIR)/engine/ign_calc.cpp \
              $(SRC_DIR)/engine/knock.cpp $(SRC_DIR)/engine/auxiliaries.cpp \
              $(SRC_DIR)/engine/table3d.cpp $(SRC_DIR)/engine/quick_crank.cpp \

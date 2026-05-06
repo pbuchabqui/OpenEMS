@@ -322,6 +322,7 @@ static void openems_init() noexcept {
 	if (!ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes)) {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
+	ems::engine::cfg::engine_config_load(g_calib_page0, kCalibPageBytes);
 	load_corr_calibration_from_nvm();
 	load_xtau_calibration_from_nvm();
 	if (!ems::hal::nvm_load_adaptive_maps()) {
@@ -646,6 +647,7 @@ int main() {
             if (g_calib_dirty &&
                 (last_calib_save_ms == 0u ||
                  elapsed(now, last_calib_save_ms, kCalibSaveMinIntervalMs))) {
+                ems::engine::cfg::engine_config_serialize(g_calib_page0, kCalibPageBytes);
                 if (ems::hal::nvm_save_calibration(0u, g_calib_page0,
                                                    kCalibPageBytes)) {
                     g_calib_dirty = false;

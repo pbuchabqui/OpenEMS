@@ -678,3 +678,90 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 #define IRQ_GPDMA1_CH1   28u   // GPDMA1 channel 1
 #define IRQ_FDCAN1_IT0   39u   // FDCAN1 interrupt line 0
 // SysTick não usa NVIC — configurado via SCB->SHP diretamente (ARM core)
+
+// ─── USB DRD FS (RM0481 §52.7) ───────────────────────────────────────────────
+// Base: APB2 @ 0x40016000
+// Packet Buffer Area: 0x40016C00 (2 KB)
+#define USB_BASE     0x40016000UL
+#define USB_PBA_BASE 0x40016C00UL
+
+// Channel/Endpoint registers (USB_CHEPxR) — one per endpoint
+#define USB_CHEP0R  STM32_REG32(USB_BASE + 0x00UL)
+#define USB_CHEP1R  STM32_REG32(USB_BASE + 0x04UL)
+#define USB_CHEP2R  STM32_REG32(USB_BASE + 0x08UL)
+#define USB_CHEP3R  STM32_REG32(USB_BASE + 0x0CUL)
+
+// Control/Status registers
+#define USB_CNTR    STM32_REG32(USB_BASE + 0x40UL)  // Control
+#define USB_ISTR    STM32_REG32(USB_BASE + 0x44UL)  // Interrupt Status
+#define USB_FNR     STM32_REG32(USB_BASE + 0x48UL)  // Frame Number
+#define USB_DADDR   STM32_REG32(USB_BASE + 0x4CUL)  // Device Address
+#define USB_BTABLE  STM32_REG32(USB_BASE + 0x50UL)  // Buffer Table base addr (in PBA words)
+#define USB_LPMCSR  STM32_REG32(USB_BASE + 0x54UL)  // LPM Control/Status
+#define USB_BCDR    STM32_REG32(USB_BASE + 0x58UL)  // Battery Charging Detect
+
+// USB_CNTR bits
+#define USB_CNTR_USBRST  (1u << 0)   // USB Reset (apply then clear)
+#define USB_CNTR_PDWN    (1u << 1)   // Power down (1=off, 0=active)
+#define USB_CNTR_FSUSP   (1u << 3)   // Force suspend
+#define USB_CNTR_RESUME  (1u << 4)   // Resume request
+#define USB_CNTR_RESETM  (1u << 10)  // Reset interrupt enable
+#define USB_CNTR_SUSPM   (1u << 11)  // Suspend interrupt enable
+#define USB_CNTR_WKUPM  (1u << 12)  // Wakeup interrupt enable
+#define USB_CNTR_CTRM    (1u << 15)  // Correct Transfer interrupt enable
+
+// USB_ISTR bits
+#define USB_ISTR_EP_ID   (0xFu << 0) // Endpoint ID mask
+#define USB_ISTR_DIR     (1u << 4)   // Direction (0=IN, 1=OUT/SETUP)
+#define USB_ISTR_ESOF    (1u << 8)
+#define USB_ISTR_SOF     (1u << 9)
+#define USB_ISTR_RESET   (1u << 10)  // USB Reset received
+#define USB_ISTR_SUSP    (1u << 11)  // Suspend
+#define USB_ISTR_WKUP    (1u << 12)  // Wakeup
+#define USB_ISTR_CTR     (1u << 15)  // Correct Transfer
+
+// USB_DADDR bits
+#define USB_DADDR_EF     (1u << 7)   // Enable function
+
+// USB_CHEPxR bit fields
+// EA[3:0]       bits 3:0   endpoint address
+// STAT_TX[1:0]  bits 5:4   TX status: 00=disabled,01=stall,10=NAK,11=VALID
+// DTOG_TX       bit 6      TX data toggle
+// CTR_TX        bit 7      Correct TX (RC_W0)
+// EP_KIND       bit 8      (0=normal, 1=double-buffer or STATUS_OUT for ctrl)
+// EP_TYPE[1:0]  bits 10:9  00=Bulk, 01=Control, 10=Iso, 11=Interrupt
+// SETUP         bit 11     SETUP packet flag (r/o)
+// STAT_RX[1:0]  bits 13:12 RX status
+// DTOG_RX       bit 14     RX data toggle
+// CTR_RX        bit 15     Correct RX (RC_W0)
+#define USB_EP_STAT_TX_DISABLED  (0u << 4)
+#define USB_EP_STAT_TX_STALL     (1u << 4)
+#define USB_EP_STAT_TX_NAK       (2u << 4)
+#define USB_EP_STAT_TX_VALID     (3u << 4)
+#define USB_EP_STAT_TX_MASK      (3u << 4)
+#define USB_EP_DTOG_TX           (1u << 6)
+#define USB_EP_CTR_TX            (1u << 7)
+#define USB_EP_TYPE_BULK         (0u << 9)
+#define USB_EP_TYPE_CTRL         (1u << 9)
+#define USB_EP_TYPE_ISO          (2u << 9)
+#define USB_EP_TYPE_INT          (3u << 9)
+#define USB_EP_TYPE_MASK         (3u << 9)
+#define USB_EP_SETUP             (1u << 11)
+#define USB_EP_STAT_RX_DISABLED  (0u << 12)
+#define USB_EP_STAT_RX_STALL     (1u << 12)
+#define USB_EP_STAT_RX_NAK       (2u << 12)
+#define USB_EP_STAT_RX_VALID     (3u << 12)
+#define USB_EP_STAT_RX_MASK      (3u << 12)
+#define USB_EP_DTOG_RX           (1u << 14)
+#define USB_EP_CTR_RX            (1u << 15)
+// Invariant bits that must be preserved (write 1) when writing CHEPxR:
+#define USB_EP_INVARIANT         (USB_EP_CTR_RX | USB_EP_CTR_TX)
+
+// RCC USB clock enable (APB2, bit 24)
+#define RCC_APB2ENR_USBEN        (1u << 24)
+
+// GPIO AF10 for USB DP/DM (PA11/PA12)
+#define GPIO_AF10  10u
+
+// NVIC IRQ for USB DRD FS
+#define IRQ_USB  73u
