@@ -53,7 +53,7 @@ static constexpr uint8_t kAdc1ChMap[8] = {
     // AdcPrimaryChannel::AN2_SE7B   → ADC1_IN8  → índice 5
     // AdcPrimaryChannel::AN3_SE8B   → ADC1_IN9  → índice 6
     // AdcPrimaryChannel::AN4_SE9B   → ADC1_IN10 → índice 7
-    3, 4, 5, 6, 7, 8, 9, 10
+    0, 1, 2, 3, 4, 5, 6, 7
 };
 
 static constexpr uint8_t kAdc2ChMap[4] = {
@@ -301,7 +301,7 @@ void adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept {
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept {
     const uint8_t idx = static_cast<uint8_t>(ch);
     if (idx >= 8u) { return 0u; }
-    return g_adc_secondary_raw[idx];
+    return g_adc_secondary_raw[kAdc1ChMap[idx]];
 }
 
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept {

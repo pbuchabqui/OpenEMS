@@ -520,10 +520,8 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us)
     if (pw_us == 0U) { return; }
     if (pw_us > 30000U) { pw_us = 30000U; }
     const uint32_t off_cnv = scheduler_counter() + ((pw_us * ECU_SCHED_TICKS_PER_MS) / 1000U);
-    enter_critical();
     for (uint8_t i = 0U; i < 4U; ++i) { force_output(inj[i], ECU_ACT_INJ_ON); }
     for (uint8_t i = 0U; i < 4U; ++i) { arm_channel(inj[i], off_cnv, ECU_ACT_INJ_OFF); }
-    exit_critical();
 }
 
 namespace ems::engine {
