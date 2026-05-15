@@ -1,28 +1,66 @@
-# Build outputs — host tests
-/tmp/openems_host_tests/
-
-# Arduino / Teensyduino build artefacts
+```
+# Build artifacts
+*.o
+*.obj
+*.out
 build/
-*.elf
-*.hex
-*.bin
-*.map
-*.lst
+dist/
 
-# Patch files gerados por git format-patch
-*.patch
+# Dependencies
+node_modules/
+venv/
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+target/
+.gradle/
 
-# Logs de execução de testes
-*.log
-test_output.log
-
-# Editor metadata
+# Editor/IDE files
 .vscode/
 .idea/
 *.swp
-*~
+*.swo
+*.tmp
 
-# macOS / Linux
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# OS files
 .DS_Store
-*.o
-*.a
+Thumbs.db
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
+```

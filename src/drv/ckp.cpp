@@ -63,6 +63,7 @@
 #include <cstdint>
 #include <cstring>
 #include "hal/timer.h"
+#include "hal/critical_section.h"
 #if defined(TARGET_STM32H562) && !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
 #endif
@@ -388,13 +389,12 @@ namespace ems::drv {
 
 CkpSnapshot ckp_snapshot() noexcept {
     CkpSnapshot out;
-    enter_critical();
-    // memcpy garante cópia byte-a-byte determinística; enter_critical()
+    ems::hal::CriticalSectionGuard guard;
+    // memcpy garante cópia byte-a-byte determinística; CriticalSectionGuard
     // desabilita interrupções, impedindo que a ISR TIM5 modifique g_state.snap
     // durante a cópia. Sem volatile + critical section, o compilador poderia
     // reordenar ou cachear leituras de campos individuais de g_state.snap.
     std::memcpy(&out, &g_state.snap, sizeof(out));
-    exit_critical();
     return out;
 }
 
