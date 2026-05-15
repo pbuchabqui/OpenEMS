@@ -8,6 +8,10 @@
 #include "adc.h"
 #endif
 
+#if __has_include("engine/diagnostic_manager.h")
+#include "engine/diagnostic_manager.h"
+#endif
+
 namespace {
 
 using ems::drv::SensorData;
@@ -301,6 +305,45 @@ inline void sample_fast_channels() noexcept {
     g_data.maf_gps_x100 = (maf_avg_period > 0u)
                          ? kMafTim5ClockHz / static_cast<uint32_t>(maf_avg_period)
                          : 0u;
+    
+    // Sensor plausibility check with diagnostic reporting
+    #if __has_include("engine/diagnostic_manager.h")
+    using ems::engine::DiagnosticCode;
+    using ems::engine::FaultSeverity;
+    using ems::engine::DiagnosticManager;
+    
+    // Report sensor range faults to diagnostic system
+    if (g_fault[static_cast<uint8_t>(SensorId::MAP)].active) {
+        DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE,
+                                       FaultSeverity::WARNING,
+                                       map_raw, 0);
+    }
+    if (g_fault[static_cast<uint8_t>(SensorId::TPS)].active) {
+        DiagnosticManager::report_fault(DiagnosticCode::TPS_SENSOR_RANGE,
+                                       FaultSeverity::WARNING,
+                                       tps_raw, 0);
+    }
+    if (g_fault[static_cast<uint8_t>(SensorId::MAF)].active) {
+        DiagnosticManager::report_fault(DiagnosticCode::MAF_SENSOR_RANGE,
+                                       FaultSeverity::WARNING,
+                                       mafv_raw, 0);
+    }
+    if (g_fault[static_cast<uint8_t>(SensorId::O2)].active) {
+        DiagnosticManager::report_fault(DiagnosticCode::O2_SENSOR_RANGE,
+                                       FaultSeverity::INFO,
+                                       o2_raw, 0);
+    }
+    
+    // Perform plausibility check between MAP and TPS
+    if (!DiagnosticManager::check_sensor_plausibility(g_data.map_kpa_x10,
+                                                      g_data.tps_pct_x10,
+                                                      0)) {
+        DiagnosticManager::report_fault(DiagnosticCode::MAP_TPS_CORRELATION,
+                                       FaultSeverity::WARNING,
+                                       g_data.map_kpa_x10,
+                                       g_data.tps_pct_x10);
+    }
+    #endif
 }
 
 }  // namespace
@@ -413,6 +456,31 @@ void sensors_tick_50ms() noexcept {
         (static_cast<uint32_t>(avg4(g_fuel_buf)) * 2500u) / 4095u);
     g_data.oil_press_kpa_x10 = static_cast<uint16_t>(
         (static_cast<uint32_t>(avg4(g_oil_buf)) * 2500u) / 4095u);
+    
+    // Report pressure sensor faults to diagnostic system
+    #if __has_include("engine/diagnostic_manager.h")
+    using ems::engine::DiagnosticCode;
+    using ems::engine::FaultSeverity;
+    using ems::engine::DiagnosticManager;
+    
+    if (g_fault[static_cast<uint8_t>(SensorId::FUEL_PRESS)].active) {
+        DiagnosticCode code = (g_data.fuel_press_kpa_x10 < 100u)
+                             ? DiagnosticCode::FUEL_PRESS_LOW
+                             : DiagnosticCode::FUEL_PRESS_HIGH;
+        DiagnosticManager::report_fault(code, FaultSeverity::ERROR,
+                                       g_data.fuel_press_kpa_x10, 0);
+    }
+    if (g_fault[static_cast<uint8_t>(SensorId::OIL_PRESS)].active) {
+        DiagnosticCode code = (g_data.oil_press_kpa_x10 < 50u)
+                             ? DiagnosticCode::LOW_OIL_PRESSURE
+                             : DiagnosticCode::OIL_PRESS_HIGH;
+        FaultSeverity severity = (g_data.oil_press_kpa_x10 < 30u)
+                                ? FaultSeverity::CRITICAL
+                                : FaultSeverity::ERROR;
+        DiagnosticManager::report_fault(code, severity,
+                                       g_data.oil_press_kpa_x10, 0);
+    }
+    #endif
 }
 
 // [FIX-3] AN1-4 agora amostrados e publicados como passthrough em SensorData
@@ -449,6 +517,34 @@ void sensors_tick_100ms() noexcept {
 
     const uint16_t vbatt_mv = vbatt_raw_to_mv(vbatt_raw);
     g_data.vbatt_mv = (vbatt_mv >= 6000u && vbatt_mv <= 18000u) ? vbatt_mv : 12000u;
+    
+    // ADC recovery verification: check if ADC recovered from any timeout
+    // Report to diagnostic manager if faults detected
+    #if __has_include("engine/diagnostic_manager.h")
+    using ems::engine::DiagnosticCode;
+    using ems::engine::FaultSeverity;
+    using ems::engine::DiagnosticManager;
+    
+    // Check for sensor range faults and report to diagnostic system
+    if (g_fault[static_cast<uint8_t>(SensorId::CLT)].active) {
+        DiagnosticManager::report_fault(DiagnosticCode::CLT_SENSOR_RANGE, 
+                                       FaultSeverity::WARNING,
+                                       clt_raw, 0);
+    }
+    if (g_fault[static_cast<uint8_t>(SensorId::IAT)].active) {
+        DiagnosticManager::report_fault(DiagnosticCode::IAT_SENSOR_RANGE,
+                                       FaultSeverity::WARNING,
+                                       iat_raw, 0);
+    }
+    if (vbatt_mv < 6000u || vbatt_mv > 18000u) {
+        DiagnosticCode code = (vbatt_mv < 6000u) ? DiagnosticCode::VBATT_LOW 
+                                                  : DiagnosticCode::VBATT_HIGH;
+        FaultSeverity severity = (vbatt_mv < 5000u || vbatt_mv > 20000u)
+                                ? FaultSeverity::CRITICAL
+                                : FaultSeverity::WARNING;
+        DiagnosticManager::report_fault(code, severity, vbatt_mv, 0);
+    }
+    #endif
 }
 
 void sensors_maf_freq_capture_isr(uint16_t period_ticks) noexcept {

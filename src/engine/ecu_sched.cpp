@@ -1,7 +1,9 @@
 #include "engine/ecu_sched.h"
 #include "drv/ckp.h"
 #include "engine/engine_config.h"
+#include "engine/constants.h"
 #include "hal/regs.h"
+#include "hal/critical_section.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -285,16 +287,17 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     // atômica. Sem seção crítica, TIM2_IRQ poderia disparar entre a leitura de
     // scheduler_counter() e a escrita do registrador de compare, corrompendo o
     // agendamento de eventos já pendentes.
-    enter_critical();
+    ems::hal::CriticalSectionGuard guard;
+    
     const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
     const uint8_t tim_ch = (is_inj != 0U) ? stm32_inj_tim_ch(ch) : stm32_ign_tim_ch(ch);
     const uint32_t now = scheduler_counter();
     const uint32_t delta = target_cnv - now;
     volatile uint32_t *ccr;
 
-    if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; exit_critical(); return; }
-    if ((is_inj == 0U) && (delta > 0xFFFFU)) { ++g_cycle_schedule_drop_count; exit_critical(); return; }
-    if (delta < STM32_MIN_COMPARE_LEAD_TICKS) { ++g_late_event_count; force_output(ch, action); exit_critical(); return; }
+    if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
+    if ((is_inj == 0U) && (delta > ems::engine::kTim8MaxDelta16)) { ++g_cycle_schedule_drop_count; return; }
+    if (delta < STM32_MIN_COMPARE_LEAD_TICKS) { ++g_late_event_count; force_output(ch, action); return; }
 
 	stm32_set_oc_mode(is_inj, tim_ch, ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U);
 	// Clear any pending match flag BEFORE programming CCR to avoid missing an edge
@@ -310,9 +313,15 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 	if (is_inj != 0U) {
 		*ccr = target_cnv;
 	} else {
-		*ccr = (uint16_t)((TIM8_CNT & 0xFFFFU) + delta);
+		// FIX P0: Handle 16-bit timer wraparound correctly
+		// TIM8 is configured as 16-bit (ARR = 0xFFFF), so we must handle wrap
+		const uint32_t current_cnt = TIM8_CNT & 0xFFFFU;
+		uint32_t target = current_cnt + delta;
+		if (target > 0xFFFFU) {
+			target -= 0x10000U;  // Wrap within 16-bit range
+		}
+		*ccr = static_cast<uint16_t>(target);
 	}
-    exit_critical();
 }
 
 static void clear_all_events_and_drive_safe_outputs(void)
@@ -491,27 +500,30 @@ static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
 
 void ecu_sched_commit_calibration(uint32_t advance_deg, uint32_t dwell_ticks, uint32_t inj_pw_ticks, uint32_t soi_lead_deg)
 {
-    enter_critical();
+    ems::hal::CriticalSectionGuard guard;
     g_advance_deg = advance_deg;
     g_dwell_ticks = dwell_ticks;
     g_inj_pw_ticks = inj_pw_ticks;
     g_soi_lead_deg = soi_lead_deg;
     sanitize_runtime_calibration();
-    exit_critical();
 }
-void ecu_sched_set_advance_deg(uint32_t adv) { enter_critical(); g_advance_deg = adv; sanitize_runtime_calibration(); exit_critical(); }
-void ecu_sched_set_dwell_ticks(uint32_t dwell) { enter_critical(); g_dwell_ticks = dwell; sanitize_runtime_calibration(); exit_critical(); }
-void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { enter_critical(); g_inj_pw_ticks = pw_ticks; sanitize_runtime_calibration(); exit_critical(); }
-void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg) { enter_critical(); g_soi_lead_deg = soi_lead_deg; sanitize_runtime_calibration(); exit_critical(); }
-void ecu_sched_set_presync_enable(uint8_t enable) { enter_critical(); g_presync_enable = (enable != 0U) ? 1U : 0U; exit_critical(); }
-void ecu_sched_set_presync_inj_mode(uint8_t mode) { enter_critical(); g_presync_inj_mode = mode; sanitize_runtime_calibration(); exit_critical(); }
-void ecu_sched_set_presync_ign_mode(uint8_t mode) { enter_critical(); g_presync_ign_mode = mode; sanitize_runtime_calibration(); exit_critical(); }
-void ecu_sched_set_ivc(uint8_t ivc_abdc_deg) { enter_critical(); g_ivc_abdc_deg = (ivc_abdc_deg > 180U) ? 180U : ivc_abdc_deg; exit_critical(); }
+void ecu_sched_set_advance_deg(uint32_t adv) { ems::hal::CriticalSectionGuard guard; g_advance_deg = adv; sanitize_runtime_calibration(); }
+void ecu_sched_set_dwell_ticks(uint32_t dwell) { ems::hal::CriticalSectionGuard guard; g_dwell_ticks = dwell; sanitize_runtime_calibration(); }
+void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { ems::hal::CriticalSectionGuard guard; g_inj_pw_ticks = pw_ticks; sanitize_runtime_calibration(); }
+void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg) { ems::hal::CriticalSectionGuard guard; g_soi_lead_deg = soi_lead_deg; sanitize_runtime_calibration(); }
+void ecu_sched_set_presync_enable(uint8_t enable) { ems::hal::CriticalSectionGuard guard; g_presync_enable = (enable != 0U) ? 1U : 0U; }
+void ecu_sched_set_presync_inj_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_inj_mode = mode; sanitize_runtime_calibration(); }
+void ecu_sched_set_presync_ign_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_ign_mode = mode; sanitize_runtime_calibration(); }
+void ecu_sched_set_ivc(uint8_t ivc_abdc_deg) { ems::hal::CriticalSectionGuard guard; g_ivc_abdc_deg = (ivc_abdc_deg > 180U) ? 180U : ivc_abdc_deg; }
 uint32_t ecu_sched_ivc_clamp_count(void) { return g_ivc_clamp_count; }
 
 void ecu_sched_reset_diagnostic_counters(void)
 {
-    enter_critical(); g_late_event_count = 0U; g_cycle_schedule_drop_count = 0U; g_calibration_clamp_count = 0U; g_ivc_clamp_count = 0U; exit_critical();
+    ems::hal::CriticalSectionGuard guard;
+    g_late_event_count = 0U;
+    g_cycle_schedule_drop_count = 0U;
+    g_calibration_clamp_count = 0U;
+    g_ivc_clamp_count = 0U;
 }
 
 void ecu_sched_fire_prime_pulse(uint32_t pw_us)

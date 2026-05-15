@@ -640,6 +640,7 @@ int main() {
         }
 
         // ── 500ms: agenda flush Flash; execução avança em passos curtos ───
+        // FIX P0: Only allow flash writes when engine is stopped or below safe RPM
         static bool adaptive_flush_pending = false;
         static uint32_t last_calib_save_ms = 0u;
         if (elapsed(now, g_t500ms_, 500u)) {
@@ -654,10 +655,21 @@ int main() {
                     last_calib_save_ms = now;
                 }
             }
-            adaptive_flush_pending = true;
+            
+            // FIX P0: Only schedule adaptive map flush when engine is below safe RPM
+            // Flash writes during engine operation can cause timing jitter and misfires
+            const bool engine_running_fast = (snap.rpm_x10 > ems::engine::kFlashWriteSafeRpmX10);
+            if (!engine_running_fast) {
+                adaptive_flush_pending = true;
+            }
+            // If engine is running fast, keep adaptive_flush_pending false to defer flash write
         }
         if (adaptive_flush_pending) {
-            adaptive_flush_pending = !ems::hal::nvm_flush_adaptive_maps();
+            // Double-check RPM before actually writing (engine may have started)
+            const bool engine_running_fast = (snap.rpm_x10 > ems::engine::kFlashWriteSafeRpmX10);
+            if (!engine_running_fast) {
+                adaptive_flush_pending = !ems::hal::nvm_flush_adaptive_maps();
+            }
         }
     }
 }
