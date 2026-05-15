@@ -276,6 +276,41 @@ inline uint16_t maf_period_avg4() noexcept {
 // MAP, MAF-V, TPS, O2 — todos sincronizados ao mesmo ângulo de virabrequim
 // -----------------------------------------------------------------------------
 inline void sample_fast_channels() noexcept {
+    // P0 #3: Verifica status do ADC antes de ler sensores críticos
+    // Se ADC está em recovery ou falhou, usa valores safe defaults (limp-home)
+    const bool adc_unavailable = ems::hal::adc_is_recovering() || 
+                                  ems::hal::adc_recovery_failed();
+    
+    if (adc_unavailable) {
+        // ADC não disponível - usa valores fallback para segurança do motor
+        g_data.map_kpa_x10 = kFallbackMapKpaX10;   // 101.0 kPa (pressão atmosférica)
+        g_data.tps_pct_x10 = kFallbackTpsPctX10;   // 0.0% (borboleta fechada)
+        g_data.maf_gps_x100 = 0u;                   // MAF desconhecido
+        
+        // Reporta fault de ADC recovery ao sistema de diagnóstico
+        #if __has_include("engine/diagnostic_manager.h")
+        using ems::engine::DiagnosticCode;
+        using ems::engine::FaultSeverity;
+        using ems::engine::DiagnosticManager;
+        
+        if (ems::hal::adc_recovery_failed()) {
+            DiagnosticManager::report_fault(DiagnosticCode::ADC_RECOVERY_FAILED,
+                                           FaultSeverity::CRITICAL,
+                                           ems::hal::adc_get_timeout_count(),
+                                           ems::hal::adc_get_recovery_retries());
+        } else if (ems::hal::adc_is_recovering()) {
+            // ADC_RECOVERY_IN_PROGRESS não existe - usa ADC_RECOVERY_FAILED como placeholder
+            // ou simplesmente reporta como WARNING genérico
+            DiagnosticManager::report_fault(DiagnosticCode::ADC_RECOVERY_FAILED,
+                                           FaultSeverity::WARNING,
+                                           ems::hal::adc_get_timeout_count(),
+                                           ems::hal::adc_get_recovery_retries());
+        }
+        #endif
+        
+        return;  // Sai sem atualizar outros sensores
+    }
+    
     const uint16_t map_raw  = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAP_SE10);
     const uint16_t mafv_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAF_V_SE11);
     const uint16_t tps_raw  = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::TPS_SE12);
