@@ -50,6 +50,12 @@ void     adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept;
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept;
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept;
 
+// P0 #3: ADC Recovery System - status flags para verificação em tempo de execução
+bool     adc_is_recovering() noexcept;
+bool     adc_recovery_failed() noexcept;
+uint32_t adc_get_timeout_count() noexcept;
+uint32_t adc_get_recovery_retries() noexcept;
+
 #if defined(EMS_HOST_TEST)
 void     adc_test_set_raw_primary(AdcPrimaryChannel ch, uint16_t raw) noexcept;
 void     adc_test_set_raw_secondary(AdcSecondaryChannel ch, uint16_t raw) noexcept;
