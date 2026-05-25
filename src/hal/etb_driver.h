@@ -16,15 +16,26 @@ extern "C" {
 #endif
 
 // ============================================================================
-// CONFIGURAÇÃO DE HARDWARE
+// CONFIGURAÇÃO DE HARDWARE - STM32H562RGT6
 // ============================================================================
 
-// Pinagem (ajustar conforme schematic)
-#define ETB_PWM_PIN             PA8   // TIM1_CH1 - PWM controle motor
-#define ETB_IN1_PIN             PA9   // Direção 1
-#define ETB_IN2_PIN             PA10  // Direção 2
-#define ETB_TPS1_PIN            PA0   // ADC1_INP0 - Sensor primário
-#define ETB_TPS2_PIN            PA1   // ADC1_INP1 - Sensor secundário (redundante)
+// Pinagem definida para STM32H562RGT6
+#define ETB_PWM_GPIO_PORT       GPIOA
+#define ETB_PWM_PIN             8U    // PA8 - TIM1_CH1
+#define ETB_PWM_AF              GPIO_AF1_TIM1
+
+#define ETB_PWM_N_GPIO_PORT     GPIOA
+#define ETB_PWM_N_PIN           9U    // PA9 - TIM1_CH1N (complementar)
+#define ETB_PWM_N_AF            GPIO_AF1_TIM1
+
+#define ETB_IN1_GPIO_PORT       GPIOA
+#define ETB_IN1_PIN             10U   // PA10 - Direção 1 (Abrir)
+
+#define ETB_IN2_GPIO_PORT       GPIOB
+#define ETB_IN2_PIN             2U    // PB2 - Direção 2 (Fechar)
+
+#define ETB_TPS1_ADC_CHANNEL    0U    // PA0 - ADC1_INP0 - Sensor primário
+#define ETB_TPS2_ADC_CHANNEL    1U    // PA1 - ADC1_INP1 - Sensor secundário (redundante)
 
 // Frequência PWM (20kHz para evitar ruído audível)
 #define ETB_PWM_FREQ_HZ         20000u
@@ -120,6 +131,36 @@ etb_driver_state_t etb_driver_get_state(void);
  * @brief Converte ADC raw para porcentagem (0-100%)
  */
 float etb_driver_adc_to_percent(uint16_t adc_raw);
+
+// ============================================================================
+// FUNÇÕES HAL NECESSÁRIAS (implementar em stm32h562/gpio.c e timer.c)
+// ============================================================================
+
+/**
+ * @brief Configura pino como alternate function (implementar em gpio.c)
+ */
+void gpio_set_alternate(void* port, uint16_t pin, uint8_t af);
+
+/**
+ * @brief Configura pino como output push-pull (implementar em gpio.c)
+ */
+void gpio_set_output_pushpull(void* port, uint16_t pin);
+
+/**
+ * @brief Escreve nível lógico em pino GPIO (implementar em gpio.c)
+ */
+void gpio_write_pin(void* port, uint16_t pin, uint8_t value);
+
+/**
+ * @brief Inicializa TIM1 para PWM com dead-time (implementar em timer.c)
+ */
+void timer_etb_pwm_init(void);
+
+/**
+ * @brief Ajusta duty cycle do TIM1 (implementar em timer.c)
+ * @param duty 0-1023 (10-bit)
+ */
+void timer_etb_set_duty(uint16_t duty);
 
 #ifdef __cplusplus
 }
