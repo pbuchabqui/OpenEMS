@@ -1,1 +1,43 @@
-Nothing should be ignored since the changes only include source code files (.cpp, .h) without any build artifacts, dependencies, or temporary files.
+```gitignore
+# Compiled and build artifacts
+*.o
+*.obj
+*.out
+*.elf
+
+# Dependencies
+node_modules/
+venv/
+.venv/
+__pycache__/
+*.egg-info/
+dist/
+build/
+target/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# OS
+.DS_Store
+Thumbs.db
+```

@@ -296,8 +296,24 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     volatile uint32_t *ccr;
 
     if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
-    if ((is_inj == 0U) && (delta > ems::engine::kTim8MaxDelta16)) { ++g_cycle_schedule_drop_count; return; }
-    if (delta < STM32_MIN_COMPARE_LEAD_TICKS) { ++g_late_event_count; force_output(ch, action); return; }
+    
+    // FIX P0 (BUG-7): TIM8 é 16-bit — validar delta antes de descartar evento
+    // Se delta > max_delta_16, o evento NÃO cabe no timer e deve ser descartado
+    // Isso previne perda de ignição em baixa rotação onde dwell + advance > 65535 ticks
+    if ((is_inj == 0U) && (delta > ems::engine::kTim8MaxDelta16)) { 
+        ++g_cycle_schedule_drop_count; 
+        return; 
+    }
+    
+    // FIX P2 (BUG-9): Eventos atrasados devem ser DESCARTADOS, não forçados
+    // Forçar saída em eventos atrasados causa spark/injeção no ângulo errado
+    // Para ignição: pode disparar em cilindro em admissão (sem combustível)
+    // Para injeção: injeta fora da janela de válvula aberta
+    if (delta < STM32_MIN_COMPARE_LEAD_TICKS) { 
+        ++g_late_event_count; 
+        // NÃO chamar force_output() — descarta evento atrasado silenciosamente
+        return; 
+    }
 
 	stm32_set_oc_mode(is_inj, tim_ch, ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U);
 	// Clear any pending match flag BEFORE programming CCR to avoid missing an edge
