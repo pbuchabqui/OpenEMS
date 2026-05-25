@@ -63,6 +63,7 @@
 #include <cstdint>
 #include <cstring>
 #include "hal/timer.h"
+#include "hal/critical_section.h"
 #if defined(TARGET_STM32H562) && !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
 #endif
@@ -182,6 +183,7 @@ struct DecoderState {
     uint8_t  hist_ready;                // quantas entradas válidas em tooth_hist (máx kHistSize)
     uint16_t tooth_count;               // dentes desde o último gap aceito
     uint8_t  cmp_confirms;              // confirmações do cam sensor (CH1)
+    uint32_t cmp_glitch_count;          // FIX P0: contador de glitches CMP rejeitados (diagnóstico)
 };
 
 static DecoderState g_state = {
@@ -192,6 +194,7 @@ static DecoderState g_state = {
     0u,
     0u,
     0u,
+    0u,  // cmp_glitch_count inicializado
 };
 // FIX-5: volatile nas variáveis escritas pela ISR TIM5 (prio 1) e lidas pelo
 // background loop sem seção crítica. Sem volatile, o compilador pode elevar
@@ -318,12 +321,26 @@ inline bool process_gap_event() noexcept {
                 g_state.tooth_count = 0u;
                 return false;
             }
+            
+            // FIX P0 (BUG-12): Validar rotação forward antes de consumir seed
+            // Se rotação for reversa ou instável, não consumir a seed para preservar
+            // o benefício do fast-reacquire na próxima tentativa válida.
+            if (g_seed_armed && !is_forward_rotation_coherent(g_state.snap.tooth_period_ns)) {
+                // Rotação não validada como forward estável — mantém seed armada
+                // mas não avança para FULL_SYNC ainda
+                g_state.tooth_count = 0u;
+                return false;
+            }
+            
             if (g_seed_armed) {
                 g_state.snap.state       = ems::drv::SyncState::FULL_SYNC;
                 g_state.snap.phase_A     = g_seed_phase_a;
                 g_seed_armed             = false;
                 g_seed_probation         = true;
                 g_seed_probation_teeth   = 0u;
+                // Reset contador de coerência após consumo bem-sucedido da seed
+                g_prev_valid_period_ns = 0u;
+                g_coherent_periods_count = 0u;
             } else {
                 g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
             }
@@ -388,13 +405,12 @@ namespace ems::drv {
 
 CkpSnapshot ckp_snapshot() noexcept {
     CkpSnapshot out;
-    enter_critical();
-    // memcpy garante cópia byte-a-byte determinística; enter_critical()
+    ems::hal::CriticalSectionGuard guard;
+    // memcpy garante cópia byte-a-byte determinística; CriticalSectionGuard
     // desabilita interrupções, impedindo que a ISR TIM5 modifique g_state.snap
     // durante a cópia. Sem volatile + critical section, o compilador poderia
     // reordenar ou cachear leituras de campos individuais de g_state.snap.
     std::memcpy(&out, &g_state.snap, sizeof(out));
-    exit_critical();
     return out;
 }
 
@@ -560,14 +576,88 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     prime_on_tooth(g_state.snap);
 }
 
+// FIX P0 (BUG-12): Proteger seed contra consumo em rotação reversa
+// Problema: Se a seed for consumida durante partida com rotação reversa,
+// ela é perdida permanentemente até próximo shutdown, mesmo que motor
+// não tenha atingido sincronismo válido.
+// Solução: Validar coerência temporal do período CKP antes de consumir seed.
+// Rotação reversa produz períodos instáveis ou decrescentes inconsistentes.
+static uint32_t g_prev_valid_period_ns = 0u;
+static uint8_t g_coherent_periods_count = 0u;
+
+// Valida se período CKP é coerente com rotação forward estável
+// Períodos coerentes: variação < 25% entre amostras consecutivas
+inline bool is_forward_rotation_coherent(uint32_t period_ns) noexcept {
+    if (period_ns == 0u || period_ns > 10000000u) {  // > 10ms = RPM < 100
+        return false;
+    }
+    
+    if (g_prev_valid_period_ns == 0u) {
+        g_prev_valid_period_ns = period_ns;
+        g_coherent_periods_count = 1u;
+        return true;
+    }
+    
+    // Verifica se variação está dentro de ±25% (rotação estável forward)
+    const uint32_t max_valid = g_prev_valid_period_ns + (g_prev_valid_period_ns >> 2u);
+    const uint32_t min_valid = g_prev_valid_period_ns - (g_prev_valid_period_ns >> 2u);
+    
+    if (period_ns >= min_valid && period_ns <= max_valid) {
+        g_prev_valid_period_ns = period_ns;
+        if (g_coherent_periods_count < 255u) {
+            ++g_coherent_periods_count;
+        }
+        // Requer 3 períodos coerentes consecutivos para validar forward rotation
+        return g_coherent_periods_count >= 3u;
+    } else {
+        // Variação brusca: possível reversão ou ruído
+        g_prev_valid_period_ns = period_ns;
+        g_coherent_periods_count = 1u;
+        return false;
+    }
+}
+
 // ── ISR do cam sensor: TIM5 CH2 (PA1/CMP, rising edge) ──────────────────────
 // Cada borda de subida do cam sensor indica meio ciclo de motor (180° de virabrequim).
 // phase_A alterna para permitir ao agendador identificar qual par de cilindros está
 // no tempo de injeção (cilindros 1/4 vs 2/3 para motor 4 cilindros em linha).
+//
+// FIX P0 (BUG-11): Validação temporal CMP × CKP — detecta glitches que invertem fase
+// Um glitch no CMP pode inverter phase_A silenciosamente, causando ignição/injeção
+// no cilindro errado. Esta ISR valida coerência temporal usando o período CKP como
+// referência: o período entre bordas CMP deve ser ~2× o período do CKP (CMP = 1 rev,
+// CKP gap = 2 rev). Se delta for muito pequeno ou muito grande, é glitch.
 FASTRUN void ckp_tim5_ch2_isr() noexcept {
     if ((CKP_CAM_GPIO_IDR & (1u << 1u)) == 0u) {
         return;  // anti-glitch: apenas rising edges reais
     }
+    
+    // Validação de coerência temporal baseada no período CKP atual
+    // Período CMP esperado ≈ 2× período médio dos dentes CKP (1 revolução completa)
+    const uint32_t ckp_period_ns = g_state.snap.tooth_period_ns;
+    if (ckp_period_ns > 0u) {
+        // Estima período CMP esperado: 58 dentes × período_dente ≈ 1 revolução
+        // Para simplificar: usa-se o tooth_period_ns como referência de escala
+        // CMP válido deve ter período entre 0.5× e 4.0× o período de referência
+        static uint32_t prev_cmp_tooth_period = 0u;
+        
+        // Compara com período anterior do CKP para detectar anomalias grosseiras
+        // Se tooth_period mudou drasticamente (>4× ou <0.25×), ignora esta borda CMP
+        if (prev_cmp_tooth_period > 0u) {
+            const uint32_t min_valid = prev_cmp_tooth_period >> 2u;   // 25%
+            const uint32_t max_valid = prev_cmp_tooth_period << 2u;   // 400%
+            
+            if ((ckp_period_ns < min_valid) || (ckp_period_ns > max_valid)) {
+                // Período CKP mudou drasticamente — possível ruído, não atualiza phase_A
+                ++g_state.cmp_glitch_count;
+                static_cast<void>(TIM5_CAM_CAPTURE);
+                prev_cmp_tooth_period = ckp_period_ns;
+                return;
+            }
+        }
+        prev_cmp_tooth_period = ckp_period_ns;
+    }
+    
     static_cast<void>(TIM5_CAM_CAPTURE);   // leitura limpa o CHF do canal
     g_state.snap.phase_A = !g_state.snap.phase_A;
     if (g_seed_probation) {

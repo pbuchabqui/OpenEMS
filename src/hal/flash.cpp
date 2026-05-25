@@ -50,6 +50,7 @@ static constexpr uint32_t kFlashKey2 = 0xCDEF89ABu;
 static constexpr uint32_t kFlashErrorMask = FLASH_SR_PGSERR | FLASH_SR_WRPERR;
 static constexpr uint32_t kFlashBusyMask = FLASH_SR_BSY | FLASH_SR_WBNE | FLASH_SR_DBNE;
 static constexpr uint32_t kFlashWordsPerStep = 16u;
+static volatile uint32_t g_flash_wait_timeouts = 0u;
 
 // ── Funções auxiliares ───────────────────────────────────────────────────────
 
@@ -65,7 +66,14 @@ static void flash_lock_bank2() noexcept {
 }
 
 static void flash_wait_ready() noexcept {
-    while (FLASH_SR2 & kFlashBusyMask) { }
+    // Timeout defensivo: evita busy-wait infinito se hardware de flash falhar.
+    // ~300k iterações ≈ vários ms de margem para operações de erase/program.
+    constexpr uint32_t kFlashWaitTimeout = 300000u;
+    for (uint32_t i = 0u; i < kFlashWaitTimeout; ++i) {
+        if ((FLASH_SR2 & kFlashBusyMask) == 0u) { return; }
+    }
+    // Timeout: contabiliza e prossegue — caller verifica FLASH_SR2 por erros.
+    ++g_flash_wait_timeouts;
 }
 
 static bool flash_erase_sector(uint32_t sector_num) noexcept {

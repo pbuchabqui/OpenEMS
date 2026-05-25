@@ -238,7 +238,10 @@ uint32_t calc_req_fuel_us(uint16_t displacement_cc,
 }
 
 uint32_t default_req_fuel_us() noexcept {
-    return kDefaultReqFuelUs;
+    return calc_req_fuel_us(cfg::g_eng_cfg.displacement_cc,
+                            cfg::kCylinderCount,
+                            cfg::g_eng_cfg.injector_flow_cc_min,
+                            cfg::g_eng_cfg.stoich_afr_x100);
 }
 
 uint32_t calc_base_pw_us(uint16_t req_fuel_us,
@@ -282,10 +285,11 @@ uint32_t calc_base_pw_us_default(uint8_t ve,
         return 0u;
     }
 
-    const uint32_t num = static_cast<uint32_t>(kDefaultReqFuelUs) *
+    const uint32_t req_fuel_us = default_req_fuel_us();
+    const uint32_t num = req_fuel_us *
                          static_cast<uint32_t>(ve) *
                          static_cast<uint32_t>(map_kpa);
-    uint32_t out = num / (100u * static_cast<uint32_t>(cfg::kMapRefKpa));
+    uint32_t out = num / (100u * static_cast<uint32_t>(cfg::g_eng_cfg.map_ref_kpa));
     if (out > 100000u) {
         out = 100000u;
     }
@@ -376,10 +380,11 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
                                       uint16_t dead_time_us) noexcept {
     uint32_t base_pw_us = 0u;
     if (ve != 0u && map_kpa <= 300u) {
-        const uint32_t num = static_cast<uint32_t>(kDefaultReqFuelUs) *
+        const uint32_t req_fuel_us = default_req_fuel_us();
+        const uint32_t num = req_fuel_us *
                              static_cast<uint32_t>(ve) *
                              static_cast<uint32_t>(map_kpa);
-        base_pw_us = num / (100u * static_cast<uint32_t>(cfg::kMapRefKpa));
+        base_pw_us = num / (100u * static_cast<uint32_t>(cfg::g_eng_cfg.map_ref_kpa));
         if (base_pw_us > 100000u) {
             base_pw_us = 100000u;
         }

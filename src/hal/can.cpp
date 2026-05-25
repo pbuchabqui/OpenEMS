@@ -182,8 +182,9 @@ bool can0_rx_pop(CanFrame& out) noexcept {
         return rx_fifo_pop(out);
     }
 
-    // 2. Índice do próximo elemento a ler
-    const uint32_t get_idx = (fqs >> 8) & 0x3Fu;
+    // 2. Índice do próximo elemento a ler (hardware garante 0-2, mas valida defensivamente)
+    const uint32_t get_idx_raw = (fqs >> 8) & 0x3Fu;
+    const uint32_t get_idx = (get_idx_raw < 3u) ? get_idx_raw : 0u;
     const uint32_t elem_addr = kSramRxFifo0 + get_idx * (kElemSizeWords * 4u);
 
     // 3. Ler dados do elemento

@@ -81,6 +81,7 @@ uint32_t tim5_count() noexcept {
 // ════════════════════════════════════════════════════════════════════════════
 
 void tim3_pwm_init(uint32_t freq_hz) {
+    if (freq_hz == 0u) { return; }
     RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
 
     // PA6 = TIM3_CH1 (IACV), PA7 = TIM3_CH2 (Wastegate) — AF2
@@ -107,6 +108,7 @@ void tim3_pwm_init(uint32_t freq_hz) {
 }
 
 void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
+    if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
     const uint32_t arr = TIM3_ARR;
     // CCR = (ARR+1) * duty_pct_x10 / 1000
     const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
@@ -122,6 +124,7 @@ void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
 // ════════════════════════════════════════════════════════════════════════════
 
 void tim4_pwm_init(uint32_t freq_hz) {
+    if (freq_hz == 0u) { return; }
     RCC_APB1LENR |= RCC_APB1LENR_TIM4EN;
 
     // PB6 = TIM4_CH1 (VVT Exhaust), PB7 = TIM4_CH2 (VVT Intake) — AF2
@@ -145,6 +148,7 @@ void tim4_pwm_init(uint32_t freq_hz) {
 }
 
 void tim4_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
+    if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
     const uint32_t arr = TIM4_ARR;
     const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
     if (ch == 0u) {
@@ -191,5 +195,61 @@ void tim3_set_duty(uint8_t, uint16_t) noexcept {}
 void tim4_set_duty(uint8_t, uint16_t) noexcept {}
 uint32_t tim5_count() noexcept { return g_mock_tim5_cnt; }
 } // namespace ems::hal
+
+// ════════════════════════════════════════════════════════════════════════════
+// TIM1 — PWM para Borboleta Eletrônica (ETB) com dead-time
+// ════════════════════════════════════════════════════════════════════════════
+
+void timer_etb_pwm_init(void) {
+    // ── 1. Habilitar clock TIM1 ───────────────────────────────────────────────
+    RCC_APB4ENR |= RCC_APB4ENR_TIM1EN;
+    
+    // ── 2. Configurar pinos PA8 (TIM1_CH1) e PA9 (TIM1_CH1N) ─────────────────
+    // AF1 = TIM1 nos pinos PA8, PA9
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 8u, GPIO_AF1);
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 9u, GPIO_AF1);
+    
+    // ── 3. Configurar TIM1 para PWM com dead-time ─────────────────────────────
+    // Frequência: 20kHz, Resolução: 10-bit (0-1023)
+    // Timer clock = 250 MHz (APB4)
+    // f_pwm = 250MHz / ((PSC+1) * (ARR+1)) = 20kHz
+    // ARR = 250000000 / 20000 - 1 = 12499
+    // PSC = 0 (sem prescaler)
+    
+    TIM1_CR1 = 0u;                          // Desabilitar durante configuração
+    TIM1_PSC = 0u;                          // Sem prescaler
+    TIM1_ARR = 12499u;                      // 20kHz @ 250MHz
+    TIM1_RCR = 0u;                          // Repetition counter = 0
+    TIM1_EGR = TIM_EGR_UG;                  // Update generation
+    
+    // ── 4. Configurar Channel 1 como PWM mode 1 ───────────────────────────────
+    // CC1S = 00 (output), OC1M = 110 (PWM mode 1), OC1PE = 1 (preload enable)
+    TIM1_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
+    
+    // ── 5. Configurar dead-time no register BDTR ──────────────────────────────
+    // Dead-time = 200ns @ 250MHz = 50 ticks
+    // DTG[7:0] = 50 (0x32)
+    TIM1_BDTR = TIM_BDTR_MOE           // Main output enable
+              | (50u << 0u);           // DTG = 50 → ~200ns
+    
+    // ── 6. Habilitar outputs CH1 e CH1N ───────────────────────────────────────
+    // CC1E = 1, CC1NE = 1, CC1P = 0, CC1NP = 0
+    TIM1_CCER = TIM_CCER_CC1E | TIM_CCER_CC1NE;
+    
+    // ── 7. Inicializar duty cycle em 0 (segurança) ────────────────────────────
+    TIM1_CCR1 = 0u;
+    
+    // ── 8. Iniciar timer ──────────────────────────────────────────────────────
+    TIM1_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;  // Enable + Auto-reload preload
+}
+
+void timer_etb_set_duty(uint16_t duty) {
+    // duty: 0-1023 (10-bit)
+    // TIM1_ARR = 12499, então escalar: CCR1 = (duty * ARR) / 1023
+    if (duty > 1023u) { duty = 1023u; }
+    
+    uint32_t ccr1_val = ((uint32_t)duty * 12499u) / 1023u;
+    TIM1_CCR1 = (uint16_t)ccr1_val;
+}
 
 #endif  // EMS_HOST_TEST

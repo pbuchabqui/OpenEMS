@@ -29,11 +29,13 @@ LDFLAGS_ARM = -mcpu=cortex-m33 -mthumb -nostartfiles \
               -T$(LINKER_SCRIPT)
 
 ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
+             $(SRC_DIR)/engine/engine_config.cpp \
              $(SRC_DIR)/engine/fuel_calc.cpp $(SRC_DIR)/engine/ign_calc.cpp \
              $(SRC_DIR)/engine/knock.cpp $(SRC_DIR)/engine/auxiliaries.cpp \
              $(SRC_DIR)/engine/table3d.cpp $(SRC_DIR)/engine/quick_crank.cpp \
              $(SRC_DIR)/engine/transient_fuel.cpp \
-             $(SRC_DIR)/engine/ecu_sched.cpp
+             $(SRC_DIR)/engine/ecu_sched.cpp \
+             $(SRC_DIR)/engine/diagnostic_manager.cpp
 
 DRV_SRC = $(SRC_DIR)/drv/ckp.cpp $(SRC_DIR)/drv/sensors.cpp
 APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp $(SRC_DIR)/app/can_stack.cpp

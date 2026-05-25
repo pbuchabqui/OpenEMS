@@ -9,6 +9,9 @@ extern "C" uint32_t _sdata;
 extern "C" uint32_t _edata;
 extern "C" uint32_t _sbss;
 extern "C" uint32_t _ebss;
+/* FIX ERRATA FLASH: símbolos do vetor de IRQs em SRAM */
+extern "C" uint32_t _svector_ram;
+extern "C" uint32_t _evector_ram;
 
 extern "C" void Default_Handler();
 extern "C" [[noreturn]] void Reset_Handler();
@@ -22,17 +25,35 @@ extern "C" void TIM5_IRQHandler()     __attribute__((weak, alias("Default_Handle
 extern "C" void _init() {}
 extern "C" void _fini() {}
 
+/* FIX ERRATA FLASH: Handlers críticos marcados com .fastrun para execução em SRAM */
+extern "C" void Default_Handler() __attribute__((section(".fastrun")));
+extern "C" [[noreturn]] void Reset_Handler() __attribute__((section(".fastrun")));
+
 extern "C" void Default_Handler() {
     while (true) { }
 }
 
+/* FIX ERRATA FLASH: Reset_Handler copia vetor de IRQs para SRAM antes de habilitar ISRs */
 extern "C" [[noreturn]] void Reset_Handler() {
-    uint32_t* src = &_sidata;
-    for (uint32_t* dst = &_sdata; dst < &_edata; ++dst, ++src) {
-        *dst = *src;
+    /* FIX ERRATA: Copiar vetor de IRQs para SRAM ANTES de qualquer operação Flash */
+    /* Isso previne o latency spike de 120µs descrito na errata do STM32H562 */
+    const uint32_t* src = &_svector_ram;
+    volatile uint32_t* dst = reinterpret_cast<volatile uint32_t*>(0xE000E000); /* VTOR base */
+    const uint32_t* end = &_evector_ram;
+    while (src < end) {
+        *dst++ = *src++;
     }
-    for (uint32_t* dst = &_sbss; dst < &_ebss; ++dst) {
-        *dst = 0u;
+    /* Agora configura VTOR para apontar para o vetor em SRAM */
+    *(volatile uint32_t*)0xE000ED08 = reinterpret_cast<uint32_t>(&_svector_ram);
+    
+    /* Copia .data para RAM */
+    src = &_sidata;
+    for (uint32_t* d = &_sdata; d < &_edata; ++d, ++src) {
+        *d = *src;
+    }
+    /* Zera .bss */
+    for (uint32_t* d = &_sbss; d < &_ebss; ++d) {
+        *d = 0u;
     }
     __libc_init_array();
     static_cast<void>(main());

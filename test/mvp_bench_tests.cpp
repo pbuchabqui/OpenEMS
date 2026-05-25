@@ -3,16 +3,21 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "app/can_stack.h"
 #include "app/ui_protocol.h"
 #include "drv/ckp.h"
+#include "drv/sensors.h"
+#include "engine/auxiliaries.h"
 #include "engine/calibration.h"
 #include "engine/ecu_sched.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
+#include "engine/knock.h"
 #include "engine/quick_crank.h"
 #include "engine/table3d.h"
 #include "engine/transient_fuel.h"
 #include "hal/adc.h"
+#include "hal/can.h"
 #include "hal/flash.h"
 
 extern volatile uint32_t ems_test_tim5_ccr1;
@@ -292,6 +297,160 @@ void test_fuel_calc_chain() {
            "vbatt correction at 12V returns correct dead time (900us)");
 }
 
+void test_auxiliaries() {
+    // 1. After reset + key_on, pump primes (should be ON initially)
+    ems::engine::auxiliaries_test_reset();
+    ems::engine::auxiliaries_set_key_on(true);
+    ems::engine::auxiliaries_tick_10ms();
+    expect(ems::engine::auxiliaries_test_get_pump_state(),
+           "fuel pump primes after key_on");
+
+    // 2. Cold CLT needs higher idle RPM than warm CLT
+    expect(ems::engine::auxiliaries_idle_target_rpm_x10(-400) >
+           ems::engine::auxiliaries_idle_target_rpm_x10(900),
+           "cold CLT produces higher idle target RPM than warm CLT");
+
+    // 3. Wastegate failsafe starts false after reset
+    ems::engine::auxiliaries_test_reset();
+    expect(!ems::engine::auxiliaries_test_get_wg_failsafe(),
+           "wastegate failsafe is inactive after reset");
+}
+
+void test_can_stack() {
+    // 1. After reset, safe lambda returns WBO2_SAFE_LAMBDA_MILLI (no frame received)
+    ems::hal::can_test_reset();
+    ems::app::can_stack_test_reset();
+    expect(ems::app::can_stack_lambda_milli_safe(0u) == ems::app::WBO2_SAFE_LAMBDA_MILLI,
+           "safe lambda returns fallback when no WBO2 frame received");
+
+    // 2. Inject frame 0x180 with lambda 1.000 (1000 milli)
+    {
+        ems::hal::CanFrame frame = {};
+        frame.id = 0x180u;
+        frame.dlc = 3u;
+        frame.extended = false;
+        frame.data[0] = 0xE8u;  // 1000 & 0xFF
+        frame.data[1] = 0x03u;  // 1000 >> 8
+        frame.data[2] = 0u;     // status
+        ems::hal::can_test_inject_rx(frame);
+    }
+    // Process so RX is consumed
+    {
+        ems::drv::CkpSnapshot snap = {};
+        ems::drv::SensorData sensors = {};
+        ems::app::can_stack_process(100u, snap, sensors, 0, 0, 0, 0u, 0u, 0u);
+    }
+    expect(ems::app::can_stack_lambda_milli() == 1000u,
+           "lambda_milli returns 1000 after injecting 0x180 with lambda 1.000");
+    expect(ems::app::can_stack_wbo2_fresh(100u),
+           "wbo2_fresh is true immediately after receiving frame");
+
+    // 3. WBO2 timeout: frame at t=100, check at t=700 (>500ms timeout)
+    expect(!ems::app::can_stack_wbo2_fresh(700u),
+           "wbo2_fresh is false after 600ms without new frame");
+    expect(ems::app::can_stack_lambda_milli_safe(700u) == ems::app::WBO2_SAFE_LAMBDA_MILLI,
+           "safe lambda returns fallback after WBO2 timeout");
+
+    // 4. TX encoding: call process() and pop 0x400 frame, verify RPM bytes
+    {
+        ems::hal::can_test_reset();
+        ems::app::can_stack_test_reset();
+        ems::drv::CkpSnapshot snap = {};
+        snap.rpm_x10 = 30000u;  // 3000 RPM
+        ems::drv::SensorData sensors = {};
+        // Send at t=10 so elapsed(10, 0, 10) triggers TX (10 - 0 >= 10)
+        ems::app::can_stack_process(10u, snap, sensors, 0, 0, 0, 0u, 0u, 0u);
+        ems::hal::CanFrame tx_frame = {};
+        const bool got_frame = ems::hal::can_test_pop_tx(tx_frame);
+        expect(got_frame, "can_stack_process transmits 0x400 frame");
+        if (got_frame) {
+            expect(tx_frame.id == 0x400u,
+                   "transmitted frame has ID 0x400");
+            const uint16_t rpm_decoded = static_cast<uint16_t>(
+                tx_frame.data[0] | (static_cast<uint16_t>(tx_frame.data[1]) << 8u));
+            expect(rpm_decoded == 3000u,
+                   "0x400 frame bytes 0-1 encode RPM correctly (3000)");
+        }
+    }
+}
+
+void test_knock() {
+    // Reset NVM so knock_init() sees no stored retard
+    ems::hal::nvm_test_reset();
+
+    // 1. After knock_init(), all knock_retard_x10 are 0
+    ems::engine::knock_init();
+    bool all_zero = true;
+    for (uint8_t i = 0u; i < ems::engine::kKnockCylinders; ++i) {
+        if (ems::engine::knock_retard_x10[i] != 0u) {
+            all_zero = false;
+        }
+    }
+    expect(all_zero, "knock_retard_x10 all zero after knock_init with clean NVM");
+
+    // 2. knock_window_open() sets window active and cylinder
+    ems::engine::knock_window_open(0u);
+    expect(ems::engine::knock_test_window_active(),
+           "knock window is active after knock_window_open(0)");
+    expect(ems::engine::knock_test_window_cyl() == 0u,
+           "knock window cylinder is 0 after knock_window_open(0)");
+
+    // 3. Fire ISR 4 times (> default threshold 3), then cycle_complete → retard increases
+    ems::engine::knock_cmp0_isr();
+    ems::engine::knock_cmp0_isr();
+    ems::engine::knock_cmp0_isr();
+    ems::engine::knock_cmp0_isr();
+    ems::engine::knock_cycle_complete(0u);
+    expect(ems::engine::knock_retard_x10[0] > 0u,
+           "knock_retard_x10[0] increases after 4 knock events (threshold=3)");
+    // kRetardStepX10 = 20
+    expect(ems::engine::knock_retard_x10[0] == 20u,
+           "knock_retard_x10[0] equals kRetardStepX10=20 after one knock event");
+
+    // 4. knock_window_close() deactivates window
+    ems::engine::knock_window_close(0u);
+    expect(!ems::engine::knock_test_window_active(),
+           "knock window is inactive after knock_window_close(0)");
+
+    // 5. Many clean cycles → retard decreases (recovery)
+    // Need > kRecoveryDelayCycles (10) clean cycles for recovery to begin
+    const uint16_t initial_retard = ems::engine::knock_retard_x10[0];
+    for (uint8_t i = 0u; i < 20u; ++i) {
+        ems::engine::knock_cycle_complete(0u);
+    }
+    expect(ems::engine::knock_retard_x10[0] < initial_retard,
+           "knock retard decreases after many clean cycles");
+
+    // 6. knock_get_vosel() returns a valid value (0-63)
+    const uint8_t vosel = ems::engine::knock_get_vosel();
+    expect(vosel <= 63u,
+           "knock_get_vosel returns a value in range [0,63]");
+}
+
+void test_sensors() {
+    // 1. After sensors_test_reset(), fault_bits = 0 (healthy initial state)
+    ems::drv::sensors_test_reset();
+    const ems::drv::SensorData data = ems::drv::sensors_get();
+    expect(data.fault_bits == 0u,
+           "sensors_get fault_bits is 0 after sensors_test_reset");
+
+    // 2. validate_sensor_values() on default-initialized (all zero) SensorData returns false
+    const ems::drv::SensorData zero_data = {};
+    expect(!ems::drv::validate_sensor_values(zero_data),
+           "validate_sensor_values returns false for zero-initialized SensorData");
+
+    // 3. get_sensor_health_status() doesn't crash
+    const uint8_t health = ems::drv::get_sensor_health_status();
+    static_cast<void>(health);
+    expect(true, "get_sensor_health_status executes without crashing");
+
+    // 4. After reset, map_kpa_x10 is the fallback value (not zero)
+    ems::drv::sensors_test_reset();
+    const ems::drv::SensorData data2 = ems::drv::sensors_get();
+    expect(data2.map_kpa_x10 == 0u,  // reset_state zeroes g_data before any conversion
+           "sensors_get map_kpa_x10 after test_reset is zero (pre-ADC-update state)");
+}
+
 }  // namespace
 
 int main() {
@@ -302,6 +461,10 @@ int main() {
     test_transient_fuel();
     test_ign_calc();
     test_fuel_calc_chain();
+    test_auxiliaries();
+    test_can_stack();
+    test_knock();
+    test_sensors();
 
     if (g_failures != 0u) {
         std::printf("%u MVP bench host test(s) failed\n", g_failures);

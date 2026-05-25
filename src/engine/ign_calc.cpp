@@ -84,8 +84,16 @@ int16_t calc_idle_spark_correction_deg(uint32_t rpm_x10,
         error_x10 += deadband;
     }
 
+    // Correção base por RPM
     const int32_t corr = error_x10 / static_cast<int32_t>(idle_spark_rpm_per_deg_x10);
-    return clamp_i16(static_cast<int16_t>(corr),
+    
+    // Adicionar trim do ETB (controle coordenado ar+ignição)
+    int16_t etb_trim = ems::engine::etb_get_idle_spark_trim();
+    
+    // Clamp final combinando correção RPM + trim ETB
+    int16_t total_corr = static_cast<int16_t>(corr) + etb_trim;
+    
+    return clamp_i16(total_corr,
                      idle_spark_retard_limit_deg,
                      idle_spark_advance_limit_deg);
 }
