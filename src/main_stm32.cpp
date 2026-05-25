@@ -41,8 +41,10 @@ int main() { return 0; }
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/knock.h"
+#include "engine/map_estimator.h"
 #include "engine/quick_crank.h"
 #include "engine/transient_fuel.h"
+#include "engine/xtau_autocalib.h"
 #include "hal/adc.h"
 #include "hal/can.h"
 #include "hal/flash.h"
@@ -90,7 +92,7 @@ static uint32_t g_loop2ms_last_us = 0u;
 static uint32_t g_loop2ms_max_us = 0u;
 
 static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
-static constexpr uint32_t kRuntimeSeedArmWindowMs = 2000u;
+static constexpr uint32_t kRuntimeSeedArmWindowMs = 300000u;  // 5 minutos para start-stop
 static constexpr uint32_t kSchedulerTicksPerMs = 10000u;
 static constexpr uint32_t kCalibSaveMinIntervalMs = 300000u;
 static constexpr uint16_t kMapMinKpa = 10u;
@@ -345,6 +347,10 @@ static void openems_init() noexcept {
 
     // 6) Drivers
     ems::drv::sensors_init();
+    
+    // 6a) Inicializa sistemas "invisíveis" ao motorista
+    ems::engine::map_estimator_init();
+    ems::engine::xtau_autocalib_init();
 
     // 7) Engine
     ems::engine::fuel_reset_adaptives();
@@ -420,7 +426,15 @@ int main() {
             }
 
             const uint16_t map_kpa_raw = static_cast<uint16_t>(sensors.map_kpa_x10 / 10u);
-            const uint16_t map_kpa = clamp_u16(map_kpa_raw, kMapMinKpa, kMapMaxKpa);
+            const uint16_t map_kpa_sensor = clamp_u16(map_kpa_raw, kMapMinKpa, kMapMaxKpa);
+            
+            // Atualiza estimador de MAP com sensor fusion para resposta transiente rápida
+            const uint16_t map_kpa = ems::engine::map_estimator_update(
+                map_kpa_sensor,
+                sensors.tps_pct_x10,
+                kAePeriodMs,
+                snap.rpm_x10);
+            
             const bool map_fault = (sensors.fault_bits & kFaultBitMap) != 0u;
             const bool clt_fault = (sensors.fault_bits & kFaultBitClt) != 0u;
             g_limp_active = map_fault || clt_fault;
@@ -463,10 +477,27 @@ int main() {
                     const uint32_t fuel_pw_us =
                         final_pw_us_base - static_cast<uint32_t>(fuel_corr.dead_time_us);
                     const bool xtau_enabled = !crank_rpm_window && (snap.rpm_x10 >= 7000u);
+                    
+                    // Detecta transiente para auto-calibração X-τ
+                    const bool is_transient = ems::engine::map_is_transient();
+                    
+                    // Auto-calibração X-τ baseada em erro de lambda
+                    if (full_sync && !crank_rpm_window && sensors.o2_valid) {
+                        const int16_t lambda_measured_x1000 = sensors.lambda_raw_x1000;
+                        ems::engine::xtau_autocalib_update(
+                            snap.rpm_x10,
+                            map_kpa,
+                            lambda_target_x1000,
+                            lambda_measured_x1000,
+                            sensors.clt_degc_x10,
+                            is_transient);
+                    }
+                    
+                    // Usa modelo X-τ com parâmetros aprendidos
                     const uint32_t xtau_fuel_pw_us =
-                        ems::engine::transient_fuel_xtau_update(fuel_pw_us,
-                                                                sensors.clt_degc_x10,
-                                                                xtau_enabled);
+                        ems::engine::transient_fuel_xtau_with_autocalib(fuel_pw_us,
+                                                                        sensors.clt_degc_x10,
+                                                                        xtau_enabled);
                     final_pw_us_base = xtau_fuel_pw_us + static_cast<uint32_t>(fuel_corr.dead_time_us);
                 } else {
                     ems::engine::transient_fuel_reset();
