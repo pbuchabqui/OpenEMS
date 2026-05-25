@@ -181,7 +181,18 @@ void prime_on_tooth(const CkpSnapshot& snap) noexcept {
     if (snap.rpm_x10 == 0u || snap.rpm_x10 >= sanitized_crank_exit_rpm_x10()) { return; }
 
     ++g_prime_tooth_count;
-    if (g_prime_tooth_count < sanitized_prime_tooth()) { return; }
+    
+    // FIX P1 (BUG-8): Resetar contador se ultrapassar o dente alvo sem disparar
+    // Previne que falha na partida anterior impeça prime pulse na próxima tentativa
+    const uint8_t target_tooth = sanitized_prime_tooth();
+    if (g_prime_tooth_count > target_tooth + 5u) {
+        // Ultrapassou o dente alvo com margem de segurança — reseta para próxima tentativa
+        g_prime_tooth_count = 0u;
+        g_prime_done = false;
+        return;
+    }
+    
+    if (g_prime_tooth_count < target_tooth) { return; }
 
     // Dente-alvo: calcula PW usando a tabela de enriquecimento de cranking,
     // CLT e dead time mais recentes atualizados pelo loop de fundo.
