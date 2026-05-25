@@ -321,12 +321,26 @@ inline bool process_gap_event() noexcept {
                 g_state.tooth_count = 0u;
                 return false;
             }
+            
+            // FIX P0 (BUG-12): Validar rotação forward antes de consumir seed
+            // Se rotação for reversa ou instável, não consumir a seed para preservar
+            // o benefício do fast-reacquire na próxima tentativa válida.
+            if (g_seed_armed && !is_forward_rotation_coherent(g_state.snap.tooth_period_ns)) {
+                // Rotação não validada como forward estável — mantém seed armada
+                // mas não avança para FULL_SYNC ainda
+                g_state.tooth_count = 0u;
+                return false;
+            }
+            
             if (g_seed_armed) {
                 g_state.snap.state       = ems::drv::SyncState::FULL_SYNC;
                 g_state.snap.phase_A     = g_seed_phase_a;
                 g_seed_armed             = false;
                 g_seed_probation         = true;
                 g_seed_probation_teeth   = 0u;
+                // Reset contador de coerência após consumo bem-sucedido da seed
+                g_prev_valid_period_ns = 0u;
+                g_coherent_periods_count = 0u;
             } else {
                 g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
             }
@@ -560,6 +574,47 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     sensors_on_tooth(g_state.snap);
     schedule_on_tooth(g_state.snap);
     prime_on_tooth(g_state.snap);
+}
+
+// FIX P0 (BUG-12): Proteger seed contra consumo em rotação reversa
+// Problema: Se a seed for consumida durante partida com rotação reversa,
+// ela é perdida permanentemente até próximo shutdown, mesmo que motor
+// não tenha atingido sincronismo válido.
+// Solução: Validar coerência temporal do período CKP antes de consumir seed.
+// Rotação reversa produz períodos instáveis ou decrescentes inconsistentes.
+static uint32_t g_prev_valid_period_ns = 0u;
+static uint8_t g_coherent_periods_count = 0u;
+
+// Valida se período CKP é coerente com rotação forward estável
+// Períodos coerentes: variação < 25% entre amostras consecutivas
+inline bool is_forward_rotation_coherent(uint32_t period_ns) noexcept {
+    if (period_ns == 0u || period_ns > 10000000u) {  // > 10ms = RPM < 100
+        return false;
+    }
+    
+    if (g_prev_valid_period_ns == 0u) {
+        g_prev_valid_period_ns = period_ns;
+        g_coherent_periods_count = 1u;
+        return true;
+    }
+    
+    // Verifica se variação está dentro de ±25% (rotação estável forward)
+    const uint32_t max_valid = g_prev_valid_period_ns + (g_prev_valid_period_ns >> 2u);
+    const uint32_t min_valid = g_prev_valid_period_ns - (g_prev_valid_period_ns >> 2u);
+    
+    if (period_ns >= min_valid && period_ns <= max_valid) {
+        g_prev_valid_period_ns = period_ns;
+        if (g_coherent_periods_count < 255u) {
+            ++g_coherent_periods_count;
+        }
+        // Requer 3 períodos coerentes consecutivos para validar forward rotation
+        return g_coherent_periods_count >= 3u;
+    } else {
+        // Variação brusca: possível reversão ou ruído
+        g_prev_valid_period_ns = period_ns;
+        g_coherent_periods_count = 1u;
+        return false;
+    }
 }
 
 // ── ISR do cam sensor: TIM5 CH2 (PA1/CMP, rising edge) ──────────────────────
