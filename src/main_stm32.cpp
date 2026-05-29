@@ -520,14 +520,19 @@ int main() {
                     // Detecta transiente para auto-calibração X-τ
                     const bool is_transient = ems::engine::map_is_transient();
                     
-                    // Auto-calibração X-τ baseada em erro de lambda
-                    if (full_sync && !crank_rpm_window && sensors.o2_valid) {
-                        const int16_t lambda_measured_x1000 = sensors.lambda_raw_x1000;
+                    // Auto-calibração X-τ baseada em erro de lambda.
+                    // Lambda vem exclusivamente do WBO2 via CAN (mesma fonte do
+                    // STFT em 100ms); SensorData não carrega mais o2/lambda.
+                    const bool lambda_valid = ems::app::can_stack_wbo2_fresh(now);
+                    if (full_sync && !crank_rpm_window && lambda_valid) {
+                        const uint16_t lambda_measured = clamp_u16(
+                            ems::app::can_stack_lambda_milli_safe(now),
+                            kLambdaMinMilli, kLambdaMaxMilli);
                         ems::engine::xtau_autocalib_update(
                             snap.rpm_x10,
                             map_kpa,
                             lambda_target_x1000,
-                            lambda_measured_x1000,
+                            static_cast<int16_t>(lambda_measured),
                             sensors.clt_degc_x10,
                             is_transient);
                     }
