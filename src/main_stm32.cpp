@@ -457,7 +457,10 @@ int main() {
                 g_etb_loop_timer_ms = now;
                 
                 // Preparar entradas do torque manager
-                g_torque_inputs.pedal_percent = sensors.app_pct_x10 / 10.0f; // APS → %
+                // APP (pedal do acelerador) na entrada analógica de expansão AN1
+                // (raw 12-bit, 0–4095). Distinto de tps_pct_x10, que é a posição
+                // da borboleta (feedback do ETB), não a demanda do motorista.
+                g_torque_inputs.pedal_percent = (static_cast<float>(sensors.an1_raw) * 100.0f) / 4095.0f;
                 g_torque_inputs.engine_rpm = snap.rpm_x10 / 10.0f;
                 g_torque_inputs.coolant_temp = sensors.clt_degc_x10 / 10.0f;
                 g_torque_inputs.intake_air_temp = sensors.iat_degc_x10 / 10.0f;
