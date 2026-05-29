@@ -303,6 +303,51 @@ inline void exit_critical() noexcept {
 #endif
 }
 
+// FIX P0 (BUG-12): Proteger seed contra consumo em rotação reversa
+// Problema: Se a seed for consumida durante partida com rotação reversa,
+// ela é perdida permanentemente até próximo shutdown, mesmo que motor
+// não tenha atingido sincronismo válido.
+// Solução: Validar coerência temporal do período CKP antes de consumir seed.
+// Rotação reversa produz períodos instáveis ou decrescentes inconsistentes.
+//
+// NOTA: declarados aqui (acima de process_gap_event) porque process_gap_event
+// os consome. A ISR ckp_tim5_ch1_isr (única escritora) e estas funções rodam
+// no mesmo contexto de prioridade 1, portanto não precisam de seção crítica.
+static uint32_t g_prev_valid_period_ns = 0u;
+static uint8_t g_coherent_periods_count = 0u;
+
+// Valida se período CKP é coerente com rotação forward estável
+// Períodos coerentes: variação < 25% entre amostras consecutivas
+inline bool is_forward_rotation_coherent(uint32_t period_ns) noexcept {
+    if (period_ns == 0u || period_ns > 10000000u) {  // > 10ms = RPM < 100
+        return false;
+    }
+
+    if (g_prev_valid_period_ns == 0u) {
+        g_prev_valid_period_ns = period_ns;
+        g_coherent_periods_count = 1u;
+        return true;
+    }
+
+    // Verifica se variação está dentro de ±25% (rotação estável forward)
+    const uint32_t max_valid = g_prev_valid_period_ns + (g_prev_valid_period_ns >> 2u);
+    const uint32_t min_valid = g_prev_valid_period_ns - (g_prev_valid_period_ns >> 2u);
+
+    if (period_ns >= min_valid && period_ns <= max_valid) {
+        g_prev_valid_period_ns = period_ns;
+        if (g_coherent_periods_count < 255u) {
+            ++g_coherent_periods_count;
+        }
+        // Requer 3 períodos coerentes consecutivos para validar forward rotation
+        return g_coherent_periods_count >= 3u;
+    } else {
+        // Variação brusca: possível reversão ou ruído
+        g_prev_valid_period_ns = period_ns;
+        g_coherent_periods_count = 1u;
+        return false;
+    }
+}
+
 // ── Processamento de gap na máquina de estados ───────────────────────────────
 // Chamado pela ISR quando period > 1,5 × avg E tooth_count satisfaz a condição.
 // Retorna true se o gap foi aceito (transição válida).
@@ -576,47 +621,6 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     prime_on_tooth(g_state.snap);
 }
 
-// FIX P0 (BUG-12): Proteger seed contra consumo em rotação reversa
-// Problema: Se a seed for consumida durante partida com rotação reversa,
-// ela é perdida permanentemente até próximo shutdown, mesmo que motor
-// não tenha atingido sincronismo válido.
-// Solução: Validar coerência temporal do período CKP antes de consumir seed.
-// Rotação reversa produz períodos instáveis ou decrescentes inconsistentes.
-static uint32_t g_prev_valid_period_ns = 0u;
-static uint8_t g_coherent_periods_count = 0u;
-
-// Valida se período CKP é coerente com rotação forward estável
-// Períodos coerentes: variação < 25% entre amostras consecutivas
-inline bool is_forward_rotation_coherent(uint32_t period_ns) noexcept {
-    if (period_ns == 0u || period_ns > 10000000u) {  // > 10ms = RPM < 100
-        return false;
-    }
-    
-    if (g_prev_valid_period_ns == 0u) {
-        g_prev_valid_period_ns = period_ns;
-        g_coherent_periods_count = 1u;
-        return true;
-    }
-    
-    // Verifica se variação está dentro de ±25% (rotação estável forward)
-    const uint32_t max_valid = g_prev_valid_period_ns + (g_prev_valid_period_ns >> 2u);
-    const uint32_t min_valid = g_prev_valid_period_ns - (g_prev_valid_period_ns >> 2u);
-    
-    if (period_ns >= min_valid && period_ns <= max_valid) {
-        g_prev_valid_period_ns = period_ns;
-        if (g_coherent_periods_count < 255u) {
-            ++g_coherent_periods_count;
-        }
-        // Requer 3 períodos coerentes consecutivos para validar forward rotation
-        return g_coherent_periods_count >= 3u;
-    } else {
-        // Variação brusca: possível reversão ou ruído
-        g_prev_valid_period_ns = period_ns;
-        g_coherent_periods_count = 1u;
-        return false;
-    }
-}
-
 // ── ISR do cam sensor: TIM5 CH2 (PA1/CMP, rising edge) ──────────────────────
 // Cada borda de subida do cam sensor indica meio ciclo de motor (180° de virabrequim).
 // phase_A alterna para permitir ao agendador identificar qual par de cilindros está
@@ -703,6 +707,7 @@ void ckp_test_reset() noexcept {
         0u,
         0u,
         0u,
+        0u,  // cmp_glitch_count
     };
     ems_test_tim5_ccr1   = 0u;
     ems_test_tim5_ccr2   = 0u;
@@ -714,6 +719,8 @@ void ckp_test_reset() noexcept {
     g_seed_loaded_count = 0u;
     g_seed_confirmed_count = 0u;
     g_seed_rejected_count = 0u;
+    g_prev_valid_period_ns = 0u;
+    g_coherent_periods_count = 0u;
 }
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {
