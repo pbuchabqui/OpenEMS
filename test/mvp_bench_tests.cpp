@@ -10,15 +10,20 @@
 #include "engine/auxiliaries.h"
 #include "engine/calibration.h"
 #include "engine/ecu_sched.h"
+#include "engine/etb_control.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/knock.h"
 #include "engine/quick_crank.h"
 #include "engine/table3d.h"
+#include "engine/torque_manager.h"
 #include "engine/transient_fuel.h"
+#include "engine/xtau_autocalib.h"
 #include "hal/adc.h"
 #include "hal/can.h"
+#include "hal/etb_driver.h"
 #include "hal/flash.h"
+#include "hal/timer.h"
 
 extern volatile uint32_t ems_test_tim5_ccr1;
 extern volatile uint32_t ems_test_tim5_ccr2;
@@ -264,6 +269,98 @@ void test_ign_calc() {
            "idle spark advances when rpm is below target");
 }
 
+void feed_clt_deg_x10(int16_t degc_x10) {
+    for (uint8_t i = 0u; i < 128u; ++i) {
+        ems::drv::sensors_test_set_clt_table_entry(i, degc_x10);
+    }
+    ems::hal::adc_test_set_raw_secondary(ems::hal::AdcSecondaryChannel::CLT_SE14, 2048u);
+    for (uint8_t i = 0u; i < 8u; ++i) {
+        ems::drv::sensors_tick_100ms();
+    }
+}
+
+void feed_map_kpa_x10(uint16_t map_kpa_x10) {
+    const uint32_t raw = (static_cast<uint32_t>(map_kpa_x10) * 4095u) / 3000u;
+    const uint16_t map_raw = static_cast<uint16_t>(raw > 4095u ? 4095u : raw);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::MAP_SE10, map_raw);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::MAF_V_SE11, 1000u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::TPS_SE12, 1000u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::O2_SE4B, 1000u);
+
+    ems::drv::CkpSnapshot snap{};
+    snap.state = ems::drv::SyncState::FULL_SYNC;
+    snap.tooth_period_ns = 1000000u;
+    for (uint8_t i = 0u; i < 5u; ++i) {
+        ems::drv::sensors_on_tooth(snap);
+    }
+}
+
+void feed_tps_pct_x10(uint16_t tps_pct_x10) {
+    const uint16_t raw = static_cast<uint16_t>(
+        200u + ((static_cast<uint32_t>(tps_pct_x10) * 3695u) / 1000u));
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::TPS_SE12, raw);
+    ems::drv::CkpSnapshot snap{};
+    snap.state = ems::drv::SyncState::FULL_SYNC;
+    snap.tooth_period_ns = 1000000u;
+    for (uint8_t i = 0u; i < 5u; ++i) {
+        ems::drv::sensors_on_tooth(snap);
+    }
+}
+
+void test_auxiliaries() {
+    ems::drv::ckp_test_reset();
+    ems::drv::sensors_init();
+    ems::engine::auxiliaries_test_reset();
+    ems::engine::auxiliaries_set_key_on(true);
+
+    feed_clt_deg_x10(900);
+    expect(ems::engine::auxiliaries_idle_target_rpm_x10(900) >= 8000u,
+           "auxiliaries idle target rpm decreases with warmup table at 90C");
+
+    ems::engine::auxiliaries_tick_10ms();
+    expect(ems::engine::auxiliaries_test_get_pump_state(),
+           "auxiliaries energize fuel pump while key is on");
+
+    feed_clt_deg_x10(960);
+    for (uint8_t i = 0u; i < 3u; ++i) {
+        ems::engine::auxiliaries_tick_10ms();
+    }
+    expect(ems::engine::auxiliaries_test_get_fan_state(),
+           "auxiliaries turn cooling fan on above CLT threshold");
+
+    ems::engine::auxiliaries_test_reset();
+    ems::engine::auxiliaries_set_key_on(true);
+    feed_clt_deg_x10(700);
+    feed_map_kpa_x10(800u);
+    feed_tps_pct_x10(100u);
+
+    for (uint8_t i = 0u; i < 30u; ++i) {
+        ems::engine::auxiliaries_tick_20ms();
+    }
+    expect(ems::engine::auxiliaries_test_get_iac_duty() > 0u,
+           "auxiliaries IAC PID increases duty when rpm is below target");
+
+    ems::drv::ckp_test_reset();
+    ems::engine::auxiliaries_test_reset();
+    feed_map_kpa_x10(800u);
+    feed_tps_pct_x10(100u);
+    for (uint8_t i = 0u; i < 30u; ++i) {
+        feed_map_kpa_x10(1600u);
+        ems::engine::auxiliaries_tick_20ms();
+    }
+    expect(ems::engine::auxiliaries_test_get_wg_failsafe(),
+           "auxiliaries wastegate enters failsafe after sustained overboost");
+
+    ems::drv::ckp_test_reset();
+    ems::engine::auxiliaries_test_reset();
+    for (uint8_t i = 0u; i < 25u; ++i) {
+        ems::engine::auxiliaries_tick_10ms();
+    }
+    expect(ems::engine::auxiliaries_test_get_vvt_esc_duty() == 0u &&
+               ems::engine::auxiliaries_test_get_vvt_adm_duty() == 0u,
+           "auxiliaries hold VVT at zero without FULL_SYNC confirmation");
+}
+
 void test_fuel_calc_chain() {
     using namespace ems::engine;
 
@@ -298,43 +395,34 @@ void test_fuel_calc_chain() {
 }
 
 void test_auxiliaries() {
-    // 1. After reset + key_on, pump primes (should be ON initially)
     ems::engine::auxiliaries_test_reset();
     ems::engine::auxiliaries_set_key_on(true);
     ems::engine::auxiliaries_tick_10ms();
     expect(ems::engine::auxiliaries_test_get_pump_state(),
            "fuel pump primes after key_on");
-
-    // 2. Cold CLT needs higher idle RPM than warm CLT
     expect(ems::engine::auxiliaries_idle_target_rpm_x10(-400) >
            ems::engine::auxiliaries_idle_target_rpm_x10(900),
            "cold CLT produces higher idle target RPM than warm CLT");
-
-    // 3. Wastegate failsafe starts false after reset
     ems::engine::auxiliaries_test_reset();
     expect(!ems::engine::auxiliaries_test_get_wg_failsafe(),
            "wastegate failsafe is inactive after reset");
 }
 
 void test_can_stack() {
-    // 1. After reset, safe lambda returns WBO2_SAFE_LAMBDA_MILLI (no frame received)
     ems::hal::can_test_reset();
     ems::app::can_stack_test_reset();
     expect(ems::app::can_stack_lambda_milli_safe(0u) == ems::app::WBO2_SAFE_LAMBDA_MILLI,
            "safe lambda returns fallback when no WBO2 frame received");
-
-    // 2. Inject frame 0x180 with lambda 1.000 (1000 milli)
     {
         ems::hal::CanFrame frame = {};
         frame.id = 0x180u;
         frame.dlc = 3u;
         frame.extended = false;
-        frame.data[0] = 0xE8u;  // 1000 & 0xFF
-        frame.data[1] = 0x03u;  // 1000 >> 8
-        frame.data[2] = 0u;     // status
+        frame.data[0] = 0xE8u;
+        frame.data[1] = 0x03u;
+        frame.data[2] = 0u;
         ems::hal::can_test_inject_rx(frame);
     }
-    // Process so RX is consumed
     {
         ems::drv::CkpSnapshot snap = {};
         ems::drv::SensorData sensors = {};
@@ -344,58 +432,42 @@ void test_can_stack() {
            "lambda_milli returns 1000 after injecting 0x180 with lambda 1.000");
     expect(ems::app::can_stack_wbo2_fresh(100u),
            "wbo2_fresh is true immediately after receiving frame");
-
-    // 3. WBO2 timeout: frame at t=100, check at t=700 (>500ms timeout)
     expect(!ems::app::can_stack_wbo2_fresh(700u),
            "wbo2_fresh is false after 600ms without new frame");
     expect(ems::app::can_stack_lambda_milli_safe(700u) == ems::app::WBO2_SAFE_LAMBDA_MILLI,
            "safe lambda returns fallback after WBO2 timeout");
-
-    // 4. TX encoding: call process() and pop 0x400 frame, verify RPM bytes
     {
         ems::hal::can_test_reset();
         ems::app::can_stack_test_reset();
         ems::drv::CkpSnapshot snap = {};
-        snap.rpm_x10 = 30000u;  // 3000 RPM
+        snap.rpm_x10 = 30000u;
         ems::drv::SensorData sensors = {};
-        // Send at t=10 so elapsed(10, 0, 10) triggers TX (10 - 0 >= 10)
         ems::app::can_stack_process(10u, snap, sensors, 0, 0, 0, 0u, 0u, 0u);
         ems::hal::CanFrame tx_frame = {};
         const bool got_frame = ems::hal::can_test_pop_tx(tx_frame);
         expect(got_frame, "can_stack_process transmits 0x400 frame");
         if (got_frame) {
-            expect(tx_frame.id == 0x400u,
-                   "transmitted frame has ID 0x400");
+            expect(tx_frame.id == 0x400u, "transmitted frame has ID 0x400");
             const uint16_t rpm_decoded = static_cast<uint16_t>(
                 tx_frame.data[0] | (static_cast<uint16_t>(tx_frame.data[1]) << 8u));
-            expect(rpm_decoded == 3000u,
-                   "0x400 frame bytes 0-1 encode RPM correctly (3000)");
+            expect(rpm_decoded == 3000u, "0x400 frame bytes 0-1 encode RPM correctly (3000)");
         }
     }
 }
 
 void test_knock() {
-    // Reset NVM so knock_init() sees no stored retard
     ems::hal::nvm_test_reset();
-
-    // 1. After knock_init(), all knock_retard_x10 are 0
     ems::engine::knock_init();
     bool all_zero = true;
     for (uint8_t i = 0u; i < ems::engine::kKnockCylinders; ++i) {
-        if (ems::engine::knock_retard_x10[i] != 0u) {
-            all_zero = false;
-        }
+        if (ems::engine::knock_retard_x10[i] != 0u) { all_zero = false; }
     }
     expect(all_zero, "knock_retard_x10 all zero after knock_init with clean NVM");
-
-    // 2. knock_window_open() sets window active and cylinder
     ems::engine::knock_window_open(0u);
     expect(ems::engine::knock_test_window_active(),
            "knock window is active after knock_window_open(0)");
     expect(ems::engine::knock_test_window_cyl() == 0u,
            "knock window cylinder is 0 after knock_window_open(0)");
-
-    // 3. Fire ISR 4 times (> default threshold 3), then cycle_complete → retard increases
     ems::engine::knock_cmp0_isr();
     ems::engine::knock_cmp0_isr();
     ems::engine::knock_cmp0_isr();
@@ -403,51 +475,29 @@ void test_knock() {
     ems::engine::knock_cycle_complete(0u);
     expect(ems::engine::knock_retard_x10[0] > 0u,
            "knock_retard_x10[0] increases after 4 knock events (threshold=3)");
-    // kRetardStepX10 = 20
     expect(ems::engine::knock_retard_x10[0] == 20u,
            "knock_retard_x10[0] equals kRetardStepX10=20 after one knock event");
-
-    // 4. knock_window_close() deactivates window
     ems::engine::knock_window_close(0u);
     expect(!ems::engine::knock_test_window_active(),
            "knock window is inactive after knock_window_close(0)");
-
-    // 5. Many clean cycles → retard decreases (recovery)
-    // Need > kRecoveryDelayCycles (10) clean cycles for recovery to begin
     const uint16_t initial_retard = ems::engine::knock_retard_x10[0];
-    for (uint8_t i = 0u; i < 20u; ++i) {
-        ems::engine::knock_cycle_complete(0u);
-    }
+    for (uint8_t i = 0u; i < 20u; ++i) { ems::engine::knock_cycle_complete(0u); }
     expect(ems::engine::knock_retard_x10[0] < initial_retard,
            "knock retard decreases after many clean cycles");
-
-    // 6. knock_get_vosel() returns a valid value (0-63)
-    const uint8_t vosel = ems::engine::knock_get_vosel();
-    expect(vosel <= 63u,
+    expect(ems::engine::knock_get_vosel() <= 63u,
            "knock_get_vosel returns a value in range [0,63]");
 }
 
 void test_sensors() {
-    // 1. After sensors_test_reset(), fault_bits = 0 (healthy initial state)
     ems::drv::sensors_test_reset();
-    const ems::drv::SensorData data = ems::drv::sensors_get();
-    expect(data.fault_bits == 0u,
+    expect(ems::drv::sensors_get().fault_bits == 0u,
            "sensors_get fault_bits is 0 after sensors_test_reset");
-
-    // 2. validate_sensor_values() on default-initialized (all zero) SensorData returns false
-    const ems::drv::SensorData zero_data = {};
-    expect(!ems::drv::validate_sensor_values(zero_data),
+    expect(!ems::drv::validate_sensor_values(ems::drv::SensorData{}),
            "validate_sensor_values returns false for zero-initialized SensorData");
-
-    // 3. get_sensor_health_status() doesn't crash
-    const uint8_t health = ems::drv::get_sensor_health_status();
-    static_cast<void>(health);
+    static_cast<void>(ems::drv::get_sensor_health_status());
     expect(true, "get_sensor_health_status executes without crashing");
-
-    // 4. After reset, map_kpa_x10 is the fallback value (not zero)
     ems::drv::sensors_test_reset();
-    const ems::drv::SensorData data2 = ems::drv::sensors_get();
-    expect(data2.map_kpa_x10 == 0u,  // reset_state zeroes g_data before any conversion
+    expect(ems::drv::sensors_get().map_kpa_x10 == 0u,
            "sensors_get map_kpa_x10 after test_reset is zero (pre-ADC-update state)");
 }
 
@@ -455,7 +505,6 @@ void test_tim8_wraparound() {
     ECU_Hardware_Init();
     ecu_sched_test_reset();
     ecu_sched_test_set_tim8_cnt(0xFFFEu);
-
     ems::drv::CkpSnapshot snap{};
     snap.state = ems::drv::SyncState::FULL_SYNC;
     snap.phase_A = true;
@@ -465,7 +514,6 @@ void test_tim8_wraparound() {
     ems::drv::schedule_on_tooth(snap);
     snap.tooth_index = 0u;
     ems::drv::schedule_on_tooth(snap);
-
     for (uint8_t ch = 1u; ch <= 4u; ++ch) {
         expect(ecu_sched_test_get_tim8_ccr(ch) <= 0xFFFFu,
                "TIM8 CCR stays in 16-bit range when CNT near rollover");
@@ -475,37 +523,104 @@ void test_tim8_wraparound() {
 void test_sensor_adc_recovery_fallback() {
     ems::drv::sensors_test_reset();
     ems::hal::adc_test_set_recovery_failed(true);
-
     ems::drv::CkpSnapshot snap{};
     snap.tooth_period_ns = 1000000u;
-    for (uint8_t i = 0u; i < 5u; ++i) {
-        ems::drv::sensors_on_tooth(snap);
-    }
+    for (uint8_t i = 0u; i < 5u; ++i) { ems::drv::sensors_on_tooth(snap); }
     ems::drv::sensors_tick_100ms();
-
-    const auto data = ems::drv::sensors_get();
-    expect(data.map_kpa_x10 == ems::drv::kFallbackMapKpaX10,
+    expect(ems::drv::sensors_get().map_kpa_x10 == ems::drv::kFallbackMapKpaX10,
            "MAP uses fallback when ADC recovery failed");
-
     ems::hal::adc_test_set_recovery_failed(false);
 }
 
 void test_sensor_clt_fault_fallback() {
     ems::drv::sensors_test_reset();
     ems::drv::sensors_init();
-
-    ems::hal::adc_test_set_raw_secondary(
-        ems::hal::AdcSecondaryChannel::CLT_SE14, 0u);
-
+    ems::hal::adc_test_set_raw_secondary(ems::hal::AdcSecondaryChannel::CLT_SE14, 0u);
     ems::drv::sensors_tick_100ms();
     ems::drv::sensors_tick_100ms();
     ems::drv::sensors_tick_100ms();
-
     const auto data = ems::drv::sensors_get();
     expect(data.clt_degc_x10 == ems::drv::kFallbackCltDegcX10,
            "CLT uses fallback value after 3 consecutive out-of-range reads");
     expect((data.fault_bits & (1u << 3u)) != 0u,
            "CLT fault bit is set after consecutive range violations");
+}
+
+void test_etb_control() {
+    using namespace ems::engine;
+    ems::drv::sensors_init();
+    ems::hal::etb_driver_test_reset();
+    torque_manager_reset();
+    etb_control_reset();
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN1_SE6B, 2048u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN2_SE7B, 2048u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN3_SE8B, 1000u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN4_SE9B, 1000u);
+    ems::drv::sensors_tick_100ms();
+    etb_cal_valid = 1u;
+    ems::drv::CkpSnapshot snap{};
+    snap.state = ems::drv::SyncState::FULL_SYNC;
+    snap.rpm_x10 = 4000u;
+    snap.tooth_period_ns = 1000000u;
+    const auto sensors = ems::drv::sensors_get();
+    const auto torque = torque_manager_update(snap, sensors, true, false, false, 8000u, 2u);
+    expect(torque.etb_enable_request,
+           "torque manager enables ETB when calibrated and no faults");
+    const auto etb_state = etb_control_update(500u, 0u, true, 2u);
+    expect(etb_state.active, "ETB control is active when enabled");
+    expect(etb_state.output_pct_x10 > 0, "ETB PID outputs positive when below target");
+    etb_control_reset();
+    const auto etb_state2 = etb_control_update(500u, 500u, true, 2u);
+    expect(etb_state2.output_pct_x10 >= -5 && etb_state2.output_pct_x10 <= 5,
+           "ETB PID output near zero when at target");
+    etb_control_reset();
+    const auto etb_state3 = etb_control_update(500u, 0u, false, 2u);
+    expect(etb_state3.output_pct_x10 == 0, "ETB output zeroed when disable requested");
+}
+
+void test_throttle_plausibility() {
+    ems::drv::sensors_init();
+    ems::engine::etb_cal_valid = 1u;
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN1_SE6B, 1000u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN2_SE7B, 1000u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN3_SE8B, 1000u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN4_SE9B, 1000u);
+    ems::drv::sensors_tick_100ms();
+    expect(ems::drv::sensors_get().throttle_fault_bits == 0u,
+           "no throttle faults when sensors agree");
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN1_SE6B, 100u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN2_SE7B, 4000u);
+    ems::drv::sensors_tick_100ms();
+    expect((ems::drv::sensors_get().throttle_fault_bits & ems::drv::THROTTLE_FAULT_APP_PLAUS) != 0u,
+           "APP plausibility fault when delta exceeds threshold");
+    ems::engine::etb_cal_valid = 1u;
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN3_SE8B, 100u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::AN4_SE9B, 4000u);
+    ems::drv::sensors_tick_100ms();
+    expect((ems::drv::sensors_get().throttle_fault_bits & ems::drv::THROTTLE_FAULT_ETB_PLAUS) != 0u,
+           "ETB plausibility fault when TPS1/TPS2 delta exceeds threshold");
+}
+
+void test_xtau_autocal() {
+    ems::engine::xtau_autocal_test_reset();
+    ems::engine::xtau_autocal_tick(10000u, 50, 900, true);
+    expect(!ems::engine::xtau_autocal_is_active(),
+           "X-tau autocal inactive when disabled");
+    ems::engine::xtau_autocal_enabled = 1u;
+    ems::engine::xtau_autocal_tick(60001u, 10, 900, true);
+    expect(!ems::engine::xtau_autocal_is_active(),
+           "X-tau no learning with small STFT error");
+    ems::engine::xtau_autocal_tick(120001u, 50, 900, true);
+    expect(ems::engine::xtau_autocal_is_active(),
+           "X-tau learning active with large positive STFT");
+    expect(ems::engine::xtau_autocal_test_get_tau_delta(5) == 1,
+           "tau delta incremented for positive STFT at warm CLT");
+    ems::engine::xtau_autocal_test_reset();
+    ems::engine::xtau_autocal_enabled = 1u;
+    ems::engine::xtau_autocal_tick(60001u, 50, 900, true);
+    ems::engine::xtau_autocal_tick(61000u, 30, 900, true);
+    expect(!ems::engine::xtau_autocal_is_active(),
+           "X-tau blocked before minimum interval");
 }
 
 }  // namespace
@@ -525,6 +640,9 @@ int main() {
     test_tim8_wraparound();
     test_sensor_adc_recovery_fallback();
     test_sensor_clt_fault_fallback();
+    test_etb_control();
+    test_throttle_plausibility();
+    test_xtau_autocal();
 
     if (g_failures != 0u) {
         std::printf("%u MVP bench host test(s) failed\n", g_failures);

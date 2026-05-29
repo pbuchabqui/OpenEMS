@@ -15,8 +15,8 @@ struct UiRealtimeData {
     uint8_t advance_p40;
     uint8_t ve;
     int8_t stft_p100;
-    uint8_t status_bits;
-    uint8_t reserved[52];
+    uint16_t status_bits;
+    uint8_t reserved[50];
 };
 
 static_assert(sizeof(UiRealtimeData) == 64u, "UiRealtimeData must be 64 bytes");

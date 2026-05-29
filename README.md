@@ -126,8 +126,20 @@ Mapeamento atual pretendido:
 | AUX PWM 2 | TIM3 CH2 | PA7 |
 | AUX PWM 3 | TIM4 CH1 | PB6 |
 | AUX PWM 4 | TIM4 CH2 | PB7 |
+| ETB PWM | TIM1 CH1 | PA8 |
+| ETB DIR | GPIO | PB14 |
+| ETB EN | GPIO | PB15 |
 | UI proprietaria UART TX | USART1 TX | PA9 |
 | UI proprietaria UART RX | USART1 RX | PA10 |
+
+Pinos ADC (expansão):
+
+| Funcao | Canal | Pino |
+|---|---:|---|
+| APP1 | AN1/ADC1_IN7 | PB0 |
+| APP2 | AN2/ADC1_IN8 | PB1 |
+| ETB_TPS1 | AN3/ADC1_IN9 | PC0 |
+| ETB_TPS2 | AN4/ADC1_IN10 | PC1 |
 
 Limitacoes de placa/pino:
 
@@ -196,12 +208,52 @@ make clean
 Definicao de pronto para o MVP de bancada:
 
 - `make firmware` gera `.elf`, `.hex` e `.bin`.
-- `make host-test` cobre regressao minima de CKP 60-2, quick crank, scheduler, tabelas e protocolo da UI proprietaria.
+- `make host-test` cobre regressao minima de CKP 60-2, quick crank, scheduler, tabelas, protocolo da UI proprietaria, ETB control, plausibilidade de pedal/ETB e autocalibracao X-τ.
 - Firmware sobe na STM32H562 com ST-Link, sem bobinas/injetores energizados, sem reset loop ou hard fault.
 - TIM5 recebe CKP/CMP sintetico de 200 a 8500 rpm e telemetria mostra transicoes `WAIT_GAP`, `HALF_SYNC`, `FULL_SYNC`, perda e retomada de sync.
 - TIM2/TIM8 geram sinais verificaveis em osciloscopio para cranking, half-sync, full-sync, loss-of-sync e zero RPM.
+- ETB (TIM1/PA8) permanece desligado até `etb_cal_valid==1 && !throttle_fault_bits`.
 - UI bridge usa UART `PA9/PA10` a 115200 8N1 para assinatura, realtime data e escrita pequena de calibracao.
 - Durante ensaio, registrar `loop2_last`, `loop2_max`, `late_event_count`, `cycle_schedule_drop_count` e `calibration_clamp_count`.
+
+### Status Bits (16-bit, CAN frame bytes 6-7)
+
+- Status bits são transmitidos no quadro CAN 0x400 nos bytes 6-7 (upper byte em `data[7]`).
+- Bits definidos em `src/app/status_bits.h`:
+  - `STATUS_SYNC_FULL` (bit 0): sincronismo CKP/CMP completo.
+  - `STATUS_PHASE_A` (bit 1): fase parcial disponível.
+  - `STATUS_SENSOR_FAULT` (bit 2): falha em sensores analógicos.
+  - `STATUS_LIMP_MODE` (bit 3): modo de emergência ativo.
+  - `STATUS_ETB_LIMP` (bit 4): ETB em modo limp (limite reduzido).
+  - `STATUS_XTAU_LEARN` (bit 5): autocalibracao X-τ em progresso.
+  - `STATUS_SCHED_LATE` (bit 6): evento de scheduler atrasado.
+  - `STATUS_SCHED_DROP` (bit 7): evento descartado no scheduler.
+  - `STATUS_SCHED_CLAMP` (bit 8): ajuste limitado na calibracao.
+  - `STATUS_WBO2_FAULT` (bit 9): sensor WBO2 offline.
+
+### ETB (Electronic Throttle Body)
+
+- PWM: TIM1 CH1 em PA8, frequência configurável (default 2kHz).
+- H-bridge: GPIO PB14 (DIR) + PB15 (EN) para driver DRV8701-style.
+- Boot policy: ETB desativado (`EN=0`, PWM=0) até calibracao valida e sensores OK.
+- Plausibilidade dual-sensor:
+  - APP plausibilidade: compara APP1 vs APP2 (pinos PB0/PB1), gera `THROTTLE_FAULT_APP_PLAUS` se delta exceder limite.
+  - ETB_TPS plausibilidade: compara ETB_TPS1 vs ETB_TPS2 (pinos PC0/PC1), gera `THROTTLE_FAULT_ETB_PLAUS` se delta exceder limite.
+  - Delta máximo default: 12% entre sensores redundantes.
+- Falhas: `THROTTLE_FAULT_APP1/APP2/APP_PLAUS` bloqueiam demanda; `THROTTLE_FAULT_ETB_*` entram em limp mode com `etb_max_open_pct_x10_limp` (default 25%).
+- RATE limits: `etb_max_rate_pct_per_s` (default 500 %/s).
+- Gating do torque manager:
+  - Falhas APP (`THROTTLE_FAULT_APP1/APP2/APP_PLAUS`): limitam abertura do ETB (limp home) mas nao desativam o enable request.
+  - Falhas ETB (`THROTTLE_FAULT_ETB_TPS1/ETB_TPS2/ETB_PLAUS`): desativam o enable request do ETB via `etb_enable_request = false`.
+
+### X-τ Autocalibracao
+
+- Executa no slot 100ms, gated por: RPM > 2000, STFT ±500 limites, lambda valido, AE inativo.
+- Bloqueio de intervalo: `kLearnIntervalMs = 60000u` (mínimo 60s entre aprendizados consecutivos).
+- Deadband STFT: não aprende quando `|STFT| <= 20` (±20% deadband).
+- Ajuste lento: 1 LSB por minuto max, clamp aos limites de tabela (1..255 ciclos).
+- Persistencia: RAM only, salva em NVM page 6 via burn explícito (nunca durante motor girando).
+- Safety: nunca executa erase/program durante janela critica de CKP/scheduler.
 
 Fora do MVP de bancada:
 

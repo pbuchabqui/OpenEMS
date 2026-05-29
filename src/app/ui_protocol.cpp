@@ -182,27 +182,27 @@ inline void update_realtime_page() noexcept {
     rt.ve          = g_page1_ve[0];
     rt.stft_p100   = g_rt_stft_p100;
 
-    uint8_t status = 0u;
+    uint16_t status = 0u;
     if (c.state == ems::drv::SyncState::FULL_SYNC) {
         status |= ems::app::STATUS_SYNC_FULL;
     }
     if (c.phase_A) {
-        status = static_cast<uint8_t>(status | ems::app::STATUS_PHASE_A);
+        status = static_cast<uint16_t>(status | ems::app::STATUS_PHASE_A);
     }
     if (s.fault_bits != 0u) {
-        status = static_cast<uint8_t>(status | ems::app::STATUS_SENSOR_FAULT);
+        status = static_cast<uint16_t>(status | ems::app::STATUS_SENSOR_FAULT);
     }
     if (g_rt_sched_late_events != 0u) {
-        status = static_cast<uint8_t>(status | ems::app::STATUS_SCHED_LATE);
+        status = static_cast<uint16_t>(status | ems::app::STATUS_SCHED_LATE);
     }
     if (g_rt_sched_cycle_schedule_drop_count != 0u) {
-        status = static_cast<uint8_t>(status | ems::app::STATUS_SCHED_DROP);
+        status = static_cast<uint16_t>(status | ems::app::STATUS_SCHED_DROP);
     }
     if (g_rt_sched_calibration_clamp_count != 0u) {
-        status = static_cast<uint8_t>(status | ems::app::STATUS_SCHED_CLAMP);
+        status = static_cast<uint16_t>(status | ems::app::STATUS_SCHED_CLAMP);
     }
     if (ems::app::can_stack_wbo2_fault()) {
-        status = static_cast<uint8_t>(status | ems::app::STATUS_WBO2_FAULT);
+        status = static_cast<uint16_t>(status | ems::app::STATUS_WBO2_FAULT);
     }
     rt.status_bits = status;
     write_u32_le(&rt.reserved[0], g_rt_sched_late_events);

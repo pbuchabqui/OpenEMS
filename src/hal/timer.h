@@ -13,4 +13,7 @@ void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept;
 void tim4_pwm_init(uint32_t freq_hz);
 void tim4_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept;
 
+void tim1_etb_pwm_init(uint32_t freq_hz);
+void tim1_etb_set_duty_x10(uint16_t duty_pct_x10) noexcept;
+
 } // namespace ems::hal

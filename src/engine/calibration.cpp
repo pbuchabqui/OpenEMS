@@ -1,5 +1,7 @@
 #include "engine/calibration.h"
 
+#include <cstring>
+
 namespace ems::engine {
 
 uint8_t ve_table[kTableAxisSize][kTableAxisSize] = {
@@ -109,5 +111,93 @@ uint16_t idle_spark_deadband_rpm_x10 = 500u;
 uint16_t idle_spark_rpm_per_deg_x10 = 500u;
 int16_t idle_spark_retard_limit_deg = -8;
 int16_t idle_spark_advance_limit_deg = 12;
+
+uint16_t app1_raw_min = 200u;
+uint16_t app1_raw_max = 3895u;
+uint16_t app2_raw_min = 200u;
+uint16_t app2_raw_max = 3895u;
+uint16_t etb_tps1_raw_min = 200u;
+uint16_t etb_tps1_raw_max = 3895u;
+uint16_t etb_tps2_raw_min = 200u;
+uint16_t etb_tps2_raw_max = 3895u;
+uint16_t app_max_delta_pct_x10 = 120u;
+uint16_t etb_max_delta_pct_x10 = 120u;
+uint16_t etb_max_open_pct_x10_limp = 250u;
+uint16_t etb_max_rate_pct_per_s = 500u;
+uint16_t etb_idle_open_pct_x10 = 80u;
+uint16_t etb_kp_x10 = 120u;
+uint16_t etb_ki_x10 = 8u;
+uint16_t etb_kd_x10 = 40u;
+uint8_t etb_cal_valid = 0u;
+uint8_t etb_harness_present = 0u;
+
+uint8_t xtau_autocal_enabled = 0u;
+uint8_t xtau_autocal_active = 0u;
+int8_t xtau_autocal_tau_delta[kCorrectionTableSize] = {};
+
+void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept {
+    if (page == nullptr || len < 36u) {
+        return;
+    }
+    std::memcpy(&app1_raw_min, page + 0, 2u);
+    std::memcpy(&app1_raw_max, page + 2, 2u);
+    std::memcpy(&app2_raw_min, page + 4, 2u);
+    std::memcpy(&app2_raw_max, page + 6, 2u);
+    std::memcpy(&etb_tps1_raw_min, page + 8, 2u);
+    std::memcpy(&etb_tps1_raw_max, page + 10, 2u);
+    std::memcpy(&etb_tps2_raw_min, page + 12, 2u);
+    std::memcpy(&etb_tps2_raw_max, page + 14, 2u);
+    std::memcpy(&app_max_delta_pct_x10, page + 16, 2u);
+    std::memcpy(&etb_max_delta_pct_x10, page + 18, 2u);
+    std::memcpy(&etb_max_open_pct_x10_limp, page + 20, 2u);
+    std::memcpy(&etb_max_rate_pct_per_s, page + 22, 2u);
+    std::memcpy(&etb_idle_open_pct_x10, page + 24, 2u);
+    etb_cal_valid = page[26];
+    etb_harness_present = page[27];
+    std::memcpy(&etb_kp_x10, page + 28, 2u);
+    std::memcpy(&etb_ki_x10, page + 30, 2u);
+    std::memcpy(&etb_kd_x10, page + 32, 2u);
+}
+
+void sync_etb_calibration_to_page(uint8_t* page, uint16_t len) noexcept {
+    if (page == nullptr || len < 36u) {
+        return;
+    }
+    std::memcpy(page + 0, &app1_raw_min, 2u);
+    std::memcpy(page + 2, &app1_raw_max, 2u);
+    std::memcpy(page + 4, &app2_raw_min, 2u);
+    std::memcpy(page + 6, &app2_raw_max, 2u);
+    std::memcpy(page + 8, &etb_tps1_raw_min, 2u);
+    std::memcpy(page + 10, &etb_tps1_raw_max, 2u);
+    std::memcpy(page + 12, &etb_tps2_raw_min, 2u);
+    std::memcpy(page + 14, &etb_tps2_raw_max, 2u);
+    std::memcpy(page + 16, &app_max_delta_pct_x10, 2u);
+    std::memcpy(page + 18, &etb_max_delta_pct_x10, 2u);
+    std::memcpy(page + 20, &etb_max_open_pct_x10_limp, 2u);
+    std::memcpy(page + 22, &etb_max_rate_pct_per_s, 2u);
+    std::memcpy(page + 24, &etb_idle_open_pct_x10, 2u);
+    page[26] = etb_cal_valid;
+    page[27] = etb_harness_present;
+    std::memcpy(page + 28, &etb_kp_x10, 2u);
+    std::memcpy(page + 30, &etb_ki_x10, 2u);
+    std::memcpy(page + 32, &etb_kd_x10, 2u);
+}
+
+void apply_xtau_autocal_from_page(const uint8_t* page, uint16_t len) noexcept {
+    if (page == nullptr || len < 86u) {
+        return;
+    }
+    xtau_autocal_enabled = page[76];
+    std::memcpy(xtau_autocal_tau_delta, page + 78, 8u);
+}
+
+void sync_xtau_autocal_to_page(uint8_t* page, uint16_t len) noexcept {
+    if (page == nullptr || len < 86u) {
+        return;
+    }
+    page[76] = xtau_autocal_enabled;
+    page[77] = 1u;
+    std::memcpy(page + 78, xtau_autocal_tau_delta, 8u);
+}
 
 }  // namespace ems::engine
