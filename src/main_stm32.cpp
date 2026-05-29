@@ -36,6 +36,7 @@ int main() { return 0; }
 #include "drv/sensors.h"
 #include "engine/auxiliaries.h"
 #include "engine/calibration.h"
+#include "engine/constants.h"
 #include "engine/ecu_sched.h"
 #include "engine/engine_config.h"
 #include "engine/etb_control.h"
@@ -714,6 +715,7 @@ int main() {
         static uint32_t last_calib_save_ms = 0u;
         if (elapsed(now, g_t500ms_, 500u)) {
             g_t500ms_ = now;
+            const auto snap = ems::drv::ckp_snapshot();
             if (g_calib_dirty &&
                 (last_calib_save_ms == 0u ||
                  elapsed(now, last_calib_save_ms, kCalibSaveMinIntervalMs))) {
@@ -735,6 +737,7 @@ int main() {
         }
         if (adaptive_flush_pending) {
             // Double-check RPM before actually writing (engine may have started)
+            const auto snap = ems::drv::ckp_snapshot();
             const bool engine_running_fast = (snap.rpm_x10 > ems::engine::kFlashWriteSafeRpmX10);
             if (!engine_running_fast) {
                 adaptive_flush_pending = !ems::hal::nvm_flush_adaptive_maps();
