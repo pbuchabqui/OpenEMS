@@ -81,6 +81,38 @@ static FaultTracker g_fault[8] = {
 static uint16_t g_tps_raw_min = 200u;
 static uint16_t g_tps_raw_max = 3895u;
 
+static uint16_t g_app1_raw_min = 200u;
+static uint16_t g_app1_raw_max = 3895u;
+static uint16_t g_app2_raw_min = 200u;
+static uint16_t g_app2_raw_max = 3895u;
+static uint16_t g_etb_tps1_raw_min = 200u;
+static uint16_t g_etb_tps1_raw_max = 3895u;
+static uint16_t g_etb_tps2_raw_min = 200u;
+static uint16_t g_etb_tps2_raw_max = 3895u;
+static uint16_t g_app_max_delta_pct_x10 = 120u;
+static uint16_t g_etb_max_delta_pct_x10 = 120u;
+static bool g_etb_harness_present = false;
+
+static uint16_t g_app1_buf[4] = {};
+static uint16_t g_app2_buf[4] = {};
+static uint16_t g_etb1_buf[4] = {};
+static uint16_t g_etb2_buf[4] = {};
+static uint8_t g_app1_pos = 0u;
+static uint8_t g_app2_pos = 0u;
+static uint8_t g_etb1_pos = 0u;
+static uint8_t g_etb2_pos = 0u;
+
+static uint8_t g_app1_fault_strikes = 0u;
+static uint8_t g_app2_fault_strikes = 0u;
+static uint8_t g_etb1_fault_strikes = 0u;
+static uint8_t g_etb2_fault_strikes = 0u;
+static bool g_app1_fault = false;
+static bool g_app2_fault = false;
+static bool g_etb1_fault = false;
+static bool g_etb2_fault = false;
+static bool g_app_plaus_fault = false;
+static bool g_etb_plaus_fault = false;
+
 static uint16_t g_map_filt  = 0u;
 static uint16_t g_o2_filt   = 0u;
 
@@ -143,6 +175,37 @@ inline void reset_state() noexcept {
 
     g_tps_raw_min = 200u;
     g_tps_raw_max = 3895u;
+    g_app1_raw_min = 200u;
+    g_app1_raw_max = 3895u;
+    g_app2_raw_min = 200u;
+    g_app2_raw_max = 3895u;
+    g_etb_tps1_raw_min = 200u;
+    g_etb_tps1_raw_max = 3895u;
+    g_etb_tps2_raw_min = 200u;
+    g_etb_tps2_raw_max = 3895u;
+    g_app_max_delta_pct_x10 = 120u;
+    g_etb_max_delta_pct_x10 = 120u;
+    g_etb_harness_present = false;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        g_app1_buf[i] = 0u;
+        g_app2_buf[i] = 0u;
+        g_etb1_buf[i] = 0u;
+        g_etb2_buf[i] = 0u;
+    }
+    g_app1_pos = 0u;
+    g_app2_pos = 0u;
+    g_etb1_pos = 0u;
+    g_etb2_pos = 0u;
+    g_app1_fault_strikes = 0u;
+    g_app2_fault_strikes = 0u;
+    g_etb1_fault_strikes = 0u;
+    g_etb2_fault_strikes = 0u;
+    g_app1_fault = false;
+    g_app2_fault = false;
+    g_etb1_fault = false;
+    g_etb2_fault = false;
+    g_app_plaus_fault = false;
+    g_etb_plaus_fault = false;
 
     // [FIX-1] único ponto de verdade para os ranges padrão
     for (uint8_t i = 0u; i < 8u; ++i) {
@@ -151,27 +214,13 @@ inline void reset_state() noexcept {
 }
 
 // -----------------------------------------------------------------------------
-// Filtros IIR — inteiros, sem float
-// α=0.3 → y = y + ((x - y) × 3) / 10
-// α=0.1 → y = y + (x - y) / 10
-// Usa int32_t intermediário para evitar overflow em operandos uint16_t.
-// Nudge ±1 garante convergência monotônica mesmo quando |delta| < 10.
+// Filtro IIR inteiro genérico — α = num/den (ex: 3/10 = 0.3, 1/10 = 0.1)
+// Usa int32_t para evitar overflow em operandos uint16_t.
+// Nudge ±1 garante convergência monotônica mesmo quando |delta| < den/num.
 // -----------------------------------------------------------------------------
-inline uint16_t iir_alpha_03(uint16_t y, uint16_t x) noexcept {
+inline uint16_t iir(uint16_t y, uint16_t x, int32_t num, int32_t den) noexcept {
     const int32_t delta = static_cast<int32_t>(x) - static_cast<int32_t>(y);
-    int32_t step = (delta * 3) / 10;
-    if (step == 0 && delta != 0) {
-        step = (delta > 0) ? 1 : -1;
-    }
-    const int32_t out = static_cast<int32_t>(y) + step;
-    if (out <= 0)    { return 0u; }
-    if (out >= 4095) { return 4095u; }
-    return static_cast<uint16_t>(out);
-}
-
-inline uint16_t iir_alpha_01(uint16_t y, uint16_t x) noexcept {
-    const int32_t delta = static_cast<int32_t>(x) - static_cast<int32_t>(y);
-    int32_t step = delta / 10;
+    int32_t step = (delta * num) / den;
     if (step == 0 && delta != 0) {
         step = (delta > 0) ? 1 : -1;
     }
@@ -185,15 +234,11 @@ inline uint8_t sensor_bit(SensorId id) noexcept {
     return static_cast<uint8_t>(id);
 }
 
-inline uint16_t avg4(const uint16_t* v) noexcept {
-    return static_cast<uint16_t>(
-        (static_cast<uint32_t>(v[0]) + v[1] + v[2] + v[3]) >> 2u);
-}
-
-inline uint16_t avg8(const uint16_t* v) noexcept {
+// Média de N amostras (N = potência de 2, entre 2 e 8)
+inline uint16_t avg_n(const uint16_t* v, uint8_t n) noexcept {
     uint32_t sum = 0u;
-    for (uint8_t i = 0u; i < 8u; ++i) { sum += v[i]; }
-    return static_cast<uint16_t>(sum >> 3u);
+    for (uint8_t i = 0u; i < n; ++i) { sum += v[i]; }
+    return static_cast<uint16_t>(sum / n);
 }
 
 // -----------------------------------------------------------------------------
@@ -277,8 +322,40 @@ inline uint16_t tps_raw_to_pct_x10_cached(uint16_t raw) noexcept {
     return g_tps_pct_cache_x10;
 }
 
+inline uint16_t pct_from_cal(uint16_t raw, uint16_t raw_min, uint16_t raw_max) noexcept {
+    if (raw_max <= raw_min) { return 0u; }
+    if (raw <= raw_min) { return 0u; }
+    if (raw >= raw_max) { return 1000u; }
+    const uint32_t num = static_cast<uint32_t>(raw - raw_min) * 1000u;
+    const uint32_t den = static_cast<uint32_t>(raw_max - raw_min);
+    return static_cast<uint16_t>(num / den);
+}
+
+inline void update_strike_fault(uint16_t raw, uint16_t min_raw, uint16_t max_raw,
+                              uint8_t& strikes, bool& active) noexcept {
+    const bool bad = (raw < min_raw) || (raw > max_raw);
+    if (bad) {
+        if (strikes < 255u) { ++strikes; }
+        if (strikes >= kFaultLimit) { active = true; }
+    } else {
+        strikes = 0u;
+        active = false;
+    }
+}
+
+inline void refresh_throttle_fault_bits() noexcept {
+    uint8_t bits = 0u;
+    if (g_app1_fault) { bits |= ems::drv::THROTTLE_FAULT_APP1; }
+    if (g_app2_fault) { bits |= ems::drv::THROTTLE_FAULT_APP2; }
+    if (g_app_plaus_fault) { bits |= ems::drv::THROTTLE_FAULT_APP_PLAUS; }
+    if (g_etb1_fault) { bits |= ems::drv::THROTTLE_FAULT_ETB_TPS1; }
+    if (g_etb2_fault) { bits |= ems::drv::THROTTLE_FAULT_ETB_TPS2; }
+    if (g_etb_plaus_fault) { bits |= ems::drv::THROTTLE_FAULT_ETB_PLAUS; }
+    g_data_staging.throttle_fault_bits = bits;
+}
+
 inline uint16_t maf_period_avg4() noexcept {
-    return avg4(g_maf_period_buf);
+    return avg_n(g_maf_period_buf, 4);
 }
 
 // -----------------------------------------------------------------------------
@@ -326,8 +403,8 @@ inline void sample_fast_channels() noexcept {
     const uint16_t tps_raw  = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::TPS_SE12);
     const uint16_t o2_raw   = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::O2_SE4B);
 
-    g_map_filt = iir_alpha_03(g_map_filt, map_raw);
-    g_o2_filt  = iir_alpha_01(g_o2_filt,  o2_raw);
+    g_map_filt = iir(g_map_filt, map_raw, 3, 10);
+    g_o2_filt  = iir(g_o2_filt,  o2_raw, 1, 10);
 
     g_tps_buf[g_tps_pos] = tps_raw;
     g_tps_pos = static_cast<uint8_t>((g_tps_pos + 1u) & 0x3u);
@@ -343,7 +420,7 @@ inline void sample_fast_channels() noexcept {
 
     g_data_staging.tps_pct_x10 = g_fault[static_cast<uint8_t>(SensorId::TPS)].active
                          ? kFallbackTpsPctX10
-                         : tps_raw_to_pct_x10_cached(avg4(g_tps_buf));
+                         : tps_raw_to_pct_x10_cached(avg_n(g_tps_buf, 4));
 
     // MAF: estimativa por frequência via TIM5 CH1 (250 MHz / prescaler 4 = 62.5 MHz)
     const uint16_t maf_avg_period = maf_period_avg4();
@@ -498,37 +575,12 @@ void sensors_tick_50ms() noexcept {
     apply_fault(SensorId::OIL_PRESS,  oil_raw);
 
     g_data_staging.fuel_press_kpa_x10 = static_cast<uint16_t>(
-        (static_cast<uint32_t>(avg4(g_fuel_buf)) * 2500u) / 4095u);
+        (static_cast<uint32_t>(avg_n(g_fuel_buf, 4)) * 2500u) / 4095u);
     g_data_staging.oil_press_kpa_x10 = static_cast<uint16_t>(
-        (static_cast<uint32_t>(avg4(g_oil_buf)) * 2500u) / 4095u);
-    
-    // Report pressure sensor faults to diagnostic system
-    #if __has_include("engine/diagnostic_manager.h")
-    using ems::engine::DiagnosticCode;
-    using ems::engine::FaultSeverity;
-    using ems::engine::DiagnosticManager;
-    
-    if (g_fault[static_cast<uint8_t>(SensorId::FUEL_PRESS)].active) {
-        DiagnosticCode code = (g_data_staging.fuel_press_kpa_x10 < 100u)
-                             ? DiagnosticCode::FUEL_PRESS_LOW
-                             : DiagnosticCode::FUEL_PRESS_HIGH;
-        DiagnosticManager::report_fault(code, FaultSeverity::ERROR,
-                                       g_data_staging.fuel_press_kpa_x10, 0);
-    }
-    if (g_fault[static_cast<uint8_t>(SensorId::OIL_PRESS)].active) {
-        DiagnosticCode code = (g_data_staging.oil_press_kpa_x10 < 50u)
-                             ? DiagnosticCode::LOW_OIL_PRESSURE
-                             : DiagnosticCode::OIL_PRESS_HIGH;
-        FaultSeverity severity = (g_data_staging.oil_press_kpa_x10 < 30u)
-                                ? FaultSeverity::CRITICAL
-                                : FaultSeverity::ERROR;
-        DiagnosticManager::report_fault(code, severity,
-                                       g_data_staging.oil_press_kpa_x10, 0);
-    }
-    #endif
+        (static_cast<uint32_t>(avg_n(g_oil_buf, 4)) * 2500u) / 4095u);
 }
 
-// [FIX-3] AN1-4 agora amostrados e publicados como passthrough em SensorData
+// [FIX-3] AN1-4: APP/ETB + passthrough bruto
 void sensors_tick_100ms() noexcept {
     const uint16_t clt_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::CLT_SE14);
     const uint16_t iat_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::IAT_SE15);
@@ -542,8 +594,8 @@ void sensors_tick_100ms() noexcept {
     apply_fault(SensorId::CLT, clt_raw);
     apply_fault(SensorId::IAT, iat_raw);
 
-    const uint16_t clt_avg = avg8(g_clt_buf);
-    const uint16_t iat_avg = avg8(g_iat_buf);
+    const uint16_t clt_avg = avg_n(g_clt_buf, 8);
+    const uint16_t iat_avg = avg_n(g_iat_buf, 8);
 
     g_data_staging.clt_degc_x10 = g_fault[static_cast<uint8_t>(SensorId::CLT)].active
                           ? kFallbackCltDegcX10
@@ -552,67 +604,117 @@ void sensors_tick_100ms() noexcept {
                           ? kFallbackIatDegcX10
                           : lut128(g_iat_table, iat_avg);
 
-    // Expansão AN1-4: passthrough direto — sem filtro, sem fault tracking
-    // [FIX-3] canais antes ignorados; agora publicados em SensorData
-    g_data_staging.an1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN1_SE6B);
-    g_data_staging.an2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN2_SE7B);
-    g_data_staging.an3_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN3_SE8B);
-    const uint16_t vbatt_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN4_SE9B);
-    g_data_staging.an4_raw = vbatt_raw;
+    const uint16_t app1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN1_SE6B);
+    const uint16_t app2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN2_SE7B);
+    const uint16_t etb1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN3_SE8B);
+    const uint16_t etb2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN4_SE9B);
 
-    const uint16_t vbatt_mv = vbatt_raw_to_mv(vbatt_raw);
-    g_data_staging.vbatt_mv = (vbatt_mv >= 6000u && vbatt_mv <= 18000u) ? vbatt_mv : 12000u;
-    
-        // Double buffering: copy staging→committed under critical section.
-    // sensors_on_tooth() (ISR) writes g_data_staging concurrently; without CPSID
-    // the copy below can interleave with the ISR, producing a torn snapshot.
+    g_data_staging.an1_raw = app1_raw;
+    g_data_staging.an2_raw = app2_raw;
+    g_data_staging.an3_raw = etb1_raw;
+    g_data_staging.an4_raw = etb2_raw;
+
+    g_app1_buf[g_app1_pos] = app1_raw;
+    g_app1_pos = static_cast<uint8_t>((g_app1_pos + 1u) & 0x3u);
+    g_app2_buf[g_app2_pos] = app2_raw;
+    g_app2_pos = static_cast<uint8_t>((g_app2_pos + 1u) & 0x3u);
+    g_etb1_buf[g_etb1_pos] = etb1_raw;
+    g_etb1_pos = static_cast<uint8_t>((g_etb1_pos + 1u) & 0x3u);
+    g_etb2_buf[g_etb2_pos] = etb2_raw;
+    g_etb2_pos = static_cast<uint8_t>((g_etb2_pos + 1u) & 0x3u);
+
+    const uint16_t app1_avg = avg_n(g_app1_buf, 4);
+    const uint16_t app2_avg = avg_n(g_app2_buf, 4);
+    const uint16_t etb1_avg = avg_n(g_etb1_buf, 4);
+    const uint16_t etb2_avg = avg_n(g_etb2_buf, 4);
+
+    update_strike_fault(app1_avg, 50u, 4095u, g_app1_fault_strikes, g_app1_fault);
+    update_strike_fault(app2_avg, 50u, 4095u, g_app2_fault_strikes, g_app2_fault);
+    update_strike_fault(etb1_avg, 50u, 4095u, g_etb1_fault_strikes, g_etb1_fault);
+    update_strike_fault(etb2_avg, 50u, 4095u, g_etb2_fault_strikes, g_etb2_fault);
+
+    g_data_staging.app1_pct_x10 = g_app1_fault ? 0u :
+        pct_from_cal(app1_avg, g_app1_raw_min, g_app1_raw_max);
+    g_data_staging.app2_pct_x10 = g_app2_fault ? 0u :
+        pct_from_cal(app2_avg, g_app2_raw_min, g_app2_raw_max);
+    g_data_staging.etb_tps1_pct_x10 = g_etb1_fault ? 0u :
+        pct_from_cal(etb1_avg, g_etb_tps1_raw_min, g_etb_tps1_raw_max);
+    g_data_staging.etb_tps2_pct_x10 = g_etb2_fault ? 0u :
+        pct_from_cal(etb2_avg, g_etb_tps2_raw_min, g_etb_tps2_raw_max);
+
+    g_app_plaus_fault = false;
+    if (!g_app1_fault && !g_app2_fault) {
+        const uint16_t a1 = g_data_staging.app1_pct_x10;
+        const uint16_t a2 = g_data_staging.app2_pct_x10;
+        const uint16_t delta = (a1 > a2) ? static_cast<uint16_t>(a1 - a2)
+                                         : static_cast<uint16_t>(a2 - a1);
+        if (delta > g_app_max_delta_pct_x10) {
+            g_app_plaus_fault = true;
+        }
+    }
+
+    g_etb_plaus_fault = false;
+    if (!g_etb1_fault && !g_etb2_fault) {
+        const uint16_t t1 = g_data_staging.etb_tps1_pct_x10;
+        const uint16_t t2 = g_data_staging.etb_tps2_pct_x10;
+        const uint16_t delta = (t1 > t2) ? static_cast<uint16_t>(t1 - t2)
+                                         : static_cast<uint16_t>(t2 - t1);
+        if (delta > g_etb_max_delta_pct_x10) {
+            g_etb_plaus_fault = true;
+        }
+    }
+
+    if (g_app1_fault || g_app2_fault || g_app_plaus_fault) {
+        g_data_staging.app_pct_x10 = 0u;
+    } else {
+        g_data_staging.app_pct_x10 = (g_data_staging.app1_pct_x10 < g_data_staging.app2_pct_x10)
+            ? g_data_staging.app1_pct_x10 : g_data_staging.app2_pct_x10;
+    }
+
+    if (g_etb1_fault || g_etb2_fault || g_etb_plaus_fault) {
+        g_data_staging.etb_tps_pct_x10 = 0u;
+    } else {
+        g_data_staging.etb_tps_pct_x10 = static_cast<uint16_t>(
+            (static_cast<uint32_t>(g_data_staging.etb_tps1_pct_x10) +
+             static_cast<uint32_t>(g_data_staging.etb_tps2_pct_x10)) / 2u);
+    }
+
+    refresh_throttle_fault_bits();
+
+    if (!g_etb_harness_present) {
+        const uint16_t vbatt_mv = vbatt_raw_to_mv(etb2_raw);
+        g_data_staging.vbatt_mv = (vbatt_mv >= 6000u && vbatt_mv <= 18000u) ? vbatt_mv : 12000u;
+    } else {
+        g_data_staging.vbatt_mv = 12000u;
+    }
+
+    // Double buffering: copy staging→committed under critical section.
 #if defined(__arm__) || defined(__thumb__)
     __asm__ volatile("cpsid i" ::: "memory");
 #endif
-    g_data_committed.map_kpa_x10 = g_data_staging.map_kpa_x10;
-    g_data_committed.maf_gps_x100 = g_data_staging.maf_gps_x100;
-    g_data_committed.tps_pct_x10 = g_data_staging.tps_pct_x10;
-    g_data_committed.clt_degc_x10 = g_data_staging.clt_degc_x10;
-    g_data_committed.iat_degc_x10 = g_data_staging.iat_degc_x10;
+    g_data_committed.map_kpa_x10        = g_data_staging.map_kpa_x10;
+    g_data_committed.maf_gps_x100       = g_data_staging.maf_gps_x100;
+    g_data_committed.tps_pct_x10        = g_data_staging.tps_pct_x10;
+    g_data_committed.clt_degc_x10       = g_data_staging.clt_degc_x10;
+    g_data_committed.iat_degc_x10       = g_data_staging.iat_degc_x10;
     g_data_committed.fuel_press_kpa_x10 = g_data_staging.fuel_press_kpa_x10;
-    g_data_committed.oil_press_kpa_x10 = g_data_staging.oil_press_kpa_x10;
-    g_data_committed.vbatt_mv = g_data_staging.vbatt_mv;
-    g_data_committed.fault_bits = g_data_staging.fault_bits;
-    g_data_committed.an1_raw = g_data_staging.an1_raw;
-    g_data_committed.an2_raw = g_data_staging.an2_raw;
-    g_data_committed.an3_raw = g_data_staging.an3_raw;
-    g_data_committed.an4_raw = g_data_staging.an4_raw;
+    g_data_committed.oil_press_kpa_x10  = g_data_staging.oil_press_kpa_x10;
+    g_data_committed.vbatt_mv           = g_data_staging.vbatt_mv;
+    g_data_committed.fault_bits         = g_data_staging.fault_bits;
+    g_data_committed.app1_pct_x10       = g_data_staging.app1_pct_x10;
+    g_data_committed.app2_pct_x10       = g_data_staging.app2_pct_x10;
+    g_data_committed.app_pct_x10        = g_data_staging.app_pct_x10;
+    g_data_committed.etb_tps1_pct_x10   = g_data_staging.etb_tps1_pct_x10;
+    g_data_committed.etb_tps2_pct_x10   = g_data_staging.etb_tps2_pct_x10;
+    g_data_committed.etb_tps_pct_x10    = g_data_staging.etb_tps_pct_x10;
+    g_data_committed.throttle_fault_bits = g_data_staging.throttle_fault_bits;
+    g_data_committed.an1_raw            = g_data_staging.an1_raw;
+    g_data_committed.an2_raw            = g_data_staging.an2_raw;
+    g_data_committed.an3_raw            = g_data_staging.an3_raw;
+    g_data_committed.an4_raw            = g_data_staging.an4_raw;
 #if defined(__arm__) || defined(__thumb__)
     __asm__ volatile("cpsie i" ::: "memory");
 #endif
-    
-    // ADC recovery verification: check if ADC recovered from any timeout
-    // Report to diagnostic manager if faults detected
-    #if __has_include("engine/diagnostic_manager.h")
-    using ems::engine::DiagnosticCode;
-    using ems::engine::FaultSeverity;
-    using ems::engine::DiagnosticManager;
-    
-    // Check for sensor range faults and report to diagnostic system
-    if (g_fault[static_cast<uint8_t>(SensorId::CLT)].active) {
-        DiagnosticManager::report_fault(DiagnosticCode::CLT_SENSOR_RANGE, 
-                                       FaultSeverity::WARNING,
-                                       clt_raw, 0);
-    }
-    if (g_fault[static_cast<uint8_t>(SensorId::IAT)].active) {
-        DiagnosticManager::report_fault(DiagnosticCode::IAT_SENSOR_RANGE,
-                                       FaultSeverity::WARNING,
-                                       iat_raw, 0);
-    }
-    if (vbatt_mv < 6000u || vbatt_mv > 18000u) {
-        DiagnosticCode code = (vbatt_mv < 6000u) ? DiagnosticCode::VBATT_LOW 
-                                                  : DiagnosticCode::VBATT_HIGH;
-        FaultSeverity severity = (vbatt_mv < 5000u || vbatt_mv > 20000u)
-                                ? FaultSeverity::CRITICAL
-                                : FaultSeverity::WARNING;
-        DiagnosticManager::report_fault(code, severity, vbatt_mv, 0);
-    }
-    #endif
 }
 
 void sensors_maf_freq_capture_isr(uint16_t period_ticks) noexcept {
@@ -623,6 +725,33 @@ void sensors_maf_freq_capture_isr(uint16_t period_ticks) noexcept {
 void sensors_set_tps_cal(uint16_t raw_min, uint16_t raw_max) noexcept {
     g_tps_raw_min = raw_min;
     g_tps_raw_max = raw_max;
+    g_tps_pct_cache_valid = false;
+}
+
+void sensors_set_app_cal(uint16_t app1_min, uint16_t app1_max,
+                         uint16_t app2_min, uint16_t app2_max) noexcept {
+    g_app1_raw_min = app1_min;
+    g_app1_raw_max = app1_max;
+    g_app2_raw_min = app2_min;
+    g_app2_raw_max = app2_max;
+}
+
+void sensors_set_etb_tps_cal(uint16_t tps1_min, uint16_t tps1_max,
+                             uint16_t tps2_min, uint16_t tps2_max) noexcept {
+    g_etb_tps1_raw_min = tps1_min;
+    g_etb_tps1_raw_max = tps1_max;
+    g_etb_tps2_raw_min = tps2_min;
+    g_etb_tps2_raw_max = tps2_max;
+}
+
+void sensors_set_plausibility(uint16_t app_max_delta_pct_x10,
+                              uint16_t etb_max_delta_pct_x10) noexcept {
+    g_app_max_delta_pct_x10 = app_max_delta_pct_x10;
+    g_etb_max_delta_pct_x10 = etb_max_delta_pct_x10;
+}
+
+void sensors_set_etb_harness_present(bool present) noexcept {
+    g_etb_harness_present = present;
 }
 
 void sensors_set_range(SensorId id, SensorRange range) noexcept {
@@ -634,19 +763,26 @@ SensorData sensors_get() noexcept {
     // Não precisa de CPSID pois g_data_committed é apenas lido no main loop
     // e escrito atomicamente pela ISR após swap completo.
     SensorData out;
-    out.map_kpa_x10        = g_data_committed.map_kpa_x10;
-    out.maf_gps_x100       = g_data_committed.maf_gps_x100;
-    out.tps_pct_x10        = g_data_committed.tps_pct_x10;
-    out.clt_degc_x10       = g_data_committed.clt_degc_x10;
-    out.iat_degc_x10       = g_data_committed.iat_degc_x10;
-    out.fuel_press_kpa_x10 = g_data_committed.fuel_press_kpa_x10;
-    out.oil_press_kpa_x10  = g_data_committed.oil_press_kpa_x10;
-    out.vbatt_mv           = g_data_committed.vbatt_mv;
-    out.fault_bits         = g_data_committed.fault_bits;
-    out.an1_raw            = g_data_committed.an1_raw;
-    out.an2_raw            = g_data_committed.an2_raw;
-    out.an3_raw            = g_data_committed.an3_raw;
-    out.an4_raw            = g_data_committed.an4_raw;
+    out.map_kpa_x10         = g_data_committed.map_kpa_x10;
+    out.maf_gps_x100        = g_data_committed.maf_gps_x100;
+    out.tps_pct_x10         = g_data_committed.tps_pct_x10;
+    out.clt_degc_x10        = g_data_committed.clt_degc_x10;
+    out.iat_degc_x10        = g_data_committed.iat_degc_x10;
+    out.fuel_press_kpa_x10  = g_data_committed.fuel_press_kpa_x10;
+    out.oil_press_kpa_x10   = g_data_committed.oil_press_kpa_x10;
+    out.vbatt_mv            = g_data_committed.vbatt_mv;
+    out.fault_bits          = g_data_committed.fault_bits;
+    out.app1_pct_x10        = g_data_committed.app1_pct_x10;
+    out.app2_pct_x10        = g_data_committed.app2_pct_x10;
+    out.app_pct_x10         = g_data_committed.app_pct_x10;
+    out.etb_tps1_pct_x10    = g_data_committed.etb_tps1_pct_x10;
+    out.etb_tps2_pct_x10    = g_data_committed.etb_tps2_pct_x10;
+    out.etb_tps_pct_x10     = g_data_committed.etb_tps_pct_x10;
+    out.throttle_fault_bits = g_data_committed.throttle_fault_bits;
+    out.an1_raw             = g_data_committed.an1_raw;
+    out.an2_raw             = g_data_committed.an2_raw;
+    out.an3_raw             = g_data_committed.an3_raw;
+    out.an4_raw             = g_data_committed.an4_raw;
     return out;
 }
 
@@ -661,6 +797,10 @@ void sensors_test_set_clt_table_entry(uint8_t idx, int16_t degc_x10) noexcept {
 
 void sensors_test_set_iat_table_entry(uint8_t idx, int16_t degc_x10) noexcept {
     if (idx < 128u) { g_iat_table[idx] = degc_x10; }
+}
+
+void sensors_test_tick_100ms() noexcept {
+    sensors_tick_100ms();
 }
 #endif
 
