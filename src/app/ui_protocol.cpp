@@ -169,7 +169,7 @@ inline void update_realtime_page() noexcept {
     const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
     rt.rpm = static_cast<uint16_t>((c.rpm_x10 > 655350u) ? 65535u : (c.rpm_x10 / 10u));
-    rt.map_kpa = ems::engine::clamp_u8(s.map_kpa_x10 / 10u);
+    rt.map_bar_x100 = ems::engine::clamp_u8(s.map_bar_x1000 / 10u);
     rt.tps_pct = ems::engine::clamp_u8(s.tps_pct_x10 / 10u);
 
     rt.clt_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.clt_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
@@ -268,13 +268,13 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(p + 160, ems::engine::dwell_vbatt_axis_mv,        16u);
         std::memcpy(p + 176, ems::engine::dwell_ms_x10_table,         16u);
         std::memcpy(p + 192, ems::engine::lambda_delay_rpm_axis_x10,  12u);
-        std::memcpy(p + 204, ems::engine::lambda_delay_load_axis_kpa, 12u);
+        std::memcpy(p + 204, ems::engine::lambda_delay_load_axis_bar_x100, 12u);
         std::memcpy(p + 216, ems::engine::lambda_delay_ms_table,      18u);
         std::memcpy(p + 234, &ems::engine::ae_tpsdot_threshold_x10, 2u);
         std::memcpy(p + 236, &ems::engine::ae_taper_cycles,         2u);
         std::memcpy(p + 238, &ems::engine::ae_max_pw_us,            2u);
         std::memcpy(p + 240, &ems::engine::idle_spark_tps_max_x10,             2u);
-        std::memcpy(p + 242, &ems::engine::idle_spark_map_max_kpa,             2u);
+        std::memcpy(p + 242, &ems::engine::idle_spark_map_max_bar_x100,             2u);
         std::memcpy(p + 244, &ems::engine::idle_spark_rpm_min_x10,             2u);
         std::memcpy(p + 246, &ems::engine::idle_spark_window_above_target_x10, 2u);
         std::memcpy(p + 248, &ems::engine::idle_spark_deadband_rpm_x10,        2u);
@@ -322,13 +322,13 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(ems::engine::dwell_vbatt_axis_mv,        p + 160, 16u);
         std::memcpy(ems::engine::dwell_ms_x10_table,         p + 176, 16u);
         std::memcpy(ems::engine::lambda_delay_rpm_axis_x10,  p + 192, 12u);
-        std::memcpy(ems::engine::lambda_delay_load_axis_kpa, p + 204, 12u);
+        std::memcpy(ems::engine::lambda_delay_load_axis_bar_x100, p + 204, 12u);
         std::memcpy(ems::engine::lambda_delay_ms_table,      p + 216, 18u);
         std::memcpy(&ems::engine::ae_tpsdot_threshold_x10, p + 234, 2u);
         std::memcpy(&ems::engine::ae_taper_cycles,         p + 236, 2u);
         std::memcpy(&ems::engine::ae_max_pw_us,            p + 238, 2u);
         std::memcpy(&ems::engine::idle_spark_tps_max_x10,             p + 240, 2u);
-        std::memcpy(&ems::engine::idle_spark_map_max_kpa,             p + 242, 2u);
+        std::memcpy(&ems::engine::idle_spark_map_max_bar_x100,             p + 242, 2u);
         std::memcpy(&ems::engine::idle_spark_rpm_min_x10,             p + 244, 2u);
         std::memcpy(&ems::engine::idle_spark_window_above_target_x10, p + 246, 2u);
         std::memcpy(&ems::engine::idle_spark_deadband_rpm_x10,        p + 248, 2u);

@@ -96,7 +96,7 @@ uint16_t dwell_vbatt_axis_mv[kIgnitionDwellTableSize] = {9000u, 10000u, 11000u, 
 uint16_t dwell_ms_x10_table[kIgnitionDwellTableSize] = {42u, 38u, 35u, 30u, 28u, 25u, 23u, 22u};
 
 uint32_t lambda_delay_rpm_axis_x10[kLambdaDelayTableSize] = {10000u, 25500u, 80000u};
-uint32_t lambda_delay_load_axis_kpa[kLambdaDelayTableSize] = {10u, 91u, 300u};
+uint32_t lambda_delay_load_axis_bar_x100[kLambdaDelayTableSize] = {10u, 91u, 300u};
 uint16_t lambda_delay_ms_table[kLambdaDelayTableSize][kLambdaDelayTableSize] = {
     {1100u, 550u, 200u},
     {600u, 400u, 150u},
@@ -104,7 +104,7 @@ uint16_t lambda_delay_ms_table[kLambdaDelayTableSize][kLambdaDelayTableSize] = {
 };
 
 uint16_t idle_spark_tps_max_x10 = 25u;
-uint16_t idle_spark_map_max_kpa = 80u;
+uint16_t idle_spark_map_max_bar_x100 = 80u;
 uint16_t idle_spark_rpm_min_x10 = 5000u;
 uint16_t idle_spark_window_above_target_x10 = 4000u;
 uint16_t idle_spark_deadband_rpm_x10 = 500u;

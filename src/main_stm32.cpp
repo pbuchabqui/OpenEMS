@@ -100,8 +100,8 @@ static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
 static constexpr uint32_t kRuntimeSeedArmWindowMs = 300000u;  // 5 minutos para start-stop
 static constexpr uint32_t kSchedulerTicksPerMs = 10000u;
 static constexpr uint32_t kCalibSaveMinIntervalMs = 300000u;
-static constexpr uint16_t kMapMinKpa = 10u;
-static constexpr uint16_t kMapMaxKpa = 300u;
+static constexpr uint16_t kMapMinBarX100 = 10u;
+static constexpr uint16_t kMapMaxBarX100 = 300u;
 static constexpr uint16_t kLambdaMinMilli = 700u;
 static constexpr uint16_t kLambdaMaxMilli = 1400u;
 static constexpr uint16_t kAePeriodMs = 2u;
@@ -188,7 +188,7 @@ static void load_corr_calibration_from_nvm() noexcept {
     std::memcpy(ems::engine::dwell_vbatt_axis_mv,        p + 160, 16u);
     std::memcpy(ems::engine::dwell_ms_x10_table,         p + 176, 16u);
     std::memcpy(ems::engine::lambda_delay_rpm_axis_x10,  p + 192, 12u);
-    std::memcpy(ems::engine::lambda_delay_load_axis_kpa, p + 204, 12u);
+    std::memcpy(ems::engine::lambda_delay_load_axis_bar_x100, p + 204, 12u);
     std::memcpy(ems::engine::lambda_delay_ms_table,      p + 216, 18u);
     if (!page_range_is_zero(page, 234u, 6u)) {
         std::memcpy(&ems::engine::ae_tpsdot_threshold_x10, p + 234, 2u);
@@ -199,7 +199,7 @@ static void load_corr_calibration_from_nvm() noexcept {
         return;
     }
     std::memcpy(&ems::engine::idle_spark_tps_max_x10,             p + 240, 2u);
-    std::memcpy(&ems::engine::idle_spark_map_max_kpa,             p + 242, 2u);
+    std::memcpy(&ems::engine::idle_spark_map_max_bar_x100,             p + 242, 2u);
     std::memcpy(&ems::engine::idle_spark_rpm_min_x10,             p + 244, 2u);
     std::memcpy(&ems::engine::idle_spark_window_above_target_x10, p + 246, 2u);
     std::memcpy(&ems::engine::idle_spark_deadband_rpm_x10,        p + 248, 2u);
@@ -436,12 +436,12 @@ int main() {
                 g_last_gap_sync_snapshot = snap;
             }
 
-            const uint16_t map_kpa_raw = static_cast<uint16_t>(sensors.map_kpa_x10 / 10u);
-            const uint16_t map_kpa_sensor = clamp_u16(map_kpa_raw, kMapMinKpa, kMapMaxKpa);
+            const uint16_t map_bar_x100_raw = static_cast<uint16_t>(sensors.map_bar_x1000 / 10u);
+            const uint16_t map_bar_x100_sensor = clamp_u16(map_bar_x100_raw, kMapMinBarX100, kMapMaxBarX100);
             
             // Atualiza estimador de MAP com sensor fusion para resposta transiente rápida
-            const uint16_t map_kpa = ems::engine::map_estimator_update(
-                map_kpa_sensor,
+            const uint16_t map_bar_x100 = ems::engine::map_estimator_update(
+                map_bar_x100_sensor,
                 sensors.tps_pct_x10,
                 kAePeriodMs,
                 snap.rpm_x10);
@@ -486,9 +486,9 @@ int main() {
             if (sched_sync && !rev_cut) {
                 const ems::engine::Table2dLookup fuel_lookup =
                     ems::engine::table3d_prepare_lookup(ems::engine::kRpmAxisX10,
-                                                        ems::engine::kLoadAxisKpa,
+                                                        ems::engine::kLoadAxisBarX100,
                                                         snap.rpm_x10,
-                                                        map_kpa);
+                                                        map_bar_x100);
                 const uint8_t  ve = ems::engine::get_ve_prepared(fuel_lookup);
                 const uint16_t lambda_target_x1000 =
                     ems::engine::get_lambda_target_x1000_prepared(fuel_lookup);
@@ -503,7 +503,7 @@ int main() {
                     sensors.clt_degc_x10);
                 uint32_t final_pw_us_base =
                     ems::engine::calc_fuel_pw_us_default_fast(ve,
-                                                               map_kpa,
+                                                               map_bar_x100,
                                                                lambda_target_x1000,
                                                                fuel_trim_pct_x10,
                                                                fuel_corr.corr_clt_x256,
@@ -527,7 +527,7 @@ int main() {
                             kLambdaMinMilli, kLambdaMaxMilli);
                         ems::engine::xtau_autocalib_update(
                             snap.rpm_x10,
-                            map_kpa,
+                            map_bar_x100,
                             lambda_target_x1000,
                             static_cast<int16_t>(lambda_measured),
                             sensors.clt_degc_x10,
@@ -558,7 +558,7 @@ int main() {
                     ems::engine::calc_idle_spark_correction_deg(snap.rpm_x10,
                                                                 idle_target_rpm_x10,
                                                                 sensors.tps_pct_x10,
-                                                                map_kpa);
+                                                                map_bar_x100);
                 const int16_t advance_deg = ems::engine::calc_total_advance(
                     base_advance_deg,
                     {0, idle_spark_corr_deg, static_cast<int16_t>(knock_retard_x10 / 10u)});
@@ -583,7 +583,7 @@ int main() {
                     inj_pw_ticks,
                     ems::engine::cfg::kDefaultSoiLeadDeg);
             } else if (sched_sync && rev_cut) {
-                const int16_t base_advance_deg = ems::engine::get_advance(snap.rpm_x10, map_kpa);
+                const int16_t base_advance_deg = ems::engine::get_advance(snap.rpm_x10, map_bar_x100);
                 const uint32_t dwell_ticks =
                     (static_cast<uint32_t>(fuel_corr.dwell_ms_x10) * kSchedulerTicksPerMs) / 10u;
                 ::ecu_sched_commit_calibration(
@@ -656,18 +656,18 @@ int main() {
             const auto sensors = ems::drv::sensors_get();
 
             if (snap.state == ems::drv::SyncState::FULL_SYNC) {
-                const uint16_t map_kpa = clamp_u16(
-                    static_cast<uint16_t>(sensors.map_kpa_x10 / 10u), kMapMinKpa, kMapMaxKpa);
+                const uint16_t map_bar_x100 = clamp_u16(
+                    static_cast<uint16_t>(sensors.map_bar_x1000 / 10u), kMapMinBarX100, kMapMaxBarX100);
                 const uint16_t lambda_measured = clamp_u16(
                     ems::app::can_stack_lambda_milli_safe(now), kLambdaMinMilli, kLambdaMaxMilli);
                 const bool lambda_valid = ems::app::can_stack_wbo2_fresh(now);
                 const uint16_t lambda_target_x1000 =
-                    ems::engine::get_lambda_target_x1000(snap.rpm_x10, map_kpa);
+                    ems::engine::get_lambda_target_x1000(snap.rpm_x10, map_bar_x100);
                 const bool rev_cut = g_limp_active &&
                     (snap.rpm_x10 > kLimpRpmLimit_x10);
                 const bool ae_active = g_ae_active;
                 const int16_t stft = ems::engine::fuel_update_stft_delayed(
-                    now, snap.rpm_x10, map_kpa,
+                    now, snap.rpm_x10, map_bar_x100,
                     static_cast<int16_t>(lambda_target_x1000),
                     static_cast<int16_t>(lambda_measured),
                     sensors.clt_degc_x10, lambda_valid,

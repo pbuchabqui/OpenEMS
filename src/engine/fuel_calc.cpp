@@ -43,7 +43,7 @@ constexpr uint8_t kLambdaHistorySize = 16u;
 struct LambdaHistorySample {
     uint32_t time_ms;
     uint32_t rpm_x10;
-    uint16_t map_kpa;
+    uint16_t map_bar_x100;
     int16_t lambda_target_x1000;
     bool valid;
 };
@@ -102,19 +102,19 @@ uint16_t interp_u16_4pt_u16x(const uint16_t* x_axis,
     return static_cast<uint16_t>(y > 65535u ? 65535u : y);
 }
 
-uint16_t interp_lambda_delay_3x3(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
+uint16_t interp_lambda_delay_3x3(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
     const uint8_t xi = ems::engine::table_axis_index(
         ems::engine::lambda_delay_rpm_axis_x10,
         ems::engine::kLambdaDelayTableSize,
         rpm_x10);
     const uint8_t yi = ems::engine::table_axis_index(
-        ems::engine::lambda_delay_load_axis_kpa,
+        ems::engine::lambda_delay_load_axis_bar_x100,
         ems::engine::kLambdaDelayTableSize,
-        map_kpa);
+        map_bar_x100);
     const uint8_t fx = ems::engine::table_axis_frac_q8(
         ems::engine::lambda_delay_rpm_axis_x10, xi, rpm_x10);
     const uint8_t fy = ems::engine::table_axis_frac_q8(
-        ems::engine::lambda_delay_load_axis_kpa, yi, map_kpa);
+        ems::engine::lambda_delay_load_axis_bar_x100, yi, map_bar_x100);
 
     const int32_t v00 = ems::engine::lambda_delay_ms_table[yi][xi];
     const int32_t v10 = ems::engine::lambda_delay_ms_table[yi][xi + 1u];
@@ -129,12 +129,12 @@ uint16_t interp_lambda_delay_3x3(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
 
 void lambda_history_push(uint32_t now_ms,
                          uint32_t rpm_x10,
-                         uint16_t map_kpa,
+                         uint16_t map_bar_x100,
                          int16_t lambda_target_x1000) noexcept {
     LambdaHistorySample& sample = g_lambda_history[g_lambda_history_pos];
     sample.time_ms = now_ms;
     sample.rpm_x10 = rpm_x10;
-    sample.map_kpa = map_kpa;
+    sample.map_bar_x100 = map_bar_x100;
     sample.lambda_target_x1000 = lambda_target_x1000;
     sample.valid = true;
     g_lambda_history_pos = static_cast<uint8_t>((g_lambda_history_pos + 1u) % kLambdaHistorySize);
@@ -184,22 +184,22 @@ bool closed_loop_allowed(int16_t clt_x10,
 
 namespace ems::engine {
 
-uint8_t get_ve(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
+uint8_t get_ve(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
     ASSERT_VALID_RPM_X10(rpm_x10);
-    ASSERT_VALID_MAP_KPA(map_kpa);
-    return table3d_lookup_u8(ve_table, kRpmAxisX10, kLoadAxisKpa, rpm_x10, map_kpa);
+    ASSERT_VALID_MAP_KPA(map_bar_x100);
+    return table3d_lookup_u8(ve_table, kRpmAxisX10, kLoadAxisBarX100, rpm_x10, map_bar_x100);
 }
 
 uint8_t get_ve_prepared(const Table2dLookup& lookup) noexcept {
     return table3d_lookup_u8_prepared(ve_table, lookup);
 }
 
-uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
+uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
     ASSERT_VALID_RPM_X10(rpm_x10);
-    ASSERT_VALID_MAP_KPA(map_kpa);
+    ASSERT_VALID_MAP_KPA(map_bar_x100);
 
     const int16_t target = table3d_lookup_s16(
-        lambda_target_table_x1000, kRpmAxisX10, kLoadAxisKpa, rpm_x10, map_kpa);
+        lambda_target_table_x1000, kRpmAxisX10, kLoadAxisBarX100, rpm_x10, map_bar_x100);
     return static_cast<uint16_t>(clamp_i16(target, 650, 1200));
 }
 
@@ -217,7 +217,7 @@ uint32_t calc_req_fuel_us(uint16_t displacement_cc,
         return 0u;
     }
 
-    // REQ_FUEL @ 100 kPa, 100% VE, lambda 1.00:
+    // REQ_FUEL @ 1.00 bar, 100% VE, lambda 1.00:
     // air/cyl = (displacement / cylinders) * air_density
     // fuel/cyl = air/cyl / stoich_afr
     // pulse = fuel/cyl / injector_mass_flow
@@ -246,29 +246,29 @@ uint32_t default_req_fuel_us() noexcept {
 
 uint32_t calc_base_pw_us(uint16_t req_fuel_us,
                          uint8_t ve,
-                         uint16_t map_kpa,
-                         uint16_t map_ref_kpa) noexcept {
+                         uint16_t map_bar_x100,
+                         uint16_t map_ref_bar_x100) noexcept {
     // Verificações de produção (ativas mesmo em release): retorno seguro 0
     // evita divisão por zero e overflow de uint64_t na fórmula abaixo.
-    if (map_ref_kpa == 0u || ve == 0u || req_fuel_us == 0u) {
+    if (map_ref_bar_x100 == 0u || ve == 0u || req_fuel_us == 0u) {
         return 0u;
     }
-    if (map_kpa > 300u) {
-        return 0u;  // MAP > 300 kPa: sensor em fault, não calcular PW
+    if (map_bar_x100 > 300u) {
+        return 0u;  // MAP > 3.00 bar: sensor em fault, não calcular PW
     }
     if (req_fuel_us > 50000u) {
         return 0u;  // REQ_FUEL > 50 ms: valor absurdo, não calcular PW
     }
 
-    ASSERT_VALID_MAP_KPA(map_kpa);
-    ASSERT_VALID_MAP_KPA(map_ref_kpa);
+    ASSERT_VALID_MAP_KPA(map_bar_x100);
+    ASSERT_VALID_MAP_KPA(map_ref_bar_x100);
     ASSERT_VALID_VE(ve);
 
     // PW = REQ_FUEL * (VE / 100) * (MAP / MAP_REF)
     const uint64_t num = static_cast<uint64_t>(req_fuel_us) *
                          static_cast<uint64_t>(ve) *
-                         static_cast<uint64_t>(map_kpa);
-    const uint32_t den = 100u * static_cast<uint32_t>(map_ref_kpa);
+                         static_cast<uint64_t>(map_bar_x100);
+    const uint32_t den = 100u * static_cast<uint32_t>(map_ref_bar_x100);
     uint32_t temp = static_cast<uint32_t>(num / den);
     if (temp > 100000u) {
         temp = 100000u;
@@ -277,19 +277,19 @@ uint32_t calc_base_pw_us(uint16_t req_fuel_us,
 }
 
 uint32_t calc_base_pw_us_default(uint8_t ve,
-                                 uint16_t map_kpa) noexcept {
+                                 uint16_t map_bar_x100) noexcept {
     if (ve == 0u) {
         return 0u;
     }
-    if (map_kpa > 300u) {
+    if (map_bar_x100 > 300u) {
         return 0u;
     }
 
     const uint32_t req_fuel_us = default_req_fuel_us();
     const uint32_t num = req_fuel_us *
                          static_cast<uint32_t>(ve) *
-                         static_cast<uint32_t>(map_kpa);
-    uint32_t out = num / (100u * static_cast<uint32_t>(cfg::g_eng_cfg.map_ref_kpa));
+                         static_cast<uint32_t>(map_bar_x100);
+    uint32_t out = num / (100u * static_cast<uint32_t>(cfg::g_eng_cfg.map_ref_bar_x100));
     if (out > 100000u) {
         out = 100000u;
     }
@@ -372,19 +372,19 @@ uint32_t calc_final_pw_us(uint32_t base_pw_us,
 }
 
 uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
-                                      uint16_t map_kpa,
+                                      uint16_t map_bar_x100,
                                       uint16_t lambda_target_x1000,
                                       int16_t trim_pct_x10,
                                       uint16_t corr_clt_x256,
                                       uint16_t corr_iat_x256,
                                       uint16_t dead_time_us) noexcept {
     uint32_t base_pw_us = 0u;
-    if (ve != 0u && map_kpa <= 300u) {
+    if (ve != 0u && map_bar_x100 <= 300u) {
         const uint32_t req_fuel_us = default_req_fuel_us();
         const uint32_t num = req_fuel_us *
                              static_cast<uint32_t>(ve) *
-                             static_cast<uint32_t>(map_kpa);
-        base_pw_us = num / (100u * static_cast<uint32_t>(cfg::g_eng_cfg.map_ref_kpa));
+                             static_cast<uint32_t>(map_bar_x100);
+        base_pw_us = num / (100u * static_cast<uint32_t>(cfg::g_eng_cfg.map_ref_bar_x100));
         if (base_pw_us > 100000u) {
             base_pw_us = 100000u;
         }
@@ -495,12 +495,12 @@ void fuel_lambda_delay_reset() noexcept {
 }
 
 uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
-                                       uint16_t map_kpa) noexcept {
-    return interp_lambda_delay_3x3(rpm_x10, map_kpa);
+                                       uint16_t map_bar_x100) noexcept {
+    return interp_lambda_delay_3x3(rpm_x10, map_bar_x100);
 }
 
 int16_t fuel_update_stft(uint32_t rpm_x10,
-                         uint16_t map_kpa,
+                         uint16_t map_bar_x100,
                          int16_t lambda_target_x1000,
                          int16_t lambda_measured_x1000,
                          int16_t clt_x10,
@@ -527,7 +527,7 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     g_stft_pct_x10 = clamp_i16(static_cast<int16_t>(stft), -kStftClampX10, kStftClampX10);
 
     const uint8_t rpm_idx = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
-    const uint8_t map_idx = table_axis_index(kLoadAxisKpa, kTableAxisSize, map_kpa);
+    const uint8_t map_idx = table_axis_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
 
     int16_t& cell = g_ltft_pct_x10[map_idx][rpm_idx];
     cell = static_cast<int16_t>(cell + (g_stft_pct_x10 - cell) / 64);
@@ -541,20 +541,20 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
 
 int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  uint32_t rpm_x10,
-                                 uint16_t map_kpa,
+                                 uint16_t map_bar_x100,
                                  int16_t lambda_target_x1000,
                                  int16_t lambda_measured_x1000,
                                  int16_t clt_x10,
                                  bool o2_valid,
                                  bool ae_active,
                                  bool rev_cut) noexcept {
-    lambda_history_push(now_ms, rpm_x10, map_kpa, lambda_target_x1000);
+    lambda_history_push(now_ms, rpm_x10, map_bar_x100, lambda_target_x1000);
 
-    const uint16_t delay_ms = lambda_delay_ms_from_rpm_load(rpm_x10, map_kpa);
+    const uint16_t delay_ms = lambda_delay_ms_from_rpm_load(rpm_x10, map_bar_x100);
     LambdaHistorySample delayed{};
     if (!lambda_history_get_delayed(now_ms, delay_ms, delayed)) {
         return fuel_update_stft(rpm_x10,
-                                map_kpa,
+                                map_bar_x100,
                                 lambda_target_x1000,
                                 lambda_measured_x1000,
                                 clt_x10,
@@ -564,7 +564,7 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
     }
 
     return fuel_update_stft(delayed.rpm_x10,
-                            delayed.map_kpa,
+                            delayed.map_bar_x100,
                             delayed.lambda_target_x1000,
                             lambda_measured_x1000,
                             clt_x10,

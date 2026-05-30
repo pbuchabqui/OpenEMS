@@ -124,7 +124,7 @@ void xtau_autocalib_reset() noexcept {
 }
 
 bool xtau_autocalib_update(uint32_t rpm_x10,
-                           uint16_t map_kpa,
+                           uint16_t map_bar_x100,
                            int16_t lambda_target_x1000,
                            int16_t lambda_measured_x1000,
                            int16_t clt_x10,

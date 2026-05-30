@@ -207,12 +207,12 @@ public:
     
     /**
      * @brief Perform sensor plausibility check
-     * @param map_kpa_x10 MAP sensor value
+     * @param map_bar_x1000 MAP sensor value
      * @param tps_pct_x10 TPS sensor value
      * @param rpm_x10 Engine RPM
      * @return true if values are plausible together
      */
-    static bool check_sensor_plausibility(uint16_t map_kpa_x10,
+    static bool check_sensor_plausibility(uint16_t map_bar_x1000,
                                          uint16_t tps_pct_x10,
                                          uint32_t rpm_x10) noexcept;
     

@@ -17,7 +17,7 @@ namespace {
 using ems::drv::SensorData;
 using ems::drv::SensorId;
 using ems::drv::SensorRange;
-using ems::drv::kFallbackMapKpaX10;
+using ems::drv::kFallbackMapBarX1000;
 using ems::drv::kFallbackCltDegcX10;
 using ems::drv::kFallbackIatDegcX10;
 
@@ -63,7 +63,7 @@ constexpr FaultTracker kDefaultFault[8] = {
 // FIX-6 (BUG-10): Double buffering para SensorData — elimina race condition
 // Problema anterior: volatile + CPSID em sensors_get() NÃO garantem snapshot consistente
 // porque sensors_on_tooth() pode atualizar campos individuais entre leituras sucessivas.
-// Exemplo: map_kpa_x10 do dente atual, mas clt_degc_x10 do dente anterior.
+// Exemplo: map_bar_x1000 do dente atual, mas clt_degc_x10 do dente anterior.
 //
 // Solução: sensors_on_tooth() escreve em g_data_staging (buffer secundário).
 // sensors_get() faz swap atômico dos ponteiros e copia o buffer "congelado".
@@ -283,8 +283,8 @@ inline void init_tables() noexcept {
     }
 }
 
-// MAP: 0-5V linear → 0..300.0 kPa (×10)
-inline uint16_t map_raw_to_kpa_x10(uint16_t raw) noexcept {
+// MAP: 0-5V linear → 0..3.00 bar (×10)
+inline uint16_t map_raw_to_bar_x1000(uint16_t raw) noexcept {
     return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 3000u) / 4095u);
 }
 
@@ -370,7 +370,7 @@ inline void sample_fast_channels() noexcept {
     
     if (adc_unavailable) {
         // ADC não disponível - usa valores fallback para segurança do motor
-        g_data_staging.map_kpa_x10 = kFallbackMapKpaX10;   // 101.0 kPa (pressão atmosférica)
+        g_data_staging.map_bar_x1000 = kFallbackMapBarX1000;   // 1.010 bar (pressão atmosférica)
         g_data_staging.tps_pct_x10 = kFallbackTpsPctX10;   // 0.0% (borboleta fechada)
         g_data_staging.maf_gps_x100 = 0u;                   // MAF desconhecido
         
@@ -414,9 +414,9 @@ inline void sample_fast_channels() noexcept {
     apply_fault(SensorId::TPS, tps_raw);
     apply_fault(SensorId::O2,  o2_raw);
 
-    g_data_staging.map_kpa_x10 = g_fault[static_cast<uint8_t>(SensorId::MAP)].active
-                         ? kFallbackMapKpaX10
-                         : map_raw_to_kpa_x10(g_map_filt);
+    g_data_staging.map_bar_x1000 = g_fault[static_cast<uint8_t>(SensorId::MAP)].active
+                         ? kFallbackMapBarX1000
+                         : map_raw_to_bar_x1000(g_map_filt);
 
     g_data_staging.tps_pct_x10 = g_fault[static_cast<uint8_t>(SensorId::TPS)].active
                          ? kFallbackTpsPctX10
@@ -457,12 +457,12 @@ inline void sample_fast_channels() noexcept {
     }
     
     // Perform plausibility check between MAP and TPS
-    if (!DiagnosticManager::check_sensor_plausibility(g_data_staging.map_kpa_x10,
+    if (!DiagnosticManager::check_sensor_plausibility(g_data_staging.map_bar_x1000,
                                                       g_data_staging.tps_pct_x10,
                                                       0)) {
         DiagnosticManager::report_fault(DiagnosticCode::MAP_TPS_CORRELATION,
                                        FaultSeverity::WARNING,
-                                       g_data_staging.map_kpa_x10,
+                                       g_data_staging.map_bar_x1000,
                                        g_data_staging.tps_pct_x10);
     }
     #endif
@@ -481,8 +481,8 @@ bool validate_sensor_range(SensorId id, uint16_t raw_value) noexcept {
 }
 
 bool validate_sensor_values(const SensorData& data) noexcept {
-    // Validate MAP: 10 kPa to 300 kPa (×10)
-    if ((data.map_kpa_x10 < 100u) || (data.map_kpa_x10 > 3000u)) {
+    // Validate MAP: 0.10 bar to 3.00 bar (×10)
+    if ((data.map_bar_x1000 < 100u) || (data.map_bar_x1000 > 3000u)) {
         return false;
     }
     
@@ -506,13 +506,13 @@ bool validate_sensor_values(const SensorData& data) noexcept {
         return false;
     }
     
-    // Validate fuel pressure: 0 kPa to 500 kPa (×10)
-    if (data.fuel_press_kpa_x10 > 5000u) {
+    // Validate fuel pressure: 0 bar to 5.00 bar (×10)
+    if (data.fuel_press_bar_x1000 > 5000u) {
         return false;
     }
     
-    // Validate oil pressure: 0 kPa to 1000 kPa (×10)
-    if (data.oil_press_kpa_x10 > 10000u) {
+    // Validate oil pressure: 0 bar to 10.00 bar (×10)
+    if (data.oil_press_bar_x1000 > 10000u) {
         return false;
     }
     
@@ -574,9 +574,9 @@ void sensors_tick_50ms() noexcept {
     apply_fault(SensorId::FUEL_PRESS, fuel_raw);
     apply_fault(SensorId::OIL_PRESS,  oil_raw);
 
-    g_data_staging.fuel_press_kpa_x10 = static_cast<uint16_t>(
+    g_data_staging.fuel_press_bar_x1000 = static_cast<uint16_t>(
         (static_cast<uint32_t>(avg_n(g_fuel_buf, 4)) * 2500u) / 4095u);
-    g_data_staging.oil_press_kpa_x10 = static_cast<uint16_t>(
+    g_data_staging.oil_press_bar_x1000 = static_cast<uint16_t>(
         (static_cast<uint32_t>(avg_n(g_oil_buf, 4)) * 2500u) / 4095u);
 }
 
@@ -692,13 +692,13 @@ void sensors_tick_100ms() noexcept {
 #if defined(__arm__) || defined(__thumb__)
     __asm__ volatile("cpsid i" ::: "memory");
 #endif
-    g_data_committed.map_kpa_x10        = g_data_staging.map_kpa_x10;
+    g_data_committed.map_bar_x1000        = g_data_staging.map_bar_x1000;
     g_data_committed.maf_gps_x100       = g_data_staging.maf_gps_x100;
     g_data_committed.tps_pct_x10        = g_data_staging.tps_pct_x10;
     g_data_committed.clt_degc_x10       = g_data_staging.clt_degc_x10;
     g_data_committed.iat_degc_x10       = g_data_staging.iat_degc_x10;
-    g_data_committed.fuel_press_kpa_x10 = g_data_staging.fuel_press_kpa_x10;
-    g_data_committed.oil_press_kpa_x10  = g_data_staging.oil_press_kpa_x10;
+    g_data_committed.fuel_press_bar_x1000 = g_data_staging.fuel_press_bar_x1000;
+    g_data_committed.oil_press_bar_x1000  = g_data_staging.oil_press_bar_x1000;
     g_data_committed.vbatt_mv           = g_data_staging.vbatt_mv;
     g_data_committed.fault_bits         = g_data_staging.fault_bits;
     g_data_committed.app1_pct_x10       = g_data_staging.app1_pct_x10;
@@ -763,13 +763,13 @@ SensorData sensors_get() noexcept {
     // Não precisa de CPSID pois g_data_committed é apenas lido no main loop
     // e escrito atomicamente pela ISR após swap completo.
     SensorData out;
-    out.map_kpa_x10         = g_data_committed.map_kpa_x10;
+    out.map_bar_x1000         = g_data_committed.map_bar_x1000;
     out.maf_gps_x100        = g_data_committed.maf_gps_x100;
     out.tps_pct_x10         = g_data_committed.tps_pct_x10;
     out.clt_degc_x10        = g_data_committed.clt_degc_x10;
     out.iat_degc_x10        = g_data_committed.iat_degc_x10;
-    out.fuel_press_kpa_x10  = g_data_committed.fuel_press_kpa_x10;
-    out.oil_press_kpa_x10   = g_data_committed.oil_press_kpa_x10;
+    out.fuel_press_bar_x1000  = g_data_committed.fuel_press_bar_x1000;
+    out.oil_press_bar_x1000   = g_data_committed.oil_press_bar_x1000;
     out.vbatt_mv            = g_data_committed.vbatt_mv;
     out.fault_bits          = g_data_committed.fault_bits;
     out.app1_pct_x10        = g_data_committed.app1_pct_x10;

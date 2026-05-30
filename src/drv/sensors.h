@@ -23,14 +23,14 @@ static constexpr uint8_t THROTTLE_FAULT_ETB_TPS2  = (1u << 4u);
 static constexpr uint8_t THROTTLE_FAULT_ETB_PLAUS = (1u << 5u);
 
 struct SensorData {
-    uint16_t map_kpa_x10;         // MAP kPa × 10
+    uint16_t map_bar_x1000;         // MAP bar × 10
     uint32_t maf_gps_x100;        // MAF g/s × 100
     uint16_t tps_pct_x10;         // TPS % × 10 (cabo legado PA4)
     int16_t  clt_degc_x10;        // CLT °C × 10
     int16_t  iat_degc_x10;        // IAT °C × 10
     // o2_mv REMOVIDO — sistema usa exclusivamente WBO2 via CAN (ID 0x180)
-    uint16_t fuel_press_kpa_x10;  // pressão combustível kPa × 10
-    uint16_t oil_press_kpa_x10;   // pressão óleo kPa × 10
+    uint16_t fuel_press_bar_x1000;  // pressão combustível bar × 10
+    uint16_t oil_press_bar_x1000;   // pressão óleo bar × 10
     uint16_t vbatt_mv;            // tensão bateria mV
     uint8_t  fault_bits;          // bitmask de falhas ativas
     uint16_t app1_pct_x10;        // APP1 (AN1/PB0) % × 10
@@ -87,7 +87,7 @@ bool validate_sensor_range(SensorId id, uint16_t raw_value) noexcept;
 bool validate_sensor_values(const SensorData& data) noexcept;
 uint8_t get_sensor_health_status() noexcept;
 
-inline constexpr uint16_t kFallbackMapKpaX10  = 1010u;
+inline constexpr uint16_t kFallbackMapBarX1000  = 1010u;
 inline constexpr int16_t  kFallbackCltDegcX10 = 900;
 inline constexpr int16_t  kFallbackIatDegcX10 = 250;
 

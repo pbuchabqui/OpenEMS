@@ -69,7 +69,7 @@ inline void tx_0x400(const ems::drv::CkpSnapshot& ckp,
 
     out.data[0] = static_cast<uint8_t>(rpm & 0xFFu);
     out.data[1] = static_cast<uint8_t>((rpm >> 8u) & 0xFFu);
-    out.data[2] = clamp_u8(sensors.map_kpa_x10 / 10u);
+    out.data[2] = clamp_u8(sensors.map_bar_x1000 / 10u);
     out.data[3] = clamp_u8(sensors.tps_pct_x10 / 10u);
     out.data[4] = clamp_u8_i32((static_cast<int32_t>(sensors.clt_degc_x10) / 10) + 40);
     out.data[5] = clamp_u8_i32(static_cast<int32_t>(advance_deg) + 40);
@@ -94,10 +94,10 @@ inline void tx_0x401(const ems::drv::SensorData& sensors,
     out.dlc      = 8u;
     out.extended = false;
 
-    out.data[0] = static_cast<uint8_t>(sensors.fuel_press_kpa_x10 & 0xFFu);
-    out.data[1] = static_cast<uint8_t>((sensors.fuel_press_kpa_x10 >> 8u) & 0xFFu);
-    out.data[2] = static_cast<uint8_t>(sensors.oil_press_kpa_x10 & 0xFFu);
-    out.data[3] = static_cast<uint8_t>((sensors.oil_press_kpa_x10 >> 8u) & 0xFFu);
+    out.data[0] = static_cast<uint8_t>(sensors.fuel_press_bar_x1000 & 0xFFu);
+    out.data[1] = static_cast<uint8_t>((sensors.fuel_press_bar_x1000 >> 8u) & 0xFFu);
+    out.data[2] = static_cast<uint8_t>(sensors.oil_press_bar_x1000 & 0xFFu);
+    out.data[3] = static_cast<uint8_t>((sensors.oil_press_bar_x1000 >> 8u) & 0xFFu);
     out.data[4] = clamp_u8_i32((static_cast<int32_t>(sensors.iat_degc_x10) / 10) + 40);
     out.data[5] = clamp_u8_i32(static_cast<int32_t>(stft_pct) + 100);
     out.data[6] = vvt_intake_pct;

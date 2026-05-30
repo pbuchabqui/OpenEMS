@@ -6,7 +6,7 @@ namespace ems::app {
 
 struct UiRealtimeData {
     uint16_t rpm;
-    uint8_t map_kpa;
+    uint8_t map_bar_x100;
     uint8_t tps_pct;
     int8_t clt_p40;
     int8_t iat_p40;

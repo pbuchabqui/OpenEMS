@@ -42,7 +42,7 @@ inline constexpr uint32_t kCrankDegreesPerCycle = 720u;
 // Fuel Calculation Constants
 // ============================================================================
 
-/** Air density at 100 kPa, 25°C in mg/cc × 1000 (1.184 mg/cc) */
+/** Air density at 1.00 bar, 25°C in mg/cc × 1000 (1.184 mg/cc) */
 inline constexpr uint32_t kAirDensityMgPerCcX1000 = 1184u;
 
 /** Gasoline fuel density in mg/cc */
@@ -70,13 +70,13 @@ inline constexpr int16_t kCltMinX10 = -400;
 /** Coolant temperature maximum in °C × 10 (150.0°C) */
 inline constexpr int16_t kCltMaxX10 = 1500;
 
-/** MAP sensor minimum in kPa */
-inline constexpr uint16_t kMapMinKpa = 10u;
+/** MAP sensor minimum in bar */
+inline constexpr uint16_t kMapMinBarX100 = 10u;
 
-/** MAP sensor maximum in kPa */
-inline constexpr uint16_t kMapMaxKpa = 300u;
+/** MAP sensor maximum in bar */
+inline constexpr uint16_t kMapMaxBarX100 = 300u;
 
-/** Default MAP value for limp-home mode in kPa */
+/** Default MAP value for limp-home mode in bar */
 inline constexpr uint16_t kMapDefaultLimpHome = 50u;
 
 /** Default IAT value for limp-home mode in °C × 10 (25.0°C) */

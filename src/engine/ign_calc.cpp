@@ -38,11 +38,11 @@ int16_t etb_get_idle_spark_trim() noexcept { return 0; }
 
 
 
-int16_t get_advance(uint32_t rpm_x10, uint16_t load_kpa) noexcept {
+int16_t get_advance(uint32_t rpm_x10, uint16_t load_bar_x100) noexcept {
     const uint8_t xi = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
-    const uint8_t yi = table_axis_index(kLoadAxisKpa, kTableAxisSize, load_kpa);
+    const uint8_t yi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, load_bar_x100);
     const uint8_t fx = table_axis_frac_q8(kRpmAxisX10, xi, rpm_x10);
-    const uint8_t fy = table_axis_frac_q8(kLoadAxisKpa, yi, load_kpa);
+    const uint8_t fy = table_axis_frac_q8(kLoadAxisBarX100, yi, load_bar_x100);
 
     const int16_t v00 = static_cast<int16_t>(spark_table[yi][xi]);
     const int16_t v10 = static_cast<int16_t>(spark_table[yi][xi + 1u]);
@@ -73,10 +73,10 @@ int16_t calc_total_advance(int16_t base_advance_deg,
 int16_t calc_idle_spark_correction_deg(uint32_t rpm_x10,
                                        uint16_t idle_target_rpm_x10,
                                        uint16_t tps_pct_x10,
-                                       uint16_t map_kpa) noexcept {
+                                       uint16_t map_bar_x100) noexcept {
     if (idle_target_rpm_x10 == 0u ||
         tps_pct_x10 > idle_spark_tps_max_x10 ||
-        map_kpa > idle_spark_map_max_kpa ||
+        map_bar_x100 > idle_spark_map_max_bar_x100 ||
         rpm_x10 < idle_spark_rpm_min_x10 ||
         rpm_x10 > static_cast<uint32_t>(idle_target_rpm_x10) + idle_spark_window_above_target_x10 ||
         idle_spark_rpm_per_deg_x10 == 0u) {

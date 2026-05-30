@@ -35,9 +35,9 @@ inline constexpr uint32_t kDefaultReqFuelUs =
                                cfg::kInjectorFlowCcMin,
                                cfg::kStoichAfrX100);
 
-uint8_t get_ve(uint32_t rpm_x10, uint16_t map_kpa) noexcept;
+uint8_t get_ve(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 uint8_t get_ve_prepared(const Table2dLookup& lookup) noexcept;
-uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_kpa) noexcept;
+uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 uint16_t get_lambda_target_x1000_prepared(const Table2dLookup& lookup) noexcept;
 
 uint32_t calc_req_fuel_us(uint16_t displacement_cc,
@@ -48,10 +48,10 @@ uint32_t default_req_fuel_us() noexcept;
 
 uint32_t calc_base_pw_us(uint16_t req_fuel_us,
                          uint8_t ve,
-                         uint16_t map_kpa,
-                         uint16_t map_ref_kpa) noexcept;
+                         uint16_t map_bar_x100,
+                         uint16_t map_ref_bar_x100) noexcept;
 uint32_t calc_base_pw_us_default(uint8_t ve,
-                                 uint16_t map_kpa) noexcept;
+                                 uint16_t map_bar_x100) noexcept;
 
 uint32_t apply_lambda_target_pw_us(uint32_t base_pw_us,
                                    uint16_t lambda_target_x1000) noexcept;
@@ -69,7 +69,7 @@ uint32_t calc_final_pw_us(uint32_t base_pw_us,
                           uint16_t corr_iat_x256,
                           uint16_t dead_time_us) noexcept;
 uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
-                                      uint16_t map_kpa,
+                                      uint16_t map_bar_x100,
                                       uint16_t lambda_target_x1000,
                                       int16_t trim_pct_x10,
                                       uint16_t corr_clt_x256,
@@ -88,10 +88,10 @@ void fuel_reset_adaptives() noexcept;
 void fuel_lambda_delay_reset() noexcept;
 
 uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
-                                       uint16_t map_kpa) noexcept;
+                                       uint16_t map_bar_x100) noexcept;
 
 int16_t fuel_update_stft(uint32_t rpm_x10,
-                         uint16_t map_kpa,
+                         uint16_t map_bar_x100,
                          int16_t lambda_target_x1000,
                          int16_t lambda_measured_x1000,
                          int16_t clt_x10,
@@ -101,7 +101,7 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
 
 int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  uint32_t rpm_x10,
-                                 uint16_t map_kpa,
+                                 uint16_t map_bar_x100,
                                  int16_t lambda_target_x1000,
                                  int16_t lambda_measured_x1000,
                                  int16_t clt_x10,

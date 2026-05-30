@@ -101,7 +101,7 @@ namespace ems::engine {
 
 void map_estimator_init() noexcept {
     g_map_state = {};
-    g_map_state.map_estimated_kpa = 50u;  // Valor inicial seguro
+    g_map_state.map_estimated_bar_x100 = 50u;  // Valor inicial seguro
     
     for (uint8_t i = 0u; i < kTpsHistorySize; ++i) {
         g_tps_history[i] = 0u;
@@ -113,14 +113,14 @@ void map_estimator_init() noexcept {
     g_transient_gain_q8 = 64u;
 }
 
-uint16_t map_estimator_update(uint16_t map_sensor_kpa,
+uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
                               uint16_t tps_pct_x10,
                               uint16_t dt_ms,
                               uint32_t rpm_x10) noexcept {
     // Validações básicas
-    const bool sensor_ok = (map_sensor_kpa >= 10u && map_sensor_kpa <= 300u);
+    const bool sensor_ok = (map_sensor_bar_x100 >= 10u && map_sensor_bar_x100 <= 300u);
     if (sensor_ok) {
-        g_map_state.map_sensor_kpa = map_sensor_kpa;
+        g_map_state.map_sensor_bar_x100 = map_sensor_bar_x100;
     } else {
         // Sensor fora de range: usa apenas modelo. NÃO alimentar o valor cru
         // (railed/0) no filtro complementar — abaixo zeramos o ganho do sensor.
@@ -157,19 +157,19 @@ uint16_t map_estimator_update(uint16_t map_sensor_kpa,
                                static_cast<int32_t>(model_gain) * 
                                static_cast<int32_t>(dt_ms)) / 10000;
     
-    const int32_t map_predicted = static_cast<int32_t>(g_map_state.map_estimated_kpa) + 
+    const int32_t map_predicted = static_cast<int32_t>(g_map_state.map_estimated_bar_x100) + 
                                    (map_delta / 10);  // Escala adequada
     const uint16_t map_predicted_clamped = clamp_u16(
         static_cast<uint16_t>(map_predicted > 0 ? map_predicted : 0),
         10u, 300u);
     
     // Aplica filtro complementar: MAP_final = (gain × sensor) + ((256-gain) × modelo)
-    const int32_t map_filtered = (static_cast<int32_t>(map_sensor_kpa) * 
+    const int32_t map_filtered = (static_cast<int32_t>(map_sensor_bar_x100) * 
                                   static_cast<int32_t>(gain_q8)) / 256 +
                                  (static_cast<int32_t>(map_predicted_clamped) * 
                                   static_cast<int32_t>(256u - gain_q8)) / 256;
     
-    g_map_state.map_estimated_kpa = clamp_u16(
+    g_map_state.map_estimated_bar_x100 = clamp_u16(
         static_cast<uint16_t>(map_filtered), 10u, 300u);
     
     // Determina modo do estimador
@@ -179,11 +179,11 @@ uint16_t map_estimator_update(uint16_t map_sensor_kpa,
         g_map_state.estimator_mode = 1u;  // fusion (transiente)
     }
     
-    return g_map_state.map_estimated_kpa;
+    return g_map_state.map_estimated_bar_x100;
 }
 
-uint16_t map_get_estimated_kpa() noexcept {
-    return g_map_state.map_estimated_kpa;
+uint16_t map_get_estimated_bar_x100() noexcept {
+    return g_map_state.map_estimated_bar_x100;
 }
 
 int16_t map_get_tpsdot_x10() noexcept {

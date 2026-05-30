@@ -7,7 +7,7 @@ namespace ems::engine {
 constexpr uint8_t kTableAxisSize = 16u;
 
 extern const uint32_t kRpmAxisX10[kTableAxisSize];
-extern const uint32_t kLoadAxisKpa[kTableAxisSize];
+extern const uint32_t kLoadAxisBarX100[kTableAxisSize];
 
 struct Table2dLookup {
     uint8_t xi;

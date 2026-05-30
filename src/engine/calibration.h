@@ -50,11 +50,11 @@ extern uint16_t dwell_vbatt_axis_mv[kIgnitionDwellTableSize];
 extern uint16_t dwell_ms_x10_table[kIgnitionDwellTableSize];
 
 extern uint32_t lambda_delay_rpm_axis_x10[kLambdaDelayTableSize];
-extern uint32_t lambda_delay_load_axis_kpa[kLambdaDelayTableSize];
+extern uint32_t lambda_delay_load_axis_bar_x100[kLambdaDelayTableSize];
 extern uint16_t lambda_delay_ms_table[kLambdaDelayTableSize][kLambdaDelayTableSize];
 
 extern uint16_t idle_spark_tps_max_x10;
-extern uint16_t idle_spark_map_max_kpa;
+extern uint16_t idle_spark_map_max_bar_x100;
 extern uint16_t idle_spark_rpm_min_x10;
 extern uint16_t idle_spark_window_above_target_x10;
 extern uint16_t idle_spark_deadband_rpm_x10;

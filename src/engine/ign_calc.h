@@ -25,7 +25,7 @@ struct AdvanceCorrections {
     int16_t knock_retard_deg;
 };
 
-int16_t get_advance(uint32_t rpm_x10, uint16_t load_kpa) noexcept;
+int16_t get_advance(uint32_t rpm_x10, uint16_t load_bar_x100) noexcept;
 int16_t get_advance_prepared(const Table2dLookup& lookup) noexcept;
 int16_t clamp_advance_deg(int16_t advance_deg) noexcept;
 
@@ -34,7 +34,7 @@ int16_t calc_total_advance(int16_t base_advance_deg,
 int16_t calc_idle_spark_correction_deg(uint32_t rpm_x10,
                                        uint16_t idle_target_rpm_x10,
                                        uint16_t tps_pct_x10,
-                                       uint16_t map_kpa) noexcept;
+                                       uint16_t map_bar_x100) noexcept;
 
 uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv) noexcept;
 uint16_t calc_dwell_angle_x10(uint16_t dwell_ms_x10, uint16_t rpm) noexcept;

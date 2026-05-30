@@ -13,7 +13,7 @@ inline constexpr uint16_t kStoichAfrX100 = 1300u;
 inline constexpr uint16_t kFuelDensityMgPerCc = 755u;
 inline constexpr uint16_t kAirDensityMgPerCcX1000 = 1184u;
 
-inline constexpr uint16_t kMapRefKpa = 100u;
+inline constexpr uint16_t kMapRefBarX100 = 100u;
 inline constexpr uint16_t kDefaultSoiLeadDeg = 62u;
 inline constexpr uint16_t kIvcAbdcDeg = 50u;
 
@@ -43,7 +43,7 @@ struct EngineConfigRam {
     uint16_t displacement_cc;
     uint16_t injector_flow_cc_min;
     uint16_t stoich_afr_x100;
-    uint16_t map_ref_kpa;
+    uint16_t map_ref_bar_x100;
     uint16_t trigger_tooth0_engine_deg;
     uint16_t default_soi_lead_deg;
 };

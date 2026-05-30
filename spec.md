@@ -266,13 +266,13 @@ uint32_t ckp_seed_rejected_count();
 #### Estruturas
 ```cpp
 struct SensorData {
-    uint16_t map_kpa_x10;        // 0–300,0 kPa
+    uint16_t map_bar_x1000;        // 0–300,0 bar
     uint32_t maf_gps_x100;       // g/s × 100
     uint16_t tps_pct_x10;        // 0–100,0 %
     int16_t  clt_degc_x10;       // −40 a +150 °C
     int16_t  iat_degc_x10;
-    uint16_t fuel_press_kpa_x10;
-    uint16_t oil_press_kpa_x10;
+    uint16_t fuel_press_bar_x1000;
+    uint16_t oil_press_bar_x1000;
     uint16_t vbatt_mv;           // 6000–18000 mV
     uint8_t  fault_bits;         // bit N = SensorId N
     uint16_t app1_pct_x10;       // Pedal 1
@@ -314,11 +314,11 @@ sensors_get()    ← lê g_data_committed (sem seção crítica necessária)
 #### Conversões
 | Sensor | Fórmula |
 |---|---|
-| MAP | `raw × 3000 / 4095` → kPa×10 |
+| MAP | `raw × 3000 / 4095` → bar×10 |
 | TPS/APP/ETB | `(raw − min) × 1000 / (max − min)` → %×10 |
 | CLT/IAT | LUT 128 pontos (−40 a +150 °C) |
 | VBatt | `raw × 18000 / 4095` → mV |
-| FuelP/OilP | `avg4 × 2500 / 4095` → kPa×10 |
+| FuelP/OilP | `avg4 × 2500 / 4095` → bar×10 |
 
 #### Ranges Padrão de Falha
 | Sensor | Min raw | Max raw |
@@ -352,7 +352,7 @@ bit 5: THROTTLE_FAULT_ETB_PLAUS  — Delta TPS1/TPS2 > etb_max_delta
 | kStoichAfrX100 | 1300 | (AFR E30 = 13,0) |
 | kFuelDensityMgPerCc | 755 | mg/cc |
 | kAirDensityMgPerCcX1000 | 1184 | mg/cc×1000 |
-| kMapRefKpa | 100 | kPa |
+| kMapRefBarX100 | 100 | bar |
 | kDefaultSoiLeadDeg | 62 | ° BTDC |
 | kIvcAbdcDeg | 50 | ° ABDC |
 | kFiringOrder | {0,2,3,1} | — |
@@ -362,11 +362,11 @@ bit 5: THROTTLE_FAULT_ETB_PLAUS  — Delta TPS1/TPS2 > etb_max_delta
 
 **Eixos globais:**
 - `kRpmAxisX10[16]` = {5000, 7500, 10000, …, 120000} (RPM × 10)
-- `kLoadAxisKpa[16]` = {20, 30, 40, …, 300} (kPa)
+- `kLoadAxisBarX100[16]` = {20, 30, 40, …, 300} (bar)
 
 **Funções:**
 ```cpp
-Table2dLookup table3d_prepare_lookup(x_axis, y_axis, rpm_x10, map_kpa);
+Table2dLookup table3d_prepare_lookup(x_axis, y_axis, rpm_x10, map_bar_x100);
 uint8_t  table3d_lookup_u8_prepared(table[16][16], lookup);   // VE
 int16_t  table3d_lookup_i8_prepared(table[16][16], lookup);   // Spark
 int16_t  table3d_lookup_s16_prepared(table[16][16], lookup);  // Lambda
@@ -431,10 +431,10 @@ VE + MAP → BASE_PW = REQ_FUEL × VE/100 × MAP/MAP_REF
 
 **Interface:**
 ```cpp
-uint8_t  get_ve(uint32_t rpm_x10, uint16_t map_kpa);
+uint8_t  get_ve(uint32_t rpm_x10, uint16_t map_bar_x100);
 uint8_t  get_ve_prepared(const Table2dLookup&);
-uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_kpa);
-uint32_t calc_fuel_pw_us_default_fast(uint8_t ve, uint16_t map_kpa,
+uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_bar_x100);
+uint32_t calc_fuel_pw_us_default_fast(uint8_t ve, uint16_t map_bar_x100,
     uint16_t lambda_x1000, int16_t trim_pct_x10,
     uint16_t corr_clt_x256, uint16_t corr_iat_x256, uint16_t dead_time_us);
 int32_t  calc_ae_pw_us(uint16_t tps_now_x10, uint16_t tps_prev_x10,
@@ -448,7 +448,7 @@ uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv);
 
 // STFT/LTFT
 int16_t fuel_update_stft_delayed(uint32_t now_ms, uint32_t rpm_x10,
-    uint16_t map_kpa, int16_t lambda_target_x1000, int16_t lambda_measured,
+    uint16_t map_bar_x100, int16_t lambda_target_x1000, int16_t lambda_measured,
     int16_t clt_x10, bool lambda_valid, bool ae_active, bool rev_cut);
 int16_t fuel_get_stft_pct_x10();
 int16_t fuel_get_ltft_pct_x10(uint8_t map_idx, uint8_t rpm_idx);
@@ -463,17 +463,17 @@ void    fuel_reset_adaptives();
 
 ### 7.5 Cálculo de Ignição (`engine/ign_calc.h`)
 ```cpp
-int16_t get_advance(uint32_t rpm_x10, uint16_t load_kpa);
+int16_t get_advance(uint32_t rpm_x10, uint16_t load_bar_x100);
 int16_t get_advance_prepared(const Table2dLookup&);
 int16_t calc_total_advance(int16_t base,
     const AdvanceCorrections& corr); // clamp −10 a +40°
 int16_t calc_idle_spark_correction_deg(uint32_t rpm_x10,
-    uint16_t idle_target_rpm_x10, uint16_t tps_pct_x10, uint16_t map_kpa);
+    uint16_t idle_target_rpm_x10, uint16_t tps_pct_x10, uint16_t map_bar_x100);
 uint32_t inj_pw_us_to_scheduler_ticks(uint32_t pw_us); // × 10 (100 ns/tick)
 ```
 
 **Controle de avanço em idle:**
-- Ativo quando: TPS < 2,5% · MAP < 80 kPa · RPM ∈ [500, idle+400 RPM]
+- Ativo quando: TPS < 2,5% · MAP < 0.80 bar · RPM ∈ [500, idle+400 RPM]
 - Deadband: ±50 RPM
 - Ganho: 1° por 50 RPM de erro
 - Limites: −8 a +12°
@@ -582,9 +582,9 @@ void quick_crank_set_prime_context(int16_t clt_x10, uint16_t dead_time_us);
 - PWM TIM3_CH1 @ 15 Hz
 
 **Wastegate (Boost):**
-- Target boost por RPM × TPS: 105–170 kPa
+- Target boost por RPM × TPS: 105–10.70 bar
 - PID: Kp=0,08 · Ki=0,01 · integrador ±250
-- Failsafe: cut se overboost > 20 kPa por 500 ms
+- Failsafe: cut se overboost > 20 bar por 500 ms
 - PWM TIM3_CH2 @ 15 Hz
 
 **VVT:**
@@ -688,9 +688,9 @@ bit 4: TORQUE_LIMP_REV_CUT    — corte de rotação
 ### 7.14 Map Estimator (`engine/map_estimator.h`)
 ```cpp
 void    map_estimator_init();
-uint16_t map_estimator_update(uint16_t map_sensor_kpa, uint16_t tps_pct_x10,
+uint16_t map_estimator_update(uint16_t map_sensor_bar_x100, uint16_t tps_pct_x10,
     uint16_t dt_ms, uint32_t rpm_x10); // retorna MAP filtrado
-uint16_t map_get_estimated_kpa();
+uint16_t map_get_estimated_bar_x100();
 int16_t  map_get_tpsdot_x10();    // derivada TPS (%/s × 10)
 bool     map_is_transient();
 ```
@@ -770,7 +770,7 @@ bool     can_stack_wbo2_fault();
 **Página 3 — Realtime (64 B):**
 ```
 [0:1]   RPM
-[2]     MAP kPa
+[2]     MAP bar
 [3]     TPS %
 [4]     CLT + 40°C
 [5]     IAT + 40°C
@@ -839,8 +839,8 @@ bit 4: ETB_LIMP        bit 9: WBO2_FAULT
 ### Fluxo de Dados no Slot de 2ms
 ```
 CKP snapshot
-    ↓ rpm_x10, map_kpa, sched_sync, full_sync
-table3d_prepare_lookup(rpm_x10, map_kpa)
+    ↓ rpm_x10, map_bar_x100, sched_sync, full_sync
+table3d_prepare_lookup(rpm_x10, map_bar_x100)
     ↓ fuel_lookup (xi, yi, fx, fy)
 get_ve_prepared(fuel_lookup)        → ve
 get_lambda_target_x1000_prepared()  → lambda_target_x1000

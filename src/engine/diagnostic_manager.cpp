@@ -217,14 +217,14 @@ const DiagnosticEvent* DiagnosticManager::get_event(DiagnosticCode code) noexcep
     return nullptr;
 }
 
-bool DiagnosticManager::check_sensor_plausibility(uint16_t map_kpa_x10,
+bool DiagnosticManager::check_sensor_plausibility(uint16_t map_bar_x1000,
                                                   uint16_t tps_pct_x10,
                                                   uint32_t rpm_x10) noexcept {
     // Plausibility checks based on physical constraints
     
     // At idle (low RPM), MAP should be low (high vacuum)
     if (rpm_x10 < 12000) {  // Below 1200 RPM
-        if (map_kpa_x10 > 600) {  // MAP > 60 kPa at idle is suspicious
+        if (map_bar_x1000 > 600) {  // MAP > 0.60 bar at idle is suspicious
             // Could indicate vacuum leak or sensor fault
             return false;
         }
@@ -232,7 +232,7 @@ bool DiagnosticManager::check_sensor_plausibility(uint16_t map_kpa_x10,
     
     // At wide open throttle (TPS > 90%), MAP should be high
     if (tps_pct_x10 > 900) {  // TPS > 90%
-        if (map_kpa_x10 < 700) {  // MAP < 70 kPa at WOT is suspicious
+        if (map_bar_x1000 < 700) {  // MAP < 0.70 bar at WOT is suspicious
             // Could indicate boost leak or sensor fault
             return false;
         }
@@ -240,14 +240,14 @@ bool DiagnosticManager::check_sensor_plausibility(uint16_t map_kpa_x10,
     
     // At closed throttle (TPS < 5%), MAP should not be atmospheric
     if (tps_pct_x10 < 50) {  // TPS < 5%
-        if (map_kpa_x10 > 950) {  // MAP > 95 kPa at closed throttle
+        if (map_bar_x1000 > 950) {  // MAP > 0.95 bar at closed throttle
             // Could indicate stuck throttle or sensor fault
             return false;
         }
     }
     
     // High RPM with very low MAP is implausible (unless decelerating)
-    if (rpm_x10 > 60000 && map_kpa_x10 < 300) {  // RPM > 6000, MAP < 30 kPa
+    if (rpm_x10 > 60000 && map_bar_x1000 < 300) {  // RPM > 6000, MAP < 0.30 bar
         // Very unlikely under normal operation
         return false;
     }

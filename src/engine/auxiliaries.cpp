@@ -47,7 +47,7 @@ constexpr uint16_t kIacOpenStepX10 = 100u;
 constexpr uint16_t kIacCloseStepX10 = 20u;
 
 constexpr uint32_t kOverboostDurationMs = 500u;
-constexpr uint16_t kOverboostMarginKpaX10 = 200u;
+constexpr uint16_t kOverboostMarginBarX1000 = 200u;
 
 constexpr uint32_t kVvtConfirmTimeoutMs = 200u;
 
@@ -65,7 +65,7 @@ constexpr uint16_t kIdleTargetRpmX10[kWarmupPts] = {12000u, 11500u, 10800u, 1000
 constexpr uint8_t kBoostPts = 8u;
 constexpr uint32_t kBoostRpmAxisX10[kBoostPts] = {15000u, 20000u, 25000u, 30000u, 40000u, 50000u, 65000u, 80000u};
 constexpr uint16_t kBoostTpsAxisX10[kBoostPts] = {100u, 200u, 300u, 450u, 600u, 750u, 900u, 1000u};
-constexpr uint16_t kBoostTargetKpaX10[kBoostPts][kBoostPts] = {
+constexpr uint16_t kBoostTargetBarX1000[kBoostPts][kBoostPts] = {
     {1050u, 1100u, 1150u, 1200u, 1250u, 1300u, 1350u, 1400u},
     {1050u, 1100u, 1150u, 1220u, 1270u, 1320u, 1380u, 1430u},
     {1060u, 1120u, 1180u, 1250u, 1300u, 1360u, 1420u, 1480u},
@@ -78,7 +78,7 @@ constexpr uint16_t kBoostTargetKpaX10[kBoostPts][kBoostPts] = {
 
 constexpr uint8_t kVvtPts = 12u;
 constexpr uint32_t kVvtRpmAxisX10[kVvtPts] = {10000u, 15000u, 20000u, 25000u, 30000u, 35000u, 40000u, 45000u, 50000u, 60000u, 70000u, 80000u};
-constexpr uint16_t kVvtLoadAxisKpaX10[kVvtPts] = {300u, 400u, 500u, 600u, 700u, 800u, 900u, 1000u, 1100u, 1200u, 1400u, 1700u};
+constexpr uint16_t kVvtLoadAxisBarX1000[kVvtPts] = {300u, 400u, 500u, 600u, 700u, 800u, 900u, 1000u, 1100u, 1200u, 1400u, 1700u};
 
 constexpr int16_t kVvtAdmTargetDegX10[kVvtPts][kVvtPts] = {
     {180, 180, 170, 160, 150, 140, 130, 120, 110, 100, 90, 80},
@@ -243,10 +243,10 @@ uint16_t lookup_boost_target(uint32_t rpm_x10, uint16_t tps_x10) noexcept {
     const uint8_t fx = ems::engine::table_axis_frac_q8(kBoostRpmAxisX10, xi, rpm_x10);
     const uint8_t fy = axis_frac_q8_u16(kBoostTpsAxisX10, yi, tps_x10);
 
-    const int32_t v00 = static_cast<int32_t>(kBoostTargetKpaX10[yi][xi]);
-    const int32_t v10 = static_cast<int32_t>(kBoostTargetKpaX10[yi][xi + 1u]);
-    const int32_t v01 = static_cast<int32_t>(kBoostTargetKpaX10[yi + 1u][xi]);
-    const int32_t v11 = static_cast<int32_t>(kBoostTargetKpaX10[yi + 1u][xi + 1u]);
+    const int32_t v00 = static_cast<int32_t>(kBoostTargetBarX1000[yi][xi]);
+    const int32_t v10 = static_cast<int32_t>(kBoostTargetBarX1000[yi][xi + 1u]);
+    const int32_t v01 = static_cast<int32_t>(kBoostTargetBarX1000[yi + 1u][xi]);
+    const int32_t v11 = static_cast<int32_t>(kBoostTargetBarX1000[yi + 1u][xi + 1u]);
 
     const int32_t v0 = lerp_q8_s32(v00, v10, fx);
     const int32_t v1 = lerp_q8_s32(v01, v11, fx);
@@ -263,11 +263,11 @@ uint16_t lookup_boost_target(uint32_t rpm_x10, uint16_t tps_x10) noexcept {
 
 int16_t lookup_vvt_target(const int16_t table[kVvtPts][kVvtPts],
                           uint32_t rpm_x10,
-                          uint16_t load_kpa_x10) noexcept {
+                          uint16_t load_bar_x1000) noexcept {
     const uint8_t xi = ems::engine::table_axis_index(kVvtRpmAxisX10, kVvtPts, rpm_x10);
-    const uint8_t yi = axis_index_u16(kVvtLoadAxisKpaX10, kVvtPts, load_kpa_x10);
+    const uint8_t yi = axis_index_u16(kVvtLoadAxisBarX1000, kVvtPts, load_bar_x1000);
     const uint8_t fx = ems::engine::table_axis_frac_q8(kVvtRpmAxisX10, xi, rpm_x10);
-    const uint8_t fy = axis_frac_q8_u16(kVvtLoadAxisKpaX10, yi, load_kpa_x10);
+    const uint8_t fy = axis_frac_q8_u16(kVvtLoadAxisBarX1000, yi, load_bar_x1000);
 
     const int32_t v00 = table[yi][xi];
     const int32_t v10 = table[yi][xi + 1u];
@@ -382,9 +382,9 @@ void run_iac_control(const ems::drv::CkpSnapshot& snap,
 
 void run_wastegate_control(const ems::drv::CkpSnapshot& snap,
                            const ems::drv::SensorData& s) noexcept {
-    const uint16_t target_kpa_x10 = lookup_boost_target(snap.rpm_x10, s.tps_pct_x10);
+    const uint16_t target_bar_x1000 = lookup_boost_target(snap.rpm_x10, s.tps_pct_x10);
 
-    if (s.map_kpa_x10 > static_cast<uint16_t>(target_kpa_x10 + kOverboostMarginKpaX10)) {
+    if (s.map_bar_x1000 > static_cast<uint16_t>(target_bar_x1000 + kOverboostMarginBarX1000)) {
         g.wg_overboost_ms += kTick20ms;
     } else {
         g.wg_overboost_ms = 0u;
@@ -402,7 +402,7 @@ void run_wastegate_control(const ems::drv::CkpSnapshot& snap,
         return;
     }
 
-    const int32_t error = static_cast<int32_t>(target_kpa_x10) - static_cast<int32_t>(s.map_kpa_x10);
+    const int32_t error = static_cast<int32_t>(target_bar_x1000) - static_cast<int32_t>(s.map_bar_x1000);
     const int32_t p_x10 = (error * 8) / 100;
     g.wg_integrator_x10 = clamp_i16(
         static_cast<int16_t>(g.wg_integrator_x10 + static_cast<int16_t>(error / 100)),
@@ -464,8 +464,8 @@ void run_vvt_control(const ems::drv::CkpSnapshot& snap,
     }
 
     const uint16_t pos_deg_x10 = calc_cam_pos_est_x10(snap);
-    const int16_t target_esc = lookup_vvt_target(kVvtEscTargetDegX10, snap.rpm_x10, s.map_kpa_x10);
-    const int16_t target_adm = lookup_vvt_target(kVvtAdmTargetDegX10, snap.rpm_x10, s.map_kpa_x10);
+    const int16_t target_esc = lookup_vvt_target(kVvtEscTargetDegX10, snap.rpm_x10, s.map_bar_x1000);
+    const int16_t target_adm = lookup_vvt_target(kVvtAdmTargetDegX10, snap.rpm_x10, s.map_bar_x1000);
 
     g.vvt_esc_duty_x10 = run_vvt_pid(target_esc, pos_deg_x10, g.vvt_esc_integrator_x10);
     g.vvt_adm_duty_x10 = run_vvt_pid(target_adm, pos_deg_x10, g.vvt_adm_integrator_x10);

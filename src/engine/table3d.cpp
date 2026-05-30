@@ -70,7 +70,7 @@ const uint32_t kRpmAxisX10[kTableAxisSize] = {
     80000u,  90000u,  100000u, 120000u,
 };
 
-const uint32_t kLoadAxisKpa[kTableAxisSize] = {
+const uint32_t kLoadAxisBarX100[kTableAxisSize] = {
     20u,  30u,  40u,  50u,
     60u,  70u,  80u,  90u,
     100u, 115u, 130u, 145u,

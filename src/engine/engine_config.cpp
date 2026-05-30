@@ -11,7 +11,7 @@ namespace ems::engine::cfg {
 //  [2-3]  : displacement_cc (uint16_t LE)
 //  [4-5]  : injector_flow_cc_min (uint16_t LE)
 //  [6-7]  : stoich_afr_x100 (uint16_t LE)
-//  [8-9]  : map_ref_kpa (uint16_t LE)
+//  [8-9]  : map_ref_bar_x100 (uint16_t LE)
 //  [10-11]: trigger_tooth0_engine_deg (uint16_t LE)
 //  [12-13]: default_soi_lead_deg (uint16_t LE)
 //  [14-15]: magic 0x4543 ('E','C')
@@ -32,7 +32,7 @@ EngineConfigRam g_eng_cfg = {
     kDisplacementCc,
     kInjectorFlowCcMin,
     kStoichAfrX100,
-    kMapRefKpa,
+    kMapRefBarX100,
     kTriggerTooth0EngineDeg,
     kDefaultSoiLeadDeg,
 };
@@ -57,7 +57,7 @@ bool engine_config_valid(const EngineConfigRam& c) noexcept {
     if (c.stoich_afr_x100 < 900u || c.stoich_afr_x100 > 1800u) {
         return false;
     }
-    if (c.map_ref_kpa < 50u || c.map_ref_kpa > 250u) {
+    if (c.map_ref_bar_x100 < 50u || c.map_ref_bar_x100 > 250u) {
         return false;
     }
     if (c.trigger_tooth0_engine_deg > 719u) {
@@ -83,7 +83,7 @@ void engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept {
     tmp.displacement_cc         = read_u16_le(page0_buf, kOffsetDisplacementCc);
     tmp.injector_flow_cc_min    = read_u16_le(page0_buf, kOffsetInjectorFlowCcMin);
     tmp.stoich_afr_x100         = read_u16_le(page0_buf, kOffsetStoichAfrX100);
-    tmp.map_ref_kpa             = read_u16_le(page0_buf, kOffsetMapRefKpa);
+    tmp.map_ref_bar_x100             = read_u16_le(page0_buf, kOffsetMapRefKpa);
     tmp.trigger_tooth0_engine_deg = read_u16_le(page0_buf, kOffsetTriggerTooth0EngineDeg);
     tmp.default_soi_lead_deg    = read_u16_le(page0_buf, kOffsetDefaultSoiLeadDeg);
 
@@ -104,7 +104,7 @@ void engine_config_serialize(uint8_t* page0_buf, uint16_t len) noexcept {
     write_u16_le(page0_buf, kOffsetDisplacementCc,          g_eng_cfg.displacement_cc);
     write_u16_le(page0_buf, kOffsetInjectorFlowCcMin,       g_eng_cfg.injector_flow_cc_min);
     write_u16_le(page0_buf, kOffsetStoichAfrX100,           g_eng_cfg.stoich_afr_x100);
-    write_u16_le(page0_buf, kOffsetMapRefKpa,               g_eng_cfg.map_ref_kpa);
+    write_u16_le(page0_buf, kOffsetMapRefKpa,               g_eng_cfg.map_ref_bar_x100);
     write_u16_le(page0_buf, kOffsetTriggerTooth0EngineDeg,  g_eng_cfg.trigger_tooth0_engine_deg);
     write_u16_le(page0_buf, kOffsetDefaultSoiLeadDeg,       g_eng_cfg.default_soi_lead_deg);
     write_u16_le(page0_buf, kMagicOffset,                   kMagicValue);
