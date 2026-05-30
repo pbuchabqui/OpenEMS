@@ -97,32 +97,34 @@ static float apply_ramp_limit(float current, float target, float max_rate, float
     return target;
 }
 
-// PID cálculo (com anti-windup)
-static float calculate_pid(float error, float* integral, float* derivative, 
-                          float kp, float ki, float kd, float dt_ms,
-                          float max_integral) {
-    // Proporcional
+// PID with conditional anti-windup and resetable derivative state.
+// filtered_deriv must be stored in caller's struct so it survives across calls
+// and can be zeroed on re-init (was previously an unresetable static local).
+// Conditional anti-windup: integral only accumulates when the output is not
+// saturated, preventing integrator wind-up during throttle stops or RPM cuts.
+static float calculate_pid(float error, float* integral, float* prev_error,
+                           float* filtered_deriv,
+                           float kp, float ki, float kd, float dt_ms,
+                           float max_integral, float output_limit) {
     float p = kp * error;
-    
-    // Integral (com anti-windup)
-    *integral += error * (dt_ms / 1000.0f);
-    
-    // Clamp integral
-    if (*integral > max_integral) *integral = max_integral;
-    if (*integral < -max_integral) *integral = -max_integral;
-    
+
+    // Conditional anti-windup: accumulate only when not saturated in error direction
+    const float candidate_integral = *integral + error * (dt_ms / 1000.0f);
+    const float candidate_out = p + ki * candidate_integral;
+    const bool saturated_open  = (candidate_out >  output_limit) && (error > 0.0f);
+    const bool saturated_close = (candidate_out < -output_limit) && (error < 0.0f);
+    if (!saturated_open && !saturated_close) {
+        *integral = candidate_integral;
+    }
+    if (*integral >  max_integral) { *integral =  max_integral; }
+    if (*integral < -max_integral) { *integral = -max_integral; }
     float i = ki * (*integral);
-    
-    // Derivativa (filtro passa-baixa implícito no dt)
-    float deriv = (error - (*derivative)) / (dt_ms / 1000.0f);
-    *derivative = error;
-    
-    // Filtro simples na derivada (suavização)
-    static float filtered_deriv = 0.0f;
-    filtered_deriv = filtered_deriv * 0.8f + deriv * 0.2f;
-    
-    float d = kd * filtered_deriv;
-    
+
+    float deriv = (error - (*prev_error)) / (dt_ms / 1000.0f);
+    *prev_error = error;
+    *filtered_deriv = (*filtered_deriv) * 0.8f + deriv * 0.2f;
+    float d = kd * (*filtered_deriv);
+
     return p + i + d;
 }
 
@@ -261,16 +263,18 @@ void etb_control_loop(float pedal, float rpm, float dt) {
     
     // 7. PID de Posição (cascata externa)
     g_data.pos_error = g_data.throttle_target - g_data.throttle_actual;
-    
+
     float pos_output = calculate_pid(
         g_data.pos_error,
         &g_data.pos_integral,
         &g_data.pos_derivative,
+        &g_data.pos_filtered_deriv,
         g_config.pid_configs[g_config.current_mode].kp_pos,
         g_config.pid_configs[g_config.current_mode].ki_pos,
         g_config.pid_configs[g_config.current_mode].kd_pos,
         dt,
-        50.0f  // Max integral
+        50.0f,   // max_integral
+        100.0f   // output_limit (maps to ±1023 motor PWM via ×10.23)
     );
     
     // 8. Feed-forward (atrito + inércia)

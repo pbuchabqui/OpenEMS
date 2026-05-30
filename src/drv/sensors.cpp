@@ -563,10 +563,12 @@ void sensors_tick_100ms() noexcept {
     const uint16_t vbatt_mv = vbatt_raw_to_mv(vbatt_raw);
     g_data_staging.vbatt_mv = (vbatt_mv >= 6000u && vbatt_mv <= 18000u) ? vbatt_mv : 12000u;
     
-    // FIX-6 (BUG-10): Double buffering — swap atômico após completar todas as atualizações
-    // O staging buffer agora contém dados consistentes; fazemos swap com committed
-    g_data_swap_flag = 1u - g_data_swap_flag;  // Toggle flag atomicamente (uint8_t é atômico)
-    // Copia staging para committed (ISR não pode interromper esta cópia pois já está em ISR)
+        // Double buffering: copy staging→committed under critical section.
+    // sensors_on_tooth() (ISR) writes g_data_staging concurrently; without CPSID
+    // the copy below can interleave with the ISR, producing a torn snapshot.
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("cpsid i" ::: "memory");
+#endif
     g_data_committed.map_kpa_x10 = g_data_staging.map_kpa_x10;
     g_data_committed.maf_gps_x100 = g_data_staging.maf_gps_x100;
     g_data_committed.tps_pct_x10 = g_data_staging.tps_pct_x10;
@@ -580,6 +582,9 @@ void sensors_tick_100ms() noexcept {
     g_data_committed.an2_raw = g_data_staging.an2_raw;
     g_data_committed.an3_raw = g_data_staging.an3_raw;
     g_data_committed.an4_raw = g_data_staging.an4_raw;
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("cpsie i" ::: "memory");
+#endif
     
     // ADC recovery verification: check if ADC recovered from any timeout
     // Report to diagnostic manager if faults detected

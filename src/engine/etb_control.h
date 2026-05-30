@@ -70,6 +70,7 @@ typedef struct {
     float pos_error;
     float pos_integral;
     float pos_derivative;
+    float pos_filtered_deriv;  // derivative low-pass state (was an unresetable static)
     float vel_error;
     float vel_integral;
     

@@ -50,9 +50,9 @@ static volatile uint16_t g_rx_head = 0u;
 static volatile uint16_t g_rx_tail = 0u;
 static volatile bool g_rx_flag = false;
 
-static uint8_t g_tx_buf[kTxSize] = {};
-static uint16_t g_tx_head = 0u;
-static uint16_t g_tx_tail = 0u;
+static volatile uint8_t g_tx_buf[kTxSize] = {};
+static volatile uint16_t g_tx_head = 0u;
+static volatile uint16_t g_tx_tail = 0u;
 
 static uint8_t  g_rt_pw_ms_x10   = 0u;
 static int8_t   g_rt_advance_deg  = 0;
@@ -122,13 +122,16 @@ inline uint8_t normalize_page_id(uint8_t page) noexcept {
 }
 
 inline bool tx_push(uint8_t byte) noexcept {
+    enter_critical();
     const uint16_t next = static_cast<uint16_t>((g_tx_head + 1u) & kTxMask);
-    if (next == g_tx_tail) {
-        return false;
+    bool ok = false;
+    if (next != g_tx_tail) {
+        g_tx_buf[g_tx_head] = byte;
+        g_tx_head = next;
+        ok = true;
     }
-    g_tx_buf[g_tx_head] = byte;
-    g_tx_head = next;
-    return true;
+    exit_critical();
+    return ok;
 }
 
 inline void tx_push_bytes(const uint8_t* ptr, uint16_t len) noexcept {

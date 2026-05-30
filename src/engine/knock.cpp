@@ -135,7 +135,16 @@ void knock_cmp0_isr() noexcept {
 
 void knock_cycle_complete(uint8_t cyl) noexcept {
     const uint8_t c = static_cast<uint8_t>(cyl & 0x3u);
+    // Read and zero atomically: knock_cmp0_isr() can increment knock_count[c]
+    // at any moment; a CPSID window around the read+zero prevents losing events.
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("cpsid i" ::: "memory");
+#endif
     const uint8_t count = g.knock_count[c];
+    g.knock_count[c] = 0u;
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("cpsie i" ::: "memory");
+#endif
 
     if (count > g.event_threshold) {
         const uint16_t next = static_cast<uint16_t>(knock_retard_x10[c] + kRetardStepX10);
@@ -168,8 +177,6 @@ void knock_cycle_complete(uint8_t cyl) noexcept {
             g.global_clean_cycles = 0u;
         }
     }
-
-    g.knock_count[c] = 0u;
 }
 
 uint16_t knock_get_retard_x10(uint8_t cyl) noexcept {

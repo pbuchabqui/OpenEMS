@@ -22,11 +22,33 @@
  *   5. Re-travar
  */
 
+#include "hal/flash.h"
+#include "hal/runtime_seed.h"
+#include <cstring>
+
+// ── CRC-32 (ISO 3309 / Ethernet) — shared between production and host-test ───
+static uint32_t crc32_update(uint32_t crc, uint8_t data) noexcept {
+    crc ^= data;
+    for (uint8_t i = 0u; i < 8u; ++i) {
+        const uint32_t mask = static_cast<uint32_t>(-(static_cast<int32_t>(crc & 1u)));
+        crc = (crc >> 1u) ^ (0xEDB88320u & mask);
+    }
+    return crc;
+}
+
+static uint32_t runtime_seed_crc32(const ems::hal::RuntimeSyncSeed& seed) noexcept {
+    uint32_t crc = 0xFFFFFFFFu;
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(&seed);
+    const uint16_t sz = static_cast<uint16_t>(sizeof(seed) - sizeof(seed.crc32));
+    for (uint16_t i = 0u; i < sz; ++i) {
+        crc = crc32_update(crc, p[i]);
+    }
+    return ~crc;
+}
+
 #ifndef EMS_HOST_TEST
 
-#include "hal/flash.h"
 #include "hal/regs.h"
-#include <cstring>
 
 // ── Buffers SRAM para LTFT e Knock maps ─────────────────────────────────────
 // Espelham os dados da Flash; modificados em RAM e flushed periodicamente.
@@ -113,8 +135,6 @@ static bool flash_write_words(uint32_t dest_addr,
     FLASH_CR2 &= ~FLASH_CR_PG;
     return true;
 }
-
-#include "hal/runtime_seed.h"
 
 namespace ems::hal {
 
@@ -336,6 +356,7 @@ bool nvm_load_runtime_seed(RuntimeSyncSeed* seed_out) noexcept {
     const uint32_t addr = kBank2Base + kSeedOffset;
     std::memcpy(seed_out, reinterpret_cast<const void*>(addr),
                 sizeof(RuntimeSyncSeed));
+    if (seed_out->crc32 != runtime_seed_crc32(*seed_out)) { return false; }
     return runtime_seed_boot_compatible_60_2(*seed_out);
 }
 
@@ -347,31 +368,6 @@ bool nvm_clear_runtime_seed() noexcept {
 } // namespace ems::hal
 
 #else  // EMS_HOST_TEST ─────────────────────────────────────────────────────
-
-#include "hal/flash.h"
-#include "hal/runtime_seed.h"
-#include <cstring>
-
-// ── CRC-32 (ISO 3309 / Ethernet) ─────────────────────────────────────────────
-// Shared between host-test mock and production code.
-static uint32_t crc32_update(uint32_t crc, uint8_t data) noexcept {
-    crc ^= data;
-    for (uint8_t i = 0u; i < 8u; ++i) {
-        const uint32_t mask = static_cast<uint32_t>(-(static_cast<int32_t>(crc & 1u)));
-        crc = (crc >> 1u) ^ (0xEDB88320u & mask);
-    }
-    return crc;
-}
-
-static uint32_t runtime_seed_crc32(const ems::hal::RuntimeSyncSeed& seed) noexcept {
-    uint32_t crc = 0xFFFFFFFFu;
-    const uint8_t* p = reinterpret_cast<const uint8_t*>(&seed);
-    const uint16_t sz = static_cast<uint16_t>(sizeof(seed) - sizeof(seed.crc32));
-    for (uint16_t i = 0u; i < sz; ++i) {
-        crc = crc32_update(crc, p[i]);
-    }
-    return ~crc;
-}
 
 namespace ems::hal {
 
