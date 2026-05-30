@@ -15,12 +15,12 @@ extern "C" uint32_t _evector_ram;
 
 extern "C" void Default_Handler();
 extern "C" [[noreturn]] void Reset_Handler();
-extern "C" void SysTick_Handler()     __attribute__((weak, alias("Default_Handler")));
-extern "C" void ADC1_IRQHandler()     __attribute__((weak, alias("Default_Handler")));
-extern "C" void ADC2_IRQHandler()     __attribute__((weak, alias("Default_Handler")));
-extern "C" void GPDMA1_Channel0_IRQHandler() __attribute__((weak, alias("Default_Handler")));
-extern "C" void GPDMA1_Channel1_IRQHandler() __attribute__((weak, alias("Default_Handler")));
-extern "C" void TIM5_IRQHandler()     __attribute__((weak, alias("Default_Handler")));
+extern "C" void SysTick_Handler()            noexcept __attribute__((weak, alias("Default_Handler")));
+extern "C" void ADC1_IRQHandler()            noexcept __attribute__((weak, alias("Default_Handler")));
+extern "C" void ADC2_IRQHandler()            noexcept __attribute__((weak, alias("Default_Handler")));
+extern "C" void GPDMA1_Channel0_IRQHandler() noexcept __attribute__((weak, alias("Default_Handler")));
+extern "C" void GPDMA1_Channel1_IRQHandler() noexcept __attribute__((weak, alias("Default_Handler")));
+extern "C" void TIM5_IRQHandler()            noexcept __attribute__((weak, alias("Default_Handler")));
 
 extern "C" void _init() {}
 extern "C" void _fini() {}

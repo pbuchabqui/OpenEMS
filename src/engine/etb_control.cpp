@@ -54,8 +54,8 @@ static const float g_response_maps[ETB_MODE_COUNT][10] = {
 // ============================================================================
 
 static etb_system_config_t g_config = {};
-static etb_control_data_t g_data = {0};
-static etb_driver_data_t g_driver_data = {0};
+static etb_control_data_t g_data = {};
+static etb_driver_data_t g_driver_data = {};
 static bool g_initialized = false;
 static bool g_limp_mode = false;
 

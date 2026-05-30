@@ -17,8 +17,8 @@
 // VARIÁVEIS GLOBAIS
 // ============================================================================
 
-static torque_manager_config_t g_config = {0};
-static torque_manager_outputs_t g_outputs = {0};
+static torque_manager_config_t g_config = {};
+static torque_manager_outputs_t g_outputs = {};
 static bool g_initialized = false;
 static bool g_limp_active = false;
 

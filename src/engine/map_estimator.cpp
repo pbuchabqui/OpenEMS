@@ -33,7 +33,7 @@ constexpr int16_t kHeavyTransientTpsdotX10 = 300u;   // 30 %/s
 
 // Fator de correção baseado em RPM e carga para modelo
 uint16_t calculate_model_map_correction(uint32_t rpm_x10,
-                                        uint16_t tps_pct_x10) noexcept {
+                                        uint16_t /*tps_pct_x10*/) noexcept {
     // Modelo simplificado: MAP estimado = MAP anterior + (TPSdot * ganho volumétrico)
     // Ganho depende de RPM (maior RPM = menor tempo para encher coletor)
     
