@@ -24,6 +24,9 @@ void can_stack_process(uint32_t now_ms,
                        uint8_t vvt_exhaust_pct,
                        uint16_t status_bits) noexcept;
 
+// Combustível acumulado desde boot em µl (wraps em ~4295 L)
+uint32_t can_stack_fco_accum_ul() noexcept;
+
 // Lambda × 1000 do último frame WBO2 recebido (raw, sem fallback)
 uint16_t can_stack_lambda_milli() noexcept;
 

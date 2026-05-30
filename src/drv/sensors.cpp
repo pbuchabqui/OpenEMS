@@ -78,6 +78,17 @@ static FaultTracker g_fault[8] = {
     kDefaultFault[4], kDefaultFault[5], kDefaultFault[6], kDefaultFault[7],
 };
 
+// ── TPS gradient limiter (MS42 §2.2.6.2) ─────────────────────────────────
+// C_TPS_HYS:     variação mínima para aceitar actualização (supressão de ruído).
+// C_TPS_GRD_MAX: variação máxima por janela de amostragem.
+//   Excedida na 1ª vez → congela valor anterior (spike de sensor).
+//   Excedida na 2ª vez consecutiva → aceita (movimento rápido real confirmado).
+constexpr uint16_t kTpsHysX10    =  5u;   // 0.5 % — histerese
+constexpr uint16_t kTpsGrdMaxX10 = 150u;  // 15.0 % por janela de amostragem
+
+static uint16_t g_tps_validated_x10    = 0u;   // último valor aceite/validado
+static bool     g_tps_gradient_pending = false; // gradiente excedido no ciclo anterior
+
 static uint16_t g_tps_raw_min = 200u;
 static uint16_t g_tps_raw_max = 3895u;
 
@@ -170,8 +181,10 @@ inline void reset_state() noexcept {
     g_fuel_pos       = 0u;
     g_oil_pos        = 0u;
     g_maf_period_pos = 0u;
-    g_fast_sample_accum = 0u;
-    g_tps_pct_cache_valid = false;
+    g_fast_sample_accum    = 0u;
+    g_tps_pct_cache_valid  = false;
+    g_tps_validated_x10    = 0u;
+    g_tps_gradient_pending = false;
 
     g_tps_raw_min = 200u;
     g_tps_raw_max = 3895u;
@@ -418,9 +431,36 @@ inline void sample_fast_channels() noexcept {
                          ? kFallbackMapBarX1000
                          : map_raw_to_bar_x1000(g_map_filt);
 
-    g_data_staging.tps_pct_x10 = g_fault[static_cast<uint8_t>(SensorId::TPS)].active
-                         ? kFallbackTpsPctX10
-                         : tps_raw_to_pct_x10_cached(avg_n(g_tps_buf, 4));
+    // TPS gradient limiter (MS42 §2.2.6.2: histerese + C_TPS_GRD_MAX + confirm no 2º ciclo)
+    {
+        const bool tps_fault = g_fault[static_cast<uint8_t>(SensorId::TPS)].active;
+        if (tps_fault) {
+            g_data_staging.tps_pct_x10 = kFallbackTpsPctX10;
+            g_tps_validated_x10        = kFallbackTpsPctX10;
+            g_tps_gradient_pending     = false;
+        } else {
+            const uint16_t tps_new = tps_raw_to_pct_x10_cached(avg_n(g_tps_buf, 4));
+            const uint16_t prev    = g_tps_validated_x10;
+            const uint16_t delta   = (tps_new >= prev)
+                                     ? static_cast<uint16_t>(tps_new - prev)
+                                     : static_cast<uint16_t>(prev - tps_new);
+
+            if (delta <= kTpsHysX10) {
+                // Abaixo da histerese — suprime ruído, congela valor validado
+                g_data_staging.tps_pct_x10 = prev;
+                g_tps_gradient_pending      = false;
+            } else if (delta < kTpsGrdMaxX10 || g_tps_gradient_pending) {
+                // Dentro do gradiente OU confirmação de segundo ciclo consecutivo
+                g_data_staging.tps_pct_x10 = tps_new;
+                g_tps_validated_x10         = tps_new;
+                g_tps_gradient_pending      = false;
+            } else {
+                // Gradiente excedido pela primeira vez — congela, regista pendente
+                g_data_staging.tps_pct_x10 = prev;
+                g_tps_gradient_pending      = true;
+            }
+        }
+    }
 
     // MAF: estimativa por frequência via TIM5 CH1 (250 MHz / prescaler 4 = 62.5 MHz)
     const uint16_t maf_avg_period = maf_period_avg4();

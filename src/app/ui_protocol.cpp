@@ -44,6 +44,7 @@ alignas(4) static uint8_t g_page3_rt[64]      = {};
 alignas(4) static uint8_t g_page4_lambda[512] = {};   // lambda_target_table_x1000
 alignas(4) static uint8_t g_page5_corr[256]   = {};   // tabelas de correção 1D
 alignas(4) static uint8_t g_page6_xtau[80]    = {};   // X-Tau, AE rate curve, quick crank
+alignas(4) static uint8_t g_page7_dwell2d[32] = {};   // Dwell 2D: eixo RPM + factores Q8
 
 static volatile uint8_t g_rx_buf[kRxSize] = {};
 static volatile uint16_t g_rx_head = 0u;
@@ -295,6 +296,11 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(p + 70, &ems::engine::crank_min_pw_us,        2u);
         std::memcpy(p + 72, &ems::engine::crank_prime_tooth,      2u);
         std::memcpy(p + 74, &ems::engine::crank_prime_max_pw_us,  2u);
+    } else if (page == 0x07u) {
+        uint8_t* p = g_page7_dwell2d;
+        std::memset(p, 0, sizeof(g_page7_dwell2d));
+        std::memcpy(p + 0,  ems::engine::dwell_rpm_axis_rpm,  8u);
+        std::memcpy(p + 8,  ems::engine::dwell_rpm_factor_q8, 8u);
     }
 }
 
@@ -348,6 +354,10 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::crank_min_pw_us,       p + 70, 2u);
         std::memcpy(&ems::engine::crank_prime_tooth,     p + 72, 2u);
         std::memcpy(&ems::engine::crank_prime_max_pw_us, p + 74, 2u);
+    } else if (page == 0x07u) {
+        const uint8_t* p = g_page7_dwell2d;
+        std::memcpy(ems::engine::dwell_rpm_axis_rpm,  p + 0,  8u);
+        std::memcpy(ems::engine::dwell_rpm_factor_q8, p + 8,  8u);
     }
 }
 
@@ -357,6 +367,7 @@ inline uint8_t editable_page_bit(uint8_t page) noexcept {
     if (page == 0x04u) { return 0x04u; }
     if (page == 0x05u) { return 0x08u; }
     if (page == 0x06u) { return 0x10u; }
+    if (page == 0x07u) { return 0x20u; }
     return 0u;
 }
 
@@ -395,6 +406,12 @@ inline bool burn_page_to_flash(uint8_t page) noexcept {
     }
     if (page == 0x06u) {
         const bool ok = ems::hal::nvm_save_calibration(5u, g_page6_xtau, static_cast<uint16_t>(sizeof(g_page6_xtau)));
+        if (!ok) { return false; }
+        clear_page_dirty(page);
+        return true;
+    }
+    if (page == 0x07u) {
+        const bool ok = ems::hal::nvm_save_calibration(6u, g_page7_dwell2d, static_cast<uint16_t>(sizeof(g_page7_dwell2d)));
         if (!ok) { return false; }
         clear_page_dirty(page);
         return true;

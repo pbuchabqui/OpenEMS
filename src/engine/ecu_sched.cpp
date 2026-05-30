@@ -139,6 +139,25 @@ volatile uint32_t g_late_event_count = 0U;
 volatile uint32_t g_calibration_clamp_count = 0U;
 volatile uint32_t g_cycle_schedule_drop_count = 0U;
 
+// ── Dwell watchdog (MS42 §2.2.2.1.3 — TD × 1.4) ──────────────────────────
+// Escrito pela ISR (arm_channel), lido pelo main loop (ecu_sched_dwell_watchdog).
+// volatile necessário: compilador não pode cachear em registo entre os dois contextos.
+static volatile uint32_t g_dwell_arm_tick[4]  = {0U, 0U, 0U, 0U};  // TIM2_CNT no arm de DWELL_START; 0 = inactivo
+static volatile uint32_t g_dwell_wdog_ticks[4] = {0U, 0U, 0U, 0U};  // 1.4 × dwell_ticks no momento do arm
+static volatile uint32_t g_dwell_watchdog_count = 0U;
+
+// ── Per-cylinder injection inhibit (MS42 §2.2.5) ──────────────────────────
+// Escrito pelo main loop (ecu_sched_set_inj_inhibit_mask), lido pela ISR (arm_channel).
+// bit 0 = cyl 0 (INJ1), bit 1 = cyl 1 (INJ2), bit 2 = cyl 2 (INJ3), bit 3 = cyl 3 (INJ4).
+static volatile uint8_t g_inj_inhibit_mask = 0U;
+
+// ── Multi-spark (MS42 §2.2.3) ──────────────────────────────────────────────
+// count=0 desabilitado. Valores escritos por ecu_sched_set_mspark() (main loop),
+// lidos por Calculate_Sequential_Cycle() (ISR context via tooth hook).
+static volatile uint8_t  g_mspark_count            = 0U;
+static volatile uint32_t g_mspark_inter_dwell_ticks = 0U;
+static volatile uint32_t g_mspark_atdc_limit_deg    = 18U;
+
 static volatile uint32_t g_advance_deg = 10U;
 static volatile uint32_t g_dwell_ticks = 30000U;
 static volatile uint32_t g_inj_pw_ticks = 30000U;
@@ -180,6 +199,19 @@ static inline uint8_t stm32_inj_tim_ch(uint8_t ch)
         case ECU_CH_INJ2: return 2U;
         case ECU_CH_INJ3: return 3U;
         case ECU_CH_INJ4: return 4U;
+        default: return 0U;
+    }
+}
+
+// Mapeia canal de injecção para bit de cilindro no g_inj_inhibit_mask.
+// Retorna 0 para canais de ignição ou desconhecidos.
+static inline uint8_t inj_ch_to_cyl_bit(uint8_t ch)
+{
+    switch (ch) {
+        case ECU_CH_INJ1: return (1U << 0U);
+        case ECU_CH_INJ2: return (1U << 1U);
+        case ECU_CH_INJ3: return (1U << 2U);
+        case ECU_CH_INJ4: return (1U << 3U);
         default: return 0U;
     }
 }
@@ -315,6 +347,29 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
         return; 
     }
 
+    // ── Injection inhibit mask (MS42 §2.2.5 — corte por cilindro) ────────
+    // Suprime ECU_ACT_INJ_ON se o bit do cilindro estiver activo.
+    // INJ_OFF passa normalmente — fechar um injetor já fechado é inócuo.
+    if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
+        const uint8_t cyl_bit = inj_ch_to_cyl_bit(ch);
+        if (cyl_bit != 0U && (g_inj_inhibit_mask & cyl_bit) != 0U) { return; }
+    }
+
+    // ── Dwell watchdog tracking (apenas canais de ignição) ────────────────
+    // Executado depois de todos os guards de rejeição — só para eventos que
+    // realmente serão programados no hardware.
+    if (is_inj == 0U && tim_ch != 0U) {
+        const uint8_t ign_idx = (uint8_t)(tim_ch - 1U);
+        if (action == ECU_ACT_DWELL_START) {
+            // Arma watchdog: timeout = 1.4 × dwell = 7/5 × dwell (sem ponto flutuante)
+            g_dwell_arm_tick[ign_idx]   = now;
+            g_dwell_wdog_ticks[ign_idx] = (g_dwell_ticks * 7U) / 5U;
+        } else if (action == ECU_ACT_SPARK) {
+            // Evento SPARK programado com sucesso — watchdog já não é necessário
+            g_dwell_arm_tick[ign_idx] = 0U;
+        }
+    }
+
 	stm32_set_oc_mode(is_inj, tim_ch, ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U);
 	// Clear any pending match flag BEFORE programming CCR to avoid missing an edge
 	if (is_inj != 0U) {
@@ -346,6 +401,8 @@ static void clear_all_events_and_drive_safe_outputs(void)
     g_angle_tooth_mask_lo = 0U;
     g_angle_tooth_mask_hi = 0U;
     for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) { force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK); }
+    // Bobinas forçadas a LOW — watchdog já não é necessário para nenhum canal
+    for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; }
 }
 
 static void angle_to_tooth_event(uint32_t angle_deg, uint8_t *out_tooth, uint8_t *out_sub_frac, uint8_t *out_phase_A)
@@ -467,6 +524,33 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
         table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
         angle_to_tooth_event(engine_angle_to_trigger_angle(spark, ECU_CYCLE_DEG), &tooth, &frac, &phase);
         table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
+
+        // ── Additional sparks (MS42 §2.2.3 — multi-spark) ──────────────
+        // Cada spark adicional n usa o mesmo canal de ignição do cilindro.
+        // add_dwell_n arranca 1° após SPARK_{n-1} para evitar conflito no mesmo tooth.
+        // add_spark_n dispara inter_dwell_deg depois de add_dwell_n.
+        // Interrompido se o spark ultrapassar o limite ATDC configurado.
+        {
+            const uint8_t ms_count = g_mspark_count;
+            if (ms_count > 0U && snap.tooth_period_ns > 0U) {
+                const uint32_t inter_deg = ticks_to_cycle_degrees(
+                    g_mspark_inter_dwell_ticks, snap.tooth_period_ns, ECU_CYCLE_DEG);
+                const uint32_t step      = inter_deg + 1U;  // +1° = epsilon anti-conflito
+                const uint32_t window    = g_advance_deg + g_mspark_atdc_limit_deg;
+                for (uint8_t n = 1U; n <= ms_count; ++n) {
+                    const uint32_t add_spark_off = (uint32_t)n * step;
+                    if (add_spark_off >= window) { break; }
+                    const uint32_t add_dwell_off = (uint32_t)(n - 1U) * step + 1U;
+                    const uint32_t add_dwell_ang = (spark + add_dwell_off) % ECU_CYCLE_DEG;
+                    const uint32_t add_spark_ang = (spark + add_spark_off) % ECU_CYCLE_DEG;
+                    angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
+                    table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
+                    angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
+                    table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
+                }
+            }
+        }
+
         angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, ECU_CYCLE_DEG), &tooth, &frac, &phase);
         table_add(tooth, frac, phase, inj_ch[cyl], ECU_ACT_INJ_ON);
         angle_to_tooth_event(engine_angle_to_trigger_angle(inj_off, ECU_CYCLE_DEG), &tooth, &frac, &phase);
@@ -536,6 +620,33 @@ void ecu_sched_set_presync_ign_mode(uint8_t mode) { ems::hal::CriticalSectionGua
 void ecu_sched_set_ivc(uint8_t ivc_abdc_deg) { ems::hal::CriticalSectionGuard guard; g_ivc_abdc_deg = (ivc_abdc_deg > 180U) ? 180U : ivc_abdc_deg; }
 uint32_t ecu_sched_ivc_clamp_count(void) { return g_ivc_clamp_count; }
 
+void ecu_sched_dwell_watchdog(void)
+{
+    // Lê TIM2_CNT uma vez — mesmo relógio que scheduler_counter() usa para arm_tick.
+    // TIM2 é 32-bit: subtracção circular correcta sem overflow adicional.
+    const uint32_t now = TIM2_CNT;
+    for (uint8_t i = 0U; i < 4U; ++i) {
+        enter_critical();
+        const uint32_t arm  = g_dwell_arm_tick[i];
+        const uint32_t tout = g_dwell_wdog_ticks[i];
+        exit_critical();
+
+        if (arm == 0U) { continue; }                    // canal inactivo
+        if ((now - arm) < tout) { continue; }           // ainda dentro do limite
+
+        // Timeout: bobina saturada > 1.4 × TD — força saída LOW imediatamente
+        enter_critical();
+        if (g_dwell_arm_tick[i] != 0U) {               // re-check dentro de CS
+            stm32_force_oc(0U, (uint8_t)(i + 1U), 0U);
+            g_dwell_arm_tick[i] = 0U;
+            ++g_dwell_watchdog_count;
+        }
+        exit_critical();
+    }
+}
+
+uint32_t ecu_sched_dwell_watchdog_count(void) { return g_dwell_watchdog_count; }
+
 void ecu_sched_reset_diagnostic_counters(void)
 {
     ems::hal::CriticalSectionGuard guard;
@@ -543,6 +654,7 @@ void ecu_sched_reset_diagnostic_counters(void)
     g_cycle_schedule_drop_count = 0U;
     g_calibration_clamp_count = 0U;
     g_ivc_clamp_count = 0U;
+    g_dwell_watchdog_count = 0U;
 }
 
 void ecu_sched_fire_prime_pulse(uint32_t pw_us)
@@ -554,6 +666,21 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us)
     for (uint8_t i = 0U; i < 4U; ++i) { force_output(inj[i], ECU_ACT_INJ_ON); }
     for (uint8_t i = 0U; i < 4U; ++i) { arm_channel(inj[i], off_cnv, ECU_ACT_INJ_OFF); }
 }
+
+void ecu_sched_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg)
+{
+    ems::hal::CriticalSectionGuard guard;
+    g_mspark_count            = (count > 3U) ? 3U : count;
+    g_mspark_inter_dwell_ticks = inter_dwell_ticks;
+    g_mspark_atdc_limit_deg   = (atdc_limit_deg == 0U) ? 18U : atdc_limit_deg;
+}
+
+void ecu_sched_set_inj_inhibit_mask(uint8_t mask)
+{
+    ems::hal::CriticalSectionGuard guard;
+    g_inj_inhibit_mask = mask & 0x0FU;  // apenas 4 cilindros
+}
+uint8_t ecu_sched_get_inj_inhibit_mask(void) { return g_inj_inhibit_mask; }
 
 namespace ems::engine {
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
@@ -613,6 +740,8 @@ void ecu_sched_test_reset(void)
     g_advance_deg = 10U; g_dwell_ticks = 22500U; g_inj_pw_ticks = 22500U; g_soi_lead_deg = 62U;
     g_angle_table_count = 0U; g_angle_tooth_mask_lo = 0U; g_angle_tooth_mask_hi = 0U;
     g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg; g_ivc_clamp_count = 0U;
+    g_inj_inhibit_mask = 0U;
+    g_mspark_count = 0U; g_mspark_inter_dwell_ticks = 0U; g_mspark_atdc_limit_deg = 18U;
 }
 uint8_t ecu_sched_test_angle_table_size(void) { return g_angle_table_count; }
 uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *sub_frac, uint8_t *ch, uint8_t *action, uint8_t *phase)
@@ -633,6 +762,10 @@ uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void) { return g_cycle_sch
 uint32_t ecu_sched_test_get_late_event_count(void) { return g_late_event_count; }
 void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg) { ecu_sched_set_ivc(ivc_abdc_deg); }
 uint32_t ecu_sched_test_get_ivc_clamp_count(void) { return g_ivc_clamp_count; }
+void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg) {
+    ecu_sched_set_mspark(count, inter_dwell_ticks, atdc_limit_deg);
+}
+uint8_t ecu_sched_test_get_mspark_count(void) { return g_mspark_count; }
 void ecu_sched_test_set_tim8_cnt(uint32_t cnt) noexcept { ems_test_tim8_cnt = cnt; }
 uint32_t ecu_sched_test_get_tim8_ccr(uint8_t ch) noexcept {
     switch (ch) {

@@ -119,6 +119,21 @@ uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv) noexcept {
                                 kIgnitionDwellTableSize, vbatt_mv);
 }
 
+uint16_t dwell_ms_x10_from_vbatt_rpm(uint16_t vbatt_mv, uint32_t rpm_x10) noexcept {
+    const uint16_t base = dwell_ms_x10_from_vbatt(vbatt_mv);
+
+    // Eixo RPM armazenado em RPM (não ×10) — converte e clamp a uint16_t.
+    const uint32_t rpm = rpm_x10 / 10u;
+    const uint16_t rpm_u16 = static_cast<uint16_t>(rpm > 65535u ? 65535u : rpm);
+
+    const uint16_t factor = interp_u16_8pt_u16x(dwell_rpm_axis_rpm, dwell_rpm_factor_q8,
+                                                  kDwellRpmCorrSize, rpm_u16);
+
+    // base × factor / 256, arredondado
+    const uint32_t result = (static_cast<uint32_t>(base) * factor + 128u) / 256u;
+    return static_cast<uint16_t>(result > 65535u ? 65535u : result);
+}
+
 uint16_t calc_dwell_angle_x10(uint16_t dwell_ms_x10, uint16_t rpm) noexcept {
     // max intermediate: 420×8000×36 = 120M, fits uint32
     const uint32_t num = static_cast<uint32_t>(dwell_ms_x10) * rpm * 36u;

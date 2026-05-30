@@ -97,6 +97,14 @@ uint32_t ckp_seed_loaded_count() noexcept;
 uint32_t ckp_seed_confirmed_count() noexcept;
 uint32_t ckp_seed_rejected_count() noexcept;
 
+// ── Stall watchdog ────────────────────────────────────────────────────────────
+// Detecta motor parado entre dois dentes — situação em que tooth_count para de
+// incrementar e a máquina ficaria presa em FULL_SYNC indefinidamente.
+// Deve ser chamado do main loop (slot 2ms) com o valor atual do contador TIM5
+// obtido via ems::hal::tim5_count().
+// Retorna true se stall foi detectado nesta chamada (transição → LOSS_OF_SYNC).
+bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept;
+
 // ── API de teste (somente em build host) ──────────────────────────────────────
 #if defined(EMS_HOST_TEST)
 void     ckp_test_reset() noexcept;

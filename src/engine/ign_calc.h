@@ -37,6 +37,10 @@ int16_t calc_idle_spark_correction_deg(uint32_t rpm_x10,
                                        uint16_t map_bar_x100) noexcept;
 
 uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv) noexcept;
+
+// Dwell com correcção 2D tensão × RPM (MS42 §2.2.2.2.1 IP_TD__VB__N_32).
+// Usa dwell_ms_x10_from_vbatt() como base e aplica o factor RPM Q8.
+uint16_t dwell_ms_x10_from_vbatt_rpm(uint16_t vbatt_mv, uint32_t rpm_x10) noexcept;
 uint16_t calc_dwell_angle_x10(uint16_t dwell_ms_x10, uint16_t rpm) noexcept;
 int32_t calc_dwell_start_deg_x10(int16_t spark_deg_x10,
                                  uint16_t dwell_ms_x10,

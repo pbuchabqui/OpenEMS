@@ -6,10 +6,11 @@
 
 namespace ems::engine {
 
-constexpr uint8_t kCorrectionTableSize = 8u;
+constexpr uint8_t kCorrectionTableSize    = 8u;
 constexpr uint8_t kIgnitionDwellTableSize = 8u;
-constexpr uint8_t kLambdaDelayTableSize = 3u;
-constexpr uint8_t kAeRateTableSize = 4u;
+constexpr uint8_t kDwellRpmCorrSize       = 4u;  // pontos do eixo RPM para correcção de dwell
+constexpr uint8_t kLambdaDelayTableSize   = 3u;
+constexpr uint8_t kAeRateTableSize        = 4u;
 
 extern uint8_t ve_table[kTableAxisSize][kTableAxisSize];
 extern int16_t lambda_target_table_x1000[kTableAxisSize][kTableAxisSize];
@@ -48,6 +49,23 @@ extern uint16_t crank_prime_max_pw_us;
 
 extern uint16_t dwell_vbatt_axis_mv[kIgnitionDwellTableSize];
 extern uint16_t dwell_ms_x10_table[kIgnitionDwellTableSize];
+
+// Correcção de dwell por RPM (MS42 §2.2.2.2.1 — IP_TD__VB__N_32).
+// dwell_final = dwell_1d(V) × dwell_rpm_factor_q8(N) / 256
+// Eixo em RPM (não ×10) para caber em uint16_t.
+// Factor Q8: 256 = 1.0× (referência a ~4000 RPM).
+//   Cranking (~500 RPM): 384 = 1.5× (mais tempo disponível → mais energia na bobina)
+//   High RPM (~7000 RPM): 200 = 0.78× (evitar sobreposição entre ciclos)
+extern uint16_t dwell_rpm_axis_rpm[kDwellRpmCorrSize];   // eixo em RPM (500, 1200, 4000, 7000)
+extern uint16_t dwell_rpm_factor_q8[kDwellRpmCorrSize];  // factor multiplicativo Q8
+
+// Multi-spark (MS42 §2.2.3) — sparks adicionais a baixo RPM para melhorar ignição.
+// mspark_max_rpm_x10: RPM (×10) acima do qual multi-spark é desabilitado.
+// mspark_count: número de sparks adicionais por ciclo (0=desabilitado, máx 3).
+// mspark_inter_dwell_ms_x10: dwell entre sparks consecutivos (ms ×10, ex: 18 = 1.8ms).
+extern uint16_t mspark_max_rpm_x10;
+extern uint8_t  mspark_count;
+extern uint16_t mspark_inter_dwell_ms_x10;
 
 extern uint32_t lambda_delay_rpm_axis_x10[kLambdaDelayTableSize];
 extern uint32_t lambda_delay_load_axis_bar_x100[kLambdaDelayTableSize];

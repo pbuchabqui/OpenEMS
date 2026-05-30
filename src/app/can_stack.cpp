@@ -15,6 +15,20 @@ static bool     g_wbo2_fault      = true;   // começa em fault até primeiro fr
 
 static uint32_t g_last_tx_400_ms  = 0u;
 static uint32_t g_last_tx_401_ms  = 0u;
+static uint32_t g_last_tx_402_ms  = 0u;
+
+// ── FCO — accumulated fuel consumption (MS42 §2.2.7) ──────────────────────
+// Acumulador em nanolitros (fracção) + contador inteiro em microlitros.
+// Fórmula (derivação em can_stack.cpp): delta_nl = pw_ms_x10 × flow × n_cyl × rpm / 36000
+// com flow = kInjectorFlowCcMin (cc/min), n_cyl = kCylinderCount, rpm em RPM.
+// Constantes inline para manter can_stack.cpp independente de engine_config.h.
+static constexpr uint32_t kFcoFlowCcMin  = 450u;  // injector flow cc/min
+static constexpr uint32_t kFcoCylCount   = 4u;    // number of cylinders
+static constexpr uint64_t kFcoDivisor    = 36000u; // 100µs→µs conv × 3_600_000 / 100
+
+static uint32_t g_fco_accum_ul   = 0u;  // accumulated fuel [µl], wraps at ~4295 L
+static uint32_t g_fco_nl_frac    = 0u;  // sub-µl remainder [nl]
+static uint32_t g_fco_snap_ul    = 0u;  // accum at last 0x402 TX (for delta)
 
 inline uint8_t clamp_u8(uint32_t v) noexcept {
     return static_cast<uint8_t>((v > 255u) ? 255u : v);
@@ -106,6 +120,47 @@ inline void tx_0x401(const ems::drv::SensorData& sensors,
     static_cast<void>(ems::hal::can0_tx(out));
 }
 
+// Acumula combustível injectado. Chamada a cada iteração de can_stack_process (2ms).
+inline void fco_accumulate(uint8_t pw_ms_x10, uint32_t rpm) noexcept {
+    if (rpm == 0u || pw_ms_x10 == 0u) { return; }
+    // delta_nl = pw_us × flow × n_cyl × rpm / 3_600_000
+    //          = pw_ms_x10 × 100 × kFcoFlowCcMin × kFcoCylCount × rpm / 3_600_000
+    //          = pw_ms_x10 × kFcoFlowCcMin × kFcoCylCount × rpm / 36000
+    // uint64 para evitar overflow (255×450×4×8000 = 3.67G > uint32_max)
+    const uint64_t delta_nl = static_cast<uint64_t>(pw_ms_x10)
+                              * kFcoFlowCcMin * kFcoCylCount * rpm / kFcoDivisor;
+    g_fco_nl_frac  += static_cast<uint32_t>(delta_nl);
+    g_fco_accum_ul += g_fco_nl_frac / 1000u;
+    g_fco_nl_frac  %= 1000u;
+}
+
+// TX 0x402 — 500 ms
+// Byte 0-3: accumulated fuel [µl] (uint32 LE, wraps at ~4295 L)
+// Byte 4-5: fuel consumed in last 500 ms window [µl] (uint16 LE)
+// Byte 6-7: reserved
+inline void tx_0x402() noexcept {
+    const uint32_t delta_ul = g_fco_accum_ul - g_fco_snap_ul;
+    g_fco_snap_ul = g_fco_accum_ul;
+
+    ems::hal::CanFrame out = {};
+    out.id       = 0x402u;
+    out.dlc      = 8u;
+    out.extended = false;
+
+    out.data[0] = static_cast<uint8_t>( g_fco_accum_ul         & 0xFFu);
+    out.data[1] = static_cast<uint8_t>((g_fco_accum_ul >>  8u) & 0xFFu);
+    out.data[2] = static_cast<uint8_t>((g_fco_accum_ul >> 16u) & 0xFFu);
+    out.data[3] = static_cast<uint8_t>((g_fco_accum_ul >> 24u) & 0xFFu);
+
+    const uint16_t delta_u16 = (delta_ul > 65535u) ? 65535u : static_cast<uint16_t>(delta_ul);
+    out.data[4] = static_cast<uint8_t>( delta_u16        & 0xFFu);
+    out.data[5] = static_cast<uint8_t>((delta_u16 >> 8u) & 0xFFu);
+    out.data[6] = 0u;
+    out.data[7] = 0u;
+
+    static_cast<void>(ems::hal::can0_tx(out));
+}
+
 } // namespace
 
 namespace ems::app {
@@ -119,6 +174,10 @@ void can_stack_init(uint16_t wbo2_rx_id) noexcept {
     g_wbo2_fault      = true;
     g_last_tx_400_ms  = 0u;
     g_last_tx_401_ms  = 0u;
+    g_last_tx_402_ms  = 0u;
+    g_fco_accum_ul    = 0u;
+    g_fco_nl_frac     = 0u;
+    g_fco_snap_ul     = 0u;
     ems::hal::can0_init();
 }
 
@@ -140,6 +199,9 @@ void can_stack_process(uint32_t now_ms,
     // Atualiza flag de falha após processar RX
     g_wbo2_fault = wbo2_timed_out(now_ms);
 
+    // Acumula combustível injectado a cada chamada (2ms)
+    fco_accumulate(pw_ms_x10, ckp.rpm_x10 / 10u);
+
     if (elapsed(now_ms, g_last_tx_400_ms, 10u)) {
         g_last_tx_400_ms = now_ms;
         tx_0x400(ckp, sensors, advance_deg, pw_ms_x10, status_bits);
@@ -149,6 +211,15 @@ void can_stack_process(uint32_t now_ms,
         g_last_tx_401_ms = now_ms;
         tx_0x401(sensors, stft_pct, vvt_intake_pct, vvt_exhaust_pct);
     }
+
+    if (elapsed(now_ms, g_last_tx_402_ms, 500u)) {
+        g_last_tx_402_ms = now_ms;
+        tx_0x402();
+    }
+}
+
+uint32_t can_stack_fco_accum_ul() noexcept {
+    return g_fco_accum_ul;
 }
 
 uint16_t can_stack_lambda_milli() noexcept {

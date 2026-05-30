@@ -205,6 +205,16 @@ static void load_corr_calibration_from_nvm() noexcept {
     std::memcpy(&ems::engine::idle_spark_advance_limit_deg,       p + 254, 2u);
 }
 
+static void load_dwell2d_calibration_from_nvm() noexcept {
+    alignas(4) uint8_t page[32] = {};
+    if (!ems::hal::nvm_load_calibration(6u, page, sizeof(page)) ||
+        page_is_erased(page, 16u)) {
+        return;  // sem page 6 → mantém valores default (factor 1.0× a 4000 RPM)
+    }
+    std::memcpy(ems::engine::dwell_rpm_axis_rpm,  page + 0,  8u);
+    std::memcpy(ems::engine::dwell_rpm_factor_q8, page + 8,  8u);
+}
+
 static void load_xtau_calibration_from_nvm() noexcept {
     alignas(4) uint8_t page[80] = {};
     if (!ems::hal::nvm_load_calibration(5u, page, sizeof(page)) ||
@@ -240,7 +250,8 @@ struct CachedFuelCorrections {
     uint16_t corr_clt_x256;
     uint16_t corr_iat_x256;
     uint16_t dead_time_us;
-    uint16_t dwell_ms_x10;
+    // dwell_ms_x10 não é cacheado: depende de RPM que varia a cada dente.
+    // Calculado inline via dwell_ms_x10_from_vbatt_rpm() em cada slot de 2ms.
 };
 
 static CachedFuelCorrections g_fuel_corr_cache = {};
@@ -258,7 +269,6 @@ static inline const CachedFuelCorrections& fuel_corrections_for(
         g_fuel_corr_cache.corr_clt_x256 = ems::engine::corr_clt(sensors.clt_degc_x10);
         g_fuel_corr_cache.corr_iat_x256 = ems::engine::corr_iat(sensors.iat_degc_x10);
         g_fuel_corr_cache.dead_time_us = ems::engine::corr_vbatt(sensors.vbatt_mv);
-        g_fuel_corr_cache.dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt(sensors.vbatt_mv);
     }
     return g_fuel_corr_cache;
 }
@@ -330,6 +340,7 @@ static void openems_init() noexcept {
 	ems::engine::cfg::engine_config_load(g_calib_page0, kCalibPageBytes);
 	load_corr_calibration_from_nvm();
 	load_xtau_calibration_from_nvm();
+	load_dwell2d_calibration_from_nvm();
 	if (!ems::hal::nvm_load_adaptive_maps()) {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
@@ -411,6 +422,16 @@ int main() {
             g_t2ms_ = now;
             const uint32_t loop2ms_start_us = micros();
 
+            // Stall watchdog: detecta virabrequim parado entre dentes.
+            // Deve preceder ckp_snapshot() para que o snapshot deste ciclo
+            // já reflicta LOSS_OF_SYNC se o motor parou.
+            ems::drv::ckp_stall_poll(ems::hal::tim5_count());
+
+            // Dwell watchdog: protege bobinas de ignição contra saturação.
+            // Se SPARK não disparou dentro de 1.4 × dwell após DWELL_START,
+            // força a saída LOW imediatamente (MS42 §2.2.2.1.3).
+            ecu_sched_dwell_watchdog();
+
             const auto snap    = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
             const bool full_sync = (snap.state == ems::drv::SyncState::FULL_SYNC);
@@ -450,6 +471,25 @@ int main() {
             const bool rev_cut = g_limp_active &&
                 (snap.rpm_x10 > kLimpRpmLimit_x10);
             const CachedFuelCorrections& fuel_corr = fuel_corrections_for(sensors);
+            // Dwell 2D: tensão × RPM (MS42 §2.2.2.2.1).
+            // Calculado fora do cache porque depende de RPM que varia a cada dente.
+            const uint16_t dwell_ms_x10 = ems::engine::dwell_ms_x10_from_vbatt_rpm(
+                sensors.vbatt_mv, snap.rpm_x10);
+            const uint32_t dwell_ticks =
+                (static_cast<uint32_t>(dwell_ms_x10) * kSchedulerTicksPerMs) / 10u;
+
+            // Multi-spark (MS42 §2.2.3): habilita/desabilita conforme RPM gate.
+            // O dwell inter-spark é mais curto (tabela dedicada mspark_inter_dwell_ms_x10).
+            // Limite 18°ATDC garante que o último spark contribui para a combustão.
+            if (snap.rpm_x10 < ems::engine::mspark_max_rpm_x10 &&
+                ems::engine::mspark_count > 0u) {
+                const uint32_t inter_dwell_ticks =
+                    (static_cast<uint32_t>(ems::engine::mspark_inter_dwell_ms_x10)
+                     * kSchedulerTicksPerMs) / 10u;
+                ::ecu_sched_set_mspark(ems::engine::mspark_count, inter_dwell_ticks, 18u);
+            } else {
+                ::ecu_sched_set_mspark(0u, 0u, 18u);
+            }
             const bool crank_rpm_window =
                 sched_sync && snap.rpm_x10 > 0u &&
                 snap.rpm_x10 < ems::engine::crank_exit_rpm_x10;
@@ -547,8 +587,6 @@ int main() {
                 g_last_advance_deg = clamp_i8(qc.spark_deg, -10, 40);
 
                 const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
-                const uint32_t dwell_ticks =
-                    (static_cast<uint32_t>(fuel_corr.dwell_ms_x10) * kSchedulerTicksPerMs) / 10u;
 
                 ::ecu_sched_commit_calibration(
                     static_cast<uint32_t>(qc.spark_deg < 0 ? 0 : qc.spark_deg),
@@ -557,8 +595,6 @@ int main() {
                     ems::engine::cfg::kDefaultSoiLeadDeg);
             } else if (sched_sync && rev_cut) {
                 const int16_t base_advance_deg = ems::engine::get_advance(snap.rpm_x10, map_bar_x100);
-                const uint32_t dwell_ticks =
-                    (static_cast<uint32_t>(fuel_corr.dwell_ms_x10) * kSchedulerTicksPerMs) / 10u;
                 ::ecu_sched_commit_calibration(
                     static_cast<uint32_t>(base_advance_deg < 0 ? 0 : base_advance_deg),
                     dwell_ticks,

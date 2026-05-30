@@ -29,7 +29,7 @@ extern "C" {
 #define ECU_CH_IGN3   5U
 #define ECU_CH_IGN4   4U
 
-#define ECU_ANGLE_TABLE_SIZE  32U
+#define ECU_ANGLE_TABLE_SIZE  48U  // base 16 + até 3 sparks adicionais × 4 cil × 2 eventos = 40; margem 8
 
 typedef struct {
     uint8_t tooth_index;
@@ -64,6 +64,28 @@ void ecu_sched_set_presync_enable(uint8_t enable);
 void ecu_sched_set_presync_inj_mode(uint8_t mode);
 void ecu_sched_set_presync_ign_mode(uint8_t mode);
 void ecu_sched_reset_diagnostic_counters(void);
+
+// Dwell watchdog — chamar do main loop (slot 2ms) com TIM2_CNT.
+// Se uma bobina ficou activa por > 1.4 × dwell_ticks sem evento SPARK,
+// força a saída LOW imediatamente para proteger o módulo de ignição.
+void ecu_sched_dwell_watchdog(void);
+uint32_t ecu_sched_dwell_watchdog_count(void);
+
+// Multi-spark (MS42 §2.2.3): sparks adicionais por ciclo a baixo RPM.
+// count: número de sparks adicionais (0=desabilitado, máx 3).
+// inter_dwell_ticks: tempo de dwell entre sparks consecutivos (em ticks do TIM2/TIM8).
+// atdc_limit_deg: o último spark adicional não pode ultrapassar este ângulo ATDC (default 18°).
+void ecu_sched_set_mspark(uint8_t  count,
+                          uint32_t inter_dwell_ticks,
+                          uint32_t atdc_limit_deg);
+
+// Per-cylinder injection inhibit (MS42 §2.2.5 — corte de cilindros).
+// mask: bit 0 = cyl 0, bit 1 = cyl 1, ..., bit 3 = cyl 3.
+// Quando o bit está activo, ECU_ACT_INJ_ON é suprimido no canal correspondente.
+// ECU_ACT_INJ_OFF passa normalmente (fechar injetor já fechado é inócuo).
+// Aplica-se tanto ao modo sequencial como presync.
+void ecu_sched_set_inj_inhibit_mask(uint8_t mask);
+uint8_t ecu_sched_get_inj_inhibit_mask(void);
 void ecu_sched_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_ivc_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
@@ -92,6 +114,8 @@ void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_test_get_ivc_clamp_count(void);
 void     ecu_sched_test_set_tim8_cnt(uint32_t cnt) noexcept;
 uint32_t ecu_sched_test_get_tim8_ccr(uint8_t channel) noexcept;
+void     ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg);
+uint8_t  ecu_sched_test_get_mspark_count(void);
 #endif
 
 #ifdef __cplusplus

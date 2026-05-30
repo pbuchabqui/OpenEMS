@@ -95,6 +95,21 @@ uint16_t crank_prime_max_pw_us = 30000u;
 uint16_t dwell_vbatt_axis_mv[kIgnitionDwellTableSize] = {9000u, 10000u, 11000u, 12000u, 13000u, 14000u, 15000u, 16000u};
 uint16_t dwell_ms_x10_table[kIgnitionDwellTableSize] = {42u, 38u, 35u, 30u, 28u, 25u, 23u, 22u};
 
+// Eixo RPM para correcção de dwell (em RPM, não ×10)
+uint16_t dwell_rpm_axis_rpm[kDwellRpmCorrSize] = {500u, 1200u, 4000u, 7000u};
+
+// Factor multiplicativo Q8 (÷256): ajusta dwell por zona de RPM.
+// 300 cranking: 1.5× — mais energia na bobina a baixa rotação
+// 1200 idle:    1.125×
+// 4000 cruise:  1.0×  — ponto de referência (tabela de tensão calibrada aqui)
+// 7000 high:    0.78× — reduz dwell para evitar sobreposição de ciclos
+uint16_t dwell_rpm_factor_q8[kDwellRpmCorrSize] = {384u, 288u, 256u, 200u};
+
+// Multi-spark: activo abaixo de 1200 RPM, 2 sparks adicionais, dwell inter-spark 1.8ms
+uint16_t mspark_max_rpm_x10        = 12000u;  // 1200 RPM — gate RPM
+uint8_t  mspark_count              = 2u;      // sparks adicionais por ciclo
+uint16_t mspark_inter_dwell_ms_x10 = 18u;     // 1.8ms entre sparks
+
 uint32_t lambda_delay_rpm_axis_x10[kLambdaDelayTableSize] = {10000u, 25500u, 80000u};
 uint32_t lambda_delay_load_axis_bar_x100[kLambdaDelayTableSize] = {10u, 91u, 300u};
 uint16_t lambda_delay_ms_table[kLambdaDelayTableSize][kLambdaDelayTableSize] = {

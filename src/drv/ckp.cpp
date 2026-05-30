@@ -131,6 +131,28 @@ static constexpr uint8_t kHistSize = 3u;
 // Mínimo de ticks entre bordas para descartar glitches de EMC (<800 ns @ 62.5 MHz).
 static constexpr uint32_t kMinToothTicks = 50u;
 
+// ── Stall watchdog ─────────────────────────────────────────────────────────
+// Tempo máximo sem dente antes de declarar motor parado: 200 ms @ 62.5 MHz.
+// Resolve o caso em que o virabrequim para entre dois dentes — tooth_count
+// para de incrementar e a detecção por contagem nunca dispara.
+static constexpr uint32_t kMinStallTimeoutTicks = 12500000u;
+
+// ── Limiares TOOTH_GRD (MS42 §1.2.3.1.3, NC_TOOTH_GRD_MIN/MAX_GAP) ──────
+// TOOTH_GRD(n) = [T(n) × T(n-2)] / T(n-1)²
+//
+// Gap válido:  1.5 < TOOTH_GRD ≤ 3.5  (janela que cobre o gap 60-2 ≈ 3.0×)
+//   Limite inf:  delta×t_n2×2 > t_n1²×3  (TOOTH_GRD > 3/2)
+//   Limite sup:  delta×t_n2×2 > t_n1²×7  → fora da janela → SPIKE_NOISE
+//
+// Spike/glitch: TOOTH_GRD < 1/4 → delta×t_n2×4 < t_n1²
+//
+// Usa uint64_t: T(n-1)² estoura uint32_t abaixo de ~650 RPM.
+static constexpr uint32_t kGrdGapNum       = 3u;  // gap inf: 3/2 = 1.5
+static constexpr uint32_t kGrdGapDen       = 2u;
+static constexpr uint32_t kGrdGapMaxNum    = 7u;  // gap sup: 7/2 = 3.5
+static constexpr uint32_t kGrdGapMaxDen    = 2u;
+static constexpr uint32_t kGrdSpikeDen     = 4u;  // spike:   1/4 = 0.25
+
 // ---- Acesso a registradores TIM5 ------------------------------------------------
 // STM32H562 TIM5 e GPIO sao configurados em hal/stm32h562/timer.cpp.
 // O modulo usa aliases HAL para manter o decode desacoplado de offsets.
@@ -283,6 +305,56 @@ static uint8_t g_coherent_periods_count = 0u;
 inline bool is_normal_tooth(uint32_t period, uint32_t avg) noexcept {
     const uint32_t p5 = period * kTolDenLow;
     return (p5 >= avg * kTolNumLow) && (p5 <= avg * kTolNumHigh);
+}
+
+// ── TOOTH_GRD (MS42 §1.2.3.1.3) ──────────────────────────────────────────────
+// gap:   delta × t_n2 × kGrdGapDen  > t_n1² × kGrdGapNum
+// spike: delta × t_n2 × kGrdSpikeDen < t_n1²
+inline bool tooth_grd_is_gap(uint32_t delta, uint32_t t_n1, uint32_t t_n2) noexcept {
+    const uint64_t lhs = static_cast<uint64_t>(delta) * t_n2 * kGrdGapDen;
+    const uint64_t rhs = static_cast<uint64_t>(t_n1) * t_n1 * kGrdGapNum;
+    return lhs > rhs;
+}
+
+inline bool tooth_grd_is_spike(uint32_t delta, uint32_t t_n1, uint32_t t_n2) noexcept {
+    const uint64_t lhs = static_cast<uint64_t>(delta) * t_n2 * kGrdSpikeDen;
+    const uint64_t rhs = static_cast<uint64_t>(t_n1) * t_n1;
+    return lhs < rhs;
+}
+
+// TOOTH_GRD > 3.5: dente demasiado longo para ser o gap 60-2 (que é ≈3.0×).
+// Ocorre durante recuperação de stall ou escorregamento de roda — não é um gap válido.
+inline bool tooth_grd_over_gap_max(uint32_t delta, uint32_t t_n1, uint32_t t_n2) noexcept {
+    const uint64_t lhs = static_cast<uint64_t>(delta) * t_n2 * kGrdGapMaxDen;
+    const uint64_t rhs = static_cast<uint64_t>(t_n1) * t_n1 * kGrdGapMaxNum;
+    return lhs > rhs;
+}
+
+// Classifica o período atual do dente.
+// Com histórico completo (hist_ready == kHistSize) usa TOOTH_GRD — robusto a
+// aceleração/desaceleração rápida e rejeita spikes bidirecionais.
+// No bootstrap (hist_ready < kHistSize) recai em is_gap / is_normal_tooth.
+enum class ToothClass : uint8_t { GAP, SPIKE_NOISE, NORMAL };
+
+inline ToothClass classify_tooth(uint32_t delta_ticks) noexcept {
+    if (g_state.hist_ready >= 2u) {
+        const uint32_t t_n1 = g_state.tooth_hist[0];
+        const uint32_t t_n2 = g_state.tooth_hist[1];
+        if (tooth_grd_is_gap(delta_ticks, t_n1, t_n2)) {
+            // Verifica limite superior da janela de gap (NC_TOOTH_GRD_MAX_GAP = 3.5).
+            // TOOTH_GRD > 3.5 indica dente anomalamente longo — não é o gap 60-2.
+            if (tooth_grd_over_gap_max(delta_ticks, t_n1, t_n2)) {
+                return ToothClass::SPIKE_NOISE;
+            }
+            return ToothClass::GAP;
+        }
+        if (tooth_grd_is_spike(delta_ticks, t_n1, t_n2)) { return ToothClass::SPIKE_NOISE; }
+        return ToothClass::NORMAL;
+    }
+    const uint32_t avg = hist_avg();
+    if (is_gap(delta_ticks, avg))          { return ToothClass::GAP; }
+    if (!is_normal_tooth(delta_ticks, avg)) { return ToothClass::SPIKE_NOISE; }
+    return ToothClass::NORMAL;
 }
 
 // ── Seção crítica ARM Cortex-M4 ──────────────────────────────────────────────
@@ -503,41 +575,27 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
         return;
     }
 
-    // ── 5. Classificação do evento por razão ──────────────────────────────
-    // Calcula média dos últimos kHistSize períodos normais (em ticks).
-    // avg é computado em ticks (não ns) para evitar conversão adicional.
-    const uint32_t avg = hist_avg();
+    // ── 5. Classificação do dente ─────────────────────────────────────────
+    // Com histórico completo usa TOOTH_GRD (MS42 §1.2.3.1.3) — trend-compensado,
+    // robusto a aceleração/desaceleração rápida e rejeita spikes de ambos os
+    // sentidos. No bootstrap (hist_ready < kHistSize) recai em razão de média.
+    switch (classify_tooth(delta_ticks)) {
 
-    // ── 5a. Teste de GAP ──────────────────────────────────────────────────
-    // Condição: delta_ticks × 2 > avg × 3  ≡  delta > 1,5 × avg
-    // Para 60-2: gap ≈ 3 × avg → ratio ≈ 3,0 >> 1,5 (margem de 100%)
-    // O limiar 1,5× separa o gap de qualquer dente normal válido (máx 120% de avg).
-    //
-    // NOTA (CKP-02): A verificação de tooth_count >= kGapThresholdTooth é feita
-    // DENTRO de process_gap_event() para todos os estados, incluindo WAIT_GAP e
-    // LOSS_OF_SYNC. Isso garante proteção uniforme contra gaps prematuros durante
-    // bootstrap do histórico (hist_ready < kHistSize) onde o filtro de razão acima
-    // ainda não estava activo nas iterações anteriores.
-    if (is_gap(delta_ticks, avg)) {
-        // Delega para a máquina de estados — a validação de tooth_count
-        // e todas as transições estão encapsuladas em process_gap_event().
-        static_cast<void>(process_gap_event());
-        // Dispara hooks mesmo após gap: permite ao agendador / sensores reagir
-        // à mudança de estado (ex: cancelar eventos pendentes após LOSS_OF_SYNC).
-        sensors_on_tooth(g_state.snap);
-        schedule_on_tooth(g_state.snap);
-        return;
-    }
+        case ToothClass::GAP:
+            // Valida tooth_count e aplica transição de estado.
+            static_cast<void>(process_gap_event());
+            sensors_on_tooth(g_state.snap);
+            schedule_on_tooth(g_state.snap);
+            return;
 
-    // ── 5b. Filtro ±20%: dente normal vs ruído ────────────────────────────
-    // Período dentro de [80%, 120%] do avg → dente normal válido.
-    // Fora desta janela (mas < limiar de gap) → ruído transitório: descartar.
-    if (!is_normal_tooth(delta_ticks, avg)) {
-        // Ruído: não atualiza hist, não incrementa tooth_count.
-        // Apenas dispara hooks para que camadas superiores possam monitorar.
-        sensors_on_tooth(g_state.snap);
-        schedule_on_tooth(g_state.snap);
-        return;
+        case ToothClass::SPIKE_NOISE:
+            // Ruído: não atualiza hist nem tooth_count; hooks para monitorização.
+            sensors_on_tooth(g_state.snap);
+            schedule_on_tooth(g_state.snap);
+            return;
+
+        case ToothClass::NORMAL:
+            break;
     }
 
     // ── 6. Processamento de dente normal ──────────────────────────────────
@@ -641,6 +699,31 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     if (g_state.cmp_confirms < 2u) {
         ++g_state.cmp_confirms;
     }
+}
+
+bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
+    const SyncState state = g_state.snap.state;
+    if (state != SyncState::HALF_SYNC && state != SyncState::FULL_SYNC) {
+        return false;
+    }
+    // Subtracção circular uint32_t: correcta mesmo após overflow de TIM5 (32 bits).
+    const uint32_t elapsed_ticks = tim5_cnt_now - g_state.prev_capture;
+    if (elapsed_ticks < kMinStallTimeoutTicks) {
+        return false;
+    }
+    // Stall confirmado — seção crítica necessária: escrevemos g_state.snap fora
+    // da ISR TIM5 (que normalmente tem exclusividade sobre esse campo).
+    // Re-verificação dentro da secção evita race com ISR que possa ter disparado
+    // no intervalo entre o teste acima e o CPSID.
+    enter_critical();
+    if (g_state.snap.state == SyncState::HALF_SYNC ||
+        g_state.snap.state == SyncState::FULL_SYNC) {
+        g_state.snap.state   = SyncState::LOSS_OF_SYNC;
+        g_state.snap.rpm_x10 = 0u;
+        g_state.tooth_count  = 0u;
+    }
+    exit_critical();
+    return true;
 }
 
 void ckp_seed_arm(bool phase_A) noexcept {
