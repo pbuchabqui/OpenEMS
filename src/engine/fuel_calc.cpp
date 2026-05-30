@@ -381,10 +381,11 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
     uint32_t base_pw_us = 0u;
     if (ve != 0u && map_bar_x100 <= 300u) {
         const uint32_t req_fuel_us = default_req_fuel_us();
-        const uint32_t num = req_fuel_us *
-                             static_cast<uint32_t>(ve) *
-                             static_cast<uint32_t>(map_bar_x100);
-        base_pw_us = num / (100u * static_cast<uint32_t>(cfg::g_eng_cfg.map_ref_bar_x100));
+        const uint64_t num = static_cast<uint64_t>(req_fuel_us) *
+                             static_cast<uint64_t>(ve) *
+                             static_cast<uint64_t>(map_bar_x100);
+        base_pw_us = static_cast<uint32_t>(
+            num / (100u * static_cast<uint64_t>(cfg::g_eng_cfg.map_ref_bar_x100)));
         if (base_pw_us > 100000u) {
             base_pw_us = 100000u;
         }

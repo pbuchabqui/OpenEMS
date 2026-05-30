@@ -424,9 +424,12 @@ void ECU_Hardware_Init(void)
 
 static uint32_t ticks_to_cycle_degrees(uint32_t ticks, uint32_t tooth_period_ns, uint32_t cycle_deg)
 {
-    uint32_t tooth_ticks = TOOTH_NS_TO_SCHED(tooth_period_ns);
-    uint32_t denom = tooth_ticks * ((cycle_deg == ECU_CYCLE_DEG) ? 120U : 60U);
-    return (denom > 0U) ? ((ticks * cycle_deg) / denom) : 0U;
+    const uint64_t tooth_ticks = static_cast<uint64_t>(TOOTH_NS_TO_SCHED(tooth_period_ns));
+    const uint64_t factor = (cycle_deg == ECU_CYCLE_DEG) ? 120ULL : 60ULL;
+    const uint64_t denom  = tooth_ticks * factor;
+    return (denom > 0ULL)
+        ? static_cast<uint32_t>((static_cast<uint64_t>(ticks) * cycle_deg) / denom)
+        : 0U;
 }
 
 static uint32_t clamp_inj_pw_to_ivc(uint32_t tdc_deg, uint32_t inj_on_deg, uint32_t inj_pw_deg)
