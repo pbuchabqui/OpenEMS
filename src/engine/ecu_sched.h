@@ -90,6 +90,8 @@ uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 uint32_t ecu_sched_test_get_late_event_count(void);
 void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_test_get_ivc_clamp_count(void);
+void     ecu_sched_test_set_tim8_cnt(uint32_t cnt) noexcept;
+uint32_t ecu_sched_test_get_tim8_ccr(uint8_t channel) noexcept;
 #endif
 
 #ifdef __cplusplus

@@ -65,6 +65,10 @@ bool validate_sensor_range(SensorId id, uint16_t raw_value) noexcept;
 bool validate_sensor_values(const SensorData& data) noexcept;
 uint8_t get_sensor_health_status() noexcept;
 
+inline constexpr uint16_t kFallbackMapKpaX10  = 1010u;
+inline constexpr int16_t  kFallbackCltDegcX10 = 900;
+inline constexpr int16_t  kFallbackIatDegcX10 = 250;
+
 #if defined(EMS_HOST_TEST)
 void sensors_test_reset() noexcept;
 void sensors_test_set_clt_table_entry(uint8_t idx, int16_t degc_x10) noexcept;

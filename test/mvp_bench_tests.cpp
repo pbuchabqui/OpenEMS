@@ -451,6 +451,63 @@ void test_sensors() {
            "sensors_get map_kpa_x10 after test_reset is zero (pre-ADC-update state)");
 }
 
+void test_tim8_wraparound() {
+    ECU_Hardware_Init();
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim8_cnt(0xFFFEu);
+
+    ems::drv::CkpSnapshot snap{};
+    snap.state = ems::drv::SyncState::FULL_SYNC;
+    snap.phase_A = true;
+    snap.tooth_index = 1u;
+    snap.tooth_period_ns = 1000000u;
+    snap.predicted_tooth_period_ns = 1000000u;
+    ems::drv::schedule_on_tooth(snap);
+    snap.tooth_index = 0u;
+    ems::drv::schedule_on_tooth(snap);
+
+    for (uint8_t ch = 1u; ch <= 4u; ++ch) {
+        expect(ecu_sched_test_get_tim8_ccr(ch) <= 0xFFFFu,
+               "TIM8 CCR stays in 16-bit range when CNT near rollover");
+    }
+}
+
+void test_sensor_adc_recovery_fallback() {
+    ems::drv::sensors_test_reset();
+    ems::hal::adc_test_set_recovery_failed(true);
+
+    ems::drv::CkpSnapshot snap{};
+    snap.tooth_period_ns = 1000000u;
+    for (uint8_t i = 0u; i < 5u; ++i) {
+        ems::drv::sensors_on_tooth(snap);
+    }
+    ems::drv::sensors_tick_100ms();
+
+    const auto data = ems::drv::sensors_get();
+    expect(data.map_kpa_x10 == ems::drv::kFallbackMapKpaX10,
+           "MAP uses fallback when ADC recovery failed");
+
+    ems::hal::adc_test_set_recovery_failed(false);
+}
+
+void test_sensor_clt_fault_fallback() {
+    ems::drv::sensors_test_reset();
+    ems::drv::sensors_init();
+
+    ems::hal::adc_test_set_raw_secondary(
+        ems::hal::AdcSecondaryChannel::CLT_SE14, 0u);
+
+    ems::drv::sensors_tick_100ms();
+    ems::drv::sensors_tick_100ms();
+    ems::drv::sensors_tick_100ms();
+
+    const auto data = ems::drv::sensors_get();
+    expect(data.clt_degc_x10 == ems::drv::kFallbackCltDegcX10,
+           "CLT uses fallback value after 3 consecutive out-of-range reads");
+    expect((data.fault_bits & (1u << 3u)) != 0u,
+           "CLT fault bit is set after consecutive range violations");
+}
+
 }  // namespace
 
 int main() {
@@ -465,6 +522,9 @@ int main() {
     test_can_stack();
     test_knock();
     test_sensors();
+    test_tim8_wraparound();
+    test_sensor_adc_recovery_fallback();
+    test_sensor_clt_fault_fallback();
 
     if (g_failures != 0u) {
         std::printf("%u MVP bench host test(s) failed\n", g_failures);

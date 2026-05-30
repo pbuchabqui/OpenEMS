@@ -630,4 +630,14 @@ uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void) { return g_cycle_sch
 uint32_t ecu_sched_test_get_late_event_count(void) { return g_late_event_count; }
 void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg) { ecu_sched_set_ivc(ivc_abdc_deg); }
 uint32_t ecu_sched_test_get_ivc_clamp_count(void) { return g_ivc_clamp_count; }
+void ecu_sched_test_set_tim8_cnt(uint32_t cnt) noexcept { ems_test_tim8_cnt = cnt; }
+uint32_t ecu_sched_test_get_tim8_ccr(uint8_t ch) noexcept {
+    switch (ch) {
+        case 1u: return ems_test_tim8_ccr1;
+        case 2u: return ems_test_tim8_ccr2;
+        case 3u: return ems_test_tim8_ccr3;
+        case 4u: return ems_test_tim8_ccr4;
+        default: return 0u;
+    }
+}
 #endif

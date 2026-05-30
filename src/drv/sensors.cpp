@@ -17,15 +17,15 @@ namespace {
 using ems::drv::SensorData;
 using ems::drv::SensorId;
 using ems::drv::SensorRange;
+using ems::drv::kFallbackMapKpaX10;
+using ems::drv::kFallbackCltDegcX10;
+using ems::drv::kFallbackIatDegcX10;
 
 constexpr uint8_t  kFaultLimit         = 3u;
 constexpr uint16_t kRealTeethPerRev    = 58u;
 constexpr uint16_t kFastSamplesPerRev  = 12u;
 
-constexpr uint16_t kFallbackMapKpaX10  = 1010u;
 constexpr uint16_t kFallbackTpsPctX10  = 0u;
-constexpr int16_t  kFallbackCltDegcX10 = 900;
-constexpr int16_t  kFallbackIatDegcX10 = 250;
 
 // TIM5: 250 MHz / prescaler 4 = 62.5 MHz efetivo = 16 ns/tick
 // TIM6 trigger: mesmo clock efetivo usado no cálculo
