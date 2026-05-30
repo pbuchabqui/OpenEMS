@@ -57,6 +57,7 @@ int32_t g_stft_integrator_x10 = 0;
 int16_t g_ltft_pct_x10[ems::engine::kTableAxisSize][ems::engine::kTableAxisSize] = {};
 // LTFT aditivo: offset em µs, indexado 0-7 (rpm_idx>>1, map_idx>>1)
 int16_t g_ltft_add_us[8][8] = {};
+bool g_decel_cut = false;
 LambdaHistorySample g_lambda_history[kLambdaHistorySize] = {};
 uint8_t g_lambda_history_pos = 0u;
 
@@ -496,6 +497,7 @@ void fuel_reset_adaptives() noexcept {
     g_stft_integrator_x10 = 0;
     g_ae_decay_cycles = 0u;
     g_ae_pulse_us = 0;
+    g_decel_cut = false;
     fuel_lambda_delay_reset();
 
     for (uint8_t y = 0u; y < kTableAxisSize; ++y) {
@@ -630,6 +632,36 @@ int16_t fuel_get_ltft_add_us(uint8_t map_idx, uint8_t rpm_idx) noexcept {
         return 0;
     }
     return g_ltft_add_us[map_idx >> 1u][rpm_idx >> 1u];
+}
+
+// ── Corte de combustível na desaceleração (MS42 TI_PUR) ──────────────────────
+
+bool fuel_decel_cut_update(uint32_t rpm_x10,
+                           uint16_t tps_pct_x10,
+                           int16_t clt_x10) noexcept {
+    const bool throttle_closed = tps_pct_x10 <= decel_cut_tps_threshold_x10;
+    const bool engine_warm     = clt_x10 >= decel_cut_min_clt_x10;
+
+    if (!g_decel_cut) {
+        if (throttle_closed && engine_warm && rpm_x10 >= decel_cut_entry_rpm_x10) {
+            g_decel_cut = true;
+        }
+    } else {
+        // Sai do corte se o acelerador abrir OU o RPM cair abaixo do limiar de saída.
+        // A histerese (entry > exit) evita oscilações ao redor do limiar.
+        if (!throttle_closed || rpm_x10 < decel_cut_exit_rpm_x10) {
+            g_decel_cut = false;
+        }
+    }
+    return g_decel_cut;
+}
+
+bool fuel_decel_cut_active() noexcept {
+    return g_decel_cut;
+}
+
+void fuel_decel_cut_reset() noexcept {
+    g_decel_cut = false;
 }
 
 }  // namespace ems::engine

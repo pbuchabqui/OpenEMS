@@ -116,4 +116,13 @@ int16_t fuel_get_ltft_pct_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 // LTFT aditivo: retorna offset em µs (negativo = redução de PW)
 int16_t fuel_get_ltft_add_us(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 
+// Corte de combustível na desaceleração (MS42 TI_PUR).
+// Chama a cada ciclo de injeção (2ms); atualiza estado interno com histerese.
+// Retorna true enquanto o corte estiver ativo.
+bool fuel_decel_cut_update(uint32_t rpm_x10,
+                           uint16_t tps_pct_x10,
+                           int16_t clt_x10) noexcept;
+bool fuel_decel_cut_active() noexcept;
+void fuel_decel_cut_reset() noexcept;
+
 }  // namespace ems::engine

@@ -613,9 +613,25 @@ int main() {
                      static_cast<int16_t>(knock_retard_x10 / 10u),
                      idle_spark_corr_deg, antijerk_retard});
 
+                // Corte de combustível na desaceleração (MS42 TI_PUR)
+                // Deve ser avaliado após o cálculo de PW mas antes do commit.
+                // Crank window não entra em decel cut (motor ainda não estabilizou).
+                const bool decel_cut_active = !crank_rpm_window &&
+                    ems::engine::fuel_decel_cut_update(
+                        snap.rpm_x10, sensors.tps_pct_x10, sensors.clt_degc_x10);
+                if (decel_cut_active) {
+                    // Zera PW e reseta X-Tau (parede seca durante corte;
+                    // na reativação o X-Tau repõe o filme naturalmente).
+                    final_pw_us_base = 0u;
+                    g_last_net_pw_us = 0u;
+                    g_ae_active = false;
+                    ems::engine::transient_fuel_reset();
+                }
+
                 const auto qc = ems::engine::quick_crank_update(
                     now, snap.rpm_x10, sched_sync, sensors.clt_degc_x10, advance_deg);
-                const uint32_t final_pw_us =
+                // Decel cut: força PW=0 sem passar pelo quick_crank (que pode adicionar min_pw)
+                const uint32_t final_pw_us = decel_cut_active ? 0u :
                     ems::engine::quick_crank_apply_pw_us(final_pw_us_base,
                                                          qc.fuel_mult_x256,
                                                          qc.min_pw_us);
@@ -712,12 +728,14 @@ int main() {
                 const bool rev_cut = g_limp_active &&
                     (snap.rpm_x10 > kLimpRpmLimit_x10);
                 const bool ae_active = g_ae_active;
+                // STFT deve ser congelado durante decel cut: sem combustível → sem feedback válido
+                const bool stft_inhibit = rev_cut || ems::engine::fuel_decel_cut_active();
                 const int16_t stft = ems::engine::fuel_update_stft_delayed(
                     now, snap.rpm_x10, map_bar_x100,
                     static_cast<int16_t>(lambda_target_x1000),
                     static_cast<int16_t>(lambda_measured),
                     sensors.clt_degc_x10, lambda_valid,
-                    ae_active, rev_cut, g_last_net_pw_us);
+                    ae_active, stft_inhibit, g_last_net_pw_us);
                 g_ae_active = false;
                 g_last_stft_pct = clamp_i8(static_cast<int16_t>(stft / 10), -25, 25);
 

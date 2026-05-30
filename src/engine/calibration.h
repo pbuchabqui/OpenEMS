@@ -123,6 +123,14 @@ extern uint32_t rev_limit_soft_window_x10;
 // LTFT aditivo (MS42 TI_AD_ADD_MMV)
 extern uint16_t ltft_add_pw_threshold_us;
 
+// Corte de combustível na desaceleração (MS42 TI_PUR)
+// Ativa quando: TPS < threshold + RPM > entry + CLT > min_clt
+// Desativa quando: RPM < exit (histerese) OU TPS >= threshold
+extern uint16_t decel_cut_tps_threshold_x10;   // TPS máximo para entrada (ex. 5 = 0.5%)
+extern uint32_t decel_cut_entry_rpm_x10;        // RPM mínimo para ativar corte
+extern uint32_t decel_cut_exit_rpm_x10;         // RPM abaixo do qual reativa combustível
+extern int16_t  decel_cut_min_clt_x10;          // CLT mínima (motor aquecido)
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;
 void sync_etb_calibration_to_page(uint8_t* page, uint16_t len) noexcept;
 void apply_xtau_autocal_from_page(const uint8_t* page, uint16_t len) noexcept;

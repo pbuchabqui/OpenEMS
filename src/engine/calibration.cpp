@@ -170,6 +170,14 @@ uint32_t rev_limit_soft_window_x10   = 2000u;
 // LTFT aditivo: ativa quando PW < 2.5ms (regime de marcha lenta / carga baixa)
 uint16_t ltft_add_pw_threshold_us = 2500u;
 
+// Corte de combustível na desaceleração (MS42 TI_PUR)
+// Entrada: TPS < 0.5% + RPM > 1500 + CLT > 70°C
+// Saída: RPM < 1200 (histerese 300 RPM) OU TPS abre
+uint16_t decel_cut_tps_threshold_x10 = 5u;      // 0.5% TPS
+uint32_t decel_cut_entry_rpm_x10     = 15000u;   // 1500 RPM
+uint32_t decel_cut_exit_rpm_x10      = 12000u;   // 1200 RPM (histerese)
+int16_t  decel_cut_min_clt_x10       = 700;      // 70°C
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept {
     if (page == nullptr || len < 36u) {
         return;
