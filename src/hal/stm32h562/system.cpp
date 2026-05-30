@@ -59,10 +59,19 @@ void iwdg_kick(void) noexcept {
 
 // ── Inicialização do sistema ──────────────────────────────────────────────────
 
+// Trigger NVIC SYSRESETREQ — last resort if clock hardware doesn't respond.
+// IWDG is not yet running at this point in boot, so we force a reset directly.
+[[noreturn]] static void clock_fault_reset() noexcept {
+    *reinterpret_cast<volatile uint32_t*>(0xE000ED0Cu) = 0x05FA0004u;
+    while (true) {}
+}
+
 void system_stm32_init(void) noexcept {
     // ── 1. Habilitar HSE e aguardar estabilização ─────────────────────────
     RCC_CR |= RCC_CR_HSEON;
-    while ((RCC_CR & RCC_CR_HSERDY) == 0u) { /* aguarda */ }
+    for (uint32_t n = 500000u; (RCC_CR & RCC_CR_HSERDY) == 0u; --n) {
+        if (n == 0u) { clock_fault_reset(); }
+    }
 
     // ── 2. Flash latency + cache antes de aumentar clock ─────────────────
     // 5 WS exigidos para HCLK > 210 MHz @ VOS0 (RM0481 §9.3.3)
@@ -71,8 +80,9 @@ void system_stm32_init(void) noexcept {
               | FLASH_ACR_PRFTEN
               | FLASH_ACR_ICEN
               | FLASH_ACR_DCEN;
-    // Aguarda que o novo valor seja aplicado
-    while ((FLASH_ACR & 0xFu) != 5u) { /* aguarda */ }
+    for (uint32_t n = 100000u; (FLASH_ACR & 0xFu) != 5u; --n) {
+        if (n == 0u) { clock_fault_reset(); }
+    }
 
     // ── 3. Configurar PLL1: HSE=8 MHz / M=1 × N=125 / P=4 = 250 MHz ────
     // PLL1CFGR: PLLSRC=HSE (01b), DIVM1=1 (M-1 = 0)
@@ -88,7 +98,9 @@ void system_stm32_init(void) noexcept {
 
     // ── 4. Ligar PLL1 e aguardar lock ────────────────────────────────────
     RCC_CR |= RCC_CR_PLL1ON;
-    while ((RCC_CR & RCC_CR_PLL1RDY) == 0u) { /* aguarda lock */ }
+    for (uint32_t n = 200000u; (RCC_CR & RCC_CR_PLL1RDY) == 0u; --n) {
+        if (n == 0u) { clock_fault_reset(); }
+    }
 
     // ── 5. Configurar prescalers APB (manter AHB = SYSCLK) ───────────────
     // CFGR1: AHB prescaler = 1 (HPRE=0), APB1=/2 (PPRE1=100b), APB2=/2 (PPRE2=100b)
@@ -99,7 +111,9 @@ void system_stm32_init(void) noexcept {
 
     // ── 6. Selecionar PLL1 como SYSCLK ───────────────────────────────────
     RCC_CFGR1 = (RCC_CFGR1 & ~0x7u) | RCC_CFGR1_SW_PLL1;
-    while ((RCC_CFGR1 & (7u << 3)) != RCC_CFGR1_SWS_PLL1) { /* aguarda */ }
+    for (uint32_t n = 100000u; (RCC_CFGR1 & (7u << 3)) != RCC_CFGR1_SWS_PLL1; --n) {
+        if (n == 0u) { clock_fault_reset(); }
+    }
 
     // ── 7. Habilitar clocks dos GPIOs ────────────────────────────────────
     // STM32H562RGT6 (LQFP64): apenas GPIOA/B/C disponíveis no package

@@ -30,6 +30,8 @@ extern "C" void Default_Handler() __attribute__((section(".fastrun")));
 extern "C" [[noreturn]] void Reset_Handler() __attribute__((section(".fastrun")));
 
 extern "C" void Default_Handler() {
+    // Trigger SYSRESETREQ so an unhandled IRQ resets the MCU instead of hanging.
+    *reinterpret_cast<volatile uint32_t*>(0xE000ED0Cu) = 0x05FA0004u;
     while (true) { }
 }
 
