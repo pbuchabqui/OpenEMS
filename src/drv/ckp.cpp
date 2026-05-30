@@ -92,11 +92,6 @@ namespace {
 static constexpr uint16_t kRealTeethPerRev    = 58u;  // dentes físicos — uso exclusivo da máquina de estados (gap detection)
 static constexpr uint16_t kTeethPositionsPerRev = 60u; // posições angulares uniformes — uso em cálculos de RPM e ângulo
 
-// Ângulo por dente normal em miligraus (× 1000).
-// 6,0° × 1000 = 6000. Usado em ckp_angle_to_ticks().
-// NOTA: o nome kToothAngleX1000 sugere ×1000, que é "miligraus".
-static constexpr uint16_t kToothAngleX1000 = 6000u;
-
 // Mínimo de dentes contados desde o último gap para aceitar novo gap.
 // 55 << 58: descarta pulsos espúrios no início de cada revolução.
 static constexpr uint16_t kGapThresholdTooth  = 55u;
@@ -460,22 +455,6 @@ CkpSnapshot ckp_snapshot() noexcept {
     // reordenar ou cachear leituras de campos individuais de g_state.snap.
     std::memcpy(&out, &g_state.snap, sizeof(out));
     return out;
-}
-
-uint32_t ckp_angle_to_ticks(uint32_t angle_mdeg, uint32_t ref_capture) noexcept {
-    // RESERVADA: sem callers em producao. Dominio TIM5 @ 62.5 MHz. Ver header.
-    // tooth_period_ticks = tooth_period_ns / 16 ns por tick
-    // ticks_para_angulo  = (angle_mdeg × tooth_period_ticks) / kToothAngleX1000
-    //
-    // Verificação dimensional (angle_mdeg em miligraus, kToothAngleX1000 = 6000 mg/dente):
-    //   Para 6° (1 dente): angle_mdeg = 6000 → ticks = 6000 × T / 6000 = T ✓
-    //   Para 1°:           angle_mdeg = 1000 → ticks = 1000 × T / 6000 = T/6 ✓
-    //
-    // ATENÇÃO: não passar graus inteiros (ex: 6) — causará erro de 1000×.
-    const uint32_t tooth_period_ticks = g_state.snap.tooth_period_ns >> 4u;
-    const uint32_t delta = (angle_mdeg * tooth_period_ticks)
-                           / kToothAngleX1000;
-    return ref_capture + delta;
 }
 
 // ── ISR do CKP: TIM5 CH1 (PA0/CKP, rising edge) ─────────────────────────────

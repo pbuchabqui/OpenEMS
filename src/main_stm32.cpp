@@ -54,6 +54,7 @@ int main() { return 0; }
 #include "hal/flash.h"
 #include "hal/runtime_seed.h"
 #include "hal/timer.h"
+#include "hal/etb_driver.h"
 
 // =============================================================================
 // Estado de background (do firmware)
@@ -118,20 +119,13 @@ static uint32_t g_etb_loop_timer_ms = 0;
 // Utilitários
 // =============================================================================
 
-[[noreturn]] static inline void system_reset() noexcept {
-    // ARM Cortex-M33: AIRCR reset (idêntico ao M4)
-    *reinterpret_cast<volatile uint32_t*>(0xE000ED0Cu) =
-        (0x5FAu << 16u) | (1u << 2u);
-    for (;;) {}
-}
-
 static inline bool elapsed(uint32_t now, uint32_t last, uint32_t period) noexcept {
     return static_cast<uint32_t>(now - last) >= period;
 }
 
-static inline uint8_t build_status_bits(const ems::drv::CkpSnapshot& snap,
-                                        const ems::drv::SensorData& sensors) noexcept {
-    uint8_t status = 0u;
+static inline uint16_t build_status_bits(const ems::drv::CkpSnapshot& snap,
+                                           const ems::drv::SensorData& sensors) noexcept {
+    uint16_t status = 0u;
     if (snap.state == ems::drv::SyncState::FULL_SYNC) {
         status |= ems::app::STATUS_SYNC_FULL;
     }
@@ -316,11 +310,10 @@ static void openems_init() noexcept {
     // 1) PLL → 250 MHz + SysTick 1ms + IWDG 100ms
     system_stm32_init();
 
-    // 2) Timers (TIM5=CKP IC, TIM2/TIM8=OC injeção/ignição, TIM3/TIM4=PWM)
+    // 2) Timers (TIM5=CKP IC, TIM2/TIM8=OC injeção/ignição)
+    // TIM3/TIM4 PWM auxiliares são inicializados em auxiliaries_init().
     // ECU_Hardware_Init() owns TIM2/TIM8 for injection/ignition scheduling.
     ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
-    ems::hal::tim3_pwm_init(125u);  // → TIM3 PWM (IACV + Wastegate)
-    ems::hal::tim4_pwm_init(150u);  // → TIM4 PWM (VVT)
 
     // 2a) Scheduler unificado
     ::ECU_Hardware_Init();
@@ -360,11 +353,11 @@ static void openems_init() noexcept {
 
     // 6) Drivers
     ems::drv::sensors_init();
-    
+
     // 6a) Inicializa sistemas "invisíveis" ao motorista
     ems::engine::map_estimator_init();
     ems::engine::xtau_autocalib_init();
-    
+
     // 6b) Inicializa ETB e Torque Manager (borboleta eletrônica)
     g_etb_initialized = etb_control_init();
     torque_manager_init();
@@ -407,6 +400,7 @@ int main() {
     uint32_t g_t50ms_  = g_t2ms_;
     uint32_t g_t100ms_ = g_t2ms_;
     uint32_t g_t500ms_ = g_t2ms_;
+    uint32_t g_t_etb_ms = g_t2ms_;
 
     for (;;) {
         // ── Watchdog kick (primeiro statement) ───────────────────────────
@@ -680,6 +674,16 @@ int main() {
                     ae_active, rev_cut);
                 g_ae_active = false;
                 g_last_stft_pct = clamp_i8(static_cast<int16_t>(stft / 10), -25, 25);
+
+                // X-tau autocalibration (100ms lambda-gated)
+                const bool xtau_learning_ok = (stft >= -500 && stft <= 500 &&
+                    lambda_valid && snap.rpm_x10 >= 2000u);
+                ems::engine::xtau_autocal_tick(
+                    now, stft, sensors.clt_degc_x10, xtau_learning_ok);
+                if (ems::engine::xtau_autocal_is_dirty()) {
+                    ems::engine::xtau_autocal_apply_learned_tables();
+                    ems::engine::xtau_autocal_clear_dirty();
+                }
             } else {
                 g_last_stft_pct = 0;
             }
@@ -750,6 +754,20 @@ int main() {
             if (!engine_running_fast) {
                 adaptive_flush_pending = !ems::hal::nvm_flush_adaptive_maps();
             }
+        }
+
+        // ── ETB control (2ms cadence) ─────────────────────────────────────
+        if (elapsed(now, g_t_etb_ms, 2u)) {
+            g_t_etb_ms = now;
+            const auto sensors_etb = ems::drv::sensors_get();
+            const auto snap_etb = ems::drv::ckp_snapshot();
+            const bool etb_rev_cut = g_limp_active && (snap_etb.rpm_x10 > kLimpRpmLimit_x10);
+            const auto torque_out = ems::engine::torque_manager_update(
+                snap_etb, sensors_etb, true, g_limp_active, etb_rev_cut,
+                ems::engine::auxiliaries_idle_target_rpm_x10(sensors_etb.clt_degc_x10), 2u);
+            (void)ems::engine::etb_control_update(
+                torque_out.etb_target_pct_x10, sensors_etb.etb_tps_pct_x10,
+                torque_out.etb_enable_request, 2u);
         }
     }
 }

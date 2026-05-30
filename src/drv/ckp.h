@@ -68,26 +68,6 @@ struct CkpSnapshot {
  */
 CkpSnapshot ckp_snapshot() noexcept;
 
-/**
- * @brief Converte ângulo de virabrequim em tick-alvo no domínio TIM5.
- *
- * @param angle_mdeg  Ângulo em MILIGRAUS (×1000 de graus inteiros).
- *                    Ex: 6000 = 6,0°; 60000 = 60,0°.
- *                    ATENÇÃO: passar graus inteiros causa erro de 1000×.
- * @param ref_capture Timestamp TIM5 do dente de referência
- *                    (tipicamente snap.last_tim5_capture).
- * @return            Valor CnV para TIM5 — NÃO compatível com scheduler.
- *
- * DOMÍNIO DE CLOCK: TIM5 @ 62.5 MHz (PS=4, 16 ns/tick).
- * scheduler usa TIM2/TIM8 e deve converter explicitamente entre dominios.
- *
- * STATUS (2026-03): Sem callers em produção. O pipeline ecu_sched deriva
- * ângulo→ticks no domínio scheduler via g_ticks_per_rev (ecu_sched.cpp,
- * Calculate_Sequential_Cycle). Reservada para uso futuro em saídas
- * CKP-síncronas (tach-out, came via TIM5 output-compare).
- */
-uint32_t ckp_angle_to_ticks(uint32_t angle_mdeg, uint32_t ref_capture) noexcept;
-
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 // Chamados pela ISR de CKP a cada dente (símbolos fracos — sobrescreva para
 // adicionar comportamento sem modificar este módulo).

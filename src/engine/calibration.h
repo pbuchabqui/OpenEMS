@@ -62,4 +62,32 @@ extern uint16_t idle_spark_rpm_per_deg_x10;
 extern int16_t idle_spark_retard_limit_deg;
 extern int16_t idle_spark_advance_limit_deg;
 
+extern uint16_t app1_raw_min;
+extern uint16_t app1_raw_max;
+extern uint16_t app2_raw_min;
+extern uint16_t app2_raw_max;
+extern uint16_t etb_tps1_raw_min;
+extern uint16_t etb_tps1_raw_max;
+extern uint16_t etb_tps2_raw_min;
+extern uint16_t etb_tps2_raw_max;
+extern uint16_t app_max_delta_pct_x10;
+extern uint16_t etb_max_delta_pct_x10;
+extern uint16_t etb_max_open_pct_x10_limp;
+extern uint16_t etb_max_rate_pct_per_s;
+extern uint16_t etb_idle_open_pct_x10;
+extern uint16_t etb_kp_x10;
+extern uint16_t etb_ki_x10;
+extern uint16_t etb_kd_x10;
+extern uint8_t  etb_cal_valid;
+extern uint8_t  etb_harness_present;
+
+extern uint8_t  xtau_autocal_enabled;
+extern uint8_t  xtau_autocal_active;
+extern int8_t   xtau_autocal_tau_delta[kCorrectionTableSize];
+
+void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;
+void sync_etb_calibration_to_page(uint8_t* page, uint16_t len) noexcept;
+void apply_xtau_autocal_from_page(const uint8_t* page, uint16_t len) noexcept;
+void sync_xtau_autocal_to_page(uint8_t* page, uint16_t len) noexcept;
+
 }  // namespace ems::engine

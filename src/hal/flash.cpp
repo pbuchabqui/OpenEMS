@@ -62,6 +62,7 @@ static constexpr uint32_t kSectorLtft  = 0u;   // Setor 0: LTFT + knock
 static constexpr uint32_t kSectorCal0  = 1u;   // Setor 1: Cal page 0
 static constexpr uint32_t kSectorCal1  = 2u;   // Setor 2: Cal page 1
 static constexpr uint32_t kSectorCal2  = 3u;   // Setor 3: Cal page 2
+static constexpr uint32_t kSectorCal6  = 7u;   // Setor 7: Cal page 6 (ETB)
 
 static constexpr uint32_t kBank2Base   = FLASH_BANK2_BASE;
 static constexpr uint32_t kSectorSize  = FLASH_SECTOR_SIZE;
@@ -202,9 +203,9 @@ void nvm_reset_knock_map() noexcept {
 // ── Calibração (páginas) ──────────────────────────────────────────────────────
 
 bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexcept {
-    if (page > 5u || data == nullptr || len == 0u) { return false; }
+    if (page > 6u || data == nullptr || len == 0u) { return false; }
 
-    const uint32_t sector = kSectorCal0 + page;
+    const uint32_t sector = (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
     const uint32_t dest   = kBank2Base + sector * kSectorSize;
 
     // Arredondar len para múltiplo de 4
@@ -229,9 +230,9 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
 }
 
 bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept {
-    if (page > 5u || data == nullptr || len == 0u) { return false; }
+    if (page > 6u || data == nullptr || len == 0u) { return false; }
 
-    const uint32_t sector = kSectorCal0 + page;
+    const uint32_t sector = (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
     const uint32_t src    = kBank2Base + sector * kSectorSize;
 
     // Leitura direta da Flash (mapeada em memória)

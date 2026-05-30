@@ -22,7 +22,7 @@ void can_stack_process(uint32_t now_ms,
                        int8_t  stft_pct,
                        uint8_t vvt_intake_pct,
                        uint8_t vvt_exhaust_pct,
-                       uint8_t status_bits) noexcept;
+                       uint16_t status_bits) noexcept;
 
 // Lambda × 1000 do último frame WBO2 recebido (raw, sem fallback)
 uint16_t can_stack_lambda_milli() noexcept;

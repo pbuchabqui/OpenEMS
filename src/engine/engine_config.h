@@ -18,9 +18,16 @@ inline constexpr uint16_t kDefaultSoiLeadDeg = 62u;
 inline constexpr uint16_t kIvcAbdcDeg = 50u;
 
 // Ângulo do motor quando o decodificador CKP está em tooth_index 0.
-// 0 mantém o comportamento atual: tooth 0 coincide com TDC do cilindro 0.
-// Ex.: se tooth 0 ocorre 84° antes do TDC, usar 636° (720 - 84).
+// ASSUNÇÃO CRÍTICA: 0 mantém o comportamento atual: tooth 0 coincide com TDC do
+// cilindro 0. Se o trigger wheel for montado com offset físico (ex: 84° antes
+// do TDC), TODOS os ângulos de spark/injeção estarão errados.
+// Ao calibrar para motor real:
+//   - Medir o offset entre tooth 0 e TDC do cilindro 0
+//   - Ajustar para: kTriggerTooth0EngineDeg = (720 - offset_deg) % 720
+//   - Ex: offset 84° antes do TDC → kTriggerTooth0EngineDeg = 636
 inline constexpr uint16_t kTriggerTooth0EngineDeg = 0u;
+static_assert(kTriggerTooth0EngineDeg < 720u,
+    "kTriggerTooth0EngineDeg deve estar em [0, 720) graus de virabrequim");
 
 inline constexpr uint8_t kFiringOrder[kCylinderCount] = {0u, 2u, 3u, 1u};
 

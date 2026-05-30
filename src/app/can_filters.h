@@ -26,7 +26,7 @@ struct CanMessageRoute {
 void can_filters_init() noexcept;
 void can_filters_add(const CanMessageRoute& route) noexcept;
 void can_filters_remove(uint16_t frame_id) noexcept;
-bool can_filters_should_accept(uint16_t frame_id, uint8_t dlc) noexcept;
+bool can_filters_should_accept(uint16_t frame_id) noexcept;
 
 // Priority-based routing (determines which handler processes message)
 uint8_t can_filter_get_priority(uint16_t frame_id) noexcept;

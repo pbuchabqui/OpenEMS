@@ -159,6 +159,37 @@ void tim4_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// TIM1 — ETB PWM (PA8 CH1)
+// ════════════════════════════════════════════════════════════════════════════
+
+void tim1_etb_pwm_init(uint32_t freq_hz) {
+    RCC_APB2ENR |= RCC_APB2ENR_TIM1EN;
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN;
+
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 8u, GPIO_AF1);
+
+    uint32_t arr = kTimClockHz / freq_hz;
+    if (arr > 0xFFFFu) { arr = 0xFFFFu; }
+    if (arr > 0u) { arr -= 1u; }
+
+    TIM1_CR1 = 0u;
+    TIM1_PSC = 0u;
+    TIM1_ARR = arr;
+    TIM1_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
+    TIM1_CCER = TIM_CCER_CC1E;
+    TIM1_CCR1 = 0u;
+    TIM1_BDTR = (1u << 15);  // MOE
+    TIM1_EGR = 1u;
+    TIM1_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;
+}
+
+void tim1_etb_set_duty_x10(uint16_t duty_pct_x10) noexcept {
+    const uint32_t arr = TIM1_ARR;
+    const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
+    TIM1_CCR1 = ccr;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // ISR Handlers
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -246,6 +277,8 @@ void tim3_pwm_init(uint32_t) {}
 void tim4_pwm_init(uint32_t) {}
 void tim3_set_duty(uint8_t, uint16_t) noexcept {}
 void tim4_set_duty(uint8_t, uint16_t) noexcept {}
+void tim1_etb_pwm_init(uint32_t) {}
+void tim1_etb_set_duty_x10(uint16_t) noexcept {}
 uint32_t tim5_count() noexcept { return g_mock_tim5_cnt; }
 } // namespace ems::hal
 
