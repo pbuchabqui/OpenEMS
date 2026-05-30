@@ -58,6 +58,8 @@ int16_t g_ltft_pct_x10[ems::engine::kTableAxisSize][ems::engine::kTableAxisSize]
 // LTFT aditivo: offset em µs, indexado 0-7 (rpm_idx>>1, map_idx>>1)
 int16_t g_ltft_add_us[8][8] = {};
 bool g_decel_cut = false;
+// Referência barométrica: inicializada com map_ref estático, atualizada no key-on
+static uint16_t g_baro_bar_x100 = ems::engine::cfg::kMapRefBarX100;
 LambdaHistorySample g_lambda_history[kLambdaHistorySize] = {};
 uint8_t g_lambda_history_pos = 0u;
 
@@ -402,8 +404,13 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
         const uint64_t num = static_cast<uint64_t>(req_fuel_us) *
                              static_cast<uint64_t>(ve) *
                              static_cast<uint64_t>(map_bar_x100);
+        // Denominador usa baro dinâmico (MS42 TI_FAC_ALTI): MAP/baro em vez de MAP/100.
+        // A altitude reduz o baro → denominador menor → PW sobe para compensar VE
+        // não calibrada na altitude (WOT a 0.90bar não é igual a 90% carga no nível do mar).
+        const uint16_t baro = (g_baro_bar_x100 >= 70u && g_baro_bar_x100 <= 110u)
+                              ? g_baro_bar_x100 : cfg::g_eng_cfg.map_ref_bar_x100;
         base_pw_us = static_cast<uint32_t>(
-            num / (100u * static_cast<uint64_t>(cfg::g_eng_cfg.map_ref_bar_x100)));
+            num / (100u * static_cast<uint64_t>(baro)));
         if (base_pw_us > 100000u) {
             base_pw_us = 100000u;
         }
@@ -632,6 +639,19 @@ int16_t fuel_get_ltft_add_us(uint8_t map_idx, uint8_t rpm_idx) noexcept {
         return 0;
     }
     return g_ltft_add_us[map_idx >> 1u][rpm_idx >> 1u];
+}
+
+// ── Compensação barométrica (MS42 TI_FAC_ALTI) ───────────────────────────────
+
+void fuel_set_baro_bar_x100(uint16_t baro) noexcept {
+    // Clamp: aceita apenas valores plausíveis de pressão barométrica
+    // 70 = 700 mbar (≈5000m altitude) … 110 = 1100 mbar (abaixo do nível do mar)
+    if (baro < 70u || baro > 110u) { return; }
+    g_baro_bar_x100 = baro;
+}
+
+uint16_t fuel_get_baro_bar_x100() noexcept {
+    return g_baro_bar_x100;
 }
 
 // ── Corte de combustível na desaceleração (MS42 TI_PUR) ──────────────────────

@@ -44,6 +44,8 @@ int main() { return 0; }
 #include "engine/ign_calc.h"
 #include "engine/knock.h"
 #include "engine/map_estimator.h"
+#include "engine/diagnostic_manager.h"
+#include "engine/misfire_detect.h"
 #include "engine/quick_crank.h"
 #include "engine/torque_manager.h"
 #include "engine/transient_fuel.h"
@@ -83,6 +85,9 @@ static bool g_runtime_seed_saved_for_stop = false;
 static bool g_runtime_seed_arm_window_active = false;
 static bool g_ae_active = false;
 static uint32_t g_last_net_pw_us = 0u;
+// Barometric correction: amostrar MAP quando motor parado por >300ms após key-on
+static uint32_t g_baro_stopped_since_ms = 0u;
+static bool     g_baro_sampled          = false;
 static uint32_t g_zero_rpm_since_ms = 0u;
 static uint32_t g_runtime_seed_arm_window_start_ms = 0u;
 static uint16_t g_prev_tps_pct_x10 = 0u;
@@ -375,6 +380,7 @@ static void openems_init() noexcept {
     ems::engine::fuel_reset_adaptives();
     ems::engine::auxiliaries_init();
     ems::engine::knock_init();
+    ems::engine::misfire_init();
     ems::engine::quick_crank_reset();
 
     // 8) Aplicação
@@ -710,12 +716,49 @@ int main() {
             ems::drv::sensors_tick_50ms();
         }
 
-        // ── 100ms: sensores + STFT ───────────────────────────────────────
+        // ── 100ms: sensores + STFT + misfire report + baro ──────────────
         if (elapsed(now, g_t100ms_, 100u)) {
             g_t100ms_ = now;
             ems::drv::sensors_tick_100ms();
             const auto snap    = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
+
+            // Compensação barométrica: amostrar MAP enquanto motor parado.
+            // Aguarda 300ms estabilizado antes de aceitar a leitura (ADC settle).
+            if (snap.rpm_x10 == 0u) {
+                if (g_baro_stopped_since_ms == 0u) {
+                    g_baro_stopped_since_ms = now;
+                    g_baro_sampled = false;
+                } else if (!g_baro_sampled &&
+                           (now - g_baro_stopped_since_ms) >= 300u) {
+                    const uint16_t map_baro = clamp_u16(
+                        static_cast<uint16_t>(sensors.map_bar_x1000 / 10u),
+                        70u, 110u);
+                    ems::engine::fuel_set_baro_bar_x100(map_baro);
+                    g_baro_sampled = true;
+                }
+            } else {
+                g_baro_stopped_since_ms = 0u;
+            }
+
+            // Misfire: reporte de DTCs acumulados no período de 100ms
+            if (snap.state == ems::drv::SyncState::FULL_SYNC) {
+                constexpr ems::engine::DiagnosticCode kMisfireCodes[4] = {
+                    ems::engine::DiagnosticCode::MISFIRE_CYLINDER_1,
+                    ems::engine::DiagnosticCode::MISFIRE_CYLINDER_2,
+                    ems::engine::DiagnosticCode::MISFIRE_CYLINDER_3,
+                    ems::engine::DiagnosticCode::MISFIRE_CYLINDER_4,
+                };
+                for (uint8_t c = 0u; c < 4u; ++c) {
+                    if (ems::engine::misfire_get_event_count(c) >=
+                        ems::engine::kMisfireFaultThreshold) {
+                        ems::engine::DiagnosticManager::report_fault(
+                            kMisfireCodes[c],
+                            ems::engine::FaultSeverity::WARNING);
+                        ems::engine::misfire_clear_events(c);
+                    }
+                }
+            }
 
             if (snap.state == ems::drv::SyncState::FULL_SYNC) {
                 const uint16_t map_bar_x100 = clamp_u16(

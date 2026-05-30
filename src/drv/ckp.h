@@ -75,10 +75,12 @@ CkpSnapshot ckp_snapshot() noexcept;
 // sensors_on_tooth  → drv/sensors.cpp  (amostragem sincronizada ao dente)
 // schedule_on_tooth → engine/ecu_sched.cpp (agendamento injeção/ignição)
 // prime_on_tooth    → engine/quick_crank.cpp (prime pulse — 5º dente de cranking)
+// misfire_on_tooth  → engine/misfire_detect.cpp (detecção de falha de combustão)
 
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept;
 void schedule_on_tooth(const CkpSnapshot& snap) noexcept;
 void prime_on_tooth(const CkpSnapshot& snap) noexcept;
+void misfire_on_tooth(const CkpSnapshot& snap) noexcept;
 
 // ── ISR handlers (chamados de hal/stm32h562/timer.cpp) ────────────────────────────────────
 void ckp_tim5_ch1_isr() noexcept;   ///< CKP rising edge (TIM5 CH1 / PA0)

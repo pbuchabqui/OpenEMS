@@ -500,6 +500,11 @@ __attribute__((weak))
 #endif
 void prime_on_tooth(const CkpSnapshot& snap) noexcept { static_cast<void>(snap); }
 
+#if defined(__GNUC__)
+__attribute__((weak))
+#endif
+void misfire_on_tooth(const CkpSnapshot& snap) noexcept { static_cast<void>(snap); }
+
 }  // namespace ems::drv
 
 // ── API pública ───────────────────────────────────────────────────────────────
@@ -646,6 +651,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     sensors_on_tooth(g_state.snap);
     schedule_on_tooth(g_state.snap);
     prime_on_tooth(g_state.snap);
+    misfire_on_tooth(g_state.snap);
 }
 
 // ── ISR do cam sensor: TIM5 CH2 (PA1/CMP, rising edge) ──────────────────────

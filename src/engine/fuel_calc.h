@@ -125,4 +125,10 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
 bool fuel_decel_cut_active() noexcept;
 void fuel_decel_cut_reset() noexcept;
 
+// Compensação barométrica (MS42 TI_FAC_ALTI).
+// Leitura do MAP com motor parado → referência dinâmica de pressão atmosférica.
+// Clamp de segurança: [70, 110] centibares (700–1100 mbar).
+void     fuel_set_baro_bar_x100(uint16_t baro) noexcept;
+uint16_t fuel_get_baro_bar_x100() noexcept;
+
 }  // namespace ems::engine
