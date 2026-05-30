@@ -20,10 +20,17 @@ struct InjScheduleParams {
 };
 
 struct AdvanceCorrections {
-    int16_t iat_deg;
-    int16_t clt_deg;
-    int16_t knock_retard_deg;
+    int16_t iat_deg;             // corrección IAT (negativo = atraso por ar quente)
+    int16_t clt_deg;             // corrección CLT (negativo = atraso para aquecimento do cat.)
+    int16_t knock_retard_deg;    // subtracted: retardo de detonação
+    int16_t idle_spark_deg;      // corrección de marcha lenta (positivo = avança)
+    int16_t antijerk_retard_deg; // subtracted: retardo anti-jerk no tip-in
 };
+
+int16_t calc_ign_iat_correction_deg(int16_t iat_x10) noexcept;
+int16_t calc_ign_clt_correction_deg(int16_t clt_x10) noexcept;
+int16_t calc_antijerk_retard_deg(bool ae_active) noexcept;
+void    antijerk_reset() noexcept;
 
 int16_t get_advance(uint32_t rpm_x10, uint16_t load_bar_x100) noexcept;
 int16_t get_advance_prepared(const Table2dLookup& lookup) noexcept;

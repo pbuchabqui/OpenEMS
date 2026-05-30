@@ -52,10 +52,12 @@ static uint32_t runtime_seed_crc32(const ems::hal::RuntimeSyncSeed& seed) noexce
 
 // ── Buffers SRAM para LTFT e Knock maps ─────────────────────────────────────
 // Espelham os dados da Flash; modificados em RAM e flushed periodicamente.
-static int8_t  g_ltft_ram[16][16] = {};     // 256 bytes
-static int8_t  g_knock_ram[8][8]  = {};     // 64 bytes
-static bool    g_ltft_dirty  = false;
-static bool    g_knock_dirty = false;
+static int8_t  g_ltft_ram[16][16] = {};     // 256 bytes  @ offset 0
+static int8_t  g_knock_ram[8][8]  = {};     // 64 bytes   @ offset 256
+static int8_t  g_ltft_add_ram[8][8] = {};   // 64 bytes   @ offset 320 (50µs/count)
+static bool    g_ltft_dirty     = false;
+static bool    g_knock_dirty    = false;
+static bool    g_ltft_add_dirty = false;
 
 // ── Endereços dos setores Bank2 ───────────────────────────────────────────────
 static constexpr uint32_t kSectorLtft  = 0u;   // Setor 0: LTFT + knock
@@ -162,21 +164,47 @@ bool nvm_load_adaptive_maps() noexcept {
     std::memcpy(g_knock_ram,
                 reinterpret_cast<const void*>(kBank2Base + 256u),
                 sizeof(g_knock_ram));
+    std::memcpy(g_ltft_add_ram,
+                reinterpret_cast<const void*>(kBank2Base + 320u),
+                sizeof(g_ltft_add_ram));
+
     bool erased = true;
     const uint8_t* ltft_bytes = reinterpret_cast<const uint8_t*>(g_ltft_ram);
     for (uint16_t i = 0u; i < sizeof(g_ltft_ram); ++i) {
-        if (ltft_bytes[i] != 0xFFu) {
-            erased = false;
-            break;
-        }
+        if (ltft_bytes[i] != 0xFFu) { erased = false; break; }
     }
     if (erased) {
         std::memset(g_ltft_ram, 0, sizeof(g_ltft_ram));
         std::memset(g_knock_ram, 0, sizeof(g_knock_ram));
     }
-    g_ltft_dirty = false;
-    g_knock_dirty = false;
+
+    bool add_erased = true;
+    const uint8_t* add_bytes = reinterpret_cast<const uint8_t*>(g_ltft_add_ram);
+    for (uint16_t i = 0u; i < sizeof(g_ltft_add_ram); ++i) {
+        if (add_bytes[i] != 0xFFu) { add_erased = false; break; }
+    }
+    if (add_erased) {
+        std::memset(g_ltft_add_ram, 0, sizeof(g_ltft_add_ram));
+    }
+
+    g_ltft_dirty     = false;
+    g_knock_dirty    = false;
+    g_ltft_add_dirty = false;
     return true;
+}
+
+bool nvm_write_ltft_add(uint8_t rpm_i, uint8_t load_i, int8_t val_50us) noexcept {
+    if (rpm_i >= 8u || load_i >= 8u) { return false; }
+    if (g_ltft_add_ram[rpm_i][load_i] != val_50us) {
+        g_ltft_add_ram[rpm_i][load_i] = val_50us;
+        g_ltft_add_dirty = true;
+    }
+    return true;
+}
+
+int8_t nvm_read_ltft_add(uint8_t rpm_i, uint8_t load_i) noexcept {
+    if (rpm_i >= 8u || load_i >= 8u) { return 0; }
+    return g_ltft_add_ram[rpm_i][load_i];
 }
 
 // ── Knock map ─────────────────────────────────────────────────────────────────
@@ -257,23 +285,26 @@ bool nvm_flush_adaptive_maps() noexcept {
     const auto fail = []() noexcept {
         FLASH_CR2 &= ~(FLASH_CR_PG | FLASH_CR_SER | (0xFu << FLASH_CR_SNB_SHIFT));
         flash_lock_bank2();
-        g_ltft_dirty = true;
-        g_knock_dirty = true;
+        g_ltft_dirty     = true;
+        g_knock_dirty    = true;
+        g_ltft_add_dirty = true;
         return false;
     };
 
     if (state == FlushState::Idle) {
-        if (!g_ltft_dirty && !g_knock_dirty) { return true; }
+        if (!g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty) { return true; }
 
-        // Setor 0 contém LTFT, Knock e RuntimeSyncSeed. Preserva o restante.
+        // Setor 0 contém LTFT, Knock, LTFT-add e RuntimeSyncSeed. Preserva o restante.
         std::memcpy(sector_buf,
                     reinterpret_cast<const void*>(kBank2Base),
                     sizeof(sector_buf));
 
-        std::memcpy(sector_buf + 0,   g_ltft_ram,  256u);
-        std::memcpy(sector_buf + 256, g_knock_ram, 64u);
-        g_ltft_dirty = false;
-        g_knock_dirty = false;
+        std::memcpy(sector_buf + 0,   g_ltft_ram,     256u);
+        std::memcpy(sector_buf + 256, g_knock_ram,     64u);
+        std::memcpy(sector_buf + 320, g_ltft_add_ram,  64u);
+        g_ltft_dirty     = false;
+        g_knock_dirty    = false;
+        g_ltft_add_dirty = false;
 
         flash_unlock_bank2();
         FLASH_CCR2 = 0xFFFFFFFFu;
@@ -325,7 +356,7 @@ bool nvm_flush_adaptive_maps() noexcept {
         FLASH_CR2 &= ~FLASH_CR_PG;
         flash_lock_bank2();
         state = FlushState::Idle;
-        return !g_ltft_dirty && !g_knock_dirty;
+        return !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty;
     }
 
     return false;
@@ -374,9 +405,10 @@ namespace ems::hal {
 
 static constexpr uint8_t kTestSeedSlots = 8u;
 
-static int8_t g_ltft[16][16] = {};
-static int8_t g_knock[8][8]  = {};
-static uint8_t g_cal[6][512]  = {};
+static int8_t g_ltft[16][16]     = {};
+static int8_t g_knock[8][8]      = {};
+static int8_t g_ltft_add[8][8]   = {};
+static uint8_t g_cal[6][512]     = {};
 static uint32_t g_erase_cnt   = 0u, g_prog_cnt = 0u;
 static bool     g_flash_busy      = false;  // simulates flash BSY timeout when set
 static uint32_t g_flash_busy_polls = 0u;     // non-zero → simulate timeout on next op
@@ -405,6 +437,14 @@ int8_t nvm_read_knock(uint8_t r, uint8_t l) noexcept {
     return g_knock[r][l];
 }
 void nvm_reset_knock_map() noexcept { std::memset(g_knock, 0, sizeof(g_knock)); }
+bool nvm_write_ltft_add(uint8_t r, uint8_t l, int8_t v) noexcept {
+    if (r >= 8u || l >= 8u) { return false; }
+    g_ltft_add[r][l] = v; return true;
+}
+int8_t nvm_read_ltft_add(uint8_t r, uint8_t l) noexcept {
+    if (r >= 8u || l >= 8u) { return 0; }
+    return g_ltft_add[r][l];
+}
 
 bool nvm_save_calibration(uint8_t pg, const uint8_t* d, uint16_t l) noexcept {
     if (pg > 5u || d == nullptr || l == 0u) return false;

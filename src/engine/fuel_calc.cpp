@@ -2,6 +2,7 @@
 #include "engine/calibration.h"
 #include "engine/engine_config.h"
 #include "engine/math_utils.h"
+#include "engine/table3d.h"
 #include "hal/flash.h"
 
 #include <cstdint>
@@ -54,12 +55,28 @@ int32_t g_ae_pulse_us = 0;
 int16_t g_stft_pct_x10 = 0;
 int32_t g_stft_integrator_x10 = 0;
 int16_t g_ltft_pct_x10[ems::engine::kTableAxisSize][ems::engine::kTableAxisSize] = {};
+// LTFT aditivo: offset em µs, indexado 0-7 (rpm_idx>>1, map_idx>>1)
+int16_t g_ltft_add_us[8][8] = {};
 LambdaHistorySample g_lambda_history[kLambdaHistorySize] = {};
 uint8_t g_lambda_history_pos = 0u;
 
 int16_t fuel_ltft_load_cell(uint8_t map_idx, uint8_t rpm_idx) noexcept {
     const int8_t stored_pct = ems::hal::nvm_read_ltft(rpm_idx, map_idx);
     return static_cast<int16_t>(stored_pct) * 10;
+}
+
+int16_t fuel_ltft_add_load_cell(uint8_t map_idx, uint8_t rpm_idx) noexcept {
+    const int8_t stored = ems::hal::nvm_read_ltft_add(rpm_idx >> 1u, map_idx >> 1u);
+    return static_cast<int16_t>(stored) * 50;  // 50 µs/count
+}
+
+void fuel_ltft_add_store_cell(uint8_t map_idx, uint8_t rpm_idx, int16_t value_us) noexcept {
+    const int16_t clamped = clamp_i16(value_us, -6350, 6350);
+    const int16_t rounded = static_cast<int16_t>(
+        clamped >= 0 ? (clamped + 25) / 50 : (clamped - 25) / 50);
+    const bool ok = ems::hal::nvm_write_ltft_add(
+        rpm_idx >> 1u, map_idx >> 1u, static_cast<int8_t>(rounded));
+    if (!ok) { ++g_nvm_write_faults; }
 }
 
 void fuel_ltft_store_cell(uint8_t map_idx, uint8_t rpm_idx, int16_t value_x10) noexcept {
@@ -486,6 +503,13 @@ void fuel_reset_adaptives() noexcept {
             g_ltft_pct_x10[y][x] = fuel_ltft_load_cell(y, x);
         }
     }
+    for (uint8_t y = 0u; y < 8u; ++y) {
+        for (uint8_t x = 0u; x < 8u; ++x) {
+            // Carrega via índice 16×16 equivalente (dobra o índice)
+            g_ltft_add_us[y][x] = fuel_ltft_add_load_cell(
+                static_cast<uint8_t>(y << 1u), static_cast<uint8_t>(x << 1u));
+        }
+    }
 }
 
 void fuel_lambda_delay_reset() noexcept {
@@ -507,7 +531,8 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                          int16_t clt_x10,
                          bool o2_valid,
                          bool ae_active,
-                         bool rev_cut) noexcept {
+                         bool rev_cut,
+                         uint32_t net_pw_us) noexcept {
     if (!closed_loop_allowed(clt_x10, o2_valid, ae_active, rev_cut)) {
         g_stft_integrator_x10 = (g_stft_integrator_x10 * 15) / 16;
         g_stft_pct_x10 = static_cast<int16_t>((g_stft_pct_x10 * 15) / 16);
@@ -530,12 +555,24 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     const uint8_t rpm_idx = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
     const uint8_t map_idx = table_axis_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
 
-    int16_t& cell = g_ltft_pct_x10[map_idx][rpm_idx];
-    cell = static_cast<int16_t>(cell + (g_stft_pct_x10 - cell) / 64);
-    // Clamp explícito: impede acumulação ilimitada quando fuel_ltft_store_cell
-    // é no-op (implementação futura). Limite igual ao do STFT para consistência.
-    cell = clamp_i16(cell, -kStftClampX10, kStftClampX10);
-    fuel_ltft_store_cell(map_idx, rpm_idx, cell);
+    if (net_pw_us > 0u && net_pw_us < static_cast<uint32_t>(ltft_add_pw_threshold_us)) {
+        // PW pequeno: erros de offset do injetor dominam — integrar LTFT aditivo.
+        // Converte correção percentual em µs: error_us = stft_pct × net_pw / 100
+        const int32_t error_us = (static_cast<int32_t>(g_stft_pct_x10) *
+                                  static_cast<int32_t>(net_pw_us)) / 1000;  // x10 → /1000
+        const uint8_t ri = rpm_idx >> 1u;
+        const uint8_t mi = map_idx >> 1u;
+        int16_t& cell_add = g_ltft_add_us[mi][ri];
+        cell_add = clamp_i16(
+            static_cast<int16_t>(cell_add + (error_us - cell_add) / 64), -6350, 6350);
+        fuel_ltft_add_store_cell(map_idx, rpm_idx, cell_add);
+    } else {
+        // PW normal: integrar LTFT multiplicativo (comportamento original).
+        int16_t& cell = g_ltft_pct_x10[map_idx][rpm_idx];
+        cell = static_cast<int16_t>(cell + (g_stft_pct_x10 - cell) / 64);
+        cell = clamp_i16(cell, -kStftClampX10, kStftClampX10);
+        fuel_ltft_store_cell(map_idx, rpm_idx, cell);
+    }
 
     return g_stft_pct_x10;
 }
@@ -548,7 +585,8 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  int16_t clt_x10,
                                  bool o2_valid,
                                  bool ae_active,
-                                 bool rev_cut) noexcept {
+                                 bool rev_cut,
+                                 uint32_t net_pw_us) noexcept {
     lambda_history_push(now_ms, rpm_x10, map_bar_x100, lambda_target_x1000);
 
     const uint16_t delay_ms = lambda_delay_ms_from_rpm_load(rpm_x10, map_bar_x100);
@@ -561,7 +599,8 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                 clt_x10,
                                 false,
                                 ae_active,
-                                rev_cut);
+                                rev_cut,
+                                net_pw_us);
     }
 
     return fuel_update_stft(delayed.rpm_x10,
@@ -571,7 +610,8 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                             clt_x10,
                             o2_valid,
                             ae_active,
-                            rev_cut);
+                            rev_cut,
+                            net_pw_us);
 }
 
 int16_t fuel_get_stft_pct_x10() noexcept {
@@ -583,6 +623,13 @@ int16_t fuel_get_ltft_pct_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept {
         return 0;
     }
     return g_ltft_pct_x10[map_idx][rpm_idx];
+}
+
+int16_t fuel_get_ltft_add_us(uint8_t map_idx, uint8_t rpm_idx) noexcept {
+    if (map_idx >= kTableAxisSize || rpm_idx >= kTableAxisSize) {
+        return 0;
+    }
+    return g_ltft_add_us[map_idx >> 1u][rpm_idx >> 1u];
 }
 
 }  // namespace ems::engine

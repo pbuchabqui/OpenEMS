@@ -97,7 +97,8 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                          int16_t clt_x10,
                          bool o2_valid,
                          bool ae_active,
-                         bool rev_cut) noexcept;
+                         bool rev_cut,
+                         uint32_t net_pw_us) noexcept;
 
 int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  uint32_t rpm_x10,
@@ -107,9 +108,12 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  int16_t clt_x10,
                                  bool o2_valid,
                                  bool ae_active,
-                                 bool rev_cut) noexcept;
+                                 bool rev_cut,
+                                 uint32_t net_pw_us) noexcept;
 
 int16_t fuel_get_stft_pct_x10() noexcept;
 int16_t fuel_get_ltft_pct_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
+// LTFT aditivo: retorna offset em µs (negativo = redução de PW)
+int16_t fuel_get_ltft_add_us(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 
 }  // namespace ems::engine

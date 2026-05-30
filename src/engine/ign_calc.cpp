@@ -6,6 +6,8 @@
 
 namespace {
 
+static uint8_t g_antijerk_cycles_rem = 0u;
+
 uint16_t normalize_7200(int32_t deg_x10) noexcept {
     int32_t out = deg_x10 % 7200;
     if (out < 0) {
@@ -63,11 +65,41 @@ int16_t clamp_advance_deg(int16_t advance_deg) noexcept {
     return clamp_i16(advance_deg, -10, 40);
 }
 
+int16_t calc_ign_iat_correction_deg(int16_t iat_x10) noexcept {
+    return interp_i16_8pt(iat_spark_axis_x10, iat_spark_corr_deg,
+                          kCorrectionTableSize, iat_x10);
+}
+
+int16_t calc_ign_clt_correction_deg(int16_t clt_x10) noexcept {
+    return interp_i16_8pt(clt_spark_axis_x10, clt_spark_corr_deg,
+                          kCorrectionTableSize, clt_x10);
+}
+
+int16_t calc_antijerk_retard_deg(bool ae_active) noexcept {
+    if (ae_active && g_antijerk_cycles_rem == 0u) {
+        g_antijerk_cycles_rem = antijerk_decay_cycles;
+    }
+    if (g_antijerk_cycles_rem > 0u) {
+        --g_antijerk_cycles_rem;
+        return antijerk_retard_deg;
+    }
+    return 0;
+}
+
+void antijerk_reset() noexcept {
+    g_antijerk_cycles_rem = 0u;
+}
+
 int16_t calc_total_advance(int16_t base_advance_deg,
                            AdvanceCorrections corr) noexcept {
-    const int16_t total = static_cast<int16_t>(
-        base_advance_deg + corr.iat_deg + corr.clt_deg - corr.knock_retard_deg);
-    return clamp_advance_deg(total);
+    const int32_t total = static_cast<int32_t>(base_advance_deg)
+        + corr.iat_deg
+        + corr.clt_deg
+        + corr.idle_spark_deg
+        - corr.knock_retard_deg
+        - corr.antijerk_retard_deg;
+    return clamp_advance_deg(static_cast<int16_t>(
+        total < -32768 ? -32768 : total > 32767 ? 32767 : total));
 }
 
 int16_t calc_idle_spark_correction_deg(uint32_t rpm_x10,

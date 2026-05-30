@@ -82,6 +82,7 @@ static bool g_engine_was_running = false;
 static bool g_runtime_seed_saved_for_stop = false;
 static bool g_runtime_seed_arm_window_active = false;
 static bool g_ae_active = false;
+static uint32_t g_last_net_pw_us = 0u;
 static uint32_t g_zero_rpm_since_ms = 0u;
 static uint32_t g_runtime_seed_arm_window_start_ms = 0u;
 static uint16_t g_prev_tps_pct_x10 = 0u;
@@ -496,6 +497,21 @@ int main() {
             ems::engine::quick_crank_set_prime_context(sensors.clt_degc_x10,
                                                        fuel_corr.dead_time_us);
 
+            // Limitador de RPM progressivo (MS42 §2.2.5 / PAT_INH_IV)
+            {
+                const uint32_t hard = ems::engine::rev_limit_rpm_x10;
+                const uint32_t window = ems::engine::rev_limit_soft_window_x10;
+                uint8_t inj_mask = 0u;
+                if (rev_cut || snap.rpm_x10 >= hard) {
+                    inj_mask = 0x0Fu;  // corte total (limp ou acima do limite duro)
+                } else if (window > 0u && snap.rpm_x10 >= hard - (window * 3u / 4u)) {
+                    inj_mask = 0x05u;  // corta cilindros 0 e 2 (50%)
+                } else if (window > 0u && snap.rpm_x10 >= hard - window) {
+                    inj_mask = 0x01u;  // corta cilindro 0 (25%)
+                }
+                ::ecu_sched_set_inj_inhibit_mask(inj_mask);
+            }
+
             if (sched_sync && !rev_cut) {
                 const ems::engine::Table2dLookup fuel_lookup =
                     ems::engine::table3d_prepare_lookup(ems::engine::kRpmAxisX10,
@@ -523,8 +539,20 @@ int main() {
                                                                fuel_corr.corr_iat_x256,
                                                                fuel_corr.dead_time_us);
                 if (final_pw_us_base > fuel_corr.dead_time_us) {
-                    const uint32_t fuel_pw_us =
+                    uint32_t fuel_pw_us =
                         final_pw_us_base - static_cast<uint32_t>(fuel_corr.dead_time_us);
+
+                    // LTFT aditivo (MS42 TI_AD_ADD_MMV): aplica offset no PW líquido
+                    if (!crank_rpm_window) {
+                        const int16_t ltft_add = ems::engine::fuel_get_ltft_add_us(
+                            fuel_lookup.yi, fuel_lookup.xi);
+                        const int32_t pw_adj = static_cast<int32_t>(fuel_pw_us) + ltft_add;
+                        fuel_pw_us = (pw_adj <= 0) ? 0u
+                                   : (pw_adj > 100000) ? 100000u
+                                   : static_cast<uint32_t>(pw_adj);
+                    }
+                    g_last_net_pw_us = fuel_pw_us;
+
                     const bool xtau_enabled = !crank_rpm_window && (snap.rpm_x10 >= 7000u);
                     
                     // Detecta transiente para auto-calibração X-τ
@@ -572,9 +600,18 @@ int main() {
                                                                 idle_target_rpm_x10,
                                                                 sensors.tps_pct_x10,
                                                                 map_bar_x100);
+                const int16_t iat_spark_deg = crank_rpm_window ? 0 :
+                    ems::engine::calc_ign_iat_correction_deg(sensors.iat_degc_x10);
+                const int16_t clt_spark_deg = crank_rpm_window ? 0 :
+                    ems::engine::calc_ign_clt_correction_deg(sensors.clt_degc_x10);
+                const bool ae_now = (ae_pw_us > 0);
+                const int16_t antijerk_retard = crank_rpm_window ? 0 :
+                    ems::engine::calc_antijerk_retard_deg(ae_now);
                 const int16_t advance_deg = ems::engine::calc_total_advance(
                     base_advance_deg,
-                    {0, idle_spark_corr_deg, static_cast<int16_t>(knock_retard_x10 / 10u)});
+                    {iat_spark_deg, clt_spark_deg,
+                     static_cast<int16_t>(knock_retard_x10 / 10u),
+                     idle_spark_corr_deg, antijerk_retard});
 
                 const auto qc = ems::engine::quick_crank_update(
                     now, snap.rpm_x10, sched_sync, sensors.clt_degc_x10, advance_deg);
@@ -680,7 +717,7 @@ int main() {
                     static_cast<int16_t>(lambda_target_x1000),
                     static_cast<int16_t>(lambda_measured),
                     sensors.clt_degc_x10, lambda_valid,
-                    ae_active, rev_cut);
+                    ae_active, rev_cut, g_last_net_pw_us);
                 g_ae_active = false;
                 g_last_stft_pct = clamp_i8(static_cast<int16_t>(stft / 10), -25, 25);
 

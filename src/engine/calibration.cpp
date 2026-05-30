@@ -150,6 +150,26 @@ uint8_t xtau_autocal_enabled = 0u;
 uint8_t xtau_autocal_active = 0u;
 int8_t xtau_autocal_tau_delta[kCorrectionTableSize] = {};
 
+// IAT spark correction: retarda 0° a 20°C, até -5° a 80°C+
+int16_t iat_spark_axis_x10[kCorrectionTableSize] = {-200, 0, 200, 400, 500, 600, 700, 800};
+int16_t iat_spark_corr_deg[kCorrectionTableSize]  = {2, 1, 0, -1, -2, -3, -4, -5};
+
+// CLT spark correction: retarda até -8° no aquecimento inicial para catalisador
+int16_t clt_spark_axis_x10[kCorrectionTableSize] = {-400, -100, 200, 400, 600, 700, 900, 1100};
+int16_t clt_spark_corr_deg[kCorrectionTableSize]  = {0, -4, -8, -4, 0, 0, 0, 0};
+
+// Anti-jerk: mesmo limiar de tpsdot do AE; 3° retardo por 3 ciclos
+uint16_t antijerk_tpsdot_threshold_x10 = 5u;   // mesmo que ae_tpsdot_threshold_x10
+int16_t  antijerk_retard_deg           = 3;
+uint8_t  antijerk_decay_cycles         = 3u;
+
+// Rev limiter: limite duro 7000 RPM, zona suave 200 RPM abaixo
+uint32_t rev_limit_rpm_x10           = 70000u;
+uint32_t rev_limit_soft_window_x10   = 2000u;
+
+// LTFT aditivo: ativa quando PW < 2.5ms (regime de marcha lenta / carga baixa)
+uint16_t ltft_add_pw_threshold_us = 2500u;
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept {
     if (page == nullptr || len < 36u) {
         return;

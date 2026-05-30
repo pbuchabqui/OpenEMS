@@ -81,4 +81,27 @@ inline uint16_t interp_u16_8pt(const int16_t* axis,
     return static_cast<uint16_t>(y);
 }
 
+inline int16_t interp_i16_8pt(const int16_t* axis,
+                              const int16_t* table,
+                              uint8_t n,
+                              int16_t x) noexcept {
+    if (x <= axis[0]) return table[0];
+    if (x >= axis[n - 1u]) return table[n - 1u];
+
+    uint8_t idx = 0u;
+    while (idx < (n - 2u) && x > axis[idx + 1u]) { ++idx; }
+
+    const int32_t x0 = axis[idx];
+    const int32_t x1 = axis[idx + 1u];
+    const int32_t y0 = table[idx];
+    const int32_t y1 = table[idx + 1u];
+    const int32_t span = x1 - x0;
+    if (span <= 0) return static_cast<int16_t>(y0);
+
+    const int32_t y = y0 + ((y1 - y0) * (static_cast<int32_t>(x) - x0)) / span;
+    if (y < -32768) return -32768;
+    if (y > 32767) return 32767;
+    return static_cast<int16_t>(y);
+}
+
 }  // namespace ems::engine

@@ -6,6 +6,12 @@ namespace ems::hal {
 
 bool nvm_write_ltft(uint8_t rpm_i, uint8_t load_i, int8_t val) noexcept;
 int8_t nvm_read_ltft(uint8_t rpm_i, uint8_t load_i) noexcept;
+
+// LTFT aditivo: unidade 50 µs/count, range ±6350 µs.
+// Índices 0–7 (mapeados do eixo 0-15 via >>1).
+bool nvm_write_ltft_add(uint8_t rpm_i, uint8_t load_i, int8_t val_50us) noexcept;
+int8_t nvm_read_ltft_add(uint8_t rpm_i, uint8_t load_i) noexcept;
+
 bool nvm_load_adaptive_maps() noexcept;
 bool nvm_flush_adaptive_maps() noexcept;
 
