@@ -2,6 +2,7 @@
 #include "engine/calibration.h"
 #include "engine/math_utils.h"
 #include "engine/transient_fuel.h"
+#include "hal/system.h"
 
 #include <cstdint>
 
@@ -37,7 +38,7 @@ constexpr uint8_t kLearningRateQ8 = 32u;             // 12.5% de atualização p
 
 void lambda_error_push(int16_t error_x1000) noexcept {
     g_lambda_error_history[g_lambda_error_pos].timestamp_ms = 
-        ems::hal::millis();
+        millis();
     g_lambda_error_history[g_lambda_error_pos].error_x1000 = error_x1000;
     g_lambda_error_history[g_lambda_error_pos].valid = true;
     g_lambda_error_pos = (g_lambda_error_pos + 1u) % kLambdaErrorHistorySize;
@@ -295,7 +296,7 @@ uint32_t transient_fuel_xtau_with_autocalib(uint32_t fuel_pw_us,
         g_wall_state.wall_fuel_us_q8 = max_q8;
     }
     
-    g_wall_state.last_update_ms = ems::hal::millis();
+    g_wall_state.last_update_ms = millis();
     
     return static_cast<uint32_t>(injected_q8 >> 8);
 }

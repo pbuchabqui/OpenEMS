@@ -129,12 +129,12 @@ void can_stack_set_wbo2_rx_id(uint16_t id) noexcept {
 void can_stack_process(uint32_t now_ms,
                        const ems::drv::CkpSnapshot& ckp,
                        const ems::drv::SensorData&  sensors,
-                       int8_t  advance_deg,
-                       uint8_t pw_ms_x10,
-                       int8_t  stft_pct,
-                       uint8_t vvt_intake_pct,
-                       uint8_t vvt_exhaust_pct,
-                       uint8_t status_bits) noexcept {
+                       int8_t   advance_deg,
+                       uint8_t  pw_ms_x10,
+                       int8_t   stft_pct,
+                       uint8_t  vvt_intake_pct,
+                       uint8_t  vvt_exhaust_pct,
+                       uint16_t status_bits) noexcept {
     process_rx(now_ms);
 
     // Atualiza flag de falha após processar RX

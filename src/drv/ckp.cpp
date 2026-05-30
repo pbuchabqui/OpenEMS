@@ -301,19 +301,6 @@ inline void exit_critical() noexcept {
 #endif
 }
 
-// FIX P0 (BUG-12): Proteger seed contra consumo em rotação reversa
-// Problema: Se a seed for consumida durante partida com rotação reversa,
-// ela é perdida permanentemente até próximo shutdown, mesmo que motor
-// não tenha atingido sincronismo válido.
-// Solução: Validar coerência temporal do período CKP antes de consumir seed.
-// Rotação reversa produz períodos instáveis ou decrescentes inconsistentes.
-//
-// NOTA: declarados aqui (acima de process_gap_event) porque process_gap_event
-// os consome. A ISR ckp_tim5_ch1_isr (única escritora) e estas funções rodam
-// no mesmo contexto de prioridade 1, portanto não precisam de seção crítica.
-static uint32_t g_prev_valid_period_ns = 0u;
-static uint8_t g_coherent_periods_count = 0u;
-
 // Valida se período CKP é coerente com rotação forward estável
 // Períodos coerentes: variação < 25% entre amostras consecutivas
 inline bool is_forward_rotation_coherent(uint32_t period_ns) noexcept {

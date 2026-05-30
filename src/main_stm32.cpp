@@ -110,10 +110,7 @@ static constexpr uint16_t kAePeriodMs = 2u;
 // Estado ETB e Torque Manager
 // =============================================================================
 
-static torque_manager_inputs_t g_torque_inputs = {0};
-static torque_manager_outputs_t g_torque_outputs = {0};
 static bool g_etb_initialized = false;
-static uint32_t g_etb_loop_timer_ms = 0;
 
 // =============================================================================
 // Utilitários
@@ -447,30 +444,6 @@ int main() {
                 snap.rpm_x10);
             
             // Loop ETB (1kHz = 1ms) - controle de borboleta eletrônica
-            if (g_etb_initialized && elapsed(now, g_etb_loop_timer_ms, 1u)) {
-                g_etb_loop_timer_ms = now;
-                
-                // Preparar entradas do torque manager
-                // APP (pedal do acelerador) na entrada analógica de expansão AN1
-                // (raw 12-bit, 0–4095). Distinto de tps_pct_x10, que é a posição
-                // da borboleta (feedback do ETB), não a demanda do motorista.
-                g_torque_inputs.pedal_percent = (static_cast<float>(sensors.an1_raw) * 100.0f) / 4095.0f;
-                g_torque_inputs.engine_rpm = snap.rpm_x10 / 10.0f;
-                g_torque_inputs.coolant_temp = sensors.clt_degc_x10 / 10.0f;
-                g_torque_inputs.intake_air_temp = sensors.iat_degc_x10 / 10.0f;
-                g_torque_inputs.idle_mode = (snap.rpm_x10 < 1500u) && 
-                                            (sensors.tps_pct_x10 < 50u);
-                g_torque_inputs.limp_mode = g_limp_active;
-                
-                // Executar torque manager
-                torque_manager_loop(&g_torque_inputs, &g_torque_outputs);
-                
-                // Executar controle ETB com target do torque manager
-                etb_control_loop(g_torque_outputs.throttle_target, 
-                                snap.rpm_x10 / 10.0f, 
-                                1.0f);
-            }
-            
             const bool map_fault = (sensors.fault_bits & kFaultBitMap) != 0u;
             const bool clt_fault = (sensors.fault_bits & kFaultBitClt) != 0u;
             g_limp_active = map_fault || clt_fault;
@@ -678,12 +651,14 @@ int main() {
                 // X-tau autocalibration (100ms lambda-gated)
                 const bool xtau_learning_ok = (stft >= -500 && stft <= 500 &&
                     lambda_valid && snap.rpm_x10 >= 2000u);
-                ems::engine::xtau_autocal_tick(
-                    now, stft, sensors.clt_degc_x10, xtau_learning_ok);
-                if (ems::engine::xtau_autocal_is_dirty()) {
-                    ems::engine::xtau_autocal_apply_learned_tables();
-                    ems::engine::xtau_autocal_clear_dirty();
-                }
+                ems::engine::xtau_autocalib_update(
+                    snap.rpm_x10,
+                    clamp_u16(static_cast<uint16_t>(sensors.map_bar_x1000 / 10u),
+                              kMapMinBarX100, kMapMaxBarX100),
+                    static_cast<int16_t>(lambda_target_x1000),
+                    static_cast<int16_t>(ems::app::can_stack_lambda_milli_safe(now)),
+                    sensors.clt_degc_x10,
+                    xtau_learning_ok);
             } else {
                 g_last_stft_pct = 0;
             }
