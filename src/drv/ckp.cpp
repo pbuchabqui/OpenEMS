@@ -278,6 +278,9 @@ inline bool is_gap(uint32_t period, uint32_t avg) noexcept {
     return (period * kGapRatioDen > avg * kGapRatioNum);
 }
 
+static uint32_t g_prev_valid_period_ns = 0u;
+static uint8_t g_coherent_periods_count = 0u;
+
 // Teste de dente normal dentro da janela de tolerância ±20%.
 // 0,8×avg ≤ period ≤ 1,2×avg → dente aceito para atualização do histórico.
 // Multiplica ambos os lados por kTolDen (5) para eliminar as divisões da ISR.

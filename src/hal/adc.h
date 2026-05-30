@@ -60,6 +60,10 @@ uint32_t adc_get_recovery_retries() noexcept;
 void     adc_test_set_raw_primary(AdcPrimaryChannel ch, uint16_t raw) noexcept;
 void     adc_test_set_raw_secondary(AdcSecondaryChannel ch, uint16_t raw) noexcept;
 uint32_t adc_test_last_trigger_mod() noexcept;
+void     adc_test_set_recovering(bool recovering) noexcept;
+void     adc_test_set_recovery_failed(bool failed) noexcept;
+void     adc_test_set_timeout_count(uint32_t count) noexcept;
+void     adc_test_set_recovery_retries(uint32_t retries) noexcept;
 #endif
 
 }  // namespace ems::hal
