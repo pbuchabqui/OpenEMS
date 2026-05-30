@@ -278,7 +278,10 @@ uint32_t transient_fuel_xtau_with_autocalib(uint32_t fuel_pw_us,
     }
     
     const int32_t dry_fraction_q8 = 256 - static_cast<int32_t>(x_q8);
-    int32_t injected_q8 = (numerator_q8 * 256) / dry_fraction_q8;
+    // numerator_q8 chega a ~25.6M (kMaxPwUs<<8); ×256 estoura int32_t.
+    // Intermediário de 64 bits evita overflow; o resultado pós-clamp cabe em int32_t.
+    int32_t injected_q8 = static_cast<int32_t>(
+        (static_cast<int64_t>(numerator_q8) * 256) / dry_fraction_q8);
     const int32_t max_q8 = static_cast<int32_t>(kMaxPwUs << 8u);
     if (injected_q8 > max_q8) {
         injected_q8 = max_q8;

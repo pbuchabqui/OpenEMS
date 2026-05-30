@@ -30,6 +30,7 @@
 #define TIM4_BASE    0x40000800UL
 #define TIM5_BASE    0x40000C00UL
 #define TIM6_BASE    0x40001000UL
+#define TIM1_BASE    0x40012C00UL
 #define TIM8_BASE    0x40013400UL
 #define USART1_BASE  0x40013800UL
 #define USART2_BASE  0x40004400UL
@@ -93,6 +94,7 @@
 #define RCC_APB1LENR_FDCAN1EN (1u << 9)
 #define RCC_APB1LENR_USART2EN (1u << 17)
 #define RCC_APB1LENR_IWDGEN   (1u << 12)
+#define RCC_APB2ENR_TIM1EN    (1u << 11)
 #define RCC_APB2ENR_TIM8EN    (1u << 13)
 #define RCC_APB2ENR_USART1EN  (1u << 14)
 
@@ -197,6 +199,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM_CNT_OFF   0x24UL   // Counter
 #define TIM_PSC_OFF   0x28UL   // Prescaler
 #define TIM_ARR_OFF   0x2CUL   // Auto-reload
+#define TIM_RCR_OFF   0x30UL   // Repetition counter (advanced timers TIM1/TIM8)
 #define TIM_CCR1_OFF  0x34UL   // Capture/compare 1
 #define TIM_CCR2_OFF  0x38UL   // Capture/compare 2
 #define TIM_CCR3_OFF  0x3CUL   // Capture/compare 3
@@ -210,6 +213,12 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM_CR1_URS   (1u << 2)   // Update request source
 #define TIM_CR1_OPM   (1u << 3)   // One-pulse mode
 #define TIM_CR1_ARPE  (1u << 7)   // Auto-reload preload enable
+
+// TIM_EGR bits
+#define TIM_EGR_UG    (1u << 0)   // Update generation
+
+// TIM_BDTR bits (advanced timers TIM1/TIM8)
+#define TIM_BDTR_MOE  (1u << 15)  // Main output enable
 
 // TIM_SR bits
 #define TIM_SR_UIF    (1u << 0)   // Update interrupt flag
@@ -265,6 +274,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 // TIM_CCER bits (enable + polarity per channel)
 #define TIM_CCER_CC1E   (1u << 0)
 #define TIM_CCER_CC1P   (1u << 1)   // polarity (0=active high, 1=active low)
+#define TIM_CCER_CC1NE  (1u << 2)   // complementary output enable CH1N (advanced timers)
 #define TIM_CCER_CC1NP  (1u << 3)   // input capture: 0=rising, 1=falling, 11=both
 #define TIM_CCER_CC2E   (1u << 4)
 #define TIM_CCER_CC2P   (1u << 5)
@@ -300,6 +310,17 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM5_CCR1  STM32_REG32(TIM5_BASE + TIM_CCR1_OFF)  // CKP timestamp travado
 #define TIM5_CCR2  STM32_REG32(TIM5_BASE + TIM_CCR2_OFF)  // CMP timestamp travado
 #define TIM5_EGR   STM32_REG32(TIM5_BASE + TIM_EGR_OFF)
+
+// TIM1 — advanced timer: PWM com dead-time para borboleta eletrônica (ETB)
+#define TIM1_CR1   STM32_REG32(TIM1_BASE + TIM_CR1_OFF)
+#define TIM1_EGR   STM32_REG32(TIM1_BASE + TIM_EGR_OFF)
+#define TIM1_CCMR1 STM32_REG32(TIM1_BASE + TIM_CCMR1_OFF)
+#define TIM1_CCER  STM32_REG32(TIM1_BASE + TIM_CCER_OFF)
+#define TIM1_PSC   STM32_REG32(TIM1_BASE + TIM_PSC_OFF)
+#define TIM1_ARR   STM32_REG32(TIM1_BASE + TIM_ARR_OFF)
+#define TIM1_RCR   STM32_REG32(TIM1_BASE + TIM_RCR_OFF)
+#define TIM1_CCR1  STM32_REG32(TIM1_BASE + TIM_CCR1_OFF)
+#define TIM1_BDTR  STM32_REG32(TIM1_BASE + TIM_BDTR_OFF)
 
 // TIM8 — advanced timer for ignition output compare
 #define TIM8_CR1   STM32_REG32(TIM8_BASE + TIM_CR1_OFF)

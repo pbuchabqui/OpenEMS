@@ -12,7 +12,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "etb_driver.h"
+#include "hal/etb_driver.h"
 
 #ifdef __cplusplus
 extern "C" {

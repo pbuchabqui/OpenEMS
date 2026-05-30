@@ -118,11 +118,13 @@ uint16_t map_estimator_update(uint16_t map_sensor_kpa,
                               uint16_t dt_ms,
                               uint32_t rpm_x10) noexcept {
     // Validações básicas
-    if (map_sensor_kpa < 10u || map_sensor_kpa > 300u) {
-        // Sensor fora de range, usa apenas modelo
-        g_map_state.estimator_mode = 2u;
-    } else {
+    const bool sensor_ok = (map_sensor_kpa >= 10u && map_sensor_kpa <= 300u);
+    if (sensor_ok) {
         g_map_state.map_sensor_kpa = map_sensor_kpa;
+    } else {
+        // Sensor fora de range: usa apenas modelo. NÃO alimentar o valor cru
+        // (railed/0) no filtro complementar — abaixo zeramos o ganho do sensor.
+        g_map_state.estimator_mode = 2u;
     }
     
     // Atualiza histórico de TPS e calcula derivada
@@ -137,7 +139,9 @@ uint16_t map_estimator_update(uint16_t map_sensor_kpa,
     
     // Seleciona ganho baseado em força do transiente
     uint8_t gain_q8 = g_steady_gain_q8;
-    if (g_map_state.transient_strength >= 3u) {
+    if (!sensor_ok) {
+        gain_q8 = 0u;  // Sensor inválido: saída = modelo puro (0% sensor)
+    } else if (g_map_state.transient_strength >= 3u) {
         gain_q8 = g_transient_gain_q8;  // Heavy transient: confia mais no modelo
     } else if (g_map_state.transient_strength >= 2u) {
         // Medium transient: blend entre gains
