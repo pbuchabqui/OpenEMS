@@ -1,5 +1,6 @@
 #include "engine/misfire_detect.h"
 #include "engine/engine_config.h"
+#include "engine/ecu_sched.h"
 #include "drv/ckp.h"
 
 #include <cstdint>
@@ -25,6 +26,10 @@ static volatile uint8_t  g_debounce[ems::engine::cfg::kCylinderCount];
 
 // Contadores de eventos lidos pelo main loop (uint8_t = atômico em ARM Cortex-M).
 static volatile uint8_t  g_event_count[ems::engine::cfg::kCylinderCount];
+
+// Inibe toda a detecção (ex.: durante decel cut — sem combustão é esperado).
+// Escrito pelo main loop, lido na ISR do CKP (volatile bool).
+static volatile bool g_all_inhibit = false;
 
 constexpr uint8_t kN = ems::engine::cfg::kCylinderCount;
 
@@ -86,6 +91,10 @@ void misfire_clear_events(uint8_t cyl) noexcept {
     if (cyl < kN) { g_event_count[cyl] = 0u; }
 }
 
+void misfire_set_all_inhibit(bool inhibit) noexcept {
+    g_all_inhibit = inhibit;
+}
+
 }  // namespace ems::engine
 
 // ── Hook ISR (ems::drv namespace — substitui símbolo fraco de ckp.cpp) ────────
@@ -94,15 +103,28 @@ namespace ems::drv {
 void misfire_on_tooth(const CkpSnapshot& snap) noexcept {
     if (snap.state != SyncState::FULL_SYNC) { return; }
     if (snap.tooth_period_ns == 0u || snap.predicted_tooth_period_ns == 0u) { return; }
+    // Cortes intencionais de combustão: não acumular → evitar DTCs falsos
+    if (g_all_inhibit) { return; }
 
     const uint8_t ti  = static_cast<uint8_t>(snap.tooth_index & 0x3Fu);
     const bool    phA = snap.phase_A;
+    // Lê máscara de ignição: cilindros com DWELL inibido não têm combustão real
+    const uint8_t ign_mask = static_cast<uint8_t>(::ecu_sched_get_ign_inhibit_mask());
 
     for (uint8_t c = 0u; c < ems::engine::cfg::kCylinderCount; ++c) {
         if (phA != g_cyl_tdc[c].phase_A) { continue; }
 
         const uint8_t tdc = g_cyl_tdc[c].tdc_tooth;
         if (ti < tdc || ti >= static_cast<uint8_t>(tdc + ems::engine::kMisfireWindowTeeth)) {
+            continue;
+        }
+
+        // Cilindro com faísca inibida pelo rev limiter: reseta janela sem avaliar
+        if ((ign_mask >> c) & 1u) {
+            g_power_sum_ns[c] = 0u;
+            g_pred_sum_ns[c]  = 0u;
+            g_power_teeth[c]  = 0u;
+            g_debounce[c]     = 0u;
             continue;
         }
 

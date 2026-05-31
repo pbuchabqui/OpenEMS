@@ -529,11 +529,15 @@ int main() {
                     rev_cut ? INT16_MIN :
                     ems::engine::calc_rev_limit_spark_trim(snap.rpm_x10);
                 if (g_rev_spark_trim == INT16_MIN) {
-                    // Corte alternado: cyl 0+2 um ciclo, cyl 1+3 no seguinte.
-                    // Mantém ~50% de torque em vez de corte total — transição mais suave.
-                    static bool s_ign_toggle = false;
-                    s_ign_toggle = !s_ign_toggle;
-                    ::ecu_sched_set_ign_inhibit_mask(s_ign_toggle ? 0x05u : 0x0Au);
+                    if (rev_cut) {
+                        // Limp mode (falha de sensor): corte total de ignição
+                        ::ecu_sched_set_ign_inhibit_mask(0x0Fu);
+                    } else {
+                        // Limitador normal: alternado 0+2 / 1+3 para transição mais suave
+                        static bool s_ign_toggle = false;
+                        s_ign_toggle = !s_ign_toggle;
+                        ::ecu_sched_set_ign_inhibit_mask(s_ign_toggle ? 0x05u : 0x0Au);
+                    }
                 } else {
                     ::ecu_sched_set_ign_inhibit_mask(0u);
                 }
@@ -648,11 +652,12 @@ int main() {
                 }
 
                 // Corte de combustível na desaceleração (MS42 TI_PUR)
-                // Deve ser avaliado após o cálculo de PW mas antes do commit.
-                // Crank window não entra em decel cut (motor ainda não estabilizou).
                 const bool decel_cut_active = !crank_rpm_window &&
                     ems::engine::fuel_decel_cut_update(
                         snap.rpm_x10, sensors.tps_pct_x10, sensors.clt_degc_x10);
+                // Inibe misfire detection durante cortes intencionais de combustão:
+                // decel cut (sem fuel) e crank window (combustão instável no arranque)
+                ems::engine::misfire_set_all_inhibit(decel_cut_active || crank_rpm_window);
                 if (decel_cut_active) {
                     // Zera PW e reseta X-Tau (parede seca durante corte;
                     // na reativação o X-Tau repõe o filme naturalmente).
@@ -799,8 +804,14 @@ int main() {
                 const bool rev_cut = g_limp_active &&
                     (snap.rpm_x10 > kLimpRpmLimit_x10);
                 const bool ae_active = g_ae_active;
-                // STFT deve ser congelado durante decel cut: sem combustível → sem feedback válido
-                const bool stft_inhibit = rev_cut || ems::engine::fuel_decel_cut_active();
+                // STFT congelado em qualquer condição de corte intencional de combustível:
+                // - rev_cut: limp mode
+                // - decel_cut: borboleta fechada em desaceleração
+                // - inj_inhibit_mask != 0: rev limiter cortou injeção em ≥1 cilindro
+                //   (lambda leria lean sem combustível → STFT aprenderia errado)
+                const bool stft_inhibit = rev_cut ||
+                    ems::engine::fuel_decel_cut_active() ||
+                    (::ecu_sched_get_inj_inhibit_mask() != 0u);
                 const int16_t stft = ems::engine::fuel_update_stft_delayed(
                     now, snap.rpm_x10, map_bar_x100,
                     static_cast<int16_t>(lambda_target_x1000),

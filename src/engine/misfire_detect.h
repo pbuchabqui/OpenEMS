@@ -13,6 +13,10 @@ constexpr uint8_t  kMisfireFaultThreshold = 5u;    // eventos em período de 100
 void misfire_init() noexcept;
 void misfire_reset() noexcept;
 
+// Inibe toda a detecção (ex.: decel cut, arranque) — sem combustão é esperado.
+// Chame com true quando corte intencional estiver ativo; false para retomar.
+void misfire_set_all_inhibit(bool inhibit) noexcept;
+
 // Retorna número de eventos de misfire acumulados desde o último clear.
 // Seguro para leitura fora do ISR (uint8_t = atômico em ARM).
 uint8_t misfire_get_event_count(uint8_t cyl) noexcept;
