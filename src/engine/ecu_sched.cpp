@@ -370,9 +370,9 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     }
 
     // ── Ignition inhibit mask (rev limiter por faísca) ────────────────────
-    // Suprime ECU_ACT_DWELL_START: bobina não carrega → sem energia → sem faísca.
-    // ECU_ACT_SPARK passa (output toggle inócuo sem carga prévia na bobina).
-    if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
+    // Suprime DWELL_START e SPARK: drivers IGBT com detecção de corrente podem
+    // interpretar o toggle do pino sem carga prévia como condição de falha.
+    if (is_inj == 0U && (action == ECU_ACT_DWELL_START || action == ECU_ACT_SPARK)) {
         const uint8_t cyl_bit = ign_ch_to_cyl_bit(ch);
         if (cyl_bit != 0U && (g_ign_inhibit_mask & cyl_bit) != 0U) { return; }
     }

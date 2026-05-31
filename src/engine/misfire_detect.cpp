@@ -135,12 +135,15 @@ void misfire_on_tooth(const CkpSnapshot& snap) noexcept {
     // Lê máscara de ignição: cilindros com DWELL inibido não têm combustão real
     const uint8_t ign_mask = static_cast<uint8_t>(::ecu_sched_get_ign_inhibit_mask());
 
-    // Cilindro com faísca inibida pelo rev limiter: reseta janela sem avaliar
+    // Cilindro com faísca inibida pelo rev limiter: reseta janela sem avaliar.
+    // g_event_count também é zerado: eventos acumulados antes do corte não devem
+    // cruzar o limiar de DTC após o corte encerrar — seriam falsos positivos.
     if ((ign_mask >> c) & 1u) {
         g_power_sum_ns[c] = 0u;
         g_pred_sum_ns[c]  = 0u;
         g_power_teeth[c]  = 0u;
         g_debounce[c]     = 0u;
+        g_event_count[c]  = 0u;
         return;
     }
 

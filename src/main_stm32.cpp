@@ -515,12 +515,15 @@ int main() {
                 const uint32_t hard       = ems::engine::rev_limit_rpm_x10;
                 const uint32_t inj_window = ems::engine::rev_limit_soft_window_x10;
 
-                // Injeção — corte progressivo (igual ao anterior)
+                // Injeção — corte progressivo em 3 níveis:
+                //   25% (cil 0) na banda inferior, 50% (cil 0+2) na superior, 100% no limite.
                 uint8_t inj_mask = 0u;
                 if (rev_cut || snap.rpm_x10 >= hard) {
                     inj_mask = 0x0Fu;
+                } else if (inj_window > 0u && snap.rpm_x10 >= hard - (inj_window * 3u / 4u)) {
+                    inj_mask = 0x05u;  // 50%: cil 0 + 2
                 } else if (inj_window > 0u && snap.rpm_x10 >= hard - inj_window) {
-                    inj_mask = 0x05u;  // balanced 2-cyl (50%)
+                    inj_mask = 0x01u;  // 25%: apenas cil 0
                 }
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);
 
