@@ -24,6 +24,10 @@ void knock_cmp0_isr() noexcept;
 // Fecha o ciclo de combustao do cilindro e aplica algoritmo.
 void knock_cycle_complete(uint8_t cyl) noexcept;
 
+// Fecha a janela corrente (se houver) e avalia o ciclo do cilindro que estava aberto.
+// Chamado no ECU_ACT_DWELL_START do cilindro seguinte (ISR-safe).
+void knock_window_cycle_end() noexcept;
+
 uint16_t knock_get_retard_x10(uint8_t cyl) noexcept;
 uint8_t knock_get_vosel() noexcept;
 

@@ -3,6 +3,9 @@
 #include <cstdint>
 
 #include "hal/flash.h"
+#ifndef EMS_HOST_TEST
+#include "hal/stm32h562/regs.h"
+#endif
 
 namespace {
 
@@ -75,6 +78,15 @@ volatile uint16_t knock_retard_x10[kKnockCylinders] = {};
 void knock_init() noexcept {
     g = {};
     g.event_threshold = kDefaultEventThreshold;
+
+#ifndef EMS_HOST_TEST
+    // Enable COMP1 interrupt at priority 3 (lower than CKP/TIM5 at prio 1,
+    // higher than main-loop-level work). COMP1 IRQ number: verify against
+    // RM0481 Table 175 for STM32H562 — currently assumed IRQ64.
+    // CMP0 register base (0x40073000) also needs verification vs RM0481 §
+    nvic_set_priority(IRQ_COMP1, 3u);
+    nvic_enable_irq(IRQ_COMP1);
+#endif
 
     // Carrega retard persistido do NVM: rpm_i=0, load_i=cyl (4 células)
     // nvm_read_knock retorna int8_t em deci-graus (0.1°); knock_retard_x10 usa ×10.
@@ -183,6 +195,19 @@ uint16_t knock_get_retard_x10(uint8_t cyl) noexcept {
     return knock_retard_x10[static_cast<uint8_t>(cyl & 0x3u)];
 }
 
+void knock_window_cycle_end() noexcept {
+    // Called from arm_channel() (ISR context) at each DWELL_START event.
+    // Closes whichever window was previously open and immediately evaluates
+    // that cylinder's knock cycle. This fires once per combustion interval
+    // (every ~180 crank degrees on a 4-cyl), which is the correct cadence
+    // for the retard/recovery algorithm.
+    if (g.window_active) {
+        cmp0_set_enabled(false);
+        g.window_active = false;
+        knock_cycle_complete(g.window_cyl);
+    }
+}
+
 uint8_t knock_get_vosel() noexcept {
     return g.vosel;
 }
@@ -202,3 +227,9 @@ uint8_t knock_test_window_cyl() noexcept {
 #endif
 
 }  // namespace ems::engine
+
+#ifndef EMS_HOST_TEST
+extern "C" void COMP1_IRQHandler() noexcept {
+    ems::engine::knock_cmp0_isr();
+}
+#endif

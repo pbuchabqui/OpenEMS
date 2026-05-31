@@ -2,6 +2,7 @@
 #include "drv/ckp.h"
 #include "engine/engine_config.h"
 #include "engine/constants.h"
+#include "engine/knock.h"
 #include "hal/regs.h"
 #include "hal/critical_section.h"
 
@@ -171,6 +172,7 @@ static volatile uint8_t g_presync_bank_toggle = 0U;
 static volatile uint8_t g_hook_prev_valid = 0U;
 static volatile uint16_t g_hook_prev_tooth = 0U;
 static volatile uint8_t g_hook_schedule_this_gap = 1U;
+static volatile uint8_t g_knock_sequential = 0U;  // 1 when running Calculate_Sequential_Cycle (full sync, per-cyl knock valid)
 static volatile uint8_t g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg;  // FIX: volatile — escrita por ecu_sched_set_ivc (cs), leitura por clamp_inj_pw_to_ivc (contexto ISR)
 static uint32_t g_ivc_clamp_count = 0U;
 static uint32_t g_oc_mode_shadow[ECU_CHANNELS];
@@ -393,6 +395,17 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
             // Arma watchdog: timeout = 1.4 × dwell = 7/5 × dwell (sem ponto flutuante)
             g_dwell_arm_tick[ign_idx]   = now;
             g_dwell_wdog_ticks[ign_idx] = (g_dwell_ticks * 7U) / 5U;
+
+            // Knock window management — only in sequential (full-sync) mode.
+            // knock_window_cycle_end() closes the previous cylinder's window and
+            // evaluates its knock count (one call per combustion interval, ~180 deg).
+            // knock_window_open() arms CMP0 for the new cylinder.
+            // ch → cyl: ECU_CH_IGN1=7→0, IGN2=6→1, IGN3=5→2, IGN4=4→3
+            if (g_knock_sequential != 0U) {
+                const uint8_t knock_cyl = static_cast<uint8_t>(7U - ch);
+                ems::engine::knock_window_cycle_end();
+                ems::engine::knock_window_open(knock_cyl);
+            }
         } else if (action == ECU_ACT_SPARK) {
             // Evento SPARK programado com sucesso — watchdog já não é necessário
             g_dwell_arm_tick[ign_idx] = 0U;
@@ -432,6 +445,9 @@ static void clear_all_events_and_drive_safe_outputs(void)
     for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) { force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK); }
     // Bobinas forçadas a LOW — watchdog já não é necessário para nenhum canal
     for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; }
+    // Close any open knock window — sync lost means no valid combustion cylinder
+    g_knock_sequential = 0U;
+    ems::engine::knock_window_cycle_end();
 }
 
 static void angle_to_tooth_event(uint32_t angle_deg, uint8_t *out_tooth, uint8_t *out_sub_frac, uint8_t *out_phase_A)
@@ -532,6 +548,7 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
     static const uint8_t ign_ch[ems::engine::cfg::kCylinderCount] = {ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
     static const uint8_t inj_ch[ems::engine::cfg::kCylinderCount] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
 
+    g_knock_sequential = 1U;  // knock window per-cylinder valid in sequential mode
     g_angle_table_count = 0U;
     g_angle_tooth_mask_lo = 0U;
     g_angle_tooth_mask_hi = 0U;
@@ -595,6 +612,7 @@ static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
     static const uint8_t ign[4U] = {ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
     uint8_t tooth, frac, phase;
 
+    g_knock_sequential = 0U;  // wasted-spark presync: no per-cylinder knock tracking
     g_angle_table_count = 0U;
     g_angle_tooth_mask_lo = 0U;
     g_angle_tooth_mask_hi = 0U;
