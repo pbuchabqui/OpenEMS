@@ -327,6 +327,10 @@ static void openems_init() noexcept {
     // 2) Timers (TIM5=CKP IC, TIM2/TIM8=OC injeção/ignição)
     // TIM3/TIM4 PWM auxiliares são inicializados em auxiliaries_init().
     // ECU_Hardware_Init() owns TIM2/TIM8 for injection/ignition scheduling.
+    // misfire_init() DEVE preceder tim5_ic_init(): a tabela g_tooth_to_cyl parte de
+    // BSS (zero), mas 0 é um índice de cilindro válido — o ISR do CKP leria cyl=0
+    // para todos os dentes antes da tabela ser preenchida, gerando DTCs falsos.
+    ems::engine::misfire_init();
     ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
 
     // 2a) Scheduler unificado
@@ -381,7 +385,6 @@ static void openems_init() noexcept {
     ems::engine::fuel_reset_adaptives();
     ems::engine::auxiliaries_init();
     ems::engine::knock_init();
-    ems::engine::misfire_init();
     ems::engine::quick_crank_reset();
 
     // 8) Aplicação
@@ -516,11 +519,8 @@ int main() {
                 uint8_t inj_mask = 0u;
                 if (rev_cut || snap.rpm_x10 >= hard) {
                     inj_mask = 0x0Fu;
-                } else if (inj_window > 0u &&
-                           snap.rpm_x10 >= hard - (inj_window * 3u / 4u)) {
-                    inj_mask = 0x05u;
                 } else if (inj_window > 0u && snap.rpm_x10 >= hard - inj_window) {
-                    inj_mask = 0x05u;
+                    inj_mask = 0x05u;  // balanced 2-cyl (50%)
                 }
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);
 
@@ -626,7 +626,7 @@ int main() {
                 } else {
                     ems::engine::transient_fuel_reset();
                 }
-                if (ae_pw_us > 0) {
+                if (!decel_cut_active && ae_pw_us > 0) {
                     const uint32_t ae_add = static_cast<uint32_t>(ae_pw_us);
                     final_pw_us_base = (ae_add >= 100000u || final_pw_us_base > (100000u - ae_add))
                         ? 100000u
@@ -806,7 +806,7 @@ int main() {
                 //   (lambda leria lean sem combustível → STFT aprenderia errado)
                 const bool stft_inhibit = rev_cut ||
                     ems::engine::fuel_decel_cut_active() ||
-                    (::ecu_sched_get_inj_inhibit_mask() == 0x0Fu);
+                    (::ecu_sched_get_inj_inhibit_mask() != 0u);
                 const int16_t stft = ems::engine::fuel_update_stft_delayed(
                     now, snap.rpm_x10, map_bar_x100,
                     static_cast<int16_t>(lambda_target_x1000),

@@ -1,9 +1,11 @@
 #include "engine/misfire_detect.h"
 #include "engine/engine_config.h"
+#include "engine/constants.h"
 #include "engine/ecu_sched.h"
 #include "drv/ckp.h"
 
 #include <cstdint>
+#include <cstring>
 
 namespace {
 
@@ -20,7 +22,9 @@ static CylTdcPos g_cyl_tdc[ems::engine::cfg::kCylinderCount];
 
 // Tabela pré-computada: [phase_A(0/1)][tooth_index] → cilindro (-1 = fora de janela).
 // Permite saída O(1) no ISR do CKP sem varrer todos os cilindros por dente.
-static int8_t g_tooth_to_cyl[2][58];
+// IMPORTANTE: preenchida em misfire_init(), que DEVE ser chamada antes de habilitar
+// o ISR do CKP — BSS é zero, e 0 é um índice de cilindro válido.
+static int8_t g_tooth_to_cyl[2][ems::engine::kRealTeeth60_2];
 
 // Acumuladores por cilindro (escritos apenas no ISR do CKP → volatile).
 static volatile uint32_t g_power_sum_ns[ems::engine::cfg::kCylinderCount];
@@ -74,14 +78,12 @@ void misfire_init() noexcept {
         g_cyl_tdc[cyl].phase_A   = (i < 2u);
     }
     // Pré-computa mapa dente→cilindro para lookup O(1) no ISR.
-    for (auto& row : g_tooth_to_cyl) {
-        for (auto& cell : row) { cell = -1; }
-    }
+    std::memset(g_tooth_to_cyl, 0xFF, sizeof(g_tooth_to_cyl));  // -1 em int8_t
     for (uint8_t c = 0u; c < kN; ++c) {
         const uint8_t phase = g_cyl_tdc[c].phase_A ? 0u : 1u;
         for (uint8_t t = 0u; t < ems::engine::kMisfireWindowTeeth; ++t) {
             const uint8_t tooth = g_cyl_tdc[c].tdc_tooth + t;
-            if (tooth < 58u) {
+            if (tooth < ems::engine::kRealTeeth60_2) {
                 g_tooth_to_cyl[phase][tooth] = static_cast<int8_t>(c);
             }
         }
@@ -125,7 +127,7 @@ void misfire_on_tooth(const CkpSnapshot& snap) noexcept {
 
     const uint8_t ti    = static_cast<uint8_t>(snap.tooth_index & 0x3Fu);
     const uint8_t phase = snap.phase_A ? 0u : 1u;
-    if (ti >= 58u) { return; }
+    if (ti >= ems::engine::kRealTeeth60_2) { return; }
     const int8_t cyl_idx = g_tooth_to_cyl[phase][ti];
     if (cyl_idx < 0) { return; }
     const uint8_t c = static_cast<uint8_t>(cyl_idx);
