@@ -356,8 +356,15 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     // Para ignição: pode disparar em cilindro em admissão (sem combustível)
     // Para injeção: injeta fora da janela de válvula aberta
     if (delta < STM32_MIN_COMPARE_LEAD_TICKS) { 
-        ++g_late_event_count; 
-        // NÃO chamar force_output() — descarta evento atrasado silenciosamente
+        ++g_late_event_count;
+        // FIX C3: se DWELL_START já armou o watchdog mas o SPARK chega tarde e
+        // é descartado aqui, o watchdog fica armado para sempre e vai disparar
+        // após 1.4× dwell — cortando a bobina sem que ela tenha disparado.
+        // Desarma o watchdog para qualquer evento de ignição tardio.
+        if (is_inj == 0U && action == ECU_ACT_SPARK && tim_ch != 0U) {
+            const uint8_t ign_idx = static_cast<uint8_t>(tim_ch - 1U);
+            g_dwell_arm_tick[ign_idx] = 0U;
+        }
         return; 
     }
 
@@ -644,21 +651,19 @@ uint32_t ecu_sched_ivc_clamp_count(void) { return g_ivc_clamp_count; }
 
 void ecu_sched_dwell_watchdog(void)
 {
-    // Lê TIM2_CNT uma vez — mesmo relógio que scheduler_counter() usa para arm_tick.
-    // TIM2 é 32-bit: subtracção circular correcta sem overflow adicional.
+    // TIM2 lido UMA vez fora do loop — contador 32-bit, não há risco de wrap
+    // num intervalo de 2 ms entre chamadas (~20 000 ticks @ 10 MHz).
     const uint32_t now = TIM2_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
+        // FIX C1: leitura + avaliação + acção dentro de UMA secção crítica.
+        // A versão anterior lia arm/tout dentro de CS, saía, avaliava fora,
+        // depois entrava numa segunda CS para agir. A ISR arm_channel() pode
+        // zerar g_dwell_arm_tick[i] (acção SPARK, linha 389) nessa janela,
+        // causando disparo espúrio do watchdog e corte indevido da bobina.
         enter_critical();
         const uint32_t arm  = g_dwell_arm_tick[i];
         const uint32_t tout = g_dwell_wdog_ticks[i];
-        exit_critical();
-
-        if (arm == 0U) { continue; }                    // canal inactivo
-        if ((now - arm) < tout) { continue; }           // ainda dentro do limite
-
-        // Timeout: bobina saturada > 1.4 × TD — força saída LOW imediatamente
-        enter_critical();
-        if (g_dwell_arm_tick[i] != 0U) {               // re-check dentro de CS
+        if (arm != 0U && (now - arm) >= tout) {
             stm32_force_oc(0U, (uint8_t)(i + 1U), 0U);
             g_dwell_arm_tick[i] = 0U;
             ++g_dwell_watchdog_count;

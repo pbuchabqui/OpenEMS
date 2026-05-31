@@ -685,9 +685,17 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
         const uint32_t cmp_delta = cmp_capture_now - s_prev_cmp_capture; // circular uint32
         // Expected: 58 teeth × tooth_period_ticks (one full crank revolution)
         const uint32_t expected  = kRealTeethPerRev * prev_period_ticks;
-        // Accept window: [75%, 125%] of expected
-        const uint32_t min_valid = expected - (expected >> 2u);  // 75%
-        const uint32_t max_valid = expected + (expected >> 2u);  // 125%
+        // FIX C10: at cranking/low RPM the starter motor can disengage mid-revolution,
+        // causing tooth period to grow 30-40%. A fixed ±25% window would reject
+        // legitimate CMP edges and leave the decoder stuck in HALF_SYNC.
+        // prev_period_ticks > ~130000 ticks (62.5 MHz) corresponds to RPM < ~500.
+        // Below that threshold widen to ±50%; above use the tighter ±25%.
+        constexpr uint32_t kLowRpmThreshTicks = 130000u;  // ~500 RPM @ 62.5 MHz TIM5
+        const uint32_t tolerance = (prev_period_ticks > kLowRpmThreshTicks)
+                                   ? 2u   // ÷2 → ±50% at low RPM
+                                   : 4u;  // ÷4 → ±25% at normal RPM
+        const uint32_t min_valid = expected - (expected / tolerance);
+        const uint32_t max_valid = expected + (expected / tolerance);
         if (cmp_delta < min_valid || cmp_delta > max_valid) {
             ++g_state.cmp_glitch_count;
             // Do NOT update s_prev_cmp_capture — keep last known-good timestamp

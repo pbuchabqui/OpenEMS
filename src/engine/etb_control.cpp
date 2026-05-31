@@ -311,9 +311,15 @@ void etb_set_idle_control(bool active, float target_rpm) {
     }
 }
 
-int16_t etb_get_idle_spark_trim(void) {
+// FIX C2: must be in ems::engine namespace to override the weak symbol in
+// ign_calc.cpp. Defined outside the namespace it was unreachable from
+// ems::engine::etb_get_idle_spark_trim() — linker kept the weak stub (return 0),
+// so idle spark trim was always zero and idle control via ignition was broken.
+namespace ems::engine {
+int16_t etb_get_idle_spark_trim() noexcept {
     return g_data.idle_spark_trim;
 }
+}  // namespace ems::engine
 
 // ============================================================================
 // MODOS DE CONDUÇÃO

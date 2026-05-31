@@ -389,8 +389,16 @@ inline void sample_fast_channels() noexcept {
         g_data_staging.map_bar_x1000 = kFallbackMapBarX1000;
         g_data_staging.tps_pct_x10   = kFallbackTpsPctX10;
         g_data_staging.maf_gps_x100  = 0u;
+        // FIX C5: mark ALL ADC-sourced channels as faulted, not just MAP.
+        // With only MAP faulted, the torque manager sees MAP=fallback but
+        // TPS=stale (last good value), creating an inconsistent sensor suite
+        // and preventing TPS-based limp-mode paths from activating.
         g_data_staging.fault_bits = static_cast<uint8_t>(
-            g_data_staging.fault_bits | (1u << static_cast<uint8_t>(SensorId::MAP)));
+            g_data_staging.fault_bits |
+            (1u << static_cast<uint8_t>(SensorId::MAP)) |
+            (1u << static_cast<uint8_t>(SensorId::MAF)) |
+            (1u << static_cast<uint8_t>(SensorId::TPS)) |
+            (1u << static_cast<uint8_t>(SensorId::O2)));
         
         // Reporta fault de ADC recovery ao sistema de diagnóstico
         #if __has_include("engine/diagnostic_manager.h")

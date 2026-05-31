@@ -281,6 +281,7 @@ bool nvm_flush_adaptive_maps() noexcept {
     static uint8_t sector_buf[FLASH_SECTOR_SIZE] = {};
     static FlushState state = FlushState::Idle;
     static uint32_t word_i = 0u;
+    static uint32_t bsy_stall_count = 0u;  // FIX C8: detect permanently stuck BSY
 
     const auto fail = []() noexcept {
         FLASH_CR2 &= ~(FLASH_CR_PG | FLASH_CR_SER | (0xFu << FLASH_CR_SNB_SHIFT));
@@ -335,7 +336,20 @@ bool nvm_flush_adaptive_maps() noexcept {
         const uint32_t nwords = sizeof(sector_buf) / sizeof(uint32_t);
         uint32_t budget = kFlashWordsPerStep;
         while ((word_i < nwords) && (budget-- != 0u)) {
-            if (FLASH_SR2 & kFlashBusyMask) { return false; }
+            if (FLASH_SR2 & kFlashBusyMask) {
+                // FIX C8: if BSY never clears, the state machine is permanently stuck
+                // (word_i doesn't advance, fail() is never called, data is lost forever).
+                // Abort and re-mark dirty after a threshold so the next flush cycle
+                // can attempt recovery.
+                constexpr uint32_t kBsyStallLimit = 50000u;
+                if (++bsy_stall_count >= kBsyStallLimit) {
+                    bsy_stall_count = 0u;
+                    state = FlushState::Idle;
+                    return fail();
+                }
+                return false;
+            }
+            bsy_stall_count = 0u;  // Reset on any successful progress
             if (FLASH_SR2 & kFlashErrorMask) {
                 state = FlushState::Idle;
                 return fail();
