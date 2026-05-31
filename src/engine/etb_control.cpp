@@ -388,11 +388,21 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
     // P term
     int32_t output_x10 = (kp_x10 * static_cast<int32_t>(error_x10)) / 10;
 
-    // I term with anti-windup
-    if (output_x10 < 1000 && output_x10 > -1000) {
-        if (period_ms > 0u) {
-            g_integrator_x10 += (ki_x10 * static_cast<int32_t>(error_x10)
-                                 * static_cast<int32_t>(period_ms)) / 1000;
+    // I term with anti-windup — guard must check P+I saturation, not P alone.
+    // Old code checked output_x10 (P-only) which allowed unlimited windup against
+    // mechanical stops: small error → small P (within ±100%) → integral accumulates
+    // unbounded → large overshoot on throttle release.
+    if (period_ms > 0u) {
+        const int32_t ki_inc = (ki_x10 * static_cast<int32_t>(error_x10)
+                                * static_cast<int32_t>(period_ms)) / 1000;
+        const int32_t raw_i = g_integrator_x10 + ki_inc;
+        const int32_t candidate_i = (raw_i > 2000) ? 2000 : (raw_i < -2000 ? -2000 : raw_i);
+        const int32_t candidate_out = output_x10 + candidate_i;  // P + I
+        // Reject accumulation only when P+I is saturated in the same direction as error
+        const bool saturating = (candidate_out >  1000 && error_x10 > 0) ||
+                                (candidate_out < -1000 && error_x10 < 0);
+        if (!saturating) {
+            g_integrator_x10 = static_cast<int16_t>(candidate_i);
         }
     }
     g_integrator_x10 = clamp_i16(static_cast<int32_t>(g_integrator_x10), -2000, 2000);

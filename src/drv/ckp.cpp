@@ -668,34 +668,33 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     if ((CKP_CAM_GPIO_IDR & (1u << 1u)) == 0u) {
         return;  // anti-glitch: apenas rising edges reais
     }
-    
-    // Validação de coerência temporal baseada no período CKP atual
-    // Período CMP esperado ≈ 2× período médio dos dentes CKP (1 revolução completa)
-    const uint32_t ckp_period_ns = g_state.snap.tooth_period_ns;
-    if (ckp_period_ns > 0u) {
-        // Estima período CMP esperado: 58 dentes × período_dente ≈ 1 revolução
-        // Para simplificar: usa-se o tooth_period_ns como referência de escala
-        // CMP válido deve ter período entre 0.5× e 4.0× o período de referência
-        static uint32_t prev_cmp_tooth_period = 0u;
-        
-        // Compara com período anterior do CKP para detectar anomalias grosseiras
-        // Se tooth_period mudou drasticamente (>4× ou <0.25×), ignora esta borda CMP
-        if (prev_cmp_tooth_period > 0u) {
-            const uint32_t min_valid = prev_cmp_tooth_period >> 2u;   // 25%
-            const uint32_t max_valid = prev_cmp_tooth_period << 2u;   // 400%
-            
-            if ((ckp_period_ns < min_valid) || (ckp_period_ns > max_valid)) {
-                // Período CKP mudou drasticamente — possível ruído, não atualiza phase_A
-                ++g_state.cmp_glitch_count;
-                static_cast<void>(TIM5_CAM_CAPTURE);
-                prev_cmp_tooth_period = ckp_period_ns;
-                return;
-            }
+
+    // Read capture register now — clears CHF flag; value is the TIM5 timestamp
+    // of this CMP edge. Must be read before any other logic that might be slow.
+    const uint32_t cmp_capture_now = TIM5_CAM_CAPTURE;
+
+    // ── Validação temporal CMP inter-edge (FIX Major #5) ─────────────────
+    // Valida o período entre bordas CMP consecutivas contra o período esperado
+    // de 58 dentes CKP (= 1 revolução de virabrequim). A verificação anterior
+    // (estabilidade do período CKP) não detecta glitches que chegam durante
+    // operação steady-state — o período CKP não muda, mas a borda CMP chega cedo.
+    // Esta verificação usa a captura TIM5 real para medir o delta entre bordas.
+    static uint32_t s_prev_cmp_capture = 0u;
+    const uint32_t prev_period_ticks = g_state.prev_period_ticks;
+    if (s_prev_cmp_capture != 0u && prev_period_ticks > 0u) {
+        const uint32_t cmp_delta = cmp_capture_now - s_prev_cmp_capture; // circular uint32
+        // Expected: 58 teeth × tooth_period_ticks (one full crank revolution)
+        const uint32_t expected  = kRealTeethPerRev * prev_period_ticks;
+        // Accept window: [75%, 125%] of expected
+        const uint32_t min_valid = expected - (expected >> 2u);  // 75%
+        const uint32_t max_valid = expected + (expected >> 2u);  // 125%
+        if (cmp_delta < min_valid || cmp_delta > max_valid) {
+            ++g_state.cmp_glitch_count;
+            // Do NOT update s_prev_cmp_capture — keep last known-good timestamp
+            return;
         }
-        prev_cmp_tooth_period = ckp_period_ns;
     }
-    
-    static_cast<void>(TIM5_CAM_CAPTURE);   // leitura limpa o CHF do canal
+    s_prev_cmp_capture = cmp_capture_now;
     g_state.snap.phase_A = !g_state.snap.phase_A;
     if (g_seed_probation) {
         g_seed_probation = false;
@@ -752,6 +751,10 @@ uint32_t ckp_seed_confirmed_count() noexcept {
 
 uint32_t ckp_seed_rejected_count() noexcept {
     return g_seed_rejected_count;
+}
+
+uint32_t ckp_get_cmp_glitch_count() noexcept {
+    return g_state.cmp_glitch_count;
 }
 
 // ── API de teste (host only) ──────────────────────────────────────────────────

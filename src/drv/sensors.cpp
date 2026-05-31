@@ -382,10 +382,15 @@ inline void sample_fast_channels() noexcept {
                                   ems::hal::adc_recovery_failed();
     
     if (adc_unavailable) {
-        // ADC não disponível - usa valores fallback para segurança do motor
-        g_data_staging.map_bar_x1000 = kFallbackMapBarX1000;   // 1.010 bar (pressão atmosférica)
-        g_data_staging.tps_pct_x10 = kFallbackTpsPctX10;   // 0.0% (borboleta fechada)
-        g_data_staging.maf_gps_x100 = 0u;                   // MAF desconhecido
+        // ADC not available — use safe fallback values and mark MAP fault so that
+        // the main loop's limp-mode logic (fault_bits & kFaultBitMap) fires.
+        // Without setting the fault bit the engine runs on stale/fake sensor data
+        // with no protection (limp mode never activates).
+        g_data_staging.map_bar_x1000 = kFallbackMapBarX1000;
+        g_data_staging.tps_pct_x10   = kFallbackTpsPctX10;
+        g_data_staging.maf_gps_x100  = 0u;
+        g_data_staging.fault_bits = static_cast<uint8_t>(
+            g_data_staging.fault_bits | (1u << static_cast<uint8_t>(SensorId::MAP)));
         
         // Reporta fault de ADC recovery ao sistema de diagnóstico
         #if __has_include("engine/diagnostic_manager.h")

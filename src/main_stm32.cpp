@@ -517,12 +517,18 @@ int main() {
 
                 // Injeção — corte progressivo em 3 níveis:
                 //   25% (cil 0) na banda inferior, 50% (cil 0+2) na superior, 100% no limite.
+                // Saturating subtractions prevent unsigned underflow if a misconfigured
+                // calibration sets inj_window > hard, which would wrap to ~4B RPM
+                // and disable the rev limiter entirely.
+                const uint32_t band75  = inj_window * 3u / 4u;
+                const uint32_t thresh_50 = (hard > band75)      ? hard - band75      : 0u;
+                const uint32_t thresh_25 = (hard > inj_window)  ? hard - inj_window  : 0u;
                 uint8_t inj_mask = 0u;
                 if (rev_cut || snap.rpm_x10 >= hard) {
                     inj_mask = 0x0Fu;
-                } else if (inj_window > 0u && snap.rpm_x10 >= hard - (inj_window * 3u / 4u)) {
+                } else if (inj_window > 0u && snap.rpm_x10 >= thresh_50) {
                     inj_mask = 0x05u;  // 50%: cil 0 + 2
-                } else if (inj_window > 0u && snap.rpm_x10 >= hard - inj_window) {
+                } else if (inj_window > 0u && snap.rpm_x10 >= thresh_25) {
                     inj_mask = 0x01u;  // 25%: apenas cil 0
                 }
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);
@@ -874,24 +880,22 @@ int main() {
         if (elapsed(now, g_t500ms_, 500u)) {
             g_t500ms_ = now;
             const auto snap = ems::drv::ckp_snapshot();
-            if (g_calib_dirty &&
-                (last_calib_save_ms == 0u ||
-                 elapsed(now, last_calib_save_ms, kCalibSaveMinIntervalMs))) {
-                ems::engine::cfg::engine_config_serialize(g_calib_page0, kCalibPageBytes);
-                if (ems::hal::nvm_save_calibration(0u, g_calib_page0,
-                                                   kCalibPageBytes)) {
-                    g_calib_dirty = false;
-                    last_calib_save_ms = now;
-                }
-            }
-            
-            // FIX P0: Only schedule adaptive map flush when engine is below safe RPM
-            // Flash writes during engine operation can cause timing jitter and misfires
+            // FIX: gate ALL flash writes behind the same RPM threshold — calibration
+            // writes had no RPM check, creating a latent bug (see Blocker #3).
             const bool engine_running_fast = (snap.rpm_x10 > ems::engine::kFlashWriteSafeRpmX10);
             if (!engine_running_fast) {
+                if (g_calib_dirty &&
+                    (last_calib_save_ms == 0u ||
+                     elapsed(now, last_calib_save_ms, kCalibSaveMinIntervalMs))) {
+                    ems::engine::cfg::engine_config_serialize(g_calib_page0, kCalibPageBytes);
+                    if (ems::hal::nvm_save_calibration(0u, g_calib_page0,
+                                                       kCalibPageBytes)) {
+                        g_calib_dirty = false;
+                        last_calib_save_ms = now;
+                    }
+                }
                 adaptive_flush_pending = true;
             }
-            // If engine is running fast, keep adaptive_flush_pending false to defer flash write
         }
         if (adaptive_flush_pending) {
             // Double-check RPM before actually writing (engine may have started)

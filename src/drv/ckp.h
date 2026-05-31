@@ -98,6 +98,7 @@ void ckp_seed_disarm() noexcept;
 uint32_t ckp_seed_loaded_count() noexcept;
 uint32_t ckp_seed_confirmed_count() noexcept;
 uint32_t ckp_seed_rejected_count() noexcept;
+uint32_t ckp_get_cmp_glitch_count() noexcept;
 
 // ── Stall watchdog ────────────────────────────────────────────────────────────
 // Detecta motor parado entre dois dentes — situação em que tooth_count para de
