@@ -520,7 +520,7 @@ int main() {
                            snap.rpm_x10 >= hard - (inj_window * 3u / 4u)) {
                     inj_mask = 0x05u;
                 } else if (inj_window > 0u && snap.rpm_x10 >= hard - inj_window) {
-                    inj_mask = 0x01u;
+                    inj_mask = 0x05u;
                 }
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);
 
@@ -569,7 +569,18 @@ int main() {
                                                                fuel_corr.corr_clt_x256,
                                                                fuel_corr.corr_iat_x256,
                                                                fuel_corr.dead_time_us);
-                if (final_pw_us_base > fuel_corr.dead_time_us) {
+                // Corte de combustível na desaceleração (MS42 TI_PUR).
+                // Avaliado ANTES do X-Tau: evita alimentar o modelo de parede com PW
+                // real e depois descartar o resultado, contaminando a auto-calibração.
+                const bool decel_cut_active = !crank_rpm_window &&
+                    ems::engine::fuel_decel_cut_update(
+                        snap.rpm_x10, sensors.tps_pct_x10, sensors.clt_degc_x10);
+                ems::engine::misfire_set_all_inhibit(decel_cut_active || crank_rpm_window);
+                if (decel_cut_active) {
+                    g_last_net_pw_us = 0u;
+                    g_ae_active = false;
+                    ems::engine::transient_fuel_reset();
+                } else if (final_pw_us_base > fuel_corr.dead_time_us) {
                     uint32_t fuel_pw_us =
                         final_pw_us_base - static_cast<uint32_t>(fuel_corr.dead_time_us);
 
@@ -585,10 +596,10 @@ int main() {
                     g_last_net_pw_us = fuel_pw_us;
 
                     const bool xtau_enabled = !crank_rpm_window && (snap.rpm_x10 >= 7000u);
-                    
+
                     // Detecta transiente para auto-calibração X-τ
                     const bool is_transient = ems::engine::map_is_transient();
-                    
+
                     // Auto-calibração X-τ baseada em erro de lambda.
                     // Lambda vem exclusivamente do WBO2 via CAN (mesma fonte do
                     // STFT em 100ms); SensorData não carrega mais o2/lambda.
@@ -605,7 +616,7 @@ int main() {
                             sensors.clt_degc_x10,
                             is_transient);
                     }
-                    
+
                     // Usa modelo X-τ com parâmetros aprendidos
                     const uint32_t xtau_fuel_pw_us =
                         ems::engine::transient_fuel_xtau_with_autocalib(fuel_pw_us,
@@ -649,22 +660,6 @@ int main() {
                 if (g_rev_spark_trim != INT16_MIN && g_rev_spark_trim != 0) {
                     advance_deg = ems::engine::clamp_advance_deg(
                         static_cast<int16_t>(advance_deg + g_rev_spark_trim));
-                }
-
-                // Corte de combustível na desaceleração (MS42 TI_PUR)
-                const bool decel_cut_active = !crank_rpm_window &&
-                    ems::engine::fuel_decel_cut_update(
-                        snap.rpm_x10, sensors.tps_pct_x10, sensors.clt_degc_x10);
-                // Inibe misfire detection durante cortes intencionais de combustão:
-                // decel cut (sem fuel) e crank window (combustão instável no arranque)
-                ems::engine::misfire_set_all_inhibit(decel_cut_active || crank_rpm_window);
-                if (decel_cut_active) {
-                    // Zera PW e reseta X-Tau (parede seca durante corte;
-                    // na reativação o X-Tau repõe o filme naturalmente).
-                    final_pw_us_base = 0u;
-                    g_last_net_pw_us = 0u;
-                    g_ae_active = false;
-                    ems::engine::transient_fuel_reset();
                 }
 
                 const auto qc = ems::engine::quick_crank_update(
@@ -811,7 +806,7 @@ int main() {
                 //   (lambda leria lean sem combustível → STFT aprenderia errado)
                 const bool stft_inhibit = rev_cut ||
                     ems::engine::fuel_decel_cut_active() ||
-                    (::ecu_sched_get_inj_inhibit_mask() != 0u);
+                    (::ecu_sched_get_inj_inhibit_mask() == 0x0Fu);
                 const int16_t stft = ems::engine::fuel_update_stft_delayed(
                     now, snap.rpm_x10, map_bar_x100,
                     static_cast<int16_t>(lambda_target_x1000),

@@ -407,7 +407,7 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
         // Denominador usa baro dinâmico (MS42 TI_FAC_ALTI): MAP/baro em vez de MAP/100.
         // A altitude reduz o baro → denominador menor → PW sobe para compensar VE
         // não calibrada na altitude (WOT a 0.90bar não é igual a 90% carga no nível do mar).
-        const uint16_t baro = (g_baro_bar_x100 >= 70u && g_baro_bar_x100 <= 110u)
+        const uint16_t baro = (g_baro_bar_x100 != 0u)
                               ? g_baro_bar_x100 : cfg::g_eng_cfg.map_ref_bar_x100;
         base_pw_us = static_cast<uint32_t>(
             num / (100u * static_cast<uint64_t>(baro)));

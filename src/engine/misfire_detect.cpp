@@ -18,6 +18,10 @@ struct CylTdcPos {
 
 static CylTdcPos g_cyl_tdc[ems::engine::cfg::kCylinderCount];
 
+// Tabela pré-computada: [phase_A(0/1)][tooth_index] → cilindro (-1 = fora de janela).
+// Permite saída O(1) no ISR do CKP sem varrer todos os cilindros por dente.
+static int8_t g_tooth_to_cyl[2][58];
+
 // Acumuladores por cilindro (escritos apenas no ISR do CKP → volatile).
 static volatile uint32_t g_power_sum_ns[ems::engine::cfg::kCylinderCount];
 static volatile uint32_t g_pred_sum_ns[ems::engine::cfg::kCylinderCount];
@@ -69,6 +73,19 @@ void misfire_init() noexcept {
         g_cyl_tdc[cyl].tdc_tooth = static_cast<uint8_t>((i % 2u) * 30u);
         g_cyl_tdc[cyl].phase_A   = (i < 2u);
     }
+    // Pré-computa mapa dente→cilindro para lookup O(1) no ISR.
+    for (auto& row : g_tooth_to_cyl) {
+        for (auto& cell : row) { cell = -1; }
+    }
+    for (uint8_t c = 0u; c < kN; ++c) {
+        const uint8_t phase = g_cyl_tdc[c].phase_A ? 0u : 1u;
+        for (uint8_t t = 0u; t < ems::engine::kMisfireWindowTeeth; ++t) {
+            const uint8_t tooth = g_cyl_tdc[c].tdc_tooth + t;
+            if (tooth < 58u) {
+                g_tooth_to_cyl[phase][tooth] = static_cast<int8_t>(c);
+            }
+        }
+    }
     misfire_reset();
 }
 
@@ -106,38 +123,34 @@ void misfire_on_tooth(const CkpSnapshot& snap) noexcept {
     // Cortes intencionais de combustão: não acumular → evitar DTCs falsos
     if (g_all_inhibit) { return; }
 
-    const uint8_t ti  = static_cast<uint8_t>(snap.tooth_index & 0x3Fu);
-    const bool    phA = snap.phase_A;
+    const uint8_t ti    = static_cast<uint8_t>(snap.tooth_index & 0x3Fu);
+    const uint8_t phase = snap.phase_A ? 0u : 1u;
+    if (ti >= 58u) { return; }
+    const int8_t cyl_idx = g_tooth_to_cyl[phase][ti];
+    if (cyl_idx < 0) { return; }
+    const uint8_t c = static_cast<uint8_t>(cyl_idx);
+
     // Lê máscara de ignição: cilindros com DWELL inibido não têm combustão real
     const uint8_t ign_mask = static_cast<uint8_t>(::ecu_sched_get_ign_inhibit_mask());
 
-    for (uint8_t c = 0u; c < ems::engine::cfg::kCylinderCount; ++c) {
-        if (phA != g_cyl_tdc[c].phase_A) { continue; }
+    // Cilindro com faísca inibida pelo rev limiter: reseta janela sem avaliar
+    if ((ign_mask >> c) & 1u) {
+        g_power_sum_ns[c] = 0u;
+        g_pred_sum_ns[c]  = 0u;
+        g_power_teeth[c]  = 0u;
+        g_debounce[c]     = 0u;
+        return;
+    }
 
-        const uint8_t tdc = g_cyl_tdc[c].tdc_tooth;
-        if (ti < tdc || ti >= static_cast<uint8_t>(tdc + ems::engine::kMisfireWindowTeeth)) {
-            continue;
-        }
+    g_power_sum_ns[c] += snap.tooth_period_ns;
+    g_pred_sum_ns[c]  += snap.predicted_tooth_period_ns;
+    ++g_power_teeth[c];
 
-        // Cilindro com faísca inibida pelo rev limiter: reseta janela sem avaliar
-        if ((ign_mask >> c) & 1u) {
-            g_power_sum_ns[c] = 0u;
-            g_pred_sum_ns[c]  = 0u;
-            g_power_teeth[c]  = 0u;
-            g_debounce[c]     = 0u;
-            continue;
-        }
-
-        g_power_sum_ns[c] += snap.tooth_period_ns;
-        g_pred_sum_ns[c]  += snap.predicted_tooth_period_ns;
-        ++g_power_teeth[c];
-
-        if (g_power_teeth[c] >= ems::engine::kMisfireWindowTeeth) {
-            evaluate_window(c);
-            g_power_sum_ns[c] = 0u;
-            g_pred_sum_ns[c]  = 0u;
-            g_power_teeth[c]  = 0u;
-        }
+    if (g_power_teeth[c] >= ems::engine::kMisfireWindowTeeth) {
+        evaluate_window(c);
+        g_power_sum_ns[c] = 0u;
+        g_pred_sum_ns[c]  = 0u;
+        g_power_teeth[c]  = 0u;
     }
 }
 
