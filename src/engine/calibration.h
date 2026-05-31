@@ -118,7 +118,12 @@ extern uint8_t  antijerk_decay_cycles;
 
 // Limitador de RPM progressivo (MS42 §2.2.5 / PAT_INH_IV)
 extern uint32_t rev_limit_rpm_x10;
-extern uint32_t rev_limit_soft_window_x10;
+extern uint32_t rev_limit_soft_window_x10;   // janela do corte de injeção (menor, ~200 RPM)
+
+// Soft rev limiter por spark retard (complementar ao corte de injeção)
+// Janela mais larga (ex. 500 RPM) — retarda progressivamente antes do corte de injeção
+extern uint32_t rev_limit_spark_window_x10;  // janela do retardo de ignição
+extern int16_t  rev_limit_max_retard_deg;    // retardo máximo no limite (ex. 15°)
 
 // LTFT aditivo (MS42 TI_AD_ADD_MMV)
 extern uint16_t ltft_add_pw_threshold_us;

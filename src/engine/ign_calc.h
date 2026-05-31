@@ -27,6 +27,12 @@ struct AdvanceCorrections {
     int16_t antijerk_retard_deg; // subtracted: retardo anti-jerk no tip-in
 };
 
+// Trim de ignição para o soft rev limiter por faísca.
+// Retorna retardo negativo na zona suave; INT16_MIN quando RPM >= limite (spark cut).
+// O toggle de corte alternado é gerido internamente (estado estático).
+int16_t calc_rev_limit_spark_trim(uint32_t rpm_x10) noexcept;
+void    rev_limit_spark_reset() noexcept;
+
 int16_t calc_ign_iat_correction_deg(int16_t iat_x10) noexcept;
 int16_t calc_ign_clt_correction_deg(int16_t clt_x10) noexcept;
 int16_t calc_antijerk_retard_deg(bool ae_active) noexcept;

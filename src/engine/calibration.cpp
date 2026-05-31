@@ -163,9 +163,13 @@ uint16_t antijerk_tpsdot_threshold_x10 = 5u;   // mesmo que ae_tpsdot_threshold_
 int16_t  antijerk_retard_deg           = 3;
 uint8_t  antijerk_decay_cycles         = 3u;
 
-// Rev limiter: limite duro 7000 RPM, zona suave 200 RPM abaixo
+// Rev limiter: limite duro 7000 RPM
 uint32_t rev_limit_rpm_x10           = 70000u;
+// Corte de injeção: janela 200 RPM (6800–7000 RPM)
 uint32_t rev_limit_soft_window_x10   = 2000u;
+// Retardo de ignição: janela 500 RPM (6500–7000 RPM), máx 15° retardo
+uint32_t rev_limit_spark_window_x10  = 5000u;
+int16_t  rev_limit_max_retard_deg    = 15;
 
 // LTFT aditivo: ativa quando PW < 2.5ms (regime de marcha lenta / carga baixa)
 uint16_t ltft_add_pw_threshold_us = 2500u;

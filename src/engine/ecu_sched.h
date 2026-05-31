@@ -86,6 +86,12 @@ void ecu_sched_set_mspark(uint8_t  count,
 // Aplica-se tanto ao modo sequencial como presync.
 void ecu_sched_set_inj_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_inj_inhibit_mask(void);
+
+// Per-cylinder ignition inhibit (rev limiter por faísca).
+// mask: bit 0 = cyl 0 … bit 3 = cyl 3.
+// Suprime ECU_ACT_DWELL_START → bobina não carrega → sem faísca nesse cilindro.
+void ecu_sched_set_ign_inhibit_mask(uint8_t mask);
+uint8_t ecu_sched_get_ign_inhibit_mask(void);
 void ecu_sched_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_ivc_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);

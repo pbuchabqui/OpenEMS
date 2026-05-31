@@ -146,10 +146,12 @@ static volatile uint32_t g_dwell_arm_tick[4]  = {0U, 0U, 0U, 0U};  // TIM2_CNT n
 static volatile uint32_t g_dwell_wdog_ticks[4] = {0U, 0U, 0U, 0U};  // 1.4 × dwell_ticks no momento do arm
 static volatile uint32_t g_dwell_watchdog_count = 0U;
 
-// ── Per-cylinder injection inhibit (MS42 §2.2.5) ──────────────────────────
-// Escrito pelo main loop (ecu_sched_set_inj_inhibit_mask), lido pela ISR (arm_channel).
-// bit 0 = cyl 0 (INJ1), bit 1 = cyl 1 (INJ2), bit 2 = cyl 2 (INJ3), bit 3 = cyl 3 (INJ4).
+// ── Per-cylinder inhibit masks (MS42 §2.2.5) ──────────────────────────────
+// Escrito pelo main loop, lido pela ISR (arm_channel). bit N = cilindro N.
 static volatile uint8_t g_inj_inhibit_mask = 0U;
+// Ignition inhibit: suprime ECU_ACT_DWELL_START → bobina não carrega → sem faísca.
+// Usado pelo soft rev limiter por ignição (retardo + corte alternado de cilindros).
+static volatile uint8_t g_ign_inhibit_mask = 0U;
 
 // ── Multi-spark (MS42 §2.2.3) ──────────────────────────────────────────────
 // count=0 desabilitado. Valores escritos por ecu_sched_set_mspark() (main loop),
@@ -212,6 +214,18 @@ static inline uint8_t inj_ch_to_cyl_bit(uint8_t ch)
         case ECU_CH_INJ2: return (1U << 1U);
         case ECU_CH_INJ3: return (1U << 2U);
         case ECU_CH_INJ4: return (1U << 3U);
+        default: return 0U;
+    }
+}
+
+// Mapeia canal de ignição para bit de cilindro no g_ign_inhibit_mask.
+static inline uint8_t ign_ch_to_cyl_bit(uint8_t ch)
+{
+    switch (ch) {
+        case ECU_CH_IGN1: return (1U << 0U);
+        case ECU_CH_IGN2: return (1U << 1U);
+        case ECU_CH_IGN3: return (1U << 2U);
+        case ECU_CH_IGN4: return (1U << 3U);
         default: return 0U;
     }
 }
@@ -353,6 +367,14 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
         const uint8_t cyl_bit = inj_ch_to_cyl_bit(ch);
         if (cyl_bit != 0U && (g_inj_inhibit_mask & cyl_bit) != 0U) { return; }
+    }
+
+    // ── Ignition inhibit mask (rev limiter por faísca) ────────────────────
+    // Suprime ECU_ACT_DWELL_START: bobina não carrega → sem energia → sem faísca.
+    // ECU_ACT_SPARK passa (output toggle inócuo sem carga prévia na bobina).
+    if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
+        const uint8_t cyl_bit = ign_ch_to_cyl_bit(ch);
+        if (cyl_bit != 0U && (g_ign_inhibit_mask & cyl_bit) != 0U) { return; }
     }
 
     // ── Dwell watchdog tracking (apenas canais de ignição) ────────────────
@@ -678,9 +700,16 @@ void ecu_sched_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t at
 void ecu_sched_set_inj_inhibit_mask(uint8_t mask)
 {
     ems::hal::CriticalSectionGuard guard;
-    g_inj_inhibit_mask = mask & 0x0FU;  // apenas 4 cilindros
+    g_inj_inhibit_mask = mask & 0x0FU;
 }
 uint8_t ecu_sched_get_inj_inhibit_mask(void) { return g_inj_inhibit_mask; }
+
+void ecu_sched_set_ign_inhibit_mask(uint8_t mask)
+{
+    ems::hal::CriticalSectionGuard guard;
+    g_ign_inhibit_mask = mask & 0x0FU;
+}
+uint8_t ecu_sched_get_ign_inhibit_mask(void) { return g_ign_inhibit_mask; }
 
 namespace ems::engine {
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
@@ -741,6 +770,7 @@ void ecu_sched_test_reset(void)
     g_angle_table_count = 0U; g_angle_tooth_mask_lo = 0U; g_angle_tooth_mask_hi = 0U;
     g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg; g_ivc_clamp_count = 0U;
     g_inj_inhibit_mask = 0U;
+    g_ign_inhibit_mask = 0U;
     g_mspark_count = 0U; g_mspark_inter_dwell_ticks = 0U; g_mspark_atdc_limit_deg = 18U;
 }
 uint8_t ecu_sched_test_angle_table_size(void) { return g_angle_table_count; }
