@@ -9,7 +9,7 @@
  *     MAP_SE10   → ADC1_IN3  (PA2)
  *     MAF_V_SE11 → ADC1_IN4  (PA3)
  *     TPS_SE12   → ADC1_IN5  (PA4)
- *     O2_SE4B    → ADC1_IN6  (PA5)
+ *     KNOCK_SE4B → ADC1_IN6  (PA5) — knock sensor (O2 migrated to CAN-only)
  *     AN1_SE6B   → ADC1_IN7  (PB0)
  *     AN2_SE7B   → ADC1_IN8  (PB1)
  *     AN3_SE8B   → ADC1_IN9  (PC0)
@@ -56,7 +56,7 @@ static constexpr uint8_t kAdc1ChMap[8] = {
     // AdcPrimaryChannel::MAP_SE10   → ADC1_IN3  → índice 0
     // AdcPrimaryChannel::MAF_V_SE11 → ADC1_IN4  → índice 1
     // AdcPrimaryChannel::TPS_SE12   → ADC1_IN5  → índice 2
-    // AdcPrimaryChannel::O2_SE4B    → ADC1_IN6  → índice 3
+    // AdcPrimaryChannel::KNOCK_SE4B → ADC1_IN6  → índice 3
     // AdcPrimaryChannel::AN1_SE6B   → ADC1_IN7  → índice 4
     // AdcPrimaryChannel::AN2_SE7B   → ADC1_IN8  → índice 5
     // AdcPrimaryChannel::AN3_SE8B   → ADC1_IN9  → índice 6

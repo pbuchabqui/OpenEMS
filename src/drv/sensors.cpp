@@ -433,7 +433,7 @@ inline void sample_fast_channels() noexcept {
     const uint16_t tps_raw   = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::TPS_SE12);
     // ADC1_IN6 (PA5) formerly O2 — O2 is now CAN-only (wideband via FDCAN1).
     // This channel is repurposed for the knock sensor (piezo + external BP filter).
-    const uint16_t knock_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::O2_SE4B);
+    const uint16_t knock_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::KNOCK_SE4B);
 
     g_map_filt = iir(g_map_filt, map_raw, 3, 10);
 

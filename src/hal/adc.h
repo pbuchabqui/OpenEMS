@@ -30,7 +30,7 @@ enum class AdcPrimaryChannel : uint8_t {
     MAP_SE10   = 0,
     MAF_V_SE11 = 1,
     TPS_SE12   = 2,
-    O2_SE4B    = 3,
+    KNOCK_SE4B = 3,  // PA5/ADC1_IN6 — knock sensor (O2 migrated to CAN-only)
     AN1_SE6B   = 4,
     AN2_SE7B   = 5,
     AN3_SE8B   = 6,

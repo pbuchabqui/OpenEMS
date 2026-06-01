@@ -77,7 +77,8 @@
 | PB8, PB9 | CAN RX/TX (WBO2) | FDCAN1 AF9 |
 | PA11, PA12 | USB D−/D+ | USB AF10 |
 | PB12, PB13 | Fan / Fuel Pump GPIO | — |
-| PA2–PA5, PB0–PB1, PC0–PC1 | ADC1 (MAP, MAF, TPS, O2, AN1–4) | ADC1 |
+| PA5 | Knock sensor input | ADC1_IN6 |
+| PB0–PB1, PC0–PC1 | ADC1 (APP1–2, ETB_TPS1–2) | ADC1 |
 | PC2–PC5 | ADC2 (CLT, IAT, FuelP, OilP) | ADC2 |
 
 ---
@@ -95,8 +96,8 @@ void iwdg_kick() noexcept;         // feed watchdog
 ### 5.2 ADC (`hal/adc.h`)
 ```cpp
 enum class AdcPrimaryChannel : uint8_t {
-    MAP_SE10=0, MAF_V_SE11=1, TPS_SE12=2, O2_SE4B=3,
-    AN1_SE6B=4, AN2_SE7B=5, AN3_SE8B=6, AN4_SE9B=7
+    MAP_SE10=0, MAF_V_SE11=1, TPS_SE12=2, KNOCK_SE4B=3,  // PA5 — knock
+    AN1_SE6B=4, AN2_SE7B=5, AN3_SE8B=6,  AN4_SE9B=7
 };
 enum class AdcSecondaryChannel : uint8_t {
     CLT_SE14=0, IAT_SE15=1, FUEL_PRESS_SE5B=2, OIL_PRESS_SE6B=3
@@ -111,6 +112,7 @@ bool    adc_recovery_failed();
 ```
 - ADC clock: 62,5 MHz · 12-bit · trigger TIM6_TRGO · GPDMA one-shot com re-arm por ISR
 - Sampling: 47,5 ciclos (~0,76 µs por canal)
+- **Nota:** Sensor O2/lambda (wideband) é recebido exclusivamente via CAN (FDCAN1, frame 0x180), não por ADC
 
 ### 5.3 Timers (`hal/stm32h562/timer.h`)
 ```cpp
@@ -520,31 +522,45 @@ void xtau_autocal_clear_dirty() noexcept;
 
 ### 7.8 Knock (`engine/knock.h`)
 
+**Hardware:**
+- Entrada: PA5 / ADC1_IN6
+- Caminho: sensor piezoelétrico → filtro passa-banda externo → PA5 → ADC1
+- Detecção: software via threshold ADC (STM32H562 não possui periférico COMP)
+
 **Parâmetros:**
 | Constante | Valor |
 |---|---|
 | kKnockCylinders | 4 |
-| kDefaultEventThreshold | 3 eventos/janela |
+| kDefaultAdcThreshold | 2048 (12-bit) |
+| kAdcThresholdMin | 256 |
+| kAdcThresholdMax | 4000 |
 | kRetardStepX10 | 20 (2,0°) |
 | kRetardMaxX10 | 100 (10,0°) |
 | kRecoveryStepX10 | 1 (0,1°) |
 | kRecoveryDelayCycles | 10 ciclos limpos |
+| kThresholdDropOnKnock | 64 |
+| kThresholdRiseAfterClean | 32 (após 100 ciclos) |
 
 ```cpp
 extern volatile uint16_t knock_retard_x10[4]; // por cilindro
 
 void knock_init();
-void knock_window_open(uint8_t cyl);   // ativar CMP0 listening
+void knock_window_open(uint8_t cyl);          // ativar janela de escuta
 void knock_window_close(uint8_t cyl);
-void knock_cmp0_isr();                  // ISR: incrementa count
-void knock_cycle_complete(uint8_t cyl); // aplicar retard/recovery
+void knock_window_cycle_end();                // chamado no DWELL_START (fecha cil. anterior)
+void knock_adc_update(uint16_t raw_adc);      // chamado de sample_fast_channels()
+void knock_cycle_complete(uint8_t cyl);       // aplicar retard/recovery
 uint16_t knock_get_retard_x10(uint8_t cyl);
-uint8_t knock_get_vosel();              // DAC ref 0–63
+void knock_set_adc_threshold(uint16_t threshold); // range [256, 4000]
+uint16_t knock_get_adc_threshold();
 ```
 
 **Algoritmo por ciclo:**
-- count > threshold → retard += 2° · VOSEL-- (threshold mais alto)
-- count ≤ threshold por 10+ ciclos → retard −= 0,1° · VOSEL++ (threshold menor)
+- Janela ativa: amostragem ADC em cada dente CKP via `knock_adc_update(raw)`
+- Evento knock: `raw_adc > threshold` incrementa contador da janela
+- Fim do ciclo: `count > 0` → retard += 2° · threshold −= 64 (mais sensível)
+- Ciclo limpo: após 10+ consecutivos → retard −= 0,1°; após 100 limpos → threshold += 32 (menos sensível)
+- Persistência NVM: retardo em slot knock, threshold armazenado como `int8_t` (/32)
 
 ### 7.9 Quick Crank (`engine/quick_crank.h`)
 

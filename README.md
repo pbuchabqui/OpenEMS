@@ -106,6 +106,19 @@ Eventos de injecao ficam codificados no scheduler do motor, nao em um driver leg
 
 Eventos de ignicao usam o mesmo conceito, mas programam TIM8 para dwell e centelha.
 
+### 4a. Detecção De Knock (Detonação)
+
+- Sensor piezoelétrico knock conectado em PA5/ADC1_IN6.
+- Hardware: filtro passa-banda externo → PA5 → ADC1.
+- Detecção: software via threshold ADC (STM32H562 não possui periférico COMP).
+- Amostragem: `knock_adc_update(raw)` chamado de `sample_fast_channels()` a cada dente CKP durante janela ativa.
+- Threshold ADC: padrão 2048 (12-bit), range [256, 4000].
+  - Adaptativo: -64 por evento de knock, +32 após 100 ciclos limpos.
+- Janela de knock: aberta/fechada por `knock_window_cycle_end()` no evento `ECU_ACT_DWELL_START` (modo sequencial).
+- Retardo: +2,0° por evento de knock, máximo 10,0°.
+- Recuperação: -0,1° por ciclo limpo após 10 ciclos consecutivos limpos.
+- Persistência NVM: retardo em slot knock, threshold armazenado como int8_t (/32).
+
 ### 5. Atuadores
 
 Mapeamento atual pretendido:
@@ -136,10 +149,13 @@ Pinos ADC (expansão):
 
 | Funcao | Canal | Pino |
 |---|---:|---|
+| KNOCK | ADC1_IN6 | PA5 |
 | APP1 | AN1/ADC1_IN7 | PB0 |
 | APP2 | AN2/ADC1_IN8 | PB1 |
 | ETB_TPS1 | AN3/ADC1_IN9 | PC0 |
 | ETB_TPS2 | AN4/ADC1_IN10 | PC1 |
+
+**Nota:** Sensor lambda/O2 (wideband) é recebido exclusivamente via CAN (FDCAN1, ID 0x180). Não há entrada ADC para O2.
 
 Limitacoes de placa/pino:
 
