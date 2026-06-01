@@ -79,14 +79,13 @@ void knock_init() noexcept {
     g = {};
     g.event_threshold = kDefaultEventThreshold;
 
-#ifndef EMS_HOST_TEST
-    // Enable COMP1 interrupt at priority 3 (lower than CKP/TIM5 at prio 1,
-    // higher than main-loop-level work). COMP1 IRQ number: verify against
-    // RM0481 Table 175 for STM32H562 — currently assumed IRQ64.
-    // CMP0 register base (0x40073000) also needs verification vs RM0481 §
-    nvic_set_priority(IRQ_COMP1, 3u);
-    nvic_enable_irq(IRQ_COMP1);
-#endif
+    // HARDWARE PENDING: STM32H562 has no on-chip analog comparator (COMP).
+    // CMP0_CR1/CMP0_DACCR at 0x40073000 are invalid on this SoC.
+    // Knock sensor must be connected via an external comparator to a GPIO
+    // with EXTI interrupt. When hardware design is finalised:
+    //   1. Replace CMP0_CR1/CMP0_DACCR with actual peripheral registers.
+    //   2. Add nvic_set_priority / nvic_enable_irq for the correct EXTI IRQn.
+    //   3. Update COMP1_IRQHandler to match the actual EXTI vector name.
 
     // Carrega retard persistido do NVM: rpm_i=0, load_i=cyl (4 células)
     // nvm_read_knock retorna int8_t em deci-graus (0.1°); knock_retard_x10 usa ×10.
@@ -228,8 +227,9 @@ uint8_t knock_test_window_cyl() noexcept {
 
 }  // namespace ems::engine
 
-#ifndef EMS_HOST_TEST
+// COMP1_IRQHandler stub kept for linker compatibility.
+// Replace with the correct EXTI handler when knock hardware is defined.
+// See comment in knock_init() above.
 extern "C" void COMP1_IRQHandler() noexcept {
     ems::engine::knock_cmp0_isr();
 }
-#endif

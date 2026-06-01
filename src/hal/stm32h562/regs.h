@@ -702,7 +702,10 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 
 // IRQ numbers — STM32H562 (RM0481 §Table 87 / cmsis-device-h5 stm32h562xx.h)
 // Valores confirmados contra TIM5_IRQn=48 etc.; scheduler usa TIM2/TIM8 sem ISR no caminho crítico.
-#define IRQ_COMP1        64u   // COMP1/COMP2 combined (knock comparator) — verify against RM0481 Table 175
+// NOTE: STM32H562 has NO analog comparator (COMP) peripheral — confirmed
+// in CMSIS header stm32h562xx.h (no COMP1_IRQn entry). IRQ64 = LPTIM1.
+// Knock sensor must use an external comparator routed to a GPIO/EXTI line.
+// IRQ_COMP1 is intentionally undefined; update knock.cpp when hardware is known.
 #define IRQ_TIM2         45u   // TIM2 global (injection output compare)
 #define IRQ_TIM5         48u   // TIM5 global (CKP input capture)
 #define IRQ_TIM3         46u   // TIM3 (PWM IACV/wastegate — não usa IRQ)
