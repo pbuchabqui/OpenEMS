@@ -67,12 +67,14 @@ inline void process_rx(uint32_t now_ms) noexcept {
 }
 
 // TX 0x400 — 10 ms
-// status_bits vem do chamador; o bit STATUS_WBO2_FAULT é forçado se sensor offline
+// byte[6] = pw_ms_x10
+// byte[7] = status_bits[7:0]  (bits 8-15 go in 0x401 byte[6])
+// WBO2_FAULT (bit 9) is forced here on the full 16-bit word before splitting.
 inline void tx_0x400(const ems::drv::CkpSnapshot& ckp,
                      const ems::drv::SensorData&  sensors,
-                     int8_t  advance_deg,
-                     uint8_t pw_ms_x10,
-                     uint8_t status_bits) noexcept {
+                     int8_t   advance_deg,
+                     uint8_t  pw_ms_x10,
+                     uint16_t status_bits) noexcept {
     ems::hal::CanFrame out = {};
     out.id       = 0x400u;
     out.dlc      = 8u;
@@ -81,6 +83,11 @@ inline void tx_0x400(const ems::drv::CkpSnapshot& ckp,
     const uint16_t rpm = static_cast<uint16_t>(
         (ckp.rpm_x10 > 655350u) ? 65535u : (ckp.rpm_x10 / 10u));
 
+    // Force WBO2_FAULT on the full 16-bit word so bit 9 is preserved before split
+    const uint16_t effective_status = g_wbo2_fault
+        ? (status_bits | ems::app::STATUS_WBO2_FAULT)
+        : (status_bits & ~static_cast<uint16_t>(ems::app::STATUS_WBO2_FAULT));
+
     out.data[0] = static_cast<uint8_t>(rpm & 0xFFu);
     out.data[1] = static_cast<uint8_t>((rpm >> 8u) & 0xFFu);
     out.data[2] = clamp_u8(sensors.map_bar_x1000 / 10u);
@@ -88,21 +95,18 @@ inline void tx_0x400(const ems::drv::CkpSnapshot& ckp,
     out.data[4] = clamp_u8_i32((static_cast<int32_t>(sensors.clt_degc_x10) / 10) + 40);
     out.data[5] = clamp_u8_i32(static_cast<int32_t>(advance_deg) + 40);
     out.data[6] = pw_ms_x10;
-
-    // Força bit de falha WBO2 no byte de status antes de transmitir
-    const uint8_t effective_status = g_wbo2_fault
-        ? (status_bits | ems::app::STATUS_WBO2_FAULT)
-        : (status_bits & static_cast<uint8_t>(~ems::app::STATUS_WBO2_FAULT));
-    out.data[7] = effective_status;
+    out.data[7] = static_cast<uint8_t>(effective_status & 0xFFu);  // bits 0-7
 
     static_cast<void>(ems::hal::can0_tx(out));
 }
 
 // TX 0x401 — 100 ms
+// byte[6] = status_bits[15:8] (bits 8-15 of 16-bit status word, e.g. STATUS_WBO2_FAULT bit9)
+// byte[7] = vvt_exhaust_pct (reserved, 0 until VVT implemented)
 inline void tx_0x401(const ems::drv::SensorData& sensors,
-                     int8_t  stft_pct,
-                     uint8_t vvt_intake_pct,
-                     uint8_t vvt_exhaust_pct) noexcept {
+                     int8_t   stft_pct,
+                     uint8_t  status_hi,
+                     uint8_t  vvt_exhaust_pct) noexcept {
     ems::hal::CanFrame out = {};
     out.id       = 0x401u;
     out.dlc      = 8u;
@@ -114,8 +118,8 @@ inline void tx_0x401(const ems::drv::SensorData& sensors,
     out.data[3] = static_cast<uint8_t>((sensors.oil_press_bar_x1000 >> 8u) & 0xFFu);
     out.data[4] = clamp_u8_i32((static_cast<int32_t>(sensors.iat_degc_x10) / 10) + 40);
     out.data[5] = clamp_u8_i32(static_cast<int32_t>(stft_pct) + 100);
-    out.data[6] = vvt_intake_pct;
-    out.data[7] = vvt_exhaust_pct;
+    out.data[6] = status_hi;       // bits 8-15 of status_bits (STATUS_WBO2_FAULT = bit1 here)
+    out.data[7] = vvt_exhaust_pct; // reserved, always 0 until VVT implemented
 
     static_cast<void>(ems::hal::can0_tx(out));
 }
@@ -191,7 +195,7 @@ void can_stack_process(uint32_t now_ms,
                        int8_t   advance_deg,
                        uint8_t  pw_ms_x10,
                        int8_t   stft_pct,
-                       uint8_t  vvt_intake_pct,
+                       uint8_t  /*vvt_intake_pct*/,  // reserved — replaced by status_hi in 0x401[6]
                        uint8_t  vvt_exhaust_pct,
                        uint16_t status_bits) noexcept {
     process_rx(now_ms);
@@ -209,7 +213,10 @@ void can_stack_process(uint32_t now_ms,
 
     if (elapsed(now_ms, g_last_tx_401_ms, 100u)) {
         g_last_tx_401_ms = now_ms;
-        tx_0x401(sensors, stft_pct, vvt_intake_pct, vvt_exhaust_pct);
+        // FIX: pass status_hi (bits 8-15) so STATUS_WBO2_FAULT (bit 9) reaches the bus.
+        // vvt_intake_pct dropped (VVT not implemented, was always 0).
+        const uint8_t status_hi = static_cast<uint8_t>((status_bits >> 8u) & 0xFFu);
+        tx_0x401(sensors, stft_pct, status_hi, vvt_exhaust_pct);
     }
 
     if (elapsed(now_ms, g_last_tx_402_ms, 500u)) {

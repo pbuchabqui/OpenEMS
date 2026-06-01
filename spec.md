@@ -122,11 +122,15 @@ void    tim3_pwm_init(uint32_t freq_hz);  // IACV/Wastegate
 void    tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10);
 void    tim4_pwm_init(uint32_t freq_hz);  // VVT
 void    tim4_set_duty(uint8_t ch, uint16_t duty_pct_x10);
-void    tim1_etb_pwm_init(uint32_t freq_hz); // ETB 20 kHz
+void    tim1_etb_pwm_init(uint32_t freq_hz); // ETB 20 kHz (namespace ems::hal)
 void    tim1_etb_set_duty_x10(uint16_t duty_pct_x10);
+// C-linkage wrappers chamados por etb_driver.cpp:
+void    timer_etb_pwm_init(void);            // configura PA8 CH1 + PA9 CH1N com dead-time
+void    timer_etb_set_duty(uint16_t duty);   // duty 0–1000 (0–100%)
 ```
 - TIM3/TIM4: PSC=3 (÷4, 62,5 MHz base)
 - TIM1 ETB: ARR=12499 @ 20 kHz, dead-time ~200 ns
+- PA8 = TIM1\_CH1 (half-bridge high-side); PA9 = TIM1\_CH1N (complementar, low-side)
 
 ### 5.4 CAN (`hal/can.h`)
 ```cpp
@@ -749,8 +753,9 @@ DiagnosticManager::is_system_ready(); // sem falhas CRITICAL
 **TX Frames:**
 | ID | Cadência | Payload (8 bytes) |
 |---|---|---|
-| 0x400 | 10 ms | RPM(2LE) · MAP_kpa(1) · TPS_pct(1) · CLT+40(1) · advance+40(1) · PW_x10(1) · StatusBits_lo(1) |
-| 0x401 | 100 ms | FuelP_kpa(2LE) · OilP_kpa(2LE) · IAT+40(1) · STFT+100(1) · VVT_in_pct(1) · VVT_ex_pct(1) |
+| 0x400 | 10 ms | RPM(2LE) · MAP_kpa(1) · TPS_pct(1) · CLT+40(1) · advance+40(1) · PW_x10(1) · StatusBits[7:0](1) |
+| 0x401 | 100 ms | FuelP_kpa(2LE) · OilP_kpa(2LE) · IAT+40(1) · STFT+100(1) · StatusBits[15:8](1) · VVT_ex_pct(1) |
+| 0x402 | 500 ms | FuelAccum_ul(4LE) · FuelDelta_ul(2LE) · reservado(2) |
 
 **RX — WBO2 (padrão ID 0x180):**
 - `data[0:1]` = lambda × 1000 (little-endian)
@@ -915,7 +920,7 @@ make clean      # remove /tmp/openems-build
 
 | Slot | Endereço Flash | Conteúdo | Tamanho |
 |---|---|---|---|
-| Setor 0 | 0x08100000 | LTFT (16×16 int8) + Knock (4×1 int8) + VOSEL + RuntimeSeed | 8 KB |
+| Setor 0 | 0x08100000 | LTFT 256B (16×16 int8, off.0) + Knock 64B (8×8 int8, off.256) + LTFT_add 64B (8×8 int8, off.320) + RuntimeSeed 32B (off.512) | 8 KB |
 | Setor 1 | 0x08102000 | Calibração página 0 (config + ETB + IVC) | 512 B |
 | Setor 2 | 0x08104000 | Calibração página 1 (VE table) | 512 B |
 | Setor 3 | 0x08106000 | Calibração página 2 (Spark table) | 512 B |
@@ -939,7 +944,7 @@ make clean      # remove /tmp/openems-build
 | `_x100` | × 100 (centi) | `maf_gps_x100` |
 | `_x1000` | × 1000 (milli) | `lambda_x1000 = 1000` → λ 1,000 |
 | `_x256` / `_q8` | Q8 fixo (÷ 256) | `corr_clt_x256 = 288` → 1,125 |
-| `_x10_pct` | % × 10 | `tps_pct_x10 = 500` → 50,0 % |
+| `_pct_x10` | % × 10 | `tps_pct_x10 = 500` → 50,0 % |
 | `_p40` | + 40 offset (wire encoding) | `clt_p40 = 65` → 25°C |
 | `_ms_x10` | ms × 10 | `dwell_ms_x10 = 30` → 3,0 ms |
 | `_deg` | graus inteiros | `advance_deg = 20` → 20° BTDC |

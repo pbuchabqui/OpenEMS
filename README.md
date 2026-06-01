@@ -139,7 +139,7 @@ Mapeamento atual pretendido:
 | AUX PWM 2 | TIM3 CH2 | PA7 |
 | AUX PWM 3 | TIM4 CH1 | PB6 |
 | AUX PWM 4 | TIM4 CH2 | PB7 |
-| ETB PWM | TIM1 CH1 | PA8 |
+| ETB PWM | TIM1 CH1 | PA8 (PA9 reservado USART1\_TX \- sem CH1N) |
 | ETB DIR | GPIO | PB14 |
 | ETB EN | GPIO | PB15 |
 | UI proprietaria UART TX | USART1 TX | PA9 |
@@ -232,9 +232,17 @@ Definicao de pronto para o MVP de bancada:
 - UI bridge usa UART `PA9/PA10` a 115200 8N1 para assinatura, realtime data e escrita pequena de calibracao.
 - Durante ensaio, registrar `loop2_last`, `loop2_max`, `late_event_count`, `cycle_schedule_drop_count` e `calibration_clamp_count`.
 
-### Status Bits (16-bit, CAN frame bytes 6-7)
+### CAN TX Frames
 
-- Status bits são transmitidos no quadro CAN 0x400 nos bytes 6-7 (upper byte em `data[7]`).
+| ID | Cadência | Layout |
+|---|---|---|
+| 0x400 | 10 ms | RPM(2LE) · MAP_kpa(1) · TPS_pct(1) · CLT+40(1) · advance+40(1) · PW_x10(1) · StatusBits[7:0](1) |
+| 0x401 | 100 ms | FuelP_kpa(2LE) · OilP_kpa(2LE) · IAT+40(1) · STFT+100(1) · StatusBits[15:8](1) · VVT_ex_pct(1) |
+| 0x402 | 500 ms | FuelAccum_ul(4LE) · FuelDelta_ul(2LE) · reservado(2) |
+
+### Status Bits (16-bit, split entre 0x400 e 0x401)
+
+- Bits 0-7 transmitidos em `0x400 data[7]`; bits 8-15 em `0x401 data[6]`.
 - Bits definidos em `src/app/status_bits.h`:
   - `STATUS_SYNC_FULL` (bit 0): sincronismo CKP/CMP completo.
   - `STATUS_PHASE_A` (bit 1): fase parcial disponível.
@@ -244,8 +252,8 @@ Definicao de pronto para o MVP de bancada:
   - `STATUS_XTAU_LEARN` (bit 5): autocalibracao X-τ em progresso.
   - `STATUS_SCHED_LATE` (bit 6): evento de scheduler atrasado.
   - `STATUS_SCHED_DROP` (bit 7): evento descartado no scheduler.
-  - `STATUS_SCHED_CLAMP` (bit 8): ajuste limitado na calibracao.
-  - `STATUS_WBO2_FAULT` (bit 9): sensor WBO2 offline.
+  - `STATUS_SCHED_CLAMP` (bit 8): ajuste limitado na calibracao — em `0x401 data[6]` bit 0.
+  - `STATUS_WBO2_FAULT` (bit 9): sensor WBO2 offline — em `0x401 data[6]` bit 1.
 
 ### ETB (Electronic Throttle Body)
 

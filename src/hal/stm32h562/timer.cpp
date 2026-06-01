@@ -225,9 +225,12 @@ void timer_etb_pwm_init(void) {
     RCC_APB2ENR |= RCC_APB2ENR_TIM1EN;
 
     // ── 2. Configurar pinos PA8 (TIM1_CH1) e PA9 (TIM1_CH1N) ─────────────────
-    // AF1 = TIM1 nos pinos PA8, PA9
+    // AF1: PA8=TIM1_CH1. PA9 AF1=TIM1_CH2 (NAO CH1N; TIM1_CH1N fica em PA7 ou PB13).
+    // PA9=USART1_TX no projeto -- nao reconfigurar como AF TIM1.
+    // Esta funcao (timer_etb_pwm_init) nao e chamada pelo main flow;
+    // etb_driver.cpp usa tim1_etb_pwm_init() que so configura PA8.
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 8u, GPIO_AF1);
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 9u, GPIO_AF1);
+    // PA9 omitido: USART1_TX conflito; CH1N nao disponivel neste pino
 
     // ── 3. Configurar TIM1 para PWM com dead-time ─────────────────────────────
     // Frequência: 20kHz, Resolução: 10-bit (0-1023)
