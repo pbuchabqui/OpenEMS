@@ -12,6 +12,10 @@
 #include "engine/diagnostic_manager.h"
 #endif
 
+#if __has_include("engine/knock.h")
+#include "engine/knock.h"
+#endif
+
 namespace {
 
 using ems::drv::SensorData;
@@ -125,7 +129,7 @@ static bool g_app_plaus_fault = false;
 static bool g_etb_plaus_fault = false;
 
 static uint16_t g_map_filt  = 0u;
-static uint16_t g_o2_filt   = 0u;
+// g_o2_filt removed — O2 is CAN-only; PA5/ADC1_IN6 is now knock sensor input.
 
 static uint16_t g_tps_buf[4]  = {};
 static uint8_t  g_tps_pos     = 0u;
@@ -162,7 +166,7 @@ inline void reset_state() noexcept {
     g_data_swap_flag = 0u;  // staging é o buffer válido inicial
 
     g_map_filt  = 0u;
-    g_o2_filt   = 0u;
+
 
     for (uint8_t i = 0u; i < 4u; ++i) {
         g_tps_buf[i]        = 0u;
@@ -424,13 +428,14 @@ inline void sample_fast_channels() noexcept {
         return;  // Sai sem atualizar outros sensores
     }
     
-    const uint16_t map_raw  = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAP_SE10);
-    const uint16_t mafv_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAF_V_SE11);
-    const uint16_t tps_raw  = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::TPS_SE12);
-    const uint16_t o2_raw   = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::O2_SE4B);
+    const uint16_t map_raw   = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAP_SE10);
+    const uint16_t mafv_raw  = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAF_V_SE11);
+    const uint16_t tps_raw   = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::TPS_SE12);
+    // ADC1_IN6 (PA5) formerly O2 — O2 is now CAN-only (wideband via FDCAN1).
+    // This channel is repurposed for the knock sensor (piezo + external BP filter).
+    const uint16_t knock_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::O2_SE4B);
 
     g_map_filt = iir(g_map_filt, map_raw, 3, 10);
-    g_o2_filt  = iir(g_o2_filt,  o2_raw, 1, 10);
 
     g_tps_buf[g_tps_pos] = tps_raw;
     g_tps_pos = static_cast<uint8_t>((g_tps_pos + 1u) & 0x3u);
@@ -438,7 +443,16 @@ inline void sample_fast_channels() noexcept {
     apply_fault(SensorId::MAP, map_raw);
     apply_fault(SensorId::MAF, mafv_raw);
     apply_fault(SensorId::TPS, tps_raw);
-    apply_fault(SensorId::O2,  o2_raw);
+    // O2 fault no longer sourced from ADC — lambda comes via CAN.
+    // Clear any stale O2 fault bit so it does not trigger limp mode.
+    g_data_staging.fault_bits = static_cast<uint8_t>(
+        g_data_staging.fault_bits & ~(1u << static_cast<uint8_t>(SensorId::O2)));
+
+    // Feed knock ADC sample — knock_adc_update() counts samples above threshold
+    // only while a window is active (no-op otherwise).
+#if __has_include("engine/knock.h")
+    ems::engine::knock_adc_update(knock_raw);
+#endif
 
     g_data_staging.map_bar_x1000 = g_fault[static_cast<uint8_t>(SensorId::MAP)].active
                          ? kFallbackMapBarX1000
@@ -503,11 +517,7 @@ inline void sample_fast_channels() noexcept {
                                        FaultSeverity::WARNING,
                                        mafv_raw, 0);
     }
-    if (g_fault[static_cast<uint8_t>(SensorId::O2)].active) {
-        DiagnosticManager::report_fault(DiagnosticCode::O2_SENSOR_RANGE,
-                                       FaultSeverity::INFO,
-                                       o2_raw, 0);
-    }
+    // O2 ADC fault removed — O2 now CAN-only; knock_raw uses that channel.
     
     // Perform plausibility check between MAP and TPS
     if (!DiagnosticManager::check_sensor_plausibility(g_data_staging.map_bar_x1000,

@@ -21,10 +21,7 @@ extern "C" void ADC2_IRQHandler()            noexcept __attribute__((weak, alias
 extern "C" void GPDMA1_Channel0_IRQHandler() noexcept __attribute__((weak, alias("Default_Handler")));
 extern "C" void GPDMA1_Channel1_IRQHandler() noexcept __attribute__((weak, alias("Default_Handler")));
 extern "C" void TIM5_IRQHandler()            noexcept __attribute__((weak, alias("Default_Handler")));
-// NOTE: STM32H562 has no COMP peripheral. COMP1_IRQHandler kept as a forward
-// declaration so knock.cpp compiles, but the vector slot (IRQ64=LPTIM1) must
-// NOT be overridden. See regs.h for details.
-extern "C" void COMP1_IRQHandler()           noexcept __attribute__((weak, alias("Default_Handler")));
+// Knock detection uses ADC1_IN6 (PA5) + software threshold — no COMP IRQ needed.
 
 extern "C" void _init() {}
 extern "C" void _fini() {}
