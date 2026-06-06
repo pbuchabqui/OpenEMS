@@ -260,7 +260,7 @@ void DiagnosticManager::clear_all_faults() noexcept {
     uint8_t write_idx = 0;
     for (uint8_t i = 0; i < g_event_count; ++i) {
         // Keep permanent faults
-        if (g_recovery_states[i] != RecoveryState::PERMANENT) {
+        if (g_recovery_states[i] == RecoveryState::PERMANENT) {
             if (write_idx != i) {
                 g_events[write_idx] = g_events[i];
                 g_recovery_states[write_idx] = g_recovery_states[i];
@@ -269,13 +269,13 @@ void DiagnosticManager::clear_all_faults() noexcept {
         }
     }
     
-    // Clear remaining slots
-    while (write_idx < g_event_count) {
-        g_events[write_idx].code = DiagnosticCode::NONE;
-        g_recovery_states[write_idx] = RecoveryState::IDLE;
-        ++write_idx;
-    }
+    // Fix count first, then clear remaining slots
+    const uint8_t old_count = g_event_count;
     g_event_count = write_idx;
+    for (uint8_t i = write_idx; i < old_count; ++i) {
+        g_events[i].code = DiagnosticCode::NONE;
+        g_recovery_states[i] = RecoveryState::IDLE;
+    }
 }
 
 bool DiagnosticManager::is_system_ready() noexcept {
