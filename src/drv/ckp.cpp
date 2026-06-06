@@ -297,6 +297,7 @@ inline bool is_gap(uint32_t period, uint32_t avg) noexcept {
 
 static uint32_t g_prev_valid_period_ns = 0u;
 static uint8_t g_coherent_periods_count = 0u;
+static uint32_t s_prev_cmp_capture = 0u;
 
 // Teste de dente normal dentro da janela de tolerância ±20%.
 // 0,8×avg ≤ period ≤ 1,2×avg → dente aceito para atualização do histórico.
@@ -679,7 +680,6 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     // (estabilidade do período CKP) não detecta glitches que chegam durante
     // operação steady-state — o período CKP não muda, mas a borda CMP chega cedo.
     // Esta verificação usa a captura TIM5 real para medir o delta entre bordas.
-    static uint32_t s_prev_cmp_capture = 0u;
     const uint32_t prev_period_ticks = g_state.prev_period_ticks;
     if (s_prev_cmp_capture != 0u && prev_period_ticks > 0u) {
         const uint32_t cmp_delta = cmp_capture_now - s_prev_cmp_capture; // circular uint32
@@ -790,6 +790,7 @@ void ckp_test_reset() noexcept {
     g_seed_rejected_count = 0u;
     g_prev_valid_period_ns = 0u;
     g_coherent_periods_count = 0u;
+    s_prev_cmp_capture = 0u;
 }
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {

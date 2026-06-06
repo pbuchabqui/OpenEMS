@@ -1,0 +1,1770 @@
+/**
+ * @file test/mvp_bench_tests.cpp
+ * @brief Host regression harness — OpenEMS EMS_HOST_TEST build
+ *
+ * Compile: g++ -DEMS_HOST_TEST -std=c++17 -O2 -g -I./src <all srcs> -o mvp_bench_tests
+ * Run:     make host-test
+ *
+ * Cobertura:
+ *   etb_driver  — adc_to_percent, init, get_state, read_sensors, set_motor_pwm,
+ *                 shutdown, clear_fault
+ *   etb_control — set/get_drive_mode, is_ready, enter_limp, set_idle_control,
+ *                 get_idle_spark_trim, get_throttle_position, control_loop
+ *   torque_manager — init, enter_limp, is_ready, set/get_config, loop (normal,
+ *                    rpm_cut, limp, idle, traction_control, null guards)
+ */
+
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <cmath>
+
+#include "engine/etb_control.h"
+#include "hal/etb_driver.h"
+#include "engine/torque_manager.h"
+#include "engine/calibration.h"
+#include "hal/adc.h"
+#include "drv/ckp.h"
+#include "drv/sensors.h"
+#include "engine/fuel_calc.h"
+#include "engine/ign_calc.h"
+#include "engine/auxiliaries.h"
+#include "engine/knock.h"
+
+// etb_get_idle_spark_trim is implemented in ems::engine namespace in etb_control.cpp
+// (C++ linkage) but only declared extern "C" in the header (C linkage — different symbol).
+// Forward-declare the C++ version so we can call it directly from tests.
+namespace ems::engine {
+    int16_t etb_get_idle_spark_trim() noexcept;
+}
+
+// CKP mock registers exposed by drv/ckp.cpp under EMS_HOST_TEST
+extern volatile uint32_t ems_test_tim5_ccr1;
+extern volatile uint32_t ems_test_tim5_ccr2;
+extern volatile uint32_t ems_test_cam_gpio_idr;
+
+using namespace ems::drv;
+using namespace ems::engine;
+
+// ─── Minimal test framework ────────────────────────────────────────────────────
+
+static int g_pass = 0;
+static int g_fail = 0;
+
+#define CHECK(cond, name) do { \
+    if (cond) { \
+        ++g_pass; \
+        printf("  PASS  %s\n", name); \
+    } else { \
+        ++g_fail; \
+        printf("  FAIL  %s  (line %d)\n", name, __LINE__); \
+    } \
+} while (0)
+
+#define CHECK_TRUE(cond,   name) CHECK(!!(cond), name)
+#define CHECK_FALSE(cond,  name) CHECK(!(cond),  name)
+#define CHECK_EQ(a, b,     name) CHECK((a) == (b), name)
+#define CHECK_NEAR(a, b, eps, name) \
+    CHECK(fabsf(static_cast<float>(a) - static_cast<float>(b)) <= (eps), name)
+
+static void section(const char* name) {
+    printf("\n[%s]\n", name);
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+// Set both TPS ADC channels to a valid, consistent mid-range value (~50%).
+// ETB_TPS_NORMAL_MIN=400, ETB_TPS_NORMAL_MAX=3700 → mid ≈ 2050.
+static void drv_set_valid_adc(void) {
+    using namespace ems::hal;
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 2050u);  // TPS1
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B, 2050u);  // TPS2
+}
+
+// Reset driver to known state + load valid ADC.
+static void drv_setup(void) {
+    etb_driver_test_reset();
+    drv_set_valid_adc();
+}
+
+// Reset driver + init ETB control layer (also inits driver internally).
+static void etb_ctrl_setup(void) {
+    drv_setup();
+    // etb_control_init calls etb_driver_init() → reads ADC → must be valid
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ETB DRIVER TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static void test_etb_driver_adc_to_percent(void) {
+    section("etb_driver_adc_to_percent");
+
+    // Below ETB_TPS_NORMAL_MIN (400) → 0 %
+    CHECK_NEAR(etb_driver_adc_to_percent(0u),   0.0f, 0.01f, "adc=0 → 0%");
+    CHECK_NEAR(etb_driver_adc_to_percent(200u), 0.0f, 0.01f, "adc=ADC_MIN(200) → 0%");
+    CHECK_NEAR(etb_driver_adc_to_percent(399u), 0.0f, 0.01f, "adc=399 < NORMAL_MIN → 0%");
+    CHECK_NEAR(etb_driver_adc_to_percent(400u), 0.0f, 0.01f, "adc=NORMAL_MIN(400) → 0%");
+
+    // Above ETB_TPS_NORMAL_MAX (3700) → 100 %
+    CHECK_NEAR(etb_driver_adc_to_percent(3700u), 100.0f, 0.01f, "adc=NORMAL_MAX(3700) → 100%");
+    CHECK_NEAR(etb_driver_adc_to_percent(3900u), 100.0f, 0.01f, "adc=ADC_MAX(3900) → 100%");
+    CHECK_NEAR(etb_driver_adc_to_percent(4095u), 100.0f, 0.01f, "adc=4095 → 100%");
+
+    // Mid-point: (400+3700)/2 = 2050 → 50 %
+    CHECK_NEAR(etb_driver_adc_to_percent(2050u), 50.0f, 0.1f, "adc=2050 → ~50%");
+
+    // Just above NORMAL_MIN → tiny positive value
+    CHECK_TRUE(etb_driver_adc_to_percent(401u) > 0.0f, "adc=401 > NORMAL_MIN → >0%");
+}
+
+static void test_etb_driver_init_and_state(void) {
+    section("etb_driver_init / get_state");
+
+    drv_setup();
+    CHECK_EQ(etb_driver_get_state(), ETB_DRV_STATE_OFF, "state=OFF before init");
+
+    const bool ok = etb_driver_init();
+    CHECK_TRUE(ok, "init returns true with valid ADC");
+    CHECK_EQ(etb_driver_get_state(), ETB_DRV_STATE_READY, "state=READY after init");
+}
+
+static void test_etb_driver_init_fault_tps1_open(void) {
+    section("etb_driver_init fault: TPS1 open (ADC below min)");
+
+    etb_driver_test_reset();
+    using namespace ems::hal;
+    // t1 = 100 < ETB_TPS_ADC_MIN(200) → TPS1_OPEN
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 100u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B, 2050u);
+
+    const bool ok = etb_driver_init();
+    CHECK_FALSE(ok, "init fails when TPS1 open");
+    CHECK_EQ(etb_driver_get_state(), ETB_DRV_STATE_FAULT, "state=FAULT on TPS1 open");
+}
+
+static void test_etb_driver_init_fault_tps2_short(void) {
+    section("etb_driver_init fault: TPS2 short (ADC above max)");
+
+    etb_driver_test_reset();
+    using namespace ems::hal;
+    // t2 = 4000 > ETB_TPS_ADC_MAX(3900) → TPS2_SHORT
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 2050u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B, 4000u);
+
+    const bool ok = etb_driver_init();
+    CHECK_FALSE(ok, "init fails when TPS2 short");
+    CHECK_EQ(etb_driver_get_state(), ETB_DRV_STATE_FAULT, "state=FAULT on TPS2 short");
+}
+
+static void test_etb_driver_read_sensors_valid(void) {
+    section("etb_driver_read_sensors: valid reading");
+
+    drv_setup();
+    etb_driver_init();
+
+    etb_driver_data_t data{};
+    const etb_driver_fault_t fault = etb_driver_read_sensors(&data);
+    CHECK_EQ(fault, ETB_DRV_OK, "read_sensors → OK");
+    CHECK_EQ(data.tps1_raw, 2050u, "tps1_raw captured");
+    CHECK_EQ(data.tps2_raw, 2050u, "tps2_raw captured");
+    CHECK_NEAR(data.tps_validated, 50.0f, 0.5f, "tps_validated ≈ 50%");
+}
+
+static void test_etb_driver_read_sensors_mismatch(void) {
+    section("etb_driver_read_sensors: TPS mismatch (diff > 12%)");
+
+    drv_setup();
+    etb_driver_init();  // init with matching values
+
+    // Now inject mismatched values: TPS1=0%, TPS2=50% → diff=50% > 12%
+    using namespace ems::hal;
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 400u);   // 0%
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B, 2050u);  // 50%
+
+    etb_driver_data_t data{};
+    const etb_driver_fault_t fault = etb_driver_read_sensors(&data);
+    CHECK_EQ(fault, ETB_DRV_FAULT_TPS_MISMATCH, "large TPS diff → MISMATCH fault");
+}
+
+static void test_etb_driver_read_sensors_null(void) {
+    section("etb_driver_read_sensors: null pointer guard");
+
+    drv_setup();
+    etb_driver_init();
+
+    const etb_driver_fault_t fault = etb_driver_read_sensors(nullptr);
+    CHECK_EQ(fault, ETB_DRV_FAULT_NOT_INITIALIZED, "nullptr → NOT_INITIALIZED");
+}
+
+static void test_etb_driver_set_motor_pwm(void) {
+    section("etb_driver_set_motor_pwm");
+
+    etb_driver_test_reset();
+    // Not READY → rejected
+    CHECK_FALSE(etb_driver_set_motor_pwm(500), "set_motor_pwm false when not READY");
+
+    drv_setup();
+    etb_driver_init();
+
+    CHECK_TRUE(etb_driver_set_motor_pwm(0),    "pwm=0 accepted");
+    CHECK_TRUE(etb_driver_set_motor_pwm(512),  "pwm=+512 accepted");
+    CHECK_TRUE(etb_driver_set_motor_pwm(1023), "pwm=+1023 (max) accepted");
+    CHECK_TRUE(etb_driver_set_motor_pwm(-512), "pwm=-512 accepted");
+    CHECK_TRUE(etb_driver_set_motor_pwm(-1023),"pwm=-1023 (min) accepted");
+    // Values beyond ±1023 are clamped but still accepted
+    CHECK_TRUE(etb_driver_set_motor_pwm(2000), "pwm=2000 clamped+accepted");
+    CHECK_TRUE(etb_driver_set_motor_pwm(-2000),"pwm=-2000 clamped+accepted");
+}
+
+static void test_etb_driver_shutdown(void) {
+    section("etb_driver_shutdown");
+
+    drv_setup();
+    etb_driver_init();
+    etb_driver_set_motor_pwm(800);
+
+    etb_driver_shutdown();
+    // Driver must remain usable (state not changed to FAULT by shutdown)
+    CHECK_TRUE(etb_driver_set_motor_pwm(0), "driver still usable after shutdown");
+}
+
+static void test_etb_driver_clear_fault(void) {
+    section("etb_driver_clear_fault");
+
+    // Trigger fault on init
+    etb_driver_test_reset();
+    using namespace ems::hal;
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 100u);  // TPS1 open
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B, 2050u);
+    etb_driver_init();
+    CHECK_EQ(etb_driver_get_state(), ETB_DRV_STATE_FAULT, "pre-cond: FAULT state");
+
+    // Fix ADC, then clear fault (clear_fault calls etb_driver_init internally)
+    drv_set_valid_adc();
+    etb_driver_clear_fault();
+    CHECK_EQ(etb_driver_get_state(), ETB_DRV_STATE_READY, "state=READY after clear_fault");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ETB CONTROL TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static void test_etb_set_get_drive_mode(void) {
+    section("etb_set_drive_mode / etb_get_drive_mode");
+
+    etb_ctrl_setup();
+    etb_control_init();
+
+    etb_set_drive_mode(ETB_MODE_ECO);
+    CHECK_EQ(etb_get_drive_mode(), ETB_MODE_ECO, "mode=ECO");
+
+    etb_set_drive_mode(ETB_MODE_SPORT);
+    CHECK_EQ(etb_get_drive_mode(), ETB_MODE_SPORT, "mode=SPORT");
+
+    etb_set_drive_mode(ETB_MODE_RAIN);
+    CHECK_EQ(etb_get_drive_mode(), ETB_MODE_RAIN, "mode=RAIN");
+
+    etb_set_drive_mode(ETB_MODE_NORMAL);
+    CHECK_EQ(etb_get_drive_mode(), ETB_MODE_NORMAL, "mode=NORMAL");
+
+    // Out-of-range mode must be rejected; current mode unchanged
+    etb_set_drive_mode(static_cast<etb_drive_mode_t>(99));
+    CHECK_EQ(etb_get_drive_mode(), ETB_MODE_NORMAL, "invalid mode rejected");
+}
+
+static void test_etb_is_ready(void) {
+    section("etb_is_ready");
+
+    etb_ctrl_setup();
+    etb_control_init();
+    CHECK_TRUE(etb_is_ready(), "ready after successful init");
+}
+
+static void test_etb_enter_limp_mode(void) {
+    section("etb_enter_limp_mode");
+
+    etb_ctrl_setup();
+    etb_control_init();
+    CHECK_TRUE(etb_is_ready(), "pre-cond: ready");
+
+    etb_enter_limp_mode();
+    CHECK_FALSE(etb_is_ready(), "not ready after limp");
+}
+
+static void test_etb_set_idle_control_and_spark_trim(void) {
+    section("etb_set_idle_control / etb_get_idle_spark_trim");
+
+    etb_ctrl_setup();
+    etb_control_init();
+
+    // Activate idle at 850 RPM target
+    etb_set_idle_control(true, 850.0f);
+
+    // rpm=800 → idle_error=50 < 100 → trim = (int16_t)(50 * 0.5) = 25
+    etb_control_loop(0.0f, 800.0f, 10.0f);
+    const int16_t trim_active = ems::engine::etb_get_idle_spark_trim();
+    CHECK_NEAR(static_cast<float>(trim_active), 25.0f, 5.0f,
+               "idle trim ≈ 25 at 50 RPM under target");
+
+    // Deactivate idle → trim must return to 0
+    etb_set_idle_control(false, 0.0f);
+    etb_control_loop(0.0f, 800.0f, 10.0f);
+    const int16_t trim_off = ems::engine::etb_get_idle_spark_trim();
+    CHECK_EQ(trim_off, 0, "trim=0 when idle disabled");
+}
+
+static void test_etb_get_throttle_position(void) {
+    section("etb_get_throttle_position");
+
+    etb_ctrl_setup();
+    // ADC at 2050 → tps_validated ≈ 50%
+    etb_control_init();
+    etb_control_loop(50.0f, 3000.0f, 10.0f);
+
+    const float pos = etb_get_throttle_position();
+    CHECK_NEAR(pos, 50.0f, 1.0f, "throttle_position ≈ 50% at mid ADC");
+}
+
+static void test_etb_control_loop_rpm_cutoff(void) {
+    section("etb_control_loop: RPM over-rev cutoff");
+
+    etb_ctrl_setup();
+    etb_control_init();
+
+    // RPM way above cutoff (7000) — must not crash, position remains valid
+    etb_control_loop(100.0f, 8000.0f, 10.0f);
+    const float pos = etb_get_throttle_position();
+    CHECK_TRUE(pos >= 0.0f && pos <= 100.0f, "throttle_position in [0,100] during RPM cut");
+}
+
+static void test_etb_control_loop_sensor_fault_triggers_limp(void) {
+    section("etb_control_loop: sensor fault during loop triggers limp");
+
+    etb_ctrl_setup();
+    etb_control_init();
+    CHECK_TRUE(etb_is_ready(), "pre-cond: ready");
+
+    // Inject TPS1 fault AFTER successful init
+    using namespace ems::hal;
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 100u);  // < ADC_MIN → open
+
+    etb_control_loop(50.0f, 3000.0f, 10.0f);
+    CHECK_FALSE(etb_is_ready(), "limp mode engaged after TPS fault in loop");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TORQUE MANAGER TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static void test_torque_manager_init(void) {
+    section("torque_manager_init / is_ready");
+
+    const bool ok = torque_manager_init();
+    CHECK_TRUE(ok, "init returns true");
+    CHECK_TRUE(torque_manager_is_ready(), "is_ready after init");
+}
+
+static void test_torque_manager_enter_limp(void) {
+    section("torque_manager_enter_limp");
+
+    torque_manager_init();
+    CHECK_TRUE(torque_manager_is_ready(), "pre-cond: ready");
+
+    torque_manager_enter_limp();
+    CHECK_FALSE(torque_manager_is_ready(), "not ready after enter_limp");
+}
+
+static void test_torque_manager_set_get_config(void) {
+    section("torque_manager_set_config / get_config");
+
+    torque_manager_init();
+
+    torque_manager_config_t cfg{};
+    cfg.max_rpm            = 6500.0f;
+    cfg.max_rpm_hot        = 6000.0f;
+    cfg.max_speed          = 180.0f;
+    cfg.min_coolant_temp   = -10.0f;
+    cfg.launch_rpm         = 4000.0f;
+    cfg.launch_throttle    = 55.0f;
+    cfg.tc_max_slip        = 10.0f;
+    cfg.tc_reduction_rate  = 30.0f;
+    cfg.pedal_filter_alpha = 0.5f;
+    torque_manager_set_config(&cfg);
+
+    const torque_manager_config_t* got = torque_manager_get_config();
+    CHECK_NEAR(got->max_rpm,            6500.0f, 0.01f, "max_rpm persisted");
+    CHECK_NEAR(got->max_rpm_hot,        6000.0f, 0.01f, "max_rpm_hot persisted");
+    CHECK_NEAR(got->max_speed,          180.0f,  0.01f, "max_speed persisted");
+    CHECK_NEAR(got->launch_rpm,         4000.0f, 0.01f, "launch_rpm persisted");
+    CHECK_NEAR(got->launch_throttle,    55.0f,   0.01f, "launch_throttle persisted");
+    CHECK_NEAR(got->pedal_filter_alpha, 0.5f,   0.001f, "pedal_filter_alpha persisted");
+}
+
+static void test_torque_manager_set_config_null(void) {
+    section("torque_manager_set_config: null guard");
+
+    torque_manager_init();
+    const float max_rpm_before = torque_manager_get_config()->max_rpm;
+
+    torque_manager_set_config(nullptr);  // must not crash or corrupt state
+
+    CHECK_NEAR(torque_manager_get_config()->max_rpm, max_rpm_before, 0.01f,
+               "config unchanged after null set_config");
+}
+
+static void test_torque_manager_loop_normal_pedal(void) {
+    section("torque_manager_loop: normal driving");
+
+    torque_manager_init();
+
+    torque_manager_inputs_t inputs{};
+    inputs.pedal_percent = 50.0f;
+    inputs.engine_rpm    = 3000.0f;
+    inputs.coolant_temp  = 85.0f;
+
+    torque_manager_outputs_t outputs{};
+    torque_manager_loop(&inputs, &outputs);
+
+    CHECK_TRUE(outputs.throttle_target >= 0.0f && outputs.throttle_target <= 100.0f,
+               "throttle_target in [0,100] range");
+    CHECK_TRUE(outputs.throttle_target > 0.0f, "throttle_target > 0 with 50% pedal");
+}
+
+static void test_torque_manager_loop_rpm_hard_cut(void) {
+    section("torque_manager_loop: hard RPM cut (rpm >= max+200)");
+
+    torque_manager_init();
+
+    torque_manager_inputs_t inputs{};
+    inputs.pedal_percent = 100.0f;
+    inputs.engine_rpm    = 7500.0f;  // > max_rpm(7000) + 200
+    inputs.coolant_temp  = 85.0f;
+
+    torque_manager_outputs_t outputs{};
+    torque_manager_loop(&inputs, &outputs);
+
+    CHECK_EQ(outputs.throttle_target, 0.0f, "throttle=0 at hard rev limit");
+    CHECK_TRUE(outputs.rpm_cutoff_count > 0u, "rpm_cutoff_count incremented");
+}
+
+static void test_torque_manager_loop_rpm_progressive_cut(void) {
+    section("torque_manager_loop: progressive RPM cut (max < rpm < max+200)");
+
+    torque_manager_init();
+
+    // Run first call to build up filtered pedal
+    torque_manager_inputs_t inputs{};
+    inputs.pedal_percent = 100.0f;
+    inputs.engine_rpm    = 7100.0f;  // 100 rpm over max=7000, within 200 window
+    inputs.coolant_temp  = 85.0f;
+
+    torque_manager_outputs_t outputs{};
+    torque_manager_loop(&inputs, &outputs);
+
+    // cutoff_factor = 1 - (7100-7000)/200 = 0.5 → throttle reduced, not zero
+    CHECK_TRUE(outputs.throttle_target > 0.0f,   "throttle > 0 in progressive cut zone");
+    CHECK_TRUE(outputs.throttle_target < 100.0f, "throttle < 100 in progressive cut zone");
+    CHECK_TRUE(outputs.rpm_cutoff_count > 0u,    "rpm_cutoff_count incremented");
+}
+
+static void test_torque_manager_loop_limp_via_input(void) {
+    section("torque_manager_loop: limp mode via input flag");
+
+    torque_manager_init();
+
+    torque_manager_inputs_t inputs{};
+    inputs.pedal_percent = 80.0f;
+    inputs.engine_rpm    = 3000.0f;
+    inputs.limp_mode     = true;
+
+    torque_manager_outputs_t outputs{};
+    torque_manager_loop(&inputs, &outputs);
+
+    CHECK_NEAR(outputs.throttle_target, 5.0f,  0.01f, "throttle=5% in limp");
+    CHECK_NEAR(outputs.torque_limit,   30.0f,  0.01f, "torque_limit=30% in limp");
+}
+
+static void test_torque_manager_loop_idle_mode(void) {
+    section("torque_manager_loop: idle mode (ETB handles offset)");
+
+    torque_manager_init();
+
+    torque_manager_inputs_t inputs{};
+    inputs.pedal_percent = 0.0f;
+    inputs.engine_rpm    = 850.0f;
+    inputs.idle_mode     = true;
+    inputs.coolant_temp  = 85.0f;
+
+    torque_manager_outputs_t outputs{};
+    torque_manager_loop(&inputs, &outputs);
+
+    // Idle forces requested_throttle=0; ETB control layer applies idle_offset
+    CHECK_EQ(outputs.throttle_target, 0.0f, "throttle=0 in idle (ETB manages air)");
+}
+
+static void test_torque_manager_loop_traction_control(void) {
+    section("torque_manager_loop: traction control reduces throttle+adds spark retard");
+
+    torque_manager_init();
+
+    torque_manager_inputs_t inputs{};
+    inputs.pedal_percent   = 80.0f;
+    inputs.engine_rpm      = 3000.0f;
+    inputs.coolant_temp    = 85.0f;
+    inputs.traction_active = true;
+    inputs.tc_reduction    = 50.0f;  // 50% reduction
+
+    torque_manager_outputs_t outputs{};
+    torque_manager_loop(&inputs, &outputs);
+
+    // With alpha=0.3, first call: filtered_pedal = 0.3*80 = 24.0
+    // TC: 24.0 * (1 - 0.5) = 12.0
+    CHECK_TRUE(outputs.throttle_target < 50.0f, "throttle < 50% under TC");
+    CHECK_TRUE(outputs.tc_intervention > 0u,    "tc_intervention incremented");
+    // spark_trim = -(50 * 0.3) = -15.0°
+    CHECK_NEAR(outputs.spark_trim, -15.0f, 0.5f, "spark_trim ≈ -15° under 50% TC");
+}
+
+static void test_torque_manager_loop_null_guards(void) {
+    section("torque_manager_loop: null pointer guards");
+
+    torque_manager_init();
+    torque_manager_inputs_t  in{};
+    torque_manager_outputs_t out{};
+
+    torque_manager_loop(nullptr, &out);  // must not crash
+    torque_manager_loop(&in, nullptr);   // must not crash
+    CHECK_TRUE(true, "null guards: no segfault");
+}
+
+static void test_torque_manager_loop_speed_limiter(void) {
+    section("torque_manager_loop: speed limiter (>= max_speed)");
+
+    torque_manager_init();
+
+    torque_manager_inputs_t inputs{};
+    inputs.pedal_percent   = 80.0f;
+    inputs.engine_rpm      = 3000.0f;
+    inputs.coolant_temp    = 85.0f;
+    inputs.vehicle_speed   = 230.0f;  // > max_speed=220 km/h
+
+    torque_manager_outputs_t outputs{};
+    torque_manager_loop(&inputs, &outputs);
+
+    // Limiter caps requested_throttle at 10% to maintain speed
+    CHECK_TRUE(outputs.throttle_target <= 10.0f, "throttle <= 10% at speed limit");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Includes adicionais para testes da segunda fase ────────────────────────
+#include "hal/timer.h"  // tim5_ic_init, tim3_pwm_init, etc.
+
+// ─── CKP helpers ──────────────────────────────────────────────────────────────
+// Normal period ≈ 6250 RPM: rpm_x10 = 625000000 / 10000 = 62500
+static constexpr uint32_t kNormalPeriod = 10000u;
+static constexpr uint32_t kGapPeriod    = kNormalPeriod * 3u;
+static uint32_t g_ckp_cap = 0u;
+
+static void ckp_fire(uint32_t delta) {
+    g_ckp_cap += delta;
+    ems_test_tim5_ccr1 = g_ckp_cap;
+    ckp_tim5_ch1_isr();
+}
+static void ckp_feed_n_then_gap(uint32_t n, uint32_t p = kNormalPeriod) {
+    for (uint32_t i = 0; i < n; ++i) { ckp_fire(p); }
+    ckp_fire(p * 3u);
+}
+static void ckp_reach_full_sync(uint32_t p = kNormalPeriod) {
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_feed_n_then_gap(55u, p);
+    ckp_feed_n_then_gap(55u, p);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CKP DECODER / SYNC
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_ckp_rpm_math(void) {
+    section("ckp: rpm_x10 from period_ns");
+    CHECK_EQ(ckp_test_rpm_x10_from_period_ns(160000u),  62500u, "160000 ns → 6250.0 RPM");
+    CHECK_EQ(ckp_test_rpm_x10_from_period_ns(1250000u),  8000u, "1250000 ns → 800.0 RPM");
+    CHECK_EQ(ckp_test_rpm_x10_from_period_ns(0u),            0u, "period=0 → rpm=0 (safe)");
+}
+
+static void test_ckp_initial_state(void) {
+    section("ckp: initial state after reset");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    const CkpSnapshot s = ckp_snapshot();
+    CHECK_EQ(static_cast<uint8_t>(s.state), static_cast<uint8_t>(SyncState::WAIT_GAP), "state=WAIT_GAP");
+    CHECK_EQ(s.rpm_x10, 0u,    "rpm=0");
+    CHECK_EQ(s.tooth_index, 0u, "tooth_index=0");
+}
+
+static void test_ckp_half_sync(void) {
+    section("ckp: WAIT_GAP → HALF_SYNC on first valid gap");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_feed_n_then_gap(55u);
+    const CkpSnapshot s = ckp_snapshot();
+    CHECK_EQ(static_cast<uint8_t>(s.state), static_cast<uint8_t>(SyncState::HALF_SYNC), "HALF_SYNC");
+    CHECK_TRUE(s.rpm_x10 > 0u, "rpm > 0 in HALF_SYNC");
+}
+
+static void test_ckp_full_sync(void) {
+    section("ckp: HALF_SYNC → FULL_SYNC on second valid gap");
+    ckp_reach_full_sync();
+    const CkpSnapshot s = ckp_snapshot();
+    CHECK_EQ(static_cast<uint8_t>(s.state), static_cast<uint8_t>(SyncState::FULL_SYNC), "FULL_SYNC");
+    CHECK_EQ(s.tooth_index, 0u, "tooth_index=0 at gap");
+    CHECK_NEAR(static_cast<float>(s.rpm_x10), 62500.0f, 500.0f, "rpm ≈ 62500");
+}
+
+static void test_ckp_tooth_index_increments(void) {
+    section("ckp: tooth_index increments in FULL_SYNC");
+    ckp_reach_full_sync();
+    for (uint32_t i = 0; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
+    CHECK_EQ(ckp_snapshot().tooth_index, 5u, "tooth_index=5 after 5 teeth");
+}
+
+static void test_ckp_loss_of_sync_too_many_teeth(void) {
+    section("ckp: LOSS_OF_SYNC when gap missed (>63 teeth)");
+    ckp_reach_full_sync();
+    for (uint32_t i = 0; i < 64u; ++i) { ckp_fire(kNormalPeriod); }
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::LOSS_OF_SYNC), "LOSS_OF_SYNC");
+}
+
+static void test_ckp_loss_of_sync_early_gap(void) {
+    section("ckp: LOSS_OF_SYNC on early gap (<55 teeth)");
+    ckp_reach_full_sync();
+    for (uint32_t i = 0; i < 10u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kGapPeriod);
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::LOSS_OF_SYNC), "LOSS_OF_SYNC on early gap");
+}
+
+static void test_ckp_noise_rejection(void) {
+    section("ckp: glitch < kMinToothTicks rejected");
+    ckp_reach_full_sync();
+    const CkpSnapshot before = ckp_snapshot();
+    ckp_fire(10u);  // < 50 ticks
+    const CkpSnapshot after = ckp_snapshot();
+    CHECK_EQ(static_cast<uint8_t>(after.state), static_cast<uint8_t>(SyncState::FULL_SYNC),
+             "FULL_SYNC maintained after glitch");
+    CHECK_EQ(after.rpm_x10, before.rpm_x10, "rpm unchanged after glitch");
+}
+
+static void test_ckp_stall_poll(void) {
+    section("ckp: stall_poll detects stopped engine");
+    ckp_reach_full_sync();
+    const uint32_t stale = ckp_snapshot().last_tim5_capture + 13000000u;
+    CHECK_TRUE(ckp_stall_poll(stale), "stall_poll=true after 200ms");
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::LOSS_OF_SYNC), "LOSS_OF_SYNC after stall");
+}
+
+static void test_ckp_stall_poll_no_false_positive(void) {
+    section("ckp: stall_poll false when teeth are recent");
+    ckp_reach_full_sync();
+    CHECK_FALSE(ckp_stall_poll(ckp_snapshot().last_tim5_capture + 1000u), "no stall");
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::FULL_SYNC), "FULL_SYNC maintained");
+}
+
+static void test_ckp_seed_arm_disarm(void) {
+    section("ckp: seed arm/disarm counters");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    CHECK_EQ(ckp_seed_loaded_count(), 0u, "loaded=0 before arm");
+    ckp_seed_arm(true);
+    CHECK_EQ(ckp_seed_loaded_count(), 1u, "loaded=1 after arm");
+    ckp_seed_disarm();
+    CHECK_EQ(ckp_seed_loaded_count(), 1u, "loaded still 1 after disarm");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SENSORS
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void sensor_setup(void) {
+    sensors_test_reset();
+    using namespace ems::hal;
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP_SE10,      2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::TPS_SE12,      2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN1_SE6B,      2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN2_SE7B,      2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B,      2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B,      2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT_SE14,        2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT_SE15,        2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS_SE5B, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::OIL_PRESS_SE6B,  2000u);
+}
+
+static void test_sensors_validate_range(void) {
+    section("sensors: validate_sensor_range");
+    CHECK_TRUE(validate_sensor_range(SensorId::CLT, 100u),   "CLT=100 valid");
+    CHECK_TRUE(validate_sensor_range(SensorId::CLT, 3800u),  "CLT=3800 valid");
+    CHECK_FALSE(validate_sensor_range(SensorId::CLT, 99u),   "CLT=99 invalid");
+    CHECK_FALSE(validate_sensor_range(SensorId::CLT, 3801u), "CLT=3801 invalid");
+    CHECK_TRUE(validate_sensor_range(SensorId::MAP, 1000u),  "MAP=1000 valid");
+    CHECK_FALSE(validate_sensor_range(SensorId::MAP, 10u),   "MAP=10 invalid");
+}
+
+static void test_sensors_validate_values(void) {
+    section("sensors: validate_sensor_values");
+    SensorData d{};
+    d.map_bar_x1000 = 1000u; d.clt_degc_x10 = 850; d.iat_degc_x10 = 250;
+    d.tps_pct_x10 = 500u; d.vbatt_mv = 12000u;
+    d.fuel_press_bar_x1000 = 3000u; d.oil_press_bar_x1000 = 5000u;
+    CHECK_TRUE(validate_sensor_values(d), "all valid → true");
+    SensorData bad = d; bad.map_bar_x1000 = 50u;
+    CHECK_FALSE(validate_sensor_values(bad), "MAP < 0.10 bar → false");
+    bad = d; bad.clt_degc_x10 = 1600;
+    CHECK_FALSE(validate_sensor_values(bad), "CLT > 150°C → false");
+    bad = d; bad.vbatt_mv = 5000u;
+    CHECK_FALSE(validate_sensor_values(bad), "vbatt < 6V → false");
+    bad = d; bad.tps_pct_x10 = 1001u;
+    CHECK_FALSE(validate_sensor_values(bad), "TPS > 100% → false");
+}
+
+static void test_sensors_health_status(void) {
+    section("sensors: get_sensor_health_status");
+    sensor_setup(); sensors_init();
+    CHECK_EQ(get_sensor_health_status(), 0u, "health=0 after init with valid ADC");
+}
+
+static void test_sensors_calibration(void) {
+    section("sensors: set_tps_cal / set_app_cal / set_plausibility / set_etb_tps_cal");
+    sensor_setup(); sensors_init();
+    sensors_set_tps_cal(400u, 3800u);
+    sensors_set_app_cal(400u, 3800u, 400u, 3800u);
+    sensors_set_plausibility(100u, 100u);
+    sensors_set_etb_tps_cal(400u, 3800u, 400u, 3800u);
+    CHECK_TRUE(true, "calibration setters complete without crash");
+}
+
+static void test_sensors_tick_100ms_clt_iat(void) {
+    section("sensors: sensors_tick_100ms → CLT/IAT via lut128");
+    sensor_setup(); sensors_init();
+    using namespace ems::hal;
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT_SE14, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT_SE15, 2000u);
+    for (int i = 0; i < 8; ++i) { sensors_test_tick_100ms(); }
+    const SensorData sd = sensors_get();
+    const int16_t expected = static_cast<int16_t>(-400 + (1900 * 62) / 127);
+    CHECK_EQ(sd.clt_degc_x10, expected, "CLT lut128(2000) matches formula");
+    CHECK_EQ(sd.iat_degc_x10, expected, "IAT lut128(2000) matches formula");
+}
+
+static void test_sensors_maf_freq_capture(void) {
+    section("sensors: sensors_maf_freq_capture_isr");
+    sensor_setup(); sensors_init();
+    sensors_maf_freq_capture_isr(5000u);
+    sensors_maf_freq_capture_isr(10000u);
+    sensors_maf_freq_capture_isr(0u);
+    CHECK_TRUE(true, "maf_freq_capture_isr handles various periods");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FUEL CALC
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_fuel_calc_req_fuel_us(void) {
+    section("fuel_calc: calc_req_fuel_us");
+    const uint32_t req = calc_req_fuel_us(2000u, 4u, 440u, 1470u);
+    CHECK_TRUE(req > 0u && req <= 50000u, "req_fuel in (0, 50ms]");
+    CHECK_EQ(calc_req_fuel_us(0u,    4u, 440u, 1470u), 0u, "displacement=0 → 0");
+    CHECK_EQ(calc_req_fuel_us(2000u, 0u, 440u, 1470u), 0u, "cylinders=0 → 0");
+    CHECK_EQ(calc_req_fuel_us(2000u, 4u,   0u, 1470u), 0u, "flow=0 → 0");
+    CHECK_EQ(calc_req_fuel_us(2000u, 4u, 440u,    0u), 0u, "stoich=0 → 0");
+    CHECK_TRUE(calc_req_fuel_us(50000u, 1u, 1u, 100u) <= 50000u, "clamped at 50ms");
+}
+
+static void test_fuel_calc_base_pw(void) {
+    section("fuel_calc: calc_base_pw_us");
+    CHECK_TRUE(calc_base_pw_us(5000u, 80u, 100u, 101u) > 0u, "base_pw > 0");
+    CHECK_EQ(calc_base_pw_us(5000u, 100u, 100u, 100u), 5000u, "VE=100% MAP=REF → pw=req");
+    CHECK_EQ(calc_base_pw_us(5000u,  0u, 100u, 100u),     0u, "ve=0 → 0");
+    CHECK_EQ(calc_base_pw_us(5000u, 80u, 100u,   0u),     0u, "map_ref=0 → 0");
+    CHECK_EQ(calc_base_pw_us(5000u, 80u, 400u, 100u),     0u, "MAP>3 bar → 0");
+    CHECK_EQ(calc_base_pw_us(   0u, 80u, 100u, 100u),     0u, "req=0 → 0");
+}
+
+static void test_fuel_apply_lambda_target(void) {
+    section("fuel_calc: apply_lambda_target_pw_us");
+    CHECK_EQ(apply_lambda_target_pw_us(5000u, 1000u), 5000u, "lambda=1.000 → unchanged");
+    CHECK_NEAR(static_cast<float>(apply_lambda_target_pw_us(5000u, 850u)),  5882.0f, 5.0f, "lambda=0.850 → richer");
+    CHECK_NEAR(static_cast<float>(apply_lambda_target_pw_us(5000u, 1200u)), 4167.0f, 5.0f, "lambda=1.200 → leaner");
+    CHECK_EQ(apply_lambda_target_pw_us(5000u, 600u),  5000u, "lambda<0.65 → passthrough");
+    CHECK_EQ(apply_lambda_target_pw_us(5000u, 1300u), 5000u, "lambda>1.20 → passthrough");
+    CHECK_EQ(apply_lambda_target_pw_us(0u, 1000u),       0u, "base=0 → 0");
+}
+
+static void test_fuel_apply_trim(void) {
+    section("fuel_calc: apply_fuel_trim_pw_us");
+    CHECK_EQ(apply_fuel_trim_pw_us(5000u,    0), 5000u, "trim=0 → unchanged");
+    CHECK_EQ(apply_fuel_trim_pw_us(5000u,  100), 5500u, "+10% → +10%");
+    CHECK_EQ(apply_fuel_trim_pw_us(5000u, -100), 4500u, "-10% → -10%");
+    CHECK_EQ(apply_fuel_trim_pw_us(5000u,  500), 7500u, "+50% → ×1.5");
+    CHECK_EQ(apply_fuel_trim_pw_us(0u,     100),    0u, "base=0 → 0");
+}
+
+static void test_fuel_calc_final_pw(void) {
+    section("fuel_calc: calc_final_pw_us");
+    CHECK_EQ(calc_final_pw_us(5000u, 256u, 256u, 500u), 5500u, "neutral corr + 500µs dead");
+    CHECK_EQ(calc_final_pw_us(5000u, 384u, 256u,   0u), 7500u, "CLT 1.5× → pw×1.5");
+    CHECK_EQ(calc_final_pw_us(   0u, 256u, 256u, 500u),    0u, "base=0 → 0");
+}
+
+static void test_fuel_corr_functions(void) {
+    section("fuel_calc: corr_clt / corr_iat / corr_vbatt");
+    CHECK_TRUE(corr_clt(850) <= 270u,  "corr_clt at 85°C ≤ 270");
+    CHECK_TRUE(corr_clt(-100) > 256u,  "corr_clt at -10°C > 256 (cold enrichment)");
+    CHECK_TRUE(corr_iat(250) >= 256u,  "corr_iat at 25°C ≥ 256");
+    CHECK_TRUE(corr_vbatt(12000u) > 0u && corr_vbatt(12000u) < 2000u, "dead-time at 12V in range");
+    CHECK_TRUE(corr_vbatt(9000u) > corr_vbatt(14000u), "lower voltage → longer dead-time");
+}
+
+static void test_fuel_decel_cut(void) {
+    section("fuel_calc: fuel_decel_cut_update / active / reset");
+    fuel_decel_cut_reset();
+    CHECK_FALSE(fuel_decel_cut_active(), "not active after reset");
+    CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, 800), "activates: closed + warm + high rpm");
+    CHECK_TRUE(fuel_decel_cut_active(), "active() true");
+    CHECK_FALSE(fuel_decel_cut_update(11000u, 0u, 800), "deactivates: rpm < exit");
+    fuel_decel_cut_update(20000u, 0u, 800);
+    fuel_decel_cut_update(20000u, 100u, 800);
+    CHECK_FALSE(fuel_decel_cut_active(), "deactivates: throttle open");
+    fuel_decel_cut_reset();
+    CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, 600), "no cut: cold engine");
+}
+
+static void test_fuel_baro(void) {
+    section("fuel_calc: fuel_set/get_baro_bar_x100");
+    fuel_set_baro_bar_x100(101u); CHECK_EQ(fuel_get_baro_bar_x100(), 101u, "baro=101");
+    fuel_set_baro_bar_x100(70u);  CHECK_EQ(fuel_get_baro_bar_x100(),  70u, "baro=70 (min)");
+    fuel_set_baro_bar_x100(110u); CHECK_EQ(fuel_get_baro_bar_x100(), 110u, "baro=110 (max)");
+    fuel_set_baro_bar_x100(69u);  CHECK_EQ(fuel_get_baro_bar_x100(), 110u, "69 rejected");
+    fuel_set_baro_bar_x100(111u); CHECK_EQ(fuel_get_baro_bar_x100(), 110u, "111 rejected");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IGN CALC
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_ign_rev_limit_spark_trim(void) {
+    section("ign_calc: calc_rev_limit_spark_trim");
+    rev_limit_spark_reset();
+    CHECK_EQ(calc_rev_limit_spark_trim(60000u), 0,        "below window → 0");
+    const int16_t soft = calc_rev_limit_spark_trim(67500u);
+    CHECK_TRUE(soft < 0 && soft > -15, "in soft window: -15 < trim < 0");
+    CHECK_EQ(calc_rev_limit_spark_trim(70000u), INT16_MIN, "at limit → spark cut");
+    CHECK_EQ(calc_rev_limit_spark_trim(72000u), INT16_MIN, "above limit → spark cut");
+    rev_limit_spark_reset();
+    CHECK_EQ(calc_rev_limit_spark_trim(60000u), 0,        "0 after reset");
+}
+
+static void test_ign_iat_correction(void) {
+    section("ign_calc: calc_ign_iat_correction_deg");
+    CHECK_EQ(calc_ign_iat_correction_deg(-200),  2,  "IAT=-20°C → +2°");
+    CHECK_EQ(calc_ign_iat_correction_deg(0),     1,  "IAT=0°C → +1°");
+    CHECK_EQ(calc_ign_iat_correction_deg(200),   0,  "IAT=20°C → 0° (ref)");
+    CHECK_EQ(calc_ign_iat_correction_deg(400),  -1,  "IAT=40°C → -1°");
+    CHECK_EQ(calc_ign_iat_correction_deg(800),  -5,  "IAT=80°C → -5°");
+    CHECK_EQ(calc_ign_iat_correction_deg(1000), -5,  "IAT=100°C → clamped -5°");
+}
+
+static void test_ign_clt_correction(void) {
+    section("ign_calc: calc_ign_clt_correction_deg");
+    CHECK_EQ(calc_ign_clt_correction_deg(-400), 0,  "CLT=-40°C → 0°");
+    CHECK_EQ(calc_ign_clt_correction_deg(200),  -8, "CLT=20°C → -8° (cat warm-up)");
+    CHECK_EQ(calc_ign_clt_correction_deg(600),  0,  "CLT=60°C → 0°");
+}
+
+static void test_ign_antijerk(void) {
+    section("ign_calc: calc_antijerk_retard_deg");
+    antijerk_reset();
+    CHECK_EQ(calc_antijerk_retard_deg(false), 0, "no AE → 0");
+    CHECK_EQ(calc_antijerk_retard_deg(true),  3, "AE active → 3°");
+    antijerk_reset();
+    calc_antijerk_retard_deg(true);
+    calc_antijerk_retard_deg(false); calc_antijerk_retard_deg(false); calc_antijerk_retard_deg(false);
+    CHECK_EQ(calc_antijerk_retard_deg(false), 0, "decays to 0 after 3 clean cycles");
+}
+
+static void test_ign_clamp_and_total_advance(void) {
+    section("ign_calc: clamp_advance_deg / calc_total_advance");
+    CHECK_EQ(clamp_advance_deg(40),  40,  "40° at max");
+    CHECK_EQ(clamp_advance_deg(50),  40,  "50° clamped to 40°");
+    CHECK_EQ(clamp_advance_deg(-10), -10, "-10° at min");
+    CHECK_EQ(clamp_advance_deg(-15), -10, "-15° clamped to -10°");
+    AdvanceCorrections c{};
+    CHECK_EQ(calc_total_advance(25, c), 25, "base=25 no corr → 25");
+    c.iat_deg = -3;
+    CHECK_EQ(calc_total_advance(25, c), 22, "iat=-3 → 22");
+    c = {}; c.clt_deg = -8; c.knock_retard_deg = 5;
+    CHECK_EQ(calc_total_advance(25, c), 12, "clt=-8 knock=5 → 12");
+    c = {}; c.idle_spark_deg = 5;
+    CHECK_EQ(calc_total_advance(15, c), 20, "idle_spark=+5 → 20");
+}
+
+static void test_ign_dwell(void) {
+    section("ign_calc: dwell_ms_x10_from_vbatt / calc_dwell_angle_x10 / build_ign_schedule");
+    CHECK_NEAR(static_cast<float>(dwell_ms_x10_from_vbatt(12000u)), 30.0f, 5.0f, "dwell@12V≈3.0ms");
+    CHECK_TRUE(dwell_ms_x10_from_vbatt(9000u) > dwell_ms_x10_from_vbatt(14000u), "monotonic dwell");
+    // angle: dwell=30 x10 @ 3000 RPM = 30×3000×36/6000 = 540
+    CHECK_EQ(calc_dwell_angle_x10(30u, 3000u), 540u,  "3ms@3000RPM=54.0°");
+    CHECK_EQ(calc_dwell_angle_x10(30u, 6000u), 1080u, "3ms@6000RPM=108.0°");
+    CHECK_EQ(calc_dwell_angle_x10(420u, 8000u), 3599u, "capped at 359.9°");
+    // dwell_start = spark + dwell_angle
+    CHECK_EQ(calc_dwell_start_deg_x10(300, 30u, 3000u), 840, "dwell_start=300+540=840");
+    // build schedule
+    const IgnScheduleParams p = build_ign_schedule(0u, 250, 30u, 3000u);
+    CHECK_EQ(p.cyl, 0u, "cyl=0"); CHECK_EQ(p.spark_x10, 250u, "spark=250"); CHECK_EQ(p.dwell_start_x10, 790u, "dwell_start=790");
+    CHECK_EQ(build_ign_schedule(5u, 100, 30u, 3000u).cyl, 1u, "cyl=5 masked to 1");
+    // inj_pw_to_ticks (host mode: ×60)
+    CHECK_EQ(inj_pw_us_to_scheduler_ticks(1000u), 60000u, "1000µs×60=60000 ticks");
+    CHECK_EQ(inj_pw_us_to_scheduler_ticks(0u), 0u, "0µs→0");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUXILIARIES
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_aux_init_and_idle(void) {
+    section("auxiliaries: init / idle_target_rpm_x10");
+    auxiliaries_test_reset();
+    CHECK_EQ(auxiliaries_test_get_iac_duty(), 0u, "IAC=0 before any tick");
+    CHECK_FALSE(auxiliaries_test_get_fan_state(),  "fan off after init");
+    CHECK_FALSE(auxiliaries_test_get_pump_state(), "pump off after init");
+    auxiliaries_tick_10ms();
+    CHECK_TRUE(true, "tick_10ms after init completes");
+    // kIdleTargetRpmX10 table: -40°C→12000, 90°C→8200, 110°C→8000
+    CHECK_EQ(auxiliaries_idle_target_rpm_x10(-400), 12000u, "idle@-40°C=1200RPM");
+    CHECK_EQ(auxiliaries_idle_target_rpm_x10(900),   8200u, "idle@90°C=820RPM");
+    CHECK_EQ(auxiliaries_idle_target_rpm_x10(1100),  8000u, "idle@110°C=800RPM");
+    CHECK_TRUE(auxiliaries_idle_target_rpm_x10(-100) > auxiliaries_idle_target_rpm_x10(700),
+               "idle target decreases as engine warms");
+}
+
+static void test_aux_pump_prime(void) {
+    section("auxiliaries: key_on → pump prime / key_off → pump stop");
+    auxiliaries_test_reset();
+    auxiliaries_set_key_on(true);
+    auxiliaries_tick_10ms();
+    CHECK_TRUE(auxiliaries_test_get_pump_state(), "pump on after key_on + tick");
+    auxiliaries_set_key_on(false);
+    for (int i = 0; i < 310; ++i) { auxiliaries_tick_10ms(); }
+    CHECK_FALSE(auxiliaries_test_get_pump_state(), "pump off after key_off + delay");
+}
+
+static void test_aux_ticks_no_crash(void) {
+    section("auxiliaries: tick_10ms / tick_20ms no crash");
+    auxiliaries_test_reset();
+    for (int i = 0; i < 10; ++i) { auxiliaries_tick_10ms(); auxiliaries_tick_20ms(); }
+    CHECK_TRUE(true, "20 ticks complete without crash");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// KNOCK
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_knock_init_and_threshold(void) {
+    section("knock: init / adc_threshold set/get");
+    knock_init();
+    for (uint8_t c = 0; c < 4u; ++c) { CHECK_EQ(knock_get_retard_x10(c), 0u, "retard=0 after init"); }
+    CHECK_FALSE(knock_test_window_active(), "window closed after init");
+    CHECK_EQ(knock_get_adc_threshold(), 2048u, "default threshold=2048");
+    knock_set_adc_threshold(3000u); CHECK_EQ(knock_get_adc_threshold(), 3000u, "threshold=3000");
+    knock_set_adc_threshold(100u);  CHECK_EQ(knock_get_adc_threshold(),  256u, "clamped at min=256");
+    knock_set_adc_threshold(5000u); CHECK_EQ(knock_get_adc_threshold(), 4000u, "clamped at max=4000");
+}
+
+static void test_knock_window(void) {
+    section("knock: window open/close + cylinder masking");
+    knock_init();
+    knock_window_open(0u);
+    CHECK_TRUE(knock_test_window_active(), "window active");
+    CHECK_EQ(knock_test_window_cyl(), 0u, "cyl=0");
+    knock_window_close(0u);
+    CHECK_FALSE(knock_test_window_active(), "window closed");
+    knock_window_open(6u); CHECK_EQ(knock_test_window_cyl(), 2u, "cyl=6 masked to 2"); knock_window_close(6u);
+}
+
+static void test_knock_detection_and_recovery(void) {
+    section("knock: adc_update / cycle_complete / retard / recovery / clamp / per-cyl");
+    knock_init();
+    knock_set_adc_threshold(2000u);
+    knock_set_event_threshold(2u);
+
+    // adc_update: counts only above threshold while window open
+    knock_window_open(1u);
+    knock_test_set_adc_raw(1900u); knock_test_set_adc_raw(1900u);
+    CHECK_EQ(knock_test_get_knock_count(1u), 0u, "below threshold → no count");
+    knock_test_set_adc_raw(2100u); knock_test_set_adc_raw(2100u);
+    CHECK_EQ(knock_test_get_knock_count(1u), 2u, "above threshold → 2 counts");
+    knock_window_close(1u);
+    knock_test_set_adc_raw(3000u);
+    CHECK_EQ(knock_test_get_knock_count(1u), 2u, "window closed → count frozen");
+
+    // cycle_complete: retard on knock (count=2 > threshold=2? no, need >2 → need ≥3)
+    // Reopen with 3 events
+    knock_window_open(0u);
+    knock_test_set_adc_raw(2500u); knock_test_set_adc_raw(2500u); knock_test_set_adc_raw(2500u);
+    knock_window_close(0u);
+    const uint16_t r0 = knock_get_retard_x10(0u);
+    knock_cycle_complete(0u);
+    CHECK_TRUE(knock_get_retard_x10(0u) > r0, "retard increases after knock");
+    CHECK_EQ(knock_get_retard_x10(0u) - r0, 20u, "retard += 2.0° (20 x10)");
+
+    // per-cylinder independence
+    CHECK_EQ(knock_get_retard_x10(1u), 0u, "cyl 1 unaffected by cyl 0 knock");
+    CHECK_EQ(knock_get_retard_x10(2u), 0u, "cyl 2 unaffected");
+
+    // max clamp: force many knock events
+    knock_set_event_threshold(0u);
+    for (int i = 0; i < 20; ++i) {
+        knock_window_open(3u); knock_test_set_adc_raw(2500u); knock_window_close(3u); knock_cycle_complete(3u);
+    }
+    CHECK_TRUE(knock_get_retard_x10(3u) <= 100u, "retard clamped at 10.0° (100 x10)");
+
+    // recovery: 11 clean cycles → retard decreases
+    knock_set_event_threshold(2u);
+    const uint16_t peak = knock_get_retard_x10(0u);
+    for (int i = 0; i < 11; ++i) {
+        knock_window_open(0u); knock_test_set_adc_raw(500u); knock_window_close(0u); knock_cycle_complete(0u);
+    }
+    CHECK_TRUE(knock_get_retard_x10(0u) < peak, "retard decreases after clean cycles");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FUEL CALC — SEGUNDA FASE (funções não cobertas)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_fuel_table_lookups(void) {
+    section("fuel_calc: get_ve / get_ve_prepared / get_lambda_target_x1000");
+
+    // ve_table is default-initialized; all cells = some uint8 value.
+    // We just verify: returns in [0,255], doesn't crash, uses axis clamping.
+    const uint8_t ve_mid = get_ve(30000u, 100u);  // 3000 RPM, 100 kPa
+    CHECK_TRUE(ve_mid <= 255u, "get_ve returns uint8 value");
+
+    // Prepared path must match direct path
+    const Table2dLookup lk = table3d_prepare_lookup(kRpmAxisX10, kLoadAxisBarX100, 30000u, 100u);
+    const uint8_t ve_prep = get_ve_prepared(lk);
+    CHECK_EQ(ve_mid, ve_prep, "get_ve_prepared == get_ve for same point");
+
+    // lambda_target clamped to [650, 1200]
+    const uint16_t lam = get_lambda_target_x1000(30000u, 100u);
+    CHECK_TRUE(lam >= 650u && lam <= 1200u, "get_lambda_target in [650,1200]");
+
+    // Prepared path must match
+    const uint16_t lam_prep = get_lambda_target_x1000_prepared(lk);
+    CHECK_EQ(lam, lam_prep, "get_lambda_target_x1000_prepared == direct");
+}
+
+static void test_fuel_default_req_and_base_default(void) {
+    section("fuel_calc: default_req_fuel_us / calc_base_pw_us_default");
+
+    // default_req_fuel_us uses compile-time engine config
+    const uint32_t req = default_req_fuel_us();
+    CHECK_TRUE(req > 0u && req <= 50000u, "default_req_fuel_us in (0, 50ms]");
+
+    // calc_base_pw_us_default: same result as calc_base_pw_us with defaults
+    const uint32_t base = calc_base_pw_us_default(80u, 100u);
+    CHECK_TRUE(base > 0u, "calc_base_pw_us_default > 0 at VE=80% MAP=100kPa");
+    CHECK_EQ(calc_base_pw_us_default(0u, 100u), 0u, "ve=0 → 0");
+    CHECK_EQ(calc_base_pw_us_default(80u, 400u), 0u, "MAP>3bar → 0");
+}
+
+static void test_fuel_default_fast(void) {
+    section("fuel_calc: calc_fuel_pw_us_default_fast");
+
+    fuel_set_baro_bar_x100(101u);  // 1010 mbar reference
+    const uint32_t pw = calc_fuel_pw_us_default_fast(
+        80u,    // ve
+        100u,   // map_bar_x100
+        1000u,  // lambda_target_x1000 (stoich)
+        0,      // trim_pct_x10
+        256u,   // corr_clt_x256 (neutral)
+        256u,   // corr_iat_x256 (neutral)
+        500u    // dead_time_us
+    );
+    CHECK_TRUE(pw > 0u, "calc_fuel_pw_us_default_fast > 0 for valid inputs");
+
+    // VE=0 → 0
+    CHECK_EQ(calc_fuel_pw_us_default_fast(0u, 100u, 1000u, 0, 256u, 256u, 0u), 0u,
+             "ve=0 → pw=0");
+
+    // lambda out of range → 0
+    CHECK_EQ(calc_fuel_pw_us_default_fast(80u, 100u, 600u, 0, 256u, 256u, 0u), 0u,
+             "lambda<650 → pw=0");
+}
+
+static void test_fuel_corr_warmup(void) {
+    section("fuel_calc: corr_warmup");
+    // warmup_corr_axis_x10: {-400,-100,0,200,400,700,900,1100}
+    // warmup_corr_x256:     {420, 380,350,320,290,256,256, 256}
+    const uint16_t w_cold = corr_warmup(-400);  // idx=0 → 420
+    CHECK_EQ(w_cold, 420u, "corr_warmup at -40°C = 420 (1.64×)");
+
+    const uint16_t w_warm = corr_warmup(900);   // idx=6 → 256
+    CHECK_EQ(w_warm, 256u, "corr_warmup at 90°C = 256 (1.0×, no enrichment)");
+
+    // Monotonic: colder → more enrichment
+    CHECK_TRUE(corr_warmup(-100) > corr_warmup(700), "corr_warmup monotonically decreasing");
+}
+
+static void test_fuel_ae(void) {
+    section("fuel_calc: fuel_ae_set_threshold / fuel_ae_set_taper / calc_ae_pw_us");
+
+    fuel_reset_adaptives();
+
+    // Set threshold=10 x10 (1.0%/ms), taper=4 cycles
+    fuel_ae_set_threshold(10u);
+    fuel_ae_set_taper(4u);
+
+    // No acceleration: TPS same → ae=0
+    const int32_t ae_idle = calc_ae_pw_us(500u, 500u, 10u, 800);
+    CHECK_EQ(ae_idle, 0, "no TPS change → ae=0");
+
+    // Large TPS step: delta=300 x10 in 10ms → tpsdot=30 > threshold=10
+    const int32_t ae_accel = calc_ae_pw_us(800u, 500u, 10u, 800);
+    CHECK_TRUE(ae_accel > 0, "large TPS step → ae > 0");
+    CHECK_TRUE(ae_accel <= 5000, "ae ≤ ae_max_pw_us=5000");
+
+    // Decel (TPS close): negative delta → clamped to 0, returns decaying pulse
+    const int32_t ae_decel = calc_ae_pw_us(200u, 800u, 10u, 800);
+    CHECK_TRUE(ae_decel >= 0, "decel → ae ≥ 0 (no decel enrichment)");
+
+    // dt=0 guard
+    CHECK_EQ(calc_ae_pw_us(800u, 0u, 0u, 800), 0, "dt=0 → ae=0");
+}
+
+static void test_fuel_adaptives_reset(void) {
+    section("fuel_calc: fuel_reset_adaptives / fuel_lambda_delay_reset");
+
+    // Ensure STFT is non-zero first
+    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+    CHECK_TRUE(fuel_get_stft_pct_x10() != 0, "pre-cond: STFT non-zero");
+
+    fuel_reset_adaptives();
+    CHECK_EQ(fuel_get_stft_pct_x10(), 0, "STFT=0 after reset_adaptives");
+
+    // fuel_lambda_delay_reset: just must not crash
+    fuel_lambda_delay_reset();
+    CHECK_TRUE(true, "fuel_lambda_delay_reset no crash");
+}
+
+static void test_fuel_lambda_delay(void) {
+    section("fuel_calc: lambda_delay_ms_from_rpm_load");
+
+    // Returns interpolated delay in ms. With default table, should be > 0.
+    const uint16_t d = lambda_delay_ms_from_rpm_load(30000u, 100u);
+    CHECK_TRUE(d <= 2000u, "lambda_delay in plausible range");
+
+    // At extremes must not crash
+    lambda_delay_ms_from_rpm_load(0u, 0u);
+    lambda_delay_ms_from_rpm_load(200000u, 300u);
+    CHECK_TRUE(true, "lambda_delay extremes: no crash");
+}
+
+static void test_fuel_stft(void) {
+    section("fuel_calc: fuel_update_stft / fuel_get_stft_pct_x10");
+
+    fuel_reset_adaptives();
+    CHECK_EQ(fuel_get_stft_pct_x10(), 0, "STFT=0 after reset");
+
+    // Conditions for closed loop: clt>700, o2_valid=true, ae_active=false, rev_cut=false
+    // lambda measured > target → lean signal → positive error → STFT increases (adds fuel)
+    int16_t stft = fuel_update_stft(30000u, 100u,
+        1000,   // target lambda (stoich)
+        1050,   // measured lambda (lean by 5%)
+        900,    // clt 90°C > 70°C → closed loop OK
+        true, false, false, 5000u);
+    CHECK_TRUE(stft > 0, "lean signal → STFT positive (add fuel)");
+    CHECK_EQ(stft, fuel_get_stft_pct_x10(), "fuel_get_stft_pct_x10 matches return value");
+
+    // Rich signal → STFT eventually negative
+    fuel_reset_adaptives();
+    for (int i = 0; i < 30; ++i) {
+        stft = fuel_update_stft(30000u, 100u, 1000, 950, 900, true, false, false, 5000u);
+    }
+    CHECK_TRUE(stft < 0, "rich signal → STFT negative (reduce fuel)");
+
+    // Closed loop disabled (cold engine): STFT decays toward 0
+    fuel_reset_adaptives();
+    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);  // set non-zero
+    const int16_t before = fuel_get_stft_pct_x10();
+    fuel_update_stft(30000u, 100u, 1000, 1050, 600, true, false, false, 5000u);  // clt too cold
+    const int16_t after = fuel_get_stft_pct_x10();
+    CHECK_TRUE(after < before, "closed loop disabled → STFT decays");
+}
+
+static void test_fuel_stft_delayed(void) {
+    section("fuel_calc: fuel_update_stft_delayed");
+
+    fuel_reset_adaptives();
+    // Just verify it runs without crash and returns plausible value
+    const int16_t v = fuel_update_stft_delayed(
+        1000u,  // now_ms
+        30000u, 100u, 1000, 1050, 900,
+        true, false, false, 5000u);
+    CHECK_TRUE(v >= -250 && v <= 250, "stft_delayed in [-25%,+25%] range");
+}
+
+static void test_fuel_ltft(void) {
+    section("fuel_calc: fuel_get_ltft_pct_x10 / fuel_get_ltft_add_us");
+
+    fuel_reset_adaptives();
+
+    // After reset: LTFT cells loaded from NVM (host = all zeros)
+    const int16_t ltft = fuel_get_ltft_pct_x10(0u, 0u);
+    CHECK_TRUE(ltft >= -250 && ltft <= 250, "ltft_pct_x10 in valid range");
+
+    // Out-of-range index: returns 0
+    CHECK_EQ(fuel_get_ltft_pct_x10(16u, 0u), 0, "ltft: out-of-range map_idx → 0");
+    CHECK_EQ(fuel_get_ltft_pct_x10(0u, 16u), 0, "ltft: out-of-range rpm_idx → 0");
+
+    const int16_t ltft_add = fuel_get_ltft_add_us(0u, 0u);
+    CHECK_TRUE(ltft_add >= -6350 && ltft_add <= 6350, "ltft_add_us in valid range");
+    CHECK_EQ(fuel_get_ltft_add_us(16u, 0u), 0, "ltft_add: out-of-range → 0");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// IGN CALC — SEGUNDA FASE
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_ign_get_advance(void) {
+    section("ign_calc: get_advance / get_advance_prepared");
+
+    // spark_table is int8_t — values depend on defaults. Just verify consistency.
+    const int16_t adv = get_advance(30000u, 100u);  // 3000 RPM, 100 kPa
+    CHECK_TRUE(adv >= -40 && adv <= 80, "get_advance in plausible range [-40,80]°");
+
+    // Prepared path must match
+    const Table2dLookup lk = table3d_prepare_lookup(kRpmAxisX10, kLoadAxisBarX100, 30000u, 100u);
+    const int16_t adv_prep = get_advance_prepared(lk);
+    CHECK_EQ(adv, adv_prep, "get_advance_prepared == get_advance for same point");
+
+    // Axis clamping: below min axis → uses first cell
+    const int16_t adv_lo = get_advance(100u, 10u);   // below all axis values
+    const int16_t adv_lo2 = get_advance(4999u, 19u); // just below first axis point
+    CHECK_EQ(adv_lo, adv_lo2, "below-axis values both clamp to first cell");
+}
+
+static void test_ign_dwell_vbatt_rpm(void) {
+    section("ign_calc: dwell_ms_x10_from_vbatt_rpm");
+
+    // dwell_rpm_axis_rpm: {500,1200,4000,7000}
+    // dwell_rpm_factor_q8: {384,288,256,200}  (384/256=1.5x at 500RPM, 200/256=0.78x at 7000RPM)
+    // At 12V base dwell ≈ 30 x10. At 500 RPM (cranking): 30 × 384/256 = 45.
+    const uint16_t d_crank = dwell_ms_x10_from_vbatt_rpm(12000u, 5000u);   // rpm_x10=5000 → 500 RPM
+    const uint16_t d_mid   = dwell_ms_x10_from_vbatt_rpm(12000u, 40000u);  // 4000 RPM (factor=1.0)
+    const uint16_t d_high  = dwell_ms_x10_from_vbatt_rpm(12000u, 70000u);  // 7000 RPM (factor=0.78)
+    CHECK_TRUE(d_crank > d_mid,  "cranking dwell > mid-RPM dwell");
+    CHECK_TRUE(d_mid   > d_high, "mid-RPM dwell > high-RPM dwell");
+    // At reference RPM (4000 RPM, factor_q8=256=1.0): result == base
+    const uint16_t base = dwell_ms_x10_from_vbatt(12000u);
+    CHECK_EQ(d_mid, base, "dwell unchanged at 4000 RPM (factor=1.0x)");
+}
+
+static void test_ign_idle_spark_correction(void) {
+    section("ign_calc: calc_idle_spark_correction_deg");
+
+    // Calibration defaults:
+    //   idle_spark_tps_max_x10=25, idle_spark_map_max_bar_x100=80
+    //   idle_spark_rpm_min_x10=5000, idle_spark_window_above_target_x10=4000
+    //   idle_spark_deadband_rpm_x10=500, idle_spark_rpm_per_deg_x10=500
+    //   retard_limit=-8, advance_limit=12
+
+    // Conditions NOT met: TPS too high
+    CHECK_EQ(calc_idle_spark_correction_deg(8500u, 8500u, 30u, 60u), 0,
+             "tps > max → 0");
+
+    // Conditions NOT met: MAP too high
+    CHECK_EQ(calc_idle_spark_correction_deg(8500u, 8500u, 0u, 90u), 0,
+             "map > max → 0");
+
+    // Within deadband: error=0 < 500
+    CHECK_EQ(calc_idle_spark_correction_deg(8500u, 8500u, 0u, 60u), 0,
+             "rpm == target (within deadband) → 0");
+
+    // Below target by 1500 x10 (150 RPM): error=1500, -deadband=1000 → corr=1000/500=2° advance
+    const int16_t corr_low = calc_idle_spark_correction_deg(7000u, 8500u, 0u, 60u);
+    CHECK_EQ(corr_low, 2, "150 RPM below target → +2° advance");
+
+    // Above target by 1500 x10: error=-1500, +deadband=-1000 → corr=-1000/500=-2° retard
+    const int16_t corr_high = calc_idle_spark_correction_deg(10000u, 8500u, 0u, 60u);
+    CHECK_EQ(corr_high, -2, "150 RPM above target → -2° retard");
+
+    // Advance clamped at advance_limit=12: need idle_target big enough so
+    // rpm (>= rpm_min=5000) still has error > deadband + 12*rpm_per_deg (=6500).
+    // Use idle_target=20000, rpm=5000: error=15000, -deadband=14500 → 29° → clamped at 12.
+    const int16_t corr_clamp = calc_idle_spark_correction_deg(5000u, 20000u, 0u, 60u);
+    CHECK_EQ(corr_clamp, 12, "large underspeed (5000 vs target 20000) → clamped at +12°");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ETB CONTROL — C++ namespace (ems::engine)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_etb_cpp_update(void) {
+    section("etb_control (C++ ns): reset / update / test_get_integrator");
+
+    // etb_control_update requires etb_cal_valid != 0
+    etb_cal_valid = 1u;
+    etb_kp_x10  = 120u;  // kp = 12.0
+    etb_ki_x10  = 8u;
+    etb_kd_x10  = 40u;
+
+    ems::engine::etb_control_reset();
+    CHECK_EQ(ems::engine::etb_control_test_get_integrator(), 0, "integrator=0 after reset");
+
+    // Disabled: enable_request=false → output inactive, integrator stays 0
+    auto s = ems::engine::etb_control_update(500u, 0u, false, 10u);
+    CHECK_FALSE(s.active, "enable=false → not active");
+    CHECK_EQ(s.output_pct_x10, 0, "disabled → output=0");
+    CHECK_EQ(ems::engine::etb_control_test_get_integrator(), 0, "integrator=0 when disabled");
+
+    // Invalid calibration: etb_cal_valid=0 → disabled
+    etb_cal_valid = 0u;
+    s = ems::engine::etb_control_update(500u, 0u, true, 10u);
+    CHECK_FALSE(s.active, "cal_invalid → not active");
+    etb_cal_valid = 1u;
+
+    // Enabled with positive error: output should be positive (opening)
+    ems::engine::etb_control_reset();
+    s = ems::engine::etb_control_update(500u, 0u, true, 10u);  // target=50%, measured=0%
+    CHECK_TRUE(s.active, "enabled + cal_valid → active");
+    CHECK_TRUE(s.output_pct_x10 > 0, "positive error → positive output");
+    CHECK_EQ(s.position_error_x10, 500, "error = target - measured = 500");
+
+    // Integrator accumulates with small error (P must stay below saturation limit).
+    // kp_x10=120, error=50 (5%): P = (120*50)/10 = 600 < 1000 → not saturating.
+    ems::engine::etb_control_reset();
+    for (int i = 0; i < 5; ++i) {
+        ems::engine::etb_control_update(50u, 0u, true, 10u);  // 5% error, small P
+    }
+    CHECK_TRUE(ems::engine::etb_control_test_get_integrator() > 0,
+               "integrator grows with sustained small error");
+
+    // No error (target == measured): integrator should stop growing
+    ems::engine::etb_control_reset();
+    ems::engine::etb_control_update(300u, 300u, true, 10u);
+    CHECK_EQ(ems::engine::etb_control_test_get_integrator(), 0, "no error → integrator stays 0");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TORQUE MANAGER — C++ namespace (ems::engine)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_torque_manager_cpp_update(void) {
+    section("torque_manager (C++ ns): reset / update / test_get_target / test_get_limp_reason");
+
+    ems::engine::torque_manager_reset();
+    CHECK_EQ(ems::engine::torque_manager_test_get_target(), 0u, "target=0 after reset");
+    CHECK_EQ(ems::engine::torque_manager_test_get_limp_reason(), 0u, "limp_reason=0 after reset");
+
+    // key_on=false → everything disabled
+    ems::drv::CkpSnapshot snap{};
+    snap.rpm_x10 = 15000u;  // 1500 RPM
+    ems::drv::SensorData sens{};
+    sens.app_pct_x10 = 500u;  // 50% pedal
+
+    auto out = ems::engine::torque_manager_update(snap, sens, false, false, false, 8500u, 10u);
+    CHECK_FALSE(out.etb_enable_request, "key_off → ETB disabled");
+    CHECK_EQ(out.etb_target_pct_x10, 0u, "key_off → target=0");
+    CHECK_EQ(ems::engine::torque_manager_test_get_target(), 0u, "state target=0 when key_off");
+
+    // key_on, no faults, valid calibration → target = app_pct_x10
+    etb_cal_valid = 1u;
+    out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 10u);
+    CHECK_TRUE(out.etb_enable_request, "key_on + no faults → ETB enabled");
+    CHECK_EQ(out.etb_target_pct_x10, 500u, "target = app_pct_x10=500");
+    CHECK_EQ(ems::engine::torque_manager_test_get_target(), 500u, "state target=500");
+    CHECK_EQ(ems::engine::torque_manager_test_get_limp_reason(), 0u, "no limp reason");
+
+    // Invalid calibration → TORQUE_LIMP_NO_CALIB, target=0
+    etb_cal_valid = 0u;
+    out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 10u);
+    CHECK_TRUE((out.limp_reason & TORQUE_LIMP_NO_CALIB) != 0u, "no_calib → LIMP_NO_CALIB set");
+    CHECK_EQ(out.etb_target_pct_x10, 0u, "no_calib → target=0");
+    etb_cal_valid = 1u;
+
+    // map_clt_limp → TORQUE_LIMP_MAP_CLT, target clamped to etb_max_open_pct_x10_limp
+    etb_max_open_pct_x10_limp = 250u;  // 25%
+    sens.app_pct_x10 = 800u;           // 80% pedal
+    out = ems::engine::torque_manager_update(snap, sens, true, true, false, 8500u, 10u);
+    CHECK_TRUE((out.limp_reason & TORQUE_LIMP_MAP_CLT) != 0u, "map_clt_limp → LIMP_MAP_CLT");
+    CHECK_EQ(out.etb_target_pct_x10, 250u, "limp target clamped to 250 (25%)");
+
+    // rev_cut → TORQUE_LIMP_REV_CUT, target=0
+    sens.app_pct_x10 = 500u;
+    out = ems::engine::torque_manager_update(snap, sens, true, false, true, 8500u, 10u);
+    CHECK_TRUE((out.limp_reason & TORQUE_LIMP_REV_CUT) != 0u, "rev_cut → LIMP_REV_CUT");
+    CHECK_EQ(out.etb_target_pct_x10, 0u, "rev_cut → target=0");
+
+    // APP fault → TORQUE_LIMP_APP_FAULT
+    sens.app_pct_x10 = 500u;
+    sens.throttle_fault_bits = ems::drv::THROTTLE_FAULT_APP1;
+    out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 10u);
+    CHECK_TRUE((out.limp_reason & TORQUE_LIMP_APP_FAULT) != 0u, "APP fault → LIMP_APP_FAULT");
+    sens.throttle_fault_bits = 0u;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CKP — SEGUNDA FASE (seed_confirmed, seed_rejected, cmp_glitch)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Helper: fire the cam ISR (TIM5 CH2). IDR bit 1 must be high.
+static void cam_fire(uint32_t capture_value) {
+    ems_test_cam_gpio_idr = (1u << 1u);  // bit 1 = rising edge
+    ems_test_tim5_ccr2 = capture_value;
+    ckp_tim5_ch2_isr();
+}
+
+static void test_ckp_seed_confirmed(void) {
+    section("ckp: seed_confirmed_count after cam edge during probation");
+
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_seed_arm(true);
+
+    // Feed 3 coherent normal teeth to satisfy is_forward_rotation_coherent,
+    // then 52 more to reach tooth_count=55, then gap → FULL_SYNC + probation.
+    for (uint32_t i = 0; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kNormalPeriod * 3u);  // gap: seed consumed, state=FULL_SYNC, probation=true
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::FULL_SYNC), "pre-cond: FULL_SYNC");
+
+    // Fire cam ISR during probation → seed confirmed
+    cam_fire(g_ckp_cap + kNormalPeriod * 58u);
+    CHECK_EQ(ckp_seed_confirmed_count(), 1u, "seed_confirmed_count=1 after cam edge");
+}
+
+static void test_ckp_seed_rejected(void) {
+    section("ckp: seed_rejected_count after probation timeout");
+
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_seed_arm(true);
+
+    for (uint32_t i = 0; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kNormalPeriod * 3u);  // FULL_SYNC + probation
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::FULL_SYNC), "pre-cond: FULL_SYNC");
+
+    // Feed >70 teeth without cam ISR → probation timeout → seed rejected, state=HALF_SYNC
+    for (uint32_t i = 0; i < 71u; ++i) { ckp_fire(kNormalPeriod); }
+    CHECK_EQ(ckp_seed_rejected_count(), 1u, "seed_rejected_count=1 after probation timeout");
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::HALF_SYNC), "state=HALF_SYNC after rejection");
+}
+
+static void test_ckp_cmp_glitch_count(void) {
+    section("ckp: ckp_get_cmp_glitch_count on invalid cam timing");
+
+    ckp_reach_full_sync();
+    // ckp_test_reset() inside ckp_reach_full_sync() now also resets s_prev_cmp_capture.
+
+    // First cam edge: s_prev_cmp_capture=0 → skip validation → always accepted.
+    const uint32_t cap1 = g_ckp_cap;
+    cam_fire(cap1);
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "first cam edge always accepted");
+
+    // Second cam edge too soon (delta=100, expected=58×10000=580000) → glitch
+    cam_fire(cap1 + 100u);
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 1u, "cam edge too soon → glitch counted");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SENSORS — SEGUNDA FASE
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_sensors_on_tooth(void) {
+    section("sensors: sensors_on_tooth");
+    sensor_setup(); sensors_init();
+    ems::drv::CkpSnapshot snap{};
+    snap.tooth_period_ns = 160000u;  // 10000 ticks × 16 ns = 160000 ns
+    snap.rpm_x10 = 62500u;
+    sensors_on_tooth(snap);  // triggers ADC sample accumulation (fast channels)
+    CHECK_TRUE(true, "sensors_on_tooth completes without crash");
+}
+
+static void test_sensors_tick_50ms(void) {
+    section("sensors: sensors_tick_50ms");
+    sensor_setup(); sensors_init();
+    using namespace ems::hal;
+    adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS_SE5B, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::OIL_PRESS_SE6B,  2000u);
+    sensors_tick_50ms();
+    CHECK_TRUE(true, "sensors_tick_50ms completes without crash");
+    // After tick: fuel/oil pressure should be set (raw=2000 → some bar value)
+    for (int i = 0; i < 4; ++i) { sensors_tick_50ms(); }  // fill staging buffers
+    sensors_test_tick_100ms();  // commits staging → committed (double-buffer swap)
+    const ems::drv::SensorData sd = sensors_get();
+    CHECK_TRUE(sd.fuel_press_bar_x1000 > 0u, "fuel_press > 0 after tick_50ms with raw=2000");
+}
+
+static void test_sensors_set_range(void) {
+    section("sensors: sensors_set_range");
+    sensor_setup(); sensors_init();
+    // Widen CLT range so that raw=50 is accepted
+    sensors_set_range(SensorId::CLT, {50u, 4000u});
+    CHECK_TRUE(validate_sensor_range(SensorId::CLT, 50u), "CLT raw=50 valid after range change");
+    CHECK_FALSE(validate_sensor_range(SensorId::CLT, 49u), "CLT raw=49 still invalid");
+}
+
+static void test_sensors_etb_harness_present(void) {
+    section("sensors: sensors_set_etb_harness_present");
+    sensor_setup(); sensors_init();
+    sensors_set_etb_harness_present(true);
+    // When harness present, tick_100ms uses fixed vbatt=12000 instead of ADC.
+    // Just verify no crash.
+    sensors_test_tick_100ms();
+    CHECK_TRUE(true, "tick_100ms with harness_present=true: no crash");
+    sensors_set_etb_harness_present(false);  // restore
+}
+
+static void test_sensors_table_entry_setters(void) {
+    section("sensors: sensors_test_set_clt_table_entry / set_iat_table_entry");
+    sensor_setup(); sensors_init();
+    // Manually set CLT table entry at index 62 (ADC=2000>>5=62) to 200 (20.0°C)
+    sensors_test_set_clt_table_entry(62u, 200);
+    sensors_test_set_iat_table_entry(62u, 150);
+    using namespace ems::hal;
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT_SE14, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT_SE15, 2000u);
+    for (int i = 0; i < 8; ++i) { sensors_test_tick_100ms(); }
+    const ems::drv::SensorData sd = sensors_get();
+    CHECK_EQ(sd.clt_degc_x10, 200, "CLT table entry 62 = 200 (20.0°C)");
+    CHECK_EQ(sd.iat_degc_x10, 150, "IAT table entry 62 = 150 (15.0°C)");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// KNOCK — SEGUNDA FASE
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_knock_window_cycle_end(void) {
+    section("knock: knock_window_cycle_end");
+    knock_init();
+    knock_set_adc_threshold(2000u);
+    knock_set_event_threshold(2u);
+
+    // Open window, feed 3 above-threshold samples, call cycle_end (closes + evaluates)
+    knock_window_open(0u);
+    knock_test_set_adc_raw(2500u);
+    knock_test_set_adc_raw(2500u);
+    knock_test_set_adc_raw(2500u);  // count=3 > threshold=2
+    CHECK_TRUE(knock_test_window_active(), "pre-cond: window active");
+
+    knock_window_cycle_end();
+    CHECK_FALSE(knock_test_window_active(), "window closed by cycle_end");
+    CHECK_TRUE(knock_get_retard_x10(0u) > 0u, "retard applied by cycle_end");
+}
+
+static void test_knock_save_to_nvm(void) {
+    section("knock: knock_save_to_nvm");
+    knock_init();
+    // NVM is mocked in host test (flash.cpp stub). Just verify no crash.
+    knock_save_to_nvm();
+    CHECK_TRUE(true, "knock_save_to_nvm: no crash");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUXILIARIES — SEGUNDA FASE (getters WG/VVT)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_aux_test_getters(void) {
+    section("auxiliaries: test_get_wg_duty / vvt_esc_duty / vvt_adm_duty / wg_failsafe");
+    auxiliaries_test_reset();
+    // After init all duties are 0 and no failsafe
+    CHECK_EQ(auxiliaries_test_get_wg_duty(),       0u, "wg_duty=0 after reset");
+    CHECK_EQ(auxiliaries_test_get_vvt_esc_duty(),  0u, "vvt_esc_duty=0 after reset");
+    CHECK_EQ(auxiliaries_test_get_vvt_adm_duty(),  0u, "vvt_adm_duty=0 after reset");
+    CHECK_FALSE(auxiliaries_test_get_wg_failsafe(), "wg_failsafe=false after reset");
+    // Multiple ticks should not crash even with these getters
+    for (int i = 0; i < 5; ++i) { auxiliaries_tick_20ms(); }
+    CHECK_TRUE(true, "WG/VVT getters accessible after ticks");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIMER HAL (stubs em host — testa que não crasham)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_timer_stubs(void) {
+    section("timer HAL: all stubs execute without crash");
+    using namespace ems::hal;
+    tim5_ic_init();
+    const uint32_t cnt = tim5_count();
+    CHECK_EQ(cnt, 0u, "tim5_count() returns mock value (0)");
+    tim3_pwm_init(15u);
+    tim3_set_duty(0u, 500u);
+    tim3_set_duty(1u, 250u);
+    tim4_pwm_init(15u);
+    tim4_set_duty(0u, 750u);
+    tim4_set_duty(1u, 1000u);
+    tim1_etb_pwm_init(20000u);
+    tim1_etb_set_duty_x10(500u);
+    CHECK_TRUE(true, "all timer stubs: no crash");
+}
+
+int main(void) {
+    printf("OpenEMS Host Regression Tests\n");
+    printf("============================================================\n");
+
+    // ── ETB Driver ────────────────────────────────────────────────────────────
+    printf("\n=== ETB DRIVER ===");
+    test_etb_driver_adc_to_percent();
+    test_etb_driver_init_and_state();
+    test_etb_driver_init_fault_tps1_open();
+    test_etb_driver_init_fault_tps2_short();
+    test_etb_driver_read_sensors_valid();
+    test_etb_driver_read_sensors_mismatch();
+    test_etb_driver_read_sensors_null();
+    test_etb_driver_set_motor_pwm();
+    test_etb_driver_shutdown();
+    test_etb_driver_clear_fault();
+
+    // ── ETB Control ───────────────────────────────────────────────────────────
+    printf("\n=== ETB CONTROL ===");
+    test_etb_set_get_drive_mode();
+    test_etb_is_ready();
+    test_etb_enter_limp_mode();
+    test_etb_set_idle_control_and_spark_trim();
+    test_etb_get_throttle_position();
+    test_etb_control_loop_rpm_cutoff();
+    test_etb_control_loop_sensor_fault_triggers_limp();
+
+    // ── Torque Manager ────────────────────────────────────────────────────────
+    printf("\n=== TORQUE MANAGER ===");
+    test_torque_manager_init();
+    test_torque_manager_enter_limp();
+    test_torque_manager_set_get_config();
+    test_torque_manager_set_config_null();
+    test_torque_manager_loop_normal_pedal();
+    test_torque_manager_loop_rpm_hard_cut();
+    test_torque_manager_loop_rpm_progressive_cut();
+    test_torque_manager_loop_limp_via_input();
+    test_torque_manager_loop_idle_mode();
+    test_torque_manager_loop_traction_control();
+    test_torque_manager_loop_null_guards();
+    test_torque_manager_loop_speed_limiter();
+
+    // ── CKP Decoder ───────────────────────────────────────────────────────────
+    printf("\n=== CKP DECODER / SYNC ===");
+    test_ckp_rpm_math();
+    test_ckp_initial_state();
+    test_ckp_half_sync();
+    test_ckp_full_sync();
+    test_ckp_tooth_index_increments();
+    test_ckp_loss_of_sync_too_many_teeth();
+    test_ckp_loss_of_sync_early_gap();
+    test_ckp_noise_rejection();
+    test_ckp_stall_poll();
+    test_ckp_stall_poll_no_false_positive();
+    test_ckp_seed_arm_disarm();
+
+    // ── Sensors ───────────────────────────────────────────────────────────────
+    printf("\n=== SENSORS ===");
+    test_sensors_validate_range();
+    test_sensors_validate_values();
+    test_sensors_health_status();
+    test_sensors_calibration();
+    test_sensors_tick_100ms_clt_iat();
+    test_sensors_maf_freq_capture();
+
+    // ── Fuel Calc ─────────────────────────────────────────────────────────────
+    printf("\n=== FUEL CALC ===");
+    test_fuel_calc_req_fuel_us();
+    test_fuel_calc_base_pw();
+    test_fuel_apply_lambda_target();
+    test_fuel_apply_trim();
+    test_fuel_calc_final_pw();
+    test_fuel_corr_functions();
+    test_fuel_decel_cut();
+    test_fuel_baro();
+
+    // ── Ignition Calc ─────────────────────────────────────────────────────────
+    printf("\n=== IGN CALC ===");
+    test_ign_rev_limit_spark_trim();
+    test_ign_iat_correction();
+    test_ign_clt_correction();
+    test_ign_antijerk();
+    test_ign_clamp_and_total_advance();
+    test_ign_dwell();
+
+    // ── Auxiliaries ───────────────────────────────────────────────────────────
+    printf("\n=== AUXILIARIES ===");
+    test_aux_init_and_idle();
+    test_aux_pump_prime();
+    test_aux_ticks_no_crash();
+
+    // ── Knock ─────────────────────────────────────────────────────────────────
+    printf("\n=== KNOCK ===");
+    test_knock_init_and_threshold();
+    test_knock_window();
+    test_knock_detection_and_recovery();
+
+    // ── Fuel Calc — Segunda Fase ──────────────────────────────────────────────
+    printf("\n=== FUEL CALC (fase 2) ===");
+    test_fuel_table_lookups();
+    test_fuel_default_req_and_base_default();
+    test_fuel_default_fast();
+    test_fuel_corr_warmup();
+    test_fuel_ae();
+    test_fuel_adaptives_reset();
+    test_fuel_lambda_delay();
+    test_fuel_stft();
+    test_fuel_stft_delayed();
+    test_fuel_ltft();
+
+    // ── Ign Calc — Segunda Fase ───────────────────────────────────────────────
+    printf("\n=== IGN CALC (fase 2) ===");
+    test_ign_get_advance();
+    test_ign_dwell_vbatt_rpm();
+    test_ign_idle_spark_correction();
+
+    // ── ETB Control C++ ns ───────────────────────────────────────────────────
+    printf("\n=== ETB CONTROL (C++ ns) ===");
+    test_etb_cpp_update();
+
+    // ── Torque Manager C++ ns ──────────────────────────────────────────────
+    printf("\n=== TORQUE MANAGER (C++ ns) ===");
+    test_torque_manager_cpp_update();
+
+    // ── CKP — Segunda Fase ───────────────────────────────────────────────────
+    printf("\n=== CKP (fase 2) ===");
+    test_ckp_seed_confirmed();
+    test_ckp_seed_rejected();
+    test_ckp_cmp_glitch_count();
+
+    // ── Sensors — Segunda Fase ───────────────────────────────────────────────
+    printf("\n=== SENSORS (fase 2) ===");
+    test_sensors_on_tooth();
+    test_sensors_tick_50ms();
+    test_sensors_set_range();
+    test_sensors_etb_harness_present();
+    test_sensors_table_entry_setters();
+
+    // ── Knock — Segunda Fase ──────────────────────────────────────────────────
+    printf("\n=== KNOCK (fase 2) ===");
+    test_knock_window_cycle_end();
+    test_knock_save_to_nvm();
+
+    // ── Auxiliaries — Segunda Fase ────────────────────────────────────────────
+    printf("\n=== AUXILIARIES (fase 2) ===");
+    test_aux_test_getters();
+
+    // ── Timer HAL ────────────────────────────────────────────────────────────
+    printf("\n=== TIMER HAL ===");
+    test_timer_stubs();
+
+    // ── Summary ───────────────────────────────────────────────────────────────
+    printf("\n============================================================\n");
+    printf("Results: %d PASS  %d FAIL\n", g_pass, g_fail);
+
+    return (g_fail == 0) ? 0 : 1;
+}

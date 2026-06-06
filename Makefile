@@ -57,6 +57,7 @@ FIRMWARE_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
 FIRMWARE_OBJ = $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(FIRMWARE_SRC))
 HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(SRC_DIR)/hal/stm32h562/timer.cpp \
+                $(SRC_DIR)/hal/stm32h562/system.cpp \
                 $(TEST_DIR)/mvp_bench_tests.cpp
 HOST_TEST_BIN = $(HOST_DIR)/mvp_bench_tests
 
@@ -79,7 +80,7 @@ help:
 host-test:
 	@mkdir -p $(HOST_DIR)
 	@echo "  HOST $(HOST_TEST_BIN)"
-	@$(CXX_HOST) $(CFLAGS_HOST) $(HOST_TEST_SRC) -o $(HOST_TEST_BIN)
+	@$(CXX_HOST) $(CFLAGS_HOST) $(HOST_TEST_SRC) -o $(HOST_TEST_BIN) -lm
 	@$(HOST_TEST_BIN)
 
 firmware: $(OBJ_DIR) $(ELF_DIR) $(BIN_DIR) $(FIRMWARE_ELF) $(FIRMWARE_HEX) $(FIRMWARE_BIN)

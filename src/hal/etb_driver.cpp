@@ -1,5 +1,18 @@
 #include "etb_driver.h"
+#ifndef EMS_HOST_TEST
 #include "stm32h562/regs.h"
+#else
+// Host test: mock GPIO registers as writable variables instead of
+// raw memory-mapped register dereferences (which would segfault on x86).
+static volatile uint32_t ems_etb_gpioa_moder;
+static volatile uint32_t ems_etb_gpiob_moder;
+static volatile uint32_t ems_etb_gpioa_bsrr;
+static volatile uint32_t ems_etb_gpiob_bsrr;
+#define GPIOA_MODER ems_etb_gpioa_moder
+#define GPIOB_MODER ems_etb_gpiob_moder
+#define GPIOA_BSRR  ems_etb_gpioa_bsrr
+#define GPIOB_BSRR  ems_etb_gpiob_bsrr
+#endif
 #include "timer.h"
 #include "adc.h"
 
