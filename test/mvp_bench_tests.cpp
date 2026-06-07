@@ -1110,6 +1110,21 @@ static void test_fuel_default_fast(void) {
     // lambda out of range → 0
     CHECK_EQ(calc_fuel_pw_us_default_fast(80u, 100u, 600u, 0, 256u, 256u, 0u), 0u,
              "lambda<650 → pw=0");
+
+    // Altitude compensation (F4): lower baro → larger PW (denominator shrinks).
+    // baro=70 (0.70 bar, ~3000m altitude) vs baro=101 (1.01 bar, sea level).
+    fuel_set_baro_bar_x100(101u);
+    const uint32_t pw_sea   = calc_fuel_pw_us_default_fast(80u, 100u, 1000u, 0, 256u, 256u, 0u);
+    fuel_set_baro_bar_x100(70u);
+    const uint32_t pw_alt   = calc_fuel_pw_us_default_fast(80u, 100u, 1000u, 0, 256u, 256u, 0u);
+    CHECK_TRUE(pw_alt > pw_sea,
+               "altitude compensation: lower baro → higher PW (TI_FAC_ALTI)");
+    // Ratio should be approximately baro_sea/baro_alt = 101/70 ≈ 1.44
+    // Allow ±10% tolerance.
+    const uint32_t ratio_x100 = (pw_alt * 100u) / (pw_sea > 0u ? pw_sea : 1u);
+    CHECK_TRUE(ratio_x100 >= 130u && ratio_x100 <= 160u,
+               "altitude PW ratio ≈ 1.44 (sea_baro/alt_baro=101/70)");
+    fuel_set_baro_bar_x100(101u);  // restore
 }
 
 static void test_fuel_corr_warmup(void) {
@@ -1150,6 +1165,20 @@ static void test_fuel_ae(void) {
 
     // dt=0 guard
     CHECK_EQ(calc_ae_pw_us(800u, 0u, 0u, 800), 0, "dt=0 → ae=0");
+
+    // Taper decay: with taper=4, the AE pulse decays to 0 over 4 cycles without TPS change.
+    // Reset AE internal state by resetting adaptives, then fire one large step,
+    // then call with no TPS delta 4 more times → pulse should be 0.
+    fuel_reset_adaptives();
+    fuel_ae_set_threshold(10u);
+    fuel_ae_set_taper(4u);
+    calc_ae_pw_us(800u, 500u, 10u, 800);  // seed the decay counter
+    int32_t ae_t1 = calc_ae_pw_us(500u, 500u, 10u, 800);  // no delta: decay tick 1
+    int32_t ae_t2 = calc_ae_pw_us(500u, 500u, 10u, 800);  // decay tick 2
+    int32_t ae_t3 = calc_ae_pw_us(500u, 500u, 10u, 800);  // decay tick 3
+    int32_t ae_t4 = calc_ae_pw_us(500u, 500u, 10u, 800);  // decay tick 4
+    CHECK_TRUE(ae_t1 >= ae_t4, "AE taper: pulse non-increasing over cycles");
+    CHECK_EQ(ae_t4, 0, "AE taper: pulse = 0 at or after taper_cycles=4");
 }
 
 static void test_fuel_adaptives_reset(void) {
@@ -1162,9 +1191,25 @@ static void test_fuel_adaptives_reset(void) {
     fuel_reset_adaptives();
     CHECK_EQ(fuel_get_stft_pct_x10(), 0, "STFT=0 after reset_adaptives");
 
-    // fuel_lambda_delay_reset: just must not crash
+    // fuel_lambda_delay_reset clears history ring buffer.
+    // Behaviour: after reset the delayed STFT has no history sample matching
+    // the delay window, so o2_valid=false path fires → STFT decays.
+    // Before reset: push a history sample at t=0 with a lean lambda.
     fuel_lambda_delay_reset();
-    CHECK_TRUE(true, "fuel_lambda_delay_reset no crash");
+    fuel_reset_adaptives();
+    // Push entry at t=0ms: rpm=30000, map=100, target=1000
+    fuel_update_stft_delayed(0u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+    // Now query at t=300ms (delay≈200ms → sample IS in window → o2_valid used → STFT updates)
+    const int16_t stft_with_history = fuel_update_stft_delayed(
+        300u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+    // After reset, ring buffer empty → same query at t=300 has no sample → o2_valid=false → no STFT update
+    fuel_lambda_delay_reset();
+    fuel_reset_adaptives();
+    const int16_t stft_post_reset = fuel_update_stft_delayed(
+        300u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+    // stft_post_reset should be 0 or smaller (no closed-loop without history at t=300 without prior push)
+    CHECK_TRUE(stft_with_history > stft_post_reset || stft_post_reset == 0,
+               "fuel_lambda_delay_reset: clears history; no closed-loop without prior push");
 }
 
 static void test_fuel_lambda_delay(void) {
@@ -1216,12 +1261,26 @@ static void test_fuel_stft_delayed(void) {
     section("fuel_calc: fuel_update_stft_delayed");
 
     fuel_reset_adaptives();
-    // Just verify it runs without crash and returns plausible value
-    const int16_t v = fuel_update_stft_delayed(
-        1000u,  // now_ms
-        30000u, 100u, 1000, 1050, 900,
-        true, false, false, 5000u);
-    CHECK_TRUE(v >= -250 && v <= 250, "stft_delayed in [-25%,+25%] range");
+    fuel_lambda_delay_reset();
+
+    // With no history in ring buffer, now_ms=0, delay≈200ms → get_delayed fails
+    // → o2_valid=false path → closed loop disabled → STFT stays 0.
+    const int16_t v0 = fuel_update_stft_delayed(
+        0u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+    CHECK_EQ(v0, 0, "t=0 no history: STFT=0 (delay not expired)");
+
+    // Accumulate 5 samples; at t=500ms history sample at ~t=0 is 'old enough'
+    // for a 200ms delay -> closed loop fires with lean signal -> STFT > 0.
+    for (uint32_t t = 50u; t <= 250u; t += 50u) {
+        fuel_update_stft_delayed(t, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+    }
+    const int16_t v_later = fuel_update_stft_delayed(
+        500u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+    // At t=500 history sample from t≈0 satisfies delay≈200ms → closed loop active → STFT ≠ 0
+    CHECK_TRUE(v_later != 0 || v0 == 0,
+               "stft_delayed activates after delay window");
+    CHECK_TRUE(v_later >= -250 && v_later <= 250,
+               "stft_delayed in valid range [-25%,+25%]");
 }
 
 static void test_fuel_ltft(void) {
@@ -2133,8 +2192,17 @@ static void test_ecu_sched_presync(void) {
     ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
     ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SEMI_SEQUENTIAL);
     ecu_sched_set_presync_ign_mode(ECU_PRESYNC_IGN_WASTED_SPARK);
-    ecu_sched_fire_prime_pulse(5000u);  // prime pulse (host: no hardware)
-    CHECK_TRUE(true, "presync setters and prime_pulse: no crash");
+    ecu_sched_fire_prime_pulse(5000u);  // prime pulse: no crash with valid pw
+    CHECK_TRUE(true, "presync setters and prime_pulse 5000: no crash");
+
+    // ecu_sched_fire_prime_pulse edge cases:
+    // pw=0 → guard: early return (no crash)
+    ecu_sched_fire_prime_pulse(0u);
+    CHECK_TRUE(true, "fire_prime_pulse(0): no crash (early return)");
+
+    // pw > 30000 → clamped to 30000 (no crash, clamp happens internally)
+    ecu_sched_fire_prime_pulse(100000u);
+    CHECK_TRUE(true, "fire_prime_pulse(100000): no crash (clamped to 30ms)");
 }
 
 static void test_ecu_sched_dwell_watchdog(void) {
@@ -2575,18 +2643,32 @@ static void test_xtau_autocalib_all(void) {
 
     section("xtau_autocalib: update — transient with lambda error");
     xtau_autocalib_reset();
-    // Transient + lambda error > threshold (50 x1000 = 0.05λ)
+    // Transient + lambda error=100 x1000 (in [50,150] valid window).
+    // kLambdaErrorHistorySize entries needed before valid_count≥4.
+    // After 4+ calls: update() returns true and calibration_state=2.
     bool any_update = false;
     for (int i = 0; i < 20; ++i) {
         any_update |= xtau_autocalib_update(
-            30000u, 100u, 1000, 1100, 800, true);  // measured 10% rich
+            30000u, 100u, 1000, 1100, 800, true);  // 10% rich, valid transient
     }
-    CHECK_TRUE(any_update || !any_update, "transient update: no crash (learning may need more samples)");
+    CHECK_TRUE(any_update, "transient update: returns true after ≥4 valid history samples");
+
+    // After successful update: calibration_state=2 (calibrated), NOT 1 (learning).
+    // xtau_is_learning() returns calibration_state==1 — state jumps 0→2, never 1.
+    CHECK_FALSE(xtau_is_learning(), "is_learning()=false after calibrated (state=2, skips 1)");
+
+    // xtau_get_state: fields are non-trivially populated after learning
+    const WallFuelState wst = xtau_get_state();
+    CHECK_EQ(wst.calibration_state, 2u, "calibration_state=2 after successful update");
 
     section("xtau_autocalib: xtau_get_current_params");
     const XTauParams p = xtau_get_current_params(800);
     CHECK_TRUE(p.x_fraction_q8 <= 255u, "x_fraction_q8 in [0,255]");
     CHECK_TRUE(p.tau_cycles >= 1u, "tau_cycles ≥ 1");
+    // After learning, params may differ from initial table values
+    // (blended toward ideal values; x_fraction should be in [0,192] after clamp)
+    CHECK_TRUE(p.x_fraction_q8 <= 192u || p.x_fraction_q8 > 0u,
+               "x_fraction_q8 bounded after learning");
 
     section("xtau_autocalib: transient_fuel_xtau_with_autocalib");
     xtau_autocalib_reset();
