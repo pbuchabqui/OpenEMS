@@ -120,6 +120,7 @@ void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_test_get_ivc_clamp_count(void);
 void     ecu_sched_test_set_tim8_cnt(uint32_t cnt) noexcept;
 uint32_t ecu_sched_test_get_tim8_ccr(uint8_t channel) noexcept;
+void     ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept;
 void     ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg);
 uint8_t  ecu_sched_test_get_mspark_count(void);
 #endif

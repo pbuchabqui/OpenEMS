@@ -561,7 +561,15 @@ static void test_torque_manager_loop_speed_limiter(void) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── Includes adicionais para testes da segunda fase ────────────────────────
-#include "hal/timer.h"  // tim5_ic_init, tim3_pwm_init, etc.
+#include "hal/timer.h"
+#include "engine/ecu_sched.h"
+#include "engine/quick_crank.h"
+#include "engine/transient_fuel.h"
+#include "engine/map_estimator.h"
+#include "engine/misfire_detect.h"
+#include "engine/diagnostic_manager.h"
+#include "engine/xtau_autocalib.h"
+#include "hal/flash.h"
 
 // ─── CKP helpers ──────────────────────────────────────────────────────────────
 // Normal period ≈ 6250 RPM: rpm_x10 = 625000000 / 10000 = 62500
@@ -1612,16 +1620,274 @@ static void test_timer_stubs(void) {
 }
 
 // ============================================================================
-// INCLUDES ADICIONAIS (fase 3)
+// ECU SCHED — FASE 2 (arm_channel, CCR, late events, dwell watchdog, presync)
 // ============================================================================
-#include "engine/ecu_sched.h"
-#include "engine/quick_crank.h"
-#include "engine/transient_fuel.h"
-#include "engine/map_estimator.h"
-#include "engine/misfire_detect.h"
-#include "engine/diagnostic_manager.h"
-#include "engine/xtau_autocalib.h"
-#include "hal/flash.h"
+
+static void test_ecu_sched_hardware_init(void) {
+    section("ecu_sched: ECU_Hardware_Init runs without crash");
+    // ECU_Hardware_Init writes to TIM2/TIM8/GPIO mock registers (file-scope statics
+    // in ecu_sched.cpp, not externally observable). Only testable behavior:
+    //   1. No crash.
+    //   2. Angle table cleared — ecu_sched_test_angle_table_size()=0 after init.
+    //   3. Diagnostic counters cleared.
+    ECU_Hardware_Init();
+    CHECK_EQ(ecu_sched_test_angle_table_size(), 0u,
+             "angle table empty after ECU_Hardware_Init");
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
+             "dwell_watchdog_count=0 after ECU_Hardware_Init");
+    CHECK_TRUE(true, "ECU_Hardware_Init: no crash");
+}
+
+static void test_ecu_sched_ccr_write(void) {
+    section("ecu_sched: arm_channel writes TIM8 CCR on DWELL_START");
+
+    // DWELL_START for cyl3 (ECU_CH_IGN3, TIM8_CH3) at tooth 13, frac=128:
+    //   delta = (128 × 1600) >> 8 = 800.
+    //   TIM8 CCR = (TIM8_CNT & 0xFFFF) + delta.
+    //   TIM8_CNT must be ≠1; 0 = “not armed” sentinel in dwell watchdog.
+    const uint32_t kCntBase = 1000u;
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim8_cnt(kCntBase);
+    ecu_sched_set_advance_deg(15u);
+    ecu_sched_set_dwell_ticks(22500u);
+    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_soi_lead_deg(62u);
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();  // phase_A=false; angle table built at FULL_SYNC gap
+
+    // Fire 13 teeth: at tooth 13 DWELL_START fires.
+    // cyl3 → ign_ch[3] = ECU_CH_IGN4 = 4 → stm32_ign_tim_ch(4) = TIM8 ch4 → CCR4.
+    for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
+    const uint32_t ccr4       = ecu_sched_test_get_tim8_ccr(4u);
+    const uint32_t expect_ccr = (kCntBase & 0xFFFFu) + 800u;  // cnt + delta(frac=128,ticks=1600)
+    CHECK_EQ(ccr4, expect_ccr, "TIM8_CCR4 = (cnt & 0xFFFF) + 800 at cyl3 DWELL_START");
+
+    // Changing TIM8_CNT does not rewrite CCR
+    ecu_sched_test_set_tim8_cnt(9999u);
+    CHECK_EQ(ecu_sched_test_get_tim8_ccr(4u), expect_ccr,
+             "CCR4 unchanged after tim8_cnt change (no re-arm)");
+
+    // At least one ignition CCR is non-zero (belt-and-suspenders)
+    CHECK_TRUE(ecu_sched_test_get_tim8_ccr(1u) > 0u ||
+               ecu_sched_test_get_tim8_ccr(2u) > 0u ||
+               ecu_sched_test_get_tim8_ccr(3u) > 0u ||
+               ecu_sched_test_get_tim8_ccr(4u) > 0u,
+               "at least one TIM8 CCR written after DWELL events");
+}
+
+static void test_ecu_sched_late_events(void) {
+    section("ecu_sched: late events counted when delta < STM32_MIN_COMPARE_LEAD_TICKS (20)");
+
+    // With advance_deg=0, spark for cyl2 maps to engine angle 360°:
+    //   trigger_angle(360, 720, 0) = 360. ang=360%360=0. pos=0. tooth=0, frac=0.
+    //   delta = (0 * tooth_ticks) >> 8 = 0 < 20 → LATE.
+    // This fires inside ckp_reach_full_sync() when the FULL_SYNC gap
+    // triggers Calculate_Sequential_Cycle and then processes tooth 0 events.
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim8_cnt(0u);
+    ecu_sched_set_advance_deg(0u);    // spark at TDC: tooth 0, frac=0
+    ecu_sched_set_dwell_ticks(22500u);
+    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_soi_lead_deg(62u);
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    // FULL_SYNC gap fires Calculate_Sequential_Cycle then processes tooth 0 events.
+    // Cyl2 SPARK at tooth 0, frac=0, phase_B: delta=0 < 20 → g_late_event_count++.
+    CHECK_TRUE(ecu_sched_test_get_late_event_count() > 0u,
+               "late_event_count > 0 when advance=0 (spark at TDC, frac=0)");
+}
+
+static void test_ecu_sched_dwell_watchdog_fires(void) {
+    section("ecu_sched: dwell watchdog fires after 1.4x dwell ticks");
+
+    // Setup: same as CCR test. After 13 teeth, DWELL_START for cyl3 (tim_ch=3)
+    // sets g_dwell_arm_tick[2]=TIM8_CNT=0 and g_dwell_wdog_ticks[2]=22500*7/5=31500.
+    // arm_channel uses TIM2_CNT (scheduler_counter()). Watchdog also reads TIM2_CNT.
+    // TIM2_CNT must be ≠1: 0 is the "not armed" sentinel for g_dwell_arm_tick.
+    // cyl3 → ECU_CH_IGN4 → tim_ch=4 → ign_idx=3. arm_tick = TIM2_CNT at arm time.
+    // wdog threshold = dwell_ticks × 7/5 = 22500×7/5 = 31500.
+    const uint32_t kTim2Base = 1000u;
+    const uint32_t kWdogTicks = (22500u * 7u) / 5u;  // 31500
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim2_cnt(kTim2Base);  // sets TIM2_CNT so arm_tick != 0
+    ecu_sched_set_advance_deg(15u);
+    ecu_sched_set_dwell_ticks(22500u);
+    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_soi_lead_deg(62u);
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
+    // Pre-condition: watchdog not fired (elapsed = 0, threshold = 31500)
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
+             "pre-cond: wdog_count=0 before threshold");
+    // Advance TIM2_CNT past 1.4× dwell from arm_tick=kTim2Base
+    ecu_sched_test_set_tim2_cnt(kTim2Base + kWdogTicks + 1u);
+    ecu_sched_dwell_watchdog();
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u,
+             "dwell watchdog fires: elapsed > 31500 (1.4× dwell)");
+    // Second call: arm_tick reset to 0 by watchdog → sentinel check fails → no re-fire
+    ecu_sched_dwell_watchdog();
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u, "watchdog fires only once per arm");
+}
+
+static void test_ecu_sched_presync_table(void) {
+    section("ecu_sched: presync table built in HALF_SYNC at natural rev boundary");
+
+    // After HALF_SYNC, tooth_index advances 0..57. When tooth_index wraps 57→0,
+    // rev_boundary=1 with state=HALF_SYNC → calculate_presync_revolution fires.
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim8_cnt(0u);
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_dwell_ticks(22500u);
+    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_soi_lead_deg(62u);
+    ckp_test_reset(); g_ckp_cap = 0u;
+
+    ckp_feed_n_then_gap(55u);   // → HALF_SYNC (no rev_boundary yet: prev_tooth=0)
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC");
+
+    // Fire 58 normal teeth: tooth_index 1..57, then wraps 57→0.
+    // At the wrap: prev_tooth=57≠0 → rev_boundary=1 → calculate_presync_revolution.
+    for (uint32_t i = 0u; i < 58u; ++i) { ckp_fire(kNormalPeriod); }
+    const uint8_t tsz = ecu_sched_test_angle_table_size();
+    CHECK_TRUE(tsz > 0u, "presync angle table populated after HALF_SYNC rev boundary");
+
+    // Presync events use ECU_PHASE_ANY (= 2) so they fire on every revolution
+    bool found_any = false;
+    for (uint8_t i = 0u; i < tsz; ++i) {
+        uint8_t tooth, frac, ch, action, phase;
+        if (ecu_sched_test_get_angle_event(i, &tooth, &frac, &ch, &action, &phase) != 0u) {
+            if (phase == ECU_PHASE_ANY) { found_any = true; }
+        }
+    }
+    CHECK_TRUE(found_any, "at least one presync event uses ECU_PHASE_ANY");
+
+    // Presync IGN events include DWELL_START and SPARK for all 4 coils simultaneously
+    // → table should have ≥ 2 ignition actions (at minimum: DWELL_START + SPARK)
+    uint8_t n_ign = 0u;
+    for (uint8_t i = 0u; i < tsz; ++i) {
+        uint8_t tooth, frac, ch, action, phase;
+        if (ecu_sched_test_get_angle_event(i, &tooth, &frac, &ch, &action, &phase) != 0u) {
+            if (action == ECU_ACT_DWELL_START || action == ECU_ACT_SPARK) { ++n_ign; }
+        }
+    }
+    CHECK_TRUE(n_ign >= 2u, "presync table: ≥2 ignition events");
+}
+
+// ============================================================================
+// CKP — FASE 3 (prime_on_tooth, snap fields, tooth_index, phase_A toggle)
+// ============================================================================
+
+static constexpr uint32_t kCrankPeriod = 100000u;  // rpm_x10 = 6250 < 7000 (cranking)
+
+static void test_ckp_prime_on_tooth(void) {
+    section("ckp: prime_on_tooth generates prime pulse after bootstrap + target teeth");
+
+    // crank_prime_tooth = 3. Bootstrap = first 3 teeth (prime not called).
+    // Teeth 4, 5, 6 call prime_on_tooth with count=1,2,3. At count=3: fires.
+    quick_crank_reset();
+    ckp_test_reset(); g_ckp_cap = 0u;
+    quick_crank_set_prime_context(-400, 500);  // CLT=-40°C, cold engine
+
+    // rpm_x10 = 625000000 / 100000 = 6250 < crank_exit=7000 → cranking mode
+    for (uint32_t i = 0u; i < 7u; ++i) { ckp_fire(kCrankPeriod); }
+
+    const uint32_t prime_pw = quick_crank_consume_prime();
+    CHECK_TRUE(prime_pw > 0u, "prime pulse generated at 7th cranking tooth (4 post-bootstrap)");
+    CHECK_TRUE(prime_pw <= 30000u, "prime_pw ≤ max clamp (30 ms)");
+
+    // One-shot: second consume returns 0
+    CHECK_EQ(quick_crank_consume_prime(), 0u, "prime is one-shot");
+
+    // After reset: no prime pending
+    quick_crank_reset();
+    CHECK_EQ(quick_crank_consume_prime(), 0u, "no prime after quick_crank_reset");
+}
+
+static void test_ckp_snap_fields(void) {
+    section("ckp: snap fields accurate in FULL_SYNC");
+
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    const auto snap = ckp_snapshot();
+
+    // tooth_period_ns = kNormalPeriod ticks * 16 ns/tick
+    CHECK_EQ(snap.tooth_period_ns, kNormalPeriod * 16u,
+             "tooth_period_ns = ticks × 16");
+
+    // predicted period > 0 (set by predict_next_period_ticks on last normal tooth)
+    CHECK_TRUE(snap.predicted_tooth_period_ns > 0u,
+               "predicted_tooth_period_ns > 0");
+
+    // With constant period, predicted ≈ actual (trend=0)
+    CHECK_EQ(snap.predicted_tooth_period_ns, kNormalPeriod * 16u,
+             "predicted_tooth_period_ns = actual at constant speed");
+
+    // rpm_x10 = 625000000 / kNormalPeriod
+    CHECK_EQ(snap.rpm_x10, 625000000u / kNormalPeriod, "rpm_x10 correct");
+
+    // last_tim5_capture is updated with each tooth
+    CHECK_TRUE(snap.last_tim5_capture > 0u, "last_tim5_capture > 0 after teeth");
+}
+
+static void test_ckp_tooth_index_progression(void) {
+    section("ckp: tooth_index increments per normal tooth and wraps at 58");
+
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();  // tooth_index=0 at FULL_SYNC gap
+    const uint16_t idx0 = ckp_snapshot().tooth_index;
+    CHECK_EQ(idx0, 0u, "tooth_index=0 immediately after gap");
+
+    ckp_fire(kNormalPeriod);
+    CHECK_EQ(ckp_snapshot().tooth_index, 1u, "tooth_index=1 after 1 tooth");
+
+    ckp_fire(kNormalPeriod);
+    CHECK_EQ(ckp_snapshot().tooth_index, 2u, "tooth_index=2 after 2 teeth");
+
+    // Advance to tooth 57 (fires 55 more teeth: 2+55=57)
+    for (uint32_t i = 0u; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    CHECK_EQ(ckp_snapshot().tooth_index, 57u, "tooth_index=57 after 57 teeth");
+
+    // 58th tooth wraps to 0 (kRealTeethPerRev=58, 57=max, next=0)
+    ckp_fire(kNormalPeriod);
+    CHECK_EQ(ckp_snapshot().tooth_index, 0u, "tooth_index wraps 57→0 on 58th tooth");
+
+    // State still FULL_SYNC (tooth_count=58 < kMaxTeethBeforeLoss=63)
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::FULL_SYNC), "FULL_SYNC maintained through wrap");
+}
+
+static void test_ckp_phase_toggle(void) {
+    section("ckp: phase_A toggles on each valid cam edge");
+
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_reach_full_sync();  // phase_A=false after ckp_test_reset
+
+    const bool p0 = ckp_snapshot().phase_A;
+    // First cam edge: s_prev_cmp_capture=0 → skip validation → always toggle.
+    // Use capture = g_ckp_cap + 58×kNormalPeriod (one full rev ahead).
+    cam_fire(g_ckp_cap + kNormalPeriod * 58u);
+    const bool p1 = ckp_snapshot().phase_A;
+    CHECK_TRUE(p0 != p1, "phase_A toggles on first cam edge");
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "first cam edge not a glitch");
+
+    // Second cam edge: delta = 58×kNormalPeriod = expected → valid, toggles again.
+    // expected = kRealTeeth60_2 × prev_period_ticks. prev_period_ticks=kNormalPeriod.
+    // Actual delta = 58×kNormalPeriod. min_valid=50%, max_valid=150% → valid.
+    cam_fire(g_ckp_cap + kNormalPeriod * 116u);
+    const bool p2 = ckp_snapshot().phase_A;
+    CHECK_TRUE(p1 != p2, "phase_A toggles again on second valid cam edge");
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "second cam edge not a glitch");
+
+    // Third cam edge with INVALID delta (too small) → glitch, NO toggle
+    cam_fire(g_ckp_cap + kNormalPeriod * 116u + 10u);  // delta=10 << expected
+    const bool p3 = ckp_snapshot().phase_A;
+    CHECK_EQ(p3, p2, "phase_A NOT toggled on glitch cam edge");
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 1u, "glitch cam edge counted");
+}
+
+// (all includes moved to top of file)
 
 // ============================================================================
 // TABLE3D
@@ -2529,6 +2795,21 @@ int main(void) {
     // ── XTAU AUTOCALIB ──────────────────────────────────────────────────
     printf("\n=== XTAU AUTOCALIB ===");
     test_xtau_autocalib_all();
+
+    // ── ECU SCHED FASE 2 ────────────────────────────────────────────────
+    printf("\n=== ECU SCHED (fase 2) ===");
+    test_ecu_sched_hardware_init();
+    test_ecu_sched_ccr_write();
+    test_ecu_sched_late_events();
+    test_ecu_sched_dwell_watchdog_fires();
+    test_ecu_sched_presync_table();
+
+    // ── CKP FASE 2 (snap fields, prime, phase_A, tooth_index) ─────────────
+    printf("\n=== CKP (fase 3) ===");
+    test_ckp_prime_on_tooth();
+    test_ckp_snap_fields();
+    test_ckp_tooth_index_progression();
+    test_ckp_phase_toggle();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");
