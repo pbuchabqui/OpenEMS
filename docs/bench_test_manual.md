@@ -427,44 +427,113 @@ Nova configuração a escrever (hex): 32 00 D0 07 C2 01 BE 05 64 00 00 00 3E 00 
 
 ## 7. Etapa 2 — Sinal CKP sintético e verificação de sincronismo
 
-### 7.1 Configurar o gerador de funções (roda dentada 60-2)
+### 7.1 Anatomia do sinal CKP (60-2)
 
-O decoder CKP espera pulsos de bordo de subida em PA0, com:
-- 58 dentes normais de período `T`
-- 1 gap de duração `≥ 2.5 × T` (na prática o firmware detecta `> 2 × T`)
-- Total: 58 dentes + 1 gap = equivalente a 60 posições por volta do virabrequim
+O decoder CKP do OpenEMS espera pulsos de bordo de subida em PA0:
 
-Para simular **500 RPM** (cranking realista):
 ```
-Frequência total por revolução: 500/60 = 8.33 rev/s
-Período de dente normal: 1 / (8.33 × 60) = 2.0 ms → T = 2000 µs
-Gap: 3 × T = 6000 µs (ausência de pulso)
-Nível: 0–3.3 V (TTL directo no GPIO, sem pull-up externo necessário)
+ Roda 60-2: 58 dentes reais + gap de 2 posições em falta
+
+  D0   D1   D2  ...  D57   GAP(2T)   D0   D1  ...
+  ┌─┐  ┌─┐  ┌─┐      ┌─┐            ┌─┐  ┌─┐
+──┘ └──┘ └──┘ └─ · · ─┘ └──────────┘ └──┘ └──
+  ←T→  ←T→  ←T→       ←T→  ← 2T →   ←T→  ←T→
+                             extra
+
+  Período dente normal  : T
+  Período do gap        : 3T (de RE(D57) a RE(D0) seguinte)
+  Detecção de gap       : período_actual > 2 × período_anterior
 ```
 
-**Com gerador DDS (ex: Rigol DG1022):**
+**Tabela de tempos por RPM:**
 
-Não é possível gerar directamente o padrão 60-2 com funções simples. Usar modo **ARB** (arbitrary waveform) com uma sequência de 60 ciclos onde os últimos 2 são "vazios" (low). Alternativamente, usar um microcontrolador auxiliar (Arduino/RP2040) com o seguinte código:
+| RPM | T (µs) | HIGH (µs) | LOW normal (µs) | LOW gap (µs) | Período rev. (ms) |
+|-----|--------|-----------|-----------------|--------------|-------------------|
+| 200 | 5000   | 2500      | 2500            | 12500        | 300               |
+| 500 | 2000   | 1000      | 1000            | 5000         | 120               |
+| 1000| 1000   | 500       | 500             | 2500         | 60                |
+| 3000|  333   | 166       | 166             | 832          | 20                |
 
+### 7.2 Gerar o sinal com ESP32 (recomendado)
+
+O código completo está em `tools/esp32_ckp_gen/`. Dois ficheiros:
+
+| Ficheiro | Quando usar |
+|----------|-------------|
+| `esp32_ckp_gen.ino` | Arduino C++ — jitter < 5 µs, RPM até 5000 |
+| `ckp_gen_micropython.py` | MicroPython — mais simples, adequado ≤ 1000 RPM |
+
+#### Ligações ESP32 → STM32H562
+
+```
+ESP32 GPIO 2  ──────────────►  PA0 (CKP input, TIM5_CH1)
+ESP32 GPIO 4  ──────────────►  PA1 (CMP input, TIM5_CH2)
+ESP32 GND     ──────────────►  GND do PCB   ← OBRIGATÓRIO
+```
+
+> Os dois microcontroladores têm de ter **GND comum**. Sem isso os bordos
+> de subida são referenciados em tensões diferentes e o STM32 não detecta
+> os pulsos.
+
+#### Versão Arduino C++ (`esp32_ckp_gen.ino`)
+
+```
+1. Instalar Arduino IDE + placa "ESP32 by Espressif" (core ≥ 2.0)
+2. Abrir tools/esp32_ckp_gen/esp32_ckp_gen.ino
+3. Seleccionar: Board = "ESP32 Dev Module", Upload Speed = 921600
+4. Fazer upload
+5. Abrir Serial Monitor (115200 baud)
+```
+
+Saída esperada após upload:
+```
+=== OpenEMS CKP Generator (ESP32) ===
+Comandos: '+'/'-' RPM±100 | '0'-'9' preset | 's' estado
+[CKP] RPM=500  T=2000 µs  HIGH=1000 µs  LOW_gap=5000 µs  rev=120.0 ms
+```
+
+Comandos pelo monitor série:
+
+| Tecla | Efeito |
+|-------|--------|
+| `+` | RPM + 100 |
+| `-` | RPM − 100 |
+| `3` | Preset 500 RPM |
+| `5` | Preset 1000 RPM |
+| `8` | Preset 3000 RPM |
+| `s` | Imprimir estado (RPM, revoluções, pulsos CMP) |
+
+Presets `'0'`–`'9'`: 100 / 200 / 300 / 500 / 700 / 1000 / 1500 / 2000 / 3000 / 5000 RPM.
+
+O LED integrado pisca a cada 4 revoluções (~33 Hz a 500 RPM) — confirmar
+visualmente que o sinal está a ser gerado.
+
+#### Versão MicroPython (`ckp_gen_micropython.py`)
+
+```bash
+# Instalar MicroPython no ESP32 (se ainda não estiver)
+esptool.py --chip esp32 erase_flash
+esptool.py --chip esp32 write_flash -z 0x1000 esp32-20231227-v1.22.0.bin
+
+# Copiar o ficheiro
+mpremote cp tools/esp32_ckp_gen/ckp_gen_micropython.py :/ckp_gen.py
+
+# Correr (bloqueante — Ctrl+C para parar)
+mpremote run tools/esp32_ckp_gen/ckp_gen_micropython.py
+```
+
+Ou no REPL interactivo:
 ```python
-# Exemplo MicroPython (RP2040) — gera sinal 60-2 em GPIO 0
-import machine, time
-
-ckp = machine.Pin(0, machine.Pin.OUT)
-RPM = 500
-tooth_period_us = int(60_000_000 / (RPM * 60))  # µs por dente
-
-while True:
-    for i in range(58):           # 58 dentes normais
-        ckp.value(1)
-        time.sleep_us(tooth_period_us // 2)
-        ckp.value(0)
-        time.sleep_us(tooth_period_us // 2)
-    # gap: 2 posições em silêncio (2 × tooth_period)
-    time.sleep_us(tooth_period_us * 2)
+import ckp_gen
+ckp_gen.start(rpm=500)    # bloqueia até Ctrl+C
 ```
 
-### 7.2 Verificar sincronismo via snapshot
+> **Nota de precisão:** o MicroPython no ESP32 tem jitter de ±50–200 µs
+> devido ao escalonamento FreeRTOS. A 500 RPM (T=2000 µs) isso representa
+> ±2.5–10% por dente. O detector CKP tolera esta variação para sincronismo
+> mas não use para medir avanço de ignição — use a versão Arduino C++.
+
+### 7.3 Verificar sincronismo via snapshot
 
 Com o sinal CKP activo, enviar snapshot:
 
