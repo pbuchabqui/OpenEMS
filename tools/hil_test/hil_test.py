@@ -407,8 +407,18 @@ class STM32Client:
 class CKPGenClient:
     _PRESETS = [100, 200, 300, 500, 700, 1000, 1500, 2000, 3000, 5000]
 
-    def __init__(self, port: str, baud: int = 115200):
-        self._ser = serial.Serial(port, baud, timeout=1.0)
+    def __init__(self, port: str, baud: int = 115200,
+                 shared_ser: Optional["serial.Serial"] = None):
+        """
+        Se shared_ser for fornecido, usa-o em vez de abrir uma nova porta.
+        Útil quando CKP gen e scope estão no mesmo ESP32 (esp32_combined).
+        """
+        if shared_ser is not None:
+            self._ser = shared_ser
+            self._owns = False
+        else:
+            self._ser = serial.Serial(port, baud, timeout=1.0)
+            self._owns = True
         self._rpm = 500
         time.sleep(0.3)
         self._ser.reset_input_buffer()
@@ -420,14 +430,11 @@ class CKPGenClient:
 
     def set_rpm(self, target_rpm: int):
         """Ajusta RPM. Usa presets quando possível, senão usa +/-."""
-        # Tentar preset exacto
         if target_rpm in self._PRESETS:
             idx = self._PRESETS.index(target_rpm)
             self._send(str(idx))
             self._rpm = target_rpm
             return
-
-        # Ajustar em passos de 100
         current = self._rpm
         while current != target_rpm:
             if current < target_rpm:
@@ -439,7 +446,8 @@ class CKPGenClient:
         self._rpm = target_rpm
 
     def close(self):
-        self._ser.close()
+        if self._owns:
+            self._ser.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -463,8 +471,14 @@ class TimingData:
 
 
 class ScopeClient:
-    def __init__(self, port: str, baud: int = 115200):
-        self._ser = serial.Serial(port, baud, timeout=3.0)
+    def __init__(self, port: str, baud: int = 115200,
+                 shared_ser: Optional["serial.Serial"] = None):
+        if shared_ser is not None:
+            self._ser = shared_ser
+            self._owns = False
+        else:
+            self._ser = serial.Serial(port, baud, timeout=3.0)
+            self._owns = True
         time.sleep(0.3)
         self._ser.reset_input_buffer()
 
@@ -544,7 +558,8 @@ class ScopeClient:
         return td
 
     def close(self):
-        self._ser.close()
+        if self._owns:
+            self._ser.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -771,8 +786,11 @@ DEFAULT_TEST_MATRIX = [
 def main():
     p = argparse.ArgumentParser(description="OpenEMS HIL Test")
     p.add_argument("--stm32",  required=True,  help="Porta STM32 UART")
-    p.add_argument("--gen",    required=True,  help="Porta ESP32 CKP generator")
-    p.add_argument("--scope",  default=None,   help="Porta ESP32 scope (opcional)")
+    p.add_argument("--gen",    required=True,
+                   help="Porta ESP32 CKP generator (ou esp32_combined)")
+    p.add_argument("--scope",  default=None,
+                   help="Porta ESP32 scope. Se igual a --gen (ou omitido com "
+                        "esp32_combined), partilha a mesma ligação serial.")
     p.add_argument("--baud",   type=int, default=115200)
     p.add_argument("--rpms",   nargs="+", type=int,
                    default=[pt.rpm for pt in DEFAULT_TEST_MATRIX],
@@ -784,6 +802,9 @@ def main():
     print("║   OpenEMS HIL Test                       ║")
     print("╚══════════════════════════════════════════╝")
 
+    # Detectar modo combinado: scope e gen na mesma porta
+    combined = (args.scope is None or args.scope == args.gen)
+
     # Ligar dispositivos
     print(f"\nSTM32  : {args.stm32}")
     stm32 = STM32Client(args.stm32, args.baud)
@@ -792,17 +813,22 @@ def main():
         sys.exit(1)
     print("  ✓ STM32 OK")
 
-    print(f"CKP Gen: {args.gen}")
-    gen = CKPGenClient(args.gen, args.baud)
-    print("  ✓ CKP generator OK")
-
-    scope = None
-    if args.scope:
+    if combined:
+        # Um único ESP32 (esp32_combined.ino) para gen + scope
+        print(f"ESP32  : {args.gen}  (CKP gen + scope combinados)")
+        _shared = serial.Serial(args.gen, args.baud, timeout=3.0)
+        time.sleep(0.3)
+        _shared.reset_input_buffer()
+        gen   = CKPGenClient(args.gen,   args.baud, shared_ser=_shared)
+        scope = ScopeClient (args.gen,   args.baud, shared_ser=_shared)
+        print("  ✓ ESP32 combinado OK")
+    else:
+        print(f"CKP Gen: {args.gen}")
+        gen = CKPGenClient(args.gen, args.baud)
+        print("  ✓ CKP generator OK")
         print(f"Scope  : {args.scope}")
         scope = ScopeClient(args.scope, args.baud)
         print("  ✓ Scope OK")
-    else:
-        print("Scope  : não configurado (só verificação software)")
 
     # Ler configuração e tabelas da ECU
     print("\nA ler configuração da ECU...")
