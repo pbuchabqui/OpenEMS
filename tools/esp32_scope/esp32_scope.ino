@@ -28,6 +28,7 @@
  *   e  — Edge log (imprime cada bordo)
  *   p  — Pulse log (imprime cada pulso completo)
  *   w  — Waveform bar da última janela de 300 ms
+ *   t  — Timing analysis: sequência IGN + ângulo de avanço
  *   r  — Reset estatísticas
  *   ?  — Ajuda
  *
@@ -99,8 +100,52 @@ static ChanMetrics g_m[kNChan];
 
 // ── Modos de visualização ─────────────────────────────────────────────────────
 
-enum class Mode : uint8_t { LIVE, EDGE, PULSE, WAVE };
+enum class Mode : uint8_t { LIVE, EDGE, PULSE, WAVE, TIMING };
 static volatile Mode g_mode = Mode::LIVE;
+
+// ── Máquina de estados para Timing Analysis ───────────────────────────
+// Captura uma sequência completa: gap CKP → 4 sparks IGN0-3.
+// CH8 (CKP loopback) obrigatório para detecção do gap.
+
+static constexpr int kCkpChan  = 8;   // índice do canal CKP no kChan[]
+static constexpr int kIgnFirst = 0;   // primeiro canal IGN
+static constexpr int kIgnCount = 4;   // número de cilindros
+
+// Ordem de disparo esperada: IGN0→IGN2→IGN3→IGN1  (1-3-4-2)
+static constexpr uint8_t kExpectedFiringOrder[kIgnCount] = {0, 2, 3, 1};
+
+enum class TmState : uint8_t {
+    IDLE,
+    WAIT_GAP,    // aguardar gap CKP (fall→rise com intervalo > 2T)
+    CAPTURE,     // capturar os 4 sparks (FALL dos IGN)
+    DONE,
+};
+
+struct TimingCapture {
+    int64_t  gap_ts_us;                    // timestamp da RE do dente 0 (após gap)
+    int64_t  last_ckp_fall_us;             // última descida do CKP
+    int64_t  spark_ts_us[kIgnCount];       // FALL de cada canal IGN (= instante do spark)
+    bool     spark_done[kIgnCount];        // canal capturado
+    uint32_t ckp_period_us;               // T medido pelo scope
+    int      sparks_captured;             // quantos já foram capturados
+    uint32_t timeout_us;                  // tempo limite de captura
+};
+
+static TmState        g_tm_state  = TmState::IDLE;
+static TimingCapture  g_tm_cap;
+
+// Limpar captura e iniciar
+static void timing_start() {
+    g_tm_cap = {};
+    g_tm_cap.ckp_period_us = (g_m[kCkpChan].period_us > 0)
+                             ? g_m[kCkpChan].period_us : 2000u;
+    g_tm_cap.timeout_us    = g_tm_cap.ckp_period_us * 120u; // 1 ciclo completo de margem
+    g_tm_state = TmState::WAIT_GAP;
+    Serial.println("  [TIMING] A aguardar gap CKP no CH8 (loopback PA0)...");
+    if (g_m[kCkpChan].period_us == 0) {
+        Serial.println("  AVISO: CH8 sem sinal CKP. Ligar GPIO36 → PA0 do STM32.");
+    }
+}
 
 // ── ISR ───────────────────────────────────────────────────────────────────────
 
@@ -124,6 +169,146 @@ static void IRAM_ATTR edge_isr(void* arg) {
     }
 }
 
+// ── Timing Analysis ────────────────────────────────────────────────────────────────────────────────────
+
+static void timing_report();
+
+static void timing_start() {
+    g_tm_cap                  = {};
+    g_tm_cap.ckp_period_us    = (g_m[kCkpChan].period_us > 0)
+                                ? g_m[kCkpChan].period_us : 2000u;
+    g_tm_cap.timeout_us       = g_tm_cap.ckp_period_us * 120u; // 1 ciclo + margem
+    g_tm_state = TmState::WAIT_GAP;
+    Serial.println("  [TIMING] A aguardar gap CKP (CH8 loopback PA0)...");
+    if (g_m[kCkpChan].period_us == 0) {
+        Serial.println("  AVISO: CH8 sem sinal. Ligar GPIO36 ao PA0 do STM32.");
+    }
+}
+
+static void timing_feed(const EdgeEvent& ev) {
+    TimingCapture& c = g_tm_cap;
+
+    if (g_tm_state == TmState::WAIT_GAP) {
+        if (ev.ch != (uint8_t)kCkpChan) { return; }
+        if (ev.level == 0u) {
+            c.last_ckp_fall_us = ev.ts_us;
+        } else if (c.last_ckp_fall_us > 0) {
+            const int64_t gap = ev.ts_us - c.last_ckp_fall_us;
+            // Threshold: 1.8 × T (gap real é 2.5T)
+            if (gap > (int64_t)(c.ckp_period_us * 18u / 10u)) {
+                c.gap_ts_us = ev.ts_us;
+                g_tm_state  = TmState::CAPTURE;
+                Serial.printf("  [TIMING] Gap OK (%.2f ms). A capturar 4 sparks...\n",
+                              gap / 1000.0f);
+            }
+        }
+        return;
+    }
+
+    if (g_tm_state == TmState::CAPTURE) {
+        if ((ev.ts_us - c.gap_ts_us) > (int64_t)c.timeout_us) {
+            Serial.println("  [TIMING] Timeout. Verificar ligações IGN (PC6-9).");
+            g_tm_state = TmState::IDLE;
+            g_mode     = Mode::LIVE;
+            return;
+        }
+        // Capturar FALL de cada canal IGN (falling edge = instante do spark)
+        if (ev.level == 0u &&
+            ev.ch >= (uint8_t)kIgnFirst &&
+            ev.ch <  (uint8_t)(kIgnFirst + kIgnCount)) {
+            const int idx = (int)(ev.ch - kIgnFirst);
+            if (!c.spark_done[idx]) {
+                c.spark_ts_us[idx] = ev.ts_us;
+                c.spark_done[idx]  = true;
+                c.sparks_captured++;
+                Serial.printf("  [TIMING] IGN%d spark @ +%.3f ms\n",
+                              idx, (ev.ts_us - c.gap_ts_us) / 1000.0f);
+                if (c.sparks_captured == kIgnCount) {
+                    g_tm_state = TmState::DONE;
+                    timing_report();
+                    g_mode = Mode::LIVE;
+                }
+            }
+        }
+    }
+}
+
+static void timing_report() {
+    const TimingCapture& c  = g_tm_cap;
+    const float          T  = c.ckp_period_us / 1000.0f;   // ms
+    // T_cycle = 60 dentes/rev × 2 rev × T_dente
+    const float expected_inter_ms = T * 60.0f * 2.0f / 4.0f;  // = T × 30
+
+    // Ordenar canais por timestamp (bubble sort, 4 elementos)
+    uint8_t order[kIgnCount] = {0, 1, 2, 3};
+    for (int i = 0; i < kIgnCount - 1; ++i)
+        for (int j = 0; j < kIgnCount - 1 - i; ++j)
+            if (c.spark_ts_us[order[j]] > c.spark_ts_us[order[j + 1]]) {
+                uint8_t t = order[j]; order[j] = order[j+1]; order[j+1] = t;
+            }
+
+    Serial.println();
+    Serial.println("  ╔══════════════════════════════════════════════════════╗");
+    Serial.println("  ║  Ignition Timing Analysis                      ║");
+    Serial.printf( "  ║  T_dente=%.3f ms  Inter-cil esperado=%.3f ms %s║\n",
+                   T, expected_inter_ms, "");
+    Serial.println("  ╚══════════════════════════════════════════════════════╝");
+    Serial.println();
+    Serial.println("  Canal  Desde gap      Inter-cil     Esperado  Desvio  OK?");
+    Serial.println("  ─────  ─────────────  ───────────  ────────  ──────  ───");
+
+    float prev_ms = 0.0f;
+    bool  timing_ok = true;
+    for (int i = 0; i < kIgnCount; ++i) {
+        const int   ch  = order[i];
+        const float dt  = (c.spark_ts_us[ch] - c.gap_ts_us) / 1000.0f;
+        const float ic  = (i == 0) ? 0.0f : dt - prev_ms;
+        const float dev = (i == 0) ? 0.0f : ic - expected_inter_ms;
+        const bool  ok  = (i == 0) || (fabsf(dev) < 1.0f);
+        if (!ok) { timing_ok = false; }
+        if (i == 0)
+            Serial.printf("  IGN%d   %8.3f ms        —             —       —      —\n",
+                          ch, dt);
+        else
+            Serial.printf("  IGN%d   %8.3f ms  %8.3f ms  %7.3f ms %+6.3f ms %s\n",
+                          ch, dt, ic, expected_inter_ms, dev, ok ? "✓" : "✗ FALHA");
+        prev_ms = dt;
+    }
+
+    // Ordem de disparo
+    Serial.println();
+    Serial.print("  Detectada : ");
+    for (int i = 0; i < kIgnCount; ++i) {
+        if (i) Serial.print("→");
+        Serial.printf("IGN%d", order[i]);
+    }
+    Serial.println();
+    Serial.print("  Esperada  : ");
+    for (int i = 0; i < kIgnCount; ++i) {
+        if (i) Serial.print("→");
+        Serial.printf("IGN%d", kExpectedFiringOrder[i]);
+    }
+    bool order_ok = true;
+    for (int i = 0; i < kIgnCount; ++i)
+        if (order[i] != kExpectedFiringOrder[i]) { order_ok = false; }
+    Serial.printf("  %s\n", order_ok ? "  ✓ CORRECTA" : "  ✗ ERRADA");
+
+    // Ângulo desde gap do primeiro spark
+    const int   first = order[0];
+    const float dt0   = (c.spark_ts_us[first] - c.gap_ts_us) / 1000.0f;
+    const float teeth = dt0 / T;
+    const float deg   = teeth * 6.0f;
+    Serial.println();
+    Serial.printf("  IGN%d (1º spark): +%.3f ms = %.2f dentes = %.1f° desde dente 0\n",
+                  first, dt0, teeth, deg);
+    Serial.println("  Usar snapshot UART 'A' → byte 8 (advance_p40) para confirmar.");
+
+    Serial.println();
+    Serial.printf("  Resultado final: %s\n",
+                  (timing_ok && order_ok) ? "✓ IGNIÇÃO OK" : "✗ VER FALHAS ACIMA");
+    Serial.println();
+}
+
 // ── Processamento de eventos (loop principal) ─────────────────────────────────
 
 static void process_events() {
@@ -137,6 +322,12 @@ static void process_events() {
         g_tail = (g_tail + 1u) & kBufMask;
 
         if (ev.ch >= kNChan) { continue; }
+
+        // Alimentar FSM de timing (activa apenas durante modo TIMING)
+        if (g_tm_state != TmState::IDLE && g_tm_state != TmState::DONE) {
+            timing_feed(ev);
+        }
+
         ChanMetrics& m = g_m[ev.ch];
         m.last_event_us = ev.ts_us;
 
@@ -332,8 +523,12 @@ static void print_help() {
     Serial.println("  ────────────────────────────────");
     Serial.println("  l  Live table (1 s)       p  Pulse log");
     Serial.println("  e  Edge log               w  Waveform bar");
-    Serial.println("  s  Estatísticas           r  Reset stats");
-    Serial.println("  ?  Esta ajuda");
+    Serial.println("  t  Timing analysis IGN    s  Estatísticas");
+    Serial.println("  r  Reset stats            ?  Esta ajuda");
+    Serial.println();
+    Serial.println("  Timing (t): detecta gap CKP, captura 4 sparks,");
+    Serial.println("    verifica ordem de disparo e inter-cil timing.");
+    Serial.println("    Requer CH8 (GPIO36) ligado ao PA0 do STM32.");
     Serial.println();
     Serial.println("  Canais activos:");
     for (int ch = 0; ch < kNChan; ++ch) {
@@ -404,6 +599,7 @@ void loop() {
             case 'e': g_mode = Mode::EDGE;  Serial.println("  Modo: EDGE");  break;
             case 'p': g_mode = Mode::PULSE; Serial.println("  Modo: PULSE"); break;
             case 'w': g_mode = Mode::WAVE;  Serial.println("  Modo: WAVE");  break;
+            case 't': g_mode = Mode::TIMING; timing_start(); break;
             case 's': print_stats(); break;
             case 'r': reset_stats(); break;
             case '?': print_help();  break;
