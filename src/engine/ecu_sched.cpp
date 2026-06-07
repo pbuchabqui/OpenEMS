@@ -837,6 +837,10 @@ void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32
 uint8_t ecu_sched_test_get_mspark_count(void) { return g_mspark_count; }
 void ecu_sched_test_set_tim8_cnt(uint32_t cnt) noexcept { ems_test_tim8_cnt = cnt; }
 void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim2_cnt = cnt; }
+void ecu_sched_test_reset_ccr(void) noexcept {
+    ems_test_tim8_ccr1 = 0u; ems_test_tim8_ccr2 = 0u;
+    ems_test_tim8_ccr3 = 0u; ems_test_tim8_ccr4 = 0u;
+}
 uint32_t ecu_sched_test_get_tim8_ccr(uint8_t ch) noexcept {
     switch (ch) {
         case 1u: return ems_test_tim8_ccr1;

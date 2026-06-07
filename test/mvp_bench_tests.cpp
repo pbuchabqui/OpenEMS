@@ -3098,6 +3098,95 @@ static void test_math_misfire_threshold(void) {
     CHECK_EQ(threshold_check, 1793750u, "threshold = predicted_sum × 287/256 = 1793750");
 }
 
+static void test_trigger_offset(void) {
+    using namespace ems::engine::cfg;
+
+    // ----------------------------------------------------------------
+    // Baseline: offset = 0°
+    // For cyl3 (tdc=540°), advance=15°, dwell=84°:
+    //   dwell_engine_angle = (525+720-84)%720 = 441°
+    //   trigger_angle(441, offset=0) = (441+720-0)%720 = 441°
+    //   ang=81, pos_x256=81*256/6=3456, tooth=13, frac=128, phase_B
+    // ----------------------------------------------------------------
+    section("trigger offset=0°: cyl3 DWELL_START scheduled at tooth 13");
+    g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    ecu_sched_test_reset();
+    ecu_sched_test_reset_ccr();
+    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_set_advance_deg(15u);
+    ecu_sched_set_dwell_ticks(22500u);
+    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_soi_lead_deg(62u);
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+
+    // Inspect angle table: find ECU_CH_IGN4 DWELL_START entry
+    uint8_t tooth_off0 = 0xFFu;
+    for (uint8_t i = 0u; i < ecu_sched_test_angle_table_size(); ++i) {
+        uint8_t t, f, ch, act, ph;
+        if (ecu_sched_test_get_angle_event(i, &t, &f, &ch, &act, &ph)) {
+            if (ch == ECU_CH_IGN4 && act == ECU_ACT_DWELL_START) { tooth_off0 = t; }
+        }
+    }
+    CHECK_EQ(tooth_off0, 13u,
+             "offset=0°: cyl3 DWELL_START tooth=13 (trigger=441°, ang=81, 81*256/6=3456>>8=13)");
+
+    // CCR4 NOT written yet (event fires at tooth 13, not at gap/tooth 0)
+    CHECK_EQ(ecu_sched_test_get_tim8_ccr(4u), 0u,
+             "offset=0°: CCR4=0 immediately after FULL_SYNC (no teeth fired yet)");
+
+    // Fire 13 teeth → at tooth 13 DWELL_START fires
+    // CCR4 = (TIM8_CNT & 0xFFFF) + delta = 0 + (128*1600>>8) = 0+800 = 800
+    for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
+    CHECK_EQ(ecu_sched_test_get_tim8_ccr(4u), 800u,
+             "offset=0°: CCR4=800 after tooth 13 (TIM8_CNT=0, delta=800)");
+
+    // ----------------------------------------------------------------
+    // Non-zero offset: 78°
+    // trigger_angle(441, offset=78) = (441+720-78)%720 = 363°
+    //   ang=363%360=3, pos_x256=3*256/6=128, tooth=0, frac=128, phase_B
+    // Event shifts to tooth 0 → fires AT the FULL_SYNC gap (tooth 0 is
+    // processed immediately when Calculate_Sequential_Cycle completes).
+    // ----------------------------------------------------------------
+    section("trigger offset=78°: cyl3 DWELL_START shifts to tooth 0");
+    g_eng_cfg.trigger_tooth0_engine_deg = 78u;
+    ecu_sched_test_reset();
+    ecu_sched_test_reset_ccr();
+    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_set_advance_deg(15u);
+    ecu_sched_set_dwell_ticks(22500u);
+    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_soi_lead_deg(62u);
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+
+    // Angle table: cyl3 DWELL_START must be at tooth 0
+    uint8_t tooth_off78 = 0xFFu;
+    for (uint8_t i = 0u; i < ecu_sched_test_angle_table_size(); ++i) {
+        uint8_t t, f, ch, act, ph;
+        if (ecu_sched_test_get_angle_event(i, &t, &f, &ch, &act, &ph)) {
+            if (ch == ECU_CH_IGN4 && act == ECU_ACT_DWELL_START) { tooth_off78 = t; }
+        }
+    }
+    CHECK_EQ(tooth_off78, 0u,
+             "offset=78°: cyl3 DWELL_START shifts to tooth 0 (trigger=363°, ang=3, 3*256/6=128>>8=0)");
+    CHECK_TRUE(tooth_off0 != tooth_off78,
+               "offset change moves the event: tooth 13 (offset=0) ≠ tooth 0 (offset=78)");
+
+    // CCR4 written AT the gap (tooth 0 event fires during FULL_SYNC gap processing)
+    // CCR4 = (TIM8_CNT=0) + delta(frac=128,ticks=1600) = 0+800 = 800
+    CHECK_EQ(ecu_sched_test_get_tim8_ccr(4u), 800u,
+             "offset=78°: CCR4=800 immediately at FULL_SYNC gap (tooth 0 fires at gap)");
+
+    // Confirm: with offset=0 the CCR was 0 at gap; with offset=78 it is 1800 at gap.
+    // Both CCR values are numerically 1800 because frac=128 in both cases,
+    // but offset=0 fires 13 teeth LATER whereas offset=78 fires IMMEDIATELY.
+    // The table inspection above is the definitive proof of timing difference.
+
+    // Restore default so subsequent tests are unaffected
+    g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+}
+
 int main(void) {
     printf("OpenEMS Host Regression Tests\n");
     printf("============================================================\n");
@@ -3315,6 +3404,7 @@ int main(void) {
     test_math_xtau_convergence();
     test_math_production_tables();
     test_math_misfire_threshold();
+    test_trigger_offset();
 
     // ── CKP FASE 2 (snap fields, prime, phase_A, tooth_index) ─────────────
     printf("\n=== CKP (fase 3) ===");
