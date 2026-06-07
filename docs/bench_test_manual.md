@@ -595,9 +595,155 @@ get_snapshot()
 
 ---
 
-## 8. Etapa 3 — Medição dos pulsos de saída no osciloscópio
+## 8. Etapa 3 — ESP32 como osciloscópio lógico
 
-### 8.1 O que medir
+O sketch `tools/esp32_scope/esp32_scope.ino` transforma o ESP32 num
+analisador lógico de 9 canais com resolução de 1 µs, suficiente para
+verificar todos os pulsos de ignição e injeção do OpenEMS.
+
+### 8.1 Ligações ESP32 → STM32H562
+
+```
+ESP32            STM32H562        Função
+─────────────    ──────────       ─────────────────
+GPIO 32     ←─── PC6             TIM8_CH1 Ignição cil.0
+GPIO 33     ←─── PC7             TIM8_CH2 Ignição cil.1
+GPIO 25     ←─── PC8             TIM8_CH3 Ignição cil.2
+GPIO 26     ←─── PC9             TIM8_CH4 Ignição cil.3
+GPIO 27     ←─── PA15            TIM2_CH1 Injeção cil.0
+GPIO 14     ←─── PB3             TIM2_CH2 Injeção cil.1
+GPIO 12     ←─── PB10            TIM2_CH3 Injeção cil.2
+GPIO 13     ←─── PB11            TIM2_CH4 Injeção cil.3
+GPIO 36     ←─── PA0 (loopback)  CKP gerado pelo próprio ESP32
+GND         ───► GND             OBRIGATÓRIO
+```
+
+> GPIO 36 (VP) é input-only no ESP32 — não pode ser acidentalmente
+> configurado como saída. Ligar ao GPIO 2 do CKP generator com um fio
+> curto para monitorizar o próprio sinal CKP gerado.
+>
+> Se usar **dois ESP32** (um para gerar CKP, outro para o scope), ligar
+> o GPIO 2 do gerador ao GPIO 36 do scope, além dos 8 canais de saída
+> do STM32.
+
+### 8.2 Instalar e arrancar o scope
+
+```
+1. Abrir tools/esp32_scope/esp32_scope.ino no Arduino IDE
+2. Verificar os GPIOs em kChan[] (ajustar ao DevKit se necessário)
+3. Upload para o ESP32
+4. Abrir Serial Monitor @ 115200 baud
+```
+
+Ao ligar, o scope imprime:
+
+```
+╔══════════════════════════════════════════╗
+║   OpenEMS ESP32 Logic Scope              ║
+║   Resolução: 1 µs  Latência: ~5 µs      ║
+╚══════════════════════════════════════════╝
+```
+
+### 8.3 Modos de operação
+
+| Tecla | Modo | Descrição |
+|-------|------|-----------|
+| `l` | **LIVE** (default) | Tabela de métricas actualizada a cada 1 s |
+| `p` | **PULSE** | Uma linha por pulso completo (falling edge) |
+| `e` | **EDGE** | Uma linha por bordo (rising e falling) |
+| `w` | **WAVE** | Barra de texto dos últimos 300 ms |
+| `s` | **STATS** | Mínimo/máximo/média desde o reset |
+| `r` | Reset | Zera contadores e estatísticas |
+
+### 8.4 Saída esperada (modo LIVE a 500 RPM)
+
+```
++───────────────────────────────────────────────────────────────+
+| OpenEMS Scope @ 12.345 s                                             |
++──+──────+───────+────────+────────+────────+───────+─────────+
+|CH| Name |STM32  |PW (ms) |Per(ms) |Freq(Hz)| Count | Status  |
++──+──────+───────+────────+────────+────────+───────+─────────+
+| 0|IGN0  |PC6    |   3.021|  240.00|    4.17|    500|  OK     |
+| 1|IGN1  |PC7    |   3.019|  240.00|    4.17|    500|  OK     |
+| 2|IGN2  |PC8    |   3.022|  240.00|    4.17|    500|  OK     |
+| 3|IGN3  |PC9    |   3.020|  240.00|    4.17|    500|  OK     |
+| 4|INJ0  |PA15   |   7.250|  240.00|    4.17|    500|  OK     |
+| 5|INJ1  |PB3    |   7.248|  240.00|    4.17|    500|  OK     |
+| 6|INJ2  |PB10   |   7.252|  240.00|    4.17|    500|  OK     |
+| 7|INJ3  |PB11   |   7.249|  240.00|    4.17|    500|  OK     |
+| 8|CKP   |PA0    |   1.000|    2.00|  500.00|  29000|  OK     |
++──+──────+───────+────────+────────+────────+───────+─────────+
+  RPM estimado (IGN0 period): 500.0
+```
+
+**O que verificar na tabela:**
+
+| Campo | IGN (TIM8) | INJ (TIM2) |
+|-------|-----------|----------|
+| PW (ms) | 1.0–5.0 (dwell) | calc. em 9.4 |
+| Per (ms) | 240 a 500 RPM | 240 a 500 RPM |
+| Freq (Hz) | 4.17 a 500 RPM | 4.17 a 500 RPM |
+| Status | OK | OK |
+
+Se algum canal mostrar **IDLE** mais de 2 s após FULL_SYNC: o pino
+correspondente não está a receber pulsos — ver secção 12.
+
+### 8.5 Verificar avanço de ignição com o scope
+
+No modo PULSE, o ESP32 imprime cada pulso com timestamp:
+
+```
+CH0 IGN0   PW=  3.021 ms  T=240.000 ms  #501
+CH0 IGN0   PW=  3.020 ms  T=240.001 ms  #502
+```
+
+Para verificar o avanço relativo ao gap CKP:
+
+1. Activar modo **EDGE** (`e`) para ver todos os bordos com timestamps
+2. Identificar o bordo RE do dente 0 do CKP (canal 8, RISE, após o gap)
+3. Identificar o bordo FALL seguinte do IGN0 (canal 0, FALL = instante de spark)
+4. Calcular:
+   ```
+   Δt = ts_IGN0_FALL - ts_CKP_RISE_dente0  (em µs)
+   ângulo = Δt / T_dente × 6°  (6° por posição de dente)
+   avanço = 360° - ângulo  (antes do TDC)
+   ```
+5. Comparar com o avanço definido na tabela spark (page 2)
+
+### 8.6 Script de leitura no computador (opcional)
+
+```bash
+# Instalar dependência
+pip install pyserial
+
+# Modo live com gravação CSV
+python3 tools/esp32_scope/scope_host.py \
+    --port /dev/ttyUSB1 --mode live --csv bench_$(date +%Y%m%d_%H%M).csv
+
+# Modo pulse (uma linha por pulso, mais legível)
+python3 tools/esp32_scope/scope_host.py --port /dev/ttyUSB1 --mode pulse
+
+# Analisar CSV gravado anteriormente
+python3 tools/esp32_scope/scope_host.py --analyse bench_20260606_1430.csv
+```
+
+Saída de `--analyse`:
+
+```
+Análise de bench_20260606_1430.csv  (3000 amostras)
+
+Canal    N     Média     Min       Max       σ         Avaliação
+────────  ──────  ─────────  ─────────  ─────────  ────────
+ IGN0      500   3.021ms  3.018ms  3.025ms  0.001ms  ✓ OK  (dwell 1–5 ms)
+ IGN1      500   3.019ms  3.015ms  3.023ms  0.001ms  ✓ OK
+ INJ0      500   7.251ms  7.245ms  7.258ms  0.002ms  ✓ OK  (PW 1–30 ms)
+```
+
+---
+
+## 9. Etapa 4 — Medição dos pulsos de saída
+
+### 9.1 O que medir
 
 Com FULL_SYNC activo e a 500 RPM, o scheduler deve gerar:
 - **TIM8 (ignição):** pulsos de dwell em PC6–PC9, um por cilindro por ciclo (720° de virabrequim)
@@ -605,7 +751,7 @@ Com FULL_SYNC activo e a 500 RPM, o scheduler deve gerar:
 
 O tempo de dwell padrão é lido da tabela `dwell_ms_x10_table` (page 5, offset 176). O default a 12 V é 3.0 ms.
 
-### 8.2 Verificar duração do dwell
+### 9.2 Verificar duração do dwell
 
 ```
 A 500 RPM:
@@ -621,7 +767,7 @@ No osciloscópio em PC6 (TIM8_CH1, cil. 0):
 3. Medir a duração do pulso HIGH (dwell): deve ser **3.0 ± 0.1 ms**
 4. Medir o período entre pulsos consecutivos do mesmo canal: deve ser **240 ± 5 ms**
 
-### 8.3 Verificar avanço de ignição
+### 9.3 Verificar avanço de ignição
 
 O avanço de ignição é lido da tabela `spark_table` (page 2). Para verificar o ângulo actual:
 
@@ -636,7 +782,7 @@ O avanço de ignição é lido da tabela `spark_table` (page 2). Para verificar 
 
 3. Comparar com o valor lido da tabela spark: `r page 2 offset correspondente a (RPM, MAP)`.
 
-### 8.4 Verificar largura de pulso de injecção
+### 9.4 Verificar largura de pulso de injecção
 
 A largura de pulso de injecção (`inj_pw_ticks`) é calculada pelo `fuel_calc`. Para verificar:
 
@@ -666,15 +812,15 @@ No osciloscópio em PA15 (TIM2_CH1, cil. 0):
 
 ---
 
-## 9. Etapa 4 — Sinal CMP e fase
+## 10. Etapa 5 — Sinal CMP e fase
 
-### 9.1 Porquê o CMP é necessário
+### 10.1 Porquê o CMP é necessário
 
 Sem o sinal CMP (camshaft position), o firmware fica em **HALF_SYNC**: sabe quantos dentes passaram desde o gap, mas não sabe em que meia-volta do ciclo está (compressão ou escape do cil. 0). O scheduler usa injecção simultânea (wasted spark + bank fire) até ter FULL_SYNC.
 
 Para injecção sequencial correcta é obrigatório o FULL_SYNC.
 
-### 9.2 Simular o sinal CMP
+### 10.2 Simular o sinal CMP
 
 O sinal CMP é 1 pulso por 2 rotações do virabrequim (1 por ciclo de 720°), em PA1.
 
@@ -700,7 +846,7 @@ for _ in range(5):
 
 ---
 
-## 10. Interpretar o snapshot em tempo real
+## 11. Interpretar o snapshot em tempo real
 
 ### Estrutura dos 64 bytes (page 3, read-only)
 
@@ -740,7 +886,7 @@ for _ in range(5):
 
 ---
 
-## 11. Problemas comuns e diagnóstico
+## 12. Problemas comuns e diagnóstico
 
 | Sintoma | Causa provável | Acção |
 |---------|---------------|-------|
@@ -762,7 +908,7 @@ openocd> flash erase_sector 1 1 7
 
 ---
 
-## 12. O que medir antes do primeiro arranque do motor
+## 13. O que medir antes do primeiro arranque do motor
 
 Antes de qualquer tentativa de arranque com combustível, confirmar
 **obrigatoriamente**:
@@ -795,7 +941,7 @@ Passo 5: Re-verificar: a posição do pulso de ignição no osciloscópio
 
 ---
 
-## 13. Referência rápida de comandos UART
+## 14. Referência rápida de comandos UART
 
 ### Enviar comandos manualmente com Python
 
