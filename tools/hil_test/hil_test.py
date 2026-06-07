@@ -1,29 +1,22 @@
 #!/usr/bin/env python3
 """
-hil_test.py — Teste HIL (Hardware-in-the-Loop) automatizado para OpenEMS
-══════════════════════════════════════════════════════════════════════════
-Controla o ESP32 CKP generator para variar RPM, lê o snapshot do STM32
-via UART e verifica que os valores calculados pelo firmware coincidem com
-os valores esperados calculados em Python a partir das tabelas lidas da ECU.
+hil_test.py — Teste HIL automático para OpenEMS
+════════════════════════════════════════════════
+Requer hardware:
+  PC ─ USB0 → STM32H562  (UART protocolo OpenEMS)
+  PC ─ USB1 → ESP32       (esp32_combined.ino: CKP gen + scope)
 
-Opcionalmente lê o ESP32 scope para verificação dos pulsos no hardware.
+O ESP32 gera o sinal 60-2 para o STM32, monitoriza IGN/INJ e
+reporta firing order + PW por série.
 
-Uso mínimo (sem scope):
-    python3 hil_test.py --stm32 /dev/ttyUSB0 --gen /dev/ttyUSB1
+O script lê as tabelas da ECU (VE, spark, dwell), calcula os valores
+esperados em Python com o mesmo math do firmware (integer arithmetic),
+e compara com os valores medidos pelo scope e o snapshot UART.
 
-Com scope:
-    python3 hil_test.py --stm32 /dev/ttyUSB0 --gen /dev/ttyUSB1 \\
-                        --scope /dev/ttyUSB2 --report report.md
-
-Arquitectura de verificação (por ponto de teste):
-    1. CKP generator → RPM comandado
-    2. Aguardar steady-state (2 s)
-    3. STM32 snapshot → {rpm, map, ve, advance, pw, dwell, status}
-    4. Tabelas lidas da ECU + sensor values do snapshot
-       → calcular expected_{ve, advance, pw, dwell} em Python
-    5. Scope timing 't' → firing order + inter-cylinder offset (se disponível)
-    6. Scope LIVE → dwell PW + injection PW medidos (se disponível)
-    7. Comparar: PASS se dentro das tolerâncias
+Uso:
+    python3 hil_test.py --stm32 /dev/ttyUSB0 --esp32 /dev/ttyUSB1
+    python3 hil_test.py --stm32 /dev/ttyUSB0 --esp32 /dev/ttyUSB1 \\
+                        --rpms 500 1000 2000 --report resultado.md
 """
 
 from __future__ import annotations
@@ -42,53 +35,52 @@ except ImportError:
     print("Instalar: pip install pyserial")
     sys.exit(1)
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Configuração de tolerâncias
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Tolerâncias
+# ══════════════════════════════════════════════════════════════════════════════
 
-TOL_RPM_PCT       = 5.0   # % de tolerância no RPM medido vs comandado
-TOL_DWELL_MS      = 0.3   # ms de tolerância no dwell medido vs esperado
-TOL_INJ_PW_PCT    = 15.0  # % de tolerância no PW injecção (firmware aplica corr. não modeladas)
-TOL_ADVANCE_DEG   = 2.0   # ° de tolerância no avanço de ignição
-TOL_INTER_CYL_MS  = 2.0   # ms de tolerância no espaçamento entre cilindros
-EXPECTED_ORDER    = [0, 2, 3, 1]  # IGN0→IGN2→IGN3→IGN1 (1-3-4-2)
+TOL_RPM_PCT      = 5.0   # % — RPM medido vs comandado
+TOL_VE_UNITS     = 3.0   # unidades — VE snapshot vs tabela
+TOL_ADVANCE_DEG  = 2.0   # ° — advance snapshot vs tabela
+TOL_INJ_PW_PCT   = 15.0  # % — PW snapshot vs cálculo (STFT + dead time não modelados)
+TOL_INTER_CYL_MS = 2.0   # ms — espaçamento entre cilindros
+TOL_HW_PW_MS     = 0.3   # ms — PW scope vs snapshot (medição hardware)
+TOL_DWELL_MS     = 0.3   # ms — dwell scope vs tabela
 
-SETTLE_S = 2.0    # segundos a aguardar após mudança de RPM
+SETTLE_S    = 2.0         # s — aguardar após mudança de RPM
+SYNC_WAIT_S = 8.0         # s — timeout para FULL_SYNC
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Eixos das tabelas 3D (kRpmAxisX10 e kLoadAxisBarX100, de table3d.cpp)
-# ═══════════════════════════════════════════════════════════════════════════════
+EXPECTED_FIRING_ORDER = [0, 2, 3, 1]   # IGN0→IGN2→IGN3→IGN1  (1-3-4-2)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Eixos das tabelas 3D (table3d.cpp)
+# ══════════════════════════════════════════════════════════════════════════════
 
 RPM_AXIS_X10 = [
-    5000, 7500, 10000, 12500,
+    5000,  7500,  10000, 12500,
     15000, 20000, 25000, 30000,
     40000, 50000, 60000, 70000,
     80000, 90000, 100000, 120000,
 ]
 
 MAP_AXIS_BAR_X100 = [
-    20, 30, 40, 50,
-    60, 70, 80, 90,
+    20,  30,  40,  50,
+    60,  70,  80,  90,
     100, 115, 130, 145,
     160, 180, 215, 300,
 ]
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Mirror exacto do math do firmware (table3d.cpp + fuel_calc.cpp)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# Mirror do firmware (table3d.cpp + fuel_calc.cpp)
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _axis_lookup(axis: list[int], value: int) -> tuple[int, int]:
-    """
-    Devolve (idx, frac_q8) — mirror de axis_lookup() em table3d.cpp.
-    idx: índice do intervalo inferior.
-    frac_q8: posição fraccionária em Q8 (0-255).
-    """
+    """Mirror de axis_lookup(): binary search → (idx, frac_q8)."""
     if value <= axis[0]:
         return 0, 0
     last = len(axis) - 1
     if value >= axis[last]:
         return last - 1, 255
-
     lo, hi = 1, last
     while lo < hi:
         mid = lo + (hi - lo) // 2
@@ -96,71 +88,57 @@ def _axis_lookup(axis: list[int], value: int) -> tuple[int, int]:
             hi = mid
         else:
             lo = mid + 1
-
     idx = lo - 1
     x0, x1 = axis[idx], axis[idx + 1]
     if value <= x0:
         return idx, 0
     if value >= x1:
         return idx, 255
-    span = x1 - x0
-    frac = ((value - x0) << 8) // span
-    return idx, min(255, frac)
+    return idx, min(255, ((value - x0) << 8) // (x1 - x0))
 
 
-def _lerp_q8(a: int, b: int, frac_q8: int) -> int:
+def _lerp_q8(a: int, b: int, f: int) -> int:
     """Mirror de lerp_q8_s32()."""
-    if frac_q8 == 255:
-        return b
-    return a + (((b - a) * frac_q8) >> 8)
+    return b if f == 255 else a + (((b - a) * f) >> 8)
 
 
-def table3d_lookup_u8(table: list[list[int]],
-                      x_axis: list[int], y_axis: list[int],
-                      x: int, y: int) -> int:
-    """
-    Interpolação bilinear — mirror exacto de table3d_lookup_u8_prepared().
-    table[yi][xi], x=RPM (cols), y=MAP/load (rows).
-    """
+def _table3d(table: list[list[int]],
+             x_axis: list[int], y_axis: list[int],
+             x: int, y: int) -> int:
+    """Interpolação bilinear — mirror exacto de table3d_lookup_u8_prepared()."""
     xi, fx = _axis_lookup(x_axis, x)
     yi, fy = _axis_lookup(y_axis, y)
-    v00 = table[yi][xi];     v10 = table[yi][xi + 1]
-    v01 = table[yi + 1][xi]; v11 = table[yi + 1][xi + 1]
-    v0 = _lerp_q8(v00, v10, fx)
-    v1 = _lerp_q8(v01, v11, fx)
-    v  = _lerp_q8(v0,  v1,  fy)
-    return max(0, min(255, v))
+    v0 = _lerp_q8(table[yi][xi],     table[yi][xi + 1],     fx)
+    v1 = _lerp_q8(table[yi + 1][xi], table[yi + 1][xi + 1], fx)
+    return max(0, min(255, _lerp_q8(v0, v1, fy)))
 
 
-def table3d_lookup_i8(table: list[list[int]],
-                      x_axis: list[int], y_axis: list[int],
-                      x: int, y: int) -> int:
+def _table3d_signed(table: list[list[int]],
+                    x_axis: list[int], y_axis: list[int],
+                    x: int, y: int) -> int:
     """Mirror de table3d_lookup_i8_prepared() (signed)."""
     xi, fx = _axis_lookup(x_axis, x)
     yi, fy = _axis_lookup(y_axis, y)
-    v00 = table[yi][xi];     v10 = table[yi][xi + 1]
-    v01 = table[yi + 1][xi]; v11 = table[yi + 1][xi + 1]
-    v0 = _lerp_q8(v00, v10, fx)
-    v1 = _lerp_q8(v01, v11, fx)
+    v0 = _lerp_q8(table[yi][xi],     table[yi][xi + 1],     fx)
+    v1 = _lerp_q8(table[yi + 1][xi], table[yi + 1][xi + 1], fx)
     return _lerp_q8(v0, v1, fy)
 
 
-def interp_1d(axis: list[int], values: list[int], x: int) -> int:
-    """Interpolação 1D linear simples (para tabelas de correcção)."""
+def _interp1d(axis: list[int], values: list[int], x: int) -> int:
+    """Interpolação 1D linear."""
     idx, frac = _axis_lookup(axis, x)
     return _lerp_q8(values[idx], values[idx + 1], frac)
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 # Estruturas de dados
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 
 @dataclass
 class EngineConfig:
     ivc_abdc_deg:              int = 50
     displacement_cc:           int = 2000
     injector_flow_cc_min:      int = 450
-    stoich_afr_x100:           int = 1300
+    stoich_afr_x100:           int = 1470
     map_ref_bar_x100:          int = 100
     trigger_tooth0_engine_deg: int = 0
     default_soi_lead_deg:      int = 62
@@ -168,135 +146,85 @@ class EngineConfig:
     @property
     def req_fuel_us(self) -> int:
         """
-        Mirror EXACTO de calc_req_fuel_us() — integer arithmetic idêntica.
+        Mirror inteiro de calc_req_fuel_us() — fuel_calc.cpp.
         num = displacement * kAirDensityMgPerCcX1000 * 100 * 60_000_000
         den = cylinders * stoich_x100 * inj_flow_cc_min * kFuelDensityMgPerCc * 1000
+        Verificado: (1998, 4, 440, 1470) → 7266 µs.
         """
-        if (self.displacement_cc == 0 or self.injector_flow_cc_min == 0
-                or self.stoich_afr_x100 == 0):
+        if self.displacement_cc == 0 or self.injector_flow_cc_min == 0 \
+                or self.stoich_afr_x100 == 0:
             return 0
-        AIR_X1000    = 1184   # kAirDensityMgPerCcX1000
-        FUEL_DENSITY = 755    # kFuelDensityMgPerCc
-        CYLINDERS    = 4
-        num = (self.displacement_cc * AIR_X1000 * 100 * 60_000_000)
-        den = (CYLINDERS * self.stoich_afr_x100
-               * self.injector_flow_cc_min * FUEL_DENSITY * 1000)
+        num = self.displacement_cc * 1184 * 100 * 60_000_000
+        den = 4 * self.stoich_afr_x100 * self.injector_flow_cc_min * 755 * 1000
         return min(num // den, 50000)
 
 
 @dataclass
 class Snapshot:
-    rpm:            int   = 0
-    map_bar_x100:   int   = 100   # MAP em bar × 100
-    tps_pct:        int   = 0
-    clt_degc:       int   = 25    # (clt_p40 - 40)
-    iat_degc:       int   = 25    # (iat_p40 - 40)
-    pw1_ms_x10:     int   = 0
-    advance_deg:    int   = 0     # (advance_p40 - 40)
-    ve:             int   = 0
-    stft_pct:       int   = 0
-    status:         int   = 0
+    rpm:          int = 0
+    map_bar_x100: int = 100
+    tps_pct:      int = 0
+    clt_degc:     int = 25
+    iat_degc:     int = 25
+    pw1_ms_x10:   int = 0
+    advance_deg:  int = 0
+    ve:           int = 0
+    stft_pct:     int = 0
+    status:       int = 0
 
     @property
-    def full_sync(self) -> bool: return bool(self.status & 0x0001)
+    def full_sync(self) -> bool:    return bool(self.status & 0x0001)
     @property
     def sensor_fault(self) -> bool: return bool(self.status & 0x0004)
     @property
-    def late_event(self) -> bool: return bool(self.status & 0x0040)
+    def late_event(self) -> bool:   return bool(self.status & 0x0040)
     @property
-    def inj_pw_ms(self) -> float: return self.pw1_ms_x10 / 10.0
+    def inj_pw_ms(self) -> float:   return self.pw1_ms_x10 / 10.0
 
 
 @dataclass
 class Tables:
-    ve_table:     list[list[int]] = field(default_factory=list)  # [16][16] uint8
-    spark_table:  list[list[int]] = field(default_factory=list)  # [16][16] int8 signed
-    dwell_vbatt_axis_mv:  list[int] = field(default_factory=list)  # 16 values
-    dwell_ms_x10:         list[int] = field(default_factory=list)  # 16 values
-    clt_corr_axis_x10:    list[int] = field(default_factory=list)
-    clt_corr_x256:        list[int] = field(default_factory=list)
-    iat_corr_axis_x10:    list[int] = field(default_factory=list)
-    iat_corr_x256:        list[int] = field(default_factory=list)
-    vbatt_corr_axis_mv:   list[int] = field(default_factory=list)
-    injector_dead_time_us: list[int] = field(default_factory=list)
+    ve_table:              list[list[int]] = field(default_factory=list)
+    spark_table:           list[list[int]] = field(default_factory=list)
+    dwell_vbatt_axis_mv:   list[int]       = field(default_factory=list)
+    dwell_ms_x10:          list[int]       = field(default_factory=list)
+    clt_corr_axis_x10:     list[int]       = field(default_factory=list)
+    clt_corr_x256:         list[int]       = field(default_factory=list)
+    iat_corr_axis_x10:     list[int]       = field(default_factory=list)
+    iat_corr_x256:         list[int]       = field(default_factory=list)
 
     def ve_at(self, rpm: int, map_bar_x100: int) -> int:
-        """VE% na tabela 3D para (rpm, MAP)."""
-        return table3d_lookup_u8(
-            self.ve_table,
-            RPM_AXIS_X10, MAP_AXIS_BAR_X100,
-            rpm * 10, map_bar_x100)
+        if not self.ve_table:
+            return 80
+        return _table3d(self.ve_table, RPM_AXIS_X10, MAP_AXIS_BAR_X100,
+                        rpm * 10, map_bar_x100)
 
     def advance_at(self, rpm: int, map_bar_x100: int) -> int:
-        """Avanço em graus na tabela 3D para (rpm, MAP). signed int8."""
-        return table3d_lookup_i8(
-            self.spark_table,
-            RPM_AXIS_X10, MAP_AXIS_BAR_X100,
-            rpm * 10, map_bar_x100)
+        if not self.spark_table:
+            return 10
+        return _table3d_signed(self.spark_table, RPM_AXIS_X10, MAP_AXIS_BAR_X100,
+                               rpm * 10, map_bar_x100)
 
-    def dwell_ms_at(self, vbatt_mv: int) -> float:
-        """Dwell em ms para a tensão de bateria actual."""
+    def dwell_ms_at(self, vbatt_mv: int = 12000) -> float:
         if not self.dwell_vbatt_axis_mv or not self.dwell_ms_x10:
-            return 3.0   # default
-        return interp_1d(self.dwell_vbatt_axis_mv,
-                         self.dwell_ms_x10, vbatt_mv) / 10.0
+            return 3.0
+        return _interp1d(self.dwell_vbatt_axis_mv, self.dwell_ms_x10, vbatt_mv) / 10.0
 
-    def clt_corr_at(self, clt_degc: int) -> float:
-        """Correcção CLT em fracção (1.0 = sem correcção)."""
+    def clt_corr(self, clt_degc: int) -> float:
         if not self.clt_corr_axis_x10:
             return 1.0
-        v = interp_1d(self.clt_corr_axis_x10, self.clt_corr_x256,
-                      clt_degc * 10)
-        return v / 256.0
+        return _interp1d(self.clt_corr_axis_x10, self.clt_corr_x256,
+                         clt_degc * 10) / 256.0
 
-    def iat_corr_at(self, iat_degc: int) -> float:
+    def iat_corr(self, iat_degc: int) -> float:
         if not self.iat_corr_axis_x10:
             return 1.0
-        v = interp_1d(self.iat_corr_axis_x10, self.iat_corr_x256,
-                      iat_degc * 10)
-        return v / 256.0
+        return _interp1d(self.iat_corr_axis_x10, self.iat_corr_x256,
+                         iat_degc * 10) / 256.0
 
-
-@dataclass
-class TestPoint:
-    rpm:         int
-    description: str = ""
-
-@dataclass
-class TestResult:
-    rpm_cmd:       int
-    description:   str
-    snap:          Optional[Snapshot]  = None
-    timing_order:  Optional[list[int]] = None
-    inter_cyl_ms:  Optional[float]     = None
-    scope_dwell_ms: Optional[float]    = None
-    scope_pw_ms:    Optional[float]    = None
-    checks:        list[tuple[str, bool, str]] = field(default_factory=list)
-
-    def passed(self) -> bool:
-        return all(ok for _, ok, _ in self.checks)
-
-    def add_check(self, name: str, ok: bool, detail: str = ""):
-        self.checks.append((name, ok, detail))
-
-    def add_range(self, name: str, actual, expected, tol,
-                  fmt=".3f", pct=False):
-        if pct:
-            err = abs(actual - expected) / max(abs(expected), 1e-9) * 100
-            ok  = err <= tol
-            detail = (f"actual={actual:{fmt}}  expected={expected:{fmt}}"
-                      f"  err={err:.1f}%  tol={tol:.1f}%")
-        else:
-            err = abs(actual - expected)
-            ok  = err <= tol
-            detail = (f"actual={actual:{fmt}}  expected={expected:{fmt}}"
-                      f"  err={err:{fmt}}  tol={tol:{fmt}}")
-        self.add_check(name, ok, detail)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# STM32 client (protocolo UART OpenEMS)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# STM32 client
+# ══════════════════════════════════════════════════════════════════════════════
 
 class STM32Client:
     def __init__(self, port: str, baud: int = 115200):
@@ -304,49 +232,49 @@ class STM32Client:
         time.sleep(0.3)
         self._ser.reset_input_buffer()
 
-    def _cmd(self, data: bytes, read_n: int, delay: float = 0.05) -> bytes:
-        self._ser.write(data)
-        time.sleep(delay)
-        return self._ser.read(read_n)
-
     def ping(self) -> bool:
-        r = self._cmd(b"\x43", 2)       # 'C' → ACK + magic
+        self._ser.write(b"\x43")
+        time.sleep(0.05)
+        r = self._ser.read(2)
         return len(r) == 2 and r[0] == 0x00 and r[1] == 0xAA
 
-    def read_page(self, page: int, offset: int, length: int) -> bytes:
+    def _read_page(self, page: int, offset: int, length: int) -> bytes:
         cmd = bytes([0x72, page,
                      offset & 0xFF, (offset >> 8) & 0xFF,
                      length & 0xFF, (length >> 8) & 0xFF])
-        r = self._cmd(cmd, length, delay=0.05 + length / 10000)
-        return r
+        self._ser.write(cmd)
+        time.sleep(0.05 + length / 10000)
+        return self._ser.read(length)
 
     def snapshot(self) -> Optional[Snapshot]:
-        r = self._cmd(b"\x41", 64, delay=0.05)
+        self._ser.write(b"\x41")
+        time.sleep(0.05)
+        r = self._ser.read(64)
         if len(r) < 13:
             return None
         s = Snapshot()
-        s.rpm           = struct.unpack_from("<H", r, 0)[0]
-        s.map_bar_x100  = r[2]
-        s.tps_pct       = r[3]
-        s.clt_degc      = r[4] - 40
-        s.iat_degc      = r[5] - 40
-        s.pw1_ms_x10    = r[7]
-        s.advance_deg   = r[8] - 40
-        s.ve            = r[9]
-        s.stft_pct      = struct.unpack_from("b", r, 10)[0]
-        s.status        = struct.unpack_from("<H", r, 11)[0]
+        s.rpm          = struct.unpack_from("<H", r, 0)[0]
+        s.map_bar_x100 = r[2]
+        s.tps_pct      = r[3]
+        s.clt_degc     = r[4] - 40
+        s.iat_degc     = r[5] - 40
+        s.pw1_ms_x10   = r[7]
+        s.advance_deg  = r[8] - 40
+        s.ve           = r[9]
+        s.stft_pct     = struct.unpack_from("b", r, 10)[0]
+        s.status       = struct.unpack_from("<H", r, 11)[0]
         return s
 
     def read_engine_config(self) -> EngineConfig:
-        d = self.read_page(0, 0, 16)
+        d = self._read_page(0, 0, 16)
         if len(d) < 16:
             return EngineConfig()
         return EngineConfig(
             ivc_abdc_deg              = d[0],
-            displacement_cc           = struct.unpack_from("<H", d, 2)[0],
-            injector_flow_cc_min      = struct.unpack_from("<H", d, 4)[0],
-            stoich_afr_x100           = struct.unpack_from("<H", d, 6)[0],
-            map_ref_bar_x100          = struct.unpack_from("<H", d, 8)[0],
+            displacement_cc           = struct.unpack_from("<H", d,  2)[0],
+            injector_flow_cc_min      = struct.unpack_from("<H", d,  4)[0],
+            stoich_afr_x100           = struct.unpack_from("<H", d,  6)[0],
+            map_ref_bar_x100          = struct.unpack_from("<H", d,  8)[0],
             trigger_tooth0_engine_deg = struct.unpack_from("<H", d, 10)[0],
             default_soi_lead_deg      = struct.unpack_from("<H", d, 12)[0],
         )
@@ -354,105 +282,37 @@ class STM32Client:
     def read_tables(self) -> Tables:
         t = Tables()
 
-        # VE table — page 1, 256 bytes, layout [16 rows][16 cols] = [MAP][RPM]
-        raw = self.read_page(1, 0, 256)
+        raw = self._read_page(1, 0, 256)
         if len(raw) == 256:
             t.ve_table = [[raw[r * 16 + c] for c in range(16)] for r in range(16)]
 
-        # Spark table — page 2, 256 bytes, signed int8
-        raw = self.read_page(2, 0, 256)
+        raw = self._read_page(2, 0, 256)
         if len(raw) == 256:
             t.spark_table = [
                 [struct.unpack_from("b", raw, r * 16 + c)[0] for c in range(16)]
                 for r in range(16)]
 
-        # Corrections — page 5
-        # offsets: 96=dwell_vbatt_axis, 160=dwell_vbatt_axis (re-check),
-        # Conforme sync_table_from_page() em ui_protocol.cpp:
-        #   p+  0: clt_corr_axis_x10   (16B)
-        #   p+ 16: clt_corr_x256       (16B)
-        #   p+ 32: iat_corr_axis_x10   (16B)
-        #   p+ 48: iat_corr_x256       (16B)
-        #   p+ 96: vbatt_corr_axis_mv  (16B u16 LE → 8 values)
-        #   p+112: injector_dead_time_us(16B)
-        #   p+160: dwell_vbatt_axis_mv (16B u16 LE → 8 values)
-        #   p+176: dwell_ms_x10_table  (16B u16 LE → 8 values)
-        raw = self.read_page(5, 0, 192)
+        # page 5: CLT/IAT corr + dwell
+        raw = self._read_page(5, 0, 192)
         if len(raw) >= 192:
-            def u16s(buf, off, n):
-                return [struct.unpack_from("<H", buf, off + i * 2)[0]
-                        for i in range(n)]
-            def u8s(buf, off, n):
-                return list(buf[off:off + n])
-
-            t.clt_corr_axis_x10   = u8s(raw,   0, 16)
-            t.clt_corr_x256       = u8s(raw,  16, 16)
-            t.iat_corr_axis_x10   = u8s(raw,  32, 16)
-            t.iat_corr_x256       = u8s(raw,  48, 16)
-            t.vbatt_corr_axis_mv  = u16s(raw, 96, 8)
-            t.injector_dead_time_us = u16s(raw, 112, 8)
-            t.dwell_vbatt_axis_mv = u16s(raw, 160, 8)
-            t.dwell_ms_x10        = u16s(raw, 176, 8)
+            u8  = lambda off, n: list(raw[off:off + n])
+            u16 = lambda off, n: [struct.unpack_from("<H", raw, off + i*2)[0]
+                                  for i in range(n)]
+            t.clt_corr_axis_x10  = u8(  0, 16)
+            t.clt_corr_x256      = u8( 16, 16)
+            t.iat_corr_axis_x10  = u8( 32, 16)
+            t.iat_corr_x256      = u8( 48, 16)
+            t.dwell_vbatt_axis_mv = u16(160, 8)
+            t.dwell_ms_x10        = u16(176, 8)
 
         return t
 
     def close(self):
         self._ser.close()
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# CKP generator client (esp32_ckp_gen.ino)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class CKPGenClient:
-    _PRESETS = [100, 200, 300, 500, 700, 1000, 1500, 2000, 3000, 5000]
-
-    def __init__(self, port: str, baud: int = 115200,
-                 shared_ser: Optional["serial.Serial"] = None):
-        """
-        Se shared_ser for fornecido, usa-o em vez de abrir uma nova porta.
-        Útil quando CKP gen e scope estão no mesmo ESP32 (esp32_combined).
-        """
-        if shared_ser is not None:
-            self._ser = shared_ser
-            self._owns = False
-        else:
-            self._ser = serial.Serial(port, baud, timeout=1.0)
-            self._owns = True
-        self._rpm = 500
-        time.sleep(0.3)
-        self._ser.reset_input_buffer()
-
-    def _send(self, c: str):
-        self._ser.write(c.encode())
-        time.sleep(0.05)
-        self._ser.reset_input_buffer()
-
-    def set_rpm(self, target_rpm: int):
-        """Ajusta RPM. Usa presets quando possível, senão usa +/-."""
-        if target_rpm in self._PRESETS:
-            idx = self._PRESETS.index(target_rpm)
-            self._send(str(idx))
-            self._rpm = target_rpm
-            return
-        current = self._rpm
-        while current != target_rpm:
-            if current < target_rpm:
-                self._send("+")
-                current = min(current + 100, target_rpm)
-            else:
-                self._send("-")
-                current = max(current - 100, target_rpm)
-        self._rpm = target_rpm
-
-    def close(self):
-        if self._owns:
-            self._ser.close()
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Scope client (esp32_scope.ino)
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+# ESP32 combined client (CKP gen + scope numa única ligação série)
+# ══════════════════════════════════════════════════════════════════════════════
 
 @dataclass
 class LiveData:
@@ -463,129 +323,160 @@ class LiveData:
 
 @dataclass
 class TimingData:
-    firing_order:  list[int]         = field(default_factory=list)
-    inter_cyl_ms:  list[float]       = field(default_factory=list)
-    from_gap_ms:   dict[int, float]  = field(default_factory=dict)
-    ok:            bool              = False
-    error:         str               = ""
+    firing_order: list[int]        = field(default_factory=list)
+    inter_cyl_ms: list[float]      = field(default_factory=list)
+    from_gap_ms:  dict[int, float] = field(default_factory=dict)
+    ok:           bool             = False
+    error:        str              = ""
 
 
-class ScopeClient:
-    def __init__(self, port: str, baud: int = 115200,
-                 shared_ser: Optional["serial.Serial"] = None):
-        if shared_ser is not None:
-            self._ser = shared_ser
-            self._owns = False
-        else:
-            self._ser = serial.Serial(port, baud, timeout=3.0)
-            self._owns = True
+class ESP32Client:
+    """
+    Controla o esp32_combined.ino: gera CKP e lê scope pela mesma UART.
+    Comandos CKP: +/-/0-9/S
+    Comandos scope: l/e/p/w/t/s/r/?
+    """
+    _PRESETS = [100, 200, 300, 500, 700, 1000, 1500, 2000, 3000, 5000]
+
+    def __init__(self, port: str, baud: int = 115200):
+        self._ser = serial.Serial(port, baud, timeout=3.0)
+        self._rpm = 500
         time.sleep(0.3)
         self._ser.reset_input_buffer()
 
     def _send(self, c: str):
         self._ser.write(c.encode())
         time.sleep(0.05)
+        self._ser.reset_input_buffer()
+
+    # ── CKP generator ─────────────────────────────────────────────────────
+
+    def set_rpm(self, target: int):
+        """Ajusta RPM via preset ou passos de 100."""
+        if target in self._PRESETS:
+            self._send(str(self._PRESETS.index(target)))
+            self._rpm = target
+            return
+        while self._rpm != target:
+            if self._rpm < target:
+                self._send("+")
+                self._rpm = min(self._rpm + 100, target)
+            else:
+                self._send("-")
+                self._rpm = max(self._rpm - 100, target)
+
+    # ── Scope ──────────────────────────────────────────────────────────────
 
     def get_live(self, wait_s: float = 1.5) -> dict[int, LiveData]:
-        """Lê uma tabela LIVE do scope (modo 'l')."""
+        """Modo 'l' — devolve {ch: LiveData}."""
         self._send("l")
         time.sleep(wait_s)
-        raw = self._ser.read(self._ser.in_waiting)
+        raw  = self._ser.read(self._ser.in_waiting)
         text = raw.decode("utf-8", errors="replace")
 
-        # Parsa linhas: "| 0|IGN0  |PC6    |   3.021|  240.00| ..."
         RE = re.compile(
-            r"\|\s*(\d+)\|(\w+)\s*\|\w+\s*\|\s*([\d.]+)\|\s*([\d.]+)\|\s*[\d.]+\|\s*(\d+)\|"
+            r"\|\s*(\d+)\|(\w+)\s*\|\S+\s*\|\s*([\d.]+)\|\s*([\d.]+)\|\s*[\d.]+\|\s*(\d+)\|"
         )
         result: dict[int, LiveData] = {}
         for m in RE.finditer(text):
-            ch, name, pw, period, count = m.groups()
-            idle = ("IDLE" in text[m.start():m.start()+120])
+            ch, _name, pw, period, count = m.groups()
+            window = text[m.start(): m.start() + 120]
             result[int(ch)] = LiveData(
                 pw_ms     = float(pw),
                 period_ms = float(period),
                 count     = int(count),
-                idle      = idle,
+                idle      = "IDLE" in window,
             )
         return result
 
     def run_timing(self, timeout_s: float = 30.0) -> TimingData:
-        """Executa o modo 't' e parseia o relatório de timing."""
+        """Modo 't' — devolve firing order, inter-cyl e ângulo."""
         self._send("t")
         deadline = time.time() + timeout_s
-        lines = []
+        lines: list[str] = []
 
-        # Acumular output até ver "Resultado final" ou timeout
         while time.time() < deadline:
             line = self._ser.readline().decode("utf-8", errors="replace").strip()
             if line:
                 lines.append(line)
-            if "Resultado final" in line or "IGNIÇÃO OK" in line or "VER FALHAS" in line:
+            if any(k in line for k in ("Resultado final", "IGNIÇÃO OK", "VER FALHAS")):
                 break
 
         text = "\n".join(lines)
+        td   = TimingData()
 
-        td = TimingData()
+        # Parsar "  [TIMING] IGN0 spark @ +15.234 ms"
+        sparks: list[tuple[int, float]] = []
+        for m in re.finditer(r"IGN(\d)\s+spark\s*@\s*\+([\d.]+)\s*ms", text):
+            sparks.append((int(m.group(1)), float(m.group(2))))
 
-        # Parsar linhas de spark: "  IGN0    15.234 ms ..."
-        RE_SPARK = re.compile(r"IGN(\d)\s+([\d.]+)\s*ms")
-        spark_entries = []
-        for m in RE_SPARK.finditer(text):
-            ch, dt = int(m.group(1)), float(m.group(2))
-            spark_entries.append((ch, dt))
-
-        if len(spark_entries) < 4:
-            td.error = f"Spark entries insuficientes: {len(spark_entries)}/4"
+        if len(sparks) < 4:
+            td.error = f"Apenas {len(sparks)}/4 sparks capturados"
             return td
 
-        # Ordenar por timestamp para obter firing order
-        spark_entries.sort(key=lambda x: x[1])
-        td.firing_order = [ch for ch, _ in spark_entries]
-
-        # from_gap_ms
-        for ch, dt in spark_entries:
-            td.from_gap_ms[ch] = dt
-
-        # inter-cylinder offsets
-        for i in range(1, len(spark_entries)):
-            dt = spark_entries[i][1] - spark_entries[i-1][1]
-            td.inter_cyl_ms.append(dt)
-
-        td.ok = "IGNIÇÃO OK" in text
+        sparks.sort(key=lambda x: x[1])
+        td.firing_order = [ch for ch, _ in sparks]
+        td.from_gap_ms  = {ch: dt for ch, dt in sparks}
+        td.inter_cyl_ms = [sparks[i][1] - sparks[i-1][1] for i in range(1, len(sparks))]
+        td.ok           = "IGNIÇÃO OK" in text
         if "VER FALHAS" in text:
             td.error = "Scope reportou falhas"
-
         return td
 
     def close(self):
-        if self._owns:
-            self._ser.close()
+        self._ser.close()
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Resultado de cada ponto de teste
+# ══════════════════════════════════════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════════════════════════
+@dataclass
+class TestResult:
+    rpm_cmd:     int
+    description: str
+    snap:        Optional[Snapshot]  = None
+    timing:      Optional[TimingData] = None
+    live:        Optional[dict]      = None
+    checks:      list[tuple[str, bool, str]] = field(default_factory=list)
+
+    def passed(self) -> bool:
+        return all(ok for _, ok, _ in self.checks)
+
+    def add(self, name: str, ok: bool, detail: str = ""):
+        self.checks.append((name, ok, detail))
+
+    def add_range(self, name: str, actual, expected, tol,
+                  fmt: str = ".3f", pct: bool = False):
+        if pct:
+            err = abs(actual - expected) / max(abs(expected), 1e-9) * 100
+            ok  = err <= tol
+            detail = (f"actual={actual:{fmt}}  expected={expected:{fmt}}"
+                      f"  err={err:.1f}%  tol={tol:.1f}%")
+        else:
+            err = abs(actual - expected)
+            ok  = err <= tol
+            detail = (f"actual={actual:{fmt}}  expected={expected:{fmt}}"
+                      f"  err={err:{fmt}}  tol={tol:{fmt}}")
+        self.add(name, ok, detail)
+
+# ══════════════════════════════════════════════════════════════════════════════
 # HIL Runner
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 
 class HILRunner:
-    def __init__(self,
-                 stm32:  STM32Client,
-                 gen:    CKPGenClient,
-                 scope:  Optional[ScopeClient],
-                 eng:    EngineConfig,
-                 tables: Tables):
-        self._stm  = stm32
-        self._gen  = gen
-        self._scope = scope
-        self._eng   = eng
+    def __init__(self, stm32: STM32Client, esp32: ESP32Client,
+                 eng: EngineConfig, tables: Tables):
+        self._stm    = stm32
+        self._esp    = esp32
+        self._eng    = eng
         self._tables = tables
         self.results: list[TestResult] = []
 
-    def _wait_sync(self, timeout_s: float = 8.0) -> bool:
-        """Aguarda FULL_SYNC no snapshot."""
-        deadline = time.time() + timeout_s
+    def _wait_sync(self) -> bool:
+        deadline = time.time() + SYNC_WAIT_S
         while time.time() < deadline:
-            snap = self._stm.snapshot()
-            if snap and snap.full_sync:
+            s = self._stm.snapshot()
+            if s and s.full_sync:
                 return True
             time.sleep(0.2)
         return False
@@ -595,182 +486,160 @@ class HILRunner:
             print(f"\n{'─'*60}")
             print(f"  RPM={pt.rpm}  {pt.description}")
             print(f"{'─'*60}")
-            r = self._test_point(pt)
+            r = self._run_point(pt)
             self.results.append(r)
             for name, ok, detail in r.checks:
-                sym = "✓" if ok else "✗"
-                print(f"  {sym}  {name}")
+                print(f"  {'✓' if ok else '✗'}  {name}")
                 if detail:
                     print(f"      {detail}")
         return self.results
 
-    def _test_point(self, pt: TestPoint) -> TestResult:
+    def _run_point(self, pt: TestPoint) -> TestResult:
         r = TestResult(rpm_cmd=pt.rpm, description=pt.description)
 
-        # 1. Comandar RPM
-        print(f"  → Comandar RPM={pt.rpm}...")
-        self._gen.set_rpm(pt.rpm)
-
-        # 2. Aguardar steady-state e FULL_SYNC
+        # 1. RPM
+        print(f"  → RPM={pt.rpm}...")
+        self._esp.set_rpm(pt.rpm)
         time.sleep(SETTLE_S)
+
+        # 2. FULL_SYNC
         synced = self._wait_sync()
-        r.add_check("FULL_SYNC", synced,
-                    "" if synced else "Sem sync após 8 s — verificar sinal CKP")
+        r.add("FULL_SYNC", synced,
+              "" if synced else "Sem sync — verificar sinal CKP (GPIO2→PA0)")
         if not synced:
             return r
 
-        # 3. Ler snapshot
+        # 3. Snapshot
         snap = self._stm.snapshot()
-        if not snap:
-            r.add_check("Snapshot lido", False, "Sem resposta da ECU")
+        if snap is None:
+            r.add("Snapshot lido", False, "Sem resposta UART")
             return r
         r.snap = snap
 
-        # 4. Verificações de status
-        r.add_check("Sem sensor fault", not snap.sensor_fault)
-        r.add_check("Sem late events", not snap.late_event,
-                    f"status=0x{snap.status:04X}")
+        r.add("Sem sensor fault", not snap.sensor_fault)
+        r.add("Sem late events",  not snap.late_event,
+              f"status=0x{snap.status:04X}")
 
-        # 5. RPM medido vs comandado
+        # 4. RPM medido
         r.add_range("RPM medido", snap.rpm, pt.rpm, TOL_RPM_PCT,
                     fmt=".0f", pct=True)
 
-        # 6. VE: valor do snapshot vs lookup Python na tabela
-        expected_ve = self._tables.ve_at(snap.rpm, snap.map_bar_x100)
-        r.add_range("VE da tabela",
-                    snap.ve, expected_ve, 3.0,   # ±3 % (arredondamento Q8)
-                    fmt=".0f")
+        # 5. VE snapshot vs tabela Python
+        exp_ve = self._tables.ve_at(snap.rpm, snap.map_bar_x100)
+        r.add_range("VE (snapshot vs tabela)",
+                    snap.ve, exp_ve, TOL_VE_UNITS, fmt=".0f")
 
-        # 7. Avanço de ignição: snapshot vs lookup Python
-        expected_adv = self._tables.advance_at(snap.rpm, snap.map_bar_x100)
-        r.add_range("Advance da tabela",
-                    snap.advance_deg, expected_adv, TOL_ADVANCE_DEG,
-                    fmt=".1f")
+        # 6. Advance snapshot vs tabela Python
+        exp_adv = self._tables.advance_at(snap.rpm, snap.map_bar_x100)
+        r.add_range("Advance (snapshot vs tabela)",
+                    snap.advance_deg, exp_adv, TOL_ADVANCE_DEG, fmt=".1f")
 
-        # 8. PW de injecção: snapshot vs cálculo Python
-        #    expected_pw = req_fuel × VE/100 × clt_corr × iat_corr
-        #    (STFT não modelado — tolerância mais larga)
-        req_us   = self._eng.req_fuel_us
-        clt_corr = self._tables.clt_corr_at(snap.clt_degc)
-        iat_corr = self._tables.iat_corr_at(snap.iat_degc)
-        ve_frac  = snap.ve / 100.0
-        expected_pw_ms = (req_us * ve_frac * clt_corr * iat_corr) / 1000.0
-
-        r.add_range("Injection PW",
-                    snap.inj_pw_ms, expected_pw_ms, TOL_INJ_PW_PCT,
+        # 7. PW injecção: req_fuel × VE × correcções CLT/IAT
+        clt_c = self._tables.clt_corr(snap.clt_degc)
+        iat_c = self._tables.iat_corr(snap.iat_degc)
+        exp_pw_ms = self._eng.req_fuel_us * (snap.ve / 100.0) * clt_c * iat_c / 1000.0
+        r.add_range("Injection PW (snapshot vs cálculo)",
+                    snap.inj_pw_ms, exp_pw_ms, TOL_INJ_PW_PCT,
                     fmt=".3f", pct=True)
 
-        # 9. Scope: timing de ignição (se disponível)
-        if self._scope:
-            print("  → Scope timing analysis...")
-            td = self._scope.run_timing(timeout_s=25.0)
+        # 8. Timing analysis (scope interno do ESP32)
+        print("  → Scope timing analysis...")
+        td = self._esp.run_timing(timeout_s=25.0)
+        r.timing = td
 
-            if td.error:
-                r.add_check("Scope timing", False, td.error)
-            else:
-                r.timing_order   = td.firing_order
-                r.inter_cyl_ms   = sum(td.inter_cyl_ms) / max(len(td.inter_cyl_ms), 1)
+        if td.error:
+            r.add("Scope timing capturado", False, td.error)
+        else:
+            order_ok = (td.firing_order == EXPECTED_FIRING_ORDER)
+            r.add("Firing order",
+                  order_ok,
+                  f"detectada={'→'.join(f'IGN{c}' for c in td.firing_order)}"
+                  f"  esperada={'→'.join(f'IGN{c}' for c in EXPECTED_FIRING_ORDER)}")
 
-                order_ok = (td.firing_order == EXPECTED_ORDER)
-                r.add_check("Firing order",
-                            order_ok,
-                            f"detectada={'→'.join(f'IGN{c}' for c in td.firing_order)}"
-                            f"  esperada={'→'.join(f'IGN{c}' for c in EXPECTED_ORDER)}")
+            exp_ic = 2 * 60_000 / max(snap.rpm, 1) / 4   # ms
+            for i, ic in enumerate(td.inter_cyl_ms):
+                r.add_range(f"Inter-cil [{i+1}]",
+                            ic, exp_ic, TOL_INTER_CYL_MS, fmt=".3f")
 
-                expected_inter = snap.rpm and (2 * 60_000 / snap.rpm / 4)
-                for i, ic in enumerate(td.inter_cyl_ms):
-                    r.add_range(f"Inter-cil [cyl{i+1}]",
-                                ic, expected_inter, TOL_INTER_CYL_MS, fmt=".3f")
+        # 9. PW medidos no hardware (scope LIVE)
+        print("  → Scope LIVE...")
+        live = self._esp.get_live(wait_s=1.5)
+        r.live = live
 
-            # 10. Scope: PW medido no hardware
-            print("  → Scope live data...")
-            live = self._scope.get_live(wait_s=1.5)
-            if 4 in live and not live[4].idle:     # INJ0
-                r.scope_pw_ms = live[4].pw_ms
-                r.add_range("INJ0 PW (scope vs snapshot)",
-                            r.scope_pw_ms, snap.inj_pw_ms, TOL_DWELL_MS,
-                            fmt=".3f")
-            if 0 in live and not live[0].idle:     # IGN0 dwell
-                r.scope_dwell_ms = live[0].pw_ms
-                # Dwell esperado da tabela (vbatt não disponível no snapshot → usar 12000 mV default)
-                expected_dwell = self._tables.dwell_ms_at(12000)
-                r.add_range("IGN0 Dwell (scope vs tabela)",
-                            r.scope_dwell_ms, expected_dwell, TOL_DWELL_MS,
-                            fmt=".3f")
+        if 4 in live and not live[4].idle:   # INJ0
+            r.add_range("INJ0 PW (scope vs snapshot)",
+                        live[4].pw_ms, snap.inj_pw_ms, TOL_HW_PW_MS, fmt=".3f")
+
+        if 0 in live and not live[0].idle:   # IGN0 dwell
+            exp_dwell = self._tables.dwell_ms_at()
+            r.add_range("IGN0 Dwell (scope vs tabela)",
+                        live[0].pw_ms, exp_dwell, TOL_DWELL_MS, fmt=".3f")
 
         return r
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 # Relatório markdown
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 
-def generate_report(results: list[TestResult], eng: EngineConfig,
-                    path: Optional[str] = None) -> str:
+def write_report(results: list[TestResult], eng: EngineConfig, path: str):
     total  = sum(len(r.checks) for r in results)
     passed = sum(sum(1 for _, ok, _ in r.checks if ok) for r in results)
-    failed = total - passed
 
     lines = [
         "# OpenEMS HIL Test Report",
         f"**Data:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"**Resultados:** {passed}/{total} PASS  —  {failed} FAIL",
+        f"**Resultados:** {passed}/{total} PASS — {total-passed} FAIL",
         "",
-        "## Configuração do Motor",
+        "## Motor",
         f"| Parâmetro | Valor |",
         f"|-----------|-------|",
         f"| Cilindrada | {eng.displacement_cc} cc |",
         f"| Injector | {eng.injector_flow_cc_min} cc/min |",
         f"| Stoich AFR | {eng.stoich_afr_x100/100:.2f} :1 |",
-        f"| req_fuel | {eng.req_fuel_us:.0f} µs |",
+        f"| req_fuel | {eng.req_fuel_us} µs |",
         f"| Trigger offset | {eng.trigger_tooth0_engine_deg}° |",
         "",
-        "## Resultados por Ponto de Teste",
+        "## Resultados",
         "",
     ]
 
     for r in results:
         status = "✅ PASS" if r.passed() else "❌ FAIL"
-        lines.append(f"### RPM={r.rpm_cmd} — {r.description}  {status}")
+        lines.append(f"### RPM={r.rpm_cmd}  {r.description}  {status}")
         if r.snap:
             s = r.snap
-            lines += [
+            lines.append(
                 f"**Snapshot:** RPM={s.rpm}  MAP={s.map_bar_x100/100:.2f}bar"
                 f"  VE={s.ve}%  ADV={s.advance_deg}°  PW={s.inj_pw_ms:.3f}ms"
-                f"  CLT={s.clt_degc}°C  IAT={s.iat_degc}°C  "
-                f"status=0x{s.status:04X}",
-                "",
-            ]
-        if r.timing_order:
-            lines.append(f"**Firing order:** "
-                         f"{'→'.join(f'IGN{c}' for c in r.timing_order)}")
-        if r.scope_dwell_ms:
-            lines.append(f"**Dwell (scope):** {r.scope_dwell_ms:.3f} ms")
-        if r.scope_pw_ms:
-            lines.append(f"**INJ PW (scope):** {r.scope_pw_ms:.3f} ms")
-
-        lines.append("")
-        lines.append("| Verificação | Resultado | Detalhe |")
-        lines.append("|------------|-----------|---------|")
+                f"  CLT={s.clt_degc}°C  IAT={s.iat_degc}°C"
+                f"  status=0x{s.status:04X}"
+            )
+        if r.timing and not r.timing.error:
+            lines.append(
+                f"**Firing:** {'→'.join(f'IGN{c}' for c in r.timing.firing_order)}"
+                f"  {'✓' if r.timing.ok else '✗'}"
+            )
+        lines += ["", "| Verificação | Resultado | Detalhe |",
+                  "|------------|-----------|---------|"]
         for name, ok, detail in r.checks:
-            sym = "✓" if ok else "✗ **FALHOU**"
-            lines.append(f"| {name} | {sym} | {detail} |")
+            lines.append(f"| {name} | {'✓' if ok else '✗ **FALHOU**'} | {detail} |")
         lines.append("")
 
-    text = "\n".join(lines)
-    if path:
-        with open(path, "w") as f:
-            f.write(text)
-        print(f"\nRelatório guardado em {path}")
-    return text
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"Relatório → {path}")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Matriz de testes por defeito
+# ══════════════════════════════════════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Matrix de testes
-# ═══════════════════════════════════════════════════════════════════════════════
+@dataclass
+class TestPoint:
+    rpm: int
+    description: str = ""
 
-DEFAULT_TEST_MATRIX = [
-    TestPoint(500,  "cranking — idle baixo"),
+DEFAULT_POINTS = [
+    TestPoint(500,  "cranking / idle baixo"),
     TestPoint(750,  "fast idle"),
     TestPoint(1000, "idle normal"),
     TestPoint(1500, "saída de idle"),
@@ -778,97 +647,71 @@ DEFAULT_TEST_MATRIX = [
     TestPoint(3000, "carga média"),
 ]
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 # main()
-# ═══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    p = argparse.ArgumentParser(description="OpenEMS HIL Test")
-    p.add_argument("--stm32",  required=True,  help="Porta STM32 UART")
-    p.add_argument("--gen",    required=True,
-                   help="Porta ESP32 CKP generator (ou esp32_combined)")
-    p.add_argument("--scope",  default=None,
-                   help="Porta ESP32 scope. Se igual a --gen (ou omitido com "
-                        "esp32_combined), partilha a mesma ligação serial.")
+    p = argparse.ArgumentParser(
+        description="OpenEMS HIL Test — 1× STM32 + 1× ESP32 (combined)")
+    p.add_argument("--stm32",  required=True, help="Porta STM32 (ex: /dev/ttyUSB0)")
+    p.add_argument("--esp32",  required=True, help="Porta ESP32 combined (ex: /dev/ttyUSB1)")
     p.add_argument("--baud",   type=int, default=115200)
     p.add_argument("--rpms",   nargs="+", type=int,
-                   default=[pt.rpm for pt in DEFAULT_TEST_MATRIX],
-                   help="Lista de RPMs a testar")
-    p.add_argument("--report", default=None, help="Ficheiro markdown de saída")
+                   default=[pt.rpm for pt in DEFAULT_POINTS],
+                   help="RPMs a testar (ex: 500 1000 2000)")
+    p.add_argument("--report", default=None, metavar="FILE",
+                   help="Gerar relatório markdown")
     args = p.parse_args()
 
-    print("╔══════════════════════════════════════════╗")
-    print("║   OpenEMS HIL Test                       ║")
-    print("╚══════════════════════════════════════════╝")
+    print("╔══════════════════════════════════════╗")
+    print("║   OpenEMS HIL Test                   ║")
+    print("╚══════════════════════════════════════╝")
 
-    # Detectar modo combinado: scope e gen na mesma porta
-    combined = (args.scope is None or args.scope == args.gen)
-
-    # Ligar dispositivos
-    print(f"\nSTM32  : {args.stm32}")
+    print(f"\nSTM32 : {args.stm32}")
     stm32 = STM32Client(args.stm32, args.baud)
     if not stm32.ping():
-        print("ERRO: STM32 não responde ao handshake 'C'")
+        print("ERRO: STM32 não responde — verificar porta e firmware")
         sys.exit(1)
     print("  ✓ STM32 OK")
 
-    if combined:
-        # Um único ESP32 (esp32_combined.ino) para gen + scope
-        print(f"ESP32  : {args.gen}  (CKP gen + scope combinados)")
-        _shared = serial.Serial(args.gen, args.baud, timeout=3.0)
-        time.sleep(0.3)
-        _shared.reset_input_buffer()
-        gen   = CKPGenClient(args.gen,   args.baud, shared_ser=_shared)
-        scope = ScopeClient (args.gen,   args.baud, shared_ser=_shared)
-        print("  ✓ ESP32 combinado OK")
-    else:
-        print(f"CKP Gen: {args.gen}")
-        gen = CKPGenClient(args.gen, args.baud)
-        print("  ✓ CKP generator OK")
-        print(f"Scope  : {args.scope}")
-        scope = ScopeClient(args.scope, args.baud)
-        print("  ✓ Scope OK")
+    print(f"ESP32 : {args.esp32}  (CKP gen + scope)")
+    esp32 = ESP32Client(args.esp32, args.baud)
+    print("  ✓ ESP32 OK")
 
-    # Ler configuração e tabelas da ECU
-    print("\nA ler configuração da ECU...")
-    eng = stm32.read_engine_config()
+    print("\nA ler config e tabelas da ECU...")
+    eng    = stm32.read_engine_config()
+    tables = stm32.read_tables()
     print(f"  displacement={eng.displacement_cc}cc  "
           f"inj={eng.injector_flow_cc_min}cc/min  "
           f"stoich={eng.stoich_afr_x100/100:.2f}  "
-          f"req_fuel={eng.req_fuel_us:.0f}µs")
+          f"req_fuel={eng.req_fuel_us}µs")
+    print(f"  VE={'OK' if tables.ve_table else 'VAZIA'}  "
+          f"Spark={'OK' if tables.spark_table else 'VAZIA'}  "
+          f"Dwell={'OK' if tables.dwell_ms_x10 else 'VAZIA'}")
 
-    print("A ler tabelas (VE, spark, dwell, correcções)...")
-    tables = stm32.read_tables()
-    print(f"  VE table: {'OK' if tables.ve_table else 'VAZIA (defaults)'}")
-    print(f"  Spark:    {'OK' if tables.spark_table else 'VAZIA'}")
-    print(f"  Dwell:    {'OK' if tables.dwell_ms_x10 else 'VAZIA'}")
+    points = [TestPoint(rpm) for rpm in args.rpms]
+    runner = HILRunner(stm32, esp32, eng, tables)
+    results = runner.run(points)
 
-    # Criar matriz de testes
-    test_pts = [TestPoint(rpm) for rpm in args.rpms]
-
-    # Correr
-    runner = HILRunner(stm32, gen, scope, eng, tables)
-    results = runner.run(test_pts)
-
-    # Resumo
     total  = sum(len(r.checks) for r in results)
     passed = sum(sum(1 for _, ok, _ in r.checks if ok) for r in results)
     failed = total - passed
 
     print(f"\n{'═'*60}")
-    print(f"  RESULTADOS: {passed}/{total} PASS   {failed} FAIL")
+    print(f"  RESULTADOS FINAIS: {passed}/{total} PASS   {failed} FAIL")
     print(f"{'═'*60}")
     for r in results:
-        sym = "✓" if r.passed() else "✗"
-        failed_names = [n for n, ok, _ in r.checks if not ok]
-        detail = f"  FALHOU: {', '.join(failed_names)}" if failed_names else ""
-        print(f"  {sym} RPM={r.rpm_cmd:5d}{detail}")
+        fails = [n for n, ok, _ in r.checks if not ok]
+        sym   = "✓" if r.passed() else "✗"
+        extra = f"  → {', '.join(fails)}" if fails else ""
+        print(f"  {sym}  RPM={r.rpm_cmd:5d}{extra}")
 
-    # Relatório
     if args.report:
-        generate_report(results, eng, args.report)
+        write_report(results, eng, args.report)
 
+    stm32.close()
+    esp32.close()
     sys.exit(0 if failed == 0 else 1)
 
 
