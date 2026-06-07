@@ -17,17 +17,19 @@ inline constexpr uint16_t kMapRefBarX100 = 100u;
 inline constexpr uint16_t kDefaultSoiLeadDeg = 62u;
 inline constexpr uint16_t kIvcAbdcDeg = 50u;
 
-// Ângulo do motor quando o decodificador CKP está em tooth_index 0.
-// ASSUNÇÃO CRÍTICA: 0 mantém o comportamento atual: tooth 0 coincide com TDC do
-// cilindro 0. Se o trigger wheel for montado com offset físico (ex: 84° antes
-// do TDC), TODOS os ângulos de spark/injeção estarão errados.
-// Ao calibrar para motor real:
-//   - Medir o offset entre tooth 0 e TDC do cilindro 0
-//   - Ajustar para: kTriggerTooth0EngineDeg = (720 - offset_deg) % 720
-//   - Ex: offset 84° antes do TDC → kTriggerTooth0EngineDeg = 636
-inline constexpr uint16_t kTriggerTooth0EngineDeg = 0u;
-static_assert(kTriggerTooth0EngineDeg < 720u,
-    "kTriggerTooth0EngineDeg deve estar em [0, 720) graus de virabrequim");
+// Default para g_eng_cfg.trigger_tooth0_engine_deg (usado antes de NVM válida).
+// NOTA: este valor de compilação é apenas o default inicial.
+// O scheduler usa g_eng_cfg.trigger_tooth0_engine_deg em runtime (NVM/UART).
+//
+// Como calibrar:
+//   1. Com dial indicator no cil.0, marcar TDC na polia.
+//   2. Ligar oscilóscopo ao pino CKP (PA0). Identificar o dente 0
+//      (primeiro dente após o gap de 3 períodos).
+//   3. Medir o ângulo entre o dente 0 e a marca de TDC.
+//   4. Calcular: trigger_tooth0_engine_deg = (720 - offset_graus_antes_TDC) % 720
+//      Exemplo: dente 0 está 84° antes do TDC do cil.0 → valor = 636.
+//   5. Escrever via comando UART SET_CONFIG antes do primeiro arranque.
+inline constexpr uint16_t kTriggerTooth0EngineDeg = 0u;  // MEDIR NO MOTOR REAL
 
 inline constexpr uint8_t kFiringOrder[kCylinderCount] = {0u, 2u, 3u, 1u};
 

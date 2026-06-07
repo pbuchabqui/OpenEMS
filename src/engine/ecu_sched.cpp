@@ -129,6 +129,18 @@ static inline void gpio_set_af(volatile uint32_t*, volatile uint32_t*, volatile 
 #define ECU_CYCLE_DEG     720U
 #define STM32_TIM_PSC_10MHZ 24U
 #define STM32_MIN_COMPARE_LEAD_TICKS 20U
+
+// Verificações de consistência do clock em tempo de compilação.
+// Se qualquer uma falhar, a fórmula TIM5_ns → scheduler_ticks está errada.
+// TIM2/TIM8: APB1_timer(250MHz) / (PSC+1) = 250MHz/25 = 10MHz = ECU_SCHED_CLOCK_HZ
+static_assert(STM32_TIM_PSC_10MHZ == 24U,
+    "PSC 10MHz: APB1_timer=250MHz, PSC+1=25, 250/25=10MHz");
+static_assert(ECU_SCHED_CLOCK_HZ == 10000000U,
+    "ECU_SCHED_CLOCK_HZ deve ser 10 000 000 Hz (100 ns/tick)");
+static_assert(ECU_SCHED_NS_PER_TICK == 100U,
+    "ECU_SCHED_NS_PER_TICK deve ser 100 ns @ 10 MHz");
+static_assert(ECU_SCHED_TICKS_PER_US == 10U,
+    "ECU_SCHED_TICKS_PER_US deve ser 10 @ 10 MHz");
 #define TOOTH_NS_TO_SCHED(ns) ((uint32_t)((ns) / ECU_SCHED_NS_PER_TICK))
 
 static AngleEvent_t g_angle_table[ECU_ANGLE_TABLE_SIZE];
@@ -464,7 +476,11 @@ static void angle_to_tooth_event(uint32_t angle_deg, uint8_t *out_tooth, uint8_t
 
 static uint32_t engine_angle_to_trigger_angle(uint32_t engine_angle_deg, uint32_t cycle_deg)
 {
-    const uint32_t trigger_offset = ems::engine::cfg::kTriggerTooth0EngineDeg % cycle_deg;
+    // FIX: usar valor em runtime (NVM/UART) em vez da constante de compilação.
+    // kTriggerTooth0EngineDeg era o default hard-coded (0°); o campo de runtime
+    // g_eng_cfg.trigger_tooth0_engine_deg é o valor calibrável por engine.
+    const uint32_t trigger_offset =
+        static_cast<uint32_t>(ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg) % cycle_deg;
     return (engine_angle_deg + cycle_deg - trigger_offset) % cycle_deg;
 }
 
