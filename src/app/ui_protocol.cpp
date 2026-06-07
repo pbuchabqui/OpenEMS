@@ -13,6 +13,7 @@
 #include "engine/ign_calc.h"
 #include "engine/math_utils.h"
 #include "hal/flash.h"
+#include "engine/engine_config.h"
 
 namespace {
 
@@ -248,7 +249,11 @@ inline bool command_bounds_ok() noexcept {
 }
 
 inline void sync_page_from_table(uint8_t page) noexcept {
-    if (page == 0x01u) {
+    if (page == 0x00u) {
+        // Popula bytes 2-15 do buffer UI a partir de g_eng_cfg.
+        // Byte 0 (ivc_abdc_deg) é gerido separadamente por ecu_sched_set_ivc.
+        ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+    } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
         std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));
@@ -307,6 +312,10 @@ inline void sync_page_from_table(uint8_t page) noexcept {
 inline void sync_table_from_page(uint8_t page) noexcept {
     if (page == 0x00u) {
         ::ecu_sched_set_ivc(g_page0[0]);
+        // Aplica engine config (displacement, injector, AFR, trigger offset, etc.)
+        // engine_config_load valida magic 0x4543 em bytes [14-15] — a escrita via
+        // 'w' deve sempre incluir os 16 bytes completos com magic correcto.
+        ems::engine::cfg::engine_config_load(g_page0, 16u);
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -380,6 +389,15 @@ inline void clear_page_dirty(uint8_t page) noexcept {
 }
 
 inline bool burn_page_to_flash(uint8_t page) noexcept {
+    if (page == 0x00u) {
+        // Serializa g_eng_cfg → g_page0[2-15] e guarda o slot NVM 0 completo.
+        ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+        const bool ok = ems::hal::nvm_save_calibration(0u, g_page0,
+                                            static_cast<uint16_t>(sizeof(g_page0)));
+        if (!ok) { return false; }
+        clear_page_dirty(page);
+        return true;
+    }
     if (page == 0x01u) {
         const bool ok = ems::hal::nvm_save_calibration(1u, g_page1_ve, static_cast<uint16_t>(sizeof(g_page1_ve)));
         if (!ok) { return false; }
@@ -617,6 +635,10 @@ inline void reset_pages() noexcept {
     std::memset(g_page0, 0, sizeof(g_page0));
     g_page0[0] = 50u;  /* ivc_abdc_deg padrão: 50° ABDC */
     ::ecu_sched_set_ivc(g_page0[0]);
+    // Popula campos de engine config com valores actuais (de NVM ou defaults de
+    // compilação). Garante que 'r' page 0 devolve valores coerentes antes de
+    // qualquer 'w'.
+    ems::engine::cfg::engine_config_serialize(g_page0, 16u);
     std::memcpy(g_page1_ve,    ems::engine::ve_table,    sizeof(g_page1_ve));
     std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));
     std::memset(g_page3_rt, 0, sizeof(g_page3_rt));
