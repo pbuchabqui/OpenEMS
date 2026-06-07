@@ -2961,6 +2961,82 @@ static void test_math_xtau_convergence(void) {
     CHECK_TRUE(first_out <= 100000u, "xtau 1ª injeção ≤ 100ms clamp");
 }
 
+static void test_math_production_tables(void) {
+    using namespace ems::engine;
+    section("MATH: get_ve / get_lambda / get_advance com tabelas reais");
+    // Ponto (3000 RPM = rpm_x10=30000, MAP=100 kPa = map_bar_x100=100).
+    // kRpmAxisX10[7]=30000   → idx=6, frac=255
+    // kLoadAxisBarX100[8]=100 → idx=7, frac=255
+    // Frac=255 aplica o caso especial: lerp retorna b exacto.
+    //
+    // ve_table[7][6]=87,[7][7]=88,[8][6]=91,[8][7]=92
+    //   v0=lerp(87,88,255)=88; v1=lerp(91,92,255)=92; v=lerp(88,92,255)=92
+    CHECK_EQ(get_ve(30000u, 100u), 92u,
+             "get_ve(3000RPM,100kPa) = 92 (tabela real, frac=255 ambos eixos)");
+
+    // Prepared == direct para mesmo ponto
+    const Table2dLookup lk = table3d_prepare_lookup(
+        kRpmAxisX10, kLoadAxisBarX100, 30000u, 100u);
+    CHECK_EQ(get_ve_prepared(lk), 92u, "get_ve_prepared == 92");
+
+    // lambda_target_table[7]=all 990; [8][6]=970,[8][7]=930
+    //   v0=lerp(990,990,255)=990; v1=lerp(970,930,255)=930; v=lerp(990,930,255)=930
+    CHECK_EQ(get_lambda_target_x1000(30000u, 100u), 930u,
+             "get_lambda(3000RPM,100kPa) = 930 (tabela real)");
+    CHECK_EQ(get_lambda_target_x1000_prepared(lk), 930u,
+             "get_lambda_prepared == 930");
+
+    // spark_table[7][6]=17,[7][7]=16,[8][6]=15,[8][7]=14
+    //   v0=lerp(17,16,255)=16; v1=lerp(15,14,255)=14; v=lerp(16,14,255)=14
+    CHECK_EQ(get_advance(30000u, 100u), 14,
+             "get_advance(3000RPM,100kPa) = 14\u00b0 (tabela real)");
+    CHECK_EQ(get_advance_prepared(lk), 14,
+             "get_advance_prepared == 14");
+
+    section("MATH: corr_warmup valores exactos");
+    // warmup_corr_axis_x10={-400,-100,0,...}, warmup_corr_x256={420,380,350,...}
+    // Eixo exacto -400 → 420; eixo exacto -100: idx=0,frac=255 → lerp(420,380,255)=380
+    CHECK_EQ(corr_warmup(-400), 420u, "corr_warmup(-40\u00b0C) = 420");
+    CHECK_EQ(corr_warmup(-100), 380u, "corr_warmup(-10\u00b0C) = 380 (eixo[1], frac=255)");
+    // Midpoint entre -400 e -100 (-250): frac=150\u00d7256/300=128
+    // lerp(420,380,128) = 420 + (380-420)\u00d7128/256 = 420-20 = 400
+    CHECK_EQ(corr_warmup(-250), 400u, "corr_warmup(-25\u00b0C) = 400 (interp exacta)");
+
+    section("MATH: dwell_ms_x10_from_vbatt valor exacto");
+    // dwell_vbatt_axis_mv={9000,...,12000,...},dwell_ms_x10={42,...,30,...}
+    // 12000 = axis[3]: idx=2, frac=255 → lerp(35,30,255)=30
+    CHECK_EQ(dwell_ms_x10_from_vbatt(12000u), 30u,
+             "dwell @ 12V = 30 x10 (3.0ms, valor exacto da tabela)");
+    CHECK_EQ(dwell_ms_x10_from_vbatt(9000u),  42u,
+             "dwell @ 9V = 42 x10 (4.2ms, limite inferior)");
+
+    section("MATH: dwell_ms_x10_from_vbatt_rpm correc\u00e7\u00e3o por RPM");
+    // dwell_rpm_axis_rpm={500,1200,4000,7000}, factor_q8={384,288,256,200}
+    // rpm_x10=5000 → RPM=500 = axis[0]: frac=0 (value<=axis[0]) → factor=384
+    // dwell_final = 30 \u00d7 384 / 256 = 45
+    CHECK_EQ(dwell_ms_x10_from_vbatt_rpm(12000u, 5000u), 45u,
+             "dwell @ 12V, 500 RPM = 45 x10 (1.5\u00d7 factor de arranque)");
+    // rpm_x10=70000 → RPM=7000 = axis[3]: frac=255 → factor=200
+    // dwell_final = 30 \u00d7 200 / 256 = 23 (integer: 6000/256=23)
+    CHECK_EQ(dwell_ms_x10_from_vbatt_rpm(12000u, 70000u), 23u,
+             "dwell @ 12V, 7000 RPM = 23 x10 (0.78\u00d7 factor alto RPM)");
+
+    section("MATH: calc_ae_pw_us formula exacta");
+    // Input: tps_now=800, tps_prev=500, dt=10ms, clt=800.
+    // delta_tps_x10 = 300;  tpsdot_x10 = 300/10 = 30
+    // ae_tpsdot_axis_x10={5,20,50,100}: tpsdot=30 entre [1]=20 e [2]=50
+    //   frac = (30-20)\u00d7256/(50-20) = 2560/30 = 85
+    //   base_pw = lerp(800,1500,85) = 800 + 700\u00d785/256 = 800+232 = 1032
+    // ae_clt_corr_axis_x10={-400,-100,0,200,400,700,900,1100}
+    //   clt=800: bucket=5 (700<800<900) → ae_clt_sens[5]=6
+    // ae_pw = 1032 \u00d7 6 / 8 = 6192/8 = 774
+    fuel_reset_adaptives();
+    fuel_ae_set_threshold(10u);
+    fuel_ae_set_taper(4u);
+    CHECK_EQ(calc_ae_pw_us(800u, 500u, 10u, 800), 774,
+             "calc_ae_pw_us(tpsdot=30,clt=800): 1032\u00d76/8=774\u00b5s");
+}
+
 static void test_math_misfire_threshold(void) {
     using namespace ems::engine;
     section("MATH: misfire threshold kMisfireThresholdQ8=287 (=1.12×256)");
@@ -3237,6 +3313,7 @@ int main(void) {
     test_math_stft_gains();
     test_math_inj_scheduler_ticks();
     test_math_xtau_convergence();
+    test_math_production_tables();
     test_math_misfire_threshold();
 
     // ── CKP FASE 2 (snap fields, prime, phase_A, tooth_index) ─────────────
