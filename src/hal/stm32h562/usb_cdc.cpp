@@ -22,15 +22,15 @@ constexpr uint16_t kTxSize = 256u;
 constexpr uint16_t kRxMask = kRxSize - 1u;
 constexpr uint16_t kTxMask = kTxSize - 1u;
 
-static uint8_t  g_rx[kRxSize] = {};
-static uint8_t  g_tx[kTxSize] = {};
-static uint16_t g_rx_head = 0u;
-static uint16_t g_rx_tail = 0u;
-static uint16_t g_tx_head = 0u;
-static uint16_t g_tx_tail = 0u;
+static uint8_t           g_rx[kRxSize] = {};
+static uint8_t           g_tx[kTxSize] = {};
+static volatile uint16_t g_rx_head = 0u;
+static volatile uint16_t g_rx_tail = 0u;
+static volatile uint16_t g_tx_head = 0u;
+static volatile uint16_t g_tx_tail = 0u;
 
-static bool g_dtr = false;
-static bool g_rts = false;
+static volatile bool g_dtr = false;
+static volatile bool g_rts = false;
 
 inline bool rx_push(uint8_t b) noexcept {
     const uint16_t next = static_cast<uint16_t>((g_rx_head + 1u) & kRxMask);
@@ -90,48 +90,47 @@ constexpr uint32_t kPBA_EP1TX    = 0x0C0u;
 constexpr uint32_t kPBA_EP2RX    = 0x100u;
 constexpr uint32_t kPBA_EP3TX    = 0x140u;
 
-// COUNT_RX field for allocating 64-byte buffer:
-//   BLSIZe=1 (bit15), NUM_BLOCK=1 (bits 14:10) → 2 × 32-byte blocks = 64 B
-constexpr uint16_t kCOUNT_RX_64  = static_cast<uint16_t>((1u << 15) | (1u << 10));
-// COUNT_RX for 8-byte buffer:
-//   BLSIZe=0 (bit15), NUM_BLOCK=3 (bits 14:10) → 4 × 2-byte blocks = 8 B
-// Actually: BLSIZe=0 → 2-byte blocks; NUM_BLOCK[4:0] → (NUM_BLOCK+1) blocks
-// For 8 bytes: need 4 blocks → NUM_BLOCK=3 → (3u << 10)
-// But EP3 is Interrupt IN only — no RX buffer needed, use 0 allocation.
-// We still write a placeholder to keep BDTable aligned.
-constexpr uint16_t kCOUNT_RX_8   = static_cast<uint16_t>((0u << 15) | (3u << 10));
+// COUNT_RX configuration for the BDTable RXBD lower 16 bits (BLSIZe + NUM_BLOCK fields).
+// STM32H562 DRD FS: PMA is 2KB; BLSIZe=1 (32-byte blocks), NUM_BLOCK=1 → 2×32=64 B
+// Confirmed format from USB_PMA_RXBD_COUNTMSK in stm32h562xx.h
+constexpr uint16_t kCOUNT_RX_64 = static_cast<uint16_t>((1u << 15) | (1u << 10));
+// EP3 TX-only — no RX buffer allocated.
+constexpr uint16_t kCOUNT_RX_8  = 0u;
 
-// ── PMA half-word accessor ────────────────────────────────────────────────────
-static inline volatile uint16_t& pba_hw(uint32_t byte_offset) noexcept {
-    return *reinterpret_cast<volatile uint16_t*>(USB_PBA_BASE + byte_offset);
+// ── PMA 32-bit accessor ────────────────────────────────────────────────────────
+// STM32H562 DRD FS PMA is 32-bit access only (LL comment: "PMA access 32bit only").
+// All BDTable and data buffer operations use uint32_t reads/writes.
+static inline volatile uint32_t& pba_w32(uint32_t byte_offset) noexcept {
+    return *reinterpret_cast<volatile uint32_t*>(USB_PBA_BASE + byte_offset);
 }
 
-// BDTable entry accessors (each entry = 4 × uint16 = 8 bytes)
-// Entry layout: [ADDR_TX][COUNT_TX][ADDR_RX][COUNT_RX]  (each 16-bit, 32-bit aligned slots)
-// In STM32H5 PBA the 16-bit values live at actual byte addresses (no 32-bit stride).
+// ── BDTable entry accessors ────────────────────────────────────────────────────────
+// STM32H562 BDTable layout per endpoint (8 bytes = two 32-bit words):
+//   TXBD (offset 0): bits[31:16]=ADDR_TX, bits[15:0]=COUNT_TX
+//   RXBD (offset 4): bits[31:16]=ADDR_RX, bits[15:0]=COUNT_RX/BLSIZe/NUM_BLOCK
+// Confirmed from USB_PMA_TXBD_ADDMSK/COUNTMSK in stm32h562xx.h
 static inline void bdtable_set(uint32_t ep, uint16_t addr_tx, uint16_t cnt_tx,
                                 uint16_t addr_rx, uint16_t cnt_rx) noexcept {
-    const uint32_t base = kPBA_BDTable + ep * 8u;
-    pba_hw(base + 0u) = addr_tx;
-    pba_hw(base + 2u) = cnt_tx;
-    pba_hw(base + 4u) = addr_rx;
-    pba_hw(base + 6u) = cnt_rx;
+    pba_w32(ep * 8u + 0u) = (static_cast<uint32_t>(addr_tx) << 16) | cnt_tx;  // TXBD
+    pba_w32(ep * 8u + 4u) = (static_cast<uint32_t>(addr_rx) << 16) | cnt_rx;  // RXBD
 }
 
 static inline uint16_t bdtable_count_tx(uint32_t ep) noexcept {
-    return pba_hw(kPBA_BDTable + ep * 8u + 2u);
+    return static_cast<uint16_t>(pba_w32(ep * 8u) & 0xFFFFu);  // lower 16 bits of TXBD
 }
 
 static inline void bdtable_set_count_tx(uint32_t ep, uint16_t cnt) noexcept {
-    pba_hw(kPBA_BDTable + ep * 8u + 2u) = cnt;
+    volatile uint32_t& txbd = pba_w32(ep * 8u);
+    txbd = (txbd & 0xFFFF0000u) | cnt;
 }
 
 static inline uint16_t bdtable_count_rx(uint32_t ep) noexcept {
-    return pba_hw(kPBA_BDTable + ep * 8u + 6u) & 0x3FFu;  // lower 10 bits = received count
+    return static_cast<uint16_t>(pba_w32(ep * 8u + 4u) & 0x3FFu);  // COUNT field bits[9:0]
 }
 
 static inline void bdtable_set_count_rx_cfg(uint32_t ep, uint16_t cfg) noexcept {
-    pba_hw(kPBA_BDTable + ep * 8u + 6u) = cfg;
+    volatile uint32_t& rxbd = pba_w32(ep * 8u + 4u);
+    rxbd = (rxbd & 0xFFFF0000u) | cfg;
 }
 
 // ── CHEPxR safe write helpers ─────────────────────────────────────────────────
@@ -228,9 +227,18 @@ static void ep_clear_ctr_rx(uint32_t ep) noexcept {
 }
 
 // ── USB state machine ─────────────────────────────────────────────────────────
-static uint8_t  g_usb_addr_pending = 0u;   // address to apply after status stage
-static bool     g_configured       = false;
-static bool     g_ep1_tx_busy      = false; // true while PMA EP1 TX buffer is in flight
+static uint8_t           g_usb_addr_pending = 0u;
+static volatile bool     g_configured       = false;
+static volatile bool     g_ep1_tx_busy      = false;
+
+// EP0 multi-packet TX state
+static const uint8_t* g_ep0_tx_ptr = nullptr;
+static uint16_t       g_ep0_tx_rem = 0u;
+static bool           g_ep0_tx_zlp = false;
+
+// Stable buffer for EP0 string descriptor responses (not stack-local — ep0_tx_continue()
+// may fire from ISR after handle_setup() has returned, so the pointer must stay valid).
+static uint8_t g_ep0_str_buf[64u] = {};
 
 // CDC line coding (baud/format/parity/bits) — stored but not applied to HW
 static uint8_t  g_line_coding[7] = {
@@ -244,7 +252,7 @@ static uint8_t  g_line_coding[7] = {
 static const uint8_t kDeviceDesc[18] = {
     18u,           // bLength
     0x01u,         // bDescriptorType = Device
-    0x10u, 0x01u,  // bcdUSB = 1.10
+    0x00u, 0x02u,  // bcdUSB = 2.00
     0x02u,         // bDeviceClass = CDC
     0x00u,         // bDeviceSubClass
     0x00u,         // bDeviceProtocol
@@ -313,28 +321,50 @@ static uint16_t build_str_desc(const char* ascii, uint8_t* buf, uint16_t buflen)
 
 // ── PMA copy helpers ──────────────────────────────────────────────────────────
 
-// Copy from RAM to PBA (for TX)
+// Copy from RAM to PBA (for TX) — 32-bit access only (H562 PMA requirement)
 static void pba_write(uint32_t pba_offset, const uint8_t* src, uint16_t len) noexcept {
-    for (uint16_t i = 0u; i < len; ++i) {
-        pba_hw(pba_offset + i) = src[i];
+    const uint16_t nwords = static_cast<uint16_t>((len + 3u) / 4u);
+    for (uint16_t i = 0u; i < nwords; ++i) {
+        const uint16_t base = static_cast<uint16_t>(i * 4u);
+        uint32_t val = 0u;
+        for (uint8_t b = 0u; b < 4u; ++b) {
+            if (static_cast<uint16_t>(base + b) < len) {
+                val |= static_cast<uint32_t>(src[base + b]) << (8u * b);
+            }
+        }
+        pba_w32(pba_offset + i * 4u) = val;
     }
 }
 
-// Copy from PBA to RAM (for RX)
+// Copy from PBA to RAM (for RX) — 32-bit access only
 static void pba_read(uint32_t pba_offset, uint8_t* dst, uint16_t len) noexcept {
-    for (uint16_t i = 0u; i < len; ++i) {
-        dst[i] = static_cast<uint8_t>(pba_hw(pba_offset + i));
+    const uint16_t nwords = static_cast<uint16_t>((len + 3u) / 4u);
+    for (uint16_t i = 0u; i < nwords; ++i) {
+        const uint32_t val = pba_w32(pba_offset + i * 4u);
+        const uint16_t base = static_cast<uint16_t>(i * 4u);
+        for (uint8_t b = 0u; b < 4u; ++b) {
+            if (static_cast<uint16_t>(base + b) < len) {
+                dst[base + b] = static_cast<uint8_t>(val >> (8u * b));
+            }
+        }
     }
 }
 
 // ── EP1 TX drain: load next chunk from g_tx FIFO into PMA and arm EP1 ─────────
 static void ep1_tx_kick() noexcept {
-    if (g_ep1_tx_busy) {
+    // Atomically claim g_ep1_tx_busy before loading data.
+    // CPSID/CPSIE prevent a race between main-loop callers and the USB ISR;
+    // they are effectively no-ops when already executing inside the ISR.
+    __asm__ volatile("cpsid i" ::: "memory");
+    const bool busy_or_empty = g_ep1_tx_busy || (g_tx_head == g_tx_tail);
+    if (!busy_or_empty) {
+        g_ep1_tx_busy = true;
+    }
+    __asm__ volatile("cpsie i" ::: "memory");
+    if (busy_or_empty) {
         return;
     }
-    if (g_tx_head == g_tx_tail) {
-        return;  // nothing to send
-    }
+
     // Load up to 64 bytes into EP1 TX PMA buffer
     uint8_t  buf[64u];
     uint16_t n = 0u;
@@ -344,7 +374,6 @@ static void ep1_tx_kick() noexcept {
     }
     pba_write(kPBA_EP1TX, buf, n);
     bdtable_set_count_tx(1u, n);
-    g_ep1_tx_busy = true;
     ep_set_stat_tx(1u, 3u);  // VALID
 }
 
@@ -352,16 +381,40 @@ static void ep1_tx_kick() noexcept {
 
 // Send a ZLP IN (zero-length packet) on EP0 — status stage for OUT control transfers
 static void ep0_send_zlp() noexcept {
+    g_ep0_tx_ptr = nullptr;
+    g_ep0_tx_rem = 0u;
+    g_ep0_tx_zlp = false;
     bdtable_set_count_tx(0u, 0u);
     ep_set_stat_tx(0u, 3u);  // VALID
 }
 
-// Queue data in EP0 TX buffer (up to 64 bytes at a time)
-static void ep0_send(const uint8_t* data, uint16_t len) noexcept {
-    const uint16_t chunk = (len > 64u) ? 64u : len;
-    pba_write(kPBA_EP0TX, data, chunk);
+// Send next chunk of a pending EP0 IN transfer (called from ep0_send and EP0 IN CTR).
+static void ep0_tx_continue() noexcept {
+    if (g_ep0_tx_rem == 0u) {
+        if (g_ep0_tx_zlp) {
+            // Transfer length was an exact multiple of 64 — send terminating ZLP
+            g_ep0_tx_zlp = false;
+            bdtable_set_count_tx(0u, 0u);
+            ep_set_stat_tx(0u, 3u);
+        }
+        return;
+    }
+    const uint16_t chunk = (g_ep0_tx_rem > 64u) ? 64u : g_ep0_tx_rem;
+    pba_write(kPBA_EP0TX, g_ep0_tx_ptr, chunk);
     bdtable_set_count_tx(0u, chunk);
+    g_ep0_tx_ptr += chunk;
+    g_ep0_tx_rem  = static_cast<uint16_t>(g_ep0_tx_rem - chunk);
     ep_set_stat_tx(0u, 3u);  // VALID
+}
+
+// Begin a multi-packet (or single-packet) EP0 IN data transfer.
+static void ep0_send(const uint8_t* data, uint16_t len) noexcept {
+    g_ep0_tx_ptr = data;
+    g_ep0_tx_rem = len;
+    // A ZLP is needed only when len is a non-zero exact multiple of max packet (64)
+    // to signal end-of-transfer to the host.
+    g_ep0_tx_zlp = (len > 0u && (len % 64u) == 0u);
+    ep0_tx_continue();
 }
 
 // SETUP packet: 8 bytes
@@ -374,6 +427,11 @@ struct SetupPacket {
 };
 
 static void handle_setup(const SetupPacket& s) noexcept {
+    // Abort any in-progress multi-packet EP0 TX: a new SETUP supersedes whatever was in flight.
+    g_ep0_tx_ptr = nullptr;
+    g_ep0_tx_rem = 0u;
+    g_ep0_tx_zlp = false;
+
     const uint8_t req_type_type = (s.bmRequestType >> 5u) & 0x03u;  // 0=Standard, 1=Class
     const uint8_t req_type_dir  = (s.bmRequestType >> 7u) & 0x01u;  // 0=Host→Dev, 1=Dev→Host
     (void)req_type_dir;
@@ -409,23 +467,24 @@ static void handle_setup(const SetupPacket& s) noexcept {
                         break;
                     }
                     case 0x03u: {
-                        // String descriptor
-                        uint8_t  sbuf[64u];
+                        // String descriptor — build into g_ep0_str_buf (static, not stack)
+                        // so ep0_tx_continue() can safely dereference g_ep0_tx_ptr from ISR.
                         uint16_t slen = 0u;
                         if (desc_index == 0u) {
                             slen = sizeof(kStrDesc0);
-                            memcpy(sbuf, kStrDesc0, slen);
+                            memcpy(g_ep0_str_buf, kStrDesc0, slen);
                         } else if (desc_index == 1u) {
-                            slen = build_str_desc("STMicroelectronics", sbuf, sizeof(sbuf));
+                            slen = build_str_desc("STMicroelectronics", g_ep0_str_buf,
+                                                  sizeof(g_ep0_str_buf));
                         } else if (desc_index == 2u) {
-                            slen = build_str_desc("OpenEMS VCP", sbuf, sizeof(sbuf));
+                            slen = build_str_desc("OpenEMS VCP", g_ep0_str_buf,
+                                                  sizeof(g_ep0_str_buf));
                         }
                         if (slen > 0u) {
                             const uint16_t len = (s.wLength < slen) ? s.wLength : slen;
-                            ep0_send(sbuf, len);
+                            ep0_send(g_ep0_str_buf, len);
                         } else {
-                            // Stall for unknown string
-                            ep_set_stat_tx(0u, 1u);  // STALL
+                            ep_set_stat_tx(0u, 1u);  // STALL for unknown string index
                         }
                         break;
                     }
@@ -439,6 +498,17 @@ static void handle_setup(const SetupPacket& s) noexcept {
                 // SET_CONFIGURATION
                 if ((s.wValue & 0xFFu) == 1u) {
                     g_configured = true;
+                    // USB spec: reset data toggles to DATA0 on all non-control endpoints.
+                    // DTOG bits are toggle-on-write: write 1 to flip; write 0 to leave.
+                    for (uint32_t ep = 1u; ep <= 3u; ++ep) {
+                        volatile uint32_t& r = ep_reg(ep);
+                        const uint32_t cur = r;
+                        uint32_t v = cur & (0xFu | USB_EP_TYPE_MASK | (1u << 8u));
+                        v |= USB_EP_CTR_TX | USB_EP_CTR_RX;
+                        if (cur & USB_EP_DTOG_TX) { v |= USB_EP_DTOG_TX; }  // toggle → DATA0
+                        if (cur & USB_EP_DTOG_RX) { v |= USB_EP_DTOG_RX; }  // toggle → DATA0
+                        r = v;
+                    }
                     // Arm EP1 IN (TX) with NAK until data is queued
                     ep_write(1u, USB_EP_TYPE_BULK, 1u, 2u, 0u);  // STAT_TX=NAK, STAT_RX=DISABLED
                     // Arm EP2 OUT (RX) VALID
@@ -458,7 +528,10 @@ static void handle_setup(const SetupPacket& s) noexcept {
         switch (s.bRequest) {
             case 0x20u: {
                 // SET_LINE_CODING — host sends 7-byte line coding data
-                // We accept but ignore. Arm EP0 RX to receive the data.
+                if (s.wLength != 7u) {
+                    ep_set_stat_tx(0u, 1u);  // STALL: CDC spec requires exactly 7 bytes
+                    break;
+                }
                 ep_set_stat_rx(0u, 3u);  // VALID — accept the data stage
                 break;
             }
@@ -489,10 +562,11 @@ static void usb_hw_reset() noexcept {
     g_usb_addr_pending = 0u;
     g_configured       = false;
     g_ep1_tx_busy      = false;
+    g_ep0_tx_ptr       = nullptr;
+    g_ep0_tx_rem       = 0u;
+    g_ep0_tx_zlp       = false;
 
-    // Set BTABLE to 0 (BDTable at start of PBA)
-    USB_BTABLE = 0u;
-
+    // BDTable is at PMA offset 0 (fixed on H562 DRD FS — BTABLE register is RESERVED).
     // Initialise BDTable entries
     bdtable_set(0u,
                 static_cast<uint16_t>(kPBA_EP0TX),
@@ -574,8 +648,13 @@ static void handle_ctr() noexcept {
                 g_usb_addr_pending = 0u;
             }
 
-            // Re-arm EP0 RX for next setup/out
-            ep_set_stat_rx(0u, 3u);
+            if (g_ep0_tx_rem > 0u || g_ep0_tx_zlp) {
+                // More data to send — continue multi-packet transfer
+                ep0_tx_continue();
+            } else {
+                // Transfer complete — re-arm EP0 RX for STATUS stage / next SETUP
+                ep_set_stat_rx(0u, 3u);
+            }
         }
     } else if (ep == 1u) {
         // EP1 IN: TX complete
@@ -650,38 +729,52 @@ void usb_cdc_init() noexcept {
     g_configured       = false;
     g_ep1_tx_busy      = false;
 
-    // 1. Enable GPIOA clock (for PA11/PA12)
+    // 1. Enable VDDUSB 3.3V supply — required BEFORE USB peripheral init.
+    // Without this the USB PHY has no power and enumeration never starts.
+    // Confirmed from WeActStudio example: HAL_PWREx_EnableVddUSB() → SET_BIT(PWR->USBSCR, USB33SV)
+    PWR_USBSCR |= PWR_USBSCR_USB33SV;
+    // Wait for VDDUSB ready (PWR_VMSR.USB33RDY)
+    for (volatile uint32_t i = 0u; (PWR_VMSR & PWR_VMSR_USB33RDY) == 0u && i < 100000u; ++i) {}
+
+    // 2. Enable GPIOA clock (for PA11/PA12)
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN;
 
-    // 2. Configure PA11 (DM) and PA12 (DP) as AF10, very-high speed
+    // 3. Configure PA11 (DM) and PA12 (DP) as AF10, very-high speed
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 11u, GPIO_AF10);
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 12u, GPIO_AF10);
 
-    // 3. Enable USB clock on APB2
+    // 4. Select HSI48 as USB kernel clock (RCC_CCIPR4 USBSEL=00) and enable APB2 clock
+    RCC_CCIPR4 = (RCC_CCIPR4 & ~RCC_CCIPR4_USBSEL_MSK);  // 00b = HSI48
     RCC_APB2ENR |= RCC_APB2ENR_USBEN;
 
-    // 4. Power up USB transceiver: clear PDWN
+    // 5. Power up USB transceiver: clear PDWN
     USB_CNTR = USB_CNTR_PDWN | USB_CNTR_USBRST;  // start with reset asserted
-    // Small delay: ~1 µs startup time for analog block.
-    // Without a timer here, execute a short spin (~1000 NOPs at 250 MHz >> 1 µs)
-    for (volatile uint32_t i = 0u; i < 1000u; ++i) {
-        __asm__ volatile ("nop");
+    // RM0481 §52.4.1: minimum 1 µs analog startup after clearing PDWN.
+    // DSB ensures the write completes before the spin loop. 5000 NOPs @ 250 MHz ≈ 20 µs.
+    __asm__ volatile("dsb" ::: "memory");
+    for (volatile uint32_t i = 0u; i < 5000u; ++i) {
+        __asm__ volatile("nop");
     }
     USB_CNTR = USB_CNTR_USBRST;  // clear PDWN, keep USBRST
 
-    // 5. Clear USB reset
+    // 6. Clear USB reset
     USB_CNTR = 0u;
 
-    // 6. Clear any stale interrupt flags
+    // 7. Clear any stale interrupt flags
     USB_ISTR = 0u;
 
-    // 7. Set BTABLE = 0, configure initial endpoint and BDTable
+    // 8. Configure BDTable (at fixed PMA offset 0) and initialise endpoints
     usb_hw_reset();
 
-    // 8. Enable interrupts: Reset, CTR, Suspend, Wakeup
+    // 9. Enable interrupts: Reset, CTR, Suspend, Wakeup
     USB_CNTR = USB_CNTR_RESETM | USB_CNTR_CTRM | USB_CNTR_SUSPM | USB_CNTR_WKUPM;
 
-    // 9. Configure NVIC
+    // 10. Enable internal D+ pull-up BEFORE NVIC enable: DPPU asserts D+ to signal
+    // USB FS presence to the host. Setting it before NVIC enable guarantees the
+    // peripheral is fully initialised before the first RESET IRQ can fire.
+    USB_BCDR |= (1u << 15u);
+
+    // 11. Configure NVIC
     nvic_set_priority(IRQ_USB, 2u);
     nvic_enable_irq(IRQ_USB);
 #else

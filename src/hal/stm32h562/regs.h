@@ -50,6 +50,22 @@
 // APB1 — IWDG
 #define IWDG_BASE    0x40003000UL
 
+// PWR (AHB3, offset 0x800 from AHB3PERIPH_BASE_NS=0x44020000)
+// Confirmed addresses from stm32h562xx.h PWR_TypeDef struct
+#define PWR_BASE     0x44020800UL
+#define PWR_VOSCR    STM32_REG32(PWR_BASE + 0x10UL)  // Voltage Scaling Control Register
+#define PWR_VOSSR    STM32_REG32(PWR_BASE + 0x14UL)  // Voltage Scaling Status Register
+#define PWR_USBSCR   STM32_REG32(PWR_BASE + 0x38UL)  // USB Supply Control Register
+#define PWR_VMSR     STM32_REG32(PWR_BASE + 0x3CUL)  // Voltage Monitoring Status Register
+// PWR_VOSCR VOS[5:4] bits: 11b=VOS0 (up to 250 MHz), reset=VOS3 (00b, up to ~100 MHz only)
+#define PWR_VOSCR_VOS_MSK    (3u << 4u)
+#define PWR_VOSCR_VOS0       (3u << 4u)  // 11b: Scale 0, max HCLK 250 MHz
+#define PWR_VOSSR_VOSRDY     (1u << 3u)  // Voltage scaling ready flag
+// PWR_USBSCR bits (confirmed from stm32h562xx.h)
+#define PWR_USBSCR_USB33DEN  (1u << 24u)  // VDDUSB voltage detector enable
+#define PWR_USBSCR_USB33SV   (1u << 25u)  // VDDUSB 3.3V supply enable (required for USB PHY)
+#define PWR_VMSR_USB33RDY    (1u << 24u)  // VDDUSB 3.3V ready flag
+
 // RCC
 #define RCC_BASE     0x44020C00UL
 
@@ -92,8 +108,9 @@
 #define RCC_APB1LENR_TIM5EN   (1u << 3)
 #define RCC_APB1LENR_TIM6EN   (1u << 4)
 #define RCC_APB1LENR_FDCAN1EN (1u << 9)
-#define RCC_APB1LENR_USART2EN (1u << 17)
 #define RCC_APB1LENR_IWDGEN   (1u << 12)
+#define RCC_APB1LENR_USART2EN (1u << 17)
+#define RCC_APB1LENR_CRSEN    (1u << 24u)  // CRS clock enable (APB1, bit 24)
 #define RCC_APB2ENR_TIM1EN    (1u << 11)
 #define RCC_APB2ENR_TIM8EN    (1u << 13)
 #define RCC_APB2ENR_USART1EN  (1u << 14)
@@ -721,7 +738,9 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 // Base: APB2 @ 0x40016000
 // Packet Buffer Area: 0x40016C00 (2 KB)
 #define USB_BASE     0x40016000UL
-#define USB_PBA_BASE 0x40016C00UL
+// PMA base: USB_DRD_PMAADDR_NS = APB2PERIPH_BASE_NS + 0x6400 = 0x40016400
+// Confirmed from stm32h562xx.h (was incorrectly 0x40016C00)
+#define USB_PBA_BASE 0x40016400UL
 
 // Channel/Endpoint registers (USB_CHEPxR) — one per endpoint
 #define USB_CHEP0R  STM32_REG32(USB_BASE + 0x00UL)
@@ -798,8 +817,38 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 // RCC USB clock enable (APB2, bit 24)
 #define RCC_APB2ENR_USBEN        (1u << 24)
 
+// HSI48 — 48 MHz RC oscillator (clock source for USB DRD FS)
+// Confirmed: RCC_CR bits 12/13 from stm32h562xx.h
+#define RCC_CR_HSI48ON   (1u << 12)
+#define RCC_CR_HSI48RDY  (1u << 13)
+
+// RCC_CCIPR4: peripheral kernel clock source selectors
+// Offset 0xE4 confirmed from stm32h562xx.h struct comment "Address offset: 0xE4"
+#define RCC_CCIPR4            STM32_REG32(RCC_BASE + 0x0E4UL)
+// USBSEL[1:0] at bits [5:4] (mask=0x30): 00=HSI48, 01=PLL1Q, 10=PLL3Q, 11=HSE
+// Confirmed: RCC_CCIPR4_USBSEL_Pos=4, RCC_CCIPR4_USBSEL_Msk=0x30 from stm32h562xx.h
+#define RCC_CCIPR4_USBSEL_MSK (3u << 4u)
+// HSI48 selection = 0b00 (clear both bits)
+
 // GPIO AF10 for USB DP/DM (PA11/PA12)
 #define GPIO_AF10  10u
 
 // NVIC IRQ for USB DRD FS
-#define IRQ_USB  73u
+// USB_DRD_FS_IRQn = 74 confirmed from stm32h562xx.h (was incorrectly 73)
+#define IRQ_USB  74u
+
+// ─── CRS (Clock Recovery System) ─────────────────────────────────────────────
+// CRS_BASE_NS = APB1PERIPH_BASE_NS + 0x6000 = 0x40006000
+#define CRS_BASE    0x40006000UL
+#define CRS_CR      STM32_REG32(CRS_BASE + 0x00UL)
+#define CRS_CFGR    STM32_REG32(CRS_BASE + 0x04UL)
+#define CRS_ISR     STM32_REG32(CRS_BASE + 0x08UL)
+#define CRS_ICR     STM32_REG32(CRS_BASE + 0x0CUL)
+// CRS_CR bits
+#define CRS_CR_CEN          (1u << 5u)   // Frequency error counter enable
+#define CRS_CR_AUTOTRIMEN   (1u << 6u)   // Automatic HSI48 trimming enable
+// CRS_CFGR fields (from stm32h562xx.h)
+// RELOAD[15:0]: 47999 = 48MHz/1kHz(USB SOF) - 1
+// FELIM[23:16]: 34 (frequency error limit, from WeAct example)
+// SYNCSRC[29:28]: 01b = USB SOF
+#define CRS_CFGR_SYNCSRC_USB  (1u << 28u)

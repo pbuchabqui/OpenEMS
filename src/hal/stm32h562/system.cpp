@@ -67,9 +67,23 @@ void iwdg_kick(void) noexcept {
 }
 
 void system_stm32_init(void) noexcept {
+    // ── 0. VOS0: obrigatório ANTES de subir para 250 MHz ─────────────────
+    // Reset default é VOS3 (máx ~100 MHz). VOS0 (11b) permite até 250 MHz.
+    // Confirmado: WeAct SystemClock_Config chama VOS0 antes de qualquer PLL.
+    PWR_VOSCR = (PWR_VOSCR & ~PWR_VOSCR_VOS_MSK) | PWR_VOSCR_VOS0;
+    for (uint32_t n = 100000u; (PWR_VOSSR & PWR_VOSSR_VOSRDY) == 0u; --n) {
+        if (n == 0u) { clock_fault_reset(); }
+    }
+
     // ── 1. Habilitar HSE e aguardar estabilização ─────────────────────────
     RCC_CR |= RCC_CR_HSEON;
     for (uint32_t n = 500000u; (RCC_CR & RCC_CR_HSERDY) == 0u; --n) {
+        if (n == 0u) { clock_fault_reset(); }
+    }
+
+    // ── 1a. Habilitar HSI48 para USB DRD FS (48 MHz) ─────────────────────
+    RCC_CR |= RCC_CR_HSI48ON;
+    for (uint32_t n = 100000u; (RCC_CR & RCC_CR_HSI48RDY) == 0u; --n) {
         if (n == 0u) { clock_fault_reset(); }
     }
 
@@ -84,17 +98,27 @@ void system_stm32_init(void) noexcept {
         if (n == 0u) { clock_fault_reset(); }
     }
 
-    // ── 3. Configurar PLL1: HSE=8 MHz / M=1 × N=125 / P=4 = 250 MHz ────
-    // PLL1CFGR: PLLSRC=HSE (01b), DIVM1=1 (M-1 = 0)
-    RCC_PLL1CFGR = (1u << 0)   // PLLSRC = HSE (bits [1:0] = 01)
-                 | (0u << 8);  // DIVM1 = 1 (valor M-1 = 0, bits [13:8])
-    // PLL1DIVR: N=125 (DIVN1 = N-1 = 124), P=4 (DIVP1 = P/2-1 = 1)
-    // Bits [8:0]  = DIVN1 (N-1) = 124 = 0x7C
-    // Bits [14:9] = DIVP1 (P/2-1) = 1
-    // Bits [22:16]= DIVQ1 — não usado, manter 0
-    // Bits [30:24]= DIVR1 — não usado, manter 0
-    RCC_PLL1DIVR = (124u << 0)   // DIVN1 = 124 → N = 125
-                 | (1u << 9);    // DIVP1 = 1   → P = 4
+    // ── 3. Configurar PLL1: HSE=8 MHz / M=2 × N=125 / P=2 = 250 MHz ────
+    // Configuração confirmada por WeAct SystemClock_Config (PLLM=2, PLLN=125, PLLP=2)
+    //   VCO input  = 8 MHz / 2 = 4 MHz  (PLL1RGE=10b, range 4-8 MHz)
+    //   VCO output = 4 MHz × 125 = 500 MHz (wide range, max 960 MHz ✓)
+    //   SYSCLK     = 500 MHz / 2 = 250 MHz
+    // PLL1CFGR:
+    //   [1:0]  PLL1SRC=01b (HSE)
+    //   [3:2]  PLL1RGE=10b (4-8 MHz VCI input range)
+    //   [5]    PLL1VCOSEL=0 (wide VCO range 192-960 MHz)
+    //   [13:8] PLL1M=2
+    //   [16]   PLL1PEN=1 (enable P output for SYSCLK)
+    RCC_PLL1CFGR = (1u << 0)    // PLL1SRC = HSE
+                 | (2u << 2)    // PLL1RGE = 10b (4-8 MHz input)
+                 | (0u << 5)    // PLL1VCOSEL = 0 (wide, 192-960 MHz)
+                 | (2u << 8)    // PLL1M = 2
+                 | (1u << 16);  // PLL1PEN = 1
+    // PLL1DIVR:
+    //   [8:0]  PLL1N=124 → effective N=125 (VCO=500 MHz)
+    //   [15:9] PLL1P=0   → effective P=2×(0+1)=2 (SYSCLK=250 MHz)
+    RCC_PLL1DIVR = (124u << 0)   // N = 125
+                 | (0u << 9);    // P = 2
 
     // ── 4. Ligar PLL1 e aguardar lock ────────────────────────────────────
     RCC_CR |= RCC_CR_PLL1ON;
@@ -103,11 +127,10 @@ void system_stm32_init(void) noexcept {
     }
 
     // ── 5. Configurar prescalers APB (manter AHB = SYSCLK) ───────────────
-    // CFGR1: AHB prescaler = 1 (HPRE=0), APB1=/2 (PPRE1=100b), APB2=/2 (PPRE2=100b)
-    // Para simplificar timers: usar APB1=APB2=HCLK/2 → timer clock = 2×APB = HCLK
-    RCC_CFGR1 = (0u << 4)    // HPRE = 0  → HCLK = SYSCLK
-              | (4u << 8)    // PPRE1 = 4 → APB1 = HCLK/2 = 125 MHz
-              | (4u << 11);  // PPRE2 = 4 → APB2 = HCLK/2 = 125 MHz
+    // Timer clock = 2×APB = HCLK = 250 MHz (timer doubler activo quando PPRE≠1)
+    RCC_CFGR1 = (0u << 4)    // HPRE = 0  → HCLK = SYSCLK = 250 MHz
+              | (4u << 8)    // PPRE1 = 4 → APB1 = 125 MHz
+              | (4u << 11);  // PPRE2 = 4 → APB2 = 125 MHz
 
     // ── 6. Selecionar PLL1 como SYSCLK ───────────────────────────────────
     RCC_CFGR1 = (RCC_CFGR1 & ~0x7u) | RCC_CFGR1_SW_PLL1;
@@ -139,7 +162,18 @@ void system_stm32_init(void) noexcept {
     // ARM: SCB->SHP[11] = priority for SysTick (offset 0xE000ED23)
     *reinterpret_cast<volatile uint8_t*>(0xE000ED23u) = static_cast<uint8_t>(11u << 4u);
 
-    // ── 9. Configurar IWDG ≈ 100 ms ─────────────────────────────────────
+    // ── 9. CRS — sincroniza HSI48 com USB SOF ────────────────────────────
+    // HSI48 sem CRS tem ±1.5% de desvio — fora da tolerancia USB FS (±0.25%).
+    // CRS trima HSI48 usando USB SOF (1 kHz) para < 0.1% de desvio.
+    // Confirmado: WeAct SystemClock_Config activa CRS com SYNCSRC=USB.
+    RCC_APB1LENR |= RCC_APB1LENR_CRSEN;
+    // RELOAD = 48MHz/1kHz - 1 = 47999; FELIM = 34; SYNCSRC = USB SOF (01b)
+    CRS_CFGR = (47999u)
+             | (34u << 16)
+             | CRS_CFGR_SYNCSRC_USB;
+    CRS_CR |= CRS_CR_CEN | CRS_CR_AUTOTRIMEN;
+
+    // ── 10. Configurar IWDG ≈ 100 ms ─────────────────────────────────────
     IWDG_KR  = IWDG_KR_START;    // Inicia IWDG (habilita LSI automaticamente)
     IWDG_KR  = IWDG_KR_ACCESS;   // Desbloqueia PR e RLR
     IWDG_PR  = IWDG_PR_DIV32;    // Prescaler /32 → 1000 Hz

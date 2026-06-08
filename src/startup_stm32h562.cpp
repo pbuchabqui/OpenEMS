@@ -21,6 +21,7 @@ extern "C" void ADC2_IRQHandler()            noexcept __attribute__((weak, alias
 extern "C" void GPDMA1_Channel0_IRQHandler() noexcept __attribute__((weak, alias("Default_Handler")));
 extern "C" void GPDMA1_Channel1_IRQHandler() noexcept __attribute__((weak, alias("Default_Handler")));
 extern "C" void TIM5_IRQHandler()            noexcept __attribute__((weak, alias("Default_Handler")));
+extern "C" void USB_IRQHandler()             noexcept __attribute__((weak, alias("Default_Handler")));
 // Knock detection uses ADC1_IN6 (PA5) + software threshold — no COMP IRQ needed.
 
 extern "C" void _init() {}
@@ -103,7 +104,10 @@ Handler const g_vector_table[] = {
     // IRQ64..IRQ69  (64=LPTIM1, 65=TIM8_BRK, 66=TIM8_UP, 67=TIM8_TRG, 68=TIM8_CC, 69=ADC2)
     Default_Handler, Default_Handler, Default_Handler, Default_Handler,
     Default_Handler, ADC2_IRQHandler,
+    // IRQ70..IRQ74  (73=TIM17, 74=USB DRD FS)
+    // USB_DRD_FS_IRQn=74 confirmed from stm32h562xx.h
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler, USB_IRQHandler,
 };
 
-static_assert((sizeof(g_vector_table) / sizeof(g_vector_table[0])) >= (16u + 69u + 1u),
-              "STM32H562 vector table must include ADC2 IRQ69");
+static_assert((sizeof(g_vector_table) / sizeof(g_vector_table[0])) >= (16u + 74u + 1u),
+              "STM32H562 vector table must include USB IRQ74");
