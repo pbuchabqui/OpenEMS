@@ -90,10 +90,12 @@ constexpr uint32_t kPBA_EP1TX    = 0x0C0u;
 constexpr uint32_t kPBA_EP2RX    = 0x100u;
 constexpr uint32_t kPBA_EP3TX    = 0x140u;
 
-// COUNT_RX configuration for the BDTable RXBD lower 16 bits (BLSIZe + NUM_BLOCK fields).
-// STM32H562 DRD FS: PMA is 2KB; BLSIZe=1 (32-byte blocks), NUM_BLOCK=1 → 2×32=64 B
-// Confirmed format from USB_PMA_RXBD_COUNTMSK in stm32h562xx.h
-constexpr uint16_t kCOUNT_RX_64 = static_cast<uint16_t>((1u << 15) | (1u << 10));
+// COUNT_RX configuration for the BDTable RXBD high half-word (BLSIZe + NUM_BLOCK).
+// STM32H562 DRD FS: BLSIZe=1 (32-byte blocks); a 64-byte buffer needs NUM_BLOCK=2
+// (2×32=64). NUM_BLOCK lives at bits[14:10], so the value is (1<<15)|(2<<10)=0x8800.
+// (An earlier (1<<15)|(1<<10)=0x8400 encoded NUM_BLOCK=1 → only 32 B, too small for a
+// 64-byte OUT packet. Matches the golden reference PMA_RX_64=0x8800.)
+constexpr uint16_t kCOUNT_RX_64 = static_cast<uint16_t>((1u << 15) | (2u << 10));
 // EP3 TX-only — no RX buffer allocated.
 constexpr uint16_t kCOUNT_RX_8  = 0u;
 
@@ -105,32 +107,34 @@ static inline volatile uint32_t& pba_w32(uint32_t byte_offset) noexcept {
 }
 
 // ── BDTable entry accessors ────────────────────────────────────────────────────────
-// STM32H562 BDTable layout per endpoint (8 bytes = two 32-bit words):
-//   TXBD (offset 0): bits[31:16]=ADDR_TX, bits[15:0]=COUNT_TX
-//   RXBD (offset 4): bits[31:16]=ADDR_RX, bits[15:0]=COUNT_RX/BLSIZe/NUM_BLOCK
-// Confirmed from USB_PMA_TXBD_ADDMSK/COUNTMSK in stm32h562xx.h
+// STM32H5 USB DRD FS BDTable layout per endpoint (8 bytes = two 32-bit words):
+//   TXBD (offset 0): bits[15:0]=ADDR_TX,  bits[25:16]=COUNT_TX
+//   RXBD (offset 4): bits[15:0]=ADDR_RX,  bits[31:16]=COUNT_RX/BLSIZe/NUM_BLOCK
+// Address is the LOW half-word, byte count is the HIGH half-word (RM0481 §52.7;
+// matches ST HAL USB_DRD_SET_CHEP_TX_ADDRESS and the golden reference). The CMSIS
+// USB_PMA_TXBD_ADDMSK=0xFFFF0000 mask is mislabelled — do NOT use it for packing.
 static inline void bdtable_set(uint32_t ep, uint16_t addr_tx, uint16_t cnt_tx,
                                 uint16_t addr_rx, uint16_t cnt_rx) noexcept {
-    pba_w32(ep * 8u + 0u) = (static_cast<uint32_t>(addr_tx) << 16) | cnt_tx;  // TXBD
-    pba_w32(ep * 8u + 4u) = (static_cast<uint32_t>(addr_rx) << 16) | cnt_rx;  // RXBD
+    pba_w32(ep * 8u + 0u) = (static_cast<uint32_t>(cnt_tx) << 16) | addr_tx;  // TXBD
+    pba_w32(ep * 8u + 4u) = (static_cast<uint32_t>(cnt_rx) << 16) | addr_rx;  // RXBD
 }
 
 static inline uint16_t bdtable_count_tx(uint32_t ep) noexcept {
-    return static_cast<uint16_t>(pba_w32(ep * 8u) & 0xFFFFu);  // lower 16 bits of TXBD
+    return static_cast<uint16_t>((pba_w32(ep * 8u) >> 16) & 0x3FFu);  // COUNT_TX bits[25:16]
 }
 
 static inline void bdtable_set_count_tx(uint32_t ep, uint16_t cnt) noexcept {
     volatile uint32_t& txbd = pba_w32(ep * 8u);
-    txbd = (txbd & 0xFFFF0000u) | cnt;
+    txbd = (txbd & 0x0000FFFFu) | (static_cast<uint32_t>(cnt) << 16);  // keep ADDR, set COUNT
 }
 
 static inline uint16_t bdtable_count_rx(uint32_t ep) noexcept {
-    return static_cast<uint16_t>(pba_w32(ep * 8u + 4u) & 0x3FFu);  // COUNT field bits[9:0]
+    return static_cast<uint16_t>((pba_w32(ep * 8u + 4u) >> 16) & 0x3FFu);  // COUNT_RX bits[25:16]
 }
 
 static inline void bdtable_set_count_rx_cfg(uint32_t ep, uint16_t cfg) noexcept {
     volatile uint32_t& rxbd = pba_w32(ep * 8u + 4u);
-    rxbd = (rxbd & 0xFFFF0000u) | cfg;
+    rxbd = (rxbd & 0x0000FFFFu) | (static_cast<uint32_t>(cfg) << 16);  // keep ADDR, set cfg
 }
 
 // ── CHEPxR safe write helpers ─────────────────────────────────────────────────
@@ -230,6 +234,30 @@ static void ep_clear_ctr_rx(uint32_t ep) noexcept {
 static uint8_t           g_usb_addr_pending = 0u;
 static volatile bool     g_configured       = false;
 static volatile bool     g_ep1_tx_busy      = false;
+// EP2 (bulk OUT) back-pressure: when the RX FIFO can't hold another full 64-byte
+// packet we leave the endpoint at NAK instead of re-arming RX VALID, so the host
+// stalls instead of us silently dropping bytes. Re-armed once the consumer drains.
+static volatile bool     g_rx_paused        = false;
+
+// Free slots in the RX FIFO (one slot is always reserved to distinguish full/empty).
+static inline uint16_t rx_free() noexcept {
+    return static_cast<uint16_t>((g_rx_tail - g_rx_head - 1u) & kRxMask);
+}
+
+// Re-arm EP2 RX if it was paused for back-pressure and the FIFO now has room for a
+// full max-size packet. Safe to call from the main loop and from read paths.
+static void ep2_rx_resume() noexcept {
+    __asm__ volatile("cpsid i" ::: "memory");
+    const bool resume = g_rx_paused && (rx_free() >= 64u);
+    if (resume) {
+        g_rx_paused = false;
+    }
+    __asm__ volatile("cpsie i" ::: "memory");
+    if (resume) {
+        bdtable_set_count_rx_cfg(2u, kCOUNT_RX_64);
+        ep_set_stat_rx(2u, 3u);  // VALID
+    }
+}
 
 // EP0 multi-packet TX state
 static const uint8_t* g_ep0_tx_ptr = nullptr;
@@ -673,9 +701,15 @@ static void handle_ctr() noexcept {
                 rx_push(buf[i]);
             }
         }
-        // Re-arm EP2 RX buffer
-        bdtable_set_count_rx_cfg(2u, kCOUNT_RX_64);
-        ep_set_stat_rx(2u, 3u);  // VALID
+        // Back-pressure: only re-arm RX if the FIFO can absorb another full packet.
+        // Otherwise leave the endpoint at NAK (set by HW after this transfer) so the
+        // host retries instead of us dropping bytes; ep2_rx_resume() re-arms on drain.
+        if (rx_free() >= 64u) {
+            bdtable_set_count_rx_cfg(2u, kCOUNT_RX_64);
+            ep_set_stat_rx(2u, 3u);  // VALID
+        } else {
+            g_rx_paused = true;
+        }
     } else if (ep == 3u) {
         // EP3 IN: notification TX complete (not used for data)
         ep_clear_ctr_tx(3u);
@@ -743,8 +777,10 @@ void usb_cdc_init() noexcept {
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 11u, GPIO_AF10);
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 12u, GPIO_AF10);
 
-    // 4. Select HSI48 as USB kernel clock (RCC_CCIPR4 USBSEL=00) and enable APB2 clock
-    RCC_CCIPR4 = (RCC_CCIPR4 & ~RCC_CCIPR4_USBSEL_MSK);  // 00b = HSI48
+    // 4. Select HSI48 as USB kernel clock (RCC_CCIPR4 USBSEL=11) and enable APB2 clock.
+    // CRITICAL: USBSEL=00 is NOCLOCK on H5 — the USB peripheral would have no kernel
+    // clock and never enumerate. HSI48 = 0b11 (matches the proven golden reference).
+    RCC_CCIPR4 = (RCC_CCIPR4 & ~RCC_CCIPR4_USBSEL_MSK) | RCC_CCIPR4_USBSEL_HSI48;
     RCC_APB2ENR |= RCC_APB2ENR_USBEN;
 
     // 5. Power up USB transceiver: clear PDWN
@@ -789,6 +825,7 @@ void usb_cdc_poll() noexcept {
     // Kick TX if we have data and EP1 is idle (belt-and-suspenders: IRQ handles it too)
     if (g_configured) {
         ep1_tx_kick();
+        ep2_rx_resume();  // re-arm bulk OUT if it was paused for back-pressure
     }
 #else
     // Stub: drain TX queue as "sent"
