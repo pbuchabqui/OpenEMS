@@ -104,7 +104,10 @@ static bool adc_wait_ready(volatile uint32_t& isr) noexcept {
     // ready, o busy-wait consumia ~4 ms com PRIMASK ativo (interrupções
     // desabilitadas), bloqueando o main loop. Agora retorna false e
     // incrementa fault counter para diagnóstico.
-    constexpr uint32_t kTimeout = 1000000u;
+    // BENCH-PROOF: ADRDY surge em ~µs após ADEN; 30k iterações (~0.5 ms @250 MHz)
+    // é folga enorme. O valor antigo (1.000.000) somava SEGUNDOS quando o ADC não
+    // ficava ready (bancada sem VDDA/entradas flutuantes), travando o boot.
+    constexpr uint32_t kTimeout = 30000u;
     for (uint32_t i = 0u; i < kTimeout; ++i) {
         if (isr & ADC_ISR_ADRDY) { return true; }
     }
@@ -126,7 +129,9 @@ static void adc_prepare_for_config(volatile uint32_t& cr) noexcept {
 	// FIX: timeout na espera de ADCAL — sem isso, firmware congela se calibração falhar
 	{
 		uint32_t cal_to = 0u;
-		constexpr uint32_t kCalTimeout = 1000000u;
+		// BENCH-PROOF: ADCAL completa em ~116 ciclos ADC (~2 µs). 30k iterações é folga;
+		// o valor antigo (1.000.000) travava o boot na bancada sem VDDA.
+		constexpr uint32_t kCalTimeout = 30000u;
 		while ((cr & ADC_CR_ADCAL) != 0u) {
 			if (++cal_to >= kCalTimeout) {
 				++g_adc_init_faults;
