@@ -9,9 +9,6 @@ extern "C" uint32_t _sdata;
 extern "C" uint32_t _edata;
 extern "C" uint32_t _sbss;
 extern "C" uint32_t _ebss;
-/* FIX ERRATA FLASH: símbolos do vetor de IRQs em SRAM */
-extern "C" uint32_t _svector_ram;
-extern "C" uint32_t _evector_ram;
 
 extern "C" void Default_Handler();
 extern "C" [[noreturn]] void Reset_Handler();
@@ -37,21 +34,50 @@ extern "C" void Default_Handler() {
     while (true) { }
 }
 
-/* FIX ERRATA FLASH: Reset_Handler copia vetor de IRQs para SRAM antes de habilitar ISRs */
 extern "C" [[noreturn]] void Reset_Handler() {
-    /* FIX ERRATA: Copiar vetor de IRQs para SRAM ANTES de qualquer operação Flash */
-    /* Isso previne o latency spike de 120µs descrito na errata do STM32H562 */
-    const uint32_t* src = &_svector_ram;
-    volatile uint32_t* dst = reinterpret_cast<volatile uint32_t*>(0xE000E000); /* VTOR base */
-    const uint32_t* end = &_evector_ram;
-    while (src < end) {
-        *dst++ = *src++;
+    /* 1. Desactivar IRQs e corrigir VTOR — DFU jump pode deixar VTOR errado */
+    __asm__ volatile ("cpsid i");
+    *reinterpret_cast<volatile uint32_t*>(0xE000ED08u) = 0x08000000u;  // VTOR = Flash
+
+    /* 2. Kick WWDG imediatamente (hardware WWDG activo desde reset) */
+    *reinterpret_cast<volatile uint32_t*>(0x40002C00u) = 0x7Fu;  // WWDG_CR refresh
+
+    /* 3. Forcar SYSCLK = HSI16
+     * OBRIGATORIO: activar HSI16 primeiro (DFU pode ter desligado para usar PLL/HSE)
+     * RCC_CR @ 0x44020C00: HSION=bit0, HSIRDY=bit1
+     * RCC_CFGR1 @ 0x44020C1C: SW[1:0]=bits[1:0], SWS[1:0]=bits[4:3] */
+    {
+        volatile uint32_t* rcc_cr  = reinterpret_cast<volatile uint32_t*>(0x44020C00u);
+        volatile uint32_t* cfgr1   = reinterpret_cast<volatile uint32_t*>(0x44020C1Cu);
+
+        // 3a. Ligar HSI16 e aguardar pronto
+        *rcc_cr |= (1u << 0u);  // HSION = 1
+        for (volatile uint32_t t = 20000u; t > 0u; --t) {
+            if (*rcc_cr & (1u << 1u)) break;  // aguardar HSIRDY
+        }
+
+        // 3b. Mudar SYSCLK para HSI16 e aguardar
+        *cfgr1 = (*cfgr1 & ~0x3u);              // SW[1:0] = 00 (HSI16)
+        for (volatile uint32_t t = 10000u; t > 0u; --t) {
+            if ((*cfgr1 & (3u << 3)) == 0u) break; // aguardar SWS=00
+        }
+        // Desligar PLL1 (liberta energia, confirma HSI16 exclusivo)
+        // NAO alterar Flash latency aqui: VOS3 (default reset) exige >=1WS a 16MHz
+        *reinterpret_cast<volatile uint32_t*>(0x44020C00u) &= ~(1u << 24u); // PLL1ON=0
+
+        // Reset prescalers AHB/APB1/APB2 para 1 (DFU pode ter configurado divisores)
+        // CFGR2 @ 0x44020C20: HPRE[3:0]=0, PPRE1[6:4]=0, PPRE2[10:8]=0 -> todos /1
+        volatile uint32_t* cfgr2 = reinterpret_cast<volatile uint32_t*>(0x44020C20u);
+        *cfgr2 &= ~0x77Fu;  // limpar HPRE+PPRE1+PPRE2
+
+        // USART1 clock = HSI16 directamente (independente de prescalers)
+        // CCIPR1 @ 0x44020CD8: USART1SEL[2:0] = 011 = HSI16
+        volatile uint32_t* ccipr1 = reinterpret_cast<volatile uint32_t*>(0x44020CD8u);
+        *ccipr1 = (*ccipr1 & ~0x7u) | 0x3u;
     }
-    /* Agora configura VTOR para apontar para o vetor em SRAM */
-    *(volatile uint32_t*)0xE000ED08 = reinterpret_cast<uint32_t>(&_svector_ram);
-    
-    /* Copia .data para RAM */
-    src = &_sidata;
+
+    /* 3. Copia .data para RAM */
+    const uint32_t* src = &_sidata;
     for (uint32_t* d = &_sdata; d < &_edata; ++d, ++src) {
         *d = *src;
     }

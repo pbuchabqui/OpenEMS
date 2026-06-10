@@ -751,6 +751,7 @@ extern "C" void USB_IRQHandler() noexcept {
     if (istr & USB_ISTR_WKUP) {
         USB_ISTR = ~USB_ISTR_WKUP;
         USB_CNTR &= ~USB_CNTR_FSUSP;
+        // ep1_tx_kick removido: chamar EP1R do ISR antes do core resumir corrompe STAT_TX
     }
 
     // Handle all pending CTR events (may be multiple)
@@ -844,10 +845,14 @@ void usb_cdc_init() noexcept {
 
 void usb_cdc_poll() noexcept {
 #ifndef EMS_HOST_TEST
-    // Kick TX if we have data and EP1 is idle (belt-and-suspenders: IRQ handles it too)
+    // Bench device: se autosuspend setou FSUSP, limpa imediatamente do thread context
+    // Não fazer isso no WKUP ISR pois modifica EP1R antes do core USB estar pronto
+    if (USB_CNTR & USB_CNTR_FSUSP) {
+        USB_CNTR &= ~USB_CNTR_FSUSP;
+    }
     if (g_configured) {
         ep1_tx_kick();
-        ep2_rx_resume();  // re-arm bulk OUT if it was paused for back-pressure
+        ep2_rx_resume();
     }
 #else
     // Stub: drain TX queue as "sent"

@@ -78,11 +78,10 @@
 #define RCC_CFGR2       STM32_REG32(RCC_BASE + 0x020)
 #define RCC_PLL1CFGR    STM32_REG32(RCC_BASE + 0x028)
 #define RCC_PLL1DIVR    STM32_REG32(RCC_BASE + 0x034)
-#define RCC_AHB1ENR     STM32_REG32(RCC_BASE + 0x0E8)
-#define RCC_AHB2ENR1    STM32_REG32(RCC_BASE + 0x0EC)
-#define RCC_AHB2ENR2    STM32_REG32(RCC_BASE + 0x0F0)
-#define RCC_APB1LENR    STM32_REG32(RCC_BASE + 0x0F4)
-#define RCC_APB2ENR     STM32_REG32(RCC_BASE + 0x100)
+#define RCC_AHB1ENR     STM32_REG32(RCC_BASE + 0x088)  // AHB1ENR offset 0x88 (CMSIS verified; 0xE8 é o CCIPR5!)
+#define RCC_AHB2ENR1    STM32_REG32(RCC_BASE + 0x08C)  // AHB2ENR offset 0x8C (CMSIS verified)
+#define RCC_APB1LENR    STM32_REG32(RCC_BASE + 0x09C)  // APB1LENR offset 0x9C (CMSIS verified; 0xF4 é o RSR!)
+#define RCC_APB2ENR     STM32_REG32(RCC_BASE + 0x0A4)  // APB2ENR offset 0xA4 (CMSIS verified)
 
 // RCC_CR bits
 #define RCC_CR_HSEON    (1u << 16)
@@ -135,6 +134,7 @@
 #define GPIOA_BSRR    STM32_REG32(GPIOA_BASE + GPIO_BSRR_OFF)
 
 #define GPIOB_MODER   STM32_REG32(GPIOB_BASE + GPIO_MODER_OFF)
+#define GPIOB_ODR     STM32_REG32(GPIOB_BASE + GPIO_ODR_OFF)
 #define GPIOB_OSPEEDR STM32_REG32(GPIOB_BASE + GPIO_OSPEEDR_OFF)
 #define GPIOB_AFRL    STM32_REG32(GPIOB_BASE + GPIO_AFRL_OFF)
 #define GPIOB_AFRH    STM32_REG32(GPIOB_BASE + GPIO_AFRH_OFF)
@@ -825,10 +825,14 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 // RCC_CCIPR4: peripheral kernel clock source selectors
 // Offset 0xE4 confirmed from stm32h562xx.h struct comment "Address offset: 0xE4"
 #define RCC_CCIPR4            STM32_REG32(RCC_BASE + 0x0E4UL)
-// USBSEL[1:0] at bits [5:4] (mask=0x30): 00=HSI48, 01=PLL1Q, 10=PLL3Q, 11=HSE
+// USBSEL[1:0] at bits [5:4] (mask=0x30). Encoding per ST HAL (stm32h5xx_hal_rcc_ex.h):
+//   00 = NOCLOCK (no USB clock!)   01 = PLL1Q   10 = PLL3Q   11 = HSI48
+// NOTE: an earlier comment here wrongly said 00=HSI48 — writing 00 leaves USB with NO
+// clock and enumeration never starts. The proven golden reference uses 11 = HSI48.
 // Confirmed: RCC_CCIPR4_USBSEL_Pos=4, RCC_CCIPR4_USBSEL_Msk=0x30 from stm32h562xx.h
-#define RCC_CCIPR4_USBSEL_MSK (3u << 4u)
-// HSI48 selection = 0b00 (clear both bits)
+#define RCC_CCIPR4_USBSEL_MSK   (3u << 4u)
+// HSI48 selection = 0b11 (set both bits)
+#define RCC_CCIPR4_USBSEL_HSI48 (3u << 4u)
 
 // GPIO AF10 for USB DP/DM (PA11/PA12)
 #define GPIO_AF10  10u
@@ -850,5 +854,6 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 // CRS_CFGR fields (from stm32h562xx.h)
 // RELOAD[15:0]: 47999 = 48MHz/1kHz(USB SOF) - 1
 // FELIM[23:16]: 34 (frequency error limit, from WeAct example)
-// SYNCSRC[29:28]: 01b = USB SOF
-#define CRS_CFGR_SYNCSRC_USB  (1u << 28u)
+// SYNCSRC[29:28] per ST HAL: 00=GPIO, 01=LSE, 10=USB SOF. USB SOF = 0b10.
+// NOTE: was wrongly 0b01 (LSE) — with LSE not running, CRS never trims HSI48.
+#define CRS_CFGR_SYNCSRC_USB  (2u << 28u)

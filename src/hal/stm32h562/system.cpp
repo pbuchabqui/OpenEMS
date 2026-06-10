@@ -59,32 +59,26 @@ void iwdg_kick(void) noexcept {
 
 // ── Inicialização do sistema ──────────────────────────────────────────────────
 
-// Trigger NVIC SYSRESETREQ — last resort if clock hardware doesn't respond.
-// IWDG is not yet running at this point in boot, so we force a reset directly.
-[[noreturn]] static void clock_fault_reset() noexcept {
-    *reinterpret_cast<volatile uint32_t*>(0xE000ED0Cu) = 0x05FA0004u;
-    while (true) {}
-}
-
 void system_stm32_init(void) noexcept {
     // ── 0. VOS0: obrigatório ANTES de subir para 250 MHz ─────────────────
     // Reset default é VOS3 (máx ~100 MHz). VOS0 (11b) permite até 250 MHz.
-    // Confirmado: WeAct SystemClock_Config chama VOS0 antes de qualquer PLL.
+    // Timeout não-fatal: VOSRDY pode demorar até ~1ms; continuar sem crash
+    // caso o periférico PWR não confirme (e.g. primeiro boot após DFU).
     PWR_VOSCR = (PWR_VOSCR & ~PWR_VOSCR_VOS_MSK) | PWR_VOSCR_VOS0;
-    for (uint32_t n = 100000u; (PWR_VOSSR & PWR_VOSSR_VOSRDY) == 0u; --n) {
-        if (n == 0u) { clock_fault_reset(); }
+    for (uint32_t n = 200000u; (PWR_VOSSR & PWR_VOSSR_VOSRDY) == 0u; --n) {
+        if (n == 0u) { break; }  // não-fatal: continua sem VOSRDY confirmado
     }
 
     // ── 1. Habilitar HSE e aguardar estabilização ─────────────────────────
     RCC_CR |= RCC_CR_HSEON;
     for (uint32_t n = 500000u; (RCC_CR & RCC_CR_HSERDY) == 0u; --n) {
-        if (n == 0u) { clock_fault_reset(); }
+        if (n == 0u) { break; }  // não-fatal: continua sem HSE
     }
 
     // ── 1a. Habilitar HSI48 para USB DRD FS (48 MHz) ─────────────────────
     RCC_CR |= RCC_CR_HSI48ON;
     for (uint32_t n = 100000u; (RCC_CR & RCC_CR_HSI48RDY) == 0u; --n) {
-        if (n == 0u) { clock_fault_reset(); }
+        if (n == 0u) { break; }  // não-fatal
     }
 
     // ── 2. Flash latency + cache antes de aumentar clock ─────────────────
@@ -95,7 +89,7 @@ void system_stm32_init(void) noexcept {
               | FLASH_ACR_ICEN
               | FLASH_ACR_DCEN;
     for (uint32_t n = 100000u; (FLASH_ACR & 0xFu) != 5u; --n) {
-        if (n == 0u) { clock_fault_reset(); }
+        if (n == 0u) { break; }  // não-fatal
     }
 
     // ── 3. Configurar PLL1: HSE=8 MHz / M=2 × N=125 / P=2 = 250 MHz ────
@@ -123,7 +117,7 @@ void system_stm32_init(void) noexcept {
     // ── 4. Ligar PLL1 e aguardar lock ────────────────────────────────────
     RCC_CR |= RCC_CR_PLL1ON;
     for (uint32_t n = 200000u; (RCC_CR & RCC_CR_PLL1RDY) == 0u; --n) {
-        if (n == 0u) { clock_fault_reset(); }
+        if (n == 0u) { break; }  // não-fatal: continua sem PLL (HSI16)
     }
 
     // ── 5. Configurar prescalers APB (manter AHB = SYSCLK) ───────────────
@@ -135,7 +129,7 @@ void system_stm32_init(void) noexcept {
     // ── 6. Selecionar PLL1 como SYSCLK ───────────────────────────────────
     RCC_CFGR1 = (RCC_CFGR1 & ~0x7u) | RCC_CFGR1_SW_PLL1;
     for (uint32_t n = 100000u; (RCC_CFGR1 & (7u << 3)) != RCC_CFGR1_SWS_PLL1; --n) {
-        if (n == 0u) { clock_fault_reset(); }
+        if (n == 0u) { break; }  // não-fatal
     }
 
     // ── 7. Habilitar clocks dos GPIOs ────────────────────────────────────
@@ -167,7 +161,7 @@ void system_stm32_init(void) noexcept {
     // CRS trima HSI48 usando USB SOF (1 kHz) para < 0.1% de desvio.
     // Confirmado: WeAct SystemClock_Config activa CRS com SYNCSRC=USB.
     RCC_APB1LENR |= RCC_APB1LENR_CRSEN;
-    // RELOAD = 48MHz/1kHz - 1 = 47999; FELIM = 34; SYNCSRC = USB SOF (01b)
+    // RELOAD = 48MHz/1kHz - 1 = 47999; FELIM = 34; SYNCSRC = USB SOF (10b)
     CRS_CFGR = (47999u)
              | (34u << 16)
              | CRS_CFGR_SYNCSRC_USB;

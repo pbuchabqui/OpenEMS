@@ -10,25 +10,18 @@ _estack = ORIGIN(RAM) + LENGTH(RAM);
 
 SECTIONS
 {
-    /* FIX ERRATA FLASH: Vetor de IRQs e handlers críticos em SRAM (.fastrun) */
-    /* Previne latency spike de 120µs durante primeira operação Flash após power-on */
+    /* Vector table e handlers críticos em Flash */
     .isr_vector :
     {
         KEEP(*(.isr_vector))
-    } > RAM AT > FLASH
-    _svector_ram = LOADADDR(.isr_vector);
-    _evector_ram = LOADADDR(.isr_vector) + SIZEOF(.isr_vector);
+    } > FLASH
 
-    /* Seção .fastrun para código crítico (ISRs, handlers Flash) */
     .fastrun :
     {
-        _sfastrun = .;
         *(.fastrun*)
         *(.fastrun.*)
         . = ALIGN(4);
-        _efastrun = .;
-    } > RAM AT > FLASH
-    _sfastrun_load = LOADADDR(.fastrun);
+    } > FLASH
 
     .text :
     {
