@@ -468,6 +468,20 @@ static void openems_init() noexcept {
     // Com SysTick já configurado em system_stm32_init(), é seguro habilitar aqui.
     __asm__ volatile("cpsie i" ::: "memory");
 
+    // 1b) USB CDC CEDO: só depende de clock (HSI48/CRS já prontos) + IRQs. Subir aqui,
+    // antes dos inits da ECU (ADC/CAN/CKP), garante enumeração mesmo que algum init
+    // adiante demore/bloqueie numa placa de bancada sem motor — a ISR cuida do resto.
+    ems::hal::usb_cdc_init();
+
+    // 1c) Janela p/ a enumeração USB (ISR-driven) completar antes dos inits da ECU, que
+    // podem entrar em seção crítica (cpsid i) e mascarar a ISR do USB por um tempo.
+    // ~300 ms kicando o IWDG (timeout 100 ms) a cada ~1 ms @ 250 MHz.
+    for (uint32_t ms = 0u; ms < 300u; ++ms) {
+        for (volatile uint32_t d = 0u; d < 60000u; ++d) { /* ~1ms */ }
+        iwdg_kick();
+        ems::hal::usb_cdc_poll();
+    }
+
     // 2) Timers (TIM5=CKP IC, TIM2/TIM8=OC injeção/ignição)
     // TIM3/TIM4 PWM auxiliares são inicializados em auxiliaries_init().
     // ECU_Hardware_Init() owns TIM2/TIM8 for injection/ignition scheduling.
@@ -484,9 +498,9 @@ static void openems_init() noexcept {
     ems::hal::adc_init();
 
     // 4) CAN + bench communication. MVP transport: USART1 PA9/PA10.
+    // (usb_cdc_init() já foi chamado cedo em 1b, antes dos inits da ECU.)
     ems::hal::can0_init();
     ems::hal::uart0_init(115200u);
-    ems::hal::usb_cdc_init();
 
 	// 5) Flash Bank2 → carrega calibrações persistidas
 	if (!ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes)) {
