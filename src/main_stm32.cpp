@@ -320,9 +320,153 @@ static inline void ui_service() noexcept {
 // Inicialização — sequência idêntica ao main.cpp
 // =============================================================================
 
+// Modo diagnóstico: descomente para teste isolado de USB CDC (clock + usb_cdc_init + echo).
+// Em produção fica DESATIVADO → usa o openems_init() real (ECU completa + usb_cdc_init).
+// #define MINIMAL_BOOT 1
+
+#ifdef MINIMAL_BOOT
+static void openems_init() noexcept {
+    // ABSOLUTE MINIMUM TEST: kick WWDG + DPPU=1
+    // Objectivo: confirmar que firmware executa (dmesg USB) ou detectar WWDG loop
+
+    // 0. Kick WWDG imediatamente (hardware WWDG activo!)
+    // WWDG_CR @ APB1_BASE + 0x2C00 = 0x40002C00
+    // bit 7 (WDGA) e bits[6:0] T[6:0] = 0x7F: refresh com T=0x7F
+    STM32_REG32(0x40002C00) = 0x7Fu;  // WWDG kick
+
+    // 1. GPIOA clock — dummy read DEVE ser do GPIOA (nao do AHB2ENR!)
+    STM32_REG32(0x44020C8C) |= (1u << 0);  // AHB2ENR GPIOAEN
+    (void)STM32_REG32(0x42020000);  // dummy read GPIOA_MODER — garante clock propagado
+
+    // 2. PA9 = OUTPUT para teste GPIO (MODER[19:18]=01)
+    //    PA9 HIGH = 3.3V visivel no adaptador serie RXD
+    STM32_REG32(0x42020000) = (STM32_REG32(0x42020000) & ~(3u<<18)) | (1u<<18);
+    STM32_REG32(0x42020018) = (1u << 9);  // BSRR: set PA9 HIGH
+
+    // 3. UART init PA9=AF7 USART1
+    STM32_REG32(0x42020000) = (STM32_REG32(0x42020000) & ~(3u<<18)) | (2u<<18);
+    STM32_REG32(0x42020024) = (STM32_REG32(0x42020024) & ~(0xFu<<4)) | (7u<<4);
+    STM32_REG32(0x44020CA4) |= (1u << 14);  // APB2ENR USART1EN
+    (void)STM32_REG32(0x40013800);  // dummy read USART1 — garante clock propagado
+
+    auto uart_putc = [](char c) noexcept {
+        for (volatile uint32_t t = 5000u; t > 0; --t) {
+            STM32_REG32(0x40002C00) = 0x7Fu;  // WWDG kick
+            if (STM32_REG32(0x40013800 + 0x1C) & (1u<<7)) break;
+        }
+        STM32_REG32(0x40013800 + 0x28) = static_cast<uint8_t>(c);
+    };
+    auto uart_puts = [&uart_putc](const char* s) noexcept {
+        while (*s) uart_putc(*s++);
+    };
+
+    // SYSCLK = 64 MHz (confirmado por clock sweep: DFU exit deixa PLL @ 64 MHz)
+    // PCLK2 = 64 MHz, BRR = 64e6/115200 = 556 = 0x22C
+    STM32_REG32(0x40013800 + 0x0C) = 0x22Cu;
+    STM32_REG32(0x40013800 + 0x00) = (1u<<3)|(1u<<0);   // CR1 TE+UE
+    for (volatile uint32_t i = 0; i < 1000u; ++i) { __asm__("nop"); }
+
+    uart_puts("\r\n=== OpenEMS BOOT64 ===\r\n");
+
+    // Helper: print hex (4 digits)
+    auto uart_hex16 = [&uart_putc](uint32_t v) noexcept {
+        const char* hex = "0123456789ABCDEF";
+        uart_putc(hex[(v >> 12) & 0xF]);
+        uart_putc(hex[(v >> 8)  & 0xF]);
+        uart_putc(hex[(v >> 4)  & 0xF]);
+        uart_putc(hex[v & 0xF]);
+    };
+    auto uart_hex32 = [&uart_hex16](uint32_t v) noexcept {
+        uart_hex16(v >> 16);
+        uart_hex16(v);
+    };
+    auto delay_ms_64 = [](uint32_t ms) noexcept {
+        // 64 MHz: ~6400 NOPs por ms (com pipeline ~2 ciclos/loop)
+        for (uint32_t m = 0; m < ms; ++m) {
+            STM32_REG32(0x40002C00) = 0x7Fu;
+            for (volatile uint32_t i = 0; i < 6400u; ++i) { __asm__("nop"); }
+        }
+    };
+
+    // Dump state inicial
+    uart_puts("RCC_CR=");      uart_hex32(STM32_REG32(0x44020C00)); uart_puts("\r\n");
+    uart_puts("RCC_CFGR1=");   uart_hex32(STM32_REG32(0x44020C1C)); uart_puts("\r\n");
+    uart_puts("PWR_VOSCR=");   uart_hex32(STM32_REG32(0x44020810)); uart_puts("\r\n");
+    uart_puts("PWR_USBSCR=");  uart_hex32(STM32_REG32(0x44020838)); uart_puts("\r\n");
+
+    // 4. VDDUSB enable + delay longo (>= 1 ms)
+    STM32_REG32(0x44020838) |= (1u << 25);
+    delay_ms_64(5);
+    uart_puts("VDDUSB_OK PWR_USBSCR="); uart_hex32(STM32_REG32(0x44020838)); uart_puts("\r\n");
+
+    // 5. HSI48 (USB clock) — confirmar HSI48RDY
+    STM32_REG32(0x44020C00) |= (1u << 12);
+    {
+        bool ready = false;
+        for (uint32_t n = 0; n < 200000u; ++n) {
+            STM32_REG32(0x40002C00) = 0x7Fu;
+            if (STM32_REG32(0x44020C00) & (1u<<13)) { ready = true; break; }
+        }
+        uart_puts(ready ? "HSI48_RDY " : "HSI48_TIMEOUT ");
+        uart_puts("RCC_CR="); uart_hex32(STM32_REG32(0x44020C00)); uart_puts("\r\n");
+    }
+
+    // 6. Inicialização USB CDC completa pelo driver REAL (ems::hal::usb_cdc_init):
+    //    seleciona USBSEL=HSI48 (0b11, NÃO 00=NOCLOCK), configura PA11/PA12 AF10,
+    //    power-up do transceiver, BDTable + descritores, NVIC e DPPU. Substitui os
+    //    pokes crus anteriores (que usavam USBSEL=00 e nunca serviam descritores).
+    STM32_REG32(0x40002C00) = 0x7Fu;  // kick WWDG antes da init
+    ems::hal::usb_cdc_init();
+    STM32_REG32(0x40002C00) = 0x7Fu;  // kick WWDG depois da init
+
+    // CRÍTICO: o Reset_Handler faz cpsid i e nunca reabilita. O firmware completo
+    // reabilita por acidente no 1º cpsie de uma seção crítica do openems_init; o caminho
+    // MINIMAL não chama nenhuma → sem isto, PRIMASK=1 e a ISR do USB NUNCA dispara.
+    __asm__ volatile("cpsie i" ::: "memory");
+    uart_puts("usb_cdc_init OK CCIPR4="); uart_hex32(STM32_REG32(0x44020CE4));
+    uart_puts(" CNTR=");  uart_hex32(STM32_REG32(0x40016040));
+    uart_puts(" ISTR=");  uart_hex32(STM32_REG32(0x40016044));
+    uart_puts(" BCDR=");  uart_hex32(STM32_REG32(0x40016058)); uart_puts("\r\n");
+
+    delay_ms_64(100);  // dar tempo ao host de detectar/enumerar
+    uart_puts("100ms ISTR="); uart_hex32(STM32_REG32(0x40016044));
+    uart_puts(" DADDR=");      uart_hex32(STM32_REG32(0x4001604C)); uart_puts("\r\n");
+
+    // Configura PB2 (LED da placa WeAct) como saída para o "ladder" de diagnóstico:
+    // o LED pisca N vezes = maior estágio de enumeração alcançado (1..6), pausa, repete.
+    STM32_REG32(0x44020C8C) |= (1u << 1);  // RCC AHB2ENR1 GPIOBEN
+    (void)STM32_REG32(0x42020400);          // dummy read p/ propagar clock
+    STM32_REG32(0x42020400) = (STM32_REG32(0x42020400) & ~(3u << 4)) | (1u << 4);  // PB2 output
+
+    // Loop limpo: echo a cada iteração (sem bloqueio) + heartbeat de LED não-bloqueante.
+    uint32_t hb = 0u;
+    while (true) {
+        STM32_REG32(0x40002C00) = 0x7Fu;  // kick WWDG
+
+        // Echo: devolve cada byte recebido (valida EP2 OUT bulk + EP1 IN bulk + BDTable).
+        ems::hal::usb_cdc_poll();
+        while (ems::hal::usb_cdc_available()) {
+            const uint8_t b = ems::hal::usb_cdc_read_byte();
+            ems::hal::usb_cdc_send_byte(b);
+        }
+
+        // Heartbeat: toggle PB2 ~a cada N iterações, sem bloquear o echo.
+        if (++hb >= 100000u) {
+            STM32_REG32(0x42020414) ^= (1u << 2);  // GPIOB_ODR toggle PB2
+            hb = 0u;
+        }
+    }
+}
+#else
 static void openems_init() noexcept {
     // 1) PLL → 250 MHz + SysTick 1ms + IWDG 100ms
     system_stm32_init();
+
+    // 1a) Reabilitar IRQs globais EXPLICITAMENTE. O Reset_Handler faz cpsid i e nunca
+    // reabilita; antes isto só acontecia por efeito colateral do 1º cpsie de uma seção
+    // crítica adiante, o que deixava a ISR do USB (e outras) mascaradas se a ordem mudasse.
+    // Com SysTick já configurado em system_stm32_init(), é seguro habilitar aqui.
+    __asm__ volatile("cpsie i" ::: "memory");
 
     // 2) Timers (TIM5=CKP IC, TIM2/TIM8=OC injeção/ignição)
     // TIM3/TIM4 PWM auxiliares são inicializados em auxiliaries_init().
@@ -404,7 +548,13 @@ static void openems_init() noexcept {
         const auto snap = ems::drv::ckp_snapshot();
         if (snap.state == ems::drv::SyncState::FULL_SYNC) { break; }
     }
+
+    // Kick final antes de entrar no main loop — garante que openems_init()
+    // não ultrapassa o timeout de 100 ms do IWDG.
+    iwdg_kick();
 }
+#endif // MINIMAL_BOOT
+
 
 // =============================================================================
 // main() — substituição do setup()/loop() do STM32 runtime
@@ -873,12 +1023,18 @@ int main() {
             }
         }
 
-        // ── 500ms: agenda flush Flash; execução avança em passos curtos ───
+        // ── 500ms: agenda flush Flash + LED heartbeat (PB2 WeAct) ──────────
+        // PB2 = LED da placa WeAct STM32H562; toggle confirma firmware a correr.
+        // GPIOB já tem clock habilitado em system_stm32_init().
         // FIX P0: Only allow flash writes when engine is stopped or below safe RPM
         static bool adaptive_flush_pending = false;
         static uint32_t last_calib_save_ms = 0u;
         if (elapsed(now, g_t500ms_, 500u)) {
             g_t500ms_ = now;
+            // LED heartbeat: toggle PB2 a cada 500ms (1 Hz)
+            // MODER PB2 = output (01b at bits [5:4])
+            GPIOB_MODER = (GPIOB_MODER & ~(3u << 4u)) | (1u << 4u);
+            GPIOB_ODR ^= (1u << 2u);  // toggle PB2
             const auto snap = ems::drv::ckp_snapshot();
             // FIX: gate ALL flash writes behind the same RPM threshold — calibration
             // writes had no RPM check, creating a latent bug (see Blocker #3).
