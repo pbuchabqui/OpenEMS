@@ -38,4 +38,9 @@ uint16_t usb_cdc_read_bytes(uint8_t* buffer, uint16_t max_len) noexcept;
 bool usb_cdc_dtr() noexcept;  // Data Terminal Ready
 bool usb_cdc_rts() noexcept;  // Request To Send
 
+// Diagnóstico: maior estágio de enumeração já alcançado (1..6).
+// 1=vivo  2=ISR USB disparou  3=RESET do host  4=SETUP recebido
+// 5=GET_DESCRIPTOR pedido  6=SET_CONFIGURATION (enumerado)
+uint8_t usb_cdc_dbg_stage() noexcept;
+
 } // namespace ems::hal

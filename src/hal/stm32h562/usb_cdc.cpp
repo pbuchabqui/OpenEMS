@@ -14,6 +14,13 @@
 #include <cstdint>
 #include <cstring>
 
+// Diagnóstico de enumeração: maior estágio alcançado (ver usb_cdc.h). File-scope para
+// ser visível tanto pela ISR (fora do namespace anônimo) quanto pelos handlers e accessor.
+static volatile uint8_t g_usb_dbg_stage = 1u;
+static inline void dbg_stage(uint8_t s) noexcept {
+    if (g_usb_dbg_stage < s) { g_usb_dbg_stage = s; }
+}
+
 // ── Circular FIFO helpers (shared between host-test and hardware paths) ────────
 namespace {
 
@@ -480,6 +487,7 @@ static void handle_setup(const SetupPacket& s) noexcept {
                 switch (desc_type) {
                     case 0x01u: {
                         // Device descriptor
+                        dbg_stage(5u);  // host pediu GET_DESCRIPTOR(device)
                         const uint16_t len = (s.wLength < sizeof(kDeviceDesc))
                                            ? s.wLength
                                            : static_cast<uint16_t>(sizeof(kDeviceDesc));
@@ -526,6 +534,7 @@ static void handle_setup(const SetupPacket& s) noexcept {
                 // SET_CONFIGURATION
                 if ((s.wValue & 0xFFu) == 1u) {
                     g_configured = true;
+                    dbg_stage(6u);  // SET_CONFIGURATION → enumerado
                     // USB spec: reset data toggles to DATA0 on all non-control endpoints.
                     // DTOG bits are toggle-on-write: write 1 to flip; write 0 to leave.
                     for (uint32_t ep = 1u; ep <= 3u; ++ep) {
@@ -725,6 +734,10 @@ static void handle_ctr() noexcept {
 extern "C" void USB_IRQHandler() noexcept {
     uint32_t istr = USB_ISTR;
 
+    dbg_stage(2u);                                   // ISR USB disparou
+    if (istr & USB_ISTR_RESET) { dbg_stage(3u); }    // RESET do host
+    if (istr & USB_ISTR_CTR)   { dbg_stage(4u); }    // transferência (SETUP/CTR)
+
     if (istr & USB_ISTR_RESET) {
         USB_ISTR = ~USB_ISTR_RESET;  // clear reset flag
         usb_hw_reset();
@@ -770,12 +783,12 @@ void usb_cdc_init() noexcept {
     // Wait for VDDUSB ready (PWR_VMSR.USB33RDY)
     for (volatile uint32_t i = 0u; (PWR_VMSR & PWR_VMSR_USB33RDY) == 0u && i < 100000u; ++i) {}
 
-    // 2. Enable GPIOA clock (for PA11/PA12)
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN;
-
-    // 3. Configure PA11 (DM) and PA12 (DP) as AF10, very-high speed
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 11u, GPIO_AF10);
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 12u, GPIO_AF10);
+    // 2/3. NÃO configurar GPIO PA11/PA12.
+    // O STM32H5 usa USB_DRD_FS com PHY full-speed EMBUTIDO: DP/DM são pinos DEDICADOS,
+    // dirigidos diretamente pelo transceiver — NÃO se configura GPIO AF (isso é só para o
+    // USB_OTG_FS de F4/F7/H7). Forçar PA11/PA12 como AF10 digital push-pull briga com o
+    // PHY analógico e impede a sinalização → device anexa mas EP0 falha (descriptor -32).
+    // O golden reference (USBCDC_H5, hardware-verificado) deixa esses pinos no reset.
 
     // 4. Select HSI48 as USB kernel clock (RCC_CCIPR4 USBSEL=11) and enable APB2 clock.
     // CRITICAL: USBSEL=00 is NOCLOCK on H5 — the USB peripheral would have no kernel
@@ -783,15 +796,24 @@ void usb_cdc_init() noexcept {
     RCC_CCIPR4 = (RCC_CCIPR4 & ~RCC_CCIPR4_USBSEL_MSK) | RCC_CCIPR4_USBSEL_HSI48;
     RCC_APB2ENR |= RCC_APB2ENR_USBEN;
 
-    // 5. Power up USB transceiver: clear PDWN
-    USB_CNTR = USB_CNTR_PDWN | USB_CNTR_USBRST;  // start with reset asserted
-    // RM0481 §52.4.1: minimum 1 µs analog startup after clearing PDWN.
-    // DSB ensures the write completes before the spin loop. 5000 NOPs @ 250 MHz ≈ 20 µs.
+    // 4a. CRS: trim do HSI48 contra o USB SOF. HSI48 não-trimado tem ±1-2% (fora da
+    // tolerância USB FS de ±0.25%) → enumeração pode falhar (descriptor read -32). O golden
+    // reference habilita CRS aqui; o usb_cdc_init() do OpenEMS dependia de system_stm32_init()
+    // ter feito isso, mas o caminho minimal/isolado não chama. Reset defaults de CRS_CFGR já
+    // têm RELOAD=47999/FELIM=34; só precisamos SYNCSRC=USB + AUTOTRIMEN + CEN.
+    RCC_APB1LENR |= RCC_APB1LENR_CRSEN;
+    CRS_CFGR = (CRS_CFGR & ~(3u << 28u)) | CRS_CFGR_SYNCSRC_USB;  // SYNCSRC=0b10 (USB SOF)
+    CRS_CR |= CRS_CR_AUTOTRIMEN | CRS_CR_CEN;
+
+    // 5. Power up USB transceiver: clear PDWN (PDWN=0) mantendo o core em reset (USBRST=1).
+    // RM0481 §52.4.1: mínimo 1 µs de startup analógico DEPOIS de limpar PDWN — só então
+    // libera o reset. (Antes o delay estava ANTES de limpar PDWN, dando ~0 de startup ao
+    // transceiver, divergindo do reference que faz PDWN=0 → delay → reset=0.)
+    USB_CNTR = USB_CNTR_USBRST;  // PDWN=0, USBRST=1
     __asm__ volatile("dsb" ::: "memory");
-    for (volatile uint32_t i = 0u; i < 5000u; ++i) {
+    for (volatile uint32_t i = 0u; i < 5000u; ++i) {  // t_STARTUP > 1 µs
         __asm__ volatile("nop");
     }
-    USB_CNTR = USB_CNTR_USBRST;  // clear PDWN, keep USBRST
 
     // 6. Clear USB reset
     USB_CNTR = 0u;
@@ -892,6 +914,10 @@ bool usb_cdc_dtr() noexcept {
 
 bool usb_cdc_rts() noexcept {
     return g_rts;
+}
+
+uint8_t usb_cdc_dbg_stage() noexcept {
+    return g_usb_dbg_stage;
 }
 
 }  // namespace ems::hal
