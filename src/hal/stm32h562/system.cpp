@@ -60,10 +60,6 @@ void iwdg_kick(void) noexcept {
 // ── Inicialização do sistema ──────────────────────────────────────────────────
 
 void system_stm32_init(void) noexcept {
-    // [DIAG] preserva o waypoint do boot anterior p/ relatório RSR/WP via CDC
-    *reinterpret_cast<volatile uint32_t*>(0x20050008u) =
-        *reinterpret_cast<volatile uint32_t*>(0x20050000u);
-
     // ── 0. VOS0: obrigatório ANTES de subir para 250 MHz ─────────────────
     // Reset default é VOS3 (máx ~100 MHz). VOS0 (11b) permite até 250 MHz.
     // Timeout não-fatal: VOSRDY pode demorar até ~1ms; continuar sem crash
