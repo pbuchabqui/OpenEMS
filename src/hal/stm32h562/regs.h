@@ -35,10 +35,12 @@
 #define USART1_BASE  0x40013800UL
 #define USART2_BASE  0x40004400UL
 
-// AHB1
-#define ADC1_BASE    0x42022400UL
-#define ADC2_BASE    0x42022500UL
-#define ADC12_COMMON 0x42022700UL
+// AHB2 — ADC (CMSIS verified: AHB2PERIPH 0x42020000 + 0x8000/0x8100/0x8300)
+// Os endereços antigos (0x42022400...) caíam em região sem periférico → acesso
+// travava o barramento AHB para sempre (sem fault) até o IWDG resetar.
+#define ADC1_BASE    0x42028000UL
+#define ADC2_BASE    0x42028100UL
+#define ADC12_COMMON 0x42028300UL
 
 // APB1 — FDCAN
 #define FDCAN1_BASE  0x4000A400UL
@@ -100,7 +102,9 @@
 #define RCC_AHB2ENR1_GPIODEN  (1u << 3)
 #define RCC_AHB2ENR1_GPIOEEN  (1u << 4)
 #define RCC_AHB1ENR_GPDMA1EN  (1u << 0)
-#define RCC_AHB1ENR_ADC12EN   (1u << 5)
+// ADC no H562 fica no AHB2 (RCC_AHB2ENR_ADCEN bit 10, CMSIS verified) — o define
+// antigo RCC_AHB1ENR_ADC12EN (bit 5 do AHB1ENR) não habilitava clock nenhum do ADC.
+#define RCC_AHB2ENR1_ADCEN    (1u << 10)
 #define RCC_APB1LENR_TIM2EN   (1u << 0)
 #define RCC_APB1LENR_TIM3EN   (1u << 1)
 #define RCC_APB1LENR_TIM4EN   (1u << 2)
@@ -646,6 +650,8 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define IWDG_PR  STM32_REG32(IWDG_BASE + IWDG_PR_OFF)
 #define IWDG_RLR STM32_REG32(IWDG_BASE + IWDG_RLR_OFF)
 #define IWDG_SR  STM32_REG32(IWDG_BASE + IWDG_SR_OFF)
+#define IWDG_SR_PVU  (1u << 0u)   // prescaler update in progress
+#define IWDG_SR_RVU  (1u << 1u)   // reload value update in progress
 
 #define IWDG_KR_REFRESH  0xAAAAu
 #define IWDG_KR_ACCESS   0x5555u
@@ -654,7 +660,10 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 // IWDG_PR: prescaler para ~100ms a 32 kHz LSI
 // Prescaler /32 → 32000/32 = 1000 Hz → RLR = 100 → 100 ms
 #define IWDG_PR_DIV32    0x3u
+#define IWDG_PR_DIV256   0x6u    // /256 → 125 Hz @ 32 kHz LSI
 #define IWDG_RLR_100MS   99u
+#define IWDG_RLR_1S      999u    // com /32 → 1s
+#define IWDG_RLR_10S     1249u   // com /256 → 10s (boot completo + margem)
 
 // ─── Flash (RM0481 §7) ───────────────────────────────────────────────────────
 #define FLASH_ACR_OFF     0x000UL

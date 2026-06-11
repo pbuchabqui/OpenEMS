@@ -225,7 +225,8 @@ static void gpdma_adc2_arm() noexcept {
 
 void adc_init() noexcept {
     // ── 1. Habilitar clocks ADC e GPIOs ─────────────────────────────────
-    RCC_AHB1ENR |= RCC_AHB1ENR_ADC12EN | RCC_AHB1ENR_GPDMA1EN;
+    RCC_AHB1ENR |= RCC_AHB1ENR_GPDMA1EN;
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_ADCEN;   // ADC fica no AHB2 no H562 (bit 10)
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN
                   | RCC_AHB2ENR1_GPIOBEN
                   | RCC_AHB2ENR1_GPIOCEN;
