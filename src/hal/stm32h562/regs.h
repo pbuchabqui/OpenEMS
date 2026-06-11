@@ -706,7 +706,10 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define FLASH_ACR_DCEN        (1u << 10)
 
 // Flash Bank2 base address
-#define FLASH_BANK2_BASE  0x08100000UL
+// STM32H562RG = 1 MB flash (DFU: 128 setores × 8KB). Bank1 0x08000000-0x0807FFFF,
+// Bank2 0x08080000-0x080FFFFF. O valor antigo 0x08100000 (chip de 2MB) está FORA
+// da flash → leitura travava o barramento AHB (bus stall, sem fault).
+#define FLASH_BANK2_BASE  0x08080000UL
 #define FLASH_SECTOR_SIZE 0x00002000UL  // 8 KB por setor no H562
 
 // ─── NVIC helpers (ARM Cortex-M33 NVIC — idêntico ao M4) ────────────────────

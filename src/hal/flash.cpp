@@ -2,11 +2,11 @@
  * @file hal/stm32h562/flash.cpp
  * @brief Emulação de EEPROM via Flash Bank2 para STM32H562RGT6
  *
- * Layout da Flash Bank2 (base 0x08100000):
- *   Setor 0 (0x08100000, 8 KB): LTFT map + Knock map (página quente)
- *   Setor 1 (0x08102000, 8 KB): Calibração página 0 (512 bytes)
- *   Setor 2 (0x08104000, 8 KB): Calibração página 1 (256 bytes)
- *   Setor 3 (0x08106000, 8 KB): Calibração página 2 (256 bytes)
+ * Layout da Flash Bank2 (base 0x08080000 — H562RG = 1MB, 512K/bank):
+ *   Setor 0 (0x08080000, 8 KB): LTFT map + Knock map (página quente)
+ *   Setor 1 (0x08082000, 8 KB): Calibração página 0 (512 bytes)
+ *   Setor 2 (0x08084000, 8 KB): Calibração página 1 (256 bytes)
+ *   Setor 3 (0x08086000, 8 KB): Calibração página 2 (256 bytes)
  *   Setores 4-6: Calibração páginas 3-5
  *   Setor 7: reservado
  *
