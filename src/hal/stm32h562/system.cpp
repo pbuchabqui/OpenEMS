@@ -98,12 +98,15 @@ void system_stm32_init(void) noexcept {
     //   VCO output = 4 MHz × 125 = 500 MHz (wide range, max 960 MHz ✓)
     //   SYSCLK     = 500 MHz / 2 = 250 MHz
     // PLL1CFGR:
-    //   [1:0]  PLL1SRC=01b (HSE)
+    //   [1:0]  PLL1SRC=11b (HSE) — RM0481: 00=none, 01=HSI, 10=CSI, 11=HSE.
+    //          BUG ANTERIOR: usava 01b achando que era HSE, mas 01b é HSI →
+    //          VCO input fora do range → PLL1RDY nunca setava → SYSCLK ficava
+    //          em HSI 32MHz (8x lento; boot de ~6s virava ~47s).
     //   [3:2]  PLL1RGE=10b (4-8 MHz VCI input range)
     //   [5]    PLL1VCOSEL=0 (wide VCO range 192-960 MHz)
     //   [13:8] PLL1M=2
     //   [16]   PLL1PEN=1 (enable P output for SYSCLK)
-    RCC_PLL1CFGR = (1u << 0)    // PLL1SRC = HSE
+    RCC_PLL1CFGR = (3u << 0)    // PLL1SRC = 11b = HSE
                  | (2u << 2)    // PLL1RGE = 10b (4-8 MHz input)
                  | (0u << 5)    // PLL1VCOSEL = 0 (wide, 192-960 MHz)
                  | (2u << 8)    // PLL1M = 2
@@ -167,12 +170,19 @@ void system_stm32_init(void) noexcept {
              | CRS_CFGR_SYNCSRC_USB;
     CRS_CR |= CRS_CR_CEN | CRS_CR_AUTOTRIMEN;
 
-    // ── 10. Configurar IWDG ≈ 100 ms ─────────────────────────────────────
+    // ── 10. Configurar IWDG ≈ 10 s durante boot (estreitado p/ 100ms no main loop)
+    // 10s cobre: 300ms USB + inits ECU (~2s) + CKP sync wait 5s + margem.
+    // Nota: PR e RLR levam alguns ciclos LSI para fazer efeito (IWDG_SR.PVU/RVU).
+    // O kick imediato ainda usa o valor anterior — seguro pois o IWDG acabou de ser iniciado.
     IWDG_KR  = IWDG_KR_START;    // Inicia IWDG (habilita LSI automaticamente)
     IWDG_KR  = IWDG_KR_ACCESS;   // Desbloqueia PR e RLR
-    IWDG_PR  = IWDG_PR_DIV32;    // Prescaler /32 → 1000 Hz
-    IWDG_RLR = IWDG_RLR_100MS;   // Reload = 99 → 99/1000 ≈ 99 ms
-    IWDG_KR  = IWDG_KR_REFRESH;  // Primeiro kick
+    IWDG_PR  = IWDG_PR_DIV256;   // Prescaler /256 → 125 Hz
+    IWDG_RLR = IWDG_RLR_10S;     // Reload = 1249 → 1249/125 ≈ 10s
+    // Aguardar PR e RLR ficarem efetivos (atualização via domínio LSI ~3 ciclos LSI ≈ 100µs)
+    for (uint32_t n = 10000u; (IWDG_SR & (IWDG_SR_PVU | IWDG_SR_RVU)) != 0u; --n) {
+        if (n == 0u) { break; }
+    }
+    IWDG_KR  = IWDG_KR_REFRESH;  // Primeiro kick com novo RLR efectivo
 }
 
 #else  // EMS_HOST_TEST
