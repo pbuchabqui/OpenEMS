@@ -60,6 +60,10 @@ void iwdg_kick(void) noexcept {
 // ── Inicialização do sistema ──────────────────────────────────────────────────
 
 void system_stm32_init(void) noexcept {
+    // [DIAG] preserva o waypoint do boot anterior p/ relatório RSR/WP via CDC
+    *reinterpret_cast<volatile uint32_t*>(0x20050008u) =
+        *reinterpret_cast<volatile uint32_t*>(0x20050000u);
+
     // ── 0. VOS0: obrigatório ANTES de subir para 250 MHz ─────────────────
     // Reset default é VOS3 (máx ~100 MHz). VOS0 (11b) permite até 250 MHz.
     // Timeout não-fatal: VOSRDY pode demorar até ~1ms; continuar sem crash
@@ -111,11 +115,13 @@ void system_stm32_init(void) noexcept {
                  | (0u << 5)    // PLL1VCOSEL = 0 (wide, 192-960 MHz)
                  | (2u << 8)    // PLL1M = 2
                  | (1u << 16);  // PLL1PEN = 1
-    // PLL1DIVR:
-    //   [8:0]  PLL1N=124 → effective N=125 (VCO=500 MHz)
-    //   [15:9] PLL1P=0   → effective P=2×(0+1)=2 (SYSCLK=250 MHz)
+    // PLL1DIVR (campos guardam divisor−1, cf. __HAL_RCC_PLL1_CONFIG):
+    //   [8:0]  PLL1N=124 → ×125 (VCO = 500 MHz)
+    //   [15:9] PLL1P=1   → ÷2   (SYSCLK = 250 MHz)
+    // BUG ANTERIOR: P=0 → ÷1 → SYSCLK = 500 MHz (2× o máximo!) → lockup
+    // instantâneo no switch; os guards passavam porque o PLL trava normalmente.
     RCC_PLL1DIVR = (124u << 0)   // N = 125
-                 | (0u << 9);    // P = 2
+                 | (1u << 9);    // P = 2
 
     // ── 4. Ligar PLL1 e aguardar lock ────────────────────────────────────
     RCC_CR |= RCC_CR_PLL1ON;
@@ -123,16 +129,31 @@ void system_stm32_init(void) noexcept {
         if (n == 0u) { break; }  // não-fatal: continua sem PLL (HSI16)
     }
 
-    // ── 5. Configurar prescalers APB (manter AHB = SYSCLK) ───────────────
+    // ── 5. Configurar prescalers AHB/APB — ficam no CFGR2 no H5! ─────────
+    // BUG ANTERIOR: escrevia no CFGR1 (que é SW/SWS/MCO) — os prescalers nunca
+    // eram configurados (tudo /1) e bits espúrios entravam no CFGR1.
+    // CFGR2: HPRE[3:0], PPRE1[6:4], PPRE2[10:8]. PPRE=100b → /2.
     // Timer clock = 2×APB = HCLK = 250 MHz (timer doubler activo quando PPRE≠1)
-    RCC_CFGR1 = (0u << 4)    // HPRE = 0  → HCLK = SYSCLK = 250 MHz
-              | (4u << 8)    // PPRE1 = 4 → APB1 = 125 MHz
-              | (4u << 11);  // PPRE2 = 4 → APB2 = 125 MHz
+    RCC_CFGR2 = (0u << 0)    // HPRE = 0   → HCLK = SYSCLK = 250 MHz
+              | (4u << 4)    // PPRE1 = 100b → APB1 = 125 MHz
+              | (4u << 8);   // PPRE2 = 100b → APB2 = 125 MHz
 
-    // ── 6. Selecionar PLL1 como SYSCLK ───────────────────────────────────
-    RCC_CFGR1 = (RCC_CFGR1 & ~0x7u) | RCC_CFGR1_SW_PLL1;
-    for (uint32_t n = 100000u; (RCC_CFGR1 & (7u << 3)) != RCC_CFGR1_SWS_PLL1; --n) {
-        if (n == 0u) { break; }  // não-fatal
+    // ── 6. Selecionar PLL1 como SYSCLK — SÓ com pré-condições confirmadas ─
+    // Guards: sem eles, trocar p/ 250MHz com VOS/flash/PLL errado mata o core
+    // sem fault (lockup) e sem diagnóstico. Se algum guard falhar, fica em HSI
+    // (vivo, USB ok) e o relatório de boot via CDC mostra qual registo falhou.
+    {
+        const bool pll_ok  = (RCC_CR & RCC_CR_PLL1RDY) != 0u;
+        const bool acr_ok  = (FLASH_ACR & (0xFu | FLASH_ACR_WRHIGHFREQ_MSK))
+                             == (FLASH_ACR_LATENCY_5WS | FLASH_ACR_WRHIGHFREQ_250);
+        const bool vos_ok  = (PWR_VOSSR & PWR_VOSSR_VOSRDY) != 0u
+                          && (PWR_VOSSR & PWR_VOSSR_ACTVOS_MSK) == PWR_VOSSR_ACTVOS_VOS0;
+        if (pll_ok && acr_ok && vos_ok) {
+            RCC_CFGR1 = (RCC_CFGR1 & ~0x7u) | RCC_CFGR1_SW_PLL1;
+            for (uint32_t n = 100000u; (RCC_CFGR1 & (7u << 3)) != RCC_CFGR1_SWS_PLL1; --n) {
+                if (n == 0u) { break; }  // não-fatal
+            }
+        }
     }
 
     // ── 7. Habilitar clocks dos GPIOs ────────────────────────────────────
@@ -170,19 +191,15 @@ void system_stm32_init(void) noexcept {
              | CRS_CFGR_SYNCSRC_USB;
     CRS_CR |= CRS_CR_CEN | CRS_CR_AUTOTRIMEN;
 
-    // ── 10. Configurar IWDG ≈ 10 s durante boot (estreitado p/ 100ms no main loop)
-    // 10s cobre: 300ms USB + inits ECU (~2s) + CKP sync wait 5s + margem.
-    // Nota: PR e RLR levam alguns ciclos LSI para fazer efeito (IWDG_SR.PVU/RVU).
-    // O kick imediato ainda usa o valor anterior — seguro pois o IWDG acabou de ser iniciado.
-    IWDG_KR  = IWDG_KR_START;    // Inicia IWDG (habilita LSI automaticamente)
-    IWDG_KR  = IWDG_KR_ACCESS;   // Desbloqueia PR e RLR
-    IWDG_PR  = IWDG_PR_DIV256;   // Prescaler /256 → 125 Hz
-    IWDG_RLR = IWDG_RLR_10S;     // Reload = 1249 → 1249/125 ≈ 10s
-    // Aguardar PR e RLR ficarem efetivos (atualização via domínio LSI ~3 ciclos LSI ≈ 100µs)
+    // ── 10. IWDG ≈ 10 s durante boot (estreitado p/ 100ms no main loop) ──
+    IWDG_KR  = IWDG_KR_START;
+    IWDG_KR  = IWDG_KR_ACCESS;
+    IWDG_PR  = IWDG_PR_DIV256;
+    IWDG_RLR = IWDG_RLR_10S;
     for (uint32_t n = 10000u; (IWDG_SR & (IWDG_SR_PVU | IWDG_SR_RVU)) != 0u; --n) {
         if (n == 0u) { break; }
     }
-    IWDG_KR  = IWDG_KR_REFRESH;  // Primeiro kick com novo RLR efectivo
+    IWDG_KR  = IWDG_KR_REFRESH;
 }
 
 #else  // EMS_HOST_TEST

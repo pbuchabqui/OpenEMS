@@ -63,6 +63,9 @@
 #define PWR_VOSCR_VOS_MSK    (3u << 4u)
 #define PWR_VOSCR_VOS0       (3u << 4u)  // 11b: Scale 0, max HCLK 250 MHz
 #define PWR_VOSSR_VOSRDY     (1u << 3u)  // Voltage scaling ready flag
+#define PWR_VOSSR_ACTVOSRDY  (1u << 13u) // VOS aplicado e pronto (CMSIS pos 13)
+#define PWR_VOSSR_ACTVOS_MSK (3u << 14u) // VOS efetivamente em uso (CMSIS pos 14)
+#define PWR_VOSSR_ACTVOS_VOS0 (3u << 14u)
 // PWR_USBSCR bits (confirmed from stm32h562xx.h)
 #define PWR_USBSCR_USB33DEN  (1u << 24u)  // VDDUSB voltage detector enable
 #define PWR_USBSCR_USB33SV   (1u << 25u)  // VDDUSB 3.3V supply enable (required for USB PHY)
