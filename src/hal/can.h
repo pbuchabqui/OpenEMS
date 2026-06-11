@@ -25,6 +25,7 @@ struct CanFrame {
 void can0_init() noexcept;
 bool can0_tx(const CanFrame& frame) noexcept;
 bool can0_rx_pop(CanFrame& out) noexcept;
+uint32_t can0_get_init_faults() noexcept;
 
 #if defined(EMS_HOST_TEST)
 void can_test_reset() noexcept;

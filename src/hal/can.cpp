@@ -75,6 +75,8 @@ static inline bool rx_fifo_pop(CanFrame& out) noexcept {
     return true;
 }
 
+static uint32_t g_can_init_faults = 0u;
+
 // ── Inicialização ─────────────────────────────────────────────────────────────
 
 void can0_init() noexcept {
@@ -88,7 +90,13 @@ void can0_init() noexcept {
 
     // ── 3. Entrar em modo de inicialização ───────────────────────────────
     FDCAN1_CCCR |= FDCAN_CCCR_INIT;
-    while ((FDCAN1_CCCR & FDCAN_CCCR_INIT) == 0u) { /* aguarda */ }
+    {
+        constexpr uint32_t kTimeout = 30000u;
+        for (uint32_t n = kTimeout; n > 0u; --n) {
+            if (FDCAN1_CCCR & FDCAN_CCCR_INIT) { break; }
+        }
+        if ((FDCAN1_CCCR & FDCAN_CCCR_INIT) == 0u) { ++g_can_init_faults; }
+    }
     FDCAN1_CCCR |= FDCAN_CCCR_CCE;   // habilita configuração
 
     // ── 4. Bit timing 500 kbps a 62.5 MHz ────────────────────────────────
@@ -131,7 +139,17 @@ void can0_init() noexcept {
     FDCAN1_CCCR &= ~FDCAN_CCCR_CCE;
     FDCAN1_CCCR &= ~FDCAN_CCCR_INIT;
     // Aguardar sincronização no barramento
-    while (FDCAN1_CCCR & FDCAN_CCCR_INIT) { /* aguarda */ }
+    {
+        constexpr uint32_t kTimeout = 30000u;
+        for (uint32_t n = kTimeout; n > 0u; --n) {
+            if ((FDCAN1_CCCR & FDCAN_CCCR_INIT) == 0u) { break; }
+        }
+        if (FDCAN1_CCCR & FDCAN_CCCR_INIT) { ++g_can_init_faults; }
+    }
+}
+
+uint32_t can0_get_init_faults() noexcept {
+    return g_can_init_faults;
 }
 
 // ── Transmissão ───────────────────────────────────────────────────────────────
@@ -227,6 +245,7 @@ static uint8_t  g_tx_cnt = 0u, g_rx_cnt = 0u, g_rx_pop_idx = 0u;
 static uint32_t g_test_ctrl1 = 0u;
 
 void can0_init() noexcept {}
+uint32_t can0_get_init_faults() noexcept { return 0u; }
 bool can0_tx(const CanFrame& f) noexcept {
     if (g_tx_cnt < 8u) { g_tx_buf[g_tx_cnt++] = f; }
     return true;
