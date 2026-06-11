@@ -490,17 +490,21 @@ static void openems_init() noexcept {
     // para todos os dentes antes da tabela ser preenchida, gerando DTCs falsos.
     ems::engine::misfire_init();
     ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
+    iwdg_kick();
 
     // 2a) Scheduler unificado
     ::ECU_Hardware_Init();
+    iwdg_kick();
 
     // 3) ADC (ADC1/ADC2 + TIM6 trigger)
     ems::hal::adc_init();
+    iwdg_kick();
 
     // 4) CAN + bench communication. MVP transport: USART1 PA9/PA10.
     // (usb_cdc_init() já foi chamado cedo em 1b, antes dos inits da ECU.)
     ems::hal::can0_init();
     ems::hal::uart0_init(115200u);
+    iwdg_kick();
 
 	// 5) Flash Bank2 → carrega calibrações persistidas
 	if (!ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes)) {
@@ -530,6 +534,7 @@ static void openems_init() noexcept {
 
     // 6) Drivers
     ems::drv::sensors_init();
+    iwdg_kick();
 
     // 6a) Inicializa sistemas "invisíveis" ao motorista
     ems::engine::map_estimator_init();
@@ -538,12 +543,14 @@ static void openems_init() noexcept {
     // 6b) Inicializa ETB e Torque Manager (borboleta eletrônica)
     g_etb_initialized = etb_control_init();
     torque_manager_init();
+    iwdg_kick();
 
     // 7) Engine
     ems::engine::fuel_reset_adaptives();
     ems::engine::auxiliaries_init();
     ems::engine::knock_init();
     ems::engine::quick_crank_reset();
+    iwdg_kick();
 
     // 8) Aplicação
     ems::app::ui_init();
@@ -584,6 +591,14 @@ int main() {
     uint32_t g_t100ms_ = g_t2ms_;
     uint32_t g_t500ms_ = g_t2ms_;
     uint32_t g_t_etb_ms = g_t2ms_;
+
+    // Estreitar IWDG de 10s (boot) para 100ms (runtime): o main loop kica a cada
+    // ciclo; 100ms detecta travamento de runtime sem tolerar os inits longos do boot.
+    // Nota: IWDG_PR segue /256 (boot) → RLR=99 dá ~0.8s efetivo; suficiente p/ runtime
+    // e evita esperar PVU/RVU de novo no caminho crítico.
+    IWDG_KR  = IWDG_KR_ACCESS;
+    IWDG_RLR = IWDG_RLR_100MS;
+    IWDG_KR  = IWDG_KR_REFRESH;
 
     for (;;) {
         // ── Watchdog kick (primeiro statement) ───────────────────────────

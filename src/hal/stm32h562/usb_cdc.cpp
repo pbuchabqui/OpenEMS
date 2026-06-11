@@ -241,6 +241,10 @@ static void ep_clear_ctr_rx(uint32_t ep) noexcept {
 static uint8_t           g_usb_addr_pending = 0u;
 static volatile bool     g_configured       = false;
 static volatile bool     g_ep1_tx_busy      = false;
+// ZLP pendente: o último pacote IN foi full-size (64B). USB bulk exige um
+// zero-length packet para terminar transferências múltiplas de wMaxPacketSize —
+// sem ele o cdc_acm do host segura os dados no URB até chegar um short packet.
+static volatile bool     g_ep1_zlp_pending  = false;
 // EP2 (bulk OUT) back-pressure: when the RX FIFO can't hold another full 64-byte
 // packet we leave the endpoint at NAK instead of re-arming RX VALID, so the host
 // stalls instead of us silently dropping bytes. Re-armed once the consumer drains.
@@ -409,6 +413,7 @@ static void ep1_tx_kick() noexcept {
     }
     pba_write(kPBA_EP1TX, buf, n);
     bdtable_set_count_tx(1u, n);
+    g_ep1_zlp_pending = (n == 64u);  // full-size: terminar com ZLP se a fila esvaziar
     ep_set_stat_tx(1u, 3u);  // VALID
 }
 
@@ -697,8 +702,16 @@ static void handle_ctr() noexcept {
         // EP1 IN: TX complete
         ep_clear_ctr_tx(1u);
         g_ep1_tx_busy = false;
-        // Drain more data if available
-        ep1_tx_kick();
+        if (g_tx_head != g_tx_tail) {
+            // Mais dados na fila — continua a transferência (ZLP só no fim)
+            ep1_tx_kick();
+        } else if (g_ep1_zlp_pending) {
+            // Fila vazia após pacote full-size: ZLP termina a transferência no host
+            g_ep1_zlp_pending = false;
+            g_ep1_tx_busy = true;
+            bdtable_set_count_tx(1u, 0u);
+            ep_set_stat_tx(1u, 3u);  // VALID
+        }
     } else if (ep == 2u) {
         // EP2 OUT: RX data received
         ep_clear_ctr_rx(2u);
@@ -853,6 +866,21 @@ void usb_cdc_poll() noexcept {
     if (g_configured) {
         ep1_tx_kick();
         ep2_rx_resume();
+
+        // TX watchdog: se uma transação IN ficou órfã (e.g. suspend/resume corrompeu
+        // STAT_TX — ver nota no WKUP ISR), g_ep1_tx_busy fica true para sempre e o
+        // payload morre no PMA até o próximo OUT por acaso destravar. Após ~10 polls
+        // consecutivos com busy, re-arma o MESMO payload (count já está no BDTable;
+        // só STAT_TX=VALID de novo) — inócuo se a transação estiver realmente em curso.
+        static uint16_t tx_stuck_polls = 0u;
+        if (g_ep1_tx_busy) {
+            if (++tx_stuck_polls >= 10u) {
+                tx_stuck_polls = 0u;
+                ep_set_stat_tx(1u, 3u);  // re-VALID
+            }
+        } else {
+            tx_stuck_polls = 0u;
+        }
     }
 #else
     // Stub: drain TX queue as "sent"
