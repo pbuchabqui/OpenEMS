@@ -81,13 +81,13 @@ void system_stm32_init(void) noexcept {
         if (n == 0u) { break; }  // não-fatal
     }
 
-    // ── 2. Flash latency + cache antes de aumentar clock ─────────────────
-    // 5 WS exigidos para HCLK > 210 MHz @ VOS0 (RM0481 §9.3.3)
-    FLASH_ACR = (FLASH_ACR & ~0xFu)
+    // ── 2. Flash latency + WRHIGHFREQ antes de aumentar clock ────────────
+    // 5 WS + WRHIGHFREQ=0b10 exigidos para 150<HCLK≤250 MHz @ VOS0 (RM0481 §7.3.3).
+    // Sem WRHIGHFREQ a flash retorna lixo a 250MHz (crash após switch p/ PLL).
+    FLASH_ACR = (FLASH_ACR & ~(0xFu | FLASH_ACR_WRHIGHFREQ_MSK))
               | FLASH_ACR_LATENCY_5WS
-              | FLASH_ACR_PRFTEN
-              | FLASH_ACR_ICEN
-              | FLASH_ACR_DCEN;
+              | FLASH_ACR_WRHIGHFREQ_250
+              | FLASH_ACR_PRFTEN;
     for (uint32_t n = 100000u; (FLASH_ACR & 0xFu) != 5u; --n) {
         if (n == 0u) { break; }  // não-fatal
     }

@@ -700,10 +700,14 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define FLASH_CR_SNB_SHIFT 6       // Sector number [3:0] @ bits [9:6]
 
 // Flash_ACR: latency / prefetch
-#define FLASH_ACR_LATENCY_5WS (5u << 0)
-#define FLASH_ACR_PRFTEN      (1u << 8)
-#define FLASH_ACR_ICEN        (1u << 9)
-#define FLASH_ACR_DCEN        (1u << 10)
+// FLASH_ACR no H5 (CMSIS verified): LATENCY[3:0], WRHIGHFREQ[5:4], PRFTEN(8).
+// ICEN/DCEN (bits 9/10, herdados de F4/H7) NÃO existem no H5 — removidos.
+// WRHIGHFREQ é OBRIGATÓRIO: 0b10 para 150<HCLK≤250MHz; sem ele a flash
+// retorna lixo a 250MHz (crash logo após o switch para PLL).
+#define FLASH_ACR_LATENCY_5WS    (5u << 0)
+#define FLASH_ACR_WRHIGHFREQ_MSK (3u << 4)
+#define FLASH_ACR_WRHIGHFREQ_250 (2u << 4)   // 0b10: 150-250 MHz
+#define FLASH_ACR_PRFTEN         (1u << 8)
 
 // Flash Bank2 base address
 // STM32H562RG = 1 MB flash (DFU: 128 setores × 8KB). Bank1 0x08000000-0x0807FFFF,
