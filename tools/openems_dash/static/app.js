@@ -171,7 +171,12 @@ async function loadGrid(pane) {
       }
       html += "</tr>";
     }
-    $(".grid-wrap", pane).innerHTML = html + "</table>";
+    $(".grid-wrap", pane).innerHTML = html + "</table>" +
+      `<canvas class="trail"></canvas>`;
+    const wrap = $(".grid-wrap", pane), tbl = $("table.tune", wrap),
+          cv = $("canvas.trail", wrap);
+    cv.width = tbl.offsetWidth;
+    cv.height = tbl.offsetHeight;
     $(".dirty", pane).textContent = st.modified.size
       ? `${st.modified.size} célula(s) não enviada(s)` : "";
     bindCells();
@@ -242,21 +247,58 @@ function axisLookup(axis, v) {
   while (i > 0 && v < axis[i]) i--;
   return { idx: i, frac: (v - axis[i]) / (axis[i + 1] - axis[i]) };
 }
+const TRAIL_MS = 1000;
 function highlightLiveCell() {
   if (!RT || !INFO) return;
   const pane = $(".grid-pane.active");
   if (!pane) return;
-  $$("td.live, td.live2", pane).forEach(td => td.classList.remove("live", "live2"));
+  const page = +pane.dataset.page;
+  const st = gridState[page];
+  const cv = pane.querySelector("canvas.trail");
+  if (!st || !cv) return;
+
   const lx = axisLookup(INFO.axes.rpm, RT.rpm);
   const ly = axisLookup(INFO.axes.map_kpa, RT.map_kpa);
-  const domCol = lx.idx + (lx.frac >= 0.5 ? 1 : 0);
-  const domRow = ly.idx + (ly.frac >= 0.5 ? 1 : 0);
-  for (const r of [ly.idx, ly.idx + 1]) {
+
+  // células de contexto da bilinear (tracejado fraco) — sem contorno no dominante
+  $$("td.live2", pane).forEach(td => td.classList.remove("live2"));
+  for (const r of [ly.idx, ly.idx + 1])
     for (const c of [lx.idx, lx.idx + 1]) {
       const td = pane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
-      if (td) td.classList.add(r === domRow && c === domCol ? "live" : "live2");
+      if (td) td.classList.add("live2");
     }
+
+  // posição real interpolada em pixels: centro do nó idx + frac até o nó idx+1
+  const center = (sel) => {
+    const td = pane.querySelector(sel);
+    return td ? { x: td.offsetLeft + td.offsetWidth / 2,
+                  y: td.offsetTop + td.offsetHeight / 2 } : null;
+  };
+  const c0 = center(`td[data-r="${ly.idx}"][data-c="${lx.idx}"]`);
+  const c1 = center(`td[data-r="${ly.idx + 1}"][data-c="${lx.idx + 1}"]`);
+  if (!c0 || !c1) return;
+  const x = c0.x + lx.frac * (c1.x - c0.x);
+  const y = c0.y + ly.frac * (c1.y - c0.y);
+
+  // rastro dos últimos TRAIL_MS
+  const now = performance.now();
+  st.trail = (st.trail || []).filter(p => now - p.t < TRAIL_MS);
+  st.trail.push({ x, y, t: now });
+
+  const g = cv.getContext("2d");
+  g.clearRect(0, 0, cv.width, cv.height);
+  g.lineCap = g.lineJoin = "round";
+  for (let i = 1; i < st.trail.length; i++) {
+    const a = st.trail[i - 1], b = st.trail[i];
+    const age = (now - b.t) / TRAIL_MS;          // 0 = recente, 1 = velho
+    g.strokeStyle = `rgba(255,255,255,${(1 - age) * 0.85})`;
+    g.lineWidth = 2 + (1 - age) * 3;             // afina conforme envelhece
+    g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
   }
+  // ponto atual — bem visível
+  g.beginPath(); g.arc(x, y, 9, 0, 2 * Math.PI);
+  g.fillStyle = "#fff"; g.fill();
+  g.lineWidth = 3; g.strokeStyle = "#111"; g.stroke();
 }
 
 /* ── parâmetros (páginas 5/6/7) ───────────────────────────────────────── */
