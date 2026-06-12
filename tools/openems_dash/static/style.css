@@ -64,7 +64,8 @@ table.tune td { border: 1px solid var(--grid-border); padding: 0;
                 text-align: center; cursor: cell; color: #111; }
 table.tune td.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
 table.tune td.mod { font-weight: 700; text-decoration: underline; }
-table.tune td.live { outline: 2px dashed #fff; outline-offset: -2px; }
+table.tune td.live  { outline: 2px solid #fff; outline-offset: -2px; }
+table.tune td.live2 { outline: 1px dashed rgba(255,255,255,.55); outline-offset: -1px; }
 /* edição inline: input herda fundo/cor/tamanho da célula — nada muda visualmente */
 table.tune td input { width: 100%; height: 100%; border: none; margin: 0; padding: 0;
                       background: transparent; color: inherit; font: inherit;

@@ -230,20 +230,32 @@ async function loadGrid(pane) {
   await reload();
 }
 
-/* célula corrente do motor destacada ao vivo */
-function axisIndex(axis, v) {
-  for (let i = axis.length - 1; i >= 0; i--) if (v >= axis[i]) return Math.min(i, 15);
-  return 0;
+/* célula corrente do motor destacada ao vivo.
+   Espelha axis_lookup() do firmware (table3d.cpp): eixos são NÓS de
+   interpolação — o ponto de operação mistura os 4 nós vizinhos com peso
+   pela posição real. Destacamos os 4 (dominante mais forte). */
+function axisLookup(axis, v) {
+  const last = axis.length - 1;
+  if (v <= axis[0]) return { idx: 0, frac: 0 };
+  if (v >= axis[last]) return { idx: last - 1, frac: 1 };
+  let i = last - 1;
+  while (i > 0 && v < axis[i]) i--;
+  return { idx: i, frac: (v - axis[i]) / (axis[i + 1] - axis[i]) };
 }
 function highlightLiveCell() {
   if (!RT || !INFO) return;
-  const col = axisIndex(INFO.axes.rpm, RT.rpm);
-  const row = axisIndex(INFO.axes.map_kpa, RT.map_kpa);
-  $$(".grid-pane.active td.live").forEach(td => td.classList.remove("live"));
   const pane = $(".grid-pane.active");
-  if (pane) {
-    const td = pane.querySelector(`td[data-r="${row}"][data-c="${col}"]`);
-    if (td) td.classList.add("live");
+  if (!pane) return;
+  $$("td.live, td.live2", pane).forEach(td => td.classList.remove("live", "live2"));
+  const lx = axisLookup(INFO.axes.rpm, RT.rpm);
+  const ly = axisLookup(INFO.axes.map_kpa, RT.map_kpa);
+  const domCol = lx.idx + (lx.frac >= 0.5 ? 1 : 0);
+  const domRow = ly.idx + (ly.frac >= 0.5 ? 1 : 0);
+  for (const r of [ly.idx, ly.idx + 1]) {
+    for (const c of [lx.idx, lx.idx + 1]) {
+      const td = pane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+      if (td) td.classList.add(r === domRow && c === domCol ? "live" : "live2");
+    }
   }
 }
 
