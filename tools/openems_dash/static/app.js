@@ -461,6 +461,8 @@ $("#logBtn").onclick = async () => {
   } catch (e) { toast(e.message, true); }
 };
 
+$("#logExportBtn").onclick = () => window.open("/api/log/export");
+
 /* ── init ─────────────────────────────────────────────────────────────── */
 (async () => {
   try {

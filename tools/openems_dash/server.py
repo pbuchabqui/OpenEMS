@@ -221,6 +221,61 @@ def api_log_stop():
     return {"path": worker.log_stop()}
 
 
+@app.get("/api/log/export")
+def api_log_export(rows: int = 120):
+    """Exporta o último log como relatório Markdown amigável p/ análise por LLM:
+    metadados, estatísticas por canal, transições de status e série temporal
+    reamostrada para no máximo `rows` linhas."""
+    files = sorted(LOGS.glob("*.csv"))
+    if not files:
+        return JSONResponse({"error": "sem logs"}, status_code=404)
+    path = files[-1]
+    with open(path) as fh:
+        data = list(csv.DictReader(fh))
+    if not data:
+        return JSONResponse({"error": "log vazio"}, status_code=404)
+
+    num_keys = [k for k in data[0] if k not in ("t",) and not k.startswith("st_")]
+    st_keys = [k for k in data[0] if k.startswith("st_")]
+    t0, t1 = float(data[0]["t"]), float(data[-1]["t"])
+    dur = t1 - t0
+
+    md = [f"# OpenEMS datalog — {path.name}", ""]
+    md += [f"- Amostras: {len(data)}  ·  Duração: {dur:.1f}s  ·  "
+           f"Taxa: {len(data)/dur:.1f} Hz" if dur > 0 else f"- Amostras: {len(data)}",
+           f"- Início (unix): {t0:.2f}", "",
+           "## Estatísticas por canal", "",
+           "| canal | min | max | média |", "|---|---|---|---|"]
+    for k in num_keys:
+        vals = [float(r[k]) for r in data]
+        md.append(f"| {k} | {min(vals):g} | {max(vals):g} | {sum(vals)/len(vals):.2f} |")
+
+    md += ["", "## Transições de status", ""]
+    transitions = []
+    prev = None
+    for r in data:
+        cur = {k: r[k] for k in st_keys}
+        if prev is not None and cur != prev:
+            changed = [f"{k.removeprefix('st_')}={cur[k]}" for k in st_keys if cur[k] != prev[k]]
+            transitions.append(f"- t+{float(r['t'])-t0:.2f}s: " + ", ".join(changed))
+        prev = cur
+    md += transitions if transitions else ["(nenhuma — status constante: " +
+        ", ".join(f"{k.removeprefix('st_')}={data[0][k]}" for k in st_keys) + ")"]
+
+    step = max(1, len(data) // rows)
+    sampled = data[::step]
+    md += ["", f"## Série temporal (reamostrada 1:{step}, {len(sampled)} linhas)", "",
+           "| t(s) | " + " | ".join(num_keys) + " |",
+           "|" + "---|" * (len(num_keys) + 1)]
+    for r in sampled:
+        md.append(f"| {float(r['t'])-t0:.2f} | " +
+                  " | ".join(f"{float(r[k]):g}" for k in num_keys) + " |")
+
+    out = path.with_suffix(".md")
+    out.write_text("\n".join(md) + "\n")
+    return FileResponse(out, filename=out.name, media_type="text/markdown")
+
+
 @app.get("/api/log/download")
 def api_log_download():
     files = sorted(LOGS.glob("*.csv"))
