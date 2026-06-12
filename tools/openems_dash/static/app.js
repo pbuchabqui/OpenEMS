@@ -161,7 +161,9 @@ async function loadGrid(pane) {
     const [min, max] = [Math.min(...flat), Math.max(...flat)];
     let html = `<table class="tune"><tr><th></th>` +
       INFO.axes.rpm.map(r => `<th>${r}</th>`).join("") + "</tr>";
-    for (let row = 0; row < 16; row++) {
+    // eixo Y invertido na exibição: MAP cresce de baixo p/ cima (data-r mantém
+    // o índice real da página — edição/tracing não mudam)
+    for (let row = 15; row >= 0; row--) {
       html += `<tr><th>${INFO.axes.map_kpa[row]}</th>`;
       for (let col = 0; col < 16; col++) {
         const v = st.values[row][col];
