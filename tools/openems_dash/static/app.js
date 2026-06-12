@@ -245,7 +245,21 @@ function highlightLiveCell() {
 }
 
 /* ── parâmetros (páginas 5/6/7) ───────────────────────────────────────── */
-const PARAM_PAGES = { 5: "Correções 1D", 6: "X-Tau / AE / Crank", 7: "Dwell 2D" };
+const PARAM_PAGES = { 0: "Configuração do motor", 5: "Correções 1D",
+                      6: "X-Tau / AE / Crank", 7: "Dwell 2D" };
+
+/* rótulos amigáveis (página 0) e campos read-only */
+const FIELD_LABELS = {
+  ivc_abdc_deg:              "Fecho da admissão IVC (° ABDC)",
+  displacement_cc:           "Cilindrada (cc)",
+  injector_flow_cc_min:      "Vazão do bico (cc/min)",
+  stoich_afr_x100:           "AFR estequiométrico (×100)",
+  map_ref_bar_x100:          "MAP de referência (bar×100)",
+  trigger_tooth0_engine_deg: "Offset trigger dente 0 (° motor, 0-719)",
+  default_soi_lead_deg:      "Avanço SOI padrão (°)",
+  config_magic:              "Magic (0x4543 = config válida)",
+};
+const READONLY_FIELDS = new Set(["config_magic"]);
 
 /* Layout explícito: curvas 1D (eixo + 1..n linhas de valores), tabelas 2D
    e escalares. Nomes de campo = protocol.py / ui_protocol.cpp. */
@@ -319,7 +333,8 @@ async function bindParamGroup(div, page) {
     let html = "";
 
     const inp = (f, i, v, cls = "") =>
-      `<input class="${cls}" data-f="${f}" data-i="${i}" value="${v}">`;
+      `<input class="${cls}" data-f="${f}" data-i="${i}" value="${v}"
+              ${READONLY_FIELDS.has(f) ? "disabled" : ""}>`;
 
     // curvas 1D: linha de eixo (editável) + linhas de valores
     for (const c of layout.curves) {
@@ -354,7 +369,7 @@ async function bindParamGroup(div, page) {
     for (const [name, v] of Object.entries(fields)) {
       if (used.has(name)) continue;
       const vals = Array.isArray(v) ? v : [v];
-      html += `<div class="param-row"><label>${name}</label>` +
+      html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
         vals.map((x, i) => inp(name, i, x)).join("") + "</div>";
     }
     rowsEl.innerHTML = html;

@@ -274,7 +274,20 @@ PAGE7_FIELDS = [
     ("dwell_rpm_factor_q8",  8, 4, "H"),
 ]
 
-FIELD_PAGES = {5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
+# Página 0, bytes 0-15: engine config (engine_config.cpp). Byte 1 é padding;
+# bytes 14-15 são o magic 0x4543 — exposto read-only para diagnóstico.
+PAGE0_FIELDS = [
+    ("ivc_abdc_deg",              0, 1, "B"),
+    ("displacement_cc",           2, 1, "H"),
+    ("injector_flow_cc_min",      4, 1, "H"),
+    ("stoich_afr_x100",           6, 1, "H"),
+    ("map_ref_bar_x100",          8, 1, "H"),
+    ("trigger_tooth0_engine_deg", 10, 1, "H"),
+    ("default_soi_lead_deg",     12, 1, "H"),
+    ("config_magic",             14, 1, "H"),
+]
+
+FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
 
 
 def decode_fields(page: int, buf: bytes) -> dict:
