@@ -221,11 +221,16 @@ def api_log_stop():
     return {"path": worker.log_stop()}
 
 
+def _nearest_bin(axis: list, v: float) -> int:
+    """Índice da célula mais próxima de v no eixo (para binning de tuning)."""
+    return min(range(len(axis)), key=lambda i: abs(axis[i] - v))
+
+
 @app.get("/api/log/export")
-def api_log_export(rows: int = 120):
-    """Exporta o último log como relatório Markdown amigável p/ análise por LLM:
-    metadados, estatísticas por canal, transições de status e série temporal
-    reamostrada para no máximo `rows` linhas."""
+def api_log_export(rows: int = 120, min_samples: int = 8):
+    """Relatório Markdown de tuning a partir do último log: pontos de operação
+    na grade RPM×MAP (regime permanente), lambda medido vs alvo por célula com
+    correção de VE sugerida, qualidade dos dados, e série reamostrada."""
     files = sorted(LOGS.glob("*.csv"))
     if not files:
         return JSONResponse({"error": "sem logs"}, status_code=404)
@@ -249,6 +254,94 @@ def api_log_export(rows: int = 120):
     for k in num_keys:
         vals = [float(r[k]) for r in data]
         md.append(f"| {k} | {min(vals):g} | {max(vals):g} | {sum(vals)/len(vals):.2f} |")
+
+    # ── análise de tuning: binning RPM×MAP em regime permanente ─────────
+    running = [r for r in data if float(r["rpm"]) > 300]
+    md += ["", "## Análise de tuning (regime permanente)", ""]
+    if not running:
+        md += ["**Motor parado durante todo o log** — sem dados de tuning. "
+               "Grave um log com o motor em funcionamento (ou HIL ativo)."]
+    else:
+        # alvo de lambda da ECU (página 4), se conectada
+        target_grid = None
+        try:
+            buf = worker.submit(lambda l: l.read_page(4))
+            target_grid = proto.decode_grid_i16(buf)
+        except Exception:  # noqa: BLE001 — sem placa: relatório sem coluna alvo
+            pass
+
+        # regime permanente: ΔRPM < 200 e ΔTPS < 2% entre amostras vizinhas
+        steady = []
+        for i, r in enumerate(running):
+            if i == 0 or i == len(running) - 1:
+                continue
+            prv, nxt = running[i - 1], running[i + 1]
+            if (abs(float(r["rpm"]) - float(prv["rpm"])) < 200
+                    and abs(float(nxt["rpm"]) - float(r["rpm"])) < 200
+                    and abs(float(r["tps_pct"]) - float(prv["tps_pct"])) < 2):
+                steady.append(r)
+        pct = 100 * len(steady) / len(running)
+        md += [f"- Amostras com motor girando: {len(running)} · em regime "
+               f"permanente: {len(steady)} ({pct:.0f}%) — transientes descartados",
+               f"- Células com < {min_samples} amostras são omitidas "
+               f"(estatística não confiável)", ""]
+
+        cells: dict = {}
+        for r in steady:
+            key = (_nearest_bin(proto.MAP_AXIS_KPA, float(r["map_kpa"])),
+                   _nearest_bin(proto.RPM_AXIS, float(r["rpm"])))
+            cells.setdefault(key, []).append(r)
+
+        rows_out = []
+        for (mi, ri), rs in sorted(cells.items()):
+            if len(rs) < min_samples:
+                continue
+            lam = sum(float(r["lambda_x1000"]) for r in rs) / len(rs)
+            ve = sum(float(r["ve"]) for r in rs) / len(rs)
+            stft = sum(float(r["stft_pct"]) for r in rs) / len(rs)
+            adv = sum(float(r["advance_deg"]) for r in rs) / len(rs)
+            pw = sum(float(r["pw_ms"]) for r in rs) / len(rs)
+            line = (f"| {proto.RPM_AXIS[ri]} | {proto.MAP_AXIS_KPA[mi]} | {len(rs)} "
+                    f"| {lam/1000:.3f} ")
+            if target_grid:
+                tgt = target_grid[mi][ri]
+                err = 100 * (lam - tgt) / tgt if tgt else 0
+                sug = lam / tgt if tgt else 1
+                line += (f"| {tgt/1000:.3f} | {err:+.1f}% | ×{sug:.3f} ")
+            line += f"| {ve:.0f} | {stft:+.1f} | {adv:.1f} | {pw:.2f} |"
+            rows_out.append(line)
+
+        if rows_out:
+            hdr = "| RPM | MAP kPa | n | λ médio "
+            sep = "|---|---|---|---"
+            if target_grid:
+                hdr += "| λ alvo | erro λ | VE sugerido "
+                sep += "|---|---|---"
+            hdr += "| VE | STFT% | avanço° | PW ms |"
+            sep += "|---|---|---|---|"
+            md += [hdr, sep] + rows_out
+            md += ["", "**Como usar**: λ medido > alvo = mistura pobre → multiplicar "
+                   "a célula da tabela VE pelo fator 'VE sugerido' (= λ_medido/λ_alvo). "
+                   "Confiar apenas em células com n alto e STFT estável."]
+            if target_grid is None:
+                md += ["", "(ECU desconectada no export — colunas de alvo omitidas)"]
+        else:
+            md += [f"Nenhuma célula atingiu {min_samples} amostras em regime "
+                   "permanente — log curto demais ou operação só em transiente."]
+
+        # confiabilidade
+        warn = []
+        if any(r["st_SENSOR_FAULT"] == "1" for r in running):
+            warn.append("SENSOR_FAULT ativo em parte do log — dados suspeitos")
+        if any(r["st_WBO2_FAULT"] == "1" for r in running):
+            warn.append("WBO2_FAULT — lambda NÃO confiável nesses trechos")
+        if not all(r["st_FULL_SYNC"] == "1" for r in running):
+            warn.append("trechos sem FULL_SYNC — RPM/fase não confiáveis")
+        d_late = float(running[-1]["late_events"]) - float(running[0]["late_events"])
+        if d_late > 0:
+            warn.append(f"{d_late:.0f} eventos de agendamento atrasado durante o log")
+        md += ["", "## Confiabilidade", ""]
+        md += [f"- ⚠ {w}" for w in warn] if warn else ["- ✓ sem faults, FULL_SYNC contínuo"]
 
     md += ["", "## Transições de status", ""]
     transitions = []
