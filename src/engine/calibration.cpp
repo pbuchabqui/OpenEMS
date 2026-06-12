@@ -190,6 +190,21 @@ void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept
     if (page == nullptr || len < 36u) {
         return;
     }
+    // Validação: flash apagada lê 0xFF — sem isto o boot carregava 65535 como
+    // calibração de pedal/ETB. Raws são ADC 12-bit (≤4095), pares min<max,
+    // flags 0/1. Bloco inválido → mantém defaults de compilação.
+    for (uint16_t i = 0u; i < 4u; ++i) {
+        uint16_t mn = 0u;
+        uint16_t mx = 0u;
+        std::memcpy(&mn, page + (i * 4u), 2u);
+        std::memcpy(&mx, page + (i * 4u) + 2u, 2u);
+        if (mx > 4095u || mn >= mx) {
+            return;
+        }
+    }
+    if (page[26] > 1u || page[27] > 1u) {
+        return;
+    }
     std::memcpy(&app1_raw_min, page + 0, 2u);
     std::memcpy(&app1_raw_max, page + 2, 2u);
     std::memcpy(&app2_raw_min, page + 4, 2u);
@@ -209,8 +224,14 @@ void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept
     std::memcpy(&etb_ki_x10, page + 30, 2u);
     std::memcpy(&etb_kd_x10, page + 32, 2u);
     if (len >= 40u) {
-        std::memcpy(&tps_raw_min, page + 36, 2u);
-        std::memcpy(&tps_raw_max, page + 38, 2u);
+        uint16_t mn = 0u;
+        uint16_t mx = 0u;
+        std::memcpy(&mn, page + 36, 2u);
+        std::memcpy(&mx, page + 38, 2u);
+        if (mx <= 4095u && mn < mx) {
+            tps_raw_min = mn;
+            tps_raw_max = mx;
+        }
     }
 }
 
