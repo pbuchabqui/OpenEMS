@@ -66,8 +66,8 @@ namespace ems::engine {
 const uint32_t kRpmAxisX10[kTableAxisSize] = {
     5000u,   7500u,   10000u,  12500u,
     15000u,  20000u,  25000u,  30000u,
-    40000u,  50000u,  60000u,  70000u,
-    80000u,  90000u,  100000u, 120000u,
+    35000u,  40000u,  45000u,  50000u,
+    55000u,  60000u,  70000u,  80000u,
 };
 
 const uint32_t kLoadAxisBarX100[kTableAxisSize] = {
