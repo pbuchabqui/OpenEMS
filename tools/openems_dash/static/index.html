@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<title>OpenEMS Dashboard</title>
+<link rel="stylesheet" href="uplot.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>OpenEMS</h1>
+  <span id="conn" class="badge off">desconectado</span>
+  <span id="fw" class="muted"></span>
+  <nav>
+    <button class="tab active" data-tab="telemetry">Telemetria</button>
+    <button class="tab" data-tab="grid-1">VE</button>
+    <button class="tab" data-tab="grid-2">Spark</button>
+    <button class="tab" data-tab="grid-4">Lambda</button>
+    <button class="tab" data-tab="params">Parâmetros</button>
+  </nav>
+  <div class="spacer"></div>
+  <button id="logBtn">● Gravar log</button>
+</header>
+
+<main>
+  <!-- Telemetria -->
+  <section id="tab-telemetry" class="pane active">
+    <div id="gauges" class="gauges"></div>
+    <div id="statusLeds" class="leds"></div>
+    <div id="charts" class="charts"></div>
+    <div id="diag" class="diag muted"></div>
+  </section>
+
+  <!-- Editores de grid (VE / Spark / Lambda) -->
+  <section id="tab-grid-1" class="pane grid-pane" data-page="1"></section>
+  <section id="tab-grid-2" class="pane grid-pane" data-page="2"></section>
+  <section id="tab-grid-4" class="pane grid-pane" data-page="4"></section>
+
+  <!-- Parâmetros (páginas 5/6/7) -->
+  <section id="tab-params" class="pane">
+    <div id="paramsRoot"></div>
+  </section>
+</main>
+
+<footer id="toast"></footer>
+
+<script src="uplot.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

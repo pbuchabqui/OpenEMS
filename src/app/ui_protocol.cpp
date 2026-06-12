@@ -102,6 +102,7 @@ inline uint16_t page_size(uint8_t page) noexcept {
         return 64u;
     }
     if (page == 0x06u) { return static_cast<uint16_t>(sizeof(g_page6_xtau)); }
+    if (page == 0x07u) { return static_cast<uint16_t>(sizeof(g_page7_dwell2d)); }
     return 0u;
 }
 
@@ -113,11 +114,12 @@ inline uint8_t* page_ptr(uint8_t page) noexcept {
     if (page == 0x04u) { return g_page4_lambda; }
     if (page == 0x05u) { return g_page5_corr; }
     if (page == 0x06u) { return g_page6_xtau; }
+    if (page == 0x07u) { return g_page7_dwell2d; }
     return nullptr;
 }
 
 inline uint8_t normalize_page_id(uint8_t page) noexcept {
-    if (page >= static_cast<uint8_t>('0') && page <= static_cast<uint8_t>('6')) {
+    if (page >= static_cast<uint8_t>('0') && page <= static_cast<uint8_t>('7')) {
         return static_cast<uint8_t>(page - static_cast<uint8_t>('0'));
     }
     return page;
@@ -645,6 +647,7 @@ inline void reset_pages() noexcept {
     sync_page_from_table(0x04u);
     sync_page_from_table(0x05u);
     sync_page_from_table(0x06u);
+    sync_page_from_table(0x07u);
     g_dirty_page_mask = 0u;
 }
 
