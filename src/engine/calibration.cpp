@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+#include "drv/sensors.h"
+
 namespace ems::engine {
 
 uint8_t ve_table[kTableAxisSize][kTableAxisSize] = {
@@ -145,6 +147,8 @@ uint16_t etb_ki_x10 = 8u;
 uint16_t etb_kd_x10 = 40u;
 uint8_t etb_cal_valid = 0u;
 uint8_t etb_harness_present = 0u;
+uint16_t tps_raw_min = 200u;
+uint16_t tps_raw_max = 3895u;
 
 uint8_t xtau_autocal_enabled = 0u;
 uint8_t xtau_autocal_active = 0u;
@@ -204,6 +208,10 @@ void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept
     std::memcpy(&etb_kp_x10, page + 28, 2u);
     std::memcpy(&etb_ki_x10, page + 30, 2u);
     std::memcpy(&etb_kd_x10, page + 32, 2u);
+    if (len >= 40u) {
+        std::memcpy(&tps_raw_min, page + 36, 2u);
+        std::memcpy(&tps_raw_max, page + 38, 2u);
+    }
 }
 
 void sync_etb_calibration_to_page(uint8_t* page, uint16_t len) noexcept {
@@ -228,6 +236,22 @@ void sync_etb_calibration_to_page(uint8_t* page, uint16_t len) noexcept {
     std::memcpy(page + 28, &etb_kp_x10, 2u);
     std::memcpy(page + 30, &etb_ki_x10, 2u);
     std::memcpy(page + 32, &etb_kd_x10, 2u);
+    if (len >= 40u) {
+        std::memcpy(page + 36, &tps_raw_min, 2u);
+        std::memcpy(page + 38, &tps_raw_max, 2u);
+    }
+}
+
+void push_sensor_calibration_to_drivers() noexcept {
+    ems::drv::sensors_set_app_cal(app1_raw_min, app1_raw_max,
+                                  app2_raw_min, app2_raw_max);
+    ems::drv::sensors_set_etb_tps_cal(etb_tps1_raw_min, etb_tps1_raw_max,
+                                      etb_tps2_raw_min, etb_tps2_raw_max);
+    ems::drv::sensors_set_plausibility(app_max_delta_pct_x10, etb_max_delta_pct_x10);
+    ems::drv::sensors_set_etb_harness_present(etb_harness_present != 0u);
+    if (tps_raw_min < tps_raw_max && tps_raw_max <= 4095u) {
+        ems::drv::sensors_set_tps_cal(tps_raw_min, tps_raw_max);
+    }
 }
 
 void apply_xtau_autocal_from_page(const uint8_t* page, uint16_t len) noexcept {

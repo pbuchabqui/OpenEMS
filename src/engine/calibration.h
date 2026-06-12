@@ -98,6 +98,8 @@ extern uint16_t etb_ki_x10;
 extern uint16_t etb_kd_x10;
 extern uint8_t  etb_cal_valid;
 extern uint8_t  etb_harness_present;
+extern uint16_t tps_raw_min;   // TPS legado (cabo, PA4) — raw ADC em 0%/100%
+extern uint16_t tps_raw_max;
 
 extern uint8_t  xtau_autocal_enabled;
 extern uint8_t  xtau_autocal_active;
@@ -137,6 +139,8 @@ extern uint32_t decel_cut_exit_rpm_x10;         // RPM abaixo do qual reativa co
 extern int16_t  decel_cut_min_clt_x10;          // CLT mínima (motor aquecido)
 
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;
+// Empurra a calibração de sensores (APP/ETB/TPS/plausibilidade) p/ drv::sensors.
+void push_sensor_calibration_to_drivers() noexcept;
 void sync_etb_calibration_to_page(uint8_t* page, uint16_t len) noexcept;
 void apply_xtau_autocal_from_page(const uint8_t* page, uint16_t len) noexcept;
 void sync_xtau_autocal_to_page(uint8_t* page, uint16_t len) noexcept;

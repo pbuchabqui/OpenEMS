@@ -90,6 +90,8 @@ table.ptable td input { width: 64px; border: none; background: #22262d;
                         padding: 4px 6px; box-sizing: border-box; }
 table.ptable td.axis input { background: #1a1d22; color: var(--muted); }
 table.ptable td input.mod { color: var(--warn); }
+button.cap { padding: 2px 8px; font-size: 11px; margin-left: 6px; }
+.live-raw { font-variant-numeric: tabular-nums; min-width: 90px; }
 .param-row input.mod { border-color: var(--warn); color: var(--warn); }
 
 #toast { position: fixed; bottom: 16px; right: 16px; }

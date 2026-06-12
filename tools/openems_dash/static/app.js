@@ -114,7 +114,10 @@ function connectWS() {
     const conn = d.connected;
     $("#conn").className = "badge " + (conn ? "on" : "off");
     $("#conn").textContent = conn ? "conectado" : (d.error || "desconectado");
-    if (conn && d.rpm !== undefined) { RT = d; pushTelemetry(d); highlightLiveCell(); }
+    if (conn && d.rpm !== undefined) {
+      RT = d; pushTelemetry(d); highlightLiveCell();
+      $$(".live-raw").forEach(el => el.textContent = `ao vivo: ${d[el.dataset.src]}`);
+    }
   };
   ws.onclose = () => setTimeout(connectWS, 1000);
 }
@@ -258,6 +261,26 @@ const FIELD_LABELS = {
   trigger_tooth0_engine_deg: "Offset trigger dente 0 (° motor, 0-719)",
   default_soi_lead_deg:      "Avanço SOI padrão (°)",
   config_magic:              "Magic (0x4543 = config válida)",
+  app1_raw_min:  "APP1 pedal solto (raw)",   app1_raw_max:  "APP1 pedal a fundo (raw)",
+  app2_raw_min:  "APP2 pedal solto (raw)",   app2_raw_max:  "APP2 pedal a fundo (raw)",
+  etb_tps1_raw_min: "ETB TPS1 fechada (raw)", etb_tps1_raw_max: "ETB TPS1 aberta (raw)",
+  etb_tps2_raw_min: "ETB TPS2 fechada (raw)", etb_tps2_raw_max: "ETB TPS2 aberta (raw)",
+  tps_raw_min: "TPS cabo fechado (raw)",      tps_raw_max: "TPS cabo aberto (raw)",
+  app_max_delta_pct_x10: "Plausibilidade APP Δmáx (%×10)",
+  etb_max_delta_pct_x10: "Plausibilidade ETB Δmáx (%×10)",
+  etb_max_open_pct_x10_limp: "ETB abertura máx limp (%×10)",
+  etb_max_rate_pct_per_s: "ETB taxa máx (%/s)",
+  etb_idle_open_pct_x10: "ETB abertura idle (%×10)",
+  etb_cal_valid: "Calibração ETB válida (0/1)",
+  etb_harness_present: "Chicote ETB presente (0/1)",
+  etb_kp_x10: "ETB PID Kp (×10)", etb_ki_x10: "ETB PID Ki (×10)", etb_kd_x10: "ETB PID Kd (×10)",
+};
+
+/* calibração assistida: campo → fonte do raw ao vivo na telemetria */
+const CAL_CAPTURE = {
+  app1_raw_min: "an1_raw", app1_raw_max: "an1_raw",
+  app2_raw_min: "an2_raw", app2_raw_max: "an2_raw",
+  etb_tps1_raw_min: "an3_raw", etb_tps1_raw_max: "an3_raw",
 };
 const READONLY_FIELDS = new Set(["config_magic"]);
 
@@ -369,10 +392,23 @@ async function bindParamGroup(div, page) {
     for (const [name, v] of Object.entries(fields)) {
       if (used.has(name)) continue;
       const vals = Array.isArray(v) ? v : [v];
+      const cap = CAL_CAPTURE[name]
+        ? `<button class="cap" data-cap="${name}" data-src="${CAL_CAPTURE[name]}"
+                   title="capturar valor ao vivo">◉ capturar</button>
+           <span class="muted live-raw" data-src="${CAL_CAPTURE[name]}"></span>`
+        : "";
       html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
-        vals.map((x, i) => inp(name, i, x)).join("") + "</div>";
+        vals.map((x, i) => inp(name, i, x)).join("") + cap + "</div>";
     }
     rowsEl.innerHTML = html;
+    $$("button.cap", rowsEl).forEach(btn => btn.onclick = () => {
+      if (!RT) return toast("sem telemetria", true);
+      const v = RT[btn.dataset.src];
+      const input = rowsEl.querySelector(`input[data-f="${btn.dataset.cap}"]`);
+      input.value = v;
+      input.dispatchEvent(new Event("change"));
+      toast(`${btn.dataset.cap} ← ${v}`);
+    });
     $$("input", rowsEl).forEach(inp => inp.onchange = () => {
       const { f, i } = inp.dataset;
       const v = parseInt(inp.value, 10);

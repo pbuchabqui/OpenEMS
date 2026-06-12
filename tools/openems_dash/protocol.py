@@ -71,6 +71,9 @@ class RealtimeData:
     ivc_clamps: int
     loop2ms_last_us: int
     loop2ms_max_us: int
+    an1_raw: int      # APP1 (pedal 1) ADC bruto
+    an2_raw: int      # APP2 (pedal 2)
+    an3_raw: int      # ETB TPS1
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -106,6 +109,9 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         ivc_clamps=struct.unpack_from("<I", r, 31)[0],
         loop2ms_last_us=struct.unpack_from("<I", r, 35)[0],
         loop2ms_max_us=struct.unpack_from("<I", r, 39)[0],
+        an1_raw=struct.unpack_from("<H", r, 43)[0],
+        an2_raw=struct.unpack_from("<H", r, 45)[0],
+        an3_raw=struct.unpack_from("<H", r, 47)[0],
     )
 
 
@@ -121,7 +127,9 @@ class OpenEMSLink:
 
     def __init__(self, port: str | None = None, timeout: float = 1.0):
         self.port = port or autodetect_port()
-        self._ser = serial.Serial(self.port, 115200, timeout=timeout)
+        # exclusive=True: segunda instância falha na hora em vez de disputar
+        # bytes da mesma porta (transações corrompidas, "network error" na UI)
+        self._ser = serial.Serial(self.port, 115200, timeout=timeout, exclusive=True)
         self._lock = threading.Lock()
 
     def close(self) -> None:
@@ -285,6 +293,27 @@ PAGE0_FIELDS = [
     ("trigger_tooth0_engine_deg", 10, 1, "H"),
     ("default_soi_lead_deg",     12, 1, "H"),
     ("config_magic",             14, 1, "H"),
+    # bytes 16-55: calibração de sensores (apply_etb_calibration_from_page)
+    ("app1_raw_min",             16, 1, "H"),
+    ("app1_raw_max",             18, 1, "H"),
+    ("app2_raw_min",             20, 1, "H"),
+    ("app2_raw_max",             22, 1, "H"),
+    ("etb_tps1_raw_min",         24, 1, "H"),
+    ("etb_tps1_raw_max",         26, 1, "H"),
+    ("etb_tps2_raw_min",         28, 1, "H"),
+    ("etb_tps2_raw_max",         30, 1, "H"),
+    ("app_max_delta_pct_x10",    32, 1, "H"),
+    ("etb_max_delta_pct_x10",    34, 1, "H"),
+    ("etb_max_open_pct_x10_limp", 36, 1, "H"),
+    ("etb_max_rate_pct_per_s",   38, 1, "H"),
+    ("etb_idle_open_pct_x10",    40, 1, "H"),
+    ("etb_cal_valid",            42, 1, "B"),
+    ("etb_harness_present",      43, 1, "B"),
+    ("etb_kp_x10",               44, 1, "H"),
+    ("etb_ki_x10",               46, 1, "H"),
+    ("etb_kd_x10",               48, 1, "H"),
+    ("tps_raw_min",              52, 1, "H"),
+    ("tps_raw_max",              54, 1, "H"),
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

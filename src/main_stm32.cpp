@@ -511,6 +511,9 @@ static void openems_init() noexcept {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
 	ems::engine::cfg::engine_config_load(g_calib_page0, kCalibPageBytes);
+	// Calibração de sensores persistida (página 0, bytes 16-55) → drivers
+	ems::engine::apply_etb_calibration_from_page(g_calib_page0 + 16, 40u);
+	ems::engine::push_sensor_calibration_to_drivers();
 	load_corr_calibration_from_nvm();
 	load_xtau_calibration_from_nvm();
 	load_dwell2d_calibration_from_nvm();

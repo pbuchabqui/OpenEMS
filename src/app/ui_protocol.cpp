@@ -222,6 +222,13 @@ inline void update_realtime_page() noexcept {
     write_u32_le(&rt.reserved[31], g_rt_ivc_clamp_count);
     write_u32_le(&rt.reserved[35], g_rt_loop2ms_last_us);
     write_u32_le(&rt.reserved[39], g_rt_loop2ms_max_us);
+    // ADC bruto p/ calibração de pedal/borboleta (AN1=APP1, AN2=APP2, AN3=ETB1)
+    rt.reserved[43] = static_cast<uint8_t>(s.an1_raw & 0xFFu);
+    rt.reserved[44] = static_cast<uint8_t>((s.an1_raw >> 8u) & 0xFFu);
+    rt.reserved[45] = static_cast<uint8_t>(s.an2_raw & 0xFFu);
+    rt.reserved[46] = static_cast<uint8_t>((s.an2_raw >> 8u) & 0xFFu);
+    rt.reserved[47] = static_cast<uint8_t>(s.an3_raw & 0xFFu);
+    rt.reserved[48] = static_cast<uint8_t>((s.an3_raw >> 8u) & 0xFFu);
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }
@@ -255,6 +262,8 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         // Popula bytes 2-15 do buffer UI a partir de g_eng_cfg.
         // Byte 0 (ivc_abdc_deg) é gerido separadamente por ecu_sched_set_ivc.
         ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+        // Bytes 16-55: calibração de sensores APP/ETB/TPS + plausibilidade
+        ems::engine::sync_etb_calibration_to_page(g_page0 + 16, 40u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -318,6 +327,9 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         // engine_config_load valida magic 0x4543 em bytes [14-15] — a escrita via
         // 'w' deve sempre incluir os 16 bytes completos com magic correcto.
         ems::engine::cfg::engine_config_load(g_page0, 16u);
+        // Calibração de sensores (bytes 16-55) → globals + drivers
+        ems::engine::apply_etb_calibration_from_page(g_page0 + 16, 40u);
+        ems::engine::push_sensor_calibration_to_drivers();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -641,6 +653,7 @@ inline void reset_pages() noexcept {
     // compilação). Garante que 'r' page 0 devolve valores coerentes antes de
     // qualquer 'w'.
     ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+    ems::engine::sync_etb_calibration_to_page(g_page0 + 16, 40u);
     std::memcpy(g_page1_ve,    ems::engine::ve_table,    sizeof(g_page1_ve));
     std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));
     std::memset(g_page3_rt, 0, sizeof(g_page3_rt));
