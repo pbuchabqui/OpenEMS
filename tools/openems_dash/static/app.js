@@ -278,11 +278,21 @@ async function bindParamGroup(div, page) {
   }
   function render() {
     rowsEl.className = "rows";
+    let lastAxis = null;   // último campo *_axis_* visto — vira cabeçalho dos valores
     rowsEl.innerHTML = Object.entries(fields).map(([name, v]) => {
-      const vals = Array.isArray(v) ? v : [v];
-      const inputs = vals.map((x, i) =>
-        `<input data-f="${name}" data-i="${i}" value="${x}">`).join("");
-      return `<div class="param-row"><label>${name}</label>${inputs}</div>`;
+      if (!Array.isArray(v)) {
+        lastAxis = null;
+        return `<div class="param-row"><label>${name}</label>
+                <input data-f="${name}" data-i="0" value="${v}"></div>`;
+      }
+      const isAxis = name.includes("axis");
+      const heads = (!isAxis && lastAxis && lastAxis.length === v.length)
+        ? lastAxis : v.map((_, i) => `[${i}]`);
+      if (isAxis) lastAxis = v;
+      const cols = v.map((x, i) =>
+        `<span class="param-col"><span class="col-h">${heads[i]}</span>
+         <input data-f="${name}" data-i="${i}" value="${x}"></span>`).join("");
+      return `<div class="param-row"><label>${name}</label>${cols}</div>`;
     }).join("");
     $$("input", rowsEl).forEach(inp => inp.onchange = () => {
       const { f, i } = inp.dataset;

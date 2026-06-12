@@ -161,8 +161,16 @@ class OpenEMSLink:
         size = PAGE_SIZES[page]
         if length is None:
             length = size - off
-        cmd = b"r" + struct.pack("<BHH", page, off, length)
-        return self._txn(cmd, length)
+        # O ring TX do firmware tem 512B (capacidade útil 511) — uma leitura de
+        # 512B (páginas 0 e 4) não cabe e perde bytes. Ler em blocos de 256B.
+        out = b""
+        while length > 0:
+            n = min(length, 256)
+            cmd = b"r" + struct.pack("<BHH", page, off, n)
+            out += self._txn(cmd, n)
+            off += n
+            length -= n
+        return out
 
     def write_page_ram(self, page: int, off: int, data: bytes) -> None:
         cmd = b"x" + struct.pack("<BHH", page, off, len(data)) + data
