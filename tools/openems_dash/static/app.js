@@ -247,6 +247,42 @@ function highlightLiveCell() {
 /* ── parâmetros (páginas 5/6/7) ───────────────────────────────────────── */
 const PARAM_PAGES = { 5: "Correções 1D", 6: "X-Tau / AE / Crank", 7: "Dwell 2D" };
 
+/* Layout explícito: curvas 1D (eixo + 1..n linhas de valores), tabelas 2D
+   e escalares. Nomes de campo = protocol.py / ui_protocol.cpp. */
+const PAGE_LAYOUT = {
+  5: {
+    curves: [
+      { title: "Correção CLT",        axis: "clt_corr_axis_x10",     axisLabel: "CLT (°C×10)",   rows: [["clt_corr_x256", "fator ×256"]] },
+      { title: "Correção IAT",        axis: "iat_corr_axis_x10",     axisLabel: "IAT (°C×10)",   rows: [["iat_corr_x256", "fator ×256"]] },
+      { title: "Warmup",              axis: "warmup_corr_axis_x10",  axisLabel: "CLT (°C×10)",   rows: [["warmup_corr_x256", "fator ×256"]] },
+      { title: "Injetor vs VBat",     axis: "vbatt_corr_axis_mv",    axisLabel: "VBat (mV)",     rows: [["injector_dead_time_us", "dead time (µs)"]] },
+      { title: "AE vs CLT",           axis: "ae_clt_corr_axis_x10",  axisLabel: "CLT (°C×10)",   rows: [["ae_clt_sens", "sensibilidade"]] },
+      { title: "Dwell vs VBat",       axis: "dwell_vbatt_axis_mv",   axisLabel: "VBat (mV)",     rows: [["dwell_ms_x10_table", "dwell (ms×10)"]] },
+    ],
+    tables2d: [
+      { title: "Atraso lambda (ms)", x: "lambda_delay_rpm_axis_x10", xLabel: "RPM ×10",
+        y: "lambda_delay_load_axis_bar_x100", yLabel: "MAP (bar×100)",
+        values: "lambda_delay_ms_table" },
+    ],
+  },
+  6: {
+    curves: [
+      { title: "X-Tau vs CLT", axis: "xtau_clt_axis_x10", axisLabel: "CLT (°C×10)",
+        rows: [["xtau_x_fraction_q8", "X (Q8)"], ["xtau_tau_cycles", "τ (ciclos)"]] },
+      { title: "AE rate", axis: "ae_tpsdot_axis_x10", axisLabel: "TPSdot (%/s×10)",
+        rows: [["ae_pw_adder_us", "PW adder (µs)"]] },
+    ],
+    tables2d: [],
+  },
+  7: {
+    curves: [
+      { title: "Fator de dwell vs RPM", axis: "dwell_rpm_axis_rpm", axisLabel: "RPM",
+        rows: [["dwell_rpm_factor_q8", "fator (Q8, 256=1.0×)"]] },
+    ],
+    tables2d: [],
+  },
+};
+
 async function loadParams() {
   const root = $("#paramsRoot");
   root.dataset.loaded = "1";
@@ -278,22 +314,50 @@ async function bindParamGroup(div, page) {
   }
   function render() {
     rowsEl.className = "rows";
-    let lastAxis = null;   // último campo *_axis_* visto — vira cabeçalho dos valores
-    rowsEl.innerHTML = Object.entries(fields).map(([name, v]) => {
-      if (!Array.isArray(v)) {
-        lastAxis = null;
-        return `<div class="param-row"><label>${name}</label>
-                <input data-f="${name}" data-i="0" value="${v}"></div>`;
-      }
-      const isAxis = name.includes("axis");
-      const heads = (!isAxis && lastAxis && lastAxis.length === v.length)
-        ? lastAxis : v.map((_, i) => `[${i}]`);
-      if (isAxis) lastAxis = v;
-      const cols = v.map((x, i) =>
-        `<span class="param-col"><span class="col-h">${heads[i]}</span>
-         <input data-f="${name}" data-i="${i}" value="${x}"></span>`).join("");
-      return `<div class="param-row"><label>${name}</label>${cols}</div>`;
-    }).join("");
+    const layout = PAGE_LAYOUT[page] || { curves: [], tables2d: [] };
+    const used = new Set();
+    let html = "";
+
+    const inp = (f, i, v, cls = "") =>
+      `<input class="${cls}" data-f="${f}" data-i="${i}" value="${v}">`;
+
+    // curvas 1D: linha de eixo (editável) + linhas de valores
+    for (const c of layout.curves) {
+      used.add(c.axis);
+      c.rows.forEach(([f]) => used.add(f));
+      html += `<h4>${c.title}</h4><table class="ptable"><tr>
+        <th>${c.axisLabel}</th>` +
+        fields[c.axis].map((v, i) => `<td class="axis">${inp(c.axis, i, v)}</td>`).join("") +
+        "</tr>" +
+        c.rows.map(([f, label]) => `<tr><th>${label}</th>` +
+          fields[f].map((v, i) => `<td>${inp(f, i, v)}</td>`).join("") + "</tr>").join("") +
+        "</table>";
+    }
+
+    // tabelas 2D: eixo X no cabeçalho, eixo Y na 1ª coluna, valores row-major [y][x]
+    for (const t of layout.tables2d) {
+      used.add(t.x); used.add(t.y); used.add(t.values);
+      const nx = fields[t.x].length;
+      html += `<h4>${t.title}</h4><table class="ptable"><tr>
+        <th>${t.yLabel} \\ ${t.xLabel}</th>` +
+        fields[t.x].map((v, i) => `<td class="axis">${inp(t.x, i, v)}</td>`).join("") +
+        "</tr>" +
+        fields[t.y].map((yv, yi) => `<tr><td class="axis">${inp(t.y, yi, yv)}</td>` +
+          fields[t.x].map((_, xi) => {
+            const idx = yi * nx + xi;
+            return `<td>${inp(t.values, idx, fields[t.values][idx])}</td>`;
+          }).join("") + "</tr>").join("") +
+        "</table>";
+    }
+
+    // escalares e campos fora do layout
+    for (const [name, v] of Object.entries(fields)) {
+      if (used.has(name)) continue;
+      const vals = Array.isArray(v) ? v : [v];
+      html += `<div class="param-row"><label>${name}</label>` +
+        vals.map((x, i) => inp(name, i, x)).join("") + "</div>";
+    }
+    rowsEl.innerHTML = html;
     $$("input", rowsEl).forEach(inp => inp.onchange = () => {
       const { f, i } = inp.dataset;
       const v = parseInt(inp.value, 10);
