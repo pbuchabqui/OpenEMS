@@ -109,7 +109,9 @@ enum PwmIdx : int { kCLT=0, kIAT, kAPP1, kAPP2, kFUEL, kOIL, kETB1, kETB2 };
 
 // resolução LEDC: 12-bit (raw 0-4095 mapeado directamente como duty)
 static constexpr ledc_timer_bit_t kPwmBits  = LEDC_TIMER_12_BIT;
-static constexpr uint32_t         kPwmFreq  = 39000u;  // Hz
+// 12 bits @ 80 MHz APB: freq máx = 80e6/4096 ≈ 19.5 kHz (39 kHz aborta no IDF5).
+// A 19 kHz o RC 10k+100n (fc≈159 Hz) ainda atenua ~41 dB — ripple < 3 mV.
+static constexpr uint32_t         kPwmFreq  = 19000u;  // Hz
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── SECÇÃO 2 — Estado da simulação
