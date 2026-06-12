@@ -28,6 +28,7 @@ $$("nav .tab").forEach(b => b.onclick = () => {
   const pane = $("#tab-" + b.dataset.tab);
   if (pane.classList.contains("grid-pane") && !pane.dataset.loaded) loadGrid(pane);
   if (b.dataset.tab === "params" && !$("#paramsRoot").dataset.loaded) loadParams();
+  if (b.dataset.tab === "stim" && !$("#stimSliders").dataset.loaded) loadStim();
 });
 
 /* ── telemetria: gauges + charts ──────────────────────────────────────── */
@@ -518,6 +519,83 @@ $("#logBtn").onclick = async () => {
 };
 
 $("#logExportBtn").onclick = () => window.open("/api/log/export");
+
+/* ── estimulador ESP32 ────────────────────────────────────────────────── */
+const STIM_LABELS = {
+  RPM: "RPM", MAP: "MAP (kPa)", TPS: "TPS (%)", CLT: "CLT (°C)",
+  IAT: "IAT (°C)", APP: "Pedal APP (%)", FUEL: "Press. comb. (bar×10)",
+  OIL: "Press. óleo (bar×10)", ETB: "Borboleta ETB (%)",
+};
+const STIM_DEFAULTS = { RPM: 700, MAP: 35, TPS: 3, CLT: 90, IAT: 25,
+                        APP: 0, FUEL: 35, OIL: 20, ETB: 0 };
+const stimTimers = {};
+
+async function stimSet(param, value) {
+  // debounce por parâmetro: 100ms durante o arrasto do slider
+  clearTimeout(stimTimers[param]);
+  stimTimers[param] = setTimeout(async () => {
+    try {
+      const r = await fetch("/api/stim/set", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ param, value: +value }),
+      });
+      if (!r.ok) toast((await r.json()).error, true);
+    } catch (e) { toast(e.message, true); }
+  }, 100);
+}
+
+async function loadStim() {
+  const root = $("#stimSliders");
+  root.dataset.loaded = "1";
+  let info;
+  try { info = await api("/api/stim/status"); }
+  catch (e) { return toast(e.message, true); }
+
+  $("#stimConn").className = "badge " + (info.connected ? "on" : "off");
+  $("#stimConn").textContent = info.connected ? info.port : (info.error || "desconectado");
+
+  $("#stimPresets").innerHTML = info.presets.map(p =>
+    `<button data-preset="${p}">${p}</button>`).join("");
+  $$("#stimPresets button").forEach(b => b.onclick = async () => {
+    try {
+      const r = await fetch("/api/stim/preset", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: b.dataset.preset }),
+      });
+      if (!r.ok) return toast((await r.json()).error, true);
+      toast("preset " + b.dataset.preset);
+      // sliders refletem o preset? valores ficam no ESP32; só resetamos RPM visual
+    } catch (e) { toast(e.message, true); }
+  });
+
+  root.innerHTML = Object.entries(info.params).map(([name, p]) => {
+    const v = info.state[name] ?? STIM_DEFAULTS[name] ?? p.min;
+    const big = name === "RPM" ? " stim-big" : "";
+    return `<div class="stim-row${big}">
+      <label>${STIM_LABELS[name] || name}</label>
+      <input type="range" data-p="${name}" min="${p.min}" max="${p.max}"
+             step="${name === "RPM" ? 10 : 1}" value="${v}">
+      <input type="number" data-pn="${name}" min="${p.min}" max="${p.max}" value="${v}">
+    </div>`;
+  }).join("");
+
+  $$("input[type=range]", root).forEach(sl => sl.oninput = () => {
+    root.querySelector(`input[data-pn="${sl.dataset.p}"]`).value = sl.value;
+    stimSet(sl.dataset.p, sl.value);
+  });
+  $$("input[type=number]", root).forEach(nb => nb.onchange = () => {
+    root.querySelector(`input[data-p="${nb.dataset.pn}"]`).value = nb.value;
+    stimSet(nb.dataset.pn, nb.value);
+  });
+}
+setInterval(async () => {   // estado de conexão do ESP32 a cada 3s
+  if (!$("#tab-stim").classList.contains("active")) return;
+  try {
+    const s = await api("/api/stim/status");
+    $("#stimConn").className = "badge " + (s.connected ? "on" : "off");
+    $("#stimConn").textContent = s.connected ? s.port : (s.error || "desconectado");
+  } catch { /* server fora */ }
+}, 3000);
 
 /* ── init ─────────────────────────────────────────────────────────────── */
 (async () => {

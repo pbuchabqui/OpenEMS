@@ -94,6 +94,18 @@ table.ptable td input { width: 64px; border: none; background: #22262d;
 table.ptable td.axis input { background: #1a1d22; color: var(--muted); }
 table.ptable td input.mod { color: var(--warn); }
 button.cap { padding: 2px 8px; font-size: 11px; margin-left: 6px; }
+.stim-row { display: flex; align-items: center; gap: 12px; margin: 8px 0;
+            background: var(--panel); border: 1px solid var(--grid-border);
+            border-radius: 8px; padding: 8px 14px; max-width: 720px; }
+.stim-row label { width: 180px; color: var(--muted); font-size: 13px; }
+.stim-row input[type=range] { flex: 1; accent-color: var(--accent); }
+.stim-row input[type=number] { width: 80px; background: #22262d; color: var(--fg);
+            border: 1px solid var(--grid-border); border-radius: 4px;
+            padding: 4px 6px; text-align: right; font-variant-numeric: tabular-nums; }
+.stim-row.stim-big { border-color: var(--accent); }
+.stim-row.stim-big label { color: var(--fg); font-size: 15px; font-weight: 600; }
+.stim-row.stim-big input[type=range] { height: 26px; }
+.stim-row.stim-big input[type=number] { font-size: 17px; width: 95px; }
 .live-raw { font-variant-numeric: tabular-nums; min-width: 90px; }
 .param-row input.mod { border-color: var(--warn); color: var(--warn); }
 
