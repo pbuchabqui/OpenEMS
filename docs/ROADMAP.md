@@ -2,11 +2,20 @@
 
 ## Pendente
 
-### 1. Validação HIL (bloqueada por hardware)
-`tools/hil_test/hil_test.py` + ESP32 com `tools/esp32_combined/esp32_combined.ino`
-(gera CKP 60-2 e mede IGN/INJ). RPM sweep com verificação matemática de
-VE/spark/dwell contra as tabelas; critério: FULL_SYNC nos status bits.
-**Aguarda**: ESP32 conectado na bancada (porta `/dev/ttyUSB*`).
+### 1. Teste HIL automático (`hil_test.py` adaptado ao estimulador)
+**Caminho de hardware VALIDADO** (2026-06-13): estimulador esp32_stimulator gera
+CKP 60-2 por RMT, a ECU atinge FULL_SYNC e rastreia RPM <0,2% em 600–5000 RPM
+(sweep bidirecional 9/9, estável em regime). Falta o software:
+- Adaptar `tools/hil_test/hil_test.py`: substituir `ESP32Client` (esp32_combined)
+  por um `StimClient` que fala o protocolo do estimulador (`RPM n`, `MAP n`, …)
+  via serial `/dev/ttyUSB0` ou TCP `192.168.15.169:3333`. Reusar o mirror de
+  math + leitores de tabela (`STM32Client`, `Tables`, `EngineConfig`).
+- Sweep RPM×MAP×CLT comparando PW/avanço/VE computados vs medidos; relatório MD.
+- **Nota de bancada**: após gravar a STM32 por DFU, fazer **power-cycle** (o
+  `dfu-util :leave` é jump, não POR; sem POR o RCC fica em estado do bootloader e
+  GPIO/ADC/TIM5 não clocam — ver memória trustzone-blocks-gpio-tim5).
+- CMP ainda em LOW (FULL_SYNC usa só o crank); para phase_A correto, adicionar 2º
+  canal RMT sincronizado depois.
 
 ### 2. Datalog em SD card (registrado 2026-06-12)
 Logging interno no slot TF da placa (STM32H562 tem SDMMC com DMA), em vez de
