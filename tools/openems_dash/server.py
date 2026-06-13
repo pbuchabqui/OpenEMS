@@ -15,14 +15,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
-import glob
 import json
 import queue
 import threading
 import time
 from pathlib import Path
 
-import serial
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -154,86 +152,9 @@ class SerialWorker(threading.Thread):
             self._log_writer.writerow(flat)
 
 
-class StimWorker(threading.Thread):
-    """Serial do ESP32 estimulador (protocolo texto 115200: 'RPM 1500' etc.)."""
-
-    PARAMS = {  # nome → (min, max, unidade)
-        "RPM":  (50, 6000, "rpm"),   "MAP": (0, 300, "kPa"),
-        "TPS":  (0, 100, "%"),       "CLT": (-40, 150, "°C"),
-        "IAT":  (-40, 150, "°C"),    "APP": (0, 100, "%"),
-        "FUEL": (0, 50, "bar×10"),   "OIL": (0, 50, "bar×10"),
-        "ETB":  (0, 100, "%"),
-    }
-    PRESETS = ["IDLE", "CRANK", "CRUISE", "WOT", "COAST"]
-
-    def __init__(self, port: str | None):
-        super().__init__(daemon=True)
-        self.port_arg = port
-        self.ser: serial.Serial | None = None
-        self.port: str | None = None
-        self.error: str | None = None
-        self.state: dict = {}        # último valor enviado por parâmetro
-        self._lock = threading.Lock()
-
-    @staticmethod
-    def _find_port() -> str | None:
-        ports = sorted(glob.glob("/dev/ttyUSB*"))
-        return ports[0] if ports else None
-
-    def _connect(self):
-        port = self.port_arg or self._find_port()
-        if not port:
-            self.error = "ESP32 não encontrado (sem /dev/ttyUSB*)"
-            return
-        try:
-            self.ser = serial.Serial(port, 115200, timeout=1.0, exclusive=True)
-            self.port = port
-            self.error = None
-            time.sleep(0.3)
-            self.ser.reset_input_buffer()
-        except Exception as e:  # noqa: BLE001
-            self.ser = None
-            self.error = str(e)
-
-    def run(self):
-        while True:
-            if self.ser is None:
-                self._connect()
-            time.sleep(1.0)
-            if self.ser is not None and not Path(self.port).exists():
-                with self._lock:
-                    try:
-                        self.ser.close()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    self.ser = None
-                    self.error = "ESP32 desconectado"
-
-    def send(self, line: str) -> None:
-        with self._lock:
-            if self.ser is None:
-                raise IOError(self.error or "ESP32 não conectado")
-            self.ser.write((line.strip() + "\n").encode())
-
-    def set_param(self, name: str, value: int) -> None:
-        name = name.upper()
-        if name not in self.PARAMS:
-            raise ValueError(f"parâmetro inválido: {name}")
-        lo, hi, _ = self.PARAMS[name]
-        value = max(lo, min(hi, int(value)))
-        self.send(f"{name} {value}")
-        self.state[name] = value
-
-    def preset(self, name: str) -> None:
-        name = name.upper()
-        if name not in self.PRESETS:
-            raise ValueError(f"preset inválido: {name}")
-        self.send(name)
-        self.state = {"preset": name}
-
-
 worker: SerialWorker = None   # type: ignore[assignment]
-stim: StimWorker = None       # type: ignore[assignment]
+# O estimulador ESP32 tem interface própria (página web embarcada no ESP32,
+# http://<ip-esp32>/) — não é controlado por este dashboard.
 
 
 # ── REST ────────────────────────────────────────────────────────────────────
@@ -458,35 +379,6 @@ def api_log_download():
     return FileResponse(files[-1], filename=files[-1].name)
 
 
-# ── Estimulador ESP32 ───────────────────────────────────────────────────────
-
-@app.get("/api/stim/status")
-def api_stim_status():
-    return {"connected": stim.ser is not None, "port": stim.port,
-            "error": stim.error, "state": stim.state,
-            "params": {k: {"min": v[0], "max": v[1], "unit": v[2]}
-                       for k, v in StimWorker.PARAMS.items()},
-            "presets": StimWorker.PRESETS}
-
-
-@app.post("/api/stim/set")
-def api_stim_set(body: dict):
-    try:
-        stim.set_param(body["param"], body["value"])
-        return {"ok": True}
-    except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": str(e)}, status_code=400)
-
-
-@app.post("/api/stim/preset")
-def api_stim_preset(body: dict):
-    try:
-        stim.preset(body["name"])
-        return {"ok": True}
-    except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": str(e)}, status_code=400)
-
-
 # ── WebSocket telemetria ────────────────────────────────────────────────────
 
 @app.websocket("/ws/telemetry")
@@ -513,19 +405,15 @@ app.mount("/", StaticFiles(directory=BASE / "static", html=True), name="static")
 
 
 def main():
-    global worker, stim  # noqa: PLW0603
+    global worker  # noqa: PLW0603
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", default=None, help="porta serial (default: auto /dev/ttyACM*)")
     ap.add_argument("--http-port", type=int, default=8000)
     ap.add_argument("--rate", type=float, default=30.0, help="taxa de poll em Hz")
-    ap.add_argument("--stim-port", default=None,
-                    help="porta serial do ESP32 estimulador (default: auto /dev/ttyUSB*)")
     args = ap.parse_args()
 
     worker = SerialWorker(args.port, args.rate)
     worker.start()
-    stim = StimWorker(args.stim_port)
-    stim.start()
     print(f"Dashboard: http://localhost:{args.http_port}")
     uvicorn.run(app, host="127.0.0.1", port=args.http_port, log_level="warning")
 
