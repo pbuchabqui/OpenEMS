@@ -201,7 +201,18 @@ struct DecoderState {
     uint16_t tooth_count;               // dentes desde o último gap aceito
     uint8_t  cmp_confirms;              // confirmações do cam sensor (CH1)
     uint32_t cmp_glitch_count;          // FIX P0: contador de glitches CMP rejeitados (diagnóstico)
+    uint16_t consecutive_anomalies;     // gaps+spikes seguidos — re-bootstrap se histórico defasar
 };
+
+// Após este nº de classificações anómalas SEGUIDAS (gap OU spike) sem nenhum
+// dente NORMAL, o histórico é considerado defasado/envenenado e força-se
+// re-bootstrap (hist_ready=0) para reaprender o período real. Causas:
+//  • mudança de RPM em degrau (período novo ≫ histórico antigo ⇒ tudo vira GAP);
+//  • glitch curto que entrou na janela (⇒ tudo vira SPIKE).
+// Num 60-2 normal há no máximo 1 gap isolado entre dentes normais, então um
+// valor alto nunca ocorre em operação saudável. Sem isto, um período espúrio
+// ou um salto de RPM trava o sync para sempre (gap/spike não atualizam histórico).
+static constexpr uint16_t kAnomalyResyncThreshold = 16u;
 
 static DecoderState g_state = {
     ems::drv::CkpSnapshot{0u, 0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false},
@@ -588,7 +599,17 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     switch (classify_tooth(delta_ticks)) {
 
         case ToothClass::GAP:
-            // Valida tooth_count e aplica transição de estado.
+            // Auto-recuperação: muitos gaps seguidos ⇒ histórico defasado (ex.:
+            // salto de RPM). Re-bootstrap reaprende o período; senão trava.
+            if (++g_state.consecutive_anomalies >= kAnomalyResyncThreshold) {
+                g_state.hist_ready         = 0u;
+                g_state.tooth_count        = 0u;
+                g_state.consecutive_anomalies = 0u;
+                g_state.snap.state         = ems::drv::SyncState::WAIT_GAP;
+                sensors_on_tooth(g_state.snap);
+                schedule_on_tooth(g_state.snap);
+                return;
+            }
             static_cast<void>(process_gap_event());
             sensors_on_tooth(g_state.snap);
             schedule_on_tooth(g_state.snap);
@@ -596,11 +617,18 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
 
         case ToothClass::SPIKE_NOISE:
             // Ruído: não atualiza hist nem tooth_count; hooks para monitorização.
+            if (++g_state.consecutive_anomalies >= kAnomalyResyncThreshold) {
+                g_state.hist_ready         = 0u;
+                g_state.tooth_count        = 0u;
+                g_state.consecutive_anomalies = 0u;
+                g_state.snap.state         = ems::drv::SyncState::WAIT_GAP;
+            }
             sensors_on_tooth(g_state.snap);
             schedule_on_tooth(g_state.snap);
             return;
 
         case ToothClass::NORMAL:
+            g_state.consecutive_anomalies = 0u;
             break;
     }
 

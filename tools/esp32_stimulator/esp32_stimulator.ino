@@ -69,8 +69,20 @@
 #include "driver/gpio.h"
 #include "driver/dac.h"
 #include "driver/ledc.h"
+#include "driver/rmt_tx.h"        // CKP 60-2 gerado por hardware (jitter ~zero)
+#include "driver/rmt_encoder.h"
 #include <cstring>
 #include <cstdlib>
+
+// ── WiFi: servidor TCP porta 3333 com o mesmo protocolo de linha ─────────
+// Credenciais em wifi_credentials.h (não commitado — ver .gitignore):
+//   #define WIFI_SSID "minha_rede"
+//   #define WIFI_PASS "minha_senha"
+#include <WiFi.h>
+#include <WebServer.h>
+#if __has_include("wifi_credentials.h")
+#include "wifi_credentials.h"
+#endif
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── SECÇÃO 1 — Definição de pinos
@@ -180,60 +192,70 @@ static constexpr int      kRealTeeth = 58;
 static constexpr int      kCmpTooth  = 5;     // dente onde sobe o CMP (rev 0)
 static constexpr uint32_t kRpmMin    = 50u;
 static constexpr uint32_t kRpmMax    = 6000u;
+static constexpr uint32_t kRmtResHz  = 1000000u;  // 1 tick RMT = 1 µs
+static constexpr uint16_t kRmtMaxDur = 32767u;    // duração máx por campo (15 bits)
 
-static volatile int      g_tooth      = 0;
-static volatile bool     g_ckp_high   = false;
-static volatile int      g_revolution = 0;
-static volatile uint32_t g_rev_count  = 0;
+// ── CKP via RMT (perif. de hardware) ─────────────────────────────────────
+// Uma revolução = 58 dentes; cada dente = símbolo {HIGH T/2, LOW T/2}. O 58º
+// dente leva o LOW estendido (+2 dentes ausentes) = gap 3× do 60-2. O canal
+// transmite em loop infinito: timing 100% hardware, imune ao WiFi.
+static rmt_channel_handle_t g_ckp_chan = nullptr;
+static rmt_encoder_handle_t g_ckp_enc  = nullptr;
+static rmt_symbol_word_t    g_ckp_sym[kRealTeeth];
+static volatile uint32_t    g_ckp_rpm_active = 0u;
 
-// Timers de hardware (GPTimer @ 1 MHz, one-shot rearmado na ISR).
-// Core 3.x (IDF 5) removeu ESP_TIMER_ISR do esp_timer; o GPTimer dá dispatch
-// em ISR real (IRAM) com jitter menor — necessário a 6000 RPM (½ dente = 83 µs).
-static hw_timer_t* g_ckp_timer   = nullptr;
-static hw_timer_t* g_cmp_off_tmr = nullptr;
+// liveness para o status (estimativa, não crítica)
+static volatile uint32_t g_rev_count = 0u;
+static uint32_t          g_rev_accum_ms = 0u;
 
-static inline void IRAM_ATTR timer_arm_once(hw_timer_t* t, uint64_t us) {
-    timerWrite(t, 0);
-    timerAlarm(t, us, false, 0);
-}
-
-static void ARDUINO_ISR_ATTR cmp_off_isr() {
-    gpio_set_level(CMP_GPIO, 0);
-}
-
-static void ARDUINO_ISR_ATTR ckp_isr() {
-    const uint32_t rpm  = g_sim.rpm;
-    const uint32_t T_us = 60000000UL / (rpm * 60UL);   // período de 1 dente [µs]
-
-    if (!g_ckp_high) {
-        // ── Rising edge ───────────────────────────────────────────────────
-        gpio_set_level(CKP_GPIO, 1);
-        g_ckp_high = true;
-
-        if (g_revolution == 0 && g_tooth == kCmpTooth) {
-            gpio_set_level(CMP_GPIO, 1);
-            timer_arm_once(g_cmp_off_tmr, (uint64_t)T_us / 2u);
-        }
-        timer_arm_once(g_ckp_timer, (uint64_t)T_us / 2u);
-
-    } else {
-        // ── Falling edge ──────────────────────────────────────────────────
-        gpio_set_level(CKP_GPIO, 0);
-        g_ckp_high = false;
-        g_tooth++;
-
-        uint64_t low_us;
-        if (g_tooth >= kRealTeeth) {
-            // gap de 2 dentes: LOW extra de 2 × T
-            low_us  = (uint64_t)T_us / 2u + (uint64_t)T_us * 2u;
-            g_tooth = 0;
-            g_revolution ^= 1;
-            g_rev_count++;
-        } else {
-            low_us = (uint64_t)T_us / 2u;
-        }
-        timer_arm_once(g_ckp_timer, low_us);
+static void build_ckp_pattern(uint32_t rpm) {
+    if (rpm < kRpmMin) rpm = kRpmMin;
+    const uint32_t T = 60000000UL / (rpm * 60UL);  // µs por dente
+    const uint16_t h = (uint16_t)(T / 2u);
+    const uint16_t l = (uint16_t)(T - (T / 2u));
+    uint32_t gap_low = (uint32_t)l + 2u * T;        // dente 58: low + 2 ausentes
+    if (gap_low > kRmtMaxDur) gap_low = kRmtMaxDur;
+    for (int i = 0; i < kRealTeeth - 1; i++) {
+        g_ckp_sym[i].level0 = 1; g_ckp_sym[i].duration0 = h;
+        g_ckp_sym[i].level1 = 0; g_ckp_sym[i].duration1 = l;
     }
+    g_ckp_sym[kRealTeeth - 1].level0 = 1; g_ckp_sym[kRealTeeth - 1].duration0 = h;
+    g_ckp_sym[kRealTeeth - 1].level1 = 0; g_ckp_sym[kRealTeeth - 1].duration1 = (uint16_t)gap_low;
+}
+
+static void ckp_transmit() {
+    rmt_transmit_config_t txcfg = {};
+    txcfg.loop_count = -1;  // loop infinito (hardware)
+    rmt_transmit(g_ckp_chan, g_ckp_enc, g_ckp_sym, sizeof(g_ckp_sym), &txcfg);
+}
+
+static void ckp_set_rpm(uint32_t rpm) {
+    if (rpm == g_ckp_rpm_active) return;
+    build_ckp_pattern(rpm);
+    rmt_disable(g_ckp_chan);            // aborta o loop atual (encoder fica mid-símbolo)
+    rmt_encoder_reset(g_ckp_enc);       // CRÍTICO: reposiciona o copy-encoder no início
+    rmt_enable(g_ckp_chan);
+    ckp_transmit();
+    g_ckp_rpm_active = rpm;
+}
+
+static void ckp_init() {
+    rmt_tx_channel_config_t cfg = {};
+    cfg.gpio_num        = CKP_GPIO;
+    cfg.clk_src         = RMT_CLK_SRC_DEFAULT;
+    cfg.resolution_hz   = kRmtResHz;
+    cfg.mem_block_symbols = 64;     // 58 símbolos cabem num bloco
+    cfg.trans_queue_depth = 4;
+    ESP_ERROR_CHECK(rmt_new_tx_channel(&cfg, &g_ckp_chan));
+    rmt_copy_encoder_config_t enc = {};
+    ESP_ERROR_CHECK(rmt_new_copy_encoder(&enc, &g_ckp_enc));
+    rmt_enable(g_ckp_chan);
+    build_ckp_pattern(g_sim.rpm);
+    ckp_transmit();
+    g_ckp_rpm_active = g_sim.rpm;
+    // CMP mantido em LOW por enquanto (FULL_SYNC usa só o crank).
+    gpio_set_direction(CMP_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(CMP_GPIO, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -277,6 +299,7 @@ static void update_analog(const SimState& s) {
 static void apply_preset(const SimState& p, const char* label) {
     g_sim = p;
     update_analog(g_sim);
+    if (g_ckp_chan != nullptr) ckp_set_rpm(g_sim.rpm);  // RMT já iniciado
     Serial.printf("  [STIM] Preset: %s\n", label);
 }
 
@@ -298,6 +321,8 @@ static void print_status() {
     Serial.println("  ╚═══════════════════════════════════════════════════════════╝");
     Serial.println();
     Serial.printf("  %-10s %6lu\n",          "RPM:",       (unsigned long)s.rpm);
+    Serial.printf("  %-10s %6lu  (incrementa = CKP ISR viva)\n",
+                  "REVS:", (unsigned long)g_rev_count);
     Serial.println();
 
     auto pline = [](const char* lbl, const char* stm32, uint16_t raw, float v) {
@@ -400,6 +425,7 @@ static void parse_cmd(const char* raw) {
 
     if      (strcmp(cmd, "RPM")    == 0 && has_val) {
         g_sim.rpm = (uint32_t)constrain(val, (int)kRpmMin, (int)kRpmMax);
+        ckp_set_rpm(g_sim.rpm);   // reprograma a roda RMT
         Serial.printf("  [STIM] RPM=%lu\n", (unsigned long)g_sim.rpm);
     }
     else if (strcmp(cmd, "MAP")    == 0 && has_val) {
@@ -503,21 +529,165 @@ void setup() {
         ESP_ERROR_CHECK(ledc_channel_config(&cc));
     }
 
-    // ── Timers CKP / CMP — GPTimer @ 1 MHz (1 tick = 1 µs) ──────────────
-    g_ckp_timer = timerBegin(1000000u);
-    timerAttachInterrupt(g_ckp_timer, &ckp_isr);
-    g_cmp_off_tmr = timerBegin(1000000u);
-    timerAttachInterrupt(g_cmp_off_tmr, &cmp_off_isr);
-
-    // ── Preset inicial + arrancar CKP ─────────────────────────────────────
+    // ── Preset inicial + arrancar CKP (RMT) ──────────────────────────────
     preset_idle();
     update_analog(g_sim);
+    ckp_init();   // arranca a roda 60-2 por hardware (RMT) à RPM do preset
 
-    const uint32_t T0 = 60000000UL / (g_sim.rpm * 60UL);
-    timer_arm_once(g_ckp_timer, T0 / 2u);
-
+    wifi_setup();
     print_help();
     print_status();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── SECÇÃO 8 — WiFi (TCP servidor, mesmo protocolo de linha do serial)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static WiFiServer g_tcp_server(3333);
+static WiFiClient g_tcp_client;
+static char       g_tcp_line[96];
+static int        g_tcp_pos = 0;
+
+// ── Interface web standalone (http://IP/) ───────────────────────────────
+static WebServer g_http(80);
+
+static const char kIndexHtml[] PROGMEM = R"HTML(<!DOCTYPE html>
+<html lang="pt"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenEMS Stim</title><style>
+body{background:#14161a;color:#d8dce2;font:15px system-ui;margin:0;padding:14px}
+h1{font-size:17px;color:#4cc2ff;margin:0 0 4px}
+#st{color:#7b828c;font-size:12px;margin-bottom:12px}
+.row{display:flex;align-items:center;gap:10px;background:#1d2026;
+ border:1px solid #2a2e36;border-radius:8px;padding:8px 12px;margin:7px 0}
+.row label{width:120px;color:#7b828c;font-size:13px}
+.row.big{border-color:#4cc2ff}.row.big label{color:#d8dce2;font-weight:600}
+input[type=range]{flex:1;accent-color:#4cc2ff}
+.v{width:64px;text-align:right;font-variant-numeric:tabular-nums}
+button{background:#2a2f38;color:#d8dce2;border:1px solid #2a2e36;
+ border-radius:5px;padding:7px 13px;margin:3px}
+</style></head><body>
+<h1>OpenEMS — Estimulador</h1><div id="st">…</div>
+<div id="presets"></div><div id="sliders"></div>
+<script>
+const P={RPM:[50,6000,700],MAP:[0,300,35],TPS:[0,100,3],CLT:[-40,150,90],
+IAT:[-40,150,25],APP:[0,100,0],FUEL:[0,50,35],OIL:[0,50,20],ETB:[0,100,0]};
+const U={RPM:'rpm',MAP:'kPa',TPS:'%',CLT:'°C',IAT:'°C',APP:'%',
+FUEL:'bar×10',OIL:'bar×10',ETB:'%'};
+const tm={};
+function send(p,v){clearTimeout(tm[p]);
+ tm[p]=setTimeout(()=>fetch(`/set?p=${p}&v=${v}`),80);}
+document.getElementById('sliders').innerHTML=Object.entries(P).map(([p,[a,b,d]])=>
+ `<div class="row${p=='RPM'?' big':''}"><label>${p} (${U[p]})</label>
+ <input type=range id=s${p} min=${a} max=${b} value=${d} step=${p=='RPM'?10:1}
+ oninput="document.getElementById('v${p}').textContent=this.value;send('${p}',this.value)">
+ <span class=v id=v${p}>${d}</span></div>`).join('');
+document.getElementById('presets').innerHTML=
+ ['IDLE','CRANK','CRUISE','WOT','COAST'].map(n=>
+ `<button onclick="fetch('/preset?n=${n}').then(()=>setTimeout(sync,300))">${n}</button>`).join('');
+async function sync(){try{
+ const s=await (await fetch('/status.json')).json();
+ document.getElementById('st').textContent=
+  `revs=${s.revs} (CKP ${s.revs>0?'ativo':'PARADO'}) · uptime=${s.up}s`;
+ for(const p in P){if(s[p]!==undefined){
+  document.getElementById('s'+p).value=s[p];
+  document.getElementById('v'+p).textContent=s[p];}}
+}catch(e){document.getElementById('st').textContent='sem conexão';}}
+setInterval(async()=>{try{
+ const s=await (await fetch('/status.json')).json();
+ document.getElementById('st').textContent=
+  `revs=${s.revs} (CKP ${s.revs>0?'ativo':'PARADO'}) · uptime=${s.up}s`;
+}catch(e){}},1000);
+sync();
+</script></body></html>)HTML";
+
+static void http_index()  { g_http.send_P(200, "text/html", kIndexHtml); }
+
+static void http_set() {
+    char line[48];
+    snprintf(line, sizeof(line), "%s %s",
+             g_http.arg("p").c_str(), g_http.arg("v").c_str());
+    parse_cmd(line);
+    g_http.send(200, "text/plain", "OK");
+}
+
+static void http_preset() {
+    char line[24];
+    snprintf(line, sizeof(line), "%s", g_http.arg("n").c_str());
+    parse_cmd(line);
+    g_http.send(200, "text/plain", "OK");
+}
+
+static void http_status() {
+    char js[300];
+    snprintf(js, sizeof(js),
+        "{\"revs\":%lu,\"up\":%lu,\"RPM\":%lu,\"MAP\":%u,\"TPS\":%u,"
+        "\"CLT\":%d,\"IAT\":%d,\"APP\":%u,\"FUEL\":%u,\"OIL\":%u,\"ETB\":%u}",
+        (unsigned long)g_rev_count, (unsigned long)(millis() / 1000u),
+        (unsigned long)g_sim.rpm, g_sim.map_kpa, g_sim.tps_pct,
+        g_sim.clt_degc, g_sim.iat_degc, g_sim.app_pct,
+        g_sim.fuel_bar_x10, g_sim.oil_bar_x10, g_sim.etb_pct);
+    g_http.send(200, "application/json", js);
+}
+
+static void wifi_setup() {
+#if defined(WIFI_SSID)
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    Serial.print("[WIFI] ligando a " WIFI_SSID " ");
+    for (int i = 0; i < 30 && WiFi.status() != WL_CONNECTED; i++) {
+        delay(500);
+        Serial.print('.');
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.printf("\n[WIFI] OK  IP=%s  porta TCP 3333\n",
+                      WiFi.localIP().toString().c_str());
+    } else {
+        Serial.println("\n[WIFI] FALHOU — só serial disponível");
+        return;
+    }
+#else
+    Serial.println("[WIFI] sem wifi_credentials.h — só serial");
+    return;
+#endif
+    g_tcp_server.begin();
+    g_tcp_server.setNoDelay(true);
+    g_http.on("/", http_index);
+    g_http.on("/set", http_set);
+    g_http.on("/preset", http_preset);
+    g_http.on("/status.json", http_status);
+    g_http.begin();
+    Serial.printf("[WIFI] interface web: http://%s/\n",
+                  WiFi.localIP().toString().c_str());
+}
+
+static void wifi_poll() {
+    if (WiFi.status() != WL_CONNECTED) return;
+    g_http.handleClient();
+    if (g_tcp_server.hasClient()) {
+        if (g_tcp_client && g_tcp_client.connected()) {
+            g_tcp_server.accept().stop();   // já há cliente — rejeita o novo
+        } else {
+            g_tcp_client = g_tcp_server.accept();
+            g_tcp_client.setNoDelay(true);
+            g_tcp_pos = 0;
+            g_tcp_client.println("OpenEMS-Stim pronto");
+        }
+    }
+    while (g_tcp_client && g_tcp_client.available()) {
+        char c = (char)g_tcp_client.read();
+        if (c == '\r') continue;
+        if (c == '\n' || g_tcp_pos >= (int)(sizeof(g_tcp_line) - 1)) {
+            g_tcp_line[g_tcp_pos] = '\0';
+            if (g_tcp_pos > 0) {
+                parse_cmd(g_tcp_line);
+                g_tcp_client.println("OK");
+            }
+            g_tcp_pos = 0;
+        } else {
+            g_tcp_line[g_tcp_pos++] = c;
+        }
+    }
 }
 
 void loop() {
@@ -531,6 +701,15 @@ void loop() {
         } else {
             g_line[g_line_pos++] = c;
         }
+    }
+    wifi_poll();
+    // estimativa de revoluções p/ o indicador de liveness do status
+    const uint32_t now = millis();
+    if (g_rev_accum_ms == 0u) g_rev_accum_ms = now;
+    const uint32_t dt = now - g_rev_accum_ms;
+    if (dt >= 100u) {
+        g_rev_count += (uint32_t)((uint64_t)g_ckp_rpm_active * dt / 60000u);
+        g_rev_accum_ms = now;
     }
     delay(5);
 }
