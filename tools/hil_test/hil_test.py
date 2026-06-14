@@ -3,20 +3,26 @@
 hil_test.py — Teste HIL automático para OpenEMS
 ════════════════════════════════════════════════
 Requer hardware:
-  PC ─ USB0 → STM32H562  (UART protocolo OpenEMS)
-  PC ─ USB1 → ESP32       (esp32_combined.ino: CKP gen + scope)
+  PC ─ USB → STM32H562          (CDC, protocolo OpenEMS — /dev/ttyACM0)
+  esp32_stimulator → STM32      (CKP 60-2 por RMT em GPIO2→PA0, GND comum)
+  estimulador acessível por serial (/dev/ttyUSB0) ou WiFi/TCP (porta 3333)
 
-O ESP32 gera o sinal 60-2 para o STM32, monitoriza IGN/INJ e
-reporta firing order + PW por série.
+O estimulador gera o sinal 60-2 (hardware RMT, jitter ~zero). O script lê as
+tabelas da ECU (VE, spark, dwell, correções) e a config do motor, calcula os
+valores esperados em Python com o MESMO math inteiro do firmware, e compara
+com o snapshot (VE/avanço/PW computados pela ECU) em cada ponto de operação.
 
-O script lê as tabelas da ECU (VE, spark, dwell), calcula os valores
-esperados em Python com o mesmo math do firmware (integer arithmetic),
-e compara com os valores medidos pelo scope e o snapshot UART.
+Sem osciloscópio: valida a math interna da ECU. As checagens são
+self-consistentes sobre o snapshot — funcionam mesmo com só o CKP ligado
+(MAP/CLT analógicos opcionais; se desligados, a ECU usa o que ler).
+
+IMPORTANTE: após gravar a STM32 por DFU, faça power-cycle (o dfu :leave é jump,
+não reset — sem POR o RCC fica no estado do bootloader e o TIM5/CKP não clocam).
 
 Uso:
-    python3 hil_test.py --stm32 /dev/ttyUSB0 --esp32 /dev/ttyUSB1
-    python3 hil_test.py --stm32 /dev/ttyUSB0 --esp32 /dev/ttyUSB1 \\
-                        --rpms 500 1000 2000 --report resultado.md
+    python3 hil_test.py --stm32 /dev/ttyACM0 --stim /dev/ttyUSB0
+    python3 hil_test.py --stm32 /dev/ttyACM0 --stim tcp:192.168.15.169:3333 \\
+                        --rpms 800 1500 3000 --report resultado.md
 """
 
 from __future__ import annotations
@@ -262,7 +268,8 @@ class STM32Client:
         s.advance_deg  = r[8] - 40
         s.ve           = r[9]
         s.stft_pct     = struct.unpack_from("b", r, 10)[0]
-        s.status       = struct.unpack_from("<H", r, 11)[0]
+        # status_bits é uint16 alinhado → offset 12 (1 byte de padding em 11).
+        s.status       = struct.unpack_from("<H", r, 12)[0]
         return s
 
     def read_engine_config(self) -> EngineConfig:
@@ -426,6 +433,70 @@ class ESP32Client:
     def close(self):
         self._ser.close()
 
+
+class StimClient:
+    """
+    Controla o esp32_stimulator (CKP 60-2 por RMT + sensores).
+    Protocolo de texto: 'RPM 1500', 'MAP 55', 'CLT 90', … (presets IDLE/WOT/…).
+    Transporte: serial '/dev/ttyUSB*' ou TCP 'tcp:IP[:porta]' (WiFi, porta 3333).
+    Sem scope — valida apenas a math interna da ECU via snapshot.
+    """
+    PARAMS = {"RPM", "MAP", "TPS", "CLT", "IAT", "APP", "FUEL", "OIL", "ETB"}
+
+    def __init__(self, target: str, baud: int = 115200):
+        self._tcp = None
+        self._ser = None
+        hp = self._parse_tcp(target)
+        if hp:
+            import socket
+            self._tcp = socket.create_connection(hp, timeout=3.0)
+            self._tcp.settimeout(2.0)
+            time.sleep(0.3)
+            try:
+                self._tcp.recv(200)   # banner "OpenEMS-Stim pronto"
+            except Exception:
+                pass
+        else:
+            self._ser = serial.Serial(target, baud, timeout=1.0)
+            time.sleep(0.3)
+            self._ser.reset_input_buffer()
+
+    @staticmethod
+    def _parse_tcp(arg: str):
+        if arg.startswith("tcp:"):
+            arg = arg[4:]
+        elif arg.startswith("socket://"):
+            arg = arg[9:]
+        elif "/" in arg or ":" not in arg:
+            return None   # é um caminho de device serial
+        host, _, port = arg.partition(":")
+        return (host, int(port) if port else 3333)
+
+    def _send(self, line: str):
+        data = (line + "\n").encode()
+        if self._tcp is not None:
+            self._tcp.sendall(data)
+        else:
+            self._ser.write(data)
+        time.sleep(0.05)
+
+    def set_rpm(self, rpm: int):
+        self._send(f"RPM {int(rpm)}")
+
+    def set(self, param: str, value: int):
+        param = param.upper()
+        if param in self.PARAMS:
+            self._send(f"{param} {int(value)}")
+
+    def preset(self, name: str):
+        self._send(name.upper())
+
+    def close(self):
+        if self._tcp is not None:
+            self._tcp.close()
+        if self._ser is not None:
+            self._ser.close()
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Resultado de cada ponto de teste
 # ══════════════════════════════════════════════════════════════════════════════
@@ -464,10 +535,10 @@ class TestResult:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class HILRunner:
-    def __init__(self, stm32: STM32Client, esp32: ESP32Client,
+    def __init__(self, stm32: STM32Client, stim: StimClient,
                  eng: EngineConfig, tables: Tables):
         self._stm    = stm32
-        self._esp    = esp32
+        self._stim   = stim
         self._eng    = eng
         self._tables = tables
         self.results: list[TestResult] = []
@@ -497,9 +568,14 @@ class HILRunner:
     def _run_point(self, pt: TestPoint) -> TestResult:
         r = TestResult(rpm_cmd=pt.rpm, description=pt.description)
 
-        # 1. RPM
-        print(f"  → RPM={pt.rpm}...")
-        self._esp.set_rpm(pt.rpm)
+        # 1. Estímulo: RPM (CKP por RMT) + sensores analógicos (só efetivos se
+        #    os canais MAP/CLT/IAT estiverem ligados; senão a ECU lê o que tiver
+        #    — as checagens abaixo são self-consistentes sobre o snapshot).
+        print(f"  → RPM={pt.rpm}  MAP={pt.map_kpa}kPa  CLT={pt.clt}°C...")
+        self._stim.set("MAP", pt.map_kpa)
+        self._stim.set("CLT", pt.clt)
+        self._stim.set("IAT", pt.iat)
+        self._stim.set_rpm(pt.rpm)
         time.sleep(SETTLE_S)
 
         # 2. FULL_SYNC
@@ -542,39 +618,9 @@ class HILRunner:
                     snap.inj_pw_ms, exp_pw_ms, TOL_INJ_PW_PCT,
                     fmt=".3f", pct=True)
 
-        # 8. Timing analysis (scope interno do ESP32)
-        print("  → Scope timing analysis...")
-        td = self._esp.run_timing(timeout_s=25.0)
-        r.timing = td
-
-        if td.error:
-            r.add("Scope timing capturado", False, td.error)
-        else:
-            order_ok = (td.firing_order == EXPECTED_FIRING_ORDER)
-            r.add("Firing order",
-                  order_ok,
-                  f"detectada={'→'.join(f'IGN{c}' for c in td.firing_order)}"
-                  f"  esperada={'→'.join(f'IGN{c}' for c in EXPECTED_FIRING_ORDER)}")
-
-            exp_ic = 2 * 60_000 / max(snap.rpm, 1) / 4   # ms
-            for i, ic in enumerate(td.inter_cyl_ms):
-                r.add_range(f"Inter-cil [{i+1}]",
-                            ic, exp_ic, TOL_INTER_CYL_MS, fmt=".3f")
-
-        # 9. PW medidos no hardware (scope LIVE)
-        print("  → Scope LIVE...")
-        live = self._esp.get_live(wait_s=1.5)
-        r.live = live
-
-        if 4 in live and not live[4].idle:   # INJ0
-            r.add_range("INJ0 PW (scope vs snapshot)",
-                        live[4].pw_ms, snap.inj_pw_ms, TOL_HW_PW_MS, fmt=".3f")
-
-        if 0 in live and not live[0].idle:   # IGN0 dwell
-            exp_dwell = self._tables.dwell_ms_at()
-            r.add_range("IGN0 Dwell (scope vs tabela)",
-                        live[0].pw_ms, exp_dwell, TOL_DWELL_MS, fmt=".3f")
-
+        # (As etapas de scope — firing order, inter-cilindro, PW/dwell medidos —
+        #  exigem o esp32_combined com osciloscópio. O estimulador não tem scope;
+        #  para cobertura de saídas IGN/INJ, usar um 2º ESP32 com esp32_scope.)
         return r
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -636,15 +682,18 @@ def write_report(results: list[TestResult], eng: EngineConfig, path: str):
 @dataclass
 class TestPoint:
     rpm: int
+    map_kpa: int = 50
+    clt: int = 90
+    iat: int = 30
     description: str = ""
 
 DEFAULT_POINTS = [
-    TestPoint(500,  "cranking / idle baixo"),
-    TestPoint(750,  "fast idle"),
-    TestPoint(1000, "idle normal"),
-    TestPoint(1500, "saída de idle"),
-    TestPoint(2000, "carga parcial"),
-    TestPoint(3000, "carga média"),
+    TestPoint(800,  35, 90, 30, "idle"),
+    TestPoint(1000, 40, 90, 30, "idle alto"),
+    TestPoint(1500, 50, 90, 35, "saída de idle"),
+    TestPoint(2000, 55, 90, 35, "carga parcial"),
+    TestPoint(3000, 70, 90, 40, "carga média"),
+    TestPoint(4000, 90, 90, 40, "carga alta"),
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -653,13 +702,13 @@ DEFAULT_POINTS = [
 
 def main():
     p = argparse.ArgumentParser(
-        description="OpenEMS HIL Test — 1× STM32 + 1× ESP32 (combined)")
-    p.add_argument("--stm32",  required=True, help="Porta STM32 (ex: /dev/ttyUSB0)")
-    p.add_argument("--esp32",  required=True, help="Porta ESP32 combined (ex: /dev/ttyUSB1)")
+        description="OpenEMS HIL Test — STM32 (CDC) + esp32_stimulator (CKP RMT)")
+    p.add_argument("--stm32",  required=True, help="Porta STM32 CDC (ex: /dev/ttyACM0)")
+    p.add_argument("--stim",   required=True,
+                   help="Estimulador: serial /dev/ttyUSB0 ou TCP tcp:192.168.15.169:3333")
     p.add_argument("--baud",   type=int, default=115200)
-    p.add_argument("--rpms",   nargs="+", type=int,
-                   default=[pt.rpm for pt in DEFAULT_POINTS],
-                   help="RPMs a testar (ex: 500 1000 2000)")
+    p.add_argument("--rpms",   nargs="+", type=int, default=None,
+                   help="RPMs a testar (default: matriz interna). Ex: 800 1500 3000")
     p.add_argument("--report", default=None, metavar="FILE",
                    help="Gerar relatório markdown")
     args = p.parse_args()
@@ -675,9 +724,9 @@ def main():
         sys.exit(1)
     print("  ✓ STM32 OK")
 
-    print(f"ESP32 : {args.esp32}  (CKP gen + scope)")
-    esp32 = ESP32Client(args.esp32, args.baud)
-    print("  ✓ ESP32 OK")
+    print(f"Estim.: {args.stim}  (esp32_stimulator — CKP RMT)")
+    stim = StimClient(args.stim, args.baud)
+    print("  ✓ estimulador OK")
 
     print("\nA ler config e tabelas da ECU...")
     eng    = stm32.read_engine_config()
@@ -690,8 +739,11 @@ def main():
           f"Spark={'OK' if tables.spark_table else 'VAZIA'}  "
           f"Dwell={'OK' if tables.dwell_ms_x10 else 'VAZIA'}")
 
-    points = [TestPoint(rpm) for rpm in args.rpms]
-    runner = HILRunner(stm32, esp32, eng, tables)
+    if args.rpms:
+        points = [TestPoint(rpm) for rpm in args.rpms]
+    else:
+        points = DEFAULT_POINTS
+    runner = HILRunner(stm32, stim, eng, tables)
     results = runner.run(points)
 
     total  = sum(len(r.checks) for r in results)
@@ -711,7 +763,7 @@ def main():
         write_report(results, eng, args.report)
 
     stm32.close()
-    esp32.close()
+    stim.close()
     sys.exit(0 if failed == 0 else 1)
 
 

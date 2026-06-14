@@ -83,9 +83,10 @@ def parse_realtime(buf: bytes) -> RealtimeData:
     """Decodifica UiRealtimeData (ui_protocol.h, 64 bytes)."""
     if len(buf) != 64:
         raise ValueError(f"realtime page: esperado 64B, recebido {len(buf)}B")
+    # 'x' = byte de padding: status_bits (uint16) é alinhado p/ offset 12.
     (rpm, map_x100, tps, clt_p40, iat_p40, o2_d4, pw_x10,
-     adv_p40, ve, stft, status) = struct.unpack_from("<HBBbbBBBBbH", buf, 0)
-    r = buf[12:62]  # reserved[50]
+     adv_p40, ve, stft, status) = struct.unpack_from("<HBBbbBBBBbxH", buf, 0)
+    r = buf[14:64]  # reserved[50] começa no offset 14
     return RealtimeData(
         rpm=rpm,
         map_kpa=map_x100,           # bar×100 == kPa
