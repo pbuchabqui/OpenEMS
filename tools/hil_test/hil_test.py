@@ -48,7 +48,11 @@ except ImportError:
 TOL_RPM_PCT      = 5.0   # % — RPM medido vs comandado
 TOL_VE_UNITS     = 3.0   # unidades — VE snapshot vs tabela
 TOL_ADVANCE_DEG  = 2.0   # ° — advance snapshot vs tabela
-TOL_INJ_PW_PCT   = 15.0  # % — PW snapshot vs cálculo (STFT + dead time não modelados)
+TOL_INJ_PW_PCT   = 15.0  # % — PW snapshot vs cálculo (STFT/trim não modelados)
+
+# Mirror de calc_fuel_pw_us_default_fast — valores não expostos no snapshot:
+LAMBDA_TARGET_X1000 = 1000   # alvo λ=1.00 (stoich); factor 1000/λ
+INJ_DEAD_TIME_US    = 900    # dead-time do injector a ~14 V (calibration.cpp, vbatt-idx)
 TOL_INTER_CYL_MS = 2.0   # ms — espaçamento entre cilindros
 TOL_HW_PW_MS     = 0.3   # ms — PW scope vs snapshot (medição hardware)
 TOL_DWELL_MS     = 0.3   # ms — dwell scope vs tabela
@@ -174,7 +178,8 @@ class Snapshot:
     iat_degc:     int = 25
     pw1_ms_x10:   int = 0
     advance_deg:  int = 0
-    ve:           int = 0
+    ve:           int = 0       # VE[0][0] (primeira célula da tabela)
+    ve_live:      int = 0       # VE interpolado vivo (get_ve no ponto rpm×map atual)
     stft_pct:     int = 0
     status:       int = 0
 
@@ -244,6 +249,14 @@ class STM32Client:
         r = self._ser.read(2)
         return len(r) == 2 and r[0] == 0x00 and r[1] == 0xAA
 
+    def set_bench_clt_iat(self, enable: bool) -> bool:
+        """Comando 'B': bench-mode CLT/IAT (90 °C/25 °C fixos, sem SENSOR_FAULT
+        pelos canais CLT/IAT). Para banco HIL sem os sensores físicos ligados."""
+        self._ser.write(bytes([0x42, 0x01 if enable else 0x00]))
+        time.sleep(0.05)
+        r = self._ser.read(1)
+        return len(r) == 1 and r[0] == 0x00
+
     def _read_page(self, page: int, offset: int, length: int) -> bytes:
         cmd = bytes([0x72, page,
                      offset & 0xFF, (offset >> 8) & 0xFF,
@@ -270,6 +283,9 @@ class STM32Client:
         s.stft_pct     = struct.unpack_from("b", r, 10)[0]
         # status_bits é uint16 alinhado → offset 12 (1 byte de padding em 11).
         s.status       = struct.unpack_from("<H", r, 12)[0]
+        # VE interpolado vivo em reserved[49] = byte 14+49 = 63 (firmware get_ve).
+        if len(r) >= 64:
+            s.ve_live  = r[63]
         return s
 
     def read_engine_config(self) -> EngineConfig:
@@ -302,13 +318,17 @@ class STM32Client:
         # page 5: CLT/IAT corr + dwell
         raw = self._read_page(5, 0, 192)
         if len(raw) >= 192:
-            u8  = lambda off, n: list(raw[off:off + n])
             u16 = lambda off, n: [struct.unpack_from("<H", raw, off + i*2)[0]
                                   for i in range(n)]
-            t.clt_corr_axis_x10  = u8(  0, 16)
-            t.clt_corr_x256      = u8( 16, 16)
-            t.iat_corr_axis_x10  = u8( 32, 16)
-            t.iat_corr_x256      = u8( 48, 16)
+            # FIX: corr tables são 8× int16 (não 16× u8). O eixo (temperatura ×10)
+            # é signed (−40 °C…); os valores ×256 são unsigned. Ler como u8 dava
+            # clt_corr/iat_corr ≈ 0 (1/256) → zerava a base do PW esperado.
+            i16 = lambda off, n: [struct.unpack_from("<h", raw, off + i*2)[0]
+                                  for i in range(n)]
+            t.clt_corr_axis_x10  = i16(  0, 8)
+            t.clt_corr_x256      = u16( 16, 8)
+            t.iat_corr_axis_x10  = i16( 32, 8)
+            t.iat_corr_x256      = u16( 48, 8)
             t.dwell_vbatt_axis_mv = u16(160, 8)
             t.dwell_ms_x10        = u16(176, 8)
 
@@ -600,20 +620,30 @@ class HILRunner:
         r.add_range("RPM medido", snap.rpm, pt.rpm, TOL_RPM_PCT,
                     fmt=".0f", pct=True)
 
-        # 5. VE snapshot vs tabela Python
+        # 5. VE interpolado vivo (reserved[49]) vs tabela Python interpolada.
+        #    snap.ve é só VE[0][0]; snap.ve_live é o get_ve no ponto rpm×map (= ECU).
         exp_ve = self._tables.ve_at(snap.rpm, snap.map_bar_x100)
-        r.add_range("VE (snapshot vs tabela)",
-                    snap.ve, exp_ve, TOL_VE_UNITS, fmt=".0f")
+        r.add_range("VE (vivo vs tabela)",
+                    snap.ve_live, exp_ve, TOL_VE_UNITS, fmt=".0f")
 
         # 6. Advance snapshot vs tabela Python
         exp_adv = self._tables.advance_at(snap.rpm, snap.map_bar_x100)
         r.add_range("Advance (snapshot vs tabela)",
                     snap.advance_deg, exp_adv, TOL_ADVANCE_DEG, fmt=".1f")
 
-        # 7. PW injecção: req_fuel × VE × correcções CLT/IAT
+        # 7. PW injecção — espelha calc_fuel_pw_us_default_fast + calc_final_pw_us
+        #    (fuel_calc.cpp). base = req_fuel × ve/100 × MAP/baro; depois λ-target,
+        #    correcções CLT/IAT (×256) e, por fim, SOMA o dead-time do injector.
         clt_c = self._tables.clt_corr(snap.clt_degc)
         iat_c = self._tables.iat_corr(snap.iat_degc)
-        exp_pw_ms = self._eng.req_fuel_us * (snap.ve / 100.0) * clt_c * iat_c / 1000.0
+        baro = self._eng.map_ref_bar_x100 or 100         # baro dinâmico ≈ map_ref
+        # A ECU computa o PW com o VE interpolado vivo. O snapshot só expõe VE[0][0]
+        # (snap.ve), então usa-se o exp_ve interpolado (idêntico ao da ECU) na base.
+        base_us = (self._eng.req_fuel_us * exp_ve * snap.map_bar_x100
+                   / (100.0 * baro))                     # MAP/baro = factor de carga
+        lambda_us = base_us * 1000.0 / LAMBDA_TARGET_X1000   # λ-target (1000 = stoich)
+        corrected_us = lambda_us * clt_c * iat_c             # clt_c/iat_c já são ÷256
+        exp_pw_ms = (corrected_us + INJ_DEAD_TIME_US) / 1000.0
         r.add_range("Injection PW (snapshot vs cálculo)",
                     snap.inj_pw_ms, exp_pw_ms, TOL_INJ_PW_PCT,
                     fmt=".3f", pct=True)
@@ -711,6 +741,9 @@ def main():
                    help="RPMs a testar (default: matriz interna). Ex: 800 1500 3000")
     p.add_argument("--report", default=None, metavar="FILE",
                    help="Gerar relatório markdown")
+    p.add_argument("--bench-clt-iat", action="store_true",
+                   help="Ativa bench-mode CLT/IAT na ECU (cmd 'B'): força 90°C/25°C "
+                        "e limpa SENSOR_FAULT desses canais (sensores físicos ausentes)")
     args = p.parse_args()
 
     print("╔══════════════════════════════════════╗")
@@ -723,6 +756,12 @@ def main():
         print("ERRO: STM32 não responde — verificar porta e firmware")
         sys.exit(1)
     print("  ✓ STM32 OK")
+
+    if args.bench_clt_iat:
+        if stm32.set_bench_clt_iat(True):
+            print("  ✓ bench-mode CLT/IAT ON (90°C/25°C, fault CLT/IAT limpo)")
+        else:
+            print("  ⚠ bench-mode CLT/IAT: sem ACK (firmware sem suporte ao cmd 'B'?)")
 
     print(f"Estim.: {args.stim}  (esp32_stimulator — CKP RMT)")
     stim = StimClient(args.stim, args.baud)

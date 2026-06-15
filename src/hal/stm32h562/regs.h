@@ -480,6 +480,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define ADC_CFGR1_EXTEN_RISING (1u << 10)
 // EXTSEL[4:0] = 0b01101 → TIM6_TRGO (ver RM0481 Tab.125)
 #define ADC_CFGR1_EXTSEL_TIM6_TRGO (13u << 5)
+#define ADC_CFGR1_OVRMOD (1u << 12)  // 1 = overrun sobrescreve DR (não trava ADSTART)
 #define ADC_CFGR1_CONT   (1u << 13)
 #define ADC_CFGR1_DISCEN (1u << 16)
 

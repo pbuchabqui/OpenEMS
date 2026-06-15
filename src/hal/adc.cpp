@@ -269,11 +269,16 @@ ADC1_SMPR2 = (kSmpr << 0); // IN10 (AN4) — bits [(10-10)*3] = bit 0
     ADC1_SQR1 = kAdc1Sqr1;
     ADC1_SQR2 = kAdc1Sqr2;
 
-	// CFGR1: 12-bit, trigger externo TIM6_TRGO, rising edge, DMA one-shot por sequência
+	// CFGR1: 12-bit, trigger TIM6_TRGO rising, DMA circular (DMACFG=1) p/ o ADC
+	// requisitar DMA continuamente em cada sequência; OVRMOD=1 p/ overrun sobrescrever
+	// o DR em vez de travar o ADSTART. FIX: o "one-shot + re-arm no ISR" anterior
+	// parava de requisitar após a 1ª sequência e o OVR limpava ADSTART → ADC congelava.
 	ADC1_CFGR1 = ADC_CFGR1_RES_12BIT
 		| ADC_CFGR1_DMAEN
+		| ADC_CFGR1_DMACFG
+		| ADC_CFGR1_OVRMOD
 		| ADC_CFGR1_EXTSEL_TIM6_TRGO
-		| ADC_CFGR1_EXTEN_RISING; // FIX: removido DMACFG — one-shot DMA, re-arm no ISR
+		| ADC_CFGR1_EXTEN_RISING;
 
     // ── 5. Calibrar e configurar ADC2 ainda desabilitado ────────────────
     adc_prepare_for_config(ADC2_CR);
@@ -292,8 +297,10 @@ ADC1_SMPR2 = (kSmpr << 0); // IN10 (AN4) — bits [(10-10)*3] = bit 0
 // ADC2: trigger TIM6_TRGO simultâneo
 ADC2_CFGR1 = ADC_CFGR1_RES_12BIT
 	| ADC_CFGR1_DMAEN
+	| ADC_CFGR1_DMACFG
+	| ADC_CFGR1_OVRMOD
 	| ADC_CFGR1_EXTSEL_TIM6_TRGO
-	| ADC_CFGR1_EXTEN_RISING; // FIX: removido DMACFG — one-shot DMA, re-arm no ISR
+	| ADC_CFGR1_EXTEN_RISING;
 
     // ── 6. Configurar TIM6 como gerador de TRGO ───────────────────────────
     RCC_APB1LENR |= RCC_APB1LENR_TIM6EN;
@@ -332,6 +339,12 @@ void adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept {
     // Amostrar na metade do período do dente (delay do TIM6 trigger)
     const uint32_t arr = (tooth_period_ticks / 2u);
     if (arr > 0u) {
+        // FIX: re-arm determinístico do GPDMA por dente, ANTES do trigger. O re-arm
+        // só na ISV de TC não reciclava (ADC1+ADC2 congelavam após a 1ª sequência).
+        // A conversão da rajada anterior já terminou (ocorreu ~½ dente atrás), então
+        // este é o instante quieto p/ rearmar com buffer alinhado.
+        gpdma_adc1_arm();
+        gpdma_adc2_arm();
         TIM6_CR1 = TIM_CR1_OPM | TIM_CR1_URS;
         TIM6_SR = 0u;
         TIM6_ARR = arr - 1u;
@@ -382,7 +395,8 @@ extern "C" void GPDMA1_Channel0_IRQHandler(void) {
             // Recovery será tentado na próxima chamada de adc_enable() ou via ISR dedicada
         }
     }
-    ems::hal::gpdma_adc1_arm();
+    // Re-arm agora é por dente em adc_trigger_on_tooth (determinístico); aqui só
+    // limpamos as flags. O re-arm na ISV não reciclava → ADCs congelavam.
 }
 
 extern "C" void GPDMA1_Channel1_IRQHandler(void) {
@@ -395,7 +409,7 @@ extern "C" void GPDMA1_Channel1_IRQHandler(void) {
             // Sinaliza para main loop verificar ADC status
         }
     }
-    ems::hal::gpdma_adc2_arm();  // FIX: era gpdma_adc1_arm() — Channel1 gerencia ADC2
+    // Re-arm por dente em adc_trigger_on_tooth; aqui só limpamos flags.
 }
 
 // P0 #3: Handler de timeout do ADC para recuperação em tempo de execução

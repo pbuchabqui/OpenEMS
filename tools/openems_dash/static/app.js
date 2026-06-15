@@ -249,7 +249,7 @@ function axisLookup(axis, v) {
   while (i > 0 && v < axis[i]) i--;
   return { idx: i, frac: (v - axis[i]) / (axis[i + 1] - axis[i]) };
 }
-const TRAIL_MS = 1000;
+const TRAIL_MS = 10000;
 function highlightLiveCell() {
   if (!RT || !INFO) return;
   const pane = $(".grid-pane.active");
@@ -287,9 +287,26 @@ function highlightLiveCell() {
   st.trail = (st.trail || []).filter(p => now - p.t < TRAIL_MS);
   st.trail.push({ x, y, t: now });
 
+  // célula dominante (nó mais próximo da posição interpolada) visitada agora
+  const domR = ly.idx + (ly.frac >= 0.5 ? 1 : 0);
+  const domC = lx.idx + (lx.frac >= 0.5 ? 1 : 0);
+  st.cells = (st.cells || []).filter(p => now - p.t < TRAIL_MS);
+  const hit = st.cells.find(p => p.r === domR && p.c === domC);
+  if (hit) hit.t = now;                       // renova o tempo se já visitada
+  else st.cells.push({ r: domR, c: domC, t: now });
+
   const g = cv.getContext("2d");
   g.clearRect(0, 0, cv.width, cv.height);
   g.lineCap = g.lineJoin = "round";
+
+  // realce das células percorridas nos últimos TRAIL_MS (desvanece com a idade)
+  for (const p of st.cells) {
+    const td = pane.querySelector(`td[data-r="${p.r}"][data-c="${p.c}"]`);
+    if (!td) continue;
+    const age = (now - p.t) / TRAIL_MS;        // 0 = recente, 1 = velho
+    g.fillStyle = `rgba(255,213,79,${(1 - age) * 0.30})`;
+    g.fillRect(td.offsetLeft, td.offsetTop, td.offsetWidth, td.offsetHeight);
+  }
   for (let i = 1; i < st.trail.length; i++) {
     const a = st.trail[i - 1], b = st.trail[i];
     const age = (now - b.t) / TRAIL_MS;          // 0 = recente, 1 = velho

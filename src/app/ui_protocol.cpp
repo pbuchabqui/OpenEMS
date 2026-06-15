@@ -36,6 +36,7 @@ enum class ParseState : uint8_t {
     WRITE_ARGS = 2u,
     WRITE_DATA = 3u,
     BURN_ARGS = 4u,
+    BENCH_ARG = 5u,   // 'B' + 1 byte: bench-mode CLT/IAT (0=off, 1=on)
 };
 
 alignas(4) static uint8_t g_page0[512] = {};
@@ -185,6 +186,10 @@ inline void update_realtime_page() noexcept {
     rt.advance_p40 = static_cast<uint8_t>(static_cast<int16_t>(g_rt_advance_deg) + 40);
     rt.ve          = g_page1_ve[0];
     rt.stft_p100   = g_rt_stft_p100;
+    // VE interpolado vivo (get_ve no ponto rpm×map atual) — rt.ve só expõe VE[0][0].
+    // reserved[49] (byte 63 do snapshot) p/ validação HIL da interpolação.
+    rt.reserved[49] = ems::engine::get_ve(
+        c.rpm_x10, static_cast<uint16_t>(s.map_bar_x1000 / 10u));
 
     uint16_t status = 0u;
     if (c.state == ems::drv::SyncState::FULL_SYNC) {
@@ -565,6 +570,19 @@ inline void parse_byte(uint8_t b) noexcept {
             tx_push(g_dirty_page_mask);
             return;
         }
+        if (b == static_cast<uint8_t>('B')) {
+            g_state = ParseState::BENCH_ARG;
+            return;
+        }
+        return;
+    }
+
+    if (g_state == ParseState::BENCH_ARG) {
+        // Bench-mode CLT/IAT p/ HIL: 0=off (ADC normal), !=0=on (90°C/25°C fixos,
+        // sem SENSOR_FAULT pelos canais CLT/IAT). Ver sensors_set_bench_clt_iat.
+        ems::drv::sensors_set_bench_clt_iat(b != 0u, 900, 250);
+        tx_push(kAckOk);
+        reset_parser();
         return;
     }
 
