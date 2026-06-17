@@ -38,13 +38,14 @@ constexpr uint32_t kTick20ms = 20u;
 constexpr uint32_t kAuxTim3PwmHz = 15u;
 constexpr uint32_t kAuxTim4PwmHz = 15u;
 
-constexpr int16_t kCltPidEnableX10 = 600;
 constexpr int16_t kDrpmEnableMaxX10PerSec = 2000;
 
-constexpr int16_t kIacKp_num = 2;
-constexpr int16_t kIacKd_num = 5;
-constexpr int16_t kIacKd_den = 2;
-constexpr int16_t kIacIClampX10 = 300;
+// IAC PID — lidos de calibration globals (configuráveis via dashboard/NVM)
+#define kCltPidEnableX10  ems::engine::iac_clt_pid_enable_x10
+#define kIacKp_num        ems::engine::iac_kp_num
+#define kIacKd_num        ems::engine::iac_kd_num
+#define kIacKd_den        ems::engine::iac_kd_den
+#define kIacIClampX10     ems::engine::iac_i_clamp_x10
 constexpr uint16_t kIacOpenStepX10 = 100u;
 constexpr uint16_t kIacCloseStepX10 = 20u;
 

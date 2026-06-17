@@ -9,6 +9,7 @@
 #include "drv/sensors.h"
 #include "engine/calibration.h"
 #include "engine/ecu_sched.h"
+#include "engine/etb_control.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/math_utils.h"
@@ -281,6 +282,29 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         // Bytes 64-65: janela de dente CMP
         g_page0[64] = ems::engine::cmp_window_open_tooth;
         g_page0[65] = ems::engine::cmp_window_close_tooth;
+        // Bytes 66-99: dirigibilidade (anti-jerk, rev limit, decel cut, LTFT)
+        std::memcpy(g_page0 + 66, &ems::engine::antijerk_tpsdot_threshold_x10, 2u);
+        std::memcpy(g_page0 + 68, &ems::engine::antijerk_retard_deg,            2u);
+        g_page0[70] = ems::engine::antijerk_decay_cycles;
+        g_page0[71] = 0u;  // pad
+        std::memcpy(g_page0 + 72, &ems::engine::rev_limit_rpm_x10,         4u);
+        std::memcpy(g_page0 + 76, &ems::engine::rev_limit_soft_window_x10, 4u);
+        std::memcpy(g_page0 + 80, &ems::engine::rev_limit_spark_window_x10, 4u);
+        std::memcpy(g_page0 + 84, &ems::engine::rev_limit_max_retard_deg,  2u);
+        std::memcpy(g_page0 + 86, &ems::engine::ltft_add_pw_threshold_us,  2u);
+        std::memcpy(g_page0 + 88, &ems::engine::decel_cut_tps_threshold_x10, 2u);
+        std::memcpy(g_page0 + 90, &ems::engine::decel_cut_entry_rpm_x10,   4u);
+        std::memcpy(g_page0 + 94, &ems::engine::decel_cut_exit_rpm_x10,    4u);
+        std::memcpy(g_page0 + 98, &ems::engine::decel_cut_min_clt_x10,     2u);
+        // Bytes 100-115: marcha lenta ETB + IAC PID
+        std::memcpy(g_page0 + 100, &ems::engine::etb_idle_rpm_target,       2u);
+        std::memcpy(g_page0 + 102, &ems::engine::etb_idle_min_opening_x10,  2u);
+        std::memcpy(g_page0 + 104, &ems::engine::etb_idle_max_opening_x10,  2u);
+        std::memcpy(g_page0 + 106, &ems::engine::iac_clt_pid_enable_x10,   2u);
+        std::memcpy(g_page0 + 108, &ems::engine::iac_kp_num,               2u);
+        std::memcpy(g_page0 + 110, &ems::engine::iac_kd_num,               2u);
+        std::memcpy(g_page0 + 112, &ems::engine::iac_kd_den,               2u);
+        std::memcpy(g_page0 + 114, &ems::engine::iac_i_clamp_x10,          2u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -356,6 +380,29 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(ems::engine::cyl_ign_trim_deg,  g_page0 + 60, 4u);
         ems::engine::cmp_window_open_tooth  = g_page0[64];
         ems::engine::cmp_window_close_tooth = g_page0[65];
+        // Dirigibilidade (bytes 66-99)
+        std::memcpy(&ems::engine::antijerk_tpsdot_threshold_x10, g_page0 + 66, 2u);
+        std::memcpy(&ems::engine::antijerk_retard_deg,            g_page0 + 68, 2u);
+        ems::engine::antijerk_decay_cycles = g_page0[70];
+        std::memcpy(&ems::engine::rev_limit_rpm_x10,          g_page0 + 72, 4u);
+        std::memcpy(&ems::engine::rev_limit_soft_window_x10,  g_page0 + 76, 4u);
+        std::memcpy(&ems::engine::rev_limit_spark_window_x10, g_page0 + 80, 4u);
+        std::memcpy(&ems::engine::rev_limit_max_retard_deg,   g_page0 + 84, 2u);
+        std::memcpy(&ems::engine::ltft_add_pw_threshold_us,   g_page0 + 86, 2u);
+        std::memcpy(&ems::engine::decel_cut_tps_threshold_x10, g_page0 + 88, 2u);
+        std::memcpy(&ems::engine::decel_cut_entry_rpm_x10,    g_page0 + 90, 4u);
+        std::memcpy(&ems::engine::decel_cut_exit_rpm_x10,     g_page0 + 94, 4u);
+        std::memcpy(&ems::engine::decel_cut_min_clt_x10,      g_page0 + 98, 2u);
+        // Marcha lenta ETB + IAC PID (bytes 100-115)
+        std::memcpy(&ems::engine::etb_idle_rpm_target,      g_page0 + 100, 2u);
+        std::memcpy(&ems::engine::etb_idle_min_opening_x10, g_page0 + 102, 2u);
+        std::memcpy(&ems::engine::etb_idle_max_opening_x10, g_page0 + 104, 2u);
+        std::memcpy(&ems::engine::iac_clt_pid_enable_x10,  g_page0 + 106, 2u);
+        std::memcpy(&ems::engine::iac_kp_num,              g_page0 + 108, 2u);
+        std::memcpy(&ems::engine::iac_kd_num,              g_page0 + 110, 2u);
+        std::memcpy(&ems::engine::iac_kd_den,              g_page0 + 112, 2u);
+        std::memcpy(&ems::engine::iac_i_clamp_x10,         g_page0 + 114, 2u);
+        etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
     } else if (page == 0x02u) {

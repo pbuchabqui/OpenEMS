@@ -367,6 +367,19 @@ const PAGE_0_SECTIONS = [
     label: "CMP",
     fields: ["cmp_window_open_tooth","cmp_window_close_tooth"],
   },
+  {
+    label: "MARCHA LENTA",
+    fields: ["etb_idle_rpm_target","etb_idle_min_opening_x10","etb_idle_max_opening_x10",
+             "iac_clt_pid_enable_x10","iac_kp_num","iac_kd_num","iac_kd_den","iac_i_clamp_x10"],
+  },
+  {
+    label: "DIRIGIBILIDADE",
+    fields: ["antijerk_tpsdot_threshold_x10","antijerk_retard_deg","antijerk_decay_cycles",
+             "rev_limit_rpm_x10","rev_limit_soft_window_x10","rev_limit_spark_window_x10",
+             "rev_limit_max_retard_deg","ltft_add_pw_threshold_us",
+             "decel_cut_tps_threshold_x10","decel_cut_entry_rpm_x10",
+             "decel_cut_exit_rpm_x10","decel_cut_min_clt_x10"],
+  },
 ];
 
 /* rótulos amigáveis (página 0) e campos read-only */
@@ -397,6 +410,40 @@ const FIELD_LABELS = {
   cyl_ign_trim_deg_2:  "Trim ign. cil.3 (°)",  cyl_ign_trim_deg_3:  "Trim ign. cil.4 (°)",
   cmp_window_open_tooth:  "CMP janela abre (dente)",
   cmp_window_close_tooth: "CMP janela fecha (dente; 0/0=desabilitado)",
+  // Page 5 scalars
+  ae_tpsdot_threshold_x10: "AE TPSdot threshold (%/s×10)",
+  ae_taper_cycles:         "AE taper (ciclos)",
+  ae_max_pw_us:            "AE PW máximo (µs)",
+  idle_spark_tps_max_x10:              "Idle spark TPS máx. (%×10)",
+  idle_spark_map_max_bar_x100:         "Idle spark MAP máx. (bar×100)",
+  idle_spark_rpm_min_x10:              "Idle spark RPM mín. (×10)",
+  idle_spark_window_above_target_x10:  "Idle spark janela acima target (RPM×10)",
+  idle_spark_deadband_rpm_x10:         "Idle spark deadband (RPM×10)",
+  idle_spark_rpm_per_deg_x10:          "Idle spark RPM/° (×10)",
+  idle_spark_retard_limit_deg:         "Idle spark retardo máx. (°)",
+  idle_spark_advance_limit_deg:        "Idle spark avanço máx. (°)",
+  // Marcha lenta ETB + IAC
+  etb_idle_rpm_target:      "RPM alvo marcha lenta (ETB)",
+  etb_idle_min_opening_x10: "Abertura mínima idle ETB (%×10)",
+  etb_idle_max_opening_x10: "Abertura máxima idle ETB (%×10)",
+  iac_clt_pid_enable_x10:   "CLT mín. para PID IAC (°C×10)",
+  iac_kp_num:               "IAC Kp (numerador)",
+  iac_kd_num:               "IAC Kd (numerador)",
+  iac_kd_den:               "IAC Kd (denominador)",
+  iac_i_clamp_x10:          "IAC integrador clamp (×10)",
+  // Dirigibilidade
+  antijerk_tpsdot_threshold_x10: "Anti-jerk TPSdot threshold (%/s×10)",
+  antijerk_retard_deg:            "Anti-jerk retardo ignição (°)",
+  antijerk_decay_cycles:          "Anti-jerk decay (ciclos)",
+  rev_limit_rpm_x10:              "Limitador RPM (×10)",
+  rev_limit_soft_window_x10:      "Rev limit janela corte injeção (RPM×10)",
+  rev_limit_spark_window_x10:     "Rev limit janela retardo ign. (RPM×10)",
+  rev_limit_max_retard_deg:       "Rev limit retardo máx. ignição (°)",
+  ltft_add_pw_threshold_us:       "LTFT threshold PW (µs)",
+  decel_cut_tps_threshold_x10:    "Decel cut TPS máx. (%×10)",
+  decel_cut_entry_rpm_x10:        "Decel cut RPM entrada (×10)",
+  decel_cut_exit_rpm_x10:         "Decel cut RPM saída/histerese (×10)",
+  decel_cut_min_clt_x10:          "Decel cut CLT mín. (°C×10)",
 };
 
 /* calibração assistida: campo → fonte do raw ao vivo na telemetria */
@@ -423,6 +470,15 @@ const PAGE_LAYOUT = {
       { title: "Atraso lambda (ms)", x: "lambda_delay_rpm_axis_x10", xLabel: "RPM ×10",
         y: "lambda_delay_load_axis_bar_x100", yLabel: "MAP (bar×100)",
         values: "lambda_delay_ms_table" },
+    ],
+    scalarSections: [
+      { label: "ENRIQUECIMENTO ACELERAÇÃO (AE)",
+        fields: ["ae_tpsdot_threshold_x10","ae_taper_cycles","ae_max_pw_us"] },
+      { label: "IDLE SPARK",
+        fields: ["idle_spark_tps_max_x10","idle_spark_map_max_bar_x100",
+                 "idle_spark_rpm_min_x10","idle_spark_window_above_target_x10",
+                 "idle_spark_deadband_rpm_x10","idle_spark_rpm_per_deg_x10",
+                 "idle_spark_retard_limit_deg","idle_spark_advance_limit_deg"] },
     ],
   },
   6: {
@@ -696,12 +752,13 @@ async function bindParamGroup(div, page) {
         "</table>";
     }
 
-    // escalares: página 0 usa subgrupos; outras páginas exibem plano
+    // escalares: página 0 e páginas com scalarSections usam subgrupos; demais exibem plano
     const remaining = Object.entries(fields).filter(([n]) => !used.has(n));
-    if (page === 0 && remaining.length) {
+    const scalarSections = (page === 0) ? PAGE_0_SECTIONS : (layout.scalarSections || []);
+    if (scalarSections.length && remaining.length) {
       const fieldMap = Object.fromEntries(remaining);
       const rendered = new Set();
-      for (const sec of PAGE_0_SECTIONS) {
+      for (const sec of scalarSections) {
         const secFields = sec.fields.filter(f => f in fieldMap);
         if (!secFields.length) continue;
         html += `<div class="pg-section-header">${sec.label}</div>`;

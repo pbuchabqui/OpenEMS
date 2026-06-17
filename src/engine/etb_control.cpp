@@ -137,10 +137,10 @@ bool etb_control_init(void) {
         memcpy(&g_config.pid_configs[i], &g_default_pid_config, sizeof(etb_pid_config_t));
     }
     
-    // 4. Parâmetros de marcha lenta
-    g_config.idle_rpm_target = 850.0f;
-    g_config.idle_min_opening = 3.0f;
-    g_config.idle_max_opening = 8.0f;
+    // 4. Parâmetros de marcha lenta — lidos de calibration globals
+    g_config.idle_rpm_target  = static_cast<float>(ems::engine::etb_idle_rpm_target);
+    g_config.idle_min_opening = static_cast<float>(ems::engine::etb_idle_min_opening_x10) / 10.0f;
+    g_config.idle_max_opening = static_cast<float>(ems::engine::etb_idle_max_opening_x10) / 10.0f;
     g_config.idle_spark_advance = 15.0f;   // 15° base
     g_config.idle_spark_retard = 10.0f;    // Até 10° retardo
     
@@ -295,6 +295,12 @@ void etb_set_idle_control(bool active, float target_rpm) {
     if (active) {
         g_config.idle_rpm_target = target_rpm;
     }
+}
+
+void etb_apply_idle_calibration(void) {
+    g_config.idle_rpm_target  = static_cast<float>(ems::engine::etb_idle_rpm_target);
+    g_config.idle_min_opening = static_cast<float>(ems::engine::etb_idle_min_opening_x10) / 10.0f;
+    g_config.idle_max_opening = static_cast<float>(ems::engine::etb_idle_max_opening_x10) / 10.0f;
 }
 
 // FIX C2: must be in ems::engine namespace to override the weak symbol in

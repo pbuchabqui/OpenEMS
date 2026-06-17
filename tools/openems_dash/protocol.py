@@ -325,6 +325,28 @@ PAGE0_FIELDS = [
     ("cyl_ign_trim_deg_3",     63, 1, "b"),
     ("cmp_window_open_tooth",  64, 1, "B"),
     ("cmp_window_close_tooth", 65, 1, "B"),
+    # bytes 66-99: dirigibilidade
+    ("antijerk_tpsdot_threshold_x10", 66, 1, "H"),
+    ("antijerk_retard_deg",           68, 1, "h"),
+    ("antijerk_decay_cycles",         70, 1, "B"),
+    ("rev_limit_rpm_x10",             72, 1, "L"),
+    ("rev_limit_soft_window_x10",     76, 1, "L"),
+    ("rev_limit_spark_window_x10",    80, 1, "L"),
+    ("rev_limit_max_retard_deg",      84, 1, "h"),
+    ("ltft_add_pw_threshold_us",      86, 1, "H"),
+    ("decel_cut_tps_threshold_x10",   88, 1, "H"),
+    ("decel_cut_entry_rpm_x10",       90, 1, "L"),
+    ("decel_cut_exit_rpm_x10",        94, 1, "L"),
+    ("decel_cut_min_clt_x10",         98, 1, "h"),
+    # bytes 100-115: marcha lenta ETB + IAC PID
+    ("etb_idle_rpm_target",      100, 1, "H"),
+    ("etb_idle_min_opening_x10", 102, 1, "H"),
+    ("etb_idle_max_opening_x10", 104, 1, "H"),
+    ("iac_clt_pid_enable_x10",   106, 1, "h"),
+    ("iac_kp_num",               108, 1, "h"),
+    ("iac_kd_num",               110, 1, "h"),
+    ("iac_kd_den",               112, 1, "h"),
+    ("iac_i_clamp_x10",          114, 1, "h"),
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

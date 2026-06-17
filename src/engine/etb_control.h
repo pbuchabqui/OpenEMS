@@ -52,6 +52,7 @@ void             etb_control_loop(float pedal, float rpm, float dt);
 void             etb_set_drive_mode(etb_drive_mode_t mode);
 etb_drive_mode_t etb_get_drive_mode(void);
 void             etb_set_idle_control(bool active, float target_rpm);
+void             etb_apply_idle_calibration(void);  /* re-aplica globals de calibration → g_config */
 int16_t          etb_get_idle_spark_trim(void);
 float            etb_get_throttle_position(void);
 bool             etb_is_ready(void);

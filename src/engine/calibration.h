@@ -151,12 +151,28 @@ extern int16_t  rev_limit_max_retard_deg;    // retardo máximo no limite (ex. 1
 extern uint16_t ltft_add_pw_threshold_us;
 
 // Corte de combustível na desaceleração (MS42 TI_PUR)
-// Ativa quando: TPS < threshold + RPM > entry + CLT > min_clt
-// Desativa quando: RPM < exit (histerese) OU TPS >= threshold
-extern uint16_t decel_cut_tps_threshold_x10;   // TPS máximo para entrada (ex. 5 = 0.5%)
-extern uint32_t decel_cut_entry_rpm_x10;        // RPM mínimo para ativar corte
-extern uint32_t decel_cut_exit_rpm_x10;         // RPM abaixo do qual reativa combustível
-extern int16_t  decel_cut_min_clt_x10;          // CLT mínima (motor aquecido)
+extern uint16_t decel_cut_tps_threshold_x10;
+extern uint32_t decel_cut_entry_rpm_x10;
+extern uint32_t decel_cut_exit_rpm_x10;
+extern int16_t  decel_cut_min_clt_x10;
+
+// Marcha lenta ETB — posição mínima/máxima da borboleta no idle (unidade: %×10)
+// idle_rpm_target: RPM alvo (uint16, RPM direto, ex. 850)
+// idle_min_opening_x10: abertura mínima (%×10, ex. 30 = 3.0%)
+// idle_max_opening_x10: abertura máxima (%×10, ex. 80 = 8.0%)
+extern uint16_t etb_idle_rpm_target;
+extern uint16_t etb_idle_min_opening_x10;
+extern uint16_t etb_idle_max_opening_x10;
+
+// IAC PID gains — ganhos do controlador P+I+D da válvula de ar de marcha lenta
+// Kp e Kd são numerador inteiro (denominador fixo = 1000 e 2 respectivamente).
+// I-clamp: limite do integrador em unidades de duty×10.
+// CLT enable: temperatura mínima (°C×10) para ativar o PID (abaixo usa warmup duty).
+extern int16_t iac_kp_num;
+extern int16_t iac_kd_num;
+extern int16_t iac_kd_den;
+extern int16_t iac_i_clamp_x10;
+extern int16_t iac_clt_pid_enable_x10;
 
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;
 // Empurra a calibração de sensores (APP/ETB/TPS/plausibilidade) p/ drv::sensors.

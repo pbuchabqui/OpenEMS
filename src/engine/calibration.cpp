@@ -207,6 +207,18 @@ uint32_t decel_cut_entry_rpm_x10     = 15000u;   // 1500 RPM
 uint32_t decel_cut_exit_rpm_x10      = 12000u;   // 1200 RPM (histerese)
 int16_t  decel_cut_min_clt_x10       = 700;      // 70°C
 
+// Marcha lenta ETB
+uint16_t etb_idle_rpm_target      = 850u;
+uint16_t etb_idle_min_opening_x10 = 30u;   // 3.0%
+uint16_t etb_idle_max_opening_x10 = 80u;   // 8.0%
+
+// IAC PID (mesmos defaults dos constexpr em auxiliaries.cpp)
+int16_t iac_kp_num            = 2;
+int16_t iac_kd_num            = 5;
+int16_t iac_kd_den            = 2;
+int16_t iac_i_clamp_x10       = 300;
+int16_t iac_clt_pid_enable_x10 = 600;   // 60°C
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept {
     if (page == nullptr || len < 36u) {
         return;
