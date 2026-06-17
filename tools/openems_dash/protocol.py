@@ -34,7 +34,7 @@ MAP_AXIS_BAR_X100 = [
 RPM_AXIS = [v // 10 for v in RPM_AXIS_X10]
 MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
-PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 64, 4: 512, 5: 256, 6: 80, 7: 32}
+PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 64, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112}
 
 STATUS_BITS = {
     "FULL_SYNC":    0x0001,
@@ -313,11 +313,74 @@ PAGE0_FIELDS = [
     ("etb_kp_x10",               44, 1, "H"),
     ("etb_ki_x10",               46, 1, "H"),
     ("etb_kd_x10",               48, 1, "H"),
-    ("tps_raw_min",              52, 1, "H"),
-    ("tps_raw_max",              54, 1, "H"),
+    # tps_raw_min (offset 52) e tps_raw_max (offset 54) removidos — DBW usa ETB TPS
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
+
+# Pedal map (page 8): 4 modes × 10 uint16 LE, units pct×10.
+# Mode order: 0=ECO, 1=NORMAL, 2=SPORT, 3=RAIN. Axis fixed: 0%,10%,...,100%.
+PEDAL_MAP_MODES = ["ECO", "NORMAL", "SPORT", "RAIN"]
+PEDAL_MAP_AXIS  = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]  # pedal %
+
+def decode_pedal_maps(buf: bytes) -> list[list[float]]:
+    """80 bytes → list of 4 lists of 10 floats (throttle %)."""
+    maps = []
+    for m in range(4):
+        row = list(struct.unpack_from("<10H", buf, m * 20))
+        maps.append([v / 10.0 for v in row])
+    return maps
+
+# ── Boost map (page 9) ────────────────────────────────────────────────────────
+# 7 marchas × 8 RPM × uint16 LE; unidade: bar × 1000
+BOOST_RPM_AXIS   = [1500, 2000, 2500, 3000, 4000, 5000, 6500, 8000]
+BOOST_GEAR_LABELS = ["Neutro/Desc.", "1ª", "2ª", "3ª", "4ª", "5ª", "6ª"]
+
+def decode_boost_map(buf: bytes) -> list[list[int]]:
+    rows = []
+    for g in range(7):
+        row = list(struct.unpack_from("<8H", buf, g * 16))
+        rows.append(row)
+    return rows
+
+def encode_boost_map(rows: list[list[int]]) -> bytes:
+    out = bytearray(112)
+    for g, row in enumerate(rows):
+        struct.pack_into("<8H", out, g * 16, *[int(v) for v in row])
+    return bytes(out)
+
+
+def encode_pedal_maps(maps: list[list[float]]) -> bytes:
+    """4 × 10 floats (throttle %) → 80 bytes for page 8."""
+    out = bytearray(80)
+    for m, row in enumerate(maps):
+        struct.pack_into("<10H", out, m * 20, *[int(round(v * 10)) for v in row])
+    return bytes(out)
+
+
+# ── CAN RX Map ────────────────────────────────────────────────────────────────
+# Configuração RAM-only (sem NVM por enquanto); enviada ao firmware via protocolo
+# futuro. Armazenada no servidor e exposta ao dashboard via REST.
+
+CAN_RX_SIGNALS = ["GEAR", "SPEED_KMH"]
+
+CAN_SIGNAL_DEFAULTS = {
+    "GEAR":      {"id": 0, "byte_lo": 0, "byte_hi": 255, "shift_right": 0, "mask": 255, "offset": 0, "timeout_ms": 500},
+    "SPEED_KMH": {"id": 0, "byte_lo": 0, "byte_hi": 255, "shift_right": 0, "mask": 255, "offset": 0, "timeout_ms": 500},
+}
+
+# Estado em memória (o servidor é single-process)
+_can_rx_map: dict = {k: dict(v) for k, v in CAN_SIGNAL_DEFAULTS.items()}
+
+def can_rx_map_get() -> dict:
+    return {k: dict(v) for k, v in _can_rx_map.items()}
+
+def can_rx_map_set(signal: str, fields: dict) -> None:
+    if signal not in _can_rx_map:
+        raise ValueError(f"sinal desconhecido: {signal}")
+    for k, v in fields.items():
+        if k in _can_rx_map[signal]:
+            _can_rx_map[signal][k] = int(v)
 
 
 def decode_fields(page: int, buf: bytes) -> dict:

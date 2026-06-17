@@ -2,17 +2,20 @@
 
 ## Pendente
 
-### 1. Bug ADC1/ADC2 não converte continuamente (firmware) — HANDOFF de bancada
-A math do HIL está **validada 21/21** via bench-mode (ver Concluído). O bug que
-restou é de firmware e **afeta sensores reais também**: o ADC captura UMA sequência
-e congela (raw não recicla), mesmo com o DAC do estimulador a varrer o pino (PA2
-medido 0.22–3.19 V real; o caminho analógico está OK).
-- **Já corrigido e em produção**: `DMACFG=1`+`OVRMOD=1` no CFGR1 e re-arm do GPDMA
-  por dente (`adc_trigger_on_tooth`) → ADSTART=1, init_faults 4→0, sem `SENSOR_FAULT`.
-- **Falta**: a DMA não recicla (modo comum ADC1+ADC2). Precisa de bancada com
-  analisador lógico / single-step — não dá pra fechar por flash às cegas. Tentar
-  GPDMA circular real via linked-list (CLLR auto-apontando) ou polling de `ADC1_DR`
-  por EOS sem DMA p/ isolar DMA vs conversão. Ver memória `adc1-nao-converte`.
+### 1. Pinos/canais do ADC errados no H562 (firmware+fiação) — HANDOFF
+A math do HIL está **validada 21/21** via bench-mode (ver Concluído). Causa-raiz
+**definitiva** do "ADC nunca leu sensor real" (DS14258, 2026-06-15): a atribuição de
+pinos analógicos em `src/hal/adc.cpp` é incompatível com o STM32H562.
+- **PA2 (MAP), PC1 (AN4), PC2 (CLT), PC3 (IAT) NÃO têm ADC** no H562. E os nº de
+  canais estão todos errados. Mapa REAL: PA3=INP15, PA4=INP18, PA6=INP3, PA7=INP7,
+  PB0=INP9, PB1=INP5, PC0=INP10, PC4=INP4, PC5=INP8.
+- O ADC, a DMA e o trigger **funcionam** (corrigido pelo caminho: GPDMA circular via
+  LLI auto-referente + DMACFG/OVRMOD; ADSTART=1, init_faults 4→0). Mas o ADC lê pinos
+  errados → o MAP no PA2 (sem ADC) nunca chega; sweep do DAC não bate em canal nenhum.
+- **FIX**: reatribuir sensores a pinos com ADC, corrigir `kAdc1Sqr1/2`+`gpio_set_analog`
+  +header de pinagem, e refazer a fiação da bancada (ESP32 DAC→pino certo). Ex.:
+  MAP→PA4(INP18)/PC4(INP4); TPS→PA3(INP15)/PA6(INP3); CLT→PB0(INP9); IAT→PB1(INP5).
+  VREF+ é interno ao VDDA (pino 13, ferrite FB1 do 3.3V — OK). Ver `adc1-nao-converte`.
 - CMP ainda em LOW (FULL_SYNC usa só o crank); para phase_A, adicionar 2º canal RMT.
 
 ### 2. Datalog em SD card (registrado 2026-06-12)

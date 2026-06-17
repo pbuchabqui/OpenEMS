@@ -42,7 +42,6 @@ typedef struct {
 typedef struct {
     etb_drive_mode_t current_mode;
     etb_pid_config_t pid_configs[ETB_MODE_COUNT];
-    float response_maps[ETB_MODE_COUNT][10];
     float idle_rpm_target, idle_min_opening, idle_max_opening;
     float idle_spark_advance, idle_spark_retard;
     float rpm_cutoff, tps_rate_limit, limp_opening;

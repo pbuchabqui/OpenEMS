@@ -214,11 +214,24 @@ bool torque_manager_is_ready(void) {
 // ─── New integer API (ems::engine namespace) ─────────────────────────────────
 #include "engine/calibration.h"
 #include "engine/math_utils.h"
+#include "etb_control.h"
 
 namespace ems::engine {
 
 static uint16_t g_etb_target_x10   = 0u;
 static uint8_t  g_limp_reason      = 0u;
+
+// Interpolação inteira do pedal map: app_x10 (0-1000) → throttle_x10 (0-1000).
+// Os 10 pontos correspondem a pedal 0%,10%,...,100%.
+static uint16_t pedal_map_lookup(uint16_t app_x10) noexcept {
+    const uint8_t mode = static_cast<uint8_t>(etb_get_drive_mode());
+    if (app_x10 >= 1000u) { return etb_pedal_map[mode][9]; }
+    const uint16_t idx  = app_x10 / 100u;          // 0-9
+    const uint16_t frac = app_x10 - idx * 100u;    // 0-99
+    const uint16_t lo   = etb_pedal_map[mode][idx];
+    const uint16_t hi   = etb_pedal_map[mode][idx + 1u];
+    return static_cast<uint16_t>(lo + (static_cast<uint32_t>(hi - lo) * frac) / 100u);
+}
 
 void torque_manager_reset() noexcept {
     g_etb_target_x10 = 0u;
@@ -261,8 +274,8 @@ TorqueOutput torque_manager_update(
         out.limp_reason |= TORQUE_LIMP_ETB_FAULT;
     }
 
-    // Base target from driver pedal
-    uint16_t target_x10 = sensors.app_pct_x10;
+    // Base target from driver pedal — apply response map
+    uint16_t target_x10 = pedal_map_lookup(sensors.app_pct_x10);
 
     // Limp mode: clamp to etb_max_open_pct_x10_limp
     if ((out.limp_reason & (TORQUE_LIMP_MAP_CLT | TORQUE_LIMP_APP_FAULT)) != 0u) {

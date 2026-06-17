@@ -47,6 +47,8 @@ alignas(4) static uint8_t g_page4_lambda[512] = {};   // lambda_target_table_x10
 alignas(4) static uint8_t g_page5_corr[256]   = {};   // tabelas de correção 1D
 alignas(4) static uint8_t g_page6_xtau[80]    = {};   // X-Tau, AE rate curve, quick crank
 alignas(4) static uint8_t g_page7_dwell2d[32] = {};   // Dwell 2D: eixo RPM + factores Q8
+alignas(4) static uint8_t g_page8_pedalmap[80] = {};  // Pedal map: 4 modos × 10 × uint16
+alignas(4) static uint8_t g_page9_boost[112]   = {};  // Boost map: 7 marchas × 8 RPM × uint16
 
 static volatile uint8_t g_rx_buf[kRxSize] = {};
 static volatile uint16_t g_rx_head = 0u;
@@ -104,6 +106,8 @@ inline uint16_t page_size(uint8_t page) noexcept {
     }
     if (page == 0x06u) { return static_cast<uint16_t>(sizeof(g_page6_xtau)); }
     if (page == 0x07u) { return static_cast<uint16_t>(sizeof(g_page7_dwell2d)); }
+    if (page == 0x08u) { return static_cast<uint16_t>(sizeof(g_page8_pedalmap)); }
+    if (page == 0x09u) { return static_cast<uint16_t>(sizeof(g_page9_boost)); }
     return 0u;
 }
 
@@ -116,11 +120,13 @@ inline uint8_t* page_ptr(uint8_t page) noexcept {
     if (page == 0x05u) { return g_page5_corr; }
     if (page == 0x06u) { return g_page6_xtau; }
     if (page == 0x07u) { return g_page7_dwell2d; }
+    if (page == 0x08u) { return g_page8_pedalmap; }
+    if (page == 0x09u) { return g_page9_boost; }
     return nullptr;
 }
 
 inline uint8_t normalize_page_id(uint8_t page) noexcept {
-    if (page >= static_cast<uint8_t>('0') && page <= static_cast<uint8_t>('7')) {
+    if (page >= static_cast<uint8_t>('0') && page <= static_cast<uint8_t>('9')) {
         return static_cast<uint8_t>(page - static_cast<uint8_t>('0'));
     }
     return page;
@@ -175,7 +181,7 @@ inline void update_realtime_page() noexcept {
 
     rt.rpm = static_cast<uint16_t>((c.rpm_x10 > 655350u) ? 65535u : (c.rpm_x10 / 10u));
     rt.map_bar_x100 = ems::engine::clamp_u8(s.map_bar_x1000 / 10u);
-    rt.tps_pct = ems::engine::clamp_u8(s.tps_pct_x10 / 10u);
+    rt.tps_pct = ems::engine::clamp_u8(s.etb_tps_pct_x10 / 10u);
 
     rt.clt_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.clt_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
     rt.iat_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.iat_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
@@ -322,6 +328,10 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memset(p, 0, sizeof(g_page7_dwell2d));
         std::memcpy(p + 0,  ems::engine::dwell_rpm_axis_rpm,  8u);
         std::memcpy(p + 8,  ems::engine::dwell_rpm_factor_q8, 8u);
+    } else if (page == 0x08u) {
+        std::memcpy(g_page8_pedalmap, ems::engine::etb_pedal_map, sizeof(g_page8_pedalmap));
+    } else if (page == 0x09u) {
+        std::memcpy(g_page9_boost, ems::engine::boost_target_bar_x1000, sizeof(g_page9_boost));
     }
 }
 
@@ -386,6 +396,10 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         const uint8_t* p = g_page7_dwell2d;
         std::memcpy(ems::engine::dwell_rpm_axis_rpm,  p + 0,  8u);
         std::memcpy(ems::engine::dwell_rpm_factor_q8, p + 8,  8u);
+    } else if (page == 0x08u) {
+        std::memcpy(ems::engine::etb_pedal_map, g_page8_pedalmap, sizeof(g_page8_pedalmap));
+    } else if (page == 0x09u) {
+        std::memcpy(ems::engine::boost_target_bar_x1000, g_page9_boost, sizeof(g_page9_boost));
     }
 }
 
@@ -396,6 +410,8 @@ inline uint8_t editable_page_bit(uint8_t page) noexcept {
     if (page == 0x05u) { return 0x08u; }
     if (page == 0x06u) { return 0x10u; }
     if (page == 0x07u) { return 0x20u; }
+    if (page == 0x08u) { return 0x40u; }
+    if (page == 0x09u) { return 0x80u; }
     return 0u;
 }
 
@@ -449,6 +465,18 @@ inline bool burn_page_to_flash(uint8_t page) noexcept {
     }
     if (page == 0x07u) {
         const bool ok = ems::hal::nvm_save_calibration(6u, g_page7_dwell2d, static_cast<uint16_t>(sizeof(g_page7_dwell2d)));
+        if (!ok) { return false; }
+        clear_page_dirty(page);
+        return true;
+    }
+    if (page == 0x08u) {
+        const bool ok = ems::hal::nvm_save_calibration(7u, g_page8_pedalmap, static_cast<uint16_t>(sizeof(g_page8_pedalmap)));
+        if (!ok) { return false; }
+        clear_page_dirty(page);
+        return true;
+    }
+    if (page == 0x09u) {
+        const bool ok = ems::hal::nvm_save_calibration(8u, g_page9_boost, static_cast<uint16_t>(sizeof(g_page9_boost)));
         if (!ok) { return false; }
         clear_page_dirty(page);
         return true;

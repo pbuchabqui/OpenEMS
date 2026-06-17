@@ -98,8 +98,15 @@ extern uint16_t etb_ki_x10;
 extern uint16_t etb_kd_x10;
 extern uint8_t  etb_cal_valid;
 extern uint8_t  etb_harness_present;
+// Pedal-to-throttle response maps: 4 modes × 10 points, units pct×10 (0–1000).
+// Axis is fixed: pedal 0%,10%,...,90%,100%. Points[0]=0 and [9]=1000 are enforced.
+extern uint16_t etb_pedal_map[4][10];
 extern uint16_t tps_raw_min;   // TPS legado (cabo, PA4) — raw ADC em 0%/100%
 extern uint16_t tps_raw_max;
+
+// Boost target: 7 marchas (0=neutro/desconhecido, 1-6) × 8 pontos de RPM.
+// Unidade: bar × 1000. Eixo RPM fixo (mesmo que kBoostRpmAxisX10 em auxiliaries).
+extern uint16_t boost_target_bar_x1000[7][8];
 
 extern uint8_t  xtau_autocal_enabled;
 extern uint8_t  xtau_autocal_active;

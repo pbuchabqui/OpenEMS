@@ -22,12 +22,14 @@ async function api(path, opts) {
 }
 
 /* ── tabs ─────────────────────────────────────────────────────────────── */
-$$("nav .tab").forEach(b => b.onclick = () => {
-  $$("nav .tab").forEach(x => x.classList.toggle("active", x === b));
+$$("#sb-nav .tab").forEach(b => b.onclick = () => {
+  $$("#sb-nav .tab").forEach(x => x.classList.toggle("active", x === b));
   $$(".pane").forEach(p => p.classList.toggle("active", p.id === "tab-" + b.dataset.tab));
   const pane = $("#tab-" + b.dataset.tab);
   if (pane.classList.contains("grid-pane") && !pane.dataset.loaded) loadGrid(pane);
-  if (b.dataset.tab === "params" && !$("#paramsRoot").dataset.loaded) loadParams();
+  if (b.dataset.tab === "params"    && !$("#paramsRoot").dataset.loaded)   loadParams();
+  if (b.dataset.tab === "pedal-map" && !$("#pedalMapRoot").dataset.loaded) loadPedalMap();
+  if (b.dataset.tab === "boost"     && !$("#boostRoot").dataset.loaded)    loadBoostMap();
 });
 
 /* ── telemetria: gauges + charts ──────────────────────────────────────── */
@@ -46,21 +48,22 @@ const GAUGES = [
 $("#gauges").innerHTML = GAUGES.map(([k, l]) =>
   `<div class="gauge"><div class="v" id="g_${k}">—</div><div class="l">${l}</div></div>`).join("");
 
+
 const LEDS = [
   ["FULL_SYNC", true], ["PHASE_A", true], ["SENSOR_FAULT", false],
   ["SCHED_LATE", false], ["SCHED_DROP", false], ["SCHED_CLAMP", false],
   ["WBO2_FAULT", false],
 ];
 $("#statusLeds").innerHTML = LEDS.map(([k]) =>
-  `<span class="led" id="led_${k}">${k}</span>`).join("");
+  `<span class="led" id="led_${k}">[${k.replace(/_/g,"-")}]</span>`).join("");
 
 /* strip-charts uPlot: janela deslizante de 60 s */
 const WINDOW_S = 60, MAX_PTS = 60 * 35;
 const chartDefs = [
-  { title: "RPM", series: [["rpm", "#4cc2ff"]] },
-  { title: "MAP / TPS", series: [["map_kpa", "#ffb347"], ["tps_pct", "#3ad06c"]] },
-  { title: "Lambda / STFT", series: [["lambda_x1000", "#ff5562"], ["stft_pct", "#b58cff"]] },
-  { title: "PW / Avanço", series: [["pw_ms", "#4cc2ff"], ["advance_deg", "#ffd24c"]] },
+  { title: "RPM",          series: [["rpm",           "#e8a020"]] },
+  { title: "MAP / TPS",    series: [["map_kpa",       "#e8a020"], ["tps_pct",     "#22c55e"]] },
+  { title: "λ / STFT",     series: [["lambda_x1000",  "#ef4444"], ["stft_pct",    "#e8a020"]] },
+  { title: "PW / AVANÇO",  series: [["pw_ms",         "#e8a020"], ["advance_deg", "#22c55e"]] },
 ];
 const charts = chartDefs.map(def => {
   const box = document.createElement("div");
@@ -68,11 +71,11 @@ const charts = chartDefs.map(def => {
   $("#charts").appendChild(box);
   const data = [[], ...def.series.map(() => [])];
   const u = new uPlot({
-    width: box.clientWidth - 12 || 560, height: 180, title: def.title,
+    width: box.clientWidth - 8 || 480, height: 160, title: def.title,
     scales: { x: { time: false } },
     axes: [
-      { stroke: "#7b828c", grid: { stroke: "#2a2e36" } },
-      { stroke: "#7b828c", grid: { stroke: "#2a2e36" } },
+      { stroke: "#555555", grid: { stroke: "#1a1a1a" } },
+      { stroke: "#555555", grid: { stroke: "#1a1a1a" } },
     ],
     series: [
       { label: "t" },
@@ -82,7 +85,7 @@ const charts = chartDefs.map(def => {
   return { u, data, keys: def.series.map(([k]) => k) };
 });
 window.addEventListener("resize", () =>
-  charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 12, height: 180 })));
+  charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 160 })));
 
 const t0 = performance.now();
 function pushTelemetry(d) {
@@ -112,8 +115,8 @@ function connectWS() {
   ws.onmessage = ev => {
     const d = JSON.parse(ev.data);
     const conn = d.connected;
-    $("#conn").className = "badge " + (conn ? "on" : "off");
-    $("#conn").textContent = conn ? "conectado" : (d.error || "desconectado");
+    $("#conn").className = conn ? "on" : "off";
+    $("#conn").textContent = conn ? "[ONLINE]" : "[OFFLINE]";
     if (conn && d.rpm !== undefined) {
       RT = d; pushTelemetry(d); highlightLiveCell();
       $$(".live-raw").forEach(el => el.textContent = `ao vivo: ${d[el.dataset.src]}`);
@@ -320,9 +323,42 @@ function highlightLiveCell() {
   g.lineWidth = 3; g.strokeStyle = "#111"; g.stroke();
 }
 
-/* ── parâmetros (páginas 5/6/7) ───────────────────────────────────────── */
+/* ── parâmetros ───────────────────────────────────────────────────────── */
 const PARAM_PAGES = { 0: "Configuração do motor", 5: "Correções 1D",
                       6: "X-Tau / AE / Crank", 7: "Dwell 2D" };
+
+/* Metadados dos grupos de parâmetros: ícone, rótulo da seção, página(s) */
+const PARAM_GROUPS = [
+  { id: "pg-motor",    icon: "⚙",  label: "MOTOR",       pages: [0] },
+  { id: "pg-inject",   icon: "⛽", label: "INJEÇÃO",      pages: [5, 6] },
+  { id: "pg-ignition", icon: "⚡", label: "IGNIÇÃO",      pages: [7] },
+  { id: "pg-canrx",    icon: "⇄",  label: "CAN RX",       pages: [], canRx: true },
+];
+
+/* Subgrupos de campos escalares dentro da página 0 */
+const PAGE_0_SECTIONS = [
+  {
+    label: "MOTOR",
+    fields: ["ivc_abdc_deg","displacement_cc","trigger_tooth0_engine_deg",
+             "default_soi_lead_deg","config_magic"],
+  },
+  {
+    label: "INJEÇÃO",
+    fields: ["injector_flow_cc_min","stoich_afr_x100","map_ref_bar_x100"],
+  },
+  {
+    label: "SENSORES APP",
+    fields: ["app1_raw_min","app1_raw_max","app2_raw_min","app2_raw_max",
+             "app_max_delta_pct_x10"],
+  },
+  {
+    label: "BORBOLETA ETB",
+    fields: ["etb_tps1_raw_min","etb_tps1_raw_max","etb_tps2_raw_min","etb_tps2_raw_max",
+             "etb_max_delta_pct_x10","etb_max_open_pct_x10_limp",
+             "etb_max_rate_pct_per_s","etb_idle_open_pct_x10","etb_cal_valid",
+             "etb_harness_present","etb_kp_x10","etb_ki_x10","etb_kd_x10"],
+  },
+];
 
 /* rótulos amigáveis (página 0) e campos read-only */
 const FIELD_LABELS = {
@@ -338,7 +374,6 @@ const FIELD_LABELS = {
   app2_raw_min:  "APP2 pedal solto (raw)",   app2_raw_max:  "APP2 pedal a fundo (raw)",
   etb_tps1_raw_min: "ETB TPS1 fechada (raw)", etb_tps1_raw_max: "ETB TPS1 aberta (raw)",
   etb_tps2_raw_min: "ETB TPS2 fechada (raw)", etb_tps2_raw_max: "ETB TPS2 aberta (raw)",
-  tps_raw_min: "TPS cabo fechado (raw)",      tps_raw_max: "TPS cabo aberto (raw)",
   app_max_delta_pct_x10: "Plausibilidade APP Δmáx (%×10)",
   etb_max_delta_pct_x10: "Plausibilidade ETB Δmáx (%×10)",
   etb_max_open_pct_x10_limp: "ETB abertura máx limp (%×10)",
@@ -393,22 +428,207 @@ const PAGE_LAYOUT = {
   },
 };
 
+/* ── Boost map editor (page 9) ───────────────────────────────────────── */
+const BOOST_RPM_AXIS    = [1500, 2000, 2500, 3000, 4000, 5000, 6500, 8000];
+const BOOST_GEAR_LABELS = ["NEUTRO", "1ª", "2ª", "3ª", "4ª", "5ª", "6ª"];
+const BOOST_DEFAULTS = [
+  [1000, 1020, 1050, 1080, 1100, 1120, 1150, 1180],
+  [1000, 1050, 1100, 1150, 1200, 1250, 1280, 1300],
+  [1000, 1080, 1150, 1220, 1280, 1340, 1380, 1420],
+  [1000, 1100, 1180, 1260, 1330, 1400, 1450, 1500],
+  [1000, 1120, 1210, 1300, 1380, 1460, 1520, 1580],
+  [1000, 1140, 1240, 1340, 1430, 1520, 1600, 1680],
+  [1000, 1150, 1260, 1370, 1470, 1570, 1660, 1750],
+];
+
+async function loadBoostMap() {
+  const root = $("#boostRoot");
+  root.dataset.loaded = "1";
+  root.innerHTML = `<div class="grid-toolbar">
+    <strong>BOOST TARGET</strong>
+    <span class="muted">(bar × 1000)</span>
+    <button class="primary" id="boostSend">Enviar (RAM)</button>
+    <button class="danger"  id="boostBurn">Burn → flash</button>
+    <button id="boostReload">Reler</button>
+    <span class="dirty" id="boostDirty"></span>
+  </div>
+  <div id="boostWrap"></div>`;
+
+  let rows = BOOST_DEFAULTS.map(r => [...r]);
+  const modified = new Set();
+
+  async function reload() {
+    try {
+      const d = await api("/api/pages/9");
+      rows = d.boost_map;
+    } catch { toast("ECU offline — mostrando defaults", false); }
+    modified.clear();
+    render();
+  }
+
+  function render() {
+    const flat = rows.flat();
+    const [mn, mx] = [Math.min(...flat), Math.max(...flat)];
+    let html = `<table class="tune"><tr><th>MARCHA \\ RPM</th>` +
+      BOOST_RPM_AXIS.map(r => `<th>${r}</th>`).join("") + "</tr>";
+    rows.forEach((row, g) => {
+      html += `<tr><th style="text-align:left;padding:0 6px">${BOOST_GEAR_LABELS[g]}</th>`;
+      row.forEach((v, c) => {
+        const mod = modified.has(`${g},${c}`) ? " mod" : "";
+        html += `<td class="${mod}" data-g="${g}" data-c="${c}"
+                     style="background:${heatColor(v, mn, mx)}">${v}</td>`;
+      });
+      html += "</tr>";
+    });
+    html += "</table>";
+    $("#boostWrap").innerHTML = html;
+    $("#boostDirty").textContent = modified.size ? `${modified.size} célula(s) não enviada(s)` : "";
+    $$("td[data-g]", root).forEach(td => td.onclick = () => {
+      if (td.querySelector("input")) return;
+      const g = +td.dataset.g, c = +td.dataset.c;
+      const inp = document.createElement("input");
+      inp.value = rows[g][c];
+      td.textContent = ""; td.appendChild(inp);
+      inp.focus(); inp.select();
+      const commit = () => {
+        const v = parseInt(inp.value, 10);
+        if (!Number.isNaN(v) && v !== rows[g][c]) {
+          rows[g][c] = v; modified.add(`${g},${c}`);
+        }
+        render();
+      };
+      inp.onblur = commit;
+      inp.onkeydown = e => {
+        if (e.key === "Enter") inp.blur();
+        if (e.key === "Escape") { inp.value = rows[g][c]; inp.blur(); }
+      };
+    });
+  }
+
+  $("#boostSend", root).onclick = async () => {
+    try {
+      await api("/api/pages/9/cells", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ boost_map: rows }),
+      });
+      modified.clear(); render();
+      toast("boost map enviado (RAM)");
+    } catch (e) { toast(e.message, true); }
+  };
+  $("#boostBurn", root).onclick = async () => {
+    try { await api("/api/pages/9/burn", { method: "POST" }); toast("burn OK"); }
+    catch (e) { toast(e.message, true); }
+  };
+  $("#boostReload", root).onclick = reload;
+  await reload();
+}
+
+/* ── CAN RX Map editor ────────────────────────────────────────────────── */
+const CAN_RX_FIELDS = [
+  { key: "id",          label: "Frame ID (hex)",   hex: true  },
+  { key: "byte_lo",     label: "Byte LSB (0-7)",   hex: false },
+  { key: "byte_hi",     label: "Byte MSB (255=8bit)",hex:false },
+  { key: "shift_right", label: "Shift direito",    hex: false },
+  { key: "mask",        label: "Máscara",          hex: true  },
+  { key: "offset",      label: "Offset aditivo",   hex: false },
+  { key: "timeout_ms",  label: "Timeout (ms)",     hex: false },
+];
+
+async function buildCanRxUI(container) {
+  const div = document.createElement("div");
+  div.className = "param-group";
+  div.innerHTML = `<div class="muted" style="font-size:10px;margin-bottom:8px">
+    Configuração RAM-only — ativa até o próximo reset da ECU.</div>`;
+  container.appendChild(div);
+
+  let cfg = {};
+  try { cfg = (await api("/api/can_rx_map")).signals; }
+  catch { toast("CAN RX map: servidor offline", true); }
+
+  for (const sig of ["GEAR", "SPEED_KMH"]) {
+    const sec = document.createElement("div");
+    const sigLabel = sig === "GEAR" ? "MARCHA" : "VELOCIDADE (km/h)";
+    sec.innerHTML = `<div class="pg-section-header">${sigLabel}</div>`;
+    div.appendChild(sec);
+
+    const vals = cfg[sig] || {};
+    for (const f of CAN_RX_FIELDS) {
+      const raw = vals[f.key] ?? 0;
+      const disp = f.hex ? "0x" + raw.toString(16).toUpperCase() : raw;
+      const row = document.createElement("div");
+      row.className = "param-row";
+      row.innerHTML = `<label>${f.label}</label>
+        <input data-sig="${sig}" data-key="${f.key}" data-hex="${f.hex}" value="${disp}">`;
+      sec.appendChild(row);
+    }
+  }
+
+  const btnRow = document.createElement("div");
+  btnRow.className = "param-row pg-btns";
+  btnRow.innerHTML = `<button class="primary" id="canRxSend">Enviar (RAM)</button>`;
+  div.appendChild(btnRow);
+
+  div.querySelector("#canRxSend").onclick = async () => {
+    const inputs = div.querySelectorAll("input[data-sig]");
+    const bySignal = {};
+    for (const inp of inputs) {
+      const { sig, key, hex } = inp.dataset;
+      if (!bySignal[sig]) bySignal[sig] = {};
+      const raw = inp.value.trim();
+      bySignal[sig][key] = hex === "true" ? parseInt(raw, 16) : parseInt(raw, 10);
+    }
+    try {
+      for (const [sig, fields] of Object.entries(bySignal)) {
+        await api(`/api/can_rx_map/${sig}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(fields),
+        });
+      }
+      toast("CAN RX map enviado");
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
 async function loadParams() {
   const root = $("#paramsRoot");
   root.dataset.loaded = "1";
   root.innerHTML = "";
-  for (const [page, title] of Object.entries(PARAM_PAGES)) {
-    const div = document.createElement("div");
-    div.className = "param-group";
-    div.innerHTML = `<h3>Página ${page} — ${title}</h3>
-      <div class="rows muted">carregando…</div>
-      <div class="param-row">
-        <button class="primary" data-act="send">Enviar (RAM)</button>
-        <button class="danger" data-act="burn">Burn → flash</button>
-        <button data-act="reload">Reler</button>
-      </div>`;
-    root.appendChild(div);
-    bindParamGroup(div, +page);
+
+  for (const grp of PARAM_GROUPS) {
+    const details = document.createElement("details");
+    details.className = "pg-accordion";
+    details.id = grp.id;
+    details.innerHTML = `<summary class="pg-summary">
+      <span class="pg-icon">${grp.icon}</span>
+      <span class="pg-label">${grp.label}</span>
+      <span class="pg-arrow">▶</span>
+    </summary>`;
+    root.appendChild(details);
+
+    let opened = false;
+    details.addEventListener("toggle", () => {
+      if (details.open && !opened) {
+        opened = true;
+        if (grp.canRx) {
+          buildCanRxUI(details);
+        } else {
+          for (const page of grp.pages) {
+            const div = document.createElement("div");
+            div.className = "param-group";
+            div.innerHTML = `
+              <div class="pg-page-label">PG${page} — ${PARAM_PAGES[page]}</div>
+              <div class="rows muted">carregando…</div>
+              <div class="param-row pg-btns">
+                <button class="primary" data-act="send">Enviar (RAM)</button>
+                <button class="danger"  data-act="burn">Burn → flash</button>
+                <button data-act="reload">Reler</button>
+              </div>`;
+            details.appendChild(div);
+            bindParamGroup(div, page);
+          }
+        }
+      }
+    });
   }
 }
 
@@ -461,17 +681,46 @@ async function bindParamGroup(div, page) {
         "</table>";
     }
 
-    // escalares e campos fora do layout
-    for (const [name, v] of Object.entries(fields)) {
-      if (used.has(name)) continue;
-      const vals = Array.isArray(v) ? v : [v];
-      const cap = CAL_CAPTURE[name]
-        ? `<button class="cap" data-cap="${name}" data-src="${CAL_CAPTURE[name]}"
-                   title="capturar valor ao vivo">◉ capturar</button>
-           <span class="muted live-raw" data-src="${CAL_CAPTURE[name]}"></span>`
-        : "";
-      html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
-        vals.map((x, i) => inp(name, i, x)).join("") + cap + "</div>";
+    // escalares: página 0 usa subgrupos; outras páginas exibem plano
+    const remaining = Object.entries(fields).filter(([n]) => !used.has(n));
+    if (page === 0 && remaining.length) {
+      const fieldMap = Object.fromEntries(remaining);
+      const rendered = new Set();
+      for (const sec of PAGE_0_SECTIONS) {
+        const secFields = sec.fields.filter(f => f in fieldMap);
+        if (!secFields.length) continue;
+        html += `<div class="pg-section-header">${sec.label}</div>`;
+        for (const name of secFields) {
+          rendered.add(name);
+          const v = fieldMap[name];
+          const vals = Array.isArray(v) ? v : [v];
+          const cap = CAL_CAPTURE[name]
+            ? `<button class="cap" data-cap="${name}" data-src="${CAL_CAPTURE[name]}"
+                       title="capturar valor ao vivo">◉ capturar</button>
+               <span class="muted live-raw" data-src="${CAL_CAPTURE[name]}"></span>`
+            : "";
+          html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
+            vals.map((x, i) => inp(name, i, x)).join("") + cap + "</div>";
+        }
+      }
+      // qualquer campo não coberto pelos subgrupos
+      for (const [name, v] of remaining) {
+        if (rendered.has(name)) continue;
+        const vals = Array.isArray(v) ? v : [v];
+        html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
+          vals.map((x, i) => inp(name, i, x)).join("") + "</div>";
+      }
+    } else {
+      for (const [name, v] of remaining) {
+        const vals = Array.isArray(v) ? v : [v];
+        const cap = CAL_CAPTURE[name]
+          ? `<button class="cap" data-cap="${name}" data-src="${CAL_CAPTURE[name]}"
+                     title="capturar valor ao vivo">◉ capturar</button>
+             <span class="muted live-raw" data-src="${CAL_CAPTURE[name]}"></span>`
+          : "";
+        html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
+          vals.map((x, i) => inp(name, i, x)).join("") + cap + "</div>";
+      }
     }
     rowsEl.innerHTML = html;
     $$("button.cap", rowsEl).forEach(btn => btn.onclick = () => {
@@ -536,6 +785,164 @@ $("#logBtn").onclick = async () => {
 
 $("#logExportBtn").onclick = () => window.open("/api/log/export");
 
+/* ── Pedal Map (page 8) ──────────────────────────────────────────────── */
+const PEDAL_MODES = ["ECO", "NORMAL", "SPORT", "RAIN"];
+const PEDAL_AXIS  = [0, 10, 20, 30, 40, 50, 60, 70, 80, 100]; // labels do eixo pedal (10 pontos)
+const PEDAL_COLORS = ["#4caf50","#2196f3","#ff5722","#9c27b0"];
+
+let pedalMaps = null; // current edited state: float[4][10]
+
+function buildPedalMapUI(data) {
+  const root = $("#pedalMapRoot");
+  root.dataset.loaded = "1";
+  pedalMaps = data.pedal_maps.map(m => [...m]);
+
+  root.innerHTML = `
+    <div class="pm-header">
+      <div class="pm-tabs">${PEDAL_MODES.map((m,i)=>`<button class="pm-tab${i===0?" active":""}" data-mode="${i}">${m}</button>`).join("")}</div>
+      <button id="pmSave">Salvar na ECU</button>
+      <button id="pmReset">Restaurar padrões</button>
+    </div>
+    <div class="pm-body">
+      <canvas id="pmCanvas" width="540" height="360"></canvas>
+      <div id="pmTable"></div>
+    </div>`;
+
+  let activeMode = 0;
+
+  function drawChart() {
+    const canvas = $("#pmCanvas");
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width, H = canvas.height;
+    const PAD = {l:40,r:20,t:20,b:40};
+    const iW = W-PAD.l-PAD.r, iH = H-PAD.t-PAD.b;
+
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle="#1a1a1a"; ctx.fillRect(0,0,W,H);
+
+    // grid
+    ctx.strokeStyle="#333"; ctx.lineWidth=1;
+    for(let i=0;i<=10;i++){
+      const x=PAD.l+i*iW/10, y=PAD.t+i*iH/10;
+      ctx.beginPath(); ctx.moveTo(x,PAD.t); ctx.lineTo(x,PAD.t+iH); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(PAD.l,y); ctx.lineTo(PAD.l+iW,y); ctx.stroke();
+    }
+    // axes labels
+    ctx.fillStyle="#888"; ctx.font="11px monospace"; ctx.textAlign="center";
+    for(let i=0;i<=10;i++) {
+      ctx.fillText(i*10, PAD.l+i*iW/10, PAD.t+iH+14);
+    }
+    ctx.textAlign="right";
+    for(let i=0;i<=10;i++) ctx.fillText(i*10, PAD.l-6, PAD.t+iH-i*iH/10+4);
+    ctx.fillStyle="#aaa"; ctx.textAlign="center";
+    ctx.fillText("Pedal %", PAD.l+iW/2, H-4);
+
+    // linear reference
+    ctx.strokeStyle="#444"; ctx.lineWidth=1.5; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(PAD.l,PAD.t+iH); ctx.lineTo(PAD.l+iW,PAD.t); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // all modes faint
+    pedalMaps.forEach((map,mi)=>{
+      if(mi===activeMode) return;
+      ctx.strokeStyle=PEDAL_COLORS[mi]+"44"; ctx.lineWidth=1.5;
+      ctx.beginPath();
+      map.forEach((v,i)=>{
+        const x=PAD.l+i*iW/9, y=PAD.t+iH-v*iH/100;
+        i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+      });
+      ctx.stroke();
+    });
+
+    // active mode
+    const map = pedalMaps[activeMode];
+    ctx.strokeStyle=PEDAL_COLORS[activeMode]; ctx.lineWidth=2.5;
+    ctx.beginPath();
+    map.forEach((v,i)=>{
+      const x=PAD.l+i*iW/9, y=PAD.t+iH-v*iH/100;
+      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+
+    // points
+    map.forEach((v,i)=>{
+      const x=PAD.l+i*iW/9, y=PAD.t+iH-v*iH/100;
+      ctx.fillStyle=PEDAL_COLORS[activeMode];
+      ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2); ctx.fill();
+    });
+  }
+
+  function buildTable() {
+    const div = $("#pmTable");
+    const map = pedalMaps[activeMode];
+    div.innerHTML = `<table class="pm-tbl"><thead><tr><th>Pedal%</th><th>Borboleta%</th></tr></thead><tbody>${
+      PEDAL_AXIS.map((ax,i)=>`<tr><td>${ax}</td><td><input type="number" min="0" max="100" step="0.1" value="${map[i].toFixed(1)}" data-idx="${i}" ${i===0?"disabled":""}></td></tr>`).join("")
+    }</tbody></table>`;
+    div.querySelectorAll("input").forEach(inp=>{
+      inp.oninput = ()=>{
+        const idx=+inp.dataset.idx;
+        let v=parseFloat(inp.value);
+        if(isNaN(v)) return;
+        v=Math.max(0,Math.min(100,v));
+        // monotonicity guard
+        if(idx>0 && v<pedalMaps[activeMode][idx-1]) v=pedalMaps[activeMode][idx-1];
+        if(idx<9 && v>pedalMaps[activeMode][idx+1]) v=pedalMaps[activeMode][idx+1];
+        pedalMaps[activeMode][idx]=v;
+        inp.value=v.toFixed(1);
+        drawChart();
+      };
+    });
+  }
+
+  function activate(mode) {
+    activeMode=mode;
+    root.querySelectorAll(".pm-tab").forEach(b=>b.classList.toggle("active",+b.dataset.mode===mode));
+    buildTable(); drawChart();
+  }
+
+  root.querySelectorAll(".pm-tab").forEach(b=>b.onclick=()=>activate(+b.dataset.mode));
+
+  root.querySelector("#pmSave").onclick = async ()=>{
+    try {
+      await api("/api/pages/8/cells","PUT",{pedal_maps:pedalMaps});
+      toast("Pedal Map salvo na ECU ✓");
+    } catch(e){toast(e.message,true);}
+  };
+
+  const DEFAULTS = [
+    [0,8,15,22,30,40,52,65,80,100],
+    [0,10,20,30,40,50,60,70,80,100],
+    [0,18,35,50,60,70,78,85,92,100],
+    [0,5,10,15,22,30,40,52,65,100],
+  ];
+  root.querySelector("#pmReset").onclick = ()=>{
+    pedalMaps=DEFAULTS.map(m=>[...m]);
+    activate(activeMode);
+  };
+
+  activate(0);
+}
+
+async function loadPedalMap() {
+  try {
+    const data = await api("/api/pages/8");
+    buildPedalMapUI(data);
+  } catch(e) {
+    // ECU desconectada — mostra UI com defaults para edição offline
+    buildPedalMapUI({
+      pedal_maps: [
+        [0,8,15,22,30,40,52,65,80,100],
+        [0,10,20,30,40,50,60,70,80,100],
+        [0,18,35,50,60,70,78,85,92,100],
+        [0,5,10,15,22,30,40,52,65,100],
+      ],
+      modes: PEDAL_MODES,
+      axis: PEDAL_AXIS,
+    });
+    toast("ECU desconectada — exibindo defaults", false);
+  }
+}
+
 /* ── init ─────────────────────────────────────────────────────────────── */
 (async () => {
   try {
@@ -544,4 +951,6 @@ $("#logExportBtn").onclick = () => window.open("/api/log/export");
     logging = INFO.logging;
   } catch (e) { toast(e.message, true); }
   connectWS();
+  // Carregar VE automaticamente (aba padrão)
+  loadGrid($("#tab-grid-1"));
 })();

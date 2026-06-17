@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "hal/can.h"
+#include "app/can_rx_map.h"
 
 namespace {
 
@@ -53,16 +54,21 @@ inline bool wbo2_timed_out(uint32_t now_ms) noexcept {
 inline void process_rx(uint32_t now_ms) noexcept {
     ems::hal::CanFrame frame = {};
     while (ems::hal::can0_rx_pop(frame)) {
-        if (frame.extended || frame.id != g_wbo2_rx_id || frame.dlc < 3u) {
-            continue;
+        if (frame.extended) { continue; }
+
+        // WBO2
+        if (frame.id == g_wbo2_rx_id && frame.dlc >= 3u) {
+            g_lambda_milli    = static_cast<uint16_t>(
+                                    frame.data[0] |
+                                    (static_cast<uint16_t>(frame.data[1]) << 8u));
+            g_wbo2_status     = frame.data[2];
+            g_wbo2_last_rx_ms = now_ms;
+            g_wbo2_seen       = true;
+            g_wbo2_fault      = false;
         }
-        g_lambda_milli    = static_cast<uint16_t>(
-                                frame.data[0] |
-                                (static_cast<uint16_t>(frame.data[1]) << 8u));
-        g_wbo2_status     = frame.data[2];
-        g_wbo2_last_rx_ms = now_ms;
-        g_wbo2_seen       = true;
-        g_wbo2_fault      = false;
+
+        // Sinais configuráveis (marcha, velocidade, …)
+        ems::app::can_rx_map_process(frame.id, frame.data, frame.dlc, now_ms);
     }
 }
 
@@ -91,7 +97,7 @@ inline void tx_0x400(const ems::drv::CkpSnapshot& ckp,
     out.data[0] = static_cast<uint8_t>(rpm & 0xFFu);
     out.data[1] = static_cast<uint8_t>((rpm >> 8u) & 0xFFu);
     out.data[2] = clamp_u8(sensors.map_bar_x1000 / 10u);
-    out.data[3] = clamp_u8(sensors.tps_pct_x10 / 10u);
+    out.data[3] = clamp_u8(sensors.etb_tps_pct_x10 / 10u);
     out.data[4] = clamp_u8_i32((static_cast<int32_t>(sensors.clt_degc_x10) / 10) + 40);
     out.data[5] = clamp_u8_i32(static_cast<int32_t>(advance_deg) + 40);
     out.data[6] = pw_ms_x10;

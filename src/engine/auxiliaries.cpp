@@ -3,6 +3,8 @@
 #include <cstdint>
 
 #include "engine/table3d.h"
+#include "engine/calibration.h"
+#include "app/can_rx_map.h"
 
 #if __has_include("drv/ckp.h")
 #include "drv/ckp.h"
@@ -62,18 +64,12 @@ constexpr int16_t kWarmupCltAxisX10[kWarmupPts] = {-400, -100, 100, 300, 500, 70
 constexpr uint16_t kIacWarmupDutyX10[kWarmupPts] = {620u, 560u, 500u, 440u, 360u, 280u, 220u, 180u};
 constexpr uint16_t kIdleTargetRpmX10[kWarmupPts] = {12000u, 11500u, 10800u, 10000u, 9200u, 8500u, 8200u, 8000u};
 
-constexpr uint8_t kBoostPts = 8u;
-constexpr uint32_t kBoostRpmAxisX10[kBoostPts] = {15000u, 20000u, 25000u, 30000u, 40000u, 50000u, 65000u, 80000u};
-constexpr uint16_t kBoostTpsAxisX10[kBoostPts] = {100u, 200u, 300u, 450u, 600u, 750u, 900u, 1000u};
-constexpr uint16_t kBoostTargetBarX1000[kBoostPts][kBoostPts] = {
-    {1050u, 1100u, 1150u, 1200u, 1250u, 1300u, 1350u, 1400u},
-    {1050u, 1100u, 1150u, 1220u, 1270u, 1320u, 1380u, 1430u},
-    {1060u, 1120u, 1180u, 1250u, 1300u, 1360u, 1420u, 1480u},
-    {1080u, 1140u, 1210u, 1280u, 1340u, 1400u, 1460u, 1520u},
-    {1100u, 1170u, 1240u, 1320u, 1390u, 1460u, 1530u, 1600u},
-    {1120u, 1200u, 1270u, 1350u, 1430u, 1510u, 1590u, 1670u},
-    {1140u, 1220u, 1300u, 1390u, 1470u, 1560u, 1650u, 1740u},
-    {1150u, 1240u, 1330u, 1420u, 1510u, 1610u, 1700u, 1800u},
+// Boost target: usa global calibrável boost_target_bar_x1000[7][8] de calibration.h
+// Eixo RPM fixo (abaixo). Eixo Y = marcha inteira — índice direto sem interpolação.
+constexpr uint8_t kBoostRpmPts = 8u;
+constexpr uint8_t kBoostGears  = 7u;
+constexpr uint32_t kBoostRpmAxisX10[kBoostRpmPts] = {
+    15000u, 20000u, 25000u, 30000u, 40000u, 50000u, 65000u, 80000u
 };
 
 constexpr uint8_t kVvtPts = 12u;
@@ -237,20 +233,15 @@ uint16_t interp1_u16_8(const int16_t* axis, const uint16_t* values, int16_t x) n
     return static_cast<uint16_t>(y);
 }
 
-uint16_t lookup_boost_target(uint32_t rpm_x10, uint16_t tps_x10) noexcept {
-    const uint8_t xi = ems::engine::table_axis_index(kBoostRpmAxisX10, kBoostPts, rpm_x10);
-    const uint8_t yi = axis_index_u16(kBoostTpsAxisX10, kBoostPts, tps_x10);
+// gear: 0=neutro/desconhecido, 1-6; índice direto na tabela (sem interpolação no eixo Y)
+uint16_t lookup_boost_target(uint32_t rpm_x10, uint8_t gear) noexcept {
+    const uint8_t g  = (gear >= kBoostGears) ? (kBoostGears - 1u) : gear;
+    const uint8_t xi = ems::engine::table_axis_index(kBoostRpmAxisX10, kBoostRpmPts, rpm_x10);
     const uint8_t fx = ems::engine::table_axis_frac_q8(kBoostRpmAxisX10, xi, rpm_x10);
-    const uint8_t fy = axis_frac_q8_u16(kBoostTpsAxisX10, yi, tps_x10);
 
-    const int32_t v00 = static_cast<int32_t>(kBoostTargetBarX1000[yi][xi]);
-    const int32_t v10 = static_cast<int32_t>(kBoostTargetBarX1000[yi][xi + 1u]);
-    const int32_t v01 = static_cast<int32_t>(kBoostTargetBarX1000[yi + 1u][xi]);
-    const int32_t v11 = static_cast<int32_t>(kBoostTargetBarX1000[yi + 1u][xi + 1u]);
-
-    const int32_t v0 = lerp_q8_s32(v00, v10, fx);
-    const int32_t v1 = lerp_q8_s32(v01, v11, fx);
-    const int32_t v = lerp_q8_s32(v0, v1, fy);
+    const int32_t v0 = static_cast<int32_t>(ems::engine::boost_target_bar_x1000[g][xi]);
+    const int32_t v1 = static_cast<int32_t>(ems::engine::boost_target_bar_x1000[g][xi + 1u]);
+    const int32_t v  = lerp_q8_s32(v0, v1, fx);
 
     if (v <= 0) {
         return 0u;
@@ -382,7 +373,9 @@ void run_iac_control(const ems::drv::CkpSnapshot& snap,
 
 void run_wastegate_control(const ems::drv::CkpSnapshot& snap,
                            const ems::drv::SensorData& s) noexcept {
-    const uint16_t target_bar_x1000 = lookup_boost_target(snap.rpm_x10, s.tps_pct_x10);
+    uint8_t gear = 0u;
+    ems::app::can_rx_gear(gear, g.time_ms);  // fallback para 0 se CAN não configurado
+    const uint16_t target_bar_x1000 = lookup_boost_target(snap.rpm_x10, gear);
 
     if (s.map_bar_x1000 > static_cast<uint16_t>(target_bar_x1000 + kOverboostMarginBarX1000)) {
         g.wg_overboost_ms += kTick20ms;

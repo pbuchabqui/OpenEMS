@@ -43,7 +43,8 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/misfire_detect.cpp
 
 DRV_SRC = $(SRC_DIR)/drv/ckp.cpp $(SRC_DIR)/drv/sensors.cpp
-APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp $(SRC_DIR)/app/can_stack.cpp
+APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp $(SRC_DIR)/app/can_stack.cpp \
+          $(SRC_DIR)/app/can_rx_map.cpp
 HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp \
                   $(SRC_DIR)/hal/uart.cpp $(SRC_DIR)/hal/flash.cpp \
                   $(SRC_DIR)/hal/etb_driver.cpp

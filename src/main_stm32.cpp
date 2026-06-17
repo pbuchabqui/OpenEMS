@@ -222,6 +222,25 @@ static void load_dwell2d_calibration_from_nvm() noexcept {
     std::memcpy(ems::engine::dwell_rpm_factor_q8, page + 8,  8u);
 }
 
+static void load_boost_map_from_nvm() noexcept {
+    alignas(4) uint8_t page[112] = {};
+    if (!ems::hal::nvm_load_calibration(8u, page, sizeof(page)) ||
+        page_is_erased(page, sizeof(page))) {
+        return;
+    }
+    std::memcpy(ems::engine::boost_target_bar_x1000, page,
+                sizeof(ems::engine::boost_target_bar_x1000));
+}
+
+static void load_pedal_map_from_nvm() noexcept {
+    alignas(4) uint8_t page[80] = {};
+    if (!ems::hal::nvm_load_calibration(7u, page, sizeof(page)) ||
+        page_is_erased(page, sizeof(page))) {
+        return;  // flash apagada → usa defaults de compilação
+    }
+    std::memcpy(ems::engine::etb_pedal_map, page, sizeof(ems::engine::etb_pedal_map));
+}
+
 static void load_xtau_calibration_from_nvm() noexcept {
     alignas(4) uint8_t page[80] = {};
     if (!ems::hal::nvm_load_calibration(5u, page, sizeof(page)) ||
@@ -517,6 +536,8 @@ static void openems_init() noexcept {
 	load_corr_calibration_from_nvm();
 	load_xtau_calibration_from_nvm();
 	load_dwell2d_calibration_from_nvm();
+	load_pedal_map_from_nvm();
+	load_boost_map_from_nvm();
 	if (!ems::hal::nvm_load_adaptive_maps()) {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
@@ -653,7 +674,7 @@ int main() {
             // Atualiza estimador de MAP com sensor fusion para resposta transiente rápida
             const uint16_t map_bar_x100 = ems::engine::map_estimator_update(
                 map_bar_x100_sensor,
-                sensors.tps_pct_x10,
+                sensors.etb_tps_pct_x10,
                 kAePeriodMs,
                 snap.rpm_x10);
             
@@ -748,7 +769,7 @@ int main() {
                                          ems::engine::fuel_get_ltft_pct_x10(fuel_lookup.yi, fuel_lookup.xi)),
                     -500, 500);
                 const int32_t ae_pw_us = crank_rpm_window ? 0 : ems::engine::calc_ae_pw_us(
-                    sensors.tps_pct_x10,
+                    sensors.etb_tps_pct_x10,
                     g_prev_tps_pct_x10,
                     kAePeriodMs,
                     sensors.clt_degc_x10);
@@ -765,7 +786,7 @@ int main() {
                 // real e depois descartar o resultado, contaminando a auto-calibração.
                 const bool decel_cut_active = !crank_rpm_window &&
                     ems::engine::fuel_decel_cut_update(
-                        snap.rpm_x10, sensors.tps_pct_x10, sensors.clt_degc_x10);
+                        snap.rpm_x10, sensors.etb_tps_pct_x10, sensors.clt_degc_x10);
                 ems::engine::misfire_set_all_inhibit(decel_cut_active || crank_rpm_window);
                 if (decel_cut_active) {
                     g_last_net_pw_us = 0u;
@@ -831,7 +852,7 @@ int main() {
                 const int16_t idle_spark_corr_deg = crank_rpm_window ? 0 :
                     ems::engine::calc_idle_spark_correction_deg(snap.rpm_x10,
                                                                 idle_target_rpm_x10,
-                                                                sensors.tps_pct_x10,
+                                                                sensors.etb_tps_pct_x10,
                                                                 map_bar_x100);
                 const int16_t iat_spark_deg = crank_rpm_window ? 0 :
                     ems::engine::calc_ign_iat_correction_deg(sensors.iat_degc_x10);
@@ -884,7 +905,7 @@ int main() {
                 static_cast<void>(ems::engine::quick_crank_update(
                     now, snap.rpm_x10, false, sensors.clt_degc_x10, 0));
             }
-            g_prev_tps_pct_x10 = sensors.tps_pct_x10;
+            g_prev_tps_pct_x10 = sensors.etb_tps_pct_x10;
 
             const uint32_t prime_pw = ems::engine::quick_crank_consume_prime();
             if (prime_pw != 0u) {

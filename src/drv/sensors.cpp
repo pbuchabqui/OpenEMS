@@ -153,15 +153,12 @@ static int16_t g_iat_table[128] = {};
 static uint16_t g_fast_sample_accum = 0u;
 static uint32_t g_last_rpm_x10        = 0u;   // RPM do último dente — p/ plausibilidade MAP×TPS
 
-// Bench-mode: quando ativo, ignora o ADC físico (pinos não ligados / DAC que não
-// chega, ou ADC1 não convertendo) e força valores fixos válidos em CLT/IAT (ADC2) E
-// MAP/TPS/MAF (ADC1), limpando o fault desses canais para não acionar SENSOR_FAULT.
-// Sem efeito quando g_bench_clt_iat == false (produção).
+// Bench-mode: quando ativo, força CLT/IAT (ADC2) a valores fixos e limpa o fault
+// desses canais (sensores físicos ausentes na bancada, sem RC). MAP/TPS NÃO são mais
+// forçados — agora são ADC real (PA3/PA4). Sem efeito quando false (produção).
 static bool     g_bench_clt_iat      = false;
 static int16_t  g_bench_clt_x10      = 900;   // 90,0 °C — motor quente (corr CLT ≈ 1.0)
 static int16_t  g_bench_iat_x10      = 250;   // 25,0 °C — ar ambiente (corr IAT ≈ 1.0)
-static uint16_t g_bench_map_bar_x1000 = 500;  // 0,50 bar = 50 kPa — carga parcial
-static uint16_t g_bench_tps_x10       = 100;  // 10,0 % — borboleta coerente c/ MAP
 static bool     g_tps_pct_cache_valid = false;
 static uint16_t g_tps_pct_cache_raw = 0u;
 static uint16_t g_tps_pct_cache_min = 0u;
@@ -394,27 +391,8 @@ inline uint16_t maf_period_avg4() noexcept {
 // MAP, MAF-V, TPS, O2 — todos sincronizados ao mesmo ângulo de virabrequim
 // -----------------------------------------------------------------------------
 inline void sample_fast_channels() noexcept {
-    if (g_bench_clt_iat) {
-        // Bench HIL: ADC1 não disponível (sem sensores / DAC não chega / ADC1 não
-        // converte). Força MAP/TPS válidos e limpa os faults dos canais do ADC1
-        // (MAP/MAF/TPS/O2) p/ não acionar SENSOR_FAULT. Pula a leitura física.
-        FaultTracker& fm = g_fault[static_cast<uint8_t>(SensorId::MAP)];
-        FaultTracker& ft = g_fault[static_cast<uint8_t>(SensorId::TPS)];
-        FaultTracker& fa = g_fault[static_cast<uint8_t>(SensorId::MAF)];
-        fm.active = false; fm.consecutive_bad = 0u;
-        ft.active = false; ft.consecutive_bad = 0u;
-        fa.active = false; fa.consecutive_bad = 0u;
-        g_data_staging.fault_bits = static_cast<uint8_t>(
-            g_data_staging.fault_bits &
-            ~((1u << static_cast<uint8_t>(SensorId::MAP)) |
-              (1u << static_cast<uint8_t>(SensorId::MAF)) |
-              (1u << static_cast<uint8_t>(SensorId::TPS)) |
-              (1u << static_cast<uint8_t>(SensorId::O2))));
-        g_data_staging.map_bar_x1000 = g_bench_map_bar_x1000;
-        g_data_staging.tps_pct_x10   = g_bench_tps_x10;
-        g_data_staging.maf_gps_x100  = 0u;
-        return;
-    }
+    // NOTA: MAP (PA3/INP15) e TPS (PA4/INP18) agora são ADC real — o bench-mode NÃO
+    // os força mais (só CLT/IAT em sensors_tick_100ms). Ligar o DAC do estimulador.
 
     // P0 #3: Verifica status do ADC antes de ler sensores críticos
     // Se ADC está em recovery ou falhou, usa valores safe defaults (limp-home)

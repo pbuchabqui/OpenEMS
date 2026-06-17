@@ -147,8 +147,24 @@ uint16_t etb_ki_x10 = 8u;
 uint16_t etb_kd_x10 = 40u;
 uint8_t etb_cal_valid = 0u;
 uint8_t etb_harness_present = 0u;
+uint16_t etb_pedal_map[4][10] = {
+    {   0,  80, 150, 220, 300, 400, 520, 650, 800, 1000},  // ECO
+    {   0, 100, 200, 300, 400, 500, 600, 700, 800, 1000},  // NORMAL
+    {   0, 180, 350, 500, 600, 700, 780, 850, 920, 1000},  // SPORT
+    {   0,  50, 100, 150, 220, 300, 400, 520, 650, 1000},  // RAIN
+};
 uint16_t tps_raw_min = 200u;
 uint16_t tps_raw_max = 3895u;
+
+uint16_t boost_target_bar_x1000[7][8] = {
+    {1000u, 1020u, 1050u, 1080u, 1100u, 1120u, 1150u, 1180u},  // 0: neutro
+    {1000u, 1050u, 1100u, 1150u, 1200u, 1250u, 1280u, 1300u},  // 1ª marcha
+    {1000u, 1080u, 1150u, 1220u, 1280u, 1340u, 1380u, 1420u},  // 2ª marcha
+    {1000u, 1100u, 1180u, 1260u, 1330u, 1400u, 1450u, 1500u},  // 3ª marcha
+    {1000u, 1120u, 1210u, 1300u, 1380u, 1460u, 1520u, 1580u},  // 4ª marcha
+    {1000u, 1140u, 1240u, 1340u, 1430u, 1520u, 1600u, 1680u},  // 5ª marcha
+    {1000u, 1150u, 1260u, 1370u, 1470u, 1570u, 1660u, 1750u},  // 6ª marcha
+};
 
 uint8_t xtau_autocal_enabled = 0u;
 uint8_t xtau_autocal_active = 0u;
