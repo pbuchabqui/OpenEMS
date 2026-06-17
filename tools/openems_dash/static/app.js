@@ -426,6 +426,9 @@ const FIELD_LABELS = {
   etb_idle_rpm_target:      "RPM alvo marcha lenta (ETB)",
   etb_idle_min_opening_x10: "Abertura mínima idle ETB (%×10)",
   etb_idle_max_opening_x10: "Abertura máxima idle ETB (%×10)",
+  iac_clt_axis_x10:         "IAC eixo CLT (°C×10, 8pts)",
+  iac_warmup_duty_x10:      "IAC duty warmup (%×10, 8pts)",
+  iac_idle_target_rpm_x10:  "IAC RPM alvo (RPM, 8pts)",
   iac_clt_pid_enable_x10:   "CLT mín. para PID IAC (°C×10)",
   iac_kp_num:               "IAC Kp (numerador)",
   iac_kd_num:               "IAC Kd (numerador)",
@@ -457,6 +460,14 @@ const READONLY_FIELDS = new Set(["config_magic"]);
 /* Layout explícito: curvas 1D (eixo + 1..n linhas de valores), tabelas 2D
    e escalares. Nomes de campo = protocol.py / ui_protocol.cpp. */
 const PAGE_LAYOUT = {
+  0: {
+    curves: [
+      { title: "IAC — RPM alvo vs CLT", axis: "iac_clt_axis_x10", axisLabel: "CLT (°C×10)",
+        rows: [["iac_idle_target_rpm_x10", "RPM alvo (×1)"], ["iac_warmup_duty_x10", "Duty IACV (%×10)"]] },
+    ],
+    tables2d: [],
+    scalarSections: PAGE_0_SECTIONS,
+  },
   5: {
     curves: [
       { title: "Correção CLT",        axis: "clt_corr_axis_x10",     axisLabel: "CLT (°C×10)",   rows: [["clt_corr_x256", "fator ×256"]] },
@@ -754,7 +765,7 @@ async function bindParamGroup(div, page) {
 
     // escalares: página 0 e páginas com scalarSections usam subgrupos; demais exibem plano
     const remaining = Object.entries(fields).filter(([n]) => !used.has(n));
-    const scalarSections = (page === 0) ? PAGE_0_SECTIONS : (layout.scalarSections || []);
+    const scalarSections = layout.scalarSections || (page === 0 ? PAGE_0_SECTIONS : []);
     if (scalarSections.length && remaining.length) {
       const fieldMap = Object.fromEntries(remaining);
       const rendered = new Set();

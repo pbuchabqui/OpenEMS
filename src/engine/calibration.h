@@ -174,6 +174,15 @@ extern int16_t iac_kd_den;
 extern int16_t iac_i_clamp_x10;
 extern int16_t iac_clt_pid_enable_x10;
 
+// IAC warmup curves — 8 pontos, eixo CLT (°C×10)
+// iac_clt_axis_x10:      eixo de CLT compartilhado pelas duas curvas
+// iac_warmup_duty_x10:   duty cycle do IACV durante warmup (0–1000 = 0–100%)
+// iac_idle_target_rpm_x10: RPM alvo de marcha lenta em função da CLT
+constexpr uint8_t kIacWarmupPts = 8u;
+extern int16_t  iac_clt_axis_x10[kIacWarmupPts];
+extern uint16_t iac_warmup_duty_x10[kIacWarmupPts];
+extern uint16_t iac_idle_target_rpm_x10[kIacWarmupPts];
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;
 // Empurra a calibração de sensores (APP/ETB/TPS/plausibilidade) p/ drv::sensors.
 void push_sensor_calibration_to_drivers() noexcept;

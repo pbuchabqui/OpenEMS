@@ -305,6 +305,10 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 110, &ems::engine::iac_kd_num,               2u);
         std::memcpy(g_page0 + 112, &ems::engine::iac_kd_den,               2u);
         std::memcpy(g_page0 + 114, &ems::engine::iac_i_clamp_x10,          2u);
+        // Bytes 116-163: IAC warmup curves (3 × 8 × 2 bytes)
+        std::memcpy(g_page0 + 116, ems::engine::iac_clt_axis_x10,        16u);
+        std::memcpy(g_page0 + 132, ems::engine::iac_warmup_duty_x10,     16u);
+        std::memcpy(g_page0 + 148, ems::engine::iac_idle_target_rpm_x10, 16u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -402,6 +406,10 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::iac_kd_num,              g_page0 + 110, 2u);
         std::memcpy(&ems::engine::iac_kd_den,              g_page0 + 112, 2u);
         std::memcpy(&ems::engine::iac_i_clamp_x10,         g_page0 + 114, 2u);
+        // IAC warmup curves (bytes 116-163)
+        std::memcpy(ems::engine::iac_clt_axis_x10,        g_page0 + 116, 16u);
+        std::memcpy(ems::engine::iac_warmup_duty_x10,     g_page0 + 132, 16u);
+        std::memcpy(ems::engine::iac_idle_target_rpm_x10, g_page0 + 148, 16u);
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));

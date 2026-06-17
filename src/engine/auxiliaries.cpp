@@ -60,10 +60,11 @@ constexpr int16_t kFanOffDegCX10 = 900;
 constexpr uint32_t kPumpPrimeMs = 2000u;
 constexpr uint32_t kPumpOffDelayMs = 3000u;
 
-constexpr uint8_t kWarmupPts = 8u;
-constexpr int16_t kWarmupCltAxisX10[kWarmupPts] = {-400, -100, 100, 300, 500, 700, 900, 1100};
-constexpr uint16_t kIacWarmupDutyX10[kWarmupPts] = {620u, 560u, 500u, 440u, 360u, 280u, 220u, 180u};
-constexpr uint16_t kIdleTargetRpmX10[kWarmupPts] = {12000u, 11500u, 10800u, 10000u, 9200u, 8500u, 8200u, 8000u};
+// IAC warmup tables — lidos de calibration globals (editáveis via dashboard/NVM)
+#define kWarmupPts         ems::engine::kIacWarmupPts
+#define kWarmupCltAxisX10  ems::engine::iac_clt_axis_x10
+#define kIacWarmupDutyX10  ems::engine::iac_warmup_duty_x10
+#define kIdleTargetRpmX10  ems::engine::iac_idle_target_rpm_x10
 
 // Boost target: usa global calibrável boost_target_bar_x1000[7][8] de calibration.h
 // Eixo RPM fixo (abaixo). Eixo Y = marcha inteira — índice direto sem interpolação.

@@ -347,6 +347,10 @@ PAGE0_FIELDS = [
     ("iac_kd_num",               110, 1, "h"),
     ("iac_kd_den",               112, 1, "h"),
     ("iac_i_clamp_x10",          114, 1, "h"),
+    # bytes 116-163: IAC warmup curves (3 × 8 × int16/uint16)
+    ("iac_clt_axis_x10",         116, 8, "h"),
+    ("iac_warmup_duty_x10",      132, 8, "H"),
+    ("iac_idle_target_rpm_x10",  148, 8, "H"),
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
