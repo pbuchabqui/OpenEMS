@@ -358,6 +358,15 @@ const PAGE_0_SECTIONS = [
              "etb_max_rate_pct_per_s","etb_idle_open_pct_x10","etb_cal_valid",
              "etb_harness_present","etb_kp_x10","etb_ki_x10","etb_kd_x10"],
   },
+  {
+    label: "TRIM CILINDROS",
+    fields: ["cyl_fuel_trim_pct_0","cyl_fuel_trim_pct_1","cyl_fuel_trim_pct_2","cyl_fuel_trim_pct_3",
+             "cyl_ign_trim_deg_0","cyl_ign_trim_deg_1","cyl_ign_trim_deg_2","cyl_ign_trim_deg_3"],
+  },
+  {
+    label: "CMP",
+    fields: ["cmp_window_open_tooth","cmp_window_close_tooth"],
+  },
 ];
 
 /* rótulos amigáveis (página 0) e campos read-only */
@@ -382,6 +391,12 @@ const FIELD_LABELS = {
   etb_cal_valid: "Calibração ETB válida (0/1)",
   etb_harness_present: "Chicote ETB presente (0/1)",
   etb_kp_x10: "ETB PID Kp (×10)", etb_ki_x10: "ETB PID Ki (×10)", etb_kd_x10: "ETB PID Kd (×10)",
+  cyl_fuel_trim_pct_0: "Trim comb. cil.1 (%)", cyl_fuel_trim_pct_1: "Trim comb. cil.2 (%)",
+  cyl_fuel_trim_pct_2: "Trim comb. cil.3 (%)", cyl_fuel_trim_pct_3: "Trim comb. cil.4 (%)",
+  cyl_ign_trim_deg_0:  "Trim ign. cil.1 (°)",  cyl_ign_trim_deg_1:  "Trim ign. cil.2 (°)",
+  cyl_ign_trim_deg_2:  "Trim ign. cil.3 (°)",  cyl_ign_trim_deg_3:  "Trim ign. cil.4 (°)",
+  cmp_window_open_tooth:  "CMP janela abre (dente)",
+  cmp_window_close_tooth: "CMP janela fecha (dente; 0/0=desabilitado)",
 };
 
 /* calibração assistida: campo → fonte do raw ao vivo na telemetria */

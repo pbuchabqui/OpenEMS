@@ -64,6 +64,7 @@
 #include <cstring>
 #include "hal/timer.h"
 #include "hal/critical_section.h"
+#include "engine/calibration.h"
 #if defined(TARGET_STM32H562) && !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
 #endif
@@ -730,6 +731,23 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
             return;
         }
     }
+    // ── Validação de janela de dente CMP (configurável) ──────────────────
+    // Se open != 0 || close != 0 verifica se tooth_index cai dentro da janela.
+    // open=0 close=0 → desabilitado (comportamento padrão).
+    const uint8_t cmp_open  = ems::engine::cmp_window_open_tooth;
+    const uint8_t cmp_close = ems::engine::cmp_window_close_tooth;
+    if ((cmp_open != 0u || cmp_close != 0u) &&
+        g_state.snap.state == SyncState::FULL_SYNC) {
+        const uint16_t ti = g_state.snap.tooth_index;
+        const bool in_window = (cmp_open <= cmp_close)
+            ? (ti >= cmp_open && ti <= cmp_close)
+            : (ti >= cmp_open || ti <= cmp_close);  // janela que envolve o wrap
+        if (!in_window) {
+            ++g_state.cmp_glitch_count;
+            return;
+        }
+    }
+
     s_prev_cmp_capture = cmp_capture_now;
     g_state.snap.phase_A = !g_state.snap.phase_A;
     if (g_seed_probation) {

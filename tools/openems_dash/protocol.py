@@ -314,6 +314,17 @@ PAGE0_FIELDS = [
     ("etb_ki_x10",               46, 1, "H"),
     ("etb_kd_x10",               48, 1, "H"),
     # tps_raw_min (offset 52) e tps_raw_max (offset 54) removidos — DBW usa ETB TPS
+    # bytes 56-65: trim por cilindro + janela CMP
+    ("cyl_fuel_trim_pct_0",    56, 1, "b"),
+    ("cyl_fuel_trim_pct_1",    57, 1, "b"),
+    ("cyl_fuel_trim_pct_2",    58, 1, "b"),
+    ("cyl_fuel_trim_pct_3",    59, 1, "b"),
+    ("cyl_ign_trim_deg_0",     60, 1, "b"),
+    ("cyl_ign_trim_deg_1",     61, 1, "b"),
+    ("cyl_ign_trim_deg_2",     62, 1, "b"),
+    ("cyl_ign_trim_deg_3",     63, 1, "b"),
+    ("cmp_window_open_tooth",  64, 1, "B"),
+    ("cmp_window_close_tooth", 65, 1, "B"),
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

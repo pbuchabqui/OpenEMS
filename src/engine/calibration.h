@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "engine/table3d.h"
+#include "engine/engine_config.h"
 
 namespace ems::engine {
 
@@ -107,6 +108,18 @@ extern uint16_t tps_raw_max;
 // Boost target: 7 marchas (0=neutro/desconhecido, 1-6) × 8 pontos de RPM.
 // Unidade: bar × 1000. Eixo RPM fixo (mesmo que kBoostRpmAxisX10 em auxiliaries).
 extern uint16_t boost_target_bar_x1000[7][8];
+
+// Trim por cilindro — índice = cilindro físico (0-based, kCylinderCount elementos).
+// Fuel: ±% sobre o PW calculado.  Ign: ±° sobre o avanço calculado.
+// Defaults zero = sem correção.
+extern int8_t cyl_fuel_trim_pct[::ems::engine::cfg::kCylinderCount];
+extern int8_t cyl_ign_trim_deg[::ems::engine::cfg::kCylinderCount];
+
+// CMP dente único: janela de dentes do virabrequim onde a borda do sensor CMP
+// é esperada. open=close=0 → validação desabilitada (usa só timing).
+// Unidade: índice de dente (0 = primeiro após gap).
+extern uint8_t cmp_window_open_tooth;
+extern uint8_t cmp_window_close_tooth;
 
 extern uint8_t  xtau_autocal_enabled;
 extern uint8_t  xtau_autocal_active;

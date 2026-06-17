@@ -275,6 +275,12 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         ems::engine::cfg::engine_config_serialize(g_page0, 16u);
         // Bytes 16-55: calibração de sensores APP/ETB/TPS + plausibilidade
         ems::engine::sync_etb_calibration_to_page(g_page0 + 16, 40u);
+        // Bytes 56-63: trim de combustível e ignição por cilindro (int8 × 4 cada)
+        std::memcpy(g_page0 + 56, ems::engine::cyl_fuel_trim_pct, 4u);
+        std::memcpy(g_page0 + 60, ems::engine::cyl_ign_trim_deg,  4u);
+        // Bytes 64-65: janela de dente CMP
+        g_page0[64] = ems::engine::cmp_window_open_tooth;
+        g_page0[65] = ems::engine::cmp_window_close_tooth;
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -345,6 +351,11 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         // Calibração de sensores (bytes 16-55) → globals + drivers
         ems::engine::apply_etb_calibration_from_page(g_page0 + 16, 40u);
         ems::engine::push_sensor_calibration_to_drivers();
+        // Trim por cilindro e janela CMP (bytes 56-65)
+        std::memcpy(ems::engine::cyl_fuel_trim_pct, g_page0 + 56, 4u);
+        std::memcpy(ems::engine::cyl_ign_trim_deg,  g_page0 + 60, 4u);
+        ems::engine::cmp_window_open_tooth  = g_page0[64];
+        ems::engine::cmp_window_close_tooth = g_page0[65];
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
