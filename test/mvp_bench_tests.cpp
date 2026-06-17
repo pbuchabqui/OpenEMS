@@ -945,7 +945,6 @@ static void test_ign_dwell(void) {
 static void test_aux_init_and_idle(void) {
     section("auxiliaries: init / idle_target_rpm_x10");
     auxiliaries_test_reset();
-    CHECK_EQ(auxiliaries_test_get_iac_duty(), 0u, "IAC=0 before any tick");
     CHECK_FALSE(auxiliaries_test_get_fan_state(),  "fan off after init");
     CHECK_FALSE(auxiliaries_test_get_pump_state(), "pump off after init");
     auxiliaries_tick_10ms();

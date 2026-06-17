@@ -296,19 +296,13 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 90, &ems::engine::decel_cut_entry_rpm_x10,   4u);
         std::memcpy(g_page0 + 94, &ems::engine::decel_cut_exit_rpm_x10,    4u);
         std::memcpy(g_page0 + 98, &ems::engine::decel_cut_min_clt_x10,     2u);
-        // Bytes 100-115: marcha lenta ETB + IAC PID
+        // Bytes 100-105: marcha lenta ETB
         std::memcpy(g_page0 + 100, &ems::engine::etb_idle_rpm_target,       2u);
         std::memcpy(g_page0 + 102, &ems::engine::etb_idle_min_opening_x10,  2u);
         std::memcpy(g_page0 + 104, &ems::engine::etb_idle_max_opening_x10,  2u);
-        std::memcpy(g_page0 + 106, &ems::engine::iac_clt_pid_enable_x10,   2u);
-        std::memcpy(g_page0 + 108, &ems::engine::iac_kp_num,               2u);
-        std::memcpy(g_page0 + 110, &ems::engine::iac_kd_num,               2u);
-        std::memcpy(g_page0 + 112, &ems::engine::iac_kd_den,               2u);
-        std::memcpy(g_page0 + 114, &ems::engine::iac_i_clamp_x10,          2u);
-        // Bytes 116-163: IAC warmup curves (3 × 8 × 2 bytes)
-        std::memcpy(g_page0 + 116, ems::engine::iac_clt_axis_x10,        16u);
-        std::memcpy(g_page0 + 132, ems::engine::iac_warmup_duty_x10,     16u);
-        std::memcpy(g_page0 + 148, ems::engine::iac_idle_target_rpm_x10, 16u);
+        // Bytes 106-121: idle RPM target vs CLT (8 × int16 CLT + 8 × uint16 RPM)
+        std::memcpy(g_page0 + 106, ems::engine::iac_clt_axis_x10,        16u);
+        std::memcpy(g_page0 + 122, ems::engine::iac_idle_target_rpm_x10, 16u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -397,19 +391,13 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::decel_cut_entry_rpm_x10,    g_page0 + 90, 4u);
         std::memcpy(&ems::engine::decel_cut_exit_rpm_x10,     g_page0 + 94, 4u);
         std::memcpy(&ems::engine::decel_cut_min_clt_x10,      g_page0 + 98, 2u);
-        // Marcha lenta ETB + IAC PID (bytes 100-115)
+        // Marcha lenta ETB (bytes 100-105)
         std::memcpy(&ems::engine::etb_idle_rpm_target,      g_page0 + 100, 2u);
         std::memcpy(&ems::engine::etb_idle_min_opening_x10, g_page0 + 102, 2u);
         std::memcpy(&ems::engine::etb_idle_max_opening_x10, g_page0 + 104, 2u);
-        std::memcpy(&ems::engine::iac_clt_pid_enable_x10,  g_page0 + 106, 2u);
-        std::memcpy(&ems::engine::iac_kp_num,              g_page0 + 108, 2u);
-        std::memcpy(&ems::engine::iac_kd_num,              g_page0 + 110, 2u);
-        std::memcpy(&ems::engine::iac_kd_den,              g_page0 + 112, 2u);
-        std::memcpy(&ems::engine::iac_i_clamp_x10,         g_page0 + 114, 2u);
-        // IAC warmup curves (bytes 116-163)
-        std::memcpy(ems::engine::iac_clt_axis_x10,        g_page0 + 116, 16u);
-        std::memcpy(ems::engine::iac_warmup_duty_x10,     g_page0 + 132, 16u);
-        std::memcpy(ems::engine::iac_idle_target_rpm_x10, g_page0 + 148, 16u);
+        // Idle RPM target vs CLT (bytes 106-121)
+        std::memcpy(ems::engine::iac_clt_axis_x10,        g_page0 + 106, 16u);
+        std::memcpy(ems::engine::iac_idle_target_rpm_x10, g_page0 + 122, 16u);
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));

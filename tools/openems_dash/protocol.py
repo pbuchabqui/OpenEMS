@@ -339,19 +339,13 @@ PAGE0_FIELDS = [
     ("decel_cut_entry_rpm_x10",       90, 1, "L", 0.1),  # RPM
     ("decel_cut_exit_rpm_x10",        94, 1, "L", 0.1),  # RPM
     ("decel_cut_min_clt_x10",         98, 1, "h", 0.1),  # °C
-    # bytes 100-115: marcha lenta ETB + IAC PID
+    # bytes 100-105: marcha lenta ETB
     ("etb_idle_rpm_target",      100, 1, "H", 1.0),  # RPM
     ("etb_idle_min_opening_x10", 102, 1, "H", 0.1),  # %
     ("etb_idle_max_opening_x10", 104, 1, "H", 0.1),  # %
-    ("iac_clt_pid_enable_x10",   106, 1, "h", 0.1),  # °C
-    ("iac_kp_num",               108, 1, "h", 1.0),
-    ("iac_kd_num",               110, 1, "h", 1.0),
-    ("iac_kd_den",               112, 1, "h", 1.0),
-    ("iac_i_clamp_x10",          114, 1, "h", 0.1),  # %
-    # bytes 116-163: IAC warmup curves
-    ("iac_clt_axis_x10",         116, 8, "h", 0.1),  # °C
-    ("iac_warmup_duty_x10",      132, 8, "H", 0.1),  # %
-    ("iac_idle_target_rpm_x10",  148, 8, "H", 0.1),  # RPM
+    # bytes 106-121: idle RPM target vs CLT
+    ("iac_clt_axis_x10",         106, 8, "h", 0.1),  # °C
+    ("iac_idle_target_rpm_x10",  122, 8, "H", 0.1),  # RPM
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

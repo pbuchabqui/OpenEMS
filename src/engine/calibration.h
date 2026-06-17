@@ -164,23 +164,9 @@ extern uint16_t etb_idle_rpm_target;
 extern uint16_t etb_idle_min_opening_x10;
 extern uint16_t etb_idle_max_opening_x10;
 
-// IAC PID gains — ganhos do controlador P+I+D da válvula de ar de marcha lenta
-// Kp e Kd são numerador inteiro (denominador fixo = 1000 e 2 respectivamente).
-// I-clamp: limite do integrador em unidades de duty×10.
-// CLT enable: temperatura mínima (°C×10) para ativar o PID (abaixo usa warmup duty).
-extern int16_t iac_kp_num;
-extern int16_t iac_kd_num;
-extern int16_t iac_kd_den;
-extern int16_t iac_i_clamp_x10;
-extern int16_t iac_clt_pid_enable_x10;
-
-// IAC warmup curves — 8 pontos, eixo CLT (°C×10)
-// iac_clt_axis_x10:      eixo de CLT compartilhado pelas duas curvas
-// iac_warmup_duty_x10:   duty cycle do IACV durante warmup (0–1000 = 0–100%)
-// iac_idle_target_rpm_x10: RPM alvo de marcha lenta em função da CLT
+// Idle RPM target vs CLT — 8 pontos, eixo CLT (°C×10); usado pelo ETB idle spark
 constexpr uint8_t kIacWarmupPts = 8u;
 extern int16_t  iac_clt_axis_x10[kIacWarmupPts];
-extern uint16_t iac_warmup_duty_x10[kIacWarmupPts];
 extern uint16_t iac_idle_target_rpm_x10[kIacWarmupPts];
 
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;

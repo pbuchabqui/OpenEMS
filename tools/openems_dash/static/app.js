@@ -369,8 +369,7 @@ const PAGE_0_SECTIONS = [
   },
   {
     label: "MARCHA LENTA",
-    fields: ["etb_idle_rpm_target","etb_idle_min_opening_x10","etb_idle_max_opening_x10",
-             "iac_clt_pid_enable_x10","iac_kp_num","iac_kd_num","iac_kd_den","iac_i_clamp_x10"],
+    fields: ["etb_idle_rpm_target","etb_idle_min_opening_x10","etb_idle_max_opening_x10"],
   },
   {
     label: "DIRIGIBILIDADE",
@@ -426,14 +425,8 @@ const FIELD_LABELS = {
   etb_idle_rpm_target:      "RPM alvo marcha lenta",
   etb_idle_min_opening_x10: "Abertura mínima idle ETB (%)",
   etb_idle_max_opening_x10: "Abertura máxima idle ETB (%)",
-  iac_clt_axis_x10:         "IAC eixo CLT (°C, 8pts)",
-  iac_warmup_duty_x10:      "IAC duty warmup (%, 8pts)",
-  iac_idle_target_rpm_x10:  "IAC RPM alvo (RPM, 8pts)",
-  iac_clt_pid_enable_x10:   "CLT mín. para PID IAC (°C)",
-  iac_kp_num:               "IAC Kp (numerador)",
-  iac_kd_num:               "IAC Kd (numerador)",
-  iac_kd_den:               "IAC Kd (denominador)",
-  iac_i_clamp_x10:          "IAC integrador clamp",
+  iac_clt_axis_x10:         "Eixo CLT — RPM alvo marcha lenta (°C, 8pts)",
+  iac_idle_target_rpm_x10:  "RPM alvo marcha lenta vs CLT (8pts)",
   // Dirigibilidade
   antijerk_tpsdot_threshold_x10: "Anti-jerk TPSdot threshold (%/s)",
   antijerk_retard_deg:            "Anti-jerk retardo ignição (°)",
@@ -462,8 +455,8 @@ const READONLY_FIELDS = new Set(["config_magic"]);
 const PAGE_LAYOUT = {
   0: {
     curves: [
-      { title: "IAC — RPM alvo vs CLT", axis: "iac_clt_axis_x10", axisLabel: "CLT (°C)",
-        rows: [["iac_idle_target_rpm_x10", "RPM alvo (×1)"], ["iac_warmup_duty_x10", "Duty IACV (%×10)"]] },
+      { title: "RPM alvo marcha lenta vs CLT", axis: "iac_clt_axis_x10", axisLabel: "CLT (°C)",
+        rows: [["iac_idle_target_rpm_x10", "RPM alvo"]] },
     ],
     tables2d: [],
     scalarSections: PAGE_0_SECTIONS,

@@ -12,7 +12,6 @@ uint16_t auxiliaries_idle_target_rpm_x10(int16_t clt_x10) noexcept;
 
 #if defined(EMS_HOST_TEST)
 void auxiliaries_test_reset() noexcept;
-uint16_t auxiliaries_test_get_iac_duty() noexcept;
 uint16_t auxiliaries_test_get_wg_duty() noexcept;
 uint16_t auxiliaries_test_get_vvt_esc_duty() noexcept;
 uint16_t auxiliaries_test_get_vvt_adm_duty() noexcept;
