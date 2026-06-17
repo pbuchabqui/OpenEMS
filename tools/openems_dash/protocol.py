@@ -74,6 +74,7 @@ class RealtimeData:
     an1_raw: int      # APP1 (pedal 1) ADC bruto
     an2_raw: int      # APP2 (pedal 2)
     an3_raw: int      # ETB TPS1
+    an4_raw: int      # ETB TPS2
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -113,6 +114,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         an1_raw=struct.unpack_from("<H", r, 43)[0],
         an2_raw=struct.unpack_from("<H", r, 45)[0],
         an3_raw=struct.unpack_from("<H", r, 47)[0],
+        an4_raw=struct.unpack_from("<H", r, 49)[0],
     )
 
 

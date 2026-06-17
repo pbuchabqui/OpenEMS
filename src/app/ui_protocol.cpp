@@ -234,13 +234,15 @@ inline void update_realtime_page() noexcept {
     write_u32_le(&rt.reserved[31], g_rt_ivc_clamp_count);
     write_u32_le(&rt.reserved[35], g_rt_loop2ms_last_us);
     write_u32_le(&rt.reserved[39], g_rt_loop2ms_max_us);
-    // ADC bruto p/ calibração de pedal/borboleta (AN1=APP1, AN2=APP2, AN3=ETB1)
+    // ADC bruto p/ calibração de pedal/borboleta (AN1=APP1, AN2=APP2, AN3=ETB1, AN4=ETB2)
     rt.reserved[43] = static_cast<uint8_t>(s.an1_raw & 0xFFu);
     rt.reserved[44] = static_cast<uint8_t>((s.an1_raw >> 8u) & 0xFFu);
     rt.reserved[45] = static_cast<uint8_t>(s.an2_raw & 0xFFu);
     rt.reserved[46] = static_cast<uint8_t>((s.an2_raw >> 8u) & 0xFFu);
     rt.reserved[47] = static_cast<uint8_t>(s.an3_raw & 0xFFu);
     rt.reserved[48] = static_cast<uint8_t>((s.an3_raw >> 8u) & 0xFFu);
+    rt.reserved[49] = static_cast<uint8_t>(s.an4_raw & 0xFFu);
+    rt.reserved[50] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }

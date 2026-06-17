@@ -15,7 +15,12 @@ function toast(msg, err = false) {
   setTimeout(() => d.remove(), 4200);
 }
 
-async function api(path, opts) {
+async function api(path, methodOrOpts, body) {
+  let opts = methodOrOpts;
+  if (typeof methodOrOpts === "string") {
+    opts = { method: methodOrOpts, headers: {"Content-Type":"application/json"},
+             body: body !== undefined ? JSON.stringify(body) : undefined };
+  }
   const r = await fetch(path, opts);
   if (!r.ok) throw new Error(`${path}: HTTP ${r.status} ${await r.text()}`);
   return r.json();
@@ -128,8 +133,10 @@ function connectWS() {
 /* ── heatmap helpers ──────────────────────────────────────────────────── */
 function heatColor(v, min, max) {
   const f = max > min ? (v - min) / (max - min) : 0;
-  const h = (1 - f) * 120;          // 120=verde → 0=vermelho
-  return `hsl(${h} 65% 62%)`;
+  const h = (1 - f) * 240;          // 240=azul → 0=vermelho (faixa completa)
+  const s = 90 + f * 10;            // 90–100% saturação
+  const l = 28 + (1 - Math.abs(f - 0.5) * 2) * 14; // 28% nas extremidades, 42% no meio
+  return `hsl(${h} ${s}% ${l}%)`;
 }
 
 /* ── editores de grid (VE/Spark/Lambda) ───────────────────────────────── */
@@ -447,6 +454,7 @@ const CAL_CAPTURE = {
   app1_raw_min: "an1_raw", app1_raw_max: "an1_raw",
   app2_raw_min: "an2_raw", app2_raw_max: "an2_raw",
   etb_tps1_raw_min: "an3_raw", etb_tps1_raw_max: "an3_raw",
+  etb_tps2_raw_min: "an4_raw", etb_tps2_raw_max: "an4_raw",
 };
 const READONLY_FIELDS = new Set(["config_magic"]);
 
@@ -516,82 +524,69 @@ const BOOST_DEFAULTS = [
   [1000, 1150, 1260, 1370, 1470, 1570, 1660, 1750],
 ];
 
+const BOOST_GEAR_COLORS = ["#888","#e8a020","#4caf50","#2196f3","#ff5722","#9c27b0","#00bcd4"];
+
 async function loadBoostMap() {
   const root = $("#boostRoot");
   root.dataset.loaded = "1";
-  root.innerHTML = `<div class="grid-toolbar">
-    <strong>BOOST TARGET</strong>
-    <span class="muted">(bar × 1000)</span>
-    <button class="primary" id="boostSend">Enviar (RAM)</button>
-    <button class="danger"  id="boostBurn">Burn → flash</button>
-    <button id="boostReload">Reler</button>
-    <span class="dirty" id="boostDirty"></span>
-  </div>
-  <div id="boostWrap"></div>`;
+  root.innerHTML = `
+    <div class="pm-header">
+      <strong>BOOST TARGET</strong>
+      <div class="pm-tabs">${BOOST_GEAR_LABELS.map((l,i)=>`<button class="pm-tab${i===0?" active":""}" data-gear="${i}">${l}</button>`).join("")}</div>
+      <button class="primary" id="boostSend">Enviar (RAM)</button>
+      <button class="danger"  id="boostBurn">Burn → flash</button>
+      <button id="boostReload">Reler</button>
+      <span class="dirty" id="boostDirty"></span>
+    </div>
+    <canvas id="boostCanvas" width="760" height="500"></canvas>`;
 
   let rows = BOOST_DEFAULTS.map(r => [...r]);
-  const modified = new Set();
+  let activeGear = 0;
+  let curve = null;
+
+  function buildCurve() {
+    curve = makeDragCurve({
+      canvas: $("#boostCanvas"),
+      get values() { return rows; },
+      get active() { return activeGear; },
+      colors: BOOST_GEAR_COLORS,
+      nPts: 8,
+      xAxis: BOOST_RPM_AXIS,
+      xLabel: "RPM",
+      yLabel: "Boost (bar×1000)",
+      yMin: 800, yMax: 2200,
+      mono: false,
+      onchange: () => { $("#boostDirty").textContent = "não enviado"; },
+    });
+  }
+
+  function activateGear(g) {
+    activeGear = g;
+    root.querySelectorAll(".pm-tab").forEach(b => b.classList.toggle("active", +b.dataset.gear === g));
+    curve.draw();
+  }
 
   async function reload() {
     try {
       const d = await api("/api/pages/9");
       rows = d.boost_map;
     } catch { toast("ECU offline — mostrando defaults", false); }
-    modified.clear();
-    render();
+    $("#boostDirty").textContent = "";
+    curve.draw();
   }
 
-  function render() {
-    const flat = rows.flat();
-    const [mn, mx] = [Math.min(...flat), Math.max(...flat)];
-    let html = `<table class="tune"><tr><th>MARCHA \\ RPM</th>` +
-      BOOST_RPM_AXIS.map(r => `<th>${r}</th>`).join("") + "</tr>";
-    rows.forEach((row, g) => {
-      html += `<tr><th style="text-align:left;padding:0 6px">${BOOST_GEAR_LABELS[g]}</th>`;
-      row.forEach((v, c) => {
-        const mod = modified.has(`${g},${c}`) ? " mod" : "";
-        html += `<td class="${mod}" data-g="${g}" data-c="${c}"
-                     style="background:${heatColor(v, mn, mx)}">${v}</td>`;
-      });
-      html += "</tr>";
-    });
-    html += "</table>";
-    $("#boostWrap").innerHTML = html;
-    $("#boostDirty").textContent = modified.size ? `${modified.size} célula(s) não enviada(s)` : "";
-    $$("td[data-g]", root).forEach(td => td.onclick = () => {
-      if (td.querySelector("input")) return;
-      const g = +td.dataset.g, c = +td.dataset.c;
-      const inp = document.createElement("input");
-      inp.value = rows[g][c];
-      td.textContent = ""; td.appendChild(inp);
-      inp.focus(); inp.select();
-      const commit = () => {
-        const v = parseInt(inp.value, 10);
-        if (!Number.isNaN(v) && v !== rows[g][c]) {
-          rows[g][c] = v; modified.add(`${g},${c}`);
-        }
-        render();
-      };
-      inp.onblur = commit;
-      inp.onkeydown = e => {
-        if (e.key === "Enter") inp.blur();
-        if (e.key === "Escape") { inp.value = rows[g][c]; inp.blur(); }
-      };
-    });
-  }
+  buildCurve();
+  root.querySelectorAll(".pm-tab").forEach(b => b.onclick = () => activateGear(+b.dataset.gear));
 
   $("#boostSend", root).onclick = async () => {
     try {
-      await api("/api/pages/9/cells", {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ boost_map: rows }),
-      });
-      modified.clear(); render();
+      await api("/api/pages/9/cells", "PUT", { boost_map: rows });
+      $("#boostDirty").textContent = "";
       toast("boost map enviado (RAM)");
     } catch (e) { toast(e.message, true); }
   };
   $("#boostBurn", root).onclick = async () => {
-    try { await api("/api/pages/9/burn", { method: "POST" }); toast("burn OK"); }
+    try { await api("/api/pages/9/burn", "POST"); toast("burn OK"); }
     catch (e) { toast(e.message, true); }
   };
   $("#boostReload", root).onclick = reload;
@@ -868,6 +863,159 @@ const PEDAL_COLORS = ["#4caf50","#2196f3","#ff5722","#9c27b0"];
 
 let pedalMaps = null; // current edited state: float[4][10]
 
+/* ── shared drag-curve engine ─────────────────────────────────────────── */
+// Draws an interactive curve on a canvas.
+// cfg: { canvas, values[], colors[], labels[], nPts, xAxis[], xLabel, yLabel,
+//        yMin, yMax, onchange(idx,v), hitRadius=10, mono=false }
+function makeDragCurve(cfg) {
+  const cv = cfg.canvas;
+  const ctx = cv.getContext("2d");
+  const PAD = {l:52, r:18, t:18, b:42};
+  let dragIdx = -1;
+
+  function ptX(i) {
+    const iW = cv.width - PAD.l - PAD.r;
+    return PAD.l + i * iW / (cfg.nPts - 1);
+  }
+  function ptY(v) {
+    const iH = cv.height - PAD.t - PAD.b;
+    return PAD.t + iH - (v - cfg.yMin) / (cfg.yMax - cfg.yMin) * iH;
+  }
+  function yFromPx(py) {
+    const iH = cv.height - PAD.t - PAD.b;
+    return cfg.yMin + (1 - (py - PAD.t) / iH) * (cfg.yMax - cfg.yMin);
+  }
+
+  function draw() {
+    const W = cv.width, H = cv.height;
+    const iW = W - PAD.l - PAD.r, iH = H - PAD.t - PAD.b;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#111"; ctx.fillRect(0, 0, W, H);
+
+    // grid
+    ctx.strokeStyle = "#222"; ctx.lineWidth = 1;
+    for (let i = 0; i <= 10; i++) {
+      const x = PAD.l + i * iW / 10, y = PAD.t + i * iH / 10;
+      ctx.beginPath(); ctx.moveTo(x, PAD.t); ctx.lineTo(x, PAD.t + iH); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(PAD.l + iW, y); ctx.stroke();
+    }
+
+    // axis labels
+    ctx.fillStyle = "#666"; ctx.font = "11px monospace";
+    const yStep = (cfg.yMax - cfg.yMin) / 10;
+    ctx.textAlign = "right";
+    for (let i = 0; i <= 10; i++) {
+      const v = cfg.yMin + i * yStep;
+      ctx.fillText(v % 1 === 0 ? v : v.toFixed(1), PAD.l - 5, PAD.t + iH - i * iH / 10 + 4);
+    }
+    ctx.textAlign = "center";
+    if (cfg.xAxis) {
+      cfg.xAxis.forEach((x, i) => ctx.fillText(x, ptX(i), PAD.t + iH + 14));
+    }
+    ctx.fillStyle = "#888";
+    ctx.fillText(cfg.xLabel || "", PAD.l + iW / 2, H - 4);
+    ctx.save(); ctx.translate(12, PAD.t + iH / 2); ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center"; ctx.fillText(cfg.yLabel || "", 0, 0); ctx.restore();
+
+    // all series faint
+    cfg.values.forEach((vals, si) => {
+      if (si === cfg.active) return;
+      ctx.strokeStyle = cfg.colors[si] + "33"; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      vals.forEach((v, i) => { i === 0 ? ctx.moveTo(ptX(i), ptY(v)) : ctx.lineTo(ptX(i), ptY(v)); });
+      ctx.stroke();
+    });
+
+    // active series
+    const vals = cfg.values[cfg.active];
+    ctx.strokeStyle = cfg.colors[cfg.active]; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    vals.forEach((v, i) => { i === 0 ? ctx.moveTo(ptX(i), ptY(v)) : ctx.lineTo(ptX(i), ptY(v)); });
+    ctx.stroke();
+
+    // points
+    vals.forEach((v, i) => {
+      const x = ptX(i), y = ptY(v);
+      ctx.fillStyle = dragIdx === i ? "#fff" : cfg.colors[cfg.active];
+      ctx.beginPath(); ctx.arc(x, y, dragIdx === i ? 7 : 5, 0, Math.PI * 2); ctx.fill();
+      // value label on hover
+      if (dragIdx === i) {
+        ctx.fillStyle = "#fff"; ctx.font = "bold 12px monospace"; ctx.textAlign = "center";
+        ctx.fillText(v % 1 === 0 ? v : v.toFixed(1), x, y - 12);
+      }
+    });
+  }
+
+  function nearestPt(ex, ey) {
+    const vals = cfg.values[cfg.active];
+    const R = cfg.hitRadius || 12;
+    let best = -1, bestD = R * R;
+    vals.forEach((v, i) => {
+      const dx = ex - ptX(i), dy = ey - ptY(v);
+      const d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    return best;
+  }
+
+  function clampVal(idx, v) {
+    v = Math.max(cfg.yMin, Math.min(cfg.yMax, v));
+    if (cfg.mono) {
+      const vals = cfg.values[cfg.active];
+      if (idx > 0 && v < vals[idx - 1]) v = vals[idx - 1];
+      if (idx < cfg.nPts - 1 && v > vals[idx + 1]) v = vals[idx + 1];
+    }
+    return v;
+  }
+
+  function evPos(e) {
+    const r = cv.getBoundingClientRect();
+    const src = e.touches ? e.touches[0] : e;
+    return [src.clientX - r.left, src.clientY - r.top];
+  }
+
+  cv.addEventListener("mousedown", e => {
+    const [ex, ey] = evPos(e);
+    dragIdx = nearestPt(ex, ey);
+    if (dragIdx >= 0) { e.preventDefault(); draw(); }
+  });
+  cv.addEventListener("mousemove", e => {
+    const [ex, ey] = evPos(e);
+    if (dragIdx >= 0) {
+      e.preventDefault();
+      const v = clampVal(dragIdx, yFromPx(ey));
+      cfg.values[cfg.active][dragIdx] = v;
+      cfg.onchange && cfg.onchange(dragIdx, v);
+      draw();
+    } else {
+      const h = nearestPt(ex, ey);
+      cv.style.cursor = h >= 0 ? "grab" : "default";
+    }
+  });
+  const stopDrag = () => { dragIdx = -1; draw(); };
+  cv.addEventListener("mouseup",   stopDrag);
+  cv.addEventListener("mouseleave", stopDrag);
+
+  // touch
+  cv.addEventListener("touchstart", e => {
+    const [ex, ey] = evPos(e);
+    dragIdx = nearestPt(ex, ey);
+    if (dragIdx >= 0) e.preventDefault();
+  }, {passive: false});
+  cv.addEventListener("touchmove", e => {
+    if (dragIdx < 0) return;
+    e.preventDefault();
+    const [, ey] = evPos(e);
+    const v = clampVal(dragIdx, yFromPx(ey));
+    cfg.values[cfg.active][dragIdx] = v;
+    cfg.onchange && cfg.onchange(dragIdx, v);
+    draw();
+  }, {passive: false});
+  cv.addEventListener("touchend", stopDrag);
+
+  return { draw };
+}
+
 function buildPedalMapUI(data) {
   const root = $("#pedalMapRoot");
   root.dataset.loaded = "1";
@@ -879,110 +1027,36 @@ function buildPedalMapUI(data) {
       <button id="pmSave">Salvar na ECU</button>
       <button id="pmReset">Restaurar padrões</button>
     </div>
-    <div class="pm-body">
-      <canvas id="pmCanvas" width="540" height="360"></canvas>
-      <div id="pmTable"></div>
-    </div>`;
+    <canvas id="pmCanvas" width="760" height="500"></canvas>`;
 
   let activeMode = 0;
-
-  function drawChart() {
-    const canvas = $("#pmCanvas");
-    const ctx = canvas.getContext("2d");
-    const W = canvas.width, H = canvas.height;
-    const PAD = {l:40,r:20,t:20,b:40};
-    const iW = W-PAD.l-PAD.r, iH = H-PAD.t-PAD.b;
-
-    ctx.clearRect(0,0,W,H);
-    ctx.fillStyle="#1a1a1a"; ctx.fillRect(0,0,W,H);
-
-    // grid
-    ctx.strokeStyle="#333"; ctx.lineWidth=1;
-    for(let i=0;i<=10;i++){
-      const x=PAD.l+i*iW/10, y=PAD.t+i*iH/10;
-      ctx.beginPath(); ctx.moveTo(x,PAD.t); ctx.lineTo(x,PAD.t+iH); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(PAD.l,y); ctx.lineTo(PAD.l+iW,y); ctx.stroke();
-    }
-    // axes labels
-    ctx.fillStyle="#888"; ctx.font="11px monospace"; ctx.textAlign="center";
-    for(let i=0;i<=10;i++) {
-      ctx.fillText(i*10, PAD.l+i*iW/10, PAD.t+iH+14);
-    }
-    ctx.textAlign="right";
-    for(let i=0;i<=10;i++) ctx.fillText(i*10, PAD.l-6, PAD.t+iH-i*iH/10+4);
-    ctx.fillStyle="#aaa"; ctx.textAlign="center";
-    ctx.fillText("Pedal %", PAD.l+iW/2, H-4);
-
-    // linear reference
-    ctx.strokeStyle="#444"; ctx.lineWidth=1.5; ctx.setLineDash([4,4]);
-    ctx.beginPath(); ctx.moveTo(PAD.l,PAD.t+iH); ctx.lineTo(PAD.l+iW,PAD.t); ctx.stroke();
-    ctx.setLineDash([]);
-
-    // all modes faint
-    pedalMaps.forEach((map,mi)=>{
-      if(mi===activeMode) return;
-      ctx.strokeStyle=PEDAL_COLORS[mi]+"44"; ctx.lineWidth=1.5;
-      ctx.beginPath();
-      map.forEach((v,i)=>{
-        const x=PAD.l+i*iW/9, y=PAD.t+iH-v*iH/100;
-        i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
-      });
-      ctx.stroke();
-    });
-
-    // active mode
-    const map = pedalMaps[activeMode];
-    ctx.strokeStyle=PEDAL_COLORS[activeMode]; ctx.lineWidth=2.5;
-    ctx.beginPath();
-    map.forEach((v,i)=>{
-      const x=PAD.l+i*iW/9, y=PAD.t+iH-v*iH/100;
-      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
-    });
-    ctx.stroke();
-
-    // points
-    map.forEach((v,i)=>{
-      const x=PAD.l+i*iW/9, y=PAD.t+iH-v*iH/100;
-      ctx.fillStyle=PEDAL_COLORS[activeMode];
-      ctx.beginPath(); ctx.arc(x,y,5,0,Math.PI*2); ctx.fill();
-    });
-  }
-
-  function buildTable() {
-    const div = $("#pmTable");
-    const map = pedalMaps[activeMode];
-    div.innerHTML = `<table class="pm-tbl"><thead><tr><th>Pedal%</th><th>Borboleta%</th></tr></thead><tbody>${
-      PEDAL_AXIS.map((ax,i)=>`<tr><td>${ax}</td><td><input type="number" min="0" max="100" step="0.1" value="${map[i].toFixed(1)}" data-idx="${i}" ${i===0?"disabled":""}></td></tr>`).join("")
-    }</tbody></table>`;
-    div.querySelectorAll("input").forEach(inp=>{
-      inp.oninput = ()=>{
-        const idx=+inp.dataset.idx;
-        let v=parseFloat(inp.value);
-        if(isNaN(v)) return;
-        v=Math.max(0,Math.min(100,v));
-        // monotonicity guard
-        if(idx>0 && v<pedalMaps[activeMode][idx-1]) v=pedalMaps[activeMode][idx-1];
-        if(idx<9 && v>pedalMaps[activeMode][idx+1]) v=pedalMaps[activeMode][idx+1];
-        pedalMaps[activeMode][idx]=v;
-        inp.value=v.toFixed(1);
-        drawChart();
-      };
-    });
-  }
+  const curve = makeDragCurve({
+    canvas: $("#pmCanvas"),
+    get values() { return pedalMaps; },
+    get active() { return activeMode; },
+    colors: PEDAL_COLORS,
+    nPts: 10,
+    xAxis: PEDAL_AXIS,
+    xLabel: "Pedal %",
+    yLabel: "Borboleta %",
+    yMin: 0, yMax: 100,
+    mono: true,
+    onchange: () => {},
+  });
 
   function activate(mode) {
-    activeMode=mode;
-    root.querySelectorAll(".pm-tab").forEach(b=>b.classList.toggle("active",+b.dataset.mode===mode));
-    buildTable(); drawChart();
+    activeMode = mode;
+    root.querySelectorAll(".pm-tab").forEach(b => b.classList.toggle("active", +b.dataset.mode === mode));
+    curve.draw();
   }
 
-  root.querySelectorAll(".pm-tab").forEach(b=>b.onclick=()=>activate(+b.dataset.mode));
+  root.querySelectorAll(".pm-tab").forEach(b => b.onclick = () => activate(+b.dataset.mode));
 
-  root.querySelector("#pmSave").onclick = async ()=>{
+  root.querySelector("#pmSave").onclick = async () => {
     try {
-      await api("/api/pages/8/cells","PUT",{pedal_maps:pedalMaps});
+      await api("/api/pages/8/cells", "PUT", {pedal_maps: pedalMaps});
       toast("Pedal Map salvo na ECU ✓");
-    } catch(e){toast(e.message,true);}
+    } catch(e) { toast(e.message, true); }
   };
 
   const DEFAULTS = [
@@ -991,8 +1065,8 @@ function buildPedalMapUI(data) {
     [0,18,35,50,60,70,78,85,92,100],
     [0,5,10,15,22,30,40,52,65,100],
   ];
-  root.querySelector("#pmReset").onclick = ()=>{
-    pedalMaps=DEFAULTS.map(m=>[...m]);
+  root.querySelector("#pmReset").onclick = () => {
+    pedalMaps = DEFAULTS.map(m => [...m]);
     activate(activeMode);
   };
 
