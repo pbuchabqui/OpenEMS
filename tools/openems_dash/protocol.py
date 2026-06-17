@@ -234,123 +234,124 @@ GRID_PAGES = {
 }
 
 # Página 5: layout de sync_page_from_table (ui_protocol.cpp)
+# Tupla: (nome, offset, count, fmt, scale)
+# scale: fator aplicado na leitura (display = raw * scale); na escrita: raw = round(display / scale)
+# scale=1.0 → valor já está em unidade natural.
+
 PAGE5_FIELDS = [
-    # (nome, offset, count, struct fmt por elemento)
-    ("clt_corr_axis_x10",            0, 8, "h"),
-    ("clt_corr_x256",               16, 8, "H"),
-    ("iat_corr_axis_x10",           32, 8, "h"),
-    ("iat_corr_x256",               48, 8, "H"),
-    ("warmup_corr_axis_x10",        64, 8, "h"),
-    ("warmup_corr_x256",            80, 8, "H"),
-    ("vbatt_corr_axis_mv",          96, 8, "H"),
-    ("injector_dead_time_us",      112, 8, "H"),
-    ("ae_clt_corr_axis_x10",       128, 8, "h"),
-    ("ae_clt_sens",                144, 8, "H"),
-    ("dwell_vbatt_axis_mv",        160, 8, "H"),
-    ("dwell_ms_x10_table",         176, 8, "H"),
-    ("lambda_delay_rpm_axis_x10",  192, 3, "I"),
-    ("lambda_delay_load_axis_bar_x100", 204, 3, "I"),
-    ("lambda_delay_ms_table",      216, 9, "H"),
-    ("ae_tpsdot_threshold_x10",    234, 1, "H"),
-    ("ae_taper_cycles",            236, 1, "H"),
-    ("ae_max_pw_us",               238, 1, "H"),
-    ("idle_spark_tps_max_x10",     240, 1, "H"),
-    ("idle_spark_map_max_bar_x100", 242, 1, "H"),
-    ("idle_spark_rpm_min_x10",     244, 1, "H"),
-    ("idle_spark_window_above_target_x10", 246, 1, "H"),
-    ("idle_spark_deadband_rpm_x10", 248, 1, "H"),
-    ("idle_spark_rpm_per_deg_x10", 250, 1, "H"),
-    ("idle_spark_retard_limit_deg", 252, 1, "h"),
-    ("idle_spark_advance_limit_deg", 254, 1, "h"),
+    ("clt_corr_axis_x10",            0, 8, "h",  0.1),   # °C
+    ("clt_corr_x256",               16, 8, "H",  1.0),   # fator ×256 (adimensional)
+    ("iat_corr_axis_x10",           32, 8, "h",  0.1),   # °C
+    ("iat_corr_x256",               48, 8, "H",  1.0),
+    ("warmup_corr_axis_x10",        64, 8, "h",  0.1),   # °C
+    ("warmup_corr_x256",            80, 8, "H",  1.0),
+    ("vbatt_corr_axis_mv",          96, 8, "H",  0.001), # V
+    ("injector_dead_time_us",      112, 8, "H",  0.001), # ms
+    ("ae_clt_corr_axis_x10",       128, 8, "h",  0.1),   # °C
+    ("ae_clt_sens",                144, 8, "H",  1.0),
+    ("dwell_vbatt_axis_mv",        160, 8, "H",  0.001), # V
+    ("dwell_ms_x10_table",         176, 8, "H",  0.1),   # ms
+    ("lambda_delay_rpm_axis_x10",  192, 3, "I",  0.1),   # RPM
+    ("lambda_delay_load_axis_bar_x100", 204, 3, "I", 0.01), # bar
+    ("lambda_delay_ms_table",      216, 9, "H",  1.0),   # ms
+    ("ae_tpsdot_threshold_x10",    234, 1, "H",  0.1),   # %/s
+    ("ae_taper_cycles",            236, 1, "H",  1.0),
+    ("ae_max_pw_us",               238, 1, "H",  0.001), # ms
+    ("idle_spark_tps_max_x10",     240, 1, "H",  0.1),   # %
+    ("idle_spark_map_max_bar_x100", 242, 1, "H", 0.01),  # bar
+    ("idle_spark_rpm_min_x10",     244, 1, "H",  0.1),   # RPM
+    ("idle_spark_window_above_target_x10", 246, 1, "H", 0.1), # RPM
+    ("idle_spark_deadband_rpm_x10", 248, 1, "H", 0.1),   # RPM
+    ("idle_spark_rpm_per_deg_x10", 250, 1, "H",  0.1),   # RPM/°
+    ("idle_spark_retard_limit_deg", 252, 1, "h", 1.0),   # °
+    ("idle_spark_advance_limit_deg", 254, 1, "h", 1.0),  # °
 ]
 
 PAGE6_FIELDS = [
-    ("xtau_clt_axis_x10",      0, 8, "h"),
-    ("xtau_x_fraction_q8",    16, 8, "H"),
-    ("xtau_tau_cycles",       32, 8, "H"),
-    ("ae_tpsdot_axis_x10",    48, 4, "H"),
-    ("ae_pw_adder_us",        56, 4, "H"),
-    ("crank_enter_rpm_x10",   64, 1, "H"),
-    ("crank_exit_rpm_x10",    66, 1, "H"),
-    ("crank_spark_deg",       68, 1, "h"),
-    ("crank_min_pw_us",       70, 1, "H"),
-    ("crank_prime_tooth",     72, 1, "H"),
-    ("crank_prime_max_pw_us", 74, 1, "H"),
+    ("xtau_clt_axis_x10",      0, 8, "h",  0.1),   # °C
+    ("xtau_x_fraction_q8",    16, 8, "H",  1.0),   # Q8 adimensional
+    ("xtau_tau_cycles",       32, 8, "H",  1.0),
+    ("ae_tpsdot_axis_x10",    48, 4, "H",  0.1),   # %/s
+    ("ae_pw_adder_us",        56, 4, "H",  0.001), # ms
+    ("crank_enter_rpm_x10",   64, 1, "H",  0.1),   # RPM
+    ("crank_exit_rpm_x10",    66, 1, "H",  0.1),   # RPM
+    ("crank_spark_deg",       68, 1, "h",  1.0),   # °
+    ("crank_min_pw_us",       70, 1, "H",  0.001), # ms
+    ("crank_prime_tooth",     72, 1, "H",  1.0),
+    ("crank_prime_max_pw_us", 74, 1, "H",  0.001), # ms
 ]
 
 PAGE7_FIELDS = [
-    ("dwell_rpm_axis_rpm",   0, 4, "H"),
-    ("dwell_rpm_factor_q8",  8, 4, "H"),
+    ("dwell_rpm_axis_rpm",   0, 4, "H", 1.0),   # RPM
+    ("dwell_rpm_factor_q8",  8, 4, "H", 1.0),   # Q8 adimensional
 ]
 
-# Página 0, bytes 0-15: engine config (engine_config.cpp). Byte 1 é padding;
-# bytes 14-15 são o magic 0x4543 — exposto read-only para diagnóstico.
+# Página 0 — bytes 0-15: engine config; bytes 16+: calibração e dirigibilidade.
 PAGE0_FIELDS = [
-    ("ivc_abdc_deg",              0, 1, "B"),
-    ("displacement_cc",           2, 1, "H"),
-    ("injector_flow_cc_min",      4, 1, "H"),
-    ("stoich_afr_x100",           6, 1, "H"),
-    ("map_ref_bar_x100",          8, 1, "H"),
-    ("trigger_tooth0_engine_deg", 10, 1, "H"),
-    ("default_soi_lead_deg",     12, 1, "H"),
-    ("config_magic",             14, 1, "H"),
-    # bytes 16-55: calibração de sensores (apply_etb_calibration_from_page)
-    ("app1_raw_min",             16, 1, "H"),
-    ("app1_raw_max",             18, 1, "H"),
-    ("app2_raw_min",             20, 1, "H"),
-    ("app2_raw_max",             22, 1, "H"),
-    ("etb_tps1_raw_min",         24, 1, "H"),
-    ("etb_tps1_raw_max",         26, 1, "H"),
-    ("etb_tps2_raw_min",         28, 1, "H"),
-    ("etb_tps2_raw_max",         30, 1, "H"),
-    ("app_max_delta_pct_x10",    32, 1, "H"),
-    ("etb_max_delta_pct_x10",    34, 1, "H"),
-    ("etb_max_open_pct_x10_limp", 36, 1, "H"),
-    ("etb_max_rate_pct_per_s",   38, 1, "H"),
-    ("etb_idle_open_pct_x10",    40, 1, "H"),
-    ("etb_cal_valid",            42, 1, "B"),
-    ("etb_harness_present",      43, 1, "B"),
-    ("etb_kp_x10",               44, 1, "H"),
-    ("etb_ki_x10",               46, 1, "H"),
-    ("etb_kd_x10",               48, 1, "H"),
-    # tps_raw_min (offset 52) e tps_raw_max (offset 54) removidos — DBW usa ETB TPS
-    # bytes 56-65: trim por cilindro + janela CMP
-    ("cyl_fuel_trim_pct_0",    56, 1, "b"),
-    ("cyl_fuel_trim_pct_1",    57, 1, "b"),
-    ("cyl_fuel_trim_pct_2",    58, 1, "b"),
-    ("cyl_fuel_trim_pct_3",    59, 1, "b"),
-    ("cyl_ign_trim_deg_0",     60, 1, "b"),
-    ("cyl_ign_trim_deg_1",     61, 1, "b"),
-    ("cyl_ign_trim_deg_2",     62, 1, "b"),
-    ("cyl_ign_trim_deg_3",     63, 1, "b"),
-    ("cmp_window_open_tooth",  64, 1, "B"),
-    ("cmp_window_close_tooth", 65, 1, "B"),
+    ("ivc_abdc_deg",              0, 1, "B",  1.0),  # °
+    ("displacement_cc",           2, 1, "H",  1.0),  # cc
+    ("injector_flow_cc_min",      4, 1, "H",  1.0),  # cc/min
+    ("stoich_afr_x100",           6, 1, "H",  0.01), # AFR
+    ("map_ref_bar_x100",          8, 1, "H",  0.01), # bar
+    ("trigger_tooth0_engine_deg", 10, 1, "H", 1.0),  # °
+    ("default_soi_lead_deg",     12, 1, "H",  1.0),  # °
+    ("config_magic",             14, 1, "H",  1.0),
+    # bytes 16-55: sensores APP/ETB
+    ("app1_raw_min",             16, 1, "H",  1.0),
+    ("app1_raw_max",             18, 1, "H",  1.0),
+    ("app2_raw_min",             20, 1, "H",  1.0),
+    ("app2_raw_max",             22, 1, "H",  1.0),
+    ("etb_tps1_raw_min",         24, 1, "H",  1.0),
+    ("etb_tps1_raw_max",         26, 1, "H",  1.0),
+    ("etb_tps2_raw_min",         28, 1, "H",  1.0),
+    ("etb_tps2_raw_max",         30, 1, "H",  1.0),
+    ("app_max_delta_pct_x10",    32, 1, "H",  0.1),  # %
+    ("etb_max_delta_pct_x10",    34, 1, "H",  0.1),  # %
+    ("etb_max_open_pct_x10_limp", 36, 1, "H", 0.1), # %
+    ("etb_max_rate_pct_per_s",   38, 1, "H",  1.0),  # %/s
+    ("etb_idle_open_pct_x10",    40, 1, "H",  0.1),  # %
+    ("etb_cal_valid",            42, 1, "B",  1.0),
+    ("etb_harness_present",      43, 1, "B",  1.0),
+    ("etb_kp_x10",               44, 1, "H",  0.1),
+    ("etb_ki_x10",               46, 1, "H",  0.1),
+    ("etb_kd_x10",               48, 1, "H",  0.1),
+    # bytes 56-65: trim + CMP
+    ("cyl_fuel_trim_pct_0",    56, 1, "b",  1.0),  # %
+    ("cyl_fuel_trim_pct_1",    57, 1, "b",  1.0),
+    ("cyl_fuel_trim_pct_2",    58, 1, "b",  1.0),
+    ("cyl_fuel_trim_pct_3",    59, 1, "b",  1.0),
+    ("cyl_ign_trim_deg_0",     60, 1, "b",  1.0),  # °
+    ("cyl_ign_trim_deg_1",     61, 1, "b",  1.0),
+    ("cyl_ign_trim_deg_2",     62, 1, "b",  1.0),
+    ("cyl_ign_trim_deg_3",     63, 1, "b",  1.0),
+    ("cmp_window_open_tooth",  64, 1, "B",  1.0),
+    ("cmp_window_close_tooth", 65, 1, "B",  1.0),
     # bytes 66-99: dirigibilidade
-    ("antijerk_tpsdot_threshold_x10", 66, 1, "H"),
-    ("antijerk_retard_deg",           68, 1, "h"),
-    ("antijerk_decay_cycles",         70, 1, "B"),
-    ("rev_limit_rpm_x10",             72, 1, "L"),
-    ("rev_limit_soft_window_x10",     76, 1, "L"),
-    ("rev_limit_spark_window_x10",    80, 1, "L"),
-    ("rev_limit_max_retard_deg",      84, 1, "h"),
-    ("ltft_add_pw_threshold_us",      86, 1, "H"),
-    ("decel_cut_tps_threshold_x10",   88, 1, "H"),
-    ("decel_cut_entry_rpm_x10",       90, 1, "L"),
-    ("decel_cut_exit_rpm_x10",        94, 1, "L"),
-    ("decel_cut_min_clt_x10",         98, 1, "h"),
+    ("antijerk_tpsdot_threshold_x10", 66, 1, "H", 0.1),  # %/s
+    ("antijerk_retard_deg",           68, 1, "h", 1.0),  # °
+    ("antijerk_decay_cycles",         70, 1, "B", 1.0),
+    ("rev_limit_rpm_x10",             72, 1, "L", 0.1),  # RPM
+    ("rev_limit_soft_window_x10",     76, 1, "L", 0.1),  # RPM
+    ("rev_limit_spark_window_x10",    80, 1, "L", 0.1),  # RPM
+    ("rev_limit_max_retard_deg",      84, 1, "h", 1.0),  # °
+    ("ltft_add_pw_threshold_us",      86, 1, "H", 0.001),# ms
+    ("decel_cut_tps_threshold_x10",   88, 1, "H", 0.1),  # %
+    ("decel_cut_entry_rpm_x10",       90, 1, "L", 0.1),  # RPM
+    ("decel_cut_exit_rpm_x10",        94, 1, "L", 0.1),  # RPM
+    ("decel_cut_min_clt_x10",         98, 1, "h", 0.1),  # °C
     # bytes 100-115: marcha lenta ETB + IAC PID
-    ("etb_idle_rpm_target",      100, 1, "H"),
-    ("etb_idle_min_opening_x10", 102, 1, "H"),
-    ("etb_idle_max_opening_x10", 104, 1, "H"),
-    ("iac_clt_pid_enable_x10",   106, 1, "h"),
-    ("iac_kp_num",               108, 1, "h"),
-    ("iac_kd_num",               110, 1, "h"),
-    ("iac_kd_den",               112, 1, "h"),
-    ("iac_i_clamp_x10",          114, 1, "h"),
-    # bytes 116-163: IAC warmup curves (3 × 8 × int16/uint16)
-    ("iac_clt_axis_x10",         116, 8, "h"),
-    ("iac_warmup_duty_x10",      132, 8, "H"),
-    ("iac_idle_target_rpm_x10",  148, 8, "H"),
+    ("etb_idle_rpm_target",      100, 1, "H", 1.0),  # RPM
+    ("etb_idle_min_opening_x10", 102, 1, "H", 0.1),  # %
+    ("etb_idle_max_opening_x10", 104, 1, "H", 0.1),  # %
+    ("iac_clt_pid_enable_x10",   106, 1, "h", 0.1),  # °C
+    ("iac_kp_num",               108, 1, "h", 1.0),
+    ("iac_kd_num",               110, 1, "h", 1.0),
+    ("iac_kd_den",               112, 1, "h", 1.0),
+    ("iac_i_clamp_x10",          114, 1, "h", 0.1),  # %
+    # bytes 116-163: IAC warmup curves
+    ("iac_clt_axis_x10",         116, 8, "h", 0.1),  # °C
+    ("iac_warmup_duty_x10",      132, 8, "H", 0.1),  # %
+    ("iac_idle_target_rpm_x10",  148, 8, "H", 0.1),  # RPM
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
@@ -420,20 +421,38 @@ def can_rx_map_set(signal: str, fields: dict) -> None:
             _can_rx_map[signal][k] = int(v)
 
 
+def _apply_scale(vals: list, scale: float) -> list:
+    if scale == 1.0:
+        return vals
+    return [round(v * scale, 6) for v in vals]
+
+
+def _remove_scale(vals: list, scale: float) -> list:
+    if scale == 1.0:
+        return [int(v) for v in vals]
+    return [round(float(v) / scale) for v in vals]
+
+
 def decode_fields(page: int, buf: bytes) -> dict:
     out = {}
-    for name, off, count, fmt in FIELD_PAGES[page]:
+    for entry in FIELD_PAGES[page]:
+        name, off, count, fmt = entry[0], entry[1], entry[2], entry[3]
+        scale = entry[4] if len(entry) > 4 else 1.0
         vals = list(struct.unpack_from(f"<{count}{fmt}", buf, off))
+        vals = _apply_scale(vals, scale)
         out[name] = vals[0] if count == 1 else vals
     return out
 
 
 def encode_field(page: int, name: str, values) -> tuple[int, bytes]:
     """Devolve (offset, bytes) para escrever um campo via 'x'."""
-    for fname, off, count, fmt in FIELD_PAGES[page]:
+    for entry in FIELD_PAGES[page]:
+        fname, off, count, fmt = entry[0], entry[1], entry[2], entry[3]
+        scale = entry[4] if len(entry) > 4 else 1.0
         if fname == name:
             vals = values if isinstance(values, list) else [values]
             if len(vals) != count:
                 raise ValueError(f"{name}: esperado {count} valores")
-            return off, struct.pack(f"<{count}{fmt}", *[int(v) for v in vals])
+            raw = _remove_scale(vals, scale)
+            return off, struct.pack(f"<{count}{fmt}", *raw)
     raise KeyError(f"página {page}: campo {name} desconhecido")

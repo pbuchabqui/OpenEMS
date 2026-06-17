@@ -222,7 +222,7 @@ int16_t iac_clt_pid_enable_x10 = 600;   // 60°C
 // IAC warmup curves (mesmos valores dos constexpr em auxiliaries.cpp)
 int16_t  iac_clt_axis_x10[kIacWarmupPts]        = {-400, -100, 100, 300, 500, 700, 900, 1100};
 uint16_t iac_warmup_duty_x10[kIacWarmupPts]      = {620u, 560u, 500u, 440u, 360u, 280u, 220u, 180u};
-uint16_t iac_idle_target_rpm_x10[kIacWarmupPts]  = {1200u, 1150u, 1080u, 1000u, 920u, 850u, 820u, 800u};
+uint16_t iac_idle_target_rpm_x10[kIacWarmupPts]  = {12000u, 11500u, 10800u, 10000u, 9200u, 8500u, 8200u, 8000u};
 
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept {
     if (page == nullptr || len < 36u) {
