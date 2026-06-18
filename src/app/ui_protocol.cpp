@@ -43,7 +43,7 @@ enum class ParseState : uint8_t {
 alignas(4) static uint8_t g_page0[512] = {};
 alignas(4) static uint8_t g_page1_ve[256] = {};
 alignas(4) static uint8_t g_page2_spark[256] = {};
-alignas(4) static uint8_t g_page3_rt[64]      = {};
+alignas(4) static uint8_t g_page3_rt[66]      = {};
 alignas(4) static uint8_t g_page4_lambda[512] = {};   // lambda_target_table_x1000
 alignas(4) static uint8_t g_page5_corr[256]   = {};   // tabelas de correção 1D
 alignas(4) static uint8_t g_page6_xtau[80]    = {};   // X-Tau, AE rate curve, quick crank
@@ -194,7 +194,6 @@ inline void update_realtime_page() noexcept {
     rt.ve          = g_page1_ve[0];
     rt.stft_p100   = g_rt_stft_p100;
     // VE interpolado vivo (get_ve no ponto rpm×map atual) — rt.ve só expõe VE[0][0].
-    // reserved[49] (byte 63 do snapshot) p/ validação HIL da interpolação.
     rt.reserved[49] = ems::engine::get_ve(
         c.rpm_x10, static_cast<uint16_t>(s.map_bar_x1000 / 10u));
 
@@ -234,15 +233,15 @@ inline void update_realtime_page() noexcept {
     write_u32_le(&rt.reserved[31], g_rt_ivc_clamp_count);
     write_u32_le(&rt.reserved[35], g_rt_loop2ms_last_us);
     write_u32_le(&rt.reserved[39], g_rt_loop2ms_max_us);
-    // ADC bruto p/ calibração de pedal/borboleta (AN1=APP1, AN2=APP2, AN3=ETB1, AN4=ETB2)
+    // ADC bruto p/ calibração (AN1=APP1, AN2=APP2, AN3=ETB TPS1, AN4=ETB TPS2)
     rt.reserved[43] = static_cast<uint8_t>(s.an1_raw & 0xFFu);
     rt.reserved[44] = static_cast<uint8_t>((s.an1_raw >> 8u) & 0xFFu);
     rt.reserved[45] = static_cast<uint8_t>(s.an2_raw & 0xFFu);
     rt.reserved[46] = static_cast<uint8_t>((s.an2_raw >> 8u) & 0xFFu);
     rt.reserved[47] = static_cast<uint8_t>(s.an3_raw & 0xFFu);
     rt.reserved[48] = static_cast<uint8_t>((s.an3_raw >> 8u) & 0xFFu);
-    rt.reserved[49] = static_cast<uint8_t>(s.an4_raw & 0xFFu);
-    rt.reserved[50] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
+    rt.reserved[50] = static_cast<uint8_t>(s.an4_raw & 0xFFu);
+    rt.reserved[51] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }

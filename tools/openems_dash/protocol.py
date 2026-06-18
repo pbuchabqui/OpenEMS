@@ -34,7 +34,7 @@ MAP_AXIS_BAR_X100 = [
 RPM_AXIS = [v // 10 for v in RPM_AXIS_X10]
 MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
-PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 64, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112}
+PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 66, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112}
 
 STATUS_BITS = {
     "FULL_SYNC":    0x0001,
@@ -81,13 +81,13 @@ class RealtimeData:
 
 
 def parse_realtime(buf: bytes) -> RealtimeData:
-    """Decodifica UiRealtimeData (ui_protocol.h, 64 bytes)."""
-    if len(buf) != 64:
-        raise ValueError(f"realtime page: esperado 64B, recebido {len(buf)}B")
+    """Decodifica UiRealtimeData (ui_protocol.h, 66 bytes)."""
+    if len(buf) != 66:
+        raise ValueError(f"realtime page: esperado 66B, recebido {len(buf)}B")
     # 'x' = byte de padding: status_bits (uint16) é alinhado p/ offset 12.
     (rpm, map_x100, tps, clt_p40, iat_p40, o2_d4, pw_x10,
      adv_p40, ve, stft, status) = struct.unpack_from("<HBBbbBBBBbxH", buf, 0)
-    r = buf[14:64]  # reserved[50] começa no offset 14
+    r = buf[14:66]  # reserved[52] começa no offset 14
     return RealtimeData(
         rpm=rpm,
         map_kpa=map_x100,           # bar×100 == kPa
@@ -114,7 +114,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         an1_raw=struct.unpack_from("<H", r, 43)[0],
         an2_raw=struct.unpack_from("<H", r, 45)[0],
         an3_raw=struct.unpack_from("<H", r, 47)[0],
-        an4_raw=struct.unpack_from("<H", r, 49)[0],
+        an4_raw=struct.unpack_from("<H", r, 50)[0],
     )
 
 
