@@ -1052,8 +1052,9 @@ function buildPedalMapUI(data) {
   root.innerHTML = `
     <div class="pm-header">
       <div class="pm-tabs">${PEDAL_MODES.map((m,i)=>`<button class="pm-tab${i===0?" active":""}" data-mode="${i}">${m}</button>`).join("")}</div>
-      <button id="pmSave">Save to ECU</button>
-      <button id="pmReset">Restaurar padrões</button>
+      <button class="primary" id="pmSend">Send (RAM)</button>
+      <button class="danger"  id="pmBurn">Burn → flash</button>
+      <button id="pmReload">Reload</button>
     </div>
     <canvas id="pmCanvas" width="760" height="500"></canvas>`;
 
@@ -1066,7 +1067,7 @@ function buildPedalMapUI(data) {
     nPts: 10,
     xAxis: PEDAL_AXIS,
     xLabel: "Pedal %",
-    yLabel: "Borboleta %",
+    yLabel: "Throttle %",
     yMin: 0, yMax: 100,
     mono: true,
     onchange: () => {},
@@ -1080,22 +1081,22 @@ function buildPedalMapUI(data) {
 
   root.querySelectorAll(".pm-tab").forEach(b => b.onclick = () => activate(+b.dataset.mode));
 
-  root.querySelector("#pmSave").onclick = async () => {
+  root.querySelector("#pmSend").onclick = async () => {
     try {
       await api("/api/pages/8/cells", "PUT", {pedal_maps: pedalMaps});
-      toast("Pedal Map saved to ECU ✓");
+      toast("Pedal Map sent (RAM)");
     } catch(e) { toast(e.message, true); }
   };
-
-  const DEFAULTS = [
-    [0,8,15,22,30,40,52,65,80,100],
-    [0,10,20,30,40,50,60,70,80,100],
-    [0,18,35,50,60,70,78,85,92,100],
-    [0,5,10,15,22,30,40,52,65,100],
-  ];
-  root.querySelector("#pmReset").onclick = () => {
-    pedalMaps = DEFAULTS.map(m => [...m]);
-    activate(activeMode);
+  root.querySelector("#pmBurn").onclick = async () => {
+    try { await api("/api/pages/8/burn", "POST"); toast("burn OK"); }
+    catch(e) { toast(e.message, true); }
+  };
+  root.querySelector("#pmReload").onclick = async () => {
+    try {
+      const data = await api("/api/pages/8");
+      pedalMaps = data.pedal_maps.map(m => [...m]);
+      activate(activeMode);
+    } catch(e) { toast(e.message, true); }
   };
 
   activate(0);
