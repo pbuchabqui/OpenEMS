@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "app/can_stack.h"
+#include "hal/tle8888.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
 #include "engine/calibration.h"
@@ -223,6 +224,9 @@ inline void update_realtime_page() noexcept {
     }
     if (ems::app::can_stack_wbo2_fault()) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_WBO2_FAULT);
+    }
+    if (!ems::hal::tle8888_ok()) {
+        status = static_cast<uint16_t>(status | ems::app::STATUS_TLE8888_FAULT);
     }
     rt.status_bits = status;
     write_u32_le(&rt.reserved[0], g_rt_sched_late_events);

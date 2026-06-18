@@ -37,13 +37,17 @@ MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 66, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112, 10: 320}
 
 STATUS_BITS = {
-    "FULL_SYNC":    0x0001,
-    "PHASE_A":      0x0002,
-    "SENSOR_FAULT": 0x0004,
-    "SCHED_LATE":   0x0008,
-    "SCHED_DROP":   0x0010,
-    "SCHED_CLAMP":  0x0020,
-    "WBO2_FAULT":   0x0040,
+    "FULL_SYNC":        0x0001,  # bit 0
+    "PHASE_A":          0x0002,  # bit 1
+    "SENSOR_FAULT":     0x0004,  # bit 2
+    "LIMP_MODE":        0x0008,  # bit 3
+    "ETB_LIMP":         0x0010,  # bit 4
+    "XTAU_LEARN":       0x0020,  # bit 5
+    "SCHED_LATE":       0x0040,  # bit 6
+    "SCHED_DROP":       0x0080,  # bit 7
+    "SCHED_CLAMP":      0x0100,  # bit 8
+    "WBO2_FAULT":       0x0200,  # bit 9
+    "TLE8888_FAULT":    0x0400,  # bit 10
 }
 
 

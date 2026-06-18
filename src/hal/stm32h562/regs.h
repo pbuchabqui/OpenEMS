@@ -49,6 +49,9 @@
 // AHB1 — GPDMA
 #define GPDMA1_BASE  0x40020000UL
 
+// APB1 — SPI2
+#define SPI2_BASE    0x40003800UL
+
 // APB1 — IWDG
 #define IWDG_BASE    0x40003000UL
 
@@ -115,6 +118,7 @@
 #define RCC_APB1LENR_TIM6EN   (1u << 4)
 #define RCC_APB1LENR_FDCAN1EN (1u << 9)
 #define RCC_APB1LENR_IWDGEN   (1u << 12)
+#define RCC_APB1LENR_SPI2EN   (1u << 14)
 #define RCC_APB1LENR_USART2EN (1u << 17)
 #define RCC_APB1LENR_CRSEN    (1u << 24u)  // CRS clock enable (APB1, bit 24)
 #define RCC_APB2ENR_TIM1EN    (1u << 11)
@@ -177,6 +181,7 @@
 #define GPIO_AF2   2u
 #define GPIO_AF3   3u
 #define GPIO_AF7   7u
+#define GPIO_AF5   5u
 #define GPIO_AF9   9u
 
 static inline void gpio_set_output(volatile uint32_t* moder,
@@ -882,3 +887,40 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 // SYNCSRC[29:28] per ST HAL: 00=GPIO, 01=LSE, 10=USB SOF. USB SOF = 0b10.
 // NOTE: was wrongly 0b01 (LSE) — with LSE not running, CRS never trims HSI48.
 #define CRS_CFGR_SYNCSRC_USB  (2u << 28u)
+
+// ─── SPI2 (RM0481 §37) ──────────────────────────────────────────────────────
+#define SPI2_CR1     STM32_REG32(SPI2_BASE + 0x00UL)
+#define SPI2_CR2     STM32_REG32(SPI2_BASE + 0x04UL)
+#define SPI2_CFG1    STM32_REG32(SPI2_BASE + 0x08UL)
+#define SPI2_CFG2    STM32_REG32(SPI2_BASE + 0x0CUL)
+#define SPI2_IER     STM32_REG32(SPI2_BASE + 0x10UL)
+#define SPI2_SR      STM32_REG32(SPI2_BASE + 0x14UL)
+#define SPI2_IFCR    STM32_REG32(SPI2_BASE + 0x18UL)
+#define SPI2_TXDR    STM32_REG32(SPI2_BASE + 0x20UL)
+#define SPI2_RXDR    STM32_REG32(SPI2_BASE + 0x30UL)
+
+// SPI_CR1
+#define SPI_CR1_SPE       (1u << 0u)
+#define SPI_CR1_CSTART    (1u << 9u)
+
+// SPI_CFG1 — DSIZE[4:0] bits 0-4, MBR[30:28] prescaler
+#define SPI_CFG1_DSIZE_16BIT  (15u << 0u)  // 16-bit frame
+
+// SPI_CFG2
+#define SPI_CFG2_MASTER   (1u << 22u)
+#define SPI_CFG2_SSOE     (1u << 29u)
+#define SPI_CFG2_SSOM     (1u << 30u)
+#define SPI_CFG2_SSM      (1u << 26u)
+#define SPI_CFG2_CPHA     (1u << 24u)
+#define SPI_CFG2_CPOL     (1u << 25u)
+#define SPI_CFG2_COMM_FULLDUPLEX  (0u << 17u)
+
+// SPI_SR
+#define SPI_SR_TXP        (1u << 1u)
+#define SPI_SR_RXP        (1u << 0u)
+#define SPI_SR_EOT        (1u << 3u)
+#define SPI_SR_TXTF       (1u << 4u)
+
+// SPI_IFCR
+#define SPI_IFCR_EOTC     (1u << 3u)
+#define SPI_IFCR_TXTFC    (1u << 4u)

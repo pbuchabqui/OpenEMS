@@ -62,6 +62,7 @@ const LEDS = [
   ["FULL_SYNC", true], ["PHASE_A", true], ["SENSOR_FAULT", false],
   ["SCHED_LATE", false], ["SCHED_DROP", false], ["SCHED_CLAMP", false],
   ["WBO2_FAULT", false],
+  ["TLE8888_FAULT", false],
 ];
 $("#statusLeds").innerHTML = LEDS.map(([k]) =>
   `<span class="led" id="led_${k}">[${k.replace(/_/g,"-")}]</span>`).join("");

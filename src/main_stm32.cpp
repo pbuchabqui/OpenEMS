@@ -54,6 +54,7 @@ int main() { return 0; }
 #include "hal/can.h"
 #include "hal/etb_driver.h"
 #include "hal/flash.h"
+#include "hal/tle8888.h"
 #include "hal/runtime_seed.h"
 #include "hal/timer.h"
 #include "hal/etb_driver.h"
@@ -525,6 +526,7 @@ static void openems_init() noexcept {
     // (usb_cdc_init() já foi chamado cedo em 1b, antes dos inits da ECU.)
     ems::hal::can0_init();
     ems::hal::uart0_init(115200u);
+    ems::hal::tle8888_init();
     iwdg_kick();
 
 	// 5) Flash Bank2 → carrega calibrações persistidas
@@ -963,6 +965,7 @@ int main() {
         if (elapsed(now, g_t100ms_, 100u)) {
             g_t100ms_ = now;
             ems::drv::sensors_tick_100ms();
+            ems::hal::tle8888_poll_diag();
             const auto snap    = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
 
