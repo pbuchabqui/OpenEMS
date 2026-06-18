@@ -2965,32 +2965,32 @@ static void test_math_production_tables(void) {
     section("MATH: get_ve / get_lambda / get_advance com tabelas reais");
     // Ponto (3000 RPM = rpm_x10=30000, MAP=100 kPa = map_bar_x100=100).
     // kRpmAxisX10[7]=30000   → idx=6, frac=255
-    // kLoadAxisBarX100[8]=100 → idx=7, frac=255
+    // kLoadAxisBarX100[7]=100 → idx=6, frac=255
     // Frac=255 aplica o caso especial: lerp retorna b exacto.
     //
-    // ve_table[7][6]=87,[7][7]=88,[8][6]=91,[8][7]=92
-    //   v0=lerp(87,88,255)=88; v1=lerp(91,92,255)=92; v=lerp(88,92,255)=92
-    CHECK_EQ(get_ve(30000u, 100u), 92u,
-             "get_ve(3000RPM,100kPa) = 92 (tabela real, frac=255 ambos eixos)");
+    // ve_table[6][6]=84,[6][7]=85,[7][6]=87,[7][7]=88
+    //   v0=lerp(84,85,255)=85; v1=lerp(87,88,255)=88; v=lerp(85,88,255)=88
+    CHECK_EQ(get_ve(30000u, 100u), 88u,
+             "get_ve(3000RPM,100kPa) = 88 (tabela real, frac=255 ambos eixos)");
 
     // Prepared == direct para mesmo ponto
     const Table2dLookup lk = table3d_prepare_lookup(
         kRpmAxisX10, kLoadAxisBarX100, 30000u, 100u);
-    CHECK_EQ(get_ve_prepared(lk), 92u, "get_ve_prepared == 92");
+    CHECK_EQ(get_ve_prepared(lk), 88u, "get_ve_prepared == 88");
 
-    // lambda_target_table[7]=all 990; [8][6]=970,[8][7]=930
-    //   v0=lerp(990,990,255)=990; v1=lerp(970,930,255)=930; v=lerp(990,930,255)=930
-    CHECK_EQ(get_lambda_target_x1000(30000u, 100u), 930u,
-             "get_lambda(3000RPM,100kPa) = 930 (tabela real)");
-    CHECK_EQ(get_lambda_target_x1000_prepared(lk), 930u,
-             "get_lambda_prepared == 930");
+    // lambda_target_table[6]=all 1000; [7]=all 990
+    //   v0=lerp(1000,1000,255)=1000; v1=lerp(990,990,255)=990; v=lerp(1000,990,255)=990
+    CHECK_EQ(get_lambda_target_x1000(30000u, 100u), 990u,
+             "get_lambda(3000RPM,100kPa) = 990 (tabela real)");
+    CHECK_EQ(get_lambda_target_x1000_prepared(lk), 990u,
+             "get_lambda_prepared == 990");
 
-    // spark_table[7][6]=17,[7][7]=16,[8][6]=15,[8][7]=14
-    //   v0=lerp(17,16,255)=16; v1=lerp(15,14,255)=14; v=lerp(16,14,255)=14
-    CHECK_EQ(get_advance(30000u, 100u), 14,
-             "get_advance(3000RPM,100kPa) = 14\u00b0 (tabela real)");
-    CHECK_EQ(get_advance_prepared(lk), 14,
-             "get_advance_prepared == 14");
+    // spark_table[6][6]=19,[6][7]=18,[7][6]=17,[7][7]=16
+    //   v0=lerp(19,18,255)=18; v1=lerp(17,16,255)=16; v=lerp(18,16,255)=16
+    CHECK_EQ(get_advance(30000u, 100u), 16,
+             "get_advance(3000RPM,100kPa) = 16\u00b0 (tabela real)");
+    CHECK_EQ(get_advance_prepared(lk), 16,
+             "get_advance_prepared == 16");
 
     section("MATH: corr_warmup valores exactos");
     // warmup_corr_axis_x10={-400,-100,0,...}, warmup_corr_x256={420,380,350,...}
