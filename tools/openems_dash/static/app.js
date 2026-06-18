@@ -1052,7 +1052,7 @@ function buildPedalMapUI(data) {
   root.innerHTML = `
     <div class="pm-header">
       <div class="pm-tabs">${PEDAL_MODES.map((m,i)=>`<button class="pm-tab${i===0?" active":""}" data-mode="${i}">${m}</button>`).join("")}</div>
-      <button id="pmSave">Salvar na ECU</button>
+      <button id="pmSave">Save to ECU</button>
       <button id="pmReset">Restaurar padrões</button>
     </div>
     <canvas id="pmCanvas" width="760" height="500"></canvas>`;
