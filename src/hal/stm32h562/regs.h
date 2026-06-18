@@ -381,7 +381,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM8_CCR4  STM32_REG32(TIM8_BASE + TIM_CCR4_OFF)
 #define TIM8_BDTR  STM32_REG32(TIM8_BASE + TIM_BDTR_OFF)
 
-// TIM3 — PWM (IACV CH1 + Wastegate CH2)
+// TIM3 — PWM (Wastegate CH2)
 #define TIM3_CR1   STM32_REG32(TIM3_BASE + TIM_CR1_OFF)
 #define TIM3_CR2   STM32_REG32(TIM3_BASE + TIM_CR2_OFF)
 #define TIM3_SR    STM32_REG32(TIM3_BASE + TIM_SR_OFF)
@@ -755,7 +755,7 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 // IRQ_COMP1 is intentionally undefined; update knock.cpp when hardware is known.
 #define IRQ_TIM2         45u   // TIM2 global (injection output compare)
 #define IRQ_TIM5         48u   // TIM5 global (CKP input capture)
-#define IRQ_TIM3         46u   // TIM3 (PWM IACV/wastegate — não usa IRQ)
+#define IRQ_TIM3         46u   // TIM3 (PWM wastegate — não usa IRQ)
 #define IRQ_TIM4         47u   // TIM4 (PWM VVT — não usa IRQ)
 #define IRQ_ADC1         37u   // ADC1 (IRQ separado do ADC2)
 #define IRQ_ADC2         69u   // ADC2 (IRQ separado do ADC1)

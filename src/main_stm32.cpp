@@ -923,7 +923,7 @@ int main() {
             ems::app::ui_update_loop_diag(g_loop2ms_last_us, g_loop2ms_max_us);
         }
 
-        // ── 10ms: IACV, VVT, wastegate PID ───────────────────────────────
+        // ── 10ms: VVT, wastegate PID ─────────────────────────────────────
         if (elapsed(now, g_t10ms_, 10u)) {
             g_t10ms_ = now;
             ems::engine::auxiliaries_tick_10ms();

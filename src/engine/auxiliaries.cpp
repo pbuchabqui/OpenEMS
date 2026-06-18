@@ -434,9 +434,7 @@ void auxiliaries_init() noexcept {
     const ems::drv::CkpSnapshot snap = ems::drv::ckp_snapshot();
     g.phase_prev = snap.phase_A;
 
-    // TIM3_CH0 (IACV) e TIM3_CH1 (Wastegate) compartilham o mesmo MOD:
-    // não é possível 12.5 Hz e 15 Hz simultâneos em hardware no mesmo timer.
-    // Estratégia: fixa TIM3 em 15 Hz (prioridade para WG) e calibra IACV por duty.
+    // TIM3_CH2: Wastegate PWM @ 15 Hz
     ems::hal::tim3_pwm_init(kAuxTim3PwmHz);
     ems::hal::tim4_pwm_init(kAuxTim4PwmHz);
 

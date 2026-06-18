@@ -77,20 +77,16 @@ uint32_t tim5_count() noexcept {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// TIM3 — PWM (IACV CH1 + Wastegate CH2)
+// TIM3 — PWM (Wastegate CH2)
 // ════════════════════════════════════════════════════════════════════════════
 
 void tim3_pwm_init(uint32_t freq_hz) {
     if (freq_hz == 0u) { return; }
     RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
 
-    // PA6 = TIM3_CH1 (IACV), PA7 = TIM3_CH2 (Wastegate) — AF2
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 6u, GPIO_AF2);
+    // PA7 = TIM3_CH2 (Wastegate) — AF2.  PA6 (CH1) free — no IACV.
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 7u, GPIO_AF2);
 
-    // Calcular ARR e PSC para freq_hz desejada
-    // f_pwm = timer_clock / ((PSC+1) * (ARR+1))
-    // Resolução máxima: PSC=0, ARR = timer_clock / freq_hz - 1
     uint32_t arr = kTimClockHz / freq_hz;
     if (arr > 0xFFFFu) { arr = 0xFFFFu; }
     if (arr > 0u) { arr -= 1u; }
@@ -98,25 +94,19 @@ void tim3_pwm_init(uint32_t freq_hz) {
     TIM3_CR1 = 0u;
     TIM3_PSC = 0u;
     TIM3_ARR = arr;
-    TIM3_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE   // CH1: PWM1
-               | TIM_CCMR1_OC2M_PWM1 | TIM_CCMR1_OC2PE;  // CH2: PWM1
-    TIM3_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E;            // enable outputs
-    TIM3_CCR1 = 0u;    // 0% duty inicial
+    TIM3_CCMR1 = TIM_CCMR1_OC2M_PWM1 | TIM_CCMR1_OC2PE;  // CH2 only
+    TIM3_CCER = TIM_CCER_CC2E;
     TIM3_CCR2 = 0u;
-    TIM3_EGR  = 1u;    // UG: aplica valores
+    TIM3_EGR  = 1u;
     TIM3_CR1  = TIM_CR1_CEN | TIM_CR1_ARPE;
 }
 
 void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
     if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
     const uint32_t arr = TIM3_ARR;
-    // CCR = (ARR+1) * duty_pct_x10 / 1000
     const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
-    if (ch == 0u) {
-        TIM3_CCR1 = ccr;
-    } else {
-        TIM3_CCR2 = ccr;
-    }
+    (void)ch;  // only CH2 (wastegate) active
+    TIM3_CCR2 = ccr;
 }
 
 // ════════════════════════════════════════════════════════════════════════════

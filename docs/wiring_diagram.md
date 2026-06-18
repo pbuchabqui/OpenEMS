@@ -46,7 +46,6 @@
   │  │                      │ ETB TPS2 ◄──── AN4 (ADC) ──────┤
   │  │                      │                                 │
   │  │                      │         AUXILIARIES (TIM3/4)    │
-  │  │                      │ PA6  TIM3_CH1  (AF2) ──────────┼──► IACV PWM
   │  │                      │ PA7  TIM3_CH2  (AF2) ──────────┼──► Wastegate PWM
   │  │                      │ PB6  TIM4_CH1  (AF2) ──────────┼──► VVT Escape PWM
   │  │                      │ PB7  TIM4_CH2  (AF2) ──────────┼──► VVT Intake PWM
@@ -134,7 +133,7 @@
 | PA3  | MAP sensor       | ADC1_IN15  | -   | 0-3 bar                  |
 | PA4  | TPS sensor       | ADC1_IN18  | -   |                          |
 | PA5  | Knock sensor     | ADC1_IN6   | -   |                          |
-| PA6  | IACV PWM         | TIM3_CH1   | AF2 |                          |
+| PA6  | *(free)*         | -          | -   |                          |
 | PA7  | Wastegate PWM    | TIM3_CH2   | AF2 |                          |
 | PA8  | ETB PWM          | TIM1_CH1   | AF1 |                          |
 | PA9  | USART1 TX        | USART1     | AF7 | Debug/bench              |
