@@ -13,12 +13,12 @@
  *  ────────────────────────────────────────────────────────────────────
  *  GPIO2  → PA0     CKP 60-2    Directo (3.3V logic)
  *  GPIO4  → PA1     CMP         Directo (1 pulso/ciclo)
- *  GPIO25 → PA2     MAP         DAC1 analógico — sem filtro externo
+ *  GPIO25 → PA3     MAP         DAC1 analógico — sem filtro externo
  *  GPIO26 → PA4     TPS         DAC2 analógico — sem filtro externo
- *  GPIO13 → PC2     CLT         LEDC PWM → R=10 kΩ, C=100 nF → ADC
- *  GPIO12 → PC3     IAT         LEDC PWM → R=10 kΩ, C=100 nF → ADC
- *  GPIO14 → PB0     APP1        LEDC PWM → R=10 kΩ, C=100 nF → ADC
- *  GPIO27 → PB1     APP2        LEDC PWM → R=10 kΩ, C=100 nF → ADC
+ *  GPIO13 → PB0     CLT         LEDC PWM → R=10 kΩ, C=100 nF → ADC2_INP9
+ *  GPIO12 → PB1     IAT         LEDC PWM → R=10 kΩ, C=100 nF → ADC2_INP5
+ *  GPIO14    (APP1 — desligado na bancada; PB0 usado para CLT)
+ *  GPIO27    (APP2 — desligado na bancada; PB1 usado para IAT)
  *  GPIO16 → PC4     FUEL_PRESS  LEDC PWM → R=10 kΩ, C=100 nF → ADC
  *  GPIO17 → PC5     OIL_PRESS   LEDC PWM → R=10 kΩ, C=100 nF → ADC
  *  GPIO18 → PC0     ETB_TPS1    LEDC PWM → R=10 kΩ, C=100 nF → ADC
@@ -92,8 +92,8 @@
 #define CMP_GPIO  ((gpio_num_t)4)
 
 // DAC interno (8-bit, 0-3.3 V, sem filtro RC externo necessário):
-// GPIO25 = DAC_CHANNEL_1 → MAP (PA2/ADC1_IN3)
-// GPIO26 = DAC_CHANNEL_2 → TPS (PA4/ADC1_IN5)
+// GPIO25 = DAC_CHANNEL_1 → MAP (PA3/ADC1_INP15)
+// GPIO26 = DAC_CHANNEL_2 → TPS (PA4/ADC1_INP18)
 
 // LEDC PWM 12-bit @ 39 kHz + filtro RC 10 kΩ / 100 nF (fc ≈ 159 Hz):
 struct PwmChan {
@@ -105,8 +105,8 @@ struct PwmChan {
 };
 
 static const PwmChan kPwm[] = {
-    { GPIO_NUM_13, LEDC_CHANNEL_0, LEDC_TIMER_0, "CLT",      "PC2"  },
-    { GPIO_NUM_12, LEDC_CHANNEL_1, LEDC_TIMER_0, "IAT",      "PC3"  },
+    { GPIO_NUM_13, LEDC_CHANNEL_0, LEDC_TIMER_0, "CLT",      "PB0"  },
+    { GPIO_NUM_12, LEDC_CHANNEL_1, LEDC_TIMER_0, "IAT",      "PB1"  },
     { GPIO_NUM_14, LEDC_CHANNEL_2, LEDC_TIMER_0, "APP1",     "PB0"  },
     { GPIO_NUM_27, LEDC_CHANNEL_3, LEDC_TIMER_0, "APP2",     "PB1"  },
     { GPIO_NUM_16, LEDC_CHANNEL_4, LEDC_TIMER_1, "FUEL",     "PC4"  },
@@ -395,7 +395,7 @@ static void print_help() {
     Serial.println("  Pinos:");
     Serial.printf("    GPIO%-2d → PA0  CKP 60-2\n",  (int)CKP_GPIO);
     Serial.printf("    GPIO%-2d → PA1  CMP\n",        (int)CMP_GPIO);
-    Serial.printf("    GPIO25 → PA2  MAP  (DAC1)\n");
+    Serial.printf("    GPIO25 → PA3  MAP  (DAC1)\n");
     Serial.printf("    GPIO26 → PA4  TPS  (DAC2)\n");
     for (int i = 0; i < kNPwm; ++i) {
         Serial.printf("    GPIO%-2d → %s  %-9s (LEDC PWM + RC 10kΩ/100nF)\n",
@@ -488,7 +488,7 @@ void setup() {
     }
 
     // ── DAC (MAP + TPS) ───────────────────────────────────────────────────
-    dac_output_enable(DAC_CHANNEL_1);   // GPIO25 → MAP (PA2)
+    dac_output_enable(DAC_CHANNEL_1);   // GPIO25 → MAP (PA3)
     dac_output_enable(DAC_CHANNEL_2);   // GPIO26 → TPS (PA4)
 
     // ── LEDC timer 0: CLT, IAT, APP1, APP2 ───────────────────────────────
