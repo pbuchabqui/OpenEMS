@@ -54,20 +54,23 @@ volatile uint8_t g_channel_faults[8] = {};
 inline void cs_low()  noexcept { GPIOB_BSRR = (1u << (12u + 16u)); }  // reset PB12
 inline void cs_high() noexcept { GPIOB_BSRR = (1u << 12u); }          // set PB12
 
+constexpr uint32_t SPI_TIMEOUT = 50000u;  // ~500µs at 250MHz
+
 uint16_t spi2_txrx(uint16_t tx) noexcept {
-    // Wait TXP (TX buffer ready)
-    while (!(SPI2_SR & SPI_SR_TXP)) {}
+    uint32_t tries = SPI_TIMEOUT;
+    while (!(SPI2_SR & SPI_SR_TXP) && --tries) {}
+    if (!tries) { return 0xFFFFu; }
     SPI2_TXDR = tx;
 
-    // Start transfer
     SPI2_CR1 |= SPI_CR1_CSTART;
 
-    // Wait RXP (data received)
-    while (!(SPI2_SR & SPI_SR_RXP)) {}
+    tries = SPI_TIMEOUT;
+    while (!(SPI2_SR & SPI_SR_RXP) && --tries) {}
+    if (!tries) { SPI2_IFCR = SPI_IFCR_EOTC | SPI_IFCR_TXTFC; return 0xFFFFu; }
     const uint16_t rx = static_cast<uint16_t>(SPI2_RXDR);
 
-    // Wait EOT and clear flags
-    while (!(SPI2_SR & SPI_SR_EOT)) {}
+    tries = SPI_TIMEOUT;
+    while (!(SPI2_SR & SPI_SR_EOT) && --tries) {}
     SPI2_IFCR = SPI_IFCR_EOTC | SPI_IFCR_TXTFC;
 
     return rx;
