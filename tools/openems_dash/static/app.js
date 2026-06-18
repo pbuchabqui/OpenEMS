@@ -51,6 +51,8 @@ const GAUGES = [
   ["iat_c",        "IAT °C",  v => v],
   ["ve",           "VE %",    v => v],
   ["stft_pct",     "STFT %",  v => v],
+  ["lambda_target_x1000", "λ tgt", v => (v / 1000).toFixed(2)],
+  ["ltft_pct",     "LTFT %",  v => v],
 ];
 $("#gauges").innerHTML = GAUGES.map(([k, l]) =>
   `<div class="gauge"><div class="v" id="g_${k}">—</div><div class="l">${l}</div></div>`).join("");
@@ -385,10 +387,14 @@ const PAGE_0_SECTIONS = [
     ],
   },
   {
+    label: "CLOSED-LOOP (STFT/LTFT)",
+    fields: ["stft_kp_x100","stft_ki_x1000","stft_clamp_pct_x10","ltft_add_pw_threshold_us"],
+  },
+  {
     label: "DRIVABILITY",
     fields: ["antijerk_tpsdot_threshold_x10","antijerk_retard_deg","antijerk_decay_cycles",
              "rev_limit_rpm_x10","rev_limit_soft_window_x10","rev_limit_spark_window_x10",
-             "rev_limit_max_retard_deg","ltft_add_pw_threshold_us",
+             "rev_limit_max_retard_deg",
              "decel_cut_tps_threshold_x10","decel_cut_entry_rpm_x10",
              "decel_cut_exit_rpm_x10","decel_cut_min_clt_x10"],
   },
@@ -440,6 +446,10 @@ const FIELD_LABELS = {
   etb_idle_max_opening_x10: "ETB idle max opening (%)",
   iac_clt_axis_x10:         "Eixo CLT — Idle target RPM (°C, 8pts)",
   iac_idle_target_rpm_x10:  "Idle target RPM vs CLT (8pts)",
+  // Closed-loop STFT/LTFT
+  stft_kp_x100:             "STFT Kp (×100)",
+  stft_ki_x1000:            "STFT Ki (×1000)",
+  stft_clamp_pct_x10:       "STFT clamp ±(%)",
   // Dirigibilidade
   antijerk_tpsdot_threshold_x10: "Anti-jerk TPSdot threshold (%/s)",
   antijerk_retard_deg:            "Anti-jerk ignition retard (°)",

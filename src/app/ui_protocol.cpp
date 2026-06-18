@@ -64,6 +64,8 @@ static volatile uint16_t g_tx_tail = 0u;
 static uint8_t  g_rt_pw_ms_x10   = 0u;
 static int8_t   g_rt_advance_deg  = 0;
 static int8_t   g_rt_stft_p100   = 0;
+static uint8_t  g_rt_lambda_target_d4 = 0u;
+static int8_t   g_rt_ltft_pct    = 0;
 static uint32_t g_rt_sched_late_events = 0u;
 static uint32_t g_rt_sched_cycle_schedule_drop_count = 0u;
 static uint32_t g_rt_sched_calibration_clamp_count = 0u;
@@ -224,7 +226,10 @@ inline void update_realtime_page() noexcept {
     }
     rt.status_bits = status;
     write_u32_le(&rt.reserved[0], g_rt_sched_late_events);
-    write_u32_le(&rt.reserved[4], 0u);   // late_max_delay_ticks: not yet tracked
+    rt.reserved[4] = g_rt_lambda_target_d4;
+    rt.reserved[5] = static_cast<uint8_t>(g_rt_ltft_pct);
+    rt.reserved[6] = 0u;
+    rt.reserved[7] = 0u;
     rt.reserved[8] = 0u;                 // queue_depth_peak: not yet tracked
     rt.reserved[9] = 0u;                 // queue_depth_last_cycle_peak: not yet tracked
     write_u32_le(&rt.reserved[10], g_rt_sched_cycle_schedule_drop_count);
@@ -309,6 +314,10 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 122, ems::engine::iac_idle_target_rpm_x10, 16u);
         // Byte 138: WBO2 CAN ID (uint16)
         std::memcpy(g_page0 + 138, &ems::engine::wbo2_can_id, 2u);
+        // Bytes 140-145: STFT closed-loop tuning
+        std::memcpy(g_page0 + 140, &ems::engine::stft_kp_x100,       2u);
+        std::memcpy(g_page0 + 142, &ems::engine::stft_ki_x1000,      2u);
+        std::memcpy(g_page0 + 144, &ems::engine::stft_clamp_pct_x10, 2u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -419,6 +428,9 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(ems::engine::iac_idle_target_rpm_x10, g_page0 + 122, 16u);
         std::memcpy(&ems::engine::wbo2_can_id,             g_page0 + 138, 2u);
         ems::app::can_stack_set_wbo2_rx_id(ems::engine::wbo2_can_id);
+        std::memcpy(&ems::engine::stft_kp_x100,       g_page0 + 140, 2u);
+        std::memcpy(&ems::engine::stft_ki_x1000,      g_page0 + 142, 2u);
+        std::memcpy(&ems::engine::stft_clamp_pct_x10, g_page0 + 144, 2u);
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
@@ -842,10 +854,13 @@ uint16_t ui_tx_available() noexcept {
     return static_cast<uint16_t>((g_tx_head - g_tx_tail) & kTxMask);
 }
 
-void ui_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p100) noexcept {
+void ui_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p100,
+                          uint8_t lambda_target_d4, int8_t ltft_pct) noexcept {
     g_rt_pw_ms_x10  = pw_ms_x10;
     g_rt_advance_deg = advance_deg;
     g_rt_stft_p100  = stft_p100;
+    g_rt_lambda_target_d4 = lambda_target_d4;
+    g_rt_ltft_pct   = ltft_pct;
 }
 
 void ui_update_rt_sched_diag(uint32_t late_events,

@@ -75,6 +75,8 @@ volatile uint32_t g_flash_write_faults = 0u; // FIX: fault counter para falhas d
 static int8_t  g_last_advance_deg = 0;
 static uint8_t g_last_pw_ms_x10   = 0u;
 static int8_t  g_last_stft_pct    = 0;
+static uint8_t g_last_lambda_target_d4 = 0u;
+static int8_t  g_last_ltft_pct    = 0;
 
 static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
 static constexpr uint8_t  kFaultBitMap = (1u << 0u);
@@ -930,7 +932,8 @@ int main() {
             g_t20ms_ = now;
             const auto snap = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
-            ems::app::ui_update_rt_metrics(g_last_pw_ms_x10, g_last_advance_deg, g_last_stft_pct);
+            ems::app::ui_update_rt_metrics(g_last_pw_ms_x10, g_last_advance_deg, g_last_stft_pct,
+                                           g_last_lambda_target_d4, g_last_ltft_pct);
             ems::app::ui_update_rt_sched_diag(
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
@@ -1027,6 +1030,10 @@ int main() {
                     ae_active, stft_inhibit, g_last_net_pw_us);
                 g_ae_active = false;
                 g_last_stft_pct = clamp_i8(static_cast<int16_t>(stft / 10), -25, 25);
+                g_last_lambda_target_d4 = ems::engine::clamp_u8(lambda_target_x1000 / 4u);
+                g_last_ltft_pct = clamp_i8(
+                    ems::engine::fuel_get_ltft_at(snap.rpm_x10, map_bar_x100) / 10,
+                    -25, 25);
 
                 // X-tau autocalibration (100ms lambda-gated)
                 const bool xtau_learning_ok = (stft >= -500 && stft <= 500 &&

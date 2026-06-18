@@ -173,6 +173,11 @@ extern uint16_t iac_idle_target_rpm_x10[kIacWarmupPts];
 // Gravado em NVM (página 0, offset 138). Aplicado via can_stack_init().
 extern uint16_t wbo2_can_id;
 
+// STFT closed-loop tuning (página 0, offsets 140-145)
+extern uint16_t stft_kp_x100;        // Kp × 100, default 3 (= 0.03)
+extern uint16_t stft_ki_x1000;       // Ki × 1000, default 5 (= 0.005)
+extern uint16_t stft_clamp_pct_x10;  // clamp ±%, default 250 (= 25.0%)
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;
 // Empurra a calibração de sensores (APP/ETB/TPS/plausibilidade) p/ drv::sensors.
 void push_sensor_calibration_to_drivers() noexcept;

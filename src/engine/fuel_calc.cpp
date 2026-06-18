@@ -35,10 +35,6 @@ using ems::engine::interp_u16_8pt;
 
 constexpr uint8_t kCorrPoints = ems::engine::kCorrectionTableSize;
 
-constexpr int16_t kStftKpNum = 3;     // 0.03 por erro_x1000 -> x10
-constexpr int16_t kStftKiNum = 1;     // 0.005 por amostra
-constexpr int16_t kStftKiDen = 200;
-constexpr int16_t kStftClampX10 = 250;
 constexpr uint8_t kLambdaHistorySize = 16u;
 
 struct LambdaHistorySample {
@@ -548,18 +544,19 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
         return g_stft_pct_x10;
     }
 
+    const int16_t clamp = static_cast<int16_t>(ems::engine::stft_clamp_pct_x10);
     const int16_t error_x1000 = static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
-    const int32_t p_x10 = (static_cast<int32_t>(error_x1000) * kStftKpNum) / 100;
-    g_stft_integrator_x10 += (static_cast<int32_t>(error_x1000) * kStftKiNum) / kStftKiDen;
+    const int32_t p_x10 = (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_kp_x100)) / 100;
+    g_stft_integrator_x10 += (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_ki_x1000)) / 1000;
 
-    if (g_stft_integrator_x10 > kStftClampX10) {
-        g_stft_integrator_x10 = kStftClampX10;
-    } else if (g_stft_integrator_x10 < -kStftClampX10) {
-        g_stft_integrator_x10 = -kStftClampX10;
+    if (g_stft_integrator_x10 > clamp) {
+        g_stft_integrator_x10 = clamp;
+    } else if (g_stft_integrator_x10 < -clamp) {
+        g_stft_integrator_x10 = -clamp;
     }
 
     const int32_t stft = p_x10 + g_stft_integrator_x10;
-    g_stft_pct_x10 = clamp_i16(static_cast<int16_t>(stft), -kStftClampX10, kStftClampX10);
+    g_stft_pct_x10 = clamp_i16(static_cast<int16_t>(stft), -clamp, clamp);
 
     const uint8_t rpm_idx = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
     const uint8_t map_idx = table_axis_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
@@ -579,7 +576,7 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
         // PW normal: integrar LTFT multiplicativo (comportamento original).
         int16_t& cell = g_ltft_pct_x10[map_idx][rpm_idx];
         cell = static_cast<int16_t>(cell + (g_stft_pct_x10 - cell) / 64);
-        cell = clamp_i16(cell, -kStftClampX10, kStftClampX10);
+        cell = clamp_i16(cell, -clamp, clamp);
         fuel_ltft_store_cell(map_idx, rpm_idx, cell);
     }
 
@@ -625,6 +622,12 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
 
 int16_t fuel_get_stft_pct_x10() noexcept {
     return g_stft_pct_x10;
+}
+
+int16_t fuel_get_ltft_at(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
+    const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
+    const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
+    return g_ltft_pct_x10[mi][ri];
 }
 
 int16_t fuel_get_ltft_pct_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept {

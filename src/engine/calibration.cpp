@@ -217,6 +217,10 @@ int16_t  iac_clt_axis_x10[kIacWarmupPts]        = {-400, -100, 100, 300, 500, 70
 uint16_t iac_idle_target_rpm_x10[kIacWarmupPts]  = {12000u, 11500u, 10800u, 10000u, 9200u, 8500u, 8200u, 8000u};
 uint16_t wbo2_can_id = 0x180u;
 
+uint16_t stft_kp_x100       = 3u;    // 0.03
+uint16_t stft_ki_x1000      = 5u;    // 0.005
+uint16_t stft_clamp_pct_x10 = 250u;  // 25.0%
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept {
     if (page == nullptr || len < 36u) {
         return;

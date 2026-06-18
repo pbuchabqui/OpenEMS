@@ -75,6 +75,8 @@ class RealtimeData:
     an2_raw: int      # APP2 (pedal 2)
     an3_raw: int      # ETB TPS1
     an4_raw: int      # ETB TPS2
+    lambda_target_x1000: int
+    ltft_pct: int
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -115,6 +117,8 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         an2_raw=struct.unpack_from("<H", r, 45)[0],
         an3_raw=struct.unpack_from("<H", r, 47)[0],
         an4_raw=struct.unpack_from("<H", r, 50)[0],
+        lambda_target_x1000=r[4] * 4,
+        ltft_pct=struct.unpack_from("<b", r, 5)[0],
     )
 
 
@@ -359,6 +363,10 @@ PAGE0_FIELDS = [
     ("iac_idle_target_rpm_x10",  122, 8, "H", 0.1),  # RPM
     # byte 138: WBO2 CAN ID
     ("wbo2_can_id",              138, 1, "H", 1.0),  # CAN ID 11-bit
+    # bytes 140-145: STFT closed-loop tuning
+    ("stft_kp_x100",            140, 1, "H", 1.0),
+    ("stft_ki_x1000",           142, 1, "H", 1.0),
+    ("stft_clamp_pct_x10",      144, 1, "H", 1.0),
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
