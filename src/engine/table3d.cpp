@@ -71,10 +71,10 @@ const uint32_t kRpmAxisX10[kTableAxisSize] = {
 };
 
 const uint32_t kLoadAxisBarX100[kTableAxisSize] = {
-    20u,  30u,  40u,  50u,
-    60u,  70u,  80u,  90u,
-    100u, 115u, 130u, 145u,
-    160u, 180u, 215u, 300u,
+     20u,  30u,  40u,  52u,
+     64u,  76u,  88u, 100u,
+    110u, 130u, 160u, 190u,
+    220u, 250u, 273u, 300u,
 };
 
 uint8_t table_axis_index(const uint32_t* axis, uint8_t size, uint32_t value) noexcept {

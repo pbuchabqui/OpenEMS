@@ -35,6 +35,8 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
   if (b.dataset.tab === "params"    && !$("#paramsRoot").dataset.loaded)   loadParams();
   if (b.dataset.tab === "pedal-map" && !$("#pedalMapRoot").dataset.loaded) loadPedalMap();
   if (b.dataset.tab === "boost"     && !$("#boostRoot").dataset.loaded)    loadBoostMap();
+  if (b.dataset.tab === "telemetry")
+    charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 160 }));
 });
 
 /* ── telemetria: gauges + charts ──────────────────────────────────────── */
@@ -554,7 +556,7 @@ async function loadBoostMap() {
       xAxis: BOOST_RPM_AXIS,
       xLabel: "RPM",
       yLabel: "Boost (bar×1000)",
-      yMin: 800, yMax: 2200,
+      yMin: 1000, yMax: 3000,
       mono: false,
       onchange: () => { $("#boostDirty").textContent = "não enviado"; },
     });
