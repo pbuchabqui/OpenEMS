@@ -50,6 +50,7 @@ alignas(4) static uint8_t g_page6_xtau[80]    = {};   // X-Tau, AE rate curve, q
 alignas(4) static uint8_t g_page7_dwell2d[32] = {};   // Dwell 2D: eixo RPM + factores Q8
 alignas(4) static uint8_t g_page8_pedalmap[80] = {};  // Pedal map: 4 modos × 10 × uint16
 alignas(4) static uint8_t g_page9_boost[112]   = {};  // Boost map: 7 marchas × 8 RPM × uint16
+alignas(4) static uint8_t g_page10_ltft[320]   = {};  // LTFT: mult 16×16 int8 + add 8×8 int8
 
 static volatile uint8_t g_rx_buf[kRxSize] = {};
 static volatile uint16_t g_rx_head = 0u;
@@ -109,6 +110,7 @@ inline uint16_t page_size(uint8_t page) noexcept {
     if (page == 0x07u) { return static_cast<uint16_t>(sizeof(g_page7_dwell2d)); }
     if (page == 0x08u) { return static_cast<uint16_t>(sizeof(g_page8_pedalmap)); }
     if (page == 0x09u) { return static_cast<uint16_t>(sizeof(g_page9_boost)); }
+    if (page == 0x0Au) { return static_cast<uint16_t>(sizeof(g_page10_ltft)); }
     return 0u;
 }
 
@@ -123,6 +125,7 @@ inline uint8_t* page_ptr(uint8_t page) noexcept {
     if (page == 0x07u) { return g_page7_dwell2d; }
     if (page == 0x08u) { return g_page8_pedalmap; }
     if (page == 0x09u) { return g_page9_boost; }
+    if (page == 0x0Au) { return g_page10_ltft; }
     return nullptr;
 }
 
@@ -361,6 +364,19 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page8_pedalmap, ems::engine::etb_pedal_map, sizeof(g_page8_pedalmap));
     } else if (page == 0x09u) {
         std::memcpy(g_page9_boost, ems::engine::boost_target_bar_x1000, sizeof(g_page9_boost));
+    } else if (page == 0x0Au) {
+        for (uint8_t m = 0u; m < 16u; ++m) {
+            for (uint8_t r = 0u; r < 16u; ++r) {
+                g_page10_ltft[m * 16u + r] = static_cast<uint8_t>(
+                    ems::hal::nvm_read_ltft(r, m));
+            }
+        }
+        for (uint8_t m = 0u; m < 8u; ++m) {
+            for (uint8_t r = 0u; r < 8u; ++r) {
+                g_page10_ltft[256u + m * 8u + r] = static_cast<uint8_t>(
+                    ems::hal::nvm_read_ltft_add(r, m));
+            }
+        }
     }
 }
 
