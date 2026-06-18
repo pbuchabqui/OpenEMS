@@ -245,6 +245,21 @@ def api_can_rx_map_set(signal: str, body: dict):
     return {"ok": True, "signal": signal, "config": proto.can_rx_map_get()[signal]}
 
 
+@app.get("/api/wbo2_can_id")
+def api_wbo2_can_id_get():
+    buf = worker.submit(lambda l: l.read_page(0))
+    fields = proto.decode_fields(0, buf)
+    return {"id": int(fields.get("wbo2_can_id", 0x180))}
+
+
+@app.put("/api/wbo2_can_id")
+def api_wbo2_can_id_set(body: dict):
+    can_id = int(body.get("id", 0x180)) & 0x7FF
+    off, data = proto.encode_field(0, "wbo2_can_id", can_id)
+    worker.submit(lambda l: l.write_page_ram(0, off, data))
+    return {"ok": True, "id": can_id}
+
+
 @app.get("/api/dirty")
 def api_dirty():
     return {"mask": worker.submit(lambda l: l.dirty_mask())}

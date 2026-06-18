@@ -357,6 +357,8 @@ PAGE0_FIELDS = [
     # bytes 106-121: idle RPM target vs CLT
     ("iac_clt_axis_x10",         106, 8, "h", 0.1),  # °C
     ("iac_idle_target_rpm_x10",  122, 8, "H", 0.1),  # RPM
+    # byte 138: WBO2 CAN ID
+    ("wbo2_can_id",              138, 1, "H", 1.0),  # CAN ID 11-bit
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

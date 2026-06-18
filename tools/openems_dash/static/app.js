@@ -379,6 +379,10 @@ const PAGE_0_SECTIONS = [
   {
     label: "IDLE",
     fields: ["etb_idle_rpm_target","etb_idle_min_opening_x10","etb_idle_max_opening_x10"],
+    curves: [
+      { title: "Idle target RPM vs CLT", axis: "iac_clt_axis_x10", axisLabel: "CLT (°C)",
+        rows: [["iac_idle_target_rpm_x10", "RPM alvo"]] },
+    ],
   },
   {
     label: "DRIVABILITY",
@@ -464,10 +468,7 @@ const READONLY_FIELDS = new Set(["config_magic"]);
    e escalares. Nomes de campo = protocol.py / ui_protocol.cpp. */
 const PAGE_LAYOUT = {
   0: {
-    curves: [
-      { title: "Idle target RPM vs CLT", axis: "iac_clt_axis_x10", axisLabel: "CLT (°C)",
-        rows: [["iac_idle_target_rpm_x10", "RPM alvo"]] },
-    ],
+    curves: [],
     tables2d: [],
     scalarSections: PAGE_0_SECTIONS,
   },
@@ -789,6 +790,21 @@ async function bindParamGroup(div, page) {
         const secFields = sec.fields.filter(f => f in fieldMap);
         if (!secFields.length) continue;
         html += `<div class="pg-section-header">${sec.label}</div>`;
+        if (sec.curves) {
+          for (const c of sec.curves) {
+            rendered.add(c.axis);
+            c.rows.forEach(([f]) => rendered.add(f));
+            if (fields[c.axis]) {
+              html += `<h4>${c.title}</h4><table class="ptable"><tr>
+                <th>${c.axisLabel}</th>` +
+                fields[c.axis].map((v, i) => `<td class="axis">${inp(c.axis, i, v)}</td>`).join("") +
+                "</tr>" +
+                c.rows.map(([f, label]) => `<tr><th>${label}</th>` +
+                  fields[f].map((v, i) => `<td>${inp(f, i, v)}</td>`).join("") + "</tr>").join("") +
+                "</table>";
+            }
+          }
+        }
         for (const name of secFields) {
           rendered.add(name);
           const v = fieldMap[name];

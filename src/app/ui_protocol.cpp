@@ -307,6 +307,8 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         // Bytes 106-121: idle RPM target vs CLT (8 × int16 CLT + 8 × uint16 RPM)
         std::memcpy(g_page0 + 106, ems::engine::iac_clt_axis_x10,        16u);
         std::memcpy(g_page0 + 122, ems::engine::iac_idle_target_rpm_x10, 16u);
+        // Byte 138: WBO2 CAN ID (uint16)
+        std::memcpy(g_page0 + 138, &ems::engine::wbo2_can_id, 2u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -415,6 +417,8 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         // Idle RPM target vs CLT (bytes 106-121)
         std::memcpy(ems::engine::iac_clt_axis_x10,        g_page0 + 106, 16u);
         std::memcpy(ems::engine::iac_idle_target_rpm_x10, g_page0 + 122, 16u);
+        std::memcpy(&ems::engine::wbo2_can_id,             g_page0 + 138, 2u);
+        ems::app::can_stack_set_wbo2_rx_id(ems::engine::wbo2_can_id);
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));

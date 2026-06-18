@@ -215,6 +215,7 @@ uint16_t etb_idle_max_opening_x10 = 80u;   // 8.0%
 // Idle RPM target vs CLT — usado para idle spark correction (ETB)
 int16_t  iac_clt_axis_x10[kIacWarmupPts]        = {-400, -100, 100, 300, 500, 700, 900, 1100};
 uint16_t iac_idle_target_rpm_x10[kIacWarmupPts]  = {12000u, 11500u, 10800u, 10000u, 9200u, 8500u, 8200u, 8000u};
+uint16_t wbo2_can_id = 0x180u;
 
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept {
     if (page == nullptr || len < 36u) {

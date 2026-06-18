@@ -578,7 +578,7 @@ static void openems_init() noexcept {
 
     // 8) Aplicação
     ems::app::ui_init();
-    ems::app::can_stack_init();
+    ems::app::can_stack_init(ems::engine::wbo2_can_id);
 
     // 9) NVIC — CKP fica com prioridade máxima. Injeção/ignição em TIM2/TIM8
     //    usam output compare direto por hardware, sem ISR no caminho crítico.

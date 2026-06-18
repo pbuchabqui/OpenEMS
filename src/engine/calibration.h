@@ -169,6 +169,10 @@ constexpr uint8_t kIacWarmupPts = 8u;
 extern int16_t  iac_clt_axis_x10[kIacWarmupPts];
 extern uint16_t iac_idle_target_rpm_x10[kIacWarmupPts];
 
+// ID CAN 11-bit do sensor wideband lambda (WBO2). Default 0x180.
+// Gravado em NVM (página 0, offset 138). Aplicado via can_stack_init().
+extern uint16_t wbo2_can_id;
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;
 // Empurra a calibração de sensores (APP/ETB/TPS/plausibilidade) p/ drv::sensors.
 void push_sensor_calibration_to_drivers() noexcept;

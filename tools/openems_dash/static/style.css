@@ -154,8 +154,9 @@ table.tune td input { width: 100%; height: 100%; border: none; margin: 0; paddin
 
 /* subgrupos de campos dentro da página 0 */
 .pg-section-header {
-  font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px;
-  margin: 10px 0 4px; padding-bottom: 3px; border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--accent); font-weight: 700;
+  text-transform: uppercase; letter-spacing: 2px;
+  margin: 16px 0 6px; padding-bottom: 3px; border-bottom: 1px solid var(--accent);
 }
 .pg-section-header:first-child { margin-top: 0; }
 
