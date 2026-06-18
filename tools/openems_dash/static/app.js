@@ -719,6 +719,7 @@ async function loadParams() {
               <div class="param-row pg-btns">
                 <button class="primary" data-act="send">Send (RAM)</button>
                 <button class="danger"  data-act="burn">Burn → flash</button>
+                <button data-act="reload">Reload</button>
               </div>`;
             details.appendChild(div);
             bindParamGroup(div, page);
