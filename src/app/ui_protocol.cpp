@@ -103,7 +103,7 @@ inline uint16_t page_size(uint8_t page) noexcept {
         return 256u;
     }
     if (page == 0x03u) {
-        return 64u;
+        return static_cast<uint16_t>(sizeof(g_page3_rt));
     }
     if (page == 0x06u) { return static_cast<uint16_t>(sizeof(g_page6_xtau)); }
     if (page == 0x07u) { return static_cast<uint16_t>(sizeof(g_page7_dwell2d)); }

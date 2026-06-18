@@ -165,7 +165,7 @@ class OpenEMSLink:
         return self._txn(b"d", 1)[0]
 
     def read_realtime(self) -> RealtimeData:
-        return parse_realtime(self._txn(b"A", 64))
+        return parse_realtime(self._txn(b"A", PAGE_SIZES[3]))
 
     # ── páginas ─────────────────────────────────────────────────────────
     def read_page(self, page: int, off: int = 0, length: int | None = None) -> bytes:
