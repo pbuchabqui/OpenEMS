@@ -42,7 +42,7 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
 /* ── telemetria: gauges + charts ──────────────────────────────────────── */
 const GAUGES = [
   ["rpm",          "RPM",     v => v],
-  ["map_kpa",      "MAP bar", v => (v / 100).toFixed(2)],
+  ["map_kpa",      "MAP kPa", v => v],
   ["tps_pct",      "TPS %",   v => v],
   ["lambda_x1000", "λ",       v => (v / 1000).toFixed(2)],
   ["pw_ms",        "PW ms",   v => v.toFixed(2)],
@@ -64,13 +64,13 @@ const LEDS = [
 $("#statusLeds").innerHTML = LEDS.map(([k]) =>
   `<span class="led" id="led_${k}">[${k.replace(/_/g,"-")}]</span>`).join("");
 
-/* strip-charts uPlot: janela deslizante de 60 s */
+/* strip-charts uPlot: 60 s sliding window */
 const WINDOW_S = 60, MAX_PTS = 60 * 35;
 const chartDefs = [
-  { title: "RPM",          series: [["rpm",           "#e8a020"]] },
+  { title: "RPM",           series: [["rpm",           "#e8a020"]] },
   { title: "MAP / TPS",    series: [["map_kpa",       "#e8a020"], ["tps_pct",     "#22c55e"]] },
   { title: "λ / STFT",     series: [["lambda_x1000",  "#ef4444"], ["stft_pct",    "#e8a020"]] },
-  { title: "PW / AVANÇO",  series: [["pw_ms",         "#e8a020"], ["advance_deg", "#22c55e"]] },
+  { title: "PW / ADVANCE", series: [["pw_ms",         "#e8a020"], ["advance_deg", "#22c55e"]] },
 ];
 const charts = chartDefs.map(def => {
   const box = document.createElement("div");
@@ -111,7 +111,7 @@ function pushTelemetry(d) {
     $(`#led_${k}`).className = "led" + (on ? (goodWhenOn ? " on-good" : " on-bad") : "");
   }
   $("#diag").textContent =
-    `loop2ms ${d.loop2ms_last_us}µs (máx ${d.loop2ms_max_us}µs) · ` +
+    `loop2ms ${d.loop2ms_last_us}µs (max ${d.loop2ms_max_us}µs) · ` +
     `late ${d.late_events} · drops ${d.sched_drops} · clamps ${d.cal_clamps} · ` +
     `sync_state ${d.sync_state}`;
 }
@@ -126,7 +126,7 @@ function connectWS() {
     $("#conn").textContent = conn ? "[ONLINE]" : "[OFFLINE]";
     if (conn && d.rpm !== undefined) {
       RT = d; pushTelemetry(d); highlightLiveCell();
-      $$(".live-raw").forEach(el => el.textContent = `ao vivo: ${d[el.dataset.src]}`);
+      $$(".live-raw").forEach(el => el.textContent = `live: ${d[el.dataset.src]}`);
     }
   };
   ws.onclose = () => setTimeout(connectWS, 1000);
@@ -150,11 +150,11 @@ async function loadGrid(pane) {
   pane.innerHTML = `
     <div class="grid-toolbar">
       <strong>${meta.name}</strong> <span class="muted">(${meta.unit})</span>
-      <button class="primary" data-act="send">Enviar (RAM)</button>
+      <button class="primary" data-act="send">Send (RAM)</button>
       <button class="danger" data-act="burn">Burn → flash</button>
-      <button data-act="reload">Reler</button>
+      <button data-act="reload">Reload</button>
       <span class="dirty"></span>
-      <span class="muted">eixo X = RPM, eixo Y = MAP (kPa)</span>
+      <span class="muted">X = RPM, Y = MAP (kPa)</span>
     </div>
     <div class="grid-wrap"></div>`;
   pane.dataset.loaded = "1";
@@ -174,7 +174,7 @@ async function loadGrid(pane) {
     let html = `<table class="tune"><tr><th></th>` +
       INFO.axes.rpm.map(r => `<th>${r}</th>`).join("") + "</tr>";
     // eixo Y invertido na exibição: MAP cresce de baixo p/ cima (data-r mantém
-    // o índice real da página — edição/tracing não mudam)
+    // o índice real da page — edição/tracing não mudam)
     for (let row = 15; row >= 0; row--) {
       html += `<tr><th>${INFO.axes.map_kpa[row]}</th>`;
       for (let col = 0; col < 16; col++) {
@@ -226,7 +226,7 @@ async function loadGrid(pane) {
   }
 
   pane.querySelector('[data-act="send"]').onclick = async () => {
-    if (!st.modified.size) return toast("nada a enviar");
+    if (!st.modified.size) return toast("nothing to send");
     const cells = [...st.modified].map(k => {
       const [row, col] = k.split(",").map(Number);
       return { row, col, value: st.values[row][col] };
@@ -237,7 +237,7 @@ async function loadGrid(pane) {
         body: JSON.stringify({ cells }),
       });
       st.modified.clear(); render();
-      toast(`${cells.length} célula(s) enviadas (RAM)`);
+      toast(`${cells.length} cell(s) sent (RAM)`);
     } catch (e) { toast(e.message, true); }
   };
   pane.querySelector('[data-act="burn"]').onclick = async () => {
@@ -333,42 +333,42 @@ function highlightLiveCell() {
 }
 
 /* ── parâmetros ───────────────────────────────────────────────────────── */
-const PARAM_PAGES = { 0: "Configuração do motor", 5: "Correções 1D",
+const PARAM_PAGES = { 0: "Engine Config", 5: "1D Corrections",
                       6: "X-Tau / AE / Crank", 7: "Dwell 2D" };
 
 /* Metadados dos grupos de parâmetros: ícone, rótulo da seção, página(s) */
 const PARAM_GROUPS = [
-  { id: "pg-motor",    icon: "⚙",  label: "MOTOR",       pages: [0] },
-  { id: "pg-inject",   icon: "⛽", label: "INJEÇÃO",      pages: [5, 6] },
-  { id: "pg-ignition", icon: "⚡", label: "IGNIÇÃO",      pages: [7] },
-  { id: "pg-canrx",    icon: "⇄",  label: "CAN RX",       pages: [], canRx: true },
+  { id: "pg-motor",    icon: "⚙",  label: "ENGINE",      pages: [0] },
+  { id: "pg-inject",   icon: "⛽", label: "FUELING",     pages: [5, 6] },
+  { id: "pg-ignition", icon: "⚡", label: "IGNITION",    pages: [7] },
+  { id: "pg-canrx",    icon: "⇄",  label: "CAN RX",      pages: [], canRx: true },
 ];
 
-/* Subgrupos de campos escalares dentro da página 0 */
+/* Page 0 scalar sub-groups */
 const PAGE_0_SECTIONS = [
   {
-    label: "MOTOR",
+    label: "ENGINE",
     fields: ["ivc_abdc_deg","displacement_cc","trigger_tooth0_engine_deg",
              "default_soi_lead_deg","config_magic"],
   },
   {
-    label: "INJEÇÃO",
+    label: "FUELING",
     fields: ["injector_flow_cc_min","stoich_afr_x100","map_ref_bar_x100"],
   },
   {
-    label: "SENSORES APP",
+    label: "APP SENSORS",
     fields: ["app1_raw_min","app1_raw_max","app2_raw_min","app2_raw_max",
              "app_max_delta_pct_x10"],
   },
   {
-    label: "BORBOLETA ETB",
+    label: "THROTTLE BODY (ETB)",
     fields: ["etb_tps1_raw_min","etb_tps1_raw_max","etb_tps2_raw_min","etb_tps2_raw_max",
              "etb_max_delta_pct_x10","etb_max_open_pct_x10_limp",
              "etb_max_rate_pct_per_s","etb_idle_open_pct_x10","etb_cal_valid",
              "etb_harness_present","etb_kp_x10","etb_ki_x10","etb_kd_x10"],
   },
   {
-    label: "TRIM CILINDROS",
+    label: "CYLINDER TRIM",
     fields: ["cyl_fuel_trim_pct_0","cyl_fuel_trim_pct_1","cyl_fuel_trim_pct_2","cyl_fuel_trim_pct_3",
              "cyl_ign_trim_deg_0","cyl_ign_trim_deg_1","cyl_ign_trim_deg_2","cyl_ign_trim_deg_3"],
   },
@@ -377,11 +377,11 @@ const PAGE_0_SECTIONS = [
     fields: ["cmp_window_open_tooth","cmp_window_close_tooth"],
   },
   {
-    label: "MARCHA LENTA",
+    label: "IDLE",
     fields: ["etb_idle_rpm_target","etb_idle_min_opening_x10","etb_idle_max_opening_x10"],
   },
   {
-    label: "DIRIGIBILIDADE",
+    label: "DRIVABILITY",
     fields: ["antijerk_tpsdot_threshold_x10","antijerk_retard_deg","antijerk_decay_cycles",
              "rev_limit_rpm_x10","rev_limit_soft_window_x10","rev_limit_spark_window_x10",
              "rev_limit_max_retard_deg","ltft_add_pw_threshold_us",
@@ -390,65 +390,65 @@ const PAGE_0_SECTIONS = [
   },
 ];
 
-/* rótulos amigáveis (página 0) e campos read-only */
+/* friendly labels (page 0) and read-only fields */
 const FIELD_LABELS = {
-  ivc_abdc_deg:              "Fecho admissão IVC (° ABDC)",
-  displacement_cc:           "Cilindrada (cc)",
-  injector_flow_cc_min:      "Vazão do bico (cc/min)",
-  stoich_afr_x100:           "AFR estequiométrico",
-  map_ref_bar_x100:          "MAP de referência (bar)",
-  trigger_tooth0_engine_deg: "Offset trigger dente 0 (°, 0-719)",
-  default_soi_lead_deg:      "Avanço SOI padrão (°)",
-  config_magic:              "Magic (0x4543 = config válida)",
-  app1_raw_min:  "APP1 pedal solto (raw)",   app1_raw_max:  "APP1 pedal fundo (raw)",
-  app2_raw_min:  "APP2 pedal solto (raw)",   app2_raw_max:  "APP2 pedal fundo (raw)",
-  etb_tps1_raw_min: "ETB TPS1 fechada (raw)", etb_tps1_raw_max: "ETB TPS1 aberta (raw)",
-  etb_tps2_raw_min: "ETB TPS2 fechada (raw)", etb_tps2_raw_max: "ETB TPS2 aberta (raw)",
-  app_max_delta_pct_x10: "Plausibilidade APP Δmáx (%)",
-  etb_max_delta_pct_x10: "Plausibilidade ETB Δmáx (%)",
-  etb_max_open_pct_x10_limp: "ETB abertura máx limp (%)",
-  etb_max_rate_pct_per_s: "ETB taxa máx (%/s)",
-  etb_idle_open_pct_x10: "ETB abertura idle (%)",
-  etb_cal_valid: "Calibração ETB válida (0/1)",
-  etb_harness_present: "Chicote ETB presente (0/1)",
+  ivc_abdc_deg:              "IVC closing (° ABDC)",
+  displacement_cc:           "Displacement (cc)",
+  injector_flow_cc_min:      "Injector flow (cc/min)",
+  stoich_afr_x100:           "Stoich AFR",
+  map_ref_bar_x100:          "Reference MAP (bar)",
+  trigger_tooth0_engine_deg: "Trigger tooth 0 offset (°, 0-719)",
+  default_soi_lead_deg:      "Default SOI advance (°)",
+  config_magic:              "Magic (0x4543 = valid config)",
+  app1_raw_min:  "APP1 released (raw)",   app1_raw_max:  "APP1 floored (raw)",
+  app2_raw_min:  "APP2 released (raw)",   app2_raw_max:  "APP2 floored (raw)",
+  etb_tps1_raw_min: "ETB TPS1 closed (raw)", etb_tps1_raw_max: "ETB TPS1 open (raw)",
+  etb_tps2_raw_min: "ETB TPS2 closed (raw)", etb_tps2_raw_max: "ETB TPS2 open (raw)",
+  app_max_delta_pct_x10: "APP plausibility Δmax (%)",
+  etb_max_delta_pct_x10: "ETB plausibility Δmax (%)",
+  etb_max_open_pct_x10_limp: "ETB max opening limp (%)",
+  etb_max_rate_pct_per_s: "ETB max rate (%/s)",
+  etb_idle_open_pct_x10: "ETB idle opening (%)",
+  etb_cal_valid: "ETB cal valid (0/1)",
+  etb_harness_present: "ETB harness present (0/1)",
   etb_kp_x10: "ETB PID Kp", etb_ki_x10: "ETB PID Ki", etb_kd_x10: "ETB PID Kd",
-  cyl_fuel_trim_pct_0: "Trim comb. cil.1 (%)", cyl_fuel_trim_pct_1: "Trim comb. cil.2 (%)",
-  cyl_fuel_trim_pct_2: "Trim comb. cil.3 (%)", cyl_fuel_trim_pct_3: "Trim comb. cil.4 (%)",
-  cyl_ign_trim_deg_0:  "Trim ign. cil.1 (°)",  cyl_ign_trim_deg_1:  "Trim ign. cil.2 (°)",
-  cyl_ign_trim_deg_2:  "Trim ign. cil.3 (°)",  cyl_ign_trim_deg_3:  "Trim ign. cil.4 (°)",
-  cmp_window_open_tooth:  "CMP janela abre (dente)",
-  cmp_window_close_tooth: "CMP janela fecha (dente; 0/0=desabilitado)",
+  cyl_fuel_trim_pct_0: "Fuel trim cyl.1 (%)", cyl_fuel_trim_pct_1: "Fuel trim cyl.2 (%)",
+  cyl_fuel_trim_pct_2: "Fuel trim cyl.3 (%)", cyl_fuel_trim_pct_3: "Fuel trim cyl.4 (%)",
+  cyl_ign_trim_deg_0:  "Ign trim cyl.1 (°)",  cyl_ign_trim_deg_1:  "Ign trim cyl.2 (°)",
+  cyl_ign_trim_deg_2:  "Ign trim cyl.3 (°)",  cyl_ign_trim_deg_3:  "Ign trim cyl.4 (°)",
+  cmp_window_open_tooth:  "CMP window open (tooth)",
+  cmp_window_close_tooth: "CMP window close (tooth; 0/0=disabled)",
   // Page 5 scalars
   ae_tpsdot_threshold_x10: "AE TPSdot threshold (%/s)",
-  ae_taper_cycles:         "AE taper (ciclos)",
-  ae_max_pw_us:            "AE PW máximo (ms)",
-  idle_spark_tps_max_x10:              "Idle spark TPS máx. (%)",
-  idle_spark_map_max_bar_x100:         "Idle spark MAP máx. (bar)",
-  idle_spark_rpm_min_x10:              "Idle spark RPM mín.",
-  idle_spark_window_above_target_x10:  "Idle spark janela acima target (RPM)",
+  ae_taper_cycles:         "AE taper (cycles)",
+  ae_max_pw_us:            "AE max PW (ms)",
+  idle_spark_tps_max_x10:              "Idle spark TPS max (%)",
+  idle_spark_map_max_bar_x100:         "Idle spark MAP max (bar)",
+  idle_spark_rpm_min_x10:              "Idle spark RPM min",
+  idle_spark_window_above_target_x10:  "Idle spark window above target (RPM)",
   idle_spark_deadband_rpm_x10:         "Idle spark deadband (RPM)",
   idle_spark_rpm_per_deg_x10:          "Idle spark RPM/°",
-  idle_spark_retard_limit_deg:         "Idle spark retardo máx. (°)",
-  idle_spark_advance_limit_deg:        "Idle spark avanço máx. (°)",
+  idle_spark_retard_limit_deg:         "Idle spark max retard (°)",
+  idle_spark_advance_limit_deg:        "Idle spark max advance (°)",
   // Marcha lenta ETB + IAC
-  etb_idle_rpm_target:      "RPM alvo marcha lenta",
-  etb_idle_min_opening_x10: "Abertura mínima idle ETB (%)",
-  etb_idle_max_opening_x10: "Abertura máxima idle ETB (%)",
-  iac_clt_axis_x10:         "Eixo CLT — RPM alvo marcha lenta (°C, 8pts)",
-  iac_idle_target_rpm_x10:  "RPM alvo marcha lenta vs CLT (8pts)",
+  etb_idle_rpm_target:      "Idle target RPM",
+  etb_idle_min_opening_x10: "ETB idle min opening (%)",
+  etb_idle_max_opening_x10: "ETB idle max opening (%)",
+  iac_clt_axis_x10:         "Eixo CLT — Idle target RPM (°C, 8pts)",
+  iac_idle_target_rpm_x10:  "Idle target RPM vs CLT (8pts)",
   // Dirigibilidade
   antijerk_tpsdot_threshold_x10: "Anti-jerk TPSdot threshold (%/s)",
-  antijerk_retard_deg:            "Anti-jerk retardo ignição (°)",
-  antijerk_decay_cycles:          "Anti-jerk decay (ciclos)",
-  rev_limit_rpm_x10:              "Limitador RPM",
-  rev_limit_soft_window_x10:      "Rev limit janela corte injeção (RPM)",
-  rev_limit_spark_window_x10:     "Rev limit janela retardo ign. (RPM)",
-  rev_limit_max_retard_deg:       "Rev limit retardo máx. ignição (°)",
-  ltft_add_pw_threshold_us:       "LTFT threshold PW (ms)",
-  decel_cut_tps_threshold_x10:    "Decel cut TPS máx. (%)",
-  decel_cut_entry_rpm_x10:        "Decel cut RPM entrada",
-  decel_cut_exit_rpm_x10:         "Decel cut RPM saída/histerese",
-  decel_cut_min_clt_x10:          "Decel cut CLT mín. (°C)",
+  antijerk_retard_deg:            "Anti-jerk ignition retard (°)",
+  antijerk_decay_cycles:          "Anti-jerk decay (cycles)",
+  rev_limit_rpm_x10:              "Rev limiter",
+  rev_limit_soft_window_x10:      "Rev limit injection cut window (RPM)",
+  rev_limit_spark_window_x10:     "Rev limit spark retard window (RPM)",
+  rev_limit_max_retard_deg:       "Rev limit max spark retard (°)",
+  ltft_add_pw_threshold_us:       "LTFT PW threshold (ms)",
+  decel_cut_tps_threshold_x10:    "Decel cut TPS max (%)",
+  decel_cut_entry_rpm_x10:        "Decel cut entry RPM",
+  decel_cut_exit_rpm_x10:         "Decel cut exit RPM",
+  decel_cut_min_clt_x10:          "Decel cut min CLT (°C)",
 };
 
 /* calibração assistida: campo → fonte do raw ao vivo na telemetria */
@@ -465,7 +465,7 @@ const READONLY_FIELDS = new Set(["config_magic"]);
 const PAGE_LAYOUT = {
   0: {
     curves: [
-      { title: "RPM alvo marcha lenta vs CLT", axis: "iac_clt_axis_x10", axisLabel: "CLT (°C)",
+      { title: "Idle target RPM vs CLT", axis: "iac_clt_axis_x10", axisLabel: "CLT (°C)",
         rows: [["iac_idle_target_rpm_x10", "RPM alvo"]] },
     ],
     tables2d: [],
@@ -473,20 +473,20 @@ const PAGE_LAYOUT = {
   },
   5: {
     curves: [
-      { title: "Correção CLT",        axis: "clt_corr_axis_x10",     axisLabel: "CLT (°C)",   rows: [["clt_corr_x256", "fator ×256"]] },
-      { title: "Correção IAT",        axis: "iat_corr_axis_x10",     axisLabel: "IAT (°C)",   rows: [["iat_corr_x256", "fator ×256"]] },
-      { title: "Warmup",              axis: "warmup_corr_axis_x10",  axisLabel: "CLT (°C)",   rows: [["warmup_corr_x256", "fator ×256"]] },
-      { title: "Injetor vs VBat",     axis: "vbatt_corr_axis_mv",    axisLabel: "VBat (V)",     rows: [["injector_dead_time_us", "dead time (ms)"]] },
-      { title: "AE vs CLT",           axis: "ae_clt_corr_axis_x10",  axisLabel: "CLT (°C)",   rows: [["ae_clt_sens", "sensibilidade"]] },
+      { title: "CLT correction",        axis: "clt_corr_axis_x10",     axisLabel: "CLT (°C)",   rows: [["clt_corr_x256", "factor ×256"]] },
+      { title: "IAT correction",        axis: "iat_corr_axis_x10",     axisLabel: "IAT (°C)",   rows: [["iat_corr_x256", "factor ×256"]] },
+      { title: "Warmup",              axis: "warmup_corr_axis_x10",  axisLabel: "CLT (°C)",   rows: [["warmup_corr_x256", "factor ×256"]] },
+      { title: "Injector dead time vs VBat",     axis: "vbatt_corr_axis_mv",    axisLabel: "VBat (V)",     rows: [["injector_dead_time_us", "dead time (ms)"]] },
+      { title: "AE vs CLT",           axis: "ae_clt_corr_axis_x10",  axisLabel: "CLT (°C)",   rows: [["ae_clt_sens", "sensitivity"]] },
       { title: "Dwell vs VBat",       axis: "dwell_vbatt_axis_mv",   axisLabel: "VBat (V)",     rows: [["dwell_ms_x10_table", "dwell (ms)"]] },
     ],
     tables2d: [
-      { title: "Atraso lambda (ms)", x: "lambda_delay_rpm_axis_x10", xLabel: "RPM",
+      { title: "Lambda delay (ms)", x: "lambda_delay_rpm_axis_x10", xLabel: "RPM",
         y: "lambda_delay_load_axis_bar_x100", yLabel: "MAP (bar)",
         values: "lambda_delay_ms_table" },
     ],
     scalarSections: [
-      { label: "ENRIQUECIMENTO ACELERAÇÃO (AE)",
+      { label: "ACCEL ENRICHMENT (AE)",
         fields: ["ae_tpsdot_threshold_x10","ae_taper_cycles","ae_max_pw_us"] },
       { label: "IDLE SPARK",
         fields: ["idle_spark_tps_max_x10","idle_spark_map_max_bar_x100",
@@ -506,8 +506,8 @@ const PAGE_LAYOUT = {
   },
   7: {
     curves: [
-      { title: "Fator de dwell vs RPM", axis: "dwell_rpm_axis_rpm", axisLabel: "RPM",
-        rows: [["dwell_rpm_factor_q8", "fator (Q8, 256=1.0×)"]] },
+      { title: "Dwell factor vs RPM", axis: "dwell_rpm_axis_rpm", axisLabel: "RPM",
+        rows: [["dwell_rpm_factor_q8", "factor (Q8, 256=1.0×)"]] },
     ],
     tables2d: [],
   },
@@ -515,7 +515,7 @@ const PAGE_LAYOUT = {
 
 /* ── Boost map editor (page 9) ───────────────────────────────────────── */
 const BOOST_RPM_AXIS    = [1500, 2000, 2500, 3000, 4000, 5000, 6500, 8000];
-const BOOST_GEAR_LABELS = ["NEUTRO", "1ª", "2ª", "3ª", "4ª", "5ª", "6ª"];
+const BOOST_GEAR_LABELS = ["NEUTRAL", "1ª", "2ª", "3ª", "4ª", "5ª", "6ª"];
 const BOOST_DEFAULTS = [
   [1000, 1020, 1050, 1080, 1100, 1120, 1150, 1180],
   [1000, 1050, 1100, 1150, 1200, 1250, 1280, 1300],
@@ -535,9 +535,9 @@ async function loadBoostMap() {
     <div class="pm-header">
       <strong>BOOST TARGET</strong>
       <div class="pm-tabs">${BOOST_GEAR_LABELS.map((l,i)=>`<button class="pm-tab${i===0?" active":""}" data-gear="${i}">${l}</button>`).join("")}</div>
-      <button class="primary" id="boostSend">Enviar (RAM)</button>
+      <button class="primary" id="boostSend">Send (RAM)</button>
       <button class="danger"  id="boostBurn">Burn → flash</button>
-      <button id="boostReload">Reler</button>
+      <button id="boostReload">Reload</button>
       <span class="dirty" id="boostDirty"></span>
     </div>
     <canvas id="boostCanvas" width="760" height="500"></canvas>`;
@@ -558,7 +558,7 @@ async function loadBoostMap() {
       yLabel: "Boost (bar×1000)",
       yMin: 1000, yMax: 3000,
       mono: false,
-      onchange: () => { $("#boostDirty").textContent = "não enviado"; },
+      onchange: () => { $("#boostDirty").textContent = "unsent"; },
     });
   }
 
@@ -572,7 +572,7 @@ async function loadBoostMap() {
     try {
       const d = await api("/api/pages/9");
       rows = d.boost_map;
-    } catch { toast("ECU offline — mostrando defaults", false); }
+    } catch { toast("ECU offline — showing defaults", false); }
     $("#boostDirty").textContent = "";
     curve.draw();
   }
@@ -584,7 +584,7 @@ async function loadBoostMap() {
     try {
       await api("/api/pages/9/cells", "PUT", { boost_map: rows });
       $("#boostDirty").textContent = "";
-      toast("boost map enviado (RAM)");
+      toast("boost map sent (RAM)");
     } catch (e) { toast(e.message, true); }
   };
   $("#boostBurn", root).onclick = async () => {
@@ -600,26 +600,25 @@ const CAN_RX_FIELDS = [
   { key: "id",          label: "Frame ID (hex)",   hex: true  },
   { key: "byte_lo",     label: "Byte LSB (0-7)",   hex: false },
   { key: "byte_hi",     label: "Byte MSB (255=8bit)",hex:false },
-  { key: "shift_right", label: "Shift direito",    hex: false },
-  { key: "mask",        label: "Máscara",          hex: true  },
-  { key: "offset",      label: "Offset aditivo",   hex: false },
+  { key: "shift_right", label: "Right shift",    hex: false },
+  { key: "mask",        label: "Mask",          hex: true  },
+  { key: "offset",      label: "Additive offset",   hex: false },
   { key: "timeout_ms",  label: "Timeout (ms)",     hex: false },
 ];
 
 async function buildCanRxUI(container) {
   const div = document.createElement("div");
   div.className = "param-group";
-  div.innerHTML = `<div class="muted" style="font-size:10px;margin-bottom:8px">
-    Configuração RAM-only — ativa até o próximo reset da ECU.</div>`;
+  div.innerHTML = "";
   container.appendChild(div);
 
   let cfg = {};
   try { cfg = (await api("/api/can_rx_map")).signals; }
-  catch { toast("CAN RX map: servidor offline", true); }
+  catch { toast("CAN RX map: server offline", true); }
 
   for (const sig of ["GEAR", "SPEED_KMH"]) {
     const sec = document.createElement("div");
-    const sigLabel = sig === "GEAR" ? "MARCHA" : "VELOCIDADE (km/h)";
+    const sigLabel = sig === "GEAR" ? "GEAR" : "SPEED (km/h)";
     sec.innerHTML = `<div class="pg-section-header">${sigLabel}</div>`;
     div.appendChild(sec);
 
@@ -635,28 +634,55 @@ async function buildCanRxUI(container) {
     }
   }
 
-  const btnRow = document.createElement("div");
-  btnRow.className = "param-row pg-btns";
-  btnRow.innerHTML = `<button class="primary" id="canRxSend">Enviar (RAM)</button>`;
-  div.appendChild(btnRow);
+  // ── WBO2 CAN ID ────────────────────────────────────────────────────
+  const wboSec = document.createElement("div");
+  wboSec.innerHTML = `<div class="pg-section-header">WBO2 (WIDEBAND LAMBDA)</div>`;
+  div.appendChild(wboSec);
 
-  div.querySelector("#canRxSend").onclick = async () => {
+  let wboId = 0x180;
+  try { wboId = (await api("/api/wbo2_can_id")).id; } catch { /* offline */ }
+
+  const wboRow = document.createElement("div");
+  wboRow.className = "param-row";
+  wboRow.innerHTML = `<label>Frame ID (hex)</label>
+    <input id="wboIdInput" value="0x${wboId.toString(16).toUpperCase()}" style="width:80px">`;
+  wboSec.appendChild(wboRow);
+
+  // ── botões únicos que enviam tudo ──────────────────────────────────
+  async function sendAll() {
     const inputs = div.querySelectorAll("input[data-sig]");
     const bySignal = {};
     for (const inp of inputs) {
       const { sig, key, hex } = inp.dataset;
       if (!bySignal[sig]) bySignal[sig] = {};
-      const raw = inp.value.trim();
-      bySignal[sig][key] = hex === "true" ? parseInt(raw, 16) : parseInt(raw, 10);
+      bySignal[sig][key] = hex === "true"
+        ? parseInt(inp.value.trim(), 16)
+        : parseInt(inp.value.trim(), 10);
     }
+    for (const [sig, fields] of Object.entries(bySignal))
+      await api(`/api/can_rx_map/${sig}`, "PUT", fields);
+    const id = parseInt($("#wboIdInput").value.trim(), 16);
+    if (!isNaN(id) && id >= 1 && id <= 0x7FF)
+      await api("/api/wbo2_can_id", "PUT", { id });
+  }
+
+  const btnRow = document.createElement("div");
+  btnRow.className = "param-row pg-btns";
+  btnRow.innerHTML = `
+    <button class="primary" id="canRxSend">Send (RAM)</button>
+    <button class="danger"  id="canRxBurn">Burn → flash</button>`;
+  div.appendChild(btnRow);
+
+  div.querySelector("#canRxSend").onclick = async () => {
+    try { await sendAll(); toast("CAN RX sent (RAM)"); }
+    catch (e) { toast(e.message, true); }
+  };
+
+  div.querySelector("#canRxBurn").onclick = async () => {
     try {
-      for (const [sig, fields] of Object.entries(bySignal)) {
-        await api(`/api/can_rx_map/${sig}`, {
-          method: "PUT", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(fields),
-        });
-      }
-      toast("CAN RX map enviado");
+      await sendAll();
+      await api("/api/pages/0/burn", "POST", {});
+      toast("CAN RX written to flash");
     } catch (e) { toast(e.message, true); }
   };
 }
@@ -689,11 +715,10 @@ async function loadParams() {
             div.className = "param-group";
             div.innerHTML = `
               <div class="pg-page-label">PG${page} — ${PARAM_PAGES[page]}</div>
-              <div class="rows muted">carregando…</div>
+              <div class="rows muted">loading…</div>
               <div class="param-row pg-btns">
-                <button class="primary" data-act="send">Enviar (RAM)</button>
+                <button class="primary" data-act="send">Send (RAM)</button>
                 <button class="danger"  data-act="burn">Burn → flash</button>
-                <button data-act="reload">Reler</button>
               </div>`;
             details.appendChild(div);
             bindParamGroup(div, page);
@@ -753,7 +778,7 @@ async function bindParamGroup(div, page) {
         "</table>";
     }
 
-    // escalares: página 0 e páginas com scalarSections usam subgrupos; demais exibem plano
+    // escalares: page 0 e páginas com scalarSections usam subgrupos; demais exibem plano
     const remaining = Object.entries(fields).filter(([n]) => !used.has(n));
     const scalarSections = layout.scalarSections || (page === 0 ? PAGE_0_SECTIONS : []);
     if (scalarSections.length && remaining.length) {
@@ -769,7 +794,7 @@ async function bindParamGroup(div, page) {
           const vals = Array.isArray(v) ? v : [v];
           const cap = CAL_CAPTURE[name]
             ? `<button class="cap" data-cap="${name}" data-src="${CAL_CAPTURE[name]}"
-                       title="capturar valor ao vivo">◉ capturar</button>
+                       title="capture live value">◉ capture</button>
                <span class="muted live-raw" data-src="${CAL_CAPTURE[name]}"></span>`
             : "";
           html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
@@ -788,7 +813,7 @@ async function bindParamGroup(div, page) {
         const vals = Array.isArray(v) ? v : [v];
         const cap = CAL_CAPTURE[name]
           ? `<button class="cap" data-cap="${name}" data-src="${CAL_CAPTURE[name]}"
-                     title="capturar valor ao vivo">◉ capturar</button>
+                     title="capture live value">◉ capture</button>
              <span class="muted live-raw" data-src="${CAL_CAPTURE[name]}"></span>`
           : "";
         html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
@@ -797,7 +822,7 @@ async function bindParamGroup(div, page) {
     }
     rowsEl.innerHTML = html;
     $$("button.cap", rowsEl).forEach(btn => btn.onclick = () => {
-      if (!RT) return toast("sem telemetria", true);
+      if (!RT) return toast("no telemetry", true);
       const v = RT[btn.dataset.src];
       const input = rowsEl.querySelector(`input[data-f="${btn.dataset.cap}"]`);
       input.value = v;
@@ -815,7 +840,7 @@ async function bindParamGroup(div, page) {
   }
 
   div.querySelector('[data-act="send"]').onclick = async () => {
-    if (!modified.size) return toast("nada a enviar");
+    if (!modified.size) return toast("nothing to send");
     const body = { fields: {} };
     modified.forEach(f => body.fields[f] = fields[f]);
     try {
@@ -824,7 +849,7 @@ async function bindParamGroup(div, page) {
         body: JSON.stringify(body),
       });
       modified.clear(); render();
-      toast(`página ${page}: campos enviados (RAM)`);
+      toast(`page ${page}: fields sent (RAM)`);
     } catch (e) { toast(e.message, true); }
   };
   div.querySelector('[data-act="burn"]').onclick = async () => {
@@ -842,15 +867,15 @@ $("#logBtn").onclick = async () => {
     if (!logging) {
       const r = await api("/api/log/start", { method: "POST" });
       logging = true;
-      $("#logBtn").textContent = "■ Parar log";
+      $("#logBtn").textContent = "■ Stop log";
       $("#logBtn").classList.add("rec");
-      toast("gravando: " + r.path);
+      toast("recording: " + r.path);
     } else {
       const r = await api("/api/log/stop", { method: "POST" });
       logging = false;
-      $("#logBtn").textContent = "● Gravar log";
+      $("#logBtn").textContent = "● Record log";
       $("#logBtn").classList.remove("rec");
-      toast("log salvo: " + r.path);
+      toast("log saved: " + r.path);
       window.open("/api/log/download");
     }
   } catch (e) { toast(e.message, true); }
@@ -1057,7 +1082,7 @@ function buildPedalMapUI(data) {
   root.querySelector("#pmSave").onclick = async () => {
     try {
       await api("/api/pages/8/cells", "PUT", {pedal_maps: pedalMaps});
-      toast("Pedal Map salvo na ECU ✓");
+      toast("Pedal Map saved to ECU ✓");
     } catch(e) { toast(e.message, true); }
   };
 
@@ -1080,7 +1105,7 @@ async function loadPedalMap() {
     const data = await api("/api/pages/8");
     buildPedalMapUI(data);
   } catch(e) {
-    // ECU desconectada — mostra UI com defaults para edição offline
+    // ECU offline — show UI with defaults for offline editing
     buildPedalMapUI({
       pedal_maps: [
         [0,8,15,22,30,40,52,65,80,100],
@@ -1091,7 +1116,7 @@ async function loadPedalMap() {
       modes: PEDAL_MODES,
       axis: PEDAL_AXIS,
     });
-    toast("ECU desconectada — exibindo defaults", false);
+    toast("ECU disconnected — showing defaults", false);
   }
 }
 
