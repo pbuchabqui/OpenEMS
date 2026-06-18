@@ -234,8 +234,8 @@ inline void update_realtime_page() noexcept {
     rt.reserved[5] = static_cast<uint8_t>(g_rt_ltft_pct);
     rt.reserved[6] = 0u;
     rt.reserved[7] = 0u;
-    rt.reserved[8] = 0u;                 // queue_depth_peak: not yet tracked
-    rt.reserved[9] = 0u;                 // queue_depth_last_cycle_peak: not yet tracked
+    rt.reserved[8] = ems::hal::tle8888_fault_bitmap();
+    rt.reserved[9] = 0u;
     write_u32_le(&rt.reserved[10], g_rt_sched_cycle_schedule_drop_count);
     write_u32_le(&rt.reserved[14], g_rt_sched_calibration_clamp_count);
     write_u32_le(&rt.reserved[18], g_rt_seed_loaded_count);

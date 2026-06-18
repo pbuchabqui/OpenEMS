@@ -113,10 +113,12 @@ function pushTelemetry(d) {
     const on = d.status[k];
     $(`#led_${k}`).className = "led" + (on ? (goodWhenOn ? " on-good" : " on-bad") : "");
   }
+  const tleBm = d.tle8888_fault_bm || 0;
+  const tleStr = tleBm ? ` · TLE8888 fault 0x${tleBm.toString(16).toUpperCase()}` : "";
   $("#diag").textContent =
     `loop2ms ${d.loop2ms_last_us}µs (max ${d.loop2ms_max_us}µs) · ` +
     `late ${d.late_events} · drops ${d.sched_drops} · clamps ${d.cal_clamps} · ` +
-    `sync_state ${d.sync_state}`;
+    `sync_state ${d.sync_state}${tleStr}`;
 }
 
 /* ── WebSocket ────────────────────────────────────────────────────────── */

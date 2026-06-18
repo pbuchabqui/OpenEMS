@@ -81,6 +81,7 @@ class RealtimeData:
     an4_raw: int      # ETB TPS2
     lambda_target_x1000: int
     ltft_pct: int
+    tle8888_fault_bm: int
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -123,6 +124,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         an4_raw=struct.unpack_from("<H", r, 50)[0],
         lambda_target_x1000=r[4] * 4,
         ltft_pct=struct.unpack_from("<b", r, 5)[0],
+        tle8888_fault_bm=r[8],
     )
 
 
