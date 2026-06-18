@@ -88,13 +88,17 @@ void calculate_ideal_xtau(int16_t avg_error_x1000,
         // Ajuste de X: ±25% baseado em erro
         const int16_t x_correction_q8 = (avg_error_x1000 * 64) / 1000;  // 64 Q8 = 0.25
         int32_t new_x_q8 = static_cast<int32_t>(out_x_q8) + x_correction_q8;
-        new_x_q8 = ems::engine::clamp_i16(static_cast<int16_t>(new_x_q8), 64, 192);  // 25%-75%
+        new_x_q8 = ems::engine::clamp_i16(static_cast<int16_t>(new_x_q8),
+            static_cast<int16_t>(ems::engine::xtau_x_min_q8),
+            static_cast<int16_t>(ems::engine::xtau_x_max_q8));
         out_x_q8 = static_cast<uint16_t>(new_x_q8);
         
         // Ajuste de τ: ∓20% baseado em erro (direção oposta)
         const int16_t tau_correction = (avg_error_x1000 * 51) / 1000;  // 51 ≈ 20% de 256
         int32_t new_tau = static_cast<int32_t>(out_tau) - tau_correction;
-        new_tau = ems::engine::clamp_i16(static_cast<int16_t>(new_tau), 10, 255);
+        new_tau = ems::engine::clamp_i16(static_cast<int16_t>(new_tau),
+            static_cast<int16_t>(ems::engine::xtau_tau_min),
+            static_cast<int16_t>(ems::engine::xtau_tau_max));
         out_tau = static_cast<uint16_t>(new_tau);
     }
 }

@@ -221,6 +221,11 @@ uint16_t stft_kp_x100       = 3u;    // 0.03
 uint16_t stft_ki_x1000      = 5u;    // 0.005
 uint16_t stft_clamp_pct_x10 = 250u;  // 25.0%
 
+uint16_t xtau_x_min_q8  = 64u;   // 0.25
+uint16_t xtau_x_max_q8  = 192u;  // 0.75
+uint16_t xtau_tau_min   = 10u;
+uint16_t xtau_tau_max   = 255u;
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept {
     if (page == nullptr || len < 36u) {
         return;

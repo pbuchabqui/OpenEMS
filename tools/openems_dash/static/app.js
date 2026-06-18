@@ -391,7 +391,9 @@ const PAGE_0_SECTIONS = [
   },
   {
     label: "CLOSED-LOOP (STFT/LTFT)",
-    fields: ["stft_kp_x100","stft_ki_x1000","stft_clamp_pct_x10","ltft_add_pw_threshold_us"],
+    fields: ["stft_kp_x100","stft_ki_x1000","stft_clamp_pct_x10","ltft_add_pw_threshold_us",
+             "xtau_x_min_q8","xtau_x_max_q8","xtau_tau_min","xtau_tau_max"],
+    actions: [{ label: "Reset LTFT", cls: "danger", endpoint: "/api/ltft/reset", confirm: "Zero ALL learned fuel trims (LTFT)?" }],
   },
   {
     label: "DRIVABILITY",
@@ -453,6 +455,10 @@ const FIELD_LABELS = {
   stft_kp_x100:             "STFT Kp (×100)",
   stft_ki_x1000:            "STFT Ki (×1000)",
   stft_clamp_pct_x10:       "STFT clamp ±(%)",
+  xtau_x_min_q8:            "X-τ X min (Q8)",
+  xtau_x_max_q8:            "X-τ X max (Q8)",
+  xtau_tau_min:              "X-τ τ min (cycles)",
+  xtau_tau_max:              "X-τ τ max (cycles)",
   // Dirigibilidade
   antijerk_tpsdot_threshold_x10: "Anti-jerk TPSdot threshold (%/s)",
   antijerk_retard_deg:            "Anti-jerk ignition retard (°)",
@@ -829,6 +835,12 @@ async function bindParamGroup(div, page) {
             : "";
           html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
             vals.map((x, i) => inp(name, i, x)).join("") + cap + "</div>";
+        }
+        if (sec.actions) {
+          for (const act of sec.actions) {
+            html += `<div class="param-row"><button class="${act.cls || 'primary'}"
+              onclick="if(confirm('${act.confirm || 'Are you sure?'}'))fetch('${act.endpoint}',{method:'POST'}).then(r=>r.json()).then(()=>toast('${act.label} OK')).catch(e=>toast(e.message,true))">${act.label}</button></div>`;
+          }
         }
       }
       // qualquer campo não coberto pelos subgrupos

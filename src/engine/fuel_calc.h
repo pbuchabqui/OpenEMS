@@ -112,6 +112,7 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  uint32_t net_pw_us) noexcept;
 
 int16_t fuel_get_stft_pct_x10() noexcept;
+void fuel_reset_ltft() noexcept;
 int16_t fuel_get_ltft_at(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 int16_t fuel_get_ltft_pct_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 // LTFT aditivo: retorna offset em µs (negativo = redução de PW)

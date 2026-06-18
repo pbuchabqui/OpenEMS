@@ -260,6 +260,18 @@ def api_wbo2_can_id_set(body: dict):
     return {"ok": True, "id": can_id}
 
 
+@app.post("/api/ltft/reset")
+def api_ltft_reset():
+    size = proto.PAGE_SIZES[10]
+    zeros = b"\x00" * size
+    def do_reset(l):
+        l.write_page_ram(10, 0, zeros[:256])
+        l.write_page_ram(10, 256, zeros[256:])
+        l.burn_page(10)
+    worker.submit(do_reset)
+    return {"ok": True}
+
+
 @app.get("/api/dirty")
 def api_dirty():
     return {"mask": worker.submit(lambda l: l.dirty_mask())}

@@ -495,6 +495,23 @@ int32_t calc_ae_pw_us(uint16_t tps_now_x10,
 }
 
 
+void fuel_reset_ltft() noexcept {
+    for (uint8_t y = 0u; y < kTableAxisSize; ++y) {
+        for (uint8_t x = 0u; x < kTableAxisSize; ++x) {
+            g_ltft_pct_x10[y][x] = 0;
+            ems::hal::nvm_write_ltft(x, y, 0);
+        }
+    }
+    for (uint8_t y = 0u; y < 8u; ++y) {
+        for (uint8_t x = 0u; x < 8u; ++x) {
+            g_ltft_add_us[y][x] = 0;
+            ems::hal::nvm_write_ltft_add(x, y, 0);
+        }
+    }
+    g_stft_pct_x10 = 0;
+    g_stft_integrator_x10 = 0;
+}
+
 void fuel_reset_adaptives() noexcept {
     g_stft_pct_x10 = 0;
     g_stft_integrator_x10 = 0;

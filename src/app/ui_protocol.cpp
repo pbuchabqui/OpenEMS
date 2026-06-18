@@ -322,6 +322,11 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 140, &ems::engine::stft_kp_x100,       2u);
         std::memcpy(g_page0 + 142, &ems::engine::stft_ki_x1000,      2u);
         std::memcpy(g_page0 + 144, &ems::engine::stft_clamp_pct_x10, 2u);
+        // Bytes 146-153: X-τ auto-calibration limits
+        std::memcpy(g_page0 + 146, &ems::engine::xtau_x_min_q8,  2u);
+        std::memcpy(g_page0 + 148, &ems::engine::xtau_x_max_q8,  2u);
+        std::memcpy(g_page0 + 150, &ems::engine::xtau_tau_min,    2u);
+        std::memcpy(g_page0 + 152, &ems::engine::xtau_tau_max,    2u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -435,6 +440,10 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::stft_kp_x100,       g_page0 + 140, 2u);
         std::memcpy(&ems::engine::stft_ki_x1000,      g_page0 + 142, 2u);
         std::memcpy(&ems::engine::stft_clamp_pct_x10, g_page0 + 144, 2u);
+        std::memcpy(&ems::engine::xtau_x_min_q8,  g_page0 + 146, 2u);
+        std::memcpy(&ems::engine::xtau_x_max_q8,  g_page0 + 148, 2u);
+        std::memcpy(&ems::engine::xtau_tau_min,    g_page0 + 150, 2u);
+        std::memcpy(&ems::engine::xtau_tau_max,    g_page0 + 152, 2u);
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));

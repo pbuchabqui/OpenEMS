@@ -178,6 +178,12 @@ extern uint16_t stft_kp_x100;        // Kp × 100, default 3 (= 0.03)
 extern uint16_t stft_ki_x1000;       // Ki × 1000, default 5 (= 0.005)
 extern uint16_t stft_clamp_pct_x10;  // clamp ±%, default 250 (= 25.0%)
 
+// X-τ auto-calibration limits (página 0, offsets 146-153)
+extern uint16_t xtau_x_min_q8;       // X min Q8, default 64 (= 0.25)
+extern uint16_t xtau_x_max_q8;       // X max Q8, default 192 (= 0.75)
+extern uint16_t xtau_tau_min;         // τ min cycles, default 10
+extern uint16_t xtau_tau_max;         // τ max cycles, default 255
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;
 // Empurra a calibração de sensores (APP/ETB/TPS/plausibilidade) p/ drv::sensors.
 void push_sensor_calibration_to_drivers() noexcept;

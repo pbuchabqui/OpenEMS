@@ -373,6 +373,11 @@ PAGE0_FIELDS = [
     ("stft_kp_x100",            140, 1, "H", 1.0),
     ("stft_ki_x1000",           142, 1, "H", 1.0),
     ("stft_clamp_pct_x10",      144, 1, "H", 1.0),
+    # bytes 146-153: X-τ auto-calibration limits
+    ("xtau_x_min_q8",          146, 1, "H", 1.0),
+    ("xtau_x_max_q8",          148, 1, "H", 1.0),
+    ("xtau_tau_min",            150, 1, "H", 1.0),
+    ("xtau_tau_max",            152, 1, "H", 1.0),
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
