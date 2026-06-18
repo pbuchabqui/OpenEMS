@@ -265,6 +265,16 @@ def _nearest_bin(axis: list, v: float) -> int:
     return min(range(len(axis)), key=lambda i: abs(axis[i] - v))
 
 
+def _format_corr_table(label: str, axis: list, values: list, axis_unit: str,
+                       val_unit: str) -> list[str]:
+    """Mini-tabela 1D para seção de correções."""
+    md = [f"**{label}** ({val_unit})", ""]
+    hdr = "| " + " | ".join(f"{a}{axis_unit}" for a in axis) + " |"
+    sep = "|" + "---|" * len(axis)
+    row = "| " + " | ".join(str(v) for v in values) + " |"
+    return md + [hdr, sep, row, ""]
+
+
 @app.get("/api/log/export")
 def api_log_export(rows: int = 120, min_samples: int = 8):
     """Relatório Markdown de tuning a partir do último log: pontos de operação
@@ -287,8 +297,70 @@ def api_log_export(rows: int = 120, min_samples: int = 8):
     md = [f"# OpenEMS datalog — {path.name}", ""]
     md += [f"- Amostras: {len(data)}  ·  Duração: {dur:.1f}s  ·  "
            f"Taxa: {len(data)/dur:.1f} Hz" if dur > 0 else f"- Amostras: {len(data)}",
-           f"- Início (unix): {t0:.2f}", "",
-           "## Estatísticas por canal", "",
+           f"- Início (unix): {t0:.2f}", ""]
+
+    # ── leitura de calibração da ECU ──────────────────────────────────────
+    engine_params = None
+    ve_grid = None
+    spark_grid = None
+    target_grid = None
+    corr_5 = None
+    corr_6 = None
+    ltft_data = None
+    try:
+        engine_params = proto.decode_fields(0, worker.submit(lambda l: l.read_page(0)))
+        ve_grid = proto.decode_grid_u8(worker.submit(lambda l: l.read_page(1)))
+        spark_grid = proto.decode_grid_i8(worker.submit(lambda l: l.read_page(2)))
+        target_grid = proto.decode_grid_i16(worker.submit(lambda l: l.read_page(4)))
+        corr_5 = proto.decode_fields(5, worker.submit(lambda l: l.read_page(5)))
+        corr_6 = proto.decode_fields(6, worker.submit(lambda l: l.read_page(6)))
+        ltft_data = proto.decode_ltft(worker.submit(lambda l: l.read_page(10)))
+    except Exception:  # noqa: BLE001 — ECU desconectada: seções omitidas
+        pass
+
+    # ── parâmetros do motor ───────────────────────────────────────────────
+    if engine_params:
+        md += ["## Parâmetros do motor", ""]
+        ep = engine_params
+        md += [
+            f"- Cilindrada: {ep.get('displacement_cc', '?')} cc",
+            f"- Injetores: {ep.get('injector_flow_cc_min', '?')} cc/min",
+            f"- AFR estequiométrico: {ep.get('stoich_afr_x100', 0):.2f}",
+            f"- MAP referência: {ep.get('map_ref_bar_x100', 0):.2f} bar",
+            f"- IVC ABDC: {ep.get('ivc_abdc_deg', '?')}°",
+            f"- SOI lead: {ep.get('default_soi_lead_deg', '?')}°",
+            "",
+        ]
+
+    # ── tabelas de correção 1D ────────────────────────────────────────────
+    if corr_5:
+        md += ["## Tabelas de correção", ""]
+        md += _format_corr_table(
+            "CLT fuel correction", corr_5["clt_corr_axis_x10"], corr_5["clt_corr_x256"],
+            "°C", "factor x256")
+        md += _format_corr_table(
+            "IAT fuel correction", corr_5["iat_corr_axis_x10"], corr_5["iat_corr_x256"],
+            "°C", "factor x256")
+        md += _format_corr_table(
+            "Warmup enrichment", corr_5["warmup_corr_axis_x10"], corr_5["warmup_corr_x256"],
+            "°C", "factor x256")
+        md += _format_corr_table(
+            "Dead time vs VBatt", corr_5["vbatt_corr_axis_mv"],
+            corr_5["injector_dead_time_us"], "V", "ms")
+        md += _format_corr_table(
+            "Dwell vs VBatt", corr_5["dwell_vbatt_axis_mv"],
+            corr_5["dwell_ms_x10_table"], "V", "ms")
+
+    if corr_6:
+        md += _format_corr_table(
+            "X-tau wall fraction (Q8)", corr_6["xtau_clt_axis_x10"],
+            corr_6["xtau_x_fraction_q8"], "°C", "Q8")
+        md += _format_corr_table(
+            "X-tau time constant", corr_6["xtau_clt_axis_x10"],
+            corr_6["xtau_tau_cycles"], "°C", "cycles")
+
+    # ── estatísticas por canal ────────────────────────────────────────────
+    md += ["## Estatísticas por canal", "",
            "| canal | min | max | média |", "|---|---|---|---|"]
     for k in num_keys:
         vals = [float(r[k]) for r in data]
@@ -301,14 +373,6 @@ def api_log_export(rows: int = 120, min_samples: int = 8):
         md += ["**Motor parado durante todo o log** — sem dados de tuning. "
                "Grave um log com o motor em funcionamento (ou HIL ativo)."]
     else:
-        # alvo de lambda da ECU (página 4), se conectada
-        target_grid = None
-        try:
-            buf = worker.submit(lambda l: l.read_page(4))
-            target_grid = proto.decode_grid_i16(buf)
-        except Exception:  # noqa: BLE001 — sem placa: relatório sem coluna alvo
-            pass
-
         # regime permanente: ΔRPM < 200 e ΔTPS < 2% entre amostras vizinhas
         steady = []
         for i, r in enumerate(running):
@@ -340,49 +404,104 @@ def api_log_export(rows: int = 120, min_samples: int = 8):
             stft = sum(float(r["stft_pct"]) for r in rs) / len(rs)
             adv = sum(float(r["advance_deg"]) for r in rs) / len(rs)
             pw = sum(float(r["pw_ms"]) for r in rs) / len(rs)
+            clt_avg = sum(float(r["clt_c"]) for r in rs) / len(rs)
+            iat_avg = sum(float(r["iat_c"]) for r in rs) / len(rs)
             line = (f"| {proto.RPM_AXIS[ri]} | {proto.MAP_AXIS_KPA[mi]} | {len(rs)} "
                     f"| {lam/1000:.3f} ")
             if target_grid:
                 tgt = target_grid[mi][ri]
                 err = 100 * (lam - tgt) / tgt if tgt else 0
                 sug = lam / tgt if tgt else 1
-                line += (f"| {tgt/1000:.3f} | {err:+.1f}% | ×{sug:.3f} ")
-            line += f"| {ve:.0f} | {stft:+.1f} | {adv:.1f} | {pw:.2f} |"
+                line += (f"| {tgt/1000:.3f} | {err:+.1f}% | x{sug:.3f} ")
+            if ve_grid:
+                line += f"| {ve_grid[mi][ri]} "
+            if spark_grid:
+                line += f"| {spark_grid[mi][ri]} "
+            if ltft_data:
+                line += f"| {ltft_data['ltft_pct'][mi][ri]} "
+            line += (f"| {ve:.0f} | {stft:+.1f} | {adv:.1f} | {pw:.2f} "
+                     f"| {clt_avg:.0f} | {iat_avg:.0f} |")
             rows_out.append(line)
 
         if rows_out:
-            hdr = "| RPM | MAP kPa | n | λ médio "
+            hdr = "| RPM | MAP kPa | n | lambda "
             sep = "|---|---|---|---"
             if target_grid:
-                hdr += "| λ alvo | erro λ | VE sugerido "
+                hdr += "| lambda_alvo | erro_lambda | fator_VE "
                 sep += "|---|---|---"
-            hdr += "| VE | STFT% | avanço° | PW ms |"
-            sep += "|---|---|---|---|"
+            if ve_grid:
+                hdr += "| VE_cal "
+                sep += "|---"
+            if spark_grid:
+                hdr += "| Spark_cal "
+                sep += "|---"
+            if ltft_data:
+                hdr += "| LTFT% "
+                sep += "|---"
+            hdr += "| VE_med | STFT% | advance | PW_ms | CLT | IAT |"
+            sep += "|---|---|---|---|---|---|"
             md += [hdr, sep] + rows_out
-            md += ["", "**Como usar**: λ medido > alvo = mistura pobre → multiplicar "
-                   "a célula da tabela VE pelo fator 'VE sugerido' (= λ_medido/λ_alvo). "
-                   "Confiar apenas em células com n alto e STFT estável."]
+            md += ["", "**Como usar**: lambda medido > alvo = mistura pobre -> multiplicar "
+                   "a celula da tabela VE pelo fator 'fator_VE' (= lambda_medido/lambda_alvo). "
+                   "Confiar apenas em celulas com n alto e STFT estavel."]
             if target_grid is None:
                 md += ["", "(ECU desconectada no export — colunas de alvo omitidas)"]
         else:
-            md += [f"Nenhuma célula atingiu {min_samples} amostras em regime "
-                   "permanente — log curto demais ou operação só em transiente."]
+            md += [f"Nenhuma celula atingiu {min_samples} amostras em regime "
+                   "permanente — log curto demais ou operacao so em transiente."]
+
+        # ── calibração atual (células visitadas) ──────────────────────────
+        visited = {k for k, rs in cells.items() if len(rs) >= min_samples}
+        if visited and (ve_grid or spark_grid):
+            md += ["", "## Calibracao atual (celulas visitadas)", ""]
+            if ve_grid:
+                md += ["### Tabela VE (page 1, uint8)", "",
+                       "| MAP (bar x100) | RPM | VE_cal |",
+                       "|---|---|---|"]
+                for mi, ri in sorted(visited):
+                    md.append(f"| {proto.MAP_AXIS_KPA[mi]} | {proto.RPM_AXIS[ri]} "
+                              f"| {ve_grid[mi][ri]} |")
+                md.append("")
+            if spark_grid:
+                md += ["### Tabela Spark (page 2, int8 BTDC)", "",
+                       "| MAP (bar x100) | RPM | Spark_cal |",
+                       "|---|---|---|"]
+                for mi, ri in sorted(visited):
+                    md.append(f"| {proto.MAP_AXIS_KPA[mi]} | {proto.RPM_AXIS[ri]} "
+                              f"| {spark_grid[mi][ri]} |")
+                md.append("")
+            if target_grid:
+                md += ["### Tabela Lambda alvo (page 4, x1000)", "",
+                       "| MAP (bar x100) | RPM | lambda_alvo_x1000 |",
+                       "|---|---|---|"]
+                for mi, ri in sorted(visited):
+                    md.append(f"| {proto.MAP_AXIS_KPA[mi]} | {proto.RPM_AXIS[ri]} "
+                              f"| {target_grid[mi][ri]} |")
+                md.append("")
+            if ltft_data:
+                md += ["### LTFT multiplicativo (page 10, int8 %)", "",
+                       "| MAP (bar x100) | RPM | LTFT% |",
+                       "|---|---|---|"]
+                for mi, ri in sorted(visited):
+                    md.append(f"| {proto.MAP_AXIS_KPA[mi]} | {proto.RPM_AXIS[ri]} "
+                              f"| {ltft_data['ltft_pct'][mi][ri]} |")
+                md.append("")
 
         # confiabilidade
         warn = []
         if any(r["st_SENSOR_FAULT"] == "1" for r in running):
             warn.append("SENSOR_FAULT ativo em parte do log — dados suspeitos")
         if any(r["st_WBO2_FAULT"] == "1" for r in running):
-            warn.append("WBO2_FAULT — lambda NÃO confiável nesses trechos")
+            warn.append("WBO2_FAULT — lambda NAO confiavel nesses trechos")
         if not all(r["st_FULL_SYNC"] == "1" for r in running):
-            warn.append("trechos sem FULL_SYNC — RPM/fase não confiáveis")
+            warn.append("trechos sem FULL_SYNC — RPM/fase nao confiaveis")
         d_late = float(running[-1]["late_events"]) - float(running[0]["late_events"])
         if d_late > 0:
             warn.append(f"{d_late:.0f} eventos de agendamento atrasado durante o log")
         md += ["", "## Confiabilidade", ""]
-        md += [f"- ⚠ {w}" for w in warn] if warn else ["- ✓ sem faults, FULL_SYNC contínuo"]
+        md += [f"- WARN {w}" for w in warn] if warn else ["- OK sem faults, FULL_SYNC continuo"]
 
-    md += ["", "## Transições de status", ""]
+    md += ["", "## Transicoes de status", ""]
     transitions = []
     prev = None
     for r in data:
@@ -396,12 +515,55 @@ def api_log_export(rows: int = 120, min_samples: int = 8):
 
     step = max(1, len(data) // rows)
     sampled = data[::step]
-    md += ["", f"## Série temporal (reamostrada 1:{step}, {len(sampled)} linhas)", "",
+    md += ["", f"## Serie temporal (reamostrada 1:{step}, {len(sampled)} linhas)", "",
            "| t(s) | " + " | ".join(num_keys) + " |",
            "|" + "---|" * (len(num_keys) + 1)]
     for r in sampled:
         md.append(f"| {float(r['t'])-t0:.2f} | " +
                   " | ".join(f"{float(r[k]):g}" for k in num_keys) + " |")
+
+    # ── prompt para LLM ──────────────────────────────────────────────────
+    md += ["", "## Prompt para LLM", "", """
+Voce e um engenheiro de calibracao de ECU analisando um datalog do OpenEMS.
+O relatorio acima contem:
+1. Parametros do motor (cilindrada, injetores, AFR estequiometrico)
+2. Tabelas de correcao 1D (CLT, IAT, warmup, dead time, X-tau)
+3. Binning RPM x MAP em regime permanente com lambda medido vs alvo
+4. Snapshot das tabelas de calibracao (VE, Spark, Lambda alvo, LTFT) para as celulas visitadas
+5. Indicadores de confiabilidade (faults, sync, late events)
+
+### Instrucoes de analise
+
+1. **Prioridade**: corrija VE primeiro (fuel), spark depois (ignition).
+2. **Formato de saida**: para cada celula que precisa correcao, retorne uma tabela:
+
+| page | row (MAP idx) | col (RPM idx) | valor_atual | valor_novo | justificativa |
+|---|---|---|---|---|---|
+
+   - page 1 = VE (uint8), page 2 = Spark (int8 BTDC)
+   - row = indice MAP (0=20 bar x100, 15=300 bar x100)
+   - col = indice RPM (0=500, 15=8000)
+
+3. **Regras de decisao**:
+   - So confie em celulas com n >= {min_samples} amostras
+   - Se STFT esta estavel (|STFT| < 5%), a correcao e mais confiavel
+   - Se LTFT ja esta compensando (ex: LTFT = +5%), o VE base precisa de correcao maior
+   - Considere CLT/IAT medios do bin: se fora do nominal (20-40C), as correcoes 1D podem estar erradas
+   - Se houver SENSOR_FAULT ou WBO2_FAULT, ignore esses trechos
+
+4. **Limites de seguranca**:
+   - Delta VE maximo: +/-15% do valor atual por iteracao
+   - Delta Spark maximo: +/-3 graus por iteracao
+   - Nunca sugira lambda alvo < 0.750 (risco de detonacao)
+   - Resolucao do WBO2: +/-0.004 lambda (o2_d4 x 4) — nao persiga erros menores que isso
+
+5. **Correcao VE**: se lambda_medido > lambda_alvo, a mistura esta pobre.
+   VE_novo = VE_atual * (lambda_medido / lambda_alvo).
+   Se LTFT ja esta em +X%, considere: VE_novo = VE_atual * (1 + LTFT/100) * (lambda_medido / lambda_alvo).
+
+6. **Diagnostico de correcoes 1D**: se TODAS as celulas num range de CLT mostram o mesmo erro
+   de lambda, o problema pode ser na tabela de correcao CLT (page 5) em vez de nas celulas VE individuais.
+""".strip()]
 
     out = path.with_suffix(".md")
     out.write_text("\n".join(md) + "\n")

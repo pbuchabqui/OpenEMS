@@ -34,7 +34,7 @@ MAP_AXIS_BAR_X100 = [
 RPM_AXIS = [v // 10 for v in RPM_AXIS_X10]
 MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
-PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 66, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112}
+PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 66, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112, 10: 320}
 
 STATUS_BITS = {
     "FULL_SYNC":    0x0001,
@@ -212,6 +212,15 @@ def decode_grid_i16(buf: bytes) -> list[list[int]]:
     """Página 4 (lambda target ×1000): 16×16 int16 LE."""
     vals = struct.unpack("<256h", buf)
     return [list(vals[r * 16:(r + 1) * 16]) for r in range(16)]
+
+
+def decode_ltft(buf: bytes) -> dict:
+    """Page 10: LTFT mult 16×16 int8 (%) + LTFT add 8×8 int8 (50µs/count)."""
+    mult = struct.unpack("<256b", buf[:256])
+    mult_grid = [list(mult[r * 16:(r + 1) * 16]) for r in range(16)]
+    add_vals = struct.unpack("<64b", buf[256:320])
+    add_grid = [list(add_vals[r * 8:(r + 1) * 8]) for r in range(8)]
+    return {"ltft_pct": mult_grid, "ltft_add_50us": add_grid}
 
 
 def encode_cell_u8(value: int) -> bytes:
