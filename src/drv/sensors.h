@@ -76,6 +76,12 @@ void sensors_set_etb_tps_cal(uint16_t tps1_min, uint16_t tps1_max,
 void sensors_set_plausibility(uint16_t app_max_delta_pct_x10,
                               uint16_t etb_max_delta_pct_x10) noexcept;
 void sensors_set_etb_harness_present(bool present) noexcept;
+// Bench-mode HIL: força CLT/IAT a temperaturas fixas e limpa o fault desses
+// canais (pinos físicos ausentes não acionam SENSOR_FAULT). enable=false (default)
+// restaura o caminho normal de ADC. Não é resetado por sensors_init.
+void sensors_set_bench_clt_iat(bool enable,
+                               int16_t clt_degc_x10,
+                               int16_t iat_degc_x10) noexcept;
 void sensors_set_range(SensorId id, SensorRange range) noexcept;
 // FIX-6: retorna por valor (snapshot atômico com CPSID/CPSIE) em vez de
 // referência. Previne torn read: ISR TIM5 (prio 1) pode atualizar g_data entre

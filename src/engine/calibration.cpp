@@ -147,8 +147,29 @@ uint16_t etb_ki_x10 = 8u;
 uint16_t etb_kd_x10 = 40u;
 uint8_t etb_cal_valid = 0u;
 uint8_t etb_harness_present = 0u;
+uint16_t etb_pedal_map[4][10] = {
+    {   0,  80, 150, 220, 300, 400, 520, 650, 800, 1000},  // ECO
+    {   0, 100, 200, 300, 400, 500, 600, 700, 800, 1000},  // NORMAL
+    {   0, 180, 350, 500, 600, 700, 780, 850, 920, 1000},  // SPORT
+    {   0,  50, 100, 150, 220, 300, 400, 520, 650, 1000},  // RAIN
+};
 uint16_t tps_raw_min = 200u;
 uint16_t tps_raw_max = 3895u;
+
+int8_t cyl_fuel_trim_pct[cfg::kCylinderCount] = {};  // 0 = sem correção
+int8_t cyl_ign_trim_deg[cfg::kCylinderCount]  = {};  // 0 = sem correção
+uint8_t cmp_window_open_tooth  = 0u;  // 0/0 = desabilitado
+uint8_t cmp_window_close_tooth = 0u;
+
+uint16_t boost_target_bar_x1000[7][8] = {
+    {1000u, 1020u, 1050u, 1080u, 1100u, 1120u, 1150u, 1180u},  // 0: neutro
+    {1000u, 1050u, 1100u, 1150u, 1200u, 1250u, 1280u, 1300u},  // 1ª marcha
+    {1000u, 1080u, 1150u, 1220u, 1280u, 1340u, 1380u, 1420u},  // 2ª marcha
+    {1000u, 1100u, 1180u, 1260u, 1330u, 1400u, 1450u, 1500u},  // 3ª marcha
+    {1000u, 1120u, 1210u, 1300u, 1380u, 1460u, 1520u, 1580u},  // 4ª marcha
+    {1000u, 1140u, 1240u, 1340u, 1430u, 1520u, 1600u, 1680u},  // 5ª marcha
+    {1000u, 1150u, 1260u, 1370u, 1470u, 1570u, 1660u, 1750u},  // 6ª marcha
+};
 
 uint8_t xtau_autocal_enabled = 0u;
 uint8_t xtau_autocal_active = 0u;
@@ -185,6 +206,15 @@ uint16_t decel_cut_tps_threshold_x10 = 5u;      // 0.5% TPS
 uint32_t decel_cut_entry_rpm_x10     = 15000u;   // 1500 RPM
 uint32_t decel_cut_exit_rpm_x10      = 12000u;   // 1200 RPM (histerese)
 int16_t  decel_cut_min_clt_x10       = 700;      // 70°C
+
+// Marcha lenta ETB
+uint16_t etb_idle_rpm_target      = 850u;
+uint16_t etb_idle_min_opening_x10 = 30u;   // 3.0%
+uint16_t etb_idle_max_opening_x10 = 80u;   // 8.0%
+
+// Idle RPM target vs CLT — usado para idle spark correction (ETB)
+int16_t  iac_clt_axis_x10[kIacWarmupPts]        = {-400, -100, 100, 300, 500, 700, 900, 1100};
+uint16_t iac_idle_target_rpm_x10[kIacWarmupPts]  = {12000u, 11500u, 10800u, 10000u, 9200u, 8500u, 8200u, 8000u};
 
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept {
     if (page == nullptr || len < 36u) {

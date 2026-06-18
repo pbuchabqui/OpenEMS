@@ -3,6 +3,8 @@
 #include <cstdint>
 
 #include "engine/table3d.h"
+#include "engine/calibration.h"
+#include "app/can_rx_map.h"
 
 #if __has_include("drv/ckp.h")
 #include "drv/ckp.h"
@@ -36,15 +38,7 @@ constexpr uint32_t kTick20ms = 20u;
 constexpr uint32_t kAuxTim3PwmHz = 15u;
 constexpr uint32_t kAuxTim4PwmHz = 15u;
 
-constexpr int16_t kCltPidEnableX10 = 600;
 constexpr int16_t kDrpmEnableMaxX10PerSec = 2000;
-
-constexpr int16_t kIacKp_num = 2;
-constexpr int16_t kIacKd_num = 5;
-constexpr int16_t kIacKd_den = 2;
-constexpr int16_t kIacIClampX10 = 300;
-constexpr uint16_t kIacOpenStepX10 = 100u;
-constexpr uint16_t kIacCloseStepX10 = 20u;
 
 constexpr uint32_t kOverboostDurationMs = 500u;
 constexpr uint16_t kOverboostMarginBarX1000 = 200u;
@@ -57,23 +51,17 @@ constexpr int16_t kFanOffDegCX10 = 900;
 constexpr uint32_t kPumpPrimeMs = 2000u;
 constexpr uint32_t kPumpOffDelayMs = 3000u;
 
-constexpr uint8_t kWarmupPts = 8u;
-constexpr int16_t kWarmupCltAxisX10[kWarmupPts] = {-400, -100, 100, 300, 500, 700, 900, 1100};
-constexpr uint16_t kIacWarmupDutyX10[kWarmupPts] = {620u, 560u, 500u, 440u, 360u, 280u, 220u, 180u};
-constexpr uint16_t kIdleTargetRpmX10[kWarmupPts] = {12000u, 11500u, 10800u, 10000u, 9200u, 8500u, 8200u, 8000u};
+// Idle target RPM vs CLT — curva compartilhada com ETB idle spark
+#define kWarmupPts         ems::engine::kIacWarmupPts
+#define kWarmupCltAxisX10  ems::engine::iac_clt_axis_x10
+#define kIdleTargetRpmX10  ems::engine::iac_idle_target_rpm_x10
 
-constexpr uint8_t kBoostPts = 8u;
-constexpr uint32_t kBoostRpmAxisX10[kBoostPts] = {15000u, 20000u, 25000u, 30000u, 40000u, 50000u, 65000u, 80000u};
-constexpr uint16_t kBoostTpsAxisX10[kBoostPts] = {100u, 200u, 300u, 450u, 600u, 750u, 900u, 1000u};
-constexpr uint16_t kBoostTargetBarX1000[kBoostPts][kBoostPts] = {
-    {1050u, 1100u, 1150u, 1200u, 1250u, 1300u, 1350u, 1400u},
-    {1050u, 1100u, 1150u, 1220u, 1270u, 1320u, 1380u, 1430u},
-    {1060u, 1120u, 1180u, 1250u, 1300u, 1360u, 1420u, 1480u},
-    {1080u, 1140u, 1210u, 1280u, 1340u, 1400u, 1460u, 1520u},
-    {1100u, 1170u, 1240u, 1320u, 1390u, 1460u, 1530u, 1600u},
-    {1120u, 1200u, 1270u, 1350u, 1430u, 1510u, 1590u, 1670u},
-    {1140u, 1220u, 1300u, 1390u, 1470u, 1560u, 1650u, 1740u},
-    {1150u, 1240u, 1330u, 1420u, 1510u, 1610u, 1700u, 1800u},
+// Boost target: usa global calibrável boost_target_bar_x1000[7][8] de calibration.h
+// Eixo RPM fixo (abaixo). Eixo Y = marcha inteira — índice direto sem interpolação.
+constexpr uint8_t kBoostRpmPts = 8u;
+constexpr uint8_t kBoostGears  = 7u;
+constexpr uint32_t kBoostRpmAxisX10[kBoostRpmPts] = {
+    15000u, 20000u, 25000u, 30000u, 40000u, 50000u, 65000u, 80000u
 };
 
 constexpr uint8_t kVvtPts = 12u;
@@ -126,12 +114,6 @@ struct AuxState {
     volatile uint32_t time_ms;
     uint32_t key_on_ms;
     uint32_t rpm_zero_since_ms;
-
-    uint16_t iac_duty_x10;
-    int16_t iac_integrator_x10;
-    int16_t iac_prev_error_x10;
-    int32_t iac_last_rpm_x10;
-    bool iac_have_prev_rpm;
 
     uint16_t wg_duty_x10;
     int16_t wg_integrator_x10;
@@ -237,20 +219,15 @@ uint16_t interp1_u16_8(const int16_t* axis, const uint16_t* values, int16_t x) n
     return static_cast<uint16_t>(y);
 }
 
-uint16_t lookup_boost_target(uint32_t rpm_x10, uint16_t tps_x10) noexcept {
-    const uint8_t xi = ems::engine::table_axis_index(kBoostRpmAxisX10, kBoostPts, rpm_x10);
-    const uint8_t yi = axis_index_u16(kBoostTpsAxisX10, kBoostPts, tps_x10);
+// gear: 0=neutro/desconhecido, 1-6; índice direto na tabela (sem interpolação no eixo Y)
+uint16_t lookup_boost_target(uint32_t rpm_x10, uint8_t gear) noexcept {
+    const uint8_t g  = (gear >= kBoostGears) ? (kBoostGears - 1u) : gear;
+    const uint8_t xi = ems::engine::table_axis_index(kBoostRpmAxisX10, kBoostRpmPts, rpm_x10);
     const uint8_t fx = ems::engine::table_axis_frac_q8(kBoostRpmAxisX10, xi, rpm_x10);
-    const uint8_t fy = axis_frac_q8_u16(kBoostTpsAxisX10, yi, tps_x10);
 
-    const int32_t v00 = static_cast<int32_t>(kBoostTargetBarX1000[yi][xi]);
-    const int32_t v10 = static_cast<int32_t>(kBoostTargetBarX1000[yi][xi + 1u]);
-    const int32_t v01 = static_cast<int32_t>(kBoostTargetBarX1000[yi + 1u][xi]);
-    const int32_t v11 = static_cast<int32_t>(kBoostTargetBarX1000[yi + 1u][xi + 1u]);
-
-    const int32_t v0 = lerp_q8_s32(v00, v10, fx);
-    const int32_t v1 = lerp_q8_s32(v01, v11, fx);
-    const int32_t v = lerp_q8_s32(v0, v1, fy);
+    const int32_t v0 = static_cast<int32_t>(ems::engine::boost_target_bar_x1000[g][xi]);
+    const int32_t v1 = static_cast<int32_t>(ems::engine::boost_target_bar_x1000[g][xi + 1u]);
+    const int32_t v  = lerp_q8_s32(v0, v1, fx);
 
     if (v <= 0) {
         return 0u;
@@ -310,79 +287,11 @@ uint16_t iac_target_rpm_x10(int16_t clt_x10) noexcept {
     return interp1_u16_8(kWarmupCltAxisX10, kIdleTargetRpmX10, clt_x10);
 }
 
-uint16_t iac_warmup_duty_x10(int16_t clt_x10) noexcept {
-    return interp1_u16_8(kWarmupCltAxisX10, kIacWarmupDutyX10, clt_x10);
-}
-
-uint16_t slew_iac_duty_x10(uint16_t current, uint16_t target) noexcept {
-    if (target > current) {
-        const uint16_t delta = static_cast<uint16_t>(target - current);
-        return static_cast<uint16_t>(current + (delta > kIacOpenStepX10 ? kIacOpenStepX10 : delta));
-    }
-
-    const uint16_t delta = static_cast<uint16_t>(current - target);
-    return static_cast<uint16_t>(current - (delta > kIacCloseStepX10 ? kIacCloseStepX10 : delta));
-}
-
-void run_iac_control(const ems::drv::CkpSnapshot& snap,
-                     const ems::drv::SensorData& s) noexcept {
-    const int32_t rpm_now = static_cast<int32_t>(snap.rpm_x10);
-    int32_t drpm_x10 = 0;
-    if (g.iac_have_prev_rpm) {
-        drpm_x10 = rpm_now - g.iac_last_rpm_x10;
-    } else {
-        g.iac_have_prev_rpm = true;
-    }
-    g.iac_last_rpm_x10 = rpm_now;
-    const int32_t drpm_dt_x10_per_sec = drpm_x10 * static_cast<int32_t>(1000u / kTick20ms);
-
-    uint16_t duty_base = 0u;
-    if (s.clt_degc_x10 < kCltPidEnableX10) {
-        duty_base = iac_warmup_duty_x10(s.clt_degc_x10);
-    } else {
-        duty_base = 300u;
-    }
-
-    const uint16_t rpm_target = iac_target_rpm_x10(s.clt_degc_x10);
-    const int32_t error_x10 = static_cast<int32_t>(rpm_target) - rpm_now;
-
-    bool pid_enabled = false;
-    if (s.clt_degc_x10 > kCltPidEnableX10) {
-        const int32_t abs_drpm = (drpm_dt_x10_per_sec < 0) ? -drpm_dt_x10_per_sec : drpm_dt_x10_per_sec;
-        pid_enabled = (abs_drpm < kDrpmEnableMaxX10PerSec);
-    }
-
-    int32_t out_x10 = static_cast<int32_t>(duty_base);
-
-    if (pid_enabled) {
-        const int32_t p_x10 = static_cast<int32_t>(kIacKp_num) * error_x10;
-        g.iac_integrator_x10 = clamp_i16(
-            static_cast<int16_t>(g.iac_integrator_x10 + static_cast<int16_t>((error_x10 * 6) / 1000)),
-            -kIacIClampX10,
-            kIacIClampX10);
-
-        const int32_t de_x10 = error_x10 - static_cast<int32_t>(g.iac_prev_error_x10);
-        const int32_t d_x10 = (de_x10 * kIacKd_num) / kIacKd_den;
-
-        const int32_t err_clamped = error_x10 < -12000 ? -12000 : (error_x10 > 12000 ? 12000 : error_x10);
-        g.iac_prev_error_x10 = static_cast<int16_t>(err_clamped);
-        out_x10 += p_x10 + g.iac_integrator_x10 + d_x10;
-    }
-
-    if (out_x10 < 0) {
-        out_x10 = 0;
-    }
-    if (out_x10 > 1000) {
-        out_x10 = 1000;
-    }
-
-    g.iac_duty_x10 = slew_iac_duty_x10(g.iac_duty_x10, static_cast<uint16_t>(out_x10));
-    ems::hal::tim3_set_duty(0u, g.iac_duty_x10);
-}
-
 void run_wastegate_control(const ems::drv::CkpSnapshot& snap,
                            const ems::drv::SensorData& s) noexcept {
-    const uint16_t target_bar_x1000 = lookup_boost_target(snap.rpm_x10, s.tps_pct_x10);
+    uint8_t gear = 0u;
+    ems::app::can_rx_gear(gear, g.time_ms);  // fallback para 0 se CAN não configurado
+    const uint16_t target_bar_x1000 = lookup_boost_target(snap.rpm_x10, gear);
 
     if (s.map_bar_x1000 > static_cast<uint16_t>(target_bar_x1000 + kOverboostMarginBarX1000)) {
         g.wg_overboost_ms += kTick20ms;
@@ -531,7 +440,6 @@ void auxiliaries_init() noexcept {
     ems::hal::tim3_pwm_init(kAuxTim3PwmHz);
     ems::hal::tim4_pwm_init(kAuxTim4PwmHz);
 
-    ems::hal::tim3_set_duty(0u, 0u);
     ems::hal::tim3_set_duty(1u, 0u);
     ems::hal::tim4_set_duty(0u, 0u);
     ems::hal::tim4_set_duty(1u, 0u);
@@ -575,7 +483,6 @@ void auxiliaries_tick_20ms() noexcept {
     const ems::drv::CkpSnapshot snap = ems::drv::ckp_snapshot();
     const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
-    run_iac_control(snap, s);
     run_wastegate_control(snap, s);
     run_fan_control(s.clt_degc_x10);
     run_pump_control(snap.rpm_x10);
@@ -584,10 +491,6 @@ void auxiliaries_tick_20ms() noexcept {
 #if defined(EMS_HOST_TEST)
 void auxiliaries_test_reset() noexcept {
     auxiliaries_init();
-}
-
-uint16_t auxiliaries_test_get_iac_duty() noexcept {
-    return g.iac_duty_x10;
 }
 
 uint16_t auxiliaries_test_get_wg_duty() noexcept {

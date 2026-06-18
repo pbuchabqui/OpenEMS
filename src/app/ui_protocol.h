@@ -16,10 +16,10 @@ struct UiRealtimeData {
     uint8_t ve;
     int8_t stft_p100;
     uint16_t status_bits;
-    uint8_t reserved[50];
+    uint8_t reserved[52];
 };
 
-static_assert(sizeof(UiRealtimeData) == 64u, "UiRealtimeData must be 64 bytes");
+static_assert(sizeof(UiRealtimeData) == 66u, "UiRealtimeData must be 66 bytes");
 
 void ui_init() noexcept;
 void ui_rx_byte(uint8_t byte) noexcept;

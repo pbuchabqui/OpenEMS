@@ -60,7 +60,11 @@
 
 #define CKP_GPIO    ((gpio_num_t)2)
 #define CMP_GPIO    ((gpio_num_t)4)
+#ifndef LED_BUILTIN
+#define LED_GPIO    ((gpio_num_t)GPIO_NUM_MAX)
+#else
 #define LED_GPIO    ((gpio_num_t)LED_BUILTIN)
+#endif
 
 static constexpr uint32_t kRpmInit   = 500;
 static constexpr int      kCmpTooth  = 5;
@@ -210,7 +214,8 @@ static void IRAM_ATTR ckp_isr(void*) {
             g_revolution ^= 1;
             g_rev_count++;
             if ((g_rev_count & 0x03u) == 0) {
-                gpio_set_level(LED_GPIO, (g_rev_count >> 2) & 1u);
+                if (LED_GPIO != GPIO_NUM_MAX)
+                    gpio_set_level(LED_GPIO, (g_rev_count >> 2) & 1u);
             }
         } else {
             low_us = (uint64_t)T_us / 2;
@@ -529,10 +534,15 @@ void setup() {
     memset(g_m, 0, sizeof(g_m));
 
     // ── GPIOs de saída (CKP/CMP/LED) ─────────────────────────────────────
-    for (gpio_num_t g : {CKP_GPIO, CMP_GPIO, LED_GPIO}) {
-        gpio_reset_pin(g);
-        gpio_set_direction(g, GPIO_MODE_OUTPUT);
-        gpio_set_level(g, 0);
+    {
+        gpio_num_t outs[] = {CKP_GPIO, CMP_GPIO, LED_GPIO};
+        for (size_t i = 0; i < (sizeof(outs) / sizeof(outs[0])); ++i) {
+            gpio_num_t g = outs[i];
+            if (g == GPIO_NUM_MAX) continue;
+            gpio_reset_pin(g);
+            gpio_set_direction(g, GPIO_MODE_OUTPUT);
+            gpio_set_level(g, 0);
+        }
     }
 
     // ── GPIOs de entrada (scope, apenas canais físicos) ───────────────────
@@ -551,20 +561,18 @@ void setup() {
     // ── Timer CKP (ISR context) ───────────────────────────────────────────
     {
         esp_timer_create_args_t a = {};
-        a.callback        = ckp_isr;
-        a.dispatch_method = ESP_TIMER_ISR;
-        a.name            = "ckp";
-        a.skip_unhandled_events = false;
+        a.callback = ckp_isr;
+        a.arg = nullptr;
+        a.name = "ckp";
         ESP_ERROR_CHECK(esp_timer_create(&a, &g_ckp_timer));
     }
 
     // ── Timer CMP off (ISR context) ───────────────────────────────────────
     {
         esp_timer_create_args_t a = {};
-        a.callback        = cmp_off_isr;
-        a.dispatch_method = ESP_TIMER_ISR;
-        a.name            = "cmp_off";
-        a.skip_unhandled_events = false;
+        a.callback = cmp_off_isr;
+        a.arg = nullptr;
+        a.name = "cmp_off";
         ESP_ERROR_CHECK(esp_timer_create(&a, &g_cmp_off_tmr));
     }
 

@@ -480,6 +480,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define ADC_CFGR1_EXTEN_RISING (1u << 10)
 // EXTSEL[4:0] = 0b01101 → TIM6_TRGO (ver RM0481 Tab.125)
 #define ADC_CFGR1_EXTSEL_TIM6_TRGO (13u << 5)
+#define ADC_CFGR1_OVRMOD (1u << 12)  // 1 = overrun sobrescreve DR (não trava ADSTART)
 #define ADC_CFGR1_CONT   (1u << 13)
 #define ADC_CFGR1_DISCEN (1u << 16)
 
@@ -535,8 +536,13 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define GPDMA_CCR_TCIE    (1u << 8)
 #define GPDMA_CCR_DTEIE   (1u << 10)
 #define GPDMA_CCR_USEIE   (1u << 12)
-#define GPDMA_CCR_CIRC    (1u << 4)  // Circular mode (RM0481 §16.4.2)
 #define GPDMA_CCR_PRIO_HIGH (2u << 22)
+// Continuidade no GPDMA do H5 é via linked-list (LLI em RAM apontada por
+// CLLBAR+CLLR), NÃO por um bit circular no CCR. Update bits do CLLR (RM0481/CMSIS):
+#define GPDMA_CLLR_LA_MASK 0x0000FFFCu  // LA[15:2] — endereço (low) do próximo LLI
+#define GPDMA_CLLR_ULL    (1u << 16)    // recarrega CLLR do LLI
+#define GPDMA_CLLR_UDA    (1u << 27)    // recarrega CDAR do LLI
+#define GPDMA_CLLR_UB1    (1u << 29)    // recarrega CBR1 do LLI
 
 #define GPDMA_CSR_TCF     (1u << 8)
 #define GPDMA_CSR_DTEF    (1u << 10)

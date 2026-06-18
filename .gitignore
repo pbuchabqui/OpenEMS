@@ -65,3 +65,4 @@ Thumbs.db
 *.tar.xz
 *.tar.zst
 ```.cave/
+tools/esp32_stimulator/wifi_credentials.h

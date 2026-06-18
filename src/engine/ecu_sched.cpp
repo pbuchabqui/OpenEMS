@@ -3,6 +3,7 @@
 #include "engine/engine_config.h"
 #include "engine/constants.h"
 #include "engine/knock.h"
+#include "engine/calibration.h"
 #include "hal/regs.h"
 #include "hal/critical_section.h"
 
@@ -575,10 +576,25 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
     for (uint8_t seq = 0U; seq < ems::engine::cfg::kCylinderCount; ++seq) {
         const uint8_t cyl = ems::engine::cfg::kFiringOrder[seq];
         const uint32_t tdc = ems::engine::cfg::cyl_tdc_deg(cyl);
-        const uint32_t spark = (tdc + ECU_CYCLE_DEG - g_advance_deg) % ECU_CYCLE_DEG;
+
+        // Trim de ignição por cilindro (±°)
+        const int32_t ign_trim = static_cast<int32_t>(ems::engine::cyl_ign_trim_deg[cyl]);
+        const int32_t trimmed_advance = static_cast<int32_t>(g_advance_deg) + ign_trim;
+        const uint32_t eff_advance = (trimmed_advance < 0) ? 0u
+                                   : static_cast<uint32_t>(trimmed_advance);
+
+        const uint32_t spark = (tdc + ECU_CYCLE_DEG - eff_advance) % ECU_CYCLE_DEG;
         const uint32_t dwell = (spark + ECU_CYCLE_DEG - dwell_deg) % ECU_CYCLE_DEG;
         const uint32_t inj_on = (tdc + ECU_CYCLE_DEG - g_soi_lead_deg) % ECU_CYCLE_DEG;
-        const uint32_t inj_pw = clamp_inj_pw_to_ivc(tdc, inj_on, base_inj_pw_deg);
+
+        // Trim de combustível por cilindro (±%)
+        const int32_t fuel_trim = static_cast<int32_t>(ems::engine::cyl_fuel_trim_pct[cyl]);
+        const int32_t pw_trimmed = static_cast<int32_t>(base_inj_pw_deg)
+                                   * (100 + fuel_trim) / 100;
+        const uint32_t eff_inj_pw_deg = (pw_trimmed < 0) ? 0u
+                                       : static_cast<uint32_t>(pw_trimmed);
+
+        const uint32_t inj_pw = clamp_inj_pw_to_ivc(tdc, inj_on, eff_inj_pw_deg);
         const uint32_t inj_off = (inj_on + inj_pw) % ECU_CYCLE_DEG;
         uint8_t tooth, frac, phase;
 

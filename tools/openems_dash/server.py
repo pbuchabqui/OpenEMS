@@ -173,6 +173,12 @@ def api_read_page(page: int):
     buf = worker.submit(lambda l: l.read_page(page))
     if page in proto.GRID_PAGES:
         return {"page": page, "grid": proto.GRID_PAGES[page]["decode"](buf)}
+    if page == 8:
+        return {"page": page, "pedal_maps": proto.decode_pedal_maps(buf),
+                "modes": proto.PEDAL_MAP_MODES, "axis": proto.PEDAL_MAP_AXIS}
+    if page == 9:
+        return {"page": page, "boost_map": proto.decode_boost_map(buf),
+                "rpm_axis": proto.BOOST_RPM_AXIS, "gear_labels": proto.BOOST_GEAR_LABELS}
     if page in proto.FIELD_PAGES:
         return {"page": page, "fields": proto.decode_fields(page, buf)}
     return {"page": page, "raw": buf.hex()}
@@ -188,6 +194,22 @@ def api_write_cells(page: int, body: dict):
         for cell in body["cells"]:
             off = (cell["row"] * 16 + cell["col"]) * meta["cell_size"]
             writes.append((off, meta["encode"](cell["value"])))
+    elif page == 9:
+        rows = body.get("boost_map")
+        if not rows or len(rows) != 7:
+            return JSONResponse({"error": "boost_map: esperado 7 marchas"}, status_code=400)
+        encoded = proto.encode_boost_map(rows)
+        worker.submit(lambda l: l.write_page_ram(9, 0, encoded))
+        worker.submit(lambda l: l.burn_page(9))
+        return {"ok": True, "written": 1}
+    elif page == 8:
+        maps = body.get("pedal_maps")
+        if not maps or len(maps) != 4:
+            return JSONResponse({"error": "pedal_maps: esperado 4 modos"}, status_code=400)
+        encoded = proto.encode_pedal_maps(maps)
+        worker.submit(lambda l: l.write_page_ram(8, 0, encoded))
+        worker.submit(lambda l: l.burn_page(8))
+        return {"ok": True, "written": 1}
     elif page in proto.FIELD_PAGES:
         writes = [proto.encode_field(page, name, vals)
                   for name, vals in body["fields"].items()]
@@ -206,6 +228,21 @@ def api_write_cells(page: int, body: dict):
 def api_burn(page: int):
     worker.submit(lambda l: l.burn_page(page))
     return {"ok": True}
+
+
+@app.get("/api/can_rx_map")
+def api_can_rx_map_get():
+    return {"signals": proto.can_rx_map_get(), "signal_names": proto.CAN_RX_SIGNALS}
+
+
+@app.put("/api/can_rx_map/{signal}")
+def api_can_rx_map_set(signal: str, body: dict):
+    try:
+        proto.can_rx_map_set(signal, body)
+    except ValueError as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "signal": signal, "config": proto.can_rx_map_get()[signal]}
 
 
 @app.get("/api/dirty")

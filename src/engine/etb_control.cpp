@@ -9,6 +9,7 @@
  */
 
 #include "etb_control.h"
+#include "engine/calibration.h"
 #include "hal/etb_driver.h"
 #include <string.h>
 #include <math.h>
@@ -34,20 +35,6 @@ static const etb_pid_config_t g_default_pid_config = {
     .deadband_width = 2.0f
 };
 
-// Mapas de resposta por modo (10 pontos: 0%, 10%, ..., 90%, 100% pedal)
-static const float g_response_maps[ETB_MODE_COUNT][10] = {
-    // ECO: Suave, progressivo
-    {0.0f, 8.0f, 15.0f, 22.0f, 30.0f, 40.0f, 52.0f, 65.0f, 80.0f, 100.0f},
-    
-    // NORMAL: Linear OEM
-    {0.0f, 10.0f, 20.0f, 30.0f, 40.0f, 50.0f, 60.0f, 70.0f, 80.0f, 100.0f},
-    
-    // SPORT: Agressivo nos primeiros 30%
-    {0.0f, 18.0f, 35.0f, 50.0f, 60.0f, 70.0f, 78.0f, 85.0f, 92.0f, 100.0f},
-    
-    // RAIN: Muito suave, tração
-    {0.0f, 5.0f, 10.0f, 15.0f, 22.0f, 30.0f, 40.0f, 52.0f, 65.0f, 100.0f}
-};
 
 // ============================================================================
 // VARIÁVEIS GLOBAIS
@@ -63,8 +50,8 @@ static bool g_limp_mode = false;
 // FUNÇÕES AUXILIARES
 // ============================================================================
 
-// Interpolação linear em mapa de resposta
-static float interpolate_response(const float* map, float pedal) {
+// Interpolação linear em mapa de resposta (valores uint16 pct×10 → float %)
+static float interpolate_response(const uint16_t* map, float pedal) {
     // Clamp pedal 0-100
     if (pedal < 0.0f) pedal = 0.0f;
     if (pedal > 100.0f) pedal = 100.0f;
@@ -81,7 +68,7 @@ static float interpolate_response(const float* map, float pedal) {
     // Fração para interpolação
     float frac = index - (float)idx_low;
     
-    return map[idx_low] + (map[idx_high] - map[idx_low]) * frac;
+    return (map[idx_low] + (map[idx_high] - map[idx_low]) * frac) / 10.0f;
 }
 
 // Limitador de taxa (ramp rate limiter)
@@ -148,13 +135,12 @@ bool etb_control_init(void) {
     // Copiar PID config para todos os modos
     for (int i = 0; i < ETB_MODE_COUNT; i++) {
         memcpy(&g_config.pid_configs[i], &g_default_pid_config, sizeof(etb_pid_config_t));
-        memcpy(g_config.response_maps[i], g_response_maps[i], sizeof(float) * 10);
     }
     
-    // 4. Parâmetros de marcha lenta
-    g_config.idle_rpm_target = 850.0f;
-    g_config.idle_min_opening = 3.0f;
-    g_config.idle_max_opening = 8.0f;
+    // 4. Parâmetros de marcha lenta — lidos de calibration globals
+    g_config.idle_rpm_target  = static_cast<float>(ems::engine::etb_idle_rpm_target);
+    g_config.idle_min_opening = static_cast<float>(ems::engine::etb_idle_min_opening_x10) / 10.0f;
+    g_config.idle_max_opening = static_cast<float>(ems::engine::etb_idle_max_opening_x10) / 10.0f;
     g_config.idle_spark_advance = 15.0f;   // 15° base
     g_config.idle_spark_retard = 10.0f;    // Até 10° retardo
     
@@ -209,7 +195,7 @@ void etb_control_loop(float pedal, float rpm, float dt) {
     } else {
         // 3. Aplicar mapa de resposta conforme modo
         float raw_target = interpolate_response(
-            g_config.response_maps[g_config.current_mode], 
+            ems::engine::etb_pedal_map[g_config.current_mode],
             pedal
         );
         
@@ -309,6 +295,12 @@ void etb_set_idle_control(bool active, float target_rpm) {
     if (active) {
         g_config.idle_rpm_target = target_rpm;
     }
+}
+
+void etb_apply_idle_calibration(void) {
+    g_config.idle_rpm_target  = static_cast<float>(ems::engine::etb_idle_rpm_target);
+    g_config.idle_min_opening = static_cast<float>(ems::engine::etb_idle_min_opening_x10) / 10.0f;
+    g_config.idle_max_opening = static_cast<float>(ems::engine::etb_idle_max_opening_x10) / 10.0f;
 }
 
 // FIX C2: must be in ems::engine namespace to override the weak symbol in

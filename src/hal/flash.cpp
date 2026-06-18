@@ -65,6 +65,8 @@ static constexpr uint32_t kSectorCal0  = 1u;   // Setor 1: Cal page 0
 static constexpr uint32_t kSectorCal1  = 2u;   // Setor 2: Cal page 1
 static constexpr uint32_t kSectorCal2  = 3u;   // Setor 3: Cal page 2
 static constexpr uint32_t kSectorCal6  = 7u;   // Setor 7: Cal page 6 (ETB)
+static constexpr uint32_t kSectorCal7  = 8u;   // Setor 8: Cal page 7 (Pedal map)
+static constexpr uint32_t kSectorCal8  = 9u;   // Setor 9: Cal page 8 (Boost map)
 
 static constexpr uint32_t kBank2Base   = FLASH_BANK2_BASE;
 static constexpr uint32_t kSectorSize  = FLASH_SECTOR_SIZE;
@@ -231,9 +233,11 @@ void nvm_reset_knock_map() noexcept {
 // ── Calibração (páginas) ──────────────────────────────────────────────────────
 
 bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexcept {
-    if (page > 6u || data == nullptr || len == 0u) { return false; }
+    if (page > 8u || data == nullptr || len == 0u) { return false; }
 
-    const uint32_t sector = (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
+    const uint32_t sector = (page == 8u) ? kSectorCal8 :
+                            (page == 7u) ? kSectorCal7 :
+                            (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
     const uint32_t dest   = kBank2Base + sector * kSectorSize;
 
     // Arredondar len para múltiplo de 4
@@ -258,9 +262,11 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
 }
 
 bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept {
-    if (page > 6u || data == nullptr || len == 0u) { return false; }
+    if (page > 8u || data == nullptr || len == 0u) { return false; }
 
-    const uint32_t sector = (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
+    const uint32_t sector = (page == 8u) ? kSectorCal8 :
+                            (page == 7u) ? kSectorCal7 :
+                            (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
     const uint32_t src    = kBank2Base + sector * kSectorSize;
 
     // Leitura direta da Flash (mapeada em memória)
@@ -422,7 +428,7 @@ static constexpr uint8_t kTestSeedSlots = 8u;
 static int8_t g_ltft[16][16]     = {};
 static int8_t g_knock[8][8]      = {};
 static int8_t g_ltft_add[8][8]   = {};
-static uint8_t g_cal[6][512]     = {};
+static uint8_t g_cal[8][512]     = {};
 static uint32_t g_erase_cnt   = 0u, g_prog_cnt = 0u;
 static bool     g_flash_busy      = false;  // simulates flash BSY timeout when set
 static uint32_t g_flash_busy_polls = 0u;     // non-zero → simulate timeout on next op
@@ -461,13 +467,13 @@ int8_t nvm_read_ltft_add(uint8_t r, uint8_t l) noexcept {
 }
 
 bool nvm_save_calibration(uint8_t pg, const uint8_t* d, uint16_t l) noexcept {
-    if (pg > 5u || d == nullptr || l == 0u) return false;
+    if (pg > 7u || d == nullptr || l == 0u) return false;
     if (g_flash_busy) { return false; }
     ++g_erase_cnt; ++g_prog_cnt;
     std::memcpy(g_cal[pg], d, l); return true;
 }
 bool nvm_load_calibration(uint8_t pg, uint8_t* d, uint16_t l) noexcept {
-    if (pg > 5u || d == nullptr || l == 0u) return false;
+    if (pg > 7u || d == nullptr || l == 0u) return false;
     std::memcpy(d, g_cal[pg], l); return true;
 }
 bool nvm_flush_adaptive_maps() noexcept { return true; }

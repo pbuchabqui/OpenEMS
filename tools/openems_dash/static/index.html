@@ -2,51 +2,98 @@
 <html lang="pt">
 <head>
 <meta charset="utf-8">
-<title>OpenEMS Dashboard</title>
+<title>OpenEMS</title>
 <link rel="stylesheet" href="uplot.min.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>OpenEMS</h1>
-  <span id="conn" class="badge off">desconectado</span>
-  <span id="fw" class="muted"></span>
-  <nav>
-    <button class="tab active" data-tab="telemetry">Telemetria</button>
-    <button class="tab" data-tab="grid-1">VE</button>
-    <button class="tab" data-tab="grid-2">Spark</button>
-    <button class="tab" data-tab="grid-4">Lambda</button>
-    <button class="tab" data-tab="params">Parâmetros</button>
-  </nav>
-  <div class="spacer"></div>
-  <button id="logBtn">● Gravar log</button>
-  <button id="logExportBtn" title="relatório Markdown do último log (estatísticas + série reamostrada)">⇩ Exportar p/ LLM</button>
-</header>
 
-<main>
-  <!-- Telemetria -->
-  <section id="tab-telemetry" class="pane active">
-    <div id="gauges" class="gauges"></div>
-    <div id="statusLeds" class="leds"></div>
-    <div id="charts" class="charts"></div>
-    <div id="diag" class="diag muted"></div>
-  </section>
+<div id="shell">
 
-  <!-- Editores de grid (VE / Spark / Lambda) -->
-  <section id="tab-grid-1" class="pane grid-pane" data-page="1"></section>
-  <section id="tab-grid-2" class="pane grid-pane" data-page="2"></section>
-  <section id="tab-grid-4" class="pane grid-pane" data-page="4"></section>
+  <!-- ── Coluna lateral esquerda ─────────────────────────────────────── -->
+  <aside id="sidebar">
+    <div id="sb-logo">OPEN<br>EMS</div>
 
-  <!-- Parâmetros (páginas 5/6/7) -->
-  <section id="tab-params" class="pane">
-    <div id="paramsRoot"></div>
-  </section>
+    <nav id="sb-nav">
+      <button class="tab active" data-tab="grid-1">
+        <span class="tab-icon">▦</span>
+        <span class="tab-label">VE</span>
+      </button>
+      <button class="tab" data-tab="grid-2">
+        <span class="tab-icon">▦</span>
+        <span class="tab-label">SPARK</span>
+      </button>
+      <button class="tab" data-tab="grid-4">
+        <span class="tab-icon">▦</span>
+        <span class="tab-label">LAMBDA</span>
+      </button>
+      <button class="tab" data-tab="pedal-map">
+        <span class="tab-icon">⌇</span>
+        <span class="tab-label">PEDAL MAP</span>
+      </button>
+      <button class="tab" data-tab="boost">
+        <span class="tab-icon">⬆</span>
+        <span class="tab-label">BOOST</span>
+      </button>
+      <button class="tab" data-tab="telemetry">
+        <span class="tab-icon">◈</span>
+        <span class="tab-label">TELEMETRIA</span>
+      </button>
+      <button class="tab" data-tab="params">
+        <span class="tab-icon">≡</span>
+        <span class="tab-label">PARÂMETROS</span>
+      </button>
+    </nav>
 
-</main>
+    <div id="sb-bottom">
+      <div id="conn" class="off">[OFFLINE]</div>
+      <div id="fw"></div>
+      <button id="logBtn">⏺ LOG</button>
+      <button id="logExportBtn" title="Exportar log para LLM">⇩ EXPORT</button>
+    </div>
+  </aside>
+
+  <!-- ── Área principal ──────────────────────────────────────────────── -->
+  <div id="main-wrap">
+
+    <!-- barra de status superior sempre visível -->
+    <div id="statusbar">
+      <div id="gauges" class="gauges"></div>
+      <div id="statusLeds" class="leds"></div>
+    </div>
+
+    <!-- conteúdo das abas -->
+    <main id="content">
+
+      <section id="tab-telemetry" class="pane">
+        <div id="charts" class="charts"></div>
+        <div id="diag" class="diag"></div>
+      </section>
+
+      <section id="tab-grid-1" class="pane grid-pane active" data-page="1"></section>
+      <section id="tab-grid-2" class="pane grid-pane" data-page="2"></section>
+      <section id="tab-grid-4" class="pane grid-pane" data-page="4"></section>
+
+      <section id="tab-params" class="pane">
+        <div id="paramsRoot"></div>
+      </section>
+
+      <section id="tab-boost" class="pane">
+        <div id="boostRoot"></div>
+      </section>
+
+      <section id="tab-pedal-map" class="pane">
+        <div id="pedalMapRoot"></div>
+      </section>
+
+    </main>
+  </div>
+
+</div>
 
 <footer id="toast"></footer>
 
 <script src="uplot.min.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=20260618c"></script>
 </body>
 </html>

@@ -151,6 +151,14 @@ static int16_t g_clt_table[128] = {};
 static int16_t g_iat_table[128] = {};
 
 static uint16_t g_fast_sample_accum = 0u;
+static uint32_t g_last_rpm_x10        = 0u;   // RPM do último dente — p/ plausibilidade MAP×TPS
+
+// Bench-mode: quando ativo, força CLT/IAT (ADC2) a valores fixos e limpa o fault
+// desses canais (sensores físicos ausentes na bancada, sem RC). MAP/TPS NÃO são mais
+// forçados — agora são ADC real (PA3/PA4). Sem efeito quando false (produção).
+static bool     g_bench_clt_iat      = false;
+static int16_t  g_bench_clt_x10      = 900;   // 90,0 °C — motor quente (corr CLT ≈ 1.0)
+static int16_t  g_bench_iat_x10      = 250;   // 25,0 °C — ar ambiente (corr IAT ≈ 1.0)
 static bool     g_tps_pct_cache_valid = false;
 static uint16_t g_tps_pct_cache_raw = 0u;
 static uint16_t g_tps_pct_cache_min = 0u;
@@ -186,6 +194,9 @@ inline void reset_state() noexcept {
     g_oil_pos        = 0u;
     g_maf_period_pos = 0u;
     g_fast_sample_accum    = 0u;
+    g_last_rpm_x10         = 0u;
+    // g_bench_clt_iat NÃO é resetado aqui — é config de bancada, persiste por
+    // sensors_set_bench_clt_iat() até ser desligado explicitamente.
     g_tps_pct_cache_valid  = false;
     g_tps_validated_x10    = 0u;
     g_tps_gradient_pending = false;
@@ -380,9 +391,12 @@ inline uint16_t maf_period_avg4() noexcept {
 // MAP, MAF-V, TPS, O2 — todos sincronizados ao mesmo ângulo de virabrequim
 // -----------------------------------------------------------------------------
 inline void sample_fast_channels() noexcept {
+    // NOTA: MAP (PA3/INP15) e TPS (PA4/INP18) agora são ADC real — o bench-mode NÃO
+    // os força mais (só CLT/IAT em sensors_tick_100ms). Ligar o DAC do estimulador.
+
     // P0 #3: Verifica status do ADC antes de ler sensores críticos
     // Se ADC está em recovery ou falhou, usa valores safe defaults (limp-home)
-    const bool adc_unavailable = ems::hal::adc_is_recovering() || 
+    const bool adc_unavailable = ems::hal::adc_is_recovering() ||
                                   ems::hal::adc_recovery_failed();
     
     if (adc_unavailable) {
@@ -522,7 +536,7 @@ inline void sample_fast_channels() noexcept {
     // Perform plausibility check between MAP and TPS
     if (!DiagnosticManager::check_sensor_plausibility(g_data_staging.map_bar_x1000,
                                                       g_data_staging.tps_pct_x10,
-                                                      0)) {
+                                                      g_last_rpm_x10)) {
         DiagnosticManager::report_fault(DiagnosticCode::MAP_TPS_CORRELATION,
                                        FaultSeverity::WARNING,
                                        g_data_staging.map_bar_x1000,
@@ -612,6 +626,7 @@ void sensors_init() noexcept {
 // TIM6 trigger opera no mesmo clock efetivo → razão 1:1,
 // adc_trigger_on_tooth usa o valor diretamente sem nova conversão.
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
+    g_last_rpm_x10 = snap.rpm_x10;            // cache p/ check de plausibilidade MAP×TPS
     const uint32_t ticks = snap.tooth_period_ns >> 4u;
     ems::hal::adc_trigger_on_tooth(ticks);
 
@@ -654,18 +669,36 @@ void sensors_tick_100ms() noexcept {
     g_iat_buf[g_iat_pos] = iat_raw;
     g_iat_pos = static_cast<uint8_t>((g_iat_pos + 1u) & 0x7u);
 
-    apply_fault(SensorId::CLT, clt_raw);
-    apply_fault(SensorId::IAT, iat_raw);
+    if (g_bench_clt_iat) {
+        // Banco HIL: CLT/IAT físicos ausentes — força temperaturas válidas e limpa
+        // o fault desses canais para que não acionem SENSOR_FAULT (bit 2).
+        FaultTracker& fc = g_fault[static_cast<uint8_t>(SensorId::CLT)];
+        FaultTracker& fi = g_fault[static_cast<uint8_t>(SensorId::IAT)];
+        fc.active = false; fc.consecutive_bad = 0u;
+        fi.active = false; fi.consecutive_bad = 0u;
+        const uint8_t clt_bit = sensor_bit(SensorId::CLT);
+        const uint8_t iat_bit = sensor_bit(SensorId::IAT);
+        uint8_t mask = 0u;
+        if (clt_bit < 8u) { mask = static_cast<uint8_t>(mask | (1u << clt_bit)); }
+        if (iat_bit < 8u) { mask = static_cast<uint8_t>(mask | (1u << iat_bit)); }
+        g_data_staging.fault_bits =
+            static_cast<uint8_t>(g_data_staging.fault_bits & ~mask);
+        g_data_staging.clt_degc_x10 = g_bench_clt_x10;
+        g_data_staging.iat_degc_x10 = g_bench_iat_x10;
+    } else {
+        apply_fault(SensorId::CLT, clt_raw);
+        apply_fault(SensorId::IAT, iat_raw);
 
-    const uint16_t clt_avg = avg_n(g_clt_buf, 8);
-    const uint16_t iat_avg = avg_n(g_iat_buf, 8);
+        const uint16_t clt_avg = avg_n(g_clt_buf, 8);
+        const uint16_t iat_avg = avg_n(g_iat_buf, 8);
 
-    g_data_staging.clt_degc_x10 = g_fault[static_cast<uint8_t>(SensorId::CLT)].active
-                          ? kFallbackCltDegcX10
-                          : lut128(g_clt_table, clt_avg);
-    g_data_staging.iat_degc_x10 = g_fault[static_cast<uint8_t>(SensorId::IAT)].active
-                          ? kFallbackIatDegcX10
-                          : lut128(g_iat_table, iat_avg);
+        g_data_staging.clt_degc_x10 = g_fault[static_cast<uint8_t>(SensorId::CLT)].active
+                              ? kFallbackCltDegcX10
+                              : lut128(g_clt_table, clt_avg);
+        g_data_staging.iat_degc_x10 = g_fault[static_cast<uint8_t>(SensorId::IAT)].active
+                              ? kFallbackIatDegcX10
+                              : lut128(g_iat_table, iat_avg);
+    }
 
     const uint16_t app1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN1_SE6B);
     const uint16_t app2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN2_SE7B);
@@ -815,6 +848,14 @@ void sensors_set_plausibility(uint16_t app_max_delta_pct_x10,
 
 void sensors_set_etb_harness_present(bool present) noexcept {
     g_etb_harness_present = present;
+}
+
+void sensors_set_bench_clt_iat(bool enable,
+                               int16_t clt_degc_x10,
+                               int16_t iat_degc_x10) noexcept {
+    g_bench_clt_iat = enable;
+    g_bench_clt_x10 = clt_degc_x10;
+    g_bench_iat_x10 = iat_degc_x10;
 }
 
 void sensors_set_range(SensorId id, SensorRange range) noexcept {

@@ -9,6 +9,7 @@
 #include "drv/sensors.h"
 #include "engine/calibration.h"
 #include "engine/ecu_sched.h"
+#include "engine/etb_control.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/math_utils.h"
@@ -36,16 +37,19 @@ enum class ParseState : uint8_t {
     WRITE_ARGS = 2u,
     WRITE_DATA = 3u,
     BURN_ARGS = 4u,
+    BENCH_ARG = 5u,   // 'B' + 1 byte: bench-mode CLT/IAT (0=off, 1=on)
 };
 
 alignas(4) static uint8_t g_page0[512] = {};
 alignas(4) static uint8_t g_page1_ve[256] = {};
 alignas(4) static uint8_t g_page2_spark[256] = {};
-alignas(4) static uint8_t g_page3_rt[64]      = {};
+alignas(4) static uint8_t g_page3_rt[66]      = {};
 alignas(4) static uint8_t g_page4_lambda[512] = {};   // lambda_target_table_x1000
 alignas(4) static uint8_t g_page5_corr[256]   = {};   // tabelas de correção 1D
 alignas(4) static uint8_t g_page6_xtau[80]    = {};   // X-Tau, AE rate curve, quick crank
 alignas(4) static uint8_t g_page7_dwell2d[32] = {};   // Dwell 2D: eixo RPM + factores Q8
+alignas(4) static uint8_t g_page8_pedalmap[80] = {};  // Pedal map: 4 modos × 10 × uint16
+alignas(4) static uint8_t g_page9_boost[112]   = {};  // Boost map: 7 marchas × 8 RPM × uint16
 
 static volatile uint8_t g_rx_buf[kRxSize] = {};
 static volatile uint16_t g_rx_head = 0u;
@@ -99,10 +103,12 @@ inline uint16_t page_size(uint8_t page) noexcept {
         return 256u;
     }
     if (page == 0x03u) {
-        return 64u;
+        return static_cast<uint16_t>(sizeof(g_page3_rt));
     }
     if (page == 0x06u) { return static_cast<uint16_t>(sizeof(g_page6_xtau)); }
     if (page == 0x07u) { return static_cast<uint16_t>(sizeof(g_page7_dwell2d)); }
+    if (page == 0x08u) { return static_cast<uint16_t>(sizeof(g_page8_pedalmap)); }
+    if (page == 0x09u) { return static_cast<uint16_t>(sizeof(g_page9_boost)); }
     return 0u;
 }
 
@@ -115,11 +121,13 @@ inline uint8_t* page_ptr(uint8_t page) noexcept {
     if (page == 0x05u) { return g_page5_corr; }
     if (page == 0x06u) { return g_page6_xtau; }
     if (page == 0x07u) { return g_page7_dwell2d; }
+    if (page == 0x08u) { return g_page8_pedalmap; }
+    if (page == 0x09u) { return g_page9_boost; }
     return nullptr;
 }
 
 inline uint8_t normalize_page_id(uint8_t page) noexcept {
-    if (page >= static_cast<uint8_t>('0') && page <= static_cast<uint8_t>('7')) {
+    if (page >= static_cast<uint8_t>('0') && page <= static_cast<uint8_t>('9')) {
         return static_cast<uint8_t>(page - static_cast<uint8_t>('0'));
     }
     return page;
@@ -174,7 +182,7 @@ inline void update_realtime_page() noexcept {
 
     rt.rpm = static_cast<uint16_t>((c.rpm_x10 > 655350u) ? 65535u : (c.rpm_x10 / 10u));
     rt.map_bar_x100 = ems::engine::clamp_u8(s.map_bar_x1000 / 10u);
-    rt.tps_pct = ems::engine::clamp_u8(s.tps_pct_x10 / 10u);
+    rt.tps_pct = ems::engine::clamp_u8(s.etb_tps_pct_x10 / 10u);
 
     rt.clt_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.clt_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
     rt.iat_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.iat_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
@@ -185,6 +193,9 @@ inline void update_realtime_page() noexcept {
     rt.advance_p40 = static_cast<uint8_t>(static_cast<int16_t>(g_rt_advance_deg) + 40);
     rt.ve          = g_page1_ve[0];
     rt.stft_p100   = g_rt_stft_p100;
+    // VE interpolado vivo (get_ve no ponto rpm×map atual) — rt.ve só expõe VE[0][0].
+    rt.reserved[49] = ems::engine::get_ve(
+        c.rpm_x10, static_cast<uint16_t>(s.map_bar_x1000 / 10u));
 
     uint16_t status = 0u;
     if (c.state == ems::drv::SyncState::FULL_SYNC) {
@@ -222,13 +233,15 @@ inline void update_realtime_page() noexcept {
     write_u32_le(&rt.reserved[31], g_rt_ivc_clamp_count);
     write_u32_le(&rt.reserved[35], g_rt_loop2ms_last_us);
     write_u32_le(&rt.reserved[39], g_rt_loop2ms_max_us);
-    // ADC bruto p/ calibração de pedal/borboleta (AN1=APP1, AN2=APP2, AN3=ETB1)
+    // ADC bruto p/ calibração (AN1=APP1, AN2=APP2, AN3=ETB TPS1, AN4=ETB TPS2)
     rt.reserved[43] = static_cast<uint8_t>(s.an1_raw & 0xFFu);
     rt.reserved[44] = static_cast<uint8_t>((s.an1_raw >> 8u) & 0xFFu);
     rt.reserved[45] = static_cast<uint8_t>(s.an2_raw & 0xFFu);
     rt.reserved[46] = static_cast<uint8_t>((s.an2_raw >> 8u) & 0xFFu);
     rt.reserved[47] = static_cast<uint8_t>(s.an3_raw & 0xFFu);
     rt.reserved[48] = static_cast<uint8_t>((s.an3_raw >> 8u) & 0xFFu);
+    rt.reserved[50] = static_cast<uint8_t>(s.an4_raw & 0xFFu);
+    rt.reserved[51] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }
@@ -264,6 +277,33 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         ems::engine::cfg::engine_config_serialize(g_page0, 16u);
         // Bytes 16-55: calibração de sensores APP/ETB/TPS + plausibilidade
         ems::engine::sync_etb_calibration_to_page(g_page0 + 16, 40u);
+        // Bytes 56-63: trim de combustível e ignição por cilindro (int8 × 4 cada)
+        std::memcpy(g_page0 + 56, ems::engine::cyl_fuel_trim_pct, 4u);
+        std::memcpy(g_page0 + 60, ems::engine::cyl_ign_trim_deg,  4u);
+        // Bytes 64-65: janela de dente CMP
+        g_page0[64] = ems::engine::cmp_window_open_tooth;
+        g_page0[65] = ems::engine::cmp_window_close_tooth;
+        // Bytes 66-99: dirigibilidade (anti-jerk, rev limit, decel cut, LTFT)
+        std::memcpy(g_page0 + 66, &ems::engine::antijerk_tpsdot_threshold_x10, 2u);
+        std::memcpy(g_page0 + 68, &ems::engine::antijerk_retard_deg,            2u);
+        g_page0[70] = ems::engine::antijerk_decay_cycles;
+        g_page0[71] = 0u;  // pad
+        std::memcpy(g_page0 + 72, &ems::engine::rev_limit_rpm_x10,         4u);
+        std::memcpy(g_page0 + 76, &ems::engine::rev_limit_soft_window_x10, 4u);
+        std::memcpy(g_page0 + 80, &ems::engine::rev_limit_spark_window_x10, 4u);
+        std::memcpy(g_page0 + 84, &ems::engine::rev_limit_max_retard_deg,  2u);
+        std::memcpy(g_page0 + 86, &ems::engine::ltft_add_pw_threshold_us,  2u);
+        std::memcpy(g_page0 + 88, &ems::engine::decel_cut_tps_threshold_x10, 2u);
+        std::memcpy(g_page0 + 90, &ems::engine::decel_cut_entry_rpm_x10,   4u);
+        std::memcpy(g_page0 + 94, &ems::engine::decel_cut_exit_rpm_x10,    4u);
+        std::memcpy(g_page0 + 98, &ems::engine::decel_cut_min_clt_x10,     2u);
+        // Bytes 100-105: marcha lenta ETB
+        std::memcpy(g_page0 + 100, &ems::engine::etb_idle_rpm_target,       2u);
+        std::memcpy(g_page0 + 102, &ems::engine::etb_idle_min_opening_x10,  2u);
+        std::memcpy(g_page0 + 104, &ems::engine::etb_idle_max_opening_x10,  2u);
+        // Bytes 106-121: idle RPM target vs CLT (8 × int16 CLT + 8 × uint16 RPM)
+        std::memcpy(g_page0 + 106, ems::engine::iac_clt_axis_x10,        16u);
+        std::memcpy(g_page0 + 122, ems::engine::iac_idle_target_rpm_x10, 16u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -317,6 +357,10 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memset(p, 0, sizeof(g_page7_dwell2d));
         std::memcpy(p + 0,  ems::engine::dwell_rpm_axis_rpm,  8u);
         std::memcpy(p + 8,  ems::engine::dwell_rpm_factor_q8, 8u);
+    } else if (page == 0x08u) {
+        std::memcpy(g_page8_pedalmap, ems::engine::etb_pedal_map, sizeof(g_page8_pedalmap));
+    } else if (page == 0x09u) {
+        std::memcpy(g_page9_boost, ems::engine::boost_target_bar_x1000, sizeof(g_page9_boost));
     }
 }
 
@@ -330,6 +374,32 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         // Calibração de sensores (bytes 16-55) → globals + drivers
         ems::engine::apply_etb_calibration_from_page(g_page0 + 16, 40u);
         ems::engine::push_sensor_calibration_to_drivers();
+        // Trim por cilindro e janela CMP (bytes 56-65)
+        std::memcpy(ems::engine::cyl_fuel_trim_pct, g_page0 + 56, 4u);
+        std::memcpy(ems::engine::cyl_ign_trim_deg,  g_page0 + 60, 4u);
+        ems::engine::cmp_window_open_tooth  = g_page0[64];
+        ems::engine::cmp_window_close_tooth = g_page0[65];
+        // Dirigibilidade (bytes 66-99)
+        std::memcpy(&ems::engine::antijerk_tpsdot_threshold_x10, g_page0 + 66, 2u);
+        std::memcpy(&ems::engine::antijerk_retard_deg,            g_page0 + 68, 2u);
+        ems::engine::antijerk_decay_cycles = g_page0[70];
+        std::memcpy(&ems::engine::rev_limit_rpm_x10,          g_page0 + 72, 4u);
+        std::memcpy(&ems::engine::rev_limit_soft_window_x10,  g_page0 + 76, 4u);
+        std::memcpy(&ems::engine::rev_limit_spark_window_x10, g_page0 + 80, 4u);
+        std::memcpy(&ems::engine::rev_limit_max_retard_deg,   g_page0 + 84, 2u);
+        std::memcpy(&ems::engine::ltft_add_pw_threshold_us,   g_page0 + 86, 2u);
+        std::memcpy(&ems::engine::decel_cut_tps_threshold_x10, g_page0 + 88, 2u);
+        std::memcpy(&ems::engine::decel_cut_entry_rpm_x10,    g_page0 + 90, 4u);
+        std::memcpy(&ems::engine::decel_cut_exit_rpm_x10,     g_page0 + 94, 4u);
+        std::memcpy(&ems::engine::decel_cut_min_clt_x10,      g_page0 + 98, 2u);
+        // Marcha lenta ETB (bytes 100-105)
+        std::memcpy(&ems::engine::etb_idle_rpm_target,      g_page0 + 100, 2u);
+        std::memcpy(&ems::engine::etb_idle_min_opening_x10, g_page0 + 102, 2u);
+        std::memcpy(&ems::engine::etb_idle_max_opening_x10, g_page0 + 104, 2u);
+        // Idle RPM target vs CLT (bytes 106-121)
+        std::memcpy(ems::engine::iac_clt_axis_x10,        g_page0 + 106, 16u);
+        std::memcpy(ems::engine::iac_idle_target_rpm_x10, g_page0 + 122, 16u);
+        etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -381,6 +451,10 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         const uint8_t* p = g_page7_dwell2d;
         std::memcpy(ems::engine::dwell_rpm_axis_rpm,  p + 0,  8u);
         std::memcpy(ems::engine::dwell_rpm_factor_q8, p + 8,  8u);
+    } else if (page == 0x08u) {
+        std::memcpy(ems::engine::etb_pedal_map, g_page8_pedalmap, sizeof(g_page8_pedalmap));
+    } else if (page == 0x09u) {
+        std::memcpy(ems::engine::boost_target_bar_x1000, g_page9_boost, sizeof(g_page9_boost));
     }
 }
 
@@ -391,6 +465,8 @@ inline uint8_t editable_page_bit(uint8_t page) noexcept {
     if (page == 0x05u) { return 0x08u; }
     if (page == 0x06u) { return 0x10u; }
     if (page == 0x07u) { return 0x20u; }
+    if (page == 0x08u) { return 0x40u; }
+    if (page == 0x09u) { return 0x80u; }
     return 0u;
 }
 
@@ -444,6 +520,18 @@ inline bool burn_page_to_flash(uint8_t page) noexcept {
     }
     if (page == 0x07u) {
         const bool ok = ems::hal::nvm_save_calibration(6u, g_page7_dwell2d, static_cast<uint16_t>(sizeof(g_page7_dwell2d)));
+        if (!ok) { return false; }
+        clear_page_dirty(page);
+        return true;
+    }
+    if (page == 0x08u) {
+        const bool ok = ems::hal::nvm_save_calibration(7u, g_page8_pedalmap, static_cast<uint16_t>(sizeof(g_page8_pedalmap)));
+        if (!ok) { return false; }
+        clear_page_dirty(page);
+        return true;
+    }
+    if (page == 0x09u) {
+        const bool ok = ems::hal::nvm_save_calibration(8u, g_page9_boost, static_cast<uint16_t>(sizeof(g_page9_boost)));
         if (!ok) { return false; }
         clear_page_dirty(page);
         return true;
@@ -565,6 +653,19 @@ inline void parse_byte(uint8_t b) noexcept {
             tx_push(g_dirty_page_mask);
             return;
         }
+        if (b == static_cast<uint8_t>('B')) {
+            g_state = ParseState::BENCH_ARG;
+            return;
+        }
+        return;
+    }
+
+    if (g_state == ParseState::BENCH_ARG) {
+        // Bench-mode CLT/IAT p/ HIL: 0=off (ADC normal), !=0=on (90°C/25°C fixos,
+        // sem SENSOR_FAULT pelos canais CLT/IAT). Ver sensors_set_bench_clt_iat.
+        ems::drv::sensors_set_bench_clt_iat(b != 0u, 900, 250);
+        tx_push(kAckOk);
+        reset_parser();
         return;
     }
 

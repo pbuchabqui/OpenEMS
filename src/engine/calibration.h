@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "engine/table3d.h"
+#include "engine/engine_config.h"
 
 namespace ems::engine {
 
@@ -98,8 +99,27 @@ extern uint16_t etb_ki_x10;
 extern uint16_t etb_kd_x10;
 extern uint8_t  etb_cal_valid;
 extern uint8_t  etb_harness_present;
+// Pedal-to-throttle response maps: 4 modes × 10 points, units pct×10 (0–1000).
+// Axis is fixed: pedal 0%,10%,...,90%,100%. Points[0]=0 and [9]=1000 are enforced.
+extern uint16_t etb_pedal_map[4][10];
 extern uint16_t tps_raw_min;   // TPS legado (cabo, PA4) — raw ADC em 0%/100%
 extern uint16_t tps_raw_max;
+
+// Boost target: 7 marchas (0=neutro/desconhecido, 1-6) × 8 pontos de RPM.
+// Unidade: bar × 1000. Eixo RPM fixo (mesmo que kBoostRpmAxisX10 em auxiliaries).
+extern uint16_t boost_target_bar_x1000[7][8];
+
+// Trim por cilindro — índice = cilindro físico (0-based, kCylinderCount elementos).
+// Fuel: ±% sobre o PW calculado.  Ign: ±° sobre o avanço calculado.
+// Defaults zero = sem correção.
+extern int8_t cyl_fuel_trim_pct[::ems::engine::cfg::kCylinderCount];
+extern int8_t cyl_ign_trim_deg[::ems::engine::cfg::kCylinderCount];
+
+// CMP dente único: janela de dentes do virabrequim onde a borda do sensor CMP
+// é esperada. open=close=0 → validação desabilitada (usa só timing).
+// Unidade: índice de dente (0 = primeiro após gap).
+extern uint8_t cmp_window_open_tooth;
+extern uint8_t cmp_window_close_tooth;
 
 extern uint8_t  xtau_autocal_enabled;
 extern uint8_t  xtau_autocal_active;
@@ -131,12 +151,23 @@ extern int16_t  rev_limit_max_retard_deg;    // retardo máximo no limite (ex. 1
 extern uint16_t ltft_add_pw_threshold_us;
 
 // Corte de combustível na desaceleração (MS42 TI_PUR)
-// Ativa quando: TPS < threshold + RPM > entry + CLT > min_clt
-// Desativa quando: RPM < exit (histerese) OU TPS >= threshold
-extern uint16_t decel_cut_tps_threshold_x10;   // TPS máximo para entrada (ex. 5 = 0.5%)
-extern uint32_t decel_cut_entry_rpm_x10;        // RPM mínimo para ativar corte
-extern uint32_t decel_cut_exit_rpm_x10;         // RPM abaixo do qual reativa combustível
-extern int16_t  decel_cut_min_clt_x10;          // CLT mínima (motor aquecido)
+extern uint16_t decel_cut_tps_threshold_x10;
+extern uint32_t decel_cut_entry_rpm_x10;
+extern uint32_t decel_cut_exit_rpm_x10;
+extern int16_t  decel_cut_min_clt_x10;
+
+// Marcha lenta ETB — posição mínima/máxima da borboleta no idle (unidade: %×10)
+// idle_rpm_target: RPM alvo (uint16, RPM direto, ex. 850)
+// idle_min_opening_x10: abertura mínima (%×10, ex. 30 = 3.0%)
+// idle_max_opening_x10: abertura máxima (%×10, ex. 80 = 8.0%)
+extern uint16_t etb_idle_rpm_target;
+extern uint16_t etb_idle_min_opening_x10;
+extern uint16_t etb_idle_max_opening_x10;
+
+// Idle RPM target vs CLT — 8 pontos, eixo CLT (°C×10); usado pelo ETB idle spark
+constexpr uint8_t kIacWarmupPts = 8u;
+extern int16_t  iac_clt_axis_x10[kIacWarmupPts];
+extern uint16_t iac_idle_target_rpm_x10[kIacWarmupPts];
 
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;
 // Empurra a calibração de sensores (APP/ETB/TPS/plausibilidade) p/ drv::sensors.

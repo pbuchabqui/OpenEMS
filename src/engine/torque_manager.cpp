@@ -214,15 +214,32 @@ bool torque_manager_is_ready(void) {
 // ─── New integer API (ems::engine namespace) ─────────────────────────────────
 #include "engine/calibration.h"
 #include "engine/math_utils.h"
+#include "etb_control.h"
 
 namespace ems::engine {
 
 static uint16_t g_etb_target_x10   = 0u;
 static uint8_t  g_limp_reason      = 0u;
+// Integrador de ar para marcha lenta (pct×10). Acumula abertura necessária
+// para manter RPM no target; limitado entre etb_idle_min/max_opening_x10.
+static int32_t  g_idle_air_int_x10 = 0;
+
+// Interpolação inteira do pedal map: app_x10 (0-1000) → throttle_x10 (0-1000).
+// Os 10 pontos correspondem a pedal 0%,10%,...,100%.
+static uint16_t pedal_map_lookup(uint16_t app_x10) noexcept {
+    const uint8_t mode = static_cast<uint8_t>(etb_get_drive_mode());
+    if (app_x10 >= 1000u) { return etb_pedal_map[mode][9]; }
+    const uint16_t idx  = app_x10 / 100u;          // 0-9
+    const uint16_t frac = app_x10 - idx * 100u;    // 0-99
+    const uint16_t lo   = etb_pedal_map[mode][idx];
+    const uint16_t hi   = etb_pedal_map[mode][idx + 1u];
+    return static_cast<uint16_t>(lo + (static_cast<uint32_t>(hi - lo) * frac) / 100u);
+}
 
 void torque_manager_reset() noexcept {
-    g_etb_target_x10 = 0u;
-    g_limp_reason    = 0u;
+    g_etb_target_x10   = 0u;
+    g_limp_reason      = 0u;
+    g_idle_air_int_x10 = 0;
 }
 
 TorqueOutput torque_manager_update(
@@ -261,8 +278,8 @@ TorqueOutput torque_manager_update(
         out.limp_reason |= TORQUE_LIMP_ETB_FAULT;
     }
 
-    // Base target from driver pedal
-    uint16_t target_x10 = sensors.app_pct_x10;
+    // Base target from driver pedal — apply response map
+    uint16_t target_x10 = pedal_map_lookup(sensors.app_pct_x10);
 
     // Limp mode: clamp to etb_max_open_pct_x10_limp
     if ((out.limp_reason & (TORQUE_LIMP_MAP_CLT | TORQUE_LIMP_APP_FAULT)) != 0u) {
@@ -274,16 +291,37 @@ TorqueOutput torque_manager_update(
         target_x10 = 0u;
     }
 
-    // Idle boost: if RPM below target, open slightly
-    if (snap.rpm_x10 > 0u && snap.rpm_x10 < idle_target_rpm_x10 &&
-        sensors.app_pct_x10 < etb_idle_open_pct_x10) {
-        const uint16_t idle_add =
-            static_cast<uint16_t>(
-                (static_cast<uint32_t>(etb_idle_open_pct_x10 - sensors.app_pct_x10) *
-                 (idle_target_rpm_x10 - snap.rpm_x10)) /
-                static_cast<uint32_t>(idle_target_rpm_x10 > 0u ? idle_target_rpm_x10 : 1u));
-        target_x10 = static_cast<uint16_t>(
-            clamp_u16(static_cast<uint16_t>(target_x10 + idle_add), 0u, 1000u));
+    // Idle air control: floor + integrador I simples.
+    // Condição de idle: pedal solto (APP < threshold) E motor girando.
+    // O integrador acumula/dissipa 1 unit (0.1%) por tick (2ms) conforme
+    // erro RPM. Isso converge para a abertura exata necessária sem overshoot.
+    const bool in_idle_mode = (sensors.app_pct_x10 < etb_idle_open_pct_x10)
+                              && (snap.rpm_x10 > 0u);
+    if (in_idle_mode) {
+        const int32_t rpm_error = static_cast<int32_t>(idle_target_rpm_x10)
+                                  - static_cast<int32_t>(snap.rpm_x10);
+        // Integra: +1 quando abaixo do target, -1 quando acima
+        if (rpm_error > 0) {
+            g_idle_air_int_x10 += 1;
+        } else if (rpm_error < 0) {
+            g_idle_air_int_x10 -= 1;
+        }
+        // Limita entre mínimo e máximo de abertura de idle
+        const int32_t idle_min = static_cast<int32_t>(etb_idle_min_opening_x10);
+        const int32_t idle_max = static_cast<int32_t>(etb_idle_max_opening_x10);
+        if (g_idle_air_int_x10 < idle_min) { g_idle_air_int_x10 = idle_min; }
+        if (g_idle_air_int_x10 > idle_max) { g_idle_air_int_x10 = idle_max; }
+        // Impõe chão: borboleta nunca fecha abaixo do valor integrado
+        const uint16_t idle_floor = static_cast<uint16_t>(g_idle_air_int_x10);
+        if (target_x10 < idle_floor) {
+            target_x10 = idle_floor;
+        }
+    } else if (sensors.app_pct_x10 >= etb_idle_open_pct_x10) {
+        // Fora do modo idle: dissipa integrador gradualmente (1/tick)
+        // para não haver salto ao retornar para idle.
+        if (g_idle_air_int_x10 > 0) {
+            g_idle_air_int_x10 -= 1;
+        }
     }
 
     g_etb_target_x10 = target_x10;

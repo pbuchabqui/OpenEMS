@@ -3,7 +3,15 @@
  * @brief ADC1 + ADC2 com trigger via TIM6 TRGO — STM32H562RGT6
  *        Substitui hal/adc.cpp da versão STM32.
  *
- * Mapeamento de canais:
+ * ⚠⚠ MAPEAMENTO DE CANAIS ABAIXO ESTÁ ERRADO PARA O STM32H562 ⚠⚠ (DS14258, 2026-06-15)
+ *   PA2(MAP), PC1(AN4), PC2(CLT), PC3(IAT) NÃO TÊM ADC. Nº de canais todos errados.
+ *   Mapa REAL (pino→canal): PA3=INP15, PA4=INP18, PA6=INP3, PA7=INP7, PB0=INP9,
+ *   PB1=INP5, PC0=INP10, PC4=INP4, PC5=INP8 (PA0/PA1 sem ADC, usados p/ TIM5).
+ *   O ADC funciona (LLI/DMA/trigger ok) mas lê pinos errados → sensores não lêem.
+ *   FIX pendente = reatribuir sensores a pinos com ADC + corrigir SQR/gpio/fiação.
+ *   Workaround atual: bench-mode (cmd 'B') força os valores. Ver memória adc1-nao-converte.
+ *
+ * Mapeamento de canais (HISTÓRICO — INCORRETO, ver aviso acima):
  *
  *   ADC1:
  *     MAP_SE10   → ADC1_IN3  (PA2)
@@ -39,6 +47,12 @@
 // ── Cache das últimas leituras ADC ───────────────────────────────────────────
 static volatile uint16_t g_adc_secondary_raw[8] = {};  // canais ADC1 IN3-IN10
 static volatile uint16_t g_adc2_raw[4] = {};  // canais ADC2 IN1-IN4
+
+// LLI auto-referente por canal (CBR1, CDAR, CLLR) — torna o GPDMA contínuo: ao fim
+// de cada bloco recarrega tamanho+destino e re-aponta pra si mesmo. Em SRAM (.bss),
+// 32-byte aligned. Sem isso o canal vai a IDLE após 1 bloco (congelamento).
+alignas(32) static volatile uint32_t g_adc1_lli[3] = {};
+alignas(32) static volatile uint32_t g_adc2_lli[3] = {};
 
 static volatile uint32_t g_adc_dma_faults = 0u;
 static volatile uint32_t g_adc_init_faults = 0u;  // FIX: Fault counter para adc_wait_ready timeout
@@ -78,22 +92,27 @@ static constexpr uint32_t kTimClockHz = 62500000u;  // TIM6 @ 62.5 MHz após clo
 
 // ── Sequência de conversão ADC1 (8 canais em sequência) ─────────────────────
 // SQR1: L[3:0] = 7 (8 conversões - 1), SQ1-SQ4 nos bits [10:6],[16:12],[22:18],[28:24]
+// SQ1=INP15(MAP/PA3), SQ3=INP18(TPS/PA4) — canais REAIS do H562 (DS14258). Os demais
+// slots (MAF/KNOCK/AN1-4, não usados na bancada) apontam p/ canais ADC válidos
+// (INP4/5/8/9/10 = PC4/PB1/PC5/PB0/PC0) só para não converter canal inexistente.
 static constexpr uint32_t kAdc1Sqr1 = (7u << 0)    // L = 7 (8 conv)
-                                     | (3u << 6)    // SQ1 = IN3
-                                     | (4u << 12)   // SQ2 = IN4
-                                     | (5u << 18)   // SQ3 = IN5
-                                     | (6u << 24);  // SQ4 = IN6
-static constexpr uint32_t kAdc1Sqr2 = (7u << 0)    // SQ5 = IN7
-                                     | (8u << 6)    // SQ6 = IN8
-                                     | (9u << 12)   // SQ7 = IN9
-                                     | (10u << 18); // SQ8 = IN10
+                                     | (15u << 6)   // SQ1 = INP15 (MAP, PA3) → array[0]
+                                     | (5u << 12)   // SQ2 = INP5  (PB1)
+                                     | (18u << 18)  // SQ3 = INP18 (TPS, PA4) → array[2]
+                                     | (9u << 24);  // SQ4 = INP9  (PB0)
+static constexpr uint32_t kAdc1Sqr2 = (10u << 0)   // SQ5 = INP10 (PC0)
+                                     | (4u << 6)    // SQ6 = INP4  (PC4)
+                                     | (8u << 12)   // SQ7 = INP8  (PC5)
+                                     | (5u << 18);  // SQ8 = INP5  (PB1, dup)
 
 // ── Sequência de conversão ADC2 (4 canais) ───────────────────────────────────
+// CLT→INP9(PB0), IAT→INP5(PB1) — bancada: PB0/PB1 partilhados com APP1/APP2 no ADC1;
+// fios GPIO14/GPIO27 (APP1/APP2) desligados na bancada, GPIO13/GPIO12 ligados a PB0/PB1.
 static constexpr uint32_t kAdc2Sqr1 = (3u << 0)    // L = 3 (4 conv)
-                                     | (1u << 6)    // SQ1 = IN1
-                                     | (2u << 12)   // SQ2 = IN2
-                                     | (13u << 18)  // SQ3 = IN13
-                                     | (14u << 24); // SQ4 = IN14
+                                     | (9u << 6)    // SQ1 = INP9 (CLT, PB0)
+                                     | (5u << 12)   // SQ2 = INP5 (IAT, PB1)
+                                     | (4u << 18)   // SQ3 = INP4 (FUEL, PC4)
+                                     | (8u << 24);  // SQ4 = INP8 (OIL, PC5)
 
 namespace ems::hal {
 
@@ -188,8 +207,9 @@ static void adc_enable(volatile uint32_t& cr, volatile uint32_t& isr) noexcept {
     }
 }
 
-static void gpdma_arm(uint32_t ch_base, uint32_t reqsel,
-                      uint32_t buf_bytes, uint32_t src_dr, uint32_t dest_buf) noexcept {
+static void gpdma_arm(uint32_t ch_base, uint32_t reqsel, uint32_t buf_bytes,
+                      uint32_t src_dr, uint32_t dest_buf,
+                      volatile uint32_t* lli) noexcept {
     GPDMA_REG(ch_base, GPDMA_CCR_OFF) = GPDMA_CCR_RESET;
     for (uint32_t i = 0u; i < 128u; ++i) {
         if ((GPDMA_REG(ch_base, GPDMA_CCR_OFF) & GPDMA_CCR_RESET) == 0u) { break; }
@@ -202,23 +222,36 @@ static void gpdma_arm(uint32_t ch_base, uint32_t reqsel,
     GPDMA_REG(ch_base, GPDMA_CDAR_OFF) = dest_buf;
     GPDMA_REG(ch_base, GPDMA_CTR3_OFF) = 0u;
     GPDMA_REG(ch_base, GPDMA_CBR2_OFF) = 0u;
-    GPDMA_REG(ch_base, GPDMA_CLLR_OFF) = 0u;
+
+    // LLI auto-referente: ao completar o bloco, o GPDMA recarrega CBR1 (tamanho),
+    // CDAR (destino → array[0]) e CLLR (de volta a este nó) → roda pra sempre.
+    // CSAR (ADC_DR) é constante (CTR1 só incrementa o destino) → não recarregado.
+    const uint32_t node = reinterpret_cast<uint32_t>(lli);
+    const uint32_t cllr = (node & GPDMA_CLLR_LA_MASK)
+                        | GPDMA_CLLR_UB1 | GPDMA_CLLR_UDA | GPDMA_CLLR_ULL;
+    lli[0] = buf_bytes;   // → CBR1
+    lli[1] = dest_buf;    // → CDAR
+    lli[2] = cllr;        // → CLLR (self-link)
+    GPDMA_REG(ch_base, GPDMA_CLLBAR_OFF) = node & 0xFFFF0000u;  // base do LLI (high)
+    GPDMA_REG(ch_base, GPDMA_CLLR_OFF)   = cllr;                // arma o link
 	GPDMA_REG(ch_base, GPDMA_CCR_OFF) = GPDMA_CCR_PRIO_HIGH | GPDMA_CCR_TCIE |
-		GPDMA_CCR_DTEIE | GPDMA_CCR_USEIE | GPDMA_CCR_EN; // FIX: removido GPDMA_CCR_CIRC — one-shot com re-arm no ISR
+		GPDMA_CCR_DTEIE | GPDMA_CCR_USEIE | GPDMA_CCR_EN;
 }
 
 static void gpdma_adc1_arm() noexcept {
     gpdma_arm(GPDMA_CH0_BASE, GPDMA_CTR2_REQSEL_ADC1,
               sizeof(g_adc_secondary_raw),
               reinterpret_cast<uint32_t>(&ADC1_DR),
-              reinterpret_cast<uint32_t>(&g_adc_secondary_raw[0]));
+              reinterpret_cast<uint32_t>(&g_adc_secondary_raw[0]),
+              g_adc1_lli);
 }
 
 static void gpdma_adc2_arm() noexcept {
     gpdma_arm(GPDMA_CH1_BASE, GPDMA_CTR2_REQSEL_ADC2,
               sizeof(g_adc2_raw),
               reinterpret_cast<uint32_t>(&ADC2_DR),
-              reinterpret_cast<uint32_t>(&g_adc2_raw[0]));
+              reinterpret_cast<uint32_t>(&g_adc2_raw[0]),
+              g_adc2_lli);
 }
 
 // ── API pública ───────────────────────────────────────────────────────────────
@@ -232,19 +265,20 @@ void adc_init() noexcept {
                   | RCC_AHB2ENR1_GPIOCEN;
 
     // ── 2. Configurar pinos analógicos (MODER = 11b = ANALOG) ────────────
-    // ADC1: PA2(IN3), PA3(IN4), PA4(IN5), PA5(IN6), PB0(IN7), PB1(IN8)
-    gpio_set_analog(&GPIOA_MODER, 2u);
+    // ADC1: PA3=INP15(MAP), PA4=INP18(TPS), PA5=INN18(diff-), PB0=INP9(APP1/CLT), PB1=INP5(APP2/IAT)
+    // PA2 não tem ADC no H562 (DS14258) — não configurar.
     gpio_set_analog(&GPIOA_MODER, 3u);
     gpio_set_analog(&GPIOA_MODER, 4u);
     gpio_set_analog(&GPIOA_MODER, 5u);
-    gpio_set_analog(&GPIOB_MODER, 0u);
-    gpio_set_analog(&GPIOB_MODER, 1u);
-    // PC0(IN9), PC1(IN10), PC2(IN1), PC3(IN2), PC4(IN13), PC5(IN14)
+    gpio_set_analog(&GPIOB_MODER, 0u);  // INP9: APP1 (ADC1) / CLT (ADC2, bancada)
+    gpio_set_analog(&GPIOB_MODER, 1u);  // INP5: APP2 (ADC1) / IAT (ADC2, bancada)
+    // PC0=INP10(ETB_TPS1), PC4=INP4(FUEL), PC5=INP8(OIL)
+    // PC1/PC2/PC3 não têm ADC no H562 — não configurar.
     volatile uint32_t* gpioc_moder = reinterpret_cast<volatile uint32_t*>(
         GPIOC_BASE + GPIO_MODER_OFF);
-    for (uint8_t p = 0u; p <= 5u; ++p) {
-        gpio_set_analog(gpioc_moder, p);
-    }
+    gpio_set_analog(gpioc_moder, 0u);
+    gpio_set_analog(gpioc_moder, 4u);
+    gpio_set_analog(gpioc_moder, 5u);
 
     // ── 3. Clock ADC: HCLK/4 = 62.5 MHz, síncrono ao trigger de timer ───
     ADC12_CCR = ADC12_CCR_CKMODE_HCLK_DIV4;
@@ -262,38 +296,45 @@ ADC1_SMPR1 = (kSmpr) // IN1
 	| (kSmpr << 18) // IN7 (AN1)
 	| (kSmpr << 21) // IN8 (AN2)
 	| (kSmpr << 24); // IN9 (AN3)
-// FIX: IN10 está em SMPR2, não em SMPR1 (SMPR1 cobre IN0-IN9, SMPR2 cobre IN10-IN18)
-ADC1_SMPR2 = (kSmpr << 0); // IN10 (AN4) — bits [(10-10)*3] = bit 0
+// SMPR2 cobre IN10-IN18. Canais usados aqui: IN10, IN15 (MAP/PA3), IN18 (TPS/PA4).
+ADC1_SMPR2 = (kSmpr << ((10-10)*3))   // IN10
+           | (kSmpr << ((15-10)*3))   // IN15 (MAP)
+           | (kSmpr << ((18-10)*3));  // IN18 (TPS)
 
     // Sequência de conversão ADC1
     ADC1_SQR1 = kAdc1Sqr1;
     ADC1_SQR2 = kAdc1Sqr2;
 
-	// CFGR1: 12-bit, trigger externo TIM6_TRGO, rising edge, DMA one-shot por sequência
+	// CFGR1: 12-bit, trigger TIM6_TRGO rising, DMA circular (DMACFG=1) p/ o ADC
+	// requisitar DMA continuamente em cada sequência; OVRMOD=1 p/ overrun sobrescrever
+	// o DR em vez de travar o ADSTART. FIX: o "one-shot + re-arm no ISR" anterior
+	// parava de requisitar após a 1ª sequência e o OVR limpava ADSTART → ADC congelava.
 	ADC1_CFGR1 = ADC_CFGR1_RES_12BIT
 		| ADC_CFGR1_DMAEN
+		| ADC_CFGR1_DMACFG
+		| ADC_CFGR1_OVRMOD
 		| ADC_CFGR1_EXTSEL_TIM6_TRGO
-		| ADC_CFGR1_EXTEN_RISING; // FIX: removido DMACFG — one-shot DMA, re-arm no ISR
+		| ADC_CFGR1_EXTEN_RISING;
 
     // ── 5. Calibrar e configurar ADC2 ainda desabilitado ────────────────
     adc_prepare_for_config(ADC2_CR);
 
-    ADC2_SMPR1 = (kSmpr)
-               | (kSmpr << 3)  // IN1 (CLT)
-               | (kSmpr << 6)  // IN2 (IAT)
-               | (kSmpr << 9)  // IN3
-               | (kSmpr << 12);// IN4
-
-    ADC2_SMPR2 = (kSmpr << 9)  // IN13 (FUEL_PRESS) — bits [(13-10)*3+offset]
-               | (kSmpr << 12);// IN14 (OIL_PRESS)
+    // SMPR1 cobre INP0-INP9. Canais ADC2: INP4(FUEL), INP5(IAT), INP8(OIL), INP9(CLT).
+    ADC2_SMPR1 = (kSmpr << (4u * 3u))   // INP4  (FUEL, PC4)
+               | (kSmpr << (5u * 3u))   // INP5  (IAT, PB1)
+               | (kSmpr << (8u * 3u))   // INP8  (OIL, PC5)
+               | (kSmpr << (9u * 3u));  // INP9  (CLT, PB0)
+    ADC2_SMPR2 = 0u;
 
     ADC2_SQR1 = kAdc2Sqr1;
 
 // ADC2: trigger TIM6_TRGO simultâneo
 ADC2_CFGR1 = ADC_CFGR1_RES_12BIT
 	| ADC_CFGR1_DMAEN
+	| ADC_CFGR1_DMACFG
+	| ADC_CFGR1_OVRMOD
 	| ADC_CFGR1_EXTSEL_TIM6_TRGO
-	| ADC_CFGR1_EXTEN_RISING; // FIX: removido DMACFG — one-shot DMA, re-arm no ISR
+	| ADC_CFGR1_EXTEN_RISING;
 
     // ── 6. Configurar TIM6 como gerador de TRGO ───────────────────────────
     RCC_APB1LENR |= RCC_APB1LENR_TIM6EN;
@@ -332,6 +373,8 @@ void adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept {
     // Amostrar na metade do período do dente (delay do TIM6 trigger)
     const uint32_t arr = (tooth_period_ticks / 2u);
     if (arr > 0u) {
+        // GPDMA roda contínuo via LLI auto-referente (armado em adc_init) — NÃO
+        // re-armar por dente (corromperia CDAR no meio de um reload do hardware).
         TIM6_CR1 = TIM_CR1_OPM | TIM_CR1_URS;
         TIM6_SR = 0u;
         TIM6_ARR = arr - 1u;
@@ -382,7 +425,8 @@ extern "C" void GPDMA1_Channel0_IRQHandler(void) {
             // Recovery será tentado na próxima chamada de adc_enable() ou via ISR dedicada
         }
     }
-    ems::hal::gpdma_adc1_arm();
+    // Re-arm agora é por dente em adc_trigger_on_tooth (determinístico); aqui só
+    // limpamos as flags. O re-arm na ISV não reciclava → ADCs congelavam.
 }
 
 extern "C" void GPDMA1_Channel1_IRQHandler(void) {
@@ -395,7 +439,7 @@ extern "C" void GPDMA1_Channel1_IRQHandler(void) {
             // Sinaliza para main loop verificar ADC status
         }
     }
-    ems::hal::gpdma_adc2_arm();  // FIX: era gpdma_adc1_arm() — Channel1 gerencia ADC2
+    // Re-arm por dente em adc_trigger_on_tooth; aqui só limpamos flags.
 }
 
 // P0 #3: Handler de timeout do ADC para recuperação em tempo de execução
