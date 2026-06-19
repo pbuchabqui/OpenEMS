@@ -18,8 +18,8 @@ static volatile uint32_t ems_etb_gpiob_bsrr;
 
 #include <cstring>
 
-using ems::hal::tim1_etb_pwm_init;
-using ems::hal::tim1_etb_set_duty_x10;
+using ems::hal::tim15_etb_pwm_init;
+using ems::hal::tim15_etb_set_duty_x10;
 using ems::hal::adc_primary_read;
 using ems::hal::AdcPrimaryChannel;
 
@@ -54,8 +54,8 @@ bool etb_driver_init(void) {
     GPIOA_MODER = (GPIOA_MODER & ~(3u << (kIn1Pin * 2u))) | (1u << (kIn1Pin * 2u));
     GPIOB_MODER = (GPIOB_MODER & ~(3u << (kIn2Pin * 2u))) | (1u << (kIn2Pin * 2u));
 
-    // TIM1 PWM @ 20 kHz for ETB motor drive
-    tim1_etb_pwm_init(20000u);
+    // TIM15 PWM @ 20 kHz for ETB motor drive
+    tim15_etb_pwm_init(20000u);
 
     etb_driver_shutdown();
 
@@ -75,8 +75,8 @@ etb_driver_fault_t etb_driver_read_sensors(etb_driver_data_t* data) {
     if (data == nullptr) { return ETB_DRV_FAULT_NOT_INITIALIZED; }
     if (g_state == ETB_DRV_STATE_FAULT) { return g_fault; }
 
-    const uint16_t t1 = adc_primary_read(AdcPrimaryChannel::AN3_SE8B);
-    const uint16_t t2 = adc_primary_read(AdcPrimaryChannel::AN4_SE9B);
+    const uint16_t t1 = adc_primary_read(AdcPrimaryChannel::ETB_TPS1);
+    const uint16_t t2 = adc_primary_read(AdcPrimaryChannel::ETB_TPS2);
 
     if (t1 < ETB_TPS_ADC_MIN) { return ETB_DRV_FAULT_TPS1_OPEN;  }
     if (t1 > ETB_TPS_ADC_MAX) { return ETB_DRV_FAULT_TPS1_SHORT; }
@@ -115,14 +115,14 @@ bool etb_driver_set_motor_pwm(int16_t pwm) {
         GPIOA_BSRR = (1u << (kIn1Pin + 16u));
         GPIOB_BSRR = (1u << (kIn2Pin + 16u));
     }
-    tim1_etb_set_duty_x10(static_cast<uint16_t>((static_cast<uint32_t>(duty) * 1000u) / 1023u));
+    tim15_etb_set_duty_x10(static_cast<uint16_t>((static_cast<uint32_t>(duty) * 1000u) / 1023u));
     return true;
 }
 
 void etb_driver_shutdown(void) {
     GPIOA_BSRR = (1u << (kIn1Pin + 16u));
     GPIOB_BSRR = (1u << (kIn2Pin + 16u));
-    tim1_etb_set_duty_x10(0u);
+    tim15_etb_set_duty_x10(0u);
     g_etb_data.motor_pwm = 0;
 }
 

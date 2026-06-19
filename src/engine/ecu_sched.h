@@ -73,7 +73,7 @@ uint32_t ecu_sched_dwell_watchdog_count(void);
 
 // Multi-spark (MS42 §2.2.3): sparks adicionais por ciclo a baixo RPM.
 // count: número de sparks adicionais (0=desabilitado, máx 3).
-// inter_dwell_ticks: tempo de dwell entre sparks consecutivos (em ticks do TIM2/TIM8).
+// inter_dwell_ticks: tempo de dwell entre sparks consecutivos (em ticks do TIM2/TIM1).
 // atdc_limit_deg: o último spark adicional não pode ultrapassar este ângulo ATDC (default 18°).
 void ecu_sched_set_mspark(uint8_t  count,
                           uint32_t inter_dwell_ticks,
@@ -118,10 +118,10 @@ uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 uint32_t ecu_sched_test_get_late_event_count(void);
 void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_test_get_ivc_clamp_count(void);
-void     ecu_sched_test_set_tim8_cnt(uint32_t cnt) noexcept;
-uint32_t ecu_sched_test_get_tim8_ccr(uint8_t channel) noexcept;
+void     ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept;
+uint32_t ecu_sched_test_get_tim1_ccr(uint8_t channel) noexcept;
 void     ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept;
-void     ecu_sched_test_reset_ccr(void) noexcept;   // zero all TIM8/TIM2 CCR mocks
+void     ecu_sched_test_reset_ccr(void) noexcept;   // zero all TIM1/TIM2 CCR mocks
 void     ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg);
 uint8_t  ecu_sched_test_get_mspark_count(void);
 #endif

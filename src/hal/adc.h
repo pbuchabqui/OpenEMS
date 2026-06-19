@@ -27,22 +27,22 @@
 namespace ems::hal {
 
 enum class AdcPrimaryChannel : uint8_t {
-    MAP_SE10   = 0,
-    MAF_V_SE11 = 1,
-    TPS_SE12   = 2,
-    KNOCK_SE4B = 3,  // PA5/ADC1_IN6 — knock sensor (O2 migrated to CAN-only)
-    AN1_SE6B   = 4,
-    AN2_SE7B   = 5,
-    AN3_SE8B   = 6,
-    AN4_SE9B   = 7,
+    MAP       = 0,  // PA3 / INP15
+    MAF_V     = 1,  // (reservado)
+    TPS       = 2,  // PA4 / INP18
+    KNOCK     = 3,  // PA5 / INP19
+    APP1      = 4,  // PC0 / INP10
+    APP2      = 5,  // PC2 / INP12
+    ETB_TPS1  = 6,  // PC4 / INP4
+    ETB_TPS2  = 7,  // PC5 / INP8
 };
 
 enum class AdcSecondaryChannel : uint8_t {
-    CLT_SE14        = 0,
-    IAT_SE15        = 1,
-    FUEL_PRESS_SE5B = 2,
-    OIL_PRESS_SE6B  = 3,
-    EWG_POS         = 4,  // PC0 = ADC2_INP10
+    CLT        = 0,  // PB0 / INP9
+    IAT        = 1,  // PB1 / INP5
+    FUEL_PRESS = 2,  // PC4 / INP4
+    OIL_PRESS  = 3,  // PC5 / INP8
+    EWG_POS    = 4,  // PC3 / INP13
 };
 
 void     adc_init() noexcept;

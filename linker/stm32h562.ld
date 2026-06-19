@@ -4,6 +4,7 @@ MEMORY
 {
     FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
     RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 512K
+    SRAM3 (rwx) : ORIGIN = 0x20060000, LENGTH = 128K
 }
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
@@ -65,6 +66,15 @@ SECTIONS
         . = ALIGN(8);
         _estack_guard = .;
     } > RAM
+
+    .sram3 (NOLOAD) :
+    {
+        . = ALIGN(4);
+        _ssram3 = .;
+        *(.sram3*)
+        . = ALIGN(4);
+        _esram3 = .;
+    } > SRAM3
 
     /DISCARD/ :
     {

@@ -157,9 +157,18 @@
 #define GPIOC_AFRH    STM32_REG32(GPIOC_BASE + GPIO_AFRH_OFF)
 #define GPIOC_BSRR    STM32_REG32(GPIOC_BASE + GPIO_BSRR_OFF)
 
+#define GPIOD_MODER   STM32_REG32(GPIOD_BASE + GPIO_MODER_OFF)
+#define GPIOD_OSPEEDR STM32_REG32(GPIOD_BASE + GPIO_OSPEEDR_OFF)
+#define GPIOD_AFRL    STM32_REG32(GPIOD_BASE + GPIO_AFRL_OFF)
+#define GPIOD_AFRH    STM32_REG32(GPIOD_BASE + GPIO_AFRH_OFF)
+#define GPIOD_BSRR    STM32_REG32(GPIOD_BASE + GPIO_BSRR_OFF)
+
 #define GPIOE_MODER   STM32_REG32(GPIOE_BASE + GPIO_MODER_OFF)
 #define GPIOE_OSPEEDR STM32_REG32(GPIOE_BASE + GPIO_OSPEEDR_OFF)
+#define GPIOE_AFRL    STM32_REG32(GPIOE_BASE + GPIO_AFRL_OFF)
 #define GPIOE_AFRH    STM32_REG32(GPIOE_BASE + GPIO_AFRH_OFF)
+#define GPIOE_BSRR    STM32_REG32(GPIOE_BASE + GPIO_BSRR_OFF)
+#define GPIOE_ODR     STM32_REG32(GPIOE_BASE + GPIO_ODR_OFF)
 
 // GPIO MODER values (2 bits por pino)
 #define GPIO_MODER_INPUT  0x0u
@@ -180,9 +189,11 @@
 #define GPIO_AF1   1u
 #define GPIO_AF2   2u
 #define GPIO_AF3   3u
-#define GPIO_AF7   7u
+#define GPIO_AF4   4u
 #define GPIO_AF5   5u
+#define GPIO_AF7   7u
 #define GPIO_AF9   9u
+#define GPIO_AF12  12u
 
 static inline void gpio_set_output(volatile uint32_t* moder,
                                    volatile uint32_t* ospeedr,
@@ -311,17 +322,22 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM_CCER_CC4E   (1u << 12)
 
 
-// TIM1 — advanced timer (ETB PWM on PA8)
+// TIM1 — advanced timer (ignition output compare on LQFP100)
 #define TIM1_CR1   STM32_REG32(TIM1_BASE + TIM_CR1_OFF)
 #define TIM1_DIER  STM32_REG32(TIM1_BASE + TIM_DIER_OFF)
 #define TIM1_SR    STM32_REG32(TIM1_BASE + TIM_SR_OFF)
 #define TIM1_EGR   STM32_REG32(TIM1_BASE + TIM_EGR_OFF)
 #define TIM1_CCMR1 STM32_REG32(TIM1_BASE + TIM_CCMR1_OFF)
+#define TIM1_CCMR2 STM32_REG32(TIM1_BASE + TIM_CCMR2_OFF)
 #define TIM1_CCER  STM32_REG32(TIM1_BASE + TIM_CCER_OFF)
 #define TIM1_CNT   STM32_REG32(TIM1_BASE + TIM_CNT_OFF)
 #define TIM1_PSC   STM32_REG32(TIM1_BASE + TIM_PSC_OFF)
 #define TIM1_ARR   STM32_REG32(TIM1_BASE + TIM_ARR_OFF)
+#define TIM1_RCR   STM32_REG32(TIM1_BASE + TIM_RCR_OFF)
 #define TIM1_CCR1  STM32_REG32(TIM1_BASE + TIM_CCR1_OFF)
+#define TIM1_CCR2  STM32_REG32(TIM1_BASE + TIM_CCR2_OFF)
+#define TIM1_CCR3  STM32_REG32(TIM1_BASE + TIM_CCR3_OFF)
+#define TIM1_CCR4  STM32_REG32(TIM1_BASE + TIM_CCR4_OFF)
 #define TIM1_BDTR  STM32_REG32(TIM1_BASE + TIM_BDTR_OFF)
 
 // TIM2 — 32-bit output compare for injection events
@@ -353,18 +369,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM5_CCR2  STM32_REG32(TIM5_BASE + TIM_CCR2_OFF)  // CMP timestamp travado
 #define TIM5_EGR   STM32_REG32(TIM5_BASE + TIM_EGR_OFF)
 
-// TIM1 — advanced timer: PWM com dead-time para borboleta eletrônica (ETB)
-#define TIM1_CR1   STM32_REG32(TIM1_BASE + TIM_CR1_OFF)
-#define TIM1_EGR   STM32_REG32(TIM1_BASE + TIM_EGR_OFF)
-#define TIM1_CCMR1 STM32_REG32(TIM1_BASE + TIM_CCMR1_OFF)
-#define TIM1_CCER  STM32_REG32(TIM1_BASE + TIM_CCER_OFF)
-#define TIM1_PSC   STM32_REG32(TIM1_BASE + TIM_PSC_OFF)
-#define TIM1_ARR   STM32_REG32(TIM1_BASE + TIM_ARR_OFF)
-#define TIM1_RCR   STM32_REG32(TIM1_BASE + TIM_RCR_OFF)
-#define TIM1_CCR1  STM32_REG32(TIM1_BASE + TIM_CCR1_OFF)
-#define TIM1_BDTR  STM32_REG32(TIM1_BASE + TIM_BDTR_OFF)
-
-// TIM8 — advanced timer for ignition output compare
+// TIM8 — advanced timer (kept for reference; ignition migrated to TIM1 on LQFP100)
 #define TIM8_CR1   STM32_REG32(TIM8_BASE + TIM_CR1_OFF)
 #define TIM8_DIER  STM32_REG32(TIM8_BASE + TIM_DIER_OFF)
 #define TIM8_SR    STM32_REG32(TIM8_BASE + TIM_SR_OFF)
@@ -415,6 +420,18 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM6_PSC   STM32_REG32(TIM6_BASE + TIM_PSC_OFF)
 #define TIM6_ARR   STM32_REG32(TIM6_BASE + TIM_ARR_OFF)
 #define TIM6_EGR   STM32_REG32(TIM6_BASE + TIM_EGR_OFF)
+
+// TIM15 — advanced timer (ETB PWM on PE5, LQFP100)
+#define TIM15_BASE   0x40014000UL
+#define RCC_APB2ENR_TIM15EN (1u << 16)
+#define TIM15_CR1   STM32_REG32(TIM15_BASE + TIM_CR1_OFF)
+#define TIM15_EGR   STM32_REG32(TIM15_BASE + TIM_EGR_OFF)
+#define TIM15_CCMR1 STM32_REG32(TIM15_BASE + TIM_CCMR1_OFF)
+#define TIM15_CCER  STM32_REG32(TIM15_BASE + TIM_CCER_OFF)
+#define TIM15_PSC   STM32_REG32(TIM15_BASE + TIM_PSC_OFF)
+#define TIM15_ARR   STM32_REG32(TIM15_BASE + TIM_ARR_OFF)
+#define TIM15_CCR1  STM32_REG32(TIM15_BASE + TIM_CCR1_OFF)
+#define TIM15_BDTR  STM32_REG32(TIM15_BASE + TIM_BDTR_OFF)
 
 // ─── ADC (RM0481 §25) ─────────────────────────────────────────────────────────
 #define ADC_ISR_OFF    0x00UL
@@ -888,6 +905,56 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 // SYNCSRC[29:28] per ST HAL: 00=GPIO, 01=LSE, 10=USB SOF. USB SOF = 0b10.
 // NOTE: was wrongly 0b01 (LSE) — with LSE not running, CRS never trims HSI48.
 #define CRS_CFGR_SYNCSRC_USB  (2u << 28u)
+
+// ─── SDMMC1 (RM0481 §54) ────────────────────────────────────────────────────
+#define SDMMC1_BASE      0x420C8000UL
+#define RCC_AHB2ENR1_SDMMC1EN (1u << 12)
+#define SDMMC1_POWER     STM32_REG32(SDMMC1_BASE + 0x00UL)
+#define SDMMC1_CLKCR     STM32_REG32(SDMMC1_BASE + 0x04UL)
+#define SDMMC1_ARG       STM32_REG32(SDMMC1_BASE + 0x08UL)
+#define SDMMC1_CMD       STM32_REG32(SDMMC1_BASE + 0x0CUL)
+#define SDMMC1_RESPCMD   STM32_REG32(SDMMC1_BASE + 0x10UL)
+#define SDMMC1_RESP1     STM32_REG32(SDMMC1_BASE + 0x14UL)
+#define SDMMC1_RESP2     STM32_REG32(SDMMC1_BASE + 0x18UL)
+#define SDMMC1_RESP3     STM32_REG32(SDMMC1_BASE + 0x1CUL)
+#define SDMMC1_RESP4     STM32_REG32(SDMMC1_BASE + 0x20UL)
+#define SDMMC1_DTIMER    STM32_REG32(SDMMC1_BASE + 0x24UL)
+#define SDMMC1_DLEN      STM32_REG32(SDMMC1_BASE + 0x28UL)
+#define SDMMC1_DCTRL     STM32_REG32(SDMMC1_BASE + 0x2CUL)
+#define SDMMC1_DCOUNT    STM32_REG32(SDMMC1_BASE + 0x30UL)
+#define SDMMC1_STA       STM32_REG32(SDMMC1_BASE + 0x34UL)
+#define SDMMC1_ICR       STM32_REG32(SDMMC1_BASE + 0x38UL)
+#define SDMMC1_MASK      STM32_REG32(SDMMC1_BASE + 0x3CUL)
+#define SDMMC1_ACKTIME   STM32_REG32(SDMMC1_BASE + 0x40UL)
+#define SDMMC1_IDMACTRL  STM32_REG32(SDMMC1_BASE + 0x50UL)
+#define SDMMC1_IDMABSIZE STM32_REG32(SDMMC1_BASE + 0x54UL)
+#define SDMMC1_IDMABASER STM32_REG32(SDMMC1_BASE + 0x58UL)
+#define SDMMC1_FIFO      STM32_REG32(SDMMC1_BASE + 0x80UL)
+
+// SDMMC_POWER bits
+#define SDMMC_POWER_PWRCTRL_ON  (3u << 0)
+// SDMMC_STA bits
+#define SDMMC_STA_CCRCFAIL  (1u << 0)
+#define SDMMC_STA_DCRCFAIL  (1u << 1)
+#define SDMMC_STA_CTIMEOUT  (1u << 2)
+#define SDMMC_STA_DTIMEOUT  (1u << 3)
+#define SDMMC_STA_TXUNDERR  (1u << 4)
+#define SDMMC_STA_RXOVERR   (1u << 5)
+#define SDMMC_STA_CMDREND   (1u << 6)
+#define SDMMC_STA_CMDSENT   (1u << 7)
+#define SDMMC_STA_DATAEND   (1u << 8)
+#define SDMMC_STA_DBCKEND   (1u << 10)
+#define SDMMC_STA_DPSMACT   (1u << 12)
+#define SDMMC_STA_TXFIFOE   (1u << 18)
+#define SDMMC_STA_RXFIFONE  (1u << 21)
+// SDMMC_CMD bits
+#define SDMMC_CMD_CPSMEN    (1u << 12)
+#define SDMMC_CMD_WAITRESP_SHORT (1u << 6)
+#define SDMMC_CMD_WAITRESP_LONG  (3u << 6)
+// SDMMC_DCTRL bits
+#define SDMMC_DCTRL_DTEN    (1u << 0)
+#define SDMMC_DCTRL_DTDIR   (1u << 1)
+#define SDMMC_DCTRL_DBLOCKSIZE_512 (9u << 4)
 
 // ─── SPI2 (RM0481 §37) ──────────────────────────────────────────────────────
 #define SPI2_CR1     STM32_REG32(SPI2_BASE + 0x00UL)

@@ -13,7 +13,7 @@
  *
  * Clock dos timers:
  *   TIM5, TIM3, TIM4 (APB1): timer clock = 250 MHz (timer doubler ativo)
- *   TIM2/TIM8 scheduling: configurados em engine/ecu_sched.cpp a 10 MHz
+ *   TIM2/TIM1 scheduling: configurados em engine/ecu_sched.cpp a 10 MHz
  *   TIM5 CKP prescaler = 3 → tick = 250 MHz / 4 = 62.5 MHz → 16 ns/tick
  */
 
@@ -154,34 +154,34 @@ void tim4_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// TIM1 — ETB PWM (PA8 CH1)
+// TIM15 — ETB PWM (PE5 CH1, AF4)
 // ════════════════════════════════════════════════════════════════════════════
 
-void tim1_etb_pwm_init(uint32_t freq_hz) {
-    RCC_APB2ENR |= RCC_APB2ENR_TIM1EN;
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN;
+void tim15_etb_pwm_init(uint32_t freq_hz) {
+    RCC_APB2ENR |= RCC_APB2ENR_TIM15EN;
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
 
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 8u, GPIO_AF1);
+    gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 5u, GPIO_AF4);
 
     uint32_t arr = kTimClockHz / freq_hz;
     if (arr > 0xFFFFu) { arr = 0xFFFFu; }
     if (arr > 0u) { arr -= 1u; }
 
-    TIM1_CR1 = 0u;
-    TIM1_PSC = 0u;
-    TIM1_ARR = arr;
-    TIM1_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
-    TIM1_CCER = TIM_CCER_CC1E;
-    TIM1_CCR1 = 0u;
-    TIM1_BDTR = (1u << 15);  // MOE
-    TIM1_EGR = 1u;
-    TIM1_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;
+    TIM15_CR1 = 0u;
+    TIM15_PSC = 0u;
+    TIM15_ARR = arr;
+    TIM15_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
+    TIM15_CCER = TIM_CCER_CC1E;
+    TIM15_CCR1 = 0u;
+    TIM15_BDTR = (1u << 15);  // MOE
+    TIM15_EGR = 1u;
+    TIM15_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;
 }
 
-void tim1_etb_set_duty_x10(uint16_t duty_pct_x10) noexcept {
-    const uint32_t arr = TIM1_ARR;
+void tim15_etb_set_duty_x10(uint16_t duty_pct_x10) noexcept {
+    const uint32_t arr = TIM15_ARR;
     const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
-    TIM1_CCR1 = ccr;
+    TIM15_CCR1 = ccr;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -210,59 +210,36 @@ extern "C" void TIM5_IRQHandler(void) {
 } // namespace ems::hal
 
 // ════════════════════════════════════════════════════════════════════════════
-// TIM1 — PWM para Borboleta Eletrônica (ETB) com dead-time
+// TIM15 — PWM para Borboleta Eletrônica (ETB) com dead-time (PE5 CH1, AF4)
 // ════════════════════════════════════════════════════════════════════════════
-// Declaradas em hal/etb_driver.h (extern "C", escopo global).
 
 void timer_etb_pwm_init(void) {
-    // ── 1. Habilitar clock TIM1 ───────────────────────────────────────────────
-    // TIM1 é timer avançado no barramento APB2 (não APB4).
-    RCC_APB2ENR |= RCC_APB2ENR_TIM1EN;
+    RCC_APB2ENR |= RCC_APB2ENR_TIM15EN;
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
 
-    // ── 2. Configurar pinos PA8 (TIM1_CH1) e PA9 (TIM1_CH1N) ─────────────────
-    // AF1: PA8=TIM1_CH1. PA9 AF1=TIM1_CH2 (NAO CH1N; TIM1_CH1N fica em PA7 ou PB13).
-    // PA9=USART1_TX no projeto -- nao reconfigurar como AF TIM1.
-    // Esta funcao (timer_etb_pwm_init) nao e chamada pelo main flow;
-    // etb_driver.cpp usa tim1_etb_pwm_init() que so configura PA8.
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 8u, GPIO_AF1);
-    // PA9 omitido: USART1_TX conflito; CH1N nao disponivel neste pino
+    gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 5u, GPIO_AF4);
 
-    // ── 3. Configurar TIM1 para PWM com dead-time ─────────────────────────────
-    // Frequência: 20kHz, Resolução: 10-bit (0-1023)
-    // Timer clock = 250 MHz (APB2)
-    // f_pwm = 250MHz / ((PSC+1) * (ARR+1)) = 20kHz
-    // ARR = 250000000 / 20000 - 1 = 12499
-    // PSC = 0 (sem prescaler)
-    TIM1_CR1 = 0u;                          // Desabilitar durante configuração
-    TIM1_PSC = 0u;                          // Sem prescaler
-    TIM1_ARR = 12499u;                      // 20kHz @ 250MHz
-    TIM1_RCR = 0u;                          // Repetition counter = 0
-    TIM1_EGR = TIM_EGR_UG;                  // Update generation
+    TIM15_CR1 = 0u;
+    TIM15_PSC = 0u;
+    TIM15_ARR = 12499u;                      // 20kHz @ 250MHz
+    TIM15_EGR = TIM_EGR_UG;
 
-    // ── 4. Configurar Channel 1 como PWM mode 1 ───────────────────────────────
-    // CC1S = 00 (output), OC1M = 110 (PWM mode 1), OC1PE = 1 (preload enable)
-    TIM1_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
+    TIM15_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
 
-    // ── 5. Configurar dead-time no register BDTR ──────────────────────────────
-    // Dead-time = 200ns @ 250MHz = 50 ticks; DTG[7:0] = 50
-    TIM1_BDTR = TIM_BDTR_MOE           // Main output enable
+    TIM15_BDTR = TIM_BDTR_MOE
               | (50u << 0u);           // DTG = 50 → ~200ns
 
-    // ── 6. Habilitar outputs CH1 e CH1N ───────────────────────────────────────
-    TIM1_CCER = TIM_CCER_CC1E | TIM_CCER_CC1NE;
+    TIM15_CCER = TIM_CCER_CC1E;
 
-    // ── 7. Inicializar duty cycle em 0 (segurança) ────────────────────────────
-    TIM1_CCR1 = 0u;
+    TIM15_CCR1 = 0u;
 
-    // ── 8. Iniciar timer ──────────────────────────────────────────────────────
-    TIM1_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;  // Enable + Auto-reload preload
+    TIM15_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;
 }
 
 void timer_etb_set_duty(uint16_t duty) {
-    // duty: 0-1023 (10-bit) → CCR1 = (duty * ARR) / 1023
     if (duty > 1023u) { duty = 1023u; }
     uint32_t ccr1_val = ((uint32_t)duty * 12499u) / 1023u;
-    TIM1_CCR1 = (uint16_t)ccr1_val;
+    TIM15_CCR1 = (uint16_t)ccr1_val;
 }
 
 #else  // EMS_HOST_TEST ─────────────────────────────────────────────────────
@@ -275,17 +252,14 @@ void tim3_pwm_init(uint32_t) {}
 void tim4_pwm_init(uint32_t) {}
 void tim3_set_duty(uint8_t, uint16_t) noexcept {}
 void tim4_set_duty(uint8_t, uint16_t) noexcept {}
-void tim1_etb_pwm_init(uint32_t) {}
-void tim1_etb_set_duty_x10(uint16_t) noexcept {}
+void tim15_etb_pwm_init(uint32_t) {}
+void tim15_etb_set_duty_x10(uint16_t) noexcept {}
 uint32_t tim5_count() noexcept { return g_mock_tim5_cnt; }
 } // namespace ems::hal
 
 // ════════════════════════════════════════════════════════════════════════════
-// TIM1 — PWM para Borboleta Eletrônica (ETB): stubs no host
+// TIM15 — PWM para Borboleta Eletrônica (ETB): stubs no host
 // ════════════════════════════════════════════════════════════════════════════
-// As implementações reais (TIM1 com dead-time) dependem de registradores TIM1
-// que ainda não estão definidos em hal/regs.h. No build host fornecemos stubs
-// vazios (mesmo padrão de tim3_*/tim4_* acima) para manter o harness compilável.
 
 void timer_etb_pwm_init(void) {}
 void timer_etb_set_duty(uint16_t duty) { (void)duty; }

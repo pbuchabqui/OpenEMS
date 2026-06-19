@@ -16,8 +16,8 @@ inline constexpr uint32_t kSchedulerTickPeriodNs = 100u;
 /** Minimum scheduler advance warning in ticks (typically 5 µs @ 10 MHz = 50 ticks) */
 inline constexpr uint32_t kMinCompareLeadTicks = 50u;
 
-/** Maximum safe TIM8 delta for 16-bit mode */
-inline constexpr uint32_t kTim8MaxDelta16 = 0xFFFFu;
+/** Maximum safe ignition timer delta for 16-bit mode */
+inline constexpr uint32_t kTimIgnMaxDelta16 = 0xFFFFu;
 
 // ============================================================================
 // Engine Physical Constants (60-2 tooth wheel)

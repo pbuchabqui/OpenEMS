@@ -7,10 +7,9 @@
 
 namespace {
 
-// EWG H-bridge: PA7 = IN1 (open), PB4 = IN2 (close), PA6 = TIM3_CH1 PWM
-// TODO(VGT6): migrar IN2 para pino dedicado no LQFP100
+// EWG H-bridge: PA7 = IN1 (open), PD3 = IN2 (close), PA6 = TIM3_CH1 PWM
 constexpr uint8_t kIn1Pin = 7u;   // PA7
-constexpr uint8_t kIn2Pin = 4u;   // PB4
+constexpr uint8_t kIn2Pin = 3u;   // PD3
 
 }  // namespace
 
@@ -19,8 +18,8 @@ namespace ems::hal {
 bool ewg_driver_init() noexcept {
     // PA7 = IN1 (GPIO output)
     GPIOA_MODER = (GPIOA_MODER & ~(3u << (kIn1Pin * 2u))) | (1u << (kIn1Pin * 2u));
-    // PB4 = IN2 (GPIO output)
-    GPIOB_MODER = (GPIOB_MODER & ~(3u << (kIn2Pin * 2u))) | (1u << (kIn2Pin * 2u));
+    // PD3 = IN2 (GPIO output)
+    GPIOD_MODER = (GPIOD_MODER & ~(3u << (kIn2Pin * 2u))) | (1u << (kIn2Pin * 2u));
 
     // TIM3_CH1 (PA6) PWM @ 10 kHz for EWG motor
     tim3_pwm_init(10000u);
@@ -37,13 +36,13 @@ void ewg_driver_set_motor_pwm(int16_t pwm) noexcept {
 
     if (pwm > 0) {
         GPIOA_BSRR = (1u << kIn1Pin);                  // IN1=1 (open)
-        GPIOB_BSRR = (1u << (kIn2Pin + 16u));          // IN2=0
+        GPIOD_BSRR = (1u << (kIn2Pin + 16u));          // IN2=0
     } else if (pwm < 0) {
         GPIOA_BSRR = (1u << (kIn1Pin + 16u));          // IN1=0
-        GPIOB_BSRR = (1u << kIn2Pin);                  // IN2=1 (close)
+        GPIOD_BSRR = (1u << kIn2Pin);                  // IN2=1 (close)
     } else {
         GPIOA_BSRR = (1u << (kIn1Pin + 16u));          // IN1=0
-        GPIOB_BSRR = (1u << (kIn2Pin + 16u));          // IN2=0 (brake)
+        GPIOD_BSRR = (1u << (kIn2Pin + 16u));          // IN2=0 (brake)
     }
     tim3_set_duty(0u, duty);
 }
@@ -54,7 +53,7 @@ uint16_t ewg_driver_read_position_raw() noexcept {
 
 void ewg_driver_shutdown() noexcept {
     GPIOA_BSRR = (1u << (kIn1Pin + 16u));
-    GPIOB_BSRR = (1u << (kIn2Pin + 16u));
+    GPIOD_BSRR = (1u << (kIn2Pin + 16u));
     tim3_set_duty(0u, 0u);
 }
 

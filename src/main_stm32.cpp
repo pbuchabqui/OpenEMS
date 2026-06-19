@@ -9,7 +9,7 @@
 //   - millis() provido por SysTick_Handler em system.cpp
 //   - iwdg_kick() alimenta o watchdog IWDG
 //   - SysTick fornece millis()/micros()
-//   - NVIC setup usa IRQs do STM32H562 (TIM5 para CKP; TIM2/TIM8 são OC por hardware)
+//   - NVIC setup usa IRQs do STM32H562 (TIM5 para CKP; TIM2/TIM1 são OC por hardware)
 //   - SysTick e IWDG já inicializados em system_stm32_init()
 //   - nvm_flush_adaptive_maps() no slot 500ms (Flash Bank2)
 // =============================================================================
@@ -506,9 +506,9 @@ static void openems_init() noexcept {
         ems::hal::usb_cdc_poll();
     }
 
-    // 2) Timers (TIM5=CKP IC, TIM2/TIM8=OC injeção/ignição)
+    // 2) Timers (TIM5=CKP IC, TIM2/TIM1=OC injeção/ignição)
     // TIM3/TIM4 PWM auxiliares são inicializados em auxiliaries_init().
-    // ECU_Hardware_Init() owns TIM2/TIM8 for injection/ignition scheduling.
+    // ECU_Hardware_Init() owns TIM2/TIM1 for injection/ignition scheduling.
     // misfire_init() DEVE preceder tim5_ic_init(): a tabela g_tooth_to_cyl parte de
     // BSS (zero), mas 0 é um índice de cilindro válido — o ISR do CKP leria cyl=0
     // para todos os dentes antes da tabela ser preenchida, gerando DTCs falsos.
@@ -588,7 +588,7 @@ static void openems_init() noexcept {
     ems::app::ui_init();
     ems::app::can_stack_init(ems::engine::wbo2_can_id);
 
-    // 9) NVIC — CKP fica com prioridade máxima. Injeção/ignição em TIM2/TIM8
+    // 9) NVIC — CKP fica com prioridade máxima. Injeção/ignição em TIM2/TIM1
     //    usam output compare direto por hardware, sem ISR no caminho crítico.
     //    SysTick configurado em system_stm32_init() com prio 11.
     nvic_set_priority(IRQ_TIM5, 1u);
@@ -1105,18 +1105,17 @@ int main() {
             }
         }
 
-        // ── 500ms: agenda flush Flash + LED heartbeat (PB2 WeAct) ──────────
-        // PB2 = LED da placa WeAct STM32H562; toggle confirma firmware a correr.
-        // GPIOB já tem clock habilitado em system_stm32_init().
+        // ── 500ms: agenda flush Flash + LED heartbeat (PE0 WeAct) ──────────
+        // PE0 = LED da placa WeAct STM32H562 LQFP100; toggle confirma firmware a correr.
+        // GPIOE já tem clock habilitado em system_stm32_init().
         // FIX P0: Only allow flash writes when engine is stopped or below safe RPM
         static bool adaptive_flush_pending = false;
         static uint32_t last_calib_save_ms = 0u;
         if (elapsed(now, g_t500ms_, 500u)) {
             g_t500ms_ = now;
-            // LED heartbeat: toggle PB2 a cada 500ms (1 Hz)
-            // MODER PB2 = output (01b at bits [5:4])
-            GPIOB_MODER = (GPIOB_MODER & ~(3u << 4u)) | (1u << 4u);
-            GPIOB_ODR ^= (1u << 2u);  // toggle PB2
+            // LED heartbeat: toggle PE0 a cada 500ms (1 Hz)
+            GPIOE_MODER = (GPIOE_MODER & ~(3u << 0u)) | (1u << 0u);
+            GPIOE_ODR ^= (1u << 0u);  // toggle PE0
             const auto snap = ems::drv::ckp_snapshot();
             // FIX: gate ALL flash writes behind the same RPM threshold — calibration
             // writes had no RPM check, creating a latent bug (see Blocker #3).

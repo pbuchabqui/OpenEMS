@@ -3,33 +3,24 @@
  * @brief ADC1 + ADC2 com trigger via TIM6 TRGO — STM32H562RGT6
  *        Substitui hal/adc.cpp da versão STM32.
  *
- * ⚠⚠ MAPEAMENTO DE CANAIS ABAIXO ESTÁ ERRADO PARA O STM32H562 ⚠⚠ (DS14258, 2026-06-15)
- *   PA2(MAP), PC1(AN4), PC2(CLT), PC3(IAT) NÃO TÊM ADC. Nº de canais todos errados.
- *   Mapa REAL (pino→canal): PA3=INP15, PA4=INP18, PA6=INP3, PA7=INP7, PB0=INP9,
- *   PB1=INP5, PC0=INP10, PC4=INP4, PC5=INP8 (PA0/PA1 sem ADC, usados p/ TIM5).
- *   O ADC funciona (LLI/DMA/trigger ok) mas lê pinos errados → sensores não lêem.
- *   FIX pendente = reatribuir sensores a pinos com ADC + corrigir SQR/gpio/fiação.
- *   Workaround atual: bench-mode (cmd 'B') força os valores. Ver memória adc1-nao-converte.
+ * Mapeamento de canais (LQFP100 / STM32H562VGT6, DS14258):
  *
- * Mapeamento de canais (HISTÓRICO — INCORRETO, ver aviso acima):
+ *   ADC1 (8 canais):
+ *     MAP       → INP15 (PA3)  — SQ1
+ *     KNOCK     → INP19 (PA5)  — SQ2
+ *     TPS       → INP18 (PA4)  — SQ3
+ *     (placeholder) → INP19    — SQ4
+ *     APP1      → INP10 (PC0)  — SQ5
+ *     APP2      → INP12 (PC2)  — SQ6
+ *     ETB_TPS1  → INP4  (PC4)  — SQ7
+ *     ETB_TPS2  → INP8  (PC5)  — SQ8
  *
- *   ADC1:
- *     MAP_SE10   → ADC1_IN3  (PA2)
- *     MAF_V_SE11 → ADC1_IN4  (PA3)
- *     TPS_SE12   → ADC1_IN5  (PA4)
- *     KNOCK_SE4B → ADC1_IN6  (PA5) — knock sensor (O2 migrated to CAN-only)
- *     AN1_SE6B   → ADC1_IN7  (PB0)
- *     AN2_SE7B   → ADC1_IN8  (PB1)
- *     AN3_SE8B   → ADC1_IN9  (PC0)
- *     AN4_SE9B   → ADC1_IN10 (PC1)
- *
- *   ADC2 (ADC1 do STM32):
- *     CLT_SE14       → ADC2_IN1 (PC2)
- *     IAT_SE15       → ADC2_IN2 (PC3)
- *     FUEL_PRESS_SE5B → ADC2_IN3 (PA6 — cuidado: compartilhado com TIM3_CH1)
- *                       NOTA: usar PC4 (ADC2_IN13) para evitar conflito com PWM
- *     OIL_PRESS_SE6B  → ADC2_IN4 (PA7 — conflito com TIM3_CH2)
- *                       NOTA: usar PC5 (ADC2_IN14) para evitar conflito
+ *   ADC2 (5 canais):
+ *     CLT       → INP9  (PB0)  — SQ1
+ *     IAT       → INP5  (PB1)  — SQ2
+ *     FUEL_PRESS → INP4 (PC4)  — SQ3
+ *     OIL_PRESS  → INP8 (PC5)  — SQ4
+ *     EWG_POS    → INP13 (PC3) — SQ5
  *
  * Trigger: TIM6 TRGO (Update Event) disparado pela ckp adc_trigger_on_tooth().
  *   TIM6 → prescaler configura período → TRGO → ADC1 + ADC2 disparo simultâneo
@@ -67,24 +58,18 @@ static volatile uint32_t g_adc_recovery_retries = 0u;   // Contador de retries a
 
 // ── Mapeamento AdcPrimaryChannel → índice do array g_adc_secondary_raw ─────────────────────
 static constexpr uint8_t kAdc1ChMap[8] = {
-    // AdcPrimaryChannel::MAP_SE10   → ADC1_IN3  → índice 0
-    // AdcPrimaryChannel::MAF_V_SE11 → ADC1_IN4  → índice 1
-    // AdcPrimaryChannel::TPS_SE12   → ADC1_IN5  → índice 2
-    // AdcPrimaryChannel::KNOCK_SE4B → ADC1_IN6  → índice 3
-    // AdcPrimaryChannel::AN1_SE6B   → ADC1_IN7  → índice 4
-    // AdcPrimaryChannel::AN2_SE7B   → ADC1_IN8  → índice 5
-    // AdcPrimaryChannel::AN3_SE8B   → ADC1_IN9  → índice 6
-    // AdcPrimaryChannel::AN4_SE9B   → ADC1_IN10 → índice 7
+    // MAP(0)→INP15, MAF_V(1)→placeholder, TPS(2)→INP18, KNOCK(3)→INP19,
+    // APP1(4)→INP10, APP2(5)→INP12, ETB_TPS1(6)→INP4, ETB_TPS2(7)→INP8
     0, 1, 2, 3, 4, 5, 6, 7
 };
 
 static constexpr uint8_t kAdc2ChMap[5] = {
-    // AdcSecondaryChannel::CLT_SE14        → ADC2_INP9  → índice 0
-    // AdcSecondaryChannel::IAT_SE15        → ADC2_INP5  → índice 1
-    // AdcSecondaryChannel::FUEL_PRESS_SE5B → ADC2_INP4 (PC4) → índice 2
-    // AdcSecondaryChannel::OIL_PRESS_SE6B  → ADC2_INP8 (PC5) → índice 3
-    // AdcSecondaryChannel::EWG_POS         → ADC2_INP10 (PC0) → índice 4
-    9, 5, 4, 8, 10
+    // AdcSecondaryChannel::CLT        → ADC2_INP9  (PB0) → índice 0
+    // AdcSecondaryChannel::IAT        → ADC2_INP5  (PB1) → índice 1
+    // AdcSecondaryChannel::FUEL_PRESS → ADC2_INP4  (PC4) → índice 2
+    // AdcSecondaryChannel::OIL_PRESS  → ADC2_INP8  (PC5) → índice 3
+    // AdcSecondaryChannel::EWG_POS    → ADC2_INP13 (PC3) → índice 4
+    9, 5, 4, 8, 13
 };
 
 // ── Tempo de amostragem para todos os canais: 47.5 ciclos = 011b ─────────────
@@ -97,14 +82,14 @@ static constexpr uint32_t kTimClockHz = 62500000u;  // TIM6 @ 62.5 MHz após clo
 // slots (MAF/KNOCK/AN1-4, não usados na bancada) apontam p/ canais ADC válidos
 // (INP4/5/8/9/10 = PC4/PB1/PC5/PB0/PC0) só para não converter canal inexistente.
 static constexpr uint32_t kAdc1Sqr1 = (7u << 0)    // L = 7 (8 conv)
-                                     | (15u << 6)   // SQ1 = INP15 (MAP, PA3) → array[0]
-                                     | (5u << 12)   // SQ2 = INP5  (PB1)
-                                     | (18u << 18)  // SQ3 = INP18 (TPS, PA4) → array[2]
-                                     | (9u << 24);  // SQ4 = INP9  (PB0)
-static constexpr uint32_t kAdc1Sqr2 = (10u << 0)   // SQ5 = INP10 (PC0)
-                                     | (4u << 6)    // SQ6 = INP4  (PC4)
-                                     | (8u << 12)   // SQ7 = INP8  (PC5)
-                                     | (5u << 18);  // SQ8 = INP5  (PB1, dup)
+                                     | (15u << 6)   // SQ1 = INP15 (MAP, PA3)
+                                     | (19u << 12)  // SQ2 = INP19 (KNOCK, PA5)
+                                     | (18u << 18)  // SQ3 = INP18 (TPS, PA4)
+                                     | (19u << 24); // SQ4 = INP19 (KNOCK, dup placeholder)
+static constexpr uint32_t kAdc1Sqr2 = (10u << 0)   // SQ5 = INP10 (APP1, PC0)
+                                     | (12u << 6)   // SQ6 = INP12 (APP2, PC2)
+                                     | (4u << 12)   // SQ7 = INP4  (ETB_TPS1, PC4)
+                                     | (8u << 18);  // SQ8 = INP8  (ETB_TPS2, PC5)
 
 // ── Sequência de conversão ADC2 (4 canais) ───────────────────────────────────
 // CLT→INP9(PB0), IAT→INP5(PB1) — bancada: PB0/PB1 partilhados com APP1/APP2 no ADC1;
@@ -114,7 +99,7 @@ static constexpr uint32_t kAdc2Sqr1 = (4u << 0)    // L = 4 (5 conv)
                                      | (5u << 12)   // SQ2 = INP5 (IAT, PB1)
                                      | (4u << 18)   // SQ3 = INP4 (FUEL, PC4)
                                      | (8u << 24);  // SQ4 = INP8 (OIL, PC5)
-static constexpr uint32_t kAdc2Sqr2 = (10u << 0);   // SQ5 = INP10 (EWG, PC0)
+static constexpr uint32_t kAdc2Sqr2 = (13u << 0);   // SQ5 = INP13 (EWG, PC3)
 
 namespace ems::hal {
 
@@ -274,11 +259,12 @@ void adc_init() noexcept {
     gpio_set_analog(&GPIOA_MODER, 5u);
     gpio_set_analog(&GPIOB_MODER, 0u);  // INP9: APP1 (ADC1) / CLT (ADC2, bancada)
     gpio_set_analog(&GPIOB_MODER, 1u);  // INP5: APP2 (ADC1) / IAT (ADC2, bancada)
-    // PC0=INP10(ETB_TPS1), PC4=INP4(FUEL), PC5=INP8(OIL)
-    // PC1/PC2/PC3 não têm ADC no H562 — não configurar.
+    // PC0=INP10(APP1), PC2=INP12(APP2), PC3=INP13(EWG), PC4=INP4(ETB_TPS1/FUEL), PC5=INP8(ETB_TPS2/OIL)
     volatile uint32_t* gpioc_moder = reinterpret_cast<volatile uint32_t*>(
         GPIOC_BASE + GPIO_MODER_OFF);
     gpio_set_analog(gpioc_moder, 0u);
+    gpio_set_analog(gpioc_moder, 2u);  // PC2 = APP2 (INP12) — LQFP100
+    gpio_set_analog(gpioc_moder, 3u);  // PC3 = EWG pos (INP13) — LQFP100
     gpio_set_analog(gpioc_moder, 4u);
     gpio_set_analog(gpioc_moder, 5u);
 
@@ -298,10 +284,12 @@ ADC1_SMPR1 = (kSmpr) // IN1
 	| (kSmpr << 18) // IN7 (AN1)
 	| (kSmpr << 21) // IN8 (AN2)
 	| (kSmpr << 24); // IN9 (AN3)
-// SMPR2 cobre IN10-IN18. Canais usados aqui: IN10, IN15 (MAP/PA3), IN18 (TPS/PA4).
-ADC1_SMPR2 = (kSmpr << ((10-10)*3))   // IN10
-           | (kSmpr << ((15-10)*3))   // IN15 (MAP)
-           | (kSmpr << ((18-10)*3));  // IN18 (TPS)
+// SMPR2 cobre IN10-IN18: INP10(APP1), INP12(APP2), INP15(MAP), INP18(TPS), INP19(KNOCK)
+ADC1_SMPR2 = (kSmpr << ((10-10)*3))   // IN10 (APP1, PC0)
+           | (kSmpr << ((12-10)*3))   // IN12 (APP2, PC2)
+           | (kSmpr << ((15-10)*3))   // IN15 (MAP, PA3)
+           | (kSmpr << ((18-10)*3))   // IN18 (TPS, PA4)
+           | (kSmpr << ((19-10)*3));  // IN19 (KNOCK, PA5)
 
     // Sequência de conversão ADC1
     ADC1_SQR1 = kAdc1Sqr1;
@@ -326,7 +314,8 @@ ADC1_SMPR2 = (kSmpr << ((10-10)*3))   // IN10
                | (kSmpr << (5u * 3u))   // INP5  (IAT, PB1)
                | (kSmpr << (8u * 3u))   // INP8  (OIL, PC5)
                | (kSmpr << (9u * 3u));  // INP9  (CLT, PB0)
-    ADC2_SMPR2 = (kSmpr << (0u * 3u));  // INP10 (EWG, PC0)
+    ADC2_SMPR2 = (kSmpr << ((10-10)*3u))   // INP10 (placeholder)
+               | (kSmpr << ((13-10)*3u));  // INP13 (EWG, PC3)
 
     ADC2_SQR1 = kAdc2Sqr1;
     ADC2_SQR2 = kAdc2Sqr2;
