@@ -152,19 +152,6 @@ void system_stm32_init(void) noexcept {
         }
     }
 
-    // ── 6b. TrustZone: marcar periféricos como non-secure ──────────────
-    // Habilitar clock do GTZC antes de acessar seus registros
-    RCC_AHB1ENR |= (1u << 24u);  // GTZC1EN
-    for (volatile int i = 0; i < 4; ++i) {}
-    // SECCFGR: 0 = non-secure. Libera GPIOA-E, timers, SPI, CAN, USB, ADC, SDMMC.
-    GTZC1_TZSC_SECCFGR1 = 0u;
-    GTZC1_TZSC_SECCFGR2 = 0u;
-    GTZC1_TZSC_SECCFGR3 = 0u;
-    // MPCBB: marcar toda SRAM1/2/3 como non-secure
-    GTZC1_MPCBB1_CR = 0u;
-    GTZC1_MPCBB2_CR = 0u;
-    GTZC1_MPCBB3_CR = 0u;
-
     // ── 7. Habilitar clocks dos GPIOs ────────────────────────────────────
     // STM32H562VGT6 (LQFP100): GPIOA-E disponíveis
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN
