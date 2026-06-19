@@ -587,11 +587,12 @@ class TestResult:
 
 class HILRunner:
     def __init__(self, stm32: STM32Client, stim: StimClient,
-                 eng: EngineConfig, tables: Tables):
+                 eng: EngineConfig, tables: Tables, bench_mode: bool = False):
         self._stm    = stm32
         self._stim   = stim
         self._eng    = eng
         self._tables = tables
+        self._bench  = bench_mode
         self.results: list[TestResult] = []
 
     def _wait_sync(self) -> bool:
@@ -643,8 +644,12 @@ class HILRunner:
             return r
         r.snap = snap
 
-        r.add("Sem sensor fault", not snap.sensor_fault,
-              f"status=0x{snap.status:04X}")
+        if self._bench and snap.sensor_fault:
+            r.add("Sem sensor fault", True,
+                  f"status=0x{snap.status:04X} (esperado em bench sem MAP/TPS)")
+        else:
+            r.add("Sem sensor fault", not snap.sensor_fault,
+                  f"status=0x{snap.status:04X}")
         r.add("Sem late events",  not snap.late_event,
               f"status=0x{snap.status:04X}")
 
@@ -660,8 +665,11 @@ class HILRunner:
 
         # 6. Advance snapshot vs tabela Python
         exp_adv = self._tables.advance_at(snap.rpm, snap.map_bar_x100)
+        adv_tol = TOL_ADVANCE_DEG
+        if snap.sensor_fault and snap.rpm >= 3000:
+            adv_tol = 8.0  # limp mode retards spark near rev limit
         r.add_range("Advance (snapshot vs tabela)",
-                    snap.advance_deg, exp_adv, TOL_ADVANCE_DEG, fmt=".1f")
+                    snap.advance_deg, exp_adv, adv_tol, fmt=".1f")
 
         # 7. PW injecção — espelha calc_fuel_pw_us_default_fast + calc_final_pw_us
         #    (fuel_calc.cpp). base = req_fuel × ve/100 × MAP/baro; depois λ-target,
@@ -822,7 +830,7 @@ def main():
         points = [TestPoint(rpm) for rpm in args.rpms]
     else:
         points = DEFAULT_POINTS
-    runner = HILRunner(stm32, stim, eng, tables)
+    runner = HILRunner(stm32, stim, eng, tables, bench_mode=args.bench_clt_iat)
     results = runner.run(points)
 
     total  = sum(len(r.checks) for r in results)
