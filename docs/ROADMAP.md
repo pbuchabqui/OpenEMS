@@ -31,26 +31,52 @@ depender do polling USB a ~30 Hz.
 - **Ganhos**: taxa de 100 Hz–1 kHz (captura transientes que 30 Hz perde),
   autonomia sem notebook, log sobrevive a desconexão de USB.
 - **Estimativa**: alguns dias de bancada (driver é o grosso do trabalho).
-- O relatório de tuning do dashboard (`/api/log/export`) já serve para analisar
-  os logs do cartão — só importar o CSV/binário para `tools/openems_dash/logs/`.
+
+### 3. Migração para STM32H562VGT6 (LQFP100)
+Mais pinos disponíveis. Permite:
+- Pino dedicado para EWG H-bridge IN2 (atualmente PB4, compartilhado com LED)
+- Restaurar LED heartbeat em pino próprio
+- ADC adicionais para sensores (EGT, fuel pressure, oil pressure)
+- Marcado no código com `// TODO(VGT6)`
 
 ## Concluído (referência)
 
+- **Diagrama elétrico completo** (2026-06-19): power supply (buck 5V wide-Vin +
+  LDO 3.3V + TVS SMBJ24CA), condicionamento de sinais (divisores, filtros RC,
+  proteção TVS por canal), atuadores externos (ETB/EWG H-bridge, WBO2, flex fuel),
+  conector ECU genérico (~47 pinos com VVT), star grounding (PGND/SGND/Shield).
+  CAN transceiver integrado no TLE8888 (sem PHY externo). Correções ultrareview:
+  divider flex fuel (3.3kΩ), ADC range NTC (0–3V), reguladores automotivos.
+- **Flex fuel sensor** (2026-06-18): PB5/EXTI5, 50–150Hz → 0–100% etanol, duty
+  → temperatura combustível. Stoich AFR auto-ajustado (14.7→9.8 conforme E%).
+- **TLE8888 VRS conditioner** (2026-06-18): CKP reluctor entra direto no TLE8888
+  VRS_IN → saída digital VRS_OUT → PA0/TIM5. Sem comparador externo.
+- **Electronic Wastegate (EWG)** (2026-06-18): motor DC + H-bridge externo (PA6 PWM
+  10kHz + PA7/PB4 DIR), PID de posição (2ms), cascata boost PI (20ms) → position PID.
+  Calibração EWG gains + pos min/max em NVM page 0.
+- **Remoção IACV** (2026-06-18): idle controlado exclusivamente pela ETB. PA6 liberado
+  para EWG PWM.
+- **TLE8888 integração completa** (2026-06-18): SPI2 driver (config/diag, 3.9MHz,
+  timeout 500µs), INJ low-side (OC 10A), IGN push-pull (OC 6A), VRS conditioner,
+  per-channel fault bitmap na telemetria + dashboard, watchdog 100ms.
+- **Closed-loop fuel** (2026-06-18): STFT (PI, params em NVM), LTFT (mult+add,
+  reset via dashboard), lambda target table editor, gauges λ tgt / LTFT% / E%.
+  X-τ auto-calibration params em NVM.
+- **WBO2 CAN ID configurável** (2026-06-17): offset 138 page 0, default 0x180.
+  Idle RPM vs CLT movido para seção IDLE no dashboard.
+- **Dashboard full English** (2026-06-17): tradução completa, Pedal Map Send/Burn/
+  Reload pattern, Reload button restaurado em params groups.
+- **DBW puro + boost por marcha** (2026-06-16): dashboard estilo MoTeC M1, subgrupos
+  de parâmetros.
+- **Trim combustível/ignição por cilindro** (2026-06-16): janela dente CMP.
+- **Idle ETB + dirigibilidade** (2026-06-16): marcha lenta via ETB, floor + integrador
+  I, warmup CLT table.
+- **Unidades reais no dashboard** (2026-06-16): sem ×10/×100/µs nos valores exibidos.
+- **Redistribuição eixo MAP** (2026-06-16): 9 linhas vácuo (20–110kPa) + 7 boost.
 - **HIL 21/21 — math da ECU validada ponta-a-ponta** (2026-06-15): VE interpolado vivo,
-  avanço e PW de injeção batem com o mirror Python em 800/1500/3000 RPM. Como o ADC
-  está com bug (Pendente §1), usa-se **bench-mode** (cmd USB `B`) que força MAP/TPS/
-  CLT/IAT e limpa `SENSOR_FAULT` desses canais. Firmware ganhou: VE vivo interpolado
-  em `reserved[49]` do snapshot (`get_ve`), fix do RPM real na plausibilidade MAP×TPS.
-  Script: corrigidas as tabelas CLT/IAT corr (8× int16, não 16× u8) e a base de PW
-  (usa VE interpolado). Ver memórias `bench-mode-clt-iat`, `hil-pw-ve-snapshot`.
-- **Infra HIL automática validada** (2026-06-14, `tools/hil_test/hil_test.py`):
-  `StimClient` dirige o esp32_stimulator por serial (`/dev/ttyUSB0`) ou TCP
-  (`192.168.15.169:3333`); reusa o mirror de math + leitores de tabela. Run
-  end-to-end (800/1500/3000 RPM): **FULL_SYNC ✓, RPM tracking ✓ (<0,2%)**, sem late
-  events. Fórmula de PW esperada corrigida para espelhar o firmware (MAP/baro,
-  λ-target e dead-time +900µs). Checks de VE/avanço/PW dependem do wiring analógico
-  (ver Pendente §1). Lembrete de bancada: power-cycle real após DFU (`:leave` é jump,
-  não POR — memória trustzone-blocks-gpio-tim5).
+  avanço e PW de injeção batem com o mirror Python em 800/1500/3000 RPM. Bench-mode
+  (cmd USB `B`) força MAP/TPS/CLT/IAT e limpa SENSOR_FAULT. Script HIL corrigido
+  (tabelas CLT/IAT corr 8× int16, PW usa VE interpolado).
 - Clock 250 MHz real + USB CDC estável (cadeia de 6 bugs de regs.h, 2026-06-11)
 - Comando `A` com ZLP; IWDG de produção (boot 10s → runtime 100ms)
 - Dashboard de calibração (`tools/openems_dash/`): telemetria WS 30 Hz, editores
