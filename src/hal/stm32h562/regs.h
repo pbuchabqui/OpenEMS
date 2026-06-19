@@ -955,6 +955,8 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 #define SDMMC_DCTRL_DTEN    (1u << 0)
 #define SDMMC_DCTRL_DTDIR   (1u << 1)
 #define SDMMC_DCTRL_DBLOCKSIZE_512 (9u << 4)
+// SDMMC_CLKCR bits
+#define SDMMC_CLKCR_HWFC_EN    (1u << 17)
 
 // ─── SPI2 (RM0481 §37) ──────────────────────────────────────────────────────
 #define SPI2_CR1     STM32_REG32(SPI2_BASE + 0x00UL)

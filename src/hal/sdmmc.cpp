@@ -36,8 +36,8 @@ static constexpr uint32_t STA_TXUNDERR = (1u << 4);
 static bool send_cmd(uint32_t cmd_idx, uint32_t arg, bool wait_resp) noexcept {
     SDMMC1_ICR = 0x1FE00FFFu;
     SDMMC1_ARG = arg;
-    uint32_t cmd = (cmd_idx & 0x3Fu) | SDMMC1_CMD_CPSMEN;
-    if (wait_resp) { cmd |= SDMMC1_CMD_WAITRESP_SHORT; }
+    uint32_t cmd = (cmd_idx & 0x3Fu) | SDMMC_CMD_CPSMEN;
+    if (wait_resp) { cmd |= SDMMC_CMD_WAITRESP_SHORT; }
     SDMMC1_CMD = cmd;
 
     uint32_t mask = wait_resp ? (STA_CMDREND | STA_CTIMEOUT | STA_CCRCFAIL)
@@ -90,12 +90,12 @@ bool sdmmc_init() noexcept {
     GPIOD_AFRL = (GPIOD_AFRL & ~(0xFu << 8u)) | (GPIO_AF12 << 8u);  // PD2 AF12
 
     // Power on SDMMC1
-    SDMMC1_POWER = SDMMC1_POWER_PWRCTRL_ON;
+    SDMMC1_POWER = SDMMC_POWER_PWRCTRL_ON;
     for (volatile uint32_t i = 0u; i < 10000u; ++i) {}
 
     // Clock: 400 kHz for init (SDMMC kernel clock assumed ~48 MHz)
     // CLKDIV = 48MHz / (2 * 400kHz) = 60
-    SDMMC1_CLKCR = 60u | SDMMC1_CLKCR_HWFC_EN;
+    SDMMC1_CLKCR = 60u | SDMMC_CLKCR_HWFC_EN;
 
     // CMD0: GO_IDLE_STATE
     if (!send_cmd(0u, 0u, false)) { return false; }
@@ -120,7 +120,7 @@ bool sdmmc_init() noexcept {
     // CMD2: ALL_SEND_CID
     SDMMC1_ICR = 0x1FE00FFFu;
     SDMMC1_ARG = 0u;
-    SDMMC1_CMD = 2u | SDMMC1_CMD_CPSMEN | SDMMC1_CMD_WAITRESP_LONG;
+    SDMMC1_CMD = 2u | SDMMC_CMD_CPSMEN | SDMMC_CMD_WAITRESP_LONG;
     for (uint32_t i = 0u; i < kCmdTimeout; ++i) {
         if (SDMMC1_STA & (STA_CMDREND | STA_CTIMEOUT | STA_CCRCFAIL)) { break; }
     }
@@ -134,7 +134,7 @@ bool sdmmc_init() noexcept {
     if (!send_cmd(7u, g_rca << 16u, true)) { return false; }
 
     // Switch to full speed: ~24 MHz (CLKDIV=1)
-    SDMMC1_CLKCR = 1u | SDMMC1_CLKCR_HWFC_EN;
+    SDMMC1_CLKCR = 1u | SDMMC_CLKCR_HWFC_EN;
 
     g_card_ready = true;
     return true;
@@ -149,8 +149,8 @@ bool sdmmc_write_block(uint32_t lba, const uint8_t* data) noexcept {
     // Configure data path
     SDMMC1_DTIMER = 0x0FFFFFFFu;
     SDMMC1_DLEN   = kBlockSize;
-    SDMMC1_DCTRL  = SDMMC1_DCTRL_DBLOCKSIZE_512
-                  | SDMMC1_DCTRL_DTEN;
+    SDMMC1_DCTRL  = SDMMC_DCTRL_DBLOCKSIZE_512
+                  | SDMMC_DCTRL_DTEN;
 
     // CMD24: WRITE_SINGLE_BLOCK (SDHC: byte address = lba for SDHC)
     if (!send_cmd(24u, lba, true)) { return false; }
