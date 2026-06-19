@@ -56,6 +56,7 @@ int main() { return 0; }
 #include "hal/flash.h"
 #include "hal/tle8888.h"
 #include "engine/ewg_control.h"
+#include "hal/flex_fuel.h"
 #include "hal/runtime_seed.h"
 #include "hal/timer.h"
 #include "hal/etb_driver.h"
@@ -529,6 +530,7 @@ static void openems_init() noexcept {
     ems::hal::uart0_init(115200u);
     ems::hal::tle8888_init();
     ems::engine::ewg_control_init();
+    ems::hal::flex_fuel_init();
     iwdg_kick();
 
 	// 5) Flash Bank2 → carrega calibrações persistidas
@@ -975,6 +977,14 @@ int main() {
             g_t100ms_ = now;
             ems::drv::sensors_tick_100ms();
             ems::hal::tle8888_poll_diag();
+
+            // Flex fuel: update stoich AFR based on ethanol %
+            // E0=14.7 (1470), E100=9.0 (900), linear
+            if (ems::hal::flex_fuel_valid()) {
+                const uint16_t eth = ems::hal::flex_fuel_ethanol_pct();
+                ems::engine::cfg::g_eng_cfg.stoich_afr_x100 =
+                    static_cast<uint16_t>(1470u - (eth * 570u) / 100u);
+            }
             const auto snap    = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
 

@@ -49,7 +49,8 @@ APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp $(SRC_DIR)/app/can_stack.cpp \
 HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp \
                   $(SRC_DIR)/hal/uart.cpp $(SRC_DIR)/hal/flash.cpp \
                   $(SRC_DIR)/hal/etb_driver.cpp $(SRC_DIR)/hal/tle8888.cpp \
-                  $(SRC_DIR)/hal/ewg_driver.cpp
+                  $(SRC_DIR)/hal/ewg_driver.cpp \
+                  $(SRC_DIR)/hal/flex_fuel.cpp
 HAL_STM32H562_SRC = $(SRC_DIR)/hal/stm32h562/system.cpp \
                     $(SRC_DIR)/hal/stm32h562/timer.cpp \
                     $(SRC_DIR)/hal/stm32h562/usb_cdc.cpp

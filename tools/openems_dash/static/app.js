@@ -53,6 +53,7 @@ const GAUGES = [
   ["stft_pct",     "STFT %",  v => v],
   ["lambda_target_x1000", "λ tgt", v => (v / 1000).toFixed(2)],
   ["ltft_pct",     "LTFT %",  v => v],
+  ["ethanol_pct",  "E%",      v => v],
 ];
 $("#gauges").innerHTML = GAUGES.map(([k, l]) =>
   `<div class="gauge"><div class="v" id="g_${k}">—</div><div class="l">${l}</div></div>`).join("");

@@ -52,6 +52,9 @@
   │  │                      │ PB6  TIM4_CH1  (AF2) ──────────┼──► VVT Escape PWM
   │  │                      │ PB7  TIM4_CH2  (AF2) ──────────┼──► VVT Intake PWM
   │  │                      │                                 │
+  │  │                      │         FLEX FUEL SENSOR         │
+  │  │                      │ PB5  EXTI5 (input) ◄────────────┼─── Flex fuel freq signal
+  │  │                      │                                 │
   │  │                      │         CAN BUS (FDCAN1)        │
   │  │                      │ PB8  FDCAN1_RX (AF9) ◄─────────┼─── CAN transceiver RX
   │  │                      │ PB9  FDCAN1_TX (AF9) ──────────┼──► CAN transceiver TX
@@ -152,6 +155,8 @@
 | PB1  | IAT sensor       | ADC2       | -   | NTC                      |
 | PB2  | LED / ETB DIR2   | GPIO       | -   |                          |
 | PB3  | IGN4 output      | TIM8_CH4   | AF1 | → TLE8888 IGN3           |
+| PB4  | EWG DIR IN2      | GPIO       | -   | TODO(VGT6): dedicated pin|
+| PB5  | Flex fuel sensor  | EXTI5      | -   | 50-150Hz freq input      |
 | PB6  | VVT escape PWM   | TIM4_CH1   | AF2 |                          |
 | PB7  | VVT intake PWM   | TIM4_CH2   | AF2 |                          |
 | PB8  | CAN RX           | FDCAN1     | AF9 |                          |

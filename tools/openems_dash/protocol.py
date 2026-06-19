@@ -82,6 +82,7 @@ class RealtimeData:
     lambda_target_x1000: int
     ltft_pct: int
     tle8888_fault_bm: int
+    ethanol_pct: int
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -125,6 +126,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         lambda_target_x1000=r[4] * 4,
         ltft_pct=struct.unpack_from("<b", r, 5)[0],
         tle8888_fault_bm=r[8],
+        ethanol_pct=r[9],
     )
 
 

@@ -6,6 +6,7 @@
 
 #include "app/can_stack.h"
 #include "hal/tle8888.h"
+#include "hal/flex_fuel.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
 #include "engine/calibration.h"
@@ -235,7 +236,8 @@ inline void update_realtime_page() noexcept {
     rt.reserved[6] = 0u;
     rt.reserved[7] = 0u;
     rt.reserved[8] = ems::hal::tle8888_fault_bitmap();
-    rt.reserved[9] = 0u;
+    rt.reserved[9] = ems::hal::flex_fuel_valid()
+                    ? ems::hal::flex_fuel_ethanol_pct() : 0u;
     write_u32_le(&rt.reserved[10], g_rt_sched_cycle_schedule_drop_count);
     write_u32_le(&rt.reserved[14], g_rt_sched_calibration_clamp_count);
     write_u32_le(&rt.reserved[18], g_rt_seed_loaded_count);
