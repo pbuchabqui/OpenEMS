@@ -93,7 +93,7 @@ class SerialWorker(threading.Thread):
             if self.link is None:
                 self._connect()
                 if self.link is None:
-                    time.sleep(1.0)
+                    time.sleep(0.3)
                     continue
             t0 = time.monotonic()
             try:

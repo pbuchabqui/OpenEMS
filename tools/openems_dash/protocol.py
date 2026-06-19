@@ -140,7 +140,7 @@ def autodetect_port() -> str:
 class OpenEMSLink:
     """Acesso serial thread-safe (uma transação por vez)."""
 
-    def __init__(self, port: str | None = None, timeout: float = 1.0):
+    def __init__(self, port: str | None = None, timeout: float = 0.3):
         self.port = port or autodetect_port()
         # exclusive=True: segunda instância falha na hora em vez de disputar
         # bytes da mesma porta (transações corrompidas, "network error" na UI)
