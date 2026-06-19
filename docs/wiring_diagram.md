@@ -96,6 +96,12 @@
   │  │  │    IGN2 ◄── PA15 ────► COIL2 ───────────► Coil 3       │
   │  │  │    IGN3 ◄── PB3  ────► COIL3 ───────────► Coil 4       │
   │  │  │                                                         │
+  │  │  │  CAN Transceiver (HS-CAN, ISO 11898-2, integrated):      │
+  │  │  │    TXD  ◄──── PB9 (FDCAN1_TX)                          │
+  │  │  │    RXD  ────► PB8 (FDCAN1_RX)                          │
+  │  │  │    CANH ────► CAN bus (120Ω termination each end)       │
+  │  │  │    CANL ────►                                           │
+  │  │  │                                                         │
   │  │  │  Protection (hardware, independent of MCU):             │
   │  │  │    • Overcurrent shutdown per channel                   │
   │  │  │    • Thermal shutdown                                   │
@@ -188,4 +194,181 @@ Sensors → ADC → fuel_calc / ign_calc → ecu_sched ◄───────�
                    SPI2 (config/diag) ─────┼──► TLE8888 registers (VRS+INJ+IGN+WD)
                                            │
                    EWG cascade ────────────┼──► boost PI (20ms) → pos PID (2ms) → motor
+```
+
+## Power Supply
+
+```
+                    ┌─────────────────────────────────────────────────┐
+                    │              POWER DISTRIBUTION                 │
+                    │                                                 │
+  Battery 12V ──►──┤ P-MOSFET (reverse polarity protection)         │
+                    │    │                                            │
+                    │  Fuse 30A                                       │
+                    │    │                                            │
+                    │  Main Relay (key-on or MCU-controlled)          │
+                    │    │                                            │
+                    │    ├── VBAT rail ──────────────────────────────│
+                    │    │    │                                       │
+                    │    │    ├── TLE8888 VBAT (100µF + 100nF)      │
+                    │    │    ├── Fuel pump relay (fuse 15A)         │
+                    │    │    ├── WBO2 controller (fuse 5A)         │
+                    │    │    └── Flex fuel sensor 12V               │
+                    │    │                                            │
+                    │    │    └── SMBJ24CA TVS clamp on VBAT rail    │
+                    │    │                                            │
+                    │    ├── DC-DC Buck 5V (LM2596-HV or TPS54302)  │
+                    │    │    │  Vin(max) 45V, load-dump survivable  │
+                    │    │    │  10µF in + 22µF + 100nF out          │
+                    │    │    ├── Sensor supply (MAP, TPS, APP1/2)  │
+                    │    │    ├── NTC pull-ups (CLT, IAT)           │
+                    │    │    ├── EWG position sensor                │
+                    │    │    ├── ETB TPS1/TPS2                     │
+                    │    │    └── Flex fuel pull-up                  │
+                    │    │                                            │
+                    │    └── LDO 3.3V from 5V (AMS1117-3.3, 10µF)  │
+                    │         │  Vin=5V → Vdrop=1.7V, cool in SOT223│
+                    │         ├── STM32 VDD (100nF per VDD pin)     │
+                    │         └── STM32 VDDA (1µF + 100nF)          │
+                    │                                                 │
+                    └─────────────────────────────────────────────────┘
+```
+
+## Signal Conditioning
+
+```
+Generic analog input circuit (MAP, TPS, APP1/2, EWG pos):
+
+  Sensor (0.5-4.5V) ──[R1 10k]──┬──[R_filt 1k]──┬──► STM32 ADC (3.3V max)
+                                 │               │
+                               [R2 15k]      [C 100nF]
+                                 │               │
+                                GND             GND
+                                 │
+                             [TVS 3.3V]
+                                 │
+                                GND
+
+NTC thermistor input (CLT, IAT):
+
+  5V ──[R_pull 2.49kΩ]──┬── NTC to GND
+                         │
+                    [R1 10k]──┬──[R_filt 1k]──┬──► STM32 ADC
+                              │               │
+                            [R2 15k]      [C 100nF]
+                              │               │
+                             GND             GND
+```
+
+| Sensor | Input Range | Divider | ADC Range | Filter | Protection |
+|--------|-------------|---------|-----------|--------|------------|
+| MAP | 0.5–4.5V | 10k/15k | 0.3–2.7V | RC 1kΩ+100nF | TVS 3.3V |
+| TPS | 0.5–4.5V | 10k/15k | 0.3–2.7V | RC 1kΩ+100nF | TVS 3.3V |
+| APP1/APP2 | 0.5–4.5V | 10k/15k | 0.3–2.7V | RC 1kΩ+100nF | TVS 3.3V |
+| CLT (NTC) | 0–5V (via pull-up) | 10k/15k | 0–3.0V | RC 1kΩ+100nF | TVS 3.3V |
+| IAT (NTC) | 0–5V (via pull-up) | 10k/15k | 0–3.0V | RC 1kΩ+100nF | TVS 3.3V |
+| EWG pos | 0–5V (pot) | 10k/15k | 0–3.0V | RC 1kΩ+100nF | TVS 3.3V |
+| Knock | Piezo AC | Bandpass 6–8kHz + amp | ±1.5V | Dedicated | Clamping diodes |
+| Flex fuel | 0–12V square | 10k/3.3k | 0–3.0V | — | TVS 3.3V |
+
+## External Actuators
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│          CAN Bus — TLE8888 Integrated Transceiver           │
+│                                                             │
+│  STM32 PB9 (FDCAN1_TX) ──► TLE8888 TXD                    │
+│  STM32 PB8 (FDCAN1_RX) ◄── TLE8888 RXD                    │
+│  TLE8888 CANH ──┬── bus ──┬── 120Ω termination             │
+│  TLE8888 CANL ──┘         └── (each end)                   │
+│                                                             │
+│  No external CAN transceiver needed — HS-CAN PHY           │
+│  (ISO 11898-2) integrated in TLE8888.                       │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│          ETB — External H-Bridge (BTS7960 / VNH5019)        │
+│                                                             │
+│  STM32 PA8  (TIM1_CH1 PWM) ──► H-bridge PWM               │
+│  STM32 PA10 (GPIO OUT)     ──► H-bridge DIR1 (IN1)        │
+│  STM32 PB2  (GPIO OUT)     ──► H-bridge DIR2 (IN2)        │
+│  ETB TPS1/TPS2 ──► ADC (position feedback)                 │
+│  12V ──► H-bridge VCC      GND ──► H-bridge GND           │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│          EWG — External H-Bridge (BTS7960 / VNH5019)        │
+│                                                             │
+│  STM32 PA6  (TIM3_CH1 PWM) ──► H-bridge PWM (10kHz)       │
+│  STM32 PA7  (GPIO OUT)     ──► H-bridge DIR1 (IN1)        │
+│  STM32 PB4  (GPIO OUT)     ──► H-bridge DIR2 (IN2)        │
+│  EWG position pot ──► divider ──► ADC2 (feedback)          │
+│  12V ──► H-bridge VCC      GND ──► H-bridge GND           │
+│  TODO(VGT6): PB4 shared with LED — dedicate on LQFP100    │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│          WBO2 Lambda Controller                             │
+│          (Bosch CJ125 / AEM 30-0300 / similar)             │
+│                                                             │
+│  12V ──► power (fuse 5A)                                    │
+│  CANH/CANL ──► CAN bus (RX ID 0x180, configurable)         │
+│  LSU 4.9 sonda ──► 6-pin connector                          │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│          Flex Fuel Sensor (GM / Continental)                 │
+│                                                             │
+│  12V ──► sensor power                                       │
+│  Signal ──► [R1 10k]──┬──► PB5 (EXTI5)                    │
+│                       [R2 3.3k]                              │
+│                        │                                     │
+│                       GND                                    │
+│  Pull-up 10kΩ → 5V (if open-collector output)               │
+│  Frequency: 50Hz = 0% ethanol, 150Hz = 100%                 │
+│  Duty cycle: 10–90% = -40°C to +125°C fuel temp            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## ECU Connector Pinout (TBD — ~47 pins)
+
+| Group | Count | Signals |
+|-------|-------|---------|
+| Power | 4 | VBAT, Main relay ctrl, Fuel pump ctrl, PGND |
+| Injection | 4 | INJ1–4 (TLE8888 OUT0–3 → injectors) |
+| Ignition | 4 | IGN1–4 (TLE8888 COIL0–3 → coils) |
+| CKP/CMP | 4 | CKP+ (VRS+), CKP- (VRS-), CMP signal, Shield GND |
+| Analog sensors | 10 | MAP, TPS, CLT, IAT, APP1, APP2, Knock, EWG pos, 5V ref, SGND |
+| ETB | 5 | Motor+, Motor-, TPS1, TPS2, 5V ref |
+| EWG | 4 | Motor+, Motor-, Position, 5V ref |
+| VVT | 2 | VVT escape (PB6), VVT intake (PB7) |
+| CAN | 3 | CANH, CANL, Shield GND |
+| Flex fuel | 3 | 12V supply, Signal, GND |
+| USB | 2 | USB_DM, USB_DP (internal connector) |
+| Reserve | 2 | Future expansion |
+| **Total** | **~47** | |
+
+## Grounding
+
+```
+                   Chassis stud (single star point)
+                            │
+                 ┌──────────┼──────────┐
+                 │          │          │
+               PGND       SGND     Shield GND
+            (power)     (signal)  (shielding)
+                 │          │          │
+           ┌─────┤    ┌─────┤    ┌─────┤
+           │ TLE8888   │ All     │ CAN bus
+           │ LDO regs  │ sensors │ CKP cable
+           │ H-bridge  │ ADC AGND│
+           │ Fuel pump │ Pull-ups│
+           └───────────┘─────────┘
+
+  PCB rules:
+  • Separate copper pours for PGND and SGND, joined at star point
+  • Dedicated AGND pour for STM32 VSSA pin
+  • Shielded cables: CKP and CAN (shield grounded at ECU end only)
+  • 100nF bypass cap on every VDD pin of STM32
+  • Bulk capacitor 100µF at TLE8888 VBAT
 ```
