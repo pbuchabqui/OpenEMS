@@ -610,6 +610,8 @@ def api_log_download():
 @app.websocket("/ws/telemetry")
 async def ws_telemetry(ws: WebSocket):
     await ws.accept()
+    await ws.send_text(json.dumps(
+        {"connected": worker.connected, "error": worker.error}))
     last_t = 0.0
     try:
         while True:

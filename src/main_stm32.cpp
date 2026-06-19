@@ -492,18 +492,22 @@ static void openems_init() noexcept {
     // Com SysTick já configurado em system_stm32_init(), é seguro habilitar aqui.
     __asm__ volatile("cpsie i" ::: "memory");
 
-    // 1b) USB CDC CEDO: só depende de clock (HSI48/CRS já prontos) + IRQs. Subir aqui,
+    // 1b) PB2 (LED WeAct) como saída — heartbeat visível desde o boot.
+    GPIOB_MODER = (GPIOB_MODER & ~(3u << 4u)) | (1u << 4u);
+
+    // 1c) USB CDC CEDO: só depende de clock (HSI48/CRS já prontos) + IRQs. Subir aqui,
     // antes dos inits da ECU (ADC/CAN/CKP), garante enumeração mesmo que algum init
     // adiante demore/bloqueie numa placa de bancada sem motor — a ISR cuida do resto.
     ems::hal::usb_cdc_init();
 
-    // 1c) Janela p/ a enumeração USB (ISR-driven) completar antes dos inits da ECU, que
+    // 1d) Janela p/ a enumeração USB (ISR-driven) completar antes dos inits da ECU, que
     // podem entrar em seção crítica (cpsid i) e mascarar a ISR do USB por um tempo.
     // ~300 ms kicando o IWDG (timeout 100 ms) a cada ~1 ms @ 250 MHz.
     for (uint32_t ms = 0u; ms < 300u; ++ms) {
         for (volatile uint32_t d = 0u; d < 60000u; ++d) { /* ~1ms */ }
         iwdg_kick();
         ems::hal::usb_cdc_poll();
+        if ((ms % 100u) == 0u) { GPIOB_ODR ^= (1u << 2u); }
     }
 
     // 2) Timers (TIM5=CKP IC, TIM2/TIM1=OC injeção/ignição)
@@ -594,12 +598,19 @@ static void openems_init() noexcept {
     nvic_set_priority(IRQ_TIM5, 1u);
     nvic_enable_irq(IRQ_TIM5);
 
-    // 10) Aguardar CKP sync (timeout 5 s)
-    const uint32_t sync_deadline = millis() + 5000u;
-    while (millis() < sync_deadline) {
-        iwdg_kick();
-        const auto snap = ems::drv::ckp_snapshot();
-        if (snap.state == ems::drv::SyncState::FULL_SYNC) { break; }
+    // 10) Aguardar CKP sync (timeout 5 s), heartbeat 5 Hz
+    {
+        const uint32_t sync_deadline = millis() + 5000u;
+        uint32_t next_toggle = millis() + 100u;
+        while (millis() < sync_deadline) {
+            iwdg_kick();
+            if (millis() >= next_toggle) {
+                GPIOB_ODR ^= (1u << 2u);
+                next_toggle = millis() + 100u;
+            }
+            const auto snap = ems::drv::ckp_snapshot();
+            if (snap.state == ems::drv::SyncState::FULL_SYNC) { break; }
+        }
     }
 
     // Kick final antes de entrar no main loop — garante que openems_init()

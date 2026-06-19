@@ -1176,12 +1176,12 @@ async function loadPedalMap() {
 
 /* ── init ─────────────────────────────────────────────────────────────── */
 (async () => {
+  connectWS();
   try {
     INFO = await api("/api/info");
     $("#fw").textContent = INFO.connected ? `${INFO.signature} · ${INFO.fw} · ${INFO.port}` : "";
     logging = INFO.logging;
   } catch (e) { toast(e.message, true); }
-  connectWS();
   // Carregar VE automaticamente (aba padrão)
   loadGrid($("#tab-grid-1"));
 })();
