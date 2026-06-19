@@ -77,26 +77,28 @@ uint32_t tim5_count() noexcept {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// TIM3 — PWM (Wastegate CH2)
+// TIM3 — PWM (CH1: EWG motor)
 // ════════════════════════════════════════════════════════════════════════════
 
 void tim3_pwm_init(uint32_t freq_hz) {
     if (freq_hz == 0u) { return; }
     RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
 
-    // PA7 = TIM3_CH2 (Wastegate) — AF2.  PA6 (CH1) free — no IACV.
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 7u, GPIO_AF2);
+    // PA6 = TIM3_CH1 (EWG PWM) — AF2
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 6u, GPIO_AF2);
 
+    // For high frequencies (>1kHz), use prescaler to keep ARR in 16-bit range
+    uint32_t psc = 0u;
     uint32_t arr = kTimClockHz / freq_hz;
-    if (arr > 0xFFFFu) { arr = 0xFFFFu; }
+    while (arr > 0xFFFFu) { ++psc; arr = kTimClockHz / (freq_hz * (psc + 1u)); }
     if (arr > 0u) { arr -= 1u; }
 
     TIM3_CR1 = 0u;
-    TIM3_PSC = 0u;
+    TIM3_PSC = psc;
     TIM3_ARR = arr;
-    TIM3_CCMR1 = TIM_CCMR1_OC2M_PWM1 | TIM_CCMR1_OC2PE;  // CH2 only
-    TIM3_CCER = TIM_CCER_CC2E;
-    TIM3_CCR2 = 0u;
+    TIM3_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;  // CH1: EWG
+    TIM3_CCER = TIM_CCER_CC1E;
+    TIM3_CCR1 = 0u;
     TIM3_EGR  = 1u;
     TIM3_CR1  = TIM_CR1_CEN | TIM_CR1_ARPE;
 }
@@ -105,8 +107,11 @@ void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
     if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
     const uint32_t arr = TIM3_ARR;
     const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
-    (void)ch;  // only CH2 (wastegate) active
-    TIM3_CCR2 = ccr;
+    if (ch == 0u) {
+        TIM3_CCR1 = ccr;
+    } else {
+        TIM3_CCR2 = ccr;
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

@@ -55,6 +55,7 @@ int main() { return 0; }
 #include "hal/etb_driver.h"
 #include "hal/flash.h"
 #include "hal/tle8888.h"
+#include "engine/ewg_control.h"
 #include "hal/runtime_seed.h"
 #include "hal/timer.h"
 #include "hal/etb_driver.h"
@@ -527,6 +528,7 @@ static void openems_init() noexcept {
     ems::hal::can0_init();
     ems::hal::uart0_init(115200u);
     ems::hal::tle8888_init();
+    ems::engine::ewg_control_init();
     iwdg_kick();
 
 	// 5) Flash Bank2 → carrega calibrações persistidas
@@ -914,6 +916,13 @@ int main() {
             const uint32_t prime_pw = ems::engine::quick_crank_consume_prime();
             if (prime_pw != 0u) {
                 ::ecu_sched_fire_prime_pulse(prime_pw);
+            }
+
+            // EWG position inner loop (2ms cadence)
+            {
+                const uint16_t demand = ems::engine::auxiliaries_ewg_position_demand_x10();
+                const uint16_t pos = ems::engine::ewg_read_position_pct_x10();
+                ems::engine::ewg_control_update(demand, pos);
             }
 
             g_loop2ms_last_us = micros() - loop2ms_start_us;

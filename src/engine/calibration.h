@@ -184,6 +184,13 @@ extern uint16_t xtau_x_max_q8;       // X max Q8, default 192 (= 0.75)
 extern uint16_t xtau_tau_min;         // τ min cycles, default 10
 extern uint16_t xtau_tau_max;         // τ max cycles, default 255
 
+// EWG position PID (página 0, offsets 154-163)
+extern uint16_t ewg_kp_x10;          // Kp × 10, default 80
+extern uint16_t ewg_ki_x10;          // Ki × 10, default 5
+extern uint16_t ewg_kd_x10;          // Kd × 10, default 20
+extern uint16_t ewg_pos_min_raw;     // ADC raw at fully closed
+extern uint16_t ewg_pos_max_raw;     // ADC raw at fully open
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept;
 // Empurra a calibração de sensores (APP/ETB/TPS/plausibilidade) p/ drv::sensors.
 void push_sensor_calibration_to_drivers() noexcept;

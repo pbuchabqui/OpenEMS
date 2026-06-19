@@ -378,6 +378,12 @@ PAGE0_FIELDS = [
     ("xtau_x_max_q8",          148, 1, "H", 1.0),
     ("xtau_tau_min",            150, 1, "H", 1.0),
     ("xtau_tau_max",            152, 1, "H", 1.0),
+    # bytes 154-163: EWG position PID + sensor calibration
+    ("ewg_kp_x10",             154, 1, "H", 1.0),
+    ("ewg_ki_x10",             156, 1, "H", 1.0),
+    ("ewg_kd_x10",             158, 1, "H", 1.0),
+    ("ewg_pos_min_raw",        160, 1, "H", 1.0),
+    ("ewg_pos_max_raw",        162, 1, "H", 1.0),
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

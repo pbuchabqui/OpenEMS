@@ -119,6 +119,7 @@ struct AuxState {
     int16_t wg_integrator_x10;
     uint32_t wg_overboost_ms;
     bool wg_failsafe;
+    uint16_t ewg_position_demand_x10;
 
     uint16_t vvt_esc_duty_x10;
     uint16_t vvt_adm_duty_x10;
@@ -305,9 +306,9 @@ void run_wastegate_control(const ems::drv::CkpSnapshot& snap,
     }
 
     if (g.wg_failsafe) {
-        g.wg_duty_x10 = 0u;
+        g.wg_duty_x10 = 1000u;  // full open on overboost
         g.wg_integrator_x10 = 0;
-        ems::hal::tim3_set_duty(1u, 0u);
+        g.ewg_position_demand_x10 = 1000u;
         return;
     }
 
@@ -327,7 +328,8 @@ void run_wastegate_control(const ems::drv::CkpSnapshot& snap,
     }
 
     g.wg_duty_x10 = static_cast<uint16_t>(out);
-    ems::hal::tim3_set_duty(1u, g.wg_duty_x10);
+    // EWG cascata: outer loop output = position demand for inner PID (2ms loop)
+    g.ewg_position_demand_x10 = g.wg_duty_x10;
 }
 
 uint16_t run_vvt_pid(int16_t target_deg_x10,
@@ -484,6 +486,10 @@ void auxiliaries_tick_20ms() noexcept {
     run_wastegate_control(snap, s);
     run_fan_control(s.clt_degc_x10);
     run_pump_control(snap.rpm_x10);
+}
+
+uint16_t auxiliaries_ewg_position_demand_x10() noexcept {
+    return g.ewg_position_demand_x10;
 }
 
 #if defined(EMS_HOST_TEST)

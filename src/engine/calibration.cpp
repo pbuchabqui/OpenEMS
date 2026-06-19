@@ -226,6 +226,12 @@ uint16_t xtau_x_max_q8  = 192u;  // 0.75
 uint16_t xtau_tau_min   = 10u;
 uint16_t xtau_tau_max   = 255u;
 
+uint16_t ewg_kp_x10       = 80u;   // 8.0
+uint16_t ewg_ki_x10       = 5u;    // 0.5
+uint16_t ewg_kd_x10       = 20u;   // 2.0
+uint16_t ewg_pos_min_raw  = 200u;
+uint16_t ewg_pos_max_raw  = 3800u;
+
 void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept {
     if (page == nullptr || len < 36u) {
         return;

@@ -327,6 +327,12 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 148, &ems::engine::xtau_x_max_q8,  2u);
         std::memcpy(g_page0 + 150, &ems::engine::xtau_tau_min,    2u);
         std::memcpy(g_page0 + 152, &ems::engine::xtau_tau_max,    2u);
+        // Bytes 154-163: EWG position PID + sensor cal
+        std::memcpy(g_page0 + 154, &ems::engine::ewg_kp_x10,       2u);
+        std::memcpy(g_page0 + 156, &ems::engine::ewg_ki_x10,       2u);
+        std::memcpy(g_page0 + 158, &ems::engine::ewg_kd_x10,       2u);
+        std::memcpy(g_page0 + 160, &ems::engine::ewg_pos_min_raw,  2u);
+        std::memcpy(g_page0 + 162, &ems::engine::ewg_pos_max_raw,  2u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -444,6 +450,11 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::xtau_x_max_q8,  g_page0 + 148, 2u);
         std::memcpy(&ems::engine::xtau_tau_min,    g_page0 + 150, 2u);
         std::memcpy(&ems::engine::xtau_tau_max,    g_page0 + 152, 2u);
+        std::memcpy(&ems::engine::ewg_kp_x10,       g_page0 + 154, 2u);
+        std::memcpy(&ems::engine::ewg_ki_x10,       g_page0 + 156, 2u);
+        std::memcpy(&ems::engine::ewg_kd_x10,       g_page0 + 158, 2u);
+        std::memcpy(&ems::engine::ewg_pos_min_raw,  g_page0 + 160, 2u);
+        std::memcpy(&ems::engine::ewg_pos_max_raw,  g_page0 + 162, 2u);
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));

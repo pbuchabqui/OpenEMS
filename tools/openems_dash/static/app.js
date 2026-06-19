@@ -396,6 +396,10 @@ const PAGE_0_SECTIONS = [
     actions: [{ label: "Reset LTFT", cls: "danger", endpoint: "/api/ltft/reset", confirm: "Zero ALL learned fuel trims (LTFT)?" }],
   },
   {
+    label: "EWG (ELECTRONIC WASTEGATE)",
+    fields: ["ewg_kp_x10","ewg_ki_x10","ewg_kd_x10","ewg_pos_min_raw","ewg_pos_max_raw"],
+  },
+  {
     label: "DRIVABILITY",
     fields: ["antijerk_tpsdot_threshold_x10","antijerk_retard_deg","antijerk_decay_cycles",
              "rev_limit_rpm_x10","rev_limit_soft_window_x10","rev_limit_spark_window_x10",
@@ -459,6 +463,12 @@ const FIELD_LABELS = {
   xtau_x_max_q8:            "X-τ X max (Q8)",
   xtau_tau_min:              "X-τ τ min (cycles)",
   xtau_tau_max:              "X-τ τ max (cycles)",
+  // EWG
+  ewg_kp_x10:               "EWG Kp (×10)",
+  ewg_ki_x10:               "EWG Ki (×10)",
+  ewg_kd_x10:               "EWG Kd (×10)",
+  ewg_pos_min_raw:           "EWG pos closed (raw)",
+  ewg_pos_max_raw:           "EWG pos open (raw)",
   // Dirigibilidade
   antijerk_tpsdot_threshold_x10: "Anti-jerk TPSdot threshold (%/s)",
   antijerk_retard_deg:            "Anti-jerk ignition retard (°)",

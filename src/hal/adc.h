@@ -42,6 +42,7 @@ enum class AdcSecondaryChannel : uint8_t {
     IAT_SE15        = 1,
     FUEL_PRESS_SE5B = 2,
     OIL_PRESS_SE6B  = 3,
+    EWG_POS         = 4,  // PC0 = ADC2_INP10
 };
 
 void     adc_init() noexcept;

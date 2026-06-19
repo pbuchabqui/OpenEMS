@@ -46,7 +46,7 @@
 
 // ── Cache das últimas leituras ADC ───────────────────────────────────────────
 static volatile uint16_t g_adc_secondary_raw[8] = {};  // canais ADC1 IN3-IN10
-static volatile uint16_t g_adc2_raw[4] = {};  // canais ADC2 IN1-IN4
+static volatile uint16_t g_adc2_raw[5] = {};  // canais ADC2: CLT,IAT,FUEL,OIL,EWG
 
 // LLI auto-referente por canal (CBR1, CDAR, CLLR) — torna o GPDMA contínuo: ao fim
 // de cada bloco recarrega tamanho+destino e re-aponta pra si mesmo. Em SRAM (.bss),
@@ -78,12 +78,13 @@ static constexpr uint8_t kAdc1ChMap[8] = {
     0, 1, 2, 3, 4, 5, 6, 7
 };
 
-static constexpr uint8_t kAdc2ChMap[4] = {
-    // AdcSecondaryChannel::CLT_SE14        → ADC2_IN1 → índice 0
-    // AdcSecondaryChannel::IAT_SE15        → ADC2_IN2 → índice 1
-    // AdcSecondaryChannel::FUEL_PRESS_SE5B → ADC2_IN13 (PC4) → índice 2
-    // AdcSecondaryChannel::OIL_PRESS_SE6B  → ADC2_IN14 (PC5) → índice 3
-    1, 2, 13, 14
+static constexpr uint8_t kAdc2ChMap[5] = {
+    // AdcSecondaryChannel::CLT_SE14        → ADC2_INP9  → índice 0
+    // AdcSecondaryChannel::IAT_SE15        → ADC2_INP5  → índice 1
+    // AdcSecondaryChannel::FUEL_PRESS_SE5B → ADC2_INP4 (PC4) → índice 2
+    // AdcSecondaryChannel::OIL_PRESS_SE6B  → ADC2_INP8 (PC5) → índice 3
+    // AdcSecondaryChannel::EWG_POS         → ADC2_INP10 (PC0) → índice 4
+    9, 5, 4, 8, 10
 };
 
 // ── Tempo de amostragem para todos os canais: 47.5 ciclos = 011b ─────────────
@@ -108,11 +109,12 @@ static constexpr uint32_t kAdc1Sqr2 = (10u << 0)   // SQ5 = INP10 (PC0)
 // ── Sequência de conversão ADC2 (4 canais) ───────────────────────────────────
 // CLT→INP9(PB0), IAT→INP5(PB1) — bancada: PB0/PB1 partilhados com APP1/APP2 no ADC1;
 // fios GPIO14/GPIO27 (APP1/APP2) desligados na bancada, GPIO13/GPIO12 ligados a PB0/PB1.
-static constexpr uint32_t kAdc2Sqr1 = (3u << 0)    // L = 3 (4 conv)
+static constexpr uint32_t kAdc2Sqr1 = (4u << 0)    // L = 4 (5 conv)
                                      | (9u << 6)    // SQ1 = INP9 (CLT, PB0)
                                      | (5u << 12)   // SQ2 = INP5 (IAT, PB1)
                                      | (4u << 18)   // SQ3 = INP4 (FUEL, PC4)
                                      | (8u << 24);  // SQ4 = INP8 (OIL, PC5)
+static constexpr uint32_t kAdc2Sqr2 = (10u << 0);   // SQ5 = INP10 (EWG, PC0)
 
 namespace ems::hal {
 
@@ -319,14 +321,15 @@ ADC1_SMPR2 = (kSmpr << ((10-10)*3))   // IN10
     // ── 5. Calibrar e configurar ADC2 ainda desabilitado ────────────────
     adc_prepare_for_config(ADC2_CR);
 
-    // SMPR1 cobre INP0-INP9. Canais ADC2: INP4(FUEL), INP5(IAT), INP8(OIL), INP9(CLT).
+    // SMPR1 cobre INP0-INP9. SMPR2 cobre INP10+.
     ADC2_SMPR1 = (kSmpr << (4u * 3u))   // INP4  (FUEL, PC4)
                | (kSmpr << (5u * 3u))   // INP5  (IAT, PB1)
                | (kSmpr << (8u * 3u))   // INP8  (OIL, PC5)
                | (kSmpr << (9u * 3u));  // INP9  (CLT, PB0)
-    ADC2_SMPR2 = 0u;
+    ADC2_SMPR2 = (kSmpr << (0u * 3u));  // INP10 (EWG, PC0)
 
     ADC2_SQR1 = kAdc2Sqr1;
+    ADC2_SQR2 = kAdc2Sqr2;
 
 // ADC2: trigger TIM6_TRGO simultâneo
 ADC2_CFGR1 = ADC_CFGR1_RES_12BIT
@@ -391,7 +394,7 @@ uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept {
 
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept {
     const uint8_t idx = static_cast<uint8_t>(ch);
-    if (idx >= 4u) { return 0u; }
+    if (idx >= 5u) { return 0u; }
     return g_adc2_raw[idx];
 }
 
@@ -487,7 +490,7 @@ extern "C" void adc_timeout_isr() noexcept {
 #include "hal/adc.h"
 namespace ems::hal {
 static uint16_t g_adc_primary[8] = {};
-static uint16_t g_adc_secondary[4] = {};
+static uint16_t g_adc_secondary[5] = {};
 static uint32_t g_last_trigger_mod = 0u;
 // P0 #3: Mock variables para ADC recovery system
 static bool g_adc_recovering_mock = false;
