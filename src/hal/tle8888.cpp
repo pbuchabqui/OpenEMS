@@ -18,6 +18,8 @@ constexpr uint8_t REG_INCONFIG1   = 0x05u;  // INJ ch2-3 mode
 constexpr uint8_t REG_IGNCONFIG   = 0x08u;  // IGN ch0-3 mode
 constexpr uint8_t REG_OC_THRESH   = 0x0Au;  // overcurrent threshold
 constexpr uint8_t REG_SLEW_RATE   = 0x0Bu;  // output slew rate
+constexpr uint8_t REG_VRS_CTRL    = 0x0Cu;  // VRS conditioner control
+constexpr uint8_t REG_VRS_THRESH  = 0x0Du;  // VRS adaptive threshold config
 constexpr uint8_t REG_CHIP_ID     = 0x7Eu;
 constexpr uint8_t REG_OP_STAT     = 0x34u;  // operation status
 constexpr uint8_t REG_DIAG_OUT0   = 0x38u;  // diag INJ ch0-1 (2 bits each)
@@ -39,6 +41,13 @@ constexpr uint8_t OC_INJ_10A = 0x05u;
 constexpr uint8_t OC_IGN_6A  = 0x03u;
 // SLEW_RATE: [3:0]=INJ (1=fast), [7:4]=IGN (1=fast)
 constexpr uint8_t SLEW_FAST = 0x11u;
+// VRS_CTRL: [0]=enable, [2:1]=filter (00=off, 01=low, 10=med, 11=high)
+// [4:3]=hysteresis (00=5mV, 01=10mV, 10=20mV, 11=40mV)
+constexpr uint8_t VRS_ENABLE       = 0x01u;
+constexpr uint8_t VRS_FILTER_MED   = (0x02u << 1u);  // medium filter for 60-2
+constexpr uint8_t VRS_HYST_20MV    = (0x02u << 3u);   // 20mV hysteresis
+// VRS_THRESH: [7:0] adaptive threshold level (higher = less sensitive)
+constexpr uint8_t VRS_THRESH_DEFAULT = 0x30u;
 
 // Channel fault codes: 2 bits per channel
 // 00=OK, 01=open-load, 10=short-to-GND, 11=short-to-VBAT
@@ -118,6 +127,11 @@ bool configure_channels() noexcept {
 
     // Slew rate: fast for both banks
     if (!write_verify(REG_SLEW_RATE, SLEW_FAST)) return false;
+
+    // VRS conditioner: enable, medium filter (60-2 tooth wheel), 20mV hysteresis
+    // CKP reluctor → TLE8888 VRS_IN → conditioned digital → VRS_OUT → PA0 (TIM5_CH1)
+    if (!write_verify(REG_VRS_CTRL, VRS_ENABLE | VRS_FILTER_MED | VRS_HYST_20MV)) return false;
+    if (!write_verify(REG_VRS_THRESH, VRS_THRESH_DEFAULT)) return false;
 
     // Normal operation mode
     tle_write(REG_OPMODE, 0x01u);

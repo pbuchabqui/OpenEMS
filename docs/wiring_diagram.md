@@ -9,7 +9,7 @@
                             │                                 │
   8 MHz HSE ───────────────►│ PH0/PH1 (OSC_IN/OUT)           │
                             │                                 │
-  ┌─ CKP (60-2) ──────────►│ PA0  TIM5_CH1  (AF2) ──────────┤── Input Capture (16ns/tick)
+  ┌─ CKP (60-2) ──► TLE8888 VRS_IN ──► VRS_OUT ──►│ PA0  TIM5_CH1 (AF2) ─┤── Input Capture (16ns)
   │  CMP (cam) ───────────►│ PA1  TIM5_CH2  (AF2) ──────────┤── Phase detection
   │                         │                                 │
   │  ┌── MAP sensor ──────►│ PA3  ADC1_IN15 ─────────────────┤
@@ -69,6 +69,11 @@
   │  │  ┌─────────────────────────────────────────────────────────┐
   │  │  │                    TLE8888                              │
   │  │  │              Smart Power Stage                          │
+  │  │  │                                                         │
+  │  │  │  VRS Conditioner (CKP signal conditioning)              │
+  │  │  │    VRS_IN  ◄──── CKP reluctor (60-2)                   │
+  │  │  │    VRS_OUT ────► PA0 (TIM5_CH1, input capture)          │
+  │  │  │    Filter: medium, Hysteresis: 20mV, adaptive threshold │
   │  │  │                                                         │
   │  │  │  SPI Interface (config/diag only, 3.9 MHz)              │
   │  │  │    CSN  ◄──── PB12                                      │
@@ -167,12 +172,15 @@
 ## Signal Flow
 
 ```
-Sensors → ADC → fuel_calc / ign_calc → ecu_sched
+CKP (reluctor) → TLE8888 VRS → VRS_OUT → PA0/TIM5 IC → ckp driver → sync
+CMP (cam)      → PA1/TIM5 IC ──────────────────────────────────────────┘
+                                                                        │
+Sensors → ADC → fuel_calc / ign_calc → ecu_sched ◄─────────────────────┘
                                            │
                    TIM2 OC (INJ) ──────────┼──► TLE8888 low-side → Injectors
                    TIM8 OC (IGN) ──────────┼──► TLE8888 push-pull → Coils
                                            │
-                   SPI2 (config/diag) ─────┼──► TLE8888 registers
+                   SPI2 (config/diag) ─────┼──► TLE8888 registers (VRS+INJ+IGN+WD)
                                            │
-CKP/CMP → TIM5 IC → ckp driver → sync ────┘
+                   EWG cascade ────────────┼──► boost PI (20ms) → pos PID (2ms) → motor
 ```
