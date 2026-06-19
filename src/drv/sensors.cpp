@@ -442,12 +442,12 @@ inline void sample_fast_channels() noexcept {
         return;  // Sai sem atualizar outros sensores
     }
     
-    const uint16_t map_raw   = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAP_SE10);
-    const uint16_t mafv_raw  = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAF_V_SE11);
-    const uint16_t tps_raw   = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::TPS_SE12);
+    const uint16_t map_raw   = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAP);
+    const uint16_t mafv_raw  = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAF_V);
+    const uint16_t tps_raw   = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::TPS);
     // ADC1_IN6 (PA5) formerly O2 — O2 is now CAN-only (wideband via FDCAN1).
     // This channel is repurposed for the knock sensor (piezo + external BP filter).
-    const uint16_t knock_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::KNOCK_SE4B);
+    const uint16_t knock_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::KNOCK);
 
     g_map_filt = iir(g_map_filt, map_raw, 3, 10);
 
@@ -640,8 +640,8 @@ void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
 }
 
 void sensors_tick_50ms() noexcept {
-    const uint16_t fuel_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::FUEL_PRESS_SE5B);
-    const uint16_t oil_raw  = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::OIL_PRESS_SE6B);
+    const uint16_t fuel_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::FUEL_PRESS);
+    const uint16_t oil_raw  = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::OIL_PRESS);
 
     g_fuel_buf[g_fuel_pos] = fuel_raw;
     g_fuel_pos = static_cast<uint8_t>((g_fuel_pos + 1u) & 0x3u);
@@ -660,8 +660,8 @@ void sensors_tick_50ms() noexcept {
 
 // [FIX-3] AN1-4: APP/ETB + passthrough bruto
 void sensors_tick_100ms() noexcept {
-    const uint16_t clt_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::CLT_SE14);
-    const uint16_t iat_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::IAT_SE15);
+    const uint16_t clt_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::CLT);
+    const uint16_t iat_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::IAT);
 
     g_clt_buf[g_clt_pos] = clt_raw;
     g_clt_pos = static_cast<uint8_t>((g_clt_pos + 1u) & 0x7u);
@@ -700,10 +700,10 @@ void sensors_tick_100ms() noexcept {
                               : lut128(g_iat_table, iat_avg);
     }
 
-    const uint16_t app1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN1_SE6B);
-    const uint16_t app2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN2_SE7B);
-    const uint16_t etb1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN3_SE8B);
-    const uint16_t etb2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::AN4_SE9B);
+    const uint16_t app1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::APP1);
+    const uint16_t app2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::APP2);
+    const uint16_t etb1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::ETB_TPS1);
+    const uint16_t etb2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::ETB_TPS2);
 
     g_data_staging.an1_raw = app1_raw;
     g_data_staging.an2_raw = app2_raw;

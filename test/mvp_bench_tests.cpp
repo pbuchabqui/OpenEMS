@@ -77,8 +77,8 @@ static void section(const char* name) {
 // ETB_TPS_NORMAL_MIN=400, ETB_TPS_NORMAL_MAX=3700 → mid ≈ 2050.
 static void drv_set_valid_adc(void) {
     using namespace ems::hal;
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 2050u);  // TPS1
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B, 2050u);  // TPS2
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 2050u);  // TPS1
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 2050u);  // TPS2
 }
 
 // Reset driver to known state + load valid ADC.
@@ -135,8 +135,8 @@ static void test_etb_driver_init_fault_tps1_open(void) {
     etb_driver_test_reset();
     using namespace ems::hal;
     // t1 = 100 < ETB_TPS_ADC_MIN(200) → TPS1_OPEN
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 100u);
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B, 2050u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 100u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 2050u);
 
     const bool ok = etb_driver_init();
     CHECK_FALSE(ok, "init fails when TPS1 open");
@@ -149,8 +149,8 @@ static void test_etb_driver_init_fault_tps2_short(void) {
     etb_driver_test_reset();
     using namespace ems::hal;
     // t2 = 4000 > ETB_TPS_ADC_MAX(3900) → TPS2_SHORT
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 2050u);
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B, 4000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 2050u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 4000u);
 
     const bool ok = etb_driver_init();
     CHECK_FALSE(ok, "init fails when TPS2 short");
@@ -179,8 +179,8 @@ static void test_etb_driver_read_sensors_mismatch(void) {
 
     // Now inject mismatched values: TPS1=0%, TPS2=50% → diff=50% > 12%
     using namespace ems::hal;
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 400u);   // 0%
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B, 2050u);  // 50%
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 400u);   // 0%
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 2050u);  // 50%
 
     etb_driver_data_t data{};
     const etb_driver_fault_t fault = etb_driver_read_sensors(&data);
@@ -235,8 +235,8 @@ static void test_etb_driver_clear_fault(void) {
     // Trigger fault on init
     etb_driver_test_reset();
     using namespace ems::hal;
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 100u);  // TPS1 open
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B, 2050u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 100u);  // TPS1 open
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 2050u);
     etb_driver_init();
     CHECK_EQ(etb_driver_get_state(), ETB_DRV_STATE_FAULT, "pre-cond: FAULT state");
 
@@ -347,7 +347,7 @@ static void test_etb_control_loop_sensor_fault_triggers_limp(void) {
 
     // Inject TPS1 fault AFTER successful init
     using namespace ems::hal;
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B, 100u);  // < ADC_MIN → open
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 100u);  // < ADC_MIN → open
 
     etb_control_loop(50.0f, 3000.0f, 10.0f);
     CHECK_FALSE(etb_is_ready(), "limp mode engaged after TPS fault in loop");
@@ -699,16 +699,16 @@ static void test_ckp_seed_arm_disarm(void) {
 static void sensor_setup(void) {
     sensors_test_reset();
     using namespace ems::hal;
-    adc_test_set_raw_primary(AdcPrimaryChannel::MAP_SE10,      2000u);
-    adc_test_set_raw_primary(AdcPrimaryChannel::TPS_SE12,      2000u);
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN1_SE6B,      2000u);
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN2_SE7B,      2000u);
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN3_SE8B,      2000u);
-    adc_test_set_raw_primary(AdcPrimaryChannel::AN4_SE9B,      2000u);
-    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT_SE14,        2000u);
-    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT_SE15,        2000u);
-    adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS_SE5B, 2000u);
-    adc_test_set_raw_secondary(AdcSecondaryChannel::OIL_PRESS_SE6B,  2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP,      2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::TPS,      2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP1,      2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP2,      2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1,      2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2,      2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT,        2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT,        2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::OIL_PRESS,  2000u);
 }
 
 static void test_sensors_validate_range(void) {
@@ -758,8 +758,8 @@ static void test_sensors_tick_100ms_clt_iat(void) {
     section("sensors: sensors_tick_100ms → CLT/IAT via lut128");
     sensor_setup(); sensors_init();
     using namespace ems::hal;
-    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT_SE14, 2000u);
-    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT_SE15, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT, 2000u);
     for (int i = 0; i < 8; ++i) { sensors_test_tick_100ms(); }
     const SensorData sd = sensors_get();
     const int16_t expected = static_cast<int16_t>(-400 + (1900 * 62) / 127);
@@ -1563,8 +1563,8 @@ static void test_sensors_tick_50ms(void) {
     section("sensors: sensors_tick_50ms");
     sensor_setup(); sensors_init();
     using namespace ems::hal;
-    adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS_SE5B, 2000u);
-    adc_test_set_raw_secondary(AdcSecondaryChannel::OIL_PRESS_SE6B,  2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::OIL_PRESS,  2000u);
     sensors_tick_50ms();
     CHECK_TRUE(true, "sensors_tick_50ms completes without crash");
     // After tick: fuel/oil pressure should be set (raw=2000 → some bar value)
@@ -1601,8 +1601,8 @@ static void test_sensors_table_entry_setters(void) {
     sensors_test_set_clt_table_entry(62u, 200);
     sensors_test_set_iat_table_entry(62u, 150);
     using namespace ems::hal;
-    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT_SE14, 2000u);
-    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT_SE15, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT, 2000u);
     for (int i = 0; i < 8; ++i) { sensors_test_tick_100ms(); }
     const ems::drv::SensorData sd = sensors_get();
     CHECK_EQ(sd.clt_degc_x10, 200, "CLT table entry 62 = 200 (20.0°C)");
@@ -1672,8 +1672,8 @@ static void test_timer_stubs(void) {
     tim4_pwm_init(15u);
     tim4_set_duty(0u, 750u);
     tim4_set_duty(1u, 1000u);
-    tim1_etb_pwm_init(20000u);
-    tim1_etb_set_duty_x10(500u);
+    tim15_etb_pwm_init(20000u);
+    tim15_etb_set_duty_x10(500u);
     CHECK_TRUE(true, "all timer stubs: no crash");
 }
 
@@ -1683,7 +1683,7 @@ static void test_timer_stubs(void) {
 
 static void test_ecu_sched_hardware_init(void) {
     section("ecu_sched: ECU_Hardware_Init runs without crash");
-    // ECU_Hardware_Init writes to TIM2/TIM8/GPIO mock registers (file-scope statics
+    // ECU_Hardware_Init writes to TIM2/TIM1/GPIO mock registers (file-scope statics
     // in ecu_sched.cpp, not externally observable). Only testable behavior:
     //   1. No crash.
     //   2. Angle table cleared — ecu_sched_test_angle_table_size()=0 after init.
@@ -1697,15 +1697,15 @@ static void test_ecu_sched_hardware_init(void) {
 }
 
 static void test_ecu_sched_ccr_write(void) {
-    section("ecu_sched: arm_channel writes TIM8 CCR on DWELL_START");
+    section("ecu_sched: arm_channel writes TIM1 CCR on DWELL_START");
 
-    // DWELL_START for cyl3 (ECU_CH_IGN3, TIM8_CH3) at tooth 13, frac=128:
+    // DWELL_START for cyl3 (ECU_CH_IGN3, TIM1_CH3) at tooth 13, frac=128:
     //   delta = (128 × 1600) >> 8 = 800.
-    //   TIM8 CCR = (TIM8_CNT & 0xFFFF) + delta.
-    //   TIM8_CNT must be ≠1; 0 = “not armed” sentinel in dwell watchdog.
+    //   TIM1 CCR = (TIM1_CNT & 0xFFFF) + delta.
+    //   TIM1_CNT must be ≠1; 0 = “not armed” sentinel in dwell watchdog.
     const uint32_t kCntBase = 1000u;
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim8_cnt(kCntBase);
+    ecu_sched_test_set_tim1_cnt(kCntBase);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(22500u);
     ecu_sched_set_inj_pw_ticks(20000u);
@@ -1714,23 +1714,23 @@ static void test_ecu_sched_ccr_write(void) {
     ckp_reach_full_sync();  // phase_A=false; angle table built at FULL_SYNC gap
 
     // Fire 13 teeth: at tooth 13 DWELL_START fires.
-    // cyl3 → ign_ch[3] = ECU_CH_IGN4 = 4 → stm32_ign_tim_ch(4) = TIM8 ch4 → CCR4.
+    // cyl3 → ign_ch[3] = ECU_CH_IGN4 = 4 → stm32_ign_tim_ch(4) = TIM1 ch4 → CCR4.
     for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
-    const uint32_t ccr4       = ecu_sched_test_get_tim8_ccr(4u);
+    const uint32_t ccr4       = ecu_sched_test_get_tim1_ccr(4u);
     const uint32_t expect_ccr = (kCntBase & 0xFFFFu) + 800u;  // cnt + delta(frac=128,ticks=1600)
-    CHECK_EQ(ccr4, expect_ccr, "TIM8_CCR4 = (cnt & 0xFFFF) + 800 at cyl3 DWELL_START");
+    CHECK_EQ(ccr4, expect_ccr, "TIM1_CCR4 = (cnt & 0xFFFF) + 800 at cyl3 DWELL_START");
 
-    // Changing TIM8_CNT does not rewrite CCR
-    ecu_sched_test_set_tim8_cnt(9999u);
-    CHECK_EQ(ecu_sched_test_get_tim8_ccr(4u), expect_ccr,
+    // Changing TIM1_CNT does not rewrite CCR
+    ecu_sched_test_set_tim1_cnt(9999u);
+    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), expect_ccr,
              "CCR4 unchanged after tim8_cnt change (no re-arm)");
 
     // At least one ignition CCR is non-zero (belt-and-suspenders)
-    CHECK_TRUE(ecu_sched_test_get_tim8_ccr(1u) > 0u ||
-               ecu_sched_test_get_tim8_ccr(2u) > 0u ||
-               ecu_sched_test_get_tim8_ccr(3u) > 0u ||
-               ecu_sched_test_get_tim8_ccr(4u) > 0u,
-               "at least one TIM8 CCR written after DWELL events");
+    CHECK_TRUE(ecu_sched_test_get_tim1_ccr(1u) > 0u ||
+               ecu_sched_test_get_tim1_ccr(2u) > 0u ||
+               ecu_sched_test_get_tim1_ccr(3u) > 0u ||
+               ecu_sched_test_get_tim1_ccr(4u) > 0u,
+               "at least one TIM1 CCR written after DWELL events");
 }
 
 static void test_ecu_sched_late_events(void) {
@@ -1742,7 +1742,7 @@ static void test_ecu_sched_late_events(void) {
     // This fires inside ckp_reach_full_sync() when the FULL_SYNC gap
     // triggers Calculate_Sequential_Cycle and then processes tooth 0 events.
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim8_cnt(0u);
+    ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(0u);    // spark at TDC: tooth 0, frac=0
     ecu_sched_set_dwell_ticks(22500u);
     ecu_sched_set_inj_pw_ticks(20000u);
@@ -1759,7 +1759,7 @@ static void test_ecu_sched_dwell_watchdog_fires(void) {
     section("ecu_sched: dwell watchdog fires after 1.4x dwell ticks");
 
     // Setup: same as CCR test. After 13 teeth, DWELL_START for cyl3 (tim_ch=3)
-    // sets g_dwell_arm_tick[2]=TIM8_CNT=0 and g_dwell_wdog_ticks[2]=22500*7/5=31500.
+    // sets g_dwell_arm_tick[2]=TIM1_CNT=0 and g_dwell_wdog_ticks[2]=22500*7/5=31500.
     // arm_channel uses TIM2_CNT (scheduler_counter()). Watchdog also reads TIM2_CNT.
     // TIM2_CNT must be ≠1: 0 is the "not armed" sentinel for g_dwell_arm_tick.
     // cyl3 → ECU_CH_IGN4 → tim_ch=4 → ign_idx=3. arm_tick = TIM2_CNT at arm time.
@@ -1794,7 +1794,7 @@ static void test_ecu_sched_presync_table(void) {
     // After HALF_SYNC, tooth_index advances 0..57. When tooth_index wraps 57→0,
     // rev_boundary=1 with state=HALF_SYNC → calculate_presync_revolution fires.
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim8_cnt(0u);
+    ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(10u);
     ecu_sched_set_dwell_ticks(22500u);
     ecu_sched_set_inj_pw_ticks(20000u);
@@ -2511,12 +2511,12 @@ static void test_hal_adc_all(void) {
     section("hal/adc: init + primary/secondary read");
     adc_init();
     // After test_set_raw, read must return set value
-    adc_test_set_raw_primary(AdcPrimaryChannel::MAP_SE10, 2500u);
-    CHECK_EQ(adc_primary_read(AdcPrimaryChannel::MAP_SE10), 2500u,
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 2500u);
+    CHECK_EQ(adc_primary_read(AdcPrimaryChannel::MAP), 2500u,
              "primary_read == test_set_raw");
 
-    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT_SE14, 1800u);
-    CHECK_EQ(adc_secondary_read(AdcSecondaryChannel::CLT_SE14), 1800u,
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT, 1800u);
+    CHECK_EQ(adc_secondary_read(AdcSecondaryChannel::CLT), 1800u,
              "secondary_read == test_set_raw");
 
     section("hal/adc: adc_trigger_on_tooth updates trigger mod");
@@ -3131,14 +3131,14 @@ static void test_trigger_offset(void) {
              "offset=0°: cyl3 DWELL_START tooth=13 (trigger=441°, ang=81, 81*256/6=3456>>8=13)");
 
     // CCR4 NOT written yet (event fires at tooth 13, not at gap/tooth 0)
-    CHECK_EQ(ecu_sched_test_get_tim8_ccr(4u), 0u,
+    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), 0u,
              "offset=0°: CCR4=0 immediately after FULL_SYNC (no teeth fired yet)");
 
     // Fire 13 teeth → at tooth 13 DWELL_START fires
-    // CCR4 = (TIM8_CNT & 0xFFFF) + delta = 0 + (128*1600>>8) = 0+800 = 800
+    // CCR4 = (TIM1_CNT & 0xFFFF) + delta = 0 + (128*1600>>8) = 0+800 = 800
     for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
-    CHECK_EQ(ecu_sched_test_get_tim8_ccr(4u), 800u,
-             "offset=0°: CCR4=800 after tooth 13 (TIM8_CNT=0, delta=800)");
+    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), 800u,
+             "offset=0°: CCR4=800 after tooth 13 (TIM1_CNT=0, delta=800)");
 
     // ----------------------------------------------------------------
     // Non-zero offset: 78°
@@ -3173,8 +3173,8 @@ static void test_trigger_offset(void) {
                "offset change moves the event: tooth 13 (offset=0) ≠ tooth 0 (offset=78)");
 
     // CCR4 written AT the gap (tooth 0 event fires during FULL_SYNC gap processing)
-    // CCR4 = (TIM8_CNT=0) + delta(frac=128,ticks=1600) = 0+800 = 800
-    CHECK_EQ(ecu_sched_test_get_tim8_ccr(4u), 800u,
+    // CCR4 = (TIM1_CNT=0) + delta(frac=128,ticks=1600) = 0+800 = 800
+    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), 800u,
              "offset=78°: CCR4=800 immediately at FULL_SYNC gap (tooth 0 fires at gap)");
 
     // Confirm: with offset=0 the CCR was 0 at gap; with offset=78 it is 1800 at gap.

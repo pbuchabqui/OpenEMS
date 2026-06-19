@@ -25,21 +25,21 @@ static uint32_t ems_test_tim2_ccmr1;
 static uint32_t ems_test_tim2_ccmr2;
 static uint32_t ems_test_tim2_ccer;
 static uint32_t ems_test_tim2_egr;
-static uint32_t ems_test_tim8_cnt;
-static uint32_t ems_test_tim8_ccr1;
-static uint32_t ems_test_tim8_ccr2;
-static uint32_t ems_test_tim8_ccr3;
-static uint32_t ems_test_tim8_ccr4;
-static uint32_t ems_test_tim8_sr;
-static uint32_t ems_test_tim8_cr1;
-static uint32_t ems_test_tim8_dier;
-static uint32_t ems_test_tim8_psc;
-static uint32_t ems_test_tim8_arr;
-static uint32_t ems_test_tim8_ccmr1;
-static uint32_t ems_test_tim8_ccmr2;
-static uint32_t ems_test_tim8_ccer;
-static uint32_t ems_test_tim8_bdtr;
-static uint32_t ems_test_tim8_egr;
+static uint32_t ems_test_tim1_ign_cnt;
+static uint32_t ems_test_tim1_ign_ccr1;
+static uint32_t ems_test_tim1_ign_ccr2;
+static uint32_t ems_test_tim1_ign_ccr3;
+static uint32_t ems_test_tim1_ign_ccr4;
+static uint32_t ems_test_tim1_ign_sr;
+static uint32_t ems_test_tim1_ign_cr1;
+static uint32_t ems_test_tim1_ign_dier;
+static uint32_t ems_test_tim1_ign_psc;
+static uint32_t ems_test_tim1_ign_arr;
+static uint32_t ems_test_tim1_ign_ccmr1;
+static uint32_t ems_test_tim1_ign_ccmr2;
+static uint32_t ems_test_tim1_ign_ccer;
+static uint32_t ems_test_tim1_ign_bdtr;
+static uint32_t ems_test_tim1_ign_egr;
 static uint32_t ems_test_rcc_ahb2enr1;
 static uint32_t ems_test_rcc_apb1lenr;
 static uint32_t ems_test_rcc_apb2enr;
@@ -62,21 +62,21 @@ static uint32_t ems_test_gpio_ospeedr;
 #define TIM2_CCMR2 ems_test_tim2_ccmr2
 #define TIM2_CCER ems_test_tim2_ccer
 #define TIM2_EGR ems_test_tim2_egr
-#define TIM8_CNT ems_test_tim8_cnt
-#define TIM8_CCR1 ems_test_tim8_ccr1
-#define TIM8_CCR2 ems_test_tim8_ccr2
-#define TIM8_CCR3 ems_test_tim8_ccr3
-#define TIM8_CCR4 ems_test_tim8_ccr4
-#define TIM8_SR ems_test_tim8_sr
-#define TIM8_CR1 ems_test_tim8_cr1
-#define TIM8_DIER ems_test_tim8_dier
-#define TIM8_PSC ems_test_tim8_psc
-#define TIM8_ARR ems_test_tim8_arr
-#define TIM8_CCMR1 ems_test_tim8_ccmr1
-#define TIM8_CCMR2 ems_test_tim8_ccmr2
-#define TIM8_CCER ems_test_tim8_ccer
-#define TIM8_BDTR ems_test_tim8_bdtr
-#define TIM8_EGR ems_test_tim8_egr
+#define TIM1_CNT ems_test_tim1_ign_cnt
+#define TIM1_CCR1 ems_test_tim1_ign_ccr1
+#define TIM1_CCR2 ems_test_tim1_ign_ccr2
+#define TIM1_CCR3 ems_test_tim1_ign_ccr3
+#define TIM1_CCR4 ems_test_tim1_ign_ccr4
+#define TIM1_SR ems_test_tim1_ign_sr
+#define TIM1_CR1 ems_test_tim1_ign_cr1
+#define TIM1_DIER ems_test_tim1_ign_dier
+#define TIM1_PSC ems_test_tim1_ign_psc
+#define TIM1_ARR ems_test_tim1_ign_arr
+#define TIM1_CCMR1 ems_test_tim1_ign_ccmr1
+#define TIM1_CCMR2 ems_test_tim1_ign_ccmr2
+#define TIM1_CCER ems_test_tim1_ign_ccer
+#define TIM1_BDTR ems_test_tim1_ign_bdtr
+#define TIM1_EGR ems_test_tim1_ign_egr
 #define RCC_AHB2ENR1 ems_test_rcc_ahb2enr1
 #define RCC_APB1LENR ems_test_rcc_apb1lenr
 #define RCC_APB2ENR ems_test_rcc_apb2enr
@@ -92,11 +92,15 @@ static uint32_t ems_test_gpio_ospeedr;
 #define GPIOC_AFRL ems_test_gpio_afrl
 #define GPIOC_AFRH ems_test_gpio_afrh
 #define GPIOC_OSPEEDR ems_test_gpio_ospeedr
+#define GPIOE_MODER ems_test_gpio_moder
+#define GPIOE_AFRL ems_test_gpio_afrl
+#define GPIOE_AFRH ems_test_gpio_afrh
+#define GPIOE_OSPEEDR ems_test_gpio_ospeedr
 #define RCC_AHB2ENR1_GPIOAEN 1U
 #define RCC_AHB2ENR1_GPIOBEN 2U
 #define RCC_AHB2ENR1_GPIOCEN 4U
 #define RCC_APB1LENR_TIM2EN 1U
-#define RCC_APB2ENR_TIM8EN 1U
+#define RCC_APB2ENR_TIM1EN 1U
 #define GPIO_AF1 1U
 #define GPIO_AF3 3U
 #define TIM_SR_CC1IF 0x2U
@@ -133,7 +137,7 @@ static inline void gpio_set_af(volatile uint32_t*, volatile uint32_t*, volatile 
 
 // Verificações de consistência do clock em tempo de compilação.
 // Se qualquer uma falhar, a fórmula TIM5_ns → scheduler_ticks está errada.
-// TIM2/TIM8: APB1_timer(250MHz) / (PSC+1) = 250MHz/25 = 10MHz = ECU_SCHED_CLOCK_HZ
+// TIM2/TIM1: APB_timer(250MHz) / (PSC+1) = 250MHz/25 = 10MHz = ECU_SCHED_CLOCK_HZ
 static_assert(STM32_TIM_PSC_10MHZ == 24U,
     "PSC 10MHz: APB1_timer=250MHz, PSC+1=25, 250/25=10MHz");
 static_assert(ECU_SCHED_CLOCK_HZ == 10000000U,
@@ -267,10 +271,10 @@ static inline volatile uint32_t *stm32_tim_ccr(uint8_t is_inj, uint8_t tim_ch)
         }
     }
     switch (tim_ch) {
-        case 1U: return &TIM8_CCR1;
-        case 2U: return &TIM8_CCR2;
-        case 3U: return &TIM8_CCR3;
-        default: return &TIM8_CCR4;
+        case 1U: return &TIM1_CCR1;
+        case 2U: return &TIM1_CCR2;
+        case 3U: return &TIM1_CCR3;
+        default: return &TIM1_CCR4;
     }
 }
 
@@ -281,8 +285,8 @@ static inline uint32_t stm32_tim_cc_flag(uint8_t tim_ch)
 
 static inline void stm32_write_oc_mode(uint8_t is_inj, uint8_t tim_ch, uint32_t m1, uint32_t m2, uint32_t m3, uint32_t m4)
 {
-    volatile uint32_t *ccmr1 = (is_inj != 0U) ? &TIM2_CCMR1 : &TIM8_CCMR1;
-    volatile uint32_t *ccmr2 = (is_inj != 0U) ? &TIM2_CCMR2 : &TIM8_CCMR2;
+    volatile uint32_t *ccmr1 = (is_inj != 0U) ? &TIM2_CCMR1 : &TIM1_CCMR1;
+    volatile uint32_t *ccmr2 = (is_inj != 0U) ? &TIM2_CCMR2 : &TIM1_CCMR2;
     const uint8_t shadow_base = (is_inj != 0U) ? 0U : ECU_IGN_CH_FIRST;
     const uint8_t shadow_idx = (uint8_t)(shadow_base + tim_ch - 1U);
     uint32_t desired;
@@ -358,10 +362,7 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 
     if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
     
-    // FIX P0 (BUG-7): TIM8 é 16-bit — validar delta antes de descartar evento
-    // Se delta > max_delta_16, o evento NÃO cabe no timer e deve ser descartado
-    // Isso previne perda de ignição em baixa rotação onde dwell + advance > 65535 ticks
-    if ((is_inj == 0U) && (delta > ems::engine::kTim8MaxDelta16)) { 
+    if ((is_inj == 0U) && (delta > ems::engine::kTimIgnMaxDelta16)) {
         ++g_cycle_schedule_drop_count; 
         return; 
     }
@@ -430,7 +431,7 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 	if (is_inj != 0U) {
 		TIM2_SR &= ~stm32_tim_cc_flag(tim_ch);
 	} else {
-		TIM8_SR &= ~stm32_tim_cc_flag(tim_ch);
+		TIM1_SR &= ~stm32_tim_cc_flag(tim_ch);
 	}
 #if defined(__arm__) || defined(__thumb__)
 	__asm__ volatile("dmb" ::: "memory"); // Ensure OC mode + flag clear complete before CCR update
@@ -439,9 +440,8 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 	if (is_inj != 0U) {
 		*ccr = target_cnv;
 	} else {
-		// FIX P0: Handle 16-bit timer wraparound correctly
-		// TIM8 is configured as 16-bit (ARR = 0xFFFF), so we must handle wrap
-		const uint32_t current_cnt = TIM8_CNT & 0xFFFFU;
+		// TIM1 is configured as 16-bit (ARR = 0xFFFF), handle wrap
+		const uint32_t current_cnt = TIM1_CNT & 0xFFFFU;
 		uint32_t target = current_cnt + delta;
 		if (target > 0xFFFFU) {
 			target -= 0x10000U;  // Wrap within 16-bit range
@@ -506,21 +506,23 @@ void ECU_Hardware_Init(void)
 {
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN | RCC_AHB2ENR1_GPIOBEN | RCC_AHB2ENR1_GPIOCEN;
     RCC_APB1LENR |= RCC_APB1LENR_TIM2EN;
-    RCC_APB2ENR  |= RCC_APB2ENR_TIM8EN;
+    RCC_APB2ENR  |= RCC_APB2ENR_TIM1EN;
 
+    // Injection: TIM2 CH1-4 on PC6/PC7(AF3), PB10/PB11(AF1) — unchanged
     gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 6U, GPIO_AF3);
     gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 7U, GPIO_AF3);
-    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 8U, GPIO_AF3);
-    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 9U, GPIO_AF3);
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 15U, GPIO_AF1);
-    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 3U, GPIO_AF1);
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 10U, GPIO_AF1);
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 11U, GPIO_AF1);
+    // Ignition: TIM1 CH1=PA8/AF1, CH2=PE11/AF1, CH3=PE13/AF1, CH4=PE14/AF1 (LQFP100)
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 8U, GPIO_AF1);
+    gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 11U, GPIO_AF1);
+    gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 13U, GPIO_AF1);
+    gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 14U, GPIO_AF1);
 
-    TIM8_CR1 = 0U; TIM8_DIER = 0U; TIM8_SR = 0U; TIM8_PSC = STM32_TIM_PSC_10MHZ; TIM8_CNT = 0U; TIM8_ARR = 0xFFFFU;
-    TIM8_CCMR1 = TIM_CCMR1_OC1M_FORCE_INACTIVE | TIM_CCMR1_OC2M_FORCE_INACTIVE;
-    TIM8_CCMR2 = TIM_CCMR2_OC3M_FORCE_INACTIVE | TIM_CCMR2_OC4M_FORCE_INACTIVE;
-    TIM8_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E; TIM8_BDTR = (1U << 15); TIM8_EGR = 1U;
+    TIM1_CR1 = 0U; TIM1_DIER = 0U; TIM1_SR = 0U; TIM1_PSC = STM32_TIM_PSC_10MHZ; TIM1_CNT = 0U; TIM1_ARR = 0xFFFFU;
+    TIM1_CCMR1 = TIM_CCMR1_OC1M_FORCE_INACTIVE | TIM_CCMR1_OC2M_FORCE_INACTIVE;
+    TIM1_CCMR2 = TIM_CCMR2_OC3M_FORCE_INACTIVE | TIM_CCMR2_OC4M_FORCE_INACTIVE;
+    TIM1_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E; TIM1_BDTR = (1U << 15); TIM1_EGR = 1U;
 
     TIM2_CR1 = 0U; TIM2_DIER = 0U; TIM2_SR = 0U; TIM2_PSC = STM32_TIM_PSC_10MHZ; TIM2_CNT = 0U; TIM2_ARR = 0xFFFFFFFFU;
     TIM2_CCMR1 = TIM_CCMR1_OC1M_FORCE_INACTIVE | TIM_CCMR1_OC2M_FORCE_INACTIVE;
@@ -536,7 +538,7 @@ void ECU_Hardware_Init(void)
     g_oc_mode_shadow[6] = TIM_CCMR2_OC3M_FORCE_INACTIVE;
     g_oc_mode_shadow[7] = TIM_CCMR2_OC4M_FORCE_INACTIVE;
 
-    TIM8_CR1 = TIM_CR1_CEN;
+    TIM1_CR1 = TIM_CR1_CEN;
     TIM2_CR1 = TIM_CR1_CEN;
     clear_all_events_and_drive_safe_outputs();
 }
@@ -851,18 +853,18 @@ void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32
     ecu_sched_set_mspark(count, inter_dwell_ticks, atdc_limit_deg);
 }
 uint8_t ecu_sched_test_get_mspark_count(void) { return g_mspark_count; }
-void ecu_sched_test_set_tim8_cnt(uint32_t cnt) noexcept { ems_test_tim8_cnt = cnt; }
+void ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept { ems_test_tim1_ign_cnt = cnt; }
 void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim2_cnt = cnt; }
 void ecu_sched_test_reset_ccr(void) noexcept {
-    ems_test_tim8_ccr1 = 0u; ems_test_tim8_ccr2 = 0u;
-    ems_test_tim8_ccr3 = 0u; ems_test_tim8_ccr4 = 0u;
+    ems_test_tim1_ign_ccr1 = 0u; ems_test_tim1_ign_ccr2 = 0u;
+    ems_test_tim1_ign_ccr3 = 0u; ems_test_tim1_ign_ccr4 = 0u;
 }
-uint32_t ecu_sched_test_get_tim8_ccr(uint8_t ch) noexcept {
+uint32_t ecu_sched_test_get_tim1_ccr(uint8_t ch) noexcept {
     switch (ch) {
-        case 1u: return ems_test_tim8_ccr1;
-        case 2u: return ems_test_tim8_ccr2;
-        case 3u: return ems_test_tim8_ccr3;
-        case 4u: return ems_test_tim8_ccr4;
+        case 1u: return ems_test_tim1_ign_ccr1;
+        case 2u: return ems_test_tim1_ign_ccr2;
+        case 3u: return ems_test_tim1_ign_ccr3;
+        case 4u: return ems_test_tim1_ign_ccr4;
         default: return 0u;
     }
 }
