@@ -152,6 +152,19 @@ void system_stm32_init(void) noexcept {
         }
     }
 
+    // ── 6b. TrustZone: marcar periféricos como non-secure ──────────────
+    // Chip pode vir com TZEN=0xC3; escritas NS em periféricos secure são
+    // descartadas silenciosamente → hard fault / hang no boot.
+    // SECCFGR: 0 = non-secure. Limpar bits de GPIOA-E, TIM1-5, TIM8,
+    // TIM15, SPI2, FDCAN1, USB, ADC, SDMMC1 para garantir acesso NS.
+    GTZC1_TZSC_SECCFGR1 = 0u;
+    GTZC1_TZSC_SECCFGR2 = 0u;
+    GTZC1_TZSC_SECCFGR3 = 0u;
+    // MPCBB: marcar toda SRAM1/2/3 como non-secure
+    GTZC1_MPCBB1_CR = 0u;
+    GTZC1_MPCBB2_CR = 0u;
+    GTZC1_MPCBB3_CR = 0u;
+
     // ── 7. Habilitar clocks dos GPIOs ────────────────────────────────────
     // STM32H562VGT6 (LQFP100): GPIOA-E disponíveis
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN

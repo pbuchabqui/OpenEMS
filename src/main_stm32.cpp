@@ -1105,17 +1105,16 @@ int main() {
             }
         }
 
-        // ── 500ms: agenda flush Flash + LED heartbeat (PE0 WeAct) ──────────
-        // PE0 = LED da placa WeAct STM32H562 LQFP100; toggle confirma firmware a correr.
-        // GPIOE já tem clock habilitado em system_stm32_init().
+        // ── 500ms: agenda flush Flash + LED heartbeat (PB2 WeAct blue LED) ─
+        // PB2 = LED blue on-board da WeAct STM32H562 LQFP100.
         // FIX P0: Only allow flash writes when engine is stopped or below safe RPM
         static bool adaptive_flush_pending = false;
         static uint32_t last_calib_save_ms = 0u;
         if (elapsed(now, g_t500ms_, 500u)) {
             g_t500ms_ = now;
-            // LED heartbeat: toggle PE0 a cada 500ms (1 Hz)
-            GPIOE_MODER = (GPIOE_MODER & ~(3u << 0u)) | (1u << 0u);
-            GPIOE_ODR ^= (1u << 0u);  // toggle PE0
+            // LED heartbeat: toggle PB2 a cada 500ms (1 Hz)
+            GPIOB_MODER = (GPIOB_MODER & ~(3u << 4u)) | (1u << 4u);
+            GPIOB_ODR ^= (1u << 2u);  // toggle PB2
             const auto snap = ems::drv::ckp_snapshot();
             // FIX: gate ALL flash writes behind the same RPM threshold — calibration
             // writes had no RPM check, creating a latent bug (see Blocker #3).

@@ -102,6 +102,15 @@
 #define RCC_CFGR1_SWS_PLL1 (3u << 3)
 
 // Clock enables
+// ─── GTZC (TrustZone controller — RM0481 §11) ──────────────────────────────
+#define GTZC1_BASE              0x40032400UL
+#define GTZC1_TZSC_SECCFGR1     STM32_REG32(GTZC1_BASE + 0x10UL)
+#define GTZC1_TZSC_SECCFGR2     STM32_REG32(GTZC1_BASE + 0x14UL)
+#define GTZC1_TZSC_SECCFGR3     STM32_REG32(GTZC1_BASE + 0x18UL)
+#define GTZC1_MPCBB1_CR         STM32_REG32(0x40032C00UL)
+#define GTZC1_MPCBB2_CR         STM32_REG32(0x40033000UL)
+#define GTZC1_MPCBB3_CR         STM32_REG32(0x40033400UL)
+
 #define RCC_AHB2ENR1_GPIOAEN  (1u << 0)
 #define RCC_AHB2ENR1_GPIOBEN  (1u << 1)
 #define RCC_AHB2ENR1_GPIOCEN  (1u << 2)
