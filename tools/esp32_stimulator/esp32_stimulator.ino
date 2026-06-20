@@ -82,6 +82,7 @@
 //   #define WIFI_PASS "minha_senha"
 #include <WiFi.h>
 #include <WebServer.h>
+#include <ArduinoOTA.h>
 #if __has_include("wifi_credentials.h")
 #include "wifi_credentials.h"
 #endif
@@ -659,8 +660,16 @@ static void wifi_setup() {
     g_http.on("/preset", http_preset);
     g_http.on("/status.json", http_status);
     g_http.begin();
+
+    ArduinoOTA.setHostname("openems-stim");
+    ArduinoOTA.onStart([]() { rmt_disable(g_ckp_chan); Serial.println("[OTA] start"); });
+    ArduinoOTA.onEnd([]()   { Serial.println("[OTA] done — reboot"); });
+    ArduinoOTA.onError([](ota_error_t e) { Serial.printf("[OTA] err %u\n", e); });
+    ArduinoOTA.begin();
+
     Serial.printf("[WIFI] interface web: http://%s/\n",
                   WiFi.localIP().toString().c_str());
+    Serial.printf("[OTA] pronto — hostname: openems-stim\n");
 }
 
 static void wifi_poll() {
@@ -705,6 +714,7 @@ void loop() {
         }
     }
     wifi_poll();
+    ArduinoOTA.handle();
     // estimativa de revoluções p/ o indicador de liveness do status
     const uint32_t now = millis();
     if (g_rev_accum_ms == 0u) g_rev_accum_ms = now;
