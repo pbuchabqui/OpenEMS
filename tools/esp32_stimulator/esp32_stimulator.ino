@@ -19,11 +19,13 @@
  *  GPIO12 → PB1     IAT         LEDC PWM → R=10 kΩ, C=100 nF → ADC2_INP5
  *  GPIO14    (APP1 — desligado na bancada; PB0 usado para CLT)
  *  GPIO27    (APP2 — desligado na bancada; PB1 usado para IAT)
- *  GPIO16 → PC4     FUEL_PRESS  LEDC PWM → R=10 kΩ, C=100 nF → ADC
+ *  GPIO16 → PA2     ETB_TPS1    LEDC PWM → R=10 kΩ, C=100 nF → ADC1_INP14
  *  GPIO17 → PC5     OIL_PRESS   LEDC PWM → R=10 kΩ, C=100 nF → ADC
- *  GPIO18 → PC0     ETB_TPS1    LEDC PWM → R=10 kΩ, C=100 nF → ADC
+ *  GPIO18 → PC0     FUEL_PRESS  LEDC PWM → R=10 kΩ, C=100 nF → ADC (placeholder)
  *  GPIO19 → PC1     ETB_TPS2    LEDC PWM → R=10 kΩ, C=100 nF → ADC
  *  GND    — GND     referência  OBRIGATÓRIO
+ *
+ *  Nota: PC4 agora é INJ3 (TIM2_CH4) — FUEL_PRESS movido para PC0.
  *
  *  Nota sobre CLT/IAT: se a PCB tiver pull-up para 3.3 V nestes pinos,
  *  remover o resistor (DNP) ou interpor um buffer rail-to-rail (e.g.
@@ -109,15 +111,15 @@ static const PwmChan kPwm[] = {
     { GPIO_NUM_12, LEDC_CHANNEL_1, LEDC_TIMER_0, "IAT",      "PB1"  },
     { GPIO_NUM_14, LEDC_CHANNEL_2, LEDC_TIMER_0, "APP1",     "PB0"  },
     { GPIO_NUM_27, LEDC_CHANNEL_3, LEDC_TIMER_0, "APP2",     "PB1"  },
-    { GPIO_NUM_16, LEDC_CHANNEL_4, LEDC_TIMER_1, "FUEL",     "PC4"  },
+    { GPIO_NUM_16, LEDC_CHANNEL_4, LEDC_TIMER_1, "ETB_TPS1", "PA2"  },
     { GPIO_NUM_17, LEDC_CHANNEL_5, LEDC_TIMER_1, "OIL",      "PC5"  },
-    { GPIO_NUM_18, LEDC_CHANNEL_6, LEDC_TIMER_1, "ETB_TPS1", "PC0"  },
+    { GPIO_NUM_18, LEDC_CHANNEL_6, LEDC_TIMER_1, "FUEL",     "PC0"  },
     { GPIO_NUM_19, LEDC_CHANNEL_7, LEDC_TIMER_1, "ETB_TPS2", "PC1"  },
 };
 static constexpr int kNPwm = (int)(sizeof(kPwm) / sizeof(kPwm[0]));
 
 // índices semânticos no array kPwm:
-enum PwmIdx : int { kCLT=0, kIAT, kAPP1, kAPP2, kFUEL, kOIL, kETB1, kETB2 };
+enum PwmIdx : int { kCLT=0, kIAT, kAPP1, kAPP2, kETB1, kOIL, kFUEL, kETB2 };
 
 // resolução LEDC: 12-bit (raw 0-4095 mapeado directamente como duty)
 static constexpr ledc_timer_bit_t kPwmBits  = LEDC_TIMER_12_BIT;
@@ -333,7 +335,7 @@ static void print_status() {
     uint16_t r;
     r = map_kpa_to_raw(s.map_kpa);
     Serial.printf("  %-10s %-4s  %3u kPa   raw=%4u  V=%.3f V\n",
-                  "MAP:", "PA2", s.map_kpa, r, raw_v(r));
+                  "MAP:", "PA3", s.map_kpa, r, raw_v(r));
 
     r = tps_pct_to_raw(s.tps_pct);
     Serial.printf("  %-10s %-4s  %3u %%     raw=%4u  V=%.3f V\n",
@@ -353,7 +355,7 @@ static void print_status() {
 
     r = press_bar_x10_to_raw(s.fuel_bar_x10);
     Serial.printf("  %-10s %-4s  %.1f bar   raw=%4u  V=%.3f V\n",
-                  "FUEL:", "PC4", s.fuel_bar_x10 / 10.0f, r, raw_v(r));
+                  "FUEL:", "PC0", s.fuel_bar_x10 / 10.0f, r, raw_v(r));
 
     r = press_bar_x10_to_raw(s.oil_bar_x10);
     Serial.printf("  %-10s %-4s  %.1f bar   raw=%4u  V=%.3f V\n",
@@ -361,7 +363,7 @@ static void print_status() {
 
     r = tps_pct_to_raw(s.etb_pct);
     Serial.printf("  %-10s %-4s  %3u %%     raw=%4u  (TPS2 invertido)\n",
-                  "ETB:", "PC0/1", s.etb_pct, r);
+                  "ETB:", "PA2/C1", s.etb_pct, r);
 
     Serial.println();
 }

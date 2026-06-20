@@ -14,14 +14,14 @@
  *   ──────────  ─────────  ────────────────────
  *   GPIO 2  →  PA0        CKP output (60-2)
  *   GPIO 4  →  PA1        CMP output (1 pulso/ciclo)
- *   GPIO 32 ←  PC6        IGN0 (TIM8_CH1)
- *   GPIO 33 ←  PC7        IGN1 (TIM8_CH2)
- *   GPIO 25 ←  PC8        IGN2 (TIM8_CH3)
- *   GPIO 26 ←  PC9        IGN3 (TIM8_CH4)
- *   GPIO 27 ←  PA15       INJ0 (TIM2_CH1)
- *   GPIO 14 ←  PB3        INJ1 (TIM2_CH2)
+ *   GPIO 32 ←  PA8        IGN0 (TIM1_CH1)
+ *   GPIO 33 ←  PE11       IGN1 (TIM1_CH2)
+ *   GPIO 25 ←  PE13       IGN2 (TIM1_CH3)
+ *   GPIO 26 ←  PE14       IGN3 (TIM1_CH4)
+ *   GPIO 27 ←  PC6        INJ0 (TIM2_CH1)
+ *   GPIO 14 ←  PC7        INJ1 (TIM2_CH2)
  *   GPIO 12 ←  PB10       INJ2 (TIM2_CH3)
- *   GPIO 13 ←  PB11       INJ3 (TIM2_CH4)
+ *   GPIO 13 ←  PC4        INJ3 (TIM2_CH4)
  *   GND     —  GND        OBRIGATÓRIO
  *
  *   Nota: NÃO ligar GPIO36 (era o loopback CKP — aqui desnecessário).
@@ -129,14 +129,14 @@ struct ChanDef {
 static constexpr gpio_num_t kVirtual = GPIO_NUM_MAX;
 
 static ChanDef kChan[] = {
-    { GPIO_NUM_32,  "IGN0", "PC6",  true  },   // CH0
-    { GPIO_NUM_33,  "IGN1", "PC7",  true  },   // CH1
-    { GPIO_NUM_25,  "IGN2", "PC8",  true  },   // CH2
-    { GPIO_NUM_26,  "IGN3", "PC9",  true  },   // CH3
-    { GPIO_NUM_27,  "INJ0", "PA15", true  },   // CH4
-    { GPIO_NUM_14,  "INJ1", "PB3",  true  },   // CH5
+    { GPIO_NUM_32,  "IGN0", "PA8",  true  },   // CH0
+    { GPIO_NUM_33,  "IGN1", "PE11", true  },   // CH1
+    { GPIO_NUM_25,  "IGN2", "PE13", true  },   // CH2
+    { GPIO_NUM_26,  "IGN3", "PE14", true  },   // CH3
+    { GPIO_NUM_27,  "INJ0", "PC6",  true  },   // CH4
+    { GPIO_NUM_14,  "INJ1", "PC7",  true  },   // CH5
     { GPIO_NUM_12,  "INJ2", "PB10", true  },   // CH6
-    { GPIO_NUM_13,  "INJ3", "PB11", true  },   // CH7
+    { GPIO_NUM_13,  "INJ3", "PC4",  true  },   // CH7
     { kVirtual,     "CKP",  "PA0",  true  },   // CH8 — virtual, via timer ISR
 };
 static constexpr int kNChan = (int)(sizeof(kChan) / sizeof(kChan[0]));
