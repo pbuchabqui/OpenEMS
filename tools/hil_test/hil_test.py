@@ -675,7 +675,8 @@ class HILRunner:
         #    (fuel_calc.cpp). base = req_fuel × ve/100 × MAP/baro; depois λ-target,
         #    trim, correcções CLT/IAT (×256) e dead-time interpolado por Vbatt.
         #    Sem motor MAP ≈ baro, firmware usa g_baro_bar_x100 (amostrado ao boot).
-        baro = snap.map_bar_x100 or self._eng.map_ref_bar_x100 or 100
+        baro_raw = snap.map_bar_x100
+        baro = baro_raw if 70 <= baro_raw <= 110 else (self._eng.map_ref_bar_x100 or 100)
         base_us = (self._eng.req_fuel_us * exp_ve * snap.map_bar_x100
                    / (100.0 * baro))
         lambda_target = self._tables.lambda_target_at(snap.rpm, snap.map_bar_x100)

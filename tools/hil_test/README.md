@@ -29,7 +29,7 @@ ESP32 GPIO 26 ←────────────────  STM32 PE14  (
 ESP32 GPIO 27 ←────────────────  STM32 PC6   (INJ0 TIM2_CH1)
 ESP32 GPIO 14 ←────────────────  STM32 PC7   (INJ1 TIM2_CH2)
 ESP32 GPIO 12 ←────────────────  STM32 PB10  (INJ2 TIM2_CH3)
-ESP32 GPIO 13 ←────────────────  STM32 PB11  (INJ3 TIM2_CH4)
+ESP32 GPIO 13 ←────────────────  STM32 PC4   (INJ3 TIM2_CH4)
 
 ESP32 GND     ─────────────────  STM32 GND   (OBRIGATÓRIO)
 ```

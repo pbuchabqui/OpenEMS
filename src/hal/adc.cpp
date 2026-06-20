@@ -12,13 +12,13 @@
  *     (placeholder) → INP19    — SQ4
  *     APP1      → INP10 (PC0)  — SQ5
  *     APP2      → INP12 (PC2)  — SQ6
- *     ETB_TPS1  → INP4  (PC4)  — SQ7
+ *     ETB_TPS1  → INP14 (PA2)  — SQ7
  *     ETB_TPS2  → INP8  (PC5)  — SQ8
  *
  *   ADC2 (5 canais):
  *     CLT       → INP9  (PB0)  — SQ1
  *     IAT       → INP5  (PB1)  — SQ2
- *     FUEL_PRESS → INP4 (PC4)  — SQ3
+ *     FUEL_PRESS → INP9 (PB0)  — SQ3  (placeholder, PC4 usado por INJ3)
  *     OIL_PRESS  → INP8 (PC5)  — SQ4
  *     EWG_POS    → INP13 (PC3) — SQ5
  *
@@ -59,7 +59,7 @@ static volatile uint32_t g_adc_recovery_retries = 0u;   // Contador de retries a
 // ── Mapeamento AdcPrimaryChannel → índice do array g_adc_secondary_raw ─────────────────────
 static constexpr uint8_t kAdc1ChMap[8] = {
     // MAP(0)→INP15, MAF_V(1)→placeholder, TPS(2)→INP18, KNOCK(3)→INP19,
-    // APP1(4)→INP10, APP2(5)→INP12, ETB_TPS1(6)→INP4, ETB_TPS2(7)→INP8
+    // APP1(4)→INP10, APP2(5)→INP12, ETB_TPS1(6)→INP14, ETB_TPS2(7)→INP8
     0, 1, 2, 3, 4, 5, 6, 7
 };
 
@@ -88,7 +88,7 @@ static constexpr uint32_t kAdc1Sqr1 = (7u << 0)    // L = 7 (8 conv)
                                      | (19u << 24); // SQ4 = INP19 (KNOCK, dup placeholder)
 static constexpr uint32_t kAdc1Sqr2 = (10u << 0)   // SQ5 = INP10 (APP1, PC0)
                                      | (12u << 6)   // SQ6 = INP12 (APP2, PC2)
-                                     | (4u << 12)   // SQ7 = INP4  (ETB_TPS1, PC4)
+                                     | (14u << 12)  // SQ7 = INP14 (ETB_TPS1, PA2)
                                      | (8u << 18);  // SQ8 = INP8  (ETB_TPS2, PC5)
 
 // ── Sequência de conversão ADC2 (4 canais) ───────────────────────────────────
@@ -97,7 +97,7 @@ static constexpr uint32_t kAdc1Sqr2 = (10u << 0)   // SQ5 = INP10 (APP1, PC0)
 static constexpr uint32_t kAdc2Sqr1 = (4u << 0)    // L = 4 (5 conv)
                                      | (9u << 6)    // SQ1 = INP9 (CLT, PB0)
                                      | (5u << 12)   // SQ2 = INP5 (IAT, PB1)
-                                     | (4u << 18)   // SQ3 = INP4 (FUEL, PC4)
+                                     | (9u << 18)   // SQ3 = INP9 (FUEL placeholder, PC4→INJ3)
                                      | (8u << 24);  // SQ4 = INP8 (OIL, PC5)
 static constexpr uint32_t kAdc2Sqr2 = (13u << 0);   // SQ5 = INP13 (EWG, PC3)
 
@@ -252,20 +252,20 @@ void adc_init() noexcept {
                   | RCC_AHB2ENR1_GPIOCEN;
 
     // ── 2. Configurar pinos analógicos (MODER = 11b = ANALOG) ────────────
-    // ADC1: PA3=INP15(MAP), PA4=INP18(TPS), PA5=INN18(diff-), PB0=INP9(APP1/CLT), PB1=INP5(APP2/IAT)
-    // PA2 não tem ADC no H562 (DS14258) — não configurar.
+    // ADC1: PA2=INP14(ETB_TPS1), PA3=INP15(MAP), PA4=INP18(TPS), PA5=INN18(diff-)
+    gpio_set_analog(&GPIOA_MODER, 2u);
     gpio_set_analog(&GPIOA_MODER, 3u);
     gpio_set_analog(&GPIOA_MODER, 4u);
     gpio_set_analog(&GPIOA_MODER, 5u);
     gpio_set_analog(&GPIOB_MODER, 0u);  // INP9: APP1 (ADC1) / CLT (ADC2, bancada)
     gpio_set_analog(&GPIOB_MODER, 1u);  // INP5: APP2 (ADC1) / IAT (ADC2, bancada)
-    // PC0=INP10(APP1), PC2=INP12(APP2), PC3=INP13(EWG), PC4=INP4(ETB_TPS1/FUEL), PC5=INP8(ETB_TPS2/OIL)
+    // PC0=INP10(APP1), PC2=INP12(APP2), PC3=INP13(EWG), PC5=INP8(ETB_TPS2/OIL)
+    // PC4 é TIM2_CH4 (INJ3) — configurado como AF1 em ECU_Hardware_Init()
     volatile uint32_t* gpioc_moder = reinterpret_cast<volatile uint32_t*>(
         GPIOC_BASE + GPIO_MODER_OFF);
     gpio_set_analog(gpioc_moder, 0u);
     gpio_set_analog(gpioc_moder, 2u);  // PC2 = APP2 (INP12) — LQFP100
     gpio_set_analog(gpioc_moder, 3u);  // PC3 = EWG pos (INP13) — LQFP100
-    gpio_set_analog(gpioc_moder, 4u);
     gpio_set_analog(gpioc_moder, 5u);
 
     // ── 3. Clock ADC: HCLK/4 = 62.5 MHz, síncrono ao trigger de timer ───
@@ -287,6 +287,7 @@ ADC1_SMPR1 = (kSmpr) // IN1
 // SMPR2 cobre IN10-IN18: INP10(APP1), INP12(APP2), INP15(MAP), INP18(TPS), INP19(KNOCK)
 ADC1_SMPR2 = (kSmpr << ((10-10)*3))   // IN10 (APP1, PC0)
            | (kSmpr << ((12-10)*3))   // IN12 (APP2, PC2)
+           | (kSmpr << ((14-10)*3))   // IN14 (ETB_TPS1, PA2)
            | (kSmpr << ((15-10)*3))   // IN15 (MAP, PA3)
            | (kSmpr << ((18-10)*3))   // IN18 (TPS, PA4)
            | (kSmpr << ((19-10)*3));  // IN19 (KNOCK, PA5)
