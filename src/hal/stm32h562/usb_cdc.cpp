@@ -758,7 +758,6 @@ extern "C" void USB_IRQHandler() noexcept {
 
     if (istr & USB_ISTR_SUSP) {
         USB_ISTR = ~USB_ISTR_SUSP;
-        USB_CNTR |= USB_CNTR_FSUSP;
     }
 
     if (istr & USB_ISTR_WKUP) {
@@ -858,11 +857,6 @@ void usb_cdc_init() noexcept {
 
 void usb_cdc_poll() noexcept {
 #ifndef EMS_HOST_TEST
-    // Bench device: se autosuspend setou FSUSP, limpa imediatamente do thread context
-    // Não fazer isso no WKUP ISR pois modifica EP1R antes do core USB estar pronto
-    if (USB_CNTR & USB_CNTR_FSUSP) {
-        USB_CNTR &= ~USB_CNTR_FSUSP;
-    }
     if (g_configured) {
         ep1_tx_kick();
         ep2_rx_resume();
