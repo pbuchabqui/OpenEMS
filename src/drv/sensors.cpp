@@ -670,19 +670,10 @@ void sensors_tick_100ms() noexcept {
     g_iat_pos = static_cast<uint8_t>((g_iat_pos + 1u) & 0x7u);
 
     if (g_bench_clt_iat) {
-        // Banco HIL: CLT/IAT físicos ausentes — força temperaturas válidas e limpa
-        // o fault desses canais para que não acionem SENSOR_FAULT (bit 2).
-        FaultTracker& fc = g_fault[static_cast<uint8_t>(SensorId::CLT)];
-        FaultTracker& fi = g_fault[static_cast<uint8_t>(SensorId::IAT)];
-        fc.active = false; fc.consecutive_bad = 0u;
-        fi.active = false; fi.consecutive_bad = 0u;
-        const uint8_t clt_bit = sensor_bit(SensorId::CLT);
-        const uint8_t iat_bit = sensor_bit(SensorId::IAT);
-        uint8_t mask = 0u;
-        if (clt_bit < 8u) { mask = static_cast<uint8_t>(mask | (1u << clt_bit)); }
-        if (iat_bit < 8u) { mask = static_cast<uint8_t>(mask | (1u << iat_bit)); }
-        g_data_staging.fault_bits =
-            static_cast<uint8_t>(g_data_staging.fault_bits & ~mask);
+        // Banco HIL: sensores físicos ausentes — força valores válidos e limpa
+        // ALL faults para que não acionem limp mode (rev-cut a 3000 RPM).
+        for (auto& f : g_fault) { f.active = false; f.consecutive_bad = 0u; }
+        g_data_staging.fault_bits = 0u;
         g_data_staging.clt_degc_x10 = g_bench_clt_x10;
         g_data_staging.iat_degc_x10 = g_bench_iat_x10;
     } else {
