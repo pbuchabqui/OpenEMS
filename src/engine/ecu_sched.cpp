@@ -189,6 +189,7 @@ static volatile uint8_t g_presync_bank_toggle = 0U;
 static volatile uint8_t g_hook_prev_valid = 0U;
 static volatile uint16_t g_hook_prev_tooth = 0U;
 static volatile uint8_t g_hook_schedule_this_gap = 1U;
+static volatile uint8_t g_cmp_phase_seen = 0U; // set when phase_A toggles (CMP present)
 static volatile uint8_t g_knock_sequential = 0U;  // 1 when running Calculate_Sequential_Cycle (full sync, per-cyl knock valid)
 static volatile uint8_t g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg;  // FIX: volatile — escrita por ecu_sched_set_ivc (cs), leitura por clamp_inj_pw_to_ivc (contexto ISR)
 static uint32_t g_ivc_clamp_count = 0U;
@@ -774,12 +775,24 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
     if ((snap.state != ems::drv::SyncState::FULL_SYNC) && (snap.state != ems::drv::SyncState::HALF_SYNC)) {
         if (g_hook_prev_valid != 0U) { clear_all_events_and_drive_safe_outputs(); }
-        g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U; return;
+        g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U; g_cmp_phase_seen = 0U; return;
+    }
+
+    // Track CMP presence: if phase_A ever changes, CMP is working
+    {
+        static uint8_t s_prev_phase = 0xFFU;
+        const uint8_t cur_phase = snap.phase_A ? 1U : 0U;
+        if (s_prev_phase != 0xFFU && cur_phase != s_prev_phase) {
+            g_cmp_phase_seen = 1U;
+        }
+        s_prev_phase = cur_phase;
     }
 
     const uint8_t rev_boundary = ((g_hook_prev_valid != 0U) && (snap.tooth_index == 0U) && (g_hook_prev_tooth != 0U)) ? 1U : 0U;
     if (rev_boundary != 0U) {
-        if ((snap.state == ems::drv::SyncState::HALF_SYNC) && (g_presync_enable != 0U)) {
+        const bool use_presync = (snap.state == ems::drv::SyncState::HALF_SYNC && g_presync_enable != 0U)
+                              || (snap.state == ems::drv::SyncState::FULL_SYNC && g_cmp_phase_seen == 0U);
+        if (use_presync) {
             calculate_presync_revolution(snap);
         } else {
             if (g_hook_schedule_this_gap != 0U) {
