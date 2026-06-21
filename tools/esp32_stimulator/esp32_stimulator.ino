@@ -367,6 +367,8 @@ static void print_status() {
                   "ETB:", "PA2/C1", s.etb_pct, r);
 
     Serial.println();
+    scope_print();
+    Serial.println();
 }
 
 static void print_help() {
@@ -476,6 +478,71 @@ static void parse_cmd(const char* raw) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ── Output Scope (IGN/INJ pulse measurement on spare GPIOs)
+// ═══════════════════════════════════════════════════════════════════════════
+// GPIO32 ← PA8  (IGN0)    GPIO33 ← PE11 (IGN1)
+// GPIO34 ← PC6  (INJ0)    GPIO35 ← PC7  (INJ1)
+
+struct ScopeCh {
+    gpio_num_t gpio;
+    const char* name;
+    volatile uint32_t count;
+    volatile uint32_t rise_us;
+    volatile uint32_t pw_us;
+    volatile uint32_t period_us;
+    volatile uint32_t last_rise_us;
+};
+
+// GPIO34/35 input-only without pull — noise. GPIO27 is LEDC (APP2).
+// GPIO32 ← PA8 (IGN0), GPIO33 ← PC6 (INJ0)
+static ScopeCh g_scope[] = {
+    { GPIO_NUM_32, "IGN0", 0, 0, 0, 0, 0 },
+    { GPIO_NUM_33, "INJ0", 0, 0, 0, 0, 0 },
+};
+static constexpr int kScopeCh = 2;
+
+static void IRAM_ATTR scope_isr(void* arg) {
+    ScopeCh* ch = (ScopeCh*)arg;
+    const uint32_t now = (uint32_t)esp_timer_get_time();
+    if (gpio_get_level(ch->gpio)) {
+        ch->rise_us = now;
+        if (ch->last_rise_us != 0u) {
+            ch->period_us = now - ch->last_rise_us;
+        }
+        ch->last_rise_us = now;
+        ch->count++;
+    } else {
+        if (ch->rise_us != 0u) {
+            ch->pw_us = now - ch->rise_us;
+        }
+    }
+}
+
+static void scope_init() {
+    gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+    for (int i = 0; i < kScopeCh; ++i) {
+        gpio_reset_pin(g_scope[i].gpio);
+        gpio_set_direction(g_scope[i].gpio, GPIO_MODE_INPUT);
+        gpio_set_pull_mode(g_scope[i].gpio, GPIO_PULLDOWN_ONLY);
+        gpio_set_intr_type(g_scope[i].gpio, GPIO_INTR_ANYEDGE);
+        gpio_isr_handler_add(g_scope[i].gpio, scope_isr, &g_scope[i]);
+    }
+}
+
+static void scope_print() {
+    Serial.println("  ── Output Scope ──────────────────────────────────────────");
+    Serial.println("  CH   Name   PW(ms)   Per(ms)  Freq(Hz)  Count");
+    for (int i = 0; i < kScopeCh; ++i) {
+        const ScopeCh& c = g_scope[i];
+        float pw_ms  = c.pw_us / 1000.0f;
+        float per_ms = c.period_us / 1000.0f;
+        float freq   = (c.period_us > 0) ? 1000000.0f / c.period_us : 0.0f;
+        Serial.printf("  %d    %-4s   %6.2f   %7.2f  %8.1f  %lu\n",
+            i, c.name, pw_ms, per_ms, freq, (unsigned long)c.count);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ── setup() e loop()
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -537,6 +604,7 @@ void setup() {
     update_analog(g_sim);
     ckp_init();   // arranca a roda 60-2 por hardware (RMT) à RPM do preset
 
+    scope_init();
     wifi_setup();
     print_help();
     print_status();
