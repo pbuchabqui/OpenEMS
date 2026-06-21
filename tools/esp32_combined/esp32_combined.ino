@@ -137,7 +137,7 @@ static ChanDef kChan[] = {
     { GPIO_NUM_14,  "INJ1", "PC7",  true  },   // CH5
     { GPIO_NUM_12,  "INJ2", "PB10", true  },   // CH6
     { GPIO_NUM_13,  "INJ3", "PC4",  true  },   // CH7
-    { kVirtual,     "CKP",  "PA0",  false },   // CH8 — virtual, disabled to free buffer
+    { kVirtual,     "CKP",  "PA0",  true  },   // CH8 — virtual, via timer ISR
 };
 static constexpr int kNChan = (int)(sizeof(kChan) / sizeof(kChan[0]));
 static constexpr int kCkpChan = 8;  // índice do canal CKP

@@ -43,9 +43,11 @@ void uart0_init(uint32_t baud) noexcept {
     RCC_APB2ENR |= RCC_APB2ENR_USART1EN;
 
     // ── 2. Configurar pinos PA9 (TX) e PA10 (RX) — AF7 ─────────────────
-    // PB10/PB11 pertencem ao TIM2_CH3/CH4 no MVP de bancada.
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 9u, GPIO_AF7);
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 10u, GPIO_AF7);
+
+    // Pull-up em PA10 (RX): pino flutuante gera bytes fantasma que contaminam USB TX
+    GPIOA_PUPDR = (GPIOA_PUPDR & ~(0x3u << (10u * 2u))) | (0x1u << (10u * 2u));
 
     // ── 3. Configurar USART1 ─────────────────────────────────────────────
     USART1_CR1 = 0u;   // desabilita durante config
@@ -56,17 +58,26 @@ void uart0_init(uint32_t baud) noexcept {
     USART1_CR2 = 0u;   // 1 stop bit, sem LIN, sem clock síncrono
     USART1_CR3 = 0u;   // sem hardware flow control
 
-    // Habilitar RX, TX e periférico
-    USART1_CR1 = USART_CR1_UE | USART_CR1_RE | USART_CR1_TE;
+    // Habilitar TX e periférico; RX desabilitado até uart0_enable_rx()
+    // PA10 flutuante gera bytes fantasma que contaminam USB CDC TX
+    USART1_CR1 = USART_CR1_UE | USART_CR1_TE;
 }
 
 void uart0_poll_rx(uint16_t max_bytes) noexcept {
-    // Drena os bytes disponíveis no USART1 para o buffer circular
     for (uint16_t i = 0u; i < max_bytes; ++i) {
-        if ((USART1_ISR & USART_ISR_RXNE) == 0u) { break; }
+        const uint32_t isr = USART1_ISR;
+        // Clear error flags first — FE/NE/ORE from floating RX pin
+        if (isr & (USART_ISR_FE | USART_ISR_NE | USART_ISR_ORE | USART_ISR_PE)) {
+            USART1_ICR = USART_ICR_FECF | USART_ICR_NECF | USART_ICR_ORECF | USART_ICR_PECF;
+            if (isr & USART_ISR_RXNE) {
+                (void)USART1_RDR;  // discard byte with error
+            }
+            continue;
+        }
+        if ((isr & USART_ISR_RXNE) == 0u) { break; }
         const uint8_t byte = static_cast<uint8_t>(USART1_RDR & 0xFFu);
         const uint8_t next = static_cast<uint8_t>((g_rx_tail + 1u) % kRxBufSize);
-        if (next != g_rx_head) {  // não sobrescreve se buffer cheio
+        if (next != g_rx_head) {
             g_rx_buf[g_rx_tail] = byte;
             g_rx_tail = next;
         }
@@ -108,6 +119,10 @@ bool uart0_tx_push(uint8_t byte) noexcept {
     return true;
 }
 
+void uart0_enable_rx() noexcept {
+    USART1_CR1 |= USART_CR1_RE;
+}
+
 void uart0_tx_poll(uint16_t max_bytes) noexcept {
     for (uint16_t i = 0u; i < max_bytes && g_tx_head != g_tx_tail; ++i) {
         uint32_t timeout = 1000u;
@@ -132,6 +147,7 @@ static uint32_t g_baud = 0u;
 
 void uart0_init(uint32_t baud) noexcept { g_baud = baud; }
 void uart0_poll_rx(uint16_t) noexcept { }
+void uart0_enable_rx() noexcept { }
 bool uart0_tx_ready() noexcept { return true; }
 bool uart0_tx_byte(uint8_t b) noexcept {
     if (g_tx_len < 256u) { g_tx_buf[g_tx_len++] = b; }

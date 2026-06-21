@@ -150,6 +150,7 @@
 #define GPIOA_OSPEEDR STM32_REG32(GPIOA_BASE + GPIO_OSPEEDR_OFF)
 #define GPIOA_AFRL    STM32_REG32(GPIOA_BASE + GPIO_AFRL_OFF)
 #define GPIOA_AFRH    STM32_REG32(GPIOA_BASE + GPIO_AFRH_OFF)
+#define GPIOA_PUPDR   STM32_REG32(GPIOA_BASE + GPIO_PUPDR_OFF)
 #define GPIOA_IDR     STM32_REG32(GPIOA_BASE + GPIO_IDR_OFF)
 #define GPIOA_BSRR    STM32_REG32(GPIOA_BASE + GPIO_BSRR_OFF)
 
@@ -677,8 +678,16 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define USART_CR1_FIFOEN (1u << 29)
 
 // USART_ISR bits
+#define USART_ISR_PE    (1u << 0)   // Parity error
+#define USART_ISR_FE    (1u << 1)   // Framing error
+#define USART_ISR_NE    (1u << 2)   // Noise detection flag
+#define USART_ISR_ORE   (1u << 3)   // Overrun error
 #define USART_ISR_RXNE  (1u << 5)   // RX not empty (data available)
 #define USART_ISR_TC    (1u << 6)   // Transmission complete
+#define USART_ICR_PECF  (1u << 0)
+#define USART_ICR_FECF  (1u << 1)
+#define USART_ICR_NECF  (1u << 2)
+#define USART_ICR_ORECF (1u << 3)
 #define USART_ISR_TXE   (1u << 7)   // TX register empty
 
 // ─── IWDG (Independent Watchdog, RM0481 §35) ─────────────────────────────────
