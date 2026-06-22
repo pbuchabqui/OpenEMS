@@ -11,20 +11,20 @@
 #include <stdint.h>
 
 #if defined(EMS_HOST_TEST)
-static uint32_t ems_test_tim2_cnt;
-static uint32_t ems_test_tim2_ccr1;
-static uint32_t ems_test_tim2_ccr2;
-static uint32_t ems_test_tim2_ccr3;
-static uint32_t ems_test_tim2_ccr4;
-static uint32_t ems_test_tim2_sr;
-static uint32_t ems_test_tim2_cr1;
-static uint32_t ems_test_tim2_dier;
-static uint32_t ems_test_tim2_psc;
-static uint32_t ems_test_tim2_arr;
-static uint32_t ems_test_tim2_ccmr1;
-static uint32_t ems_test_tim2_ccmr2;
-static uint32_t ems_test_tim2_ccer;
-static uint32_t ems_test_tim2_egr;
+static uint32_t ems_test_tim3_inj_cnt;
+static uint32_t ems_test_tim3_inj_ccr1;
+static uint32_t ems_test_tim3_inj_ccr2;
+static uint32_t ems_test_tim3_inj_ccr3;
+static uint32_t ems_test_tim3_inj_ccr4;
+static uint32_t ems_test_tim3_inj_sr;
+static uint32_t ems_test_tim3_inj_cr1;
+static uint32_t ems_test_tim3_inj_dier;
+static uint32_t ems_test_tim3_inj_psc;
+static uint32_t ems_test_tim3_inj_arr;
+static uint32_t ems_test_tim3_inj_ccmr1;
+static uint32_t ems_test_tim3_inj_ccmr2;
+static uint32_t ems_test_tim3_inj_ccer;
+static uint32_t ems_test_tim3_inj_egr;
 static uint32_t ems_test_tim1_ign_cnt;
 static uint32_t ems_test_tim1_ign_ccr1;
 static uint32_t ems_test_tim1_ign_ccr2;
@@ -48,20 +48,20 @@ static uint32_t ems_test_gpio_afrl;
 static uint32_t ems_test_gpio_afrh;
 static uint32_t ems_test_gpio_ospeedr;
 
-#define TIM2_CNT ems_test_tim2_cnt
-#define TIM2_CCR1 ems_test_tim2_ccr1
-#define TIM2_CCR2 ems_test_tim2_ccr2
-#define TIM2_CCR3 ems_test_tim2_ccr3
-#define TIM2_CCR4 ems_test_tim2_ccr4
-#define TIM2_SR ems_test_tim2_sr
-#define TIM2_CR1 ems_test_tim2_cr1
-#define TIM2_DIER ems_test_tim2_dier
-#define TIM2_PSC ems_test_tim2_psc
-#define TIM2_ARR ems_test_tim2_arr
-#define TIM2_CCMR1 ems_test_tim2_ccmr1
-#define TIM2_CCMR2 ems_test_tim2_ccmr2
-#define TIM2_CCER ems_test_tim2_ccer
-#define TIM2_EGR ems_test_tim2_egr
+#define TIM3_CNT ems_test_tim3_inj_cnt
+#define TIM3_CCR1 ems_test_tim3_inj_ccr1
+#define TIM3_CCR2 ems_test_tim3_inj_ccr2
+#define TIM3_CCR3 ems_test_tim3_inj_ccr3
+#define TIM3_CCR4 ems_test_tim3_inj_ccr4
+#define TIM3_SR ems_test_tim3_inj_sr
+#define TIM3_CR1 ems_test_tim3_inj_cr1
+#define TIM3_DIER ems_test_tim3_inj_dier
+#define TIM3_PSC ems_test_tim3_inj_psc
+#define TIM3_ARR ems_test_tim3_inj_arr
+#define TIM3_CCMR1 ems_test_tim3_inj_ccmr1
+#define TIM3_CCMR2 ems_test_tim3_inj_ccmr2
+#define TIM3_CCER ems_test_tim3_inj_ccer
+#define TIM3_EGR ems_test_tim3_inj_egr
 #define TIM1_CNT ems_test_tim1_ign_cnt
 #define TIM1_CCR1 ems_test_tim1_ign_ccr1
 #define TIM1_CCR2 ems_test_tim1_ign_ccr2
@@ -99,9 +99,10 @@ static uint32_t ems_test_gpio_ospeedr;
 #define RCC_AHB2ENR1_GPIOAEN 1U
 #define RCC_AHB2ENR1_GPIOBEN 2U
 #define RCC_AHB2ENR1_GPIOCEN 4U
-#define RCC_APB1LENR_TIM2EN 1U
+#define RCC_APB1LENR_TIM3EN 1U
 #define RCC_APB2ENR_TIM1EN 1U
 #define GPIO_AF1 1U
+#define GPIO_AF2 2U
 #define GPIO_AF3 3U
 #define TIM_SR_CC1IF 0x2U
 #define TIM_CR1_CEN 1U
@@ -160,7 +161,7 @@ volatile uint32_t g_cycle_schedule_drop_count = 0U;
 // ── Dwell watchdog (MS42 §2.2.2.1.3 — TD × 1.4) ──────────────────────────
 // Escrito pela ISR (arm_channel), lido pelo main loop (ecu_sched_dwell_watchdog).
 // volatile necessário: compilador não pode cachear em registo entre os dois contextos.
-static volatile uint32_t g_dwell_arm_tick[4]  = {0U, 0U, 0U, 0U};  // TIM2_CNT no arm de DWELL_START; 0 = inactivo
+static volatile uint32_t g_dwell_arm_tick[4]  = {0U, 0U, 0U, 0U};  // TIM3_CNT no arm de DWELL_START; 0 = inactivo
 static volatile uint32_t g_dwell_wdog_ticks[4] = {0U, 0U, 0U, 0U};  // 1.4 × dwell_ticks no momento do arm
 static volatile uint32_t g_dwell_watchdog_count = 0U;
 
@@ -211,7 +212,7 @@ static inline void exit_critical(void)
 
 static inline uint32_t scheduler_counter(void)
 {
-    return TIM2_CNT;
+    return TIM3_CNT;
 }
 
 static inline uint8_t stm32_inj_tim_ch(uint8_t ch)
@@ -265,10 +266,10 @@ static inline volatile uint32_t *stm32_tim_ccr(uint8_t is_inj, uint8_t tim_ch)
 {
     if (is_inj != 0U) {
         switch (tim_ch) {
-            case 1U: return &TIM2_CCR1;
-            case 2U: return &TIM2_CCR2;
-            case 3U: return &TIM2_CCR3;
-            default: return &TIM2_CCR4;
+            case 1U: return &TIM3_CCR1;
+            case 2U: return &TIM3_CCR2;
+            case 3U: return &TIM3_CCR3;
+            default: return &TIM3_CCR4;
         }
     }
     switch (tim_ch) {
@@ -286,8 +287,8 @@ static inline uint32_t stm32_tim_cc_flag(uint8_t tim_ch)
 
 static inline void stm32_write_oc_mode(uint8_t is_inj, uint8_t tim_ch, uint32_t m1, uint32_t m2, uint32_t m3, uint32_t m4)
 {
-    volatile uint32_t *ccmr1 = (is_inj != 0U) ? &TIM2_CCMR1 : &TIM1_CCMR1;
-    volatile uint32_t *ccmr2 = (is_inj != 0U) ? &TIM2_CCMR2 : &TIM1_CCMR2;
+    volatile uint32_t *ccmr1 = (is_inj != 0U) ? &TIM3_CCMR1 : &TIM1_CCMR1;
+    volatile uint32_t *ccmr2 = (is_inj != 0U) ? &TIM3_CCMR2 : &TIM1_CCMR2;
     const uint8_t shadow_base = (is_inj != 0U) ? 0U : ECU_IGN_CH_FIRST;
     const uint8_t shadow_idx = (uint8_t)(shadow_base + tim_ch - 1U);
     uint32_t desired;
@@ -301,11 +302,13 @@ static inline void stm32_write_oc_mode(uint8_t is_inj, uint8_t tim_ch, uint32_t 
     if (g_oc_mode_shadow[shadow_idx] == desired) { return; }
     g_oc_mode_shadow[shadow_idx] = desired;
 
+    // STM32H5: OCxM is 4 bits — OC1M[2:0] in bits [6:4], OC1M[3] in bit 16
+    //          OC2M[2:0] in bits [14:12], OC2M[3] in bit 24
     switch (tim_ch) {
-        case 1U: *ccmr1 = (*ccmr1 & ~0x70U) | desired; break;
-        case 2U: *ccmr1 = (*ccmr1 & ~0x7000U) | desired; break;
-        case 3U: *ccmr2 = (*ccmr2 & ~0x70U) | desired; break;
-        default: *ccmr2 = (*ccmr2 & ~0x7000U) | desired; break;
+        case 1U: *ccmr1 = (*ccmr1 & ~((1U<<16)|0x70U)) | desired; break;
+        case 2U: *ccmr1 = (*ccmr1 & ~((1U<<24)|0x7000U)) | desired; break;
+        case 3U: *ccmr2 = (*ccmr2 & ~((1U<<16)|0x70U)) | desired; break;
+        default: *ccmr2 = (*ccmr2 & ~((1U<<24)|0x7000U)) | desired; break;
     }
 }
 
@@ -363,9 +366,9 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 
     if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
     
-    if ((is_inj == 0U) && (delta > ems::engine::kTimIgnMaxDelta16)) {
-        ++g_cycle_schedule_drop_count; 
-        return; 
+    if (delta > ems::engine::kTimIgnMaxDelta16) {
+        ++g_cycle_schedule_drop_count;
+        return;
     }
     
     // FIX P2 (BUG-9): Eventos atrasados devem ser DESCARTADOS, não forçados
@@ -430,7 +433,7 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 	stm32_set_oc_mode(is_inj, tim_ch, ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U);
 	// Clear any pending match flag BEFORE programming CCR to avoid missing an edge
 	if (is_inj != 0U) {
-		TIM2_SR &= ~stm32_tim_cc_flag(tim_ch);
+		TIM3_SR &= ~stm32_tim_cc_flag(tim_ch);
 	} else {
 		TIM1_SR &= ~stm32_tim_cc_flag(tim_ch);
 	}
@@ -438,14 +441,12 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 	__asm__ volatile("dmb" ::: "memory"); // Ensure OC mode + flag clear complete before CCR update
 #endif
 	ccr = stm32_tim_ccr(is_inj, tim_ch);
-	if (is_inj != 0U) {
-		*ccr = target_cnv;
-	} else {
-		// TIM1 is configured as 16-bit (ARR = 0xFFFF), handle wrap
-		const uint32_t current_cnt = TIM1_CNT & 0xFFFFU;
+	{
+		// Both TIM3 (INJ) and TIM1 (IGN) are 16-bit (ARR = 0xFFFF)
+		const uint32_t current_cnt = (is_inj != 0U ? TIM3_CNT : TIM1_CNT) & 0xFFFFU;
 		uint32_t target = current_cnt + delta;
 		if (target > 0xFFFFU) {
-			target -= 0x10000U;  // Wrap within 16-bit range
+			target -= 0x10000U;
 		}
 		*ccr = static_cast<uint16_t>(target);
 	}
@@ -506,15 +507,14 @@ static void table_add(uint8_t tooth, uint8_t sub_frac, uint8_t phase_A, uint8_t 
 void ECU_Hardware_Init(void)
 {
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN | RCC_AHB2ENR1_GPIOBEN | RCC_AHB2ENR1_GPIOCEN;
-    RCC_APB1LENR |= RCC_APB1LENR_TIM2EN;
+    RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
     RCC_APB2ENR  |= RCC_APB2ENR_TIM1EN;
 
-    // Injection: TIM2 CH1-3 on PC6/PC7(AF3), PB10(AF1); CH4 on PC4(AF1)
-    // PB11 not exposed on WeAct LQFP100 header → INJ3 moved to PC4
-    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 6U, GPIO_AF3);
-    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 7U, GPIO_AF3);
-    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 10U, GPIO_AF1);
-    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 4U, GPIO_AF1);
+    // Injection: TIM3 CH1-4 on PC6/PC7/PC8/PC9 — all AF2 (TIM3)
+    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 6U, GPIO_AF2);
+    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 7U, GPIO_AF2);
+    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 8U, GPIO_AF2);
+    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 9U, GPIO_AF2);
     // Ignition: TIM1 CH1=PA8/AF1, CH2=PE11/AF1, CH3=PE13/AF1, CH4=PE14/AF1 (LQFP100)
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 8U, GPIO_AF1);
     gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 11U, GPIO_AF1);
@@ -526,10 +526,10 @@ void ECU_Hardware_Init(void)
     TIM1_CCMR2 = TIM_CCMR2_OC3M_FORCE_INACTIVE | TIM_CCMR2_OC4M_FORCE_INACTIVE;
     TIM1_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E; TIM1_BDTR = (1U << 15); TIM1_EGR = 1U;
 
-    TIM2_CR1 = 0U; TIM2_DIER = 0U; TIM2_SR = 0U; TIM2_PSC = STM32_TIM_PSC_10MHZ; TIM2_CNT = 0U; TIM2_ARR = 0xFFFFFFFFU;
-    TIM2_CCMR1 = TIM_CCMR1_OC1M_FORCE_INACTIVE | TIM_CCMR1_OC2M_FORCE_INACTIVE;
-    TIM2_CCMR2 = TIM_CCMR2_OC3M_FORCE_INACTIVE | TIM_CCMR2_OC4M_FORCE_INACTIVE;
-    TIM2_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E; TIM2_EGR = 1U;
+    TIM3_CR1 = 0U; TIM3_DIER = 0U; TIM3_SR = 0U; TIM3_PSC = STM32_TIM_PSC_10MHZ; TIM3_CNT = 0U; TIM3_ARR = 0xFFFFU;
+    TIM3_CCMR1 = TIM_CCMR1_OC1M_FORCE_INACTIVE | TIM_CCMR1_OC2M_FORCE_INACTIVE;
+    TIM3_CCMR2 = TIM_CCMR2_OC3M_FORCE_INACTIVE | TIM_CCMR2_OC4M_FORCE_INACTIVE;
+    TIM3_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E; TIM3_EGR = 1U;
 
     g_oc_mode_shadow[0] = TIM_CCMR1_OC1M_FORCE_INACTIVE;
     g_oc_mode_shadow[1] = TIM_CCMR1_OC2M_FORCE_INACTIVE;
@@ -541,7 +541,7 @@ void ECU_Hardware_Init(void)
     g_oc_mode_shadow[7] = TIM_CCMR2_OC4M_FORCE_INACTIVE;
 
     TIM1_CR1 = TIM_CR1_CEN;
-    TIM2_CR1 = TIM_CR1_CEN;
+    TIM3_CR1 = TIM_CR1_CEN;
     clear_all_events_and_drive_safe_outputs();
 }
 
@@ -707,7 +707,7 @@ void ecu_sched_dwell_watchdog(void)
 {
     // TIM2 lido UMA vez fora do loop — contador 32-bit, não há risco de wrap
     // num intervalo de 2 ms entre chamadas (~20 000 ticks @ 10 MHz).
-    const uint32_t now = TIM2_CNT;
+    const uint32_t now = TIM3_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
         // FIX C1: leitura + avaliação + acção dentro de UMA secção crítica.
         // A versão anterior lia arm/tout dentro de CS, saía, avaliava fora,
@@ -868,7 +868,7 @@ void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32
 }
 uint8_t ecu_sched_test_get_mspark_count(void) { return g_mspark_count; }
 void ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept { ems_test_tim1_ign_cnt = cnt; }
-void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim2_cnt = cnt; }
+void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim3_inj_cnt = cnt; }
 void ecu_sched_test_reset_ccr(void) noexcept {
     ems_test_tim1_ign_ccr1 = 0u; ems_test_tim1_ign_ccr2 = 0u;
     ems_test_tim1_ign_ccr3 = 0u; ems_test_tim1_ign_ccr4 = 0u;

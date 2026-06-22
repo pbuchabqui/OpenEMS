@@ -346,7 +346,7 @@ static inline void ui_service() noexcept {
 
 // Modo diagnóstico: descomente para teste isolado de USB CDC (clock + usb_cdc_init + echo).
 // Em produção fica DESATIVADO → usa o openems_init() real (ECU completa + usb_cdc_init).
-// #define MINIMAL_BOOT 1
+// #define MINIMAL_BOOT 1  // uncomment for USB CDC echo-only diagnostic mode
 
 #ifdef MINIMAL_BOOT
 static void openems_init() noexcept {
@@ -462,22 +462,47 @@ static void openems_init() noexcept {
     (void)STM32_REG32(0x42020400);          // dummy read p/ propagar clock
     STM32_REG32(0x42020400) = (STM32_REG32(0x42020400) & ~(3u << 4)) | (1u << 4);  // PB2 output
 
-    // Loop limpo: echo a cada iteração (sem bloqueio) + heartbeat de LED não-bloqueante.
-    uint32_t hb = 0u;
-    while (true) {
-        STM32_REG32(0x40002C00) = 0x7Fu;  // kick WWDG
+    // AF brute-force test: cycle AF0-AF15 on PC6 with TIM3 FORCE_ACTIVE
+    // Enable GPIOC + TIM3 clocks
+    STM32_REG32(0x44020C8C) |= (1u << 2);   // GPIOCEN
+    STM32_REG32(0x44020C9C) |= (1u << 1);   // TIM3EN (APB1LENR bit 1)
+    (void)STM32_REG32(0x42020800);           // dummy read GPIOC
 
-        // Echo: devolve cada byte recebido (valida EP2 OUT bulk + EP1 IN bulk + BDTable).
-        ems::hal::usb_cdc_poll();
-        while (ems::hal::usb_cdc_available()) {
-            const uint8_t b = ems::hal::usb_cdc_read_byte();
-            ems::hal::usb_cdc_send_byte(b);
+    // TIM3: PSC=24 (10MHz), FORCE_ACTIVE on CH1, CCER CC1E=1, CEN=1
+    STM32_REG32(0x40000400 + 0x28) = 24u;   // TIM3_PSC
+    STM32_REG32(0x40000400 + 0x18) = 0x50u; // TIM3_CCMR1 = FORCE_ACTIVE CH1
+    STM32_REG32(0x40000400 + 0x20) = 1u;    // TIM3_CCER = CC1E
+    STM32_REG32(0x40000400 + 0x00) = 1u;    // TIM3_CR1 = CEN
+
+    auto delay_2s = [](void) {
+        for (volatile uint32_t d = 0; d < 8000000u; ++d) {
+            if ((d & 0xFFFu) == 0) STM32_REG32(0x40002C00) = 0x7Fu;
         }
+    };
 
-        // Heartbeat: toggle PB2 ~a cada N iterações, sem bloquear o echo.
-        if (++hb >= 100000u) {
-            STM32_REG32(0x42020414) ^= (1u << 2);  // GPIOB_ODR toggle PB2
-            hb = 0u;
+    auto blink_n = [](uint8_t n) {
+        for (uint8_t i = 0; i < n; ++i) {
+            STM32_REG32(0x42020414) |= (1u << 2);
+            for (volatile uint32_t d = 0; d < 500000u; ++d) {
+                if ((d & 0xFFFu) == 0) STM32_REG32(0x40002C00) = 0x7Fu;
+            }
+            STM32_REG32(0x42020414) &= ~(1u << 2);
+            for (volatile uint32_t d = 0; d < 500000u; ++d) {
+                if ((d & 0xFFFu) == 0) STM32_REG32(0x40002C00) = 0x7Fu;
+            }
+        }
+    };
+
+    while (true) {
+        for (uint8_t af = 0u; af < 16u; ++af) {
+            // Set PC6 to AF mode (MODER=10) with AFRL[27:24] = af
+            uint32_t afrl = STM32_REG32(0x42020820);  // GPIOC_AFRL
+            afrl = (afrl & ~(0xFu << 24u)) | ((uint32_t)af << 24u);
+            STM32_REG32(0x42020820) = afrl;
+            STM32_REG32(0x42020800) = (STM32_REG32(0x42020800) & ~(3u << 12u)) | (2u << 12u);
+
+            blink_n(af + 1u);  // blink AF number (1-16)
+            delay_2s();        // hold — measure PC6 with multimeter
         }
     }
 }

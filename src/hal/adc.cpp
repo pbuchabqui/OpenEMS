@@ -18,7 +18,7 @@
  *   ADC2 (5 canais):
  *     CLT       → INP9  (PB0)  — SQ1
  *     IAT       → INP5  (PB1)  — SQ2
- *     FUEL_PRESS → INP9 (PB0)  — SQ3  (placeholder, PC4 usado por INJ3)
+ *     FUEL_PRESS → INP9 (PB0)  — SQ3  (placeholder)
  *     OIL_PRESS  → INP8 (PC5)  — SQ4
  *     EWG_POS    → INP13 (PC3) — SQ5
  *
