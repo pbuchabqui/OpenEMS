@@ -13,7 +13,7 @@
  *
  * Clock dos timers:
  *   TIM5, TIM3, TIM4 (APB1): timer clock = 250 MHz (timer doubler ativo)
- *   TIM2/TIM1 scheduling: configurados em engine/ecu_sched.cpp a 10 MHz
+ *   TIM3/TIM1 scheduling: configurados em engine/ecu_sched.cpp a 10 MHz
  *   TIM5 CKP prescaler = 3 → tick = 250 MHz / 4 = 62.5 MHz → 16 ns/tick
  */
 

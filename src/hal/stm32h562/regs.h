@@ -350,7 +350,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM1_CCR4  STM32_REG32(TIM1_BASE + TIM_CCR4_OFF)
 #define TIM1_BDTR  STM32_REG32(TIM1_BASE + TIM_BDTR_OFF)
 
-// TIM2 — 32-bit output compare for injection events
+// TIM2 — 32-bit timer (master timebase / flex fuel, not yet used)
 #define TIM2_CR1   STM32_REG32(TIM2_BASE + TIM_CR1_OFF)
 #define TIM2_DIER  STM32_REG32(TIM2_BASE + TIM_DIER_OFF)
 #define TIM2_SR    STM32_REG32(TIM2_BASE + TIM_SR_OFF)
@@ -793,7 +793,7 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 // in CMSIS header stm32h562xx.h (no COMP1_IRQn entry). IRQ64 = LPTIM1.
 // Knock sensor must use an external comparator routed to a GPIO/EXTI line.
 // IRQ_COMP1 is intentionally undefined; update knock.cpp when hardware is known.
-#define IRQ_TIM2         45u   // TIM2 global (injection output compare)
+#define IRQ_TIM2         45u   // TIM2 global (master timebase — reserved)
 #define IRQ_TIM5         48u   // TIM5 global (CKP input capture)
 #define IRQ_TIM3         46u   // TIM3 (PWM wastegate — não usa IRQ)
 #define IRQ_TIM4         47u   // TIM4 (PWM VVT — não usa IRQ)

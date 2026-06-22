@@ -139,7 +139,7 @@ static inline void gpio_set_af(volatile uint32_t*, volatile uint32_t*, volatile 
 
 // Verificações de consistência do clock em tempo de compilação.
 // Se qualquer uma falhar, a fórmula TIM5_ns → scheduler_ticks está errada.
-// TIM2/TIM1: APB_timer(250MHz) / (PSC+1) = 250MHz/25 = 10MHz = ECU_SCHED_CLOCK_HZ
+// TIM3/TIM1: APB_timer(250MHz) / (PSC+1) = 250MHz/25 = 10MHz = ECU_SCHED_CLOCK_HZ
 static_assert(STM32_TIM_PSC_10MHZ == 24U,
     "PSC 10MHz: APB1_timer=250MHz, PSC+1=25, 250/25=10MHz");
 static_assert(ECU_SCHED_CLOCK_HZ == 10000000U,
@@ -354,7 +354,7 @@ static void force_output(uint8_t ch, uint8_t action)
 static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 {
     // FIX BUG-6: toda a operação (leitura do contador + escrita do CCR) deve ser
-    // atômica. Sem seção crítica, TIM2_IRQ poderia disparar entre a leitura de
+    // atômica. Sem seção crítica, uma IRQ poderia disparar entre a leitura de
     // scheduler_counter() e a escrita do registrador de compare, corrompendo o
     // agendamento de eventos já pendentes.
     ems::hal::CriticalSectionGuard guard;
@@ -706,8 +706,8 @@ uint32_t ecu_sched_ivc_clamp_count(void) { return g_ivc_clamp_count; }
 
 void ecu_sched_dwell_watchdog(void)
 {
-    // TIM2 lido UMA vez fora do loop — contador 32-bit, não há risco de wrap
-    // num intervalo de 2 ms entre chamadas (~20 000 ticks @ 10 MHz).
+    // TIM1/TIM3 lidos UMA vez fora do loop — contadores 16-bit @ 10 MHz
+    // (~6.5 ms wrap), intervalo entre chamadas é ~2 ms.
     const uint32_t now = TIM3_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
         // FIX C1: leitura + avaliação + acção dentro de UMA secção crítica.
