@@ -715,21 +715,46 @@ inline void parse_byte(uint8_t b) noexcept {
             g_state = ParseState::BENCH_ARG;
             return;
         }
+        if (b == static_cast<uint8_t>('P')) {
+            extern volatile uint8_t g_inj_pw_override __asm("g_inj_pw_override");
+            g_inj_pw_override = 2U;  // 2=write-once then lock
+            ecu_sched_commit_calibration(10U, 22500U, 50000U, 30U);
+            tx_push(0x00u);
+            return;
+        }
+        if (b == static_cast<uint8_t>('V')) {
+            extern volatile uint32_t g_pin_high_count[] __asm("g_pin_high_count");
+            extern volatile uint32_t g_pin_low_count[] __asm("g_pin_low_count");
+            extern volatile uint32_t g_pin_seq_error[] __asm("g_pin_seq_error");
+            // INJ1(idx=0) + IGN1(idx=4): 6×uint32 = 24 bytes
+            const uint32_t v[6] = {
+                g_pin_high_count[0], g_pin_low_count[0], g_pin_seq_error[0],
+                g_pin_high_count[4], g_pin_low_count[4], g_pin_seq_error[4]
+            };
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(v), 24U);
+            return;
+        }
         if (b == static_cast<uint8_t>('D')) {
             extern volatile uint32_t g_dbg_tim3_isr_count __asm("g_dbg_tim3_isr_count");
             extern volatile uint32_t g_dbg_tim1cc_isr_count __asm("g_dbg_tim1cc_isr_count");
             extern volatile uint32_t g_dbg_inj_force_early __asm("g_dbg_inj_force_early");
             extern volatile uint32_t g_dbg_ign_force_early __asm("g_dbg_ign_force_early");
-            const uint32_t diag[7] = {
+            extern volatile uint32_t g_dbg_tc_gap __asm("_ZN3ems3drv12g_dbg_tc_gapE");
+            extern volatile uint32_t g_dbg_tc_spike __asm("_ZN3ems3drv14g_dbg_tc_spikeE");
+            extern volatile uint32_t g_dbg_tc_normal __asm("_ZN3ems3drv15g_dbg_tc_normalE");
+            extern volatile uint32_t g_dbg_bootstrap_reject __asm("_ZN3ems3drv22g_dbg_bootstrap_rejectE");
+            extern volatile uint32_t g_dbg_hist_ready_max __asm("_ZN3ems3drv20g_dbg_hist_ready_maxE");
+            const uint32_t diag[8] = {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
                 ecu_sched_dwell_watchdog_count(),
-                g_dbg_tim3_isr_count,
-                g_dbg_tim1cc_isr_count,
-                g_dbg_inj_force_early,
-                g_dbg_ign_force_early
+                g_dbg_tc_gap,
+                g_dbg_tc_spike,
+                g_dbg_tc_normal,
+                g_dbg_bootstrap_reject,
+                g_dbg_hist_ready_max
             };
-            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 28U);
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 32U);
             return;
         }
         return;

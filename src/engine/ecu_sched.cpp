@@ -190,6 +190,7 @@ static volatile uint32_t g_mspark_atdc_limit_deg    = 18U;
 static volatile uint32_t g_advance_deg = 10U;
 static volatile uint32_t g_dwell_ticks = 30000U;
 static volatile uint32_t g_inj_pw_ticks = 30000U;
+volatile uint8_t g_inj_pw_override = 0U;  // 1=lock g_inj_pw_ticks, ignore main loop writes
 static volatile uint32_t g_soi_lead_deg = 62U;
 static volatile uint8_t g_presync_enable = 1U;
 static volatile uint8_t g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
@@ -207,6 +208,22 @@ static volatile uint8_t g_cc_pending_inj[4];
 static volatile uint8_t g_cc_pending_ign[4];
 volatile uint32_t g_dbg_inj_force_early = 0U;
 volatile uint32_t g_dbg_ign_force_early = 0U;
+
+// Pin transition verification: count every actual pin state change
+volatile uint32_t g_pin_high_count[8];  // [0-3]=INJ CH1-4, [4-7]=IGN CH1-4
+volatile uint32_t g_pin_low_count[8];
+volatile uint32_t g_pin_seq_error[8];   // consecutive same-direction transitions
+static uint8_t    g_pin_last_state[8];  // 0=LOW, 1=HIGH, 0xFF=unknown
+
+static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state = 0U) {
+    if (g_pin_last_state[idx] == high && high != 0xFFU) {
+        if (is_safe_state == 0U) { ++g_pin_seq_error[idx]; }
+        return;  // redundant transition — don't double-count
+    }
+    if (high) { ++g_pin_high_count[idx]; }
+    else      { ++g_pin_low_count[idx]; }
+    g_pin_last_state[idx] = high;
+}
 
 static inline void enter_critical(void)
 {
@@ -345,12 +362,16 @@ static void sanitize_runtime_calibration(void)
     if (clamped != 0U) { ++g_calibration_clamp_count; }
 }
 
-static void force_output(uint8_t ch, uint8_t action)
+static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U)
 {
     const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
     const uint8_t tim_ch = (is_inj != 0U) ? stm32_inj_tim_ch(ch) : stm32_ign_tim_ch(ch);
     const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
-    if (tim_ch != 0U) { stm32_force_oc(is_inj, tim_ch, high); }
+    if (tim_ch != 0U) {
+        stm32_force_oc(is_inj, tim_ch, high);
+        const uint8_t idx = (is_inj != 0U) ? (tim_ch - 1U) : (ECU_IGN_CH_FIRST + tim_ch - 1U);
+        pin_transition(idx, high, is_safe_state);
+    }
 }
 
 static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
@@ -444,6 +465,7 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
                 TIM3_DIER &= ~cc_ie_bit;
                 TIM3_SR &= ~stm32_tim_cc_flag(tim_ch);
                 stm32_force_oc(1U, tim_ch, g_cc_pending_inj[tim_ch - 1U]);
+                pin_transition(tim_ch - 1U, g_cc_pending_inj[tim_ch - 1U], 1U);
                 ++g_dbg_inj_force_early;
             }
             g_cc_pending_inj[tim_ch - 1U] = high;
@@ -452,6 +474,7 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
                 TIM1_DIER &= ~cc_ie_bit;
                 TIM1_SR &= ~stm32_tim_cc_flag(tim_ch);
                 stm32_force_oc(0U, tim_ch, g_cc_pending_ign[tim_ch - 1U]);
+                pin_transition(ECU_IGN_CH_FIRST + tim_ch - 1U, g_cc_pending_ign[tim_ch - 1U], 1U);
                 ++g_dbg_ign_force_early;
             }
             g_cc_pending_ign[tim_ch - 1U] = high;
@@ -494,7 +517,7 @@ static void clear_all_events_and_drive_safe_outputs(void)
     g_angle_tooth_mask_hi = 0U;
     TIM3_DIER &= ~(TIM_DIER_CC1IE | TIM_DIER_CC2IE | TIM_DIER_CC3IE | TIM_DIER_CC4IE);
     TIM1_DIER &= ~(TIM_DIER_CC1IE | TIM_DIER_CC2IE | TIM_DIER_CC3IE | TIM_DIER_CC4IE);
-    for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) { force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK); }
+    for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) { force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK, 1U); }
     for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; }
     // Close any open knock window — sync lost means no valid combustion cylinder
     g_knock_sequential = 0U;
@@ -731,15 +754,22 @@ static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
 void ecu_sched_commit_calibration(uint32_t advance_deg, uint32_t dwell_ticks, uint32_t inj_pw_ticks, uint32_t soi_lead_deg)
 {
     ems::hal::CriticalSectionGuard guard;
-    g_advance_deg = advance_deg;
-    g_dwell_ticks = dwell_ticks;
-    g_inj_pw_ticks = inj_pw_ticks;
+    if (g_inj_pw_override == 0U) {
+        g_advance_deg = advance_deg;
+        g_dwell_ticks = dwell_ticks;
+        g_inj_pw_ticks = inj_pw_ticks;
+    } else if (g_inj_pw_override == 2U) {
+        g_advance_deg = advance_deg;
+        g_dwell_ticks = dwell_ticks;
+        g_inj_pw_ticks = inj_pw_ticks;
+        g_inj_pw_override = 1U;
+    }
     g_soi_lead_deg = soi_lead_deg;
     sanitize_runtime_calibration();
 }
 void ecu_sched_set_advance_deg(uint32_t adv) { ems::hal::CriticalSectionGuard guard; g_advance_deg = adv; sanitize_runtime_calibration(); }
 void ecu_sched_set_dwell_ticks(uint32_t dwell) { ems::hal::CriticalSectionGuard guard; g_dwell_ticks = dwell; sanitize_runtime_calibration(); }
-void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { ems::hal::CriticalSectionGuard guard; g_inj_pw_ticks = pw_ticks; sanitize_runtime_calibration(); }
+void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { ems::hal::CriticalSectionGuard guard; if (g_inj_pw_override == 0U) { g_inj_pw_ticks = pw_ticks; } sanitize_runtime_calibration(); }
 void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg) { ems::hal::CriticalSectionGuard guard; g_soi_lead_deg = soi_lead_deg; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_enable(uint8_t enable) { ems::hal::CriticalSectionGuard guard; g_presync_enable = (enable != 0U) ? 1U : 0U; }
 void ecu_sched_set_presync_inj_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_inj_mode = mode; sanitize_runtime_calibration(); }
@@ -749,8 +779,7 @@ uint32_t ecu_sched_ivc_clamp_count(void) { return g_ivc_clamp_count; }
 
 void ecu_sched_dwell_watchdog(void)
 {
-    // TIM2 lido UMA vez fora do loop — contador 32-bit, não há risco de wrap
-    // num intervalo de 2 ms entre chamadas (~20 000 ticks @ 10 MHz).
+    if (g_inj_pw_override != 0U) { return; }  // test mode — disable watchdog
     const uint32_t now = TIM3_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
         // FIX C1: leitura + avaliação + acção dentro de UMA secção crítica.
@@ -887,34 +916,38 @@ extern "C" void TIM3_IRQHandler(void) {
     if (sr & TIM_SR_CC1IF) {
         TIM3_SR   = ~TIM_SR_CC1IF;
         TIM3_DIER &= ~TIM_DIER_CC1IE;
-        const uint32_t v = g_cc_pending_inj[0]
-            ? TIM_CCMR1_OC1M_FORCE_ACTIVE : TIM_CCMR1_OC1M_FORCE_INACTIVE;
+        const uint8_t h = g_cc_pending_inj[0];
+        const uint32_t v = h ? TIM_CCMR1_OC1M_FORCE_ACTIVE : TIM_CCMR1_OC1M_FORCE_INACTIVE;
         TIM3_CCMR1 = (TIM3_CCMR1 & ~((1U<<16)|0x70U)) | v;
         g_oc_mode_shadow[0] = v;
+        pin_transition(0, h);
     }
     if (sr & TIM_SR_CC2IF) {
         TIM3_SR   = ~TIM_SR_CC2IF;
         TIM3_DIER &= ~TIM_DIER_CC2IE;
-        const uint32_t v = g_cc_pending_inj[1]
-            ? TIM_CCMR1_OC2M_FORCE_ACTIVE : TIM_CCMR1_OC2M_FORCE_INACTIVE;
+        const uint8_t h = g_cc_pending_inj[1];
+        const uint32_t v = h ? TIM_CCMR1_OC2M_FORCE_ACTIVE : TIM_CCMR1_OC2M_FORCE_INACTIVE;
         TIM3_CCMR1 = (TIM3_CCMR1 & ~((1U<<24)|0x7000U)) | v;
         g_oc_mode_shadow[1] = v;
+        pin_transition(1, h);
     }
     if (sr & TIM_SR_CC3IF) {
         TIM3_SR   = ~TIM_SR_CC3IF;
         TIM3_DIER &= ~TIM_DIER_CC3IE;
-        const uint32_t v = g_cc_pending_inj[2]
-            ? TIM_CCMR2_OC3M_FORCE_ACTIVE : TIM_CCMR2_OC3M_FORCE_INACTIVE;
+        const uint8_t h = g_cc_pending_inj[2];
+        const uint32_t v = h ? TIM_CCMR2_OC3M_FORCE_ACTIVE : TIM_CCMR2_OC3M_FORCE_INACTIVE;
         TIM3_CCMR2 = (TIM3_CCMR2 & ~((1U<<16)|0x70U)) | v;
         g_oc_mode_shadow[2] = v;
+        pin_transition(2, h);
     }
     if (sr & TIM_SR_CC4IF) {
         TIM3_SR   = ~TIM_SR_CC4IF;
         TIM3_DIER &= ~TIM_DIER_CC4IE;
-        const uint32_t v = g_cc_pending_inj[3]
-            ? TIM_CCMR2_OC4M_FORCE_ACTIVE : TIM_CCMR2_OC4M_FORCE_INACTIVE;
+        const uint8_t h = g_cc_pending_inj[3];
+        const uint32_t v = h ? TIM_CCMR2_OC4M_FORCE_ACTIVE : TIM_CCMR2_OC4M_FORCE_INACTIVE;
         TIM3_CCMR2 = (TIM3_CCMR2 & ~((1U<<24)|0x7000U)) | v;
         g_oc_mode_shadow[3] = v;
+        pin_transition(3, h);
     }
 }
 
@@ -924,34 +957,38 @@ extern "C" void TIM1_CC_IRQHandler(void) {
     if (sr & TIM_SR_CC1IF) {
         TIM1_SR   = ~TIM_SR_CC1IF;
         TIM1_DIER &= ~TIM_DIER_CC1IE;
-        const uint32_t v = g_cc_pending_ign[0]
-            ? TIM_CCMR1_OC1M_FORCE_ACTIVE : TIM_CCMR1_OC1M_FORCE_INACTIVE;
+        const uint8_t h = g_cc_pending_ign[0];
+        const uint32_t v = h ? TIM_CCMR1_OC1M_FORCE_ACTIVE : TIM_CCMR1_OC1M_FORCE_INACTIVE;
         TIM1_CCMR1 = (TIM1_CCMR1 & ~((1U<<16)|0x70U)) | v;
         g_oc_mode_shadow[4] = v;
+        pin_transition(4, h);
     }
     if (sr & TIM_SR_CC2IF) {
         TIM1_SR   = ~TIM_SR_CC2IF;
         TIM1_DIER &= ~TIM_DIER_CC2IE;
-        const uint32_t v = g_cc_pending_ign[1]
-            ? TIM_CCMR1_OC2M_FORCE_ACTIVE : TIM_CCMR1_OC2M_FORCE_INACTIVE;
+        const uint8_t h = g_cc_pending_ign[1];
+        const uint32_t v = h ? TIM_CCMR1_OC2M_FORCE_ACTIVE : TIM_CCMR1_OC2M_FORCE_INACTIVE;
         TIM1_CCMR1 = (TIM1_CCMR1 & ~((1U<<24)|0x7000U)) | v;
         g_oc_mode_shadow[5] = v;
+        pin_transition(5, h);
     }
     if (sr & TIM_SR_CC3IF) {
         TIM1_SR   = ~TIM_SR_CC3IF;
         TIM1_DIER &= ~TIM_DIER_CC3IE;
-        const uint32_t v = g_cc_pending_ign[2]
-            ? TIM_CCMR2_OC3M_FORCE_ACTIVE : TIM_CCMR2_OC3M_FORCE_INACTIVE;
+        const uint8_t h = g_cc_pending_ign[2];
+        const uint32_t v = h ? TIM_CCMR2_OC3M_FORCE_ACTIVE : TIM_CCMR2_OC3M_FORCE_INACTIVE;
         TIM1_CCMR2 = (TIM1_CCMR2 & ~((1U<<16)|0x70U)) | v;
         g_oc_mode_shadow[6] = v;
+        pin_transition(6, h);
     }
     if (sr & TIM_SR_CC4IF) {
         TIM1_SR   = ~TIM_SR_CC4IF;
         TIM1_DIER &= ~TIM_DIER_CC4IE;
-        const uint32_t v = g_cc_pending_ign[3]
-            ? TIM_CCMR2_OC4M_FORCE_ACTIVE : TIM_CCMR2_OC4M_FORCE_INACTIVE;
+        const uint8_t h = g_cc_pending_ign[3];
+        const uint32_t v = h ? TIM_CCMR2_OC4M_FORCE_ACTIVE : TIM_CCMR2_OC4M_FORCE_INACTIVE;
         TIM1_CCMR2 = (TIM1_CCMR2 & ~((1U<<24)|0x7000U)) | v;
         g_oc_mode_shadow[7] = v;
+        pin_transition(7, h);
     }
 }
 #endif
