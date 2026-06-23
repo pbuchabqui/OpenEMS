@@ -80,9 +80,11 @@
 // Credenciais em wifi_credentials.h (não commitado — ver .gitignore):
 //   #define WIFI_SSID "minha_rede"
 //   #define WIFI_PASS "minha_senha"
-#include <WiFi.h>
-#include <WebServer.h>
-#include <ArduinoOTA.h>
+// WiFi disabled for clean CKP signal at high RPM
+// #include <WiFi.h>
+// #include <WebServer.h>
+// #include <ArduinoOTA.h>
+#define NO_WIFI_BUILD
 #if __has_include("wifi_credentials.h")
 #include "wifi_credentials.h"
 #endif
@@ -194,7 +196,7 @@ static uint8_t raw_to_dac8(uint16_t raw) {
 static constexpr int      kRealTeeth = 58;
 static constexpr int      kCmpTooth  = 5;     // dente onde sobe o CMP (rev 0)
 static constexpr uint32_t kRpmMin    = 50u;
-static constexpr uint32_t kRpmMax    = 6000u;
+static constexpr uint32_t kRpmMax    = 9000u;
 static constexpr uint32_t kRmtResHz  = 1000000u;  // 1 tick RMT = 1 µs
 static constexpr uint16_t kRmtMaxDur = 32767u;    // duração máx por campo (15 bits)
 
@@ -614,6 +616,7 @@ void setup() {
 // ── SECÇÃO 8 — WiFi (TCP servidor, mesmo protocolo de linha do serial)
 // ═══════════════════════════════════════════════════════════════════════════
 
+#ifndef NO_WIFI_BUILD
 static WiFiServer g_tcp_server(3333);
 static WiFiClient g_tcp_client;
 static char       g_tcp_line[96];
@@ -768,6 +771,12 @@ static void wifi_poll() {
         }
     }
 }
+#endif // NO_WIFI_BUILD
+
+#ifdef NO_WIFI_BUILD
+static void wifi_setup() {}
+static void wifi_poll() {}
+#endif
 
 void loop() {
     while (Serial.available()) {
@@ -782,7 +791,9 @@ void loop() {
         }
     }
     wifi_poll();
+#ifndef NO_WIFI_BUILD
     ArduinoOTA.handle();
+#endif
     // estimativa de revoluções p/ o indicador de liveness do status
     const uint32_t now = millis();
     if (g_rev_accum_ms == 0u) g_rev_accum_ms = now;

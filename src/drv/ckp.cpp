@@ -498,6 +498,14 @@ inline bool process_gap_event() noexcept {
 // ── Símbolos fracos (hooks) ───────────────────────────────────────────────────
 namespace ems::drv {
 
+volatile uint32_t g_dbg_isr_max_ticks = 0u;
+volatile uint32_t g_dbg_isr_last_ticks = 0u;
+volatile uint32_t g_dbg_tc_gap = 0u;
+volatile uint32_t g_dbg_tc_spike = 0u;
+volatile uint32_t g_dbg_tc_normal = 0u;
+volatile uint32_t g_dbg_bootstrap_reject = 0u;
+volatile uint32_t g_dbg_hist_ready_max = 0u;
+
 #if defined(__GNUC__)
 __attribute__((weak))
 #endif
@@ -584,6 +592,13 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     if (g_state.hist_ready < kHistSize) {
         if (g_state.hist_ready == 0u || delta_ticks <= g_state.prev_period_ticks * 2u) {
             hist_push(delta_ticks);
+        } else {
+            extern volatile uint32_t g_dbg_bootstrap_reject;
+            ++g_dbg_bootstrap_reject;
+        }
+        {
+            extern volatile uint32_t g_dbg_hist_ready_max;
+            if (g_state.hist_ready > g_dbg_hist_ready_max) g_dbg_hist_ready_max = g_state.hist_ready;
         }
         ++g_state.tooth_count;
         g_state.snap.tooth_period_ns = period_ns;
@@ -599,7 +614,14 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     // Com histórico completo usa TOOTH_GRD (MS42 §1.2.3.1.3) — trend-compensado,
     // robusto a aceleração/desaceleração rápida e rejeita spikes de ambos os
     // sentidos. No bootstrap (hist_ready < kHistSize) recai em razão de média.
-    switch (classify_tooth(delta_ticks)) {
+    const ToothClass tc = classify_tooth(delta_ticks);
+    {
+        extern volatile uint32_t g_dbg_tc_gap, g_dbg_tc_spike, g_dbg_tc_normal;
+        if (tc == ToothClass::GAP) ++g_dbg_tc_gap;
+        else if (tc == ToothClass::SPIKE_NOISE) ++g_dbg_tc_spike;
+        else ++g_dbg_tc_normal;
+    }
+    switch (tc) {
 
         case ToothClass::GAP:
             // Auto-recuperação: muitos gaps seguidos ⇒ histórico defasado (ex.:
@@ -684,6 +706,17 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     schedule_on_tooth(g_state.snap);
     prime_on_tooth(g_state.snap);
     misfire_on_tooth(g_state.snap);
+
+    // Measure ISR duration (TIM5 free-running counter)
+    const uint32_t isr_end = TIM5_CKP_CAPTURE;  // re-read would give current CNT, not capture
+    // Use TIM5_CNT directly for elapsed time
+    {
+        extern volatile uint32_t g_dbg_isr_max_ticks;
+        extern volatile uint32_t g_dbg_isr_last_ticks;
+        const uint32_t elapsed = TIM5_CNT - capture_now;
+        g_dbg_isr_last_ticks = elapsed;
+        if (elapsed > g_dbg_isr_max_ticks) { g_dbg_isr_max_ticks = elapsed; }
+    }
 }
 
 // ── ISR do cam sensor: TIM5 CH2 (PA1/CMP, rising edge) ──────────────────────

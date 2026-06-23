@@ -64,8 +64,8 @@ void tim5_ic_init(void) {
     // Habilitar interrupções CC1 (CKP) e CC2 (CMP)
     TIM5_DIER = TIM_DIER_CC1IE | TIM_DIER_CC2IE;
 
-    // ── 4. NVIC TIM5 → prioridade 1 (máxima) ─
-    nvic_set_priority(IRQ_TIM5, 1u);
+    // ── 4. NVIC TIM5 → prioridade 0 (máxima — preempts CC ISRs to avoid overcapture)
+    nvic_set_priority(IRQ_TIM5, 0u);
     nvic_enable_irq(IRQ_TIM5);
 
     // ── 5. Iniciar contador ─────────────────────────────────────────────
