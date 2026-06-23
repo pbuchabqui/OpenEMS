@@ -106,6 +106,13 @@ static uint32_t ems_test_gpio_ospeedr;
 #define GPIO_AF2 2U
 #define GPIO_AF3 3U
 #define TIM_SR_CC1IF 0x2U
+#define TIM_SR_CC2IF 0x4U
+#define TIM_SR_CC3IF 0x8U
+#define TIM_SR_CC4IF 0x10U
+#define TIM_DIER_CC1IE (1U << 1)
+#define TIM_DIER_CC2IE (1U << 2)
+#define TIM_DIER_CC3IE (1U << 3)
+#define TIM_DIER_CC4IE (1U << 4)
 #define TIM_CR1_CEN 1U
 #define TIM_CCMR1_OC1M_ACTIVE 0x10U
 #define TIM_CCMR1_OC1M_INACTIVE 0x20U
@@ -196,6 +203,8 @@ static volatile uint8_t g_knock_sequential = 0U;  // 1 when running Calculate_Se
 static volatile uint8_t g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg;  // FIX: volatile — escrita por ecu_sched_set_ivc (cs), leitura por clamp_inj_pw_to_ivc (contexto ISR)
 static uint32_t g_ivc_clamp_count = 0U;
 static uint32_t g_oc_mode_shadow[ECU_CHANNELS];
+static volatile uint8_t g_cc_pending_inj[4];
+static volatile uint8_t g_cc_pending_ign[4];
 
 static inline void enter_critical(void)
 {
@@ -313,15 +322,6 @@ static inline void stm32_write_oc_mode(uint8_t is_inj, uint8_t tim_ch, uint32_t 
     }
 }
 
-static inline void stm32_set_oc_mode(uint8_t is_inj, uint8_t tim_ch, uint8_t make_high)
-{
-    stm32_write_oc_mode(is_inj, tim_ch,
-        (make_high != 0U) ? TIM_CCMR1_OC1M_ACTIVE : TIM_CCMR1_OC1M_INACTIVE,
-        (make_high != 0U) ? TIM_CCMR1_OC2M_ACTIVE : TIM_CCMR1_OC2M_INACTIVE,
-        (make_high != 0U) ? TIM_CCMR2_OC3M_ACTIVE : TIM_CCMR2_OC3M_INACTIVE,
-        (make_high != 0U) ? TIM_CCMR2_OC4M_ACTIVE : TIM_CCMR2_OC4M_INACTIVE);
-}
-
 static inline void stm32_force_oc(uint8_t is_inj, uint8_t tim_ch, uint8_t high)
 {
     stm32_write_oc_mode(is_inj, tim_ch,
@@ -431,26 +431,42 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
         }
     }
 
-	stm32_set_oc_mode(is_inj, tim_ch, ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U);
-	// Clear any pending match flag BEFORE programming CCR to avoid missing an edge
-	if (is_inj != 0U) {
-		TIM3_SR &= ~stm32_tim_cc_flag(tim_ch);
-	} else {
-		TIM1_SR &= ~stm32_tim_cc_flag(tim_ch);
-	}
+    {
+        const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
+        if (is_inj != 0U) {
+            g_cc_pending_inj[tim_ch - 1U] = high;
+        } else {
+            g_cc_pending_ign[tim_ch - 1U] = high;
+        }
+    }
+
+    if (is_inj != 0U) {
+        TIM3_SR &= ~stm32_tim_cc_flag(tim_ch);
+    } else {
+        TIM1_SR &= ~stm32_tim_cc_flag(tim_ch);
+    }
+
+    ccr = stm32_tim_ccr(is_inj, tim_ch);
+    {
+        const uint32_t current_cnt = (is_inj != 0U ? TIM3_CNT : TIM1_CNT) & 0xFFFFU;
+        uint32_t target = current_cnt + delta;
+        if (target > 0xFFFFU) {
+            target -= 0x10000U;
+        }
+        *ccr = static_cast<uint16_t>(target);
+    }
+
 #if defined(__arm__) || defined(__thumb__)
-	__asm__ volatile("dmb" ::: "memory"); // Ensure OC mode + flag clear complete before CCR update
+    __asm__ volatile("dmb" ::: "memory");
 #endif
-	ccr = stm32_tim_ccr(is_inj, tim_ch);
-	{
-		// Both TIM3 (INJ) and TIM1 (IGN) are 16-bit (ARR = 0xFFFF)
-		const uint32_t current_cnt = (is_inj != 0U ? TIM3_CNT : TIM1_CNT) & 0xFFFFU;
-		uint32_t target = current_cnt + delta;
-		if (target > 0xFFFFU) {
-			target -= 0x10000U;
-		}
-		*ccr = static_cast<uint16_t>(target);
-	}
+    {
+        const uint32_t cc_ie = (1U << tim_ch);
+        if (is_inj != 0U) {
+            TIM3_DIER |= cc_ie;
+        } else {
+            TIM1_DIER |= cc_ie;
+        }
+    }
 }
 
 static void clear_all_events_and_drive_safe_outputs(void)
@@ -458,8 +474,9 @@ static void clear_all_events_and_drive_safe_outputs(void)
     g_angle_table_count = 0U;
     g_angle_tooth_mask_lo = 0U;
     g_angle_tooth_mask_hi = 0U;
+    TIM3_DIER &= ~(TIM_DIER_CC1IE | TIM_DIER_CC2IE | TIM_DIER_CC3IE | TIM_DIER_CC4IE);
+    TIM1_DIER &= ~(TIM_DIER_CC1IE | TIM_DIER_CC2IE | TIM_DIER_CC3IE | TIM_DIER_CC4IE);
     for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) { force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK); }
-    // Bobinas forçadas a LOW — watchdog já não é necessário para nenhum canal
     for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; }
     // Close any open knock window — sync lost means no valid combustion cylinder
     g_knock_sequential = 0U;
@@ -543,6 +560,14 @@ void ECU_Hardware_Init(void)
 
     TIM1_CR1 = TIM_CR1_CEN;
     TIM3_CR1 = TIM_CR1_CEN;
+
+#if !defined(EMS_HOST_TEST)
+    nvic_set_priority(IRQ_TIM3, 1u);
+    nvic_enable_irq(IRQ_TIM3);
+    nvic_set_priority(IRQ_TIM1_CC, 1u);
+    nvic_enable_irq(IRQ_TIM1_CC);
+#endif
+
     clear_all_events_and_drive_safe_outputs();
 }
 
@@ -828,6 +853,80 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 }
 }
 
+#if !defined(EMS_HOST_TEST)
+extern "C" void TIM3_IRQHandler(void) {
+    const uint32_t sr = TIM3_SR;
+    if (sr & TIM_SR_CC1IF) {
+        TIM3_SR   = ~TIM_SR_CC1IF;
+        TIM3_DIER &= ~TIM_DIER_CC1IE;
+        const uint32_t v = g_cc_pending_inj[0]
+            ? TIM_CCMR1_OC1M_FORCE_ACTIVE : TIM_CCMR1_OC1M_FORCE_INACTIVE;
+        TIM3_CCMR1 = (TIM3_CCMR1 & ~((1U<<16)|0x70U)) | v;
+        g_oc_mode_shadow[0] = v;
+    }
+    if (sr & TIM_SR_CC2IF) {
+        TIM3_SR   = ~TIM_SR_CC2IF;
+        TIM3_DIER &= ~TIM_DIER_CC2IE;
+        const uint32_t v = g_cc_pending_inj[1]
+            ? TIM_CCMR1_OC2M_FORCE_ACTIVE : TIM_CCMR1_OC2M_FORCE_INACTIVE;
+        TIM3_CCMR1 = (TIM3_CCMR1 & ~((1U<<24)|0x7000U)) | v;
+        g_oc_mode_shadow[1] = v;
+    }
+    if (sr & TIM_SR_CC3IF) {
+        TIM3_SR   = ~TIM_SR_CC3IF;
+        TIM3_DIER &= ~TIM_DIER_CC3IE;
+        const uint32_t v = g_cc_pending_inj[2]
+            ? TIM_CCMR2_OC3M_FORCE_ACTIVE : TIM_CCMR2_OC3M_FORCE_INACTIVE;
+        TIM3_CCMR2 = (TIM3_CCMR2 & ~((1U<<16)|0x70U)) | v;
+        g_oc_mode_shadow[2] = v;
+    }
+    if (sr & TIM_SR_CC4IF) {
+        TIM3_SR   = ~TIM_SR_CC4IF;
+        TIM3_DIER &= ~TIM_DIER_CC4IE;
+        const uint32_t v = g_cc_pending_inj[3]
+            ? TIM_CCMR2_OC4M_FORCE_ACTIVE : TIM_CCMR2_OC4M_FORCE_INACTIVE;
+        TIM3_CCMR2 = (TIM3_CCMR2 & ~((1U<<24)|0x7000U)) | v;
+        g_oc_mode_shadow[3] = v;
+    }
+}
+
+extern "C" void TIM1_CC_IRQHandler(void) {
+    const uint32_t sr = TIM1_SR;
+    if (sr & TIM_SR_CC1IF) {
+        TIM1_SR   = ~TIM_SR_CC1IF;
+        TIM1_DIER &= ~TIM_DIER_CC1IE;
+        const uint32_t v = g_cc_pending_ign[0]
+            ? TIM_CCMR1_OC1M_FORCE_ACTIVE : TIM_CCMR1_OC1M_FORCE_INACTIVE;
+        TIM1_CCMR1 = (TIM1_CCMR1 & ~((1U<<16)|0x70U)) | v;
+        g_oc_mode_shadow[4] = v;
+    }
+    if (sr & TIM_SR_CC2IF) {
+        TIM1_SR   = ~TIM_SR_CC2IF;
+        TIM1_DIER &= ~TIM_DIER_CC2IE;
+        const uint32_t v = g_cc_pending_ign[1]
+            ? TIM_CCMR1_OC2M_FORCE_ACTIVE : TIM_CCMR1_OC2M_FORCE_INACTIVE;
+        TIM1_CCMR1 = (TIM1_CCMR1 & ~((1U<<24)|0x7000U)) | v;
+        g_oc_mode_shadow[5] = v;
+    }
+    if (sr & TIM_SR_CC3IF) {
+        TIM1_SR   = ~TIM_SR_CC3IF;
+        TIM1_DIER &= ~TIM_DIER_CC3IE;
+        const uint32_t v = g_cc_pending_ign[2]
+            ? TIM_CCMR2_OC3M_FORCE_ACTIVE : TIM_CCMR2_OC3M_FORCE_INACTIVE;
+        TIM1_CCMR2 = (TIM1_CCMR2 & ~((1U<<16)|0x70U)) | v;
+        g_oc_mode_shadow[6] = v;
+    }
+    if (sr & TIM_SR_CC4IF) {
+        TIM1_SR   = ~TIM_SR_CC4IF;
+        TIM1_DIER &= ~TIM_DIER_CC4IE;
+        const uint32_t v = g_cc_pending_ign[3]
+            ? TIM_CCMR2_OC4M_FORCE_ACTIVE : TIM_CCMR2_OC4M_FORCE_INACTIVE;
+        TIM1_CCMR2 = (TIM1_CCMR2 & ~((1U<<24)|0x7000U)) | v;
+        g_oc_mode_shadow[7] = v;
+    }
+}
+#endif
+
 namespace ems::drv {
 void schedule_on_tooth(const CkpSnapshot& snap) noexcept { ems::engine::ecu_sched_on_tooth_hook(snap); }
 }
@@ -844,6 +943,7 @@ void ecu_sched_test_reset(void)
     g_inj_inhibit_mask = 0U;
     g_ign_inhibit_mask = 0U;
     g_mspark_count = 0U; g_mspark_inter_dwell_ticks = 0U; g_mspark_atdc_limit_deg = 18U;
+    for (uint8_t i = 0U; i < 4U; ++i) { g_cc_pending_inj[i] = 0U; g_cc_pending_ign[i] = 0U; }
 }
 uint8_t ecu_sched_test_angle_table_size(void) { return g_angle_table_count; }
 uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *sub_frac, uint8_t *ch, uint8_t *action, uint8_t *phase)
