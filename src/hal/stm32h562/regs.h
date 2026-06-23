@@ -795,7 +795,8 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 // IRQ_COMP1 is intentionally undefined; update knock.cpp when hardware is known.
 #define IRQ_TIM2         45u   // TIM2 global (injection output compare)
 #define IRQ_TIM5         48u   // TIM5 global (CKP input capture)
-#define IRQ_TIM3         46u   // TIM3 (PWM wastegate — não usa IRQ)
+#define IRQ_TIM1_CC      44u   // TIM1 capture/compare (ignition OC match)
+#define IRQ_TIM3         46u   // TIM3 global (injection OC match)
 #define IRQ_TIM4         47u   // TIM4 (PWM VVT — não usa IRQ)
 #define IRQ_ADC1         37u   // ADC1 (IRQ separado do ADC2)
 #define IRQ_ADC2         69u   // ADC2 (IRQ separado do ADC1)
