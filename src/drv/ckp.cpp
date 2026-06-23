@@ -582,7 +582,9 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     // todos os dentes incondicionalmente para inicializar a janela de média.
     // Não há referência de velocidade ainda para filtrar.
     if (g_state.hist_ready < kHistSize) {
-        hist_push(delta_ticks);
+        if (g_state.hist_ready == 0u || delta_ticks <= g_state.prev_period_ticks * 2u) {
+            hist_push(delta_ticks);
+        }
         ++g_state.tooth_count;
         g_state.snap.tooth_period_ns = period_ns;
         g_state.snap.predicted_tooth_period_ns = period_ns;
