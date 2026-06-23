@@ -205,6 +205,8 @@ static uint32_t g_ivc_clamp_count = 0U;
 static uint32_t g_oc_mode_shadow[ECU_CHANNELS];
 static volatile uint8_t g_cc_pending_inj[4];
 static volatile uint8_t g_cc_pending_ign[4];
+volatile uint32_t g_dbg_inj_force_early = 0U;
+volatile uint32_t g_dbg_ign_force_early = 0U;
 
 static inline void enter_critical(void)
 {
@@ -362,7 +364,7 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
     const uint8_t tim_ch = (is_inj != 0U) ? stm32_inj_tim_ch(ch) : stm32_ign_tim_ch(ch);
     const uint32_t now = scheduler_counter();
-    const uint32_t delta = target_cnv - now;
+    const uint32_t delta = (target_cnv - now) & 0xFFFFU;
     volatile uint32_t *ccr;
 
     if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
@@ -433,9 +435,25 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 
     {
         const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
+        const uint32_t cc_ie_bit = (1U << tim_ch);
+        // If a previous CC event is still pending (IE enabled, ISR hasn't fired yet),
+        // force it immediately before scheduling the new one.
         if (is_inj != 0U) {
+            if (TIM3_DIER & cc_ie_bit) {
+                // Previous CC event hasn't fired — force it now, then schedule new one
+                TIM3_DIER &= ~cc_ie_bit;
+                TIM3_SR &= ~stm32_tim_cc_flag(tim_ch);
+                stm32_force_oc(1U, tim_ch, g_cc_pending_inj[tim_ch - 1U]);
+                ++g_dbg_inj_force_early;
+            }
             g_cc_pending_inj[tim_ch - 1U] = high;
         } else {
+            if (TIM1_DIER & cc_ie_bit) {
+                TIM1_DIER &= ~cc_ie_bit;
+                TIM1_SR &= ~stm32_tim_cc_flag(tim_ch);
+                stm32_force_oc(0U, tim_ch, g_cc_pending_ign[tim_ch - 1U]);
+                ++g_dbg_ign_force_early;
+            }
             g_cc_pending_ign[tim_ch - 1U] = high;
         }
     }
@@ -743,7 +761,7 @@ void ecu_sched_dwell_watchdog(void)
         enter_critical();
         const uint32_t arm  = g_dwell_arm_tick[i];
         const uint32_t tout = g_dwell_wdog_ticks[i];
-        if (arm != 0U && (now - arm) >= tout) {
+        if (arm != 0U && ((now - arm) & 0xFFFFU) >= tout) {
             stm32_force_oc(0U, (uint8_t)(i + 1U), 0U);
             g_dwell_arm_tick[i] = 0U;
             ++g_dwell_watchdog_count;
@@ -799,10 +817,16 @@ uint8_t ecu_sched_get_ign_inhibit_mask(void) { return g_ign_inhibit_mask; }
 namespace ems::engine {
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
+    static uint8_t s_unsync_teeth = 0U;
     if ((snap.state != ems::drv::SyncState::FULL_SYNC) && (snap.state != ems::drv::SyncState::HALF_SYNC)) {
-        if (g_hook_prev_valid != 0U) { clear_all_events_and_drive_safe_outputs(); }
-        g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U; g_cmp_phase_seen = 0U; return;
+        ++s_unsync_teeth;
+        if (s_unsync_teeth >= 60U && g_hook_prev_valid != 0U) {
+            clear_all_events_and_drive_safe_outputs();
+            g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U; g_cmp_phase_seen = 0U;
+        }
+        return;
     }
+    s_unsync_teeth = 0U;
 
     // Track CMP presence: if phase_A ever changes, CMP is working
     {
@@ -854,7 +878,11 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 }
 
 #if !defined(EMS_HOST_TEST)
+volatile uint32_t g_dbg_tim3_isr_count = 0U;
+volatile uint32_t g_dbg_tim1cc_isr_count = 0U;
+
 extern "C" void TIM3_IRQHandler(void) {
+    ++g_dbg_tim3_isr_count;
     const uint32_t sr = TIM3_SR;
     if (sr & TIM_SR_CC1IF) {
         TIM3_SR   = ~TIM_SR_CC1IF;
@@ -891,6 +919,7 @@ extern "C" void TIM3_IRQHandler(void) {
 }
 
 extern "C" void TIM1_CC_IRQHandler(void) {
+    ++g_dbg_tim1cc_isr_count;
     const uint32_t sr = TIM1_SR;
     if (sr & TIM_SR_CC1IF) {
         TIM1_SR   = ~TIM_SR_CC1IF;

@@ -715,6 +715,23 @@ inline void parse_byte(uint8_t b) noexcept {
             g_state = ParseState::BENCH_ARG;
             return;
         }
+        if (b == static_cast<uint8_t>('D')) {
+            extern volatile uint32_t g_dbg_tim3_isr_count __asm("g_dbg_tim3_isr_count");
+            extern volatile uint32_t g_dbg_tim1cc_isr_count __asm("g_dbg_tim1cc_isr_count");
+            extern volatile uint32_t g_dbg_inj_force_early __asm("g_dbg_inj_force_early");
+            extern volatile uint32_t g_dbg_ign_force_early __asm("g_dbg_ign_force_early");
+            const uint32_t diag[7] = {
+                g_late_event_count,
+                g_cycle_schedule_drop_count,
+                ecu_sched_dwell_watchdog_count(),
+                g_dbg_tim3_isr_count,
+                g_dbg_tim1cc_isr_count,
+                g_dbg_inj_force_early,
+                g_dbg_ign_force_early
+            };
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 28U);
+            return;
+        }
         return;
     }
 
