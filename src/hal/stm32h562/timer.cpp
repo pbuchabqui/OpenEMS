@@ -22,6 +22,7 @@
 #include "hal/timer.h"
 #include "hal/regs.h"
 #include "drv/ckp.h"    // ckp_tim5_ch1_isr / ckp_tim5_ch2_isr
+#include "engine/ecu_sched.h"  // ecu_sched_evt_dispatch
 
 // ── Constantes de clock ───────────────────────────────────────────────────────
 // Timer clock = 250 MHz, prescaler = 3 → 62.5 MHz → 16 ns/tick
@@ -61,7 +62,12 @@ void tim5_ic_init(void) {
     TIM5_CCER = TIM_CCER_CC1E             // habilita captura CH1
               | TIM_CCER_CC2E;            // habilita captura CH2
 
+    // CH3 = Output Compare, Frozen mode (event dispatcher — no pin output)
+    // CCMR2.CC3S = 00 (output), OC3M = 000 (frozen)
+    TIM5_CCMR2 = 0u;  // all zero = output compare frozen, no preload
+
     // Habilitar interrupções CC1 (CKP) e CC2 (CMP)
+    // CC3IE enabled on-demand by evt_insert
     TIM5_DIER = TIM_DIER_CC1IE | TIM_DIER_CC2IE;
 
     // ── 4. NVIC TIM5 → prioridade 1 (mesma que CC ISRs — sem preemption)
@@ -204,6 +210,10 @@ extern "C" void TIM5_IRQHandler(void) {
     if (sr & TIM_SR_CC2IF) {
         TIM5_SR &= ~TIM_SR_CC2IF;
         ems::drv::ckp_tim5_ch2_isr();
+    }
+    if (sr & TIM_SR_CC3IF) {
+        TIM5_SR &= ~TIM_SR_CC3IF;
+        ecu_sched_evt_dispatch();
     }
 }
 
