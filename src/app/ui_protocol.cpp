@@ -730,11 +730,13 @@ inline void parse_byte(uint8_t b) noexcept {
             const volatile uint8_t* base = reinterpret_cast<const volatile uint8_t*>(&g_ts_ring);
             for (uint8_t i = 0; i < 8U; ++i) {
                 const uint8_t ri = (ridx + 32U - 8U + i) & 31U;
-                // TsEntry is 8 bytes: ts(4) + high(1) + pad(3)
+                // TsEntry is 8 bytes: ts(4) + high(1) + channel(1) + pad(2)
                 const uint32_t ts = *reinterpret_cast<const volatile uint32_t*>(base + ri * 8U);
                 const uint8_t h = *(base + ri * 8U + 4U);
+                const uint8_t ch = *(base + ri * 8U + 5U);
                 tx_push_bytes(reinterpret_cast<const uint8_t*>(&ts), 4U);
                 tx_push(h);
+                tx_push(ch);
             }
             return;
         }
