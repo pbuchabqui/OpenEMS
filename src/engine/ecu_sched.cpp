@@ -208,6 +208,8 @@ static volatile uint8_t g_cc_pending_inj[4];
 static volatile uint8_t g_cc_pending_ign[4];
 volatile uint32_t g_dbg_inj_force_early = 0U;
 volatile uint32_t g_dbg_ign_force_early = 0U;
+volatile uint32_t g_dbg_clear_all_count = 0U;
+volatile uint32_t g_dbg_presync_count = 0U;
 
 // Pin transition verification: count every actual pin state change
 volatile uint32_t g_pin_high_count[8];  // [0-3]=INJ CH1-4, [4-7]=IGN CH1-4
@@ -385,11 +387,39 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
     const uint8_t tim_ch = (is_inj != 0U) ? stm32_inj_tim_ch(ch) : stm32_ign_tim_ch(ch);
     const uint32_t now = scheduler_counter();
-    const uint32_t delta = (target_cnv - now) & 0xFFFFU;
+    const uint32_t raw_delta = (target_cnv - now) & 0xFFFFU;
     volatile uint32_t *ccr;
 
     if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
-    
+
+    // Always fire immediately (force_oc at tooth boundary).
+    // CCR sub-tooth precision deferred to sequential mode implementation.
+    {
+        const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
+        if (is_inj != 0U) {
+            if (TIM3_DIER & (1U << tim_ch)) { TIM3_DIER &= ~(1U << tim_ch); }
+            g_cc_pending_inj[tim_ch - 1U] = high;
+        } else {
+            if (TIM1_DIER & (1U << tim_ch)) { TIM1_DIER &= ~(1U << tim_ch); }
+            g_cc_pending_ign[tim_ch - 1U] = high;
+        }
+        stm32_force_oc(is_inj, tim_ch, high);
+        const uint8_t idx = (is_inj != 0U) ? (tim_ch - 1U) : (ECU_IGN_CH_FIRST + tim_ch - 1U);
+        pin_transition(idx, high);
+        // Dwell watchdog tracking still needed
+        if (is_inj == 0U && tim_ch != 0U) {
+            const uint8_t ign_idx = (uint8_t)(tim_ch - 1U);
+            if (action == ECU_ACT_DWELL_START) {
+                g_dwell_arm_tick[ign_idx] = now;
+                g_dwell_wdog_ticks[ign_idx] = (g_dwell_ticks * 7U) / 5U;
+            } else if (action == ECU_ACT_SPARK) {
+                g_dwell_arm_tick[ign_idx] = 0U;
+            }
+        }
+        return;
+    }
+    const uint32_t delta = raw_delta;
+
     if (delta > ems::engine::kTimIgnMaxDelta16) {
         ++g_cycle_schedule_drop_count;
         return;
@@ -852,6 +882,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         if (s_unsync_teeth >= 60U && g_hook_prev_valid != 0U) {
             clear_all_events_and_drive_safe_outputs();
             g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U; g_cmp_phase_seen = 0U;
+            ++g_dbg_clear_all_count;
         }
         return;
     }
@@ -872,6 +903,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         const bool use_presync = (snap.state == ems::drv::SyncState::HALF_SYNC && g_presync_enable != 0U)
                               || (snap.state == ems::drv::SyncState::FULL_SYNC && g_cmp_phase_seen == 0U);
         if (use_presync) {
+            ++g_dbg_presync_count;
             calculate_presync_revolution(snap);
         } else {
             if (g_hook_schedule_this_gap != 0U) {
