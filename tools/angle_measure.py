@@ -37,17 +37,19 @@ for sample in range(N):
     gap_ts = struct.unpack_from('<I', raw, 0)[0]
     ridx = raw[4]
 
+    rev_ticks = tooth_ticks * 58.0  # one full revolution in TIM5 ticks
     for i in range(8):
         off = 5 + i * 5
         ts = struct.unpack_from('<I', raw, off)[0]
         high = raw[off + 4]
         if ts == 0: continue
 
-        dt = (ts - gap_ts) & 0xFFFFFFFF  # 32-bit circular
-        teeth_from_gap = dt / tooth_ticks
-        tooth_in_rev = teeth_from_gap % 58.0
-        tooth_int = int(tooth_in_rev)
-        frac = tooth_in_rev - tooth_int
+        dt = (ts - gap_ts) & 0xFFFFFFFF
+        # Normalize to position within ONE revolution
+        dt_in_rev = dt % int(rev_ticks) if rev_ticks > 0 else dt
+        teeth_from_gap = dt_in_rev / tooth_ticks
+        tooth_int = int(teeth_from_gap)
+        frac = teeth_from_gap - tooth_int
 
         if high:
             on_fracs.append((tooth_int, frac))
