@@ -234,7 +234,7 @@ volatile uint32_t g_dbg_evt_dispatched = 0U;
 
 // Timestamp capture ring for angle measurement (INJ1 ON/OFF)
 #define TS_RING_SIZE 32U
-struct TsEntry { uint32_t ts; uint8_t high; };
+struct TsEntry { uint32_t ts; uint8_t high; uint8_t channel; uint8_t _pad[2]; };
 volatile TsEntry g_ts_ring[TS_RING_SIZE];
 volatile uint8_t g_ts_ring_idx = 0U;
 // Gap timestamp from CKP (written by tooth hook at rev boundary)
@@ -306,11 +306,12 @@ void ecu_sched_evt_dispatch(void) {
         if ((int32_t)(e.timestamp - now) > 0) { break; }  // still in future
         // Execute: GPIO BSRR
         gpio_set_pin(e.channel, e.high);
-        // Capture timestamp for INJ1 angle measurement
-        if (e.channel == ECU_CH_INJ1) {
+        // Capture timestamp for angle measurement (INJ1 + IGN1)
+        if (e.channel == ECU_CH_INJ1 || e.channel == ECU_CH_IGN1) {
             const uint8_t ri = g_ts_ring_idx;
             g_ts_ring[ri].ts = now;
             g_ts_ring[ri].high = e.high;
+            g_ts_ring[ri].channel = e.channel;
             g_ts_ring_idx = (ri + 1U) & (TS_RING_SIZE - 1U);
         }
         // Pin transition tracking
@@ -526,7 +527,7 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     // Converts sub-tooth delta to absolute TIM5 timestamp, inserts into
     // event queue. TIM5_CH3 compare fires, ISR does GPIO BSRR.
     // Precision: 16 ns (62.5 MHz). No OC mode, no CCR overwrite.
-    if (ch == ECU_CH_INJ1) {
+    if (ch == ECU_CH_INJ1 || ch == ECU_CH_IGN1) {
         // Convert TIM3 delta (10 MHz) to TIM5 ticks (62.5 MHz): ×6.25
         // Use integer: delta * 25 / 4
         const uint32_t delta = raw_delta;
@@ -746,8 +747,10 @@ void ECU_Hardware_Init(void)
     gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 7U, GPIO_AF2);
     gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 8U, GPIO_AF2);
     gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 9U, GPIO_AF2);
-    // Ignition: TIM1 CH1=PE9/AF1, CH2=PE11/AF1, CH3=PE13/AF1, CH4=PE14/AF1 (LQFP100)
-    gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 9U, GPIO_AF1);
+    // Ignition: TIM1 CH2=PE11/AF1, CH3=PE13/AF1, CH4=PE14/AF1 (LQFP100)
+    // PE9 (IGN1) is GPIO output — driven by event scheduler via BSRR
+    GPIOE_MODER = (GPIOE_MODER & ~(3U << 18)) | (1U << 18);  // PE9 = output
+    GPIOE_BSRR = (1U << 25);  // PE9 LOW initially
     gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 11U, GPIO_AF1);
     gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 13U, GPIO_AF1);
     gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 14U, GPIO_AF1);
