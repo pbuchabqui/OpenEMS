@@ -83,6 +83,12 @@ volatile uint32_t ems_test_cam_gpio_idr = 0u;
 #define FASTRUN
 #endif
 
+namespace ems::drv {
+    extern volatile uint32_t g_dbg_gap_accepted;
+    extern volatile uint32_t g_dbg_gap_premature;
+    extern volatile uint32_t g_dbg_gap_last_tc;
+}
+
 namespace {
 
 // ── Constantes da roda fônica 60-2 ───────────────────────────────────────────
@@ -478,12 +484,13 @@ inline bool process_gap_event() noexcept {
 
         case ems::drv::SyncState::FULL_SYNC:
             if (g_state.tooth_count >= kGapThresholdTooth) {
-                // Gap na posição esperada → mantém FULL_SYNC, reinicia contagem.
                 g_state.tooth_count      = 0u;
                 g_state.snap.tooth_index = 0u;
+                ++ems::drv::g_dbg_gap_accepted;
                 return true;
             }
-            // Gap inesperado: wheel slip, dente duplo, interferência severa.
+            ++ems::drv::g_dbg_gap_premature;
+            ems::drv::g_dbg_gap_last_tc = g_state.tooth_count;
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
             return false;
@@ -505,6 +512,9 @@ volatile uint32_t g_dbg_tc_spike = 0u;
 volatile uint32_t g_dbg_tc_normal = 0u;
 volatile uint32_t g_dbg_bootstrap_reject = 0u;
 volatile uint32_t g_dbg_hist_ready_max = 0u;
+volatile uint32_t g_dbg_gap_accepted = 0u;
+volatile uint32_t g_dbg_gap_premature = 0u;
+volatile uint32_t g_dbg_gap_last_tc = 0u;
 
 #if defined(__GNUC__)
 __attribute__((weak))

@@ -744,15 +744,18 @@ inline void parse_byte(uint8_t b) noexcept {
             extern volatile uint32_t g_dbg_tc_normal __asm("_ZN3ems3drv15g_dbg_tc_normalE");
             extern volatile uint32_t g_dbg_bootstrap_reject __asm("_ZN3ems3drv22g_dbg_bootstrap_rejectE");
             extern volatile uint32_t g_dbg_hist_ready_max __asm("_ZN3ems3drv20g_dbg_hist_ready_maxE");
+            extern volatile uint32_t g_dbg_gap_premature __asm("_ZN3ems3drv19g_dbg_gap_prematureE");
+            extern volatile uint32_t g_dbg_clear_all_count __asm("g_dbg_clear_all_count");
+            extern volatile uint32_t g_dbg_presync_count __asm("g_dbg_presync_count");
             const uint32_t diag[8] = {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
-                ecu_sched_dwell_watchdog_count(),
                 g_dbg_tc_gap,
-                g_dbg_tc_spike,
                 g_dbg_tc_normal,
-                g_dbg_bootstrap_reject,
-                g_dbg_hist_ready_max
+                g_dbg_gap_premature,
+                g_dbg_clear_all_count,
+                g_dbg_presync_count,
+                ecu_sched_dwell_watchdog_count()
             };
             tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 32U);
             return;
