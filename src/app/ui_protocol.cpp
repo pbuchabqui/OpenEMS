@@ -715,6 +715,29 @@ inline void parse_byte(uint8_t b) noexcept {
             g_state = ParseState::BENCH_ARG;
             return;
         }
+        if (b == static_cast<uint8_t>('G')) {
+            // Angle measurement: gap_ts + 8 latest {ts, high} from dispatch ring
+            // Format: [gap_ts:4] [idx:1] [8×{ts:4, high:1}] = 45 bytes
+            extern volatile uint32_t g_last_gap_ts __asm("g_last_gap_ts");
+            extern volatile uint8_t g_ts_ring_idx __asm("g_ts_ring_idx");
+            // TsEntry is {uint32_t ts; uint8_t high} — 8 bytes with padding
+            // Read raw memory: each entry is 8 bytes at g_ts_ring base
+            extern volatile uint32_t g_ts_ring __asm("g_ts_ring");
+            const uint32_t gap = g_last_gap_ts;
+            const uint8_t ridx = g_ts_ring_idx;
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(&gap), 4U);
+            tx_push(ridx);
+            const volatile uint8_t* base = reinterpret_cast<const volatile uint8_t*>(&g_ts_ring);
+            for (uint8_t i = 0; i < 8U; ++i) {
+                const uint8_t ri = (ridx + 32U - 8U + i) & 31U;
+                // TsEntry is 8 bytes: ts(4) + high(1) + pad(3)
+                const uint32_t ts = *reinterpret_cast<const volatile uint32_t*>(base + ri * 8U);
+                const uint8_t h = *(base + ri * 8U + 4U);
+                tx_push_bytes(reinterpret_cast<const uint8_t*>(&ts), 4U);
+                tx_push(h);
+            }
+            return;
+        }
         if (b == static_cast<uint8_t>('P')) {
             extern volatile uint8_t g_inj_pw_override __asm("g_inj_pw_override");
             g_inj_pw_override = 2U;  // 2=write-once then lock
