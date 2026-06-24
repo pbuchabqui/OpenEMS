@@ -217,7 +217,7 @@ volatile uint32_t g_dbg_presync_count = 0U;
 // TIM5 ISR fires, executes GPIO BSRR, and loads the next event.
 // No OC mode — pure compare + software GPIO.
 
-#define EVT_QUEUE_SIZE 16U
+#define EVT_QUEUE_SIZE 32U
 
 struct SchedEvent {
     uint32_t timestamp;   // TIM5 absolute tick
@@ -231,6 +231,8 @@ static SchedEvent g_evt_queue[EVT_QUEUE_SIZE];
 static volatile uint8_t g_evt_count = 0U;
 static volatile uint8_t g_evt_armed = 0U;  // 1 if CCR3 is loaded with next event
 volatile uint32_t g_dbg_evt_dispatched = 0U;
+volatile uint32_t g_dbg_evt_inserted = 0U;
+volatile uint32_t g_dbg_evt_overflow = 0U;
 
 // Timestamp capture ring for angle measurement (INJ1 ON/OFF)
 #define TS_RING_SIZE 32U
@@ -269,7 +271,8 @@ static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_sta
 
 // Insert event in sorted order (by timestamp). Called from tooth ISR.
 static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
-    if (g_evt_count >= EVT_QUEUE_SIZE) { return; }
+    if (g_evt_count >= EVT_QUEUE_SIZE) { ++g_dbg_evt_overflow; return; }
+    ++g_dbg_evt_inserted;
     // Find insertion point (linear search, queue is small)
     uint8_t pos = g_evt_count;
     for (uint8_t i = 0; i < g_evt_count; ++i) {
@@ -329,14 +332,29 @@ void ecu_sched_evt_dispatch(void) {
         }
     }
     // Arm next event or disable interrupt
-    if (g_evt_count > 0U) {
-        TIM5_CCR3 = g_evt_queue[0].timestamp;
-        TIM5_SR  &= ~TIM_SR_CC3IF;
-        g_evt_armed = 1U;
-    } else {
-        TIM5_DIER &= ~TIM_DIER_CC3IE;
-        g_evt_armed = 0U;
+    // Loop: if the next event is already past, process it immediately
+    while (g_evt_count > 0U) {
+        const uint32_t next_ts = g_evt_queue[0].timestamp;
+        if ((int32_t)(next_ts - TIM5_CNT) > 16) {  // >16 ticks (~0.25µs) in future
+            TIM5_CCR3 = next_ts;
+            TIM5_SR  &= ~TIM_SR_CC3IF;
+            g_evt_armed = 1U;
+            return;
+        }
+        // Already past — process inline
+        gpio_set_pin(g_evt_queue[0].channel, g_evt_queue[0].high);
+        const uint8_t is_inj2 = (g_evt_queue[0].channel < ECU_IGN_CH_FIRST) ? 1U : 0U;
+        const uint8_t tc2 = is_inj2 ? stm32_inj_tim_ch(g_evt_queue[0].channel) : stm32_ign_tim_ch(g_evt_queue[0].channel);
+        if (tc2 != 0U) {
+            const uint8_t idx2 = is_inj2 ? (tc2-1U) : (ECU_IGN_CH_FIRST+tc2-1U);
+            pin_transition(idx2, g_evt_queue[0].high);
+        }
+        ++g_dbg_evt_dispatched;
+        --g_evt_count;
+        for (uint8_t i = 0; i < g_evt_count; ++i) g_evt_queue[i] = g_evt_queue[i+1U];
     }
+    TIM5_DIER &= ~TIM_DIER_CC3IE;
+    g_evt_armed = 0U;
 }
 
 
@@ -499,7 +517,7 @@ static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U)
     const uint8_t tim_ch = (is_inj != 0U) ? stm32_inj_tim_ch(ch) : stm32_ign_tim_ch(ch);
     const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
     if (tim_ch != 0U) {
-        stm32_force_oc(is_inj, tim_ch, high);
+        gpio_set_pin(ch, high);
         const uint8_t idx = (is_inj != 0U) ? (tim_ch - 1U) : (ECU_IGN_CH_FIRST + tim_ch - 1U);
         pin_transition(idx, high, is_safe_state);
     }
@@ -523,39 +541,29 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 
     const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
 
-    // ── Absolute-timestamp scheduler path (INJ1 only — Phase 1) ─────
-    // Converts sub-tooth delta to absolute TIM5 timestamp, inserts into
+    // Dwell watchdog tracking (ignition channels only)
+    if (is_inj == 0U && tim_ch != 0U) {
+        const uint8_t ign_idx = (uint8_t)(tim_ch - 1U);
+        if (action == ECU_ACT_DWELL_START) {
+            g_dwell_arm_tick[ign_idx] = now;
+            g_dwell_wdog_ticks[ign_idx] = (g_dwell_ticks * 7U) / 5U;
+        } else if (action == ECU_ACT_SPARK) {
+            g_dwell_arm_tick[ign_idx] = 0U;
+        }
+    }
+
+    // ── Absolute-timestamp event scheduler ──────────────────────────
+    // Converts sub-tooth delta to TIM5 timestamp, inserts into sorted
     // event queue. TIM5_CH3 compare fires, ISR does GPIO BSRR.
-    // Precision: 16 ns (62.5 MHz). No OC mode, no CCR overwrite.
-    if (ch == ECU_CH_INJ1 || ch == ECU_CH_IGN1) {
-        // Convert TIM3 delta (10 MHz) to TIM5 ticks (62.5 MHz): ×6.25
-        // Use integer: delta * 25 / 4
+    {
         const uint32_t delta = raw_delta;
         uint32_t tim5_delta;
         if (delta > 0x8000U || delta < STM32_MIN_COMPARE_LEAD_TICKS) {
-            tim5_delta = STM32_MIN_COMPARE_LEAD_TICKS * 25U / 4U;  // ~31 ticks = 0.5µs
+            tim5_delta = STM32_MIN_COMPARE_LEAD_TICKS * 25U / 4U;
         } else {
             tim5_delta = delta * 25U / 4U;
         }
-        const uint32_t ts = TIM5_CNT + tim5_delta;
-        evt_insert(ts, ch, high);
-        return;
-    }
-
-    // ── Force-OC path: all other channels ───────────────────────────
-    {
-        stm32_force_oc(is_inj, tim_ch, high);
-        const uint8_t idx = (is_inj != 0U) ? (tim_ch - 1U) : (ECU_IGN_CH_FIRST + tim_ch - 1U);
-        pin_transition(idx, high);
-        if (is_inj == 0U && tim_ch != 0U) {
-            const uint8_t ign_idx = (uint8_t)(tim_ch - 1U);
-            if (action == ECU_ACT_DWELL_START) {
-                g_dwell_arm_tick[ign_idx] = now;
-                g_dwell_wdog_ticks[ign_idx] = (g_dwell_ticks * 7U) / 5U;
-            } else if (action == ECU_ACT_SPARK) {
-                g_dwell_arm_tick[ign_idx] = 0U;
-            }
-        }
+        evt_insert(TIM5_CNT + tim5_delta, ch, high);
         return;
     }
     const uint32_t delta = raw_delta;
@@ -739,21 +747,21 @@ void ECU_Hardware_Init(void)
     RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
     RCC_APB2ENR  |= RCC_APB2ENR_TIM1EN;
 
-    // Injection: TIM3 CH2-4 on PC7/PC8/PC9 — AF2 (TIM3)
-    // PC6 (INJ1) is GPIO output — driven by event scheduler via BSRR
-    // gpio_set_af for PC6 skipped; configure as output instead:
-    GPIOC_MODER = (GPIOC_MODER & ~(3U << 12)) | (1U << 12);  // PC6 = output
-    GPIOC_BSRR = (1U << 22);  // PC6 LOW initially
-    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 7U, GPIO_AF2);
-    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 8U, GPIO_AF2);
-    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 9U, GPIO_AF2);
-    // Ignition: TIM1 CH2=PE11/AF1, CH3=PE13/AF1, CH4=PE14/AF1 (LQFP100)
-    // PE9 (IGN1) is GPIO output — driven by event scheduler via BSRR
-    GPIOE_MODER = (GPIOE_MODER & ~(3U << 18)) | (1U << 18);  // PE9 = output
-    GPIOE_BSRR = (1U << 25);  // PE9 LOW initially
-    gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 11U, GPIO_AF1);
-    gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 13U, GPIO_AF1);
-    gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 14U, GPIO_AF1);
+    // All INJ/IGN pins are GPIO outputs — driven by event scheduler via BSRR
+    // INJ: PC6(INJ1), PC7(INJ2), PC8(INJ3), PC9(INJ4)
+    for (uint8_t pin = 6U; pin <= 9U; ++pin) {
+        GPIOC_MODER = (GPIOC_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
+    }
+    GPIOC_BSRR = (1U<<22)|(1U<<23)|(1U<<24)|(1U<<25);  // PC6-9 LOW
+    // IGN: PE9(IGN1), PE11(IGN2), PE13(IGN3), PE14(IGN4)
+    {
+        static const uint8_t ign_pins[] = {9U, 11U, 13U, 14U};
+        for (uint8_t i = 0; i < 4; ++i) {
+            const uint8_t pin = ign_pins[i];
+            GPIOE_MODER = (GPIOE_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
+        }
+    }
+    GPIOE_BSRR = (1U<<25)|(1U<<27)|(1U<<29)|(1U<<30);  // PE9,11,13,14 LOW
 
     TIM1_CR1 = 0U; TIM1_DIER = 0U; TIM1_SR = 0U; TIM1_PSC = STM32_TIM_PSC_10MHZ; TIM1_CNT = 0U; TIM1_ARR = 0xFFFFU;
     TIM1_CCMR1 = TIM_CCMR1_OC1M_FORCE_INACTIVE | TIM_CCMR1_OC2M_FORCE_INACTIVE;
@@ -966,7 +974,8 @@ void ecu_sched_dwell_watchdog(void)
         const uint32_t arm  = g_dwell_arm_tick[i];
         const uint32_t tout = g_dwell_wdog_ticks[i];
         if (arm != 0U && ((now - arm) & 0xFFFFU) >= tout) {
-            stm32_force_oc(0U, (uint8_t)(i + 1U), 0U);
+            // IGN channels: ECU_CH_IGN1=7, IGN2=6, IGN3=5, IGN4=4
+            gpio_set_pin(static_cast<uint8_t>(7U - i), 0U);
             g_dwell_arm_tick[i] = 0U;
             ++g_dwell_watchdog_count;
         }
