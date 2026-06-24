@@ -232,6 +232,14 @@ static volatile uint8_t g_evt_count = 0U;
 static volatile uint8_t g_evt_armed = 0U;  // 1 if CCR3 is loaded with next event
 volatile uint32_t g_dbg_evt_dispatched = 0U;
 
+// Timestamp capture ring for angle measurement (INJ1 ON/OFF)
+#define TS_RING_SIZE 32U
+struct TsEntry { uint32_t ts; uint8_t high; };
+volatile TsEntry g_ts_ring[TS_RING_SIZE];
+volatile uint8_t g_ts_ring_idx = 0U;
+// Gap timestamp from CKP (written by tooth hook at rev boundary)
+volatile uint32_t g_last_gap_ts = 0U;
+
 // GPIO BSRR addresses for direct pin control (no OC mode needed)
 // PC6=INJ1(TIM3_CH1), PC7=INJ2, PC8=INJ3, PC9=INJ4
 // PE9=IGN1(TIM1_CH1), PE11=IGN2, PE13=IGN3, PE14=IGN4
@@ -298,6 +306,13 @@ void ecu_sched_evt_dispatch(void) {
         if ((int32_t)(e.timestamp - now) > 0) { break; }  // still in future
         // Execute: GPIO BSRR
         gpio_set_pin(e.channel, e.high);
+        // Capture timestamp for INJ1 angle measurement
+        if (e.channel == ECU_CH_INJ1) {
+            const uint8_t ri = g_ts_ring_idx;
+            g_ts_ring[ri].ts = now;
+            g_ts_ring[ri].high = e.high;
+            g_ts_ring_idx = (ri + 1U) & (TS_RING_SIZE - 1U);
+        }
         // Pin transition tracking
         const uint8_t is_inj = (e.channel < ECU_IGN_CH_FIRST) ? 1U : 0U;
         const uint8_t tim_ch = is_inj ? stm32_inj_tim_ch(e.channel) : stm32_ign_tim_ch(e.channel);
@@ -1027,6 +1042,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 
     const uint8_t rev_boundary = ((g_hook_prev_valid != 0U) && (snap.tooth_index == 0U) && (g_hook_prev_tooth != 0U)) ? 1U : 0U;
     if (rev_boundary != 0U) {
+        g_last_gap_ts = snap.last_tim5_capture;  // TIM5 timestamp of gap (tooth 0)
         const bool use_presync = (snap.state == ems::drv::SyncState::HALF_SYNC && g_presync_enable != 0U)
                               || (snap.state == ems::drv::SyncState::FULL_SYNC && g_cmp_phase_seen == 0U);
         if (use_presync) {
