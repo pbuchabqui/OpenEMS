@@ -60,7 +60,8 @@ void tim5_ic_init(void) {
     // Polaridade: rising edge para CH1 e CH2 (CC1P=0, CC2P=0)
     // CC1NP=0, CC2NP=0 → não inverte
     TIM5_CCER = TIM_CCER_CC1E             // habilita captura CH1
-              | TIM_CCER_CC2E;            // habilita captura CH2
+              | TIM_CCER_CC2E             // habilita captura CH2
+              | TIM_CCER_CC3E;            // habilita compare CH3 (event dispatcher)
 
     // CH3 = Output Compare, Frozen mode (event dispatcher — no pin output)
     // CCMR2.CC3S = 00 (output), OC3M = 000 (frozen)
@@ -201,7 +202,7 @@ void tim15_etb_set_duty_x10(uint16_t duty_pct_x10) noexcept {
  * ativo (CC1IF = CKP, CC2IF = CMP) e despacha para os respectivos handlers.
  */
 extern "C" void TIM5_IRQHandler(void) {
-    const uint32_t sr = TIM5_SR;
+    uint32_t sr = TIM5_SR;
 
     if (sr & TIM_SR_CC1IF) {
         TIM5_SR &= ~TIM_SR_CC1IF;
@@ -211,6 +212,8 @@ extern "C" void TIM5_IRQHandler(void) {
         TIM5_SR &= ~TIM_SR_CC2IF;
         ems::drv::ckp_tim5_ch2_isr();
     }
+    // Re-read SR: CC3IF may have been set by evt_insert during tooth handler
+    sr = TIM5_SR;
     if (sr & TIM_SR_CC3IF) {
         TIM5_SR &= ~TIM_SR_CC3IF;
         ecu_sched_evt_dispatch();
