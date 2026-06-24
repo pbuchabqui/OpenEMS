@@ -377,6 +377,8 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM5_ARR   STM32_REG32(TIM5_BASE + TIM_ARR_OFF)
 #define TIM5_CCR1  STM32_REG32(TIM5_BASE + TIM_CCR1_OFF)  // CKP timestamp travado
 #define TIM5_CCR2  STM32_REG32(TIM5_BASE + TIM_CCR2_OFF)  // CMP timestamp travado
+#define TIM5_CCMR2 STM32_REG32(TIM5_BASE + TIM_CCMR2_OFF)
+#define TIM5_CCR3  STM32_REG32(TIM5_BASE + TIM_CCR3_OFF)  // Event dispatcher compare
 #define TIM5_EGR   STM32_REG32(TIM5_BASE + TIM_EGR_OFF)
 
 // TIM8 — advanced timer (kept for reference; ignition migrated to TIM1 on LQFP100)

@@ -211,13 +211,126 @@ volatile uint32_t g_dbg_ign_force_early = 0U;
 volatile uint32_t g_dbg_clear_all_count = 0U;
 volatile uint32_t g_dbg_presync_count = 0U;
 
+// ── Absolute-timestamp event scheduler (TIM5_CH3 dispatcher) ────────────
+// Events are timestamped in the TIM5 32-bit domain (62.5 MHz = 16 ns/tick).
+// The next event's timestamp is loaded into TIM5_CCR3. When CNT matches,
+// TIM5 ISR fires, executes GPIO BSRR, and loads the next event.
+// No OC mode — pure compare + software GPIO.
+
+#define EVT_QUEUE_SIZE 16U
+
+struct SchedEvent {
+    uint32_t timestamp;   // TIM5 absolute tick
+    uint8_t  channel;     // ECU_CH_INJ1..IGN4
+    uint8_t  high;        // 1=ON/DWELL, 0=OFF/SPARK
+    uint8_t  valid;
+    uint8_t  _pad;
+};
+
+static SchedEvent g_evt_queue[EVT_QUEUE_SIZE];
+static volatile uint8_t g_evt_count = 0U;
+static volatile uint8_t g_evt_armed = 0U;  // 1 if CCR3 is loaded with next event
+volatile uint32_t g_dbg_evt_dispatched = 0U;
+
+// GPIO BSRR addresses for direct pin control (no OC mode needed)
+// PC6=INJ1(TIM3_CH1), PC7=INJ2, PC8=INJ3, PC9=INJ4
+// PE9=IGN1(TIM1_CH1), PE11=IGN2, PE13=IGN3, PE14=IGN4
+#define GPIOC_BSRR STM32_REG32(0x42020818UL)
+#define GPIOE_BSRR STM32_REG32(0x42021018UL)
+
+static inline void gpio_set_pin(uint8_t channel, uint8_t high) {
+    // Map channel to GPIO port + pin
+    // INJ: ECU_CH_INJ1=2→PC6, INJ2=3→PC7, INJ3=0→PC8, INJ4=1→PC9
+    // IGN: ECU_CH_IGN1=7→PE9, IGN2=6→PE11, IGN3=5→PE13, IGN4=4→PE14
+    switch (channel) {
+        case ECU_CH_INJ1: GPIOC_BSRR = high ? (1U<<6)  : (1U<<22); break;
+        case ECU_CH_INJ2: GPIOC_BSRR = high ? (1U<<7)  : (1U<<23); break;
+        case ECU_CH_INJ3: GPIOC_BSRR = high ? (1U<<8)  : (1U<<24); break;
+        case ECU_CH_INJ4: GPIOC_BSRR = high ? (1U<<9)  : (1U<<25); break;
+        case ECU_CH_IGN1: GPIOE_BSRR = high ? (1U<<9)  : (1U<<25); break;
+        case ECU_CH_IGN2: GPIOE_BSRR = high ? (1U<<11) : (1U<<27); break;
+        case ECU_CH_IGN3: GPIOE_BSRR = high ? (1U<<13) : (1U<<29); break;
+        case ECU_CH_IGN4: GPIOE_BSRR = high ? (1U<<14) : (1U<<30); break;
+        default: break;
+    }
+}
+
+static inline uint8_t stm32_inj_tim_ch(uint8_t ch);
+static inline uint8_t stm32_ign_tim_ch(uint8_t ch);
+static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state = 0U);
+
+// Insert event in sorted order (by timestamp). Called from tooth ISR.
+static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
+    if (g_evt_count >= EVT_QUEUE_SIZE) { return; }
+    // Find insertion point (linear search, queue is small)
+    uint8_t pos = g_evt_count;
+    for (uint8_t i = 0; i < g_evt_count; ++i) {
+        if ((int32_t)(ts - g_evt_queue[i].timestamp) < 0) {
+            pos = i;
+            break;
+        }
+    }
+    // Shift right
+    for (uint8_t i = g_evt_count; i > pos; --i) {
+        g_evt_queue[i] = g_evt_queue[i - 1U];
+    }
+    g_evt_queue[pos].timestamp = ts;
+    g_evt_queue[pos].channel = channel;
+    g_evt_queue[pos].high = high;
+    g_evt_queue[pos].valid = 1U;
+    ++g_evt_count;
+
+    // If this is the earliest event, arm CCR3
+    if (pos == 0U) {
+        TIM5_CCR3 = ts;
+        TIM5_SR  &= ~TIM_SR_CC3IF;
+        TIM5_DIER |= TIM_DIER_CC3IE;
+        g_evt_armed = 1U;
+    }
+}
+
+// Called from TIM5 ISR when CC3IF fires
+void ecu_sched_evt_dispatch(void) {
+    const uint32_t now = TIM5_CNT;
+    // Process all events that are due (handles simultaneous events)
+    while (g_evt_count > 0U) {
+        const SchedEvent& e = g_evt_queue[0];
+        if ((int32_t)(e.timestamp - now) > 0) { break; }  // still in future
+        // Execute: GPIO BSRR
+        gpio_set_pin(e.channel, e.high);
+        // Pin transition tracking
+        const uint8_t is_inj = (e.channel < ECU_IGN_CH_FIRST) ? 1U : 0U;
+        const uint8_t tim_ch = is_inj ? stm32_inj_tim_ch(e.channel) : stm32_ign_tim_ch(e.channel);
+        if (tim_ch != 0U) {
+            const uint8_t idx = is_inj ? (tim_ch - 1U) : (ECU_IGN_CH_FIRST + tim_ch - 1U);
+            pin_transition(idx, e.high);
+        }
+        ++g_dbg_evt_dispatched;
+        // Remove from queue (shift left)
+        --g_evt_count;
+        for (uint8_t i = 0; i < g_evt_count; ++i) {
+            g_evt_queue[i] = g_evt_queue[i + 1U];
+        }
+    }
+    // Arm next event or disable interrupt
+    if (g_evt_count > 0U) {
+        TIM5_CCR3 = g_evt_queue[0].timestamp;
+        TIM5_SR  &= ~TIM_SR_CC3IF;
+        g_evt_armed = 1U;
+    } else {
+        TIM5_DIER &= ~TIM_DIER_CC3IE;
+        g_evt_armed = 0U;
+    }
+}
+
+
 // Pin transition verification: count every actual pin state change
 volatile uint32_t g_pin_high_count[8];  // [0-3]=INJ CH1-4, [4-7]=IGN CH1-4
 volatile uint32_t g_pin_low_count[8];
 volatile uint32_t g_pin_seq_error[8];   // consecutive same-direction transitions
 static uint8_t    g_pin_last_state[8];  // 0=LOW, 1=HIGH, 0xFF=unknown
 
-static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state = 0U) {
+static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
     if (g_pin_last_state[idx] == high && high != 0xFFU) {
         if (is_safe_state == 0U) { ++g_pin_seq_error[idx]; }
         return;  // redundant transition — don't double-count
@@ -392,21 +505,32 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 
     if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
 
-    // Always fire immediately (force_oc at tooth boundary).
-    // CCR sub-tooth precision deferred to sequential mode implementation.
-    {
-        const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
-        if (is_inj != 0U) {
-            if (TIM3_DIER & (1U << tim_ch)) { TIM3_DIER &= ~(1U << tim_ch); }
-            g_cc_pending_inj[tim_ch - 1U] = high;
+    const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
+
+    // ── Absolute-timestamp scheduler path (INJ1 only — Phase 1) ─────
+    // Converts sub-tooth delta to absolute TIM5 timestamp, inserts into
+    // event queue. TIM5_CH3 compare fires, ISR does GPIO BSRR.
+    // Precision: 16 ns (62.5 MHz). No OC mode, no CCR overwrite.
+    if (ch == ECU_CH_INJ1) {
+        // Convert TIM3 delta (10 MHz) to TIM5 ticks (62.5 MHz): ×6.25
+        // Use integer: delta * 25 / 4
+        const uint32_t delta = raw_delta;
+        uint32_t tim5_delta;
+        if (delta > 0x8000U || delta < STM32_MIN_COMPARE_LEAD_TICKS) {
+            tim5_delta = STM32_MIN_COMPARE_LEAD_TICKS * 25U / 4U;  // ~31 ticks = 0.5µs
         } else {
-            if (TIM1_DIER & (1U << tim_ch)) { TIM1_DIER &= ~(1U << tim_ch); }
-            g_cc_pending_ign[tim_ch - 1U] = high;
+            tim5_delta = delta * 25U / 4U;
         }
+        const uint32_t ts = TIM5_CNT + tim5_delta;
+        evt_insert(ts, ch, high);
+        return;
+    }
+
+    // ── Force-OC path: all other channels ───────────────────────────
+    {
         stm32_force_oc(is_inj, tim_ch, high);
         const uint8_t idx = (is_inj != 0U) ? (tim_ch - 1U) : (ECU_IGN_CH_FIRST + tim_ch - 1U);
         pin_transition(idx, high);
-        // Dwell watchdog tracking still needed
         if (is_inj == 0U && tim_ch != 0U) {
             const uint8_t ign_idx = (uint8_t)(tim_ch - 1U);
             if (action == ECU_ACT_DWELL_START) {
@@ -599,8 +723,11 @@ void ECU_Hardware_Init(void)
     RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
     RCC_APB2ENR  |= RCC_APB2ENR_TIM1EN;
 
-    // Injection: TIM3 CH1-4 on PC6/PC7/PC8/PC9 — all AF2 (TIM3)
-    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 6U, GPIO_AF2);
+    // Injection: TIM3 CH2-4 on PC7/PC8/PC9 — AF2 (TIM3)
+    // PC6 (INJ1) is GPIO output — driven by event scheduler via BSRR
+    // gpio_set_af for PC6 skipped; configure as output instead:
+    GPIOC_MODER = (GPIOC_MODER & ~(3U << 12)) | (1U << 12);  // PC6 = output
+    GPIOC_BSRR = (1U << 22);  // PC6 LOW initially
     gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 7U, GPIO_AF2);
     gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 8U, GPIO_AF2);
     gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 9U, GPIO_AF2);
