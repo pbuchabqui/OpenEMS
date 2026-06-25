@@ -502,7 +502,7 @@ inline bool process_gap_event() noexcept {
             // Gap prematuro: pulso espúrio (EMC, dente danificado).
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
-            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
+            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u;
             return false;
 
         case ems::drv::SyncState::FULL_SYNC:
@@ -517,7 +517,7 @@ inline bool process_gap_event() noexcept {
             ems::drv::g_dbg_gap_last_tc = g_state.tooth_count;
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
-            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
+            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u;
             return false;
 
         default:
@@ -721,7 +721,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
             g_state.snap.state == ems::drv::SyncState::FULL_SYNC) {
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
-            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
+            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u;
         }
     }
 
@@ -856,7 +856,7 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
         g_state.snap.state   = SyncState::LOSS_OF_SYNC;
         g_state.snap.rpm_x10 = 0u;
         g_state.tooth_count  = 0u;
-        g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
+        g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u;
     }
     exit_critical();
     return true;
