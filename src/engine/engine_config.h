@@ -33,6 +33,12 @@ inline constexpr uint16_t kTriggerTooth0EngineDeg = 0u;  // MEDIR NO MOTOR REAL
 
 inline constexpr uint8_t kFiringOrder[kCylinderCount] = {0u, 2u, 3u, 1u};
 
+// CMP reference half: which 360° half the cam rising edge marks.
+// Convention: CMP rises at kCmpTooth of the 1st revolution of the 720° pair.
+// That revolution is PHASE_A → kCmpRefHalf=0 (snap.phase_A=true).
+// Adjust empirically if the physical cam sensor marks the other revolution.
+inline constexpr uint8_t kCmpRefHalf = 0u;
+
 constexpr uint16_t cyl_tdc_deg(uint8_t cyl) noexcept {
     return static_cast<uint16_t>(cyl * (720u / kCylinderCount));
 }

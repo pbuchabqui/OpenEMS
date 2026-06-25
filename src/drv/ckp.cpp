@@ -207,6 +207,7 @@ struct DecoderState {
     uint8_t  hist_ready;                // quantas entradas válidas em tooth_hist (máx kHistSize)
     uint16_t tooth_count;               // dentes desde o último gap aceito
     uint8_t  cmp_confirms;              // confirmações do cam sensor (CH1)
+    uint8_t  phase_half;               // 0/1: which 360° half of the 720° cycle (toggles at each gap)
     uint32_t cmp_glitch_count;          // FIX P0: contador de glitches CMP rejeitados (diagnóstico)
     uint16_t consecutive_anomalies;     // gaps+spikes seguidos — re-bootstrap se histórico defasar
 };
@@ -222,14 +223,15 @@ struct DecoderState {
 static constexpr uint16_t kAnomalyResyncThreshold = 16u;
 
 static DecoderState g_state = {
-    ems::drv::CkpSnapshot{0u, 0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false},
+    ems::drv::CkpSnapshot{0u, 0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false, 0u},
     0u,
     0u,
     {0u, 0u, 0u},
     0u,
     0u,
-    0u,
-    0u,  // cmp_glitch_count inicializado
+    0u,   // cmp_confirms
+    0u,   // phase_half
+    0u,   // cmp_glitch_count
 };
 // FIX-5: volatile nas variáveis escritas pela ISR TIM5 (prio 1) e lidas pelo
 // background loop sem seção crítica. Sem volatile, o compilador pode elevar
@@ -430,6 +432,12 @@ inline bool is_forward_rotation_coherent(uint32_t period_ns) noexcept {
 // last_tim5_capture já foi escrito pela ISR (linha antes de is_gap) para todos os
 // eventos válidos — não precisa ser repetido aqui. process_gap_event foca apenas
 // nas transições de estado e nos resets de contagem/índice.
+// Toggle phase half and propagate to snapshot. Called on every accepted gap (=360°).
+static inline void advance_phase_half() noexcept {
+    g_state.phase_half ^= 1u;
+    g_state.snap.phase_A = (g_state.phase_half == 0u);
+}
+
 inline bool process_gap_event() noexcept {
     switch (g_state.snap.state) {
 
@@ -455,7 +463,8 @@ inline bool process_gap_event() noexcept {
             
             if (g_seed_armed) {
                 g_state.snap.state       = ems::drv::SyncState::FULL_SYNC;
-                g_state.snap.phase_A     = g_seed_phase_a;
+                g_state.phase_half       = g_seed_phase_a ? 0u : 1u;
+                g_state.snap.phase_A     = (g_state.phase_half == 0u);
                 g_seed_armed             = false;
                 g_seed_probation         = true;
                 g_seed_probation_teeth   = 0u;
@@ -467,6 +476,7 @@ inline bool process_gap_event() noexcept {
             }
             g_state.tooth_count      = 0u;
             g_state.snap.tooth_index = 0u;
+            advance_phase_half();
             return true;
 
         case ems::drv::SyncState::HALF_SYNC:
@@ -475,17 +485,20 @@ inline bool process_gap_event() noexcept {
                 g_state.snap.state       = ems::drv::SyncState::FULL_SYNC;
                 g_state.tooth_count      = 0u;
                 g_state.snap.tooth_index = 0u;
+                advance_phase_half();
                 return true;
             }
             // Gap prematuro: pulso espúrio (EMC, dente danificado).
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
+            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
             return false;
 
         case ems::drv::SyncState::FULL_SYNC:
             if (g_state.tooth_count >= kGapThresholdTooth) {
                 g_state.tooth_count      = 0u;
                 g_state.snap.tooth_index = 0u;
+                advance_phase_half();
                 ++ems::drv::g_dbg_gap_accepted;
                 return true;
             }
@@ -493,6 +506,7 @@ inline bool process_gap_event() noexcept {
             ems::drv::g_dbg_gap_last_tc = g_state.tooth_count;
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
+            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
             return false;
 
         default:
@@ -696,6 +710,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
             g_state.snap.state == ems::drv::SyncState::FULL_SYNC) {
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
+            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
         }
     }
 
@@ -757,8 +772,9 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     const uint32_t prev_period_ticks = g_state.prev_period_ticks;
     if (s_prev_cmp_capture != 0u && prev_period_ticks > 0u) {
         const uint32_t cmp_delta = cmp_capture_now - s_prev_cmp_capture; // circular uint32
-        // Expected: 58 teeth × tooth_period_ticks (one full crank revolution)
-        const uint32_t expected  = kRealTeethPerRev * prev_period_ticks;
+        // Expected: 2 × 58 teeth × tooth_period_ticks (one cam cycle = 720° = 2 crank revs)
+        // CMP fires once per 720°, not once per 360°.
+        const uint32_t expected  = 2u * kRealTeethPerRev * prev_period_ticks;
         // FIX C10: at cranking/low RPM the starter motor can disengage mid-revolution,
         // causing tooth period to grow 30-40%. A fixed ±25% window would reject
         // legitimate CMP edges and leave the decoder stuck in HALF_SYNC.
@@ -794,7 +810,9 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     }
 
     s_prev_cmp_capture = cmp_capture_now;
-    g_state.snap.phase_A = !g_state.snap.phase_A;
+    // CMP validated: SET phase to absolute reference (not toggle)
+    g_state.phase_half = ems::engine::cfg::kCmpRefHalf;
+    g_state.snap.phase_A = (g_state.phase_half == 0u);
     if (g_seed_probation) {
         g_seed_probation = false;
         g_seed_probation_teeth = 0u;
@@ -803,6 +821,7 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     if (g_state.cmp_confirms < 2u) {
         ++g_state.cmp_confirms;
     }
+    g_state.snap.cmp_confirms = g_state.cmp_confirms;
 }
 
 bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
@@ -825,6 +844,7 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
         g_state.snap.state   = SyncState::LOSS_OF_SYNC;
         g_state.snap.rpm_x10 = 0u;
         g_state.tooth_count  = 0u;
+        g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
     }
     exit_critical();
     return true;
