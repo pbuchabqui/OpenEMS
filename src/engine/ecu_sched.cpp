@@ -911,7 +911,9 @@ static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
     g_angle_tooth_mask_hi = 0U;
 
     const uint32_t dwell_deg = ticks_to_cycle_degrees(g_dwell_ticks, snap.tooth_period_ns, 360U);
-    const uint32_t inj_pw_deg = ticks_to_cycle_degrees(g_inj_pw_ticks, snap.tooth_period_ns, 360U);
+    // Presync fires each injector once per 360° rev (2× per 720° cycle).
+    // Halve the per-cycle PW so each event delivers half the intended dose.
+    const uint32_t inj_pw_deg = ticks_to_cycle_degrees(g_inj_pw_ticks / 2U, snap.tooth_period_ns, 360U);
     const uint32_t spark = (360U - (g_advance_deg % 360U)) % 360U;
     const uint32_t dwell = (spark + 360U - dwell_deg) % 360U;
     const uint32_t inj_on = (360U - (g_soi_lead_deg % 360U)) % 360U;
