@@ -33,7 +33,7 @@ enum class AdcPrimaryChannel : uint8_t {
     KNOCK     = 3,  // PA5 / INP19
     APP1      = 4,  // PC0 / INP10
     APP2      = 5,  // PC2 / INP12
-    ETB_TPS1  = 6,  // PC4 / INP4
+    ETB_TPS1  = 6,  // PA2 / INP14
     ETB_TPS2  = 7,  // PC5 / INP8
 };
 
