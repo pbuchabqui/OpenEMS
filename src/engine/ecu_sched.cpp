@@ -213,6 +213,8 @@ volatile uint32_t g_dbg_presync_count = 0U;
 volatile uint32_t g_dbg_phase_skip = 0U;
 volatile uint32_t g_dbg_phase_fire = 0U;
 volatile uint32_t g_dbg_seq_calls = 0U;
+volatile uint32_t g_dbg_inj1_arm = 0U;  // arm_channel calls for INJ1
+volatile uint32_t g_dbg_ign1_arm = 0U;  // arm_channel calls for IGN1
 
 // ── Absolute-timestamp event scheduler (TIM5_CH3 dispatcher) ────────────
 // Events are timestamped in the TIM5 32-bit domain (62.5 MHz = 16 ns/tick).
@@ -543,6 +545,8 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
 
     const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
+    if (ch == ECU_CH_INJ1) { ++g_dbg_inj1_arm; }
+    if (ch == ECU_CH_IGN1) { ++g_dbg_ign1_arm; }
 
     // Dwell watchdog tracking (ignition channels only)
     if (is_inj == 0U && tim_ch != 0U) {

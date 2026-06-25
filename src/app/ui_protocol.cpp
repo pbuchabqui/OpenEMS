@@ -764,8 +764,8 @@ inline void parse_byte(uint8_t b) noexcept {
             extern volatile uint32_t g_dbg_tim1cc_isr_count __asm("g_dbg_tim1cc_isr_count");
             extern volatile uint32_t g_dbg_inj_force_early __asm("g_dbg_inj_force_early");
             extern volatile uint32_t g_dbg_ign_force_early __asm("g_dbg_ign_force_early");
-            extern volatile uint32_t g_dbg_phase_fire __asm("g_dbg_phase_fire");
-            extern volatile uint32_t g_dbg_seq_calls __asm("g_dbg_seq_calls");
+            extern volatile uint32_t g_dbg_inj1_arm __asm("g_dbg_inj1_arm");
+            extern volatile uint32_t g_dbg_ign1_arm __asm("g_dbg_ign1_arm");
             extern volatile uint32_t g_dbg_evt_overflow __asm("g_dbg_evt_overflow");
             extern volatile uint32_t g_dbg_tc_gap __asm("_ZN3ems3drv12g_dbg_tc_gapE");
             extern volatile uint32_t g_dbg_tc_spike __asm("_ZN3ems3drv14g_dbg_tc_spikeE");
@@ -778,8 +778,8 @@ inline void parse_byte(uint8_t b) noexcept {
             const uint32_t diag[8] = {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
-                g_dbg_phase_fire,
-                g_dbg_seq_calls,
+                g_dbg_inj1_arm,
+                g_dbg_ign1_arm,
                 g_dbg_evt_overflow,
                 g_dbg_clear_all_count,
                 g_dbg_presync_count,

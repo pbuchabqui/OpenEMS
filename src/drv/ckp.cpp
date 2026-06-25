@@ -208,6 +208,8 @@ struct DecoderState {
     uint16_t tooth_count;               // dentes desde o último gap aceito
     uint8_t  cmp_confirms;              // confirmações do cam sensor (CH1)
     uint8_t  phase_half;               // 0/1: which 360° half of the 720° cycle (toggles at each gap)
+    uint8_t  cmp_phase_pending;       // 1 = CMP validated, apply kCmpRefHalf at next gap instead of toggle
+    uint8_t  cmp_ref_value;           // the value to SET at next gap (= kCmpRefHalf XOR 1, pre-toggle)
     uint32_t cmp_glitch_count;          // FIX P0: contador de glitches CMP rejeitados (diagnóstico)
     uint16_t consecutive_anomalies;     // gaps+spikes seguidos — re-bootstrap se histórico defasar
 };
@@ -231,6 +233,8 @@ static DecoderState g_state = {
     0u,
     0u,   // cmp_confirms
     0u,   // phase_half
+    0u,   // cmp_phase_pending
+    0u,   // cmp_ref_value
     0u,   // cmp_glitch_count
 };
 // FIX-5: volatile nas variáveis escritas pela ISR TIM5 (prio 1) e lidas pelo
@@ -432,8 +436,15 @@ inline bool is_forward_rotation_coherent(uint32_t period_ns) noexcept {
 // last_tim5_capture já foi escrito pela ISR (linha antes de is_gap) para todos os
 // eventos válidos — não precisa ser repetido aqui. process_gap_event foca apenas
 // nas transições de estado e nos resets de contagem/índice.
-// Toggle phase half and propagate to snapshot. Called on every accepted gap (=360°).
+// Advance phase at each accepted gap (=360°).
+// If CMP validated since last gap, SET to reference value instead of toggle.
 static inline void advance_phase_half() noexcept {
+    if (g_state.cmp_phase_pending != 0u) {
+        // CMP arrived since last gap — SET to pre-toggle value so that
+        // after the XOR below, phase_half lands on kCmpRefHalf.
+        g_state.phase_half = g_state.cmp_ref_value;
+        g_state.cmp_phase_pending = 0u;
+    }
     g_state.phase_half ^= 1u;
     g_state.snap.phase_A = (g_state.phase_half == 0u);
 }
@@ -810,9 +821,10 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     }
 
     s_prev_cmp_capture = cmp_capture_now;
-    // CMP validated: SET phase to absolute reference (not toggle)
-    g_state.phase_half = ems::engine::cfg::kCmpRefHalf;
-    g_state.snap.phase_A = (g_state.phase_half == 0u);
+    // CMP validated: defer phase correction to next gap to avoid mid-revolution split.
+    // Store pre-toggle value: after XOR in advance_phase_half, result = kCmpRefHalf.
+    g_state.cmp_phase_pending = 1u;
+    g_state.cmp_ref_value = ems::engine::cfg::kCmpRefHalf ^ 1u;
     if (g_seed_probation) {
         g_seed_probation = false;
         g_seed_probation_teeth = 0u;
