@@ -210,6 +210,9 @@ volatile uint32_t g_dbg_inj_force_early = 0U;
 volatile uint32_t g_dbg_ign_force_early = 0U;
 volatile uint32_t g_dbg_clear_all_count = 0U;
 volatile uint32_t g_dbg_presync_count = 0U;
+volatile uint32_t g_dbg_phase_skip = 0U;
+volatile uint32_t g_dbg_phase_fire = 0U;
+volatile uint32_t g_dbg_seq_calls = 0U;
 
 // ── Absolute-timestamp event scheduler (TIM5_CH3 dispatcher) ────────────
 // Events are timestamped in the TIM5 32-bit domain (62.5 MHz = 16 ns/tick).
@@ -1056,6 +1059,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
             calculate_presync_revolution(snap);
         } else {
             if (g_hook_schedule_this_gap != 0U) {
+                ++g_dbg_seq_calls;
                 Calculate_Sequential_Cycle(snap);
                 g_hook_schedule_this_gap = 0U;
             } else {
@@ -1078,7 +1082,8 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         for (uint8_t i = 0U; i < g_angle_table_count; ++i) {
             const AngleEvent_t *e = &g_angle_table[i];
             if (e->tooth_index != tooth_index) { continue; }
-            if ((e->phase_A != ECU_PHASE_ANY) && (e->phase_A != current_phase)) { continue; }
+            if ((e->phase_A != ECU_PHASE_ANY) && (e->phase_A != current_phase)) { ++g_dbg_phase_skip; continue; }
+            ++g_dbg_phase_fire;
             arm_channel(e->channel, now + ((e->sub_frac_x256 * tooth_ticks) >> 8U), e->action);
         }
     }
