@@ -113,6 +113,7 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept;
 #if defined(EMS_HOST_TEST)
 void     ckp_test_reset() noexcept;
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept;
+void     ckp_test_set_cmp_confirms(uint8_t n) noexcept;
 #endif
 
 }  // namespace ems::drv

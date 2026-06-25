@@ -74,6 +74,8 @@
 volatile uint32_t ems_test_tim5_ccr1  = 0u;
 volatile uint32_t ems_test_tim5_ccr2  = 0u;
 volatile uint32_t ems_test_cam_gpio_idr = 0u;
+volatile uint32_t ems_test_tim5_cnt   = 0u;
+#define TIM5_CNT ems_test_tim5_cnt
 #endif
 
 // FASTRUN coloca ISRs críticas em SRAM (zero cache miss).
@@ -918,6 +920,10 @@ void ckp_test_reset() noexcept {
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {
     return rpm_x10_from_period_ns(period_ns);
+}
+void ckp_test_set_cmp_confirms(uint8_t n) noexcept {
+    g_state.cmp_confirms = n;
+    g_state.snap.cmp_confirms = n;
 }
 #endif
 

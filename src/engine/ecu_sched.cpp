@@ -136,6 +136,19 @@ static uint32_t ems_test_gpio_ospeedr;
 #define TIM_CCER_CC4E 0x1000U
 static inline void gpio_set_af(volatile uint32_t*, volatile uint32_t*, volatile uint32_t*,
                                volatile uint32_t*, uint8_t, uint8_t) noexcept {}
+
+// TIM5 event-scheduler stubs (absolute-timestamp dispatcher)
+static uint32_t ems_test_tim5_ccr3 = 0u;
+static uint32_t ems_test_tim5_sr   = 0u;
+static uint32_t ems_test_tim5_dier = 0u;
+static uint32_t ems_test_tim5_cnt  = 0u;
+static uint32_t ems_test_gpioc_bsrr = 0u;
+static uint32_t ems_test_gpioe_bsrr = 0u;
+#define TIM5_CCR3   ems_test_tim5_ccr3
+#define TIM5_SR     ems_test_tim5_sr
+#define TIM5_DIER   ems_test_tim5_dier
+#define TIM5_CNT    ems_test_tim5_cnt
+#define STM32_REG32(addr) (*reinterpret_cast<volatile uint32_t*>(&ems_test_gpioc_bsrr))
 #endif
 
 #define ECU_CHANNELS      8U
@@ -1202,6 +1215,14 @@ void ecu_sched_test_reset(void)
     g_ign_inhibit_mask = 0U;
     g_mspark_count = 0U; g_mspark_inter_dwell_ticks = 0U; g_mspark_atdc_limit_deg = 18U;
     for (uint8_t i = 0U; i < 4U; ++i) { g_cc_pending_inj[i] = 0U; g_cc_pending_ign[i] = 0U; }
+    // Reset dwell watchdog state
+    for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; g_dwell_wdog_ticks[i] = 0U; }
+    g_dwell_watchdog_count = 0U;
+    g_inj_pw_override = 0U;
+    // Reset TIM5 event queue
+    g_evt_count = 0U; g_evt_armed = 0U;
+    for (uint8_t i = 0U; i < EVT_QUEUE_SIZE; ++i) { g_evt_queue[i].valid = 0U; }
+    ems_test_tim5_ccr3 = 0U; ems_test_tim5_sr = 0U; ems_test_tim5_dier = 0U; ems_test_tim5_cnt = 0U;
 }
 uint8_t ecu_sched_test_angle_table_size(void) { return g_angle_table_count; }
 uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *sub_frac, uint8_t *ch, uint8_t *action, uint8_t *phase)
@@ -1231,6 +1252,7 @@ void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim3_inj_cnt 
 void ecu_sched_test_reset_ccr(void) noexcept {
     ems_test_tim1_ign_ccr1 = 0u; ems_test_tim1_ign_ccr2 = 0u;
     ems_test_tim1_ign_ccr3 = 0u; ems_test_tim1_ign_ccr4 = 0u;
+    ems_test_tim5_ccr3 = 0u; g_evt_count = 0U; g_evt_armed = 0U;
 }
 uint32_t ecu_sched_test_get_tim1_ccr(uint8_t ch) noexcept {
     switch (ch) {
@@ -1241,4 +1263,8 @@ uint32_t ecu_sched_test_get_tim1_ccr(uint8_t ch) noexcept {
         default: return 0u;
     }
 }
+// TIM5 event-queue accessors for tests
+uint8_t  ecu_sched_test_get_evt_count(void) noexcept { return g_evt_count; }
+uint32_t ecu_sched_test_get_tim5_ccr3(void)  noexcept { return ems_test_tim5_ccr3; }
+void     ecu_sched_test_set_tim5_cnt(uint32_t v) noexcept { ems_test_tim5_cnt = v; }
 #endif

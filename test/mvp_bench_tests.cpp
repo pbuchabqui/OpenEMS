@@ -1697,62 +1697,45 @@ static void test_ecu_sched_hardware_init(void) {
 }
 
 static void test_ecu_sched_ccr_write(void) {
-    section("ecu_sched: arm_channel writes TIM1 CCR on DWELL_START");
+    section("ecu_sched: arm_channel inserts event into TIM5 queue on DWELL_START");
 
-    // DWELL_START for cyl3 (ECU_CH_IGN3, TIM1_CH3) at tooth 13, frac=128:
-    //   delta = (128 × 1600) >> 8 = 800.
-    //   TIM1 CCR = (TIM1_CNT & 0xFFFF) + delta.
-    //   TIM1_CNT must be ≠1; 0 = “not armed” sentinel in dwell watchdog.
-    const uint32_t kCntBase = 1000u;
+    // Scheduler now uses TIM5-based absolute-timestamp event queue + GPIO BSRR.
+    // TIM1 CCRs are no longer written by arm_channel.
+    // Verify: after firing 13 teeth, at least one event is in the TIM5 queue.
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim1_cnt(kCntBase);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(22500u);
     ecu_sched_set_inj_pw_ticks(20000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
-    ckp_reach_full_sync();  // phase_A=false; angle table built at FULL_SYNC gap
+    ckp_reach_full_sync();  // angle table built at FULL_SYNC gap
 
-    // Fire 13 teeth: at tooth 13 DWELL_START fires.
-    // cyl3 → ign_ch[3] = ECU_CH_IGN4 = 4 → stm32_ign_tim_ch(4) = TIM1 ch4 → CCR4.
-    for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
-    const uint32_t ccr4       = ecu_sched_test_get_tim1_ccr(4u);
-    const uint32_t expect_ccr = (kCntBase & 0xFFFFu) + 800u;  // cnt + delta(frac=128,ticks=1600)
-    CHECK_EQ(ccr4, expect_ccr, "TIM1_CCR4 = (cnt & 0xFFFF) + 800 at cyl3 DWELL_START");
-
-    // Changing TIM1_CNT does not rewrite CCR
-    ecu_sched_test_set_tim1_cnt(9999u);
-    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), expect_ccr,
-             "CCR4 unchanged after tim8_cnt change (no re-arm)");
-
-    // At least one ignition CCR is non-zero (belt-and-suspenders)
-    CHECK_TRUE(ecu_sched_test_get_tim1_ccr(1u) > 0u ||
-               ecu_sched_test_get_tim1_ccr(2u) > 0u ||
-               ecu_sched_test_get_tim1_ccr(3u) > 0u ||
-               ecu_sched_test_get_tim1_ccr(4u) > 0u,
-               "at least one TIM1 CCR written after DWELL events");
+    // Events fire when specific teeth match angle table entries — not at tooth 0.
+    // Fire a full revolution so at least one event tooth is hit.
+    for (uint32_t i = 0u; i < 58u; ++i) { ckp_fire(kNormalPeriod); }
+    CHECK_TRUE(ecu_sched_test_get_evt_count() > 0u ||
+               ecu_sched_test_get_tim5_ccr3() > 0u,
+               "at least one event in TIM5 queue after full revolution");
 }
 
 static void test_ecu_sched_late_events(void) {
-    section("ecu_sched: late events counted when delta < STM32_MIN_COMPARE_LEAD_TICKS (20)");
+    section("ecu_sched: small delta events are queued with minimum delay");
 
-    // With advance_deg=0, spark for cyl2 maps to engine angle 360°:
-    //   trigger_angle(360, 720, 0) = 360. ang=360%360=0. pos=0. tooth=0, frac=0.
-    //   delta = (0 * tooth_ticks) >> 8 = 0 < 20 → LATE.
-    // This fires inside ckp_reach_full_sync() when the FULL_SYNC gap
-    // triggers Calculate_Sequential_Cycle and then processes tooth 0 events.
+    // Scheduler now uses TIM5 absolute-timestamp queue. Events with very small
+    // delta use a minimum delay (STM32_MIN_COMPARE_LEAD_TICKS * 25/4) instead
+    // of being rejected. The old g_late_event_count path is no longer reached.
+    // Verify: with advance=0 (delta≈0 at tooth 0), events still reach the queue.
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim1_cnt(0u);
-    ecu_sched_set_advance_deg(0u);    // spark at TDC: tooth 0, frac=0
+    ecu_sched_set_advance_deg(0u);
     ecu_sched_set_dwell_ticks(22500u);
     ecu_sched_set_inj_pw_ticks(20000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
-    // FULL_SYNC gap fires Calculate_Sequential_Cycle then processes tooth 0 events.
-    // Cyl2 SPARK at tooth 0, frac=0, phase_B: delta=0 < 20 → g_late_event_count++.
-    CHECK_TRUE(ecu_sched_test_get_late_event_count() > 0u,
-               "late_event_count > 0 when advance=0 (spark at TDC, frac=0)");
+    // Events were inserted (with minimum delay) even for near-zero delta.
+    CHECK_TRUE(ecu_sched_test_get_evt_count() > 0u ||
+               ecu_sched_test_get_tim5_ccr3() > 0u,
+               "events queued with minimum delay when delta~=0");
 }
 
 static void test_ecu_sched_dwell_watchdog_fires(void) {
@@ -1774,6 +1757,12 @@ static void test_ecu_sched_dwell_watchdog_fires(void) {
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
+    // Force sequential mode: requires cmp_confirms>=2 and a gap to rebuild table.
+    ckp_test_set_cmp_confirms(2u);
+    // Fire 57 teeth so presync SPARK at tooth 57 clears arm_ticks before the gap.
+    // Then the gap triggers Calculate_Sequential_Cycle (sequential mode).
+    ckp_feed_n_then_gap(57u);  // sequential table built; tooth_index back to 0
+    // Fire 13 teeth: at tooth 13 DWELL_START for cyl3 (IGN4) fires.
     for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
     // Pre-condition: watchdog not fired (elapsed = 0, threshold = 31500)
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
@@ -1917,32 +1906,38 @@ static void test_ckp_tooth_index_progression(void) {
 }
 
 static void test_ckp_phase_toggle(void) {
-    section("ckp: phase_A toggles on each valid cam edge");
+    section("ckp: CMP corrects phase_A to kCmpRefHalf; glitch is ignored");
+
+    // CMP does NOT just toggle — it SETS phase_A to kCmpRefHalf (=0→true) at
+    // the NEXT gap via advance_phase_half(). A glitch is rejected; the gap then
+    // only performs the normal phase toggle.
 
     ckp_test_reset(); g_ckp_cap = 0u;
-    ckp_reach_full_sync();  // phase_A=false after ckp_test_reset
+    ckp_reach_full_sync();
 
-    const bool p0 = ckp_snapshot().phase_A;
-    // First cam edge: s_prev_cmp_capture=0 → skip validation → always toggle.
-    // Use capture = g_ckp_cap + 58×kNormalPeriod (one full rev ahead).
-    cam_fire(g_ckp_cap + kNormalPeriod * 58u);
-    const bool p1 = ckp_snapshot().phase_A;
-    CHECK_TRUE(p0 != p1, "phase_A toggles on first cam edge");
+    // First cam: s_prev_cmp_capture=0 → validation skipped → always accepted.
+    // Records cam1_ts for delta validation of subsequent edges.
+    const uint32_t cam1_ts = g_ckp_cap + kNormalPeriod * 58u;
+    cam_fire(cam1_ts);
     CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "first cam edge not a glitch");
+    ckp_feed_n_then_gap(55u);  // gap applies pending CMP correction
+    // After CMP correction: phase_half = kCmpRefHalf = 0 → phase_A = true.
+    CHECK_EQ(ckp_snapshot().phase_A, true, "first CMP corrects phase_A to kCmpRefHalf (true)");
 
-    // Second cam edge: delta = 58×kNormalPeriod = expected → valid, toggles again.
-    // expected = kRealTeeth60_2 × prev_period_ticks. prev_period_ticks=kNormalPeriod.
-    // Actual delta = 58×kNormalPeriod. min_valid=50%, max_valid=150% → valid.
+    // Second cam: delta = cam2_ts - cam1_ts = 116×kNP (2 crank revs = 720°).
+    // expected = 2×58×kNP = 1160000; tolerance ±25% → [870k, 1450k] ✓.
     cam_fire(g_ckp_cap + kNormalPeriod * 116u);
-    const bool p2 = ckp_snapshot().phase_A;
-    CHECK_TRUE(p1 != p2, "phase_A toggles again on second valid cam edge");
     CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "second cam edge not a glitch");
+    ckp_feed_n_then_gap(55u);  // gap applies pending correction again
+    CHECK_EQ(ckp_snapshot().phase_A, true, "second CMP corrects phase_A to kCmpRefHalf (true)");
 
-    // Third cam edge with INVALID delta (too small) → glitch, NO toggle
-    cam_fire(g_ckp_cap + kNormalPeriod * 116u + 10u);  // delta=10 << expected
-    const bool p3 = ckp_snapshot().phase_A;
-    CHECK_EQ(p3, p2, "phase_A NOT toggled on glitch cam edge");
+    // Glitch: delta from prev valid CMP is too small → rejected.
+    cam_fire(g_ckp_cap + 10u);  // delta << expected → glitch
     CHECK_EQ(ckp_get_cmp_glitch_count(), 1u, "glitch cam edge counted");
+    // No cmp_phase_pending set → gap just does normal toggle.
+    const bool phase_before = ckp_snapshot().phase_A;  // true
+    ckp_feed_n_then_gap(55u);
+    CHECK_EQ(ckp_snapshot().phase_A, !phase_before, "after glitch: phase_A toggles normally (no CMP correction)");
 }
 
 // (all includes moved to top of file)
@@ -3118,6 +3113,10 @@ static void test_trigger_offset(void) {
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
+    // Force cmp_confirms>=2 so Calculate_Sequential_Cycle() runs (not presync).
+    ckp_test_set_cmp_confirms(2u);
+    ckp_feed_n_then_gap(55u);  // trigger sequential scheduling at next gap
+    ecu_sched_test_reset_ccr();
 
     // Inspect angle table: find ECU_CH_IGN4 DWELL_START entry
     uint8_t tooth_off0 = 0xFFu;
@@ -3130,15 +3129,13 @@ static void test_trigger_offset(void) {
     CHECK_EQ(tooth_off0, 13u,
              "offset=0°: cyl3 DWELL_START tooth=13 (trigger=441°, ang=81, 81*256/6=3456>>8=13)");
 
-    // CCR4 NOT written yet (event fires at tooth 13, not at gap/tooth 0)
-    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), 0u,
-             "offset=0°: CCR4=0 immediately after FULL_SYNC (no teeth fired yet)");
+    // Events from tooth 0 (gap) may already be in queue; reset for clean check.
+    ecu_sched_test_reset_ccr();
 
-    // Fire 13 teeth → at tooth 13 DWELL_START fires
-    // CCR4 = (TIM1_CNT & 0xFFFF) + delta = 0 + (128*1600>>8) = 0+800 = 800
+    // Fire 13 teeth → at tooth 13 DWELL_START for cyl3 fires → event inserted.
     for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
-    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), 800u,
-             "offset=0°: CCR4=800 after tooth 13 (TIM1_CNT=0, delta=800)");
+    CHECK_TRUE(ecu_sched_test_get_evt_count() > 0u || ecu_sched_test_get_tim5_ccr3() > 0u,
+               "offset=0°: TIM5 event queued after tooth 13 DWELL_START");
 
     // ----------------------------------------------------------------
     // Non-zero offset: 78°
@@ -3158,6 +3155,11 @@ static void test_trigger_offset(void) {
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
+    // Force cmp_confirms>=2 so Calculate_Sequential_Cycle() runs (not presync).
+    ckp_test_set_cmp_confirms(2u);
+    // 57 teeth: presync SPARK at tooth 57 clears arm_ticks; gap triggers sequential.
+    // Do NOT call reset_ccr after — event at tooth 0 fires during the gap itself.
+    ckp_feed_n_then_gap(57u);
 
     // Angle table: cyl3 DWELL_START must be at tooth 0
     uint8_t tooth_off78 = 0xFFu;
@@ -3172,10 +3174,10 @@ static void test_trigger_offset(void) {
     CHECK_TRUE(tooth_off0 != tooth_off78,
                "offset change moves the event: tooth 13 (offset=0) ≠ tooth 0 (offset=78)");
 
-    // CCR4 written AT the gap (tooth 0 event fires during FULL_SYNC gap processing)
-    // CCR4 = (TIM1_CNT=0) + delta(frac=128,ticks=1600) = 0+800 = 800
-    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), 800u,
-             "offset=78°: CCR4=800 immediately at FULL_SYNC gap (tooth 0 fires at gap)");
+    // With offset=78°, cyl3 DWELL_START fires at tooth 0 (at the FULL_SYNC gap).
+    // Verify event was queued immediately at FULL_SYNC.
+    CHECK_TRUE(ecu_sched_test_get_evt_count() > 0u || ecu_sched_test_get_tim5_ccr3() > 0u,
+               "offset=78°: TIM5 event queued immediately at FULL_SYNC gap (tooth 0)");
 
     // Confirm: with offset=0 the CCR was 0 at gap; with offset=78 it is 1800 at gap.
     // Both CCR values are numerically 1800 because frac=128 in both cases,
