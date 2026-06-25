@@ -95,6 +95,7 @@ uint8_t ecu_sched_get_ign_inhibit_mask(void);
 void ecu_sched_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_ivc_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
+void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 
 #if defined(EMS_HOST_TEST)
 void ecu_sched_test_reset(void);

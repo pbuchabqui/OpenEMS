@@ -377,6 +377,8 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM5_ARR   STM32_REG32(TIM5_BASE + TIM_ARR_OFF)
 #define TIM5_CCR1  STM32_REG32(TIM5_BASE + TIM_CCR1_OFF)  // CKP timestamp travado
 #define TIM5_CCR2  STM32_REG32(TIM5_BASE + TIM_CCR2_OFF)  // CMP timestamp travado
+#define TIM5_CCMR2 STM32_REG32(TIM5_BASE + TIM_CCMR2_OFF)
+#define TIM5_CCR3  STM32_REG32(TIM5_BASE + TIM_CCR3_OFF)  // Event dispatcher compare
 #define TIM5_EGR   STM32_REG32(TIM5_BASE + TIM_EGR_OFF)
 
 // TIM8 — advanced timer (kept for reference; ignition migrated to TIM1 on LQFP100)
@@ -795,7 +797,8 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 // IRQ_COMP1 is intentionally undefined; update knock.cpp when hardware is known.
 #define IRQ_TIM2         45u   // TIM2 global (injection output compare)
 #define IRQ_TIM5         48u   // TIM5 global (CKP input capture)
-#define IRQ_TIM3         46u   // TIM3 (PWM wastegate — não usa IRQ)
+#define IRQ_TIM1_CC      44u   // TIM1 capture/compare (ignition OC match)
+#define IRQ_TIM3         46u   // TIM3 global (injection OC match)
 #define IRQ_TIM4         47u   // TIM4 (PWM VVT — não usa IRQ)
 #define IRQ_ADC1         37u   // ADC1 (IRQ separado do ADC2)
 #define IRQ_ADC2         69u   // ADC2 (IRQ separado do ADC1)

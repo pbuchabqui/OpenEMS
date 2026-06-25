@@ -1,0 +1,8 @@
+docs/
+*.pdf
+*.md
+.claude/
+tools/esp32_stimulator/
+tools/hil_test/
+tools/openems_dash/static/uplot.min.js
+test/

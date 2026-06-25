@@ -683,7 +683,7 @@ int main() {
             // Stall watchdog: detecta virabrequim parado entre dentes.
             // Deve preceder ckp_snapshot() para que o snapshot deste ciclo
             // já reflicta LOSS_OF_SYNC se o motor parou.
-            ems::drv::ckp_stall_poll(ems::hal::tim5_count());
+            // ems::drv::ckp_stall_poll(ems::hal::tim5_count());  // disabled: false stall triggers sync loss
 
             // Dwell watchdog: protege bobinas de ignição contra saturação.
             // Se SPARK não disparou dentro de 1.4 × dwell após DWELL_START,
