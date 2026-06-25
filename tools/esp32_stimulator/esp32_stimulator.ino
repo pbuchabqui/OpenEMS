@@ -209,6 +209,14 @@ static rmt_encoder_handle_t g_ckp_enc  = nullptr;
 static rmt_symbol_word_t    g_ckp_sym[kRealTeeth];
 static volatile uint32_t    g_ckp_rpm_active = 0u;
 
+// ── CMP via 2nd RMT channel (1 pulse per 720° = 2 crank revolutions) ─────
+// Pattern: 116 symbols (2×58 teeth). All LOW except one HIGH pulse at
+// kCmpTooth of the 1st revolution. Runs in lockstep with CKP channel.
+static constexpr int kCmpSymCount = kRealTeeth * 2;  // 116 symbols = 720°
+static rmt_channel_handle_t g_cmp_chan = nullptr;
+static rmt_encoder_handle_t g_cmp_enc  = nullptr;
+static rmt_symbol_word_t    g_cmp_sym[kCmpSymCount];
+
 // liveness para o status (estimativa, não crítica)
 static volatile uint32_t g_rev_count = 0u;
 static uint32_t          g_rev_accum_ms = 0u;
@@ -228,39 +236,84 @@ static void build_ckp_pattern(uint32_t rpm) {
     g_ckp_sym[kRealTeeth - 1].level1 = 0; g_ckp_sym[kRealTeeth - 1].duration1 = (uint16_t)gap_low;
 }
 
-static void ckp_transmit() {
+static void build_cmp_pattern(uint32_t rpm) {
+    if (rpm < kRpmMin) rpm = kRpmMin;
+    const uint32_t T = 60000000UL / (rpm * 60UL);
+    const uint16_t h = (uint16_t)(T / 2u);
+    const uint16_t l = (uint16_t)(T - (T / 2u));
+    uint32_t gap_low = (uint32_t)l + 2u * T;
+    if (gap_low > kRmtMaxDur) gap_low = kRmtMaxDur;
+    // Build 116 symbols: 2 full revolutions, matching CKP timing exactly.
+    // CMP stays LOW except for a single HIGH pulse at kCmpTooth of rev 0.
+    for (int rev = 0; rev < 2; rev++) {
+        for (int i = 0; i < kRealTeeth; i++) {
+            const int idx = rev * kRealTeeth + i;
+            const bool is_gap_tooth = (i == kRealTeeth - 1);
+            const bool is_cmp_pulse = (rev == 0 && i == kCmpTooth);
+            g_cmp_sym[idx].level0 = is_cmp_pulse ? 1 : 0;  // HIGH only at CMP tooth
+            g_cmp_sym[idx].duration0 = h;
+            g_cmp_sym[idx].level1 = 0;
+            g_cmp_sym[idx].duration1 = is_gap_tooth ? (uint16_t)gap_low : l;
+        }
+    }
+}
+
+static void transmit_both() {
     rmt_transmit_config_t txcfg = {};
-    txcfg.loop_count = -1;  // loop infinito (hardware)
+    txcfg.loop_count = -1;
     rmt_transmit(g_ckp_chan, g_ckp_enc, g_ckp_sym, sizeof(g_ckp_sym), &txcfg);
+    rmt_transmit(g_cmp_chan, g_cmp_enc, g_cmp_sym, sizeof(g_cmp_sym), &txcfg);
 }
 
 static void ckp_set_rpm(uint32_t rpm) {
+    if (rpm < kRpmMin) rpm = kRpmMin;
+    if (rpm > kRpmMax) rpm = kRpmMax;
     if (rpm == g_ckp_rpm_active) return;
     build_ckp_pattern(rpm);
-    rmt_disable(g_ckp_chan);            // aborta o loop atual (encoder fica mid-símbolo)
-    rmt_encoder_reset(g_ckp_enc);       // CRÍTICO: reposiciona o copy-encoder no início
+    build_cmp_pattern(rpm);
+    // Stop both channels, reset encoders, restart in lockstep
+    rmt_disable(g_ckp_chan);
+    rmt_disable(g_cmp_chan);
+    rmt_encoder_reset(g_ckp_enc);
+    rmt_encoder_reset(g_cmp_enc);
     rmt_enable(g_ckp_chan);
-    ckp_transmit();
+    rmt_enable(g_cmp_chan);
+    transmit_both();
     g_ckp_rpm_active = rpm;
 }
 
 static void ckp_init() {
-    rmt_tx_channel_config_t cfg = {};
-    cfg.gpio_num        = CKP_GPIO;
-    cfg.clk_src         = RMT_CLK_SRC_DEFAULT;
-    cfg.resolution_hz   = kRmtResHz;
-    cfg.mem_block_symbols = 64;     // 58 símbolos cabem num bloco
-    cfg.trans_queue_depth = 4;
-    ESP_ERROR_CHECK(rmt_new_tx_channel(&cfg, &g_ckp_chan));
-    rmt_copy_encoder_config_t enc = {};
-    ESP_ERROR_CHECK(rmt_new_copy_encoder(&enc, &g_ckp_enc));
-    rmt_enable(g_ckp_chan);
+    // CKP channel: 58 symbols (1 rev), 1 memory block
+    {
+        rmt_tx_channel_config_t cfg = {};
+        cfg.gpio_num        = CKP_GPIO;
+        cfg.clk_src         = RMT_CLK_SRC_DEFAULT;
+        cfg.resolution_hz   = kRmtResHz;
+        cfg.mem_block_symbols = 64;
+        cfg.trans_queue_depth = 4;
+        ESP_ERROR_CHECK(rmt_new_tx_channel(&cfg, &g_ckp_chan));
+        rmt_copy_encoder_config_t enc = {};
+        ESP_ERROR_CHECK(rmt_new_copy_encoder(&enc, &g_ckp_enc));
+    }
+    // CMP channel: 116 symbols (2 revs = 720°), 2 memory blocks
+    {
+        rmt_tx_channel_config_t cfg = {};
+        cfg.gpio_num        = CMP_GPIO;
+        cfg.clk_src         = RMT_CLK_SRC_DEFAULT;
+        cfg.resolution_hz   = kRmtResHz;
+        cfg.mem_block_symbols = 128;  // 116 symbols need 2 blocks
+        cfg.trans_queue_depth = 4;
+        ESP_ERROR_CHECK(rmt_new_tx_channel(&cfg, &g_cmp_chan));
+        rmt_copy_encoder_config_t enc = {};
+        ESP_ERROR_CHECK(rmt_new_copy_encoder(&enc, &g_cmp_enc));
+    }
+    // Build patterns and start both in lockstep
     build_ckp_pattern(g_sim.rpm);
-    ckp_transmit();
+    build_cmp_pattern(g_sim.rpm);
+    rmt_enable(g_ckp_chan);
+    rmt_enable(g_cmp_chan);
+    transmit_both();
     g_ckp_rpm_active = g_sim.rpm;
-    // CMP mantido em LOW por enquanto (FULL_SYNC usa só o crank).
-    gpio_set_direction(CMP_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(CMP_GPIO, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
