@@ -1042,15 +1042,9 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     }
     s_unsync_teeth = 0U;
 
-    // Track CMP presence: if phase_A ever changes, CMP is working
-    {
-        static uint8_t s_prev_phase = 0xFFU;
-        const uint8_t cur_phase = snap.phase_A ? 1U : 0U;
-        if (s_prev_phase != 0xFFU && cur_phase != s_prev_phase) {
-            g_cmp_phase_seen = 1U;
-        }
-        s_prev_phase = cur_phase;
-    }
+    // Cam-present gate: decoupled from phase_A (which now toggles at every gap).
+    // Requires 2 validated CMP edges since last sync loss.
+    g_cmp_phase_seen = (snap.cmp_confirms >= 2U) ? 1U : 0U;
 
     const uint8_t rev_boundary = ((g_hook_prev_valid != 0U) && (snap.tooth_index == 0U) && (g_hook_prev_tooth != 0U)) ? 1U : 0U;
     if (rev_boundary != 0U) {
