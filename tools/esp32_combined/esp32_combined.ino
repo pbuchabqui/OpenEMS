@@ -671,12 +671,50 @@ void setup() {
 
 static uint32_t g_last_live_ms = 0;
 
+// Line buffer for text commands (e.g. "RPM 800\n" from hil_test.py)
+static char g_line[64];
+static int  g_line_pos = 0;
+
+static void parse_text_cmd(const char* raw) {
+    char buf[64];
+    int  len = 0;
+    while (raw[len] && len < 63) { buf[len] = raw[len]; len++; }
+    buf[len] = '\0';
+    for (int i = 0; i < len; ++i)
+        if (buf[i] >= 'a' && buf[i] <= 'z') buf[i] -= 32;
+
+    char cmd[16] = {};
+    int  val = 0;
+    const bool has_val = (sscanf(buf, "%15s %d", cmd, &val) >= 2);
+
+    if (strcmp(cmd, "RPM") == 0 && has_val) {
+        g_rpm = (uint32_t)constrain(val, (int)kRpmMin, (int)kRpmMax);
+        Serial.printf("  [GEN] RPM=%lu\n", (unsigned long)g_rpm);
+    }
+    // MAP/TPS/CLT/IAT/APP/FUEL/OIL/ETB: accepted silently (no DAC/PWM in combined)
+}
+
 void loop() {
     process_events();
 
-    if (Serial.available()) {
+    while (Serial.available()) {
         const char c = (char)Serial.read();
 
+        // Accumulate text commands terminated by '\n' or '\r'
+        if (c == '\n' || c == '\r') {
+            if (g_line_pos > 0) {
+                g_line[g_line_pos] = '\0';
+                parse_text_cmd(g_line);
+                g_line_pos = 0;
+            }
+            // Also handle as single-char scope command if buffer was empty
+        } else {
+            if (g_line_pos < (int)(sizeof(g_line) - 1))
+                g_line[g_line_pos++] = c;
+        }
+
+        // Single-char commands (only when not mid-line)
+        if (g_line_pos == 1) {
         // CKP generator commands
         uint32_t new_rpm = g_rpm;
         if      (c == '+') new_rpm = min(g_rpm + 100u, kRpmMax);
@@ -714,7 +752,8 @@ void loop() {
             default: break;
         }
         g_last_live_ms = 0;  // forçar refresh no modo LIVE
-    }
+        } // end if (g_line_pos == 1)
+    } // end while Serial.available()
 
     if (g_mode == Mode::LIVE) {
         const uint32_t now = millis();
