@@ -171,10 +171,25 @@ static void timing_start() {
                               ? g_m[kCkpChan].period_us : 2000u;
     // timeout = 2 ciclos completos (2 × 60 dentes × 2 revs) + margem
     g_tm_cap.timeout_us   = g_tm_cap.ckp_period_us * 240u;
+
+    if (g_m[kCkpChan].period_us == 0) {
+        Serial.println("  AVISO: CH8 sem sinal. Ligar GPIO36 ao gerador CKP do stimulator.");
+        Serial.println("  [TIMING] Aguardar sinal CKP antes de usar 't'.");
+        g_tm_state = TmState::IDLE;
+        return;
+    }
+    // Sinal com period < 200µs (>5kHz dente = >~6000 RPM equiv) é ruído — rejeitar.
+    if (g_m[kCkpChan].period_us < 200u) {
+        Serial.printf("  ERRO: CKP period=%.3f ms parece ruído (esperado ~0.5-5 ms).\n",
+                      g_m[kCkpChan].period_us / 1000.0f);
+        Serial.println("  Verificar fio: GPIO2 stimulator → GPIO36 (VP) + PA0 STM32.");
+        g_tm_state = TmState::IDLE;
+        return;
+    }
+
     g_tm_state = TmState::WAIT_GAP1;
-    Serial.println("  [TIMING] A aguardar 1º gap CKP (CH8 loopback PA0)...");
-    if (g_m[kCkpChan].period_us == 0)
-        Serial.println("  AVISO: CH8 sem sinal. Ligar GPIO36 → PA0 do STM32.");
+    Serial.printf("  [TIMING] CKP OK (period=%.3f ms). A aguardar 1º gap...\n",
+                  g_m[kCkpChan].period_us / 1000.0f);
 }
 
 // ── ISR ───────────────────────────────────────────────────────────────────────
@@ -219,9 +234,10 @@ static void timing_feed(const EdgeEvent& ev) {
             if (is_gap) {
                 c.gap_count++;
                 if (c.gap_count == 1) {
-                    c.gap1_ts_us = ev.ts_us;
-                    c.in_cycle   = true;
-                    g_tm_state   = TmState::CAPTURE;
+                    c.gap1_ts_us       = ev.ts_us;
+                    c.last_ckp_fall_us = 0;  // reset para não reutilizar fall do gap1
+                    c.in_cycle         = true;
+                    g_tm_state         = TmState::CAPTURE;
                     Serial.printf("  [TIMING] Gap1 OK (%.2f ms) — a capturar 720°...\n",
                                   gap / 1000.0f);
                 } else if (c.gap_count == 2) {
@@ -279,8 +295,8 @@ static void timing_feed(const EdgeEvent& ev) {
 
 static void timing_report() {
     const TimingCapture& c = g_tm_cap;
-    const float T  = c.ckp_period_us / 1000.0f;          // ms/dente
     const float T720 = (c.gap2_ts_us - c.gap1_ts_us) / 1000.0f;  // ms/ciclo medido
+    const float T  = (T720 > 0.0f) ? T720 / 120.0f : c.ckp_period_us / 1000.0f;  // ms/dente
     // Inter-cilindro esperado: 720° / 4 cilindros = 180° = 30 dentes
     const float inter_exp_ms  = T * 30.0f;
     const float inter_exp_deg = 180.0f;
