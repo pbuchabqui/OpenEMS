@@ -144,7 +144,9 @@ void system_stm32_init(void) noexcept {
                              == (FLASH_ACR_LATENCY_5WS | FLASH_ACR_WRHIGHFREQ_250);
         const bool vos_ok  = (PWR_VOSSR & PWR_VOSSR_VOSRDY) != 0u
                           && (PWR_VOSSR & PWR_VOSSR_ACTVOS_MSK) == PWR_VOSSR_ACTVOS_VOS0;
-        if (pll_ok && acr_ok && vos_ok) {
+        // [DIAG] kEnablePllSwitch=true em produção; false para A/B (ficar em HSI 64 MHz).
+        constexpr bool kEnablePllSwitch = true;
+        if (kEnablePllSwitch && pll_ok && acr_ok && vos_ok) {
             RCC_CFGR1 = (RCC_CFGR1 & ~0x7u) | RCC_CFGR1_SW_PLL1;
             for (uint32_t n = 100000u; (RCC_CFGR1 & (7u << 3)) != RCC_CFGR1_SWS_PLL1; --n) {
                 if (n == 0u) { break; }  // não-fatal

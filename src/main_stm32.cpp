@@ -348,6 +348,12 @@ static inline void ui_service() noexcept {
 // Em produção fica DESATIVADO → usa o openems_init() real (ECU completa + usb_cdc_init).
 // #define MINIMAL_BOOT 1  // uncomment for USB CDC echo-only diagnostic mode
 
+// [DIAG] Waypoint em RAM crua @0x20050000 — sobrevive a reset IWDG (fora de .data/.bss).
+// O valor do boot anterior é lido via CDC no arranque seguinte para identificar onde travou.
+// Mapa: 0xA0=antes system_init, 0xA1=após, 0xA2=cpsie, 0xA3=LED, 0xA4=usb_init,
+//       0xB0=após janela USB (antes ECU inits), 0xC1..0xCF=inits ECU (ver abaixo), 0xFF=boot completo.
+#define DIAG_WP(v) (*reinterpret_cast<volatile uint32_t*>(0x20050000u) = (v))
+
 #ifdef MINIMAL_BOOT
 static void openems_init() noexcept {
     // ABSOLUTE MINIMUM TEST: kick WWDG + DPPU=1
@@ -506,24 +512,30 @@ static void openems_init() noexcept {
         }
     }
 }
+
 #else
 static void openems_init() noexcept {
     // 1) PLL → 250 MHz + SysTick 1ms + IWDG 100ms
+    DIAG_WP(0xA0u);  // antes de system_stm32_init
     system_stm32_init();
+    DIAG_WP(0xA1u);  // após system_stm32_init (PLL/SysTick/IWDG ok)
 
     // 1a) Reabilitar IRQs globais EXPLICITAMENTE. O Reset_Handler faz cpsid i e nunca
     // reabilita; antes isto só acontecia por efeito colateral do 1º cpsie de uma seção
     // crítica adiante, o que deixava a ISR do USB (e outras) mascaradas se a ordem mudasse.
     // Com SysTick já configurado em system_stm32_init(), é seguro habilitar aqui.
     __asm__ volatile("cpsie i" ::: "memory");
+    DIAG_WP(0xA2u);
 
     // 1b) PB2 (LED WeAct) como saída — heartbeat visível desde o boot.
     GPIOB_MODER = (GPIOB_MODER & ~(3u << 4u)) | (1u << 4u);
+    DIAG_WP(0xA3u);
 
     // 1c) USB CDC CEDO: só depende de clock (HSI48/CRS já prontos) + IRQs. Subir aqui,
     // antes dos inits da ECU (ADC/CAN/CKP), garante enumeração mesmo que algum init
     // adiante demore/bloqueie numa placa de bancada sem motor — a ISR cuida do resto.
     ems::hal::usb_cdc_init();
+    DIAG_WP(0xA4u);
 
     // 1d) Janela p/ a enumeração USB (ISR-driven) completar antes dos inits da ECU, que
     // podem entrar em seção crítica (cpsid i) e mascarar a ISR do USB por um tempo.
@@ -535,27 +547,72 @@ static void openems_init() noexcept {
         if ((ms % 100u) == 0u) { GPIOB_ODR ^= (1u << 2u); }
     }
 
+    DIAG_WP(0xB0u);  // após janela USB — antes dos inits ECU
+
+    // [DIAG] Relatorio CDC: RSR (causa ultimo reset) + WP anterior + estado de clock/VOS/Flash.
+    // Emitido cedo, antes das inits pesadas, para o host receber mesmo que uma init trave.
+    // Persistência em RAM garante que um hang pré-CDC é reportado no arranque seguinte.
+    {
+        const auto put_hex = [](uint8_t* dst, uint32_t v) noexcept {
+            for (uint32_t i = 0u; i < 8u; ++i) {
+                const uint32_t nib = (v >> (28u - 4u * i)) & 0xFu;
+                dst[i] = static_cast<uint8_t>(nib < 10u ? '0' + nib : 'A' + nib - 10u);
+            }
+        };
+        // "RSR=XXXXXXXX WP=XXXXXXXX CR=XXXXXXXX CF=XXXXXXXX VS=XXXXXXXX AC=XXXXXXXX\r\n"
+        uint8_t msg[80] = {
+            'R','S','R','=','?','?','?','?','?','?','?','?',
+            ' ','W','P','=','?','?','?','?','?','?','?','?',
+            ' ','C','R','=','?','?','?','?','?','?','?','?',
+            ' ','C','F','=','?','?','?','?','?','?','?','?',
+            ' ','V','S','=','?','?','?','?','?','?','?','?',
+            ' ','A','C','=','?','?','?','?','?','?','?','?',
+            '\r','\n'};
+        put_hex(&msg[4],  STM32_REG32(RCC_BASE + 0x0F4u));                         // RSR: IWDGRSTF/WWDGRSTF/etc
+        put_hex(&msg[16], *reinterpret_cast<volatile uint32_t*>(0x20050008u));     // WP do boot anterior
+        put_hex(&msg[28], RCC_CR);                                                  // HSERDY/PLL1RDY
+        put_hex(&msg[40], RCC_CFGR1);                                               // SW/SWS (qual clock ativo)
+        put_hex(&msg[52], PWR_VOSSR);                                               // VOSRDY/ACTVOS
+        put_hex(&msg[64], FLASH_ACR);                                               // LATENCY/WRHIGHFREQ
+        ems::hal::usb_cdc_send_bytes(msg, 74u);
+        // Salva WP no slot 2 (@0x20050008) para o próximo boot poder ler como "WP anterior"
+        *reinterpret_cast<volatile uint32_t*>(0x20050008u) = *reinterpret_cast<volatile uint32_t*>(0x20050000u);
+        STM32_REG32(RCC_BASE + 0x0F4u) |= (1u << 23u);  // RMVF: limpa RSR p/ próximo boot
+        // Janela 200 ms p/ host receber o relatorio (IWDG_KICK em cada ms)
+        for (uint32_t ms = 0u; ms < 200u; ++ms) {
+            for (volatile uint32_t d = 0u; d < 60000u; ++d) {}
+            iwdg_kick();
+            ems::hal::usb_cdc_poll();
+        }
+    }
+
     // 2) Timers (TIM5=CKP IC, TIM2/TIM1=OC injeção/ignição)
     // TIM3/TIM4 PWM auxiliares são inicializados em auxiliaries_init().
     // ECU_Hardware_Init() owns TIM2/TIM1 for injection/ignition scheduling.
     // misfire_init() DEVE preceder tim5_ic_init(): a tabela g_tooth_to_cyl parte de
     // BSS (zero), mas 0 é um índice de cilindro válido — o ISR do CKP leria cyl=0
     // para todos os dentes antes da tabela ser preenchida, gerando DTCs falsos.
+    DIAG_WP(0xC1u);
     ems::engine::misfire_init();
+    DIAG_WP(0xC2u);
     ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
     iwdg_kick();
 
     // 2a) Scheduler unificado
+    DIAG_WP(0xC3u);
     ::ECU_Hardware_Init();
     iwdg_kick();
 
     // 3) ADC (ADC1/ADC2 + TIM6 trigger)
+    DIAG_WP(0xC4u);
     ems::hal::adc_init();
     iwdg_kick();
 
     // 4) CAN + bench communication. MVP transport: USART1 PA9/PA10.
     // (usb_cdc_init() já foi chamado cedo em 1b, antes dos inits da ECU.)
+    DIAG_WP(0xC5u);
     ems::hal::can0_init();
+    DIAG_WP(0xC6u);
     ems::hal::uart0_init(115200u);
     ems::hal::tle8888_init();
     ems::engine::ewg_control_init();
@@ -563,6 +620,7 @@ static void openems_init() noexcept {
     iwdg_kick();
 
 	// 5) Flash Bank2 → carrega calibrações persistidas
+    DIAG_WP(0xC7u);
 	if (!ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes)) {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
@@ -578,6 +636,7 @@ static void openems_init() noexcept {
 	if (!ems::hal::nvm_load_adaptive_maps()) {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
+    DIAG_WP(0xC8u);
     {
         ems::hal::RuntimeSyncSeed seed = {};
         if (ems::hal::nvm_load_runtime_seed(&seed) &&
@@ -594,19 +653,23 @@ static void openems_init() noexcept {
     }
 
     // 6) Drivers
+    DIAG_WP(0xC9u);
     ems::drv::sensors_init();
     iwdg_kick();
 
     // 6a) Inicializa sistemas "invisíveis" ao motorista
+    DIAG_WP(0xCAu);
     ems::engine::map_estimator_init();
     ems::engine::xtau_autocalib_init();
 
     // 6b) Inicializa ETB e Torque Manager (borboleta eletrônica)
+    DIAG_WP(0xCBu);
     g_etb_initialized = etb_control_init();
     torque_manager_init();
     iwdg_kick();
 
     // 7) Engine
+    DIAG_WP(0xCCu);
     ems::engine::fuel_reset_adaptives();
     ems::engine::auxiliaries_init();
     ems::engine::knock_init();
@@ -614,12 +677,14 @@ static void openems_init() noexcept {
     iwdg_kick();
 
     // 8) Aplicação
+    DIAG_WP(0xCDu);
     ems::app::ui_init();
     ems::app::can_stack_init(ems::engine::wbo2_can_id);
 
     // 9) NVIC — CKP fica com prioridade máxima. Injeção/ignição em TIM2/TIM1
     //    usam output compare direto por hardware, sem ISR no caminho crítico.
     //    SysTick configurado em system_stm32_init() com prio 11.
+    DIAG_WP(0xCEu);
     nvic_set_priority(IRQ_TIM5, 1u);
     nvic_enable_irq(IRQ_TIM5);
 
@@ -638,6 +703,7 @@ static void openems_init() noexcept {
         }
     }
 
+    DIAG_WP(0xFFu);  // fim de openems_init — boot completo
     // Kick final antes de entrar no main loop — garante que openems_init()
     // não ultrapassa o timeout de 100 ms do IWDG.
     iwdg_kick();
