@@ -6,23 +6,24 @@
  * Latência   : 2–5 µs por bordo (ISR context)
  *
  * Sinais monitorizados:
- *   CH0 IGN0  ← PC6  TIM8_CH1  (bobina cil.0)
- *   CH1 IGN1  ← PC7  TIM8_CH2  (bobina cil.1)
- *   CH2 IGN2  ← PC8  TIM8_CH3  (bobina cil.2)
- *   CH3 IGN3  ← PC9  TIM8_CH4  (bobina cil.3)
- *   CH4 INJ0  ← PA15 TIM2_CH1  (injector cil.0)
- *   CH5 INJ1  ← PB3  TIM2_CH2  (injector cil.1)
- *   CH6 INJ2  ← PB10 TIM2_CH3  (injector cil.2)
- *   CH7 INJ3  ← PB11 TIM2_CH4  (injector cil.3)
- *   CH8 CKP   ← PA0  (loopback — ligar ao gerador CKP)
+ *   CH0 IGN0  ← PE9  TIM1_CH1  (bobina cil.1)
+ *   CH1 IGN1  ← PE11 TIM1_CH2  (bobina cil.2)
+ *   CH2 IGN2  ← PE13 TIM1_CH3  (bobina cil.3)
+ *   CH3 IGN3  ← PE14 TIM1_CH4  (bobina cil.4)
+ *   CH4 INJ0  ← PC6  TIM3_CH1  (injector cil.1)
+ *   CH5 INJ1  ← PC7  TIM3_CH2  (injector cil.2)
+ *   CH6 INJ2  ← PC8  TIM3_CH3  (injector cil.3)
+ *   CH7 INJ3  ← PC9  TIM3_CH4  (injector cil.4)
+ *   CH8 CKP   ← PA0  (loopback — ligar ao gerador CKP do stimulator)
+ *   CH9 CMP   ← PA1  (loopback — ligar GPIO4 do stimulator a GPIO39 + PA1)
  *
  * Ligações STM32H562 → ESP32:
- *   PC6  → GPIO 32    PC7  → GPIO 33
- *   PC8  → GPIO 25    PC9  → GPIO 26
- *   PA15 → GPIO 27    PB3  → GPIO 14
- *   PB10 → GPIO 12    PB11 → GPIO 13
+ *   PE9  → GPIO 32    PE11 → GPIO 33
+ *   PE13 → GPIO 25    PE14 → GPIO 26
+ *   PC6  → GPIO 27    PC7  → GPIO 14
+ *   PC8  → GPIO 12    PC9  → GPIO 13
  *   PA0  → GPIO 36    PA1  → GPIO 39   GND → GND  ← OBRIGATÓRIO
- *   (PA0=CKP loopback, PA1=CMP loopback: ligar GPIO4→GPIO39 no mesmo ESP32)
+ *   (GPIO4 do stimulator → GPIO39 ESP32 + PA1 STM32 para loopback CMP)
  *
  * Comandos série (115200 baud):
  *   l  — Live table (actualiza a cada 1 s) [default]
@@ -55,16 +56,16 @@ struct ChanDef {
 // GPIO 34-39: input-only (VP, VN, etc.) — bons para monitorização.
 // GPIO 6-11: flash SPI — NÃO usar.
 static ChanDef kChan[] = {
-    { GPIO_NUM_32, "IGN0",  "PC6",  true },
-    { GPIO_NUM_33, "IGN1",  "PC7",  true },
-    { GPIO_NUM_25, "IGN2",  "PC8",  true },
-    { GPIO_NUM_26, "IGN3",  "PC9",  true },
-    { GPIO_NUM_27, "INJ0",  "PA15", true },
-    { GPIO_NUM_14, "INJ1",  "PB3",  true },
-    { GPIO_NUM_12, "INJ2",  "PB10", true },
-    { GPIO_NUM_13, "INJ3",  "PB11", true },
-    { GPIO_NUM_36, "CKP",   "PA0",  true },  // input-only; loopback CKP
-    { GPIO_NUM_39, "CMP",   "PA1",  true },  // input-only; loopback CMP (GPIO4 do stimulator)
+    { GPIO_NUM_32, "IGN0",  "PE9",  true },   // TIM1_CH1
+    { GPIO_NUM_33, "IGN1",  "PE11", true },   // TIM1_CH2
+    { GPIO_NUM_25, "IGN2",  "PE13", true },   // TIM1_CH3
+    { GPIO_NUM_26, "IGN3",  "PE14", true },   // TIM1_CH4
+    { GPIO_NUM_27, "INJ0",  "PC6",  true },   // TIM3_CH1
+    { GPIO_NUM_14, "INJ1",  "PC7",  true },   // TIM3_CH2
+    { GPIO_NUM_12, "INJ2",  "PC8",  true },   // TIM3_CH3
+    { GPIO_NUM_13, "INJ3",  "PC9",  true },   // TIM3_CH4
+    { GPIO_NUM_36, "CKP",   "PA0",  true },   // input-only; loopback CKP
+    { GPIO_NUM_39, "CMP",   "PA1",  true },   // input-only; loopback CMP
 };
 static constexpr int kNChan = (int)(sizeof(kChan) / sizeof(kChan[0]));
 
