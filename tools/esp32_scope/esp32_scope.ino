@@ -684,6 +684,10 @@ void setup() {
     Serial.println("╚══════════════════════════════════════════╝");
     print_help();
     Serial.println("  Modo: LIVE (enviar '?' para ajuda)");
+
+    // LED onboard como heart-beat (GPIO2 no ESP32, RGB no C6)
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
 }
 
 // ── loop() ───────────────────────────────────────────────────────────────────
@@ -727,6 +731,22 @@ void loop() {
         if (now - last_wave_ms >= 500u) {
             last_wave_ms = now;
             print_waveform();
+        }
+    }
+
+    // Heartbeat LED: pulso curto a cada 2 s (indica que o scope está vivo)
+    // ESP32-C6: RGB_BUILTIN (GPIO8, WS2812 via RMT); ESP32: LED_BUILTIN (GPIO13/2)
+    {
+        static uint32_t last_hb = 0;
+        static bool     hb_on  = false;
+        const uint32_t now = millis();
+        if (!hb_on && now - last_hb >= 2000u) {
+            digitalWrite(LED_BUILTIN, HIGH);
+            hb_on    = true;
+            last_hb = now;
+        } else if (hb_on && now - last_hb >= 80u) {
+            digitalWrite(LED_BUILTIN, LOW);
+            hb_on = false;
         }
     }
 
