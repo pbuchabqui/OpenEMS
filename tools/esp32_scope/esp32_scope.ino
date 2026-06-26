@@ -21,7 +21,8 @@
  *   PC8  → GPIO 25    PC9  → GPIO 26
  *   PA15 → GPIO 27    PB3  → GPIO 14
  *   PB10 → GPIO 12    PB11 → GPIO 13
- *   PA0  → GPIO 36    GND  → GND  ← OBRIGATÓRIO
+ *   PA0  → GPIO 36    PA1  → GPIO 39   GND → GND  ← OBRIGATÓRIO
+ *   (PA0=CKP loopback, PA1=CMP loopback: ligar GPIO4→GPIO39 no mesmo ESP32)
  *
  * Comandos série (115200 baud):
  *   l  — Live table (actualiza a cada 1 s) [default]
@@ -62,7 +63,8 @@ static ChanDef kChan[] = {
     { GPIO_NUM_14, "INJ1",  "PB3",  true },
     { GPIO_NUM_12, "INJ2",  "PB10", true },
     { GPIO_NUM_13, "INJ3",  "PB11", true },
-    { GPIO_NUM_36, "CKP",   "PA0",  true },  // input-only; loopback ou directo
+    { GPIO_NUM_36, "CKP",   "PA0",  true },  // input-only; loopback CKP
+    { GPIO_NUM_39, "CMP",   "PA1",  true },  // input-only; loopback CMP (GPIO4 do stimulator)
 };
 static constexpr int kNChan = (int)(sizeof(kChan) / sizeof(kChan[0]));
 
@@ -105,13 +107,14 @@ static volatile Mode g_mode = Mode::LIVE;
 
 // ── Máquina de estados para Timing Analysis 720° ─────────────────────────────
 // Captura um ciclo completo de 720° (2 gaps CKP) e verifica:
-//   1. Cada IGN dispara exatamente 1× por ciclo de 720°
+//   1. Cada IGN/INJ dispara exatamente 1× por ciclo de 720°
 //   2. Ordem de disparo 1-3-4-2 (IGN0→IGN2→IGN3→IGN1)
-//   3. Ângulo de cada faísca vs TDC_cyl − avanço, ±0.5°
-//   4. INJ capturados no mesmo ciclo
-// CH8 (CKP loopback PA0) obrigatório.
+//   3. Inter-cilindro 180°±3°; ângulo absoluto desde gap1
+//   4. CMP (CH9) presente 1×/720° com offset esperado ~30° (kCmpTooth=5 × 6°/dente)
+// CH8 (CKP loopback PA0) e CH9 (CMP loopback GPIO39←GPIO4) obrigatórios.
 
 static constexpr int kCkpChan  = 8;
+static constexpr int kCmpChan  = 9;
 static constexpr int kIgnFirst = 0;
 static constexpr int kIgnCount = 4;
 static constexpr int kInjFirst = 4;
@@ -141,17 +144,19 @@ struct TmEvent {
 };
 
 struct TimingCapture {
-    int64_t  gap1_ts_us;                        // timestamp da RE do 1º gap
-    int64_t  gap2_ts_us;                        // timestamp da RE do 2º gap (360° depois)
+    int64_t  gap1_ts_us;
+    int64_t  gap2_ts_us;
     int64_t  last_ckp_fall_us;
-    int64_t  ign_ts_us[kIgnCount];              // 1ª FALL de cada IGN no ciclo
-    uint8_t  ign_count[kIgnCount];              // quantas vezes cada IGN disparou no ciclo
-    int64_t  inj_ts_us[kInjCount];             // 1ª FALL de cada INJ no ciclo
+    int64_t  ign_ts_us[kIgnCount];
+    uint8_t  ign_count[kIgnCount];
+    int64_t  inj_ts_us[kInjCount];
     uint8_t  inj_count[kInjCount];
+    int64_t  cmp_ts_us;   // 1ª RISE do CMP no ciclo
+    uint8_t  cmp_count;   // nº de bordas CMP no ciclo (esperado: 1)
     uint32_t ckp_period_us;
     uint32_t timeout_us;
-    int      gap_count;                         // gaps vistos até agora (0, 1, 2)
-    bool     in_cycle;                          // entre gap1 e gap2
+    int      gap_count;
+    bool     in_cycle;
 };
 
 static TmState       g_tm_state = TmState::IDLE;
@@ -232,8 +237,24 @@ static void timing_feed(const EdgeEvent& ev) {
         return;
     }
 
-    // ── Captura IGN/INJ entre gap1 e gap2 ───────────────────────────────────
-    if (!c.in_cycle || ev.level != 0u) { return; }  // só FALL entre os dois gaps
+    // ── Captura IGN/INJ/CMP entre gap1 e gap2 ───────────────────────────────
+    if (!c.in_cycle) { return; }
+
+    // CMP: capturar borda de RISE (pulso activo-alto do stimulator)
+    if (ev.ch == (uint8_t)kCmpChan && ev.level == 1u) {
+        c.cmp_count++;
+        if (c.cmp_count == 1) {
+            c.cmp_ts_us = ev.ts_us;
+            Serial.printf("  [TIMING] CMP  @ +%.3f ms (%.1f°)\n",
+                          (ev.ts_us - c.gap1_ts_us) / 1000.0f,
+                          (float)(ev.ts_us - c.gap1_ts_us) / c.ckp_period_us * 6.0f);
+        } else {
+            Serial.printf("  [TIMING] !! CMP disparou %dx (esperado 1×/720°)\n", c.cmp_count);
+        }
+        return;
+    }
+
+    if (ev.level != 0u) { return; }  // IGN/INJ: só FALL
 
     if (ev.ch >= (uint8_t)kIgnFirst && ev.ch < (uint8_t)(kIgnFirst + kIgnCount)) {
         const int idx = (int)(ev.ch - kIgnFirst);
@@ -350,8 +371,28 @@ static void timing_report() {
         }
     }
 
+    // ── 5. CMP ──────────────────────────────────────────────────────────────
+    // kCmpTooth=5 → CMP sobe ~5 dentes após dente 0 do gap = ~30°
+    static constexpr float kCmpExpectedDeg = 30.0f;
+    static constexpr float kCmpToleranceDeg = 18.0f;  // ±3 dentes
+    Serial.println();
+    Serial.println("  [5] CMP (cam sensor) — esperado 1×/720°");
+    bool cmp_ok = false;
+    if (c.cmp_count == 0) {
+        Serial.println("  CMP   0×  ✗ AUSENTE — verificar ligação GPIO39←GPIO4 e CMP_GPIO do stimulator");
+    } else if (c.cmp_count > 1) {
+        Serial.printf("  CMP   %dx ✗ DUPLICADO\n", c.cmp_count);
+    } else {
+        const float dt  = (c.cmp_ts_us - c.gap1_ts_us) / 1000.0f;
+        const float deg = dt / T * 6.0f;
+        const float dev = deg - kCmpExpectedDeg;
+        cmp_ok = (fabsf(dev) < kCmpToleranceDeg);
+        Serial.printf("  CMP   1×  @ +%.3f ms = %.1f°  (esp. ~%.0f°, dev %+.1f°)  %s\n",
+                      dt, deg, kCmpExpectedDeg, dev, cmp_ok ? "✓" : "✗ OFFSET ERRADO");
+    }
+
     // ── Resultado ───────────────────────────────────────────────────────────
-    const bool all_ok = count_ok && order_ok && angle_ok;
+    const bool all_ok = count_ok && order_ok && angle_ok && cmp_ok;
     Serial.println();
     Serial.printf("  Resultado: %s\n", all_ok ? "✓ SEQUENCIAL OK (720°)" : "✗ VER FALHAS ACIMA");
     Serial.println("  (para confirmar ângulo: snapshot CDC 'A' byte 8 = advance_p40 × 0.25°)");
@@ -576,9 +617,9 @@ static void print_help() {
     Serial.println("  r  Reset stats            ?  Esta ajuda");
     Serial.println();
     Serial.println("  Timing (t): captura 1 ciclo de 720° (2 gaps CKP).");
-    Serial.println("    Verifica: 1) IGN/INJ dispara 1x/720°; 2) ordem 1-3-4-2;");
-    Serial.println("    3) inter-cilindro 180°±3°; 4) ângulo de cada IGN/INJ.");
-    Serial.println("    Requer CH8 (GPIO36) ligado ao PA0 do STM32 (loopback CKP).");
+    Serial.println("    Verifica: 1) IGN/INJ/CMP dispara 1x/720°; 2) ordem 1-3-4-2;");
+    Serial.println("    3) inter-cilindro 180°±3°; 4) CMP ~30° desde gap.");
+    Serial.println("    CH8=GPIO36←PA0 (CKP); CH9=GPIO39←GPIO4 (CMP loopback).");
     Serial.println();
     Serial.println("  Canais activos:");
     for (int ch = 0; ch < kNChan; ++ch) {
