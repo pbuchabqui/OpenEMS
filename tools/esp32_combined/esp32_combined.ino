@@ -242,6 +242,9 @@ static void IRAM_ATTR edge_isr(void* arg) {
 // ═══════════════════════════════════════════════════════════════════════════
 // ── SECÇÃO 4 — Timing Analysis 720° (sequencial + ângulo)
 // ═══════════════════════════════════════════════════════════════════════════
+
+enum class Mode : uint8_t { LIVE, EDGE, PULSE, WAVE, TIMING };
+static volatile Mode g_mode = Mode::LIVE;
 // Captura um ciclo completo de 720° (2 gaps CKP, 60-2) e verifica:
 //   1. Cada IGN/INJ dispara exatamente 1× por ciclo
 //   2. Ordem de disparo 1-3-4-2 (IGN0→IGN2→IGN3→IGN1)
@@ -526,9 +529,6 @@ static void timing_report() {
 // ═══════════════════════════════════════════════════════════════════════════
 // ── SECÇÃO 5 — Modos de visualização
 // ═══════════════════════════════════════════════════════════════════════════
-
-enum class Mode : uint8_t { LIVE, EDGE, PULSE, WAVE, TIMING };
-static volatile Mode g_mode = Mode::LIVE;
 
 static void process_events() {
     while (g_tail != g_head) {

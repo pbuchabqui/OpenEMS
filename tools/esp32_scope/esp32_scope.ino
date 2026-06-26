@@ -1,7 +1,7 @@
 /*
  * esp32_scope.ino — Osciloscópio lógico para bancada OpenEMS
  * ════════════════════════════════════════════════════════════
- * Plataforma : ESP32 (Arduino core ≥ 2.0)
+ * Plataforma : ESP32 / ESP32-C6 (Arduino core ≥ 2.0)
  * Resolução  : 1 µs  (esp_timer_get_time)
  * Latência   : 2–5 µs por bordo (ISR context)
  *
@@ -15,15 +15,23 @@
  *   CH6 INJ2  ← PC8  TIM3_CH3  (injector cil.3)
  *   CH7 INJ3  ← PC9  TIM3_CH4  (injector cil.4)
  *   CH8 CKP   ← PA0  (loopback — ligar ao gerador CKP do stimulator)
- *   CH9 CMP   ← PA1  (loopback — ligar GPIO4 do stimulator a GPIO39 + PA1)
+ *   CH9 CMP   ← PA1  (loopback — ligar ao gerador CMP do stimulator)
  *
- * Ligações STM32H562 → ESP32:
- *   PE9  → GPIO 32    PE11 → GPIO 33
- *   PE13 → GPIO 25    PE14 → GPIO 26
- *   PC6  → GPIO 27    PC7  → GPIO 14
- *   PC8  → GPIO 12    PC9  → GPIO 13
- *   PA0  → GPIO 36    PA1  → GPIO 39   GND → GND  ← OBRIGATÓRIO
- *   (GPIO4 do stimulator → GPIO39 ESP32 + PA1 STM32 para loopback CMP)
+ * Ligações STM32H562 → ESP32-C6 (GPIO 0-7 + 10-11):
+ *   PE9  → GPIO 0     PE11 → GPIO 1
+ *   PE13 → GPIO 2     PE14 → GPIO 3
+ *   PC6  → GPIO 4     PC7  → GPIO 5
+ *   PC8  → GPIO 6     PC9  → GPIO 7
+ *   PA0  → GPIO 10    PA1  → GPIO 11   GND → GND  ← OBRIGATÓRIO
+ *
+ *   (CKP/CMP: ligar GPIO2/4 do stimulator a GPIO10/11 + PA0/PA1 do STM32)
+ *
+ *   NOTA C6: GPIO16/17 são UART0 (bloqueados pelo Periman), GPIO24-30 são
+ *   flash SPI externo, GPIO12/13 são USB D-/D+. Usar só GPIO 0-7 + 10-11.
+ *
+ *   NOTA ESP32 original: GPIO 0-11 existem (evitar 6-11 que são flash SPI).
+ *   Se usar ESP32 original com este sketch, editar kChan[] para GPIO32-39
+ *   que são input-only e mais convenientes.
  *
  * Comandos série (115200 baud):
  *   l  — Live table (actualiza a cada 1 s) [default]
@@ -34,8 +42,6 @@
  *   r  — Reset estatísticas
  *   ?  — Ajuda
  *
- * Nota: Se o mesmo ESP32 gerar o sinal CKP (esp32_ckp_gen.ino),
- * ligar GPIO 2 → GPIO 36 com um fio para monitorizar o CKP gerado.
  * ════════════════════════════════════════════════════════════
  */
 
@@ -53,19 +59,20 @@ struct ChanDef {
 };
 
 // Editar GPIOs conforme o seu DevKit.
-// GPIO 34-39: input-only (VP, VN, etc.) — bons para monitorização.
-// GPIO 6-11: flash SPI — NÃO usar.
+// ESP32-C6: usar GPIO0-7 + GPIO10-11 (GPIO16/17=UART, 24-30=flash, 12/13=USB).
+// ESP32 original: GPIO 0-11 também existem, mas 6-11 são flash SPI — preferir
+// GPIO32-39 (input-only) editando kChan[] abaixo.
 static ChanDef kChan[] = {
-    { GPIO_NUM_32, "IGN0",  "PE9",  true },   // TIM1_CH1
-    { GPIO_NUM_33, "IGN1",  "PE11", true },   // TIM1_CH2
-    { GPIO_NUM_25, "IGN2",  "PE13", true },   // TIM1_CH3
-    { GPIO_NUM_26, "IGN3",  "PE14", true },   // TIM1_CH4
-    { GPIO_NUM_27, "INJ0",  "PC6",  true },   // TIM3_CH1
-    { GPIO_NUM_14, "INJ1",  "PC7",  true },   // TIM3_CH2
-    { GPIO_NUM_12, "INJ2",  "PC8",  true },   // TIM3_CH3
-    { GPIO_NUM_13, "INJ3",  "PC9",  true },   // TIM3_CH4
-    { GPIO_NUM_36, "CKP",   "PA0",  true },   // input-only; loopback CKP
-    { GPIO_NUM_39, "CMP",   "PA1",  true },   // input-only; loopback CMP
+    { GPIO_NUM_0,  "IGN0", "PE9",  true },   // TIM1_CH1
+    { GPIO_NUM_1,  "IGN1", "PE11", true },   // TIM1_CH2
+    { GPIO_NUM_2,  "IGN2", "PE13", true },   // TIM1_CH3
+    { GPIO_NUM_3,  "IGN3", "PE14", true },   // TIM1_CH4
+    { GPIO_NUM_4,  "INJ0", "PC6",  true },   // TIM3_CH1
+    { GPIO_NUM_5,  "INJ1", "PC7",  true },   // TIM3_CH2
+    { GPIO_NUM_6,  "INJ2", "PC8",  true },   // TIM3_CH3
+    { GPIO_NUM_7,  "INJ3", "PC9",  true },   // TIM3_CH4
+    { GPIO_NUM_10, "CKP",  "PA0",  true },   // loopback CKP do stimulator
+    { GPIO_NUM_11, "CMP",  "PA1",  true },   // loopback CMP do stimulator
 };
 static constexpr int kNChan = (int)(sizeof(kChan) / sizeof(kChan[0]));
 
@@ -657,29 +664,17 @@ void setup() {
     // Inicializar métricas
     memset(g_m, 0, sizeof(g_m));
 
-    // Instalar serviço de ISR GPIO (partilhado por todos os canais)
-    gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-
+    // Configurar GPIOs via Arduino API (portável ESP32/C6)
+    // NOTA: O core do ESP32 já instala o ISR service internamente no primeiro
+    // attachInterruptArg() — NÃO chamar gpio_install_isr_service() novamente.
     for (int ch = 0; ch < kNChan; ++ch) {
         if (!kChan[ch].enabled) { continue; }
         const gpio_num_t g = kChan[ch].gpio;
 
-        gpio_reset_pin(g);
-        gpio_set_direction(g, GPIO_MODE_INPUT);
+        pinMode((uint8_t)g, INPUT_PULLDOWN);
 
-        // Pull-down interno: quando o STM32 não está ligado, o pino fica LOW
-        // e não gera falsas interrupções.
-        gpio_set_pull_mode(g, GPIO_PULLDOWN_ONLY);
-
-        gpio_set_intr_type(g, GPIO_INTR_ANYEDGE);
-        gpio_isr_handler_add(g, edge_isr, (void*)(uint32_t)ch);
-    }
-
-    // Habilitar interrupções GPIO
-    for (int ch = 0; ch < kNChan; ++ch) {
-        if (kChan[ch].enabled) {
-            gpio_intr_enable(kChan[ch].gpio);
-        }
+        attachInterruptArg(digitalPinToInterrupt((uint8_t)g), edge_isr,
+                           (void*)(uint32_t)ch, CHANGE);
     }
 
     Serial.println();
