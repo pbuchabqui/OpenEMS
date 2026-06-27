@@ -99,6 +99,17 @@ uint32_t ckp_seed_loaded_count() noexcept;
 uint32_t ckp_seed_confirmed_count() noexcept;
 uint32_t ckp_seed_rejected_count() noexcept;
 uint32_t ckp_get_cmp_glitch_count() noexcept;
+uint32_t ckp_get_cmp_phase_corrections() noexcept;
+
+/**
+ * @brief True se ao menos uma borda CMP válida já foi aceite (cam sensor presente).
+ *
+ * Sinal fiável de presença do CMP, incrementado SÓ por bordas reais aceites na
+ * ckp_tim5_ch2_isr(). Substitui a heurística "phase_A mudou" do agendador, que
+ * deixou de ser fiável após o carry-forward de fase no gap (phase_A alterna a
+ * cada volta mesmo sem CMP).
+ */
+bool ckp_cmp_seen() noexcept;
 
 // ── Stall watchdog ────────────────────────────────────────────────────────────
 // Detecta motor parado entre dois dentes — situação em que tooth_count para de

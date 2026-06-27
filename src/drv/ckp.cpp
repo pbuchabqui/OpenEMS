@@ -93,6 +93,35 @@ namespace {
 static constexpr uint16_t kRealTeethPerRev    = 58u;  // dentes físicos — uso exclusivo da máquina de estados (gap detection)
 static constexpr uint16_t kTeethPositionsPerRev = 60u; // posições angulares uniformes — uso em cálculos de RPM e ângulo
 
+// ── Encoding do CMP (fase absoluta, compile-time) ────────────────────────────
+// Encoding recomendado: 1 borda CMP por volta, em dentes DISTINTOS nas duas
+// voltas do ciclo de 720°. A janela em que a borda cai determina absolutamente
+// a fase (volta A vs volta B), permitindo SET (não toggle) auto-corretivo.
+//   - Janela A → phase_A = true   (ex.: dente 5, came na volta 0)
+//   - Janela B → phase_A = false  (ex.: dente 34, came na volta 1)
+// Trocar de esquema = ajustar estes defines + recompilar. Devem casar com as
+// posições kCmpToothA/kCmpToothB do estimulador ESP32.
+#ifndef CMP_WINDOW_A_OPEN_TOOTH
+#define CMP_WINDOW_A_OPEN_TOOTH   3u
+#endif
+#ifndef CMP_WINDOW_A_CLOSE_TOOTH
+#define CMP_WINDOW_A_CLOSE_TOOTH  8u
+#endif
+#ifndef CMP_WINDOW_B_OPEN_TOOTH
+#define CMP_WINDOW_B_OPEN_TOOTH   32u
+#endif
+#ifndef CMP_WINDOW_B_CLOSE_TOOTH
+#define CMP_WINDOW_B_CLOSE_TOOTH  37u
+#endif
+
+// Bordas CMP por ciclo de 720°. =2 (recomendado): 1 borda/volta, inter-borda
+// esperada = 58 dentes (1 rev). =1: borda única por 720°, inter-borda = 116
+// dentes (2 revs) — exige tolerância mais larga. Mantido atrás de #if para não
+// custar nada no caminho recomendado.
+#ifndef CMP_EDGES_PER_720
+#define CMP_EDGES_PER_720         2u
+#endif
+
 // Mínimo de dentes contados desde o último gap para aceitar novo gap.
 // 55 << 58: descarta pulsos espúrios no início de cada revolução.
 static constexpr uint16_t kGapThresholdTooth  = 55u;
@@ -202,6 +231,7 @@ struct DecoderState {
     uint16_t tooth_count;               // dentes desde o último gap aceito
     uint8_t  cmp_confirms;              // confirmações do cam sensor (CH1)
     uint32_t cmp_glitch_count;          // FIX P0: contador de glitches CMP rejeitados (diagnóstico)
+    uint32_t cmp_phase_corrections;     // bordas CMP que corrigiram phase_A (anchor auto-corretivo) — diagnóstico
     uint16_t consecutive_anomalies;     // gaps+spikes seguidos — re-bootstrap se histórico defasar
 };
 
@@ -224,6 +254,8 @@ static DecoderState g_state = {
     0u,
     0u,
     0u,  // cmp_glitch_count inicializado
+    0u,  // cmp_phase_corrections inicializado
+    0u,  // consecutive_anomalies inicializado
 };
 // FIX-5: volatile nas variáveis escritas pela ISR TIM5 (prio 1) e lidas pelo
 // background loop sem seção crítica. Sem volatile, o compilador pode elevar
@@ -481,6 +513,11 @@ inline bool process_gap_event() noexcept {
                 // Gap na posição esperada → mantém FULL_SYNC, reinicia contagem.
                 g_state.tooth_count      = 0u;
                 g_state.snap.tooth_index = 0u;
+                // Carry-forward de fase: o gap ocorre 1× por volta, então a fase
+                // alterna a cada gap. Se uma borda CMP for perdida nesta volta,
+                // phase_A avança corretamente mesmo assim; a próxima borda CMP
+                // re-ancora o valor absoluto (ckp_tim5_ch2_isr).
+                g_state.snap.phase_A = !g_state.snap.phase_A;
                 return true;
             }
             // Gap inesperado: wheel slip, dente duplo, interferência severa.
@@ -684,16 +721,28 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     misfire_on_tooth(g_state.snap);
 }
 
+// Testa se tooth_index cai dentro de [open, close], suportando janela que
+// envolve o wrap (open > close). open==close==0 → janela vazia (false).
+static inline bool cmp_tooth_in_window(uint16_t ti, uint8_t open, uint8_t close) noexcept {
+    if (open == 0u && close == 0u) { return false; }
+    return (open <= close) ? (ti >= open && ti <= close)
+                           : (ti >= open || ti <= close);
+}
+
 // ── ISR do cam sensor: TIM5 CH2 (PA1/CMP, rising edge) ──────────────────────
-// Cada borda de subida do cam sensor indica meio ciclo de motor (180° de virabrequim).
-// phase_A alterna para permitir ao agendador identificar qual par de cilindros está
-// no tempo de injeção (cilindros 1/4 vs 2/3 para motor 4 cilindros em linha).
+// Encoding assimétrico por 720°: 1 borda CMP por volta, em dentes DISTINTOS nas
+// voltas A e B (ver defines CMP_WINDOW_A/B_*). A janela em que a borda cai
+// determina ABSOLUTAMENTE a fase → phase_A é SETADO (não toggleado) e se
+// autocorrige a cada borda. O carry-forward no gap (ver detecção de gap) alterna
+// phase_A a cada volta caso uma borda CMP seja perdida; a próxima borda re-ancora.
 //
-// FIX P0 (BUG-11): Validação temporal CMP × CKP — detecta glitches que invertem fase
-// Um glitch no CMP pode inverter phase_A silenciosamente, causando ignição/injeção
-// no cilindro errado. Esta ISR valida coerência temporal usando o período CKP como
-// referência: o período entre bordas CMP deve ser ~2× o período do CKP (CMP = 1 rev,
-// CKP gap = 2 rev). Se delta for muito pequeno ou muito grande, é glitch.
+// FIX P0 (BUG-11): a fase deixou de depender de toggle temporal. Como phase_A é
+// SETADO pela janela de dente (posição absoluta), uma borda aceite produz sempre
+// a fase fisicamente correta — mesmo um glitch dentro da janela. Por isso, no modo
+// A/B (2 bordas/720°) a validação inter-borda é só um debounce de espaçamento
+// mínimo (o intervalo entre bordas ALTERNA entre as janelas, não é fixo). No modo
+// borda-única (CMP_EDGES_PER_720=1) o intervalo é periódico em 116 dentes e mantém
+// banda estreita contra glitches.
 FASTRUN void ckp_tim5_ch2_isr() noexcept {
     if ((CKP_CAM_GPIO_IDR & (1u << 1u)) == 0u) {
         return;  // anti-glitch: apenas rising edges reais
@@ -703,53 +752,77 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     // of this CMP edge. Must be read before any other logic that might be slow.
     const uint32_t cmp_capture_now = TIM5_CAM_CAPTURE;
 
-    // ── Validação temporal CMP inter-edge (FIX Major #5) ─────────────────
-    // Valida o período entre bordas CMP consecutivas contra o período esperado
-    // de 58 dentes CKP (= 1 revolução de virabrequim). A verificação anterior
-    // (estabilidade do período CKP) não detecta glitches que chegam durante
-    // operação steady-state — o período CKP não muda, mas a borda CMP chega cedo.
-    // Esta verificação usa a captura TIM5 real para medir o delta entre bordas.
+    // ── Validação temporal CMP inter-edge ────────────────────────────────
     const uint32_t prev_period_ticks = g_state.prev_period_ticks;
     if (s_prev_cmp_capture != 0u && prev_period_ticks > 0u) {
         const uint32_t cmp_delta = cmp_capture_now - s_prev_cmp_capture; // circular uint32
-        // Expected: 58 teeth × tooth_period_ticks (one full crank revolution)
-        const uint32_t expected  = kRealTeethPerRev * prev_period_ticks;
-        // FIX C10: at cranking/low RPM the starter motor can disengage mid-revolution,
-        // causing tooth period to grow 30-40%. A fixed ±25% window would reject
-        // legitimate CMP edges and leave the decoder stuck in HALF_SYNC.
-        // prev_period_ticks > ~130000 ticks (62.5 MHz) corresponds to RPM < ~500.
-        // Below that threshold widen to ±50%; above use the tighter ±25%.
+#if (CMP_EDGES_PER_720 == 1u)
+        // Borda ÚNICA por 720°: período inter-borda É periódico em 116 dentes
+        // (2 revoluções) → mantém banda estreita contra glitches (FIX Major #5).
+        // Tolerância alargada porque 2 voltas acumulam mais variação de RPM.
+        const uint32_t expected  = 2u * kRealTeethPerRev * prev_period_ticks;
         constexpr uint32_t kLowRpmThreshTicks = 130000u;  // ~500 RPM @ 62.5 MHz TIM5
         const uint32_t tolerance = (prev_period_ticks > kLowRpmThreshTicks)
-                                   ? 2u   // ÷2 → ±50% at low RPM
-                                   : 4u;  // ÷4 → ±25% at normal RPM
+                                   ? 1u   // ÷1 → ±100% at low RPM
+                                   : 2u;  // ÷2 → ±50%  at normal RPM
         const uint32_t min_valid = expected - (expected / tolerance);
         const uint32_t max_valid = expected + (expected / tolerance);
         if (cmp_delta < min_valid || cmp_delta > max_valid) {
             ++g_state.cmp_glitch_count;
-            // Do NOT update s_prev_cmp_capture — keep last known-good timestamp
-            return;
+            return;  // mantém s_prev_cmp_capture (último válido)
         }
-    }
-    // ── Validação de janela de dente CMP (configurável) ──────────────────
-    // Se open != 0 || close != 0 verifica se tooth_index cai dentro da janela.
-    // open=0 close=0 → desabilitado (comportamento padrão).
-    const uint8_t cmp_open  = ems::engine::cmp_window_open_tooth;
-    const uint8_t cmp_close = ems::engine::cmp_window_close_tooth;
-    if ((cmp_open != 0u || cmp_close != 0u) &&
-        g_state.snap.state == SyncState::FULL_SYNC) {
-        const uint16_t ti = g_state.snap.tooth_index;
-        const bool in_window = (cmp_open <= cmp_close)
-            ? (ti >= cmp_open && ti <= cmp_close)
-            : (ti >= cmp_open || ti <= cmp_close);  // janela que envolve o wrap
-        if (!in_window) {
+#else
+        // Encoding A/B (2 bordas/720°): bordas em dentes DISTINTOS → o intervalo
+        // inter-borda ALTERNA (ex.: 87 e 29 dentes p/ janelas 5 e 34) e não é uma
+        // banda fixa. A correção de fase passou a vir da JANELA de dente (abaixo),
+        // que seta phase_A absoluto — um glitch dentro da janela já produz a fase
+        // fisicamente correta. Logo a banda estreita é desnecessária; basta um
+        // debounce de espaçamento mínimo contra ringing/borda dupla.
+        // INVARIANTE: min_spacing < menor intervalo legítimo. Janelas A=[3,8],
+        // B=[32,37] → pior caso late-A→early-B = 24 dentes; 0.25 rev (~14.5) é seguro.
+        // Ao aproximar as janelas, reapertar este limite.
+        const uint32_t min_spacing = (kRealTeethPerRev / 4u) * prev_period_ticks;
+        if (cmp_delta < min_spacing) {
             ++g_state.cmp_glitch_count;
+            return;  // mantém s_prev_cmp_capture (último válido)
+        }
+#endif
+    }
+    // ── Âncora de fase absoluta por janela de dente A/B ──────────────────
+    // Em FULL_SYNC a janela (A vs B) em que a borda cai determina ABSOLUTAMENTE
+    // a fase: SET phase_A (auto-corretivo). Fora de ambas as janelas → glitch.
+    // Antes de FULL_SYNC, tooth_index não é fiável; avança por toggle apenas
+    // para sinalizar presença do CMP (cmp_confirms) até o anchor entrar.
+    if (g_state.snap.state == SyncState::FULL_SYNC) {
+        const uint16_t ti = g_state.snap.tooth_index;
+        const bool in_a = cmp_tooth_in_window(
+            ti, CMP_WINDOW_A_OPEN_TOOTH, CMP_WINDOW_A_CLOSE_TOOTH);
+#if (CMP_EDGES_PER_720 == 1u)
+        // Borda única por 720°: só a janela A é válida (fase de referência);
+        // a outra volta recebe phase_A=false via carry-forward do gap.
+        if (!in_a) {
+            ++g_state.cmp_glitch_count;  // borda fora da janela de referência
             return;
         }
+        const bool phase_A_target = true;
+#else
+        const bool in_b = cmp_tooth_in_window(
+            ti, CMP_WINDOW_B_OPEN_TOOTH, CMP_WINDOW_B_CLOSE_TOOTH);
+        if (!in_a && !in_b) {
+            ++g_state.cmp_glitch_count;  // borda fora das janelas esperadas
+            return;
+        }
+        const bool phase_A_target = in_a;  // janela A → true, janela B → false
+#endif
+        if (phase_A_target != g_state.snap.phase_A) {
+            ++g_state.cmp_phase_corrections;  // anchor corrigiu fase invertida
+        }
+        s_prev_cmp_capture   = cmp_capture_now;
+        g_state.snap.phase_A = phase_A_target;
+    } else {
+        s_prev_cmp_capture   = cmp_capture_now;
+        g_state.snap.phase_A = !g_state.snap.phase_A;
     }
-
-    s_prev_cmp_capture = cmp_capture_now;
-    g_state.snap.phase_A = !g_state.snap.phase_A;
     if (g_seed_probation) {
         g_seed_probation = false;
         g_seed_probation_teeth = 0u;
@@ -811,6 +884,14 @@ uint32_t ckp_get_cmp_glitch_count() noexcept {
     return g_state.cmp_glitch_count;
 }
 
+uint32_t ckp_get_cmp_phase_corrections() noexcept {
+    return g_state.cmp_phase_corrections;
+}
+
+bool ckp_cmp_seen() noexcept {
+    return g_state.cmp_confirms > 0u;
+}
+
 // ── API de teste (host only) ──────────────────────────────────────────────────
 #if defined(EMS_HOST_TEST)
 void ckp_test_reset() noexcept {
@@ -823,6 +904,8 @@ void ckp_test_reset() noexcept {
         0u,
         0u,
         0u,  // cmp_glitch_count
+        0u,  // cmp_phase_corrections
+        0u,  // consecutive_anomalies
     };
     ems_test_tim5_ccr1   = 0u;
     ems_test_tim5_ccr2   = 0u;

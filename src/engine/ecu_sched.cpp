@@ -779,14 +779,12 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U; g_cmp_phase_seen = 0U; return;
     }
 
-    // Track CMP presence: if phase_A ever changes, CMP is working
-    {
-        static uint8_t s_prev_phase = 0xFFU;
-        const uint8_t cur_phase = snap.phase_A ? 1U : 0U;
-        if (s_prev_phase != 0xFFU && cur_phase != s_prev_phase) {
-            g_cmp_phase_seen = 1U;
-        }
-        s_prev_phase = cur_phase;
+    // Track CMP presence via sinal fiável do decoder (bordas CMP reais aceites).
+    // NOTA: a heurística antiga "phase_A mudou" deixou de servir após o
+    // carry-forward de fase no gap (ckp.cpp), que alterna phase_A a cada volta
+    // mesmo SEM cam sensor — sinalizaria CMP presente indevidamente.
+    if (ems::drv::ckp_cmp_seen()) {
+        g_cmp_phase_seen = 1U;
     }
 
     const uint8_t rev_boundary = ((g_hook_prev_valid != 0U) && (snap.tooth_index == 0U) && (g_hook_prev_tooth != 0U)) ? 1U : 0U;

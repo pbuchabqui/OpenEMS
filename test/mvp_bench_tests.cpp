@@ -1493,6 +1493,61 @@ static void cam_fire(uint32_t capture_value) {
     ckp_tim5_ch2_isr();
 }
 
+// ── Helpers para testes de agendamento SEQUENCIAL ───────────────────────────
+// O scheduler só constrói a tabela sequencial (per-cilindro) quando há fase CMP
+// (g_cmp_phase_seen=1). Sem borda CMP, ckp_reach_full_sync() resulta em PRESYNC
+// (wasted-spark/batch: todos os cilindros no mesmo tooth, phase=ECU_PHASE_ANY).
+// Estes helpers estabelecem a fase CMP e navegam até um evento concreto.
+
+// Atinge FULL_SYNC + estabelece fase CMP (borda válida na janela A, tooth 5) →
+// scheduler em modo SEQUENCIAL com a tabela construída. Duas revoluções completas
+// garantem que Calculate_Sequential_Cycle correu (constrói a cada 2º gap).
+static void ckp_reach_full_sync_seq(void) {
+    ckp_reach_full_sync();
+    for (uint32_t i = 0u; i < 5u; ++i) { ckp_fire(kNormalPeriod); }   // tooth 5 = janela A
+    cam_fire(g_ckp_cap);                                              // CMP aceite → cmp_seen
+    for (uint32_t i = 5u; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kNormalPeriod * 3u);                                     // gap
+    for (uint32_t i = 0u; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kNormalPeriod * 3u);                                     // gap → tabela sequencial
+}
+
+// Localiza (tooth, frac, phase) do 1º evento da tabela com canal+ação dados.
+static bool seq_find_event(uint8_t ch, uint8_t action,
+                           uint8_t* tooth, uint8_t* frac, uint8_t* phase) {
+    for (uint8_t i = 0u; i < ecu_sched_test_angle_table_size(); ++i) {
+        uint8_t t, f, c, a, ph;
+        if (ecu_sched_test_get_angle_event(i, &t, &f, &c, &a, &ph) && c == ch && a == action) {
+            *tooth = t; *frac = f; *phase = ph; return true;
+        }
+    }
+    return false;
+}
+
+// Dispara dentes (e gaps no fim de cada revolução) até o decoder ficar em
+// (target_tooth, target_phase) em FULL_SYNC — momento em que o hook desse dente
+// acaba de correr e os eventos correspondentes foram armados. ECU_PHASE_A=1
+// (phase_A=true), ECU_PHASE_B=0 (phase_A=false).
+static bool fire_to_tooth_phase(uint8_t target_tooth, uint8_t target_phase) {
+    for (int guard = 0; guard < 200; ++guard) {
+        const ems::drv::CkpSnapshot s = ckp_snapshot();
+        const uint8_t cur = s.phase_A ? 1u : 0u;
+        if (s.state == ems::drv::SyncState::FULL_SYNC &&
+            s.tooth_index == target_tooth && cur == target_phase) { return true; }
+        if (s.tooth_index >= 55u) { ckp_fire(kNormalPeriod * 3u); }
+        else { ckp_fire(kNormalPeriod); }
+    }
+    return false;
+}
+
+// tooth_ticks que o scheduler usa: período de dente (ns) / ECU_SCHED_NS_PER_TICK(=100).
+static uint32_t seq_tooth_ticks(void) {
+    const ems::drv::CkpSnapshot s = ckp_snapshot();
+    const uint32_t pn = (s.predicted_tooth_period_ns != 0u)
+                        ? s.predicted_tooth_period_ns : s.tooth_period_ns;
+    return pn / 100u;
+}
+
 static void test_ckp_seed_confirmed(void) {
     section("ckp: seed_confirmed_count after cam edge during probation");
 
@@ -1506,9 +1561,11 @@ static void test_ckp_seed_confirmed(void) {
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::FULL_SYNC), "pre-cond: FULL_SYNC");
 
-    // Fire cam ISR during probation → seed confirmed
+    // Anchor por janela: a borda CMP deve cair na janela A (dentes 3–8).
+    // Avança até o dente 5 antes de disparar o cam (1ª borda → inter-borda ignorada).
+    for (uint32_t i = 0; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
     cam_fire(g_ckp_cap + kNormalPeriod * 58u);
-    CHECK_EQ(ckp_seed_confirmed_count(), 1u, "seed_confirmed_count=1 after cam edge");
+    CHECK_EQ(ckp_seed_confirmed_count(), 1u, "seed_confirmed_count=1 after cam edge in window A");
 }
 
 static void test_ckp_seed_rejected(void) {
@@ -1535,12 +1592,14 @@ static void test_ckp_cmp_glitch_count(void) {
     ckp_reach_full_sync();
     // ckp_test_reset() inside ckp_reach_full_sync() now also resets s_prev_cmp_capture.
 
-    // First cam edge: s_prev_cmp_capture=0 → skip validation → always accepted.
+    // Anchor por janela: avança até o dente 5 (janela A) antes da 1ª borda.
+    for (uint32_t i = 0; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
+    // First cam edge: s_prev_cmp_capture=0 → skip inter-edge; window A → accepted.
     const uint32_t cap1 = g_ckp_cap;
     cam_fire(cap1);
-    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "first cam edge always accepted");
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "first cam edge in window A accepted");
 
-    // Second cam edge too soon (delta=100, expected=58×10000=580000) → glitch
+    // Second cam edge too soon (delta=100 << debounce min_spacing) → glitch.
     cam_fire(cap1 + 100u);
     CHECK_EQ(ckp_get_cmp_glitch_count(), 1u, "cam edge too soon → glitch counted");
 }
@@ -1711,19 +1770,23 @@ static void test_ecu_sched_ccr_write(void) {
     ecu_sched_set_inj_pw_ticks(20000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
-    ckp_reach_full_sync();  // phase_A=false; angle table built at FULL_SYNC gap
+    ckp_reach_full_sync_seq();  // FULL_SYNC + fase CMP → tabela SEQUENCIAL
 
-    // Fire 13 teeth: at tooth 13 DWELL_START fires.
-    // cyl3 → ign_ch[3] = ECU_CH_IGN4 = 4 → stm32_ign_tim_ch(4) = TIM1 ch4 → CCR4.
-    for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
-    const uint32_t ccr4       = ecu_sched_test_get_tim1_ccr(4u);
-    const uint32_t expect_ccr = (kCntBase & 0xFFFFu) + 800u;  // cnt + delta(frac=128,ticks=1600)
-    CHECK_EQ(ccr4, expect_ccr, "TIM1_CCR4 = (cnt & 0xFFFF) + 800 at cyl3 DWELL_START");
+    // cyl3 → ign_ch[3] = ECU_CH_IGN4 → stm32_ign_tim_ch(4) = TIM1 ch4 → CCR4.
+    // Localiza o DWELL_START de cyl3 na tabela sequencial e dispara até ao seu
+    // (tooth, fase). delta = (frac × tooth_ticks) >> 8; CCR = (CNT & 0xFFFF) + delta.
+    uint8_t dt, df, dph;
+    CHECK_TRUE(seq_find_event(ECU_CH_IGN4, ECU_ACT_DWELL_START, &dt, &df, &dph),
+               "cyl3 DWELL_START present in sequential table");
+    CHECK_TRUE(fire_to_tooth_phase(dt, dph), "reached cyl3 DWELL_START tooth/phase");
+    const uint32_t expect_ccr = (kCntBase & 0xFFFFu) + (((uint32_t)df * seq_tooth_ticks()) >> 8u);
+    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), expect_ccr,
+             "TIM1_CCR4 = (cnt & 0xFFFF) + frac-delta at cyl3 DWELL_START");
 
-    // Changing TIM1_CNT does not rewrite CCR
+    // Changing TIM1_CNT does not rewrite CCR (no re-arm without an event)
     ecu_sched_test_set_tim1_cnt(9999u);
     CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), expect_ccr,
-             "CCR4 unchanged after tim8_cnt change (no re-arm)");
+             "CCR4 unchanged after TIM1_CNT change (no re-arm)");
 
     // At least one ignition CCR is non-zero (belt-and-suspenders)
     CHECK_TRUE(ecu_sched_test_get_tim1_ccr(1u) > 0u ||
@@ -1773,19 +1836,25 @@ static void test_ecu_sched_dwell_watchdog_fires(void) {
     ecu_sched_set_inj_pw_ticks(20000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
-    ckp_reach_full_sync();
-    for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_reach_full_sync_seq();  // FULL_SYNC + fase CMP → tabela SEQUENCIAL
+    // Dispara até o DWELL_START de cyl3 → arma o watchdog desse canal
+    // (arm_tick = scheduler_counter() = TIM3_CNT = kTim2Base, constante nos mocks).
+    uint8_t dt, df, dph;
+    CHECK_TRUE(seq_find_event(ECU_CH_IGN4, ECU_ACT_DWELL_START, &dt, &df, &dph),
+               "cyl3 DWELL_START present in sequential table");
+    CHECK_TRUE(fire_to_tooth_phase(dt, dph), "reached cyl3 DWELL_START (watchdog armed)");
     // Pre-condition: watchdog not fired (elapsed = 0, threshold = 31500)
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
              "pre-cond: wdog_count=0 before threshold");
-    // Advance TIM2_CNT past 1.4× dwell from arm_tick=kTim2Base
+    // Advance TIM3_CNT past 1.4× dwell from arm_tick=kTim2Base
     ecu_sched_test_set_tim2_cnt(kTim2Base + kWdogTicks + 1u);
     ecu_sched_dwell_watchdog();
-    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u,
-             "dwell watchdog fires: elapsed > 31500 (1.4× dwell)");
-    // Second call: arm_tick reset to 0 by watchdog → sentinel check fails → no re-fire
+    const uint32_t after1 = ecu_sched_dwell_watchdog_count();
+    CHECK_TRUE(after1 >= 1u,
+               "dwell watchdog fires: elapsed > 31500 (1.4× dwell)");
+    // Second call: arm_tick(s) reset to 0 by watchdog → sentinel fails → no re-fire
     ecu_sched_dwell_watchdog();
-    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u, "watchdog fires only once per arm");
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), after1, "watchdog fires only once per arm");
 }
 
 static void test_ecu_sched_presync_table(void) {
@@ -1917,32 +1986,64 @@ static void test_ckp_tooth_index_progression(void) {
 }
 
 static void test_ckp_phase_toggle(void) {
-    section("ckp: phase_A toggles on each valid cam edge");
+    section("ckp: phase_A anchored by tooth window (A→true, B→false)");
 
     ckp_test_reset(); g_ckp_cap = 0u;
-    ckp_reach_full_sync();  // phase_A=false after ckp_test_reset
+    ckp_reach_full_sync();  // phase_A=false, tooth_index=0 após o gap
 
-    const bool p0 = ckp_snapshot().phase_A;
-    // First cam edge: s_prev_cmp_capture=0 → skip validation → always toggle.
-    // Use capture = g_ckp_cap + 58×kNormalPeriod (one full rev ahead).
-    cam_fire(g_ckp_cap + kNormalPeriod * 58u);
-    const bool p1 = ckp_snapshot().phase_A;
-    CHECK_TRUE(p0 != p1, "phase_A toggles on first cam edge");
-    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "first cam edge not a glitch");
+    // Borda na janela A (dente 5): 1ª borda (s_prev=0) → inter-borda ignorada.
+    // SET absoluto: janela A → phase_A=true.
+    for (uint32_t i = 0; i < 5u; ++i) { ckp_fire(kNormalPeriod); }  // → tooth 5
+    cam_fire(g_ckp_cap);
+    CHECK_TRUE(ckp_snapshot().phase_A, "window A edge → phase_A=true");
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "window A edge not a glitch");
 
-    // Second cam edge: delta = 58×kNormalPeriod = expected → valid, toggles again.
-    // expected = kRealTeeth60_2 × prev_period_ticks. prev_period_ticks=kNormalPeriod.
-    // Actual delta = 58×kNormalPeriod. min_valid=50%, max_valid=150% → valid.
-    cam_fire(g_ckp_cap + kNormalPeriod * 116u);
-    const bool p2 = ckp_snapshot().phase_A;
-    CHECK_TRUE(p1 != p2, "phase_A toggles again on second valid cam edge");
-    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "second cam edge not a glitch");
+    // Borda na janela B (dente 34): delta=29 dentes > debounce → aceita; B → false.
+    for (uint32_t i = 0; i < 29u; ++i) { ckp_fire(kNormalPeriod); }  // tooth 5 → 34
+    cam_fire(g_ckp_cap);
+    CHECK_TRUE(!ckp_snapshot().phase_A, "window B edge → phase_A=false");
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "window B edge not a glitch");
 
-    // Third cam edge with INVALID delta (too small) → glitch, NO toggle
-    cam_fire(g_ckp_cap + kNormalPeriod * 116u + 10u);  // delta=10 << expected
-    const bool p3 = ckp_snapshot().phase_A;
-    CHECK_EQ(p3, p2, "phase_A NOT toggled on glitch cam edge");
-    CHECK_EQ(ckp_get_cmp_glitch_count(), 1u, "glitch cam edge counted");
+    // Borda FORA das janelas (dente 49): delta=15 dentes > debounce → glitch por janela,
+    // phase_A inalterado (a posição não corresponde a nenhuma fase válida).
+    const bool pB = ckp_snapshot().phase_A;
+    for (uint32_t i = 0; i < 15u; ++i) { ckp_fire(kNormalPeriod); }  // tooth 34 → 49
+    cam_fire(g_ckp_cap);
+    CHECK_EQ(ckp_snapshot().phase_A, pB, "out-of-window edge → phase_A unchanged");
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 1u, "out-of-window edge counted as glitch");
+}
+
+// Exercita a interação gap-flip ↔ anchor ao longo de várias revoluções: o
+// carry-forward no gap alterna phase_A a cada volta e a borda CMP (janela A=dente5
+// na volta par, B=dente34 na ímpar) re-ancora o valor absoluto. Em regime as duas
+// fontes CONCORDAM → cmp_phase_corrections para de incrementar após a 1ª borda.
+static void test_ckp_phase_multirev(void) {
+    section("ckp: phase parity across revolutions (gap-flip ↔ anchor agree)");
+
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_reach_full_sync();  // FULL_SYNC, tooth_index=0, phase_A=false
+
+    uint32_t corr_prev = ckp_get_cmp_phase_corrections();
+    for (int cyc = 0; cyc < 4; ++cyc) {
+        const int  cam_tooth     = (cyc % 2 == 0) ? 5 : 34;     // janela A (par) / B (ímpar)
+        const bool expect_A      = (cyc % 2 == 0);              // A → true, B → false
+        // Avança até o dente da borda e dispara o cam.
+        for (int t = 0; t < cam_tooth; ++t) { ckp_fire(kNormalPeriod); }
+        cam_fire(g_ckp_cap);
+        CHECK_EQ(ckp_snapshot().phase_A ? 1u : 0u, expect_A ? 1u : 0u,
+                 expect_A ? "rev par: phase_A=true após borda janela A"
+                          : "rev ímpar: phase_A=false após borda janela B");
+        const uint32_t corr_now = ckp_get_cmp_phase_corrections();
+        if (cyc > 0) {
+            CHECK_EQ(corr_now, corr_prev, "sem correção de fase extra em regime");
+        }
+        corr_prev = corr_now;
+        // Completa a revolução (tooth_count≥55) e dispara o gap → carry-forward flip.
+        for (int t = cam_tooth; t < 55; ++t) { ckp_fire(kNormalPeriod); }
+        ckp_fire(kNormalPeriod * 3u);
+    }
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "nenhum glitch ao longo de 4 revoluções");
+    CHECK_EQ(ckp_get_cmp_phase_corrections(), 1u, "apenas a 1ª borda corrigiu a fase");
 }
 
 // (all includes moved to top of file)
@@ -3101,86 +3202,57 @@ static void test_trigger_offset(void) {
     using namespace ems::engine::cfg;
 
     // ----------------------------------------------------------------
-    // Baseline: offset = 0°
-    // For cyl3 (tdc=540°), advance=15°, dwell=84°:
-    //   dwell_engine_angle = (525+720-84)%720 = 441°
-    //   trigger_angle(441, offset=0) = (441+720-0)%720 = 441°
-    //   ang=81, pos_x256=81*256/6=3456, tooth=13, frac=128, phase_B
+    // O trigger offset (trigger_tooth0_engine_deg) desloca o ângulo de disparo:
+    // trigger_angle = (engine_angle + 720 - offset) % 720. Um offset de 78° = 13
+    // dentes exactos (78/6) → desloca o tooth do evento em -13 (frac preservado).
+    // Modo SEQUENCIAL (fase CMP estabelecida) para o cyl3 (IGN4) ter o seu evento
+    // próprio (em presync todos colapsam num só tooth).
     // ----------------------------------------------------------------
-    section("trigger offset=0°: cyl3 DWELL_START scheduled at tooth 13");
+    section("trigger offset=0°: cyl3 DWELL_START tooth/CCR (sequencial)");
     g_eng_cfg.trigger_tooth0_engine_deg = 0u;
     ecu_sched_test_reset();
-    ecu_sched_test_reset_ccr();
+    ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_test_set_tim2_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(22500u);
     ecu_sched_set_inj_pw_ticks(20000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
-    ckp_reach_full_sync();
+    ckp_reach_full_sync_seq();
 
-    // Inspect angle table: find ECU_CH_IGN4 DWELL_START entry
-    uint8_t tooth_off0 = 0xFFu;
-    for (uint8_t i = 0u; i < ecu_sched_test_angle_table_size(); ++i) {
-        uint8_t t, f, ch, act, ph;
-        if (ecu_sched_test_get_angle_event(i, &t, &f, &ch, &act, &ph)) {
-            if (ch == ECU_CH_IGN4 && act == ECU_ACT_DWELL_START) { tooth_off0 = t; }
-        }
-    }
-    CHECK_EQ(tooth_off0, 13u,
-             "offset=0°: cyl3 DWELL_START tooth=13 (trigger=441°, ang=81, 81*256/6=3456>>8=13)");
-
-    // CCR4 NOT written yet (event fires at tooth 13, not at gap/tooth 0)
-    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), 0u,
-             "offset=0°: CCR4=0 immediately after FULL_SYNC (no teeth fired yet)");
-
-    // Fire 13 teeth → at tooth 13 DWELL_START fires
-    // CCR4 = (TIM1_CNT & 0xFFFF) + delta = 0 + (128*1600>>8) = 0+800 = 800
-    for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
-    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), 800u,
-             "offset=0°: CCR4=800 after tooth 13 (TIM1_CNT=0, delta=800)");
+    uint8_t dt0, df0, dph0;
+    CHECK_TRUE(seq_find_event(ECU_CH_IGN4, ECU_ACT_DWELL_START, &dt0, &df0, &dph0),
+               "offset=0°: cyl3 DWELL_START presente na tabela sequencial");
+    // Dispara até o evento e confirma o arming: CCR4 = (CNT=0) + (frac×tooth_ticks)>>8.
+    ecu_sched_test_reset_ccr();
+    CHECK_TRUE(fire_to_tooth_phase(dt0, dph0), "offset=0°: alcançou cyl3 DWELL_START");
+    const uint32_t expect_ccr0 = ((uint32_t)df0 * seq_tooth_ticks()) >> 8u;  // TIM1_CNT=0
+    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), expect_ccr0,
+             "offset=0°: CCR4 = frac-delta ao disparar cyl3 DWELL_START");
 
     // ----------------------------------------------------------------
-    // Non-zero offset: 78°
-    // trigger_angle(441, offset=78) = (441+720-78)%720 = 363°
-    //   ang=363%360=3, pos_x256=3*256/6=128, tooth=0, frac=128, phase_B
-    // Event shifts to tooth 0 → fires AT the FULL_SYNC gap (tooth 0 is
-    // processed immediately when Calculate_Sequential_Cycle completes).
+    // offset = 78° (= 13 dentes): o mesmo evento desloca -13 dentes, frac igual.
     // ----------------------------------------------------------------
-    section("trigger offset=78°: cyl3 DWELL_START shifts to tooth 0");
+    section("trigger offset=78°: cyl3 DWELL_START desloca -13 dentes");
     g_eng_cfg.trigger_tooth0_engine_deg = 78u;
     ecu_sched_test_reset();
-    ecu_sched_test_reset_ccr();
+    ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_test_set_tim2_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(22500u);
     ecu_sched_set_inj_pw_ticks(20000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
-    ckp_reach_full_sync();
+    ckp_reach_full_sync_seq();
 
-    // Angle table: cyl3 DWELL_START must be at tooth 0
-    uint8_t tooth_off78 = 0xFFu;
-    for (uint8_t i = 0u; i < ecu_sched_test_angle_table_size(); ++i) {
-        uint8_t t, f, ch, act, ph;
-        if (ecu_sched_test_get_angle_event(i, &t, &f, &ch, &act, &ph)) {
-            if (ch == ECU_CH_IGN4 && act == ECU_ACT_DWELL_START) { tooth_off78 = t; }
-        }
-    }
-    CHECK_EQ(tooth_off78, 0u,
-             "offset=78°: cyl3 DWELL_START shifts to tooth 0 (trigger=363°, ang=3, 3*256/6=128>>8=0)");
-    CHECK_TRUE(tooth_off0 != tooth_off78,
-               "offset change moves the event: tooth 13 (offset=0) ≠ tooth 0 (offset=78)");
-
-    // CCR4 written AT the gap (tooth 0 event fires during FULL_SYNC gap processing)
-    // CCR4 = (TIM1_CNT=0) + delta(frac=128,ticks=1600) = 0+800 = 800
-    CHECK_EQ(ecu_sched_test_get_tim1_ccr(4u), 800u,
-             "offset=78°: CCR4=800 immediately at FULL_SYNC gap (tooth 0 fires at gap)");
-
-    // Confirm: with offset=0 the CCR was 0 at gap; with offset=78 it is 1800 at gap.
-    // Both CCR values are numerically 1800 because frac=128 in both cases,
-    // but offset=0 fires 13 teeth LATER whereas offset=78 fires IMMEDIATELY.
-    // The table inspection above is the definitive proof of timing difference.
+    uint8_t dt78, df78, dph78;
+    CHECK_TRUE(seq_find_event(ECU_CH_IGN4, ECU_ACT_DWELL_START, &dt78, &df78, &dph78),
+               "offset=78°: cyl3 DWELL_START presente na tabela sequencial");
+    // 78° = 13 dentes exactos → tooth desloca -13 (mod 58), frac e fase preservados.
+    CHECK_EQ(((uint32_t)dt0 + 58u - dt78) % 58u, 13u,
+             "offset=78°: tooth desloca exactamente -13 dentes vs offset=0");
+    CHECK_EQ((uint32_t)df78, (uint32_t)df0, "offset=78°: frac preservado (shift inteiro)");
+    CHECK_TRUE(dt0 != dt78, "offset muda o tooth do evento (0 ≠ 78)");
 
     // Restore default so subsequent tests are unaffected
     g_eng_cfg.trigger_tooth0_engine_deg = 0u;
@@ -3411,6 +3483,7 @@ int main(void) {
     test_ckp_snap_fields();
     test_ckp_tooth_index_progression();
     test_ckp_phase_toggle();
+    test_ckp_phase_multirev();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");
