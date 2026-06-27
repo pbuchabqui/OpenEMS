@@ -131,7 +131,7 @@ static const char* mode_name(Mode m) {
 //   2. Ordem de disparo 1-3-4-2 (IGN0→IGN2→IGN3→IGN1)
 //   3. Inter-cilindro 180°±3°; ângulo absoluto desde gap1
 //   4. CMP (CH9) presente 1×/720° com offset esperado ~30° (kCmpTooth=5 × 6°/dente)
-// CH8 (CKP loopback PA0) e CH9 (CMP loopback GPIO39←GPIO4) obrigatórios.
+// CH8 (CKP loopback PA0→GPIO10) e CH9 (CMP loopback GPIO4→GPIO11) obrigatórios.
 
 static constexpr int kCkpChan  = 8;
 static constexpr int kCmpChan  = 9;
@@ -192,7 +192,7 @@ static void timing_start() {
     g_tm_cap.timeout_us   = g_tm_cap.ckp_period_us * 240u;
 
     if (g_m[kCkpChan].period_us == 0) {
-        Serial.println("  AVISO: CH8 sem sinal. Ligar GPIO36 ao gerador CKP do stimulator.");
+        Serial.println("  AVISO: CH8 sem sinal. Ligar GPIO10 ao gerador CKP do stimulator.");
         Serial.println("  [TIMING] Aguardar sinal CKP antes de usar 't'.");
         g_tm_state = TmState::IDLE;
         return;
@@ -201,7 +201,7 @@ static void timing_start() {
     if (g_m[kCkpChan].period_us < 200u) {
         Serial.printf("  ERRO: CKP period=%.3f ms parece ruído (esperado ~0.5-5 ms).\n",
                       g_m[kCkpChan].period_us / 1000.0f);
-        Serial.println("  Verificar fio: GPIO2 stimulator → GPIO36 (VP) + PA0 STM32.");
+        Serial.println("  Verificar fio: GPIO2 stimulator → GPIO10 + PA0 STM32.");
         g_tm_state = TmState::IDLE;
         return;
     }
@@ -418,7 +418,7 @@ static void timing_report() {
     Serial.println("  [5] CMP (cam sensor) — esperado 1×/720°");
     bool cmp_ok = false;
     if (c.cmp_count == 0) {
-        Serial.println("  CMP   0×  ✗ AUSENTE — verificar ligação GPIO39←GPIO4 e CMP_GPIO do stimulator");
+        Serial.println("  CMP   0×  ✗ AUSENTE — verificar ligação GPIO11←GPIO4 e CMP_GPIO do stimulator");
     } else if (c.cmp_count > 1) {
         Serial.printf("  CMP   %dx ✗ DUPLICADO\n", c.cmp_count);
     } else {
@@ -661,7 +661,7 @@ static void print_help() {
     Serial.println("  Timing (t): captura 1 ciclo de 720° (2 gaps CKP).");
     Serial.println("    Verifica: 1) IGN/INJ/CMP dispara 1x/720°; 2) ordem 1-3-4-2;");
     Serial.println("    3) inter-cilindro 180°±3°; 4) CMP ~30° desde gap.");
-    Serial.println("    CH8=GPIO36←PA0 (CKP); CH9=GPIO39←GPIO4 (CMP loopback).");
+    Serial.println("    CH8=GPIO10←PA0 (CKP); CH9=GPIO11←GPIO4 (CMP loopback).");
     Serial.println();
     Serial.println("  Canais activos:");
     for (int ch = 0; ch < kNChan; ++ch) {
@@ -677,6 +677,12 @@ static void print_help() {
 
 void setup() {
     Serial.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT
+    // C6/C-series com CDC On Boot: Serial = HWCDC (USB nativo). Sem isto o
+    // HWCDC BLOQUEIA/DESCARTA os prints quando o host não está a drenar →
+    // saída fica muda. Timeout 0 = escrita não-bloqueante (essencial no C6).
+    Serial.setTxTimeoutMs(0);
+#endif
     delay(300);
 
     // Inicializar métricas
