@@ -436,11 +436,10 @@ void auxiliaries_init() noexcept {
     const ems::drv::CkpSnapshot snap = ems::drv::ckp_snapshot();
     g.phase_prev = snap.phase_A;
 
-    // TIM3_CH2: Wastegate PWM @ 15 Hz
-    ems::hal::tim3_pwm_init(kAuxTim3PwmHz);
-    ems::hal::tim4_pwm_init(kAuxTim4PwmHz);
-
-    ems::hal::tim3_set_duty(1u, 0u);
+    // NÃO inicializar o TIM3 aqui: ele é dedicado à injeção (OC em PC6-9).
+    // O motor EWG (wastegate) usa o TIM2_CH3/PB10 via ewg_driver. Antes, este
+    // tim3_pwm_init reescrevia o ARR do TIM3 e quebrava o timing dos injetores.
+    ems::hal::tim4_pwm_init(kAuxTim4PwmHz);   // TIM4: VVT (CH1 exhaust, CH2 intake)
     ems::hal::tim4_set_duty(0u, 0u);
     ems::hal::tim4_set_duty(1u, 0u);
 

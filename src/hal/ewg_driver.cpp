@@ -7,7 +7,9 @@
 
 namespace {
 
-// EWG H-bridge: PA7 = IN1 (open), PD3 = IN2 (close), PA6 = TIM3_CH1 PWM
+// EWG H-bridge: PA7 = IN1 (open), PD3 = IN2 (close), PB10 = TIM2_CH3 PWM.
+// PWM movido de TIM3_CH1/PA6 p/ TIM2_CH3/PB10: o TIM3 é dedicado à injeção
+// (PC6-9) e TIM3_CH1 colidia com INJ0 (PC6). REQUER religar o PWM do EWG ao PB10.
 constexpr uint8_t kIn1Pin = 7u;   // PA7
 constexpr uint8_t kIn2Pin = 3u;   // PD3
 
@@ -21,8 +23,8 @@ bool ewg_driver_init() noexcept {
     // PD3 = IN2 (GPIO output)
     GPIOD_MODER = (GPIOD_MODER & ~(3u << (kIn2Pin * 2u))) | (1u << (kIn2Pin * 2u));
 
-    // TIM3_CH1 (PA6) PWM @ 10 kHz for EWG motor
-    tim3_pwm_init(10000u);
+    // TIM2_CH3 (PB10) PWM @ 10 kHz for EWG motor
+    tim2_pwm_init(10000u);
 
     ewg_driver_shutdown();
     return true;
@@ -44,7 +46,7 @@ void ewg_driver_set_motor_pwm(int16_t pwm) noexcept {
         GPIOA_BSRR = (1u << (kIn1Pin + 16u));          // IN1=0
         GPIOD_BSRR = (1u << (kIn2Pin + 16u));          // IN2=0 (brake)
     }
-    tim3_set_duty(0u, duty);
+    tim2_set_duty(duty);
 }
 
 uint16_t ewg_driver_read_position_raw() noexcept {
@@ -54,7 +56,7 @@ uint16_t ewg_driver_read_position_raw() noexcept {
 void ewg_driver_shutdown() noexcept {
     GPIOA_BSRR = (1u << (kIn1Pin + 16u));
     GPIOD_BSRR = (1u << (kIn2Pin + 16u));
-    tim3_set_duty(0u, 0u);
+    tim2_set_duty(0u);
 }
 
 }  // namespace ems::hal

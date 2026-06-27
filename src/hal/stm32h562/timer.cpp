@@ -154,6 +154,43 @@ void tim4_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// TIM2 — PWM do motor EWG (CH3 em PB10, AF1)
+// ════════════════════════════════════════════════════════════════════════════
+// Movido do TIM3 (que é dedicado à injeção: OC em PC6-9, ARR=0xFFFF). TIM3_CH1
+// (PA6/EWG) colidia com INJ0 (PC6) — mesmo canal — e o tim3_pwm_init reescrevia
+// o ARR do TIM3, quebrando o timing dos injetores.
+
+void tim2_pwm_init(uint32_t freq_hz) {
+    if (freq_hz == 0u) { return; }
+    RCC_APB1LENR |= RCC_APB1LENR_TIM2EN;
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOBEN;
+
+    // PB10 = TIM2_CH3 (EWG PWM) — AF1
+    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 10u, GPIO_AF1);
+
+    uint32_t psc = 0u;
+    uint32_t arr = kTimClockHz / freq_hz;
+    while (arr > 0xFFFFu) { ++psc; arr = kTimClockHz / (freq_hz * (psc + 1u)); }
+    if (arr > 0u) { arr -= 1u; }
+
+    TIM2_CR1   = 0u;
+    TIM2_PSC   = psc;
+    TIM2_ARR   = arr;
+    TIM2_CCMR2 = TIM_CCMR2_OC3M_PWM1 | TIM_CCMR2_OC3PE;  // CH3: EWG
+    TIM2_CCER  = TIM_CCER_CC3E;
+    TIM2_CCR3  = 0u;
+    TIM2_EGR   = 1u;
+    TIM2_CR1   = TIM_CR1_CEN | TIM_CR1_ARPE;
+}
+
+void tim2_set_duty(uint16_t duty_pct_x10) noexcept {
+    if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
+    const uint32_t arr = TIM2_ARR;
+    const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
+    TIM2_CCR3 = ccr;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // TIM15 — ETB PWM (PE5 CH1, AF4)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -250,7 +287,9 @@ static uint32_t g_mock_tim5_cnt = 0u;
 void tim5_ic_init(void) {}
 void tim3_pwm_init(uint32_t) {}
 void tim4_pwm_init(uint32_t) {}
+void tim2_pwm_init(uint32_t) {}
 void tim3_set_duty(uint8_t, uint16_t) noexcept {}
+void tim2_set_duty(uint16_t) noexcept {}
 void tim4_set_duty(uint8_t, uint16_t) noexcept {}
 void tim15_etb_pwm_init(uint32_t) {}
 void tim15_etb_set_duty_x10(uint16_t) noexcept {}
