@@ -68,10 +68,10 @@ static ChanDef kChan[] = {
     { GPIO_NUM_1,  "IGN2", "PE11", true },   // TIM1_CH2 — cil.2
     { GPIO_NUM_2,  "IGN3", "PE13", true },   // TIM1_CH3 — cil.3
     { GPIO_NUM_3,  "IGN4", "PE14", true },   // TIM1_CH4 — cil.4
-    { GPIO_NUM_4,  "INJ1", "PC6",  true },   // TIM3_CH1 — cil.1
-    { GPIO_NUM_5,  "INJ2", "PC7",  true },   // TIM3_CH2 — cil.2
-    { GPIO_NUM_6,  "INJ3", "PC8",  true },   // TIM3_CH3 — cil.3
-    { GPIO_NUM_7,  "INJ4", "PC9",  true },   // TIM3_CH4 — cil.4
+    { GPIO_NUM_4,  "INJ1", "PC6",  false },  // TIM3_CH1 — cil.1 (desligado p/ reduzir overflow)
+    { GPIO_NUM_5,  "INJ2", "PC7",  false },  // TIM3_CH2 — cil.2
+    { GPIO_NUM_6,  "INJ3", "PC8",  false },  // TIM3_CH3 — cil.3
+    { GPIO_NUM_7,  "INJ4", "PC9",  false },  // TIM3_CH4 — cil.4
     { GPIO_NUM_10, "CKP",  "PA0",  true },   // loopback CKP do stimulator
     { GPIO_NUM_11, "CMP",  "PA1",  true },   // loopback CMP do stimulator
 };
@@ -85,7 +85,7 @@ struct EdgeEvent {
     uint8_t level;   // 1=subida, 0=descida
 };
 
-static constexpr int kBufSize = 2048;
+static constexpr int kBufSize = 8192;  // 4× original — reduz overflow com 10 canais a 700+ RPM
 static constexpr int kBufMask = kBufSize - 1;
 
 static volatile EdgeEvent g_buf[kBufSize];
@@ -188,6 +188,9 @@ static void timing_report();
 
 static void timing_start() {
     g_tm_cap              = {};
+    // Flush ring buffer — descarta eventos antigos que encheriam o buffer
+    // e causariam perda de gaps durante a captura de 720°.
+    g_tail = g_head;
     g_tm_cap.ckp_period_us = (g_m[kCkpChan].period_us > 0)
                               ? g_m[kCkpChan].period_us : 2000u;
     // timeout = 2 ciclos completos de 720° (2 × 120 dentes virtuais) + margem
@@ -219,6 +222,12 @@ static void IRAM_ATTR edge_isr(void* arg) {
     const uint8_t ch  = (uint8_t)(uint32_t)arg;
     const int64_t t   = esp_timer_get_time();
     const int     lvl = gpio_get_level(kChan[ch].gpio);
+
+    // CKP: em modos não-TIMING, gravar só bordas RISE (½ eventos, 700/s vs 1400/s)
+    // No modo TIMING precisamos de ambas as bordas para deteção de gap.
+    if (ch == (uint8_t)kCkpChan && lvl == 0 && g_mode != Mode::TIMING) {
+        return;
+    }
 
     const uint16_t next = (g_head + 1u) & kBufMask;
     if (next != g_tail) {
@@ -447,7 +456,9 @@ static void timing_report() {
 // ── Processamento de eventos (loop principal) ─────────────────────────────────
 
 static void process_events() {
-    while (g_tail != g_head) {
+    int batch = 0;
+    while (g_tail != g_head && batch < 512) {
+        ++batch;
         // C6 é RISC-V (weak ordering): fence acquire garante que os campos do
         // evento já estão visíveis depois de g_head ter avançado na ISR
         // (emparelha com o fence release em edge_isr).
@@ -653,6 +664,29 @@ static void reset_stats() {
     Serial.println("  Estatísticas resetadas.");
 }
 
+// ── Toggle INJ channels ────────────────────────────────────────────────────────
+
+static void toggle_inj_channels() {
+    bool any_on = false;
+    for (int ch = (int)kInjFirst; ch < (int)(kInjFirst + kInjCount); ++ch) {
+        if (kChan[ch].enabled) { any_on = true; break; }
+    }
+    const bool enable = !any_on;
+    for (int ch = (int)kInjFirst; ch < (int)(kInjFirst + kInjCount); ++ch) {
+        kChan[ch].enabled = enable;
+    }
+    Serial.printf("  INJ1-4: %s\n", enable ? "LIGADOS" : "DESLIGADOS");
+    if (enable) {
+        for (int ch = (int)kInjFirst; ch < (int)(kInjFirst + kInjCount); ++ch) {
+            attachInterruptArg(kChan[ch].gpio, edge_isr, (void*)(uint32_t)ch, CHANGE);
+        }
+    } else {
+        for (int ch = (int)kInjFirst; ch < (int)(kInjFirst + kInjCount); ++ch) {
+            detachInterrupt(kChan[ch].gpio);
+        }
+    }
+}
+
 // ── Help ──────────────────────────────────────────────────────────────────────
 
 static void print_help() {
@@ -661,13 +695,15 @@ static void print_help() {
     Serial.println("  ────────────────────────────────");
     Serial.println("  l  Live table (1 s)       p  Pulse log");
     Serial.println("  e  Edge log               w  Waveform bar");
-    Serial.println("  t  Timing analysis IGN    s  Estatísticas");
-    Serial.println("  r  Reset stats            ?  Esta ajuda");
+    Serial.println("  t  Timing 720° analysis   s  Estatísticas");
+    Serial.println("  r  Reset stats            i  Toggle INJ1-4");
+    Serial.println("  ?  Esta ajuda");
     Serial.println();
-    Serial.println("  Timing (t): captura 1 ciclo de 720° (2 gaps CKP).");
-    Serial.println("    Verifica: 1) IGN/INJ/CMP dispara 1x/720°; 2) ordem 1-3-4-2;");
-    Serial.println("    3) inter-cilindro 180°±3°; 4) CMP ~30° desde gap.");
+    Serial.println("  Timing (t): captura 720° (3 gaps CKP, gap1→gap3).");
+    Serial.println("    Verifica: 1) IGN/INJ dispara 1x/720°; 2) ordem 1-3-4-2;");
+    Serial.println("    3) inter-cilindro 180°±3°; 4) CMP 2x/720° (janela A+B).");
     Serial.println("    CH8=GPIO10←PA0 (CKP); CH9=GPIO11←GPIO4 (CMP loopback).");
+    Serial.println("    INJ1-4 desligados por défice — 'i' para ligar/desligar.");
     Serial.println();
     Serial.println("  Canais activos:");
     for (int ch = 0; ch < kNChan; ++ch) {
@@ -739,6 +775,7 @@ void loop() {
             case 't': g_mode = Mode::TIMING; timing_start(); break;
             case 's': print_stats(); break;
             case 'r': reset_stats(); break;
+            case 'i': toggle_inj_channels(); break;
             case '?': print_help();  break;
             default: break;
         }
