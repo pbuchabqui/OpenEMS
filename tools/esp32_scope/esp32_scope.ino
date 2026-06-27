@@ -6,14 +6,14 @@
  * Latência   : 2–5 µs por bordo (ISR context)
  *
  * Sinais monitorizados:
- *   CH0 IGN0  ← PE9  TIM1_CH1  (bobina cil.1)
- *   CH1 IGN1  ← PE11 TIM1_CH2  (bobina cil.2)
- *   CH2 IGN2  ← PE13 TIM1_CH3  (bobina cil.3)
- *   CH3 IGN3  ← PE14 TIM1_CH4  (bobina cil.4)
- *   CH4 INJ0  ← PC6  TIM3_CH1  (injector cil.1)
- *   CH5 INJ1  ← PC7  TIM3_CH2  (injector cil.2)
- *   CH6 INJ2  ← PC8  TIM3_CH3  (injector cil.3)
- *   CH7 INJ3  ← PC9  TIM3_CH4  (injector cil.4)
+ *   CH0 IGN1  ← PE9  TIM1_CH1  (bobina cil.1)
+ *   CH1 IGN2  ← PE11 TIM1_CH2  (bobina cil.2)
+ *   CH2 IGN3  ← PE13 TIM1_CH3  (bobina cil.3)
+ *   CH3 IGN4  ← PE14 TIM1_CH4  (bobina cil.4)
+ *   CH4 INJ1  ← PC6  TIM3_CH1  (injector cil.1)
+ *   CH5 INJ2  ← PC7  TIM3_CH2  (injector cil.2)
+ *   CH6 INJ3  ← PC8  TIM3_CH3  (injector cil.3)
+ *   CH7 INJ4  ← PC9  TIM3_CH4  (injector cil.4)
  *   CH8 CKP   ← PA0  (loopback — ligar ao gerador CKP do stimulator)
  *   CH9 CMP   ← PA1  (loopback — ligar ao gerador CMP do stimulator)
  *
@@ -64,14 +64,14 @@ struct ChanDef {
 // ESP32 original: GPIO 0-11 também existem, mas 6-11 são flash SPI — preferir
 // GPIO32-39 (input-only) editando kChan[] abaixo.
 static ChanDef kChan[] = {
-    { GPIO_NUM_0,  "IGN0", "PE9",  true },   // TIM1_CH1
-    { GPIO_NUM_1,  "IGN1", "PE11", true },   // TIM1_CH2
-    { GPIO_NUM_2,  "IGN2", "PE13", true },   // TIM1_CH3
-    { GPIO_NUM_3,  "IGN3", "PE14", true },   // TIM1_CH4
-    { GPIO_NUM_4,  "INJ0", "PC6",  true },   // TIM3_CH1
-    { GPIO_NUM_5,  "INJ1", "PC7",  true },   // TIM3_CH2
-    { GPIO_NUM_6,  "INJ2", "PC8",  true },   // TIM3_CH3
-    { GPIO_NUM_7,  "INJ3", "PC9",  true },   // TIM3_CH4
+    { GPIO_NUM_0,  "IGN1", "PE9",  true },   // TIM1_CH1 — cil.1
+    { GPIO_NUM_1,  "IGN2", "PE11", true },   // TIM1_CH2 — cil.2
+    { GPIO_NUM_2,  "IGN3", "PE13", true },   // TIM1_CH3 — cil.3
+    { GPIO_NUM_3,  "IGN4", "PE14", true },   // TIM1_CH4 — cil.4
+    { GPIO_NUM_4,  "INJ1", "PC6",  true },   // TIM3_CH1 — cil.1
+    { GPIO_NUM_5,  "INJ2", "PC7",  true },   // TIM3_CH2 — cil.2
+    { GPIO_NUM_6,  "INJ3", "PC8",  true },   // TIM3_CH3 — cil.3
+    { GPIO_NUM_7,  "INJ4", "PC9",  true },   // TIM3_CH4 — cil.4
     { GPIO_NUM_10, "CKP",  "PA0",  true },   // loopback CKP do stimulator
     { GPIO_NUM_11, "CMP",  "PA1",  true },   // loopback CMP do stimulator
 };
@@ -126,11 +126,11 @@ static const char* mode_name(Mode m) {
 }
 
 // ── Máquina de estados para Timing Analysis 720° ─────────────────────────────
-// Captura um ciclo completo de 720° (2 gaps CKP) e verifica:
+// Captura um ciclo completo de 720° (3 gaps CKP: gap1→gap3 = 2 revoluções) e verifica:
 //   1. Cada IGN/INJ dispara exatamente 1× por ciclo de 720°
-//   2. Ordem de disparo 1-3-4-2 (IGN0→IGN2→IGN3→IGN1)
+//   2. Ordem de disparo 1-3-4-2 (IGN1→IGN3→IGN4→IGN2)
 //   3. Inter-cilindro 180°±3°; ângulo absoluto desde gap1
-//   4. CMP (CH9) presente 1×/720° com offset esperado ~30° (kCmpTooth=5 × 6°/dente)
+//   4. CMP (CH9) presente 2×/720° (janela A dente 5 + janela B dente 34)
 // CH8 (CKP loopback PA0→GPIO10) e CH9 (CMP loopback GPIO4→GPIO11) obrigatórios.
 
 static constexpr int kCkpChan  = 8;
@@ -141,17 +141,18 @@ static constexpr int kInjFirst = 4;
 static constexpr int kInjCount = 4;
 static constexpr int kCylCount = 4;
 
-// TDC de cada cilindro em dentes desde dente 0 do gap (60-2, firing order 1-3-4-2)
-// Cil.1=IGN0: TDC @ dente 0; Cil.3=IGN2: TDC @ 15; Cil.4=IGN3: TDC @ 30; Cil.2=IGN1: TDC @ 45
-// (baseado em firing order 1-3-4-2 com TDC equidistantes a 180°/15 dentes)
-static constexpr float kTdcDente[kCylCount] = { 0.0f, 15.0f, 30.0f, 45.0f };
+// TDC de cada cilindro em dentes desde dente 0 do gap1 (60-2, firing order 1-3-4-2)
+// Ciclo completo = 720° = 120 dentes virtuais (2 revoluções × 60 dentes).
+// Cil.1=IGN1: TDC @ dente 0 (0°); Cil.3=IGN3: TDC @ dente 30 (180°);
+// Cil.4=IGN4: TDC @ dente 60 (360°); Cil.2=IGN2: TDC @ dente 90 (540°)
+static constexpr float kTdcDente[kCylCount] = { 0.0f, 30.0f, 60.0f, 90.0f };
 // kTdcDente[i] = TDC do cilindro cujo IGN é kExpectedFiringOrder[i]
 static constexpr uint8_t kExpectedFiringOrder[kIgnCount] = {0, 2, 3, 1};
 
 enum class TmState : uint8_t {
     IDLE,
     WAIT_GAP1,   // aguardar 1º gap
-    CAPTURE,     // capturar IGN/INJ entre gap1 e gap2 (360°)
+    CAPTURE,     // capturar IGN/INJ entre gap1 e gap3 (720° = 2 revoluções)
     WAIT_GAP2,   // aguardar 2º gap (confirma 720°)
     VERIFY,      // verificar que nenhum canal disparou 2× no mesmo ciclo
     DONE,
@@ -165,7 +166,8 @@ struct TmEvent {
 
 struct TimingCapture {
     int64_t  gap1_ts_us;
-    int64_t  gap2_ts_us;
+    int64_t  gap2_ts_us;   // 1ª volta (360°) — referência de fase
+    int64_t  gap3_ts_us;   // 2ª volta (720°) — fim do ciclo completo
     int64_t  last_ckp_fall_us;
     int64_t  ign_ts_us[kIgnCount];
     uint8_t  ign_count[kIgnCount];
@@ -188,8 +190,8 @@ static void timing_start() {
     g_tm_cap              = {};
     g_tm_cap.ckp_period_us = (g_m[kCkpChan].period_us > 0)
                               ? g_m[kCkpChan].period_us : 2000u;
-    // timeout = 2 ciclos completos (2 × 60 dentes × 2 revs) + margem
-    g_tm_cap.timeout_us   = g_tm_cap.ckp_period_us * 240u;
+    // timeout = 2 ciclos completos de 720° (2 × 120 dentes virtuais) + margem
+    g_tm_cap.timeout_us   = g_tm_cap.ckp_period_us * 480u;
 
     if (g_m[kCkpChan].period_us == 0) {
         Serial.println("  AVISO: CH8 sem sinal. Ligar GPIO10 ao gerador CKP do stimulator.");
@@ -264,9 +266,13 @@ static void timing_feed(const EdgeEvent& ev) {
                                   gap / 1000.0f);
                 } else if (c.gap_count == 2) {
                     c.gap2_ts_us = ev.ts_us;
+                    Serial.printf("  [TIMING] Gap2 OK (1ª volta, +%.0f ms) — a continuar...\n",
+                                  (ev.ts_us - c.gap1_ts_us) / 1000.0f);
+                } else if (c.gap_count == 3) {
+                    c.gap3_ts_us = ev.ts_us;
                     c.in_cycle   = false;
                     g_tm_state   = TmState::DONE;
-                    Serial.printf("  [TIMING] Gap2 OK — ciclo de %.2f ms capturado.\n",
+                    Serial.printf("  [TIMING] Gap3 OK — ciclo de 720° capturado (%.2f ms).\n",
                                   (ev.ts_us - c.gap1_ts_us) / 1000.0f);
                     timing_report();
                     g_mode = Mode::LIVE;
@@ -288,7 +294,7 @@ static void timing_feed(const EdgeEvent& ev) {
                           (ev.ts_us - c.gap1_ts_us) / 1000.0f,
                           (float)(ev.ts_us - c.gap1_ts_us) / c.ckp_period_us * 6.0f);
         } else {
-            Serial.printf("  [TIMING] !! CMP disparou %dx (esperado 1×/720°)\n", c.cmp_count);
+            Serial.printf("  [TIMING] !! CMP disparou %dx (esperado 2×/720°)\n", c.cmp_count);
         }
         return;
     }
@@ -300,11 +306,11 @@ static void timing_feed(const EdgeEvent& ev) {
         c.ign_count[idx]++;
         if (c.ign_count[idx] == 1) {
             c.ign_ts_us[idx] = ev.ts_us;
-            Serial.printf("  [TIMING] IGN%d @ +%.3f ms (%.1f°)\n", idx,
+            Serial.printf("  [TIMING] IGN%d @ +%.3f ms (%.1f°)\n", idx + 1,
                           (ev.ts_us - c.gap1_ts_us) / 1000.0f,
                           (float)(ev.ts_us - c.gap1_ts_us) / c.ckp_period_us * 6.0f);
         } else if (c.ign_count[idx] == 2) {
-            Serial.printf("  [TIMING] !! IGN%d disparou 2x (wasted-spark ou fase errada)\n", idx);
+            Serial.printf("  [TIMING] !! IGN%d disparou 2x (wasted-spark ou fase errada)\n", idx + 1);
         }
     } else if (ev.ch >= (uint8_t)kInjFirst && ev.ch < (uint8_t)(kInjFirst + kInjCount)) {
         const int idx = (int)(ev.ch - kInjFirst);
@@ -317,7 +323,7 @@ static void timing_feed(const EdgeEvent& ev) {
 
 static void timing_report() {
     const TimingCapture& c = g_tm_cap;
-    const float T720 = (c.gap2_ts_us - c.gap1_ts_us) / 1000.0f;  // ms/ciclo medido
+    const float T720 = (c.gap3_ts_us - c.gap1_ts_us) / 1000.0f;  // ms/ciclo 720° medido
     const float T  = (T720 > 0.0f) ? T720 / 120.0f : c.ckp_period_us / 1000.0f;  // ms/dente
     // Inter-cilindro esperado: 720° / 4 cilindros = 180° = 30 dentes
     const float inter_exp_ms  = T * 30.0f;
@@ -338,12 +344,12 @@ static void timing_report() {
     for (int i = 0; i < kIgnCount; ++i) {
         const bool ok = (c.ign_count[i] == 1);
         if (!ok) count_ok = false;
-        Serial.printf("  IGN%d   %dx        %s\n", i, c.ign_count[i], ok ? "✓" : "✗ FALHA");
+        Serial.printf("  IGN%d   %dx        %s\n", i + 1, c.ign_count[i], ok ? "✓" : "✗ FALHA");
     }
     for (int i = 0; i < kInjCount; ++i) {
         const bool ok = (c.inj_count[i] == 1);
         if (!ok) count_ok = false;
-        Serial.printf("  INJ%d   %dx        %s\n", i, c.inj_count[i], ok ? "✓" : "✗ FALHA");
+        Serial.printf("  INJ%d   %dx        %s\n", i + 1, c.inj_count[i], ok ? "✓" : "✗ FALHA");
     }
 
     // ── 2. Ordem de disparo ─────────────────────────────────────────────────
@@ -362,9 +368,9 @@ static void timing_report() {
     Serial.println();
     Serial.println("  [2] Ordem de disparo IGN");
     Serial.print("  Detectada : ");
-    for (int i = 0; i < kIgnCount; ++i) { if (i) Serial.print("→"); Serial.printf("IGN%d", order[i]); }
+    for (int i = 0; i < kIgnCount; ++i) { if (i) Serial.print("→"); Serial.printf("IGN%d", order[i] + 1); }
     Serial.println();
-    Serial.print("  Esperada  : IGN0→IGN2→IGN3→IGN1");
+    Serial.print("  Esperada  : IGN1→IGN3→IGN4→IGN2");
     Serial.printf("  %s\n", order_ok ? "  ✓" : "  ✗ ERRADA");
 
     // ── 3. Ângulo por cilindro ──────────────────────────────────────────────
@@ -384,14 +390,14 @@ static void timing_report() {
         const bool  ic_ok  = (i == 0) || (fabsf(ic_dev) < 3.0f);  // ±3° = ~±0.5 dentes
         if (!ic_ok) { angle_ok = false; }
         if (!cap) {
-            Serial.printf("  IGN%d  (não capturado)                                    ✗\n", ch);
+            Serial.printf("  IGN%d  (não capturado)                                    ✗\n", ch + 1);
             angle_ok = false;
         } else if (i == 0) {
             Serial.printf("  IGN%d  %8.3f ms  %6.2f  %6.1f°     —          —        —\n",
-                          ch, dt, dt / T, deg);
+                          ch + 1, dt, dt / T, deg);
         } else {
             Serial.printf("  IGN%d  %8.3f ms  %6.2f  %6.1f°  %6.1f°  %+6.1f°    %s\n",
-                          ch, dt, dt / T, deg, ic_deg, ic_dev, ic_ok ? "✓" : "✗");
+                          ch + 1, dt, dt / T, deg, ic_deg, ic_dev, ic_ok ? "✓" : "✗");
         }
         if (cap) { prev_deg = deg; }
     }
@@ -404,30 +410,30 @@ static void timing_report() {
         if (c.inj_count[i] == 1) {
             const float dt  = (c.inj_ts_us[i] - c.gap1_ts_us) / 1000.0f;
             const float deg = dt / T * 6.0f;
-            Serial.printf("  INJ%d   %8.3f ms  %6.1f°\n", i, dt, deg);
+            Serial.printf("  INJ%d   %8.3f ms  %6.1f°\n", i + 1, dt, deg);
         } else {
-            Serial.printf("  INJ%d   (não capturado ou %dx)\n", i, c.inj_count[i]);
+            Serial.printf("  INJ%d   (não capturado ou %dx)\n", i + 1, c.inj_count[i]);
         }
     }
 
     // ── 5. CMP ──────────────────────────────────────────────────────────────
-    // kCmpTooth=5 → CMP sobe ~5 dentes após dente 0 do gap = ~30°
+    // Encoding A/B: 1ª borda CMP no dente 5 (janela A, ~30°), 2ª no dente 34 (janela B, ~564°)
     static constexpr float kCmpExpectedDeg = 30.0f;
     static constexpr float kCmpToleranceDeg = 18.0f;  // ±3 dentes
     Serial.println();
-    Serial.println("  [5] CMP (cam sensor) — esperado 1×/720°");
+    Serial.println("  [5] CMP (cam sensor) — esperado 2×/720° (janela A + B)");
     bool cmp_ok = false;
     if (c.cmp_count == 0) {
         Serial.println("  CMP   0×  ✗ AUSENTE — verificar ligação GPIO11←GPIO4 e CMP_GPIO do stimulator");
-    } else if (c.cmp_count > 1) {
-        Serial.printf("  CMP   %dx ✗ DUPLICADO\n", c.cmp_count);
+    } else if (c.cmp_count > 2) {
+        Serial.printf("  CMP   %dx ✗ EXCESSIVO (esperado 2)\n", c.cmp_count);
     } else {
         const float dt  = (c.cmp_ts_us - c.gap1_ts_us) / 1000.0f;
         const float deg = dt / T * 6.0f;
         const float dev = deg - kCmpExpectedDeg;
         cmp_ok = (fabsf(dev) < kCmpToleranceDeg);
-        Serial.printf("  CMP   1×  @ +%.3f ms = %.1f°  (esp. ~%.0f°, dev %+.1f°)  %s\n",
-                      dt, deg, kCmpExpectedDeg, dev, cmp_ok ? "✓" : "✗ OFFSET ERRADO");
+        Serial.printf("  CMP   %dx  @ +%.3f ms = %.1f°  (esp. ~%.0f°, dev %+.1f°)  %s\n",
+                      c.cmp_count, dt, deg, kCmpExpectedDeg, dev, cmp_ok ? "✓" : "✗ OFFSET ERRADO");
     }
 
     // ── Resultado ───────────────────────────────────────────────────────────
@@ -550,7 +556,7 @@ static void print_live_table() {
     Serial.println("+──+──────+───────+────────+────────+────────+───────+─────────+");
 
     if (ign0_rpm > 0) {
-        Serial.printf("  RPM estimado (IGN0 period): %.1f\n", ign0_rpm);
+        Serial.printf("  RPM estimado (IGN1 period): %.1f\n", ign0_rpm);
     }
 
     // Avisos
