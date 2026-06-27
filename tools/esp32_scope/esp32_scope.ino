@@ -64,14 +64,14 @@ struct ChanDef {
 // ESP32 original: GPIO 0-11 também existem, mas 6-11 são flash SPI — preferir
 // GPIO32-39 (input-only) editando kChan[] abaixo.
 static ChanDef kChan[] = {
-    { GPIO_NUM_0,  "IGN1", "PE9",  true },   // TIM1_CH1 — cil.1
-    { GPIO_NUM_1,  "IGN2", "PE11", true },   // TIM1_CH2 — cil.2
-    { GPIO_NUM_2,  "IGN3", "PE13", true },   // TIM1_CH3 — cil.3
-    { GPIO_NUM_3,  "IGN4", "PE14", true },   // TIM1_CH4 — cil.4
-    { GPIO_NUM_4,  "INJ1", "PC6",  false },  // TIM3_CH1 — cil.1 (desligado p/ reduzir overflow)
-    { GPIO_NUM_5,  "INJ2", "PC7",  false },  // TIM3_CH2 — cil.2
-    { GPIO_NUM_6,  "INJ3", "PC8",  false },  // TIM3_CH3 — cil.3
-    { GPIO_NUM_7,  "INJ4", "PC9",  false },  // TIM3_CH4 — cil.4
+    { GPIO_NUM_0,  "IGN4", "PE14", true },   // TIM1_CH4 — cil.4 (GPIO0→PE14 na bancada)
+    { GPIO_NUM_1,  "IGN3", "PE13", true },   // TIM1_CH3 — cil.3 (GPIO1→PE13)
+    { GPIO_NUM_2,  "IGN2", "PE11", true },   // TIM1_CH2 — cil.2 (GPIO2→PE11)
+    { GPIO_NUM_3,  "IGN1", "PE9",  true },   // TIM1_CH1 — cil.1 (GPIO3→PE9)
+    { GPIO_NUM_4,  "INJ4", "PC9",  false },  // TIM3_CH4 — cil.4
+    { GPIO_NUM_5,  "INJ3", "PC8",  false },  // TIM3_CH3 — cil.3
+    { GPIO_NUM_6,  "INJ2", "PC7",  false },  // TIM3_CH2 — cil.2 (GPIO6→PC7)
+    { GPIO_NUM_7,  "INJ1", "PC6",  false },  // TIM3_CH1 — cil.1 (GPIO7→PC6)
     { GPIO_NUM_10, "CKP",  "PA0",  true },   // loopback CKP do stimulator
     { GPIO_NUM_11, "CMP",  "PA1",  true },   // loopback CMP do stimulator
 };
@@ -148,7 +148,9 @@ static constexpr int kCylCount = 4;
 // Cil.4=IGN4: TDC @ dente 60 (360°); Cil.2=IGN2: TDC @ dente 90 (540°)
 static constexpr float kTdcDente[kCylCount] = { 0.0f, 30.0f, 60.0f, 90.0f };
 // kTdcDente[i] = TDC do cilindro cujo IGN é kExpectedFiringOrder[i]
-static constexpr uint8_t kExpectedFiringOrder[kIgnCount] = {0, 2, 3, 1};
+// CH0=IGN4(PE14), CH1=IGN3(PE13), CH2=IGN2(PE11), CH3=IGN1(PE9)
+// Firing order 1-3-4-2: IGN1→IGN3→IGN4→IGN2 → CH3→CH1→CH0→CH2
+static constexpr uint8_t kExpectedFiringOrder[kIgnCount] = {3, 1, 0, 2};
 
 enum class TmState : uint8_t {
     IDLE,
@@ -402,7 +404,7 @@ static void timing_report() {
     Serial.print("  Detectada : ");
     for (int i = 0; i < kIgnCount; ++i) { if (i) Serial.print("→"); Serial.printf("IGN%d", order[i] + 1); }
     Serial.println();
-    Serial.print("  Esperada  : IGN1→IGN3→IGN4→IGN2");
+    Serial.print("  Esperada  : IGN3→IGN4→IGN2→IGN1  (temporal CH1→CH0→CH2→CH3)");
     Serial.printf("  %s\n", order_ok ? "  ✓" : "  ✗ ERRADA");
 
     // ── 3. Ângulo por cilindro ──────────────────────────────────────────────
@@ -917,8 +919,9 @@ static void render_dashboard() {
             }
 
     // Ordem temporal esperada p/ firing order 1-3-4-2 com gap1 = TDC cyl1:
-    // IGN3@167° → IGN4@347° → IGN2@527° → IGN1@707°
-    static const uint8_t kExpectedTemporalOrder[4] = {2, 3, 1, 0};  // IGN3, IGN4, IGN2, IGN1
+    // IGN3@167°(CH1) → IGN4@347°(CH0) → IGN2@527°(CH2) → IGN1@707°(CH3)
+    // CH0=IGN4, CH1=IGN3, CH2=IGN2, CH3=IGN1
+    static const uint8_t kExpectedTemporalOrder[4] = {1, 0, 2, 3};  // IGN3, IGN4, IGN2, IGN1
     bool ign_order_ok = true;
     for (int i = 0; i < 4; ++i)
         if (ign_order[i] != kExpectedTemporalOrder[i]) { ign_order_ok = false; }
