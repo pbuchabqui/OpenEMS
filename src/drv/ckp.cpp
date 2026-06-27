@@ -230,8 +230,11 @@ struct DecoderState {
     uint8_t  hist_ready;                // quantas entradas válidas em tooth_hist (máx kHistSize)
     uint16_t tooth_count;               // dentes desde o último gap aceito
     uint8_t  cmp_confirms;              // confirmações do cam sensor (CH1)
-    uint32_t cmp_glitch_count;          // FIX P0: contador de glitches CMP rejeitados (diagnóstico)
+    uint32_t cmp_glitch_count;          // FIX P0: contador de glitches CMP rejeitados (diagnóstico) — soma spacing+window
+    uint16_t cmp_glitch_spacing_count;  // glitches por inter-edge spacing < min_spacing
+    uint16_t cmp_glitch_window_count;   // glitches fora das janelas A/B (inclui pré-FULL_SYNC)
     uint32_t cmp_phase_corrections;     // bordas CMP que corrigiram phase_A (anchor auto-corretivo) — diagnóstico
+    uint8_t  phase_anchor_count;        // bordas CMP que SETARAM phase_A via janela A/B (âncora absoluta) — diagnóstico
     uint16_t consecutive_anomalies;     // gaps+spikes seguidos — re-bootstrap se histórico defasar
 };
 
@@ -254,7 +257,10 @@ static DecoderState g_state = {
     0u,
     0u,
     0u,  // cmp_glitch_count inicializado
+    0u,  // cmp_glitch_spacing_count inicializado
+    0u,  // cmp_glitch_window_count inicializado
     0u,  // cmp_phase_corrections inicializado
+    0u,  // phase_anchor_count inicializado
     0u,  // consecutive_anomalies inicializado
 };
 // FIX-5: volatile nas variáveis escritas pela ISR TIM5 (prio 1) e lidas pelo
@@ -769,6 +775,7 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
         const uint32_t max_valid = expected + (expected / tolerance);
         if (cmp_delta < min_valid || cmp_delta > max_valid) {
             ++g_state.cmp_glitch_count;
+            ++g_state.cmp_glitch_spacing_count;
             return;  // mantém s_prev_cmp_capture (último válido)
         }
 #else
@@ -784,6 +791,7 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
         const uint32_t min_spacing = (kRealTeethPerRev / 4u) * prev_period_ticks;
         if (cmp_delta < min_spacing) {
             ++g_state.cmp_glitch_count;
+            ++g_state.cmp_glitch_spacing_count;
             return;  // mantém s_prev_cmp_capture (último válido)
         }
 #endif
@@ -802,6 +810,7 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
         // a outra volta recebe phase_A=false via carry-forward do gap.
         if (!in_a) {
             ++g_state.cmp_glitch_count;  // borda fora da janela de referência
+            ++g_state.cmp_glitch_window_count;
             return;
         }
         const bool phase_A_target = true;
@@ -810,6 +819,7 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
             ti, CMP_WINDOW_B_OPEN_TOOTH, CMP_WINDOW_B_CLOSE_TOOTH);
         if (!in_a && !in_b) {
             ++g_state.cmp_glitch_count;  // borda fora das janelas esperadas
+            ++g_state.cmp_glitch_window_count;
             return;
         }
         const bool phase_A_target = in_a;  // janela A → true, janela B → false
@@ -819,6 +829,7 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
         }
         s_prev_cmp_capture   = cmp_capture_now;
         g_state.snap.phase_A = phase_A_target;
+        ++g_state.phase_anchor_count;         // âncora CMP aplicada (diagnóstico)
     } else {
         s_prev_cmp_capture   = cmp_capture_now;
         g_state.snap.phase_A = !g_state.snap.phase_A;
@@ -884,8 +895,20 @@ uint32_t ckp_get_cmp_glitch_count() noexcept {
     return g_state.cmp_glitch_count;
 }
 
+uint16_t ckp_get_cmp_glitch_spacing_count() noexcept {
+    return g_state.cmp_glitch_spacing_count;
+}
+
+uint16_t ckp_get_cmp_glitch_window_count() noexcept {
+    return g_state.cmp_glitch_window_count;
+}
+
 uint32_t ckp_get_cmp_phase_corrections() noexcept {
     return g_state.cmp_phase_corrections;
+}
+
+uint8_t ckp_get_phase_anchor_count() noexcept {
+    return g_state.phase_anchor_count;
 }
 
 bool ckp_cmp_seen() noexcept {
@@ -904,7 +927,10 @@ void ckp_test_reset() noexcept {
         0u,
         0u,
         0u,  // cmp_glitch_count
+        0u,  // cmp_glitch_spacing_count
+        0u,  // cmp_glitch_window_count
         0u,  // cmp_phase_corrections
+        0u,  // phase_anchor_count
         0u,  // consecutive_anomalies
     };
     ems_test_tim5_ccr1   = 0u;

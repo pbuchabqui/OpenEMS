@@ -233,8 +233,10 @@ inline void update_realtime_page() noexcept {
     write_u32_le(&rt.reserved[0], g_rt_sched_late_events);
     rt.reserved[4] = g_rt_lambda_target_d4;
     rt.reserved[5] = static_cast<uint8_t>(g_rt_ltft_pct);
-    rt.reserved[6] = 0u;
-    rt.reserved[7] = 0u;
+    rt.reserved[6] = ems::drv::ckp_get_cmp_glitch_spacing_count() > 255u ? 255u
+                     : static_cast<uint8_t>(ems::drv::ckp_get_cmp_glitch_spacing_count());
+    rt.reserved[7] = ems::drv::ckp_get_cmp_glitch_window_count() > 255u ? 255u
+                     : static_cast<uint8_t>(ems::drv::ckp_get_cmp_glitch_window_count());
     rt.reserved[8] = ems::hal::tle8888_fault_bitmap();
     rt.reserved[9] = ems::hal::flex_fuel_valid()
                     ? ems::hal::flex_fuel_ethanol_pct() : 0u;

@@ -99,7 +99,10 @@ uint32_t ckp_seed_loaded_count() noexcept;
 uint32_t ckp_seed_confirmed_count() noexcept;
 uint32_t ckp_seed_rejected_count() noexcept;
 uint32_t ckp_get_cmp_glitch_count() noexcept;
+uint16_t ckp_get_cmp_glitch_spacing_count() noexcept;
+uint16_t ckp_get_cmp_glitch_window_count() noexcept;
 uint32_t ckp_get_cmp_phase_corrections() noexcept;
+uint8_t  ckp_get_phase_anchor_count() noexcept;
 
 /**
  * @brief True se ao menos uma borda CMP válida já foi aceite (cam sensor presente).
