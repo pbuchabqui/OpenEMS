@@ -111,7 +111,7 @@ static ChanMetrics g_m[kNChan];
 
 // ── Modos de visualização ─────────────────────────────────────────────────────
 
-enum class Mode : uint8_t { LIVE, EDGE, PULSE, WAVE, TIMING };
+enum class Mode : uint8_t { LIVE, EDGE, PULSE, WAVE, TIMING, DASH };
 static volatile Mode g_mode = Mode::LIVE;
 
 static const char* mode_name(Mode m) {
@@ -121,6 +121,7 @@ static const char* mode_name(Mode m) {
         case Mode::PULSE:  return "PULSE";
         case Mode::WAVE:   return "WAVE";
         case Mode::TIMING: return "TIMING";
+        case Mode::DASH:   return "DASH";
     }
     return "?";
 }
@@ -181,6 +182,28 @@ struct TimingCapture {
     bool     in_cycle;
 };
 
+// ── Dashboard 720° oscilloscope ──────────────────────────────────────────────
+// Captura TODAS as bordas num ciclo 720° e renderiza diagrama ASCII.
+static constexpr int kDashMaxEdges = 600;   // ~284 esperados — folga 2×
+static constexpr int kDashWidth    = 96;    // colunas (7.5°/col em 720°)
+static constexpr float kDashDegPerCol = 720.0f / (float)kDashWidth;
+
+struct DashEvent {
+    int64_t ts_us;
+    uint8_t ch;
+    uint8_t level;  // 0=FALL, 1=RISE
+};
+static DashEvent g_dash_events[kDashMaxEdges];
+static int       g_dash_event_count = 0;
+static int64_t   g_dash_gap1_us = 0;
+static int64_t   g_dash_gap3_us = 0;
+static int       g_dash_gap_count = 0;
+static bool      g_dash_capturing = false;
+
+static void dashboard_start();
+static void dashboard_feed(const EdgeEvent& ev);
+static void render_dashboard();
+
 static TmState       g_tm_state = TmState::IDLE;
 static TimingCapture g_tm_cap;
 
@@ -223,9 +246,9 @@ static void IRAM_ATTR edge_isr(void* arg) {
     const int64_t t   = esp_timer_get_time();
     const int     lvl = gpio_get_level(kChan[ch].gpio);
 
-    // CKP: em modos não-TIMING, gravar só bordas RISE (½ eventos, 700/s vs 1400/s)
-    // No modo TIMING precisamos de ambas as bordas para deteção de gap.
-    if (ch == (uint8_t)kCkpChan && lvl == 0 && g_mode != Mode::TIMING) {
+    // CKP: em modos não-TIMING/DASH, gravar só bordas RISE (½ eventos, 700/s vs 1400/s)
+    // Nos modos TIMING e DASH precisamos de ambas as bordas para deteção de gap.
+    if (ch == (uint8_t)kCkpChan && lvl == 0 && g_mode != Mode::TIMING && g_mode != Mode::DASH) {
         return;
     }
 
@@ -477,6 +500,11 @@ static void process_events() {
             timing_feed(ev);
         }
 
+        // Alimentar dashboard (activo apenas durante modo DASH)
+        if (g_mode == Mode::DASH) {
+            dashboard_feed(ev);
+        }
+
         ChanMetrics& m = g_m[ev.ch];
         m.last_event_us = ev.ts_us;
 
@@ -628,6 +656,308 @@ static void print_waveform() {
     }
 }
 
+// ── Dashboard 720° Oscilloscope ────────────────────────────────────────────────
+
+static void dashboard_start() {
+    g_dash_event_count = 0;
+    g_dash_gap_count   = 0;
+    g_dash_gap1_us     = 0;
+    g_dash_gap3_us     = 0;
+    g_dash_capturing   = false;
+    // Auto- Ligar canais INJ (necessários p/ dashboard)
+    for (int ch = (int)kInjFirst; ch < (int)(kInjFirst + kInjCount); ++ch) {
+        if (!kChan[ch].enabled) {
+            kChan[ch].enabled = true;
+            attachInterruptArg(kChan[ch].gpio, edge_isr, (void*)(uint32_t)ch, CHANGE);
+        }
+    }
+    // Flush ring buffer
+    g_tail = g_head;
+    uint32_t ckp_period = (g_m[kCkpChan].period_us > 0) ? g_m[kCkpChan].period_us : 2000u;
+    Serial.printf("  [DASH] À espera do 1º gap CKP (period=%.3f ms)...\n", ckp_period / 1000.0f);
+}
+
+// Chamado por process_events() para cada evento quando g_mode == Mode::DASH
+static void dashboard_feed(const EdgeEvent& ev) {
+    // ── Deteção de gap CKP ──────────────────────────────────────────────
+    if (ev.ch == (uint8_t)kCkpChan) {
+        static int64_t last_fall = 0;
+        if (ev.level == 0u) {
+            last_fall = ev.ts_us;
+        } else if (last_fall > 0) {
+            const uint32_t ckp_period = (g_m[kCkpChan].period_us > 0) ? g_m[kCkpChan].period_us : 2000u;
+            const int64_t gap = ev.ts_us - last_fall;
+            if (gap > (int64_t)(ckp_period * 18u / 10u)) {
+                g_dash_gap_count++;
+                if (g_dash_gap_count == 1) {
+                    g_dash_gap1_us   = ev.ts_us;
+                    g_dash_capturing = true;
+                    g_dash_event_count = 0;
+                    Serial.printf("  [DASH] Gap1 OK — a capturar ciclo 720°...\n");
+                } else if (g_dash_gap_count == 2) {
+                    Serial.printf("  [DASH] Gap2 OK (1ª volta, +%.0f ms) — a continuar...\n",
+                                  (ev.ts_us - g_dash_gap1_us) / 1000.0f);
+                } else if (g_dash_gap_count == 3) {
+                    g_dash_gap3_us   = ev.ts_us;
+                    g_dash_capturing = false;
+                    Serial.printf("  [DASH] Gap3 OK — ciclo 720° capturado (%.2f ms).\n",
+                                  (ev.ts_us - g_dash_gap1_us) / 1000.0f);
+                    render_dashboard();
+                    g_mode = Mode::LIVE;
+                }
+            }
+        }
+        // Sempre gravar CKP no buffer durante captura
+        if (g_dash_capturing && g_dash_event_count < kDashMaxEdges) {
+            DashEvent de;
+            de.ts_us = ev.ts_us; de.ch = ev.ch; de.level = ev.level;
+            g_dash_events[g_dash_event_count++] = de;
+        }
+        return;
+    }
+
+    // ── Gravar todos os canais durante captura ──────────────────────────
+    if (g_dash_capturing && g_dash_event_count < kDashMaxEdges) {
+        DashEvent de;
+        de.ts_us = ev.ts_us; de.ch = ev.ch; de.level = ev.level;
+        g_dash_events[g_dash_event_count++] = de;
+    }
+}
+
+static void render_dashboard() {
+    if (g_dash_event_count == 0 || g_dash_gap3_us <= g_dash_gap1_us) {
+        Serial.println("  [DASH] ERRO: sem dados ou ciclo inválido.");
+        return;
+    }
+
+    const float T720_ms = (g_dash_gap3_us - g_dash_gap1_us) / 1000.0f;
+    const float T_tooth_ms = T720_ms / 120.0f;  // 120 dentes virtuais em 720°
+    const float rpm_f = (T_tooth_ms > 0) ? 60000.0f / (T_tooth_ms * 60.0f) : 0.0f;
+    const float us_per_col = T720_ms * 1000.0f / (float)kDashWidth;
+
+    // ── Cabeçalho ──────────────────────────────────────────────────────
+    Serial.println();
+    Serial.println("  ╔══════════════════════════════════════════════════════════════════════════════════╗");
+    Serial.printf("  ║ 720° Engine Dashboard — RPM=%.0f  T_ciclo=%.2f ms  events=%d                     ║\n",
+                  rpm_f, T720_ms, g_dash_event_count);
+    Serial.println("  ╠══════════════════════════════════════════════════════════════════════════════════╣");
+
+    // ── Régua de ângulo (marcas a cada 90°, labels a cada 180°) ──────────
+    // Pré-construir a linha da régua como string
+    char ruler[kDashWidth + 1];
+    for (int col = 0; col < kDashWidth; ++col) {
+        float deg = col * kDashDegPerCol;
+        int deg_i = (int)(deg + 0.5f);
+        if (deg_i % 180 == 0 && fabsf(deg - (float)deg_i) < kDashDegPerCol) {
+            ruler[col] = '0' + (deg_i / 180);  // 0,1,2,3,4 para 0,180,360,540,720
+        } else if (deg_i % 90 == 0 && fabsf(deg - (float)deg_i) < kDashDegPerCol / 2.0f) {
+            ruler[col] = '|';
+        } else if (deg_i % 30 == 0 && fabsf(deg - (float)deg_i) < kDashDegPerCol / 2.0f) {
+            ruler[col] = '\'';
+        } else {
+            ruler[col] = ' ';
+        }
+    }
+    ruler[kDashWidth] = '\0';
+    Serial.print("  ║"); Serial.print(ruler);
+    Serial.printf(" ║ 0=0° 1=180° 2=360° 3=540° 4=720°\n");
+
+    // ── Marcadores TDC ──────────────────────────────────────────────────
+    // T1=cyl1@0°/720°, T3=cyl3@180°, T4=cyl4@360°, T2=cyl2@540°
+    char tdc[kDashWidth + 1];
+    for (int col = 0; col < kDashWidth; ++col) {
+        float deg = col * kDashDegPerCol;
+        float near_0 = fabsf(fmodf(deg + kDashDegPerCol, 720.0f));
+        if (deg < kDashDegPerCol * 2.0f || fabsf(deg - 360.0f) < kDashDegPerCol * 1.5f) {
+            tdc[col] = '1';  // TDC cyl 1
+        } else if (fabsf(deg - 180.0f) < kDashDegPerCol * 1.5f) {
+            tdc[col] = '3';  // TDC cyl 3
+        } else if (fabsf(deg - 540.0f) < kDashDegPerCol * 1.5f) {
+            tdc[col] = '2';  // TDC cyl 2
+        } else {
+            tdc[col] = ' ';
+        }
+    }
+    // Sobrescrever 360° com '4' (TDC cyl 4)
+    for (int col = 0; col < kDashWidth; ++col) {
+        float deg = col * kDashDegPerCol;
+        if (fabsf(deg - 360.0f) < kDashDegPerCol * 1.5f) { tdc[col] = '4'; }
+    }
+    tdc[kDashWidth] = '\0';
+    Serial.print("  ║TDC"); Serial.print(tdc);
+    Serial.println("║ 1=cyl1 3=cyl3 4=cyl4 2=cyl2");
+
+    // ── Phase bar ───────────────────────────────────────────────────────
+    Serial.print("  ║PHASE");
+    for (int col = 0; col < kDashWidth - 5; ++col) {
+        float deg = col * kDashDegPerCol;
+        Serial.print(deg < 360.0f ? 'A' : 'B');
+    }
+    Serial.println("║");
+
+    // ── CKP 60-2 wheel (reconstruído analiticamente) ────────────────────
+    Serial.print("  ║CKP");
+    for (int col = 0; col < kDashWidth - 3; ++col) {
+        float deg = col * kDashDegPerCol;
+        float tooth_pos = fmodf(deg, 360.0f);
+        int tooth = (int)(tooth_pos / 6.0f);
+        float in_tooth = fmodf(tooth_pos, 6.0f);
+        bool is_gap = (tooth >= 58);
+        Serial.print(is_gap ? '_' : (in_tooth < 3.0f ? '\xDB' : '_'));
+    }
+    Serial.println("║ 60-2 wheel (gap = __)");
+
+    // ── CMP + IGN + INJ traces (sticky rendering) ───────────────────────
+    static const uint8_t kDashChannels[] = {
+        (uint8_t)kCmpChan,  // 9
+        0, 1, 2, 3,         // IGN1-4
+        4, 5, 6, 7          // INJ1-4
+    };
+    static const int kDashNumChannels = sizeof(kDashChannels) / sizeof(kDashChannels[0]);
+
+    for (int ci = 0; ci < kDashNumChannels; ++ci) {
+        const uint8_t ch = kDashChannels[ci];
+        if (!kChan[ch].enabled) { continue; }
+
+        // Sticky: percorrer todos os eventos UMA vez, construir níveis por coluna
+        // O nível inicial (antes do 1º evento) é LOW para todos os canais.
+        bool level = false;
+        int ev_idx = 0;
+        char trace[kDashWidth + 1];
+
+        for (int col = 0; col < kDashWidth; ++col) {
+            int64_t t_col = g_dash_gap1_us + (int64_t)(col * us_per_col);
+
+            // Avançar eventos até ao tempo desta coluna, actualizando o nível
+            while (ev_idx < g_dash_event_count && g_dash_events[ev_idx].ts_us <= t_col) {
+                if (g_dash_events[ev_idx].ch == ch) {
+                    level = (g_dash_events[ev_idx].level == 1u);
+                }
+                ev_idx++;
+            }
+            trace[col] = level ? '\xDB' : ' ';
+        }
+        trace[kDashWidth] = '\0';
+
+        Serial.print("  ║"); Serial.print(kChan[ch].name); Serial.print(trace); Serial.println("║");
+    }
+
+    // ── Rodapé com verificação ──────────────────────────────────────────
+    Serial.println("  ╠══════════════════════════════════════════════════════════════════════════════════╣");
+
+    // Extrair primeiros FALLs de IGN/INJ e contar CMP RISE
+    int64_t ign_fall_ts[4] = {0, 0, 0, 0};
+    int64_t inj_rise_ts[4] = {0, 0, 0, 0};  // INJ RISE = início da injeção
+    int64_t inj_fall_ts[4] = {0, 0, 0, 0};
+    int ign_order[4] = {0, 1, 2, 3};
+    int cmp_rise_count = 0;
+
+    // Extrair eventos IGN/INJ pareados: 1º RISE (dwell/INJ start) e o
+    // 1º FALL APÓS esse RISE (spark/INJ end). Evita confundir FALLs
+    // do ciclo anterior (ex: IGN1 spark a 707° aparece como FALL a 5°
+    // no ciclo seguinte).
+    int64_t ign_rise_ts[4] = {0, 0, 0, 0};
+    bool ign_got_rise[4] = {false, false, false, false};
+    for (int i = 0; i < g_dash_event_count; ++i) {
+        const DashEvent& e = g_dash_events[i];
+        if (e.ch >= 0 && e.ch < 4) {
+            if (e.level == 1u && !ign_got_rise[e.ch]) {
+                ign_rise_ts[e.ch] = e.ts_us;
+                ign_got_rise[e.ch] = true;
+            }
+            if (e.level == 0u && ign_got_rise[e.ch] && ign_fall_ts[e.ch] == 0) {
+                ign_fall_ts[e.ch] = e.ts_us;  // 1º FALL após o 1º RISE
+            }
+        }
+        if (e.ch >= 4 && e.ch < 8) {
+            if (e.level == 1u && inj_rise_ts[e.ch - 4] == 0) { inj_rise_ts[e.ch - 4] = e.ts_us; }
+            if (e.level == 0u && inj_rise_ts[e.ch - 4] > 0 && inj_fall_ts[e.ch - 4] == 0) {
+                inj_fall_ts[e.ch - 4] = e.ts_us;
+            }
+        }
+        if (e.ch == (uint8_t)kCmpChan && e.level == 1u) { cmp_rise_count++; }
+    }
+
+    // ── Tabela detalhada de ângulos ────────────────────────────────────
+    Serial.println("  ╠══════════════════════════════════════════════════════════════════════════════════╣");
+    Serial.println("  ║ Canal  1º FALL(°)  1º RISE(°)  PW_IGN(°)  INJ RISE(°)  INJ FALL(°)  INJ→IGN  ║");
+    Serial.println("  ║ ─────  ──────────  ──────────  ─────────  ───────────  ───────────  ───────  ║");
+    for (int ch = 0; ch < 4; ++ch) {
+        float ign_fall_deg = (ign_fall_ts[ch] > 0)
+            ? (ign_fall_ts[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
+        float ign_rise_deg = -1.0f;
+        float inj_rise_deg = (inj_rise_ts[ch] > 0)
+            ? (inj_rise_ts[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
+        float inj_fall_deg = (inj_fall_ts[ch] > 0)
+            ? (inj_fall_ts[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
+
+        // Procurar 1º RISE do IGN (dwell start)
+        for (int i = 0; i < g_dash_event_count; ++i) {
+            if (g_dash_events[i].ch == (uint8_t)ch && g_dash_events[i].level == 1u) {
+                ign_rise_deg = (g_dash_events[i].ts_us - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f;
+                break;
+            }
+        }
+
+        float inj_to_ign = (ign_fall_deg > 0 && inj_rise_deg > 0) ? ign_fall_deg - inj_rise_deg : 0.0f;
+
+        Serial.printf("  ║ %-5s  %8.1f°  %8.1f°  %7.1f°  %9.1f°  %9.1f°  %+6.1f°  ║\n",
+                      kChan[ch].name,
+                      ign_fall_deg, ign_rise_deg,
+                      (ign_fall_deg > 0 && ign_rise_deg > 0) ? ign_fall_deg - ign_rise_deg : 0.0f,
+                      inj_rise_deg, inj_fall_deg, inj_to_ign);
+    }
+    Serial.println("  ╠══════════════════════════════════════════════════════════════════════════════════╣");
+
+    // Ordenar IGN por timestamp (ordem temporal no ciclo 720°)
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3 - i; ++j)
+            if (ign_fall_ts[ign_order[j]] > ign_fall_ts[ign_order[j+1]]) {
+                int tmp = ign_order[j]; ign_order[j] = ign_order[j+1]; ign_order[j+1] = tmp;
+            }
+
+    // Ordem temporal esperada p/ firing order 1-3-4-2 com gap1 = TDC cyl1:
+    // IGN3@167° → IGN4@347° → IGN2@527° → IGN1@707°
+    static const uint8_t kExpectedTemporalOrder[4] = {2, 3, 1, 0};  // IGN3, IGN4, IGN2, IGN1
+    bool ign_order_ok = true;
+    for (int i = 0; i < 4; ++i)
+        if (ign_order[i] != kExpectedTemporalOrder[i]) { ign_order_ok = false; }
+
+    // INJ sync: cada INJ deve começar (RISE) antes do IGN (FALL) do mesmo canal
+    bool inj_sync_ok = true;
+    for (int i = 0; i < 4; ++i) {
+        if (ign_fall_ts[i] == 0 || inj_rise_ts[i] == 0) { inj_sync_ok = false; }
+        else if (inj_rise_ts[i] > ign_fall_ts[i]) { inj_sync_ok = false; }
+    }
+
+    // Inter-cilindro 180° ± 12° (tolerância maior p/ resolução 7.5°/col)
+    bool spacing_ok = true;
+    for (int i = 1; i < 4; ++i) {
+        int ch_a = ign_order[i-1], ch_b = ign_order[i];
+        if (ign_fall_ts[ch_a] > 0 && ign_fall_ts[ch_b] > 0) {
+            float deg_a = (ign_fall_ts[ch_a] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f;
+            float deg_b = (ign_fall_ts[ch_b] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f;
+            float inter = deg_b - deg_a;
+            if (fabsf(inter - 180.0f) > 12.0f) { spacing_ok = false; }
+        }
+    }
+
+    bool cmp_ok = (cmp_rise_count == 2);
+
+    // Mostrar ordem detectada
+    Serial.print("  ║ Ordem IGN temporal: ");
+    for (int i = 0; i < 4; ++i) { if (i) Serial.print("→"); Serial.print(kChan[ign_order[i]].name); }
+    Serial.println();
+
+    Serial.printf("  ║ %s ordem  %s INJ sync  %s spacing 180°  %s CMP 2x (%d RISE)          ║\n",
+                  ign_order_ok ? "✓" : "✗",
+                  inj_sync_ok ? "✓" : "✗",
+                  spacing_ok ? "✓" : "✗",
+                  cmp_ok ? "✓" : "✗", cmp_rise_count);
+    Serial.println("  ╚══════════════════════════════════════════════════════════════════════════════════╝");
+    Serial.println();
+}
+
 // ── Estatísticas ──────────────────────────────────────────────────────────────
 
 static void print_stats() {
@@ -695,9 +1025,9 @@ static void print_help() {
     Serial.println("  ────────────────────────────────");
     Serial.println("  l  Live table (1 s)       p  Pulse log");
     Serial.println("  e  Edge log               w  Waveform bar");
-    Serial.println("  t  Timing 720° analysis   s  Estatísticas");
-    Serial.println("  r  Reset stats            i  Toggle INJ1-4");
-    Serial.println("  ?  Esta ajuda");
+    Serial.println("  t  Timing 720° analysis   d  Dashboard 720°");
+    Serial.println("  s  Estatísticas           i  Toggle INJ1-4");
+    Serial.println("  r  Reset stats            ?  Esta ajuda");
     Serial.println();
     Serial.println("  Timing (t): captura 720° (3 gaps CKP, gap1→gap3).");
     Serial.println("    Verifica: 1) IGN/INJ dispara 1x/720°; 2) ordem 1-3-4-2;");
@@ -773,6 +1103,7 @@ void loop() {
             case 'p': g_mode = Mode::PULSE; Serial.println("  Modo: PULSE"); break;
             case 'w': g_mode = Mode::WAVE;  Serial.println("  Modo: WAVE");  break;
             case 't': g_mode = Mode::TIMING; timing_start(); break;
+            case 'd': g_mode = Mode::DASH;   dashboard_start(); break;
             case 's': print_stats(); break;
             case 'r': reset_stats(); break;
             case 'i': toggle_inj_channels(); break;
