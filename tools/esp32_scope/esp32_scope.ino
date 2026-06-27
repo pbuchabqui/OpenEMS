@@ -48,6 +48,7 @@
 #include "Arduino.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+#include <atomic>     // barreiras de memória p/ o SPSC ISR→loop (C6 é RISC-V, weak ordering)
 
 // ── Definição de canais ───────────────────────────────────────────────────────
 
@@ -112,6 +113,17 @@ static ChanMetrics g_m[kNChan];
 
 enum class Mode : uint8_t { LIVE, EDGE, PULSE, WAVE, TIMING };
 static volatile Mode g_mode = Mode::LIVE;
+
+static const char* mode_name(Mode m) {
+    switch (m) {
+        case Mode::LIVE:   return "LIVE";
+        case Mode::EDGE:   return "EDGE";
+        case Mode::PULSE:  return "PULSE";
+        case Mode::WAVE:   return "WAVE";
+        case Mode::TIMING: return "TIMING";
+    }
+    return "?";
+}
 
 // ── Máquina de estados para Timing Analysis 720° ─────────────────────────────
 // Captura um ciclo completo de 720° (2 gaps CKP) e verifica:
@@ -211,6 +223,9 @@ static void IRAM_ATTR edge_isr(void* arg) {
         g_buf[g_head].ts_us = t;
         g_buf[g_head].ch    = ch;
         g_buf[g_head].level = (uint8_t)lvl;
+        // C6 é RISC-V (weak ordering): fence release garante que os campos do
+        // evento fiquem visíveis ANTES de g_head avançar (visto pelo consumidor).
+        std::atomic_thread_fence(std::memory_order_release);
         g_head = next;
     } else {
         g_m[ch].overflow_count++;
@@ -427,7 +442,10 @@ static void timing_report() {
 
 static void process_events() {
     while (g_tail != g_head) {
-        // Leitura do buffer (sem barreira explícita — ESP32 Xtensa é TSO)
+        // C6 é RISC-V (weak ordering): fence acquire garante que os campos do
+        // evento já estão visíveis depois de g_head ter avançado na ISR
+        // (emparelha com o fence release em edge_isr).
+        std::atomic_thread_fence(std::memory_order_acquire);
         const EdgeEvent ev = {
             .ts_us = g_buf[g_tail].ts_us,
             .ch    = g_buf[g_tail].ch,
@@ -744,6 +762,10 @@ void loop() {
             digitalWrite(LED_BUILTIN, HIGH);
             hb_on    = true;
             last_hb = now;
+            // Heartbeat no Serial: confirma que o loop() corre e que a UART0 está
+            // a sair, independentemente do banner de boot (que pode perder-se).
+            Serial.printf("[HB] scope vivo modo=%s uptime=%lus\n",
+                          mode_name(g_mode), (unsigned long)(now / 1000u));
         } else if (hb_on && now - last_hb >= 80u) {
             digitalWrite(LED_BUILTIN, LOW);
             hb_on = false;
