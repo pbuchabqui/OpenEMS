@@ -187,7 +187,7 @@ struct TimingCapture {
 // ── Dashboard 720° oscilloscope ──────────────────────────────────────────────
 // Captura TODAS as bordas num ciclo 720° e renderiza diagrama ASCII.
 static constexpr int kDashMaxEdges = 600;   // ~284 esperados — folga 2×
-static constexpr int kDashWidth    = 96;    // colunas (7.5°/col em 720°)
+static constexpr int kDashWidth    = 120;   // colunas (6°/col em 720° = 1 dente/col)
 static constexpr float kDashDegPerCol = 720.0f / (float)kDashWidth;
 
 struct DashEvent {
@@ -882,8 +882,8 @@ static void render_dashboard() {
 
     // ── Tabela detalhada de ângulos ────────────────────────────────────
     Serial.println("  ╠══════════════════════════════════════════════════════════════════════════════════╣");
-    Serial.println("  ║ Canal  1º FALL(°)  1º RISE(°)  PW_IGN(°)  INJ RISE(°)  INJ FALL(°)  INJ→IGN  ║");
-    Serial.println("  ║ ─────  ──────────  ──────────  ─────────  ───────────  ───────────  ───────  ║");
+    Serial.println("  ║ Canal  1º FALL(°)  1º RISE(°)  PW(°)  Advance(°)  INJ RISE(°)  INJ FALL(°)  INJ→IGN  ║");
+    Serial.println("  ║ ─────  ──────────  ──────────  ─────  ──────────  ───────────  ───────────  ───────  ║");
     for (int ch = 0; ch < 4; ++ch) {
         float ign_fall_deg = (ign_fall_ts[ch] > 0)
             ? (ign_fall_ts[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
@@ -903,10 +903,23 @@ static void render_dashboard() {
 
         float inj_to_ign = (ign_fall_deg > 0 && inj_rise_deg > 0) ? ign_fall_deg - inj_rise_deg : 0.0f;
 
-        Serial.printf("  ║ %-5s  %8.1f°  %8.1f°  %7.1f°  %9.1f°  %9.1f°  %+6.1f°  ║\n",
+        // Calcular TDC e avanço para este canal
+        // Mapeamento: CH0=IGN4(cyl3,pos2,TDC=360°), CH1=IGN3(cyl2,pos1,TDC=180°),
+        //             CH2=IGN2(cyl1,pos3,TDC=540°), CH3=IGN1(cyl0,pos0,TDC=0°)
+        float tdc_deg = -1.0f;
+        if (ch == 3)      { tdc_deg = 0.0f; }      // IGN1 → cyl 0, pos 0
+        else if (ch == 1) { tdc_deg = 180.0f; }     // IGN3 → cyl 2, pos 1
+        else if (ch == 0) { tdc_deg = 360.0f; }     // IGN4 → cyl 3, pos 2
+        else if (ch == 2) { tdc_deg = 540.0f; }     // IGN2 → cyl 1, pos 3
+        float adv = (ign_fall_deg > 0 && tdc_deg >= 0)
+                   ? fmodf(tdc_deg + 720.0f - ign_fall_deg, 720.0f) : 0.0f;
+        if (adv > 360.0f) { adv -= 360.0f; }  // advance em graus (0-180 típico)
+
+        Serial.printf("  ║ %-5s  %8.1f°  %8.1f°  %4.1f°  %8.1f°  %9.1f°  %9.1f°  %+6.1f°  ║\n",
                       kChan[ch].name,
                       ign_fall_deg, ign_rise_deg,
                       (ign_fall_deg > 0 && ign_rise_deg > 0) ? ign_fall_deg - ign_rise_deg : 0.0f,
+                      adv,
                       inj_rise_deg, inj_fall_deg, inj_to_ign);
     }
     Serial.println("  ╠══════════════════════════════════════════════════════════════════════════════════╣");
