@@ -280,7 +280,143 @@ static void IRAM_ATTR edge_isr(void* arg) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── SECÇÃO 4 — Timing Analysis (IGN sequência + avanço)
+// ── SECÇÃO 4 — Sensores analógicos (DAC + LEDC PWM)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#include "driver/dac.h"
+#include "driver/ledc.h"
+
+// DAC: MAP (GPIO25), TPS (GPIO26) — 8-bit true analog
+// LEDC PWM 12-bit @ 19 kHz + filtro RC 10kΩ/100nF: CLT, IAT, APP, OIL, FUEL, ETB
+
+struct SimState {
+    uint32_t rpm;
+    uint16_t map_kpa;       // kPa
+    uint8_t  tps_pct;       // 0-100%
+    int16_t  clt_degc;      // °C
+    int16_t  iat_degc;      // °C
+    uint8_t  app_pct;       // 0-100%
+    uint16_t fuel_bar_x10;
+    uint16_t oil_bar_x10;
+    uint8_t  etb_pct;
+};
+
+static SimState g_sim;
+
+static void dac_init() {
+    dac_output_enable(DAC_CHANNEL_1);  // GPIO25 → MAP
+    dac_output_enable(DAC_CHANNEL_2);  // GPIO26 → TPS
+    dac_output_voltage(DAC_CHANNEL_1, 0);
+    dac_output_voltage(DAC_CHANNEL_2, 0);
+}
+
+static void dac_write_map(uint8_t v)  { dac_output_voltage(DAC_CHANNEL_1, v); }
+static void dac_write_tps(uint8_t v)  { dac_output_voltage(DAC_CHANNEL_2, v); }
+
+// MAP: dac_val = kPa * 255 / 300
+static uint8_t map_to_dac(uint16_t kpa) {
+    if (kpa > 300) kpa = 300;
+    return (uint8_t)((uint32_t)kpa * 255u / 300u);
+}
+// TPS: dac_val = 16 + pct * 239 / 100  (range ~0.2V..3.3V)
+static uint8_t tps_to_dac(uint8_t pct) {
+    if (pct > 100) pct = 100;
+    return (uint8_t)(16u + (uint32_t)pct * 239u / 100u);
+}
+
+// LEDC PWM: 8 channels, 12-bit, 19 kHz, timer 0
+static constexpr int      kPwmBits = 12;
+static constexpr uint32_t kPwmFreq = 19000;
+
+struct PwmChan { gpio_num_t gpio; ledc_channel_t ch; const char* name; };
+static const PwmChan kPwm[] = {
+    { GPIO_NUM_13, LEDC_CHANNEL_0, "CLT" },
+    { GPIO_NUM_12, LEDC_CHANNEL_1, "IAT" },
+    { GPIO_NUM_14, LEDC_CHANNEL_2, "APP" },
+    { GPIO_NUM_17, LEDC_CHANNEL_3, "OIL" },
+    { GPIO_NUM_18, LEDC_CHANNEL_4, "FUEL" },
+    { GPIO_NUM_16, LEDC_CHANNEL_5, "ETB1" },
+    { GPIO_NUM_19, LEDC_CHANNEL_6, "ETB2" },
+};
+static constexpr int kNPwm = (int)(sizeof(kPwm) / sizeof(kPwm[0]));
+
+static void pwm_init() {
+    ledc_timer_config_t tcfg = {};
+    tcfg.speed_mode = LEDC_LOW_SPEED_MODE;
+    tcfg.timer_num  = LEDC_TIMER_0;
+    tcfg.duty_resolution = (ledc_timer_bit_t)kPwmBits;
+    tcfg.freq_hz    = kPwmFreq;
+    tcfg.clk_cfg    = LEDC_AUTO_CLK;
+    ledc_timer_config(&tcfg);
+    for (int i = 0; i < kNPwm; ++i) {
+        ledc_channel_config_t ccfg = {};
+        ccfg.speed_mode = LEDC_LOW_SPEED_MODE;
+        ccfg.channel    = kPwm[i].ch;
+        ccfg.timer_sel  = LEDC_TIMER_0;
+        ccfg.intr_type  = LEDC_INTR_DISABLE;
+        ccfg.gpio_num   = (int)kPwm[i].gpio;
+        ccfg.duty       = 0;
+        ccfg.hpoint     = 0;
+        ledc_channel_config(&ccfg);
+        gpio_set_pull_mode(kPwm[i].gpio, GPIO_FLOATING);
+    }
+}
+
+static void pwm_write(int idx, uint32_t duty_12bit) {
+    if (duty_12bit > 4095) duty_12bit = 4095;
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, kPwm[idx].ch, duty_12bit);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, kPwm[idx].ch);
+}
+
+// CLT/IAT: tabela linear simplificada — raw = (degc + 40) * 4095 / 190
+static uint32_t temp_to_pwm(int16_t degc) {
+    if (degc < -40) degc = -40;
+    if (degc > 150) degc = 150;
+    return (uint32_t)(degc + 40) * 4095u / 190u;
+}
+
+static void update_all_sensors() {
+    SimState& s = g_sim;
+    dac_write_map(map_to_dac(s.map_kpa));
+    dac_write_tps(tps_to_dac(s.tps_pct));
+    pwm_write(0, temp_to_pwm(s.clt_degc));   // CLT
+    pwm_write(1, temp_to_pwm(s.iat_degc));   // IAT
+    pwm_write(2, (uint32_t)s.app_pct * 4095u / 100u);  // APP
+    pwm_write(3, (uint32_t)s.oil_bar_x10 * 4095u / 500u);  // OIL
+    pwm_write(4, (uint32_t)s.fuel_bar_x10 * 4095u / 500u); // FUEL
+    pwm_write(5, (uint32_t)s.etb_pct * 4095u / 100u);  // ETB1
+    pwm_write(6, (uint32_t)(100u - s.etb_pct) * 4095u / 100u); // ETB2 inverted
+}
+
+// Presets
+static void preset(const char* name, uint32_t rpm, uint16_t map_kpa, uint8_t tps,
+                   int16_t clt, int16_t iat, uint8_t app, uint16_t fuel, uint16_t oil, uint8_t etb) {
+    ckp_set_rpm(rpm);
+    g_sim.map_kpa = map_kpa;  g_sim.tps_pct = tps;
+    g_sim.clt_degc = clt;     g_sim.iat_degc = iat;
+    g_sim.app_pct  = app;     g_sim.fuel_bar_x10 = fuel;
+    g_sim.oil_bar_x10 = oil;  g_sim.etb_pct = etb;
+    update_all_sensors();
+    Serial.printf("  [SIM] %s: %lu RPM MAP=%u TPS=%u CLT=%d IAT=%d\n",
+                  name, (unsigned long)rpm, map_kpa, tps, clt, iat);
+}
+
+static void preset_idle()   { preset("IDLE",   700,  35,  3,  90, 25,  0, 350, 20, 3); }
+static void preset_crank()  { preset("CRANK",  200, 101,  0,  20, 15,  0, 350, 10, 0); }
+static void preset_cruise() { preset("CRUISE",2000,  55, 20,  90, 35, 20, 350, 30, 20); }
+static void preset_wot()    { preset("WOT",   4000, 100,100,  90, 40,100, 350, 40,100); }
+static void preset_coast()  { preset("COAST", 2000,  25,  0,  90, 35,  0, 350, 20, 0); }
+
+static void print_status() {
+    SimState& s = g_sim;
+    Serial.printf("  RPM=%lu MAP=%u TPS=%u CLT=%d IAT=%d APP=%u FUEL=%.1f OIL=%.1f ETB=%u\n",
+                  (unsigned long)s.rpm, s.map_kpa, s.tps_pct,
+                  s.clt_degc, s.iat_degc, s.app_pct,
+                  s.fuel_bar_x10 / 10.0f, s.oil_bar_x10 / 10.0f, s.etb_pct);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── SECÇÃO 5 — Timing Analysis (IGN sequência + avanço)
 // ═══════════════════════════════════════════════════════════════════════════
 
 static constexpr int kIgnFirst = 0;
@@ -686,6 +822,13 @@ void setup() {
     // ── CKP/CMP via RMT (hardware, jitter ~zero) ──────────────────────────
     rmt_ckp_init();
 
+    // ── Sensores analógicos (DAC + LEDC PWM) ──────────────────────────────
+    dac_init();
+    pwm_init();
+    g_sim = {};  // zero-init
+    g_sim.rpm = kRpmInit;
+    update_all_sensors();
+
     print_help();
     Serial.printf("\n  CKP: %lu RPM (RMT)  Modo scope: LIVE\n", (unsigned long)g_rpm);
     Serial.printf("  Wire loopback: GPIO2 -> GPIO34 (CKP scope)\n\n");
@@ -711,9 +854,23 @@ static void parse_text_cmd(const char* raw) {
 
     if (strcmp(cmd, "RPM") == 0 && has_val) {
         ckp_set_rpm((uint32_t)constrain(val, (int)kRpmMin, (int)kRpmMax));
+        g_sim.rpm = g_rpm;
         Serial.printf("  [GEN] RPM=%lu\n", (unsigned long)g_rpm);
     }
-    // MAP/TPS/CLT/IAT/APP/FUEL/OIL/ETB: accepted silently (no DAC/PWM in combined)
+    else if (strcmp(cmd, "MAP") == 0 && has_val) { g_sim.map_kpa = constrain(val, 0, 300); update_all_sensors(); }
+    else if (strcmp(cmd, "TPS") == 0 && has_val) { g_sim.tps_pct = constrain(val, 0, 100); update_all_sensors(); }
+    else if (strcmp(cmd, "CLT") == 0 && has_val) { g_sim.clt_degc = constrain(val, -40, 150); update_all_sensors(); }
+    else if (strcmp(cmd, "IAT") == 0 && has_val) { g_sim.iat_degc = constrain(val, -40, 150); update_all_sensors(); }
+    else if (strcmp(cmd, "APP") == 0 && has_val) { g_sim.app_pct = constrain(val, 0, 100); update_all_sensors(); }
+    else if (strcmp(cmd, "FUEL")== 0 && has_val) { g_sim.fuel_bar_x10 = constrain(val, 0, 500); update_all_sensors(); }
+    else if (strcmp(cmd, "OIL") == 0 && has_val)  { g_sim.oil_bar_x10  = constrain(val, 0, 500); update_all_sensors(); }
+    else if (strcmp(cmd, "ETB") == 0 && has_val)  { g_sim.etb_pct = constrain(val, 0, 100); update_all_sensors(); }
+    else if (strcmp(cmd, "IDLE")   == 0)   preset_idle();
+    else if (strcmp(cmd, "CRANK")  == 0)   preset_crank();
+    else if (strcmp(cmd, "CRUISE") == 0)   preset_cruise();
+    else if (strcmp(cmd, "WOT")    == 0)   preset_wot();
+    else if (strcmp(cmd, "COAST")  == 0)   preset_coast();
+    else if (strcmp(cmd, "STATUS") == 0)   print_status();
 }
 
 void loop() {
