@@ -235,7 +235,7 @@ inline void update_realtime_page() noexcept {
     rt.reserved[5] = static_cast<uint8_t>(g_rt_ltft_pct);
     const uint32_t cmp_glitch_cnt = ems::drv::ckp_get_cmp_glitch_count();
     rt.reserved[6] = cmp_glitch_cnt > 255u ? 255u : static_cast<uint8_t>(cmp_glitch_cnt);
-    rt.reserved[7] = ems::drv::ckp_get_phase_anchor_count();
+    rt.reserved[7] = 0u;  // phase_anchor_count removido (unificado com cmp_glitch_count)
     rt.reserved[8] = ems::hal::tle8888_fault_bitmap();
     rt.reserved[9] = ems::hal::flex_fuel_valid()
                     ? ems::hal::flex_fuel_ethanol_pct() : 0u;

@@ -216,7 +216,6 @@ static volatile uint8_t g_cmp_phase_seen = 0U; // set when phase_A toggles (CMP 
 static volatile uint8_t g_knock_sequential = 0U;  // 1 when running Calculate_Sequential_Cycle (full sync, per-cyl knock valid)
 static volatile uint8_t g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg;  // FIX: volatile — escrita por ecu_sched_set_ivc (cs), leitura por clamp_inj_pw_to_ivc (contexto ISR)
 static uint32_t g_ivc_clamp_count = 0U;
-static uint32_t g_oc_mode_shadow[ECU_CHANNELS];
 static volatile uint8_t g_cc_pending_inj[4];
 static volatile uint8_t g_cc_pending_ign[4];
 volatile uint32_t g_dbg_inj_force_early = 0U;
@@ -458,65 +457,6 @@ static inline uint8_t stm32_ign_tim_ch(uint8_t ch)
     }
 }
 
-static inline volatile uint32_t *stm32_tim_ccr(uint8_t is_inj, uint8_t tim_ch)
-{
-    if (is_inj != 0U) {
-        switch (tim_ch) {
-            case 1U: return &TIM3_CCR1;
-            case 2U: return &TIM3_CCR2;
-            case 3U: return &TIM3_CCR3;
-            default: return &TIM3_CCR4;
-        }
-    }
-    switch (tim_ch) {
-        case 1U: return &TIM1_CCR1;
-        case 2U: return &TIM1_CCR2;
-        case 3U: return &TIM1_CCR3;
-        default: return &TIM1_CCR4;
-    }
-}
-
-static inline uint32_t stm32_tim_cc_flag(uint8_t tim_ch)
-{
-    return (uint32_t)(TIM_SR_CC1IF << (tim_ch - 1U));
-}
-
-static inline void stm32_write_oc_mode(uint8_t is_inj, uint8_t tim_ch, uint32_t m1, uint32_t m2, uint32_t m3, uint32_t m4)
-{
-    volatile uint32_t *ccmr1 = (is_inj != 0U) ? &TIM3_CCMR1 : &TIM1_CCMR1;
-    volatile uint32_t *ccmr2 = (is_inj != 0U) ? &TIM3_CCMR2 : &TIM1_CCMR2;
-    const uint8_t shadow_base = (is_inj != 0U) ? 0U : ECU_IGN_CH_FIRST;
-    const uint8_t shadow_idx = (uint8_t)(shadow_base + tim_ch - 1U);
-    uint32_t desired;
-
-    switch (tim_ch) {
-        case 1U: desired = m1; break;
-        case 2U: desired = m2; break;
-        case 3U: desired = m3; break;
-        default: desired = m4; break;
-    }
-    if (g_oc_mode_shadow[shadow_idx] == desired) { return; }
-    g_oc_mode_shadow[shadow_idx] = desired;
-
-    // STM32H5: OCxM is 4 bits — OC1M[2:0] in bits [6:4], OC1M[3] in bit 16
-    //          OC2M[2:0] in bits [14:12], OC2M[3] in bit 24
-    switch (tim_ch) {
-        case 1U: *ccmr1 = (*ccmr1 & ~((1U<<16)|0x70U)) | desired; break;
-        case 2U: *ccmr1 = (*ccmr1 & ~((1U<<24)|0x7000U)) | desired; break;
-        case 3U: *ccmr2 = (*ccmr2 & ~((1U<<16)|0x70U)) | desired; break;
-        default: *ccmr2 = (*ccmr2 & ~((1U<<24)|0x7000U)) | desired; break;
-    }
-}
-
-static inline void stm32_force_oc(uint8_t is_inj, uint8_t tim_ch, uint8_t high)
-{
-    stm32_write_oc_mode(is_inj, tim_ch,
-        (high != 0U) ? TIM_CCMR1_OC1M_FORCE_ACTIVE : TIM_CCMR1_OC1M_FORCE_INACTIVE,
-        (high != 0U) ? TIM_CCMR1_OC2M_FORCE_ACTIVE : TIM_CCMR1_OC2M_FORCE_INACTIVE,
-        (high != 0U) ? TIM_CCMR2_OC3M_FORCE_ACTIVE : TIM_CCMR2_OC3M_FORCE_INACTIVE,
-        (high != 0U) ? TIM_CCMR2_OC4M_FORCE_ACTIVE : TIM_CCMR2_OC4M_FORCE_INACTIVE);
-}
-
 static void sanitize_runtime_calibration(void)
 {
     uint8_t clamped = 0U;
@@ -586,126 +526,6 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
         evt_insert(TIM5_CNT + tim5_delta, ch, high);
         return;
     }
-    const uint32_t delta = raw_delta;
-
-    if (delta > ems::engine::kTimIgnMaxDelta16) {
-        ++g_cycle_schedule_drop_count;
-        return;
-    }
-    
-    // FIX P2 (BUG-9): Eventos atrasados devem ser DESCARTADOS, não forçados
-    // Forçar saída em eventos atrasados causa spark/injeção no ângulo errado
-    // Para ignição: pode disparar em cilindro em admissão (sem combustível)
-    // Para injeção: injeta fora da janela de válvula aberta
-    if (delta < STM32_MIN_COMPARE_LEAD_TICKS) { 
-        ++g_late_event_count;
-        // FIX C3: se DWELL_START já armou o watchdog mas o SPARK chega tarde e
-        // é descartado aqui, o watchdog fica armado para sempre e vai disparar
-        // após 1.4× dwell — cortando a bobina sem que ela tenha disparado.
-        // Desarma o watchdog para qualquer evento de ignição tardio.
-        if (is_inj == 0U && action == ECU_ACT_SPARK && tim_ch != 0U) {
-            const uint8_t ign_idx = static_cast<uint8_t>(tim_ch - 1U);
-            g_dwell_arm_tick[ign_idx] = 0U;
-        }
-        return; 
-    }
-
-    // ── Injection inhibit mask (MS42 §2.2.5 — corte por cilindro) ────────
-    // Suprime ECU_ACT_INJ_ON se o bit do cilindro estiver activo.
-    // INJ_OFF passa normalmente — fechar um injetor já fechado é inócuo.
-    if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
-        const uint8_t cyl_bit = inj_ch_to_cyl_bit(ch);
-        if (cyl_bit != 0U && (g_inj_inhibit_mask & cyl_bit) != 0U) { return; }
-    }
-
-    // ── Ignition inhibit mask (rev limiter por faísca) ────────────────────
-    // Suprime DWELL_START e SPARK: drivers IGBT com detecção de corrente podem
-    // interpretar o toggle do pino sem carga prévia como condição de falha.
-    if (is_inj == 0U && (action == ECU_ACT_DWELL_START || action == ECU_ACT_SPARK)) {
-        const uint8_t cyl_bit = ign_ch_to_cyl_bit(ch);
-        if (cyl_bit != 0U && (g_ign_inhibit_mask & cyl_bit) != 0U) { return; }
-    }
-
-    // ── Dwell watchdog tracking (apenas canais de ignição) ────────────────
-    // Executado depois de todos os guards de rejeição — só para eventos que
-    // realmente serão programados no hardware.
-    if (is_inj == 0U && tim_ch != 0U) {
-        const uint8_t ign_idx = (uint8_t)(tim_ch - 1U);
-        if (action == ECU_ACT_DWELL_START) {
-            // Arma watchdog: timeout = 1.4 × dwell = 7/5 × dwell (sem ponto flutuante)
-            g_dwell_arm_tick[ign_idx]   = now;
-            g_dwell_wdog_ticks[ign_idx] = (g_dwell_ticks * 7U) / 5U;
-
-            // Knock window management — only in sequential (full-sync) mode.
-            // knock_window_cycle_end() closes the previous cylinder's window and
-            // evaluates its knock count (one call per combustion interval, ~180 deg).
-            // knock_window_open() arms CMP0 for the new cylinder.
-            // ch → cyl: ECU_CH_IGN1=7→0, IGN2=6→1, IGN3=5→2, IGN4=4→3
-            if (g_knock_sequential != 0U) {
-                const uint8_t knock_cyl = static_cast<uint8_t>(7U - ch);
-                ems::engine::knock_window_cycle_end();
-                ems::engine::knock_window_open(knock_cyl);
-            }
-        } else if (action == ECU_ACT_SPARK) {
-            // Evento SPARK programado com sucesso — watchdog já não é necessário
-            g_dwell_arm_tick[ign_idx] = 0U;
-        }
-    }
-
-    {
-        const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
-        const uint32_t cc_ie_bit = (1U << tim_ch);
-        // If a previous CC event is still pending (IE enabled, ISR hasn't fired yet),
-        // force it immediately before scheduling the new one.
-        if (is_inj != 0U) {
-            if (TIM3_DIER & cc_ie_bit) {
-                // Previous CC event hasn't fired — force it now, then schedule new one
-                TIM3_DIER &= ~cc_ie_bit;
-                TIM3_SR &= ~stm32_tim_cc_flag(tim_ch);
-                stm32_force_oc(1U, tim_ch, g_cc_pending_inj[tim_ch - 1U]);
-                pin_transition(tim_ch - 1U, g_cc_pending_inj[tim_ch - 1U], 1U);
-                ++g_dbg_inj_force_early;
-            }
-            g_cc_pending_inj[tim_ch - 1U] = high;
-        } else {
-            if (TIM1_DIER & cc_ie_bit) {
-                TIM1_DIER &= ~cc_ie_bit;
-                TIM1_SR &= ~stm32_tim_cc_flag(tim_ch);
-                stm32_force_oc(0U, tim_ch, g_cc_pending_ign[tim_ch - 1U]);
-                pin_transition(ECU_IGN_CH_FIRST + tim_ch - 1U, g_cc_pending_ign[tim_ch - 1U], 1U);
-                ++g_dbg_ign_force_early;
-            }
-            g_cc_pending_ign[tim_ch - 1U] = high;
-        }
-    }
-
-    if (is_inj != 0U) {
-        TIM3_SR &= ~stm32_tim_cc_flag(tim_ch);
-    } else {
-        TIM1_SR &= ~stm32_tim_cc_flag(tim_ch);
-    }
-
-    ccr = stm32_tim_ccr(is_inj, tim_ch);
-    {
-        const uint32_t current_cnt = (is_inj != 0U ? TIM3_CNT : TIM1_CNT) & 0xFFFFU;
-        uint32_t target = current_cnt + delta;
-        if (target > 0xFFFFU) {
-            target -= 0x10000U;
-        }
-        *ccr = static_cast<uint16_t>(target);
-    }
-
-#if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("dmb" ::: "memory");
-#endif
-    {
-        const uint32_t cc_ie = (1U << tim_ch);
-        if (is_inj != 0U) {
-            TIM3_DIER |= cc_ie;
-        } else {
-            TIM1_DIER |= cc_ie;
-        }
-    }
 }
 
 static void clear_all_events_and_drive_safe_outputs(void)
@@ -713,8 +533,10 @@ static void clear_all_events_and_drive_safe_outputs(void)
     g_angle_table_count = 0U;
     g_angle_tooth_mask_lo = 0U;
     g_angle_tooth_mask_hi = 0U;
-    TIM3_DIER &= ~(TIM_DIER_CC1IE | TIM_DIER_CC2IE | TIM_DIER_CC3IE | TIM_DIER_CC4IE);
-    TIM1_DIER &= ~(TIM_DIER_CC1IE | TIM_DIER_CC2IE | TIM_DIER_CC3IE | TIM_DIER_CC4IE);
+    // Clear TIM5 event queue
+    g_evt_count = 0U;
+    g_evt_armed = 0U;
+    TIM5_DIER &= ~TIM_DIER_CC3IE;
     for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) { force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK, 1U); }
     for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; }
     // Close any open knock window — sync lost means no valid combustion cylinder
@@ -764,8 +586,6 @@ static void table_add(uint8_t tooth, uint8_t sub_frac, uint8_t phase_A, uint8_t 
 void ECU_Hardware_Init(void)
 {
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN | RCC_AHB2ENR1_GPIOBEN | RCC_AHB2ENR1_GPIOCEN | RCC_AHB2ENR1_GPIOEEN;
-    RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
-    RCC_APB2ENR  |= RCC_APB2ENR_TIM1EN;
 
     // All INJ/IGN pins are GPIO outputs — driven by event scheduler via BSRR
     // INJ: PC6(INJ1), PC7(INJ2), PC8(INJ3), PC9(INJ4)
@@ -782,35 +602,6 @@ void ECU_Hardware_Init(void)
         }
     }
     GPIOE_BSRR = (1U<<25)|(1U<<27)|(1U<<29)|(1U<<30);  // PE9,11,13,14 LOW
-
-    TIM1_CR1 = 0U; TIM1_DIER = 0U; TIM1_SR = 0U; TIM1_PSC = STM32_TIM_PSC_10MHZ; TIM1_CNT = 0U; TIM1_ARR = 0xFFFFU;
-    TIM1_CCMR1 = TIM_CCMR1_OC1M_FORCE_INACTIVE | TIM_CCMR1_OC2M_FORCE_INACTIVE;
-    TIM1_CCMR2 = TIM_CCMR2_OC3M_FORCE_INACTIVE | TIM_CCMR2_OC4M_FORCE_INACTIVE;
-    TIM1_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E; TIM1_BDTR = (1U << 15); TIM1_EGR = 1U;
-
-    TIM3_CR1 = 0U; TIM3_DIER = 0U; TIM3_SR = 0U; TIM3_PSC = STM32_TIM_PSC_10MHZ; TIM3_CNT = 0U; TIM3_ARR = 0xFFFFU;
-    TIM3_CCMR1 = TIM_CCMR1_OC1M_FORCE_INACTIVE | TIM_CCMR1_OC2M_FORCE_INACTIVE;
-    TIM3_CCMR2 = TIM_CCMR2_OC3M_FORCE_INACTIVE | TIM_CCMR2_OC4M_FORCE_INACTIVE;
-    TIM3_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E | TIM_CCER_CC4E; TIM3_EGR = 1U;
-
-    g_oc_mode_shadow[0] = TIM_CCMR1_OC1M_FORCE_INACTIVE;
-    g_oc_mode_shadow[1] = TIM_CCMR1_OC2M_FORCE_INACTIVE;
-    g_oc_mode_shadow[2] = TIM_CCMR2_OC3M_FORCE_INACTIVE;
-    g_oc_mode_shadow[3] = TIM_CCMR2_OC4M_FORCE_INACTIVE;
-    g_oc_mode_shadow[4] = TIM_CCMR1_OC1M_FORCE_INACTIVE;
-    g_oc_mode_shadow[5] = TIM_CCMR1_OC2M_FORCE_INACTIVE;
-    g_oc_mode_shadow[6] = TIM_CCMR2_OC3M_FORCE_INACTIVE;
-    g_oc_mode_shadow[7] = TIM_CCMR2_OC4M_FORCE_INACTIVE;
-
-    TIM1_CR1 = TIM_CR1_CEN;
-    TIM3_CR1 = TIM_CR1_CEN;
-
-#if !defined(EMS_HOST_TEST)
-    nvic_set_priority(IRQ_TIM3, 1u);
-    nvic_enable_irq(IRQ_TIM3);
-    nvic_set_priority(IRQ_TIM1_CC, 1u);
-    nvic_enable_irq(IRQ_TIM1_CC);
-#endif
 
     clear_all_events_and_drive_safe_outputs();
 }
@@ -1112,90 +903,6 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 }
 
 #if !defined(EMS_HOST_TEST)
-volatile uint32_t g_dbg_tim3_isr_count = 0U;
-volatile uint32_t g_dbg_tim1cc_isr_count = 0U;
-
-extern "C" void TIM3_IRQHandler(void) {
-    ++g_dbg_tim3_isr_count;
-    const uint32_t sr = TIM3_SR;
-    if (sr & TIM_SR_CC1IF) {
-        TIM3_SR   = ~TIM_SR_CC1IF;
-        TIM3_DIER &= ~TIM_DIER_CC1IE;
-        const uint8_t h = g_cc_pending_inj[0];
-        const uint32_t v = h ? TIM_CCMR1_OC1M_FORCE_ACTIVE : TIM_CCMR1_OC1M_FORCE_INACTIVE;
-        TIM3_CCMR1 = (TIM3_CCMR1 & ~((1U<<16)|0x70U)) | v;
-        g_oc_mode_shadow[0] = v;
-        pin_transition(0, h);
-    }
-    if (sr & TIM_SR_CC2IF) {
-        TIM3_SR   = ~TIM_SR_CC2IF;
-        TIM3_DIER &= ~TIM_DIER_CC2IE;
-        const uint8_t h = g_cc_pending_inj[1];
-        const uint32_t v = h ? TIM_CCMR1_OC2M_FORCE_ACTIVE : TIM_CCMR1_OC2M_FORCE_INACTIVE;
-        TIM3_CCMR1 = (TIM3_CCMR1 & ~((1U<<24)|0x7000U)) | v;
-        g_oc_mode_shadow[1] = v;
-        pin_transition(1, h);
-    }
-    if (sr & TIM_SR_CC3IF) {
-        TIM3_SR   = ~TIM_SR_CC3IF;
-        TIM3_DIER &= ~TIM_DIER_CC3IE;
-        const uint8_t h = g_cc_pending_inj[2];
-        const uint32_t v = h ? TIM_CCMR2_OC3M_FORCE_ACTIVE : TIM_CCMR2_OC3M_FORCE_INACTIVE;
-        TIM3_CCMR2 = (TIM3_CCMR2 & ~((1U<<16)|0x70U)) | v;
-        g_oc_mode_shadow[2] = v;
-        pin_transition(2, h);
-    }
-    if (sr & TIM_SR_CC4IF) {
-        TIM3_SR   = ~TIM_SR_CC4IF;
-        TIM3_DIER &= ~TIM_DIER_CC4IE;
-        const uint8_t h = g_cc_pending_inj[3];
-        const uint32_t v = h ? TIM_CCMR2_OC4M_FORCE_ACTIVE : TIM_CCMR2_OC4M_FORCE_INACTIVE;
-        TIM3_CCMR2 = (TIM3_CCMR2 & ~((1U<<24)|0x7000U)) | v;
-        g_oc_mode_shadow[3] = v;
-        pin_transition(3, h);
-    }
-}
-
-extern "C" void TIM1_CC_IRQHandler(void) {
-    ++g_dbg_tim1cc_isr_count;
-    const uint32_t sr = TIM1_SR;
-    if (sr & TIM_SR_CC1IF) {
-        TIM1_SR   = ~TIM_SR_CC1IF;
-        TIM1_DIER &= ~TIM_DIER_CC1IE;
-        const uint8_t h = g_cc_pending_ign[0];
-        const uint32_t v = h ? TIM_CCMR1_OC1M_FORCE_ACTIVE : TIM_CCMR1_OC1M_FORCE_INACTIVE;
-        TIM1_CCMR1 = (TIM1_CCMR1 & ~((1U<<16)|0x70U)) | v;
-        g_oc_mode_shadow[4] = v;
-        pin_transition(4, h);
-    }
-    if (sr & TIM_SR_CC2IF) {
-        TIM1_SR   = ~TIM_SR_CC2IF;
-        TIM1_DIER &= ~TIM_DIER_CC2IE;
-        const uint8_t h = g_cc_pending_ign[1];
-        const uint32_t v = h ? TIM_CCMR1_OC2M_FORCE_ACTIVE : TIM_CCMR1_OC2M_FORCE_INACTIVE;
-        TIM1_CCMR1 = (TIM1_CCMR1 & ~((1U<<24)|0x7000U)) | v;
-        g_oc_mode_shadow[5] = v;
-        pin_transition(5, h);
-    }
-    if (sr & TIM_SR_CC3IF) {
-        TIM1_SR   = ~TIM_SR_CC3IF;
-        TIM1_DIER &= ~TIM_DIER_CC3IE;
-        const uint8_t h = g_cc_pending_ign[2];
-        const uint32_t v = h ? TIM_CCMR2_OC3M_FORCE_ACTIVE : TIM_CCMR2_OC3M_FORCE_INACTIVE;
-        TIM1_CCMR2 = (TIM1_CCMR2 & ~((1U<<16)|0x70U)) | v;
-        g_oc_mode_shadow[6] = v;
-        pin_transition(6, h);
-    }
-    if (sr & TIM_SR_CC4IF) {
-        TIM1_SR   = ~TIM_SR_CC4IF;
-        TIM1_DIER &= ~TIM_DIER_CC4IE;
-        const uint8_t h = g_cc_pending_ign[3];
-        const uint32_t v = h ? TIM_CCMR2_OC4M_FORCE_ACTIVE : TIM_CCMR2_OC4M_FORCE_INACTIVE;
-        TIM1_CCMR2 = (TIM1_CCMR2 & ~((1U<<24)|0x7000U)) | v;
-        g_oc_mode_shadow[7] = v;
-        pin_transition(7, h);
-    }
-}
 #endif
 
 namespace ems::drv {
