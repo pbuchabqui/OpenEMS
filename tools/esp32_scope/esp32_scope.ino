@@ -201,6 +201,7 @@ static int64_t   g_dash_gap1_us = 0;
 static int64_t   g_dash_gap3_us = 0;
 static int       g_dash_gap_count = 0;
 static bool      g_dash_capturing = false;
+static int64_t   g_dash_last_ckp_fall_us = 0;  // reset in dashboard_start() — evita gap falso na 2ª invocação
 
 static void dashboard_start();
 static void dashboard_feed(const EdgeEvent& ev);
@@ -324,7 +325,11 @@ static void timing_feed(const EdgeEvent& ev) {
         c.cmp_count++;
         if (c.cmp_count == 1) {
             c.cmp_ts_us = ev.ts_us;
-            Serial.printf("  [TIMING] CMP  @ +%.3f ms (%.1f°)\n",
+            Serial.printf("  [TIMING] CMP  janela A @ +%.3f ms (%.1f°)\n",
+                          (ev.ts_us - c.gap1_ts_us) / 1000.0f,
+                          (float)(ev.ts_us - c.gap1_ts_us) / c.ckp_period_us * 6.0f);
+        } else if (c.cmp_count == 2) {
+            Serial.printf("  [TIMING] CMP  janela B @ +%.3f ms (%.1f°)\n",
                           (ev.ts_us - c.gap1_ts_us) / 1000.0f,
                           (float)(ev.ts_us - c.gap1_ts_us) / c.ckp_period_us * 6.0f);
         } else {
@@ -665,7 +670,8 @@ static void dashboard_start() {
     g_dash_gap_count   = 0;
     g_dash_gap1_us     = 0;
     g_dash_gap3_us     = 0;
-    g_dash_capturing   = false;
+    g_dash_capturing        = false;
+    g_dash_last_ckp_fall_us = 0;
     // Auto- Ligar canais INJ (necessários p/ dashboard)
     for (int ch = (int)kInjFirst; ch < (int)(kInjFirst + kInjCount); ++ch) {
         if (!kChan[ch].enabled) {
@@ -683,12 +689,11 @@ static void dashboard_start() {
 static void dashboard_feed(const EdgeEvent& ev) {
     // ── Deteção de gap CKP ──────────────────────────────────────────────
     if (ev.ch == (uint8_t)kCkpChan) {
-        static int64_t last_fall = 0;
         if (ev.level == 0u) {
-            last_fall = ev.ts_us;
-        } else if (last_fall > 0) {
+            g_dash_last_ckp_fall_us = ev.ts_us;
+        } else if (g_dash_last_ckp_fall_us > 0) {
             const uint32_t ckp_period = (g_m[kCkpChan].period_us > 0) ? g_m[kCkpChan].period_us : 2000u;
-            const int64_t gap = ev.ts_us - last_fall;
+            const int64_t gap = ev.ts_us - g_dash_last_ckp_fall_us;
             if (gap > (int64_t)(ckp_period * 18u / 10u)) {
                 g_dash_gap_count++;
                 if (g_dash_gap_count == 1) {
@@ -739,10 +744,10 @@ static void render_dashboard() {
 
     // ── Cabeçalho ──────────────────────────────────────────────────────
     Serial.println();
-    Serial.println("  ╔══════════════════════════════════════════════════════════════════════════════════╗");
+    Serial.println("  ╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗");
     Serial.printf("  ║ 720° Engine Dashboard — RPM=%.0f  T_ciclo=%.2f ms  events=%d                     ║\n",
                   rpm_f, T720_ms, g_dash_event_count);
-    Serial.println("  ╠══════════════════════════════════════════════════════════════════════════════════╣");
+    Serial.println("  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
 
     // ── Régua de ângulo (marcas a cada 90°, labels a cada 180°) ──────────
     // Pré-construir a linha da régua como string
@@ -845,7 +850,7 @@ static void render_dashboard() {
     }
 
     // ── Rodapé com verificação ──────────────────────────────────────────
-    Serial.println("  ╠══════════════════════════════════════════════════════════════════════════════════╣");
+    Serial.println("  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
 
     // Extrair primeiros FALLs de IGN/INJ e contar CMP RISE
     int64_t ign_fall_ts[4] = {0, 0, 0, 0};
@@ -881,7 +886,7 @@ static void render_dashboard() {
     }
 
     // ── Tabela detalhada de ângulos ────────────────────────────────────
-    Serial.println("  ╠══════════════════════════════════════════════════════════════════════════════════╣");
+    Serial.println("  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
     Serial.println("  ║ Canal  1º FALL(°)  1º RISE(°)  PW(°)  Advance(°)  INJ RISE(°)  INJ FALL(°)  INJ→IGN  ║");
     Serial.println("  ║ ─────  ──────────  ──────────  ─────  ──────────  ───────────  ───────────  ───────  ║");
     for (int ch = 0; ch < 4; ++ch) {
@@ -922,7 +927,7 @@ static void render_dashboard() {
                       adv,
                       inj_rise_deg, inj_fall_deg, inj_to_ign);
     }
-    Serial.println("  ╠══════════════════════════════════════════════════════════════════════════════════╣");
+    Serial.println("  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
 
     // Ordenar IGN por timestamp (ordem temporal no ciclo 720°)
     for (int i = 0; i < 3; ++i)
@@ -970,7 +975,7 @@ static void render_dashboard() {
                   inj_sync_ok ? "✓" : "✗",
                   spacing_ok ? "✓" : "✗",
                   cmp_ok ? "✓" : "✗", cmp_rise_count);
-    Serial.println("  ╚══════════════════════════════════════════════════════════════════════════════════╝");
+    Serial.println("  ╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝");
     Serial.println();
 }
 
