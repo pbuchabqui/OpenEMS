@@ -1,4 +1,9 @@
 /*
+ * ⚠️ DEPRECATED — use esp32_combined.ino instead.
+ * This standalone scope is kept for reference. The combined tool integrates
+ * CKP/CMP generation + logic scope in a single ESP32 (no external loopback).
+ * Dashboard 720° mode has been ported to the combined tool.
+ *
  * esp32_scope.ino — Osciloscópio lógico para bancada OpenEMS
  * ════════════════════════════════════════════════════════════
  * Plataforma : ESP32 / ESP32-C6 (Arduino core ≥ 2.0)

@@ -1,4 +1,9 @@
 /*
+ * ⚠️ DEPRECATED — use esp32_combined.ino instead.
+ * This standalone stimulator is kept for reference. Its features (RMT CKP/CMP,
+ * DAC/PWM sensors, presets) are being ported to the combined tool.
+ * WiFi/TCP server and OTA remain exclusive to this legacy tool.
+ *
  * esp32_stimulator.ino — Engine Sensor Stimulator para bancada OpenEMS
  * ═══════════════════════════════════════════════════════════════════════
  * Gera todos os sinais de entrada do STM32H562: CKP/CMP digitais e 10
