@@ -190,6 +190,8 @@ class Snapshot:
     @property
     def late_event(self) -> bool:   return bool(self.status & 0x0040)
     @property
+    def drop_count(self) -> bool:   return bool(self.status & 0x0080)
+    @property
     def inj_pw_ms(self) -> float:   return self.pw1_ms_x10 / 10.0
 
 
@@ -604,12 +606,48 @@ class HILRunner:
             time.sleep(0.2)
         return False
 
+    def set_mode(self, mode: str, scope_port: str | None = None):
+        self._mode = mode
+        self._scope = None
+        if mode == "timing" and scope_port:
+            try:
+                from tools.lib.scope_link import ScopeLink
+                self._scope = ScopeLink(scope_port)
+                print(f"  ✓ Scope conectado em {scope_port}")
+            except Exception as e:
+                print(f"  ⚠ Scope não disponível: {e}")
+
     def run(self, points: list[TestPoint]) -> list[TestResult]:
+        if self._mode == "verify":
+            print("\n  [MODO VERIFY] Validação de outputs do event scheduler")
+        elif self._mode == "timing":
+            print("\n  [MODO TIMING] Análise 720° via scope combinado")
+
         for pt in points:
             print(f"\n{'─'*60}")
             print(f"  RPM={pt.rpm}  {pt.description}")
             print(f"{'─'*60}")
             r = self._run_point(pt)
+
+            # Verify mode: event scheduler diagnostics
+            if self._mode == "verify" and r.snap:
+                s = r.snap
+                ok = not s.late_event and not s.drop_count
+                r.add("Event queue OK (no late/drop)",
+                      ok,
+                      f"late={s.late_event} drop={s.drop_count} status=0x{s.status:04X}")
+                r.add("FULL_SYNC mantido", s.full_sync,
+                      f"status=0x{s.status:04X}")
+
+            # Timing mode: scope 720° analysis
+            if self._mode == "timing" and self._scope and r.snap:
+                try:
+                    report = self._scope.run_timing()
+                    ok = "PASS" in report and "FAIL" not in report
+                    r.add("Scope timing 720°", ok, report[:120])
+                except Exception as e:
+                    r.add("Scope timing 720°", False, str(e))
+
             self.results.append(r)
             for name, ok, detail in r.checks:
                 print(f"  {'✓' if ok else '✗'}  {name}")
@@ -793,6 +831,13 @@ def main():
     p.add_argument("--bench-clt-iat", action="store_true",
                    help="Ativa bench-mode CLT/IAT na ECU (cmd 'B'): força 90°C/25°C "
                         "e limpa SENSOR_FAULT desses canais (sensores físicos ausentes)")
+    p.add_argument("--mode", choices=["regression", "verify", "timing"], default="regression",
+                   help="Modo: regression (math validation), verify (event scheduler outputs), "
+                        "timing (scope 720° analysis via combined)")
+    p.add_argument("--smoke", action="store_true",
+                   help="Quick smoke test: 3 RPM points, fail-fast")
+    p.add_argument("--scope-port", default="/dev/ttyUSB0",
+                   help="ESP32 scope/combined serial port (modo timing)")
     args = p.parse_args()
 
     print("╔══════════════════════════════════════╗")
@@ -829,9 +874,12 @@ def main():
 
     if args.rpms:
         points = [TestPoint(rpm) for rpm in args.rpms]
+    elif args.smoke:
+        points = [TestPoint(rpm) for rpm in [800, 1500, 3000]]
     else:
         points = DEFAULT_POINTS
     runner = HILRunner(stm32, stim, eng, tables, bench_mode=args.bench_clt_iat)
+    runner.set_mode(args.mode, scope_port=args.scope_port if args.mode == "timing" else None)
     results = runner.run(points)
 
     total  = sum(len(r.checks) for r in results)
