@@ -739,7 +739,7 @@ static void render_dashboard() {
 
     const float T720_ms = (g_dash_gap3_us - g_dash_gap1_us) / 1000.0f;
     const float T_tooth_ms = T720_ms / 120.0f;  // 120 dentes virtuais em 720°
-    const float rpm_f = (T_tooth_ms > 0) ? 60000.0f / (T_tooth_ms * 60.0f) : 0.0f;
+    const float rpm_f = (T720_ms > 0) ? 60000.0f / T720_ms : 0.0f;
     const float us_per_col = T720_ms * 1000.0f / (float)kDashWidth;
 
     // ── Cabeçalho ──────────────────────────────────────────────────────
