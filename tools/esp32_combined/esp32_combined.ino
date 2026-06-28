@@ -1,9 +1,8 @@
 /*
  * esp32_combined.ino — CKP Generator + Logic Scope para bancada OpenEMS
  * ═══════════════════════════════════════════════════════════════════════
- * Um único ESP32 substitui os dois sketches separados (esp32_ckp_gen +
- * esp32_scope). O timer ISR que gera o sinal CKP também escreve os eventos
- * directamente no ring buffer do scope — não é necessário fio de loopback.
+ * Um único ESP32: gera CKP/CMP via RMT (hardware, jitter ~zero) + scope lógico
+ * de 10 canais para IGN/INJ. CKP loopback para scope via GPIO34 (wire interno).
  *
  * Plataforma : ESP32 (Arduino core ≥ 2.0, ESP-IDF ≥ 4.4)
  * Resolução  : 1 µs  (esp_timer_get_time)
@@ -12,26 +11,27 @@
  *
  *   ESP32 GPIO  STM32      Função
  *   ──────────  ─────────  ────────────────────
- *   GPIO 2  →  PA0        CKP output (60-2)
- *   GPIO 4  →  PA1        CMP output (1 pulso/ciclo)
- *   GPIO 32 ←  PA8        IGN0 (TIM1_CH1)
- *   GPIO 33 ←  PE11       IGN1 (TIM1_CH2)
- *   GPIO 25 ←  PE13       IGN2 (TIM1_CH3)
- *   GPIO 26 ←  PE14       IGN3 (TIM1_CH4)
- *   GPIO 27 ←  PC6        INJ0 (TIM2_CH1)
- *   GPIO 14 ←  PC7        INJ1 (TIM2_CH2)
- *   GPIO 12 ←  PB10       INJ2 (TIM2_CH3)
- *   GPIO 13 ←  PC4        INJ3 (TIM2_CH4)
+ *   GPIO 2  →  PA0        CKP output (60-2, RMT hardware)
+ *   GPIO 4  →  PA1        CMP output (1 pulso/720°, RMT hardware)
+ *   GPIO 2  →  GPIO34     Wire loopback p/ scope CKP (mesma placa)
+ *   GPIO 32 ←  PE9        IGN1 (TIM1_CH1)
+ *   GPIO 33 ←  PE11       IGN2 (TIM1_CH2)
+ *   GPIO 25 ←  PE13       IGN3 (TIM1_CH3)
+ *   GPIO 26 ←  PE14       IGN4 (TIM1_CH4)
+ *   GPIO 27 ←  PC6        INJ1 (TIM3_CH1)
+ *   GPIO 14 ←  PC7        INJ2 (TIM3_CH2)
+ *   GPIO 12 ←  PC8        INJ3 (TIM3_CH3)
+ *   GPIO 13 ←  PC9        INJ4 (TIM3_CH4)
  *   GND     —  GND        OBRIGATÓRIO
- *
- *   Nota: NÃO ligar GPIO36 (era o loopback CKP — aqui desnecessário).
  *
  * ── Comandos série (115200 baud) ────────────────────────────────────────────
  *
  *   CKP generator:
- *     +  / -   RPM ± 100
- *     0  – 9   presets: 100/200/300/500/700/1000/1500/2000/3000/5000 RPM
- *     S        estado do gerador (RPM, contadores)
+ *     +  / -   RPM ± 50
+ *     RPM <n>  RPM exacto (50-9000)
+ *     MAP <kpa> / CLT <c> / TPS <pct> / IAT <c>  (sensores)
+ *     IDLE / CRANK / CRUISE / WOT / COAST  (presets)
+ *     STATUS   estado completo
  *
  *   Scope:
  *     l        Live table (actualiza a cada 1 s)  [default]
@@ -39,11 +39,10 @@
  *     p        Pulse log (cada pulso completo)
  *     w        Waveform bar (últimos 300 ms)
  *     t        Timing analysis: sequência IGN + ângulo de avanço
+ *     d        Dashboard 720° (diagrama ASCII, régua de ângulo)
  *     s        Estatísticas por canal
  *     r        Reset estatísticas
  *     ?        Esta ajuda
- *
- *   Conflito: 's' scope e 'S' gerador usam letras diferentes intencionalmente.
  *
  * ═══════════════════════════════════════════════════════════════════════
  */
@@ -51,15 +50,18 @@
 #include "Arduino.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+#include "driver/rmt_tx.h"
+#include "driver/rmt_encoder.h"
 #include <cstring>
 #include <cmath>
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── SECÇÃO 1 — CKP/CMP Generator
+// ── SECÇÃO 1 — CKP/CMP Generator (RMT hardware)
 // ═══════════════════════════════════════════════════════════════════════════
 
 #define CKP_GPIO    ((gpio_num_t)2)
 #define CMP_GPIO    ((gpio_num_t)4)
+#define CKP_LB_GPIO ((gpio_num_t)34)  // loopback p/ scope CKP
 #ifndef LED_BUILTIN
 #define LED_GPIO    ((gpio_num_t)GPIO_NUM_MAX)
 #else
@@ -70,21 +72,27 @@ static constexpr uint32_t kRpmInit   = 500;
 static constexpr int      kCmpTooth  = 5;
 static constexpr int      kRealTeeth = 58;
 static constexpr uint32_t kRpmMin    = 50;
-static constexpr uint32_t kRpmMax    = 6000;
+static constexpr uint32_t kRpmMax    = 9000;
+static constexpr uint32_t kRmtResHz  = 1000000u;  // 1 tick RMT = 1 µs
+static constexpr uint16_t kRmtMaxDur = 32767u;
+static constexpr int kCmpSymCount = kRealTeeth * 2;  // 116 symbols = 720°
 
 static const uint32_t kRpmPresets[] = {
     100, 200, 300, 500, 700, 1000, 1500, 2000, 3000, 5000
 };
 
-static volatile uint32_t g_rpm        = kRpmInit;
-static volatile int      g_tooth      = 0;
-static volatile bool     g_ckp_high   = false;
-static volatile int      g_revolution = 0;
-static volatile uint32_t g_rev_count  = 0;
-static volatile uint32_t g_cmp_count  = 0;
+static volatile uint32_t g_rpm       = kRpmInit;
+static volatile uint32_t g_rev_count = 0;
+static volatile uint32_t g_cmp_count = 0;
 
-static esp_timer_handle_t g_ckp_timer    = nullptr;
-static esp_timer_handle_t g_cmp_off_tmr  = nullptr;
+// RMT handles
+static rmt_channel_handle_t g_ckp_chan = nullptr;
+static rmt_encoder_handle_t g_ckp_enc  = nullptr;
+static rmt_symbol_word_t    g_ckp_sym[kRealTeeth];
+static rmt_channel_handle_t g_cmp_chan = nullptr;
+static rmt_encoder_handle_t g_cmp_enc  = nullptr;
+static rmt_symbol_word_t    g_cmp_sym[kCmpSymCount];
+static volatile uint32_t    g_ckp_rpm_active = 0u;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── SECÇÃO 2 — Ring Buffer e Canais (Scope)
@@ -116,8 +124,9 @@ static inline void IRAM_ATTR buf_push(int64_t ts, uint8_t ch, uint8_t level) {
 }
 
 // ── Definição de canais scope ─────────────────────────────────────────────
-// CH8 (CKP) é virtual: alimentado pelo timer ISR, não tem GPIO físico.
-// gpio = GPIO_NUM_MAX indica canal virtual — não instalar ISR GPIO.
+// CH8 (CKP) em GPIO34: wire loopback interno GPIO2→GPIO34 para capturar o
+// sinal real gerado pelo RMT (não virtual, timestamp real da borda).
+// CH9 (CMP) é virtual: alimentado por software no momento do pulso CMP.
 
 struct ChanDef {
     gpio_num_t  gpio;
@@ -129,18 +138,23 @@ struct ChanDef {
 static constexpr gpio_num_t kVirtual = GPIO_NUM_MAX;
 
 static ChanDef kChan[] = {
-    { GPIO_NUM_32,  "IGN0", "PA8",  true  },   // CH0
-    { GPIO_NUM_33,  "IGN1", "PE11", true  },   // CH1
-    { GPIO_NUM_25,  "IGN2", "PE13", true  },   // CH2
-    { GPIO_NUM_26,  "IGN3", "PE14", true  },   // CH3
-    { GPIO_NUM_27,  "INJ0", "PC6",  true  },   // CH4
-    { GPIO_NUM_14,  "INJ1", "PC7",  true  },   // CH5
-    { GPIO_NUM_12,  "INJ2", "PB10", true  },   // CH6
-    { GPIO_NUM_13,  "INJ3", "PC4",  true  },   // CH7
-    { kVirtual,     "CKP",  "PA0",  true  },   // CH8 — virtual, via timer ISR
+    // IGN: GPIO assignments matching scope.ino corrected pin mapping
+    { GPIO_NUM_32,  "IGN1", "PE9",  true  },   // CH0 — IGN1 (cyl 1)
+    { GPIO_NUM_33,  "IGN2", "PE11", true  },   // CH1 — IGN2 (cyl 2)
+    { GPIO_NUM_25,  "IGN3", "PE13", true  },   // CH2 — IGN3 (cyl 3)
+    { GPIO_NUM_26,  "IGN4", "PE14", true  },   // CH3 — IGN4 (cyl 4)
+    // INJ: GPIO assignments matching scope.ino corrected pin mapping
+    { GPIO_NUM_27,  "INJ1", "PC6",  true  },   // CH4 — INJ1 (cyl 1)
+    { GPIO_NUM_14,  "INJ2", "PC7",  true  },   // CH5 — INJ2 (cyl 2)
+    { GPIO_NUM_12,  "INJ3", "PC8",  true  },   // CH6 — INJ3 (cyl 3)
+    { GPIO_NUM_13,  "INJ4", "PC9",  true  },   // CH7 — INJ4 (cyl 4)
+    // CKP/CMP: CKP via GPIO34 loopback, CMP virtual
+    { CKP_LB_GPIO,  "CKP",  "PA0",  true  },   // CH8 — loopback real do RMT
+    { kVirtual,     "CMP",  "PA1",  true  },   // CH9 — virtual (software)
 };
 static constexpr int kNChan = (int)(sizeof(kChan) / sizeof(kChan[0]));
 static constexpr int kCkpChan = 8;  // índice do canal CKP
+static constexpr int kCmpChan = 9;  // índice do canal CMP
 
 // ── Métricas por canal ────────────────────────────────────────────────────
 
@@ -160,72 +174,103 @@ struct ChanMetrics {
 static ChanMetrics g_m[kNChan];
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── SECÇÃO 3 — Timer ISRs (CKP + CMP)
+// ── SECÇÃO 3 — RMT CKP/CMP Generator (hardware, jitter ~zero)
 // ═══════════════════════════════════════════════════════════════════════════
 
-static void IRAM_ATTR cmp_off_isr(void*) {
-    gpio_set_level(CMP_GPIO, 0);
+static void build_ckp_pattern(uint32_t rpm) {
+    if (rpm < kRpmMin) rpm = kRpmMin;
+    const uint32_t T = 60000000UL / (rpm * 60UL);
+    const uint16_t h = (uint16_t)(T / 2u);
+    const uint16_t l = (uint16_t)(T - (T / 2u));
+    uint32_t gap_low = (uint32_t)l + 2u * T;
+    if (gap_low > kRmtMaxDur) gap_low = kRmtMaxDur;
+    for (int i = 0; i < kRealTeeth - 1; i++) {
+        g_ckp_sym[i].level0 = 1; g_ckp_sym[i].duration0 = h;
+        g_ckp_sym[i].level1 = 0; g_ckp_sym[i].duration1 = l;
+    }
+    g_ckp_sym[kRealTeeth - 1].level0 = 1; g_ckp_sym[kRealTeeth - 1].duration0 = h;
+    g_ckp_sym[kRealTeeth - 1].level1 = 0; g_ckp_sym[kRealTeeth - 1].duration1 = (uint16_t)gap_low;
 }
 
-/*
- * ckp_isr — Gera sinal CKP (60-2) E alimenta o scope (CH8).
- *
- * Cada chamada: alterna nível GPIO2, agenda próxima chamada, e empurra
- * um EdgeEvent para o ring buffer com timestamp esp_timer_get_time().
- * O gap é detectado pelo timing_feed() através do intervalo fall→rise.
- */
-static void IRAM_ATTR ckp_isr(void*) {
-    const uint32_t rpm   = g_rpm;
-    const uint32_t T_us  = 60000000UL / (rpm * 60UL);
-    const int64_t  ts    = esp_timer_get_time();
-
-    if (!g_ckp_high) {
-        // ── Rising edge ────────────────────────────────────────────
-        gpio_set_level(CKP_GPIO, 1);
-        g_ckp_high = true;
-
-        // Registar no scope (CH8, nível 1)
-        buf_push(ts, (uint8_t)kCkpChan, 1u);
-
-        // CMP no dente kCmpTooth da revolução 0
-        if (g_revolution == 0 && g_tooth == kCmpTooth) {
-            gpio_set_level(CMP_GPIO, 1);
-            esp_timer_start_once(g_cmp_off_tmr, (uint64_t)T_us / 2);
-            g_cmp_count++;
+static void build_cmp_pattern(uint32_t rpm) {
+    if (rpm < kRpmMin) rpm = kRpmMin;
+    const uint32_t T = 60000000UL / (rpm * 60UL);
+    const uint16_t h = (uint16_t)(T / 2u);
+    const uint16_t l = (uint16_t)(T - (T / 2u));
+    uint32_t gap_low = (uint32_t)l + 2u * T;
+    if (gap_low > kRmtMaxDur) gap_low = kRmtMaxDur;
+    for (int rev = 0; rev < 2; rev++) {
+        for (int i = 0; i < kRealTeeth; i++) {
+            const int idx = rev * kRealTeeth + i;
+            const bool is_gap_tooth = (i == kRealTeeth - 1);
+            const bool is_cmp_pulse = (rev == 0 && i == kCmpTooth);
+            g_cmp_sym[idx].level0 = is_cmp_pulse ? 1 : 0;
+            g_cmp_sym[idx].duration0 = h;
+            g_cmp_sym[idx].level1 = 0;
+            g_cmp_sym[idx].duration1 = is_gap_tooth ? (uint16_t)gap_low : l;
         }
-
-        esp_timer_start_once(g_ckp_timer, (uint64_t)T_us / 2);
-
-    } else {
-        // ── Falling edge ───────────────────────────────────────────
-        gpio_set_level(CKP_GPIO, 0);
-        g_ckp_high = false;
-
-        // Registar no scope (CH8, nível 0)
-        buf_push(ts, (uint8_t)kCkpChan, 0u);
-
-        uint64_t low_us;
-        g_tooth++;
-
-        if (g_tooth >= kRealTeeth) {
-            // Fim da revolução: gap = T/2 + 2T (total LOW = 5T/2)
-            low_us = (uint64_t)T_us / 2 + (uint64_t)T_us * 2;
-            g_tooth = 0;
-            g_revolution ^= 1;
-            g_rev_count++;
-            if ((g_rev_count & 0x03u) == 0) {
-                if (LED_GPIO != GPIO_NUM_MAX)
-                    gpio_set_level(LED_GPIO, (g_rev_count >> 2) & 1u);
-            }
-        } else {
-            low_us = (uint64_t)T_us / 2;
-        }
-
-        esp_timer_start_once(g_ckp_timer, low_us);
     }
 }
 
-// ── ISR GPIO scope ────────────────────────────────────────────────────────
+static void rmt_transmit_both() {
+    rmt_transmit_config_t txcfg = {};
+    txcfg.loop_count = -1;  // loop infinito
+    rmt_transmit(g_ckp_chan, g_ckp_enc, g_ckp_sym, sizeof(g_ckp_sym), &txcfg);
+    rmt_transmit(g_cmp_chan, g_cmp_enc, g_cmp_sym, sizeof(g_cmp_sym), &txcfg);
+}
+
+static void ckp_set_rpm(uint32_t rpm) {
+    if (rpm < kRpmMin) rpm = kRpmMin;
+    if (rpm > kRpmMax) rpm = kRpmMax;
+    if (rpm == g_ckp_rpm_active) return;
+    build_ckp_pattern(rpm);
+    build_cmp_pattern(rpm);
+    rmt_disable(g_ckp_chan);
+    rmt_disable(g_cmp_chan);
+    rmt_encoder_reset(g_ckp_enc);
+    rmt_encoder_reset(g_cmp_enc);
+    rmt_enable(g_ckp_chan);
+    rmt_enable(g_cmp_chan);
+    rmt_transmit_both();
+    g_ckp_rpm_active = rpm;
+    g_rpm = rpm;
+    g_rev_count++;
+}
+
+static void rmt_ckp_init() {
+    // CKP channel: 58 symbols (1 rev), 1 memory block (64 symbols)
+    {
+        rmt_tx_channel_config_t cfg = {};
+        cfg.gpio_num        = CKP_GPIO;
+        cfg.clk_src         = RMT_CLK_SRC_DEFAULT;
+        cfg.resolution_hz   = kRmtResHz;
+        cfg.mem_block_symbols = 64;
+        cfg.trans_queue_depth = 4;
+        ESP_ERROR_CHECK(rmt_new_tx_channel(&cfg, &g_ckp_chan));
+        rmt_copy_encoder_config_t enc = {};
+        ESP_ERROR_CHECK(rmt_new_copy_encoder(&enc, &g_ckp_enc));
+    }
+    // CMP channel: 116 symbols (2 revs = 720°), 2 memory blocks (128 symbols)
+    {
+        rmt_tx_channel_config_t cfg = {};
+        cfg.gpio_num        = CMP_GPIO;
+        cfg.clk_src         = RMT_CLK_SRC_DEFAULT;
+        cfg.resolution_hz   = kRmtResHz;
+        cfg.mem_block_symbols = 128;
+        cfg.trans_queue_depth = 4;
+        ESP_ERROR_CHECK(rmt_new_tx_channel(&cfg, &g_cmp_chan));
+        rmt_copy_encoder_config_t enc = {};
+        ESP_ERROR_CHECK(rmt_new_copy_encoder(&enc, &g_cmp_enc));
+    }
+    build_ckp_pattern(kRpmInit);
+    build_cmp_pattern(kRpmInit);
+    rmt_enable(g_ckp_chan);
+    rmt_enable(g_cmp_chan);
+    rmt_transmit_both();
+    g_ckp_rpm_active = kRpmInit;
+}
+
+// ── ISR GPIO scope (IGN, INJ, CKP loopback) ──────────────────────────────
 
 static void IRAM_ATTR edge_isr(void* arg) {
     const uint8_t ch  = (uint8_t)(uint32_t)arg;
@@ -618,19 +663,14 @@ void setup() {
     delay(300);
     memset(g_m, 0, sizeof(g_m));
 
-    // ── GPIOs de saída (CKP/CMP/LED) ─────────────────────────────────────
-    {
-        gpio_num_t outs[] = {CKP_GPIO, CMP_GPIO, LED_GPIO};
-        for (size_t i = 0; i < (sizeof(outs) / sizeof(outs[0])); ++i) {
-            gpio_num_t g = outs[i];
-            if (g == GPIO_NUM_MAX) continue;
-            gpio_reset_pin(g);
-            gpio_set_direction(g, GPIO_MODE_OUTPUT);
-            gpio_set_level(g, 0);
-        }
+    // ── LED output (se disponível) ────────────────────────────────────────
+    if (LED_GPIO != GPIO_NUM_MAX) {
+        gpio_reset_pin(LED_GPIO);
+        gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+        gpio_set_level(LED_GPIO, 0);
     }
 
-    // ── GPIOs de entrada (scope, apenas canais físicos) ───────────────────
+    // ── GPIOs de entrada (scope: IGN, INJ, CKP loopback) ──────────────────
     gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
     for (int ch = 0; ch < kNChan; ++ch) {
         if (!kChan[ch].enabled || kChan[ch].gpio == kVirtual) continue;
@@ -643,30 +683,12 @@ void setup() {
         gpio_intr_enable(g);
     }
 
-    // ── Timer CKP (ISR context) ───────────────────────────────────────────
-    {
-        esp_timer_create_args_t a = {};
-        a.callback = ckp_isr;
-        a.arg = nullptr;
-        a.name = "ckp";
-        ESP_ERROR_CHECK(esp_timer_create(&a, &g_ckp_timer));
-    }
-
-    // ── Timer CMP off (ISR context) ───────────────────────────────────────
-    {
-        esp_timer_create_args_t a = {};
-        a.callback = cmp_off_isr;
-        a.arg = nullptr;
-        a.name = "cmp_off";
-        ESP_ERROR_CHECK(esp_timer_create(&a, &g_cmp_off_tmr));
-    }
-
-    // ── Arrancar CKP ─────────────────────────────────────────────────────
-    const uint32_t T0 = 60000000UL / (g_rpm * 60UL);
-    ESP_ERROR_CHECK(esp_timer_start_once(g_ckp_timer, T0 / 2));
+    // ── CKP/CMP via RMT (hardware, jitter ~zero) ──────────────────────────
+    rmt_ckp_init();
 
     print_help();
-    Serial.printf("\n  CKP: %lu RPM  Modo scope: LIVE\n\n", g_rpm);
+    Serial.printf("\n  CKP: %lu RPM (RMT)  Modo scope: LIVE\n", (unsigned long)g_rpm);
+    Serial.printf("  Wire loopback: GPIO2 -> GPIO34 (CKP scope)\n\n");
 }
 
 static uint32_t g_last_live_ms = 0;
@@ -688,7 +710,7 @@ static void parse_text_cmd(const char* raw) {
     const bool has_val = (sscanf(buf, "%15s %d", cmd, &val) >= 2);
 
     if (strcmp(cmd, "RPM") == 0 && has_val) {
-        g_rpm = (uint32_t)constrain(val, (int)kRpmMin, (int)kRpmMax);
+        ckp_set_rpm((uint32_t)constrain(val, (int)kRpmMin, (int)kRpmMax));
         Serial.printf("  [GEN] RPM=%lu\n", (unsigned long)g_rpm);
     }
     // MAP/TPS/CLT/IAT/APP/FUEL/OIL/ETB: accepted silently (no DAC/PWM in combined)
