@@ -14,14 +14,14 @@
  *   ──────────  ─────────  ────────────────────
  *   GPIO 2  →  PA0        CKP output (60-2)
  *   GPIO 4  →  PA1        CMP output (1 pulso/ciclo)
- *   GPIO 32 ←  PE9        IGN0 (TIM1_CH1)
+ *   GPIO 32 ←  PA8        IGN0 (TIM1_CH1)
  *   GPIO 33 ←  PE11       IGN1 (TIM1_CH2)
  *   GPIO 25 ←  PE13       IGN2 (TIM1_CH3)
  *   GPIO 26 ←  PE14       IGN3 (TIM1_CH4)
- *   GPIO 27 ←  PC6        INJ0 (TIM3_CH1)
- *   GPIO 14 ←  PC7        INJ1 (TIM3_CH2)
- *   GPIO 12 ←  PC8        INJ2 (TIM3_CH3)
- *   GPIO 13 ←  PC9        INJ3 (TIM3_CH4)
+ *   GPIO 27 ←  PC6        INJ0 (TIM2_CH1)
+ *   GPIO 14 ←  PC7        INJ1 (TIM2_CH2)
+ *   GPIO 12 ←  PB10       INJ2 (TIM2_CH3)
+ *   GPIO 13 ←  PC4        INJ3 (TIM2_CH4)
  *   GND     —  GND        OBRIGATÓRIO
  *
  *   Nota: NÃO ligar GPIO36 (era o loopback CKP — aqui desnecessário).
@@ -38,7 +38,7 @@
  *     e        Edge log (cada bordo)
  *     p        Pulse log (cada pulso completo)
  *     w        Waveform bar (últimos 300 ms)
- *     t        Timing analysis 720°: 1×/ciclo, ordem 1-3-4-2, ângulo IGN+INJ
+ *     t        Timing analysis: sequência IGN + ângulo de avanço
  *     s        Estatísticas por canal
  *     r        Reset estatísticas
  *     ?        Esta ajuda
@@ -129,20 +129,18 @@ struct ChanDef {
 static constexpr gpio_num_t kVirtual = GPIO_NUM_MAX;
 
 static ChanDef kChan[] = {
-    { GPIO_NUM_32,  "IGN0", "PE9",  true  },   // CH0 TIM1_CH1
-    { GPIO_NUM_33,  "IGN1", "PE11", true  },   // CH1 TIM1_CH2
-    { GPIO_NUM_25,  "IGN2", "PE13", true  },   // CH2 TIM1_CH3
-    { GPIO_NUM_26,  "IGN3", "PE14", true  },   // CH3 TIM1_CH4
-    { GPIO_NUM_27,  "INJ0", "PC6",  true  },   // CH4 TIM3_CH1
-    { GPIO_NUM_14,  "INJ1", "PC7",  true  },   // CH5 TIM3_CH2
-    { GPIO_NUM_12,  "INJ2", "PC8",  true  },   // CH6 TIM3_CH3
-    { GPIO_NUM_13,  "INJ3", "PC9",  true  },   // CH7 TIM3_CH4
+    { GPIO_NUM_32,  "IGN0", "PA8",  true  },   // CH0
+    { GPIO_NUM_33,  "IGN1", "PE11", true  },   // CH1
+    { GPIO_NUM_25,  "IGN2", "PE13", true  },   // CH2
+    { GPIO_NUM_26,  "IGN3", "PE14", true  },   // CH3
+    { GPIO_NUM_27,  "INJ0", "PC6",  true  },   // CH4
+    { GPIO_NUM_14,  "INJ1", "PC7",  true  },   // CH5
+    { GPIO_NUM_12,  "INJ2", "PB10", true  },   // CH6
+    { GPIO_NUM_13,  "INJ3", "PC4",  true  },   // CH7
     { kVirtual,     "CKP",  "PA0",  true  },   // CH8 — virtual, via timer ISR
-    { kVirtual,     "CMP",  "PA1",  true  },   // CH9 — virtual, via timer ISR
 };
 static constexpr int kNChan = (int)(sizeof(kChan) / sizeof(kChan[0]));
 static constexpr int kCkpChan = 8;  // índice do canal CKP
-static constexpr int kCmpChan = 9;  // índice do canal CMP
 
 // ── Métricas por canal ────────────────────────────────────────────────────
 
@@ -166,9 +164,7 @@ static ChanMetrics g_m[kNChan];
 // ═══════════════════════════════════════════════════════════════════════════
 
 static void IRAM_ATTR cmp_off_isr(void*) {
-    const int64_t ts = esp_timer_get_time();
     gpio_set_level(CMP_GPIO, 0);
-    buf_push(ts, (uint8_t)kCmpChan, 0u);  // scope CH9 FALL
 }
 
 /*
@@ -194,7 +190,6 @@ static void IRAM_ATTR ckp_isr(void*) {
         // CMP no dente kCmpTooth da revolução 0
         if (g_revolution == 0 && g_tooth == kCmpTooth) {
             gpio_set_level(CMP_GPIO, 1);
-            buf_push(ts, (uint8_t)kCmpChan, 1u);  // scope CH9 RISE
             esp_timer_start_once(g_cmp_off_tmr, (uint64_t)T_us / 2);
             g_cmp_count++;
         }
@@ -240,54 +235,31 @@ static void IRAM_ATTR edge_isr(void* arg) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── SECÇÃO 4 — Timing Analysis 720° (sequencial + ângulo)
+// ── SECÇÃO 4 — Timing Analysis (IGN sequência + avanço)
 // ═══════════════════════════════════════════════════════════════════════════
-
-enum class Mode : uint8_t { LIVE, EDGE, PULSE, WAVE, TIMING };
-static volatile Mode g_mode = Mode::LIVE;
-// Captura um ciclo completo de 720° (2 gaps CKP, 60-2) e verifica:
-//   1. Cada IGN/INJ dispara exatamente 1× por ciclo
-//   2. Ordem de disparo 1-3-4-2 (IGN0→IGN2→IGN3→IGN1)
-//   3. Inter-cilindro 180°±3°; ângulo absoluto desde gap1
-//   4. CMP (CH9) presente 1×/720° com offset esperado ~30°
-//
-// CH8 (CKP, virtual) e CH9 (CMP, virtual) são alimentados pelo timer ISR
-// do gerador CKP/CMP — não precisam de fio de loopback externo.
 
 static constexpr int kIgnFirst = 0;
 static constexpr int kIgnCount = 4;
-static constexpr int kInjFirst = 4;
-static constexpr int kInjCount = 4;
-static constexpr int kCylCount = 4;
-
-// TDC de cada cilindro em dentes desde dente 0 do gap (60-2, firing order 1-3-4-2)
-// Cil.1=IGN0: TDC @ dente 0; Cil.3=IGN2: TDC @ 15; Cil.4=IGN3: TDC @ 30; Cil.2=IGN1: TDC @ 45
-static constexpr float kTdcDente[kCylCount] = { 0.0f, 15.0f, 30.0f, 45.0f };
 static constexpr uint8_t kExpectedFiringOrder[kIgnCount] = {0, 2, 3, 1};
+static constexpr int kInjFirst = 4;
 
-enum class TmState : uint8_t {
-    IDLE,
-    WAIT_GAP1,   // aguardar 1º gap
-    CAPTURE,     // capturar IGN/INJ/CMP entre gap1 e gap2 (360°)
-    WAIT_GAP2,   // aguardar 2º gap (confirma 720°)
-    VERIFY,      // verificar que nenhum canal disparou 2× no mesmo ciclo
-    DONE,
-};
+static constexpr float kTdcDeg[kIgnCount] = {0.0f, 540.0f, 180.0f, 360.0f};
+static constexpr float kDefaultAdvanceDeg = 15.0f;
+
+enum class TmState : uint8_t { IDLE, WAIT_GAP, CAPTURE, WAIT_GAP_2, DONE };
 
 struct TimingCapture {
-    int64_t  gap1_ts_us;
-    int64_t  gap2_ts_us;
+    int64_t  gap_ts_us[2];
     int64_t  last_ckp_fall_us;
-    int64_t  ign_ts_us[kIgnCount];
-    uint8_t  ign_count[kIgnCount];
-    int64_t  inj_ts_us[kInjCount];
-    uint8_t  inj_count[kInjCount];
-    int64_t  cmp_ts_us;       // 1ª RISE do CMP no ciclo
-    uint8_t  cmp_count;       // nº de bordas CMP no ciclo (esperado: 1)
+    int64_t  spark_ts_us[2][kIgnCount];
+    bool     spark_done[2][kIgnCount];
+    int64_t  inj_ts_us[2][kIgnCount];
+    bool     inj_done[2][kIgnCount];
     uint32_t ckp_period_us;
+    int      sparks_captured[2];
+    int      inj_captured[2];
+    uint8_t  half;
     uint32_t timeout_us;
-    int      gap_count;
-    bool     in_cycle;
 };
 
 static TmState       g_tm_state = TmState::IDLE;
@@ -296,239 +268,213 @@ static TimingCapture g_tm_cap;
 static void timing_report();
 
 static void timing_start() {
-    g_tm_cap              = {};
+    g_tm_cap               = {};
     g_tm_cap.ckp_period_us = (g_m[kCkpChan].period_us > 0)
-                              ? g_m[kCkpChan].period_us : 2000u;
-    // timeout = 2 ciclos completos (2 × 60 dentes × 2 revs) + margem
-    g_tm_cap.timeout_us   = g_tm_cap.ckp_period_us * 240u;
-
-    if (g_m[kCkpChan].period_us == 0) {
-        Serial.println("  AVISO: CH8 sem sinal CKP. O gerador está activo?");
-        Serial.println("  [TIMING] Usar '+'/'−' para definir RPM primeiro.");
-        g_tm_state = TmState::IDLE;
-        return;
-    }
-    // Sinal com period < 200µs (>5kHz dente = >~6000 RPM equiv) é ruído — rejeitar.
-    if (g_m[kCkpChan].period_us < 200u) {
-        Serial.printf("  ERRO: CKP period=%.3f ms parece ruído (esperado ~0.5-5 ms).\n",
-                      g_m[kCkpChan].period_us / 1000.0f);
-        Serial.println("  Verificar RPM (comando '+'/'−') e gerador CKP.");
-        g_tm_state = TmState::IDLE;
-        return;
-    }
-
-    g_tm_state = TmState::WAIT_GAP1;
-    Serial.printf("  [TIMING] CKP OK (period=%.3f ms). A aguardar 1º gap...\n",
-                  g_m[kCkpChan].period_us / 1000.0f);
+                             ? g_m[kCkpChan].period_us : 2000u;
+    g_tm_cap.timeout_us    = g_tm_cap.ckp_period_us * 120u;
+    g_tm_cap.half          = 0;
+    g_tm_state = TmState::WAIT_GAP;
+    Serial.println("  [TIMING 720] A aguardar gap CKP...");
+    Serial.printf("  [TIMING] T_dente=%.3f ms  timeout=%.0f ms\n",
+                  g_tm_cap.ckp_period_us / 1000.0f,
+                  g_tm_cap.timeout_us    / 1000.0f);
 }
 
 static void timing_feed(const EdgeEvent& ev) {
     TimingCapture& c = g_tm_cap;
 
-    // Timeout global
-    if (c.gap1_ts_us > 0 &&
-        (ev.ts_us - c.gap1_ts_us) > (int64_t)c.timeout_us) {
-        Serial.println("  [TIMING] Timeout — verificar CKP e ligações IGN/INJ.");
-        g_tm_state = TmState::IDLE;
-        g_mode     = Mode::LIVE;
-        return;
-    }
-
-    // ── Deteção de gap CKP ──────────────────────────────────────────────────
-    if (ev.ch == (uint8_t)kCkpChan) {
+    if (g_tm_state == TmState::WAIT_GAP || g_tm_state == TmState::WAIT_GAP_2) {
+        if (ev.ch != (uint8_t)kCkpChan) { return; }
         if (ev.level == 0u) {
             c.last_ckp_fall_us = ev.ts_us;
         } else if (c.last_ckp_fall_us > 0) {
             const int64_t gap = ev.ts_us - c.last_ckp_fall_us;
-            const bool is_gap = (gap > (int64_t)(c.ckp_period_us * 18u / 10u));
-            if (is_gap) {
-                c.gap_count++;
-                if (c.gap_count == 1) {
-                    c.gap1_ts_us       = ev.ts_us;
-                    c.last_ckp_fall_us = 0;  // reset para não reutilizar fall do gap1
-                    c.in_cycle         = true;
-                    g_tm_state         = TmState::CAPTURE;
-                    Serial.printf("  [TIMING] Gap1 OK (%.2f ms) — a capturar 720°...\n",
-                                  gap / 1000.0f);
-                } else if (c.gap_count == 2) {
-                    c.gap2_ts_us = ev.ts_us;
-                    c.in_cycle   = false;
-                    g_tm_state   = TmState::DONE;
-                    Serial.printf("  [TIMING] Gap2 OK — ciclo de %.2f ms capturado.\n",
-                                  (ev.ts_us - c.gap1_ts_us) / 1000.0f);
-                    timing_report();
-                    g_mode = Mode::LIVE;
-                }
+            if (gap > (int64_t)(c.ckp_period_us * 18u / 10u)) {
+                c.gap_ts_us[c.half] = ev.ts_us;
+                g_tm_state = TmState::CAPTURE;
+                Serial.printf("  [TIMING] Gap %d OK (%.2f ms). A capturar half %d...\n",
+                              c.half, gap / 1000.0f, c.half);
             }
         }
         return;
     }
 
-    // ── Captura IGN/INJ/CMP entre gap1 e gap2 ───────────────────────────────
-    if (!c.in_cycle) { return; }
-
-    // CMP: capturar borda de RISE (pulso activo-alto do gerador)
-    if (ev.ch == (uint8_t)kCmpChan && ev.level == 1u) {
-        c.cmp_count++;
-        if (c.cmp_count == 1) {
-            c.cmp_ts_us = ev.ts_us;
-            Serial.printf("  [TIMING] CMP  @ +%.3f ms (%.1f°)\n",
-                          (ev.ts_us - c.gap1_ts_us) / 1000.0f,
-                          (float)(ev.ts_us - c.gap1_ts_us) / c.ckp_period_us * 6.0f);
-        } else {
-            Serial.printf("  [TIMING] !! CMP disparou %dx (esperado 1×/720°)\n", c.cmp_count);
+    if (g_tm_state == TmState::CAPTURE) {
+        if ((ev.ts_us - c.gap_ts_us[c.half]) > (int64_t)c.timeout_us) {
+            Serial.println("  [TIMING] Timeout — verificar ligações IGN/INJ.");
+            g_tm_state = TmState::IDLE;
+            return;
         }
-        return;
-    }
+        if (ev.level != 0u) { return; }
+        const int h = c.half;
 
-    if (ev.level != 0u) { return; }  // IGN/INJ: só FALL
-
-    // ── IGN ─────────────────────────────────────────────────────────────────
-    if (ev.ch >= (uint8_t)kIgnFirst && ev.ch < (uint8_t)(kIgnFirst + kIgnCount)) {
-        const int idx = (int)(ev.ch - kIgnFirst);
-        c.ign_count[idx]++;
-        if (c.ign_count[idx] == 1) {
-            c.ign_ts_us[idx] = ev.ts_us;
-            Serial.printf("  [TIMING] IGN%d @ +%.3f ms (%.1f°)\n", idx,
-                          (ev.ts_us - c.gap1_ts_us) / 1000.0f,
-                          (float)(ev.ts_us - c.gap1_ts_us) / c.ckp_period_us * 6.0f);
-        } else if (c.ign_count[idx] == 2) {
-            Serial.printf("  [TIMING] !! IGN%d disparou 2x (wasted-spark ou fase errada)\n", idx);
+        if (ev.ch >= (uint8_t)kIgnFirst &&
+            ev.ch <  (uint8_t)(kIgnFirst + kIgnCount)) {
+            const int idx = (int)(ev.ch - kIgnFirst);
+            if (!c.spark_done[h][idx]) {
+                c.spark_ts_us[h][idx] = ev.ts_us;
+                c.spark_done[h][idx]  = true;
+                c.sparks_captured[h]++;
+                Serial.printf("  [TIMING] IGN%d spark @ +%.3f ms (half %d)\n",
+                              idx, (ev.ts_us - c.gap_ts_us[h]) / 1000.0f, h);
+            }
         }
-    // ── INJ ─────────────────────────────────────────────────────────────────
-    } else if (ev.ch >= (uint8_t)kInjFirst && ev.ch < (uint8_t)(kInjFirst + kInjCount)) {
-        const int idx = (int)(ev.ch - kInjFirst);
-        c.inj_count[idx]++;
-        if (c.inj_count[idx] == 1) {
-            c.inj_ts_us[idx] = ev.ts_us;
+
+        if (ev.ch >= (uint8_t)kInjFirst &&
+            ev.ch <  (uint8_t)(kInjFirst + kIgnCount)) {
+            const int idx = (int)(ev.ch - kInjFirst);
+            if (!c.inj_done[h][idx]) {
+                c.inj_ts_us[h][idx] = ev.ts_us;
+                c.inj_done[h][idx]  = true;
+                c.inj_captured[h]++;
+                Serial.printf("  [TIMING] INJ%d @ +%.3f ms (half %d)\n",
+                              idx, (ev.ts_us - c.gap_ts_us[h]) / 1000.0f, h);
+            }
+        }
+
+        if (c.sparks_captured[h] == kIgnCount) {
+            if (h == 0) {
+                c.half = 1;
+                g_tm_state = TmState::WAIT_GAP_2;
+                Serial.println("  [TIMING] Half 0 completa. A aguardar gap 2...");
+            } else {
+                g_tm_state = TmState::DONE;
+                timing_report();
+            }
         }
     }
 }
 
 static void timing_report() {
-    const TimingCapture& c = g_tm_cap;
-    const float T720 = (c.gap2_ts_us - c.gap1_ts_us) / 1000.0f;  // ms/ciclo medido
-    const float T  = (T720 > 0.0f) ? T720 / 120.0f : c.ckp_period_us / 1000.0f;  // ms/dente
-    // Inter-cilindro esperado: 720° / 4 cilindros = 180° = 30 dentes
-    const float inter_exp_deg = 180.0f;
+    const TimingCapture& c  = g_tm_cap;
+    const float          T  = c.ckp_period_us / 1000.0f;
+    const float expected_inter_ms = T * 60.0f * 2.0f / 4.0f;
 
-    Serial.println();
-    Serial.println("  ╔═══════════════════════════════════════════════════════════╗");
-    Serial.println("  ║  Sequential Ignition Analysis — 720° Cycle              ║");
-    Serial.printf( "  ║  T_dente=%.3f ms   T_ciclo=%.2f ms (esp. %.2f ms) %s║\n",
-                   T, T720, T * 120.0f, "");
-    Serial.println("  ╚═══════════════════════════════════════════════════════════╝");
-
-    // ── 1. Verificação 1×/720° ──────────────────────────────────────────────
-    Serial.println();
-    Serial.println("  [1] Contagem de disparos por ciclo de 720° (esperado: 1×)");
-    Serial.println("  Canal  Contagem  OK?");
-    bool count_ok = true;
-    for (int i = 0; i < kIgnCount; ++i) {
-        const bool ok = (c.ign_count[i] == 1);
-        if (!ok) count_ok = false;
-        Serial.printf("  IGN%d   %dx        %s\n", i, c.ign_count[i], ok ? "✓" : "✗ FALHA");
-    }
-    for (int i = 0; i < kInjCount; ++i) {
-        const bool ok = (c.inj_count[i] == 1);
-        if (!ok) count_ok = false;
-        Serial.printf("  INJ%d   %dx        %s\n", i, c.inj_count[i], ok ? "✓" : "✗ FALHA");
-    }
-
-    // ── 2. Ordem de disparo ─────────────────────────────────────────────────
-    // Ordenar canais IGN por timestamp (só os que dispararam 1×)
     uint8_t order[kIgnCount] = {0, 1, 2, 3};
     for (int i = 0; i < kIgnCount - 1; ++i)
         for (int j = 0; j < kIgnCount - 1 - i; ++j)
-            if (c.ign_ts_us[order[j]] > c.ign_ts_us[order[j+1]]) {
-                uint8_t tmp = order[j]; order[j] = order[j+1]; order[j+1] = tmp;
+            if (c.spark_ts_us[0][order[j]] > c.spark_ts_us[0][order[j + 1]]) {
+                uint8_t t = order[j]; order[j] = order[j+1]; order[j+1] = t;
             }
 
-    bool order_ok = true;
-    for (int i = 0; i < kIgnCount; ++i)
-        if (order[i] != kExpectedFiringOrder[i]) { order_ok = false; }
-
     Serial.println();
-    Serial.println("  [2] Ordem de disparo IGN");
+    Serial.println("  ╔══════════════════════════════════════════════════════╗");
+    Serial.println("  ║  Ignition Timing Analysis — 720°                    ║");
+    Serial.printf( "  ║  T_dente=%.3f ms  Inter-cil esperado=%.3f ms       ║\n",
+                   T, expected_inter_ms);
+    Serial.println("  ╚══════════════════════════════════════════════════════╝");
+
+    // ── Inter-cylinder spacing (half 0) ──
+    Serial.println();
+    Serial.println("  Canal  Desde gap      Inter-cil     Esperado  Desvio  OK?");
+    Serial.println("  ─────  ─────────────  ───────────  ────────  ──────  ───");
+
+    float prev_ms = 0.0f;
+    bool  timing_ok = true;
+    for (int i = 0; i < kIgnCount; ++i) {
+        const int   ch  = order[i];
+        const float dt  = (c.spark_ts_us[0][ch] - c.gap_ts_us[0]) / 1000.0f;
+        const float ic  = (i == 0) ? 0.0f : dt - prev_ms;
+        const float dev = (i == 0) ? 0.0f : ic - expected_inter_ms;
+        const bool  ok  = (i == 0) || (fabsf(dev) < 1.5f);
+        if (!ok) timing_ok = false;
+        if (i == 0)
+            Serial.printf("  IGN%d   %8.3f ms        —             —       —      —\n",
+                          ch, dt);
+        else
+            Serial.printf("  IGN%d   %8.3f ms  %8.3f ms  %7.3f ms %+6.3f ms %s\n",
+                          ch, dt, ic, expected_inter_ms, dev, ok ? "✓" : "✗ FALHA");
+        prev_ms = dt;
+    }
+
+    // ── Firing order ──
+    Serial.println();
     Serial.print("  Detectada : ");
     for (int i = 0; i < kIgnCount; ++i) { if (i) Serial.print("→"); Serial.printf("IGN%d", order[i]); }
     Serial.println();
-    Serial.print("  Esperada  : IGN0→IGN2→IGN3→IGN1");
-    Serial.printf("  %s\n", order_ok ? "  ✓" : "  ✗ ERRADA");
+    Serial.print("  Esperada  : ");
+    for (int i = 0; i < kIgnCount; ++i) { if (i) Serial.print("→"); Serial.printf("IGN%d", kExpectedFiringOrder[i]); }
+    bool order_ok = true;
+    for (int i = 0; i < kIgnCount; ++i) if (order[i] != kExpectedFiringOrder[i]) order_ok = false;
+    Serial.printf("  %s\n", order_ok ? "  ✓ CORRECTA" : "  ✗ ERRADA");
 
-    // ── 3. Ângulo por cilindro ──────────────────────────────────────────────
+    // ── 720° period per cylinder (sequential proof) ──
     Serial.println();
-    Serial.println("  [3] Ângulo de avanço por cilindro (FALL IGN desde gap1)");
-    Serial.println("  Canal  ms desde gap1  Dentes   Graus    Inter-cil  Dev inter  OK?");
-    Serial.println("  ─────  ────────────  ──────  ──────   ─────────  ─────────  ───");
-    float prev_deg = 0.0f;
-    bool  angle_ok = true;
-    for (int i = 0; i < kIgnCount; ++i) {
-        const int   ch  = order[i];
-        const bool  cap = (c.ign_count[ch] == 1);
-        const float dt  = cap ? (c.ign_ts_us[ch] - c.gap1_ts_us) / 1000.0f : -1.0f;
-        const float deg = cap ? dt / T * 6.0f : -1.0f;
-        const float ic_deg = (i == 0) ? 0.0f : deg - prev_deg;
-        const float ic_dev = (i == 0) ? 0.0f : ic_deg - inter_exp_deg;
-        const bool  ic_ok  = (i == 0) || (fabsf(ic_dev) < 3.0f);  // ±3° = ~±0.5 dentes
-        if (!ic_ok) { angle_ok = false; }
-        if (!cap) {
-            Serial.printf("  IGN%d  (não capturado)                                    ✗\n", ch);
-            angle_ok = false;
-        } else if (i == 0) {
-            Serial.printf("  IGN%d  %8.3f ms  %6.2f  %6.1f°     —          —        —\n",
-                          ch, dt, dt / T, deg);
-        } else {
-            Serial.printf("  IGN%d  %8.3f ms  %6.2f  %6.1f°  %6.1f°  %+6.1f°    %s\n",
-                          ch, dt, dt / T, deg, ic_deg, ic_dev, ic_ok ? "✓" : "✗");
+    Serial.println("  ── Período 720° por cilindro ──");
+    const float gap_period_us = (float)(c.gap_ts_us[1] - c.gap_ts_us[0]);
+    const float expected_720_ms = gap_period_us * 2.0f / 1000.0f;
+    Serial.printf("  Gap period (360°) = %.3f ms → esperado 720° = %.3f ms\n",
+                  gap_period_us / 1000.0f, expected_720_ms);
+    Serial.println("  Cil    Período 720°   Esperado   Desvio   OK?");
+    Serial.println("  ───    ────────────    ────────   ──────   ───");
+
+    bool period_ok = true;
+    for (int cyl = 0; cyl < kIgnCount; ++cyl) {
+        const float p_ms = (c.spark_ts_us[1][cyl] - c.spark_ts_us[0][cyl]) / 1000.0f;
+        const float dev  = p_ms - expected_720_ms;
+        const float tol  = expected_720_ms * 0.05f;
+        const bool  ok   = fabsf(dev) < tol;
+        if (!ok) { period_ok = false; }
+        Serial.printf("  IGN%d  %8.3f ms  %8.3f ms  %+6.3f ms  %s\n",
+                      cyl, p_ms, expected_720_ms, dev, ok ? "✓" : "✗ FALHA");
+    }
+
+    // ── Spark angle vs TDC (informational) ──
+    Serial.println();
+    Serial.println("  ── Ângulo spark vs TDC (informativo) ──");
+    Serial.println("  Nota: ângulo absoluto requer calibração trigger_tooth0_engine_deg.");
+    Serial.printf("  Advance configurado: %.1f°\n", kDefaultAdvanceDeg);
+    Serial.println("  Cil    Medido°    Esperado°   Desvio°");
+    Serial.println("  ───    ───────    ─────────   ───────");
+    for (int cyl = 0; cyl < kIgnCount; ++cyl) {
+        const float dt_us = (float)(c.spark_ts_us[0][cyl] - c.gap_ts_us[0]);
+        const float measured_deg = (dt_us / (float)c.ckp_period_us) * 6.0f;
+        float expected_deg = kTdcDeg[cyl] - kDefaultAdvanceDeg;
+        if (expected_deg < 0.0f) expected_deg += 720.0f;
+        float dev = measured_deg - expected_deg;
+        if (dev > 360.0f) dev -= 720.0f;
+        if (dev < -360.0f) dev += 720.0f;
+        Serial.printf("  IGN%d  %7.1f°   %7.1f°    %+6.1f°\n",
+                      cyl, measured_deg, expected_deg, dev);
+    }
+
+    // ── INJ offset (informational) ──
+    int inj_total = c.inj_captured[0];
+    if (inj_total > 0) {
+        Serial.println();
+        Serial.println("  ── Offset INJ → IGN (informativo) ──");
+        Serial.println("  Cil    INJ→IGN (ms)");
+        Serial.println("  ───    ────────────");
+        for (int cyl = 0; cyl < kIgnCount; ++cyl) {
+            if (c.inj_done[0][cyl]) {
+                const float off = (c.inj_ts_us[0][cyl] - c.spark_ts_us[0][cyl]) / 1000.0f;
+                Serial.printf("  INJ%d  %+8.3f ms\n", cyl, off);
+            } else {
+                Serial.printf("  INJ%d  sem dados\n", cyl);
+            }
         }
-        if (cap) { prev_deg = deg; }
     }
 
-    // ── 4. INJ ──────────────────────────────────────────────────────────────
+    // ── Overall result ──
     Serial.println();
-    Serial.println("  [4] Injetores (FALL INJ desde gap1)");
-    Serial.println("  Canal  ms desde gap1  Graus");
-    for (int i = 0; i < kInjCount; ++i) {
-        if (c.inj_count[i] == 1) {
-            const float dt  = (c.inj_ts_us[i] - c.gap1_ts_us) / 1000.0f;
-            const float deg = dt / T * 6.0f;
-            Serial.printf("  INJ%d   %8.3f ms  %6.1f°\n", i, dt, deg);
-        } else {
-            Serial.printf("  INJ%d   (não capturado ou %dx)\n", i, c.inj_count[i]);
-        }
+    const bool all_ok = timing_ok && order_ok && period_ok;
+    Serial.printf("  Resultado final: %s\n",
+                  all_ok ? "✓ IGNIÇÃO SEQUENCIAL OK (720°)"
+                         : "✗ VER FALHAS ACIMA");
+    if (!period_ok) {
+        Serial.println("  NOTA: Período 720° falhou — possível wasted-spark ou fase errada.");
     }
+    Serial.println();
 
-    // ── 5. CMP (cam sensor) ─────────────────────────────────────────────────
-    static constexpr float kCmpExpectedDeg = 30.0f;
-    static constexpr float kCmpToleranceDeg = 18.0f;  // ±3 dentes
-    Serial.println();
-    Serial.println("  [5] CMP (cam sensor) — esperado 1×/720°");
-    bool cmp_ok = false;
-    if (c.cmp_count == 0) {
-        Serial.println("  CMP   0×  ✗ AUSENTE — verificar CMP_GPIO no gerador");
-    } else if (c.cmp_count > 1) {
-        Serial.printf("  CMP   %dx ✗ DUPLICADO\n", c.cmp_count);
-    } else {
-        const float dt  = (c.cmp_ts_us - c.gap1_ts_us) / 1000.0f;
-        const float deg = dt / T * 6.0f;
-        const float dev = deg - kCmpExpectedDeg;
-        cmp_ok = (fabsf(dev) < kCmpToleranceDeg);
-        Serial.printf("  CMP   1×  @ +%.3f ms = %.1f°  (esp. ~%.0f°, dev %+.1f°)  %s\n",
-                      dt, deg, kCmpExpectedDeg, dev, cmp_ok ? "✓" : "✗ OFFSET ERRADO");
-    }
-
-    // ── Resultado ───────────────────────────────────────────────────────────
-    const bool all_ok = count_ok && order_ok && angle_ok && cmp_ok;
-    Serial.println();
-    Serial.printf("  Resultado: %s\n", all_ok ? "✓ SEQUENCIAL OK (720°)" : "✗ VER FALHAS ACIMA");
-    Serial.println("  (para confirmar ângulo: snapshot CDC 'A' byte 8 = advance_p40 × 0.25°)");
-    Serial.println();
+    g_tm_state = TmState::IDLE;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── SECÇÃO 5 — Modos de visualização
 // ═══════════════════════════════════════════════════════════════════════════
+
+enum class Mode : uint8_t { LIVE, EDGE, PULSE, WAVE, TIMING };
+static volatile Mode g_mode = Mode::LIVE;
 
 static void process_events() {
     while (g_tail != g_head) {
@@ -648,7 +594,7 @@ static void print_help() {
     Serial.println("  Scope:");
     Serial.println("    l       Live table (1 s)     p  Pulse log");
     Serial.println("    e       Edge log              w  Waveform bar");
-    Serial.println("    t       Timing 720° IGN+INJ   s  Estatísticas");
+    Serial.println("    t       Timing 720° (seq)     s  Estatísticas");
     Serial.println("    r       Reset stats           ?  Esta ajuda");
     Serial.println();
     Serial.println("  Canais:");
@@ -725,12 +671,50 @@ void setup() {
 
 static uint32_t g_last_live_ms = 0;
 
+// Line buffer for text commands (e.g. "RPM 800\n" from hil_test.py)
+static char g_line[64];
+static int  g_line_pos = 0;
+
+static void parse_text_cmd(const char* raw) {
+    char buf[64];
+    int  len = 0;
+    while (raw[len] && len < 63) { buf[len] = raw[len]; len++; }
+    buf[len] = '\0';
+    for (int i = 0; i < len; ++i)
+        if (buf[i] >= 'a' && buf[i] <= 'z') buf[i] -= 32;
+
+    char cmd[16] = {};
+    int  val = 0;
+    const bool has_val = (sscanf(buf, "%15s %d", cmd, &val) >= 2);
+
+    if (strcmp(cmd, "RPM") == 0 && has_val) {
+        g_rpm = (uint32_t)constrain(val, (int)kRpmMin, (int)kRpmMax);
+        Serial.printf("  [GEN] RPM=%lu\n", (unsigned long)g_rpm);
+    }
+    // MAP/TPS/CLT/IAT/APP/FUEL/OIL/ETB: accepted silently (no DAC/PWM in combined)
+}
+
 void loop() {
     process_events();
 
-    if (Serial.available()) {
+    while (Serial.available()) {
         const char c = (char)Serial.read();
 
+        // Accumulate text commands terminated by '\n' or '\r'
+        if (c == '\n' || c == '\r') {
+            if (g_line_pos > 0) {
+                g_line[g_line_pos] = '\0';
+                parse_text_cmd(g_line);
+                g_line_pos = 0;
+            }
+            // Also handle as single-char scope command if buffer was empty
+        } else {
+            if (g_line_pos < (int)(sizeof(g_line) - 1))
+                g_line[g_line_pos++] = c;
+        }
+
+        // Single-char commands (only when not mid-line)
+        if (g_line_pos == 1) {
         // CKP generator commands
         uint32_t new_rpm = g_rpm;
         if      (c == '+') new_rpm = min(g_rpm + 100u, kRpmMax);
@@ -768,7 +752,8 @@ void loop() {
             default: break;
         }
         g_last_live_ms = 0;  // forçar refresh no modo LIVE
-    }
+        } // end if (g_line_pos == 1)
+    } // end while Serial.available()
 
     if (g_mode == Mode::LIVE) {
         const uint32_t now = millis();

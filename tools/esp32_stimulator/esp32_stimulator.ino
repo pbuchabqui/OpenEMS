@@ -80,9 +80,11 @@
 // Credenciais em wifi_credentials.h (não commitado — ver .gitignore):
 //   #define WIFI_SSID "minha_rede"
 //   #define WIFI_PASS "minha_senha"
-#include <WiFi.h>
-#include <WebServer.h>
-#include <ArduinoOTA.h>
+// WiFi disabled for clean CKP signal at high RPM
+// #include <WiFi.h>
+// #include <WebServer.h>
+// #include <ArduinoOTA.h>
+#define NO_WIFI_BUILD
 #if __has_include("wifi_credentials.h")
 #include "wifi_credentials.h"
 #endif
@@ -192,13 +194,9 @@ static uint8_t raw_to_dac8(uint16_t raw) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 static constexpr int      kRealTeeth = 58;
-// CMP assimétrico por 720°: 1 borda por volta, em dentes DISTINTOS nas duas
-// voltas → a posição da borda identifica absolutamente a fase no firmware.
-// Devem casar com CMP_WINDOW_A/B_*_TOOTH do decoder (src/drv/ckp.cpp).
-static constexpr int      kCmpToothA = 5;     // dente da borda CMP na volta A (rev 0)
-static constexpr int      kCmpToothB = 34;    // dente da borda CMP na volta B (rev 1)
+static constexpr int      kCmpTooth  = 5;     // dente onde sobe o CMP (rev 0)
 static constexpr uint32_t kRpmMin    = 50u;
-static constexpr uint32_t kRpmMax    = 6000u;
+static constexpr uint32_t kRpmMax    = 9000u;
 static constexpr uint32_t kRmtResHz  = 1000000u;  // 1 tick RMT = 1 µs
 static constexpr uint16_t kRmtMaxDur = 32767u;    // duração máx por campo (15 bits)
 
@@ -211,11 +209,9 @@ static rmt_encoder_handle_t g_ckp_enc  = nullptr;
 static rmt_symbol_word_t    g_ckp_sym[kRealTeeth];
 static volatile uint32_t    g_ckp_rpm_active = 0u;
 
-// ── CMP via 2nd RMT channel (encoding assimétrico por 720°) ─────────────
-// Pattern: 116 symbols (2 voltas = 720°). 1 borda CMP por volta, mas em dentes
-// distintos: kCmpToothA na volta 0, kCmpToothB na volta 1. A POSIÇÃO do dente
-// (não o tempo) identifica a fase absoluta no STM32: o decoder casa a borda com
-// a janela A ou B. O intervalo inter-borda alterna (não é fixo). Lockstep c/ CKP.
+// ── CMP via 2nd RMT channel (1 pulse per 720° = 2 crank revolutions) ─────
+// Pattern: 116 symbols (2×58 teeth). All LOW except one HIGH pulse at
+// kCmpTooth of the 1st revolution. Runs in lockstep with CKP channel.
 static constexpr int kCmpSymCount = kRealTeeth * 2;  // 116 symbols = 720°
 static rmt_channel_handle_t g_cmp_chan = nullptr;
 static rmt_encoder_handle_t g_cmp_enc  = nullptr;
@@ -247,15 +243,14 @@ static void build_cmp_pattern(uint32_t rpm) {
     const uint16_t l = (uint16_t)(T - (T / 2u));
     uint32_t gap_low = (uint32_t)l + 2u * T;
     if (gap_low > kRmtMaxDur) gap_low = kRmtMaxDur;
-    // Build 116 symbols: 2 voltas (720°). Borda CMP em kCmpToothA na volta 0 e
-    // em kCmpToothB na volta 1 → o STM32 deduz a fase absoluta pela posição.
+    // Build 116 symbols: 2 full revolutions, matching CKP timing exactly.
+    // CMP stays LOW except for a single HIGH pulse at kCmpTooth of rev 0.
     for (int rev = 0; rev < 2; rev++) {
-        const int cmp_tooth = (rev == 0) ? kCmpToothA : kCmpToothB;
         for (int i = 0; i < kRealTeeth; i++) {
             const int idx = rev * kRealTeeth + i;
             const bool is_gap_tooth = (i == kRealTeeth - 1);
-            const bool is_cmp_pulse = (i == cmp_tooth);
-            g_cmp_sym[idx].level0 = is_cmp_pulse ? 1 : 0;
+            const bool is_cmp_pulse = (rev == 0 && i == kCmpTooth);
+            g_cmp_sym[idx].level0 = is_cmp_pulse ? 1 : 0;  // HIGH only at CMP tooth
             g_cmp_sym[idx].duration0 = h;
             g_cmp_sym[idx].level1 = 0;
             g_cmp_sym[idx].duration1 = is_gap_tooth ? (uint16_t)gap_low : l;
@@ -276,6 +271,7 @@ static void ckp_set_rpm(uint32_t rpm) {
     if (rpm == g_ckp_rpm_active) return;
     build_ckp_pattern(rpm);
     build_cmp_pattern(rpm);
+    // Stop both channels, reset encoders, restart in lockstep
     rmt_disable(g_ckp_chan);
     rmt_disable(g_cmp_chan);
     rmt_encoder_reset(g_ckp_enc);
@@ -383,7 +379,7 @@ static void print_status() {
     Serial.println("  ╚═══════════════════════════════════════════════════════════╝");
     Serial.println();
     Serial.printf("  %-10s %6lu\n",          "RPM:",       (unsigned long)s.rpm);
-    Serial.printf("  %-10s %6lu  (incrementa = CKP activo)\n",
+    Serial.printf("  %-10s %6lu  (incrementa = CKP ISR viva)\n",
                   "REVS:", (unsigned long)g_rev_count);
     Serial.println();
 
@@ -578,6 +574,7 @@ static void IRAM_ATTR scope_isr(void* arg) {
 }
 
 static void scope_init() {
+    gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
     for (int i = 0; i < kScopeCh; ++i) {
         gpio_reset_pin(g_scope[i].gpio);
         gpio_set_direction(g_scope[i].gpio, GPIO_MODE_INPUT);
@@ -657,9 +654,6 @@ void setup() {
         ESP_ERROR_CHECK(ledc_channel_config(&cc));
     }
 
-    // ── ISR service (partilhado: CKP edge + scope IGN/INJ) ──────────────
-    gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
-
     // ── Preset inicial + arrancar CKP (RMT) ──────────────────────────────
     preset_idle();
     update_analog(g_sim);
@@ -675,6 +669,7 @@ void setup() {
 // ── SECÇÃO 8 — WiFi (TCP servidor, mesmo protocolo de linha do serial)
 // ═══════════════════════════════════════════════════════════════════════════
 
+#ifndef NO_WIFI_BUILD
 static WiFiServer g_tcp_server(3333);
 static WiFiClient g_tcp_client;
 static char       g_tcp_line[96];
@@ -829,6 +824,12 @@ static void wifi_poll() {
         }
     }
 }
+#endif // NO_WIFI_BUILD
+
+#ifdef NO_WIFI_BUILD
+static void wifi_setup() {}
+static void wifi_poll() {}
+#endif
 
 void loop() {
     while (Serial.available()) {
@@ -843,7 +844,9 @@ void loop() {
         }
     }
     wifi_poll();
+#ifndef NO_WIFI_BUILD
     ArduinoOTA.handle();
+#endif
     // estimativa de revoluções p/ o indicador de liveness do status
     const uint32_t now = millis();
     if (g_rev_accum_ms == 0u) g_rev_accum_ms = now;

@@ -95,6 +95,7 @@ uint8_t ecu_sched_get_ign_inhibit_mask(void);
 void ecu_sched_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_ivc_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
+void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 
 #if defined(EMS_HOST_TEST)
 void ecu_sched_test_reset(void);
@@ -124,6 +125,10 @@ void     ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept;
 void     ecu_sched_test_reset_ccr(void) noexcept;   // zero all TIM1/TIM2 CCR mocks
 void     ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg);
 uint8_t  ecu_sched_test_get_mspark_count(void);
+// TIM5 event-queue accessors
+uint8_t  ecu_sched_test_get_evt_count(void) noexcept;
+uint32_t ecu_sched_test_get_tim5_ccr3(void)  noexcept;
+void     ecu_sched_test_set_tim5_cnt(uint32_t v) noexcept;
 #endif
 
 #ifdef __cplusplus

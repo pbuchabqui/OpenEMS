@@ -846,7 +846,7 @@ void usb_cdc_init() noexcept {
     USB_BCDR |= (1u << 15u);
 
     // 11. Configure NVIC
-    nvic_set_priority(IRQ_USB, 0u);
+    nvic_set_priority(IRQ_USB, 2u);  // below TIM5/CKP (prio 1)
     nvic_enable_irq(IRQ_USB);
 #else
     // Host test: treat DTR/RTS as always active for protocol tests

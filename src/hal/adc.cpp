@@ -18,7 +18,7 @@
  *   ADC2 (5 canais):
  *     CLT       → INP9  (PB0)  — SQ1
  *     IAT       → INP5  (PB1)  — SQ2
- *     FUEL_PRESS → INP9 (PB0)  — SQ3  (placeholder)
+ *     FUEL_PRESS → INP4 (PC4)  — SQ3
  *     OIL_PRESS  → INP8 (PC5)  — SQ4
  *     EWG_POS    → INP13 (PC3) — SQ5
  *
@@ -92,12 +92,11 @@ static constexpr uint32_t kAdc1Sqr2 = (10u << 0)   // SQ5 = INP10 (APP1, PC0)
                                      | (8u << 18);  // SQ8 = INP8  (ETB_TPS2, PC5)
 
 // ── Sequência de conversão ADC2 (4 canais) ───────────────────────────────────
-// CLT→INP9(PB0), IAT→INP5(PB1) — bancada: PB0/PB1 partilhados com APP1/APP2 no ADC1;
-// fios GPIO14/GPIO27 (APP1/APP2) desligados na bancada, GPIO13/GPIO12 ligados a PB0/PB1.
+// CLT→INP9(PB0), IAT→INP5(PB1), FUEL_PRESS→INP4(PC4), OIL→INP8(PC5), EWG→INP13(PC3)
 static constexpr uint32_t kAdc2Sqr1 = (4u << 0)    // L = 4 (5 conv)
                                      | (9u << 6)    // SQ1 = INP9 (CLT, PB0)
                                      | (5u << 12)   // SQ2 = INP5 (IAT, PB1)
-                                     | (9u << 18)   // SQ3 = INP9 (FUEL placeholder, PC4→INJ3)
+                                     | (4u << 18)   // SQ3 = INP4 (FUEL_PRESS, PC4)
                                      | (8u << 24);  // SQ4 = INP8 (OIL, PC5)
 static constexpr uint32_t kAdc2Sqr2 = (13u << 0);   // SQ5 = INP13 (EWG, PC3)
 
@@ -259,13 +258,13 @@ void adc_init() noexcept {
     gpio_set_analog(&GPIOA_MODER, 5u);
     gpio_set_analog(&GPIOB_MODER, 0u);  // INP9: APP1 (ADC1) / CLT (ADC2, bancada)
     gpio_set_analog(&GPIOB_MODER, 1u);  // INP5: APP2 (ADC1) / IAT (ADC2, bancada)
-    // PC0=INP10(APP1), PC2=INP12(APP2), PC3=INP13(EWG), PC5=INP8(ETB_TPS2/OIL)
-    // PC4 é TIM2_CH4 (INJ3) — configurado como AF1 em ECU_Hardware_Init()
+    // PC0=INP10(APP1), PC2=INP12(APP2), PC3=INP13(EWG), PC4=INP4(FUEL_PRESS), PC5=INP8(ETB_TPS2/OIL)
     volatile uint32_t* gpioc_moder = reinterpret_cast<volatile uint32_t*>(
         GPIOC_BASE + GPIO_MODER_OFF);
     gpio_set_analog(gpioc_moder, 0u);
     gpio_set_analog(gpioc_moder, 2u);  // PC2 = APP2 (INP12) — LQFP100
     gpio_set_analog(gpioc_moder, 3u);  // PC3 = EWG pos (INP13) — LQFP100
+    gpio_set_analog(gpioc_moder, 4u);  // PC4 = FUEL_PRESS (INP4, ADC2)
     gpio_set_analog(gpioc_moder, 5u);
 
     // ── 3. Clock ADC: HCLK/4 = 62.5 MHz, síncrono ao trigger de timer ───

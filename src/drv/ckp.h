@@ -57,7 +57,8 @@ struct CkpSnapshot {
     uint32_t last_tim5_capture;  ///< Timestamp TIM5 (ticks) do último dente — para angle-to-ticks
     uint32_t rpm_x10;            ///< RPM × 10 (ex: 8000 = 800,0 RPM); 0 antes de dados suficientes
     SyncState state;             ///< Estado corrente da máquina de sincronismo
-    bool phase_A;                ///< Fase do ciclo de 4 tempos — alterna a cada evento no cam sensor (CH1)
+    bool phase_A;                ///< Fase do ciclo de 720°: true=PHASE_A (0-360°), false=PHASE_B (360-720°). Toggles at each gap, SET by CMP.
+    uint8_t cmp_confirms;        ///< Number of validated CMP edges since last sync loss (0-2). Gate for sequential mode.
 };
 
 /**
@@ -126,6 +127,7 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept;
 #if defined(EMS_HOST_TEST)
 void     ckp_test_reset() noexcept;
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept;
+void     ckp_test_set_cmp_confirms(uint8_t n) noexcept;
 #endif
 
 }  // namespace ems::drv
