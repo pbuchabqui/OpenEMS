@@ -89,6 +89,7 @@ namespace ems::drv {
     extern volatile uint32_t g_dbg_gap_accepted;
     extern volatile uint32_t g_dbg_gap_premature;
     extern volatile uint32_t g_dbg_gap_last_tc;
+    volatile uint32_t g_dbg_cmp_isr_count = 0U;  // DEPURAÇÃO: incrementado a cada entrada da ISR CMP
 }
 
 namespace {
@@ -768,10 +769,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
 // referência: o período entre bordas CMP deve ser ~2× o período do CKP (CMP = 1 rev,
 // CKP gap = 2 rev). Se delta for muito pequeno ou muito grande, é glitch.
 FASTRUN void ckp_tim5_ch2_isr() noexcept {
-    if ((CKP_CAM_GPIO_IDR & (1u << 1u)) == 0u) {
-        return;  // anti-glitch: apenas rising edges reais
-    }
-
+    ++ems::drv::g_dbg_cmp_isr_count;  // DEPURAÇÃO
     // Read capture register now — clears CHF flag; value is the TIM5 timestamp
     // of this CMP edge. Must be read before any other logic that might be slow.
     const uint32_t cmp_capture_now = TIM5_CAM_CAPTURE;

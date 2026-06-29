@@ -246,17 +246,20 @@ extern "C" void TIM5_IRQHandler(void) {
     uint32_t sr = TIM5_SR;
 
     if (sr & TIM_SR_CC1IF) {
-        TIM5_SR &= ~TIM_SR_CC1IF;
+        TIM5_SR = ~TIM_SR_CC1IF;  // rc_w0: write-1-no-effect, só CC1IF é limpo
         ems::drv::ckp_tim5_ch1_isr();
     }
+    // Re-read SR: CC2IF (CMP) may have arrived during CKP ISR
+    // (a ISR CKP leva microsegundos; a borda CMP pode chegar nesse intervalo)
+    sr = TIM5_SR;
     if (sr & TIM_SR_CC2IF) {
-        TIM5_SR &= ~TIM_SR_CC2IF;
+        TIM5_SR = ~TIM_SR_CC2IF;  // rc_w0: só CC2IF é limpo (não aniquila CC1IF nem CC3IF)
         ems::drv::ckp_tim5_ch2_isr();
     }
     // Re-read SR: CC3IF may have been set by evt_insert during tooth handler
     sr = TIM5_SR;
     if (sr & TIM_SR_CC3IF) {
-        TIM5_SR &= ~TIM_SR_CC3IF;
+        TIM5_SR = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
         ecu_sched_evt_dispatch();
     }
 }

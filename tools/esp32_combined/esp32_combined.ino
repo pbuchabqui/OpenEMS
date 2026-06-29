@@ -210,6 +210,11 @@ static void build_cmp_pattern(uint32_t rpm) {
             g_cmp_sym[idx].duration1 = is_gap_tooth ? (uint16_t)gap_low : l;
         }
     }
+    // Dessincronizar CMP de CKP em 1 tick RMT (1µs) para evitar race no STM32:
+    // CKP e CMP partilham o mesmo clock RMT — as bordas podem coincidir dentro
+    // da janela LDR-STR do TIM5_SR, aniquilando CC2IF. Um offset de 1µs garante
+    // que as bordas CMP chegam sempre depois das CKP.
+    g_cmp_sym[0].duration0 = h + 1u;
 }
 
 static void rmt_transmit_both() {

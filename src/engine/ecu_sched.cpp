@@ -311,7 +311,7 @@ static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
     // If this is the earliest event, arm CCR3
     if (pos == 0U) {
         TIM5_CCR3 = ts;
-        TIM5_SR  &= ~TIM_SR_CC3IF;
+        TIM5_SR  = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
         TIM5_DIER |= TIM_DIER_CC3IE;
         g_evt_armed = 1U;
     }
@@ -354,7 +354,7 @@ void ecu_sched_evt_dispatch(void) {
         const uint32_t next_ts = g_evt_queue[0].timestamp;
         if ((int32_t)(next_ts - TIM5_CNT) > 16) {  // >16 ticks (~0.25µs) in future
             TIM5_CCR3 = next_ts;
-            TIM5_SR  &= ~TIM_SR_CC3IF;
+            TIM5_SR  = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
             g_evt_armed = 1U;
             return;
         }
