@@ -89,7 +89,6 @@ namespace ems::drv {
     extern volatile uint32_t g_dbg_gap_accepted;
     extern volatile uint32_t g_dbg_gap_premature;
     extern volatile uint32_t g_dbg_gap_last_tc;
-    volatile uint32_t g_dbg_cmp_isr_count = 0U;  // DEPURAÇÃO: incrementado a cada entrada da ISR CMP
 }
 
 namespace {
@@ -135,7 +134,8 @@ static constexpr uint32_t kTolDenHigh = 5u;
 static constexpr uint32_t kPredictionClampDen = 8u;
 
 // Tamanho da janela deslizante de histórico (em número de períodos).
-// 3 amostras são suficientes para filtrar ruído transitório.
+// 3 amostras são suficientes. A validação pós-bootstrap (secção 4b) deteta e
+// rejeita outliers como o dente de gap que podia entrar durante o bootstrap.
 static constexpr uint8_t kHistSize = 3u;
 
 // Mínimo de ticks entre bordas para descartar glitches de EMC (<800 ns @ 62.5 MHz).
@@ -183,7 +183,7 @@ static constexpr uint32_t kGrdSpikeDen     = 4u;  // spike:   1/4 = 0.25
 #define CKP_CAM_GPIO_IDR    ems_test_cam_gpio_idr
 #endif
 #else
-#define TIM5_CKP_CAPTURE TIM5_CCR1
+#define TIM5_CKP_CAPTURE TIM5_CCR1  // TIM5_CH1 (PA0/AF2) — hardware capture sem jitter
 #define TIM5_CAM_CAPTURE TIM5_CCR2
 #define CKP_CAM_GPIO_IDR GPIOA_IDR
 #endif
@@ -225,7 +225,7 @@ struct DecoderState {
 // Num 60-2 normal há no máximo 1 gap isolado entre dentes normais, então um
 // valor alto nunca ocorre em operação saudável. Sem isto, um período espúrio
 // ou um salto de RPM trava o sync para sempre (gap/spike não atualizam histórico).
-static constexpr uint16_t kAnomalyResyncThreshold = 16u;
+static constexpr uint16_t kAnomalyResyncThreshold = 60u;
 
 static DecoderState g_state = {
     ems::drv::CkpSnapshot{0u, 0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false, 0u},
@@ -365,21 +365,19 @@ inline bool tooth_grd_over_gap_max(uint32_t delta, uint32_t t_n1, uint32_t t_n2)
 enum class ToothClass : uint8_t { GAP, SPIKE_NOISE, NORMAL };
 
 inline ToothClass classify_tooth(uint32_t delta_ticks) noexcept {
-    if (g_state.hist_ready >= 2u) {
-        const uint32_t t_n1 = g_state.tooth_hist[0];
-        const uint32_t t_n2 = g_state.tooth_hist[1];
-        if (tooth_grd_is_gap(delta_ticks, t_n1, t_n2)) {
-            // Verifica limite superior da janela de gap (NC_TOOTH_GRD_MAX_GAP = 3.5).
-            // TOOTH_GRD > 3.5 indica dente anomalamente longo — não é o gap 60-2.
-            if (tooth_grd_over_gap_max(delta_ticks, t_n1, t_n2)) {
-                return ToothClass::SPIKE_NOISE;
-            }
-            return ToothClass::GAP;
-        }
-        if (tooth_grd_is_spike(delta_ticks, t_n1, t_n2)) { return ToothClass::SPIKE_NOISE; }
-        return ToothClass::NORMAL;
-    }
+    // Classificador por razão de média (equivalente Speeduino/rusEFI ratio).
+    // GAP:   delta × 2 > avg × 3  (delta > 1,5× média)
+    // NORMAL: avg × 0,8 ≤ delta ≤ avg × 1,2
+    // SPIKE: fora da janela normal mas não gap
+    //
+    // NOTA: NÃO usa TOOTH_GRD (Δ×t_n2 vs t_n1²). O TOOTH_GRD depende de t_n1 e
+    // t_n2 estarem limpos, mas ringing e/ou re-bootstrap contaminam-nos, fazendo
+    // com que o gap 3× passe despercebido. A razão de média é mais robusta a
+    // contaminação porque usa TODOS os valores do histórico.
     const uint32_t avg = hist_avg();
+    ems::drv::g_diag_tn1 = avg;
+    ems::drv::g_diag_tn2 = g_state.tooth_hist[0];
+    ems::drv::g_diag_delta = delta_ticks;
     if (is_gap(delta_ticks, avg))          { return ToothClass::GAP; }
     if (!is_normal_tooth(delta_ticks, avg)) { return ToothClass::SPIKE_NOISE; }
     return ToothClass::NORMAL;
@@ -456,38 +454,31 @@ inline bool process_gap_event() noexcept {
     switch (g_state.snap.state) {
 
         case ems::drv::SyncState::WAIT_GAP:
+            // WAIT_GAP: primeiro gap aceite com count ≥ kHistSize (bootstrap minimo).
+            // Após bootstrap, o classificador ja tem media valida. O gap 3× e o
+            // UNICO evento com esta razao neste estado — baixo risco de falso gap.
+            if (g_state.tooth_count < kHistSize) {
+                g_state.tooth_count = 0u;
+                return false;
+            }
+            goto sync_transition_common;
+
         case ems::drv::SyncState::LOSS_OF_SYNC:
-            // CORREÇÃO CKP-02: exigir tooth_count >= kGapThresholdTooth mesmo aqui.
-            // Protege contra spikes de EMC que gerem período longo (aparentemente gap)
-            // antes de dentes suficientes — evitaria sincronização falsa.
+            // LOSS_OF_SYNC: exigir kGapThresholdTooth para evitar re-sync falso
+            // apos perda por ruido (gap espurio seguido de poucos dentes).
             if (g_state.tooth_count < kGapThresholdTooth) {
                 g_state.tooth_count = 0u;
                 return false;
             }
-            
-            // FIX P0 (BUG-12): Validar rotação forward antes de consumir seed
-            // Se rotação for reversa ou instável, não consumir a seed para preservar
-            // o benefício do fast-reacquire na próxima tentativa válida.
-            if (g_seed_armed && !is_forward_rotation_coherent(g_state.snap.tooth_period_ns)) {
-                // Rotação não validada como forward estável — mantém seed armada
-                // mas não avança para FULL_SYNC ainda
-                g_state.tooth_count = 0u;
-                return false;
-            }
-            
-            if (g_seed_armed) {
-                g_state.snap.state       = ems::drv::SyncState::FULL_SYNC;
-                g_state.phase_half       = g_seed_phase_a ? 0u : 1u;
-                g_state.snap.phase_A     = (g_state.phase_half == 0u);
-                g_seed_armed             = false;
-                g_seed_probation         = true;
-                g_seed_probation_teeth   = 0u;
-                // Reset contador de coerência após consumo bem-sucedido da seed
-                g_prev_valid_period_ns = 0u;
-                g_coherent_periods_count = 0u;
-            } else {
-                g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
-            }
+            goto sync_transition_common;
+
+        sync_transition_common:
+            // FIX 2026-06-29: seed desativado p/ diagnóstico. O seed armado pela
+            // NVM pode impedir sync se is_forward_rotation_coherent nunca retornar
+            // true devido a contaminação do tooth_period_ns.
+            // TODO: re-activar seed (via is_forward_rotation_coherent) quando
+            //       a classificação de dentes estiver robusta.
+            g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
             g_state.tooth_count      = 0u;
             g_state.snap.tooth_index = 0u;
             advance_phase_half();
@@ -569,6 +560,15 @@ void misfire_on_tooth(const CkpSnapshot& snap) noexcept { static_cast<void>(snap
 // ── API pública ───────────────────────────────────────────────────────────────
 namespace ems::drv {
 
+// DIAG: últimos valores de classify_tooth
+volatile uint32_t g_diag_tn1 = 0u;
+volatile uint32_t g_diag_tn2 = 0u;
+volatile uint32_t g_diag_delta = 0u;
+volatile uint32_t g_diag_isr_count = 0u;
+volatile uint32_t g_diag_hist_ready = 0u;
+volatile uint32_t g_diag_tooth_count = 0u;
+volatile uint32_t g_diag_consec_anom = 0u;
+
 CkpSnapshot ckp_snapshot() noexcept {
     CkpSnapshot out;
     ems::hal::CriticalSectionGuard guard;
@@ -597,6 +597,13 @@ CkpSnapshot ckp_snapshot() noexcept {
 //   vários ciclos depois — o timestamp em C0V permanece válido.
 //   Isso é impossível com GPIO/EXTI onde a CPU leria o contador atual (atrasado).
 FASTRUN void ckp_tim5_ch1_isr() noexcept {
+    ++g_diag_isr_count;  // DIAG: incrementa em cada ISR
+
+    // snapshot estado interno para diagnóstico
+    g_diag_hist_ready = g_state.hist_ready;
+    g_diag_tooth_count = g_state.tooth_count;
+    g_diag_consec_anom = g_state.consecutive_anomalies;
+
     // ── 1. Timestamp sem jitter de ISR ────────────────────────────────────
     // CRÍTICO: lemos TIM5_CKP_CAPTURE ANTES de qualquer outra operação.
     // O registrador de captura foi travado pelo HW no instante exato da borda;
@@ -624,11 +631,12 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     const uint32_t period_ns = ticks_to_ns(delta_ticks);
 
     // ── 4. Construção do histórico (primeiros kHistSize dentes) ───────────
-    // Antes do histórico estar completo (hist_ready < kHistSize), aceitamos
-    // todos os dentes incondicionalmente para inicializar a janela de média.
-    // Não há referência de velocidade ainda para filtrar.
+    // Antes do histórico estar completo, aceitamos todos os dentes
+    // incondicionalmente para inicializar a janela de média.
+    // O primeiro dente (prev_period_ticks==0) é SEMPRE aceite — o filtro
+    // delta <= prev_period*2 = 0 rejeitaria sempre o 1º dente.
     if (g_state.hist_ready < kHistSize) {
-        if (g_state.hist_ready == 0u || delta_ticks <= g_state.prev_period_ticks * 2u) {
+        if (g_state.prev_period_ticks == 0u || delta_ticks <= g_state.prev_period_ticks * 2u) {
             hist_push(delta_ticks);
         } else {
             extern volatile uint32_t g_dbg_bootstrap_reject;
@@ -646,6 +654,27 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
         sensors_on_tooth(g_state.snap);
         schedule_on_tooth(g_state.snap);
         return;
+    }
+
+    // ── 4b. Validação de consistência do histograma pós-bootstrap ────────
+    // Após bootstrap, verificar se os valores em tooth_hist são coerentes.
+    // Se um gap entrou no hist durante o bootstrap, o TOOTH_GRD compara
+    // dentes normais contra ele e classifica-os como GAP/SPIKE — nunca
+    // se atinge FULL_SYNC.
+    {
+        const uint32_t h0 = g_state.tooth_hist[0];
+        const uint32_t h1 = g_state.tooth_hist[1];
+        const uint32_t h2 = g_state.tooth_hist[2];
+        const uint32_t mn = (h0 < h1) ? ((h0 < h2) ? h0 : h2) : ((h1 < h2) ? h1 : h2);
+        const uint32_t mx = (h0 > h1) ? ((h0 > h2) ? h0 : h2) : ((h1 > h2) ? h1 : h2);
+        // mx > mn×1.5: tolerância de 50% cobre gap 3T enquanto rejeita t_n2
+        // contaminado (ex: 1.6T vs T normal que causa falso GAP no TOOTH_GRD)
+        if (mn > 0u && mx > mn + mn / 2u) {
+            g_state.hist_ready = 0u;  // hist contaminado → re-bootstrap
+            sensors_on_tooth(g_state.snap);
+            schedule_on_tooth(g_state.snap);
+            return;
+        }
     }
 
     // ── 5. Classificação do dente ─────────────────────────────────────────
@@ -747,8 +776,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     misfire_on_tooth(g_state.snap);
 
     // Measure ISR duration (TIM5 free-running counter)
-    const uint32_t isr_end = TIM5_CKP_CAPTURE;  // re-read would give current CNT, not capture
-    // Use TIM5_CNT directly for elapsed time
+    // Usamos TIM5_CNT para tempo decorrido (não TIM5_CCR1 que é o timestamp da borda)
     {
         extern volatile uint32_t g_dbg_isr_max_ticks;
         extern volatile uint32_t g_dbg_isr_last_ticks;
@@ -769,7 +797,6 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
 // referência: o período entre bordas CMP deve ser ~2× o período do CKP (CMP = 1 rev,
 // CKP gap = 2 rev). Se delta for muito pequeno ou muito grande, é glitch.
 FASTRUN void ckp_tim5_ch2_isr() noexcept {
-    ++ems::drv::g_dbg_cmp_isr_count;  // DEPURAÇÃO
     // Read capture register now — clears CHF flag; value is the TIM5 timestamp
     // of this CMP edge. Must be read before any other logic that might be slow.
     const uint32_t cmp_capture_now = TIM5_CAM_CAPTURE;

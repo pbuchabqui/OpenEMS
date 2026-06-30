@@ -25,7 +25,8 @@
 
 // ── Variável global de contagem SysTick ─────────────────────────────────────
 static volatile uint32_t g_systick_ms = 0u;
-// Reload value para 1 ms a 250 MHz (SysTick usa HCLK)
+
+	// Reload value para 1 ms a 250 MHz (SysTick usa HCLK)
 static constexpr uint32_t kSysTickReload = 250000u - 1u;  // 1 ms
 
 // ── SysTick_Handler ──────────────────────────────────────────────────────────
@@ -159,6 +160,20 @@ void system_stm32_init(void) noexcept {
                   | RCC_AHB2ENR1_GPIOCEN
                   | RCC_AHB2ENR1_GPIODEN
                   | RCC_AHB2ENR1_GPIOEEN;
+
+    // ── 7b. Garantir que SECCFGR permite acesso a todos os periféricos ──
+    // No STM32H5, o GTZC pode bloquear escritas a periféricos mesmo com
+    // TZEN=0. A configuração de fábrica (boot ROM) pode marcar alguns como
+    // Secure. Escrevemos 0 em todos os SECCFGR para os tornar Non-Secure.
+    // GTZC1EN no AHB1ENR bit 24 — obrigatório activar ANTES de escrever.
+    {
+        volatile uint32_t* ahb1enr = reinterpret_cast<volatile uint32_t*>(0x44020C88u);
+        *ahb1enr |= (1u << 24u);       // GTZC1EN
+        for (volatile int i = 0; i < 4; ++i) {}
+        *reinterpret_cast<volatile uint32_t*>(0x40032410u) = 0u;  // SECCFGR1 = todos NS
+        *reinterpret_cast<volatile uint32_t*>(0x40032414u) = 0u;  // SECCFGR2 = todos NS
+        *reinterpret_cast<volatile uint32_t*>(0x40032418u) = 0u;  // SECCFGR3 = todos NS
+    }
 
     // ── 8. Configurar SysTick @ 1 ms ─────────────────────────────────────
     // ARM SysTick registers (CMSIS):

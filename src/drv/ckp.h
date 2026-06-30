@@ -101,6 +101,18 @@ uint32_t ckp_seed_confirmed_count() noexcept;
 uint32_t ckp_seed_rejected_count() noexcept;
 uint32_t ckp_get_cmp_glitch_count() noexcept;
 
+// DIAG: valores internos de classify_tooth (expostos para snapshot)
+extern volatile uint32_t g_diag_tn1;
+extern volatile uint32_t g_diag_tn2;
+extern volatile uint32_t g_diag_delta;
+
+// DIAG: contador de ISR — incrementa em cada entrada da ISR TIM5
+extern volatile uint32_t g_diag_isr_count;
+extern volatile uint32_t g_diag_hist_ready;
+extern volatile uint32_t g_diag_tooth_count;
+extern volatile uint32_t g_diag_consec_anom;
+
+
 // ── Stall watchdog ────────────────────────────────────────────────────────────
 // Detecta motor parado entre dois dentes — situação em que tooth_count para de
 // incrementar e a máquina ficaria presa em FULL_SYNC indefinidamente.

@@ -235,10 +235,6 @@ inline void update_realtime_page() noexcept {
     rt.reserved[5] = static_cast<uint8_t>(g_rt_ltft_pct);
     const uint32_t cmp_glitch_cnt = ems::drv::ckp_get_cmp_glitch_count();
     rt.reserved[6] = cmp_glitch_cnt > 255u ? 255u : static_cast<uint8_t>(cmp_glitch_cnt);
-    {   // DEPURAÇÃO CMP: contador de chamadas à ISR do CMP (ocupa reserved[7])
-        extern volatile uint32_t g_dbg_cmp_isr_cnt __asm("_ZN3ems3drv19g_dbg_cmp_isr_countE");
-        rt.reserved[7] = static_cast<uint8_t>(g_dbg_cmp_isr_cnt > 255u ? 255u : g_dbg_cmp_isr_cnt);
-    }
     rt.reserved[8] = ems::hal::tle8888_fault_bitmap();
     rt.reserved[9] = ems::hal::flex_fuel_valid()
                     ? ems::hal::flex_fuel_ethanol_pct() : 0u;
@@ -771,15 +767,13 @@ inline void parse_byte(uint8_t b) noexcept {
             extern volatile uint32_t g_dbg_inj1_arm __asm("g_dbg_inj1_arm");
             extern volatile uint32_t g_dbg_seq_calls __asm("g_dbg_seq_calls");
             extern volatile uint32_t g_dbg_evt_overflow __asm("g_dbg_evt_overflow");
+            extern volatile uint32_t g_dbg_clear_all_count __asm("g_dbg_clear_all_count");
+            extern volatile uint32_t g_diag_isr_count __asm("_ZN3ems3drv16g_diag_isr_countE");
             extern volatile uint32_t g_dbg_tc_gap __asm("_ZN3ems3drv12g_dbg_tc_gapE");
             extern volatile uint32_t g_dbg_tc_spike __asm("_ZN3ems3drv14g_dbg_tc_spikeE");
             extern volatile uint32_t g_dbg_tc_normal __asm("_ZN3ems3drv15g_dbg_tc_normalE");
-            extern volatile uint32_t g_dbg_bootstrap_reject __asm("_ZN3ems3drv22g_dbg_bootstrap_rejectE");
-            extern volatile uint32_t g_dbg_hist_ready_max __asm("_ZN3ems3drv20g_dbg_hist_ready_maxE");
-            extern volatile uint32_t g_dbg_gap_premature __asm("_ZN3ems3drv19g_dbg_gap_prematureE");
-            extern volatile uint32_t g_dbg_clear_all_count __asm("g_dbg_clear_all_count");
             extern volatile uint32_t g_dbg_presync_count __asm("g_dbg_presync_count");
-            const uint32_t diag[8] = {
+            const uint32_t diag[12] = {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
                 g_dbg_inj1_arm,
@@ -787,9 +781,13 @@ inline void parse_byte(uint8_t b) noexcept {
                 g_dbg_evt_overflow,
                 g_dbg_clear_all_count,
                 g_dbg_presync_count,
-                ecu_sched_dwell_watchdog_count()
+                ecu_sched_dwell_watchdog_count(),
+                g_diag_isr_count,
+                g_dbg_tc_gap,
+                g_dbg_tc_spike,
+                g_dbg_tc_normal,
             };
-            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 32U);
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 48U);
             return;
         }
         return;
