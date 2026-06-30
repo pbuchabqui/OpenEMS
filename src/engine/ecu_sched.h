@@ -41,10 +41,10 @@ typedef struct {
 } AngleEvent_t;
 
 #define ECU_SYSTEM_CLOCK_HZ       250000000U
-#define ECU_SCHED_CLOCK_HZ        10000000U
-#define ECU_SCHED_TICKS_PER_MS    10000U
-#define ECU_SCHED_TICKS_PER_US    10U
-#define ECU_SCHED_NS_PER_TICK     100U
+#define ECU_SCHED_CLOCK_HZ        62500000U   // TIM5_CNT: 62.5 MHz, 16 ns/tick
+#define ECU_SCHED_TICKS_PER_MS    62500U
+// TICKS_PER_US = 62.5 (não inteiro) — usar macro ECU_SCHED_US_TO_TICKS() em vez deste define
+#define ECU_SCHED_NS_PER_TICK     16U
 
 extern volatile uint32_t g_late_event_count;
 extern volatile uint32_t g_calibration_clamp_count;

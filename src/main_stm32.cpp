@@ -110,7 +110,7 @@ static uint32_t g_loop2ms_max_us = 0u;
 
 static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
 static constexpr uint32_t kRuntimeSeedArmWindowMs = 300000u;  // 5 minutos para start-stop
-static constexpr uint32_t kSchedulerTicksPerMs = 10000u;
+static constexpr uint32_t kSchedulerTicksPerMs = 62500u;  // TIM5_CNT @ 62.5 MHz
 static constexpr uint32_t kCalibSaveMinIntervalMs = 300000u;
 static constexpr uint16_t kMapMinBarX100 = 10u;
 static constexpr uint16_t kMapMaxBarX100 = 300u;

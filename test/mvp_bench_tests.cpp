@@ -1704,8 +1704,8 @@ static void test_ecu_sched_ccr_write(void) {
     // Verify: after firing 13 teeth, at least one event is in the TIM5 queue.
     ecu_sched_test_reset();
     ecu_sched_set_advance_deg(15u);
-    ecu_sched_set_dwell_ticks(22500u);
-    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();  // angle table built at FULL_SYNC gap
@@ -1727,8 +1727,8 @@ static void test_ecu_sched_late_events(void) {
     // Verify: with advance=0 (delta≈0 at tooth 0), events still reach the queue.
     ecu_sched_test_reset();
     ecu_sched_set_advance_deg(0u);
-    ecu_sched_set_dwell_ticks(22500u);
-    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
@@ -1742,18 +1742,18 @@ static void test_ecu_sched_dwell_watchdog_fires(void) {
     section("ecu_sched: dwell watchdog fires after 1.4x dwell ticks");
 
     // Setup: same as CCR test. After 13 teeth, DWELL_START for cyl3 (tim_ch=3)
-    // sets g_dwell_arm_tick[2]=TIM1_CNT=0 and g_dwell_wdog_ticks[2]=22500*7/5=31500.
-    // arm_channel uses TIM2_CNT (scheduler_counter()). Watchdog also reads TIM2_CNT.
-    // TIM2_CNT must be ≠1: 0 is the "not armed" sentinel for g_dwell_arm_tick.
-    // cyl3 → ECU_CH_IGN4 → tim_ch=4 → ign_idx=3. arm_tick = TIM2_CNT at arm time.
-    // wdog threshold = dwell_ticks × 7/5 = 22500×7/5 = 31500.
+    // sets g_dwell_arm_tick[2]=TIM5_CNT=0 and g_dwell_wdog_ticks[2]=140625*7/5=196875.
+    // arm_channel uses TIM5_CNT (scheduler_counter()). Watchdog also reads TIM5_CNT.
+    // TIM5_CNT must be ≠1: 0 is the "not armed" sentinel for g_dwell_arm_tick.
+    // cyl3 → ECU_CH_IGN4 → tim_ch=4 → ign_idx=3. arm_tick = TIM5_CNT at arm time.
+    // wdog threshold = dwell_ticks × 7/5 = 140625×7/5 = 196875.
     const uint32_t kTim2Base = 1000u;
-    const uint32_t kWdogTicks = (22500u * 7u) / 5u;  // 31500
+    const uint32_t kWdogTicks = (140625u * 7u) / 5u;  // 196875
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim2_cnt(kTim2Base);  // sets TIM2_CNT so arm_tick != 0
+    ecu_sched_test_set_tim2_cnt(kTim2Base);  // sets TIM5_CNT so arm_tick != 0
     ecu_sched_set_advance_deg(15u);
-    ecu_sched_set_dwell_ticks(22500u);
-    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
@@ -1764,14 +1764,14 @@ static void test_ecu_sched_dwell_watchdog_fires(void) {
     ckp_feed_n_then_gap(57u);  // sequential table built; tooth_index back to 0
     // Fire 13 teeth: at tooth 13 DWELL_START for cyl3 (IGN4) fires.
     for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
-    // Pre-condition: watchdog not fired (elapsed = 0, threshold = 31500)
+    // Pre-condition: watchdog not fired (elapsed = 0, threshold = 196875)
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
              "pre-cond: wdog_count=0 before threshold");
-    // Advance TIM2_CNT past 1.4× dwell from arm_tick=kTim2Base
+    // Advance TIM5_CNT past 1.4× dwell from arm_tick=kTim2Base
     ecu_sched_test_set_tim2_cnt(kTim2Base + kWdogTicks + 1u);
     ecu_sched_dwell_watchdog();
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u,
-             "dwell watchdog fires: elapsed > 31500 (1.4× dwell)");
+             "dwell watchdog fires: elapsed > 196875 (1.4× dwell)");
     // Second call: arm_tick reset to 0 by watchdog → sentinel check fails → no re-fire
     ecu_sched_dwell_watchdog();
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u, "watchdog fires only once per arm");
@@ -1785,8 +1785,8 @@ static void test_ecu_sched_presync_table(void) {
     ecu_sched_test_reset();
     ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(10u);
-    ecu_sched_set_dwell_ticks(22500u);
-    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_soi_lead_deg(62u);
     ckp_test_reset(); g_ckp_cap = 0u;
 
@@ -2055,10 +2055,10 @@ static void test_ecu_sched_setters(void) {
     section("ecu_sched: reset / setters / getters");
     ecu_sched_test_reset();
 
-    // Defaults after reset: advance=10, dwell=22500, inj_pw=22500, soi=62
+    // Defaults after reset: advance=10, dwell=140625, inj_pw=140625, soi=62
     CHECK_EQ(ecu_sched_test_get_advance_deg(),  10u, "default advance=10°");
-    CHECK_EQ(ecu_sched_test_get_dwell_ticks(), 22500u, "default dwell=22500");
-    CHECK_EQ(ecu_sched_test_get_inj_pw_ticks(), 22500u, "default inj_pw=22500");
+    CHECK_EQ(ecu_sched_test_get_dwell_ticks(), 140625u, "default dwell=140625");
+    CHECK_EQ(ecu_sched_test_get_inj_pw_ticks(), 140625u, "default inj_pw=140625");
     CHECK_EQ(ecu_sched_test_get_soi_lead_deg(), 62u, "default soi=62°");
 
     // Individual setters
@@ -2066,7 +2066,7 @@ static void test_ecu_sched_setters(void) {
     CHECK_EQ(ecu_sched_test_get_advance_deg(), 20u, "set_advance_deg(20)");
 
     ecu_sched_set_dwell_ticks(30000u);
-    CHECK_EQ(ecu_sched_test_get_dwell_ticks(), 30000u, "set_dwell_ticks(30000)");
+    CHECK_EQ(ecu_sched_test_get_dwell_ticks(), 30000u, "set_dwell_ticks(187500)");
 
     ecu_sched_set_inj_pw_ticks(15000u);
     CHECK_EQ(ecu_sched_test_get_inj_pw_ticks(), 15000u, "set_inj_pw_ticks(15000)");
@@ -2096,8 +2096,8 @@ static void test_ecu_sched_angle_table(void) {
     section("ecu_sched: schedule_on_tooth populates angle table in FULL_SYNC");
     ecu_sched_test_reset();
     ecu_sched_set_advance_deg(15u);
-    ecu_sched_set_dwell_ticks(22500u);
-    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_soi_lead_deg(62u);
 
     // Reach full sync — schedule_on_tooth fires each CKP tooth hook
@@ -3108,8 +3108,8 @@ static void test_trigger_offset(void) {
     ecu_sched_test_reset_ccr();
     ecu_sched_test_set_tim2_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
-    ecu_sched_set_dwell_ticks(22500u);
-    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
@@ -3150,8 +3150,8 @@ static void test_trigger_offset(void) {
     ecu_sched_test_reset_ccr();
     ecu_sched_test_set_tim2_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
-    ecu_sched_set_dwell_ticks(22500u);
-    ecu_sched_set_inj_pw_ticks(20000u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_soi_lead_deg(62u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();

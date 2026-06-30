@@ -751,12 +751,18 @@ inline void parse_byte(uint8_t b) noexcept {
             extern volatile uint32_t g_pin_high_count[] __asm("g_pin_high_count");
             extern volatile uint32_t g_pin_low_count[] __asm("g_pin_low_count");
             extern volatile uint32_t g_pin_seq_error[] __asm("g_pin_seq_error");
-            // INJ1(idx=0) + IGN1(idx=4): 6×uint32 = 24 bytes
-            const uint32_t v[6] = {
+            // Todos os 8 canais: [0-3]=INJ1-4, [4-7]=IGN1-4
+            const uint32_t v[24] = {
                 g_pin_high_count[0], g_pin_low_count[0], g_pin_seq_error[0],
-                g_pin_high_count[4], g_pin_low_count[4], g_pin_seq_error[4]
+                g_pin_high_count[1], g_pin_low_count[1], g_pin_seq_error[1],
+                g_pin_high_count[2], g_pin_low_count[2], g_pin_seq_error[2],
+                g_pin_high_count[3], g_pin_low_count[3], g_pin_seq_error[3],
+                g_pin_high_count[4], g_pin_low_count[4], g_pin_seq_error[4],
+                g_pin_high_count[5], g_pin_low_count[5], g_pin_seq_error[5],
+                g_pin_high_count[6], g_pin_low_count[6], g_pin_seq_error[6],
+                g_pin_high_count[7], g_pin_low_count[7], g_pin_seq_error[7],
             };
-            tx_push_bytes(reinterpret_cast<const uint8_t*>(v), 24U);
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(v), 96U);
             return;
         }
         if (b == static_cast<uint8_t>('D')) {
@@ -773,7 +779,11 @@ inline void parse_byte(uint8_t b) noexcept {
             extern volatile uint32_t g_dbg_tc_spike __asm("_ZN3ems3drv14g_dbg_tc_spikeE");
             extern volatile uint32_t g_dbg_tc_normal __asm("_ZN3ems3drv15g_dbg_tc_normalE");
             extern volatile uint32_t g_dbg_presync_count __asm("g_dbg_presync_count");
-            const uint32_t diag[12] = {
+            extern volatile uint32_t g_dbg_phase_skip __asm("g_dbg_phase_skip");
+            extern volatile uint32_t g_dbg_phase_fire __asm("g_dbg_phase_fire");
+            extern volatile uint32_t g_dbg_evt_inserted __asm("g_dbg_evt_inserted");
+            extern volatile uint32_t g_dbg_evt_dispatched __asm("g_dbg_evt_dispatched");
+            const uint32_t diag[16] = {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
                 g_dbg_inj1_arm,
@@ -786,8 +796,12 @@ inline void parse_byte(uint8_t b) noexcept {
                 g_dbg_tc_gap,
                 g_dbg_tc_spike,
                 g_dbg_tc_normal,
+                g_dbg_phase_skip,
+                g_dbg_phase_fire,
+                g_dbg_evt_inserted,
+                g_dbg_evt_dispatched,
             };
-            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 48U);
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 64U);
             return;
         }
         return;

@@ -209,7 +209,7 @@ IgnScheduleParams build_ign_schedule(uint8_t cyl,
 
 uint32_t inj_pw_us_to_scheduler_ticks(uint32_t pw_us) noexcept {
 #if defined(TARGET_STM32H562)
-    return pw_us * 10u;  // STM32 scheduler tick = 100 ns.
+    return pw_us * 125u / 2u;  // STM32 scheduler tick = 16 ns (62.5 MHz TIM5_CNT).
 #else
     return pw_us * 60u;
 #endif

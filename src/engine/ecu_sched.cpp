@@ -154,20 +154,17 @@ static uint32_t ems_test_gpioe_bsrr = 0u;
 #define ECU_CHANNELS      8U
 #define ECU_IGN_CH_FIRST  4U
 #define ECU_CYCLE_DEG     720U
-#define STM32_TIM_PSC_10MHZ 24U
-#define STM32_MIN_COMPARE_LEAD_TICKS 20U
+#define STM32_MIN_COMPARE_LEAD_TICKS 125U  // 2 µs @ 62.5 MHz
 
 // Verificações de consistência do clock em tempo de compilação.
-// Se qualquer uma falhar, a fórmula TIM5_ns → scheduler_ticks está errada.
-// TIM2/TIM1: APB_timer(250MHz) / (PSC+1) = 250MHz/25 = 10MHz = ECU_SCHED_CLOCK_HZ
-static_assert(STM32_TIM_PSC_10MHZ == 24U,
-    "PSC 10MHz: APB1_timer=250MHz, PSC+1=25, 250/25=10MHz");
-static_assert(ECU_SCHED_CLOCK_HZ == 10000000U,
-    "ECU_SCHED_CLOCK_HZ deve ser 10 000 000 Hz (100 ns/tick)");
-static_assert(ECU_SCHED_NS_PER_TICK == 100U,
-    "ECU_SCHED_NS_PER_TICK deve ser 100 ns @ 10 MHz");
-static_assert(ECU_SCHED_TICKS_PER_US == 10U,
-    "ECU_SCHED_TICKS_PER_US deve ser 10 @ 10 MHz");
+// Scheduler usa TIM5_CNT (32-bit, 62.5 MHz, 16 ns/tick).
+static_assert(ECU_SCHED_CLOCK_HZ == 62500000U,
+    "ECU_SCHED_CLOCK_HZ deve ser 62 500 000 Hz (16 ns/tick)");
+static_assert(ECU_SCHED_NS_PER_TICK == 16U,
+    "ECU_SCHED_NS_PER_TICK deve ser 16 ns @ 62.5 MHz");
+// TICKS_PER_US = 62.5 (não-inteiro) — usar macro ECU_SCHED_US_TO_TICKS() para
+// conversão exacta de µs para ticks sem truncamento.
+#define ECU_SCHED_US_TO_TICKS(us) ((us) * 125U / 2U)
 #define TOOTH_NS_TO_SCHED(ns) ((uint32_t)((ns) / ECU_SCHED_NS_PER_TICK))
 
 static AngleEvent_t g_angle_table[ECU_ANGLE_TABLE_SIZE];
@@ -182,7 +179,7 @@ volatile uint32_t g_cycle_schedule_drop_count = 0U;
 // ── Dwell watchdog (MS42 §2.2.2.1.3 — TD × 1.4) ──────────────────────────
 // Escrito pela ISR (arm_channel), lido pelo main loop (ecu_sched_dwell_watchdog).
 // volatile necessário: compilador não pode cachear em registo entre os dois contextos.
-static volatile uint32_t g_dwell_arm_tick[4]  = {0U, 0U, 0U, 0U};  // TIM3_CNT no arm de DWELL_START; 0 = inactivo
+static volatile uint32_t g_dwell_arm_tick[4]  = {0U, 0U, 0U, 0U};  // TIM5_CNT no arm de DWELL_START; 0 = inactivo
 static volatile uint32_t g_dwell_wdog_ticks[4] = {0U, 0U, 0U, 0U};  // 1.4 × dwell_ticks no momento do arm
 static volatile uint32_t g_dwell_watchdog_count = 0U;
 
@@ -201,8 +198,8 @@ static volatile uint32_t g_mspark_inter_dwell_ticks = 0U;
 static volatile uint32_t g_mspark_atdc_limit_deg    = 18U;
 
 static volatile uint32_t g_advance_deg = 10U;
-static volatile uint32_t g_dwell_ticks = 30000U;
-static volatile uint32_t g_inj_pw_ticks = 30000U;
+static volatile uint32_t g_dwell_ticks = 187500U;  // 3 ms @ 62.5 MHz
+static volatile uint32_t g_inj_pw_ticks = 187500U;  // 3 ms @ 62.5 MHz
 volatile uint8_t g_inj_pw_override = 0U;  // 1=lock g_inj_pw_ticks, ignore main loop writes
 static volatile uint32_t g_soi_lead_deg = 62U;
 static volatile uint8_t g_presync_enable = 1U;
@@ -407,7 +404,7 @@ static inline void exit_critical(void)
 
 static inline uint32_t scheduler_counter(void)
 {
-    return TIM3_CNT;
+    return TIM5_CNT;  // 32-bit, 62.5 MHz — sem wrap de 16-bit
 }
 
 static inline uint8_t stm32_inj_tim_ch(uint8_t ch)
@@ -461,8 +458,9 @@ static void sanitize_runtime_calibration(void)
 {
     uint8_t clamped = 0U;
     if (g_advance_deg > 60U) { g_advance_deg = 60U; clamped = 1U; }
-    if (g_dwell_ticks > 100000U) { g_dwell_ticks = 100000U; clamped = 1U; }
-    if (g_inj_pw_ticks > 200000U) { g_inj_pw_ticks = 200000U; clamped = 1U; }
+    // Clamps em ticks TIM5 (62.5 MHz): 100000 ticks ≈ 1.6ms dwell máx
+    if (g_dwell_ticks > 625000U) { g_dwell_ticks = 625000U; clamped = 1U; }
+    if (g_inj_pw_ticks > 1250000U) { g_inj_pw_ticks = 1250000U; clamped = 1U; }
     if (g_soi_lead_deg >= ECU_CYCLE_DEG) { g_soi_lead_deg = ECU_CYCLE_DEG - 1U; clamped = 1U; }
     if (g_presync_inj_mode > ECU_PRESYNC_INJ_SEMI_SEQUENTIAL) { g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; clamped = 1U; }
     if (g_presync_ign_mode > ECU_PRESYNC_IGN_WASTED_SPARK) { g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK; clamped = 1U; }
@@ -488,12 +486,10 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     // scheduler_counter() e a escrita do registrador de compare, corrompendo o
     // agendamento de eventos já pendentes.
     ems::hal::CriticalSectionGuard guard;
-    
+
     const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
     const uint8_t tim_ch = (is_inj != 0U) ? stm32_inj_tim_ch(ch) : stm32_ign_tim_ch(ch);
-    const uint32_t now = scheduler_counter();
-    const uint32_t raw_delta = (target_cnv - now) & 0xFFFFU;
-    volatile uint32_t *ccr;
+    const uint32_t now = scheduler_counter();  // TIM5_CNT, 32-bit, sem wrap
 
     if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
 
@@ -505,25 +501,24 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     if (is_inj == 0U && tim_ch != 0U) {
         const uint8_t ign_idx = (uint8_t)(tim_ch - 1U);
         if (action == ECU_ACT_DWELL_START) {
-            g_dwell_arm_tick[ign_idx] = now;
+            g_dwell_arm_tick[ign_idx] = now;  // TIM5_CNT value
             g_dwell_wdog_ticks[ign_idx] = (g_dwell_ticks * 7U) / 5U;
         } else if (action == ECU_ACT_SPARK) {
             g_dwell_arm_tick[ign_idx] = 0U;
         }
     }
 
-    // ── Absolute-timestamp event scheduler ──────────────────────────
-    // Converts sub-tooth delta to TIM5 timestamp, inserts into sorted
-    // event queue. TIM5_CH3 compare fires, ISR does GPIO BSRR.
+    // ── Absolute-timestamp event scheduler (domínio TIM5, 32-bit) ───
+    // Delta computado com base no TIM5_CNT actual (não no `now` do dispatch
+    // per-tooth) para evitar wrap quando TIM5_CNT avança entre as leituras.
     {
-        const uint32_t delta = raw_delta;
-        uint32_t tim5_delta;
-        if (delta > 0x8000U || delta < STM32_MIN_COMPARE_LEAD_TICKS) {
-            tim5_delta = STM32_MIN_COMPARE_LEAD_TICKS * 25U / 4U;
+        const uint32_t tnow = TIM5_CNT;
+        const uint32_t delta = (target_cnv > tnow) ? (target_cnv - tnow) : 0U;
+        if (delta < STM32_MIN_COMPARE_LEAD_TICKS) {
+            evt_insert(tnow + STM32_MIN_COMPARE_LEAD_TICKS, ch, high);
         } else {
-            tim5_delta = delta * 25U / 4U;
+            evt_insert(tnow + delta, ch, high);
         }
-        evt_insert(TIM5_CNT + tim5_delta, ch, high);
         return;
     }
 }
@@ -776,17 +771,12 @@ uint32_t ecu_sched_ivc_clamp_count(void) { return g_ivc_clamp_count; }
 void ecu_sched_dwell_watchdog(void)
 {
     if (g_inj_pw_override != 0U) { return; }  // test mode — disable watchdog
-    const uint32_t now = TIM3_CNT;
+    const uint32_t now = TIM5_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
-        // FIX C1: leitura + avaliação + acção dentro de UMA secção crítica.
-        // A versão anterior lia arm/tout dentro de CS, saía, avaliava fora,
-        // depois entrava numa segunda CS para agir. A ISR arm_channel() pode
-        // zerar g_dwell_arm_tick[i] (acção SPARK, linha 389) nessa janela,
-        // causando disparo espúrio do watchdog e corte indevido da bobina.
         enter_critical();
-        const uint32_t arm  = g_dwell_arm_tick[i];
+        const uint32_t arm  = g_dwell_arm_tick[i];  // TIM5_CNT value
         const uint32_t tout = g_dwell_wdog_ticks[i];
-        if (arm != 0U && ((now - arm) & 0xFFFFU) >= tout) {
+        if (arm != 0U && (now - arm) >= tout) {  // 32-bit, sem mask de wrap
             // IGN channels: ECU_CH_IGN1=7, IGN2=6, IGN3=5, IGN4=4
             gpio_set_pin(static_cast<uint8_t>(7U - i), 0U);
             g_dwell_arm_tick[i] = 0U;
@@ -813,7 +803,7 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us)
     static const uint8_t inj[4U] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
     if (pw_us == 0U) { return; }
     if (pw_us > 30000U) { pw_us = 30000U; }
-    const uint32_t off_cnv = scheduler_counter() + ((pw_us * ECU_SCHED_TICKS_PER_MS) / 1000U);
+    const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
     for (uint8_t i = 0U; i < 4U; ++i) { force_output(inj[i], ECU_ACT_INJ_ON); }
     for (uint8_t i = 0U; i < 4U; ++i) { arm_channel(inj[i], off_cnv, ECU_ACT_INJ_OFF); }
 }
@@ -915,7 +905,7 @@ void ecu_sched_test_reset(void)
     g_late_event_count = 0U; g_cycle_schedule_drop_count = 0U; g_calibration_clamp_count = 0U;
     g_presync_enable = 1U; g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
     g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
-    g_advance_deg = 10U; g_dwell_ticks = 22500U; g_inj_pw_ticks = 22500U; g_soi_lead_deg = 62U;
+    g_advance_deg = 10U; g_dwell_ticks = 140625U; g_inj_pw_ticks = 140625U; g_soi_lead_deg = 62U;
     g_angle_table_count = 0U; g_angle_tooth_mask_lo = 0U; g_angle_tooth_mask_hi = 0U;
     g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg; g_ivc_clamp_count = 0U;
     g_inj_inhibit_mask = 0U;
@@ -955,7 +945,7 @@ void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32
 }
 uint8_t ecu_sched_test_get_mspark_count(void) { return g_mspark_count; }
 void ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept { ems_test_tim1_ign_cnt = cnt; }
-void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim3_inj_cnt = cnt; }
+void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim5_cnt = cnt; }
 void ecu_sched_test_reset_ccr(void) noexcept {
     ems_test_tim1_ign_ccr1 = 0u; ems_test_tim1_ign_ccr2 = 0u;
     ems_test_tim1_ign_ccr3 = 0u; ems_test_tim1_ign_ccr4 = 0u;
