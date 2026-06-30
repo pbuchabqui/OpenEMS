@@ -783,7 +783,10 @@ inline void parse_byte(uint8_t b) noexcept {
             extern volatile uint32_t g_dbg_phase_fire __asm("g_dbg_phase_fire");
             extern volatile uint32_t g_dbg_evt_inserted __asm("g_dbg_evt_inserted");
             extern volatile uint32_t g_dbg_evt_dispatched __asm("g_dbg_evt_dispatched");
-            const uint32_t diag[16] = {
+            extern volatile uint32_t g_diag_presync_revs __asm("g_diag_presync_revs");
+            extern volatile uint32_t g_diag_seq_revs __asm("g_diag_seq_revs");
+            extern volatile uint32_t g_diag_clear_all_count __asm("g_diag_clear_all_count");
+            const uint32_t diag[19] = {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
                 g_dbg_inj1_arm,
@@ -800,8 +803,11 @@ inline void parse_byte(uint8_t b) noexcept {
                 g_dbg_phase_fire,
                 g_dbg_evt_inserted,
                 g_dbg_evt_dispatched,
+                g_diag_presync_revs,
+                g_diag_seq_revs,
+                g_diag_clear_all_count,
             };
-            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 64U);
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 76U);
             return;
         }
         return;

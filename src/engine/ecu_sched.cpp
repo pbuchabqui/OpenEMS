@@ -197,6 +197,13 @@ static volatile uint8_t  g_mspark_count            = 0U;
 static volatile uint32_t g_mspark_inter_dwell_ticks = 0U;
 static volatile uint32_t g_mspark_atdc_limit_deg    = 18U;
 
+// ── Contadores de diagnóstico (cranking, mode switches) ─────────────────────
+volatile uint32_t g_diag_presync_revs = 0U;    // revoluções em modo presync
+volatile uint32_t g_diag_seq_revs = 0U;        // revoluções em modo sequencial
+volatile uint32_t g_diag_prime_fired = 0U;     // prime pulse disparado
+volatile uint32_t g_diag_clear_all_count = 0U; // clear_all_events calls (non-init)
+volatile uint32_t g_diag_unsync_teeth_peak = 0U; // pico de dentes sem sync
+
 static volatile uint32_t g_advance_deg = 10U;
 static volatile uint32_t g_dwell_ticks = 187500U;  // 3 ms @ 62.5 MHz
 static volatile uint32_t g_inj_pw_ticks = 187500U;  // 3 ms @ 62.5 MHz
@@ -806,6 +813,7 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us)
     const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
     for (uint8_t i = 0U; i < 4U; ++i) { force_output(inj[i], ECU_ACT_INJ_ON); }
     for (uint8_t i = 0U; i < 4U; ++i) { arm_channel(inj[i], off_cnv, ECU_ACT_INJ_OFF); }
+    ++g_diag_prime_fired;
 }
 
 void ecu_sched_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg)
@@ -836,10 +844,12 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     static uint8_t s_unsync_teeth = 0U;
     if ((snap.state != ems::drv::SyncState::FULL_SYNC) && (snap.state != ems::drv::SyncState::HALF_SYNC)) {
         ++s_unsync_teeth;
+        if (s_unsync_teeth > g_diag_unsync_teeth_peak) { g_diag_unsync_teeth_peak = s_unsync_teeth; }
         if (s_unsync_teeth >= 60U && g_hook_prev_valid != 0U) {
             clear_all_events_and_drive_safe_outputs();
             g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U; g_cmp_phase_seen = 0U;
             ++g_dbg_clear_all_count;
+            ++g_diag_clear_all_count;
         }
         return;
     }
@@ -856,10 +866,12 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
                               || (snap.state == ems::drv::SyncState::FULL_SYNC && g_cmp_phase_seen == 0U);
         if (use_presync) {
             ++g_dbg_presync_count;
+            ++g_diag_presync_revs;
             calculate_presync_revolution(snap);
         } else {
             if (g_hook_schedule_this_gap != 0U) {
                 ++g_dbg_seq_calls;
+                ++g_diag_seq_revs;
                 Calculate_Sequential_Cycle(snap);
                 g_hook_schedule_this_gap = 0U;
             } else {
