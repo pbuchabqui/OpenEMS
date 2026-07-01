@@ -225,11 +225,11 @@ O protocolo é **binário**, stateless e funciona em cima de UART ou USB-CDC com
 | 6–7 | u16 LE | `stoich_afr_x100` | AFR×100 | 1300 → `0x14 0x05` |
 | 8–9 | u16 LE | `map_ref_bar_x100` | bar×100 | 100 → `0x64 0x00` |
 | 10–11 | u16 LE | `trigger_tooth0_engine_deg` | graus | **MEDIR** |
-| 12–13 | u16 LE | `default_soi_lead_deg` | graus | 62 → `0x3E 0x00` |
-| 14–15 | u16 LE | magic | — | **0x43 0x45** (obrigatório) |
+| 12–13 | u16 LE | `default_eoi_lead_deg` | graus | 60 → `0x3C 0x00` |
+| 14–15 | u16 LE | magic | — | **0x44 0x45** (v2/EOI — obrigatório) |
 
 > **ATENÇÃO — magic obrigatório:** `engine_config_load()` verifica os bytes
-> 14–15 (`0x43 0x45` = `'CE'` em little-endian = 0x4543). Se estiverem
+> 14–15 (`0x44 0x45` em little-endian = 0x4544, versão v2/EOI). Se estiverem
 > errados ou a zero, os campos 2–13 são **ignorados** e o firmware mantém
 > os defaults de compilação. O comando `w` deve sempre incluir todos os
 > 16 bytes.
@@ -296,11 +296,11 @@ INJECTOR_FLOW_CC_MIN      = 450      # caudal do injetor em cc/min
 STOICH_AFR_X100           = 1470     # AFR estequiométrico × 100 (1470 = gasolina)
 MAP_REF_BAR_X100          = 100      # pressão de referência (100 = 1.00 bar = atmosférica)
 TRIGGER_TOOTH0_ENGINE_DEG = 0        # MEDIR NO MOTOR — ver secção 6.3
-DEFAULT_SOI_LEAD_DEG      = 62       # avanço de injecção por defeito (SOI lead)
-MAGIC                     = 0x4543   # NÃO ALTERAR
+DEFAULT_EOI_LEAD_DEG      = 60       # alvo de FIM de injecção (EOI, ° BTDC)
+MAGIC                     = 0x4544   # v2 — semântica EOI. NÃO ALTERAR
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_page0(ivc, displacement, inj_flow, stoich, map_ref, trigger, soi):
+def build_page0(ivc, displacement, inj_flow, stoich, map_ref, trigger, eoi):
     """Constrói os 16 bytes da engine config page 0."""
     buf = bytearray(16)
     buf[0]  = ivc & 0xFF
@@ -310,7 +310,7 @@ def build_page0(ivc, displacement, inj_flow, stoich, map_ref, trigger, soi):
     struct.pack_into('<H', buf,  6, stoich)
     struct.pack_into('<H', buf,  8, map_ref)
     struct.pack_into('<H', buf, 10, trigger)
-    struct.pack_into('<H', buf, 12, soi)
+    struct.pack_into('<H', buf, 12, eoi)
     struct.pack_into('<H', buf, 14, MAGIC)
     return buf
 
@@ -379,7 +379,7 @@ def main():
             STOICH_AFR_X100,
             MAP_REF_BAR_X100,
             TRIGGER_TOOTH0_ENGINE_DEG,
-            DEFAULT_SOI_LEAD_DEG,
+            DEFAULT_EOI_LEAD_DEG,
         )
         print(f"\nNova configuração a escrever (hex): {new_cfg.hex(' ').upper()}")
 
@@ -417,7 +417,7 @@ Configuração actual (page 0):
   injector_flow = 450 cc/min
   stoich_afr    = 14.70 : 1
   trigger_deg   = 0°
-  magic         = 0x4543
+  magic         = 0x4544
 Nova configuração a escrever (hex): 32 00 D0 07 C2 01 BE 05 64 00 00 00 3E 00 43 45
 ✓ Escrita em NVM OK
 ✓ Verificação OK — configuração confirmada em NVM
@@ -895,7 +895,7 @@ for _ in range(5):
 | RPM errado (ex: metade) | Gap detectado a cada 2 rotações (CMP confundido com CKP) | Confirmar PA0 = CKP, PA1 = CMP |
 | Sem pulsos em PC6–PC9 | TIM8 não saiu de FORCE_INACTIVE | Verificar FULL_SYNC; verificar `ECU_Hardware_Init` via SWD |
 | Dwell muito curto ou longo | Tabela dwell incorrecta; tensão de bateria diferente | Ler page 5 offset 176 (dwell_ms_x10_table), verificar vbatt_corr |
-| NACK (0x01) em escrita page 0 | Flash write falhou; `engine_config_valid` rejeitou dados | Confirmar magic 0x4543; confirmar displacement > 0 |
+| NACK (0x01) em escrita page 0 | Flash write falhou; `engine_config_valid` rejeitou dados | Confirmar magic 0x4544 (v2); confirmar displacement > 0 |
 | `late_event_count` > 0 | CPU sobrecarregada ou ISR a demorar muito | Verificar `loop2ms_max_us`; pode ser normal a baixo RPM |
 | `g_flash_write_faults` > 0 | NVM corrompida ou falha de leitura no arranque | Apagar Bank2 via OpenOCD; reflash |
 
@@ -988,7 +988,7 @@ with serial.Serial('/dev/ttyUSB0', 115200, timeout=1) as s:
 
 | Page | ID | Tamanho | Conteúdo |
 |------|----|---------|---------|
-| 0 | `0x00` | 512 B | Engine config (IVC, displacement, injector, AFR, trigger, SOI) |
+| 0 | `0x00` | 512 B | Engine config (IVC, displacement, injector, AFR, trigger, EOI) |
 | 1 | `0x01` | 256 B | Tabela VE 16×16 |
 | 2 | `0x02` | 256 B | Tabela spark (avanço) 16×16 |
 | 3 | `0x03` | 64 B | Snapshot real-time (read-only) |

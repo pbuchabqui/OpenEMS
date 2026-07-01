@@ -1706,7 +1706,7 @@ static void test_ecu_sched_ccr_write(void) {
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
-    ecu_sched_set_soi_lead_deg(62u);
+    ecu_sched_set_eoi_lead_deg(60u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();  // angle table built at FULL_SYNC gap
 
@@ -1729,7 +1729,7 @@ static void test_ecu_sched_late_events(void) {
     ecu_sched_set_advance_deg(0u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
-    ecu_sched_set_soi_lead_deg(62u);
+    ecu_sched_set_eoi_lead_deg(60u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
     // Events were inserted (with minimum delay) even for near-zero delta.
@@ -1754,7 +1754,7 @@ static void test_ecu_sched_dwell_watchdog_fires(void) {
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
-    ecu_sched_set_soi_lead_deg(62u);
+    ecu_sched_set_eoi_lead_deg(60u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
     // Force sequential mode: requires cmp_confirms>=2 and a gap to rebuild table.
@@ -1787,7 +1787,7 @@ static void test_ecu_sched_presync_table(void) {
     ecu_sched_set_advance_deg(10u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
-    ecu_sched_set_soi_lead_deg(62u);
+    ecu_sched_set_eoi_lead_deg(60u);
     ckp_test_reset(); g_ckp_cap = 0u;
 
     ckp_feed_n_then_gap(55u);   // → HALF_SYNC (no rev_boundary yet: prev_tooth=0)
@@ -2055,11 +2055,11 @@ static void test_ecu_sched_setters(void) {
     section("ecu_sched: reset / setters / getters");
     ecu_sched_test_reset();
 
-    // Defaults after reset: advance=10, dwell=140625, inj_pw=140625, soi=62
+    // Defaults after reset: advance=10, dwell=140625, inj_pw=140625, eoi=60
     CHECK_EQ(ecu_sched_test_get_advance_deg(),  10u, "default advance=10°");
     CHECK_EQ(ecu_sched_test_get_dwell_ticks(), 140625u, "default dwell=140625");
     CHECK_EQ(ecu_sched_test_get_inj_pw_ticks(), 140625u, "default inj_pw=140625");
-    CHECK_EQ(ecu_sched_test_get_soi_lead_deg(), 62u, "default soi=62°");
+    CHECK_EQ(ecu_sched_test_get_eoi_lead_deg(), 60u, "default eoi=60°");
 
     // Individual setters
     ecu_sched_set_advance_deg(20u);
@@ -2071,15 +2071,15 @@ static void test_ecu_sched_setters(void) {
     ecu_sched_set_inj_pw_ticks(15000u);
     CHECK_EQ(ecu_sched_test_get_inj_pw_ticks(), 15000u, "set_inj_pw_ticks(15000)");
 
-    ecu_sched_set_soi_lead_deg(50u);
-    CHECK_EQ(ecu_sched_test_get_soi_lead_deg(), 50u, "set_soi_lead_deg(50)");
+    ecu_sched_set_eoi_lead_deg(50u);
+    CHECK_EQ(ecu_sched_test_get_eoi_lead_deg(), 50u, "set_eoi_lead_deg(50)");
 
     // commit_calibration sets all four atomically
     ecu_sched_commit_calibration(25u, 25000u, 18000u, 55u);
     CHECK_EQ(ecu_sched_test_get_advance_deg(),   25u, "commit: advance=25");
     CHECK_EQ(ecu_sched_test_get_dwell_ticks(),  25000u, "commit: dwell=25000");
     CHECK_EQ(ecu_sched_test_get_inj_pw_ticks(), 18000u, "commit: inj_pw=18000");
-    CHECK_EQ(ecu_sched_test_get_soi_lead_deg(),  55u, "commit: soi=55");
+    CHECK_EQ(ecu_sched_test_get_eoi_lead_deg(),  55u, "commit: eoi=55");
 
     // Calibration clamp: advance > 719 → clamped
     ecu_sched_set_advance_deg(800u);
@@ -2098,7 +2098,7 @@ static void test_ecu_sched_angle_table(void) {
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
-    ecu_sched_set_soi_lead_deg(62u);
+    ecu_sched_set_eoi_lead_deg(60u);
 
     // Reach full sync — schedule_on_tooth fires each CKP tooth hook
     g_ckp_cap = 0u;
@@ -2157,23 +2157,142 @@ static void test_ecu_sched_mspark(void) {
 }
 
 static void test_ecu_sched_ivc(void) {
-    section("ecu_sched: IVC clamp");
+    section("ecu_sched: IVC API (clamp removido — EOI targeting)");
     ecu_sched_test_reset();
 
     CHECK_EQ(ecu_sched_test_get_ivc_clamp_count(), 0u, "ivc_clamp=0 after reset");
 
-    // Set IVC angle — clamped at 180
+    // Com EOI targeting o clamp de PW à IVC foi removido (o timing é
+    // garantido pelo próprio EOI). A API é mantida por compatibilidade;
+    // o contador deve permanecer 0 mesmo com PW muito longo.
     ecu_sched_test_set_ivc(50u);
-    // Reach full sync with very long pulse: inj_pw > IVC window → clamped
     ecu_sched_set_inj_pw_ticks(120000u);  // very long injection
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
-    CHECK_TRUE(ecu_sched_test_get_ivc_clamp_count() >= 0u, "ivc_clamp_count accessible");
-    // ivc_abdc=50: IVC at TDC+540+50=590°. Very long PW usually clamped.
-    // Just verify setter/getter round-trip and no crash
+    CHECK_EQ(ecu_sched_test_get_ivc_clamp_count(), 0u,
+             "ivc_clamp_count stays 0 (EOI targeting supersedes IVC clamp)");
     ecu_sched_test_set_ivc(180u);  // max allowed
     CHECK_EQ(ecu_sched_ivc_clamp_count(), ecu_sched_test_get_ivc_clamp_count(),
              "ivc_clamp_count: public == test getter");
+}
+
+// ── EOI targeting ───────────────────────────────────────────────────────────
+// Helper: procura na tabela angular o primeiro evento (channel, action).
+static uint8_t find_angle_event(uint8_t want_ch, uint8_t want_act,
+                                uint8_t *out_tooth, uint8_t *out_frac, uint8_t *out_phase) {
+    for (uint8_t i = 0u; i < ecu_sched_test_angle_table_size(); ++i) {
+        uint8_t t, f, ch, act, ph;
+        if (ecu_sched_test_get_angle_event(i, &t, &f, &ch, &act, &ph) != 0u &&
+            ch == want_ch && act == want_act) {
+            *out_tooth = t; *out_frac = f; *out_phase = ph;
+            return 1u;
+        }
+    }
+    return 0u;
+}
+
+// Constrói tabela sequencial com o PW dado e devolve eventos INJ1 ON/OFF.
+// kNormalPeriod=10000 ticks → tooth_period=160000ns → tooth_ticks=10000
+// → deg = ticks×6/10000 (720°); RPM ≈ 6250.
+static void build_seq_table_with_pw(uint32_t pw_ticks) {
+    ecu_sched_test_reset();
+    for (uint8_t i = 0u; i < 4u; ++i) { ems::engine::cyl_fuel_trim_pct[i] = 0; }
+    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_set_advance_deg(15u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(pw_ticks);
+    ecu_sched_set_eoi_lead_deg(60u);
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    ckp_test_set_cmp_confirms(2u);
+    ckp_feed_n_then_gap(55u);  // gap → Calculate_Sequential_Cycle
+}
+
+static void test_ecu_sched_eoi_targeting(void) {
+    // Cyl0: tdc=0, eoi_lead=60 → EOI=660° (60° BTDC combustão).
+    // Trigger frame (offset=0): ang=660%360=300 → 300×256/6=12800 → tooth=50,
+    // frac=0, PHASE_B (660≥360). O INJ_OFF deve ficar AQUI para qualquer PW.
+    uint8_t t_on, f_on, p_on, t_off, f_off, p_off;
+
+    section("ecu_sched EOI: INJ_OFF fixo no alvo de EOI, independente do PW");
+    // PW curto: 120° → ticks = 120×10000/6 = 200000. SOI = 660−120 = 540°
+    // → ang=180 → 180×256/6=7680 → tooth=30, frac=0, PHASE_B.
+    build_seq_table_with_pw(200000u);
+    CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_OFF, &t_off, &f_off, &p_off), 1u,
+             "PW=120°: INJ1 OFF presente");
+    CHECK_EQ(t_off, 50u, "PW=120°: INJ_OFF em tooth 50 (EOI=660°)");
+    CHECK_EQ(f_off, 0u,  "PW=120°: INJ_OFF frac=0");
+    CHECK_EQ(p_off, ECU_PHASE_B, "PW=120°: INJ_OFF em PHASE_B");
+    CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_ON, &t_on, &f_on, &p_on), 1u,
+             "PW=120°: INJ1 ON presente");
+    CHECK_EQ(t_on, 30u, "PW=120°: SOI recua para tooth 30 (540°)");
+    CHECK_EQ(p_on, ECU_PHASE_B, "PW=120°: SOI em PHASE_B");
+    CHECK_EQ(ecu_sched_test_get_pw_duty_clamp_count(), 0u,
+             "PW=120°: duty clamp não dispara");
+
+    section("ecu_sched EOI: SOI cruza a origem do ciclo (wrap) mantendo o EOI");
+    // Com eoi_lead=60 e duty clamp de 648°, SOI = 660−PW ∈ [12,660] — nunca
+    // cruza a origem. O wrap real ocorre com EOI mais cedo no ciclo:
+    // eoi_lead=300 → EOI=420° → ang=60 → tooth=10, frac=0, PHASE_B.
+    // PW: ticks=833333 → deg=499 (trunc). SOI=(420+720−499)%720=641°
+    // → ang=281 → 281×256/6=11989 → tooth=46, frac=213, PHASE_B.
+    // SOI (641°) fica DEPOIS do EOI (420°) em ângulo absoluto: o pulso
+    // atravessa a fronteira 720→0 do ciclo — o caso que o SOI fixo não cobria.
+    ecu_sched_test_reset();
+    for (uint8_t i = 0u; i < 4u; ++i) { ems::engine::cyl_fuel_trim_pct[i] = 0; }
+    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_set_advance_deg(15u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(833333u);
+    ecu_sched_set_eoi_lead_deg(300u);
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    ckp_test_set_cmp_confirms(2u);
+    ckp_feed_n_then_gap(55u);
+    CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_OFF, &t_off, &f_off, &p_off), 1u,
+             "PW=499°/EOI=420°: INJ1 OFF presente");
+    CHECK_EQ(t_off, 10u, "PW=499°: INJ_OFF em tooth 10 (EOI=420° fixo)");
+    CHECK_EQ(p_off, ECU_PHASE_B, "PW=499°: INJ_OFF em PHASE_B");
+    CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_ON, &t_on, &f_on, &p_on), 1u,
+             "PW=499°: INJ1 ON presente");
+    CHECK_EQ(t_on, 46u, "PW=499°: SOI em tooth 46 (641° — wrap além da origem)");
+    CHECK_EQ(p_on, ECU_PHASE_B, "PW=499°: SOI em PHASE_B");
+    CHECK_EQ(ecu_sched_test_get_pw_duty_clamp_count(), 0u,
+             "PW=499° ≤ 648°: duty clamp não dispara");
+
+    section("ecu_sched EOI: duty clamp em PW ≥ 90% do ciclo");
+    // PW máximo permitido: ticks=1250000 → deg=750 > 648 → clamp a 648°.
+    // SOI=(660+720−648)%720=732%720=12° → ang=12 → 512 → tooth=2, frac=0,
+    // PHASE_A. Contador: 4 incrementos (um por cilindro na build).
+    build_seq_table_with_pw(1250000u);
+    CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_OFF, &t_off, &f_off, &p_off), 1u,
+             "PW=750°: INJ1 OFF presente");
+    CHECK_EQ(t_off, 50u, "PW=750°: INJ_OFF permanece em tooth 50 (EOI fixo)");
+    CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_ON, &t_on, &f_on, &p_on), 1u,
+             "PW=750°: INJ1 ON presente");
+    CHECK_EQ(t_on, 2u,  "PW=750°→648°: SOI em tooth 2 (12°)");
+    CHECK_EQ(p_on, ECU_PHASE_A, "PW=750°→648°: SOI em PHASE_A");
+    // Contador: ≥4 (um por cilindro na build sequencial). Nota: as builds
+    // presync durante o padrão de sync (PW/2=375° > 324°) também incrementam,
+    // pelo que a contagem exacta depende do número de rev boundaries.
+    CHECK_TRUE(ecu_sched_test_get_pw_duty_clamp_count() >= 4u,
+             "PW=750°: duty clamp disparou ≥4× (1× por cilindro na build seq.)");
+
+    section("ecu_sched EOI: presync usa EOI targeting na janela de 360°");
+    // presync: eoi=(360−60)%360=300 → tooth 50, frac 0, PHASE_ANY.
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim1_cnt(0u);
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_feed_n_then_gap(55u);   // HALF_SYNC
+    for (uint32_t i = 0u; i < 58u; ++i) { ckp_fire(kNormalPeriod); }  // rev boundary
+    CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_OFF, &t_off, &f_off, &p_off), 1u,
+             "presync: INJ1 OFF presente");
+    CHECK_EQ(t_off, 50u, "presync: INJ_OFF em tooth 50 (EOI=300° na janela 360°)");
+    CHECK_EQ(p_off, ECU_PHASE_ANY, "presync: INJ_OFF em PHASE_ANY");
 }
 
 static void test_ecu_sched_presync(void) {
@@ -3110,7 +3229,7 @@ static void test_trigger_offset(void) {
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
-    ecu_sched_set_soi_lead_deg(62u);
+    ecu_sched_set_eoi_lead_deg(60u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
     // Force cmp_confirms>=2 so Calculate_Sequential_Cycle() runs (not presync).
@@ -3152,7 +3271,7 @@ static void test_trigger_offset(void) {
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
-    ecu_sched_set_soi_lead_deg(62u);
+    ecu_sched_set_eoi_lead_deg(60u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
     // Force cmp_confirms>=2 so Calculate_Sequential_Cycle() runs (not presync).
@@ -3350,6 +3469,7 @@ int main(void) {
     test_ecu_sched_inhibit_masks();
     test_ecu_sched_mspark();
     test_ecu_sched_ivc();
+    test_ecu_sched_eoi_targeting();
     test_ecu_sched_presync();
     test_ecu_sched_dwell_watchdog();
 

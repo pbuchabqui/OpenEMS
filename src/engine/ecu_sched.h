@@ -52,14 +52,17 @@ extern volatile uint32_t g_cycle_schedule_drop_count;
 
 void ECU_Hardware_Init(void);
 
+// eoi_lead_deg: EOI targeting — ângulo (° BTDC de combustão) em que a
+// injecção TERMINA. O início é calculado para trás (SOI = EOI − PW°),
+// recuando automaticamente com PW grande. Clampado a [0, 359] em runtime.
 void ecu_sched_commit_calibration(uint32_t advance_deg,
                                   uint32_t dwell_ticks,
                                   uint32_t inj_pw_ticks,
-                                  uint32_t soi_lead_deg);
+                                  uint32_t eoi_lead_deg);
 void ecu_sched_set_advance_deg(uint32_t adv);
 void ecu_sched_set_dwell_ticks(uint32_t dwell);
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
-void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg);
+void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg);
 void ecu_sched_set_presync_enable(uint8_t enable);
 void ecu_sched_set_presync_inj_mode(uint8_t mode);
 void ecu_sched_set_presync_ign_mode(uint8_t mode);
@@ -94,6 +97,9 @@ void ecu_sched_set_ign_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_ign_inhibit_mask(void);
 void ecu_sched_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_ivc_clamp_count(void);
+// Contador do duty clamp: incrementado quando PW_deg excede 90% do ciclo
+// (648° sequencial / 324° presync) e é clampado. >0 = fuel shortfall.
+uint32_t ecu_sched_pw_duty_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
 void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 
@@ -109,16 +115,17 @@ uint8_t ecu_sched_test_get_angle_event(uint8_t index,
 void ecu_sched_test_set_advance_deg(uint32_t adv);
 void ecu_sched_test_set_dwell_ticks(uint32_t dwell);
 void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks);
-void ecu_sched_test_set_soi_lead_deg(uint32_t soi_lead_deg);
+void ecu_sched_test_set_eoi_lead_deg(uint32_t eoi_lead_deg);
 uint32_t ecu_sched_test_get_advance_deg(void);
 uint32_t ecu_sched_test_get_dwell_ticks(void);
 uint32_t ecu_sched_test_get_inj_pw_ticks(void);
-uint32_t ecu_sched_test_get_soi_lead_deg(void);
+uint32_t ecu_sched_test_get_eoi_lead_deg(void);
 uint32_t ecu_sched_test_get_calibration_clamp_count(void);
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 uint32_t ecu_sched_test_get_late_event_count(void);
 void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_test_get_ivc_clamp_count(void);
+uint32_t ecu_sched_test_get_pw_duty_clamp_count(void);
 void     ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept;
 uint32_t ecu_sched_test_get_tim1_ccr(uint8_t channel) noexcept;
 void     ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept;

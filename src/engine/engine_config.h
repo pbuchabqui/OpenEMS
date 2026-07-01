@@ -14,7 +14,10 @@ inline constexpr uint16_t kFuelDensityMgPerCc = 755u;
 inline constexpr uint16_t kAirDensityMgPerCcX1000 = 1184u;
 
 inline constexpr uint16_t kMapRefBarX100 = 100u;
-inline constexpr uint16_t kDefaultSoiLeadDeg = 62u;
+// EOI targeting: ângulo (° BTDC de combustão) em que a injecção TERMINA.
+// SOI é derivado para trás (SOI = EOI − PW°). BREAKING CHANGE vs kDefaultSoiLeadDeg:
+// mesma ordem de grandeza numérica, semântica oposta (fim vs início do pulso).
+inline constexpr uint16_t kDefaultEoiLeadDeg = 60u;
 inline constexpr uint16_t kIvcAbdcDeg = 50u;
 
 // Default para g_eng_cfg.trigger_tooth0_engine_deg (usado antes de NVM válida).
@@ -60,7 +63,7 @@ struct EngineConfigRam {
     uint16_t stoich_afr_x100;
     uint16_t map_ref_bar_x100;
     uint16_t trigger_tooth0_engine_deg;
-    uint16_t default_soi_lead_deg;
+    uint16_t default_eoi_lead_deg;
 };
 
 // Runtime config — initialized to compile-time defaults at startup.

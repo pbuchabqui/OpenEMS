@@ -355,7 +355,7 @@ const PAGE_0_SECTIONS = [
   {
     label: "ENGINE",
     fields: ["ivc_abdc_deg","displacement_cc","trigger_tooth0_engine_deg",
-             "default_soi_lead_deg","config_magic"],
+             "default_eoi_lead_deg","config_magic"],
   },
   {
     label: "FUELING",
@@ -418,8 +418,8 @@ const FIELD_LABELS = {
   stoich_afr_x100:           "Stoich AFR",
   map_ref_bar_x100:          "Reference MAP (bar)",
   trigger_tooth0_engine_deg: "Trigger tooth 0 offset (°, 0-719)",
-  default_soi_lead_deg:      "Default SOI advance (°)",
-  config_magic:              "Magic (0x4543 = valid config)",
+  default_eoi_lead_deg:      "EOI target (° BTDC — fim da injeção)",
+  config_magic:              "Magic (0x4544 = valid config v2/EOI)",
   app1_raw_min:  "APP1 released (raw)",   app1_raw_max:  "APP1 floored (raw)",
   app2_raw_min:  "APP2 released (raw)",   app2_raw_max:  "APP2 floored (raw)",
   etb_tps1_raw_min: "ETB TPS1 closed (raw)", etb_tps1_raw_max: "ETB TPS1 open (raw)",

@@ -355,7 +355,7 @@ def api_log_export(rows: int = 120, min_samples: int = 8):
             f"- AFR estequiométrico: {ep.get('stoich_afr_x100', 0):.2f}",
             f"- MAP referência: {ep.get('map_ref_bar_x100', 0):.2f} bar",
             f"- IVC ABDC: {ep.get('ivc_abdc_deg', '?')}°",
-            f"- SOI lead: {ep.get('default_soi_lead_deg', '?')}°",
+            f"- EOI target: {ep.get('default_eoi_lead_deg', '?')}° BTDC (fim da injeção)",
             "",
         ]
 

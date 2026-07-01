@@ -151,7 +151,7 @@ class EngineConfig:
     stoich_afr_x100:           int = 1470
     map_ref_bar_x100:          int = 100
     trigger_tooth0_engine_deg: int = 0
-    default_soi_lead_deg:      int = 62
+    default_eoi_lead_deg:      int = 60
 
     @property
     def req_fuel_us(self) -> int:
@@ -324,7 +324,7 @@ class STM32Client:
             stoich_afr_x100           = struct.unpack_from("<H", d,  6)[0],
             map_ref_bar_x100          = struct.unpack_from("<H", d,  8)[0],
             trigger_tooth0_engine_deg = struct.unpack_from("<H", d, 10)[0],
-            default_soi_lead_deg      = struct.unpack_from("<H", d, 12)[0],
+            default_eoi_lead_deg      = struct.unpack_from("<H", d, 12)[0],
         )
 
     def read_tables(self) -> Tables:

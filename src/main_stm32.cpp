@@ -935,14 +935,14 @@ int main() {
                     static_cast<uint32_t>(qc.spark_deg < 0 ? 0 : qc.spark_deg),
                     dwell_ticks,
                     inj_pw_ticks,
-                    ems::engine::cfg::kDefaultSoiLeadDeg);
+                    static_cast<uint32_t>(ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg));
             } else if (sched_sync && rev_cut) {
                 const int16_t base_advance_deg = ems::engine::get_advance(snap.rpm_x10, map_bar_x100);
                 ::ecu_sched_commit_calibration(
                     static_cast<uint32_t>(base_advance_deg < 0 ? 0 : base_advance_deg),
                     dwell_ticks,
                     0u,
-                    ems::engine::cfg::kDefaultSoiLeadDeg);
+                    static_cast<uint32_t>(ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg));
                 g_last_pw_ms_x10 = 0u;
                 g_ae_active = false;
             } else if (snap.rpm_x10 == 0u) {

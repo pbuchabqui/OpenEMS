@@ -13,10 +13,15 @@ namespace ems::engine::cfg {
 //  [6-7]  : stoich_afr_x100 (uint16_t LE)
 //  [8-9]  : map_ref_bar_x100 (uint16_t LE)
 //  [10-11]: trigger_tooth0_engine_deg (uint16_t LE)
-//  [12-13]: default_soi_lead_deg (uint16_t LE)
-//  [14-15]: magic 0x4543 ('E','C')
+//  [12-13]: default_eoi_lead_deg (uint16_t LE)
+//  [14-15]: magic 0x4544 (v2)
+//
+// Magic v1 (0x4543) → v2 (0x4544): o campo [12-13] mudou de semântica
+// (SOI lead → EOI lead). Páginas gravadas com magic v1 são rejeitadas e a
+// ECU volta aos defaults de compilação — reinterpretar um SOI antigo como
+// EOI mudaria silenciosamente o timing de injecção de tunes existentes.
 
-static constexpr uint16_t kMagicValue  = 0x4543u;
+static constexpr uint16_t kMagicValue  = 0x4544u;  // v2 — semântica EOI
 static constexpr uint16_t kMagicOffset = 14u;
 static constexpr uint16_t kMinPageLen  = 16u;
 
@@ -25,7 +30,7 @@ static constexpr uint16_t kOffsetInjectorFlowCcMin      = 4u;
 static constexpr uint16_t kOffsetStoichAfrX100          = 6u;
 static constexpr uint16_t kOffsetMapRefKpa              = 8u;
 static constexpr uint16_t kOffsetTriggerTooth0EngineDeg = 10u;
-static constexpr uint16_t kOffsetDefaultSoiLeadDeg      = 12u;
+static constexpr uint16_t kOffsetDefaultEoiLeadDeg      = 12u;
 
 // Global runtime config, initialized to compile-time defaults.
 EngineConfigRam g_eng_cfg = {
@@ -34,7 +39,7 @@ EngineConfigRam g_eng_cfg = {
     kStoichAfrX100,
     kMapRefBarX100,
     kTriggerTooth0EngineDeg,
-    kDefaultSoiLeadDeg,
+    kDefaultEoiLeadDeg,
 };
 
 static inline uint16_t read_u16_le(const uint8_t* buf, uint16_t offset) noexcept {
@@ -63,7 +68,7 @@ bool engine_config_valid(const EngineConfigRam& c) noexcept {
     if (c.trigger_tooth0_engine_deg > 719u) {
         return false;
     }
-    if (c.default_soi_lead_deg > 360u) {
+    if (c.default_eoi_lead_deg > 359u) {
         return false;
     }
     return true;
@@ -85,7 +90,7 @@ void engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept {
     tmp.stoich_afr_x100         = read_u16_le(page0_buf, kOffsetStoichAfrX100);
     tmp.map_ref_bar_x100             = read_u16_le(page0_buf, kOffsetMapRefKpa);
     tmp.trigger_tooth0_engine_deg = read_u16_le(page0_buf, kOffsetTriggerTooth0EngineDeg);
-    tmp.default_soi_lead_deg    = read_u16_le(page0_buf, kOffsetDefaultSoiLeadDeg);
+    tmp.default_eoi_lead_deg    = read_u16_le(page0_buf, kOffsetDefaultEoiLeadDeg);
 
     if (engine_config_valid(tmp)) {
         g_eng_cfg = tmp;
@@ -106,7 +111,7 @@ void engine_config_serialize(uint8_t* page0_buf, uint16_t len) noexcept {
     write_u16_le(page0_buf, kOffsetStoichAfrX100,           g_eng_cfg.stoich_afr_x100);
     write_u16_le(page0_buf, kOffsetMapRefKpa,               g_eng_cfg.map_ref_bar_x100);
     write_u16_le(page0_buf, kOffsetTriggerTooth0EngineDeg,  g_eng_cfg.trigger_tooth0_engine_deg);
-    write_u16_le(page0_buf, kOffsetDefaultSoiLeadDeg,       g_eng_cfg.default_soi_lead_deg);
+    write_u16_le(page0_buf, kOffsetDefaultEoiLeadDeg,       g_eng_cfg.default_eoi_lead_deg);
     write_u16_le(page0_buf, kMagicOffset,                   kMagicValue);
 }
 

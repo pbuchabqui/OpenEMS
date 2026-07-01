@@ -208,7 +208,15 @@ static volatile uint32_t g_advance_deg = 10U;
 static volatile uint32_t g_dwell_ticks = 187500U;  // 3 ms @ 62.5 MHz
 static volatile uint32_t g_inj_pw_ticks = 187500U;  // 3 ms @ 62.5 MHz
 volatile uint8_t g_inj_pw_override = 0U;  // 1=lock g_inj_pw_ticks, ignore main loop writes
-static volatile uint32_t g_soi_lead_deg = 62U;
+// ── EOI targeting (End of Injection) ────────────────────────────────────────
+// A injeção TERMINA num ângulo fixo (g_eoi_lead_deg antes do TDC de combustão)
+// e o início é calculado para trás: SOI = EOI − PW°. Com PW grande (alta RPM),
+// o SOI recua automaticamente para mais cedo no ciclo — resolve a janela
+// insuficiente do antigo SOI fixo (a 8500 RPM, 50° = 0.98 ms << PW típico).
+// Default 60° BTDC: fim da injeção no início da compressão (válvula fechada,
+// combustível fica no pórtico até à próxima admissão) — preserva a filosofia
+// closed-valve do antigo SOI 62° BTDC.
+static volatile uint32_t g_eoi_lead_deg = 60U;
 static volatile uint8_t g_presync_enable = 1U;
 static volatile uint8_t g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
 static volatile uint8_t g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
@@ -220,6 +228,17 @@ static volatile uint8_t g_cmp_phase_seen = 0U; // set when phase_A toggles (CMP 
 static volatile uint8_t g_knock_sequential = 0U;  // 1 when running Calculate_Sequential_Cycle (full sync, per-cyl knock valid)
 static volatile uint8_t g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg;  // FIX: volatile — escrita por ecu_sched_set_ivc (cs), leitura por clamp_inj_pw_to_ivc (contexto ISR)
 static uint32_t g_ivc_clamp_count = 0U;
+
+// ── Duty clamp (EOI targeting) ──────────────────────────────────────────────
+// PW ≥ 720° é irrepresentável na tabela angular (duty ≥ 100%): inj_on e
+// inj_off são dois ângulos no mesmo ciclo — 766° colapsaria silenciosamente
+// para 46° (mistura pobre severa a alta RPM). Clamp a 90% do ciclo garante
+// aritmética modular válida E tempo mínimo de injetor fechado (dinâmica de
+// abertura/fecho). Incrementa g_pw_duty_clamp_count quando actua — fuel
+// shortfall a alta RPM deve ser visível no diagnóstico, nunca escondido.
+#define ECU_MAX_SEQ_INJ_PW_DEG      648U   // 90% de 720°
+#define ECU_MAX_PRESYNC_INJ_PW_DEG  324U   // 90% de 360°
+static volatile uint32_t g_pw_duty_clamp_count = 0U;
 static volatile uint8_t g_cc_pending_inj[4];
 static volatile uint8_t g_cc_pending_ign[4];
 volatile uint32_t g_dbg_inj_force_early = 0U;
@@ -468,7 +487,9 @@ static void sanitize_runtime_calibration(void)
     // Clamps em ticks TIM5 (62.5 MHz): 100000 ticks ≈ 1.6ms dwell máx
     if (g_dwell_ticks > 625000U) { g_dwell_ticks = 625000U; clamped = 1U; }
     if (g_inj_pw_ticks > 1250000U) { g_inj_pw_ticks = 1250000U; clamped = 1U; }
-    if (g_soi_lead_deg >= ECU_CYCLE_DEG) { g_soi_lead_deg = ECU_CYCLE_DEG - 1U; clamped = 1U; }
+    // EOI lead ∈ [0, 359]: 0–129 = fim na compressão (closed-valve, após IVC);
+    // 130–359 = fim com válvula aberta / admissão (estilo Speeduino).
+    if (g_eoi_lead_deg >= 360U) { g_eoi_lead_deg = 359U; clamped = 1U; }
     if (g_presync_inj_mode > ECU_PRESYNC_INJ_SEMI_SEQUENTIAL) { g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; clamped = 1U; }
     if (g_presync_ign_mode > ECU_PRESYNC_IGN_WASTED_SPARK) { g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK; clamped = 1U; }
     if (clamped != 0U) { ++g_calibration_clamp_count; }
@@ -618,13 +639,17 @@ static uint32_t ticks_to_cycle_degrees(uint32_t ticks, uint32_t tooth_period_ns,
         : 0U;
 }
 
-static uint32_t clamp_inj_pw_to_ivc(uint32_t tdc_deg, uint32_t inj_on_deg, uint32_t inj_pw_deg)
-{
-    const uint32_t ivc_cycle_deg = (tdc_deg + 540U + (uint32_t)g_ivc_abdc_deg) % ECU_CYCLE_DEG;
-    const uint32_t soi_to_ivc = (ivc_cycle_deg + ECU_CYCLE_DEG - inj_on_deg) % ECU_CYCLE_DEG;
-    if ((soi_to_ivc < (ECU_CYCLE_DEG / 2U)) && (inj_pw_deg > soi_to_ivc)) { ++g_ivc_clamp_count; return soi_to_ivc; }
-    return inj_pw_deg;
-}
+// NOTA (EOI targeting): o antigo clamp_inj_pw_to_ivc foi removido. Com EOI
+// targeting a restrição de IVC é satisfeita pela própria calibração do EOI:
+//  • eoi_lead ≤ ~130° → EOI após IVC → injecção closed-valve intencional
+//    (combustível espera no pórtico pela próxima admissão);
+//  • eoi_lead que coloque o EOI antes/na IVC → a injecção termina, por
+//    construção, antes do fecho da válvula — nada a clampar.
+// O antigo clamp (PW limitado à janela SOI→IVC) destruiria o EOI targeting:
+// com PW longo o inj_on cai antes da IVC e o clamp encurtaria o pulso,
+// movendo o fim da injecção para a IVC — anulando o alvo de EOI.
+// g_ivc_abdc_deg / ecu_sched_set_ivc / g_ivc_clamp_count são mantidos por
+// compatibilidade de API e protocolo (contador permanece 0).
 
 static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
 {
@@ -652,17 +677,26 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
 
         const uint32_t spark = (tdc + ECU_CYCLE_DEG - eff_advance) % ECU_CYCLE_DEG;
         const uint32_t dwell = (spark + ECU_CYCLE_DEG - dwell_deg) % ECU_CYCLE_DEG;
-        const uint32_t inj_on = (tdc + ECU_CYCLE_DEG - g_soi_lead_deg) % ECU_CYCLE_DEG;
+
+        // ── EOI targeting: a injecção TERMINA em eoi; o início recua PW° ──
+        const uint32_t eoi = (tdc + ECU_CYCLE_DEG - g_eoi_lead_deg) % ECU_CYCLE_DEG;
 
         // Trim de combustível por cilindro (±%)
         const int32_t fuel_trim = static_cast<int32_t>(ems::engine::cyl_fuel_trim_pct[cyl]);
         const int32_t pw_trimmed = static_cast<int32_t>(base_inj_pw_deg)
                                    * (100 + fuel_trim) / 100;
-        const uint32_t eff_inj_pw_deg = (pw_trimmed < 0) ? 0u
-                                       : static_cast<uint32_t>(pw_trimmed);
+        uint32_t inj_pw = (pw_trimmed < 0) ? 0u : static_cast<uint32_t>(pw_trimmed);
 
-        const uint32_t inj_pw = clamp_inj_pw_to_ivc(tdc, inj_on, eff_inj_pw_deg);
-        const uint32_t inj_off = (inj_on + inj_pw) % ECU_CYCLE_DEG;
+        // Duty clamp: PW ≥ 720° é irrepresentável (ver comentário no topo).
+        // Clamp ANTES da aritmética modular — dispensa loop de wrap e garante
+        // que (eoi + 720 − pw) nunca precisa de mais de uma volta.
+        if (inj_pw > ECU_MAX_SEQ_INJ_PW_DEG) {
+            inj_pw = ECU_MAX_SEQ_INJ_PW_DEG;
+            ++g_pw_duty_clamp_count;
+        }
+
+        const uint32_t inj_on  = (eoi + ECU_CYCLE_DEG - inj_pw) % ECU_CYCLE_DEG;
+        const uint32_t inj_off = eoi;
         uint8_t tooth, frac, phase;
 
         angle_to_tooth_event(engine_angle_to_trigger_angle(dwell, ECU_CYCLE_DEG), &tooth, &frac, &phase);
@@ -719,11 +753,20 @@ static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
     const uint32_t dwell_deg = ticks_to_cycle_degrees(g_dwell_ticks, snap.tooth_period_ns, 360U);
     // Presync fires each injector once per 360° rev (2× per 720° cycle).
     // Halve the per-cycle PW so each event delivers half the intended dose.
-    const uint32_t inj_pw_deg = ticks_to_cycle_degrees(g_inj_pw_ticks / 2U, snap.tooth_period_ns, 360U);
+    uint32_t inj_pw_deg = ticks_to_cycle_degrees(g_inj_pw_ticks / 2U, snap.tooth_period_ns, 360U);
+    // Duty clamp na janela de 360° — mesma razão do modo sequencial.
+    // Improvável no cranking (200 RPM → 360° = 150 ms), mas obrigatório por
+    // simetria: PW_deg ≥ 360° colapsaria na aritmética modular.
+    if (inj_pw_deg > ECU_MAX_PRESYNC_INJ_PW_DEG) {
+        inj_pw_deg = ECU_MAX_PRESYNC_INJ_PW_DEG;
+        ++g_pw_duty_clamp_count;
+    }
     const uint32_t spark = (360U - (g_advance_deg % 360U)) % 360U;
     const uint32_t dwell = (spark + 360U - dwell_deg) % 360U;
-    const uint32_t inj_on = (360U - (g_soi_lead_deg % 360U)) % 360U;
-    const uint32_t inj_off = (inj_on + inj_pw_deg) % 360U;
+    // EOI targeting: fim da injecção fixo, início recua PW°.
+    const uint32_t eoi     = (360U - (g_eoi_lead_deg % 360U)) % 360U;
+    const uint32_t inj_on  = (eoi + 360U - inj_pw_deg) % 360U;
+    const uint32_t inj_off = eoi;
 
     angle_to_tooth_event(engine_angle_to_trigger_angle(dwell, 360U), &tooth, &frac, &phase);
     for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_DWELL_START); }
@@ -749,7 +792,7 @@ static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
     }
 }
 
-void ecu_sched_commit_calibration(uint32_t advance_deg, uint32_t dwell_ticks, uint32_t inj_pw_ticks, uint32_t soi_lead_deg)
+void ecu_sched_commit_calibration(uint32_t advance_deg, uint32_t dwell_ticks, uint32_t inj_pw_ticks, uint32_t eoi_lead_deg)
 {
     ems::hal::CriticalSectionGuard guard;
     if (g_inj_pw_override == 0U) {
@@ -762,18 +805,19 @@ void ecu_sched_commit_calibration(uint32_t advance_deg, uint32_t dwell_ticks, ui
         g_inj_pw_ticks = inj_pw_ticks;
         g_inj_pw_override = 1U;
     }
-    g_soi_lead_deg = soi_lead_deg;
+    g_eoi_lead_deg = eoi_lead_deg;
     sanitize_runtime_calibration();
 }
 void ecu_sched_set_advance_deg(uint32_t adv) { ems::hal::CriticalSectionGuard guard; g_advance_deg = adv; sanitize_runtime_calibration(); }
 void ecu_sched_set_dwell_ticks(uint32_t dwell) { ems::hal::CriticalSectionGuard guard; g_dwell_ticks = dwell; sanitize_runtime_calibration(); }
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { ems::hal::CriticalSectionGuard guard; if (g_inj_pw_override == 0U) { g_inj_pw_ticks = pw_ticks; } sanitize_runtime_calibration(); }
-void ecu_sched_set_soi_lead_deg(uint32_t soi_lead_deg) { ems::hal::CriticalSectionGuard guard; g_soi_lead_deg = soi_lead_deg; sanitize_runtime_calibration(); }
+void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ems::hal::CriticalSectionGuard guard; g_eoi_lead_deg = eoi_lead_deg; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_enable(uint8_t enable) { ems::hal::CriticalSectionGuard guard; g_presync_enable = (enable != 0U) ? 1U : 0U; }
 void ecu_sched_set_presync_inj_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_inj_mode = mode; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_ign_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_ign_mode = mode; sanitize_runtime_calibration(); }
 void ecu_sched_set_ivc(uint8_t ivc_abdc_deg) { ems::hal::CriticalSectionGuard guard; g_ivc_abdc_deg = (ivc_abdc_deg > 180U) ? 180U : ivc_abdc_deg; }
 uint32_t ecu_sched_ivc_clamp_count(void) { return g_ivc_clamp_count; }
+uint32_t ecu_sched_pw_duty_clamp_count(void) { return g_pw_duty_clamp_count; }
 
 void ecu_sched_dwell_watchdog(void)
 {
@@ -802,6 +846,7 @@ void ecu_sched_reset_diagnostic_counters(void)
     g_cycle_schedule_drop_count = 0U;
     g_calibration_clamp_count = 0U;
     g_ivc_clamp_count = 0U;
+    g_pw_duty_clamp_count = 0U;
     g_dwell_watchdog_count = 0U;
 }
 
@@ -917,9 +962,9 @@ void ecu_sched_test_reset(void)
     g_late_event_count = 0U; g_cycle_schedule_drop_count = 0U; g_calibration_clamp_count = 0U;
     g_presync_enable = 1U; g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
     g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
-    g_advance_deg = 10U; g_dwell_ticks = 140625U; g_inj_pw_ticks = 140625U; g_soi_lead_deg = 62U;
+    g_advance_deg = 10U; g_dwell_ticks = 140625U; g_inj_pw_ticks = 140625U; g_eoi_lead_deg = 60U;
     g_angle_table_count = 0U; g_angle_tooth_mask_lo = 0U; g_angle_tooth_mask_hi = 0U;
-    g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg; g_ivc_clamp_count = 0U;
+    g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg; g_ivc_clamp_count = 0U; g_pw_duty_clamp_count = 0U;
     g_inj_inhibit_mask = 0U;
     g_ign_inhibit_mask = 0U;
     g_mspark_count = 0U; g_mspark_inter_dwell_ticks = 0U; g_mspark_atdc_limit_deg = 18U;
@@ -942,16 +987,17 @@ uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *s
 void ecu_sched_test_set_advance_deg(uint32_t adv) { ecu_sched_set_advance_deg(adv); }
 void ecu_sched_test_set_dwell_ticks(uint32_t dwell) { ecu_sched_set_dwell_ticks(dwell); }
 void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks) { ecu_sched_set_inj_pw_ticks(pw_ticks); }
-void ecu_sched_test_set_soi_lead_deg(uint32_t soi_lead_deg) { ecu_sched_set_soi_lead_deg(soi_lead_deg); }
+void ecu_sched_test_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ecu_sched_set_eoi_lead_deg(eoi_lead_deg); }
 uint32_t ecu_sched_test_get_advance_deg(void) { return g_advance_deg; }
 uint32_t ecu_sched_test_get_dwell_ticks(void) { return g_dwell_ticks; }
 uint32_t ecu_sched_test_get_inj_pw_ticks(void) { return g_inj_pw_ticks; }
-uint32_t ecu_sched_test_get_soi_lead_deg(void) { return g_soi_lead_deg; }
+uint32_t ecu_sched_test_get_eoi_lead_deg(void) { return g_eoi_lead_deg; }
 uint32_t ecu_sched_test_get_calibration_clamp_count(void) { return g_calibration_clamp_count; }
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void) { return g_cycle_schedule_drop_count; }
 uint32_t ecu_sched_test_get_late_event_count(void) { return g_late_event_count; }
 void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg) { ecu_sched_set_ivc(ivc_abdc_deg); }
 uint32_t ecu_sched_test_get_ivc_clamp_count(void) { return g_ivc_clamp_count; }
+uint32_t ecu_sched_test_get_pw_duty_clamp_count(void) { return g_pw_duty_clamp_count; }
 void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg) {
     ecu_sched_set_mspark(count, inter_dwell_ticks, atdc_limit_deg);
 }

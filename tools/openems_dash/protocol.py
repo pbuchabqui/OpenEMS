@@ -317,7 +317,7 @@ PAGE0_FIELDS = [
     ("stoich_afr_x100",           6, 1, "H",  0.01), # AFR
     ("map_ref_bar_x100",          8, 1, "H",  0.01), # bar
     ("trigger_tooth0_engine_deg", 10, 1, "H", 1.0),  # °
-    ("default_soi_lead_deg",     12, 1, "H",  1.0),  # °
+    ("default_eoi_lead_deg",     12, 1, "H",  1.0),  # ° (EOI targeting — magic v2 0x4544)
     ("config_magic",             14, 1, "H",  1.0),
     # bytes 16-55: sensores APP/ETB
     ("app1_raw_min",             16, 1, "H",  1.0),

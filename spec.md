@@ -359,7 +359,7 @@ bit 5: THROTTLE_FAULT_ETB_PLAUS  — Delta TPS1/TPS2 > etb_max_delta
 | kFuelDensityMgPerCc | 755 | mg/cc |
 | kAirDensityMgPerCcX1000 | 1184 | mg/cc×1000 |
 | kMapRefBarX100 | 100 | bar |
-| kDefaultSoiLeadDeg | 62 | ° BTDC |
+| kDefaultEoiLeadDeg | 60 | ° BTDC (EOI targeting — fim da injeção) |
 | kIvcAbdcDeg | 50 | ° ABDC |
 | kFiringOrder | {0,2,3,1} | — |
 | `cyl_tdc_deg(cyl)` | `cyl × 180` | ° |
@@ -647,8 +647,10 @@ typedef struct {
 void ECU_Hardware_Init();
 void ecu_sched_commit_calibration(uint32_t advance_deg,
     uint32_t dwell_ticks, uint32_t inj_pw_ticks,
-    uint32_t soi_lead_deg); // atômico (seção crítica)
-void ecu_sched_set_ivc(uint8_t ivc_abdc_deg); // clamp PW para IVC
+    uint32_t eoi_lead_deg); // atômico (seção crítica)
+    // EOI targeting: a injeção TERMINA em eoi_lead_deg (° BTDC);
+    // SOI = EOI − PW°, com duty clamp a 648° (90% do ciclo).
+void ecu_sched_set_ivc(uint8_t ivc_abdc_deg); // mantido p/ compat (clamp removido)
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
 ```
 
@@ -877,7 +879,7 @@ calc_total_advance(base, corr)      → advance_deg
 quick_crank_update(...)             → qc.fuel_mult, qc.spark_deg
 quick_crank_apply_pw_us(...)        → final_pw_us
     ↓
-ecu_sched_commit_calibration(advance, dwell_ticks, inj_pw_ticks, soi_lead)
+ecu_sched_commit_calibration(advance, dwell_ticks, inj_pw_ticks, eoi_lead)
 ```
 
 ### Limp Mode e Rev Cut
