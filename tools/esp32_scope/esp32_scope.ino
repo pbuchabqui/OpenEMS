@@ -203,10 +203,12 @@ struct DashEvent {
 static DashEvent g_dash_events[kDashMaxEdges];
 static int       g_dash_event_count = 0;
 static int64_t   g_dash_gap1_us = 0;
+static int64_t   g_dash_gap2_us = 0;  // timestamp do 2º gap (referência de metade do ciclo)
 static int64_t   g_dash_gap3_us = 0;
 static int       g_dash_gap_count = 0;
 static bool      g_dash_capturing = false;
 static int64_t   g_dash_last_ckp_fall_us = 0;  // reset in dashboard_start() — evita gap falso na 2ª invocação
+static int        g_dash_post_gap3_ckp_edges = 0;  // contador de dentes CKP após gap3 (captura de sparks tardios)
 
 static void dashboard_start();
 static void dashboard_feed(const EdgeEvent& ev);
@@ -674,9 +676,11 @@ static void dashboard_start() {
     g_dash_event_count = 0;
     g_dash_gap_count   = 0;
     g_dash_gap1_us     = 0;
+    g_dash_gap2_us     = 0;
     g_dash_gap3_us     = 0;
     g_dash_capturing        = false;
     g_dash_last_ckp_fall_us = 0;
+    g_dash_post_gap3_ckp_edges = 0;
     // Auto- Ligar canais INJ (necessários p/ dashboard)
     for (int ch = (int)kInjFirst; ch < (int)(kInjFirst + kInjCount); ++ch) {
         if (!kChan[ch].enabled) {
@@ -707,29 +711,40 @@ static void dashboard_feed(const EdgeEvent& ev) {
                     g_dash_event_count = 0;
                     Serial.printf("  [DASH] Gap1 OK — a capturar ciclo 720°...\n");
                 } else if (g_dash_gap_count == 2) {
+                    g_dash_gap2_us = ev.ts_us;
                     Serial.printf("  [DASH] Gap2 OK (1ª volta, +%.0f ms) — a continuar...\n",
                                   (ev.ts_us - g_dash_gap1_us) / 1000.0f);
                 } else if (g_dash_gap_count == 3) {
                     g_dash_gap3_us   = ev.ts_us;
                     g_dash_capturing = false;
-                    Serial.printf("  [DASH] Gap3 OK — ciclo 720° capturado (%.2f ms).\n",
+                    g_dash_post_gap3_ckp_edges = 0;  // iniciar buffer pós-gap3
+                    Serial.printf("  [DASH] Gap3 OK — ciclo 720° capturado (%.2f ms). A capturar sparks tardios...\n",
                                   (ev.ts_us - g_dash_gap1_us) / 1000.0f);
-                    render_dashboard();
-                    g_mode = Mode::LIVE;
+                    // NÃO chamar render_dashboard() aqui — esperar pelos eventos pós-gap3
                 }
             }
         }
-        // Sempre gravar CKP no buffer durante captura
-        if (g_dash_capturing && g_dash_event_count < kDashMaxEdges) {
+        // Sempre gravar CKP no buffer durante captura ou pós-gap3
+        const bool recording = g_dash_capturing || (g_dash_gap_count >= 3 && g_dash_post_gap3_ckp_edges < 8);
+        if (recording && g_dash_event_count < kDashMaxEdges) {
             DashEvent de;
             de.ts_us = ev.ts_us; de.ch = ev.ch; de.level = ev.level;
             g_dash_events[g_dash_event_count++] = de;
         }
+        // Após gap3, contar dentes CKP para decidir quando renderizar
+        if (!g_dash_capturing && g_dash_gap_count >= 3 && ev.level == 1u) {
+            g_dash_post_gap3_ckp_edges++;
+            if (g_dash_post_gap3_ckp_edges >= 8) {
+                render_dashboard();
+                g_mode = Mode::LIVE;
+            }
+        }
         return;
     }
 
-    // ── Gravar todos os canais durante captura ──────────────────────────
-    if (g_dash_capturing && g_dash_event_count < kDashMaxEdges) {
+    // ── Gravar todos os canais durante captura ou pós-gap3 ──────────────
+    const bool recording = g_dash_capturing || (g_dash_gap_count >= 3 && g_dash_post_gap3_ckp_edges < 8);
+    if (recording && g_dash_event_count < kDashMaxEdges) {
         DashEvent de;
         de.ts_us = ev.ts_us; de.ch = ev.ch; de.level = ev.level;
         g_dash_events[g_dash_event_count++] = de;
@@ -857,65 +872,106 @@ static void render_dashboard() {
     // ── Rodapé com verificação ──────────────────────────────────────────
     Serial.println("  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
 
-    // Extrair primeiros FALLs de IGN/INJ e contar CMP RISE
-    int64_t ign_fall_ts[4] = {0, 0, 0, 0};
-    int64_t inj_rise_ts[4] = {0, 0, 0, 0};  // INJ RISE = início da injeção
-    int64_t inj_fall_ts[4] = {0, 0, 0, 0};
+    // Extrair pares RISE→FALL de IGN/INJ.
+    // Noise filter: em vez de tomar o 1º par (que pode ser ruído em GPIO0/GPIO2),
+    // recolhemos TODOS os pares e escolhemos o de MAIOR PW > limiar mínimo (100µs).
+    // O spark real tem PW ≥ 1ms, ruído tem PW de µs.
+    // Phase alignment: CMP marca cil 1 (~30° na fase A). Se CMP RISE está na
+    // 2ª metade (gap2→gap3), gap1 começou 360° depois → subtrair 360°.
+    int64_t ign_best_rise[4] = {0, 0, 0, 0};
+    int64_t ign_best_fall[4] = {0, 0, 0, 0};
+    int64_t ign_best_pw[4] = {0, 0, 0, 0};
+    uint8_t ign_pair_count[4] = {0, 0, 0, 0};
+    int64_t ign_pending_rise[4] = {0, 0, 0, 0};
+    int64_t inj_best_rise[4] = {0, 0, 0, 0};
+    int64_t inj_best_fall[4] = {0, 0, 0, 0};
+    int64_t inj_best_pw[4] = {0, 0, 0, 0};
+    uint8_t inj_pair_count[4] = {0, 0, 0, 0};
+    int64_t inj_pending_rise[4] = {0, 0, 0, 0};
     int ign_order[4] = {0, 1, 2, 3};
     int cmp_rise_count = 0;
+    int64_t cmp_rise_ts = 0;  // timestamp do 1º CMP RISE p/ phase alignment
 
-    // Extrair eventos IGN/INJ pareados: 1º RISE (dwell/INJ start) e o
-    // 1º FALL APÓS esse RISE (spark/INJ end). Evita confundir FALLs
-    // do ciclo anterior (ex: IGN1 spark a 707° aparece como FALL a 5°
-    // no ciclo seguinte).
-    int64_t ign_rise_ts[4] = {0, 0, 0, 0};
-    bool ign_got_rise[4] = {false, false, false, false};
+    static constexpr int64_t kMinPwUs = 100;  // rejeitar pares com PW < 100µs (ruído)
+
     for (int i = 0; i < g_dash_event_count; ++i) {
         const DashEvent& e = g_dash_events[i];
         if (e.ch >= 0 && e.ch < 4) {
-            if (e.level == 1u && !ign_got_rise[e.ch]) {
-                ign_rise_ts[e.ch] = e.ts_us;
-                ign_got_rise[e.ch] = true;
-            }
-            if (e.level == 0u && ign_got_rise[e.ch] && ign_fall_ts[e.ch] == 0) {
-                ign_fall_ts[e.ch] = e.ts_us;  // 1º FALL após o 1º RISE
+            // Canal IGN (0-3)
+            if (e.level == 1u) {
+                ign_pending_rise[e.ch] = e.ts_us;
+            } else if (e.level == 0u && ign_pending_rise[e.ch] > 0) {
+                const int64_t pw = e.ts_us - ign_pending_rise[e.ch];
+                if (pw > kMinPwUs && pw > ign_best_pw[e.ch]) {
+                    ign_best_rise[e.ch] = ign_pending_rise[e.ch];
+                    ign_best_fall[e.ch] = e.ts_us;
+                    ign_best_pw[e.ch] = pw;
+                }
+                ign_pair_count[e.ch]++;
+                ign_pending_rise[e.ch] = 0;
             }
         }
         if (e.ch >= 4 && e.ch < 8) {
-            if (e.level == 1u && inj_rise_ts[e.ch - 4] == 0) { inj_rise_ts[e.ch - 4] = e.ts_us; }
-            if (e.level == 0u && inj_rise_ts[e.ch - 4] > 0 && inj_fall_ts[e.ch - 4] == 0) {
-                inj_fall_ts[e.ch - 4] = e.ts_us;
+            // Canal INJ (4-7 → INJ1-4)
+            const uint8_t ich = e.ch - 4u;
+            if (e.level == 1u) {
+                inj_pending_rise[ich] = e.ts_us;
+            } else if (e.level == 0u && inj_pending_rise[ich] > 0) {
+                const int64_t pw = e.ts_us - inj_pending_rise[ich];
+                if (pw > kMinPwUs && pw > inj_best_pw[ich]) {
+                    inj_best_rise[ich] = inj_pending_rise[ich];
+                    inj_best_fall[ich] = e.ts_us;
+                    inj_best_pw[ich] = pw;
+                }
+                inj_pair_count[ich]++;
+                inj_pending_rise[ich] = 0;
             }
         }
-        if (e.ch == (uint8_t)kCmpChan && e.level == 1u) { cmp_rise_count++; }
+        if (e.ch == (uint8_t)kCmpChan && e.level == 1u) {
+            if (cmp_rise_count == 0) { cmp_rise_ts = e.ts_us; }
+            cmp_rise_count++;
+        }
     }
+
+    // ── Phase alignment: CMP marca cil 1. Se CMP na 2ª metade → offset -360° ──
+    float phase_offset_deg = 0.0f;
+    if (cmp_rise_count >= 1 && g_dash_gap2_us > 0 && cmp_rise_ts > g_dash_gap2_us) {
+        phase_offset_deg = -360.0f;
+    }
+
+    // Helper para aplicar offset e normalizar para [0, 720)
+    auto norm_deg = [&](float deg) -> float {
+        deg += phase_offset_deg;
+        while (deg < 0.0f) deg += 720.0f;
+        while (deg >= 720.0f) deg -= 720.0f;
+        return deg;
+    };
 
     // ── Tabela detalhada de ângulos ────────────────────────────────────
     Serial.println("  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
-    Serial.println("  ║ Canal  1º FALL(°)  1º RISE(°)  PW(°)  Advance(°)  INJ RISE(°)  INJ FALL(°)  INJ→IGN  ║");
-    Serial.println("  ║ ─────  ──────────  ──────────  ─────  ──────────  ───────────  ───────────  ───────  ║");
+    Serial.println("  ║ Canal  BestFALL(°) BestRISE(°)  PW(°)  Advance(°)  MsPk  INJ RISE(°)  INJ FALL(°)  INJ→IGN  ║");
+    Serial.println("  ║ ─────  ─────────── ───────────  ─────  ──────────  ────  ───────────  ───────────  ───────  ║");
     for (int ch = 0; ch < 4; ++ch) {
-        float ign_fall_deg = (ign_fall_ts[ch] > 0)
-            ? (ign_fall_ts[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
-        float ign_rise_deg = -1.0f;
-        float inj_rise_deg = (inj_rise_ts[ch] > 0)
-            ? (inj_rise_ts[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
-        float inj_fall_deg = (inj_fall_ts[ch] > 0)
-            ? (inj_fall_ts[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
+        float ign_fall_raw = (ign_best_fall[ch] > 0)
+            ? (ign_best_fall[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
+        float ign_rise_raw = (ign_best_rise[ch] > 0)
+            ? (ign_best_rise[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
+        float inj_rise_raw = (inj_best_rise[ch] > 0)
+            ? (inj_best_rise[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
+        float inj_fall_raw = (inj_best_fall[ch] > 0)
+            ? (inj_best_fall[ch] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f : -1.0f;
 
-        // Procurar 1º RISE do IGN (dwell start)
-        for (int i = 0; i < g_dash_event_count; ++i) {
-            if (g_dash_events[i].ch == (uint8_t)ch && g_dash_events[i].level == 1u) {
-                ign_rise_deg = (g_dash_events[i].ts_us - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f;
-                break;
-            }
-        }
+        // Aplicar phase alignment
+        float ign_fall_deg = norm_deg(ign_fall_raw);
+        float ign_rise_deg = norm_deg(ign_rise_raw);
+        float inj_rise_deg = norm_deg(inj_rise_raw);
+        float inj_fall_deg = norm_deg(inj_fall_raw);
 
         float inj_to_ign = (ign_fall_deg > 0 && inj_rise_deg > 0) ? ign_fall_deg - inj_rise_deg : 0.0f;
 
         // Calcular TDC e avanço para este canal
         // Mapeamento: CH0=IGN4(cyl3,pos2,TDC=360°), CH1=IGN3(cyl2,pos1,TDC=180°),
-        //             CH2=IGN2(cyl1,pos3,TDC=540°), CH3=IGN1(cyl0,pos0,TDC=0°)
+        //             CH2=IGN2(cyl1,pos3,TDC=540°), CH3=IGN1(cyl0,pos0,TDC=0°/720°)
         float tdc_deg = -1.0f;
         if (ch == 3)      { tdc_deg = 0.0f; }      // IGN1 → cyl 0, pos 0
         else if (ch == 1) { tdc_deg = 180.0f; }     // IGN3 → cyl 2, pos 1
@@ -925,11 +981,16 @@ static void render_dashboard() {
                    ? fmodf(tdc_deg + 720.0f - ign_fall_deg, 720.0f) : 0.0f;
         if (adv > 360.0f) { adv -= 360.0f; }  // advance em graus (0-180 típico)
 
-        Serial.printf("  ║ %-5s  %8.1f°  %8.1f°  %4.1f°  %8.1f°  %9.1f°  %9.1f°  %+6.1f°  ║\n",
+        // Indicador de multi-spark
+        const char* mspk_str = (ign_pair_count[ch] > 1) ? " ✗" : "  ";
+
+        Serial.printf("  ║ %-5s  %9.1f°  %9.1f°  %4.1f°  %8.1f°  %3s  %9.1f°  %9.1f°  %+6.1f°  ║\n",
                       kChan[ch].name,
                       ign_fall_deg, ign_rise_deg,
-                      (ign_fall_deg > 0 && ign_rise_deg > 0) ? ign_fall_deg - ign_rise_deg : 0.0f,
+                      (ign_best_fall[ch] > 0 && ign_best_rise[ch] > 0)
+                          ? (float)(ign_best_fall[ch] - ign_best_rise[ch]) / 1000.0f / T_tooth_ms * 6.0f : 0.0f,
                       adv,
+                      mspk_str,
                       inj_rise_deg, inj_fall_deg, inj_to_ign);
     }
     Serial.println("  ╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣");
@@ -937,49 +998,68 @@ static void render_dashboard() {
     // Ordenar IGN por timestamp (ordem temporal no ciclo 720°)
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3 - i; ++j)
-            if (ign_fall_ts[ign_order[j]] > ign_fall_ts[ign_order[j+1]]) {
+            if (ign_best_fall[ign_order[j]] > ign_best_fall[ign_order[j+1]]) {
                 int tmp = ign_order[j]; ign_order[j] = ign_order[j+1]; ign_order[j+1] = tmp;
             }
 
     // Ordem temporal esperada p/ firing order 1-3-4-2 com gap1 = TDC cyl1:
-    // IGN3@167°(CH1) → IGN4@347°(CH0) → IGN2@527°(CH2) → IGN1@707°(CH3)
-    // CH0=IGN4, CH1=IGN3, CH2=IGN2, CH3=IGN1
+    // IGN3@168°(CH1) → IGN4@348°(CH0) → IGN2@528°(CH2) → IGN1@708°(CH3)
     static const uint8_t kExpectedTemporalOrder[4] = {1, 0, 2, 3};  // IGN3, IGN4, IGN2, IGN1
     bool ign_order_ok = true;
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 4; ++i) {
+        const int ch = ign_order[i];
+        if (ign_best_fall[ch] <= 0) { ign_order_ok = false; break; }
         if (ign_order[i] != kExpectedTemporalOrder[i]) { ign_order_ok = false; }
+    }
 
     // INJ sync: cada INJ deve começar (RISE) antes do IGN (FALL) do mesmo canal
     bool inj_sync_ok = true;
     for (int i = 0; i < 4; ++i) {
-        if (ign_fall_ts[i] == 0 || inj_rise_ts[i] == 0) { inj_sync_ok = false; }
-        else if (inj_rise_ts[i] > ign_fall_ts[i]) { inj_sync_ok = false; }
+        if (ign_best_fall[i] == 0 || inj_best_rise[i] == 0) { inj_sync_ok = false; break; }
+        if (inj_best_rise[i] > ign_best_fall[i]) { inj_sync_ok = false; }
     }
 
-    // Inter-cilindro 180° ± 12° (tolerância maior p/ resolução 7.5°/col)
+    // Inter-cilindro 180° ± 12° (tolerância maior p/ resolução 6°/col)
     bool spacing_ok = true;
     for (int i = 1; i < 4; ++i) {
         int ch_a = ign_order[i-1], ch_b = ign_order[i];
-        if (ign_fall_ts[ch_a] > 0 && ign_fall_ts[ch_b] > 0) {
-            float deg_a = (ign_fall_ts[ch_a] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f;
-            float deg_b = (ign_fall_ts[ch_b] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f;
-            float inter = deg_b - deg_a;
+        if (ign_best_fall[ch_a] > 0 && ign_best_fall[ch_b] > 0) {
+            float deg_a = (ign_best_fall[ch_a] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f;
+            float deg_b = (ign_best_fall[ch_b] - g_dash_gap1_us) / 1000.0f / T_tooth_ms * 6.0f;
+            float inter = norm_deg(deg_b) - norm_deg(deg_a);
+            if (inter < 0.0f) inter += 720.0f;  // unwrap
             if (fabsf(inter - 180.0f) > 12.0f) { spacing_ok = false; }
-        }
+        } else { spacing_ok = false; }
     }
 
-    bool cmp_ok = (cmp_rise_count == 2);
+    // CMP: 1 RISE por ciclo 720° (cam sensor 2:1 reduction, 1 pulso/720°)
+    bool cmp_ok = (cmp_rise_count >= 1);
 
     // Mostrar ordem detectada
     Serial.print("  ║ Ordem IGN temporal: ");
     for (int i = 0; i < 4; ++i) { if (i) Serial.print("→"); Serial.print(kChan[ign_order[i]].name); }
     Serial.println();
 
-    Serial.printf("  ║ %s ordem  %s INJ sync  %s spacing 180°  %s CMP 2x (%d RISE)          ║\n",
+    Serial.printf("  ║ %s ordem  %s INJ sync  %s spacing 180°  %s CMP (%d RISE)          ║\n",
                   ign_order_ok ? "✓" : "✗",
                   inj_sync_ok ? "✓" : "✗",
                   spacing_ok ? "✓" : "✗",
                   cmp_ok ? "✓" : "✗", cmp_rise_count);
+    // Nota sobre multi-spark
+    bool any_mspk = false;
+    for (int i = 0; i < 4; ++i) if (ign_pair_count[i] > 1) { any_mspk = true; break; }
+    if (any_mspk) {
+        Serial.print("  ║ ℹ Multi-spark detetado em: ");
+        bool first = true;
+        for (int i = 0; i < 4; ++i) {
+            if (ign_pair_count[i] > 1) {
+                if (!first) Serial.print(", ");
+                Serial.printf("%s(%d sparks)", kChan[i].name, ign_pair_count[i]);
+                first = false;
+            }
+        }
+        Serial.println();
+    }
     Serial.println("  ╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝");
     Serial.println();
 }
@@ -1057,7 +1137,7 @@ static void print_help() {
     Serial.println();
     Serial.println("  Timing (t): captura 720° (3 gaps CKP, gap1→gap3).");
     Serial.println("    Verifica: 1) IGN/INJ dispara 1x/720°; 2) ordem 1-3-4-2;");
-    Serial.println("    3) inter-cilindro 180°±3°; 4) CMP 2x/720° (janela A+B).");
+    Serial.println("    3) inter-cilindro 180°±3°; 4) CMP 1×/720° (cam sensor phase anchor).");
     Serial.println("    CH8=GPIO10←PA0 (CKP); CH9=GPIO11←GPIO4 (CMP loopback).");
     Serial.println("    INJ1-4 desligados por défice — 'i' para ligar/desligar.");
     Serial.println();
