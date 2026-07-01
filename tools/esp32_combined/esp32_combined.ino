@@ -141,8 +141,8 @@ static ChanDef kChan[] = {
     // IGN: GPIO assignments matching scope.ino corrected pin mapping
     { GPIO_NUM_32,  "IGN1", "PE9",  true  },   // CH0 — IGN1 (cyl 1)
     { GPIO_NUM_33,  "IGN2", "PE11", true  },   // CH1 — IGN2 (cyl 2)
-    { GPIO_NUM_25,  "IGN3", "PE13", true  },   // CH2 — IGN3 (cyl 3)
-    { GPIO_NUM_26,  "IGN4", "PE14", true  },   // CH3 — IGN4 (cyl 4)
+    { GPIO_NUM_25,  "IGN3", "PE13", false },   // CH2 — disabled (GPIO25 = MAP PWM)
+    { GPIO_NUM_26,  "IGN4", "PE14", false },   // CH3 — disabled (GPIO26 = TPS PWM)
     // INJ: GPIO assignments matching scope.ino corrected pin mapping
     { GPIO_NUM_27,  "INJ1", "PC6",  true  },   // CH4 — INJ1 (cyl 1)
     { GPIO_NUM_14,  "INJ2", "PC7",  true  },   // CH5 — INJ2 (cyl 2)
@@ -285,14 +285,14 @@ static void IRAM_ATTR edge_isr(void* arg) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── SECÇÃO 4 — Sensores analógicos (DAC + LEDC PWM)
+// ── SECÇÃO 4 — Sensores analógicos (PWM + RC filter)
 // ═══════════════════════════════════════════════════════════════════════════
 
-#include "driver/dac.h"
 #include "driver/ledc.h"
 
-// DAC: MAP (GPIO25), TPS (GPIO26) — 8-bit true analog
-// LEDC PWM 12-bit @ 19 kHz + filtro RC 10kΩ/100nF: CLT, IAT, APP, OIL, FUEL, ETB
+// Todos os sensores usam LEDC PWM 12-bit @ 19kHz + RC 10kΩ/100nF.
+// MAP/TPS migraram de DAC para PWM. GPIO25 danificado → MAP em GPIO21.
+// Cablagem: GPIO21→PA3(MAP), GPIO26→PA4(TPS).
 
 struct SimState {
     uint32_t rpm;
@@ -308,56 +308,60 @@ struct SimState {
 
 static SimState g_sim;
 
-static void dac_init() {
-    dac_output_enable(DAC_CHANNEL_1);  // GPIO25 → MAP
-    dac_output_enable(DAC_CHANNEL_2);  // GPIO26 → TPS
-    dac_output_voltage(DAC_CHANNEL_1, 0);
-    dac_output_voltage(DAC_CHANNEL_2, 0);
-}
-
-static void dac_write_map(uint8_t v)  { dac_output_voltage(DAC_CHANNEL_1, v); }
-static void dac_write_tps(uint8_t v)  { dac_output_voltage(DAC_CHANNEL_2, v); }
-
-// MAP: dac_val = kPa * 255 / 300
-static uint8_t map_to_dac(uint16_t kpa) {
+// MAP: 0-300 kPa → 12-bit PWM (0-4095). 35kPa ≈ 478/4095 ≈ 0.38V @ 3.3V
+static uint32_t map_to_pwm(uint16_t kpa) {
     if (kpa > 300) kpa = 300;
-    return (uint8_t)((uint32_t)kpa * 255u / 300u);
+    return (uint32_t)kpa * 4095u / 300u;
 }
-// TPS: dac_val = 16 + pct * 239 / 100  (range ~0.2V..3.3V)
-static uint8_t tps_to_dac(uint8_t pct) {
+// TPS: 0-100% → 12-bit PWM with ~0.2V minimum (248/4095 ≈ 0.20V @ 3.3V)
+static uint32_t tps_to_pwm(uint8_t pct) {
     if (pct > 100) pct = 100;
-    return (uint8_t)(16u + (uint32_t)pct * 239u / 100u);
+    return 248u + (uint32_t)pct * 3847u / 100u;
 }
 
-// LEDC PWM: 8 channels, 12-bit, 19 kHz, timer 0
+// LEDC PWM: 12-bit, 19 kHz. Timer 0 (ch0-6): CLT,IAT,APP,OIL,FUEL,ETB.
+//             Timer 1 (ch0-1): MAP(GPIO25), TPS(GPIO26) — ex-DAC avariado.
 static constexpr int      kPwmBits = 12;
 static constexpr uint32_t kPwmFreq = 19000;
 
-struct PwmChan { gpio_num_t gpio; ledc_channel_t ch; const char* name; };
-static const PwmChan kPwm[] = {
-    { GPIO_NUM_13, LEDC_CHANNEL_0, "CLT" },
-    { GPIO_NUM_12, LEDC_CHANNEL_1, "IAT" },
-    { GPIO_NUM_14, LEDC_CHANNEL_2, "APP" },
-    { GPIO_NUM_17, LEDC_CHANNEL_3, "OIL" },
-    { GPIO_NUM_18, LEDC_CHANNEL_4, "FUEL" },
-    { GPIO_NUM_16, LEDC_CHANNEL_5, "ETB1" },
-    { GPIO_NUM_19, LEDC_CHANNEL_6, "ETB2" },
+struct PwmChan { gpio_num_t gpio; ledc_channel_t ch; ledc_timer_t timer; const char* name; };
+static PwmChan kPwm[] = {
+    { GPIO_NUM_13, LEDC_CHANNEL_0, LEDC_TIMER_0, "CLT" },
+    { GPIO_NUM_12, LEDC_CHANNEL_1, LEDC_TIMER_0, "IAT" },
+    { GPIO_NUM_14, LEDC_CHANNEL_2, LEDC_TIMER_0, "APP" },
+    { GPIO_NUM_17, LEDC_CHANNEL_3, LEDC_TIMER_0, "OIL" },
+    { GPIO_NUM_18, LEDC_CHANNEL_4, LEDC_TIMER_0, "FUEL" },
+    { GPIO_NUM_16, LEDC_CHANNEL_5, LEDC_TIMER_0, "ETB1" },
+    { GPIO_NUM_19, LEDC_CHANNEL_6, LEDC_TIMER_0, "ETB2" },
+    { GPIO_NUM_21, LEDC_CHANNEL_0, LEDC_TIMER_1, "MAP" },   // was GPIO25 (damaged)
+    { GPIO_NUM_26, LEDC_CHANNEL_1, LEDC_TIMER_1, "TPS" },
 };
 static constexpr int kNPwm = (int)(sizeof(kPwm) / sizeof(kPwm[0]));
+static constexpr int kMapPwmIdx = 7;
+static constexpr int kTpsPwmIdx = 8;
 
 static void pwm_init() {
-    ledc_timer_config_t tcfg = {};
-    tcfg.speed_mode = LEDC_LOW_SPEED_MODE;
-    tcfg.timer_num  = LEDC_TIMER_0;
-    tcfg.duty_resolution = (ledc_timer_bit_t)kPwmBits;
-    tcfg.freq_hz    = kPwmFreq;
-    tcfg.clk_cfg    = LEDC_AUTO_CLK;
-    ledc_timer_config(&tcfg);
+    // Timer 0: CLT, IAT, APP, OIL, FUEL, ETB
+    ledc_timer_config_t tcfg0 = {};
+    tcfg0.speed_mode = LEDC_LOW_SPEED_MODE;
+    tcfg0.timer_num  = LEDC_TIMER_0;
+    tcfg0.duty_resolution = (ledc_timer_bit_t)kPwmBits;
+    tcfg0.freq_hz    = kPwmFreq;
+    tcfg0.clk_cfg    = LEDC_AUTO_CLK;
+    ledc_timer_config(&tcfg0);
+    // Timer 1: MAP (GPIO25), TPS (GPIO26)
+    ledc_timer_config_t tcfg1 = {};
+    tcfg1.speed_mode = LEDC_LOW_SPEED_MODE;
+    tcfg1.timer_num  = LEDC_TIMER_1;
+    tcfg1.duty_resolution = (ledc_timer_bit_t)kPwmBits;
+    tcfg1.freq_hz    = kPwmFreq;
+    tcfg1.clk_cfg    = LEDC_AUTO_CLK;
+    ledc_timer_config(&tcfg1);
     for (int i = 0; i < kNPwm; ++i) {
         ledc_channel_config_t ccfg = {};
         ccfg.speed_mode = LEDC_LOW_SPEED_MODE;
         ccfg.channel    = kPwm[i].ch;
-        ccfg.timer_sel  = LEDC_TIMER_0;
+        ccfg.timer_sel  = kPwm[i].timer;
         ccfg.intr_type  = LEDC_INTR_DISABLE;
         ccfg.gpio_num   = (int)kPwm[i].gpio;
         ccfg.duty       = 0;
@@ -382,8 +386,8 @@ static uint32_t temp_to_pwm(int16_t degc) {
 
 static void update_all_sensors() {
     SimState& s = g_sim;
-    dac_write_map(map_to_dac(s.map_kpa));
-    dac_write_tps(tps_to_dac(s.tps_pct));
+    pwm_write(kMapPwmIdx, map_to_pwm(s.map_kpa));
+    pwm_write(kTpsPwmIdx, tps_to_pwm(s.tps_pct));
     pwm_write(0, temp_to_pwm(s.clt_degc));   // CLT
     pwm_write(1, temp_to_pwm(s.iat_degc));   // IAT
     pwm_write(2, (uint32_t)s.app_pct * 4095u / 100u);  // APP
@@ -827,8 +831,7 @@ void setup() {
     // ── CKP/CMP via RMT (hardware, jitter ~zero) ──────────────────────────
     rmt_ckp_init();
 
-    // ── Sensores analógicos (DAC + LEDC PWM) ──────────────────────────────
-    dac_init();
+    // ── Sensores analógicos (PWM + RC filter) ──────────────────────────
     pwm_init();
     g_sim = {};  // zero-init
     g_sim.rpm = kRpmInit;

@@ -159,6 +159,8 @@ static uint32_t g_last_rpm_x10        = 0u;   // RPM do último dente — p/ pla
 static bool     g_bench_clt_iat      = false;
 static int16_t  g_bench_clt_x10      = 900;   // 90,0 °C — motor quente (corr CLT ≈ 1.0)
 static int16_t  g_bench_iat_x10      = 250;   // 25,0 °C — ar ambiente (corr IAT ≈ 1.0)
+static uint16_t g_bench_map_bar_x1000 = 350u; // 35,0 kPa — idle vacuum
+static uint16_t g_bench_tps_pct_x10   = 30u;  // 3,0% — idle TPS
 static bool     g_tps_pct_cache_valid = false;
 static uint16_t g_tps_pct_cache_raw = 0u;
 static uint16_t g_tps_pct_cache_min = 0u;
@@ -533,6 +535,17 @@ inline void sample_fast_channels() noexcept {
     }
     // O2 ADC fault removed — O2 now CAN-only; knock_raw uses that channel.
     
+    // Bench mode: force MAP/TPS (same as CLT/IAT override above)
+    if (g_bench_clt_iat) {
+        g_data_staging.map_bar_x1000 = g_bench_map_bar_x1000;
+        g_data_staging.tps_pct_x10   = g_bench_tps_pct_x10;
+        // Clear MAP/TPS faults so limp mode doesn't activate
+        g_fault[static_cast<uint8_t>(SensorId::MAP)].active = false;
+        g_fault[static_cast<uint8_t>(SensorId::MAP)].consecutive_bad = 0u;
+        g_fault[static_cast<uint8_t>(SensorId::TPS)].active = false;
+        g_fault[static_cast<uint8_t>(SensorId::TPS)].consecutive_bad = 0u;
+    }
+
     // Perform plausibility check between MAP and TPS
     if (!DiagnosticManager::check_sensor_plausibility(g_data_staging.map_bar_x1000,
                                                       g_data_staging.tps_pct_x10,
@@ -847,6 +860,9 @@ void sensors_set_bench_clt_iat(bool enable,
     g_bench_clt_iat = enable;
     g_bench_clt_x10 = clt_degc_x10;
     g_bench_iat_x10 = iat_degc_x10;
+    // MAP/TPS bench defaults: 35kPa idle vacuum, 3% TPS
+    g_bench_map_bar_x1000 = 350u;
+    g_bench_tps_pct_x10   = 30u;
 }
 
 void sensors_set_range(SensorId id, SensorRange range) noexcept {
