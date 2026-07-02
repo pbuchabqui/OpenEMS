@@ -704,4 +704,33 @@ void fuel_decel_cut_reset() noexcept {
     g_decel_cut = false;
 }
 
+uint16_t calc_eoi_lead_deg(uint32_t rpm_x10) noexcept
+{
+    const uint16_t main_deg = cfg::g_eng_cfg.default_eoi_lead_deg;
+    const uint16_t lo = eoi_blend_rpm_lo;
+    const uint16_t hi = eoi_blend_rpm_hi;
+
+    if (hi <= lo) {  // desligado (inclui 0/0 — page 0 antiga zerada)
+        return (main_deg > 719u) ? 719u : main_deg;
+    }
+
+    const uint32_t rpm = rpm_x10 / 10u;
+    uint16_t idle = eoi_idle_deg;
+    if (idle > 719u) { idle = 719u; }
+
+    if (rpm <= lo) { return idle; }
+    if (rpm >= hi) { return (main_deg > 719u) ? 719u : main_deg; }
+
+    // Interpolação linear em int32: |main−idle| ≤ 719 e (rpm−lo) < 65535
+    // → |produto| < 47.2M — folga ampla em int32. Divisor > 0 garantido
+    // pelo gate hi > lo acima.
+    const int32_t span   = static_cast<int32_t>(main_deg) - static_cast<int32_t>(idle);
+    const int32_t num    = span * static_cast<int32_t>(rpm - lo);
+    const int32_t eoi    = static_cast<int32_t>(idle) + num / static_cast<int32_t>(hi - lo);
+
+    if (eoi < 0)    { return 0u; }
+    if (eoi > 719)  { return 719u; }
+    return static_cast<uint16_t>(eoi);
+}
+
 }  // namespace ems::engine

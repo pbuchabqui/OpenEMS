@@ -489,9 +489,11 @@ static void sanitize_runtime_calibration(void)
     // Clamps em ticks TIM5 (62.5 MHz): 100000 ticks ≈ 1.6ms dwell máx
     if (g_dwell_ticks > 625000U) { g_dwell_ticks = 625000U; clamped = 1U; }
     if (g_inj_pw_ticks > 1250000U) { g_inj_pw_ticks = 1250000U; clamped = 1U; }
-    // EOI lead ∈ [0, 359]: 0–129 = fim na compressão (closed-valve, após IVC);
-    // 130–359 = fim com válvula aberta / admissão (estilo Speeduino).
-    if (g_eoi_lead_deg >= 360U) { g_eoi_lead_deg = 359U; clamped = 1U; }
+    // EOI lead ∈ [0, 719]: 0–129 = fim na compressão (closed-valve, soak longo);
+    // 130–359 = válvula aberta / admissão (estilo Speeduino, default 355);
+    // 360–719 = fim no escape/pré-IVO (closed-valve OEM, soak curto na válvula
+    // quente — candidato a eoi_idle). Presync mapeia via % 360.
+    if (g_eoi_lead_deg >= ECU_CYCLE_DEG) { g_eoi_lead_deg = ECU_CYCLE_DEG - 1U; clamped = 1U; }
     if (g_presync_inj_mode > ECU_PRESYNC_INJ_SEMI_SEQUENTIAL) { g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; clamped = 1U; }
     if (g_presync_ign_mode > ECU_PRESYNC_IGN_WASTED_SPARK) { g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK; clamped = 1U; }
     if (clamped != 0U) { ++g_calibration_clamp_count; }

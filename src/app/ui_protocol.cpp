@@ -335,6 +335,9 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 158, &ems::engine::ewg_kd_x10,       2u);
         std::memcpy(g_page0 + 160, &ems::engine::ewg_pos_min_raw,  2u);
         std::memcpy(g_page0 + 162, &ems::engine::ewg_pos_max_raw,  2u);
+        std::memcpy(g_page0 + 164, &ems::engine::eoi_idle_deg,      2u);
+        std::memcpy(g_page0 + 166, &ems::engine::eoi_blend_rpm_lo,  2u);
+        std::memcpy(g_page0 + 168, &ems::engine::eoi_blend_rpm_hi,  2u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -457,6 +460,11 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::ewg_kd_x10,       g_page0 + 158, 2u);
         std::memcpy(&ems::engine::ewg_pos_min_raw,  g_page0 + 160, 2u);
         std::memcpy(&ems::engine::ewg_pos_max_raw,  g_page0 + 162, 2u);
+        std::memcpy(&ems::engine::eoi_idle_deg,      g_page0 + 164, 2u);
+        std::memcpy(&ems::engine::eoi_blend_rpm_lo,  g_page0 + 166, 2u);
+        std::memcpy(&ems::engine::eoi_blend_rpm_hi,  g_page0 + 168, 2u);
+        // eoi_idle_deg fora de [0,719] seria clampado pelo blend; normaliza aqui
+        if (ems::engine::eoi_idle_deg > 719u) { ems::engine::eoi_idle_deg = 719u; }
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));

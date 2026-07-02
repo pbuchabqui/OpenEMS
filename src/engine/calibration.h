@@ -175,6 +175,15 @@ extern uint16_t wbo2_can_id;
 
 // STFT closed-loop tuning (página 0, offsets 140-145)
 extern uint16_t stft_kp_x100;        // Kp × 100, default 3 (= 0.03)
+// ── EOI blend por RPM (fase de injeção) ─────────────────────────────────
+// EOI efetivo interpolado linearmente entre eoi_idle_deg (rpm ≤ lo) e
+// g_eng_cfg.default_eoi_lead_deg (rpm ≥ hi). hi ≤ lo (incl. 0/0) = DESLIGADO
+// → usa sempre default_eoi_lead_deg (comportamento pré-blend). RPM em
+// unidades planas (não ×10): u16 ×10 saturaria a 6553 RPM.
+extern uint16_t eoi_idle_deg;        // ° BTDC combustão, default 60 (closed-valve)
+extern uint16_t eoi_blend_rpm_lo;    // RPM início do blend, default 0 (off)
+extern uint16_t eoi_blend_rpm_hi;    // RPM fim do blend,    default 0 (off)
+
 extern uint16_t stft_ki_x1000;       // Ki × 1000, default 5 (= 0.005)
 extern uint16_t stft_clamp_pct_x10;  // clamp ±%, default 250 (= 25.0%)
 

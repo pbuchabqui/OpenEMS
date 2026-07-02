@@ -38,6 +38,13 @@ inline constexpr uint32_t kDefaultReqFuelUs =
 uint8_t get_ve(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 uint8_t get_ve_prepared(const Table2dLookup& lookup) noexcept;
 uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
+
+// EOI blend de 2 pontos por RPM: devolve o eoi_lead_deg efetivo, interpolado
+// linearmente entre eoi_idle_deg e g_eng_cfg.default_eoi_lead_deg na janela
+// [eoi_blend_rpm_lo, eoi_blend_rpm_hi]. hi ≤ lo = desligado → devolve o main.
+// Resultado sempre clampado a [0, 719]; o sanitize do scheduler clampa de novo
+// (defesa em profundidade). Integer math pura — sem float, sem divisão por 0.
+uint16_t calc_eoi_lead_deg(uint32_t rpm_x10) noexcept;
 uint16_t get_lambda_target_x1000_prepared(const Table2dLookup& lookup) noexcept;
 
 uint32_t calc_req_fuel_us(uint16_t displacement_cc,

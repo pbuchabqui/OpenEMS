@@ -360,6 +360,8 @@ bit 5: THROTTLE_FAULT_ETB_PLAUS  — Delta TPS1/TPS2 > etb_max_delta
 | kAirDensityMgPerCcX1000 | 1184 | mg/cc×1000 |
 | kMapRefBarX100 | 100 | bar |
 | kDefaultEoiLeadDeg | 355 | ° BTDC combustão (EOI open-valve, Speeduino-style) |
+| eoi_idle_deg | 60 | ° BTDC — EOI em idle (blend por RPM; 365 = pré-IVO) |
+| eoi_blend_rpm_lo / hi | 0 / 0 | RPM — janela do blend linear idle→main; hi ≤ lo = desligado |
 | kIvcAbdcDeg | 50 | ° ABDC |
 | kFiringOrder | {0,2,3,1} | — |
 | `cyl_tdc_deg(cyl)` | `cyl × 180` | ° |

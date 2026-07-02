@@ -227,6 +227,9 @@ O protocolo é **binário**, stateless e funciona em cima de UART ou USB-CDC com
 | 10–11 | u16 LE | `trigger_tooth0_engine_deg` | graus | **MEDIR** |
 | 12–13 | u16 LE | `default_eoi_lead_deg` | graus | 355 → `0x63 0x01` |
 | 14–15 | u16 LE | magic | — | **0x44 0x45** (v2/EOI — obrigatório) |
+| 164–165 | u16 LE | `eoi_idle_deg` | graus | 60 (blend: EOI em idle; 365 = pré-IVO) |
+| 166–167 | u16 LE | `eoi_blend_rpm_lo` | RPM | 0 (0/0 = blend desligado) |
+| 168–169 | u16 LE | `eoi_blend_rpm_hi` | RPM | 0 — EOI interpola linearmente lo→hi até `default_eoi_lead_deg` |
 
 > **ATENÇÃO — magic obrigatório:** `engine_config_load()` verifica os bytes
 > 14–15 (`0x44 0x45` em little-endian = 0x4544, versão v2/EOI). Se estiverem

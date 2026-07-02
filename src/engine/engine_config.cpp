@@ -68,7 +68,7 @@ bool engine_config_valid(const EngineConfigRam& c) noexcept {
     if (c.trigger_tooth0_engine_deg > 719u) {
         return false;
     }
-    if (c.default_eoi_lead_deg > 359u) {
+    if (c.default_eoi_lead_deg > 719u) {
         return false;
     }
     return true;

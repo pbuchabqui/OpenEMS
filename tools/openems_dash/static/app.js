@@ -401,6 +401,10 @@ const PAGE_0_SECTIONS = [
     fields: ["ewg_kp_x10","ewg_ki_x10","ewg_kd_x10","ewg_pos_min_raw","ewg_pos_max_raw"],
   },
   {
+    label: "EOI BLEND (FASE DE INJEÇÃO)",
+    fields: ["eoi_idle_deg","eoi_blend_rpm_lo","eoi_blend_rpm_hi"],
+  },
+  {
     label: "DRIVABILITY",
     fields: ["antijerk_tpsdot_threshold_x10","antijerk_retard_deg","antijerk_decay_cycles",
              "rev_limit_rpm_x10","rev_limit_soft_window_x10","rev_limit_spark_window_x10",
@@ -470,6 +474,9 @@ const FIELD_LABELS = {
   ewg_kd_x10:               "EWG Kd (×10)",
   ewg_pos_min_raw:           "EWG pos closed (raw)",
   ewg_pos_max_raw:           "EWG pos open (raw)",
+  eoi_idle_deg:              "EOI idle (° BTDC — 60=compressão, 365=pré-IVO)",
+  eoi_blend_rpm_lo:          "Blend RPM início (0/0 = desligado)",
+  eoi_blend_rpm_hi:          "Blend RPM fim (→ EOI target 355°)",
   // Dirigibilidade
   antijerk_tpsdot_threshold_x10: "Anti-jerk TPSdot threshold (%/s)",
   antijerk_retard_deg:            "Anti-jerk ignition retard (°)",

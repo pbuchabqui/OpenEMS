@@ -391,6 +391,9 @@ PAGE0_FIELDS = [
     ("ewg_kd_x10",             158, 1, "H", 1.0),
     ("ewg_pos_min_raw",        160, 1, "H", 1.0),
     ("ewg_pos_max_raw",        162, 1, "H", 1.0),
+    ("eoi_idle_deg",           164, 1, "H", 1.0),  # ° BTDC — EOI em idle (blend)
+    ("eoi_blend_rpm_lo",       166, 1, "H", 1.0),  # RPM início do blend (0/0=off)
+    ("eoi_blend_rpm_hi",       168, 1, "H", 1.0),  # RPM fim do blend
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
