@@ -61,6 +61,7 @@ class RealtimeData:
     lambda_x1000: int
     pw_ms: float
     advance_deg: int
+    dc_pct: float      # injector duty cycle % (720° cycle)
     ve: int
     stft_pct: int
     status_bits: int
@@ -96,6 +97,8 @@ def parse_realtime(buf: bytes) -> RealtimeData:
     (rpm, map_x100, tps, clt_p40, iat_p40, o2_d4, pw_x10,
      adv_p40, ve, stft, status) = struct.unpack_from("<HBBbbBBBBbxH", buf, 0)
     r = buf[14:66]  # reserved[52] começa no offset 14
+    # Injector duty cycle (contra ciclo 720°): DC% = PW_ms × RPM / 1200
+    dc_pct = round(pw_x10 * rpm / 1200.0, 1) if rpm > 0 else 0.0
     return RealtimeData(
         rpm=rpm,
         map_kpa=map_x100,           # bar×100 == kPa
@@ -105,6 +108,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         lambda_x1000=o2_d4 * 4,
         pw_ms=pw_x10 / 10.0,
         advance_deg=adv_p40 - 40,
+        dc_pct=dc_pct,
         ve=ve,
         stft_pct=stft,
         status_bits=status,
