@@ -219,8 +219,8 @@ uint16_t wbo2_can_id = 0x180u;
 
 uint16_t stft_kp_x100       = 3u;    // 0.03
 uint16_t eoi_idle_deg      = 60u;   // closed-valve (fim na compressão)
-uint16_t eoi_blend_rpm_lo  = 0u;    // 0/0 = blend desligado
-uint16_t eoi_blend_rpm_hi  = 0u;
+uint16_t eoi_blend_rpm_lo  = 2000u; // abaixo: closed-valve (60°)
+uint16_t eoi_blend_rpm_hi  = 4000u; // acima: open-valve (355°)
 
 uint16_t stft_ki_x1000      = 5u;    // 0.005
 uint16_t stft_clamp_pct_x10 = 250u;  // 25.0%
