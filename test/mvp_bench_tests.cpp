@@ -2055,11 +2055,11 @@ static void test_ecu_sched_setters(void) {
     section("ecu_sched: reset / setters / getters");
     ecu_sched_test_reset();
 
-    // Defaults after reset: advance=10, dwell=140625, inj_pw=140625, eoi=60
+    // Defaults after reset: advance=10, dwell=140625, inj_pw=140625, eoi=355
     CHECK_EQ(ecu_sched_test_get_advance_deg(),  10u, "default advance=10°");
     CHECK_EQ(ecu_sched_test_get_dwell_ticks(), 140625u, "default dwell=140625");
     CHECK_EQ(ecu_sched_test_get_inj_pw_ticks(), 140625u, "default inj_pw=140625");
-    CHECK_EQ(ecu_sched_test_get_eoi_lead_deg(), 60u, "default eoi=60°");
+    CHECK_EQ(ecu_sched_test_get_eoi_lead_deg(), 355u, "default eoi=355° (open-valve)");
 
     // Individual setters
     ecu_sched_set_advance_deg(20u);

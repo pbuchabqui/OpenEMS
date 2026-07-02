@@ -213,10 +213,10 @@ volatile uint8_t g_inj_pw_override = 0U;  // 1=lock g_inj_pw_ticks, ignore main 
 // e o início é calculado para trás: SOI = EOI − PW°. Com PW grande (alta RPM),
 // o SOI recua automaticamente para mais cedo no ciclo — resolve a janela
 // insuficiente do antigo SOI fixo (a 8500 RPM, 50° = 0.98 ms << PW típico).
-// Default 60° BTDC: fim da injeção no início da compressão (válvula fechada,
-// combustível fica no pórtico até à próxima admissão) — preserva a filosofia
-// closed-valve do antigo SOI 62° BTDC.
-static volatile uint32_t g_eoi_lead_deg = 60U;
+// Default 355° BTDC: open-valve injection (Speeduino-style). Injeção termina
+// 5° antes do TDC com a válvula de admissão ainda aberta — spray directo na
+// câmara, máxima atomização. SOI recua automaticamente com EOI targeting.
+static volatile uint32_t g_eoi_lead_deg = 355U;
 static volatile uint8_t g_presync_enable = 1U;
 static volatile uint8_t g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
 static volatile uint8_t g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
@@ -962,7 +962,7 @@ void ecu_sched_test_reset(void)
     g_late_event_count = 0U; g_cycle_schedule_drop_count = 0U; g_calibration_clamp_count = 0U;
     g_presync_enable = 1U; g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
     g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
-    g_advance_deg = 10U; g_dwell_ticks = 140625U; g_inj_pw_ticks = 140625U; g_eoi_lead_deg = 60U;
+    g_advance_deg = 10U; g_dwell_ticks = 140625U; g_inj_pw_ticks = 140625U; g_eoi_lead_deg = 355U;
     g_angle_table_count = 0U; g_angle_tooth_mask_lo = 0U; g_angle_tooth_mask_hi = 0U;
     g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg; g_ivc_clamp_count = 0U; g_pw_duty_clamp_count = 0U;
     g_inj_inhibit_mask = 0U;
