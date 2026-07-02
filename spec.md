@@ -359,7 +359,7 @@ bit 5: THROTTLE_FAULT_ETB_PLAUS  — Delta TPS1/TPS2 > etb_max_delta
 | kFuelDensityMgPerCc | 755 | mg/cc |
 | kAirDensityMgPerCcX1000 | 1184 | mg/cc×1000 |
 | kMapRefBarX100 | 100 | bar |
-| kDefaultEoiLeadDeg | 60 | ° BTDC (EOI targeting — fim da injeção) |
+| kDefaultEoiLeadDeg | 355 | ° BTDC combustão (EOI open-valve, Speeduino-style) |
 | kIvcAbdcDeg | 50 | ° ABDC |
 | kFiringOrder | {0,2,3,1} | — |
 | `cyl_tdc_deg(cyl)` | `cyl × 180` | ° |

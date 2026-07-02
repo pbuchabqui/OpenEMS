@@ -97,8 +97,9 @@ def parse_realtime(buf: bytes) -> RealtimeData:
     (rpm, map_x100, tps, clt_p40, iat_p40, o2_d4, pw_x10,
      adv_p40, ve, stft, status) = struct.unpack_from("<HBBbbBBBBbxH", buf, 0)
     r = buf[14:66]  # reserved[52] começa no offset 14
-    # Injector duty cycle (contra ciclo 720°): DC% = PW_ms × RPM / 1200
-    dc_pct = round(pw_x10 * rpm / 1200.0, 1) if rpm > 0 else 0.0
+    # Injector duty cycle (contra ciclo 720°): DC% = PW_ms × RPM / 1200.
+    # pw_x10 está em décimos de ms → PW_ms = pw_x10/10 → divisor 12000.
+    dc_pct = round(pw_x10 * rpm / 12000.0, 1) if rpm > 0 else 0.0
     return RealtimeData(
         rpm=rpm,
         map_kpa=map_x100,           # bar×100 == kPa

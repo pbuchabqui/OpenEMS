@@ -2293,6 +2293,30 @@ static void test_ecu_sched_eoi_targeting(void) {
              "presync: INJ1 OFF presente");
     CHECK_EQ(t_off, 50u, "presync: INJ_OFF em tooth 50 (EOI=300° na janela 360°)");
     CHECK_EQ(p_off, ECU_PHASE_ANY, "presync: INJ_OFF em PHASE_ANY");
+
+    section("ecu_sched EOI: default 355° — pulso presync cruza a fronteira de rev");
+    // Com o default open-valve (eoi_lead=355), o EOI presync cai a
+    // eoi=(360−355%360)%360=5° → ang=5 → 5×256/6=213 → tooth 0, frac 213.
+    // PW/2=62500 ticks → 37° → SOI=(5+360−37)%360=328° → 328×256/6=13994
+    // → tooth 54, frac 170. O pulso ON(tooth 54, rev N) → OFF(tooth 0, rev N+1)
+    // CRUZA a fronteira de revolução onde a tabela é reconstruída — este check
+    // fixa que ambos os eventos existem na tabela (o OFF da tabela nova fecha
+    // o injetor aberto na rev anterior; toggle de bancos já validado acima).
+    ecu_sched_test_reset();  // usa o default eoi_lead=355 — sem set explícito
+    ecu_sched_test_set_tim1_cnt(0u);
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_feed_n_then_gap(55u);   // HALF_SYNC
+    for (uint32_t i = 0u; i < 58u; ++i) { ckp_fire(kNormalPeriod); }  // rev boundary
+    CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_OFF, &t_off, &f_off, &p_off), 1u,
+             "presync 355°: INJ1 OFF presente");
+    CHECK_EQ(t_off, 0u,  "presync 355°: INJ_OFF em tooth 0 (EOI=5°)");
+    CHECK_EQ(f_off, 213u, "presync 355°: INJ_OFF frac=213 (5°×256/6)");
+    CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_ON, &t_on, &f_on, &p_on), 1u,
+             "presync 355°: INJ1 ON presente");
+    CHECK_EQ(t_on, 54u, "presync 355°: SOI em tooth 54 (328°) — antes da fronteira");
 }
 
 static void test_ecu_sched_presync(void) {

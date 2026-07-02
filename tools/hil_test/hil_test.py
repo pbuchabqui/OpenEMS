@@ -151,7 +151,7 @@ class EngineConfig:
     stoich_afr_x100:           int = 1470
     map_ref_bar_x100:          int = 100
     trigger_tooth0_engine_deg: int = 0
-    default_eoi_lead_deg:      int = 60
+    default_eoi_lead_deg:      int = 355
 
     @property
     def req_fuel_us(self) -> int:

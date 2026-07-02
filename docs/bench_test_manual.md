@@ -225,7 +225,7 @@ O protocolo é **binário**, stateless e funciona em cima de UART ou USB-CDC com
 | 6–7 | u16 LE | `stoich_afr_x100` | AFR×100 | 1300 → `0x14 0x05` |
 | 8–9 | u16 LE | `map_ref_bar_x100` | bar×100 | 100 → `0x64 0x00` |
 | 10–11 | u16 LE | `trigger_tooth0_engine_deg` | graus | **MEDIR** |
-| 12–13 | u16 LE | `default_eoi_lead_deg` | graus | 60 → `0x3C 0x00` |
+| 12–13 | u16 LE | `default_eoi_lead_deg` | graus | 355 → `0x63 0x01` |
 | 14–15 | u16 LE | magic | — | **0x44 0x45** (v2/EOI — obrigatório) |
 
 > **ATENÇÃO — magic obrigatório:** `engine_config_load()` verifica os bytes
@@ -296,7 +296,7 @@ INJECTOR_FLOW_CC_MIN      = 450      # caudal do injetor em cc/min
 STOICH_AFR_X100           = 1470     # AFR estequiométrico × 100 (1470 = gasolina)
 MAP_REF_BAR_X100          = 100      # pressão de referência (100 = 1.00 bar = atmosférica)
 TRIGGER_TOOTH0_ENGINE_DEG = 0        # MEDIR NO MOTOR — ver secção 6.3
-DEFAULT_EOI_LEAD_DEG      = 60       # alvo de FIM de injecção (EOI, ° BTDC)
+DEFAULT_EOI_LEAD_DEG      = 355      # fim de injecção (EOI, ° BTDC combustão — open-valve)
 MAGIC                     = 0x4544   # v2 — semântica EOI. NÃO ALTERAR
 # ─────────────────────────────────────────────────────────────────────────────
 

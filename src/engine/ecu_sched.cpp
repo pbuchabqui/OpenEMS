@@ -213,9 +213,11 @@ volatile uint8_t g_inj_pw_override = 0U;  // 1=lock g_inj_pw_ticks, ignore main 
 // e o início é calculado para trás: SOI = EOI − PW°. Com PW grande (alta RPM),
 // o SOI recua automaticamente para mais cedo no ciclo — resolve a janela
 // insuficiente do antigo SOI fixo (a 8500 RPM, 50° = 0.98 ms << PW típico).
-// Default 355° BTDC: open-valve injection (Speeduino-style). Injeção termina
-// 5° antes do TDC com a válvula de admissão ainda aberta — spray directo na
-// câmara, máxima atomização. SOI recua automaticamente com EOI targeting.
+// Default 355° BTDC de COMBUSTÃO (Speeduino-style, mesmo referencial do
+// Speeduino): EOI cai 5° APÓS o TDC de cruzamento, no início da admissão,
+// com a válvula acabada de abrir — open-valve, combustível arrastado com o
+// fluxo de ar (spray no pórtico/válvula; port injection não atinge a câmara
+// directamente). SOI recua automaticamente com EOI targeting.
 static volatile uint32_t g_eoi_lead_deg = 355U;
 static volatile uint8_t g_presync_enable = 1U;
 static volatile uint8_t g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
