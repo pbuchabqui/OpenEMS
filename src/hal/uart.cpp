@@ -60,7 +60,9 @@ void uart0_init(uint32_t baud) noexcept {
 
     // Habilitar TX e periférico; RX desabilitado até uart0_enable_rx()
     // PA10 flutuante gera bytes fantasma que contaminam USB CDC TX
-    USART1_CR1 = USART_CR1_UE | USART_CR1_TE;
+    // FIFOEN: FIFOs de 8 entradas — TXE/RXNE viram TXFNF/RXFNE (mesmos bits),
+    // permitindo top-up de até 8 bytes por chamada não-bloqueante.
+    USART1_CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_FIFOEN;
 }
 
 void uart0_poll_rx(uint16_t max_bytes) noexcept {
@@ -133,6 +135,22 @@ void uart0_tx_poll(uint16_t max_bytes) noexcept {
     }
 }
 
+void uart0_tx_poll_nb(uint16_t max_bytes) noexcept {
+    // Variante não-bloqueante: escreve só enquanto o TX FIFO aceita
+    // (TXFNF, mesmo bit de TXE) — nunca espera. Com FIFO de 8 entradas,
+    // cada chamada enche até 8 bytes instantaneamente.
+    for (uint16_t i = 0u; i < max_bytes && g_tx_head != g_tx_tail; ++i) {
+        if (!(USART1_ISR & USART_ISR_TXE)) { return; }
+        USART1_TDR = static_cast<uint32_t>(g_tx_buf[g_tx_tail]);
+        g_tx_tail = static_cast<uint16_t>((g_tx_tail + 1u) & kTxBufMask);
+    }
+}
+
+uint16_t uart0_tx_free() noexcept {
+    return static_cast<uint16_t>((kTxBufSize - 1u) -
+                                 ((g_tx_head - g_tx_tail) & kTxBufMask));
+}
+
 } // namespace ems::hal
 
 #else  // EMS_HOST_TEST ─────────────────────────────────────────────────────
@@ -164,6 +182,8 @@ bool uart0_tx_push(uint8_t b) noexcept {
     return false;
 }
 void uart0_tx_poll(uint16_t) noexcept {}
+void uart0_tx_poll_nb(uint16_t) noexcept {}
+uint16_t uart0_tx_free() noexcept { return static_cast<uint16_t>(256u - g_tx_len); }
 // Test helpers (usados em test/hal/test_uart)
 void uart_test_reset() noexcept { g_tx_len = g_rx_len = g_rx_pos = 0u; }
 void uart_test_inject_rx(const uint8_t* data, uint16_t len) noexcept {

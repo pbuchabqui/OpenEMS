@@ -27,4 +27,9 @@ bool uart0_rx_pop(uint8_t& byte) noexcept;
 bool uart0_tx_push(uint8_t byte) noexcept;
 void uart0_tx_poll(uint16_t max_bytes = 32u) noexcept;
 
+// Drenagem não-bloqueante: escreve enquanto o TX FIFO aceita, nunca espera.
+void uart0_tx_poll_nb(uint16_t max_bytes = 16u) noexcept;
+// Espaço livre no ring TX de software (bytes).
+uint16_t uart0_tx_free() noexcept;
+
 }  // namespace ems::hal

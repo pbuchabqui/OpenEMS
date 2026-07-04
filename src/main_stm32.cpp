@@ -237,6 +237,21 @@ static void load_boost_map_from_nvm() noexcept {
                 sizeof(ems::engine::boost_target_bar_x1000));
 }
 
+static void load_table_axes_from_nvm() noexcept {
+    alignas(4) uint8_t page[64] = {};
+    if (!ems::hal::nvm_load_calibration(9u, page, sizeof(page)) ||
+        page_is_erased(page, sizeof(page))) {
+        return;  // flash apagada → eixos default de compilação
+    }
+    uint16_t rpm[ems::engine::kTableAxisSize] = {};
+    uint16_t load[ems::engine::kTableAxisSize] = {};
+    std::memcpy(rpm,  page +  0, 32u);
+    std::memcpy(load, page + 32, 32u);
+    // table_axes_set valida monotonicidade — conteúdo corrompido é rejeitado
+    // e os defaults de compilação permanecem.
+    (void)ems::engine::table_axes_set(rpm, load);
+}
+
 static void load_pedal_map_from_nvm() noexcept {
     alignas(4) uint8_t page[80] = {};
     if (!ems::hal::nvm_load_calibration(7u, page, sizeof(page)) ||
@@ -305,16 +320,9 @@ static inline const CachedFuelCorrections& fuel_corrections_for(
 }
 
 static inline void ui_service() noexcept {
-    // ── UART path (transporte primário: adaptador USB-UART em PA9/PA10) ──
-    ems::hal::uart0_poll_rx(64u);
-    {
-        uint8_t b = 0u;
-        while (ems::hal::uart0_rx_pop(b)) {
-            ems::app::ui_rx_byte(b);
-        }
-    }
-
     // ── USB CDC path (stub; no-op até driver real) ─────────────────────────
+    // O caminho UART (RX/TX/parse) vive em comms_pump() a 2 ms; aqui fica só
+    // o transporte USB, cuja latência de 20 ms é aceitável.
     ems::hal::usb_cdc_poll();
     if (ems::hal::usb_cdc_dtr()) {
         uint8_t rx_buf[64] = {};
@@ -323,21 +331,36 @@ static inline void ui_service() noexcept {
             ems::app::ui_rx_byte(rx_buf[i]);
         }
     }
+    ems::app::ui_process();
+}
 
-    // ── Processar protocolo ────────────────────────────────────────────────
+static inline void comms_pump() noexcept {
+    // Shuttle UART↔protocolo a 2 ms: a 115200 chegam ~23 B por período — o
+    // poll de 32 acompanha a linha sem estourar o ring RX de 128 B. Nada aqui
+    // bloqueia: a drenagem TX só escreve com espaço no FIFO (8 entradas).
+    ems::hal::uart0_poll_rx(32u);
+    {
+        uint8_t b = 0u;
+        while (ems::hal::uart0_rx_pop(b)) {
+            ems::app::ui_rx_byte(b);
+        }
+    }
     ems::app::ui_process();
 
-    // ── Drenar TX para ambos os transportes ───────────────────────────────
-    uint8_t tx_buf[96] = {};
+    // Drena ui_tx → UART + USB (espelhado), limitado pelo espaço no ring UART
+    // para nunca perder bytes de um frame a meio.
+    uint16_t budget = ems::hal::uart0_tx_free();
+    if (budget > 32u) { budget = 32u; }
+    uint8_t tx_buf[32] = {};
     uint16_t tx_n = 0u;
-    while (tx_n < 96u && ems::app::ui_tx_pop(tx_buf[tx_n])) { ++tx_n; }
+    while (tx_n < budget && ems::app::ui_tx_pop(tx_buf[tx_n])) { ++tx_n; }
     if (tx_n != 0u) {
         for (uint16_t i = 0u; i < tx_n; ++i) {
             ems::hal::uart0_tx_push(tx_buf[i]);
         }
         ems::hal::usb_cdc_send_bytes(tx_buf, tx_n);
     }
-    ems::hal::uart0_tx_poll(32u);  // máx 32 bytes/ciclo de 20 ms (~230 B budget)
+    ems::hal::uart0_tx_poll_nb(16u);
 }
 
 // =============================================================================
@@ -575,6 +598,7 @@ static void openems_init() noexcept {
 	load_dwell2d_calibration_from_nvm();
 	load_pedal_map_from_nvm();
 	load_boost_map_from_nvm();
+	load_table_axes_from_nvm();
 	if (!ems::hal::nvm_load_adaptive_maps()) {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
@@ -659,6 +683,7 @@ int main() {
     uint32_t g_t100ms_ = g_t2ms_;
     uint32_t g_t500ms_ = g_t2ms_;
     uint32_t g_t_etb_ms = g_t2ms_;
+    uint32_t g_t_comms_ms = g_t2ms_;
 
     // Estreitar IWDG de 10s (boot) para 100ms (runtime): o main loop kica a cada
     // ciclo; 100ms detecta travamento de runtime sem tolerar os inits longos do boot.
@@ -1176,6 +1201,12 @@ int main() {
             if (!engine_running_fast) {
                 adaptive_flush_pending = !ems::hal::nvm_flush_adaptive_maps();
             }
+        }
+
+        // ── Comms pump UART (2ms cadence, fora da medição de loop2) ──────
+        if (elapsed(now, g_t_comms_ms, 2u)) {
+            g_t_comms_ms = now;
+            comms_pump();
         }
 
         // ── ETB control (2ms cadence) ─────────────────────────────────────
