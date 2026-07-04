@@ -24,7 +24,9 @@
 namespace {
 
 constexpr uint16_t kRxSize = 256u;
-constexpr uint16_t kTxSize = 512u;
+// 1024: precisa caber [size(2)+code(1)+dados(até 512, páginas 0/4)+crc(4)] = 519 B
+// de uma só vez, mais folga para tráfego legacy concorrente.
+constexpr uint16_t kTxSize = 1024u;
 constexpr uint16_t kRxMask = kRxSize - 1u;
 constexpr uint16_t kTxMask = kTxSize - 1u;
 
@@ -53,8 +55,14 @@ enum class ParseState : uint8_t {
 // Frame de resposta:[size u16 BE][code][dados][CRC32 u32 BE sobre code+dados]
 // Coexiste com o protocolo legacy: comandos legacy são letras ASCII (≥0x20),
 // o byte alto do size de um frame <8 KB é 0x00-0x1F — detecção por 1º byte.
-constexpr uint16_t kEnvMaxPayload = 263u;  // 'w' + canId + page + off(2) + len(2) + 256 dados
-constexpr uint16_t kEnvMaxChunk   = 256u;  // = blockingFactor do .ini
+// 519 = 'w' + canId + page + off(2) + len(2) + 512 dados (páginas 0/4, as
+// maiores declaradas no .ini). kEnvMaxChunk tinha ficado em 256 (=
+// blockingFactor), mas o Comm Manager real do TunerStudio pode pedir a
+// página inteira numa só transação em vez de fatiar por blockingFactor —
+// confirmado empiricamente: 'r' page0/page4 com count=512 devolvia 0x84
+// (range) e travava a conexão em "Unsupported Controller Firmware".
+constexpr uint16_t kEnvMaxPayload = 519u;
+constexpr uint16_t kEnvMaxChunk   = 512u;  // = maior página declarada no .ini
 
 // Códigos de resposta (convenção TS/Speeduino: 0x00 OK, não-zero erro)
 constexpr uint8_t kTsRcOk       = 0x00u;
