@@ -580,6 +580,7 @@ static void openems_init() noexcept {
     // (usb_cdc_init() já foi chamado cedo em 1b, antes dos inits da ECU.)
     ems::hal::can0_init();
     ems::hal::uart0_init(115200u);
+    ems::hal::uart0_enable_rx();  // RX fica desligado por padrão (uart.cpp:61)
     ems::hal::tle8888_init();
     ems::engine::ewg_control_init();
     ems::hal::flex_fuel_init();
