@@ -173,8 +173,23 @@ Limitacoes de placa/pino:
 
 ## Comunicacao
 
-- UI proprietaria: protocolo em `src/app/ui_protocol.cpp`, servido pelo bridge `scripts/bridge.py` e pela interface em `scripts/ui/`.
-- MVP de bancada: UI proprietaria via UART 115200 8N1 em `USART1` (`PA9=TX`, `PA10=RX`).
+- Protocolo em `src/app/ui_protocol.cpp`, dual-mode com auto-detect por frame:
+  - **Legacy** (ASCII cru, sem envelope): comandos `Q/S/F/C/A/O/r/w/x/b/d/B/G/P/V/D`,
+    usados por `tools/openems_dash/protocol.py`, `tools/lib/ecu_link.py`, HIL e diag.
+  - **TunerStudio** (envelope `msEnvelope_1.0`): `[size u16 BE][cmd+dados][CRC32 BE]`;
+    detectado quando o primeiro byte em IDLE e < 0x20 (byte alto do size). Respostas
+    levam response code (0x00 OK, 0x82 CRC, 0x83 cmd, 0x84 range, 0x85 busy) + CRC32.
+    Projeto TunerStudio: `tools/ts/openems.ini` (assinatura `OpenEMS_v1.2`).
+    No envelope, `w` e chunk-write **RAM-only**; burn e explicito via `b`.
+- Burn de Flash via protocolo (`w` legacy sem RAM-only, `b` em ambos os modos) e
+  bloqueado quando `rpm_x10 > kFlashWriteSafeRpmX10` (errata ES0565: primeira
+  escrita/erase pode congelar fetch ~120 us). Legacy devolve NACK; envelope 0x85.
+- Pagina 11 (64 B): eixos das tabelas 16x16 (16xu16 RPM + 16xu16 load bar x100),
+  editaveis com validacao de monotonicidade estrita; NVM setor 10 (slot 9).
+- MVP de bancada: UART 115200 8N1 em `USART1` (`PA9=TX`, `PA10=RX`). O shuttle
+  UART<->protocolo roda no slot de 2 ms (`comms_pump()`), nao-bloqueante, com
+  TX FIFO (FIFOEN) — throughput efetivo ~4 kB/s, suficiente para realtime TS a
+  10-20 Hz. USB CDC espelha o TX e mantem RX no slot de 20 ms.
 - USB CDC: pos-MVP; o backend atual permanece stub/no-op e nao deve ser tratado como transporte validado.
 - CAN/FDCAN: diagnostico e integracao com sensores externos.
 

@@ -3400,6 +3400,279 @@ static void test_trigger_offset(void) {
     g_eng_cfg.trigger_tooth0_engine_deg = 0u;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// UI PROTOCOL / TUNERSTUDIO ENVELOPE
+// ═══════════════════════════════════════════════════════════════════════════
+
+#include <cstring>
+
+#include "app/ui_protocol.h"
+#include "hal/crc32.h"
+
+static void ui_feed(const uint8_t* data, uint16_t n) {
+    for (uint16_t i = 0u; i < n; ++i) { ems::app::ui_rx_byte(data[i]); }
+    ems::app::ui_process();
+}
+
+static uint16_t ui_drain(uint8_t* out, uint16_t max) {
+    uint16_t n = 0u;
+    uint8_t b = 0u;
+    while (n < max && ems::app::ui_tx_pop(b)) { out[n++] = b; }
+    return n;
+}
+
+// Monta frame envelope: [size u16 BE][payload][CRC32 BE]. Retorna bytes totais.
+static uint16_t env_frame(uint8_t* out, const uint8_t* payload, uint16_t n) {
+    out[0] = static_cast<uint8_t>(n >> 8u);
+    out[1] = static_cast<uint8_t>(n & 0xFFu);
+    memcpy(out + 2, payload, n);
+    const uint32_t crc = ems::hal::crc32_calc(payload, n);
+    out[2u + n] = static_cast<uint8_t>(crc >> 24u);
+    out[3u + n] = static_cast<uint8_t>(crc >> 16u);
+    out[4u + n] = static_cast<uint8_t>(crc >> 8u);
+    out[5u + n] = static_cast<uint8_t>(crc & 0xFFu);
+    return static_cast<uint16_t>(n + 6u);
+}
+
+struct EnvResp {
+    bool frame_ok;    // tamanho coerente
+    bool crc_ok;      // CRC32 da resposta confere
+    uint8_t code;
+    uint16_t len;     // bytes de dados (sem o code)
+    uint8_t data[300];
+};
+
+// Envia payload embrulhado e decodifica a resposta envelope.
+static EnvResp env_txn(const uint8_t* payload, uint16_t n) {
+    EnvResp r = {};
+    uint8_t frame[340] = {};
+    const uint16_t fl = env_frame(frame, payload, n);
+    ui_feed(frame, fl);
+
+    uint8_t buf[340] = {};
+    const uint16_t rn = ui_drain(buf, sizeof(buf));
+    if (rn < 7u) { return r; }
+    const uint16_t psize = static_cast<uint16_t>((buf[0] << 8u) | buf[1]);
+    if (static_cast<uint16_t>(psize + 6u) != rn) { return r; }
+    r.frame_ok = true;
+    r.code = buf[2];
+    r.len = static_cast<uint16_t>(psize - 1u);
+    memcpy(r.data, buf + 3, r.len);
+    const uint32_t rx_crc = (static_cast<uint32_t>(buf[2u + psize]) << 24u) |
+                            (static_cast<uint32_t>(buf[3u + psize]) << 16u) |
+                            (static_cast<uint32_t>(buf[4u + psize]) << 8u) |
+                             static_cast<uint32_t>(buf[5u + psize]);
+    r.crc_ok = (rx_crc == ems::hal::crc32_calc(buf + 2, psize));
+    return r;
+}
+
+static void test_crc32_vectors(void) {
+    section("crc32: vetores ISO-HDLC");
+    const uint8_t check[9] = {'1','2','3','4','5','6','7','8','9'};
+    CHECK_EQ(ems::hal::crc32_calc(check, 9u), 0xCBF43926u, "crc32(\"123456789\")=0xCBF43926");
+    CHECK_EQ(ems::hal::crc32_calc(nullptr, 0u), 0x00000000u, "crc32(vazio)=0");
+}
+
+static void test_legacy_protocol_regression(void) {
+    section("ui_protocol legacy: intocado pelo envelope");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+
+    uint8_t buf[80] = {};
+    const uint8_t q = 'Q';
+    ui_feed(&q, 1u);
+    uint16_t n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 12u, "'Q' devolve 12 bytes crus (sem envelope)");
+    CHECK_TRUE(memcmp(buf, "OpenEMS_v1.2", 12u) == 0, "assinatura OpenEMS_v1.2");
+
+    const uint8_t c = 'C';
+    ui_feed(&c, 1u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_TRUE(n == 2u && buf[0] == 0x00u && buf[1] == 0xAAu, "'C' → ACK+0xAA");
+
+    // read legacy: 'r' page1 off0 len16
+    const uint8_t rd[6] = {'r', 0x01u, 0x00u, 0x00u, 0x10u, 0x00u};
+    ui_feed(rd, 6u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 16u, "'r' page1 len16 → 16 bytes crus");
+    CHECK_EQ(buf[0], ve_table[0][0], "primeiro byte = ve_table[0][0]");
+
+    // write RAM-only legacy: 'x' page1 off0 len1 data=77
+    const uint8_t wr[7] = {'x', 0x01u, 0x00u, 0x00u, 0x01u, 0x00u, 77u};
+    ui_feed(wr, 7u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_TRUE(n == 1u && buf[0] == 0x00u, "'x' → ACK");
+    CHECK_EQ(ve_table[0][0], 77u, "ve_table[0][0]=77 aplicado em RAM");
+
+    const uint8_t d = 'd';
+    ui_feed(&d, 1u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_TRUE(n == 1u && (buf[0] & 0x01u) != 0u, "'d' → 1 byte, página 1 dirty");
+}
+
+static void test_ts_envelope_basic(void) {
+    section("envelope TS: assinatura + comms test");
+    ems::app::ui_test_reset();
+
+    const uint8_t q = 'Q';
+    EnvResp r = env_txn(&q, 1u);
+    CHECK_TRUE(r.frame_ok, "resposta com framing válido");
+    CHECK_TRUE(r.crc_ok, "CRC32 da resposta confere");
+    CHECK_EQ(r.code, 0x00u, "code OK");
+    CHECK_TRUE(r.len == 12u && memcmp(r.data, "OpenEMS_v1.2", 12u) == 0,
+               "payload = assinatura");
+
+    const uint8_t c = 'C';
+    r = env_txn(&c, 1u);
+    CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u && r.len == 1u &&
+               r.data[0] == 0xAAu, "'C' → code OK + magic");
+
+    const uint8_t z = 'Z';  // comando inexistente
+    r = env_txn(&z, 1u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x83u, "comando desconhecido → 0x83");
+}
+
+static void test_ts_envelope_crc_reject(void) {
+    section("envelope TS: CRC corrompido rejeitado");
+    ems::app::ui_test_reset();
+
+    uint8_t frame[16] = {};
+    const uint8_t q = 'Q';
+    const uint16_t fl = env_frame(frame, &q, 1u);
+    frame[fl - 1u] ^= 0xFFu;  // corrompe CRC
+    ui_feed(frame, fl);
+
+    uint8_t buf[32] = {};
+    const uint16_t n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 7u, "resposta de erro tem 7 bytes (code sem dados)");
+    CHECK_EQ(buf[2], 0x82u, "code 0x82 = CRC error");
+
+    // parser recupera: próximo frame válido responde normalmente
+    EnvResp r = env_txn(&q, 1u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "parser recuperado após CRC error");
+}
+
+static void test_ts_envelope_read_write_burn(void) {
+    section("envelope TS: r/w/b com página VE");
+    ckp_test_reset(); g_ckp_cap = 0u;  // RPM=0 → burn permitido
+    ems::app::ui_test_reset();
+
+    // read: 'r' page1 off0 len16 (forma sem canId)
+    const uint8_t rd[6] = {'r', 0x01u, 0x00u, 0x00u, 0x10u, 0x00u};
+    EnvResp r = env_txn(rd, 6u);
+    CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u && r.len == 16u,
+               "'r' 5-args → 16 bytes");
+    CHECK_EQ(r.data[0], ve_table[0][0], "dados = ve_table");
+
+    // read com canId à frente (forma TS canónica de 6 args)
+    const uint8_t rd7[7] = {'r', 0x00u, 0x01u, 0x00u, 0x00u, 0x10u, 0x00u};
+    r = env_txn(rd7, 7u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 16u,
+               "'r' com canId=0 → 16 bytes");
+
+    // chunk write: RAM-only, sem burn
+    const uint32_t prog_before = ems::hal::nvm_test_program_count();
+    const uint8_t wr[10] = {'w', 0x01u, 0x00u, 0x00u, 0x04u, 0x00u, 11u, 22u, 33u, 44u};
+    r = env_txn(wr, 10u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'w' chunk → OK");
+    CHECK_EQ(ve_table[0][0], 11u, "VE[0][0]=11 aplicado em RAM");
+    CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before,
+             "'w' envelope NÃO grava flash (RAM-only)");
+
+    // dirty mask (16 bits LE no envelope)
+    const uint8_t d = 'd';
+    r = env_txn(&d, 1u);
+    CHECK_TRUE(r.frame_ok && r.len == 2u && (r.data[0] & 0x01u) != 0u,
+               "'d' → 2 bytes, página 1 dirty");
+
+    // burn com motor parado
+    const uint8_t burn[2] = {'b', 0x01u};
+    r = env_txn(burn, 2u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'b' page1 @ 0 RPM → OK");
+    CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before + 1u,
+             "burn gravou 1 página");
+
+    r = env_txn(&d, 1u);
+    CHECK_TRUE(r.frame_ok && (r.data[0] & 0x01u) == 0u, "dirty limpo após burn");
+}
+
+static void test_ts_envelope_burn_gate(void) {
+    section("envelope TS: burn bloqueado com motor girando");
+    ems::app::ui_test_reset();
+    ckp_reach_full_sync();  // ~6250 RPM > kFlashWriteSafeRpmX10 (300 RPM)
+
+    const uint32_t prog_before = ems::hal::nvm_test_program_count();
+    const uint8_t burn[2] = {'b', 0x01u};
+    EnvResp r = env_txn(burn, 2u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x85u, "'b' com RPM alto → 0x85 busy");
+    CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before, "flash intocada");
+
+    // legacy 'b' também bloqueado
+    uint8_t buf[8] = {};
+    const uint8_t lb[2] = {'b', 0x01u};
+    ui_feed(lb, 2u);
+    const uint16_t n = ui_drain(buf, sizeof(buf));
+    CHECK_TRUE(n == 1u && buf[0] == 0x01u, "legacy 'b' com RPM alto → NACK");
+
+    ckp_test_reset(); g_ckp_cap = 0u;  // restaura RPM=0 p/ testes seguintes
+}
+
+static void test_ts_axes_page(void) {
+    section("página 11: eixos de tabela editáveis");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+
+    // read: defaults serializados (rpm[0]=500, load[0]=20)
+    const uint8_t rd[6] = {'r', 0x0Bu, 0x00u, 0x00u, 0x40u, 0x00u};
+    EnvResp r = env_txn(rd, 6u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 64u, "'r' page11 → 64 bytes");
+    const uint16_t rpm0 = static_cast<uint16_t>(r.data[0] | (r.data[1] << 8u));
+    const uint16_t load0 = static_cast<uint16_t>(r.data[32] | (r.data[33] << 8u));
+    CHECK_EQ(rpm0, 500u, "rpm[0] default = 500");
+    CHECK_EQ(load0, 20u, "load[0] default = 20 (0.20 bar)");
+
+    // write monotónico: rpm 400..7900 (passo 500), load 10..160 (passo 10)
+    uint8_t wr[6u + 64u] = {'w', 0x0Bu, 0x00u, 0x00u, 0x40u, 0x00u};
+    for (uint8_t i = 0u; i < 16u; ++i) {
+        const uint16_t rv = static_cast<uint16_t>(400u + i * 500u);
+        const uint16_t lv = static_cast<uint16_t>(10u + i * 10u);
+        wr[6u + i * 2u]       = static_cast<uint8_t>(rv & 0xFFu);
+        wr[7u + i * 2u]       = static_cast<uint8_t>(rv >> 8u);
+        wr[6u + 32u + i * 2u] = static_cast<uint8_t>(lv & 0xFFu);
+        wr[7u + 32u + i * 2u] = static_cast<uint8_t>(lv >> 8u);
+    }
+    r = env_txn(wr, sizeof(wr));
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'w' eixos monotónicos → OK");
+    CHECK_EQ(kRpmAxisX10[0], 4000u, "kRpmAxisX10[0]=4000 (400 RPM ×10)");
+    CHECK_EQ(kLoadAxisBarX100[15], 160u, "kLoadAxisBarX100[15]=160");
+
+    // write não-monotónico rejeitado, eixos preservados
+    wr[6u + 4u] = wr[6u + 0u];  // rpm[2] == rpm[0] → viola monotonicidade
+    wr[7u + 4u] = wr[7u + 0u];
+    r = env_txn(wr, sizeof(wr));
+    CHECK_TRUE(r.frame_ok && r.code == 0x84u, "'w' não-monotónico → 0x84");
+    CHECK_EQ(kRpmAxisX10[2], 14000u, "eixos preservados após rejeição");
+
+    // buffer restaurado: 'r' devolve os eixos válidos, não o lixo rejeitado
+    r = env_txn(rd, 6u);
+    const uint16_t rpm2 = static_cast<uint16_t>(r.data[4] | (r.data[5] << 8u));
+    CHECK_EQ(rpm2, 1400u, "'r' pós-rejeição devolve eixo válido (1400)");
+
+    // burn página 11 → NVM slot 9
+    const uint32_t prog_before = ems::hal::nvm_test_program_count();
+    const uint8_t burn[2] = {'b', 0x0Bu};
+    r = env_txn(burn, 2u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'b' page11 → OK");
+    CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before + 1u, "NVM slot 9 gravado");
+
+    // restaura defaults p/ não afetar outros testes
+    const uint16_t rpm_def[16] = {500u, 750u, 1000u, 1250u, 1500u, 2000u, 2500u, 3000u,
+                                  3500u, 4000u, 4500u, 5000u, 5500u, 6000u, 7000u, 8000u};
+    const uint16_t load_def[16] = {20u, 30u, 40u, 52u, 64u, 76u, 88u, 100u,
+                                   110u, 130u, 160u, 190u, 220u, 250u, 273u, 300u};
+    CHECK_TRUE(table_axes_set(rpm_def, load_def), "defaults restaurados");
+}
+
 int main(void) {
     printf("OpenEMS Host Regression Tests\n");
     printf("============================================================\n");
@@ -3627,6 +3900,16 @@ int main(void) {
     test_ckp_snap_fields();
     test_ckp_tooth_index_progression();
     test_ckp_phase_toggle();
+
+    // ── UI PROTOCOL / TUNERSTUDIO ENVELOPE ────────────────────────────────
+    printf("\n=== UI PROTOCOL / TS ENVELOPE ===");
+    test_crc32_vectors();
+    test_legacy_protocol_regression();
+    test_ts_envelope_basic();
+    test_ts_envelope_crc_reject();
+    test_ts_envelope_read_write_burn();
+    test_ts_envelope_burn_gate();
+    test_ts_axes_page();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");
