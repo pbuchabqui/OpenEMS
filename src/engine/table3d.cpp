@@ -63,19 +63,46 @@ AxisLookupResult axis_lookup(const uint32_t* axis, uint8_t size, uint32_t value)
 
 namespace ems::engine {
 
-const uint32_t kRpmAxisX10[kTableAxisSize] = {
+uint32_t kRpmAxisX10[kTableAxisSize] = {
     5000u,   7500u,   10000u,  12500u,
     15000u,  20000u,  25000u,  30000u,
     35000u,  40000u,  45000u,  50000u,
     55000u,  60000u,  70000u,  80000u,
 };
 
-const uint32_t kLoadAxisBarX100[kTableAxisSize] = {
+uint32_t kLoadAxisBarX100[kTableAxisSize] = {
      20u,  30u,  40u,  52u,
      64u,  76u,  88u, 100u,
     110u, 130u, 160u, 190u,
     220u, 250u, 273u, 300u,
 };
+
+bool table_axes_set(const uint16_t rpm[kTableAxisSize],
+                    const uint16_t load_bar_x100[kTableAxisSize]) noexcept {
+    if (rpm[0] == 0u || load_bar_x100[0] == 0u) {
+        return false;
+    }
+    for (uint8_t i = 1u; i < kTableAxisSize; ++i) {
+        if (rpm[i] <= rpm[i - 1u] || load_bar_x100[i] <= load_bar_x100[i - 1u]) {
+            return false;
+        }
+    }
+    for (uint8_t i = 0u; i < kTableAxisSize; ++i) {
+        kRpmAxisX10[i] = static_cast<uint32_t>(rpm[i]) * 10u;
+        kLoadAxisBarX100[i] = load_bar_x100[i];
+    }
+    return true;
+}
+
+void table_axes_get(uint16_t rpm[kTableAxisSize],
+                    uint16_t load_bar_x100[kTableAxisSize]) noexcept {
+    for (uint8_t i = 0u; i < kTableAxisSize; ++i) {
+        const uint32_t r = kRpmAxisX10[i] / 10u;
+        rpm[i] = static_cast<uint16_t>((r > 65535u) ? 65535u : r);
+        const uint32_t l = kLoadAxisBarX100[i];
+        load_bar_x100[i] = static_cast<uint16_t>((l > 65535u) ? 65535u : l);
+    }
+}
 
 uint8_t table_axis_index(const uint32_t* axis, uint8_t size, uint32_t value) noexcept {
     return axis_lookup(axis, size, value).idx;

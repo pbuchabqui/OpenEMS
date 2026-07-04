@@ -15,6 +15,9 @@
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/math_utils.h"
+#include "engine/constants.h"
+#include "engine/table3d.h"
+#include "hal/crc32.h"
 #include "hal/flash.h"
 #include "engine/engine_config.h"
 
@@ -29,8 +32,8 @@ constexpr uint8_t kAckOk = 0x00u;
 constexpr uint8_t kAckErr = 0x01u;
 constexpr uint8_t kCommsTestMagic = 0xAAu;
 
-constexpr char kSignature[] = "OpenEMS_v1.1";
-constexpr char kFwVersion[] = "OpenEMS_fw_1.1";
+constexpr char kSignature[] = "OpenEMS_v1.2";
+constexpr char kFwVersion[] = "OpenEMS_fw_1.2";
 constexpr char kProtocolVersion[] = "001";
 
 enum class ParseState : uint8_t {
@@ -40,7 +43,25 @@ enum class ParseState : uint8_t {
     WRITE_DATA = 3u,
     BURN_ARGS = 4u,
     BENCH_ARG = 5u,   // 'B' + 1 byte: bench-mode CLT/IAT (0=off, 1=on)
+    ENV_SIZE_LO = 6u,  // envelope TS: byte baixo do tamanho (BE)
+    ENV_PAYLOAD = 7u,  // envelope TS: cmd + args + dados
+    ENV_CRC = 8u,      // envelope TS: CRC32 BE (4 bytes)
 };
+
+// ── Envelope TunerStudio (msEnvelope_1.0) ────────────────────────────────────
+// Frame de pedido:  [size u16 BE][cmd+args+dados][CRC32 u32 BE sobre payload]
+// Frame de resposta:[size u16 BE][code][dados][CRC32 u32 BE sobre code+dados]
+// Coexiste com o protocolo legacy: comandos legacy são letras ASCII (≥0x20),
+// o byte alto do size de um frame <8 KB é 0x00-0x1F — detecção por 1º byte.
+constexpr uint16_t kEnvMaxPayload = 263u;  // 'w' + canId + page + off(2) + len(2) + 256 dados
+constexpr uint16_t kEnvMaxChunk   = 256u;  // = blockingFactor do .ini
+
+// Códigos de resposta (convenção TS/Speeduino: 0x00 OK, não-zero erro)
+constexpr uint8_t kTsRcOk       = 0x00u;
+constexpr uint8_t kTsRcCrcErr   = 0x82u;
+constexpr uint8_t kTsRcUnknown  = 0x83u;
+constexpr uint8_t kTsRcRangeErr = 0x84u;
+constexpr uint8_t kTsRcBusyErr  = 0x85u;  // burn bloqueado com motor girando
 
 alignas(4) static uint8_t g_page0[512] = {};
 alignas(4) static uint8_t g_page1_ve[256] = {};
@@ -53,6 +74,13 @@ alignas(4) static uint8_t g_page7_dwell2d[32] = {};   // Dwell 2D: eixo RPM + fa
 alignas(4) static uint8_t g_page8_pedalmap[80] = {};  // Pedal map: 4 modos × 10 × uint16
 alignas(4) static uint8_t g_page9_boost[112]   = {};  // Boost map: 7 marchas × 8 RPM × uint16
 alignas(4) static uint8_t g_page10_ltft[320]   = {};  // LTFT: mult 16×16 int8 + add 8×8 int8
+alignas(4) static uint8_t g_page11_axes[64]    = {};  // Eixos: 16×u16 RPM + 16×u16 load bar×100
+
+alignas(4) static uint8_t g_env_buf[kEnvMaxPayload] = {};
+static uint16_t g_env_size = 0u;
+static uint16_t g_env_pos = 0u;
+static uint32_t g_env_rx_crc = 0u;
+static uint8_t  g_env_crc_pos = 0u;
 
 static volatile uint8_t g_rx_buf[kRxSize] = {};
 static volatile uint16_t g_rx_head = 0u;
@@ -86,7 +114,7 @@ static uint16_t g_cmd_len = 0u;
 static uint8_t g_arg_pos = 0u;
 static uint16_t g_write_pos = 0u;
 static bool g_write_ram_only = false;
-static uint8_t g_dirty_page_mask = 0u;
+static uint16_t g_dirty_page_mask = 0u;
 
 inline void enter_critical() noexcept {
 #if defined(__arm__) || defined(__thumb__)
@@ -115,6 +143,7 @@ inline uint16_t page_size(uint8_t page) noexcept {
     if (page == 0x08u) { return static_cast<uint16_t>(sizeof(g_page8_pedalmap)); }
     if (page == 0x09u) { return static_cast<uint16_t>(sizeof(g_page9_boost)); }
     if (page == 0x0Au) { return static_cast<uint16_t>(sizeof(g_page10_ltft)); }
+    if (page == 0x0Bu) { return static_cast<uint16_t>(sizeof(g_page11_axes)); }
     return 0u;
 }
 
@@ -130,6 +159,7 @@ inline uint8_t* page_ptr(uint8_t page) noexcept {
     if (page == 0x08u) { return g_page8_pedalmap; }
     if (page == 0x09u) { return g_page9_boost; }
     if (page == 0x0Au) { return g_page10_ltft; }
+    if (page == 0x0Bu) { return g_page11_axes; }
     return nullptr;
 }
 
@@ -268,20 +298,34 @@ inline void reset_parser() noexcept {
     g_arg_pos = 0u;
     g_write_pos = 0u;
     g_write_ram_only = false;
+    g_env_size = 0u;
+    g_env_pos = 0u;
+    g_env_rx_crc = 0u;
+    g_env_crc_pos = 0u;
 }
 
-inline bool command_bounds_ok() noexcept {
-    const uint16_t psize = page_size(g_cmd_page);
+inline bool bounds_ok(uint8_t page, uint16_t off, uint16_t len) noexcept {
+    const uint16_t psize = page_size(page);
     if (psize == 0u) {
         return false;
     }
-    if (g_cmd_off > psize) {
+    if (off > psize) {
         return false;
     }
-    if (g_cmd_len > static_cast<uint16_t>(psize - g_cmd_off)) {
+    if (len > static_cast<uint16_t>(psize - off)) {
         return false;
     }
     return true;
+}
+
+inline bool command_bounds_ok() noexcept {
+    return bounds_ok(g_cmd_page, g_cmd_off, g_cmd_len);
+}
+
+// Burn de Flash só com motor parado/lento (errata ES0565: erase/program pode
+// congelar fetch por ~120 µs — inaceitável durante janela de CKP/scheduler).
+inline bool burn_rpm_safe() noexcept {
+    return ems::drv::ckp_snapshot().rpm_x10 <= ems::engine::kFlashWriteSafeRpmX10;
 }
 
 inline void sync_page_from_table(uint8_t page) noexcept {
@@ -408,10 +452,19 @@ inline void sync_page_from_table(uint8_t page) noexcept {
                     ems::hal::nvm_read_ltft_add(r, m));
             }
         }
+    } else if (page == 0x0Bu) {
+        uint16_t rpm[ems::engine::kTableAxisSize];
+        uint16_t load[ems::engine::kTableAxisSize];
+        ems::engine::table_axes_get(rpm, load);
+        std::memcpy(g_page11_axes +  0, rpm,  32u);
+        std::memcpy(g_page11_axes + 32, load, 32u);
     }
 }
 
-inline void sync_table_from_page(uint8_t page) noexcept {
+// Aplica o buffer da página aos globals do engine. Retorna false se a página
+// tiver validação própria e o conteúdo for rejeitado (buffer fica incoerente —
+// caller deve restaurar com sync_page_from_table()).
+inline bool sync_table_from_page(uint8_t page) noexcept {
     if (page == 0x00u) {
         ::ecu_sched_set_ivc(g_page0[0]);
         // Aplica engine config (displacement, injector, AFR, trigger offset, etc.)
@@ -521,10 +574,17 @@ inline void sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(ems::engine::etb_pedal_map, g_page8_pedalmap, sizeof(g_page8_pedalmap));
     } else if (page == 0x09u) {
         std::memcpy(ems::engine::boost_target_bar_x1000, g_page9_boost, sizeof(g_page9_boost));
+    } else if (page == 0x0Bu) {
+        uint16_t rpm[ems::engine::kTableAxisSize];
+        uint16_t load[ems::engine::kTableAxisSize];
+        std::memcpy(rpm,  g_page11_axes +  0, 32u);
+        std::memcpy(load, g_page11_axes + 32, 32u);
+        return ems::engine::table_axes_set(rpm, load);
     }
+    return true;
 }
 
-inline uint8_t editable_page_bit(uint8_t page) noexcept {
+inline uint16_t editable_page_bit(uint8_t page) noexcept {
     if (page == 0x01u) { return 0x01u; }
     if (page == 0x02u) { return 0x02u; }
     if (page == 0x04u) { return 0x04u; }
@@ -533,15 +593,16 @@ inline uint8_t editable_page_bit(uint8_t page) noexcept {
     if (page == 0x07u) { return 0x20u; }
     if (page == 0x08u) { return 0x40u; }
     if (page == 0x09u) { return 0x80u; }
+    if (page == 0x0Bu) { return 0x100u; }
     return 0u;
 }
 
 inline void mark_page_dirty(uint8_t page) noexcept {
-    g_dirty_page_mask = static_cast<uint8_t>(g_dirty_page_mask | editable_page_bit(page));
+    g_dirty_page_mask = static_cast<uint16_t>(g_dirty_page_mask | editable_page_bit(page));
 }
 
 inline void clear_page_dirty(uint8_t page) noexcept {
-    g_dirty_page_mask = static_cast<uint8_t>(g_dirty_page_mask & static_cast<uint8_t>(~editable_page_bit(page)));
+    g_dirty_page_mask = static_cast<uint16_t>(g_dirty_page_mask & static_cast<uint16_t>(~editable_page_bit(page)));
 }
 
 inline bool burn_page_to_flash(uint8_t page) noexcept {
@@ -602,6 +663,13 @@ inline bool burn_page_to_flash(uint8_t page) noexcept {
         clear_page_dirty(page);
         return true;
     }
+    if (page == 0x0Bu) {
+        sync_page_from_table(0x0Bu);  // serializa eixos atuais → buffer
+        const bool ok = ems::hal::nvm_save_calibration(9u, g_page11_axes, static_cast<uint16_t>(sizeof(g_page11_axes)));
+        if (!ok) { return false; }
+        clear_page_dirty(page);
+        return true;
+    }
     return false;
 }
 
@@ -631,10 +699,17 @@ inline void handle_write_done() noexcept {
         return;
     }
 
-    sync_table_from_page(g_cmd_page);
+    if (!sync_table_from_page(g_cmd_page)) {
+        // Conteúdo rejeitado (ex.: eixos não monotónicos) — restaura o buffer
+        // a partir dos globals para não servir dados incoerentes num 'r'.
+        sync_page_from_table(g_cmd_page);
+        tx_push(kAckErr);
+        reset_parser();
+        return;
+    }
     mark_page_dirty(g_cmd_page);
     if (!g_write_ram_only) {
-        if (!burn_page_to_flash(g_cmd_page)) {
+        if (!burn_rpm_safe() || !burn_page_to_flash(g_cmd_page)) {
             tx_push(kAckErr);
             reset_parser();
             return;
@@ -644,10 +719,166 @@ inline void handle_write_done() noexcept {
     reset_parser();
 }
 
+// ── Envelope TS: resposta e dispatcher ───────────────────────────────────────
+
+inline uint16_t tx_free() noexcept {
+    return static_cast<uint16_t>((kTxSize - 1u) -
+                                 ((g_tx_head - g_tx_tail) & kTxMask));
+}
+
+static void env_send_response(uint8_t code, const uint8_t* data, uint16_t len) noexcept {
+    const uint16_t psize = static_cast<uint16_t>(len + 1u);
+    // Sem espaço para o frame inteiro → não envia nada (frame parcial seria
+    // corrupção; o TunerStudio faz timeout e re-tenta).
+    if (tx_free() < static_cast<uint16_t>(psize + 6u)) {
+        return;
+    }
+    tx_push(static_cast<uint8_t>(psize >> 8u));
+    tx_push(static_cast<uint8_t>(psize & 0xFFu));
+    uint32_t crc = 0xFFFFFFFFu;
+    crc = ems::hal::crc32_update(crc, code);
+    tx_push(code);
+    for (uint16_t i = 0u; i < len; ++i) {
+        crc = ems::hal::crc32_update(crc, data[i]);
+        tx_push(data[i]);
+    }
+    crc = ~crc;
+    tx_push(static_cast<uint8_t>(crc >> 24u));
+    tx_push(static_cast<uint8_t>(crc >> 16u));
+    tx_push(static_cast<uint8_t>(crc >> 8u));
+    tx_push(static_cast<uint8_t>(crc & 0xFFu));
+}
+
+// Chunk write (RAM-only; burn é explícito via 'b'). `a` aponta para
+// page + off(u16 LE) + len(u16 LE) + dados; data_n = bytes de dados no frame.
+// Retorna código TS, ou -1 se o header declarado não corresponder a data_n
+// (permite ao caller tentar a forma com canId à frente).
+static int env_try_write(const uint8_t* a, uint16_t data_n) noexcept {
+    const uint8_t page = normalize_page_id(a[0]);
+    const uint16_t off = static_cast<uint16_t>(a[1] | (static_cast<uint16_t>(a[2]) << 8u));
+    const uint16_t len = static_cast<uint16_t>(a[3] | (static_cast<uint16_t>(a[4]) << 8u));
+    if (len != data_n) {
+        return -1;
+    }
+    if (!bounds_ok(page, off, len) || page == 0x03u || len > kEnvMaxChunk) {
+        return kTsRcRangeErr;
+    }
+    uint8_t* ptr = page_ptr(page);
+    if (ptr == nullptr) {
+        return kTsRcRangeErr;
+    }
+    if (len != 0u) {
+        std::memcpy(ptr + off, a + 5u, len);
+        if (!sync_table_from_page(page)) {
+            sync_page_from_table(page);
+            return kTsRcRangeErr;
+        }
+        mark_page_dirty(page);
+    }
+    return kTsRcOk;
+}
+
+static void env_dispatch(const uint8_t* p, uint16_t n) noexcept {
+    const uint8_t cmd = p[0];
+
+    if (cmd == static_cast<uint8_t>('Q') || cmd == static_cast<uint8_t>('H')) {
+        env_send_response(kTsRcOk, reinterpret_cast<const uint8_t*>(kSignature),
+                          static_cast<uint16_t>(sizeof(kSignature) - 1u));
+        return;
+    }
+    if (cmd == static_cast<uint8_t>('S')) {
+        env_send_response(kTsRcOk, reinterpret_cast<const uint8_t*>(kFwVersion),
+                          static_cast<uint16_t>(sizeof(kFwVersion) - 1u));
+        return;
+    }
+    if (cmd == static_cast<uint8_t>('F')) {
+        env_send_response(kTsRcOk, reinterpret_cast<const uint8_t*>(kProtocolVersion),
+                          static_cast<uint16_t>(sizeof(kProtocolVersion) - 1u));
+        return;
+    }
+    if (cmd == static_cast<uint8_t>('C')) {
+        const uint8_t magic = kCommsTestMagic;
+        env_send_response(kTsRcOk, &magic, 1u);
+        return;
+    }
+    if (cmd == static_cast<uint8_t>('A') || cmd == static_cast<uint8_t>('O')) {
+        update_realtime_page();
+        env_send_response(kTsRcOk, g_page3_rt,
+                          static_cast<uint16_t>(sizeof(g_page3_rt)));
+        return;
+    }
+    if (cmd == static_cast<uint8_t>('d')) {
+        const uint8_t mask[2] = {
+            static_cast<uint8_t>(g_dirty_page_mask & 0xFFu),
+            static_cast<uint8_t>(g_dirty_page_mask >> 8u),
+        };
+        env_send_response(kTsRcOk, mask, 2u);
+        return;
+    }
+    if (cmd == static_cast<uint8_t>('r')) {
+        // 'r' [canId] page off(u16 LE) len(u16 LE) → 6 ou 7 bytes no payload
+        if (n != 6u && n != 7u) {
+            env_send_response(kTsRcRangeErr, nullptr, 0u);
+            return;
+        }
+        const uint8_t* a = (n == 7u) ? (p + 2u) : (p + 1u);
+        const uint8_t page = normalize_page_id(a[0]);
+        const uint16_t off = static_cast<uint16_t>(a[1] | (static_cast<uint16_t>(a[2]) << 8u));
+        const uint16_t len = static_cast<uint16_t>(a[3] | (static_cast<uint16_t>(a[4]) << 8u));
+        if (!bounds_ok(page, off, len) || len > kEnvMaxChunk) {
+            env_send_response(kTsRcRangeErr, nullptr, 0u);
+            return;
+        }
+        if (page == 0x03u) {
+            update_realtime_page();
+        } else {
+            sync_page_from_table(page);
+        }
+        const uint8_t* ptr = page_ptr(page);
+        if (ptr == nullptr) {
+            env_send_response(kTsRcRangeErr, nullptr, 0u);
+            return;
+        }
+        env_send_response(kTsRcOk, ptr + off, len);
+        return;
+    }
+    if (cmd == static_cast<uint8_t>('w') || cmd == static_cast<uint8_t>('x')) {
+        int rc = (n >= 6u) ? env_try_write(p + 1u, static_cast<uint16_t>(n - 6u)) : -1;
+        if (rc < 0 && n >= 7u) {
+            rc = env_try_write(p + 2u, static_cast<uint16_t>(n - 7u));  // forma com canId
+        }
+        env_send_response((rc < 0) ? kTsRcRangeErr : static_cast<uint8_t>(rc), nullptr, 0u);
+        return;
+    }
+    if (cmd == static_cast<uint8_t>('b')) {
+        // 'b' [canId] page → 2 ou 3 bytes no payload
+        if (n != 2u && n != 3u) {
+            env_send_response(kTsRcRangeErr, nullptr, 0u);
+            return;
+        }
+        const uint8_t page = normalize_page_id(p[n - 1u]);
+        if (!burn_rpm_safe()) {
+            env_send_response(kTsRcBusyErr, nullptr, 0u);
+            return;
+        }
+        env_send_response(burn_page_to_flash(page) ? kTsRcOk : kTsRcRangeErr,
+                          nullptr, 0u);
+        return;
+    }
+    env_send_response(kTsRcUnknown, nullptr, 0u);
+}
+
 inline void parse_byte(uint8_t b) noexcept {
     if (g_state == ParseState::IDLE) {
         // Ignore line-state reset probe bytes used by some host stacks.
         if (b == 0xF0u) {
+            return;
+        }
+        // Auto-detect envelope TS: comandos legacy são ASCII ≥ 0x20; um frame
+        // envelope começa pelo byte alto do size BE (0x00-0x01 para ≤ 263 B).
+        if (b < 0x20u) {
+            g_env_size = static_cast<uint16_t>(static_cast<uint16_t>(b) << 8u);
+            g_state = ParseState::ENV_SIZE_LO;
             return;
         }
         if (b == static_cast<uint8_t>('Q')) {
@@ -716,7 +947,9 @@ inline void parse_byte(uint8_t b) noexcept {
             return;
         }
         if (b == static_cast<uint8_t>('d')) {
-            tx_push(g_dirty_page_mask);
+            // Legacy: só o byte baixo (páginas 1-9); página 11 (bit 8) é
+            // reportada apenas no 'd' do envelope, que devolve os 16 bits.
+            tx_push(static_cast<uint8_t>(g_dirty_page_mask & 0xFFu));
             return;
         }
         if (b == static_cast<uint8_t>('B')) {
@@ -821,6 +1054,42 @@ inline void parse_byte(uint8_t b) noexcept {
         return;
     }
 
+    if (g_state == ParseState::ENV_SIZE_LO) {
+        g_env_size = static_cast<uint16_t>(g_env_size | b);
+        if (g_env_size == 0u || g_env_size > kEnvMaxPayload) {
+            reset_parser();
+            return;
+        }
+        g_env_pos = 0u;
+        g_state = ParseState::ENV_PAYLOAD;
+        return;
+    }
+
+    if (g_state == ParseState::ENV_PAYLOAD) {
+        g_env_buf[g_env_pos] = b;
+        ++g_env_pos;
+        if (g_env_pos >= g_env_size) {
+            g_env_rx_crc = 0u;
+            g_env_crc_pos = 0u;
+            g_state = ParseState::ENV_CRC;
+        }
+        return;
+    }
+
+    if (g_state == ParseState::ENV_CRC) {
+        g_env_rx_crc = (g_env_rx_crc << 8u) | b;
+        ++g_env_crc_pos;
+        if (g_env_crc_pos >= 4u) {
+            if (ems::hal::crc32_calc(g_env_buf, g_env_size) == g_env_rx_crc) {
+                env_dispatch(g_env_buf, g_env_size);
+            } else {
+                env_send_response(kTsRcCrcErr, nullptr, 0u);
+            }
+            reset_parser();
+        }
+        return;
+    }
+
     if (g_state == ParseState::BENCH_ARG) {
         // Bench-mode CLT/IAT p/ HIL: 0=off (ADC normal), !=0=on (90°C/25°C fixos,
         // sem SENSOR_FAULT pelos canais CLT/IAT). Ver sensors_set_bench_clt_iat.
@@ -832,7 +1101,7 @@ inline void parse_byte(uint8_t b) noexcept {
 
     if (g_state == ParseState::BURN_ARGS) {
         g_cmd_page = normalize_page_id(b);
-        if (burn_page_to_flash(g_cmd_page)) {
+        if (burn_rpm_safe() && burn_page_to_flash(g_cmd_page)) {
             tx_push(kAckOk);
         } else {
             tx_push(kAckErr);
@@ -923,6 +1192,7 @@ inline void reset_pages() noexcept {
     sync_page_from_table(0x05u);
     sync_page_from_table(0x06u);
     sync_page_from_table(0x07u);
+    sync_page_from_table(0x0Bu);
     g_dirty_page_mask = 0u;
 }
 

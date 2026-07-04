@@ -6,8 +6,20 @@ namespace ems::engine {
 
 constexpr uint8_t kTableAxisSize = 16u;
 
-extern const uint32_t kRpmAxisX10[kTableAxisSize];
-extern const uint32_t kLoadAxisBarX100[kTableAxisSize];
+// Eixos das tabelas 16×16. Editáveis em runtime via protocolo (página 11);
+// mutação apenas por table_axes_set(), que valida monotonicidade estrita.
+extern uint32_t kRpmAxisX10[kTableAxisSize];
+extern uint32_t kLoadAxisBarX100[kTableAxisSize];
+
+// Aplica novos eixos a partir da forma serializada da página 11
+// (RPM cru em u16, load em bar×100 u16). Rejeita (sem alterar nada) se
+// qualquer eixo não for estritamente crescente ou se rpm[0] == 0.
+bool table_axes_set(const uint16_t rpm[kTableAxisSize],
+                    const uint16_t load_bar_x100[kTableAxisSize]) noexcept;
+
+// Serializa os eixos atuais para a forma da página 11 (RPM cru, load bar×100).
+void table_axes_get(uint16_t rpm[kTableAxisSize],
+                    uint16_t load_bar_x100[kTableAxisSize]) noexcept;
 
 struct Table2dLookup {
     uint8_t xi;
