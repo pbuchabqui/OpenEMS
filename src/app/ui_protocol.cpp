@@ -833,6 +833,15 @@ static void env_dispatch(const uint8_t* p, uint16_t n) noexcept {
         const uint8_t page = normalize_page_id(a[0]);
         const uint16_t off = static_cast<uint16_t>(a[1] | (static_cast<uint16_t>(a[2]) << 8u));
         const uint16_t len = static_cast<uint16_t>(a[3] | (static_cast<uint16_t>(a[4]) << 8u));
+        // page=0x0F: pseudo-página "signature" — convenção real do TunerStudio/
+        // Speeduino (comms.cpp: "cmd == 0x0f → Request for signature"), usada
+        // pelo Comm Manager para validar o controlador após a conexão real
+        // (distinta do probe leve 'Q' cru da fase de deteção/wizard).
+        if (page == 0x0Fu) {
+            env_send_response(kTsRcOk, reinterpret_cast<const uint8_t*>(kSignature),
+                              static_cast<uint16_t>(sizeof(kSignature) - 1u));
+            return;
+        }
         if (!bounds_ok(page, off, len) || len > kEnvMaxChunk) {
             env_send_response(kTsRcRangeErr, nullptr, 0u);
             return;

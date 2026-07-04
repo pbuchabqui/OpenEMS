@@ -3719,6 +3719,28 @@ static void test_ts_envelope_canid_forms(void) {
                "och via 'r' canId+page3+off0+count66 → 66 bytes");
 }
 
+static void test_ts_envelope_signature_via_r(void) {
+    section("envelope TS: 'r' page 0x0F → assinatura (convenção Comm Manager)");
+    ems::app::ui_test_reset();
+
+    // 'r' canId(0) page(0x0F) off(0) count(0) — o Comm Manager real do
+    // TunerStudio usa esta pseudo-página para validar o controlador após a
+    // conexão, distinta do probe leve 'Q' cru da fase de deteção/wizard
+    // (confirmado no comms.cpp real do Speeduino: "cmd == 0x0f → Request
+    // for signature"). off/count no pedido são ignorados para esta página.
+    const uint8_t req[7] = {'r', 0x00u, 0x0Fu, 0x00u, 0x00u, 0x00u, 0x00u};
+    EnvResp r = env_txn(req, 7u);
+    CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u, "'r' page 0x0F → OK");
+    CHECK_TRUE(r.len == 12u && memcmp(r.data, "OpenEMS_v1.2", 12u) == 0,
+               "payload = assinatura OpenEMS_v1.2");
+
+    // forma sem canId (6 bytes) também deve funcionar
+    const uint8_t req6[6] = {'r', 0x0Fu, 0x00u, 0x00u, 0x00u, 0x00u};
+    r = env_txn(req6, 6u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 12u,
+               "'r' page 0x0F sem canId → também OK");
+}
+
 int main(void) {
     printf("OpenEMS Host Regression Tests\n");
     printf("============================================================\n");
@@ -3957,6 +3979,7 @@ int main(void) {
     test_ts_envelope_burn_gate();
     test_ts_axes_page();
     test_ts_envelope_canid_forms();
+    test_ts_envelope_signature_via_r();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");
