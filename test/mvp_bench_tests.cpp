@@ -3673,6 +3673,52 @@ static void test_ts_axes_page(void) {
     CHECK_TRUE(table_axes_set(rpm_def, load_def), "defaults restaurados");
 }
 
+// Formas de wire que o TunerStudio REAL emite quando pageIdentifier usa o
+// prefixo \$tsCanId (obrigatório em msEnvelope_1.0, confirmado contra os
+// projetos Speeduino 202501.6 e rusEFI): toda página fica com identificador
+// de 2 bytes (canId+page), logo 'w'/'b' chegam sempre com 1 byte a mais do
+// que a forma "sem canId" testada em test_ts_envelope_read_write_burn.
+static void test_ts_envelope_canid_forms(void) {
+    section("envelope TS: formas com \\$tsCanId (write/burn/och)");
+    ckp_test_reset(); g_ckp_cap = 0u;  // RPM=0 → burn permitido
+    ems::app::ui_test_reset();
+
+    // och lê página 3 → update_realtime_page() → get_ve(rpm, map_bar_x100), que
+    // faz assert em map válido. map_bar_x1000 só é populado depois de pelo menos
+    // uma sample_fast_channels() (5× sensors_on_tooth(), kFastSamplesPerRev=12 /
+    // kRealTeethPerRev=58) seguida do commit staging→committed.
+    sensor_setup(); sensors_init();
+    {
+        ems::drv::CkpSnapshot snap{};
+        snap.tooth_period_ns = 160000u;
+        snap.rpm_x10 = 62500u;
+        for (int i = 0; i < 5; ++i) { sensors_on_tooth(snap); }
+        sensors_test_tick_100ms();
+    }
+
+    // write canId-prefixed: 'w' canId(0) page(1) off(2) len(2) data(4)
+    const uint32_t prog_before = ems::hal::nvm_test_program_count();
+    const uint8_t wr[11] = {'w', 0x00u, 0x01u, 0x00u, 0x00u, 0x04u, 0x00u, 55u, 66u, 77u, 88u};
+    EnvResp r = env_txn(wr, 11u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'w' canId+page+off+len → OK");
+    CHECK_EQ(ve_table[0][0], 55u, "VE[0][0]=55 aplicado (forma canId)");
+    CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before,
+             "'w' canId não grava flash (RAM-only)");
+
+    // burn canId-prefixed: 'b' canId(0) page(1) — 3 bytes total
+    const uint8_t burn[3] = {'b', 0x00u, 0x01u};
+    r = env_txn(burn, 3u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'b' canId+page → OK");
+    CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before + 1u,
+             "burn (forma canId) gravou 1 página");
+
+    // ochGetCommand real: 'r' canId(0) page(3) off(0) count(66) — 7 bytes
+    const uint8_t och[7] = {'r', 0x00u, 0x03u, 0x00u, 0x00u, 0x42u, 0x00u};
+    r = env_txn(och, 7u);
+    CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u && r.len == 66u,
+               "och via 'r' canId+page3+off0+count66 → 66 bytes");
+}
+
 int main(void) {
     printf("OpenEMS Host Regression Tests\n");
     printf("============================================================\n");
@@ -3910,6 +3956,7 @@ int main(void) {
     test_ts_envelope_read_write_burn();
     test_ts_envelope_burn_gate();
     test_ts_axes_page();
+    test_ts_envelope_canid_forms();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");
