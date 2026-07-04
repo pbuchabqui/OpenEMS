@@ -25,7 +25,10 @@ static inline void dbg_stage(uint8_t s) noexcept {
 namespace {
 
 constexpr uint16_t kRxSize = 256u;
-constexpr uint16_t kTxSize = 256u;
+// 512: uma resposta de envelope para as páginas 0/4 (513 B) precisa trocar
+// mais que 256 B com o hardware ao longo de vários ciclos de comms_pump();
+// um ring maior dá mais folga sob polling rápido/sustentado do TunerStudio.
+constexpr uint16_t kTxSize = 512u;
 constexpr uint16_t kRxMask = kRxSize - 1u;
 constexpr uint16_t kTxMask = kTxSize - 1u;
 
@@ -75,6 +78,11 @@ inline bool tx_pop(uint8_t& b) noexcept {
     b = g_tx[g_tx_tail];
     g_tx_tail = static_cast<uint16_t>((g_tx_tail + 1u) & kTxMask);
     return true;
+}
+
+inline uint16_t tx_free() noexcept {
+    return static_cast<uint16_t>((kTxSize - 1u) -
+                                 ((g_tx_head - g_tx_tail) & kTxMask));
 }
 
 // ── Hardware driver (TARGET_STM32H562) ────────────────────────────────────────
@@ -912,6 +920,10 @@ void usb_cdc_send_bytes(const uint8_t* data, uint16_t len) noexcept {
 
 bool usb_cdc_available() noexcept {
     return g_rx_head != g_rx_tail;
+}
+
+uint16_t usb_cdc_tx_free() noexcept {
+    return tx_free();
 }
 
 uint8_t usb_cdc_read_byte() noexcept {

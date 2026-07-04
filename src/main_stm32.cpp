@@ -347,9 +347,13 @@ static inline void comms_pump() noexcept {
     }
     ems::app::ui_process();
 
-    // Drena ui_tx → UART + USB (espelhado), limitado pelo espaço no ring UART
-    // para nunca perder bytes de um frame a meio.
+    // Drena ui_tx → UART + USB (espelhado), limitado pelo MENOR espaço livre
+    // entre os dois rings de destino — usb_cdc_send_bytes() descarta bytes
+    // em silêncio se o seu próprio ring encher, então o orçamento tem de
+    // respeitar ambos, não só o do UART, para nunca perder bytes de um frame.
     uint16_t budget = ems::hal::uart0_tx_free();
+    const uint16_t usb_free = ems::hal::usb_cdc_tx_free();
+    if (usb_free < budget) { budget = usb_free; }
     if (budget > 32u) { budget = 32u; }
     uint8_t tx_buf[32] = {};
     uint16_t tx_n = 0u;

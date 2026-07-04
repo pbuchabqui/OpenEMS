@@ -28,6 +28,9 @@ void usb_cdc_poll() noexcept;
 // Data transmission
 void usb_cdc_send_byte(uint8_t byte) noexcept;
 void usb_cdc_send_bytes(const uint8_t* data, uint16_t len) noexcept;
+// Espaço livre no ring de TX interno — usar para orçamentar envios e nunca
+// perder bytes silenciosamente (usb_cdc_send_bytes descarta o que não couber).
+uint16_t usb_cdc_tx_free() noexcept;
 
 // Data reception
 bool usb_cdc_available() noexcept;
