@@ -15,5 +15,6 @@ static constexpr uint16_t STATUS_SCHED_DROP = (1u << 7);
 static constexpr uint16_t STATUS_SCHED_CLAMP = (1u << 8);
 static constexpr uint16_t STATUS_WBO2_FAULT = (1u << 9);
 static constexpr uint16_t STATUS_TLE8888_FAULT = (1u << 10);
+static constexpr uint16_t STATUS_IGN_SEQUENTIAL = (1u << 11);
 
 }  // namespace ems::app

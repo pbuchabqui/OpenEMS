@@ -267,12 +267,18 @@ inline void update_realtime_page() noexcept {
     if (!ems::hal::tle8888_ok()) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_TLE8888_FAULT);
     }
+    if (ecu_sched_is_sequential()) {
+        status = static_cast<uint16_t>(status | ems::app::STATUS_IGN_SEQUENTIAL);
+    }
     rt.status_bits = status;
     write_u32_le(&rt.reserved[0], g_rt_sched_late_events);
     rt.reserved[4] = g_rt_lambda_target_d4;
     rt.reserved[5] = static_cast<uint8_t>(g_rt_ltft_pct);
     const uint32_t cmp_glitch_cnt = ems::drv::ckp_get_cmp_glitch_count();
     rt.reserved[6] = cmp_glitch_cnt > 255u ? 255u : static_cast<uint8_t>(cmp_glitch_cnt);
+    // Gate do sequencial: cmp_confirms (0/1/2). Torna observável no dash porquê a
+    // transição wasted→sequencial ocorre ou não (0=CMP ausente/rejeitado, 2=confirmado).
+    rt.reserved[7] = c.cmp_confirms;
     rt.reserved[8] = ems::hal::tle8888_fault_bitmap();
     rt.reserved[9] = ems::hal::flex_fuel_valid()
                     ? ems::hal::flex_fuel_ethanol_pct() : 0u;

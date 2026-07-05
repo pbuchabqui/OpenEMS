@@ -843,6 +843,8 @@ void ecu_sched_dwell_watchdog(void)
 
 uint32_t ecu_sched_dwell_watchdog_count(void) { return g_dwell_watchdog_count; }
 
+uint8_t ecu_sched_is_sequential(void) { return g_knock_sequential; }
+
 void ecu_sched_reset_diagnostic_counters(void)
 {
     ems::hal::CriticalSectionGuard guard;
@@ -917,6 +919,11 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
             ++g_dbg_presync_count;
             ++g_diag_presync_revs;
             calculate_presync_revolution(snap);
+            // Rearma o toggle p/ que a PRIMEIRA fronteira sequencial após presync
+            // compute sempre a tabela (Calculate_Sequential_Cycle). Sem isto, se um
+            // ciclo sequencial anterior deixou o toggle em 0, a re-entrada saltava
+            // uma volta — mantendo a tabela wasted (PHASE_ANY, meia-PW) por +360°.
+            g_hook_schedule_this_gap = 1U;
         } else {
             if (g_hook_schedule_this_gap != 0U) {
                 ++g_dbg_seq_calls;
@@ -981,6 +988,10 @@ void ecu_sched_test_reset(void)
     g_evt_count = 0U; g_evt_armed = 0U;
     for (uint8_t i = 0U; i < EVT_QUEUE_SIZE; ++i) { g_evt_queue[i].valid = 0U; }
     ems_test_tim5_ccr3 = 0U; ems_test_tim5_sr = 0U; ems_test_tim5_dier = 0U; ems_test_tim5_cnt = 0U;
+    // Reset mode/diag counters — testes de transição presync↔sequencial dependem
+    // de arrancar em estado limpo (senão herdam contagem de testes anteriores).
+    g_diag_presync_revs = 0U; g_diag_seq_revs = 0U;
+    g_knock_sequential = 0U; g_cmp_phase_seen = 0U;
 }
 uint8_t ecu_sched_test_angle_table_size(void) { return g_angle_table_count; }
 uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *sub_frac, uint8_t *ch, uint8_t *action, uint8_t *phase)
@@ -1026,4 +1037,6 @@ uint32_t ecu_sched_test_get_tim1_ccr(uint8_t ch) noexcept {
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept { return g_evt_count; }
 uint32_t ecu_sched_test_get_tim5_ccr3(void)  noexcept { return ems_test_tim5_ccr3; }
 void     ecu_sched_test_set_tim5_cnt(uint32_t v) noexcept { ems_test_tim5_cnt = v; }
+uint32_t ecu_sched_test_get_presync_revs(void) { return g_diag_presync_revs; }
+uint32_t ecu_sched_test_get_seq_revs(void) { return g_diag_seq_revs; }
 #endif

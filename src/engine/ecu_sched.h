@@ -103,6 +103,11 @@ uint32_t ecu_sched_pw_duty_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
 void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 
+// Modo de ignição actual: 1 = sequencial (full sync + CMP confirmado),
+// 0 = wasted-spark (presync). Reflecte g_knock_sequential. Usado pela
+// observabilidade (status bit IGN_SEQUENTIAL) e pelos host tests.
+uint8_t ecu_sched_is_sequential(void);
+
 #if defined(EMS_HOST_TEST)
 void ecu_sched_test_reset(void);
 uint8_t ecu_sched_test_angle_table_size(void);
@@ -136,6 +141,9 @@ uint8_t  ecu_sched_test_get_mspark_count(void);
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept;
 uint32_t ecu_sched_test_get_tim5_ccr3(void)  noexcept;
 void     ecu_sched_test_set_tim5_cnt(uint32_t v) noexcept;
+// Contadores de revoluções por modo — validam a transição presync↔sequencial.
+uint32_t ecu_sched_test_get_presync_revs(void);
+uint32_t ecu_sched_test_get_seq_revs(void);
 #endif
 
 #ifdef __cplusplus

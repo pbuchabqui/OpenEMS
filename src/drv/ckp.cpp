@@ -101,6 +101,13 @@ namespace {
 static constexpr uint16_t kRealTeethPerRev    = 58u;  // dentes físicos — uso exclusivo da máquina de estados (gap detection)
 static constexpr uint16_t kTeethPositionsPerRev = 60u; // posições angulares uniformes — uso em cálculos de RPM e ângulo
 
+// Fallback sequencial→wasted por ausência de CMP. O came dispara 1×/720° = a cada
+// 2 revoluções, logo em operação normal o contador chega no máximo a ~2 antes de
+// cada borda o zerar. 6 revs = 3 ciclos de came sem uma borda válida → assume-se
+// que o sinal do came se perdeu e reverte-se a wasted-spark (cmp_confirms=0).
+// Threshold >> 2 evita falso fallback com jitter/rejeição pontual. Ajustável.
+static constexpr uint16_t kMaxRevsWithoutCmp = 6u;
+
 // Mínimo de dentes contados desde o último gap para aceitar novo gap.
 // 55 << 58: descarta pulsos espúrios no início de cada revolução.
 static constexpr uint16_t kGapThresholdTooth  = 55u;
@@ -325,6 +332,19 @@ inline bool is_gap(uint32_t period, uint32_t avg) noexcept {
 static uint32_t g_prev_valid_period_ns = 0u;
 static uint8_t g_coherent_periods_count = 0u;
 static uint32_t s_prev_cmp_capture = 0u;
+// Revoluções (gaps aceites em FULL_SYNC) desde a última borda CMP validada.
+// Zerado na ISR do came; se exceder kMaxRevsWithoutCmp, força fallback a wasted.
+static uint16_t s_revs_since_cmp = 0u;
+// tooth_index da última borda CMP aceite (0xFF = não-ancorado). Uma borda de came
+// real recorre sempre no mesmo dente; ruído (came desligado, PA1 a flutuar) ocorre
+// em posições aleatórias → gate de consistência rejeita-o. ±kCmpToothTol dentes.
+static uint8_t s_cmp_ref_tooth = 0xFFu;
+static constexpr uint8_t kCmpToothTol = 3u;
+// Rejeições temporais CONSECUTIVAS. Ao atingir kCmpRejectResync, s_prev_cmp_capture
+// é considerado obsoleto (came reconectado após ausência/ruído → bordas reais caem
+// fora da janela relativa a uma referência morta) e é largado p/ permitir recuperação.
+static uint8_t s_cmp_reject_streak = 0u;
+static constexpr uint8_t kCmpRejectResync = 3u;
 
 // Teste de dente normal dentro da janela de tolerância ±20%.
 // 0,8×avg ≤ period ≤ 1,2×avg → dente aceito para atualização do histórico.
@@ -496,7 +516,7 @@ inline bool process_gap_event() noexcept {
             // Gap prematuro: pulso espúrio (EMC, dente danificado).
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
-            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u;
+            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u; s_revs_since_cmp = 0u; s_cmp_ref_tooth = 0xFFu;
             return false;
 
         case ems::drv::SyncState::FULL_SYNC:
@@ -505,13 +525,22 @@ inline bool process_gap_event() noexcept {
                 g_state.snap.tooth_index = 0u;
                 advance_phase_half();
                 ++ems::drv::g_dbg_gap_accepted;
+                // Fallback CMP-ausente: conta revoluções desde a última borda de came
+                // validada. Ultrapassado o limite, o came presume-se perdido → zera
+                // cmp_confirms para o agendador reverter a wasted-spark (o gate lê
+                // cmp_confirms>=2). Não toca em s_prev_cmp_capture: uma futura borda
+                // re-valida temporalmente e reconstrói a confirmação do zero.
+                if (s_revs_since_cmp < 0xFFFFu) { ++s_revs_since_cmp; }
+                if (s_revs_since_cmp >= kMaxRevsWithoutCmp && g_state.cmp_confirms != 0u) {
+                    g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
+                }
                 return true;
             }
             ++ems::drv::g_dbg_gap_premature;
             ems::drv::g_dbg_gap_last_tc = g_state.tooth_count;
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
-            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u;
+            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u; s_revs_since_cmp = 0u; s_cmp_ref_tooth = 0xFFu;
             return false;
 
         default:
@@ -753,7 +782,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
             g_state.snap.state == ems::drv::SyncState::FULL_SYNC) {
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
-            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u;
+            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u; s_revs_since_cmp = 0u; s_cmp_ref_tooth = 0xFFu;
         }
     }
 
@@ -810,9 +839,13 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     const uint32_t prev_period_ticks = g_state.prev_period_ticks;
     if (s_prev_cmp_capture != 0u && prev_period_ticks > 0u) {
         const uint32_t cmp_delta = cmp_capture_now - s_prev_cmp_capture; // circular uint32
-        // Expected: 2 × 58 teeth × tooth_period_ticks (one cam cycle = 720° = 2 crank revs)
-        // CMP fires once per 720°, not once per 360°.
-        const uint32_t expected  = 2u * kRealTeethPerRev * prev_period_ticks;
+        // Expected: 2 × 60 posições × tooth_period_ticks (one cam cycle = 720° = 2 crank revs).
+        // CMP fires once per 720°, not once per 360°. O tempo de uma revolução é
+        // kTeethPositionsPerRev (60) × período — inclui o tempo do gap (posições
+        // ausentes ainda ocupam rotação). Usar kRealTeethPerRev (58) subestimava o
+        // delta em ~4 períodos, deslocando a janela p/ baixo e arriscando rejeitar
+        // bordas legítimas em cranking acelerado (delta acumulado deriva p/ max_valid).
+        const uint32_t expected  = 2u * kTeethPositionsPerRev * prev_period_ticks;
         // FIX C10: at cranking/low RPM the starter motor can disengage mid-revolution,
         // causing tooth period to grow 30-40%. A fixed ±25% window would reject
         // legitimate CMP edges and leave the decoder stuck in HALF_SYNC.
@@ -826,10 +859,19 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
         const uint32_t max_valid = expected + (expected / tolerance);
         if (cmp_delta < min_valid || cmp_delta > max_valid) {
             ++g_state.cmp_glitch_count;
-            // Do NOT update s_prev_cmp_capture — keep last known-good timestamp
+            // Normalmente não se atualiza s_prev (rejeita glitch isolado mantendo a
+            // referência boa). Mas se as rejeições forem CONSECUTIVAS, a referência
+            // está morta (came reconectado após fallback) → larga-a p/ a próxima
+            // borda re-ancorar como "primeira", senão nunca recupera o sequencial.
+            if (++s_cmp_reject_streak >= kCmpRejectResync) {
+                s_prev_cmp_capture = 0u;
+                s_cmp_ref_tooth = 0xFFu;
+                s_cmp_reject_streak = 0u;
+            }
             return;
         }
     }
+    s_cmp_reject_streak = 0u;  // passou o gate temporal → limpa a contagem de rejeições
     // ── Validação de janela de dente CMP (configurável) ──────────────────
     // Se open != 0 || close != 0 verifica se tooth_index cai dentro da janela.
     // open=0 close=0 → desabilitado (comportamento padrão).
@@ -847,6 +889,35 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
         }
     }
 
+    // ── Consistência de posição do came (auto-ancorada) ──────────────────
+    // Uma borda de came real recorre sempre no mesmo tooth_index. Ruído (came
+    // desligado, PA1 a flutuar) chega em posições aleatórias: mesmo que passe o
+    // gate temporal por acaso, falha aqui → não confirma sync → fica em wasted.
+    {
+        const uint8_t ti = static_cast<uint8_t>(g_state.snap.tooth_index);
+        if (s_cmp_ref_tooth != 0xFFu && s_prev_cmp_capture != 0u) {
+            uint8_t diff = (ti >= s_cmp_ref_tooth)
+                         ? static_cast<uint8_t>(ti - s_cmp_ref_tooth)
+                         : static_cast<uint8_t>(s_cmp_ref_tooth - ti);
+            if (diff > (kRealTeethPerRev / 2u)) {
+                diff = static_cast<uint8_t>(kRealTeethPerRev - diff);  // wrap na roda
+            }
+            if (diff > kCmpToothTol) {
+                // Salto de posição → não é came coerente. Re-ancora (auto-cura para
+                // came real que ligue após ruído) e derruba a confirmação a 0
+                // (escolha agressiva: exige 2 bordas coerentes p/ re-sincronizar).
+                // TUNING: se surgir "flapping" com came ligado mas ruidoso na
+                // bancada, baixar para 1 em vez de 0 (histerese mais suave).
+                ++g_state.cmp_glitch_count;
+                s_cmp_ref_tooth = ti;
+                s_prev_cmp_capture = cmp_capture_now;
+                g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
+                return;
+            }
+        }
+        s_cmp_ref_tooth = ti;
+    }
+
     s_prev_cmp_capture = cmp_capture_now;
     // CMP validated: defer phase correction to next gap to avoid mid-revolution split.
     // Store pre-toggle value: after XOR in advance_phase_half, result = kCmpRefHalf.
@@ -861,6 +932,9 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
         ++g_state.cmp_confirms;
     }
     g_state.snap.cmp_confirms = g_state.cmp_confirms;
+    // Borda de came validada: zera o contador de fallback CMP-ausente.
+    // (glitches saem antes deste ponto → não zeram o contador.)
+    s_revs_since_cmp = 0u;
 }
 
 bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
@@ -883,7 +957,7 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
         g_state.snap.state   = SyncState::LOSS_OF_SYNC;
         g_state.snap.rpm_x10 = 0u;
         g_state.tooth_count  = 0u;
-        g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u;
+        g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u; s_revs_since_cmp = 0u; s_cmp_ref_tooth = 0xFFu;
     }
     exit_critical();
     return true;
@@ -941,6 +1015,9 @@ void ckp_test_reset() noexcept {
     g_prev_valid_period_ns = 0u;
     g_coherent_periods_count = 0u;
     s_prev_cmp_capture = 0u;
+    s_revs_since_cmp = 0u;
+    s_cmp_ref_tooth = 0xFFu;
+    s_cmp_reject_streak = 0u;
 }
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {

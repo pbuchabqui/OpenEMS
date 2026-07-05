@@ -48,6 +48,7 @@ STATUS_BITS = {
     "SCHED_CLAMP":      0x0100,  # bit 8
     "WBO2_FAULT":       0x0200,  # bit 9
     "TLE8888_FAULT":    0x0400,  # bit 10
+    "IGN_SEQUENTIAL":   0x0800,  # bit 11 — 1=sequencial, 0=wasted-spark (presync)
 }
 
 
@@ -84,6 +85,8 @@ class RealtimeData:
     ltft_pct: int
     tle8888_fault_bm: int
     ethanol_pct: int
+    cmp_confirms: int   # gate do sequencial (0/1/2); 2 = CMP confirmado → sequencial
+    cmp_glitch: int     # bordas CMP rejeitadas pela validação temporal (saturado 255)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -132,6 +135,8 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         ltft_pct=struct.unpack_from("<b", r, 5)[0],
         tle8888_fault_bm=r[8],
         ethanol_pct=r[9],
+        cmp_confirms=r[7],
+        cmp_glitch=r[6],
     )
 
 

@@ -2118,6 +2118,131 @@ static void test_ecu_sched_angle_table(void) {
     CHECK_TRUE(tooth < 58u, "tooth_index < kRealTeeth60_2");
 }
 
+// ── Transição wasted-spark ↔ sequencial via bordas CMP reais ────────────────
+// Ao contrário dos outros testes sequenciais (que dão bypass ao gate com
+// ckp_test_set_cmp_confirms(2u)), este conduz o caminho NUNCA testado: a
+// validação temporal em ckp_tim5_ch2_isr via cam_fire(). Reproduz o sintoma
+// de bancada ("ao ligar o CMP nada muda") com entradas ideais.
+//
+// Mecânica do timing: cada ckp_feed_n_then_gap(55) avança g_ckp_cap por
+// 58×período (55 normais + gap 3×período). CMP dispara 1×/720° = 2 revs =
+// 116×período, que é exactamente expected = 2×kRealTeethPerRev(58)×período em
+// ckp_tim5_ch2_isr → a 2ª borda cai no centro da janela ±25%.
+static void test_ecu_sched_wasted_to_sequential(void) {
+    section("ecu_sched: transição wasted→sequencial via CMP real (cam_fire)");
+    ecu_sched_test_reset();
+    // Janela de dente CMP desabilitada (default), defensivo contra herança de
+    // estado de testes anteriores no mesmo processo.
+    ems::engine::cmp_window_open_tooth  = 0u;
+    ems::engine::cmp_window_close_tooth = 0u;
+
+    // 1) FULL_SYNC sem CMP → wasted-spark (presync).
+    ckp_reach_full_sync();                       // reseta g_ckp_cap=0, dirige o hook
+    ckp_feed_n_then_gap(55u);                     // 1 rev extra em wasted
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "cmp_confirms=0 sem CMP");
+    CHECK_TRUE(ecu_sched_test_get_presync_revs() > 0u, "presync_revs>0 (wasted a correr)");
+    CHECK_EQ(ecu_sched_test_get_seq_revs(), 0u, "seq_revs=0 (ainda não sequencial)");
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "is_sequential=0 sem CMP");
+
+    // 2) 1ª borda CMP (s_prev_cmp_capture=0 → salta validação) → cmp_confirms=1.
+    //    Ainda insuficiente para sequencial (gate exige >=2).
+    cam_fire(g_ckp_cap);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "1ª borda CMP → cmp_confirms=1");
+    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(55u);                     // +2 revs → g_ckp_cap += 116×período
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "1 confirm insuficiente: continua wasted");
+
+    // 3) 2ª borda CMP: delta = 116×período = expected → validada → cmp_confirms=2.
+    cam_fire(g_ckp_cap);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "2ª borda coerente → cmp_confirms=2");
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "nenhuma borda CMP rejeitada");
+
+    // 4) Próximas fronteiras de revolução → gate abre → Calculate_Sequential_Cycle.
+    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(55u);
+    CHECK_TRUE(ecu_sched_test_get_seq_revs() > 0u, "seq_revs>0 após CMP confirmado");
+    CHECK_EQ(ecu_sched_is_sequential(), 1u, "is_sequential=1: entrou em sequencial");
+
+    // 5) Fallback CMP-ausente (Parte C-#2): mantendo o sincronismo mas SEM novas
+    //    bordas de came, o contador de revoluções desde a última borda ultrapassa
+    //    kMaxRevsWithoutCmp (6) → cmp_confirms zera → o agendador reverte a wasted.
+    //    Reproduz a segunda metade do relato ("o fallback para wasted não funciona").
+    for (uint32_t i = 0; i < 8u; ++i) { ckp_feed_n_then_gap(55u); }
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "sem came >6 revs → cmp_confirms zerado");
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "fallback: reverteu a wasted-spark");
+}
+
+// Ruído no pino CMP (came desligado, PA1 a flutuar) gera bordas fantasma em
+// posições de virabrequim ALEATÓRIAS. O gate de consistência de posição
+// (ckp_tim5_ch2_isr) exige que bordas consecutivas ocorram no mesmo tooth_index:
+// ruído nunca junta 2 coerentes → cmp_confirms não chega a 2 → fica em wasted.
+static void test_ecu_sched_noise_rejects_sequential(void) {
+    section("ecu_sched: ruído CMP (posição inconsistente) NÃO entra em sequencial");
+    ecu_sched_test_reset();
+    ems::engine::cmp_window_open_tooth  = 0u;
+    ems::engine::cmp_window_close_tooth = 0u;
+    ckp_reach_full_sync();                                   // FULL_SYNC, tooth 0
+
+    // Borda 1 no dente 5 → ancora a posição de referência (cmp_confirms=1).
+    for (uint32_t i = 0; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
+    cam_fire(g_ckp_cap);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "1ª borda ancora posição (cmp_confirms=1)");
+
+    // Borda 2 ~2 revs depois mas noutro dente (25≠5): passa o gate temporal
+    // (~120 períodos, dentro de ±25%) mas falha o de posição → rejeitada.
+    for (uint32_t i = 0; i < 50u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
+    ckp_feed_n_then_gap(55u);
+    for (uint32_t i = 0; i < 25u; ++i) { ckp_fire(kNormalPeriod); }   // tooth 25
+    cam_fire(g_ckp_cap);
+    CHECK_TRUE(ckp_snapshot().cmp_confirms < 2u, "borda em dente inconsistente não confirma");
+
+    // Mais bordas em dentes sempre diferentes → nunca acumula 2 coerentes.
+    const uint8_t teeth[3] = {40u, 12u, 33u};
+    for (uint8_t k = 0; k < 3u; ++k) {
+        for (uint32_t i = 0; i < 30u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
+        ckp_feed_n_then_gap(55u);
+        for (uint32_t i = 0; i < teeth[k]; ++i) { ckp_fire(kNormalPeriod); }
+        cam_fire(g_ckp_cap);
+    }
+    CHECK_TRUE(ckp_snapshot().cmp_confirms < 2u, "ruído nunca atinge cmp_confirms=2");
+    ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "permanece em wasted-spark sob ruído CMP");
+}
+
+// Após fallback a wasted (came ausente), o came RECONECTADO tem de recuperar o
+// sequencial. Reproduz o deadlock: s_prev_cmp_capture fica obsoleto (borda real de
+// há muitas revs) e cada borda reconectada é rejeitada por tempo contra ele. O
+// resync por rejeições consecutivas (kCmpRejectResync) larga a referência e recupera.
+static void test_ecu_sched_recovers_after_fallback(void) {
+    section("ecu_sched: recupera sequencial após fallback (came reconectado)");
+    ecu_sched_test_reset();
+    ems::engine::cmp_window_open_tooth  = 0u;
+    ems::engine::cmp_window_close_tooth = 0u;
+    ckp_reach_full_sync();
+
+    // Entra em sequencial: 2 bordas coerentes no tooth 0.
+    cam_fire(g_ckp_cap);
+    ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
+    cam_fire(g_ckp_cap);
+    ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "pré: sequencial (cmp_confirms=2)");
+    CHECK_EQ(ecu_sched_is_sequential(), 1u, "pré: is_sequential=1");
+
+    // "Desconecta": 10 revs sem came → #2 fallback → wasted. s_prev fica obsoleto.
+    for (uint32_t i = 0; i < 10u; ++i) { ckp_feed_n_then_gap(55u); }
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "fallback: cmp_confirms=0");
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "fallback: wasted");
+
+    // "Reconecta": bordas coerentes no tooth 0. Sem o resync, todas seriam rejeitadas
+    // por tempo contra o s_prev obsoleto (deadlock). Com o resync, recupera.
+    for (uint8_t e = 0; e < 6u; ++e) {
+        cam_fire(g_ckp_cap);
+        ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
+    }
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "recuperou: cmp_confirms=2 após reconexão");
+    CHECK_EQ(ecu_sched_is_sequential(), 1u, "recuperou: voltou a sequencial");
+}
+
 static void test_ecu_sched_inhibit_masks(void) {
     section("ecu_sched: injection / ignition inhibit masks");
     ecu_sched_test_reset();
@@ -3900,6 +4025,9 @@ int main(void) {
     printf("\n=== ECU SCHED ===");
     test_ecu_sched_setters();
     test_ecu_sched_angle_table();
+    test_ecu_sched_wasted_to_sequential();
+    test_ecu_sched_noise_rejects_sequential();
+    test_ecu_sched_recovers_after_fallback();
     test_ecu_sched_inhibit_masks();
     test_ecu_sched_mspark();
     test_ecu_sched_ivc();

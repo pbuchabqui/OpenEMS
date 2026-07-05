@@ -60,7 +60,8 @@ $("#gauges").innerHTML = GAUGES.map(([k, l]) =>
 
 
 const LEDS = [
-  ["FULL_SYNC", true], ["PHASE_A", true], ["SENSOR_FAULT", false],
+  ["FULL_SYNC", true], ["PHASE_A", true], ["IGN_SEQUENTIAL", true],
+  ["SENSOR_FAULT", false],
   ["SCHED_LATE", false], ["SCHED_DROP", false], ["SCHED_CLAMP", false],
   ["WBO2_FAULT", false],
   ["TLE8888_FAULT", false],
@@ -119,7 +120,8 @@ function pushTelemetry(d) {
   $("#diag").textContent =
     `loop2ms ${d.loop2ms_last_us}µs (max ${d.loop2ms_max_us}µs) · ` +
     `late ${d.late_events} · drops ${d.sched_drops} · clamps ${d.cal_clamps} · ` +
-    `sync_state ${d.sync_state}${tleStr}`;
+    `sync_state ${d.sync_state} · cmp_confirms ${d.cmp_confirms} · ` +
+    `cmp_glitch ${d.cmp_glitch}${tleStr}`;
 }
 
 /* ── WebSocket ────────────────────────────────────────────────────────── */
