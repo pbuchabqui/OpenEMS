@@ -319,30 +319,29 @@ static inline const CachedFuelCorrections& fuel_corrections_for(
     return g_fuel_corr_cache;
 }
 
-static inline void ui_service() noexcept {
-    // ── USB CDC path (stub; no-op até driver real) ─────────────────────────
-    // O caminho UART (RX/TX/parse) vive em comms_pump() a 2 ms; aqui fica só
-    // o transporte USB, cuja latência de 20 ms é aceitável.
+static inline void comms_pump() noexcept {
+    // Shuttle UART+USB↔protocolo a 2 ms. Ambos os transportes são servidos no
+    // MESMO ritmo curto: o handshake de conexão do TunerStudio envia comandos
+    // PLAIN (F, Q, ...) e, se a resposta demora, ele estoura o timeout curto e
+    // envia o próximo comando antes de ler a resposta anterior — as duas
+    // respostas saem então coladas ("001OpenEMS_v1.2") e o TS rejeita com
+    // "Unsupported Controller Firmware". Servir o USB a 20 ms (como antes)
+    // garantia esse gluing; a 2 ms cada comando é respondido a tempo, como nas
+    // implementações de referência (Speeduino/rusEFI: request→resposta→flush
+    // sub-ms). Nada aqui bloqueia (drena TX só com espaço no FIFO/rings).
+    ems::hal::uart0_poll_rx(32u);
+    {
+        uint8_t b = 0u;
+        while (ems::hal::uart0_rx_pop(b)) {
+            ems::app::ui_rx_byte(b);
+        }
+    }
     ems::hal::usb_cdc_poll();
     if (ems::hal::usb_cdc_dtr()) {
         uint8_t rx_buf[64] = {};
         const uint16_t rx_n = ems::hal::usb_cdc_read_bytes(rx_buf, 64u);
         for (uint16_t i = 0u; i < rx_n; ++i) {
             ems::app::ui_rx_byte(rx_buf[i]);
-        }
-    }
-    ems::app::ui_process();
-}
-
-static inline void comms_pump() noexcept {
-    // Shuttle UART↔protocolo a 2 ms: a 115200 chegam ~23 B por período — o
-    // poll de 32 acompanha a linha sem estourar o ring RX de 128 B. Nada aqui
-    // bloqueia: a drenagem TX só escreve com espaço no FIFO (8 entradas).
-    ems::hal::uart0_poll_rx(32u);
-    {
-        uint8_t b = 0u;
-        while (ems::hal::uart0_rx_pop(b)) {
-            ems::app::ui_rx_byte(b);
         }
     }
     ems::app::ui_process();
@@ -1022,7 +1021,7 @@ int main() {
                 ems::drv::ckp_seed_rejected_count(),
                 static_cast<uint8_t>(snap.state));
             ems::app::ui_update_ivc_diag(::ecu_sched_ivc_clamp_count());
-            ui_service();
+            // Transporte (UART+USB RX/TX/parse) vive em comms_pump() a 2 ms.
             ems::engine::auxiliaries_tick_20ms();
             ems::app::can_stack_process(now, snap, sensors,
                                         g_last_advance_deg,
