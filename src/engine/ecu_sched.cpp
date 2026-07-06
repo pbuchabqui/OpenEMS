@@ -704,9 +704,9 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
         uint8_t tooth, frac, phase;
 
         angle_to_tooth_event(engine_angle_to_trigger_angle(dwell, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
+        table_add(tooth, frac, phase, ign_ch[seq], ECU_ACT_DWELL_START);
         angle_to_tooth_event(engine_angle_to_trigger_angle(spark, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
+        table_add(tooth, frac, phase, ign_ch[seq], ECU_ACT_SPARK);
 
         // ── Additional sparks (MS42 §2.2.3 — multi-spark) ──────────────
         // Cada spark adicional n usa o mesmo canal de ignição do cilindro.
@@ -727,17 +727,17 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
                     const uint32_t add_dwell_ang = (spark + add_dwell_off) % ECU_CYCLE_DEG;
                     const uint32_t add_spark_ang = (spark + add_spark_off) % ECU_CYCLE_DEG;
                     angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-                    table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
+                    table_add(tooth, frac, phase, ign_ch[seq], ECU_ACT_DWELL_START);
                     angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-                    table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
+                    table_add(tooth, frac, phase, ign_ch[seq], ECU_ACT_SPARK);
                 }
             }
         }
 
         angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, inj_ch[cyl], ECU_ACT_INJ_ON);
+        table_add(tooth, frac, phase, inj_ch[seq], ECU_ACT_INJ_ON);
         angle_to_tooth_event(engine_angle_to_trigger_angle(inj_off, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, inj_ch[cyl], ECU_ACT_INJ_OFF);
+        table_add(tooth, frac, phase, inj_ch[seq], ECU_ACT_INJ_OFF);
     }
 }
 
@@ -755,9 +755,12 @@ static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
     g_angle_tooth_mask_hi = 0U;
 
     const uint32_t dwell_deg = ticks_to_cycle_degrees(g_dwell_ticks, snap.tooth_period_ns, 360U);
-    // Presync fires each injector once per 360° rev (2× per 720° cycle).
-    // Halve the per-cycle PW so each event delivers half the intended dose.
-    uint32_t inj_pw_deg = ticks_to_cycle_degrees(g_inj_pw_ticks / 2U, snap.tooth_period_ns, 360U);
+    // Diverging presync injection modes — same 360° window, different firing rate:
+    //   SIMULTANEOUS:   all 4 injectors every 360° (2× per 720° cycle each).
+    //   SEMI_SEQUENTIAL: bank A or B alternates each 360° (1× per 720° per injector).
+    uint32_t inj_pw_deg = ticks_to_cycle_degrees(
+        (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) ? (g_inj_pw_ticks / 2U) : g_inj_pw_ticks,
+        snap.tooth_period_ns, 360U);
     // Duty clamp na janela de 360° — mesma razão do modo sequencial.
     // Improvável no cranking (200 RPM → 360° = 150 ms), mas obrigatório por
     // simetria: PW_deg ≥ 360° colapsaria na aritmética modular.
