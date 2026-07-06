@@ -573,6 +573,7 @@ static void openems_init() noexcept {
 
     // 2a) Scheduler unificado
     ::ECU_Hardware_Init();
+    ::ecu_sched_set_presync_inj_auto(1u);  // auto-select SIMULTANEOUS/SEMI_SEQUENTIAL by cranking
     iwdg_kick();
 
     // 3) ADC (ADC1/ADC2 + TIM6 trigger)

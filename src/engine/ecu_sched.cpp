@@ -4,6 +4,7 @@
 #include "engine/constants.h"
 #include "engine/knock.h"
 #include "engine/calibration.h"
+#include "engine/quick_crank.h"
 #include "hal/regs.h"
 #include "hal/critical_section.h"
 
@@ -221,6 +222,7 @@ volatile uint8_t g_inj_pw_override = 0U;  // 1=lock g_inj_pw_ticks, ignore main 
 static volatile uint32_t g_eoi_lead_deg = 355U;
 static volatile uint8_t g_presync_enable = 1U;
 static volatile uint8_t g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
+static volatile uint8_t g_presync_inj_auto = 1U;  // 1=auto-select by crank state
 static volatile uint8_t g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
 static volatile uint8_t g_presync_bank_toggle = 0U;
 static volatile uint8_t g_hook_prev_valid = 0U;
@@ -780,6 +782,29 @@ static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
     angle_to_tooth_event(engine_angle_to_trigger_angle(spark, 360U), &tooth, &frac, &phase);
     for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_SPARK); }
 
+    // Multi-spark for presync (MS42 §2.2.3): additional sparks when below RPM gate.
+    // All IGN channels receive the same additional sparks (wasted-spark topology).
+    {
+        const uint8_t ms_count = g_mspark_count;
+        if (ms_count > 0U && snap.tooth_period_ns > 0U) {
+            const uint32_t inter_deg = ticks_to_cycle_degrees(
+                g_mspark_inter_dwell_ticks, snap.tooth_period_ns, 360U);
+            const uint32_t step      = inter_deg + 1U;
+            const uint32_t window    = g_advance_deg + g_mspark_atdc_limit_deg;
+            for (uint8_t n = 1U; n <= ms_count; ++n) {
+                const uint32_t add_spark_off = (uint32_t)n * step;
+                if (add_spark_off >= window) { break; }
+                const uint32_t add_dwell_off = (uint32_t)(n - 1U) * step + 1U;
+                const uint32_t add_dwell_ang = (spark + add_dwell_off) % 360U;
+                const uint32_t add_spark_ang = (spark + add_spark_off) % 360U;
+                angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, 360U), &tooth, &frac, &phase);
+                for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_DWELL_START); }
+                angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, 360U), &tooth, &frac, &phase);
+                for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_SPARK); }
+            }
+        }
+    }
+
     angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, 360U), &tooth, &frac, &phase);
     if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
         for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, inj_all[i], ECU_ACT_INJ_ON); }
@@ -820,6 +845,8 @@ void ecu_sched_set_dwell_ticks(uint32_t dwell) { ems::hal::CriticalSectionGuard 
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { ems::hal::CriticalSectionGuard guard; if (g_inj_pw_override == 0U) { g_inj_pw_ticks = pw_ticks; } sanitize_runtime_calibration(); }
 void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ems::hal::CriticalSectionGuard guard; g_eoi_lead_deg = eoi_lead_deg; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_enable(uint8_t enable) { ems::hal::CriticalSectionGuard guard; g_presync_enable = (enable != 0U) ? 1U : 0U; }
+void ecu_sched_set_presync_inj_auto(uint8_t on) { ems::hal::CriticalSectionGuard guard; g_presync_inj_auto = on ? 1U : 0U; }
+
 void ecu_sched_set_presync_inj_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_inj_mode = mode; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_ign_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_ign_mode = mode; sanitize_runtime_calibration(); }
 void ecu_sched_set_ivc(uint8_t ivc_abdc_deg) { ems::hal::CriticalSectionGuard guard; g_ivc_abdc_deg = (ivc_abdc_deg > 180U) ? 180U : ivc_abdc_deg; }
@@ -848,6 +875,7 @@ uint32_t ecu_sched_dwell_watchdog_count(void) { return g_dwell_watchdog_count; }
 
 uint8_t ecu_sched_is_sequential(void) { return g_knock_sequential; }
 uint8_t ecu_sched_presync_inj_mode(void) { return g_presync_inj_mode; }
+uint8_t ecu_sched_presync_inj_auto(void) { return g_presync_inj_auto; }
 
 void ecu_sched_reset_diagnostic_counters(void)
 {
@@ -894,6 +922,7 @@ void ecu_sched_set_ign_inhibit_mask(uint8_t mask)
 uint8_t ecu_sched_get_ign_inhibit_mask(void) { return g_ign_inhibit_mask; }
 
 namespace ems::engine {
+extern bool g_prev_cranking;
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
     static uint8_t s_unsync_teeth = 0U;
@@ -913,6 +942,14 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     // Cam-present gate: decoupled from phase_A (which now toggles at every gap).
     // Requires 2 validated CMP edges since last sync loss.
     g_cmp_phase_seen = (snap.cmp_confirms >= 2U) ? 1U : 0U;
+
+    // Auto-select presync injection mode by cranking state
+    // SIMULTANEOUS during crank (batch-fire), SEMI_SEQUENTIAL after
+    if (g_presync_inj_auto) {
+        g_presync_inj_mode = ems::engine::is_cranking()
+            ? ECU_PRESYNC_INJ_SIMULTANEOUS
+            : ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
+    }
 
     const uint8_t rev_boundary = ((g_hook_prev_valid != 0U) && (snap.tooth_index == 0U) && (g_hook_prev_tooth != 0U)) ? 1U : 0U;
     if (rev_boundary != 0U) {
@@ -975,7 +1012,7 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept { ems::engine::ecu_sche
 void ecu_sched_test_reset(void)
 {
     g_late_event_count = 0U; g_cycle_schedule_drop_count = 0U; g_calibration_clamp_count = 0U;
-    g_presync_enable = 1U; g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
+    g_presync_enable = 1U; g_presync_inj_auto = 0U; g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
     g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
     g_advance_deg = 10U; g_dwell_ticks = 140625U; g_inj_pw_ticks = 140625U; g_eoi_lead_deg = 355U;
     g_angle_table_count = 0U; g_angle_tooth_mask_lo = 0U; g_angle_tooth_mask_hi = 0U;

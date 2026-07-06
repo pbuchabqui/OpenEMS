@@ -287,7 +287,11 @@ inline void update_realtime_page() noexcept {
     write_u32_le(&rt.reserved[18], g_rt_seed_loaded_count);
     write_u32_le(&rt.reserved[22], g_rt_seed_confirmed_count);
     write_u32_le(&rt.reserved[26], g_rt_seed_rejected_count);
-    rt.reserved[30] = g_rt_sync_state_raw;
+    const uint8_t inj_mode = ::ecu_sched_is_sequential() ? 2u
+                            : ::ecu_sched_presync_inj_mode();
+    rt.reserved[30] = static_cast<uint8_t>((inj_mode << 4u) | (g_rt_sync_state_raw & 0x0Fu));
+    // reserved[30] bits: [7:4]=inj_mode (0=simultaneous,1=semi_seq,2=sequential),
+    //                     [3:0]=sync_state (0=WAIT_GAP..3=LOSS_OF_SYNC)
     write_u32_le(&rt.reserved[31], g_rt_ivc_clamp_count);
     write_u32_le(&rt.reserved[35], g_rt_loop2ms_last_us);
     write_u32_le(&rt.reserved[39], g_rt_loop2ms_max_us);
@@ -396,6 +400,9 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 164, &ems::engine::eoi_idle_deg,      2u);
         std::memcpy(g_page0 + 166, &ems::engine::eoi_blend_rpm_lo,  2u);
         std::memcpy(g_page0 + 168, &ems::engine::eoi_blend_rpm_hi,  2u);
+        std::memcpy(g_page0 + 170, &ems::engine::mspark_max_rpm_x10, 2u);
+        g_page0[172] = ems::engine::mspark_count;
+        std::memcpy(g_page0 + 173, &ems::engine::mspark_inter_dwell_ms_x10, 2u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -530,6 +537,11 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::eoi_idle_deg,      g_page0 + 164, 2u);
         std::memcpy(&ems::engine::eoi_blend_rpm_lo,  g_page0 + 166, 2u);
         std::memcpy(&ems::engine::eoi_blend_rpm_hi,  g_page0 + 168, 2u);
+        if (g_page0[172] > 0u && g_page0[172] <= 3u) {
+            std::memcpy(&ems::engine::mspark_max_rpm_x10, g_page0 + 170, 2u);
+            ems::engine::mspark_count = g_page0[172];
+            std::memcpy(&ems::engine::mspark_inter_dwell_ms_x10, g_page0 + 173, 2u);
+        }
         // eoi_idle_deg fora de [0,719] seria clampado pelo blend; normaliza aqui
         if (ems::engine::eoi_idle_deg > 719u) { ems::engine::eoi_idle_deg = 719u; }
         etb_apply_idle_calibration();

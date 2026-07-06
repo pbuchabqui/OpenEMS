@@ -87,6 +87,7 @@ class RealtimeData:
     ethanol_pct: int
     cmp_confirms: int   # gate do sequencial (0/1/2); 2 = CMP confirmado → sequencial
     cmp_glitch: int     # bordas CMP rejeitadas pela validação temporal (saturado 255)
+    inj_mode: int       # 0=simultaneous, 1=semi_seq, 2=sequential
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -123,7 +124,8 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         seed_loaded=struct.unpack_from("<I", r, 18)[0],
         seed_confirmed=struct.unpack_from("<I", r, 22)[0],
         seed_rejected=struct.unpack_from("<I", r, 26)[0],
-        sync_state=r[30],
+        sync_state=r[30] & 0x0F,
+        inj_mode=r[30] >> 4,
         ivc_clamps=struct.unpack_from("<I", r, 31)[0],
         loop2ms_last_us=struct.unpack_from("<I", r, 35)[0],
         loop2ms_max_us=struct.unpack_from("<I", r, 39)[0],
@@ -399,6 +401,9 @@ PAGE0_FIELDS = [
     ("eoi_idle_deg",           164, 1, "H", 1.0),  # ° BTDC — EOI em idle (blend)
     ("eoi_blend_rpm_lo",       166, 1, "H", 1.0),  # RPM início do blend (0/0=off)
     ("eoi_blend_rpm_hi",       168, 1, "H", 1.0),  # RPM fim do blend
+    ("mspark_max_rpm_x10",       170, 1, "H", 0.1),  # RPM max p/ multi-spark
+    ("mspark_count",              172, 1, "B", 1.0),  # sparks adicionais (0-3)
+    ("mspark_inter_dwell_ms_x10", 173, 1, "H", 0.1),  # dwell entre sparks (ms)
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

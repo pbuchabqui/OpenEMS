@@ -44,4 +44,7 @@ void quick_crank_set_clt(int16_t clt_x10) noexcept;
  */
 uint32_t quick_crank_consume_prime() noexcept;
 
+	/// Returns true while the engine is in cranking mode
+	bool is_cranking() noexcept;
+
 }  // namespace ems::engine

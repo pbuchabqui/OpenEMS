@@ -47,7 +47,7 @@ constexpr P2 kAfterstartDurationMs[] = {
     {1100, 500},
 };
 
-bool g_prev_cranking = false;
+volatile bool g_prev_cranking = false;
 uint32_t g_afterstart_start_ms = 0u;
 uint32_t g_afterstart_duration_ms = 0u;
 
@@ -304,6 +304,10 @@ uint32_t quick_crank_consume_prime() noexcept {
     }
     exit_critical();
     return pw;
+}
+
+bool is_cranking() noexcept {
+    return g_prev_cranking;
 }
 
 }  // namespace ems::engine

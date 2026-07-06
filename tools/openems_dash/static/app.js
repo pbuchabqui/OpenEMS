@@ -59,13 +59,8 @@ $("#gauges").innerHTML = GAUGES.map(([k, l]) =>
   `<div class="gauge"><div class="v" id="g_${k}">—</div><div class="l">${l}</div></div>`).join("");
 
 
-const LEDS = [
-  ["FULL_SYNC", true], ["PHASE_A", true], ["IGN_SEQUENTIAL", true],
-  ["SENSOR_FAULT", false],
-  ["SCHED_LATE", false], ["SCHED_DROP", false], ["SCHED_CLAMP", false],
-  ["WBO2_FAULT", false],
-  ["TLE8888_FAULT", false],
-];
+const INJ_MODES = {0:"SIMULTANEOUS", 1:"SEMI-SEQ", 2:"SEQUENTIAL"};
+const LEDS = [["SENSOR_FAULT", false]];
 $("#statusLeds").innerHTML = LEDS.map(([k]) =>
   `<span class="led" id="led_${k}">[${k.replace(/_/g,"-")}]</span>`).join("");
 
@@ -111,6 +106,8 @@ function pushTelemetry(d) {
   }
   for (const [k, , fmt] of GAUGES)
     $(`#g_${k}`).textContent = fmt(d[k]);
+  const mode = INJ_MODES[d.inj_mode] || "?";
+  $("#injMode").textContent = mode;
   for (const [k, goodWhenOn] of LEDS) {
     const on = d.status[k];
     $(`#led_${k}`).className = "led" + (on ? (goodWhenOn ? " on-good" : " on-bad") : "");

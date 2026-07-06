@@ -65,6 +65,8 @@ void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
 void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg);
 void ecu_sched_set_presync_enable(uint8_t enable);
 void ecu_sched_set_presync_inj_mode(uint8_t mode);
+void ecu_sched_set_presync_inj_auto(uint8_t on);
+uint8_t ecu_sched_presync_inj_auto(void);
 void ecu_sched_set_presync_ign_mode(uint8_t mode);
 void ecu_sched_reset_diagnostic_counters(void);
 
