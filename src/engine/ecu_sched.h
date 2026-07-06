@@ -107,6 +107,7 @@ void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 // 0 = wasted-spark (presync). Reflecte g_knock_sequential. Usado pela
 // observabilidade (status bit IGN_SEQUENTIAL) e pelos host tests.
 uint8_t ecu_sched_is_sequential(void);
+uint8_t ecu_sched_presync_inj_mode(void);
 
 #if defined(EMS_HOST_TEST)
 void ecu_sched_test_reset(void);

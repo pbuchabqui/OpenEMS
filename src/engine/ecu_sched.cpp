@@ -847,6 +847,7 @@ void ecu_sched_dwell_watchdog(void)
 uint32_t ecu_sched_dwell_watchdog_count(void) { return g_dwell_watchdog_count; }
 
 uint8_t ecu_sched_is_sequential(void) { return g_knock_sequential; }
+uint8_t ecu_sched_presync_inj_mode(void) { return g_presync_inj_mode; }
 
 void ecu_sched_reset_diagnostic_counters(void)
 {

@@ -1010,7 +1010,11 @@ int main() {
             g_t20ms_ = now;
             const auto snap = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
-            ems::app::ui_update_rt_metrics(g_last_pw_ms_x10, g_last_advance_deg, g_last_stft_pct,
+            ems::app::ui_update_rt_metrics(
+	            // In presync+SIMULTANEOUS the scheduler halves PW per pulse
+	            (!ecu_sched_is_sequential() && ecu_sched_presync_inj_mode() == 0u)
+	                ? static_cast<uint8_t>(g_last_pw_ms_x10 / 2u) : g_last_pw_ms_x10,
+	            g_last_advance_deg, g_last_stft_pct,
                                            g_last_lambda_target_d4, g_last_ltft_pct);
             ems::app::ui_update_rt_sched_diag(
                 g_late_event_count,
