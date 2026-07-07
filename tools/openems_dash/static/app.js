@@ -37,7 +37,96 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
   if (b.dataset.tab === "boost"     && !$("#boostRoot").dataset.loaded)    loadBoostMap();
   if (b.dataset.tab === "telemetry")
     charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 160 }));
+  updateCalDirty();
 });
+
+/* ── Global calibration buttons (Read / Send / Burn) ──────────────────── */
+function activePage() {
+  const p = $(".pane.active");
+  if (!p) return null;
+  if (p.classList.contains("grid-pane")) return +p.dataset.page;
+  if (p.id === "tab-params") {
+    // Return the page of the last-modified or first open param group
+    const open = $(".pg:not(.collapsed)", p);
+    return open ? +open.dataset.page : null;
+  }
+  return null; // pedal-map, boost handled by their own buttons
+}
+
+function updateCalDirty() {
+  const page = activePage();
+  if (!page) { $("#calDirty").textContent = ""; return; }
+  const st = gridState[page];
+  const n = st && st.modified ? st.modified.size : 0;
+  $("#calDirty").textContent = n ? `${n} modified` : "";
+}
+
+async function calRead() {
+  const page = activePage();
+  if (!page) return toast("no active page");
+  try {
+    const r = await api(`/api/pages/${page}`);
+    const st = gridState[page];
+    if (!st) return toast("no state for page");
+    // Detect grid vs params by checking if response has .grid or .fields
+    if (r.grid) {
+      st.values = r.grid; st.modified.clear();
+    } else if (r.fields) {
+      st.values = r.fields; st.modified.clear();
+    } else {
+      st.values = r; st.modified.clear();
+    }
+    // Reload the pane to re-render
+    const pane = $(".pane.active");
+    if (pane) { pane.dataset.loaded = ""; $$("#sb-nav .tab.active").forEach(b => b.click()); }
+    toast("reloaded");
+    updateCalDirty();
+  } catch(e) { toast(e.message, true); }
+}
+
+async function calSend() {
+  const page = activePage();
+  if (!page) return toast("no active page");
+  const st = gridState[page];
+  if (!st || !st.modified || !st.modified.size) return toast("nothing to send");
+  try {
+    const isGrid = $(".grid-pane.active");
+    if (isGrid) {
+      const cells = [...st.modified].map(k => {
+        const [row, col] = k.split(",").map(Number);
+        return { row, col, value: st.values[row][col] };
+      });
+      await api(`/api/pages/${page}/cells`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cells }),
+      });
+      toast(`${cells.length} cell(s) sent`);
+    } else {
+      const fields = {};
+      for (const k of st.modified) fields[k] = st.values[k];
+      await api(`/api/pages/${page}/cells`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fields }),
+      });
+      toast(`${Object.keys(fields).length} field(s) sent`);
+    }
+    st.modified.clear();
+    updateCalDirty();
+  } catch(e) { toast(e.message, true); }
+}
+
+async function calBurn() {
+  const page = activePage();
+  if (!page) return toast("no active page");
+  try {
+    await api(`/api/pages/${page}/burn`, { method: "POST" });
+    toast(`page ${page} burned`);
+  } catch(e) { toast(e.message, true); }
+}
+
+$("#calRead").onclick = calRead;
+$("#calSend").onclick = calSend;
+$("#calBurn").onclick = calBurn;
 
 /* ── telemetria: gauges + charts ──────────────────────────────────────── */
 const GAUGES = [
@@ -155,10 +244,6 @@ async function loadGrid(pane) {
   pane.innerHTML = `
     <div class="grid-toolbar">
       <strong>${meta.name}</strong> <span class="muted">(${meta.unit})</span>
-      <button class="primary" data-act="send">Send (RAM)</button>
-      <button class="danger" data-act="burn">Burn → flash</button>
-      <button data-act="reload">Reload</button>
-      <span class="dirty"></span>
       <span class="muted">X = RPM, Y = MAP (kPa)</span>
     </div>
     <div class="grid-wrap"></div>`;
@@ -220,6 +305,7 @@ async function loadGrid(pane) {
       if (!Number.isNaN(v) && v !== st.values[r][c]) {
         st.values[r][c] = v;
         st.modified.add(`${r},${c}`);
+        updateCalDirty();
       }
       render();
     };
@@ -230,26 +316,6 @@ async function loadGrid(pane) {
     };
   }
 
-  pane.querySelector('[data-act="send"]').onclick = async () => {
-    if (!st.modified.size) return toast("nothing to send");
-    const cells = [...st.modified].map(k => {
-      const [row, col] = k.split(",").map(Number);
-      return { row, col, value: st.values[row][col] };
-    });
-    try {
-      await api(`/api/pages/${page}/cells`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cells }),
-      });
-      st.modified.clear(); render();
-      toast(`${cells.length} cell(s) sent (RAM)`);
-    } catch (e) { toast(e.message, true); }
-  };
-  pane.querySelector('[data-act="burn"]').onclick = async () => {
-    try { await api(`/api/pages/${page}/burn`, { method: "POST" }); toast("burn OK"); }
-    catch (e) { toast(e.message, true); }
-  };
-  pane.querySelector('[data-act="reload"]').onclick = reload;
 
   await reload();
 }
@@ -753,11 +819,7 @@ async function loadParams() {
             div.innerHTML = `
               <div class="pg-page-label">PG${page} — ${PARAM_PAGES[page]}</div>
               <div class="rows muted">loading…</div>
-              <div class="param-row pg-btns">
-                <button class="primary" data-act="send">Send (RAM)</button>
-                <button class="danger"  data-act="burn">Burn → flash</button>
-                <button data-act="reload">Reload</button>
-              </div>`;
+`;
             details.appendChild(div);
             bindParamGroup(div, page);
           }
@@ -771,9 +833,12 @@ async function bindParamGroup(div, page) {
   const rowsEl = $(".rows", div);
   let fields = {};
   const modified = new Set();
+  // Expose state for global Read/Send/Burn buttons
+  gridState[page] = { values: fields, modified, pane: div };
 
   async function reload() {
     fields = (await api(`/api/pages/${page}`)).fields;
+    gridState[page].values = fields;
     modified.clear();
     render();
   }
@@ -894,28 +959,11 @@ async function bindParamGroup(div, page) {
       if (Number.isNaN(v)) return;
       if (Array.isArray(fields[f])) fields[f][+i] = v; else fields[f] = v;
       modified.add(f);
+      updateCalDirty();
       inp.classList.add("mod");
     });
   }
 
-  div.querySelector('[data-act="send"]').onclick = async () => {
-    if (!modified.size) return toast("nothing to send");
-    const body = { fields: {} };
-    modified.forEach(f => body.fields[f] = fields[f]);
-    try {
-      await api(`/api/pages/${page}/cells`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      modified.clear(); render();
-      toast(`page ${page}: fields sent (RAM)`);
-    } catch (e) { toast(e.message, true); }
-  };
-  div.querySelector('[data-act="burn"]').onclick = async () => {
-    try { await api(`/api/pages/${page}/burn`, { method: "POST" }); toast("burn OK"); }
-    catch (e) { toast(e.message, true); }
-  };
-  div.querySelector('[data-act="reload"]').onclick = reload;
   await reload();
 }
 

@@ -81,6 +81,16 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 .gauge .l { color: var(--muted); font-size: 9px; text-transform: uppercase;
             letter-spacing: 1px; margin-top: 2px; }
 
+/* ── Calibration buttons (fixed) ──────────────────────────────────────── */
+.cal-btns { display: flex; align-items: center; gap: 4px; padding: 0 6px; }
+.cal-btn { padding: 5px 14px; border: none; border-radius: 4px; font-size: 11px;
+           font-weight: 700; letter-spacing: .5px; cursor: pointer; color: #111; }
+.cal-btn.read { background: #4fc3f7; }
+.cal-btn.send { background: #ffb74d; }
+.cal-btn.burn { background: #ef5350; }
+.cal-btn:disabled { opacity: .35; cursor: default; }
+.cal-dirty { font-size: 10px; color: var(--warn); margin-left: 2px; }
+
 /* ── LEDs de status ──────────────────────────────────────────────────── */
 .leds { display: flex; align-items: center; padding: 3px 10px; gap: 14px;
         flex-wrap: wrap; }
