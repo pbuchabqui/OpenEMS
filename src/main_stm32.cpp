@@ -800,6 +800,7 @@ int main() {
                 } else if (snap.rpm_x10 <= resume) {
                     g_rev_limit_active = false;
                 }
+                ems::app::ui_set_rev_limit_active(g_rev_limit_active);
 
                 const uint8_t inj_mask = (rev_cut || g_rev_limit_active) ? 0x0Fu : 0u;
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);

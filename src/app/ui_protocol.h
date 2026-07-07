@@ -37,6 +37,7 @@ void ui_update_rt_sched_diag(uint32_t late_events,
 
 void ui_update_loop_diag(uint32_t loop2ms_last_us,
                          uint32_t loop2ms_max_us) noexcept;
+void ui_set_rev_limit_active(bool active) noexcept;
 
 /// Atualiza o contador de clamp IVC para o bloco de dados em tempo real.
 /// Chamado do loop de fundo (20 ms) junto com ui_update_rt_sched_diag.

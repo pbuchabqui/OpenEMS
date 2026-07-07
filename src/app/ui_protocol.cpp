@@ -111,6 +111,7 @@ static uint32_t g_rt_seed_loaded_count = 0u;
 static uint32_t g_rt_seed_confirmed_count = 0u;
 static uint32_t g_rt_seed_rejected_count = 0u;
 static uint8_t  g_rt_sync_state_raw = 0u;
+static bool     g_rt_rev_limit_active = false;
 static uint32_t g_rt_ivc_clamp_count = 0u;
 static uint32_t g_rt_loop2ms_last_us = 0u;
 static uint32_t g_rt_loop2ms_max_us = 0u;
@@ -269,6 +270,9 @@ inline void update_realtime_page() noexcept {
     }
     if (ecu_sched_is_sequential()) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_IGN_SEQUENTIAL);
+    }
+    if (g_rt_rev_limit_active) {
+        status = static_cast<uint16_t>(status | ems::app::STATUS_REV_LIMIT);
     }
     rt.status_bits = status;
     write_u32_le(&rt.reserved[0], g_rt_sched_late_events);
@@ -1311,6 +1315,10 @@ void ui_update_rt_sched_diag(uint32_t late_events,
     g_rt_seed_confirmed_count = seed_confirmed_count;
     g_rt_seed_rejected_count = seed_rejected_count;
     g_rt_sync_state_raw = sync_state_raw;
+}
+
+void ui_set_rev_limit_active(bool active) noexcept {
+    g_rt_rev_limit_active = active;
 }
 
 void ui_update_loop_diag(uint32_t loop2ms_last_us,
