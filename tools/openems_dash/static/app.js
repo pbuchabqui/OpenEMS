@@ -406,8 +406,7 @@ const PAGE_0_SECTIONS = [
   {
     label: "DRIVABILITY",
     fields: ["antijerk_tpsdot_threshold_x10","antijerk_retard_deg","antijerk_decay_cycles",
-             "rev_limit_rpm_x10","rev_limit_soft_window_x10","rev_limit_spark_window_x10",
-             "rev_limit_max_retard_deg",
+             "rev_limit_rpm_x10","rev_limit_soft_window_x10",
              "decel_cut_tps_threshold_x10","decel_cut_entry_rpm_x10",
              "decel_cut_exit_rpm_x10","decel_cut_min_clt_x10"],
   },
@@ -482,8 +481,6 @@ const FIELD_LABELS = {
   antijerk_decay_cycles:          "Anti-jerk decay (cycles)",
   rev_limit_rpm_x10:              "Rev limiter hard cut (RPM ×10)",
   rev_limit_soft_window_x10:      "Rev limit hysteresis (RPM ×10)",
-  rev_limit_spark_window_x10:     "(unused) rev limit spark window",
-  rev_limit_max_retard_deg:       "(unused) rev limit max retard",
   ltft_add_pw_threshold_us:       "LTFT PW threshold (ms)",
   decel_cut_tps_threshold_x10:    "Decel cut TPS max (%)",
   decel_cut_entry_rpm_x10:        "Decel cut entry RPM",
