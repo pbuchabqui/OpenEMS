@@ -106,7 +106,7 @@ static constexpr uint16_t kTeethPositionsPerRev = 60u; // posições angulares u
 // cada borda o zerar. 6 revs = 3 ciclos de came sem uma borda válida → assume-se
 // que o sinal do came se perdeu e reverte-se a wasted-spark (cmp_confirms=0).
 // Threshold >> 2 evita falso fallback com jitter/rejeição pontual. Ajustável.
-static constexpr uint16_t kMaxRevsWithoutCmp = 6u;
+static constexpr uint16_t kMaxRevsWithoutCmp = 60u;  // 60 revs = 7.2s @ 500 RPM — tolerates stimulator RMT restart gaps
 
 // Mínimo de dentes contados desde o último gap para aceitar novo gap.
 // 55 << 58: descarta pulsos espúrios no início de cada revolução.
@@ -152,7 +152,7 @@ static constexpr uint32_t kMinToothTicks = 50u;
 // Tempo máximo sem dente antes de declarar motor parado: 200 ms @ 62.5 MHz.
 // Resolve o caso em que o virabrequim para entre dois dentes — tooth_count
 // para de incrementar e a detecção por contagem nunca dispara.
-static constexpr uint32_t kMinStallTimeoutTicks = 12500000u;
+static constexpr uint32_t kMinStallTimeoutTicks = 125000000u;  // 2s @ 62.5 MHz — tolerates RMT restart gaps
 
 // ── Limiares TOOTH_GRD (MS42 §1.2.3.1.3, NC_TOOTH_GRD_MIN/MAX_GAP) ──────
 // TOOTH_GRD(n) = [T(n) × T(n-2)] / T(n-1)²
@@ -514,9 +514,9 @@ inline bool process_gap_event() noexcept {
                 return true;
             }
             // Gap prematuro: pulso espúrio (EMC, dente danificado).
+            // Preserva CMP state — perda de sync do CKP não invalida o came.
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
-            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u; s_revs_since_cmp = 0u; s_cmp_ref_tooth = 0xFFu;
             return false;
 
         case ems::drv::SyncState::FULL_SYNC:
@@ -538,9 +538,9 @@ inline bool process_gap_event() noexcept {
             }
             ++ems::drv::g_dbg_gap_premature;
             ems::drv::g_dbg_gap_last_tc = g_state.tooth_count;
+            // Gap prematuro em FULL_SYNC → LOSS_OF_SYNC, mas preserva CMP.
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
-            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u; s_revs_since_cmp = 0u; s_cmp_ref_tooth = 0xFFu;
             return false;
 
         default:
@@ -780,9 +780,9 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     if (g_state.tooth_count > kMaxTeethBeforeLoss) {
         if (g_state.snap.state == ems::drv::SyncState::HALF_SYNC ||
             g_state.snap.state == ems::drv::SyncState::FULL_SYNC) {
+            // Gap ausente → LOSS_OF_SYNC, mas preserva CMP state.
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
-            g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u; s_revs_since_cmp = 0u; s_cmp_ref_tooth = 0xFFu;
         }
     }
 

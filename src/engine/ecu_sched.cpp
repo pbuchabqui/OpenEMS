@@ -221,7 +221,7 @@ volatile uint8_t g_inj_pw_override = 0U;  // 1=lock g_inj_pw_ticks, ignore main 
 // directamente). SOI recua automaticamente com EOI targeting.
 static volatile uint32_t g_eoi_lead_deg = 355U;
 static volatile uint8_t g_presync_enable = 1U;
-static volatile uint8_t g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
+static volatile uint8_t g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
 static volatile uint8_t g_presync_inj_auto = 1U;  // 1=auto-select by crank state
 static volatile uint8_t g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
 static volatile uint8_t g_presync_bank_toggle = 0U;
@@ -966,7 +966,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     const uint8_t rev_boundary = ((g_hook_prev_valid != 0U) && (snap.tooth_index == 0U) && (g_hook_prev_tooth != 0U)) ? 1U : 0U;
     if (rev_boundary != 0U) {
         g_last_gap_ts = snap.last_tim5_capture;  // TIM5 timestamp of gap (tooth 0)
-        const bool use_presync = (snap.state == ems::drv::SyncState::HALF_SYNC && g_presync_enable != 0U)
+        const bool use_presync = (snap.state == ems::drv::SyncState::HALF_SYNC && g_presync_enable != 0U && g_cmp_phase_seen == 0U)
                               || (snap.state == ems::drv::SyncState::FULL_SYNC && g_cmp_phase_seen == 0U);
         if (use_presync) {
             ++g_dbg_presync_count;
@@ -1024,7 +1024,7 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept { ems::engine::ecu_sche
 void ecu_sched_test_reset(void)
 {
     g_late_event_count = 0U; g_cycle_schedule_drop_count = 0U; g_calibration_clamp_count = 0U;
-    g_presync_enable = 1U; g_presync_inj_auto = 0U; g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
+    g_presync_enable = 1U; g_presync_inj_auto = 0U; g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
     g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
     g_advance_deg = 10U; g_dwell_ticks = 140625U; g_inj_pw_ticks = 140625U; g_eoi_lead_deg = 355U;
     g_angle_table_count = 0U; g_angle_tooth_mask_lo = 0U; g_angle_tooth_mask_hi = 0U;
