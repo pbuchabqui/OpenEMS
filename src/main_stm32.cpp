@@ -85,12 +85,12 @@ static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
 static constexpr uint8_t  kFaultBitMap = (1u << 0u);
 static constexpr uint8_t  kFaultBitClt = (1u << 3u);
 static bool g_limp_active = false;
+static bool g_rev_limit_active = false;   // fuel cut active via rev limiter
 static bool g_engine_was_running = false;
 static bool g_runtime_seed_saved_for_stop = false;
 static bool g_runtime_seed_arm_window_active = false;
 static bool     g_ae_active        = false;
 static uint32_t g_last_net_pw_us   = 0u;
-static int16_t  g_rev_spark_trim   = 0;   // calculado no bloco rev limiter, usado no advance
 // Barometric correction: amostrar MAP quando motor parado por >300ms após key-on
 static uint32_t g_baro_stopped_since_ms = 0u;
 static bool     g_baro_sampled          = false;
@@ -143,6 +143,9 @@ static inline uint16_t build_status_bits(const ems::drv::CkpSnapshot& snap,
     }
     if (sensors.fault_bits != 0u) {
         status |= ems::app::STATUS_SENSOR_FAULT;
+    }
+    if (g_rev_limit_active) {
+        status |= ems::app::STATUS_REV_LIMIT;
     }
     return status;
 }
@@ -784,49 +787,23 @@ int main() {
             ems::engine::quick_crank_set_prime_context(sensors.clt_degc_x10,
                                                        fuel_corr.dead_time_us);
 
-            // Limitador de RPM por faísca + injeção (MS42 §2.2.5)
-            // Camada 1 (larga, ~500 RPM): retardo progressivo de ignição
-            // Camada 2 (estreita, ~200 RPM): corte progressivo de injeção
-            // Camada 3 (no limite): corte total de ambos
+            // Limitador de RPM — rusEFI-style: fuel cut only, total cut + hysteresis.
+            // Corta 100% injecção ao atingir hard limit; reativa ao descer
+            // abaixo de (hard - hysteresis). IGN nunca é cortada (só limp mode).
             {
-                const uint32_t hard       = ems::engine::rev_limit_rpm_x10;
-                const uint32_t inj_window = ems::engine::rev_limit_soft_window_x10;
+                const uint32_t hard      = ems::engine::rev_limit_rpm_x10;
+                const uint32_t hyst      = ems::engine::rev_limit_soft_window_x10;
+                const uint32_t resume    = (hard > hyst) ? hard - hyst : 0u;
 
-                // Injeção — corte progressivo em 3 níveis:
-                //   25% (cil 0) na banda inferior, 50% (cil 0+2) na superior, 100% no limite.
-                // Saturating subtractions prevent unsigned underflow if a misconfigured
-                // calibration sets inj_window > hard, which would wrap to ~4B RPM
-                // and disable the rev limiter entirely.
-                const uint32_t band75  = inj_window * 3u / 4u;
-                const uint32_t thresh_50 = (hard > band75)      ? hard - band75      : 0u;
-                const uint32_t thresh_25 = (hard > inj_window)  ? hard - inj_window  : 0u;
-                uint8_t inj_mask = 0u;
-                if (rev_cut || snap.rpm_x10 >= hard) {
-                    inj_mask = 0x0Fu;
-                } else if (inj_window > 0u && snap.rpm_x10 >= thresh_50) {
-                    inj_mask = 0x05u;  // 50%: cil 0 + 2
-                } else if (inj_window > 0u && snap.rpm_x10 >= thresh_25) {
-                    inj_mask = 0x01u;  // 25%: apenas cil 0
+                if (snap.rpm_x10 >= hard) {
+                    g_rev_limit_active = true;
+                } else if (snap.rpm_x10 <= resume) {
+                    g_rev_limit_active = false;
                 }
+
+                const uint8_t inj_mask = (rev_cut || g_rev_limit_active) ? 0x0Fu : 0u;
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);
-
-                // Ignição — retardo progressivo + corte alternado no limite
-                g_rev_spark_trim =
-                    rev_cut ? INT16_MIN :
-                    ems::engine::calc_rev_limit_spark_trim(snap.rpm_x10);
-                if (g_rev_spark_trim == INT16_MIN) {
-                    if (rev_cut) {
-                        // Limp mode (falha de sensor): corte total de ignição
-                        ::ecu_sched_set_ign_inhibit_mask(0x0Fu);
-                    } else {
-                        // Limitador normal: alternado 0+2 / 1+3 para transição mais suave
-                        static bool s_ign_toggle = false;
-                        s_ign_toggle = !s_ign_toggle;
-                        ::ecu_sched_set_ign_inhibit_mask(s_ign_toggle ? 0x05u : 0x0Au);
-                    }
-                } else {
-                    ::ecu_sched_set_ign_inhibit_mask(0u);
-                }
+                ::ecu_sched_set_ign_inhibit_mask(rev_cut ? 0x0Fu : 0u);
             }
 
             if (sched_sync && !rev_cut) {
@@ -940,13 +917,7 @@ int main() {
                     {iat_spark_deg, clt_spark_deg,
                      static_cast<int16_t>(knock_retard_x10 / 10u),
                      idle_spark_corr_deg, antijerk_retard});
-                // Rev limiter spark retard: aplicado após todas as outras correções.
-                // Se INT16_MIN (spark cut), ignição já foi suprimida via ign_inhibit_mask;
-                // aqui apenas garante que o advance não seja avançado nesse ciclo.
-                if (g_rev_spark_trim != INT16_MIN && g_rev_spark_trim != 0) {
-                    advance_deg = ems::engine::clamp_advance_deg(
-                        static_cast<int16_t>(advance_deg + g_rev_spark_trim));
-                }
+                // rusEFI-style: no spark retard. Fuel cut only handles the limit.
 
                 const auto qc = ems::engine::quick_crank_update(
                     now, snap.rpm_x10, sched_sync, sensors.clt_degc_x10, advance_deg);

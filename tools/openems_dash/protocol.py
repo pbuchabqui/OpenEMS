@@ -49,6 +49,7 @@ STATUS_BITS = {
     "WBO2_FAULT":       0x0200,  # bit 9
     "TLE8888_FAULT":    0x0400,  # bit 10
     "IGN_SEQUENTIAL":   0x0800,  # bit 11 — 1=sequencial, 0=wasted-spark (presync)
+    "REV_LIMIT":        0x1000,  # bit 12 — fuel cut active
 }
 
 

@@ -1,87 +1,6 @@
 /* OpenEMS Dashboard — telemetria WS 30Hz + editores de tabela */
 "use strict";
 
-/* ── Grid cell selection state (shared across all grid panes) ──────────── */
-const PAGE_STEP = { 1: 1, 2: 1, 4: 10 };
-let selR = -1, selC = -1;
-
-function gridSelect(pane, r, c) {
-  $$("td.sel", pane).forEach(td => td.classList.remove("sel"));
-  selR = r; selC = c;
-  if (r >= 0) {
-    const td = pane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
-    if (td) td.classList.add("sel");
-  }
-}
-
-function gridAdjust(delta) {
-  const pane = $(".grid-pane.active");
-  if (!pane) return;
-  const page = +pane.dataset.page;
-  const st = gridState[page];
-  if (!st || !st.values) return;
-  let r = selR, c = selC;
-  // Auto-select traced dominant cell if none selected
-  if (r < 0 && RT && INFO) {
-    const lx = axisLookup(INFO.axes.rpm, RT.rpm);
-    const ly = axisLookup(INFO.axes.map_kpa, RT.map_kpa);
-    r = ly.idx + (ly.frac >= 0.5 ? 1 : 0);
-    c = lx.idx + (lx.frac >= 0.5 ? 1 : 0);
-  }
-  if (r < 0) return;
-  const step = PAGE_STEP[page] || 1;
-  const v = st.values[r][c] + delta * step;
-  const clamped = (page === 2) ? Math.max(-128, Math.min(127, v))
-                : (page === 4) ? Math.max(0, Math.min(65535, v))
-                : Math.max(0, Math.min(255, v));
-  if (clamped !== st.values[r][c]) {
-    st.values[r][c] = clamped;
-    st.modified.add(`${r},${c}`);
-    updateCalDirty();
-    // Re-render grid
-    const paneEl = $(`.grid-pane[data-page="${page}"]`);
-    if (paneEl) { paneEl.dataset.loaded = ""; $$("#sb-nav .tab.active").forEach(b => b.click()); }
-    gridSelect(pane, r, c);
-  }
-}
-
-function gridMove(dr, dc) {
-  if (selR < 0) { gridSelect($(".grid-pane.active"), 0, 0); return; }
-  const nr = Math.max(0, Math.min(15, selR + dr));
-  const nc = Math.max(0, Math.min(15, selC + dc));
-  gridSelect($(".grid-pane.active"), nr, nc);
-}
-
-function gridBeginEdit() {
-  if (selR < 0) return;
-  const pane = $(".grid-pane.active");
-  if (!pane) return;
-  const page = +pane.dataset.page;
-  const st = gridState[page];
-  if (!st) return;
-  const td = pane.querySelector(`td[data-r="${selR}"][data-c="${selC}"]`);
-  if (!td || td.querySelector("input")) return;
-  const inp = document.createElement("input");
-  inp.value = st.values[selR][selC];
-  td.textContent = ""; td.appendChild(inp);
-  inp.focus(); inp.select();
-  const commit = () => {
-    const v = parseInt(inp.value, 10);
-    if (!Number.isNaN(v) && v !== st.values[selR][selC]) {
-      st.values[selR][selC] = v;
-      st.modified.add(`${selR},${selC}`);
-      updateCalDirty();
-    }
-    pane.dataset.loaded = ""; $$("#sb-nav .tab.active").forEach(b => b.click());
-    gridSelect(pane, selR, selC);
-  };
-  inp.onblur = commit;
-  inp.onkeydown = e => {
-    if (e.key === "Enter") inp.blur();
-    if (e.key === "Escape") { inp.value = st.values[selR][selC]; inp.blur(); }
-  };
-}
-
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
@@ -118,112 +37,7 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
   if (b.dataset.tab === "boost"     && !$("#boostRoot").dataset.loaded)    loadBoostMap();
   if (b.dataset.tab === "telemetry")
     charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 160 }));
-  updateCalDirty();
 });
-
-/* ── Global keyboard handler for grid cells ────────────────────────────── */
-document.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-  if (!$(".grid-pane.active")) return;
-  switch (e.key) {
-    case "+": case "=": gridAdjust(1); e.preventDefault(); break;
-    case "-": gridAdjust(-1); e.preventDefault(); break;
-    case "ArrowUp": gridMove(1, 0); e.preventDefault(); break;
-    case "ArrowDown": gridMove(-1, 0); e.preventDefault(); break;
-    case "ArrowLeft": gridMove(0, -1); e.preventDefault(); break;
-    case "ArrowRight": gridMove(0, 1); e.preventDefault(); break;
-    case "Enter": gridBeginEdit(); e.preventDefault(); break;
-    case "Escape": gridSelect($(".grid-pane.active"), -1, -1); e.preventDefault(); break;
-  }
-});
-
-/* ── Global calibration buttons (Read / Send / Burn) ──────────────────── */
-function activePage() {
-  const p = $(".pane.active");
-  if (!p) return null;
-  if (p.classList.contains("grid-pane")) return +p.dataset.page;
-  if (p.id === "tab-params") {
-    // Return the page of the last-modified or first open param group
-    const open = $(".pg:not(.collapsed)", p);
-    return open ? +open.dataset.page : null;
-  }
-  return null; // pedal-map, boost handled by their own buttons
-}
-
-function updateCalDirty() {
-  const page = activePage();
-  if (!page) { $("#calDirty").textContent = ""; return; }
-  const st = gridState[page];
-  const n = st && st.modified ? st.modified.size : 0;
-  $("#calDirty").textContent = n ? `${n} modified` : "";
-}
-
-async function calRead() {
-  const page = activePage();
-  if (!page) return toast("no active page");
-  try {
-    const r = await api(`/api/pages/${page}`);
-    const st = gridState[page];
-    if (!st) return toast("no state for page");
-    // Detect grid vs params by checking if response has .grid or .fields
-    if (r.grid) {
-      st.values = r.grid; st.modified.clear();
-    } else if (r.fields) {
-      st.values = r.fields; st.modified.clear();
-    } else {
-      st.values = r; st.modified.clear();
-    }
-    // Reload the pane to re-render
-    const pane = $(".pane.active");
-    if (pane) { pane.dataset.loaded = ""; $$("#sb-nav .tab.active").forEach(b => b.click()); }
-    toast("reloaded");
-    updateCalDirty();
-  } catch(e) { toast(e.message, true); }
-}
-
-async function calSend() {
-  const page = activePage();
-  if (!page) return toast("no active page");
-  const st = gridState[page];
-  if (!st || !st.modified || !st.modified.size) return toast("nothing to send");
-  try {
-    const isGrid = $(".grid-pane.active");
-    if (isGrid) {
-      const cells = [...st.modified].map(k => {
-        const [row, col] = k.split(",").map(Number);
-        return { row, col, value: st.values[row][col] };
-      });
-      await api(`/api/pages/${page}/cells`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cells }),
-      });
-      toast(`${cells.length} cell(s) sent`);
-    } else {
-      const fields = {};
-      for (const k of st.modified) fields[k] = st.values[k];
-      await api(`/api/pages/${page}/cells`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields }),
-      });
-      toast(`${Object.keys(fields).length} field(s) sent`);
-    }
-    st.modified.clear();
-    updateCalDirty();
-  } catch(e) { toast(e.message, true); }
-}
-
-async function calBurn() {
-  const page = activePage();
-  if (!page) return toast("no active page");
-  try {
-    await api(`/api/pages/${page}/burn`, { method: "POST" });
-    toast(`page ${page} burned`);
-  } catch(e) { toast(e.message, true); }
-}
-
-$("#calRead").onclick = calRead;
-$("#calSend").onclick = calSend;
-$("#calBurn").onclick = calBurn;
 
 /* ── telemetria: gauges + charts ──────────────────────────────────────── */
 const GAUGES = [
@@ -246,7 +60,7 @@ $("#gauges").innerHTML = GAUGES.map(([k, l]) =>
 
 
 const INJ_MODES = {0:"SIMULTANEOUS", 1:"SEMI-SEQ", 2:"SEQUENTIAL"};
-const LEDS = [["SENSOR_FAULT", false]];
+const LEDS = [["REV_LIMIT", false], ["SENSOR_FAULT", false]];
 $("#statusLeds").innerHTML = LEDS.map(([k]) =>
   `<span class="led" id="led_${k}">[${k.replace(/_/g,"-")}]</span>`).join("");
 
@@ -341,6 +155,10 @@ async function loadGrid(pane) {
   pane.innerHTML = `
     <div class="grid-toolbar">
       <strong>${meta.name}</strong> <span class="muted">(${meta.unit})</span>
+      <button class="primary" data-act="send">Send (RAM)</button>
+      <button class="danger" data-act="burn">Burn → flash</button>
+      <button data-act="reload">Reload</button>
+      <span class="dirty"></span>
       <span class="muted">X = RPM, Y = MAP (kPa)</span>
     </div>
     <div class="grid-wrap"></div>`;
@@ -378,17 +196,60 @@ async function loadGrid(pane) {
           cv = $("canvas.trail", wrap);
     cv.width = tbl.offsetWidth;
     cv.height = tbl.offsetHeight;
+    $(".dirty", pane).textContent = st.modified.size
+      ? `${st.modified.size} célula(s) não enviada(s)` : "";
     bindCells();
   }
 
   function bindCells() {
     $$("td[data-r]", pane).forEach(td => {
-      td.onclick = () => { gridSelect(pane, +td.dataset.r, +td.dataset.c); };
-      td.ondblclick = () => { gridBeginEdit(); };
+      td.onclick = () => beginEdit(td);
     });
   }
 
+  function beginEdit(td) {
+    if (td.querySelector("input")) return;
+    const r = +td.dataset.r, c = +td.dataset.c;
+    const inp = document.createElement("input");
+    inp.value = st.values[r][c];
+    td.textContent = "";
+    td.appendChild(inp);
+    inp.focus(); inp.select();
+    const commit = () => {
+      const v = parseInt(inp.value, 10);
+      if (!Number.isNaN(v) && v !== st.values[r][c]) {
+        st.values[r][c] = v;
+        st.modified.add(`${r},${c}`);
+      }
+      render();
+    };
+    inp.onblur = commit;
+    inp.onkeydown = e => {
+      if (e.key === "Enter") inp.blur();
+      if (e.key === "Escape") { inp.value = st.values[r][c]; inp.blur(); }
+    };
+  }
 
+  pane.querySelector('[data-act="send"]').onclick = async () => {
+    if (!st.modified.size) return toast("nothing to send");
+    const cells = [...st.modified].map(k => {
+      const [row, col] = k.split(",").map(Number);
+      return { row, col, value: st.values[row][col] };
+    });
+    try {
+      await api(`/api/pages/${page}/cells`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cells }),
+      });
+      st.modified.clear(); render();
+      toast(`${cells.length} cell(s) sent (RAM)`);
+    } catch (e) { toast(e.message, true); }
+  };
+  pane.querySelector('[data-act="burn"]').onclick = async () => {
+    try { await api(`/api/pages/${page}/burn`, { method: "POST" }); toast("burn OK"); }
+    catch (e) { toast(e.message, true); }
+  };
+  pane.querySelector('[data-act="reload"]').onclick = reload;
 
   await reload();
 }
@@ -619,10 +480,10 @@ const FIELD_LABELS = {
   antijerk_tpsdot_threshold_x10: "Anti-jerk TPSdot threshold (%/s)",
   antijerk_retard_deg:            "Anti-jerk ignition retard (°)",
   antijerk_decay_cycles:          "Anti-jerk decay (cycles)",
-  rev_limit_rpm_x10:              "Rev limiter",
-  rev_limit_soft_window_x10:      "Rev limit injection cut window (RPM)",
-  rev_limit_spark_window_x10:     "Rev limit spark retard window (RPM)",
-  rev_limit_max_retard_deg:       "Rev limit max spark retard (°)",
+  rev_limit_rpm_x10:              "Rev limiter hard cut (RPM ×10)",
+  rev_limit_soft_window_x10:      "Rev limit hysteresis (RPM ×10)",
+  rev_limit_spark_window_x10:     "(unused) rev limit spark window",
+  rev_limit_max_retard_deg:       "(unused) rev limit max retard",
   ltft_add_pw_threshold_us:       "LTFT PW threshold (ms)",
   decel_cut_tps_threshold_x10:    "Decel cut TPS max (%)",
   decel_cut_entry_rpm_x10:        "Decel cut entry RPM",
@@ -892,7 +753,11 @@ async function loadParams() {
             div.innerHTML = `
               <div class="pg-page-label">PG${page} — ${PARAM_PAGES[page]}</div>
               <div class="rows muted">loading…</div>
-`;
+              <div class="param-row pg-btns">
+                <button class="primary" data-act="send">Send (RAM)</button>
+                <button class="danger"  data-act="burn">Burn → flash</button>
+                <button data-act="reload">Reload</button>
+              </div>`;
             details.appendChild(div);
             bindParamGroup(div, page);
           }
@@ -906,12 +771,9 @@ async function bindParamGroup(div, page) {
   const rowsEl = $(".rows", div);
   let fields = {};
   const modified = new Set();
-  // Expose state for global Read/Send/Burn buttons
-  gridState[page] = { values: fields, modified, pane: div };
 
   async function reload() {
     fields = (await api(`/api/pages/${page}`)).fields;
-    gridState[page].values = fields;
     modified.clear();
     render();
   }
@@ -1032,11 +894,28 @@ async function bindParamGroup(div, page) {
       if (Number.isNaN(v)) return;
       if (Array.isArray(fields[f])) fields[f][+i] = v; else fields[f] = v;
       modified.add(f);
-      updateCalDirty();
       inp.classList.add("mod");
     });
   }
 
+  div.querySelector('[data-act="send"]').onclick = async () => {
+    if (!modified.size) return toast("nothing to send");
+    const body = { fields: {} };
+    modified.forEach(f => body.fields[f] = fields[f]);
+    try {
+      await api(`/api/pages/${page}/cells`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      modified.clear(); render();
+      toast(`page ${page}: fields sent (RAM)`);
+    } catch (e) { toast(e.message, true); }
+  };
+  div.querySelector('[data-act="burn"]').onclick = async () => {
+    try { await api(`/api/pages/${page}/burn`, { method: "POST" }); toast("burn OK"); }
+    catch (e) { toast(e.message, true); }
+  };
+  div.querySelector('[data-act="reload"]').onclick = reload;
   await reload();
 }
 
