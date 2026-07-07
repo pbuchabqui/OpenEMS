@@ -161,6 +161,8 @@ static int16_t  g_bench_clt_x10      = 900;   // 90,0 °C — motor quente (corr
 static int16_t  g_bench_iat_x10      = 250;   // 25,0 °C — ar ambiente (corr IAT ≈ 1.0)
 static uint16_t g_bench_map_bar_x1000 = 350u; // 35,0 kPa — idle vacuum
 static uint16_t g_bench_tps_pct_x10   = 30u;  // 3,0% — idle TPS
+static uint16_t g_bench_fuel_press_bar_x1000 = 3000u; // 3.0 bar — pressão nominal
+static uint16_t g_bench_oil_press_bar_x1000  = 3000u; // 3.0 bar — acima do threshold dinâmico
 static bool     g_tps_pct_cache_valid = false;
 static uint16_t g_tps_pct_cache_raw = 0u;
 static uint16_t g_tps_pct_cache_min = 0u;
@@ -653,6 +655,18 @@ void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
 }
 
 void sensors_tick_50ms() noexcept {
+    if (g_bench_clt_iat) {
+        // Bench HIL: sem sensores de pressão físicos — força valores nominais
+        // e limpa faults para não acionarem proteção de corte.
+        g_fault[static_cast<uint8_t>(SensorId::FUEL_PRESS)].active = false;
+        g_fault[static_cast<uint8_t>(SensorId::FUEL_PRESS)].consecutive_bad = 0u;
+        g_fault[static_cast<uint8_t>(SensorId::OIL_PRESS)].active = false;
+        g_fault[static_cast<uint8_t>(SensorId::OIL_PRESS)].consecutive_bad = 0u;
+        g_data_staging.fuel_press_bar_x1000 = g_bench_fuel_press_bar_x1000;
+        g_data_staging.oil_press_bar_x1000  = g_bench_oil_press_bar_x1000;
+        return;
+    }
+
     const uint16_t fuel_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::FUEL_PRESS);
     const uint16_t oil_raw  = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::OIL_PRESS);
 
@@ -863,6 +877,10 @@ void sensors_set_bench_clt_iat(bool enable,
     // MAP/TPS bench defaults: 35kPa idle vacuum, 3% TPS
     g_bench_map_bar_x1000 = 350u;
     g_bench_tps_pct_x10   = 30u;
+}
+
+bool sensors_is_bench_mode() noexcept {
+    return g_bench_clt_iat;
 }
 
 void sensors_set_range(SensorId id, SensorRange range) noexcept {

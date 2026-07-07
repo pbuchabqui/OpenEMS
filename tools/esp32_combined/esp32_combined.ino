@@ -50,8 +50,7 @@
 #include "Arduino.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
-#include "driver/rmt_tx.h"
-#include "driver/rmt_encoder.h"
+#include "driver/rmt.h"
 #include <cstring>
 #include <cmath>
 
@@ -85,13 +84,11 @@ static volatile uint32_t g_rpm       = kRpmInit;
 static volatile uint32_t g_rev_count = 0;
 static volatile uint32_t g_cmp_count = 0;
 
-// RMT handles
-static rmt_channel_handle_t g_ckp_chan = nullptr;
-static rmt_encoder_handle_t g_ckp_enc  = nullptr;
-static rmt_symbol_word_t    g_ckp_sym[kRealTeeth];
-static rmt_channel_handle_t g_cmp_chan = nullptr;
-static rmt_encoder_handle_t g_cmp_enc  = nullptr;
-static rmt_symbol_word_t    g_cmp_sym[kCmpSymCount];
+// RMT handles (ESP-IDF 4.x API)
+static rmt_channel_t g_ckp_chan = RMT_CHANNEL_0;
+static rmt_item32_t  g_ckp_sym[kRealTeeth];
+static rmt_channel_t g_cmp_chan = RMT_CHANNEL_1;
+static rmt_item32_t  g_cmp_sym[kCmpSymCount];
 static volatile uint32_t    g_ckp_rpm_active = 0u;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -217,11 +214,10 @@ static void build_cmp_pattern(uint32_t rpm) {
     g_cmp_sym[0].duration0 = h + 1u;
 }
 
-static void rmt_transmit_both() {
-    rmt_transmit_config_t txcfg = {};
-    txcfg.loop_count = -1;  // loop infinito
-    rmt_transmit(g_ckp_chan, g_ckp_enc, g_ckp_sym, sizeof(g_ckp_sym), &txcfg);
-    rmt_transmit(g_cmp_chan, g_cmp_enc, g_cmp_sym, sizeof(g_cmp_sym), &txcfg);
+static void rmt_apply_tx(rmt_channel_t ch, rmt_item32_t* items, int count) {
+    rmt_tx_stop(ch);
+    rmt_write_items(ch, items, count, false);  // false = don't wait
+    rmt_set_tx_loop_mode(ch, true);
 }
 
 static void ckp_set_rpm(uint32_t rpm) {
@@ -230,49 +226,38 @@ static void ckp_set_rpm(uint32_t rpm) {
     if (rpm == g_ckp_rpm_active) return;
     build_ckp_pattern(rpm);
     build_cmp_pattern(rpm);
-    rmt_disable(g_ckp_chan);
-    rmt_disable(g_cmp_chan);
-    rmt_encoder_reset(g_ckp_enc);
-    rmt_encoder_reset(g_cmp_enc);
-    rmt_enable(g_ckp_chan);
-    rmt_enable(g_cmp_chan);
-    rmt_transmit_both();
+    rmt_apply_tx(g_ckp_chan, g_ckp_sym, kRealTeeth);
+    rmt_apply_tx(g_cmp_chan, g_cmp_sym, kCmpSymCount);
     g_ckp_rpm_active = rpm;
     g_rpm = rpm;
     g_rev_count++;
 }
 
+// Init RMT channel (ESP-IDF 4.x API — clk_div 80 = 1µs/tick)
+static void rmt_chan_init(rmt_channel_t ch, gpio_num_t gpio, int mem_blocks) {
+    rmt_config_t cfg = {};
+    cfg.rmt_mode = RMT_MODE_TX;
+    cfg.channel = ch;
+    cfg.gpio_num = gpio;
+    cfg.mem_block_num = mem_blocks;
+    cfg.clk_div = 80;  // 80MHz / 80 = 1MHz = 1µs resolution
+    cfg.tx_config.loop_en = 0;
+    cfg.tx_config.carrier_en = 0;
+    cfg.tx_config.idle_output_en = 1;
+    cfg.tx_config.idle_level = RMT_IDLE_LEVEL_LOW;
+    rmt_config(&cfg);
+    rmt_driver_install(cfg.channel, 0, 0);
+}
+
 static void rmt_ckp_init() {
-    // CKP channel: 58 symbols (1 rev), 1 memory block (64 symbols)
-    {
-        rmt_tx_channel_config_t cfg = {};
-        cfg.gpio_num        = CKP_GPIO;
-        cfg.clk_src         = RMT_CLK_SRC_DEFAULT;
-        cfg.resolution_hz   = kRmtResHz;
-        cfg.mem_block_symbols = 64;
-        cfg.trans_queue_depth = 4;
-        ESP_ERROR_CHECK(rmt_new_tx_channel(&cfg, &g_ckp_chan));
-        rmt_copy_encoder_config_t enc = {};
-        ESP_ERROR_CHECK(rmt_new_copy_encoder(&enc, &g_ckp_enc));
-    }
-    // CMP channel: 116 symbols (2 revs = 720°), 2 memory blocks (128 symbols)
-    {
-        rmt_tx_channel_config_t cfg = {};
-        cfg.gpio_num        = CMP_GPIO;
-        cfg.clk_src         = RMT_CLK_SRC_DEFAULT;
-        cfg.resolution_hz   = kRmtResHz;
-        cfg.mem_block_symbols = 128;
-        cfg.trans_queue_depth = 4;
-        ESP_ERROR_CHECK(rmt_new_tx_channel(&cfg, &g_cmp_chan));
-        rmt_copy_encoder_config_t enc = {};
-        ESP_ERROR_CHECK(rmt_new_copy_encoder(&enc, &g_cmp_enc));
-    }
+    rmt_chan_init(g_ckp_chan, CKP_GPIO, 1);
+    rmt_chan_init(g_cmp_chan, CMP_GPIO, 2);
     build_ckp_pattern(kRpmInit);
     build_cmp_pattern(kRpmInit);
-    rmt_enable(g_ckp_chan);
-    rmt_enable(g_cmp_chan);
-    rmt_transmit_both();
+    rmt_apply_tx(g_ckp_chan, g_ckp_sym, kRealTeeth);
+    rmt_apply_tx(g_cmp_chan, g_cmp_sym, kCmpSymCount);
     g_ckp_rpm_active = kRpmInit;
+    Serial.println("RMT OK");
 }
 
 // ── ISR GPIO scope (IGN, INJ, CKP loopback) ──────────────────────────────

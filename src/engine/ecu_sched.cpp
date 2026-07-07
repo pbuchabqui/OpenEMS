@@ -527,6 +527,18 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 
     if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
 
+    // Enforce inhibit masks — lost in TIM3→TIM5 migration (f42c450).
+    // Injection inhibit: skip INJ_ON → injector never opens → no fuel delivered.
+    // Ignition inhibit: skip DWELL_START → coil never charges → no spark.
+    if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
+        const uint8_t cyl_bit = inj_ch_to_cyl_bit(ch);
+        if (cyl_bit != 0U && (g_inj_inhibit_mask & cyl_bit) != 0U) { return; }
+    }
+    if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
+        const uint8_t cyl_bit = ign_ch_to_cyl_bit(ch);
+        if (cyl_bit != 0U && (g_ign_inhibit_mask & cyl_bit) != 0U) { return; }
+    }
+
     const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
     if (ch == ECU_CH_INJ1) { ++g_dbg_inj1_arm; }
     if (ch == ECU_CH_IGN1) { ++g_dbg_ign1_arm; }

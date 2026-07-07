@@ -82,6 +82,8 @@ void sensors_set_etb_harness_present(bool present) noexcept;
 void sensors_set_bench_clt_iat(bool enable,
                                int16_t clt_degc_x10,
                                int16_t iat_degc_x10) noexcept;
+// Query bench mode state (for protection gating in main loop).
+bool sensors_is_bench_mode() noexcept;
 void sensors_set_range(SensorId id, SensorRange range) noexcept;
 // FIX-6: retorna por valor (snapshot atômico com CPSID/CPSIE) em vez de
 // referência. Previne torn read: ISR TIM5 (prio 1) pode atualizar g_data entre
