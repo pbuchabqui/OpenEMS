@@ -668,8 +668,10 @@ static void test_ckp_noise_rejection(void) {
 static void test_ckp_stall_poll(void) {
     section("ckp: stall_poll detects stopped engine");
     ckp_reach_full_sync();
-    const uint32_t stale = ckp_snapshot().last_tim5_capture + 13000000u;
-    CHECK_TRUE(ckp_stall_poll(stale), "stall_poll=true after 200ms");
+    // kMinStallTimeoutTicks = 125_000_000 (2s @ 62.5 MHz) — passa um pouco
+    // acima do limiar real, não os 200ms que o comentário antigo assumia.
+    const uint32_t stale = ckp_snapshot().last_tim5_capture + 130000000u;
+    CHECK_TRUE(ckp_stall_poll(stale), "stall_poll=true after 2.08s (kMinStallTimeoutTicks)");
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::LOSS_OF_SYNC), "LOSS_OF_SYNC after stall");
 }
@@ -1546,37 +1548,41 @@ static void cam_fire(uint32_t capture_value) {
 static void test_ckp_seed_confirmed(void) {
     section("ckp: seed_confirmed_count after cam edge during probation");
 
+    // NOTA: o seed está desativado em produção (ckp.cpp "FIX 2026-06-29: seed
+    // desativado p/ diagnóstico", TODO: re-activar). g_seed_probation nunca é
+    // posto a true em nenhum caminho de código atual — o 1º gap vai sempre
+    // para HALF_SYNC, nunca para FULL_SYNC+probation, e ckp_seed_arm() não
+    // tem qualquer efeito observável. Este teste reflete esse estado actual;
+    // quando o seed for reativado, restaurar a expectativa de FULL_SYNC aqui.
     ckp_test_reset(); g_ckp_cap = 0u;
     ckp_seed_arm(true);
 
-    // Feed 3 coherent normal teeth to satisfy is_forward_rotation_coherent,
-    // then 52 more to reach tooth_count=55, then gap → FULL_SYNC + probation.
     for (uint32_t i = 0; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
-    ckp_fire(kNormalPeriod * 3u);  // gap: seed consumed, state=FULL_SYNC, probation=true
+    ckp_fire(kNormalPeriod * 3u);  // gap: seed desativado → HALF_SYNC (não FULL_SYNC)
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
-             static_cast<uint8_t>(SyncState::FULL_SYNC), "pre-cond: FULL_SYNC");
+             static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC (seed desativado)");
 
-    // Fire cam ISR during probation → seed confirmed
+    // Cam ISR sem probation ativa não confirma nada.
     cam_fire(g_ckp_cap + kNormalPeriod * 58u);
-    CHECK_EQ(ckp_seed_confirmed_count(), 1u, "seed_confirmed_count=1 after cam edge");
+    CHECK_EQ(ckp_seed_confirmed_count(), 0u, "seed_confirmed_count=0 (seed desativado)");
 }
 
 static void test_ckp_seed_rejected(void) {
     section("ckp: seed_rejected_count after probation timeout");
 
+    // NOTA: mesmo motivo do teste acima — seed desativado, nunca entra em
+    // probation, logo nunca rejeita por timeout.
     ckp_test_reset(); g_ckp_cap = 0u;
     ckp_seed_arm(true);
 
     for (uint32_t i = 0; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
-    ckp_fire(kNormalPeriod * 3u);  // FULL_SYNC + probation
+    ckp_fire(kNormalPeriod * 3u);  // gap: seed desativado → HALF_SYNC
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
-             static_cast<uint8_t>(SyncState::FULL_SYNC), "pre-cond: FULL_SYNC");
+             static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC (seed desativado)");
 
-    // Feed >70 teeth without cam ISR → probation timeout → seed rejected, state=HALF_SYNC
+    // Sem probation ativa, nenhuma quantidade de dentes gera rejeição.
     for (uint32_t i = 0; i < 71u; ++i) { ckp_fire(kNormalPeriod); }
-    CHECK_EQ(ckp_seed_rejected_count(), 1u, "seed_rejected_count=1 after probation timeout");
-    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
-             static_cast<uint8_t>(SyncState::HALF_SYNC), "state=HALF_SYNC after rejection");
+    CHECK_EQ(ckp_seed_rejected_count(), 0u, "seed_rejected_count=0 (seed desativado)");
 }
 
 static void test_ckp_cmp_glitch_count(void) {
@@ -2156,9 +2162,13 @@ static void test_ecu_sched_angle_table(void) {
     // After gap tooth, scheduler should have emitted events for 4 cylinders
     const uint8_t tbl_sz = ecu_sched_test_angle_table_size();
     CHECK_TRUE(tbl_sz > 0u, "angle table has events after FULL_SYNC");
-    // Each cylinder produces at least: DWELL_START + SPARK + INJ_ON + INJ_OFF = 4
-    // For 4 cylinders: ≥16 events expected
-    CHECK_TRUE(tbl_sz >= 16u, "angle table has ≥16 events (4 cyl × 4 events)");
+    // Modo de presync default é SEMI_SEQUENTIAL (g_presync_inj_mode em
+    // ecu_sched_test_reset()), não SIMULTANEOUS: injeta em só 2 dos 4
+    // cilindros por revolução em presync. Ignição continua 1/cilindro
+    // (DWELL+SPARK = 4×2 = 8), injeção só 2 cilindros (ON+OFF = 2×2 = 4) →
+    // 12 eventos, não os 16 que a expectativa antiga assumia (modo
+    // SIMULTANEOUS, que só é ativado automaticamente durante cranking).
+    CHECK_TRUE(tbl_sz >= 12u, "angle table has ≥12 events (presync SEMI_SEQUENTIAL)");
 
     // Inspect first valid event: should be one of ECU_ACT_*
     uint8_t tooth, frac, ch, action, phase;
@@ -2215,10 +2225,11 @@ static void test_ecu_sched_wasted_to_sequential(void) {
 
     // 5) Fallback CMP-ausente (Parte C-#2): mantendo o sincronismo mas SEM novas
     //    bordas de came, o contador de revoluções desde a última borda ultrapassa
-    //    kMaxRevsWithoutCmp (6) → cmp_confirms zera → o agendador reverte a wasted.
-    //    Reproduz a segunda metade do relato ("o fallback para wasted não funciona").
-    for (uint32_t i = 0; i < 8u; ++i) { ckp_feed_n_then_gap(55u); }
-    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "sem came >6 revs → cmp_confirms zerado");
+    //    kMaxRevsWithoutCmp (60 — alargado em 9560a6b para tolerar gaps do
+    //    estimulador RMT, "60 revs = 7.2s @ 500 RPM") → cmp_confirms zera →
+    //    o agendador reverte a wasted.
+    for (uint32_t i = 0; i < 61u; ++i) { ckp_feed_n_then_gap(55u); }
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "sem came >60 revs → cmp_confirms zerado");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "fallback: reverteu a wasted-spark");
 }
 
@@ -2278,8 +2289,9 @@ static void test_ecu_sched_recovers_after_fallback(void) {
     CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "pré: sequencial (cmp_confirms=2)");
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "pré: is_sequential=1");
 
-    // "Desconecta": 10 revs sem came → #2 fallback → wasted. s_prev fica obsoleto.
-    for (uint32_t i = 0; i < 10u; ++i) { ckp_feed_n_then_gap(55u); }
+    // "Desconecta": >60 revs sem came (kMaxRevsWithoutCmp) → #2 fallback → wasted.
+    // s_prev fica obsoleto.
+    for (uint32_t i = 0; i < 61u; ++i) { ckp_feed_n_then_gap(55u); }
     CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "fallback: cmp_confirms=0");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "fallback: wasted");
 
@@ -2422,7 +2434,13 @@ static void test_ecu_sched_eoi_targeting(void) {
     ecu_sched_set_eoi_lead_deg(300u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
+    // ckp_reach_full_sync() já constrói uma tabela de presync (cmp_confirms
+    // ainda a 0 nesse ponto) com este mesmo inj_pw_ticks — em modo presync o
+    // clamp actua a 324° (ECU_MAX_PRESYNC_INJ_PW_DEG, janela de 360°) e o
+    // PW de 499° dispara-o aí, incrementando g_pw_duty_clamp_count antes da
+    // build sequencial que este teste quer isolar. Reset após confirmar CMP.
     ckp_test_set_cmp_confirms(2u);
+    ecu_sched_reset_diagnostic_counters();
     ckp_feed_n_then_gap(55u);
     CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_OFF, &t_off, &f_off, &p_off), 1u,
              "PW=499°/EOI=420°: INJ1 OFF presente");
@@ -2448,8 +2466,9 @@ static void test_ecu_sched_eoi_targeting(void) {
     CHECK_EQ(t_on, 2u,  "PW=750°→648°: SOI em tooth 2 (12°)");
     CHECK_EQ(p_on, ECU_PHASE_A, "PW=750°→648°: SOI em PHASE_A");
     // Contador: ≥4 (um por cilindro na build sequencial). Nota: as builds
-    // presync durante o padrão de sync (PW/2=375° > 324°) também incrementam,
-    // pelo que a contagem exacta depende do número de rev boundaries.
+    // presync durante o padrão de sync (modo default SEMI_SEQUENTIAL, sem
+    // halving de PW: 750° > 324°) também incrementam, pelo que a contagem
+    // exacta depende do número de rev boundaries.
     CHECK_TRUE(ecu_sched_test_get_pw_duty_clamp_count() >= 4u,
              "PW=750°: duty clamp disparou ≥4× (1× por cilindro na build seq.)");
 
@@ -2472,11 +2491,13 @@ static void test_ecu_sched_eoi_targeting(void) {
     section("ecu_sched EOI: default 355° — pulso presync cruza a fronteira de rev");
     // Com o default open-valve (eoi_lead=355), o EOI presync cai a
     // eoi=(360−355%360)%360=5° → ang=5 → 5×256/6=213 → tooth 0, frac 213.
-    // PW/2=62500 ticks → 37° → SOI=(5+360−37)%360=328° → 328×256/6=13994
-    // → tooth 54, frac 170. O pulso ON(tooth 54, rev N) → OFF(tooth 0, rev N+1)
-    // CRUZA a fronteira de revolução onde a tabela é reconstruída — este check
-    // fixa que ambos os eventos existem na tabela (o OFF da tabela nova fecha
-    // o injetor aberto na rev anterior; toggle de bancos já validado acima).
+    // Modo presync default é SEMI_SEQUENTIAL (ecu_sched_test_reset()) — SEM
+    // halving do PW (isso só acontece em SIMULTANEOUS): PW=125000 ticks → 75°
+    // → SOI=(5+360−75)%360=290° → 290×256/6=12373 → tooth 48, frac 85.
+    // O pulso ON(tooth 48, rev N) → OFF(tooth 0, rev N+1) CRUZA a fronteira de
+    // revolução onde a tabela é reconstruída — este check fixa que ambos os
+    // eventos existem na tabela (o OFF da tabela nova fecha o injetor aberto
+    // na rev anterior; toggle de bancos já validado acima).
     ecu_sched_test_reset();  // usa o default eoi_lead=355 — sem set explícito
     ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(10u);
@@ -2491,7 +2512,8 @@ static void test_ecu_sched_eoi_targeting(void) {
     CHECK_EQ(f_off, 213u, "presync 355°: INJ_OFF frac=213 (5°×256/6)");
     CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_ON, &t_on, &f_on, &p_on), 1u,
              "presync 355°: INJ1 ON presente");
-    CHECK_EQ(t_on, 54u, "presync 355°: SOI em tooth 54 (328°) — antes da fronteira");
+    CHECK_EQ(t_on, 48u, "presync 355°: SOI em tooth 48 (290°) — antes da fronteira");
+    CHECK_EQ(f_on, 85u, "presync 355°: SOI frac=85");
 }
 
 static void test_eoi_blend(void) {
