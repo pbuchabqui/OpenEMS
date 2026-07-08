@@ -71,6 +71,17 @@ uint16_t corr_iat(int16_t iat_x10) noexcept;
 uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept;
 uint16_t corr_warmup(int16_t clt_x10) noexcept;
 
+// Correção não-linear do injetor em PW pequeno (curva de abertura do bico).
+// Aplicar ao PW final já com dead-time/X-τ/AE/cranking incluídos.
+uint32_t apply_injector_scurve(uint32_t pw_us) noexcept;
+
+// Compensação de pressão diferencial de combustível: reescala o PW pela raiz
+// quadrada de (ΔP nominal / ΔP atual), já que o fluxo do bico ∝ sqrt(ΔP).
+// fuel_press_bar_x1000 == 0 (sensor sem leitura válida) → usa o nominal, sem correção.
+uint32_t apply_delta_p_compensation(uint32_t pw_us,
+                                    uint16_t fuel_press_bar_x1000,
+                                    uint16_t map_bar_x100) noexcept;
+
 uint32_t calc_final_pw_us(uint32_t base_pw_us,
                           uint16_t corr_clt_x256,
                           uint16_t corr_iat_x256,

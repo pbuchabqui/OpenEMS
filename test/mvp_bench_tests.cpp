@@ -1247,13 +1247,14 @@ static void test_fuel_stft(void) {
     }
     CHECK_TRUE(stft < 0, "rich signal → STFT negative (reduce fuel)");
 
-    // Closed loop disabled (cold engine): STFT decays toward 0
+    // Closed loop disabled (cold engine): STFT congela (anti-windup), não decai —
+    // evita um "degrau" de combustível perceptível quando volta a closed-loop.
     fuel_reset_adaptives();
     fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);  // set non-zero
     const int16_t before = fuel_get_stft_pct_x10();
     fuel_update_stft(30000u, 100u, 1000, 1050, 600, true, false, false, 5000u);  // clt too cold
     const int16_t after = fuel_get_stft_pct_x10();
-    CHECK_TRUE(after < before, "closed loop disabled → STFT decays");
+    CHECK_EQ(after, before, "closed loop disabled → STFT congela (freeze)");
 }
 
 static void test_fuel_stft_delayed(void) {
@@ -1280,6 +1281,55 @@ static void test_fuel_stft_delayed(void) {
                "stft_delayed activates after delay window");
     CHECK_TRUE(v_later >= -250 && v_later <= 250,
                "stft_delayed in valid range [-25%,+25%]");
+}
+
+static void test_injector_scurve(void) {
+    section("fuel_calc: apply_injector_scurve");
+    using namespace ems::engine;
+
+    CHECK_EQ(apply_injector_scurve(0u), 0u, "pw=0 → 0 (early return)");
+
+    // Acima do último ponto do eixo (1500us): correção=256 (Q8=1.0) → sem alteração.
+    CHECK_EQ(apply_injector_scurve(3000u), 3000u, "pw grande: sem correção (Q8=1.0)");
+
+    // PW pequeno (perto de zero): tabela dá correção < 1.0 → PW corrigido > PW teórico
+    // (o bico entrega proporcionalmente menos que o linear em aberturas curtas,
+    // logo é preciso comandar mais tempo para compensar).
+    const uint32_t pw_small_corrected = apply_injector_scurve(100u);
+    CHECK_TRUE(pw_small_corrected > 100u, "pw pequeno: PW corrigido > PW teórico");
+
+    // Monotonicidade: PW corrigido cresce com o PW teórico.
+    const uint32_t pw_200 = apply_injector_scurve(200u);
+    const uint32_t pw_800 = apply_injector_scurve(800u);
+    CHECK_TRUE(pw_800 > pw_200, "correção monótona: PW maior → corrigido maior");
+}
+
+static void test_fuel_delta_p_compensation(void) {
+    section("fuel_calc: apply_delta_p_compensation");
+    using namespace ems::engine;
+
+    CHECK_EQ(apply_delta_p_compensation(0u, 3000u, 100u), 0u, "pw=0 → 0 (early return)");
+
+    // Pressão real = nominal (3000 = 3.0 bar), MAP igual em ambos os lados →
+    // ΔP_atual == ΔP_nominal → sem correção (ratio=1.0).
+    const uint32_t pw_nominal = apply_delta_p_compensation(5000u, 3000u, 100u);
+    CHECK_NEAR(static_cast<int32_t>(pw_nominal), 5000, 20,
+               "pressão nominal: PW ~inalterado");
+
+    // Sensor sem leitura (0): usa o nominal como fallback → mesmo resultado
+    // que passar o nominal explicitamente.
+    const uint32_t pw_fallback = apply_delta_p_compensation(5000u, 0u, 100u);
+    CHECK_NEAR(static_cast<int32_t>(pw_fallback), static_cast<int32_t>(pw_nominal), 5,
+               "fuel_press=0 → usa nominal (mesmo resultado)");
+
+    // Pressão real ABAIXO da nominal → ΔP_atual < ΔP_nominal → fluxo do bico
+    // menor que o esperado → PW tem de aumentar para compensar (enriquece).
+    const uint32_t pw_low_press = apply_delta_p_compensation(5000u, 2000u, 100u);
+    CHECK_TRUE(pw_low_press > pw_nominal, "pressão baixa: PW corrigido aumenta");
+
+    // Pressão real ACIMA da nominal → fluxo do bico maior → PW deve diminuir.
+    const uint32_t pw_high_press = apply_delta_p_compensation(5000u, 4000u, 100u);
+    CHECK_TRUE(pw_high_press < pw_nominal, "pressão alta: PW corrigido diminui");
 }
 
 static void test_fuel_ltft(void) {
@@ -2651,21 +2701,21 @@ static void test_map_estimator_all(void) {
     map_estimator_init();
 
     // First update: estimated should track sensor
-    const uint16_t est = map_estimator_update(100u, 500u, 10u, 30000u);
+    const uint16_t est = map_estimator_update(100u, 500u, 10u, 30000u, 220);
     CHECK_TRUE(est > 0u && est <= 300u, "estimated MAP in (0, 300 kPa]");
     CHECK_EQ(map_get_estimated_bar_x100(), est, "getter matches return value");
 
     section("map_estimator: tpsdot");
     // After two calls with same TPS: tpsdot ≈ 0
-    map_estimator_update(100u, 500u, 10u, 30000u);
-    map_estimator_update(100u, 500u, 10u, 30000u);
+    map_estimator_update(100u, 500u, 10u, 30000u, 220);
+    map_estimator_update(100u, 500u, 10u, 30000u, 220);
     const int16_t dot = map_get_tpsdot_x10();
     CHECK_EQ(dot, 0, "steady TPS → tpsdot=0");
 
     // TPS step: history ring buffer design requires full wrap to compute non-zero
     // tpsdot; just verify the API returns a valid range value.
-    map_estimator_update(100u, 500u, 10u, 30000u);
-    map_estimator_update(100u, 900u, 10u, 30000u);
+    map_estimator_update(100u, 500u, 10u, 30000u, 220);
+    map_estimator_update(100u, 900u, 10u, 30000u, 220);
     const int16_t dot2 = map_get_tpsdot_x10();
     CHECK_TRUE(dot2 >= -1000 && dot2 <= 1000, "TPS step → tpsdot in clamped range");
 
@@ -2682,16 +2732,57 @@ static void test_map_estimator_all(void) {
     section("map_estimator: set_gains");
     map_estimator_set_gains(200u, 150u);  // arbitrary gains
     // Call update after gain change — must not crash
-    map_estimator_update(100u, 500u, 10u, 30000u);
+    map_estimator_update(100u, 500u, 10u, 30000u, 220);
     CHECK_TRUE(true, "set_gains + update: no crash");
 
     section("map_estimator: edge cases");
     // dt=0
-    map_estimator_update(100u, 500u, 0u, 30000u);
+    map_estimator_update(100u, 500u, 0u, 30000u, 220);
     CHECK_TRUE(true, "dt=0: no crash");
     // rpm=0
-    map_estimator_update(100u, 500u, 10u, 0u);
+    map_estimator_update(100u, 500u, 10u, 0u, 220);
     CHECK_TRUE(true, "rpm=0: no crash");
+
+    section("map_estimator: modelo termodinâmico — set_model_params");
+    ManifoldModelParams mp{};
+    mp.volume_cc_x10 = 5000u;
+    mp.throttle_flow_coeff_q8 = 256u;
+    mp.engine_pumping_coeff_q8 = 256u;
+    map_estimator_set_model_params(mp);
+    CHECK_TRUE(true, "set_model_params: no crash");
+
+    section("map_estimator: tpsdot deteta transiente após volta completa do ring buffer");
+    // g_tps_history_pos aponta sempre para o slot mais antigo ainda residente
+    // (prestes a ser sobrescrito); o mais recente é pos-1. tpsdot só fica
+    // não-nulo depois do buffer (kTpsHistorySize=4 amostras) ter dado a volta
+    // completa com um degrau de TPS dentro dela.
+    map_estimator_init();
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        map_estimator_update(30u, 100u, 2u, 8000u, 220);
+    }
+    map_estimator_update(30u, 900u, 2u, 8000u, 220);
+    CHECK_TRUE(map_get_tpsdot_x10() > 0, "step de TPS após volta do buffer → tpsdot > 0");
+    CHECK_TRUE(map_is_transient(), "tpsdot alto → is_transient()=true");
+
+    section("map_estimator: modelo termodinâmico responde a IAT (fluxo de admissão)");
+    // Ar mais frio é mais denso → mais massa de ar admitida para a mesma
+    // abertura de borboleta → o modelo deve prever um MAP igual ou mais alto
+    // que com ar quente, no mesmo cenário de tip-in (baixo RPM, TPS 10%→90%).
+    auto run_tip_in = [](int16_t iat_x10) noexcept -> uint16_t {
+        map_estimator_init();
+        for (uint8_t i = 0u; i < 4u; ++i) {
+            map_estimator_update(30u, 100u, 2u, 8000u, iat_x10);
+        }
+        uint16_t v = 0u;
+        for (uint8_t i = 0u; i < 3u; ++i) {
+            v = map_estimator_update(30u, 900u, 2u, 8000u, iat_x10);
+        }
+        return v;
+    };
+    const uint16_t est_hot_iat = run_tip_in(220);   // 22.0°C
+    const uint16_t est_cold_iat = run_tip_in(-100);  // -10.0°C
+    CHECK_TRUE(est_cold_iat >= est_hot_iat,
+               "IAT baixo (ar mais denso) → fluxo de admissão maior ou igual ao de IAT alto");
 }
 
 // ============================================================================
@@ -3004,12 +3095,31 @@ static void test_xtau_autocalib_all(void) {
     section("xtau_autocalib: transient_fuel_xtau_with_autocalib");
     xtau_autocalib_reset();
     // disabled: returns input pw
-    const uint32_t pw_disabled = transient_fuel_xtau_with_autocalib(5000u, 800, false);
+    const uint32_t pw_disabled = transient_fuel_xtau_with_autocalib(5000u, 30000u, 100u, 800, false);
     CHECK_EQ(pw_disabled, 5000u, "disabled → returns input pw");
     // enabled: applies model
-    const uint32_t pw_enabled = transient_fuel_xtau_with_autocalib(5000u, 800, true);
+    const uint32_t pw_enabled = transient_fuel_xtau_with_autocalib(5000u, 30000u, 100u, 800, true);
     CHECK_TRUE(pw_enabled > 0u && pw_enabled <= 100000u,
                "enabled: pw in (0, 100ms]");
+
+    section("xtau_autocalib: células RPM×MAP diferentes aprendem parâmetros diferentes");
+    // Duas células bem afastadas nos eixos (baixo RPM/baixa carga vs. alto
+    // RPM/alta carga) recebem erros de lambda opostos — se a Fase 3 deixou de
+    // ser um escalar global, os parâmetros aprendidos devem divergir.
+    xtau_autocalib_reset();
+    for (int i = 0; i < 20; ++i) {
+        xtau_autocalib_update(8000u, 2500u, 1000, 1100, 800, true);   // baixo RPM/carga, rico
+    }
+    const XTauParams p_low = xtau_get_current_params_2d(8000u, 2500u);
+
+    xtau_autocalib_reset();
+    for (int i = 0; i < 20; ++i) {
+        xtau_autocalib_update(70000u, 15000u, 1000, 900, 800, true);  // alto RPM/carga, pobre
+    }
+    const XTauParams p_high = xtau_get_current_params_2d(70000u, 15000u);
+
+    CHECK_TRUE(p_low.x_fraction_q8 != p_high.x_fraction_q8 || p_low.tau_cycles != p_high.tau_cycles,
+               "células RPM×MAP distantes aprendem parâmetros distintos");
 }
 
 // ============================================================================
@@ -3229,17 +3339,16 @@ static void test_math_stft_gains(void) {
     }
     CHECK_EQ(fuel_get_stft_pct_x10(), 250, "STFT saturado no clamp kStftClampX10=250");
 
-    section("MATH: fuel_update_stft decay quando loop fechado desabilitado");
-    // Com CLT fria (clt=600 < 700=70°C): closed_loop_allowed=false
-    // stft decai: stft = stft × 15/16 por chamada
-    // Após 1 chamada fria: stft = 250×15/16 = 234 (integer: 3750/16=234)
+    section("MATH: fuel_update_stft congela (freeze) quando loop fechado desabilitado");
+    // Com CLT fria (clt=600 < 700=70°C): closed_loop_allowed=false.
+    // Anti-windup: stft congela no último valor (250, saturado no clamp acima),
+    // não decai — evita degrau de combustível ao voltar a closed-loop.
     const int16_t s_cold1 = fuel_update_stft(
         30000u, 100u, 1000, 1200, 600, true, false, false, 30000u);
-    CHECK_EQ(s_cold1, 234, "STFT decay após 1 chamada fria: 250×15/16=234");
-    // Após 2ª chamada: 234×15/16=219 (integer: 3510/16=219)
+    CHECK_EQ(s_cold1, 250, "STFT congelado após 1 chamada fria: mantém 250");
     const int16_t s_cold2 = fuel_update_stft(
         30000u, 100u, 1000, 1200, 600, true, false, false, 30000u);
-    CHECK_EQ(s_cold2, 219, "STFT decay após 2 chamadas frias: 234×15/16=219");
+    CHECK_EQ(s_cold2, 250, "STFT congelado após 2 chamadas frias: mantém 250");
 }
 
 static void test_math_inj_scheduler_ticks(void) {
@@ -3974,6 +4083,8 @@ int main(void) {
     test_fuel_lambda_delay();
     test_fuel_stft();
     test_fuel_stft_delayed();
+    test_injector_scurve();
+    test_fuel_delta_p_compensation();
     test_fuel_ltft();
 
     // ── Ign Calc — Segunda Fase ───────────────────────────────────────────────

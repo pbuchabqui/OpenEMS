@@ -37,11 +37,17 @@ bool xtau_autocalib_update(uint32_t rpm_x10,
                            int16_t clt_x10,
                            bool is_transient) noexcept;
 
-// Obtém parâmetros X-τ atuais (aprendidos ou de tabela)
+// Obtém parâmetros X-τ atuais (fallback 1D por CLT)
 XTauParams xtau_get_current_params(int16_t clt_x10) noexcept;
 
-// Aplica modelo X-τ com parâmetros aprendidos
+// Obtém parâmetros X-τ aprendidos na célula RPM×MAP (interpolado), para
+// diagnóstico/dash e testes — não aplica fallback 1D por CLT.
+XTauParams xtau_get_current_params_2d(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
+
+// Aplica modelo X-τ com parâmetros aprendidos, indexados por RPM×MAP (carga)
 uint32_t transient_fuel_xtau_with_autocalib(uint32_t fuel_pw_us,
+                                             uint32_t rpm_x10,
+                                             uint16_t map_bar_x100,
                                              int16_t clt_x10,
                                              bool enabled) noexcept;
 

@@ -29,6 +29,17 @@ extern uint16_t warmup_corr_x256[kCorrectionTableSize];
 extern uint16_t vbatt_corr_axis_mv[kCorrectionTableSize];
 extern uint16_t injector_dead_time_us[kCorrectionTableSize];
 
+// S-curve do injetor: correção não-linear de PW pequeno (bico não abre
+// linearmente perto do tempo de dead-time). Eixo em µs de PW teórico,
+// correção em Q8 (256 = 1.0×, sem correção — acima do último ponto do eixo).
+extern uint16_t injector_scurve_pw_axis_us[kCorrectionTableSize];
+extern uint16_t injector_scurve_corr_q8[kCorrectionTableSize];
+
+// Compensação Δ-P: pressão de combustível nominal de calibração (bar × 1000).
+// Fluxo do bico ∝ sqrt(ΔP); usada como referência quando o sensor de pressão
+// real (sensors.fuel_press_bar_x1000) diverge desse nominal.
+extern uint16_t fuel_press_nominal_bar_x1000;
+
 extern int16_t ae_clt_corr_axis_x10[kCorrectionTableSize];
 extern uint16_t ae_clt_sens[kCorrectionTableSize];
 extern uint16_t ae_tpsdot_threshold_x10;

@@ -35,6 +35,28 @@ using ems::engine::interp_u16_8pt;
 
 constexpr uint8_t kCorrPoints = ems::engine::kCorrectionTableSize;
 
+// Raiz quadrada inteira (usada pela compensação Δ-P: fluxo do bico ∝ sqrt(ΔP)).
+uint32_t isqrt_u32(uint32_t x) noexcept {
+    if (x == 0u) {
+        return 0u;
+    }
+    uint32_t res = 0u;
+    uint32_t bit = 1u << 30;  // maior potência de 4 que cabe em uint32_t
+    while (bit > x) {
+        bit >>= 2u;
+    }
+    while (bit != 0u) {
+        if (x >= res + bit) {
+            x -= res + bit;
+            res = (res >> 1u) + bit;
+        } else {
+            res >>= 1u;
+        }
+        bit >>= 2u;
+    }
+    return res;
+}
+
 constexpr uint8_t kLambdaHistorySize = 16u;
 
 struct LambdaHistorySample {
@@ -375,6 +397,49 @@ uint16_t corr_warmup(int16_t clt_x10) noexcept {
     return interp_u16_8pt(warmup_corr_axis_x10, warmup_corr_x256, kCorrPoints, clt_x10);
 }
 
+uint32_t apply_injector_scurve(uint32_t pw_us) noexcept {
+    if (pw_us == 0u) {
+        return 0u;
+    }
+    const uint16_t pw_clamped = static_cast<uint16_t>(pw_us > 65535u ? 65535u : pw_us);
+    const uint16_t corr_q8 = ems::engine::interp_u16_8pt_u16x(
+        injector_scurve_pw_axis_us, injector_scurve_corr_q8, kCorrPoints, pw_clamped);
+    if (corr_q8 == 0u) {
+        return pw_us;  // tabela mal calibrada — não divide por zero, sem correção
+    }
+    const uint64_t pw_corrected = (static_cast<uint64_t>(pw_us) * 256u) / corr_q8;
+    return static_cast<uint32_t>(pw_corrected > 200000u ? 200000u : pw_corrected);
+}
+
+uint32_t apply_delta_p_compensation(uint32_t pw_us,
+                                    uint16_t fuel_press_bar_x1000,
+                                    uint16_t map_bar_x100) noexcept {
+    if (pw_us == 0u) {
+        return 0u;
+    }
+    // Sensor sem leitura válida: usa o nominal, sem correção (ratio_q8 = 256).
+    const uint16_t actual_press_bar_x1000 =
+        (fuel_press_bar_x1000 > 0u) ? fuel_press_bar_x1000 : fuel_press_nominal_bar_x1000;
+
+    // ΔP absoluto no bico = pressão do rail - pressão do coletor (ambas absolutas,
+    // bar × 1000). map_bar_x100 (bar × 100) → × 10 para bar × 1000.
+    int32_t delta_p_actual = static_cast<int32_t>(actual_press_bar_x1000) -
+                             static_cast<int32_t>(map_bar_x100) * 10;
+    int32_t delta_p_nominal = static_cast<int32_t>(fuel_press_nominal_bar_x1000) -
+                              static_cast<int32_t>(map_bar_x100) * 10;
+    // Piso de 0.2 bar: evita divisão por ~0 / raiz de negativo em falhas de sensor.
+    if (delta_p_actual < 200) delta_p_actual = 200;
+    if (delta_p_nominal < 200) delta_p_nominal = 200;
+
+    // Fluxo do bico ∝ sqrt(ΔP) → PW_corrigido = PW_base × sqrt(ΔP_nominal / ΔP_atual)
+    const uint32_t ratio_q8 = static_cast<uint32_t>(
+        (static_cast<int64_t>(delta_p_nominal) * 256) / delta_p_actual);
+    const uint32_t sqrt_factor_q8 = isqrt_u32(ratio_q8 * 256u);
+
+    const uint64_t pw_corrected = (static_cast<uint64_t>(pw_us) * sqrt_factor_q8) / 256u;
+    return static_cast<uint32_t>(pw_corrected > 200000u ? 200000u : pw_corrected);
+}
+
 uint32_t calc_final_pw_us(uint32_t base_pw_us,
                           uint16_t corr_clt_x256,
                           uint16_t corr_iat_x256,
@@ -556,8 +621,10 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                          bool rev_cut,
                          uint32_t net_pw_us) noexcept {
     if (!closed_loop_allowed(clt_x10, o2_valid, ae_active, rev_cut)) {
-        g_stft_integrator_x10 = (g_stft_integrator_x10 * 15) / 16;
-        g_stft_pct_x10 = static_cast<int16_t>((g_stft_pct_x10 * 15) / 16);
+        // Anti-windup: congela o trim em vez de decair para zero. Decair causa
+        // um "degrau" de combustível perceptível quando o motor volta a
+        // closed-loop com a correção resetada — congelar mantém o último
+        // trim válido até haver nova leitura de lambda fiável.
         return g_stft_pct_x10;
     }
 

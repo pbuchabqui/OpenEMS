@@ -75,6 +75,11 @@ uint16_t warmup_corr_x256[kCorrectionTableSize] = {420u, 380u, 350u, 320u, 290u,
 uint16_t vbatt_corr_axis_mv[kCorrectionTableSize] = {9000u, 10000u, 11000u, 12000u, 13000u, 14000u, 15000u, 16000u};
 uint16_t injector_dead_time_us[kCorrectionTableSize] = {1400u, 1200u, 1050u, 900u, 800u, 700u, 650u, 600u};
 
+uint16_t injector_scurve_pw_axis_us[kCorrectionTableSize] = {0u, 200u, 400u, 600u, 800u, 1000u, 1200u, 1500u};
+uint16_t injector_scurve_corr_q8[kCorrectionTableSize] = {90u, 179u, 205u, 220u, 235u, 245u, 252u, 256u};
+
+uint16_t fuel_press_nominal_bar_x1000 = 3000u;  // 3.0 bar
+
 int16_t ae_clt_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
 uint16_t ae_clt_sens[kCorrectionTableSize] = {11u, 10u, 9u, 8u, 7u, 6u, 5u, 4u};
 uint16_t ae_tpsdot_threshold_x10 = 5u;

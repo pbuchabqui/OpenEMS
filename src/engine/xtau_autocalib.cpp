@@ -10,10 +10,25 @@ namespace {
 
 using ems::engine::clamp_u16;
 using ems::engine::interp_u16_8pt;
+using ems::engine::table_axis_index;
+using ems::engine::table_axis_frac_q8;
 
 // Estado global do sistema de auto-calibração
 ems::engine::WallFuelState g_wall_state = {};
-ems::engine::XTauParams g_learned_params = {};
+
+// Tabela 2D (RPM × MAP) de parâmetros X-τ aprendidos. wall_fuel_us_q8 continua
+// escalar (há fisicamente uma só parede de coletor); só X e τ variam com o
+// ponto de operação — a velocidade do ar no coletor depende de RPM e carga.
+constexpr uint8_t kXTauTableSize = 4u;
+uint32_t g_xtau_rpm_axis_x10[kXTauTableSize] = {8000u, 25000u, 45000u, 70000u};
+uint32_t g_xtau_map_axis_bar_x100[kXTauTableSize] = {2500u, 5000u, 8000u, 15000u};
+ems::engine::XTauParams g_learned_table[kXTauTableSize][kXTauTableSize] = {};
+bool g_xtau_table_seeded = false;
+
+// Índice da célula aprendida no último xtau_autocalib_update(), usado para
+// detetar mudança de ponto de operação a meio de uma janela de aprendizado.
+uint8_t g_last_cell_rpm_idx = 0u;
+uint8_t g_last_cell_map_idx = 0u;
 
 // Histórico de erro de lambda durante transientes para calibração
 struct LambdaErrorSample {
@@ -65,8 +80,74 @@ void lambda_error_reset() noexcept {
     g_lambda_error_pos = 0u;
 }
 
-// Calcula X e τ ideais baseado em erro de lambda acumulado
-void calculate_ideal_xtau(int16_t avg_error_x1000,
+void xtau_seed_table_if_needed() noexcept {
+    if (g_xtau_table_seeded) {
+        return;
+    }
+    ems::engine::XTauParams seed = {};
+    seed.x_fraction_q8 = ems::engine::xtau_x_fraction_q8[0];  // baseline a 0°C
+    seed.tau_cycles = ems::engine::xtau_tau_cycles[0];
+    seed.learned_x_min_q8 = 64u;   // 25%
+    seed.learned_x_max_q8 = 192u;  // 75%
+    seed.learned_tau_min = 10u;
+    seed.learned_tau_max = 255u;
+    for (uint8_t ri = 0u; ri < kXTauTableSize; ++ri) {
+        for (uint8_t mi = 0u; mi < kXTauTableSize; ++mi) {
+            g_learned_table[ri][mi] = seed;
+        }
+    }
+    g_xtau_table_seeded = true;
+}
+
+// Célula mais próxima (arredondamento, não interpolação) — usada para escrita
+// durante o aprendizado: cada amostra atualiza um único ponto de operação.
+void find_xtau_nearest_cell(uint32_t rpm_x10, uint32_t map_bar_x100,
+                            uint8_t& out_rpm_idx, uint8_t& out_map_idx) noexcept {
+    const uint8_t ri = table_axis_index(g_xtau_rpm_axis_x10, kXTauTableSize, rpm_x10);
+    const uint8_t mi = table_axis_index(g_xtau_map_axis_bar_x100, kXTauTableSize, map_bar_x100);
+    const uint8_t fr = table_axis_frac_q8(g_xtau_rpm_axis_x10, ri, rpm_x10);
+    const uint8_t fm = table_axis_frac_q8(g_xtau_map_axis_bar_x100, mi, map_bar_x100);
+    out_rpm_idx = (fr >= 128u && ri < (kXTauTableSize - 1u)) ? static_cast<uint8_t>(ri + 1u) : ri;
+    out_map_idx = (fm >= 128u && mi < (kXTauTableSize - 1u)) ? static_cast<uint8_t>(mi + 1u) : mi;
+}
+
+// Leitura interpolada bilinear (RPM × MAP), mesmo padrão de interp_lambda_delay_3x3
+// em fuel_calc.cpp.
+ems::engine::XTauParams interpolate_xtau_2d(uint32_t rpm_x10, uint32_t map_bar_x100) noexcept {
+    const uint8_t xi = table_axis_index(g_xtau_rpm_axis_x10, kXTauTableSize, rpm_x10);
+    const uint8_t yi = table_axis_index(g_xtau_map_axis_bar_x100, kXTauTableSize, map_bar_x100);
+    const uint8_t fx = table_axis_frac_q8(g_xtau_rpm_axis_x10, xi, rpm_x10);
+    const uint8_t fy = table_axis_frac_q8(g_xtau_map_axis_bar_x100, yi, map_bar_x100);
+
+    const auto& c00 = g_learned_table[xi][yi];
+    const auto& c10 = g_learned_table[xi + 1u][yi];
+    const auto& c01 = g_learned_table[xi][yi + 1u];
+    const auto& c11 = g_learned_table[xi + 1u][yi + 1u];
+
+    auto lerp2d = [fx, fy](uint16_t v00, uint16_t v10, uint16_t v01, uint16_t v11) noexcept -> uint16_t {
+        const int32_t a0 = static_cast<int32_t>(v00) +
+            (((static_cast<int32_t>(v10) - v00) * static_cast<int32_t>(fx)) >> 8);
+        const int32_t a1 = static_cast<int32_t>(v01) +
+            (((static_cast<int32_t>(v11) - v01) * static_cast<int32_t>(fx)) >> 8);
+        return static_cast<uint16_t>(a0 + (((a1 - a0) * static_cast<int32_t>(fy)) >> 8));
+    };
+
+    ems::engine::XTauParams result;
+    result.x_fraction_q8 = lerp2d(c00.x_fraction_q8, c10.x_fraction_q8,
+                                   c01.x_fraction_q8, c11.x_fraction_q8);
+    result.tau_cycles = lerp2d(c00.tau_cycles, c10.tau_cycles,
+                                c01.tau_cycles, c11.tau_cycles);
+    result.learned_x_min_q8 = c00.learned_x_min_q8;
+    result.learned_x_max_q8 = c00.learned_x_max_q8;
+    result.learned_tau_min = c00.learned_tau_min;
+    result.learned_tau_max = c00.learned_tau_max;
+    return result;
+}
+
+// Calcula X e τ ideais baseado em erro de lambda acumulado, partindo dos
+// valores aprendidos na célula RPM×MAP atual.
+void calculate_ideal_xtau(const ems::engine::XTauParams& current,
+                          int16_t avg_error_x1000,
                           uint16_t& out_x_q8,
                           uint16_t& out_tau) noexcept {
     // Se erro positivo (lambda medido > target = mistura pobre):
@@ -75,14 +156,14 @@ void calculate_ideal_xtau(int16_t avg_error_x1000,
     // Se erro negativo (lambda medido < target = mistura rica):
     //   - Diminuir X (menos combustível na parede)
     //   - Aumentar τ (evaporação mais lenta)
-    
-    const int16_t abs_error = (avg_error_x1000 >= 0) ? 
+
+    const int16_t abs_error = (avg_error_x1000 >= 0) ?
         avg_error_x1000 : -avg_error_x1000;
-    
-    // Ponto de partida: valores da tabela baseados em CLT
-    out_x_q8 = g_learned_params.x_fraction_q8;
-    out_tau = g_learned_params.tau_cycles;
-    
+
+    // Ponto de partida: valores já aprendidos para esta célula RPM×MAP
+    out_x_q8 = current.x_fraction_q8;
+    out_tau = current.tau_cycles;
+
     // Correção baseada em erro (apenas se dentro de limites confiáveis)
     if (abs_error <= kMaxLambdaErrorX1000 && abs_error >= kLambdaErrorThresholdX1000) {
         // Ajuste de X: ±25% baseado em erro
@@ -109,16 +190,11 @@ namespace ems::engine {
 
 void xtau_autocalib_init() noexcept {
     g_wall_state = {};
-    g_learned_params = {};
-    
-    // Inicializa com valores da tabela de calibração
-    g_learned_params.x_fraction_q8 = xtau_x_fraction_q8[0];  // Valor a 0°C como baseline
-    g_learned_params.tau_cycles = xtau_tau_cycles[0];
-    g_learned_params.learned_x_min_q8 = 64u;   // 25%
-    g_learned_params.learned_x_max_q8 = 192u;  // 75%
-    g_learned_params.learned_tau_min = 10u;
-    g_learned_params.learned_tau_max = 255u;
-    
+    g_xtau_table_seeded = false;
+    xtau_seed_table_if_needed();
+    g_last_cell_rpm_idx = 0u;
+    g_last_cell_map_idx = 0u;
+
     lambda_error_reset();
     g_xtau_calib_updates = 0u;
     g_xtau_learning_cycles = 0u;
@@ -128,18 +204,20 @@ void xtau_autocalib_reset() noexcept {
     xtau_autocalib_init();
 }
 
-bool xtau_autocalib_update(uint32_t /*rpm_x10*/,
-                           uint16_t /*map_bar_x100*/,
+bool xtau_autocalib_update(uint32_t rpm_x10,
+                           uint16_t map_bar_x100,
                            int16_t lambda_target_x1000,
                            int16_t lambda_measured_x1000,
                            int16_t /*clt_x10*/,
                            bool is_transient) noexcept {
+    xtau_seed_table_if_needed();
+
     // Só aprende em condições controladas
     if (!is_transient) {
         lambda_error_reset();
         return false;
     }
-    
+
     // Validações básicas
     if (lambda_target_x1000 < 650 || lambda_target_x1000 > 1200) {
         return false;
@@ -147,24 +225,36 @@ bool xtau_autocalib_update(uint32_t /*rpm_x10*/,
     if (lambda_measured_x1000 < 650 || lambda_measured_x1000 > 1200) {
         return false;
     }
-    
+
+    // Célula RPM×MAP mais próxima do ponto de operação atual. Se mudou desde a
+    // última amostra, a janela de aprendizado em curso mistura pontos de
+    // operação diferentes — descarta e recomeça nesta célula.
+    uint8_t rpm_idx = 0u;
+    uint8_t map_idx = 0u;
+    find_xtau_nearest_cell(rpm_x10, map_bar_x100, rpm_idx, map_idx);
+    if (rpm_idx != g_last_cell_rpm_idx || map_idx != g_last_cell_map_idx) {
+        lambda_error_reset();
+        g_last_cell_rpm_idx = rpm_idx;
+        g_last_cell_map_idx = map_idx;
+    }
+
     // Calcula erro de lambda
     const int16_t error_x1000 = lambda_measured_x1000 - lambda_target_x1000;
-    
+
     // Ignora erros muito pequenos (ruído) ou muito grandes (falha)
-    if (error_x1000 > -kLambdaErrorThresholdX1000 && 
+    if (error_x1000 > -kLambdaErrorThresholdX1000 &&
         error_x1000 < kLambdaErrorThresholdX1000) {
         return false;
     }
-    if (error_x1000 > kMaxLambdaErrorX1000 || 
+    if (error_x1000 > kMaxLambdaErrorX1000 ||
         error_x1000 < -kMaxLambdaErrorX1000) {
         return false;
     }
-    
+
     // Adiciona ao histórico
     lambda_error_push(error_x1000);
     ++g_xtau_learning_cycles;
-    
+
     // Precisa de pelo menos 4 amostras válidas para tomar decisão
     uint8_t valid_count = 0;
     for (uint8_t i = 0u; i < kLambdaErrorHistorySize; ++i) {
@@ -172,82 +262,83 @@ bool xtau_autocalib_update(uint32_t /*rpm_x10*/,
             ++valid_count;
         }
     }
-    
+
     if (valid_count < 4u) {
         return false;
     }
-    
+
     // Calcula erro médio
     const int16_t avg_error_x1000 = lambda_error_get_average();
-    
-    // Calcula parâmetros ideais
+
+    ems::engine::XTauParams& cell = g_learned_table[rpm_idx][map_idx];
+
+    // Calcula parâmetros ideais para esta célula
     uint16_t ideal_x_q8 = 0u;
     uint16_t ideal_tau = 0u;
-    calculate_ideal_xtau(avg_error_x1000, ideal_x_q8, ideal_tau);
-    
+    calculate_ideal_xtau(cell, avg_error_x1000, ideal_x_q8, ideal_tau);
+
     // Aplica aprendizado com blending suave (rate-limit)
     // Blend: 87.5% valor antigo + 12.5% novo valor
-    const int32_t x_delta = static_cast<int32_t>(ideal_x_q8) - 
-                            static_cast<int32_t>(g_learned_params.x_fraction_q8);
-    const int32_t tau_delta = static_cast<int32_t>(ideal_tau) - 
-                              static_cast<int32_t>(g_learned_params.tau_cycles);
-    
-    g_learned_params.x_fraction_q8 = static_cast<uint16_t>(
-        static_cast<int32_t>(g_learned_params.x_fraction_q8) + 
+    const int32_t x_delta = static_cast<int32_t>(ideal_x_q8) -
+                            static_cast<int32_t>(cell.x_fraction_q8);
+    const int32_t tau_delta = static_cast<int32_t>(ideal_tau) -
+                              static_cast<int32_t>(cell.tau_cycles);
+
+    cell.x_fraction_q8 = static_cast<uint16_t>(
+        static_cast<int32_t>(cell.x_fraction_q8) +
         ((x_delta * kLearningRateQ8) >> 8));
-    
-    g_learned_params.tau_cycles = static_cast<uint16_t>(
-        static_cast<int32_t>(g_learned_params.tau_cycles) + 
+
+    cell.tau_cycles = static_cast<uint16_t>(
+        static_cast<int32_t>(cell.tau_cycles) +
         ((tau_delta * kLearningRateQ8) >> 8));
-    
-    // Atualiza limites aprendidos
-    if (g_learned_params.x_fraction_q8 < g_learned_params.learned_x_min_q8) {
-        g_learned_params.learned_x_min_q8 = g_learned_params.x_fraction_q8;
+
+    // Atualiza limites aprendidos (desta célula)
+    if (cell.x_fraction_q8 < cell.learned_x_min_q8) {
+        cell.learned_x_min_q8 = cell.x_fraction_q8;
     }
-    if (g_learned_params.x_fraction_q8 > g_learned_params.learned_x_max_q8) {
-        g_learned_params.learned_x_max_q8 = g_learned_params.x_fraction_q8;
+    if (cell.x_fraction_q8 > cell.learned_x_max_q8) {
+        cell.learned_x_max_q8 = cell.x_fraction_q8;
     }
-    if (g_learned_params.tau_cycles < g_learned_params.learned_tau_min) {
-        g_learned_params.learned_tau_min = g_learned_params.tau_cycles;
+    if (cell.tau_cycles < cell.learned_tau_min) {
+        cell.learned_tau_min = cell.tau_cycles;
     }
-    if (g_learned_params.tau_cycles > g_learned_params.learned_tau_max) {
-        g_learned_params.learned_tau_max = g_learned_params.tau_cycles;
+    if (cell.tau_cycles > cell.learned_tau_max) {
+        cell.learned_tau_max = cell.tau_cycles;
     }
-    
+
     // Atualiza estado
     g_wall_state.calibration_state = 2u;  // calibrated
     ++g_xtau_calib_updates;
-    
+
     // Reseta histórico para próximo ciclo de aprendizado
     lambda_error_reset();
-    
+
     return true;
 }
 
 XTauParams xtau_get_current_params(int16_t clt_x10) noexcept {
+    // Fallback 1D por temperatura do motor — usado antes de haver aprendizado
+    // 2D suficiente na célula RPM×MAP atual (ver transient_fuel_xtau_with_autocalib).
     XTauParams params = {};
-    
-    // Se já temos parâmetros aprendidos, usa-os
-    if (g_wall_state.calibration_state >= 1u) {
-        params.x_fraction_q8 = g_learned_params.x_fraction_q8;
-        params.tau_cycles = g_learned_params.tau_cycles;
-    } else {
-        // Caso contrário, interpola da tabela baseada em CLT
-        params.x_fraction_q8 = interp_u16_8pt(
-            xtau_clt_axis_x10, xtau_x_fraction_q8, kCorrectionTableSize, clt_x10);
-        params.tau_cycles = interp_u16_8pt(
-            xtau_clt_axis_x10, xtau_tau_cycles, kCorrectionTableSize, clt_x10);
-    }
-    
-    params.learned_x_min_q8 = g_learned_params.learned_x_min_q8;
-    params.learned_x_max_q8 = g_learned_params.learned_x_max_q8;
-    params.learned_tau_min = g_learned_params.learned_tau_min;
-    params.learned_tau_max = g_learned_params.learned_tau_max;
-    
+    params.x_fraction_q8 = interp_u16_8pt(
+        xtau_clt_axis_x10, xtau_x_fraction_q8, kCorrectionTableSize, clt_x10);
+    params.tau_cycles = interp_u16_8pt(
+        xtau_clt_axis_x10, xtau_tau_cycles, kCorrectionTableSize, clt_x10);
+    params.learned_x_min_q8 = 64u;   // 25%
+    params.learned_x_max_q8 = 192u;  // 75%
+    params.learned_tau_min = 10u;
+    params.learned_tau_max = 255u;
     return params;
 }
 
+XTauParams xtau_get_current_params_2d(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
+    xtau_seed_table_if_needed();
+    return interpolate_xtau_2d(rpm_x10, map_bar_x100);
+}
+
 uint32_t transient_fuel_xtau_with_autocalib(uint32_t fuel_pw_us,
+                                             uint32_t rpm_x10,
+                                             uint16_t map_bar_x100,
                                              int16_t clt_x10,
                                              bool enabled) noexcept {
     if (!enabled || fuel_pw_us == 0u) {
@@ -255,9 +346,13 @@ uint32_t transient_fuel_xtau_with_autocalib(uint32_t fuel_pw_us,
         g_wall_state.calibration_state = 0u;
         return fuel_pw_us;
     }
-    
-    // Obtém parâmetros atuais (aprendidos ou de tabela)
-    const XTauParams params = xtau_get_current_params(clt_x10);
+
+    // Enquanto não há aprendizado suficiente, usa o fallback 1D por CLT;
+    // depois de calibrado, usa a tabela 2D RPM×MAP interpolada.
+    xtau_seed_table_if_needed();
+    const XTauParams params = (g_wall_state.calibration_state >= 2u)
+        ? interpolate_xtau_2d(rpm_x10, map_bar_x100)
+        : xtau_get_current_params(clt_x10);
     
     // Reutiliza lógica do transient_fuel.cpp com parâmetros aprendidos
     uint16_t x_q8 = params.x_fraction_q8;

@@ -753,7 +753,8 @@ int main() {
                 map_bar_x100_sensor,
                 sensors.etb_tps_pct_x10,
                 kAePeriodMs,
-                snap.rpm_x10);
+                snap.rpm_x10,
+                sensors.iat_degc_x10);
             
             // Loop ETB (1kHz = 1ms) - controle de borboleta eletrônica
             const bool map_fault = (sensors.fault_bits & kFaultBitMap) != 0u;
@@ -806,6 +807,9 @@ int main() {
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);
                 ::ecu_sched_set_ign_inhibit_mask(rev_cut ? 0x0Fu : 0u);
             }
+
+            // Fuel cut active (rev limiter or limp mode): force telemetry PW to 0
+            const bool fuel_cut_active = g_rev_limit_active || g_limp_active;
 
             if (sched_sync && !rev_cut) {
                 const ems::engine::Table2dLookup fuel_lookup =
@@ -881,9 +885,11 @@ int main() {
                             is_transient);
                     }
 
-                    // Usa modelo X-τ com parâmetros aprendidos
+                    // Usa modelo X-τ com parâmetros aprendidos (RPM×MAP)
                     const uint32_t xtau_fuel_pw_us =
                         ems::engine::transient_fuel_xtau_with_autocalib(fuel_pw_us,
+                                                                        snap.rpm_x10,
+                                                                        map_bar_x100,
                                                                         sensors.clt_degc_x10,
                                                                         xtau_enabled);
                     final_pw_us_base = xtau_fuel_pw_us + static_cast<uint32_t>(fuel_corr.dead_time_us);
@@ -923,10 +929,15 @@ int main() {
                 const auto qc = ems::engine::quick_crank_update(
                     now, snap.rpm_x10, sched_sync, sensors.clt_degc_x10, advance_deg);
                 // Decel cut: força PW=0 sem passar pelo quick_crank (que pode adicionar min_pw)
-                const uint32_t final_pw_us = decel_cut_active ? 0u :
+                const uint32_t quick_crank_pw_us = decel_cut_active ? 0u :
                     ems::engine::quick_crank_apply_pw_us(final_pw_us_base,
                                                          qc.fuel_mult_x256,
                                                          qc.min_pw_us);
+                // Correções físicas finais do bico: pressão diferencial de combustível
+                // (real, via sensor) e não-linearidade de abertura em PW pequeno.
+                const uint32_t delta_p_pw_us = ems::engine::apply_delta_p_compensation(
+                    quick_crank_pw_us, sensors.fuel_press_bar_x1000, map_bar_x100);
+                const uint32_t final_pw_us = ems::engine::apply_injector_scurve(delta_p_pw_us);
                 const uint32_t pw_100 = final_pw_us / 100u;
                 g_last_pw_ms_x10 = static_cast<uint8_t>(pw_100 > 255u ? 255u : pw_100);
                 g_last_advance_deg = clamp_i8(qc.spark_deg, -10, 40);

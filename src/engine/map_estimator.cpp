@@ -7,9 +7,13 @@ namespace {
 
 using ems::engine::clamp_u16;
 using ems::engine::clamp_i16;
+using ems::engine::clamp_u32;
 
 // Estado global do estimador
 ems::engine::MapEstimatorState g_map_state = {};
+
+// Parâmetros calibráveis do modelo termodinâmico (continuidade)
+ems::engine::ManifoldModelParams g_model_params = {5000u, 256u, 256u};  // 500.0 cc, coeffs neutros (Q8=1.0)
 
 // Histórico de TPS para cálculo de derivada
 constexpr uint8_t kTpsHistorySize = 4u;
@@ -21,52 +25,101 @@ uint8_t g_tps_history_pos = 0u;
 uint8_t g_steady_gain_q8 = 200u;   // 0.78 (78% sensor, 22% modelo em regime)
 uint8_t g_transient_gain_q8 = 64u; // 0.25 (25% sensor, 75% modelo em transiente)
 
-// Constantes do modelo físico do coletor
-constexpr uint16_t kManifoldVolumeCc = 500u;      // Volume típico do coletor (ajustável por calibração)
-constexpr uint16_t kEngineDisplacementCc = 2000u; // Cilindrada do motor
-constexpr uint8_t kCylinderCount = 4u;
+// Acumulador fracionário (Q8) do incremento de MAP previsto pelo modelo. A um
+// período de loop de poucos ms, o incremento físico é frequentemente < 1
+// unidade de bar_x100 — sem carry, o truncamento inteiro perde-o todos os
+// ciclos e o modelo nunca contribui. Mesma técnica de DDA/Bresenham.
+int32_t g_map_delta_remainder_q8 = 0;
+
+// Constantes do modelo físico do coletor (equação da continuidade / conservação de massa)
+constexpr uint16_t kEngineDisplacementCc = 2000u;   // Cilindrada do motor (referência de escala)
+constexpr uint32_t kAtmosphericPressureBarX100 = 100u;  // 1.00 bar
 
 // Limites de detecção de transiente
 constexpr int16_t kLightTransientTpsdotX10 = 50u;    // 5 %/s
 constexpr int16_t kMediumTransientTpsdotX10 = 150u;  // 15 %/s
 constexpr int16_t kHeavyTransientTpsdotX10 = 300u;   // 30 %/s
 
-// Fator de correção baseado em RPM e carga para modelo
-uint16_t calculate_model_map_correction(uint32_t rpm_x10,
-                                        uint16_t /*tps_pct_x10*/) noexcept {
-    // Modelo simplificado: MAP estimado = MAP anterior + (TPSdot * ganho volumétrico)
-    // Ganho depende de RPM (maior RPM = menor tempo para encher coletor)
-    
-    if (rpm_x10 < 5000u || rpm_x10 > 100000u) {
-        return 100u;  // Ganho unitário em RPM inválida
+int32_t clamp_iat_kelvin_x10(int16_t iat_x10) noexcept {
+    int32_t iat_k_x10 = static_cast<int32_t>(iat_x10) + 2730;
+    if (iat_k_x10 < 2000) iat_k_x10 = 2000;
+    if (iat_k_x10 > 4000) iat_k_x10 = 4000;
+    return iat_k_x10;
+}
+
+// Fluxo de ar admitido pela borboleta (mg/ciclo aprox.), função de abertura,
+// ΔP atmosfera-coletor e temperatura do ar admitido.
+uint16_t calc_throttle_flow_impl(uint16_t tps_pct_x10, uint16_t map_bar_x100,
+                                 int16_t iat_x10) noexcept {
+    constexpr uint32_t kMaxFlowMg = 800u;
+
+    const uint32_t throttle_frac_q8 = (static_cast<uint32_t>(tps_pct_x10) * 256u) / 1000u;
+
+    int32_t delta_p_bar_x100 = static_cast<int32_t>(kAtmosphericPressureBarX100) -
+                               static_cast<int32_t>(map_bar_x100);
+    if (delta_p_bar_x100 < 0) {
+        delta_p_bar_x100 = 0;
     }
-    
-    // Correção volumétrica baseada em RPM
-    // Em baixa RPM: coletor enche mais devagar → ganho menor
-    // Em alta RPM: coletor enche mais rápido → ganho maior
-    const uint32_t rpm_factor = (rpm_x10 * 100u) / 60000u;  // Normaliza em 6000 RPM
-    const uint16_t gain = static_cast<uint16_t>(clamp_u16(
-        static_cast<uint32_t>(rpm_factor), 50u, 150u));
-    
-    return gain;
+    const uint32_t delta_p_frac_q8 = (static_cast<uint32_t>(delta_p_bar_x100) * 256u) /
+                                     kAtmosphericPressureBarX100;
+
+    const int32_t iat_k_x10 = clamp_iat_kelvin_x10(iat_x10);
+    const uint32_t temp_comp_q8 = (2930u * 256u) / static_cast<uint32_t>(iat_k_x10);
+
+    // Produto de três fatores Q8 (abertura × ΔP × temperatura) requer deslocar 24 bits
+    // (8 bits por fator) — não 16, que era o erro da proposta original.
+    const uint64_t flow_raw = static_cast<uint64_t>(kMaxFlowMg) * throttle_frac_q8 *
+                              delta_p_frac_q8 * temp_comp_q8;
+    const uint32_t flow_mg = static_cast<uint32_t>(flow_raw >> 24u);
+    const uint32_t flow_trimmed = (flow_mg * g_model_params.throttle_flow_coeff_q8) >> 8u;
+
+    return static_cast<uint16_t>(clamp_u32(flow_trimmed, 0u, 2000u));
+}
+
+// Fluxo de ar consumido pelo motor (bombeamento speed-density), função de RPM,
+// MAP e temperatura, escalado pela cilindrada calibrada.
+uint16_t calc_engine_pumping_impl(uint32_t rpm_x10, uint16_t map_bar_x100,
+                                  int16_t iat_x10) noexcept {
+    if (rpm_x10 < 500u) {
+        return 0u;
+    }
+
+    const int32_t iat_k_x10 = clamp_iat_kelvin_x10(iat_x10);
+
+    // m_dot ∝ coeff_q8 × MAP × RPM × cilindrada / T (bombeamento speed-density).
+    // kPumpingScaleDiv calibra a magnitude para a mesma ordem de grandeza (0-2000 mg)
+    // do fluxo de admissão, à cilindrada/RPM/MAP nominais (2000cc, 6000 RPM, 1 bar).
+    constexpr uint64_t kPumpingScaleDiv = 1'000'000ull;
+    const uint64_t flow_num = static_cast<uint64_t>(g_model_params.engine_pumping_coeff_q8) *
+                              map_bar_x100 * rpm_x10 * kEngineDisplacementCc;
+    const uint32_t flow_mg = static_cast<uint32_t>(
+        flow_num / (static_cast<uint64_t>(iat_k_x10) * kPumpingScaleDiv));
+
+    return static_cast<uint16_t>(clamp_u32(flow_mg, 0u, 2000u));
 }
 
 int16_t calculate_tpsdot() noexcept {
-    // Calcula derivada usando diferença entre amostra atual e antiga
-    const uint8_t oldest_pos = (g_tps_history_pos + 1u) % kTpsHistorySize;
-    
-    if (!g_tps_time_history[oldest_pos] || !g_tps_time_history[g_tps_history_pos]) {
+    // Calcula derivada usando diferença entre amostra mais recente e a mais
+    // antiga ainda residente no buffer circular. g_tps_history_pos aponta
+    // sempre para o próximo slot a escrever — ou seja, o slot mais antigo
+    // ainda válido (prestes a ser sobrescrito). O mais recente escrito é o
+    // slot imediatamente anterior (pos - 1, módulo o tamanho do buffer).
+    const uint8_t oldest_pos = g_tps_history_pos;
+    const uint8_t newest_pos = static_cast<uint8_t>(
+        (g_tps_history_pos + kTpsHistorySize - 1u) % kTpsHistorySize);
+
+    if (!g_tps_time_history[oldest_pos] || !g_tps_time_history[newest_pos]) {
         return 0;
     }
-    
-    const uint32_t dt_ms = g_tps_time_history[g_tps_history_pos] - 
+
+    const uint32_t dt_ms = g_tps_time_history[newest_pos] -
                            g_tps_time_history[oldest_pos];
-    
+
     if (dt_ms == 0u || dt_ms > 1000u) {
         return 0;
     }
-    
-    const int32_t delta_tps_x10 = static_cast<int32_t>(g_tps_history[g_tps_history_pos]) -
+
+    const int32_t delta_tps_x10 = static_cast<int32_t>(g_tps_history[newest_pos]) -
                                   static_cast<int32_t>(g_tps_history[oldest_pos]);
     
     // TPSdot em %/s × 10 = (delta_tps_x10 * 1000) / dt_ms
@@ -108,7 +161,8 @@ void map_estimator_init() noexcept {
         g_tps_time_history[i] = 0u;
     }
     g_tps_history_pos = 0u;
-    
+    g_map_delta_remainder_q8 = 0;
+
     g_steady_gain_q8 = 200u;
     g_transient_gain_q8 = 64u;
 }
@@ -116,7 +170,8 @@ void map_estimator_init() noexcept {
 uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
                               uint16_t tps_pct_x10,
                               uint16_t dt_ms,
-                              uint32_t rpm_x10) noexcept {
+                              uint32_t rpm_x10,
+                              int16_t iat_x10) noexcept {
     // Validações básicas
     const bool sensor_ok = (map_sensor_bar_x100 >= 10u && map_sensor_bar_x100 <= 300u);
     if (sensor_ok) {
@@ -150,15 +205,30 @@ uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
              static_cast<uint16_t>(g_transient_gain_q8)) >> 1u);
     }
     
-    // Calcula predição baseada em TPSdot
-    // MAP_predito = MAP_anterior + (TPSdot * ganho_volumétrico * dt)
-    const uint16_t model_gain = calculate_model_map_correction(rpm_x10, tps_pct_x10);
-    const int32_t map_delta = (static_cast<int32_t>(g_map_state.tpsdot_x10) * 
-                               static_cast<int32_t>(model_gain) * 
-                               static_cast<int32_t>(dt_ms)) / 10000;
-    
-    const int32_t map_predicted = static_cast<int32_t>(g_map_state.map_estimated_bar_x100) + 
-                                   (map_delta / 10);  // Escala adequada
+    // Modelo termodinâmico de continuidade: dP/dt ∝ (fluxo_admissão - fluxo_motor) / VolumeColetor
+    // (temperatura já compensada dentro de calc_throttle_flow_impl/calc_engine_pumping_impl).
+    const uint16_t flow_in_mg = calc_throttle_flow_impl(
+        tps_pct_x10, g_map_state.map_estimated_bar_x100, iat_x10);
+    const uint16_t flow_out_mg = calc_engine_pumping_impl(
+        rpm_x10, g_map_state.map_estimated_bar_x100, iat_x10);
+    const int32_t delta_flow_mg = static_cast<int32_t>(flow_in_mg) -
+                                  static_cast<int32_t>(flow_out_mg);
+
+    // dP/dt (bar_x100 por segundo). kDpDtScaleX100PerSec calibra a magnitude para
+    // ~20 bar/s no diferencial de fluxo máximo com o coletor de referência (500cc).
+    constexpr int64_t kDpDtScaleX100PerSec = 5000;
+    const int64_t dpdt_x100_per_s = (static_cast<int64_t>(delta_flow_mg) * kDpDtScaleX100PerSec) /
+                                    static_cast<int64_t>(g_model_params.volume_cc_x10);
+
+    // Acumula em Q8 e extrai só a parte inteira, preservando a fração entre
+    // chamadas (carry), para não perder incrementos sub-unitários em loops rápidos.
+    g_map_delta_remainder_q8 += static_cast<int32_t>(
+        (dpdt_x100_per_s * static_cast<int32_t>(dt_ms) * 256) / 1000);
+    const int32_t map_delta = g_map_delta_remainder_q8 >> 8;
+    g_map_delta_remainder_q8 -= (map_delta << 8);
+
+    const int32_t map_predicted = static_cast<int32_t>(g_map_state.map_estimated_bar_x100) +
+                                   map_delta;
     const uint16_t map_predicted_clamped = clamp_u16(
         static_cast<uint16_t>(map_predicted > 0 ? map_predicted : 0),
         10u, 300u);
@@ -202,6 +272,12 @@ void map_estimator_set_gains(uint8_t steady_gain_q8,
                              uint8_t transient_gain_q8) noexcept {
     g_steady_gain_q8 = clamp_u16(steady_gain_q8, 64u, 240u);
     g_transient_gain_q8 = clamp_u16(transient_gain_q8, 16u, 128u);
+}
+
+void map_estimator_set_model_params(const ManifoldModelParams& params) noexcept {
+    g_model_params.volume_cc_x10 = clamp_u16(params.volume_cc_x10, 500u, 30000u);
+    g_model_params.throttle_flow_coeff_q8 = clamp_u16(params.throttle_flow_coeff_q8, 32u, 512u);
+    g_model_params.engine_pumping_coeff_q8 = clamp_u16(params.engine_pumping_coeff_q8, 32u, 512u);
 }
 
 }  // namespace ems::engine
