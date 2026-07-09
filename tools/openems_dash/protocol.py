@@ -163,11 +163,22 @@ class OpenEMSLink:
     def close(self) -> None:
         self._ser.close()
 
-    def _txn(self, tx: bytes, rx_len: int) -> bytes:
+    def _txn(self, tx: bytes, rx_len: int, timeout: float | None = None) -> bytes:
         with self._lock:
             self._ser.reset_input_buffer()
             self._ser.write(tx)
-            data = self._ser.read(rx_len)
+            if timeout is None:
+                data = self._ser.read(rx_len)
+            else:
+                # Timeout pontual (ex.: burn — erase+program de flash bloqueia
+                # o firmware antes do ACK); restaura o timeout por-defeito no
+                # finally para não afetar as próximas transações (poll 30Hz).
+                orig = self._ser.timeout
+                self._ser.timeout = timeout
+                try:
+                    data = self._ser.read(rx_len)
+                finally:
+                    self._ser.timeout = orig
         if len(data) != rx_len:
             raise TimeoutError(
                 f"cmd {tx[:1]!r}: esperado {rx_len}B, recebido {len(data)}B")
@@ -215,7 +226,12 @@ class OpenEMSLink:
             raise IOError(f"write page {page} off {off}: ACK {ack.hex()}")
 
     def burn_page(self, page: int) -> None:
-        ack = self._txn(b"b" + bytes([page]), 1)
+        # burn_page_to_flash (ui_protocol.cpp) apaga o setor (8KB) e programa
+        # antes de responder — bloqueante no firmware. O timeout por-defeito
+        # (0.3s, dimensionado para o poll de telemetria a 30Hz) estoura em
+        # erase+program real; 2s dá margem folgada sem travar a UI para sempre
+        # se a placa realmente não responder.
+        ack = self._txn(b"b" + bytes([page]), 1, timeout=2.0)
         if ack != b"\x00":
             raise IOError(f"burn page {page}: ACK {ack.hex()}")
 

@@ -224,9 +224,26 @@ def api_write_cells(page: int, body: dict):
     return {"ok": True, "written": len(writes)}
 
 
+# kFlashWriteSafeRpmX10 (engine/constants.h) — erase/program de flash pode
+# congelar o fetch por ~120µs (errata ES0565); firmware recusa o burn (ACK
+# de erro, sem detalhe) acima deste RPM. Checamos aqui antes de tentar para
+# dar uma mensagem clara em vez de relayar só o ACK genérico.
+FLASH_WRITE_SAFE_RPM = 300
+
 @app.post("/api/pages/{page}/burn")
 def api_burn(page: int):
-    worker.submit(lambda l: l.burn_page(page))
+    latest = worker.latest
+    if latest and latest.get("rpm", 0) > FLASH_WRITE_SAFE_RPM:
+        return JSONResponse(
+            {"error": f"burn bloqueado: motor a {latest['rpm']} RPM "
+                      f"(limite {FLASH_WRITE_SAFE_RPM} RPM — erase/program de "
+                      f"flash pode travar o scheduler; pare o motor e repita)"},
+            status_code=409)
+    try:
+        worker.submit(lambda l: l.burn_page(page))
+    except Exception as e:  # noqa: BLE001 — devolvido à UI em vez de 500 opaco
+        return JSONResponse({"error": f"burn página {page} falhou: {e}"},
+                            status_code=502)
     return {"ok": True}
 
 
