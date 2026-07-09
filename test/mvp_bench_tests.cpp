@@ -2240,6 +2240,55 @@ static void test_ecu_sched_wasted_to_sequential(void) {
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "fallback: reverteu a wasted-spark");
 }
 
+// ── Revalidação CMP após perda de sync do CKP ───────────────────────────────
+// Perda de sync (gap prematuro) preserva a contagem interna do came, mas o
+// valor EXPORTADO é capado a 1: o resync não pode retomar sequencial com a
+// referência de fase antiga (phase_half pode ter caído na metade errada de
+// 720°). Só uma borda CMP fresca coerente — que também re-ancora a fase via
+// cmp_phase_pending — reabre o gate.
+// Timing: bordas de came a cada 2 revs (116×período, janela [90,150]); a borda
+// fresca pós-resync cai a 28+58+58 = 144×período, dentro da janela ±25%.
+static void test_ecu_sched_cmp_revalidation_after_sync_loss(void) {
+    section("ecu_sched: perda de sync fecha gate sequencial até borda CMP fresca");
+    ecu_sched_test_reset();
+    ems::engine::cmp_window_open_tooth  = 0u;
+    ems::engine::cmp_window_close_tooth = 0u;
+
+    // 1) FULL_SYNC + 2 bordas CMP coerentes → sequencial.
+    ckp_reach_full_sync();
+    ckp_feed_n_then_gap(55u);
+    cam_fire(g_ckp_cap);                          // 1ª borda (sem prev → aceita)
+    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(55u);
+    cam_fire(g_ckp_cap);                          // 2ª borda, delta=116 ✓
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "2 bordas coerentes → cmp_confirms=2");
+    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(55u);
+    cam_fire(g_ckp_cap);                          // 3ª borda mantém cadência, delta=116 ✓
+    CHECK_EQ(ecu_sched_is_sequential(), 1u, "sequencial activo antes da perda");
+
+    // 2) Gap prematuro (25 dentes) → LOSS_OF_SYNC; gate exportado capa a 1,
+    //    contagem interna preservada.
+    ckp_feed_n_then_gap(25u);
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::LOSS_OF_SYNC), "gap prematuro → LOSS_OF_SYNC");
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "perda de sync: gate exportado capado a 1");
+
+    // 3) Resync (LOSS→HALF→FULL) SEM borda de came fresca → wasted, não sequencial.
+    ckp_feed_n_then_gap(55u);                     // LOSS → HALF_SYNC
+    ckp_feed_n_then_gap(55u);                     // HALF → FULL_SYNC
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::FULL_SYNC), "resync completo");
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "pós-resync sem came fresco: fica em wasted");
+
+    // 4) Borda CMP fresca coerente (delta=144 ✓, mesmo tooth_index) → gate reabre.
+    cam_fire(g_ckp_cap);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "borda fresca restaura cmp_confirms=2");
+    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(55u);
+    CHECK_EQ(ecu_sched_is_sequential(), 1u, "sequencial retomado após revalidação");
+}
+
 // Ruído no pino CMP (came desligado, PA1 a flutuar) gera bordas fantasma em
 // posições de virabrequim ALEATÓRIAS. O gate de consistência de posição
 // (ckp_tim5_ch2_isr) exige que bordas consecutivas ocorram no mesmo tooth_index:
@@ -4168,6 +4217,7 @@ int main(void) {
     test_ecu_sched_setters();
     test_ecu_sched_angle_table();
     test_ecu_sched_wasted_to_sequential();
+    test_ecu_sched_cmp_revalidation_after_sync_loss();
     test_ecu_sched_noise_rejects_sequential();
     test_ecu_sched_recovers_after_fallback();
     test_ecu_sched_inhibit_masks();

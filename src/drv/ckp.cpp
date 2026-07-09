@@ -528,9 +528,13 @@ inline bool process_gap_event() noexcept {
                 return true;
             }
             // Gap prematuro: pulso espúrio (EMC, dente danificado).
-            // Preserva CMP state — perda de sync do CKP não invalida o came.
+            // Preserva CMP state — perda de sync do CKP não invalida o came —
+            // mas fecha o gate sequencial exportado até 1 borda CMP fresca
+            // pós-resync (o ISR do came restaura snap.cmp_confirms e re-ancora
+            // a fase via cmp_phase_pending): evita retomar sequencial 360° fora.
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
+            if (g_state.snap.cmp_confirms > 1u) { g_state.snap.cmp_confirms = 1u; }
             return false;
 
         case ems::drv::SyncState::FULL_SYNC:
@@ -553,8 +557,10 @@ inline bool process_gap_event() noexcept {
             ++ems::drv::g_dbg_gap_premature;
             ems::drv::g_dbg_gap_last_tc = g_state.tooth_count;
             // Gap prematuro em FULL_SYNC → LOSS_OF_SYNC, mas preserva CMP.
+            // Gate exportado fecha até borda CMP fresca (ver HALF_SYNC acima).
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
+            if (g_state.snap.cmp_confirms > 1u) { g_state.snap.cmp_confirms = 1u; }
             return false;
 
         default:
@@ -795,8 +801,10 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
         if (g_state.snap.state == ems::drv::SyncState::HALF_SYNC ||
             g_state.snap.state == ems::drv::SyncState::FULL_SYNC) {
             // Gap ausente → LOSS_OF_SYNC, mas preserva CMP state.
+            // Gate exportado fecha até borda CMP fresca (ver HALF_SYNC).
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
+            if (g_state.snap.cmp_confirms > 1u) { g_state.snap.cmp_confirms = 1u; }
         }
     }
 
