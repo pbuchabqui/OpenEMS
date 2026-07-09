@@ -668,12 +668,20 @@ static void test_ckp_noise_rejection(void) {
 static void test_ckp_stall_poll(void) {
     section("ckp: stall_poll detects stopped engine");
     ckp_reach_full_sync();
-    // kMinStallTimeoutTicks = 125_000_000 (2s @ 62.5 MHz) — passa um pouco
-    // acima do limiar real, não os 200ms que o comentário antigo assumia.
-    const uint32_t stale = ckp_snapshot().last_tim5_capture + 130000000u;
-    CHECK_TRUE(ckp_stall_poll(stale), "stall_poll=true after 2.08s (kMinStallTimeoutTicks)");
+    // Produção: kMinStallTimeoutTicks = 12_500_000 (200 ms @ 62.5 MHz).
+    const uint32_t stale = ckp_snapshot().last_tim5_capture + 13000000u;
+    CHECK_TRUE(ckp_stall_poll(stale), "stall_poll=true after 208ms (kMinStallTimeoutTicks)");
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::LOSS_OF_SYNC), "LOSS_OF_SYNC after stall");
+
+    // Bench-mode relaxa o timeout para 2 s (gaps de RMT restart do estimulador).
+    section("ckp: stall_poll bench-mode usa timeout relaxado (2s)");
+    ems::drv::sensors_set_bench_clt_iat(true, 900, 400);
+    ckp_reach_full_sync();
+    const uint32_t base = ckp_snapshot().last_tim5_capture;
+    CHECK_FALSE(ckp_stall_poll(base + 13000000u), "bench: sem stall a 208ms");
+    CHECK_TRUE(ckp_stall_poll(base + 130000000u), "bench: stall a 2.08s");
+    ems::drv::sensors_set_bench_clt_iat(false, 0, 0);
 }
 
 static void test_ckp_stall_poll_no_false_positive(void) {
@@ -2225,11 +2233,10 @@ static void test_ecu_sched_wasted_to_sequential(void) {
 
     // 5) Fallback CMP-ausente (Parte C-#2): mantendo o sincronismo mas SEM novas
     //    bordas de came, o contador de revoluções desde a última borda ultrapassa
-    //    kMaxRevsWithoutCmp (60 — alargado em 9560a6b para tolerar gaps do
-    //    estimulador RMT, "60 revs = 7.2s @ 500 RPM") → cmp_confirms zera →
-    //    o agendador reverte a wasted.
-    for (uint32_t i = 0; i < 61u; ++i) { ckp_feed_n_then_gap(55u); }
-    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "sem came >60 revs → cmp_confirms zerado");
+    //    kMaxRevsWithoutCmp (6 em produção; 60 só em bench-mode para tolerar
+    //    gaps do estimulador RMT) → cmp_confirms zera → o agendador reverte a wasted.
+    for (uint32_t i = 0; i < 7u; ++i) { ckp_feed_n_then_gap(55u); }
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "sem came >6 revs → cmp_confirms zerado");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "fallback: reverteu a wasted-spark");
 }
 

@@ -65,6 +65,7 @@
 #include "hal/timer.h"
 #include "hal/critical_section.h"
 #include "engine/calibration.h"
+#include "drv/sensors.h"
 #if defined(TARGET_STM32H562) && !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
 #endif
@@ -105,8 +106,14 @@ static constexpr uint16_t kTeethPositionsPerRev = 60u; // posições angulares u
 // 2 revoluções, logo em operação normal o contador chega no máximo a ~2 antes de
 // cada borda o zerar. 6 revs = 3 ciclos de came sem uma borda válida → assume-se
 // que o sinal do came se perdeu e reverte-se a wasted-spark (cmp_confirms=0).
-// Threshold >> 2 evita falso fallback com jitter/rejeição pontual. Ajustável.
-static constexpr uint16_t kMaxRevsWithoutCmp = 60u;  // 60 revs = 7.2s @ 500 RPM — tolerates stimulator RMT restart gaps
+// Threshold >> 2 evita falso fallback com jitter/rejeição pontual.
+// Em bench-mode o estimulador pára o RMT ao reprogramar (gaps longos sem borda),
+// por isso a janela sobe para 60 revs (7.2s @ 500 RPM) — NUNCA em produção.
+static constexpr uint16_t kMaxRevsWithoutCmp      = 6u;
+static constexpr uint16_t kMaxRevsWithoutCmpBench = 60u;
+static inline uint16_t max_revs_without_cmp() noexcept {
+    return ems::drv::sensors_is_bench_mode() ? kMaxRevsWithoutCmpBench : kMaxRevsWithoutCmp;
+}
 
 // Mínimo de dentes contados desde o último gap para aceitar novo gap.
 // 55 << 58: descarta pulsos espúrios no início de cada revolução.
@@ -152,7 +159,14 @@ static constexpr uint32_t kMinToothTicks = 50u;
 // Tempo máximo sem dente antes de declarar motor parado: 200 ms @ 62.5 MHz.
 // Resolve o caso em que o virabrequim para entre dois dentes — tooth_count
 // para de incrementar e a detecção por contagem nunca dispara.
-static constexpr uint32_t kMinStallTimeoutTicks = 125000000u;  // 2s @ 62.5 MHz — tolerates RMT restart gaps
+// Em bench-mode o estimulador pára o RMT ao reprogramar; 2 s evita falso stall
+// nesses gaps. Em produção mantém-se 200 ms — injectar 2 s num motor parado
+// afoga o motor e manda combustível cru para o escape.
+static constexpr uint32_t kMinStallTimeoutTicks      = 12500000u;   // 200 ms @ 62.5 MHz
+static constexpr uint32_t kMinStallTimeoutTicksBench = 125000000u;  // 2 s @ 62.5 MHz
+static inline uint32_t min_stall_timeout_ticks() noexcept {
+    return ems::drv::sensors_is_bench_mode() ? kMinStallTimeoutTicksBench : kMinStallTimeoutTicks;
+}
 
 // ── Limiares TOOTH_GRD (MS42 §1.2.3.1.3, NC_TOOTH_GRD_MIN/MAX_GAP) ──────
 // TOOTH_GRD(n) = [T(n) × T(n-2)] / T(n-1)²
@@ -531,7 +545,7 @@ inline bool process_gap_event() noexcept {
                 // cmp_confirms>=2). Não toca em s_prev_cmp_capture: uma futura borda
                 // re-valida temporalmente e reconstrói a confirmação do zero.
                 if (s_revs_since_cmp < 0xFFFFu) { ++s_revs_since_cmp; }
-                if (s_revs_since_cmp >= kMaxRevsWithoutCmp && g_state.cmp_confirms != 0u) {
+                if (s_revs_since_cmp >= max_revs_without_cmp() && g_state.cmp_confirms != 0u) {
                     g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u;
                 }
                 return true;
@@ -944,7 +958,7 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
     }
     // Subtracção circular uint32_t: correcta mesmo após overflow de TIM5 (32 bits).
     const uint32_t elapsed_ticks = tim5_cnt_now - g_state.prev_capture;
-    if (elapsed_ticks < kMinStallTimeoutTicks) {
+    if (elapsed_ticks < min_stall_timeout_ticks()) {
         return false;
     }
     // Stall confirmado — seção crítica necessária: escrevemos g_state.snap fora
