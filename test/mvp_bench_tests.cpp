@@ -3565,12 +3565,14 @@ static void test_trigger_offset(void) {
 
     // ----------------------------------------------------------------
     // Baseline: offset = 0°
-    // For cyl3 (tdc=540°), advance=15°, dwell=84°:
+    // TDC 540° = posição 3 da firing order {0,2,3,1} = cilindro físico 1
+    // → canal ECU_CH_IGN2 (convenção: canal = cilindro físico).
+    // Com advance=15°, dwell=84°:
     //   dwell_engine_angle = (525+720-84)%720 = 441°
     //   trigger_angle(441, offset=0) = (441+720-0)%720 = 441°
     //   ang=81, pos_x256=81*256/6=3456, tooth=13, frac=128, phase_B
     // ----------------------------------------------------------------
-    section("trigger offset=0°: cyl3 DWELL_START scheduled at tooth 13");
+    section("trigger offset=0°: cyl1 (tdc=540°) DWELL_START scheduled at tooth 13");
     g_eng_cfg.trigger_tooth0_engine_deg = 0u;
     ecu_sched_test_reset();
     ecu_sched_test_reset_ccr();
@@ -3586,16 +3588,16 @@ static void test_trigger_offset(void) {
     ckp_feed_n_then_gap(55u);  // trigger sequential scheduling at next gap
     ecu_sched_test_reset_ccr();
 
-    // Inspect angle table: find ECU_CH_IGN4 DWELL_START entry
+    // Inspect angle table: find ECU_CH_IGN2 DWELL_START entry (cyl 1, tdc=540°)
     uint8_t tooth_off0 = 0xFFu;
     for (uint8_t i = 0u; i < ecu_sched_test_angle_table_size(); ++i) {
         uint8_t t, f, ch, act, ph;
         if (ecu_sched_test_get_angle_event(i, &t, &f, &ch, &act, &ph)) {
-            if (ch == ECU_CH_IGN4 && act == ECU_ACT_DWELL_START) { tooth_off0 = t; }
+            if (ch == ECU_CH_IGN2 && act == ECU_ACT_DWELL_START) { tooth_off0 = t; }
         }
     }
     CHECK_EQ(tooth_off0, 13u,
-             "offset=0°: cyl3 DWELL_START tooth=13 (trigger=441°, ang=81, 81*256/6=3456>>8=13)");
+             "offset=0°: cyl1 DWELL_START tooth=13 (trigger=441°, ang=81, 81*256/6=3456>>8=13)");
 
     // Events from tooth 0 (gap) may already be in queue; reset for clean check.
     ecu_sched_test_reset_ccr();
@@ -3612,7 +3614,7 @@ static void test_trigger_offset(void) {
     // Event shifts to tooth 0 → fires AT the FULL_SYNC gap (tooth 0 is
     // processed immediately when Calculate_Sequential_Cycle completes).
     // ----------------------------------------------------------------
-    section("trigger offset=78°: cyl3 DWELL_START shifts to tooth 0");
+    section("trigger offset=78°: cyl1 DWELL_START shifts to tooth 0");
     g_eng_cfg.trigger_tooth0_engine_deg = 78u;
     ecu_sched_test_reset();
     ecu_sched_test_reset_ccr();
@@ -3629,16 +3631,16 @@ static void test_trigger_offset(void) {
     // Do NOT call reset_ccr after — event at tooth 0 fires during the gap itself.
     ckp_feed_n_then_gap(57u);
 
-    // Angle table: cyl3 DWELL_START must be at tooth 0
+    // Angle table: cyl1 (tdc=540°, canal IGN2) DWELL_START must be at tooth 0
     uint8_t tooth_off78 = 0xFFu;
     for (uint8_t i = 0u; i < ecu_sched_test_angle_table_size(); ++i) {
         uint8_t t, f, ch, act, ph;
         if (ecu_sched_test_get_angle_event(i, &t, &f, &ch, &act, &ph)) {
-            if (ch == ECU_CH_IGN4 && act == ECU_ACT_DWELL_START) { tooth_off78 = t; }
+            if (ch == ECU_CH_IGN2 && act == ECU_ACT_DWELL_START) { tooth_off78 = t; }
         }
     }
     CHECK_EQ(tooth_off78, 0u,
-             "offset=78°: cyl3 DWELL_START shifts to tooth 0 (trigger=363°, ang=3, 3*256/6=128>>8=0)");
+             "offset=78°: cyl1 DWELL_START shifts to tooth 0 (trigger=363°, ang=3, 3*256/6=128>>8=0)");
     CHECK_TRUE(tooth_off0 != tooth_off78,
                "offset change moves the event: tooth 13 (offset=0) ≠ tooth 0 (offset=78)");
 

@@ -718,9 +718,9 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
         uint8_t tooth, frac, phase;
 
         angle_to_tooth_event(engine_angle_to_trigger_angle(dwell, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, ign_ch[seq], ECU_ACT_DWELL_START);
+        table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
         angle_to_tooth_event(engine_angle_to_trigger_angle(spark, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, ign_ch[seq], ECU_ACT_SPARK);
+        table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
 
         // ── Additional sparks (MS42 §2.2.3 — multi-spark) ──────────────
         // Cada spark adicional n usa o mesmo canal de ignição do cilindro.
@@ -741,17 +741,17 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
                     const uint32_t add_dwell_ang = (spark + add_dwell_off) % ECU_CYCLE_DEG;
                     const uint32_t add_spark_ang = (spark + add_spark_off) % ECU_CYCLE_DEG;
                     angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-                    table_add(tooth, frac, phase, ign_ch[seq], ECU_ACT_DWELL_START);
+                    table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
                     angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-                    table_add(tooth, frac, phase, ign_ch[seq], ECU_ACT_SPARK);
+                    table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
                 }
             }
         }
 
         angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, inj_ch[seq], ECU_ACT_INJ_ON);
+        table_add(tooth, frac, phase, inj_ch[cyl], ECU_ACT_INJ_ON);
         angle_to_tooth_event(engine_angle_to_trigger_angle(inj_off, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, inj_ch[seq], ECU_ACT_INJ_OFF);
+        table_add(tooth, frac, phase, inj_ch[cyl], ECU_ACT_INJ_OFF);
     }
 }
 

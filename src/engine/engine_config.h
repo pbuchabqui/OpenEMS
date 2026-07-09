@@ -34,6 +34,10 @@ inline constexpr uint16_t kIvcAbdcDeg = 50u;
 //   5. Escrever via comando UART SET_CONFIG antes do primeiro arranque.
 inline constexpr uint16_t kTriggerTooth0EngineDeg = 0u;  // MEDIR NO MOTOR REAL
 
+// Convenção de canal: ECU_CH_IGNn/ECU_CH_INJn = cilindro físico n−1, SEMPRE.
+// A ordem de disparo entra apenas via kFiringOrder/cyl_tdc_deg — nunca na
+// escolha do canal. Invariante partilhado por Calculate_Sequential_Cycle,
+// pares presync (companheiros 0↔3, 2↔1), ign_ch_to_cyl_bit e misfire_detect.
 inline constexpr uint8_t kFiringOrder[kCylinderCount] = {0u, 2u, 3u, 1u};
 
 // CMP reference half: which 360° half the cam rising edge marks.
