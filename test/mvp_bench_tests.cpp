@@ -873,18 +873,6 @@ static void test_fuel_baro(void) {
 // IGN CALC
 // ═══════════════════════════════════════════════════════════════════════════
 
-static void test_ign_rev_limit_spark_trim(void) {
-    section("ign_calc: calc_rev_limit_spark_trim");
-    rev_limit_spark_reset();
-    CHECK_EQ(calc_rev_limit_spark_trim(60000u), 0,        "below window → 0");
-    const int16_t soft = calc_rev_limit_spark_trim(67500u);
-    CHECK_TRUE(soft < 0 && soft > -15, "in soft window: -15 < trim < 0");
-    CHECK_EQ(calc_rev_limit_spark_trim(70000u), INT16_MIN, "at limit → spark cut");
-    CHECK_EQ(calc_rev_limit_spark_trim(72000u), INT16_MIN, "above limit → spark cut");
-    rev_limit_spark_reset();
-    CHECK_EQ(calc_rev_limit_spark_trim(60000u), 0,        "0 after reset");
-}
-
 static void test_ign_iat_correction(void) {
     section("ign_calc: calc_ign_iat_correction_deg");
     CHECK_EQ(calc_ign_iat_correction_deg(-200),  2,  "IAT=-20°C → +2°");
@@ -4133,7 +4121,6 @@ int main(void) {
 
     // ── Ignition Calc ─────────────────────────────────────────────────────────
     printf("\n=== IGN CALC ===");
-    test_ign_rev_limit_spark_trim();
     test_ign_iat_correction();
     test_ign_clt_correction();
     test_ign_antijerk();

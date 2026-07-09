@@ -7,7 +7,6 @@
 namespace {
 
 static uint8_t g_antijerk_cycles_rem = 0u;
-static bool    g_rev_limit_toggle    = false;  // alterna máscara de corte entre ciclos
 
 uint16_t normalize_7200(int32_t deg_x10) noexcept {
     int32_t out = deg_x10 % 7200;
@@ -64,31 +63,6 @@ int16_t get_advance_prepared(const Table2dLookup& lookup) noexcept {
 int16_t clamp_advance_deg(int16_t advance_deg) noexcept {
     // 40° BTDC — margem de octanagem para E30/alta compressão.
     return clamp_i16(advance_deg, -10, 40);
-}
-
-int16_t calc_rev_limit_spark_trim(uint32_t rpm_x10) noexcept {
-    const uint32_t limit  = rev_limit_rpm_x10;
-    const uint32_t window = rev_limit_spark_window_x10;
-
-    if (window == 0u || rpm_x10 < (limit - window)) { return 0; }
-
-    if (rpm_x10 >= limit) {
-        // Acima do limite: corte de faísca. Toggle alterna cilindros cortados para
-        // suavizar o corte (50% de torque em vez de corte total de todos os cilindros).
-        g_rev_limit_toggle = !g_rev_limit_toggle;
-        return INT16_MIN;
-    }
-
-    // Zona suave: retardo linear de 0° na borda exterior até max_retard no limite.
-    // deficit = RPM abaixo do limite; diminui até 0 quando rpm → limit.
-    const uint32_t deficit = limit - rpm_x10;
-    const uint32_t retard = (static_cast<uint32_t>(rev_limit_max_retard_deg) *
-                             (window - deficit)) / window;
-    return -static_cast<int16_t>(retard > 127u ? 127u : retard);
-}
-
-void rev_limit_spark_reset() noexcept {
-    g_rev_limit_toggle = false;
 }
 
 int16_t calc_ign_iat_correction_deg(int16_t iat_x10) noexcept {

@@ -368,8 +368,7 @@ PAGE0_FIELDS = [
     ("antijerk_decay_cycles",         70, 1, "B", 1.0),
     ("rev_limit_rpm_x10",             72, 1, "L", 0.1),  # RPM
     ("rev_limit_soft_window_x10",     76, 1, "L", 0.1),  # RPM
-    ("rev_limit_spark_window_x10",    80, 1, "L", 0.1),  # RPM
-    ("rev_limit_max_retard_deg",      84, 1, "h", 1.0),  # °
+    # offsets 80-85 reservados: rev_limit spark retard removido (b565491)
     ("ltft_add_pw_threshold_us",      86, 1, "H", 0.001),# ms
     ("decel_cut_tps_threshold_x10",   88, 1, "H", 0.1),  # %
     ("decel_cut_entry_rpm_x10",       90, 1, "L", 0.1),  # RPM

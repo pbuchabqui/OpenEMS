@@ -153,10 +153,9 @@ extern uint8_t  antijerk_decay_cycles;
 extern uint32_t rev_limit_rpm_x10;
 extern uint32_t rev_limit_soft_window_x10;   // janela do corte de injeção (menor, ~200 RPM)
 
-// Soft rev limiter por spark retard (complementar ao corte de injeção)
-// Janela mais larga (ex. 500 RPM) — retarda progressivamente antes do corte de injeção
-extern uint32_t rev_limit_spark_window_x10;  // janela do retardo de ignição
-extern int16_t  rev_limit_max_retard_deg;    // retardo máximo no limite (ex. 15°)
+// Rev limiter: retardo progressivo de faísca removido em b565491 (rusEFI-style:
+// corte só de combustível, faísca nunca cortada). Offsets 80-85 da page 0
+// ficam reservados para não partir o layout do protocolo.
 
 // LTFT aditivo (MS42 TI_AD_ADD_MMV)
 extern uint16_t ltft_add_pw_threshold_us;

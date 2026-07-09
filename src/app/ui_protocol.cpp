@@ -370,8 +370,7 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         g_page0[71] = 0u;  // pad
         std::memcpy(g_page0 + 72, &ems::engine::rev_limit_rpm_x10,         4u);
         std::memcpy(g_page0 + 76, &ems::engine::rev_limit_soft_window_x10, 4u);
-        std::memcpy(g_page0 + 80, &ems::engine::rev_limit_spark_window_x10, 4u);
-        std::memcpy(g_page0 + 84, &ems::engine::rev_limit_max_retard_deg,  2u);
+        // Offsets 80-85 reservados: rev_limit spark retard removido (b565491).
         std::memcpy(g_page0 + 86, &ems::engine::ltft_add_pw_threshold_us,  2u);
         std::memcpy(g_page0 + 88, &ems::engine::decel_cut_tps_threshold_x10, 2u);
         std::memcpy(g_page0 + 90, &ems::engine::decel_cut_entry_rpm_x10,   4u);
@@ -510,8 +509,7 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         ems::engine::antijerk_decay_cycles = g_page0[70];
         std::memcpy(&ems::engine::rev_limit_rpm_x10,          g_page0 + 72, 4u);
         std::memcpy(&ems::engine::rev_limit_soft_window_x10,  g_page0 + 76, 4u);
-        std::memcpy(&ems::engine::rev_limit_spark_window_x10, g_page0 + 80, 4u);
-        std::memcpy(&ems::engine::rev_limit_max_retard_deg,   g_page0 + 84, 2u);
+        // Offsets 80-85 reservados: rev_limit spark retard removido (b565491).
         std::memcpy(&ems::engine::ltft_add_pw_threshold_us,   g_page0 + 86, 2u);
         std::memcpy(&ems::engine::decel_cut_tps_threshold_x10, g_page0 + 88, 2u);
         std::memcpy(&ems::engine::decel_cut_entry_rpm_x10,    g_page0 + 90, 4u);
