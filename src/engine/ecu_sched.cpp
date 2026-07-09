@@ -669,6 +669,32 @@ static uint32_t ticks_to_cycle_degrees(uint32_t ticks, uint32_t tooth_period_ns,
 // g_ivc_abdc_deg / ecu_sched_set_ivc / g_ivc_clamp_count são mantidos por
 // compatibilidade de API e protocolo (contador permanece 0).
 
+// ── Sparks adicionais (MS42 §2.2.3 — multi-spark) ───────────────────────────
+// Cada spark adicional n dispara n×step depois do spark principal; o dwell n
+// arranca 1° após o spark n-1 (epsilon anti-conflito no mesmo tooth).
+// Interrompido quando o spark ultrapassa a janela ATDC configurada.
+// emit(dwell_ang, spark_ang) materializa cada par no fan-out do chamador
+// (canal do cilindro em sequencial; os 4 canais em presync/wasted). Único
+// sítio com a temporização MS42 — sequencial e presync não podem divergir.
+template <typename EmitFn>
+static inline void emit_multispark(uint32_t spark_ang, uint32_t cycle_deg,
+                                   uint32_t tooth_period_ns, EmitFn emit)
+{
+    const uint8_t ms_count = g_mspark_count;
+    if (ms_count == 0U || tooth_period_ns == 0U) { return; }
+    const uint32_t inter_deg = ticks_to_cycle_degrees(
+        g_mspark_inter_dwell_ticks, tooth_period_ns, cycle_deg);
+    const uint32_t step   = inter_deg + 1U;  // +1° = epsilon anti-conflito
+    const uint32_t window = g_advance_deg + g_mspark_atdc_limit_deg;
+    for (uint8_t n = 1U; n <= ms_count; ++n) {
+        const uint32_t add_spark_off = (uint32_t)n * step;
+        if (add_spark_off >= window) { break; }
+        const uint32_t add_dwell_off = (uint32_t)(n - 1U) * step + 1U;
+        emit((spark_ang + add_dwell_off) % cycle_deg,
+             (spark_ang + add_spark_off) % cycle_deg);
+    }
+}
+
 static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
 {
     static_assert(ems::engine::cfg::kCylinderCount == 4u, "ign_ch/inj_ch hardcoded for 4 cylinders");
@@ -722,31 +748,14 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
         angle_to_tooth_event(engine_angle_to_trigger_angle(spark, ECU_CYCLE_DEG), &tooth, &frac, &phase);
         table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
 
-        // ── Additional sparks (MS42 §2.2.3 — multi-spark) ──────────────
-        // Cada spark adicional n usa o mesmo canal de ignição do cilindro.
-        // add_dwell_n arranca 1° após SPARK_{n-1} para evitar conflito no mesmo tooth.
-        // add_spark_n dispara inter_dwell_deg depois de add_dwell_n.
-        // Interrompido se o spark ultrapassar o limite ATDC configurado.
-        {
-            const uint8_t ms_count = g_mspark_count;
-            if (ms_count > 0U && snap.tooth_period_ns > 0U) {
-                const uint32_t inter_deg = ticks_to_cycle_degrees(
-                    g_mspark_inter_dwell_ticks, snap.tooth_period_ns, ECU_CYCLE_DEG);
-                const uint32_t step      = inter_deg + 1U;  // +1° = epsilon anti-conflito
-                const uint32_t window    = g_advance_deg + g_mspark_atdc_limit_deg;
-                for (uint8_t n = 1U; n <= ms_count; ++n) {
-                    const uint32_t add_spark_off = (uint32_t)n * step;
-                    if (add_spark_off >= window) { break; }
-                    const uint32_t add_dwell_off = (uint32_t)(n - 1U) * step + 1U;
-                    const uint32_t add_dwell_ang = (spark + add_dwell_off) % ECU_CYCLE_DEG;
-                    const uint32_t add_spark_ang = (spark + add_spark_off) % ECU_CYCLE_DEG;
-                    angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-                    table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
-                    angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-                    table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
-                }
-            }
-        }
+        // Sparks adicionais no mesmo canal de ignição do cilindro.
+        emit_multispark(spark, ECU_CYCLE_DEG, snap.tooth_period_ns,
+            [&](uint32_t add_dwell_ang, uint32_t add_spark_ang) {
+                angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
+                table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
+                angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
+                table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
+            });
 
         angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, ECU_CYCLE_DEG), &tooth, &frac, &phase);
         table_add(tooth, frac, phase, inj_ch[cyl], ECU_ACT_INJ_ON);
@@ -794,28 +803,14 @@ static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
     angle_to_tooth_event(engine_angle_to_trigger_angle(spark, 360U), &tooth, &frac, &phase);
     for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_SPARK); }
 
-    // Multi-spark for presync (MS42 §2.2.3): additional sparks when below RPM gate.
-    // All IGN channels receive the same additional sparks (wasted-spark topology).
-    {
-        const uint8_t ms_count = g_mspark_count;
-        if (ms_count > 0U && snap.tooth_period_ns > 0U) {
-            const uint32_t inter_deg = ticks_to_cycle_degrees(
-                g_mspark_inter_dwell_ticks, snap.tooth_period_ns, 360U);
-            const uint32_t step      = inter_deg + 1U;
-            const uint32_t window    = g_advance_deg + g_mspark_atdc_limit_deg;
-            for (uint8_t n = 1U; n <= ms_count; ++n) {
-                const uint32_t add_spark_off = (uint32_t)n * step;
-                if (add_spark_off >= window) { break; }
-                const uint32_t add_dwell_off = (uint32_t)(n - 1U) * step + 1U;
-                const uint32_t add_dwell_ang = (spark + add_dwell_off) % 360U;
-                const uint32_t add_spark_ang = (spark + add_spark_off) % 360U;
-                angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, 360U), &tooth, &frac, &phase);
-                for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_DWELL_START); }
-                angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, 360U), &tooth, &frac, &phase);
-                for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_SPARK); }
-            }
-        }
-    }
+    // Sparks adicionais em todos os canais IGN (topologia wasted-spark).
+    emit_multispark(spark, 360U, snap.tooth_period_ns,
+        [&](uint32_t add_dwell_ang, uint32_t add_spark_ang) {
+            angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, 360U), &tooth, &frac, &phase);
+            for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_DWELL_START); }
+            angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, 360U), &tooth, &frac, &phase);
+            for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_SPARK); }
+        });
 
     angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, 360U), &tooth, &frac, &phase);
     if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
