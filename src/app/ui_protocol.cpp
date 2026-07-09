@@ -541,7 +541,9 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::eoi_idle_deg,      g_page0 + 164, 2u);
         std::memcpy(&ems::engine::eoi_blend_rpm_lo,  g_page0 + 166, 2u);
         std::memcpy(&ems::engine::eoi_blend_rpm_hi,  g_page0 + 168, 2u);
-        if (g_page0[172] > 0u && g_page0[172] <= 3u) {
+        // count=0 é válido: desliga multi-spark (calibration.h). Só valores >3
+        // (corrupção/página antiga) são rejeitados.
+        if (g_page0[172] <= 3u) {
             std::memcpy(&ems::engine::mspark_max_rpm_x10, g_page0 + 170, 2u);
             ems::engine::mspark_count = g_page0[172];
             std::memcpy(&ems::engine::mspark_inter_dwell_ms_x10, g_page0 + 173, 2u);
