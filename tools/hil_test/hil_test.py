@@ -181,6 +181,7 @@ class Snapshot:
     ve:           int = 0       # VE[0][0] (primeira célula da tabela)
     ve_live:      int = 0       # VE interpolado vivo (get_ve no ponto rpm×map atual)
     stft_pct:     int = 0
+    ltft_pct:     int = 0       # reserved[5]; arredondado/clampado ±25 (telemetria)
     status:       int = 0
 
     @property
@@ -311,6 +312,9 @@ class STM32Client:
         # VE interpolado vivo em reserved[49] = byte 14+49 = 63 (firmware get_ve).
         if len(r) >= 66:
             s.ve_live  = r[63]
+        # LTFT em reserved[5] = byte 14+5 = 19 (ui_protocol.cpp: rt.reserved[5]).
+        if len(r) >= 20:
+            s.ltft_pct = struct.unpack_from("b", r, 19)[0]
         return s
 
     def read_engine_config(self) -> EngineConfig:
@@ -711,7 +715,17 @@ class HILRunner:
 
         # 7. PW injecção — espelha calc_fuel_pw_us_default_fast + calc_final_pw_us
         #    (fuel_calc.cpp). base = req_fuel × ve/100 × MAP/baro; depois λ-target,
-        #    trim, correcções CLT/IAT (×256) e dead-time interpolado por Vbatt.
+        #    trim (STFT+LTFT, multiplicativo, ANTES de CLT/IAT — mesma ordem de
+        #    calc_fuel_pw_us_default_fast), correcções CLT/IAT (×256) e dead-time
+        #    somado por último (calc_final_pw_us; main_stm32.cpp desde o fix que
+        #    move ΔP/S-curve para actuarem só sobre a parcela de fluxo).
+        #    NÃO modelados aqui (não expostos via UART): ΔP de combustível
+        #    (apply_delta_p_compensation — precisa do sensor de pressão + nominal),
+        #    S-curve do injector (apply_injector_scurve — tabela não lida) e o
+        #    modelo transiente X-τ (wall-wetting). Em steady-state, longe da
+        #    janela de transição EOI e com PW acima do último ponto do eixo de
+        #    S-curve (≥1500µs por defeito), ambos tendem a identidade — mas não
+        #    há garantia; ver TOL_INJ_PW_PCT para a margem residual aceite.
         #    Sem motor MAP ≈ baro, firmware usa g_baro_bar_x100 (amostrado ao boot).
         baro_raw = snap.map_bar_x100
         baro = baro_raw if 70 <= baro_raw <= 110 else (self._eng.map_ref_bar_x100 or 100)
@@ -722,11 +736,17 @@ class HILRunner:
             lambda_us = base_us * 1000.0 / lambda_target
         else:
             lambda_us = base_us
+        # trim_pct_x10 = STFT + LTFT, clamp ±500 (±50%) — mesmo clamp de
+        # calc_fuel_pw_us_default_fast. snap.stft_pct/ltft_pct já vêm
+        # arredondados e clampados ±25 pela telemetria (main_stm32.cpp), logo
+        # esta é uma aproximação ao valor x10 real usado internamente.
+        trim_pct_x10 = max(-500, min(500, (snap.stft_pct + snap.ltft_pct) * 10))
+        trimmed_us = lambda_us * (1000.0 + trim_pct_x10) / 1000.0
         clt_c = self._tables.clt_corr(snap.clt_degc)
         iat_c = self._tables.iat_corr(snap.iat_degc)
-        corrected_us = lambda_us * clt_c * iat_c
+        corrected_us = trimmed_us * clt_c * iat_c
         dead_time = self._tables.dead_time_us()
-        exp_pw_ms = (corrected_us + dead_time) / 1000.0
+        exp_pw_ms = (corrected_us + dead_time) / 1000.0 if corrected_us > 0 else 0.0
         if snap.sensor_fault and snap.inj_pw_ms == 0.0 and snap.rpm >= 3000:
             r.add("Injection PW (snapshot vs cálculo)", True,
                   "PW=0 esperado (limp rev-cut com SENSOR_FAULT)")
