@@ -892,9 +892,13 @@ int main() {
                                                                         map_bar_x100,
                                                                         sensors.clt_degc_x10,
                                                                         xtau_enabled);
-                    final_pw_us_base = xtau_fuel_pw_us + static_cast<uint32_t>(fuel_corr.dead_time_us);
+                    // Só a parcela de FLUXO segue no pipeline; o dead-time
+                    // eléctrico é somado no fim, depois de ΔP/S-curve
+                    // (convenção de calc_final_pw_us — dead-time nunca escala).
+                    final_pw_us_base = xtau_fuel_pw_us;
                 } else {
                     ems::engine::transient_fuel_reset();
+                    final_pw_us_base = 0u;  // fluxo ≈ 0 (base ≤ dead-time)
                 }
                 if (!decel_cut_active && ae_pw_us > 0) {
                     const uint32_t ae_add = static_cast<uint32_t>(ae_pw_us);
@@ -935,9 +939,14 @@ int main() {
                                                          qc.min_pw_us);
                 // Correções físicas finais do bico: pressão diferencial de combustível
                 // (real, via sensor) e não-linearidade de abertura em PW pequeno.
+                // Aplicam-se apenas ao fluxo; o dead-time entra DEPOIS, sem escalar,
+                // e só quando há fluxo (PW=0 em corte não ganha dead-time).
                 const uint32_t delta_p_pw_us = ems::engine::apply_delta_p_compensation(
                     quick_crank_pw_us, sensors.fuel_press_bar_x1000, map_bar_x100);
-                const uint32_t final_pw_us = ems::engine::apply_injector_scurve(delta_p_pw_us);
+                const uint32_t scurve_pw_us = ems::engine::apply_injector_scurve(delta_p_pw_us);
+                const uint32_t final_pw_us = (scurve_pw_us > 0u)
+                    ? scurve_pw_us + static_cast<uint32_t>(fuel_corr.dead_time_us)
+                    : 0u;
                 const uint32_t pw_100 = final_pw_us / 100u;
                 g_last_pw_ms_x10 = static_cast<uint8_t>(pw_100 > 255u ? 255u : pw_100);
                 g_last_advance_deg = clamp_i8(qc.spark_deg, -10, 40);
