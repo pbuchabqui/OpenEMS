@@ -947,8 +947,12 @@ int main() {
                 const uint32_t final_pw_us = (scurve_pw_us > 0u)
                     ? scurve_pw_us + static_cast<uint32_t>(fuel_corr.dead_time_us)
                     : 0u;
+                // Com fuel cut (rev limiter/limp) os injectores estão inibidos pela
+                // mask — a telemetria (dash/CAN) tem de mostrar 0, não o PW calculado
+                // que continua a ser comitado para retoma suave.
                 const uint32_t pw_100 = final_pw_us / 100u;
-                g_last_pw_ms_x10 = static_cast<uint8_t>(pw_100 > 255u ? 255u : pw_100);
+                g_last_pw_ms_x10 = fuel_cut_active ? 0u
+                    : static_cast<uint8_t>(pw_100 > 255u ? 255u : pw_100);
                 g_last_advance_deg = clamp_i8(qc.spark_deg, -10, 40);
 
                 const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
