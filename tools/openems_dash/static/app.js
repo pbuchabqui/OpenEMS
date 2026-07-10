@@ -280,23 +280,39 @@ async function loadGrid(pane) {
   }
 
   function bindCells() {
+    // Modelo padronizado: clique simples e Ctrl+click usam o MESMO
+    // mecanismo de selecção (contorno .sel + selCells) — clique simples
+    // substitui a selecção por só esta célula, Ctrl+click acrescenta/
+    // remove. Duplo-clique abre o campo de texto para valor exacto
+    // (antes, clique simples ia logo para o texto, sem contorno —
+    // selecção individual e múltipla pareciam mecanismos diferentes).
     $$("td[data-r]", pane).forEach(td => {
       td.onclick = (e) => {
+        if (e.target.tagName === "INPUT") return;  // clique dentro do campo em edição
+        if (st.mode !== "manual") {
+          toast('mudar para modo "✎ Manual" para seleccionar células');
+          return;
+        }
+        const key = `${td.dataset.r},${td.dataset.c}`;
         if (e.ctrlKey || e.metaKey) {
-          if (st.mode !== "manual") {
-            toast('mudar para modo "✎ Manual" para seleccionar células');
-            return;
-          }
-          const key = `${td.dataset.r},${td.dataset.c}`;
           if (selCells.has(key)) { selCells.delete(key); td.classList.remove("sel"); }
           else {
             if (!selCells.size) { selPage = page; selPane = pane; }
             selCells.add(key); td.classList.add("sel");
           }
         } else {
-          if (selCells.size) clearSel();
-          beginEdit(td);
+          clearSel();
+          selPage = page; selPane = pane;
+          selCells.add(key); td.classList.add("sel");
         }
+      };
+      td.ondblclick = (e) => {
+        if (st.mode !== "manual") {
+          toast('mudar para modo "✎ Manual" para editar');
+          return;
+        }
+        clearSel();
+        beginEdit(td);
       };
     });
   }
