@@ -17,12 +17,14 @@ document.addEventListener("keydown", e => {
   if (!selPane) return;
   if ($(".grid-pane.active") !== selPane) return;
   const st = gridState[selPage];
-  if (!st || st.mode !== "manual") return;
+  if (!st) return;
 
   // Setas: navegam pela tabela (movem a âncora, substituem a selecção por
-  // 1 célula) — deixaram de ajustar valor, esse papel passou para A/Z.
+  // 1 célula) — só em modo Manual: em Trace a selecção é conduzida pela
+  // posição do motor, navegar manualmente entraria em conflito com isso.
   const nav = { ArrowUp: [1, 0], ArrowDown: [-1, 0], ArrowRight: [0, 1], ArrowLeft: [0, -1] }[e.key];
   if (nav) {
+    if (st.mode !== "manual") return;
     e.preventDefault();
     if (!selAnchor) return;
     const r = Math.max(0, Math.min(15, selAnchor[0] + nav[0]));
@@ -517,6 +519,21 @@ function highlightLiveCell() {
   // célula dominante (nó mais próximo da posição interpolada) visitada agora
   const domR = ly.idx + (ly.frac >= 0.5 ? 1 : 0);
   const domC = lx.idx + (lx.frac >= 0.5 ? 1 : 0);
+
+  // "Trace auto-select": a célula onde o motor está agora fica pronta a
+  // ajustar com A/Z/+/- de imediato, sem mudar para modo Manual — era o
+  // objectivo original do trace. Só mexe no DOM quando a dominante muda
+  // (não a cada frame a 30Hz).
+  const domKey = `${domR},${domC}`;
+  if (selPane !== pane || selPage !== page || selCells.size !== 1 || !selCells.has(domKey)) {
+    $$("td.sel", pane).forEach(td => td.classList.remove("sel"));
+    selCells.clear();
+    selCells.add(domKey);
+    selPage = page; selPane = pane; selAnchor = [domR, domC];
+    const domTd = pane.querySelector(`td[data-r="${domR}"][data-c="${domC}"]`);
+    if (domTd) domTd.classList.add("sel");
+  }
+
   st.cells = (st.cells || []).filter(p => now - p.t < TRAIL_MS);
   const hit = st.cells.find(p => p.r === domR && p.c === domC);
   if (hit) hit.t = now;                       // renova o tempo se já visitada
