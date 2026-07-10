@@ -1,6 +1,45 @@
 /* OpenEMS Dashboard — telemetria WS 30Hz + editores de tabela */
 "use strict";
 
+/* ── Multi-cell selection state ──────────────────────────────────────────── */
+let selCells = new Set();  // Set of "r,c" keys
+let selPage = 0;           // page of current selection
+let selPane = null;        // pane element
+
+function clearSel() {
+  if (selPane) $$("td.sel", selPane).forEach(td => td.classList.remove("sel"));
+  selCells.clear(); selPage = 0; selPane = null;
+}
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (!selCells.size || !selPane) return;
+  if ($(".grid-pane.active") !== selPane) return;
+  const st = gridState[selPage];
+  if (!st) return;
+  const step = (selPage === 4) ? 10 : 1;
+  let delta = 0;
+  if (e.key === "+" || e.key === "=" || e.key === "ArrowUp")   delta = step;
+  else if (e.key === "-" || e.key === "ArrowDown") delta = -step;
+  else return;
+  e.preventDefault();
+  selCells.forEach(key => {
+    const [r, c] = key.split(",").map(Number);
+    const v = st.values[r][c] + delta;
+    const clamped = (selPage === 2) ? Math.max(-128, Math.min(127, v))
+                  : (selPage === 4) ? Math.max(0, Math.min(65535, v))
+                  : Math.max(0, Math.min(255, v));
+    st.values[r][c] = clamped;
+    st.modified.add(key);
+  });
+  // Update visible cells
+  selCells.forEach(key => {
+    const [r, c] = key.split(",");
+    const td = selPane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+    if (td) { td.textContent = st.values[r][c]; td.classList.add("mod"); }
+  });
+});
+
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
@@ -21,6 +60,11 @@ async function api(path, methodOrOpts, body) {
     opts = { method: methodOrOpts, headers: {"Content-Type":"application/json"},
              body: body !== undefined ? JSON.stringify(body) : undefined };
   }
+  // Sem isto o browser pode servir um GET repetido (ex.: botão Reload) da
+  // cache HTTP em vez de pedir de novo ao servidor — a página lê sempre
+  // g_pageN (RAM) fresco no firmware; é a cache do browser que mostrava
+  // "valores base" desactualizados, não o caminho de leitura.
+  opts = { cache: "no-store", ...opts };
   const r = await fetch(path, opts);
   if (!r.ok) throw new Error(`${path}: HTTP ${r.status} ${await r.text()}`);
   return r.json();
@@ -28,6 +72,7 @@ async function api(path, methodOrOpts, body) {
 
 /* ── tabs ─────────────────────────────────────────────────────────────── */
 $$("#sb-nav .tab").forEach(b => b.onclick = () => {
+  clearSel();
   $$("#sb-nav .tab").forEach(x => x.classList.toggle("active", x === b));
   $$(".pane").forEach(p => p.classList.toggle("active", p.id === "tab-" + b.dataset.tab));
   const pane = $("#tab-" + b.dataset.tab);
@@ -203,51 +248,80 @@ async function loadGrid(pane) {
 
   function bindCells() {
     $$("td[data-r]", pane).forEach(td => {
-      td.onclick = () => beginEdit(td);
+      td.onclick = (e) => {
+        if (e.ctrlKey || e.metaKey) {
+          const key = `${td.dataset.r},${td.dataset.c}`;
+          if (selCells.has(key)) { selCells.delete(key); td.classList.remove("sel"); }
+          else {
+            if (!selCells.size) { selPage = page; selPane = pane; }
+            selCells.add(key); td.classList.add("sel");
+          }
+        } else {
+          if (selCells.size) clearSel();
+          beginEdit(td);
+        }
+      };
     });
   }
 
   function beginEdit(td) {
     if (td.querySelector("input")) return;
     const r = +td.dataset.r, c = +td.dataset.c;
+    const orig = st.values[r][c];
     const inp = document.createElement("input");
-    inp.value = st.values[r][c];
+    inp.value = orig;
     td.textContent = "";
     td.appendChild(inp);
     inp.focus(); inp.select();
     const commit = () => {
       const v = parseInt(inp.value, 10);
-      if (!Number.isNaN(v) && v !== st.values[r][c]) {
+      if (!Number.isNaN(v) && v !== orig) {
         st.values[r][c] = v;
         st.modified.add(`${r},${c}`);
       }
       render();
     };
     inp.onblur = commit;
+    let delta = 0;
     inp.onkeydown = e => {
       if (e.key === "Enter") inp.blur();
-      if (e.key === "Escape") { inp.value = st.values[r][c]; inp.blur(); }
+      if (e.key === "Escape") { inp.value = orig; inp.blur(); }
+      const step = (page === 4) ? 10 : 1;
+      if (e.key === "+" || e.key === "=" || e.key === "ArrowUp")   { delta += step; inp.value = orig + delta; e.preventDefault(); }
+      if (e.key === "-" || e.key === "ArrowDown") { delta -= step; inp.value = orig + delta; e.preventDefault(); }
     };
   }
 
-  pane.querySelector('[data-act="send"]').onclick = async () => {
-    if (!st.modified.size) return toast("nothing to send");
+  async function sendModified() {
+    if (!st.modified.size) return 0;
     const cells = [...st.modified].map(k => {
       const [row, col] = k.split(",").map(Number);
       return { row, col, value: st.values[row][col] };
     });
+    await api(`/api/pages/${page}/cells`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cells }),
+    });
+    st.modified.clear(); render();
+    return cells.length;
+  }
+
+  pane.querySelector('[data-act="send"]').onclick = async () => {
+    if (!st.modified.size) return toast("nothing to send");
     try {
-      await api(`/api/pages/${page}/cells`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cells }),
-      });
-      st.modified.clear(); render();
-      toast(`${cells.length} cell(s) sent (RAM)`);
+      const n = await sendModified();
+      toast(`${n} cell(s) sent (RAM)`);
     } catch (e) { toast(e.message, true); }
   };
   pane.querySelector('[data-act="burn"]').onclick = async () => {
-    try { await api(`/api/pages/${page}/burn`, { method: "POST" }); toast("burn OK"); }
-    catch (e) { toast(e.message, true); }
+    // Burn grava o que já está em RAM no firmware — sem isto, uma edição
+    // por enviar ("N célula(s) não enviada(s)") ficava só no browser: o
+    // burn "sucedia" mas persistia o valor ANTIGO, sem qualquer aviso.
+    try {
+      const n = await sendModified();
+      await api(`/api/pages/${page}/burn`, { method: "POST" });
+      toast(n ? `${n} cell(s) sent + burn OK` : "burn OK");
+    } catch (e) { toast(e.message, true); }
   };
   pane.querySelector('[data-act="reload"]').onclick = reload;
 
@@ -621,8 +695,14 @@ async function loadBoostMap() {
     } catch (e) { toast(e.message, true); }
   };
   $("#boostBurn", root).onclick = async () => {
-    try { await api("/api/pages/9/burn", "POST"); toast("burn OK"); }
-    catch (e) { toast(e.message, true); }
+    // Envia sempre antes de queimar — sem isto, arrastar a curva e clicar
+    // logo em Burn (sem Send) persistia o valor ANTIGO em flash.
+    try {
+      await api("/api/pages/9/cells", "PUT", { boost_map: rows });
+      await api("/api/pages/9/burn", "POST");
+      $("#boostDirty").textContent = "";
+      toast("boost map sent + burn OK");
+    } catch (e) { toast(e.message, true); }
   };
   $("#boostReload", root).onclick = reload;
   await reload();
@@ -894,22 +974,35 @@ async function bindParamGroup(div, page) {
     });
   }
 
-  div.querySelector('[data-act="send"]').onclick = async () => {
-    if (!modified.size) return toast("nothing to send");
+  async function sendModified() {
+    if (!modified.size) return 0;
     const body = { fields: {} };
     modified.forEach(f => body.fields[f] = fields[f]);
+    await api(`/api/pages/${page}/cells`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const n = modified.size;
+    modified.clear(); render();
+    return n;
+  }
+
+  div.querySelector('[data-act="send"]').onclick = async () => {
+    if (!modified.size) return toast("nothing to send");
     try {
-      await api(`/api/pages/${page}/cells`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      modified.clear(); render();
-      toast(`page ${page}: fields sent (RAM)`);
+      const n = await sendModified();
+      toast(`page ${page}: ${n} field(s) sent (RAM)`);
     } catch (e) { toast(e.message, true); }
   };
   div.querySelector('[data-act="burn"]').onclick = async () => {
-    try { await api(`/api/pages/${page}/burn`, { method: "POST" }); toast("burn OK"); }
-    catch (e) { toast(e.message, true); }
+    // Burn grava o que já está em RAM no firmware — sem enviar primeiro os
+    // campos editados mas não enviados, o burn persistia o valor ANTIGO
+    // silenciosamente (mesmo bug corrigido nas grid pages).
+    try {
+      const n = await sendModified();
+      await api(`/api/pages/${page}/burn`, { method: "POST" });
+      toast(n ? `page ${page}: ${n} field(s) sent + burn OK` : "burn OK");
+    } catch (e) { toast(e.message, true); }
   };
   div.querySelector('[data-act="reload"]').onclick = reload;
   await reload();
@@ -1142,8 +1235,13 @@ function buildPedalMapUI(data) {
     } catch(e) { toast(e.message, true); }
   };
   root.querySelector("#pmBurn").onclick = async () => {
-    try { await api("/api/pages/8/burn", "POST"); toast("burn OK"); }
-    catch(e) { toast(e.message, true); }
+    // Envia sempre antes de queimar — sem isto, arrastar a curva e clicar
+    // logo em Burn (sem Send) persistia o valor ANTIGO em flash.
+    try {
+      await api("/api/pages/8/cells", "PUT", {pedal_maps: pedalMaps});
+      await api("/api/pages/8/burn", "POST");
+      toast("Pedal Map sent + burn OK");
+    } catch(e) { toast(e.message, true); }
   };
   root.querySelector("#pmReload").onclick = async () => {
     try {

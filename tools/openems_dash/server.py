@@ -34,6 +34,18 @@ LOGS = BASE / "logs"
 app = FastAPI(title="OpenEMS Dashboard")
 
 
+@app.middleware("http")
+async def no_cache_api(request, call_next):
+    # /api/* reflete estado ao vivo da ECU (RAM g_pageN via 'r') — nunca deve
+    # ser servido da cache HTTP do browser (ex.: cliques repetidos em
+    # "Reload" mostrando valores desactualizados apesar do firmware devolver
+    # o byte certo a cada pedido).
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 class SerialWorker(threading.Thread):
     """Dona exclusiva da serial: poll 'A' + fila de requests."""
 
