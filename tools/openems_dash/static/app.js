@@ -2,14 +2,15 @@
 "use strict";
 
 /* ── Multi-cell selection state ──────────────────────────────────────────── */
-let selCells = new Set();  // Set of "r,c" keys
-let selPage = 0;           // page of current selection
-let selPane = null;        // pane element
-let selAnchor = null;      // [r,c] da célula "actual" — origem da navegação por setas
+let selCells = new Set();      // Set of "r,c" keys
+let selWeights = new Map();    // "r,c" → peso 0-1 (1.0 = selecção manual; <1 = trace bilinear)
+let selPage = 0;               // page of current selection
+let selPane = null;            // pane element
+let selAnchor = null;          // [r,c] da célula "actual" — origem da navegação por setas
 
 function clearSel() {
   if (selPane) $$("td.sel", selPane).forEach(td => td.classList.remove("sel"));
-  selCells.clear(); selPage = 0; selPane = null;
+  selCells.clear(); selWeights.clear(); selPage = 0; selPane = null;
 }
 
 document.addEventListener("keydown", e => {
@@ -30,9 +31,10 @@ document.addEventListener("keydown", e => {
     const r = Math.max(0, Math.min(15, selAnchor[0] + nav[0]));
     const c = Math.max(0, Math.min(15, selAnchor[1] + nav[1]));
     $$("td.sel", selPane).forEach(td => td.classList.remove("sel"));
-    selCells.clear();
+    selCells.clear(); selWeights.clear();
     const key = `${r},${c}`;
     selCells.add(key);
+    selWeights.set(key, 1.0);
     selAnchor = [r, c];
     const td = selPane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
     if (td) td.classList.add("sel");
@@ -50,7 +52,14 @@ document.addEventListener("keydown", e => {
   e.preventDefault();
   selCells.forEach(key => {
     const [r, c] = key.split(",").map(Number);
-    const v = st.values[r][c] + delta;
+    // Peso bilinear (trace auto-select) escala o delta — célula dominante
+    // move-se mais depressa que as vizinhas de influência menor. Math.max(1,…)
+    // evita arredondar a 0 num nó de peso baixo mas não-nulo em tabelas de
+    // passo 1 (VE/Spark), que ficaria "preso" à espera de acumular fracção.
+    const w = selWeights.get(key) ?? 1.0;
+    const raw = delta * w;
+    const weighted = raw === 0 ? 0 : Math.sign(raw) * Math.max(1, Math.round(Math.abs(raw)));
+    const v = st.values[r][c] + weighted;
     const clamped = (selPage === 2) ? Math.max(-128, Math.min(127, v))
                   : (selPage === 4) ? Math.max(0, Math.min(65535, v))
                   : Math.max(0, Math.min(255, v));
@@ -259,11 +268,13 @@ async function loadGrid(pane) {
     st.mode = mode;
     $$(".mode-btn", pane).forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
     if (mode === "manual") {
-      // Sai do trace: apaga o destaque ao vivo para não ficar preso na
-      // última posição desenhada.
-      $$("td.live2", pane).forEach(td => td.classList.remove("live2"));
+      // Sai do trace: apaga o rasto para não ficar preso na última posição
+      // desenhada. A selecção herdada do trace (até 4 células, pesos
+      // bilineares <1) mantém-se por continuidade, mas o modo Manual
+      // trabalha sempre a peso cheio — normaliza para 1.0.
       const cv = pane.querySelector("canvas.trail");
       if (cv) cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
+      if (selPane === pane) selCells.forEach(key => selWeights.set(key, 1.0));
     } else {
       // Sai do manual: limpa qualquer selecção pendente.
       if (selPane === pane) clearSel();
@@ -329,15 +340,15 @@ async function loadGrid(pane) {
         const key = `${td.dataset.r},${td.dataset.c}`;
         selAnchor = [+td.dataset.r, +td.dataset.c];  // origem p/ navegação por setas
         if (e.ctrlKey || e.metaKey) {
-          if (selCells.has(key)) { selCells.delete(key); td.classList.remove("sel"); }
+          if (selCells.has(key)) { selCells.delete(key); selWeights.delete(key); td.classList.remove("sel"); }
           else {
             if (!selCells.size) { selPage = page; selPane = pane; }
-            selCells.add(key); td.classList.add("sel");
+            selCells.add(key); selWeights.set(key, 1.0); td.classList.add("sel");
           }
         } else {
           clearSel();
           selPage = page; selPane = pane;
-          selCells.add(key); td.classList.add("sel");
+          selCells.add(key); selWeights.set(key, 1.0); td.classList.add("sel");
         }
       };
       td.ondblclick = (e) => {
@@ -485,19 +496,11 @@ function highlightLiveCell() {
   const cv = pane.querySelector("canvas.trail");
   if (!st || !cv) return;
   // Modo manual: trace completamente desligado para este pane — não toca
-  // em .live2/canvas nem compete com a selecção/edição em curso.
+  // em .sel/canvas nem compete com a selecção/edição em curso.
   if (st.mode !== "trace") return;
 
   const lx = axisLookup(INFO.axes.rpm, RT.rpm);
   const ly = axisLookup(INFO.axes.map_kpa, RT.map_kpa);
-
-  // células de contexto da bilinear (tracejado fraco) — sem contorno no dominante
-  $$("td.live2", pane).forEach(td => td.classList.remove("live2"));
-  for (const r of [ly.idx, ly.idx + 1])
-    for (const c of [lx.idx, lx.idx + 1]) {
-      const td = pane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
-      if (td) td.classList.add("live2");
-    }
 
   // posição real interpolada em pixels: centro do nó idx + frac até o nó idx+1
   const center = (sel) => {
@@ -516,22 +519,37 @@ function highlightLiveCell() {
   st.trail = (st.trail || []).filter(p => now - p.t < TRAIL_MS);
   st.trail.push({ x, y, t: now });
 
-  // célula dominante (nó mais próximo da posição interpolada) visitada agora
+  // célula dominante (nó mais próximo da posição interpolada) — usada só
+  // para o rasto/trilha (st.cells) abaixo, já não define sozinha a selecção.
   const domR = ly.idx + (ly.frac >= 0.5 ? 1 : 0);
   const domC = lx.idx + (lx.frac >= 0.5 ? 1 : 0);
 
-  // "Trace auto-select": a célula onde o motor está agora fica pronta a
-  // ajustar com A/Z/+/- de imediato, sem mudar para modo Manual — era o
-  // objectivo original do trace. Só mexe no DOM quando a dominante muda
-  // (não a cada frame a 30Hz).
-  const domKey = `${domR},${domC}`;
-  if (selPane !== pane || selPage !== page || selCells.size !== 1 || !selCells.has(domKey)) {
+  // "Trace auto-select": as 4 células bilineares (mesmas usadas para
+  // interpolar o valor real usado pelo motor) ficam seleccionadas, cada
+  // uma com o seu peso — A/Z/+/- distribui o delta proporcionalmente em
+  // vez de aplicar tudo só à dominante. Pesos a 0 (fronteira exacta da
+  // tabela, frac=0/1) são omitidos. Só mexe no DOM quando o CONJUNTO de
+  // nós muda (não a cada frame a 30Hz).
+  const corners = [
+    { r: ly.idx,     c: lx.idx,     w: (1 - ly.frac) * (1 - lx.frac) },
+    { r: ly.idx,     c: lx.idx + 1, w: (1 - ly.frac) * lx.frac },
+    { r: ly.idx + 1, c: lx.idx,     w: ly.frac * (1 - lx.frac) },
+    { r: ly.idx + 1, c: lx.idx + 1, w: ly.frac * lx.frac },
+  ].filter(p => p.w > 0);
+  const newKeys = corners.map(p => `${p.r},${p.c}`);
+  const changed = selPane !== pane || selPage !== page ||
+    selCells.size !== newKeys.length || newKeys.some(k => !selCells.has(k));
+  if (changed) {
     $$("td.sel", pane).forEach(td => td.classList.remove("sel"));
-    selCells.clear();
-    selCells.add(domKey);
+    selCells.clear(); selWeights.clear();
+    corners.forEach(p => {
+      const key = `${p.r},${p.c}`;
+      selCells.add(key);
+      selWeights.set(key, p.w);
+      const td = pane.querySelector(`td[data-r="${p.r}"][data-c="${p.c}"]`);
+      if (td) td.classList.add("sel");
+    });
     selPage = page; selPane = pane; selAnchor = [domR, domC];
-    const domTd = pane.querySelector(`td[data-r="${domR}"][data-c="${domC}"]`);
-    if (domTd) domTd.classList.add("sel");
   }
 
   st.cells = (st.cells || []).filter(p => now - p.t < TRAIL_MS);

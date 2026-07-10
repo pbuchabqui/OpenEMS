@@ -125,7 +125,6 @@ table.tune td { border: 1px solid var(--border); padding: 0;
                 text-align: center; cursor: cell; color: #111; }
 table.tune td.sel { outline: 1px solid var(--accent); outline-offset: -1px; }
 table.tune td.mod { font-weight: 700; text-decoration: underline; }
-table.tune td.live2 { outline: 1px solid var(--accent); outline-offset: -1px; }
 .grid-wrap { position: relative; display: inline-block; }
 .grid-wrap canvas.trail { position: absolute; left: 0; top: 0;
                            pointer-events: none; z-index: 2; }
