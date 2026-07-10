@@ -332,7 +332,19 @@ async function loadGrid(pane) {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cells }),
     });
-    st.modified.clear(); render();
+    // NÃO chama render() completo aqui: recriar a tabela inteira a cada
+    // envio automático (uma vez por tecla) competia com o trace ao vivo
+    // (highlightLiveCell, 30Hz) e destruía a selecção multi-célula (.sel)
+    // e o foco do input em edição a cada envio. Só limpa a marca "não
+    // enviada" das células que acabaram de sair, deixando o resto do DOM
+    // intocado — trace e selecção passam a ser independentes da edição.
+    cells.forEach(({ row, col }) => {
+      st.modified.delete(`${row},${col}`);
+      const td = pane.querySelector(`td[data-r="${row}"][data-c="${col}"]`);
+      if (td) td.classList.remove("mod");
+    });
+    $(".dirty", pane).textContent = st.modified.size
+      ? `${st.modified.size} célula(s) não enviada(s)` : "";
     return cells.length;
   }
   st.send = sendModified;  // usado pelo atalho de teclado multi-célula
@@ -1026,7 +1038,12 @@ async function bindParamGroup(div, page) {
       body: JSON.stringify(body),
     });
     const n = modified.size;
-    modified.clear(); render();
+    // Não recria os inputs (render() completo) a cada envio automático —
+    // só limpa a marca "não enviado" dos campos que acabaram de sair.
+    modified.forEach(f => {
+      rowsEl.querySelectorAll(`input[data-f="${f}"]`).forEach(el => el.classList.remove("mod"));
+    });
+    modified.clear();
     return n;
   }
 
