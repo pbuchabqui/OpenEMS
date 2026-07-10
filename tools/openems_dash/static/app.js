@@ -293,6 +293,12 @@ async function loadGrid(pane) {
   }
 
   async function sendModified() {
+    // Força o commit de uma edição em curso (input ainda focado): clicar
+    // directamente em Burn/Send sem sair da célula antes disparava o click
+    // sem o blur ter corrido ainda — st.modified ficava vazio e nada era
+    // enviado (Network tab mostrava só o POST /burn, sem PUT /cells).
+    const activeInput = pane.querySelector("input");
+    if (activeInput) activeInput.blur();
     if (!st.modified.size) return 0;
     const cells = [...st.modified].map(k => {
       const [row, col] = k.split(",").map(Number);
@@ -307,9 +313,9 @@ async function loadGrid(pane) {
   }
 
   pane.querySelector('[data-act="send"]').onclick = async () => {
-    if (!st.modified.size) return toast("nothing to send");
     try {
       const n = await sendModified();
+      if (!n) { toast("nothing to send"); return; }
       toast(`${n} cell(s) sent (RAM)`);
     } catch (e) { toast(e.message, true); }
   };
@@ -975,6 +981,11 @@ async function bindParamGroup(div, page) {
   }
 
   async function sendModified() {
+    // Força o commit de um input em edição antes de checar `modified` —
+    // clicar em Burn/Send sem sair do campo antes disparava o click sem o
+    // onchange ter corrido, deixando `modified` vazio (nada enviado).
+    const active = document.activeElement;
+    if (active && active.tagName === "INPUT" && rowsEl.contains(active)) active.blur();
     if (!modified.size) return 0;
     const body = { fields: {} };
     modified.forEach(f => body.fields[f] = fields[f]);
@@ -988,9 +999,9 @@ async function bindParamGroup(div, page) {
   }
 
   div.querySelector('[data-act="send"]').onclick = async () => {
-    if (!modified.size) return toast("nothing to send");
     try {
       const n = await sendModified();
+      if (!n) { toast("nothing to send"); return; }
       toast(`page ${page}: ${n} field(s) sent (RAM)`);
     } catch (e) { toast(e.message, true); }
   };
