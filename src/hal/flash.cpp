@@ -25,6 +25,7 @@
 #include "hal/flash.h"
 #include "hal/crc32.h"
 #include "hal/runtime_seed.h"
+#include "hal/critical_section.h"
 #include <cstring>
 
 static uint32_t runtime_seed_crc32(const ems::hal::RuntimeSyncSeed& seed) noexcept {
@@ -70,14 +71,14 @@ static volatile uint32_t g_flash_wait_timeouts = 0u;
 // ── Funções auxiliares ───────────────────────────────────────────────────────
 
 static void flash_unlock_bank2() noexcept {
-    if (FLASH_CR2 & FLASH_CR_LOCK) {
-        FLASH_KEYR2 = kFlashKey1;
-        FLASH_KEYR2 = kFlashKey2;
+    if (FLASH_NSCR & FLASH_CR_LOCK) {
+        FLASH_NSKEYR = kFlashKey1;
+        FLASH_NSKEYR = kFlashKey2;
     }
 }
 
 static void flash_lock_bank2() noexcept {
-    FLASH_CR2 |= FLASH_CR_LOCK;
+    FLASH_NSCR |= FLASH_CR_LOCK;
 }
 
 static void flash_wait_ready() noexcept {
@@ -85,47 +86,73 @@ static void flash_wait_ready() noexcept {
     // ~300k iterações ≈ vários ms de margem para operações de erase/program.
     constexpr uint32_t kFlashWaitTimeout = 300000u;
     for (uint32_t i = 0u; i < kFlashWaitTimeout; ++i) {
-        if ((FLASH_SR2 & kFlashBusyMask) == 0u) { return; }
+        if ((FLASH_NSSR & kFlashBusyMask) == 0u) { return; }
     }
-    // Timeout: contabiliza e prossegue — caller verifica FLASH_SR2 por erros.
+    // Timeout: contabiliza e prossegue — caller verifica FLASH_NSSR por erros.
     ++g_flash_wait_timeouts;
 }
 
 static bool flash_erase_sector(uint32_t sector_num) noexcept {
     flash_wait_ready();
-    FLASH_CCR2 = 0xFFFFFFFFu;  // limpa todos os flags de erro
+    FLASH_NSCCR = 0xFFFFFFFFu;  // limpa todos os flags de erro
 
-    FLASH_CR2 = FLASH_CR_SER
-              | ((sector_num & 0xFu) << FLASH_CR_SNB_SHIFT)
+    // BKSEL=1: toda a calibração vive no Bank2 (0x08080000+); sector_num é
+    // relativo ao banco (0-63), igual em ambos os bancos — só o bit BKSEL
+    // desambigua qual metade física da flash o número de sector referencia.
+    FLASH_NSCR = FLASH_CR_SER
+              | FLASH_CR_BKSEL
+              | ((sector_num << FLASH_CR_SNB_SHIFT) & FLASH_CR_SNB_MASK)
               | FLASH_CR_STRT;
 
     flash_wait_ready();
-    FLASH_CR2 &= ~(FLASH_CR_SER | (0xFu << FLASH_CR_SNB_SHIFT));
+    FLASH_NSCR &= ~(FLASH_CR_SER | FLASH_CR_BKSEL | FLASH_CR_SNB_MASK);
 
-    return (FLASH_SR2 & kFlashErrorMask) == 0u;
+    return (FLASH_NSSR & kFlashErrorMask) == 0u;
 }
 
+// STM32H5 (RM0481): a Flash programa-se em "flash words" de 128 bits
+// (4×32-bit). O write buffer interno (SR.WBNE/DBNE) só comita as 4 palavras
+// para a célula não-volátil quando chegam em sucessão imediata; fazer
+// flash_wait_ready() (poll de BSY/WBNE/DBNE) ENTRE palavras do MESMO
+// quad-word deixa o buffer preso — BSY nunca chega a subir porque a escrita
+// nunca se completa, o timeout defensivo de flash_wait_ready() expira e
+// "segue em frente" sem erro reportado (nenhum bit de kFlashErrorMask é
+// setado), então flash_write_words devolve true mas os dados nunca saem do
+// buffer volátil: sobrevive a leituras da mesma sessão (RAM/SRAM cache) mas
+// perde-se num power-cycle. Corresponde exactamente a FLASH_Program_QuadWord
+// do HAL oficial da ST (stm32h5xx_hal_flash.c), que também desabilita IRQs
+// durante o loop das 4 palavras — uma ISR longa a meio do quad-word pode
+// violar o timing exigido pelo write buffer.
+// len_bytes DEVE ser múltiplo de 16 (4 words); ver nvm_save_calibration.
 static bool flash_write_words(uint32_t dest_addr,
                               const uint8_t* src,
                               uint32_t len_bytes) noexcept {
-    // len_bytes deve ser múltiplo de 4
     flash_wait_ready();
-    FLASH_CR2 |= FLASH_CR_PG;
+    FLASH_NSCR |= FLASH_CR_PG;
 
     const uint32_t* src32 = reinterpret_cast<const uint32_t*>(src);
     volatile uint32_t* dst32 = reinterpret_cast<volatile uint32_t*>(dest_addr);
     const uint32_t nwords = len_bytes / 4u;
 
-    for (uint32_t i = 0u; i < nwords; ++i) {
-        dst32[i] = src32[i];
+    for (uint32_t qw = 0u; qw < nwords; qw += 4u) {
+        const uint32_t n = (nwords - qw < 4u) ? (nwords - qw) : 4u;
+        {
+            // As (até) 4 palavras do quad-word em sucessão imediata, sem
+            // poll de status nem IRQs no meio — só assim o hardware comita
+            // o quad-word (ver comentário acima).
+            ems::hal::CriticalSectionGuard guard;
+            for (uint32_t i = 0u; i < n; ++i) {
+                dst32[qw + i] = src32[qw + i];
+            }
+        }
         flash_wait_ready();
-        if (FLASH_SR2 & kFlashErrorMask) {
-            FLASH_CR2 &= ~FLASH_CR_PG;
+        if (FLASH_NSSR & kFlashErrorMask) {
+            FLASH_NSCR &= ~FLASH_CR_PG;
             return false;
         }
     }
 
-    FLASH_CR2 &= ~FLASH_CR_PG;
+    FLASH_NSCR &= ~FLASH_CR_PG;
     return true;
 }
 
@@ -229,12 +256,13 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
                             (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
     const uint32_t dest   = kBank2Base + sector * kSectorSize;
 
-    // Arredondar len para múltiplo de 4
-    const uint32_t len32 = (static_cast<uint32_t>(len) + 3u) & ~3u;
-    if (len32 > kSectorSize) { return false; }
+    // flash_write_words exige múltiplo de 16 (quad-word de 128 bits, ver
+    // comentário no seu topo) — arredondar para cima ao verificar limites.
+    const uint32_t len16 = (static_cast<uint32_t>(len) + 15u) & ~15u;
+    if (len16 > kSectorSize) { return false; }
 
-    const uint32_t whole_len = static_cast<uint32_t>(len) & ~3u;
-    const uint32_t tail_len = static_cast<uint32_t>(len) - whole_len;
+    const uint32_t whole_len = static_cast<uint32_t>(len) & ~15u;
+    const uint32_t tail_len = static_cast<uint32_t>(len) - whole_len;  // 0..15
 
     flash_unlock_bank2();
     bool ok = flash_erase_sector(sector);
@@ -242,11 +270,20 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
         ok = flash_write_words(dest, data, whole_len);
     }
     if (ok && tail_len != 0u) {
-        uint8_t tail[4] = {0xFFu, 0xFFu, 0xFFu, 0xFFu};
+        uint8_t tail[16];
+        std::memset(tail, 0xFFu, sizeof(tail));
         std::memcpy(tail, data + whole_len, tail_len);
         ok = flash_write_words(dest + whole_len, tail, sizeof(tail));
     }
     flash_lock_bank2();
+    // DIAG (2026-07-09): burn reportava OK mas não sobrevivia a power-cycle.
+    // Suspeita: write buffer de 128 bits (WBNE/DBNE) do STM32H5 não é
+    // forçado a comitar para NV storage nas mesmas condições em que
+    // flash_wait_ready() considera "pronto". Readback imediato expõe
+    // isto sem esperar por reboot — se falhar aqui, confirma a hipótese.
+    if (ok) {
+        ok = std::memcmp(reinterpret_cast<const void*>(dest), data, len) == 0;
+    }
     return ok;
 }
 
@@ -280,7 +317,7 @@ bool nvm_flush_adaptive_maps() noexcept {
     static uint32_t bsy_stall_count = 0u;  // FIX C8: detect permanently stuck BSY
 
     const auto fail = []() noexcept {
-        FLASH_CR2 &= ~(FLASH_CR_PG | FLASH_CR_SER | (0xFu << FLASH_CR_SNB_SHIFT));
+        FLASH_NSCR &= ~(FLASH_CR_PG | FLASH_CR_SER | FLASH_CR_BKSEL | FLASH_CR_SNB_MASK);
         flash_lock_bank2();
         g_ltft_dirty     = true;
         g_knock_dirty    = true;
@@ -304,39 +341,46 @@ bool nvm_flush_adaptive_maps() noexcept {
         g_ltft_add_dirty = false;
 
         flash_unlock_bank2();
-        FLASH_CCR2 = 0xFFFFFFFFu;
-        FLASH_CR2 = FLASH_CR_SER
-                  | ((kSectorLtft & 0xFu) << FLASH_CR_SNB_SHIFT)
+        FLASH_NSCCR = 0xFFFFFFFFu;
+        FLASH_NSCR = FLASH_CR_SER
+                  | FLASH_CR_BKSEL
+                  | ((kSectorLtft << FLASH_CR_SNB_SHIFT) & FLASH_CR_SNB_MASK)
                   | FLASH_CR_STRT;
         state = FlushState::WaitErase;
         return false;
     }
 
-    if (FLASH_SR2 & kFlashBusyMask) { return false; }
-    if (FLASH_SR2 & kFlashErrorMask) {
+    if (FLASH_NSSR & kFlashBusyMask) { return false; }
+    if (FLASH_NSSR & kFlashErrorMask) {
         state = FlushState::Idle;
         return fail();
     }
 
     if (state == FlushState::WaitErase) {
-        FLASH_CR2 &= ~(FLASH_CR_SER | (0xFu << FLASH_CR_SNB_SHIFT));
-        FLASH_CCR2 = 0xFFFFFFFFu;
-        FLASH_CR2 |= FLASH_CR_PG;
+        FLASH_NSCR &= ~(FLASH_CR_SER | FLASH_CR_BKSEL | FLASH_CR_SNB_MASK);
+        FLASH_NSCCR = 0xFFFFFFFFu;
+        FLASH_NSCR |= FLASH_CR_PG;
         word_i = 0u;
         state = FlushState::Program;
     }
 
     if (state == FlushState::Program) {
+        // DIAG (2026-07-09): escrever 1 palavra/iteração e verificar BSY antes
+        // da SEGUINTE fazia o loop ler SR.WBNE=1 (buffer com 1-3 palavras do
+        // quad-word ainda por completar) como "ocupado" — exactamente o
+        // sintoma que o "FIX C8" abaixo mascarava (BSY nunca liberta,
+        // word_i nunca avança) sem resolver a causa: as 4 palavras de um
+        // flash-word de 128 bits têm de ser escritas em sucessão imediata,
+        // sem poll de status entre elas (ver flash_write_words). kFlashWordsPerStep
+        // é múltiplo de 4 — orçamento agora em quad-words, não em palavras soltas.
         volatile uint32_t* dst32 = reinterpret_cast<volatile uint32_t*>(kBank2Base);
         const uint32_t* src32 = reinterpret_cast<const uint32_t*>(sector_buf);
         const uint32_t nwords = sizeof(sector_buf) / sizeof(uint32_t);
-        uint32_t budget = kFlashWordsPerStep;
-        while ((word_i < nwords) && (budget-- != 0u)) {
-            if (FLASH_SR2 & kFlashBusyMask) {
-                // FIX C8: if BSY never clears, the state machine is permanently stuck
-                // (word_i doesn't advance, fail() is never called, data is lost forever).
-                // Abort and re-mark dirty after a threshold so the next flush cycle
-                // can attempt recovery.
+        uint32_t budget_qw = kFlashWordsPerStep / 4u;
+        while ((word_i < nwords) && (budget_qw-- != 0u)) {
+            if (FLASH_NSSR & kFlashBusyMask) {
+                // FIX C8: se BSY nunca limpar entre quad-words (ex.: hardware
+                // preso), aborta e remarca dirty para o próximo ciclo tentar.
                 constexpr uint32_t kBsyStallLimit = 50000u;
                 if (++bsy_stall_count >= kBsyStallLimit) {
                     bsy_stall_count = 0u;
@@ -346,24 +390,32 @@ bool nvm_flush_adaptive_maps() noexcept {
                 return false;
             }
             bsy_stall_count = 0u;  // Reset on any successful progress
-            if (FLASH_SR2 & kFlashErrorMask) {
+            if (FLASH_NSSR & kFlashErrorMask) {
                 state = FlushState::Idle;
                 return fail();
             }
-            dst32[word_i] = src32[word_i];
-            ++word_i;
+            const uint32_t n = (nwords - word_i < 4u) ? (nwords - word_i) : 4u;
+            {
+                // As (até) 4 palavras do quad-word em sucessão imediata, sem
+                // IRQs no meio (ver flash_write_words).
+                ems::hal::CriticalSectionGuard guard;
+                for (uint32_t i = 0u; i < n; ++i) {
+                    dst32[word_i + i] = src32[word_i + i];
+                }
+            }
+            word_i += n;
         }
         if (word_i < nwords) { return false; }
         state = FlushState::WaitFinal;
     }
 
     if (state == FlushState::WaitFinal) {
-        if (FLASH_SR2 & kFlashBusyMask) { return false; }
-        if (FLASH_SR2 & kFlashErrorMask) {
+        if (FLASH_NSSR & kFlashBusyMask) { return false; }
+        if (FLASH_NSSR & kFlashErrorMask) {
             state = FlushState::Idle;
             return fail();
         }
-        FLASH_CR2 &= ~FLASH_CR_PG;
+        FLASH_NSCR &= ~FLASH_CR_PG;
         flash_lock_bank2();
         state = FlushState::Idle;
         return !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty;

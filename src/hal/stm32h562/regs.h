@@ -722,24 +722,34 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define IWDG_RLR_10S     1249u   // com /256 → 10s (boot completo + margem)
 
 // ─── Flash (RM0481 §7) ───────────────────────────────────────────────────────
+// BUG HISTÓRICO (corrigido 2026-07-10): esta HAL assumia um par CR1/CR2,
+// SR1/SR2, KEYR1/KEYR2, CCR1/CCR2 com offset +0x100 entre "bank1" e "bank2",
+// modelo do STM32H7. O STM32H562 NÃO tem essa separação — verificado contra
+// o CMSIS oficial (cmsis-device-h5, stm32h562xx.h): existe um ÚNICO conjunto
+// de registos non-secure (NSKEYR@0x04, NSSR@0x20, NSCR@0x28, NSCCR@0x30); o
+// banco alvo (Bank1 0x08000000 vs Bank2 0x08080000) escolhe-se pelo bit
+// BKSEL em NSCR — só relevante para ERASE (que referencia sector por número,
+// 0-63 por banco); PROGRAM usa o endereço mapeado em memória directamente.
+// Os offsets antigos (+0x100) caíam em espaço reservado: erase/program
+// "sucediam" instantaneamente sem tocar a flash real (SR sempre lia 0 —
+// sem BSY, sem erro) — sintoma: burn reporta OK mas não sobrevive a
+// power-cycle. Ver stm32h5xx_hal_flash.c/stm32h5xx_hal_flash_ex.c (ST) para
+// a sequência de referência.
 #define FLASH_ACR_OFF     0x000UL
-#define FLASH_OPTCR_OFF   0x004UL
-#define FLASH_SR1_OFF     0x020UL   // Flash Bank1 status
-#define FLASH_SR2_OFF     0x120UL   // Flash Bank2 status
-#define FLASH_CR1_OFF     0x028UL
-#define FLASH_CR2_OFF     0x128UL
-#define FLASH_CCR1_OFF    0x030UL
-#define FLASH_CCR2_OFF    0x130UL
-#define FLASH_KEYR1_OFF   0x004UL
-#define FLASH_KEYR2_OFF   0x104UL
+#define FLASH_NSKEYR_OFF  0x004UL
+#define FLASH_OPTKEYR_OFF 0x00CUL
+#define FLASH_OPTCR_OFF   0x01CUL
+#define FLASH_NSSR_OFF    0x020UL
+#define FLASH_NSCR_OFF    0x028UL
+#define FLASH_NSCCR_OFF   0x030UL
 
-#define FLASH_ACR  STM32_REG32(FLASH_BASE + FLASH_ACR_OFF)
-#define FLASH_SR2  STM32_REG32(FLASH_BASE + FLASH_SR2_OFF)
-#define FLASH_CR2  STM32_REG32(FLASH_BASE + FLASH_CR2_OFF)
-#define FLASH_CCR2 STM32_REG32(FLASH_BASE + FLASH_CCR2_OFF)
-#define FLASH_KEYR2 STM32_REG32(FLASH_BASE + FLASH_KEYR2_OFF)
+#define FLASH_ACR    STM32_REG32(FLASH_BASE + FLASH_ACR_OFF)
+#define FLASH_NSSR   STM32_REG32(FLASH_BASE + FLASH_NSSR_OFF)
+#define FLASH_NSCR   STM32_REG32(FLASH_BASE + FLASH_NSCR_OFF)
+#define FLASH_NSCCR  STM32_REG32(FLASH_BASE + FLASH_NSCCR_OFF)
+#define FLASH_NSKEYR STM32_REG32(FLASH_BASE + FLASH_NSKEYR_OFF)
 
-// Flash_SR bits
+// Flash_NSSR bits
 #define FLASH_SR_BSY   (1u << 0)
 #define FLASH_SR_WBNE  (1u << 1)   // Write buffer not empty
 #define FLASH_SR_DBNE  (1u << 3)   // Data buffer not empty
@@ -747,13 +757,15 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define FLASH_SR_PGSERR (1u << 18) // Program sequence error
 #define FLASH_SR_WRPERR (1u << 17) // Write protection error
 
-// Flash_CR bits
+// Flash_NSCR bits
 #define FLASH_CR_LOCK  (1u << 0)
 #define FLASH_CR_PG    (1u << 1)   // Programming enable
 #define FLASH_CR_SER   (1u << 2)   // Sector erase
 #define FLASH_CR_BER   (1u << 3)   // Bank erase
-#define FLASH_CR_STRT  (1u << 5)   // Erase start
-#define FLASH_CR_SNB_SHIFT 6       // Sector number [3:0] @ bits [9:6]
+#define FLASH_CR_STRT  (1u << 5)   // Erase start ("START" no CMSIS)
+#define FLASH_CR_SNB_SHIFT 6       // Sector number: 7 bits [12:6] (128 setores totais, 0-63/banco)
+#define FLASH_CR_SNB_MASK  (0x7Fu << FLASH_CR_SNB_SHIFT)
+#define FLASH_CR_BKSEL (1u << 31)  // 0=Bank1 (0x08000000) 1=Bank2 (0x08080000) — só ERASE
 
 // Flash_ACR: latency / prefetch
 // FLASH_ACR no H5 (CMSIS verified): LATENCY[3:0], WRHIGHFREQ[5:4], PRFTEN(8).
