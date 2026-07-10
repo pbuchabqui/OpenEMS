@@ -55,11 +55,19 @@ document.addEventListener("keydown", e => {
     st.values[r][c] = clamped;
     st.modified.add(key);
   });
-  // Update visible cells
+  // Update visible cells — recalcula min/max da tabela para a cor do
+  // heatmap acompanhar o novo valor (só era feito dentro do render()
+  // completo, que deixou de correr a cada tecla).
+  const flat = st.values.flat();
+  const [tmin, tmax] = [Math.min(...flat), Math.max(...flat)];
   selCells.forEach(key => {
     const [r, c] = key.split(",");
     const td = selPane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
-    if (td) { td.textContent = st.values[r][c]; td.classList.add("mod"); }
+    if (td) {
+      td.textContent = st.values[r][c];
+      td.classList.add("mod");
+      td.style.background = heatColor(st.values[r][c], tmin, tmax);
+    }
   });
   if (st.send) st.send().catch(err => toast(err.message, true));
 });
@@ -358,6 +366,10 @@ async function loadGrid(pane) {
       if (Number.isNaN(v) || v === st.values[r][c]) return;
       st.values[r][c] = v;
       st.modified.add(`${r},${c}`);
+      // Cor do heatmap acompanha o valor em tempo real (input tem fundo
+      // transparente — o estilo do <td> é o que aparece por trás do texto).
+      const flat = st.values.flat();
+      td.style.background = heatColor(v, Math.min(...flat), Math.max(...flat));
       clearTimeout(liveTimer);
       liveTimer = setTimeout(() => {
         // forceBlur=false: isto corre EM PARALELO com a edição ainda em
