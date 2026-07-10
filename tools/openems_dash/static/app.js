@@ -320,7 +320,10 @@ async function loadGrid(pane) {
       st.modified.add(`${r},${c}`);
       clearTimeout(liveTimer);
       liveTimer = setTimeout(() => {
-        sendModified().catch(err => toast(err.message, true));
+        // forceBlur=false: isto corre EM PARALELO com a edição ainda em
+        // curso (input focado); forçar blur aqui terminava a edição a meio
+        // — só um step era possível antes do foco saltar para <body>.
+        sendModified(false).catch(err => toast(err.message, true));
       }, 200);
     };
     const commit = () => {
@@ -346,13 +349,18 @@ async function loadGrid(pane) {
     };
   }
 
-  async function sendModified() {
+  async function sendModified(forceBlur = true) {
     // Força o commit de uma edição em curso (input ainda focado): clicar
     // directamente em Burn/Send sem sair da célula antes disparava o click
     // sem o blur ter corrido ainda — st.modified ficava vazio e nada era
     // enviado (Network tab mostrava só o POST /burn, sem PUT /cells).
-    const activeInput = pane.querySelector("input");
-    if (activeInput) activeInput.blur();
+    // forceBlur=false (chamado pelo auto-envio em segundo plano durante a
+    // edição): NÃO tira o foco do input — só queremos mandar o valor já
+    // aplicado a st.values, sem interromper quem ainda está a escrever.
+    if (forceBlur) {
+      const activeInput = pane.querySelector("input");
+      if (activeInput) activeInput.blur();
+    }
     if (!st.modified.size) return 0;
     const cells = [...st.modified].map(k => {
       const [row, col] = k.split(",").map(Number);
