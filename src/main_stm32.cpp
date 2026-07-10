@@ -179,6 +179,40 @@ static bool page_is_erased(const uint8_t* data, uint16_t len) noexcept {
     return page_range_is_erased(data, 0u, len);
 }
 
+// BUG (encontrado 2026-07-10): burn_page_to_flash grava VE/Spark/Lambda
+// (páginas 1/2/4, índices internos 1/2/3) correctamente, mas nunca havia
+// loader correspondente aqui — reset_pages() (ui_protocol.cpp) copia
+// SEMPRE ve_table/spark_table/lambda_target_table_x1000 (defaults de
+// compilação, nunca actualizados a partir da flash) para os buffers da UI
+// no boot, apagando silenciosamente qualquer tabela editada e gravada.
+static void load_ve_table_from_nvm() noexcept {
+    alignas(4) uint8_t page[sizeof(ems::engine::ve_table)] = {};
+    if (!ems::hal::nvm_load_calibration(1u, page, sizeof(page)) ||
+        page_is_erased(page, sizeof(page))) {
+        return;  // flash apagada → tabela default de compilação
+    }
+    std::memcpy(ems::engine::ve_table, page, sizeof(ems::engine::ve_table));
+}
+
+static void load_spark_table_from_nvm() noexcept {
+    alignas(4) uint8_t page[sizeof(ems::engine::spark_table)] = {};
+    if (!ems::hal::nvm_load_calibration(2u, page, sizeof(page)) ||
+        page_is_erased(page, sizeof(page))) {
+        return;
+    }
+    std::memcpy(ems::engine::spark_table, page, sizeof(ems::engine::spark_table));
+}
+
+static void load_lambda_target_table_from_nvm() noexcept {
+    alignas(4) uint8_t page[sizeof(ems::engine::lambda_target_table_x1000)] = {};
+    if (!ems::hal::nvm_load_calibration(3u, page, sizeof(page)) ||
+        page_is_erased(page, sizeof(page))) {
+        return;
+    }
+    std::memcpy(ems::engine::lambda_target_table_x1000, page,
+                sizeof(ems::engine::lambda_target_table_x1000));
+}
+
 static void load_corr_calibration_from_nvm() noexcept {
     alignas(4) uint8_t page[256] = {};
     if (!ems::hal::nvm_load_calibration(4u, page, sizeof(page)) ||
@@ -601,6 +635,9 @@ static void openems_init() noexcept {
 	// Calibração de sensores persistida (página 0, bytes 16-55) → drivers
 	ems::engine::apply_etb_calibration_from_page(g_calib_page0 + 16, 40u);
 	ems::engine::push_sensor_calibration_to_drivers();
+	load_ve_table_from_nvm();
+	load_spark_table_from_nvm();
+	load_lambda_target_table_from_nvm();
 	load_corr_calibration_from_nvm();
 	load_xtau_calibration_from_nvm();
 	load_dwell2d_calibration_from_nvm();
