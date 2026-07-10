@@ -5,6 +5,7 @@
 let selCells = new Set();  // Set of "r,c" keys
 let selPage = 0;           // page of current selection
 let selPane = null;        // pane element
+let selAnchor = null;      // [r,c] da célula "actual" — origem da navegação por setas
 
 function clearSel() {
   if (selPane) $$("td.sel", selPane).forEach(td => td.classList.remove("sel"));
@@ -13,14 +14,36 @@ function clearSel() {
 
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-  if (!selCells.size || !selPane) return;
+  if (!selPane) return;
   if ($(".grid-pane.active") !== selPane) return;
   const st = gridState[selPage];
   if (!st || st.mode !== "manual") return;
+
+  // Setas: navegam pela tabela (movem a âncora, substituem a selecção por
+  // 1 célula) — deixaram de ajustar valor, esse papel passou para A/Z.
+  const nav = { ArrowUp: [1, 0], ArrowDown: [-1, 0], ArrowRight: [0, 1], ArrowLeft: [0, -1] }[e.key];
+  if (nav) {
+    e.preventDefault();
+    if (!selAnchor) return;
+    const r = Math.max(0, Math.min(15, selAnchor[0] + nav[0]));
+    const c = Math.max(0, Math.min(15, selAnchor[1] + nav[1]));
+    $$("td.sel", selPane).forEach(td => td.classList.remove("sel"));
+    selCells.clear();
+    const key = `${r},${c}`;
+    selCells.add(key);
+    selAnchor = [r, c];
+    const td = selPane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+    if (td) td.classList.add("sel");
+    return;
+  }
+
+  if (!selCells.size) return;
   const step = (selPage === 4) ? 10 : 1;
   let delta = 0;
-  if (e.key === "+" || e.key === "=" || e.key === "ArrowUp")   delta = step;
-  else if (e.key === "-" || e.key === "ArrowDown") delta = -step;
+  // "A" = step mais, "Z" = step menos (substituem ArrowUp/ArrowDown, agora
+  // usadas para navegar); +/=/- continuam a funcionar também.
+  if (e.key === "+" || e.key === "=" || e.key === "a" || e.key === "A")      delta = step;
+  else if (e.key === "-" || e.key === "z" || e.key === "Z") delta = -step;
   else return;
   e.preventDefault();
   selCells.forEach(key => {
@@ -294,6 +317,7 @@ async function loadGrid(pane) {
           return;
         }
         const key = `${td.dataset.r},${td.dataset.c}`;
+        selAnchor = [+td.dataset.r, +td.dataset.c];  // origem p/ navegação por setas
         if (e.ctrlKey || e.metaKey) {
           if (selCells.has(key)) { selCells.delete(key); td.classList.remove("sel"); }
           else {
