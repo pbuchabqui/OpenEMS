@@ -38,6 +38,7 @@ document.addEventListener("keydown", e => {
     const td = selPane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
     if (td) { td.textContent = st.values[r][c]; td.classList.add("mod"); }
   });
+  if (st.send) st.send().catch(err => toast(err.message, true));
 });
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -273,22 +274,39 @@ async function loadGrid(pane) {
     td.textContent = "";
     td.appendChild(inp);
     inp.focus(); inp.select();
+    // Envia enquanto ainda se edita (antes do blur): debounce curto para
+    // não disparar um PUT a cada tecla, mas sem esperar sair da célula.
+    let liveTimer = null;
+    const applyLive = () => {
+      const v = parseInt(inp.value, 10);
+      if (Number.isNaN(v) || v === st.values[r][c]) return;
+      st.values[r][c] = v;
+      st.modified.add(`${r},${c}`);
+      clearTimeout(liveTimer);
+      liveTimer = setTimeout(() => {
+        sendModified().catch(err => toast(err.message, true));
+      }, 200);
+    };
     const commit = () => {
+      clearTimeout(liveTimer);
       const v = parseInt(inp.value, 10);
       if (!Number.isNaN(v) && v !== orig) {
         st.values[r][c] = v;
         st.modified.add(`${r},${c}`);
       }
       render();
+      // Envia de imediato para a RAM — não requer clicar "Send" à parte.
+      sendModified().catch(err => toast(err.message, true));
     };
+    inp.oninput = applyLive;
     inp.onblur = commit;
     let delta = 0;
     inp.onkeydown = e => {
       if (e.key === "Enter") inp.blur();
       if (e.key === "Escape") { inp.value = orig; inp.blur(); }
       const step = (page === 4) ? 10 : 1;
-      if (e.key === "+" || e.key === "=" || e.key === "ArrowUp")   { delta += step; inp.value = orig + delta; e.preventDefault(); }
-      if (e.key === "-" || e.key === "ArrowDown") { delta -= step; inp.value = orig + delta; e.preventDefault(); }
+      if (e.key === "+" || e.key === "=" || e.key === "ArrowUp")   { delta += step; inp.value = orig + delta; e.preventDefault(); applyLive(); }
+      if (e.key === "-" || e.key === "ArrowDown") { delta -= step; inp.value = orig + delta; e.preventDefault(); applyLive(); }
     };
   }
 
@@ -311,6 +329,7 @@ async function loadGrid(pane) {
     st.modified.clear(); render();
     return cells.length;
   }
+  st.send = sendModified;  // usado pelo atalho de teclado multi-célula
 
   pane.querySelector('[data-act="send"]').onclick = async () => {
     try {
@@ -659,6 +678,11 @@ async function loadBoostMap() {
   let activeGear = 0;
   let curve = null;
 
+  async function sendBoost() {
+    await api("/api/pages/9/cells", "PUT", { boost_map: rows });
+    $("#boostDirty").textContent = "";
+  }
+
   function buildCurve() {
     curve = makeDragCurve({
       canvas: $("#boostCanvas"),
@@ -672,6 +696,8 @@ async function loadBoostMap() {
       yMin: 1000, yMax: 3000,
       mono: false,
       onchange: () => { $("#boostDirty").textContent = "unsent"; },
+      // Envia ao soltar o rato/dedo — não requer clicar "Send" à parte.
+      ondragend: () => sendBoost().catch(e => toast(e.message, true)),
     });
   }
 
@@ -695,8 +721,7 @@ async function loadBoostMap() {
 
   $("#boostSend", root).onclick = async () => {
     try {
-      await api("/api/pages/9/cells", "PUT", { boost_map: rows });
-      $("#boostDirty").textContent = "";
+      await sendBoost();
       toast("boost map sent (RAM)");
     } catch (e) { toast(e.message, true); }
   };
@@ -704,9 +729,8 @@ async function loadBoostMap() {
     // Envia sempre antes de queimar — sem isto, arrastar a curva e clicar
     // logo em Burn (sem Send) persistia o valor ANTIGO em flash.
     try {
-      await api("/api/pages/9/cells", "PUT", { boost_map: rows });
+      await sendBoost();
       await api("/api/pages/9/burn", "POST");
-      $("#boostDirty").textContent = "";
       toast("boost map sent + burn OK");
     } catch (e) { toast(e.message, true); }
   };
@@ -977,6 +1001,8 @@ async function bindParamGroup(div, page) {
       if (Array.isArray(fields[f])) fields[f][+i] = v; else fields[f] = v;
       modified.add(f);
       inp.classList.add("mod");
+      // Envia de imediato para a RAM — não requer clicar "Send" à parte.
+      sendModified().catch(err => toast(err.message, true));
     });
   }
 
@@ -1178,7 +1204,14 @@ function makeDragCurve(cfg) {
       cv.style.cursor = h >= 0 ? "grab" : "default";
     }
   });
-  const stopDrag = () => { dragIdx = -1; draw(); };
+  const stopDrag = () => {
+    const wasDragging = dragIdx >= 0;
+    dragIdx = -1;
+    draw();
+    // Envia ao soltar o rato/dedo (fim do gesto) — não a cada mousemove,
+    // que inundaria a ligação série durante o arrasto.
+    if (wasDragging) cfg.ondragend && cfg.ondragend();
+  };
   cv.addEventListener("mouseup",   stopDrag);
   cv.addEventListener("mouseleave", stopDrag);
 
@@ -1216,6 +1249,10 @@ function buildPedalMapUI(data) {
     </div>
     <canvas id="pmCanvas" width="760" height="500"></canvas>`;
 
+  async function sendPedal() {
+    await api("/api/pages/8/cells", "PUT", {pedal_maps: pedalMaps});
+  }
+
   let activeMode = 0;
   const curve = makeDragCurve({
     canvas: $("#pmCanvas"),
@@ -1229,6 +1266,8 @@ function buildPedalMapUI(data) {
     yMin: 0, yMax: 100,
     mono: true,
     onchange: () => {},
+    // Envia ao soltar o rato/dedo — não requer clicar "Send" à parte.
+    ondragend: () => sendPedal().catch(e => toast(e.message, true)),
   });
 
   function activate(mode) {
@@ -1241,7 +1280,7 @@ function buildPedalMapUI(data) {
 
   root.querySelector("#pmSend").onclick = async () => {
     try {
-      await api("/api/pages/8/cells", "PUT", {pedal_maps: pedalMaps});
+      await sendPedal();
       toast("Pedal Map sent (RAM)");
     } catch(e) { toast(e.message, true); }
   };
@@ -1249,7 +1288,7 @@ function buildPedalMapUI(data) {
     // Envia sempre antes de queimar — sem isto, arrastar a curva e clicar
     // logo em Burn (sem Send) persistia o valor ANTIGO em flash.
     try {
-      await api("/api/pages/8/cells", "PUT", {pedal_maps: pedalMaps});
+      await sendPedal();
       await api("/api/pages/8/burn", "POST");
       toast("Pedal Map sent + burn OK");
     } catch(e) { toast(e.message, true); }
