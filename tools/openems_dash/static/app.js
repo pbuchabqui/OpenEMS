@@ -353,7 +353,7 @@ const PARAM_GROUPS = [
 const PAGE_0_SECTIONS = [
   {
     label: "ENGINE",
-    fields: ["ivc_abdc_deg","displacement_cc","trigger_tooth0_engine_deg",
+    fields: ["displacement_cc","trigger_tooth0_engine_deg",
              "default_eoi_lead_deg","config_magic"],
   },
   {
@@ -414,7 +414,6 @@ const PAGE_0_SECTIONS = [
 
 /* friendly labels (page 0) and read-only fields */
 const FIELD_LABELS = {
-  ivc_abdc_deg:              "IVC closing (° ABDC)",
   displacement_cc:           "Displacement (cc)",
   injector_flow_cc_min:      "Injector flow (cc/min)",
   stoich_afr_x100:           "Stoich AFR",

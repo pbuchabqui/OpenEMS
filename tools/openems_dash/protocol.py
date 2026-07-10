@@ -34,7 +34,8 @@ MAP_AXIS_BAR_X100 = [
 RPM_AXIS = [v // 10 for v in RPM_AXIS_X10]
 MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
-PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 66, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112, 10: 320}
+PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 66, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112,
+              10: 320, 11: 64}
 
 STATUS_BITS = {
     "FULL_SYNC":        0x0001,  # bit 0
@@ -339,8 +340,10 @@ PAGE7_FIELDS = [
 ]
 
 # Página 0 — bytes 0-15: engine config; bytes 16+: calibração e dirigibilidade.
+# offset 0 (ivc_abdc_deg) reservado: campo morto desde a migração para EOI
+# targeting (ecu_sched.cpp — "mantido por compatibilidade de API e
+# protocolo, contador de clamp permanece 0"); scheduler já não o lê.
 PAGE0_FIELDS = [
-    ("ivc_abdc_deg",              0, 1, "B",  1.0),  # °
     ("displacement_cc",           2, 1, "H",  1.0),  # cc
     ("injector_flow_cc_min",      4, 1, "H",  1.0),  # cc/min
     ("stoich_afr_x100",           6, 1, "H",  0.01), # AFR
