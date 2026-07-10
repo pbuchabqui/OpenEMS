@@ -230,8 +230,14 @@ async function loadGrid(pane) {
       html += `<tr><th>${INFO.axes.map_kpa[row]}</th>`;
       for (let col = 0; col < 16; col++) {
         const v = st.values[row][col];
-        const mod = st.modified.has(`${row},${col}`) ? " mod" : "";
-        html += `<td class="${mod}" data-r="${row}" data-c="${col}"
+        const key = `${row},${col}`;
+        const mod = st.modified.has(key) ? " mod" : "";
+        // Reaplica a selecção multi-célula: render() corre a cada auto-send
+        // (uma vez por tecla +/-) e regenera todos os <td> do zero — sem
+        // isto a classe "sel" perdia-se após o 1º step, mesmo com selCells
+        // (o estado lógico) intacto.
+        const sel = (selPane === pane && selCells.has(key)) ? " sel" : "";
+        html += `<td class="${mod}${sel}" data-r="${row}" data-c="${col}"
                      style="background:${heatColor(v, min, max)}">${v}</td>`;
       }
       html += "</tr>";
