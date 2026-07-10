@@ -16,7 +16,7 @@ document.addEventListener("keydown", e => {
   if (!selCells.size || !selPane) return;
   if ($(".grid-pane.active") !== selPane) return;
   const st = gridState[selPage];
-  if (!st) return;
+  if (!st || st.mode !== "manual") return;
   const step = (selPage === 4) ? 10 : 1;
   let delta = 0;
   if (e.key === "+" || e.key === "=" || e.key === "ArrowUp")   delta = step;
@@ -201,6 +201,10 @@ async function loadGrid(pane) {
   pane.innerHTML = `
     <div class="grid-toolbar">
       <strong>${meta.name}</strong> <span class="muted">(${meta.unit})</span>
+      <span class="mode-toggle">
+        <button class="mode-btn active" data-mode="trace">◉ Trace</button>
+        <button class="mode-btn" data-mode="manual">✎ Manual</button>
+      </span>
       <button class="primary" data-act="send">Send (RAM)</button>
       <button class="danger" data-act="burn">Burn → flash</button>
       <button data-act="reload">Reload</button>
@@ -210,7 +214,29 @@ async function loadGrid(pane) {
     <div class="grid-wrap"></div>`;
   pane.dataset.loaded = "1";
 
-  const st = gridState[page] = { values: null, modified: new Set(), pane };
+  // Modos mutuamente exclusivos: "trace" (destaque ao vivo da posição do
+  // motor, 30Hz) e "manual" (selecção múltipla + edição por teclado). Os
+  // dois partilhavam o mesmo outline CSS (.sel/.live2) e o mesmo ciclo de
+  // desenho, tornando-se indistinguíveis e a competir pela mesma célula —
+  // agora só um corre de cada vez por pane.
+  const st = gridState[page] = { values: null, modified: new Set(), pane, mode: "trace" };
+
+  function setMode(mode) {
+    if (st.mode === mode) return;
+    st.mode = mode;
+    $$(".mode-btn", pane).forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
+    if (mode === "manual") {
+      // Sai do trace: apaga o destaque ao vivo para não ficar preso na
+      // última posição desenhada.
+      $$("td.live2", pane).forEach(td => td.classList.remove("live2"));
+      const cv = pane.querySelector("canvas.trail");
+      if (cv) cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
+    } else {
+      // Sai do manual: limpa qualquer selecção pendente.
+      if (selPane === pane) clearSel();
+    }
+  }
+  pane.querySelectorAll(".mode-btn").forEach(b => b.onclick = () => setMode(b.dataset.mode));
 
   async function reload() {
     const r = await api(`/api/pages/${page}`);
@@ -257,6 +283,10 @@ async function loadGrid(pane) {
     $$("td[data-r]", pane).forEach(td => {
       td.onclick = (e) => {
         if (e.ctrlKey || e.metaKey) {
+          if (st.mode !== "manual") {
+            toast('mudar para modo "✎ Manual" para seleccionar células');
+            return;
+          }
           const key = `${td.dataset.r},${td.dataset.c}`;
           if (selCells.has(key)) { selCells.delete(key); td.classList.remove("sel"); }
           else {
@@ -392,6 +422,9 @@ function highlightLiveCell() {
   const st = gridState[page];
   const cv = pane.querySelector("canvas.trail");
   if (!st || !cv) return;
+  // Modo manual: trace completamente desligado para este pane — não toca
+  // em .live2/canvas nem compete com a selecção/edição em curso.
+  if (st.mode !== "trace") return;
 
   const lx = axisLookup(INFO.axes.rpm, RT.rpm);
   const ly = axisLookup(INFO.axes.map_kpa, RT.map_kpa);
