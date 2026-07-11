@@ -1492,138 +1492,111 @@ async function drawScope() {
   const ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
+  ctx.font = "10px monospace";
   const info = $("#scopeInfo");
   if (!s.ckp_ms || s.ckp_ms.length < 4) {
     info.textContent = "sem bordas CKP — sensor/estimulador parado";
     return;
   }
+
   // deltas + mediana p/ detectar o gap (delta > 1.5× mediana)
   const deltas = [];
   for (let i = 1; i < s.ckp_ms.length; i++) deltas.push(s.ckp_ms[i] - s.ckp_ms[i-1]);
   const med = [...deltas].sort((a, b) => a - b)[Math.floor(deltas.length / 2)];
-  const gaps = [];
-  for (let i = 0; i < deltas.length; i++)
-    if (deltas[i] > med * 1.5) gaps.push(i);
+  const gapDeltaIdx = deltas.findIndex(d => d > med * 1.5);
+  const gapDelta = gapDeltaIdx >= 0 ? deltas[gapDeltaIdx] : null;
+  const synced = s.sync_state === 1 || s.sync_state === 2;
+  const yTop = 22, hPulse = 38, yCmp = 78, hCmp = 42;
 
-  // ── trigger no GAP: eixo em POSIÇÕES de dente ancoradas no gap ────────
-  // Sem trigger cada poll redesenha uma janela deslocada (traço "pula").
-  // Ancorar o dente-0 (fim do gap mais antigo visível) numa posição fixa
-  // torna o traço estacionário — só o marcador CMP e o ângulo variam.
-  const pos = new Array(s.ckp_ms.length);
-  pos[0] = 0;
-  for (let i = 1; i < s.ckp_ms.length; i++)
-    pos[i] = pos[i-1] + Math.max(1, Math.round(deltas[i-1] / med));
-  // referência: dente logo após o PRIMEIRO gap da janela
-  const trigIdx = gaps.length ? gaps[0] + 1 : 0;
-  const span = 63;  // posições visíveis (~1 volta + gap)
-  const x = i => (pos[i] - pos[trigIdx] + 3) / (span + 6) * (W - 20) + 10;
-  // interpola posição fracionária para timestamps arbitrários (CMP)
-  const xAtTime = t => {
-    let i = 0;
-    while (i < s.ckp_ms.length - 1 && s.ckp_ms[i+1] < t) i++;
-    if (i >= s.ckp_ms.length - 1) return x(s.ckp_ms.length - 1);
-    const f = (t - s.ckp_ms[i]) / (s.ckp_ms[i+1] - s.ckp_ms[i]);
-    const p = pos[i] + f * (pos[i+1] - pos[i]);
-    return (p - pos[trigIdx] + 3) / (span + 6) * (W - 20) + 10;
-  };
+  if (!synced) {
+    info.textContent = "sem sync — sem referência angular (traço requer HALF/FULL_SYNC)";
+    return;
+  }
 
-  // pista CKP (topo): pulso por borda
-  const yTop = 22, hPulse = 38;
+  // ── ângulo absoluto por borda (âncora: tooth_index/fase no dump) ───────
+  // Eixo DOBRADO em 0-360° de virabrequim: cada borda desenha-se no seu
+  // ângulo — gap e CMP ficam cravados no lugar (traço estável, sem trigger
+  // dependente da janela). O ciclo 720° aparece no cursor e nos rótulos.
+  const n = s.ckp_ms.length;
+  const angles = new Array(n);
+  let a = (s.phase_a ? 0 : 360) + s.tooth_index * 6;
+  angles[n - 1] = ((a % 720) + 720) % 720;
+  for (let i = n - 2; i >= 0; i--) {
+    a -= Math.max(1, Math.round(deltas[i] / med)) * 6;
+    angles[i] = ((a % 720) + 720) % 720;
+  }
+  const x = deg => (((deg % 360) + 360) % 360) / 360 * (W - 20) + 10;
+
+  // régua fixa 0-360° (marcas a cada 45°)
+  ctx.strokeStyle = "#1c1c1c";
+  ctx.fillStyle = "#4a4a4a";
+  for (let d = 0; d < 360; d += 45) {
+    const px = x(d);
+    ctx.beginPath(); ctx.moveTo(px, yTop); ctx.lineTo(px, H - 14); ctx.stroke();
+    ctx.fillText(`${d}°`, px + 2, H - 4);
+  }
+
+  // pista CKP: borda no seu ângulo (janela ~1.1 volta → sobreposição estável)
   ctx.strokeStyle = "#e8a020";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let i = 0; i < s.ckp_ms.length; i++) {
-    const px = x(i);
-    if (px < 8 || px > W - 8) continue;
+  for (let i = 0; i < n; i++) {
+    const px = x(angles[i]);
     ctx.moveTo(px, yTop + hPulse);
     ctx.lineTo(px, yTop);
   }
   ctx.stroke();
-  // gap destacado
-  ctx.fillStyle = "rgba(239,68,68,.25)";
-  ctx.strokeStyle = "#ef4444";
-  ctx.font = "10px monospace";
-  for (const gi of gaps) {
-    const x0 = x(gi), x1 = x(gi + 1);
-    if (x1 < 8 || x0 > W - 8) continue;
-    ctx.fillRect(x0, yTop, x1 - x0, hPulse);
-    ctx.fillStyle = "#ef4444";
-    ctx.fillText("GAP", (x0 + x1) / 2 - 10, yTop - 4);
-    ctx.fillStyle = "rgba(239,68,68,.25)";
-  }
 
-  // pista CMP (baixo)
-  const yCmp = 78, hCmp = 42;
-  const tMin = s.ckp_ms[0];
+  // gap fixo: 18° (3 posições) terminando no dente-0 (0°/360°)
+  const gx0 = x(342), gx1 = x(360 - 0.01);
+  ctx.fillStyle = "rgba(239,68,68,.25)";
+  ctx.fillRect(gx0, yTop, gx1 - gx0, hPulse);
+  ctx.fillStyle = "#ef4444";
+  ctx.fillText("GAP", (gx0 + gx1) / 2 - 10, yTop - 4);
+
+  // pista CMP: ângulo por interpolação fracionária entre bordas CKP
+  const cmpAngles = [];
+  for (const t of (s.cmp_ms || [])) {
+    if (t < s.ckp_ms[0] || t > s.ckp_ms[n-1]) continue;
+    let i = 0;
+    while (i < n - 1 && s.ckp_ms[i+1] < t) i++;
+    const f = (t - s.ckp_ms[i]) / ((s.ckp_ms[i+1] - s.ckp_ms[i]) || 1);
+    let ang = angles[i] + f * Math.max(1, Math.round(deltas[i] / med)) * 6;
+    cmpAngles.push(((ang % 720) + 720) % 720);
+  }
   ctx.strokeStyle = "#8b5cf6";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  let cmpVisible = 0;
-  for (const t of (s.cmp_ms || [])) {
-    if (t < tMin) continue;
-    const px = xAtTime(t);
-    if (px < 8 || px > W - 8) continue;
-    cmpVisible++;
+  for (const ang of cmpAngles) {
+    const px = x(ang);
     ctx.moveTo(px, yCmp + hCmp);
     ctx.lineTo(px, yCmp);
   }
   ctx.stroke();
   ctx.fillStyle = "#8b5cf6";
-  for (const t of (s.cmp_ms || [])) {
-    if (t < tMin) continue;
-    const px = xAtTime(t);
-    if (px < 8 || px > W - 8) continue;
-    ctx.fillText("CMP", px + 3, yCmp + 10);
-  }
+  for (const ang of cmpAngles)
+    ctx.fillText(`CMP ${Math.round(ang)}°`, x(ang) + 3, yCmp + 10);
 
-  // ── régua de ângulo do ciclo 720° ─────────────────────────────────────
-  // Âncora: a borda mais recente ≈ tooth_index (±1 dente) do snapshot no
-  // instante do dump; fase CMP decide qual das 2 revoluções (0-360/360-720).
-  // Propaga para trás: 6°/dente normal, posições×6° através do gap
-  // (posições = round(delta/mediana): gap 60-2 ≈ 3 → 18°).
-  const synced = s.sync_state === 1 || s.sync_state === 2;
-  let angles = null;
-  if (synced) {
-    angles = new Array(s.ckp_ms.length);
-    let a = (s.phase_a ? 0 : 360) + s.tooth_index * 6;
-    angles[s.ckp_ms.length - 1] = a;
-    for (let i = s.ckp_ms.length - 2; i >= 0; i--) {
-      const steps = Math.max(1, Math.round(deltas[i] / med));
-      a -= steps * 6;
-      angles[i] = ((a % 720) + 720) % 720;
-    }
-    angles[s.ckp_ms.length - 1] = ((angles[s.ckp_ms.length - 1] % 720) + 720) % 720;
-    // régua: marca a cada 90°
-    ctx.fillStyle = "#4a4a4a";
-    ctx.strokeStyle = "#1c1c1c";
-    let lastLabelX = -100;
-    for (let i = 0; i < angles.length; i++) {
-      if (angles[i] % 90 !== 0) continue;
-      const px = x(i);
-      if (px < 8 || px > W - 8 || px - lastLabelX < 30) continue;
-      lastLabelX = px;
-      ctx.beginPath();
-      ctx.moveTo(px, yTop);
-      ctx.lineTo(px, H - 14);
-      ctx.stroke();
-      ctx.fillText(`${angles[i]}°`, px - 10, H - 4);
-    }
-  }
+  // cursor: ângulo actual do ciclo 720°
+  const angNow = angles[n - 1];
+  const cx = x(angNow);
+  ctx.strokeStyle = "#22c55e";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx, yTop - 12); ctx.lineTo(cx, H - 14); ctx.stroke();
+  ctx.fillStyle = "#22c55e";
+  ctx.fillText(`▼ ${Math.round(angNow)}°/720°`, Math.min(cx + 3, W - 78), yTop - 14);
 
-  // rótulos das pistas + eixo
+  // rótulos das pistas
   ctx.fillStyle = "#4a4a4a";
   ctx.fillText("CKP", 10, yTop - 4);
   ctx.fillText("CMP", 10, yCmp - 4);
-  ctx.fillText(`${(-tMin).toFixed(0)}ms · trigger: GAP`, W - 110, yTop - 4);
 
-  const gapDelta = gaps.length ? deltas[gaps[0]] : null;
   const ref = s.cmp_ref_tooth;
-  const angNow = angles ? angles[angles.length - 1] : null;
   info.textContent =
-    (angNow !== null ? `ângulo actual: ${angNow}° de 720° · ` : "sem sync — sem referência angular · ") +
-    `bordas CKP: ${s.ckp_ms.length} · dente ${med.toFixed(2)}ms` +
+    `ângulo actual: ${Math.round(angNow)}° de 720° · ` +
+    `bordas CKP: ${n} · dente ${med.toFixed(2)}ms` +
     (gapDelta ? ` · GAP ${gapDelta.toFixed(2)}ms (${(gapDelta/med).toFixed(1)}×)` : " · GAP não visível") +
-    ` · CMP na janela: ${cmpVisible}` +
+    (cmpAngles.length ? ` · CMP @ ${cmpAngles.map(v => Math.round(v) + "°").join(", ")}` : " · sem CMP na janela") +
     (ref !== 255 ? ` · CMP ancorado no dente ${ref}` : " · CMP não-ancorado");
 }
 setInterval(drawScope, 333);
