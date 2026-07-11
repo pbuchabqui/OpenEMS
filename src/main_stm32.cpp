@@ -754,7 +754,10 @@ int main() {
             // Stall watchdog: detecta virabrequim parado entre dentes.
             // Deve preceder ckp_snapshot() para que o snapshot deste ciclo
             // já reflicta LOSS_OF_SYNC se o motor parou.
-            // ems::drv::ckp_stall_poll(ems::hal::tim5_count());  // disabled: false stall triggers sync loss
+            // Reactivado: os falsos stalls vinham do wrap 16-bit do TIM3;
+            // desde a migração para TIM5 (32-bit) o elapsed é correcto.
+            // Também decai rpm_x10 fantasma de ruído em CKP sem sync.
+            ems::drv::ckp_stall_poll(ems::hal::tim5_count());
 
             // Dwell watchdog: protege bobinas de ignição contra saturação.
             // Se SPARK não disparou dentro de 1.4 × dwell após DWELL_START,

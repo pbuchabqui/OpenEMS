@@ -961,11 +961,21 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
 
 bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
     const SyncState state = g_state.snap.state;
-    if (state != SyncState::HALF_SYNC && state != SyncState::FULL_SYNC) {
-        return false;
-    }
     // Subtracção circular uint32_t: correcta mesmo após overflow de TIM5 (32 bits).
     const uint32_t elapsed_ticks = tim5_cnt_now - g_state.prev_capture;
+    if (state != SyncState::HALF_SYNC && state != SyncState::FULL_SYNC) {
+        // Sem sync o rpm_x10 também é escrito a cada captura (bootstrap/normal)
+        // — ruído num CKP desligado deixava RPM fantasma congelado para sempre,
+        // bloqueando gates de motor-parado (burn, teste de saídas). Decai a 0
+        // após o timeout sem tocar na máquina de sync.
+        if (g_state.snap.rpm_x10 != 0u &&
+            elapsed_ticks >= min_stall_timeout_ticks()) {
+            enter_critical();
+            g_state.snap.rpm_x10 = 0u;
+            exit_critical();
+        }
+        return false;
+    }
     if (elapsed_ticks < min_stall_timeout_ticks()) {
         return false;
     }
