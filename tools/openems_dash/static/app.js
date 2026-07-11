@@ -143,12 +143,6 @@ const GAUGES = [
   ["lambda_target_x1000", "λ tgt", v => (v / 1000).toFixed(2)],
   ["ltft_pct",     "LTFT %",  v => v],
   ["ethanol_pct",  "E%",      v => v],
-  ["map_fused_kpa", "MAP fund.", v => v],
-  ["net_pw_us",    "PW flow µs", v => v],
-  ["ckp_rate_hz",  "CKP Hz",  v => v.toFixed(0)],
-  ["cmp_rate_hz",  "CMP Hz",  v => v.toFixed(1)],
-  ["ckp_edge_age_ms", "CKP age ms", v => v >= 65535 ? "—" : v],
-  ["cmp_edge_age_ms", "CMP age ms", v => v >= 65535 ? "—" : v],
 ];
 $("#gauges").innerHTML = GAUGES.map(([k, l]) =>
   `<div class="gauge"><div class="v" id="g_${k}">—</div><div class="l">${l}</div></div>`).join("");
@@ -164,8 +158,6 @@ const WINDOW_S = 60, MAX_PTS = 60 * 35;
 const chartDefs = [
   { title: "RPM",           series: [["rpm",           "#e8a020"]] },
   { title: "MAP / TPS",    series: [["map_kpa",       "#e8a020"], ["tps_pct",     "#22c55e"]] },
-  { title: "MAP bruto vs fundido", series: [["map_kpa", "#e8a020"], ["map_fused_kpa", "#8b5cf6"]] },
-  { title: "CKP / CMP bordas Hz", series: [["ckp_rate_hz", "#e8a020"], ["cmp_rate_hz", "#8b5cf6"]] },
   { title: "λ / STFT",     series: [["lambda_x1000",  "#ef4444"], ["stft_pct",    "#e8a020"]] },
   { title: "PW / ADVANCE", series: [["pw_ms",         "#e8a020"], ["advance_deg", "#22c55e"]] },
 ];
@@ -192,24 +184,7 @@ window.addEventListener("resize", () =>
   charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 160 })));
 
 const t0 = performance.now();
-// Taxa de bordas CKP/CMP (Hz) derivada dos contadores acumulados entre frames.
-// A 700 RPM esperam-se ~677 bordas CKP/s (58 dentes × rpm/60); excesso = ruído.
-let prevEdge = null;
-function edgeRates(d) {
-  const now = d.t;
-  let ckp = 0, cmp = 0;
-  if (prevEdge && now > prevEdge.t) {
-    const dt = now - prevEdge.t;
-    ckp = Math.max(0, (d.ckp_edge_count - prevEdge.ckp) / dt);
-    cmp = Math.max(0, (d.cmp_edge_count - prevEdge.cmp) / dt);
-  }
-  prevEdge = { t: now, ckp: d.ckp_edge_count, cmp: d.cmp_edge_count };
-  d.ckp_rate_hz = ckp;
-  d.cmp_rate_hz = cmp;
-}
-
 function pushTelemetry(d) {
-  edgeRates(d);
   const t = (performance.now() - t0) / 1000;
   for (const c of charts) {
     c.data[0].push(t);
@@ -1500,6 +1475,95 @@ async function loadPedalMap() {
     toast("ECU disconnected — showing defaults", false);
   }
 }
+
+/* ── osciloscópio CKP/CMP ─────────────────────────────────────────────── */
+// Desenha as bordas cruas dos rings do firmware ('K' via /api/scope):
+// CKP na pista de cima com o GAP 60-2 destacado; CMP na pista de baixo com
+// o dente âncora anotado. Poll 3 Hz só com a aba TELEMETRY visível.
+async function drawScope() {
+  const pane = $("#tab-telemetry");
+  if (!pane.classList.contains("active")) return;
+  let s;
+  try { s = await api("/api/scope"); } catch { return; }
+  const cv = $("#scopeCanvas");
+  cv.width = cv.parentElement.clientWidth - 8;
+  const ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  const info = $("#scopeInfo");
+  if (!s.ckp_ms || s.ckp_ms.length < 4) {
+    info.textContent = "sem bordas CKP — sensor/estimulador parado";
+    return;
+  }
+  const tMin = s.ckp_ms[0], tMax = 0;
+  const x = t => (t - tMin) / (tMax - tMin || 1) * (W - 20) + 10;
+
+  // deltas + mediana p/ detectar o gap (delta > 1.5× mediana)
+  const deltas = [];
+  for (let i = 1; i < s.ckp_ms.length; i++) deltas.push(s.ckp_ms[i] - s.ckp_ms[i-1]);
+  const med = [...deltas].sort((a, b) => a - b)[Math.floor(deltas.length / 2)];
+  const gaps = [];
+  for (let i = 0; i < deltas.length; i++)
+    if (deltas[i] > med * 1.5) gaps.push(i);
+
+  // pista CKP (topo): pulso por borda
+  const yTop = 22, hPulse = 38;
+  ctx.strokeStyle = "#e8a020";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const t of s.ckp_ms) {
+    const px = x(t);
+    ctx.moveTo(px, yTop + hPulse);
+    ctx.lineTo(px, yTop);
+  }
+  ctx.stroke();
+  // gap destacado
+  ctx.fillStyle = "rgba(239,68,68,.25)";
+  ctx.strokeStyle = "#ef4444";
+  ctx.font = "10px monospace";
+  for (const gi of gaps) {
+    const x0 = x(s.ckp_ms[gi]), x1 = x(s.ckp_ms[gi + 1]);
+    ctx.fillRect(x0, yTop, x1 - x0, hPulse);
+    ctx.fillStyle = "#ef4444";
+    ctx.fillText("GAP", (x0 + x1) / 2 - 10, yTop - 4);
+    ctx.fillStyle = "rgba(239,68,68,.25)";
+  }
+
+  // pista CMP (baixo)
+  const yCmp = 78, hCmp = 42;
+  ctx.strokeStyle = "#8b5cf6";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  let cmpVisible = 0;
+  for (const t of (s.cmp_ms || [])) {
+    if (t < tMin) continue;
+    cmpVisible++;
+    const px = x(t);
+    ctx.moveTo(px, yCmp + hCmp);
+    ctx.lineTo(px, yCmp);
+  }
+  ctx.stroke();
+  ctx.fillStyle = "#8b5cf6";
+  for (const t of (s.cmp_ms || [])) {
+    if (t < tMin) continue;
+    ctx.fillText("CMP", x(t) + 3, yCmp + 10);
+  }
+
+  // rótulos das pistas + eixo
+  ctx.fillStyle = "#4a4a4a";
+  ctx.fillText("CKP", 10, yTop - 4);
+  ctx.fillText("CMP", 10, yCmp - 4);
+  ctx.fillText(`${(tMax - tMin).toFixed(0)}ms`, W - 45, H - 4);
+
+  const gapDelta = gaps.length ? deltas[gaps[0]] : null;
+  const ref = s.cmp_ref_tooth;
+  info.textContent =
+    `bordas CKP: ${s.ckp_ms.length} · dente ${med.toFixed(2)}ms` +
+    (gapDelta ? ` · GAP ${gapDelta.toFixed(2)}ms (${(gapDelta/med).toFixed(1)}×)` : " · GAP não visível") +
+    ` · CMP na janela: ${cmpVisible}` +
+    (ref !== 255 ? ` · CMP ancorado no dente ${ref}` : " · CMP não-ancorado");
+}
+setInterval(drawScope, 333);
 
 /* ── teste de saídas ──────────────────────────────────────────────────── */
 let otArmed = false;

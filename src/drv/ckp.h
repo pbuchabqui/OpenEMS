@@ -132,6 +132,16 @@ extern volatile uint32_t g_dbg_loss_stall;
 extern volatile uint32_t g_dbg_loss_avg;
 extern volatile uint32_t g_dbg_loss_delta;
 
+// Osciloscópio CKP/CMP: rings de timestamps TIM5 das bordas cruas (comando 'K').
+// idx = próxima posição a escrever (elemento mais antigo do ring).
+extern volatile uint32_t g_scope_ckp_ts[64];
+extern volatile uint8_t  g_scope_ckp_idx;
+extern volatile uint32_t g_scope_cmp_ts[8];
+extern volatile uint8_t  g_scope_cmp_idx;
+
+// tooth_index âncora da última borda CMP aceite (0xFF = não-ancorado).
+uint8_t ckp_get_cmp_ref_tooth() noexcept;
+
 
 // ── Stall watchdog ────────────────────────────────────────────────────────────
 // Detecta motor parado entre dois dentes — situação em que tooth_count para de

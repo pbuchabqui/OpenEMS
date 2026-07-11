@@ -258,6 +258,21 @@ class OpenEMSLink:
         vals = struct.unpack("<26I", buf)
         return dict(zip(self.DEBUG_FIELDS, vals))
 
+    # ── osciloscópio CKP/CMP ('K': 291 bytes) ────────────────────────────
+    def read_scope(self) -> dict:
+        """Rings de timestamps TIM5 (62.5 MHz) das bordas cruas CKP/CMP.
+        Devolve listas ordenadas da mais antiga → mais recente, em ticks."""
+        buf = self._txn(b"K", 291)
+        ckp_idx, cmp_idx, cmp_ref_tooth = buf[0], buf[1], buf[2]
+        ckp = list(struct.unpack_from("<64I", buf, 3))
+        cmp = list(struct.unpack_from("<8I", buf, 259))
+        # idx aponta para a próxima escrita (mais antiga) → rotaciona
+        ckp = ckp[ckp_idx:] + ckp[:ckp_idx]
+        cmp = cmp[cmp_idx:] + cmp[:cmp_idx]
+        return {"ckp_ts": [t for t in ckp if t != 0],
+                "cmp_ts": [t for t in cmp if t != 0],
+                "cmp_ref_tooth": cmp_ref_tooth}
+
     # ── teste de saídas ('T') ────────────────────────────────────────────
     # 'T' + subcmd(1) + arg1(1) + arg2(u16 LE) → ACK 1B (STATUS → 4B)
     def _test_cmd(self, sub: int, a1: int = 0, a2: int = 0) -> None:

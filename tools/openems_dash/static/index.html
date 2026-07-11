@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>OpenEMS</title>
 <link rel="stylesheet" href="uplot.min.css">
-<link rel="stylesheet" href="style.css?v=20260711b">
+<link rel="stylesheet" href="style.css?v=20260711c">
 </head>
 <body>
 
@@ -71,6 +71,11 @@
     <main id="content">
 
       <section id="tab-telemetry" class="pane">
+        <div id="scopeWrap">
+          <div id="scopeTitle">OSCILOSCÓPIO CKP / CMP</div>
+          <canvas id="scopeCanvas" height="140"></canvas>
+          <div id="scopeInfo">—</div>
+        </div>
         <div id="charts" class="charts"></div>
         <div id="diag" class="diag"></div>
       </section>
@@ -103,6 +108,6 @@
 <footer id="toast"></footer>
 
 <script src="uplot.min.js"></script>
-<script src="app.js?v=20260711b"></script>
+<script src="app.js?v=20260711c"></script>
 </body>
 </html>

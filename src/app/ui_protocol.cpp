@@ -1067,6 +1067,26 @@ inline void parse_byte(uint8_t b) noexcept {
             g_arg_pos = 0u;
             return;
         }
+        if (b == static_cast<uint8_t>('K')) {
+            // Osciloscópio CKP/CMP: [ckp_idx][cmp_idx][cmp_ref_tooth]
+            // + 64×u32 LE (ring CKP) + 8×u32 LE (ring CMP) = 291 bytes.
+            // idx = próxima posição a escrever (mais antiga). Leitura sem
+            // critical section: u32 alinhado é atômico no M33; tearing entre
+            // elementos é aceitável para visualização.
+            tx_push(ems::drv::g_scope_ckp_idx);
+            tx_push(ems::drv::g_scope_cmp_idx);
+            tx_push(ems::drv::ckp_get_cmp_ref_tooth());
+            uint8_t tmp[4];
+            for (uint8_t i = 0u; i < 64u; ++i) {
+                write_u32_le(tmp, ems::drv::g_scope_ckp_ts[i]);
+                tx_push_bytes(tmp, 4u);
+            }
+            for (uint8_t i = 0u; i < 8u; ++i) {
+                write_u32_le(tmp, ems::drv::g_scope_cmp_ts[i]);
+                tx_push_bytes(tmp, 4u);
+            }
+            return;
+        }
         if (b == static_cast<uint8_t>('G')) {
             // Angle measurement: gap_ts + 8 latest {ts, high} from dispatch ring
             // Format: [gap_ts:4] [idx:1] [8×{ts:4, high:1}] = 45 bytes

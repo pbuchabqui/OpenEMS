@@ -609,6 +609,14 @@ volatile uint32_t g_dbg_loss_stall = 0u;
 volatile uint32_t g_dbg_loss_avg = 0u;
 volatile uint32_t g_dbg_loss_delta = 0u;
 
+// Osciloscópio CKP/CMP: rings de timestamps TIM5 das bordas cruas (pré-filtro).
+// 64 bordas CKP ≈ 1.1 revolução — cobre um gap inteiro; 8 CMP ≈ 4 ciclos de came.
+// idx aponta para a PRÓXIMA posição a escrever (a mais antiga do ring).
+volatile uint32_t g_scope_ckp_ts[64] = {};
+volatile uint8_t  g_scope_ckp_idx = 0u;
+volatile uint32_t g_scope_cmp_ts[8] = {};
+volatile uint8_t  g_scope_cmp_idx = 0u;
+
 #if defined(__GNUC__)
 __attribute__((weak))
 #endif
@@ -691,6 +699,8 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     // NÃO ler TIM5_CNT: o contador avançou durante a latência de IRQ.
     const uint32_t capture_now = TIM5_CKP_CAPTURE;
     g_diag_last_ckp_edge_tick = capture_now;  // DIAG: última borda crua
+    g_scope_ckp_ts[g_scope_ckp_idx] = capture_now;
+    g_scope_ckp_idx = static_cast<uint8_t>((g_scope_ckp_idx + 1u) & 63u);
 
     // -- 2. Delta de ticks (aritmetica circular uint32_t) -------------------
     // Subtracao circular: correta mesmo se o contador passou por 0xFFFFFFFF -> 0.
@@ -892,6 +902,8 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     const uint32_t cmp_capture_now = TIM5_CAM_CAPTURE;
     ++g_diag_cmp_isr_count;                       // DIAG: borda crua, pré-validação
     g_diag_last_cmp_edge_tick = cmp_capture_now;  // DIAG: última borda crua
+    g_scope_cmp_ts[g_scope_cmp_idx] = cmp_capture_now;
+    g_scope_cmp_idx = static_cast<uint8_t>((g_scope_cmp_idx + 1u) & 7u);
 
     // ── Validação temporal CMP inter-edge (FIX Major #5) ─────────────────
     // Valida o período entre bordas CMP consecutivas contra o período esperado
@@ -1077,6 +1089,10 @@ uint32_t ckp_seed_rejected_count() noexcept {
 
 uint32_t ckp_get_cmp_glitch_count() noexcept {
     return g_state.cmp_glitch_count;
+}
+
+uint8_t ckp_get_cmp_ref_tooth() noexcept {
+    return s_cmp_ref_tooth;
 }
 
 // ── API de teste (host only) ──────────────────────────────────────────────────

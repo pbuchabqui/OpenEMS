@@ -345,6 +345,26 @@ def api_output_test_set(body: dict):
     return _output_test_call(calls[target], f"set {target}={value}")
 
 
+@app.get("/api/scope")
+def api_scope():
+    """Osciloscópio CKP/CMP: bordas em ms relativos à borda CKP mais recente."""
+    try:
+        s = worker.submit(lambda l: l.read_scope())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"scope: {e}"}, status_code=502)
+    ckp, cmp = s["ckp_ts"], s["cmp_ts"]
+    if not ckp:
+        return {"ckp_ms": [], "cmp_ms": [], "cmp_ref_tooth": s["cmp_ref_tooth"]}
+    ref = ckp[-1]
+    # ticks 62.5 MHz → ms, relativo à borda mais recente (negativo = passado).
+    # Subtração circular u32 para sobreviver ao wrap do TIM5.
+    def rel_ms(t):
+        return -(((ref - t) & 0xFFFFFFFF) / 62500.0)
+    return {"ckp_ms": [round(rel_ms(t), 3) for t in ckp],
+            "cmp_ms": [round(rel_ms(t), 3) for t in cmp],
+            "cmp_ref_tooth": s["cmp_ref_tooth"]}
+
+
 @app.get("/api/debug/counters")
 def api_debug_counters():
     try:
