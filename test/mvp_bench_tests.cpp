@@ -684,23 +684,27 @@ static void test_ckp_stall_poll(void) {
     ems::drv::sensors_set_bench_clt_iat(false, 0, 0);
 }
 
-static void test_ckp_stall_poll_phantom_rpm_unsync(void) {
-    section("ckp: stall_poll decai RPM fantasma sem sync (CKP desligado + ruído)");
+static void test_ckp_phantom_rpm_unsync(void) {
+    section("ckp: RPM só reportado com sync (ruído em CKP desligado = 0 RPM)");
     ckp_test_reset(); g_ckp_cap = 0u;
-    // Bordas de ruído esparsas: geram capturas (rpm_x10 escrito no bootstrap)
-    // mas nunca produzem gap válido → estado fica WAIT_GAP.
+    // Bordas periódicas de ruído (ex.: 60 Hz de rede) sem gap → sem sync.
+    // RPM reportado deve ficar em 0 mesmo com capturas contínuas.
     for (uint32_t i = 0; i < 6u; ++i) { ckp_fire(kNormalPeriod); }
-    CHECK_TRUE(ckp_snapshot().rpm_x10 != 0u, "ruído gera rpm_x10 != 0");
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::WAIT_GAP), "sem sync (WAIT_GAP)");
-    // Sem novas bordas: antes do timeout, RPM mantém-se; depois, decai a 0.
+    CHECK_EQ(ckp_snapshot().rpm_x10, 0u, "ruído sem sync → RPM 0");
+    // Ruído prolongado (simula 60 Hz contínuo por >58 dentes, sem gap)
+    for (uint32_t i = 0; i < 200u; ++i) { ckp_fire(kNormalPeriod); }
+    CHECK_EQ(ckp_snapshot().rpm_x10, 0u, "RPM continua 0 com ruído contínuo");
+    // Com sync real (gap presente) o RPM aparece normalmente.
+    ckp_reach_full_sync();
+    for (uint32_t i = 0; i < 3u; ++i) { ckp_fire(kNormalPeriod); }
+    CHECK_TRUE(ckp_snapshot().rpm_x10 != 0u, "com sync, RPM reportado");
+    // E o stall_poll decai o RPM residual após perda de captura sem sync
+    // (caso: sync perdido com rpm_x10 ainda populado).
     const uint32_t base = g_ckp_cap;
-    CHECK_FALSE(ckp_stall_poll(base + 1000u), "sem stall imediato");
-    CHECK_TRUE(ckp_snapshot().rpm_x10 != 0u, "RPM mantido antes do timeout");
-    CHECK_FALSE(ckp_stall_poll(base + 13000000u), "retorna false (não muda sync)");
-    CHECK_EQ(ckp_snapshot().rpm_x10, 0u, "RPM fantasma decaiu a 0 após 208ms");
-    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
-             static_cast<uint8_t>(SyncState::WAIT_GAP), "máquina de sync intocada");
+    ckp_stall_poll(base + 13000000u);  // stall → LOSS_OF_SYNC + rpm=0
+    CHECK_EQ(ckp_snapshot().rpm_x10, 0u, "stall zera RPM");
 }
 
 static void test_ckp_stall_poll_no_false_positive(void) {
@@ -4289,7 +4293,7 @@ int main(void) {
     test_ckp_loss_of_sync_early_gap();
     test_ckp_noise_rejection();
     test_ckp_stall_poll();
-    test_ckp_stall_poll_phantom_rpm_unsync();
+    test_ckp_phantom_rpm_unsync();
     test_ckp_stall_poll_no_false_positive();
     test_ckp_seed_arm_disarm();
 

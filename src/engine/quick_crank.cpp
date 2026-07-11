@@ -177,8 +177,14 @@ void prime_on_tooth(const CkpSnapshot& snap) noexcept {
 
     if (g_prime_done) { return; }
 
-    // Só conta enquanto RPM indica cranking.
-    if (snap.rpm_x10 == 0u || snap.rpm_x10 >= sanitized_crank_exit_rpm_x10()) { return; }
+    // Só conta enquanto RPM indica cranking. Deriva do período de dente cru:
+    // snap.rpm_x10 é gated por sync (0 até ao primeiro gap) e o prime dispara
+    // de propósito nos primeiros dentes, ANTES de haver referência angular.
+    // rpm_x10 = 600e9 / (60 dentes × period_ns) × 10 = 1e10 / period_ns.
+    const uint32_t period_ns = snap.tooth_period_ns;
+    if (period_ns == 0u) { return; }
+    const uint32_t raw_rpm_x10 = static_cast<uint32_t>(10000000000ull / period_ns);
+    if (raw_rpm_x10 == 0u || raw_rpm_x10 >= sanitized_crank_exit_rpm_x10()) { return; }
 
     ++g_prime_tooth_count;
     

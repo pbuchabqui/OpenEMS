@@ -302,6 +302,17 @@ inline uint32_t rpm_x10_from_period_ticks(uint32_t period_ticks) noexcept {
     return 625000000u / period_ticks;
 }
 
+// RPM reportado só com referência angular (HALF/FULL_SYNC). Sem sync devolve
+// 0: bordas periódicas de ruído (rede 60 Hz num CKP flutuante ≙ 60 RPM) nunca
+// geram gap, e o valor cru ficava exposto como RPM real na telemetria e nos
+// gates de motor-parado (burn de flash, teste de saídas).
+inline uint32_t rpm_if_synced(uint32_t period_ticks) noexcept {
+    const ems::drv::SyncState st = g_state.snap.state;
+    if (st != ems::drv::SyncState::HALF_SYNC &&
+        st != ems::drv::SyncState::FULL_SYNC) { return 0u; }
+    return rpm_x10_from_period_ticks(period_ticks);
+}
+
 inline uint32_t predict_next_period_ticks(uint32_t current_ticks) noexcept {
     const uint32_t prev = g_state.prev_period_ticks;
     if (prev == 0u) { return current_ticks; }
@@ -515,6 +526,9 @@ inline bool process_gap_event() noexcept {
             g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
             g_state.tooth_count      = 0u;
             g_state.snap.tooth_index = 0u;
+            // RPM é gated por sync (rpm_if_synced): popula já na transição com
+            // o último período de dente normal, senão ficaria 0 até ao próximo.
+            g_state.snap.rpm_x10 = rpm_x10_from_period_ticks(g_state.prev_period_ticks);
             advance_phase_half();
             return true;
 
@@ -698,7 +712,11 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
         ++g_state.tooth_count;
         g_state.snap.tooth_period_ns = period_ns;
         g_state.snap.predicted_tooth_period_ns = period_ns;
-        g_state.snap.rpm_x10 = rpm_x10_from_period_ticks(delta_ticks);
+        // RPM só é reportado com referência angular (HALF/FULL_SYNC) — estilo
+        // Speeduino/rusEFI. Ruído periódico (ex.: 60 Hz de rede num CKP
+        // flutuante = 60 RPM exactos) nunca produz gap e ficava reportado
+        // como RPM real, bloqueando gates de motor-parado.
+        g_state.snap.rpm_x10 = rpm_if_synced(delta_ticks);
         g_state.prev_period_ticks = delta_ticks;
         sensors_on_tooth(g_state.snap);
         schedule_on_tooth(g_state.snap);
@@ -779,7 +797,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
 
     g_state.snap.tooth_period_ns = period_ns;
     g_state.snap.predicted_tooth_period_ns = ticks_to_ns(predicted_ticks);
-    g_state.snap.rpm_x10 = rpm_x10_from_period_ticks(delta_ticks);
+    g_state.snap.rpm_x10 = rpm_if_synced(delta_ticks);
     g_state.prev_period_ticks = delta_ticks;
 
     // tooth_count incrementa em todos os estados — alimenta o limiar de gap e
