@@ -16,6 +16,7 @@
 #include "engine/ign_calc.h"
 #include "engine/math_utils.h"
 #include "engine/output_test.h"
+#include "hal/timer.h"
 #include "engine/constants.h"
 #include "engine/table3d.h"
 #include "hal/crc32.h"
@@ -76,7 +77,7 @@ constexpr uint8_t kTsRcBusyErr  = 0x85u;  // burn bloqueado com motor girando
 alignas(4) static uint8_t g_page0[512] = {};
 alignas(4) static uint8_t g_page1_ve[256] = {};
 alignas(4) static uint8_t g_page2_spark[256] = {};
-alignas(4) static uint8_t g_page3_rt[70]      = {};
+alignas(4) static uint8_t g_page3_rt[86]      = {};
 alignas(4) static uint8_t g_page4_lambda[512] = {};   // lambda_target_table_x1000
 alignas(4) static uint8_t g_page5_corr[256]   = {};   // tabelas de correção 1D
 alignas(4) static uint8_t g_page6_xtau[80]    = {};   // X-Tau, AE rate curve, quick crank
@@ -315,6 +316,24 @@ inline void update_realtime_page() noexcept {
     rt.reserved[51] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
     rt.map_fused_bar_x100 = g_rt_map_fused_bar_x100;
     rt.net_pw_us = g_rt_net_pw_us;
+
+    // Diagnóstico CKP/CMP: bordas cruas + idade da última borda (TIM5 62.5MHz
+    // → ms). last_tick==0 = nenhuma borda desde o boot → idade saturada.
+    write_u32_le(&rt.ckpcmp_diag[0], ems::drv::g_diag_isr_count);
+    write_u32_le(&rt.ckpcmp_diag[4], ems::drv::g_diag_cmp_isr_count);
+    write_u32_le(&rt.ckpcmp_diag[8], c.tooth_period_ns);
+    const uint32_t now_ticks = ems::hal::tim5_count();
+    const auto edge_age_ms = [now_ticks](uint32_t last_tick) -> uint16_t {
+        if (last_tick == 0u) { return 65535u; }
+        const uint32_t age = (now_ticks - last_tick) / 62500u;  // ticks → ms
+        return age > 65535u ? 65535u : static_cast<uint16_t>(age);
+    };
+    const uint16_t ckp_age = edge_age_ms(ems::drv::g_diag_last_ckp_edge_tick);
+    const uint16_t cmp_age = edge_age_ms(ems::drv::g_diag_last_cmp_edge_tick);
+    rt.ckpcmp_diag[12] = static_cast<uint8_t>(ckp_age & 0xFFu);
+    rt.ckpcmp_diag[13] = static_cast<uint8_t>(ckp_age >> 8u);
+    rt.ckpcmp_diag[14] = static_cast<uint8_t>(cmp_age & 0xFFu);
+    rt.ckpcmp_diag[15] = static_cast<uint8_t>(cmp_age >> 8u);
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }

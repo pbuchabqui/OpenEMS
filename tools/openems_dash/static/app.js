@@ -145,6 +145,10 @@ const GAUGES = [
   ["ethanol_pct",  "E%",      v => v],
   ["map_fused_kpa", "MAP fund.", v => v],
   ["net_pw_us",    "PW flow µs", v => v],
+  ["ckp_rate_hz",  "CKP Hz",  v => v.toFixed(0)],
+  ["cmp_rate_hz",  "CMP Hz",  v => v.toFixed(1)],
+  ["ckp_edge_age_ms", "CKP age ms", v => v >= 65535 ? "—" : v],
+  ["cmp_edge_age_ms", "CMP age ms", v => v >= 65535 ? "—" : v],
 ];
 $("#gauges").innerHTML = GAUGES.map(([k, l]) =>
   `<div class="gauge"><div class="v" id="g_${k}">—</div><div class="l">${l}</div></div>`).join("");
@@ -161,6 +165,7 @@ const chartDefs = [
   { title: "RPM",           series: [["rpm",           "#e8a020"]] },
   { title: "MAP / TPS",    series: [["map_kpa",       "#e8a020"], ["tps_pct",     "#22c55e"]] },
   { title: "MAP bruto vs fundido", series: [["map_kpa", "#e8a020"], ["map_fused_kpa", "#8b5cf6"]] },
+  { title: "CKP / CMP bordas Hz", series: [["ckp_rate_hz", "#e8a020"], ["cmp_rate_hz", "#8b5cf6"]] },
   { title: "λ / STFT",     series: [["lambda_x1000",  "#ef4444"], ["stft_pct",    "#e8a020"]] },
   { title: "PW / ADVANCE", series: [["pw_ms",         "#e8a020"], ["advance_deg", "#22c55e"]] },
 ];
@@ -187,7 +192,24 @@ window.addEventListener("resize", () =>
   charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 160 })));
 
 const t0 = performance.now();
+// Taxa de bordas CKP/CMP (Hz) derivada dos contadores acumulados entre frames.
+// A 700 RPM esperam-se ~677 bordas CKP/s (58 dentes × rpm/60); excesso = ruído.
+let prevEdge = null;
+function edgeRates(d) {
+  const now = d.t;
+  let ckp = 0, cmp = 0;
+  if (prevEdge && now > prevEdge.t) {
+    const dt = now - prevEdge.t;
+    ckp = Math.max(0, (d.ckp_edge_count - prevEdge.ckp) / dt);
+    cmp = Math.max(0, (d.cmp_edge_count - prevEdge.cmp) / dt);
+  }
+  prevEdge = { t: now, ckp: d.ckp_edge_count, cmp: d.cmp_edge_count };
+  d.ckp_rate_hz = ckp;
+  d.cmp_rate_hz = cmp;
+}
+
 function pushTelemetry(d) {
+  edgeRates(d);
   const t = (performance.now() - t0) / 1000;
   for (const c of charts) {
     c.data[0].push(t);

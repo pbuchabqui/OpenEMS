@@ -631,6 +631,12 @@ volatile uint32_t g_diag_isr_count = 0u;
 volatile uint32_t g_diag_hist_ready = 0u;
 volatile uint32_t g_diag_tooth_count = 0u;
 volatile uint32_t g_diag_consec_anom = 0u;
+// Telemetria de diagnóstico de sensores CKP/CMP: bordas cruas (antes de
+// qualquer filtro) e timestamp TIM5 da última borda — permitem ver ruído
+// (ex.: 60 Hz de rede) e fio partido mesmo com RPM gated a 0.
+volatile uint32_t g_diag_cmp_isr_count = 0u;
+volatile uint32_t g_diag_last_ckp_edge_tick = 0u;
+volatile uint32_t g_diag_last_cmp_edge_tick = 0u;
 
 CkpSnapshot ckp_snapshot() noexcept {
     CkpSnapshot out;
@@ -660,7 +666,7 @@ CkpSnapshot ckp_snapshot() noexcept {
 //   vários ciclos depois — o timestamp em C0V permanece válido.
 //   Isso é impossível com GPIO/EXTI onde a CPU leria o contador atual (atrasado).
 FASTRUN void ckp_tim5_ch1_isr() noexcept {
-    ++g_diag_isr_count;  // DIAG: incrementa em cada ISR
+    ++g_diag_isr_count;  // DIAG: incrementa em cada ISR (borda crua, pré-filtro)
 
     // snapshot estado interno para diagnóstico
     g_diag_hist_ready = g_state.hist_ready;
@@ -673,6 +679,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     // leituras posteriores (CKP_CAM_GPIO_IDR, etc.) não afetam o valor capturado.
     // NÃO ler TIM5_CNT: o contador avançou durante a latência de IRQ.
     const uint32_t capture_now = TIM5_CKP_CAPTURE;
+    g_diag_last_ckp_edge_tick = capture_now;  // DIAG: última borda crua
 
     // -- 2. Delta de ticks (aritmetica circular uint32_t) -------------------
     // Subtracao circular: correta mesmo se o contador passou por 0xFFFFFFFF -> 0.
@@ -869,6 +876,8 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     // Read capture register now — clears CHF flag; value is the TIM5 timestamp
     // of this CMP edge. Must be read before any other logic that might be slow.
     const uint32_t cmp_capture_now = TIM5_CAM_CAPTURE;
+    ++g_diag_cmp_isr_count;                       // DIAG: borda crua, pré-validação
+    g_diag_last_cmp_edge_tick = cmp_capture_now;  // DIAG: última borda crua
 
     // ── Validação temporal CMP inter-edge (FIX Major #5) ─────────────────
     // Valida o período entre bordas CMP consecutivas contra o período esperado

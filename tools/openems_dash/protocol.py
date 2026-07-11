@@ -34,7 +34,7 @@ MAP_AXIS_BAR_X100 = [
 RPM_AXIS = [v // 10 for v in RPM_AXIS_X10]
 MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
-PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 70, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112,
+PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 86, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112,
               10: 320, 11: 64}
 
 STATUS_BITS = {
@@ -92,20 +92,27 @@ class RealtimeData:
     inj_mode: int       # 0=simultaneous, 1=semi_seq, 2=sequential
     map_fused_kpa: float  # MAP fundido (sensor+modelo) no tick de 2ms do cálculo de fuel
     net_pw_us: int         # PW de fluxo líquido (µs, pré-dead-time/xtau/ΔP/S-curve), mesmo tick
+    ckp_edge_count: int    # bordas CKP cruas acumuladas (pré-filtro — ruído conta)
+    cmp_edge_count: int    # bordas CMP cruas acumuladas (pré-validação)
+    tooth_period_ns: int   # período do último dente aceite (ns); 0 = nenhum
+    ckp_edge_age_ms: int   # idade da última borda CKP (ms, satura 65535; 65535 = nunca)
+    cmp_edge_age_ms: int   # idade da última borda CMP (ms, idem)
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 def parse_realtime(buf: bytes) -> RealtimeData:
-    """Decodifica UiRealtimeData (ui_protocol.h, 70 bytes)."""
-    if len(buf) != 70:
-        raise ValueError(f"realtime page: esperado 70B, recebido {len(buf)}B")
+    """Decodifica UiRealtimeData (ui_protocol.h, 86 bytes)."""
+    if len(buf) != 86:
+        raise ValueError(f"realtime page: esperado 86B, recebido {len(buf)}B")
     # 'x' = byte de padding: status_bits (uint16) é alinhado p/ offset 12.
     (rpm, map_x100, tps, clt_p40, iat_p40, o2_d4, pw_x10,
      adv_p40, ve, stft, status) = struct.unpack_from("<HBBbbBBBBbxH", buf, 0)
     r = buf[14:66]  # reserved[52] começa no offset 14
     map_fused_bar_x100, net_pw_us = struct.unpack_from("<HH", buf, 66)
+    (ckp_edges, cmp_edges, tooth_ns,
+     ckp_age, cmp_age) = struct.unpack_from("<IIIHH", buf, 70)
     # Injector duty cycle (contra ciclo 720°): DC% = PW_ms × RPM / 1200.
     # pw_x10 está em décimos de ms → PW_ms = pw_x10/10 → divisor 12000.
     dc_pct = round(pw_x10 * rpm / 12000.0, 1) if rpm > 0 else 0.0
@@ -146,6 +153,11 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         cmp_glitch=r[6],
         map_fused_kpa=map_fused_bar_x100,  # bar×100 == kPa
         net_pw_us=net_pw_us,
+        ckp_edge_count=ckp_edges,
+        cmp_edge_count=cmp_edges,
+        tooth_period_ns=tooth_ns,
+        ckp_edge_age_ms=ckp_age,
+        cmp_edge_age_ms=cmp_age,
     )
 
 

@@ -23,9 +23,18 @@ struct UiRealtimeData {
     // (reamostrado a cada poll) e o valor que de facto gerou o PW.
     uint16_t map_fused_bar_x100;
     uint16_t net_pw_us;
+    // Diagnóstico de sensores CKP/CMP: bordas cruas acumuladas (pré-filtro —
+    // ruído conta), período de dente corrente e idade da última borda. O host
+    // deriva a taxa de bordas (Hz) do delta entre polls; idade saturada em
+    // 65535ms; 65535 também quando nunca houve borda desde o boot.
+    // Bloco de bytes (LE) para evitar padding — offset 70 não é 4-alinhado:
+    //   [0..3]=ckp_edge_count u32, [4..7]=cmp_edge_count u32,
+    //   [8..11]=tooth_period_ns u32, [12..13]=ckp_edge_age_ms u16,
+    //   [14..15]=cmp_edge_age_ms u16
+    uint8_t ckpcmp_diag[16];
 };
 
-static_assert(sizeof(UiRealtimeData) == 70u, "UiRealtimeData must be 70 bytes");
+static_assert(sizeof(UiRealtimeData) == 86u, "UiRealtimeData must be 86 bytes");
 
 void ui_init() noexcept;
 void ui_rx_byte(uint8_t byte) noexcept;

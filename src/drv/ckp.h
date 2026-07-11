@@ -112,6 +112,14 @@ extern volatile uint32_t g_diag_hist_ready;
 extern volatile uint32_t g_diag_tooth_count;
 extern volatile uint32_t g_diag_consec_anom;
 
+// DIAG sensores CKP/CMP: bordas cruas (antes de filtros/validação) e timestamp
+// TIM5 da última borda. Base da telemetria de diagnóstico de sensor: ruído
+// periódico aparece como taxa de bordas estável sem sync; fio partido como
+// idade crescente sem bordas.
+extern volatile uint32_t g_diag_cmp_isr_count;
+extern volatile uint32_t g_diag_last_ckp_edge_tick;
+extern volatile uint32_t g_diag_last_cmp_edge_tick;
+
 
 // ── Stall watchdog ────────────────────────────────────────────────────────────
 // Detecta motor parado entre dois dentes — situação em que tooth_count para de
