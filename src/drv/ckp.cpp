@@ -1002,8 +1002,15 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
 
 bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
     const SyncState state = g_state.snap.state;
-    // Subtracção circular uint32_t: correcta mesmo após overflow de TIM5 (32 bits).
-    const uint32_t elapsed_ticks = tim5_cnt_now - g_state.prev_capture;
+    // Subtracção circular em SIGNED: se a ISR capturar um dente entre a leitura
+    // de TIM5_CNT no main loop e esta comparação, prev_capture fica À FRENTE de
+    // tim5_cnt_now e a subtração unsigned daria ~2^32 → falso stall (a causa
+    // real do "false stall triggers sync loss" que desativou este poll em jun).
+    // Negativo = captura mais recente que a leitura → obviamente não é stall.
+    const int32_t elapsed_signed =
+        static_cast<int32_t>(tim5_cnt_now - g_state.prev_capture);
+    const uint32_t elapsed_ticks =
+        (elapsed_signed < 0) ? 0u : static_cast<uint32_t>(elapsed_signed);
     if (state != SyncState::HALF_SYNC && state != SyncState::FULL_SYNC) {
         // Sem sync o rpm_x10 também é escrito a cada captura (bootstrap/normal)
         // — ruído num CKP desligado deixava RPM fantasma congelado para sempre,
@@ -1025,16 +1032,25 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
     // Re-verificação dentro da secção evita race com ISR que possa ter disparado
     // no intervalo entre o teste acima e o CPSID.
     enter_critical();
-    if (g_state.snap.state == SyncState::HALF_SYNC ||
-        g_state.snap.state == SyncState::FULL_SYNC) {
+    // Revalida o elapsed com prev_capture fresco: um dente pode ter chegado
+    // entre o teste acima e o CPSID (mesma corrida do falso stall).
+    const int32_t elapsed_now =
+        static_cast<int32_t>(tim5_cnt_now - g_state.prev_capture);
+    const bool still_stalled = elapsed_now >= 0 &&
+        static_cast<uint32_t>(elapsed_now) >= min_stall_timeout_ticks();
+    bool transitioned = false;
+    if (still_stalled &&
+        (g_state.snap.state == SyncState::HALF_SYNC ||
+         g_state.snap.state == SyncState::FULL_SYNC)) {
         ++ems::drv::g_dbg_loss_stall;
         g_state.snap.state   = SyncState::LOSS_OF_SYNC;
         g_state.snap.rpm_x10 = 0u;
         g_state.tooth_count  = 0u;
         g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u; s_revs_since_cmp = 0u; s_cmp_ref_tooth = 0xFFu;
+        transitioned = true;
     }
     exit_critical();
-    return true;
+    return transitioned;
 }
 
 void ckp_seed_arm(bool phase_A) noexcept {

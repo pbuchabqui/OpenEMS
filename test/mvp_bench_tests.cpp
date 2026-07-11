@@ -713,6 +713,19 @@ static void test_ckp_stall_poll_no_false_positive(void) {
     CHECK_FALSE(ckp_stall_poll(ckp_snapshot().last_tim5_capture + 1000u), "no stall");
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::FULL_SYNC), "FULL_SYNC maintained");
+
+    // Corrida real de bancada (7 falsos stalls/180s a 700 RPM): a ISR captura
+    // um dente ENTRE a leitura de TIM5_CNT no main loop e a comparação —
+    // prev_capture fica à frente de tim5_cnt_now e a subtração unsigned dava
+    // ~2^32 → falso stall. Elapsed negativo tem de ser tratado como "recente".
+    section("ckp: stall_poll imune a captura à frente do CNT lido (corrida ISR)");
+    ckp_reach_full_sync();
+    const uint32_t cap = ckp_snapshot().last_tim5_capture;
+    CHECK_FALSE(ckp_stall_poll(cap - 5000u), "captura 5000 ticks à frente → sem stall");
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::FULL_SYNC),
+             "FULL_SYNC preservado na corrida");
+    CHECK_TRUE(ckp_snapshot().rpm_x10 != 0u, "RPM preservado na corrida");
 }
 
 static void test_ckp_seed_arm_disarm(void) {
