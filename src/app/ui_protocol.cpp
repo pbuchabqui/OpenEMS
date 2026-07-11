@@ -1138,7 +1138,7 @@ inline void parse_byte(uint8_t b) noexcept {
             extern volatile uint32_t g_diag_presync_revs __asm("g_diag_presync_revs");
             extern volatile uint32_t g_diag_seq_revs __asm("g_diag_seq_revs");
             extern volatile uint32_t g_diag_clear_all_count __asm("g_diag_clear_all_count");
-            const uint32_t diag[19] = {
+            const uint32_t diag[22] = {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
                 g_dbg_inj1_arm,
@@ -1158,8 +1158,11 @@ inline void parse_byte(uint8_t b) noexcept {
                 g_diag_presync_revs,
                 g_diag_seq_revs,
                 g_diag_clear_all_count,
+                ems::drv::g_dbg_gap_accepted,
+                ems::drv::g_dbg_gap_premature,
+                ems::drv::g_dbg_gap_last_tc,
             };
-            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 76U);
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 88U);
             return;
         }
         return;

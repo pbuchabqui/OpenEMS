@@ -120,6 +120,13 @@ extern volatile uint32_t g_diag_cmp_isr_count;
 extern volatile uint32_t g_diag_last_ckp_edge_tick;
 extern volatile uint32_t g_diag_last_cmp_edge_tick;
 
+// DIAG gap 60-2: aceites, prematuros (FULL_SYNC + count<55 → LOSS) e o
+// tooth_count do último prematuro — discrimina perda por gap deslizado
+// (estimulador off-by-one) vs gap ausente (kMaxTeethBeforeLoss).
+extern volatile uint32_t g_dbg_gap_accepted;
+extern volatile uint32_t g_dbg_gap_premature;
+extern volatile uint32_t g_dbg_gap_last_tc;
+
 
 // ── Stall watchdog ────────────────────────────────────────────────────────────
 // Detecta motor parado entre dois dentes — situação em que tooth_count para de

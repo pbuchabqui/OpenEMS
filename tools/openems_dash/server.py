@@ -345,6 +345,14 @@ def api_output_test_set(body: dict):
     return _output_test_call(calls[target], f"set {target}={value}")
 
 
+@app.get("/api/debug/counters")
+def api_debug_counters():
+    try:
+        return worker.submit(lambda l: l.read_debug())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"debug counters: {e}"}, status_code=502)
+
+
 @app.get("/api/can_rx_map")
 def api_can_rx_map_get():
     return {"signals": proto.can_rx_map_get(), "signal_names": proto.CAN_RX_SIGNALS}
