@@ -1497,9 +1497,6 @@ async function drawScope() {
     info.textContent = "sem bordas CKP — sensor/estimulador parado";
     return;
   }
-  const tMin = s.ckp_ms[0], tMax = 0;
-  const x = t => (t - tMin) / (tMax - tMin || 1) * (W - 20) + 10;
-
   // deltas + mediana p/ detectar o gap (delta > 1.5× mediana)
   const deltas = [];
   for (let i = 1; i < s.ckp_ms.length; i++) deltas.push(s.ckp_ms[i] - s.ckp_ms[i-1]);
@@ -1508,13 +1505,36 @@ async function drawScope() {
   for (let i = 0; i < deltas.length; i++)
     if (deltas[i] > med * 1.5) gaps.push(i);
 
+  // ── trigger no GAP: eixo em POSIÇÕES de dente ancoradas no gap ────────
+  // Sem trigger cada poll redesenha uma janela deslocada (traço "pula").
+  // Ancorar o dente-0 (fim do gap mais antigo visível) numa posição fixa
+  // torna o traço estacionário — só o marcador CMP e o ângulo variam.
+  const pos = new Array(s.ckp_ms.length);
+  pos[0] = 0;
+  for (let i = 1; i < s.ckp_ms.length; i++)
+    pos[i] = pos[i-1] + Math.max(1, Math.round(deltas[i-1] / med));
+  // referência: dente logo após o PRIMEIRO gap da janela
+  const trigIdx = gaps.length ? gaps[0] + 1 : 0;
+  const span = 63;  // posições visíveis (~1 volta + gap)
+  const x = i => (pos[i] - pos[trigIdx] + 3) / (span + 6) * (W - 20) + 10;
+  // interpola posição fracionária para timestamps arbitrários (CMP)
+  const xAtTime = t => {
+    let i = 0;
+    while (i < s.ckp_ms.length - 1 && s.ckp_ms[i+1] < t) i++;
+    if (i >= s.ckp_ms.length - 1) return x(s.ckp_ms.length - 1);
+    const f = (t - s.ckp_ms[i]) / (s.ckp_ms[i+1] - s.ckp_ms[i]);
+    const p = pos[i] + f * (pos[i+1] - pos[i]);
+    return (p - pos[trigIdx] + 3) / (span + 6) * (W - 20) + 10;
+  };
+
   // pista CKP (topo): pulso por borda
   const yTop = 22, hPulse = 38;
   ctx.strokeStyle = "#e8a020";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  for (const t of s.ckp_ms) {
-    const px = x(t);
+  for (let i = 0; i < s.ckp_ms.length; i++) {
+    const px = x(i);
+    if (px < 8 || px > W - 8) continue;
     ctx.moveTo(px, yTop + hPulse);
     ctx.lineTo(px, yTop);
   }
@@ -1524,7 +1544,8 @@ async function drawScope() {
   ctx.strokeStyle = "#ef4444";
   ctx.font = "10px monospace";
   for (const gi of gaps) {
-    const x0 = x(s.ckp_ms[gi]), x1 = x(s.ckp_ms[gi + 1]);
+    const x0 = x(gi), x1 = x(gi + 1);
+    if (x1 < 8 || x0 > W - 8) continue;
     ctx.fillRect(x0, yTop, x1 - x0, hPulse);
     ctx.fillStyle = "#ef4444";
     ctx.fillText("GAP", (x0 + x1) / 2 - 10, yTop - 4);
@@ -1533,14 +1554,16 @@ async function drawScope() {
 
   // pista CMP (baixo)
   const yCmp = 78, hCmp = 42;
+  const tMin = s.ckp_ms[0];
   ctx.strokeStyle = "#8b5cf6";
   ctx.lineWidth = 2;
   ctx.beginPath();
   let cmpVisible = 0;
   for (const t of (s.cmp_ms || [])) {
     if (t < tMin) continue;
+    const px = xAtTime(t);
+    if (px < 8 || px > W - 8) continue;
     cmpVisible++;
-    const px = x(t);
     ctx.moveTo(px, yCmp + hCmp);
     ctx.lineTo(px, yCmp);
   }
@@ -1548,7 +1571,9 @@ async function drawScope() {
   ctx.fillStyle = "#8b5cf6";
   for (const t of (s.cmp_ms || [])) {
     if (t < tMin) continue;
-    ctx.fillText("CMP", x(t) + 3, yCmp + 10);
+    const px = xAtTime(t);
+    if (px < 8 || px > W - 8) continue;
+    ctx.fillText("CMP", px + 3, yCmp + 10);
   }
 
   // ── régua de ângulo do ciclo 720° ─────────────────────────────────────
@@ -1574,8 +1599,8 @@ async function drawScope() {
     let lastLabelX = -100;
     for (let i = 0; i < angles.length; i++) {
       if (angles[i] % 90 !== 0) continue;
-      const px = x(s.ckp_ms[i]);
-      if (px - lastLabelX < 30) continue;
+      const px = x(i);
+      if (px < 8 || px > W - 8 || px - lastLabelX < 30) continue;
       lastLabelX = px;
       ctx.beginPath();
       ctx.moveTo(px, yTop);
@@ -1589,7 +1614,7 @@ async function drawScope() {
   ctx.fillStyle = "#4a4a4a";
   ctx.fillText("CKP", 10, yTop - 4);
   ctx.fillText("CMP", 10, yCmp - 4);
-  ctx.fillText(`${(tMax - tMin).toFixed(0)}ms`, W - 45, yTop - 4);
+  ctx.fillText(`${(-tMin).toFixed(0)}ms · trigger: GAP`, W - 110, yTop - 4);
 
   const gapDelta = gaps.length ? deltas[gaps[0]] : null;
   const ref = s.cmp_ref_tooth;
