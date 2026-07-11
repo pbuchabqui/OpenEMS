@@ -74,7 +74,7 @@ constexpr uint8_t kTsRcBusyErr  = 0x85u;  // burn bloqueado com motor girando
 alignas(4) static uint8_t g_page0[512] = {};
 alignas(4) static uint8_t g_page1_ve[256] = {};
 alignas(4) static uint8_t g_page2_spark[256] = {};
-alignas(4) static uint8_t g_page3_rt[66]      = {};
+alignas(4) static uint8_t g_page3_rt[70]      = {};
 alignas(4) static uint8_t g_page4_lambda[512] = {};   // lambda_target_table_x1000
 alignas(4) static uint8_t g_page5_corr[256]   = {};   // tabelas de correção 1D
 alignas(4) static uint8_t g_page6_xtau[80]    = {};   // X-Tau, AE rate curve, quick crank
@@ -104,6 +104,8 @@ static int8_t   g_rt_advance_deg  = 0;
 static int8_t   g_rt_stft_p100   = 0;
 static uint8_t  g_rt_lambda_target_d4 = 0u;
 static int8_t   g_rt_ltft_pct    = 0;
+static uint16_t g_rt_map_fused_bar_x100 = 0u;
+static uint16_t g_rt_net_pw_us   = 0u;
 static uint32_t g_rt_sched_late_events = 0u;
 static uint32_t g_rt_sched_cycle_schedule_drop_count = 0u;
 static uint32_t g_rt_sched_calibration_clamp_count = 0u;
@@ -308,6 +310,8 @@ inline void update_realtime_page() noexcept {
     rt.reserved[48] = static_cast<uint8_t>((s.an3_raw >> 8u) & 0xFFu);
     rt.reserved[50] = static_cast<uint8_t>(s.an4_raw & 0xFFu);
     rt.reserved[51] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
+    rt.map_fused_bar_x100 = g_rt_map_fused_bar_x100;
+    rt.net_pw_us = g_rt_net_pw_us;
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }
@@ -1329,6 +1333,11 @@ void ui_update_loop_diag(uint32_t loop2ms_last_us,
 
 void ui_update_ivc_diag(uint32_t ivc_clamp_count) noexcept {
     g_rt_ivc_clamp_count = ivc_clamp_count;
+}
+
+void ui_update_rt_map_fuel(uint16_t map_fused_bar_x100, uint32_t net_pw_us) noexcept {
+    g_rt_map_fused_bar_x100 = map_fused_bar_x100;
+    g_rt_net_pw_us = net_pw_us > 65535u ? 65535u : static_cast<uint16_t>(net_pw_us);
 }
 
 #if defined(EMS_HOST_TEST)

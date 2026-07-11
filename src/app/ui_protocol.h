@@ -17,9 +17,15 @@ struct UiRealtimeData {
     int8_t stft_p100;
     uint16_t status_bits;
     uint8_t reserved[52];
+    // MAP fundido (sensor+modelo, bar×100) e PW de fluxo líquido (µs, pré-dead-time/
+    // pré-xtau/pré-ΔP/pré-S-curve) latchados no mesmo tick de 2ms que alimenta o
+    // cálculo de combustível — diagnóstico do descasamento entre o MAP bruto exibido
+    // (reamostrado a cada poll) e o valor que de facto gerou o PW.
+    uint16_t map_fused_bar_x100;
+    uint16_t net_pw_us;
 };
 
-static_assert(sizeof(UiRealtimeData) == 66u, "UiRealtimeData must be 66 bytes");
+static_assert(sizeof(UiRealtimeData) == 70u, "UiRealtimeData must be 70 bytes");
 
 void ui_init() noexcept;
 void ui_rx_byte(uint8_t byte) noexcept;
@@ -42,6 +48,10 @@ void ui_set_rev_limit_active(bool active) noexcept;
 /// Atualiza o contador de clamp IVC para o bloco de dados em tempo real.
 /// Chamado do loop de fundo (20 ms) junto com ui_update_rt_sched_diag.
 void ui_update_ivc_diag(uint32_t ivc_clamp_count) noexcept;
+
+/// Latch do MAP fundido (bar×100) e PW de fluxo líquido (µs) do tick de 2ms de
+/// cálculo de combustível — chamado a cada iteração, independente de sync.
+void ui_update_rt_map_fuel(uint16_t map_fused_bar_x100, uint32_t net_pw_us) noexcept;
 
 bool ui_tx_pop(uint8_t& byte) noexcept;
 uint16_t ui_tx_available() noexcept;

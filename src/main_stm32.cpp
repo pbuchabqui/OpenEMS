@@ -1013,6 +1013,7 @@ int main() {
                     now, snap.rpm_x10, false, sensors.clt_degc_x10, 0));
             }
             g_prev_tps_pct_x10 = sensors.etb_tps_pct_x10;
+            ems::app::ui_update_rt_map_fuel(map_bar_x100, g_last_net_pw_us);
 
             const uint32_t prime_pw = ems::engine::quick_crank_consume_prime();
             if (prime_pw != 0u) {

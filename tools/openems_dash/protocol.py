@@ -34,7 +34,7 @@ MAP_AXIS_BAR_X100 = [
 RPM_AXIS = [v // 10 for v in RPM_AXIS_X10]
 MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
-PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 66, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112,
+PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 70, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112,
               10: 320, 11: 64}
 
 STATUS_BITS = {
@@ -90,19 +90,22 @@ class RealtimeData:
     cmp_confirms: int   # gate do sequencial (0/1/2); 2 = CMP confirmado → sequencial
     cmp_glitch: int     # bordas CMP rejeitadas pela validação temporal (saturado 255)
     inj_mode: int       # 0=simultaneous, 1=semi_seq, 2=sequential
+    map_fused_kpa: float  # MAP fundido (sensor+modelo) no tick de 2ms do cálculo de fuel
+    net_pw_us: int         # PW de fluxo líquido (µs, pré-dead-time/xtau/ΔP/S-curve), mesmo tick
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 def parse_realtime(buf: bytes) -> RealtimeData:
-    """Decodifica UiRealtimeData (ui_protocol.h, 66 bytes)."""
-    if len(buf) != 66:
-        raise ValueError(f"realtime page: esperado 66B, recebido {len(buf)}B")
+    """Decodifica UiRealtimeData (ui_protocol.h, 70 bytes)."""
+    if len(buf) != 70:
+        raise ValueError(f"realtime page: esperado 70B, recebido {len(buf)}B")
     # 'x' = byte de padding: status_bits (uint16) é alinhado p/ offset 12.
     (rpm, map_x100, tps, clt_p40, iat_p40, o2_d4, pw_x10,
      adv_p40, ve, stft, status) = struct.unpack_from("<HBBbbBBBBbxH", buf, 0)
     r = buf[14:66]  # reserved[52] começa no offset 14
+    map_fused_bar_x100, net_pw_us = struct.unpack_from("<HH", buf, 66)
     # Injector duty cycle (contra ciclo 720°): DC% = PW_ms × RPM / 1200.
     # pw_x10 está em décimos de ms → PW_ms = pw_x10/10 → divisor 12000.
     dc_pct = round(pw_x10 * rpm / 12000.0, 1) if rpm > 0 else 0.0
@@ -141,6 +144,8 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         ethanol_pct=r[9],
         cmp_confirms=r[7],
         cmp_glitch=r[6],
+        map_fused_kpa=map_fused_bar_x100,  # bar×100 == kPa
+        net_pw_us=net_pw_us,
     )
 
 

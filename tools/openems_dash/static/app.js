@@ -142,6 +142,8 @@ const GAUGES = [
   ["lambda_target_x1000", "λ tgt", v => (v / 1000).toFixed(2)],
   ["ltft_pct",     "LTFT %",  v => v],
   ["ethanol_pct",  "E%",      v => v],
+  ["map_fused_kpa", "MAP fund.", v => v],
+  ["net_pw_us",    "PW flow µs", v => v],
 ];
 $("#gauges").innerHTML = GAUGES.map(([k, l]) =>
   `<div class="gauge"><div class="v" id="g_${k}">—</div><div class="l">${l}</div></div>`).join("");
@@ -157,6 +159,7 @@ const WINDOW_S = 60, MAX_PTS = 60 * 35;
 const chartDefs = [
   { title: "RPM",           series: [["rpm",           "#e8a020"]] },
   { title: "MAP / TPS",    series: [["map_kpa",       "#e8a020"], ["tps_pct",     "#22c55e"]] },
+  { title: "MAP bruto vs fundido", series: [["map_kpa", "#e8a020"], ["map_fused_kpa", "#8b5cf6"]] },
   { title: "λ / STFT",     series: [["lambda_x1000",  "#ef4444"], ["stft_pct",    "#e8a020"]] },
   { title: "PW / ADVANCE", series: [["pw_ms",         "#e8a020"], ["advance_deg", "#22c55e"]] },
 ];
