@@ -126,6 +126,11 @@ extern volatile uint32_t g_diag_last_cmp_edge_tick;
 extern volatile uint32_t g_dbg_gap_accepted;
 extern volatile uint32_t g_dbg_gap_premature;
 extern volatile uint32_t g_dbg_gap_last_tc;
+// Perdas de sync por caminho + contexto da última perda por gap ausente
+extern volatile uint32_t g_dbg_loss_missing_gap;
+extern volatile uint32_t g_dbg_loss_stall;
+extern volatile uint32_t g_dbg_loss_avg;
+extern volatile uint32_t g_dbg_loss_delta;
 
 
 // ── Stall watchdog ────────────────────────────────────────────────────────────

@@ -243,18 +243,19 @@ class OpenEMSLink:
         if ack != b"\x00":
             raise IOError(f"write page {page} off {off}: ACK {ack.hex()}")
 
-    # ── contadores de debug ('D': 22 × u32 LE) ──────────────────────────
+    # ── contadores de debug ('D': 26 × u32 LE) ──────────────────────────
     DEBUG_FIELDS = [
         "late_events", "sched_drops", "inj1_arm", "seq_calls", "evt_overflow",
         "clear_all", "presync_count", "dwell_watchdog", "ckp_isr_count",
         "tc_gap", "tc_spike", "tc_normal", "phase_skip", "phase_fire",
         "evt_inserted", "evt_dispatched", "presync_revs", "seq_revs",
         "diag_clear_all", "gap_accepted", "gap_premature", "gap_last_tc",
+        "loss_missing_gap", "loss_stall", "loss_avg", "loss_delta",
     ]
 
     def read_debug(self) -> dict:
-        buf = self._txn(b"D", 88)
-        vals = struct.unpack("<22I", buf)
+        buf = self._txn(b"D", 104)
+        vals = struct.unpack("<26I", buf)
         return dict(zip(self.DEBUG_FIELDS, vals))
 
     # ── teste de saídas ('T') ────────────────────────────────────────────

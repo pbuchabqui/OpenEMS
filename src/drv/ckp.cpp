@@ -90,6 +90,10 @@ namespace ems::drv {
     extern volatile uint32_t g_dbg_gap_accepted;
     extern volatile uint32_t g_dbg_gap_premature;
     extern volatile uint32_t g_dbg_gap_last_tc;
+    extern volatile uint32_t g_dbg_loss_missing_gap;
+    extern volatile uint32_t g_dbg_loss_stall;
+    extern volatile uint32_t g_dbg_loss_avg;
+    extern volatile uint32_t g_dbg_loss_delta;
 }
 
 namespace {
@@ -597,6 +601,13 @@ volatile uint32_t g_dbg_hist_ready_max = 0u;
 volatile uint32_t g_dbg_gap_accepted = 0u;
 volatile uint32_t g_dbg_gap_premature = 0u;
 volatile uint32_t g_dbg_gap_last_tc = 0u;
+// Perdas de sync por caminho: gap ausente (tooth_count > kMaxTeethBeforeLoss)
+// vs stall watchdog. avg/delta capturados no instante da perda por gap ausente
+// — média inflada = histórico contaminado; delta anômalo = borda distorcida.
+volatile uint32_t g_dbg_loss_missing_gap = 0u;
+volatile uint32_t g_dbg_loss_stall = 0u;
+volatile uint32_t g_dbg_loss_avg = 0u;
+volatile uint32_t g_dbg_loss_delta = 0u;
 
 #if defined(__GNUC__)
 __attribute__((weak))
@@ -827,6 +838,9 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
             g_state.snap.state == ems::drv::SyncState::FULL_SYNC) {
             // Gap ausente → LOSS_OF_SYNC, mas preserva CMP state.
             // Gate exportado fecha até borda CMP fresca (ver HALF_SYNC).
+            ++ems::drv::g_dbg_loss_missing_gap;
+            ems::drv::g_dbg_loss_avg   = hist_avg();
+            ems::drv::g_dbg_loss_delta = delta_ticks;
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
             g_state.tooth_count = 0u;
             if (g_state.snap.cmp_confirms > 1u) { g_state.snap.cmp_confirms = 1u; }
@@ -1013,6 +1027,7 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
     enter_critical();
     if (g_state.snap.state == SyncState::HALF_SYNC ||
         g_state.snap.state == SyncState::FULL_SYNC) {
+        ++ems::drv::g_dbg_loss_stall;
         g_state.snap.state   = SyncState::LOSS_OF_SYNC;
         g_state.snap.rpm_x10 = 0u;
         g_state.tooth_count  = 0u;
