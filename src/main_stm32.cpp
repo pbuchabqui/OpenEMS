@@ -44,6 +44,7 @@ int main() { return 0; }
 #include "engine/ign_calc.h"
 #include "engine/knock.h"
 #include "engine/map_estimator.h"
+#include "engine/output_test.h"
 #include "engine/diagnostic_manager.h"
 #include "engine/misfire_detect.h"
 #include "engine/quick_crank.h"
@@ -762,6 +763,10 @@ int main() {
 
             const auto snap    = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
+
+            // Teste de saídas em bancada: aborto imediato se RPM > 0 e
+            // timeout de keepalive (o dwell watchdog acima continua activo).
+            ems::engine::output_test_poll(now, snap.rpm_x10);
             const bool full_sync = (snap.state == ems::drv::SyncState::FULL_SYNC);
             const bool sched_sync = (snap.state == ems::drv::SyncState::HALF_SYNC || full_sync);
 
@@ -1016,12 +1021,12 @@ int main() {
             ems::app::ui_update_rt_map_fuel(map_bar_x100, g_last_net_pw_us);
 
             const uint32_t prime_pw = ems::engine::quick_crank_consume_prime();
-            if (prime_pw != 0u) {
+            if (prime_pw != 0u && !ems::engine::output_test_active()) {
                 ::ecu_sched_fire_prime_pulse(prime_pw);
             }
 
             // EWG position inner loop (2ms cadence)
-            {
+            if (!ems::engine::output_test_active()) {
                 const uint16_t demand = ems::engine::auxiliaries_ewg_position_demand_x10();
                 const uint16_t pos = ems::engine::ewg_read_position_pct_x10();
                 ems::engine::ewg_control_update(demand, pos);
@@ -1253,7 +1258,7 @@ int main() {
         }
 
         // ── ETB control (2ms cadence) ─────────────────────────────────────
-        if (elapsed(now, g_t_etb_ms, 2u)) {
+        if (elapsed(now, g_t_etb_ms, 2u) && !ems::engine::output_test_active()) {
             g_t_etb_ms = now;
             const auto sensors_etb = ems::drv::sensors_get();
             const auto snap_etb = ems::drv::ckp_snapshot();

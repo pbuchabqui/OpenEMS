@@ -123,6 +123,7 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
   if (b.dataset.tab === "params"    && !$("#paramsRoot").dataset.loaded)   loadParams();
   if (b.dataset.tab === "pedal-map" && !$("#pedalMapRoot").dataset.loaded) loadPedalMap();
   if (b.dataset.tab === "boost"     && !$("#boostRoot").dataset.loaded)    loadBoostMap();
+  if (b.dataset.tab === "output-test" && !$("#outputTestRoot").dataset.loaded) loadOutputTest();
   if (b.dataset.tab === "telemetry")
     charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 160 }));
 });
@@ -1476,6 +1477,154 @@ async function loadPedalMap() {
     });
     toast("ECU disconnected — showing defaults", false);
   }
+}
+
+/* ── teste de saídas ──────────────────────────────────────────────────── */
+let otArmed = false;
+let otTimer = null;   // keepalive + status poll (1s) enquanto armado
+
+const OT_ABORT_REASONS = {0: "", 1: "abortado: RPM > 0 detectado",
+                          2: "abortado: keepalive expirou"};
+
+function otSetArmedUI(armed) {
+  otArmed = armed;
+  const root = $("#outputTestRoot");
+  $("#otArmBtn", root).textContent = armed ? "DESARMAR" : "ARMAR";
+  $("#otArmBtn", root).classList.toggle("armed", armed);
+  $$(".ot-ctl", root).forEach(el => el.disabled = !armed);
+  $("#otBanner", root).textContent = armed
+    ? "⚠ MODO TESTE ARMADO — saídas sob controle manual"
+    : "Modo teste desarmado — controles bloqueados";
+  $("#otBanner", root).classList.toggle("armed", armed);
+  if (!armed && otTimer) { clearInterval(otTimer); otTimer = null; }
+}
+
+async function otDisarm(silent = false) {
+  try { await api("/api/output_test/exit", "POST"); } catch (e) {
+    if (!silent) toast(e.message, true);
+  }
+  otSetArmedUI(false);
+}
+
+async function otArm() {
+  if (RT && RT.rpm > 0) { toast(`bloqueado: motor a ${RT.rpm} RPM`, true); return; }
+  try {
+    await api("/api/output_test/enter", "POST");
+  } catch (e) { toast(e.message, true); return; }
+  otSetArmedUI(true);
+  otTimer = setInterval(async () => {
+    try {
+      await api("/api/output_test/keepalive", "POST");
+      const st = await api("/api/output_test/status");
+      if (!st.active) {
+        otSetArmedUI(false);
+        toast("Modo teste " + (OT_ABORT_REASONS[st.abort_reason] || "encerrado pelo firmware"), true);
+      }
+    } catch (e) {
+      otSetArmedUI(false);
+      toast("keepalive falhou — teste desarmado: " + e.message, true);
+    }
+  }, 1000);
+}
+
+async function otFire(kind, cyl, usInputId) {
+  const us = parseInt($(usInputId).value, 10);
+  if (!us || us <= 0) { toast("largura de pulso inválida", true); return; }
+  try {
+    await api("/api/output_test/fire", "POST", { kind, cyl, us });
+  } catch (e) { toast(e.message, true); }
+}
+
+async function otSet(target, value) {
+  try {
+    await api("/api/output_test/set", "POST", { target, value });
+  } catch (e) { toast(e.message, true); }
+}
+
+function loadOutputTest() {
+  const root = $("#outputTestRoot");
+  root.dataset.loaded = "1";
+  root.innerHTML = `
+    <div class="ot-wrap">
+      <div id="otBanner" class="ot-banner">Modo teste desarmado — controles bloqueados</div>
+      <div class="ot-arm-row">
+        <button id="otArmBtn" class="ot-arm">ARMAR</button>
+        <span class="ot-hint">Só com motor parado. Auto-desarma se RPM &gt; 0 ou sem comunicação por 5s.</span>
+      </div>
+
+      <h4>Injetores (pulso único)</h4>
+      <div class="ot-row">
+        <label>PW (µs): <input id="otInjPw" class="ot-ctl" type="number" value="5000" min="100" max="30000" step="100" disabled></label>
+        ${[0,1,2,3].map(i => `<button class="ot-ctl ot-fire" data-inj="${i}" disabled>INJ${i+1}</button>`).join("")}
+      </div>
+
+      <h4>Bobinas (dwell + faísca)</h4>
+      <div class="ot-row">
+        <label>Dwell (µs): <input id="otIgnDwell" class="ot-ctl" type="number" value="3000" min="500" max="10000" step="100" disabled></label>
+        ${[0,1,2,3].map(i => `<button class="ot-ctl ot-fire" data-ign="${i}" disabled>IGN${i+1}</button>`).join("")}
+      </div>
+
+      <h4>Relés</h4>
+      <div class="ot-row">
+        <button class="ot-ctl" data-set="pump" data-val="1" disabled>BOMBA ON</button>
+        <button class="ot-ctl" data-set="pump" data-val="0" disabled>BOMBA OFF</button>
+        <button class="ot-ctl" data-set="fan" data-val="1" disabled>VENTOINHA ON</button>
+        <button class="ot-ctl" data-set="fan" data-val="0" disabled>VENTOINHA OFF</button>
+      </div>
+
+      <h4>VVT (duty %)</h4>
+      <div class="ot-row">
+        <label>Escape: <input class="ot-ctl ot-slider" data-vvt="vvt_exh" type="range" min="0" max="100" value="0" disabled>
+          <span id="otVvtExhVal">0%</span></label>
+        <label>Admissão: <input class="ot-ctl ot-slider" data-vvt="vvt_int" type="range" min="0" max="100" value="0" disabled>
+          <span id="otVvtIntVal">0%</span></label>
+      </div>
+
+      <h4>Motores (ETB / EWG — duty limitado a ±30%)</h4>
+      <div class="ot-row">
+        <label>ETB: <input class="ot-ctl ot-slider" data-motor="etb" data-scale="10.23" type="range" min="-30" max="30" value="0" disabled>
+          <span id="otEtbVal">0%</span></label>
+        <label>EWG: <input class="ot-ctl ot-slider" data-motor="ewg" data-scale="10" type="range" min="-30" max="30" value="0" disabled>
+          <span id="otEwgVal">0%</span></label>
+        <button id="otStopBtn" class="ot-ctl ot-stop" disabled>■ STOP MOTORES</button>
+      </div>
+    </div>`;
+
+  $("#otArmBtn", root).onclick = () => otArmed ? otDisarm() : otArm();
+
+  $$(".ot-fire", root).forEach(b => b.onclick = () => {
+    if (b.dataset.inj !== undefined) otFire("inj", +b.dataset.inj, "#otInjPw");
+    else otFire("ign", +b.dataset.ign, "#otIgnDwell");
+  });
+
+  $$("[data-set]", root).forEach(b => b.onclick = () =>
+    otSet(b.dataset.set, +b.dataset.val));
+
+  $$("[data-vvt]", root).forEach(sl => sl.oninput = () => {
+    const pct = +sl.value;
+    const span = sl.dataset.vvt === "vvt_exh" ? "#otVvtExhVal" : "#otVvtIntVal";
+    $(span, root).textContent = pct + "%";
+    otSet(sl.dataset.vvt, pct * 10);   // duty_pct_x10
+  });
+
+  $$("[data-motor]", root).forEach(sl => sl.oninput = () => {
+    const pct = +sl.value;
+    const span = sl.dataset.motor === "etb" ? "#otEtbVal" : "#otEwgVal";
+    $(span, root).textContent = pct + "%";
+    otSet(sl.dataset.motor, Math.round(pct * +sl.dataset.scale));
+  });
+
+  $("#otStopBtn", root).onclick = () => {
+    $$("[data-motor]", root).forEach(sl => { sl.value = 0; });
+    $("#otEtbVal", root).textContent = "0%";
+    $("#otEwgVal", root).textContent = "0%";
+    otSet("etb", 0); otSet("ewg", 0);
+  };
+
+  // Segurança extra: sair da página/aba desarma
+  window.addEventListener("beforeunload", () => {
+    if (otArmed) navigator.sendBeacon("/api/output_test/exit");
+  });
 }
 
 /* ── init ─────────────────────────────────────────────────────────────── */

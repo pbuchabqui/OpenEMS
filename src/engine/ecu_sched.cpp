@@ -906,6 +906,44 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us)
     ++g_diag_prime_fired;
 }
 
+void ecu_sched_test_pulse_inj(uint8_t cyl, uint32_t pw_us)
+{
+    static const uint8_t inj[4U] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
+    if (cyl > 3U || pw_us == 0U) { return; }
+    if (pw_us > 30000U) { pw_us = 30000U; }
+    const uint8_t ch = inj[cyl];
+    const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
+    force_output(ch, ECU_ACT_INJ_ON);
+    arm_channel(ch, off_cnv, ECU_ACT_INJ_OFF);
+}
+
+void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
+{
+    static const uint8_t ign[4U] = {ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
+    if (cyl > 3U) { return; }
+    if (dwell_us == 0U) { dwell_us = 3000U; }
+    if (dwell_us > 10000U) { dwell_us = 10000U; }
+    const uint8_t ch = ign[cyl];
+    const uint32_t spark_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(dwell_us);
+    force_output(ch, ECU_ACT_DWELL_START);
+    arm_channel(ch, spark_cnv, ECU_ACT_SPARK);
+    // Watchdog manual DEPOIS do arm_channel: armar ECU_ACT_SPARK zera
+    // g_dwell_arm_tick (convenção do caminho normal). Se o evento SPARK se
+    // perder, ecu_sched_dwell_watchdog() força a bobina LOW em 1.4× dwell.
+    {
+        ems::hal::CriticalSectionGuard guard;
+        const uint8_t ign_idx = (uint8_t)(stm32_ign_tim_ch(ch) - 1U);
+        g_dwell_arm_tick[ign_idx]  = scheduler_counter();
+        g_dwell_wdog_ticks[ign_idx] = (ECU_SCHED_US_TO_TICKS(dwell_us) * 7U) / 5U;
+    }
+}
+
+void ecu_sched_test_all_outputs_safe(void)
+{
+    ems::hal::CriticalSectionGuard guard;
+    clear_all_events_and_drive_safe_outputs();
+}
+
 void ecu_sched_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg)
 {
     ems::hal::CriticalSectionGuard guard;

@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "engine/output_test.h"
+
 #include "engine/table3d.h"
 #include "engine/calibration.h"
 #include "app/can_rx_map.h"
@@ -470,6 +472,9 @@ void auxiliaries_set_key_on(bool key_on) noexcept {
 void auxiliaries_tick_10ms() noexcept {
     g.time_ms += kTick10ms;
 
+    // Teste de saídas em bancada é dono de VVT/fan/pump — só o relógio corre.
+    if (output_test_active()) { return; }
+
     const ems::drv::CkpSnapshot snap = ems::drv::ckp_snapshot();
     const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
@@ -479,6 +484,8 @@ void auxiliaries_tick_10ms() noexcept {
 }
 
 void auxiliaries_tick_20ms() noexcept {
+    if (output_test_active()) { return; }
+
     const ems::drv::CkpSnapshot snap = ems::drv::ckp_snapshot();
     const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
@@ -486,6 +493,9 @@ void auxiliaries_tick_20ms() noexcept {
     run_fan_control(s.clt_degc_x10);
     run_pump_control(snap.rpm_x10);
 }
+
+void auxiliaries_force_pump(bool on) noexcept { set_pump(on); }
+void auxiliaries_force_fan(bool on) noexcept { set_fan(on); }
 
 uint16_t auxiliaries_ewg_position_demand_x10() noexcept {
     return g.ewg_position_demand_x10;

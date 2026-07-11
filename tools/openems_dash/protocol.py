@@ -231,6 +231,48 @@ class OpenEMSLink:
         if ack != b"\x00":
             raise IOError(f"write page {page} off {off}: ACK {ack.hex()}")
 
+    # ── teste de saídas ('T') ────────────────────────────────────────────
+    # 'T' + subcmd(1) + arg1(1) + arg2(u16 LE) → ACK 1B (STATUS → 4B)
+    def _test_cmd(self, sub: int, a1: int = 0, a2: int = 0) -> None:
+        ack = self._txn(b"T" + struct.pack("<BBH", sub, a1, a2 & 0xFFFF), 1)
+        if ack != b"\x00":
+            raise IOError(f"test cmd 0x{sub:02x}: ACK {ack.hex()}")
+
+    def test_enter(self) -> None:
+        self._test_cmd(0x01, 0, 0xA55A)
+
+    def test_exit(self) -> None:
+        self._test_cmd(0x00)
+
+    def test_keepalive(self) -> None:
+        self._test_cmd(0x02)
+
+    def test_status(self) -> dict:
+        st = self._txn(b"T\x03\x00\x00\x00", 4)
+        return {"active": bool(st[0]), "abort_reason": st[1],
+                "keepalive_s": st[2], "busy": bool(st[3])}
+
+    def test_fire_inj(self, cyl: int, pw_us: int) -> None:
+        self._test_cmd(0x10, cyl, pw_us)
+
+    def test_fire_ign(self, cyl: int, dwell_us: int) -> None:
+        self._test_cmd(0x11, cyl, dwell_us)
+
+    def test_pump(self, on: bool) -> None:
+        self._test_cmd(0x20, 1 if on else 0)
+
+    def test_fan(self, on: bool) -> None:
+        self._test_cmd(0x21, 1 if on else 0)
+
+    def test_vvt(self, ch: int, duty_pct_x10: int) -> None:
+        self._test_cmd(0x30, ch, duty_pct_x10)
+
+    def test_etb(self, pwm: int) -> None:
+        self._test_cmd(0x40, 0, pwm & 0xFFFF)  # int16 como u16
+
+    def test_ewg(self, pwm: int) -> None:
+        self._test_cmd(0x41, 0, pwm & 0xFFFF)
+
     def burn_page(self, page: int) -> None:
         # burn_page_to_flash (ui_protocol.cpp) apaga o setor (8KB) e programa
         # antes de responder — bloqueante no firmware. O timeout por-defeito

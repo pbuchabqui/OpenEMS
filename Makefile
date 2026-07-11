@@ -37,6 +37,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/ecu_sched.cpp \
              $(SRC_DIR)/engine/diagnostic_manager.cpp \
              $(SRC_DIR)/engine/map_estimator.cpp \
+             $(SRC_DIR)/engine/output_test.cpp \
              $(SRC_DIR)/engine/xtau_autocalib.cpp \
              $(SRC_DIR)/engine/etb_control.cpp \
              $(SRC_DIR)/engine/torque_manager.cpp \

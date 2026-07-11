@@ -103,6 +103,15 @@ uint32_t ecu_sched_ivc_clamp_count(void);
 // (648° sequencial / 324° presync) e é clampado. >0 = fuel shortfall.
 uint32_t ecu_sched_pw_duty_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
+
+// Teste de saídas em bancada: pulso único num canal individual (motor parado).
+// cyl = 0-3 na ordem INJ1..INJ4 / IGN1..IGN4. pw_us clamp ≤30000; dwell_us
+// clamp ≤10000 (o dwell-watchdog fica armado como backstop do SPARK).
+void ecu_sched_test_pulse_inj(uint8_t cyl, uint32_t pw_us);
+void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us);
+// Descarta eventos TIM5 pendentes e leva todos os INJ/IGN ao estado seguro.
+void ecu_sched_test_all_outputs_safe(void);
+
 void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 
 // Modo de ignição actual: 1 = sequencial (full sync + CMP confirmado),

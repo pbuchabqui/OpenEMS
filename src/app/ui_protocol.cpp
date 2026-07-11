@@ -15,6 +15,7 @@
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/math_utils.h"
+#include "engine/output_test.h"
 #include "engine/constants.h"
 #include "engine/table3d.h"
 #include "hal/crc32.h"
@@ -45,6 +46,7 @@ enum class ParseState : uint8_t {
     WRITE_DATA = 3u,
     BURN_ARGS = 4u,
     BENCH_ARG = 5u,   // 'B' + 1 byte: bench-mode CLT/IAT (0=off, 1=on)
+    TEST_ARGS = 9u,   // 'T' + 4 bytes: subcmd + arg1 + arg2 u16 LE (teste de saídas)
     ENV_SIZE_LO = 6u,  // envelope TS: byte baixo do tamanho (BE)
     ENV_PAYLOAD = 7u,  // envelope TS: cmd + args + dados
     ENV_CRC = 8u,      // envelope TS: CRC32 BE (4 bytes)
@@ -123,6 +125,7 @@ static uint8_t g_cmd_page = 0u;
 static uint16_t g_cmd_off = 0u;
 static uint16_t g_cmd_len = 0u;
 static uint8_t g_arg_pos = 0u;
+static uint8_t g_test_args[4] = {};  // 'T': subcmd, arg1, arg2_lo, arg2_hi
 static uint16_t g_write_pos = 0u;
 static bool g_write_ram_only = false;
 static uint16_t g_dirty_page_mask = 0u;
@@ -328,6 +331,47 @@ inline void reset_parser() noexcept {
     g_env_pos = 0u;
     g_env_rx_crc = 0u;
     g_env_crc_pos = 0u;
+}
+
+// ── Teste de saídas ('T') ───────────────────────────────────────────────────
+// Formato: 'T' + subcmd(1) + arg1(1) + arg2(u16 LE). Resposta: 1 byte ACK,
+// excepto STATUS (0x03) → 4 bytes {active, abort_reason, keepalive_s, busy}.
+constexpr uint16_t kTestEnterMagic = 0xA55Au;
+
+static void handle_test_cmd() noexcept {
+    const uint8_t sub  = g_test_args[0];
+    const uint8_t a1   = g_test_args[1];
+    const uint16_t a2  = static_cast<uint16_t>(g_test_args[2] |
+                         (static_cast<uint16_t>(g_test_args[3]) << 8u));
+    bool ok = false;
+    switch (sub) {
+        case 0x00u:  // EXIT
+            ems::engine::output_test_exit();
+            ok = true;
+            break;
+        case 0x01u:  // ENTER (magic contra armamento acidental por ruído)
+            ok = (a2 == kTestEnterMagic) && ems::engine::output_test_enter();
+            break;
+        case 0x02u:  // KEEPALIVE
+            ok = ems::engine::output_test_active();
+            ems::engine::output_test_keepalive();
+            break;
+        case 0x03u: {  // STATUS — resposta de 4 bytes, sem ACK
+            uint8_t st[4];
+            ems::engine::output_test_status(st);
+            tx_push_bytes(st, 4u);
+            return;
+        }
+        case 0x10u: ok = ems::engine::output_test_fire_injector(a1, a2); break;
+        case 0x11u: ok = ems::engine::output_test_fire_coil(a1, a2); break;
+        case 0x20u: ok = ems::engine::output_test_set_pump(a1 != 0u); break;
+        case 0x21u: ok = ems::engine::output_test_set_fan(a1 != 0u); break;
+        case 0x30u: ok = ems::engine::output_test_set_vvt(a1, a2); break;
+        case 0x40u: ok = ems::engine::output_test_set_etb(static_cast<int16_t>(a2)); break;
+        case 0x41u: ok = ems::engine::output_test_set_ewg(static_cast<int16_t>(a2)); break;
+        default: break;
+    }
+    tx_push(ok ? kAckOk : kAckErr);
 }
 
 inline bool bounds_ok(uint8_t page, uint16_t off, uint16_t len) noexcept {
@@ -999,6 +1043,11 @@ inline void parse_byte(uint8_t b) noexcept {
             g_state = ParseState::BENCH_ARG;
             return;
         }
+        if (b == static_cast<uint8_t>('T')) {
+            g_state = ParseState::TEST_ARGS;
+            g_arg_pos = 0u;
+            return;
+        }
         if (b == static_cast<uint8_t>('G')) {
             // Angle measurement: gap_ts + 8 latest {ts, high} from dispatch ring
             // Format: [gap_ts:4] [idx:1] [8×{ts:4, high:1}] = 45 bytes
@@ -1130,6 +1179,15 @@ inline void parse_byte(uint8_t b) noexcept {
             }
             reset_parser();
         }
+        return;
+    }
+
+    if (g_state == ParseState::TEST_ARGS) {
+        g_test_args[g_arg_pos] = b;
+        ++g_arg_pos;
+        if (g_arg_pos < 4u) { return; }
+        handle_test_cmd();
+        reset_parser();
         return;
     }
 

@@ -226,3 +226,34 @@ button.cap { padding: 2px 6px; font-size: 10px; margin-left: 4px; width: auto; }
               font-size: 11px; animation: fade 4s forwards; }
 #toast .msg.err { border-left-color: var(--err); }
 @keyframes fade { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   TESTE DE SAÍDAS
+   ═══════════════════════════════════════════════════════════════════════ */
+.ot-wrap { max-width: 720px; padding: 12px; }
+.ot-wrap h4 { color: var(--accent); font-size: 11px; letter-spacing: 1px;
+              text-transform: uppercase; margin: 18px 0 6px;
+              border-bottom: 1px solid var(--border); padding-bottom: 3px; }
+.ot-banner { padding: 8px 12px; font-size: 12px; border: 1px solid var(--border);
+             border-left: 3px solid var(--muted); color: var(--muted); }
+.ot-banner.armed { border-left-color: var(--err); color: var(--err); font-weight: 700; }
+.ot-arm-row { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+.ot-arm { background: var(--panel); color: var(--ok); border: 1px solid var(--ok);
+          padding: 8px 24px; font: 700 13px var(--font); cursor: pointer;
+          letter-spacing: 1.5px; }
+.ot-arm.armed { color: var(--err); border-color: var(--err); }
+.ot-hint { font-size: 10px; color: var(--muted); }
+.ot-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+          padding: 6px 0; font-size: 11px; }
+.ot-row label { display: flex; align-items: center; gap: 6px; }
+.ot-row input[type=number] { width: 70px; background: #141414; color: var(--fg);
+          border: 1px solid var(--border); padding: 4px; font: 11px var(--font);
+          text-align: right; }
+.ot-row button { background: var(--panel); color: var(--fg);
+          border: 1px solid var(--border); padding: 6px 14px;
+          font: 11px var(--font); cursor: pointer; }
+.ot-row button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.ot-row button:disabled, .ot-row input:disabled { opacity: .35; cursor: default; }
+.ot-fire { min-width: 60px; }
+.ot-stop { color: var(--err) !important; border-color: var(--err) !important; }
+.ot-slider { width: 140px; }

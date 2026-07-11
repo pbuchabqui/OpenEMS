@@ -259,6 +259,92 @@ def api_burn(page: int):
     return {"ok": True}
 
 
+# ── teste de saídas ──────────────────────────────────────────────────────────
+# Guard: nenhum comando de teste passa com motor girando (RPM > 0). O firmware
+# tem o mesmo bloqueio (enter NAK + aborto imediato no poll de 2ms) — aqui é só
+# para dar mensagem clara em vez do ACK genérico.
+
+def _output_test_rpm_guard():
+    latest = worker.latest
+    if latest and latest.get("rpm", 0) > 0:
+        return JSONResponse(
+            {"error": f"teste de saídas bloqueado: motor a {latest['rpm']} RPM "
+                      f"(só disponível com motor parado)"},
+            status_code=409)
+    return None
+
+
+def _output_test_call(fn, desc: str):
+    try:
+        worker.submit(fn)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{desc} falhou: {e}"}, status_code=502)
+    return {"ok": True}
+
+
+@app.post("/api/output_test/enter")
+def api_output_test_enter():
+    guard = _output_test_rpm_guard()
+    if guard:
+        return guard
+    return _output_test_call(lambda l: l.test_enter(), "armar teste")
+
+
+@app.post("/api/output_test/exit")
+def api_output_test_exit():
+    return _output_test_call(lambda l: l.test_exit(), "desarmar teste")
+
+
+@app.post("/api/output_test/keepalive")
+def api_output_test_keepalive():
+    return _output_test_call(lambda l: l.test_keepalive(), "keepalive")
+
+
+@app.get("/api/output_test/status")
+def api_output_test_status():
+    try:
+        return worker.submit(lambda l: l.test_status())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"status falhou: {e}"}, status_code=502)
+
+
+@app.post("/api/output_test/fire")
+def api_output_test_fire(body: dict):
+    guard = _output_test_rpm_guard()
+    if guard:
+        return guard
+    kind = body.get("kind")
+    cyl = int(body.get("cyl", -1))
+    us = int(body.get("us", 0))
+    if kind not in ("inj", "ign") or not 0 <= cyl <= 3 or us <= 0:
+        return JSONResponse({"error": "fire: esperado kind=inj|ign, cyl 0-3, us>0"},
+                            status_code=400)
+    if kind == "inj":
+        return _output_test_call(lambda l: l.test_fire_inj(cyl, us), f"INJ{cyl+1}")
+    return _output_test_call(lambda l: l.test_fire_ign(cyl, us), f"IGN{cyl+1}")
+
+
+@app.post("/api/output_test/set")
+def api_output_test_set(body: dict):
+    guard = _output_test_rpm_guard()
+    if guard:
+        return guard
+    target = body.get("target")
+    value = int(body.get("value", 0))
+    calls = {
+        "pump":    lambda l: l.test_pump(value != 0),
+        "fan":     lambda l: l.test_fan(value != 0),
+        "vvt_exh": lambda l: l.test_vvt(0, value),
+        "vvt_int": lambda l: l.test_vvt(1, value),
+        "etb":     lambda l: l.test_etb(value),
+        "ewg":     lambda l: l.test_ewg(value),
+    }
+    if target not in calls:
+        return JSONResponse({"error": f"target desconhecido: {target}"},
+                            status_code=400)
+    return _output_test_call(calls[target], f"set {target}={value}")
+
+
 @app.get("/api/can_rx_map")
 def api_can_rx_map_get():
     return {"signals": proto.can_rx_map_get(), "signal_names": proto.CAN_RX_SIGNALS}
