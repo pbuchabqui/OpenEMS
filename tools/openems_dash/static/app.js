@@ -1479,10 +1479,12 @@ async function loadPedalMap() {
 /* ── osciloscópio CKP/CMP ─────────────────────────────────────────────── */
 // Desenha as bordas cruas dos rings do firmware ('K' via /api/scope):
 // CKP na pista de cima com o GAP 60-2 destacado; CMP na pista de baixo com
-// o dente âncora anotado. Poll 3 Hz só com a aba TELEMETRY visível.
+// o dente âncora anotado; régua de ângulo do ciclo 720° (dente 0 pós-gap =
+// 0°/360° conforme a fase CMP). Poll 3 Hz só com a aba TELEMETRY visível.
+let scopeFrozen = false;
 async function drawScope() {
   const pane = $("#tab-telemetry");
-  if (!pane.classList.contains("active")) return;
+  if (!pane.classList.contains("active") || scopeFrozen) return;
   let s;
   try { s = await api("/api/scope"); } catch { return; }
   const cv = $("#scopeCanvas");
@@ -1549,21 +1551,64 @@ async function drawScope() {
     ctx.fillText("CMP", x(t) + 3, yCmp + 10);
   }
 
+  // ── régua de ângulo do ciclo 720° ─────────────────────────────────────
+  // Âncora: a borda mais recente ≈ tooth_index (±1 dente) do snapshot no
+  // instante do dump; fase CMP decide qual das 2 revoluções (0-360/360-720).
+  // Propaga para trás: 6°/dente normal, posições×6° através do gap
+  // (posições = round(delta/mediana): gap 60-2 ≈ 3 → 18°).
+  const synced = s.sync_state === 1 || s.sync_state === 2;
+  let angles = null;
+  if (synced) {
+    angles = new Array(s.ckp_ms.length);
+    let a = (s.phase_a ? 0 : 360) + s.tooth_index * 6;
+    angles[s.ckp_ms.length - 1] = a;
+    for (let i = s.ckp_ms.length - 2; i >= 0; i--) {
+      const steps = Math.max(1, Math.round(deltas[i] / med));
+      a -= steps * 6;
+      angles[i] = ((a % 720) + 720) % 720;
+    }
+    angles[s.ckp_ms.length - 1] = ((angles[s.ckp_ms.length - 1] % 720) + 720) % 720;
+    // régua: marca a cada 90°
+    ctx.fillStyle = "#4a4a4a";
+    ctx.strokeStyle = "#1c1c1c";
+    let lastLabelX = -100;
+    for (let i = 0; i < angles.length; i++) {
+      if (angles[i] % 90 !== 0) continue;
+      const px = x(s.ckp_ms[i]);
+      if (px - lastLabelX < 30) continue;
+      lastLabelX = px;
+      ctx.beginPath();
+      ctx.moveTo(px, yTop);
+      ctx.lineTo(px, H - 14);
+      ctx.stroke();
+      ctx.fillText(`${angles[i]}°`, px - 10, H - 4);
+    }
+  }
+
   // rótulos das pistas + eixo
   ctx.fillStyle = "#4a4a4a";
   ctx.fillText("CKP", 10, yTop - 4);
   ctx.fillText("CMP", 10, yCmp - 4);
-  ctx.fillText(`${(tMax - tMin).toFixed(0)}ms`, W - 45, H - 4);
+  ctx.fillText(`${(tMax - tMin).toFixed(0)}ms`, W - 45, yTop - 4);
 
   const gapDelta = gaps.length ? deltas[gaps[0]] : null;
   const ref = s.cmp_ref_tooth;
+  const angNow = angles ? angles[angles.length - 1] : null;
   info.textContent =
+    (angNow !== null ? `ângulo actual: ${angNow}° de 720° · ` : "sem sync — sem referência angular · ") +
     `bordas CKP: ${s.ckp_ms.length} · dente ${med.toFixed(2)}ms` +
     (gapDelta ? ` · GAP ${gapDelta.toFixed(2)}ms (${(gapDelta/med).toFixed(1)}×)` : " · GAP não visível") +
     ` · CMP na janela: ${cmpVisible}` +
     (ref !== 255 ? ` · CMP ancorado no dente ${ref}` : " · CMP não-ancorado");
 }
 setInterval(drawScope, 333);
+
+$("#scopeFreezeBtn").onclick = () => {
+  scopeFrozen = !scopeFrozen;
+  const b = $("#scopeFreezeBtn");
+  b.textContent = scopeFrozen ? "▶ RUN" : "⏸ FREEZE";
+  b.classList.toggle("frozen", scopeFrozen);
+};
 
 /* ── teste de saídas ──────────────────────────────────────────────────── */
 let otArmed = false;

@@ -267,3 +267,11 @@ button.cap { padding: 2px 6px; font-size: 10px; margin-left: 4px; width: auto; }
               color: var(--accent); padding: 0 6px 6px; }
 #scopeCanvas { width: 100%; display: block; background: #060606; }
 #scopeInfo { font: 10px var(--font); color: var(--muted); padding: 6px 6px 0; }
+#scopeHeader { display: flex; justify-content: space-between; align-items: center;
+               padding: 0 6px 6px; }
+#scopeFreezeBtn { background: var(--panel); color: var(--fg);
+                  border: 1px solid var(--border); padding: 3px 12px;
+                  font: 10px var(--font); cursor: pointer; }
+#scopeFreezeBtn:hover { border-color: var(--accent); color: var(--accent); }
+#scopeFreezeBtn.frozen { color: var(--accent); border-color: var(--accent);
+                         font-weight: 700; }

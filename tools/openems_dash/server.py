@@ -353,8 +353,10 @@ def api_scope():
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"scope: {e}"}, status_code=502)
     ckp, cmp = s["ckp_ts"], s["cmp_ts"]
+    meta = {"cmp_ref_tooth": s["cmp_ref_tooth"], "tooth_index": s["tooth_index"],
+            "phase_a": s["phase_a"], "sync_state": s["sync_state"]}
     if not ckp:
-        return {"ckp_ms": [], "cmp_ms": [], "cmp_ref_tooth": s["cmp_ref_tooth"]}
+        return {"ckp_ms": [], "cmp_ms": [], **meta}
     ref = ckp[-1]
     # ticks 62.5 MHz → ms, relativo à borda mais recente (negativo = passado).
     # Subtração circular u32 para sobreviver ao wrap do TIM5.
@@ -362,7 +364,7 @@ def api_scope():
         return -(((ref - t) & 0xFFFFFFFF) / 62500.0)
     return {"ckp_ms": [round(rel_ms(t), 3) for t in ckp],
             "cmp_ms": [round(rel_ms(t), 3) for t in cmp],
-            "cmp_ref_tooth": s["cmp_ref_tooth"]}
+            **meta}
 
 
 @app.get("/api/debug/counters")

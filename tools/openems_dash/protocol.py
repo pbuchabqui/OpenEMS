@@ -258,20 +258,25 @@ class OpenEMSLink:
         vals = struct.unpack("<26I", buf)
         return dict(zip(self.DEBUG_FIELDS, vals))
 
-    # ── osciloscópio CKP/CMP ('K': 291 bytes) ────────────────────────────
+    # ── osciloscópio CKP/CMP ('K': 294 bytes) ────────────────────────────
     def read_scope(self) -> dict:
-        """Rings de timestamps TIM5 (62.5 MHz) das bordas cruas CKP/CMP.
+        """Rings de timestamps TIM5 (62.5 MHz) das bordas cruas CKP/CMP +
+        âncora angular (tooth_index/fase/sync no instante do dump).
         Devolve listas ordenadas da mais antiga → mais recente, em ticks."""
-        buf = self._txn(b"K", 291)
+        buf = self._txn(b"K", 294)
         ckp_idx, cmp_idx, cmp_ref_tooth = buf[0], buf[1], buf[2]
         ckp = list(struct.unpack_from("<64I", buf, 3))
         cmp = list(struct.unpack_from("<8I", buf, 259))
+        tooth_index, phase_a, sync_state = buf[291], buf[292], buf[293]
         # idx aponta para a próxima escrita (mais antiga) → rotaciona
         ckp = ckp[ckp_idx:] + ckp[:ckp_idx]
         cmp = cmp[cmp_idx:] + cmp[:cmp_idx]
         return {"ckp_ts": [t for t in ckp if t != 0],
                 "cmp_ts": [t for t in cmp if t != 0],
-                "cmp_ref_tooth": cmp_ref_tooth}
+                "cmp_ref_tooth": cmp_ref_tooth,
+                "tooth_index": tooth_index,
+                "phase_a": bool(phase_a),
+                "sync_state": sync_state}
 
     # ── teste de saídas ('T') ────────────────────────────────────────────
     # 'T' + subcmd(1) + arg1(1) + arg2(u16 LE) → ACK 1B (STATUS → 4B)
