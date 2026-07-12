@@ -239,8 +239,9 @@ inline void update_realtime_page() noexcept {
     rt.clt_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.clt_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
     rt.iat_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.iat_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
 
-    // WBO2 via CAN (lambda × 1000); ÷4 para caber em uint8_t (0..375 range típico)
-    rt.o2_mv_d4 = ems::engine::clamp_u8(ems::app::can_stack_lambda_milli() / 4u);
+    // WBO2 via CAN (lambda × 1000); ÷5 para caber em uint8_t até λ=1.275
+    // (÷4 saturava em 1.020 — o default 1050 exibia 1.02 no dashboard)
+    rt.o2_mv_d4 = ems::engine::clamp_u8(ems::app::can_stack_lambda_milli() / 5u);
     rt.pw1_ms_x10  = g_rt_pw_ms_x10;
     rt.advance_p40 = static_cast<uint8_t>(static_cast<int16_t>(g_rt_advance_deg) + 40);
     rt.ve          = g_page1_ve[0];

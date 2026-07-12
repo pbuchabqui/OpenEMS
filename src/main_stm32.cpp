@@ -80,6 +80,9 @@ static int8_t  g_last_advance_deg = 0;
 static uint8_t g_last_pw_ms_x10   = 0u;
 static int8_t  g_last_stft_pct    = 0;
 static uint8_t g_last_lambda_target_d4 = 0u;
+// MAP fundido do último tick de 2ms — fonte única p/ os consumidores de 100ms
+// (STFT/alvo λ): usar o sensor cru ali dava alvo≠combustível na fronteira de célula.
+static uint16_t g_last_map_fused_x100 = 0u;
 static int8_t  g_last_ltft_pct    = 0;
 
 static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
@@ -1033,6 +1036,7 @@ int main() {
             }
             g_prev_tps_pct_x10 = sensors.etb_tps_pct_x10;
             ems::app::ui_update_rt_map_fuel(map_bar_x100, g_last_net_pw_us);
+            g_last_map_fused_x100 = map_bar_x100;
 
             const uint32_t prime_pw = ems::engine::quick_crank_consume_prime();
             if (prime_pw != 0u && !ems::engine::output_test_active()) {
@@ -1149,8 +1153,11 @@ int main() {
             }
 
             if (snap.state == ems::drv::SyncState::FULL_SYNC) {
+                // MAP fundido (mesma fonte do cálculo de combustível de 2ms):
+                // o cru daqui divergia na fronteira de célula → alvo λ do
+                // gauge oscilava sem o ponto de operação mudar.
                 const uint16_t map_bar_x100 = clamp_u16(
-                    static_cast<uint16_t>(sensors.map_bar_x1000 / 10u), kMapMinBarX100, kMapMaxBarX100);
+                    g_last_map_fused_x100, kMapMinBarX100, kMapMaxBarX100);
                 const uint16_t lambda_measured = clamp_u16(
                     ems::app::can_stack_lambda_milli_safe(now), kLambdaMinMilli, kLambdaMaxMilli);
                 const bool lambda_valid = ems::app::can_stack_wbo2_fresh(now);
@@ -1175,7 +1182,8 @@ int main() {
                     ae_active, stft_inhibit, g_last_net_pw_us);
                 g_ae_active = false;
                 g_last_stft_pct = clamp_i8(static_cast<int16_t>(stft / 10), -25, 25);
-                g_last_lambda_target_d4 = ems::engine::clamp_u8(lambda_target_x1000 / 4u);
+                // ÷5 (não ÷4): ÷4 saturava o u8 em 1020 — alvos 1.02-1.27 exibiam 1.02
+                g_last_lambda_target_d4 = ems::engine::clamp_u8(lambda_target_x1000 / 5u);
                 g_last_ltft_pct = clamp_i8(
                     ems::engine::fuel_get_ltft_at(snap.rpm_x10, map_bar_x100) / 10,
                     -25, 25);

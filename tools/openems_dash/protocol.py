@@ -125,7 +125,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         tps_pct=tps,
         clt_c=clt_p40 - 40,
         iat_c=iat_p40 - 40,
-        lambda_x1000=o2_d4 * 4,
+        lambda_x1000=o2_d4 * 5,  # ÷5 no fw (cobre até 1.275)
         pw_ms=pw_x10 / 10.0,
         advance_deg=adv_p40 - 40,
         dc_pct=dc_pct,
@@ -150,7 +150,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         an2_raw=struct.unpack_from("<H", r, 45)[0],
         an3_raw=struct.unpack_from("<H", r, 47)[0],
         an4_raw=struct.unpack_from("<H", r, 50)[0],
-        lambda_target_x1000=r[4] * 4,
+        lambda_target_x1000=r[4] * 5,
         ltft_pct=struct.unpack_from("<b", r, 5)[0],
         tle8888_fault_bm=r[8],
         ethanol_pct=r[9],
