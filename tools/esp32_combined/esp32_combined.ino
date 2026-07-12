@@ -324,11 +324,18 @@ struct SimState {
 
 static SimState g_sim;
 
-// MAP: 0-300 kPa → DAC 8-bit (0-255). 35kPa ≈ 30/255 ≈ 0.38V @ 3.3V.
-// Resolução: 300/255 ≈ 1.18 kPa/step — suficiente p/ bancada.
+// MAP: 0-300 kPa → DAC 8-bit (0-255). Resolução ~1.18 kPa/step.
+// Calibração medida na bancada (2026-07-12, varredura 35-250 kPa lida na
+// ECU): o DAC do ESP32 não alcança os rails (satura ~0.08-3.1V), dando
+// lido = 0.931×alvo + 8.2 kPa. Compensação inversa: alvo_corr = (kpa-8.2)/0.931
+// → em contas inteiras: dac = (kpa*1000 - 8200) * 255 / (931 * 300 / ... )
+// simplificado: dac = ((kpa - 8.2) / 0.931) * 255/300 = (kpa*10 - 82) * 2550 / (9310*3)
 static uint8_t map_to_dac(uint16_t kpa) {
     if (kpa > 300) kpa = 300;
-    return (uint8_t)((uint32_t)kpa * 255u / 300u);
+    int32_t corr_x10 = ((int32_t)kpa * 10 - 82) * 1000 / 931;  // kPa×10 corrigido
+    if (corr_x10 < 0) corr_x10 = 0;
+    uint32_t dac = (uint32_t)corr_x10 * 255u / 3000u;
+    return (uint8_t)(dac > 255u ? 255u : dac);
 }
 // TPS: 0-100% → DAC 8-bit com piso ~0.2V (15/255 ≈ 0.19V @ 3.3V)
 static uint8_t tps_to_dac(uint8_t pct) {
