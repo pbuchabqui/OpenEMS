@@ -338,12 +338,15 @@ static uint8_t map_to_dac(uint16_t kpa) {
     return (uint8_t)(dac > 255u ? 255u : dac);
 }
 // TPS: 0-100% → DAC 8-bit com piso ~0.2V (15/255 ≈ 0.19V @ 3.3V).
-// Mesma calibração do MAP (DAC1 mediu 1.65V p/ 1.75V nominal @ 50% —
-// ganho ~0.931 + offset ~0.09V dos rails): dac_corr = (dac_nom - 7)/0.931.
+// Calibração DAC1 por 2 pontos crus (multímetro, 2026-07-12):
+// raw 64→0.85V, raw 200→2.46V ⇒ V = 0.011838×raw + 0.092
+// (ganho 0.915, offset +92mV). Inversa: raw = nom×1.0932 − 7.81.
+// Teto físico: raw 255 → ~3.11V (o DAC não alcança 3.3V; TPS 100%
+// lê ~94% na ECU — limite do silício, aceito p/ bancada).
 static uint8_t tps_to_dac(uint8_t pct) {
     if (pct > 100) pct = 100;
     const uint32_t nom = 15u + (uint32_t)pct * 240u / 100u;
-    int32_t corr = ((int32_t)nom * 1000 - 6950) / 931;
+    int32_t corr = ((int32_t)nom * 10932 - 78060) / 10000;
     if (corr < 0) corr = 0;
     return (uint8_t)(corr > 255 ? 255 : corr);
 }
