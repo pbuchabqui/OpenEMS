@@ -903,6 +903,14 @@ static void wifi_init() {
 }
 
 static void tcp_service() {
+    // Diagnóstico: estado do WiFi a cada 5s até conectar
+    // (0=IDLE 1=NO_SSID 4=CONNECT_FAILED 6=DISCONNECTED 3=CONNECTED)
+    static uint32_t s_last_diag = 0;
+    if (!g_wifi_reported && millis() - s_last_diag > 5000) {
+        s_last_diag = millis();
+        Serial.printf("  [WIFI] status=%d rssi=%d\n", (int)WiFi.status(),
+                      (int)WiFi.RSSI());
+    }
     if (WiFi.status() == WL_CONNECTED && !g_wifi_reported) {
         Serial.printf("  [WIFI] conectado: %s  (TCP 3333)\n",
                       WiFi.localIP().toString().c_str());
