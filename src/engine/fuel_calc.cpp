@@ -71,7 +71,10 @@ uint8_t g_ae_decay_cycles = 0u;
 int32_t g_ae_pulse_us = 0;
 
 int16_t g_stft_pct_x10 = 0;
-int32_t g_stft_integrator_x10 = 0;
+// Integrador em percent×1000 (não ×10): com Ki=0.005 default, um erro de
+// λ 0.07 contribui 0.35 x10-unidades/ciclo — em ×10 inteiro truncava a 0 e
+// o integrador NUNCA acumulava em condição realista (só erros ≥0.2 λ).
+int32_t g_stft_integrator_x1000 = 0;
 int16_t g_ltft_pct_x10[ems::engine::kTableAxisSize][ems::engine::kTableAxisSize] = {};
 // LTFT aditivo: offset em µs, sub-grid do principal (rpm_idx>>1, map_idx>>1)
 int16_t g_ltft_add_us[ems::engine::kLtftAddAxisSize][ems::engine::kLtftAddAxisSize] = {};
@@ -581,12 +584,12 @@ void fuel_reset_ltft() noexcept {
         }
     }
     g_stft_pct_x10 = 0;
-    g_stft_integrator_x10 = 0;
+    g_stft_integrator_x1000 = 0;
 }
 
 void fuel_reset_adaptives() noexcept {
     g_stft_pct_x10 = 0;
-    g_stft_integrator_x10 = 0;
+    g_stft_integrator_x1000 = 0;
     g_ae_decay_cycles = 0u;
     g_ae_pulse_us = 0;
     g_decel_cut = false;
@@ -636,17 +639,19 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     }
 
     const int16_t clamp = static_cast<int16_t>(ems::engine::stft_clamp_pct_x10);
+    const int32_t clamp_x1000 = static_cast<int32_t>(clamp) * 100;
     const int16_t error_x1000 = static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
     const int32_t p_x10 = (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_kp_x100)) / 100;
-    g_stft_integrator_x10 += (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_ki_x1000)) / 1000;
+    // incremento em ×1000: error×ki/10 (era /1000 em ×10 — truncava a zero)
+    g_stft_integrator_x1000 += (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_ki_x1000)) / 10;
 
-    if (g_stft_integrator_x10 > clamp) {
-        g_stft_integrator_x10 = clamp;
-    } else if (g_stft_integrator_x10 < -clamp) {
-        g_stft_integrator_x10 = -clamp;
+    if (g_stft_integrator_x1000 > clamp_x1000) {
+        g_stft_integrator_x1000 = clamp_x1000;
+    } else if (g_stft_integrator_x1000 < -clamp_x1000) {
+        g_stft_integrator_x1000 = -clamp_x1000;
     }
 
-    const int32_t stft = p_x10 + g_stft_integrator_x10;
+    const int32_t stft = p_x10 + g_stft_integrator_x1000 / 100;
     g_stft_pct_x10 = clamp_i16(static_cast<int16_t>(stft), -clamp, clamp);
 
     const uint8_t rpm_idx = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
