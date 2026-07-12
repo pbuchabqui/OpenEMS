@@ -11,6 +11,42 @@ let selFocus = null;           // extremo móvel do rectângulo (Shift+setas)
 let dragSel = null;            // {pane, page, from:[r,c]} durante clique-e-arraste
 let dragMoved = false;         // suprime o click que dispara após um arraste
 
+// Pilha de undo por página: snapshot dos valores antes de cada operação
+// mutante (A/Z, H/V, edição de célula). Tecla X restaura o último.
+function pushUndo(st) {
+  if (!st.values) return;
+  if (!st.undo) st.undo = [];
+  st.undo.push(st.values.map(row => row.slice()));
+  if (st.undo.length > 50) st.undo.shift();
+}
+
+function applyUndo(st, page) {
+  if (!st.undo || !st.undo.length) { toast("nada para desfazer"); return; }
+  const snap = st.undo.pop();
+  const changed = [];
+  for (let r = 0; r < snap.length; r++)
+    for (let c = 0; c < snap[r].length; c++)
+      if (st.values[r][c] !== snap[r][c]) {
+        st.values[r][c] = snap[r][c];
+        st.modified.add(`${r},${c}`);
+        changed.push([r, c]);
+      }
+  if (!changed.length) { toast("nada para desfazer"); return; }
+  const flat = st.values.flat();
+  const [lo, hi] = [Math.min(...flat), Math.max(...flat)];
+  for (const [r, c] of changed) {
+    const td = st.pane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+    if (td) {
+      td.textContent = st.disp ? st.disp.fmt(st.values[r][c]) : st.values[r][c];
+      td.classList.add("mod");
+      td.style.background = heatColor(st.values[r][c], lo, hi);
+      td.style.color = heatTextColor(st.values[r][c], lo, hi);
+    }
+  }
+  toast(`desfeito: ${changed.length} célula(s)`);
+  if (st.send) st.send().catch(err => toast(err.message, true));
+}
+
 // Selecciona o rectângulo entre dois cantos (inclusivo), substituindo a
 // selecção actual. Usado pelo arraste do mouse e por Shift+setas/click.
 function selectRect(pane, page, a, b) {
@@ -73,6 +109,13 @@ document.addEventListener("keydown", e => {
     return;
   }
 
+  // X: desfaz a última operação nesta página (não exige selecção activa)
+  if (e.key === "x" || e.key === "X") {
+    e.preventDefault();
+    applyUndo(st, selPage);
+    return;
+  }
+
   if (!selCells.size) return;
 
   // H/V: interpolação linear entre as células EXTREMAS da selecção — por
@@ -87,6 +130,7 @@ document.addEventListener("keydown", e => {
     const clampV = (v) => (selPage === 2) ? Math.max(-128, Math.min(127, v))
                         : (selPage === 4) ? Math.max(0, Math.min(65535, v))
                         : Math.max(0, Math.min(255, v));
+    pushUndo(st);
     // agrupa as células seleccionadas por linha (H) ou por coluna (V)
     const groups = new Map();  // fixo → [móvel, ...]
     selCells.forEach(key => {
@@ -141,6 +185,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "-" || e.key === "z" || e.key === "Z") delta = -step;
   else return;
   e.preventDefault();
+  pushUndo(st);
   selCells.forEach(key => {
     const [r, c] = key.split(",").map(Number);
     // Peso bilinear (trace auto-select) escala o delta — célula dominante
@@ -492,6 +537,7 @@ async function loadGrid(pane) {
 
   function beginEdit(td) {
     if (td.querySelector("input")) return;
+    pushUndo(st);
     const r = +td.dataset.r, c = +td.dataset.c;
     const orig = st.values[r][c];
     const inp = document.createElement("input");
