@@ -80,6 +80,7 @@ document.addEventListener("keydown", e => {
       td.textContent = st.values[r][c];
       td.classList.add("mod");
       td.style.background = heatColor(st.values[r][c], tmin, tmax);
+      td.style.color = heatTextColor(st.values[r][c], tmin, tmax);
     }
   });
   if (st.send) st.send().catch(err => toast(err.message, true));
@@ -237,6 +238,21 @@ function heatColor(v, min, max) {
   return `hsl(${h} ${s}% ${l}%)`;
 }
 
+// Cor do texto por contraste com o fundo do heatmap: a lightness HSL é a
+// mesma fórmula do heatColor, mas a luminância PERCEBIDA depende do matiz
+// (azul L=28% é muito mais escuro ao olho que amarelo L=42%). Aproximação:
+// luminância ≈ l ajustado pelo peso do canal — texto claro em fundos azuis/
+// vermelhos escuros (extremos), escuro na faixa clara do meio.
+function heatTextColor(v, min, max) {
+  const f = max > min ? (v - min) / (max - min) : 0;
+  const h = (1 - f) * 240;
+  const l = 28 + (1 - Math.abs(f - 0.5) * 2) * 14;
+  // peso perceptual do matiz: verde/amarelo (~60-120°) parecem claros,
+  // azul (240°) e vermelho (0°) parecem escuros para o mesmo L
+  const hueBoost = (h > 40 && h < 160) ? 14 : 0;
+  return (l + hueBoost) >= 40 ? "#111" : "#f2f2f2";
+}
+
 /* ── editores de grid (VE/Spark/Lambda) ───────────────────────────────── */
 const gridState = {};   // page → {values, modified:Set("r,c"), table}
 
@@ -311,7 +327,7 @@ async function loadGrid(pane) {
         // (o estado lógico) intacto.
         const sel = (selPane === pane && selCells.has(key)) ? " sel" : "";
         html += `<td class="${mod}${sel}" data-r="${row}" data-c="${col}"
-                     style="background:${heatColor(v, min, max)}">${v}</td>`;
+                     style="background:${heatColor(v, min, max)};color:${heatTextColor(v, min, max)}">${v}</td>`;
       }
       html += "</tr>";
     }
@@ -386,6 +402,7 @@ async function loadGrid(pane) {
       // transparente — o estilo do <td> é o que aparece por trás do texto).
       const flat = st.values.flat();
       td.style.background = heatColor(v, Math.min(...flat), Math.max(...flat));
+      td.style.color = heatTextColor(v, Math.min(...flat), Math.max(...flat));
       clearTimeout(liveTimer);
       liveTimer = setTimeout(() => {
         // forceBlur=false: isto corre EM PARALELO com a edição ainda em
