@@ -77,7 +77,7 @@ document.addEventListener("keydown", e => {
     const [r, c] = key.split(",");
     const td = selPane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
     if (td) {
-      td.textContent = st.values[r][c];
+      td.textContent = st.disp ? st.disp.fmt(st.values[r][c]) : st.values[r][c];
       td.classList.add("mod");
       td.style.background = heatColor(st.values[r][c], tmin, tmax);
       td.style.color = heatTextColor(st.values[r][c], tmin, tmax);
@@ -248,6 +248,11 @@ const gridState = {};   // page → {values, modified:Set("r,c"), table}
 async function loadGrid(pane) {
   const page = +pane.dataset.page;
   const meta = INFO.grid_pages[page];
+  // Exibição: página 4 guarda λ×1000 no wire/estado; mostrar λ real (1.050).
+  // parse converte o texto editado de volta para o valor cru do protocolo.
+  const disp = (page === 4)
+    ? { fmt: v => (v / 1000).toFixed(3), parse: s => Math.round(parseFloat(s) * 1000) }
+    : { fmt: v => v, parse: s => parseInt(s, 10) };
   pane.innerHTML = `
     <div class="grid-toolbar">
       <strong>${meta.name}</strong> <span class="muted">(${meta.unit})</span>
@@ -269,7 +274,7 @@ async function loadGrid(pane) {
   // dois partilhavam o mesmo outline CSS (.sel/.live2) e o mesmo ciclo de
   // desenho, tornando-se indistinguíveis e a competir pela mesma célula —
   // agora só um corre de cada vez por pane.
-  const st = gridState[page] = { values: null, modified: new Set(), pane, mode: "trace" };
+  const st = gridState[page] = { values: null, modified: new Set(), pane, mode: "trace", disp };
 
   function setMode(mode) {
     if (st.mode === mode) return;
@@ -316,7 +321,7 @@ async function loadGrid(pane) {
         // (o estado lógico) intacto.
         const sel = (selPane === pane && selCells.has(key)) ? " sel" : "";
         html += `<td class="${mod}${sel}" data-r="${row}" data-c="${col}"
-                     style="background:${heatColor(v, min, max)};color:${heatTextColor(v, min, max)}">${v}</td>`;
+                     style="background:${heatColor(v, min, max)};color:${heatTextColor(v, min, max)}">${disp.fmt(v)}</td>`;
       }
       html += "</tr>";
     }
@@ -375,7 +380,7 @@ async function loadGrid(pane) {
     const r = +td.dataset.r, c = +td.dataset.c;
     const orig = st.values[r][c];
     const inp = document.createElement("input");
-    inp.value = orig;
+    inp.value = disp.fmt(orig);
     td.textContent = "";
     td.appendChild(inp);
     inp.focus(); inp.select();
@@ -383,7 +388,7 @@ async function loadGrid(pane) {
     // não disparar um PUT a cada tecla, mas sem esperar sair da célula.
     let liveTimer = null;
     const applyLive = () => {
-      const v = parseInt(inp.value, 10);
+      const v = disp.parse(inp.value);
       if (Number.isNaN(v) || v === st.values[r][c]) return;
       st.values[r][c] = v;
       st.modified.add(`${r},${c}`);
@@ -402,7 +407,7 @@ async function loadGrid(pane) {
     };
     const commit = () => {
       clearTimeout(liveTimer);
-      const v = parseInt(inp.value, 10);
+      const v = disp.parse(inp.value);
       if (!Number.isNaN(v) && v !== orig) {
         st.values[r][c] = v;
         st.modified.add(`${r},${c}`);
@@ -416,10 +421,10 @@ async function loadGrid(pane) {
     let delta = 0;
     inp.onkeydown = e => {
       if (e.key === "Enter") inp.blur();
-      if (e.key === "Escape") { inp.value = orig; inp.blur(); }
+      if (e.key === "Escape") { inp.value = disp.fmt(orig); inp.blur(); }
       const step = (page === 4) ? 10 : 1;
-      if (e.key === "+" || e.key === "=" || e.key === "ArrowUp")   { delta += step; inp.value = orig + delta; e.preventDefault(); applyLive(); }
-      if (e.key === "-" || e.key === "ArrowDown") { delta -= step; inp.value = orig + delta; e.preventDefault(); applyLive(); }
+      if (e.key === "+" || e.key === "=" || e.key === "ArrowUp")   { delta += step; inp.value = disp.fmt(orig + delta); e.preventDefault(); applyLive(); }
+      if (e.key === "-" || e.key === "ArrowDown") { delta -= step; inp.value = disp.fmt(orig + delta); e.preventDefault(); applyLive(); }
     };
   }
 

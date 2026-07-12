@@ -381,7 +381,7 @@ GRID_PAGES = {
     2: {"name": "Spark", "fmt": "i8", "decode": decode_grid_i8, "encode": encode_cell_i8,
         "cell_size": 1, "unit": "°BTDC"},
     4: {"name": "Lambda", "fmt": "i16", "decode": decode_grid_i16, "encode": encode_cell_i16,
-        "cell_size": 2, "unit": "λ×1000"},
+        "cell_size": 2, "unit": "λ"},
 }
 
 # Página 5: layout de sync_page_from_table (ui_protocol.cpp)
