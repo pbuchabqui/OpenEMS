@@ -246,6 +246,12 @@ class OpenEMSLink:
         if ack != b"\x00":
             raise IOError(f"write page {page} off {off}: ACK {ack.hex()}")
 
+    # ── bench-mode ('B': força CLT=90°C/IAT=25°C p/ HIL sem sondas) ──────
+    def bench_mode(self, on: bool) -> None:
+        ack = self._txn(b"B" + bytes([1 if on else 0]), 1)
+        if ack != b"\x00":
+            raise IOError(f"bench_mode: ACK {ack.hex()}")
+
     # ── contadores de debug ('D': 26 × u32 LE) ──────────────────────────
     DEBUG_FIELDS = [
         "late_events", "sched_drops", "inj1_arm", "seq_calls", "evt_overflow",

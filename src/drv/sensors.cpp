@@ -537,16 +537,10 @@ inline void sample_fast_channels() noexcept {
     }
     // O2 ADC fault removed — O2 now CAN-only; knock_raw uses that channel.
     
-    // Bench mode: force MAP/TPS (same as CLT/IAT override above)
-    if (g_bench_clt_iat) {
-        g_data_staging.map_bar_x1000 = g_bench_map_bar_x1000;
-        g_data_staging.tps_pct_x10   = g_bench_tps_pct_x10;
-        // Clear MAP/TPS faults so limp mode doesn't activate
-        g_fault[static_cast<uint8_t>(SensorId::MAP)].active = false;
-        g_fault[static_cast<uint8_t>(SensorId::MAP)].consecutive_bad = 0u;
-        g_fault[static_cast<uint8_t>(SensorId::TPS)].active = false;
-        g_fault[static_cast<uint8_t>(SensorId::TPS)].consecutive_bad = 0u;
-    }
+    // Bench mode força SÓ CLT/IAT (sensors_tick_100ms): MAP/TPS são ADC real
+    // (PA3/PA4 vêm dos DACs do estimulador) — o override que vivia aqui
+    // congelava MAP=35kPa/TPS=3% e invalidava sweeps com o 'B' ligado
+    // (TPS 3% fixo ainda disparava o decel fuel cut em alta rotação).
 
     // Perform plausibility check between MAP and TPS
     if (!DiagnosticManager::check_sensor_plausibility(g_data_staging.map_bar_x1000,

@@ -367,6 +367,16 @@ def api_scope():
             **meta}
 
 
+@app.post("/api/bench_mode")
+def api_bench_mode(body: dict):
+    on = bool(body.get("on", False))
+    try:
+        worker.submit(lambda l: l.bench_mode(on))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"bench_mode: {e}"}, status_code=502)
+    return {"ok": True, "bench": on}
+
+
 @app.get("/api/debug/counters")
 def api_debug_counters():
     try:
