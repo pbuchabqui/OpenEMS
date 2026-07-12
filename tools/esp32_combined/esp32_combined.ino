@@ -16,8 +16,8 @@
  *   GPIO 2  →  GPIO34     Wire loopback p/ scope CKP (mesma placa)
  *   GPIO 32 ←  PE9        IGN1 (TIM1_CH1)
  *   GPIO 33 ←  PE11       IGN2 (TIM1_CH2)
- *   GPIO 25 ←  PE13       IGN3 (TIM1_CH3)
- *   GPIO 26 ←  PE14       IGN4 (TIM1_CH4)
+ *   GPIO 26 →  PA3        MAP  (DAC2 real, 8-bit, ligação DIRETA sem RC)
+ *   GPIO 25 →  PA4        TPS  (DAC1 real — reteste; cmd DAC25 <0-255>)
  *   GPIO 27 ←  PC6        INJ1 (TIM3_CH1)
  *   GPIO 14 ←  PC7        INJ2 (TIM3_CH2)
  *   GPIO 12 ←  PC8        INJ3 (TIM3_CH3)
@@ -138,8 +138,8 @@ static ChanDef kChan[] = {
     // IGN: GPIO assignments matching scope.ino corrected pin mapping
     { GPIO_NUM_32,  "IGN1", "PE9",  true  },   // CH0 — IGN1 (cyl 1)
     { GPIO_NUM_33,  "IGN2", "PE11", true  },   // CH1 — IGN2 (cyl 2)
-    { GPIO_NUM_25,  "IGN3", "PE13", false },   // CH2 — disabled (GPIO25 = MAP PWM)
-    { GPIO_NUM_26,  "IGN4", "PE14", false },   // CH3 — disabled (GPIO26 = TPS PWM)
+    { GPIO_NUM_25,  "IGN3", "PE13", false },   // CH2 — disabled (GPIO25 = TPS DAC1)
+    { GPIO_NUM_26,  "IGN4", "PE14", false },   // CH3 — disabled (GPIO26 = MAP DAC2)
     // INJ: GPIO assignments matching scope.ino corrected pin mapping
     { GPIO_NUM_27,  "INJ1", "PC6",  true  },   // CH4 — INJ1 (cyl 1)
     { GPIO_NUM_14,  "INJ2", "PC7",  true  },   // CH5 — INJ2 (cyl 2)
@@ -302,9 +302,13 @@ static void IRAM_ATTR edge_isr(void* arg) {
 
 #include "driver/ledc.h"
 
-// Todos os sensores usam LEDC PWM 12-bit @ 19kHz + RC 10kΩ/100nF.
-// MAP/TPS migraram de DAC para PWM. GPIO25 danificado → MAP em GPIO21.
-// Cablagem: GPIO21→PA3(MAP), GPIO26→PA4(TPS).
+// Sensores lentos (CLT/IAT/APP/OIL/FUEL/ETB): LEDC PWM 12-bit @ 19kHz + RC.
+// MAP/TPS: DAC REAL de 8 bits — sem RC, sem ripple (o ADC do STM32 lê nível
+// DC direto). MAP no DAC2/GPIO26 (funcional); TPS no DAC1/GPIO25 em RETESTE
+// (tido como danificado na era do stimulator antigo — comando DAC25 <0-255>
+// permite medir o pino cru com multímetro; se confirmar morto, TPS volta a
+// PWM no GPIO21, liberado pelo MAP).
+// Cablagem: GPIO26→PA3(MAP, direto), GPIO25→PA4(TPS, direto).
 
 struct SimState {
     uint32_t rpm;
@@ -320,15 +324,24 @@ struct SimState {
 
 static SimState g_sim;
 
-// MAP: 0-300 kPa → 12-bit PWM (0-4095). 35kPa ≈ 478/4095 ≈ 0.38V @ 3.3V
-static uint32_t map_to_pwm(uint16_t kpa) {
+// MAP: 0-300 kPa → DAC 8-bit (0-255). 35kPa ≈ 30/255 ≈ 0.38V @ 3.3V.
+// Resolução: 300/255 ≈ 1.18 kPa/step — suficiente p/ bancada.
+static uint8_t map_to_dac(uint16_t kpa) {
     if (kpa > 300) kpa = 300;
-    return (uint32_t)kpa * 4095u / 300u;
+    return (uint8_t)((uint32_t)kpa * 255u / 300u);
 }
-// TPS: 0-100% → 12-bit PWM with ~0.2V minimum (248/4095 ≈ 0.20V @ 3.3V)
-static uint32_t tps_to_pwm(uint8_t pct) {
+// TPS: 0-100% → DAC 8-bit com piso ~0.2V (15/255 ≈ 0.19V @ 3.3V)
+static uint8_t tps_to_dac(uint8_t pct) {
     if (pct > 100) pct = 100;
-    return 248u + (uint32_t)pct * 3847u / 100u;
+    return (uint8_t)(15u + (uint32_t)pct * 240u / 100u);
+}
+
+#include "driver/dac.h"
+static constexpr dac_channel_t kMapDac = DAC_CHANNEL_2;  // GPIO26 → PA3
+static constexpr dac_channel_t kTpsDac = DAC_CHANNEL_1;  // GPIO25 → PA4 (reteste)
+static void dac_init_map_tps() {
+    dac_output_enable(kMapDac);
+    dac_output_enable(kTpsDac);
 }
 
 // LEDC PWM: 12-bit, 19 kHz. Timer 0 (ch0-6): CLT,IAT,APP,OIL,FUEL,ETB.
@@ -345,12 +358,8 @@ static PwmChan kPwm[] = {
     { GPIO_NUM_18, LEDC_CHANNEL_4, LEDC_TIMER_0, "FUEL" },
     { GPIO_NUM_16, LEDC_CHANNEL_5, LEDC_TIMER_0, "ETB1" },
     { GPIO_NUM_19, LEDC_CHANNEL_6, LEDC_TIMER_0, "ETB2" },
-    { GPIO_NUM_21, LEDC_CHANNEL_0, LEDC_TIMER_1, "MAP" },   // was GPIO25 (damaged)
-    { GPIO_NUM_26, LEDC_CHANNEL_1, LEDC_TIMER_1, "TPS" },
 };
 static constexpr int kNPwm = (int)(sizeof(kPwm) / sizeof(kPwm[0]));
-static constexpr int kMapPwmIdx = 7;
-static constexpr int kTpsPwmIdx = 8;
 
 static void pwm_init() {
     // Timer 0: CLT, IAT, APP, OIL, FUEL, ETB
@@ -398,8 +407,8 @@ static uint32_t temp_to_pwm(int16_t degc) {
 
 static void update_all_sensors() {
     SimState& s = g_sim;
-    pwm_write(kMapPwmIdx, map_to_pwm(s.map_kpa));
-    pwm_write(kTpsPwmIdx, tps_to_pwm(s.tps_pct));
+    dac_output_voltage(kMapDac, map_to_dac(s.map_kpa));
+    dac_output_voltage(kTpsDac, tps_to_dac(s.tps_pct));
     pwm_write(0, temp_to_pwm(s.clt_degc));   // CLT
     pwm_write(1, temp_to_pwm(s.iat_degc));   // IAT
     pwm_write(2, (uint32_t)s.app_pct * 4095u / 100u);  // APP
@@ -845,6 +854,7 @@ void setup() {
 
     // ── Sensores analógicos (PWM + RC filter) ──────────────────────────
     pwm_init();
+    dac_init_map_tps();
     g_sim = {};  // zero-init
     g_sim.rpm = kRpmInit;
     update_all_sensors();
@@ -890,6 +900,15 @@ static void parse_text_cmd(const char* raw) {
     else if (strcmp(cmd, "CRUISE") == 0)   preset_cruise();
     else if (strcmp(cmd, "WOT")    == 0)   preset_wot();
     else if (strcmp(cmd, "COAST")  == 0)   preset_coast();
+    else if (strcmp(cmd, "DAC25") == 0 && has_val) {
+        // Reteste do DAC1/GPIO25: escreve valor cru p/ medição com multímetro
+        dac_output_voltage(DAC_CHANNEL_1, (uint8_t)constrain(val, 0, 255));
+        Serial.printf("  [DAC] GPIO25=%d (%.2fV esperado)\n", val, val * 3.3f / 255.0f);
+    }
+    else if (strcmp(cmd, "DAC26") == 0 && has_val) {
+        dac_output_voltage(DAC_CHANNEL_2, (uint8_t)constrain(val, 0, 255));
+        Serial.printf("  [DAC] GPIO26=%d (%.2fV esperado)\n", val, val * 3.3f / 255.0f);
+    }
     else if (strcmp(cmd, "STATUS") == 0)   print_status();
 }
 
