@@ -223,6 +223,12 @@ def api_write_cells(page: int, body: dict):
         worker.submit(lambda l: l.burn_page(8))
         return {"ok": True, "written": 1}
     elif page in proto.FIELD_PAGES:
+        # PRIME obrigatório: no firmware, escrever qualquer campo aplica o
+        # buffer INTEIRO da página aos globals (sync_table_from_page). Sem uma
+        # leitura prévia o buffer pode estar zerado → aplicaria rev_limit=0
+        # (corte total), ETB cal zerada, etc. A leitura sincroniza o buffer
+        # com os globals atuais antes do write parcial.
+        worker.submit(lambda l: l.read_page(page))
         writes = [proto.encode_field(page, name, vals)
                   for name, vals in body["fields"].items()]
     else:

@@ -129,7 +129,9 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         pw_ms=pw_x10 / 10.0,
         advance_deg=adv_p40 - 40,
         dc_pct=dc_pct,
-        ve=ve,
+        # VE interpolado vivo (get_ve no ponto rpm×map atual) — o campo 've'
+        # da struct é o VE[0][0] estático (nunca muda); o vivo vai em r[49].
+        ve=r[49],
         stft_pct=stft,
         status_bits=status,
         status={name: bool(status & bit) for name, bit in STATUS_BITS.items()},
