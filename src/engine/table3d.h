@@ -5,6 +5,19 @@
 namespace ems::engine {
 
 constexpr uint8_t kTableAxisSize = 16u;
+// Derivados — usar SEMPRE estes em serialização/buffers em vez de literais:
+// células por tabela (u8/i8 = kTableCells bytes; i16 = 2×kTableCells) e a
+// dimensão do sub-grid LTFT aditivo (indexado por idx>>1 do grid principal).
+constexpr uint16_t kTableCells = static_cast<uint16_t>(kTableAxisSize) * kTableAxisSize;
+constexpr uint8_t  kLtftAddAxisSize = (kTableAxisSize + 1u) / 2u;
+
+// Versão do layout de calibração (byte 175 da página 0, área livre).
+// Páginas de tabela gravadas em flash só são carregadas no boot se a versão
+// bater — evita que um blob antigo menor seja lido com cauda 0xFF (ex.: VE
+// de 256B interpretado como 400B = células a 255). Incrementar sempre que
+// kTableAxisSize (ou o layout serializado das tabelas) mudar.
+constexpr uint8_t kCalLayoutVersion       = 2u;
+constexpr uint16_t kCalLayoutVersionOffset = 175u;
 
 // Eixos das tabelas 16×16. Editáveis em runtime via protocolo (página 11);
 // mutação apenas por table_axes_set(), que valida monotonicidade estrita.

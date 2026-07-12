@@ -73,8 +73,15 @@ int32_t g_ae_pulse_us = 0;
 int16_t g_stft_pct_x10 = 0;
 int32_t g_stft_integrator_x10 = 0;
 int16_t g_ltft_pct_x10[ems::engine::kTableAxisSize][ems::engine::kTableAxisSize] = {};
-// LTFT aditivo: offset em µs, indexado 0-7 (rpm_idx>>1, map_idx>>1)
-int16_t g_ltft_add_us[8][8] = {};
+// LTFT aditivo: offset em µs, sub-grid do principal (rpm_idx>>1, map_idx>>1)
+int16_t g_ltft_add_us[ems::engine::kLtftAddAxisSize][ems::engine::kLtftAddAxisSize] = {};
+
+// Lockstep HAL↔engine: as dimensões NVM (flash.h — HAL não vê headers do
+// engine) têm de espelhar as do grid; este TU vê ambos os headers.
+static_assert(ems::hal::kNvmLtftDim == ems::engine::kTableAxisSize,
+              "kNvmLtftDim deve espelhar kTableAxisSize");
+static_assert(ems::hal::kNvmLtftAddDim == ems::engine::kLtftAddAxisSize,
+              "kNvmLtftAddDim deve espelhar kLtftAddAxisSize");
 bool g_decel_cut = false;
 // Referência barométrica: inicializada com map_ref estático, atualizada no key-on
 static uint16_t g_baro_bar_x100 = ems::engine::cfg::kMapRefBarX100;
@@ -567,8 +574,8 @@ void fuel_reset_ltft() noexcept {
             ems::hal::nvm_write_ltft(x, y, 0);
         }
     }
-    for (uint8_t y = 0u; y < 8u; ++y) {
-        for (uint8_t x = 0u; x < 8u; ++x) {
+    for (uint8_t y = 0u; y < kLtftAddAxisSize; ++y) {
+        for (uint8_t x = 0u; x < kLtftAddAxisSize; ++x) {
             g_ltft_add_us[y][x] = 0;
             ems::hal::nvm_write_ltft_add(x, y, 0);
         }
@@ -590,9 +597,9 @@ void fuel_reset_adaptives() noexcept {
             g_ltft_pct_x10[y][x] = fuel_ltft_load_cell(y, x);
         }
     }
-    for (uint8_t y = 0u; y < 8u; ++y) {
-        for (uint8_t x = 0u; x < 8u; ++x) {
-            // Carrega via índice 16×16 equivalente (dobra o índice)
+    for (uint8_t y = 0u; y < kLtftAddAxisSize; ++y) {
+        for (uint8_t x = 0u; x < kLtftAddAxisSize; ++x) {
+            // Carrega via índice do grid principal equivalente (dobra o índice)
             g_ltft_add_us[y][x] = fuel_ltft_add_load_cell(
                 static_cast<uint8_t>(y << 1u), static_cast<uint8_t>(x << 1u));
         }

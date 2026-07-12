@@ -636,15 +636,26 @@ static void openems_init() noexcept {
 	// Calibração de sensores persistida (página 0, bytes 16-55) → drivers
 	ems::engine::apply_etb_calibration_from_page(g_calib_page0 + 16, 40u);
 	ems::engine::push_sensor_calibration_to_drivers();
-	load_ve_table_from_nvm();
-	load_spark_table_from_nvm();
-	load_lambda_target_table_from_nvm();
+	// Gate de layout: páginas de tabela só carregam se a versão gravada no
+	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
+	// lido com o tamanho novo ganharia cauda 0xFF (VE=255!). Sem versão →
+	// defaults de compilação; um "burn all" no dashboard re-persiste tudo.
+	const bool cal_layout_ok =
+		g_calib_page0[ems::engine::kCalLayoutVersionOffset] ==
+		ems::engine::kCalLayoutVersion;
+	if (cal_layout_ok) {
+		load_ve_table_from_nvm();
+		load_spark_table_from_nvm();
+		load_lambda_target_table_from_nvm();
+	}
 	load_corr_calibration_from_nvm();
 	load_xtau_calibration_from_nvm();
 	load_dwell2d_calibration_from_nvm();
 	load_pedal_map_from_nvm();
 	load_boost_map_from_nvm();
-	load_table_axes_from_nvm();
+	if (cal_layout_ok) {
+		load_table_axes_from_nvm();
+	}
 	if (!ems::hal::nvm_load_adaptive_maps()) {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}

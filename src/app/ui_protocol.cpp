@@ -75,17 +75,18 @@ constexpr uint8_t kTsRcRangeErr = 0x84u;
 constexpr uint8_t kTsRcBusyErr  = 0x85u;  // burn bloqueado com motor girando
 
 alignas(4) static uint8_t g_page0[512] = {};
-alignas(4) static uint8_t g_page1_ve[256] = {};
-alignas(4) static uint8_t g_page2_spark[256] = {};
+alignas(4) static uint8_t g_page1_ve[ems::engine::kTableCells] = {};
+alignas(4) static uint8_t g_page2_spark[ems::engine::kTableCells] = {};
 alignas(4) static uint8_t g_page3_rt[86]      = {};
-alignas(4) static uint8_t g_page4_lambda[512] = {};   // lambda_target_table_x1000
+alignas(4) static uint8_t g_page4_lambda[2u * ems::engine::kTableCells] = {};   // lambda_target_table_x1000
 alignas(4) static uint8_t g_page5_corr[256]   = {};   // tabelas de correção 1D
 alignas(4) static uint8_t g_page6_xtau[80]    = {};   // X-Tau, AE rate curve, quick crank
 alignas(4) static uint8_t g_page7_dwell2d[32] = {};   // Dwell 2D: eixo RPM + factores Q8
 alignas(4) static uint8_t g_page8_pedalmap[80] = {};  // Pedal map: 4 modos × 10 × uint16
 alignas(4) static uint8_t g_page9_boost[112]   = {};  // Boost map: 7 marchas × 8 RPM × uint16
-alignas(4) static uint8_t g_page10_ltft[320]   = {};  // LTFT: mult 16×16 int8 + add 8×8 int8
-alignas(4) static uint8_t g_page11_axes[64]    = {};  // Eixos: 16×u16 RPM + 16×u16 load bar×100
+alignas(4) static uint8_t g_page10_ltft[ems::engine::kTableCells +
+    static_cast<uint16_t>(ems::engine::kLtftAddAxisSize) * ems::engine::kLtftAddAxisSize] = {};  // LTFT: mult 16×16 int8 + add 8×8 int8
+alignas(4) static uint8_t g_page11_axes[4u * ems::engine::kTableAxisSize]    = {};  // Eixos: 16×u16 RPM + 16×u16 load bar×100
 
 alignas(4) static uint8_t g_env_buf[kEnvMaxPayload] = {};
 static uint16_t g_env_size = 0u;
@@ -144,12 +145,11 @@ inline void exit_critical() noexcept {
 }
 
 inline uint16_t page_size(uint8_t page) noexcept {
-    if (page == 0x00u || page == 0x04u) {
-        return 512u;
-    }
-    if (page == 0x01u || page == 0x02u || page == 0x05u) {
-        return 256u;
-    }
+    if (page == 0x00u) { return 512u; }
+    if (page == 0x04u) { return static_cast<uint16_t>(sizeof(g_page4_lambda)); }
+    if (page == 0x01u) { return static_cast<uint16_t>(sizeof(g_page1_ve)); }
+    if (page == 0x02u) { return static_cast<uint16_t>(sizeof(g_page2_spark)); }
+    if (page == 0x05u) { return 256u; }
     if (page == 0x03u) {
         return static_cast<uint16_t>(sizeof(g_page3_rt));
     }
@@ -473,12 +473,15 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 170, &ems::engine::mspark_max_rpm_x10, 2u);
         g_page0[172] = ems::engine::mspark_count;
         std::memcpy(g_page0 + 173, &ems::engine::mspark_inter_dwell_ms_x10, 2u);
+        // Versão do layout de calibração — gate do boot contra blobs de
+        // tabela com dimensão antiga (ver kCalLayoutVersion em table3d.h).
+        g_page0[ems::engine::kCalLayoutVersionOffset] = ems::engine::kCalLayoutVersion;
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
         std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));
     } else if (page == 0x04u) {
-        std::memcpy(g_page4_lambda, ems::engine::lambda_target_table_x1000, 512u);
+        std::memcpy(g_page4_lambda, ems::engine::lambda_target_table_x1000, sizeof(g_page4_lambda));
     } else if (page == 0x05u) {
         uint8_t* p = g_page5_corr;
         std::memcpy(p +   0, ems::engine::clt_corr_axis_x10,          16u);
@@ -531,15 +534,18 @@ inline void sync_page_from_table(uint8_t page) noexcept {
     } else if (page == 0x09u) {
         std::memcpy(g_page9_boost, ems::engine::boost_target_bar_x1000, sizeof(g_page9_boost));
     } else if (page == 0x0Au) {
-        for (uint8_t m = 0u; m < 16u; ++m) {
-            for (uint8_t r = 0u; r < 16u; ++r) {
-                g_page10_ltft[m * 16u + r] = static_cast<uint8_t>(
+        constexpr uint8_t  kN   = ems::engine::kTableAxisSize;
+        constexpr uint8_t  kNA  = ems::engine::kLtftAddAxisSize;
+        constexpr uint16_t kOffAdd = ems::engine::kTableCells;
+        for (uint8_t m = 0u; m < kN; ++m) {
+            for (uint8_t r = 0u; r < kN; ++r) {
+                g_page10_ltft[m * kN + r] = static_cast<uint8_t>(
                     ems::hal::nvm_read_ltft(r, m));
             }
         }
-        for (uint8_t m = 0u; m < 8u; ++m) {
-            for (uint8_t r = 0u; r < 8u; ++r) {
-                g_page10_ltft[256u + m * 8u + r] = static_cast<uint8_t>(
+        for (uint8_t m = 0u; m < kNA; ++m) {
+            for (uint8_t r = 0u; r < kNA; ++r) {
+                g_page10_ltft[kOffAdd + m * kNA + r] = static_cast<uint8_t>(
                     ems::hal::nvm_read_ltft_add(r, m));
             }
         }
@@ -547,8 +553,9 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         uint16_t rpm[ems::engine::kTableAxisSize];
         uint16_t load[ems::engine::kTableAxisSize];
         ems::engine::table_axes_get(rpm, load);
-        std::memcpy(g_page11_axes +  0, rpm,  32u);
-        std::memcpy(g_page11_axes + 32, load, 32u);
+        constexpr uint16_t kAxisBytes = 2u * ems::engine::kTableAxisSize;
+        std::memcpy(g_page11_axes + 0,          rpm,  kAxisBytes);
+        std::memcpy(g_page11_axes + kAxisBytes, load, kAxisBytes);
     }
 }
 
@@ -621,7 +628,7 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
     } else if (page == 0x02u) {
         std::memcpy(ems::engine::spark_table, g_page2_spark, sizeof(g_page2_spark));
     } else if (page == 0x04u) {
-        std::memcpy(ems::engine::lambda_target_table_x1000, g_page4_lambda, 512u);
+        std::memcpy(ems::engine::lambda_target_table_x1000, g_page4_lambda, sizeof(g_page4_lambda));
     } else if (page == 0x05u) {
         const uint8_t* p = g_page5_corr;
         std::memcpy(ems::engine::clt_corr_axis_x10,          p +   0, 16u);
@@ -674,8 +681,9 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
     } else if (page == 0x0Bu) {
         uint16_t rpm[ems::engine::kTableAxisSize];
         uint16_t load[ems::engine::kTableAxisSize];
-        std::memcpy(rpm,  g_page11_axes +  0, 32u);
-        std::memcpy(load, g_page11_axes + 32, 32u);
+        constexpr uint16_t kAxisBytes = 2u * ems::engine::kTableAxisSize;
+        std::memcpy(rpm,  g_page11_axes + 0,          kAxisBytes);
+        std::memcpy(load, g_page11_axes + kAxisBytes, kAxisBytes);
         return ems::engine::table_axes_set(rpm, load);
     }
     return true;
@@ -706,6 +714,7 @@ inline bool burn_page_to_flash(uint8_t page) noexcept {
     if (page == 0x00u) {
         // Serializa g_eng_cfg → g_page0[2-15] e guarda o slot NVM 0 completo.
         ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+        g_page0[ems::engine::kCalLayoutVersionOffset] = ems::engine::kCalLayoutVersion;
         const bool ok = ems::hal::nvm_save_calibration(0u, g_page0,
                                             static_cast<uint16_t>(sizeof(g_page0)));
         if (!ok) { return false; }
@@ -725,7 +734,7 @@ inline bool burn_page_to_flash(uint8_t page) noexcept {
         return true;
     }
     if (page == 0x04u) {
-        const bool ok = ems::hal::nvm_save_calibration(3u, g_page4_lambda, 512u);
+        const bool ok = ems::hal::nvm_save_calibration(3u, g_page4_lambda, sizeof(g_page4_lambda));
         if (!ok) { return false; }
         clear_page_dirty(page);
         return true;

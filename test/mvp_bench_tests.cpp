@@ -16,6 +16,7 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <cmath>
 
@@ -3134,6 +3135,43 @@ static void test_hal_flash_all(void) {
     } else {
         CHECK_TRUE(true, "save/load_calibration: graceful result");
     }
+
+    section("hal/flash: gate de layout do setor adaptativo (magic LTF2)");
+    {
+        // Imagem sintética: setor apagado (0xFF) OU layout antigo (sem magic
+        // na posição atual) → inválido; magic presente → válido.
+        static uint8_t sector[8192];
+        memset(sector, 0xFF, sizeof(sector));
+        CHECK_FALSE(nvm_adaptive_sector_valid(sector),
+                    "setor apagado (0xFF) → layout inválido");
+        memset(sector, 0, sizeof(sector));
+        CHECK_FALSE(nvm_adaptive_sector_valid(sector),
+                    "layout antigo (sem magic) → inválido");
+        memcpy(sector + kNvmOffLayoutMagic, &kNvmLayoutMagic,
+                    sizeof(kNvmLayoutMagic));
+        CHECK_TRUE(nvm_adaptive_sector_valid(sector),
+                   "magic presente → layout válido");
+        CHECK_FALSE(nvm_adaptive_sector_valid(nullptr), "nullptr → inválido");
+        // Coerência do layout derivado: regiões não podem sobrepor-se
+        CHECK_TRUE(kNvmOffKnock >= kNvmLtftDim * kNvmLtftDim,
+                   "knock após LTFT-mult");
+        CHECK_TRUE(kNvmOffLayoutMagic >=
+                       kNvmOffLtftAdd + kNvmLtftAddDim * kNvmLtftAddDim,
+                   "magic após LTFT-add");
+        CHECK_TRUE(kNvmSeedOffset >= kNvmOffLayoutMagic + 4u, "seed após magic");
+        CHECK_TRUE((kNvmOffLayoutMagic % 16u) == 0u, "magic 16-alinhado");
+        CHECK_TRUE((kNvmSeedOffset % 16u) == 0u, "seed 16-alinhado");
+    }
+
+    section("hal/flash: bounds LTFT seguem as dimensões NVM");
+    nvm_test_reset();
+    CHECK_TRUE(nvm_write_ltft(kNvmLtftDim - 1u, kNvmLtftDim - 1u, 7),
+               "última célula LTFT aceita");
+    CHECK_FALSE(nvm_write_ltft(kNvmLtftDim, 0u, 7), "além do grid → false");
+    CHECK_TRUE(nvm_write_ltft_add(kNvmLtftAddDim - 1u, kNvmLtftAddDim - 1u, 3),
+               "última célula LTFT-add aceita");
+    CHECK_FALSE(nvm_write_ltft_add(kNvmLtftAddDim, 0u, 3),
+                "além do sub-grid → false");
 
     section("hal/flash: flash_test_set_busy_polls blocks writes");
     nvm_test_reset();

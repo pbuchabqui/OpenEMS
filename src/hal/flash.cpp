@@ -34,15 +34,30 @@ static uint32_t runtime_seed_crc32(const ems::hal::RuntimeSyncSeed& seed) noexce
     return ems::hal::crc32_calc(p, sz);
 }
 
+namespace ems::hal {
+
+// Pura e compilada em ambos os alvos (target + host-test): o gate de layout
+// do setor adaptativo é testável alimentando imagens sintéticas.
+bool nvm_adaptive_sector_valid(const uint8_t* sector) noexcept {
+    if (sector == nullptr) { return false; }
+    uint32_t magic = 0u;
+    // memcpy: o offset é 16-alinhado, mas não assumir alinhamento do buffer.
+    __builtin_memcpy(&magic, sector + kNvmOffLayoutMagic, sizeof(magic));
+    return magic == kNvmLayoutMagic;
+}
+
+}  // namespace ems::hal
+
 #ifndef EMS_HOST_TEST
 
 #include "hal/regs.h"
 
 // ── Buffers SRAM para LTFT e Knock maps ─────────────────────────────────────
 // Espelham os dados da Flash; modificados em RAM e flushed periodicamente.
-static int8_t  g_ltft_ram[16][16] = {};     // 256 bytes  @ offset 0
-static int8_t  g_knock_ram[8][8]  = {};     // 64 bytes   @ offset 256
-static int8_t  g_ltft_add_ram[8][8] = {};   // 64 bytes   @ offset 320 (50µs/count)
+// Layout do Setor 0: ver kNvmOff* em flash.h (offsets derivados das dimensões).
+static int8_t  g_ltft_ram[ems::hal::kNvmLtftDim][ems::hal::kNvmLtftDim] = {};
+static int8_t  g_knock_ram[8][8]  = {};     // 8×8 fixo (por-cilindro, não segue o grid)
+static int8_t  g_ltft_add_ram[ems::hal::kNvmLtftAddDim][ems::hal::kNvmLtftAddDim] = {};  // 50µs/count
 static bool    g_ltft_dirty     = false;
 static bool    g_knock_dirty    = false;
 static bool    g_ltft_add_dirty = false;
@@ -161,7 +176,7 @@ namespace ems::hal {
 // ── LTFT map ─────────────────────────────────────────────────────────────────
 
 bool nvm_write_ltft(uint8_t rpm_i, uint8_t load_i, int8_t val) noexcept {
-    if (rpm_i >= 16u || load_i >= 16u) { return false; }
+    if (rpm_i >= kNvmLtftDim || load_i >= kNvmLtftDim) { return false; }
     if (g_ltft_ram[rpm_i][load_i] != val) {
         g_ltft_ram[rpm_i][load_i] = val;
         g_ltft_dirty = true;
@@ -170,39 +185,33 @@ bool nvm_write_ltft(uint8_t rpm_i, uint8_t load_i, int8_t val) noexcept {
 }
 
 int8_t nvm_read_ltft(uint8_t rpm_i, uint8_t load_i) noexcept {
-    if (rpm_i >= 16u || load_i >= 16u) { return 0; }
+    if (rpm_i >= kNvmLtftDim || load_i >= kNvmLtftDim) { return 0; }
     return g_ltft_ram[rpm_i][load_i];
 }
 
 bool nvm_load_adaptive_maps() noexcept {
-    std::memcpy(g_ltft_ram,
-                reinterpret_cast<const void*>(kBank2Base),
-                sizeof(g_ltft_ram));
-    std::memcpy(g_knock_ram,
-                reinterpret_cast<const void*>(kBank2Base + 256u),
-                sizeof(g_knock_ram));
-    std::memcpy(g_ltft_add_ram,
-                reinterpret_cast<const void*>(kBank2Base + 320u),
-                sizeof(g_ltft_add_ram));
-
-    bool erased = true;
-    const uint8_t* ltft_bytes = reinterpret_cast<const uint8_t*>(g_ltft_ram);
-    for (uint16_t i = 0u; i < sizeof(g_ltft_ram); ++i) {
-        if (ltft_bytes[i] != 0xFFu) { erased = false; break; }
-    }
-    if (erased) {
+    // Magic gate: setor apagado (0xFF) OU layout antigo (magic ausente na
+    // posição atual) → zera tudo e marca dirty; o flush de 500ms regrava o
+    // setor inteiro já no layout novo, incluindo o magic.
+    if (!nvm_adaptive_sector_valid(reinterpret_cast<const uint8_t*>(kBank2Base))) {
         std::memset(g_ltft_ram, 0, sizeof(g_ltft_ram));
         std::memset(g_knock_ram, 0, sizeof(g_knock_ram));
+        std::memset(g_ltft_add_ram, 0, sizeof(g_ltft_add_ram));
+        g_ltft_dirty     = true;
+        g_knock_dirty    = true;
+        g_ltft_add_dirty = true;
+        return true;
     }
 
-    bool add_erased = true;
-    const uint8_t* add_bytes = reinterpret_cast<const uint8_t*>(g_ltft_add_ram);
-    for (uint16_t i = 0u; i < sizeof(g_ltft_add_ram); ++i) {
-        if (add_bytes[i] != 0xFFu) { add_erased = false; break; }
-    }
-    if (add_erased) {
-        std::memset(g_ltft_add_ram, 0, sizeof(g_ltft_add_ram));
-    }
+    std::memcpy(g_ltft_ram,
+                reinterpret_cast<const void*>(kBank2Base + kNvmOffLtft),
+                sizeof(g_ltft_ram));
+    std::memcpy(g_knock_ram,
+                reinterpret_cast<const void*>(kBank2Base + kNvmOffKnock),
+                sizeof(g_knock_ram));
+    std::memcpy(g_ltft_add_ram,
+                reinterpret_cast<const void*>(kBank2Base + kNvmOffLtftAdd),
+                sizeof(g_ltft_add_ram));
 
     g_ltft_dirty     = false;
     g_knock_dirty    = false;
@@ -211,7 +220,7 @@ bool nvm_load_adaptive_maps() noexcept {
 }
 
 bool nvm_write_ltft_add(uint8_t rpm_i, uint8_t load_i, int8_t val_50us) noexcept {
-    if (rpm_i >= 8u || load_i >= 8u) { return false; }
+    if (rpm_i >= kNvmLtftAddDim || load_i >= kNvmLtftAddDim) { return false; }
     if (g_ltft_add_ram[rpm_i][load_i] != val_50us) {
         g_ltft_add_ram[rpm_i][load_i] = val_50us;
         g_ltft_add_dirty = true;
@@ -220,7 +229,7 @@ bool nvm_write_ltft_add(uint8_t rpm_i, uint8_t load_i, int8_t val_50us) noexcept
 }
 
 int8_t nvm_read_ltft_add(uint8_t rpm_i, uint8_t load_i) noexcept {
-    if (rpm_i >= 8u || load_i >= 8u) { return 0; }
+    if (rpm_i >= kNvmLtftAddDim || load_i >= kNvmLtftAddDim) { return 0; }
     return g_ltft_add_ram[rpm_i][load_i];
 }
 
@@ -333,9 +342,10 @@ bool nvm_flush_adaptive_maps() noexcept {
                     reinterpret_cast<const void*>(kBank2Base),
                     sizeof(sector_buf));
 
-        std::memcpy(sector_buf + 0,   g_ltft_ram,     256u);
-        std::memcpy(sector_buf + 256, g_knock_ram,     64u);
-        std::memcpy(sector_buf + 320, g_ltft_add_ram,  64u);
+        std::memcpy(sector_buf + kNvmOffLtft,    g_ltft_ram,     sizeof(g_ltft_ram));
+        std::memcpy(sector_buf + kNvmOffKnock,   g_knock_ram,    sizeof(g_knock_ram));
+        std::memcpy(sector_buf + kNvmOffLtftAdd, g_ltft_add_ram, sizeof(g_ltft_add_ram));
+        std::memcpy(sector_buf + kNvmOffLayoutMagic, &kNvmLayoutMagic, sizeof(kNvmLayoutMagic));
         g_ltft_dirty     = false;
         g_knock_dirty    = false;
         g_ltft_add_dirty = false;
@@ -425,9 +435,11 @@ bool nvm_flush_adaptive_maps() noexcept {
 }
 
 // ── RuntimeSyncSeed (boot rápido) ────────────────────────────────────────────
-// Armazena seed na região final do Setor 0 (bytes 512-543 = 32 bytes)
+// Armazenado no Setor 0 após o layout magic (offset kNvmSeedOffset, flash.h).
+// Um seed gravado no layout antigo (offset 512) falha o CRC na posição nova
+// → rejeitado limpo, fast-boot cai no caminho de sync normal.
 
-static constexpr uint32_t kSeedOffset = 512u;
+static constexpr uint32_t kSeedOffset = kNvmSeedOffset;
 
 bool nvm_save_runtime_seed(const RuntimeSyncSeed* seed) noexcept {
     if (seed == nullptr) { return false; }
@@ -467,10 +479,10 @@ namespace ems::hal {
 
 static constexpr uint8_t kTestSeedSlots = 8u;
 
-static int8_t g_ltft[16][16]     = {};
+static int8_t g_ltft[kNvmLtftDim][kNvmLtftDim] = {};
 static int8_t g_knock[8][8]      = {};
-static int8_t g_ltft_add[8][8]   = {};
-static uint8_t g_cal[10][512]    = {};
+static int8_t g_ltft_add[kNvmLtftAddDim][kNvmLtftAddDim] = {};
+static uint8_t g_cal[10][1024]   = {};  // linha ≥ maior página (lambda 2×kTableCells)
 static uint32_t g_erase_cnt   = 0u, g_prog_cnt = 0u;
 static bool     g_flash_busy      = false;  // simulates flash BSY timeout when set
 static uint32_t g_flash_busy_polls = 0u;     // non-zero → simulate timeout on next op
@@ -480,12 +492,12 @@ static RuntimeSyncSeed g_seed_slots[kTestSeedSlots] = {};
 static bool g_seed_slot_valid[kTestSeedSlots] = {};
 
 bool nvm_write_ltft(uint8_t r, uint8_t l, int8_t v) noexcept {
-    if (r >= 16u || l >= 16u) { return false; }
+    if (r >= kNvmLtftDim || l >= kNvmLtftDim) { return false; }
     if (g_flash_busy) { return false; }
     g_ltft[r][l] = v; return true;
 }
 int8_t nvm_read_ltft(uint8_t r, uint8_t l) noexcept {
-    if (r >= 16u || l >= 16u) { return 0; }
+    if (r >= kNvmLtftDim || l >= kNvmLtftDim) { return 0; }
     return g_ltft[r][l];
 }
 bool nvm_load_adaptive_maps() noexcept { return true; }
@@ -500,11 +512,11 @@ int8_t nvm_read_knock(uint8_t r, uint8_t l) noexcept {
 }
 void nvm_reset_knock_map() noexcept { std::memset(g_knock, 0, sizeof(g_knock)); }
 bool nvm_write_ltft_add(uint8_t r, uint8_t l, int8_t v) noexcept {
-    if (r >= 8u || l >= 8u) { return false; }
+    if (r >= kNvmLtftAddDim || l >= kNvmLtftAddDim) { return false; }
     g_ltft_add[r][l] = v; return true;
 }
 int8_t nvm_read_ltft_add(uint8_t r, uint8_t l) noexcept {
-    if (r >= 8u || l >= 8u) { return 0; }
+    if (r >= kNvmLtftAddDim || l >= kNvmLtftAddDim) { return 0; }
     return g_ltft_add[r][l];
 }
 
