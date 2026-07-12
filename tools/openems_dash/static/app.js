@@ -28,8 +28,10 @@ document.addEventListener("keydown", e => {
     if (st.mode !== "manual") return;
     e.preventDefault();
     if (!selAnchor) return;
-    const r = Math.max(0, Math.min(15, selAnchor[0] + nav[0]));
-    const c = Math.max(0, Math.min(15, selAnchor[1] + nav[1]));
+    const maxR = (INFO ? INFO.axes.map_kpa.length : 20) - 1;
+    const maxC = (INFO ? INFO.axes.rpm.length : 20) - 1;
+    const r = Math.max(0, Math.min(maxR, selAnchor[0] + nav[0]));
+    const c = Math.max(0, Math.min(maxC, selAnchor[1] + nav[1]));
     $$("td.sel", selPane).forEach(td => td.classList.remove("sel"));
     selCells.clear(); selWeights.clear();
     const key = `${r},${c}`;
