@@ -48,6 +48,8 @@
  */
 
 #include "Arduino.h"
+#include <WiFi.h>
+#include "wifi_credentials.h"  // WIFI_SSID/WIFI_PASS — gitignored
 #include "esp_timer.h"
 #include "driver/gpio.h"
 #include "driver/rmt.h"
@@ -870,6 +872,7 @@ void setup() {
     // ── Sensores analógicos (PWM + RC filter) ──────────────────────────
     pwm_init();
     dac_init_map_tps();
+    wifi_init();
     g_sim = {};  // zero-init
     g_sim.rpm = kRpmInit;
     update_all_sensors();
@@ -884,6 +887,47 @@ static uint32_t g_last_live_ms = 0;
 // Line buffer for text commands (e.g. "RPM 800\n" from hil_test.py)
 static char g_line[64];
 static int  g_line_pos = 0;
+
+// ── WiFi + TCP (porta 3333): fallback de controle quando o USB cai ─────────
+// Mesmo parser de comandos da serial; StimLink.tcp(host, 3333) já fala isto.
+static WiFiServer g_tcp(3333);
+static WiFiClient g_tcp_client;
+static char g_tcp_line[64];
+static int  g_tcp_line_pos = 0;
+static bool g_wifi_reported = false;
+
+static void wifi_init() {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    // não bloqueia o boot: o loop reporta o IP quando conectar
+}
+
+static void tcp_service() {
+    if (WiFi.status() == WL_CONNECTED && !g_wifi_reported) {
+        Serial.printf("  [WIFI] conectado: %s  (TCP 3333)\n",
+                      WiFi.localIP().toString().c_str());
+        g_tcp.begin();
+        g_wifi_reported = true;
+    }
+    if (!g_wifi_reported) return;
+    if (!g_tcp_client || !g_tcp_client.connected()) {
+        g_tcp_client = g_tcp.accept();
+        if (g_tcp_client) g_tcp_line_pos = 0;
+    }
+    while (g_tcp_client && g_tcp_client.available()) {
+        const char c = (char)g_tcp_client.read();
+        if (c == '\n' || c == '\r') {
+            if (g_tcp_line_pos > 0) {
+                g_tcp_line[g_tcp_line_pos] = '\0';
+                parse_text_cmd(g_tcp_line);
+                g_tcp_client.printf("OK %s\n", g_tcp_line);
+                g_tcp_line_pos = 0;
+            }
+        } else if (g_tcp_line_pos < (int)(sizeof(g_tcp_line) - 1)) {
+            g_tcp_line[g_tcp_line_pos++] = c;
+        }
+    }
+}
 
 static void parse_text_cmd(const char* raw) {
     char buf[64];
@@ -929,6 +973,7 @@ static void parse_text_cmd(const char* raw) {
 
 void loop() {
     process_events();
+    tcp_service();
 
     while (Serial.available()) {
         const char c = (char)Serial.read();
