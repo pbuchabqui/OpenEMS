@@ -214,10 +214,39 @@ static void build_cmp_pattern(uint32_t rpm) {
     g_cmp_sym[0].duration0 = h + 1u;
 }
 
-static void rmt_apply_tx(rmt_channel_t ch, rmt_item32_t* items, int count) {
-    rmt_tx_stop(ch);
-    rmt_write_items(ch, items, count, false);  // false = don't wait
-    rmt_set_tx_loop_mode(ch, true);
+// Arranque SIMULTÂNEO dos loops CKP/CMP. Sem isto o offset CKP↔CMP era o
+// tempo de software entre os dois rmt_write_items, re-sorteado a cada mudança
+// de RPM: um atraso fixo em tempo vira deslocamento angular ∝ RPM
+// (δ×RPM×0.006°/ms) e com offset >360° o pulso CMP cai na revolução errada
+// (fase invertida no decoder do STM32).
+// O ESP32 original NÃO tem tx_sim (SOC_RMT_SUPPORT_TX_SYNCHRO só em S2/S3/C3),
+// então: preenche a RAM do RMT sem iniciar (rmt_fill_tx_items) e dispara os
+// dois tx_start por registrador, back-to-back com IRQs desligadas — offset
+// residual ~100ns, constante (0.01° @ 10000 RPM). Como o CMP loopa em
+// exatamente 2× o período do CKP, a sincronia do arranque persiste para
+// sempre; o único offset restante é o 1µs intencional do build_cmp_pattern
+// (anti-race no TIM5 do STM32).
+static void rmt_apply_tx_pair() {
+    // Terminador (duração 0): em loop mode o RMT reinicia ao encontrá-lo.
+    // rmt_write_items escrevia-o automaticamente; rmt_fill_tx_items NÃO —
+    // sem ele o transmissor varre RAM suja além do padrão (timing corrompido).
+    static const rmt_item32_t kEnd = {};
+    rmt_tx_stop(g_ckp_chan);
+    rmt_tx_stop(g_cmp_chan);
+    rmt_fill_tx_items(g_ckp_chan, g_ckp_sym, kRealTeeth, 0);
+    rmt_fill_tx_items(g_ckp_chan, &kEnd, 1, kRealTeeth);
+    rmt_fill_tx_items(g_cmp_chan, g_cmp_sym, kCmpSymCount, 0);
+    rmt_fill_tx_items(g_cmp_chan, &kEnd, 1, kCmpSymCount);
+    rmt_set_tx_loop_mode(g_ckp_chan, true);
+    rmt_set_tx_loop_mode(g_cmp_chan, true);
+    portDISABLE_INTERRUPTS();
+    RMT.conf_ch[g_ckp_chan].conf1.mem_rd_rst = 1;
+    RMT.conf_ch[g_ckp_chan].conf1.mem_rd_rst = 0;
+    RMT.conf_ch[g_cmp_chan].conf1.mem_rd_rst = 1;
+    RMT.conf_ch[g_cmp_chan].conf1.mem_rd_rst = 0;
+    RMT.conf_ch[g_ckp_chan].conf1.tx_start = 1;
+    RMT.conf_ch[g_cmp_chan].conf1.tx_start = 1;
+    portENABLE_INTERRUPTS();
 }
 
 static void ckp_set_rpm(uint32_t rpm) {
@@ -226,8 +255,7 @@ static void ckp_set_rpm(uint32_t rpm) {
     if (rpm == g_ckp_rpm_active) return;
     build_ckp_pattern(rpm);
     build_cmp_pattern(rpm);
-    rmt_apply_tx(g_ckp_chan, g_ckp_sym, kRealTeeth);
-    rmt_apply_tx(g_cmp_chan, g_cmp_sym, kCmpSymCount);
+    rmt_apply_tx_pair();
     g_ckp_rpm_active = rpm;
     g_rpm = rpm;
     g_rev_count++;
@@ -254,10 +282,9 @@ static void rmt_ckp_init() {
     rmt_chan_init(g_cmp_chan, CMP_GPIO, 2);
     build_ckp_pattern(kRpmInit);
     build_cmp_pattern(kRpmInit);
-    rmt_apply_tx(g_ckp_chan, g_ckp_sym, kRealTeeth);
-    rmt_apply_tx(g_cmp_chan, g_cmp_sym, kCmpSymCount);
+    rmt_apply_tx_pair();
     g_ckp_rpm_active = kRpmInit;
-    Serial.println("RMT OK");
+    Serial.println("RMT OK (tx_sim)");
 }
 
 // ── ISR GPIO scope (IGN, INJ, CKP loopback) ──────────────────────────────
