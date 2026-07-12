@@ -74,6 +74,65 @@ document.addEventListener("keydown", e => {
   }
 
   if (!selCells.size) return;
+
+  // H/V: interpolação linear entre as células EXTREMAS da selecção — por
+  // linha (H, ao longo do eixo de RPM) ou por coluna (V, eixo de MAP).
+  // Interpola pelo VALOR do eixo (não pelo índice): os eixos não são
+  // uniformes (ex.: RPM 500→750 vs 7000→8000), então a rampa fica
+  // fisicamente correta. Extremos mantêm o valor; intermediárias recebem.
+  if (e.key === "h" || e.key === "H" || e.key === "v" || e.key === "V") {
+    e.preventDefault();
+    const horiz = (e.key === "h" || e.key === "H");
+    const axis = horiz ? INFO.axes.rpm : INFO.axes.map_kpa;
+    const clampV = (v) => (selPage === 2) ? Math.max(-128, Math.min(127, v))
+                        : (selPage === 4) ? Math.max(0, Math.min(65535, v))
+                        : Math.max(0, Math.min(255, v));
+    // agrupa as células seleccionadas por linha (H) ou por coluna (V)
+    const groups = new Map();  // fixo → [móvel, ...]
+    selCells.forEach(key => {
+      const [r, c] = key.split(",").map(Number);
+      const fixed = horiz ? r : c;
+      const moving = horiz ? c : r;
+      if (!groups.has(fixed)) groups.set(fixed, []);
+      groups.get(fixed).push(moving);
+    });
+    let changed = 0;
+    groups.forEach((movs, fixed) => {
+      movs.sort((a, b) => a - b);
+      const lo = movs[0], hi = movs[movs.length - 1];
+      if (hi - lo < 2) return;  // sem intermediárias
+      const vAt = (m) => horiz ? st.values[fixed][m] : st.values[m][fixed];
+      const setAt = (m, v) => {
+        if (horiz) st.values[fixed][m] = v; else st.values[m][fixed] = v;
+        st.modified.add(horiz ? `${fixed},${m}` : `${m},${fixed}`);
+        ++changed;
+      };
+      const v0 = vAt(lo), v1 = vAt(hi);
+      const x0 = axis[lo], x1 = axis[hi];
+      for (const m of movs) {
+        if (m === lo || m === hi) continue;
+        const f = (axis[m] - x0) / ((x1 - x0) || 1);
+        setAt(m, clampV(Math.round(v0 + f * (v1 - v0))));
+      }
+    });
+    if (!changed) { toast("interpolação: seleccione ≥3 células na direção"); return; }
+    // actualiza as células visíveis (mesmo padrão do A/Z)
+    const flat2 = st.values.flat();
+    const [m2lo, m2hi] = [Math.min(...flat2), Math.max(...flat2)];
+    selCells.forEach(key => {
+      const [r, c] = key.split(",");
+      const td = selPane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+      if (td) {
+        td.textContent = st.disp ? st.disp.fmt(st.values[r][c]) : st.values[r][c];
+        if (st.modified.has(key)) td.classList.add("mod");
+        td.style.background = heatColor(st.values[r][c], m2lo, m2hi);
+        td.style.color = heatTextColor(st.values[r][c], m2lo, m2hi);
+      }
+    });
+    if (st.send) st.send().catch(err => toast(err.message, true));
+    return;
+  }
+
   const step = (selPage === 4) ? 10 : 1;
   let delta = 0;
   // "A" = step mais, "Z" = step menos (substituem ArrowUp/ArrowDown, agora
