@@ -337,10 +337,15 @@ static uint8_t map_to_dac(uint16_t kpa) {
     uint32_t dac = (uint32_t)corr_x10 * 255u / 3000u;
     return (uint8_t)(dac > 255u ? 255u : dac);
 }
-// TPS: 0-100% → DAC 8-bit com piso ~0.2V (15/255 ≈ 0.19V @ 3.3V)
+// TPS: 0-100% → DAC 8-bit com piso ~0.2V (15/255 ≈ 0.19V @ 3.3V).
+// Mesma calibração do MAP (DAC1 mediu 1.65V p/ 1.75V nominal @ 50% —
+// ganho ~0.931 + offset ~0.09V dos rails): dac_corr = (dac_nom - 7)/0.931.
 static uint8_t tps_to_dac(uint8_t pct) {
     if (pct > 100) pct = 100;
-    return (uint8_t)(15u + (uint32_t)pct * 240u / 100u);
+    const uint32_t nom = 15u + (uint32_t)pct * 240u / 100u;
+    int32_t corr = ((int32_t)nom * 1000 - 6950) / 931;
+    if (corr < 0) corr = 0;
+    return (uint8_t)(corr > 255 ? 255 : corr);
 }
 
 #include "driver/dac.h"
