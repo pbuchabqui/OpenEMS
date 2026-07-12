@@ -119,18 +119,18 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 .mode-btn.active { background: var(--accent); color: #111; font-weight: 700; }
 
 table.tune { border-collapse: collapse; font-variant-numeric: tabular-nums;
-             font-size: clamp(10px, 1.9vh, 18px); user-select: none;
+             font-size: clamp(10px, 1.7vh, 13px); user-select: none;
              font-family: var(--font); }
 table.tune th { color: var(--muted); font-weight: 400; font-size: 10px;
                 padding: 1px 3px; background: var(--panel); position: sticky; }
-/* Células ocupam TODO o espaço disponível: 21 linhas (20 dados + header) e
-   21 colunas preenchem o viewport — overhead vertical ≈150px (statusbar 32 +
-   padding 16 + toolbar 34 + header/margens), horizontal ≈220px (sidebar 140 +
-   rótulos). Sem teto: em tela grande as células crescem junto. */
+/* Altura/largura responsivas: 21 linhas (20 dados + header) e 21 colunas
+   cabem sem scroll — overhead vertical ≈150px (statusbar 32 + padding 16 +
+   toolbar 34 + header/margens), horizontal ≈220px (sidebar 140 + rótulos). */
 table.tune td { border: 1px solid var(--border); padding: 0;
-                width: max(40px, calc((100vw - 220px) / 21));
+                width: clamp(40px, calc((100vw - 220px) / 21), 56px);
                 min-width: 40px;
-                height: max(16px, calc((100vh - 150px) / 21));
+                max-width: 56px;
+                height: clamp(16px, calc((100vh - 150px) / 21), 28px);
                 text-align: center; cursor: cell; color: #111; }
 table.tune td.sel { outline: 1px solid var(--accent); outline-offset: -1px; }
 table.tune td.mod { font-weight: 700; text-decoration: underline; }
