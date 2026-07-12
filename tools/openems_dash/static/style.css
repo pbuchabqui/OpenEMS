@@ -69,29 +69,31 @@ button.primary { border-color: var(--accent); color: var(--accent); }
    ═══════════════════════════════════════════════════════════════════════ */
 #main-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
-/* ── Status bar ──────────────────────────────────────────────────────── */
-#statusbar { flex-shrink: 0; border-bottom: 1px solid var(--border); }
+/* ── Status bar — linha única: gauges | inj-mode | leds ─────────────── */
+#statusbar { flex-shrink: 0; border-bottom: 1px solid var(--border);
+             display: flex; align-items: stretch; gap: 6px; }
 
-/* ── Gauges ──────────────────────────────────────────────────────────── */
-.gauges { display: flex; border-bottom: 1px solid var(--border); }
-.gauge { flex: 1; padding: 6px 10px; border-right: 1px solid var(--border); }
+/* ── Gauges (compactos p/ caber as tabelas 20×20 sem scroll) ────────── */
+.gauges { display: flex; flex: 1; min-width: 0; }
+.gauge { flex: 1; padding: 2px 6px; border-right: 1px solid var(--border); }
 .gauge:last-child { border-right: none; }
-.gauge .v { font: 700 22px var(--font); color: var(--accent);
-            font-variant-numeric: tabular-nums; line-height: 1; }
-.gauge .l { color: var(--muted); font-size: 9px; text-transform: uppercase;
-            letter-spacing: 1px; margin-top: 2px; }
+.gauge .v { font: 700 15px var(--font); color: var(--accent);
+            font-variant-numeric: tabular-nums; line-height: 1.1; }
+.gauge .l { color: var(--muted); font-size: 8px; text-transform: uppercase;
+            letter-spacing: .6px; }
 
 /* ── LEDs de status ──────────────────────────────────────────────────── */
-.leds { display: flex; align-items: center; padding: 3px 10px; gap: 14px;
-        flex-wrap: wrap; }
-.led { font-size: 10px; color: var(--muted); letter-spacing: .5px; }
+.leds { display: flex; align-items: center; padding: 0 8px; gap: 10px; }
+.led { font-size: 9px; color: var(--muted); letter-spacing: .5px;
+       white-space: nowrap; }
 .led.on-good { color: var(--ok); }
 .led.on-bad  { color: var(--err); }
-.inj-mode { font-size: 11px; font-weight: 700; letter-spacing: .8px;
-            padding: 2px 8px; border-radius: 4px; background: var(--bg2); }
+.inj-mode { font-size: 10px; font-weight: 700; letter-spacing: .8px;
+            padding: 0 8px; align-self: center; white-space: nowrap;
+            border-left: 1px solid var(--border); }
 
 /* ── Conteúdo / panes ────────────────────────────────────────────────── */
-#content { flex: 1; overflow: auto; padding: 10px; }
+#content { flex: 1; overflow: auto; padding: 8px; }
 .pane { display: none; }
 .pane.active { display: block; }
 .diag { font-size: 10px; color: var(--muted); margin-top: 6px;
@@ -107,7 +109,7 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 /* ═══════════════════════════════════════════════════════════════════════
    GRID EDITOR (VE / SPARK / LAMBDA)
    ═══════════════════════════════════════════════════════════════════════ */
-.grid-toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+.grid-toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
 .grid-toolbar .dirty { color: var(--warn); font-size: 10px; }
 .grid-toolbar button { width: auto; }
 .mode-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
@@ -117,11 +119,18 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 .mode-btn.active { background: var(--accent); color: #111; font-weight: 700; }
 
 table.tune { border-collapse: collapse; font-variant-numeric: tabular-nums;
-             font-size: 13px; user-select: none; font-family: var(--font); }
+             font-size: clamp(10px, 1.7vh, 13px); user-select: none;
+             font-family: var(--font); }
 table.tune th { color: var(--muted); font-weight: 400; font-size: 10px;
                 padding: 1px 3px; background: var(--panel); position: sticky; }
+/* Altura/largura responsivas: 21 linhas (20 dados + header) e 21 colunas
+   cabem sem scroll — overhead vertical ≈150px (statusbar 32 + padding 16 +
+   toolbar 34 + header/margens), horizontal ≈220px (sidebar 140 + rótulos). */
 table.tune td { border: 1px solid var(--border); padding: 0;
-                width: 56px; min-width: 56px; max-width: 56px; height: 28px;
+                width: clamp(40px, calc((100vw - 220px) / 21), 56px);
+                min-width: 40px;
+                max-width: 56px;
+                height: clamp(16px, calc((100vh - 150px) / 21), 28px);
                 text-align: center; cursor: cell; color: #111; }
 table.tune td.sel { outline: 1px solid var(--accent); outline-offset: -1px; }
 table.tune td.mod { font-weight: 700; text-decoration: underline; }
