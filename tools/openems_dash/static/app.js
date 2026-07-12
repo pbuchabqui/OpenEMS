@@ -7,6 +7,26 @@ let selWeights = new Map();    // "r,c" → peso 0-1 (1.0 = selecção manual; <
 let selPage = 0;               // page of current selection
 let selPane = null;            // pane element
 let selAnchor = null;          // [r,c] da célula "actual" — origem da navegação por setas
+let selFocus = null;           // extremo móvel do rectângulo (Shift+setas)
+let dragSel = null;            // {pane, page, from:[r,c]} durante clique-e-arraste
+let dragMoved = false;         // suprime o click que dispara após um arraste
+
+// Selecciona o rectângulo entre dois cantos (inclusivo), substituindo a
+// selecção actual. Usado pelo arraste do mouse e por Shift+setas/click.
+function selectRect(pane, page, a, b) {
+  clearSel();
+  selPage = page; selPane = pane;
+  const r0 = Math.min(a[0], b[0]), r1 = Math.max(a[0], b[0]);
+  const c0 = Math.min(a[1], b[1]), c1 = Math.max(a[1], b[1]);
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const key = `${r},${c}`;
+      selCells.add(key); selWeights.set(key, 1.0);
+      const td = pane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+      if (td) td.classList.add("sel");
+    }
+  }
+}
 
 function clearSel() {
   if (selPane) $$("td.sel", selPane).forEach(td => td.classList.remove("sel"));
@@ -30,6 +50,15 @@ document.addEventListener("keydown", e => {
     if (!selAnchor) return;
     const maxR = (INFO ? INFO.axes.map_kpa.length : 20) - 1;
     const maxC = (INFO ? INFO.axes.rpm.length : 20) - 1;
+    if (e.shiftKey) {
+      // Shift+seta: âncora fica, o foco move — selecção = rectângulo entre os dois
+      const base = selFocus ?? selAnchor;
+      selFocus = [Math.max(0, Math.min(maxR, base[0] + nav[0])),
+                  Math.max(0, Math.min(maxC, base[1] + nav[1]))];
+      const pane = selPane, page = selPage;
+      selectRect(pane, page, selAnchor, selFocus);
+      return;
+    }
     const r = Math.max(0, Math.min(maxR, selAnchor[0] + nav[0]));
     const c = Math.max(0, Math.min(maxC, selAnchor[1] + nav[1]));
     $$("td.sel", selPane).forEach(td => td.classList.remove("sel"));
@@ -38,6 +67,7 @@ document.addEventListener("keydown", e => {
     selCells.add(key);
     selWeights.set(key, 1.0);
     selAnchor = [r, c];
+    selFocus = null;
     const td = selPane.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
     if (td) td.classList.add("sel");
     return;
@@ -88,6 +118,8 @@ document.addEventListener("keydown", e => {
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+
+document.addEventListener("mouseup", () => { dragSel = null; });
 
 let INFO = null;          // /api/info
 let RT = null;            // último frame de telemetria
@@ -344,14 +376,38 @@ async function loadGrid(pane) {
     // (antes, clique simples ia logo para o texto, sem contorno —
     // selecção individual e múltipla pareciam mecanismos diferentes).
     $$("td[data-r]", pane).forEach(td => {
+      // Clique-e-arraste: mousedown ancora, mouseenter estende o rectângulo.
+      td.onmousedown = (e) => {
+        if (e.button !== 0 || e.target.tagName === "INPUT") return;
+        if (st.mode !== "manual") return;
+        dragSel = { pane, page, from: [+td.dataset.r, +td.dataset.c] };
+        dragMoved = false;
+        e.preventDefault();  // evita selecção de texto durante o arraste
+      };
+      td.onmouseenter = () => {
+        if (!dragSel || dragSel.pane !== pane) return;
+        const to = [+td.dataset.r, +td.dataset.c];
+        if (to[0] !== dragSel.from[0] || to[1] !== dragSel.from[1]) dragMoved = true;
+        selAnchor = dragSel.from;
+        selFocus = to;
+        selectRect(pane, page, dragSel.from, to);
+      };
       td.onclick = (e) => {
         if (e.target.tagName === "INPUT") return;  // clique dentro do campo em edição
+        if (dragMoved) { dragMoved = false; return; }  // fim de arraste ≠ clique
         if (st.mode !== "manual") {
           toast('mudar para modo "✎ Manual" para seleccionar células');
           return;
         }
         const key = `${td.dataset.r},${td.dataset.c}`;
         selAnchor = [+td.dataset.r, +td.dataset.c];  // origem p/ navegação por setas
+        selFocus = null;
+        if (e.shiftKey && selCells.size) {
+          // Shift+click: rectângulo da âncora anterior até aqui
+          const prev = [...selCells][0].split(",").map(Number);
+          selectRect(pane, page, prev, selAnchor);
+          return;
+        }
         if (e.ctrlKey || e.metaKey) {
           if (selCells.has(key)) { selCells.delete(key); selWeights.delete(key); td.classList.remove("sel"); }
           else {
