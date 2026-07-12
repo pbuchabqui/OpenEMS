@@ -8,7 +8,7 @@ namespace ems::hal {
 // HAL não inclui headers do engine: estas constantes DEVEM espelhar
 // engine::kTableAxisSize / kLtftAddAxisSize — static_assert em fuel_calc.cpp
 // (que vê ambos os headers) garante o lockstep.
-constexpr uint8_t kNvmLtftDim    = 16u;
+constexpr uint8_t kNvmLtftDim    = 20u;
 constexpr uint8_t kNvmLtftAddDim = (kNvmLtftDim + 1u) / 2u;
 
 // ── Layout do Setor 0 (LTFT-mult + knock + LTFT-add + magic + seed) ─────────

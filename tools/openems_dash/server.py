@@ -204,7 +204,7 @@ def api_write_cells(page: int, body: dict):
         meta = proto.GRID_PAGES[page]
         writes = []
         for cell in body["cells"]:
-            off = (cell["row"] * 16 + cell["col"]) * meta["cell_size"]
+            off = (cell["row"] * proto.N + cell["col"]) * meta["cell_size"]
             writes.append((off, meta["encode"](cell["value"])))
     elif page == 9:
         rows = body.get("boost_map")

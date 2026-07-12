@@ -2053,9 +2053,9 @@ static void test_table3d_all(void) {
     // value==axis[1]: binary search sets hi=1, idx=lo-1=0 (lower interval)
     CHECK_EQ(table_axis_index(kRpmAxisX10, kTableAxisSize, 7500u), 0u,
              "at axis[1]=7500 → idx=0 (lower interval)");
-    // Above last → idx=kTableAxisSize-2=14
-    CHECK_EQ(table_axis_index(kRpmAxisX10, kTableAxisSize, 999999u), 14u,
-             "above last → idx=kTableAxisSize-2=14");
+    // Above last → idx=kTableAxisSize-2=18
+    CHECK_EQ(table_axis_index(kRpmAxisX10, kTableAxisSize, 999999u), 18u,
+             "above last → idx=kTableAxisSize-2=18");
 
     // ─ table_axis_frac_q8 ────────────────────────────────────────────
     section("table3d: table_axis_frac_q8");
@@ -3859,7 +3859,7 @@ static void test_legacy_protocol_regression(void) {
     ui_feed(&q, 1u);
     uint16_t n = ui_drain(buf, sizeof(buf));
     CHECK_EQ(n, 12u, "'Q' devolve 12 bytes crus (sem envelope)");
-    CHECK_TRUE(memcmp(buf, "OpenEMS_v1.2", 12u) == 0, "assinatura OpenEMS_v1.2");
+    CHECK_TRUE(memcmp(buf, "OpenEMS_v1.3", 12u) == 0, "assinatura OpenEMS_v1.3");
 
     const uint8_t c = 'C';
     ui_feed(&c, 1u);
@@ -3895,7 +3895,7 @@ static void test_ts_envelope_basic(void) {
     CHECK_TRUE(r.frame_ok, "resposta com framing válido");
     CHECK_TRUE(r.crc_ok, "CRC32 da resposta confere");
     CHECK_EQ(r.code, 0x00u, "code OK");
-    CHECK_TRUE(r.len == 12u && memcmp(r.data, "OpenEMS_v1.2", 12u) == 0,
+    CHECK_TRUE(r.len == 12u && memcmp(r.data, "OpenEMS_v1.3", 12u) == 0,
                "payload = assinatura");
 
     const uint8_t c = 'C';
@@ -3999,40 +3999,40 @@ static void test_ts_axes_page(void) {
     ems::app::ui_test_reset();
 
     // read: defaults serializados (rpm[0]=500, load[0]=20)
-    const uint8_t rd[6] = {'r', 0x0Bu, 0x00u, 0x00u, 0x40u, 0x00u};
+    const uint8_t rd[6] = {'r', 0x0Bu, 0x00u, 0x00u, 0x50u, 0x00u};
     EnvResp r = env_txn(rd, 6u);
-    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 64u, "'r' page11 → 64 bytes");
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 80u, "'r' page11 → 80 bytes");
     const uint16_t rpm0 = static_cast<uint16_t>(r.data[0] | (r.data[1] << 8u));
-    const uint16_t load0 = static_cast<uint16_t>(r.data[32] | (r.data[33] << 8u));
+    const uint16_t load0 = static_cast<uint16_t>(r.data[40] | (r.data[41] << 8u));
     CHECK_EQ(rpm0, 500u, "rpm[0] default = 500");
     CHECK_EQ(load0, 20u, "load[0] default = 20 (0.20 bar)");
 
-    // write monotónico: rpm 400..7900 (passo 500), load 10..160 (passo 10)
-    uint8_t wr[6u + 64u] = {'w', 0x0Bu, 0x00u, 0x00u, 0x40u, 0x00u};
-    for (uint8_t i = 0u; i < 16u; ++i) {
-        const uint16_t rv = static_cast<uint16_t>(400u + i * 500u);
+    // write monotónico: rpm 400..(passo 400), load 10..(passo 10)
+    uint8_t wr[6u + 80u] = {'w', 0x0Bu, 0x00u, 0x00u, 0x50u, 0x00u};
+    for (uint8_t i = 0u; i < 20u; ++i) {
+        const uint16_t rv = static_cast<uint16_t>(400u + i * 400u);
         const uint16_t lv = static_cast<uint16_t>(10u + i * 10u);
         wr[6u + i * 2u]       = static_cast<uint8_t>(rv & 0xFFu);
         wr[7u + i * 2u]       = static_cast<uint8_t>(rv >> 8u);
-        wr[6u + 32u + i * 2u] = static_cast<uint8_t>(lv & 0xFFu);
-        wr[7u + 32u + i * 2u] = static_cast<uint8_t>(lv >> 8u);
+        wr[6u + 40u + i * 2u] = static_cast<uint8_t>(lv & 0xFFu);
+        wr[7u + 40u + i * 2u] = static_cast<uint8_t>(lv >> 8u);
     }
     r = env_txn(wr, sizeof(wr));
     CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'w' eixos monotónicos → OK");
     CHECK_EQ(kRpmAxisX10[0], 4000u, "kRpmAxisX10[0]=4000 (400 RPM ×10)");
-    CHECK_EQ(kLoadAxisBarX100[15], 160u, "kLoadAxisBarX100[15]=160");
+    CHECK_EQ(kLoadAxisBarX100[19], 200u, "kLoadAxisBarX100[19]=200");
 
     // write não-monotónico rejeitado, eixos preservados
     wr[6u + 4u] = wr[6u + 0u];  // rpm[2] == rpm[0] → viola monotonicidade
     wr[7u + 4u] = wr[7u + 0u];
     r = env_txn(wr, sizeof(wr));
     CHECK_TRUE(r.frame_ok && r.code == 0x84u, "'w' não-monotónico → 0x84");
-    CHECK_EQ(kRpmAxisX10[2], 14000u, "eixos preservados após rejeição");
+    CHECK_EQ(kRpmAxisX10[2], 12000u, "eixos preservados após rejeição");
 
     // buffer restaurado: 'r' devolve os eixos válidos, não o lixo rejeitado
     r = env_txn(rd, 6u);
     const uint16_t rpm2 = static_cast<uint16_t>(r.data[4] | (r.data[5] << 8u));
-    CHECK_EQ(rpm2, 1400u, "'r' pós-rejeição devolve eixo válido (1400)");
+    CHECK_EQ(rpm2, 1200u, "'r' pós-rejeição devolve eixo válido (1200)");
 
     // burn página 11 → NVM slot 9
     const uint32_t prog_before = ems::hal::nvm_test_program_count();
@@ -4042,10 +4042,12 @@ static void test_ts_axes_page(void) {
     CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before + 1u, "NVM slot 9 gravado");
 
     // restaura defaults p/ não afetar outros testes
-    const uint16_t rpm_def[16] = {500u, 750u, 1000u, 1250u, 1500u, 2000u, 2500u, 3000u,
-                                  3500u, 4000u, 4500u, 5000u, 5500u, 6000u, 7000u, 8000u};
-    const uint16_t load_def[16] = {20u, 30u, 40u, 52u, 64u, 76u, 88u, 100u,
-                                   110u, 130u, 160u, 190u, 220u, 250u, 273u, 300u};
+    const uint16_t rpm_def[20] = {500u, 750u, 1000u, 1250u, 1500u, 1750u, 2000u,
+                                  2250u, 2500u, 2750u, 3000u, 3500u, 4000u, 4500u,
+                                  5000u, 5500u, 6000u, 6500u, 7000u, 8000u};
+    const uint16_t load_def[20] = {20u, 30u, 40u, 46u, 52u, 58u, 64u, 70u, 76u, 88u,
+                                   94u, 100u, 110u, 130u, 160u, 190u, 220u, 250u,
+                                   273u, 300u};
     CHECK_TRUE(table_axes_set(rpm_def, load_def), "defaults restaurados");
 }
 
@@ -4107,8 +4109,8 @@ static void test_ts_envelope_signature_via_r(void) {
     const uint8_t req[7] = {'r', 0x00u, 0x0Fu, 0x00u, 0x00u, 0x00u, 0x00u};
     EnvResp r = env_txn(req, 7u);
     CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u, "'r' page 0x0F → OK");
-    CHECK_TRUE(r.len == 12u && memcmp(r.data, "OpenEMS_v1.2", 12u) == 0,
-               "payload = assinatura OpenEMS_v1.2");
+    CHECK_TRUE(r.len == 12u && memcmp(r.data, "OpenEMS_v1.3", 12u) == 0,
+               "payload = assinatura OpenEMS_v1.3");
 
     // forma sem canId (6 bytes) também deve funcionar
     const uint8_t req6[6] = {'r', 0x0Fu, 0x00u, 0x00u, 0x00u, 0x00u};

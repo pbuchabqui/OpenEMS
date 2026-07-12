@@ -297,9 +297,9 @@ async function loadGrid(pane) {
       INFO.axes.rpm.map(r => `<th>${r}</th>`).join("") + "</tr>";
     // eixo Y invertido na exibição: MAP cresce de baixo p/ cima (data-r mantém
     // o índice real da page — edição/tracing não mudam)
-    for (let row = 15; row >= 0; row--) {
+    for (let row = INFO.axes.map_kpa.length - 1; row >= 0; row--) {
       html += `<tr><th>${INFO.axes.map_kpa[row]}</th>`;
-      for (let col = 0; col < 16; col++) {
+      for (let col = 0; col < INFO.axes.rpm.length; col++) {
         const v = st.values[row][col];
         const key = `${row},${col}`;
         const mod = st.modified.has(key) ? " mod" : "";

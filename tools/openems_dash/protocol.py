@@ -22,20 +22,23 @@ from dataclasses import dataclass, asdict
 
 import serial
 
-# Eixos fixos do firmware (table3d.cpp) — mesmos de tools/hil_test/hil_test.py
+# Dimensão do grid principal (espelha kTableAxisSize do firmware)
+N = 20
+
+# Eixos default do firmware (table3d.cpp) — mesmos de tools/hil_test/hil_test.py
 RPM_AXIS_X10 = [
-    5000, 7500, 10000, 12500, 15000, 20000, 25000, 30000,
-    35000, 40000, 45000, 50000, 55000, 60000, 70000, 80000,
+    5000, 7500, 10000, 12500, 15000, 17500, 20000, 22500, 25000, 27500,
+    30000, 35000, 40000, 45000, 50000, 55000, 60000, 65000, 70000, 80000,
 ]
 MAP_AXIS_BAR_X100 = [
-     20,  30,  40,  52,  64,  76,  88, 100,
-    110, 130, 160, 190, 220, 250, 273, 300,
+     20,  30,  40,  46,  52,  58,  64,  70,  76,  88,
+     94, 100, 110, 130, 160, 190, 220, 250, 273, 300,
 ]
 RPM_AXIS = [v // 10 for v in RPM_AXIS_X10]
 MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
-PAGE_SIZES = {0: 512, 1: 256, 2: 256, 3: 86, 4: 512, 5: 256, 6: 80, 7: 32, 8: 80, 9: 112,
-              10: 320, 11: 64}
+PAGE_SIZES = {0: 512, 1: N*N, 2: N*N, 3: 86, 4: 2*N*N, 5: 256, 6: 80, 7: 32, 8: 80,
+              9: 112, 10: N*N + ((N+1)//2)**2, 11: 4*N}
 
 STATUS_BITS = {
     "FULL_SYNC":        0x0001,  # bit 0
@@ -334,28 +337,29 @@ class OpenEMSLink:
 # ── codecs de página ────────────────────────────────────────────────────────
 
 def decode_grid_u8(buf: bytes) -> list[list[int]]:
-    """Página 1 (VE): 16×16 uint8, row-major [map][rpm]."""
-    return [list(buf[r * 16:(r + 1) * 16]) for r in range(16)]
+    """Página 1 (VE): N×N uint8, row-major [map][rpm]."""
+    return [list(buf[r * N:(r + 1) * N]) for r in range(N)]
 
 
 def decode_grid_i8(buf: bytes) -> list[list[int]]:
-    """Página 2 (spark): 16×16 int8."""
-    vals = struct.unpack("<256b", buf)
-    return [list(vals[r * 16:(r + 1) * 16]) for r in range(16)]
+    """Página 2 (spark): N×N int8."""
+    vals = struct.unpack(f"<{N*N}b", buf)
+    return [list(vals[r * N:(r + 1) * N]) for r in range(N)]
 
 
 def decode_grid_i16(buf: bytes) -> list[list[int]]:
-    """Página 4 (lambda target ×1000): 16×16 int16 LE."""
-    vals = struct.unpack("<256h", buf)
-    return [list(vals[r * 16:(r + 1) * 16]) for r in range(16)]
+    """Página 4 (lambda target ×1000): N×N int16 LE."""
+    vals = struct.unpack(f"<{N*N}h", buf)
+    return [list(vals[r * N:(r + 1) * N]) for r in range(N)]
 
 
 def decode_ltft(buf: bytes) -> dict:
-    """Page 10: LTFT mult 16×16 int8 (%) + LTFT add 8×8 int8 (50µs/count)."""
-    mult = struct.unpack("<256b", buf[:256])
-    mult_grid = [list(mult[r * 16:(r + 1) * 16]) for r in range(16)]
-    add_vals = struct.unpack("<64b", buf[256:320])
-    add_grid = [list(add_vals[r * 8:(r + 1) * 8]) for r in range(8)]
+    """Page 10: LTFT mult N×N int8 (%) + LTFT add (N+1)//2 int8 (50µs/count)."""
+    na = (N + 1) // 2
+    mult = struct.unpack(f"<{N*N}b", buf[:N*N])
+    mult_grid = [list(mult[r * N:(r + 1) * N]) for r in range(N)]
+    add_vals = struct.unpack(f"<{na*na}b", buf[N*N:N*N + na*na])
+    add_grid = [list(add_vals[r * na:(r + 1) * na]) for r in range(na)]
     return {"ltft_pct": mult_grid, "ltft_add_50us": add_grid}
 
 

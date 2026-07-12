@@ -64,17 +64,13 @@ AxisLookupResult axis_lookup(const uint32_t* axis, uint8_t size, uint32_t value)
 namespace ems::engine {
 
 uint32_t kRpmAxisX10[kTableAxisSize] = {
-    5000u,   7500u,   10000u,  12500u,
-    15000u,  20000u,  25000u,  30000u,
-    35000u,  40000u,  45000u,  50000u,
-    55000u,  60000u,  70000u,  80000u,
+    5000u, 7500u, 10000u, 12500u, 15000u, 17500u, 20000u, 22500u, 25000u, 27500u,
+    30000u, 35000u, 40000u, 45000u, 50000u, 55000u, 60000u, 65000u, 70000u, 80000u,
 };
 
 uint32_t kLoadAxisBarX100[kTableAxisSize] = {
-     20u,  30u,  40u,  52u,
-     64u,  76u,  88u, 100u,
-    110u, 130u, 160u, 190u,
-    220u, 250u, 273u, 300u,
+    20u, 30u, 40u, 46u, 52u, 58u, 64u, 70u, 76u, 88u,
+    94u, 100u, 110u, 130u, 160u, 190u, 220u, 250u, 273u, 300u,
 };
 
 bool table_axes_set(const uint16_t rpm[kTableAxisSize],

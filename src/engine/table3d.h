@@ -4,7 +4,7 @@
 
 namespace ems::engine {
 
-constexpr uint8_t kTableAxisSize = 16u;
+constexpr uint8_t kTableAxisSize = 20u;
 // Derivados — usar SEMPRE estes em serialização/buffers em vez de literais:
 // células por tabela (u8/i8 = kTableCells bytes; i16 = 2×kTableCells) e a
 // dimensão do sub-grid LTFT aditivo (indexado por idx>>1 do grid principal).

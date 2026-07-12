@@ -66,18 +66,20 @@ EXPECTED_FIRING_ORDER = [0, 2, 3, 1]   # IGN0→IGN2→IGN3→IGN1  (1-3-4-2)
 # Eixos das tabelas 3D (table3d.cpp)
 # ══════════════════════════════════════════════════════════════════════════════
 
+N = 20  # kTableAxisSize do firmware
+
 RPM_AXIS_X10 = [
-    5000,  7500,  10000, 12500,
-    15000, 20000, 25000, 30000,
-    35000, 40000, 45000, 50000,
-    55000, 60000, 70000, 80000,
+    5000,  7500,  10000, 12500, 15000,
+    17500, 20000, 22500, 25000, 27500,
+    30000, 35000, 40000, 45000, 50000,
+    55000, 60000, 65000, 70000, 80000,
 ]
 
 MAP_AXIS_BAR_X100 = [
-     20,  30,  40,  52,
-     64,  76,  88, 100,
-    110, 130, 160, 190,
-    220, 250, 273, 300,
+     20,  30,  40,  46,  52,
+     58,  64,  70,  76,  88,
+     94, 100, 110, 130, 160,
+    190, 220, 250, 273, 300,
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -334,22 +336,22 @@ class STM32Client:
     def read_tables(self) -> Tables:
         t = Tables()
 
-        raw = self._read_page(1, 0, 256)
-        if len(raw) == 256:
-            t.ve_table = [[raw[r * 16 + c] for c in range(16)] for r in range(16)]
+        raw = self._read_page(1, 0, N * N)
+        if len(raw) == N * N:
+            t.ve_table = [[raw[r * N + c] for c in range(N)] for r in range(N)]
 
-        raw = self._read_page(2, 0, 256)
-        if len(raw) == 256:
+        raw = self._read_page(2, 0, N * N)
+        if len(raw) == N * N:
             t.spark_table = [
-                [struct.unpack_from("b", raw, r * 16 + c)[0] for c in range(16)]
-                for r in range(16)]
+                [struct.unpack_from("b", raw, r * N + c)[0] for c in range(N)]
+                for r in range(N)]
 
-        # page 4: lambda target (16×16 int16, ×1000)
-        raw = self._read_page(4, 0, 512)
-        if len(raw) == 512:
+        # page 4: lambda target (N×N int16, ×1000)
+        raw = self._read_page(4, 0, 2 * N * N)
+        if len(raw) == 2 * N * N:
             t.lambda_target_table = [
-                [struct.unpack_from("<h", raw, (r * 16 + c) * 2)[0]
-                 for c in range(16)] for r in range(16)]
+                [struct.unpack_from("<h", raw, (r * N + c) * 2)[0]
+                 for c in range(N)] for r in range(N)]
 
         # page 5: CLT/IAT corr + warmup + dead-time + dwell
         raw = self._read_page(5, 0, 192)
