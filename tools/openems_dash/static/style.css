@@ -26,8 +26,9 @@ body { background: var(--bg); color: var(--fg);
            background: var(--panel); border-right: 1px solid var(--border);
            display: flex; flex-direction: column; }
 
-#sb-logo { padding: 16px 14px 14px;
-           font: 900 20px var(--font); letter-spacing: 3px; line-height: 1.1;
+#sb-logo { height: 46px; box-sizing: border-box; padding: 0 14px;
+           display: flex; flex-direction: column; justify-content: center;
+           font: 900 18px var(--font); letter-spacing: 3px; line-height: 1.05;
            color: var(--accent); border-bottom: 1px solid var(--border); }
 
 #sb-nav { flex: 1; display: flex; flex-direction: column; padding: 6px 0; }
@@ -70,7 +71,8 @@ button.primary { border-color: var(--accent); color: var(--accent); }
 #main-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
 /* ── Status bar — linha única: gauges | inj-mode | leds ─────────────── */
-#statusbar { flex-shrink: 0; border-bottom: 1px solid var(--border);
+#statusbar { flex-shrink: 0; height: 46px; box-sizing: border-box;
+             border-bottom: 1px solid var(--border);
              display: flex; align-items: stretch; gap: 6px; }
 
 /* ── Gauges (compactos p/ caber as tabelas 20×20 sem scroll) ────────── */
