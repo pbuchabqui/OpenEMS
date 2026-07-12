@@ -233,25 +233,14 @@ function connectWS() {
 function heatColor(v, min, max) {
   const f = max > min ? (v - min) / (max - min) : 0;
   const h = (1 - f) * 240;          // 240=azul → 0=vermelho (faixa completa)
-  const s = 90 + f * 10;            // 90–100% saturação
-  const l = 28 + (1 - Math.abs(f - 0.5) * 2) * 14; // 28% nas extremidades, 42% no meio
+  const s = 72 + f * 10;            // 72–82% saturação (menos berrante)
+  const l = 52 + (1 - Math.abs(f - 0.5) * 2) * 12; // 52% extremos, 64% meio
   return `hsl(${h} ${s}% ${l}%)`;
 }
 
-// Cor do texto por contraste com o fundo do heatmap: a lightness HSL é a
-// mesma fórmula do heatColor, mas a luminância PERCEBIDA depende do matiz
-// (azul L=28% é muito mais escuro ao olho que amarelo L=42%). Aproximação:
-// luminância ≈ l ajustado pelo peso do canal — texto claro em fundos azuis/
-// vermelhos escuros (extremos), escuro na faixa clara do meio.
-function heatTextColor(v, min, max) {
-  const f = max > min ? (v - min) / (max - min) : 0;
-  const h = (1 - f) * 240;
-  const l = 28 + (1 - Math.abs(f - 0.5) * 2) * 14;
-  // peso perceptual do matiz: verde/amarelo (~60-120°) parecem claros,
-  // azul (240°) e vermelho (0°) parecem escuros para o mesmo L
-  const hueBoost = (h > 40 && h < 160) ? 14 : 0;
-  return (l + hueBoost) >= 40 ? "#111" : "#f2f2f2";
-}
+// Degradê claro (L≥52%) → um único tom escuro de texto contrasta em todas
+// as células, sem alternância claro/escuro (estilo TunerStudio).
+function heatTextColor() { return "#1a1a1a"; }
 
 /* ── editores de grid (VE/Spark/Lambda) ───────────────────────────────── */
 const gridState = {};   // page → {values, modified:Set("r,c"), table}
