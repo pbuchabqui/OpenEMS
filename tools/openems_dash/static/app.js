@@ -1495,8 +1495,13 @@ async function drawScope() {
   if (!pane.classList.contains("active") || scopeFrozen) return;
   let s;
   try { s = await api("/api/scope"); } catch { return; }
-  const cv = $("#scopeCanvas");
-  cv.width = cv.parentElement.clientWidth - 8;
+  // desenha o conteúdo estático num canvas offscreen; o cursor é animado
+  // por requestAnimationFrame (scopeAnim) extrapolando o ângulo pelo RPM.
+  if (!drawScope.off) drawScope.off = document.createElement("canvas");
+  const vis = $("#scopeCanvas");
+  const cv = drawScope.off;
+  cv.width = vis.parentElement.clientWidth - 8;
+  cv.height = vis.height;
   const ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
@@ -1506,6 +1511,7 @@ async function drawScope() {
   const synced = s.sync_state === 1 || s.sync_state === 2;
   if (!s.ckp_ms || s.ckp_ms.length < 4 || !synced) {
     scopeSeen.ckp.clear(); scopeSeen.cmp.clear();
+    scopeAnchor = null;
     info.textContent = !s.ckp_ms || s.ckp_ms.length < 4
       ? "sem bordas CKP — sensor/estimulador parado"
       : "sem sync — aguardando referência angular (gap)";
@@ -1587,13 +1593,12 @@ async function drawScope() {
     ctx.fillText(`${pos}°`, x(pos) + 5, yCmp + 12);
   }
 
-  // cursor do ângulo actual (única coisa em movimento)
+  // âncora do cursor animado: o ring é história — a borda mais recente
+  // ocorreu há (agora - t_última_borda); extrapola pelo RPM (6°/ms por RPM/1000)
   const angNow = angles[n-1];
-  const cx = x(angNow);
-  ctx.strokeStyle = "#22c55e";
-  ctx.beginPath(); ctx.moveTo(cx, yTop - 8); ctx.lineTo(cx, yBase); ctx.stroke();
-  ctx.fillStyle = "#22c55e";
-  ctx.fillText(`▼${Math.round(angNow)}°`, Math.min(cx + 3, W - 48), yTop - 12);
+  scopeAnchor = { angle: angNow, t: performance.now(),
+                  degPerMs: (RT && RT.rpm ? RT.rpm : 0) * 6 / 1000,
+                  W, yTop, yBase };
 
   // rótulos
   ctx.fillStyle = "#4a4a4a";
@@ -1610,7 +1615,40 @@ async function drawScope() {
 }
 setInterval(drawScope, 333);
 
+// Animação do cursor: blita o traço estático e desenha o cursor com o
+// ângulo extrapolado (60fps) — movimento contínuo entre polls de 333ms.
+let scopeAnchor = null;
+function scopeAnim() {
+  requestAnimationFrame(scopeAnim);
+  const off = drawScope.off;
+  if (!off) return;
+  if (!$("#tab-telemetry").classList.contains("active")) return;
+  const vis = $("#scopeCanvas");
+  if (vis.width !== off.width) vis.width = off.width;
+  const ctx = vis.getContext("2d");
+  ctx.clearRect(0, 0, vis.width, vis.height);
+  ctx.drawImage(off, 0, 0);
+  if (!scopeAnchor) return;
+  const a = scopeAnchor;
+  const adv = scopeFrozen ? 0 : (performance.now() - a.t) * a.degPerMs;
+  const ang = (((a.angle + adv) % 720) + 720) % 720;
+  const cx = ang / 720 * (a.W - 20) + 10;
+  ctx.strokeStyle = "#22c55e";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx, a.yTop - 8); ctx.lineTo(cx, a.yBase); ctx.stroke();
+  ctx.fillStyle = "#22c55e";
+  ctx.font = "10px monospace";
+  ctx.fillText(`▼${Math.round(ang)}°`, Math.min(cx + 3, a.W - 48), a.yTop - 12);
+}
+requestAnimationFrame(scopeAnim);
+
 $("#scopeFreezeBtn").onclick = () => {
+  // congela o cursor no ângulo do momento (o traço estático já para no poll)
+  if (!scopeFrozen && scopeAnchor) {
+    const a = scopeAnchor;
+    a.angle = (((a.angle + (performance.now() - a.t) * a.degPerMs) % 720) + 720) % 720;
+    a.t = performance.now();
+  }
   scopeFrozen = !scopeFrozen;
   const b = $("#scopeFreezeBtn");
   b.textContent = scopeFrozen ? "▶ RUN" : "⏸ FREEZE";
