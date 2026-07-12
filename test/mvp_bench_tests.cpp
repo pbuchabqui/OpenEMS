@@ -3815,17 +3815,18 @@ struct EnvResp {
     bool crc_ok;      // CRC32 da resposta confere
     uint8_t code;
     uint16_t len;     // bytes de dados (sem o code)
-    uint8_t data[300];
+    uint8_t data[1024];  // >= maior página (lambda 800B) p/ testes whole-page
 };
 
 // Envia payload embrulhado e decodifica a resposta envelope.
 static EnvResp env_txn(const uint8_t* payload, uint16_t n) {
     EnvResp r = {};
-    uint8_t frame[340] = {};
+    static uint8_t frame[1024] = {};
     const uint16_t fl = env_frame(frame, payload, n);
     ui_feed(frame, fl);
 
-    uint8_t buf[340] = {};
+    static uint8_t buf[1024] = {};
+    memset(buf, 0, sizeof(buf));
     const uint16_t rn = ui_drain(buf, sizeof(buf));
     if (rn < 7u) { return r; }
     const uint16_t psize = static_cast<uint16_t>((buf[0] << 8u) | buf[1]);
@@ -4049,6 +4050,50 @@ static void test_ts_axes_page(void) {
                                    94u, 100u, 110u, 130u, 160u, 190u, 220u, 250u,
                                    273u, 300u};
     CHECK_TRUE(table_axes_set(rpm_def, load_def), "defaults restaurados");
+}
+
+static void test_ts_whole_page_800(void) {
+    section("envelope TS: whole-page read de 800B (página 4, lambda 20×20)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+
+    // 'r' page4 off0 count800 numa única transação — exatamente o caso que
+    // motivou kEnvMaxChunk historicamente (Comm Manager pede página inteira).
+    const uint8_t rd[6] = {'r', 0x04u, 0x00u, 0x00u, 0x20u, 0x03u};  // 0x0320=800
+    EnvResp r = env_txn(rd, 6u);
+    CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u, "'r' 800B → OK");
+    CHECK_EQ(r.len, 800u, "800 bytes devolvidos");
+    // primeira célula = lambda_target[0][0] (default 1050)
+    const int16_t l00 = static_cast<int16_t>(r.data[0] | (r.data[1] << 8u));
+    CHECK_EQ(l00, (int16_t)1050, "lambda[0][0] = 1050");
+    // última célula (célula 399) legível e plausível
+    const int16_t l_last = static_cast<int16_t>(r.data[798] | (r.data[799] << 8u));
+    CHECK_TRUE(l_last > 500 && l_last < 1200, "lambda[19][19] plausível");
+
+    // whole-page 400B das páginas 1/2 também
+    const uint8_t rd1[6] = {'r', 0x01u, 0x00u, 0x00u, 0x90u, 0x01u};  // 400
+    r = env_txn(rd1, 6u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 400u, "'r' VE 400B → OK");
+    CHECK_EQ(r.data[0], ems::engine::ve_table[0][0], "VE[0][0] confere");
+    CHECK_EQ(r.data[399], ems::engine::ve_table[19][19], "VE[19][19] confere");
+}
+
+static void test_ltft_page_offsets_20(void) {
+    section("página 10: offsets do layout 20×20 (mult 400 + add 10×10)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    ems::hal::nvm_test_reset();
+
+    // grava células de canto e lê a página inteira
+    CHECK_TRUE(ems::hal::nvm_write_ltft(19u, 19u, 21), "ltft[19][19]=21");
+    CHECK_TRUE(ems::hal::nvm_write_ltft_add(9u, 9u, -7), "add[9][9]=-7");
+    const uint8_t rd[6] = {'r', 0x0Au, 0x00u, 0x00u, 0xF4u, 0x01u};  // 500
+    EnvResp r = env_txn(rd, 6u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 500u, "'r' page10 → 500B");
+    // mult[m=19][r=19] no byte 19*20+19 = 399
+    CHECK_EQ(static_cast<int8_t>(r.data[399]), (int8_t)21, "mult[19][19] no byte 399");
+    // add[m=9][r=9] no byte 400 + 9*10+9 = 499
+    CHECK_EQ(static_cast<int8_t>(r.data[499]), (int8_t)-7, "add[9][9] no byte 499");
 }
 
 // Formas de wire que o TunerStudio REAL emite quando pageIdentifier usa o
@@ -4538,6 +4583,8 @@ int main(void) {
     test_ts_axes_page();
     test_ts_envelope_canid_forms();
     test_ts_envelope_signature_via_r();
+    test_ts_whole_page_800();
+    test_ltft_page_offsets_20();
 
     printf("\n=== OUTPUT TEST (teste de saídas) ===");
     test_output_test_enter_gate();

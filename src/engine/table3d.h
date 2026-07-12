@@ -19,7 +19,7 @@ constexpr uint8_t  kLtftAddAxisSize = (kTableAxisSize + 1u) / 2u;
 constexpr uint8_t kCalLayoutVersion       = 2u;
 constexpr uint16_t kCalLayoutVersionOffset = 175u;
 
-// Eixos das tabelas 16×16. Editáveis em runtime via protocolo (página 11);
+// Eixos das tabelas 20×20. Editáveis em runtime via protocolo (página 11);
 // mutação apenas por table_axes_set(), que valida monotonicidade estrita.
 extern uint32_t kRpmAxisX10[kTableAxisSize];
 extern uint32_t kLoadAxisBarX100[kTableAxisSize];

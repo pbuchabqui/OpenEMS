@@ -85,7 +85,7 @@ alignas(4) static uint8_t g_page7_dwell2d[32] = {};   // Dwell 2D: eixo RPM + fa
 alignas(4) static uint8_t g_page8_pedalmap[80] = {};  // Pedal map: 4 modos × 10 × uint16
 alignas(4) static uint8_t g_page9_boost[112]   = {};  // Boost map: 7 marchas × 8 RPM × uint16
 alignas(4) static uint8_t g_page10_ltft[ems::engine::kTableCells +
-    static_cast<uint16_t>(ems::engine::kLtftAddAxisSize) * ems::engine::kLtftAddAxisSize] = {};  // LTFT: mult 16×16 int8 + add 8×8 int8
+    static_cast<uint16_t>(ems::engine::kLtftAddAxisSize) * ems::engine::kLtftAddAxisSize] = {};  // LTFT: mult N×N int8 + add sub-grid int8
 alignas(4) static uint8_t g_page11_axes[4u * ems::engine::kTableAxisSize]    = {};  // Eixos: 16×u16 RPM + 16×u16 load bar×100
 
 alignas(4) static uint8_t g_env_buf[kEnvMaxPayload] = {};

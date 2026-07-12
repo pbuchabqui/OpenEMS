@@ -384,7 +384,7 @@ Interpolação bilinear em Q8: resolve xi, yi, fx_q8, fy_q8 por busca binária.
 
 ### 7.3 Calibração (`engine/calibration.h`)
 
-**Tabelas 3D (16×16):**
+**Tabelas 3D (20×20):**
 - `ve_table[16][16]` — Eficiência volumétrica (45–254 %)
 - `lambda_target_table_x1000[16][16]` — Lambda alvo ×1000 (765–1050)
 - `spark_table[16][16]` — Avanço base em graus (−10 a +40)
@@ -465,7 +465,7 @@ void    fuel_reset_adaptives();
 
 **Parâmetros adaptativos:**
 - STFT: Kp = 0,03/λ erro · Ki = 0,005/sample · clamp ±25 %
-- LTFT: 16×16 células · range ±25 %
+- LTFT: 20×20 células · range ±25 %
 - Delay lambda: 80–1100 ms (tabela RPM × MAP)
 - STFT habilitado: FULL_SYNC · RPM > 0 · lambda_valid · !ae_active · !rev_cut
 
@@ -785,10 +785,10 @@ bool     can_stack_wbo2_fault();
 | ID | Tamanho | Conteúdo |
 |---|---|---|
 | 0x00 | 512 B | Config geral (byte 0 = IVC ABDC) + ETB cal (offset 0–33) + X-tau cal |
-| 0x01 | 256 B | Tabela VE (16×16 uint8) |
-| 0x02 | 256 B | Tabela Spark (16×16 int8) |
+| 0x01 | 400 B | Tabela VE (20×20 uint8) |
+| 0x02 | 400 B | Tabela Spark (20×20 int8) |
 | 0x03 | 64 B | Realtime (somente leitura) |
-| 0x04 | 512 B | Tabela lambda_target ×1000 (16×16 int16) |
+| 0x04 | 800 B | Tabela lambda_target ×1000 (20×20 int16) |
 | 0x05 | 256 B | Curvas de correção (CLT, IAT, warmup, dwell, AE, idle spark) |
 | 0x06 | 80 B | X-tau (xtau_x_fraction, xtau_tau, AE rate, quick crank) |
 
@@ -924,7 +924,7 @@ make clean      # remove /tmp/openems-build
 
 | Slot | Endereço Flash | Conteúdo | Tamanho |
 |---|---|---|---|
-| Setor 0 | 0x08100000 | LTFT 256B (16×16 int8, off.0) + Knock 64B (8×8 int8, off.256) + LTFT_add 64B (8×8 int8, off.320) + RuntimeSeed 32B (off.512) | 8 KB |
+| Setor 0 | 0x08100000 | LTFT 400B (20×20 int8, off.0) + Knock 64B (8×8 int8, off.400) + LTFT_add 100B (10×10 int8, off.464) + magic LTF2 (off.576) + RuntimeSeed 32B (off.592) | 8 KB |
 | Setor 1 | 0x08102000 | Calibração página 0 (config + ETB + IVC) | 512 B |
 | Setor 2 | 0x08104000 | Calibração página 1 (VE table) | 512 B |
 | Setor 3 | 0x08106000 | Calibração página 2 (Spark table) | 512 B |
