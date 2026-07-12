@@ -40,6 +40,10 @@ bool can_stack_wbo2_fresh(uint32_t now_ms) noexcept;
 // true se o último status_bits transmitido continha STATUS_WBO2_FAULT
 bool can_stack_wbo2_fault() noexcept;
 
+// Lambda simulado p/ bancada (bench-mode): wbo2 sempre fresco com λ fixo.
+// Liberta o gate closed_loop_allowed do STFT/LTFT sem WBO2 físico no CAN.
+void can_stack_set_bench_lambda(bool enable, uint16_t lambda_milli) noexcept;
+
 uint8_t can_stack_wbo2_status() noexcept;
 
 #if defined(EMS_HOST_TEST)

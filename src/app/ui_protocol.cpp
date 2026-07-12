@@ -1258,6 +1258,10 @@ inline void parse_byte(uint8_t b) noexcept {
         // Bench-mode CLT/IAT p/ HIL: 0=off (ADC normal), !=0=on (90°C/25°C fixos,
         // sem SENSOR_FAULT pelos canais CLT/IAT). Ver sensors_set_bench_clt_iat.
         ems::drv::sensors_set_bench_clt_iat(b != 0u, 900, 250);
+        // Lambda simulado λ=1.000: liberta o closed-loop (STFT/LTFT) sem WBO2
+        // físico — com λ medido fixo, o trim caminha até o alvo da tabela
+        // (exercita integrador e aprendizagem; não converge, por design).
+        ems::app::can_stack_set_bench_lambda(b != 0u, 1000u);
         tx_push(kAckOk);
         reset_parser();
         return;

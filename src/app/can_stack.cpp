@@ -13,6 +13,10 @@ static uint8_t  g_wbo2_status     = 0u;
 static uint32_t g_wbo2_last_rx_ms = 0u;
 static bool     g_wbo2_seen       = false;
 static bool     g_wbo2_fault      = true;   // começa em fault até primeiro frame
+// Lambda simulado p/ bancada (bench-mode 'B'): substitui o barramento CAN —
+// wbo2 sempre "fresco" com λ fixo, libertando o gate do STFT/LTFT sem WBO2 físico.
+static bool     g_bench_lambda_on    = false;
+static uint16_t g_bench_lambda_milli = 1000u;
 
 static uint32_t g_last_tx_400_ms  = 0u;
 static uint32_t g_last_tx_401_ms  = 0u;
@@ -47,6 +51,7 @@ inline bool elapsed(uint32_t now_ms, uint32_t last_ms, uint32_t period_ms) noexc
 
 // Retorna true se WBO2 nunca recebeu frame ou se o último frame foi há > 500 ms
 inline bool wbo2_timed_out(uint32_t now_ms) noexcept {
+    if (g_bench_lambda_on) { return false; }  // bench: lambda simulado sempre fresco
     if (!g_wbo2_seen) { return true; }
     return static_cast<uint32_t>(now_ms - g_wbo2_last_rx_ms) > 500u;
 }
@@ -236,12 +241,14 @@ uint32_t can_stack_fco_accum_ul() noexcept {
 }
 
 uint16_t can_stack_lambda_milli() noexcept {
+    if (g_bench_lambda_on) { return g_bench_lambda_milli; }
     return g_lambda_milli;
 }
 
 // Retorna último lambda recebido se sensor fresco,
 // ou WBO2_SAFE_LAMBDA_MILLI (1050) se offline
 uint16_t can_stack_lambda_milli_safe(uint32_t now_ms) noexcept {
+    if (g_bench_lambda_on) { return g_bench_lambda_milli; }
     if (wbo2_timed_out(now_ms)) {
         return WBO2_SAFE_LAMBDA_MILLI;
     }
@@ -253,7 +260,13 @@ bool can_stack_wbo2_fresh(uint32_t now_ms) noexcept {
 }
 
 bool can_stack_wbo2_fault() noexcept {
+    if (g_bench_lambda_on) { return false; }
     return g_wbo2_fault;
+}
+
+void can_stack_set_bench_lambda(bool enable, uint16_t lambda_milli) noexcept {
+    g_bench_lambda_on    = enable;
+    g_bench_lambda_milli = lambda_milli;
 }
 
 uint8_t can_stack_wbo2_status() noexcept {
