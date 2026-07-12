@@ -130,7 +130,7 @@ table.tune td { border: 1px solid var(--border); padding: 0;
                 width: clamp(40px, calc((100vw - 220px) / 21), 56px);
                 min-width: 40px;
                 max-width: 56px;
-                height: clamp(16px, calc((100vh - 165px) / 21), 28px);
+                height: clamp(18px, calc((100vh - 165px) / 18.3), 32px);
                 text-align: center; cursor: cell; color: #111; }
 table.tune td.sel { outline: 1px solid var(--accent); outline-offset: -1px; }
 table.tune td.mod { font-weight: 700; text-decoration: underline; }
