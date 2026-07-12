@@ -251,7 +251,7 @@ async function loadGrid(pane) {
   // Exibição: página 4 guarda λ×1000 no wire/estado; mostrar λ real (1.050).
   // parse converte o texto editado de volta para o valor cru do protocolo.
   const disp = (page === 4)
-    ? { fmt: v => (v / 1000).toFixed(3), parse: s => Math.round(parseFloat(s) * 1000) }
+    ? { fmt: v => (v / 1000).toFixed(2), parse: s => Math.round(parseFloat(s) * 1000) }
     : { fmt: v => v, parse: s => parseInt(s, 10) };
   pane.innerHTML = `
     <div class="grid-toolbar">
