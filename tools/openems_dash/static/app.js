@@ -262,6 +262,7 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
   if (b.dataset.tab === "params"    && !$("#paramsRoot").dataset.loaded)   loadParams();
   if (b.dataset.tab === "pedal-map" && !$("#pedalMapRoot").dataset.loaded) loadPedalMap();
   if (b.dataset.tab === "boost"     && !$("#boostRoot").dataset.loaded)    loadBoostMap();
+  if (b.dataset.tab === "ltft-accum" && !$("#ltftAccumRoot").dataset.loaded) loadLtftAccum();
   if (b.dataset.tab === "output-test" && !$("#outputTestRoot").dataset.loaded) loadOutputTest();
   if (b.dataset.tab === "telemetry")
     charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 160 }));
@@ -1059,6 +1060,125 @@ async function loadBoostMap() {
     } catch (e) { toast(e.message, true); }
   };
   $("#boostReload", root).onclick = reload;
+  await reload();
+}
+
+/* ── LTFT Accum / LEARN (page 12, read-only) ──────────────────────────── */
+// Visualização do acumulador Fase 1: hits + mean STFT por célula.
+// Ready = hits≥30 e |mean STFT| em 0.5–15% (contrato firmware).
+let ltftAccumAuto = null;   // interval id
+
+async function loadLtftAccum() {
+  const root = $("#ltftAccumRoot");
+  root.dataset.loaded = "1";
+  root.innerHTML = `
+    <div class="grid-toolbar">
+      <strong>LTFT ACCUMULATOR</strong>
+      <span class="muted">page 12 · read-only</span>
+      <span class="mode-toggle">
+        <button class="mode-btn active" data-view="hits">Hits</button>
+        <button class="mode-btn" data-view="stft">Mean STFT %</button>
+        <button class="mode-btn" data-view="ready">Ready</button>
+      </span>
+      <button data-act="reload">Reload</button>
+      <label class="muted" style="display:inline-flex;align-items:center;gap:4px;margin-left:8px">
+        <input type="checkbox" id="ltftAccumLive" /> Live 1s
+      </label>
+      <span class="muted" id="ltftAccumMeta"></span>
+      <span class="muted">X = RPM · Y = MAP (kPa) · outline = ready</span>
+    </div>
+    <div class="grid-wrap" id="ltftAccumGrid"></div>`;
+
+  let data = null;
+  let view = "hits";
+
+  function setView(v) {
+    view = v;
+    root.querySelectorAll(".mode-btn").forEach(b =>
+      b.classList.toggle("active", b.dataset.view === v));
+    render();
+  }
+
+  function cellDisplay(r, c) {
+    if (!data) return "—";
+    if (view === "hits") return String(data.hits[r][c]);
+    if (view === "stft") return (data.mean_stft_x10[r][c] / 10).toFixed(1);
+    return data.ready[r][c] ? "●" : "·";
+  }
+
+  function cellValue(r, c) {
+    if (!data) return 0;
+    if (view === "hits") return data.hits[r][c];
+    if (view === "stft") return data.mean_stft_x10[r][c];
+    return data.ready[r][c] ? 1 : 0;
+  }
+
+  function render() {
+    if (!data) {
+      $("#ltftAccumGrid").innerHTML = `<p class="muted">sem dados — ECU offline?</p>`;
+      return;
+    }
+    const n = data.hits.length;
+    const flat = [];
+    for (let r = 0; r < n; r++)
+      for (let c = 0; c < n; c++) flat.push(cellValue(r, c));
+    const min = Math.min(...flat), max = Math.max(...flat);
+    const rpm = (INFO && INFO.axes && INFO.axes.rpm) || [];
+    const map = (INFO && INFO.axes && INFO.axes.map_kpa) || [];
+
+    let html = `<table class="tune"><tr><th></th>` +
+      rpm.map(x => `<th>${x}</th>`).join("") + "</tr>";
+    for (let row = n - 1; row >= 0; row--) {
+      html += `<tr><th>${map[row] ?? row}</th>`;
+      for (let col = 0; col < n; col++) {
+        const v = cellValue(row, col);
+        const ready = data.ready[row][col];
+        const bg = heatColor(v, min, max);
+        const outline = ready ? "outline:2px solid #22c55e;outline-offset:-2px" : "";
+        html += `<td style="background:${bg};color:${heatTextColor()};${outline}"
+          title="MAP ${map[row]} · RPM ${rpm[col]}
+hits=${data.hits[row][col]}
+mean STFT=${(data.mean_stft_x10[row][col]/10).toFixed(1)}%
+ready=${ready ? "yes" : "no"}">${cellDisplay(row, col)}</td>`;
+      }
+      html += "</tr>";
+    }
+    html += "</table>";
+    $("#ltftAccumGrid").innerHTML = html;
+
+    const en = data.auto_learn_enable;
+    const burn = data.auto_learn_burn_ve;
+    let readyCount = 0;
+    for (let r = 0; r < n; r++)
+      for (let c = 0; c < n; c++) if (data.ready[r][c]) readyCount++;
+    $("#ltftAccumMeta").textContent =
+      `ready ${readyCount}/${n * n} · auto-learn=${en === null ? "?" : en} · burn_ve=${burn === null ? "?" : burn} · thr hits≥${data.ready_hits}`;
+  }
+
+  async function reload() {
+    try {
+      data = await api("/api/pages/12");
+      render();
+    } catch (e) {
+      toast(e.message, true);
+      data = null;
+      render();
+    }
+  }
+
+  root.querySelectorAll(".mode-btn").forEach(b =>
+    b.onclick = () => setView(b.dataset.view));
+  root.querySelector("[data-act=reload]").onclick = reload;
+  $("#ltftAccumLive", root).onchange = (ev) => {
+    if (ltftAccumAuto) { clearInterval(ltftAccumAuto); ltftAccumAuto = null; }
+    if (ev.target.checked) {
+      ltftAccumAuto = setInterval(() => {
+        if ($("#tab-ltft-accum").classList.contains("active"))
+          reload().catch(() => {});
+      }, 1000);
+    }
+  };
+
   await reload();
 }
 

@@ -4329,6 +4329,45 @@ static void test_ts_whole_page_800(void) {
     CHECK_EQ(r.data[399], ems::engine::ve_table[19][19], "VE[19][19] confere");
 }
 
+static void test_ltft_accum_page12(void) {
+    section("página 12: LTFT accum export (hits u8 + mean_stft i8)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    fuel_reset_adaptives();
+    fuel_ltft_accum_reset();
+    ltft_auto_learn_enable = 0u;
+
+    const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+
+    // 1 prev + 5 hits com err residual
+    fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false, 5000u, 500u);
+    for (int i = 0; i < 5; ++i) {
+        fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 5u, "5 hits na célula");
+
+    uint8_t buf[kLtftAccumPageSize] = {};
+    fuel_ltft_accum_export(buf, kLtftAccumPageSize);
+    const uint16_t idx = static_cast<uint16_t>(mi) * kTableAxisSize + ri;
+    CHECK_EQ(buf[idx], 5u, "export hits[map][rpm] = 5");
+    // mean STFT i8 no 2º half
+    const int8_t mean_wire = static_cast<int8_t>(buf[kTableCells + idx]);
+    CHECK_EQ(static_cast<int>(mean_wire),
+             static_cast<int>(fuel_ltft_accum_mean_stft_x10(mi, ri)),
+             "export mean_stft confere");
+
+    // Leitura via protocolo page 12 (800 B)
+    const uint8_t rd[6] = {'r', 0x0Cu, 0x00u, 0x00u, 0x20u, 0x03u};  // 800
+    EnvResp r = env_txn(rd, 6u);
+    CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u, "'r' page12 800B → OK");
+    CHECK_EQ(r.len, 800u, "page12 len 800");
+    CHECK_EQ(r.data[idx], 5u, "page12 wire hits = 5");
+
+    fuel_ltft_accum_reset();
+    fuel_reset_adaptives();
+}
+
 static void test_ltft_page_offsets_20(void) {
     section("página 10: offsets do layout 20×20 (mult 400 + add 10×10)");
     ckp_test_reset(); g_ckp_cap = 0u;
@@ -4838,6 +4877,7 @@ int main(void) {
     test_ts_envelope_canid_forms();
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();
+    test_ltft_accum_page12();
     test_ltft_page_offsets_20();
 
     printf("\n=== OUTPUT TEST (teste de saídas) ===");

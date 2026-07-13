@@ -87,6 +87,8 @@ alignas(4) static uint8_t g_page9_boost[112]   = {};  // Boost map: 7 marchas ×
 alignas(4) static uint8_t g_page10_ltft[ems::engine::kTableCells +
     static_cast<uint16_t>(ems::engine::kLtftAddAxisSize) * ems::engine::kLtftAddAxisSize] = {};  // LTFT: mult N×N int8 + add sub-grid int8
 alignas(4) static uint8_t g_page11_axes[4u * ems::engine::kTableAxisSize]    = {};  // Eixos: 16×u16 RPM + 16×u16 load bar×100
+// Page 12: LTFT accum viz (read-only) — hits u8 + mean_stft i8, 800 B
+alignas(4) static uint8_t g_page12_ltft_accum[ems::engine::kLtftAccumPageSize] = {};
 
 alignas(4) static uint8_t g_env_buf[kEnvMaxPayload] = {};
 static uint16_t g_env_size = 0u;
@@ -159,6 +161,7 @@ inline uint16_t page_size(uint8_t page) noexcept {
     if (page == 0x09u) { return static_cast<uint16_t>(sizeof(g_page9_boost)); }
     if (page == 0x0Au) { return static_cast<uint16_t>(sizeof(g_page10_ltft)); }
     if (page == 0x0Bu) { return static_cast<uint16_t>(sizeof(g_page11_axes)); }
+    if (page == 0x0Cu) { return static_cast<uint16_t>(sizeof(g_page12_ltft_accum)); }
     return 0u;
 }
 
@@ -175,6 +178,7 @@ inline uint8_t* page_ptr(uint8_t page) noexcept {
     if (page == 0x09u) { return g_page9_boost; }
     if (page == 0x0Au) { return g_page10_ltft; }
     if (page == 0x0Bu) { return g_page11_axes; }
+    if (page == 0x0Cu) { return g_page12_ltft_accum; }
     return nullptr;
 }
 
@@ -560,6 +564,10 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         constexpr uint16_t kAxisBytes = 2u * ems::engine::kTableAxisSize;
         std::memcpy(g_page11_axes + 0,          rpm,  kAxisBytes);
         std::memcpy(g_page11_axes + kAxisBytes, load, kAxisBytes);
+    } else if (page == 0x0Cu) {
+        // Read-only: snapshot do acumulador LTFT (hits + mean STFT).
+        ems::engine::fuel_ltft_accum_export(
+            g_page12_ltft_accum, static_cast<uint16_t>(sizeof(g_page12_ltft_accum)));
     }
 }
 

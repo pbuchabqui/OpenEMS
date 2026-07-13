@@ -190,6 +190,14 @@ bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 bool fuel_ltft_ve_burn_pending() noexcept;
 void fuel_ltft_ve_burn_clear() noexcept;
 
+// Page 12 (0x0C) — visualização do acumulador (read-only), 800 bytes:
+//   [0 .. N²-1]       hits u8 (sat. 255), row-major [map][rpm]
+//   [N² .. 2·N²-1]    mean_stft_x10 i8 (clamp ±127)
+// Índice linear: map_idx * kTableAxisSize + rpm_idx (igual VE).
+constexpr uint16_t kLtftAccumPageSize =
+    static_cast<uint16_t>(2u * kTableCells);
+void fuel_ltft_accum_export(uint8_t* dst, uint16_t cap) noexcept;
+
 int16_t fuel_get_stft_pct_x10() noexcept;
 void fuel_reset_ltft() noexcept;
 

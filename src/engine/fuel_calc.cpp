@@ -267,6 +267,33 @@ void fuel_ltft_ve_burn_clear() noexcept {
     g_ltft_ve_burn_pending = false;
 }
 
+void fuel_ltft_accum_export(uint8_t* dst, uint16_t cap) noexcept {
+    if (dst == nullptr || cap < kLtftAccumPageSize) {
+        return;
+    }
+    // Zera cauda se cap > size (não esperado).
+    for (uint16_t i = 0u; i < kLtftAccumPageSize; ++i) {
+        dst[i] = 0u;
+    }
+    for (uint8_t m = 0u; m < kTableAxisSize; ++m) {
+        for (uint8_t r = 0u; r < kTableAxisSize; ++r) {
+            const uint16_t idx =
+                static_cast<uint16_t>(m) * kTableAxisSize + r;
+            const uint16_t hits = g_ltft_stats[m][r].hits;
+            dst[idx] = (hits > 255u) ? 255u : static_cast<uint8_t>(hits);
+
+            int16_t mean = fuel_ltft_accum_mean_stft_x10(m, r);
+            if (mean > 127) {
+                mean = 127;
+            } else if (mean < -128) {
+                mean = -128;
+            }
+            dst[kTableCells + idx] =
+                static_cast<uint8_t>(static_cast<int8_t>(mean));
+        }
+    }
+}
+
 uint8_t get_ve(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
     ASSERT_VALID_RPM_X10(rpm_x10);
     ASSERT_VALID_MAP_KPA(map_bar_x100);

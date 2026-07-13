@@ -191,6 +191,17 @@ def api_read_page(page: int):
     if page == 9:
         return {"page": page, "boost_map": proto.decode_boost_map(buf),
                 "rpm_axis": proto.BOOST_RPM_AXIS, "gear_labels": proto.BOOST_GEAR_LABELS}
+    if page == 12:
+        data = proto.decode_ltft_accum(buf)
+        # flags de auto-learn (page0[80-81]) se disponíveis
+        try:
+            p0 = worker.submit(lambda l: l.read_page(0))
+            data["auto_learn_enable"] = 1 if p0[80] else 0
+            data["auto_learn_burn_ve"] = 1 if p0[81] else 0
+        except Exception:  # noqa: BLE001
+            data["auto_learn_enable"] = None
+            data["auto_learn_burn_ve"] = None
+        return {"page": page, **data}
     if page in proto.FIELD_PAGES:
         return {"page": page, "fields": proto.decode_fields(page, buf)}
     return {"page": page, "raw": buf.hex()}

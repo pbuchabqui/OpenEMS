@@ -38,7 +38,8 @@ RPM_AXIS = [v // 10 for v in RPM_AXIS_X10]
 MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
 PAGE_SIZES = {0: 512, 1: N*N, 2: N*N, 3: 86, 4: 2*N*N, 5: 256, 6: 80, 7: 32, 8: 80,
-              9: 112, 10: N*N + ((N+1)//2)**2, 11: 4*N}
+              9: 112, 10: N*N + ((N+1)//2)**2, 11: 4*N,
+              12: 2 * N * N}  # LTFT accum: hits u8 + mean_stft i8
 
 STATUS_BITS = {
     "FULL_SYNC":        0x0001,  # bit 0
@@ -372,6 +373,40 @@ def decode_ltft(buf: bytes) -> dict:
     add_vals = struct.unpack(f"<{na*na}b", buf[N*N:N*N + na*na])
     add_grid = [list(add_vals[r * na:(r + 1) * na]) for r in range(na)]
     return {"ltft_pct": mult_grid, "ltft_add_50us": add_grid}
+
+
+# Contrato firmware kLtftAccumReadyHits / min-max STFT (fuel_calc.h)
+LTFT_ACCUM_READY_HITS = 30
+LTFT_ACCUM_READY_MIN_STFT_X10 = 5
+LTFT_ACCUM_READY_MAX_STFT_X10 = 150
+
+
+def decode_ltft_accum(buf: bytes) -> dict:
+    """Page 12: [hits u8 N×N][mean_stft_x10 i8 N×N], row-major [map][rpm]."""
+    cells = N * N
+    if len(buf) < 2 * cells:
+        raise ValueError(f"page 12: esperado {2*cells}B, got {len(buf)}")
+    hits_flat = list(buf[:cells])
+    stft_flat = list(struct.unpack(f"<{cells}b", buf[cells:cells * 2]))
+    hits = [hits_flat[r * N:(r + 1) * N] for r in range(N)]
+    mean_stft = [stft_flat[r * N:(r + 1) * N] for r in range(N)]
+    ready = []
+    for r in range(N):
+        row = []
+        for c in range(N):
+            h = hits[r][c]
+            s = abs(mean_stft[r][c])
+            row.append(
+                h >= LTFT_ACCUM_READY_HITS
+                and LTFT_ACCUM_READY_MIN_STFT_X10 <= s <= LTFT_ACCUM_READY_MAX_STFT_X10
+            )
+        ready.append(row)
+    return {
+        "hits": hits,
+        "mean_stft_x10": mean_stft,
+        "ready": ready,
+        "ready_hits": LTFT_ACCUM_READY_HITS,
+    }
 
 
 def encode_cell_u8(value: int) -> bytes:
