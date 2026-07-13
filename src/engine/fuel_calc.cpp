@@ -71,10 +71,7 @@ uint8_t g_ae_decay_cycles = 0u;
 int32_t g_ae_pulse_us = 0;
 
 int16_t g_stft_pct_x10 = 0;
-// Integrador em percent×1000 (não ×10): com Ki=0.005 default, um erro de
-// λ 0.07 contribui 0.35 x10-unidades/ciclo — em ×10 inteiro truncava a 0 e
-// o integrador NUNCA acumulava em condição realista (só erros ≥0.2 λ).
-int32_t g_stft_integrator_x1000 = 0;
+
 int16_t g_ltft_pct_x10[ems::engine::kTableAxisSize][ems::engine::kTableAxisSize] = {};
 // LTFT aditivo: offset em µs, sub-grid do principal (rpm_idx>>1, map_idx>>1)
 int16_t g_ltft_add_us[ems::engine::kLtftAddAxisSize][ems::engine::kLtftAddAxisSize] = {};
@@ -231,6 +228,18 @@ bool closed_loop_allowed(int16_t clt_x10,
 }  // namespace
 
 namespace ems::engine {
+
+// Integrador em percent×1000 (não ×10): com Ki=0.005 default, um erro de
+// λ 0.07 contribui 0.35 x10-unidades/ciclo — em ×10 inteiro truncava a 0.
+// Em ems::engine (não anon) porque o comando 'D' exporta p/ diagnóstico.
+int32_t g_stft_integrator_x1000 = 0;
+// DIAG da malha fechada: por que o update foi bloqueado + último erro visto.
+volatile uint32_t g_dbg_stft_blocked_clt = 0u;
+volatile uint32_t g_dbg_stft_blocked_o2  = 0u;
+volatile uint32_t g_dbg_stft_blocked_ae  = 0u;
+volatile uint32_t g_dbg_stft_blocked_cut = 0u;
+volatile uint32_t g_dbg_stft_runs        = 0u;
+volatile int32_t  g_dbg_stft_last_err    = 0;
 
 uint8_t get_ve(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
     ASSERT_VALID_RPM_X10(rpm_x10);
@@ -631,16 +640,23 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                          bool rev_cut,
                          uint32_t net_pw_us) noexcept {
     if (!closed_loop_allowed(clt_x10, o2_valid, ae_active, rev_cut)) {
+        // DIAG: conta o motivo do bloqueio (prioridade na ordem do gate)
+        if (clt_x10 <= 700)      { ++g_dbg_stft_blocked_clt; }
+        else if (!o2_valid)      { ++g_dbg_stft_blocked_o2; }
+        else if (ae_active)      { ++g_dbg_stft_blocked_ae; }
+        else                     { ++g_dbg_stft_blocked_cut; }
         // Anti-windup: congela o trim em vez de decair para zero. Decair causa
         // um "degrau" de combustível perceptível quando o motor volta a
         // closed-loop com a correção resetada — congelar mantém o último
         // trim válido até haver nova leitura de lambda fiável.
         return g_stft_pct_x10;
     }
+    ++g_dbg_stft_runs;
 
     const int16_t clamp = static_cast<int16_t>(ems::engine::stft_clamp_pct_x10);
     const int32_t clamp_x1000 = static_cast<int32_t>(clamp) * 100;
     const int16_t error_x1000 = static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
+    g_dbg_stft_last_err = error_x1000;
     const int32_t p_x10 = (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_kp_x100)) / 100;
     // incremento em ×1000: error×ki/10 (era /1000 em ×10 — truncava a zero)
     g_stft_integrator_x1000 += (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_ki_x1000)) / 10;

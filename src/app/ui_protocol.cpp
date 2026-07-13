@@ -1176,7 +1176,7 @@ inline void parse_byte(uint8_t b) noexcept {
             extern volatile uint32_t g_diag_presync_revs __asm("g_diag_presync_revs");
             extern volatile uint32_t g_diag_seq_revs __asm("g_diag_seq_revs");
             extern volatile uint32_t g_diag_clear_all_count __asm("g_diag_clear_all_count");
-            const uint32_t diag[26] = {
+            const uint32_t diag[33] = {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
                 g_dbg_inj1_arm,
@@ -1203,8 +1203,15 @@ inline void parse_byte(uint8_t b) noexcept {
                 ems::drv::g_dbg_loss_stall,
                 ems::drv::g_dbg_loss_avg,
                 ems::drv::g_dbg_loss_delta,
+                ems::engine::g_dbg_stft_blocked_clt,
+                ems::engine::g_dbg_stft_blocked_o2,
+                ems::engine::g_dbg_stft_blocked_ae,
+                ems::engine::g_dbg_stft_blocked_cut,
+                ems::engine::g_dbg_stft_runs,
+                static_cast<uint32_t>(ems::engine::g_dbg_stft_last_err),
+                static_cast<uint32_t>(ems::engine::g_stft_integrator_x1000),
             };
-            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 104U);
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 132U);
             return;
         }
         return;

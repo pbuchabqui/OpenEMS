@@ -262,11 +262,14 @@ class OpenEMSLink:
         "evt_inserted", "evt_dispatched", "presync_revs", "seq_revs",
         "diag_clear_all", "gap_accepted", "gap_premature", "gap_last_tc",
         "loss_missing_gap", "loss_stall", "loss_avg", "loss_delta",
+        "stft_blk_clt", "stft_blk_o2", "stft_blk_ae", "stft_blk_cut",
+        "stft_runs", "stft_last_err", "stft_integ_x1000",
     ]
 
     def read_debug(self) -> dict:
-        buf = self._txn(b"D", 104)
-        vals = struct.unpack("<26I", buf)
+        buf = self._txn(b"D", 132)
+        # 31 u32 + 2 i32 (stft_last_err, stft_integ_x1000 são com sinal)
+        vals = struct.unpack("<31I", buf[:124]) + struct.unpack("<2i", buf[124:])
         return dict(zip(self.DEBUG_FIELDS, vals))
 
     # ── osciloscópio CKP/CMP ('K': 294 bytes) ────────────────────────────
