@@ -181,9 +181,14 @@ bool fuel_ltft_accum_cell_ready(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_ltft_accum_mean_stft_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_ltft_accum_mean_err_x1000(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 
-// Fase 2: se a célula estiver ready, bakia mean STFT na VE e desenrola trims.
-// Retorna true se commitou. Índices: [map_idx][rpm_idx] como ve_table.
+// Fase 2: se auto-learn enable + célula ready, bakia mean STFT na VE e
+// desenrola trims. Retorna true se commitou. Índices: [map_idx][rpm_idx].
 bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept;
+
+// Burn opcional da VE: true após commit com ltft_auto_learn_burn_ve=1.
+// ui_process limpa quando grava page1 com RPM seguro.
+bool fuel_ltft_ve_burn_pending() noexcept;
+void fuel_ltft_ve_burn_clear() noexcept;
 
 int16_t fuel_get_stft_pct_x10() noexcept;
 void fuel_reset_ltft() noexcept;

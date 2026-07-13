@@ -1409,6 +1409,9 @@ static void test_fuel_ltft_accum(void) {
 
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
+    // Auto-learn default off — liga só nos trechos de commit VE
+    ltft_auto_learn_enable  = 0u;
+    ltft_auto_learn_burn_ve = 0u;
 
     const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
     const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
@@ -1506,39 +1509,58 @@ static void test_fuel_ltft_accum(void) {
     CHECK_TRUE(stft_now <= kLtftAccumMaxStftX10,
                "STFT aquecido ainda dentro do gate de amostra");
 
-    const uint8_t ve_before = ve_table[mi][ri];
-    const uint32_t commits_before = g_dbg_ltft_accum_commits;
-    const int16_t stft_before_commit = fuel_get_stft_pct_x10();
-    const int16_t ltft_before = fuel_get_ltft_pct_x10(mi, ri);
-
-    fuel_ltft_accum_reset();  // zera hits/prev; mantém g_stft_*
-    fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);  // prev
+    // Com enable=0: ready não commit (só stats)
+    fuel_ltft_accum_reset();
+    fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
     for (uint16_t n = 0u; n < kLtftAccumReadyHits; ++n) {
         fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
     }
+    CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) >= kLtftAccumReadyHits,
+               "enable=0: stats acumulam");
+    CHECK_TRUE(fuel_ltft_accum_cell_ready(mi, ri),
+               "enable=0: célula ready mas sem commit");
+    CHECK_FALSE(fuel_ltft_accum_try_commit(mi, ri),
+                "enable=0: try_commit recusa");
+    CHECK_EQ(g_dbg_ltft_accum_commits, 0u, "enable=0: zero commits");
 
-    // Fase 2: no 30º hit ready → commit automático
-    CHECK_TRUE(g_dbg_ltft_accum_commits > commits_before,
-               "Fase 2: commit automático quando ready");
+    // Liga auto-learn → commit
+    const uint8_t ve_before = ve_table[mi][ri];
+    const int16_t stft_before_commit = fuel_get_stft_pct_x10();
+    const int16_t ltft_before = fuel_get_ltft_pct_x10(mi, ri);
+    ltft_auto_learn_enable = 1u;
+    CHECK_TRUE(fuel_ltft_accum_try_commit(mi, ri),
+               "enable=1 + ready → commit");
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u,
              "após commit stats da célula zerados");
     CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri),
                 "após commit não ready");
-    CHECK_TRUE(ve_table[mi][ri] != ve_before || stft_before_commit == 0,
-               "VE RAM alterada pelo bake-in (ou STFT zero edge)");
     if (stft_before_commit > 0 && ve_before < kLtftAccumVeMax) {
         CHECK_TRUE(ve_table[mi][ri] > ve_before,
                    "STFT+ → VE aumentou");
-        // LTFT desenrolado na direcção oposta ao bake
         CHECK_TRUE(fuel_get_ltft_pct_x10(mi, ri) <= ltft_before,
                    "LTFT desenrolado após bake-in positivo");
         CHECK_TRUE(fuel_get_stft_pct_x10() <= stft_before_commit,
                    "STFT desenrolado após bake-in positivo");
     }
+    CHECK_FALSE(fuel_ltft_ve_burn_pending(),
+                "burn_ve=0 → sem pedido de burn");
 
-    // try_commit sem ready → false
-    CHECK_FALSE(fuel_ltft_accum_try_commit(mi, ri),
-                "try_commit sem ready → false");
+    // burn_ve=1 marca pending
+    fuel_ltft_accum_reset();
+    ltft_auto_learn_burn_ve = 1u;
+    fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    for (uint16_t n = 0u; n < kLtftAccumReadyHits; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_TRUE(fuel_ltft_ve_burn_pending() || g_dbg_ltft_accum_commits == 0u,
+               "burn_ve=1 → pending após commit (ou STFT sem ready)");
+    if (g_dbg_ltft_accum_commits > 0u) {
+        CHECK_TRUE(fuel_ltft_ve_burn_pending(), "burn pending true");
+        fuel_ltft_ve_burn_clear();
+        CHECK_FALSE(fuel_ltft_ve_burn_pending(), "clear limpa pending");
+    }
+    ltft_auto_learn_enable  = 0u;
+    ltft_auto_learn_burn_ve = 0u;
 
     fuel_ltft_accum_reset_cell(mi, ri);
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "reset_cell zera hits");
@@ -1554,11 +1576,13 @@ static void test_fuel_ltft_accum_commit_ve(void) {
 
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
+    ltft_auto_learn_enable  = 1u;
+    ltft_auto_learn_burn_ve = 0u;
 
     const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
     const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
 
-    // Aquece STFT via PI (pode commitar entretanto — irrelevante)
+    // Aquece STFT via PI (enable on — pode commitar entretanto)
     for (int n = 0; n < 150; ++n) {
         fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
     }
@@ -1569,6 +1593,7 @@ static void test_fuel_ltft_accum_commit_ve(void) {
     fuel_ltft_accum_reset();
     ve_table[mi][ri] = 100u;
     g_dbg_ltft_accum_commits = 0u;
+    fuel_ltft_ve_burn_clear();
 
     // 1 prev + (ReadyHits-1) hits → ainda não ready
     fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
@@ -1606,6 +1631,8 @@ static void test_fuel_ltft_accum_commit_ve(void) {
              "caminho aditivo: sem commit VE");
     CHECK_EQ(ve_table[mi][ri], 100u, "VE intacta no caminho aditivo");
 
+    ltft_auto_learn_enable  = 0u;
+    ltft_auto_learn_burn_ve = 0u;
     fuel_reset_adaptives();
 }
 

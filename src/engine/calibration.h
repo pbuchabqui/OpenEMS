@@ -160,6 +160,13 @@ extern uint32_t rev_limit_soft_window_x10;   // janela do corte de injeção (me
 // LTFT aditivo (MS42 TI_AD_ADD_MMV)
 extern uint16_t ltft_add_pw_threshold_us;
 
+// Auto-learn VE a partir do acumulador LTFT (Fase 2). Page0 offsets 80-81
+// (reservados após remoção do rev-limit spark retard).
+// enable=0 (default): só acumula stats; não altera VE.
+// burn_ve=0 (default): VE só em RAM; burn_ve=1: grava flash page1 quando RPM seguro.
+extern uint8_t ltft_auto_learn_enable;
+extern uint8_t ltft_auto_learn_burn_ve;
+
 // Corte de combustível na desaceleração (MS42 TI_PUR)
 extern uint16_t decel_cut_tps_threshold_x10;
 extern uint32_t decel_cut_entry_rpm_x10;

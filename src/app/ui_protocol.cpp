@@ -438,7 +438,10 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         g_page0[71] = 0u;  // pad
         std::memcpy(g_page0 + 72, &ems::engine::rev_limit_rpm_x10,         4u);
         std::memcpy(g_page0 + 76, &ems::engine::rev_limit_soft_window_x10, 4u);
-        // Offsets 80-85 reservados: rev_limit spark retard removido (b565491).
+        // Offsets 80-81: auto-learn VE (ex-reservados rev_limit spark retard).
+        g_page0[80] = ems::engine::ltft_auto_learn_enable;
+        g_page0[81] = ems::engine::ltft_auto_learn_burn_ve;
+        // Offsets 82-85 ainda reservados.
         std::memcpy(g_page0 + 86, &ems::engine::ltft_add_pw_threshold_us,  2u);
         std::memcpy(g_page0 + 88, &ems::engine::decel_cut_tps_threshold_x10, 2u);
         std::memcpy(g_page0 + 90, &ems::engine::decel_cut_entry_rpm_x10,   4u);
@@ -584,7 +587,9 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         ems::engine::antijerk_decay_cycles = g_page0[70];
         std::memcpy(&ems::engine::rev_limit_rpm_x10,          g_page0 + 72, 4u);
         std::memcpy(&ems::engine::rev_limit_soft_window_x10,  g_page0 + 76, 4u);
-        // Offsets 80-85 reservados: rev_limit spark retard removido (b565491).
+        // Offsets 80-81: auto-learn VE (0/1)
+        ems::engine::ltft_auto_learn_enable  = (g_page0[80] != 0u) ? 1u : 0u;
+        ems::engine::ltft_auto_learn_burn_ve = (g_page0[81] != 0u) ? 1u : 0u;
         std::memcpy(&ems::engine::ltft_add_pw_threshold_us,   g_page0 + 86, 2u);
         std::memcpy(&ems::engine::decel_cut_tps_threshold_x10, g_page0 + 88, 2u);
         std::memcpy(&ems::engine::decel_cut_entry_rpm_x10,    g_page0 + 90, 4u);
@@ -1176,7 +1181,8 @@ inline void parse_byte(uint8_t b) noexcept {
             extern volatile uint32_t g_diag_presync_revs __asm("g_diag_presync_revs");
             extern volatile uint32_t g_diag_seq_revs __asm("g_diag_seq_revs");
             extern volatile uint32_t g_diag_clear_all_count __asm("g_diag_clear_all_count");
-            const uint32_t diag[33] = {
+            // 37×u32 = 148 B (era 33×u32=132; +4 campos auto-learn/accum)
+            const uint32_t diag[37] = {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
                 g_dbg_inj1_arm,
@@ -1210,8 +1216,14 @@ inline void parse_byte(uint8_t b) noexcept {
                 ems::engine::g_dbg_stft_runs,
                 static_cast<uint32_t>(ems::engine::g_dbg_stft_last_err),
                 static_cast<uint32_t>(ems::engine::g_stft_integrator_x1000),
+                ems::engine::g_dbg_ltft_accum_accepted,
+                ems::engine::g_dbg_ltft_accum_rejected,
+                ems::engine::g_dbg_ltft_accum_commits,
+                static_cast<uint32_t>(ems::engine::ltft_auto_learn_enable) |
+                    (static_cast<uint32_t>(ems::engine::ltft_auto_learn_burn_ve) << 8) |
+                    (ems::engine::fuel_ltft_ve_burn_pending() ? (1u << 16) : 0u),
             };
-            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), 132U);
+            tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), sizeof(diag));
             return;
         }
         return;
@@ -1406,6 +1418,16 @@ void ui_uart0_rx_isr_byte(uint8_t byte) noexcept {
 }
 
 void ui_process() noexcept {
+    // Auto-learn: flush VE → flash se pedido e RPM seguro (nunca em alta rotação).
+    if (ems::engine::fuel_ltft_ve_burn_pending() &&
+        ems::engine::ltft_auto_learn_burn_ve != 0u &&
+        burn_rpm_safe()) {
+        sync_page_from_table(0x01u);
+        if (burn_page_to_flash(0x01u)) {
+            ems::engine::fuel_ltft_ve_burn_clear();
+        }
+    }
+
     if (!g_rx_flag && g_rx_head == g_rx_tail) {
         return;
     }

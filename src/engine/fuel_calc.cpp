@@ -257,6 +257,15 @@ LtftCellStats g_ltft_stats[kTableAxisSize][kTableAxisSize] = {};
 static uint32_t g_ltft_accum_prev_rpm_x10 = 0u;
 static uint16_t g_ltft_accum_prev_tps_x10 = 0u;
 static bool     g_ltft_accum_have_prev    = false;
+static volatile bool g_ltft_ve_burn_pending = false;
+
+bool fuel_ltft_ve_burn_pending() noexcept {
+    return g_ltft_ve_burn_pending;
+}
+
+void fuel_ltft_ve_burn_clear() noexcept {
+    g_ltft_ve_burn_pending = false;
+}
 
 uint8_t get_ve(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
     ASSERT_VALID_RPM_X10(rpm_x10);
@@ -796,6 +805,10 @@ static void fuel_ltft_accum_tick(uint8_t map_idx,
 }
 
 bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept {
+    // Opt-in: com enable=0 só acumula stats (Fase 1), não mexe na VE.
+    if (ltft_auto_learn_enable == 0u) {
+        return false;
+    }
     if (!fuel_ltft_accum_cell_ready(map_idx, rpm_idx)) {
         return false;
     }
@@ -858,6 +871,10 @@ bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept {
 
     fuel_ltft_accum_reset_cell(map_idx, rpm_idx);
     ++g_dbg_ltft_accum_commits;
+    // Burn opcional: pedido assíncrono — ui_process grava page1 se RPM seguro.
+    if (ltft_auto_learn_burn_ve != 0u) {
+        g_ltft_ve_burn_pending = true;
+    }
     return true;
 }
 

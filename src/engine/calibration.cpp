@@ -211,6 +211,9 @@ uint32_t rev_limit_rpm_x10           = 70000u;
 uint32_t rev_limit_soft_window_x10   = 2000u;
 // LTFT aditivo: ativa quando PW < 2.5ms (regime de marcha lenta / carga baixa)
 uint16_t ltft_add_pw_threshold_us = 2500u;
+// Auto-learn VE: opt-in (default off — seguro até o tunner ligar)
+uint8_t ltft_auto_learn_enable  = 0u;
+uint8_t ltft_auto_learn_burn_ve = 0u;
 
 // Corte de combustível na desaceleração (MS42 TI_PUR)
 // Entrada: TPS < 0.5% + RPM > 1500 + CLT > 70°C

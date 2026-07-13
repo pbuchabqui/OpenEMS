@@ -496,7 +496,10 @@ PAGE0_FIELDS = [
     ("antijerk_decay_cycles",         70, 1, "B", 1.0),
     ("rev_limit_rpm_x10",             72, 1, "L", 0.1),  # RPM
     ("rev_limit_soft_window_x10",     76, 1, "L", 0.1),  # RPM
-    # offsets 80-85 reservados: rev_limit spark retard removido (b565491)
+    # offsets 80-81: auto-learn VE (ex-reservados rev_limit spark retard)
+    ("ltft_auto_learn_enable",        80, 1, "B", 1.0),  # 0=off 1=bake VE
+    ("ltft_auto_learn_burn_ve",       81, 1, "B", 1.0),  # 0=RAM only 1=flash se RPM ok
+    # offsets 82-85 ainda reservados
     ("ltft_add_pw_threshold_us",      86, 1, "H", 0.001),# ms
     ("decel_cut_tps_threshold_x10",   88, 1, "H", 0.1),  # %
     ("decel_cut_entry_rpm_x10",       90, 1, "L", 0.1),  # RPM
