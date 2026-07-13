@@ -250,6 +250,7 @@ volatile uint32_t g_dbg_stft_runs        = 0u;
 volatile int32_t  g_dbg_stft_last_err    = 0;
 volatile uint32_t g_dbg_ltft_accum_accepted = 0u;
 volatile uint32_t g_dbg_ltft_accum_rejected = 0u;
+volatile uint32_t g_dbg_ltft_accum_commits  = 0u;
 
 LtftCellStats g_ltft_stats[kTableAxisSize][kTableAxisSize] = {};
 
@@ -794,6 +795,72 @@ static void fuel_ltft_accum_tick(uint8_t map_idx,
     cell.sum_err_x1000 += err_x1000;
 }
 
+bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept {
+    if (!fuel_ltft_accum_cell_ready(map_idx, rpm_idx)) {
+        return false;
+    }
+
+    const int16_t mean_stft = fuel_ltft_accum_mean_stft_x10(map_idx, rpm_idx);
+    // bake = mean * gain / 100  (ex.: 50% do viés por commit)
+    int16_t bake_x10 = static_cast<int16_t>(
+        (static_cast<int32_t>(mean_stft) * static_cast<int32_t>(kLtftAccumCommitGainPct)) /
+        100);
+    if (bake_x10 == 0) {
+        // mean na fronteira do min mas gain arredondou a 0 — não commitar lixo
+        fuel_ltft_accum_reset_cell(map_idx, rpm_idx);
+        return false;
+    }
+
+    // VE[map][rpm] = VE * (1000 + bake_x10) / 1000
+    // bake_x10 em %×10: +40 → +4.0% → factor 1040/1000.
+    // Arredonda ao mais próximo; se o factor truncar a 0 em VE pequena,
+    // garante ΔVE mínimo de ±1 para o bake não se perder em inteiros.
+    uint8_t& ve_cell = ve_table[map_idx][rpm_idx];
+    const int32_t ve_old = static_cast<int32_t>(ve_cell);
+    const int32_t factor = 1000 + static_cast<int32_t>(bake_x10);
+    int32_t ve_new = (ve_old * factor + ((factor >= 0) ? 500 : -500)) / 1000;
+    if (ve_new == ve_old) {
+        ve_new = ve_old + ((bake_x10 > 0) ? 1 : -1);
+    }
+    if (ve_new < static_cast<int32_t>(kLtftAccumVeMin)) {
+        ve_new = static_cast<int32_t>(kLtftAccumVeMin);
+    }
+    if (ve_new > static_cast<int32_t>(kLtftAccumVeMax)) {
+        ve_new = static_cast<int32_t>(kLtftAccumVeMax);
+    }
+    // Se o clamp matou a mudança (VE já no limite), não desenrola trims —
+    // evita drift de trim sem mudança de base. Limpa stats e tenta de novo depois.
+    if (ve_new == ve_old) {
+        fuel_ltft_accum_reset_cell(map_idx, rpm_idx);
+        return false;
+    }
+    ve_cell = static_cast<uint8_t>(ve_new);
+
+    // Desenrola LTFT multiplicativo da célula (evita double-count com VE nova).
+    int16_t& ltft = g_ltft_pct_x10[map_idx][rpm_idx];
+    ltft = static_cast<int16_t>(ltft - bake_x10);
+    const int16_t ltft_clamp = static_cast<int16_t>(ems::engine::stft_clamp_pct_x10);
+    ltft = clamp_i16(ltft, static_cast<int16_t>(-ltft_clamp), ltft_clamp);
+    fuel_ltft_store_cell(map_idx, rpm_idx, ltft);
+
+    // Desenrola STFT global (integrador em ×1000: stft ≈ I/100).
+    g_stft_pct_x10 = clamp_i16(
+        static_cast<int16_t>(g_stft_pct_x10 - bake_x10),
+        static_cast<int16_t>(-ltft_clamp),
+        ltft_clamp);
+    g_stft_integrator_x1000 -= static_cast<int32_t>(bake_x10) * 100;
+    const int32_t clamp_x1000 = static_cast<int32_t>(ltft_clamp) * 100;
+    if (g_stft_integrator_x1000 > clamp_x1000) {
+        g_stft_integrator_x1000 = clamp_x1000;
+    } else if (g_stft_integrator_x1000 < -clamp_x1000) {
+        g_stft_integrator_x1000 = -clamp_x1000;
+    }
+
+    fuel_ltft_accum_reset_cell(map_idx, rpm_idx);
+    ++g_dbg_ltft_accum_commits;
+    return true;
+}
+
 int16_t fuel_update_stft(uint32_t rpm_x10,
                          uint16_t map_bar_x100,
                          int16_t lambda_target_x1000,
@@ -850,7 +917,10 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     const uint8_t rpm_idx = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
     const uint8_t map_idx = table_axis_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
 
-    if (net_pw_us > 0u && net_pw_us < static_cast<uint32_t>(ltft_add_pw_threshold_us)) {
+    const bool multiplicative_path =
+        !(net_pw_us > 0u && net_pw_us < static_cast<uint32_t>(ltft_add_pw_threshold_us));
+
+    if (!multiplicative_path) {
         // PW pequeno: erros de offset do injetor dominam — integrar LTFT aditivo.
         // Converte correção percentual em µs: error_us = stft_pct × net_pw / 100
         const int32_t error_us = (static_cast<int32_t>(g_stft_pct_x10) *
@@ -888,6 +958,11 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                                 o2_valid,
                                 ae_active,
                                 rev_cut));
+
+    // Fase 2: só bake-in na VE no caminho multiplicativo (offset de bico ≠ VE).
+    if (multiplicative_path) {
+        (void)fuel_ltft_accum_try_commit(map_idx, rpm_idx);
+    }
 
     return g_stft_pct_x10;
 }

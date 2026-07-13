@@ -1494,38 +1494,51 @@ static void test_fuel_ltft_accum(void) {
     CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri),
                 "10 hits < ReadyHits → não ready");
 
-    // Sobe o PI com err=20 (ainda ≤ MaxErr=30) sem se importar com stats;
-    // depois limpa só o acumulador e grava hits com λ no alvo (err=0) e
-    // STFT congelado (I não mexe com err=0) → mean_stft ≈ STFT actual ≥ min.
+    // Sobe o PI com err=20 (ainda ≤ MaxErr=30); depois limpa stats e grava
+    // hits com λ no alvo (err=0) e STFT congelado. No hit que atinge ready,
+    // a Fase 2 auto-commita na VE e zera a célula.
     for (int n = 0; n < 120; ++n) {
         fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
     }
-    // integrator += 20*5/10 = 10 /call → após ~120 calls stft ≈ 12 (+seed)
     const int16_t stft_now = fuel_get_stft_pct_x10();
     CHECK_TRUE(stft_now >= kLtftAccumReadyMinMeanStftX10,
                "STFT aquecido ≥ min ready");
     CHECK_TRUE(stft_now <= kLtftAccumMaxStftX10,
                "STFT aquecido ainda dentro do gate de amostra");
 
-    fuel_ltft_accum_reset();  // zera hits/prev; mantém g_stft_* 
+    const uint8_t ve_before = ve_table[mi][ri];
+    const uint32_t commits_before = g_dbg_ltft_accum_commits;
+    const int16_t stft_before_commit = fuel_get_stft_pct_x10();
+    const int16_t ltft_before = fuel_get_ltft_pct_x10(mi, ri);
+
+    fuel_ltft_accum_reset();  // zera hits/prev; mantém g_stft_*
     fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);  // prev
     for (uint16_t n = 0u; n < kLtftAccumReadyHits; ++n) {
         fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
     }
-    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), kLtftAccumReadyHits,
-             "ReadyHits com err=0 e STFT congelado");
-    CHECK_EQ(fuel_ltft_accum_mean_err_x1000(mi, ri), 0,
-             "mean_err = 0 (λ no alvo)");
-    const int16_t mean_stft_hi = fuel_ltft_accum_mean_stft_x10(mi, ri);
-    const int astft = (mean_stft_hi < 0) ? -static_cast<int>(mean_stft_hi)
-                                         : static_cast<int>(mean_stft_hi);
-    // mean_stft ≈ stft_now (ligeira variação se I/P mexerem com err=0: P=0)
-    CHECK_TRUE(astft >= static_cast<int>(kLtftAccumReadyMinMeanStftX10),
-               "mean_stft ≥ min ready (viés real, não ruído)");
-    CHECK_TRUE(astft <= static_cast<int>(kLtftAccumReadyMaxMeanStftX10),
-               "mean_stft ≤ max ready (15%) — gate antigo ≤3% falharia aqui");
-    CHECK_TRUE(fuel_ltft_accum_cell_ready(mi, ri),
-               "ready true: hits + err convergido + STFT útil (bake-in)");
+
+    // Fase 2: no 30º hit ready → commit automático
+    CHECK_TRUE(g_dbg_ltft_accum_commits > commits_before,
+               "Fase 2: commit automático quando ready");
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u,
+             "após commit stats da célula zerados");
+    CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri),
+                "após commit não ready");
+    CHECK_TRUE(ve_table[mi][ri] != ve_before || stft_before_commit == 0,
+               "VE RAM alterada pelo bake-in (ou STFT zero edge)");
+    if (stft_before_commit > 0 && ve_before < kLtftAccumVeMax) {
+        CHECK_TRUE(ve_table[mi][ri] > ve_before,
+                   "STFT+ → VE aumentou");
+        // LTFT desenrolado na direcção oposta ao bake
+        CHECK_TRUE(fuel_get_ltft_pct_x10(mi, ri) <= ltft_before,
+                   "LTFT desenrolado após bake-in positivo");
+        CHECK_TRUE(fuel_get_stft_pct_x10() <= stft_before_commit,
+                   "STFT desenrolado após bake-in positivo");
+    }
+
+    // try_commit sem ready → false
+    CHECK_FALSE(fuel_ltft_accum_try_commit(mi, ri),
+                "try_commit sem ready → false");
 
     fuel_ltft_accum_reset_cell(mi, ri);
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "reset_cell zera hits");
@@ -1534,6 +1547,66 @@ static void test_fuel_ltft_accum(void) {
 
     fuel_reset_adaptives();
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "reset_adaptives zera acumulador");
+}
+
+static void test_fuel_ltft_accum_commit_ve(void) {
+    section("fuel_calc: LTFT accum Fase 2 commit → VE");
+
+    fuel_reset_adaptives();
+    fuel_ltft_accum_reset();
+
+    const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+
+    // Aquece STFT via PI (pode commitar entretanto — irrelevante)
+    for (int n = 0; n < 150; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
+    }
+    const int16_t stft = fuel_get_stft_pct_x10();
+    CHECK_TRUE(stft >= kLtftAccumReadyMinMeanStftX10, "STFT aquecido p/ commit");
+
+    // Estado limpo + VE conhecida ANTES do acumulador (após o warmup)
+    fuel_ltft_accum_reset();
+    ve_table[mi][ri] = 100u;
+    g_dbg_ltft_accum_commits = 0u;
+
+    // 1 prev + (ReadyHits-1) hits → ainda não ready
+    fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    for (uint16_t n = 0u; n < static_cast<uint16_t>(kLtftAccumReadyHits - 1u); ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) < kLtftAccumReadyHits,
+               "ainda sem hits suficientes");
+    CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri),
+                "ainda sem hits suficientes → não ready");
+    CHECK_FALSE(fuel_ltft_accum_try_commit(mi, ri),
+                "try_commit manual sem ready → false");
+    CHECK_EQ(ve_table[mi][ri], 100u, "VE intacta sem commit");
+    CHECK_EQ(g_dbg_ltft_accum_commits, 0u, "sem commits antes do hit ready");
+
+    // Mais um hit → ready → auto-commit
+    fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    CHECK_TRUE(g_dbg_ltft_accum_commits >= 1u, "auto-commit no hit ready");
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "stats limpos pós-commit");
+    CHECK_TRUE(ve_table[mi][ri] > 100u, "VE > 100 após bake-in STFT+");
+    CHECK_TRUE(ve_table[mi][ri] <= kLtftAccumVeMax, "VE ≤ max");
+
+    // Caminho aditivo (PW < threshold 2500µs): stats podem acumular, VE não
+    fuel_ltft_accum_reset();
+    for (int n = 0; n < 80; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
+    }
+    fuel_ltft_accum_reset();
+    ve_table[mi][ri] = 100u;
+    g_dbg_ltft_accum_commits = 0u;
+    for (uint16_t n = 0u; n < static_cast<uint16_t>(kLtftAccumReadyHits + 2u); ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 100u, 500u);
+    }
+    CHECK_EQ(g_dbg_ltft_accum_commits, 0u,
+             "caminho aditivo: sem commit VE");
+    CHECK_EQ(ve_table[mi][ri], 100u, "VE intacta no caminho aditivo");
+
+    fuel_reset_adaptives();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4602,6 +4675,7 @@ int main(void) {
     test_fuel_delta_p_compensation();
     test_fuel_ltft();
     test_fuel_ltft_accum();
+    test_fuel_ltft_accum_commit_ve();
 
     // ── Ign Calc — Segunda Fase ───────────────────────────────────────────────
     printf("\n=== IGN CALC (fase 2) ===");

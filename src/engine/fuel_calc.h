@@ -108,15 +108,17 @@ void fuel_lambda_delay_reset() noexcept;
 uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
                                        uint16_t map_bar_x100) noexcept;
 
-// Acumulação LTFT por célula (Fase 1): estatísticas para commit futuro na VE.
+// Acumulação LTFT por célula + commit na VE (Fase 1 stats + Fase 2 bake-in).
 //
 // Semântica bake-in (não "filtrar ruído com erro residual"):
-//  - Amostra boa = closed-loop + regime estável (ΔRPM/ΔTPS) + λ convergida
+//  - Amostra boa = closed-loop + regime estável (ΔRPM/ΔAPP) + λ convergida
 //    (|err| ≤ max) + STFT não saturado. Erro ~0 é válido (trim estável).
 //  - Célula ready = hits suficientes + mean |err| baixa + |mean STFT| entre
 //    min (vale a pena commitar) e max (ainda não saturou o trim).
-//  - Sinal de estabilidade: TPS passado pelo caller (preferir APP / pedido
-//    do condutor; MAP+RPM já definem a célula).
+//  - Commit (Fase 2): aplica fracção do mean STFT em ve_table[map][rpm] (RAM),
+//    desenrola LTFT% e STFT no mesmo montante (sem degrau de combustível),
+//    zera stats da célula. VE em flash só com Burn do dashboard.
+//  - Sinal de estabilidade: APP (pedido do condutor); MAP+RPM definem a célula.
 //
 // Unidades: err λ ×1000 (1000 = 1.000); STFT % ×10 (10 = 1.0 %).
 constexpr uint16_t kLtftAccumReadyHits              = 30u;
@@ -125,6 +127,10 @@ constexpr int16_t  kLtftAccumMaxStftX10             = 150;  // |STFT| ≤ 15.0 %
 constexpr int16_t  kLtftAccumReadyMaxMeanErrX1000   = 25;   // média |err| ≤ 0.025
 constexpr int16_t  kLtftAccumReadyMinMeanStftX10    = 5;    // |mean STFT| ≥ 0.5 %
 constexpr int16_t  kLtftAccumReadyMaxMeanStftX10    = 150;  // |mean STFT| ≤ 15.0 %
+// Fracção do mean STFT aplicada por commit (50 = metade → evita overshoot).
+constexpr int16_t  kLtftAccumCommitGainPct          = 50;
+constexpr uint8_t  kLtftAccumVeMin                  = 1u;
+constexpr uint8_t  kLtftAccumVeMax                  = 200u;
 
 struct LtftCellStats {
     uint16_t hits;
@@ -175,6 +181,10 @@ bool fuel_ltft_accum_cell_ready(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_ltft_accum_mean_stft_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_ltft_accum_mean_err_x1000(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 
+// Fase 2: se a célula estiver ready, bakia mean STFT na VE e desenrola trims.
+// Retorna true se commitou. Índices: [map_idx][rpm_idx] como ve_table.
+bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept;
+
 int16_t fuel_get_stft_pct_x10() noexcept;
 void fuel_reset_ltft() noexcept;
 
@@ -187,6 +197,7 @@ extern volatile uint32_t g_dbg_stft_runs;
 extern volatile int32_t  g_dbg_stft_last_err;
 extern volatile uint32_t g_dbg_ltft_accum_accepted;
 extern volatile uint32_t g_dbg_ltft_accum_rejected;
+extern volatile uint32_t g_dbg_ltft_accum_commits;
 extern int32_t g_stft_integrator_x1000;
 int16_t fuel_get_ltft_at(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 int16_t fuel_get_ltft_pct_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
