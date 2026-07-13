@@ -815,7 +815,17 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
             return;
 
         case ToothClass::NORMAL:
-            g_state.consecutive_anomalies = 0u;
+            // DECAI (não zera): num salto de RPM de 2.5-3.75× o GAP real cai
+            // na banda "normal" da média defasada e zerava o contador a cada
+            // 58 dentes — 57 spikes consecutivos nunca chegavam ao threshold
+            // de 60 e o re-bootstrap NUNCA disparava (deadlock eterno, CKP
+            // perfeito rejeitado; visto em bancada no salto 800→3000 RPM).
+            // Com decaimento -2: tempestade acumula +56/volta → reset em ~2
+            // voltas; spike esporádico em operação sã decai sem re-bootstrap.
+            g_state.consecutive_anomalies =
+                (g_state.consecutive_anomalies >= 2u)
+                    ? static_cast<uint16_t>(g_state.consecutive_anomalies - 2u)
+                    : 0u;
             break;
     }
 

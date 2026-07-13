@@ -708,6 +708,25 @@ static void test_ckp_phantom_rpm_unsync(void) {
     CHECK_EQ(ckp_snapshot().rpm_x10, 0u, "stall zera RPM");
 }
 
+static void test_ckp_rpm_jump_recovery(void) {
+    section("ckp: salto de RPM 3.75x recupera (deadlock do gap-como-normal)");
+    // Reproduz a bancada: sync a "800 RPM" e salto p/ "3000" (periodo /3.75).
+    // Com a media defasada, dente novo=SPIKE e gap novo cai na banda normal
+    // (0.8x media) zerando o contador — sem o decaimento, re-bootstrap nunca
+    // dispara e o CKP perfeito fica rejeitado para sempre.
+    ckp_reach_full_sync(kNormalPeriod);               // "800 RPM"
+    const uint32_t fast = kNormalPeriod * 100u / 375u; // periodo /3.75
+    // 10 revolucoes no RPM novo: 57 dentes + gap 3x
+    for (uint32_t rev = 0; rev < 10u; ++rev) {
+        for (uint32_t i = 0; i < 57u; ++i) { ckp_fire(fast); }
+        ckp_fire(fast * 3u);
+    }
+    const CkpSnapshot s = ckp_snapshot();
+    CHECK_TRUE(s.state == SyncState::HALF_SYNC || s.state == SyncState::FULL_SYNC,
+               "re-sincronizado apos salto 3.75x");
+    CHECK_TRUE(s.rpm_x10 > 0u, "RPM reportado no novo regime");
+}
+
 static void test_ckp_stall_poll_no_false_positive(void) {
     section("ckp: stall_poll false when teeth are recent");
     ckp_reach_full_sync();
@@ -4392,6 +4411,7 @@ int main(void) {
     test_ckp_noise_rejection();
     test_ckp_stall_poll();
     test_ckp_phantom_rpm_unsync();
+    test_ckp_rpm_jump_recovery();
     test_ckp_stall_poll_no_false_positive();
     test_ckp_seed_arm_disarm();
 
