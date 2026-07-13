@@ -334,7 +334,7 @@ static SimState g_sim;
 // simplificado: dac = ((kpa - 8.2) / 0.931) * 255/300 = (kpa*10 - 82) * 2550 / (9310*3)
 static uint8_t map_to_dac(uint16_t kpa) {
     if (kpa > 300) kpa = 300;
-    int32_t corr_x10 = ((int32_t)kpa * 10 - 82) * 1000 / 931;  // kPa×10 corrigido
+    int32_t corr_x10 = ((int32_t)kpa * 10 - 107) * 1000 / 931;  // kPa×10 corrigido (trim -2.5 kPa, 2026-07-12 USB PC)
     if (corr_x10 < 0) corr_x10 = 0;
     uint32_t dac = (uint32_t)corr_x10 * 255u / 3000u;
     return (uint8_t)(dac > 255u ? 255u : dac);
