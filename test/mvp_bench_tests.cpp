@@ -1405,7 +1405,7 @@ static void test_fuel_ltft(void) {
 }
 
 static void test_fuel_ltft_accum(void) {
-    section("fuel_calc: LTFT accum stats / ltft_accum_sample_valid");
+    section("fuel_calc: LTFT accum stats / bake-in gates");
 
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
@@ -1413,47 +1413,124 @@ static void test_fuel_ltft_accum(void) {
     const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
     const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
 
+    // ── sample_valid: contrato bake-in ───────────────────────────────────
     CHECK_FALSE(ltft_accum_sample_valid(
                     30000u, 30000u, 500u, 500u, false,
-                    1000, 1050, 10, 900, true, false, false),
+                    1000, 1015, 40, 900, true, false, false),
                 "sem amostra anterior → inválido");
 
+    // |err|=15, STFT=4% estável, regime OK → válido (erro residual NÃO exigido)
     CHECK_TRUE(ltft_accum_sample_valid(
                    30000u, 30000u, 500u, 500u, true,
-                   1000, 1050, 10, 900, true, false, false),
-               "regime estável com erro λ suficiente → válido");
+                   1000, 1015, 40, 900, true, false, false),
+               "regime estável + λ convergida + STFT útil → válido");
 
+    // |err|≈0 (no alvo com trim a segurar) → válido
+    CHECK_TRUE(ltft_accum_sample_valid(
+                   30000u, 30000u, 500u, 500u, true,
+                   1000, 1000, 40, 900, true, false, false),
+               "|err λ|≈0 com STFT estável → válido (bake-in)");
+
+    // |err| > max → ainda a convergir / outlier
     CHECK_FALSE(ltft_accum_sample_valid(
                     30000u, 30000u, 500u, 500u, true,
-                    1000, 1003, 10, 900, true, false, false),
-                "|erro λ| < 4 → inválido (ruído WBO2)");
+                    1000, 1050, 40, 900, true, false, false),
+                "|erro λ| > max → inválido (não convergido)");
 
     CHECK_FALSE(ltft_accum_sample_valid(
                     32200u, 30000u, 500u, 500u, true,
-                    1000, 1050, 10, 900, true, false, false),
+                    1000, 1015, 40, 900, true, false, false),
                 "ΔRPM > 200 → inválido");
 
-    // 1ª chamada STFT: sem prev → 0 hits
-    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    CHECK_FALSE(ltft_accum_sample_valid(
+                    30000u, 30000u, 500u, 500u, true,
+                    1000, 1015, 160, 900, true, false, false),
+                "|STFT| > 15% → inválido (saturado)");
+
+    CHECK_FALSE(ltft_accum_sample_valid(
+                    30000u, 30000u, 500u, 500u, true,
+                    1000, 1015, 40, 600, true, false, false),
+                "CLT frio → inválido");
+
+    // ── Integração via fuel_update_stft (λ perto do alvo) ────────────────
+    // err=15 (1015-1000) ≤ max; 1ª amostra sem prev → 0 hits
+    fuel_update_stft(30000u, 100u, 1000, 1015, 900, true, false, false, 5000u, 500u);
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "1ª amostra: sem hit");
 
     // 2ª chamada estável → 1 hit
-    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    fuel_update_stft(30000u, 100u, 1000, 1015, 900, true, false, false, 5000u, 500u);
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 1u, "2ª amostra estável: 1 hit");
 
-    // Salto de TPS → rejeita
-    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 700u);
-    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 1u, "salto TPS: hit não incrementa");
+    // AE bloqueia closed-loop: prev NÃO avança (fica APP=500); hit não incrementa
+    const uint16_t hits_before_ae = fuel_ltft_accum_hits(mi, ri);
+    fuel_update_stft(30000u, 100u, 1000, 1015, 900, true, true, false, 5000u, 900u);
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), hits_before_ae, "AE: sem hit");
+    // Após AE, APP=500 de novo → ΔTPS=0 vs prev preservado → aceita
+    fuel_update_stft(30000u, 100u, 1000, 1015, 900, true, false, false, 5000u, 500u);
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), hits_before_ae + 1u,
+             "pós-AE com APP estável: hit (prev preservado)");
 
-    // Acumular até kLtftAccumReadyHits
-    for (uint16_t i = 0u; i < kLtftAccumReadyHits; ++i) {
-        fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    // Salto de APP → rejeita (prev=500, agora=700)
+    const uint16_t hits_before_jump = fuel_ltft_accum_hits(mi, ri);
+    fuel_update_stft(30000u, 100u, 1000, 1015, 900, true, false, false, 5000u, 700u);
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), hits_before_jump, "salto APP: hit não incrementa");
+    // Nota: prev AVANÇA em closed-loop mesmo com amostra rejeitada → agora prev=700
+    fuel_update_stft(30000u, 100u, 1000, 1015, 900, true, false, false, 5000u, 700u);
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), hits_before_jump + 1u,
+             "APP estável no novo valor: hit");
+
+    // ── Médias exactas (err constante) + ready ───────────────────────────
+    fuel_reset_adaptives();
+    fuel_ltft_accum_reset();
+
+    // 1ª = só prev; 2ª..11 = 10 hits com err=10
+    fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false, 5000u, 500u);
+    for (int n = 0; n < 10; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false, 5000u, 500u);
     }
-    CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) >= kLtftAccumReadyHits,
-               "hits atinge mínimo para commit");
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 10u, "10 hits estáveis");
+    CHECK_EQ(fuel_ltft_accum_mean_err_x1000(mi, ri), 10,
+             "mean_err exacto = 10 (todas amostras err=10)");
+    CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri),
+                "10 hits < ReadyHits → não ready");
+
+    // Sobe o PI com err=20 (ainda ≤ MaxErr=30) sem se importar com stats;
+    // depois limpa só o acumulador e grava hits com λ no alvo (err=0) e
+    // STFT congelado (I não mexe com err=0) → mean_stft ≈ STFT actual ≥ min.
+    for (int n = 0; n < 120; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
+    }
+    // integrator += 20*5/10 = 10 /call → após ~120 calls stft ≈ 12 (+seed)
+    const int16_t stft_now = fuel_get_stft_pct_x10();
+    CHECK_TRUE(stft_now >= kLtftAccumReadyMinMeanStftX10,
+               "STFT aquecido ≥ min ready");
+    CHECK_TRUE(stft_now <= kLtftAccumMaxStftX10,
+               "STFT aquecido ainda dentro do gate de amostra");
+
+    fuel_ltft_accum_reset();  // zera hits/prev; mantém g_stft_* 
+    fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);  // prev
+    for (uint16_t n = 0u; n < kLtftAccumReadyHits; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), kLtftAccumReadyHits,
+             "ReadyHits com err=0 e STFT congelado");
+    CHECK_EQ(fuel_ltft_accum_mean_err_x1000(mi, ri), 0,
+             "mean_err = 0 (λ no alvo)");
+    const int16_t mean_stft_hi = fuel_ltft_accum_mean_stft_x10(mi, ri);
+    const int astft = (mean_stft_hi < 0) ? -static_cast<int>(mean_stft_hi)
+                                         : static_cast<int>(mean_stft_hi);
+    // mean_stft ≈ stft_now (ligeira variação se I/P mexerem com err=0: P=0)
+    CHECK_TRUE(astft >= static_cast<int>(kLtftAccumReadyMinMeanStftX10),
+               "mean_stft ≥ min ready (viés real, não ruído)");
+    CHECK_TRUE(astft <= static_cast<int>(kLtftAccumReadyMaxMeanStftX10),
+               "mean_stft ≤ max ready (15%) — gate antigo ≤3% falharia aqui");
+    CHECK_TRUE(fuel_ltft_accum_cell_ready(mi, ri),
+               "ready true: hits + err convergido + STFT útil (bake-in)");
 
     fuel_ltft_accum_reset_cell(mi, ri);
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "reset_cell zera hits");
+    CHECK_EQ(fuel_ltft_accum_mean_stft_x10(mi, ri), 0, "reset_cell zera mean_stft");
+    CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri), "ready false com 0 hits");
 
     fuel_reset_adaptives();
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "reset_adaptives zera acumulador");

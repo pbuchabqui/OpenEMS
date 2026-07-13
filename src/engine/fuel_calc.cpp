@@ -225,13 +225,9 @@ bool closed_loop_allowed(int16_t clt_x10,
     return (clt_x10 > 700) && o2_valid && (!ae_active) && (!rev_cut);
 }
 
-constexpr uint32_t kLtftAccumMaxRpmDeltaX10 = 2000u;   // 200 RPM
-constexpr uint16_t kLtftAccumMaxTpsDeltaX10 = 20u;     // 2.0 %
-constexpr int16_t  kLtftAccumMinErrX1000    = 4;       // ruído WBO2
-constexpr int16_t  kLtftAccumMaxErrX1000    = 150;     // outlier
-constexpr int16_t  kLtftAccumMaxStftX10     = 50;      // 5.0 %
-constexpr int16_t  kLtftAccumReadyMaxMeanStftX10 = 30; // 3.0 %
-constexpr int16_t  kLtftAccumReadyMaxMeanErrX1000 = 30;
+// Regime estável entre amostras consecutivas em closed-loop.
+constexpr uint32_t kLtftAccumMaxRpmDeltaX10 = 2000u;  // 200 RPM
+constexpr uint16_t kLtftAccumMaxTpsDeltaX10 = 20u;    // 2.0 %  (APP ou ETB do caller)
 
 inline int32_t abs_i32(int32_t v) noexcept {
     return (v < 0) ? -v : v;
@@ -664,6 +660,8 @@ bool ltft_accum_sample_valid(uint32_t rpm_x10,
                              bool o2_valid,
                              bool ae_active,
                              bool rev_cut) noexcept {
+    // Bake-in: só acumula com malha fechada, regime estável e λ convergida.
+    // |err|≈0 é válido (trim STFT estável no alvo) — não exigir erro residual.
     if (!closed_loop_allowed(clt_x10, o2_valid, ae_active, rev_cut)) {
         return false;
     }
@@ -686,12 +684,11 @@ bool ltft_accum_sample_valid(uint32_t rpm_x10,
     }
     const int16_t err_x1000 =
         static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
-    if (abs_i32(err_x1000) < kLtftAccumMinErrX1000) {
-        return false;
-    }
+    // Rejeita outlier / ainda a convergir — não rejeita erro ~0.
     if (abs_i32(err_x1000) > kLtftAccumMaxErrX1000) {
         return false;
     }
+    // Rejeita STFT saturado (não fiável para bake-in); vieses reais até 15% OK.
     if (abs_i32(stft_pct_x10) > kLtftAccumMaxStftX10) {
         return false;
     }
@@ -735,10 +732,16 @@ bool fuel_ltft_accum_cell_ready(uint8_t map_idx, uint8_t rpm_idx) noexcept {
         static_cast<int16_t>(cell.sum_stft_x10 / static_cast<int32_t>(cell.hits));
     const int16_t mean_err =
         static_cast<int16_t>(cell.sum_err_x1000 / static_cast<int32_t>(cell.hits));
-    if (abs_i32(mean_stft) > kLtftAccumReadyMaxMeanStftX10) {
+    // Convergida: erro médio baixo (λ no alvo com trim a segurar).
+    if (abs_i32(mean_err) > kLtftAccumReadyMaxMeanErrX1000) {
         return false;
     }
-    if (abs_i32(mean_err) > kLtftAccumReadyMaxMeanErrX1000) {
+    // Vale a pena commitar: há viés real de mapa (não só ruído ~0).
+    if (abs_i32(mean_stft) < kLtftAccumReadyMinMeanStftX10) {
+        return false;
+    }
+    // Ainda fiável: STFT médio não saturado.
+    if (abs_i32(mean_stft) > kLtftAccumReadyMaxMeanStftX10) {
         return false;
     }
     return true;
@@ -775,11 +778,18 @@ static void fuel_ltft_accum_tick(uint8_t map_idx,
         ++g_dbg_ltft_accum_rejected;
         return;
     }
-    ++g_dbg_ltft_accum_accepted;
-    LtftCellStats& cell = g_ltft_stats[map_idx][rpm_idx];
-    if (cell.hits < 65535u) {
-        ++cell.hits;
+    if (map_idx >= kTableAxisSize || rpm_idx >= kTableAxisSize) {
+        ++g_dbg_ltft_accum_rejected;
+        return;
     }
+    LtftCellStats& cell = g_ltft_stats[map_idx][rpm_idx];
+    // Congela no teto: somar sem ++hits corromperia a média (sum/hits).
+    if (cell.hits >= 65535u) {
+        ++g_dbg_ltft_accum_accepted;  // amostra válida, célula saturada
+        return;
+    }
+    ++g_dbg_ltft_accum_accepted;
+    ++cell.hits;
     cell.sum_stft_x10 += stft_pct_x10;
     cell.sum_err_x1000 += err_x1000;
 }
@@ -794,12 +804,12 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                          bool rev_cut,
                          uint32_t net_pw_us,
                          uint16_t tps_x10) noexcept {
+    // prev só avança em closed-loop (mais abaixo). Em AE/rev_cut/CLT frio a
+    // âncora do último regime estável mantém-se — evita ΔTPS falso e perda
+    // da referência pós-bloqueio.
     const bool prev_valid = g_ltft_accum_have_prev;
     const uint32_t prev_rpm = g_ltft_accum_prev_rpm_x10;
     const uint16_t prev_tps = g_ltft_accum_prev_tps_x10;
-    g_ltft_accum_prev_rpm_x10 = rpm_x10;
-    g_ltft_accum_prev_tps_x10 = tps_x10;
-    g_ltft_accum_have_prev    = true;
 
     if (!closed_loop_allowed(clt_x10, o2_valid, ae_active, rev_cut)) {
         // DIAG: conta o motivo do bloqueio (prioridade na ordem do gate)
@@ -813,6 +823,11 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
         // trim válido até haver nova leitura de lambda fiável.
         return g_stft_pct_x10;
     }
+
+    g_ltft_accum_prev_rpm_x10 = rpm_x10;
+    g_ltft_accum_prev_tps_x10 = tps_x10;
+    g_ltft_accum_have_prev    = true;
+
     ++g_dbg_stft_runs;
 
     const int16_t clamp = static_cast<int16_t>(ems::engine::stft_clamp_pct_x10);

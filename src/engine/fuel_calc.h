@@ -109,7 +109,22 @@ uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
                                        uint16_t map_bar_x100) noexcept;
 
 // Acumulação LTFT por célula (Fase 1): estatísticas para commit futuro na VE.
-constexpr uint16_t kLtftAccumReadyHits = 30u;
+//
+// Semântica bake-in (não "filtrar ruído com erro residual"):
+//  - Amostra boa = closed-loop + regime estável (ΔRPM/ΔTPS) + λ convergida
+//    (|err| ≤ max) + STFT não saturado. Erro ~0 é válido (trim estável).
+//  - Célula ready = hits suficientes + mean |err| baixa + |mean STFT| entre
+//    min (vale a pena commitar) e max (ainda não saturou o trim).
+//  - Sinal de estabilidade: TPS passado pelo caller (preferir APP / pedido
+//    do condutor; MAP+RPM já definem a célula).
+//
+// Unidades: err λ ×1000 (1000 = 1.000); STFT % ×10 (10 = 1.0 %).
+constexpr uint16_t kLtftAccumReadyHits              = 30u;
+constexpr int16_t  kLtftAccumMaxErrX1000            = 30;   // |err| ≤ 0.030
+constexpr int16_t  kLtftAccumMaxStftX10             = 150;  // |STFT| ≤ 15.0 %
+constexpr int16_t  kLtftAccumReadyMaxMeanErrX1000   = 25;   // média |err| ≤ 0.025
+constexpr int16_t  kLtftAccumReadyMinMeanStftX10    = 5;    // |mean STFT| ≥ 0.5 %
+constexpr int16_t  kLtftAccumReadyMaxMeanStftX10    = 150;  // |mean STFT| ≤ 15.0 %
 
 struct LtftCellStats {
     uint16_t hits;
