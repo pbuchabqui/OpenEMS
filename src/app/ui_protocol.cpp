@@ -1086,12 +1086,15 @@ inline void parse_byte(uint8_t b) noexcept {
             return;
         }
         if (b == static_cast<uint8_t>('Z')) {
-            // Reset adaptives RAM-only: STFT, AE, delay λ, acumulador LTFT.
-            // Recarrega LTFT% da NVM (não grava flash). Usado pela aba LEARN / HIL.
-            ems::engine::fuel_reset_adaptives();
+            // Reset adaptives RAM-only p/ LEARN/HIL:
+            // zera STFT, LTFT (shadow NVM), acumulador e contadores.
+            // Não faz burn de página de calibração — só shadow adaptativo.
+            ems::engine::fuel_reset_ltft();
+            ems::engine::fuel_reset_adaptives();  // AE/delay + reload (agora zeros)
             ems::engine::g_dbg_ltft_accum_accepted = 0u;
             ems::engine::g_dbg_ltft_accum_rejected = 0u;
             ems::engine::g_dbg_ltft_accum_commits  = 0u;
+            ems::engine::g_dbg_stft_runs = 0u;
             ems::engine::fuel_ltft_ve_burn_clear();
             tx_push(kAckOk);
             return;
