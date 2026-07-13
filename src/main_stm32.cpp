@@ -1179,7 +1179,8 @@ int main() {
                     static_cast<int16_t>(lambda_target_x1000),
                     static_cast<int16_t>(lambda_measured),
                     sensors.clt_degc_x10, lambda_valid,
-                    ae_active, stft_inhibit, g_last_net_pw_us);
+                    ae_active, stft_inhibit, g_last_net_pw_us,
+                    sensors.etb_tps_pct_x10);
                 g_ae_active = false;
                 g_last_stft_pct = clamp_i8(static_cast<int16_t>(stft / 10), -25, 25);
                 // ÷5 (não ÷4): ÷4 saturava o u8 em 1020 — alvos 1.02-1.27 exibiam 1.02

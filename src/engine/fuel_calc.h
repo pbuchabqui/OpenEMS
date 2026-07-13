@@ -108,6 +108,15 @@ void fuel_lambda_delay_reset() noexcept;
 uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
                                        uint16_t map_bar_x100) noexcept;
 
+// Acumulação LTFT por célula (Fase 1): estatísticas para commit futuro na VE.
+constexpr uint16_t kLtftAccumReadyHits = 30u;
+
+struct LtftCellStats {
+    uint16_t hits;
+    int32_t  sum_stft_x10;
+    int32_t  sum_err_x1000;
+};
+
 int16_t fuel_update_stft(uint32_t rpm_x10,
                          uint16_t map_bar_x100,
                          int16_t lambda_target_x1000,
@@ -116,7 +125,8 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                          bool o2_valid,
                          bool ae_active,
                          bool rev_cut,
-                         uint32_t net_pw_us) noexcept;
+                         uint32_t net_pw_us,
+                         uint16_t tps_x10) noexcept;
 
 int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  uint32_t rpm_x10,
@@ -127,7 +137,28 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  bool o2_valid,
                                  bool ae_active,
                                  bool rev_cut,
-                                 uint32_t net_pw_us) noexcept;
+                                 uint32_t net_pw_us,
+                                 uint16_t tps_x10) noexcept;
+
+bool ltft_accum_sample_valid(uint32_t rpm_x10,
+                             uint32_t prev_rpm_x10,
+                             uint16_t tps_x10,
+                             uint16_t prev_tps_x10,
+                             bool have_prev_sample,
+                             int16_t lambda_target_x1000,
+                             int16_t lambda_measured_x1000,
+                             int16_t stft_pct_x10,
+                             int16_t clt_x10,
+                             bool o2_valid,
+                             bool ae_active,
+                             bool rev_cut) noexcept;
+
+void fuel_ltft_accum_reset() noexcept;
+void fuel_ltft_accum_reset_cell(uint8_t map_idx, uint8_t rpm_idx) noexcept;
+uint16_t fuel_ltft_accum_hits(uint8_t map_idx, uint8_t rpm_idx) noexcept;
+bool fuel_ltft_accum_cell_ready(uint8_t map_idx, uint8_t rpm_idx) noexcept;
+int16_t fuel_ltft_accum_mean_stft_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
+int16_t fuel_ltft_accum_mean_err_x1000(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 
 int16_t fuel_get_stft_pct_x10() noexcept;
 void fuel_reset_ltft() noexcept;
@@ -139,6 +170,8 @@ extern volatile uint32_t g_dbg_stft_blocked_ae;
 extern volatile uint32_t g_dbg_stft_blocked_cut;
 extern volatile uint32_t g_dbg_stft_runs;
 extern volatile int32_t  g_dbg_stft_last_err;
+extern volatile uint32_t g_dbg_ltft_accum_accepted;
+extern volatile uint32_t g_dbg_ltft_accum_rejected;
 extern int32_t g_stft_integrator_x1000;
 int16_t fuel_get_ltft_at(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 int16_t fuel_get_ltft_pct_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;

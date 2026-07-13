@@ -225,6 +225,18 @@ bool closed_loop_allowed(int16_t clt_x10,
     return (clt_x10 > 700) && o2_valid && (!ae_active) && (!rev_cut);
 }
 
+constexpr uint32_t kLtftAccumMaxRpmDeltaX10 = 2000u;   // 200 RPM
+constexpr uint16_t kLtftAccumMaxTpsDeltaX10 = 20u;     // 2.0 %
+constexpr int16_t  kLtftAccumMinErrX1000    = 4;       // ruído WBO2
+constexpr int16_t  kLtftAccumMaxErrX1000    = 150;     // outlier
+constexpr int16_t  kLtftAccumMaxStftX10     = 50;      // 5.0 %
+constexpr int16_t  kLtftAccumReadyMaxMeanStftX10 = 30; // 3.0 %
+constexpr int16_t  kLtftAccumReadyMaxMeanErrX1000 = 30;
+
+inline int32_t abs_i32(int32_t v) noexcept {
+    return (v < 0) ? -v : v;
+}
+
 }  // namespace
 
 namespace ems::engine {
@@ -240,6 +252,14 @@ volatile uint32_t g_dbg_stft_blocked_ae  = 0u;
 volatile uint32_t g_dbg_stft_blocked_cut = 0u;
 volatile uint32_t g_dbg_stft_runs        = 0u;
 volatile int32_t  g_dbg_stft_last_err    = 0;
+volatile uint32_t g_dbg_ltft_accum_accepted = 0u;
+volatile uint32_t g_dbg_ltft_accum_rejected = 0u;
+
+LtftCellStats g_ltft_stats[kTableAxisSize][kTableAxisSize] = {};
+
+static uint32_t g_ltft_accum_prev_rpm_x10 = 0u;
+static uint16_t g_ltft_accum_prev_tps_x10 = 0u;
+static bool     g_ltft_accum_have_prev    = false;
 
 uint8_t get_ve(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
     ASSERT_VALID_RPM_X10(rpm_x10);
@@ -580,6 +600,7 @@ int32_t calc_ae_pw_us(uint16_t tps_now_x10,
 
 
 void fuel_reset_ltft() noexcept {
+    fuel_ltft_accum_reset();
     for (uint8_t y = 0u; y < kTableAxisSize; ++y) {
         for (uint8_t x = 0u; x < kTableAxisSize; ++x) {
             g_ltft_pct_x10[y][x] = 0;
@@ -603,6 +624,7 @@ void fuel_reset_adaptives() noexcept {
     g_ae_pulse_us = 0;
     g_decel_cut = false;
     fuel_lambda_delay_reset();
+    fuel_ltft_accum_reset();
 
     for (uint8_t y = 0u; y < kTableAxisSize; ++y) {
         for (uint8_t x = 0u; x < kTableAxisSize; ++x) {
@@ -630,6 +652,138 @@ uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
     return interp_lambda_delay_3x3(rpm_x10, map_bar_x100);
 }
 
+bool ltft_accum_sample_valid(uint32_t rpm_x10,
+                             uint32_t prev_rpm_x10,
+                             uint16_t tps_x10,
+                             uint16_t prev_tps_x10,
+                             bool have_prev_sample,
+                             int16_t lambda_target_x1000,
+                             int16_t lambda_measured_x1000,
+                             int16_t stft_pct_x10,
+                             int16_t clt_x10,
+                             bool o2_valid,
+                             bool ae_active,
+                             bool rev_cut) noexcept {
+    if (!closed_loop_allowed(clt_x10, o2_valid, ae_active, rev_cut)) {
+        return false;
+    }
+    if (!have_prev_sample) {
+        return false;
+    }
+    if (abs_i32(static_cast<int32_t>(rpm_x10) - static_cast<int32_t>(prev_rpm_x10)) >
+        static_cast<int32_t>(kLtftAccumMaxRpmDeltaX10)) {
+        return false;
+    }
+    if (abs_i32(static_cast<int32_t>(tps_x10) - static_cast<int32_t>(prev_tps_x10)) >
+        static_cast<int32_t>(kLtftAccumMaxTpsDeltaX10)) {
+        return false;
+    }
+    if (lambda_target_x1000 < 650 || lambda_target_x1000 > 1200) {
+        return false;
+    }
+    if (lambda_measured_x1000 < 650 || lambda_measured_x1000 > 1200) {
+        return false;
+    }
+    const int16_t err_x1000 =
+        static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
+    if (abs_i32(err_x1000) < kLtftAccumMinErrX1000) {
+        return false;
+    }
+    if (abs_i32(err_x1000) > kLtftAccumMaxErrX1000) {
+        return false;
+    }
+    if (abs_i32(stft_pct_x10) > kLtftAccumMaxStftX10) {
+        return false;
+    }
+    return true;
+}
+
+void fuel_ltft_accum_reset() noexcept {
+    for (uint8_t y = 0u; y < kTableAxisSize; ++y) {
+        for (uint8_t x = 0u; x < kTableAxisSize; ++x) {
+            g_ltft_stats[y][x] = {};
+        }
+    }
+    g_ltft_accum_prev_rpm_x10 = 0u;
+    g_ltft_accum_prev_tps_x10 = 0u;
+    g_ltft_accum_have_prev    = false;
+}
+
+void fuel_ltft_accum_reset_cell(uint8_t map_idx, uint8_t rpm_idx) noexcept {
+    if (map_idx >= kTableAxisSize || rpm_idx >= kTableAxisSize) {
+        return;
+    }
+    g_ltft_stats[map_idx][rpm_idx] = {};
+}
+
+uint16_t fuel_ltft_accum_hits(uint8_t map_idx, uint8_t rpm_idx) noexcept {
+    if (map_idx >= kTableAxisSize || rpm_idx >= kTableAxisSize) {
+        return 0u;
+    }
+    return g_ltft_stats[map_idx][rpm_idx].hits;
+}
+
+bool fuel_ltft_accum_cell_ready(uint8_t map_idx, uint8_t rpm_idx) noexcept {
+    if (map_idx >= kTableAxisSize || rpm_idx >= kTableAxisSize) {
+        return false;
+    }
+    const LtftCellStats& cell = g_ltft_stats[map_idx][rpm_idx];
+    if (cell.hits < kLtftAccumReadyHits) {
+        return false;
+    }
+    const int16_t mean_stft =
+        static_cast<int16_t>(cell.sum_stft_x10 / static_cast<int32_t>(cell.hits));
+    const int16_t mean_err =
+        static_cast<int16_t>(cell.sum_err_x1000 / static_cast<int32_t>(cell.hits));
+    if (abs_i32(mean_stft) > kLtftAccumReadyMaxMeanStftX10) {
+        return false;
+    }
+    if (abs_i32(mean_err) > kLtftAccumReadyMaxMeanErrX1000) {
+        return false;
+    }
+    return true;
+}
+
+int16_t fuel_ltft_accum_mean_stft_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept {
+    if (map_idx >= kTableAxisSize || rpm_idx >= kTableAxisSize) {
+        return 0;
+    }
+    const LtftCellStats& cell = g_ltft_stats[map_idx][rpm_idx];
+    if (cell.hits == 0u) {
+        return 0;
+    }
+    return static_cast<int16_t>(cell.sum_stft_x10 / static_cast<int32_t>(cell.hits));
+}
+
+int16_t fuel_ltft_accum_mean_err_x1000(uint8_t map_idx, uint8_t rpm_idx) noexcept {
+    if (map_idx >= kTableAxisSize || rpm_idx >= kTableAxisSize) {
+        return 0;
+    }
+    const LtftCellStats& cell = g_ltft_stats[map_idx][rpm_idx];
+    if (cell.hits == 0u) {
+        return 0;
+    }
+    return static_cast<int16_t>(cell.sum_err_x1000 / static_cast<int32_t>(cell.hits));
+}
+
+static void fuel_ltft_accum_tick(uint8_t map_idx,
+                                 uint8_t rpm_idx,
+                                 int16_t stft_pct_x10,
+                                 int16_t err_x1000,
+                                 bool sample_valid) noexcept {
+    if (!sample_valid) {
+        ++g_dbg_ltft_accum_rejected;
+        return;
+    }
+    ++g_dbg_ltft_accum_accepted;
+    LtftCellStats& cell = g_ltft_stats[map_idx][rpm_idx];
+    if (cell.hits < 65535u) {
+        ++cell.hits;
+    }
+    cell.sum_stft_x10 += stft_pct_x10;
+    cell.sum_err_x1000 += err_x1000;
+}
+
 int16_t fuel_update_stft(uint32_t rpm_x10,
                          uint16_t map_bar_x100,
                          int16_t lambda_target_x1000,
@@ -638,7 +792,15 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                          bool o2_valid,
                          bool ae_active,
                          bool rev_cut,
-                         uint32_t net_pw_us) noexcept {
+                         uint32_t net_pw_us,
+                         uint16_t tps_x10) noexcept {
+    const bool prev_valid = g_ltft_accum_have_prev;
+    const uint32_t prev_rpm = g_ltft_accum_prev_rpm_x10;
+    const uint16_t prev_tps = g_ltft_accum_prev_tps_x10;
+    g_ltft_accum_prev_rpm_x10 = rpm_x10;
+    g_ltft_accum_prev_tps_x10 = tps_x10;
+    g_ltft_accum_have_prev    = true;
+
     if (!closed_loop_allowed(clt_x10, o2_valid, ae_active, rev_cut)) {
         // DIAG: conta o motivo do bloqueio (prioridade na ordem do gate)
         if (clt_x10 <= 700)      { ++g_dbg_stft_blocked_clt; }
@@ -692,6 +854,26 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
         fuel_ltft_store_cell(map_idx, rpm_idx, cell);
     }
 
+    const int16_t err_x1000 =
+        static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
+    fuel_ltft_accum_tick(
+        map_idx,
+        rpm_idx,
+        g_stft_pct_x10,
+        err_x1000,
+        ltft_accum_sample_valid(rpm_x10,
+                                prev_rpm,
+                                tps_x10,
+                                prev_tps,
+                                prev_valid,
+                                lambda_target_x1000,
+                                lambda_measured_x1000,
+                                g_stft_pct_x10,
+                                clt_x10,
+                                o2_valid,
+                                ae_active,
+                                rev_cut));
+
     return g_stft_pct_x10;
 }
 
@@ -704,7 +886,8 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  bool o2_valid,
                                  bool ae_active,
                                  bool rev_cut,
-                                 uint32_t net_pw_us) noexcept {
+                                 uint32_t net_pw_us,
+                                 uint16_t tps_x10) noexcept {
     lambda_history_push(now_ms, rpm_x10, map_bar_x100, lambda_target_x1000);
 
     const uint16_t delay_ms = lambda_delay_ms_from_rpm_load(rpm_x10, map_bar_x100);
@@ -718,7 +901,8 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                 false,
                                 ae_active,
                                 rev_cut,
-                                net_pw_us);
+                                net_pw_us,
+                                tps_x10);
     }
 
     return fuel_update_stft(delayed.rpm_x10,
@@ -729,7 +913,8 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                             o2_valid,
                             ae_active,
                             rev_cut,
-                            net_pw_us);
+                            net_pw_us,
+                            tps_x10);
 }
 
 int16_t fuel_get_stft_pct_x10() noexcept {

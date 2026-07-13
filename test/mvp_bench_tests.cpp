@@ -1238,7 +1238,7 @@ static void test_fuel_adaptives_reset(void) {
     section("fuel_calc: fuel_reset_adaptives / fuel_lambda_delay_reset");
 
     // Ensure STFT is non-zero first
-    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
     CHECK_TRUE(fuel_get_stft_pct_x10() != 0, "pre-cond: STFT non-zero");
 
     fuel_reset_adaptives();
@@ -1251,15 +1251,15 @@ static void test_fuel_adaptives_reset(void) {
     fuel_lambda_delay_reset();
     fuel_reset_adaptives();
     // Push entry at t=0ms: rpm=30000, map=100, target=1000
-    fuel_update_stft_delayed(0u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+    fuel_update_stft_delayed(0u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
     // Now query at t=300ms (delay≈200ms → sample IS in window → o2_valid used → STFT updates)
     const int16_t stft_with_history = fuel_update_stft_delayed(
-        300u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+        300u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
     // After reset, ring buffer empty → same query at t=300 has no sample → o2_valid=false → no STFT update
     fuel_lambda_delay_reset();
     fuel_reset_adaptives();
     const int16_t stft_post_reset = fuel_update_stft_delayed(
-        300u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+        300u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
     // stft_post_reset should be 0 or smaller (no closed-loop without history at t=300 without prior push)
     CHECK_TRUE(stft_with_history > stft_post_reset || stft_post_reset == 0,
                "fuel_lambda_delay_reset: clears history; no closed-loop without prior push");
@@ -1290,23 +1290,23 @@ static void test_fuel_stft(void) {
         1000,   // target lambda (stoich)
         1050,   // measured lambda (lean by 5%)
         900,    // clt 90°C > 70°C → closed loop OK
-        true, false, false, 5000u);
+        true, false, false, 5000u, 500u);
     CHECK_TRUE(stft > 0, "lean signal → STFT positive (add fuel)");
     CHECK_EQ(stft, fuel_get_stft_pct_x10(), "fuel_get_stft_pct_x10 matches return value");
 
     // Rich signal → STFT eventually negative
     fuel_reset_adaptives();
     for (int i = 0; i < 30; ++i) {
-        stft = fuel_update_stft(30000u, 100u, 1000, 950, 900, true, false, false, 5000u);
+        stft = fuel_update_stft(30000u, 100u, 1000, 950, 900, true, false, false, 5000u, 500u);
     }
     CHECK_TRUE(stft < 0, "rich signal → STFT negative (reduce fuel)");
 
     // Closed loop disabled (cold engine): STFT congela (anti-windup), não decai —
     // evita um "degrau" de combustível perceptível quando volta a closed-loop.
     fuel_reset_adaptives();
-    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);  // set non-zero
+    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);  // set non-zero
     const int16_t before = fuel_get_stft_pct_x10();
-    fuel_update_stft(30000u, 100u, 1000, 1050, 600, true, false, false, 5000u);  // clt too cold
+    fuel_update_stft(30000u, 100u, 1000, 1050, 600, true, false, false, 5000u, 500u);  // clt too cold
     const int16_t after = fuel_get_stft_pct_x10();
     CHECK_EQ(after, before, "closed loop disabled → STFT congela (freeze)");
 }
@@ -1320,16 +1320,16 @@ static void test_fuel_stft_delayed(void) {
     // With no history in ring buffer, now_ms=0, delay≈200ms → get_delayed fails
     // → o2_valid=false path → closed loop disabled → STFT stays 0.
     const int16_t v0 = fuel_update_stft_delayed(
-        0u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+        0u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
     CHECK_EQ(v0, 0, "t=0 no history: STFT=0 (delay not expired)");
 
     // Accumulate 5 samples; at t=500ms history sample at ~t=0 is 'old enough'
     // for a 200ms delay -> closed loop fires with lean signal -> STFT > 0.
     for (uint32_t t = 50u; t <= 250u; t += 50u) {
-        fuel_update_stft_delayed(t, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+        fuel_update_stft_delayed(t, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
     }
     const int16_t v_later = fuel_update_stft_delayed(
-        500u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u);
+        500u, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
     // At t=500 history sample from t≈0 satisfies delay≈200ms → closed loop active → STFT ≠ 0
     CHECK_TRUE(v_later != 0 || v0 == 0,
                "stft_delayed activates after delay window");
@@ -1402,6 +1402,61 @@ static void test_fuel_ltft(void) {
     const int16_t ltft_add = fuel_get_ltft_add_us(0u, 0u);
     CHECK_TRUE(ltft_add >= -6350 && ltft_add <= 6350, "ltft_add_us in valid range");
     CHECK_EQ(fuel_get_ltft_add_us(16u, 0u), 0, "ltft_add: out-of-range → 0");
+}
+
+static void test_fuel_ltft_accum(void) {
+    section("fuel_calc: LTFT accum stats / ltft_accum_sample_valid");
+
+    fuel_reset_adaptives();
+    fuel_ltft_accum_reset();
+
+    const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+
+    CHECK_FALSE(ltft_accum_sample_valid(
+                    30000u, 30000u, 500u, 500u, false,
+                    1000, 1050, 10, 900, true, false, false),
+                "sem amostra anterior → inválido");
+
+    CHECK_TRUE(ltft_accum_sample_valid(
+                   30000u, 30000u, 500u, 500u, true,
+                   1000, 1050, 10, 900, true, false, false),
+               "regime estável com erro λ suficiente → válido");
+
+    CHECK_FALSE(ltft_accum_sample_valid(
+                    30000u, 30000u, 500u, 500u, true,
+                    1000, 1003, 10, 900, true, false, false),
+                "|erro λ| < 4 → inválido (ruído WBO2)");
+
+    CHECK_FALSE(ltft_accum_sample_valid(
+                    32200u, 30000u, 500u, 500u, true,
+                    1000, 1050, 10, 900, true, false, false),
+                "ΔRPM > 200 → inválido");
+
+    // 1ª chamada STFT: sem prev → 0 hits
+    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "1ª amostra: sem hit");
+
+    // 2ª chamada estável → 1 hit
+    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 1u, "2ª amostra estável: 1 hit");
+
+    // Salto de TPS → rejeita
+    fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 700u);
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 1u, "salto TPS: hit não incrementa");
+
+    // Acumular até kLtftAccumReadyHits
+    for (uint16_t i = 0u; i < kLtftAccumReadyHits; ++i) {
+        fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) >= kLtftAccumReadyHits,
+               "hits atinge mínimo para commit");
+
+    fuel_ltft_accum_reset_cell(mi, ri);
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "reset_cell zera hits");
+
+    fuel_reset_adaptives();
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "reset_adaptives zera acumulador");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3482,19 +3537,19 @@ static void test_math_stft_gains(void) {
     fuel_reset_adaptives();
     // 1 chamada: p=6, integrator=1, stft=7
     const int16_t s1 = fuel_update_stft(
-        30000u, 100u, 1000, 1200, 900, true, false, false, 30000u);
+        30000u, 100u, 1000, 1200, 900, true, false, false, 30000u, 500u);
     CHECK_EQ(s1, 7, "STFT após 1 call (lean 20%): p=6 + I=1 = 7");
 
     // Após 9 calls adicionais (total 10): integrator=10, stft=16
     for (int i = 0; i < 9; ++i) {
-        fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 30000u);
+        fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 30000u, 500u);
     }
     CHECK_EQ(fuel_get_stft_pct_x10(), 16, "STFT após 10 calls: p=6 + I=10 = 16");
 
     section("MATH: fuel_update_stft clamp kStftClampX10=250");
     // Após 300 chamadas: integrator clamped=250, stft=clamp(6+250,-250,250)=250
     for (int i = 0; i < 290; ++i) {
-        fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 30000u);
+        fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 30000u, 500u);
     }
     CHECK_EQ(fuel_get_stft_pct_x10(), 250, "STFT saturado no clamp kStftClampX10=250");
 
@@ -3503,10 +3558,10 @@ static void test_math_stft_gains(void) {
     // Anti-windup: stft congela no último valor (250, saturado no clamp acima),
     // não decai — evita degrau de combustível ao voltar a closed-loop.
     const int16_t s_cold1 = fuel_update_stft(
-        30000u, 100u, 1000, 1200, 600, true, false, false, 30000u);
+        30000u, 100u, 1000, 1200, 600, true, false, false, 30000u, 500u);
     CHECK_EQ(s_cold1, 250, "STFT congelado após 1 chamada fria: mantém 250");
     const int16_t s_cold2 = fuel_update_stft(
-        30000u, 100u, 1000, 1200, 600, true, false, false, 30000u);
+        30000u, 100u, 1000, 1200, 600, true, false, false, 30000u, 500u);
     CHECK_EQ(s_cold2, 250, "STFT congelado após 2 chamadas frias: mantém 250");
 }
 
@@ -4469,6 +4524,7 @@ int main(void) {
     test_injector_scurve();
     test_fuel_delta_p_compensation();
     test_fuel_ltft();
+    test_fuel_ltft_accum();
 
     // ── Ign Calc — Segunda Fase ───────────────────────────────────────────────
     printf("\n=== IGN CALC (fase 2) ===");
