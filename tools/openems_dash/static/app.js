@@ -1081,6 +1081,7 @@ async function loadLtftAccum() {
         <button class="mode-btn" data-view="ready">Ready</button>
       </span>
       <button data-act="reload">Reload</button>
+      <button class="danger" data-act="reset-adapt" title="Zera STFT + hits do acumulador (RAM)">Reset adaptives</button>
       <label class="muted" style="display:inline-flex;align-items:center;gap:4px;margin-left:8px">
         <input type="checkbox" id="ltftAccumLive" /> Live 1s
       </label>
@@ -1115,7 +1116,10 @@ async function loadLtftAccum() {
 
   function render() {
     if (!data) {
-      $("#ltftAccumGrid").innerHTML = `<p class="muted">sem dados — ECU offline?</p>`;
+      // reload() já preenche o hint de erro; não sobrescrever se existir texto
+      const g = $("#ltftAccumGrid");
+      if (!g.innerHTML || g.innerHTML.includes("sem dados"))
+        g.innerHTML = `<p class="muted">sem dados — a carregar ou ECU sem page 12 (flash firmware novo)</p>`;
       return;
     }
     const n = data.hits.length;
@@ -1160,15 +1164,33 @@ ready=${ready ? "yes" : "no"}">${cellDisplay(row, col)}</td>`;
       data = await api("/api/pages/12");
       render();
     } catch (e) {
-      toast(e.message, true);
+      const msg = String(e.message || e);
+      toast(msg, true);
       data = null;
-      render();
+      // Page 12 = firmware deste worktree; 501/timeout ≠ offline (VE/page1 funciona)
+      const needFlash = /501|page 12|not supported|timeout|Timeout|esperado/i.test(msg);
+      const hint = needFlash
+        ? `ECU online, mas o firmware em flash ainda não tem a page 12 (LEARN).\n\n` +
+          `Solução:\n` +
+          `  1. make firmware   (neste worktree)\n` +
+          `  2. gravar .hex/.bin na STM32 (DFU / st-flash / OpenOCD)\n` +
+          `  3. Reload nesta aba\n\n` +
+          `(${msg})`
+        : `sem dados — ${msg}`;
+      $("#ltftAccumGrid").innerHTML = `<p class="muted" style="white-space:pre-wrap">${hint}</p>`;
     }
   }
 
   root.querySelectorAll(".mode-btn").forEach(b =>
     b.onclick = () => setView(b.dataset.view));
   root.querySelector("[data-act=reload]").onclick = reload;
+  root.querySelector("[data-act=reset-adapt]").onclick = async () => {
+    try {
+      await api("/api/adaptives/reset", { method: "POST" });
+      toast("adaptives reset (STFT + LEARN hits)");
+      await reload();
+    } catch (e) { toast(e.message, true); }
+  };
   $("#ltftAccumLive", root).onchange = (ev) => {
     if (ltftAccumAuto) { clearInterval(ltftAccumAuto); ltftAccumAuto = null; }
     if (ev.target.checked) {

@@ -182,7 +182,18 @@ def api_info():
 
 @app.get("/api/pages/{page}")
 def api_read_page(page: int):
-    buf = worker.submit(lambda l: l.read_page(page))
+    try:
+        buf = worker.submit(lambda l: l.read_page(page))
+    except Exception as e:  # noqa: BLE001
+        # Page 12 (LEARN) é firmware novo — timeout de 1B costuma ser
+        # "página desconhecida" no binário em flash, não ECU offline.
+        if page == 12:
+            return JSONResponse(
+                {"error": "page 12 (LTFT accum) not supported by firmware on ECU — "
+                          "flash this worktree (make firmware + dfu/st-flash) and retry",
+                 "detail": str(e)},
+                status_code=501)
+        return JSONResponse({"error": str(e)}, status_code=502)
     if page in proto.GRID_PAGES:
         return {"page": page, "grid": proto.GRID_PAGES[page]["decode"](buf)}
     if page == 8:
@@ -441,6 +452,16 @@ def api_ltft_reset():
         l.write_page_ram(10, 256, zeros[256:])
         l.burn_page(10)
     worker.submit(do_reset)
+    return {"ok": True}
+
+
+@app.post("/api/adaptives/reset")
+def api_adaptives_reset():
+    """Reset STFT + acumulador LEARN em RAM (comando 'Z'). Sem burn flash."""
+    try:
+        worker.submit(lambda l: l.reset_adaptives())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"adaptives reset: {e}"}, status_code=502)
     return {"ok": True}
 
 

@@ -4329,6 +4329,42 @@ static void test_ts_whole_page_800(void) {
     CHECK_EQ(r.data[399], ems::engine::ve_table[19][19], "VE[19][19] confere");
 }
 
+static void test_adaptives_reset_cmd_z(void) {
+    section("protocolo: 'Z' reset adaptives (STFT + accum RAM)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    fuel_reset_adaptives();
+    fuel_ltft_accum_reset();
+    ltft_auto_learn_enable = 0u;
+
+    // Gera hits e STFT não-zero
+    fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false, 5000u, 500u);
+    for (int i = 0; i < 5; ++i) {
+        fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false, 5000u, 500u);
+    }
+    const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+    CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) > 0u, "hits antes do Z");
+    CHECK_TRUE(fuel_get_stft_pct_x10() != 0 || g_stft_integrator_x1000 != 0,
+               "STFT/integrador activo antes do Z");
+
+    // Comando legacy 'Z' → ACK 0x00
+    ems::app::ui_rx_byte(static_cast<uint8_t>('Z'));
+    ems::app::ui_process();
+    uint8_t ack = 0xFFu;
+    bool got = false;
+    for (int i = 0; i < 16; ++i) {
+        if (ems::app::ui_tx_pop(ack)) { got = true; break; }
+    }
+    CHECK_TRUE(got, "Z produz byte TX");
+    CHECK_EQ(ack, 0x00u, "Z → ACK OK");
+
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "Z zera hits do acumulador");
+    CHECK_EQ(fuel_get_stft_pct_x10(), 0, "Z zera STFT");
+    CHECK_EQ(g_stft_integrator_x1000, 0, "Z zera integrador");
+    CHECK_EQ(g_dbg_ltft_accum_accepted, 0u, "Z zera contadores accum");
+}
+
 static void test_ltft_accum_page12(void) {
     section("página 12: LTFT accum export (hits u8 + mean_stft i8)");
     ckp_test_reset(); g_ckp_cap = 0u;
@@ -4877,6 +4913,7 @@ int main(void) {
     test_ts_envelope_canid_forms();
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();
+    test_adaptives_reset_cmd_z();
     test_ltft_accum_page12();
     test_ltft_page_offsets_20();
 

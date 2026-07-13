@@ -255,6 +255,12 @@ class OpenEMSLink:
         if ack != b"\x00":
             raise IOError(f"bench_mode: ACK {ack.hex()}")
 
+    # ── reset adaptives ('Z': STFT + accum RAM, recarrega LTFT da NVM) ───
+    def reset_adaptives(self) -> None:
+        ack = self._txn(b"Z", 1)
+        if ack != b"\x00":
+            raise IOError(f"reset_adaptives: ACK {ack.hex()}")
+
     # ── contadores de debug ('D': 26 × u32 LE) ──────────────────────────
     DEBUG_FIELDS = [
         "late_events", "sched_drops", "inj1_arm", "seq_calls", "evt_overflow",
