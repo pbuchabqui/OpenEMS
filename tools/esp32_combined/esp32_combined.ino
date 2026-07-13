@@ -92,6 +92,12 @@ static rmt_item32_t  g_ckp_sym[kRealTeeth];
 static rmt_channel_t g_cmp_chan = RMT_CHANNEL_1;
 static rmt_item32_t  g_cmp_sym[kCmpSymCount];
 static volatile uint32_t    g_ckp_rpm_active = 0u;
+// Slew de RPM: mudanças são rampadas a ≤2%/50ms com atualização das durações
+// NA RAM do RMT ao vivo (rmt_fill_tx_items sem stop) — zero restarts, zero
+// descontinuidade de fase. Motor real não perde sync acelerando; parar e
+// reiniciar o loop a cada comando derrubava o decoder (102 perdas/ciclo).
+static volatile uint32_t g_rpm_target = kRpmInit;
+static uint32_t g_slew_last_ms = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── SECÇÃO 2 — Ring Buffer e Canais (Scope)
@@ -254,13 +260,31 @@ static void rmt_apply_tx_pair() {
 static void ckp_set_rpm(uint32_t rpm) {
     if (rpm < kRpmMin) rpm = kRpmMin;
     if (rpm > kRpmMax) rpm = kRpmMax;
-    if (rpm == g_ckp_rpm_active) return;
-    build_ckp_pattern(rpm);
-    build_cmp_pattern(rpm);
-    rmt_apply_tx_pair();
-    g_ckp_rpm_active = rpm;
+    g_rpm_target = rpm;   // o slew (ckp_slew_tick) leva o RPM ativo até lá
     g_rpm = rpm;
     g_rev_count++;
+}
+
+// Rampa o RPM ativo em direção ao alvo (≤2%/tick) reescrevendo as durações
+// na RAM do RMT SEM parar o loop. O leitor de hardware pode cruzar a escrita
+// e produzir 1 dente com mistura old/new — com passo ≤2% isso cai dentro da
+// banda NORMAL do decoder (0.8-1.2×), invisível para o sync.
+static void ckp_slew_tick() {
+    const uint32_t now = millis();
+    if (now - g_slew_last_ms < 50u) return;
+    g_slew_last_ms = now;
+    const uint32_t tgt = g_rpm_target;
+    uint32_t cur = g_ckp_rpm_active;
+    if (cur == tgt) return;
+    const uint32_t step = (cur > 50u) ? (cur * 2u) / 100u : 1u;  // 2%
+    if (tgt > cur) { cur = (cur + step >= tgt) ? tgt : cur + step; }
+    else           { cur = (cur <= tgt + step) ? tgt : cur - step; }
+    build_ckp_pattern(cur);
+    build_cmp_pattern(cur);
+    // fill SEM stop: escreve a RAM do canal enquanto o loop corre
+    rmt_fill_tx_items(g_ckp_chan, g_ckp_sym, kRealTeeth, 0);
+    rmt_fill_tx_items(g_cmp_chan, g_cmp_sym, kCmpSymCount, 0);
+    g_ckp_rpm_active = cur;
 }
 
 // Init RMT channel (ESP-IDF 4.x API — clk_div 80 = 1µs/tick)
@@ -286,7 +310,8 @@ static void rmt_ckp_init() {
     build_cmp_pattern(kRpmInit);
     rmt_apply_tx_pair();
     g_ckp_rpm_active = kRpmInit;
-    Serial.println("RMT OK (tx_sim)");
+    g_rpm_target     = kRpmInit;
+    Serial.println("RMT OK (live-slew)");
 }
 
 // ── ISR GPIO scope (IGN, INJ, CKP loopback) ──────────────────────────────
@@ -982,6 +1007,7 @@ static void parse_text_cmd(const char* raw) {
 void loop() {
     process_events();
     tcp_service();
+    ckp_slew_tick();
 
     while (Serial.available()) {
         const char c = (char)Serial.read();
