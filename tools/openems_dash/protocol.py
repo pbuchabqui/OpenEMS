@@ -565,6 +565,12 @@ PAGE0_FIELDS = [
     ("stft_kp_x100",            140, 1, "H", 1.0),
     ("stft_ki_x1000",           142, 1, "H", 1.0),
     ("stft_clamp_pct_x10",      144, 1, "H", 1.0),
+    # bytes 176-183: LTFT authority / rates (após layout version @175)
+    ("ltft_mult_clamp_pct_x10", 176, 1, "H", 0.1),   # ±%
+    ("ltft_add_clamp_us",       178, 1, "H", 0.001),  # ms display scale
+    ("ltft_learn_div",          180, 1, "B", 1.0),
+    ("ltft_commit_gain_pct",    181, 1, "B", 1.0),
+    ("ltft_max_step_x10",       182, 1, "H", 0.1),    # %/tick; 0=unlimited
     # bytes 146-153: X-τ auto-calibration limits
     ("xtau_x_min_q8",          146, 1, "H", 1.0),
     ("xtau_x_max_q8",          148, 1, "H", 1.0),

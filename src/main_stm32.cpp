@@ -645,6 +645,17 @@ static void openems_init() noexcept {
 	ems::engine::ltft_apply_burn_ve = (g_calib_page0[81] != 0u) ? 1u : 0u;
 	std::memcpy(&ems::engine::closed_loop_post_start_s, g_calib_page0 + 82, 2u);
 	std::memcpy(&ems::engine::ltft_adapt_min_rpm_x10,   g_calib_page0 + 84, 2u);
+	{
+		uint16_t mult_c = 0u, add_c = 0u, max_s = 0u;
+		std::memcpy(&mult_c, g_calib_page0 + 176, 2u);
+		std::memcpy(&add_c,  g_calib_page0 + 178, 2u);
+		std::memcpy(&max_s,  g_calib_page0 + 182, 2u);
+		if (mult_c != 0u) { ems::engine::ltft_mult_clamp_pct_x10 = mult_c; }
+		if (add_c  != 0u) { ems::engine::ltft_add_clamp_us = add_c; }
+		if (g_calib_page0[180] != 0u) { ems::engine::ltft_learn_div = g_calib_page0[180]; }
+		if (g_calib_page0[181] != 0u) { ems::engine::ltft_commit_gain_pct = g_calib_page0[181]; }
+		ems::engine::ltft_max_step_x10 = max_s;
+	}
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
 	// lido com o tamanho novo ganharia cauda 0xFF (VE=255!). Sem versão →

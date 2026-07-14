@@ -1406,6 +1406,65 @@ static void test_fuel_ltft(void) {
 
 // WP0: apply (fuel_get_ltft_at / _add_at) usa nearest — igual crédito/store.
 // Em RPM/MAP exactos no eixo, floor (bilineal) ≠ nearest (dominante).
+static void test_fuel_ltft_authority(void) {
+    section("fuel_trim: LTFT clamp/rate calibráveis (≠ STFT)");
+
+    fuel_reset_adaptives();
+    closed_loop_enable = 1u;
+    closed_loop_post_start_s = 0u;
+    ltft_adapt_min_rpm_x10 = 0u;  // allow LTFT at any RPM for this test
+    ltft_learn_div = 1u;          // fast IIR → cell ≈ stft
+    ltft_max_step_x10 = 0u;
+    ltft_mult_clamp_pct_x10 = 50u;  // ±5.0% only
+    stft_clamp_pct_x10 = 250u;      // STFT still ±25%
+
+    // Drive STFT high (Ki lento — precisa de muitas iterações), LTFT com div=1
+    for (int i = 0; i < 200; ++i) {
+        (void)fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false,
+                               5000u, 500u);
+    }
+    const int16_t stft = fuel_get_stft_pct_x10();
+    CHECK_TRUE(stft > 50, "STFT pode ir além do clamp LTFT");
+    const int16_t ltft = fuel_get_ltft_at(30000u, 100u);
+    CHECK_TRUE(ltft <= 50 && ltft >= -50, "LTFT mult respeita clamp 50 (±5%)");
+    CHECK_TRUE(stft > ltft || ltft == 50, "STFT authority > LTFT cell clamp");
+
+    // max_step limita avanço por tick
+    fuel_reset_ltft();
+    fuel_reset_adaptives();
+    ltft_mult_clamp_pct_x10 = 250u;
+    ltft_learn_div = 1u;
+    ltft_max_step_x10 = 5u;  // 0.5%/tick
+    closed_loop_post_start_s = 0u;
+    ltft_adapt_min_rpm_x10 = 0u;
+    // seed STFT high without LTFT catch: freeze LTFT via min rpm briefly
+    ltft_adapt_min_rpm_x10 = 90000u;
+    for (int i = 0; i < 30; ++i) {
+        (void)fuel_update_stft(30000u, 100u, 1000, 1150, 900, true, false, false,
+                               5000u, 500u);
+    }
+    const int16_t stft_hi = fuel_get_stft_pct_x10();
+    CHECK_TRUE(stft_hi > 20, "STFT aquecido com LTFT freeze");
+    ltft_adapt_min_rpm_x10 = 0u;
+    const int16_t ltft0 = fuel_get_ltft_at(30000u, 100u);
+    (void)fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false,
+                           5000u, 500u);
+    const int16_t ltft1 = fuel_get_ltft_at(30000u, 100u);
+    const int16_t step = static_cast<int16_t>(
+        (ltft1 > ltft0) ? (ltft1 - ltft0) : (ltft0 - ltft1));
+    CHECK_TRUE(step <= 5, "max_step_x10=5 limita |Δ| por tick");
+
+    // restore defaults
+    ltft_mult_clamp_pct_x10 = 250u;
+    ltft_add_clamp_us = 6350u;
+    ltft_learn_div = 64u;
+    ltft_commit_gain_pct = 50u;
+    ltft_max_step_x10 = 0u;
+    ltft_adapt_min_rpm_x10 = 12000u;
+    closed_loop_post_start_s = 15u;
+    fuel_reset_adaptives();
+}
+
 static void test_fuel_closed_loop_gates(void) {
     section("fuel_trim: closed_loop_enable + LTFT min RPM");
 
@@ -5004,6 +5063,7 @@ int main(void) {
     test_injector_scurve();
     test_fuel_delta_p_compensation();
     test_fuel_ltft();
+    test_fuel_ltft_authority();
     test_fuel_closed_loop_gates();
     test_fuel_ltft_apply_nearest();
     test_fuel_ltft_accum();

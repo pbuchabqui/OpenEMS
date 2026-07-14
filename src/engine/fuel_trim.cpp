@@ -55,8 +55,44 @@ int16_t fuel_ltft_add_load_cell(uint8_t map_idx, uint8_t rpm_idx) noexcept {
     return static_cast<int16_t>(stored) * 50;  // 50 µs/count
 }
 
+int16_t ltft_add_clamp() noexcept {
+    const uint16_t c = ems::engine::ltft_add_clamp_us;
+    return static_cast<int16_t>((c == 0u) ? 6350u : c);
+}
+
+int16_t ltft_mult_clamp() noexcept {
+    const uint16_t c = ems::engine::ltft_mult_clamp_pct_x10;
+    return static_cast<int16_t>((c == 0u) ? 250u : c);
+}
+
+uint8_t ltft_iir_div() noexcept {
+    const uint8_t d = ems::engine::ltft_learn_div;
+    return (d == 0u) ? 64u : d;
+}
+
+// IIR: current + (target−current)/div, com cap opcional de passo (%×10).
+int16_t ltft_iir_toward(int16_t current, int16_t target, int16_t clamp_lim) noexcept {
+    const uint8_t div = ltft_iir_div();
+    int32_t next = static_cast<int32_t>(current) +
+        (static_cast<int32_t>(target) - static_cast<int32_t>(current)) /
+            static_cast<int32_t>(div);
+    const uint16_t max_step = ems::engine::ltft_max_step_x10;
+    if (max_step != 0u) {
+        const int32_t d = next - static_cast<int32_t>(current);
+        const int32_t cap = static_cast<int32_t>(max_step);
+        if (d > cap) {
+            next = static_cast<int32_t>(current) + cap;
+        } else if (d < -cap) {
+            next = static_cast<int32_t>(current) - cap;
+        }
+    }
+    return clamp_i16(static_cast<int16_t>(next),
+                     static_cast<int16_t>(-clamp_lim), clamp_lim);
+}
+
 void fuel_ltft_add_store_cell(uint8_t map_idx, uint8_t rpm_idx, int16_t value_us) noexcept {
-    const int16_t clamped = clamp_i16(value_us, -6350, 6350);
+    const int16_t lim = ltft_add_clamp();
+    const int16_t clamped = clamp_i16(value_us, static_cast<int16_t>(-lim), lim);
     const int16_t rounded = static_cast<int16_t>(
         clamped >= 0 ? (clamped + 25) / 50 : (clamped - 25) / 50);
     const bool ok = ems::hal::nvm_write_ltft_add(
@@ -65,12 +101,16 @@ void fuel_ltft_add_store_cell(uint8_t map_idx, uint8_t rpm_idx, int16_t value_us
 }
 
 void fuel_ltft_store_cell(uint8_t map_idx, uint8_t rpm_idx, int16_t value_x10) noexcept {
-    const int16_t clamped_x10 = clamp_i16(value_x10, -250, 250);
-    const int16_t rounded_pct = (clamped_x10 >= 0)
-        ? static_cast<int16_t>((clamped_x10 + 5) / 10)
-        : static_cast<int16_t>((clamped_x10 - 5) / 10);
-    // FIX BUG-10: verifica retorno de nvm_write — false significa índice inválido
-    // (erro de programação). Em release, o fault counter capta o problema.
+    const int16_t lim = ltft_mult_clamp();
+    const int16_t clamped_x10 =
+        clamp_i16(value_x10, static_cast<int16_t>(-lim), lim);
+    // NVM int8 %: wire max ±25%; RAM pode usar clamp calibrável maior.
+    int16_t store_x10 = clamped_x10;
+    if (store_x10 > 250) { store_x10 = 250; }
+    if (store_x10 < -250) { store_x10 = -250; }
+    const int16_t rounded_pct = (store_x10 >= 0)
+        ? static_cast<int16_t>((store_x10 + 5) / 10)
+        : static_cast<int16_t>((store_x10 - 5) / 10);
     if (!ems::hal::nvm_write_ltft(rpm_idx, map_idx, static_cast<int8_t>(rounded_pct))) {
         ++g_nvm_write_faults;
     }
@@ -481,10 +521,13 @@ static bool ltft_accum_commit_cell(uint8_t map_idx,
     }
 
     const int16_t mean_stft = fuel_ltft_accum_mean_stft_x10(map_idx, rpm_idx);
-    // bake = mean * gain / 100  (ex.: 50% do viés por commit)
+    // bake = mean * gain / 100  (calibrável; 0 no blob → default 50)
+    uint8_t gain = ltft_commit_gain_pct;
+    if (gain == 0u) {
+        gain = static_cast<uint8_t>(kLtftAccumCommitGainPct);
+    }
     int16_t bake_x10 = static_cast<int16_t>(
-        (static_cast<int32_t>(mean_stft) * static_cast<int32_t>(kLtftAccumCommitGainPct)) /
-        100);
+        (static_cast<int32_t>(mean_stft) * static_cast<int32_t>(gain)) / 100);
     if (bake_x10 == 0) {
         // mean na fronteira do min mas gain arredondou a 0 — não commitar lixo
         fuel_ltft_accum_reset_cell(map_idx, rpm_idx);
@@ -519,18 +562,19 @@ static bool ltft_accum_commit_cell(uint8_t map_idx,
     // Desenrola LTFT multiplicativo da célula (evita double-count com VE nova).
     int16_t& ltft = g_ltft_pct_x10[map_idx][rpm_idx];
     ltft = static_cast<int16_t>(ltft - bake_x10);
-    const int16_t ltft_clamp = static_cast<int16_t>(ems::engine::stft_clamp_pct_x10);
+    const int16_t ltft_clamp = ltft_mult_clamp();
     ltft = clamp_i16(ltft, static_cast<int16_t>(-ltft_clamp), ltft_clamp);
     fuel_ltft_store_cell(map_idx, rpm_idx, ltft);
 
     if (unroll_global_stft) {
         // Desenrola STFT global (integrador em ×1000: stft ≈ I/100).
+        const int16_t stft_clamp = static_cast<int16_t>(ems::engine::stft_clamp_pct_x10);
         g_stft_pct_x10 = clamp_i16(
             static_cast<int16_t>(g_stft_pct_x10 - bake_x10),
-            static_cast<int16_t>(-ltft_clamp),
-            ltft_clamp);
+            static_cast<int16_t>(-stft_clamp),
+            stft_clamp);
         g_stft_integrator_x1000 -= static_cast<int32_t>(bake_x10) * 100;
-        const int32_t clamp_x1000 = static_cast<int32_t>(ltft_clamp) * 100;
+        const int32_t clamp_x1000 = static_cast<int32_t>(stft_clamp) * 100;
         if (g_stft_integrator_x1000 > clamp_x1000) {
             g_stft_integrator_x1000 = clamp_x1000;
         } else if (g_stft_integrator_x1000 < -clamp_x1000) {
@@ -652,14 +696,20 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
             const uint8_t ri = rpm_idx >> 1u;
             const uint8_t mi = map_idx >> 1u;
             int16_t& cell_add = g_ltft_add_us[mi][ri];
+            const int16_t add_lim = ltft_add_clamp();
+            // IIR em µs: mesmo div; max_step_x10 não aplica (unidade diferente).
+            const uint8_t div = ltft_iir_div();
             cell_add = clamp_i16(
-                static_cast<int16_t>(cell_add + (error_us - cell_add) / 64), -6350, 6350);
+                static_cast<int16_t>(
+                    static_cast<int32_t>(cell_add) +
+                    (error_us - static_cast<int32_t>(cell_add)) /
+                        static_cast<int32_t>(div)),
+                static_cast<int16_t>(-add_lim), add_lim);
             fuel_ltft_add_store_cell(map_idx, rpm_idx, cell_add);
         } else {
-            // PW normal: LTFT multiplicativo.
+            // PW normal: LTFT multiplicativo (clamp/rate calibráveis).
             int16_t& cell = g_ltft_pct_x10[map_idx][rpm_idx];
-            cell = static_cast<int16_t>(cell + (g_stft_pct_x10 - cell) / 64);
-            cell = clamp_i16(cell, -clamp, clamp);
+            cell = ltft_iir_toward(cell, g_stft_pct_x10, ltft_mult_clamp());
             fuel_ltft_store_cell(map_idx, rpm_idx, cell);
         }
 

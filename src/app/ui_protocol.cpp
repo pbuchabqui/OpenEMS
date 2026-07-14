@@ -486,6 +486,12 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         // Versão do layout de calibração — gate do boot contra blobs de
         // tabela com dimensão antiga (ver kCalLayoutVersion em table3d.h).
         g_page0[ems::engine::kCalLayoutVersionOffset] = ems::engine::kCalLayoutVersion;
+        // LTFT authority / rates (176-183)
+        std::memcpy(g_page0 + 176, &ems::engine::ltft_mult_clamp_pct_x10, 2u);
+        std::memcpy(g_page0 + 178, &ems::engine::ltft_add_clamp_us,       2u);
+        g_page0[180] = ems::engine::ltft_learn_div;
+        g_page0[181] = ems::engine::ltft_commit_gain_pct;
+        std::memcpy(g_page0 + 182, &ems::engine::ltft_max_step_x10,       2u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -640,6 +646,18 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         }
         // eoi_idle_deg fora de [0,719] seria clampado pelo blend; normaliza aqui
         if (ems::engine::eoi_idle_deg > 719u) { ems::engine::eoi_idle_deg = 719u; }
+        // LTFT authority (blob antigo = 0 → defaults de compilação)
+        {
+            uint16_t mult_c = 0u, add_c = 0u, max_s = 0u;
+            std::memcpy(&mult_c, g_page0 + 176, 2u);
+            std::memcpy(&add_c,  g_page0 + 178, 2u);
+            std::memcpy(&max_s,  g_page0 + 182, 2u);
+            if (mult_c != 0u) { ems::engine::ltft_mult_clamp_pct_x10 = mult_c; }
+            if (add_c  != 0u) { ems::engine::ltft_add_clamp_us = add_c; }
+            if (g_page0[180] != 0u) { ems::engine::ltft_learn_div = g_page0[180]; }
+            if (g_page0[181] != 0u) { ems::engine::ltft_commit_gain_pct = g_page0[181]; }
+            ems::engine::ltft_max_step_x10 = max_s;  // 0 = sem cap (válido)
+        }
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));

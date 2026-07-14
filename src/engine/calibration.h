@@ -170,6 +170,18 @@ extern uint8_t  ltft_apply_burn_ve;
 extern uint16_t closed_loop_post_start_s;
 extern uint16_t ltft_adapt_min_rpm_x10;
 
+// LTFT authority / rates — page0 offsets 176-183 (após layout version @175).
+// mult_clamp: teto |LTFT %×10| (default 250 = ±25%; separado do STFT).
+// add_clamp_us: teto |LTFT add| em µs (default 6350).
+// learn_div: IIR cell += (stft−cell)/div (default 64; min 1).
+// commit_gain_pct: fracção do mean STFT no bake VE (default 50).
+// max_step_x10: |ΔLTFT %×10| por tick (0 = sem limite extra além do IIR).
+extern uint16_t ltft_mult_clamp_pct_x10;
+extern uint16_t ltft_add_clamp_us;
+extern uint8_t  ltft_learn_div;
+extern uint8_t  ltft_commit_gain_pct;
+extern uint16_t ltft_max_step_x10;
+
 // Corte de combustível na desaceleração (MS42 TI_PUR)
 extern uint16_t decel_cut_tps_threshold_x10;
 extern uint32_t decel_cut_entry_rpm_x10;

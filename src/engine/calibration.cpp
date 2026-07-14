@@ -216,6 +216,12 @@ uint8_t  closed_loop_enable         = 1u;
 uint8_t  ltft_apply_burn_ve         = 0u;   // burn VE após APPLY manual (default off)
 uint16_t closed_loop_post_start_s   = 15u;
 uint16_t ltft_adapt_min_rpm_x10     = 12000u;  // 1200 RPM
+// LTFT authority / rates (page0 176-183)
+uint16_t ltft_mult_clamp_pct_x10    = 250u;    // ±25.0 %
+uint16_t ltft_add_clamp_us          = 6350u;
+uint8_t  ltft_learn_div             = 64u;
+uint8_t  ltft_commit_gain_pct       = 50u;
+uint16_t ltft_max_step_x10          = 0u;      // 0 = sem cap de passo
 
 // Corte de combustível na desaceleração (MS42 TI_PUR)
 // Entrada: TPS < 0.5% + RPM > 1500 + CLT > 70°C
