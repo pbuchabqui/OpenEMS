@@ -12,133 +12,27 @@
 #include <stdint.h>
 
 #if defined(EMS_HOST_TEST)
-static uint32_t ems_test_tim3_inj_cnt;
-static uint32_t ems_test_tim3_inj_ccr1;
-static uint32_t ems_test_tim3_inj_ccr2;
-static uint32_t ems_test_tim3_inj_ccr3;
-static uint32_t ems_test_tim3_inj_ccr4;
-static uint32_t ems_test_tim3_inj_sr;
-static uint32_t ems_test_tim3_inj_cr1;
-static uint32_t ems_test_tim3_inj_dier;
-static uint32_t ems_test_tim3_inj_psc;
-static uint32_t ems_test_tim3_inj_arr;
-static uint32_t ems_test_tim3_inj_ccmr1;
-static uint32_t ems_test_tim3_inj_ccmr2;
-static uint32_t ems_test_tim3_inj_ccer;
-static uint32_t ems_test_tim3_inj_egr;
+// Host stubs for the live path only: TIM5 dispatcher + GPIO BSRR/MODER init.
+// TIM1/TIM3 OC register surface removed after BSRR migration (not written on device).
+static uint32_t ems_test_rcc_ahb2enr1;
+static uint32_t ems_test_gpio_moder;
+// Legacy test API placeholders (set/get TIM1 CCR no longer drive outputs).
 static uint32_t ems_test_tim1_ign_cnt;
 static uint32_t ems_test_tim1_ign_ccr1;
 static uint32_t ems_test_tim1_ign_ccr2;
 static uint32_t ems_test_tim1_ign_ccr3;
 static uint32_t ems_test_tim1_ign_ccr4;
-static uint32_t ems_test_tim1_ign_sr;
-static uint32_t ems_test_tim1_ign_cr1;
-static uint32_t ems_test_tim1_ign_dier;
-static uint32_t ems_test_tim1_ign_psc;
-static uint32_t ems_test_tim1_ign_arr;
-static uint32_t ems_test_tim1_ign_ccmr1;
-static uint32_t ems_test_tim1_ign_ccmr2;
-static uint32_t ems_test_tim1_ign_ccer;
-static uint32_t ems_test_tim1_ign_bdtr;
-static uint32_t ems_test_tim1_ign_egr;
-static uint32_t ems_test_rcc_ahb2enr1;
-static uint32_t ems_test_rcc_apb1lenr;
-static uint32_t ems_test_rcc_apb2enr;
-static uint32_t ems_test_gpio_moder;
-static uint32_t ems_test_gpio_afrl;
-static uint32_t ems_test_gpio_afrh;
-static uint32_t ems_test_gpio_ospeedr;
 
-#define TIM3_CNT ems_test_tim3_inj_cnt
-#define TIM3_CCR1 ems_test_tim3_inj_ccr1
-#define TIM3_CCR2 ems_test_tim3_inj_ccr2
-#define TIM3_CCR3 ems_test_tim3_inj_ccr3
-#define TIM3_CCR4 ems_test_tim3_inj_ccr4
-#define TIM3_SR ems_test_tim3_inj_sr
-#define TIM3_CR1 ems_test_tim3_inj_cr1
-#define TIM3_DIER ems_test_tim3_inj_dier
-#define TIM3_PSC ems_test_tim3_inj_psc
-#define TIM3_ARR ems_test_tim3_inj_arr
-#define TIM3_CCMR1 ems_test_tim3_inj_ccmr1
-#define TIM3_CCMR2 ems_test_tim3_inj_ccmr2
-#define TIM3_CCER ems_test_tim3_inj_ccer
-#define TIM3_EGR ems_test_tim3_inj_egr
-#define TIM1_CNT ems_test_tim1_ign_cnt
-#define TIM1_CCR1 ems_test_tim1_ign_ccr1
-#define TIM1_CCR2 ems_test_tim1_ign_ccr2
-#define TIM1_CCR3 ems_test_tim1_ign_ccr3
-#define TIM1_CCR4 ems_test_tim1_ign_ccr4
-#define TIM1_SR ems_test_tim1_ign_sr
-#define TIM1_CR1 ems_test_tim1_ign_cr1
-#define TIM1_DIER ems_test_tim1_ign_dier
-#define TIM1_PSC ems_test_tim1_ign_psc
-#define TIM1_ARR ems_test_tim1_ign_arr
-#define TIM1_CCMR1 ems_test_tim1_ign_ccmr1
-#define TIM1_CCMR2 ems_test_tim1_ign_ccmr2
-#define TIM1_CCER ems_test_tim1_ign_ccer
-#define TIM1_BDTR ems_test_tim1_ign_bdtr
-#define TIM1_EGR ems_test_tim1_ign_egr
 #define RCC_AHB2ENR1 ems_test_rcc_ahb2enr1
-#define RCC_APB1LENR ems_test_rcc_apb1lenr
-#define RCC_APB2ENR ems_test_rcc_apb2enr
-#define GPIOA_MODER ems_test_gpio_moder
-#define GPIOA_AFRL ems_test_gpio_afrl
-#define GPIOA_AFRH ems_test_gpio_afrh
-#define GPIOA_OSPEEDR ems_test_gpio_ospeedr
-#define GPIOB_MODER ems_test_gpio_moder
-#define GPIOB_AFRL ems_test_gpio_afrl
-#define GPIOB_AFRH ems_test_gpio_afrh
-#define GPIOB_OSPEEDR ems_test_gpio_ospeedr
 #define GPIOC_MODER ems_test_gpio_moder
-#define GPIOC_AFRL ems_test_gpio_afrl
-#define GPIOC_AFRH ems_test_gpio_afrh
-#define GPIOC_OSPEEDR ems_test_gpio_ospeedr
 #define GPIOE_MODER ems_test_gpio_moder
-#define GPIOE_AFRL ems_test_gpio_afrl
-#define GPIOE_AFRH ems_test_gpio_afrh
-#define GPIOE_OSPEEDR ems_test_gpio_ospeedr
 #define RCC_AHB2ENR1_GPIOAEN 1U
 #define RCC_AHB2ENR1_GPIOBEN 2U
 #define RCC_AHB2ENR1_GPIOCEN 4U
 #define RCC_AHB2ENR1_GPIOEEN 8U
-#define RCC_APB1LENR_TIM3EN 1U
-#define RCC_APB2ENR_TIM1EN 1U
-#define GPIO_AF1 1U
-#define GPIO_AF2 2U
-#define GPIO_AF3 3U
-#define TIM_SR_CC1IF 0x2U
-#define TIM_SR_CC2IF 0x4U
 #define TIM_SR_CC3IF 0x8U
-#define TIM_SR_CC4IF 0x10U
-#define TIM_DIER_CC1IE (1U << 1)
-#define TIM_DIER_CC2IE (1U << 2)
 #define TIM_DIER_CC3IE (1U << 3)
-#define TIM_DIER_CC4IE (1U << 4)
-#define TIM_CR1_CEN 1U
-#define TIM_CCMR1_OC1M_ACTIVE 0x10U
-#define TIM_CCMR1_OC1M_INACTIVE 0x20U
-#define TIM_CCMR1_OC2M_ACTIVE 0x1000U
-#define TIM_CCMR1_OC2M_INACTIVE 0x2000U
-#define TIM_CCMR2_OC3M_ACTIVE 0x10U
-#define TIM_CCMR2_OC3M_INACTIVE 0x20U
-#define TIM_CCMR2_OC4M_ACTIVE 0x1000U
-#define TIM_CCMR2_OC4M_INACTIVE 0x2000U
-#define TIM_CCMR1_OC1M_FORCE_ACTIVE 0x50U
-#define TIM_CCMR1_OC1M_FORCE_INACTIVE 0x40U
-#define TIM_CCMR1_OC2M_FORCE_ACTIVE 0x5000U
-#define TIM_CCMR1_OC2M_FORCE_INACTIVE 0x4000U
-#define TIM_CCMR2_OC3M_FORCE_ACTIVE 0x50U
-#define TIM_CCMR2_OC3M_FORCE_INACTIVE 0x40U
-#define TIM_CCMR2_OC4M_FORCE_ACTIVE 0x5000U
-#define TIM_CCMR2_OC4M_FORCE_INACTIVE 0x4000U
-#define TIM_CCER_CC1E 1U
-#define TIM_CCER_CC2E 0x10U
-#define TIM_CCER_CC3E 0x100U
-#define TIM_CCER_CC4E 0x1000U
-static inline void gpio_set_af(volatile uint32_t*, volatile uint32_t*, volatile uint32_t*,
-                               volatile uint32_t*, uint8_t, uint8_t) noexcept {}
 
-// TIM5 event-scheduler stubs (absolute-timestamp dispatcher)
 static uint32_t ems_test_tim5_ccr3 = 0u;
 static uint32_t ems_test_tim5_sr   = 0u;
 static uint32_t ems_test_tim5_dier = 0u;
@@ -149,7 +43,9 @@ static uint32_t ems_test_gpioe_bsrr = 0u;
 #define TIM5_SR     ems_test_tim5_sr
 #define TIM5_DIER   ems_test_tim5_dier
 #define TIM5_CNT    ems_test_tim5_cnt
-#define STM32_REG32(addr) (*reinterpret_cast<volatile uint32_t*>(&ems_test_gpioc_bsrr))
+// Host: both ports alias one cell (pre-existing); device uses real BSRR addresses.
+#define STM32_REG32(addr) (*reinterpret_cast<volatile uint32_t*>( \
+    ((addr) == 0x42021018UL) ? &ems_test_gpioe_bsrr : &ems_test_gpioc_bsrr))
 #endif
 
 #define ECU_CHANNELS      8U
@@ -167,6 +63,22 @@ static_assert(ECU_SCHED_NS_PER_TICK == 16U,
 // conversão exacta de µs para ticks sem truncamento.
 #define ECU_SCHED_US_TO_TICKS(us) ((us) * 125U / 2U)
 #define TOOTH_NS_TO_SCHED(ns) ((uint32_t)((ns) / ECU_SCHED_NS_PER_TICK))
+
+// Canonical channel order (cyl 0..3). ECU_CH_* values unchanged (legacy TIM map).
+static constexpr uint8_t k_inj_ch[4] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
+static constexpr uint8_t k_ign_ch[4] = {ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
+
+// Pin-metric index 0..3 INJ, 4..7 IGN — same mapping as old stm32_*_tim_ch()-1.
+// Indexed by raw ECU_CH_* (0..7): INJ3,INJ4,INJ1,INJ2, IGN4,IGN3,IGN2,IGN1.
+static constexpr uint8_t k_ch_to_pin_idx[8] = {2U, 3U, 0U, 1U, 7U, 6U, 5U, 4U};
+
+// Inhibit mask bit for INJ/IGN channels (cyl 0..3). Indexed by ECU_CH_* for 0..3 / 4..7.
+static constexpr uint8_t k_inj_ch_to_bit[8] = {
+    (1U << 2), (1U << 3), (1U << 0), (1U << 1), 0U, 0U, 0U, 0U
+};
+static constexpr uint8_t k_ign_ch_to_bit[8] = {
+    0U, 0U, 0U, 0U, (1U << 3), (1U << 2), (1U << 1), (1U << 0)
+};
 
 static AngleEvent_t g_angle_table[ECU_ANGLE_TABLE_SIZE];
 static uint8_t g_angle_table_count;
@@ -230,7 +142,9 @@ static volatile uint16_t g_hook_prev_tooth = 0U;
 static volatile uint8_t g_hook_schedule_this_gap = 1U;
 static volatile uint8_t g_cmp_phase_seen = 0U; // set when phase_A toggles (CMP present)
 static volatile uint8_t g_knock_sequential = 0U;  // 1 when running Calculate_Sequential_Cycle (full sync, per-cyl knock valid)
-static volatile uint8_t g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg;  // FIX: volatile — escrita por ecu_sched_set_ivc (cs), leitura por clamp_inj_pw_to_ivc (contexto ISR)
+// IVC API retained for protocol/page0 compatibility; clamp removed (EOI targeting).
+// g_ivc_abdc_deg is stored but unused by angle builders; clamp count stays 0.
+static volatile uint8_t g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg;
 static uint32_t g_ivc_clamp_count = 0U;
 
 // ── Duty clamp (EOI targeting) ──────────────────────────────────────────────
@@ -243,8 +157,6 @@ static uint32_t g_ivc_clamp_count = 0U;
 #define ECU_MAX_SEQ_INJ_PW_DEG      648U   // 90% de 720°
 #define ECU_MAX_PRESYNC_INJ_PW_DEG  324U   // 90% de 360°
 static volatile uint32_t g_pw_duty_clamp_count = 0U;
-static volatile uint8_t g_cc_pending_inj[4];
-static volatile uint8_t g_cc_pending_ign[4];
 volatile uint32_t g_dbg_inj_force_early = 0U;
 volatile uint32_t g_dbg_ign_force_early = 0U;
 volatile uint32_t g_dbg_clear_all_count = 0U;
@@ -292,26 +204,31 @@ volatile uint32_t g_last_gap_ts = 0U;
 #define GPIOC_BSRR STM32_REG32(0x42020818UL)
 #define GPIOE_BSRR STM32_REG32(0x42021018UL)
 
+// BSRR set/clr masks per ECU_CH_* (0..7). Port: 0=GPIOC (INJ), 1=GPIOE (IGN).
+static constexpr uint32_t k_bsrr_set[8] = {
+    (1U << 8), (1U << 9), (1U << 6), (1U << 7),   // INJ3 PC8, INJ4 PC9, INJ1 PC6, INJ2 PC7
+    (1U << 14), (1U << 13), (1U << 11), (1U << 9) // IGN4 PE14, IGN3 PE13, IGN2 PE11, IGN1 PE9
+};
+static constexpr uint32_t k_bsrr_clr[8] = {
+    (1U << 24), (1U << 25), (1U << 22), (1U << 23),
+    (1U << 30), (1U << 29), (1U << 27), (1U << 25)
+};
+static constexpr uint8_t k_bsrr_port_e[8] = {0U, 0U, 0U, 0U, 1U, 1U, 1U, 1U};
+
 static inline void gpio_set_pin(uint8_t channel, uint8_t high) {
-    // Map channel to GPIO port + pin
-    // INJ: ECU_CH_INJ1=2→PC6, INJ2=3→PC7, INJ3=0→PC8, INJ4=1→PC9
-    // IGN: ECU_CH_IGN1=7→PE9, IGN2=6→PE11, IGN3=5→PE13, IGN4=4→PE14
-    switch (channel) {
-        case ECU_CH_INJ1: GPIOC_BSRR = high ? (1U<<6)  : (1U<<22); break;
-        case ECU_CH_INJ2: GPIOC_BSRR = high ? (1U<<7)  : (1U<<23); break;
-        case ECU_CH_INJ3: GPIOC_BSRR = high ? (1U<<8)  : (1U<<24); break;
-        case ECU_CH_INJ4: GPIOC_BSRR = high ? (1U<<9)  : (1U<<25); break;
-        case ECU_CH_IGN1: GPIOE_BSRR = high ? (1U<<9)  : (1U<<25); break;
-        case ECU_CH_IGN2: GPIOE_BSRR = high ? (1U<<11) : (1U<<27); break;
-        case ECU_CH_IGN3: GPIOE_BSRR = high ? (1U<<13) : (1U<<29); break;
-        case ECU_CH_IGN4: GPIOE_BSRR = high ? (1U<<14) : (1U<<30); break;
-        default: break;
+    if (channel >= 8U) { return; }
+    const uint32_t mask = high ? k_bsrr_set[channel] : k_bsrr_clr[channel];
+    if (k_bsrr_port_e[channel] != 0U) {
+        GPIOE_BSRR = mask;
+    } else {
+        GPIOC_BSRR = mask;
     }
 }
 
-static inline uint8_t stm32_inj_tim_ch(uint8_t ch);
-static inline uint8_t stm32_ign_tim_ch(uint8_t ch);
 static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state = 0U);
+static inline uint8_t channel_pin_idx(uint8_t ch) {
+    return (ch < 8U) ? k_ch_to_pin_idx[ch] : 0xFFU;
+}
 
 // Insert event in sorted order (by timestamp). Called from tooth ISR.
 static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
@@ -344,6 +261,29 @@ static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
     }
 }
 
+// Fire queue head: BSRR + optional ts_ring + pin metrics + dequeue.
+// capture_ts: path-1 (due) only — path-2 (already late) keeps prior work set (no ts_ring).
+static inline void evt_execute_head(uint32_t now, uint8_t capture_ts) {
+    const SchedEvent& e = g_evt_queue[0];
+    gpio_set_pin(e.channel, e.high);
+    if (capture_ts != 0U && (e.channel == ECU_CH_INJ1 || e.channel == ECU_CH_IGN1)) {
+        const uint8_t ri = g_ts_ring_idx;
+        g_ts_ring[ri].ts = now;
+        g_ts_ring[ri].high = e.high;
+        g_ts_ring[ri].channel = e.channel;
+        g_ts_ring_idx = (ri + 1U) & (TS_RING_SIZE - 1U);
+    }
+    const uint8_t idx = channel_pin_idx(e.channel);
+    if (idx != 0xFFU) {
+        pin_transition(idx, e.high);
+    }
+    ++g_dbg_evt_dispatched;
+    --g_evt_count;
+    for (uint8_t i = 0; i < g_evt_count; ++i) {
+        g_evt_queue[i] = g_evt_queue[i + 1U];
+    }
+}
+
 // Called from TIM5 ISR when CC3IF fires
 void ecu_sched_evt_dispatch(void) {
     const uint32_t now = TIM5_CNT;
@@ -351,29 +291,7 @@ void ecu_sched_evt_dispatch(void) {
     while (g_evt_count > 0U) {
         const SchedEvent& e = g_evt_queue[0];
         if ((int32_t)(e.timestamp - now) > 0) { break; }  // still in future
-        // Execute: GPIO BSRR
-        gpio_set_pin(e.channel, e.high);
-        // Capture timestamp for angle measurement (INJ1 + IGN1)
-        if (e.channel == ECU_CH_INJ1 || e.channel == ECU_CH_IGN1) {
-            const uint8_t ri = g_ts_ring_idx;
-            g_ts_ring[ri].ts = now;
-            g_ts_ring[ri].high = e.high;
-            g_ts_ring[ri].channel = e.channel;
-            g_ts_ring_idx = (ri + 1U) & (TS_RING_SIZE - 1U);
-        }
-        // Pin transition tracking
-        const uint8_t is_inj = (e.channel < ECU_IGN_CH_FIRST) ? 1U : 0U;
-        const uint8_t tim_ch = is_inj ? stm32_inj_tim_ch(e.channel) : stm32_ign_tim_ch(e.channel);
-        if (tim_ch != 0U) {
-            const uint8_t idx = is_inj ? (tim_ch - 1U) : (ECU_IGN_CH_FIRST + tim_ch - 1U);
-            pin_transition(idx, e.high);
-        }
-        ++g_dbg_evt_dispatched;
-        // Remove from queue (shift left)
-        --g_evt_count;
-        for (uint8_t i = 0; i < g_evt_count; ++i) {
-            g_evt_queue[i] = g_evt_queue[i + 1U];
-        }
+        evt_execute_head(now, 1U);
     }
     // Arm next event or disable interrupt
     // Loop: if the next event is already past, process it immediately
@@ -385,17 +303,9 @@ void ecu_sched_evt_dispatch(void) {
             g_evt_armed = 1U;
             return;
         }
-        // Already past — process inline
-        gpio_set_pin(g_evt_queue[0].channel, g_evt_queue[0].high);
-        const uint8_t is_inj2 = (g_evt_queue[0].channel < ECU_IGN_CH_FIRST) ? 1U : 0U;
-        const uint8_t tc2 = is_inj2 ? stm32_inj_tim_ch(g_evt_queue[0].channel) : stm32_ign_tim_ch(g_evt_queue[0].channel);
-        if (tc2 != 0U) {
-            const uint8_t idx2 = is_inj2 ? (tc2-1U) : (ECU_IGN_CH_FIRST+tc2-1U);
-            pin_transition(idx2, g_evt_queue[0].high);
-        }
-        ++g_dbg_evt_dispatched;
-        --g_evt_count;
-        for (uint8_t i = 0; i < g_evt_count; ++i) g_evt_queue[i] = g_evt_queue[i+1U];
+        // Already past — process inline (no ts_ring; count as late for diag only)
+        ++g_late_event_count;
+        evt_execute_head(TIM5_CNT, 0U);
     }
     TIM5_DIER &= ~TIM_DIER_CC3IE;
     g_evt_armed = 0U;
@@ -418,70 +328,9 @@ static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_sta
     g_pin_last_state[idx] = high;
 }
 
-static inline void enter_critical(void)
-{
-#if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("cpsid i" ::: "memory");
-#endif
-}
-
-static inline void exit_critical(void)
-{
-#if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("cpsie i" ::: "memory");
-#endif
-}
-
 static inline uint32_t scheduler_counter(void)
 {
     return TIM5_CNT;  // 32-bit, 62.5 MHz — sem wrap de 16-bit
-}
-
-static inline uint8_t stm32_inj_tim_ch(uint8_t ch)
-{
-    switch (ch) {
-        case ECU_CH_INJ1: return 1U;
-        case ECU_CH_INJ2: return 2U;
-        case ECU_CH_INJ3: return 3U;
-        case ECU_CH_INJ4: return 4U;
-        default: return 0U;
-    }
-}
-
-// Mapeia canal de injecção para bit de cilindro no g_inj_inhibit_mask.
-// Retorna 0 para canais de ignição ou desconhecidos.
-static inline uint8_t inj_ch_to_cyl_bit(uint8_t ch)
-{
-    switch (ch) {
-        case ECU_CH_INJ1: return (1U << 0U);
-        case ECU_CH_INJ2: return (1U << 1U);
-        case ECU_CH_INJ3: return (1U << 2U);
-        case ECU_CH_INJ4: return (1U << 3U);
-        default: return 0U;
-    }
-}
-
-// Mapeia canal de ignição para bit de cilindro no g_ign_inhibit_mask.
-static inline uint8_t ign_ch_to_cyl_bit(uint8_t ch)
-{
-    switch (ch) {
-        case ECU_CH_IGN1: return (1U << 0U);
-        case ECU_CH_IGN2: return (1U << 1U);
-        case ECU_CH_IGN3: return (1U << 2U);
-        case ECU_CH_IGN4: return (1U << 3U);
-        default: return 0U;
-    }
-}
-
-static inline uint8_t stm32_ign_tim_ch(uint8_t ch)
-{
-    switch (ch) {
-        case ECU_CH_IGN1: return 1U;
-        case ECU_CH_IGN2: return 2U;
-        case ECU_CH_IGN3: return 3U;
-        case ECU_CH_IGN4: return 4U;
-        default: return 0U;
-    }
 }
 
 static void sanitize_runtime_calibration(void)
@@ -503,39 +352,32 @@ static void sanitize_runtime_calibration(void)
 
 static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U)
 {
-    const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
-    const uint8_t tim_ch = (is_inj != 0U) ? stm32_inj_tim_ch(ch) : stm32_ign_tim_ch(ch);
     const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
-    if (tim_ch != 0U) {
+    const uint8_t idx = channel_pin_idx(ch);
+    if (idx != 0xFFU) {
         gpio_set_pin(ch, high);
-        const uint8_t idx = (is_inj != 0U) ? (tim_ch - 1U) : (ECU_IGN_CH_FIRST + tim_ch - 1U);
         pin_transition(idx, high, is_safe_state);
     }
 }
 
 static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 {
-    // FIX BUG-6: toda a operação (leitura do contador + escrita do CCR) deve ser
-    // atômica. Sem seção crítica, TIM2_IRQ poderia disparar entre a leitura de
-    // scheduler_counter() e a escrita do registrador de compare, corrompendo o
-    // agendamento de eventos já pendentes.
+    // Atomic: read TIM5_CNT + queue insert must not interleave with TIM5 dispatch ISR.
     ems::hal::CriticalSectionGuard guard;
 
     const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
-    const uint8_t tim_ch = (is_inj != 0U) ? stm32_inj_tim_ch(ch) : stm32_ign_tim_ch(ch);
-    const uint32_t now = scheduler_counter();  // TIM5_CNT, 32-bit, sem wrap
+    const uint8_t pin_idx = channel_pin_idx(ch);
+    const uint32_t now = scheduler_counter();  // TIM5_CNT, 32-bit
 
-    if (tim_ch == 0U) { ++g_cycle_schedule_drop_count; return; }
+    if (pin_idx == 0xFFU) { ++g_cycle_schedule_drop_count; return; }
 
-    // Enforce inhibit masks — lost in TIM3→TIM5 migration (f42c450).
-    // Injection inhibit: skip INJ_ON → injector never opens → no fuel delivered.
-    // Ignition inhibit: skip DWELL_START → coil never charges → no spark.
+    // Inhibit masks: skip INJ_ON / DWELL_START for masked cylinders.
     if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
-        const uint8_t cyl_bit = inj_ch_to_cyl_bit(ch);
+        const uint8_t cyl_bit = (ch < 8U) ? k_inj_ch_to_bit[ch] : 0U;
         if (cyl_bit != 0U && (g_inj_inhibit_mask & cyl_bit) != 0U) { return; }
     }
     if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
-        const uint8_t cyl_bit = ign_ch_to_cyl_bit(ch);
+        const uint8_t cyl_bit = (ch < 8U) ? k_ign_ch_to_bit[ch] : 0U;
         if (cyl_bit != 0U && (g_ign_inhibit_mask & cyl_bit) != 0U) { return; }
     }
 
@@ -543,24 +385,24 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     if (ch == ECU_CH_INJ1) { ++g_dbg_inj1_arm; }
     if (ch == ECU_CH_IGN1) { ++g_dbg_ign1_arm; }
 
-    // Dwell watchdog tracking (ignition channels only)
-    if (is_inj == 0U && tim_ch != 0U) {
-        const uint8_t ign_idx = (uint8_t)(tim_ch - 1U);
+    // Dwell watchdog tracking (ignition channels only) — pin_idx 4..7 → ign 0..3
+    if (is_inj == 0U) {
+        const uint8_t ign_idx = (uint8_t)(pin_idx - ECU_IGN_CH_FIRST);
         if (action == ECU_ACT_DWELL_START) {
-            g_dwell_arm_tick[ign_idx] = now;  // TIM5_CNT value
+            g_dwell_arm_tick[ign_idx] = now;
             g_dwell_wdog_ticks[ign_idx] = (g_dwell_ticks * 7U) / 5U;
         } else if (action == ECU_ACT_SPARK) {
             g_dwell_arm_tick[ign_idx] = 0U;
         }
     }
 
-    // ── Absolute-timestamp event scheduler (domínio TIM5, 32-bit) ───
-    // Delta computado com base no TIM5_CNT actual (não no `now` do dispatch
-    // per-tooth) para evitar wrap quando TIM5_CNT avança entre as leituras.
+    // Absolute-timestamp insert (TIM5 domain). Re-read CNT for delta after inhibit work.
+    // Min-lead: if target already past / too soon, schedule at tnow+MIN_LEAD (timestamp policy unchanged).
     {
         const uint32_t tnow = TIM5_CNT;
         const uint32_t delta = (target_cnv > tnow) ? (target_cnv - tnow) : 0U;
         if (delta < STM32_MIN_COMPARE_LEAD_TICKS) {
+            ++g_late_event_count;  // diagnostic only — does not change insert args
             evt_insert(tnow + STM32_MIN_COMPARE_LEAD_TICKS, ch, high);
         } else {
             evt_insert(tnow + delta, ch, high);
@@ -698,8 +540,8 @@ static inline void emit_multispark(uint32_t spark_ang, uint32_t cycle_deg,
 static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
 {
     static_assert(ems::engine::cfg::kCylinderCount == 4u, "ign_ch/inj_ch hardcoded for 4 cylinders");
-    static const uint8_t ign_ch[ems::engine::cfg::kCylinderCount] = {ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
-    static const uint8_t inj_ch[ems::engine::cfg::kCylinderCount] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
+    const uint8_t* const ign_ch = k_ign_ch;
+    const uint8_t* const inj_ch = k_inj_ch;
 
     g_knock_sequential = 1U;  // knock window per-cylinder valid in sequential mode
     g_angle_table_count = 0U;
@@ -766,10 +608,10 @@ static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
 
 static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
 {
-    static const uint8_t inj_all[4U] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
     static const uint8_t inj_a[2U] = {ECU_CH_INJ1, ECU_CH_INJ4};
     static const uint8_t inj_b[2U] = {ECU_CH_INJ2, ECU_CH_INJ3};
-    static const uint8_t ign[4U] = {ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
+    const uint8_t* const inj_all = k_inj_ch;
+    const uint8_t* const ign = k_ign_ch;
     uint8_t tooth, frac, phase;
 
     g_knock_sequential = 0U;  // wasted-spark presync: no per-cylinder knock tracking
@@ -865,16 +707,14 @@ void ecu_sched_dwell_watchdog(void)
     if (g_inj_pw_override != 0U) { return; }  // test mode — disable watchdog
     const uint32_t now = TIM5_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
-        enter_critical();
+        ems::hal::CriticalSectionGuard guard;
         const uint32_t arm  = g_dwell_arm_tick[i];  // TIM5_CNT value
         const uint32_t tout = g_dwell_wdog_ticks[i];
         if (arm != 0U && (now - arm) >= tout) {  // 32-bit, sem mask de wrap
-            // IGN channels: ECU_CH_IGN1=7, IGN2=6, IGN3=5, IGN4=4
-            gpio_set_pin(static_cast<uint8_t>(7U - i), 0U);
+            gpio_set_pin(k_ign_ch[i], 0U);
             g_dwell_arm_tick[i] = 0U;
             ++g_dwell_watchdog_count;
         }
-        exit_critical();
     }
 }
 
@@ -897,21 +737,19 @@ void ecu_sched_reset_diagnostic_counters(void)
 
 void ecu_sched_fire_prime_pulse(uint32_t pw_us)
 {
-    static const uint8_t inj[4U] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
     if (pw_us == 0U) { return; }
     if (pw_us > 30000U) { pw_us = 30000U; }
     const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
-    for (uint8_t i = 0U; i < 4U; ++i) { force_output(inj[i], ECU_ACT_INJ_ON); }
-    for (uint8_t i = 0U; i < 4U; ++i) { arm_channel(inj[i], off_cnv, ECU_ACT_INJ_OFF); }
+    for (uint8_t i = 0U; i < 4U; ++i) { force_output(k_inj_ch[i], ECU_ACT_INJ_ON); }
+    for (uint8_t i = 0U; i < 4U; ++i) { arm_channel(k_inj_ch[i], off_cnv, ECU_ACT_INJ_OFF); }
     ++g_diag_prime_fired;
 }
 
 void ecu_sched_test_pulse_inj(uint8_t cyl, uint32_t pw_us)
 {
-    static const uint8_t inj[4U] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
     if (cyl > 3U || pw_us == 0U) { return; }
     if (pw_us > 30000U) { pw_us = 30000U; }
-    const uint8_t ch = inj[cyl];
+    const uint8_t ch = k_inj_ch[cyl];
     const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
     force_output(ch, ECU_ACT_INJ_ON);
     arm_channel(ch, off_cnv, ECU_ACT_INJ_OFF);
@@ -919,11 +757,10 @@ void ecu_sched_test_pulse_inj(uint8_t cyl, uint32_t pw_us)
 
 void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
 {
-    static const uint8_t ign[4U] = {ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
     if (cyl > 3U) { return; }
     if (dwell_us == 0U) { dwell_us = 3000U; }
     if (dwell_us > 10000U) { dwell_us = 10000U; }
-    const uint8_t ch = ign[cyl];
+    const uint8_t ch = k_ign_ch[cyl];
     const uint32_t spark_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(dwell_us);
     force_output(ch, ECU_ACT_DWELL_START);
     arm_channel(ch, spark_cnv, ECU_ACT_SPARK);
@@ -932,9 +769,8 @@ void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
     // perder, ecu_sched_dwell_watchdog() força a bobina LOW em 1.4× dwell.
     {
         ems::hal::CriticalSectionGuard guard;
-        const uint8_t ign_idx = (uint8_t)(stm32_ign_tim_ch(ch) - 1U);
-        g_dwell_arm_tick[ign_idx]  = scheduler_counter();
-        g_dwell_wdog_ticks[ign_idx] = (ECU_SCHED_US_TO_TICKS(dwell_us) * 7U) / 5U;
+        g_dwell_arm_tick[cyl]  = scheduler_counter();
+        g_dwell_wdog_ticks[cyl] = (ECU_SCHED_US_TO_TICKS(dwell_us) * 7U) / 5U;
     }
 }
 
@@ -965,6 +801,18 @@ void ecu_sched_set_ign_inhibit_mask(uint8_t mask)
     g_ign_inhibit_mask = mask & 0x0FU;
 }
 uint8_t ecu_sched_get_ign_inhibit_mask(void) { return g_ign_inhibit_mask; }
+
+// Bench / protocol: lock PW for one commit then ignore main-loop PW writes (was raw g_inj_pw_override poke).
+void ecu_sched_bench_pw_lock_next_commit(void)
+{
+    ems::hal::CriticalSectionGuard guard;
+    g_inj_pw_override = 2U;  // write-once then lock
+}
+
+uint8_t ecu_sched_bench_pw_override_state(void)
+{
+    return g_inj_pw_override;
+}
 
 namespace ems::engine {
 extern bool g_prev_cranking;
@@ -1046,9 +894,6 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 }
 }
 
-#if !defined(EMS_HOST_TEST)
-#endif
-
 namespace ems::drv {
 void schedule_on_tooth(const CkpSnapshot& snap) noexcept { ems::engine::ecu_sched_on_tooth_hook(snap); }
 }
@@ -1065,7 +910,6 @@ void ecu_sched_test_reset(void)
     g_inj_inhibit_mask = 0U;
     g_ign_inhibit_mask = 0U;
     g_mspark_count = 0U; g_mspark_inter_dwell_ticks = 0U; g_mspark_atdc_limit_deg = 18U;
-    for (uint8_t i = 0U; i < 4U; ++i) { g_cc_pending_inj[i] = 0U; g_cc_pending_ign[i] = 0U; }
     // Reset dwell watchdog state
     for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; g_dwell_wdog_ticks[i] = 0U; }
     g_dwell_watchdog_count = 0U;

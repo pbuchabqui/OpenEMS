@@ -1211,8 +1211,7 @@ inline void parse_byte(uint8_t b) noexcept {
             return;
         }
         if (b == static_cast<uint8_t>('P')) {
-            extern volatile uint8_t g_inj_pw_override __asm("g_inj_pw_override");
-            g_inj_pw_override = 2U;  // 2=write-once then lock
+            ecu_sched_bench_pw_lock_next_commit();
             ecu_sched_commit_calibration(10U, 22500U, 50000U, 30U);  // eoi_lead=30° (EOI targeting, valor de bench)
             tx_push(0x00u);
             return;

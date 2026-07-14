@@ -70,7 +70,7 @@ uint8_t ecu_sched_presync_inj_auto(void);
 void ecu_sched_set_presync_ign_mode(uint8_t mode);
 void ecu_sched_reset_diagnostic_counters(void);
 
-// Dwell watchdog — chamar do main loop (slot 2ms) com TIM2_CNT.
+// Dwell watchdog — chamar do main loop (slot 2ms); compara TIM5_CNT.
 // Se uma bobina ficou activa por > 1.4 × dwell_ticks sem evento SPARK,
 // força a saída LOW imediatamente para proteger o módulo de ignição.
 void ecu_sched_dwell_watchdog(void);
@@ -78,7 +78,7 @@ uint32_t ecu_sched_dwell_watchdog_count(void);
 
 // Multi-spark (MS42 §2.2.3): sparks adicionais por ciclo a baixo RPM.
 // count: número de sparks adicionais (0=desabilitado, máx 3).
-// inter_dwell_ticks: tempo de dwell entre sparks consecutivos (em ticks do TIM2/TIM1).
+// inter_dwell_ticks: tempo de dwell entre sparks consecutivos (ticks TIM5).
 // atdc_limit_deg: o último spark adicional não pode ultrapassar este ângulo ATDC (default 18°).
 void ecu_sched_set_mspark(uint8_t  count,
                           uint32_t inter_dwell_ticks,
@@ -97,12 +97,19 @@ uint8_t ecu_sched_get_inj_inhibit_mask(void);
 // Suprime ECU_ACT_DWELL_START → bobina não carrega → sem faísca nesse cilindro.
 void ecu_sched_set_ign_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_ign_inhibit_mask(void);
+// IVC: page0/protocol compatibility only. EOI targeting removed IVC PW clamp;
+// ecu_sched_ivc_clamp_count() remains 0. Stored angle is not used by builders.
 void ecu_sched_set_ivc(uint8_t ivc_abdc_deg);
 uint32_t ecu_sched_ivc_clamp_count(void);
 // Contador do duty clamp: incrementado quando PW_deg excede 90% do ciclo
 // (648° sequencial / 324° presync) e é clampado. >0 = fuel shortfall.
 uint32_t ecu_sched_pw_duty_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
+
+// Bench protocol: next commit_calibration applies PW then locks (override=1).
+// Prefer this over poking g_inj_pw_override via raw symbol linkage.
+void ecu_sched_bench_pw_lock_next_commit(void);
+uint8_t ecu_sched_bench_pw_override_state(void);
 
 // Teste de saídas em bancada: pulso único num canal individual (motor parado).
 // cyl = 0-3 na ordem INJ1..INJ4 / IGN1..IGN4. pw_us clamp ≤30000; dwell_us
