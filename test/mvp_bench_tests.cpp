@@ -1458,7 +1458,7 @@ static void test_fuel_ltft_accum(void) {
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
     // Auto-learn default off — liga só nos trechos de commit VE
-    ltft_auto_learn_burn_ve = 0u;
+    ltft_apply_burn_ve = 0u;
 
     const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
     const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);
@@ -1600,7 +1600,7 @@ static void test_fuel_ltft_accum(void) {
 
     // burn_ve=1 + apply manual → pending
     fuel_ltft_accum_reset();
-    ltft_auto_learn_burn_ve = 1u;
+    ltft_apply_burn_ve = 1u;
     g_dbg_ltft_accum_commits = 0u;
     fuel_ltft_ve_burn_clear();
     fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
@@ -1613,7 +1613,7 @@ static void test_fuel_ltft_accum(void) {
     CHECK_TRUE(fuel_ltft_ve_burn_pending(), "burn pending true após apply");
     fuel_ltft_ve_burn_clear();
     CHECK_FALSE(fuel_ltft_ve_burn_pending(), "clear limpa pending");
-    ltft_auto_learn_burn_ve = 0u;
+    ltft_apply_burn_ve = 0u;
 
     fuel_ltft_accum_reset_cell(mi, ri);
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "reset_cell zera hits");
@@ -1631,7 +1631,7 @@ static void test_fuel_ltft_accum_commit_ve(void) {
 
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
-    ltft_auto_learn_burn_ve = 0u;
+    ltft_apply_burn_ve = 0u;
 
     const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
     const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);
@@ -1709,7 +1709,7 @@ static void test_fuel_ltft_accum_commit_ve(void) {
 
     // Restaura VE default (nearest 3000/100 = [11][10] = 88) p/ testes math.
     ve_table[mi][ri] = 88u;
-    ltft_auto_learn_burn_ve = 0u;
+    ltft_apply_burn_ve = 0u;
     fuel_reset_adaptives();
 }
 
@@ -4470,7 +4470,7 @@ static void test_ltft_apply_cmd_y(void) {
     ems::app::ui_test_reset();
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
-    ltft_auto_learn_burn_ve = 0u;
+    ltft_apply_burn_ve = 0u;
 
     const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
     const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);

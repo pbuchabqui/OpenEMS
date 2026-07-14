@@ -813,7 +813,7 @@ const PAGE_0_SECTIONS = [
   {
     label: "CLOSED-LOOP (STFT/LTFT)",
     fields: ["stft_kp_x100","stft_ki_x1000","stft_clamp_pct_x10","ltft_add_pw_threshold_us",
-             "ltft_auto_learn_burn_ve",
+             "ltft_apply_burn_ve",
              "xtau_x_min_q8","xtau_x_max_q8","xtau_tau_min","xtau_tau_max"],
     actions: [{ label: "Reset LTFT", cls: "danger", endpoint: "/api/ltft/reset",
                 confirm: "Zero STFT + LEARN accum + LTFT maps (NVM adaptive shadow)?" }],
@@ -884,7 +884,7 @@ const FIELD_LABELS = {
   stft_kp_x100:             "STFT Kp (×100)",
   stft_ki_x1000:            "STFT Ki (×1000)",
   stft_clamp_pct_x10:       "STFT clamp ±(%)",
-  ltft_auto_learn_burn_ve:  "After APPLY: burn VE (0=RAM only, 1=burn page1 @ RPM safe)",
+  ltft_apply_burn_ve:  "After APPLY: burn VE (0=RAM only, 1=burn page1 @ RPM safe)",
   xtau_x_min_q8:            "X-τ X min (Q8)",
   xtau_x_max_q8:            "X-τ X max (Q8)",
   xtau_tau_min:              "X-τ τ min (cycles)",

@@ -161,9 +161,9 @@ extern uint32_t rev_limit_soft_window_x10;   // janela do corte de injeção (me
 extern uint16_t ltft_add_pw_threshold_us;
 
 // LEARN → VE. Page0 offset 81 (offset 80 = pad reservado, sempre 0).
-// burn_ve: após APPLY manual ('Y'), 0=VE só RAM; 1=pede burn page1 se RPM seguro.
+// ltft_apply_burn_ve: após APPLY manual ('Y'), 0=VE só RAM; 1=pede burn page1 se RPM seguro.
 // Bake-in nunca é automático no closed-loop.
-extern uint8_t ltft_auto_learn_burn_ve;
+extern uint8_t ltft_apply_burn_ve;
 
 // Corte de combustível na desaceleração (MS42 TI_PUR)
 extern uint16_t decel_cut_tps_threshold_x10;

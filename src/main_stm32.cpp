@@ -640,7 +640,7 @@ static void openems_init() noexcept {
 	ems::engine::apply_etb_calibration_from_page(g_calib_page0 + 16, 40u);
 	ems::engine::push_sensor_calibration_to_drivers();
 	// LEARN burn-after-APPLY (page0[81]); byte 80 é pad reservado
-	ems::engine::ltft_auto_learn_burn_ve = (g_calib_page0[81] != 0u) ? 1u : 0u;
+	ems::engine::ltft_apply_burn_ve = (g_calib_page0[81] != 0u) ? 1u : 0u;
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
 	// lido com o tamanho novo ganharia cauda 0xFF (VE=255!). Sem versão →

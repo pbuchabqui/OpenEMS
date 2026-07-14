@@ -545,7 +545,7 @@ PAGE0_FIELDS = [
     ("rev_limit_soft_window_x10",     76, 1, "L", 0.1),  # RPM
     # offset 80: reserved pad (always 0 — no auto-learn enable)
     # offset 81: after manual APPLY, 0=VE só RAM; 1=pede burn page1 se RPM seguro
-    ("ltft_auto_learn_burn_ve",       81, 1, "B", 1.0),
+    ("ltft_apply_burn_ve",       81, 1, "B", 1.0),
     # offsets 82-85 ainda reservados
     ("ltft_add_pw_threshold_us",      86, 1, "H", 0.001),# ms
     ("decel_cut_tps_threshold_x10",   88, 1, "H", 0.1),  # %

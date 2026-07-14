@@ -446,7 +446,7 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         // Offset 80: pad reservado (sempre 0 — sem knobs mortos).
         g_page0[80] = 0u;
         // Offset 81: após APPLY manual, burn VE page1 se RPM seguro.
-        g_page0[81] = ems::engine::ltft_auto_learn_burn_ve;
+        g_page0[81] = ems::engine::ltft_apply_burn_ve;
         // Offsets 82-85 ainda reservados.
         std::memcpy(g_page0 + 86, &ems::engine::ltft_add_pw_threshold_us,  2u);
         std::memcpy(g_page0 + 88, &ems::engine::decel_cut_tps_threshold_x10, 2u);
@@ -598,7 +598,7 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::rev_limit_rpm_x10,          g_page0 + 72, 4u);
         std::memcpy(&ems::engine::rev_limit_soft_window_x10,  g_page0 + 76, 4u);
         // Offset 80 pad ignorado; 81 = burn VE após APPLY manual
-        ems::engine::ltft_auto_learn_burn_ve = (g_page0[81] != 0u) ? 1u : 0u;
+        ems::engine::ltft_apply_burn_ve = (g_page0[81] != 0u) ? 1u : 0u;
         std::memcpy(&ems::engine::ltft_add_pw_threshold_us,   g_page0 + 86, 2u);
         std::memcpy(&ems::engine::decel_cut_tps_threshold_x10, g_page0 + 88, 2u);
         std::memcpy(&ems::engine::decel_cut_entry_rpm_x10,    g_page0 + 90, 4u);
@@ -1244,7 +1244,7 @@ inline void parse_byte(uint8_t b) noexcept {
                 ems::engine::g_dbg_ltft_accum_rejected,
                 ems::engine::g_dbg_ltft_accum_commits,
                 // flags: b8-15 burn_ve, b16 burn_pending (b0-7 pad reserved=0)
-                (static_cast<uint32_t>(ems::engine::ltft_auto_learn_burn_ve) << 8) |
+                (static_cast<uint32_t>(ems::engine::ltft_apply_burn_ve) << 8) |
                     (ems::engine::fuel_ltft_ve_burn_pending() ? (1u << 16) : 0u),
             };
             tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), sizeof(diag));
@@ -1444,7 +1444,7 @@ void ui_uart0_rx_isr_byte(uint8_t byte) noexcept {
 void ui_process() noexcept {
     // Auto-learn: flush VE → flash se pedido e RPM seguro (nunca em alta rotação).
     if (ems::engine::fuel_ltft_ve_burn_pending() &&
-        ems::engine::ltft_auto_learn_burn_ve != 0u &&
+        ems::engine::ltft_apply_burn_ve != 0u &&
         burn_rpm_safe()) {
         sync_page_from_table(0x01u);
         if (burn_page_to_flash(0x01u)) {
