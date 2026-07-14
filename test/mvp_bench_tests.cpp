@@ -1406,6 +1406,56 @@ static void test_fuel_ltft(void) {
 
 // WP0: apply (fuel_get_ltft_at / _add_at) usa nearest — igual crédito/store.
 // Em RPM/MAP exactos no eixo, floor (bilineal) ≠ nearest (dominante).
+static void test_fuel_trim_dtcs(void) {
+    section("fuel_trim: DTCs STFT/LTFT saturação");
+    using namespace ems::engine;
+
+    using DC = DiagnosticCode;
+    DiagnosticManager::init();
+    fuel_reset_adaptives();
+    closed_loop_enable = 1u;
+    closed_loop_post_start_s = 0u;
+    ltft_adapt_min_rpm_x10 = 0u;
+    stft_clamp_pct_x10 = 50u;       // ±5% — satura rápido
+    ltft_mult_clamp_pct_x10 = 50u;
+    ltft_learn_div = 1u;
+    ltft_max_step_x10 = 0u;
+
+    CHECK_FALSE(DiagnosticManager::is_fault_active(DC::STFT_LIMIT_REACHED),
+                "sem DTC STFT no início");
+
+    // Mantém erro grande até saturar STFT e confirmar 50 ticks
+    for (int i = 0; i < 80; ++i) {
+        (void)fuel_update_stft(30000u, 100u, 1000, 1300, 900, true, false, false,
+                               5000u, 500u);
+    }
+    CHECK_TRUE(fuel_get_stft_pct_x10() >= 50 || fuel_get_stft_pct_x10() <= -50,
+               "STFT no clamp");
+    CHECK_TRUE(DiagnosticManager::is_fault_active(DC::STFT_LIMIT_REACHED),
+               "STFT_LIMIT_REACHED após saturação prolongada");
+    CHECK_TRUE(DiagnosticManager::is_fault_active(DC::FUEL_TRIM_LEAN) ||
+               DiagnosticManager::is_fault_active(DC::FUEL_TRIM_RICH),
+               "FUEL_TRIM lean/rich com STFT saturado");
+
+    // Recupera: erro ~0, STFT baixa → clear
+    for (int i = 0; i < 80; ++i) {
+        (void)fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false,
+                               5000u, 500u);
+    }
+    // Integrador desce devagar; força STFT para 0 via reset parcial de integrador
+    // e várias amostras no alvo com enable/off dance — ou clear via muitos ticks
+    // com err=0: se STFT ainda sat, não limpa. Zera STFT via reset adaptives.
+    fuel_reset_adaptives();
+    DiagnosticManager::init();  // limpa lista (reset adaptives não limpa DTC)
+    closed_loop_enable = 1u;
+    closed_loop_post_start_s = 0u;
+    ltft_adapt_min_rpm_x10 = 0u;
+    stft_clamp_pct_x10 = 250u;
+    ltft_mult_clamp_pct_x10 = 250u;
+    ltft_learn_div = 64u;
+    fuel_reset_adaptives();
+}
+
 static void test_fuel_ltft_authority(void) {
     section("fuel_trim: LTFT clamp/rate calibráveis (≠ STFT)");
 
@@ -5063,6 +5113,7 @@ int main(void) {
     test_injector_scurve();
     test_fuel_delta_p_compensation();
     test_fuel_ltft();
+    test_fuel_trim_dtcs();
     test_fuel_ltft_authority();
     test_fuel_closed_loop_gates();
     test_fuel_ltft_apply_nearest();

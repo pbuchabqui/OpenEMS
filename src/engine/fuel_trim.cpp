@@ -1,6 +1,7 @@
 #include "engine/fuel_trim.h"
 
 #include "engine/calibration.h"
+#include "engine/diagnostic_manager.h"
 #include "engine/engine_config.h"
 #include "engine/math_utils.h"
 #include "engine/table3d.h"
@@ -204,11 +205,98 @@ static bool     g_cl_warm_latched  = false;
 static uint16_t g_ltft_prev_map_bar_x100 = 0u;
 static bool     g_ltft_have_prev_map     = false;
 
+// DTC debounce: contadores em ticks de fuel_update_stft (~100 ms).
+// Confirm 5 s / clear 2 s com tick de 100 ms.
+constexpr uint16_t kTrimSatConfirmTicks = 50u;
+constexpr uint16_t kTrimSatClearTicks   = 20u;
+static uint16_t g_stft_sat_ticks = 0u;
+static uint16_t g_ltft_sat_ticks = 0u;
+static uint16_t g_stft_ok_ticks  = 0u;
+static uint16_t g_ltft_ok_ticks  = 0u;
+
 void fuel_closed_loop_timers_reset() noexcept {
     g_cl_warm_since_ms = 0u;
     g_cl_warm_latched  = false;
     g_ltft_prev_map_bar_x100 = 0u;
     g_ltft_have_prev_map     = false;
+    g_stft_sat_ticks = 0u;
+    g_ltft_sat_ticks = 0u;
+    g_stft_ok_ticks  = 0u;
+    g_ltft_ok_ticks  = 0u;
+}
+
+void fuel_trim_update_diagnostics(int16_t stft_pct_x10,
+                                  int16_t ltft_pct_x10,
+                                  int16_t err_x1000) noexcept {
+    using DC = ems::engine::DiagnosticCode;
+    using FS = ems::engine::FaultSeverity;
+    using DM = ems::engine::DiagnosticManager;
+
+    const int16_t stft_lim = static_cast<int16_t>(ems::engine::stft_clamp_pct_x10);
+    const int16_t ltft_lim = static_cast<int16_t>(
+        (ems::engine::ltft_mult_clamp_pct_x10 == 0u)
+            ? 250u
+            : ems::engine::ltft_mult_clamp_pct_x10);
+    const bool stft_sat =
+        (stft_lim > 0) &&
+        ((stft_pct_x10 >= stft_lim) || (stft_pct_x10 <= static_cast<int16_t>(-stft_lim)));
+    const bool ltft_sat =
+        (ltft_lim > 0) &&
+        ((ltft_pct_x10 >= ltft_lim) || (ltft_pct_x10 <= static_cast<int16_t>(-ltft_lim)));
+
+    // STFT sat → STFT_LIMIT + fuel system lean/rich
+    if (stft_sat) {
+        g_stft_ok_ticks = 0u;
+        if (g_stft_sat_ticks < 65535u) {
+            ++g_stft_sat_ticks;
+        }
+        if (g_stft_sat_ticks >= kTrimSatConfirmTicks) {
+            const uint16_t mag = static_cast<uint16_t>(
+                (stft_pct_x10 >= 0) ? stft_pct_x10 : -stft_pct_x10);
+            DM::report_fault(DC::STFT_LIMIT_REACHED, FS::WARNING, mag,
+                             static_cast<uint16_t>(stft_lim));
+            // STFT+ = a enriquecer → sistema estava lean; STFT- = rich
+            if (stft_pct_x10 > 0) {
+                DM::report_fault(DC::FUEL_TRIM_LEAN, FS::WARNING, mag,
+                                 static_cast<uint16_t>(err_x1000 > 0 ? err_x1000 : -err_x1000));
+            } else {
+                DM::report_fault(DC::FUEL_TRIM_RICH, FS::WARNING, mag,
+                                 static_cast<uint16_t>(err_x1000 > 0 ? err_x1000 : -err_x1000));
+            }
+        }
+    } else {
+        g_stft_sat_ticks = 0u;
+        if (g_stft_ok_ticks < 65535u) {
+            ++g_stft_ok_ticks;
+        }
+        if (g_stft_ok_ticks >= kTrimSatClearTicks) {
+            DM::clear_fault(DC::STFT_LIMIT_REACHED);
+            DM::clear_fault(DC::FUEL_TRIM_LEAN);
+            DM::clear_fault(DC::FUEL_TRIM_RICH);
+        }
+    }
+
+    // LTFT sat na célula de apply
+    if (ltft_sat) {
+        g_ltft_ok_ticks = 0u;
+        if (g_ltft_sat_ticks < 65535u) {
+            ++g_ltft_sat_ticks;
+        }
+        if (g_ltft_sat_ticks >= kTrimSatConfirmTicks) {
+            const uint16_t mag = static_cast<uint16_t>(
+                (ltft_pct_x10 >= 0) ? ltft_pct_x10 : -ltft_pct_x10);
+            DM::report_fault(DC::LTFT_LIMIT_REACHED, FS::WARNING, mag,
+                             static_cast<uint16_t>(ltft_lim));
+        }
+    } else {
+        g_ltft_sat_ticks = 0u;
+        if (g_ltft_ok_ticks < 65535u) {
+            ++g_ltft_ok_ticks;
+        }
+        if (g_ltft_ok_ticks >= kTrimSatClearTicks) {
+            DM::clear_fault(DC::LTFT_LIMIT_REACHED);
+        }
+    }
 }
 
 // true se já passou post_start_s desde warm CLT+O2. now_ms==0 → skip (tests).
@@ -736,6 +824,12 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                                         rev_cut));
         }
     }
+
+    // DTCs de saturação (só com malha a correr).
+    fuel_trim_update_diagnostics(
+        g_stft_pct_x10,
+        g_ltft_pct_x10[map_idx][rpm_idx],
+        error_x1000);
 
     return g_stft_pct_x10;
 }
