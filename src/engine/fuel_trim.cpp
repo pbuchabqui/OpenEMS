@@ -399,6 +399,8 @@ void fuel_reset_ltft() noexcept {
     }
     g_stft_pct_x10 = 0;
     g_stft_integrator_x1000 = 0;
+    // Z / reset LTFT: grava shadows já sujas sem esperar rate-limit de 60 s.
+    ems::hal::nvm_request_adaptive_flush_now();
 }
 
 void fuel_reset_adaptives() noexcept {
@@ -761,8 +763,9 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     const uint8_t map_idx =
         table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
 
-    // LTFT IIR + LEARN: min RPM + MAP estável. STFT global corre sempre em CL.
-    bool ltft_adapt_ok = (rpm_x10 >= static_cast<uint32_t>(ltft_adapt_min_rpm_x10));
+    // LTFT IIR + LEARN: adapt enable + min RPM + MAP estável. STFT global sempre em CL.
+    bool ltft_adapt_ok = (ltft_adapt_enable != 0u) &&
+        (rpm_x10 >= static_cast<uint32_t>(ltft_adapt_min_rpm_x10));
     if (ltft_adapt_ok && g_ltft_have_prev_map) {
         if (abs_i32(static_cast<int32_t>(map_bar_x100) -
                     static_cast<int32_t>(g_ltft_prev_map_bar_x100)) >

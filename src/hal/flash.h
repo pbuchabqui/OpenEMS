@@ -36,7 +36,18 @@ bool nvm_write_ltft_add(uint8_t rpm_i, uint8_t load_i, int8_t val_50us) noexcept
 int8_t nvm_read_ltft_add(uint8_t rpm_i, uint8_t load_i) noexcept;
 
 bool nvm_load_adaptive_maps() noexcept;
+// Flush state machine do sector adaptativo. Rate-limit: no máximo 1 commit
+// completo por kMinAdaptiveFlushIntervalMs salvo force (Z / request_now).
+// Retorna true quando idle e sem trabalho pendente (ou defer por rate-limit).
 bool nvm_flush_adaptive_maps() noexcept;
+// Relógio do main (ms) para rate-limit; chamar a cada loop ou antes do flush.
+void nvm_set_now_ms(uint32_t now_ms) noexcept;
+// Força o próximo flush a ignorar o intervalo (ex.: após 'Z' / reset LTFT).
+void nvm_request_adaptive_flush_now() noexcept;
+// true se LTFT/knock/add shadows têm alterações por gravar.
+bool nvm_adaptive_maps_dirty() noexcept;
+// Intervalo mínimo entre flushes completos em run (ms).
+constexpr uint32_t kMinAdaptiveFlushIntervalMs = 60000u;
 
 // knock_map[8×8]: retraso de ignição por cilindro (unidade: 0.1°, range –12.7°..+12.7°)
 // Mapeado em SRAM (EEPROM emulada) logo após o LTFT, offset 256 bytes.

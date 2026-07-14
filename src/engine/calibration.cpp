@@ -222,6 +222,7 @@ uint16_t ltft_add_clamp_us          = 6350u;
 uint8_t  ltft_learn_div             = 64u;
 uint8_t  ltft_commit_gain_pct       = 50u;
 uint16_t ltft_max_step_x10          = 0u;      // 0 = sem cap de passo
+uint8_t  ltft_adapt_enable          = 1u;      // 0 = freeze LTFT maps
 
 // Corte de combustível na desaceleração (MS42 TI_PUR)
 // Entrada: TPS < 0.5% + RPM > 1500 + CLT > 70°C

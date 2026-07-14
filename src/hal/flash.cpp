@@ -61,6 +61,9 @@ static int8_t  g_ltft_add_ram[ems::hal::kNvmLtftAddDim][ems::hal::kNvmLtftAddDim
 static bool    g_ltft_dirty     = false;
 static bool    g_knock_dirty    = false;
 static bool    g_ltft_add_dirty = false;
+static uint32_t g_nvm_now_ms              = 0u;
+static uint32_t g_last_adaptive_flush_ms  = 0u;
+static bool     g_adaptive_flush_asap     = false;
 
 // ── Endereços dos setores Bank2 ───────────────────────────────────────────────
 static constexpr uint32_t kSectorLtft  = 0u;   // Setor 0: LTFT + knock
@@ -311,7 +314,20 @@ bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept {
 }
 
 // ── Flush LTFT + Knock para Flash ─────────────────────────────────────────────
-// Chamado a cada 500 ms do loop principal (flash flush do STM32)
+// Poll do main (ex. 500 ms). Rate-limit: no máximo 1 erase/program completo
+// por kMinAdaptiveFlushIntervalMs, salvo nvm_request_adaptive_flush_now().
+
+void nvm_set_now_ms(uint32_t now_ms) noexcept {
+    g_nvm_now_ms = now_ms;
+}
+
+void nvm_request_adaptive_flush_now() noexcept {
+    g_adaptive_flush_asap = true;
+}
+
+bool nvm_adaptive_maps_dirty() noexcept {
+    return g_ltft_dirty || g_knock_dirty || g_ltft_add_dirty;
+}
 
 bool nvm_flush_adaptive_maps() noexcept {
     enum class FlushState : uint8_t {
@@ -336,6 +352,15 @@ bool nvm_flush_adaptive_maps() noexcept {
 
     if (state == FlushState::Idle) {
         if (!g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty) { return true; }
+
+        // Rate-limit: adia flush se ainda dentro do intervalo (mantém dirty).
+        if (!g_adaptive_flush_asap && g_last_adaptive_flush_ms != 0u) {
+            const uint32_t age = g_nvm_now_ms - g_last_adaptive_flush_ms;
+            if (age < kMinAdaptiveFlushIntervalMs) {
+                return true;  // defer — main re-agenda no próximo tick
+            }
+        }
+        g_adaptive_flush_asap = false;
 
         // Setor 0 contém LTFT, Knock, LTFT-add e RuntimeSyncSeed. Preserva o restante.
         std::memcpy(sector_buf,
@@ -428,6 +453,7 @@ bool nvm_flush_adaptive_maps() noexcept {
         FLASH_NSCR &= ~FLASH_CR_PG;
         flash_lock_bank2();
         state = FlushState::Idle;
+        g_last_adaptive_flush_ms = g_nvm_now_ms;
         return !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty;
     }
 
@@ -501,6 +527,9 @@ int8_t nvm_read_ltft(uint8_t r, uint8_t l) noexcept {
     return g_ltft[r][l];
 }
 bool nvm_load_adaptive_maps() noexcept { return true; }
+void nvm_set_now_ms(uint32_t) noexcept {}
+void nvm_request_adaptive_flush_now() noexcept {}
+bool nvm_adaptive_maps_dirty() noexcept { return false; }
 bool nvm_write_knock(uint8_t r, uint8_t l, int8_t v) noexcept {
     if (r >= 8u || l >= 8u) { return false; }
     if (g_flash_busy) { return false; }

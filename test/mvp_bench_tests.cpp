@@ -1406,6 +1406,41 @@ static void test_fuel_ltft(void) {
 
 // WP0: apply (fuel_get_ltft_at / _add_at) usa nearest — igual crédito/store.
 // Em RPM/MAP exactos no eixo, floor (bilineal) ≠ nearest (dominante).
+static void test_ltft_adapt_enable(void) {
+    section("fuel_trim: ltft_adapt_enable congela LTFT/LEARN");
+
+    fuel_reset_adaptives();
+    closed_loop_enable = 1u;
+    closed_loop_post_start_s = 0u;
+    ltft_adapt_min_rpm_x10 = 0u;
+    ltft_adapt_enable = 0u;
+    fuel_ltft_accum_reset();
+
+    const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+    for (int i = 0; i < 10; ++i) {
+        (void)fuel_update_stft(30000u, 100u, 1000, 1100, 900, true, false, false,
+                               5000u, 500u);
+    }
+    CHECK_TRUE(fuel_get_stft_pct_x10() != 0, "adapt off: STFT ainda integra");
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "adapt off: zero LEARN hits");
+
+    ltft_adapt_enable = 1u;
+    fuel_ltft_accum_reset();
+    (void)fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false,
+                           5000u, 500u);
+    for (int i = 0; i < 5; ++i) {
+        (void)fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false,
+                               5000u, 500u);
+    }
+    CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) > 0u, "adapt on: LEARN hits");
+
+    ltft_adapt_enable = 1u;
+    ltft_adapt_min_rpm_x10 = 12000u;
+    closed_loop_post_start_s = 15u;
+    fuel_reset_adaptives();
+}
+
 static void test_fuel_trim_dtcs(void) {
     section("fuel_trim: DTCs STFT/LTFT saturação");
     using namespace ems::engine;
@@ -5113,6 +5148,7 @@ int main(void) {
     test_injector_scurve();
     test_fuel_delta_p_compensation();
     test_fuel_ltft();
+    test_ltft_adapt_enable();
     test_fuel_trim_dtcs();
     test_fuel_ltft_authority();
     test_fuel_closed_loop_gates();

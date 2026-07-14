@@ -181,6 +181,8 @@ extern uint16_t ltft_add_clamp_us;
 extern uint8_t  ltft_learn_div;
 extern uint8_t  ltft_commit_gain_pct;
 extern uint16_t ltft_max_step_x10;
+// page0[184]: 0 = STFT only (LTFT IIR+LEARN frozen); 1 = adapt LTFT (default).
+extern uint8_t  ltft_adapt_enable;
 
 // Corte de combustível na desaceleração (MS42 TI_PUR)
 extern uint16_t decel_cut_tps_threshold_x10;

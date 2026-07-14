@@ -645,7 +645,9 @@ static void openems_init() noexcept {
 	ems::engine::ltft_apply_burn_ve = (g_calib_page0[81] != 0u) ? 1u : 0u;
 	std::memcpy(&ems::engine::closed_loop_post_start_s, g_calib_page0 + 82, 2u);
 	std::memcpy(&ems::engine::ltft_adapt_min_rpm_x10,   g_calib_page0 + 84, 2u);
-	{
+	// Authority LTFT (176-184) só se layout version actual — blob v2 tem lixo/zeros.
+	if (g_calib_page0[ems::engine::kCalLayoutVersionOffset] ==
+	    ems::engine::kCalLayoutVersion) {
 		uint16_t mult_c = 0u, add_c = 0u, max_s = 0u;
 		std::memcpy(&mult_c, g_calib_page0 + 176, 2u);
 		std::memcpy(&add_c,  g_calib_page0 + 178, 2u);
@@ -655,6 +657,9 @@ static void openems_init() noexcept {
 		if (g_calib_page0[180] != 0u) { ems::engine::ltft_learn_div = g_calib_page0[180]; }
 		if (g_calib_page0[181] != 0u) { ems::engine::ltft_commit_gain_pct = g_calib_page0[181]; }
 		ems::engine::ltft_max_step_x10 = max_s;
+		if (g_calib_page0[184] <= 1u) {
+			ems::engine::ltft_adapt_enable = g_calib_page0[184];
+		}
 	}
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
@@ -1264,6 +1269,7 @@ int main() {
         // FIX P0: Only allow flash writes when engine is stopped or below safe RPM
         static bool adaptive_flush_pending = false;
         static uint32_t last_calib_save_ms = 0u;
+        ems::hal::nvm_set_now_ms(now);
         if (elapsed(now, g_t500ms_, 500u)) {
             g_t500ms_ = now;
             // LED heartbeat: toggle PB2 a cada 500ms (1 Hz)
@@ -1284,7 +1290,10 @@ int main() {
                         last_calib_save_ms = now;
                     }
                 }
-                adaptive_flush_pending = true;
+                // Adaptive LTFT/knock: só agenda se dirty (rate-limit dentro do flush).
+                if (ems::hal::nvm_adaptive_maps_dirty()) {
+                    adaptive_flush_pending = true;
+                }
             }
         }
         if (adaptive_flush_pending) {
