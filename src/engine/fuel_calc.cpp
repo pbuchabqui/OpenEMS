@@ -1118,6 +1118,12 @@ int16_t fuel_get_ltft_add_us(uint8_t map_idx, uint8_t rpm_idx) noexcept {
     return g_ltft_add_us[map_idx >> 1u][rpm_idx >> 1u];
 }
 
+int16_t fuel_get_ltft_add_at(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
+    const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
+    const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
+    return fuel_get_ltft_add_us(mi, ri);
+}
+
 // ── Compensação barométrica (MS42 TI_FAC_ALTI) ───────────────────────────────
 
 void fuel_set_baro_bar_x100(uint16_t baro) noexcept {

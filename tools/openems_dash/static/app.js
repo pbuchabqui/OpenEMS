@@ -815,7 +815,8 @@ const PAGE_0_SECTIONS = [
     fields: ["stft_kp_x100","stft_ki_x1000","stft_clamp_pct_x10","ltft_add_pw_threshold_us",
              "ltft_auto_learn_burn_ve",
              "xtau_x_min_q8","xtau_x_max_q8","xtau_tau_min","xtau_tau_max"],
-    actions: [{ label: "Reset LTFT", cls: "danger", endpoint: "/api/ltft/reset", confirm: "Zero ALL learned fuel trims (LTFT)?" }],
+    actions: [{ label: "Reset LTFT", cls: "danger", endpoint: "/api/ltft/reset",
+                confirm: "Zero STFT + LEARN accum + LTFT maps (NVM adaptive shadow)?" }],
   },
   {
     label: "EWG (ELECTRONIC WASTEGATE)",

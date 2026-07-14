@@ -225,10 +225,13 @@ extern volatile uint32_t g_dbg_ltft_accum_accepted;
 extern volatile uint32_t g_dbg_ltft_accum_rejected;
 extern volatile uint32_t g_dbg_ltft_accum_commits;
 extern int32_t g_stft_integrator_x1000;
+// LTFT multiplicativo: célula nearest (igual crédito/store e telemetria).
 int16_t fuel_get_ltft_at(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 int16_t fuel_get_ltft_pct_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 // LTFT aditivo: retorna offset em µs (negativo = redução de PW)
 int16_t fuel_get_ltft_add_us(uint8_t map_idx, uint8_t rpm_idx) noexcept;
+// LTFT aditivo por RPM/MAP: sub-grid da célula nearest (apply = credit).
+int16_t fuel_get_ltft_add_at(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 
 // Corte de combustível na desaceleração (MS42 TI_PUR).
 // Chama a cada ciclo de injeção (2ms); atualiza estado interno com histerese.

@@ -881,9 +881,11 @@ int main() {
                 const uint8_t  ve = ems::engine::get_ve_prepared(fuel_lookup);
                 const uint16_t lambda_target_x1000 =
                     ems::engine::get_lambda_target_x1000_prepared(fuel_lookup);
+                // LTFT apply = nearest cell (mesma política que crédito/store LEARN).
+                // fuel_lookup.yi/xi são floor da bilineal VE — mid-bin errava a célula.
                 const int16_t fuel_trim_pct_x10 = crank_rpm_window ? 0 : clamp_i16(
                     static_cast<int16_t>(ems::engine::fuel_get_stft_pct_x10() +
-                                         ems::engine::fuel_get_ltft_pct_x10(fuel_lookup.yi, fuel_lookup.xi)),
+                                         ems::engine::fuel_get_ltft_at(snap.rpm_x10, map_bar_x100)),
                     -500, 500);
                 const int32_t ae_pw_us = crank_rpm_window ? 0 : ems::engine::calc_ae_pw_us(
                     sensors.etb_tps_pct_x10,
@@ -913,10 +915,10 @@ int main() {
                     uint32_t fuel_pw_us =
                         final_pw_us_base - static_cast<uint32_t>(fuel_corr.dead_time_us);
 
-                    // LTFT aditivo (MS42 TI_AD_ADD_MMV): aplica offset no PW líquido
+                    // LTFT aditivo (MS42 TI_AD_ADD_MMV): offset no PW líquido, célula nearest
                     if (!crank_rpm_window) {
-                        const int16_t ltft_add = ems::engine::fuel_get_ltft_add_us(
-                            fuel_lookup.yi, fuel_lookup.xi);
+                        const int16_t ltft_add =
+                            ems::engine::fuel_get_ltft_add_at(snap.rpm_x10, map_bar_x100);
                         const int32_t pw_adj = static_cast<int32_t>(fuel_pw_us) + ltft_add;
                         fuel_pw_us = (pw_adj <= 0) ? 0u
                                    : (pw_adj > 100000) ? 100000u

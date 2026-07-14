@@ -1404,6 +1404,54 @@ static void test_fuel_ltft(void) {
     CHECK_EQ(fuel_get_ltft_add_us(16u, 0u), 0, "ltft_add: out-of-range → 0");
 }
 
+// WP0: apply (fuel_get_ltft_at / _add_at) usa nearest — igual crédito/store.
+// Em RPM/MAP exactos no eixo, floor (bilineal) ≠ nearest (dominante).
+static void test_fuel_ltft_apply_nearest(void) {
+    section("fuel_calc: LTFT apply = nearest (não floor bilineal)");
+
+    fuel_reset_ltft();
+    fuel_reset_adaptives();
+
+    // 2000 rpm exacto no eixo: floor cai na célula anterior; nearest = nó 2000.
+    const uint32_t rpm_x10 = 20000u;
+    const uint16_t map_x100 = 110u;
+    const uint8_t ri_floor =
+        table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
+    const uint8_t mi_floor =
+        table_axis_index(kLoadAxisBarX100, kTableAxisSize, map_x100);
+    const uint8_t ri_near =
+        table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
+    const uint8_t mi_near =
+        table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, map_x100);
+    CHECK_TRUE(ri_floor != ri_near || mi_floor != mi_near,
+               "pré-condição: floor ≠ nearest neste OP");
+
+    // Grava só a célula nearest em NVM (int8 %); floor fica 0.
+    // nvm_write_ltft(rpm_i, load_i, val) — ordem (rpm, map).
+    CHECK_TRUE(ems::hal::nvm_write_ltft(ri_near, mi_near, 12),
+               "nvm LTFT nearest = +12%");
+    CHECK_TRUE(ems::hal::nvm_write_ltft(ri_floor, mi_floor, 0),
+               "nvm LTFT floor = 0");
+    fuel_reset_adaptives();  // reload g_ltft_* from NVM
+
+    CHECK_EQ(fuel_get_ltft_pct_x10(mi_near, ri_near), 120,
+             "load nearest → +12.0% (×10)");
+    CHECK_EQ(fuel_get_ltft_pct_x10(mi_floor, ri_floor), 0,
+             "floor cell permanece 0");
+    CHECK_EQ(fuel_get_ltft_at(rpm_x10, map_x100), 120,
+             "apply mult usa nearest (+12%), não floor");
+
+    // LTFT add: grava sub-grid da célula nearest
+    CHECK_TRUE(ems::hal::nvm_write_ltft_add(ri_near >> 1u, mi_near >> 1u, 4),
+               "nvm LTFT add nearest = +4×50µs");
+    fuel_reset_adaptives();
+    CHECK_EQ(fuel_get_ltft_add_at(rpm_x10, map_x100), 200,
+             "apply add_at nearest = +200 µs");
+
+    fuel_reset_ltft();
+    fuel_reset_adaptives();
+}
+
 static void test_fuel_ltft_accum(void) {
     section("fuel_calc: LTFT accum stats / bake-in gates");
 
@@ -4914,6 +4962,7 @@ int main(void) {
     test_injector_scurve();
     test_fuel_delta_p_compensation();
     test_fuel_ltft();
+    test_fuel_ltft_apply_nearest();
     test_fuel_ltft_accum();
     test_fuel_ltft_accum_commit_ve();
 

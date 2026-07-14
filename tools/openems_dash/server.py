@@ -490,16 +490,17 @@ def api_wbo2_can_id_set(body: dict):
 
 @app.post("/api/ltft/reset")
 def api_ltft_reset():
-    """Zera page 10 (LTFT mult+add) em RAM e faz burn dessa página.
-    Não limpa STFT nem o acumulador LEARN — use /api/adaptives/reset ('Z').
+    """Zera trims de combustível aprendidos via comando 'Z' (FW):
+    STFT + acumulador LEARN + shadows LTFT mult/add (NVM adaptativo dirty).
+
+    Nota: a page 10 não é o store canónico do LTFT em runtime — gravar zeros
+    na page 10 e burn NÃO limpava g_ltft_* / NVM adaptativo. Por isso este
+    endpoint usa o mesmo path que /api/adaptives/reset.
     """
-    size = proto.PAGE_SIZES[10]
-    zeros = b"\x00" * size
-    def do_reset(l):
-        l.write_page_ram(10, 0, zeros[:256])
-        l.write_page_ram(10, 256, zeros[256:])
-        l.burn_page(10)
-    worker.submit(do_reset)
+    try:
+        worker.submit(lambda l: l.reset_adaptives())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"ltft reset: {e}"}, status_code=502)
     return {"ok": True}
 
 
@@ -508,7 +509,7 @@ def api_adaptives_reset():
     """LEARN session reset (comando 'Z'): zera STFT, acumulador LEARN e
     shadows LTFT (marca dirty → flush do sector adaptativo, não burn page0/VE).
 
-    Diferente de /api/ltft/reset, que só zera a page 10 e faz burn dessa página.
+    Alias funcional de /api/ltft/reset (ambos usam 'Z').
     """
     try:
         worker.submit(lambda l: l.reset_adaptives())
