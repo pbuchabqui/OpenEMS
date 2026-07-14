@@ -294,10 +294,11 @@ class STM32Client:
         return self._ser.read(length)
 
     def snapshot(self) -> Optional[Snapshot]:
+        # UiRealtimeData is 86 bytes (ui_protocol.h static_assert).
         self._ser.write(b"\x41")
-        time.sleep(0.05)
-        r = self._ser.read(66)
-        if len(r) < 13:
+        time.sleep(0.08)
+        r = self._ser.read(86)
+        if len(r) < 14:
             return None
         s = Snapshot()
         s.rpm          = struct.unpack_from("<H", r, 0)[0]
@@ -311,8 +312,9 @@ class STM32Client:
         s.stft_pct     = struct.unpack_from("b", r, 10)[0]
         # status_bits é uint16 alinhado → offset 12 (1 byte de padding em 11).
         s.status       = struct.unpack_from("<H", r, 12)[0]
+        # reserved[52] begins at offset 14.
         # VE interpolado vivo em reserved[49] = byte 14+49 = 63 (firmware get_ve).
-        if len(r) >= 66:
+        if len(r) >= 64:
             s.ve_live  = r[63]
         # LTFT em reserved[5] = byte 14+5 = 19 (ui_protocol.cpp: rt.reserved[5]).
         if len(r) >= 20:
