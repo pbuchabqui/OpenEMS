@@ -1861,7 +1861,7 @@ static void test_fuel_ltft_accum_commit_ve(void) {
     CHECK_TRUE(ve_table[mi][ri] > 100u, "VE > 100 após bake-in STFT+");
     CHECK_TRUE(ve_table[mi][ri] <= kLtftAccumVeMax, "VE ≤ max");
 
-    // apply_all_ready: bulk VE+LTFT; STFT global NÃO desenrola N vezes
+    // apply_all: bulk VE+LTFT em células ready; STFT global NÃO desenrola N vezes
     fuel_ltft_accum_reset();
     ve_table[mi][ri] = 100u;
     g_dbg_ltft_accum_commits = 0u;
@@ -1877,6 +1877,30 @@ static void test_fuel_ltft_accum_commit_ve(void) {
     CHECK_TRUE(ve_table[mi][ri] > 100u, "VE alterada por apply_all");
     CHECK_EQ(fuel_get_stft_pct_x10(), stft_before_all,
              "apply_all não desenrola STFT global (só VE+LTFT célula)");
+
+    // apply_all aplica células com hits mas AINDA NÃO ready (parcial)
+    fuel_ltft_accum_reset();
+    ve_table[mi][ri] = 100u;
+    g_dbg_ltft_accum_commits = 0u;
+    // Mantém STFT+ com λ ligeiramente lean; poucos hits < ready
+    fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
+    const uint16_t partial_hits = static_cast<uint16_t>(kLtftAccumReadyHits / 2u);
+    CHECK_TRUE(partial_hits >= 2u, "pre-cond: partial_hits ≥ 2");
+    for (uint16_t n = 0u; n < partial_hits; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) > 0u, "hits parciais > 0");
+    CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri), "ainda não ready");
+    CHECK_FALSE(fuel_ltft_accum_try_commit(mi, ri),
+                "try_commit continua a exigir ready");
+    CHECK_EQ(ve_table[mi][ri], 100u, "VE intacta após try_commit falhado");
+    const int16_t mean_before = fuel_ltft_accum_mean_stft_x10(mi, ri);
+    CHECK_TRUE(mean_before != 0, "mean STFT parcial ≠ 0");
+    const uint16_t n_partial = fuel_ltft_accum_apply_all_ready();
+    CHECK_TRUE(n_partial >= 1u,
+               "apply_all bakeia célula parcial (hits>0, não ready)");
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "stats limpos pós apply parcial");
+    CHECK_TRUE(ve_table[mi][ri] != 100u, "VE alterada por apply_all parcial");
 
     // Caminho aditivo (PW < threshold): NÃO alimenta acumulador LEARN→VE
     fuel_ltft_accum_reset();

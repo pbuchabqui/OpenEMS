@@ -263,9 +263,9 @@ class OpenEMSLink:
         if ack != b"\x00":
             raise IOError(f"reset_adaptives: ACK {ack.hex()}")
 
-    # ── apply LEARN ready → VE ('Y': bake-in manual, RAM) ────────────────
+    # ── apply LEARN accumulated → VE ('Y': bake-in manual, RAM) ──────────
     def apply_ltft_ready(self) -> int:
-        """Aplica bake-in em todas as células ready. Retorna n_commits (0..255)."""
+        """Aplica bake-in em todas as células com hits>0. Retorna n_commits (0..255)."""
         resp = self._txn(b"Y", 2)
         if len(resp) < 2 or resp[0] != 0x00:
             raise IOError(f"apply_ltft_ready: resp {resp.hex() if resp else 'empty'}")

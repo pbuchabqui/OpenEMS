@@ -520,7 +520,7 @@ def api_adaptives_reset():
 
 @app.post("/api/ltft/apply-ready")
 def api_ltft_apply_ready():
-    """Bake-in manual: células LEARN ready → VE (RAM). Comando 'Y'."""
+    """Bake-in manual: todas as células LEARN com hits>0 → VE (RAM). Comando 'Y'."""
     try:
         n = worker.submit(lambda l: l.apply_ltft_ready())
     except Exception as e:  # noqa: BLE001

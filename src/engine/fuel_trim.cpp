@@ -621,12 +621,22 @@ static void fuel_ltft_accum_tick(uint8_t map_idx,
     cell.sum_err_x1000 += err_x1000;
 }
 
+// require_ready: try_commit (1 célula) exige gates ready; apply_all aplica
+// qualquer célula com hits>0 (todas as correcções acumuladas na sessão).
 // unroll_global_stft: true em commit de célula única (desenrola o trim global).
 // false em apply_all — N células não devem subtrair N×bake do mesmo STFT.
 static bool ltft_accum_commit_cell(uint8_t map_idx,
                                    uint8_t rpm_idx,
+                                   bool require_ready,
                                    bool unroll_global_stft) noexcept {
-    if (!fuel_ltft_accum_cell_ready(map_idx, rpm_idx)) {
+    if (map_idx >= kTableAxisSize || rpm_idx >= kTableAxisSize) {
+        return false;
+    }
+    if (require_ready) {
+        if (!fuel_ltft_accum_cell_ready(map_idx, rpm_idx)) {
+            return false;
+        }
+    } else if (g_ltft_stats[map_idx][rpm_idx].hits == 0u) {
         return false;
     }
 
@@ -703,16 +713,24 @@ static bool ltft_accum_commit_cell(uint8_t map_idx,
 
 bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept {
     // Manual-only: closed-loop não chama isto. Unroll STFT nesta célula.
-    return ltft_accum_commit_cell(map_idx, rpm_idx, /*unroll_global_stft=*/true);
+    // Mantém gate ready (diagnóstico de 1 célula / testes).
+    return ltft_accum_commit_cell(map_idx, rpm_idx,
+                                  /*require_ready=*/true,
+                                  /*unroll_global_stft=*/true);
 }
 
 uint16_t fuel_ltft_accum_apply_all_ready() noexcept {
-    // Bulk APPLY: VE + LTFT por célula; STFT global fica — re-converge no loop.
+    // Bulk APPLY ('Y'): bake em TODAS as células com acumulação (hits>0),
+    // não só as ready. O bit ready na page12 continua a ser indicador de
+    // qualidade; o apply de sessão não deixa correcções parciais para trás.
+    // VE + LTFT por célula; STFT global fica — re-converge no loop.
     // (N commits × unroll STFT derrubava o trim global de forma incorrecta.)
     uint16_t n = 0u;
     for (uint8_t m = 0u; m < kTableAxisSize; ++m) {
         for (uint8_t r = 0u; r < kTableAxisSize; ++r) {
-            if (ltft_accum_commit_cell(m, r, /*unroll_global_stft=*/false)) {
+            if (ltft_accum_commit_cell(m, r,
+                                       /*require_ready=*/false,
+                                       /*unroll_global_stft=*/false)) {
                 ++n;
             }
         }
