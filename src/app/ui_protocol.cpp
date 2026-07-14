@@ -1186,27 +1186,18 @@ inline void parse_byte(uint8_t b) noexcept {
             return;
         }
         if (b == static_cast<uint8_t>('G')) {
-            // Angle measurement: gap_ts + 8 latest {ts, high} from dispatch ring
-            // Format: [gap_ts:4] [idx:1] [8×{ts:4, high:1}] = 45 bytes
-            extern volatile uint32_t g_last_gap_ts __asm("g_last_gap_ts");
-            extern volatile uint8_t g_ts_ring_idx __asm("g_ts_ring_idx");
-            // TsEntry is {uint32_t ts; uint8_t high} — 8 bytes with padding
-            // Read raw memory: each entry is 8 bytes at g_ts_ring base
-            extern volatile uint32_t g_ts_ring __asm("g_ts_ring");
-            const uint32_t gap = g_last_gap_ts;
-            const uint8_t ridx = g_ts_ring_idx;
+            // Angle measurement via sched API (no raw symbol peeks).
+            // Format: [gap_ts:4] [idx:1] [8×{ts:4, high:1, ch:1}] = 45 bytes
+            uint32_t gap = 0U;
+            uint8_t ridx = 0U;
+            EcuSchedTsSample samples[8];
+            ecu_sched_get_angle_trace(&gap, &ridx, samples);
             tx_push_bytes(reinterpret_cast<const uint8_t*>(&gap), 4U);
             tx_push(ridx);
-            const volatile uint8_t* base = reinterpret_cast<const volatile uint8_t*>(&g_ts_ring);
             for (uint8_t i = 0; i < 8U; ++i) {
-                const uint8_t ri = (ridx + 32U - 8U + i) & 31U;
-                // TsEntry is 8 bytes: ts(4) + high(1) + channel(1) + pad(2)
-                const uint32_t ts = *reinterpret_cast<const volatile uint32_t*>(base + ri * 8U);
-                const uint8_t h = *(base + ri * 8U + 4U);
-                const uint8_t ch = *(base + ri * 8U + 5U);
-                tx_push_bytes(reinterpret_cast<const uint8_t*>(&ts), 4U);
-                tx_push(h);
-                tx_push(ch);
+                tx_push_bytes(reinterpret_cast<const uint8_t*>(&samples[i].ts), 4U);
+                tx_push(samples[i].high);
+                tx_push(samples[i].channel);
             }
             return;
         }
@@ -1217,65 +1208,35 @@ inline void parse_byte(uint8_t b) noexcept {
             return;
         }
         if (b == static_cast<uint8_t>('V')) {
-            extern volatile uint32_t g_pin_high_count[] __asm("g_pin_high_count");
-            extern volatile uint32_t g_pin_low_count[] __asm("g_pin_low_count");
-            extern volatile uint32_t g_pin_seq_error[] __asm("g_pin_seq_error");
-            // Todos os 8 canais: [0-3]=INJ1-4, [4-7]=IGN1-4
-            const uint32_t v[24] = {
-                g_pin_high_count[0], g_pin_low_count[0], g_pin_seq_error[0],
-                g_pin_high_count[1], g_pin_low_count[1], g_pin_seq_error[1],
-                g_pin_high_count[2], g_pin_low_count[2], g_pin_seq_error[2],
-                g_pin_high_count[3], g_pin_low_count[3], g_pin_seq_error[3],
-                g_pin_high_count[4], g_pin_low_count[4], g_pin_seq_error[4],
-                g_pin_high_count[5], g_pin_low_count[5], g_pin_seq_error[5],
-                g_pin_high_count[6], g_pin_low_count[6], g_pin_seq_error[6],
-                g_pin_high_count[7], g_pin_low_count[7], g_pin_seq_error[7],
-            };
+            uint32_t v[24];
+            ecu_sched_get_pin_counts_u32x24(v);
             tx_push_bytes(reinterpret_cast<const uint8_t*>(v), 96U);
             return;
         }
         if (b == static_cast<uint8_t>('D')) {
-            extern volatile uint32_t g_dbg_tim3_isr_count __asm("g_dbg_tim3_isr_count");
-            extern volatile uint32_t g_dbg_tim1cc_isr_count __asm("g_dbg_tim1cc_isr_count");
-            extern volatile uint32_t g_dbg_inj_force_early __asm("g_dbg_inj_force_early");
-            extern volatile uint32_t g_dbg_ign_force_early __asm("g_dbg_ign_force_early");
-            extern volatile uint32_t g_dbg_inj1_arm __asm("g_dbg_inj1_arm");
-            extern volatile uint32_t g_dbg_seq_calls __asm("g_dbg_seq_calls");
-            extern volatile uint32_t g_dbg_evt_overflow __asm("g_dbg_evt_overflow");
-            extern volatile uint32_t g_dbg_clear_all_count __asm("g_dbg_clear_all_count");
-            extern volatile uint32_t g_diag_isr_count __asm("_ZN3ems3drv16g_diag_isr_countE");
-            extern volatile uint32_t g_dbg_tc_gap __asm("_ZN3ems3drv12g_dbg_tc_gapE");
-            extern volatile uint32_t g_dbg_tc_spike __asm("_ZN3ems3drv14g_dbg_tc_spikeE");
-            extern volatile uint32_t g_dbg_tc_normal __asm("_ZN3ems3drv15g_dbg_tc_normalE");
-            extern volatile uint32_t g_dbg_presync_count __asm("g_dbg_presync_count");
-            extern volatile uint32_t g_dbg_phase_skip __asm("g_dbg_phase_skip");
-            extern volatile uint32_t g_dbg_phase_fire __asm("g_dbg_phase_fire");
-            extern volatile uint32_t g_dbg_evt_inserted __asm("g_dbg_evt_inserted");
-            extern volatile uint32_t g_dbg_evt_dispatched __asm("g_dbg_evt_dispatched");
-            extern volatile uint32_t g_diag_presync_revs __asm("g_diag_presync_revs");
-            extern volatile uint32_t g_diag_seq_revs __asm("g_diag_seq_revs");
-            extern volatile uint32_t g_diag_clear_all_count __asm("g_diag_clear_all_count");
+            EcuSchedDiagSnapshot sd{};
+            ecu_sched_get_diag_snapshot(&sd);
             // 37×u32 = 148 B (era 33×u32=132; +4 campos auto-learn/accum)
             const uint32_t diag[37] = {
-                g_late_event_count,
-                g_cycle_schedule_drop_count,
-                g_dbg_inj1_arm,
-                g_dbg_seq_calls,
-                g_dbg_evt_overflow,
-                g_dbg_clear_all_count,
-                g_dbg_presync_count,
-                ecu_sched_dwell_watchdog_count(),
-                g_diag_isr_count,
-                g_dbg_tc_gap,
-                g_dbg_tc_spike,
-                g_dbg_tc_normal,
-                g_dbg_phase_skip,
-                g_dbg_phase_fire,
-                g_dbg_evt_inserted,
-                g_dbg_evt_dispatched,
-                g_diag_presync_revs,
-                g_diag_seq_revs,
-                g_diag_clear_all_count,
+                sd.late_event_count,
+                sd.cycle_schedule_drop_count,
+                sd.inj1_arm,
+                sd.seq_calls,
+                sd.evt_overflow,
+                sd.clear_all_count,
+                sd.presync_count,
+                sd.dwell_watchdog_count,
+                ems::drv::g_diag_isr_count,
+                ems::drv::g_dbg_tc_gap,
+                ems::drv::g_dbg_tc_spike,
+                ems::drv::g_dbg_tc_normal,
+                sd.phase_skip,
+                sd.phase_fire,
+                sd.evt_inserted,
+                sd.evt_dispatched,
+                sd.diag_presync_revs,
+                sd.diag_seq_revs,
+                sd.diag_clear_all_count,
                 ems::drv::g_dbg_gap_accepted,
                 ems::drv::g_dbg_gap_premature,
                 ems::drv::g_dbg_gap_last_tc,

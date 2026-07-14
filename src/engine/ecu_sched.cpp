@@ -193,6 +193,7 @@ volatile uint32_t g_dbg_evt_overflow = 0U;
 // Timestamp capture ring for angle measurement (INJ1 ON/OFF)
 #define TS_RING_SIZE 32U
 struct TsEntry { uint32_t ts; uint8_t high; uint8_t channel; uint8_t _pad[2]; };
+static_assert(sizeof(TsEntry) == 8U, "TsEntry wire layout is 8 bytes for protocol 'G'");
 volatile TsEntry g_ts_ring[TS_RING_SIZE];
 volatile uint8_t g_ts_ring_idx = 0U;
 // Gap timestamp from CKP (written by tooth hook at rev boundary)
@@ -812,6 +813,54 @@ void ecu_sched_bench_pw_lock_next_commit(void)
 uint8_t ecu_sched_bench_pw_override_state(void)
 {
     return g_inj_pw_override;
+}
+
+void ecu_sched_get_angle_trace(uint32_t *gap_ts,
+                               uint8_t *ring_idx,
+                               EcuSchedTsSample out_last8[8])
+{
+    // Snapshot without CS: single-reader protocol path; worst case is a torn
+    // sample on concurrent ISR update — acceptable for angle diagnostics.
+    if (gap_ts != nullptr) { *gap_ts = g_last_gap_ts; }
+    const uint8_t ridx = g_ts_ring_idx;
+    if (ring_idx != nullptr) { *ring_idx = ridx; }
+    if (out_last8 == nullptr) { return; }
+    for (uint8_t i = 0U; i < 8U; ++i) {
+        const uint8_t ri = static_cast<uint8_t>((ridx + TS_RING_SIZE - 8U + i) & (TS_RING_SIZE - 1U));
+        out_last8[i].ts = g_ts_ring[ri].ts;
+        out_last8[i].high = g_ts_ring[ri].high;
+        out_last8[i].channel = g_ts_ring[ri].channel;
+    }
+}
+
+void ecu_sched_get_pin_counts_u32x24(uint32_t out[24])
+{
+    if (out == nullptr) { return; }
+    for (uint8_t i = 0U; i < 8U; ++i) {
+        out[i * 3U + 0U] = g_pin_high_count[i];
+        out[i * 3U + 1U] = g_pin_low_count[i];
+        out[i * 3U + 2U] = g_pin_seq_error[i];
+    }
+}
+
+void ecu_sched_get_diag_snapshot(EcuSchedDiagSnapshot *out)
+{
+    if (out == nullptr) { return; }
+    out->late_event_count = g_late_event_count;
+    out->cycle_schedule_drop_count = g_cycle_schedule_drop_count;
+    out->inj1_arm = g_dbg_inj1_arm;
+    out->seq_calls = g_dbg_seq_calls;
+    out->evt_overflow = g_dbg_evt_overflow;
+    out->clear_all_count = g_dbg_clear_all_count;
+    out->presync_count = g_dbg_presync_count;
+    out->dwell_watchdog_count = g_dwell_watchdog_count;
+    out->phase_skip = g_dbg_phase_skip;
+    out->phase_fire = g_dbg_phase_fire;
+    out->evt_inserted = g_dbg_evt_inserted;
+    out->evt_dispatched = g_dbg_evt_dispatched;
+    out->diag_presync_revs = g_diag_presync_revs;
+    out->diag_seq_revs = g_diag_seq_revs;
+    out->diag_clear_all_count = g_diag_clear_all_count;
 }
 
 namespace ems::engine {

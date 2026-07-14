@@ -111,6 +111,46 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us);
 void ecu_sched_bench_pw_lock_next_commit(void);
 uint8_t ecu_sched_bench_pw_override_state(void);
 
+// ── Protocol / host observability (main-loop / UART only — not ISR hot path) ──
+
+// Last 8 angle-trace samples from the dispatch ring (INJ1/IGN1 edges).
+// Wire format for 'G' stays: gap_ts + ring_idx + 8×{ts, high, channel}.
+typedef struct {
+    uint32_t ts;
+    uint8_t  high;
+    uint8_t  channel;
+} EcuSchedTsSample;
+
+void ecu_sched_get_angle_trace(uint32_t *gap_ts,
+                               uint8_t *ring_idx,
+                               EcuSchedTsSample out_last8[8]);
+
+// Pin transition counters for all 8 channels: high/low/seq_error interleaved
+// as 24×u32 for protocol 'V' (same layout as before).
+void ecu_sched_get_pin_counts_u32x24(uint32_t out[24]);
+
+// Scheduler-owned fields used by protocol 'D' (order matches historical diag[]
+// slots for these counters — callers still interleave CKP/fuel fields).
+typedef struct {
+    uint32_t late_event_count;
+    uint32_t cycle_schedule_drop_count;
+    uint32_t inj1_arm;
+    uint32_t seq_calls;
+    uint32_t evt_overflow;
+    uint32_t clear_all_count;       // g_dbg_clear_all_count
+    uint32_t presync_count;
+    uint32_t dwell_watchdog_count;
+    uint32_t phase_skip;
+    uint32_t phase_fire;
+    uint32_t evt_inserted;
+    uint32_t evt_dispatched;
+    uint32_t diag_presync_revs;
+    uint32_t diag_seq_revs;
+    uint32_t diag_clear_all_count;
+} EcuSchedDiagSnapshot;
+
+void ecu_sched_get_diag_snapshot(EcuSchedDiagSnapshot *out);
+
 // Teste de saídas em bancada: pulso único num canal individual (motor parado).
 // cyl = 0-3 na ordem INJ1..INJ4 / IGN1..IGN4. pw_us clamp ≤30000; dwell_us
 // clamp ≤10000 (o dwell-watchdog fica armado como backstop do SPARK).
