@@ -2344,9 +2344,11 @@ static void test_ecu_sched_late_events(void) {
 // Golden identity checks (plan verification): min-lead timestamp formula, angle
 // table shape, sorted queue order — no soft "count>0" only.
 static void test_ecu_sched_golden_min_lead_timestamp(void) {
-    section("ecu_sched golden: min-lead insert timestamp + late counter");
+    section("ecu_sched golden: min-lead insert timestamp (not STATUS late)");
     // STM32_MIN_COMPARE_LEAD_TICKS = 125 @ 62.5 MHz (2 µs).
     // ECU_SCHED_US_TO_TICKS(1) = 62 < 125 → OFF event must land at now+125.
+    // Min-lead is a schedule safety policy — does NOT increment g_late_event_count
+    // (that bit is reserved for dispatch path-2 true misses).
     constexpr uint32_t kNow = 100000u;
     constexpr uint32_t kMinLead = 125u;
     ecu_sched_test_reset();
@@ -2360,8 +2362,26 @@ static void test_ecu_sched_golden_min_lead_timestamp(void) {
     CHECK_EQ(ts, kNow + kMinLead, "min-lead timestamp = TIM5_CNT + 125");
     CHECK_EQ(high, 0u, "OFF event is low");
     CHECK_EQ(ch, ECU_CH_INJ1, "INJ1 channel id unchanged");
+    CHECK_EQ(ecu_sched_test_get_late_event_count(), late0,
+             "min-lead does not sticky-inflate late_event_count");
+}
+
+static void test_ecu_sched_golden_dispatch_past_counts_late(void) {
+    section("ecu_sched golden: path-2 tight re-arm increments late_event_count");
+    // path-2: after due-loop, next event is already past or ≤16 ticks ahead.
+    // Queue OFF far out, then set CNT to ts-5 so due-loop skips (still future)
+    // and re-arm loop takes path-2 (5 ≤ 16).
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    ecu_sched_test_pulse_inj(0u, 1000u);  // OFF ~ now+62500
+    uint32_t ts = 0u;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, nullptr, nullptr), 1u, "have event");
+    const uint32_t late0 = ecu_sched_test_get_late_event_count();
+    ecu_sched_test_set_tim5_cnt(ts - 5u);  // 5 ticks before → path-2
+    ecu_sched_evt_dispatch();
     CHECK_TRUE(ecu_sched_test_get_late_event_count() > late0,
-               "late_event_count increments on min-lead path only (diag)");
+               "path-2 tight re-arm increments late_event_count");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "event consumed");
 }
 
 static void test_ecu_sched_golden_far_target_timestamp(void) {
@@ -5356,6 +5376,7 @@ int main(void) {
     test_ecu_sched_late_events();
     test_ecu_sched_golden_min_lead_timestamp();
     test_ecu_sched_golden_far_target_timestamp();
+    test_ecu_sched_golden_dispatch_past_counts_late();
     test_ecu_sched_golden_queue_sorted();
     test_ecu_sched_golden_seq_angle_table_size();
     test_ecu_sched_golden_dispatch_identity();

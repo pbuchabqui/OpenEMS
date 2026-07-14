@@ -377,12 +377,14 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     }
 
     // Absolute-timestamp insert (TIM5 domain). Re-read CNT for delta after inhibit work.
-    // Min-lead: if target already past / too soon, schedule at tnow+MIN_LEAD (timestamp policy unchanged).
+    // Min-lead: if target already past / too soon, schedule at tnow+MIN_LEAD
+    // (timestamp policy unchanged). Do NOT count min-lead as STATUS_SCHED_LATE —
+    // that flood made the late bit sticky under normal tooth-ISR latency. True
+    // misses are counted only in dispatch path-2 (event already past at re-arm).
     {
         const uint32_t tnow = TIM5_CNT;
         const uint32_t delta = (target_cnv > tnow) ? (target_cnv - tnow) : 0U;
         if (delta < STM32_MIN_COMPARE_LEAD_TICKS) {
-            ++g_late_event_count;  // diagnostic only — does not change insert args
             evt_insert(tnow + STM32_MIN_COMPARE_LEAD_TICKS, ch, high);
         } else {
             evt_insert(tnow + delta, ch, high);
