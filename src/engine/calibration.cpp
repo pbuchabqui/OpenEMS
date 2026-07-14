@@ -223,6 +223,11 @@ uint8_t  ltft_learn_div             = 64u;
 uint8_t  ltft_commit_gain_pct       = 50u;
 uint16_t ltft_max_step_x10          = 0u;      // 0 = sem cap de passo
 uint8_t  ltft_adapt_enable          = 1u;      // 0 = freeze LTFT maps
+uint16_t ltft_learn_ready_hits         = 30u;
+uint8_t  ltft_learn_max_err_x1000      = 30u;
+uint8_t  ltft_learn_ready_max_mean_err = 25u;
+uint8_t  ltft_learn_ready_min_stft_x10 = 5u;
+uint8_t  ltft_learn_ready_max_stft_x10 = 150u;
 
 // Corte de combustível na desaceleração (MS42 TI_PUR)
 // Entrada: TPS < 0.5% + RPM > 1500 + CLT > 70°C

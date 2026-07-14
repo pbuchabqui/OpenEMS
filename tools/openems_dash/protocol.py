@@ -572,6 +572,11 @@ PAGE0_FIELDS = [
     ("ltft_commit_gain_pct",    181, 1, "B", 1.0),
     ("ltft_max_step_x10",       182, 1, "H", 0.1),    # %/tick; 0=unlimited
     ("ltft_adapt_enable",       184, 1, "B", 1.0),    # 0=STFT only 1=LTFT adapt
+    ("ltft_learn_ready_hits",   185, 1, "H", 1.0),
+    ("ltft_learn_max_err_x1000", 187, 1, "B", 0.001),  # λ err
+    ("ltft_learn_ready_max_mean_err", 188, 1, "B", 0.001),
+    ("ltft_learn_ready_min_stft_x10", 189, 1, "B", 0.1),
+    ("ltft_learn_ready_max_stft_x10", 190, 1, "B", 0.1),
     # bytes 146-153: X-τ auto-calibration limits
     ("xtau_x_min_q8",          146, 1, "H", 1.0),
     ("xtau_x_max_q8",          148, 1, "H", 1.0),

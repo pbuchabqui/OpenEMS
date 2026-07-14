@@ -493,6 +493,12 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         g_page0[181] = ems::engine::ltft_commit_gain_pct;
         std::memcpy(g_page0 + 182, &ems::engine::ltft_max_step_x10,       2u);
         g_page0[184] = ems::engine::ltft_adapt_enable;
+        // LEARN thresholds 185-190
+        std::memcpy(g_page0 + 185, &ems::engine::ltft_learn_ready_hits, 2u);
+        g_page0[187] = ems::engine::ltft_learn_max_err_x1000;
+        g_page0[188] = ems::engine::ltft_learn_ready_max_mean_err;
+        g_page0[189] = ems::engine::ltft_learn_ready_min_stft_x10;
+        g_page0[190] = ems::engine::ltft_learn_ready_max_stft_x10;
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -661,6 +667,25 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
             ems::engine::ltft_max_step_x10 = max_s;  // 0 = sem cap (válido)
             if (g_page0[184] <= 1u) {
                 ems::engine::ltft_adapt_enable = g_page0[184];
+            }
+            {
+                uint16_t hits = 0u;
+                std::memcpy(&hits, g_page0 + 185, 2u);
+                if (hits != 0u) {
+                    ems::engine::ltft_learn_ready_hits = hits;
+                }
+                if (g_page0[187] != 0u) {
+                    ems::engine::ltft_learn_max_err_x1000 = g_page0[187];
+                }
+                if (g_page0[188] != 0u) {
+                    ems::engine::ltft_learn_ready_max_mean_err = g_page0[188];
+                }
+                if (g_page0[189] != 0u) {
+                    ems::engine::ltft_learn_ready_min_stft_x10 = g_page0[189];
+                }
+                if (g_page0[190] != 0u) {
+                    ems::engine::ltft_learn_ready_max_stft_x10 = g_page0[190];
+                }
             }
         }
         etb_apply_idle_calibration();

@@ -184,6 +184,13 @@ extern uint16_t ltft_max_step_x10;
 // page0[184]: 0 = STFT only (LTFT IIR+LEARN frozen); 1 = adapt LTFT (default).
 extern uint8_t  ltft_adapt_enable;
 
+// LEARN thresholds — page0 185-190 (0 no blob → defaults constexpr em fuel_trim.h).
+extern uint16_t ltft_learn_ready_hits;           // default 30
+extern uint8_t  ltft_learn_max_err_x1000;        // sample |err| max, default 30
+extern uint8_t  ltft_learn_ready_max_mean_err;   // default 25
+extern uint8_t  ltft_learn_ready_min_stft_x10;   // default 5
+extern uint8_t  ltft_learn_ready_max_stft_x10;   // default 150
+
 // Corte de combustível na desaceleração (MS42 TI_PUR)
 extern uint16_t decel_cut_tps_threshold_x10;
 extern uint32_t decel_cut_entry_rpm_x10;

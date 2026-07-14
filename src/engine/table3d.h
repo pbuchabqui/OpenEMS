@@ -16,8 +16,8 @@ constexpr uint8_t  kLtftAddAxisSize = (kTableAxisSize + 1u) / 2u;
 // bater — evita que um blob antigo menor seja lido com cauda 0xFF (ex.: VE
 // de 256B interpretado como 400B = células a 255). Incrementar sempre que
 // kTableAxisSize (ou o layout serializado das tabelas) mudar.
-// 3: LTFT authority 176-183 + ltft_adapt_enable @184
-constexpr uint8_t kCalLayoutVersion       = 3u;
+// 4: LEARN thresholds page0 185-190
+constexpr uint8_t kCalLayoutVersion       = 4u;
 constexpr uint16_t kCalLayoutVersionOffset = 175u;
 
 // Eixos das tabelas 20×20. Editáveis em runtime via protocolo (página 11);

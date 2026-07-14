@@ -59,9 +59,10 @@ Mais pinos disponíveis. Permite:
 - **TLE8888 integração completa** (2026-06-18): SPI2 driver (config/diag, 3.9MHz,
   timeout 500µs), INJ low-side (OC 10A), IGN push-pull (OC 6A), VRS conditioner,
   per-channel fault bitmap na telemetria + dashboard, watchdog 100ms.
-- **Closed-loop fuel** (2026-06-18): STFT (PI, params em NVM), LTFT (mult+add,
-  reset via dashboard), lambda target table editor, gauges λ tgt / LTFT% / E%.
-  X-τ auto-calibration params em NVM.
+- **Closed-loop fuel OEM-lite** (2026-07): STFT PI + delay, LTFT mult/add NVM,
+  LEARN→VE manual (APPLY), nearest cell, gates (enable/post-start/min RPM),
+  authority/rates calibráveis, DTCs P017x-lite, flush adaptativo rate-limited.
+  Ver `docs/closed_loop_fuel.md`. Stack WP0–WP5 + LEARN cal (WP6).
 - **WBO2 CAN ID configurável** (2026-06-17): offset 138 page 0, default 0x180.
   Idle RPM vs CLT movido para seção IDLE no dashboard.
 - **Dashboard full English** (2026-06-17): tradução completa, Pedal Map Send/Burn/

@@ -16,6 +16,10 @@ The rusEFI fueling system is a mass-based model that translates configuration an
 10. **Wall Wetting (Transient)**: `WallFuel` model (tau/beta) accounts for fuel sticking to intake walls.
 11. **Short-Term Fuel Trim (STFT)**: Closed-loop Lambda correction.
 12. **Long-Term Fuel Trim (LTFT)**: Learned corrections from persistent memory (`page3_s`).
+
+> **OpenEMS:** a implementação real de STFT/LTFT/LEARN está em
+> [`docs/closed_loop_fuel.md`](closed_loop_fuel.md) (`fuel_trim.cpp`). O texto
+> acima descreve o pipeline rusEFI de referência, não o firmware desta árvore.
 13. **Engine Protection (Cuts)**: `LimpManager` applies cuts (Hard/Soft/Boost/Oil).
 14. **Injector Characterization**: Conversion from mass to time using `injectorFlow` and `battLagCorr`.
 15. **Scheduling**: `engine_cycle/` translates time into crank-angle based events.

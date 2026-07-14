@@ -492,11 +492,19 @@ bool ltft_accum_sample_valid(uint32_t rpm_x10,
     const int16_t err_x1000 =
         static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
     // Rejeita outlier / ainda a convergir — não rejeita erro ~0.
-    if (abs_i32(err_x1000) > kLtftAccumMaxErrX1000) {
+    const int16_t max_err = static_cast<int16_t>(
+        (ltft_learn_max_err_x1000 == 0u)
+            ? kLtftAccumMaxErrX1000
+            : static_cast<int16_t>(ltft_learn_max_err_x1000));
+    if (abs_i32(err_x1000) > max_err) {
         return false;
     }
-    // Rejeita STFT saturado (não fiável para bake-in); vieses reais até 15% OK.
-    if (abs_i32(stft_pct_x10) > kLtftAccumMaxStftX10) {
+    // Rejeita STFT saturado (não fiável para bake-in).
+    const int16_t max_stft = static_cast<int16_t>(
+        (ltft_learn_ready_max_stft_x10 == 0u)
+            ? kLtftAccumMaxStftX10
+            : static_cast<int16_t>(ltft_learn_ready_max_stft_x10));
+    if (abs_i32(stft_pct_x10) > max_stft) {
         return false;
     }
     return true;
@@ -532,23 +540,35 @@ bool fuel_ltft_accum_cell_ready(uint8_t map_idx, uint8_t rpm_idx) noexcept {
         return false;
     }
     const LtftCellStats& cell = g_ltft_stats[map_idx][rpm_idx];
-    if (cell.hits < kLtftAccumReadyHits) {
+    const uint16_t need_hits = (ltft_learn_ready_hits == 0u)
+                                   ? kLtftAccumReadyHits
+                                   : ltft_learn_ready_hits;
+    if (cell.hits < need_hits) {
         return false;
     }
     const int16_t mean_stft =
         static_cast<int16_t>(cell.sum_stft_x10 / static_cast<int32_t>(cell.hits));
     const int16_t mean_err =
         static_cast<int16_t>(cell.sum_err_x1000 / static_cast<int32_t>(cell.hits));
-    // Convergida: erro médio baixo (λ no alvo com trim a segurar).
-    if (abs_i32(mean_err) > kLtftAccumReadyMaxMeanErrX1000) {
+    const int16_t max_mean_err = static_cast<int16_t>(
+        (ltft_learn_ready_max_mean_err == 0u)
+            ? kLtftAccumReadyMaxMeanErrX1000
+            : static_cast<int16_t>(ltft_learn_ready_max_mean_err));
+    if (abs_i32(mean_err) > max_mean_err) {
         return false;
     }
-    // Vale a pena commitar: há viés real de mapa (não só ruído ~0).
-    if (abs_i32(mean_stft) < kLtftAccumReadyMinMeanStftX10) {
+    const int16_t min_stft = static_cast<int16_t>(
+        (ltft_learn_ready_min_stft_x10 == 0u)
+            ? kLtftAccumReadyMinMeanStftX10
+            : static_cast<int16_t>(ltft_learn_ready_min_stft_x10));
+    if (abs_i32(mean_stft) < min_stft) {
         return false;
     }
-    // Ainda fiável: STFT médio não saturado.
-    if (abs_i32(mean_stft) > kLtftAccumReadyMaxMeanStftX10) {
+    const int16_t max_stft = static_cast<int16_t>(
+        (ltft_learn_ready_max_stft_x10 == 0u)
+            ? kLtftAccumReadyMaxMeanStftX10
+            : static_cast<int16_t>(ltft_learn_ready_max_stft_x10));
+    if (abs_i32(mean_stft) > max_stft) {
         return false;
     }
     return true;

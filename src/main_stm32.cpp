@@ -660,6 +660,23 @@ static void openems_init() noexcept {
 		if (g_calib_page0[184] <= 1u) {
 			ems::engine::ltft_adapt_enable = g_calib_page0[184];
 		}
+		{
+			uint16_t hits = 0u;
+			std::memcpy(&hits, g_calib_page0 + 185, 2u);
+			if (hits != 0u) { ems::engine::ltft_learn_ready_hits = hits; }
+			if (g_calib_page0[187] != 0u) {
+				ems::engine::ltft_learn_max_err_x1000 = g_calib_page0[187];
+			}
+			if (g_calib_page0[188] != 0u) {
+				ems::engine::ltft_learn_ready_max_mean_err = g_calib_page0[188];
+			}
+			if (g_calib_page0[189] != 0u) {
+				ems::engine::ltft_learn_ready_min_stft_x10 = g_calib_page0[189];
+			}
+			if (g_calib_page0[190] != 0u) {
+				ems::engine::ltft_learn_ready_max_stft_x10 = g_calib_page0[190];
+			}
+		}
 	}
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
