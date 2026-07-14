@@ -92,9 +92,10 @@ void ecu_sched_set_mspark(uint8_t  count,
 void ecu_sched_set_inj_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_inj_inhibit_mask(void);
 
-// Per-cylinder ignition inhibit (rev limiter por faísca).
+// Per-cylinder ignition inhibit (limp spark-cut; production rev-limit is fuel-only).
 // mask: bit 0 = cyl 0 … bit 3 = cyl 3.
-// Suprime ECU_ACT_DWELL_START → bobina não carrega → sem faísca nesse cilindro.
+// Suprime ECU_ACT_DWELL_START, purga eventos IGN pendentes do canal e força pin LOW
+// (não deixar bobina carregada a meio do dwell).
 void ecu_sched_set_ign_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_ign_inhibit_mask(void);
 // Contador do duty clamp: incrementado quando PW_deg excede 90% do ciclo

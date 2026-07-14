@@ -303,8 +303,17 @@ static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_sta
         if (is_safe_state == 0U) { ++g_pin_seq_error[idx]; }
         return;  // redundant transition — don't double-count
     }
-    if (high) { ++g_pin_high_count[idx]; }
-    else      { ++g_pin_low_count[idx]; }
+    if (high) {
+        ++g_pin_high_count[idx];
+    } else {
+        ++g_pin_low_count[idx];
+        // IGN pin LOW = spark/safe: release dwell watchdog for that coil.
+        // Must not clear on SPARK *arm* — only when the pin actually drops,
+        // otherwise a lost SPARK event can leave the driver HIGH forever.
+        if (idx >= ECU_IGN_CH_FIRST && idx < (ECU_IGN_CH_FIRST + 4U)) {
+            g_dwell_arm_tick[idx - ECU_IGN_CH_FIRST] = 0U;
+        }
+    }
     g_pin_last_state[idx] = high;
 }
 
@@ -365,15 +374,15 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     if (ch == ECU_CH_INJ1) { ++g_dbg_inj1_arm; }
     if (ch == ECU_CH_IGN1) { ++g_dbg_ign1_arm; }
 
-    // Dwell watchdog tracking (ignition channels only) — pin_idx 4..7 → ign 0..3
-    if (is_inj == 0U) {
+    // Dwell watchdog tracking (ignition channels only) — pin_idx 4..7 → ign 0..3.
+    // Arm on DWELL_START; release only when the pin goes LOW (pin_transition) or
+    // the watchdog itself trips. Do NOT clear on ECU_ACT_SPARK arm: both events
+    // are typically queued before dwell starts, and clearing here left the coil
+    // unprotected for the whole charge window (lost SPARK → stuck HIGH).
+    if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
         const uint8_t ign_idx = (uint8_t)(pin_idx - ECU_IGN_CH_FIRST);
-        if (action == ECU_ACT_DWELL_START) {
-            g_dwell_arm_tick[ign_idx] = now;
-            g_dwell_wdog_ticks[ign_idx] = (si::g_dwell_ticks * 7U) / 5U;
-        } else if (action == ECU_ACT_SPARK) {
-            g_dwell_arm_tick[ign_idx] = 0U;
-        }
+        g_dwell_arm_tick[ign_idx] = now;
+        g_dwell_wdog_ticks[ign_idx] = (si::g_dwell_ticks * 7U) / 5U;
     }
 
     // Absolute-timestamp insert (TIM5 domain). Re-read CNT for delta after inhibit work.
@@ -466,7 +475,8 @@ void ecu_sched_dwell_watchdog(void)
         const uint32_t arm  = g_dwell_arm_tick[i];  // TIM5_CNT value
         const uint32_t tout = g_dwell_wdog_ticks[i];
         if (arm != 0U && (now - arm) >= tout) {  // 32-bit, sem mask de wrap
-            gpio_set_pin(si::kIgnCh[i], 0U);
+            // force_output → pin_transition(LOW) also clears g_dwell_arm_tick.
+            force_output(si::kIgnCh[i], ECU_ACT_SPARK, 1U);
             g_dwell_arm_tick[i] = 0U;
             ++g_dwell_watchdog_count;
         }
@@ -517,15 +527,14 @@ void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
     const uint8_t ch = si::kIgnCh[cyl];
     const uint32_t spark_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(dwell_us);
     force_output(ch, ECU_ACT_DWELL_START);
-    arm_channel(ch, spark_cnv, ECU_ACT_SPARK);
-    // Watchdog manual DEPOIS do arm_channel: armar ECU_ACT_SPARK zera
-    // g_dwell_arm_tick (convenção do caminho normal). Se o evento SPARK se
-    // perder, ecu_sched_dwell_watchdog() força a bobina LOW em 1.4× dwell.
+    // Arm watchdog for this manual dwell (DWELL already forced HIGH; SPARK is
+    // only queued). pin_transition(LOW) / watchdog release the arm tick.
     {
         ems::hal::CriticalSectionGuard guard;
         g_dwell_arm_tick[cyl]  = scheduler_counter();
         g_dwell_wdog_ticks[cyl] = (ECU_SCHED_US_TO_TICKS(dwell_us) * 7U) / 5U;
     }
+    arm_channel(ch, spark_cnv, ECU_ACT_SPARK);
 }
 
 void ecu_sched_test_all_outputs_safe(void)
@@ -552,7 +561,39 @@ uint8_t ecu_sched_get_inj_inhibit_mask(void) { return g_inj_inhibit_mask; }
 void ecu_sched_set_ign_inhibit_mask(uint8_t mask)
 {
     ems::hal::CriticalSectionGuard guard;
-    g_ign_inhibit_mask = mask & 0x0FU;
+    const uint8_t new_mask = mask & 0x0FU;
+    g_ign_inhibit_mask = new_mask;
+    // Spark-cut (limp rev_cut): drop any pending dwell/spark for inhibited
+    // coils and force the pin LOW immediately so a mid-dwell cut cannot leave
+    // the coil charged. Rev-limit production is fuel-only and leaves mask=0.
+    if (new_mask != 0U) {
+        uint8_t w = 0U;
+        for (uint8_t r = 0U; r < g_evt_count; ++r) {
+            const uint8_t ch = g_evt_queue[r].channel;
+            const uint8_t bit = (ch < 8U) ? k_ign_ch_to_bit[ch] : 0U;
+            if (bit != 0U && (new_mask & bit) != 0U) {
+                continue;  // drop event for inhibited IGN channel
+            }
+            if (w != r) { g_evt_queue[w] = g_evt_queue[r]; }
+            ++w;
+        }
+        g_evt_count = w;
+        for (uint8_t cyl = 0U; cyl < 4U; ++cyl) {
+            if ((new_mask & (1U << cyl)) != 0U) {
+                force_output(si::kIgnCh[cyl], ECU_ACT_SPARK, 1U);
+                g_dwell_arm_tick[cyl] = 0U;
+            }
+        }
+        if (g_evt_count == 0U) {
+            TIM5_DIER &= ~TIM_DIER_CC3IE;
+            g_evt_armed = 0U;
+        } else {
+            TIM5_CCR3 = g_evt_queue[0].timestamp;
+            TIM5_SR   = ~TIM_SR_CC3IF;
+            TIM5_DIER |= TIM_DIER_CC3IE;
+            g_evt_armed = 1U;
+        }
+    }
 }
 uint8_t ecu_sched_get_ign_inhibit_mask(void) { return g_ign_inhibit_mask; }
 

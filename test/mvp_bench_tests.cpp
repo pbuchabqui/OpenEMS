@@ -2485,38 +2485,29 @@ static void test_ecu_sched_golden_dispatch_identity(void) {
 static void test_ecu_sched_dwell_watchdog_fires(void) {
     section("ecu_sched: dwell watchdog fires after 1.4x dwell ticks");
 
-    // Setup: same as CCR test. After 13 teeth, DWELL_START for cyl3 (tim_ch=3)
-    // sets g_dwell_arm_tick[2]=TIM5_CNT=0 and g_dwell_wdog_ticks[2]=140625*7/5=196875.
-    // arm_channel uses TIM5_CNT (scheduler_counter()). Watchdog also reads TIM5_CNT.
-    // TIM5_CNT must be ≠1: 0 is the "not armed" sentinel for g_dwell_arm_tick.
-    // cyl3 → ECU_CH_IGN4 → tim_ch=4 → ign_idx=3. arm_tick = TIM5_CNT at arm time.
-    // wdog threshold = dwell_ticks × 7/5 = 140625×7/5 = 196875.
-    const uint32_t kTim2Base = 1000u;
-    const uint32_t kWdogTicks = (140625u * 7u) / 5u;  // 196875
+    // Direct path: force dwell HIGH + queue SPARK without dispatching SPARK.
+    // Watchdog must stay armed across SPARK *arm* (only pin LOW / trip release it)
+    // so a lost SPARK cannot leave the coil charged indefinitely.
+    const uint32_t kNow = 1000u;
+    const uint32_t kDwellUs = 3000u;  // 3 ms → 187500 ticks @ 62.5 MHz
+    const uint32_t kDwellTicks = (kDwellUs * 125u) / 2u;
+    const uint32_t kWdogTicks = (kDwellTicks * 7u) / 5u;  // 1.4×
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim2_cnt(kTim2Base);  // sets TIM5_CNT so arm_tick != 0
-    ecu_sched_set_advance_deg(15u);
-    ecu_sched_set_dwell_ticks(140625u);
-    ecu_sched_set_inj_pw_ticks(125000u);
-    ecu_sched_set_eoi_lead_deg(60u);
-    g_ckp_cap = 0u;
-    ckp_reach_full_sync();
-    // Force sequential mode: requires cmp_confirms>=2 and a gap to rebuild table.
-    ckp_test_set_cmp_confirms(2u);
-    // Fire 57 teeth so presync SPARK at tooth 57 clears arm_ticks before the gap.
-    // Then the gap triggers Calculate_Sequential_Cycle (sequential mode).
-    ckp_feed_n_then_gap(57u);  // sequential table built; tooth_index back to 0
-    // Fire 13 teeth: at tooth 13 DWELL_START for cyl3 (IGN4) fires.
-    for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
-    // Pre-condition: watchdog not fired (elapsed = 0, threshold = 196875)
+    ecu_sched_test_set_tim5_cnt(kNow);
+    ecu_sched_test_pulse_ign(0u, kDwellUs);  // cyl0 HIGH + SPARK queued, wdog armed
+
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
              "pre-cond: wdog_count=0 before threshold");
-    // Advance TIM5_CNT past 1.4× dwell from arm_tick=kTim2Base
-    ecu_sched_test_set_tim2_cnt(kTim2Base + kWdogTicks + 1u);
+    // Still within window — no trip
+    ecu_sched_test_set_tim5_cnt(kNow + kWdogTicks - 1u);
+    ecu_sched_dwell_watchdog();
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
+             "watchdog silent inside 1.4× dwell");
+    // Past 1.4× dwell with SPARK still only queued → force pin LOW
+    ecu_sched_test_set_tim5_cnt(kNow + kWdogTicks + 1u);
     ecu_sched_dwell_watchdog();
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u,
-             "dwell watchdog fires: elapsed > 196875 (1.4× dwell)");
-    // Second call: arm_tick reset to 0 by watchdog → sentinel check fails → no re-fire
+             "dwell watchdog fires: elapsed > 1.4× dwell (lost-SPARK backstop)");
     ecu_sched_dwell_watchdog();
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u, "watchdog fires only once per arm");
 }
