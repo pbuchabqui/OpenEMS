@@ -18,7 +18,6 @@ inline constexpr uint16_t kMapRefBarX100 = 100u;
 // SOI é derivado para trás (SOI = EOI − PW°). BREAKING CHANGE vs kDefaultSoiLeadDeg:
 // mesma ordem de grandeza numérica, semântica oposta (fim vs início do pulso).
 inline constexpr uint16_t kDefaultEoiLeadDeg = 355u;  // open-valve (Speeduino-style): 5° após o TDC de cruzamento (início da admissão)
-inline constexpr uint16_t kIvcAbdcDeg = 50u;
 
 // Default para g_eng_cfg.trigger_tooth0_engine_deg (usado antes de NVM válida).
 // NOTA: este valor de compilação é apenas o default inicial.

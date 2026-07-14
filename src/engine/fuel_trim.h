@@ -20,13 +20,16 @@ uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
 //  - Amostra boa = closed-loop + regime estável (ΔRPM/ΔAPP) + λ convergida
 //    (|err| ≤ max) + STFT não saturado. Erro ~0 é válido (trim estável).
 //  - Célula ready = hits suficientes + mean |err| baixa + |mean STFT| entre
-//    min (vale a pena commitar) e max (ainda não saturou o trim).
+//    min (vale a pena) e max (ainda não saturou) — indicador de qualidade
+//    (page12 bit7) e gate de try_commit (1 célula).
 //  - Só caminho multiplicativo (PW ≥ threshold) alimenta o acumulador —
 //    PW baixo é offset de bico (LTFT add), não VE.
-//  - Commit (Fase 2, MANUAL): aplica fracção do mean STFT em ve_table[map][rpm]
-//    (RAM), desenrola LTFT% da célula. try_commit (1 célula) também desenrola
-//    STFT global; apply_all_ready ('Y') não — evita N×unroll no mesmo STFT.
-//    Nunca automático no closed-loop. VE em flash só com Burn do dashboard.
+//  - Commit (Fase 2, MANUAL):
+//      try_commit: só se ready; bake + desenrola LTFT cell + STFT global.
+//      apply_all_ready ('Y'): TODAS as células com hits>0 (correcções
+//      acumuladas da sessão), não só ready; bake + LTFT cell; NÃO desenrola
+//      STFT N× (re-converge no loop). Nunca automático no closed-loop.
+//      VE em flash só com Burn do dashboard.
 //  - Sinal de estabilidade: APP (pedido do condutor); MAP+RPM definem a célula.
 //
 // Unidades: err λ ×1000 (1000 = 1.000); STFT % ×10 (10 = 1.0 %).
@@ -92,7 +95,8 @@ bool fuel_ltft_accum_cell_ready(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_ltft_accum_mean_stft_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_ltft_accum_mean_err_x1000(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 
-// Fase 2 (manual): se célula ready, bakia mean STFT na VE e desenrola trims.
+// Fase 2 (manual): try_commit exige ready; apply_all bakeia todas as células
+// com hits>0 (mean STFT × gain → VE RAM + desenrola LTFT da célula).
 bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 uint16_t fuel_ltft_accum_apply_all_ready() noexcept;
 

@@ -1861,7 +1861,7 @@ static void test_fuel_ltft_accum_commit_ve(void) {
     CHECK_TRUE(ve_table[mi][ri] > 100u, "VE > 100 após bake-in STFT+");
     CHECK_TRUE(ve_table[mi][ri] <= kLtftAccumVeMax, "VE ≤ max");
 
-    // apply_all_ready: bulk VE+LTFT; STFT global NÃO desenrola N vezes
+    // apply_all: bulk VE+LTFT em células ready; STFT global NÃO desenrola N vezes
     fuel_ltft_accum_reset();
     ve_table[mi][ri] = 100u;
     g_dbg_ltft_accum_commits = 0u;
@@ -1877,6 +1877,30 @@ static void test_fuel_ltft_accum_commit_ve(void) {
     CHECK_TRUE(ve_table[mi][ri] > 100u, "VE alterada por apply_all");
     CHECK_EQ(fuel_get_stft_pct_x10(), stft_before_all,
              "apply_all não desenrola STFT global (só VE+LTFT célula)");
+
+    // apply_all aplica células com hits mas AINDA NÃO ready (parcial)
+    fuel_ltft_accum_reset();
+    ve_table[mi][ri] = 100u;
+    g_dbg_ltft_accum_commits = 0u;
+    // Mantém STFT+ com λ ligeiramente lean; poucos hits < ready
+    fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
+    const uint16_t partial_hits = static_cast<uint16_t>(kLtftAccumReadyHits / 2u);
+    CHECK_TRUE(partial_hits >= 2u, "pre-cond: partial_hits ≥ 2");
+    for (uint16_t n = 0u; n < partial_hits; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) > 0u, "hits parciais > 0");
+    CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri), "ainda não ready");
+    CHECK_FALSE(fuel_ltft_accum_try_commit(mi, ri),
+                "try_commit continua a exigir ready");
+    CHECK_EQ(ve_table[mi][ri], 100u, "VE intacta após try_commit falhado");
+    const int16_t mean_before = fuel_ltft_accum_mean_stft_x10(mi, ri);
+    CHECK_TRUE(mean_before != 0, "mean STFT parcial ≠ 0");
+    const uint16_t n_partial = fuel_ltft_accum_apply_all_ready();
+    CHECK_TRUE(n_partial >= 1u,
+               "apply_all bakeia célula parcial (hits>0, não ready)");
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "stats limpos pós apply parcial");
+    CHECK_TRUE(ve_table[mi][ri] != 100u, "VE alterada por apply_all parcial");
 
     // Caminho aditivo (PW < threshold): NÃO alimenta acumulador LEARN→VE
     fuel_ltft_accum_reset();
@@ -2325,7 +2349,7 @@ static void test_ecu_sched_late_events(void) {
     section("ecu_sched: small delta events are queued with minimum delay");
 
     // Scheduler now uses TIM5 absolute-timestamp queue. Events with very small
-    // delta use a minimum delay (STM32_MIN_COMPARE_LEAD_TICKS * 25/4) instead
+    // delta use a minimum delay (STM32_MIN_COMPARE_LEAD_TICKS) instead
     // of being rejected. The old g_late_event_count path is no longer reached.
     // Verify: with advance=0 (delta≈0 at tooth 0), events still reach the queue.
     ecu_sched_test_reset();
@@ -2341,41 +2365,173 @@ static void test_ecu_sched_late_events(void) {
                "events queued with minimum delay when delta~=0");
 }
 
-static void test_ecu_sched_dwell_watchdog_fires(void) {
-    section("ecu_sched: dwell watchdog fires after 1.4x dwell ticks");
-
-    // Setup: same as CCR test. After 13 teeth, DWELL_START for cyl3 (tim_ch=3)
-    // sets g_dwell_arm_tick[2]=TIM5_CNT=0 and g_dwell_wdog_ticks[2]=140625*7/5=196875.
-    // arm_channel uses TIM5_CNT (scheduler_counter()). Watchdog also reads TIM5_CNT.
-    // TIM5_CNT must be ≠1: 0 is the "not armed" sentinel for g_dwell_arm_tick.
-    // cyl3 → ECU_CH_IGN4 → tim_ch=4 → ign_idx=3. arm_tick = TIM5_CNT at arm time.
-    // wdog threshold = dwell_ticks × 7/5 = 140625×7/5 = 196875.
-    const uint32_t kTim2Base = 1000u;
-    const uint32_t kWdogTicks = (140625u * 7u) / 5u;  // 196875
+// Golden identity checks (plan verification): min-lead timestamp formula, angle
+// table shape, sorted queue order — no soft "count>0" only.
+static void test_ecu_sched_golden_min_lead_timestamp(void) {
+    section("ecu_sched golden: min-lead insert timestamp (not STATUS late)");
+    // STM32_MIN_COMPARE_LEAD_TICKS = 125 @ 62.5 MHz (2 µs).
+    // ECU_SCHED_US_TO_TICKS(1) = 62 < 125 → OFF event must land at now+125.
+    // Min-lead is a schedule safety policy — does NOT increment g_late_event_count
+    // (that bit is reserved for dispatch path-2 true misses).
+    constexpr uint32_t kNow = 100000u;
+    constexpr uint32_t kMinLead = 125u;
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim2_cnt(kTim2Base);  // sets TIM5_CNT so arm_tick != 0
+    ecu_sched_test_set_tim5_cnt(kNow);
+    const uint32_t late0 = ecu_sched_test_get_late_event_count();
+    ecu_sched_test_pulse_inj(0u, 1u);  // 1 µs PW → short delta → min-lead
+    CHECK_TRUE(ecu_sched_test_get_evt_count() >= 1u, "OFF event queued");
+    uint32_t ts = 0u;
+    uint8_t ch = 0u, high = 0xffu;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u, "peek head event");
+    CHECK_EQ(ts, kNow + kMinLead, "min-lead timestamp = TIM5_CNT + 125");
+    CHECK_EQ(high, 0u, "OFF event is low");
+    CHECK_EQ(ch, ECU_CH_INJ1, "INJ1 channel id unchanged");
+    CHECK_EQ(ecu_sched_test_get_late_event_count(), late0,
+             "min-lead does not sticky-inflate late_event_count");
+}
+
+static void test_ecu_sched_golden_dispatch_past_counts_late(void) {
+    section("ecu_sched golden: path-2 tight re-arm increments late_event_count");
+    // path-2: after due-loop, next event is already past or ≤16 ticks ahead.
+    // Queue OFF far out, then set CNT to ts-5 so due-loop skips (still future)
+    // and re-arm loop takes path-2 (5 ≤ 16).
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    ecu_sched_test_pulse_inj(0u, 1000u);  // OFF ~ now+62500
+    uint32_t ts = 0u;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, nullptr, nullptr), 1u, "have event");
+    const uint32_t late0 = ecu_sched_test_get_late_event_count();
+    ecu_sched_test_set_tim5_cnt(ts - 5u);  // 5 ticks before → path-2
+    ecu_sched_evt_dispatch();
+    CHECK_TRUE(ecu_sched_test_get_late_event_count() > late0,
+               "path-2 tight re-arm increments late_event_count");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "event consumed");
+}
+
+static void test_ecu_sched_golden_far_target_timestamp(void) {
+    section("ecu_sched golden: far target uses exact delta (no min-lead)");
+    constexpr uint32_t kNow = 50000u;
+    constexpr uint32_t kPwUs = 1000u;  // 1 ms → 62500 ticks @ 62.5 MHz
+    constexpr uint32_t kExpectedDelta = (kPwUs * 125u) / 2u;  // ECU_SCHED_US_TO_TICKS
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(kNow);
+    const uint32_t late0 = ecu_sched_test_get_late_event_count();
+    ecu_sched_test_pulse_inj(1u, kPwUs);
+    uint32_t ts = 0u;
+    uint8_t ch = 0u, high = 0xffu;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u, "peek OFF event");
+    CHECK_EQ(ts, kNow + kExpectedDelta, "timestamp = now + exact PW ticks");
+    CHECK_EQ(ch, ECU_CH_INJ2, "INJ2 channel");
+    CHECK_EQ(high, 0u, "OFF");
+    CHECK_EQ(ecu_sched_test_get_late_event_count(), late0,
+             "no late count when delta >= min-lead");
+}
+
+static void test_ecu_sched_golden_queue_sorted(void) {
+    section("ecu_sched golden: queue stays sorted by timestamp");
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    // Two pulses with different PW → two OFF times; queue must be ascending.
+    ecu_sched_test_pulse_inj(0u, 2000u);  // later OFF
+    ecu_sched_test_set_tim5_cnt(1000u);   // same now for second arm
+    ecu_sched_test_pulse_inj(1u, 500u);   // earlier OFF
+    const uint8_t n = ecu_sched_test_get_evt_count();
+    CHECK_TRUE(n >= 2u, "at least two OFF events");
+    uint32_t prev = 0u;
+    for (uint8_t i = 0u; i < n; ++i) {
+        uint32_t ts = 0u;
+        CHECK_EQ(ecu_sched_test_get_evt(i, &ts, nullptr, nullptr), 1u, "peek evt");
+        if (i > 0u) {
+            CHECK_TRUE(ts >= prev, "queue non-decreasing timestamps");
+        }
+        prev = ts;
+    }
+}
+
+static void test_ecu_sched_golden_seq_angle_table_size(void) {
+    section("ecu_sched golden: sequential base angle table is 16 events");
+    // 4 cyl × (DWELL + SPARK + INJ_ON + INJ_OFF) = 16 without multi-spark.
+    ecu_sched_test_reset();
+    ecu_sched_set_mspark(0u, 0u, 18u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_eoi_lead_deg(60u);
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
-    // Force sequential mode: requires cmp_confirms>=2 and a gap to rebuild table.
     ckp_test_set_cmp_confirms(2u);
-    // Fire 57 teeth so presync SPARK at tooth 57 clears arm_ticks before the gap.
-    // Then the gap triggers Calculate_Sequential_Cycle (sequential mode).
-    ckp_feed_n_then_gap(57u);  // sequential table built; tooth_index back to 0
-    // Fire 13 teeth: at tooth 13 DWELL_START for cyl3 (IGN4) fires.
-    for (uint32_t i = 0u; i < 13u; ++i) { ckp_fire(kNormalPeriod); }
-    // Pre-condition: watchdog not fired (elapsed = 0, threshold = 196875)
+    ckp_feed_n_then_gap(57u);  // rebuild sequential at gap
+    // May need schedule_this_gap toggle: first sequential gap builds table.
+    if (ecu_sched_test_angle_table_size() == 0u) {
+        ckp_feed_n_then_gap(57u);
+    }
+    CHECK_EQ(ecu_sched_test_angle_table_size(), 16u,
+             "sequential no-mspark table has 16 events");
+    // Every event has valid channel + action.
+    uint8_t n_dwell = 0u, n_spark = 0u, n_inj_on = 0u, n_inj_off = 0u;
+    for (uint8_t i = 0u; i < 16u; ++i) {
+        uint8_t tooth = 0, frac = 0, ch = 0, action = 0, phase = 0;
+        CHECK_EQ(ecu_sched_test_get_angle_event(i, &tooth, &frac, &ch, &action, &phase),
+                 1u, "event valid");
+        if (action == ECU_ACT_DWELL_START) { ++n_dwell; }
+        else if (action == ECU_ACT_SPARK) { ++n_spark; }
+        else if (action == ECU_ACT_INJ_ON) { ++n_inj_on; }
+        else if (action == ECU_ACT_INJ_OFF) { ++n_inj_off; }
+    }
+    CHECK_EQ(n_dwell, 4u, "4 dwell starts");
+    CHECK_EQ(n_spark, 4u, "4 sparks");
+    CHECK_EQ(n_inj_on, 4u, "4 inj on");
+    CHECK_EQ(n_inj_off, 4u, "4 inj off");
+}
+
+static void test_ecu_sched_golden_dispatch_identity(void) {
+    section("ecu_sched golden: dispatch fires head GPIO order (channel, high)");
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    ecu_sched_test_pulse_inj(0u, 1000u);  // OFF at 1000+62500
+    // Make event due and dispatch.
+    uint32_t ts = 0u;
+    uint8_t ch = 0u, high = 0xffu;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u, "have event");
+    const uint8_t n0 = ecu_sched_test_get_evt_count();
+    ecu_sched_test_set_tim5_cnt(ts);  // CNT == timestamp → due
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(ecu_sched_test_get_evt_count(), static_cast<uint32_t>(n0 - 1u),
+             "one event consumed by dispatch");
+    // Pin counters: INJ1 pin index 0 — OFF is low transition after force ON.
+    // At least one high and one low counted for pin 0 path (force ON + OFF).
+    uint32_t pins[24];
+    ecu_sched_get_pin_counts_u32x24(pins);
+    CHECK_TRUE(pins[0] >= 1u, "INJ1 high_count >= 1 after force ON");
+    CHECK_TRUE(pins[1] >= 1u, "INJ1 low_count >= 1 after OFF dispatch");
+}
+
+static void test_ecu_sched_dwell_watchdog_fires(void) {
+    section("ecu_sched: dwell watchdog fires after 1.4x dwell ticks");
+
+    // Direct path: force dwell HIGH + queue SPARK without dispatching SPARK.
+    // Watchdog must stay armed across SPARK *arm* (only pin LOW / trip release it)
+    // so a lost SPARK cannot leave the coil charged indefinitely.
+    const uint32_t kNow = 1000u;
+    const uint32_t kDwellUs = 3000u;  // 3 ms → 187500 ticks @ 62.5 MHz
+    const uint32_t kDwellTicks = (kDwellUs * 125u) / 2u;
+    const uint32_t kWdogTicks = (kDwellTicks * 7u) / 5u;  // 1.4×
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(kNow);
+    ecu_sched_test_pulse_ign(0u, kDwellUs);  // cyl0 HIGH + SPARK queued, wdog armed
+
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
              "pre-cond: wdog_count=0 before threshold");
-    // Advance TIM5_CNT past 1.4× dwell from arm_tick=kTim2Base
-    ecu_sched_test_set_tim2_cnt(kTim2Base + kWdogTicks + 1u);
+    // Still within window — no trip
+    ecu_sched_test_set_tim5_cnt(kNow + kWdogTicks - 1u);
+    ecu_sched_dwell_watchdog();
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
+             "watchdog silent inside 1.4× dwell");
+    // Past 1.4× dwell with SPARK still only queued → force pin LOW
+    ecu_sched_test_set_tim5_cnt(kNow + kWdogTicks + 1u);
     ecu_sched_dwell_watchdog();
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u,
-             "dwell watchdog fires: elapsed > 196875 (1.4× dwell)");
-    // Second call: arm_tick reset to 0 by watchdog → sentinel check fails → no re-fire
+             "dwell watchdog fires: elapsed > 1.4× dwell (lost-SPARK backstop)");
     ecu_sched_dwell_watchdog();
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u, "watchdog fires only once per arm");
 }
@@ -2962,26 +3118,6 @@ static void test_ecu_sched_mspark(void) {
     // Disable
     ecu_sched_set_mspark(0u, 0u, 0u);
     CHECK_EQ(ecu_sched_test_get_mspark_count(), 0u, "mspark disabled");
-}
-
-static void test_ecu_sched_ivc(void) {
-    section("ecu_sched: IVC API (clamp removido — EOI targeting)");
-    ecu_sched_test_reset();
-
-    CHECK_EQ(ecu_sched_test_get_ivc_clamp_count(), 0u, "ivc_clamp=0 after reset");
-
-    // Com EOI targeting o clamp de PW à IVC foi removido (o timing é
-    // garantido pelo próprio EOI). A API é mantida por compatibilidade;
-    // o contador deve permanecer 0 mesmo com PW muito longo.
-    ecu_sched_test_set_ivc(50u);
-    ecu_sched_set_inj_pw_ticks(120000u);  // very long injection
-    g_ckp_cap = 0u;
-    ckp_reach_full_sync();
-    CHECK_EQ(ecu_sched_test_get_ivc_clamp_count(), 0u,
-             "ivc_clamp_count stays 0 (EOI targeting supersedes IVC clamp)");
-    ecu_sched_test_set_ivc(180u);  // max allowed
-    CHECK_EQ(ecu_sched_ivc_clamp_count(), ecu_sched_test_get_ivc_clamp_count(),
-             "ivc_clamp_count: public == test getter");
 }
 
 // ── EOI targeting ───────────────────────────────────────────────────────────
@@ -5211,7 +5347,6 @@ int main(void) {
     test_ecu_sched_recovers_after_fallback();
     test_ecu_sched_inhibit_masks();
     test_ecu_sched_mspark();
-    test_ecu_sched_ivc();
     test_ecu_sched_eoi_targeting();
     test_eoi_blend();
     test_ecu_sched_presync();
@@ -5254,6 +5389,12 @@ int main(void) {
     test_ecu_sched_hardware_init();
     test_ecu_sched_ccr_write();
     test_ecu_sched_late_events();
+    test_ecu_sched_golden_min_lead_timestamp();
+    test_ecu_sched_golden_far_target_timestamp();
+    test_ecu_sched_golden_dispatch_past_counts_late();
+    test_ecu_sched_golden_queue_sorted();
+    test_ecu_sched_golden_seq_angle_table_size();
+    test_ecu_sched_golden_dispatch_identity();
     test_ecu_sched_dwell_watchdog_fires();
     test_ecu_sched_presync_table();
 

@@ -57,8 +57,12 @@ TOL_INTER_CYL_MS = 2.0   # ms — espaçamento entre cilindros
 TOL_HW_PW_MS     = 0.3   # ms — PW scope vs snapshot (medição hardware)
 TOL_DWELL_MS     = 0.3   # ms — dwell scope vs tabela
 
-SETTLE_S    = 2.0         # s — aguardar após mudança de RPM
+SETTLE_S    = 2.0         # s — mínimo após mudança de RPM (antes do poll)
+RPM_SETTLE_S = 10.0       # s — timeout para RPM medido entrar na tolerância
 SYNC_WAIT_S = 8.0         # s — timeout para FULL_SYNC
+# Rev-limit de produção default = 7000 RPM (calibration.cpp) — corta PW a 8000.
+# HIL sobe o hard limit em RAM para validar math de combustível a alto RPM.
+HIL_REV_LIMIT_RPM = 9500
 
 EXPECTED_FIRING_ORDER = [0, 2, 3, 1]   # IGN0→IGN2→IGN3→IGN1  (1-3-4-2)
 
@@ -147,7 +151,7 @@ def _interp1d(axis: list[int], values: list[int], x: int) -> int:
 
 @dataclass
 class EngineConfig:
-    ivc_abdc_deg:              int = 50
+    page0_byte0_reserved:      int = 0  # was IVC ABDC
     displacement_cc:           int = 2000
     injector_flow_cc_min:      int = 450
     stoich_afr_x100:           int = 1470
@@ -194,6 +198,8 @@ class Snapshot:
     def late_event(self) -> bool:   return bool(self.status & 0x0040)
     @property
     def drop_count(self) -> bool:   return bool(self.status & 0x0080)
+    @property
+    def rev_limit(self) -> bool:    return bool(self.status & 0x1000)  # fuel cut
     @property
     def inj_pw_ms(self) -> float:   return self.pw1_ms_x10 / 10.0
 
@@ -285,6 +291,22 @@ class STM32Client:
         r = self._ser.read(1)
         return len(r) == 1 and r[0] == 0x00
 
+    def write_page_ram(self, page: int, offset: int, data: bytes) -> bool:
+        """'x' = write RAM only (aplica sync_table_from_page)."""
+        cmd = (b"x"
+               + bytes([page & 0xFF])
+               + struct.pack("<H", offset & 0xFFFF)
+               + struct.pack("<H", len(data) & 0xFFFF)
+               + data)
+        self._ser.write(cmd)
+        time.sleep(0.05 + len(data) / 5000.0)
+        r = self._ser.read(1)
+        return len(r) == 1 and r[0] == 0x00
+
+    def set_rev_limit_rpm(self, rpm: int) -> bool:
+        """Sobe o hard rev-limit em RAM (page0 offset 72, uint32 LE, RPM×10)."""
+        return self.write_page_ram(0, 72, struct.pack("<I", int(rpm) * 10))
+
     def _read_page(self, page: int, offset: int, length: int) -> bytes:
         cmd = bytes([0x72, page,
                      offset & 0xFF, (offset >> 8) & 0xFF,
@@ -294,10 +316,11 @@ class STM32Client:
         return self._ser.read(length)
 
     def snapshot(self) -> Optional[Snapshot]:
+        # UiRealtimeData is 86 bytes (ui_protocol.h static_assert).
         self._ser.write(b"\x41")
-        time.sleep(0.05)
-        r = self._ser.read(66)
-        if len(r) < 13:
+        time.sleep(0.08)
+        r = self._ser.read(86)
+        if len(r) < 14:
             return None
         s = Snapshot()
         s.rpm          = struct.unpack_from("<H", r, 0)[0]
@@ -311,8 +334,9 @@ class STM32Client:
         s.stft_pct     = struct.unpack_from("b", r, 10)[0]
         # status_bits é uint16 alinhado → offset 12 (1 byte de padding em 11).
         s.status       = struct.unpack_from("<H", r, 12)[0]
+        # reserved[52] begins at offset 14.
         # VE interpolado vivo em reserved[49] = byte 14+49 = 63 (firmware get_ve).
-        if len(r) >= 66:
+        if len(r) >= 64:
             s.ve_live  = r[63]
         # LTFT em reserved[5] = byte 14+5 = 19 (ui_protocol.cpp: rt.reserved[5]).
         if len(r) >= 20:
@@ -324,7 +348,7 @@ class STM32Client:
         if len(d) < 16:
             return EngineConfig()
         return EngineConfig(
-            ivc_abdc_deg              = d[0],
+            page0_byte0_reserved      = d[0],
             displacement_cc           = struct.unpack_from("<H", d,  2)[0],
             injector_flow_cc_min      = struct.unpack_from("<H", d,  4)[0],
             stoich_afr_x100           = struct.unpack_from("<H", d,  6)[0],
@@ -612,6 +636,25 @@ class HILRunner:
             time.sleep(0.2)
         return False
 
+    def _wait_rpm(self, target: int, timeout_s: float = RPM_SETTLE_S) -> Optional[Snapshot]:
+        """Poll until |rpm_meas - target| / target ≤ TOL_RPM_PCT, or timeout."""
+        deadline = time.time() + timeout_s
+        best: Optional[Snapshot] = None
+        best_err = 1e9
+        while time.time() < deadline:
+            s = self._stm.snapshot()
+            if s is None:
+                time.sleep(0.15)
+                continue
+            best = s
+            err = abs(s.rpm - target) / max(abs(target), 1) * 100.0
+            if err < best_err:
+                best_err = err
+            if err <= TOL_RPM_PCT and s.full_sync:
+                return s
+            time.sleep(0.15)
+        return best
+
     def set_mode(self, mode: str, scope_port: str | None = None):
         self._mode = mode
         self._scope = None
@@ -674,17 +717,16 @@ class HILRunner:
         self._stim.set_rpm(pt.rpm)
         time.sleep(SETTLE_S)
 
-        # 2. FULL_SYNC
+        # 2. FULL_SYNC + RPM settle (poll — evita FAIL por rampa do stim)
         synced = self._wait_sync()
         r.add("FULL_SYNC", synced,
               "" if synced else "Sem sync — verificar sinal CKP (GPIO2→PA0)")
         if not synced:
             return r
 
-        # 3. Snapshot
-        snap = self._stm.snapshot()
+        snap = self._wait_rpm(pt.rpm)
         if snap is None:
-            r.add("Snapshot lido", False, "Sem resposta UART")
+            r.add("Snapshot lido", False, "Sem resposta UART / RPM não estabilizou")
             return r
         r.snap = snap
 
@@ -697,7 +739,7 @@ class HILRunner:
         r.add("Sem late events",  not snap.late_event,
               f"status=0x{snap.status:04X}")
 
-        # 4. RPM medido
+        # 4. RPM medido (após poll de settle)
         r.add_range("RPM medido", snap.rpm, pt.rpm, TOL_RPM_PCT,
                     fmt=".0f", pct=True)
 
@@ -749,7 +791,11 @@ class HILRunner:
         corrected_us = trimmed_us * clt_c * iat_c
         dead_time = self._tables.dead_time_us()
         exp_pw_ms = (corrected_us + dead_time) / 1000.0 if corrected_us > 0 else 0.0
-        if snap.sensor_fault and snap.inj_pw_ms == 0.0 and snap.rpm >= 3000:
+        if snap.rev_limit and snap.inj_pw_ms == 0.0:
+            # Produção: rev_limit_rpm_x10=70000 → fuel cut zera PW (main_stm32).
+            r.add("Injection PW (snapshot vs cálculo)", True,
+                  f"PW=0 esperado (STATUS_REV_LIMIT, status=0x{snap.status:04X})")
+        elif snap.sensor_fault and snap.inj_pw_ms == 0.0 and snap.rpm >= 3000:
             r.add("Injection PW (snapshot vs cálculo)", True,
                   "PW=0 esperado (limp rev-cut com SENSOR_FAULT)")
         else:
@@ -878,6 +924,12 @@ def main():
             print("  ✓ bench-mode CLT/IAT ON (90°C/25°C, fault CLT/IAT limpo)")
         else:
             print("  ⚠ bench-mode CLT/IAT: sem ACK (firmware sem suporte ao cmd 'B'?)")
+
+    # Sobe rev-limit em RAM para pontos >7000 (default produção corta PW).
+    if stm32.set_rev_limit_rpm(HIL_REV_LIMIT_RPM):
+        print(f"  ✓ rev-limit RAM = {HIL_REV_LIMIT_RPM} RPM (page0[72], sem burn)")
+    else:
+        print(f"  ⚠ rev-limit write falhou — pontos ≥7000 podem ter PW=0 (fuel cut)")
 
     print(f"Estim.: {args.stim}  (esp32_stimulator — CKP RMT)")
     stim = StimClient(args.stim, args.baud)

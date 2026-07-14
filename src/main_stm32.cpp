@@ -1123,7 +1123,6 @@ int main() {
                 ems::drv::ckp_seed_confirmed_count(),
                 ems::drv::ckp_seed_rejected_count(),
                 static_cast<uint8_t>(snap.state));
-            ems::app::ui_update_ivc_diag(::ecu_sched_ivc_clamp_count());
             // Transporte (UART+USB RX/TX/parse) vive em comms_pump() a 2 ms.
             ems::engine::auxiliaries_tick_20ms();
             ems::app::can_stack_process(now, snap, sensors,

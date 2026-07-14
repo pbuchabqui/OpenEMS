@@ -520,7 +520,7 @@ def api_adaptives_reset():
 
 @app.post("/api/ltft/apply-ready")
 def api_ltft_apply_ready():
-    """Bake-in manual: células LEARN ready → VE (RAM). Comando 'Y'."""
+    """Bake-in manual: todas as células LEARN com hits>0 → VE (RAM). Comando 'Y'."""
     try:
         n = worker.submit(lambda l: l.apply_ltft_ready())
     except Exception as e:  # noqa: BLE001
@@ -610,7 +610,6 @@ def api_log_export(rows: int = 120, min_samples: int = 8):
             f"- Injetores: {ep.get('injector_flow_cc_min', '?')} cc/min",
             f"- AFR estequiométrico: {ep.get('stoich_afr_x100', 0):.2f}",
             f"- MAP referência: {ep.get('map_ref_bar_x100', 0):.2f} bar",
-            f"- IVC ABDC: {ep.get('ivc_abdc_deg', '?')}°",
             f"- EOI target: {ep.get('default_eoi_lead_deg', '?')}° BTDC (fim da injeção)",
             "",
         ]

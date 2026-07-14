@@ -6,7 +6,7 @@
 namespace ems::engine::cfg {
 
 // Page 0 layout:
-//  [0]    : ivc_abdc_deg (1 byte, handled by ecu_sched)
+//  [0]    : reserved (was IVC ABDC; unused — EOI targeting)
 //  [1]    : reserved/padding
 //  [2-3]  : displacement_cc (uint16_t LE)
 //  [4-5]  : injector_flow_cc_min (uint16_t LE)

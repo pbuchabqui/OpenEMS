@@ -111,6 +111,10 @@ extern volatile uint32_t g_diag_isr_count;
 extern volatile uint32_t g_diag_hist_ready;
 extern volatile uint32_t g_diag_tooth_count;
 extern volatile uint32_t g_diag_consec_anom;
+// DIAG: classify_tooth class histogram (GAP / SPIKE_NOISE / normal)
+extern volatile uint32_t g_dbg_tc_gap;
+extern volatile uint32_t g_dbg_tc_spike;
+extern volatile uint32_t g_dbg_tc_normal;
 
 // DIAG sensores CKP/CMP: bordas cruas (antes de filtros/validação) e timestamp
 // TIM5 da última borda. Base da telemetria de diagnóstico de sensor: ruído

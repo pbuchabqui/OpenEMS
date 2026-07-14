@@ -70,7 +70,7 @@ uint8_t ecu_sched_presync_inj_auto(void);
 void ecu_sched_set_presync_ign_mode(uint8_t mode);
 void ecu_sched_reset_diagnostic_counters(void);
 
-// Dwell watchdog — chamar do main loop (slot 2ms) com TIM2_CNT.
+// Dwell watchdog — chamar do main loop (slot 2ms); compara TIM5_CNT.
 // Se uma bobina ficou activa por > 1.4 × dwell_ticks sem evento SPARK,
 // força a saída LOW imediatamente para proteger o módulo de ignição.
 void ecu_sched_dwell_watchdog(void);
@@ -78,7 +78,7 @@ uint32_t ecu_sched_dwell_watchdog_count(void);
 
 // Multi-spark (MS42 §2.2.3): sparks adicionais por ciclo a baixo RPM.
 // count: número de sparks adicionais (0=desabilitado, máx 3).
-// inter_dwell_ticks: tempo de dwell entre sparks consecutivos (em ticks do TIM2/TIM1).
+// inter_dwell_ticks: tempo de dwell entre sparks consecutivos (ticks TIM5).
 // atdc_limit_deg: o último spark adicional não pode ultrapassar este ângulo ATDC (default 18°).
 void ecu_sched_set_mspark(uint8_t  count,
                           uint32_t inter_dwell_ticks,
@@ -92,17 +92,61 @@ void ecu_sched_set_mspark(uint8_t  count,
 void ecu_sched_set_inj_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_inj_inhibit_mask(void);
 
-// Per-cylinder ignition inhibit (rev limiter por faísca).
+// Per-cylinder ignition inhibit (limp spark-cut; production rev-limit is fuel-only).
 // mask: bit 0 = cyl 0 … bit 3 = cyl 3.
-// Suprime ECU_ACT_DWELL_START → bobina não carrega → sem faísca nesse cilindro.
+// Suprime ECU_ACT_DWELL_START, purga eventos IGN pendentes do canal e força pin LOW
+// (não deixar bobina carregada a meio do dwell).
 void ecu_sched_set_ign_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_ign_inhibit_mask(void);
-void ecu_sched_set_ivc(uint8_t ivc_abdc_deg);
-uint32_t ecu_sched_ivc_clamp_count(void);
 // Contador do duty clamp: incrementado quando PW_deg excede 90% do ciclo
 // (648° sequencial / 324° presync) e é clampado. >0 = fuel shortfall.
 uint32_t ecu_sched_pw_duty_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
+
+// Bench protocol: next commit_calibration applies PW then locks (override=1).
+// Prefer this over poking g_inj_pw_override via raw symbol linkage.
+void ecu_sched_bench_pw_lock_next_commit(void);
+uint8_t ecu_sched_bench_pw_override_state(void);
+
+// ── Protocol / host observability (main-loop / UART only — not ISR hot path) ──
+
+// Last 8 angle-trace samples from the dispatch ring (INJ1/IGN1 edges).
+// Wire format for 'G' stays: gap_ts + ring_idx + 8×{ts, high, channel}.
+typedef struct {
+    uint32_t ts;
+    uint8_t  high;
+    uint8_t  channel;
+} EcuSchedTsSample;
+
+void ecu_sched_get_angle_trace(uint32_t *gap_ts,
+                               uint8_t *ring_idx,
+                               EcuSchedTsSample out_last8[8]);
+
+// Pin transition counters for all 8 channels: high/low/seq_error interleaved
+// as 24×u32 for protocol 'V' (same layout as before).
+void ecu_sched_get_pin_counts_u32x24(uint32_t out[24]);
+
+// Scheduler-owned fields used by protocol 'D' (order matches historical diag[]
+// slots for these counters — callers still interleave CKP/fuel fields).
+typedef struct {
+    uint32_t late_event_count;
+    uint32_t cycle_schedule_drop_count;
+    uint32_t inj1_arm;
+    uint32_t seq_calls;
+    uint32_t evt_overflow;
+    uint32_t clear_all_count;       // g_dbg_clear_all_count
+    uint32_t presync_count;
+    uint32_t dwell_watchdog_count;
+    uint32_t phase_skip;
+    uint32_t phase_fire;
+    uint32_t evt_inserted;
+    uint32_t evt_dispatched;
+    uint32_t diag_presync_revs;
+    uint32_t diag_seq_revs;
+    uint32_t diag_clear_all_count;
+} EcuSchedDiagSnapshot;
+
+void ecu_sched_get_diag_snapshot(EcuSchedDiagSnapshot *out);
 
 // Teste de saídas em bancada: pulso único num canal individual (motor parado).
 // cyl = 0-3 na ordem INJ1..INJ4 / IGN1..IGN4. pw_us clamp ≤30000; dwell_us
@@ -140,8 +184,6 @@ uint32_t ecu_sched_test_get_eoi_lead_deg(void);
 uint32_t ecu_sched_test_get_calibration_clamp_count(void);
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 uint32_t ecu_sched_test_get_late_event_count(void);
-void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg);
-uint32_t ecu_sched_test_get_ivc_clamp_count(void);
 uint32_t ecu_sched_test_get_pw_duty_clamp_count(void);
 void     ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept;
 uint32_t ecu_sched_test_get_tim1_ccr(uint8_t channel) noexcept;
@@ -153,6 +195,11 @@ uint8_t  ecu_sched_test_get_mspark_count(void);
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept;
 uint32_t ecu_sched_test_get_tim5_ccr3(void)  noexcept;
 void     ecu_sched_test_set_tim5_cnt(uint32_t v) noexcept;
+// Queue peeks for golden timestamp / channel identity tests (index 0 = earliest).
+uint8_t  ecu_sched_test_get_evt(uint8_t index,
+                                uint32_t *ts,
+                                uint8_t *channel,
+                                uint8_t *high) noexcept;
 // Contadores de revoluções por modo — validam a transição presync↔sequencial.
 uint32_t ecu_sched_test_get_presync_revs(void);
 uint32_t ecu_sched_test_get_seq_revs(void);

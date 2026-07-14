@@ -1084,7 +1084,8 @@ async function loadBoostMap() {
 }
 
 /* ── LEARN: mean STFT % (page 12) ─────────────────────────────────────── */
-// Só a grelha mean STFT e READ / APPLY / RESET. Apply = bake-in manual → VE.
+// Só a grelha mean STFT e READ / APPLY / RESET.
+// Apply = bake-in manual de TODAS as células com hits>0 → VE (não só ready).
 async function loadLtftAccum() {
   const root = $("#ltftAccumRoot");
   root.dataset.loaded = "1";

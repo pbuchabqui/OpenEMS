@@ -51,8 +51,9 @@ Não usar floor da bilineal para trims — mid-bin errava a autoridade (WP0).
 ## LEARN → VE (manual)
 
 1. Acumula hits/mean STFT/mean err em regime estável (APP + ΔRPM).  
-2. Célula **ready** (thresholds page0 185–190 ou defaults).  
-3. Dash **APPLY** (`'Y'`) → bake em VE RAM + desenrola LTFT cell; bulk não desenrola STFT N×.  
+2. Célula **ready** (thresholds page0 185–190 ou defaults) = qualidade / try_commit.  
+3. Dash **APPLY** (`'Y'`) → bake em **todas** as células com hits>0 (não só ready)
+   → VE RAM + desenrola LTFT cell; bulk não desenrola STFT N×.  
 4. **Burn** VE: flag `ltft_apply_burn_ve` ou botão Burn do dash.  
 5. Nunca auto-bake no closed-loop.
 
@@ -80,7 +81,7 @@ Clear ~2 s fora do sat. Severidade WARNING.
 | Wire | API | Acção |
 |------|-----|--------|
 | `'Z'` | `/api/ltft/reset` e `/api/adaptives/reset` | STFT+LEARN+LTFT shadow zero + flush ASAP |
-| `'Y'` | `/api/ltft/apply-ready` | APPLY all ready → VE |
+| `'Y'` | `/api/ltft/apply-ready` | APPLY all accumulated (hits>0) → VE |
 | page 10 | — | visualização LTFT mult+add |
 | page 12 | LEARN tab | hits + mean STFT + ready bit |
 
