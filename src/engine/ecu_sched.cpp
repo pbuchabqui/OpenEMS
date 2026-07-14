@@ -1,4 +1,5 @@
 #include "engine/ecu_sched.h"
+#include "engine/ecu_sched_internal.h"
 #include "drv/ckp.h"
 #include "engine/engine_config.h"
 #include "engine/constants.h"
@@ -7,6 +8,8 @@
 #include "engine/quick_crank.h"
 #include "hal/regs.h"
 #include "hal/critical_section.h"
+
+namespace si = ems::engine::sched_internal;
 
 #include <stddef.h>
 #include <stdint.h>
@@ -64,10 +67,6 @@ static_assert(ECU_SCHED_NS_PER_TICK == 16U,
 #define ECU_SCHED_US_TO_TICKS(us) ((us) * 125U / 2U)
 #define TOOTH_NS_TO_SCHED(ns) ((uint32_t)((ns) / ECU_SCHED_NS_PER_TICK))
 
-// Canonical channel order (cyl 0..3). ECU_CH_* values unchanged (legacy TIM map).
-static constexpr uint8_t k_inj_ch[4] = {ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
-static constexpr uint8_t k_ign_ch[4] = {ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
-
 // Pin-metric index 0..3 INJ, 4..7 IGN — same mapping as old stm32_*_tim_ch()-1.
 // Indexed by raw ECU_CH_* (0..7): INJ3,INJ4,INJ1,INJ2, IGN4,IGN3,IGN2,IGN1.
 static constexpr uint8_t k_ch_to_pin_idx[8] = {2U, 3U, 0U, 1U, 7U, 6U, 5U, 4U};
@@ -80,10 +79,8 @@ static constexpr uint8_t k_ign_ch_to_bit[8] = {
     0U, 0U, 0U, 0U, (1U << 3), (1U << 2), (1U << 1), (1U << 0)
 };
 
-static AngleEvent_t g_angle_table[ECU_ANGLE_TABLE_SIZE];
-static uint8_t g_angle_table_count;
-static uint32_t g_angle_tooth_mask_lo;
-static uint32_t g_angle_tooth_mask_hi;
+// Angle table lives in ecu_sched_angle.cpp (cold builders). Aliases for local use.
+// Hot path reads si::g_angle_table* at tooth time only.
 
 volatile uint32_t g_late_event_count = 0U;
 volatile uint32_t g_calibration_clamp_count = 0U;
@@ -106,9 +103,6 @@ static volatile uint8_t g_ign_inhibit_mask = 0U;
 // ── Multi-spark (MS42 §2.2.3) ──────────────────────────────────────────────
 // count=0 desabilitado. Valores escritos por ecu_sched_set_mspark() (main loop),
 // lidos por Calculate_Sequential_Cycle() (ISR context via tooth hook).
-static volatile uint8_t  g_mspark_count            = 0U;
-static volatile uint32_t g_mspark_inter_dwell_ticks = 0U;
-static volatile uint32_t g_mspark_atdc_limit_deg    = 18U;
 
 // ── Contadores de diagnóstico (cranking, mode switches) ─────────────────────
 volatile uint32_t g_diag_presync_revs = 0U;    // revoluções em modo presync
@@ -117,46 +111,34 @@ volatile uint32_t g_diag_prime_fired = 0U;     // prime pulse disparado
 volatile uint32_t g_diag_clear_all_count = 0U; // clear_all_events calls (non-init)
 volatile uint32_t g_diag_unsync_teeth_peak = 0U; // pico de dentes sem sync
 
-static volatile uint32_t g_advance_deg = 10U;
-static volatile uint32_t g_dwell_ticks = 187500U;  // 3 ms @ 62.5 MHz
-static volatile uint32_t g_inj_pw_ticks = 187500U;  // 3 ms @ 62.5 MHz
-volatile uint8_t g_inj_pw_override = 0U;  // 1=lock g_inj_pw_ticks, ignore main loop writes
-// ── EOI targeting (End of Injection) ────────────────────────────────────────
-// A injeção TERMINA num ângulo fixo (g_eoi_lead_deg antes do TDC de combustão)
-// e o início é calculado para trás: SOI = EOI − PW°. Com PW grande (alta RPM),
-// o SOI recua automaticamente para mais cedo no ciclo — resolve a janela
-// insuficiente do antigo SOI fixo (a 8500 RPM, 50° = 0.98 ms << PW típico).
-// Default 355° BTDC de COMBUSTÃO (Speeduino-style, mesmo referencial do
-// Speeduino): EOI cai 5° APÓS o TDC de cruzamento, no início da admissão,
-// com a válvula acabada de abrir — open-valve, combustível arrastado com o
-// fluxo de ar (spray no pórtico/válvula; port injection não atinge a câmara
-// directamente). SOI recua automaticamente com EOI targeting.
-static volatile uint32_t g_eoi_lead_deg = 355U;
+// Shared with ecu_sched_angle.cpp (cold builders) — see ecu_sched_internal.h
+namespace ems::engine::sched_internal {
+volatile uint8_t  g_mspark_count            = 0U;
+volatile uint32_t g_mspark_inter_dwell_ticks = 0U;
+volatile uint32_t g_mspark_atdc_limit_deg    = 18U;
+volatile uint32_t g_advance_deg = 10U;
+volatile uint32_t g_dwell_ticks = 187500U;  // 3 ms @ 62.5 MHz
+volatile uint32_t g_inj_pw_ticks = 187500U;  // 3 ms @ 62.5 MHz
+volatile uint32_t g_eoi_lead_deg = 355U;
+volatile uint8_t  g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
+volatile uint8_t  g_presync_bank_toggle = 0U;
+volatile uint8_t  g_knock_sequential = 0U;
+volatile uint32_t g_pw_duty_clamp_count = 0U;
+}  // namespace ems::engine::sched_internal
+
+// Local-only runtime state (hot façade; not needed by angle builders)
+volatile uint8_t g_inj_pw_override = 0U;  // 1=lock si::g_inj_pw_ticks, ignore main loop writes
+// EOI targeting notes: builders use si::g_eoi_lead_deg (shared).
 static volatile uint8_t g_presync_enable = 1U;
-static volatile uint8_t g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
-static volatile uint8_t g_presync_inj_auto = 1U;  // 1=auto-select by crank state
+static volatile uint8_t g_presync_inj_auto = 1U;
 static volatile uint8_t g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
-static volatile uint8_t g_presync_bank_toggle = 0U;
 static volatile uint8_t g_hook_prev_valid = 0U;
 static volatile uint16_t g_hook_prev_tooth = 0U;
 static volatile uint8_t g_hook_schedule_this_gap = 1U;
-static volatile uint8_t g_cmp_phase_seen = 0U; // set when phase_A toggles (CMP present)
-static volatile uint8_t g_knock_sequential = 0U;  // 1 when running Calculate_Sequential_Cycle (full sync, per-cyl knock valid)
+static volatile uint8_t g_cmp_phase_seen = 0U;
 // IVC API retained for protocol/page0 compatibility; clamp removed (EOI targeting).
-// g_ivc_abdc_deg is stored but unused by angle builders; clamp count stays 0.
 static volatile uint8_t g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg;
 static uint32_t g_ivc_clamp_count = 0U;
-
-// ── Duty clamp (EOI targeting) ──────────────────────────────────────────────
-// PW ≥ 720° é irrepresentável na tabela angular (duty ≥ 100%): inj_on e
-// inj_off são dois ângulos no mesmo ciclo — 766° colapsaria silenciosamente
-// para 46° (mistura pobre severa a alta RPM). Clamp a 90% do ciclo garante
-// aritmética modular válida E tempo mínimo de injetor fechado (dinâmica de
-// abertura/fecho). Incrementa g_pw_duty_clamp_count quando actua — fuel
-// shortfall a alta RPM deve ser visível no diagnóstico, nunca escondido.
-#define ECU_MAX_SEQ_INJ_PW_DEG      648U   // 90% de 720°
-#define ECU_MAX_PRESYNC_INJ_PW_DEG  324U   // 90% de 360°
-static volatile uint32_t g_pw_duty_clamp_count = 0U;
 volatile uint32_t g_dbg_inj_force_early = 0U;
 volatile uint32_t g_dbg_ign_force_early = 0U;
 volatile uint32_t g_dbg_clear_all_count = 0U;
@@ -337,16 +319,16 @@ static inline uint32_t scheduler_counter(void)
 static void sanitize_runtime_calibration(void)
 {
     uint8_t clamped = 0U;
-    if (g_advance_deg > 60U) { g_advance_deg = 60U; clamped = 1U; }
+    if (si::g_advance_deg > 60U) { si::g_advance_deg = 60U; clamped = 1U; }
     // Clamps em ticks TIM5 (62.5 MHz): 100000 ticks ≈ 1.6ms dwell máx
-    if (g_dwell_ticks > 625000U) { g_dwell_ticks = 625000U; clamped = 1U; }
-    if (g_inj_pw_ticks > 1250000U) { g_inj_pw_ticks = 1250000U; clamped = 1U; }
+    if (si::g_dwell_ticks > 625000U) { si::g_dwell_ticks = 625000U; clamped = 1U; }
+    if (si::g_inj_pw_ticks > 1250000U) { si::g_inj_pw_ticks = 1250000U; clamped = 1U; }
     // EOI lead ∈ [0, 719]: 0–129 = fim na compressão (closed-valve, soak longo);
     // 130–359 = válvula aberta / admissão (estilo Speeduino, default 355);
     // 360–719 = fim no escape/pré-IVO (closed-valve OEM, soak curto na válvula
     // quente — candidato a eoi_idle). Presync mapeia via % 360.
-    if (g_eoi_lead_deg >= ECU_CYCLE_DEG) { g_eoi_lead_deg = ECU_CYCLE_DEG - 1U; clamped = 1U; }
-    if (g_presync_inj_mode > ECU_PRESYNC_INJ_SEMI_SEQUENTIAL) { g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; clamped = 1U; }
+    if (si::g_eoi_lead_deg >= ECU_CYCLE_DEG) { si::g_eoi_lead_deg = ECU_CYCLE_DEG - 1U; clamped = 1U; }
+    if (si::g_presync_inj_mode > ECU_PRESYNC_INJ_SEMI_SEQUENTIAL) { si::g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; clamped = 1U; }
     if (g_presync_ign_mode > ECU_PRESYNC_IGN_WASTED_SPARK) { g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK; clamped = 1U; }
     if (clamped != 0U) { ++g_calibration_clamp_count; }
 }
@@ -391,7 +373,7 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
         const uint8_t ign_idx = (uint8_t)(pin_idx - ECU_IGN_CH_FIRST);
         if (action == ECU_ACT_DWELL_START) {
             g_dwell_arm_tick[ign_idx] = now;
-            g_dwell_wdog_ticks[ign_idx] = (g_dwell_ticks * 7U) / 5U;
+            g_dwell_wdog_ticks[ign_idx] = (si::g_dwell_ticks * 7U) / 5U;
         } else if (action == ECU_ACT_SPARK) {
             g_dwell_arm_tick[ign_idx] = 0U;
         }
@@ -414,9 +396,7 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 
 static void clear_all_events_and_drive_safe_outputs(void)
 {
-    g_angle_table_count = 0U;
-    g_angle_tooth_mask_lo = 0U;
-    g_angle_tooth_mask_hi = 0U;
+    si::clear_angle_table();
     // Clear TIM5 event queue
     g_evt_count = 0U;
     g_evt_armed = 0U;
@@ -424,47 +404,8 @@ static void clear_all_events_and_drive_safe_outputs(void)
     for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) { force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK, 1U); }
     for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; }
     // Close any open knock window — sync lost means no valid combustion cylinder
-    g_knock_sequential = 0U;
+    si::g_knock_sequential = 0U;
     ems::engine::knock_window_cycle_end();
-}
-
-static void angle_to_tooth_event(uint32_t angle_deg, uint8_t *out_tooth, uint8_t *out_sub_frac, uint8_t *out_phase_A)
-{
-    const uint32_t ang = angle_deg % 360U;
-    uint32_t pos_x256 = (ang * 256U) / 6U;
-    uint8_t tooth = (uint8_t)(pos_x256 >> 8U);
-    uint8_t frac = (uint8_t)(pos_x256 & 0xFFU);
-    if (tooth > 57U) { tooth = 57U; frac = 255U; }
-    *out_phase_A = (angle_deg < 360U) ? ECU_PHASE_A : ECU_PHASE_B;
-    *out_tooth = tooth;
-    *out_sub_frac = frac;
-}
-
-static uint32_t engine_angle_to_trigger_angle(uint32_t engine_angle_deg, uint32_t cycle_deg)
-{
-    // FIX: usar valor em runtime (NVM/UART) em vez da constante de compilação.
-    // kTriggerTooth0EngineDeg era o default hard-coded (0°); o campo de runtime
-    // g_eng_cfg.trigger_tooth0_engine_deg é o valor calibrável por engine.
-    const uint32_t trigger_offset =
-        static_cast<uint32_t>(ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg) % cycle_deg;
-    return (engine_angle_deg + cycle_deg - trigger_offset) % cycle_deg;
-}
-
-static void table_add(uint8_t tooth, uint8_t sub_frac, uint8_t phase_A, uint8_t channel, uint8_t action)
-{
-    if (g_angle_table_count >= ECU_ANGLE_TABLE_SIZE) { ++g_cycle_schedule_drop_count; return; }
-    AngleEvent_t *e = &g_angle_table[g_angle_table_count++];
-    e->tooth_index = tooth;
-    e->sub_frac_x256 = sub_frac;
-    e->phase_A = phase_A;
-    e->channel = channel;
-    e->action = action;
-    e->valid = 1U;
-    if (tooth < 32U) {
-        g_angle_tooth_mask_lo |= (1UL << tooth);
-    } else {
-        g_angle_tooth_mask_hi |= (1UL << (tooth - 32U));
-    }
 }
 
 void ECU_Hardware_Init(void)
@@ -490,218 +431,34 @@ void ECU_Hardware_Init(void)
     clear_all_events_and_drive_safe_outputs();
 }
 
-static uint32_t ticks_to_cycle_degrees(uint32_t ticks, uint32_t tooth_period_ns, uint32_t cycle_deg)
-{
-    const uint64_t tooth_ticks = static_cast<uint64_t>(TOOTH_NS_TO_SCHED(tooth_period_ns));
-    const uint64_t factor = (cycle_deg == ECU_CYCLE_DEG) ? 120ULL : 60ULL;
-    const uint64_t denom  = tooth_ticks * factor;
-    return (denom > 0ULL)
-        ? static_cast<uint32_t>((static_cast<uint64_t>(ticks) * cycle_deg) / denom)
-        : 0U;
-}
-
-// NOTA (EOI targeting): o antigo clamp_inj_pw_to_ivc foi removido. Com EOI
-// targeting a restrição de IVC é satisfeita pela própria calibração do EOI:
-//  • eoi_lead ≤ ~130° → EOI após IVC → injecção closed-valve intencional
-//    (combustível espera no pórtico pela próxima admissão);
-//  • eoi_lead que coloque o EOI antes/na IVC → a injecção termina, por
-//    construção, antes do fecho da válvula — nada a clampar.
-// O antigo clamp (PW limitado à janela SOI→IVC) destruiria o EOI targeting:
-// com PW longo o inj_on cai antes da IVC e o clamp encurtaria o pulso,
-// movendo o fim da injecção para a IVC — anulando o alvo de EOI.
-// g_ivc_abdc_deg / ecu_sched_set_ivc / g_ivc_clamp_count são mantidos por
-// compatibilidade de API e protocolo (contador permanece 0).
-
-// ── Sparks adicionais (MS42 §2.2.3 — multi-spark) ───────────────────────────
-// Cada spark adicional n dispara n×step depois do spark principal; o dwell n
-// arranca 1° após o spark n-1 (epsilon anti-conflito no mesmo tooth).
-// Interrompido quando o spark ultrapassa a janela ATDC configurada.
-// emit(dwell_ang, spark_ang) materializa cada par no fan-out do chamador
-// (canal do cilindro em sequencial; os 4 canais em presync/wasted). Único
-// sítio com a temporização MS42 — sequencial e presync não podem divergir.
-template <typename EmitFn>
-static inline void emit_multispark(uint32_t spark_ang, uint32_t cycle_deg,
-                                   uint32_t tooth_period_ns, EmitFn emit)
-{
-    const uint8_t ms_count = g_mspark_count;
-    if (ms_count == 0U || tooth_period_ns == 0U) { return; }
-    const uint32_t inter_deg = ticks_to_cycle_degrees(
-        g_mspark_inter_dwell_ticks, tooth_period_ns, cycle_deg);
-    const uint32_t step   = inter_deg + 1U;  // +1° = epsilon anti-conflito
-    const uint32_t window = g_advance_deg + g_mspark_atdc_limit_deg;
-    for (uint8_t n = 1U; n <= ms_count; ++n) {
-        const uint32_t add_spark_off = (uint32_t)n * step;
-        if (add_spark_off >= window) { break; }
-        const uint32_t add_dwell_off = (uint32_t)(n - 1U) * step + 1U;
-        emit((spark_ang + add_dwell_off) % cycle_deg,
-             (spark_ang + add_spark_off) % cycle_deg);
-    }
-}
-
-static void Calculate_Sequential_Cycle(const ems::drv::CkpSnapshot& snap)
-{
-    static_assert(ems::engine::cfg::kCylinderCount == 4u, "ign_ch/inj_ch hardcoded for 4 cylinders");
-    const uint8_t* const ign_ch = k_ign_ch;
-    const uint8_t* const inj_ch = k_inj_ch;
-
-    g_knock_sequential = 1U;  // knock window per-cylinder valid in sequential mode
-    g_angle_table_count = 0U;
-    g_angle_tooth_mask_lo = 0U;
-    g_angle_tooth_mask_hi = 0U;
-
-    const uint32_t dwell_deg = ticks_to_cycle_degrees(g_dwell_ticks, snap.tooth_period_ns, ECU_CYCLE_DEG);
-    const uint32_t base_inj_pw_deg = ticks_to_cycle_degrees(g_inj_pw_ticks, snap.tooth_period_ns, ECU_CYCLE_DEG);
-
-    for (uint8_t seq = 0U; seq < ems::engine::cfg::kCylinderCount; ++seq) {
-        const uint8_t cyl = ems::engine::cfg::kFiringOrder[seq];
-        const uint32_t tdc = ems::engine::cfg::cyl_tdc_deg(cyl);
-
-        // Trim de ignição por cilindro (±°)
-        const int32_t ign_trim = static_cast<int32_t>(ems::engine::cyl_ign_trim_deg[cyl]);
-        const int32_t trimmed_advance = static_cast<int32_t>(g_advance_deg) + ign_trim;
-        const uint32_t eff_advance = (trimmed_advance < 0) ? 0u
-                                   : static_cast<uint32_t>(trimmed_advance);
-
-        const uint32_t spark = (tdc + ECU_CYCLE_DEG - eff_advance) % ECU_CYCLE_DEG;
-        const uint32_t dwell = (spark + ECU_CYCLE_DEG - dwell_deg) % ECU_CYCLE_DEG;
-
-        // ── EOI targeting: a injecção TERMINA em eoi; o início recua PW° ──
-        const uint32_t eoi = (tdc + ECU_CYCLE_DEG - g_eoi_lead_deg) % ECU_CYCLE_DEG;
-
-        // Trim de combustível por cilindro (±%)
-        const int32_t fuel_trim = static_cast<int32_t>(ems::engine::cyl_fuel_trim_pct[cyl]);
-        const int32_t pw_trimmed = static_cast<int32_t>(base_inj_pw_deg)
-                                   * (100 + fuel_trim) / 100;
-        uint32_t inj_pw = (pw_trimmed < 0) ? 0u : static_cast<uint32_t>(pw_trimmed);
-
-        // Duty clamp: PW ≥ 720° é irrepresentável (ver comentário no topo).
-        // Clamp ANTES da aritmética modular — dispensa loop de wrap e garante
-        // que (eoi + 720 − pw) nunca precisa de mais de uma volta.
-        if (inj_pw > ECU_MAX_SEQ_INJ_PW_DEG) {
-            inj_pw = ECU_MAX_SEQ_INJ_PW_DEG;
-            ++g_pw_duty_clamp_count;
-        }
-
-        const uint32_t inj_on  = (eoi + ECU_CYCLE_DEG - inj_pw) % ECU_CYCLE_DEG;
-        const uint32_t inj_off = eoi;
-        uint8_t tooth, frac, phase;
-
-        angle_to_tooth_event(engine_angle_to_trigger_angle(dwell, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
-        angle_to_tooth_event(engine_angle_to_trigger_angle(spark, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
-
-        // Sparks adicionais no mesmo canal de ignição do cilindro.
-        emit_multispark(spark, ECU_CYCLE_DEG, snap.tooth_period_ns,
-            [&](uint32_t add_dwell_ang, uint32_t add_spark_ang) {
-                angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-                table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
-                angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-                table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
-            });
-
-        angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, inj_ch[cyl], ECU_ACT_INJ_ON);
-        angle_to_tooth_event(engine_angle_to_trigger_angle(inj_off, ECU_CYCLE_DEG), &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, inj_ch[cyl], ECU_ACT_INJ_OFF);
-    }
-}
-
-static void calculate_presync_revolution(const ems::drv::CkpSnapshot& snap)
-{
-    static const uint8_t inj_a[2U] = {ECU_CH_INJ1, ECU_CH_INJ4};
-    static const uint8_t inj_b[2U] = {ECU_CH_INJ2, ECU_CH_INJ3};
-    const uint8_t* const inj_all = k_inj_ch;
-    const uint8_t* const ign = k_ign_ch;
-    uint8_t tooth, frac, phase;
-
-    g_knock_sequential = 0U;  // wasted-spark presync: no per-cylinder knock tracking
-    g_angle_table_count = 0U;
-    g_angle_tooth_mask_lo = 0U;
-    g_angle_tooth_mask_hi = 0U;
-
-    const uint32_t dwell_deg = ticks_to_cycle_degrees(g_dwell_ticks, snap.tooth_period_ns, 360U);
-    // Diverging presync injection modes — same 360° window, different firing rate:
-    //   SIMULTANEOUS:   all 4 injectors every 360° (2× per 720° cycle each).
-    //   SEMI_SEQUENTIAL: bank A or B alternates each 360° (1× per 720° per injector).
-    uint32_t inj_pw_deg = ticks_to_cycle_degrees(
-        (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) ? (g_inj_pw_ticks / 2U) : g_inj_pw_ticks,
-        snap.tooth_period_ns, 360U);
-    // Duty clamp na janela de 360° — mesma razão do modo sequencial.
-    // Improvável no cranking (200 RPM → 360° = 150 ms), mas obrigatório por
-    // simetria: PW_deg ≥ 360° colapsaria na aritmética modular.
-    if (inj_pw_deg > ECU_MAX_PRESYNC_INJ_PW_DEG) {
-        inj_pw_deg = ECU_MAX_PRESYNC_INJ_PW_DEG;
-        ++g_pw_duty_clamp_count;
-    }
-    const uint32_t spark = (360U - (g_advance_deg % 360U)) % 360U;
-    const uint32_t dwell = (spark + 360U - dwell_deg) % 360U;
-    // EOI targeting: fim da injecção fixo, início recua PW°.
-    const uint32_t eoi     = (360U - (g_eoi_lead_deg % 360U)) % 360U;
-    const uint32_t inj_on  = (eoi + 360U - inj_pw_deg) % 360U;
-    const uint32_t inj_off = eoi;
-
-    angle_to_tooth_event(engine_angle_to_trigger_angle(dwell, 360U), &tooth, &frac, &phase);
-    for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_DWELL_START); }
-    angle_to_tooth_event(engine_angle_to_trigger_angle(spark, 360U), &tooth, &frac, &phase);
-    for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_SPARK); }
-
-    // Sparks adicionais em todos os canais IGN (topologia wasted-spark).
-    emit_multispark(spark, 360U, snap.tooth_period_ns,
-        [&](uint32_t add_dwell_ang, uint32_t add_spark_ang) {
-            angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, 360U), &tooth, &frac, &phase);
-            for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_DWELL_START); }
-            angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, 360U), &tooth, &frac, &phase);
-            for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_SPARK); }
-        });
-
-    angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, 360U), &tooth, &frac, &phase);
-    if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
-        for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, inj_all[i], ECU_ACT_INJ_ON); }
-    } else {
-        const uint8_t *bank = (g_presync_bank_toggle == 0U) ? inj_a : inj_b;
-        for (uint8_t i = 0U; i < 2U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, bank[i], ECU_ACT_INJ_ON); }
-        g_presync_bank_toggle ^= 1U;
-    }
-
-    angle_to_tooth_event(engine_angle_to_trigger_angle(inj_off, 360U), &tooth, &frac, &phase);
-    if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
-        for (uint8_t i = 0U; i < 4U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, inj_all[i], ECU_ACT_INJ_OFF); }
-    } else {
-        /* close the bank that was opened this revolution; toggle already advanced */
-        const uint8_t *bank = (g_presync_bank_toggle == 1U) ? inj_a : inj_b;
-        for (uint8_t i = 0U; i < 2U; ++i) { table_add(tooth, frac, ECU_PHASE_ANY, bank[i], ECU_ACT_INJ_OFF); }
-    }
-}
-
 void ecu_sched_commit_calibration(uint32_t advance_deg, uint32_t dwell_ticks, uint32_t inj_pw_ticks, uint32_t eoi_lead_deg)
 {
     ems::hal::CriticalSectionGuard guard;
     if (g_inj_pw_override == 0U) {
-        g_advance_deg = advance_deg;
-        g_dwell_ticks = dwell_ticks;
-        g_inj_pw_ticks = inj_pw_ticks;
+        si::g_advance_deg = advance_deg;
+        si::g_dwell_ticks = dwell_ticks;
+        si::g_inj_pw_ticks = inj_pw_ticks;
     } else if (g_inj_pw_override == 2U) {
-        g_advance_deg = advance_deg;
-        g_dwell_ticks = dwell_ticks;
-        g_inj_pw_ticks = inj_pw_ticks;
+        si::g_advance_deg = advance_deg;
+        si::g_dwell_ticks = dwell_ticks;
+        si::g_inj_pw_ticks = inj_pw_ticks;
         g_inj_pw_override = 1U;
     }
-    g_eoi_lead_deg = eoi_lead_deg;
+    si::g_eoi_lead_deg = eoi_lead_deg;
     sanitize_runtime_calibration();
 }
-void ecu_sched_set_advance_deg(uint32_t adv) { ems::hal::CriticalSectionGuard guard; g_advance_deg = adv; sanitize_runtime_calibration(); }
-void ecu_sched_set_dwell_ticks(uint32_t dwell) { ems::hal::CriticalSectionGuard guard; g_dwell_ticks = dwell; sanitize_runtime_calibration(); }
-void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { ems::hal::CriticalSectionGuard guard; if (g_inj_pw_override == 0U) { g_inj_pw_ticks = pw_ticks; } sanitize_runtime_calibration(); }
-void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ems::hal::CriticalSectionGuard guard; g_eoi_lead_deg = eoi_lead_deg; sanitize_runtime_calibration(); }
+void ecu_sched_set_advance_deg(uint32_t adv) { ems::hal::CriticalSectionGuard guard; si::g_advance_deg = adv; sanitize_runtime_calibration(); }
+void ecu_sched_set_dwell_ticks(uint32_t dwell) { ems::hal::CriticalSectionGuard guard; si::g_dwell_ticks = dwell; sanitize_runtime_calibration(); }
+void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { ems::hal::CriticalSectionGuard guard; if (g_inj_pw_override == 0U) { si::g_inj_pw_ticks = pw_ticks; } sanitize_runtime_calibration(); }
+void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ems::hal::CriticalSectionGuard guard; si::g_eoi_lead_deg = eoi_lead_deg; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_enable(uint8_t enable) { ems::hal::CriticalSectionGuard guard; g_presync_enable = (enable != 0U) ? 1U : 0U; }
 void ecu_sched_set_presync_inj_auto(uint8_t on) { ems::hal::CriticalSectionGuard guard; g_presync_inj_auto = on ? 1U : 0U; }
 
-void ecu_sched_set_presync_inj_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_inj_mode = mode; sanitize_runtime_calibration(); }
+void ecu_sched_set_presync_inj_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; si::g_presync_inj_mode = mode; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_ign_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_ign_mode = mode; sanitize_runtime_calibration(); }
 void ecu_sched_set_ivc(uint8_t ivc_abdc_deg) { ems::hal::CriticalSectionGuard guard; g_ivc_abdc_deg = (ivc_abdc_deg > 180U) ? 180U : ivc_abdc_deg; }
 uint32_t ecu_sched_ivc_clamp_count(void) { return g_ivc_clamp_count; }
-uint32_t ecu_sched_pw_duty_clamp_count(void) { return g_pw_duty_clamp_count; }
+uint32_t ecu_sched_pw_duty_clamp_count(void) { return si::g_pw_duty_clamp_count; }
 
 void ecu_sched_dwell_watchdog(void)
 {
@@ -712,7 +469,7 @@ void ecu_sched_dwell_watchdog(void)
         const uint32_t arm  = g_dwell_arm_tick[i];  // TIM5_CNT value
         const uint32_t tout = g_dwell_wdog_ticks[i];
         if (arm != 0U && (now - arm) >= tout) {  // 32-bit, sem mask de wrap
-            gpio_set_pin(k_ign_ch[i], 0U);
+            gpio_set_pin(si::kIgnCh[i], 0U);
             g_dwell_arm_tick[i] = 0U;
             ++g_dwell_watchdog_count;
         }
@@ -721,8 +478,8 @@ void ecu_sched_dwell_watchdog(void)
 
 uint32_t ecu_sched_dwell_watchdog_count(void) { return g_dwell_watchdog_count; }
 
-uint8_t ecu_sched_is_sequential(void) { return g_knock_sequential; }
-uint8_t ecu_sched_presync_inj_mode(void) { return g_presync_inj_mode; }
+uint8_t ecu_sched_is_sequential(void) { return si::g_knock_sequential; }
+uint8_t ecu_sched_presync_inj_mode(void) { return si::g_presync_inj_mode; }
 uint8_t ecu_sched_presync_inj_auto(void) { return g_presync_inj_auto; }
 
 void ecu_sched_reset_diagnostic_counters(void)
@@ -732,7 +489,7 @@ void ecu_sched_reset_diagnostic_counters(void)
     g_cycle_schedule_drop_count = 0U;
     g_calibration_clamp_count = 0U;
     g_ivc_clamp_count = 0U;
-    g_pw_duty_clamp_count = 0U;
+    si::g_pw_duty_clamp_count = 0U;
     g_dwell_watchdog_count = 0U;
 }
 
@@ -741,8 +498,8 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us)
     if (pw_us == 0U) { return; }
     if (pw_us > 30000U) { pw_us = 30000U; }
     const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
-    for (uint8_t i = 0U; i < 4U; ++i) { force_output(k_inj_ch[i], ECU_ACT_INJ_ON); }
-    for (uint8_t i = 0U; i < 4U; ++i) { arm_channel(k_inj_ch[i], off_cnv, ECU_ACT_INJ_OFF); }
+    for (uint8_t i = 0U; i < 4U; ++i) { force_output(si::kInjCh[i], ECU_ACT_INJ_ON); }
+    for (uint8_t i = 0U; i < 4U; ++i) { arm_channel(si::kInjCh[i], off_cnv, ECU_ACT_INJ_OFF); }
     ++g_diag_prime_fired;
 }
 
@@ -750,7 +507,7 @@ void ecu_sched_test_pulse_inj(uint8_t cyl, uint32_t pw_us)
 {
     if (cyl > 3U || pw_us == 0U) { return; }
     if (pw_us > 30000U) { pw_us = 30000U; }
-    const uint8_t ch = k_inj_ch[cyl];
+    const uint8_t ch = si::kInjCh[cyl];
     const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
     force_output(ch, ECU_ACT_INJ_ON);
     arm_channel(ch, off_cnv, ECU_ACT_INJ_OFF);
@@ -761,7 +518,7 @@ void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
     if (cyl > 3U) { return; }
     if (dwell_us == 0U) { dwell_us = 3000U; }
     if (dwell_us > 10000U) { dwell_us = 10000U; }
-    const uint8_t ch = k_ign_ch[cyl];
+    const uint8_t ch = si::kIgnCh[cyl];
     const uint32_t spark_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(dwell_us);
     force_output(ch, ECU_ACT_DWELL_START);
     arm_channel(ch, spark_cnv, ECU_ACT_SPARK);
@@ -784,9 +541,9 @@ void ecu_sched_test_all_outputs_safe(void)
 void ecu_sched_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg)
 {
     ems::hal::CriticalSectionGuard guard;
-    g_mspark_count            = (count > 3U) ? 3U : count;
-    g_mspark_inter_dwell_ticks = inter_dwell_ticks;
-    g_mspark_atdc_limit_deg   = (atdc_limit_deg == 0U) ? 18U : atdc_limit_deg;
+    si::g_mspark_count            = (count > 3U) ? 3U : count;
+    si::g_mspark_inter_dwell_ticks = inter_dwell_ticks;
+    si::g_mspark_atdc_limit_deg   = (atdc_limit_deg == 0U) ? 18U : atdc_limit_deg;
 }
 
 void ecu_sched_set_inj_inhibit_mask(uint8_t mask)
@@ -888,7 +645,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
     // Auto-select presync injection mode by cranking state
     // SIMULTANEOUS during crank (batch-fire), SEMI_SEQUENTIAL after
     if (g_presync_inj_auto) {
-        g_presync_inj_mode = ems::engine::is_cranking()
+        si::g_presync_inj_mode = ems::engine::is_cranking()
             ? ECU_PRESYNC_INJ_SIMULTANEOUS
             : ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
     }
@@ -901,7 +658,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         if (use_presync) {
             ++g_dbg_presync_count;
             ++g_diag_presync_revs;
-            calculate_presync_revolution(snap);
+            si::rebuild_presync_revolution(snap);
             // Rearma o toggle p/ que a PRIMEIRA fronteira sequencial após presync
             // compute sempre a tabela (Calculate_Sequential_Cycle). Sem isto, se um
             // ciclo sequencial anterior deixou o toggle em 0, a re-entrada saltava
@@ -911,7 +668,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
             if (g_hook_schedule_this_gap != 0U) {
                 ++g_dbg_seq_calls;
                 ++g_diag_seq_revs;
-                Calculate_Sequential_Cycle(snap);
+                si::rebuild_sequential_cycle(snap);
                 g_hook_schedule_this_gap = 0U;
             } else {
                 g_hook_schedule_this_gap = 1U;
@@ -921,8 +678,8 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 
     const uint8_t tooth_index = (uint8_t)snap.tooth_index;
     const uint32_t tooth_mask = (tooth_index < 32U)
-        ? (g_angle_tooth_mask_lo & (1UL << tooth_index))
-        : (g_angle_tooth_mask_hi & (1UL << (tooth_index - 32U)));
+        ? (si::g_angle_tooth_mask_lo & (1UL << tooth_index))
+        : (si::g_angle_tooth_mask_hi & (1UL << (tooth_index - 32U)));
     if (tooth_mask != 0U) {
         const uint32_t period_ns = (snap.predicted_tooth_period_ns != 0U)
             ? snap.predicted_tooth_period_ns
@@ -930,8 +687,8 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         uint32_t tooth_ticks = TOOTH_NS_TO_SCHED(period_ns);
         const uint32_t now = scheduler_counter();
         const uint8_t current_phase = snap.phase_A ? ECU_PHASE_A : ECU_PHASE_B;
-        for (uint8_t i = 0U; i < g_angle_table_count; ++i) {
-            const AngleEvent_t *e = &g_angle_table[i];
+        for (uint8_t i = 0U; i < si::g_angle_table_count; ++i) {
+            const AngleEvent_t *e = &si::g_angle_table[i];
             if (e->tooth_index != tooth_index) { continue; }
             if ((e->phase_A != ECU_PHASE_ANY) && (e->phase_A != current_phase)) { ++g_dbg_phase_skip; continue; }
             ++g_dbg_phase_fire;
@@ -951,14 +708,14 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept { ems::engine::ecu_sche
 void ecu_sched_test_reset(void)
 {
     g_late_event_count = 0U; g_cycle_schedule_drop_count = 0U; g_calibration_clamp_count = 0U;
-    g_presync_enable = 1U; g_presync_inj_auto = 0U; g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
-    g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
-    g_advance_deg = 10U; g_dwell_ticks = 140625U; g_inj_pw_ticks = 140625U; g_eoi_lead_deg = 355U;
-    g_angle_table_count = 0U; g_angle_tooth_mask_lo = 0U; g_angle_tooth_mask_hi = 0U;
-    g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg; g_ivc_clamp_count = 0U; g_pw_duty_clamp_count = 0U;
+    g_presync_enable = 1U; g_presync_inj_auto = 0U; si::g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
+    si::g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
+    si::g_advance_deg = 10U; si::g_dwell_ticks = 140625U; si::g_inj_pw_ticks = 140625U; si::g_eoi_lead_deg = 355U;
+    si::g_angle_table_count = 0U; si::g_angle_tooth_mask_lo = 0U; si::g_angle_tooth_mask_hi = 0U;
+    g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg; g_ivc_clamp_count = 0U; si::g_pw_duty_clamp_count = 0U;
     g_inj_inhibit_mask = 0U;
     g_ign_inhibit_mask = 0U;
-    g_mspark_count = 0U; g_mspark_inter_dwell_ticks = 0U; g_mspark_atdc_limit_deg = 18U;
+    si::g_mspark_count = 0U; si::g_mspark_inter_dwell_ticks = 0U; si::g_mspark_atdc_limit_deg = 18U;
     // Reset dwell watchdog state
     for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; g_dwell_wdog_ticks[i] = 0U; }
     g_dwell_watchdog_count = 0U;
@@ -970,32 +727,32 @@ void ecu_sched_test_reset(void)
     // Reset mode/diag counters — testes de transição presync↔sequencial dependem
     // de arrancar em estado limpo (senão herdam contagem de testes anteriores).
     g_diag_presync_revs = 0U; g_diag_seq_revs = 0U;
-    g_knock_sequential = 0U; g_cmp_phase_seen = 0U;
+    si::g_knock_sequential = 0U; g_cmp_phase_seen = 0U;
 }
-uint8_t ecu_sched_test_angle_table_size(void) { return g_angle_table_count; }
+uint8_t ecu_sched_test_angle_table_size(void) { return si::g_angle_table_count; }
 uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *sub_frac, uint8_t *ch, uint8_t *action, uint8_t *phase)
 {
-    if ((index >= g_angle_table_count) || (g_angle_table[index].valid == 0U)) { return 0U; }
-    *tooth = g_angle_table[index].tooth_index; *sub_frac = g_angle_table[index].sub_frac_x256; *ch = g_angle_table[index].channel; *action = g_angle_table[index].action; *phase = g_angle_table[index].phase_A; return 1U;
+    if ((index >= si::g_angle_table_count) || (si::g_angle_table[index].valid == 0U)) { return 0U; }
+    *tooth = si::g_angle_table[index].tooth_index; *sub_frac = si::g_angle_table[index].sub_frac_x256; *ch = si::g_angle_table[index].channel; *action = si::g_angle_table[index].action; *phase = si::g_angle_table[index].phase_A; return 1U;
 }
 void ecu_sched_test_set_advance_deg(uint32_t adv) { ecu_sched_set_advance_deg(adv); }
 void ecu_sched_test_set_dwell_ticks(uint32_t dwell) { ecu_sched_set_dwell_ticks(dwell); }
 void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks) { ecu_sched_set_inj_pw_ticks(pw_ticks); }
 void ecu_sched_test_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ecu_sched_set_eoi_lead_deg(eoi_lead_deg); }
-uint32_t ecu_sched_test_get_advance_deg(void) { return g_advance_deg; }
-uint32_t ecu_sched_test_get_dwell_ticks(void) { return g_dwell_ticks; }
-uint32_t ecu_sched_test_get_inj_pw_ticks(void) { return g_inj_pw_ticks; }
-uint32_t ecu_sched_test_get_eoi_lead_deg(void) { return g_eoi_lead_deg; }
+uint32_t ecu_sched_test_get_advance_deg(void) { return si::g_advance_deg; }
+uint32_t ecu_sched_test_get_dwell_ticks(void) { return si::g_dwell_ticks; }
+uint32_t ecu_sched_test_get_inj_pw_ticks(void) { return si::g_inj_pw_ticks; }
+uint32_t ecu_sched_test_get_eoi_lead_deg(void) { return si::g_eoi_lead_deg; }
 uint32_t ecu_sched_test_get_calibration_clamp_count(void) { return g_calibration_clamp_count; }
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void) { return g_cycle_schedule_drop_count; }
 uint32_t ecu_sched_test_get_late_event_count(void) { return g_late_event_count; }
 void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg) { ecu_sched_set_ivc(ivc_abdc_deg); }
 uint32_t ecu_sched_test_get_ivc_clamp_count(void) { return g_ivc_clamp_count; }
-uint32_t ecu_sched_test_get_pw_duty_clamp_count(void) { return g_pw_duty_clamp_count; }
+uint32_t ecu_sched_test_get_pw_duty_clamp_count(void) { return si::g_pw_duty_clamp_count; }
 void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg) {
     ecu_sched_set_mspark(count, inter_dwell_ticks, atdc_limit_deg);
 }
-uint8_t ecu_sched_test_get_mspark_count(void) { return g_mspark_count; }
+uint8_t ecu_sched_test_get_mspark_count(void) { return si::g_mspark_count; }
 void ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept { ems_test_tim1_ign_cnt = cnt; }
 void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim5_cnt = cnt; }
 void ecu_sched_test_reset_ccr(void) noexcept {

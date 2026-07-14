@@ -35,6 +35,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/table3d.cpp $(SRC_DIR)/engine/quick_crank.cpp \
              $(SRC_DIR)/engine/transient_fuel.cpp \
              $(SRC_DIR)/engine/ecu_sched.cpp \
+             $(SRC_DIR)/engine/ecu_sched_angle.cpp \
              $(SRC_DIR)/engine/diagnostic_manager.cpp \
              $(SRC_DIR)/engine/map_estimator.cpp \
              $(SRC_DIR)/engine/output_test.cpp \
