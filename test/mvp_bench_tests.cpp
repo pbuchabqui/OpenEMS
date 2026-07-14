@@ -2325,7 +2325,7 @@ static void test_ecu_sched_late_events(void) {
     section("ecu_sched: small delta events are queued with minimum delay");
 
     // Scheduler now uses TIM5 absolute-timestamp queue. Events with very small
-    // delta use a minimum delay (STM32_MIN_COMPARE_LEAD_TICKS * 25/4) instead
+    // delta use a minimum delay (STM32_MIN_COMPARE_LEAD_TICKS) instead
     // of being rejected. The old g_late_event_count path is no longer reached.
     // Verify: with advance=0 (delta≈0 at tooth 0), events still reach the queue.
     ecu_sched_test_reset();
@@ -2339,6 +2339,127 @@ static void test_ecu_sched_late_events(void) {
     CHECK_TRUE(ecu_sched_test_get_evt_count() > 0u ||
                ecu_sched_test_get_tim5_ccr3() > 0u,
                "events queued with minimum delay when delta~=0");
+}
+
+// Golden identity checks (plan verification): min-lead timestamp formula, angle
+// table shape, sorted queue order — no soft "count>0" only.
+static void test_ecu_sched_golden_min_lead_timestamp(void) {
+    section("ecu_sched golden: min-lead insert timestamp + late counter");
+    // STM32_MIN_COMPARE_LEAD_TICKS = 125 @ 62.5 MHz (2 µs).
+    // ECU_SCHED_US_TO_TICKS(1) = 62 < 125 → OFF event must land at now+125.
+    constexpr uint32_t kNow = 100000u;
+    constexpr uint32_t kMinLead = 125u;
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(kNow);
+    const uint32_t late0 = ecu_sched_test_get_late_event_count();
+    ecu_sched_test_pulse_inj(0u, 1u);  // 1 µs PW → short delta → min-lead
+    CHECK_TRUE(ecu_sched_test_get_evt_count() >= 1u, "OFF event queued");
+    uint32_t ts = 0u;
+    uint8_t ch = 0u, high = 0xffu;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u, "peek head event");
+    CHECK_EQ(ts, kNow + kMinLead, "min-lead timestamp = TIM5_CNT + 125");
+    CHECK_EQ(high, 0u, "OFF event is low");
+    CHECK_EQ(ch, ECU_CH_INJ1, "INJ1 channel id unchanged");
+    CHECK_TRUE(ecu_sched_test_get_late_event_count() > late0,
+               "late_event_count increments on min-lead path only (diag)");
+}
+
+static void test_ecu_sched_golden_far_target_timestamp(void) {
+    section("ecu_sched golden: far target uses exact delta (no min-lead)");
+    constexpr uint32_t kNow = 50000u;
+    constexpr uint32_t kPwUs = 1000u;  // 1 ms → 62500 ticks @ 62.5 MHz
+    constexpr uint32_t kExpectedDelta = (kPwUs * 125u) / 2u;  // ECU_SCHED_US_TO_TICKS
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(kNow);
+    const uint32_t late0 = ecu_sched_test_get_late_event_count();
+    ecu_sched_test_pulse_inj(1u, kPwUs);
+    uint32_t ts = 0u;
+    uint8_t ch = 0u, high = 0xffu;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u, "peek OFF event");
+    CHECK_EQ(ts, kNow + kExpectedDelta, "timestamp = now + exact PW ticks");
+    CHECK_EQ(ch, ECU_CH_INJ2, "INJ2 channel");
+    CHECK_EQ(high, 0u, "OFF");
+    CHECK_EQ(ecu_sched_test_get_late_event_count(), late0,
+             "no late count when delta >= min-lead");
+}
+
+static void test_ecu_sched_golden_queue_sorted(void) {
+    section("ecu_sched golden: queue stays sorted by timestamp");
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    // Two pulses with different PW → two OFF times; queue must be ascending.
+    ecu_sched_test_pulse_inj(0u, 2000u);  // later OFF
+    ecu_sched_test_set_tim5_cnt(1000u);   // same now for second arm
+    ecu_sched_test_pulse_inj(1u, 500u);   // earlier OFF
+    const uint8_t n = ecu_sched_test_get_evt_count();
+    CHECK_TRUE(n >= 2u, "at least two OFF events");
+    uint32_t prev = 0u;
+    for (uint8_t i = 0u; i < n; ++i) {
+        uint32_t ts = 0u;
+        CHECK_EQ(ecu_sched_test_get_evt(i, &ts, nullptr, nullptr), 1u, "peek evt");
+        if (i > 0u) {
+            CHECK_TRUE(ts >= prev, "queue non-decreasing timestamps");
+        }
+        prev = ts;
+    }
+}
+
+static void test_ecu_sched_golden_seq_angle_table_size(void) {
+    section("ecu_sched golden: sequential base angle table is 16 events");
+    // 4 cyl × (DWELL + SPARK + INJ_ON + INJ_OFF) = 16 without multi-spark.
+    ecu_sched_test_reset();
+    ecu_sched_set_mspark(0u, 0u, 18u);
+    ecu_sched_set_advance_deg(15u);
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    ckp_test_set_cmp_confirms(2u);
+    ckp_feed_n_then_gap(57u);  // rebuild sequential at gap
+    // May need schedule_this_gap toggle: first sequential gap builds table.
+    if (ecu_sched_test_angle_table_size() == 0u) {
+        ckp_feed_n_then_gap(57u);
+    }
+    CHECK_EQ(ecu_sched_test_angle_table_size(), 16u,
+             "sequential no-mspark table has 16 events");
+    // Every event has valid channel + action.
+    uint8_t n_dwell = 0u, n_spark = 0u, n_inj_on = 0u, n_inj_off = 0u;
+    for (uint8_t i = 0u; i < 16u; ++i) {
+        uint8_t tooth = 0, frac = 0, ch = 0, action = 0, phase = 0;
+        CHECK_EQ(ecu_sched_test_get_angle_event(i, &tooth, &frac, &ch, &action, &phase),
+                 1u, "event valid");
+        if (action == ECU_ACT_DWELL_START) { ++n_dwell; }
+        else if (action == ECU_ACT_SPARK) { ++n_spark; }
+        else if (action == ECU_ACT_INJ_ON) { ++n_inj_on; }
+        else if (action == ECU_ACT_INJ_OFF) { ++n_inj_off; }
+    }
+    CHECK_EQ(n_dwell, 4u, "4 dwell starts");
+    CHECK_EQ(n_spark, 4u, "4 sparks");
+    CHECK_EQ(n_inj_on, 4u, "4 inj on");
+    CHECK_EQ(n_inj_off, 4u, "4 inj off");
+}
+
+static void test_ecu_sched_golden_dispatch_identity(void) {
+    section("ecu_sched golden: dispatch fires head GPIO order (channel, high)");
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    ecu_sched_test_pulse_inj(0u, 1000u);  // OFF at 1000+62500
+    // Make event due and dispatch.
+    uint32_t ts = 0u;
+    uint8_t ch = 0u, high = 0xffu;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u, "have event");
+    const uint8_t n0 = ecu_sched_test_get_evt_count();
+    ecu_sched_test_set_tim5_cnt(ts);  // CNT == timestamp → due
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(ecu_sched_test_get_evt_count(), static_cast<uint32_t>(n0 - 1u),
+             "one event consumed by dispatch");
+    // Pin counters: INJ1 pin index 0 — OFF is low transition after force ON.
+    // At least one high and one low counted for pin 0 path (force ON + OFF).
+    uint32_t pins[24];
+    ecu_sched_get_pin_counts_u32x24(pins);
+    CHECK_TRUE(pins[0] >= 1u, "INJ1 high_count >= 1 after force ON");
+    CHECK_TRUE(pins[1] >= 1u, "INJ1 low_count >= 1 after OFF dispatch");
 }
 
 static void test_ecu_sched_dwell_watchdog_fires(void) {
@@ -5254,6 +5375,11 @@ int main(void) {
     test_ecu_sched_hardware_init();
     test_ecu_sched_ccr_write();
     test_ecu_sched_late_events();
+    test_ecu_sched_golden_min_lead_timestamp();
+    test_ecu_sched_golden_far_target_timestamp();
+    test_ecu_sched_golden_queue_sorted();
+    test_ecu_sched_golden_seq_angle_table_size();
+    test_ecu_sched_golden_dispatch_identity();
     test_ecu_sched_dwell_watchdog_fires();
     test_ecu_sched_presync_table();
 

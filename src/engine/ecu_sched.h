@@ -200,6 +200,11 @@ uint8_t  ecu_sched_test_get_mspark_count(void);
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept;
 uint32_t ecu_sched_test_get_tim5_ccr3(void)  noexcept;
 void     ecu_sched_test_set_tim5_cnt(uint32_t v) noexcept;
+// Queue peeks for golden timestamp / channel identity tests (index 0 = earliest).
+uint8_t  ecu_sched_test_get_evt(uint8_t index,
+                                uint32_t *ts,
+                                uint8_t *channel,
+                                uint8_t *high) noexcept;
 // Contadores de revoluções por modo — validam a transição presync↔sequencial.
 uint32_t ecu_sched_test_get_presync_revs(void);
 uint32_t ecu_sched_test_get_seq_revs(void);

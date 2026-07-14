@@ -1016,6 +1016,17 @@ uint32_t ecu_sched_test_get_tim1_ccr(uint8_t ch) noexcept {
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept { return g_evt_count; }
 uint32_t ecu_sched_test_get_tim5_ccr3(void)  noexcept { return ems_test_tim5_ccr3; }
 void     ecu_sched_test_set_tim5_cnt(uint32_t v) noexcept { ems_test_tim5_cnt = v; }
+uint8_t  ecu_sched_test_get_evt(uint8_t index,
+                                uint32_t *ts,
+                                uint8_t *channel,
+                                uint8_t *high) noexcept
+{
+    if (index >= g_evt_count) { return 0U; }
+    if (ts != nullptr) { *ts = g_evt_queue[index].timestamp; }
+    if (channel != nullptr) { *channel = g_evt_queue[index].channel; }
+    if (high != nullptr) { *high = g_evt_queue[index].high; }
+    return 1U;
+}
 uint32_t ecu_sched_test_get_presync_revs(void) { return g_diag_presync_revs; }
 uint32_t ecu_sched_test_get_seq_revs(void) { return g_diag_seq_revs; }
 #endif
