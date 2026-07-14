@@ -160,10 +160,15 @@ extern uint32_t rev_limit_soft_window_x10;   // janela do corte de injeção (me
 // LTFT aditivo (MS42 TI_AD_ADD_MMV)
 extern uint16_t ltft_add_pw_threshold_us;
 
-// LEARN → VE. Page0 offset 81 (offset 80 = pad reservado, sempre 0).
-// ltft_apply_burn_ve: após APPLY manual ('Y'), 0=VE só RAM; 1=pede burn page1 se RPM seguro.
-// Bake-in nunca é automático no closed-loop.
-extern uint8_t ltft_apply_burn_ve;
+// Closed-loop / LEARN — page0 offsets 80-85.
+// 80: closed_loop_enable (0=open-loop freeze STFT+LTFT, 1=on). Default 1.
+// 81: ltft_apply_burn_ve — após APPLY manual ('Y'), 0=VE só RAM; 1=burn page1 se RPM seguro.
+// 82-83: closed_loop_post_start_s — segundos após CLT+O2 OK antes de integrar (default 15).
+// 84-85: ltft_adapt_min_rpm_x10 — abaixo disto STFT corre, LTFT IIR+LEARN congelam (default 1200 RPM).
+extern uint8_t  closed_loop_enable;
+extern uint8_t  ltft_apply_burn_ve;
+extern uint16_t closed_loop_post_start_s;
+extern uint16_t ltft_adapt_min_rpm_x10;
 
 // Corte de combustível na desaceleração (MS42 TI_PUR)
 extern uint16_t decel_cut_tps_threshold_x10;

@@ -543,10 +543,10 @@ PAGE0_FIELDS = [
     ("antijerk_decay_cycles",         70, 1, "B", 1.0),
     ("rev_limit_rpm_x10",             72, 1, "L", 0.1),  # RPM
     ("rev_limit_soft_window_x10",     76, 1, "L", 0.1),  # RPM
-    # offset 80: reserved pad (always 0 — no auto-learn enable)
-    # offset 81: after manual APPLY, 0=VE só RAM; 1=pede burn page1 se RPM seguro
-    ("ltft_apply_burn_ve",       81, 1, "B", 1.0),
-    # offsets 82-85 ainda reservados
+    ("closed_loop_enable",            80, 1, "B", 1.0),  # 0=open-loop freeze 1=on
+    ("ltft_apply_burn_ve",            81, 1, "B", 1.0),  # after APPLY: 0=RAM 1=burn page1
+    ("closed_loop_post_start_s",      82, 1, "H", 1.0),  # seconds after warm CLT+O2
+    ("ltft_adapt_min_rpm_x10",        84, 1, "H", 0.1),  # RPM; LTFT/LEARN only below
     ("ltft_add_pw_threshold_us",      86, 1, "H", 0.001),# ms
     ("decel_cut_tps_threshold_x10",   88, 1, "H", 0.1),  # %
     ("decel_cut_entry_rpm_x10",       90, 1, "L", 0.1),  # RPM

@@ -142,15 +142,55 @@ bool closed_loop_allowed(int16_t clt_x10,
                          bool o2_valid,
                          bool ae_active,
                          bool rev_cut) noexcept {
+    if (ems::engine::closed_loop_enable == 0u) {
+        return false;
+    }
     return (clt_x10 > 700) && o2_valid && (!ae_active) && (!rev_cut);
 }
 
 // Regime estável entre amostras consecutivas em closed-loop.
 constexpr uint32_t kLtftAccumMaxRpmDeltaX10 = 2000u;  // 200 RPM
 constexpr uint16_t kLtftAccumMaxTpsDeltaX10 = 20u;    // 2.0 %  (APP ou ETB do caller)
+// MAP-dot: |ΔMAP| > 8 kPa entre amostras STFT (~100 ms) → freeze LTFT/LEARN.
+constexpr uint16_t kLtftAccumMaxMapDeltaBarX100 = 8u;
 
 inline int32_t abs_i32(int32_t v) noexcept {
     return (v < 0) ? -v : v;
+}
+
+// Post-start: âncora no 1º instante com CLT+O2 OK (now_ms≠0).
+static uint32_t g_cl_warm_since_ms = 0u;
+static bool     g_cl_warm_latched  = false;
+static uint16_t g_ltft_prev_map_bar_x100 = 0u;
+static bool     g_ltft_have_prev_map     = false;
+
+void fuel_closed_loop_timers_reset() noexcept {
+    g_cl_warm_since_ms = 0u;
+    g_cl_warm_latched  = false;
+    g_ltft_prev_map_bar_x100 = 0u;
+    g_ltft_have_prev_map     = false;
+}
+
+// true se já passou post_start_s desde warm CLT+O2. now_ms==0 → skip (tests).
+bool post_start_elapsed(uint32_t now_ms, int16_t clt_x10, bool o2_valid) noexcept {
+    if (now_ms == 0u) {
+        return true;
+    }
+    if (!(clt_x10 > 700 && o2_valid)) {
+        g_cl_warm_latched = false;
+        g_cl_warm_since_ms = 0u;
+        return false;
+    }
+    if (!g_cl_warm_latched) {
+        g_cl_warm_latched  = true;
+        g_cl_warm_since_ms = now_ms;
+    }
+    const uint32_t need_ms =
+        static_cast<uint32_t>(ems::engine::closed_loop_post_start_s) * 1000u;
+    if (need_ms == 0u) {
+        return true;
+    }
+    return (now_ms - g_cl_warm_since_ms) >= need_ms;
 }
 
 }  // namespace
@@ -240,6 +280,7 @@ void fuel_reset_adaptives() noexcept {
     fuel_decel_cut_reset();
     fuel_lambda_delay_reset();
     fuel_ltft_accum_reset();
+    fuel_closed_loop_timers_reset();
 
     for (uint8_t y = 0u; y < kTableAxisSize; ++y) {
         for (uint8_t x = 0u; x < kTableAxisSize; ++x) {
@@ -262,6 +303,7 @@ void fuel_reset_learn_session() noexcept {
     fuel_ae_reset();
     fuel_decel_cut_reset();
     fuel_lambda_delay_reset();
+    fuel_closed_loop_timers_reset();
     // LTFT já está a zero em RAM e shadow; não re-ler NVM.
     g_dbg_ltft_accum_accepted = 0u;
     g_dbg_ltft_accum_rejected = 0u;
@@ -533,7 +575,8 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                          bool ae_active,
                          bool rev_cut,
                          uint32_t net_pw_us,
-                         uint16_t tps_x10) noexcept {
+                         uint16_t tps_x10,
+                         uint32_t now_ms) noexcept {
     // prev só avança em closed-loop (mais abaixo). Em AE/rev_cut/CLT frio a
     // âncora do último regime estável mantém-se — evita ΔTPS falso e perda
     // da referência pós-bloqueio.
@@ -543,14 +586,17 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
 
     if (!closed_loop_allowed(clt_x10, o2_valid, ae_active, rev_cut)) {
         // DIAG: conta o motivo do bloqueio (prioridade na ordem do gate)
-        if (clt_x10 <= 700)      { ++g_dbg_stft_blocked_clt; }
+        if (closed_loop_enable == 0u) { /* master off — sem contador dedicado */ }
+        else if (clt_x10 <= 700)      { ++g_dbg_stft_blocked_clt; }
         else if (!o2_valid)      { ++g_dbg_stft_blocked_o2; }
         else if (ae_active)      { ++g_dbg_stft_blocked_ae; }
         else                     { ++g_dbg_stft_blocked_cut; }
-        // Anti-windup: congela o trim em vez de decair para zero. Decair causa
-        // um "degrau" de combustível perceptível quando o motor volta a
-        // closed-loop com a correção resetada — congelar mantém o último
-        // trim válido até haver nova leitura de lambda fiável.
+        // Anti-windup: congela o trim em vez de decair para zero.
+        return g_stft_pct_x10;
+    }
+
+    // Post-start: congela STFT+LTFT até decorrer closed_loop_post_start_s.
+    if (!post_start_elapsed(now_ms, clt_x10, o2_valid)) {
         return g_stft_pct_x10;
     }
 
@@ -578,57 +624,67 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     g_stft_pct_x10 = clamp_i16(static_cast<int16_t>(stft), -clamp, clamp);
 
     // Célula de crédito = nó dominante (nearest), igual ao trace do VE no dash.
-    // table_axis_index devolve o canto baixo da bilineal — em RPM/MAP exactos
-    // no eixo (ex. 2000 / 110) isso caía na célula anterior (1750 / 100).
     const uint8_t rpm_idx =
         table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
     const uint8_t map_idx =
         table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
 
+    // LTFT IIR + LEARN: min RPM + MAP estável. STFT global corre sempre em CL.
+    bool ltft_adapt_ok = (rpm_x10 >= static_cast<uint32_t>(ltft_adapt_min_rpm_x10));
+    if (ltft_adapt_ok && g_ltft_have_prev_map) {
+        if (abs_i32(static_cast<int32_t>(map_bar_x100) -
+                    static_cast<int32_t>(g_ltft_prev_map_bar_x100)) >
+            static_cast<int32_t>(kLtftAccumMaxMapDeltaBarX100)) {
+            ltft_adapt_ok = false;
+        }
+    }
+    g_ltft_prev_map_bar_x100 = map_bar_x100;
+    g_ltft_have_prev_map     = true;
+
     const bool multiplicative_path =
         !(net_pw_us > 0u && net_pw_us < static_cast<uint32_t>(ltft_add_pw_threshold_us));
 
-    if (!multiplicative_path) {
-        // PW pequeno: erros de offset do injetor dominam — integrar LTFT aditivo.
-        // Converte correção percentual em µs: error_us = stft_pct × net_pw / 100
-        const int32_t error_us = (static_cast<int32_t>(g_stft_pct_x10) *
-                                  static_cast<int32_t>(net_pw_us)) / 1000;  // x10 → /1000
-        const uint8_t ri = rpm_idx >> 1u;
-        const uint8_t mi = map_idx >> 1u;
-        int16_t& cell_add = g_ltft_add_us[mi][ri];
-        cell_add = clamp_i16(
-            static_cast<int16_t>(cell_add + (error_us - cell_add) / 64), -6350, 6350);
-        fuel_ltft_add_store_cell(map_idx, rpm_idx, cell_add);
-    } else {
-        // PW normal: integrar LTFT multiplicativo (comportamento original).
-        int16_t& cell = g_ltft_pct_x10[map_idx][rpm_idx];
-        cell = static_cast<int16_t>(cell + (g_stft_pct_x10 - cell) / 64);
-        cell = clamp_i16(cell, -clamp, clamp);
-        fuel_ltft_store_cell(map_idx, rpm_idx, cell);
-    }
+    if (ltft_adapt_ok) {
+        if (!multiplicative_path) {
+            // PW pequeno: LTFT aditivo (offset de bico).
+            const int32_t error_us = (static_cast<int32_t>(g_stft_pct_x10) *
+                                      static_cast<int32_t>(net_pw_us)) / 1000;
+            const uint8_t ri = rpm_idx >> 1u;
+            const uint8_t mi = map_idx >> 1u;
+            int16_t& cell_add = g_ltft_add_us[mi][ri];
+            cell_add = clamp_i16(
+                static_cast<int16_t>(cell_add + (error_us - cell_add) / 64), -6350, 6350);
+            fuel_ltft_add_store_cell(map_idx, rpm_idx, cell_add);
+        } else {
+            // PW normal: LTFT multiplicativo.
+            int16_t& cell = g_ltft_pct_x10[map_idx][rpm_idx];
+            cell = static_cast<int16_t>(cell + (g_stft_pct_x10 - cell) / 64);
+            cell = clamp_i16(cell, -clamp, clamp);
+            fuel_ltft_store_cell(map_idx, rpm_idx, cell);
+        }
 
-    // LEARN → VE só no caminho multiplicativo (PW pequeno = offset de bico,
-    // não VE). Caminho aditivo acumula LTFT add µs, nunca stats de bake VE.
-    if (multiplicative_path) {
-        const int16_t err_x1000 =
-            static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
-        fuel_ltft_accum_tick(
-            map_idx,
-            rpm_idx,
-            g_stft_pct_x10,
-            err_x1000,
-            ltft_accum_sample_valid(rpm_x10,
-                                    prev_rpm,
-                                    tps_x10,
-                                    prev_tps,
-                                    prev_valid,
-                                    lambda_target_x1000,
-                                    lambda_measured_x1000,
-                                    g_stft_pct_x10,
-                                    clt_x10,
-                                    o2_valid,
-                                    ae_active,
-                                    rev_cut));
+        // LEARN → VE só no caminho multiplicativo.
+        if (multiplicative_path) {
+            const int16_t err_x1000 =
+                static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
+            fuel_ltft_accum_tick(
+                map_idx,
+                rpm_idx,
+                g_stft_pct_x10,
+                err_x1000,
+                ltft_accum_sample_valid(rpm_x10,
+                                        prev_rpm,
+                                        tps_x10,
+                                        prev_tps,
+                                        prev_valid,
+                                        lambda_target_x1000,
+                                        lambda_measured_x1000,
+                                        g_stft_pct_x10,
+                                        clt_x10,
+                                        o2_valid,
+                                        ae_active,
+                                        rev_cut));
+        }
     }
 
     return g_stft_pct_x10;
@@ -659,7 +715,8 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                 ae_active,
                                 rev_cut,
                                 net_pw_us,
-                                tps_x10);
+                                tps_x10,
+                                now_ms);
     }
 
     return fuel_update_stft(delayed.rpm_x10,
@@ -671,7 +728,8 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                             ae_active,
                             rev_cut,
                             net_pw_us,
-                            tps_x10);
+                            tps_x10,
+                            now_ms);
 }
 
 int16_t fuel_get_stft_pct_x10() noexcept {

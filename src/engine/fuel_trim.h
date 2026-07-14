@@ -47,6 +47,7 @@ struct LtftCellStats {
     int32_t  sum_err_x1000;
 };
 
+// now_ms: 0 = sem gate de post-start (testes host). Produção passa relógio real.
 int16_t fuel_update_stft(uint32_t rpm_x10,
                          uint16_t map_bar_x100,
                          int16_t lambda_target_x1000,
@@ -56,7 +57,8 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                          bool ae_active,
                          bool rev_cut,
                          uint32_t net_pw_us,
-                         uint16_t tps_x10) noexcept;
+                         uint16_t tps_x10,
+                         uint32_t now_ms = 0u) noexcept;
 
 int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  uint32_t rpm_x10,

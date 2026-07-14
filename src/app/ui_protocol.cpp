@@ -443,11 +443,11 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         g_page0[71] = 0u;  // pad
         std::memcpy(g_page0 + 72, &ems::engine::rev_limit_rpm_x10,         4u);
         std::memcpy(g_page0 + 76, &ems::engine::rev_limit_soft_window_x10, 4u);
-        // Offset 80: pad reservado (sempre 0 — sem knobs mortos).
-        g_page0[80] = 0u;
-        // Offset 81: após APPLY manual, burn VE page1 se RPM seguro.
+        // Offsets 80-85: closed-loop enable / LEARN burn / post-start / LTFT min RPM
+        g_page0[80] = ems::engine::closed_loop_enable;
         g_page0[81] = ems::engine::ltft_apply_burn_ve;
-        // Offsets 82-85 ainda reservados.
+        std::memcpy(g_page0 + 82, &ems::engine::closed_loop_post_start_s, 2u);
+        std::memcpy(g_page0 + 84, &ems::engine::ltft_adapt_min_rpm_x10,   2u);
         std::memcpy(g_page0 + 86, &ems::engine::ltft_add_pw_threshold_us,  2u);
         std::memcpy(g_page0 + 88, &ems::engine::decel_cut_tps_threshold_x10, 2u);
         std::memcpy(g_page0 + 90, &ems::engine::decel_cut_entry_rpm_x10,   4u);
@@ -597,8 +597,11 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         ems::engine::antijerk_decay_cycles = g_page0[70];
         std::memcpy(&ems::engine::rev_limit_rpm_x10,          g_page0 + 72, 4u);
         std::memcpy(&ems::engine::rev_limit_soft_window_x10,  g_page0 + 76, 4u);
-        // Offset 80 pad ignorado; 81 = burn VE após APPLY manual
+        ems::engine::closed_loop_enable =
+            (g_page0[80] != 0u) ? 1u : 0u;
         ems::engine::ltft_apply_burn_ve = (g_page0[81] != 0u) ? 1u : 0u;
+        std::memcpy(&ems::engine::closed_loop_post_start_s, g_page0 + 82, 2u);
+        std::memcpy(&ems::engine::ltft_adapt_min_rpm_x10,   g_page0 + 84, 2u);
         std::memcpy(&ems::engine::ltft_add_pw_threshold_us,   g_page0 + 86, 2u);
         std::memcpy(&ems::engine::decel_cut_tps_threshold_x10, g_page0 + 88, 2u);
         std::memcpy(&ems::engine::decel_cut_entry_rpm_x10,    g_page0 + 90, 4u);
