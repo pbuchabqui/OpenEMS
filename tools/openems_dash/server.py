@@ -46,8 +46,36 @@ async def no_cache_api(request, call_next):
     return response
 
 
+def _realtime_plausible(d: dict) -> bool:
+    """Rejeita frames absurdos (USB glitch / parse residual) sem derrubar a sessão.
+
+    Uso real do dash publica telemetria só via poll 'A' (WS). Em stress HIL
+    com REST paralelo já se viu rpm=60k / sync_state=0 com contadores ECU
+    intactos — isso NÃO é perda de sync do motor.
+    """
+    try:
+        rpm = int(d.get("rpm", -1))
+        sync = int(d.get("sync_state", -1))
+        map_kpa = float(d.get("map_kpa", 0))
+    except (TypeError, ValueError):
+        return False
+    if rpm < 0 or rpm > 20000:
+        return False
+    if sync not in (0, 1, 2, 3):
+        return False
+    if map_kpa < 0 or map_kpa > 400:
+        return False
+    # LOSS/WAIT com RPM alto "vivo" é quase sempre frame lixo, não decoder.
+    if sync in (0, 3) and rpm > 200:
+        return False
+    return True
+
+
 class SerialWorker(threading.Thread):
     """Dona exclusiva da serial: poll 'A' + fila de requests."""
+
+    # Quantos erros seguidos de poll antes de declarar OFFLINE (glitch USB).
+    _POLL_FAIL_LIMIT = 3
 
     def __init__(self, port: str | None, rate_hz: float):
         super().__init__(daemon=True)
@@ -59,6 +87,7 @@ class SerialWorker(threading.Thread):
         self.connected = False
         self.error: str | None = None
         self.info: dict = {}
+        self._poll_fails = 0
         # datalog
         self._log_lock = threading.Lock()
         self._log_writer = None
@@ -78,8 +107,10 @@ class SerialWorker(threading.Thread):
             done.set()
 
         self.requests.put(job)
-        if not done.wait(timeout=5.0):
-            raise TimeoutError("serial worker não respondeu em 5s")
+        # Writes grandes (ex.: grelha λ 400 células) podem demorar >5s na fila
+        # atrás do poll; 15s evita TimeoutError falso com dash ainda online.
+        if not done.wait(timeout=15.0):
+            raise TimeoutError("serial worker não respondeu em 15s")
         if "error" in box:
             raise box["error"]
         return box.get("result")
@@ -95,10 +126,21 @@ class SerialWorker(threading.Thread):
             }
             self.connected = True
             self.error = None
+            self._poll_fails = 0
         except Exception as e:  # noqa: BLE001
             self.link = None
             self.connected = False
             self.error = str(e)
+
+    def _drop_link(self, err: str) -> None:
+        self.error = err
+        self.connected = False
+        try:
+            if self.link is not None:
+                self.link.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self.link = None
 
     def run(self):
         while True:
@@ -112,19 +154,24 @@ class SerialWorker(threading.Thread):
                 rt = self.link.read_realtime()
                 d = rt.to_dict()
                 d["t"] = time.time()
-                self.latest = d
-                self._log_row(d)
+                if _realtime_plausible(d):
+                    self.latest = d
+                    self._log_row(d)
+                # Frame implausível: mantém latest anterior, não marca OFFLINE.
+                self._poll_fails = 0
+                self.connected = True
+                self.error = None
                 # intercalar requests pendentes
                 while not self.requests.empty():
                     self.requests.get_nowait()(self.link)
-            except Exception as e:  # noqa: BLE001 — placa desconectou/timeout
+            except Exception as e:  # noqa: BLE001 — timeout / USB glitch
+                self._poll_fails += 1
                 self.error = str(e)
-                self.connected = False
-                try:
-                    self.link.close()
-                except Exception:  # noqa: BLE001
-                    pass
-                self.link = None
+                # Uso real: um timeout isolado (flush flash, page grande) não
+                # deve apagar RPM/sync no UI. Só desliga após falhas seguidas.
+                if self._poll_fails >= self._POLL_FAIL_LIMIT:
+                    self._drop_link(str(e))
+                time.sleep(0.05)
                 continue
             dt = time.monotonic() - t0
             if dt < self.period:
@@ -204,13 +251,11 @@ def api_read_page(page: int):
                 "rpm_axis": proto.BOOST_RPM_AXIS, "gear_labels": proto.BOOST_GEAR_LABELS}
     if page == 12:
         data = proto.decode_ltft_accum(buf)
-        # flags de auto-learn (page0[80-81]) se disponíveis
+        # burn_ve (page0[81]) após APPLY; byte 80 é reserved (não expor enable morto)
         try:
             p0 = worker.submit(lambda l: l.read_page(0))
-            data["auto_learn_enable"] = 1 if p0[80] else 0
             data["auto_learn_burn_ve"] = 1 if p0[81] else 0
         except Exception:  # noqa: BLE001
-            data["auto_learn_enable"] = None
             data["auto_learn_burn_ve"] = None
         return {"page": page, **data}
     if page in proto.FIELD_PAGES:
@@ -463,6 +508,16 @@ def api_adaptives_reset():
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"adaptives reset: {e}"}, status_code=502)
     return {"ok": True}
+
+
+@app.post("/api/ltft/apply-ready")
+def api_ltft_apply_ready():
+    """Bake-in manual: células LEARN ready → VE (RAM). Comando 'Y'."""
+    try:
+        n = worker.submit(lambda l: l.apply_ltft_ready())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"apply ready: {e}"}, status_code=502)
+    return {"ok": True, "committed": n}
 
 
 @app.get("/api/dirty")

@@ -1099,6 +1099,14 @@ inline void parse_byte(uint8_t b) noexcept {
             tx_push(kAckOk);
             return;
         }
+        if (b == static_cast<uint8_t>('Y')) {
+            // Apply manual: bake-in de todas as células LEARN ready na VE (RAM).
+            // Resposta: [ACK][n_commits u8] — n satura em 255.
+            const uint16_t n = ems::engine::fuel_ltft_accum_apply_all_ready();
+            tx_push(kAckOk);
+            tx_push(static_cast<uint8_t>((n > 255u) ? 255u : n));
+            return;
+        }
         if (b == static_cast<uint8_t>('T')) {
             g_state = ParseState::TEST_ARGS;
             g_arg_pos = 0u;

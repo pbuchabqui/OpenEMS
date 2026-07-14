@@ -813,7 +813,7 @@ const PAGE_0_SECTIONS = [
   {
     label: "CLOSED-LOOP (STFT/LTFT)",
     fields: ["stft_kp_x100","stft_ki_x1000","stft_clamp_pct_x10","ltft_add_pw_threshold_us",
-             "ltft_auto_learn_enable","ltft_auto_learn_burn_ve",
+             "ltft_auto_learn_burn_ve",
              "xtau_x_min_q8","xtau_x_max_q8","xtau_tau_min","xtau_tau_max"],
     actions: [{ label: "Reset LTFT", cls: "danger", endpoint: "/api/ltft/reset", confirm: "Zero ALL learned fuel trims (LTFT)?" }],
   },
@@ -883,8 +883,7 @@ const FIELD_LABELS = {
   stft_kp_x100:             "STFT Kp (×100)",
   stft_ki_x1000:            "STFT Ki (×1000)",
   stft_clamp_pct_x10:       "STFT clamp ±(%)",
-  ltft_auto_learn_enable:   "Auto-learn VE (0=off, 1=on)",
-  ltft_auto_learn_burn_ve:  "Auto-learn burn VE flash (0=RAM, 1=burn @ RPM safe)",
+  ltft_auto_learn_burn_ve:  "After APPLY: burn VE flash (0=RAM, 1=burn @ RPM safe)",
   xtau_x_min_q8:            "X-τ X min (Q8)",
   xtau_x_max_q8:            "X-τ X max (Q8)",
   xtau_tau_min:              "X-τ τ min (cycles)",
@@ -1063,69 +1062,33 @@ async function loadBoostMap() {
   await reload();
 }
 
-/* ── LTFT Accum / LEARN (page 12, read-only) ──────────────────────────── */
-// Visualização do acumulador Fase 1: hits + mean STFT por célula.
-// Ready = hits≥30 e |mean STFT| em 0.5–15% (contrato firmware).
-let ltftAccumAuto = null;   // interval id
-
+/* ── LEARN: mean STFT % (page 12) ─────────────────────────────────────── */
+// Só a grelha mean STFT e READ / APPLY / RESET. Apply = bake-in manual → VE.
 async function loadLtftAccum() {
   const root = $("#ltftAccumRoot");
   root.dataset.loaded = "1";
   root.innerHTML = `
     <div class="grid-toolbar">
-      <strong>LTFT ACCUMULATOR</strong>
-      <span class="muted">page 12 · read-only</span>
-      <span class="mode-toggle">
-        <button class="mode-btn active" data-view="hits">Hits</button>
-        <button class="mode-btn" data-view="stft">Mean STFT %</button>
-        <button class="mode-btn" data-view="ready">Ready</button>
-      </span>
-      <button data-act="reload">Reload</button>
-      <button class="danger" data-act="reset-adapt" title="Zera STFT + hits do acumulador (RAM)">Reset adaptives</button>
-      <label class="muted" style="display:inline-flex;align-items:center;gap:4px;margin-left:8px">
-        <input type="checkbox" id="ltftAccumLive" /> Live 1s
-      </label>
-      <span class="muted" id="ltftAccumMeta"></span>
-      <span class="muted">X = RPM · Y = MAP (kPa) · outline = ready</span>
+      <strong>LEARN</strong>
+      <span class="muted">mean STFT %</span>
+      <button data-act="read">READ</button>
+      <button data-act="apply">APPLY</button>
+      <button class="danger" data-act="reset">RESET</button>
     </div>
     <div class="grid-wrap" id="ltftAccumGrid"></div>`;
 
   let data = null;
-  let view = "hits";
-
-  function setView(v) {
-    view = v;
-    root.querySelectorAll(".mode-btn").forEach(b =>
-      b.classList.toggle("active", b.dataset.view === v));
-    render();
-  }
-
-  function cellDisplay(r, c) {
-    if (!data) return "—";
-    if (view === "hits") return String(data.hits[r][c]);
-    if (view === "stft") return (data.mean_stft_x10[r][c] / 10).toFixed(1);
-    return data.ready[r][c] ? "●" : "·";
-  }
-
-  function cellValue(r, c) {
-    if (!data) return 0;
-    if (view === "hits") return data.hits[r][c];
-    if (view === "stft") return data.mean_stft_x10[r][c];
-    return data.ready[r][c] ? 1 : 0;
-  }
 
   function render() {
     if (!data) {
-      // reload() já preenche o hint de erro; não sobrescrever se existir texto
       const g = $("#ltftAccumGrid");
-      if (!g.innerHTML || g.innerHTML.includes("sem dados"))
-        g.innerHTML = `<p class="muted">sem dados — a carregar ou ECU sem page 12 (flash firmware novo)</p>`;
+      if (!g.innerHTML) g.innerHTML = `<p class="muted">—</p>`;
       return;
     }
-    const n = data.hits.length;
+    const n = data.mean_stft_x10.length;
     const flat = [];
     for (let r = 0; r < n; r++)
-      for (let c = 0; c < n; c++) flat.push(cellValue(r, c));
+      for (let c = 0; c < n; c++) flat.push(data.mean_stft_x10[r][c]);
     const min = Math.min(...flat), max = Math.max(...flat);
     const rpm = (INFO && INFO.axes && INFO.axes.rpm) || [];
     const map = (INFO && INFO.axes && INFO.axes.map_kpa) || [];
@@ -1135,73 +1098,49 @@ async function loadLtftAccum() {
     for (let row = n - 1; row >= 0; row--) {
       html += `<tr><th>${map[row] ?? row}</th>`;
       for (let col = 0; col < n; col++) {
-        const v = cellValue(row, col);
+        const x10 = data.mean_stft_x10[row][col];
         const ready = data.ready[row][col];
-        const bg = heatColor(v, min, max);
+        const bg = heatColor(x10, min, max);
+        // Contorno só em ready (o que APPLY vai aplicar) — sem texto extra.
         const outline = ready ? "outline:2px solid #22c55e;outline-offset:-2px" : "";
+        const txt = (x10 / 10).toFixed(1);
         html += `<td style="background:${bg};color:${heatTextColor()};${outline}"
-          title="MAP ${map[row]} · RPM ${rpm[col]}
-hits=${data.hits[row][col]}
-mean STFT=${(data.mean_stft_x10[row][col]/10).toFixed(1)}%
-ready=${ready ? "yes" : "no"}">${cellDisplay(row, col)}</td>`;
+          title="${map[row]} kPa · ${rpm[col]} rpm">${txt}</td>`;
       }
       html += "</tr>";
     }
     html += "</table>";
     $("#ltftAccumGrid").innerHTML = html;
-
-    const en = data.auto_learn_enable;
-    const burn = data.auto_learn_burn_ve;
-    let readyCount = 0;
-    for (let r = 0; r < n; r++)
-      for (let c = 0; c < n; c++) if (data.ready[r][c]) readyCount++;
-    $("#ltftAccumMeta").textContent =
-      `ready ${readyCount}/${n * n} · auto-learn=${en === null ? "?" : en} · burn_ve=${burn === null ? "?" : burn} · thr hits≥${data.ready_hits}`;
   }
 
-  async function reload() {
+  async function read() {
     try {
       data = await api("/api/pages/12");
       render();
     } catch (e) {
-      const msg = String(e.message || e);
-      toast(msg, true);
+      toast(String(e.message || e), true);
       data = null;
-      // Page 12 = firmware deste worktree; 501/timeout ≠ offline (VE/page1 funciona)
-      const needFlash = /501|page 12|not supported|timeout|Timeout|esperado/i.test(msg);
-      const hint = needFlash
-        ? `ECU online, mas o firmware em flash ainda não tem a page 12 (LEARN).\n\n` +
-          `Solução:\n` +
-          `  1. make firmware   (neste worktree)\n` +
-          `  2. gravar .hex/.bin na STM32 (DFU / st-flash / OpenOCD)\n` +
-          `  3. Reload nesta aba\n\n` +
-          `(${msg})`
-        : `sem dados — ${msg}`;
-      $("#ltftAccumGrid").innerHTML = `<p class="muted" style="white-space:pre-wrap">${hint}</p>`;
+      $("#ltftAccumGrid").innerHTML = `<p class="muted">sem dados</p>`;
     }
   }
 
-  root.querySelectorAll(".mode-btn").forEach(b =>
-    b.onclick = () => setView(b.dataset.view));
-  root.querySelector("[data-act=reload]").onclick = reload;
-  root.querySelector("[data-act=reset-adapt]").onclick = async () => {
+  root.querySelector("[data-act=read]").onclick = read;
+  root.querySelector("[data-act=apply]").onclick = async () => {
     try {
-      await api("/api/adaptives/reset", { method: "POST" });
-      toast("adaptives reset (STFT + LEARN hits)");
-      await reload();
+      const r = await api("/api/ltft/apply-ready", { method: "POST" });
+      toast(`APPLY · ${r.committed ?? 0} células`);
+      await read();
     } catch (e) { toast(e.message, true); }
   };
-  $("#ltftAccumLive", root).onchange = (ev) => {
-    if (ltftAccumAuto) { clearInterval(ltftAccumAuto); ltftAccumAuto = null; }
-    if (ev.target.checked) {
-      ltftAccumAuto = setInterval(() => {
-        if ($("#tab-ltft-accum").classList.contains("active"))
-          reload().catch(() => {});
-      }, 1000);
-    }
+  root.querySelector("[data-act=reset]").onclick = async () => {
+    try {
+      await api("/api/adaptives/reset", { method: "POST" });
+      toast("RESET");
+      await read();
+    } catch (e) { toast(e.message, true); }
   };
 
-  await reload();
+  await read();
 }
 
 /* ── CAN RX Map editor ────────────────────────────────────────────────── */

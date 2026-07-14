@@ -115,9 +115,12 @@ uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
 //    (|err| ≤ max) + STFT não saturado. Erro ~0 é válido (trim estável).
 //  - Célula ready = hits suficientes + mean |err| baixa + |mean STFT| entre
 //    min (vale a pena commitar) e max (ainda não saturou o trim).
-//  - Commit (Fase 2): aplica fracção do mean STFT em ve_table[map][rpm] (RAM),
-//    desenrola LTFT% e STFT no mesmo montante (sem degrau de combustível),
-//    zera stats da célula. VE em flash só com Burn do dashboard.
+//  - Só caminho multiplicativo (PW ≥ threshold) alimenta o acumulador —
+//    PW baixo é offset de bico (LTFT add), não VE.
+//  - Commit (Fase 2, MANUAL): aplica fracção do mean STFT em ve_table[map][rpm]
+//    (RAM), desenrola LTFT% da célula. try_commit (1 célula) também desenrola
+//    STFT global; apply_all_ready ('Y') não — evita N×unroll no mesmo STFT.
+//    Nunca automático no closed-loop. VE em flash só com Burn do dashboard.
 //  - Sinal de estabilidade: APP (pedido do condutor); MAP+RPM definem a célula.
 //
 // Unidades: err λ ×1000 (1000 = 1.000); STFT % ×10 (10 = 1.0 %).
@@ -181,9 +184,13 @@ bool fuel_ltft_accum_cell_ready(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_ltft_accum_mean_stft_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_ltft_accum_mean_err_x1000(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 
-// Fase 2: se auto-learn enable + célula ready, bakia mean STFT na VE e
-// desenrola trims. Retorna true se commitou. Índices: [map_idx][rpm_idx].
+// Fase 2 (manual): se célula ready, bakia mean STFT na VE e desenrola trims.
+// Retorna true se commitou. Índices: [map_idx][rpm_idx].
+// Não é chamado pelo loop STFT — só host/UI (comando 'Y' ou API).
 bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept;
+
+// Aplica bake-in em todas as células ready. Retorna quantas commitou.
+uint16_t fuel_ltft_accum_apply_all_ready() noexcept;
 
 // Burn opcional da VE: true após commit com ltft_auto_learn_burn_ve=1.
 // ui_process limpa quando grava page1 com RPM seguro.

@@ -104,6 +104,18 @@ uint8_t table_axis_index(const uint32_t* axis, uint8_t size, uint32_t value) noe
     return axis_lookup(axis, size, value).idx;
 }
 
+uint8_t table_axis_nearest_index(const uint32_t* axis, uint8_t size, uint32_t value) noexcept {
+    const AxisLookupResult a = axis_lookup(axis, size, value);
+    // frac ≥ 0.5 → sobe para o nó alto do segmento (inclui nó exacto: frac=255).
+    if (a.frac_q8 >= 128u) {
+        const uint8_t hi = static_cast<uint8_t>(a.idx + 1u);
+        if (hi < size) {
+            return hi;
+        }
+    }
+    return a.idx;
+}
+
 uint8_t table_axis_frac_q8(const uint32_t* axis, uint8_t idx, uint32_t value) noexcept {
     const uint32_t x0 = axis[idx];
     const uint32_t x1 = axis[idx + 1u];

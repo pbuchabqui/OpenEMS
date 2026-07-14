@@ -831,11 +831,11 @@ static void fuel_ltft_accum_tick(uint8_t map_idx,
     cell.sum_err_x1000 += err_x1000;
 }
 
-bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept {
-    // Opt-in: com enable=0 só acumula stats (Fase 1), não mexe na VE.
-    if (ltft_auto_learn_enable == 0u) {
-        return false;
-    }
+// unroll_global_stft: true em commit de célula única (desenrola o trim global).
+// false em apply_all — N células não devem subtrair N×bake do mesmo STFT.
+static bool ltft_accum_commit_cell(uint8_t map_idx,
+                                   uint8_t rpm_idx,
+                                   bool unroll_global_stft) noexcept {
     if (!fuel_ltft_accum_cell_ready(map_idx, rpm_idx)) {
         return false;
     }
@@ -883,17 +883,19 @@ bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept {
     ltft = clamp_i16(ltft, static_cast<int16_t>(-ltft_clamp), ltft_clamp);
     fuel_ltft_store_cell(map_idx, rpm_idx, ltft);
 
-    // Desenrola STFT global (integrador em ×1000: stft ≈ I/100).
-    g_stft_pct_x10 = clamp_i16(
-        static_cast<int16_t>(g_stft_pct_x10 - bake_x10),
-        static_cast<int16_t>(-ltft_clamp),
-        ltft_clamp);
-    g_stft_integrator_x1000 -= static_cast<int32_t>(bake_x10) * 100;
-    const int32_t clamp_x1000 = static_cast<int32_t>(ltft_clamp) * 100;
-    if (g_stft_integrator_x1000 > clamp_x1000) {
-        g_stft_integrator_x1000 = clamp_x1000;
-    } else if (g_stft_integrator_x1000 < -clamp_x1000) {
-        g_stft_integrator_x1000 = -clamp_x1000;
+    if (unroll_global_stft) {
+        // Desenrola STFT global (integrador em ×1000: stft ≈ I/100).
+        g_stft_pct_x10 = clamp_i16(
+            static_cast<int16_t>(g_stft_pct_x10 - bake_x10),
+            static_cast<int16_t>(-ltft_clamp),
+            ltft_clamp);
+        g_stft_integrator_x1000 -= static_cast<int32_t>(bake_x10) * 100;
+        const int32_t clamp_x1000 = static_cast<int32_t>(ltft_clamp) * 100;
+        if (g_stft_integrator_x1000 > clamp_x1000) {
+            g_stft_integrator_x1000 = clamp_x1000;
+        } else if (g_stft_integrator_x1000 < -clamp_x1000) {
+            g_stft_integrator_x1000 = -clamp_x1000;
+        }
     }
 
     fuel_ltft_accum_reset_cell(map_idx, rpm_idx);
@@ -903,6 +905,25 @@ bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept {
         g_ltft_ve_burn_pending = true;
     }
     return true;
+}
+
+bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept {
+    // Manual-only: closed-loop não chama isto. Unroll STFT nesta célula.
+    return ltft_accum_commit_cell(map_idx, rpm_idx, /*unroll_global_stft=*/true);
+}
+
+uint16_t fuel_ltft_accum_apply_all_ready() noexcept {
+    // Bulk APPLY: VE + LTFT por célula; STFT global fica — re-converge no loop.
+    // (N commits × unroll STFT derrubava o trim global de forma incorrecta.)
+    uint16_t n = 0u;
+    for (uint8_t m = 0u; m < kTableAxisSize; ++m) {
+        for (uint8_t r = 0u; r < kTableAxisSize; ++r) {
+            if (ltft_accum_commit_cell(m, r, /*unroll_global_stft=*/false)) {
+                ++n;
+            }
+        }
+    }
+    return n;
 }
 
 int16_t fuel_update_stft(uint32_t rpm_x10,
@@ -958,8 +979,13 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     const int32_t stft = p_x10 + g_stft_integrator_x1000 / 100;
     g_stft_pct_x10 = clamp_i16(static_cast<int16_t>(stft), -clamp, clamp);
 
-    const uint8_t rpm_idx = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
-    const uint8_t map_idx = table_axis_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
+    // Célula de crédito = nó dominante (nearest), igual ao trace do VE no dash.
+    // table_axis_index devolve o canto baixo da bilineal — em RPM/MAP exactos
+    // no eixo (ex. 2000 / 110) isso caía na célula anterior (1750 / 100).
+    const uint8_t rpm_idx =
+        table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
+    const uint8_t map_idx =
+        table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
 
     const bool multiplicative_path =
         !(net_pw_us > 0u && net_pw_us < static_cast<uint32_t>(ltft_add_pw_threshold_us));
@@ -983,29 +1009,28 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
         fuel_ltft_store_cell(map_idx, rpm_idx, cell);
     }
 
-    const int16_t err_x1000 =
-        static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
-    fuel_ltft_accum_tick(
-        map_idx,
-        rpm_idx,
-        g_stft_pct_x10,
-        err_x1000,
-        ltft_accum_sample_valid(rpm_x10,
-                                prev_rpm,
-                                tps_x10,
-                                prev_tps,
-                                prev_valid,
-                                lambda_target_x1000,
-                                lambda_measured_x1000,
-                                g_stft_pct_x10,
-                                clt_x10,
-                                o2_valid,
-                                ae_active,
-                                rev_cut));
-
-    // Fase 2: só bake-in na VE no caminho multiplicativo (offset de bico ≠ VE).
+    // LEARN → VE só no caminho multiplicativo (PW pequeno = offset de bico,
+    // não VE). Caminho aditivo acumula LTFT add µs, nunca stats de bake VE.
     if (multiplicative_path) {
-        (void)fuel_ltft_accum_try_commit(map_idx, rpm_idx);
+        const int16_t err_x1000 =
+            static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
+        fuel_ltft_accum_tick(
+            map_idx,
+            rpm_idx,
+            g_stft_pct_x10,
+            err_x1000,
+            ltft_accum_sample_valid(rpm_x10,
+                                    prev_rpm,
+                                    tps_x10,
+                                    prev_tps,
+                                    prev_valid,
+                                    lambda_target_x1000,
+                                    lambda_measured_x1000,
+                                    g_stft_pct_x10,
+                                    clt_x10,
+                                    o2_valid,
+                                    ae_active,
+                                    rev_cut));
     }
 
     return g_stft_pct_x10;
@@ -1056,8 +1081,8 @@ int16_t fuel_get_stft_pct_x10() noexcept {
 }
 
 int16_t fuel_get_ltft_at(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
-    const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
-    const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
+    const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
+    const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, map_bar_x100);
     return g_ltft_pct_x10[mi][ri];
 }
 

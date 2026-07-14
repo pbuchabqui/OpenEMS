@@ -44,6 +44,12 @@ struct Table2dLookup {
 uint8_t table_axis_index(const uint32_t* axis, uint8_t size, uint32_t value) noexcept;
 uint8_t table_axis_frac_q8(const uint32_t* axis, uint8_t idx, uint32_t value) noexcept;
 
+// Nó de eixo mais próximo do valor (para crédito de célula única: LTFT/LEARN).
+// Diferente de table_axis_index, que devolve o canto baixo da interpolação
+// bilinear (em v exactamente igual a axis[k], k>0, devolve k-1 com frac=1).
+// O trace do dashboard destaca o dominante = nearest — LEARN deve coincidir.
+uint8_t table_axis_nearest_index(const uint32_t* axis, uint8_t size, uint32_t value) noexcept;
+
 Table2dLookup table3d_prepare_lookup(const uint32_t* x_axis,
                                      const uint32_t* y_axis,
                                      uint32_t x,

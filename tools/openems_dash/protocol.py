@@ -261,6 +261,14 @@ class OpenEMSLink:
         if ack != b"\x00":
             raise IOError(f"reset_adaptives: ACK {ack.hex()}")
 
+    # ── apply LEARN ready → VE ('Y': bake-in manual, RAM) ────────────────
+    def apply_ltft_ready(self) -> int:
+        """Aplica bake-in em todas as células ready. Retorna n_commits (0..255)."""
+        resp = self._txn(b"Y", 2)
+        if len(resp) < 2 or resp[0] != 0x00:
+            raise IOError(f"apply_ltft_ready: resp {resp.hex() if resp else 'empty'}")
+        return int(resp[1])
+
     # ── contadores de debug ('D': 26 × u32 LE) ──────────────────────────
     DEBUG_FIELDS = [
         "late_events", "sched_drops", "inj1_arm", "seq_calls", "evt_overflow",
@@ -538,8 +546,8 @@ PAGE0_FIELDS = [
     ("rev_limit_rpm_x10",             72, 1, "L", 0.1),  # RPM
     ("rev_limit_soft_window_x10",     76, 1, "L", 0.1),  # RPM
     # offsets 80-81: auto-learn VE (ex-reservados rev_limit spark retard)
-    ("ltft_auto_learn_enable",        80, 1, "B", 1.0),  # 0=off 1=bake VE
-    ("ltft_auto_learn_burn_ve",       81, 1, "B", 1.0),  # 0=RAM only 1=flash se RPM ok
+    ("ltft_auto_learn_enable",        80, 1, "B", 1.0),  # reserved wire; FW ignores
+    ("ltft_auto_learn_burn_ve",       81, 1, "B", 1.0),  # 0=RAM after APPLY 1=burn page1
     # offsets 82-85 ainda reservados
     ("ltft_add_pw_threshold_us",      86, 1, "H", 0.001),# ms
     ("decel_cut_tps_threshold_x10",   88, 1, "H", 0.1),  # %

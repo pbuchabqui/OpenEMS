@@ -1413,8 +1413,8 @@ static void test_fuel_ltft_accum(void) {
     ltft_auto_learn_enable  = 0u;
     ltft_auto_learn_burn_ve = 0u;
 
-    const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
-    const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+    const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);
 
     // ── sample_valid: contrato bake-in ───────────────────────────────────
     CHECK_FALSE(ltft_accum_sample_valid(
@@ -1498,8 +1498,7 @@ static void test_fuel_ltft_accum(void) {
                 "10 hits < ReadyHits → não ready");
 
     // Sobe o PI com err=20 (ainda ≤ MaxErr=30); depois limpa stats e grava
-    // hits com λ no alvo (err=0) e STFT congelado. No hit que atinge ready,
-    // a Fase 2 auto-commita na VE e zera a célula.
+    // hits com λ no alvo (err=0) e STFT congelado. Ready NÃO aplica VE sozinho.
     for (int n = 0; n < 120; ++n) {
         fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
     }
@@ -1509,27 +1508,26 @@ static void test_fuel_ltft_accum(void) {
     CHECK_TRUE(stft_now <= kLtftAccumMaxStftX10,
                "STFT aquecido ainda dentro do gate de amostra");
 
-    // Com enable=0: ready não commit (só stats)
+    // Acumula até ready: VE intacta sem apply manual
+    const uint8_t ve_before = ve_table[mi][ri];
     fuel_ltft_accum_reset();
+    g_dbg_ltft_accum_commits = 0u;
     fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
     for (uint16_t n = 0u; n < kLtftAccumReadyHits; ++n) {
         fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
     }
     CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) >= kLtftAccumReadyHits,
-               "enable=0: stats acumulam");
+               "stats acumulam sem mexer VE");
     CHECK_TRUE(fuel_ltft_accum_cell_ready(mi, ri),
-               "enable=0: célula ready mas sem commit");
-    CHECK_FALSE(fuel_ltft_accum_try_commit(mi, ri),
-                "enable=0: try_commit recusa");
-    CHECK_EQ(g_dbg_ltft_accum_commits, 0u, "enable=0: zero commits");
+               "célula ready mas sem commit automático");
+    CHECK_EQ(ve_table[mi][ri], ve_before, "closed-loop não altera VE");
+    CHECK_EQ(g_dbg_ltft_accum_commits, 0u, "zero commits sem apply manual");
 
-    // Liga auto-learn → commit
-    const uint8_t ve_before = ve_table[mi][ri];
+    // Apply manual (try_commit) → bake-in
     const int16_t stft_before_commit = fuel_get_stft_pct_x10();
     const int16_t ltft_before = fuel_get_ltft_pct_x10(mi, ri);
-    ltft_auto_learn_enable = 1u;
     CHECK_TRUE(fuel_ltft_accum_try_commit(mi, ri),
-               "enable=1 + ready → commit");
+               "ready → try_commit manual OK");
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u,
              "após commit stats da célula zerados");
     CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri),
@@ -1545,21 +1543,21 @@ static void test_fuel_ltft_accum(void) {
     CHECK_FALSE(fuel_ltft_ve_burn_pending(),
                 "burn_ve=0 → sem pedido de burn");
 
-    // burn_ve=1 marca pending
+    // burn_ve=1 + apply manual → pending
     fuel_ltft_accum_reset();
     ltft_auto_learn_burn_ve = 1u;
+    g_dbg_ltft_accum_commits = 0u;
+    fuel_ltft_ve_burn_clear();
     fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
     for (uint16_t n = 0u; n < kLtftAccumReadyHits; ++n) {
         fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
     }
-    CHECK_TRUE(fuel_ltft_ve_burn_pending() || g_dbg_ltft_accum_commits == 0u,
-               "burn_ve=1 → pending após commit (ou STFT sem ready)");
-    if (g_dbg_ltft_accum_commits > 0u) {
-        CHECK_TRUE(fuel_ltft_ve_burn_pending(), "burn pending true");
-        fuel_ltft_ve_burn_clear();
-        CHECK_FALSE(fuel_ltft_ve_burn_pending(), "clear limpa pending");
-    }
-    ltft_auto_learn_enable  = 0u;
+    CHECK_FALSE(fuel_ltft_ve_burn_pending(),
+                "ready sem apply → sem burn pending");
+    CHECK_TRUE(fuel_ltft_accum_try_commit(mi, ri), "apply manual com burn_ve=1");
+    CHECK_TRUE(fuel_ltft_ve_burn_pending(), "burn pending true após apply");
+    fuel_ltft_ve_burn_clear();
+    CHECK_FALSE(fuel_ltft_ve_burn_pending(), "clear limpa pending");
     ltft_auto_learn_burn_ve = 0u;
 
     fuel_ltft_accum_reset_cell(mi, ri);
@@ -1567,22 +1565,23 @@ static void test_fuel_ltft_accum(void) {
     CHECK_EQ(fuel_ltft_accum_mean_stft_x10(mi, ri), 0, "reset_cell zera mean_stft");
     CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri), "ready false com 0 hits");
 
+    // Restaura VE: nearest == canto alto bilineal em 3000/100 (math tables).
+    ve_table[mi][ri] = ve_before;
     fuel_reset_adaptives();
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "reset_adaptives zera acumulador");
 }
 
 static void test_fuel_ltft_accum_commit_ve(void) {
-    section("fuel_calc: LTFT accum Fase 2 commit → VE");
+    section("fuel_calc: LTFT accum Fase 2 commit manual → VE");
 
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
-    ltft_auto_learn_enable  = 1u;
     ltft_auto_learn_burn_ve = 0u;
 
-    const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
-    const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+    const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);
 
-    // Aquece STFT via PI (enable on — pode commitar entretanto)
+    // Aquece STFT via PI (sem bake automático)
     for (int n = 0; n < 150; ++n) {
         fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
     }
@@ -1609,29 +1608,52 @@ static void test_fuel_ltft_accum_commit_ve(void) {
     CHECK_EQ(ve_table[mi][ri], 100u, "VE intacta sem commit");
     CHECK_EQ(g_dbg_ltft_accum_commits, 0u, "sem commits antes do hit ready");
 
-    // Mais um hit → ready → auto-commit
+    // Mais um hit → ready, mas VE só muda com apply manual
     fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
-    CHECK_TRUE(g_dbg_ltft_accum_commits >= 1u, "auto-commit no hit ready");
+    CHECK_TRUE(fuel_ltft_accum_cell_ready(mi, ri), "célula ready");
+    CHECK_EQ(g_dbg_ltft_accum_commits, 0u, "sem auto-commit no hit ready");
+    CHECK_EQ(ve_table[mi][ri], 100u, "VE intacta até apply manual");
+
+    CHECK_TRUE(fuel_ltft_accum_try_commit(mi, ri), "apply manual → commit");
+    CHECK_EQ(g_dbg_ltft_accum_commits, 1u, "1 commit manual");
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "stats limpos pós-commit");
     CHECK_TRUE(ve_table[mi][ri] > 100u, "VE > 100 após bake-in STFT+");
     CHECK_TRUE(ve_table[mi][ri] <= kLtftAccumVeMax, "VE ≤ max");
 
-    // Caminho aditivo (PW < threshold 2500µs): stats podem acumular, VE não
-    fuel_ltft_accum_reset();
-    for (int n = 0; n < 80; ++n) {
-        fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
-    }
+    // apply_all_ready: bulk VE+LTFT; STFT global NÃO desenrola N vezes
     fuel_ltft_accum_reset();
     ve_table[mi][ri] = 100u;
     g_dbg_ltft_accum_commits = 0u;
+    fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    for (uint16_t n = 0u; n < kLtftAccumReadyHits; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_TRUE(fuel_ltft_accum_cell_ready(mi, ri), "ready p/ apply_all");
+    const int16_t stft_before_all = fuel_get_stft_pct_x10();
+    const uint16_t n_app = fuel_ltft_accum_apply_all_ready();
+    CHECK_TRUE(n_app >= 1u, "apply_all_ready commitou ≥1");
+    CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri), "stats limpos pós apply_all");
+    CHECK_TRUE(ve_table[mi][ri] > 100u, "VE alterada por apply_all");
+    CHECK_EQ(fuel_get_stft_pct_x10(), stft_before_all,
+             "apply_all não desenrola STFT global (só VE+LTFT célula)");
+
+    // Caminho aditivo (PW < threshold): NÃO alimenta acumulador LEARN→VE
+    fuel_ltft_accum_reset();
+    ve_table[mi][ri] = 100u;
+    g_dbg_ltft_accum_commits = 0u;
+    fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 100u, 500u);
     for (uint16_t n = 0u; n < static_cast<uint16_t>(kLtftAccumReadyHits + 2u); ++n) {
         fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 100u, 500u);
     }
-    CHECK_EQ(g_dbg_ltft_accum_commits, 0u,
-             "caminho aditivo: sem commit VE");
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u,
+             "caminho aditivo: zero hits LEARN (só LTFT add)");
+    CHECK_FALSE(fuel_ltft_accum_try_commit(mi, ri),
+                "caminho aditivo: nada ready para bake VE");
     CHECK_EQ(ve_table[mi][ri], 100u, "VE intacta no caminho aditivo");
+    CHECK_EQ(g_dbg_ltft_accum_commits, 0u, "sem commits no caminho aditivo");
 
-    ltft_auto_learn_enable  = 0u;
+    // Restaura VE default (nearest 3000/100 = [11][10] = 88) p/ testes math.
+    ve_table[mi][ri] = 88u;
     ltft_auto_learn_burn_ve = 0u;
     fuel_reset_adaptives();
 }
@@ -2307,6 +2329,32 @@ static void test_table3d_all(void) {
     // Above last → idx=kTableAxisSize-2=18
     CHECK_EQ(table_axis_index(kRpmAxisX10, kTableAxisSize, 999999u), 18u,
              "above last → idx=kTableAxisSize-2=18");
+
+    // ─ table_axis_nearest_index (célula dominante = trace VE do dash) ─
+    // Em valor exacto no eixo k>0, table_axis_index devolve k-1 (frac=255).
+    // nearest deve devolver k — senão LEARN hit cai na célula anterior.
+    section("table3d: table_axis_nearest_index");
+    // kRpmAxisX10[6]=20000 (2000 rpm), [5]=17500
+    CHECK_EQ(table_axis_index(kRpmAxisX10, kTableAxisSize, 20000u), 5u,
+             "floor em 2000 rpm exacto → idx 5 (1750)");
+    CHECK_EQ(table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 20000u), 6u,
+             "nearest em 2000 rpm exacto → idx 6 (2000)");
+    // kLoadAxisBarX100[12]=110, [11]=100
+    CHECK_EQ(table_axis_index(kLoadAxisBarX100, kTableAxisSize, 110u), 11u,
+             "floor em MAP 110 exacto → idx 11 (100)");
+    CHECK_EQ(table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 110u), 12u,
+             "nearest em MAP 110 exacto → idx 12 (110)");
+    // Midpoint RPM 2125 (2000–2250): frac=0.5 → sobe
+    CHECK_EQ(table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 21250u), 7u,
+             "nearest midpoint 2125 rpm → 2250 (idx 7)");
+    // Abaixo do 1º / no 1º
+    CHECK_EQ(table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 100u), 0u,
+             "nearest below axis[0] → 0");
+    CHECK_EQ(table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 5000u), 0u,
+             "nearest at axis[0] → 0");
+    // No último nó
+    CHECK_EQ(table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 80000u), 19u,
+             "nearest at last rpm → idx 19");
 
     // ─ table_axis_frac_q8 ────────────────────────────────────────────
     section("table3d: table_axis_frac_q8");
@@ -3796,12 +3844,9 @@ static void test_math_production_tables(void) {
     using namespace ems::engine;
     section("MATH: get_ve / get_lambda / get_advance com tabelas reais");
     // Ponto (3000 RPM = rpm_x10=30000, MAP=100 kPa = map_bar_x100=100).
-    // kRpmAxisX10[7]=30000   → idx=6, frac=255
-    // kLoadAxisBarX100[7]=100 → idx=6, frac=255
-    // Frac=255 aplica o caso especial: lerp retorna b exacto.
-    //
-    // ve_table[6][6]=84,[6][7]=85,[7][6]=87,[7][7]=88
-    //   v0=lerp(84,85,255)=85; v1=lerp(87,88,255)=88; v=lerp(85,88,255)=88
+    // Eixos 20×20: kRpmAxisX10[10]=30000 → floor idx=9, frac=255
+    //              kLoadAxisBarX100[11]=100 → floor idx=10, frac=255
+    // Frac=255 → lerp devolve o canto alto exacto: ve_table[11][10]=88.
     CHECK_EQ(get_ve(30000u, 100u), 88u,
              "get_ve(3000RPM,100kPa) = 88 (tabela real, frac=255 ambos eixos)");
 
@@ -4342,8 +4387,8 @@ static void test_adaptives_reset_cmd_z(void) {
     for (int i = 0; i < 5; ++i) {
         fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false, 5000u, 500u);
     }
-    const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
-    const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+    const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);
     CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) > 0u, "hits antes do Z");
     CHECK_TRUE(fuel_get_stft_pct_x10() != 0 || g_stft_integrator_x1000 != 0,
                "STFT/integrador activo antes do Z");
@@ -4365,6 +4410,94 @@ static void test_adaptives_reset_cmd_z(void) {
     CHECK_EQ(g_dbg_ltft_accum_accepted, 0u, "Z zera contadores accum");
 }
 
+static void test_ltft_apply_cmd_y(void) {
+    section("protocolo: 'Y' apply LEARN ready → VE (manual)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    fuel_reset_adaptives();
+    fuel_ltft_accum_reset();
+    ltft_auto_learn_burn_ve = 0u;
+
+    const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+
+    // Aquece STFT e acumula até ready
+    for (int n = 0; n < 150; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1020, 900, true, false, false, 5000u, 500u);
+    }
+    fuel_ltft_accum_reset();
+    ve_table[mi][ri] = 100u;
+    g_dbg_ltft_accum_commits = 0u;
+    fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    for (uint16_t n = 0u; n < kLtftAccumReadyHits; ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_TRUE(fuel_ltft_accum_cell_ready(mi, ri), "célula ready antes do Y");
+    CHECK_EQ(ve_table[mi][ri], 100u, "VE intacta antes do Y");
+
+    // Comando legacy 'Y' → ACK + n_commits
+    while (true) {
+        uint8_t dump = 0;
+        if (!ems::app::ui_tx_pop(dump)) break;
+    }
+    ems::app::ui_rx_byte(static_cast<uint8_t>('Y'));
+    ems::app::ui_process();
+    uint8_t b0 = 0xFFu, b1 = 0xFFu;
+    bool g0 = ems::app::ui_tx_pop(b0);
+    bool g1 = ems::app::ui_tx_pop(b1);
+    CHECK_TRUE(g0 && g1, "Y produz 2 bytes TX");
+    CHECK_EQ(b0, 0x00u, "Y → ACK OK");
+    CHECK_TRUE(b1 >= 1u, "Y → n_commits ≥ 1");
+    CHECK_TRUE(g_dbg_ltft_accum_commits >= 1u, "commit registado");
+    CHECK_TRUE(ve_table[mi][ri] > 100u, "Y alterou VE");
+    CHECK_FALSE(fuel_ltft_accum_cell_ready(mi, ri), "stats limpos pós-Y");
+
+    ve_table[mi][ri] = 88u;
+    fuel_reset_adaptives();
+    fuel_ltft_accum_reset();
+}
+
+// Regressão: hit LEARN na célula dominante do trace VE (não no canto floor).
+// Em 2000 rpm / 110 kPa exactos, floor = (1750,100) e nearest = (2000,110).
+static void test_ltft_hit_matches_ve_dominant_cell(void) {
+    section("LEARN hit = célula dominante do VE (nearest, não floor)");
+    fuel_reset_adaptives();
+    fuel_ltft_accum_reset();
+    ltft_auto_learn_enable = 0u;
+
+    const uint32_t rpm_x10 = 20000u;   // 2000 rpm — nó exacto do eixo
+    const uint16_t map_x100 = 110u;    // 110 kPa — nó exacto
+
+    const uint8_t ri_near = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
+    const uint8_t mi_near = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, map_x100);
+    const uint8_t ri_floor = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
+    const uint8_t mi_floor = table_axis_index(kLoadAxisBarX100, kTableAxisSize, map_x100);
+
+    CHECK_EQ(ri_near, 6u, "nearest rpm 2000 → idx 6");
+    CHECK_EQ(mi_near, 12u, "nearest map 110 → idx 12");
+    CHECK_EQ(ri_floor, 5u, "floor rpm 2000 → idx 5 (pré-fix bug)");
+    CHECK_EQ(mi_floor, 11u, "floor map 110 → idx 11 (pré-fix bug)");
+    CHECK_TRUE(ri_near != ri_floor && mi_near != mi_floor,
+               "caso de teste: floor ≠ nearest nos dois eixos");
+
+    // 1 prev + N hits em regime estável
+    fuel_update_stft(rpm_x10, map_x100, 1000, 1010, 900, true, false, false, 5000u, 500u);
+    for (int i = 0; i < 8; ++i) {
+        fuel_update_stft(rpm_x10, map_x100, 1000, 1010, 900, true, false, false, 5000u, 500u);
+    }
+
+    CHECK_EQ(fuel_ltft_accum_hits(mi_near, ri_near), 8u,
+             "hits na célula dominante (2000×110) — igual ao trace VE");
+    CHECK_EQ(fuel_ltft_accum_hits(mi_floor, ri_floor), 0u,
+             "zero hits na célula floor (1750×100) — era o bug");
+    // Também não deve espalhar para os outros cantos do rectângulo bilineal
+    CHECK_EQ(fuel_ltft_accum_hits(mi_near, ri_floor), 0u, "sem hit no canto misto A");
+    CHECK_EQ(fuel_ltft_accum_hits(mi_floor, ri_near), 0u, "sem hit no canto misto B");
+
+    fuel_ltft_accum_reset();
+    fuel_reset_adaptives();
+}
+
 static void test_ltft_accum_page12(void) {
     section("página 12: LTFT accum export (hits u8 + mean_stft i8)");
     ckp_test_reset(); g_ckp_cap = 0u;
@@ -4373,8 +4506,8 @@ static void test_ltft_accum_page12(void) {
     fuel_ltft_accum_reset();
     ltft_auto_learn_enable = 0u;
 
-    const uint8_t ri = table_axis_index(kRpmAxisX10, kTableAxisSize, 30000u);
-    const uint8_t mi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+    const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);
 
     // 1 prev + 5 hits com err residual
     fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false, 5000u, 500u);
@@ -4914,6 +5047,8 @@ int main(void) {
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();
     test_adaptives_reset_cmd_z();
+    test_ltft_apply_cmd_y();
+    test_ltft_hit_matches_ve_dominant_cell();
     test_ltft_accum_page12();
     test_ltft_page_offsets_20();
 
