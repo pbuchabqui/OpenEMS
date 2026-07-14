@@ -1410,7 +1410,6 @@ static void test_fuel_ltft_accum(void) {
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
     // Auto-learn default off — liga só nos trechos de commit VE
-    ltft_auto_learn_enable  = 0u;
     ltft_auto_learn_burn_ve = 0u;
 
     const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
@@ -1522,6 +1521,14 @@ static void test_fuel_ltft_accum(void) {
                "célula ready mas sem commit automático");
     CHECK_EQ(ve_table[mi][ri], ve_before, "closed-loop não altera VE");
     CHECK_EQ(g_dbg_ltft_accum_commits, 0u, "zero commits sem apply manual");
+    {
+        uint8_t exp[kLtftAccumPageSize] = {};
+        fuel_ltft_accum_export(exp, kLtftAccumPageSize);
+        const uint16_t eidx =
+            static_cast<uint16_t>(mi) * kTableAxisSize + ri;
+        CHECK_TRUE((exp[eidx] & 0x80u) != 0u,
+                   "export bit7 ready=1 quando cell_ready");
+    }
 
     // Apply manual (try_commit) → bake-in
     const int16_t stft_before_commit = fuel_get_stft_pct_x10();
@@ -4375,12 +4382,11 @@ static void test_ts_whole_page_800(void) {
 }
 
 static void test_adaptives_reset_cmd_z(void) {
-    section("protocolo: 'Z' reset adaptives (STFT + accum RAM)");
+    section("protocolo: 'Z' learn session reset (STFT+accum+LTFT shadow)");
     ckp_test_reset(); g_ckp_cap = 0u;
     ems::app::ui_test_reset();
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
-    ltft_auto_learn_enable = 0u;
 
     // Gera hits e STFT não-zero
     fuel_update_stft(30000u, 100u, 1000, 1010, 900, true, false, false, 5000u, 500u);
@@ -4463,7 +4469,6 @@ static void test_ltft_hit_matches_ve_dominant_cell(void) {
     section("LEARN hit = célula dominante do VE (nearest, não floor)");
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
-    ltft_auto_learn_enable = 0u;
 
     const uint32_t rpm_x10 = 20000u;   // 2000 rpm — nó exacto do eixo
     const uint16_t map_x100 = 110u;    // 110 kPa — nó exacto
@@ -4504,7 +4509,6 @@ static void test_ltft_accum_page12(void) {
     ems::app::ui_test_reset();
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
-    ltft_auto_learn_enable = 0u;
 
     const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
     const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);
@@ -4519,7 +4523,8 @@ static void test_ltft_accum_page12(void) {
     uint8_t buf[kLtftAccumPageSize] = {};
     fuel_ltft_accum_export(buf, kLtftAccumPageSize);
     const uint16_t idx = static_cast<uint16_t>(mi) * kTableAxisSize + ri;
-    CHECK_EQ(buf[idx], 5u, "export hits[map][rpm] = 5");
+    CHECK_EQ(buf[idx] & 0x7Fu, 5u, "export hits[map][rpm] = 5");
+    CHECK_EQ(buf[idx] & 0x80u, 0u, "export ready bit clear com 5 hits");
     // mean STFT i8 no 2º half
     const int8_t mean_wire = static_cast<int8_t>(buf[kTableCells + idx]);
     CHECK_EQ(static_cast<int>(mean_wire),
@@ -4531,7 +4536,7 @@ static void test_ltft_accum_page12(void) {
     EnvResp r = env_txn(rd, 6u);
     CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u, "'r' page12 800B → OK");
     CHECK_EQ(r.len, 800u, "page12 len 800");
-    CHECK_EQ(r.data[idx], 5u, "page12 wire hits = 5");
+    CHECK_EQ(r.data[idx], 5u, "page12 wire hits = 5 (ready bit clear)");
 
     fuel_ltft_accum_reset();
     fuel_reset_adaptives();

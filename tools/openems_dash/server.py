@@ -490,6 +490,9 @@ def api_wbo2_can_id_set(body: dict):
 
 @app.post("/api/ltft/reset")
 def api_ltft_reset():
+    """Zera page 10 (LTFT mult+add) em RAM e faz burn dessa página.
+    Não limpa STFT nem o acumulador LEARN — use /api/adaptives/reset ('Z').
+    """
     size = proto.PAGE_SIZES[10]
     zeros = b"\x00" * size
     def do_reset(l):
@@ -502,7 +505,11 @@ def api_ltft_reset():
 
 @app.post("/api/adaptives/reset")
 def api_adaptives_reset():
-    """Reset STFT + acumulador LEARN em RAM (comando 'Z'). Sem burn flash."""
+    """LEARN session reset (comando 'Z'): zera STFT, acumulador LEARN e
+    shadows LTFT (marca dirty → flush do sector adaptativo, não burn page0/VE).
+
+    Diferente de /api/ltft/reset, que só zera a page 10 e faz burn dessa página.
+    """
     try:
         worker.submit(lambda l: l.reset_adaptives())
     except Exception as e:  # noqa: BLE001

@@ -271,16 +271,17 @@ void fuel_ltft_accum_export(uint8_t* dst, uint16_t cap) noexcept {
     if (dst == nullptr || cap < kLtftAccumPageSize) {
         return;
     }
-    // Zera cauda se cap > size (não esperado).
-    for (uint16_t i = 0u; i < kLtftAccumPageSize; ++i) {
-        dst[i] = 0u;
-    }
     for (uint8_t m = 0u; m < kTableAxisSize; ++m) {
         for (uint8_t r = 0u; r < kTableAxisSize; ++r) {
             const uint16_t idx =
                 static_cast<uint16_t>(m) * kTableAxisSize + r;
+            // hits nos 7 bits baixos (sat. 127); bit7 = ready (fonte única).
             const uint16_t hits = g_ltft_stats[m][r].hits;
-            dst[idx] = (hits > 255u) ? 255u : static_cast<uint8_t>(hits);
+            uint8_t wire = static_cast<uint8_t>((hits > 127u) ? 127u : hits);
+            if (fuel_ltft_accum_cell_ready(m, r)) {
+                wire = static_cast<uint8_t>(wire | 0x80u);
+            }
+            dst[idx] = wire;
 
             int16_t mean = fuel_ltft_accum_mean_stft_x10(m, r);
             if (mean > 127) {
@@ -671,6 +672,23 @@ void fuel_reset_adaptives() noexcept {
                 static_cast<uint8_t>(y << 1u), static_cast<uint8_t>(x << 1u));
         }
     }
+}
+
+void fuel_reset_learn_session() noexcept {
+    // Uma entrada para 'Z': zera shadows LTFT (dirty NVM adaptativo), STFT,
+    // acumulador LEARN, AE/delay e contadores. Não burn de page0/VE.
+    fuel_reset_ltft();
+    g_ae_decay_cycles = 0u;
+    g_ae_pulse_us = 0;
+    g_decel_cut = false;
+    fuel_lambda_delay_reset();
+    // LTFT já está a zero em RAM e shadow; não re-ler NVM.
+    g_dbg_ltft_accum_accepted = 0u;
+    g_dbg_ltft_accum_rejected = 0u;
+    g_dbg_ltft_accum_commits  = 0u;
+    g_dbg_stft_runs = 0u;
+    g_dbg_stft_last_err = 0;
+    fuel_ltft_ve_burn_clear();
 }
 
 void fuel_lambda_delay_reset() noexcept {

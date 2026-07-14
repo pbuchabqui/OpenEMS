@@ -197,9 +197,11 @@ uint16_t fuel_ltft_accum_apply_all_ready() noexcept;
 bool fuel_ltft_ve_burn_pending() noexcept;
 void fuel_ltft_ve_burn_clear() noexcept;
 
-// Page 12 (0x0C) — visualização do acumulador (read-only), 800 bytes:
-//   [0 .. N²-1]       hits u8 (sat. 255), row-major [map][rpm]
+// Page 12 (0x0C) — visualização do acumulador (read-only), 2·N² bytes:
+//   [0 .. N²-1]       hits_wire u8, row-major [map][rpm]:
+//                     bits0-6 = min(hits,127); bit7 = ready (FW gate único)
 //   [N² .. 2·N²-1]    mean_stft_x10 i8 (clamp ±127)
+// Host deve usar bit7 p/ ready — não reimplementar thresholds.
 // Índice linear: map_idx * kTableAxisSize + rpm_idx (igual VE).
 constexpr uint16_t kLtftAccumPageSize =
     static_cast<uint16_t>(2u * kTableCells);
@@ -207,6 +209,10 @@ void fuel_ltft_accum_export(uint8_t* dst, uint16_t cap) noexcept;
 
 int16_t fuel_get_stft_pct_x10() noexcept;
 void fuel_reset_ltft() noexcept;
+
+// Sessão LEARN/HIL (comando 'Z'): zera STFT, acumulador, shadows LTFT (NVM
+// dirty p/ flush adaptativo) e contadores dbg. Não burn de page0/VE.
+void fuel_reset_learn_session() noexcept;
 
 // DIAG da malha fechada (comando 'D')
 extern volatile uint32_t g_dbg_stft_blocked_clt;

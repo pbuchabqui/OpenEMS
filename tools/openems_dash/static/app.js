@@ -883,7 +883,7 @@ const FIELD_LABELS = {
   stft_kp_x100:             "STFT Kp (×100)",
   stft_ki_x1000:            "STFT Ki (×1000)",
   stft_clamp_pct_x10:       "STFT clamp ±(%)",
-  ltft_auto_learn_burn_ve:  "After APPLY: burn VE flash (0=RAM, 1=burn @ RPM safe)",
+  ltft_auto_learn_burn_ve:  "After APPLY: burn VE (0=RAM only, 1=burn page1 @ RPM safe)",
   xtau_x_min_q8:            "X-τ X min (Q8)",
   xtau_x_max_q8:            "X-τ X max (Q8)",
   xtau_tau_min:              "X-τ τ min (cycles)",

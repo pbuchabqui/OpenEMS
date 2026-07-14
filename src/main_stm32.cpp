@@ -639,8 +639,7 @@ static void openems_init() noexcept {
 	// Calibração de sensores persistida (página 0, bytes 16-55) → drivers
 	ems::engine::apply_etb_calibration_from_page(g_calib_page0 + 16, 40u);
 	ems::engine::push_sensor_calibration_to_drivers();
-	// Auto-learn VE (page0[80-81]) — defaults de compilação se blob antigo/zero
-	ems::engine::ltft_auto_learn_enable  = (g_calib_page0[80] != 0u) ? 1u : 0u;
+	// LEARN burn-after-APPLY (page0[81]); byte 80 é pad reservado
 	ems::engine::ltft_auto_learn_burn_ve = (g_calib_page0[81] != 0u) ? 1u : 0u;
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga

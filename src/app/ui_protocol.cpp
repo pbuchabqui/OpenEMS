@@ -64,8 +64,9 @@ enum class ParseState : uint8_t {
 // página inteira numa só transação em vez de fatiar por blockingFactor —
 // confirmado empiricamente: 'r' page0/page4 com count=página devolvia 0x84
 // (range) e travava a conexão em "Unsupported Controller Firmware".
+// Maior página whole-read no envelope: page4 lambda 20×20 = 800 B.
+constexpr uint16_t kEnvMaxChunk   = 800u;
 constexpr uint16_t kEnvMaxPayload = 807u;
-constexpr uint16_t kEnvMaxChunk   = 800u;  // = maior página declarada no .ini
 
 // Códigos de resposta (convenção TS/Speeduino: 0x00 OK, não-zero erro)
 constexpr uint8_t kTsRcOk       = 0x00u;
@@ -442,8 +443,9 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         g_page0[71] = 0u;  // pad
         std::memcpy(g_page0 + 72, &ems::engine::rev_limit_rpm_x10,         4u);
         std::memcpy(g_page0 + 76, &ems::engine::rev_limit_soft_window_x10, 4u);
-        // Offsets 80-81: auto-learn VE (ex-reservados rev_limit spark retard).
-        g_page0[80] = ems::engine::ltft_auto_learn_enable;
+        // Offset 80: pad reservado (sempre 0 — sem knobs mortos).
+        g_page0[80] = 0u;
+        // Offset 81: após APPLY manual, burn VE page1 se RPM seguro.
         g_page0[81] = ems::engine::ltft_auto_learn_burn_ve;
         // Offsets 82-85 ainda reservados.
         std::memcpy(g_page0 + 86, &ems::engine::ltft_add_pw_threshold_us,  2u);
@@ -595,8 +597,7 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         ems::engine::antijerk_decay_cycles = g_page0[70];
         std::memcpy(&ems::engine::rev_limit_rpm_x10,          g_page0 + 72, 4u);
         std::memcpy(&ems::engine::rev_limit_soft_window_x10,  g_page0 + 76, 4u);
-        // Offsets 80-81: auto-learn VE (0/1)
-        ems::engine::ltft_auto_learn_enable  = (g_page0[80] != 0u) ? 1u : 0u;
+        // Offset 80 pad ignorado; 81 = burn VE após APPLY manual
         ems::engine::ltft_auto_learn_burn_ve = (g_page0[81] != 0u) ? 1u : 0u;
         std::memcpy(&ems::engine::ltft_add_pw_threshold_us,   g_page0 + 86, 2u);
         std::memcpy(&ems::engine::decel_cut_tps_threshold_x10, g_page0 + 88, 2u);
@@ -1086,16 +1087,9 @@ inline void parse_byte(uint8_t b) noexcept {
             return;
         }
         if (b == static_cast<uint8_t>('Z')) {
-            // Reset adaptives RAM-only p/ LEARN/HIL:
-            // zera STFT, LTFT (shadow NVM), acumulador e contadores.
-            // Não faz burn de página de calibração — só shadow adaptativo.
-            ems::engine::fuel_reset_ltft();
-            ems::engine::fuel_reset_adaptives();  // AE/delay + reload (agora zeros)
-            ems::engine::g_dbg_ltft_accum_accepted = 0u;
-            ems::engine::g_dbg_ltft_accum_rejected = 0u;
-            ems::engine::g_dbg_ltft_accum_commits  = 0u;
-            ems::engine::g_dbg_stft_runs = 0u;
-            ems::engine::fuel_ltft_ve_burn_clear();
+            // LEARN session reset: STFT + accum + LTFT NVM-shadow (dirty) + dbg.
+            // Não burn de page0/VE. Sector adaptativo pode flushar LTFT zeros.
+            ems::engine::fuel_reset_learn_session();
             tx_push(kAckOk);
             return;
         }
@@ -1249,8 +1243,8 @@ inline void parse_byte(uint8_t b) noexcept {
                 ems::engine::g_dbg_ltft_accum_accepted,
                 ems::engine::g_dbg_ltft_accum_rejected,
                 ems::engine::g_dbg_ltft_accum_commits,
-                static_cast<uint32_t>(ems::engine::ltft_auto_learn_enable) |
-                    (static_cast<uint32_t>(ems::engine::ltft_auto_learn_burn_ve) << 8) |
+                // flags: b8-15 burn_ve, b16 burn_pending (b0-7 pad reserved=0)
+                (static_cast<uint32_t>(ems::engine::ltft_auto_learn_burn_ve) << 8) |
                     (ems::engine::fuel_ltft_ve_burn_pending() ? (1u << 16) : 0u),
             };
             tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), sizeof(diag));

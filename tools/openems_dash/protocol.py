@@ -39,7 +39,7 @@ MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
 PAGE_SIZES = {0: 512, 1: N*N, 2: N*N, 3: 86, 4: 2*N*N, 5: 256, 6: 80, 7: 32, 8: 80,
               9: 112, 10: N*N + ((N+1)//2)**2, 11: 4*N,
-              12: 2 * N * N}  # LTFT accum: hits u8 + mean_stft i8
+              12: 2 * N * N}  # LTFT accum: hits_wire u8 + mean_stft i8
 
 STATUS_BITS = {
     "FULL_SYNC":        0x0001,  # bit 0
@@ -255,8 +255,10 @@ class OpenEMSLink:
         if ack != b"\x00":
             raise IOError(f"bench_mode: ACK {ack.hex()}")
 
-    # ── reset adaptives ('Z': STFT + accum RAM, recarrega LTFT da NVM) ───
+    # ── reset LEARN session ('Z': STFT+LEARN+LTFT NVM-shadow zero) ─────
     def reset_adaptives(self) -> None:
+        """Zera STFT, acumulador LEARN e shadows LTFT (marca dirty p/ flush
+        adaptativo). Não é burn de página de calibração (VE/page0)."""
         ack = self._txn(b"Z", 1)
         if ack != b"\x00":
             raise IOError(f"reset_adaptives: ACK {ack.hex()}")
@@ -269,7 +271,8 @@ class OpenEMSLink:
             raise IOError(f"apply_ltft_ready: resp {resp.hex() if resp else 'empty'}")
         return int(resp[1])
 
-    # ── contadores de debug ('D': 26 × u32 LE) ──────────────────────────
+    # ── contadores de debug ('D': 37 × u32 LE = 148 B) ──────────────────
+    # Índices 31-32 (stft_last_err, stft_integ_x1000) são i32 no wire.
     DEBUG_FIELDS = [
         "late_events", "sched_drops", "inj1_arm", "seq_calls", "evt_overflow",
         "clear_all", "presync_count", "dwell_watchdog", "ckp_isr_count",
@@ -279,12 +282,20 @@ class OpenEMSLink:
         "loss_missing_gap", "loss_stall", "loss_avg", "loss_delta",
         "stft_blk_clt", "stft_blk_o2", "stft_blk_ae", "stft_blk_cut",
         "stft_runs", "stft_last_err", "stft_integ_x1000",
+        "ltft_accum_accepted", "ltft_accum_rejected", "ltft_accum_commits",
+        "ltft_learn_flags",  # b0-7 reserved pad, b8-15 burn_ve, b16 burn_pending
     ]
+    DEBUG_SIZE = 37 * 4  # must match FW diag[37]
 
     def read_debug(self) -> dict:
-        buf = self._txn(b"D", 132)
-        # 31 u32 + 2 i32 (stft_last_err, stft_integ_x1000 são com sinal)
-        vals = struct.unpack("<31I", buf[:124]) + struct.unpack("<2i", buf[124:])
+        assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE
+        buf = self._txn(b"D", self.DEBUG_SIZE)
+        # 31 u32 + 2 i32 + 4 u32
+        vals = (
+            struct.unpack("<31I", buf[:124])
+            + struct.unpack("<2i", buf[124:132])
+            + struct.unpack("<4I", buf[132:148])
+        )
         return dict(zip(self.DEBUG_FIELDS, vals))
 
     # ── osciloscópio CKP/CMP ('K': 294 bytes) ────────────────────────────
@@ -389,37 +400,24 @@ def decode_ltft(buf: bytes) -> dict:
     return {"ltft_pct": mult_grid, "ltft_add_50us": add_grid}
 
 
-# Contrato firmware kLtftAccumReadyHits / min-max STFT (fuel_calc.h)
-LTFT_ACCUM_READY_HITS = 30
-LTFT_ACCUM_READY_MIN_STFT_X10 = 5
-LTFT_ACCUM_READY_MAX_STFT_X10 = 150
-
-
 def decode_ltft_accum(buf: bytes) -> dict:
-    """Page 12: [hits u8 N×N][mean_stft_x10 i8 N×N], row-major [map][rpm]."""
+    """Page 12: [hits_wire u8 N×N][mean_stft_x10 i8 N×N], row-major [map][rpm].
+
+    hits_wire: bits0-6 = min(hits,127); bit7 = ready from firmware.
+    ready is the single source of truth — host must not reimplement thresholds.
+    """
     cells = N * N
     if len(buf) < 2 * cells:
         raise ValueError(f"page 12: esperado {2*cells}B, got {len(buf)}")
-    hits_flat = list(buf[:cells])
+    hits_wire = list(buf[:cells])
     stft_flat = list(struct.unpack(f"<{cells}b", buf[cells:cells * 2]))
-    hits = [hits_flat[r * N:(r + 1) * N] for r in range(N)]
+    hits = [[hits_wire[r * N + c] & 0x7F for c in range(N)] for r in range(N)]
+    ready = [[bool(hits_wire[r * N + c] & 0x80) for c in range(N)] for r in range(N)]
     mean_stft = [stft_flat[r * N:(r + 1) * N] for r in range(N)]
-    ready = []
-    for r in range(N):
-        row = []
-        for c in range(N):
-            h = hits[r][c]
-            s = abs(mean_stft[r][c])
-            row.append(
-                h >= LTFT_ACCUM_READY_HITS
-                and LTFT_ACCUM_READY_MIN_STFT_X10 <= s <= LTFT_ACCUM_READY_MAX_STFT_X10
-            )
-        ready.append(row)
     return {
         "hits": hits,
         "mean_stft_x10": mean_stft,
         "ready": ready,
-        "ready_hits": LTFT_ACCUM_READY_HITS,
     }
 
 
@@ -545,9 +543,9 @@ PAGE0_FIELDS = [
     ("antijerk_decay_cycles",         70, 1, "B", 1.0),
     ("rev_limit_rpm_x10",             72, 1, "L", 0.1),  # RPM
     ("rev_limit_soft_window_x10",     76, 1, "L", 0.1),  # RPM
-    # offsets 80-81: auto-learn VE (ex-reservados rev_limit spark retard)
-    ("ltft_auto_learn_enable",        80, 1, "B", 1.0),  # reserved wire; FW ignores
-    ("ltft_auto_learn_burn_ve",       81, 1, "B", 1.0),  # 0=RAM after APPLY 1=burn page1
+    # offset 80: reserved pad (always 0 — no auto-learn enable)
+    # offset 81: after manual APPLY, 0=VE só RAM; 1=pede burn page1 se RPM seguro
+    ("ltft_auto_learn_burn_ve",       81, 1, "B", 1.0),
     # offsets 82-85 ainda reservados
     ("ltft_add_pw_threshold_us",      86, 1, "H", 0.001),# ms
     ("decel_cut_tps_threshold_x10",   88, 1, "H", 0.1),  # %
