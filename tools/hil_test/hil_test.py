@@ -147,7 +147,7 @@ def _interp1d(axis: list[int], values: list[int], x: int) -> int:
 
 @dataclass
 class EngineConfig:
-    ivc_abdc_deg:              int = 50
+    page0_byte0_reserved:      int = 0  # was IVC ABDC
     displacement_cc:           int = 2000
     injector_flow_cc_min:      int = 450
     stoich_afr_x100:           int = 1470
@@ -324,7 +324,7 @@ class STM32Client:
         if len(d) < 16:
             return EngineConfig()
         return EngineConfig(
-            ivc_abdc_deg              = d[0],
+            page0_byte0_reserved      = d[0],
             displacement_cc           = struct.unpack_from("<H", d,  2)[0],
             injector_flow_cc_min      = struct.unpack_from("<H", d,  4)[0],
             stoich_afr_x100           = struct.unpack_from("<H", d,  6)[0],

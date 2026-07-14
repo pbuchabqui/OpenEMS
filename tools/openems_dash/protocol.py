@@ -80,7 +80,7 @@ class RealtimeData:
     seed_confirmed: int
     seed_rejected: int
     sync_state: int
-    ivc_clamps: int
+    # reserved[31]: was IVC clamps (always 0); not exposed
     loop2ms_last_us: int
     loop2ms_max_us: int
     an1_raw: int      # APP1 (pedal 1) ADC bruto
@@ -144,7 +144,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         seed_rejected=struct.unpack_from("<I", r, 26)[0],
         sync_state=r[30] & 0x0F,
         inj_mode=r[30] >> 4,
-        ivc_clamps=struct.unpack_from("<I", r, 31)[0],
+        # r+31 was IVC clamp u32 — reserved, ignored
         loop2ms_last_us=struct.unpack_from("<I", r, 35)[0],
         loop2ms_max_us=struct.unpack_from("<I", r, 39)[0],
         an1_raw=struct.unpack_from("<H", r, 43)[0],
@@ -496,7 +496,7 @@ PAGE7_FIELDS = [
 ]
 
 # Página 0 — bytes 0-15: engine config; bytes 16+: calibração e dirigibilidade.
-# offset 0 (ivc_abdc_deg) reservado: campo morto desde a migração para EOI
+# offset 0 reserved (IVC ABDC removed from wire; always 0)
 # targeting (ecu_sched.cpp — "mantido por compatibilidade de API e
 # protocolo, contador de clamp permanece 0"); scheduler já não o lê.
 PAGE0_FIELDS = [

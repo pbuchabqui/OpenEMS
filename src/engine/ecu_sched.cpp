@@ -136,9 +136,6 @@ static volatile uint8_t g_hook_prev_valid = 0U;
 static volatile uint16_t g_hook_prev_tooth = 0U;
 static volatile uint8_t g_hook_schedule_this_gap = 1U;
 static volatile uint8_t g_cmp_phase_seen = 0U;
-// IVC API retained for protocol/page0 compatibility; clamp removed (EOI targeting).
-static volatile uint8_t g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg;
-static uint32_t g_ivc_clamp_count = 0U;
 volatile uint32_t g_dbg_inj_force_early = 0U;
 volatile uint32_t g_dbg_ign_force_early = 0U;
 volatile uint32_t g_dbg_clear_all_count = 0U;
@@ -456,8 +453,6 @@ void ecu_sched_set_presync_inj_auto(uint8_t on) { ems::hal::CriticalSectionGuard
 
 void ecu_sched_set_presync_inj_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; si::g_presync_inj_mode = mode; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_ign_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_ign_mode = mode; sanitize_runtime_calibration(); }
-void ecu_sched_set_ivc(uint8_t ivc_abdc_deg) { ems::hal::CriticalSectionGuard guard; g_ivc_abdc_deg = (ivc_abdc_deg > 180U) ? 180U : ivc_abdc_deg; }
-uint32_t ecu_sched_ivc_clamp_count(void) { return g_ivc_clamp_count; }
 uint32_t ecu_sched_pw_duty_clamp_count(void) { return si::g_pw_duty_clamp_count; }
 
 void ecu_sched_dwell_watchdog(void)
@@ -488,8 +483,7 @@ void ecu_sched_reset_diagnostic_counters(void)
     g_late_event_count = 0U;
     g_cycle_schedule_drop_count = 0U;
     g_calibration_clamp_count = 0U;
-    g_ivc_clamp_count = 0U;
-    si::g_pw_duty_clamp_count = 0U;
+        si::g_pw_duty_clamp_count = 0U;
     g_dwell_watchdog_count = 0U;
 }
 
@@ -712,7 +706,7 @@ void ecu_sched_test_reset(void)
     si::g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
     si::g_advance_deg = 10U; si::g_dwell_ticks = 140625U; si::g_inj_pw_ticks = 140625U; si::g_eoi_lead_deg = 355U;
     si::g_angle_table_count = 0U; si::g_angle_tooth_mask_lo = 0U; si::g_angle_tooth_mask_hi = 0U;
-    g_ivc_abdc_deg = ems::engine::cfg::kIvcAbdcDeg; g_ivc_clamp_count = 0U; si::g_pw_duty_clamp_count = 0U;
+    si::g_pw_duty_clamp_count = 0U;
     g_inj_inhibit_mask = 0U;
     g_ign_inhibit_mask = 0U;
     si::g_mspark_count = 0U; si::g_mspark_inter_dwell_ticks = 0U; si::g_mspark_atdc_limit_deg = 18U;
@@ -746,8 +740,6 @@ uint32_t ecu_sched_test_get_eoi_lead_deg(void) { return si::g_eoi_lead_deg; }
 uint32_t ecu_sched_test_get_calibration_clamp_count(void) { return g_calibration_clamp_count; }
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void) { return g_cycle_schedule_drop_count; }
 uint32_t ecu_sched_test_get_late_event_count(void) { return g_late_event_count; }
-void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg) { ecu_sched_set_ivc(ivc_abdc_deg); }
-uint32_t ecu_sched_test_get_ivc_clamp_count(void) { return g_ivc_clamp_count; }
 uint32_t ecu_sched_test_get_pw_duty_clamp_count(void) { return si::g_pw_duty_clamp_count; }
 void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg) {
     ecu_sched_set_mspark(count, inter_dwell_ticks, atdc_limit_deg);

@@ -121,7 +121,6 @@ static uint32_t g_rt_seed_confirmed_count = 0u;
 static uint32_t g_rt_seed_rejected_count = 0u;
 static uint8_t  g_rt_sync_state_raw = 0u;
 static bool     g_rt_rev_limit_active = false;
-static uint32_t g_rt_ivc_clamp_count = 0u;
 static uint32_t g_rt_loop2ms_last_us = 0u;
 static uint32_t g_rt_loop2ms_max_us = 0u;
 
@@ -308,7 +307,8 @@ inline void update_realtime_page() noexcept {
     rt.reserved[30] = static_cast<uint8_t>((inj_mode << 4u) | (g_rt_sync_state_raw & 0x0Fu));
     // reserved[30] bits: [7:4]=inj_mode (0=simultaneous,1=semi_seq,2=sequential),
     //                     [3:0]=sync_state (0=WAIT_GAP..3=LOSS_OF_SYNC)
-    write_u32_le(&rt.reserved[31], g_rt_ivc_clamp_count);
+    // reserved[31..34]: was IVC clamp (always 0); kept for RT wire layout stability
+    write_u32_le(&rt.reserved[31], 0u);
     write_u32_le(&rt.reserved[35], g_rt_loop2ms_last_us);
     write_u32_le(&rt.reserved[39], g_rt_loop2ms_max_us);
     // ADC bruto p/ calibração (AN1=APP1, AN2=APP2, AN3=ETB TPS1, AN4=ETB TPS2)
@@ -426,8 +426,9 @@ inline bool burn_rpm_safe() noexcept {
 inline void sync_page_from_table(uint8_t page) noexcept {
     if (page == 0x00u) {
         // Popula bytes 2-15 do buffer UI a partir de g_eng_cfg.
-        // Byte 0 (ivc_abdc_deg) é gerido separadamente por ecu_sched_set_ivc.
+        // Byte 0: reserved (was IVC ABDC; unused after EOI targeting).
         ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+        g_page0[0] = 0u;
         // Bytes 16-55: calibração de sensores APP/ETB/TPS + plausibilidade
         ems::engine::sync_etb_calibration_to_page(g_page0 + 16, 40u);
         // Bytes 56-63: trim de combustível e ignição por cilindro (int8 × 4 cada)
@@ -591,7 +592,8 @@ inline void sync_page_from_table(uint8_t page) noexcept {
 // caller deve restaurar com sync_page_from_table()).
 inline bool sync_table_from_page(uint8_t page) noexcept {
     if (page == 0x00u) {
-        ::ecu_sched_set_ivc(g_page0[0]);
+        // page0[0] reserved (IVC removed from wire); ignore host writes to that byte.
+        g_page0[0] = 0u;
         // Aplica engine config (displacement, injector, AFR, trigger offset, etc.)
         // engine_config_load valida magic 0x4543 em bytes [14-15] — a escrita via
         // 'w' deve sempre incluir os 16 bytes completos com magic correcto.
@@ -1401,8 +1403,7 @@ inline void parse_byte(uint8_t b) noexcept {
 
 inline void reset_pages() noexcept {
     std::memset(g_page0, 0, sizeof(g_page0));
-    g_page0[0] = 50u;  /* ivc_abdc_deg padrão: 50° ABDC */
-    ::ecu_sched_set_ivc(g_page0[0]);
+    // page0[0] reserved (IVC removed)
     // Popula campos de engine config com valores actuais (de NVM ou defaults de
     // compilação). Garante que 'r' page 0 devolve valores coerentes antes de
     // qualquer 'w'.
@@ -1519,10 +1520,6 @@ void ui_update_loop_diag(uint32_t loop2ms_last_us,
                          uint32_t loop2ms_max_us) noexcept {
     g_rt_loop2ms_last_us = loop2ms_last_us;
     g_rt_loop2ms_max_us = loop2ms_max_us;
-}
-
-void ui_update_ivc_diag(uint32_t ivc_clamp_count) noexcept {
-    g_rt_ivc_clamp_count = ivc_clamp_count;
 }
 
 void ui_update_rt_map_fuel(uint16_t map_fused_bar_x100, uint32_t net_pw_us) noexcept {

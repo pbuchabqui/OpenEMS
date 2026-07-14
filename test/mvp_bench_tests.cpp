@@ -3085,26 +3085,6 @@ static void test_ecu_sched_mspark(void) {
     CHECK_EQ(ecu_sched_test_get_mspark_count(), 0u, "mspark disabled");
 }
 
-static void test_ecu_sched_ivc(void) {
-    section("ecu_sched: IVC API (clamp removido — EOI targeting)");
-    ecu_sched_test_reset();
-
-    CHECK_EQ(ecu_sched_test_get_ivc_clamp_count(), 0u, "ivc_clamp=0 after reset");
-
-    // Com EOI targeting o clamp de PW à IVC foi removido (o timing é
-    // garantido pelo próprio EOI). A API é mantida por compatibilidade;
-    // o contador deve permanecer 0 mesmo com PW muito longo.
-    ecu_sched_test_set_ivc(50u);
-    ecu_sched_set_inj_pw_ticks(120000u);  // very long injection
-    g_ckp_cap = 0u;
-    ckp_reach_full_sync();
-    CHECK_EQ(ecu_sched_test_get_ivc_clamp_count(), 0u,
-             "ivc_clamp_count stays 0 (EOI targeting supersedes IVC clamp)");
-    ecu_sched_test_set_ivc(180u);  // max allowed
-    CHECK_EQ(ecu_sched_ivc_clamp_count(), ecu_sched_test_get_ivc_clamp_count(),
-             "ivc_clamp_count: public == test getter");
-}
-
 // ── EOI targeting ───────────────────────────────────────────────────────────
 // Helper: procura na tabela angular o primeiro evento (channel, action).
 static uint8_t find_angle_event(uint8_t want_ch, uint8_t want_act,
@@ -5332,7 +5312,6 @@ int main(void) {
     test_ecu_sched_recovers_after_fallback();
     test_ecu_sched_inhibit_masks();
     test_ecu_sched_mspark();
-    test_ecu_sched_ivc();
     test_ecu_sched_eoi_targeting();
     test_eoi_blend();
     test_ecu_sched_presync();

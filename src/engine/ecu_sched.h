@@ -97,10 +97,6 @@ uint8_t ecu_sched_get_inj_inhibit_mask(void);
 // Suprime ECU_ACT_DWELL_START → bobina não carrega → sem faísca nesse cilindro.
 void ecu_sched_set_ign_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_ign_inhibit_mask(void);
-// IVC: page0/protocol compatibility only. EOI targeting removed IVC PW clamp;
-// ecu_sched_ivc_clamp_count() remains 0. Stored angle is not used by builders.
-void ecu_sched_set_ivc(uint8_t ivc_abdc_deg);
-uint32_t ecu_sched_ivc_clamp_count(void);
 // Contador do duty clamp: incrementado quando PW_deg excede 90% do ciclo
 // (648° sequencial / 324° presync) e é clampado. >0 = fuel shortfall.
 uint32_t ecu_sched_pw_duty_clamp_count(void);
@@ -187,8 +183,6 @@ uint32_t ecu_sched_test_get_eoi_lead_deg(void);
 uint32_t ecu_sched_test_get_calibration_clamp_count(void);
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 uint32_t ecu_sched_test_get_late_event_count(void);
-void ecu_sched_test_set_ivc(uint8_t ivc_abdc_deg);
-uint32_t ecu_sched_test_get_ivc_clamp_count(void);
 uint32_t ecu_sched_test_get_pw_duty_clamp_count(void);
 void     ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept;
 uint32_t ecu_sched_test_get_tim1_ccr(uint8_t channel) noexcept;
