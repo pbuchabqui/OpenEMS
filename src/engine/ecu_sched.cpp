@@ -179,21 +179,23 @@ volatile uint8_t g_ts_ring_idx = 0U;
 volatile uint32_t g_last_gap_ts = 0U;
 
 // GPIO BSRR addresses for direct pin control (no OC mode needed)
-// PC6=INJ1(TIM3_CH1), PC7=INJ2, PC8=INJ3, PC9=INJ4
-// PE9=IGN1(TIM1_CH1), PE11=IGN2, PE13=IGN3, PE14=IGN4
+// INJ e IGN todos em GPIOE (BSRR único), conforme hardware/frozen spec:
+// PE0=INJ1, PE2=INJ2, PE4=INJ3, PE6=INJ4
+// PE9=IGN1, PE11=IGN2, PE13=IGN3, PE15=IGN4
 #define GPIOC_BSRR STM32_REG32(0x42020818UL)
 #define GPIOE_BSRR STM32_REG32(0x42021018UL)
 
-// BSRR set/clr masks per ECU_CH_* (0..7). Port: 0=GPIOC (INJ), 1=GPIOE (IGN).
+// BSRR set/clr masks per ECU_CH_* (0..7). Todos os canais em GPIOE (port_e=1).
+// Ordem do array segue o enum ECU_CH_*: [INJ3, INJ4, INJ1, INJ2, IGN4, IGN3, IGN2, IGN1].
 static constexpr uint32_t k_bsrr_set[8] = {
-    (1U << 8), (1U << 9), (1U << 6), (1U << 7),   // INJ3 PC8, INJ4 PC9, INJ1 PC6, INJ2 PC7
-    (1U << 14), (1U << 13), (1U << 11), (1U << 9) // IGN4 PE14, IGN3 PE13, IGN2 PE11, IGN1 PE9
+    (1U << 4), (1U << 6), (1U << 0), (1U << 2),    // INJ3 PE4, INJ4 PE6, INJ1 PE0, INJ2 PE2
+    (1U << 15), (1U << 13), (1U << 11), (1U << 9)  // IGN4 PE15, IGN3 PE13, IGN2 PE11, IGN1 PE9
 };
 static constexpr uint32_t k_bsrr_clr[8] = {
-    (1U << 24), (1U << 25), (1U << 22), (1U << 23),
-    (1U << 30), (1U << 29), (1U << 27), (1U << 25)
+    (1U << 20), (1U << 22), (1U << 16), (1U << 18),
+    (1U << 31), (1U << 29), (1U << 27), (1U << 25)
 };
-static constexpr uint8_t k_bsrr_port_e[8] = {0U, 0U, 0U, 0U, 1U, 1U, 1U, 1U};
+static constexpr uint8_t k_bsrr_port_e[8] = {1U, 1U, 1U, 1U, 1U, 1U, 1U, 1U};
 
 static inline void gpio_set_pin(uint8_t channel, uint8_t high) {
     if (channel >= 8U) { return; }
@@ -420,21 +422,26 @@ void ECU_Hardware_Init(void)
 {
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN | RCC_AHB2ENR1_GPIOBEN | RCC_AHB2ENR1_GPIOCEN | RCC_AHB2ENR1_GPIOEEN;
 
-    // All INJ/IGN pins are GPIO outputs — driven by event scheduler via BSRR
-    // INJ: PC6(INJ1), PC7(INJ2), PC8(INJ3), PC9(INJ4)
-    for (uint8_t pin = 6U; pin <= 9U; ++pin) {
-        GPIOC_MODER = (GPIOC_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
-    }
-    GPIOC_BSRR = (1U<<22)|(1U<<23)|(1U<<24)|(1U<<25);  // PC6-9 LOW
-    // IGN: PE9(IGN1), PE11(IGN2), PE13(IGN3), PE14(IGN4)
+    // All INJ/IGN pins are GPIO outputs — driven by event scheduler via BSRR.
+    // INJ e IGN todos em GPIOE.
+    // INJ: PE0(INJ1), PE2(INJ2), PE4(INJ3), PE6(INJ4)
     {
-        static const uint8_t ign_pins[] = {9U, 11U, 13U, 14U};
+        static const uint8_t inj_pins[] = {0U, 2U, 4U, 6U};
+        for (uint8_t i = 0; i < 4; ++i) {
+            const uint8_t pin = inj_pins[i];
+            GPIOE_MODER = (GPIOE_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
+        }
+    }
+    GPIOE_BSRR = (1U<<16)|(1U<<18)|(1U<<20)|(1U<<22);  // PE0,2,4,6 LOW
+    // IGN: PE9(IGN1), PE11(IGN2), PE13(IGN3), PE15(IGN4)
+    {
+        static const uint8_t ign_pins[] = {9U, 11U, 13U, 15U};
         for (uint8_t i = 0; i < 4; ++i) {
             const uint8_t pin = ign_pins[i];
             GPIOE_MODER = (GPIOE_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
         }
     }
-    GPIOE_BSRR = (1U<<25)|(1U<<27)|(1U<<29)|(1U<<30);  // PE9,11,13,14 LOW
+    GPIOE_BSRR = (1U<<25)|(1U<<27)|(1U<<29)|(1U<<31);  // PE9,11,13,15 LOW
 
     clear_all_events_and_drive_safe_outputs();
 }
