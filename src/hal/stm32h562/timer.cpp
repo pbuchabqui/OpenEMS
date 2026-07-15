@@ -40,11 +40,14 @@ void tim5_ic_init(void) {
     // PA0 = TIM5_CH1/CKP (AF2), PA1 = TIM5_CH2/CMP (AF2)
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 0u, GPIO_AF2);
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 1u, GPIO_AF2);
-    // Pull-down em PA1 (CMP): o sensor de came é idle-LOW/pulsa-HIGH e a captura é
-    // por borda de subida. Sem pull, um came desligado deixa PA1 a flutuar → ruído
-    // gera bordas fantasma que fingem sync (sequencial falso). Pull-down força
-    // LOW estável quando desligado = sem bordas de subida. (cf. uart.cpp:50, PA10.)
-    GPIOA_PUPDR = (GPIOA_PUPDR & ~(0x3u << 2u)) | (0x2u << 2u);  // pino 1, 0b10 = pull-down
+    // Pull-down em PA0 (CKP) e PA1 (CMP): sensores idle-LOW/pulsam-HIGH, captura por
+    // borda de subida. Sem pull, um sensor desligado/fio partido deixa o pino a
+    // flutuar → ruído gera bordas fantasma que fingem sync (FULL_SYNC falso → injeção
+    // batch espúria nos 4 injetores). Pull-down força LOW estável quando desligado =
+    // sem bordas de subida. Complementa o filtro IC (que corta glitch fino mas não
+    // ruído de baixa frequência num pino aberto). (cf. uart.cpp:50, PA10.)
+    GPIOA_PUPDR = (GPIOA_PUPDR & ~((0x3u << 0u) | (0x3u << 2u)))
+                | (0x2u << 0u) | (0x2u << 2u);  // PA0(CKP)+PA1(CMP), 0b10 = pull-down
 
     // Ativar clocks
     RCC_APB1LENR |= RCC_APB1LENR_TIM5EN;
