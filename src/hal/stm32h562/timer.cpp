@@ -53,8 +53,11 @@ void tim5_ic_init(void) {
     // TIM5 — 32-bit free-running @ 62.5 MHz, input capture CH1=CKP, CH2=CMP
     TIM5_CR1 = 0u; TIM5_PSC = 3u; TIM5_ARR = 0xFFFFFFFFu; TIM5_EGR = 1u;
     // CH1: CKP input capture (TI1, rising edge)
-    TIM5_CCMR1 = TIM_CCMR1_CC1S_TI1 | TIM_CCMR1_IC1F_NONE
-               | TIM_CCMR1_CC2S_TI2 | TIM_CCMR1_IC2F_NONE;
+    // Filtro de entrada ~256 ns (IC1F/IC2F) rejeita glitches EMC no HW antes da
+    // captura — CKP (PA0) e CMP (PA1) sem filtro deixavam ruído gerar bordas
+    // fantasma que disparavam prime/falso-sync com o motor parado.
+    TIM5_CCMR1 = TIM_CCMR1_CC1S_TI1 | TIM_CCMR1_IC1F_N8_DTS8
+               | TIM_CCMR1_CC2S_TI2 | TIM_CCMR1_IC2F_N8_DTS8;
     TIM5_CCER = TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E;
     TIM5_CCMR2 = 0u;
     TIM5_DIER = TIM_DIER_CC1IE | TIM_DIER_CC2IE;

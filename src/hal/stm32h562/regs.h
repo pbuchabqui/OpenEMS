@@ -291,6 +291,13 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM_CCMR1_CC2S_TI2  (1u << 8)   // CH2 → IC, mapeado em TI2
 #define TIM_CCMR1_IC1F_NONE (0u << 4)   // sem filtro
 #define TIM_CCMR1_IC2F_NONE (0u << 12)
+// Filtro de entrada N=8 amostras @ fDTS/8. Com CKD=00, fDTS=fCK_INT=250 MHz
+// (contador a 62.5 MHz via PSC=3), fSAMPLING=31.25 MHz → janela de rejeição
+// = 8 × 32 ns ≈ 256 ns. Rejeita glitches EMC abaixo do piso software (800 ns,
+// kMinToothTicks) directamente no HW, antes da captura. Jitter de quantização
+// ≤32 ns (« orçamento 0,4 µs); latência constante não afecta período/ângulo.
+#define TIM_CCMR1_IC1F_N8_DTS8 (9u << 4)   // 0b1001
+#define TIM_CCMR1_IC2F_N8_DTS8 (9u << 12)
 // Output Compare
 #define TIM_CCMR1_OC1M_FROZEN  (0u << 4)
 #define TIM_CCMR1_OC1M_ACTIVE  (1u << 4)
