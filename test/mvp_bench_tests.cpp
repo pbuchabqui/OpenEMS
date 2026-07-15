@@ -1810,6 +1810,24 @@ static void test_fuel_ltft_accum(void) {
     ve_table[mi][ri] = ve_before;
     fuel_reset_adaptives();
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "reset_adaptives zera acumulador");
+
+    // ── Regressão: teto de amostras congela hits E somas juntos ──────────
+    // Se as somas crescessem com hits saturado, a média (sum/hits) derivaria
+    // com o denominador preso (e no extremo estouraria int32). Injeta direto no
+    // acumulador: em operação real o gate STFT rejeita as amostras muito antes
+    // do teto, então este é o único caminho para exercitá-lo.
+    fuel_ltft_accum_reset();
+    constexpr int16_t kStftSample = 40;   // dentro do limite de |STFT|
+    constexpr int16_t kErrSample  = 15;
+    for (uint32_t i = 0u; i < 70000u; ++i) {  // > 65535 → passa do teto
+        fuel_ltft_accum_tick_for_test(mi, ri, kStftSample, kErrSample);
+    }
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 65535u, "hits satura exatamente no teto");
+    CHECK_EQ(fuel_ltft_accum_mean_stft_x10(mi, ri), kStftSample,
+             "média STFT = amostra constante (soma congelada no teto)");
+    CHECK_EQ(fuel_ltft_accum_mean_err_x1000(mi, ri), kErrSample,
+             "média erro = amostra constante (soma congelada no teto)");
+    fuel_reset_adaptives();
 }
 
 static void test_fuel_ltft_accum_commit_ve(void) {

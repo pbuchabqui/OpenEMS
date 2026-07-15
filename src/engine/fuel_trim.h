@@ -95,6 +95,12 @@ bool fuel_ltft_accum_cell_ready(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_ltft_accum_mean_stft_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_ltft_accum_mean_err_x1000(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 
+#if defined(EMS_HOST_TEST)
+// Test-only: injeta amostra válida direto no acumulador (bypassa gate STFT).
+void fuel_ltft_accum_tick_for_test(uint8_t map_idx, uint8_t rpm_idx,
+                                   int16_t stft_pct_x10, int16_t err_x1000) noexcept;
+#endif
+
 // Fase 2 (manual): try_commit exige ready; apply_all bakeia todas as células
 // com hits>0 (mean STFT × gain → VE RAM + desenrola LTFT da célula).
 bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept;

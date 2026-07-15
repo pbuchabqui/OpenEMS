@@ -621,6 +621,17 @@ static void fuel_ltft_accum_tick(uint8_t map_idx,
     cell.sum_err_x1000 += err_x1000;
 }
 
+#if defined(EMS_HOST_TEST)
+// Injeta uma amostra válida direto no acumulador, contornando o gate do
+// integrador STFT. Necessário para exercitar o teto de 65535 hits: em operação
+// real o mesmo erro de λ que valida a amostra satura o STFT acima do limite de
+// |STFT| e as amostras passam a ser rejeitadas muito antes do teto.
+void fuel_ltft_accum_tick_for_test(uint8_t map_idx, uint8_t rpm_idx,
+                                   int16_t stft_pct_x10, int16_t err_x1000) noexcept {
+    fuel_ltft_accum_tick(map_idx, rpm_idx, stft_pct_x10, err_x1000, true);
+}
+#endif
+
 // require_ready: try_commit (1 célula) exige gates ready; apply_all aplica
 // qualquer célula com hits>0 (todas as correcções acumuladas na sessão).
 // unroll_global_stft: true em commit de célula única (desenrola o trim global).
