@@ -1,7 +1,8 @@
 # OpenEMS — Auditoria de Cobertura de Testes
 
-**Build:** `make host-test` | **Resultado atual:** 509 PASS 0 FAIL (commit d6c4d12)  
-**Data:** 2026-06-06 | **Auditor:** análise estática + revisão por subagentes
+**Build:** `make host-test` | **Resultado de referência:** **1104 PASS / 0 FAIL** (2026-07; revalidar após mudanças)  
+**Nota:** snapshot antigo 509 PASS (2026-06-06) está **stale** — usar só o número impresso pelo binário actual.  
+**Data da auditoria original:** 2026-06-06 | **Auditor:** análise estática + revisão por subagentes
 
 ---
 

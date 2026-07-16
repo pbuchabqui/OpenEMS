@@ -2,21 +2,32 @@
 
 ## Pendente
 
-### 1. Pinos/canais do ADC errados no H562 (firmware+fiação) — HANDOFF
-A math do HIL está **validada 21/21** via bench-mode (ver Concluído). Causa-raiz
-**definitiva** do "ADC nunca leu sensor real" (DS14258, 2026-06-15): a atribuição de
-pinos analógicos em `src/hal/adc.cpp` é incompatível com o STM32H562.
-- **PA2 (MAP), PC1 (AN4), PC2 (CLT), PC3 (IAT) NÃO têm ADC** no H562. E os nº de
-  canais estão todos errados. Mapa REAL: PA3=INP15, PA4=INP18, PA6=INP3, PA7=INP7,
-  PB0=INP9, PB1=INP5, PC0=INP10, PC4=INP4, PC5=INP8.
-- O ADC, a DMA e o trigger **funcionam** (corrigido pelo caminho: GPDMA circular via
-  LLI auto-referente + DMACFG/OVRMOD; ADSTART=1, init_faults 4→0). Mas o ADC lê pinos
-  errados → o MAP no PA2 (sem ADC) nunca chega; sweep do DAC não bate em canal nenhum.
-- **FIX**: reatribuir sensores a pinos com ADC, corrigir `kAdc1Sqr1/2`+`gpio_set_analog`
-  +header de pinagem, e refazer a fiação da bancada (ESP32 DAC→pino certo). Ex.:
-  MAP→PA4(INP18)/PC4(INP4); TPS→PA3(INP15)/PA6(INP3); CLT→PB0(INP9); IAT→PB1(INP5).
-  VREF+ é interno ao VDDA (pino 13, ferrite FB1 do 3.3V — OK). Ver `adc1-nao-converte`.
-- CMP ainda em LOW (FULL_SYNC usa só o crank); para phase_A, adicionar 2º canal RMT.
+### 1. ADC pin map H562 — auditoria (2026-07-16) + residual HW
+
+**Auditoria higiene (docs only):** o firmware actual em `src/hal/adc.cpp` **já**
+mapeia canais H562 (DS14258) de forma coerente com `README.md` §5.4:
+
+| Sensor | Pino | INP (adc.cpp) |
+|--------|------|----------------|
+| MAP | PA3 | INP15 |
+| TPS | PA4 | INP18 |
+| KNOCK | PA5 | INP19 |
+| APP1 / APP2 | PC0 / PC2 | INP10 / INP12 |
+| ETB_TPS1 / TPS2 | PA2 / PC5 | INP14 / INP8 |
+| CLT / IAT | PB0 / PB1 | INP9 / INP5 |
+| FUEL / OIL / EWG | PC4 / PC1 / PC3 | INP4 / INP11 / INP13 |
+
+O texto antigo deste item (MAP em PA2, CLT em PC2, …) descrevia o bug **pré-fix**
+e está **stale**. DMA/GPDMA/ADSTART já foram tratados (ver Concluído / changelog).
+
+**Residual (produto/HW, não higiene de estilo):**
+- Confirmar no silício/bancada que a fiação ESP32 DAC e o package (RGT6/VGT6)
+  batem com a tabela acima (especialmente **PA2 = ETB_TPS1 / INP14** no teu
+  package — validar no DS14258 da revisão de silício).
+- Se a bancada ainda não lê sensores reais, preferir checklist de fiação +
+  `adc_init_faults` / recovery em vez de reescrever o mapa “do zero”.
+- CMP em LOW (FULL_SYNC só crank) e 2º canal RMT para phase_A: backlog de
+  sincronismo, não de canal ADC.
 
 ### 2. Datalog em SD card (registrado 2026-06-12)
 Logging interno no slot TF da placa (STM32H562 tem SDMMC com DMA), em vez de

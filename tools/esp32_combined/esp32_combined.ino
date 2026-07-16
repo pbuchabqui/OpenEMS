@@ -49,7 +49,8 @@
 
 #include "Arduino.h"
 #include <WiFi.h>
-#include "wifi_credentials.h"  // WIFI_SSID/WIFI_PASS — gitignored
+// Local only: copy wifi_credentials.example.h → wifi_credentials.h (gitignored).
+#include "wifi_credentials.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
 #include "driver/rmt.h"

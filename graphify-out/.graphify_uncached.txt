@@ -1,1 +1,0 @@
-/home/pedro/OpenEMS/tools/openems_dash/static/index.html

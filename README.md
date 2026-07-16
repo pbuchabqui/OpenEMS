@@ -345,12 +345,28 @@ Limpar artefatos:
 make clean
 ```
 
+Gates de qualidade locais (higiene):
+
+```bash
+make secrets-check              # sem wifi_credentials.h tracked
+make host-test WERROR=1         # 0 warnings no host
+make firmware-rgt6 WERROR=1
+make firmware-vgt6 WERROR=1
+make ci-local                   # Stage1: secrets + host + dual firmware WERROR
+make format                     # clang-format só em ficheiros dirty (requer clang-format)
+# make lint-includes LINT_ERROR=1   # só após ban ENGINE→APP (layering)
+```
+
+Credenciais WiFi dos tools ESP32: copiar `wifi_credentials.example.h` →
+`wifi_credentials.h` (gitignored). **Rodar password do AP** se alguma vez
+foi commitada no histórico.
+
 ## MVP Bancada Segura
 
 Definicao de pronto para o MVP de bancada:
 
 - `make firmware` gera `.elf`, `.hex` e `.bin`.
-- `make host-test` cobre regressao minima de CKP 60-2, quick crank, scheduler, tabelas, protocolo da UI proprietaria, ETB control, plausibilidade de pedal/ETB e autocalibracao X-τ.
+- `make host-test` cobre regressao minima (suites em `test/test_*.cpp` + `run_all.cpp`): CKP 60-2, quick crank, scheduler, tabelas, protocolo UI, ETB, torque, fuel/ign, X-τ, etc.
 - Firmware sobe na STM32H562 com ST-Link, sem bobinas/injetores energizados, sem reset loop ou hard fault.
 - TIM5 recebe CKP/CMP sintetico de 200 a 8500 rpm e telemetria mostra transicoes `WAIT_GAP`, `HALF_SYNC`, `FULL_SYNC`, perda e retomada de sync.
 - TIM2/TIM8 geram sinais verificaveis em osciloscopio para cranking, half-sync, full-sync, loss-of-sync e zero RPM.
@@ -390,9 +406,9 @@ Definicao de pronto para o MVP de bancada:
 - PWM: TIM1 CH1 em PA8, frequência configurável (default 2kHz).
 - H-bridge: GPIO PB14 (DIR) + PB15 (EN) para driver DRV8701-style.
 - Boot policy: ETB desativado (`EN=0`, PWM=0) até calibracao valida e sensores OK.
-- Plausibilidade dual-sensor:
-  - APP plausibilidade: compara APP1 vs APP2 (pinos PB0/PB1), gera `THROTTLE_FAULT_APP_PLAUS` se delta exceder limite.
-  - ETB_TPS plausibilidade: compara ETB_TPS1 vs ETB_TPS2 (pinos PC0/PC1), gera `THROTTLE_FAULT_ETB_PLAUS` se delta exceder limite.
+- Plausibilidade dual-sensor (pinos = `src/hal/adc.cpp` / §5.4):
+  - APP plausibilidade: compara APP1 vs APP2 (**PC0 / PC2**), gera `THROTTLE_FAULT_APP_PLAUS` se delta exceder limite.
+  - ETB_TPS plausibilidade: compara ETB_TPS1 vs ETB_TPS2 (**PA2 / PC5**), gera `THROTTLE_FAULT_ETB_PLAUS` se delta exceder limite.
   - Delta máximo default: 12% entre sensores redundantes.
 - Falhas: `THROTTLE_FAULT_APP1/APP2/APP_PLAUS` bloqueiam demanda; `THROTTLE_FAULT_ETB_*` entram em limp mode com `etb_max_open_pct_x10_limp` (default 25%).
 - RATE limits: `etb_max_rate_pct_per_s` (default 500 %/s).

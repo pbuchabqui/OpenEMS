@@ -252,19 +252,7 @@ struct DecoderState {
 // ou um salto de RPM trava o sync para sempre (gap/spike não atualizam histórico).
 static constexpr uint16_t kAnomalyResyncThreshold = 60u;
 
-static DecoderState g_state = {
-    ems::drv::CkpSnapshot{0u, 0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false, 0u},
-    0u,
-    0u,
-    {0u, 0u, 0u},
-    0u,
-    0u,
-    0u,   // cmp_confirms
-    0u,   // phase_half
-    0u,   // cmp_phase_pending
-    0u,   // cmp_ref_value
-    0u,   // cmp_glitch_count
-};
+static DecoderState g_state{};  // zero-init; SyncState::WAIT_GAP == 0
 // FIX-5: volatile nas variáveis escritas pela ISR TIM5 (prio 1) e lidas pelo
 // background loop sem seção crítica. Sem volatile, o compilador pode elevar
 // as leituras para fora de loops ou cacheá-las em registradores, observando
@@ -1157,16 +1145,7 @@ uint8_t ckp_get_cmp_ref_tooth() noexcept {
 // ── API de teste (host only) ──────────────────────────────────────────────────
 #if defined(EMS_HOST_TEST)
 void ckp_test_reset() noexcept {
-    g_state = DecoderState{
-        CkpSnapshot{0u, 0u, 0u, 0u, 0u, SyncState::WAIT_GAP, false},
-        0u,
-        0u,
-        {0u, 0u, 0u},
-        0u,
-        0u,
-        0u,
-        0u,  // cmp_glitch_count
-    };
+    g_state = DecoderState{};  // zero-init; SyncState::WAIT_GAP == 0
     ems_test_tim5_ccr1   = 0u;
     ems_test_tim5_ccr2   = 0u;
     ems_test_cam_gpio_idr = 0u;

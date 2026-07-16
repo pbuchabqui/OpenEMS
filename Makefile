@@ -1,11 +1,27 @@
 # OpenEMS: STM32H562 Firmware Build System
 # BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE pinout)
+# Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
-.PHONY: all clean host-test firmware firmware-rgt6 firmware-vgt6 help
+.PHONY: all clean host-test firmware firmware-rgt6 firmware-vgt6 help \
+        secrets-check lint-includes format format-all format-check ci-local
 
 COMPILER_ARM = arm-none-eabi-g++
 OBJCOPY_ARM = arm-none-eabi-objcopy
 CXX_HOST ?= g++
+CLANG_FORMAT ?= clang-format
+PYTHON ?= python3
+
+# Opt-in -Werror (ci-local Stage1 sets WERROR=1)
+WERROR ?= 0
+ifeq ($(WERROR),1)
+  WERROR_FLAG = -Werror
+else
+  WERROR_FLAG =
+endif
+
+# Lint: default warn-only until layering PRs; LINT_ERROR=1 to fail
+LINT_ERROR ?= 0
+LINT_PHASE ?= A
 
 BOARD ?= rgt6
 ifeq ($(BOARD),vgt6)
@@ -18,11 +34,12 @@ else
   BIN_SUFFIX   = -rgt6
 endif
 
-CFLAGS_COMMON = -std=c++17 -Wall -Wextra
+CFLAGS_COMMON = -std=c++17 -Wall -Wextra $(WERROR_FLAG)
 CFLAGS_ARM = $(CFLAGS_COMMON) -DTARGET_STM32H562 -DNDEBUG -mcpu=cortex-m33 -mthumb \
              -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections \
              -g0 -O2 -I./src $(BOARD_CFLAGS)
-CFLAGS_HOST = $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_RGT6 -O2 -g -I./src
+# -I. so test/*.cpp can #include "test/harness.h"
+CFLAGS_HOST = $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_RGT6 -O2 -g -I. -I./src
 
 SRC_DIR = src
 TEST_DIR = test
@@ -77,10 +94,29 @@ FIRMWARE_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                $(HAL_STM32H562_SRC) $(SRC_DIR)/main_stm32.cpp \
                $(SRC_DIR)/startup_stm32h562.cpp
 FIRMWARE_OBJ = $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(FIRMWARE_SRC))
+# Host tests split into suites (hygiene PR-06+); order of sources is free.
+# Entry: test/run_all.cpp. Exact PASS count enforced by suite_registry + main order.
+HOST_TEST_HARNESS = $(TEST_DIR)/harness.cpp \
+                    $(TEST_DIR)/fixtures.cpp \
+                    $(TEST_DIR)/ui_helpers.cpp \
+                    $(TEST_DIR)/run_all.cpp
+HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
+                   $(TEST_DIR)/test_torque.cpp \
+                   $(TEST_DIR)/test_ckp.cpp \
+                   $(TEST_DIR)/test_sensors.cpp \
+                   $(TEST_DIR)/test_fuel.cpp \
+                   $(TEST_DIR)/test_ign.cpp \
+                   $(TEST_DIR)/test_aux_knock.cpp \
+                   $(TEST_DIR)/test_timer.cpp \
+                   $(TEST_DIR)/test_sched.cpp \
+                   $(TEST_DIR)/test_engine_misc.cpp \
+                   $(TEST_DIR)/test_math.cpp \
+                   $(TEST_DIR)/test_protocol.cpp \
+                   $(TEST_DIR)/test_output.cpp
 HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(SRC_DIR)/hal/stm32h562/timer.cpp \
                 $(SRC_DIR)/hal/stm32h562/system.cpp \
-                $(TEST_DIR)/mvp_bench_tests.cpp
+                $(HOST_TEST_HARNESS) $(HOST_TEST_SUITES)
 HOST_TEST_BIN = $(HOST_DIR)/mvp_bench_tests
 
 all: help
@@ -88,13 +124,21 @@ all: help
 help:
 	@echo "OpenEMS Build System"
 	@echo "======================================"
-	@echo "Usage: make [target] [BOARD=rgt6|vgt6]"
+	@echo "Usage: make [target] [BOARD=rgt6|vgt6] [WERROR=0|1]"
 	@echo ""
 	@echo "  host-test       Host regression (always RGT6 pin map stubs)"
 	@echo "  firmware        Build for BOARD (default rgt6)"
 	@echo "  firmware-rgt6   Build RGT6 bin"
 	@echo "  firmware-vgt6   Build VGT6 bin (GPIOE INJ/IGN/ETB)"
 	@echo "  clean           Remove /tmp/openems-build"
+	@echo ""
+	@echo "Quality gates:"
+	@echo "  secrets-check   Fail if wifi_credentials.h (etc.) is tracked"
+	@echo "  lint-includes   Phase A/B include policy (LINT_PHASE=A|B LINT_ERROR=0|1)"
+	@echo "  format          clang-format dirty git files only (on-touch)"
+	@echo "  format-all      clang-format entire src/test (explicit; large diff)"
+	@echo "  format-check    Dry-run format on dirty files"
+	@echo "  ci-local        Stage1: secrets + host/fw WERROR (see tools/ci_local.sh)"
 	@echo ""
 	@echo "Outputs: /tmp/openems-build/bin/openems-rgt6.bin | openems-vgt6.bin"
 
@@ -142,6 +186,42 @@ $(FIRMWARE_BIN): $(FIRMWARE_ELF) | $(BIN_DIR)
 clean:
 	@rm -rf $(BUILD_DIR)
 	@echo "Build artifacts cleaned"
+
+# ── Quality / hygiene ─────────────────────────────────────────────────────────
+secrets-check:
+	@bash tools/secrets_check.sh
+
+lint-includes:
+	@LINT_ERROR=$(LINT_ERROR) $(PYTHON) tools/lint_includes.py --phase $(LINT_PHASE) \
+		$(if $(filter 1,$(LINT_ERROR)),--error,)
+
+# On-touch only: format files changed vs HEAD (or staged). Requires clang-format.
+FORMAT_SRC = $(shell git diff --name-only --diff-filter=ACMR HEAD -- 'src/**/*.cpp' 'src/**/*.h' 'test/**/*.cpp' 'test/**/*.h' 2>/dev/null; \
+	git diff --cached --name-only --diff-filter=ACMR -- 'src/**/*.cpp' 'src/**/*.h' 'test/**/*.cpp' 'test/**/*.h' 2>/dev/null)
+format:
+	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { \
+		echo "ERROR: $(CLANG_FORMAT) not found — install clang-format or set CLANG_FORMAT="; exit 1; }
+	@files=$$(printf '%s\n' $(FORMAT_SRC) | sort -u | sed '/^$$/d'); \
+	if [ -z "$$files" ]; then echo "format: no dirty C++ files"; exit 0; fi; \
+	echo "format (on-touch):"; echo "$$files" | sed 's/^/  /'; \
+	echo "$$files" | xargs -r $(CLANG_FORMAT) -i
+
+format-all:
+	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { \
+		echo "ERROR: $(CLANG_FORMAT) not found"; exit 1; }
+	@echo "WARNING: format-all rewrites entire src/ and test/ — large review noise"
+	@find src test -type f \( -name '*.cpp' -o -name '*.h' \) -print0 | xargs -0 $(CLANG_FORMAT) -i
+	@echo "format-all: done"
+
+format-check:
+	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { \
+		echo "ERROR: $(CLANG_FORMAT) not found"; exit 1; }
+	@files=$$(printf '%s\n' $(FORMAT_SRC) | sort -u | sed '/^$$/d'); \
+	if [ -z "$$files" ]; then echo "format-check: no dirty C++ files"; exit 0; fi; \
+	echo "$$files" | xargs -r $(CLANG_FORMAT) --dry-run -Werror
+
+ci-local:
+	@bash tools/ci_local.sh $(or $(STAGE),1)
 
 $(BIN_DIR):
 	@mkdir -p $@

@@ -1,5 +1,10 @@
 # OpenEMS — Especificação Técnica
 
+> **DEPRECATED / STALE (2026-07-16)** — Este ficheiro **não** é a fonte de verdade.
+> Decisões de arquitetura, pinout e build: **`README.md`**.
+> Use este documento só como histórico; trechos (IACV, pin maps antigos, bins)
+> podem divergir do firmware actual. Correcções pontuais só se forem perigosas.
+
 **Hardware alvo:** STM32H562RGT6 · Cortex-M33 · 250 MHz  
 **Linguagem:** C++17 · sem STL no caminho crítico · sem alocação dinâmica  
 **Build:** `make firmware` → `/tmp/openems-build/bin/openems.{hex,bin}`

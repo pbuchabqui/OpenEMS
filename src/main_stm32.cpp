@@ -114,13 +114,9 @@ static uint32_t g_zero_rpm_since_ms = 0u;
 static uint32_t g_runtime_seed_arm_window_start_ms = 0u;
 static uint16_t g_prev_tps_pct_x10 = 0u;
 static bool g_have_last_full_sync = false;
-static ems::drv::CkpSnapshot g_last_full_sync_snapshot = {
-    0u, 0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
-};
+static ems::drv::CkpSnapshot g_last_full_sync_snapshot{};  // WAIT_GAP + zeros
 static bool g_have_last_gap_sync = false;
-static ems::drv::CkpSnapshot g_last_gap_sync_snapshot = {
-    0u, 0u, 0u, 0u, 0u, ems::drv::SyncState::WAIT_GAP, false
-};
+static ems::drv::CkpSnapshot g_last_gap_sync_snapshot{};
 static uint32_t g_loop2ms_last_us = 0u;
 static uint32_t g_loop2ms_max_us = 0u;
 

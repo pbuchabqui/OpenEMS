@@ -1,5 +1,7 @@
-```
-# Build artifacts
+# OpenEMS root .gitignore
+# Keep this file free of markdown fences or other non-pattern lines.
+
+# --- Build artifacts ---
 *.o
 *.obj
 *.a
@@ -7,41 +9,47 @@
 *.dll
 *.exe
 *.out
+/tmp/
+# Host/firmware objects live under /tmp/openems-build by default (Makefile)
 
-# Dependencies
+# --- Dependencies / Python ---
 venv/
 .venv/
 __pycache__/
+*.pyc
 *.egg-info/
 dist/
 build/
 target/
 
-# IDE and editor files
+# --- IDE / editor ---
 .vscode/
 .idea/
 *.swp
 *.swo
 *.tmp
+*~
 
-# Logs
+# --- Logs ---
 *.log
+tools/openems_dash/logs/
 
-# Environment files
+# --- Environment / secrets ---
 .env
 .env.local
 *.env.*
+**/wifi_credentials.h
 
-# Coverage reports
+# --- Coverage ---
 coverage/
 htmlcov/
 .coverage
 
-# OS files
+# --- OS ---
 .DS_Store
 Thumbs.db
 
-# Compressed files
+# --- Archives ---
 *.zip
 *.gz
 *.tar
@@ -64,5 +72,15 @@ Thumbs.db
 *.tar.bz2
 *.tar.xz
 *.tar.zst
-```.cave/
-tools/esp32_stimulator/wifi_credentials.h
+
+# --- Knowledge graph (generated; rebuild with graphify) ---
+graphify-out/
+
+# --- Ardu-Stim GUI vendor weight (bins, fonts; keep app sources if re-added) ---
+tools/esp32_combined/ardustim_gui/bin/
+tools/esp32_combined/ardustim_gui/assets/fontawesome/
+tools/esp32_combined/ardustim_gui/node_modules/
+tools/esp32_combined/ardustim_gui/package-lock.json
+
+# --- Claude / cave local worktrees (if present) ---
+.cave/

@@ -71,8 +71,12 @@ O ESP32 liga-se à tua rede WiFi (modo Station) e expõe uma página web com
 sliders para RPM, MAP e TPS — acessível de qualquer browser (telemóvel, PC)
 na mesma rede.
 
-1. Edita `WIFI_SSID` e `WIFI_PASSWORD` no topo de `esp32_combined.ino` com as
-   credenciais da tua rede antes do upload.
+1. Cria credenciais locais (nunca commitadas):
+   ```bash
+   cp wifi_credentials.example.h wifi_credentials.h
+   # edita WIFI_SSID / WIFI_PASS
+   ln -sf ../wifi_credentials.h src/wifi_credentials.h   # se usares PlatformIO src/
+   ```
 2. Após o boot, a porta série (115200 baud) imprime o IP atribuído, ex:
    `[WIFI] Ligado! IP: 192.168.1.42`
 3. Abre `http://<IP>/` no browser — sliders para RPM (50–9000), MAP (0–300 kPa)
@@ -104,6 +108,10 @@ Abrir `esp32_combined.ino` como sketch normal. As dependências (Preferences.h, 
 
 ## GUI Electron
 
+A app-source em `ardustim_gui/` (main.js, package.json, …) pode estar no tree.
+**Binários avrdude, FontAwesome e `package-lock.json` não são versionados**
+(regenera com `npm install`; avrdude/esptool vêm do teu PATH ou de um clone local).
+
 ```bash
 cd tools/esp32_combined/ardustim_gui
 npm install
@@ -120,8 +128,9 @@ upload de firmware para o ESP32.
 |---|---|
 | `esp32_combined.ino` | Firmware principal (sketch único) |
 | `web_page.h` | Página HTML/JS de controlo WiFi (RPM/MAP/TPS) |
+| `wifi_credentials.example.h` | Template WiFi — copiar para `wifi_credentials.h` |
 | `platformio.ini` | Build config PlatformIO |
-| `ardustim_gui/` | GUI Electron adaptada do Ardu-Stim |
+| `ardustim_gui/` | GUI Electron (sources; vendor bins/fonts ignorados) |
 
 ## Test HIL
 
