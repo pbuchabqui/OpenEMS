@@ -44,7 +44,17 @@ void quick_crank_set_clt(int16_t clt_x10) noexcept;
  */
 uint32_t quick_crank_consume_prime() noexcept;
 
-	/// Returns true while the engine is in cranking mode
-	bool is_cranking() noexcept;
+/// Returns true while the engine is in cranking mode (last quick_crank_update).
+bool is_cranking() noexcept;
+
+/// Returns true while afterstart enrichment is active (last quick_crank_update).
+bool is_afterstart() noexcept;
+
+/// True when cranking and APP is at/above flood-clear threshold (default 70%).
+/// Used to cut scheduled fuel and suppress prime while clearing a flood.
+bool crank_flood_clear_active(uint16_t app_pct_x10) noexcept;
+
+/// Flood-clear APP threshold (pct×10). Default 700 = 70%.
+extern uint16_t crank_flood_tps_x10;
 
 }  // namespace ems::engine

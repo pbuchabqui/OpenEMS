@@ -1,7 +1,7 @@
-// gpio_set_af() is implemented as inline in hal/stm32h562/regs.h
-// No out-of-line GPIO functions remain; this header kept for documentation.
 #ifndef HAL_GPIO_H
 #define HAL_GPIO_H
+
+#include <cstdint>
 
 #ifdef __cplusplus
 extern "C" {

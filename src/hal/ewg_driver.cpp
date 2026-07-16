@@ -8,8 +8,8 @@
 namespace {
 
 // EWG H-bridge: PA7 = IN1 (open), PD3 = IN2 (close), PB10 = TIM2_CH3 PWM.
-// PWM movido de TIM3_CH1/PA6 p/ TIM2_CH3/PB10: o TIM3 é dedicado à injeção
-// (PC6-9) e TIM3_CH1 colidia com INJ0 (PC6). REQUER religar o PWM do EWG ao PB10.
+// EWG PWM TIM2_CH3/PB10 — INJ3 já não usa PB10 (PC10). WeAct: PB10 pode não
+// sair no header. PA6/TIM3 = ETB PWM. PD3 (DIR IN2) só packages c/ GPIOD.
 constexpr uint8_t kIn1Pin = 7u;   // PA7
 constexpr uint8_t kIn2Pin = 3u;   // PD3
 

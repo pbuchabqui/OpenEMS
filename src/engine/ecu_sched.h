@@ -55,6 +55,15 @@ extern volatile uint32_t g_cycle_schedule_drop_count;
 
 void ECU_Hardware_Init(void);
 
+/**
+ * @brief Força INJ/IGN a saída push-pull LOW o mais cedo possível no boot.
+ *
+ * PA15 reset = JTDI com pull-up interno → HIGH activa injectores activos-high.
+ * PC10/PC11 flutuam e podem subir por pull-ups externos no TLE/placa.
+ * Chamar logo após clocks GPIO (antes de delays USB / DFU).
+ */
+void ecu_sched_outputs_safe_early(void);
+
 // eoi_lead_deg: EOI targeting — ângulo (° BTDC de combustão) em que a
 // injecção TERMINA. O início é calculado para trás (SOI = EOI − PW°),
 // recuando automaticamente com PW grande. Clampado a [0, 359] em runtime.

@@ -596,33 +596,43 @@ static void openems_init() noexcept {
     // 1) PLL → 250 MHz + SysTick 1ms + IWDG 100ms
     system_stm32_init();
 
-    // 1a) Reabilitar IRQs globais EXPLICITAMENTE. O Reset_Handler faz cpsid i e nunca
+    // 1a) CRITICAL: INJ/IGN LOW before any delay.
+    // PA15 resets as JTDI with pull-up → HIGH → injectors on (active-high).
+    // PC10/11 float; external pull-ups can also pull INJ high.
+    // Must run before the USB 300 ms wait (was: ECU_Hardware_Init after that).
+    ::ecu_sched_outputs_safe_early();
+    ::ecu_sched_set_inj_inhibit_mask(0x0Fu);
+    ::ecu_sched_set_inj_pw_ticks(0u);
+
+    // 1b) Reabilitar IRQs globais EXPLICITAMENTE. O Reset_Handler faz cpsid i e nunca
     // reabilita; antes isto só acontecia por efeito colateral do 1º cpsie de uma seção
     // crítica adiante, o que deixava a ISR do USB (e outras) mascaradas se a ordem mudasse.
     // Com SysTick já configurado em system_stm32_init(), é seguro habilitar aqui.
     __asm__ volatile("cpsie i" ::: "memory");
 
-    // 1b) PB2 (LED WeAct) como saída — heartbeat visível desde o boot.
+    // 1c) PB2 (LED WeAct) como saída — heartbeat visível desde o boot.
     GPIOB_MODER = (GPIOB_MODER & ~(3u << 4u)) | (1u << 4u);
 
-    // 1c) USB CDC CEDO: só depende de clock (HSI48/CRS já prontos) + IRQs. Subir aqui,
+    // 1d) USB CDC CEDO: só depende de clock (HSI48/CRS já prontos) + IRQs. Subir aqui,
     // antes dos inits da ECU (ADC/CAN/CKP), garante enumeração mesmo que algum init
     // adiante demore/bloqueie numa placa de bancada sem motor — a ISR cuida do resto.
     ems::hal::usb_cdc_init();
 
-    // 1d) Janela p/ a enumeração USB (ISR-driven) completar antes dos inits da ECU, que
+    // 1e) Janela p/ a enumeração USB (ISR-driven) completar antes dos inits da ECU, que
     // podem entrar em seção crítica (cpsid i) e mascarar a ISR do USB por um tempo.
     // ~300 ms kicando o IWDG (timeout 100 ms) a cada ~1 ms @ 250 MHz.
+    // Re-assert INJ/IGN LOW each 100 ms in case USB/other init touches GPIOA.
     for (uint32_t ms = 0u; ms < 300u; ++ms) {
         for (volatile uint32_t d = 0u; d < 60000u; ++d) { /* ~1ms */ }
         iwdg_kick();
         ems::hal::usb_cdc_poll();
-        if ((ms % 100u) == 0u) { GPIOB_ODR ^= (1u << 2u); }
+        if ((ms % 100u) == 0u) {
+            GPIOB_ODR ^= (1u << 2u);
+            ::ecu_sched_outputs_safe_early();
+        }
     }
 
-    // 2) Timers (TIM5=CKP IC, TIM2/TIM1=OC injeção/ignição)
-    // TIM3/TIM4 PWM auxiliares são inicializados em auxiliaries_init().
-    // ECU_Hardware_Init() owns TIM2/TIM1 for injection/ignition scheduling.
+    // 2) Timers (TIM5=CKP IC)
     // misfire_init() DEVE preceder tim5_ic_init(): a tabela g_tooth_to_cyl parte de
     // BSS (zero), mas 0 é um índice de cilindro válido — o ISR do CKP leria cyl=0
     // para todos os dentes antes da tabela ser preenchida, gerando DTCs falsos.
@@ -630,9 +640,11 @@ static void openems_init() noexcept {
     ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
     iwdg_kick();
 
-    // 2a) Scheduler unificado
+    // 2a) Scheduler unificado (re-asserts pin safe + clears event queue)
     ::ECU_Hardware_Init();
     ::ecu_sched_set_presync_inj_auto(1u);  // auto-select SIMULTANEOUS/SEMI_SEQUENTIAL by cranking
+    ::ecu_sched_set_inj_inhibit_mask(0x0Fu);
+    ::ecu_sched_set_inj_pw_ticks(0u);
     iwdg_kick();
 
     // 3) ADC (ADC1/ADC2 + TIM6 trigger)
@@ -911,7 +923,10 @@ int main() {
             // Oil range fault while spinning: cut fuel+ign (bearing protection).
             // Fuel-rail range fault after crank: cut fuel only (lean/dry risk).
             // Overtemp critical: fuel+ign cut while spinning (same floor as oil).
-            // HALF_SYNC: spark OK (wasted), fuel only after FULL_SYNC (angular lock).
+            // Fuel angular policy:
+            //   (1) FULL_SYNC → running fuel (VE / ASE / semi-seq / sequential)
+            //   (2) HALF_SYNC + is_cranking → batch only (simultaneous, crank PW)
+            //   (3) else (exit crank, flood, protect, anomaly/no-sync) → inj cut
             const bool rev_cut = g_limp_active &&
                 (snap.rpm_x10 > kLimpRpmLimit_x10);
             const bool map_fuel_cut = map_fault;
@@ -921,7 +936,9 @@ int main() {
                 fuel_press_fault && (snap.rpm_x10 > kFuelRailMinRpmX10);
             const bool overtemp_cut =
                 overtemp_crit && (snap.rpm_x10 > kOilProtectRpmX10);
-            const bool half_fuel_lockout = sched_sync && !full_sync;
+            const bool fuel_protect_cut =
+                rev_cut || map_fuel_cut || oil_protect_cut || fuel_rail_cut ||
+                overtemp_cut || diag_critical;
             const CachedFuelCorrections& fuel_corr = fuel_corrections_for(sensors);
             // Dwell 2D: tensão × RPM (MS42 §2.2.2.2.1).
             // Calculado fora do cache porque depende de RPM que varia a cada dente.
@@ -948,11 +965,23 @@ int main() {
                     ::ecu_sched_set_mspark(0u, 0u, 18u);
                 }
             }
-            const bool crank_rpm_window =
-                sched_sync && snap.rpm_x10 > 0u &&
-                snap.rpm_x10 < ems::engine::crank_exit_rpm_x10;
+            // Quick-crank state once per 2 ms tick (HALF + FULL + stopped).
+            // Must not be gated on FULL_SYNC fuel — is_cranking() drives presync
+            // SIMULTANEOUS, ETB crank open-loop, and HALF batch fuel.
             ems::engine::quick_crank_set_prime_context(sensors.clt_degc_x10,
                                                        fuel_corr.dead_time_us);
+            const auto qc = ems::engine::quick_crank_update(
+                now, snap.rpm_x10, sched_sync, sensors.clt_degc_x10, 0);
+            // Gate closed-loop enrichments during crank + afterstart (not raw RPM).
+            const bool crank_or_ase = qc.cranking || qc.afterstart_active;
+            const bool flood_clear =
+                ems::engine::crank_flood_clear_active(sensors.app_pct_x10);
+            const bool half_sync = sched_sync && !full_sync;
+            // HALF batch: cranking only, no flood/protect. Auto presync → SIMULTANEOUS.
+            const bool allow_half_crank_batch =
+                half_sync && qc.cranking && !flood_clear && !fuel_protect_cut;
+            // Lock out angular fuel in HALF unless batch-allowed (exit crank / flood / cut).
+            const bool half_fuel_lockout = half_sync && !allow_half_crank_batch;
 
             // Limitador de RPM — rusEFI-style: fuel cut only, total cut + hysteresis.
             // Corta 100% injecção ao atingir hard limit; reativa ao descer
@@ -970,9 +999,8 @@ int main() {
                 ems::app::ui_set_rev_limit_active(g_rev_limit_active);
 
                 const uint8_t inj_mask =
-                    (rev_cut || g_rev_limit_active || map_fuel_cut ||
-                     oil_protect_cut || fuel_rail_cut || overtemp_cut ||
-                     half_fuel_lockout || diag_critical) ? 0x0Fu : 0u;
+                    (fuel_protect_cut || g_rev_limit_active ||
+                     half_fuel_lockout) ? 0x0Fu : 0u;
                 const uint8_t ign_mask =
                     (rev_cut || oil_protect_cut || overtemp_cut ||
                      diag_critical) ? 0x0Fu : 0u;
@@ -982,14 +1010,10 @@ int main() {
 
             // Telemetry PW must match actuators: only when injectors are actually cut.
             const bool fuel_cut_active =
-                g_rev_limit_active || rev_cut || map_fuel_cut ||
-                oil_protect_cut || fuel_rail_cut || overtemp_cut ||
-                half_fuel_lockout || diag_critical;
+                g_rev_limit_active || fuel_protect_cut || half_fuel_lockout;
 
-            // Fuel calc + inject only in FULL_SYNC; HALF keeps spark (wasted path).
-            if (full_sync && !rev_cut && !map_fuel_cut &&
-                !oil_protect_cut && !fuel_rail_cut && !overtemp_cut &&
-                !diag_critical) {
+            // (1) FULL_SYNC: running fuel path (VE / trims / AE / X-τ when not crank-ASE).
+            if (full_sync && !fuel_protect_cut) {
                 const ems::engine::Table2dLookup fuel_lookup =
                     ems::engine::table3d_prepare_lookup(ems::engine::kRpmAxisX10,
                                                         ems::engine::kLoadAxisBarX100,
@@ -1000,13 +1024,13 @@ int main() {
                     ems::engine::get_lambda_target_x1000_prepared(fuel_lookup);
                 // LTFT apply = nearest cell (mesma política que crédito/store LEARN).
                 // fuel_lookup.yi/xi são floor da bilineal VE — mid-bin errava a célula.
-                const int16_t fuel_trim_pct_x10 = crank_rpm_window ? 0 : clamp_i16(
+                const int16_t fuel_trim_pct_x10 = crank_or_ase ? 0 : clamp_i16(
                     static_cast<int16_t>(ems::engine::fuel_get_stft_pct_x10() +
                                          ems::engine::fuel_get_ltft_at(snap.rpm_x10, map_bar_x100)),
                     -500, 500);
                 // AE from map-fusion TPSdot (ring buffer) — more stable than 1-sample Δ.
                 const int16_t ae_tpsdot = ems::engine::map_get_tpsdot_x10();
-                const int32_t ae_pw_us = crank_rpm_window ? 0
+                const int32_t ae_pw_us = crank_or_ase ? 0
                     : ems::engine::calc_ae_pw_from_tpsdot(
                         (ae_tpsdot > 0) ? ae_tpsdot : static_cast<int16_t>(0),
                         sensors.clt_degc_x10);
@@ -1021,10 +1045,11 @@ int main() {
                 // Corte de combustível na desaceleração (MS42 TI_PUR).
                 // Avaliado ANTES do X-Tau: evita alimentar o modelo de parede com PW
                 // real e depois descartar o resultado, contaminando a auto-calibração.
-                const bool decel_cut_active = !crank_rpm_window &&
+                const bool decel_cut_active = !crank_or_ase &&
                     ems::engine::fuel_decel_cut_update(
                         snap.rpm_x10, sensors.etb_tps_pct_x10, sensors.clt_degc_x10);
-                ems::engine::misfire_set_all_inhibit(decel_cut_active || crank_rpm_window);
+                ems::engine::misfire_set_all_inhibit(
+                    decel_cut_active || crank_or_ase || flood_clear);
                 if (decel_cut_active) {
                     g_last_net_pw_us = 0u;
                     g_ae_active = false;
@@ -1034,7 +1059,7 @@ int main() {
                         final_pw_us_base - static_cast<uint32_t>(fuel_corr.dead_time_us);
 
                     // LTFT aditivo (MS42 TI_AD_ADD_MMV): offset no PW líquido, célula nearest
-                    if (!crank_rpm_window) {
+                    if (!crank_or_ase) {
                         const int16_t ltft_add =
                             ems::engine::fuel_get_ltft_add_at(snap.rpm_x10, map_bar_x100);
                         const int32_t pw_adj = static_cast<int32_t>(fuel_pw_us) + ltft_add;
@@ -1044,7 +1069,7 @@ int main() {
                     }
                     g_last_net_pw_us = fuel_pw_us;
 
-                    const bool xtau_enabled = !crank_rpm_window && (snap.rpm_x10 >= 7000u);
+                    const bool xtau_enabled = !crank_or_ase && (snap.rpm_x10 >= 7000u);
 
                     // Detecta transiente para auto-calibração X-τ
                     const bool is_transient = ems::engine::map_is_transient();
@@ -1053,7 +1078,7 @@ int main() {
                     // Lambda vem exclusivamente do WBO2 via CAN (mesma fonte do
                     // STFT em 100ms); SensorData não carrega mais o2/lambda.
                     const bool lambda_valid = ems::app::can_stack_wbo2_fresh(now);
-                    if (full_sync && !crank_rpm_window && lambda_valid) {
+                    if (full_sync && !crank_or_ase && lambda_valid) {
                         const uint16_t lambda_measured = clamp_u16(
                             ems::app::can_stack_lambda_milli_safe(now),
                             kLambdaMinMilli, kLambdaMaxMilli);
@@ -1092,30 +1117,32 @@ int main() {
                 const uint16_t knock_retard_x10 = ems::engine::knock_get_retard_x10(0u);
                 const uint16_t idle_target_rpm_x10 =
                     ems::engine::auxiliaries_idle_target_rpm_x10(sensors.clt_degc_x10);
-                const int16_t idle_spark_corr_deg = crank_rpm_window ? 0 :
+                // Idle spark OK during afterstart (helps settle); suppressed only while cranking.
+                const int16_t idle_spark_corr_deg = qc.cranking ? 0 :
                     ems::engine::calc_idle_spark_correction_deg(snap.rpm_x10,
                                                                 idle_target_rpm_x10,
                                                                 sensors.etb_tps_pct_x10,
                                                                 map_bar_x100);
-                const int16_t iat_spark_deg = crank_rpm_window ? 0 :
+                const int16_t iat_spark_deg = qc.cranking ? 0 :
                     ems::engine::calc_ign_iat_correction_deg(sensors.iat_degc_x10);
-                const int16_t clt_spark_deg = crank_rpm_window ? 0 :
+                const int16_t clt_spark_deg = qc.cranking ? 0 :
                     ems::engine::calc_ign_clt_correction_deg(sensors.clt_degc_x10);
                 const bool ae_now = (ae_pw_us > 0);
-                const int16_t antijerk_retard = crank_rpm_window ? 0 :
+                const int16_t antijerk_retard = crank_or_ase ? 0 :
                     ems::engine::calc_antijerk_retard_deg(ae_now);
-                int16_t advance_deg = ems::engine::calc_total_advance(
+                const int16_t advance_deg = ems::engine::calc_total_advance(
                     base_advance_deg,
                     {iat_spark_deg, clt_spark_deg,
                      static_cast<int16_t>(knock_retard_x10 / 10u),
                      idle_spark_corr_deg, antijerk_retard,
                      g_torque_spark_retard_deg});
-                // Fuel rev-limit remains fuel-cut only; TC/launch may retard spark.
-
-                const auto qc = ems::engine::quick_crank_update(
-                    now, snap.rpm_x10, sched_sync, sensors.clt_degc_x10, advance_deg);
-                // Decel cut: força PW=0 sem passar pelo quick_crank (que pode adicionar min_pw)
-                const uint32_t quick_crank_pw_us = decel_cut_active ? 0u :
+                // Cranking spark from qc (base was 0 at update); else table+corr.
+                const int16_t sched_spark_deg = qc.cranking
+                    ? ems::engine::crank_spark_deg
+                    : advance_deg;
+                // Decel / flood: force PW=0 (do not apply min_pw floor).
+                const uint32_t quick_crank_pw_us =
+                    (decel_cut_active || flood_clear) ? 0u :
                     ems::engine::quick_crank_apply_pw_us(final_pw_us_base,
                                                          qc.fuel_mult_x256,
                                                          qc.min_pw_us);
@@ -1135,38 +1162,82 @@ int main() {
                 const uint32_t pw_100 = final_pw_us / 100u;
                 g_last_pw_ms_x10 = fuel_cut_active ? 0u
                     : static_cast<uint8_t>(pw_100 > 255u ? 255u : pw_100);
-                g_last_advance_deg = clamp_i8(qc.spark_deg, -10, 40);
+                g_last_advance_deg = clamp_i8(sched_spark_deg, -10, 40);
 
                 const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
 
                 ::ecu_sched_commit_calibration(
-                    static_cast<uint32_t>(qc.spark_deg < 0 ? 0 : qc.spark_deg),
+                    static_cast<uint32_t>(sched_spark_deg < 0 ? 0 : sched_spark_deg),
+                    dwell_ticks,
+                    inj_pw_ticks,
+                    static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(snap.rpm_x10)));
+            } else if (allow_half_crank_batch) {
+                // (2) HALF_SYNC + cranking: simultaneous batch, crank PW only (no VE/STFT/AE).
+                // Presync auto already selects SIMULTANEOUS while is_cranking().
+                // Force mode in case auto was off or race with tooth ISR.
+                ::ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
+                ems::engine::misfire_set_all_inhibit(true);
+                g_ae_active = false;
+                ems::engine::transient_fuel_reset();
+
+                const uint32_t req_us = ems::engine::default_req_fuel_us();
+                const uint32_t crank_flow_us = ems::engine::quick_crank_apply_pw_us(
+                    req_us, qc.fuel_mult_x256, qc.min_pw_us);
+                g_last_net_pw_us = crank_flow_us;
+                const uint32_t delta_p_pw_us = ems::engine::apply_delta_p_compensation(
+                    crank_flow_us, sensors.fuel_press_bar_x1000, map_bar_x100);
+                const uint32_t scurve_pw_us = ems::engine::apply_injector_scurve(delta_p_pw_us);
+                const uint32_t final_pw_us = (scurve_pw_us > 0u)
+                    ? scurve_pw_us + static_cast<uint32_t>(fuel_corr.dead_time_us)
+                    : 0u;
+                const uint32_t pw_100 = final_pw_us / 100u;
+                g_last_pw_ms_x10 = fuel_cut_active ? 0u
+                    : static_cast<uint8_t>(pw_100 > 255u ? 255u : pw_100);
+                const int16_t sched_spark_deg = ems::engine::crank_spark_deg;
+                g_last_advance_deg = clamp_i8(sched_spark_deg, -10, 40);
+                const uint32_t inj_pw_ticks =
+                    ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
+                ::ecu_sched_commit_calibration(
+                    static_cast<uint32_t>(sched_spark_deg < 0 ? 0 : sched_spark_deg),
                     dwell_ticks,
                     inj_pw_ticks,
                     static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(snap.rpm_x10)));
             } else if (sched_sync &&
-                       (rev_cut || oil_protect_cut || overtemp_cut || diag_critical ||
-                        half_fuel_lockout || map_fuel_cut || fuel_rail_cut)) {
-                // Spark-only (or mask-inhibited): HALF lockout, fuel cuts, limp/overtemp.
+                       (fuel_protect_cut || half_fuel_lockout || g_rev_limit_active)) {
+                // (3) Spark-only: exit-crank HALF, flood, protect, rev-limit, anomaly path.
+                // qc already updated — use crank spark only while still latched cranking.
                 const int16_t base_advance_deg = ems::engine::get_advance(snap.rpm_x10, map_bar_x100);
+                const int16_t sched_spark_deg = qc.cranking
+                    ? ems::engine::crank_spark_deg
+                    : base_advance_deg;
                 ::ecu_sched_commit_calibration(
-                    static_cast<uint32_t>(base_advance_deg < 0 ? 0 : base_advance_deg),
+                    static_cast<uint32_t>(sched_spark_deg < 0 ? 0 : sched_spark_deg),
                     dwell_ticks,
                     0u,
                     static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(snap.rpm_x10)));
                 g_last_pw_ms_x10 = 0u;
+                g_last_net_pw_us = 0u;
+                g_last_advance_deg = clamp_i8(sched_spark_deg, -10, 40);
                 g_ae_active = false;
-            } else if (snap.rpm_x10 == 0u) {
-                static_cast<void>(ems::engine::quick_crank_update(
-                    now, snap.rpm_x10, false, sensors.clt_degc_x10, 0));
             }
             g_prev_tps_pct_x10 = sensors.etb_tps_pct_x10;
             ems::app::ui_update_rt_map_fuel(map_bar_x100, g_last_net_pw_us);
             g_last_map_fused_x100 = map_bar_x100;
 
-            const uint32_t prime_pw = ems::engine::quick_crank_consume_prime();
+            // Prime one-shot: suppressed on flood-clear, fuel-protect (MAP/oil/rail/
+            // overtemp/diag/rev limp), and whenever inj mask already locks all cyls.
+            // force_output also honors the mask (defense in depth vs bypass).
+            const bool prime_blocked =
+                flood_clear || fuel_protect_cut || half_fuel_lockout ||
+                g_rev_limit_active;
+            const uint32_t prime_pw = prime_blocked
+                ? 0u
+                : ems::engine::quick_crank_consume_prime();
             if (prime_pw != 0u && !ems::engine::output_test_active()) {
                 ::ecu_sched_fire_prime_pulse(prime_pw);
+            } else if (prime_blocked) {
+                // Drop pending prime so protect/flood cannot fire after condition clears mid-tooth.
+                static_cast<void>(ems::engine::quick_crank_consume_prime());
             }
 
             // EWG position inner loop (2ms cadence)

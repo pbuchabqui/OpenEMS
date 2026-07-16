@@ -55,26 +55,29 @@ GND          ──► GND do PCB
 
 Meça 3.3 V nos pinos de alimentação do STM32 antes de ligar o SWD.
 
-### Pinos de sinal (LQFP64)
+### Pinos de sinal (LQFP64 / RGT6 — firmware actual)
+
+> **Pinout completo e diferença VGT6:** ver `README.md` §5.0. Drive INJ/IGN = GPIO BSRR (não TIM OC).
 
 | Pino STM32 | Função | Destino na bancada |
 |-----------|--------|-------------------|
-| PA0 | TIM5_CH1 — CKP input capture | Saída do gerador de funções (CKP) |
-| PA1 | TIM5_CH2 — CMP input capture | Saída do gerador de funções (CMP) |
-| PC6 | TIM8_CH1 — Ignição cil. 0 | Canal 1 do osciloscópio |
-| PC7 | TIM8_CH2 — Ignição cil. 1 | Canal 2 do osciloscópio (opcional) |
-| PC8 | TIM8_CH3 — Ignição cil. 2 | — |
-| PC9 | TIM8_CH4 — Ignição cil. 3 | — |
-| PA15 | TIM2_CH1 — Injecção cil. 0 | Canal 1 do osciloscópio (fase 3) |
-| PB3  | TIM2_CH2 — Injecção cil. 1 | — |
-| PB10 | TIM2_CH3 — Injecção cil. 2 | — |
-| PB11 | TIM2_CH4 — Injecção cil. 3 | — |
-| PA9  | UART1 TX | RX do adaptador USB-UART |
-| PA10 | UART1 RX | TX do adaptador USB-UART |
-| PA11 | USB D− | Conector USB (alternativa ao UART) |
-| PA12 | USB D+ | Conector USB |
-| PA13 | SWDIO | SWD do programador |
-| PA14 | SWDCK | SWD do programador |
+| PA0 | TIM5_CH1 — CKP | Gerador / estimulador CKP |
+| PA1 | TIM5_CH2 — CMP | Gerador / estimulador CMP |
+| PA6 | TIM3_CH1 — ETB PWM | H-bridge enable / PWM |
+| PA8 | GPIO — ETB DIR open | H-bridge IN1 |
+| PB4 | GPIO — ETB DIR close | H-bridge IN2 |
+| PA15 | GPIO — INJ1 | Scope / TLE8888 |
+| PB3 | GPIO — INJ2 | |
+| PC10 | GPIO — INJ3 | (PB10/11 não expostos na WeAct) |
+| PC11 | GPIO — INJ4 | |
+| PC6 | GPIO — IGN1 | Scope / TLE8888 |
+| PC7 | GPIO — IGN2 | |
+| PC8 | GPIO — IGN3 | |
+| PC9 | GPIO — IGN4 | |
+| PA9 | UART1 TX | USB-UART RX |
+| PA10 | UART1 RX | USB-UART TX |
+| PA11 / PA12 | USB DM/DP | CDC |
+| PA13 / PA14 | SWDIO / SWDCK | ST-Link |
 
 > O firmware suporta tanto **UART1 @ 115200 baud** como **USB-CDC** com o
 > mesmo protocolo. Use o que for mais conveniente. USB-CDC requer que o

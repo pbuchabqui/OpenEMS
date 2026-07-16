@@ -11,6 +11,7 @@
  */
 
 #include "torque_manager.h"
+#include "engine/quick_crank.h"
 #include <string.h>
 #include <math.h>
 
@@ -226,6 +227,42 @@ static uint8_t  g_limp_reason      = 0u;
 // Integrador de ar para marcha lenta (pct×10). Acumula abertura necessária
 // para manter RPM no target; limitado entre etb_idle_min/max_opening_x10.
 static int32_t  g_idle_air_int_x10 = 0;
+// Crank→idle taper: hold elevated blade after first fire, then blend to idle I.
+static bool     g_prev_idle_cranking = false;
+static bool     g_crank_taper_active = false;
+static uint32_t g_crank_taper_start_ms = 0u;
+static int32_t  g_crank_taper_from_x10 = 0;
+// Idle phase latch (RPM upper hysteresis — avoid flapping idle↔coasting).
+static bool     g_idle_phase = false;
+
+// Open-loop crank air (pct×10). Prefer max idle opening; never below min.
+static uint16_t crank_open_pct_x10() noexcept {
+    uint16_t lo = etb_idle_min_opening_x10;
+    uint16_t hi = etb_idle_max_opening_x10;
+    if (hi < lo) {
+        const uint16_t t = lo;
+        lo = hi;
+        hi = t;
+    }
+    if (hi < 10u) {
+        hi = 80u;  // 8% fallback
+    }
+    return hi;
+}
+
+// Idle RPM upper band (rpm×10). Reuse idle-spark window cal when sane.
+static uint32_t idle_rpm_upper_x10() noexcept {
+    uint32_t u = idle_spark_window_above_target_x10;
+    if (u < 500u) {
+        u = 4000u;  // 400 RPM
+    }
+    if (u > 20000u) {
+        u = 20000u;
+    }
+    return u;
+}
+
+constexpr uint32_t kCrankToIdleTaperMs = 1000u;
 
 // Launch state machine
 enum class LaunchState : uint8_t { Idle = 0, Armed = 1, Active = 2 };
@@ -270,6 +307,11 @@ void torque_manager_reset() noexcept {
     g_etb_target_x10   = 0u;
     g_limp_reason      = 0u;
     g_idle_air_int_x10 = 0;
+    g_prev_idle_cranking = false;
+    g_crank_taper_active = false;
+    g_crank_taper_start_ms = 0u;
+    g_crank_taper_from_x10 = 0;
+    g_idle_phase = false;
     g_launch_state     = LaunchState::Idle;
     g_tc_reduction_x10 = 0u;
     g_tc_prev_rpm_x10  = 0u;
@@ -573,12 +615,79 @@ TorqueOutput torque_manager_update(
         }
     }
 
-    // Idle air: floor + integrator I. Skip while rev-limiting / launch / heavy TC.
+    // Idle air / crank open-loop / crank→idle taper.
+    // Skip while rev-limiting / launch / heavy TC.
     const bool rev_limiting = (out.limp_reason & TORQUE_LIMP_REV_CUT) != 0u;
-    const bool in_idle_mode = !rev_limiting && launch_active == 0u && tc_red < 100u
-                              && (sensors.app_pct_x10 < etb_idle_open_pct_x10)
-                              && (snap.rpm_x10 > 0u);
-    if (in_idle_mode) {
+    const bool app_idle = (sensors.app_pct_x10 < etb_idle_open_pct_x10);
+    const bool cranking_now = is_cranking();
+    const int32_t idle_min = static_cast<int32_t>(etb_idle_min_opening_x10);
+    const int32_t idle_max = static_cast<int32_t>(etb_idle_max_opening_x10);
+    const uint16_t crank_open = crank_open_pct_x10();
+    const uint32_t now_ms = ::millis();
+
+    // Crank edge → start taper from crank open toward idle I.
+    if (cranking_now) {
+        g_idle_air_int_x10 = static_cast<int32_t>(crank_open);
+        g_crank_taper_active = false;
+        g_crank_taper_from_x10 = static_cast<int32_t>(crank_open);
+        g_idle_phase = true;
+    } else if (g_prev_idle_cranking) {
+        g_crank_taper_active = true;
+        g_crank_taper_start_ms = now_ms;
+        g_crank_taper_from_x10 = static_cast<int32_t>(crank_open);
+        if (g_idle_air_int_x10 < idle_min) {
+            g_idle_air_int_x10 = idle_min;
+        }
+    }
+    g_prev_idle_cranking = cranking_now;
+
+    // RPM hysteresis for idle phase (closed APP only).
+    const uint32_t upper = idle_rpm_upper_x10();
+    const uint32_t exit_rpm = static_cast<uint32_t>(idle_target_rpm_x10)
+                            + (upper + upper / 2u);  // target + 1.5×upper
+    const uint32_t enter_rpm = static_cast<uint32_t>(idle_target_rpm_x10) + upper;
+    if (!app_idle || rev_limiting || launch_active != 0u || tc_red >= 100u) {
+        g_idle_phase = false;
+    } else if (snap.rpm_x10 > 0u) {
+        if (g_idle_phase) {
+            if (snap.rpm_x10 > exit_rpm) {
+                g_idle_phase = false;
+            }
+        } else if (snap.rpm_x10 < enter_rpm) {
+            g_idle_phase = true;
+        }
+    }
+
+    const bool allow_idle_air = !rev_limiting && launch_active == 0u && tc_red < 100u;
+
+    if (allow_idle_air && cranking_now) {
+        // Open-loop crank air: guarantee blade for first fire.
+        if (target_x10 < crank_open) {
+            target_x10 = crank_open;
+        }
+    } else if (allow_idle_air && g_crank_taper_active) {
+        const uint32_t elapsed = now_ms - g_crank_taper_start_ms;
+        if (elapsed >= kCrankToIdleTaperMs) {
+            g_crank_taper_active = false;
+        } else {
+            // Linear blend crank_open → current idle I floor.
+            const int32_t to = (g_idle_air_int_x10 < idle_min)
+                ? idle_min
+                : (g_idle_air_int_x10 > idle_max ? idle_max : g_idle_air_int_x10);
+            const int32_t from = g_crank_taper_from_x10;
+            const int32_t blended = from
+                + ((to - from) * static_cast<int32_t>(elapsed))
+                  / static_cast<int32_t>(kCrankToIdleTaperMs);
+            const uint16_t floor = static_cast<uint16_t>(
+                blended < 0 ? 0 : (blended > 1000 ? 1000 : blended));
+            if (target_x10 < floor) {
+                target_x10 = floor;
+            }
+        }
+    }
+
+    if (allow_idle_air && g_idle_phase && !cranking_now && snap.rpm_x10 > 0u) {
+        // Closed-loop idle I (after crank open / under taper floor).
         const int32_t rpm_error = static_cast<int32_t>(idle_target_rpm_x10)
                                   - static_cast<int32_t>(snap.rpm_x10);
         if (rpm_error > 50) {          // deadband ±5 RPM (×10)
@@ -586,16 +695,17 @@ TorqueOutput torque_manager_update(
         } else if (rpm_error < -50) {
             g_idle_air_int_x10 -= i_step;
         }
-        const int32_t idle_min = static_cast<int32_t>(etb_idle_min_opening_x10);
-        const int32_t idle_max = static_cast<int32_t>(etb_idle_max_opening_x10);
         if (g_idle_air_int_x10 < idle_min) { g_idle_air_int_x10 = idle_min; }
         if (g_idle_air_int_x10 > idle_max) { g_idle_air_int_x10 = idle_max; }
-        const uint16_t idle_floor = static_cast<uint16_t>(g_idle_air_int_x10);
-        if (target_x10 < idle_floor) {
-            target_x10 = idle_floor;
+        if (!g_crank_taper_active) {
+            const uint16_t idle_floor = static_cast<uint16_t>(g_idle_air_int_x10);
+            if (target_x10 < idle_floor) {
+                target_x10 = idle_floor;
+            }
         }
-    } else if (sensors.app_pct_x10 >= etb_idle_open_pct_x10 || rev_limiting ||
-               launch_active != 0u) {
+    } else if (!cranking_now &&
+               (sensors.app_pct_x10 >= etb_idle_open_pct_x10 || rev_limiting ||
+                launch_active != 0u || !g_idle_phase)) {
         if (g_idle_air_int_x10 > 0) {
             g_idle_air_int_x10 -= i_step;
             if (g_idle_air_int_x10 < 0) { g_idle_air_int_x10 = 0; }

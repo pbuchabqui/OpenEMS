@@ -18,7 +18,6 @@ namespace si = ems::engine::sched_internal;
 // Host stubs for the live path only: TIM5 dispatcher + GPIO BSRR/MODER init.
 // TIM1/TIM3 OC register surface removed after BSRR migration (not written on device).
 static uint32_t ems_test_rcc_ahb2enr1;
-static uint32_t ems_test_gpio_moder;
 // Legacy test API placeholders (set/get TIM1 CCR no longer drive outputs).
 static uint32_t ems_test_tim1_ign_cnt;
 static uint32_t ems_test_tim1_ign_ccr1;
@@ -26,13 +25,37 @@ static uint32_t ems_test_tim1_ign_ccr2;
 static uint32_t ems_test_tim1_ign_ccr3;
 static uint32_t ems_test_tim1_ign_ccr4;
 
+static uint32_t ems_test_gpioa_moder = 0u;
+static uint32_t ems_test_gpiob_moder = 0u;
+static uint32_t ems_test_gpioc_moder = 0u;
+static uint32_t ems_test_gpioa_otyper = 0u;
+static uint32_t ems_test_gpiob_otyper = 0u;
+static uint32_t ems_test_gpioc_otyper = 0u;
+static uint32_t ems_test_gpioa_pupdr = 0u;
+static uint32_t ems_test_gpiob_pupdr = 0u;
+static uint32_t ems_test_gpioc_pupdr = 0u;
+static uint32_t ems_test_gpioa_afrh = 0u;
+static uint32_t ems_test_gpioa_bsrr = 0u;
+static uint32_t ems_test_gpiob_bsrr = 0u;
+static uint32_t ems_test_gpioc_bsrr = 0u;
+
 #define RCC_AHB2ENR1 ems_test_rcc_ahb2enr1
-#define GPIOC_MODER ems_test_gpio_moder
-#define GPIOE_MODER ems_test_gpio_moder
+#define GPIOA_MODER ems_test_gpioa_moder
+#define GPIOB_MODER ems_test_gpiob_moder
+#define GPIOC_MODER ems_test_gpioc_moder
+#define GPIOA_OTYPER ems_test_gpioa_otyper
+#define GPIOB_OTYPER ems_test_gpiob_otyper
+#define GPIOC_OTYPER ems_test_gpioc_otyper
+#define GPIOA_PUPDR ems_test_gpioa_pupdr
+#define GPIOB_PUPDR ems_test_gpiob_pupdr
+#define GPIOC_PUPDR ems_test_gpioc_pupdr
+#define GPIOA_AFRH  ems_test_gpioa_afrh
+#define GPIOA_BSRR  ems_test_gpioa_bsrr
+#define GPIOB_BSRR  ems_test_gpiob_bsrr
+#define GPIOC_BSRR  ems_test_gpioc_bsrr
 #define RCC_AHB2ENR1_GPIOAEN 1U
 #define RCC_AHB2ENR1_GPIOBEN 2U
 #define RCC_AHB2ENR1_GPIOCEN 4U
-#define RCC_AHB2ENR1_GPIOEEN 8U
 #define TIM_SR_CC3IF 0x8U
 #define TIM_DIER_CC3IE (1U << 3)
 
@@ -40,15 +63,10 @@ static uint32_t ems_test_tim5_ccr3 = 0u;
 static uint32_t ems_test_tim5_sr   = 0u;
 static uint32_t ems_test_tim5_dier = 0u;
 static uint32_t ems_test_tim5_cnt  = 0u;
-static uint32_t ems_test_gpioc_bsrr = 0u;
-static uint32_t ems_test_gpioe_bsrr = 0u;
 #define TIM5_CCR3   ems_test_tim5_ccr3
 #define TIM5_SR     ems_test_tim5_sr
 #define TIM5_DIER   ems_test_tim5_dier
 #define TIM5_CNT    ems_test_tim5_cnt
-// Host: both ports alias one cell (pre-existing); device uses real BSRR addresses.
-#define STM32_REG32(addr) (*reinterpret_cast<volatile uint32_t*>( \
-    ((addr) == 0x42021018UL) ? &ems_test_gpioe_bsrr : &ems_test_gpioc_bsrr))
 #endif
 
 #define ECU_CHANNELS      8U
@@ -127,7 +145,9 @@ volatile uint32_t g_mspark_inter_dwell_ticks = 0U;
 volatile uint32_t g_mspark_atdc_limit_deg    = 18U;
 volatile uint32_t g_advance_deg = 10U;
 volatile uint32_t g_dwell_ticks = 187500U;  // 3 ms @ 62.5 MHz
-volatile uint32_t g_inj_pw_ticks = 187500U;  // 3 ms @ 62.5 MHz
+// Default 0 until first main commit — avoids angular fuel with default PW
+// between first CKP edges and the first 2 ms policy tick (inhibit may still be 0).
+volatile uint32_t g_inj_pw_ticks = 0U;
 volatile uint32_t g_eoi_lead_deg = 355U;
 volatile uint8_t  g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
 volatile uint8_t  g_presync_bank_toggle = 0U;
@@ -192,32 +212,49 @@ volatile uint8_t g_ts_ring_idx = 0U;
 // Gap timestamp from CKP (written by tooth hook at rev boundary)
 volatile uint32_t g_last_gap_ts = 0U;
 
-// GPIO BSRR addresses for direct pin control (no OC mode needed)
-// INJ e IGN todos em GPIOE (BSRR único), conforme hardware/frozen spec:
-// PE0=INJ1, PE2=INJ2, PE4=INJ3, PE6=INJ4
-// PE9=IGN1, PE11=IGN2, PE13=IGN3, PE15=IGN4
-#define GPIOC_BSRR STM32_REG32(0x42020818UL)
-#define GPIOE_BSRR STM32_REG32(0x42021018UL)
+// GPIO BSRR — pin map via EMS_BOARD_* (board_pinout.h).
+// Ordem ECU_CH_*: [INJ3, INJ4, INJ1, INJ2, IGN4, IGN3, IGN2, IGN1].
+#include "hal/board_pinout.h"
 
-// BSRR set/clr masks per ECU_CH_* (0..7). Todos os canais em GPIOE (port_e=1).
-// Ordem do array segue o enum ECU_CH_*: [INJ3, INJ4, INJ1, INJ2, IGN4, IGN3, IGN2, IGN1].
-static constexpr uint32_t k_bsrr_set[8] = {
-    (1U << 4), (1U << 6), (1U << 0), (1U << 2),    // INJ3 PE4, INJ4 PE6, INJ1 PE0, INJ2 PE2
-    (1U << 15), (1U << 13), (1U << 11), (1U << 9)  // IGN4 PE15, IGN3 PE13, IGN2 PE11, IGN1 PE9
+enum : uint8_t { kPortA = 0U, kPortB = 1U, kPortC = 2U, kPortE = 3U };
+
+#if EMS_BOARD_IS_VGT6
+// VGT6 LQFP100 — GPIOE:
+//   INJ1=PE0  INJ2=PE2  INJ3=PE4  INJ4=PE6
+//   IGN1=PE9  IGN2=PE11 IGN3=PE13 IGN4=PE15
+static constexpr uint8_t k_bsrr_port[8] = {
+    kPortE, kPortE, kPortE, kPortE,
+    kPortE, kPortE, kPortE, kPortE
 };
-static constexpr uint32_t k_bsrr_clr[8] = {
-    (1U << 20), (1U << 22), (1U << 16), (1U << 18),
-    (1U << 31), (1U << 29), (1U << 27), (1U << 25)
+static constexpr uint8_t k_bsrr_pin[8] = {
+    4U, 6U, 0U, 2U,
+    15U, 13U, 11U, 9U
 };
-static constexpr uint8_t k_bsrr_port_e[8] = {1U, 1U, 1U, 1U, 1U, 1U, 1U, 1U};
+#else
+// RGT6 LQFP64 / WeAct:
+//   INJ1=PA15 INJ2=PB3 INJ3=PC10 INJ4=PC11
+//   IGN1=PC6  IGN2=PC7 IGN3=PC8  IGN4=PC9
+static constexpr uint8_t k_bsrr_port[8] = {
+    kPortC, kPortC, kPortA, kPortB,
+    kPortC, kPortC, kPortC, kPortC
+};
+static constexpr uint8_t k_bsrr_pin[8] = {
+    10U, 11U, 15U, 3U,
+    9U, 8U, 7U, 6U
+};
+#endif
 
 static inline void gpio_set_pin(uint8_t channel, uint8_t high) {
     if (channel >= 8U) { return; }
-    const uint32_t mask = high ? k_bsrr_set[channel] : k_bsrr_clr[channel];
-    if (k_bsrr_port_e[channel] != 0U) {
-        GPIOE_BSRR = mask;
-    } else {
-        GPIOC_BSRR = mask;
+    const uint8_t pin = k_bsrr_pin[channel];
+    const uint32_t mask = high ? (1U << pin) : (1U << (static_cast<uint32_t>(pin) + 16U));
+    switch (k_bsrr_port[channel]) {
+    case kPortA: GPIOA_BSRR = mask; break;
+    case kPortB: GPIOB_BSRR = mask; break;
+#if !defined(EMS_HOST_TEST)
+    case kPortE: GPIOE_BSRR = mask; break;
+#endif
+    default:     GPIOC_BSRR = mask; break;
     }
 }
 
@@ -445,6 +482,20 @@ static void sanitize_runtime_calibration(void)
 
 static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state)
 {
+    // Safe-state transitions (INJ_OFF / SPARK) always allowed — never block a cut.
+    // Non-safe ON paths honor inhibit masks so prime / test pulse cannot bypass
+    // fuel-protect, half lockout, rev-limit, or flood-driven mask=0x0F.
+    if (is_safe_state == 0U) {
+        const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
+        if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
+            const uint8_t cyl_bit = (ch < 8U) ? k_inj_ch_to_bit[ch] : 0U;
+            if (cyl_bit != 0U && (g_inj_inhibit_mask & cyl_bit) != 0U) { return; }
+        }
+        if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
+            const uint8_t cyl_bit = (ch < 8U) ? k_ign_ch_to_bit[ch] : 0U;
+            if (cyl_bit != 0U && (g_ign_inhibit_mask & cyl_bit) != 0U) { return; }
+        }
+    }
     const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
     const uint8_t idx = channel_pin_idx(ch);
     if (idx != 0xFFU) {
@@ -526,31 +577,58 @@ static void clear_all_events_and_drive_safe_outputs(void)
     ems::engine::knock_window_cycle_end();
 }
 
+void ecu_sched_outputs_safe_early(void)
+{
+    for (volatile uint32_t d = 0u; d < 8u; ++d) {}
+
+#if EMS_BOARD_IS_VGT6
+    // VGT6: all INJ/IGN on GPIOE — push-pull LOW (active-high actuators).
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
+    for (volatile uint32_t d = 0u; d < 8u; ++d) {}
+    static const uint8_t pe_pins[] = {0U, 2U, 4U, 6U, 9U, 11U, 13U, 15U};
+    for (uint8_t i = 0U; i < 8U; ++i) {
+        const uint8_t pin = pe_pins[i];
+        GPIOE_OTYPER &= ~(1U << pin);
+        GPIOE_PUPDR  = (GPIOE_PUPDR & ~(3U << (pin * 2U)));
+        GPIOE_MODER  = (GPIOE_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
+    }
+    GPIOE_BSRR = (1U << (0U + 16U)) | (1U << (2U + 16U)) | (1U << (4U + 16U))
+               | (1U << (6U + 16U)) | (1U << (9U + 16U)) | (1U << (11U + 16U))
+               | (1U << (13U + 16U)) | (1U << (15U + 16U));
+#else
+    // RGT6: INJ PA15/PB3/PC10/PC11 · IGN PC6–9
+    // PA15 after reset is often JTDI with pull-up → HIGH until here.
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN | RCC_AHB2ENR1_GPIOBEN | RCC_AHB2ENR1_GPIOCEN;
+    for (volatile uint32_t d = 0u; d < 8u; ++d) {}
+
+    GPIOA_AFRH = (GPIOA_AFRH & ~(0xFu << ((15U - 8U) * 4U)));
+    GPIOA_OTYPER &= ~(1U << 15U);
+    GPIOA_PUPDR  = (GPIOA_PUPDR & ~(3U << (15U * 2U)));
+    GPIOB_OTYPER &= ~(1U << 3U);
+    GPIOB_PUPDR  = (GPIOB_PUPDR & ~(3U << (3U * 2U)));
+    for (uint8_t pin = 6U; pin <= 11U; ++pin) {
+        GPIOC_OTYPER &= ~(1U << pin);
+        GPIOC_PUPDR  = (GPIOC_PUPDR & ~(3U << (pin * 2U)));
+    }
+
+    GPIOA_MODER = (GPIOA_MODER & ~(3U << (15U * 2U))) | (1U << (15U * 2U));
+    GPIOB_MODER = (GPIOB_MODER & ~(3U << (3U * 2U))) | (1U << (3U * 2U));
+    for (uint8_t pin = 6U; pin <= 11U; ++pin) {
+        GPIOC_MODER = (GPIOC_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
+    }
+
+    GPIOA_BSRR = (1U << (15U + 16U));
+    GPIOB_BSRR = (1U << (3U + 16U));
+    GPIOC_BSRR = (1U << (6U + 16U)) | (1U << (7U + 16U))
+               | (1U << (8U + 16U)) | (1U << (9U + 16U))
+               | (1U << (10U + 16U)) | (1U << (11U + 16U));
+#endif
+}
+
 void ECU_Hardware_Init(void)
 {
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN | RCC_AHB2ENR1_GPIOBEN | RCC_AHB2ENR1_GPIOCEN | RCC_AHB2ENR1_GPIOEEN;
-
-    // All INJ/IGN pins are GPIO outputs — driven by event scheduler via BSRR.
-    // INJ e IGN todos em GPIOE.
-    // INJ: PE0(INJ1), PE2(INJ2), PE4(INJ3), PE6(INJ4)
-    {
-        static const uint8_t inj_pins[] = {0U, 2U, 4U, 6U};
-        for (uint8_t i = 0; i < 4; ++i) {
-            const uint8_t pin = inj_pins[i];
-            GPIOE_MODER = (GPIOE_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
-        }
-    }
-    GPIOE_BSRR = (1U<<16)|(1U<<18)|(1U<<20)|(1U<<22);  // PE0,2,4,6 LOW
-    // IGN: PE9(IGN1), PE11(IGN2), PE13(IGN3), PE15(IGN4)
-    {
-        static const uint8_t ign_pins[] = {9U, 11U, 13U, 15U};
-        for (uint8_t i = 0; i < 4; ++i) {
-            const uint8_t pin = ign_pins[i];
-            GPIOE_MODER = (GPIOE_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
-        }
-    }
-    GPIOE_BSRR = (1U<<25)|(1U<<27)|(1U<<29)|(1U<<31);  // PE9,11,13,15 LOW
-
+    // Idempotent re-assert after late boot steps (USB delay, etc.).
+    ecu_sched_outputs_safe_early();
     clear_all_events_and_drive_safe_outputs();
 }
 
@@ -781,7 +859,6 @@ void ecu_sched_get_diag_snapshot(EcuSchedDiagSnapshot *out)
 }
 
 namespace ems::engine {
-extern bool g_prev_cranking;
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
     static uint8_t s_unsync_teeth = 0U;

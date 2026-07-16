@@ -185,13 +185,19 @@ void tim2_set_duty(uint16_t duty_pct_x10) noexcept {
 }
 
 // ----------------------------------------------------------------------------
-// TIM15 - ETB PWM (PE5 CH1, AF4)
+// ETB motor PWM (API name legacy tim15_etb_*):
+//   VGT6: PE5 / TIM15_CH1 AF4
+//   RGT6: PA6 / TIM3_CH1  AF2
 // ----------------------------------------------------------------------------
 
+#include "hal/board_pinout.h"
+
 void tim15_etb_pwm_init(uint32_t freq_hz) {
+    if (freq_hz == 0u) { return; }
+
+#if EMS_BOARD_IS_VGT6
     RCC_APB2ENR |= RCC_APB2ENR_TIM15EN;
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
-
     gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 5u, GPIO_AF4);
 
     uint32_t arr = kTimClockHz / freq_hz;
@@ -204,15 +210,42 @@ void tim15_etb_pwm_init(uint32_t freq_hz) {
     TIM15_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
     TIM15_CCER = TIM_CCER_CC1E;
     TIM15_CCR1 = 0u;
-    TIM15_BDTR = (1u << 15);
+    TIM15_BDTR = (1u << 15);  // MOE
     TIM15_EGR = 1u;
     TIM15_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;
+#else
+    RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN;
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 6u, GPIO_AF2);
+
+    uint32_t psc = 0u;
+    uint32_t arr = kTimClockHz / freq_hz;
+    while (arr > 0xFFFFu) {
+        ++psc;
+        arr = kTimClockHz / (freq_hz * (psc + 1u));
+    }
+    if (arr > 0u) { arr -= 1u; }
+
+    TIM3_CR1 = 0u;
+    TIM3_PSC = psc;
+    TIM3_ARR = arr;
+    TIM3_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
+    TIM3_CCER = TIM_CCER_CC1E;
+    TIM3_CCR1 = 0u;
+    TIM3_EGR = 1u;
+    TIM3_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;
+#endif
 }
 
 void tim15_etb_set_duty_x10(uint16_t duty_pct_x10) noexcept {
+    if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
+#if EMS_BOARD_IS_VGT6
     const uint32_t arr = TIM15_ARR;
-    const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
-    TIM15_CCR1 = ccr;
+    TIM15_CCR1 = ((arr + 1u) * duty_pct_x10) / 1000u;
+#else
+    const uint32_t arr = TIM3_ARR;
+    TIM3_CCR1 = ((arr + 1u) * duty_pct_x10) / 1000u;
+#endif
 }
 
 // ----------------------------------------------------------------------------
@@ -243,36 +276,18 @@ extern "C" void TIM5_IRQHandler(void) {
 } // namespace ems::hal
 
 // ----------------------------------------------------------------------------
-// TIM15 - PWM para Borboleta Eletronica (ETB) com dead-time (PE5 CH1, AF4)
+// C API legacy: ETB PWM @ ~20 kHz on PA6/TIM3 (RGT6)
 // ----------------------------------------------------------------------------
 
 void timer_etb_pwm_init(void) {
-    RCC_APB2ENR |= RCC_APB2ENR_TIM15EN;
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
-
-    gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 5u, GPIO_AF4);
-
-    TIM15_CR1 = 0u;
-    TIM15_PSC = 0u;
-    TIM15_ARR = 12499u;
-    TIM15_EGR = TIM_EGR_UG;
-
-    TIM15_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
-
-    TIM15_BDTR = TIM_BDTR_MOE
-              | (50u << 0u);
-
-    TIM15_CCER = TIM_CCER_CC1E;
-
-    TIM15_CCR1 = 0u;
-
-    TIM15_CR1 = TIM_CR1_CEN | TIM_CR1_ARPE;
+    ems::hal::tim15_etb_pwm_init(20000u);
 }
 
 void timer_etb_set_duty(uint16_t duty) {
     if (duty > 1023u) { duty = 1023u; }
-    uint32_t ccr1_val = ((uint32_t)duty * 12499u) / 1023u;
-    TIM15_CCR1 = (uint16_t)ccr1_val;
+    const uint16_t duty_x10 =
+        static_cast<uint16_t>((static_cast<uint32_t>(duty) * 1000u) / 1023u);
+    ems::hal::tim15_etb_set_duty_x10(duty_x10);
 }
 
 #else  // EMS_HOST_TEST -------------------------------------------------------

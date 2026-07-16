@@ -48,6 +48,7 @@ constexpr P2 kAfterstartDurationMs[] = {
 };
 
 volatile bool g_prev_cranking = false;
+volatile bool g_afterstart_active = false;
 uint32_t g_afterstart_start_ms = 0u;
 uint32_t g_afterstart_duration_ms = 0u;
 
@@ -220,8 +221,12 @@ void prime_on_tooth(const CkpSnapshot& snap) noexcept {
 
 namespace ems::engine {
 
+// Flood-clear APP threshold (pct×10). 700 = 70% pedal/TPS during crank → cut fuel.
+uint16_t crank_flood_tps_x10 = 700u;
+
 void quick_crank_reset() noexcept {
     g_prev_cranking = false;
+    g_afterstart_active = false;
     g_afterstart_start_ms = 0u;
     g_afterstart_duration_ms = 0u;
     g_prime_tooth_count = 0u;
@@ -273,6 +278,7 @@ QuickCrankOutput quick_crank_update(uint32_t now_ms,
     }
 
     g_prev_cranking = cranking;
+    g_afterstart_active = out.afterstart_active;
     return out;
 }
 
@@ -314,6 +320,24 @@ uint32_t quick_crank_consume_prime() noexcept {
 
 bool is_cranking() noexcept {
     return g_prev_cranking;
+}
+
+bool is_afterstart() noexcept {
+    return g_afterstart_active;
+}
+
+bool crank_flood_clear_active(uint16_t app_pct_x10) noexcept {
+    if (!g_prev_cranking) {
+        return false;
+    }
+    uint16_t thr = crank_flood_tps_x10;
+    if (thr < 200u) {
+        thr = 200u;  // never below 20% — avoid noise trips
+    }
+    if (thr > 1000u) {
+        thr = 1000u;
+    }
+    return app_pct_x10 >= thr;
 }
 
 }  // namespace ems::engine

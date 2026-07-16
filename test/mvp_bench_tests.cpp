@@ -2175,6 +2175,51 @@ static void test_torque_manager_cpp_update(void) {
     CHECK_TRUE((out.limp_reason & TORQUE_LIMP_APP_FAULT) != 0u, "APP fault → LIMP_APP_FAULT");
     sens.throttle_fault_bits = 0u;
 
+    // ── Crank open-loop air + idle hysteresis ────────────────────────────
+    section("torque_manager: crank open-loop ETB floor + idle RPM exit");
+    {
+        ems::engine::torque_manager_reset();
+        ems::engine::quick_crank_reset();
+        etb_cal_valid = 1u;
+        ems::engine::etb_idle_min_opening_x10 = 30u;   // 3%
+        ems::engine::etb_idle_max_opening_x10 = 80u;   // 8% crank open
+        ems::engine::etb_idle_open_pct_x10 = 80u;      // APP idle threshold 8%
+        ems::engine::idle_spark_window_above_target_x10 = 4000u;  // 400 RPM
+
+        // Enter cranking via quick_crank so is_cranking() is true
+        ems::engine::quick_crank_update(0u, 3000u, true, 800, 8);
+        CHECK_TRUE(ems::engine::is_cranking(), "precondition: cranking");
+
+        snap.rpm_x10 = 3000u;
+        sens.app_pct_x10 = 0u;
+        out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_TRUE(out.etb_target_pct_x10 >= 80u,
+                   "cranking → ETB floor ≥ crank open (max idle opening)");
+
+        // Exit cranking → taper/idle; force high RPM to leave idle phase (no I windup)
+        ems::engine::quick_crank_update(100u, 8000u, true, 800, 8);
+        CHECK_FALSE(ems::engine::is_cranking(), "exited crank");
+        snap.rpm_x10 = 20000u;  // 2000 RPM >> target+1.5×upper
+        sens.app_pct_x10 = 0u;
+        // Several ticks: integrator should not climb toward max at high RPM
+        for (int i = 0; i < 50; ++i) {
+            out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        }
+        CHECK_TRUE(out.etb_target_pct_x10 <= 80u,
+                   "high RPM closed APP: idle phase exited (no forced high floor)");
+
+        // True idle: RPM near target → floor at least min opening after I accumulates
+        snap.rpm_x10 = 7000u;  // 700 RPM, target 850
+        sens.app_pct_x10 = 0u;
+        ems::engine::torque_manager_reset();
+        ems::engine::quick_crank_reset();
+        for (int i = 0; i < 200; ++i) {
+            out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        }
+        CHECK_TRUE(out.etb_target_pct_x10 >= 30u,
+                   "idle under target: floor ≥ min opening after I");
+    }
+
     // ── Launch control ──────────────────────────────────────────────────
     section("torque_manager: launch control holds ETB / RPM");
     {
@@ -3531,6 +3576,33 @@ static void test_ecu_sched_inhibit_masks(void) {
     ecu_sched_set_ign_inhibit_mask(0u);
     CHECK_EQ(ecu_sched_get_inj_inhibit_mask(), 0u, "inj_inhibit cleared");
     CHECK_EQ(ecu_sched_get_ign_inhibit_mask(), 0u, "ign_inhibit cleared");
+
+    section("ecu_sched: prime cannot bypass inj inhibit mask");
+    {
+        ecu_sched_test_reset();
+        uint32_t pins[24] = {};
+        ecu_sched_get_pin_counts_u32x24(pins);
+        const uint32_t h0 = pins[0];   // INJ1 high count
+        const uint32_t h1 = pins[3];   // INJ2 (idx 1 → offset 3)
+        const uint32_t h2 = pins[6];
+        const uint32_t h3 = pins[9];
+
+        ecu_sched_set_inj_inhibit_mask(0x0Fu);
+        ecu_sched_fire_prime_pulse(5000u);
+        ecu_sched_get_pin_counts_u32x24(pins);
+        CHECK_EQ(pins[0], h0, "prime+mask: INJ1 high count unchanged");
+        CHECK_EQ(pins[3], h1, "prime+mask: INJ2 high count unchanged");
+        CHECK_EQ(pins[6], h2, "prime+mask: INJ3 high count unchanged");
+        CHECK_EQ(pins[9], h3, "prime+mask: INJ4 high count unchanged");
+
+        ecu_sched_set_inj_inhibit_mask(0u);
+        ecu_sched_fire_prime_pulse(5000u);
+        ecu_sched_get_pin_counts_u32x24(pins);
+        CHECK_TRUE(pins[0] > h0, "prime unmasked: INJ1 high count increases");
+        CHECK_TRUE(pins[3] > h1, "prime unmasked: INJ2 high count increases");
+        CHECK_TRUE(pins[6] > h2, "prime unmasked: INJ3 high count increases");
+        CHECK_TRUE(pins[9] > h3, "prime unmasked: INJ4 high count increases");
+    }
 }
 
 static void test_ecu_sched_mspark(void) {
@@ -3866,6 +3938,40 @@ static void test_quick_crank_all(void) {
     CHECK_EQ(quick_crank_consume_prime(), 0u, "no prime fired → consume=0");
     // Two calls to consume same prime: second must return 0 (one-shot)
     CHECK_EQ(quick_crank_consume_prime(), 0u, "second consume → 0 (one-shot)");
+
+    section("quick_crank: hysteresis enter/exit + is_cranking latch");
+    quick_crank_reset();
+    CHECK_FALSE(is_cranking(), "reset → not cranking");
+    // Between enter and exit without prior crank → not cranking (enter=4500)
+    out = quick_crank_update(0u, 5000u, true, 800, 8);
+    CHECK_FALSE(out.cranking, "rpm=500 between enter/exit without latch → not cranking");
+    CHECK_FALSE(is_cranking(), "is_cranking tracks out");
+    // Enter cranking
+    out = quick_crank_update(10u, 3000u, true, 800, 8);
+    CHECK_TRUE(out.cranking, "enter at 300 rpm");
+    CHECK_TRUE(is_cranking(), "is_cranking true while latched");
+    // Stay cranking at 500 rpm (below exit 700)
+    out = quick_crank_update(20u, 5000u, true, 800, 8);
+    CHECK_TRUE(out.cranking, "hysteresis: stay cranking below exit");
+    // Exit at 800 rpm
+    out = quick_crank_update(30u, 8000u, true, 200, 8);
+    CHECK_FALSE(out.cranking, "exit above crank_exit");
+    CHECK_FALSE(is_cranking(), "is_cranking false after exit");
+    CHECK_TRUE(out.afterstart_active || out.fuel_mult_x256 >= 256u,
+               "afterstart arm on exit edge");
+    CHECK_TRUE(is_afterstart() || !out.afterstart_active,
+               "is_afterstart matches out when ASE armed");
+
+    section("quick_crank: flood clear APP threshold");
+    quick_crank_reset();
+    crank_flood_tps_x10 = 700u;
+    quick_crank_update(0u, 3000u, true, 800, 8);
+    CHECK_TRUE(is_cranking(), "cranking for flood test");
+    CHECK_FALSE(crank_flood_clear_active(500u), "APP 50% < 70% → no flood clear");
+    CHECK_TRUE(crank_flood_clear_active(700u), "APP 70% → flood clear");
+    CHECK_TRUE(crank_flood_clear_active(1000u), "APP 100% → flood clear");
+    quick_crank_reset();
+    CHECK_FALSE(crank_flood_clear_active(1000u), "not cranking → no flood clear");
 }
 
 // ============================================================================

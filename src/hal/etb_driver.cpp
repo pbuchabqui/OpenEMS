@@ -1,12 +1,26 @@
 #include "etb_driver.h"
+#include "hal/board_pinout.h"
 #ifndef EMS_HOST_TEST
 #include "stm32h562/regs.h"
 #else
-// Host test: mock GPIOE (ETB DIR on PE7/PE8).
+// Host test: mock DIR (RGT6 path)
+static volatile uint32_t ems_etb_gpioa_moder;
+static volatile uint32_t ems_etb_gpiob_moder;
 static volatile uint32_t ems_etb_gpioe_moder;
+static volatile uint32_t ems_etb_gpioa_bsrr;
+static volatile uint32_t ems_etb_gpiob_bsrr;
 static volatile uint32_t ems_etb_gpioe_bsrr;
+#define GPIOA_MODER ems_etb_gpioa_moder
+#define GPIOB_MODER ems_etb_gpiob_moder
 #define GPIOE_MODER ems_etb_gpioe_moder
+#define GPIOA_BSRR  ems_etb_gpioa_bsrr
+#define GPIOB_BSRR  ems_etb_gpiob_bsrr
 #define GPIOE_BSRR  ems_etb_gpioe_bsrr
+#define RCC_AHB2ENR1 ems_etb_rcc
+#define RCC_AHB2ENR1_GPIOAEN 1u
+#define RCC_AHB2ENR1_GPIOBEN 2u
+#define RCC_AHB2ENR1_GPIOEEN 8u
+static volatile uint32_t ems_etb_rcc;
 #endif
 #include "timer.h"
 #include "adc.h"
@@ -25,12 +39,33 @@ etb_driver_state_t g_state     = ETB_DRV_STATE_OFF;
 etb_driver_fault_t g_fault     = ETB_DRV_OK;
 uint32_t           g_fault_count = 0u;
 
-// Direction pins on GPIOE (same port as INJ/IGN BSRR) — frees PA10 (USART1_RX)
-// and PB2 (WeAct LED heartbeat). PWM remains TIM15_CH1 on PE5.
-//   PE7 = IN1 (open / forward)
-//   PE8 = IN2 (close / reverse)
-constexpr uint8_t kIn1Pin = 7u;  // PE7
-constexpr uint8_t kIn2Pin = 8u;  // PE8
+#if EMS_BOARD_IS_VGT6
+// VGT6: PE7 = IN1 open, PE8 = IN2 close; PWM = PE5 TIM15
+constexpr uint8_t kIn1Pin = 7u;
+constexpr uint8_t kIn2Pin = 8u;
+static inline void etb_dir_set(bool open_high, bool close_high) noexcept {
+    GPIOE_BSRR = open_high  ? (1u << kIn1Pin) : (1u << (kIn1Pin + 16u));
+    GPIOE_BSRR = close_high ? (1u << kIn2Pin) : (1u << (kIn2Pin + 16u));
+}
+static inline void etb_dir_gpio_init(void) noexcept {
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
+    GPIOE_MODER = (GPIOE_MODER & ~(3u << (kIn1Pin * 2u))) | (1u << (kIn1Pin * 2u));
+    GPIOE_MODER = (GPIOE_MODER & ~(3u << (kIn2Pin * 2u))) | (1u << (kIn2Pin * 2u));
+}
+#else
+// RGT6: PA8 = IN1 open, PB4 = IN2 close; PWM = PA6 TIM3
+constexpr uint8_t kIn1Pin = 8u;
+constexpr uint8_t kIn2Pin = 4u;
+static inline void etb_dir_set(bool open_high, bool close_high) noexcept {
+    GPIOA_BSRR = open_high  ? (1u << kIn1Pin) : (1u << (kIn1Pin + 16u));
+    GPIOB_BSRR = close_high ? (1u << kIn2Pin) : (1u << (kIn2Pin + 16u));
+}
+static inline void etb_dir_gpio_init(void) noexcept {
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN | RCC_AHB2ENR1_GPIOBEN;
+    GPIOA_MODER = (GPIOA_MODER & ~(3u << (kIn1Pin * 2u))) | (1u << (kIn1Pin * 2u));
+    GPIOB_MODER = (GPIOB_MODER & ~(3u << (kIn2Pin * 2u))) | (1u << (kIn2Pin * 2u));
+}
+#endif
 
 }  // namespace
 
@@ -47,14 +82,7 @@ bool etb_driver_init(void) {
     g_fault  = ETB_DRV_OK;
     g_fault_count = 0u;
 
-    // PE7 / PE8 direction — push-pull outputs (GPIOE)
-#if !defined(EMS_HOST_TEST)
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
-#endif
-    GPIOE_MODER = (GPIOE_MODER & ~(3u << (kIn1Pin * 2u))) | (1u << (kIn1Pin * 2u));
-    GPIOE_MODER = (GPIOE_MODER & ~(3u << (kIn2Pin * 2u))) | (1u << (kIn2Pin * 2u));
-
-    // TIM15 PWM @ 20 kHz for ETB motor drive (PE5)
+    etb_dir_gpio_init();
     tim15_etb_pwm_init(20000u);
 
     etb_driver_shutdown();
@@ -106,18 +134,18 @@ bool etb_driver_set_motor_pwm(int16_t pwm) {
     const uint16_t duty = static_cast<uint16_t>((pwm >= 0) ? pwm : -pwm);
 
     if (pwm > 0) {
-        GPIOE_BSRR = (1u << kIn1Pin) | (1u << (kIn2Pin + 16u));
+        etb_dir_set(true, false);
     } else if (pwm < 0) {
-        GPIOE_BSRR = (1u << (kIn1Pin + 16u)) | (1u << kIn2Pin);
+        etb_dir_set(false, true);
     } else {
-        GPIOE_BSRR = (1u << (kIn1Pin + 16u)) | (1u << (kIn2Pin + 16u));
+        etb_dir_set(false, false);
     }
     tim15_etb_set_duty_x10(static_cast<uint16_t>((static_cast<uint32_t>(duty) * 1000u) / 1023u));
     return true;
 }
 
 void etb_driver_shutdown(void) {
-    GPIOE_BSRR = (1u << (kIn1Pin + 16u)) | (1u << (kIn2Pin + 16u));
+    etb_dir_set(false, false);
     tim15_etb_set_duty_x10(0u);
     g_etb_data.motor_pwm = 0;
 }

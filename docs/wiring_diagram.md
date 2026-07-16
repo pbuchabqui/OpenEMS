@@ -1,9 +1,9 @@
 # OpenEMS — Electrical Wiring Diagram
 
-> **⚠️ STALE DIAGRAM (pre-GPIOE scheduler):** the ASCII art below still shows
-> TIM2/TIM8 INJ/IGN on PC/PA/PB and dual-use ETB/UART pins. **Firmware truth is
-> README.md §5 “Pinout congelado”** (INJ/IGN PE0–15 BSRR, OIL PC1, ETB DIR PE7/8,
-> ETB PWM PE5/TIM15). Re-draw this file against that table before production.
+> **⚠️ STALE DIAGRAM:** ASCII abaixo misturam mapas antigos (TIM OC / PE* / dual-use).
+> **Fonte de verdade:** `README.md` §5 — pinout **RGT6 (activo)** vs **VGT6 (legado)**.
+> Firmware actual = **RGT6**: INJ PA15/PB3/**PC10/PC11**, IGN PC6–9, ETB PA6/PA8/PB4,
+> CKP/CMP PA0/PA1, OIL PC1. Não usar PE* nem PB10/PB11 para INJ (WeAct: não no header).
 
 ## STM32H562 (LQFP100 / GPIOE) + TLE8888 Smart Power Stage
 

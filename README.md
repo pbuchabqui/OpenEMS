@@ -121,48 +121,136 @@ Eventos de ignicao usam o mesmo conceito, mas programam TIM8 para dwell e centel
 
 ### 5. Atuadores e pinout congelado (firmware)
 
-**Fonte de verdade:** `ecu_sched.cpp` (INJ/IGN BSRR), `adc.cpp`, `etb_driver.cpp`,
-`timer.cpp` (CKP/CMP/ETB PWM). Placa alvo: **LQFP100 com GPIOE** (WeAct H562 /
-H562VGT6). Docs antigos com TIM2/PC/PA para INJ/IGN estão **obsoletos**.
+**Fonte de verdade:** este README + `ecu_sched.cpp` (INJ/IGN BSRR), `etb_driver.cpp`,
+`timer.cpp` (CKP/CMP/ETB PWM), `adc.cpp`.  
+**Firmware:** selecciona o package no **build** (não em runtime):
 
-#### Crank / cam / comms
+```bash
+make firmware BOARD=rgt6   # default — WeAct LQFP64
+make firmware BOARD=vgt6   # LQFP100 GPIOE (INJ/IGN/ETB em PE*)
+# bins: /tmp/openems-build/bin/openems-rgt6.bin | openems-vgt6.bin
+```
+
+#### 5.0 RGT6 vs VGT6 — diferença de pinout
+
+| | **RGT6** (`BOARD=rgt6`, default) | **VGT6** (`BOARD=vgt6`) |
+|--|----------------------------------|---------------------------|
+| Package | LQFP64 | LQFP100 |
+| Portas GPIO | A, B, C | A–E |
+| WeAct típica | H562RGT6 | H562VGT6 |
+| Flag C | `-DEMS_BOARD_RGT6` | `-DEMS_BOARD_VGT6` |
+| Bin | `openems-rgt6.bin` | `openems-vgt6.bin` |
+
+**Porquê divergir:** o RGT6 **não tem port E**. O mapa VGT6 concentrou INJ/IGN/ETB DIR/PWM em **PE\*** (BSRR único, fiação limpa no LQFP100). No RGT6 esses pinos **não existem** — INJ/IGN/ETB foram redistribuídos por A/B/C.
+
+##### Comparação lado a lado (o que muda)
+
+| Função | **RGT6** (`BOARD=rgt6`) | **VGT6** (`BOARD=vgt6`) | Notas |
+|--------|--------------------------|--------------------------|--------|
+| CKP | **PA0** TIM5_CH1 AF2 | PA0 TIM5_CH1 AF2 | Igual |
+| CMP | **PA1** TIM5_CH2 AF2 | PA1 TIM5_CH2 AF2 | Igual |
+| UART1 TX/RX | **PA9 / PA10** | PA9 / PA10 | Igual |
+| USB DM/DP | **PA11 / PA12** | PA11 / PA12 | Igual |
+| CAN | **PB8 / PB9** | PB8 / PB9 | Igual |
+| LED | **PB2** | PB2 | Igual |
+| **INJ1** | **PA15** | **PE0** | Remap RGT6 |
+| **INJ2** | **PB3** | **PE2** | Remap RGT6 |
+| **INJ3** | **PC10** | **PE4** | Remap; WeAct: PB10/11 **não** no header |
+| **INJ4** | **PC11** | **PE6** | Remap RGT6 |
+| **IGN1** | **PC6** | **PE9** | Remap RGT6 |
+| **IGN2** | **PC7** | **PE11** | Remap RGT6 |
+| **IGN3** | **PC8** | **PE13** | Remap; ⚠️ vs SDMMC PC8 |
+| **IGN4** | **PC9** | **PE15** | Remap RGT6 |
+| **ETB PWM** | **PA6** TIM3_CH1 AF2 | **PE5** TIM15_CH1 AF4 | Timer e pino diferentes |
+| **ETB DIR open** | **PA8** | **PE7** | Remap RGT6 |
+| **ETB DIR close** | **PB4** | **PE8** | Remap RGT6 |
+| ETB_TPS1 / TPS2 | PA2 / PC5 | PA2 / PC5 | Igual (ADC) |
+| EWG PWM | PB10 TIM2_CH3 | PB10 TIM2_CH3 | PB10 livre de INJ no mapa actual (WeAct: pino pode não sair no header) |
+| EWG DIR | PA7 (+ PD3 no driver, **sem GPIOD no RGT6**) | PA7 / pino dedicado VGT6 | PD3 inválido no RGT6 |
+| Flex / VVT | PB5 / PB6–7 | PB5 / PB6–7 | Igual |
+| ADC sensores (MAP…OIL) | ver tabela §5.4 | mesma atribuição ADC actual | Igual no tree actual |
+
+##### Drive eléctrico
+
+| | RGT6 | VGT6 |
+|--|------|------|
+| INJ/IGN | GPIO **BSRR** multi-porto (A/B/C) | GPIO **BSRR** só **GPIOE** |
+| ETB PWM | TIM3 @ PA6 | TIM15 @ PE5 |
+| TIM OC (TIM2/TIM8) | **Não usado** | **Não usado** (também BSRR) |
+
+##### Conflitos / limitações WeAct RGT6
+
+| Pino | Nota |
+|------|------|
+| **PB10 / PB11** | No coreboard WeAct **não saem nos headers** — **não usar para INJ** (por isso INJ3/4 = PC10/11) |
+| **PC8 / PC9** | IGN3/4; se microSD (SDMMC) activo, colide com D0/D1 |
+| **PC10 / PC11** | INJ3/4; colidem com SDMMC D2/D3 se cartão |
+| **PD3** | EWG DIR IN2 no driver — **inexistente no RGT6** |
+
+##### Fiação ao mudar de placa
+
+- **VGT6 → RGT6:** religar todos os PE\* de INJ/IGN/ETB para a coluna RGT6; CKP/CMP/UART/USB/CAN/ADC iguais.
+- **RGT6 ↔ VGT6:** gravar o binário correcto (`BOARD=…`). Flash cruzado = pinos errados.
+
+---
+
+#### 5.1 Crank / cam / comms (comum)
 
 | Funcao | Peripheral | Pino |
 |---|---|---|
 | CKP | TIM5_CH1 AF2 | **PA0** (pull-down) |
 | CMP | TIM5_CH2 AF2 | **PA1** (pull-down) |
 | UART TX | USART1 AF7 | **PA9** |
-| UART RX | USART1 AF7 | **PA10** (pull-up; livre de ETB) |
+| UART RX | USART1 AF7 | **PA10** (pull-up) |
 | USB DM/DP | USB AF10 | **PA11 / PA12** |
 | CAN RX/TX | FDCAN1 AF9 | **PB8 / PB9** |
-| LED heartbeat | GPIO | **PB2** (livre de ETB) |
+| LED heartbeat | GPIO | **PB2** |
 
-#### Injecção / ignição (GPIOE BSRR, sem OC)
+#### 5.2 Injecção / ignição — por board
+
+**RGT6** (`BOARD=rgt6`):
 
 | Funcao | Pino | Notas |
 |---|---|---|
-| INJ1 | **PE0** | low-side → TLE8888 |
-| INJ2 | **PE2** | |
-| INJ3 | **PE4** | |
-| INJ4 | **PE6** | |
-| IGN1 | **PE9** | push-pull → TLE8888 |
-| IGN2 | **PE11** | |
-| IGN3 | **PE13** | |
-| IGN4 | **PE15** | |
+| INJ1 | **PA15** | low-side → TLE8888 (header WeAct) |
+| INJ2 | **PB3** | header WeAct |
+| INJ3 | **PC10** | header WeAct (não PB10) |
+| INJ4 | **PC11** | header WeAct (não PB11) |
+| IGN1 | **PC6** | push-pull → TLE8888 |
+| IGN2 | **PC7** | |
+| IGN3 | **PC8** | ⚠️ vs SDMMC D0 |
+| IGN4 | **PC9** | ⚠️ vs SDMMC D1 |
 
-#### ETB / EWG / AUX
+**VGT6** (`BOARD=vgt6`):
+
+| Funcao | Pino | Notas |
+|---|---|---|
+| INJ1–4 | **PE0 / PE2 / PE4 / PE6** | BSRR GPIOE |
+| IGN1–4 | **PE9 / PE11 / PE13 / PE15** | BSRR GPIOE |
+
+#### 5.3 ETB / EWG / AUX — por board
+
+**RGT6:**
 
 | Funcao | Peripheral | Pino |
 |---|---|---|
-| ETB PWM | TIM15_CH1 | **PE5** |
-| ETB DIR open | GPIO | **PE7** |
-| ETB DIR close | GPIO | **PE8** |
-| EWG PWM | TIM2_CH3 | **PB10** (ver ewg_driver) |
-| EWG DIR | GPIO | PA7 / (VGT6 dedicated) |
-| Flex fuel | EXTI | **PB5** |
-| VVT PWM | TIM4 | **PB6 / PB7** |
+| ETB PWM | TIM3_CH1 AF2 | **PA6** |
+| ETB DIR open (IN1) | GPIO | **PA8** |
+| ETB DIR close (IN2) | GPIO | **PB4** |
+| ETB_TPS1 / TPS2 | ADC1 | **PA2 / PC5** |
+| EWG PWM | TIM2_CH3 | **PB10** (WeAct: pode não sair no header) |
+| EWG DIR | GPIO | PA7 / PD3 (PD3 só c/ GPIOD) |
+| Flex / VVT | EXTI / TIM4 | **PB5** / **PB6–PB7** |
 
-#### ADC (sensores)
+**VGT6:**
+
+| Funcao | Peripheral | Pino |
+|---|---|---|
+| ETB PWM | TIM15_CH1 AF4 | **PE5** |
+| ETB DIR open / close | GPIO | **PE7 / PE8** |
+| ETB_TPS / Flex / VVT / EWG PWM | | iguais à coluna RGT6 (ADC/PB5–7/PB10) |
+
+#### 5.4 ADC (sensores) — comum nos dois packages (tree actual)
 
 | Funcao | ADC | Pino / INP |
 |---|---|---|
@@ -181,14 +269,11 @@ H562VGT6). Docs antigos com TIM2/PC/PA para INJ/IGN estão **obsoletos**.
 
 **Nota:** WBO2 lambda exclusivamente via CAN (FDCAN1). Sem ADC O2.
 
-**Conflitos resolvidos (2026-07-16):**
-- OIL saiu de PC5 → **PC1** (PC5 só ETB_TPS2).
-- ETB DIR saiu de PA10/PB2 → **PE7/PE8** (UART + LED livres).
-
-**Cautelas restantes:**
-- PE* exige package com GPIOE (LQFP100). LQFP64 WeAct RGT6 **não** tem este mapa.
-- SDMMC em PC8/PC12/PD2 — não partilhar com actuadores.
-- Re-ligar fiação da bancada: OIL→PC1, ETB DIR→PE7/PE8.
+**Histórico de pinout (2026-07):**
+- OIL: PC5 → **PC1** (PC5 fica ETB_TPS2).
+- Dual-board: `-DEMS_BOARD_RGT6` / `-DEMS_BOARD_VGT6` (`src/hal/board_pinout.h`).
+- RGT6 WeAct: INJ3/4 em **PC10/PC11** (PB10/11 não expostos nos headers).
+- Boot safe: `ecu_sched_outputs_safe_early()` — PA15 JTDI pull-up e PE* LOW no arranque.
 
 ## ADC E Sensores
 
@@ -343,6 +428,13 @@ Fora do MVP de bancada:
 
 ### Feito no firmware (defensivo — 2026-07-16)
 
+- Cranking/idle harden: `quick_crank_update` 1×/tick (HALF+FULL); `is_cranking`/`is_afterstart`
+  gates AE/STFT/X-τ (não só RPM&lt;exit); flood-clear APP≥70% corta fuel+prime; ETB open-loop
+  em crank (`etb_idle_max`) + taper 1 s + histerese RPM de idle phase.
+- Fuel angular: FULL = VE/running; **HALF+cranking** = batch SIMULTANEOUS (REQ×mult+min_pw,
+  sem VE/STFT/AE); corte imediato em exit-crank / flood / protect / !sync.
+- Prime + protect: prime bloqueado se flood/protect/half-lockout/rev-limit; `force_output`
+  honra inj/ign inhibit (prime não bypassa mask); boot com mask=0x0F e `inj_pw=0` até 1.º tick.
 - CKP: sem `schedule_on_tooth` em SPIKE; hist contaminado → LOSS; sem wrap 57→0 sem gap.
 - Scheduler: dwell WD arma no pin HIGH + purge no trip; inj inhibit = force OFF + purge fila; lead assinado wrap-safe.
 - Scheduler: injector open WD (1.2× PW / hard 36 ms) + overflow da fila prefere dropar ON/DWELL (nunca OFF/SPARK se houver assert).
@@ -363,15 +455,19 @@ Fora do MVP de bancada:
 
 ### Pinout — estado
 
-- **Congelado no firmware** (tabela §5 acima): OIL→PC1, ETB DIR→PE7/PE8, INJ/IGN em PE*.
-- **Acção de bancada:** actualizar fiação física OIL e ETB DIR; validar com `make firmware` + ST-Link.
-- **docs/wiring_diagram.md** ainda tem mapa TIM2/PC legado — usar README §5 até reescrever.
+- **Dual board:** `make firmware BOARD=rgt6|vgt6` → `openems-rgt6.bin` / `openems-vgt6.bin` (§5.0).
+- **RGT6:** INJ PA15/PB3/PC10/PC11 · IGN PC6–9 · ETB PA6/PA8/PB4 · OIL PC1.
+- **VGT6:** INJ PE0/2/4/6 · IGN PE9/11/13/15 · ETB PE5/7/8.
+- **Boot safe:** `ecu_sched_outputs_safe_early()` logo após clock (RGT6: PA15 JTDI; VGT6: PE* LOW).
+- **DFU:** `dfu-util -a 0 -s 0x08000000 -D openems-<board>.bin` + power-cycle BOOT0=0.
+- **docs/wiring_diagram.md** stale — usar README §5.
 
 ### P1 — restante (decode / cam / proteccao)
 
 - ~~Math overflow-safe `ticks_to_ns` / CMP u64; 1ª borda CMP; LOSS zera `cmp_confirms`~~ → feito.
 - ~~Flush fila + safe pins presync↔sequencial; oil/fuel-rail cut~~ → feito.
-- ~~Pinout firmware INJ PE0/2/4/6, IGN PE*, OIL PC1, ETB DIR PE7/8~~ → congelado no código.
+- ~~Pinout dual RGT6/VGT6 (`BOARD=`, board_pinout.h)~~ → no código.
+- ~~Fuel HALF+crank batch + prime/protect + boot INJ LOW~~ → no código.
 - ~~Fuel só em FULL_SYNC (HALF: spark wasted, inj inhibit); `close_cmp_seq_gate` em todos os drops de sync (incl. anomaly→WAIT_GAP, stall)~~ → feito.
 - ~~Overtemp CLT 105/115 °C (WARN/CRIT) + DiagnosticManager CRITICAL → inj/ign inhibit~~ → feito.
 - ~~Multi-spark: gate ≤1500 RPM; angle table 48 + event queue 48 (3 extras × 4 cyl); host margin test~~ → feito.
