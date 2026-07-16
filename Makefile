@@ -76,7 +76,11 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/ewg_control.cpp
 
 DRV_SRC = $(SRC_DIR)/drv/ckp.cpp $(SRC_DIR)/drv/sensors.cpp
-APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp $(SRC_DIR)/app/can_stack.cpp \
+APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp \
+          $(SRC_DIR)/app/ui_protocol_state.cpp \
+          $(SRC_DIR)/app/ui_protocol_pages.cpp \
+          $(SRC_DIR)/app/ui_protocol_envelope.cpp \
+          $(SRC_DIR)/app/can_stack.cpp \
           $(SRC_DIR)/app/can_rx_map.cpp \
           $(SRC_DIR)/app/datalog.cpp \
           $(SRC_DIR)/app/nvm_boot.cpp
