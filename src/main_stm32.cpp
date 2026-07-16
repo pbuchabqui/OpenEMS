@@ -163,10 +163,10 @@ static inline uint16_t build_status_bits(const ems::drv::CkpSnapshot& snap,
     if (g_rev_limit_active) {
         status |= ems::app::STATUS_REV_LIMIT;
     }
-    if (ems::engine::torque_manager_test_get_launch_active() != 0u) {
+    if (ems::engine::torque_manager_get_launch_active() != 0u) {
         status |= ems::app::STATUS_LAUNCH_ACTIVE;
     }
-    if (ems::engine::torque_manager_test_get_tc_reduction() > 0u) {
+    if (ems::engine::torque_manager_get_tc_reduction() > 0u) {
         status |= ems::app::STATUS_TC_ACTIVE;
     }
     return status;

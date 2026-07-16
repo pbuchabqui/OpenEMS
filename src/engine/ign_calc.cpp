@@ -27,13 +27,8 @@ int16_t lerp_q8_i16(int16_t a, int16_t b, uint8_t frac_q8) noexcept {
 
 namespace ems::engine {
 
-// Trim de ignição vindo do controle coordenado ar+ignição da borboleta (ETB).
-// O módulo etb_control fornece a implementação real quando linkado; aqui há um
-// default fraco que retorna 0 (sem trim) para manter o caminho de ignição
-// auto-contido e seguro quando o ETB não está presente no build.
-// NOTA: a integração real precisa expor esta função no namespace ems::engine —
-// etb_control.cpp hoje a declara em escopo global (extern "C"), o que não
-// resolve esta chamada. Ver findings da revisão.
+// Stub fraco: path de produção usa calc_idle_spark_correction_deg().
+// Em EMS_HOST_TEST, etb_control.cpp pode override com trim do float loop.
 #if defined(__GNUC__)
 __attribute__((weak))
 #endif

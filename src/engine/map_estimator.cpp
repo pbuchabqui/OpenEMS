@@ -25,6 +25,8 @@ constexpr uint8_t kTpsHistorySize = 4u;
 uint16_t g_tps_history[kTpsHistorySize] = {};
 uint32_t g_tps_time_history[kTpsHistorySize] = {};
 uint8_t g_tps_history_pos = 0u;
+// Tempo monotónico do ring (não static-local — resetável em init).
+uint32_t g_tps_time_ms = 0u;
 
 // Ganhos do filtro complementar (Q8)
 uint8_t g_steady_gain_q8 = 200u;   // 0.78 (78% sensor, 22% modelo em regime)
@@ -165,6 +167,7 @@ void map_estimator_init() noexcept {
         g_tps_time_history[i] = 0u;
     }
     g_tps_history_pos = 0u;
+    g_tps_time_ms = 0u;
     g_map_delta_remainder_q8 = 0;
 
     g_steady_gain_q8 = 200u;
@@ -195,10 +198,9 @@ uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
     }
     
     // Atualiza histórico de TPS e calcula derivada
-    static uint32_t s_last_time_ms = 0u;
     if (dt_ms > 0u && dt_ms < 1000u) {
-        update_tps_history(tps_pct_x10, s_last_time_ms + dt_ms);
-        s_last_time_ms += dt_ms;
+        g_tps_time_ms += dt_ms;
+        update_tps_history(tps_pct_x10, g_tps_time_ms);
     }
     
     g_map_state.tpsdot_x10 = calculate_tpsdot();

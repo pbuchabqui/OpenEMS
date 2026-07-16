@@ -1,6 +1,13 @@
 /**
  * @file torque_manager.h
  * @brief Gerenciador Central de Torque
+ *
+ * Path de PRODUÇÃO:
+ *   ems::engine::torque_manager_update — pedal map, limp, rev soft, launch,
+ *   TC, idle air, dashpot, rate-limit ETB → TorqueOutput.
+ *
+ * Path HOST_TEST only:
+ *   torque_manager_loop (float C API) — regressões legadas no mvp_bench_tests.
  */
 
 #pragma once
@@ -12,6 +19,11 @@
 extern "C" {
 #endif
 
+bool torque_manager_init(void);
+void torque_manager_enter_limp(void);
+bool torque_manager_is_ready(void);
+
+#if defined(EMS_HOST_TEST)
 typedef struct {
     float pedal_percent, engine_rpm, vehicle_speed, coolant_temp, intake_air_temp;
     bool  idle_mode, traction_active, launch_control, limp_mode;
@@ -31,13 +43,11 @@ typedef struct {
     float pedal_filter_alpha;
 } torque_manager_config_t;
 
-bool torque_manager_init(void);
 void torque_manager_loop(const torque_manager_inputs_t* inputs,
                          torque_manager_outputs_t* outputs);
 void torque_manager_set_config(const torque_manager_config_t* config);
 const torque_manager_config_t* torque_manager_get_config(void);
-void torque_manager_enter_limp(void);
-bool torque_manager_is_ready(void);
+#endif  // EMS_HOST_TEST
 
 #ifdef __cplusplus
 }
@@ -78,13 +88,37 @@ void torque_tc_set_external_slip_pct_x10(uint16_t slip_pct_x10) noexcept;
 void torque_tc_clear_external_slip() noexcept;
 void torque_launch_force_enable(uint8_t on) noexcept;  // 0=use cal, 1=force on, 2=force off
 
-uint16_t torque_manager_test_get_target() noexcept;
-uint8_t  torque_manager_test_get_limp_reason() noexcept;
-uint8_t  torque_manager_test_get_launch_active() noexcept;
-uint16_t torque_manager_test_get_tc_reduction() noexcept;
-int16_t  torque_manager_test_get_spark_retard() noexcept;
-uint16_t torque_manager_test_get_vehicle_kmh() noexcept;  // CAN SPEED_KMH latch
-uint16_t torque_manager_test_get_wheel_kmh() noexcept;    // CAN WHEEL_SPEED_KMH latch
+// Latches de telemetria (OCH / status bits / host tests)
+uint16_t torque_manager_get_target() noexcept;
+uint8_t  torque_manager_get_limp_reason() noexcept;
+uint8_t  torque_manager_get_launch_active() noexcept;
+uint16_t torque_manager_get_tc_reduction() noexcept;
+int16_t  torque_manager_get_spark_retard() noexcept;
+uint16_t torque_manager_get_vehicle_kmh() noexcept;
+uint16_t torque_manager_get_wheel_kmh() noexcept;
+
+// Aliases legados (mvp_bench_tests)
+inline uint16_t torque_manager_test_get_target() noexcept {
+    return torque_manager_get_target();
+}
+inline uint8_t torque_manager_test_get_limp_reason() noexcept {
+    return torque_manager_get_limp_reason();
+}
+inline uint8_t torque_manager_test_get_launch_active() noexcept {
+    return torque_manager_get_launch_active();
+}
+inline uint16_t torque_manager_test_get_tc_reduction() noexcept {
+    return torque_manager_get_tc_reduction();
+}
+inline int16_t torque_manager_test_get_spark_retard() noexcept {
+    return torque_manager_get_spark_retard();
+}
+inline uint16_t torque_manager_test_get_vehicle_kmh() noexcept {
+    return torque_manager_get_vehicle_kmh();
+}
+inline uint16_t torque_manager_test_get_wheel_kmh() noexcept {
+    return torque_manager_get_wheel_kmh();
+}
 
 }  // namespace ems::engine
 

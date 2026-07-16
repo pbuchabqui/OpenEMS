@@ -290,9 +290,9 @@ inline void update_realtime_page() noexcept {
         status = static_cast<uint16_t>(status | ems::app::STATUS_REV_LIMIT);
     }
     // Launch / TC from torque_manager latches (updated every ETB 2 ms tick).
-    const uint8_t launch_act = ems::engine::torque_manager_test_get_launch_active();
-    const uint16_t tc_red = ems::engine::torque_manager_test_get_tc_reduction();
-    const int16_t spark_ret = ems::engine::torque_manager_test_get_spark_retard();
+    const uint8_t launch_act = ems::engine::torque_manager_get_launch_active();
+    const uint16_t tc_red = ems::engine::torque_manager_get_tc_reduction();
+    const int16_t spark_ret = ems::engine::torque_manager_get_spark_retard();
     if (launch_act != 0u) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_LAUNCH_ACTIVE);
     }

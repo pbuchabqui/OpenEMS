@@ -1,6 +1,13 @@
 /**
  * @file etb_control.h
- * @brief Controle de Borboleta Eletrônica (ETB) com PID em Cascata
+ * @brief Controle de Borboleta Eletrônica (ETB)
+ *
+ * Path de PRODUÇÃO (firmware + main):
+ *   etb_control_init / set|get_drive_mode / apply_idle_calibration
+ *   ems::engine::etb_control_update (PID inteiro pct×10)
+ *
+ * Path HOST_TEST only (não linkado no firmware com --gc-sections se não usado):
+ *   etb_control_loop e structs float (PID cascata legado).
  */
 
 #pragma once
@@ -21,6 +28,16 @@ typedef enum {
     ETB_MODE_COUNT
 } etb_drive_mode_t;
 
+// ── Produção (também disponíveis no host) ─────────────────────────────────
+bool             etb_control_init(void);
+void             etb_set_drive_mode(etb_drive_mode_t mode);
+etb_drive_mode_t etb_get_drive_mode(void);
+void             etb_apply_idle_calibration(void);
+bool             etb_is_ready(void);
+void             etb_enter_limp_mode(void);
+
+#if defined(EMS_HOST_TEST)
+// ── Float API legada — só host tests (não usada por main_stm32) ───────────
 typedef struct {
     float kp_pos, ki_pos, kd_pos;
     float kp_vel, ki_vel, kd_vel;
@@ -47,16 +64,11 @@ typedef struct {
     float rpm_cutoff, tps_rate_limit, limp_opening;
 } etb_system_config_t;
 
-bool             etb_control_init(void);
-void             etb_control_loop(float pedal, float rpm, float dt);
-void             etb_set_drive_mode(etb_drive_mode_t mode);
-etb_drive_mode_t etb_get_drive_mode(void);
-void             etb_set_idle_control(bool active, float target_rpm);
-void             etb_apply_idle_calibration(void);  /* re-aplica globals de calibration → g_config */
-int16_t          etb_get_idle_spark_trim(void);
-float            etb_get_throttle_position(void);
-bool             etb_is_ready(void);
-void             etb_enter_limp_mode(void);
+void    etb_control_loop(float pedal, float rpm, float dt);
+void    etb_set_idle_control(bool active, float target_rpm);
+float   etb_get_throttle_position(void);
+int16_t etb_get_idle_spark_trim(void);  /* float-path trim; prod usa calc_idle_spark_correction_deg */
+#endif  // EMS_HOST_TEST
 
 #ifdef __cplusplus
 }
@@ -74,7 +86,17 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
                                    uint16_t measured_pct_x10,
                                    bool     enable_request,
                                    uint16_t period_ms) noexcept;
-int32_t         etb_control_test_get_integrator() noexcept;
+/** Integrador PID (pct×10) — host tests / diag. */
+int32_t         etb_control_get_integrator() noexcept;
+/** @deprecated use etb_control_get_integrator */
+inline int32_t  etb_control_test_get_integrator() noexcept {
+    return etb_control_get_integrator();
+}
+
+#if defined(EMS_HOST_TEST)
+// Override do weak stub em ign_calc — só relevante com float idle path nos tests.
+int16_t etb_get_idle_spark_trim() noexcept;
+#endif
 
 }  // namespace ems::engine
 
