@@ -2821,6 +2821,44 @@ static void test_ecu_sched_golden_seq_angle_table_size(void) {
     CHECK_EQ(n_inj_off, 4u, "4 inj off");
 }
 
+// Multi-spark fills angle table: base 16 + 3×2×4 = 40 ≤ ECU_ANGLE_TABLE_SIZE 48
+static void test_ecu_sched_mspark_angle_table_margin(void) {
+    section("ecu_sched: multi-spark sequential table fits with margin");
+    ecu_sched_test_reset();
+    // inter_dwell short so all 3 extras fit inside advance+18° window
+    ecu_sched_set_mspark(3u, 1000u, 18u);  // 3 extras, tiny inter-dwell ticks
+    ecu_sched_set_advance_deg(30u);        // window = 30+18 = 48°
+    ecu_sched_set_dwell_ticks(140625u);
+    ecu_sched_set_inj_pw_ticks(125000u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    ckp_test_set_cmp_confirms(2u);
+    ckp_feed_n_then_gap(57u);
+    if (ecu_sched_test_angle_table_size() == 0u) {
+        ckp_feed_n_then_gap(57u);
+    }
+    const uint8_t n = ecu_sched_test_angle_table_size();
+    CHECK_TRUE(n > 16u, "multi-spark adds events beyond base 16");
+    CHECK_TRUE(n <= ECU_ANGLE_TABLE_SIZE, "table size ≤ ECU_ANGLE_TABLE_SIZE");
+    CHECK_EQ(ecu_sched_test_get_cycle_schedule_drop_count(), 0u,
+             "no angle-table drops with max multi-spark");
+    // Count ign events: base 4+4 + up to 3×(4+4) extras
+    uint8_t n_dwell = 0u, n_spark = 0u;
+    for (uint8_t i = 0u; i < n; ++i) {
+        uint8_t tooth = 0, frac = 0, ch = 0, action = 0, phase = 0;
+        if (ecu_sched_test_get_angle_event(i, &tooth, &frac, &ch, &action, &phase) == 0u) {
+            continue;
+        }
+        if (action == ECU_ACT_DWELL_START) { ++n_dwell; }
+        else if (action == ECU_ACT_SPARK) { ++n_spark; }
+    }
+    CHECK_TRUE(n_dwell >= 4u && n_dwell <= 16u, "dwell count in [4,16] with mspark≤3");
+    CHECK_TRUE(n_spark >= 4u && n_spark <= 16u, "spark count in [4,16] with mspark≤3");
+    CHECK_EQ(n_dwell, n_spark, "dwell/spark pairs balanced");
+    ecu_sched_set_mspark(0u, 0u, 18u);
+}
+
 static void test_ecu_sched_golden_dispatch_identity(void) {
     section("ecu_sched golden: dispatch fires head GPIO order (channel, high)");
     ecu_sched_test_reset();
@@ -5912,6 +5950,7 @@ int main(void) {
     test_ecu_sched_golden_dispatch_past_counts_late();
     test_ecu_sched_golden_queue_sorted();
     test_ecu_sched_golden_seq_angle_table_size();
+    test_ecu_sched_mspark_angle_table_margin();
     test_ecu_sched_golden_dispatch_identity();
     test_ecu_sched_dwell_watchdog_fires();
     test_ecu_sched_inj_watchdog_fires();

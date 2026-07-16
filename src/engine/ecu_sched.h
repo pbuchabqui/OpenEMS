@@ -29,7 +29,10 @@ extern "C" {
 #define ECU_CH_IGN3   5U
 #define ECU_CH_IGN4   4U
 
-#define ECU_ANGLE_TABLE_SIZE  48U  // base 16 + até 3 sparks adicionais × 4 cil × 2 eventos = 40; margem 8
+// Sequential: 4 cyl × (DWELL+SPARK+INJ_ON+INJ_OFF) = 16
+// + multi-spark: max 3 extra × 2 events × 4 cyl = 24 → 40. Presync wasted can
+// reach ~40 with simultaneous inj + multi-spark. Keep margin.
+#define ECU_ANGLE_TABLE_SIZE  48U
 
 typedef struct {
     uint8_t tooth_index;

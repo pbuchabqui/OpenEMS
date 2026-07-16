@@ -161,7 +161,12 @@ volatile uint32_t g_dbg_ign1_arm = 0U;  // arm_channel calls for IGN1
 // TIM5 ISR fires, executes GPIO BSRR, and loads the next event.
 // No OC mode — pure compare + software GPIO.
 
-#define EVT_QUEUE_SIZE 32U
+// Must hold a full tooth burst under multi-spark presync (wasted: 4 coils ×
+// (1 primary + up to 3 extra) × 2 actions ≈ 32) plus concurrent inj edges.
+// Match angle-table margin so arm_channel does not drop de-asserts under load.
+#define EVT_QUEUE_SIZE 48U
+static_assert(EVT_QUEUE_SIZE >= ECU_ANGLE_TABLE_SIZE,
+              "event queue must cover a full angle-table tooth burst");
 
 struct SchedEvent {
     uint32_t timestamp;   // TIM5 absolute tick

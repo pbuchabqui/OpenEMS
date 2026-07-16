@@ -374,7 +374,7 @@ Fora do MVP de bancada:
 - ~~Pinout firmware INJ PE0/2/4/6, IGN PE*, OIL PC1, ETB DIR PE7/8~~ → congelado no código.
 - ~~Fuel só em FULL_SYNC (HALF: spark wasted, inj inhibit); `close_cmp_seq_gate` em todos os drops de sync (incl. anomaly→WAIT_GAP, stall)~~ → feito.
 - ~~Overtemp CLT 105/115 °C (WARN/CRIT) + DiagnosticManager CRITICAL → inj/ign inhibit~~ → feito.
-- Multi-spark: margem de tabela / edge cases de fila sob RPM alto.
+- ~~Multi-spark: gate ≤1500 RPM; angle table 48 + event queue 48 (3 extras × 4 cyl); host margin test~~ → feito.
 - DiagnosticManager: debounce/tick/persistência NVM ainda aspiracional (`protection_system.md`).
 
 ### P2 — bancada / HIL / docs
