@@ -105,6 +105,7 @@ void test_knock_window_cycle_end(void);
 void test_knock_save_to_nvm(void);
 void test_aux_test_getters(void);
 void test_timer_stubs(void);
+void test_out_pins_bsrr_rgt6(void);
 void test_table3d_all(void);
 void test_ecu_sched_setters(void);
 void test_ecu_sched_angle_table(void);

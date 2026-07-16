@@ -167,6 +167,7 @@ int main(void) {
     // ── Timer HAL ────────────────────────────────────────────────────────────
     printf("\n=== TIMER HAL ===");
     test_timer_stubs();
+    test_out_pins_bsrr_rgt6();
 
     // ── TABLE3D ──────────────────────────────────────────────────────────
     printf("\n=== TABLE3D ===");

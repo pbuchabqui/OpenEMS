@@ -32,6 +32,7 @@
 #include "engine/output_test.h"
 #include "engine/engine_config.h"
 #include "hal/timer.h"
+#include "hal/out_pins.h"
 #include "hal/flash.h"
 #include "app/ui_protocol.h"
 #include "app/status_bits.h"
@@ -65,6 +66,44 @@ void test_timer_stubs(void) {
     etb_pwm_init(20000u);
     etb_pwm_set_duty_x10(500u);
     CHECK_TRUE(true, "all timer stubs: no crash");
+}
+
+void test_out_pins_bsrr_rgt6(void) {
+    section("out_pins: RGT6 BSRR polarity (INJ1=PA15, IGN1=PC6, safe-early LOW)");
+    using namespace ems::hal;
+    out_pins_test_reset_stubs();
+
+    // INJ1 = ECU_CH 2 → PA15 set bit
+    out_pin_write(ECU_CH_INJ1, 1u);
+    CHECK_EQ(out_pins_test_bsrr_snapshot(0u) & (1u << 15u), (1u << 15u),
+             "INJ1 high → GPIOA BSRR set pin 15");
+    out_pin_write(ECU_CH_INJ1, 0u);
+    CHECK_EQ(out_pins_test_bsrr_snapshot(0u) & (1u << (15u + 16u)),
+             (1u << (15u + 16u)), "INJ1 low → GPIOA BSRR reset pin 15");
+
+    // INJ2 = ECU_CH 3 → PB3
+    out_pin_write(ECU_CH_INJ2, 1u);
+    CHECK_EQ(out_pins_test_bsrr_snapshot(1u) & (1u << 3u), (1u << 3u),
+             "INJ2 high → GPIOB BSRR set pin 3");
+
+    // IGN1 = ECU_CH 7 → PC6
+    out_pin_write(ECU_CH_IGN1, 1u);
+    CHECK_EQ(out_pins_test_bsrr_snapshot(2u) & (1u << 6u), (1u << 6u),
+             "IGN1 high → GPIOC BSRR set pin 6");
+    out_pin_write(ECU_CH_IGN1, 0u);
+    CHECK_EQ(out_pins_test_bsrr_snapshot(2u) & (1u << (6u + 16u)),
+             (1u << (6u + 16u)), "IGN1 low → GPIOC BSRR reset pin 6");
+
+    // Safe-early: all active-high outputs de-asserted (reset bits written)
+    out_pins_test_reset_stubs();
+    out_pins_hw_init();
+    const uint32_t a = out_pins_test_bsrr_snapshot(0u);
+    const uint32_t b = out_pins_test_bsrr_snapshot(1u);
+    const uint32_t c = out_pins_test_bsrr_snapshot(2u);
+    CHECK_TRUE((a & (1u << (15u + 16u))) != 0u, "safe-early: PA15 reset");
+    CHECK_TRUE((b & (1u << (3u + 16u))) != 0u, "safe-early: PB3 reset");
+    CHECK_TRUE((c & (1u << (6u + 16u))) != 0u, "safe-early: PC6 reset");
+    CHECK_TRUE((c & (1u << (10u + 16u))) != 0u, "safe-early: PC10 reset (INJ3)");
 }
 
 // ============================================================================

@@ -3,9 +3,10 @@
  * @brief Shared state between ecu_sched.cpp (hot path) and ecu_sched_angle.cpp
  *        (cold angle-table builders at rev boundary only).
  *
- * Hot-path rule (Tier 1.5): do NOT move evt_insert / gpio_set_pin /
- * arm_channel / ecu_sched_evt_dispatch / tooth arm loop out of ecu_sched.cpp.
- * Those stay co-located so the compiler can inline without relying on LTO.
+ * Hot-path rule (Tier 1.5): do NOT move evt_insert / arm_channel /
+ * ecu_sched_evt_dispatch / tooth arm loop out of ecu_sched.cpp.
+ * GPIO write is header-inline via hal/out_pins.h (out_pin_write) — not a
+ * separate .cpp call — so it still inlines without LTO.
  *
  * This header is private to the scheduler; public API remains ecu_sched.h.
  */

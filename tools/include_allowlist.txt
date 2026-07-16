@@ -1,6 +1,7 @@
 # Paths (relative to repo root) allowed to #include "hal/regs.h" under src/engine/**
-# Phase B lint uses this. Remove entries only after migration PRs (out_pins / aux_gpio).
+# Phase B lint uses this. Remove entries only after migration PRs.
 #
-# PR-12 migrates ecu_sched INJ/IGN; auxiliaries fan/pump stays until PR-17 (Phase C).
+# ecu_sched: TIM5 CCR/SR only (INJ/IGN GPIO via out_pins). auxiliaries fan/pump
+# stays until PR-17 (Phase C / aux_gpio).
 src/engine/ecu_sched.cpp
 src/engine/auxiliaries.cpp

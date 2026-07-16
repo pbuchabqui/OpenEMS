@@ -6,8 +6,11 @@
 #include "engine/knock.h"
 #include "engine/calibration.h"
 #include "engine/quick_crank.h"
-#include "hal/regs.h"
+#include "hal/out_pins.h"
 #include "hal/critical_section.h"
+#if !defined(EMS_HOST_TEST)
+#include "hal/regs.h"
+#endif
 
 namespace si = ems::engine::sched_internal;
 
@@ -15,47 +18,14 @@ namespace si = ems::engine::sched_internal;
 #include <stdint.h>
 
 #if defined(EMS_HOST_TEST)
-// Host stubs for the live path only: TIM5 dispatcher + GPIO BSRR/MODER init.
-// TIM1/TIM3 OC register surface removed after BSRR migration (not written on device).
-static uint32_t ems_test_rcc_ahb2enr1;
-// Legacy test API placeholders (set/get TIM1 CCR no longer drive outputs).
+// Host stubs: TIM5 dispatcher only. GPIO BSRR/MODER live in hal/out_pins.
+// TIM1 placeholders retained for legacy test API surface.
 static uint32_t ems_test_tim1_ign_cnt;
 static uint32_t ems_test_tim1_ign_ccr1;
 static uint32_t ems_test_tim1_ign_ccr2;
 static uint32_t ems_test_tim1_ign_ccr3;
 static uint32_t ems_test_tim1_ign_ccr4;
 
-static uint32_t ems_test_gpioa_moder = 0u;
-static uint32_t ems_test_gpiob_moder = 0u;
-static uint32_t ems_test_gpioc_moder = 0u;
-static uint32_t ems_test_gpioa_otyper = 0u;
-static uint32_t ems_test_gpiob_otyper = 0u;
-static uint32_t ems_test_gpioc_otyper = 0u;
-static uint32_t ems_test_gpioa_pupdr = 0u;
-static uint32_t ems_test_gpiob_pupdr = 0u;
-static uint32_t ems_test_gpioc_pupdr = 0u;
-static uint32_t ems_test_gpioa_afrh = 0u;
-static uint32_t ems_test_gpioa_bsrr = 0u;
-static uint32_t ems_test_gpiob_bsrr = 0u;
-static uint32_t ems_test_gpioc_bsrr = 0u;
-
-#define RCC_AHB2ENR1 ems_test_rcc_ahb2enr1
-#define GPIOA_MODER ems_test_gpioa_moder
-#define GPIOB_MODER ems_test_gpiob_moder
-#define GPIOC_MODER ems_test_gpioc_moder
-#define GPIOA_OTYPER ems_test_gpioa_otyper
-#define GPIOB_OTYPER ems_test_gpiob_otyper
-#define GPIOC_OTYPER ems_test_gpioc_otyper
-#define GPIOA_PUPDR ems_test_gpioa_pupdr
-#define GPIOB_PUPDR ems_test_gpiob_pupdr
-#define GPIOC_PUPDR ems_test_gpioc_pupdr
-#define GPIOA_AFRH  ems_test_gpioa_afrh
-#define GPIOA_BSRR  ems_test_gpioa_bsrr
-#define GPIOB_BSRR  ems_test_gpiob_bsrr
-#define GPIOC_BSRR  ems_test_gpioc_bsrr
-#define RCC_AHB2ENR1_GPIOAEN 1U
-#define RCC_AHB2ENR1_GPIOBEN 2U
-#define RCC_AHB2ENR1_GPIOCEN 4U
 #define TIM_SR_CC3IF 0x8U
 #define TIM_DIER_CC3IE (1U << 3)
 
@@ -85,9 +55,8 @@ static_assert(ECU_SCHED_NS_PER_TICK == 16U,
 #define ECU_SCHED_US_TO_TICKS(us) ((us) * 125U / 2U)
 #define TOOTH_NS_TO_SCHED(ns) ((uint32_t)((ns) / ECU_SCHED_NS_PER_TICK))
 
-// Pin-metric index 0..3 INJ, 4..7 IGN — same mapping as old stm32_*_tim_ch()-1.
-// Indexed by raw ECU_CH_* (0..7): INJ3,INJ4,INJ1,INJ2, IGN4,IGN3,IGN2,IGN1.
-static constexpr uint8_t k_ch_to_pin_idx[8] = {2U, 3U, 0U, 1U, 7U, 6U, 5U, 4U};
+// Pin-metric index — alias of hal/out_pins.h single source.
+#define k_ch_to_pin_idx ems::hal::kOutChToPinIdx
 
 // Inhibit mask bit for INJ/IGN channels (cyl 0..3). Indexed by ECU_CH_* for 0..3 / 4..7.
 static constexpr uint8_t k_inj_ch_to_bit[8] = {
@@ -212,50 +181,9 @@ volatile uint8_t g_ts_ring_idx = 0U;
 // Gap timestamp from CKP (written by tooth hook at rev boundary)
 volatile uint32_t g_last_gap_ts = 0U;
 
-// GPIO BSRR — pin map via EMS_BOARD_* (board_pinout.h).
-// Ordem ECU_CH_*: [INJ3, INJ4, INJ1, INJ2, IGN4, IGN3, IGN2, IGN1].
-#include "hal/board_pinout.h"
-
-enum : uint8_t { kPortA = 0U, kPortB = 1U, kPortC = 2U, kPortE = 3U };
-
-#if EMS_BOARD_IS_VGT6
-// VGT6 LQFP100 — GPIOE:
-//   INJ1=PE0  INJ2=PE2  INJ3=PE4  INJ4=PE6
-//   IGN1=PE9  IGN2=PE11 IGN3=PE13 IGN4=PE15
-static constexpr uint8_t k_bsrr_port[8] = {
-    kPortE, kPortE, kPortE, kPortE,
-    kPortE, kPortE, kPortE, kPortE
-};
-static constexpr uint8_t k_bsrr_pin[8] = {
-    4U, 6U, 0U, 2U,
-    15U, 13U, 11U, 9U
-};
-#else
-// RGT6 LQFP64 / WeAct:
-//   INJ1=PA15 INJ2=PB3 INJ3=PC10 INJ4=PC11
-//   IGN1=PC6  IGN2=PC7 IGN3=PC8  IGN4=PC9
-static constexpr uint8_t k_bsrr_port[8] = {
-    kPortC, kPortC, kPortA, kPortB,
-    kPortC, kPortC, kPortC, kPortC
-};
-static constexpr uint8_t k_bsrr_pin[8] = {
-    10U, 11U, 15U, 3U,
-    9U, 8U, 7U, 6U
-};
-#endif
-
+// GPIO BSRR: tables + inline write in hal/out_pins.h (hot path, no LTO required).
 static inline void gpio_set_pin(uint8_t channel, uint8_t high) {
-    if (channel >= 8U) { return; }
-    const uint8_t pin = k_bsrr_pin[channel];
-    const uint32_t mask = high ? (1U << pin) : (1U << (static_cast<uint32_t>(pin) + 16U));
-    switch (k_bsrr_port[channel]) {
-    case kPortA: GPIOA_BSRR = mask; break;
-    case kPortB: GPIOB_BSRR = mask; break;
-#if !defined(EMS_HOST_TEST)
-    case kPortE: GPIOE_BSRR = mask; break;
-#endif
-    default:     GPIOC_BSRR = mask; break;
-    }
+    ems::hal::out_pin_write(channel, high);
 }
 
 static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state = 0U);
@@ -579,50 +507,8 @@ static void clear_all_events_and_drive_safe_outputs(void)
 
 void ecu_sched_outputs_safe_early(void)
 {
-    for (volatile uint32_t d = 0u; d < 8u; ++d) {}
-
-#if EMS_BOARD_IS_VGT6
-    // VGT6: all INJ/IGN on GPIOE — push-pull LOW (active-high actuators).
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
-    for (volatile uint32_t d = 0u; d < 8u; ++d) {}
-    static const uint8_t pe_pins[] = {0U, 2U, 4U, 6U, 9U, 11U, 13U, 15U};
-    for (uint8_t i = 0U; i < 8U; ++i) {
-        const uint8_t pin = pe_pins[i];
-        GPIOE_OTYPER &= ~(1U << pin);
-        GPIOE_PUPDR  = (GPIOE_PUPDR & ~(3U << (pin * 2U)));
-        GPIOE_MODER  = (GPIOE_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
-    }
-    GPIOE_BSRR = (1U << (0U + 16U)) | (1U << (2U + 16U)) | (1U << (4U + 16U))
-               | (1U << (6U + 16U)) | (1U << (9U + 16U)) | (1U << (11U + 16U))
-               | (1U << (13U + 16U)) | (1U << (15U + 16U));
-#else
-    // RGT6: INJ PA15/PB3/PC10/PC11 · IGN PC6–9
-    // PA15 after reset is often JTDI with pull-up → HIGH until here.
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN | RCC_AHB2ENR1_GPIOBEN | RCC_AHB2ENR1_GPIOCEN;
-    for (volatile uint32_t d = 0u; d < 8u; ++d) {}
-
-    GPIOA_AFRH = (GPIOA_AFRH & ~(0xFu << ((15U - 8U) * 4U)));
-    GPIOA_OTYPER &= ~(1U << 15U);
-    GPIOA_PUPDR  = (GPIOA_PUPDR & ~(3U << (15U * 2U)));
-    GPIOB_OTYPER &= ~(1U << 3U);
-    GPIOB_PUPDR  = (GPIOB_PUPDR & ~(3U << (3U * 2U)));
-    for (uint8_t pin = 6U; pin <= 11U; ++pin) {
-        GPIOC_OTYPER &= ~(1U << pin);
-        GPIOC_PUPDR  = (GPIOC_PUPDR & ~(3U << (pin * 2U)));
-    }
-
-    GPIOA_MODER = (GPIOA_MODER & ~(3U << (15U * 2U))) | (1U << (15U * 2U));
-    GPIOB_MODER = (GPIOB_MODER & ~(3U << (3U * 2U))) | (1U << (3U * 2U));
-    for (uint8_t pin = 6U; pin <= 11U; ++pin) {
-        GPIOC_MODER = (GPIOC_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
-    }
-
-    GPIOA_BSRR = (1U << (15U + 16U));
-    GPIOB_BSRR = (1U << (3U + 16U));
-    GPIOC_BSRR = (1U << (6U + 16U)) | (1U << (7U + 16U))
-               | (1U << (8U + 16U)) | (1U << (9U + 16U))
-               | (1U << (10U + 16U)) | (1U << (11U + 16U));
-#endif
+    // Move-only: body lives in hal/out_pins (same MODER/BSRR polarity).
+    ems::hal::out_pins_hw_init();
 }
 
 void ECU_Hardware_Init(void)

@@ -90,7 +90,8 @@ HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp \
                   $(SRC_DIR)/hal/etb_driver.cpp $(SRC_DIR)/hal/tle8888.cpp \
                   $(SRC_DIR)/hal/ewg_driver.cpp \
                   $(SRC_DIR)/hal/flex_fuel.cpp \
-                  $(SRC_DIR)/hal/sdmmc.cpp
+                  $(SRC_DIR)/hal/sdmmc.cpp \
+                  $(SRC_DIR)/hal/out_pins.cpp
 HAL_STM32H562_SRC = $(SRC_DIR)/hal/stm32h562/system.cpp \
                     $(SRC_DIR)/hal/stm32h562/timer.cpp \
                     $(SRC_DIR)/hal/stm32h562/usb_cdc.cpp \
