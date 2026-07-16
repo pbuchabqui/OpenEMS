@@ -821,6 +821,8 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
                 g_state.tooth_count        = 0u;
                 g_state.consecutive_anomalies = 0u;
                 g_state.snap.state         = ems::drv::SyncState::WAIT_GAP;
+                // Drop sync → re-require 2 CMP edges before sequential.
+                close_cmp_seq_gate();
                 sensors_on_tooth(g_state.snap);
                 schedule_on_tooth(g_state.snap);
                 return;
@@ -839,6 +841,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
                 g_state.tooth_count        = 0u;
                 g_state.consecutive_anomalies = 0u;
                 g_state.snap.state         = ems::drv::SyncState::WAIT_GAP;
+                close_cmp_seq_gate();
                 sensors_on_tooth(g_state.snap);
                 schedule_on_tooth(g_state.snap);  // only on resync drop
                 return;
@@ -1113,7 +1116,8 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
         g_state.snap.state   = SyncState::LOSS_OF_SYNC;
         g_state.snap.rpm_x10 = 0u;
         g_state.tooth_count  = 0u;
-        g_state.cmp_confirms = 0u; g_state.snap.cmp_confirms = 0u; s_prev_cmp_capture = 0u; s_revs_since_cmp = 0u; s_cmp_ref_tooth = 0xFFu;
+        close_cmp_seq_gate();
+        s_revs_since_cmp = 0u;
         transitioned = true;
     }
     exit_critical();

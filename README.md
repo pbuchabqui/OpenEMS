@@ -369,13 +369,13 @@ Fora do MVP de bancada:
 
 ### P1 — restante (decode / cam / proteccao)
 
-- ~~Math overflow-safe `ticks_to_ns` / CMP u64; 1ª borda CMP; LOSS zera `cmp_confirms`~~ → feito (ver lista acima).
+- ~~Math overflow-safe `ticks_to_ns` / CMP u64; 1ª borda CMP; LOSS zera `cmp_confirms`~~ → feito.
 - ~~Flush fila + safe pins presync↔sequencial; oil/fuel-rail cut~~ → feito.
 - ~~Pinout firmware INJ PE0/2/4/6, IGN PE*, OIL PC1, ETB DIR PE7/8~~ → congelado no código.
-- Endurecer WAIT_GAP→HALF (mais dentes de confirmação e/ou fuel só em FULL_SYNC) — parcialmente mitigado; rever política de fuel em HALF.
-- Unificar reset de `cmp_confirms` em *todos* os caminhos de LOSS (auditoria residual).
-- Overtemp → cut real; DiagnosticManager → inhibit (doc `protection_system.md` ainda aspiracional).
+- ~~Fuel só em FULL_SYNC (HALF: spark wasted, inj inhibit); `close_cmp_seq_gate` em todos os drops de sync (incl. anomaly→WAIT_GAP, stall)~~ → feito.
+- ~~Overtemp CLT 105/115 °C (WARN/CRIT) + DiagnosticManager CRITICAL → inj/ign inhibit~~ → feito.
 - Multi-spark: margem de tabela / edge cases de fila sob RPM alto.
+- DiagnosticManager: debounce/tick/persistência NVM ainda aspiracional (`protection_system.md`).
 
 ### P2 — bancada / HIL / docs
 

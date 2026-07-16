@@ -97,6 +97,9 @@ static constexpr uint8_t  kFaultBitOil  = (1u << 7u);  // SensorId::OIL_PRESS
 // Oil must be present above this RPM; fuel-rail fault cuts after cranking.
 static constexpr uint32_t kOilProtectRpmX10  = 15000u;  // 1500 RPM
 static constexpr uint32_t kFuelRailMinRpmX10 = 5000u;   // 500 RPM
+// Coolant protection (value-based, not just open/short fault_bits).
+static constexpr int16_t  kOvertempWarnX10   = 1050;    // 105 °C
+static constexpr int16_t  kOvertempCritX10   = 1150;    // 115 °C
 static bool g_limp_active = false;
 static bool g_rev_limit_active = false;   // fuel cut active via rev limiter
 static bool g_engine_was_running = false;
@@ -741,6 +744,7 @@ static void openems_init() noexcept {
     iwdg_kick();
 
     // 6a) Inicializa sistemas "invisíveis" ao motorista
+    ems::engine::DiagnosticManager::init();
     ems::engine::map_estimator_init();
     ems::engine::xtau_autocalib_init();
 
@@ -880,11 +884,34 @@ int main() {
             const bool clt_fault = (sensors.fault_bits & kFaultBitClt) != 0u;
             const bool oil_fault = (sensors.fault_bits & kFaultBitOil) != 0u;
             const bool fuel_press_fault = (sensors.fault_bits & kFaultBitFuel) != 0u;
-            g_limp_active = map_fault || clt_fault || oil_fault;
+            // Overtemp from CLT value (open/short already covered by clt_fault).
+            const bool overtemp_warn = sensors.clt_degc_x10 >= kOvertempWarnX10;
+            const bool overtemp_crit = sensors.clt_degc_x10 >= kOvertempCritX10;
+            if (overtemp_crit) {
+                ems::engine::DiagnosticManager::report_fault(
+                    ems::engine::DiagnosticCode::OVERTEMP_CRITICAL,
+                    ems::engine::FaultSeverity::CRITICAL,
+                    static_cast<uint16_t>(sensors.clt_degc_x10), 0u);
+            } else if (overtemp_warn) {
+                ems::engine::DiagnosticManager::report_fault(
+                    ems::engine::DiagnosticCode::OVERTEMP_WARNING,
+                    ems::engine::FaultSeverity::WARNING,
+                    static_cast<uint16_t>(sensors.clt_degc_x10), 0u);
+            } else {
+                ems::engine::DiagnosticManager::clear_fault(
+                    ems::engine::DiagnosticCode::OVERTEMP_CRITICAL);
+                ems::engine::DiagnosticManager::clear_fault(
+                    ems::engine::DiagnosticCode::OVERTEMP_WARNING);
+            }
+            const bool diag_critical =
+                !ems::engine::DiagnosticManager::is_system_ready();
+            g_limp_active = map_fault || clt_fault || oil_fault || overtemp_warn;
             // CLT limp: fuel+ign cut only above kLimpRpmLimit (reduced performance below).
             // MAP fault: always cut fuel — fallback MAP≈1 bar is unsafe load for PW at any RPM.
             // Oil range fault while spinning: cut fuel+ign (bearing protection).
             // Fuel-rail range fault after crank: cut fuel only (lean/dry risk).
+            // Overtemp critical: fuel+ign cut while spinning (same floor as oil).
+            // HALF_SYNC: spark OK (wasted), fuel only after FULL_SYNC (angular lock).
             const bool rev_cut = g_limp_active &&
                 (snap.rpm_x10 > kLimpRpmLimit_x10);
             const bool map_fuel_cut = map_fault;
@@ -892,6 +919,9 @@ int main() {
                 oil_fault && (snap.rpm_x10 > kOilProtectRpmX10);
             const bool fuel_rail_cut =
                 fuel_press_fault && (snap.rpm_x10 > kFuelRailMinRpmX10);
+            const bool overtemp_cut =
+                overtemp_crit && (snap.rpm_x10 > kOilProtectRpmX10);
+            const bool half_fuel_lockout = sched_sync && !full_sync;
             const CachedFuelCorrections& fuel_corr = fuel_corrections_for(sensors);
             // Dwell 2D: tensão × RPM (MS42 §2.2.2.2.1).
             // Calculado fora do cache porque depende de RPM que varia a cada dente.
@@ -935,9 +965,11 @@ int main() {
 
                 const uint8_t inj_mask =
                     (rev_cut || g_rev_limit_active || map_fuel_cut ||
-                     oil_protect_cut || fuel_rail_cut) ? 0x0Fu : 0u;
+                     oil_protect_cut || fuel_rail_cut || overtemp_cut ||
+                     half_fuel_lockout || diag_critical) ? 0x0Fu : 0u;
                 const uint8_t ign_mask =
-                    (rev_cut || oil_protect_cut) ? 0x0Fu : 0u;
+                    (rev_cut || oil_protect_cut || overtemp_cut ||
+                     diag_critical) ? 0x0Fu : 0u;
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);
                 ::ecu_sched_set_ign_inhibit_mask(ign_mask);
             }
@@ -945,10 +977,13 @@ int main() {
             // Telemetry PW must match actuators: only when injectors are actually cut.
             const bool fuel_cut_active =
                 g_rev_limit_active || rev_cut || map_fuel_cut ||
-                oil_protect_cut || fuel_rail_cut;
+                oil_protect_cut || fuel_rail_cut || overtemp_cut ||
+                half_fuel_lockout || diag_critical;
 
-            if (sched_sync && !rev_cut && !map_fuel_cut &&
-                !oil_protect_cut && !fuel_rail_cut) {
+            // Fuel calc + inject only in FULL_SYNC; HALF keeps spark (wasted path).
+            if (full_sync && !rev_cut && !map_fuel_cut &&
+                !oil_protect_cut && !fuel_rail_cut && !overtemp_cut &&
+                !diag_critical) {
                 const ems::engine::Table2dLookup fuel_lookup =
                     ems::engine::table3d_prepare_lookup(ems::engine::kRpmAxisX10,
                                                         ems::engine::kLoadAxisBarX100,
@@ -1103,7 +1138,10 @@ int main() {
                     dwell_ticks,
                     inj_pw_ticks,
                     static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(snap.rpm_x10)));
-            } else if (sched_sync && rev_cut) {
+            } else if (sched_sync &&
+                       (rev_cut || oil_protect_cut || overtemp_cut || diag_critical ||
+                        half_fuel_lockout || map_fuel_cut || fuel_rail_cut)) {
+                // Spark-only (or mask-inhibited): HALF lockout, fuel cuts, limp/overtemp.
                 const int16_t base_advance_deg = ems::engine::get_advance(snap.rpm_x10, map_bar_x100);
                 ::ecu_sched_commit_calibration(
                     static_cast<uint32_t>(base_advance_deg < 0 ? 0 : base_advance_deg),
