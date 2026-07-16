@@ -718,7 +718,14 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         // count=0 é válido: desliga multi-spark (calibration.h). Só valores >3
         // (corrupção/página antiga) são rejeitados.
         if (g_page0[172] <= 3u) {
-            std::memcpy(&ems::engine::mspark_max_rpm_x10, g_page0 + 170, 2u);
+            uint16_t ms_rpm = 0u;
+            std::memcpy(&ms_rpm, g_page0 + 170, 2u);
+            if (ms_rpm == 0u) {
+                ms_rpm = ems::engine::kMsparkRpmCeilingX10;
+            } else if (ms_rpm > ems::engine::kMsparkRpmCeilingX10) {
+                ms_rpm = ems::engine::kMsparkRpmCeilingX10;  // hard max 1500 RPM
+            }
+            ems::engine::mspark_max_rpm_x10 = ms_rpm;
             ems::engine::mspark_count = g_page0[172];
             std::memcpy(&ems::engine::mspark_inter_dwell_ms_x10, g_page0 + 173, 2u);
         }

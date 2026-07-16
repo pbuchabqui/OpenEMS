@@ -3511,6 +3511,11 @@ static void test_ecu_sched_mspark(void) {
     // Disable
     ecu_sched_set_mspark(0u, 0u, 0u);
     CHECK_EQ(ecu_sched_test_get_mspark_count(), 0u, "mspark disabled");
+
+    // Hard RPM ceiling for multi-spark gate (firmware policy)
+    CHECK_EQ(ems::engine::kMsparkRpmCeilingX10, 15000u, "mspark ceiling = 1500 RPM");
+    CHECK_TRUE(ems::engine::mspark_max_rpm_x10 <= ems::engine::kMsparkRpmCeilingX10,
+               "default mspark gate ≤ 1500 RPM");
 }
 
 // ── EOI targeting ───────────────────────────────────────────────────────────

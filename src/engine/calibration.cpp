@@ -125,7 +125,7 @@ uint16_t dwell_rpm_axis_rpm[kDwellRpmCorrSize] = {500u, 1200u, 4000u, 7000u};
 uint16_t dwell_rpm_factor_q8[kDwellRpmCorrSize] = {384u, 288u, 256u, 200u};
 
 // Multi-spark: activo abaixo de 1200 RPM, 2 sparks adicionais, dwell inter-spark 1.8ms
-uint16_t mspark_max_rpm_x10        = 12000u;  // 1200 RPM — gate RPM
+uint16_t mspark_max_rpm_x10        = kMsparkRpmCeilingX10;  // 1500 RPM — gate (hard max)
 uint8_t  mspark_count              = 2u;      // sparks adicionais por ciclo
 uint16_t mspark_inter_dwell_ms_x10 = 18u;     // 1.8ms entre sparks
 

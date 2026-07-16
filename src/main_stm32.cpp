@@ -931,16 +931,22 @@ int main() {
                 (static_cast<uint32_t>(dwell_ms_x10) * kSchedulerTicksPerMs) / 10u;
 
             // Multi-spark (MS42 §2.2.3): habilita/desabilita conforme RPM gate.
+            // Hard ceiling 1500 RPM (kMsparkRpmCeilingX10) — window too short above.
             // O dwell inter-spark é mais curto (tabela dedicada mspark_inter_dwell_ms_x10).
             // Limite 18°ATDC garante que o último spark contribui para a combustão.
-            if (snap.rpm_x10 < ems::engine::mspark_max_rpm_x10 &&
-                ems::engine::mspark_count > 0u) {
-                const uint32_t inter_dwell_ticks =
-                    (static_cast<uint32_t>(ems::engine::mspark_inter_dwell_ms_x10)
-                     * kSchedulerTicksPerMs) / 10u;
-                ::ecu_sched_set_mspark(ems::engine::mspark_count, inter_dwell_ticks, 18u);
-            } else {
-                ::ecu_sched_set_mspark(0u, 0u, 18u);
+            {
+                uint16_t ms_gate = ems::engine::mspark_max_rpm_x10;
+                if (ms_gate == 0u || ms_gate > ems::engine::kMsparkRpmCeilingX10) {
+                    ms_gate = ems::engine::kMsparkRpmCeilingX10;
+                }
+                if (snap.rpm_x10 < ms_gate && ems::engine::mspark_count > 0u) {
+                    const uint32_t inter_dwell_ticks =
+                        (static_cast<uint32_t>(ems::engine::mspark_inter_dwell_ms_x10)
+                         * kSchedulerTicksPerMs) / 10u;
+                    ::ecu_sched_set_mspark(ems::engine::mspark_count, inter_dwell_ticks, 18u);
+                } else {
+                    ::ecu_sched_set_mspark(0u, 0u, 18u);
+                }
             }
             const bool crank_rpm_window =
                 sched_sync && snap.rpm_x10 > 0u &&

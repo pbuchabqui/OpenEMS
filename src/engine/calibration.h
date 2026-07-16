@@ -73,8 +73,10 @@ extern uint16_t dwell_rpm_factor_q8[kDwellRpmCorrSize];  // factor multiplicativ
 
 // Multi-spark (MS42 §2.2.3) — sparks adicionais a baixo RPM para melhorar ignição.
 // mspark_max_rpm_x10: RPM (×10) acima do qual multi-spark é desabilitado.
+// Hard ceiling 1500 RPM — above this the dwell window is too short for extra sparks.
 // mspark_count: número de sparks adicionais por ciclo (0=desabilitado, máx 3).
 // mspark_inter_dwell_ms_x10: dwell entre sparks consecutivos (ms ×10, ex: 18 = 1.8ms).
+constexpr uint16_t kMsparkRpmCeilingX10 = 15000u;  // 1500 RPM absolute max gate
 extern uint16_t mspark_max_rpm_x10;
 extern uint8_t  mspark_count;
 extern uint16_t mspark_inter_dwell_ms_x10;
