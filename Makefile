@@ -2,7 +2,7 @@
 # BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE pinout)
 # Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
-.PHONY: all clean host-test firmware firmware-rgt6 firmware-vgt6 help \
+.PHONY: all clean host-test host-test-vgt6 firmware firmware-rgt6 firmware-vgt6 help \
         secrets-check lint-includes format format-all format-check ci-local
 
 COMPILER_ARM = arm-none-eabi-g++
@@ -134,6 +134,7 @@ help:
 	@echo "Usage: make [target] [BOARD=rgt6|vgt6] [WERROR=0|1]"
 	@echo ""
 	@echo "  host-test       Host regression (always RGT6 pin map stubs)"
+	@echo "  host-test-vgt6  Standalone VGT6 GPIOE INJ/IGN BSRR coverage"
 	@echo "  firmware        Build for BOARD (default rgt6)"
 	@echo "  firmware-rgt6   Build RGT6 bin"
 	@echo "  firmware-vgt6   Build VGT6 bin (GPIOE INJ/IGN/ETB)"
@@ -154,6 +155,17 @@ host-test:
 	@echo "  HOST $(HOST_TEST_BIN)"
 	@$(CXX_HOST) $(CFLAGS_HOST) $(HOST_TEST_SRC) -o $(HOST_TEST_BIN) -lm
 	@$(HOST_TEST_BIN)
+
+# Standalone VGT6 pin-map coverage: out_pins.h tables are compile-time
+# selected, so the RGT6 host-test never runs the GPIOE path. Separate binary
+# built -DEMS_BOARD_VGT6 (own main; main suite PASS count untouched).
+host-test-vgt6:
+	@mkdir -p $(HOST_DIR)
+	@echo "  HOST $(HOST_DIR)/out_pins_vgt6_tests"
+	@$(CXX_HOST) $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_VGT6 -O2 -g -I. -I./src \
+		$(SRC_DIR)/hal/out_pins.cpp $(TEST_DIR)/harness.cpp \
+		$(TEST_DIR)/test_out_pins_vgt6.cpp -o $(HOST_DIR)/out_pins_vgt6_tests -lm
+	@$(HOST_DIR)/out_pins_vgt6_tests
 
 firmware-rgt6:
 	@$(MAKE) firmware BOARD=rgt6
