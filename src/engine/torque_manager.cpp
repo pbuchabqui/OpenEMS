@@ -11,7 +11,7 @@
 #include "engine/calibration.h"
 #include "engine/math_utils.h"
 #include "etb_control.h"
-#include "app/can_rx_map.h"
+#include "engine/vehicle_inputs.h"
 #include "hal/system.h"
 
 #include <string.h>
@@ -445,7 +445,7 @@ TorqueOutput torque_manager_update(
     // ── Traction control ──────────────────────────────────────────────────
     // Slip priority:
     //   1) external API (tests / override)
-    //   2) CAN wheel vs vehicle (can_rx_map SPEED_KMH + WHEEL_SPEED_KMH)
+    //   2) CAN wheel vs vehicle (vehicle_inputs → can_rx_map)
     //   3) RPM-flare proxy when APP/RPM gates pass
     uint16_t tc_red = 0u;
     {
@@ -467,8 +467,8 @@ TorqueOutput torque_manager_update(
         // Latch CAN speeds for diagnostics / speed limiter
         uint16_t veh_kmh = 0u;
         uint16_t whl_kmh = 0u;
-        const bool have_veh = ems::app::can_rx_speed_kmh(veh_kmh, now_ms);
-        const bool have_whl = ems::app::can_rx_wheel_speed_kmh(whl_kmh, now_ms);
+        const bool have_veh = vehicle_speed_kmh(veh_kmh, now_ms);
+        const bool have_whl = vehicle_wheel_speed_kmh(whl_kmh, now_ms);
         g_can_vehicle_kmh = have_veh ? veh_kmh : 0u;
         g_can_wheel_kmh   = have_whl ? whl_kmh : 0u;
 

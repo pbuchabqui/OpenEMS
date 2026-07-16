@@ -6,7 +6,7 @@
 
 #include "engine/table3d.h"
 #include "engine/calibration.h"
-#include "app/can_rx_map.h"
+#include "engine/vehicle_inputs.h"
 
 #if __has_include("drv/ckp.h")
 #include "drv/ckp.h"
@@ -293,7 +293,7 @@ uint16_t iac_target_rpm_x10(int16_t clt_x10) noexcept {
 void run_wastegate_control(const ems::drv::CkpSnapshot& snap,
                            const ems::drv::SensorData& s) noexcept {
     uint8_t gear = 0u;
-    ems::app::can_rx_gear(gear, g.time_ms);  // fallback para 0 se CAN não configurado
+    (void)ems::engine::vehicle_gear(gear, g.time_ms);  // fallback 0 se CAN off
     const uint16_t target_bar_x1000 = lookup_boost_target(snap.rpm_x10, gear);
 
     if (s.map_bar_x1000 > static_cast<uint16_t>(target_bar_x1000 + kOverboostMarginBarX1000)) {

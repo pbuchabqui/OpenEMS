@@ -170,7 +170,7 @@ extern uint16_t launch_rpm_hyst_x10;      // deadband around target (default 100
 // ── Traction control (torque_manager) — page0 202-215 (layout v5+) ───────────
 // 202 en, 203 pad, 204-205 app_min, 206-207 rpm_min, 208-209 rpm_dot_thresh,
 // 210-211 max_red, 212-213 spark_max, 214-215 rate.
-// Slip priority: external API → CAN wheel vs vehicle (can_rx_map) → RPM-dot proxy.
+// Slip priority: external API → CAN wheel vs vehicle (vehicle_inputs) → RPM-dot proxy.
 extern uint8_t  tc_enable;
 extern uint16_t tc_app_min_x10;           // min APP to intervene (default 30%)
 extern uint16_t tc_rpm_min_x10;           // min RPM (default 2000)

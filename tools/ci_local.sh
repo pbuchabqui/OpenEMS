@@ -15,12 +15,13 @@ make secrets-check
 
 case "$STAGE" in
   1)
+    # Post PR-11: Stage1 also enforces layering ban ENGINE/DRV→app/
     make host-test WERROR="$WERROR"
     make firmware-rgt6 WERROR="$WERROR"
     make firmware-vgt6 WERROR="$WERROR"
+    make lint-includes LINT_PHASE=A LINT_ERROR=1
     ;;
   2)
-    # Post PR-11: fail on ENGINE→APP includes
     make host-test WERROR="$WERROR"
     make firmware-rgt6 WERROR="$WERROR"
     make firmware-vgt6 WERROR="$WERROR"
