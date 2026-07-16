@@ -1,6 +1,7 @@
 #include "engine/transient_fuel.h"
 #include "engine/calibration.h"
 #include "engine/math_utils.h"
+#include "engine/xtau_autocalib.h"
 
 #include <cstdint>
 
@@ -17,6 +18,8 @@ namespace ems::engine {
 
 void transient_fuel_reset() noexcept {
     g_wall_fuel_us_q8 = 0;
+    // Produção usa g_wall_state em xtau_autocalib — limpar ambos evita filme fantasma no DFCO.
+    xtau_wall_fuel_reset();
 }
 
 uint32_t transient_fuel_xtau_update(uint32_t fuel_pw_us,

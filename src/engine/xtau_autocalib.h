@@ -28,6 +28,10 @@ void xtau_autocalib_init() noexcept;
 // Reseta o estado de aprendizado
 void xtau_autocalib_reset() noexcept;
 
+// Zera só o filme de parede de produção (DFCO / fuel cut / disable).
+// Não apaga a tabela 2D aprendida.
+void xtau_wall_fuel_reset() noexcept;
+
 // Atualiza parâmetros X-τ baseado em erro de lambda durante transientes
 // Retorna true se parâmetros foram atualizados
 bool xtau_autocalib_update(uint32_t rpm_x10,
@@ -44,12 +48,15 @@ XTauParams xtau_get_current_params(int16_t clt_x10) noexcept;
 // diagnóstico/dash e testes — não aplica fallback 1D por CLT.
 XTauParams xtau_get_current_params_2d(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 
-// Aplica modelo X-τ com parâmetros aprendidos, indexados por RPM×MAP (carga)
+// Aplica modelo X-τ com parâmetros aprendidos, indexados por RPM×MAP (carga).
+// τ está em ciclos de motor (720°); period_ms escala a evaporação ao wall-clock
+// do loop (produção = 2 ms). Sem period_ms, assume 2 ms.
 uint32_t transient_fuel_xtau_with_autocalib(uint32_t fuel_pw_us,
                                              uint32_t rpm_x10,
                                              uint16_t map_bar_x100,
                                              int16_t clt_x10,
-                                             bool enabled) noexcept;
+                                             bool enabled,
+                                             uint16_t period_ms = 2u) noexcept;
 
 // Verifica se sistema está em modo de aprendizado
 bool xtau_is_learning() noexcept;

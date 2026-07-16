@@ -409,20 +409,31 @@ void fuel_ae_set_taper(uint8_t taper_cycles) noexcept {
 }
 
 int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
-    if (tpsdot_x10 > static_cast<int16_t>(ae_tpsdot_threshold_x10)) {
+    const int16_t thr = static_cast<int16_t>(ae_tpsdot_threshold_x10);
+    const int16_t abs_dot = (tpsdot_x10 >= 0) ? tpsdot_x10 : static_cast<int16_t>(-tpsdot_x10);
+    const bool tip_in  = (tpsdot_x10 > thr);
+    const bool tip_out = (tpsdot_x10 < -thr);
+
+    if (tip_in || tip_out) {
         const uint8_t b = clt_bucket(clt_x10);
         const uint16_t taper = ae_taper_cycles > 255u
             ? 255u
             : (ae_taper_cycles == 0u ? 1u : ae_taper_cycles);
         const uint16_t tpsdot_u16 = static_cast<uint16_t>(
-            tpsdot_x10 < 0 ? 0 : (tpsdot_x10 > 1000 ? 1000 : tpsdot_x10));
+            abs_dot > 1000 ? 1000 : abs_dot);
         const uint16_t base_pw_us =
             interp_u16_4pt_u16x(ae_tpsdot_axis_x10, ae_pw_adder_us, tpsdot_u16);
-        g_ae_pulse_us =
+        int32_t pulse =
             (static_cast<int32_t>(base_pw_us) * static_cast<int32_t>(ae_clt_sens[b])) / 8;
-        if (g_ae_pulse_us > static_cast<int32_t>(ae_max_pw_us)) {
-            g_ae_pulse_us = static_cast<int32_t>(ae_max_pw_us);
+        if (pulse > static_cast<int32_t>(ae_max_pw_us)) {
+            pulse = static_cast<int32_t>(ae_max_pw_us);
         }
+        // Tip-out (DE): mesma magnitude, sinal negativo (enleanment).
+        // Authority DE = 50% do AE tip-in — evita lean hole agressivo.
+        if (tip_out) {
+            pulse = -(pulse / 2);
+        }
+        g_ae_pulse_us = pulse;
         g_ae_decay_cycles = static_cast<uint8_t>(taper);
         return g_ae_pulse_us;
     }
@@ -432,7 +443,7 @@ int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
             ? 255u
             : (ae_taper_cycles == 0u ? 1u : ae_taper_cycles);
         --g_ae_decay_cycles;
-        return (g_ae_pulse_us * g_ae_decay_cycles) /
+        return (g_ae_pulse_us * static_cast<int32_t>(g_ae_decay_cycles)) /
                static_cast<int32_t>(taper);
     }
 
@@ -448,17 +459,20 @@ int32_t calc_ae_pw_us(uint16_t tps_now_x10,
         return 0;
     }
 
-    int16_t delta_tps_x10 = static_cast<int16_t>(tps_now_x10) - static_cast<int16_t>(tps_prev_x10);
-    if (delta_tps_x10 < 0) {
-        delta_tps_x10 = 0;
-    }
+    // Signed ΔTPS → tip-in (AE) e tip-out (DE).
+    const int32_t delta_tps_x10 =
+        static_cast<int32_t>(tps_now_x10) - static_cast<int32_t>(tps_prev_x10);
 
-    // (%×10)/ms → %/s×10: multiply by 1000/dt_ms
-    const int32_t tpsdot_x10 =
-        (static_cast<int32_t>(delta_tps_x10) * 1000) / static_cast<int32_t>(dt_ms);
-    const int16_t tpsdot_clamped = static_cast<int16_t>(
-        tpsdot_x10 > 1000 ? 1000 : (tpsdot_x10 < 0 ? 0 : tpsdot_x10));
-    return calc_ae_pw_from_tpsdot(tpsdot_clamped, clt_x10);
+    // (%×10)/ms → %/s×10
+    int32_t tpsdot_x10 =
+        (delta_tps_x10 * 1000) / static_cast<int32_t>(dt_ms);
+    if (tpsdot_x10 > 1000) {
+        tpsdot_x10 = 1000;
+    }
+    if (tpsdot_x10 < -1000) {
+        tpsdot_x10 = -1000;
+    }
+    return calc_ae_pw_from_tpsdot(static_cast<int16_t>(tpsdot_x10), clt_x10);
 }
 
 

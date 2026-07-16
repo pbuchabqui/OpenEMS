@@ -90,7 +90,9 @@ void fuel_ae_set_threshold(uint16_t threshold_tpsdot_x10) noexcept;
 void fuel_ae_set_taper(uint8_t taper_cycles) noexcept;
 void fuel_ae_reset() noexcept;
 
-// AE from precomputed TPSdot (e.g. map fusion ring) — positive = tip-in only.
+// AE/DE from precomputed TPSdot (map fusion ring).
+// tpsdot > +threshold → tip-in enrichment (µs > 0);
+// tpsdot < −threshold → tip-out enleanment (µs < 0, 50% authority).
 int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept;
 
 int32_t calc_ae_pw_us(uint16_t tps_now_x10,

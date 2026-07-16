@@ -26,6 +26,7 @@
 #include "engine/calibration.h"
 #include "app/can_rx_map.h"
 #include "hal/adc.h"
+#include "hal/system.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
 #include "engine/fuel_calc.h"
@@ -955,12 +956,30 @@ static void test_ign_clt_correction(void) {
 static void test_ign_antijerk(void) {
     section("ign_calc: calc_antijerk_retard_deg");
     antijerk_reset();
-    CHECK_EQ(calc_antijerk_retard_deg(false), 0, "no AE → 0");
-    CHECK_EQ(calc_antijerk_retard_deg(true),  3, "AE active → 3°");
+    const uint16_t saved_thr = antijerk_tpsdot_threshold_x10;
+    const int16_t saved_ret = antijerk_retard_deg;
+    const uint8_t saved_dec = antijerk_decay_cycles;
+    antijerk_tpsdot_threshold_x10 = 30u;
+    antijerk_retard_deg = 5;
+    antijerk_decay_cycles = 4u;
+
+    CHECK_EQ(calc_antijerk_retard_deg(static_cast<int16_t>(0)), 0, "tpsdot=0 → 0");
+    CHECK_EQ(calc_antijerk_retard_deg(static_cast<int16_t>(20)), 0, "below threshold → 0");
+    // 1000 ×5 /1000 = 5°
+    CHECK_EQ(calc_antijerk_retard_deg(static_cast<int16_t>(1000)), 5, "full tip-in → max 5°");
     antijerk_reset();
-    calc_antijerk_retard_deg(true);
-    calc_antijerk_retard_deg(false); calc_antijerk_retard_deg(false); calc_antijerk_retard_deg(false);
-    CHECK_EQ(calc_antijerk_retard_deg(false), 0, "decays to 0 after 3 clean cycles");
+    // 200 ×5 /1000 = 1°
+    CHECK_EQ(calc_antijerk_retard_deg(static_cast<int16_t>(200)), 1, "mild tip-in → 1°");
+    // Decay: armed for 4 cycles (including arm tick), then zeros
+    calc_antijerk_retard_deg(static_cast<int16_t>(0));
+    calc_antijerk_retard_deg(static_cast<int16_t>(0));
+    calc_antijerk_retard_deg(static_cast<int16_t>(0));
+    CHECK_EQ(calc_antijerk_retard_deg(static_cast<int16_t>(0)), 0, "decays to 0 after decay_cycles");
+
+    antijerk_tpsdot_threshold_x10 = saved_thr;
+    antijerk_retard_deg = saved_ret;
+    antijerk_decay_cycles = saved_dec;
+    antijerk_reset();
 }
 
 static void test_ign_clamp_and_total_advance(void) {
@@ -1223,9 +1242,14 @@ static void test_fuel_ae(void) {
     fuel_ae_set_taper(4u);
     CHECK_TRUE(calc_ae_pw_from_tpsdot(100, 800) > 0, "calc_ae_pw_from_tpsdot tip-in");
 
-    // Decel (TPS close): negative delta → clamped to 0, returns decaying pulse
+    // Tip-out (DE): negative tpsdot below −threshold → enleanment (µs < 0)
+    fuel_reset_adaptives();
+    fuel_ae_set_threshold(10u);
+    fuel_ae_set_taper(4u);
+    const int32_t de = calc_ae_pw_from_tpsdot(static_cast<int16_t>(-100), 800);
+    CHECK_TRUE(de < 0, "tip-out tpsdot → DE < 0");
     const int32_t ae_decel = calc_ae_pw_us(200u, 800u, 10u, 800);
-    CHECK_TRUE(ae_decel >= 0, "decel → ae ≥ 0 (no decel enrichment)");
+    CHECK_TRUE(ae_decel <= 0, "TPS close → DE ≤ 0 (enleanment or decay)");
 
     // dt=0 guard
     CHECK_EQ(calc_ae_pw_us(800u, 0u, 0u, 800), 0, "dt=0 → ae=0");
@@ -2083,6 +2107,11 @@ static void test_etb_cpp_update(void) {
 static void test_torque_manager_cpp_update(void) {
     section("torque_manager (C++ ns): reset / update / test_get_target / test_get_limp_reason");
 
+    // Existing step-response checks assume unlimited blade rate; production
+    // default (500 %/s) would slew over many ticks. 0 = unlimited.
+    const uint16_t saved_rate = ems::engine::etb_max_rate_pct_per_s;
+    ems::engine::etb_max_rate_pct_per_s = 0u;
+
     ems::engine::torque_manager_reset();
     CHECK_EQ(ems::engine::torque_manager_test_get_target(), 0u, "target=0 after reset");
     CHECK_EQ(ems::engine::torque_manager_test_get_limp_reason(), 0u, "limp_reason=0 after reset");
@@ -2358,6 +2387,47 @@ static void test_torque_manager_cpp_update(void) {
         CHECK_EQ(got.timeout_ms, 400u, "apply wheel timeout");
         ems::app::can_rx_map_set(ems::app::CanRxSignal::WHEEL_SPEED_KMH, off);
     }
+
+    // ── ETB target rate-limit (dirigibilidade) ────────────────────────────
+    section("torque_manager: etb_max_rate_pct_per_s slews target");
+    {
+        const uint16_t saved_idle_open = etb_idle_open_pct_x10;
+        const uint16_t saved_idle_min  = etb_idle_min_opening_x10;
+        // Disable idle/dashpot so the rate test sees pure pedal→target slew.
+        etb_idle_open_pct_x10 = 0u;   // app_idle never true (app ≥ 0)
+        etb_idle_min_opening_x10 = 0u;
+
+        ems::engine::torque_manager_reset();
+        etb_cal_valid = 1u;
+        ems::engine::etb_max_rate_pct_per_s = 500u;  // 500 %/s
+        ems::drv::CkpSnapshot s{};
+        s.rpm_x10 = 15000u;
+        ems::drv::SensorData sn{};
+        sn.app_pct_x10 = 0u;
+        (void)ems::engine::torque_manager_update(s, sn, true, false, false, 8500u, 2u);
+        CHECK_EQ(ems::engine::torque_manager_test_get_target(), 0u, "rate: start at 0");
+
+        // APP step to 100% → map 1000. period 2ms × 500%/s → max_delta_x10 = 10
+        sn.app_pct_x10 = 1000u;
+        out = ems::engine::torque_manager_update(s, sn, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 10u, "rate: first 2ms step → +1.0% (10 x10)");
+        CHECK_EQ(out.etb_max_rate_pct_per_s, 500u, "rate: exposes cal rate");
+
+        // After many ticks reaches map target
+        for (int i = 0; i < 120; ++i) {
+            out = ems::engine::torque_manager_update(s, sn, true, false, false, 8500u, 2u);
+        }
+        CHECK_EQ(out.etb_target_pct_x10, 1000u, "rate: eventually reaches WOT map");
+
+        // Rev cut bypasses slew → immediate 0
+        out = ems::engine::torque_manager_update(s, sn, true, false, true, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 0u, "rate: rev_cut bypasses slew → 0");
+
+        etb_idle_open_pct_x10 = saved_idle_open;
+        etb_idle_min_opening_x10 = saved_idle_min;
+    }
+
+    ems::engine::etb_max_rate_pct_per_s = saved_rate;
 }
 
 // page0 layout v5: launch/TC serialize ↔ apply round-trip + clamps
@@ -4440,6 +4510,7 @@ static void test_xtau_autocalib_all(void) {
     using namespace ems::engine;
 
     section("xtau_autocalib: init / reset");
+    host_set_millis(0u);
     xtau_autocalib_init();
     xtau_autocalib_reset();
     CHECK_FALSE(xtau_is_learning(), "not learning after reset");
@@ -4452,21 +4523,30 @@ static void test_xtau_autocalib_all(void) {
     CHECK_FALSE(updated_steady, "non-transient → no update");
     CHECK_FALSE(xtau_is_learning(), "not learning in steady state");
 
+    section("xtau_autocalib: update — transient needs ≥100ms before samples");
+    xtau_autocalib_reset();
+    host_set_millis(1000u);
+    // First transient tick starts the window; no learn yet (duration < 100ms).
+    CHECK_FALSE(xtau_autocalib_update(30000u, 100u, 1000, 1100, 800, true),
+                "t=0: duration gate blocks learn");
+    CHECK_TRUE(xtau_is_learning() || xtau_get_state().calibration_state == 1u,
+               "duration warm-up → learning state");
+
     section("xtau_autocalib: update — transient with lambda error");
     xtau_autocalib_reset();
+    host_set_millis(2000u);
     // Transient + lambda error=100 x1000 (in [50,150] valid window).
-    // kLambdaErrorHistorySize entries needed before valid_count≥4.
-    // After 4+ calls: update() returns true and calibration_state=2.
+    // Need ≥100ms continuous transient then ≥4 valid history samples.
     bool any_update = false;
     for (int i = 0; i < 20; ++i) {
+        host_advance_millis(50u);  // 50ms steps → after 3rd call elapsed ≥100ms
         any_update |= xtau_autocalib_update(
             30000u, 100u, 1000, 1100, 800, true);  // 10% rich, valid transient
     }
-    CHECK_TRUE(any_update, "transient update: returns true after ≥4 valid history samples");
+    CHECK_TRUE(any_update, "transient update: returns true after duration + ≥4 samples");
 
-    // After successful update: calibration_state=2 (calibrated), NOT 1 (learning).
-    // xtau_is_learning() returns calibration_state==1 — state jumps 0→2, never 1.
-    CHECK_FALSE(xtau_is_learning(), "is_learning()=false after calibrated (state=2, skips 1)");
+    // After successful update: calibration_state=2 (calibrated).
+    CHECK_FALSE(xtau_is_learning(), "is_learning()=false after calibrated (state=2)");
 
     // xtau_get_state: fields are non-trivially populated after learning
     const WallFuelState wst = xtau_get_state();
@@ -4481,28 +4561,36 @@ static void test_xtau_autocalib_all(void) {
     CHECK_TRUE(p.x_fraction_q8 <= 192u || p.x_fraction_q8 > 0u,
                "x_fraction_q8 bounded after learning");
 
-    section("xtau_autocalib: transient_fuel_xtau_with_autocalib");
+    section("xtau_autocalib: transient_fuel_xtau_with_autocalib + wall reset");
     xtau_autocalib_reset();
-    // disabled: returns input pw
+    // disabled: returns input pw and clears production wall
     const uint32_t pw_disabled = transient_fuel_xtau_with_autocalib(5000u, 30000u, 100u, 800, false);
     CHECK_EQ(pw_disabled, 5000u, "disabled → returns input pw");
-    // enabled: applies model
+    // enabled: applies model (builds wall)
     const uint32_t pw_enabled = transient_fuel_xtau_with_autocalib(5000u, 30000u, 100u, 800, true);
     CHECK_TRUE(pw_enabled > 0u && pw_enabled <= 100000u,
                "enabled: pw in (0, 100ms]");
+    CHECK_TRUE(xtau_get_state().wall_fuel_us_q8 > 0, "enabled builds wall film");
+    // DFCO-style reset must clear production wall (not just legacy)
+    transient_fuel_reset();
+    CHECK_EQ(xtau_get_state().wall_fuel_us_q8, 0, "transient_fuel_reset clears production wall");
 
     section("xtau_autocalib: células RPM×MAP diferentes aprendem parâmetros diferentes");
     // Duas células bem afastadas nos eixos (baixo RPM/baixa carga vs. alto
     // RPM/alta carga) recebem erros de lambda opostos — se a Fase 3 deixou de
     // ser um escalar global, os parâmetros aprendidos devem divergir.
     xtau_autocalib_reset();
+    host_set_millis(5000u);
     for (int i = 0; i < 20; ++i) {
+        host_advance_millis(50u);
         xtau_autocalib_update(8000u, 2500u, 1000, 1100, 800, true);   // baixo RPM/carga, rico
     }
     const XTauParams p_low = xtau_get_current_params_2d(8000u, 2500u);
 
     xtau_autocalib_reset();
+    host_set_millis(10000u);
     for (int i = 0; i < 20; ++i) {
+        host_advance_millis(50u);
         xtau_autocalib_update(70000u, 15000u, 1000, 900, 800, true);  // alto RPM/carga, pobre
     }
     const XTauParams p_high = xtau_get_current_params_2d(70000u, 15000u);
@@ -4848,6 +4936,17 @@ static void test_math_production_tables(void) {
              "dwell @ 12V, 7000 RPM = 23 x10 (0.78\u00d7 factor alto RPM)");
 
     section("MATH: calc_ae_pw_from_tpsdot formula exacta");
+    // Force legacy-style axis for closed-form check (defaults are 30/80/200/500).
+    const uint16_t saved_axis[4] = {
+        ae_tpsdot_axis_x10[0], ae_tpsdot_axis_x10[1],
+        ae_tpsdot_axis_x10[2], ae_tpsdot_axis_x10[3]};
+    const uint16_t saved_add[4] = {
+        ae_pw_adder_us[0], ae_pw_adder_us[1],
+        ae_pw_adder_us[2], ae_pw_adder_us[3]};
+    ae_tpsdot_axis_x10[0] = 5u;  ae_tpsdot_axis_x10[1] = 20u;
+    ae_tpsdot_axis_x10[2] = 50u; ae_tpsdot_axis_x10[3] = 100u;
+    ae_pw_adder_us[0] = 300u; ae_pw_adder_us[1] = 800u;
+    ae_pw_adder_us[2] = 1500u; ae_pw_adder_us[3] = 2500u;
     // tpsdot_x10=30 (%/s×10) on axis {5,20,50,100}: between 20 and 50
     //   frac = (30-20)×256/(50-20) = 85
     //   base_pw = lerp(800,1500,85) = 1032
@@ -4857,11 +4956,20 @@ static void test_math_production_tables(void) {
     fuel_ae_set_taper(4u);
     CHECK_EQ(calc_ae_pw_from_tpsdot(30, 800), 774,
              "calc_ae_pw_from_tpsdot(30,clt=800): 1032×6/8=774µs");
+    // DE: same magnitude / 2, negative
+    fuel_reset_adaptives();
+    fuel_ae_set_threshold(10u);
+    CHECK_EQ(calc_ae_pw_from_tpsdot(static_cast<int16_t>(-30), 800), -387,
+             "DE tip-out: −(774/2)=−387µs");
     // calc_ae_pw_us: delta 300 in 10ms → tpsdot = 300×1000/10 = 30000 → clamp 1000
     fuel_reset_adaptives();
     fuel_ae_set_threshold(10u);
     CHECK_TRUE(calc_ae_pw_us(800u, 500u, 10u, 800) > 0,
                "calc_ae_pw_us large step → ae > 0 (tpsdot in %/s×10)");
+    for (int i = 0; i < 4; ++i) {
+        ae_tpsdot_axis_x10[i] = saved_axis[i];
+        ae_pw_adder_us[i] = saved_add[i];
+    }
 }
 
 static void test_math_misfire_threshold(void) {

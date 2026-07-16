@@ -224,5 +224,7 @@ void system_stm32_init(void) noexcept { }
 void iwdg_kick(void) noexcept { }
 uint32_t millis(void) noexcept { return g_mock_ms; }
 uint32_t micros(void) noexcept { return g_mock_ms * 1000u; }
+void host_set_millis(uint32_t ms) noexcept { g_mock_ms = ms; }
+void host_advance_millis(uint32_t dt) noexcept { g_mock_ms += dt; }
 
 #endif  // EMS_HOST_TEST

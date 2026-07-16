@@ -94,10 +94,12 @@ uint16_t fuel_press_nominal_bar_x1000 = 3000u;  // 3.0 bar
 
 int16_t ae_clt_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
 uint16_t ae_clt_sens[kCorrectionTableSize] = {11u, 10u, 9u, 8u, 7u, 6u, 5u, 4u};
-uint16_t ae_tpsdot_threshold_x10 = 5u;
+// Limiar 3 %/s (×10) — evita AE em ruído de TPS; tip-in real fica acima de light-transient.
+uint16_t ae_tpsdot_threshold_x10 = 30u;
 uint16_t ae_taper_cycles = 8u;
 uint16_t ae_max_pw_us = 5000u;
-uint16_t ae_tpsdot_axis_x10[kAeRateTableSize] = {5u, 20u, 50u, 100u};
+// Eixo de taxa tip-in/tip-out (%/s ×10). Começa no limiar default.
+uint16_t ae_tpsdot_axis_x10[kAeRateTableSize] = {30u, 80u, 200u, 500u};
 uint16_t ae_pw_adder_us[kAeRateTableSize] = {300u, 800u, 1500u, 2500u};
 
 int16_t xtau_clt_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
@@ -200,10 +202,10 @@ int16_t iat_spark_corr_deg[kCorrectionTableSize]  = {2, 1, 0, -1, -2, -3, -4, -5
 int16_t clt_spark_axis_x10[kCorrectionTableSize] = {-400, -100, 200, 400, 600, 700, 900, 1100};
 int16_t clt_spark_corr_deg[kCorrectionTableSize]  = {0, -4, -8, -4, 0, 0, 0, 0};
 
-// Anti-jerk: mesmo limiar de tpsdot do AE; 3° retardo por 3 ciclos
-uint16_t antijerk_tpsdot_threshold_x10 = 5u;   // mesmo que ae_tpsdot_threshold_x10
-int16_t  antijerk_retard_deg           = 3;
-uint8_t  antijerk_decay_cycles         = 3u;
+// Anti-jerk: limiar alinhado ao AE (3 %/s); retardo escala com tpsdot até max.
+uint16_t antijerk_tpsdot_threshold_x10 = 30u;
+int16_t  antijerk_retard_deg           = 5;   // máximo ° a 100 %/s tip-in
+uint8_t  antijerk_decay_cycles         = 4u;
 
 // Rev limiter: limite duro 7000 RPM
 uint8_t  launch_enable           = 0u;

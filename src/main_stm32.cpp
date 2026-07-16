@@ -1028,12 +1028,10 @@ int main() {
                     static_cast<int16_t>(ems::engine::fuel_get_stft_pct_x10() +
                                          ems::engine::fuel_get_ltft_at(snap.rpm_x10, map_bar_x100)),
                     -500, 500);
-                // AE from map-fusion TPSdot (ring buffer) — more stable than 1-sample Δ.
+                // AE/DE from map-fusion TPSdot (signed: tip-in >0, tip-out <0).
                 const int16_t ae_tpsdot = ems::engine::map_get_tpsdot_x10();
-                const int32_t ae_pw_us = crank_or_ase ? 0
-                    : ems::engine::calc_ae_pw_from_tpsdot(
-                        (ae_tpsdot > 0) ? ae_tpsdot : static_cast<int16_t>(0),
-                        sensors.clt_degc_x10);
+                int32_t ae_pw_us = crank_or_ase ? 0
+                    : ems::engine::calc_ae_pw_from_tpsdot(ae_tpsdot, sensors.clt_degc_x10);
                 uint32_t final_pw_us_base =
                     ems::engine::calc_fuel_pw_us_default_fast(ve,
                                                                map_bar_x100,
@@ -1050,6 +1048,12 @@ int main() {
                         snap.rpm_x10, sensors.etb_tps_pct_x10, sensors.clt_degc_x10);
                 ems::engine::misfire_set_all_inhibit(
                     decel_cut_active || crank_or_ase || flood_clear);
+                // X-τ desde !cranking (inclui afterstart frio — pior wall-wetting).
+                // AE residual a 50% quando X-τ activo (evita empilhar enrich).
+                const bool xtau_enabled = !qc.cranking;
+                if (xtau_enabled && ae_pw_us > 0) {
+                    ae_pw_us /= 2;
+                }
                 if (decel_cut_active) {
                     g_last_net_pw_us = 0u;
                     g_ae_active = false;
@@ -1069,35 +1073,15 @@ int main() {
                     }
                     g_last_net_pw_us = fuel_pw_us;
 
-                    const bool xtau_enabled = !crank_or_ase && (snap.rpm_x10 >= 7000u);
-
-                    // Detecta transiente para auto-calibração X-τ
-                    const bool is_transient = ems::engine::map_is_transient();
-
-                    // Auto-calibração X-τ baseada em erro de lambda.
-                    // Lambda vem exclusivamente do WBO2 via CAN (mesma fonte do
-                    // STFT em 100ms); SensorData não carrega mais o2/lambda.
-                    const bool lambda_valid = ems::app::can_stack_wbo2_fresh(now);
-                    if (full_sync && !crank_or_ase && lambda_valid) {
-                        const uint16_t lambda_measured = clamp_u16(
-                            ems::app::can_stack_lambda_milli_safe(now),
-                            kLambdaMinMilli, kLambdaMaxMilli);
-                        ems::engine::xtau_autocalib_update(
-                            snap.rpm_x10,
-                            map_bar_x100,
-                            lambda_target_x1000,
-                            static_cast<int16_t>(lambda_measured),
-                            sensors.clt_degc_x10,
-                            is_transient);
-                    }
-
-                    // Usa modelo X-τ com parâmetros aprendidos (RPM×MAP)
+                    // Learn X-τ: apenas no slot 100ms (λ + STFT + tpsdot gates).
+                    // Modelo de parede com τ escalado a wall-clock (period_ms).
                     const uint32_t xtau_fuel_pw_us =
                         ems::engine::transient_fuel_xtau_with_autocalib(fuel_pw_us,
                                                                         snap.rpm_x10,
                                                                         map_bar_x100,
                                                                         sensors.clt_degc_x10,
-                                                                        xtau_enabled);
+                                                                        xtau_enabled,
+                                                                        kAePeriodMs);
                     // Só a parcela de FLUXO segue no pipeline; o dead-time
                     // eléctrico é somado no fim, depois de ΔP/S-curve
                     // (convenção de calc_final_pw_us — dead-time nunca escala).
@@ -1106,12 +1090,18 @@ int main() {
                     ems::engine::transient_fuel_reset();
                     final_pw_us_base = 0u;  // fluxo ≈ 0 (base ≤ dead-time)
                 }
-                if (!decel_cut_active && ae_pw_us > 0) {
-                    const uint32_t ae_add = static_cast<uint32_t>(ae_pw_us);
-                    final_pw_us_base = (ae_add >= 100000u || final_pw_us_base > (100000u - ae_add))
-                        ? 100000u
-                        : (final_pw_us_base + ae_add);
-                    g_ae_active = true;
+                // AE tip-in (add) ou DE tip-out (subtract), clamp a [0, 100ms].
+                if (!decel_cut_active && ae_pw_us != 0) {
+                    const int64_t adj = static_cast<int64_t>(final_pw_us_base) + ae_pw_us;
+                    if (adj <= 0) {
+                        final_pw_us_base = 0u;
+                    } else if (adj > 100000) {
+                        final_pw_us_base = 100000u;
+                    } else {
+                        final_pw_us_base = static_cast<uint32_t>(adj);
+                    }
+                    // STFT freeze only on tip-in enrich (not DE).
+                    g_ae_active = (ae_pw_us > 0);
                 }
                 const int16_t base_advance_deg = ems::engine::get_advance_prepared(fuel_lookup);
                 const uint16_t knock_retard_x10 = ems::engine::knock_get_retard_x10(0u);
@@ -1127,9 +1117,8 @@ int main() {
                     ems::engine::calc_ign_iat_correction_deg(sensors.iat_degc_x10);
                 const int16_t clt_spark_deg = qc.cranking ? 0 :
                     ems::engine::calc_ign_clt_correction_deg(sensors.clt_degc_x10);
-                const bool ae_now = (ae_pw_us > 0);
                 const int16_t antijerk_retard = crank_or_ase ? 0 :
-                    ems::engine::calc_antijerk_retard_deg(ae_now);
+                    ems::engine::calc_antijerk_retard_deg(ae_tpsdot);
                 const int16_t advance_deg = ems::engine::calc_total_advance(
                     base_advance_deg,
                     {iat_spark_deg, clt_spark_deg,
@@ -1388,17 +1377,20 @@ int main() {
                     ems::engine::fuel_get_ltft_at(snap.rpm_x10, map_bar_x100) / 10,
                     -25, 25);
 
-                // X-tau autocalibration (100ms lambda-gated)
+                // X-τ learn (100ms): exige transiente real (tpsdot) E gates de
+                // qualidade λ/STFT/RPM. Nunca tratar "learning_ok" sozinho como
+                // is_transient — isso corrompia a tabela 2D em regime estável.
                 const bool xtau_learning_ok = (stft >= -500 && stft <= 500 &&
-                    lambda_valid && snap.rpm_x10 >= 2000u);
+                    lambda_valid && snap.rpm_x10 >= 20000u);
+                const bool xtau_transient = ems::engine::map_is_transient() &&
+                    xtau_learning_ok && !ae_active;
                 ems::engine::xtau_autocalib_update(
                     snap.rpm_x10,
-                    clamp_u16(static_cast<uint16_t>(sensors.map_bar_x1000 / 10u),
-                              kMapMinBarX100, kMapMaxBarX100),
+                    map_bar_x100,  // MAP fundido (mesma fonte do PW 2ms)
                     static_cast<int16_t>(lambda_target_x1000),
                     static_cast<int16_t>(ems::app::can_stack_lambda_milli_safe(now)),
                     sensors.clt_degc_x10,
-                    xtau_learning_ok);
+                    xtau_transient);
             } else {
                 g_last_stft_pct = 0;
             }

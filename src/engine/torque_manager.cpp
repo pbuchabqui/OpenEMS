@@ -234,6 +234,9 @@ static uint32_t g_crank_taper_start_ms = 0u;
 static int32_t  g_crank_taper_from_x10 = 0;
 // Idle phase latch (RPM upper hysteresis — avoid flapping idle↔coasting).
 static bool     g_idle_phase = false;
+// Dashpot: hold blade after tip-out (APP→closed) then decay toward idle.
+static int32_t  g_dashpot_x10 = 0;
+static bool     g_prev_app_idle = false;
 
 // Open-loop crank air (pct×10). Prefer max idle opening; never below min.
 static uint16_t crank_open_pct_x10() noexcept {
@@ -312,6 +315,8 @@ void torque_manager_reset() noexcept {
     g_crank_taper_start_ms = 0u;
     g_crank_taper_from_x10 = 0;
     g_idle_phase = false;
+    g_dashpot_x10 = 0;
+    g_prev_app_idle = false;
     g_launch_state     = LaunchState::Idle;
     g_tc_reduction_x10 = 0u;
     g_tc_prev_rpm_x10  = 0u;
@@ -709,6 +714,78 @@ TorqueOutput torque_manager_update(
         if (g_idle_air_int_x10 > 0) {
             g_idle_air_int_x10 -= i_step;
             if (g_idle_air_int_x10 < 0) { g_idle_air_int_x10 = 0; }
+        }
+    }
+
+    // ── Dashpot (return-to-idle) ─────────────────────────────────────────
+    // Ao soltar o pedal (drive → app_idle), segura a lâmina no último target
+    // e decai com τ≈400 ms até o floor de idle — anti-stall / anti-solavanco.
+    {
+        if (!app_idle || rev_limiting || launch_active != 0u || cranking_now) {
+            g_dashpot_x10 = 0;
+        } else if (!g_prev_app_idle) {
+            // Entrada em idle: seed com o target actual (ainda o do drive).
+            int32_t seed = static_cast<int32_t>(target_x10);
+            if (seed < static_cast<int32_t>(g_etb_target_x10)) {
+                seed = static_cast<int32_t>(g_etb_target_x10);
+            }
+            if (seed < idle_min) {
+                seed = idle_min;
+            }
+            // Cap dashpot — não segurar WOT no tip-out.
+            constexpr int32_t kDashpotMaxX10 = 350;  // 35%
+            if (seed > kDashpotMaxX10) {
+                seed = kDashpotMaxX10;
+            }
+            g_dashpot_x10 = seed;
+        } else if (g_dashpot_x10 > 0) {
+            // Decay: ~400 ms time constant → step = dashpot * dt / 400
+            int32_t step = (g_dashpot_x10 * static_cast<int32_t>(dt)) / 400;
+            if (step < 1) {
+                step = 1;
+            }
+            g_dashpot_x10 -= step;
+            if (g_dashpot_x10 <= idle_min) {
+                g_dashpot_x10 = 0;  // hand-off ao idle I
+            }
+        }
+        g_prev_app_idle = app_idle;
+
+        if (g_dashpot_x10 > 0 && allow_idle_air) {
+            const uint16_t floor = static_cast<uint16_t>(
+                g_dashpot_x10 > 1000 ? 1000 : g_dashpot_x10);
+            if (target_x10 < floor) {
+                target_x10 = floor;
+            }
+        }
+    }
+
+    // Rate-limit do alvo de lâmina (calibrável etb_max_rate_pct_per_s).
+    // Unidades: rate em %/s; target em pct×10 (0–1000).
+    // max_delta_x10 = rate × period_ms / 100  (porque %×10 = % × 10).
+    // rate=0 → sem limite. Bypass em rev-cut / ETB fault / no-cal (fecho seguro
+    // imediato — não atrasar proteção por slew de dirigibilidade).
+    {
+        const bool safety_immediate =
+            (out.limp_reason & (TORQUE_LIMP_REV_CUT | TORQUE_LIMP_ETB_FAULT |
+                                TORQUE_LIMP_NO_CALIB)) != 0u;
+        const uint16_t rate = etb_max_rate_pct_per_s;
+        if (!safety_immediate && rate > 0u) {
+            const uint32_t max_delta =
+                (static_cast<uint32_t>(rate) * static_cast<uint32_t>(dt)) / 100u;
+            const uint32_t step = (max_delta < 1u) ? 1u : max_delta;
+            const uint16_t prev = g_etb_target_x10;
+            if (target_x10 > prev) {
+                const uint32_t next = static_cast<uint32_t>(prev) + step;
+                target_x10 = static_cast<uint16_t>(
+                    next > target_x10 ? target_x10 : next);
+            } else if (target_x10 < prev) {
+                if (static_cast<uint32_t>(prev) - static_cast<uint32_t>(target_x10) > step) {
+                    target_x10 = static_cast<uint16_t>(
+                        static_cast<uint32_t>(prev) - step);
+                }
+                // else: step cobre o restante → target_x10 já é o pedido final
+            }
         }
     }
 

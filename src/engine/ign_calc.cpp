@@ -7,6 +7,7 @@
 namespace {
 
 static uint8_t g_antijerk_cycles_rem = 0u;
+static int16_t g_antijerk_active_deg = 0;
 
 uint16_t normalize_7200(int32_t deg_x10) noexcept {
     int32_t out = deg_x10 % 7200;
@@ -75,19 +76,36 @@ int16_t calc_ign_clt_correction_deg(int16_t clt_x10) noexcept {
                           kCorrectionTableSize, clt_x10);
 }
 
-int16_t calc_antijerk_retard_deg(bool ae_active) noexcept {
-    if (ae_active && g_antijerk_cycles_rem == 0u) {
-        g_antijerk_cycles_rem = antijerk_decay_cycles;
+int16_t calc_antijerk_retard_deg(int16_t tpsdot_x10) noexcept {
+    const int16_t thr = static_cast<int16_t>(antijerk_tpsdot_threshold_x10);
+    const int16_t max_ret = (antijerk_retard_deg < 0) ? 0
+        : (antijerk_retard_deg > 20 ? 20 : antijerk_retard_deg);
+
+    // Re-arm only on rising tip-in above threshold (not tip-out).
+    if (tpsdot_x10 > thr && g_antijerk_cycles_rem == 0u && max_ret > 0) {
+        // Proportional: full retard at 100 %/s (tpsdot_x10=1000).
+        int32_t ret = (static_cast<int32_t>(tpsdot_x10) * max_ret) / 1000;
+        if (ret < 1) {
+            ret = 1;
+        }
+        if (ret > max_ret) {
+            ret = max_ret;
+        }
+        g_antijerk_active_deg = static_cast<int16_t>(ret);
+        g_antijerk_cycles_rem = (antijerk_decay_cycles == 0u) ? 1u : antijerk_decay_cycles;
     }
+
     if (g_antijerk_cycles_rem > 0u) {
         --g_antijerk_cycles_rem;
-        return antijerk_retard_deg;
+        return g_antijerk_active_deg;
     }
+    g_antijerk_active_deg = 0;
     return 0;
 }
 
 void antijerk_reset() noexcept {
     g_antijerk_cycles_rem = 0u;
+    g_antijerk_active_deg = 0;
 }
 
 int16_t calc_total_advance(int16_t base_advance_deg,

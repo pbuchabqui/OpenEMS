@@ -30,7 +30,9 @@ struct AdvanceCorrections {
 
 int16_t calc_ign_iat_correction_deg(int16_t iat_x10) noexcept;
 int16_t calc_ign_clt_correction_deg(int16_t clt_x10) noexcept;
-int16_t calc_antijerk_retard_deg(bool ae_active) noexcept;
+// Retardo anti-jerk no tip-in. Dispara quando tpsdot > antijerk_tpsdot_threshold_x10;
+// magnitude proporcional a tpsdot até antijerk_retard_deg (full scale @ 100 %/s).
+int16_t calc_antijerk_retard_deg(int16_t tpsdot_x10) noexcept;
 void    antijerk_reset() noexcept;
 
 int16_t get_advance(uint32_t rpm_x10, uint16_t load_bar_x100) noexcept;

@@ -24,6 +24,10 @@ void iwdg_kick(void) noexcept;
 
 /** Milissegundos desde o boot (incrementado pelo SysTick_Handler). */
 uint32_t millis(void) noexcept;
+#if defined(EMS_HOST_TEST)
+void host_set_millis(uint32_t ms) noexcept;
+void host_advance_millis(uint32_t dt) noexcept;
+#endif
 
 /** Microssegundos desde o boot (resolução 1 µs via SysTick reload). */
 uint32_t micros(void) noexcept;
