@@ -35,6 +35,8 @@ Regras praticas:
 - `DRV` transforma sinais fisicos em eventos de motor confiaveis.
 - `HAL` contem apenas detalhe de periferico.
 - O codigo ativo deve usar somente perifericos e nomes STM32H562 reais, sem aliases de compatibilidade.
+- **`ENGINE` e `DRV` nao incluem headers `app/`.** Sinais de veiculo (marcha, velocidade, roda) entram via `engine/vehicle_inputs.h` (implementacao em `app/vehicle_inputs_bridge.cpp` → `can_rx_map`).
+- **INJ/IGN GPIO:** mapas BSRR e write hot-path em `hal/out_pins.h` (`out_pin_write` inline). Init/safe em `out_pins_hw_init()`. `ecu_sched` nao reimplementa tabelas de pinos.
 - Novos documentos Markdown paralelos nao devem ser criados; atualize este `README.md`.
 
 ## Pipeline De Controle Do Motor
@@ -345,21 +347,110 @@ Limpar artefatos:
 make clean
 ```
 
-Gates de qualidade locais (higiene):
+## Higiene De Codigo
+
+Programa de qualidade do monorepo (concluido 2026-07; HEAD tipico inclui
+`fa36aab` e anteriores `713d4a8`…`bce2f4a`). Objectivo: reviews limpos, zero
+warnings com `WERROR`, camadas enforcadas e caminho critico de actuadores
+isolado sem big-bang rewrite.
+
+### Gates locais (obrigatorios antes de merge)
 
 ```bash
-make secrets-check              # sem wifi_credentials.h tracked
-make host-test WERROR=1         # 0 warnings no host
+make ci-local                   # secrets + host/fw dual WERROR + lint A + B
+# equivalentes manuais:
+make secrets-check
+make host-test WERROR=1         # referencia: 1113 PASS / 0 FAIL
 make firmware-rgt6 WERROR=1
 make firmware-vgt6 WERROR=1
-make ci-local                   # Stage1: secrets + host + dual firmware WERROR
-make format                     # clang-format só em ficheiros dirty (requer clang-format)
-# make lint-includes LINT_ERROR=1   # só após ban ENGINE→APP (layering)
+make lint-includes LINT_PHASE=A LINT_ERROR=1   # ban ENGINE/DRV → app/
+make lint-includes LINT_PHASE=B LINT_ERROR=1   # ban ENGINE → hal/regs.h (allowlist)
+make format                     # clang-format so em ficheiros dirty (on-touch)
 ```
 
-Credenciais WiFi dos tools ESP32: copiar `wifi_credentials.example.h` →
-`wifi_credentials.h` (gitignored). **Rodar password do AP** se alguma vez
-foi commitada no histórico.
+| Gate | Target | Notas |
+|------|--------|--------|
+| Warnings | 0 com `-Wall -Wextra` | Host **e** firmware dual board |
+| Secrets tracked | 0 | `**/wifi_credentials.h` gitignored |
+| Layering A | 0 includes `app/` em `src/engine`, `src/drv` | `tools/lint_includes.py` |
+| Layering B | `hal/regs.h` so em engine com allowlist | `tools/include_allowlist.txt`: `ecu_sched` (TIM5), `auxiliaries` (fan/pump ate Phase C) |
+| Host tests | PASS exacto estavel | Suites em `test/test_*.cpp` + `run_all.cpp` |
+| Dual board | bins rgt6 + vgt6 | Qualquer mudanca de pin/HAL |
+
+### Layout de testes host
+
+| Ficheiro | Papel |
+|----------|--------|
+| `test/harness.{h,cpp}` | `CHECK_*`, contadores PASS/FAIL |
+| `test/fixtures.{h,cpp}` | setup ADC/ETB, `ckp_fire` / `cam_fire` |
+| `test/ui_helpers.{h,cpp}` | envelope TunerStudio para testes de protocolo |
+| `test/run_all.cpp` | `main()` — **ordem fixa** das suites |
+| `test/suite_registry.h` | declaracoes das funcoes `test_*` |
+| `test/test_*.cpp` | suites (etb, torque, ckp, fuel, sched, protocol, …) |
+
+Nao reintroduzir monolitio `mvp_bench_tests.cpp`. Novos testes: ficheiro de suite
+existente ou novo `test_*.cpp` + registo em `run_all.cpp` e `suite_registry.h`.
+
+### Camadas — contratos pos-higiene
+
+**Vehicle inputs (ENGINE ← APP):**
+
+```text
+can_stack → can_rx_map_process (APP)
+torque_manager / auxiliaries → vehicle_gear|speed|wheel (engine/vehicle_inputs.h)
+                            → vehicle_inputs_bridge.cpp (APP) → can_rx_*
+```
+
+Page0 serialize/apply do mapa CAN permanece em APP (`can_rx_map_*_page0`).
+
+**INJ/IGN outputs (HAL):**
+
+```text
+ecu_sched gpio_set_pin → ems::hal::out_pin_write  (inline em out_pins.h)
+ecu_sched_outputs_safe_early → out_pins_hw_init()  (clocks + MODER + BSRR LOW)
+```
+
+Ordem de canais BSRR = `ECU_CH_*`:
+`[INJ3, INJ4, INJ1, INJ2, IGN4, IGN3, IGN2, IGN1]`. Actuadores active-high;
+safe = LOW. Testes de polaridade RGT6: `test_out_pins_bsrr_rgt6`.
+
+Hot-path rule (`ecu_sched_internal.h`): nao mover `evt_insert` / arm / dispatch
+para outro `.cpp`; write GPIO so e permitido se **header-inline** (como
+`out_pin_write`).
+
+**NVM boot:** loaders de tabelas/correccoes em `app/nvm_boot.cpp`
+(`nvm_boot_load_tables(cal_layout_ok)`), chamados de `main_stm32` — mesma
+ordem e gate de layout de antes.
+
+**UI protocol:** `ui_protocol.cpp` (parse + API) + `ui_protocol_state.cpp` +
+`ui_protocol_pages.cpp` + `ui_protocol_envelope.cpp` + `ui_protocol_internal.h`.
+
+**ETB PWM:** API preferida `etb_pwm_init` / `etb_pwm_set_duty_x10`. Aliases
+`tim15_etb_*` deprecated em `hal/timer.h`.
+
+### Secrets e vendor
+
+- WiFi tools ESP32: copiar `wifi_credentials.example.h` → `wifi_credentials.h`
+  (nunca commitado). Se password ja esteve no historico git, **rodar no AP**.
+- `graphify-out/` e bins/fonts pesados do `ardustim_gui` nao sao versionados
+  (regenerar graphify / `npm install` localmente). GUI Electron continua
+  documentada em `tools/esp32_combined/README.md`.
+
+### Docs
+
+| Documento | Papel |
+|-----------|--------|
+| **README.md** (este) | Fonte unica de decisoes duraveis |
+| `spec.md` | **Deprecated** — historico; pode divergir |
+| `docs/ROADMAP.md` | Backlog de produto (ADC residual, SD, …) |
+| `docs/*.md` | Subsistemas (fuel, idle, …) |
+
+### Fora de escopo do programa de higiene (opcional)
+
+- Reactivar CKP seed (`// TODO` em `ckp.cpp`) — feature de produto.
+- `hal/aux_gpio` para fan/pump (hoje `auxiliaries.cpp` ainda usa `regs.h` /
+  BSRR — allowlist Phase C).
+- Split adicional de monolitios grandes (`ckp.cpp`, `fuel_trim`, etc.).
 
 ## MVP Bancada Segura
 
@@ -467,14 +558,17 @@ Fora do MVP de bancada:
 - Protect: oil fault @ RPM>1500 corta fuel+ign; fuel-rail fault @ RPM>500 corta fuel.
 - TS `openems.ini`: page0 80–85 closed-loop/LTFT; 175 layout ver; 176–190 LTFT authority/LEARN;
   191–215 Launch/TC; 216–251 CAN RX map (gear/vehicle/driven wheel); `ochBlockSize` = 86.
-- TC slip: CAN `WHEEL_SPEED_KMH` vs `SPEED_KMH` (can_rx_map) → torque cut; else RPM-dot proxy.
+- TC slip: CAN wheel vs vehicle via `vehicle_inputs` (bridge → can_rx_map) →
+  torque cut; else RPM-dot proxy.
 
 ### Pinout — estado
 
 - **Dual board:** `make firmware BOARD=rgt6|vgt6` → `openems-rgt6.bin` / `openems-vgt6.bin` (§5.0).
 - **RGT6:** INJ PA15/PB3/PC10/PC11 · IGN PC6–9 · ETB PA6/PA8/PB4 · OIL PC1.
 - **VGT6:** INJ PE0/2/4/6 · IGN PE9/11/13/15 · ETB PE5/7/8.
-- **Boot safe:** `ecu_sched_outputs_safe_early()` logo após clock (RGT6: PA15 JTDI; VGT6: PE* LOW).
+- **Mapas INJ/IGN:** `hal/out_pins.h` (fonte unica; `static_assert` por board).
+- **Boot safe:** `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()` logo apos
+  clock (RGT6: PA15 JTDI; VGT6: PE* LOW). Actuadores active-high.
 - **DFU:** `dfu-util -a 0 -s 0x08000000 -D openems-<board>.bin` + power-cycle BOOT0=0.
 - **docs/wiring_diagram.md** stale — usar README §5.
 

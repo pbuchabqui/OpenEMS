@@ -52,6 +52,11 @@ Mais pinos disponíveis. Permite:
 
 ## Concluído (referência)
 
+- **Higiene de código monorepo** (2026-07): secrets untracked + gitignore;
+  untrack graphify/ardustim vendor; `WERROR` host+dual firmware; `ci-local` +
+  lint-includes phase A/B; split host tests (1113 PASS); `vehicle_inputs`
+  (ban ENGINE→APP); `hal/out_pins` BSRR inline; `nvm_boot`; ui_protocol TUs;
+  `etb_pwm_*`. Documentado em **README.md § Higiene De Codigo**.
 - **Diagrama elétrico completo** (2026-06-19): power supply (buck 5V wide-Vin +
   LDO 3.3V + TVS SMBJ24CA), condicionamento de sinais (divisores, filtros RC,
   proteção TVS por canal), atuadores externos (ETB/EWG H-bridge, WBO2, flex fuel),

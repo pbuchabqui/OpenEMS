@@ -145,7 +145,7 @@ help:
 	@echo "  format          clang-format dirty git files only (on-touch)"
 	@echo "  format-all      clang-format entire src/test (explicit; large diff)"
 	@echo "  format-check    Dry-run format on dirty files"
-	@echo "  ci-local        Stage1: secrets + host/fw WERROR (see tools/ci_local.sh)"
+	@echo "  ci-local        secrets + host/fw WERROR + lint A/B (tools/ci_local.sh)"
 	@echo ""
 	@echo "Outputs: /tmp/openems-build/bin/openems-rgt6.bin | openems-vgt6.bin"
 
