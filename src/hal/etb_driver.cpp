@@ -27,8 +27,8 @@ static volatile uint32_t ems_etb_rcc;
 
 #include <cstring>
 
-using ems::hal::tim15_etb_pwm_init;
-using ems::hal::tim15_etb_set_duty_x10;
+using ems::hal::etb_pwm_init;
+using ems::hal::etb_pwm_set_duty_x10;
 using ems::hal::adc_primary_read;
 using ems::hal::AdcPrimaryChannel;
 
@@ -83,7 +83,7 @@ bool etb_driver_init(void) {
     g_fault_count = 0u;
 
     etb_dir_gpio_init();
-    tim15_etb_pwm_init(20000u);
+    etb_pwm_init(20000u);
 
     etb_driver_shutdown();
 
@@ -140,13 +140,13 @@ bool etb_driver_set_motor_pwm(int16_t pwm) {
     } else {
         etb_dir_set(false, false);
     }
-    tim15_etb_set_duty_x10(static_cast<uint16_t>((static_cast<uint32_t>(duty) * 1000u) / 1023u));
+    etb_pwm_set_duty_x10(static_cast<uint16_t>((static_cast<uint32_t>(duty) * 1000u) / 1023u));
     return true;
 }
 
 void etb_driver_shutdown(void) {
     etb_dir_set(false, false);
-    tim15_etb_set_duty_x10(0u);
+    etb_pwm_set_duty_x10(0u);
     g_etb_data.motor_pwm = 0;
 }
 

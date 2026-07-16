@@ -185,14 +185,14 @@ void tim2_set_duty(uint16_t duty_pct_x10) noexcept {
 }
 
 // ----------------------------------------------------------------------------
-// ETB motor PWM (API name legacy tim15_etb_*):
+// ETB motor PWM (etb_pwm_*):
 //   VGT6: PE5 / TIM15_CH1 AF4
 //   RGT6: PA6 / TIM3_CH1  AF2
 // ----------------------------------------------------------------------------
 
 #include "hal/board_pinout.h"
 
-void tim15_etb_pwm_init(uint32_t freq_hz) {
+void etb_pwm_init(uint32_t freq_hz) {
     if (freq_hz == 0u) { return; }
 
 #if EMS_BOARD_IS_VGT6
@@ -237,7 +237,7 @@ void tim15_etb_pwm_init(uint32_t freq_hz) {
 #endif
 }
 
-void tim15_etb_set_duty_x10(uint16_t duty_pct_x10) noexcept {
+void etb_pwm_set_duty_x10(uint16_t duty_pct_x10) noexcept {
     if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
 #if EMS_BOARD_IS_VGT6
     const uint32_t arr = TIM15_ARR;
@@ -280,14 +280,14 @@ extern "C" void TIM5_IRQHandler(void) {
 // ----------------------------------------------------------------------------
 
 void timer_etb_pwm_init(void) {
-    ems::hal::tim15_etb_pwm_init(20000u);
+    ems::hal::etb_pwm_init(20000u);
 }
 
 void timer_etb_set_duty(uint16_t duty) {
     if (duty > 1023u) { duty = 1023u; }
     const uint16_t duty_x10 =
         static_cast<uint16_t>((static_cast<uint32_t>(duty) * 1000u) / 1023u);
-    ems::hal::tim15_etb_set_duty_x10(duty_x10);
+    ems::hal::etb_pwm_set_duty_x10(duty_x10);
 }
 
 #else  // EMS_HOST_TEST -------------------------------------------------------
@@ -302,8 +302,8 @@ void tim2_pwm_init(uint32_t) {}
 void tim3_set_duty(uint8_t, uint16_t) noexcept {}
 void tim2_set_duty(uint16_t) noexcept {}
 void tim4_set_duty(uint8_t, uint16_t) noexcept {}
-void tim15_etb_pwm_init(uint32_t) {}
-void tim15_etb_set_duty_x10(uint16_t) noexcept {}
+void etb_pwm_init(uint32_t) {}
+void etb_pwm_set_duty_x10(uint16_t) noexcept {}
 uint32_t tim5_count() noexcept { return g_mock_tim5_cnt; }
 } // namespace ems::hal
 

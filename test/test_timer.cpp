@@ -62,8 +62,8 @@ void test_timer_stubs(void) {
     tim4_pwm_init(15u);
     tim4_set_duty(0u, 750u);
     tim4_set_duty(1u, 1000u);
-    tim15_etb_pwm_init(20000u);
-    tim15_etb_set_duty_x10(500u);
+    etb_pwm_init(20000u);
+    etb_pwm_set_duty_x10(500u);
     CHECK_TRUE(true, "all timer stubs: no crash");
 }
 
