@@ -17,7 +17,8 @@ constexpr uint8_t  kLtftAddAxisSize = (kTableAxisSize + 1u) / 2u;
 // de 256B interpretado como 400B = células a 255). Incrementar sempre que
 // kTableAxisSize (ou o layout serializado das tabelas) mudar.
 // 4: LEARN thresholds page0 185-190
-constexpr uint8_t kCalLayoutVersion       = 4u;
+// 5: Launch + TC knobs page0 191-215; CAN RX map 216-245 (id=0 = off, safe blank)
+constexpr uint8_t kCalLayoutVersion       = 5u;
 constexpr uint16_t kCalLayoutVersionOffset = 175u;
 
 // Eixos das tabelas 20×20. Editáveis em runtime via protocolo (página 11);

@@ -93,6 +93,15 @@ static volatile uint32_t g_dwell_arm_tick[4]  = {0U, 0U, 0U, 0U};  // TIM5_CNT n
 static volatile uint32_t g_dwell_wdog_ticks[4] = {0U, 0U, 0U, 0U};  // 1.4 × dwell_ticks no momento do arm
 static volatile uint32_t g_dwell_watchdog_count = 0U;
 
+// ── Injector open watchdog (lost INJ_OFF / queue overflow backstop) ────────
+// pin_idx 0..3 = INJ1..4. Arm on pin HIGH; release on pin LOW / trip.
+// Timeout: 1.2 × current PW when armed via arm_channel; hard 36 ms floor for
+// force_output/prime (prime clamps at 30 ms). Hard cap 36 ms always.
+static volatile uint32_t g_inj_open_tick[4]   = {0U, 0U, 0U, 0U};
+static volatile uint32_t g_inj_wdog_ticks[4]  = {0U, 0U, 0U, 0U};
+static volatile uint32_t g_inj_watchdog_count = 0U;
+static constexpr uint32_t kInjOpenWdogHardTicks = ECU_SCHED_US_TO_TICKS(36000U);
+
 // ── Per-cylinder inhibit masks (MS42 §2.2.5) ──────────────────────────────
 // Escrito pelo main loop, lido pela ISR (arm_channel). bit N = cilindro N.
 static volatile uint8_t g_inj_inhibit_mask = 0U;
@@ -212,9 +221,39 @@ static inline uint8_t channel_pin_idx(uint8_t ch) {
     return (ch < 8U) ? k_ch_to_pin_idx[ch] : 0xFFU;
 }
 
+// Drop one high=1 (ON/DWELL) event to make room for a de-assert (OFF/SPARK).
+// Prefer same channel; else any assert. Returns 1 if a slot was freed.
+static uint8_t evt_drop_one_assert(uint8_t prefer_channel)
+{
+    int8_t drop = -1;
+    for (uint8_t i = 0U; i < g_evt_count; ++i) {
+        if (g_evt_queue[i].high == 0U) { continue; }
+        if (g_evt_queue[i].channel == prefer_channel) {
+            drop = (int8_t)i;
+            break;
+        }
+        if (drop < 0) { drop = (int8_t)i; }
+    }
+    if (drop < 0) { return 0U; }
+    for (uint8_t i = (uint8_t)drop; i + 1U < g_evt_count; ++i) {
+        g_evt_queue[i] = g_evt_queue[i + 1U];
+    }
+    --g_evt_count;
+    return 1U;
+}
+
 // Insert event in sorted order (by timestamp). Called from tooth ISR.
+// Overflow policy: never silently drop OFF/SPARK — drop an ON/DWELL first so
+// an open injector/coil can still be closed. Drop new ON/DWELL if still full.
 static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
-    if (g_evt_count >= EVT_QUEUE_SIZE) { ++g_dbg_evt_overflow; return; }
+    if (g_evt_count >= EVT_QUEUE_SIZE) {
+        ++g_dbg_evt_overflow;
+        if (high == 0U) {
+            if (evt_drop_one_assert(channel) == 0U) { return; }
+        } else {
+            return;  // prefer keeping de-asserts already queued
+        }
+    }
     ++g_dbg_evt_inserted;
     // Find insertion point (linear search, queue is small)
     uint8_t pos = g_evt_count;
@@ -301,22 +340,80 @@ volatile uint32_t g_pin_seq_error[8];   // consecutive same-direction transition
 static uint8_t    g_pin_last_state[8];  // 0=LOW, 1=HIGH, 0xFF=unknown
 
 static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
+    if (idx >= 8U) { return; }
     if (g_pin_last_state[idx] == high && high != 0xFFU) {
         if (is_safe_state == 0U) { ++g_pin_seq_error[idx]; }
         return;  // redundant transition — don't double-count
     }
     if (high) {
         ++g_pin_high_count[idx];
+        if (idx < 4U) {
+            // Injector open watchdog — pin HIGH arms the timer.
+            g_inj_open_tick[idx] = TIM5_CNT | 1U;
+            if (g_inj_wdog_ticks[idx] == 0U) {
+                g_inj_wdog_ticks[idx] = kInjOpenWdogHardTicks;  // force/prime path
+            }
+        } else if (idx >= ECU_IGN_CH_FIRST && idx < (ECU_IGN_CH_FIRST + 4U)) {
+            // Dwell watchdog starts when the coil pin actually goes HIGH — not when
+            // DWELL is merely queued (sub-tooth lead can be several ms).
+            const uint8_t ign_idx = (uint8_t)(idx - ECU_IGN_CH_FIRST);
+            // OR 1: arm tick 0 is the inactive sentinel (TIM5_CNT can be 0).
+            g_dwell_arm_tick[ign_idx] = TIM5_CNT | 1U;
+            if (g_dwell_wdog_ticks[ign_idx] == 0U) {
+                g_dwell_wdog_ticks[ign_idx] = (si::g_dwell_ticks * 7U) / 5U;
+            }
+        }
     } else {
         ++g_pin_low_count[idx];
-        // IGN pin LOW = spark/safe: release dwell watchdog for that coil.
-        // Must not clear on SPARK *arm* — only when the pin actually drops,
-        // otherwise a lost SPARK event can leave the driver HIGH forever.
-        if (idx >= ECU_IGN_CH_FIRST && idx < (ECU_IGN_CH_FIRST + 4U)) {
+        if (idx < 4U) {
+            g_inj_open_tick[idx] = 0U;
+            g_inj_wdog_ticks[idx] = 0U;
+        } else if (idx >= ECU_IGN_CH_FIRST && idx < (ECU_IGN_CH_FIRST + 4U)) {
+            // IGN pin LOW = spark/safe: release dwell watchdog for that coil.
             g_dwell_arm_tick[idx - ECU_IGN_CH_FIRST] = 0U;
         }
     }
     g_pin_last_state[idx] = high;
+}
+
+static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U);
+
+// Drop pending events for channels matching bit mask (inj or ign cylinder map).
+// Also drive matching pins to safe (INJ_OFF / SPARK) and clear dwell arm.
+static void purge_events_for_cyl_mask(uint8_t mask, uint8_t is_ign)
+{
+    if (mask == 0U) { return; }
+    uint8_t w = 0U;
+    for (uint8_t r = 0U; r < g_evt_count; ++r) {
+        const uint8_t ch = g_evt_queue[r].channel;
+        const uint8_t bit = (ch < 8U)
+            ? (is_ign != 0U ? k_ign_ch_to_bit[ch] : k_inj_ch_to_bit[ch])
+            : 0U;
+        if (bit != 0U && (mask & bit) != 0U) {
+            continue;  // drop
+        }
+        if (w != r) { g_evt_queue[w] = g_evt_queue[r]; }
+        ++w;
+    }
+    g_evt_count = w;
+    for (uint8_t cyl = 0U; cyl < 4U; ++cyl) {
+        if ((mask & (1U << cyl)) == 0U) { continue; }
+        if (is_ign != 0U) {
+            force_output(si::kIgnCh[cyl], ECU_ACT_SPARK, 1U);
+            g_dwell_arm_tick[cyl] = 0U;
+        } else {
+            force_output(si::kInjCh[cyl], ECU_ACT_INJ_OFF, 1U);
+        }
+    }
+    if (g_evt_count == 0U) {
+        TIM5_DIER &= ~TIM_DIER_CC3IE;
+        g_evt_armed = 0U;
+    } else {
+        TIM5_CCR3 = g_evt_queue[0].timestamp;
+        TIM5_SR   = ~TIM_SR_CC3IF;
+        TIM5_DIER |= TIM_DIER_CC3IE;
+        g_evt_armed = 1U;
+    }
 }
 
 static inline uint32_t scheduler_counter(void)
@@ -341,7 +438,7 @@ static void sanitize_runtime_calibration(void)
     if (clamped != 0U) { ++g_calibration_clamp_count; }
 }
 
-static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U)
+static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state)
 {
     const uint8_t high = ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
     const uint8_t idx = channel_pin_idx(ch);
@@ -376,29 +473,31 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     if (ch == ECU_CH_INJ1) { ++g_dbg_inj1_arm; }
     if (ch == ECU_CH_IGN1) { ++g_dbg_ign1_arm; }
 
-    // Dwell watchdog tracking (ignition channels only) — pin_idx 4..7 → ign 0..3.
-    // Arm on DWELL_START; release only when the pin goes LOW (pin_transition) or
-    // the watchdog itself trips. Do NOT clear on ECU_ACT_SPARK arm: both events
-    // are typically queued before dwell starts, and clearing here left the coil
-    // unprotected for the whole charge window (lost SPARK → stuck HIGH).
+    // Program watchdog timeouts at queue time; pin_transition starts the clock
+    // only when the pin actually goes HIGH.
+    if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
+        uint32_t t = (si::g_inj_pw_ticks * 6U) / 5U;  // 1.2 × PW
+        if (t < ECU_SCHED_US_TO_TICKS(2000U)) { t = ECU_SCHED_US_TO_TICKS(2000U); }
+        if (t > kInjOpenWdogHardTicks) { t = kInjOpenWdogHardTicks; }
+        g_inj_wdog_ticks[pin_idx] = t;
+    }
     if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
         const uint8_t ign_idx = (uint8_t)(pin_idx - ECU_IGN_CH_FIRST);
-        g_dwell_arm_tick[ign_idx] = now;
         g_dwell_wdog_ticks[ign_idx] = (si::g_dwell_ticks * 7U) / 5U;
     }
+    (void)now;
 
-    // Absolute-timestamp insert (TIM5 domain). Re-read CNT for delta after inhibit work.
-    // Min-lead: if target already past / too soon, schedule at tnow+MIN_LEAD
-    // (timestamp policy unchanged). Do NOT count min-lead as STATUS_SCHED_LATE —
-    // that flood made the late bit sticky under normal tooth-ISR latency. True
-    // misses are counted only in dispatch path-2 (event already past at re-arm).
+    // Absolute-timestamp insert (TIM5 domain). Signed lead is wrap-safe on
+    // 32-bit TIM5; unsigned `target > tnow` misclassifies near-wrap futures.
+    // Min-lead: if target already past / too soon, schedule at tnow+MIN_LEAD.
+    // Do NOT count min-lead as STATUS_SCHED_LATE (tooth-ISR latency flood).
     {
         const uint32_t tnow = TIM5_CNT;
-        const uint32_t delta = (target_cnv > tnow) ? (target_cnv - tnow) : 0U;
-        if (delta < STM32_MIN_COMPARE_LEAD_TICKS) {
+        const int32_t lead = (int32_t)(target_cnv - tnow);
+        if (lead < (int32_t)STM32_MIN_COMPARE_LEAD_TICKS) {
             evt_insert(tnow + STM32_MIN_COMPARE_LEAD_TICKS, ch, high);
         } else {
-            evt_insert(tnow + delta, ch, high);
+            evt_insert(target_cnv, ch, high);
         }
         return;
     }
@@ -412,7 +511,11 @@ static void clear_all_events_and_drive_safe_outputs(void)
     g_evt_armed = 0U;
     TIM5_DIER &= ~TIM_DIER_CC3IE;
     for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) { force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK, 1U); }
-    for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; }
+    for (uint8_t i = 0U; i < 4U; ++i) {
+        g_dwell_arm_tick[i] = 0U;
+        g_inj_open_tick[i] = 0U;
+        g_inj_wdog_ticks[i] = 0U;
+    }
     // Close any open knock window — sync lost means no valid combustion cylinder
     si::g_knock_sequential = 0U;
     ems::engine::knock_window_cycle_end();
@@ -479,18 +582,40 @@ void ecu_sched_dwell_watchdog(void)
     const uint32_t now = TIM5_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
         ems::hal::CriticalSectionGuard guard;
-        const uint32_t arm  = g_dwell_arm_tick[i];  // TIM5_CNT value
+        const uint32_t arm  = g_dwell_arm_tick[i];  // TIM5_CNT at pin HIGH
         const uint32_t tout = g_dwell_wdog_ticks[i];
-        if (arm != 0U && (now - arm) >= tout) {  // 32-bit, sem mask de wrap
-            // force_output → pin_transition(LOW) also clears g_dwell_arm_tick.
-            force_output(si::kIgnCh[i], ECU_ACT_SPARK, 1U);
+        if (arm != 0U && tout != 0U && (now - arm) >= tout) {  // 32-bit wrap-safe
+            // Force LOW *and* purge queued re-assert (DWELL still in queue after
+            // a premature trip would re-charge the coil with no arm).
+            purge_events_for_cyl_mask(static_cast<uint8_t>(1U << i), 1U);
             g_dwell_arm_tick[i] = 0U;
+            g_dwell_wdog_ticks[i] = 0U;
             ++g_dwell_watchdog_count;
         }
     }
 }
 
 uint32_t ecu_sched_dwell_watchdog_count(void) { return g_dwell_watchdog_count; }
+
+void ecu_sched_inj_watchdog(void)
+{
+    if (g_inj_pw_override != 0U) { return; }  // test/bench PW lock — disable
+    const uint32_t now = TIM5_CNT;
+    for (uint8_t i = 0U; i < 4U; ++i) {
+        ems::hal::CriticalSectionGuard guard;
+        const uint32_t open = g_inj_open_tick[i];
+        const uint32_t tout = g_inj_wdog_ticks[i];
+        if (open != 0U && tout != 0U && (now - open) >= tout) {
+            // Force OFF + purge any pending re-assert for this cylinder.
+            purge_events_for_cyl_mask(static_cast<uint8_t>(1U << i), 0U);
+            g_inj_open_tick[i] = 0U;
+            g_inj_wdog_ticks[i] = 0U;
+            ++g_inj_watchdog_count;
+        }
+    }
+}
+
+uint32_t ecu_sched_inj_watchdog_count(void) { return g_inj_watchdog_count; }
 
 uint8_t ecu_sched_is_sequential(void) { return si::g_knock_sequential; }
 uint8_t ecu_sched_presync_inj_mode(void) { return si::g_presync_inj_mode; }
@@ -504,6 +629,7 @@ void ecu_sched_reset_diagnostic_counters(void)
     g_calibration_clamp_count = 0U;
         si::g_pw_duty_clamp_count = 0U;
     g_dwell_watchdog_count = 0U;
+    g_inj_watchdog_count = 0U;
 }
 
 void ecu_sched_fire_prime_pulse(uint32_t pw_us)
@@ -538,7 +664,8 @@ void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
     // only queued). pin_transition(LOW) / watchdog release the arm tick.
     {
         ems::hal::CriticalSectionGuard guard;
-        g_dwell_arm_tick[cyl]  = scheduler_counter();
+        // pin_transition already armed on force HIGH; keep explicit ticks for tests.
+        g_dwell_arm_tick[cyl]  = scheduler_counter() | 1U;
         g_dwell_wdog_ticks[cyl] = (ECU_SCHED_US_TO_TICKS(dwell_us) * 7U) / 5U;
     }
     arm_channel(ch, spark_cnv, ECU_ACT_SPARK);
@@ -561,7 +688,15 @@ void ecu_sched_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t at
 void ecu_sched_set_inj_inhibit_mask(uint8_t mask)
 {
     ems::hal::CriticalSectionGuard guard;
-    g_inj_inhibit_mask = mask & 0x0FU;
+    const uint8_t new_mask = mask & 0x0FU;
+    // Rising bits only: purge+force OFF for newly inhibited cylinders so a
+    // mid-pulse fuel cut cannot leave an injector stuck open. Clearing the
+    // mask (re-enable) only updates the mask; OFF/ON pairing resumes on next arm.
+    const uint8_t newly = static_cast<uint8_t>(new_mask & ~g_inj_inhibit_mask);
+    g_inj_inhibit_mask = new_mask;
+    if (newly != 0U) {
+        purge_events_for_cyl_mask(newly, 0U);
+    }
 }
 uint8_t ecu_sched_get_inj_inhibit_mask(void) { return g_inj_inhibit_mask; }
 
@@ -569,37 +704,13 @@ void ecu_sched_set_ign_inhibit_mask(uint8_t mask)
 {
     ems::hal::CriticalSectionGuard guard;
     const uint8_t new_mask = mask & 0x0FU;
+    const uint8_t newly = static_cast<uint8_t>(new_mask & ~g_ign_inhibit_mask);
     g_ign_inhibit_mask = new_mask;
     // Spark-cut (limp rev_cut): drop any pending dwell/spark for inhibited
     // coils and force the pin LOW immediately so a mid-dwell cut cannot leave
     // the coil charged. Rev-limit production is fuel-only and leaves mask=0.
-    if (new_mask != 0U) {
-        uint8_t w = 0U;
-        for (uint8_t r = 0U; r < g_evt_count; ++r) {
-            const uint8_t ch = g_evt_queue[r].channel;
-            const uint8_t bit = (ch < 8U) ? k_ign_ch_to_bit[ch] : 0U;
-            if (bit != 0U && (new_mask & bit) != 0U) {
-                continue;  // drop event for inhibited IGN channel
-            }
-            if (w != r) { g_evt_queue[w] = g_evt_queue[r]; }
-            ++w;
-        }
-        g_evt_count = w;
-        for (uint8_t cyl = 0U; cyl < 4U; ++cyl) {
-            if ((new_mask & (1U << cyl)) != 0U) {
-                force_output(si::kIgnCh[cyl], ECU_ACT_SPARK, 1U);
-                g_dwell_arm_tick[cyl] = 0U;
-            }
-        }
-        if (g_evt_count == 0U) {
-            TIM5_DIER &= ~TIM_DIER_CC3IE;
-            g_evt_armed = 0U;
-        } else {
-            TIM5_CCR3 = g_evt_queue[0].timestamp;
-            TIM5_SR   = ~TIM_SR_CC3IF;
-            TIM5_DIER |= TIM_DIER_CC3IE;
-            g_evt_armed = 1U;
-        }
+    if (newly != 0U) {
+        purge_events_for_cyl_mask(newly, 1U);
     }
 }
 uint8_t ecu_sched_get_ign_inhibit_mask(void) { return g_ign_inhibit_mask; }
@@ -699,6 +810,24 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         g_last_gap_ts = snap.last_tim5_capture;  // TIM5 timestamp of gap (tooth 0)
         const bool use_presync = (snap.state == ems::drv::SyncState::HALF_SYNC && g_presync_enable != 0U && g_cmp_phase_seen == 0U)
                               || (snap.state == ems::drv::SyncState::FULL_SYNC && g_cmp_phase_seen == 0U);
+        // Mode change presync↔sequential: drop pending events from the previous
+        // table (wrong phase / bank / half-PW) before rebuilding.
+        static uint8_t s_prev_sched_mode = 0xFFU;  // 0=presync, 1=seq, 0xFF=none
+        const uint8_t mode = use_presync ? 0U : 1U;
+        if (s_prev_sched_mode != 0xFFU && s_prev_sched_mode != mode) {
+            g_evt_count = 0U;
+            g_evt_armed = 0U;
+            TIM5_DIER &= ~TIM_DIER_CC3IE;
+            for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) {
+                force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK, 1U);
+            }
+            for (uint8_t i = 0U; i < 4U; ++i) {
+                g_dwell_arm_tick[i] = 0U;
+                g_inj_open_tick[i] = 0U;
+                g_inj_wdog_ticks[i] = 0U;
+            }
+        }
+        s_prev_sched_mode = mode;
         if (use_presync) {
             ++g_dbg_presync_count;
             ++g_diag_presync_revs;
@@ -736,7 +865,8 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
             if (e->tooth_index != tooth_index) { continue; }
             if ((e->phase_A != ECU_PHASE_ANY) && (e->phase_A != current_phase)) { ++g_dbg_phase_skip; continue; }
             ++g_dbg_phase_fire;
-            arm_channel(e->channel, now + ((e->sub_frac_x256 * tooth_ticks) >> 8U), e->action);
+            const uint32_t sub = (uint32_t)(((uint64_t)e->sub_frac_x256 * (uint64_t)tooth_ticks) >> 8U);
+            arm_channel(e->channel, now + sub, e->action);
         }
     }
 
@@ -760,9 +890,13 @@ void ecu_sched_test_reset(void)
     g_inj_inhibit_mask = 0U;
     g_ign_inhibit_mask = 0U;
     si::g_mspark_count = 0U; si::g_mspark_inter_dwell_ticks = 0U; si::g_mspark_atdc_limit_deg = 18U;
-    // Reset dwell watchdog state
-    for (uint8_t i = 0U; i < 4U; ++i) { g_dwell_arm_tick[i] = 0U; g_dwell_wdog_ticks[i] = 0U; }
+    // Reset dwell / inj open watchdog state
+    for (uint8_t i = 0U; i < 4U; ++i) {
+        g_dwell_arm_tick[i] = 0U; g_dwell_wdog_ticks[i] = 0U;
+        g_inj_open_tick[i] = 0U; g_inj_wdog_ticks[i] = 0U;
+    }
     g_dwell_watchdog_count = 0U;
+    g_inj_watchdog_count = 0U;
     g_inj_pw_override = 0U;
     // Reset TIM5 event queue
     g_evt_count = 0U; g_evt_armed = 0U;

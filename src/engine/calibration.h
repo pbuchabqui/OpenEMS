@@ -153,6 +153,37 @@ extern uint8_t  antijerk_decay_cycles;
 extern uint32_t rev_limit_rpm_x10;
 extern uint32_t rev_limit_soft_window_x10;   // janela do corte de injeção (menor, ~200 RPM)
 
+// ── Launch control (torque_manager) — page0 191-201 (layout v5+) ─────────────
+// enable=0 off. When armed (APP ≥ arm): hold engine near launch_rpm via ETB cap.
+// Disarm when APP drops below disarm. No clutch switch required (street-lite).
+// Offsets: 191 en, 192-193 rpm_x10, 194-195 etb, 196-197 app_arm, 198-199 disarm,
+//          200-201 hyst.
+extern uint8_t  launch_enable;
+extern uint16_t launch_rpm_x10;           // target hold RPM ×10 (default 4500)
+extern uint16_t launch_etb_pct_x10;       // max ETB while active (default 60%)
+extern uint16_t launch_app_arm_x10;       // APP to arm (default 20%)
+extern uint16_t launch_app_disarm_x10;    // APP to disarm (default 5%)
+extern uint16_t launch_rpm_hyst_x10;      // deadband around target (default 100=10 RPM)
+
+// ── Traction control (torque_manager) — page0 202-215 (layout v5+) ───────────
+// 202 en, 203 pad, 204-205 app_min, 206-207 rpm_min, 208-209 rpm_dot_thresh,
+// 210-211 max_red, 212-213 spark_max, 214-215 rate.
+// Slip priority: external API → CAN wheel vs vehicle (can_rx_map) → RPM-dot proxy.
+extern uint8_t  tc_enable;
+extern uint16_t tc_app_min_x10;           // min APP to intervene (default 30%)
+extern uint16_t tc_rpm_min_x10;           // min RPM (default 2000)
+// rpm_dot in rpm_x10 per second: 8000 ≈ +800 RPM/s flare
+extern uint16_t tc_rpm_dot_thresh;
+extern uint16_t tc_max_reduction_pct_x10; // max throttle cut 0-1000 (default 800=80%)
+extern uint16_t tc_spark_retard_max_deg;  // max spark retard ° (default 12)
+extern uint16_t tc_reduction_rate_x10;    // %×10 per second slew of reduction (default 500=50%/s)
+
+// page0 wire helpers (layout v5 block 191-215). Safe no-ops on short buffers.
+constexpr uint16_t kLaunchTcPage0Off = 191u;
+constexpr uint16_t kLaunchTcPage0Len = 25u;  // 191..215 inclusive
+void launch_tc_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept;
+void launch_tc_apply_from_page0(const uint8_t* page0, uint16_t len) noexcept;
+
 // Rev limiter: retardo progressivo de faísca removido em b565491 (rusEFI-style:
 // corte só de combustível, faísca nunca cortada). Offsets 80-85 da page 0
 // ficam reservados para não partir o layout do protocolo.

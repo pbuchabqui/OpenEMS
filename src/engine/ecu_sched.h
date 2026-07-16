@@ -76,6 +76,12 @@ void ecu_sched_reset_diagnostic_counters(void);
 void ecu_sched_dwell_watchdog(void);
 uint32_t ecu_sched_dwell_watchdog_count(void);
 
+// Injector open watchdog — same 2 ms slot. If an injector pin stays HIGH
+// beyond 1.2× current PW (hard cap 36 ms; covers prime ≤30 ms), force OFF
+// and purge pending events for that cylinder (lost INJ_OFF backstop).
+void ecu_sched_inj_watchdog(void);
+uint32_t ecu_sched_inj_watchdog_count(void);
+
 // Multi-spark (MS42 §2.2.3): sparks adicionais por ciclo a baixo RPM.
 // count: número de sparks adicionais (0=desabilitado, máx 3).
 // inter_dwell_ticks: tempo de dwell entre sparks consecutivos (ticks TIM5).

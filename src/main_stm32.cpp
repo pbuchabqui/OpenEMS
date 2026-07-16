@@ -31,6 +31,7 @@ int main() { return 0; }
 #include "hal/uart.h"
 
 #include "app/can_stack.h"
+#include "app/can_rx_map.h"
 #include "app/ui_protocol.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
@@ -40,6 +41,7 @@ int main() { return 0; }
 #include "engine/ecu_sched.h"
 #include "engine/engine_config.h"
 #include "engine/etb_control.h"
+#include "hal/etb_driver.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/knock.h"
@@ -77,6 +79,8 @@ volatile uint32_t g_flash_write_faults = 0u; // FIX: fault counter para falhas d
 
 
 static int8_t  g_last_advance_deg = 0;
+// Spark retard from torque manager (TC/launch), updated in 2 ms ETB slot.
+static int16_t g_torque_spark_retard_deg = 0;
 static uint8_t g_last_pw_ms_x10   = 0u;
 static int8_t  g_last_stft_pct    = 0;
 static uint8_t g_last_lambda_target_d4 = 0u;
@@ -86,8 +90,13 @@ static uint16_t g_last_map_fused_x100 = 0u;
 static int8_t  g_last_ltft_pct    = 0;
 
 static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
-static constexpr uint8_t  kFaultBitMap = (1u << 0u);
-static constexpr uint8_t  kFaultBitClt = (1u << 3u);
+static constexpr uint8_t  kFaultBitMap  = (1u << 0u);  // SensorId::MAP
+static constexpr uint8_t  kFaultBitClt  = (1u << 3u);  // SensorId::CLT
+static constexpr uint8_t  kFaultBitFuel = (1u << 6u);  // SensorId::FUEL_PRESS
+static constexpr uint8_t  kFaultBitOil  = (1u << 7u);  // SensorId::OIL_PRESS
+// Oil must be present above this RPM; fuel-rail fault cuts after cranking.
+static constexpr uint32_t kOilProtectRpmX10  = 15000u;  // 1500 RPM
+static constexpr uint32_t kFuelRailMinRpmX10 = 5000u;   // 500 RPM
 static bool g_limp_active = false;
 static bool g_rev_limit_active = false;   // fuel cut active via rev limiter
 static bool g_engine_was_running = false;
@@ -150,6 +159,12 @@ static inline uint16_t build_status_bits(const ems::drv::CkpSnapshot& snap,
     }
     if (g_rev_limit_active) {
         status |= ems::app::STATUS_REV_LIMIT;
+    }
+    if (ems::engine::torque_manager_test_get_launch_active() != 0u) {
+        status |= ems::app::STATUS_LAUNCH_ACTIVE;
+    }
+    if (ems::engine::torque_manager_test_get_tc_reduction() > 0u) {
+        status |= ems::app::STATUS_TC_ACTIVE;
     }
     return status;
 }
@@ -636,6 +651,7 @@ static void openems_init() noexcept {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
 	ems::engine::cfg::engine_config_load(g_calib_page0, kCalibPageBytes);
+	ems::engine::map_estimator_sync_engine_config();  // displacement → MAP model
 	// Calibração de sensores persistida (página 0, bytes 16-55) → drivers
 	ems::engine::apply_etb_calibration_from_page(g_calib_page0 + 16, 40u);
 	ems::engine::push_sensor_calibration_to_drivers();
@@ -677,6 +693,10 @@ static void openems_init() noexcept {
 				ems::engine::ltft_learn_ready_max_stft_x10 = g_calib_page0[190];
 			}
 		}
+		// Launch + TC knobs (page0 191-215, layout v5)
+		ems::engine::launch_tc_apply_from_page0(g_calib_page0, kCalibPageBytes);
+		// CAN RX map: gear / vehicle / driven wheel (216-245)
+		ems::app::can_rx_map_apply_from_page0(g_calib_page0, kCalibPageBytes);
 	}
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
@@ -812,10 +832,9 @@ int main() {
             // Também decai rpm_x10 fantasma de ruído em CKP sem sync.
             ems::drv::ckp_stall_poll(ems::hal::tim5_count());
 
-            // Dwell watchdog: protege bobinas de ignição contra saturação.
-            // Se SPARK não disparou dentro de 1.4 × dwell após DWELL_START,
-            // força a saída LOW imediatamente (MS42 §2.2.2.1.3).
+            // Dwell / injector open watchdogs (lost SPARK / lost INJ_OFF).
             ecu_sched_dwell_watchdog();
+            ecu_sched_inj_watchdog();
 
             const auto snap    = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
@@ -843,23 +862,36 @@ int main() {
                 g_last_gap_sync_snapshot = snap;
             }
 
+            const bool map_fault = (sensors.fault_bits & kFaultBitMap) != 0u;
             const uint16_t map_bar_x100_raw = static_cast<uint16_t>(sensors.map_bar_x1000 / 10u);
             const uint16_t map_bar_x100_sensor = clamp_u16(map_bar_x100_raw, kMapMinBarX100, kMapMaxBarX100);
-            
-            // Atualiza estimador de MAP com sensor fusion para resposta transiente rápida
+            // Throttle signal for manifold model: ETB blade if harness present, else APP.
+            const uint16_t tps_for_map = (ems::engine::etb_harness_present != 0u)
+                ? sensors.etb_tps_pct_x10
+                : sensors.app_pct_x10;
+            // Fusion: sensor_valid=false on MAP fault so fallback 1 bar is not trusted.
             const uint16_t map_bar_x100 = ems::engine::map_estimator_update(
                 map_bar_x100_sensor,
-                sensors.etb_tps_pct_x10,
+                tps_for_map,
                 kAePeriodMs,
                 snap.rpm_x10,
-                sensors.iat_degc_x10);
-            
-            // Loop ETB (1kHz = 1ms) - controle de borboleta eletrônica
-            const bool map_fault = (sensors.fault_bits & kFaultBitMap) != 0u;
+                sensors.iat_degc_x10,
+                !map_fault);
             const bool clt_fault = (sensors.fault_bits & kFaultBitClt) != 0u;
-            g_limp_active = map_fault || clt_fault;
+            const bool oil_fault = (sensors.fault_bits & kFaultBitOil) != 0u;
+            const bool fuel_press_fault = (sensors.fault_bits & kFaultBitFuel) != 0u;
+            g_limp_active = map_fault || clt_fault || oil_fault;
+            // CLT limp: fuel+ign cut only above kLimpRpmLimit (reduced performance below).
+            // MAP fault: always cut fuel — fallback MAP≈1 bar is unsafe load for PW at any RPM.
+            // Oil range fault while spinning: cut fuel+ign (bearing protection).
+            // Fuel-rail range fault after crank: cut fuel only (lean/dry risk).
             const bool rev_cut = g_limp_active &&
                 (snap.rpm_x10 > kLimpRpmLimit_x10);
+            const bool map_fuel_cut = map_fault;
+            const bool oil_protect_cut =
+                oil_fault && (snap.rpm_x10 > kOilProtectRpmX10);
+            const bool fuel_rail_cut =
+                fuel_press_fault && (snap.rpm_x10 > kFuelRailMinRpmX10);
             const CachedFuelCorrections& fuel_corr = fuel_corrections_for(sensors);
             // Dwell 2D: tensão × RPM (MS42 §2.2.2.2.1).
             // Calculado fora do cache porque depende de RPM que varia a cada dente.
@@ -901,15 +933,22 @@ int main() {
                 }
                 ems::app::ui_set_rev_limit_active(g_rev_limit_active);
 
-                const uint8_t inj_mask = (rev_cut || g_rev_limit_active) ? 0x0Fu : 0u;
+                const uint8_t inj_mask =
+                    (rev_cut || g_rev_limit_active || map_fuel_cut ||
+                     oil_protect_cut || fuel_rail_cut) ? 0x0Fu : 0u;
+                const uint8_t ign_mask =
+                    (rev_cut || oil_protect_cut) ? 0x0Fu : 0u;
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);
-                ::ecu_sched_set_ign_inhibit_mask(rev_cut ? 0x0Fu : 0u);
+                ::ecu_sched_set_ign_inhibit_mask(ign_mask);
             }
 
-            // Fuel cut active (rev limiter or limp mode): force telemetry PW to 0
-            const bool fuel_cut_active = g_rev_limit_active || g_limp_active;
+            // Telemetry PW must match actuators: only when injectors are actually cut.
+            const bool fuel_cut_active =
+                g_rev_limit_active || rev_cut || map_fuel_cut ||
+                oil_protect_cut || fuel_rail_cut;
 
-            if (sched_sync && !rev_cut) {
+            if (sched_sync && !rev_cut && !map_fuel_cut &&
+                !oil_protect_cut && !fuel_rail_cut) {
                 const ems::engine::Table2dLookup fuel_lookup =
                     ems::engine::table3d_prepare_lookup(ems::engine::kRpmAxisX10,
                                                         ems::engine::kLoadAxisBarX100,
@@ -924,11 +963,12 @@ int main() {
                     static_cast<int16_t>(ems::engine::fuel_get_stft_pct_x10() +
                                          ems::engine::fuel_get_ltft_at(snap.rpm_x10, map_bar_x100)),
                     -500, 500);
-                const int32_t ae_pw_us = crank_rpm_window ? 0 : ems::engine::calc_ae_pw_us(
-                    sensors.etb_tps_pct_x10,
-                    g_prev_tps_pct_x10,
-                    kAePeriodMs,
-                    sensors.clt_degc_x10);
+                // AE from map-fusion TPSdot (ring buffer) — more stable than 1-sample Δ.
+                const int16_t ae_tpsdot = ems::engine::map_get_tpsdot_x10();
+                const int32_t ae_pw_us = crank_rpm_window ? 0
+                    : ems::engine::calc_ae_pw_from_tpsdot(
+                        (ae_tpsdot > 0) ? ae_tpsdot : static_cast<int16_t>(0),
+                        sensors.clt_degc_x10);
                 uint32_t final_pw_us_base =
                     ems::engine::calc_fuel_pw_us_default_fast(ve,
                                                                map_bar_x100,
@@ -1027,8 +1067,9 @@ int main() {
                     base_advance_deg,
                     {iat_spark_deg, clt_spark_deg,
                      static_cast<int16_t>(knock_retard_x10 / 10u),
-                     idle_spark_corr_deg, antijerk_retard});
-                // rusEFI-style: no spark retard. Fuel cut only handles the limit.
+                     idle_spark_corr_deg, antijerk_retard,
+                     g_torque_spark_retard_deg});
+                // Fuel rev-limit remains fuel-cut only; TC/launch may retard spark.
 
                 const auto qc = ems::engine::quick_crank_update(
                     now, snap.rpm_x10, sched_sync, sensors.clt_degc_x10, advance_deg);
@@ -1336,9 +1377,22 @@ int main() {
             const auto torque_out = ems::engine::torque_manager_update(
                 snap_etb, sensors_etb, true, g_limp_active, etb_rev_cut,
                 ems::engine::auxiliaries_idle_target_rpm_x10(sensors_etb.clt_degc_x10), 2u);
-            (void)ems::engine::etb_control_update(
+            g_torque_spark_retard_deg = torque_out.spark_retard_deg;
+            const auto etb = ems::engine::etb_control_update(
                 torque_out.etb_target_pct_x10, sensors_etb.etb_tps_pct_x10,
                 torque_out.etb_enable_request, 2u);
+            // Apply PID → H-bridge. On disable/fault/no-cal, spring-return safe.
+            if (!torque_out.etb_enable_request || !etb.active || !g_etb_initialized) {
+                ::etb_driver_shutdown();
+            } else {
+                // output_pct_x10 ∈ [-1000, 1000] → driver PWM ∈ [-1023, 1023]
+                int32_t pwm = (static_cast<int32_t>(etb.output_pct_x10) * 1023) / 1000;
+                if (pwm > 1023) { pwm = 1023; }
+                if (pwm < -1023) { pwm = -1023; }
+                if (!::etb_driver_set_motor_pwm(static_cast<int16_t>(pwm))) {
+                    ::etb_driver_shutdown();
+                }
+            }
         }
     }
 }

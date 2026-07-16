@@ -25,12 +25,17 @@ struct ManifoldModelParams {
 
 // Atualiza estimativa de MAP com sensor fusion
 // Combina leitura física do sensor + modelo termodinâmico de continuidade
-// (fluxo de admissão - bombeamento do motor), compensado por IAT
+// (fluxo de admissão - bombeamento do motor), compensado por IAT.
+// sensor_valid=false (MAP fault / open) → model-only; não confiar em fallback.
 uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
                               uint16_t tps_pct_x10,
                               uint16_t dt_ms,
                               uint32_t rpm_x10,
-                              int16_t iat_x10) noexcept;
+                              int16_t iat_x10,
+                              bool sensor_valid = true) noexcept;
+
+// Sync displacement from engine_config into model (call after NVM load / page0).
+void map_estimator_sync_engine_config() noexcept;
 
 // Obtém MAP estimado para cálculo de combustível
 uint16_t map_get_estimated_bar_x100() noexcept;

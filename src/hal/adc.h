@@ -26,6 +26,8 @@
 
 namespace ems::hal {
 
+// Pin map frozen (firmware truth — see README "Pinout Congelado"):
+//   OIL on PC1 (INP11) so PC5 is exclusive to ETB_TPS2.
 enum class AdcPrimaryChannel : uint8_t {
     MAP       = 0,  // PA3 / INP15
     MAF_V     = 1,  // (reservado)
@@ -34,14 +36,14 @@ enum class AdcPrimaryChannel : uint8_t {
     APP1      = 4,  // PC0 / INP10
     APP2      = 5,  // PC2 / INP12
     ETB_TPS1  = 6,  // PA2 / INP14
-    ETB_TPS2  = 7,  // PC5 / INP8
+    ETB_TPS2  = 7,  // PC5 / INP8  (exclusive; OIL moved to PC1)
 };
 
 enum class AdcSecondaryChannel : uint8_t {
     CLT        = 0,  // PB0 / INP9
     IAT        = 1,  // PB1 / INP5
     FUEL_PRESS = 2,  // PC4 / INP4
-    OIL_PRESS  = 3,  // PC5 / INP8
+    OIL_PRESS  = 3,  // PC1 / INP11  (was PC5 — conflict with ETB_TPS2)
     EWG_POS    = 4,  // PC3 / INP13
 };
 

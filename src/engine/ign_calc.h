@@ -25,6 +25,7 @@ struct AdvanceCorrections {
     int16_t knock_retard_deg;    // subtracted: retardo de detonação
     int16_t idle_spark_deg;      // corrección de marcha lenta (positivo = avança)
     int16_t antijerk_retard_deg; // subtracted: retardo anti-jerk no tip-in
+    int16_t torque_retard_deg;   // subtracted: TC / launch spark cut (positive = retard)
 };
 
 int16_t calc_ign_iat_correction_deg(int16_t iat_x10) noexcept;

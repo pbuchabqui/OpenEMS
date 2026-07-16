@@ -38,12 +38,29 @@ namespace ems::hal {
 
 // Pura e compilada em ambos os alvos (target + host-test): o gate de layout
 // do setor adaptativo é testável alimentando imagens sintéticas.
+uint32_t nvm_adaptive_maps_crc(const uint8_t* sector) noexcept {
+    if (sector == nullptr) { return 0u; }
+    return crc32_calc(sector, kNvmOffLayoutMagic);
+}
+
 bool nvm_adaptive_sector_valid(const uint8_t* sector) noexcept {
     if (sector == nullptr) { return false; }
     uint32_t magic = 0u;
     // memcpy: o offset é 16-alinhado, mas não assumir alinhamento do buffer.
     __builtin_memcpy(&magic, sector + kNvmOffLayoutMagic, sizeof(magic));
-    return magic == kNvmLayoutMagic;
+    if (magic != kNvmLayoutMagic) { return false; }
+    uint32_t stored_crc = 0u;
+    __builtin_memcpy(&stored_crc, sector + kNvmOffMapsCrc, sizeof(stored_crc));
+    return stored_crc == nvm_adaptive_maps_crc(sector);
+}
+
+// Stamp magic + maps CRC into a sector image (payload must already be filled).
+inline void nvm_stamp_adaptive_header(uint8_t* sector) noexcept {
+    if (sector == nullptr) { return; }
+    uint32_t magic = kNvmLayoutMagic;
+    __builtin_memcpy(sector + kNvmOffLayoutMagic, &magic, sizeof(magic));
+    const uint32_t crc = nvm_adaptive_maps_crc(sector);
+    __builtin_memcpy(sector + kNvmOffMapsCrc, &crc, sizeof(crc));
 }
 
 }  // namespace ems::hal
@@ -64,6 +81,13 @@ static bool    g_ltft_add_dirty = false;
 static uint32_t g_nvm_now_ms              = 0u;
 static uint32_t g_last_adaptive_flush_ms  = 0u;
 static bool     g_adaptive_flush_asap     = false;
+// True while nvm_flush_adaptive_maps SM holds sector 0 (erase/program in flight).
+static bool     g_sector0_flush_active    = false;
+// Seed lives in the same sector as adaptive maps — never erase independently.
+// g_seed_ram is always the source of truth for the next flush; g_seed_dirty
+// forces a sector rewrite even when LTFT/knock/add are clean.
+static ems::hal::RuntimeSyncSeed g_seed_ram{};
+static bool g_seed_dirty = false;
 
 // ── Endereços dos setores Bank2 ───────────────────────────────────────────────
 static constexpr uint32_t kSectorLtft  = 0u;   // Setor 0: LTFT + knock
@@ -193,16 +217,18 @@ int8_t nvm_read_ltft(uint8_t rpm_i, uint8_t load_i) noexcept {
 }
 
 bool nvm_load_adaptive_maps() noexcept {
-    // Magic gate: setor apagado (0xFF) OU layout antigo (magic ausente na
-    // posição atual) → zera tudo e marca dirty; o flush de 500ms regrava o
-    // setor inteiro já no layout novo, incluindo o magic.
-    if (!nvm_adaptive_sector_valid(reinterpret_cast<const uint8_t*>(kBank2Base))) {
+    // Magic+CRC gate: setor apagado, layout antigo (LTF2), ou bit-rot nos
+    // mapas → zera e marca dirty; o flush regrava LTF3 + CRC + seed.
+    const uint8_t* sector = reinterpret_cast<const uint8_t*>(kBank2Base);
+    if (!nvm_adaptive_sector_valid(sector)) {
         std::memset(g_ltft_ram, 0, sizeof(g_ltft_ram));
         std::memset(g_knock_ram, 0, sizeof(g_knock_ram));
         std::memset(g_ltft_add_ram, 0, sizeof(g_ltft_add_ram));
+        std::memset(&g_seed_ram, 0, sizeof(g_seed_ram));
         g_ltft_dirty     = true;
         g_knock_dirty    = true;
         g_ltft_add_dirty = true;
+        g_seed_dirty     = false;  // blank seed need not force rewrite alone
         return true;
     }
 
@@ -215,10 +241,14 @@ bool nvm_load_adaptive_maps() noexcept {
     std::memcpy(g_ltft_add_ram,
                 reinterpret_cast<const void*>(kBank2Base + kNvmOffLtftAdd),
                 sizeof(g_ltft_add_ram));
+    std::memcpy(&g_seed_ram,
+                reinterpret_cast<const void*>(kBank2Base + kNvmSeedOffset),
+                sizeof(g_seed_ram));
 
     g_ltft_dirty     = false;
     g_knock_dirty    = false;
     g_ltft_add_dirty = false;
+    g_seed_dirty     = false;
     return true;
 }
 
@@ -326,7 +356,19 @@ void nvm_request_adaptive_flush_now() noexcept {
 }
 
 bool nvm_adaptive_maps_dirty() noexcept {
-    return g_ltft_dirty || g_knock_dirty || g_ltft_add_dirty;
+    return g_ltft_dirty || g_knock_dirty || g_ltft_add_dirty || g_seed_dirty;
+}
+
+// Pack RAM maps + seed + LTF3 header into sector_buf (full FLASH_SECTOR_SIZE).
+static void pack_adaptive_sector(uint8_t* sector_buf) noexcept {
+    std::memcpy(sector_buf,
+                reinterpret_cast<const void*>(kBank2Base),
+                FLASH_SECTOR_SIZE);
+    std::memcpy(sector_buf + kNvmOffLtft,    g_ltft_ram,     sizeof(g_ltft_ram));
+    std::memcpy(sector_buf + kNvmOffKnock,   g_knock_ram,    sizeof(g_knock_ram));
+    std::memcpy(sector_buf + kNvmOffLtftAdd, g_ltft_add_ram, sizeof(g_ltft_add_ram));
+    nvm_stamp_adaptive_header(sector_buf);
+    std::memcpy(sector_buf + kNvmSeedOffset, &g_seed_ram, sizeof(g_seed_ram));
 }
 
 bool nvm_flush_adaptive_maps() noexcept {
@@ -340,6 +382,7 @@ bool nvm_flush_adaptive_maps() noexcept {
     static FlushState state = FlushState::Idle;
     static uint32_t word_i = 0u;
     static uint32_t bsy_stall_count = 0u;  // FIX C8: detect permanently stuck BSY
+    static bool held_seed_dirty = false;
 
     const auto fail = []() noexcept {
         FLASH_NSCR &= ~(FLASH_CR_PG | FLASH_CR_SER | FLASH_CR_BKSEL | FLASH_CR_SNB_MASK);
@@ -347,33 +390,36 @@ bool nvm_flush_adaptive_maps() noexcept {
         g_ltft_dirty     = true;
         g_knock_dirty    = true;
         g_ltft_add_dirty = true;
+        g_seed_dirty     = true;  // re-attempt seed with maps
+        g_sector0_flush_active = false;
         return false;
     };
 
     if (state == FlushState::Idle) {
-        if (!g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty) { return true; }
+        if (!g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_seed_dirty) {
+            return true;
+        }
 
         // Rate-limit: adia flush se ainda dentro do intervalo (mantém dirty).
+        // Seed-only writes (engine stop) always bypass rate-limit via asap or
+        // when only g_seed_dirty — still respect asap flag from request_now.
         if (!g_adaptive_flush_asap && g_last_adaptive_flush_ms != 0u) {
             const uint32_t age = g_nvm_now_ms - g_last_adaptive_flush_ms;
-            if (age < kMinAdaptiveFlushIntervalMs) {
+            // Seed-only: allow without waiting 60 s (stop-sync must persist).
+            const bool seed_only = g_seed_dirty &&
+                !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty;
+            if (!seed_only && age < kMinAdaptiveFlushIntervalMs) {
                 return true;  // defer — main re-agenda no próximo tick
             }
         }
         g_adaptive_flush_asap = false;
 
-        // Setor 0 contém LTFT, Knock, LTFT-add e RuntimeSyncSeed. Preserva o restante.
-        std::memcpy(sector_buf,
-                    reinterpret_cast<const void*>(kBank2Base),
-                    sizeof(sector_buf));
-
-        std::memcpy(sector_buf + kNvmOffLtft,    g_ltft_ram,     sizeof(g_ltft_ram));
-        std::memcpy(sector_buf + kNvmOffKnock,   g_knock_ram,    sizeof(g_knock_ram));
-        std::memcpy(sector_buf + kNvmOffLtftAdd, g_ltft_add_ram, sizeof(g_ltft_add_ram));
-        std::memcpy(sector_buf + kNvmOffLayoutMagic, &kNvmLayoutMagic, sizeof(kNvmLayoutMagic));
+        pack_adaptive_sector(sector_buf);
+        held_seed_dirty  = g_seed_dirty;
         g_ltft_dirty     = false;
         g_knock_dirty    = false;
         g_ltft_add_dirty = false;
+        g_seed_dirty     = false;
 
         flash_unlock_bank2();
         FLASH_NSCCR = 0xFFFFFFFFu;
@@ -381,6 +427,7 @@ bool nvm_flush_adaptive_maps() noexcept {
                   | FLASH_CR_BKSEL
                   | ((kSectorLtft << FLASH_CR_SNB_SHIFT) & FLASH_CR_SNB_MASK)
                   | FLASH_CR_STRT;
+        g_sector0_flush_active = true;
         state = FlushState::WaitErase;
         return false;
     }
@@ -453,43 +500,74 @@ bool nvm_flush_adaptive_maps() noexcept {
         FLASH_NSCR &= ~FLASH_CR_PG;
         flash_lock_bank2();
         state = FlushState::Idle;
+        g_sector0_flush_active = false;
         g_last_adaptive_flush_ms = g_nvm_now_ms;
-        return !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty;
+        (void)held_seed_dirty;
+        return !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_seed_dirty;
     }
 
     return false;
 }
 
 // ── RuntimeSyncSeed (boot rápido) ────────────────────────────────────────────
-// Armazenado no Setor 0 após o layout magic (offset kNvmSeedOffset, flash.h).
-// Um seed gravado no layout antigo (offset 512) falha o CRC na posição nova
-// → rejeitado limpo, fast-boot cai no caminho de sync normal.
-
-static constexpr uint32_t kSeedOffset = kNvmSeedOffset;
+// Sempre via shadow RAM + flush SM do setor 0 (nunca erase independente).
+// Layout antigo / LTF2 / CRC maps inválido → seed rejeitado no load.
 
 bool nvm_save_runtime_seed(const RuntimeSyncSeed* seed) noexcept {
     if (seed == nullptr) { return false; }
 
-    static uint8_t sector_buf[FLASH_SECTOR_SIZE] = {};
-    std::memcpy(sector_buf,
-                reinterpret_cast<const void*>(kBank2Base),
-                sizeof(sector_buf));
-    std::memcpy(sector_buf + kSeedOffset, seed, sizeof(RuntimeSyncSeed));
+    // Finalize header fields (main only fills flags/tooth/decoder_tag).
+    RuntimeSyncSeed w = *seed;
+    w.magic   = RUNTIME_SYNC_SEED_MAGIC;
+    w.version = RUNTIME_SYNC_SEED_VERSION;
+    // Bump sequence so load prefers the newest seed if multi-slot ever returns.
+    w.sequence = g_seed_ram.sequence + 1u;
+    w.crc32 = 0u;
+    w.crc32 = runtime_seed_crc32(w);
+    g_seed_ram = w;
+    g_seed_dirty = true;
+    g_adaptive_flush_asap = true;  // stop-sync must not wait 60 s rate-limit
 
+    // If flush SM already owns the sector, RAM shadow is enough — SM will
+    // re-read dirty flags after completion or on next Idle entry.
+    if (g_sector0_flush_active) { return true; }
+
+    // Idle: pack + blocking erase/program so seed survives power-cycle even
+    // if main loop does not re-enter flush before shutdown.
+    static uint8_t sector_buf[FLASH_SECTOR_SIZE] = {};
+    pack_adaptive_sector(sector_buf);
     flash_unlock_bank2();
     const bool ok = flash_erase_sector(kSectorLtft) &&
                     flash_write_words(kBank2Base, sector_buf, sizeof(sector_buf));
     flash_lock_bank2();
+    if (ok) {
+        g_seed_dirty = false;
+        // Maps were co-written; clear dirty if they were only dirty because of
+        // a concurrent edit — actually maps may still be dirty in RAM if we
+        // packed current RAM. Clear all dirty on success (sector matches RAM).
+        g_ltft_dirty = false;
+        g_knock_dirty = false;
+        g_ltft_add_dirty = false;
+        g_last_adaptive_flush_ms = g_nvm_now_ms;
+    }
     return ok;
 }
 
 bool nvm_load_runtime_seed(RuntimeSyncSeed* seed_out) noexcept {
     if (seed_out == nullptr) { return false; }
-    const uint32_t addr = kBank2Base + kSeedOffset;
+    // Prefer RAM shadow if already loaded / recently saved.
+    if (g_seed_ram.crc32 == runtime_seed_crc32(g_seed_ram) &&
+        runtime_seed_boot_compatible_60_2(g_seed_ram)) {
+        *seed_out = g_seed_ram;
+        return true;
+    }
+    const uint32_t addr = kBank2Base + kNvmSeedOffset;
     std::memcpy(seed_out, reinterpret_cast<const void*>(addr),
                 sizeof(RuntimeSyncSeed));
     if (seed_out->crc32 != runtime_seed_crc32(*seed_out)) { return false; }
-    return runtime_seed_boot_compatible_60_2(*seed_out);
+    if (!runtime_seed_boot_compatible_60_2(*seed_out)) { return false; }
+    g_seed_ram = *seed_out;
+    return true;
 }
 
 bool nvm_clear_runtime_seed() noexcept {

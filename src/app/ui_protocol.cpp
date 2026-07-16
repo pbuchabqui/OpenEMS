@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "app/can_stack.h"
+#include "app/can_rx_map.h"
 #include "hal/tle8888.h"
 #include "hal/flex_fuel.h"
 #include "drv/ckp.h"
@@ -13,6 +14,9 @@
 #include "engine/ecu_sched.h"
 #include "engine/etb_control.h"
 #include "engine/fuel_calc.h"
+#include "engine/torque_manager.h"
+#include "engine/map_estimator.h"
+#include "app/status_bits.h"
 #include "engine/ign_calc.h"
 #include "engine/math_utils.h"
 #include "engine/output_test.h"
@@ -285,6 +289,16 @@ inline void update_realtime_page() noexcept {
     if (g_rt_rev_limit_active) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_REV_LIMIT);
     }
+    // Launch / TC from torque_manager latches (updated every ETB 2 ms tick).
+    const uint8_t launch_act = ems::engine::torque_manager_test_get_launch_active();
+    const uint16_t tc_red = ems::engine::torque_manager_test_get_tc_reduction();
+    const int16_t spark_ret = ems::engine::torque_manager_test_get_spark_retard();
+    if (launch_act != 0u) {
+        status = static_cast<uint16_t>(status | ems::app::STATUS_LAUNCH_ACTIVE);
+    }
+    if (tc_red > 0u) {
+        status = static_cast<uint16_t>(status | ems::app::STATUS_TC_ACTIVE);
+    }
     rt.status_bits = status;
     write_u32_le(&rt.reserved[0], g_rt_sched_late_events);
     rt.reserved[4] = g_rt_lambda_target_d4;
@@ -307,8 +321,19 @@ inline void update_realtime_page() noexcept {
     rt.reserved[30] = static_cast<uint8_t>((inj_mode << 4u) | (g_rt_sync_state_raw & 0x0Fu));
     // reserved[30] bits: [7:4]=inj_mode (0=simultaneous,1=semi_seq,2=sequential),
     //                     [3:0]=sync_state (0=WAIT_GAP..3=LOSS_OF_SYNC)
-    // reserved[31..34]: was IVC clamp (always 0); kept for RT wire layout stability
-    write_u32_le(&rt.reserved[31], 0u);
+    // reserved[31..34]: was IVC clamp (always 0) — reused for torque RT (layout stable size):
+    //   [31..32] tc_reduction_pct_x10 (u16 LE, 0–1000)
+    //   [33]     spark_retard_deg (u8, 0–30)
+    //   [34]     pad
+    rt.reserved[31] = static_cast<uint8_t>(tc_red & 0xFFu);
+    rt.reserved[32] = static_cast<uint8_t>((tc_red >> 8u) & 0xFFu);
+    {
+        int16_t sr = spark_ret;
+        if (sr < 0) { sr = 0; }
+        if (sr > 30) { sr = 30; }
+        rt.reserved[33] = static_cast<uint8_t>(sr);
+    }
+    rt.reserved[34] = 0u;
     write_u32_le(&rt.reserved[35], g_rt_loop2ms_last_us);
     write_u32_le(&rt.reserved[39], g_rt_loop2ms_max_us);
     // ADC bruto p/ calibração (AN1=APP1, AN2=APP2, AN3=ETB TPS1, AN4=ETB TPS2)
@@ -500,6 +525,10 @@ inline void sync_page_from_table(uint8_t page) noexcept {
         g_page0[188] = ems::engine::ltft_learn_ready_max_mean_err;
         g_page0[189] = ems::engine::ltft_learn_ready_min_stft_x10;
         g_page0[190] = ems::engine::ltft_learn_ready_max_stft_x10;
+        // Launch + TC (191-215, layout v5)
+        ems::engine::launch_tc_serialize_to_page0(g_page0, sizeof(g_page0));
+        // CAN RX map: gear / vehicle speed / driven wheel (216-245)
+        ems::app::can_rx_map_serialize_to_page0(g_page0, sizeof(g_page0));
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -598,20 +627,43 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         // engine_config_load valida magic 0x4543 em bytes [14-15] — a escrita via
         // 'w' deve sempre incluir os 16 bytes completos com magic correcto.
         ems::engine::cfg::engine_config_load(g_page0, 16u);
+        ems::engine::map_estimator_sync_engine_config();
         // Calibração de sensores (bytes 16-55) → globals + drivers
         ems::engine::apply_etb_calibration_from_page(g_page0 + 16, 40u);
         ems::engine::push_sensor_calibration_to_drivers();
         // Trim por cilindro e janela CMP (bytes 56-65)
         std::memcpy(ems::engine::cyl_fuel_trim_pct, g_page0 + 56, 4u);
         std::memcpy(ems::engine::cyl_ign_trim_deg,  g_page0 + 60, 4u);
+        for (uint8_t i = 0u; i < 4u; ++i) {
+            int8_t& ft = ems::engine::cyl_fuel_trim_pct[i];
+            if (ft > 50) { ft = 50; } else if (ft < -50) { ft = -50; }
+            int8_t& it = ems::engine::cyl_ign_trim_deg[i];
+            if (it > 15) { it = 15; } else if (it < -15) { it = -15; }
+        }
         ems::engine::cmp_window_open_tooth  = g_page0[64];
         ems::engine::cmp_window_close_tooth = g_page0[65];
+        if (ems::engine::cmp_window_open_tooth > 57u) {
+            ems::engine::cmp_window_open_tooth = 57u;
+        }
+        if (ems::engine::cmp_window_close_tooth > 57u) {
+            ems::engine::cmp_window_close_tooth = 57u;
+        }
         // Dirigibilidade (bytes 66-99)
         std::memcpy(&ems::engine::antijerk_tpsdot_threshold_x10, g_page0 + 66, 2u);
         std::memcpy(&ems::engine::antijerk_retard_deg,            g_page0 + 68, 2u);
         ems::engine::antijerk_decay_cycles = g_page0[70];
         std::memcpy(&ems::engine::rev_limit_rpm_x10,          g_page0 + 72, 4u);
         std::memcpy(&ems::engine::rev_limit_soft_window_x10,  g_page0 + 76, 4u);
+        // Safety clamps: corrupt/host typos must not disable the rev limiter
+        // (0) or push it past physical range. Defaults match calibration.cpp.
+        if (ems::engine::rev_limit_rpm_x10 < 10000u) {
+            ems::engine::rev_limit_rpm_x10 = 10000u;   // 1000 RPM floor
+        } else if (ems::engine::rev_limit_rpm_x10 > 120000u) {
+            ems::engine::rev_limit_rpm_x10 = 120000u;  // 12000 RPM ceiling
+        }
+        if (ems::engine::rev_limit_soft_window_x10 > ems::engine::rev_limit_rpm_x10) {
+            ems::engine::rev_limit_soft_window_x10 = ems::engine::rev_limit_rpm_x10 / 2u;
+        }
         ems::engine::closed_loop_enable =
             (g_page0[80] != 0u) ? 1u : 0u;
         ems::engine::ltft_apply_burn_ve = (g_page0[81] != 0u) ? 1u : 0u;
@@ -622,6 +674,15 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::decel_cut_entry_rpm_x10,    g_page0 + 90, 4u);
         std::memcpy(&ems::engine::decel_cut_exit_rpm_x10,     g_page0 + 94, 4u);
         std::memcpy(&ems::engine::decel_cut_min_clt_x10,      g_page0 + 98, 2u);
+        // Decel cut: entry must be ≥ exit (hysteresis). Swap if inverted.
+        if (ems::engine::decel_cut_entry_rpm_x10 < ems::engine::decel_cut_exit_rpm_x10) {
+            const uint32_t tmp = ems::engine::decel_cut_entry_rpm_x10;
+            ems::engine::decel_cut_entry_rpm_x10 = ems::engine::decel_cut_exit_rpm_x10;
+            ems::engine::decel_cut_exit_rpm_x10 = tmp;
+        }
+        if (ems::engine::decel_cut_tps_threshold_x10 > 200u) {
+            ems::engine::decel_cut_tps_threshold_x10 = 200u;  // 20% max
+        }
         // Marcha lenta ETB (bytes 100-105)
         std::memcpy(&ems::engine::etb_idle_rpm_target,      g_page0 + 100, 2u);
         std::memcpy(&ems::engine::etb_idle_min_opening_x10, g_page0 + 102, 2u);
@@ -634,6 +695,14 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::stft_kp_x100,       g_page0 + 140, 2u);
         std::memcpy(&ems::engine::stft_ki_x1000,      g_page0 + 142, 2u);
         std::memcpy(&ems::engine::stft_clamp_pct_x10, g_page0 + 144, 2u);
+        // STFT clamp as uint16 cast to int16 for PI — keep 1..500 (±0.1..50%).
+        if (ems::engine::stft_clamp_pct_x10 == 0u) {
+            ems::engine::stft_clamp_pct_x10 = 250u;  // default 25%
+        } else if (ems::engine::stft_clamp_pct_x10 > 500u) {
+            ems::engine::stft_clamp_pct_x10 = 500u;
+        }
+        if (ems::engine::stft_kp_x100 > 1000u) { ems::engine::stft_kp_x100 = 1000u; }
+        if (ems::engine::stft_ki_x1000 > 1000u) { ems::engine::stft_ki_x1000 = 1000u; }
         std::memcpy(&ems::engine::xtau_x_min_q8,  g_page0 + 146, 2u);
         std::memcpy(&ems::engine::xtau_x_max_q8,  g_page0 + 148, 2u);
         std::memcpy(&ems::engine::xtau_tau_min,    g_page0 + 150, 2u);
@@ -689,6 +758,10 @@ inline bool sync_table_from_page(uint8_t page) noexcept {
                     ems::engine::ltft_learn_ready_max_stft_x10 = g_page0[190];
                 }
             }
+            // Launch + TC (191-215): only layout v5+ — older blobs are zeros/garbage.
+            ems::engine::launch_tc_apply_from_page0(g_page0, sizeof(g_page0));
+            // CAN RX map 216-245 (id=0 disables each signal — safe on blank flash)
+            ems::app::can_rx_map_apply_from_page0(g_page0, sizeof(g_page0));
         }
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {

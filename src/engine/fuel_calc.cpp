@@ -79,9 +79,13 @@ uint16_t interp_u16_4pt_u16x(const uint16_t* x_axis,
         return y0;
     }
 
-    const uint32_t y = static_cast<uint32_t>(y0) +
-        ((static_cast<uint32_t>(y1 - y0) * static_cast<uint32_t>(x - x0)) / span);
-    return static_cast<uint16_t>(y > 65535u ? 65535u : y);
+    // Signed dy: non-monotonic AE tables (y1 < y0) must not wrap to huge PW.
+    const int32_t dy = static_cast<int32_t>(y1) - static_cast<int32_t>(y0);
+    const int32_t y = static_cast<int32_t>(y0) +
+        (dy * static_cast<int32_t>(x - x0)) / static_cast<int32_t>(span);
+    if (y <= 0) { return 0u; }
+    if (y > 65535) { return 65535u; }
+    return static_cast<uint16_t>(y);
 }
 
 uint8_t clt_bucket(int16_t clt_x10) noexcept {
@@ -327,9 +331,20 @@ uint32_t calc_final_pw_us(uint32_t base_pw_us,
     if (base_pw_us == 0u) {
         return 0u;
     }
-    const uint64_t num = static_cast<uint64_t>(base_pw_us) * corr_clt_x256 * corr_iat_x256;
-    const uint32_t corrected = static_cast<uint32_t>(num / (256u * 256u));
-    return corrected + dead_time_us;
+    // Clamp Q8 corrections to [0.25× .. 2.0×] so corrupt page-5 cal cannot
+    // wrap the product / cast. Matches practical enrichment range.
+    constexpr uint16_t kCorrMinQ8 = 64u;
+    constexpr uint16_t kCorrMaxQ8 = 512u;
+    constexpr uint32_t kMaxFinalPwUs = 100000u;  // 100 ms — same cap as base path
+    const uint16_t c_clt = (corr_clt_x256 < kCorrMinQ8) ? kCorrMinQ8
+                         : (corr_clt_x256 > kCorrMaxQ8) ? kCorrMaxQ8 : corr_clt_x256;
+    const uint16_t c_iat = (corr_iat_x256 < kCorrMinQ8) ? kCorrMinQ8
+                         : (corr_iat_x256 > kCorrMaxQ8) ? kCorrMaxQ8 : corr_iat_x256;
+    const uint64_t num = static_cast<uint64_t>(base_pw_us) * c_clt * c_iat;
+    const uint64_t corrected = num / (256u * 256u);
+    const uint64_t total = corrected + static_cast<uint64_t>(dead_time_us);
+    if (total > kMaxFinalPwUs) { return kMaxFinalPwUs; }
+    return static_cast<uint32_t>(total);
 }
 
 uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
@@ -393,28 +408,14 @@ void fuel_ae_set_taper(uint8_t taper_cycles) noexcept {
     ae_taper_cycles = (taper_cycles == 0u) ? 1u : taper_cycles;
 }
 
-int32_t calc_ae_pw_us(uint16_t tps_now_x10,
-                      uint16_t tps_prev_x10,
-                      uint16_t dt_ms,
-                      int16_t clt_x10) noexcept {
-    if (dt_ms == 0u) {
-        return 0;
-    }
-
-    int16_t delta_tps_x10 = static_cast<int16_t>(tps_now_x10) - static_cast<int16_t>(tps_prev_x10);
-    if (delta_tps_x10 < 0) {
-        delta_tps_x10 = 0;
-    }
-
-    const int32_t tpsdot_x10 = static_cast<int32_t>(delta_tps_x10) / dt_ms;
-
-    if (tpsdot_x10 > static_cast<int32_t>(ae_tpsdot_threshold_x10)) {
+int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
+    if (tpsdot_x10 > static_cast<int16_t>(ae_tpsdot_threshold_x10)) {
         const uint8_t b = clt_bucket(clt_x10);
         const uint16_t taper = ae_taper_cycles > 255u
             ? 255u
             : (ae_taper_cycles == 0u ? 1u : ae_taper_cycles);
         const uint16_t tpsdot_u16 = static_cast<uint16_t>(
-            tpsdot_x10 > 65535 ? 65535 : tpsdot_x10);
+            tpsdot_x10 < 0 ? 0 : (tpsdot_x10 > 1000 ? 1000 : tpsdot_x10));
         const uint16_t base_pw_us =
             interp_u16_4pt_u16x(ae_tpsdot_axis_x10, ae_pw_adder_us, tpsdot_u16);
         g_ae_pulse_us =
@@ -437,6 +438,27 @@ int32_t calc_ae_pw_us(uint16_t tps_now_x10,
 
     g_ae_pulse_us = 0;
     return 0;
+}
+
+int32_t calc_ae_pw_us(uint16_t tps_now_x10,
+                      uint16_t tps_prev_x10,
+                      uint16_t dt_ms,
+                      int16_t clt_x10) noexcept {
+    if (dt_ms == 0u) {
+        return 0;
+    }
+
+    int16_t delta_tps_x10 = static_cast<int16_t>(tps_now_x10) - static_cast<int16_t>(tps_prev_x10);
+    if (delta_tps_x10 < 0) {
+        delta_tps_x10 = 0;
+    }
+
+    // (%×10)/ms → %/s×10: multiply by 1000/dt_ms
+    const int32_t tpsdot_x10 =
+        (static_cast<int32_t>(delta_tps_x10) * 1000) / static_cast<int32_t>(dt_ms);
+    const int16_t tpsdot_clamped = static_cast<int16_t>(
+        tpsdot_x10 > 1000 ? 1000 : (tpsdot_x10 < 0 ? 0 : tpsdot_x10));
+    return calc_ae_pw_from_tpsdot(tpsdot_clamped, clt_x10);
 }
 
 

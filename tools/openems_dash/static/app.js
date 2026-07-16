@@ -1186,9 +1186,14 @@ async function buildCanRxUI(container) {
   try { cfg = (await api("/api/can_rx_map")).signals; }
   catch { toast("CAN RX map: server offline", true); }
 
-  for (const sig of ["GEAR", "SPEED_KMH"]) {
+  const SIG_LABELS = {
+    GEAR: "GEAR",
+    SPEED_KMH: "VEHICLE SPEED (km/h) — body / ABS ref",
+    WHEEL_SPEED_KMH: "DRIVEN WHEEL (km/h) — TC slip vs vehicle",
+  };
+  for (const sig of ["GEAR", "SPEED_KMH", "WHEEL_SPEED_KMH"]) {
     const sec = document.createElement("div");
-    const sigLabel = sig === "GEAR" ? "GEAR" : "SPEED (km/h)";
+    const sigLabel = SIG_LABELS[sig] || sig;
     sec.innerHTML = `<div class="pg-section-header">${sigLabel}</div>`;
     div.appendChild(sec);
 

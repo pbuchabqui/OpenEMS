@@ -24,6 +24,7 @@
 #include "hal/etb_driver.h"
 #include "engine/torque_manager.h"
 #include "engine/calibration.h"
+#include "app/can_rx_map.h"
 #include "hal/adc.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
@@ -891,6 +892,11 @@ static void test_fuel_calc_final_pw(void) {
     CHECK_EQ(calc_final_pw_us(5000u, 256u, 256u, 500u), 5500u, "neutral corr + 500µs dead");
     CHECK_EQ(calc_final_pw_us(5000u, 384u, 256u,   0u), 7500u, "CLT 1.5× → pw×1.5");
     CHECK_EQ(calc_final_pw_us(   0u, 256u, 256u, 500u),    0u, "base=0 → 0");
+    // Corrupt page-5 Q8 corr (0xFFFF) must not wrap — clamp to 2.0× then 100 ms cap
+    CHECK_EQ(calc_final_pw_us(5000u, 0xFFFFu, 0xFFFFu, 0u), 20000u,
+             "corrupt corr Q8 clamped to 2×2 → 20 ms");
+    CHECK_EQ(calc_final_pw_us(90000u, 512u, 512u, 5000u), 100000u,
+             "final PW saturates at 100 ms");
 }
 
 static void test_fuel_corr_functions(void) {
@@ -1207,10 +1213,15 @@ static void test_fuel_ae(void) {
     const int32_t ae_idle = calc_ae_pw_us(500u, 500u, 10u, 800);
     CHECK_EQ(ae_idle, 0, "no TPS change → ae=0");
 
-    // Large TPS step: delta=300 x10 in 10ms → tpsdot=30 > threshold=10
+    // Large TPS step: delta=300 x10 in 10ms → tpsdot=%/s×10 = 30000 → clamp 1000
     const int32_t ae_accel = calc_ae_pw_us(800u, 500u, 10u, 800);
     CHECK_TRUE(ae_accel > 0, "large TPS step → ae > 0");
     CHECK_TRUE(ae_accel <= 5000, "ae ≤ ae_max_pw_us=5000");
+    // Direct API (map-fusion path)
+    fuel_reset_adaptives();
+    fuel_ae_set_threshold(10u);
+    fuel_ae_set_taper(4u);
+    CHECK_TRUE(calc_ae_pw_from_tpsdot(100, 800) > 0, "calc_ae_pw_from_tpsdot tip-in");
 
     // Decel (TPS close): negative delta → clamped to 0, returns decaying pulse
     const int32_t ae_decel = calc_ae_pw_us(200u, 800u, 10u, 800);
@@ -2087,13 +2098,20 @@ static void test_torque_manager_cpp_update(void) {
     CHECK_EQ(out.etb_target_pct_x10, 0u, "key_off → target=0");
     CHECK_EQ(ems::engine::torque_manager_test_get_target(), 0u, "state target=0 when key_off");
 
-    // key_on, no faults, valid calibration → target = app_pct_x10
+    // key_on, no faults, valid calibration → target from NORMAL pedal map.
+    // NORMAL map: 50% pedal (app=500) → between map[5]=500 and map[6]=600 → 500.
     etb_cal_valid = 1u;
     out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 10u);
     CHECK_TRUE(out.etb_enable_request, "key_on + no faults → ETB enabled");
-    CHECK_EQ(out.etb_target_pct_x10, 500u, "target = app_pct_x10=500");
+    CHECK_EQ(out.etb_target_pct_x10, 500u, "NORMAL map @50% pedal → target 500");
     CHECK_EQ(ems::engine::torque_manager_test_get_target(), 500u, "state target=500");
     CHECK_EQ(ems::engine::torque_manager_test_get_limp_reason(), 0u, "no limp reason");
+
+    // Pedal map OOB guard: app 90–99% must not read past map[9]
+    sens.app_pct_x10 = 950u;
+    out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 10u);
+    CHECK_EQ(out.etb_target_pct_x10, 1000u, "app 95% → last map point (1000)");
+    sens.app_pct_x10 = 500u;
 
     // Invalid calibration → TORQUE_LIMP_NO_CALIB, target=0
     etb_cal_valid = 0u;
@@ -2109,11 +2127,46 @@ static void test_torque_manager_cpp_update(void) {
     CHECK_TRUE((out.limp_reason & TORQUE_LIMP_MAP_CLT) != 0u, "map_clt_limp → LIMP_MAP_CLT");
     CHECK_EQ(out.etb_target_pct_x10, 250u, "limp target clamped to 250 (25%)");
 
-    // rev_cut → TORQUE_LIMP_REV_CUT, target=0
+    // External rev_cut → TORQUE_LIMP_REV_CUT, target=0
     sens.app_pct_x10 = 500u;
+    snap.rpm_x10 = 15000u;
     out = ems::engine::torque_manager_update(snap, sens, true, false, true, 8500u, 10u);
     CHECK_TRUE((out.limp_reason & TORQUE_LIMP_REV_CUT) != 0u, "rev_cut → LIMP_REV_CUT");
     CHECK_EQ(out.etb_target_pct_x10, 0u, "rev_cut → target=0");
+
+    // Progressive ETB rev pullback (rev_limit defaults 7000 / window 200 RPM)
+    {
+        const uint32_t saved_hard = ems::engine::rev_limit_rpm_x10;
+        const uint32_t saved_win  = ems::engine::rev_limit_soft_window_x10;
+        ems::engine::rev_limit_rpm_x10 = 70000u;          // 7000 RPM
+        ems::engine::rev_limit_soft_window_x10 = 2000u;   // 200 RPM window
+        etb_cal_valid = 1u;
+        sens.app_pct_x10 = 1000u;  // WOT via map → 1000
+        sens.clt_degc_x10 = 800;   // warm, not hot
+
+        // Below soft_start (6800): full pedal map
+        snap.rpm_x10 = 60000u;  // 6000
+        out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 1000u, "below soft band → full target");
+        CHECK_EQ((out.limp_reason & TORQUE_LIMP_REV_CUT), 0u, "no REV_CUT below soft");
+
+        // Mid soft band: 6900 = soft_start+100 of 200 → keep 50%
+        // soft_start=68000, hard=70000, rpm=69000 → keep=(2000-1000)/2000 = 50%
+        snap.rpm_x10 = 69000u;
+        out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_TRUE((out.limp_reason & TORQUE_LIMP_REV_CUT) != 0u, "soft band → REV_CUT flag");
+        CHECK_EQ(out.etb_target_pct_x10, 500u, "mid soft band → 50% of WOT target");
+
+        // At hard limit: closed
+        snap.rpm_x10 = 70000u;
+        out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 0u, "at hard rev limit → ETB target 0");
+
+        ems::engine::rev_limit_rpm_x10 = saved_hard;
+        ems::engine::rev_limit_soft_window_x10 = saved_win;
+        snap.rpm_x10 = 15000u;
+        sens.app_pct_x10 = 500u;
+    }
 
     // APP fault → TORQUE_LIMP_APP_FAULT
     sens.app_pct_x10 = 500u;
@@ -2121,6 +2174,272 @@ static void test_torque_manager_cpp_update(void) {
     out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 10u);
     CHECK_TRUE((out.limp_reason & TORQUE_LIMP_APP_FAULT) != 0u, "APP fault → LIMP_APP_FAULT");
     sens.throttle_fault_bits = 0u;
+
+    // ── Launch control ──────────────────────────────────────────────────
+    section("torque_manager: launch control holds ETB / RPM");
+    {
+        ems::engine::torque_manager_reset();
+        etb_cal_valid = 1u;
+        ems::engine::torque_launch_force_enable(1u);  // force enable
+        ems::engine::launch_rpm_x10 = 45000u;
+        ems::engine::launch_etb_pct_x10 = 600u;
+        ems::engine::launch_app_arm_x10 = 200u;
+        ems::engine::launch_app_disarm_x10 = 50u;
+        snap.rpm_x10 = 50000u;  // 5000 > 4500 → cut
+        sens.app_pct_x10 = 800u;  // armed
+        out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.launch_active, 1u, "launch active when armed + APP high");
+        CHECK_TRUE((out.limp_reason & TORQUE_ACTIVE_LAUNCH) != 0u, "ACTIVE_LAUNCH flag");
+        CHECK_TRUE(out.etb_target_pct_x10 <= 600u, "launch caps ETB ≤ launch_etb");
+        // Disarm
+        sens.app_pct_x10 = 20u;
+        out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.launch_active, 0u, "launch disarms when APP low");
+        ems::engine::torque_launch_force_enable(0u);
+        snap.rpm_x10 = 15000u;
+        sens.app_pct_x10 = 500u;
+    }
+
+    // ── Traction control (external slip) ────────────────────────────────
+    section("torque_manager: TC external slip reduces ETB + spark retard");
+    {
+        ems::engine::torque_manager_reset();
+        etb_cal_valid = 1u;
+        ems::engine::tc_enable = 1u;
+        ems::engine::tc_max_reduction_pct_x10 = 800u;
+        ems::engine::tc_spark_retard_max_deg = 12u;
+        ems::engine::tc_reduction_rate_x10 = 10000u;  // fast slew for test
+        sens.app_pct_x10 = 1000u;
+        snap.rpm_x10 = 30000u;
+        // Seed prev rpm then apply slip
+        (void)ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        ems::engine::torque_tc_set_external_slip_pct_x10(500u);  // 50% slip
+        // Several ticks to slew reduction up
+        for (int i = 0; i < 20; ++i) {
+            out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        }
+        CHECK_TRUE(out.tc_active != 0u, "TC active with external slip");
+        CHECK_TRUE(out.tc_reduction_pct_x10 > 0u, "TC reduction > 0");
+        CHECK_TRUE(out.etb_target_pct_x10 < 1000u, "TC reduced ETB below WOT");
+        CHECK_TRUE(out.spark_retard_deg > 0, "TC applies spark retard");
+        ems::engine::torque_tc_clear_external_slip();
+        ems::engine::tc_enable = 0u;
+        for (int i = 0; i < 50; ++i) {
+            out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        }
+        CHECK_EQ(out.tc_reduction_pct_x10, 0u, "TC clears after slip removed");
+        snap.rpm_x10 = 15000u;
+        sens.app_pct_x10 = 500u;
+    }
+
+    // ── Traction control from CAN wheel vs vehicle speed ────────────────
+    section("torque_manager: TC slip from CAN wheel speed");
+    {
+        ems::engine::torque_manager_reset();
+        etb_cal_valid = 1u;
+        ems::engine::tc_enable = 1u;
+        ems::engine::tc_max_reduction_pct_x10 = 800u;
+        ems::engine::tc_spark_retard_max_deg = 12u;
+        ems::engine::tc_reduction_rate_x10 = 10000u;
+        ems::engine::tc_app_min_x10 = 100u;
+        ems::engine::tc_rpm_min_x10 = 10000u;
+
+        // Frame 0x250: vehicle km/h LE u16 @0, driven wheel LE u16 @2
+        ems::app::CanSignalDef veh = {};
+        veh.id = 0x250u;
+        veh.byte_lo = 0u;
+        veh.byte_hi = 1u;
+        veh.shift_right = 0u;
+        veh.mask = 0xFFFFu;
+        veh.timeout_ms = 0u;  // no timeout (host millis is static)
+        ems::app::CanSignalDef whl = veh;
+        whl.byte_lo = 2u;
+        whl.byte_hi = 3u;
+        ems::app::can_rx_map_set(ems::app::CanRxSignal::SPEED_KMH, veh);
+        ems::app::can_rx_map_set(ems::app::CanRxSignal::WHEEL_SPEED_KMH, whl);
+
+        // vehicle=50, wheel=80 → slip = 30/50 = 60%
+        const uint8_t payload[8] = {50u, 0u, 80u, 0u, 0u, 0u, 0u, 0u};
+        ems::app::can_rx_map_process(0x250u, payload, 8u, 1000u);
+
+        uint16_t v = 0u, w = 0u;
+        CHECK_TRUE(ems::app::can_rx_speed_kmh(v, 1000u), "CAN vehicle speed valid");
+        CHECK_TRUE(ems::app::can_rx_wheel_speed_kmh(w, 1000u), "CAN wheel speed valid");
+        CHECK_EQ(v, 50u, "vehicle=50 km/h");
+        CHECK_EQ(w, 80u, "wheel=80 km/h");
+
+        ems::drv::CkpSnapshot snap{};
+        snap.rpm_x10 = 30000u;
+        ems::drv::SensorData sens{};
+        sens.app_pct_x10 = 800u;
+        for (int i = 0; i < 20; ++i) {
+            out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        }
+        CHECK_EQ(ems::engine::torque_manager_test_get_vehicle_kmh(), 50u, "TM latched vehicle");
+        CHECK_EQ(ems::engine::torque_manager_test_get_wheel_kmh(), 80u, "TM latched wheel");
+        CHECK_TRUE(out.tc_active != 0u, "TC active on CAN slip");
+        CHECK_TRUE(out.tc_reduction_pct_x10 > 0u, "TC reduction from CAN slip");
+        CHECK_TRUE(out.etb_target_pct_x10 < 1000u, "ETB cut under CAN slip");
+
+        // Clear map (disable signals)
+        ems::app::CanSignalDef off = {};
+        ems::app::can_rx_map_set(ems::app::CanRxSignal::SPEED_KMH, off);
+        ems::app::can_rx_map_set(ems::app::CanRxSignal::WHEEL_SPEED_KMH, off);
+        ems::engine::tc_enable = 0u;
+        ems::engine::torque_manager_reset();
+    }
+
+    // page0 can_rx_map round-trip
+    section("page0: can_rx_map serialize/apply");
+    {
+        ems::app::CanSignalDef def = {};
+        def.id = 0x321u;
+        def.byte_lo = 2u;
+        def.byte_hi = 3u;
+        def.shift_right = 0u;
+        def.mask = 0xFFFFu;
+        def.offset = 0;
+        def.timeout_ms = 400u;
+        ems::app::can_rx_map_set(ems::app::CanRxSignal::WHEEL_SPEED_KMH, def);
+        uint8_t page[512] = {};
+        ems::app::can_rx_map_serialize_to_page0(page, sizeof(page));
+        ems::app::CanSignalDef off = {};
+        ems::app::can_rx_map_set(ems::app::CanRxSignal::WHEEL_SPEED_KMH, off);
+        ems::app::can_rx_map_apply_from_page0(page, sizeof(page));
+        auto got = ems::app::can_rx_map_get(ems::app::CanRxSignal::WHEEL_SPEED_KMH);
+        CHECK_EQ(got.id, 0x321u, "apply wheel id");
+        CHECK_EQ(got.byte_lo, 2u, "apply wheel byte_lo");
+        CHECK_EQ(got.mask, 0xFFFFu, "apply wheel mask");
+        CHECK_EQ(got.timeout_ms, 400u, "apply wheel timeout");
+        ems::app::can_rx_map_set(ems::app::CanRxSignal::WHEEL_SPEED_KMH, off);
+    }
+}
+
+// page0 layout v5: launch/TC serialize ↔ apply round-trip + clamps
+static void test_launch_tc_page0_roundtrip(void) {
+    section("page0 v5: launch_tc serialize/apply round-trip");
+
+    // Save defaults so other tests are not polluted
+    const uint8_t  s_le  = launch_enable;
+    const uint16_t s_lr  = launch_rpm_x10;
+    const uint16_t s_let = launch_etb_pct_x10;
+    const uint16_t s_la  = launch_app_arm_x10;
+    const uint16_t s_ld  = launch_app_disarm_x10;
+    const uint16_t s_lh  = launch_rpm_hyst_x10;
+    const uint8_t  s_te  = tc_enable;
+    const uint16_t s_ta  = tc_app_min_x10;
+    const uint16_t s_tr  = tc_rpm_min_x10;
+    const uint16_t s_td  = tc_rpm_dot_thresh;
+    const uint16_t s_tm  = tc_max_reduction_pct_x10;
+    const uint16_t s_ts  = tc_spark_retard_max_deg;
+    const uint16_t s_tt  = tc_reduction_rate_x10;
+
+    // Distinct non-default values
+    launch_enable           = 1u;
+    launch_rpm_x10          = 38000u;  // 3800 RPM
+    launch_etb_pct_x10      = 450u;
+    launch_app_arm_x10      = 350u;
+    launch_app_disarm_x10   = 80u;
+    launch_rpm_hyst_x10     = 150u;
+    tc_enable               = 1u;
+    tc_app_min_x10          = 400u;
+    tc_rpm_min_x10          = 25000u;
+    tc_rpm_dot_thresh       = 9000u;
+    tc_max_reduction_pct_x10 = 700u;
+    tc_spark_retard_max_deg = 8u;
+    tc_reduction_rate_x10   = 600u;
+
+    uint8_t page[512] = {};
+    launch_tc_serialize_to_page0(page, sizeof(page));
+    CHECK_EQ(page[191], 1u, "wire: launch_enable @191");
+    uint16_t wire_rpm = 0u;
+    std::memcpy(&wire_rpm, page + 192, 2u);
+    CHECK_EQ(wire_rpm, 38000u, "wire: launch_rpm @192");
+    CHECK_EQ(page[202], 1u, "wire: tc_enable @202");
+    CHECK_EQ(page[203], 0u, "wire: pad @203");
+    uint16_t wire_rate = 0u;
+    std::memcpy(&wire_rate, page + 214, 2u);
+    CHECK_EQ(wire_rate, 600u, "wire: tc_reduction_rate @214");
+
+    // Mutate RAM then re-apply from wire → restore
+    launch_enable = 0u;
+    launch_rpm_x10 = 1000u;
+    tc_enable = 0u;
+    tc_spark_retard_max_deg = 1u;
+    launch_tc_apply_from_page0(page, sizeof(page));
+    CHECK_EQ(launch_enable, 1u, "apply: launch_enable");
+    CHECK_EQ(launch_rpm_x10, 38000u, "apply: launch_rpm");
+    CHECK_EQ(launch_etb_pct_x10, 450u, "apply: launch_etb");
+    CHECK_EQ(launch_app_arm_x10, 350u, "apply: arm");
+    CHECK_EQ(launch_app_disarm_x10, 80u, "apply: disarm");
+    CHECK_EQ(launch_rpm_hyst_x10, 150u, "apply: hyst");
+    CHECK_EQ(tc_enable, 1u, "apply: tc_enable");
+    CHECK_EQ(tc_app_min_x10, 400u, "apply: tc_app_min");
+    CHECK_EQ(tc_rpm_min_x10, 25000u, "apply: tc_rpm_min");
+    CHECK_EQ(tc_rpm_dot_thresh, 9000u, "apply: rpm_dot");
+    CHECK_EQ(tc_max_reduction_pct_x10, 700u, "apply: max_red");
+    CHECK_EQ(tc_spark_retard_max_deg, 8u, "apply: spark");
+    CHECK_EQ(tc_reduction_rate_x10, 600u, "apply: rate");
+
+    // Short buffer → no-op
+    launch_enable = 0u;
+    launch_tc_apply_from_page0(page, 200u);  // < 191+25
+    CHECK_EQ(launch_enable, 0u, "short buffer: apply no-op");
+    launch_tc_serialize_to_page0(nullptr, 512u);  // null guard
+
+    // Clamps: inverted arm/disarm, OOB etb, OOB spark
+    std::memset(page, 0, sizeof(page));
+    page[191] = 1u;
+    uint16_t v = 50000u;  // 5000 RPM ok
+    std::memcpy(page + 192, &v, 2u);
+    v = 2000u;  // etb 200% → clamp 1000
+    std::memcpy(page + 194, &v, 2u);
+    v = 50u;    // arm 5%
+    std::memcpy(page + 196, &v, 2u);
+    v = 300u;   // disarm 30% > arm → swap
+    std::memcpy(page + 198, &v, 2u);
+    v = 100u;
+    std::memcpy(page + 200, &v, 2u);
+    page[202] = 1u;
+    v = 100u;
+    std::memcpy(page + 204, &v, 2u);
+    v = 20000u;
+    std::memcpy(page + 206, &v, 2u);
+    v = 8000u;
+    std::memcpy(page + 208, &v, 2u);
+    v = 1500u;  // max_red > 1000
+    std::memcpy(page + 210, &v, 2u);
+    v = 99u;    // spark > 30
+    std::memcpy(page + 212, &v, 2u);
+    v = 400u;
+    std::memcpy(page + 214, &v, 2u);
+    launch_tc_apply_from_page0(page, sizeof(page));
+    CHECK_EQ(launch_etb_pct_x10, 1000u, "clamp: etb ≤ 100%");
+    CHECK_TRUE(launch_app_arm_x10 >= launch_app_disarm_x10, "clamp: arm ≥ disarm");
+    CHECK_EQ(launch_app_arm_x10, 300u, "clamp: swapped arm=300");
+    CHECK_EQ(launch_app_disarm_x10, 50u, "clamp: swapped disarm=50");
+    CHECK_EQ(tc_max_reduction_pct_x10, 1000u, "clamp: max_red ≤ 100%");
+    CHECK_EQ(tc_spark_retard_max_deg, 30u, "clamp: spark ≤ 30°");
+
+    // Layout constants
+    CHECK_EQ(kLaunchTcPage0Off, 191u, "kLaunchTcPage0Off");
+    CHECK_EQ(kLaunchTcPage0Len, 25u, "kLaunchTcPage0Len");
+    CHECK_EQ(kCalLayoutVersion, 5u, "layout version 5");
+
+    // Restore
+    launch_enable = s_le;
+    launch_rpm_x10 = s_lr;
+    launch_etb_pct_x10 = s_let;
+    launch_app_arm_x10 = s_la;
+    launch_app_disarm_x10 = s_ld;
+    launch_rpm_hyst_x10 = s_lh;
+    tc_enable = s_te;
+    tc_app_min_x10 = s_ta;
+    tc_rpm_min_x10 = s_tr;
+    tc_rpm_dot_thresh = s_td;
+    tc_max_reduction_pct_x10 = s_tm;
+    tc_spark_retard_max_deg = s_ts;
+    tc_reduction_rate_x10 = s_tt;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2356,8 +2675,8 @@ static void test_ecu_sched_ccr_write(void) {
     ckp_reach_full_sync();  // angle table built at FULL_SYNC gap
 
     // Events fire when specific teeth match angle table entries — not at tooth 0.
-    // Fire a full revolution so at least one event tooth is hit.
-    for (uint32_t i = 0u; i < 58u; ++i) { ckp_fire(kNormalPeriod); }
+    // Fire 57 normals (tooth_index 1..57); 58 without gap would LOSS (no wrap).
+    for (uint32_t i = 0u; i < 57u; ++i) { ckp_fire(kNormalPeriod); }
     CHECK_TRUE(ecu_sched_test_get_evt_count() > 0u ||
                ecu_sched_test_get_tim5_ccr3() > 0u,
                "at least one event in TIM5 queue after full revolution");
@@ -2554,11 +2873,48 @@ static void test_ecu_sched_dwell_watchdog_fires(void) {
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u, "watchdog fires only once per arm");
 }
 
-static void test_ecu_sched_presync_table(void) {
-    section("ecu_sched: presync table built in HALF_SYNC at natural rev boundary");
+static void test_ecu_sched_inj_watchdog_fires(void) {
+    section("ecu_sched: injector open watchdog fires after timeout (lost INJ_OFF)");
 
-    // After HALF_SYNC, tooth_index advances 0..57. When tooth_index wraps 57→0,
-    // rev_boundary=1 with state=HALF_SYNC → calculate_presync_revolution fires.
+    // Force INJ HIGH without OFF (simulate queue drop of OFF). force_output path
+    // uses hard 36 ms timeout.
+    const uint32_t kNow = 5000u;
+    const uint32_t kHardTicks = (36000u * 125u) / 2u;  // 36 ms @ 62.5 MHz
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(kNow);
+    // test_pulse schedules OFF — fire raw force path via test pulse then clear OFF
+    // by advancing past OFF without dispatch: use pulse then wipe queue.
+    ecu_sched_test_pulse_inj(0u, 3000u);  // ON + OFF queued
+    // Drop OFF from queue by resetting event queue only, keep pin state via
+    // another open: re-force through pulse then zero events after arm.
+    // Simpler: pulse with PW, discard OFF by resetting CCR/queue after ON.
+    {
+        // Re-open: force via second pulse; then clear queue so OFF never runs.
+        ecu_sched_test_reset_ccr();
+        // Pin may be LOW after reset_ccr — re-open with pulse and immediately
+        // drop all events (lost OFF).
+        ecu_sched_test_set_tim5_cnt(kNow);
+        ecu_sched_test_pulse_inj(0u, 5000u);
+        // Wipe queue: OFF is gone, pin still HIGH from force_output.
+        ecu_sched_test_reset_ccr();
+    }
+    CHECK_EQ(ecu_sched_inj_watchdog_count(), 0u, "pre: inj wdog count=0");
+    ecu_sched_test_set_tim5_cnt(kNow + kHardTicks - 1u);
+    ecu_sched_inj_watchdog();
+    CHECK_EQ(ecu_sched_inj_watchdog_count(), 0u, "silent inside hard timeout");
+    ecu_sched_test_set_tim5_cnt(kNow + kHardTicks + 1u);
+    ecu_sched_inj_watchdog();
+    CHECK_EQ(ecu_sched_inj_watchdog_count(), 1u,
+             "inj watchdog fires: pin HIGH past hard timeout without OFF");
+    ecu_sched_inj_watchdog();
+    CHECK_EQ(ecu_sched_inj_watchdog_count(), 1u, "inj wdog fires once per open");
+}
+
+static void test_ecu_sched_presync_table(void) {
+    section("ecu_sched: presync table built at natural gap rev boundary (no CMP)");
+
+    // Rev boundary is tooth_index reset by an accepted gap (not a phantom wrap
+    // past 57). With no CMP, FULL_SYNC still uses presync / wasted builders.
     ecu_sched_test_reset();
     ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(10u);
@@ -2571,11 +2927,14 @@ static void test_ecu_sched_presync_table(void) {
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC");
 
-    // Fire 58 normal teeth: tooth_index 1..57, then wraps 57→0.
-    // At the wrap: prev_tooth=57≠0 → rev_boundary=1 → calculate_presync_revolution.
-    for (uint32_t i = 0u; i < 58u; ++i) { ckp_fire(kNormalPeriod); }
+    // 55+ normals then gap → FULL_SYNC, tooth_index=0, rev_boundary → presync table
+    // (cmp_confirms < 2 → wasted/presync path).
+    for (uint32_t i = 0u; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kGapPeriod);
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::FULL_SYNC), "post-gap: FULL_SYNC");
     const uint8_t tsz = ecu_sched_test_angle_table_size();
-    CHECK_TRUE(tsz > 0u, "presync angle table populated after HALF_SYNC rev boundary");
+    CHECK_TRUE(tsz > 0u, "presync angle table populated after gap rev boundary");
 
     // Presync events use ECU_PHASE_ANY (= 2) so they fire on every revolution
     bool found_any = false;
@@ -2656,7 +3015,7 @@ static void test_ckp_snap_fields(void) {
 }
 
 static void test_ckp_tooth_index_progression(void) {
-    section("ckp: tooth_index increments per normal tooth and wraps at 58");
+    section("ckp: tooth_index increments; missing gap at 58 → LOSS (no wrap re-fire)");
 
     g_ckp_cap = 0u;
     ckp_reach_full_sync();  // tooth_index=0 at FULL_SYNC gap
@@ -2672,14 +3031,15 @@ static void test_ckp_tooth_index_progression(void) {
     // Advance to tooth 57 (fires 55 more teeth: 2+55=57)
     for (uint32_t i = 0u; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
     CHECK_EQ(ckp_snapshot().tooth_index, 57u, "tooth_index=57 after 57 teeth");
-
-    // 58th tooth wraps to 0 (kRealTeethPerRev=58, 57=max, next=0)
-    ckp_fire(kNormalPeriod);
-    CHECK_EQ(ckp_snapshot().tooth_index, 0u, "tooth_index wraps 57→0 on 58th tooth");
-
-    // State still FULL_SYNC (tooth_count=58 < kMaxTeethBeforeLoss=63)
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
-             static_cast<uint8_t>(SyncState::FULL_SYNC), "FULL_SYNC maintained through wrap");
+             static_cast<uint8_t>(SyncState::FULL_SYNC), "FULL_SYNC at tooth 57");
+
+    // 58th normal without accepted gap must NOT wrap to 0 (would re-schedule
+    // teeth 0..N on a phantom second half-rev). Hardening: LOSS_OF_SYNC.
+    ckp_fire(kNormalPeriod);
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::LOSS_OF_SYNC),
+             "missing gap at tooth 58 → LOSS_OF_SYNC (no index wrap)");
 }
 
 static void test_ckp_phase_toggle(void) {
@@ -2692,26 +3052,26 @@ static void test_ckp_phase_toggle(void) {
     ckp_test_reset(); g_ckp_cap = 0u;
     ckp_reach_full_sync();
 
-    // First cam: s_prev_cmp_capture=0 → validation skipped → always accepted.
-    // Records cam1_ts for delta validation of subsequent edges.
-    const uint32_t cam1_ts = g_ckp_cap + kNormalPeriod * 58u;
-    cam_fire(cam1_ts);
-    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "first cam edge not a glitch");
+    // First cam: arms s_prev only. Second: temporal OK + cmp_phase_pending.
+    // Timestamps are absolute TIM5 capture values (not relative to g_ckp_cap alone).
+    const uint32_t cam_arm = g_ckp_cap + kNormalPeriod * 58u;
+    const uint32_t cam_ok1 = cam_arm + kNormalPeriod * 116u;
+    cam_fire(cam_arm);
+    cam_fire(cam_ok1);
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "first pair of cam edges not glitches");
     ckp_feed_n_then_gap(55u);  // gap applies pending CMP correction
-    // After CMP correction: phase_half = kCmpRefHalf = 0 → phase_A = true.
     CHECK_EQ(ckp_snapshot().phase_A, true, "first CMP corrects phase_A to kCmpRefHalf (true)");
 
-    // Second cam: delta = cam2_ts - cam1_ts = 116×kNP (2 crank revs = 720°).
-    // expected = 2×58×kNP = 1160000; tolerance ±25% → [870k, 1450k] ✓.
-    cam_fire(g_ckp_cap + kNormalPeriod * 116u);
-    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "second cam edge not a glitch");
-    ckp_feed_n_then_gap(55u);  // gap applies pending correction again
+    // Next validated cam: delta = 116× from last accepted (cam_ok1).
+    const uint32_t cam_ok2 = cam_ok1 + kNormalPeriod * 116u;
+    cam_fire(cam_ok2);
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "follow-up cam edge not a glitch");
+    ckp_feed_n_then_gap(55u);
     CHECK_EQ(ckp_snapshot().phase_A, true, "second CMP corrects phase_A to kCmpRefHalf (true)");
 
     // Glitch: delta from prev valid CMP is too small → rejected.
-    cam_fire(g_ckp_cap + 10u);  // delta << expected → glitch
+    cam_fire(cam_ok2 + 10u);
     CHECK_EQ(ckp_get_cmp_glitch_count(), 1u, "glitch cam edge counted");
-    // No cmp_phase_pending set → gap just does normal toggle.
     const bool phase_before = ckp_snapshot().phase_A;  // true
     ckp_feed_n_then_gap(55u);
     CHECK_EQ(ckp_snapshot().phase_A, !phase_before, "after glitch: phase_A toggles normally (no CMP correction)");
@@ -2951,17 +3311,20 @@ static void test_ecu_sched_wasted_to_sequential(void) {
     CHECK_EQ(ecu_sched_test_get_seq_revs(), 0u, "seq_revs=0 (ainda não sequencial)");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "is_sequential=0 sem CMP");
 
-    // 2) 1ª borda CMP (s_prev_cmp_capture=0 → salta validação) → cmp_confirms=1.
-    //    Ainda insuficiente para sequencial (gate exige >=2).
+    // 2) 1ª borda CMP: só arma s_prev (confirms=0). 2ª: 1.º confirm (ainda <2).
     cam_fire(g_ckp_cap);
-    CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "1ª borda CMP → cmp_confirms=1");
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "1ª borda CMP só arma timestamp");
     ckp_feed_n_then_gap(55u);
     ckp_feed_n_then_gap(55u);                     // +2 revs → g_ckp_cap += 116×período
+    cam_fire(g_ckp_cap);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "2ª borda → cmp_confirms=1");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "1 confirm insuficiente: continua wasted");
 
-    // 3) 2ª borda CMP: delta = 116×período = expected → validada → cmp_confirms=2.
+    // 3) 3ª borda CMP: delta = 116×período → cmp_confirms=2.
+    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(55u);
     cam_fire(g_ckp_cap);
-    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "2ª borda coerente → cmp_confirms=2");
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "3ª borda coerente → cmp_confirms=2");
     CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "nenhuma borda CMP rejeitada");
 
     // 4) Próximas fronteiras de revolução → gate abre → Calculate_Sequential_Cycle.
@@ -2980,49 +3343,53 @@ static void test_ecu_sched_wasted_to_sequential(void) {
 }
 
 // ── Revalidação CMP após perda de sync do CKP ───────────────────────────────
-// Perda de sync (gap prematuro) preserva a contagem interna do came, mas o
-// valor EXPORTADO é capado a 1: o resync não pode retomar sequencial com a
-// referência de fase antiga (phase_half pode ter caído na metade errada de
-// 720°). Só uma borda CMP fresca coerente — que também re-ancora a fase via
-// cmp_phase_pending — reabre o gate.
-// Timing: bordas de came a cada 2 revs (116×período, janela [90,150]); a borda
-// fresca pós-resync cai a 28+58+58 = 144×período, dentro da janela ±25%.
+// Perda de sync zera cmp_confirms (interno + export): exige 2 bordas CMP
+// frescas antes de reabrir sequencial (evita 1 borda reabrir com fase velha).
 static void test_ecu_sched_cmp_revalidation_after_sync_loss(void) {
-    section("ecu_sched: perda de sync fecha gate sequencial até borda CMP fresca");
+    section("ecu_sched: perda de sync fecha gate sequencial até 2 bordas CMP frescas");
     ecu_sched_test_reset();
     ems::engine::cmp_window_open_tooth  = 0u;
     ems::engine::cmp_window_close_tooth = 0u;
 
-    // 1) FULL_SYNC + 2 bordas CMP coerentes → sequencial.
+    // 1) FULL_SYNC + arm + 2 confirms → sequencial.
     ckp_reach_full_sync();
     ckp_feed_n_then_gap(55u);
-    cam_fire(g_ckp_cap);                          // 1ª borda (sem prev → aceita)
+    cam_fire(g_ckp_cap);                          // arma s_prev
     ckp_feed_n_then_gap(55u);
     ckp_feed_n_then_gap(55u);
-    cam_fire(g_ckp_cap);                          // 2ª borda, delta=116 ✓
-    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "2 bordas coerentes → cmp_confirms=2");
+    cam_fire(g_ckp_cap);                          // confirms=1
     ckp_feed_n_then_gap(55u);
     ckp_feed_n_then_gap(55u);
-    cam_fire(g_ckp_cap);                          // 3ª borda mantém cadência, delta=116 ✓
+    cam_fire(g_ckp_cap);                          // confirms=2
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "3 bordas (arm+2) → cmp_confirms=2");
+    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(55u);
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "sequencial activo antes da perda");
 
-    // 2) Gap prematuro (25 dentes) → LOSS_OF_SYNC; gate exportado capa a 1,
-    //    contagem interna preservada.
+    // 2) Gap prematuro → LOSS; confirms zerados (ambos os contadores).
     ckp_feed_n_then_gap(25u);
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::LOSS_OF_SYNC), "gap prematuro → LOSS_OF_SYNC");
-    CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "perda de sync: gate exportado capado a 1");
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "perda de sync: cmp_confirms=0");
 
-    // 3) Resync (LOSS→HALF→FULL) SEM borda de came fresca → wasted, não sequencial.
+    // 3) Resync SEM came fresco → wasted.
     ckp_feed_n_then_gap(55u);                     // LOSS → HALF_SYNC
     ckp_feed_n_then_gap(55u);                     // HALF → FULL_SYNC
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::FULL_SYNC), "resync completo");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "pós-resync sem came fresco: fica em wasted");
 
-    // 4) Borda CMP fresca coerente (delta=144 ✓, mesmo tooth_index) → gate reabre.
+    // 4) LOSS limpou s_prev → 1ª borda arma, 2ª/3ª confirmam.
     cam_fire(g_ckp_cap);
-    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "borda fresca restaura cmp_confirms=2");
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "1ª borda pós-LOSS só arma");
+    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(55u);
+    cam_fire(g_ckp_cap);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "2ª borda fresca → confirms=1");
+    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(55u);
+    cam_fire(g_ckp_cap);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "3ª borda fresca → confirms=2");
     ckp_feed_n_then_gap(55u);
     ckp_feed_n_then_gap(55u);
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "sequencial retomado após revalidação");
@@ -3039,13 +3406,19 @@ static void test_ecu_sched_noise_rejects_sequential(void) {
     ems::engine::cmp_window_close_tooth = 0u;
     ckp_reach_full_sync();                                   // FULL_SYNC, tooth 0
 
-    // Borda 1 no dente 5 → ancora a posição de referência (cmp_confirms=1).
+    // Borda 1 no dente 5 → só arma s_prev (confirms=0).
     for (uint32_t i = 0; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
     cam_fire(g_ckp_cap);
-    CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "1ª borda ancora posição (cmp_confirms=1)");
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "1ª borda só arma timestamp");
 
-    // Borda 2 ~2 revs depois mas noutro dente (25≠5): passa o gate temporal
-    // (~120 períodos, dentro de ±25%) mas falha o de posição → rejeitada.
+    // Borda 2 ~2 revs no mesmo dente 5 → 1.º confirm (ancora posição).
+    for (uint32_t i = 0; i < 50u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
+    ckp_feed_n_then_gap(55u);
+    for (uint32_t i = 0; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
+    cam_fire(g_ckp_cap);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "2ª borda coerente → confirms=1");
+
+    // Borda 3 noutro dente (25≠5): passa temporal, falha posição → confirms→0.
     for (uint32_t i = 0; i < 50u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
     ckp_feed_n_then_gap(55u);
     for (uint32_t i = 0; i < 25u; ++i) { ckp_fire(kNormalPeriod); }   // tooth 25
@@ -3076,10 +3449,12 @@ static void test_ecu_sched_recovers_after_fallback(void) {
     ems::engine::cmp_window_close_tooth = 0u;
     ckp_reach_full_sync();
 
-    // Entra em sequencial: 2 bordas coerentes no tooth 0.
-    cam_fire(g_ckp_cap);
+    // Entra em sequencial: arm + 2 confirms no tooth 0.
+    cam_fire(g_ckp_cap);                                      // arm
     ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
-    cam_fire(g_ckp_cap);
+    cam_fire(g_ckp_cap);                                      // confirms=1
+    ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
+    cam_fire(g_ckp_cap);                                      // confirms=2
     ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
     CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "pré: sequencial (cmp_confirms=2)");
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "pré: is_sequential=1");
@@ -3257,7 +3632,9 @@ static void test_ecu_sched_eoi_targeting(void) {
     ecu_sched_set_eoi_lead_deg(60u);
     ckp_test_reset(); g_ckp_cap = 0u;
     ckp_feed_n_then_gap(55u);   // HALF_SYNC
-    for (uint32_t i = 0u; i < 58u; ++i) { ckp_fire(kNormalPeriod); }  // rev boundary
+    // Gap rev boundary (no phantom wrap): FULL_SYNC without CMP → presync table
+    for (uint32_t i = 0u; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kGapPeriod);
     CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_OFF, &t_off, &f_off, &p_off), 1u,
              "presync: INJ1 OFF presente");
     CHECK_EQ(t_off, 50u, "presync: INJ_OFF em tooth 50 (EOI=300° na janela 360°)");
@@ -3280,7 +3657,8 @@ static void test_ecu_sched_eoi_targeting(void) {
     ecu_sched_set_inj_pw_ticks(125000u);
     ckp_test_reset(); g_ckp_cap = 0u;
     ckp_feed_n_then_gap(55u);   // HALF_SYNC
-    for (uint32_t i = 0u; i < 58u; ++i) { ckp_fire(kNormalPeriod); }  // rev boundary
+    for (uint32_t i = 0u; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kGapPeriod);  // gap rev boundary → presync table (no CMP)
     CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_OFF, &t_off, &f_off, &p_off), 1u,
              "presync 355°: INJ1 OFF presente");
     CHECK_EQ(t_off, 0u,  "presync 355°: INJ_OFF em tooth 0 (EOI=5°)");
@@ -3539,6 +3917,22 @@ static void test_map_estimator_all(void) {
     // rpm=0
     map_estimator_update(100u, 500u, 10u, 0u, 220);
     CHECK_TRUE(true, "rpm=0: no crash");
+
+    section("map_estimator: sensor inválido → model_only estável");
+    map_estimator_init();
+    (void)map_estimator_update(0u, 500u, 10u, 30000u, 220, true);
+    CHECK_EQ(map_estimator_get_state().estimator_mode, 2u,
+             "sensor 0 bar → estimator_mode=2 (model_only)");
+    (void)map_estimator_update(5u, 500u, 10u, 30000u, 220, true);
+    CHECK_EQ(map_estimator_get_state().estimator_mode, 2u,
+             "sensor inválido mantém model_only (não sobrescreve)");
+
+    section("map_estimator: sensor_valid=false (MAP fault) ignora fallback 1 bar");
+    map_estimator_init();
+    const uint16_t est_fault = map_estimator_update(101u, 500u, 10u, 30000u, 220, false);
+    CHECK_EQ(map_estimator_get_state().estimator_mode, 2u,
+             "MAP fault flag → model_only mesmo com 1.01 bar no range");
+    CHECK_TRUE(est_fault >= 10u && est_fault <= 300u, "estimate still in range");
 
     section("map_estimator: modelo termodinâmico — set_model_params");
     ManifoldModelParams mp{};
@@ -3830,10 +4224,10 @@ static void test_hal_flash_all(void) {
         CHECK_TRUE(true, "save/load_calibration: graceful result");
     }
 
-    section("hal/flash: gate de layout do setor adaptativo (magic LTF2)");
+    section("hal/flash: gate de layout do setor adaptativo (magic LTF3 + CRC)");
     {
-        // Imagem sintética: setor apagado (0xFF) OU layout antigo (sem magic
-        // na posição atual) → inválido; magic presente → válido.
+        // Imagem sintética: setor apagado / sem magic / CRC errado → inválido;
+        // magic LTF3 + CRC dos mapas → válido.
         static uint8_t sector[8192];
         memset(sector, 0xFF, sizeof(sector));
         CHECK_FALSE(nvm_adaptive_sector_valid(sector),
@@ -3841,10 +4235,21 @@ static void test_hal_flash_all(void) {
         memset(sector, 0, sizeof(sector));
         CHECK_FALSE(nvm_adaptive_sector_valid(sector),
                     "layout antigo (sem magic) → inválido");
+        // Magic alone (LTF2-style) is no longer enough — need maps CRC.
         memcpy(sector + kNvmOffLayoutMagic, &kNvmLayoutMagic,
                     sizeof(kNvmLayoutMagic));
+        CHECK_FALSE(nvm_adaptive_sector_valid(sector),
+                    "magic sem CRC → inválido");
+        const uint32_t crc = nvm_adaptive_maps_crc(sector);
+        memcpy(sector + kNvmOffMapsCrc, &crc, sizeof(crc));
         CHECK_TRUE(nvm_adaptive_sector_valid(sector),
-                   "magic presente → layout válido");
+                   "magic LTF3 + CRC → layout válido");
+        // Bit-rot: flip one payload byte → CRC fails
+        sector[0] ^= 0x01u;
+        CHECK_FALSE(nvm_adaptive_sector_valid(sector),
+                    "payload corrompido → CRC rejeita");
+        sector[0] ^= 0x01u;  // restore
+        CHECK_TRUE(nvm_adaptive_sector_valid(sector), "restaurado → válido");
         CHECK_FALSE(nvm_adaptive_sector_valid(nullptr), "nullptr → inválido");
         // Coerência do layout derivado: regiões não podem sobrepor-se
         CHECK_TRUE(kNvmOffKnock >= kNvmLtftDim * kNvmLtftDim,
@@ -3852,7 +4257,8 @@ static void test_hal_flash_all(void) {
         CHECK_TRUE(kNvmOffLayoutMagic >=
                        kNvmOffLtftAdd + kNvmLtftAddDim * kNvmLtftAddDim,
                    "magic após LTFT-add");
-        CHECK_TRUE(kNvmSeedOffset >= kNvmOffLayoutMagic + 4u, "seed após magic");
+        CHECK_TRUE(kNvmOffMapsCrc == kNvmOffLayoutMagic + 4u, "CRC após magic");
+        CHECK_TRUE(kNvmSeedOffset >= kNvmOffMapsCrc + 4u, "seed após CRC");
         CHECK_TRUE((kNvmOffLayoutMagic % 16u) == 0u, "magic 16-alinhado");
         CHECK_TRUE((kNvmSeedOffset % 16u) == 0u, "seed 16-alinhado");
     }
@@ -4292,20 +4698,21 @@ static void test_math_production_tables(void) {
     CHECK_EQ(dwell_ms_x10_from_vbatt_rpm(12000u, 70000u), 23u,
              "dwell @ 12V, 7000 RPM = 23 x10 (0.78\u00d7 factor alto RPM)");
 
-    section("MATH: calc_ae_pw_us formula exacta");
-    // Input: tps_now=800, tps_prev=500, dt=10ms, clt=800.
-    // delta_tps_x10 = 300;  tpsdot_x10 = 300/10 = 30
-    // ae_tpsdot_axis_x10={5,20,50,100}: tpsdot=30 entre [1]=20 e [2]=50
-    //   frac = (30-20)\u00d7256/(50-20) = 2560/30 = 85
-    //   base_pw = lerp(800,1500,85) = 800 + 700\u00d785/256 = 800+232 = 1032
-    // ae_clt_corr_axis_x10={-400,-100,0,200,400,700,900,1100}
-    //   clt=800: bucket=5 (700<800<900) → ae_clt_sens[5]=6
-    // ae_pw = 1032 \u00d7 6 / 8 = 6192/8 = 774
+    section("MATH: calc_ae_pw_from_tpsdot formula exacta");
+    // tpsdot_x10=30 (%/s×10) on axis {5,20,50,100}: between 20 and 50
+    //   frac = (30-20)×256/(50-20) = 85
+    //   base_pw = lerp(800,1500,85) = 1032
+    // clt=800 → bucket 5 → ae_clt_sens[5]=6 → 1032×6/8 = 774
     fuel_reset_adaptives();
     fuel_ae_set_threshold(10u);
     fuel_ae_set_taper(4u);
-    CHECK_EQ(calc_ae_pw_us(800u, 500u, 10u, 800), 774,
-             "calc_ae_pw_us(tpsdot=30,clt=800): 1032\u00d76/8=774\u00b5s");
+    CHECK_EQ(calc_ae_pw_from_tpsdot(30, 800), 774,
+             "calc_ae_pw_from_tpsdot(30,clt=800): 1032×6/8=774µs");
+    // calc_ae_pw_us: delta 300 in 10ms → tpsdot = 300×1000/10 = 30000 → clamp 1000
+    fuel_reset_adaptives();
+    fuel_ae_set_threshold(10u);
+    CHECK_TRUE(calc_ae_pw_us(800u, 500u, 10u, 800) > 0,
+               "calc_ae_pw_us large step → ae > 0 (tpsdot in %/s×10)");
 }
 
 static void test_math_misfire_threshold(void) {
@@ -4474,6 +4881,7 @@ static void test_trigger_offset(void) {
 #include <cstring>
 
 #include "app/ui_protocol.h"
+#include "app/status_bits.h"
 #include "hal/crc32.h"
 
 static void ui_feed(const uint8_t* data, uint16_t n) {
@@ -4994,6 +5402,92 @@ static void test_ts_envelope_canid_forms(void) {
                "och via 'r' canId+page3+off0+count66 → 66 bytes");
 }
 
+// OCH page3: status bits 13/14 + tcReduction/spark @ reserved[31..]
+static void test_och_launch_tc_status(void) {
+    section("OCH: launch/TC status bits + reduction scalars");
+    ems::app::ui_test_reset();
+    ems::engine::torque_manager_reset();
+    etb_cal_valid = 1u;
+    sensor_setup();
+    sensors_init();
+    {
+        ems::drv::CkpSnapshot snap{};
+        snap.tooth_period_ns = 160000u;
+        snap.rpm_x10 = 62500u;
+        for (int i = 0; i < 5; ++i) { sensors_on_tooth(snap); }
+        sensors_test_tick_100ms();
+    }
+
+    // Idle latches → bits clear
+    {
+        const uint8_t och[7] = {'r', 0x00u, 0x03u, 0x00u, 0x00u, 0x56u, 0x00u};  // 86B
+        EnvResp r = env_txn(och, 7u);
+        CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u && r.len == 86u,
+                   "och 86B OK");
+        uint16_t st = 0u;
+        std::memcpy(&st, r.data + 12, 2u);
+        CHECK_TRUE((st & ems::app::STATUS_LAUNCH_ACTIVE) == 0u, "no launch bit idle");
+        CHECK_TRUE((st & ems::app::STATUS_TC_ACTIVE) == 0u, "no TC bit idle");
+        uint16_t tcr = 0u;
+        std::memcpy(&tcr, r.data + 45, 2u);
+        CHECK_EQ(tcr, 0u, "tcReduction=0 idle");
+        CHECK_EQ(r.data[47], 0u, "spark retard=0 idle");
+    }
+
+    // Arm launch → STATUS_LAUNCH_ACTIVE
+    ems::engine::torque_launch_force_enable(1u);
+    ems::engine::launch_rpm_x10 = 45000u;
+    ems::engine::launch_etb_pct_x10 = 600u;
+    ems::engine::launch_app_arm_x10 = 200u;
+    ems::engine::launch_app_disarm_x10 = 50u;
+    {
+        ems::drv::CkpSnapshot snap{};
+        snap.rpm_x10 = 50000u;
+        ems::drv::SensorData sens{};
+        sens.app_pct_x10 = 800u;
+        (void)ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(ems::engine::torque_manager_test_get_launch_active(), 1u, "launch latched");
+        const uint8_t och[7] = {'r', 0x00u, 0x03u, 0x00u, 0x00u, 0x56u, 0x00u};
+        EnvResp r = env_txn(och, 7u);
+        uint16_t st = 0u;
+        std::memcpy(&st, r.data + 12, 2u);
+        CHECK_TRUE((st & ems::app::STATUS_LAUNCH_ACTIVE) != 0u, "STATUS_LAUNCH_ACTIVE set");
+    }
+    ems::engine::torque_launch_force_enable(0u);
+    ems::engine::torque_manager_reset();
+
+    // External slip TC → STATUS_TC_ACTIVE + reduction scalar
+    ems::engine::tc_enable = 1u;
+    ems::engine::tc_max_reduction_pct_x10 = 800u;
+    ems::engine::tc_spark_retard_max_deg = 12u;
+    ems::engine::tc_reduction_rate_x10 = 10000u;
+    {
+        ems::drv::CkpSnapshot snap{};
+        snap.rpm_x10 = 30000u;
+        ems::drv::SensorData sens{};
+        sens.app_pct_x10 = 1000u;
+        (void)ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        ems::engine::torque_tc_set_external_slip_pct_x10(500u);
+        for (int i = 0; i < 20; ++i) {
+            (void)ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        }
+        CHECK_TRUE(ems::engine::torque_manager_test_get_tc_reduction() > 0u, "TC latched >0");
+        const uint8_t och[7] = {'r', 0x00u, 0x03u, 0x00u, 0x00u, 0x56u, 0x00u};
+        EnvResp r = env_txn(och, 7u);
+        uint16_t st = 0u;
+        std::memcpy(&st, r.data + 12, 2u);
+        CHECK_TRUE((st & ems::app::STATUS_TC_ACTIVE) != 0u, "STATUS_TC_ACTIVE set");
+        uint16_t tcr = 0u;
+        std::memcpy(&tcr, r.data + 45, 2u);
+        CHECK_EQ(tcr, ems::engine::torque_manager_test_get_tc_reduction(),
+                 "och tcReduction matches latch");
+        CHECK_TRUE(r.data[47] > 0u, "och torqueSparkRetard > 0 under TC");
+    }
+    ems::engine::torque_tc_clear_external_slip();
+    ems::engine::tc_enable = 0u;
+    ems::engine::torque_manager_reset();
+}
+
 static void test_ts_envelope_signature_via_r(void) {
     section("envelope TS: 'r' page 0x0F → assinatura (convenção Comm Manager)");
     ems::app::ui_test_reset();
@@ -5323,6 +5817,7 @@ int main(void) {
     // ── Torque Manager C++ ns ──────────────────────────────────────────────
     printf("\n=== TORQUE MANAGER (C++ ns) ===");
     test_torque_manager_cpp_update();
+    test_launch_tc_page0_roundtrip();
 
     // ── CKP — Segunda Fase ───────────────────────────────────────────────────
     printf("\n=== CKP (fase 2) ===");
@@ -5414,6 +5909,7 @@ int main(void) {
     test_ecu_sched_golden_seq_angle_table_size();
     test_ecu_sched_golden_dispatch_identity();
     test_ecu_sched_dwell_watchdog_fires();
+    test_ecu_sched_inj_watchdog_fires();
     test_ecu_sched_presync_table();
 
     // ── VERIFICAÇÃO MATEMÁTICA ─────────────────────────────────────────────
@@ -5447,6 +5943,7 @@ int main(void) {
     test_ts_envelope_burn_gate();
     test_ts_axes_page();
     test_ts_envelope_canid_forms();
+    test_och_launch_tc_status();
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();
     test_adaptives_reset_cmd_z();

@@ -97,7 +97,8 @@ int16_t calc_total_advance(int16_t base_advance_deg,
         + corr.clt_deg
         + corr.idle_spark_deg
         - corr.knock_retard_deg
-        - corr.antijerk_retard_deg;
+        - corr.antijerk_retard_deg
+        - corr.torque_retard_deg;
     return clamp_advance_deg(static_cast<int16_t>(
         total < -32768 ? -32768 : total > 32767 ? 32767 : total));
 }

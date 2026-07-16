@@ -55,6 +55,8 @@ STATUS_BITS = {
     "TLE8888_FAULT":    0x0400,  # bit 10
     "IGN_SEQUENTIAL":   0x0800,  # bit 11 — 1=sequencial, 0=wasted-spark (presync)
     "REV_LIMIT":        0x1000,  # bit 12 — fuel cut active
+    "LAUNCH_ACTIVE":    0x2000,  # bit 13 — launch control holding
+    "TC_ACTIVE":        0x4000,  # bit 14 — traction control reducing torque
 }
 
 
@@ -80,7 +82,8 @@ class RealtimeData:
     seed_confirmed: int
     seed_rejected: int
     sync_state: int
-    # reserved[31]: was IVC clamps (always 0); not exposed
+    tc_reduction_pct: float   # 0–100 % throttle cut from TC (reserved[31..32])
+    torque_spark_retard_deg: int  # 0–30° retard from TC/launch (reserved[33])
     loop2ms_last_us: int
     loop2ms_max_us: int
     an1_raw: int      # APP1 (pedal 1) ADC bruto
@@ -144,7 +147,9 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         seed_rejected=struct.unpack_from("<I", r, 26)[0],
         sync_state=r[30] & 0x0F,
         inj_mode=r[30] >> 4,
-        # r+31 was IVC clamp u32 — reserved, ignored
+        # r+31..34: tc_reduction_pct_x10 (u16) + spark_retard (u8) + pad
+        tc_reduction_pct=struct.unpack_from("<H", r, 31)[0] / 10.0,
+        torque_spark_retard_deg=r[33],
         loop2ms_last_us=struct.unpack_from("<I", r, 35)[0],
         loop2ms_max_us=struct.unpack_from("<I", r, 39)[0],
         an1_raw=struct.unpack_from("<H", r, 43)[0],
@@ -639,14 +644,20 @@ def encode_pedal_maps(maps: list[list[float]]) -> bytes:
 
 
 # ── CAN RX Map ────────────────────────────────────────────────────────────────
-# Configuração RAM-only (sem NVM por enquanto); enviada ao firmware via protocolo
-# futuro. Armazenada no servidor e exposta ao dashboard via REST.
+# page0 216–245: 3 signals × 10 B (can_rx_map.h). Dash mirrors + writes FW.
 
-CAN_RX_SIGNALS = ["GEAR", "SPEED_KMH"]
+CAN_RX_SIGNALS = ["GEAR", "SPEED_KMH", "WHEEL_SPEED_KMH"]
+# Offsets match firmware kCanRxMapPage0Off + i * 12
+CAN_RX_PAGE0_OFF = {
+    "GEAR":            216,
+    "SPEED_KMH":       228,
+    "WHEEL_SPEED_KMH": 240,
+}
 
 CAN_SIGNAL_DEFAULTS = {
-    "GEAR":      {"id": 0, "byte_lo": 0, "byte_hi": 255, "shift_right": 0, "mask": 255, "offset": 0, "timeout_ms": 500},
-    "SPEED_KMH": {"id": 0, "byte_lo": 0, "byte_hi": 255, "shift_right": 0, "mask": 255, "offset": 0, "timeout_ms": 500},
+    "GEAR":            {"id": 0, "byte_lo": 0, "byte_hi": 255, "shift_right": 0, "mask": 65535, "offset": 0, "timeout_ms": 500},
+    "SPEED_KMH":       {"id": 0, "byte_lo": 0, "byte_hi": 255, "shift_right": 0, "mask": 65535, "offset": 0, "timeout_ms": 500},
+    "WHEEL_SPEED_KMH": {"id": 0, "byte_lo": 0, "byte_hi": 255, "shift_right": 0, "mask": 65535, "offset": 0, "timeout_ms": 500},
 }
 
 # Estado em memória (o servidor é single-process)
@@ -661,6 +672,43 @@ def can_rx_map_set(signal: str, fields: dict) -> None:
     for k, v in fields.items():
         if k in _can_rx_map[signal]:
             _can_rx_map[signal][k] = int(v)
+
+def can_rx_map_pack_signal(signal: str) -> bytes:
+    """12-byte LE wire blob for one CanSignalDef."""
+    if signal not in _can_rx_map:
+        raise ValueError(f"sinal desconhecido: {signal}")
+    d = _can_rx_map[signal]
+    return struct.pack(
+        "<HBBBxHhH",
+        int(d["id"]) & 0x7FF,
+        int(d["byte_lo"]) & 0xFF,
+        int(d["byte_hi"]) & 0xFF,
+        int(d["shift_right"]) & 0xFF,
+        # pad byte inserted by 'x'
+        int(d["mask"]) & 0xFFFF,
+        int(d["offset"]),
+        int(d["timeout_ms"]) & 0xFFFF,
+    )
+
+def can_rx_map_unpack_signal(blob: bytes) -> dict:
+    if len(blob) < 12:
+        raise ValueError("can_rx signal wire needs 12 bytes")
+    id_, blo, bhi, sh, mask, off, to = struct.unpack_from("<HBBBxHhH", blob, 0)
+    return {
+        "id": id_ & 0x7FF,
+        "byte_lo": blo,
+        "byte_hi": bhi,
+        "shift_right": sh,
+        "mask": mask & 0xFFFF,
+        "offset": off,
+        "timeout_ms": to & 0xFFFF,
+    }
+
+def can_rx_map_from_page0(buf: bytes) -> None:
+    """Load server-side map from page0 RAM blob."""
+    for sig, off in CAN_RX_PAGE0_OFF.items():
+        if len(buf) >= off + 12:
+            _can_rx_map[sig] = can_rx_map_unpack_signal(buf[off:off + 12])
 
 
 def _apply_scale(vals: list, scale: float) -> list:

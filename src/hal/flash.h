@@ -11,21 +11,28 @@ namespace ems::hal {
 constexpr uint8_t kNvmLtftDim    = 20u;
 constexpr uint8_t kNvmLtftAddDim = (kNvmLtftDim + 1u) / 2u;
 
-// ── Layout do Setor 0 (LTFT-mult + knock + LTFT-add + magic + seed) ─────────
+// ── Layout do Setor 0 (LTFT-mult + knock + LTFT-add + magic + maps CRC + seed) ─
 // Offsets derivados das dimensões; magic e seed alinhados a 16 bytes
-// (quad-word de flash). Mudar kNvmLtftDim muda o layout — o magic invalida
-// setores com layout antigo no boot (mapas zerados e regravados no flush).
+// (quad-word de flash). Mudar kNvmLtftDim ou o magic invalida o setor no boot
+// (mapas zerados e regravados no flush).
+//
+//   [0 .. magic)     payload (LTFT + knock + LTFT-add)
+//   magic @ aligned  "LTF3"
+//   maps_crc @ +4    CRC-32 ISO-HDLC of payload [0 .. magic)
+//   seed @ magic+16  RuntimeSyncSeed
 constexpr uint32_t kNvmOffLtft        = 0u;
 constexpr uint32_t kNvmOffKnock       = static_cast<uint32_t>(kNvmLtftDim) * kNvmLtftDim;
 constexpr uint32_t kNvmOffLtftAdd     = kNvmOffKnock + 64u;  // knock fixo 8×8
 constexpr uint32_t kNvmOffLayoutMagic =
     (kNvmOffLtftAdd + static_cast<uint32_t>(kNvmLtftAddDim) * kNvmLtftAddDim + 15u) & ~15u;
-constexpr uint32_t kNvmLayoutMagic    = 0x4C544632u;  // "LTF2"
+constexpr uint32_t kNvmLayoutMagic    = 0x4C544633u;  // "LTF3" (CRC-protected maps)
+constexpr uint32_t kNvmOffMapsCrc     = kNvmOffLayoutMagic + 4u;
 constexpr uint32_t kNvmSeedOffset     = kNvmOffLayoutMagic + 16u;
 
-// Valida o layout do setor adaptativo (magic na posição do layout atual).
-// Pura (recebe a imagem do setor) para ser testável em host.
+// Valida layout: magic LTF3 + CRC dos mapas. Pura (testável em host).
 bool nvm_adaptive_sector_valid(const uint8_t* sector) noexcept;
+// CRC-32 do payload adaptativo [0 .. kNvmOffLayoutMagic).
+uint32_t nvm_adaptive_maps_crc(const uint8_t* sector) noexcept;
 
 bool nvm_write_ltft(uint8_t rpm_i, uint8_t load_i, int8_t val) noexcept;
 int8_t nvm_read_ltft(uint8_t rpm_i, uint8_t load_i) noexcept;

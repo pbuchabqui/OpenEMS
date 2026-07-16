@@ -1,5 +1,7 @@
 #include "engine/map_estimator.h"
 #include "engine/math_utils.h"
+#include "engine/engine_config.h"
+#include "engine/fuel_calc.h"
 
 #include <cstdint>
 
@@ -14,6 +16,9 @@ ems::engine::MapEstimatorState g_map_state = {};
 
 // Parâmetros calibráveis do modelo termodinâmico (continuidade)
 ems::engine::ManifoldModelParams g_model_params = {5000u, 256u, 256u};  // 500.0 cc, coeffs neutros (Q8=1.0)
+
+// Cilindrada usada no bombeamento (espelha g_eng_cfg; sync via map_estimator_sync_engine_config).
+uint16_t g_displacement_cc = ems::engine::cfg::kDisplacementCc;
 
 // Histórico de TPS para cálculo de derivada
 constexpr uint8_t kTpsHistorySize = 4u;
@@ -31,9 +36,7 @@ uint8_t g_transient_gain_q8 = 64u; // 0.25 (25% sensor, 75% modelo em transiente
 // ciclos e o modelo nunca contribui. Mesma técnica de DDA/Bresenham.
 int32_t g_map_delta_remainder_q8 = 0;
 
-// Constantes do modelo físico do coletor (equação da continuidade / conservação de massa)
-constexpr uint16_t kEngineDisplacementCc = 2000u;   // Cilindrada do motor (referência de escala)
-constexpr uint32_t kAtmosphericPressureBarX100 = 100u;  // 1.00 bar
+// Baro for throttle ΔP: fuel_get_baro_bar_x100() each update (default 100).
 
 // Limites de detecção de transiente
 constexpr int16_t kLightTransientTpsdotX10 = 50u;    // 5 %/s
@@ -50,18 +53,19 @@ int32_t clamp_iat_kelvin_x10(int16_t iat_x10) noexcept {
 // Fluxo de ar admitido pela borboleta (mg/ciclo aprox.), função de abertura,
 // ΔP atmosfera-coletor e temperatura do ar admitido.
 uint16_t calc_throttle_flow_impl(uint16_t tps_pct_x10, uint16_t map_bar_x100,
-                                 int16_t iat_x10) noexcept {
+                                 int16_t iat_x10, uint16_t baro_bar_x100) noexcept {
     constexpr uint32_t kMaxFlowMg = 800u;
+    const uint32_t baro = (baro_bar_x100 < 70u || baro_bar_x100 > 110u)
+        ? 100u : static_cast<uint32_t>(baro_bar_x100);
 
     const uint32_t throttle_frac_q8 = (static_cast<uint32_t>(tps_pct_x10) * 256u) / 1000u;
 
-    int32_t delta_p_bar_x100 = static_cast<int32_t>(kAtmosphericPressureBarX100) -
+    int32_t delta_p_bar_x100 = static_cast<int32_t>(baro) -
                                static_cast<int32_t>(map_bar_x100);
     if (delta_p_bar_x100 < 0) {
         delta_p_bar_x100 = 0;
     }
-    const uint32_t delta_p_frac_q8 = (static_cast<uint32_t>(delta_p_bar_x100) * 256u) /
-                                     kAtmosphericPressureBarX100;
+    const uint32_t delta_p_frac_q8 = (static_cast<uint32_t>(delta_p_bar_x100) * 256u) / baro;
 
     const int32_t iat_k_x10 = clamp_iat_kelvin_x10(iat_x10);
     const uint32_t temp_comp_q8 = (2930u * 256u) / static_cast<uint32_t>(iat_k_x10);
@@ -91,7 +95,7 @@ uint16_t calc_engine_pumping_impl(uint32_t rpm_x10, uint16_t map_bar_x100,
     // do fluxo de admissão, à cilindrada/RPM/MAP nominais (2000cc, 6000 RPM, 1 bar).
     constexpr uint64_t kPumpingScaleDiv = 1'000'000ull;
     const uint64_t flow_num = static_cast<uint64_t>(g_model_params.engine_pumping_coeff_q8) *
-                              map_bar_x100 * rpm_x10 * kEngineDisplacementCc;
+                              map_bar_x100 * rpm_x10 * g_displacement_cc;
     const uint32_t flow_mg = static_cast<uint32_t>(
         flow_num / (static_cast<uint64_t>(iat_k_x10) * kPumpingScaleDiv));
 
@@ -165,20 +169,28 @@ void map_estimator_init() noexcept {
 
     g_steady_gain_q8 = 200u;
     g_transient_gain_q8 = 64u;
+    g_displacement_cc = ems::engine::cfg::g_eng_cfg.displacement_cc;
+    if (g_displacement_cc < 200u) { g_displacement_cc = ems::engine::cfg::kDisplacementCc; }
+}
+
+void map_estimator_sync_engine_config() noexcept {
+    g_displacement_cc = ems::engine::cfg::g_eng_cfg.displacement_cc;
+    if (g_displacement_cc < 200u) { g_displacement_cc = ems::engine::cfg::kDisplacementCc; }
 }
 
 uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
                               uint16_t tps_pct_x10,
                               uint16_t dt_ms,
                               uint32_t rpm_x10,
-                              int16_t iat_x10) noexcept {
-    // Validações básicas
-    const bool sensor_ok = (map_sensor_bar_x100 >= 10u && map_sensor_bar_x100 <= 300u);
+                              int16_t iat_x10,
+                              bool sensor_valid) noexcept {
+    // Range + explicit fault from main (MAP DTC / ADC fail) — never trust fallback.
+    const bool range_ok = (map_sensor_bar_x100 >= 10u && map_sensor_bar_x100 <= 300u);
+    const bool sensor_ok = sensor_valid && range_ok;
     if (sensor_ok) {
         g_map_state.map_sensor_bar_x100 = map_sensor_bar_x100;
     } else {
-        // Sensor fora de range: usa apenas modelo. NÃO alimentar o valor cru
-        // (railed/0) no filtro complementar — abaixo zeramos o ganho do sensor.
+        // Sensor fault or out of range: model-only (gain_q8 → 0 below).
         g_map_state.estimator_mode = 2u;
     }
     
@@ -206,9 +218,10 @@ uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
     }
     
     // Modelo termodinâmico de continuidade: dP/dt ∝ (fluxo_admissão - fluxo_motor) / VolumeColetor
-    // (temperatura já compensada dentro de calc_throttle_flow_impl/calc_engine_pumping_impl).
+    // Baro from fuel barometric compensation (key-on MAP / cal).
+    const uint16_t baro = fuel_get_baro_bar_x100();
     const uint16_t flow_in_mg = calc_throttle_flow_impl(
-        tps_pct_x10, g_map_state.map_estimated_bar_x100, iat_x10);
+        tps_pct_x10, g_map_state.map_estimated_bar_x100, iat_x10, baro);
     const uint16_t flow_out_mg = calc_engine_pumping_impl(
         rpm_x10, g_map_state.map_estimated_bar_x100, iat_x10);
     const int32_t delta_flow_mg = static_cast<int32_t>(flow_in_mg) -
@@ -233,22 +246,31 @@ uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
         static_cast<uint16_t>(map_predicted > 0 ? map_predicted : 0),
         10u, 300u);
     
-    // Aplica filtro complementar: MAP_final = (gain × sensor) + ((256-gain) × modelo)
-    const int32_t map_filtered = (static_cast<int32_t>(map_sensor_bar_x100) * 
+    // Complementary filter. When !sensor_ok, gain_q8=0 → pure model (ignore
+    // railed/fallback reading passed as map_sensor_bar_x100).
+    const uint16_t sensor_for_blend = sensor_ok
+        ? map_sensor_bar_x100
+        : g_map_state.map_estimated_bar_x100;
+    const int32_t map_filtered = (static_cast<int32_t>(sensor_for_blend) *
                                   static_cast<int32_t>(gain_q8)) / 256 +
-                                 (static_cast<int32_t>(map_predicted_clamped) * 
+                                 (static_cast<int32_t>(map_predicted_clamped) *
                                   static_cast<int32_t>(256u - gain_q8)) / 256;
     
     g_map_state.map_estimated_bar_x100 = clamp_u16(
         static_cast<uint16_t>(map_filtered), 10u, 300u);
-    
-    // Determina modo do estimador
-    if (g_map_state.transient_strength == 0u) {
-        g_map_state.estimator_mode = 0u;  // sensor_only (regime)
-    } else {
-        g_map_state.estimator_mode = 1u;  // fusion (transiente)
+
+    // Mode labels (for telemetry). Note: even "sensor_only" still blends
+    // ~78% sensor / ~22% model (g_steady_gain_q8=200); pure sensor would be 256.
+    // Do not overwrite model_only (2) set when sensor_ok is false.
+    if (sensor_ok) {
+        if (g_map_state.transient_strength == 0u) {
+            g_map_state.estimator_mode = 0u;  // steady blend (sensor-weighted)
+        } else {
+            g_map_state.estimator_mode = 1u;  // transient blend (model-weighted)
+        }
     }
-    
+    // else: already set estimator_mode = 2 (model_only) above
+
     return g_map_state.map_estimated_bar_x100;
 }
 

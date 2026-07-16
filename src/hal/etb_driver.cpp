@@ -2,16 +2,11 @@
 #ifndef EMS_HOST_TEST
 #include "stm32h562/regs.h"
 #else
-// Host test: mock GPIO registers as writable variables instead of
-// raw memory-mapped register dereferences (which would segfault on x86).
-static volatile uint32_t ems_etb_gpioa_moder;
-static volatile uint32_t ems_etb_gpiob_moder;
-static volatile uint32_t ems_etb_gpioa_bsrr;
-static volatile uint32_t ems_etb_gpiob_bsrr;
-#define GPIOA_MODER ems_etb_gpioa_moder
-#define GPIOB_MODER ems_etb_gpiob_moder
-#define GPIOA_BSRR  ems_etb_gpioa_bsrr
-#define GPIOB_BSRR  ems_etb_gpiob_bsrr
+// Host test: mock GPIOE (ETB DIR on PE7/PE8).
+static volatile uint32_t ems_etb_gpioe_moder;
+static volatile uint32_t ems_etb_gpioe_bsrr;
+#define GPIOE_MODER ems_etb_gpioe_moder
+#define GPIOE_BSRR  ems_etb_gpioe_bsrr
 #endif
 #include "timer.h"
 #include "adc.h"
@@ -30,9 +25,12 @@ etb_driver_state_t g_state     = ETB_DRV_STATE_OFF;
 etb_driver_fault_t g_fault     = ETB_DRV_OK;
 uint32_t           g_fault_count = 0u;
 
-// Direction pins: PA10 (IN1 open), PB2 (IN2 close)
-constexpr uint8_t kIn1Pin = 10u;
-constexpr uint8_t kIn2Pin = 2u;
+// Direction pins on GPIOE (same port as INJ/IGN BSRR) — frees PA10 (USART1_RX)
+// and PB2 (WeAct LED heartbeat). PWM remains TIM15_CH1 on PE5.
+//   PE7 = IN1 (open / forward)
+//   PE8 = IN2 (close / reverse)
+constexpr uint8_t kIn1Pin = 7u;  // PE7
+constexpr uint8_t kIn2Pin = 8u;  // PE8
 
 }  // namespace
 
@@ -49,12 +47,14 @@ bool etb_driver_init(void) {
     g_fault  = ETB_DRV_OK;
     g_fault_count = 0u;
 
-    // PA10 direction 1 (open), PB2 direction 2 (close) — push-pull outputs
-    // MODER bits: 01b = general purpose output
-    GPIOA_MODER = (GPIOA_MODER & ~(3u << (kIn1Pin * 2u))) | (1u << (kIn1Pin * 2u));
-    GPIOB_MODER = (GPIOB_MODER & ~(3u << (kIn2Pin * 2u))) | (1u << (kIn2Pin * 2u));
+    // PE7 / PE8 direction — push-pull outputs (GPIOE)
+#if !defined(EMS_HOST_TEST)
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
+#endif
+    GPIOE_MODER = (GPIOE_MODER & ~(3u << (kIn1Pin * 2u))) | (1u << (kIn1Pin * 2u));
+    GPIOE_MODER = (GPIOE_MODER & ~(3u << (kIn2Pin * 2u))) | (1u << (kIn2Pin * 2u));
 
-    // TIM15 PWM @ 20 kHz for ETB motor drive
+    // TIM15 PWM @ 20 kHz for ETB motor drive (PE5)
     tim15_etb_pwm_init(20000u);
 
     etb_driver_shutdown();
@@ -106,22 +106,18 @@ bool etb_driver_set_motor_pwm(int16_t pwm) {
     const uint16_t duty = static_cast<uint16_t>((pwm >= 0) ? pwm : -pwm);
 
     if (pwm > 0) {
-        GPIOA_BSRR = (1u << kIn1Pin);
-        GPIOB_BSRR = (1u << (kIn2Pin + 16u));
+        GPIOE_BSRR = (1u << kIn1Pin) | (1u << (kIn2Pin + 16u));
     } else if (pwm < 0) {
-        GPIOA_BSRR = (1u << (kIn1Pin + 16u));
-        GPIOB_BSRR = (1u << kIn2Pin);
+        GPIOE_BSRR = (1u << (kIn1Pin + 16u)) | (1u << kIn2Pin);
     } else {
-        GPIOA_BSRR = (1u << (kIn1Pin + 16u));
-        GPIOB_BSRR = (1u << (kIn2Pin + 16u));
+        GPIOE_BSRR = (1u << (kIn1Pin + 16u)) | (1u << (kIn2Pin + 16u));
     }
     tim15_etb_set_duty_x10(static_cast<uint16_t>((static_cast<uint32_t>(duty) * 1000u) / 1023u));
     return true;
 }
 
 void etb_driver_shutdown(void) {
-    GPIOA_BSRR = (1u << (kIn1Pin + 16u));
-    GPIOB_BSRR = (1u << (kIn2Pin + 16u));
+    GPIOE_BSRR = (1u << (kIn1Pin + 16u)) | (1u << (kIn2Pin + 16u));
     tim15_etb_set_duty_x10(0u);
     g_etb_data.motor_pwm = 0;
 }

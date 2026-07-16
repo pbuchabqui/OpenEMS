@@ -1,12 +1,13 @@
 /**
  * @file torque_manager.cpp
- * @brief Implementação Gerenciador Central de Torque
- * 
- * Arbitra entre:
- * - Pedido do motorista (pedal)
- * - Controle de marcha lenta
- * - Limites de segurança (RPM, temperatura)
- * - Controles auxiliares (tração, launch, cruise)
+ * @brief Gerenciador de Torque
+ *
+ * DUAS APIs (histórico):
+ * 1) torque_manager_loop / float C API — host tests + futuro TC/launch/cruise.
+ *    NÃO é chamado por main_stm32 no path de produção.
+ * 2) ems::engine::torque_manager_update (integer) — PRODUÇÃO: pedal map +
+ *    idle air I + limp + progressive rev ETB + launch + TC → alvo ETB +
+ *    spark retard. Ligado no slot 2 ms do main.
  */
 
 #include "torque_manager.h"
@@ -215,6 +216,8 @@ bool torque_manager_is_ready(void) {
 #include "engine/calibration.h"
 #include "engine/math_utils.h"
 #include "etb_control.h"
+#include "app/can_rx_map.h"
+#include "hal/system.h"
 
 namespace ems::engine {
 
@@ -224,29 +227,80 @@ static uint8_t  g_limp_reason      = 0u;
 // para manter RPM no target; limitado entre etb_idle_min/max_opening_x10.
 static int32_t  g_idle_air_int_x10 = 0;
 
+// Launch state machine
+enum class LaunchState : uint8_t { Idle = 0, Armed = 1, Active = 2 };
+static LaunchState g_launch_state = LaunchState::Idle;
+static uint8_t     g_launch_force = 0u;  // 0=cal, 1=force on, 2=force off
+
+// TC state
+static uint16_t g_tc_reduction_x10 = 0u;     // current applied cut 0–1000
+static uint32_t g_tc_prev_rpm_x10  = 0u;
+static uint16_t g_tc_ext_slip_x10  = 0u;     // external slip; 0 = none
+static uint8_t  g_tc_ext_slip_valid = 0u;
+static uint8_t  g_launch_active_latched = 0u;
+static uint16_t g_tc_reduction_latched = 0u;
+static int16_t  g_spark_retard_latched = 0;
+// Last CAN speeds seen by TC (0 if invalid/timeout)
+static uint16_t g_can_vehicle_kmh = 0u;
+static uint16_t g_can_wheel_kmh   = 0u;
+
 // Interpolação inteira do pedal map: app_x10 (0-1000) → throttle_x10 (0-1000).
-// Os 10 pontos correspondem a pedal 0%,10%,...,100%.
+// 10 pontos em pedal 0%,10%,…,90% (índices 0..9); 100% pedal → ponto [9].
+// Segmentos interpolados: [i]→[i+1] para i=0..8 (app 0..899).
+// app 900..999: flat no ponto [9] (antes lia [10] → OOB).
 static uint16_t pedal_map_lookup(uint16_t app_x10) noexcept {
     const uint8_t mode = static_cast<uint8_t>(etb_get_drive_mode());
-    if (app_x10 >= 1000u) { return etb_pedal_map[mode][9]; }
-    const uint16_t idx  = app_x10 / 100u;          // 0-9
-    const uint16_t frac = app_x10 - idx * 100u;    // 0-99
+    if (mode >= 4u) { return 0u; }
+    if (app_x10 >= 900u) { return etb_pedal_map[mode][9]; }
+    const uint16_t idx  = app_x10 / 100u;           // 0..8
+    const uint16_t frac = app_x10 - idx * 100u;     // 0..99
     const uint16_t lo   = etb_pedal_map[mode][idx];
     const uint16_t hi   = etb_pedal_map[mode][idx + 1u];
-    return static_cast<uint16_t>(lo + (static_cast<uint32_t>(hi - lo) * frac) / 100u);
+    return static_cast<uint16_t>(
+        lo + (static_cast<uint32_t>(hi - lo) * frac) / 100u);
+}
+
+static bool launch_is_enabled() noexcept {
+    if (g_launch_force == 1u) { return true; }
+    if (g_launch_force == 2u) { return false; }
+    return launch_enable != 0u;
 }
 
 void torque_manager_reset() noexcept {
     g_etb_target_x10   = 0u;
     g_limp_reason      = 0u;
     g_idle_air_int_x10 = 0;
+    g_launch_state     = LaunchState::Idle;
+    g_tc_reduction_x10 = 0u;
+    g_tc_prev_rpm_x10  = 0u;
+    g_tc_ext_slip_x10  = 0u;
+    g_tc_ext_slip_valid = 0u;
+    g_launch_active_latched = 0u;
+    g_tc_reduction_latched = 0u;
+    g_spark_retard_latched = 0;
+    g_can_vehicle_kmh = 0u;
+    g_can_wheel_kmh   = 0u;
+}
+
+void torque_tc_set_external_slip_pct_x10(uint16_t slip_pct_x10) noexcept {
+    g_tc_ext_slip_x10 = (slip_pct_x10 > 1000u) ? 1000u : slip_pct_x10;
+    g_tc_ext_slip_valid = 1u;
+}
+
+void torque_tc_clear_external_slip() noexcept {
+    g_tc_ext_slip_x10 = 0u;
+    g_tc_ext_slip_valid = 0u;
+}
+
+void torque_launch_force_enable(uint8_t on) noexcept {
+    g_launch_force = (on > 2u) ? 0u : on;
 }
 
 TorqueOutput torque_manager_update(
     const ems::drv::CkpSnapshot& snap,
     const ems::drv::SensorData&  sensors,
     bool key_on, bool map_clt_limp, bool rev_cut,
-    uint16_t idle_target_rpm_x10, uint16_t /*period_ms*/) noexcept
+    uint16_t idle_target_rpm_x10, uint16_t period_ms) noexcept
 {
     TorqueOutput out{};
     out.limp_reason = 0u;
@@ -287,53 +341,289 @@ TorqueOutput torque_manager_update(
             target_x10 = etb_max_open_pct_x10_limp;
         }
     }
-    if ((out.limp_reason & (TORQUE_LIMP_REV_CUT | TORQUE_LIMP_NO_CALIB)) != 0u) {
+    if ((out.limp_reason & TORQUE_LIMP_NO_CALIB) != 0u) {
         target_x10 = 0u;
     }
 
-    // Idle air control: floor + integrador I simples.
-    // Condição de idle: pedal solto (APP < threshold) E motor girando.
-    // O integrador acumula/dissipa 1 unit (0.1%) por tick (2ms) conforme
-    // erro RPM. Isso converge para a abertura exata necessária sem overshoot.
-    const bool in_idle_mode = (sensors.app_pct_x10 < etb_idle_open_pct_x10)
+    // ── Progressive ETB rev pullback (production; ported from float API) ──
+    // Starts closing the blade *before* the fuel rev-limit so air demand falls
+    // first. Uses rev_limit_rpm_x10 / rev_limit_soft_window_x10 (same knobs as
+    // fuel cut). Does NOT replace fuel cut in main — only ETB target.
+    //
+    //   soft_start ──────── hard (fuel cut) ──── hard+margin
+    //   full open           target→0            hold 0
+    //
+    // Hot CLT (>105°C): soft_start and hard pull earlier by half the window.
+    {
+        uint32_t hard = rev_limit_rpm_x10;
+        uint32_t window = rev_limit_soft_window_x10;
+        if (hard < 10000u) { hard = 70000u; }           // 7000 RPM fallback
+        if (window < 500u || window > hard) { window = 2000u; }  // 200 RPM
+
+        if (sensors.clt_degc_x10 > 1050) {              // > 105°C
+            const uint32_t pull = window / 2u;
+            hard = (hard > pull) ? (hard - pull) : hard;
+        }
+
+        const uint32_t soft_start = (hard > window) ? (hard - window) : 0u;
+        const uint32_t rpm = snap.rpm_x10;
+
+        if (rpm >= hard) {
+            // At/above fuel-cut threshold: blade closed (air path safe).
+            target_x10 = 0u;
+            out.limp_reason |= TORQUE_LIMP_REV_CUT;
+        } else if (rpm > soft_start && hard > soft_start) {
+            // Linear fade: full at soft_start → 0 at hard.
+            const uint32_t span = hard - soft_start;
+            const uint32_t over = rpm - soft_start;
+            const uint32_t keep = span - over;  // span..0
+            target_x10 = static_cast<uint16_t>(
+                (static_cast<uint32_t>(target_x10) * keep) / span);
+            // Soft band: flag limp for telemetry without implying fuel cut.
+            out.limp_reason |= TORQUE_LIMP_REV_CUT;
+        }
+    }
+
+    // External rev_cut (main limp @ high RPM): force closed regardless.
+    if (rev_cut) {
+        out.limp_reason |= TORQUE_LIMP_REV_CUT;
+        target_x10 = 0u;
+    }
+
+    const uint16_t dt = (period_ms == 0u) ? 2u : period_ms;
+    int32_t i_step = static_cast<int32_t>(dt) / 2;  // 2ms → 1
+    if (i_step < 1) { i_step = 1; }
+
+    // ── Launch control ────────────────────────────────────────────────────
+    // Street-lite (no clutch): arm when enable && APP ≥ arm; active while APP
+    // stays high; disarm when APP < disarm. While active, hold RPM near
+    // launch_rpm by capping and cutting ETB.
+    int16_t spark_retard = 0;
+    uint8_t launch_active = 0u;
+    {
+        const bool en = launch_is_enabled();
+        const uint16_t app = sensors.app_pct_x10;
+        const uint32_t rpm = snap.rpm_x10;
+        const uint16_t arm_app = (launch_app_arm_x10 > 1000u) ? 200u : launch_app_arm_x10;
+        const uint16_t disarm_app = (launch_app_disarm_x10 >= arm_app)
+            ? static_cast<uint16_t>(arm_app / 2u) : launch_app_disarm_x10;
+        const uint32_t l_rpm = (launch_rpm_x10 < 1000u) ? 45000u : launch_rpm_x10;
+        const uint16_t l_etb = (launch_etb_pct_x10 > 1000u) ? 600u : launch_etb_pct_x10;
+        const uint32_t hyst = (launch_rpm_hyst_x10 == 0u) ? 100u : launch_rpm_hyst_x10;
+
+        if (!en || (out.limp_reason & (TORQUE_LIMP_NO_CALIB | TORQUE_LIMP_REV_CUT)) != 0u) {
+            g_launch_state = LaunchState::Idle;
+        } else {
+            switch (g_launch_state) {
+            case LaunchState::Idle:
+                if (app >= arm_app) { g_launch_state = LaunchState::Armed; }
+                break;
+            case LaunchState::Armed:
+                if (app < disarm_app) {
+                    g_launch_state = LaunchState::Idle;
+                } else {
+                    g_launch_state = LaunchState::Active;  // control immediately when armed
+                }
+                break;
+            case LaunchState::Active:
+                if (app < disarm_app) { g_launch_state = LaunchState::Idle; }
+                break;
+            }
+        }
+
+        if (g_launch_state == LaunchState::Active || g_launch_state == LaunchState::Armed) {
+            launch_active = 1u;
+            out.limp_reason |= TORQUE_ACTIVE_LAUNCH;
+            // Cap blade
+            if (target_x10 > l_etb) { target_x10 = l_etb; }
+            // Over target RPM: progressive extra cut
+            if (rpm > l_rpm + hyst) {
+                const uint32_t over = rpm - l_rpm;
+                // 500 rpm_x10 over → full cut of remaining
+                uint32_t cut = (over * 1000u) / 5000u;
+                if (cut > 1000u) { cut = 1000u; }
+                target_x10 = static_cast<uint16_t>(
+                    (static_cast<uint32_t>(target_x10) * (1000u - cut)) / 1000u);
+                // Mild spark retard when far over (up to 8°)
+                const int16_t retard = static_cast<int16_t>((over * 8u) / 5000u);
+                spark_retard = (retard > 8) ? 8 : retard;
+            } else if (rpm > l_rpm) {
+                // Inside hyst band above target: hold cap only
+            }
+            // Below target: leave pedal (capped) so RPM can climb to launch rpm
+        }
+    }
+
+    // ── Traction control ──────────────────────────────────────────────────
+    // Slip priority:
+    //   1) external API (tests / override)
+    //   2) CAN wheel vs vehicle (can_rx_map SPEED_KMH + WHEEL_SPEED_KMH)
+    //   3) RPM-flare proxy when APP/RPM gates pass
+    uint16_t tc_red = 0u;
+    {
+        const bool en = (tc_enable != 0u);
+        const uint16_t app = sensors.app_pct_x10;
+        const uint32_t rpm = snap.rpm_x10;
+        const uint16_t app_min = (tc_app_min_x10 > 1000u) ? 300u : tc_app_min_x10;
+        const uint32_t rpm_min = (tc_rpm_min_x10 < 1000u) ? 20000u : tc_rpm_min_x10;
+        const uint32_t now_ms = ::millis();
+
+        // rpm_dot (rpm_x10 per second)
+        int32_t rpm_dot = 0;
+        if (g_tc_prev_rpm_x10 != 0u && dt > 0u) {
+            rpm_dot = (static_cast<int32_t>(rpm) - static_cast<int32_t>(g_tc_prev_rpm_x10))
+                      * 1000 / static_cast<int32_t>(dt);
+        }
+        g_tc_prev_rpm_x10 = rpm;
+
+        // Latch CAN speeds for diagnostics / speed limiter
+        uint16_t veh_kmh = 0u;
+        uint16_t whl_kmh = 0u;
+        const bool have_veh = ems::app::can_rx_speed_kmh(veh_kmh, now_ms);
+        const bool have_whl = ems::app::can_rx_wheel_speed_kmh(whl_kmh, now_ms);
+        g_can_vehicle_kmh = have_veh ? veh_kmh : 0u;
+        g_can_wheel_kmh   = have_whl ? whl_kmh : 0u;
+
+        uint16_t slip_x10 = 0u;
+        if (g_tc_ext_slip_valid != 0u) {
+            slip_x10 = g_tc_ext_slip_x10;
+        } else if (en && have_whl && have_veh && app >= app_min && rpm >= rpm_min) {
+            // True slip: (driven − vehicle) / vehicle. Deadband 3%.
+            // If only one speed is mapped, the other branch falls through to rpm_dot.
+            if (whl_kmh > veh_kmh && veh_kmh > 0u) {
+                const uint32_t num = static_cast<uint32_t>(whl_kmh - veh_kmh) * 1000u;
+                uint32_t slip = num / static_cast<uint32_t>(veh_kmh);
+                if (slip > 1000u) { slip = 1000u; }
+                if (slip >= 30u) {  // ignore <3% noise
+                    slip_x10 = static_cast<uint16_t>(slip);
+                }
+            } else if (whl_kmh > veh_kmh && veh_kmh == 0u && whl_kmh >= 5u) {
+                // Vehicle reports 0 but driven wheel spinning (launch / ABS freeze):
+                // treat as high slip scaled by wheel speed (cap at 100%).
+                uint32_t slip = static_cast<uint32_t>(whl_kmh) * 20u;  // 50 km/h → 100%
+                if (slip > 1000u) { slip = 1000u; }
+                slip_x10 = static_cast<uint16_t>(slip);
+            }
+        } else if (en && have_whl && !have_veh && app >= app_min && rpm >= rpm_min) {
+            // Driven wheel only: no body speed — use rpm_dot still, but also
+            // treat very high wheel speed under high APP as mild slip proxy is weak;
+            // fall through to rpm_dot below when slip still 0.
+        }
+
+        if (slip_x10 == 0u && en && app >= app_min && rpm >= rpm_min && rpm_dot > 0
+            && g_tc_ext_slip_valid == 0u
+            && !(have_whl && have_veh)) {
+            // RPM-flare proxy only when CAN dual-speed slip path is not active
+            const int32_t thresh = static_cast<int32_t>(
+                (tc_rpm_dot_thresh < 500u) ? 8000u : tc_rpm_dot_thresh);
+            if (rpm_dot > thresh) {
+                const int32_t excess = rpm_dot - thresh;
+                int32_t slip = (excess * 1000) / thresh;
+                if (slip > 1000) { slip = 1000; }
+                slip_x10 = static_cast<uint16_t>(slip);
+            }
+        }
+
+        // Vehicle speed limiter (CAN body speed)
+        if (have_veh && veh_kmh >= 220u) {
+            if (target_x10 > 100u) { target_x10 = 100u; }  // ~10% hold
+        }
+
+        // Desired reduction from slip (0 slip → 0 cut; 100% slip → max cut)
+        uint16_t desired = 0u;
+        if (en && slip_x10 > 0u) {
+            const uint16_t max_cut = (tc_max_reduction_pct_x10 > 1000u)
+                ? 800u : tc_max_reduction_pct_x10;
+            desired = static_cast<uint16_t>(
+                (static_cast<uint32_t>(slip_x10) * max_cut) / 1000u);
+        }
+
+        // Slew reduction toward desired (rate in %×10 per second)
+        const uint16_t rate = (tc_reduction_rate_x10 == 0u) ? 500u : tc_reduction_rate_x10;
+        const uint32_t step = (static_cast<uint32_t>(rate) * dt) / 1000u;
+        const uint32_t step_i = (step < 1u) ? 1u : step;
+        if (desired > g_tc_reduction_x10) {
+            const uint32_t next = static_cast<uint32_t>(g_tc_reduction_x10) + step_i;
+            g_tc_reduction_x10 = static_cast<uint16_t>(
+                next > desired ? desired : next);
+        } else if (desired < g_tc_reduction_x10) {
+            if (g_tc_reduction_x10 > step_i) {
+                g_tc_reduction_x10 = static_cast<uint16_t>(g_tc_reduction_x10 - step_i);
+            } else {
+                g_tc_reduction_x10 = desired;
+            }
+        }
+
+        // Don't fight launch hard-close / rev cut zeros
+        if ((out.limp_reason & TORQUE_LIMP_REV_CUT) != 0u && target_x10 == 0u) {
+            g_tc_reduction_x10 = 0u;
+        }
+
+        tc_red = g_tc_reduction_x10;
+        if (tc_red > 0u) {
+            out.limp_reason |= TORQUE_ACTIVE_TC;
+            target_x10 = static_cast<uint16_t>(
+                (static_cast<uint32_t>(target_x10) * (1000u - tc_red)) / 1000u);
+            // Spark retard proportional to reduction (up to tc_spark_retard_max_deg)
+            const uint16_t max_ret = (tc_spark_retard_max_deg > 30u)
+                ? 12u : tc_spark_retard_max_deg;
+            const int16_t ret = static_cast<int16_t>(
+                (static_cast<uint32_t>(tc_red) * max_ret) / 1000u);
+            if (ret > spark_retard) { spark_retard = ret; }
+        }
+    }
+
+    // Idle air: floor + integrator I. Skip while rev-limiting / launch / heavy TC.
+    const bool rev_limiting = (out.limp_reason & TORQUE_LIMP_REV_CUT) != 0u;
+    const bool in_idle_mode = !rev_limiting && launch_active == 0u && tc_red < 100u
+                              && (sensors.app_pct_x10 < etb_idle_open_pct_x10)
                               && (snap.rpm_x10 > 0u);
     if (in_idle_mode) {
         const int32_t rpm_error = static_cast<int32_t>(idle_target_rpm_x10)
                                   - static_cast<int32_t>(snap.rpm_x10);
-        // Integra: +1 quando abaixo do target, -1 quando acima
-        if (rpm_error > 0) {
-            g_idle_air_int_x10 += 1;
-        } else if (rpm_error < 0) {
-            g_idle_air_int_x10 -= 1;
+        if (rpm_error > 50) {          // deadband ±5 RPM (×10)
+            g_idle_air_int_x10 += i_step;
+        } else if (rpm_error < -50) {
+            g_idle_air_int_x10 -= i_step;
         }
-        // Limita entre mínimo e máximo de abertura de idle
         const int32_t idle_min = static_cast<int32_t>(etb_idle_min_opening_x10);
         const int32_t idle_max = static_cast<int32_t>(etb_idle_max_opening_x10);
         if (g_idle_air_int_x10 < idle_min) { g_idle_air_int_x10 = idle_min; }
         if (g_idle_air_int_x10 > idle_max) { g_idle_air_int_x10 = idle_max; }
-        // Impõe chão: borboleta nunca fecha abaixo do valor integrado
         const uint16_t idle_floor = static_cast<uint16_t>(g_idle_air_int_x10);
         if (target_x10 < idle_floor) {
             target_x10 = idle_floor;
         }
-    } else if (sensors.app_pct_x10 >= etb_idle_open_pct_x10) {
-        // Fora do modo idle: dissipa integrador gradualmente (1/tick)
-        // para não haver salto ao retornar para idle.
+    } else if (sensors.app_pct_x10 >= etb_idle_open_pct_x10 || rev_limiting ||
+               launch_active != 0u) {
         if (g_idle_air_int_x10 > 0) {
-            g_idle_air_int_x10 -= 1;
+            g_idle_air_int_x10 -= i_step;
+            if (g_idle_air_int_x10 < 0) { g_idle_air_int_x10 = 0; }
         }
     }
 
     g_etb_target_x10 = target_x10;
     g_limp_reason    = out.limp_reason;
+    g_launch_active_latched = launch_active;
+    g_tc_reduction_latched = tc_red;
+    g_spark_retard_latched = spark_retard;
 
     out.etb_target_pct_x10     = target_x10;
     out.etb_max_rate_pct_per_s = etb_max_rate_pct_per_s;
     out.etb_enable_request     = (out.limp_reason & TORQUE_LIMP_ETB_FAULT) == 0u;
+    out.spark_retard_deg       = spark_retard;
+    out.tc_reduction_pct_x10   = tc_red;
+    out.launch_active          = launch_active;
+    out.tc_active              = (tc_red > 0u) ? 1u : 0u;
     return out;
 }
 
 uint16_t torque_manager_test_get_target()      noexcept { return g_etb_target_x10; }
 uint8_t  torque_manager_test_get_limp_reason() noexcept { return g_limp_reason; }
+uint8_t  torque_manager_test_get_launch_active() noexcept { return g_launch_active_latched; }
+uint16_t torque_manager_test_get_tc_reduction() noexcept { return g_tc_reduction_latched; }
+int16_t  torque_manager_test_get_spark_retard() noexcept { return g_spark_retard_latched; }
+uint16_t torque_manager_test_get_vehicle_kmh() noexcept { return g_can_vehicle_kmh; }
+uint16_t torque_manager_test_get_wheel_kmh() noexcept { return g_can_wheel_kmh; }
 
 }  // namespace ems::engine

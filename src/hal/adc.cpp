@@ -19,7 +19,7 @@
  *     CLT       → INP9  (PB0)  — SQ1
  *     IAT       → INP5  (PB1)  — SQ2
  *     FUEL_PRESS → INP4 (PC4)  — SQ3
- *     OIL_PRESS  → INP8 (PC5)  — SQ4
+ *     OIL_PRESS  → INP11 (PC1) — SQ4  (PC5 exclusive to ETB_TPS2)
  *     EWG_POS    → INP13 (PC3) — SQ5
  *
  * Trigger: TIM6 TRGO (Update Event) disparado pela ckp adc_trigger_on_tooth().
@@ -67,9 +67,9 @@ static constexpr uint8_t kAdc2ChMap[5] = {
     // AdcSecondaryChannel::CLT        → ADC2_INP9  (PB0) → índice 0
     // AdcSecondaryChannel::IAT        → ADC2_INP5  (PB1) → índice 1
     // AdcSecondaryChannel::FUEL_PRESS → ADC2_INP4  (PC4) → índice 2
-    // AdcSecondaryChannel::OIL_PRESS  → ADC2_INP8  (PC5) → índice 3
+    // AdcSecondaryChannel::OIL_PRESS  → ADC2_INP11 (PC1) → índice 3
     // AdcSecondaryChannel::EWG_POS    → ADC2_INP13 (PC3) → índice 4
-    9, 5, 4, 8, 13
+    9, 5, 4, 11, 13
 };
 
 // ── Tempo de amostragem para todos os canais: 47.5 ciclos = 011b ─────────────
@@ -92,12 +92,12 @@ static constexpr uint32_t kAdc1Sqr2 = (10u << 0)   // SQ5 = INP10 (APP1, PC0)
                                      | (8u << 18);  // SQ8 = INP8  (ETB_TPS2, PC5)
 
 // ── Sequência de conversão ADC2 (4 canais) ───────────────────────────────────
-// CLT→INP9(PB0), IAT→INP5(PB1), FUEL_PRESS→INP4(PC4), OIL→INP8(PC5), EWG→INP13(PC3)
+// CLT→INP9(PB0), IAT→INP5(PB1), FUEL→INP4(PC4), OIL→INP11(PC1), EWG→INP13(PC3)
 static constexpr uint32_t kAdc2Sqr1 = (4u << 0)    // L = 4 (5 conv)
                                      | (9u << 6)    // SQ1 = INP9 (CLT, PB0)
                                      | (5u << 12)   // SQ2 = INP5 (IAT, PB1)
                                      | (4u << 18)   // SQ3 = INP4 (FUEL_PRESS, PC4)
-                                     | (8u << 24);  // SQ4 = INP8 (OIL, PC5)
+                                     | (11u << 24); // SQ4 = INP11 (OIL, PC1)
 static constexpr uint32_t kAdc2Sqr2 = (13u << 0);   // SQ5 = INP13 (EWG, PC3)
 
 namespace ems::hal {
@@ -258,14 +258,15 @@ void adc_init() noexcept {
     gpio_set_analog(&GPIOA_MODER, 5u);
     gpio_set_analog(&GPIOB_MODER, 0u);  // INP9: APP1 (ADC1) / CLT (ADC2, bancada)
     gpio_set_analog(&GPIOB_MODER, 1u);  // INP5: APP2 (ADC1) / IAT (ADC2, bancada)
-    // PC0=INP10(APP1), PC2=INP12(APP2), PC3=INP13(EWG), PC4=INP4(FUEL_PRESS), PC5=INP8(ETB_TPS2/OIL)
+    // PC0=APP1, PC1=OIL, PC2=APP2, PC3=EWG, PC4=FUEL, PC5=ETB_TPS2
     volatile uint32_t* gpioc_moder = reinterpret_cast<volatile uint32_t*>(
         GPIOC_BASE + GPIO_MODER_OFF);
-    gpio_set_analog(gpioc_moder, 0u);
-    gpio_set_analog(gpioc_moder, 2u);  // PC2 = APP2 (INP12) — LQFP100
-    gpio_set_analog(gpioc_moder, 3u);  // PC3 = EWG pos (INP13) — LQFP100
+    gpio_set_analog(gpioc_moder, 0u);  // PC0 = APP1 (INP10)
+    gpio_set_analog(gpioc_moder, 1u);  // PC1 = OIL_PRESS (INP11, ADC2)
+    gpio_set_analog(gpioc_moder, 2u);  // PC2 = APP2 (INP12)
+    gpio_set_analog(gpioc_moder, 3u);  // PC3 = EWG pos (INP13)
     gpio_set_analog(gpioc_moder, 4u);  // PC4 = FUEL_PRESS (INP4, ADC2)
-    gpio_set_analog(gpioc_moder, 5u);
+    gpio_set_analog(gpioc_moder, 5u);  // PC5 = ETB_TPS2 (INP8, ADC1 only)
 
     // ── 3. Clock ADC: HCLK/4 = 62.5 MHz, síncrono ao trigger de timer ───
     ADC12_CCR = ADC12_CCR_CKMODE_HCLK_DIV4;
@@ -312,9 +313,8 @@ ADC1_SMPR2 = (kSmpr << ((10-10)*3))   // IN10 (APP1, PC0)
     // SMPR1 cobre INP0-INP9. SMPR2 cobre INP10+.
     ADC2_SMPR1 = (kSmpr << (4u * 3u))   // INP4  (FUEL, PC4)
                | (kSmpr << (5u * 3u))   // INP5  (IAT, PB1)
-               | (kSmpr << (8u * 3u))   // INP8  (OIL, PC5)
                | (kSmpr << (9u * 3u));  // INP9  (CLT, PB0)
-    ADC2_SMPR2 = (kSmpr << ((10-10)*3u))   // INP10 (placeholder)
+    ADC2_SMPR2 = (kSmpr << ((11-10)*3u))   // INP11 (OIL, PC1)
                | (kSmpr << ((13-10)*3u));  // INP13 (EWG, PC3)
 
     ADC2_SQR1 = kAdc2Sqr1;

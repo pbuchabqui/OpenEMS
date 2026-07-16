@@ -17,5 +17,7 @@ static constexpr uint16_t STATUS_WBO2_FAULT = (1u << 9);
 static constexpr uint16_t STATUS_TLE8888_FAULT = (1u << 10);
 static constexpr uint16_t STATUS_IGN_SEQUENTIAL = (1u << 11);
 static constexpr uint16_t STATUS_REV_LIMIT     = (1u << 12);  // fuel cut active
+static constexpr uint16_t STATUS_LAUNCH_ACTIVE = (1u << 13);  // launch control holding
+static constexpr uint16_t STATUS_TC_ACTIVE     = (1u << 14);  // traction control reducing
 
 }  // namespace ems::app

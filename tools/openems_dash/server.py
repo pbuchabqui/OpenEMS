@@ -460,6 +460,12 @@ def api_debug_counters():
 
 @app.get("/api/can_rx_map")
 def api_can_rx_map_get():
+    # Prefer live page0 from ECU when link is up; fall back to server cache.
+    try:
+        buf = worker.submit(lambda l: l.read_page(0))
+        proto.can_rx_map_from_page0(buf)
+    except Exception:  # noqa: BLE001
+        pass
     return {"signals": proto.can_rx_map_get(), "signal_names": proto.CAN_RX_SIGNALS}
 
 
@@ -467,9 +473,17 @@ def api_can_rx_map_get():
 def api_can_rx_map_set(signal: str, body: dict):
     try:
         proto.can_rx_map_set(signal, body)
+        off = proto.CAN_RX_PAGE0_OFF[signal]
+        blob = proto.can_rx_map_pack_signal(signal)
+        # Write into ECU page0 RAM so can_rx_map_apply runs on next page apply
+        # (write_page_ram triggers the same path as TS 'w').
+        worker.submit(lambda l: l.write_page_ram(0, off, blob))
     except ValueError as e:
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:  # noqa: BLE001
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": f"can_rx_map write: {e}"}, status_code=502)
     return {"ok": True, "signal": signal, "config": proto.can_rx_map_get()[signal]}
 
 

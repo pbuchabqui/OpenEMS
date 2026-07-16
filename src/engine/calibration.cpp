@@ -206,6 +206,21 @@ int16_t  antijerk_retard_deg           = 3;
 uint8_t  antijerk_decay_cycles         = 3u;
 
 // Rev limiter: limite duro 7000 RPM
+uint8_t  launch_enable           = 0u;
+uint16_t launch_rpm_x10          = 45000u;  // 4500 RPM
+uint16_t launch_etb_pct_x10      = 600u;    // 60%
+uint16_t launch_app_arm_x10      = 200u;    // 20%
+uint16_t launch_app_disarm_x10   = 50u;     // 5%
+uint16_t launch_rpm_hyst_x10     = 100u;    // 10 RPM
+
+uint8_t  tc_enable               = 0u;
+uint16_t tc_app_min_x10          = 300u;    // 30%
+uint16_t tc_rpm_min_x10          = 20000u;  // 2000 RPM
+uint16_t tc_rpm_dot_thresh       = 8000u;   // +800 rpm_x10/s ≈ 800 RPM/s flare
+uint16_t tc_max_reduction_pct_x10 = 800u;   // 80%
+uint16_t tc_spark_retard_max_deg = 12u;
+uint16_t tc_reduction_rate_x10   = 500u;    // 50 %/s slew
+
 uint32_t rev_limit_rpm_x10           = 70000u;
 // Corte de injeção: janela 200 RPM (6800–7000 RPM)
 uint32_t rev_limit_soft_window_x10   = 2000u;
@@ -370,6 +385,104 @@ void sync_xtau_autocal_to_page(uint8_t* page, uint16_t len) noexcept {
     page[76] = xtau_autocal_enabled;
     page[77] = 1u;
     std::memcpy(page + 78, xtau_autocal_tau_delta, 8u);
+}
+
+// page0 layout v5: launch 191-201, TC 202-215 (see calibration.h).
+void launch_tc_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
+    if (page0 == nullptr || len < (kLaunchTcPage0Off + kLaunchTcPage0Len)) {
+        return;
+    }
+    uint8_t* const p = page0 + kLaunchTcPage0Off;
+    p[0] = (launch_enable != 0u) ? 1u : 0u;
+    std::memcpy(p + 1,  &launch_rpm_x10,        2u);
+    std::memcpy(p + 3,  &launch_etb_pct_x10,    2u);
+    std::memcpy(p + 5,  &launch_app_arm_x10,    2u);
+    std::memcpy(p + 7,  &launch_app_disarm_x10, 2u);
+    std::memcpy(p + 9,  &launch_rpm_hyst_x10,   2u);
+    p[11] = (tc_enable != 0u) ? 1u : 0u;
+    p[12] = 0u;  // pad @203
+    std::memcpy(p + 13, &tc_app_min_x10,           2u);
+    std::memcpy(p + 15, &tc_rpm_min_x10,           2u);
+    std::memcpy(p + 17, &tc_rpm_dot_thresh,        2u);
+    std::memcpy(p + 19, &tc_max_reduction_pct_x10, 2u);
+    std::memcpy(p + 21, &tc_spark_retard_max_deg,  2u);
+    std::memcpy(p + 23, &tc_reduction_rate_x10,    2u);
+}
+
+void launch_tc_apply_from_page0(const uint8_t* page0, uint16_t len) noexcept {
+    if (page0 == nullptr || len < (kLaunchTcPage0Off + kLaunchTcPage0Len)) {
+        return;
+    }
+    const uint8_t* const p = page0 + kLaunchTcPage0Off;
+
+    launch_enable = (p[0] != 0u) ? 1u : 0u;
+    uint16_t rpm = 0u, etb = 0u, arm = 0u, disarm = 0u, hyst = 0u;
+    std::memcpy(&rpm,    p + 1, 2u);
+    std::memcpy(&etb,    p + 3, 2u);
+    std::memcpy(&arm,    p + 5, 2u);
+    std::memcpy(&disarm, p + 7, 2u);
+    std::memcpy(&hyst,   p + 9, 2u);
+    // RPM hold: 500–6500 RPM (uint16 ×10). 0 in blob keeps prior (flash blank/legacy).
+    if (rpm != 0u) {
+        if (rpm < 5000u) {
+            rpm = 5000u;
+        } else if (rpm > 65000u) {
+            rpm = 65000u;
+        }
+        launch_rpm_x10 = rpm;
+    }
+    if (etb > 1000u) {
+        etb = 1000u;
+    }
+    launch_etb_pct_x10 = etb;
+    if (arm > 1000u) {
+        arm = 1000u;
+    }
+    if (disarm > 1000u) {
+        disarm = 1000u;
+    }
+    // Arm must be ≥ disarm (hysteresis). Swap if inverted.
+    if (arm < disarm) {
+        const uint16_t tmp = arm;
+        arm = disarm;
+        disarm = tmp;
+    }
+    launch_app_arm_x10    = arm;
+    launch_app_disarm_x10 = disarm;
+    if (hyst > 5000u) {
+        hyst = 5000u;  // 500 RPM max deadband
+    }
+    launch_rpm_hyst_x10 = hyst;
+
+    tc_enable = (p[11] != 0u) ? 1u : 0u;
+    uint16_t app_min = 0u, rpm_min = 0u, dot = 0u, max_red = 0u, spark = 0u, rate = 0u;
+    std::memcpy(&app_min, p + 13, 2u);
+    std::memcpy(&rpm_min, p + 15, 2u);
+    std::memcpy(&dot,     p + 17, 2u);
+    std::memcpy(&max_red, p + 19, 2u);
+    std::memcpy(&spark,   p + 21, 2u);
+    std::memcpy(&rate,    p + 23, 2u);
+    if (app_min > 1000u) {
+        app_min = 1000u;
+    }
+    tc_app_min_x10 = app_min;
+    if (rpm_min > 65000u) {
+        rpm_min = 65000u;  // uint16 ×10 ceiling
+    }
+    tc_rpm_min_x10 = rpm_min;
+    tc_rpm_dot_thresh = dot;  // 0 = very sensitive; allow
+    if (max_red > 1000u) {
+        max_red = 1000u;
+    }
+    tc_max_reduction_pct_x10 = max_red;
+    if (spark > 30u) {
+        spark = 30u;
+    }
+    tc_spark_retard_max_deg = spark;
+    // rate 0 would freeze slew — floor at 1 if non-zero wire; 0 keeps prior default
+    if (rate != 0u) {
+        tc_reduction_rate_x10 = rate;
+    }
 }
 
 }  // namespace ems::engine

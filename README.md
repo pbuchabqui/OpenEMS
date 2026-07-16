@@ -119,50 +119,76 @@ Eventos de ignicao usam o mesmo conceito, mas programam TIM8 para dwell e centel
 - Recuperação: -0,1° por ciclo limpo após 10 ciclos consecutivos limpos.
 - Persistência NVM: retardo em slot knock, threshold armazenado como int8_t (/32).
 
-### 5. Atuadores
+### 5. Atuadores e pinout congelado (firmware)
 
-Mapeamento atual pretendido:
+**Fonte de verdade:** `ecu_sched.cpp` (INJ/IGN BSRR), `adc.cpp`, `etb_driver.cpp`,
+`timer.cpp` (CKP/CMP/ETB PWM). Placa alvo: **LQFP100 com GPIOE** (WeAct H562 /
+H562VGT6). Docs antigos com TIM2/PC/PA para INJ/IGN estão **obsoletos**.
 
-| Funcao | Timer/Canal | Pino |
-|---|---:|---|
-| INJ1 | TIM2 CH1 | PA15 |
-| INJ2 | TIM2 CH2 | PB3 |
-| INJ3 | TIM2 CH3 | PB10 |
-| INJ4 | TIM2 CH4 | PB11 |
-| IGN1 | TIM8 CH1 | PC6 |
-| IGN2 | TIM8 CH2 | PC7 |
-| IGN3 | TIM8 CH3 | PC8 |
-| IGN4 | TIM8 CH4 | PC9 |
-| CKP | TIM5 CH1 | PA0 |
-| CMP | TIM5 CH2 | PA1 |
-| AUX PWM 1 | TIM3 CH1 | PA6 |
-| AUX PWM 2 | TIM3 CH2 | PA7 |
-| AUX PWM 3 | TIM4 CH1 | PB6 |
-| AUX PWM 4 | TIM4 CH2 | PB7 |
-| ETB PWM | TIM1 CH1 | PA8 (PA9 reservado USART1\_TX \- sem CH1N) |
-| ETB DIR | GPIO | PB14 |
-| ETB EN | GPIO | PB15 |
-| UI proprietaria UART TX | USART1 TX | PA9 |
-| UI proprietaria UART RX | USART1 RX | PA10 |
+#### Crank / cam / comms
 
-Pinos ADC (expansão):
+| Funcao | Peripheral | Pino |
+|---|---|---|
+| CKP | TIM5_CH1 AF2 | **PA0** (pull-down) |
+| CMP | TIM5_CH2 AF2 | **PA1** (pull-down) |
+| UART TX | USART1 AF7 | **PA9** |
+| UART RX | USART1 AF7 | **PA10** (pull-up; livre de ETB) |
+| USB DM/DP | USB AF10 | **PA11 / PA12** |
+| CAN RX/TX | FDCAN1 AF9 | **PB8 / PB9** |
+| LED heartbeat | GPIO | **PB2** (livre de ETB) |
 
-| Funcao | Canal | Pino |
-|---|---:|---|
-| KNOCK | ADC1_IN6 | PA5 |
-| APP1 | AN1/ADC1_IN7 | PB0 |
-| APP2 | AN2/ADC1_IN8 | PB1 |
-| ETB_TPS1 | AN3/ADC1_IN9 | PC0 |
-| ETB_TPS2 | AN4/ADC1_IN10 | PC1 |
+#### Injecção / ignição (GPIOE BSRR, sem OC)
 
-**Nota:** Sensor lambda/O2 (wideband) é recebido exclusivamente via CAN (FDCAN1, ID 0x180). Não há entrada ADC para O2.
+| Funcao | Pino | Notas |
+|---|---|---|
+| INJ1 | **PE0** | low-side → TLE8888 |
+| INJ2 | **PE2** | |
+| INJ3 | **PE4** | |
+| INJ4 | **PE6** | |
+| IGN1 | **PE9** | push-pull → TLE8888 |
+| IGN2 | **PE11** | |
+| IGN3 | **PE13** | |
+| IGN4 | **PE15** | |
 
-Limitacoes de placa/pino:
+#### ETB / EWG / AUX
 
-- PC8/PC9 podem conflitar com microSD em algumas placas WeAct.
-- PA15/PB3 compartilham funcoes de debug JTAG/SWJ; a configuracao de debug deve preservar SWD funcional ou liberar esses pinos conscientemente.
-- PB10/PB11 nao devem ser reutilizados por perifericos concorrentes se TIM2 CH3/CH4 estiver ativo.
-- USART3 em PB10/PB11 nao e permitido no MVP de bancada porque conflita com INJ3/INJ4; usar USART1 em PA9/PA10.
+| Funcao | Peripheral | Pino |
+|---|---|---|
+| ETB PWM | TIM15_CH1 | **PE5** |
+| ETB DIR open | GPIO | **PE7** |
+| ETB DIR close | GPIO | **PE8** |
+| EWG PWM | TIM2_CH3 | **PB10** (ver ewg_driver) |
+| EWG DIR | GPIO | PA7 / (VGT6 dedicated) |
+| Flex fuel | EXTI | **PB5** |
+| VVT PWM | TIM4 | **PB6 / PB7** |
+
+#### ADC (sensores)
+
+| Funcao | ADC | Pino / INP |
+|---|---|---|
+| MAP | ADC1 | **PA3** / INP15 |
+| TPS | ADC1 | **PA4** / INP18 |
+| KNOCK | ADC1 | **PA5** / INP19 |
+| ETB_TPS1 | ADC1 | **PA2** / INP14 |
+| ETB_TPS2 | ADC1 | **PC5** / INP8 |
+| APP1 | ADC1 | **PC0** / INP10 |
+| APP2 | ADC1 | **PC2** / INP12 |
+| CLT | ADC2 | **PB0** / INP9 |
+| IAT | ADC2 | **PB1** / INP5 |
+| FUEL_PRESS | ADC2 | **PC4** / INP4 |
+| OIL_PRESS | ADC2 | **PC1** / INP11 |
+| EWG_POS | ADC2 | **PC3** / INP13 |
+
+**Nota:** WBO2 lambda exclusivamente via CAN (FDCAN1). Sem ADC O2.
+
+**Conflitos resolvidos (2026-07-16):**
+- OIL saiu de PC5 → **PC1** (PC5 só ETB_TPS2).
+- ETB DIR saiu de PA10/PB2 → **PE7/PE8** (UART + LED livres).
+
+**Cautelas restantes:**
+- PE* exige package com GPIOE (LQFP100). LQFP64 WeAct RGT6 **não** tem este mapa.
+- SDMMC em PC8/PC12/PD2 — não partilhar com actuadores.
+- Re-ligar fiação da bancada: OIL→PC1, ETB DIR→PE7/PE8.
 
 ## ADC E Sensores
 
@@ -269,6 +295,10 @@ Definicao de pronto para o MVP de bancada:
   - `STATUS_SCHED_DROP` (bit 7): evento descartado no scheduler.
   - `STATUS_SCHED_CLAMP` (bit 8): ajuste limitado na calibracao — em `0x401 data[6]` bit 0.
   - `STATUS_WBO2_FAULT` (bit 9): sensor WBO2 offline — em `0x401 data[6]` bit 1.
+  - `STATUS_TLE8888_FAULT` (bit 10), `STATUS_IGN_SEQUENTIAL` (bit 11), `STATUS_REV_LIMIT` (bit 12).
+  - `STATUS_LAUNCH_ACTIVE` (bit 13): launch control holding ETB/RPM.
+  - `STATUS_TC_ACTIVE` (bit 14): traction control reducing torque.
+  - OCH also exposes `tcReduction` (%×10 @ off 45) and `torqueSparkRetard` (deg @ off 47).
 
 ### ETB (Electronic Throttle Body)
 
@@ -311,12 +341,49 @@ Fora do MVP de bancada:
 
 ## Proximos Passos De Hardening
 
-1. Validar imagem `.bin` em bancada com ST-Link, sem bobinas/injetores energizados no primeiro boot.
-2. Validar TIM2/TIM8 em bancada com osciloscopio, medindo latencia e jitter reais.
-3. Validar TIM5 com sinal CKP/CMP sintetico de 200 a 8500 rpm.
-4. Endurecer USB CDC real com IRQ/endpoints e sem bloqueio do caminho critico.
-5. Reintroduzir testes host ou HIL para decode, sync, quick crank, scheduler, fuel/ignition e sensores.
-6. Validar conflitos de pinos na placa final antes de congelar pinout.
+### Feito no firmware (defensivo — 2026-07-16)
+
+- CKP: sem `schedule_on_tooth` em SPIKE; hist contaminado → LOSS; sem wrap 57→0 sem gap.
+- Scheduler: dwell WD arma no pin HIGH + purge no trip; inj inhibit = force OFF + purge fila; lead assinado wrap-safe.
+- Scheduler: injector open WD (1.2× PW / hard 36 ms) + overflow da fila prefere dropar ON/DWELL (nunca OFF/SPARK se houver assert).
+- Sensores: commit MAP/TPS/faults a cada amostra rapida (nao so no tick 100 ms).
+- Limp: falha MAP corta combustivel a qualquer RPM; telemetria PW alinhada ao mask.
+- Fuel: `calc_final_pw_us` clampa corr Q8 0.25–2.0× e satura a 100 ms; AE interp signed.
+- Page0 apply: rev limit, STFT, decel hysteresis, CMP window, trim por cilindro clampados.
+- Flash: layout **LTF3** = magic + CRC-32 dos mapas adaptativos; seed no mesmo
+  SM de flush (sem erase independente do setor 0); seed finaliza magic/CRC.
+- ETB: PID `etb_control_update` → `etb_driver_set_motor_pwm`; disable → shutdown.
+- CKP: `ticks_to_ns`/gap/normal em math overflow-safe; CMP expected em u64; 1ª borda
+  CMP só arma timestamp; LOSS zera `cmp_confirms` (exige 2 bordas p/ sequencial).
+- Sched: flush fila + safe pins em transição presync↔sequencial.
+- Protect: oil fault @ RPM>1500 corta fuel+ign; fuel-rail fault @ RPM>500 corta fuel.
+- TS `openems.ini`: page0 80–85 closed-loop/LTFT; 175 layout ver; 176–190 LTFT authority/LEARN;
+  191–215 Launch/TC; 216–251 CAN RX map (gear/vehicle/driven wheel); `ochBlockSize` = 86.
+- TC slip: CAN `WHEEL_SPEED_KMH` vs `SPEED_KMH` (can_rx_map) → torque cut; else RPM-dot proxy.
+
+### Pinout — estado
+
+- **Congelado no firmware** (tabela §5 acima): OIL→PC1, ETB DIR→PE7/PE8, INJ/IGN em PE*.
+- **Acção de bancada:** actualizar fiação física OIL e ETB DIR; validar com `make firmware` + ST-Link.
+- **docs/wiring_diagram.md** ainda tem mapa TIM2/PC legado — usar README §5 até reescrever.
+
+### P1 — restante (decode / cam / proteccao)
+
+- ~~Math overflow-safe `ticks_to_ns` / CMP u64; 1ª borda CMP; LOSS zera `cmp_confirms`~~ → feito (ver lista acima).
+- ~~Flush fila + safe pins presync↔sequencial; oil/fuel-rail cut~~ → feito.
+- ~~Pinout firmware INJ PE0/2/4/6, IGN PE*, OIL PC1, ETB DIR PE7/8~~ → congelado no código.
+- Endurecer WAIT_GAP→HALF (mais dentes de confirmação e/ou fuel só em FULL_SYNC) — parcialmente mitigado; rever política de fuel em HALF.
+- Unificar reset de `cmp_confirms` em *todos* os caminhos de LOSS (auditoria residual).
+- Overtemp → cut real; DiagnosticManager → inhibit (doc `protection_system.md` ainda aspiracional).
+- Multi-spark: margem de tabela / edge cases de fila sob RPM alto.
+
+### P2 — bancada / HIL / docs
+
+- Validar imagem `.bin` com ST-Link, sem bobinas/injetores no primeiro boot.
+- Scope TIM2/TIM8 (latência/jitter) e TIM5 CKP/CMP 200–8500 rpm.
+- USB CDC real: IRQ/endpoints, sem bloqueio do caminho crítico; RX ≥ envelope.
+- Host/HIL expandido: decode, sync, quick crank, scheduler, fuel/ign, sensores (já há host-test 1000+; HIL físico pendente).
+- Actualizar `docs/wiring_diagram.md` ao pinout §5 (ainda tem mapa TIM2/PC legado).
 
 ## Politica Documental
 

@@ -394,6 +394,8 @@ inline uint16_t maf_period_avg4() noexcept {
 // Canais rápidos — chamado ~12× por revolução via sensors_on_tooth()
 // MAP, MAF-V, TPS, O2 — todos sincronizados ao mesmo ângulo de virabrequim
 // -----------------------------------------------------------------------------
+void commit_sensor_snapshot() noexcept;
+
 inline void sample_fast_channels() noexcept {
     // NOTA: MAP (PA3/INP15) e TPS (PA4/INP18) agora são ADC real — o bench-mode NÃO
     // os força mais (só CLT/IAT em sensors_tick_100ms). Ligar o DAC do estimulador.
@@ -552,6 +554,41 @@ inline void sample_fast_channels() noexcept {
                                        g_data_staging.tps_pct_x10);
     }
     #endif
+
+    // Publish immediately so the 2 ms fuel loop sees live MAP/TPS/faults.
+    // (Previously only sensors_tick_100ms committed → up to ~100 ms of stale load.)
+    commit_sensor_snapshot();
+}
+
+// Double buffering: staging → committed under short critical section.
+// Called after every producer that mutates staging (fast, 50 ms, 100 ms).
+void commit_sensor_snapshot() noexcept {
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("cpsid i" ::: "memory");
+#endif
+    g_data_committed.map_bar_x1000          = g_data_staging.map_bar_x1000;
+    g_data_committed.maf_gps_x100           = g_data_staging.maf_gps_x100;
+    g_data_committed.tps_pct_x10            = g_data_staging.tps_pct_x10;
+    g_data_committed.clt_degc_x10           = g_data_staging.clt_degc_x10;
+    g_data_committed.iat_degc_x10           = g_data_staging.iat_degc_x10;
+    g_data_committed.fuel_press_bar_x1000   = g_data_staging.fuel_press_bar_x1000;
+    g_data_committed.oil_press_bar_x1000    = g_data_staging.oil_press_bar_x1000;
+    g_data_committed.vbatt_mv               = g_data_staging.vbatt_mv;
+    g_data_committed.fault_bits             = g_data_staging.fault_bits;
+    g_data_committed.app1_pct_x10           = g_data_staging.app1_pct_x10;
+    g_data_committed.app2_pct_x10           = g_data_staging.app2_pct_x10;
+    g_data_committed.app_pct_x10            = g_data_staging.app_pct_x10;
+    g_data_committed.etb_tps1_pct_x10       = g_data_staging.etb_tps1_pct_x10;
+    g_data_committed.etb_tps2_pct_x10       = g_data_staging.etb_tps2_pct_x10;
+    g_data_committed.etb_tps_pct_x10        = g_data_staging.etb_tps_pct_x10;
+    g_data_committed.throttle_fault_bits    = g_data_staging.throttle_fault_bits;
+    g_data_committed.an1_raw                = g_data_staging.an1_raw;
+    g_data_committed.an2_raw                = g_data_staging.an2_raw;
+    g_data_committed.an3_raw                = g_data_staging.an3_raw;
+    g_data_committed.an4_raw                = g_data_staging.an4_raw;
+#if defined(__arm__) || defined(__thumb__)
+    __asm__ volatile("cpsie i" ::: "memory");
+#endif
 }
 
 }  // namespace
@@ -677,6 +714,7 @@ void sensors_tick_50ms() noexcept {
         (static_cast<uint32_t>(avg_n(g_fuel_buf, 4)) * 2500u) / 4095u);
     g_data_staging.oil_press_bar_x1000 = static_cast<uint16_t>(
         (static_cast<uint32_t>(avg_n(g_oil_buf, 4)) * 2500u) / 4095u);
+    commit_sensor_snapshot();
 }
 
 // [FIX-3] AN1-4: APP/ETB + passthrough bruto
@@ -796,33 +834,8 @@ void sensors_tick_100ms() noexcept {
         g_data_staging.vbatt_mv = 12000u;
     }
 
-    // Double buffering: copy staging→committed under critical section.
-#if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("cpsid i" ::: "memory");
-#endif
-    g_data_committed.map_bar_x1000        = g_data_staging.map_bar_x1000;
-    g_data_committed.maf_gps_x100       = g_data_staging.maf_gps_x100;
-    g_data_committed.tps_pct_x10        = g_data_staging.tps_pct_x10;
-    g_data_committed.clt_degc_x10       = g_data_staging.clt_degc_x10;
-    g_data_committed.iat_degc_x10       = g_data_staging.iat_degc_x10;
-    g_data_committed.fuel_press_bar_x1000 = g_data_staging.fuel_press_bar_x1000;
-    g_data_committed.oil_press_bar_x1000  = g_data_staging.oil_press_bar_x1000;
-    g_data_committed.vbatt_mv           = g_data_staging.vbatt_mv;
-    g_data_committed.fault_bits         = g_data_staging.fault_bits;
-    g_data_committed.app1_pct_x10       = g_data_staging.app1_pct_x10;
-    g_data_committed.app2_pct_x10       = g_data_staging.app2_pct_x10;
-    g_data_committed.app_pct_x10        = g_data_staging.app_pct_x10;
-    g_data_committed.etb_tps1_pct_x10   = g_data_staging.etb_tps1_pct_x10;
-    g_data_committed.etb_tps2_pct_x10   = g_data_staging.etb_tps2_pct_x10;
-    g_data_committed.etb_tps_pct_x10    = g_data_staging.etb_tps_pct_x10;
-    g_data_committed.throttle_fault_bits = g_data_staging.throttle_fault_bits;
-    g_data_committed.an1_raw            = g_data_staging.an1_raw;
-    g_data_committed.an2_raw            = g_data_staging.an2_raw;
-    g_data_committed.an3_raw            = g_data_staging.an3_raw;
-    g_data_committed.an4_raw            = g_data_staging.an4_raw;
-#if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("cpsie i" ::: "memory");
-#endif
+    // Slow path also samples APP/ETB; publish full snapshot for sensors_get().
+    commit_sensor_snapshot();
 }
 
 void sensors_maf_freq_capture_isr(uint16_t period_ticks) noexcept {

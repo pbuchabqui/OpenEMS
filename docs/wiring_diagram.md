@@ -1,6 +1,11 @@
 # OpenEMS — Electrical Wiring Diagram
 
-## STM32H562RGT6 (LQFP64) + TLE8888 Smart Power Stage
+> **⚠️ STALE DIAGRAM (pre-GPIOE scheduler):** the ASCII art below still shows
+> TIM2/TIM8 INJ/IGN on PC/PA/PB and dual-use ETB/UART pins. **Firmware truth is
+> README.md §5 “Pinout congelado”** (INJ/IGN PE0–15 BSRR, OIL PC1, ETB DIR PE7/8,
+> ETB PWM PE5/TIM15). Re-draw this file against that table before production.
+
+## STM32H562 (LQFP100 / GPIOE) + TLE8888 Smart Power Stage
 
 ```
                             ┌─────────────────────────────────┐
