@@ -53,6 +53,7 @@ int main() { return 0; }
 #include "engine/quick_crank.h"
 #include "engine/torque_manager.h"
 #include "engine/transient_fuel.h"
+#include "engine/spark_skip.h"
 #include "engine/xtau_autocalib.h"
 #include "engine/ewg_control.h"
 #include "hal/adc.h"
@@ -830,12 +831,36 @@ int main() {
                 }
                 ems::app::ui_set_rev_limit_active(g_rev_limit_active);
 
+                // Spark-skip soft limiter: na janela [hard−window, hard) o
+                // ratio rampa 0→max — torque cai progressivamente ANTES do
+                // corte duro de fuel (que permanece inalterado no hard).
+                {
+                    const uint16_t win = ems::engine::spark_skip_window_rpm_x10;
+                    const uint8_t  mx  = ems::engine::spark_skip_max_q8;
+                    uint8_t ratio = 0u;
+                    if (win != 0u && mx != 0u && !g_rev_limit_active &&
+                        hard > win && snap.rpm_x10 >= (hard - win)) {
+                        const uint32_t into = snap.rpm_x10 - (hard - win);
+                        ratio = static_cast<uint8_t>(
+                            (static_cast<uint32_t>(mx) * into) / win);
+                    }
+                    ems::engine::spark_skip_set_ratio_q8(ratio);
+                    // Edge de revolução: tooth_index recua (wrap no gap).
+                    static uint16_t s_prev_tooth = 0u;
+                    if (snap.tooth_index < s_prev_tooth) {
+                        ems::engine::spark_skip_on_rev();
+                    }
+                    s_prev_tooth = snap.tooth_index;
+                }
+
                 const uint8_t inj_mask =
                     (fuel_protect_cut || g_rev_limit_active ||
                      half_fuel_lockout) ? 0x0Fu : 0u;
-                const uint8_t ign_mask =
+                const uint8_t ign_mask_cut =
                     (rev_cut || oil_protect_cut || overtemp_cut ||
                      diag_critical) ? 0x0Fu : 0u;
+                const uint8_t ign_mask = static_cast<uint8_t>(
+                    ign_mask_cut | ems::engine::spark_skip_mask());
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);
                 ::ecu_sched_set_ign_inhibit_mask(ign_mask);
             }

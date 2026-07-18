@@ -64,6 +64,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/knock.cpp $(SRC_DIR)/engine/auxiliaries.cpp \
              $(SRC_DIR)/engine/table3d.cpp $(SRC_DIR)/engine/quick_crank.cpp \
              $(SRC_DIR)/engine/transient_fuel.cpp \
+             $(SRC_DIR)/engine/spark_skip.cpp \
              $(SRC_DIR)/engine/ecu_sched.cpp \
              $(SRC_DIR)/engine/ecu_sched_angle.cpp \
              $(SRC_DIR)/engine/diagnostic_manager.cpp \
@@ -109,6 +110,7 @@ HOST_TEST_HARNESS = $(TEST_DIR)/harness.cpp \
                     $(TEST_DIR)/run_all.cpp
 HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_torque.cpp \
+           $(TEST_DIR)/test_spark_skip.cpp \
                    $(TEST_DIR)/test_ckp.cpp \
                    $(TEST_DIR)/test_sensors.cpp \
                    $(TEST_DIR)/test_fuel.cpp \

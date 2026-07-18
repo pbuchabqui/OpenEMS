@@ -90,6 +90,7 @@ void test_fuel_ltft_accum(void);
 void test_fuel_ltft_accum_commit_ve(void);
 void test_fuel_ltft_center_gate(void);
 void test_fuel_inj_two_slope(void);
+void test_spark_skip(void);
 void test_ign_get_advance(void);
 void test_ign_dwell_vbatt_rpm(void);
 void test_ign_idle_spark_correction(void);

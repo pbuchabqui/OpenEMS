@@ -1056,6 +1056,8 @@ const FIELD_LABELS = {
   decel_cut_min_clt_x10:         "Decel cut min CLT (°C)",
   inj_small_pulse_break_us:      "Injector small-pulse breakpoint (ms, 0=off)",
   inj_small_pulse_rate_q8:       "Injector small-pulse rate (Q8, 128=0.5×, 0=off)",
+  spark_skip_window_rpm_x10:     "Spark-skip window before hard cut (RPM, 0=off)",
+  spark_skip_max_q8:             "Spark-skip max ratio (Q8, 128=50%, 0=off)",
 };
 
 /* calibração assistida: campo → fonte do raw ao vivo na telemetria */

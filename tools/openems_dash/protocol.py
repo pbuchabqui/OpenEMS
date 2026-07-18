@@ -507,6 +507,8 @@ PAGE6_FIELDS = [
 PAGE7_FIELDS = [
     ("dwell_rpm_axis_rpm",   0, 4, "H", 1.0),   # RPM
     ("dwell_rpm_factor_q8",  8, 4, "H", 1.0),   # Q8 adimensional
+    ("spark_skip_window_rpm_x10", 16, 1, "H", 0.1),  # RPM antes do hard cut (0=off)
+    ("spark_skip_max_q8",         18, 1, "B", 1.0),  # Q8 máx (128=50%; 0=off)
 ]
 
 # Página 0 — bytes 0-15: engine config; bytes 16+: calibração e dirigibilidade.

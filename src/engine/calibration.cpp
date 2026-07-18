@@ -121,6 +121,12 @@ uint16_t crank_prime_max_pw_us = 30000u;
 uint16_t inj_small_pulse_break_us = 0u;
 uint8_t  inj_small_pulse_rate_q8  = 0u;
 
+// Spark-skip soft limiter: janela em RPM×10 ANTES do hard cut onde o ratio
+// rampa 0→max_q8 (torque cai progressivamente antes do corte duro de fuel).
+// 0 em qualquer um = OFF (comportamento actual: só hard cut).
+uint16_t spark_skip_window_rpm_x10 = 0u;
+uint8_t  spark_skip_max_q8         = 0u;
+
 
 uint16_t dwell_vbatt_axis_mv[kIgnitionDwellTableSize] = {9000u, 10000u, 11000u, 12000u, 13000u, 14000u, 15000u, 16000u};
 uint16_t dwell_ms_x10_table[kIgnitionDwellTableSize] = {42u, 38u, 35u, 30u, 28u, 25u, 23u, 22u};

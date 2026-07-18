@@ -478,6 +478,8 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memset(p, 0, sizeof(g_page7_dwell2d));
         std::memcpy(p + 0,  ems::engine::dwell_rpm_axis_rpm,  8u);
         std::memcpy(p + 8,  ems::engine::dwell_rpm_factor_q8, 8u);
+        std::memcpy(p + 16, &ems::engine::spark_skip_window_rpm_x10, 2u);
+        p[18] = ems::engine::spark_skip_max_q8;
     } else if (page == 0x08u) {
         std::memcpy(g_page8_pedalmap, ems::engine::etb_pedal_map, sizeof(g_page8_pedalmap));
     } else if (page == 0x09u) {
@@ -720,6 +722,8 @@ bool sync_table_from_page(uint8_t page) noexcept {
         const uint8_t* p = g_page7_dwell2d;
         std::memcpy(ems::engine::dwell_rpm_axis_rpm,  p + 0,  8u);
         std::memcpy(ems::engine::dwell_rpm_factor_q8, p + 8,  8u);
+        std::memcpy(&ems::engine::spark_skip_window_rpm_x10, p + 16, 2u);
+        ems::engine::spark_skip_max_q8 = p[18];
     } else if (page == 0x08u) {
         std::memcpy(ems::engine::etb_pedal_map, g_page8_pedalmap, sizeof(g_page8_pedalmap));
     } else if (page == 0x09u) {

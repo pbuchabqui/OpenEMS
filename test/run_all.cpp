@@ -128,6 +128,7 @@ int main(void) {
     test_fuel_ltft_accum_commit_ve();
     test_fuel_ltft_center_gate();
     test_fuel_inj_two_slope();
+    test_spark_skip();
 
     // ── Ign Calc — Segunda Fase ───────────────────────────────────────────────
     printf("\n=== IGN CALC (fase 2) ===");
