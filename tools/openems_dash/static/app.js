@@ -302,9 +302,13 @@ const STATUS_CHIPS = [
   { id: "REV",   label: "REV LIM",  goodWhenOn: false,
     on: d => !!(d.status && d.status.REV_LIMIT) },
   { id: "FAULT", label: "FAULT",    goodWhenOn: false,
+    // TLE8888 é só informativo (nenhum gating no firmware; INJ/IGN saem por
+    // GPIOE) e em bancada o chip está ausente → suprimido com BENCH ativo.
+    // WBO2 NÃO é suprimido: bloqueia o closed-loop, e o bench simula λ que
+    // o limpa — se acender em bench, é falha real da simulação.
     on: d => !!(d.status && (d.status.SENSOR_FAULT || d.status.WBO2_FAULT ||
-                             d.status.TLE8888_FAULT || d.status.LIMP_MODE ||
-                             d.status.ETB_LIMP)) },
+                             (d.status.TLE8888_FAULT && !d.status.BENCH_MODE) ||
+                             d.status.LIMP_MODE || d.status.ETB_LIMP)) },
   { id: "TC",    label: "TRACTION", goodWhenOn: false, warn: true,
     on: d => !!(d.status && d.status.TC_ACTIVE) },
 ];
@@ -314,8 +318,7 @@ $("#statusLeds").innerHTML =
   `<span class="led on-info" id="ignMode" title="Modo de ignição">—</span>` +
   `<span class="led on-info" id="injMode" title="Modo de injeção">—</span>` +
   STATUS_CHIPS.slice(1).map(c =>
-    `<span class="led" id="led_${c.id}" title="${c.label}">${c.label}</span>`).join("") +
-  `<span class="led" id="led_BENCH" title="Bench OFF · sensores reais">BENCH</span>`;
+    `<span class="led" id="led_${c.id}" title="${c.label}">${c.label}</span>`).join("");
 
 // Detalhe do FAULT: nomes por bit de sensor_fault_bits (SensorId 0..7).
 const SENSOR_FAULT_NAMES =
@@ -333,7 +336,8 @@ function faultDetails(d) {
   if (d.status.WBO2_FAULT) out.push("WBO2 (CAN) sem sinal/fault");
   if (d.status.TLE8888_FAULT)
     out.push(`TLE8888 driver${d.tle8888_fault_bm
-      ? ` (bm 0x${d.tle8888_fault_bm.toString(16).toUpperCase()})` : ""}`);
+      ? ` (bm 0x${d.tle8888_fault_bm.toString(16).toUpperCase()})` : " ausente"}${
+      d.status.BENCH_MODE ? " — suprimido em bench" : ""}`);
   return out;
 }
 $("#led_FAULT").style.cursor = "pointer";
@@ -1719,13 +1723,6 @@ function setBenchBtn(on) {
   if (!b) return;
   b.textContent = on ? "BENCH ON" : "BENCH OFF";
   b.classList.toggle("on", on);
-  const chip = $("#led_BENCH");
-  if (chip) {
-    chip.className = "led" + (on ? " on-warn" : "");
-    chip.title = on
-      ? "Bench ON · CLT/IAT/λ simulados"
-      : "Bench OFF · sensores reais";
-  }
 }
 $("#benchBtn").onclick = async () => {
   const next = !benchOn;
