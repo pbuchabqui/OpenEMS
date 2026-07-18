@@ -144,6 +144,12 @@ extern int8_t cyl_ign_trim_deg[::ems::engine::cfg::kCylinderCount];
 extern uint8_t cmp_window_open_tooth;
 extern uint8_t cmp_window_close_tooth;
 
+// CKP: nº de dentes descartados após silêncio ≥ timeout de stall (arranque,
+// stall, religação do sensor) antes de re-entrar no bootstrap do histórico —
+// os primeiros pulsos podem ser transiente eléctrico (estilo FOME
+// triggerSkipPulses). 0 = desligado (comportamento anterior).
+extern uint8_t ckp_skip_pulses_after_gap;
+
 extern uint8_t  xtau_autocal_enabled;
 extern uint8_t  xtau_autocal_active;
 extern int8_t   xtau_autocal_tau_delta[kCorrectionTableSize];

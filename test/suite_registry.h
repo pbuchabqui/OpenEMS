@@ -36,6 +36,7 @@ void test_ckp_half_sync(void);
 void test_ckp_full_sync(void);
 void test_ckp_tooth_index_increments(void);
 void test_ckp_instant_rpm_360(void);
+void test_ckp_skip_after_silence(void);
 void test_ckp_loss_of_sync_too_many_teeth(void);
 void test_ckp_loss_of_sync_early_gap(void);
 void test_ckp_noise_rejection(void);

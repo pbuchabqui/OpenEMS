@@ -131,6 +131,40 @@ void test_ckp_loss_of_sync_early_gap(void) {
              static_cast<uint8_t>(SyncState::LOSS_OF_SYNC), "LOSS_OF_SYNC on early gap");
 }
 
+void test_ckp_skip_after_silence(void) {
+    section("ckp: skip de dentes pós-silêncio (ckp_skip_pulses_after_gap)");
+    // Desligado (default 0): sync normal, nada descartado.
+    ckp_skip_pulses_after_gap = 0u;
+    const uint32_t base0 = g_dbg_skip_after_silence;
+    ckp_reach_full_sync();
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::FULL_SYNC), "skip=0: FULL_SYNC");
+    CHECK_EQ(g_dbg_skip_after_silence, base0, "skip=0: nenhum dente descartado");
+
+    // Silêncio ≥ timeout de stall com FULL_SYNC ainda de pé (race com o
+    // stall poll do main loop): a própria borda derruba o sync e é descartada,
+    // tal como as N-1 seguintes.
+    ckp_skip_pulses_after_gap = 3u;
+    const uint32_t base1 = g_dbg_skip_after_silence;
+    ckp_fire(13000000u);  // > 12.5M ticks (200 ms) → silêncio
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::LOSS_OF_SYNC),
+             "silêncio em FULL_SYNC → drop imediato");
+    ckp_fire(kNormalPeriod);
+    ckp_fire(kNormalPeriod);
+    CHECK_EQ(g_dbg_skip_after_silence - base1, 3u, "3 dentes descartados");
+
+    // Depois do skip o bootstrap recomeça limpo e o sync recupera normalmente.
+    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(55u);
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::FULL_SYNC), "re-sync após skip");
+    CHECK_EQ(g_dbg_skip_after_silence - base1, 3u,
+             "dentes normais não são descartados");
+
+    ckp_skip_pulses_after_gap = 0u;  // isolamento entre testes
+}
+
 void test_ckp_noise_rejection(void) {
     section("ckp: glitch < kMinToothTicks rejected");
     ckp_reach_full_sync();

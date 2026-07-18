@@ -193,6 +193,7 @@ int8_t cyl_fuel_trim_pct[cfg::kCylinderCount] = {};  // 0 = sem correção
 int8_t cyl_ign_trim_deg[cfg::kCylinderCount]  = {};  // 0 = sem correção
 uint8_t cmp_window_open_tooth  = 0u;  // 0/0 = desabilitado
 uint8_t cmp_window_close_tooth = 0u;
+uint8_t ckp_skip_pulses_after_gap = 0u;  // 0 = desligado
 
 uint16_t boost_target_bar_x1000[7][8] = {
     {1000u, 1020u, 1050u, 1080u, 1100u, 1120u, 1150u, 1180u},  // 0: neutro

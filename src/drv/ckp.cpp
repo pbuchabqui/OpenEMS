@@ -370,6 +370,9 @@ static constexpr uint8_t kCmpToothTol = 3u;
 // fora da janela relativa a uma referência morta) e é largado p/ permitir recuperação.
 static uint8_t s_cmp_reject_streak = 0u;
 static constexpr uint8_t kCmpRejectResync = 3u;
+// Dentes ainda por descartar pelo skip pós-silêncio (recarregado quando
+// delta ≥ timeout de stall e ckp_skip_pulses_after_gap > 0).
+static uint8_t s_skip_remaining = 0u;
 
 // Teste de dente normal dentro da janela de tolerância ±20%.
 // 0,8×avg ≤ period ≤ 1,2×avg → dente aceito para atualização do histórico.
@@ -626,6 +629,8 @@ volatile uint32_t g_dbg_loss_histogram = 0u;
 volatile uint32_t g_dbg_loss_wrap = 0u;
 volatile uint32_t g_dbg_loss_hist_mn = 0u;
 volatile uint32_t g_dbg_loss_hist_mx = 0u;
+// Dentes descartados pelo skip pós-silêncio (ckp_skip_pulses_after_gap).
+volatile uint32_t g_dbg_skip_after_silence = 0u;
 
 // Instant RPM 360°: timestamp TIM5 do mesmo slot de dente na volta anterior +
 // último dt de volta completa (escrito só na ISR; leitura atómica de u32).
@@ -737,6 +742,42 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     // de EMC (< 800 ns) sem afetar operacao normal.
     if (delta_ticks < kMinToothTicks) {
         return;  // pulso muito curto → ruído EMC, descartar
+    }
+
+    // ── 3b. Skip de dentes pós-silêncio (estilo FOME triggerSkipPulses) ──
+    // Após ≥ timeout de stall sem bordas (arranque, stall, religação do
+    // sensor), os primeiros pulsos podem ser transiente eléctrico do
+    // sensor/chicote. Com N>0 configurado, descarta os N primeiros e re-arma
+    // o bootstrap do histórico — o sinal só entra na máquina de sync depois.
+    // Mesmo timeout do stall watchdog (2 s em bench-mode: o estimulador pára
+    // o RMT ao reprogramar e isso não é silêncio real).
+    if (ems::engine::ckp_skip_pulses_after_gap != 0u) {
+        if (delta_ticks >= min_stall_timeout_ticks()) {
+            s_skip_remaining = ems::engine::ckp_skip_pulses_after_gap;
+        }
+        if (s_skip_remaining != 0u) {
+            --s_skip_remaining;
+            ++g_dbg_skip_after_silence;
+            // Mantém os timestamps sãos (delta do próximo dente e stall poll)
+            // sem alimentar histórico/classificação com o pulso descartado.
+            g_state.prev_capture           = capture_now;
+            g_state.snap.last_tim5_capture = capture_now;
+            g_state.prev_period_ticks      = 0u;  // próximo dente aceite como 1º
+            g_state.hist_ready             = 0u;  // re-bootstrap limpo
+            g_state.tooth_count            = 0u;
+            g_state.consecutive_anomalies  = 0u;
+            // Race estreita: silêncio real com HALF/FULL ainda não derrubado
+            // pelo stall poll do main loop — drop aqui, como no gate de
+            // histograma, para nada agendar sobre tooth_index obsoleto.
+            if (g_state.snap.state == ems::drv::SyncState::HALF_SYNC ||
+                g_state.snap.state == ems::drv::SyncState::FULL_SYNC) {
+                g_state.snap.state = ems::drv::SyncState::LOSS_OF_SYNC;
+                close_cmp_seq_gate();
+                sensors_on_tooth(g_state.snap);
+                schedule_on_tooth(g_state.snap);  // advances unsync clear path
+            }
+            return;
+        }
     }
 
     g_state.prev_capture                = capture_now;
@@ -1224,6 +1265,7 @@ void ckp_test_reset() noexcept {
     s_revs_since_cmp = 0u;
     s_cmp_ref_tooth = 0xFFu;
     s_cmp_reject_streak = 0u;
+    s_skip_remaining = 0u;
 }
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {

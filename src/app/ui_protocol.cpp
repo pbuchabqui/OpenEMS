@@ -202,8 +202,8 @@ void parse_byte(uint8_t b) noexcept {
         if (b == static_cast<uint8_t>('D')) {
             EcuSchedDiagSnapshot sd{};
             ecu_sched_get_diag_snapshot(&sd);
-            // 44×u32 = 176 B (era 41; +3 diag rev-limit trips/rpm)
-            const uint32_t diag[45] = {
+            // 46×u32 = 184 B (era 45; +1 skip pós-silêncio [45])
+            const uint32_t diag[46] = {
                 sd.late_event_count,
                 sd.cycle_schedule_drop_count,
                 sd.inj1_arm,
@@ -254,6 +254,7 @@ void parse_byte(uint8_t b) noexcept {
                 ::g_dbg_rev_limit_rpm_x10,   // [42] rpm_x10 no último trip
                 ::g_dbg_rev_limit_rpm_max,   // [43] maior rpm_x10 já visto (glitch?)
                 ems::drv::ckp_instant_rpm_x10(),  // [44] RPM×10 volta-a-volta (360°)
+                ems::drv::g_dbg_skip_after_silence,  // [45] dentes descartados pós-silêncio
             };
             tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), sizeof(diag));
             return;

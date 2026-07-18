@@ -146,6 +146,8 @@ extern volatile uint32_t g_dbg_loss_histogram;
 extern volatile uint32_t g_dbg_loss_wrap;
 extern volatile uint32_t g_dbg_loss_hist_mn;
 extern volatile uint32_t g_dbg_loss_hist_mx;
+// Dentes descartados pelo skip pós-silêncio (ckp_skip_pulses_after_gap > 0).
+extern volatile uint32_t g_dbg_skip_after_silence;
 
 // Osciloscópio CKP/CMP: rings de timestamps TIM5 das bordas cruas (comando 'K').
 // idx = próxima posição a escrever (elemento mais antigo do ring).

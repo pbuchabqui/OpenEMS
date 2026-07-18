@@ -296,17 +296,18 @@ class OpenEMSLink:
         "loss_histogram", "loss_wrap", "loss_hist_mn", "loss_hist_mx",
         "rev_limit_trips", "rev_limit_rpm_x10", "rev_limit_rpm_max",
         "instant_rpm_x10",  # [44] RPM×10 volta-a-volta (mesmo dente, 360°)
+        "ckp_skip_after_silence",  # [45] dentes descartados pós-silêncio
     ]
-    DEBUG_SIZE = 45 * 4  # must match FW diag[45]
+    DEBUG_SIZE = 46 * 4  # must match FW diag[46]
 
     def read_debug(self) -> dict:
         assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE
         buf = self._txn(b"D", self.DEBUG_SIZE)
-        # 31 u32 + 2 i32 + 12 u32
+        # 31 u32 + 2 i32 + 13 u32
         vals = (
             struct.unpack("<31I", buf[:124])
             + struct.unpack("<2i", buf[124:132])
-            + struct.unpack("<12I", buf[132:180])
+            + struct.unpack("<13I", buf[132:184])
         )
         return dict(zip(self.DEBUG_FIELDS, vals))
 

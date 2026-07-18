@@ -360,7 +360,7 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 66, &ems::engine::antijerk_tpsdot_threshold_x10, 2u);
         std::memcpy(g_page0 + 68, &ems::engine::antijerk_retard_deg,            2u);
         g_page0[70] = ems::engine::antijerk_decay_cycles;
-        g_page0[71] = 0u;  // pad
+        g_page0[71] = ems::engine::ckp_skip_pulses_after_gap;  // era pad (0 = off)
         std::memcpy(g_page0 + 72, &ems::engine::rev_limit_rpm_x10,         4u);
         std::memcpy(g_page0 + 76, &ems::engine::rev_limit_soft_window_x10, 4u);
         // Offsets 80-85: closed-loop enable / LEARN burn / post-start / LTFT min RPM
@@ -550,6 +550,9 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::antijerk_tpsdot_threshold_x10, g_page0 + 66, 2u);
         std::memcpy(&ems::engine::antijerk_retard_deg,            g_page0 + 68, 2u);
         ems::engine::antijerk_decay_cycles = g_page0[70];
+        // Byte 71 (era pad): skip de dentes CKP pós-silêncio. Clamp a 57 (1 volta).
+        ems::engine::ckp_skip_pulses_after_gap =
+            (g_page0[71] > 57u) ? 57u : g_page0[71];
         std::memcpy(&ems::engine::rev_limit_rpm_x10,          g_page0 + 72, 4u);
         std::memcpy(&ems::engine::rev_limit_soft_window_x10,  g_page0 + 76, 4u);
         // Safety clamps: corrupt/host typos must not disable the rev limiter
