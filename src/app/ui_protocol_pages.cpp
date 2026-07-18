@@ -191,6 +191,9 @@ void update_realtime_page() noexcept {
     if (tc_red > 0u) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_TC_ACTIVE);
     }
+    if (ems::drv::sensors_is_bench_mode()) {
+        status = static_cast<uint16_t>(status | ems::app::STATUS_BENCH_MODE);
+    }
     rt.status_bits = status;
     write_u32_le(&rt.reserved[0], g_rt_sched_late_events);
     rt.reserved[4] = g_rt_lambda_target_d4;
@@ -216,7 +219,7 @@ void update_realtime_page() noexcept {
     // reserved[31..34]: was IVC clamp (always 0) — reused for torque RT (layout stable size):
     //   [31..32] tc_reduction_pct_x10 (u16 LE, 0–1000)
     //   [33]     spark_retard_deg (u8, 0–30)
-    //   [34]     pad
+    //   [34]     sensors fault_bits (bitmask SensorId 0..7)
     rt.reserved[31] = static_cast<uint8_t>(tc_red & 0xFFu);
     rt.reserved[32] = static_cast<uint8_t>((tc_red >> 8u) & 0xFFu);
     {
@@ -225,7 +228,7 @@ void update_realtime_page() noexcept {
         if (sr > 30) { sr = 30; }
         rt.reserved[33] = static_cast<uint8_t>(sr);
     }
-    rt.reserved[34] = 0u;
+    rt.reserved[34] = s.fault_bits;
     write_u32_le(&rt.reserved[35], g_rt_loop2ms_last_us);
     write_u32_le(&rt.reserved[39], g_rt_loop2ms_max_us);
     // ADC bruto p/ calibração (AN1=APP1, AN2=APP2, AN3=ETB TPS1, AN4=ETB TPS2)
