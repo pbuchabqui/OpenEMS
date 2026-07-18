@@ -144,6 +144,14 @@ extern int8_t cyl_ign_trim_deg[::ems::engine::cfg::kCylinderCount];
 extern uint8_t cmp_window_open_tooth;
 extern uint8_t cmp_window_close_tooth;
 
+// MAP janela angular por cilindro (engine/map_window, estilo FOME #610).
+// enable: 0=off (default), 1=medir (telemetria/balance; sem efeito no fuel).
+// open_deg: abertura da janela do slot 0 no ciclo 720° (0-719; slots seguintes
+// a +180° cada). len_deg: duração da janela (10-180°).
+extern uint8_t  map_window_enable;
+extern uint16_t map_window_open_deg;
+extern uint16_t map_window_len_deg;
+
 // CKP: nº de dentes descartados após silêncio ≥ timeout de stall (arranque,
 // stall, religação do sensor) antes de re-entrar no bootstrap do histórico —
 // os primeiros pulsos podem ser transiente eléctrico (estilo FOME

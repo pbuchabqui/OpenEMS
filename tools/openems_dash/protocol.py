@@ -297,19 +297,29 @@ class OpenEMSLink:
         "rev_limit_trips", "rev_limit_rpm_x10", "rev_limit_rpm_max",
         "instant_rpm_x10",  # [44] RPM×10 volta-a-volta (mesmo dente, 360°)
         "ckp_skip_after_silence",  # [45] dentes descartados pós-silêncio
+        # [46-49] MAP janela angular slot 0-3: hi16=média bar×1000,
+        # lo16=balance ×1000 (int16) — desempacotado abaixo em _w{N}_...
+        "map_w0", "map_w1", "map_w2", "map_w3",
+        "map_window_cycles",  # [50] ciclos 720° completos
     ]
-    DEBUG_SIZE = 46 * 4  # must match FW diag[46]
+    DEBUG_SIZE = 51 * 4  # must match FW diag[51]
 
     def read_debug(self) -> dict:
         assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE
         buf = self._txn(b"D", self.DEBUG_SIZE)
-        # 31 u32 + 2 i32 + 13 u32
+        # 31 u32 + 2 i32 + 18 u32
         vals = (
             struct.unpack("<31I", buf[:124])
             + struct.unpack("<2i", buf[124:132])
-            + struct.unpack("<13I", buf[132:184])
+            + struct.unpack("<18I", buf[132:204])
         )
-        return dict(zip(self.DEBUG_FIELDS, vals))
+        d = dict(zip(self.DEBUG_FIELDS, vals))
+        for n in range(4):
+            packed = d.pop(f"map_w{n}")
+            d[f"map_w{n}_bar_x1000"] = packed >> 16
+            bal = packed & 0xFFFF
+            d[f"map_w{n}_bal_x1000"] = bal - 0x10000 if bal >= 0x8000 else bal
+        return d
 
     # ── osciloscópio CKP/CMP ('K': 294 bytes) ────────────────────────────
     def read_scope(self) -> dict:

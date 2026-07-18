@@ -155,6 +155,7 @@ int main(void) {
     // ── Sensors — Segunda Fase ───────────────────────────────────────────────
     printf("\n=== SENSORS (fase 2) ===");
     test_sensors_on_tooth();
+    test_map_window_angular();
     test_sensors_tick_50ms();
     test_sensors_set_range();
     test_sensors_etb_harness_present();

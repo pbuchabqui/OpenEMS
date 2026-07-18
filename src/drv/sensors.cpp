@@ -16,6 +16,9 @@
 #include "engine/knock.h"
 #endif
 
+#include "engine/calibration.h"
+#include "engine/map_window.h"
+
 namespace {
 
 using ems::drv::SensorData;
@@ -675,6 +678,16 @@ void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
     g_last_rpm_x10 = snap.rpm_x10;            // cache p/ check de plausibilidade MAP×TPS
     const uint32_t ticks = snap.tooth_period_ns >> 4u;
     ems::hal::adc_trigger_on_tooth(ticks);
+
+    // MAP em janela angular por cilindro (engine/map_window) — gate barato
+    // pelo enable antes de tocar no ADC; mesmo critério de recovery dos
+    // canais rápidos (amostra de ADC em recuperação não entra na média).
+    if (ems::engine::map_window_enable != 0u &&
+        !ems::hal::adc_is_recovering() && !ems::hal::adc_recovery_failed()) {
+        const uint16_t raw =
+            ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAP);
+        ems::engine::map_window_on_tooth(snap, map_raw_to_bar_x1000(raw));
+    }
 
     g_fast_sample_accum = static_cast<uint16_t>(
         g_fast_sample_accum + kFastSamplesPerRev);

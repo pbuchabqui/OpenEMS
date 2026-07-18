@@ -24,6 +24,7 @@
 #include "engine/table3d.h"
 #include "engine/ecu_sched.h"
 #include "engine/quick_crank.h"
+#include "engine/map_window.h"
 #include "engine/transient_fuel.h"
 #include "engine/map_estimator.h"
 #include "engine/misfire_detect.h"
@@ -127,6 +128,72 @@ void test_sensors_on_tooth(void) {
     snap.rpm_x10 = 62500u;
     sensors_on_tooth(snap);  // triggers ADC sample accumulation (fast channels)
     CHECK_TRUE(true, "sensors_on_tooth completes without crash");
+}
+
+void test_map_window_angular(void) {
+    section("map_window: janela angular por cilindro + balance");
+    using ems::engine::map_window_on_tooth;
+    using ems::engine::map_window_slot_bar_x1000;
+    using ems::engine::map_window_balance_x1000;
+    using ems::engine::map_window_cycles;
+    using ems::engine::map_window_reset;
+
+    map_window_reset();
+    ems::drv::CkpSnapshot s{};
+    s.state = SyncState::FULL_SYNC;
+    s.cmp_confirms = 2u;
+    s.phase_A = true;
+    s.tooth_index = 0u;
+
+    // Desligado (default): no-op.
+    ems::engine::map_window_enable = 0u;
+    map_window_on_tooth(s, 500u);
+    CHECK_EQ(map_window_cycles(), 0u, "enable=0: nenhum ciclo");
+    CHECK_EQ(map_window_slot_bar_x1000(0u), 0u, "enable=0: slot vazio");
+
+    // 8 ciclos de 720° com MAP distinto por quadrante de 180°:
+    // 500 / 520 / 480 / 500 → média 500, desvios 0 / +20 / -20 / 0.
+    ems::engine::map_window_enable   = 1u;
+    ems::engine::map_window_open_deg = 0u;
+    ems::engine::map_window_len_deg  = 90u;
+    for (uint8_t cycle = 0u; cycle < 8u; ++cycle) {
+        for (uint8_t rev = 0u; rev < 2u; ++rev) {
+            s.phase_A = (rev == 0u);
+            for (uint16_t t = 0u; t < 58u; ++t) {
+                s.tooth_index = t;
+                const uint16_t deg  = static_cast<uint16_t>(t * 6u + (rev ? 360u : 0u));
+                const uint8_t  quad = static_cast<uint8_t>(deg / 180u);
+                const uint16_t map  = (quad == 1u) ? 520u : (quad == 2u) ? 480u : 500u;
+                map_window_on_tooth(s, map);
+            }
+        }
+    }
+    CHECK_EQ(map_window_cycles(), 8u, "8 ciclos completos (4 janelas cada)");
+    CHECK_EQ(map_window_slot_bar_x1000(0u), 500u, "slot 0 média = 500");
+    CHECK_EQ(map_window_slot_bar_x1000(1u), 520u, "slot 1 média = 520");
+    CHECK_EQ(map_window_slot_bar_x1000(2u), 480u, "slot 2 média = 480");
+    CHECK_EQ(map_window_slot_bar_x1000(3u), 500u, "slot 3 média = 500");
+    // EMA α=1/8 a partir de 0: após 8 ciclos ≈ dev × 0,66.
+    CHECK_TRUE(map_window_balance_x1000(1u) >= 10 && map_window_balance_x1000(1u) <= 20,
+               "balance slot 1 → +20 (EMA parcial)");
+    CHECK_TRUE(map_window_balance_x1000(2u) <= -10 && map_window_balance_x1000(2u) >= -20,
+               "balance slot 2 → -20 (EMA parcial)");
+    CHECK_TRUE(map_window_balance_x1000(0u) >= -1 && map_window_balance_x1000(0u) <= 1,
+               "balance slot 0 ≈ 0");
+
+    // Perda de fase de came a meio: aborta janela parcial, sem ciclo novo.
+    const uint32_t cycles_before = map_window_cycles();
+    s.phase_A = true;
+    s.tooth_index = 2u;          // dentro da janela do slot 0
+    map_window_on_tooth(s, 900u);
+    s.cmp_confirms = 1u;         // fase deixou de estar confirmada
+    map_window_on_tooth(s, 900u);
+    CHECK_EQ(map_window_cycles(), cycles_before, "sem came: nenhum ciclo novo");
+    CHECK_EQ(map_window_slot_bar_x1000(0u), 500u,
+             "janela parcial abortada não contamina a média");
+
+    ems::engine::map_window_enable = 0u;  // isolamento entre testes
+    map_window_reset();
 }
 
 void test_sensors_tick_50ms(void) {

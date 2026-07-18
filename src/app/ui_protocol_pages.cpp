@@ -423,6 +423,11 @@ void sync_page_from_table(uint8_t page) noexcept {
         ems::engine::launch_tc_serialize_to_page0(g_page0, sizeof(g_page0));
         // CAN RX map: gear / vehicle speed / driven wheel (216-245)
         ems::app::can_rx_map_serialize_to_page0(g_page0, sizeof(g_page0));
+        // MAP janela angular por cilindro (246-251)
+        g_page0[246] = ems::engine::map_window_enable;
+        g_page0[247] = 0u;  // pad
+        std::memcpy(g_page0 + 248, &ems::engine::map_window_open_deg, 2u);
+        std::memcpy(g_page0 + 250, &ems::engine::map_window_len_deg,  2u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -670,6 +675,20 @@ bool sync_table_from_page(uint8_t page) noexcept {
             ems::engine::launch_tc_apply_from_page0(g_page0, sizeof(g_page0));
             // CAN RX map 216-245 (id=0 disables each signal — safe on blank flash)
             ems::app::can_rx_map_apply_from_page0(g_page0, sizeof(g_page0));
+            // MAP janela angular (246-251). Blob antigo = zeros → fica off e
+            // len mantém o default (0 nunca substitui — janela vazia inútil).
+            ems::engine::map_window_enable = (g_page0[246] != 0u) ? 1u : 0u;
+            std::memcpy(&ems::engine::map_window_open_deg, g_page0 + 248, 2u);
+            if (ems::engine::map_window_open_deg >= 720u) {
+                ems::engine::map_window_open_deg =
+                    static_cast<uint16_t>(ems::engine::map_window_open_deg % 720u);
+            }
+            uint16_t wlen = 0u;
+            std::memcpy(&wlen, g_page0 + 250, 2u);
+            if (wlen != 0u) {
+                ems::engine::map_window_len_deg =
+                    (wlen < 10u) ? 10u : (wlen > 180u) ? 180u : wlen;
+            }
         }
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
