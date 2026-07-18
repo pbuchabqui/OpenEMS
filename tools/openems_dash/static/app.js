@@ -1763,6 +1763,8 @@ $("#logBtn").onclick = async () => {
 };
 
 $("#logExportBtn").onclick = () => window.open("/api/log/export");
+const mlgBtn = $("#logMlgBtn");
+if (mlgBtn) mlgBtn.onclick = () => window.open("/api/log/download.mlg");
 
 /* ── Pedal Map (page 8) ──────────────────────────────────────────────── */
 const PEDAL_MODES = ["ECO", "NORMAL", "SPORT", "RAIN"];

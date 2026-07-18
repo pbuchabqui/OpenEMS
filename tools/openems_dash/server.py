@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import csv
 import json
+import struct
 import queue
 import threading
 import time
@@ -870,6 +871,76 @@ O relatorio acima contem:
     out = path.with_suffix(".md")
     out.write_text("\n".join(md) + "\n")
     return FileResponse(out, filename=out.name, media_type="text/markdown")
+
+
+def _mlg_from_csv(path) -> bytes:
+    """Converte o CSV do datalog para MLG v2 (MegaLogViewer / EFI Analytics).
+
+    Formato (big-endian, spec MLG_Binary_LogFormat_2.0, igual ao rusEFI):
+    header 24B "MLVLG\\0" + descritores de campo de 89B (todos F32) + registos
+    [block=0][counter][ts u16 10µs] + payload F32 + checksum (soma do payload).
+    A coluna 't' vira o campo "Time" (s); colunas st_* (bools 0/1) vão como F32.
+    """
+    with open(path) as fh:
+        rows = list(csv.DictReader(fh))
+    if not rows:
+        raise ValueError("log vazio")
+    keys = list(rows[0].keys())
+    n = len(keys)
+    out = bytearray()
+    out += b"MLVLG\x00"
+    out += struct.pack(">H", 2)                  # format version
+    out += struct.pack(">I", int(time.time()))   # unix timestamp
+    out += struct.pack(">I", 0)                  # info data start (none)
+    out += struct.pack(">I", 24 + 89 * n)        # data begin index
+    out += struct.pack(">H", 4 * n)              # record length (payload)
+    out += struct.pack(">H", n)                  # num fields
+    for k in keys:
+        name = ("Time" if k == "t" else k)[:33].encode()
+        d = bytearray(89)
+        d[0] = 7                                  # F32
+        d[1:1 + len(name)] = name                 # nome (null-padded)
+        units = (b"s" if k == "t" else b"")[:9]
+        d[35:35 + len(units)] = units
+        d[45] = 0                                 # display: float
+        struct.pack_into(">f", d, 46, 1.0)        # scale
+        struct.pack_into(">f", d, 50, 0.0)        # transform
+        d[54] = 3                                 # digits
+        out += d
+    counter = 0
+    for r in rows:
+        try:
+            t = float(r.get("t") or 0.0)
+        except (TypeError, ValueError):
+            t = 0.0
+        out += bytes((0, counter & 0xFF)) + struct.pack(">H", int(t * 1e5) & 0xFFFF)
+        counter += 1
+        payload = bytearray()
+        for k in keys:
+            try:
+                v = float(r[k] or 0.0)
+            except (TypeError, ValueError):
+                v = 0.0
+            payload += struct.pack(">f", v)
+        out += payload
+        out.append(sum(payload) & 0xFF)
+    return bytes(out)
+
+
+@app.get("/api/log/download.mlg")
+def api_log_download_mlg():
+    files = sorted(LOGS.glob("*.csv"))
+    if not files:
+        return JSONResponse({"error": "sem logs"}, status_code=404)
+    path = files[-1]
+    try:
+        blob = _mlg_from_csv(path)
+    except ValueError as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=404)
+    out = path.with_suffix(".mlg")
+    out.write_bytes(blob)
+    return FileResponse(out, filename=out.name,
+                        media_type="application/octet-stream")
 
 
 @app.get("/api/log/download")
