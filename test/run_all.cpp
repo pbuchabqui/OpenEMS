@@ -125,6 +125,7 @@ int main(void) {
     test_fuel_ltft_apply_nearest();
     test_fuel_ltft_accum();
     test_fuel_ltft_accum_commit_ve();
+    test_fuel_ltft_center_gate();
 
     // ── Ign Calc — Segunda Fase ───────────────────────────────────────────────
     printf("\n=== IGN CALC (fase 2) ===");

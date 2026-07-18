@@ -985,6 +985,53 @@ void test_fuel_ltft_accum_commit_ve(void) {
     fuel_reset_adaptives();
 }
 
+void test_fuel_ltft_center_gate(void) {
+    section("fuel_calc: LEARN center gate (¼ do vão do nó dominante)");
+
+    // Eixos default: RPM×10 …30000,35000… (vão 5000); MAP …100,110… (vão 10).
+    // Nó exacto → centrado.
+    CHECK_TRUE(fuel_ltft_learn_point_centered(30000u, 100u),
+               "nó exacto (3000rpm/100kPa) centrado");
+    // ≤ ¼ do vão acima/abaixo do nó → centrado.
+    CHECK_TRUE(fuel_ltft_learn_point_centered(31000u, 100u),
+               "+1000 de 5000 (frac 0.2) centrado no nó baixo");
+    CHECK_TRUE(fuel_ltft_learn_point_centered(34000u, 100u),
+               "-1000 do nó alto (frac 0.8) centrado no nó alto");
+    // Zona de mistura (¼..¾ do vão) → rejeita.
+    CHECK_FALSE(fuel_ltft_learn_point_centered(32500u, 100u),
+                "meio do vão RPM rejeitado (mistura bilinear)");
+    CHECK_FALSE(fuel_ltft_learn_point_centered(30000u, 105u),
+                "meio do vão MAP rejeitado");
+    CHECK_TRUE(fuel_ltft_learn_point_centered(30000u, 102u),
+               "MAP a 0.2 do vão centrado");
+    // Fora da tabela: até ¼ do vão da borda aceita; além rejeita.
+    CHECK_TRUE(fuel_ltft_learn_point_centered(4500u, 100u),
+               "500 abaixo do 1º nó RPM (vão 2500, ¼=625) aceita");
+    CHECK_FALSE(fuel_ltft_learn_point_centered(3500u, 100u),
+                "1500 abaixo do 1º nó RPM rejeita (fora da tabela)");
+    CHECK_TRUE(fuel_ltft_learn_point_centered(82000u, 100u),
+               "2000 acima do último nó RPM (vão 10000, ¼=2500) aceita");
+    CHECK_FALSE(fuel_ltft_learn_point_centered(83000u, 100u),
+                "3000 acima do último nó RPM rejeita");
+
+    // Integração: ponto na zona de mistura NÃO acumula hits; centrado acumula.
+    fuel_reset_adaptives();
+    fuel_ltft_accum_reset();
+    const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 32500u);
+    const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, 100u);
+    fuel_update_stft(32500u, 100u, 1000, 1015, 900, true, false, false, 5000u, 500u);
+    fuel_update_stft(32500u, 100u, 1000, 1015, 900, true, false, false, 5000u, 500u);
+    CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u,
+             "zona de mistura: 0 hits (gate de centralidade)");
+    fuel_update_stft(30000u, 100u, 1000, 1015, 900, true, false, false, 5000u, 500u);
+    fuel_update_stft(30000u, 100u, 1000, 1015, 900, true, false, false, 5000u, 500u);
+    const uint8_t ri_c = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, 30000u);
+    CHECK_TRUE(fuel_ltft_accum_hits(mi, ri_c) >= 1u,
+               "ponto centrado acumula hits normalmente");
+    fuel_reset_adaptives();
+    fuel_ltft_accum_reset();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // IGN CALC — SEGUNDA FASE
 // ═══════════════════════════════════════════════════════════════════════════

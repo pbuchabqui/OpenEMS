@@ -596,6 +596,38 @@ int16_t fuel_ltft_accum_mean_err_x1000(uint8_t map_idx, uint8_t rpm_idx) noexcep
     return static_cast<int16_t>(cell.sum_err_x1000 / static_cast<int32_t>(cell.hits));
 }
 
+// Gate de centralidade do LEARN (inspirado no rusEFI LTFT, mais estrito): a
+// amostra só alimenta o acumulador quando o ponto de operação está a ≤ ¼ do
+// vão do nó dominante em AMBOS os eixos. Na zona de mistura entre nós a
+// bilinear divide o crédito entre células — creditar tudo ao nearest borra a
+// célula vizinha. Fora da tabela, aceita só até ¼ do vão da borda (além disso
+// é regime não representado pelo nó). Gate APENAS do LEARN: o LTFT IIR vivo e
+// o STFT continuam a operar em qualquer ponto.
+static bool ltft_axis_centered(const uint32_t* axis, uint8_t size,
+                               uint32_t value) noexcept {
+    if (size < 2u) {
+        return true;
+    }
+    if (value <= axis[0]) {
+        return (axis[0] - value) <= (axis[1] - axis[0]) / 4u;
+    }
+    if (value >= axis[size - 1u]) {
+        return (value - axis[size - 1u]) <=
+               (axis[size - 1u] - axis[size - 2u]) / 4u;
+    }
+    const uint8_t idx = table_axis_index(axis, size, value);
+    const uint8_t frac_q8 = table_axis_frac_q8(axis, idx, value);
+    // frac ≤ ¼ (64/256) → centrado no nó baixo; ≥ ¾ (192) → no nó alto.
+    return (frac_q8 <= 64u) || (frac_q8 >= 192u);
+}
+
+bool fuel_ltft_learn_point_centered(uint32_t rpm_x10,
+                                    uint16_t map_bar_x100) noexcept {
+    return ltft_axis_centered(kRpmAxisX10, kTableAxisSize, rpm_x10) &&
+           ltft_axis_centered(kLoadAxisBarX100, kTableAxisSize,
+                              static_cast<uint32_t>(map_bar_x100));
+}
+
 static void fuel_ltft_accum_tick(uint8_t map_idx,
                                  uint8_t rpm_idx,
                                  int16_t stft_pct_x10,
@@ -862,6 +894,7 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                 rpm_idx,
                 g_stft_pct_x10,
                 err_x1000,
+                fuel_ltft_learn_point_centered(rpm_x10, map_bar_x100) &&
                 ltft_accum_sample_valid(rpm_x10,
                                         prev_rpm,
                                         tps_x10,

@@ -88,6 +88,13 @@ bool ltft_accum_sample_valid(uint32_t rpm_x10,
                              bool ae_active,
                              bool rev_cut) noexcept;
 
+// Gate de centralidade do LEARN: true quando o ponto de operação está a ≤ ¼
+// do vão do nó dominante em ambos os eixos (fora disso a bilinear divide o
+// crédito entre células e o acumulador borraria a vizinha). Só gate do LEARN;
+// LTFT IIR vivo e STFT não são afectados.
+bool fuel_ltft_learn_point_centered(uint32_t rpm_x10,
+                                    uint16_t map_bar_x100) noexcept;
+
 void fuel_ltft_accum_reset() noexcept;
 void fuel_ltft_accum_reset_cell(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 uint16_t fuel_ltft_accum_hits(uint8_t map_idx, uint8_t rpm_idx) noexcept;
