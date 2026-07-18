@@ -43,6 +43,12 @@ async def no_cache_api(request, call_next):
     response = await call_next(request)
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    else:
+        # Estáticos: sem Cache-Control o browser usa cache heurística
+        # (Last-Modified) e pode nem revalidar num reload — HTML/JS/CSS
+        # antigos persistem apesar do ETag novo. no-cache força a
+        # revalidação (304 quando não mudou; corpo novo quando mudou).
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 

@@ -1,84 +1,91 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt">
 <head>
 <meta charset="utf-8">
-<title>OpenEMS</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenEMS · Calibration</title>
 <link rel="stylesheet" href="uplot.min.css">
-<link rel="stylesheet" href="style.css?v=20260712p">
+<link rel="stylesheet" href="style.css?v=20260718x">
 </head>
 <body>
 
 <div id="shell">
 
-  <!-- ── Coluna lateral esquerda ─────────────────────────────────────── -->
+  <!-- ── Sidebar ─────────────────────────────────────────────────────── -->
   <aside id="sidebar">
-    <div id="sb-logo">OPEN<br>EMS</div>
+    <div id="sb-brand">
+      <div id="sb-logo">OPEN<span>EMS</span></div>
+      <div id="sb-tag">CALIBRATION</div>
+    </div>
 
-    <nav id="sb-nav">
-      <button class="tab active" data-tab="grid-1">
-        <span class="tab-icon">▦</span>
-        <span class="tab-label">VE</span>
-      </button>
-      <button class="tab" data-tab="grid-2">
-        <span class="tab-icon">▦</span>
-        <span class="tab-label">SPARK</span>
-      </button>
-      <button class="tab" data-tab="grid-4">
-        <span class="tab-icon">▦</span>
-        <span class="tab-label">LAMBDA</span>
-      </button>
-      <button class="tab" data-tab="pedal-map">
-        <span class="tab-icon">⌇</span>
-        <span class="tab-label">PEDAL MAP</span>
-      </button>
-      <button class="tab" data-tab="boost">
-        <span class="tab-icon">⬆</span>
-        <span class="tab-label">BOOST</span>
-      </button>
-      <button class="tab" data-tab="ltft-accum">
-        <span class="tab-icon">◎</span>
-        <span class="tab-label">LEARN</span>
-      </button>
-      <button class="tab" data-tab="telemetry">
-        <span class="tab-icon">◈</span>
-        <span class="tab-label">TELEMETRY</span>
-      </button>
-      <button class="tab" data-tab="params">
-        <span class="tab-icon">≡</span>
-        <span class="tab-label">PARAMS</span>
-      </button>
-      <button class="tab" data-tab="output-test">
-        <span class="tab-icon">⚡</span>
-        <span class="tab-label">OUTPUT TESTS</span>
-      </button>
+    <nav id="sb-nav" aria-label="Surfaces">
+      <div class="nav-group">
+        <div class="nav-group-label">Tables</div>
+        <button class="tab active" data-tab="grid-1" title="Fuel VE map (page 1)">
+          <span class="tab-icon">▦</span><span class="tab-label">VE</span>
+        </button>
+        <button class="tab" data-tab="grid-2" title="Ignition advance (page 2)">
+          <span class="tab-icon">⚡</span><span class="tab-label">Spark</span>
+        </button>
+        <button class="tab" data-tab="grid-4" title="Lambda target (page 4)">
+          <span class="tab-icon">λ</span><span class="tab-label">Lambda</span>
+        </button>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-label">Maps</div>
+        <button class="tab" data-tab="pedal-map" title="Pedal → throttle maps">
+          <span class="tab-icon">⌇</span><span class="tab-label">Pedal</span>
+        </button>
+        <button class="tab" data-tab="boost" title="Boost target by gear">
+          <span class="tab-icon">⬆</span><span class="tab-label">Boost</span>
+        </button>
+        <button class="tab" data-tab="ltft-accum" title="LTFT learn → bake-in VE">
+          <span class="tab-icon">◎</span><span class="tab-label">Learn</span>
+        </button>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-label">Engine</div>
+        <button class="tab" data-tab="params" title="Engine config &amp; corrections">
+          <span class="tab-icon">≡</span><span class="tab-label">Params</span>
+        </button>
+        <button class="tab" data-tab="output-test" title="Output tests (engine stopped)">
+          <span class="tab-icon">⚙</span><span class="tab-label">Outputs</span>
+        </button>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-label">Diag</div>
+        <button class="tab" data-tab="telemetry" title="Gauges, charts, CKP/CMP scope">
+          <span class="tab-icon">◈</span><span class="tab-label">Telemetry</span>
+        </button>
+      </div>
     </nav>
 
     <div id="sb-bottom">
-      <div id="conn" class="off">[OFFLINE]</div>
-      <div id="fw"></div>
-      <button id="logBtn">⏺ LOG</button>
-      <button id="logExportBtn" title="Export log for LLM">⇩ EXPORT</button>
+      <div class="sb-actions">
+        <button id="benchBtn" type="button" title="Bench-mode: CLT/IAT/λ simulated + relaxed CKP (HIL)">BENCH</button>
+        <button id="logBtn" type="button" title="Record datalog CSV">● LOG</button>
+        <button id="logExportBtn" type="button" title="Export log for analysis">⇩ EXPORT</button>
+      </div>
     </div>
   </aside>
 
-  <!-- ── Área principal ──────────────────────────────────────────────── -->
+  <!-- ── Main column ─────────────────────────────────────────────────── -->
   <div id="main-wrap">
 
-    <!-- barra de status superior sempre visível -->
-    <div id="statusbar">
-      <div id="gauges" class="gauges"></div>
-      <div id="injMode" class="inj-mode">—</div>
-      <div id="statusLeds" class="leds"></div>
-    </div>
+    <header id="statusbar">
+      <div id="gauges" class="gauges" aria-label="Primary gauges"></div>
+    </header>
 
-    <!-- conteúdo das abas -->
     <main id="content">
-
       <section id="tab-telemetry" class="pane">
+        <div id="gaugesExtra" class="gauges-extra"></div>
         <div id="scopeWrap">
           <div id="scopeHeader">
-            <span id="scopeTitle">OSCILOSCÓPIO CKP / CMP</span>
-            <button id="scopeFreezeBtn">⏸ FREEZE</button>
+            <span id="scopeTitle">CKP / CMP SCOPE</span>
+            <button id="scopeFreezeBtn" type="button">⏸ FREEZE</button>
           </div>
           <canvas id="scopeCanvas" height="155"></canvas>
           <div id="scopeInfo">—</div>
@@ -110,15 +117,23 @@
       <section id="tab-output-test" class="pane">
         <div id="outputTestRoot"></div>
       </section>
-
     </main>
+
+    <footer id="ledbar" aria-label="Status chips bar">
+      <div id="statusLeds" class="leds"></div>
+      <div id="conn" class="conn-pill off" role="status">
+        <span class="conn-dot"></span>
+        <span class="conn-text">OFFLINE</span>
+      </div>
+    </footer>
   </div>
 
 </div>
 
-<footer id="toast"></footer>
+<footer id="toast" aria-live="polite"></footer>
 
 <script src="uplot.min.js"></script>
-<script src="app.js?v=20260714wp67-oem"></script>
+<script src="js/helpers.js?v=20260718x"></script>
+<script src="app.js?v=20260718x"></script>
 </body>
 </html>

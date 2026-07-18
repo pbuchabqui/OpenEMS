@@ -57,6 +57,7 @@ STATUS_BITS = {
     "REV_LIMIT":        0x1000,  # bit 12 — fuel cut active
     "LAUNCH_ACTIVE":    0x2000,  # bit 13 — launch control holding
     "TC_ACTIVE":        0x4000,  # bit 14 — traction control reducing torque
+    "BENCH_MODE":       0x8000,  # bit 15 — bench 'B' activo na ECU (RAM; cai no reset)
 }
 
 
@@ -93,6 +94,7 @@ class RealtimeData:
     lambda_target_x1000: int
     ltft_pct: int
     tle8888_fault_bm: int
+    sensor_fault_bits: int  # bitmask SensorId (reserved[34]): b0=MAP b1=MAF b2=TPS b3=CLT b4=IAT b5=O2 b6=FUEL b7=OIL
     ethanol_pct: int
     cmp_confirms: int   # gate do sequencial (0/1/2); 2 = CMP confirmado → sequencial
     cmp_glitch: int     # bordas CMP rejeitadas pela validação temporal (saturado 255)
@@ -159,6 +161,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         lambda_target_x1000=r[4] * 5,
         ltft_pct=struct.unpack_from("<b", r, 5)[0],
         tle8888_fault_bm=r[8],
+        sensor_fault_bits=r[34],
         ethanol_pct=r[9],
         cmp_confirms=r[7],
         cmp_glitch=r[6],
@@ -276,8 +279,9 @@ class OpenEMSLink:
             raise IOError(f"apply_ltft_ready: resp {resp.hex() if resp else 'empty'}")
         return int(resp[1])
 
-    # ── contadores de debug ('D': 37 × u32 LE = 148 B) ──────────────────
+    # ── contadores de debug ('D': 41 × u32 LE = 164 B) ──────────────────
     # Índices 31-32 (stft_last_err, stft_integ_x1000) são i32 no wire.
+    # 37-40: discriminação dos gatilhos de perda de FULL_SYNC (blip PW=0).
     DEBUG_FIELDS = [
         "late_events", "sched_drops", "inj1_arm", "seq_calls", "evt_overflow",
         "clear_all", "presync_count", "dwell_watchdog", "ckp_isr_count",
@@ -289,17 +293,19 @@ class OpenEMSLink:
         "stft_runs", "stft_last_err", "stft_integ_x1000",
         "ltft_accum_accepted", "ltft_accum_rejected", "ltft_accum_commits",
         "ltft_learn_flags",  # b0-7 reserved pad, b8-15 burn_ve, b16 burn_pending
+        "loss_histogram", "loss_wrap", "loss_hist_mn", "loss_hist_mx",
+        "rev_limit_trips", "rev_limit_rpm_x10", "rev_limit_rpm_max",
     ]
-    DEBUG_SIZE = 37 * 4  # must match FW diag[37]
+    DEBUG_SIZE = 44 * 4  # must match FW diag[44]
 
     def read_debug(self) -> dict:
         assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE
         buf = self._txn(b"D", self.DEBUG_SIZE)
-        # 31 u32 + 2 i32 + 4 u32
+        # 31 u32 + 2 i32 + 11 u32
         vals = (
             struct.unpack("<31I", buf[:124])
             + struct.unpack("<2i", buf[124:132])
-            + struct.unpack("<4I", buf[132:148])
+            + struct.unpack("<11I", buf[132:176])
         )
         return dict(zip(self.DEBUG_FIELDS, vals))
 

@@ -1,5 +1,9 @@
-/* OpenEMS Dashboard — telemetria WS 30Hz + editores de tabela */
+/* OpenEMS Calibration Cockpit — telemetria WS 30Hz + editores de tabela */
 "use strict";
+
+/* Pure helpers from js/helpers.js (dual-export; unit-tested). */
+const H = (typeof OpenEMSHelpers !== "undefined") ? OpenEMSHelpers : null;
+if (!H) console.error("OpenEMSHelpers missing — load js/helpers.js before app.js");
 
 /* ── Multi-cell selection state ──────────────────────────────────────────── */
 let selCells = new Set();      // Set of "r,c" keys
@@ -39,8 +43,8 @@ function applyUndo(st, page) {
     if (td) {
       td.textContent = st.disp ? st.disp.fmt(st.values[r][c]) : st.values[r][c];
       td.classList.add("mod");
-      td.style.background = heatColor(st.values[r][c], lo, hi);
-      td.style.color = heatTextColor(st.values[r][c], lo, hi);
+      td.style.background = H.heatColor(st.values[r][c], lo, hi);
+      td.style.color = H.heatTextColor(st.values[r][c], lo, hi);
     }
   }
   toast(`desfeito: ${changed.length} célula(s)`);
@@ -127,9 +131,7 @@ document.addEventListener("keydown", e => {
     e.preventDefault();
     const horiz = (e.key === "h" || e.key === "H");
     const axis = horiz ? INFO.axes.rpm : INFO.axes.map_kpa;
-    const clampV = (v) => (selPage === 2) ? Math.max(-128, Math.min(127, v))
-                        : (selPage === 4) ? Math.max(0, Math.min(65535, v))
-                        : Math.max(0, Math.min(255, v));
+    const clampV = (v) => H.clampCell(selPage, v);
     pushUndo(st);
     // agrupa as células seleccionadas por linha (H) ou por coluna (V)
     const groups = new Map();  // fixo → [móvel, ...]
@@ -169,15 +171,15 @@ document.addEventListener("keydown", e => {
       if (td) {
         td.textContent = st.disp ? st.disp.fmt(st.values[r][c]) : st.values[r][c];
         if (st.modified.has(key)) td.classList.add("mod");
-        td.style.background = heatColor(st.values[r][c], m2lo, m2hi);
-        td.style.color = heatTextColor(st.values[r][c], m2lo, m2hi);
+        td.style.background = H.heatColor(st.values[r][c], m2lo, m2hi);
+        td.style.color = H.heatTextColor(st.values[r][c], m2lo, m2hi);
       }
     });
     if (st.send) st.send().catch(err => toast(err.message, true));
     return;
   }
 
-  const step = (selPage === 4) ? 10 : 1;
+  const step = H.stepSize(selPage);
   let delta = 0;
   // "A" = step mais, "Z" = step menos (substituem ArrowUp/ArrowDown, agora
   // usadas para navegar); +/=/- continuam a funcionar também.
@@ -189,17 +191,10 @@ document.addEventListener("keydown", e => {
   selCells.forEach(key => {
     const [r, c] = key.split(",").map(Number);
     // Peso bilinear (trace auto-select) escala o delta — célula dominante
-    // move-se mais depressa que as vizinhas de influência menor. Math.max(1,…)
-    // evita arredondar a 0 num nó de peso baixo mas não-nulo em tabelas de
-    // passo 1 (VE/Spark), que ficaria "preso" à espera de acumular fracção.
+    // move-se mais depressa que as vizinhas de influência menor.
     const w = selWeights.get(key) ?? 1.0;
-    const raw = delta * w;
-    const weighted = raw === 0 ? 0 : Math.sign(raw) * Math.max(1, Math.round(Math.abs(raw)));
-    const v = st.values[r][c] + weighted;
-    const clamped = (selPage === 2) ? Math.max(-128, Math.min(127, v))
-                  : (selPage === 4) ? Math.max(0, Math.min(65535, v))
-                  : Math.max(0, Math.min(255, v));
-    st.values[r][c] = clamped;
+    const weighted = H.weightedStep(delta, w);
+    st.values[r][c] = H.clampCell(selPage, st.values[r][c] + weighted);
     st.modified.add(key);
   });
   // Update visible cells — recalcula min/max da tabela para a cor do
@@ -213,8 +208,8 @@ document.addEventListener("keydown", e => {
     if (td) {
       td.textContent = st.disp ? st.disp.fmt(st.values[r][c]) : st.values[r][c];
       td.classList.add("mod");
-      td.style.background = heatColor(st.values[r][c], tmin, tmax);
-      td.style.color = heatTextColor(st.values[r][c], tmin, tmax);
+      td.style.background = H.heatColor(st.values[r][c], tmin, tmax);
+      td.style.color = H.heatTextColor(st.values[r][c], tmin, tmax);
     }
   });
   if (st.send) st.send().catch(err => toast(err.message, true));
@@ -265,82 +260,173 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
   if (b.dataset.tab === "ltft-accum" && !$("#ltftAccumRoot").dataset.loaded) loadLtftAccum();
   if (b.dataset.tab === "output-test" && !$("#outputTestRoot").dataset.loaded) loadOutputTest();
   if (b.dataset.tab === "telemetry")
-    charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 160 }));
+    charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 300 }));
 });
 
 /* ── telemetria: gauges + charts ──────────────────────────────────────── */
+// Statusbar: 10 primários (largura toda — chips vivem no rodapé). Resto só em Telemetry.
 const GAUGES = [
-  ["rpm",          "RPM",     v => v],
-  ["map_kpa",      "MAP kPa", v => v],
-  ["tps_pct",      "TPS %",   v => v],
-  ["lambda_x1000", "λ",       v => (v / 1000).toFixed(2)],
-  ["pw_ms",        "PW ms",   v => v.toFixed(2)],
-  ["advance_deg",  "Ign °",   v => v],
-  ["clt_c",        "CLT °C",  v => v],
-  ["iat_c",        "IAT °C",  v => v],
-  ["ve",           "VE %",    v => v],
-  ["stft_pct",     "STFT %",  v => v],
-  ["lambda_target_x1000", "λ tgt", v => (v / 1000).toFixed(2)],
-  ["ltft_pct",     "LTFT %",  v => v],
-  ["ethanol_pct",  "E%",      v => v],
+  ["rpm",                 "RPM",     v => H.formatGauge("rpm", v)],
+  ["map_kpa",             "MAP kPa", v => H.formatGauge("map_kpa", v)],
+  ["tps_pct",             "TPS %",   v => H.formatGauge("tps_pct", v)],
+  ["ve",                  "VE %",    v => H.formatGauge("ve", v)],
+  ["lambda_x1000",        "λ",       v => H.formatGauge("lambda_x1000", v)],
+  ["lambda_target_x1000", "λ tgt",   v => H.formatGauge("lambda_target_x1000", v)],
+  ["pw_ms",               "PW ms",   v => H.formatGauge("pw_ms", v)],
+  ["advance_deg",         "Ign °",   v => H.formatGauge("advance_deg", v)],
+  ["clt_c",               "CLT °C",  v => H.formatGauge("clt_c", v)],
+  ["iat_c",               "IAT °C",  v => H.formatGauge("iat_c", v)],
 ];
-$("#gauges").innerHTML = GAUGES.map(([k, l]) =>
-  `<div class="gauge"><div class="v" id="g_${k}">—</div><div class="l">${l}</div></div>`).join("");
+const GAUGES_EXTRA = [
+  ["stft_pct",    "STFT %", v => H.formatGauge("stft_pct", v)],
+  ["ltft_pct",    "LTFT %", v => H.formatGauge("ltft_pct", v)],
+  ["ethanol_pct", "E%",     v => H.formatGauge("ethanol_pct", v)],
+  ["dc_pct",      "DC %",   v => H.formatGauge("dc_pct", v ?? 0)],
+];
+function renderGaugeRow(el, list, idPrefix = "g_") {
+  el.innerHTML = list.map(([k, l]) =>
+    `<div class="gauge"><div class="v" id="${idPrefix}${k}">—</div><div class="l">${l}</div></div>`
+  ).join("");
+}
+renderGaugeRow($("#gauges"), GAUGES);
+renderGaugeRow($("#gaugesExtra"), GAUGES_EXTRA, "gx_");
 
+const INJ_MODES = { 0: "SIM", 1: "SEMI", 2: "SEQ" };
+// Chips: off=muted; goodWhenOn → verde se on; senão vermelho se on (fault/cut).
+// kind "warn" = âmbar quando on (activo mas não fault).
+// FAULT agrega sensores analógicos + WBO2 (CAN) + TLE8888 + LIMP/ETB-limp —
+// clique lista as fontes ativas (sensor a sensor via sensor_fault_bits, r[34]).
+const STATUS_CHIPS = [
+  { id: "SYNC",  label: "SYNC",     goodWhenOn: true,
+    on: d => !!(d.status && d.status.FULL_SYNC) },
+  { id: "REV",   label: "REV LIM",  goodWhenOn: false,
+    on: d => !!(d.status && d.status.REV_LIMIT) },
+  { id: "FAULT", label: "FAULT",    goodWhenOn: false,
+    on: d => !!(d.status && (d.status.SENSOR_FAULT || d.status.WBO2_FAULT ||
+                             d.status.TLE8888_FAULT || d.status.LIMP_MODE ||
+                             d.status.ETB_LIMP)) },
+  { id: "TC",    label: "TRACTION", goodWhenOn: false, warn: true,
+    on: d => !!(d.status && d.status.TC_ACTIVE) },
+];
+$("#statusLeds").innerHTML =
+  STATUS_CHIPS.slice(0, 1).map(c =>
+    `<span class="led" id="led_${c.id}" title="${c.label}">${c.label}</span>`).join("") +
+  `<span class="led on-info" id="ignMode" title="Modo de ignição">—</span>` +
+  `<span class="led on-info" id="injMode" title="Modo de injeção">—</span>` +
+  STATUS_CHIPS.slice(1).map(c =>
+    `<span class="led" id="led_${c.id}" title="${c.label}">${c.label}</span>`).join("") +
+  `<span class="led" id="led_BENCH" title="Bench OFF · sensores reais">BENCH</span>`;
 
-const INJ_MODES = {0:"SIMULTANEOUS", 1:"SEMI-SEQ", 2:"SEQUENTIAL"};
-const LEDS = [["REV_LIMIT", false], ["SENSOR_FAULT", false]];
-$("#statusLeds").innerHTML = LEDS.map(([k]) =>
-  `<span class="led" id="led_${k}">[${k.replace(/_/g,"-")}]</span>`).join("");
+// Detalhe do FAULT: nomes por bit de sensor_fault_bits (SensorId 0..7).
+const SENSOR_FAULT_NAMES =
+  ["MAP", "MAF", "TPS", "CLT", "IAT", "O2", "FUEL PRESS", "OIL PRESS"];
+let lastRT = null;
+function faultDetails(d) {
+  if (!d || !d.status) return [];
+  const out = [];
+  const sb = d.sensor_fault_bits || 0;
+  SENSOR_FAULT_NAMES.forEach((n, i) => {
+    if (sb & (1 << i)) out.push(`${n} fora de range`);
+  });
+  if (d.status.LIMP_MODE) out.push("LIMP mode ativo (corte de PW)");
+  if (d.status.ETB_LIMP) out.push("ETB limp ativo");
+  if (d.status.WBO2_FAULT) out.push("WBO2 (CAN) sem sinal/fault");
+  if (d.status.TLE8888_FAULT)
+    out.push(`TLE8888 driver${d.tle8888_fault_bm
+      ? ` (bm 0x${d.tle8888_fault_bm.toString(16).toUpperCase()})` : ""}`);
+  return out;
+}
+$("#led_FAULT").style.cursor = "pointer";
+$("#led_FAULT").onclick = () => {
+  const list = faultDetails(lastRT);
+  toast(list.length ? "FAULT: " + list.join(" · ") : "Sem falhas ativas", list.length > 0);
+};
 
-/* strip-charts uPlot: 60 s sliding window */
+/* strip-chart uPlot único: 60 s sliding window, séries por checkbox.
+   Cada série tem a SUA escala (autorange independente) — sem eixo Y comum;
+   valores lêem-se na legenda (hover) e nos gauges. */
 const WINDOW_S = 60, MAX_PTS = 60 * 35;
-const chartDefs = [
-  { title: "RPM",           series: [["rpm",           "#e8a020"]] },
-  { title: "MAP / TPS",    series: [["map_kpa",       "#e8a020"], ["tps_pct",     "#22c55e"]] },
-  { title: "λ / STFT",     series: [["lambda_x1000",  "#ef4444"], ["stft_pct",    "#e8a020"]] },
-  { title: "PW / ADVANCE", series: [["pw_ms",         "#e8a020"], ["advance_deg", "#22c55e"]] },
+const CHART_SERIES = [
+  // [key, cor, label, on por default]
+  ["rpm",          "#e8a020", "RPM",    true],
+  ["map_kpa",      "#4ea1ff", "MAP",    true],
+  ["tps_pct",      "#22c55e", "TPS",    true],
+  ["lambda_x1000", "#ef4444", "λ",      false],
+  ["stft_pct",     "#a78bfa", "STFT %", false],
+  ["pw_ms",        "#f0d030", "PW ms",  false],
+  ["advance_deg",  "#2dd4a0", "Ign °",  false],
 ];
-const charts = chartDefs.map(def => {
+const charts = (() => {
+  const wrap = $("#charts");
+  const toggles = document.createElement("div");
+  toggles.className = "chart-toggles";
+  toggles.innerHTML = CHART_SERIES.map(([k, c, lab, on], i) =>
+    `<label style="--sc:${c}"><input type="checkbox" data-si="${i + 1}"
+       ${on ? "checked" : ""}> ${lab}</label>`).join("");
+  wrap.appendChild(toggles);
   const box = document.createElement("div");
-  box.className = "chart-box";
-  $("#charts").appendChild(box);
-  const data = [[], ...def.series.map(() => [])];
+  box.className = "chart-box chart-box-single";
+  wrap.appendChild(box);
+  const data = [[], ...CHART_SERIES.map(() => [])];
   const u = new uPlot({
-    width: box.clientWidth - 8 || 480, height: 160, title: def.title,
+    width: box.clientWidth - 8 || 480, height: 300,
     scales: { x: { time: false } },
-    axes: [
-      { stroke: "#555555", grid: { stroke: "#1a1a1a" } },
-      { stroke: "#555555", grid: { stroke: "#1a1a1a" } },
-    ],
+    axes: [{ stroke: "#555555", grid: { stroke: "#1a1a1a" } }],
     series: [
       { label: "t" },
-      ...def.series.map(([k, c]) => ({ label: k, stroke: c, width: 1.5 })),
+      ...CHART_SERIES.map(([k, c, lab, on]) => ({
+        label: lab, stroke: c, width: 1.5, show: on, scale: k,
+      })),
     ],
   }, data, box);
-  return { u, data, keys: def.series.map(([k]) => k) };
-});
+  toggles.querySelectorAll("input").forEach(inp => {
+    inp.onchange = () => u.setSeries(+inp.dataset.si, { show: inp.checked });
+  });
+  return [{ u, data, keys: CHART_SERIES.map(([k]) => k) }];
+})();
 window.addEventListener("resize", () =>
-  charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 160 })));
+  charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 300 })));
 
 const t0 = performance.now();
 function pushTelemetry(d) {
   const t = (performance.now() - t0) / 1000;
   for (const c of charts) {
     c.data[0].push(t);
-    c.keys.forEach((k, i) => c.data[i + 1].push(d[k]));
+    c.keys.forEach((k, i) => {
+      let v = d[k];
+      // chart de λ em unidades humanas
+      if (k === "lambda_x1000") v = v / 1000;
+      c.data[i + 1].push(v);
+    });
     while (c.data[0].length > MAX_PTS || t - c.data[0][0] > WINDOW_S)
       c.data.forEach(a => a.shift());
     c.u.setData(c.data);
   }
-  for (const [k, , fmt] of GAUGES)
-    $(`#g_${k}`).textContent = fmt(d[k]);
-  const mode = INJ_MODES[d.inj_mode] || "?";
-  $("#injMode").textContent = mode;
-  for (const [k, goodWhenOn] of LEDS) {
-    const on = d.status[k];
-    $(`#led_${k}`).className = "led" + (on ? (goodWhenOn ? " on-good" : " on-bad") : "");
+  for (const [k, , fmt] of GAUGES) {
+    const el = $(`#g_${k}`);
+    if (el) el.textContent = fmt(d[k]);
   }
+  for (const [k, , fmt] of GAUGES_EXTRA) {
+    const el = $(`#gx_${k}`);
+    if (el) el.textContent = fmt(d[k]);
+  }
+  $("#ignMode").textContent =
+    (d.status && d.status.IGN_SEQUENTIAL) ? "IGN:SEQ" : "IGN:WASTED";
+  $("#injMode").textContent = "INJ:" + (INJ_MODES[d.inj_mode] || "?");
+  lastRT = d;
+  const fd = faultDetails(d);
+  $("#led_FAULT").title = fd.length ? fd.join(" · ") : "Sem falhas ativas";
+  for (const c of STATUS_CHIPS) {
+    const on = c.on(d);
+    let cls = "led";
+    if (on) cls += c.info ? " on-info"
+                          : (c.goodWhenOn ? " on-good" : (c.warn ? " on-warn" : " on-bad"));
+    $(`#led_${c.id}`).className = cls;
+  }
+  // Chip BENCH segue o bit real da ECU (STATUS_BENCH_MODE) — apanha o caso
+  // do bench (RAM) morrer num reset da ECU com o toggle do host ainda ON.
+  const ecuBench = !!(d.status && d.status.BENCH_MODE);
+  if (ecuBench !== benchOn) setBenchBtn(ecuBench);
   const tleBm = d.tle8888_fault_bm || 0;
   const tleStr = tleBm ? ` · TLE8888 fault 0x${tleBm.toString(16).toUpperCase()}` : "";
   $("#diag").textContent =
@@ -351,33 +437,34 @@ function pushTelemetry(d) {
 }
 
 /* ── WebSocket ────────────────────────────────────────────────────────── */
+function setConnUI(online, detail) {
+  const el = $("#conn");
+  if (!el) return;
+  el.className = "conn-pill " + (online ? "on" : "off");
+  const text = el.querySelector(".conn-text");
+  if (text) text.textContent = online ? "ONLINE" : "OFFLINE";
+  else el.textContent = online ? "ONLINE" : "OFFLINE";
+  if (detail) el.title = detail;
+}
+
 function connectWS() {
   const ws = new WebSocket(`ws://${location.host}/ws/telemetry`);
   ws.onmessage = ev => {
     const d = JSON.parse(ev.data);
     const conn = d.connected;
-    $("#conn").className = conn ? "on" : "off";
-    $("#conn").textContent = conn ? "[ONLINE]" : "[OFFLINE]";
+    setConnUI(conn, d.error || (conn ? "ECU linked" : "sem ECU"));
     if (conn && d.rpm !== undefined) {
       RT = d; pushTelemetry(d); highlightLiveCell();
       $$(".live-raw").forEach(el => el.textContent = `live: ${d[el.dataset.src]}`);
     }
   };
-  ws.onclose = () => setTimeout(connectWS, 1000);
+  ws.onclose = () => {
+    setConnUI(false, "WS closed · reconnecting");
+    setTimeout(connectWS, 1000);
+  };
 }
 
-/* ── heatmap helpers ──────────────────────────────────────────────────── */
-function heatColor(v, min, max) {
-  const f = max > min ? (v - min) / (max - min) : 0;
-  const h = (1 - f) * 240;          // 240=azul → 0=vermelho (faixa completa)
-  const s = 72 + f * 10;            // 72–82% saturação (menos berrante)
-  const l = 52 + (1 - Math.abs(f - 0.5) * 2) * 12; // 52% extremos, 64% meio
-  return `hsl(${h} ${s}% ${l}%)`;
-}
-
-// Degradê claro (L≥52%) → um único tom escuro de texto contrasta em todas
-// as células, sem alternância claro/escuro (estilo TunerStudio).
-function heatTextColor() { return "#1a1a1a"; }
+/* Heatmap / axis / clamp: see js/helpers.js (H.*) */
 
 /* ── editores de grid (VE/Spark/Lambda) ───────────────────────────────── */
 const gridState = {};   // page → {values, modified:Set("r,c"), table}
@@ -387,9 +474,10 @@ async function loadGrid(pane) {
   const meta = INFO.grid_pages[page];
   // Exibição: página 4 guarda λ×1000 no wire/estado; mostrar λ real (1.050).
   // parse converte o texto editado de volta para o valor cru do protocolo.
-  const disp = (page === 4)
-    ? { fmt: v => (v / 1000).toFixed(2), parse: s => Math.round(parseFloat(s) * 1000) }
-    : { fmt: v => v, parse: s => parseInt(s, 10) };
+  const disp = {
+    fmt: v => H.formatCell(page, v),
+    parse: s => H.parseCell(page, s),
+  };
   pane.innerHTML = `
     <div class="grid-toolbar">
       <strong>${meta.name}</strong> <span class="muted">(${meta.unit})</span>
@@ -397,11 +485,12 @@ async function loadGrid(pane) {
         <button class="mode-btn active" data-mode="trace">◉ Trace</button>
         <button class="mode-btn" data-mode="manual">✎ Manual</button>
       </span>
-      <button class="primary" data-act="send">Send (RAM)</button>
-      <button class="danger" data-act="burn">Burn → flash</button>
-      <button data-act="reload">Reload</button>
+      <button data-act="reload" title="Lê a página da ECU (RAM)">Read</button>
+      <button class="primary" data-act="send" title="Escreve células pendentes na RAM (edições já vão ao teclar)">Write</button>
+      <button class="danger" data-act="burn" title="Grava a página actual (RAM) no flash">Save</button>
       <span class="dirty"></span>
-      <span class="muted">X = RPM, Y = MAP (kPa)</span>
+      <span class="flash-dirty" hidden>não gravado em flash</span>
+      <span class="grid-hint">Trace: rastro · Manual: clique/arraste · A/Z ± · H/V interp · X undo · dbl-click edita</span>
     </div>
     <div class="grid-wrap"></div>`;
   pane.dataset.loaded = "1";
@@ -411,7 +500,14 @@ async function loadGrid(pane) {
   // dois partilhavam o mesmo outline CSS (.sel/.live2) e o mesmo ciclo de
   // desenho, tornando-se indistinguíveis e a competir pela mesma célula —
   // agora só um corre de cada vez por pane.
-  const st = gridState[page] = { values: null, modified: new Set(), pane, mode: "trace", disp };
+  const st = gridState[page] = {
+    values: null, modified: new Set(), pane, mode: "trace", disp, flashDirty: false,
+  };
+
+  function updateFlashDirty() {
+    const el = $(".flash-dirty", pane);
+    if (el) el.hidden = !st.flashDirty;
+  }
 
   function setMode(mode) {
     if (st.mode === mode) return;
@@ -458,7 +554,7 @@ async function loadGrid(pane) {
         // (o estado lógico) intacto.
         const sel = (selPane === pane && selCells.has(key)) ? " sel" : "";
         html += `<td class="${mod}${sel}" data-r="${row}" data-c="${col}"
-                     style="background:${heatColor(v, min, max)};color:${heatTextColor(v, min, max)}">${disp.fmt(v)}</td>`;
+                     style="background:${H.heatColor(v, min, max)};color:${H.heatTextColor(v, min, max)}">${disp.fmt(v)}</td>`;
       }
       html += "</tr>";
     }
@@ -469,7 +565,8 @@ async function loadGrid(pane) {
     cv.width = tbl.offsetWidth;
     cv.height = tbl.offsetHeight;
     $(".dirty", pane).textContent = st.modified.size
-      ? `${st.modified.size} célula(s) não enviada(s)` : "";
+      ? `${st.modified.size} célula(s) por enviar` : "";
+    updateFlashDirty();
     bindCells();
   }
 
@@ -501,18 +598,18 @@ async function loadGrid(pane) {
         if (e.target.tagName === "INPUT") return;  // clique dentro do campo em edição
         if (dragMoved) { dragMoved = false; return; }  // fim de arraste ≠ clique
         if (st.mode !== "manual") {
-          toast('mudar para modo "✎ Manual" para seleccionar células');
+          toast('Mudar para modo "✎ Manual" para seleccionar células');
           return;
         }
         const key = `${td.dataset.r},${td.dataset.c}`;
-        selAnchor = [+td.dataset.r, +td.dataset.c];  // origem p/ navegação por setas
+        const clicked = [+td.dataset.r, +td.dataset.c];
         selFocus = null;
-        if (e.shiftKey && selCells.size) {
-          // Shift+click: rectângulo da âncora anterior até aqui
-          const prev = [...selCells][0].split(",").map(Number);
-          selectRect(pane, page, prev, selAnchor);
+        if (e.shiftKey && selAnchor && selPane === pane) {
+          // Shift+click: rectângulo da âncora (não a 1ª célula do Set)
+          selectRect(pane, page, selAnchor, clicked);
           return;
         }
+        selAnchor = clicked;  // origem p/ navegação por setas / próximo Shift
         if (e.ctrlKey || e.metaKey) {
           if (selCells.has(key)) { selCells.delete(key); selWeights.delete(key); td.classList.remove("sel"); }
           else {
@@ -527,7 +624,7 @@ async function loadGrid(pane) {
       };
       td.ondblclick = (e) => {
         if (st.mode !== "manual") {
-          toast('mudar para modo "✎ Manual" para editar');
+          toast('Mudar para modo "✎ Manual" para editar');
           return;
         }
         clearSel();
@@ -557,8 +654,8 @@ async function loadGrid(pane) {
       // Cor do heatmap acompanha o valor em tempo real (input tem fundo
       // transparente — o estilo do <td> é o que aparece por trás do texto).
       const flat = st.values.flat();
-      td.style.background = heatColor(v, Math.min(...flat), Math.max(...flat));
-      td.style.color = heatTextColor(v, Math.min(...flat), Math.max(...flat));
+      td.style.background = H.heatColor(v, Math.min(...flat), Math.max(...flat));
+      td.style.color = H.heatTextColor(v, Math.min(...flat), Math.max(...flat));
       clearTimeout(liveTimer);
       liveTimer = setTimeout(() => {
         // forceBlur=false: isto corre EM PARALELO com a edição ainda em
@@ -584,7 +681,7 @@ async function loadGrid(pane) {
     inp.onkeydown = e => {
       if (e.key === "Enter") inp.blur();
       if (e.key === "Escape") { inp.value = disp.fmt(orig); inp.blur(); }
-      const step = (page === 4) ? 10 : 1;
+      const step = H.stepSize(page);
       if (e.key === "+" || e.key === "=" || e.key === "ArrowUp")   { delta += step; inp.value = disp.fmt(orig + delta); e.preventDefault(); applyLive(); }
       if (e.key === "-" || e.key === "ArrowDown") { delta -= step; inp.value = disp.fmt(orig + delta); e.preventDefault(); applyLive(); }
     };
@@ -622,8 +719,10 @@ async function loadGrid(pane) {
       const td = pane.querySelector(`td[data-r="${row}"][data-c="${col}"]`);
       if (td) td.classList.remove("mod");
     });
+    st.flashDirty = true;
     $(".dirty", pane).textContent = st.modified.size
-      ? `${st.modified.size} célula(s) não enviada(s)` : "";
+      ? `${st.modified.size} célula(s) por enviar` : "";
+    updateFlashDirty();
     return cells.length;
   }
   st.send = sendModified;  // usado pelo atalho de teclado multi-célula
@@ -631,37 +730,60 @@ async function loadGrid(pane) {
   pane.querySelector('[data-act="send"]').onclick = async () => {
     try {
       const n = await sendModified();
-      if (!n) { toast("nothing to send"); return; }
-      toast(`${n} cell(s) sent (RAM)`);
+      if (!n) { toast("nada a escrever"); return; }
+      toast(`Write · ${n} célula(s) → RAM`);
     } catch (e) { toast(e.message, true); }
   };
   pane.querySelector('[data-act="burn"]').onclick = async () => {
-    // Burn grava o que já está em RAM no firmware — sem isto, uma edição
-    // por enviar ("N célula(s) não enviada(s)") ficava só no browser: o
-    // burn "sucedia" mas persistia o valor ANTIGO, sem qualquer aviso.
+    // Save grava o que já está em RAM no firmware — sem isto, uma edição
+    // por enviar ficava só no browser: o save "sucedia" mas persistia o
+    // valor ANTIGO, sem qualquer aviso.
     try {
       const n = await sendModified();
       await api(`/api/pages/${page}/burn`, { method: "POST" });
-      toast(n ? `${n} cell(s) sent + burn OK` : "burn OK");
+      st.flashDirty = false;
+      updateFlashDirty();
+      toast(n ? `Save OK · pág. ${page} · ${n} célula(s)` : `Save OK · pág. ${page}`);
     } catch (e) { toast(e.message, true); }
   };
-  pane.querySelector('[data-act="reload"]').onclick = reload;
+  pane.querySelector('[data-act="reload"]').onclick = async () => {
+    try {
+      await reload();
+      toast(`Read · pág. ${page}`);
+    } catch (e) { toast(e.message, true); }
+  };
 
-  await reload();
+  try {
+    await reload();
+  } catch (e) {
+    // Offline / no ECU: keep toolbar so user can retry Read without a blank pane.
+    // Still paint axis skeleton so the VE surface is a real grid structure, not empty void.
+    const wrap = $(".grid-wrap", pane);
+    if (wrap && INFO && INFO.axes) {
+      const rpm = INFO.axes.rpm || [];
+      const map = INFO.axes.map_kpa || [];
+      let html = `<table class="tune"><tr><th></th>` +
+        rpm.map(r => `<th>${r}</th>`).join("") + "</tr>";
+      for (let row = map.length - 1; row >= 0; row--) {
+        html += `<tr><th>${map[row]}</th>`;
+        for (let col = 0; col < rpm.length; col++) {
+          html += `<td data-r="${row}" data-c="${col}" style="background:#1a1e28;color:#6b7280">—</td>`;
+        }
+        html += "</tr>";
+      }
+      wrap.innerHTML = html + "</table>" +
+        `<div class="ot-banner" style="margin-top:10px">Grid offline — ${e.message || e}. Connect ECU and press Read.</div>`;
+    } else if (wrap) {
+      wrap.innerHTML = `<div class="ot-banner">Grid offline — ${e.message || e}. Connect ECU and press Read.</div>`;
+    }
+    toast(String(e.message || e), true);
+  }
 }
 
 /* célula corrente do motor destacada ao vivo.
    Espelha axis_lookup() do firmware (table3d.cpp): eixos são NÓS de
    interpolação — o ponto de operação mistura os 4 nós vizinhos com peso
    pela posição real. Destacamos os 4 (dominante mais forte). */
-function axisLookup(axis, v) {
-  const last = axis.length - 1;
-  if (v <= axis[0]) return { idx: 0, frac: 0 };
-  if (v >= axis[last]) return { idx: last - 1, frac: 1 };
-  let i = last - 1;
-  while (i > 0 && v < axis[i]) i--;
-  return { idx: i, frac: (v - axis[i]) / (axis[i + 1] - axis[i]) };
-}
 const TRAIL_MS = 10000;
 function highlightLiveCell() {
   if (!RT || !INFO) return;
@@ -675,8 +797,8 @@ function highlightLiveCell() {
   // em .sel/canvas nem compete com a selecção/edição em curso.
   if (st.mode !== "trace") return;
 
-  const lx = axisLookup(INFO.axes.rpm, RT.rpm);
-  const ly = axisLookup(INFO.axes.map_kpa, RT.map_kpa);
+  const lx = H.axisLookup(INFO.axes.rpm, RT.rpm);
+  const ly = H.axisLookup(INFO.axes.map_kpa, RT.map_kpa);
 
   // posição real interpolada em pixels: centro do nó idx + frac até o nó idx+1
   const center = (sel) => {
@@ -706,12 +828,7 @@ function highlightLiveCell() {
   // vez de aplicar tudo só à dominante. Pesos a 0 (fronteira exacta da
   // tabela, frac=0/1) são omitidos. Só mexe no DOM quando o CONJUNTO de
   // nós muda (não a cada frame a 30Hz).
-  const corners = [
-    { r: ly.idx,     c: lx.idx,     w: (1 - ly.frac) * (1 - lx.frac) },
-    { r: ly.idx,     c: lx.idx + 1, w: (1 - ly.frac) * lx.frac },
-    { r: ly.idx + 1, c: lx.idx,     w: ly.frac * (1 - lx.frac) },
-    { r: ly.idx + 1, c: lx.idx + 1, w: ly.frac * lx.frac },
-  ].filter(p => p.w > 0);
+  const corners = H.bilinearCorners(lx, ly);
   const newKeys = corners.map(p => `${p.r},${p.c}`);
   const changed = selPane !== pane || selPage !== page ||
     selCells.size !== newKeys.length || newKeys.some(k => !selCells.has(k));
@@ -841,7 +958,7 @@ const PAGE_0_SECTIONS = [
   },
 ];
 
-/* friendly labels (page 0) and read-only fields */
+/* friendly labels — unidades = valor já escalado por protocol.py (não o raw wire) */
 const FIELD_LABELS = {
   displacement_cc:           "Displacement (cc)",
   injector_flow_cc_min:      "Injector flow (cc/min)",
@@ -868,7 +985,7 @@ const FIELD_LABELS = {
   cyl_ign_trim_deg_2:  "Ign trim cyl.3 (°)",  cyl_ign_trim_deg_3:  "Ign trim cyl.4 (°)",
   cmp_window_open_tooth:  "CMP window open (tooth)",
   cmp_window_close_tooth: "CMP window close (tooth; 0/0=disabled)",
-  // Page 5 scalars
+  // Page 5 scalars (valores já em unidade natural)
   ae_tpsdot_threshold_x10: "AE TPSdot threshold (%/s)",
   ae_taper_cycles:         "AE taper (cycles)",
   ae_max_pw_us:            "AE max PW (ms)",
@@ -887,48 +1004,52 @@ const FIELD_LABELS = {
   iac_clt_axis_x10:         "Eixo CLT — Idle target RPM (°C, 8pts)",
   iac_idle_target_rpm_x10:  "Idle target RPM vs CLT (8pts)",
   // Closed-loop STFT/LTFT
+  // Nota: stft_kp/ki/clamp ainda vêm raw no wire (scale=1) — labels mantêm factor.
   closed_loop_enable:       "Closed-loop enable (0=open-loop freeze, 1=on)",
   closed_loop_post_start_s: "Post-start delay before STFT (s)",
   ltft_adapt_min_rpm_x10:   "LTFT/LEARN min RPM (STFT free below)",
-  stft_kp_x100:             "STFT Kp (×100)",
-  stft_ki_x1000:            "STFT Ki (×1000)",
-  stft_clamp_pct_x10:       "STFT clamp ±(%)",
+  stft_kp_x100:             "STFT Kp (raw ×100 no wire)",
+  stft_ki_x1000:            "STFT Ki (raw ×1000 no wire)",
+  stft_clamp_pct_x10:       "STFT clamp (raw ×10 % no wire)",
   ltft_mult_clamp_pct_x10:  "LTFT mult clamp ±(%)",
-  ltft_add_clamp_us:        "LTFT add clamp (µs)",
+  ltft_add_clamp_us:        "LTFT add clamp (ms)",
   ltft_learn_div:           "LTFT IIR divisor (cell+=(stft-cell)/div)",
   ltft_commit_gain_pct:     "LEARN bake gain (% of mean STFT)",
   ltft_max_step_x10:        "LTFT max step %/tick (0=unlimited)",
-  ltft_adapt_enable:       "LTFT adapt enable (0=STFT only, 1=learn LTFT)",
-  ltft_learn_ready_hits:   "LEARN ready min hits",
-  ltft_learn_max_err_x1000: "LEARN sample max |λ err| (×1000)",
-  ltft_learn_ready_max_mean_err: "LEARN ready max mean |err| (×1000)",
-  ltft_learn_ready_min_stft_x10: "LEARN ready min |mean STFT| (×10 %)",
-  ltft_learn_ready_max_stft_x10: "LEARN ready max |mean STFT| (×10 %)",
+  ltft_adapt_enable:        "LTFT adapt enable (0=STFT only, 1=learn LTFT)",
+  ltft_learn_ready_hits:    "LEARN ready min hits",
+  ltft_learn_max_err_x1000: "LEARN sample max |λ err|",
+  ltft_learn_ready_max_mean_err: "LEARN ready max mean |λ err|",
+  ltft_learn_ready_min_stft_x10: "LEARN ready min |mean STFT| (%)",
+  ltft_learn_ready_max_stft_x10: "LEARN ready max |mean STFT| (%)",
   ltft_apply_burn_ve:       "After APPLY: burn VE (0=RAM only, 1=burn page1 @ RPM safe)",
   xtau_x_min_q8:            "X-τ X min (Q8)",
   xtau_x_max_q8:            "X-τ X max (Q8)",
-  xtau_tau_min:              "X-τ τ min (cycles)",
-  xtau_tau_max:              "X-τ τ max (cycles)",
-  // EWG
-  ewg_kp_x10:               "EWG Kp (×10)",
-  ewg_ki_x10:               "EWG Ki (×10)",
-  ewg_kd_x10:               "EWG Kd (×10)",
-  ewg_pos_min_raw:           "EWG pos closed (raw)",
-  ewg_pos_max_raw:           "EWG pos open (raw)",
-  eoi_idle_deg:              "EOI idle (° BTDC — 60=compressão, 365=pré-IVO)",
-  eoi_blend_rpm_lo:          "Blend RPM início (0/0 = desligado)",
-  eoi_blend_rpm_hi:          "Blend RPM fim (→ EOI target 355°)",
+  xtau_tau_min:             "X-τ τ min (cycles)",
+  xtau_tau_max:             "X-τ τ max (cycles)",
+  // EWG — scale=1 no wire (raw ×10)
+  ewg_kp_x10:               "EWG Kp (raw ×10 no wire)",
+  ewg_ki_x10:               "EWG Ki (raw ×10 no wire)",
+  ewg_kd_x10:               "EWG Kd (raw ×10 no wire)",
+  ewg_pos_min_raw:          "EWG pos closed (raw)",
+  ewg_pos_max_raw:          "EWG pos open (raw)",
+  eoi_idle_deg:             "EOI idle (° BTDC — 60=compressão, 365=pré-IVO)",
+  eoi_blend_rpm_lo:         "Blend RPM início (0/0 = desligado)",
+  eoi_blend_rpm_hi:         "Blend RPM fim (→ EOI target 355°)",
+  mspark_max_rpm_x10:       "Multi-spark max RPM",
+  mspark_count:             "Multi-spark extra sparks (0-3)",
+  mspark_inter_dwell_ms_x10: "Multi-spark inter-dwell (ms)",
   // Dirigibilidade
   antijerk_tpsdot_threshold_x10: "Anti-jerk TPSdot threshold (%/s)",
-  antijerk_retard_deg:            "Anti-jerk ignition retard (°)",
-  antijerk_decay_cycles:          "Anti-jerk decay (cycles)",
-  rev_limit_rpm_x10:              "Rev limiter hard cut (RPM ×10)",
-  rev_limit_soft_window_x10:      "Rev limit hysteresis (RPM ×10)",
-  ltft_add_pw_threshold_us:       "LTFT PW threshold (ms)",
-  decel_cut_tps_threshold_x10:    "Decel cut TPS max (%)",
-  decel_cut_entry_rpm_x10:        "Decel cut entry RPM",
-  decel_cut_exit_rpm_x10:         "Decel cut exit RPM",
-  decel_cut_min_clt_x10:          "Decel cut min CLT (°C)",
+  antijerk_retard_deg:           "Anti-jerk ignition retard (°)",
+  antijerk_decay_cycles:         "Anti-jerk decay (cycles)",
+  rev_limit_rpm_x10:             "Rev limiter hard cut (RPM)",
+  rev_limit_soft_window_x10:     "Rev limit hysteresis (RPM)",
+  ltft_add_pw_threshold_us:      "LTFT PW threshold (ms)",
+  decel_cut_tps_threshold_x10:   "Decel cut TPS max (%)",
+  decel_cut_entry_rpm_x10:       "Decel cut entry RPM",
+  decel_cut_exit_rpm_x10:        "Decel cut exit RPM",
+  decel_cut_min_clt_x10:         "Decel cut min CLT (°C)",
 };
 
 /* calibração assistida: campo → fonte do raw ao vivo na telemetria */
@@ -1011,11 +1132,12 @@ async function loadBoostMap() {
   root.innerHTML = `
     <div class="pm-header">
       <strong>BOOST TARGET</strong>
-      <div class="pm-tabs">${BOOST_GEAR_LABELS.map((l,i)=>`<button class="pm-tab${i===0?" active":""}" data-gear="${i}">${l}</button>`).join("")}</div>
-      <button class="primary" id="boostSend">Send (RAM)</button>
-      <button class="danger"  id="boostBurn">Burn → flash</button>
-      <button id="boostReload">Reload</button>
+      <div class="pm-tabs" role="tablist">${BOOST_GEAR_LABELS.map((l,i)=>`<button type="button" role="tab" class="pm-tab${i===0?" active":""}" data-gear="${i}" aria-selected="${i===0?"true":"false"}">${l}</button>`).join("")}</div>
+      <button type="button" id="boostReload" title="Lê boost map da ECU">Read</button>
+      <button type="button" class="primary" id="boostSend" title="Escreve mapa na RAM (edições já vão ao soltar o ponto)">Write</button>
+      <button type="button" class="danger"  id="boostBurn" title="Grava boost map no flash">Save</button>
       <span class="dirty" id="boostDirty"></span>
+      <span class="flash-dirty" id="boostFlashDirty" hidden>não gravado em flash</span>
     </div>
     <canvas id="boostCanvas" width="760" height="500"></canvas>`;
 
@@ -1026,19 +1148,32 @@ async function loadBoostMap() {
   async function sendBoost() {
     await api("/api/pages/9/cells", "PUT", { boost_map: rows });
     $("#boostDirty").textContent = "";
+    const fd = $("#boostFlashDirty");
+    if (fd) fd.hidden = false;
   }
 
   function buildCurve() {
     curve = makeDragCurve({
       canvas: $("#boostCanvas"),
-      get values() { return rows; },
-      get active() { return activeGear; },
+      getValues: () => rows,
+      getActive: () => activeGear,
       colors: BOOST_GEAR_COLORS,
       nPts: 8,
       xAxis: BOOST_RPM_AXIS,
       xLabel: "RPM",
       yLabel: "Boost (bar×1000)",
+      // Range completo 1.0–3.0 bar, mas escala Y dividida: a faixa de foco
+      // 1.0–2.0 bar ocupa 80% da altura (ticks de 0.1) e 2.0–3.0 os 20%
+      // restantes (ticks de 0.25) — mais precisão onde se ajusta.
       yMin: 1000, yMax: 3000,
+      yNorm: v => v <= 2000
+        ? (v - 1000) / 1000 * 0.8
+        : 0.8 + (v - 2000) / 1000 * 0.2,
+      yDenorm: n => n <= 0.8
+        ? 1000 + (n / 0.8) * 1000
+        : 2000 + ((n - 0.8) / 0.2) * 1000,
+      yTicks: [1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900,
+               2000, 2250, 2500, 2750, 3000],
       mono: false,
       onchange: () => { $("#boostDirty").textContent = "unsent"; },
       // Envia ao soltar o rato/dedo — não requer clicar "Send" à parte.
@@ -1048,8 +1183,12 @@ async function loadBoostMap() {
 
   function activateGear(g) {
     activeGear = g;
-    root.querySelectorAll(".pm-tab").forEach(b => b.classList.toggle("active", +b.dataset.gear === g));
-    curve.draw();
+    root.querySelectorAll(".pm-tab").forEach(b => {
+      const on = +b.dataset.gear === g;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    if (curve) curve.draw();
   }
 
   async function reload() {
@@ -1058,43 +1197,61 @@ async function loadBoostMap() {
       rows = d.boost_map;
     } catch { toast("ECU offline — showing defaults", false); }
     $("#boostDirty").textContent = "";
-    curve.draw();
+    if (curve) curve.draw();
   }
 
   buildCurve();
-  root.querySelectorAll(".pm-tab").forEach(b => b.onclick = () => activateGear(+b.dataset.gear));
+  // Capture on the tab strip so Read/Write/Save (or any overlay) cannot
+  // steal the click; stopPropagation keeps global handlers out of the way.
+  const boostTabs = root.querySelector(".pm-tabs");
+  if (boostTabs) {
+    boostTabs.addEventListener("click", e => {
+      const b = e.target.closest(".pm-tab");
+      if (!b || !boostTabs.contains(b)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      activateGear(+b.dataset.gear);
+    });
+  }
 
   $("#boostSend", root).onclick = async () => {
     try {
       await sendBoost();
-      toast("boost map sent (RAM)");
+      toast("Write · boost map → RAM");
     } catch (e) { toast(e.message, true); }
   };
   $("#boostBurn", root).onclick = async () => {
-    // Envia sempre antes de queimar — sem isto, arrastar a curva e clicar
-    // logo em Burn (sem Send) persistia o valor ANTIGO em flash.
+    // Write sempre antes de Save — sem isto, arrastar a curva e clicar
+    // logo em Save persistia o valor ANTIGO em flash.
     try {
       await sendBoost();
       await api("/api/pages/9/burn", "POST");
-      toast("boost map sent + burn OK");
+      const fd = $("#boostFlashDirty");
+      if (fd) fd.hidden = true;
+      toast("Save OK · boost map");
     } catch (e) { toast(e.message, true); }
   };
-  $("#boostReload", root).onclick = reload;
+  $("#boostReload", root).onclick = async () => {
+    try { await reload(); toast("Read · boost map"); }
+    catch (e) { toast(e.message, true); }
+  };
   await reload();
 }
 
 /* ── LEARN: mean STFT % (page 12) ─────────────────────────────────────── */
-// Só a grelha mean STFT e READ / APPLY / RESET.
 // Apply = bake-in manual de TODAS as células com hits>0 → VE (não só ready).
+// Contorno verde = célula "ready" (critérios de qualidade do FW); APPLY não
+// se limita a ready — usa hits>0 (comando 'Y').
 async function loadLtftAccum() {
   const root = $("#ltftAccumRoot");
   root.dataset.loaded = "1";
   root.innerHTML = `
     <div class="grid-toolbar">
       <strong>LEARN</strong>
-      <span class="muted">mean STFT %</span>
+      <span class="muted" title="Mapa de aprendizado: mean STFT % por célula (RPM×MAP); contorno verde = ready; APPLY grava em VE células com hits>0; RESET zera o acumulador">mean STFT %</span>
+      <span class="learn-stats" id="ltftStats"></span>
       <button data-act="read">READ</button>
-      <button data-act="apply">APPLY</button>
+      <button data-act="apply">APPLY → VE</button>
       <button class="danger" data-act="reset">RESET</button>
     </div>
     <div class="grid-wrap" id="ltftAccumGrid"></div>`;
@@ -1109,8 +1266,14 @@ async function loadLtftAccum() {
     }
     const n = data.mean_stft_x10.length;
     const flat = [];
+    let nReady = 0, nHits = 0;
     for (let r = 0; r < n; r++)
-      for (let c = 0; c < n; c++) flat.push(data.mean_stft_x10[r][c]);
+      for (let c = 0; c < n; c++) {
+        flat.push(data.mean_stft_x10[r][c]);
+        if (data.ready[r][c]) nReady++;
+        if (data.hits[r][c] > 0) nHits++;
+      }
+    $("#ltftStats").textContent = `ready ${nReady} · hits>0 ${nHits}`;
     const min = Math.min(...flat), max = Math.max(...flat);
     const rpm = (INFO && INFO.axes && INFO.axes.rpm) || [];
     const map = (INFO && INFO.axes && INFO.axes.map_kpa) || [];
@@ -1122,12 +1285,13 @@ async function loadLtftAccum() {
       for (let col = 0; col < n; col++) {
         const x10 = data.mean_stft_x10[row][col];
         const ready = data.ready[row][col];
-        const bg = heatColor(x10, min, max);
-        // Contorno só em ready (o que APPLY vai aplicar) — sem texto extra.
+        const hits = data.hits[row][col];
+        const bg = H.heatColor(x10, min, max);
+        // Verde = ready (qualidade). Hits>0 sem ready ficam só no heatmap.
         const outline = ready ? "outline:2px solid #22c55e;outline-offset:-2px" : "";
         const txt = (x10 / 10).toFixed(1);
-        html += `<td style="background:${bg};color:${heatTextColor()};${outline}"
-          title="${map[row]} kPa · ${rpm[col]} rpm">${txt}</td>`;
+        html += `<td style="background:${bg};color:${H.heatTextColor()};${outline}"
+          title="${map[row]} kPa · ${rpm[col]} rpm · hits ${hits}${ready ? " · ready" : ""}">${txt}</td>`;
       }
       html += "</tr>";
     }
@@ -1148,16 +1312,20 @@ async function loadLtftAccum() {
 
   root.querySelector("[data-act=read]").onclick = read;
   root.querySelector("[data-act=apply]").onclick = async () => {
+    if (!confirm("APPLY: bake-in LEARN → VE (todas as células com hits>0). Continuar?"))
+      return;
     try {
       const r = await api("/api/ltft/apply-ready", { method: "POST" });
-      toast(`APPLY · ${r.committed ?? 0} células`);
+      toast(`APPLY · ${r.committed ?? 0} célula(s) → VE`);
       await read();
     } catch (e) { toast(e.message, true); }
   };
   root.querySelector("[data-act=reset]").onclick = async () => {
+    if (!confirm("RESET: zera acumulador LEARN / adaptives. Continuar?"))
+      return;
     try {
       await api("/api/adaptives/reset", { method: "POST" });
-      toast("RESET");
+      toast("RESET OK");
       await read();
     } catch (e) { toast(e.message, true); }
   };
@@ -1244,12 +1412,12 @@ async function buildCanRxUI(container) {
   const btnRow = document.createElement("div");
   btnRow.className = "param-row pg-btns";
   btnRow.innerHTML = `
-    <button class="primary" id="canRxSend">Send (RAM)</button>
-    <button class="danger"  id="canRxBurn">Burn → flash</button>`;
+    <button class="primary" id="canRxSend" title="Escreve CAN RX na RAM">Write</button>
+    <button class="danger"  id="canRxBurn" title="Grava CAN RX no flash">Save</button>`;
   div.appendChild(btnRow);
 
   div.querySelector("#canRxSend").onclick = async () => {
-    try { await sendAll(); toast("CAN RX sent (RAM)"); }
+    try { await sendAll(); toast("Write · CAN RX → RAM"); }
     catch (e) { toast(e.message, true); }
   };
 
@@ -1257,7 +1425,7 @@ async function buildCanRxUI(container) {
     try {
       await sendAll();
       await api("/api/pages/0/burn", "POST", {});
-      toast("CAN RX written to flash");
+      toast("Save OK · CAN RX");
     } catch (e) { toast(e.message, true); }
   };
 }
@@ -1265,12 +1433,53 @@ async function buildCanRxUI(container) {
 async function loadParams() {
   const root = $("#paramsRoot");
   root.dataset.loaded = "1";
-  root.innerHTML = "";
+  root.innerHTML = `
+    <div class="params-filter">
+      <input type="search" id="paramsFilter" placeholder="Filtrar parâmetros…" autocomplete="off">
+    </div>`;
+
+  const filterInp = $("#paramsFilter", root);
+  filterInp.oninput = () => {
+    const q = filterInp.value.trim().toLowerCase();
+    $$(".param-row", root).forEach(row => {
+      if (row.classList.contains("pg-btns")) return;
+      const text = row.textContent.toLowerCase();
+      row.style.display = !q || text.includes(q) ? "" : "none";
+    });
+    // Mostra secções/acordeões que ainda têm linhas visíveis
+    $$(".pg-section-header", root).forEach(h => {
+      let el = h.nextElementSibling, any = false;
+      while (el && !el.classList.contains("pg-section-header") && !el.classList.contains("pg-btns")) {
+        if (el.classList.contains("param-row") && el.style.display !== "none") any = true;
+        if (el.tagName === "H4" || el.tagName === "TABLE") {
+          // curva/tabela: mostra se filtro vazio ou título casa
+          const hit = !q || el.textContent.toLowerCase().includes(q) ||
+            (el.previousElementSibling === h);
+          if (el.tagName === "TABLE" && q) {
+            const prev = el.previousElementSibling;
+            const titleHit = prev && prev.tagName === "H4" && prev.textContent.toLowerCase().includes(q);
+            el.style.display = titleHit || el.textContent.toLowerCase().includes(q) ? "" : "none";
+            if (el.style.display !== "none") any = true;
+          } else if (el.tagName === "H4") {
+            el.style.display = !q || el.textContent.toLowerCase().includes(q) ? "" : "none";
+            if (el.style.display !== "none") any = true;
+          }
+        }
+        el = el.nextElementSibling;
+      }
+      h.style.display = !q || any || h.textContent.toLowerCase().includes(q) ? "" : "none";
+    });
+    $$(".pg-accordion", root).forEach(acc => {
+      if (q && !acc.open) acc.open = true;
+    });
+  };
 
   for (const grp of PARAM_GROUPS) {
     const details = document.createElement("details");
     details.className = "pg-accordion";
     details.id = grp.id;
+    // ENGINE aberto por default na 1ª visita
+    if (grp.id === "pg-motor") details.open = true;
     details.innerHTML = `<summary class="pg-summary">
       <span class="pg-icon">${grp.icon}</span>
       <span class="pg-label">${grp.label}</span>
@@ -1279,29 +1488,33 @@ async function loadParams() {
     root.appendChild(details);
 
     let opened = false;
-    details.addEventListener("toggle", () => {
-      if (details.open && !opened) {
-        opened = true;
-        if (grp.canRx) {
-          buildCanRxUI(details);
-        } else {
-          for (const page of grp.pages) {
-            const div = document.createElement("div");
-            div.className = "param-group";
-            div.innerHTML = `
-              <div class="pg-page-label">PG${page} — ${PARAM_PAGES[page]}</div>
-              <div class="rows muted">loading…</div>
-              <div class="param-row pg-btns">
-                <button class="primary" data-act="send">Send (RAM)</button>
-                <button class="danger"  data-act="burn">Burn → flash</button>
-                <button data-act="reload">Reload</button>
-              </div>`;
-            details.appendChild(div);
-            bindParamGroup(div, page);
-          }
+    const loadGroup = () => {
+      if (opened) return;
+      opened = true;
+      if (grp.canRx) {
+        buildCanRxUI(details);
+      } else {
+        for (const page of grp.pages) {
+          const div = document.createElement("div");
+          div.className = "param-group";
+          div.innerHTML = `
+            <div class="pg-page-label">PG${page} — ${PARAM_PAGES[page]}</div>
+            <div class="rows muted">a carregar…</div>
+            <div class="param-row pg-btns">
+              <button data-act="reload" title="Lê a página da ECU (RAM)">Read</button>
+              <button class="primary" data-act="send" title="Escreve campos pendentes na RAM">Write</button>
+              <button class="danger"  data-act="burn" title="Grava a página no flash">Save</button>
+              <span class="flash-dirty" hidden>não gravado em flash</span>
+            </div>`;
+          details.appendChild(div);
+          bindParamGroup(div, page);
         }
       }
+    };
+    details.addEventListener("toggle", () => {
+      if (details.open) loadGroup();
     });
+    if (details.open) loadGroup();
   }
 }
 
@@ -1309,6 +1522,12 @@ async function bindParamGroup(div, page) {
   const rowsEl = $(".rows", div);
   let fields = {};
   const modified = new Set();
+  let flashDirty = false;
+
+  function updateFlashDirty() {
+    const el = $(".flash-dirty", div);
+    if (el) el.hidden = !flashDirty;
+  }
 
   async function reload() {
     fields = (await api(`/api/pages/${page}`)).fields;
@@ -1419,7 +1638,7 @@ async function bindParamGroup(div, page) {
     }
     rowsEl.innerHTML = html;
     $$("button.cap", rowsEl).forEach(btn => btn.onclick = () => {
-      if (!RT) return toast("no telemetry", true);
+      if (!RT) return toast("sem telemetria", true);
       const v = RT[btn.dataset.src];
       const input = rowsEl.querySelector(`input[data-f="${btn.dataset.cap}"]`);
       input.value = v;
@@ -1458,46 +1677,85 @@ async function bindParamGroup(div, page) {
       rowsEl.querySelectorAll(`input[data-f="${f}"]`).forEach(el => el.classList.remove("mod"));
     });
     modified.clear();
+    if (n) { flashDirty = true; updateFlashDirty(); }
     return n;
   }
 
   div.querySelector('[data-act="send"]').onclick = async () => {
     try {
       const n = await sendModified();
-      if (!n) { toast("nothing to send"); return; }
-      toast(`page ${page}: ${n} field(s) sent (RAM)`);
+      if (!n) { toast("nada a escrever"); return; }
+      toast(`Write · pág. ${page}: ${n} campo(s) → RAM`);
     } catch (e) { toast(e.message, true); }
   };
   div.querySelector('[data-act="burn"]').onclick = async () => {
-    // Burn grava o que já está em RAM no firmware — sem enviar primeiro os
-    // campos editados mas não enviados, o burn persistia o valor ANTIGO
-    // silenciosamente (mesmo bug corrigido nas grid pages).
+    // Save grava o que já está em RAM no firmware — sem Write prévio dos
+    // campos editados, o save persistia o valor ANTIGO silenciosamente.
     try {
       const n = await sendModified();
       await api(`/api/pages/${page}/burn`, { method: "POST" });
-      toast(n ? `page ${page}: ${n} field(s) sent + burn OK` : "burn OK");
+      flashDirty = false;
+      updateFlashDirty();
+      toast(n ? `Save OK · pág. ${page} · ${n} campo(s)` : `Save OK · pág. ${page}`);
     } catch (e) { toast(e.message, true); }
   };
-  div.querySelector('[data-act="reload"]').onclick = reload;
+  div.querySelector('[data-act="reload"]').onclick = async () => {
+    try {
+      await reload();
+      toast(`Read · pág. ${page}`);
+    } catch (e) { toast(e.message, true); }
+  };
   await reload();
 }
 
+/* ── bench-mode (comando 'B' no protocolo) ────────────────────────────── */
+// Força CLT=90°C / IAT=25°C (sem SENSOR_FAULT), λ=1.000 simulado no CAN stack,
+// e relaxa timeouts CKP/CMP no firmware (HIL com estimulador). O FW expõe
+// STATUS_BENCH_MODE (bit 15) no realtime — benchOn segue a ECU, não o host.
+let benchOn = false;
+function setBenchBtn(on) {
+  benchOn = on;
+  const b = $("#benchBtn");
+  if (!b) return;
+  b.textContent = on ? "BENCH ON" : "BENCH OFF";
+  b.classList.toggle("on", on);
+  const chip = $("#led_BENCH");
+  if (chip) {
+    chip.className = "led" + (on ? " on-warn" : "");
+    chip.title = on
+      ? "Bench ON · CLT/IAT/λ simulados"
+      : "Bench OFF · sensores reais";
+  }
+}
+$("#benchBtn").onclick = async () => {
+  const next = !benchOn;
+  try {
+    await api("/api/bench_mode", "POST", { on: next });
+    setBenchBtn(next);
+    toast(next
+      ? "Bench ON · CLT=90°C IAT=25°C λ=1.000"
+      : "Bench OFF · sensores reais");
+  } catch (e) { toast(e.message, true); }
+};
+
 /* ── datalog ──────────────────────────────────────────────────────────── */
 let logging = false;
+function setLogBtn(rec) {
+  $("#logBtn").textContent = rec ? "■ STOP LOG" : "● LOG";
+  $("#logBtn").classList.toggle("rec", rec);
+}
 $("#logBtn").onclick = async () => {
   try {
     if (!logging) {
       const r = await api("/api/log/start", { method: "POST" });
       logging = true;
-      $("#logBtn").textContent = "■ Stop log";
-      $("#logBtn").classList.add("rec");
-      toast("recording: " + r.path);
+      setLogBtn(true);
+      toast("a gravar: " + r.path);
     } else {
       const r = await api("/api/log/stop", { method: "POST" });
       logging = false;
-      $("#logBtn").textContent = "● Record log";
-      $("#logBtn").classList.remove("rec");
-      toast("log saved: " + r.path);
+      setLogBtn(false);
+      toast("log guardado: " + r.path);
       window.open("/api/log/download");
     }
   } catch (e) { toast(e.message, true); }
@@ -1522,40 +1780,70 @@ function makeDragCurve(cfg) {
   const PAD = {l:52, r:18, t:18, b:42};
   let dragIdx = -1;
 
+  // Resolve live series list / active index every call so preset tabs
+  // (getters or plain fields) always drive the draw/edit path.
+  function seriesList() {
+    const v = typeof cfg.getValues === "function" ? cfg.getValues() : cfg.values;
+    return v || [];
+  }
+  function activeIdx() {
+    if (typeof cfg.getActive === "function") return cfg.getActive() | 0;
+    return (cfg.active | 0);
+  }
+  function activeSeries() {
+    const list = seriesList();
+    const i = Math.max(0, Math.min(list.length - 1, activeIdx()));
+    return list[i] || [];
+  }
+
   function ptX(i) {
     const iW = cv.width - PAD.l - PAD.r;
     return PAD.l + i * iW / (cfg.nPts - 1);
   }
+  // Mapeamento Y opcionalmente não-linear: yNorm(v)→[0..1] e o inverso
+  // yDenorm — permite dar mais altura a uma faixa de interesse (ex.: boost
+  // 1.0–2.0 bar maior que 2.0–3.0). Default = linear.
+  const yNorm = cfg.yNorm ||
+    (v => (v - cfg.yMin) / (cfg.yMax - cfg.yMin));
+  const yDenorm = cfg.yDenorm ||
+    (n => cfg.yMin + n * (cfg.yMax - cfg.yMin));
   function ptY(v) {
     const iH = cv.height - PAD.t - PAD.b;
-    return PAD.t + iH - (v - cfg.yMin) / (cfg.yMax - cfg.yMin) * iH;
+    return PAD.t + iH - yNorm(v) * iH;
   }
   function yFromPx(py) {
     const iH = cv.height - PAD.t - PAD.b;
-    return cfg.yMin + (1 - (py - PAD.t) / iH) * (cfg.yMax - cfg.yMin);
+    return yDenorm(1 - (py - PAD.t) / iH);
   }
 
   function draw() {
     const W = cv.width, H = cv.height;
     const iW = W - PAD.l - PAD.r, iH = H - PAD.t - PAD.b;
+    const act = activeIdx();
+    const list = seriesList();
     ctx.clearRect(0, 0, W, H);
     ctx.fillStyle = "#111"; ctx.fillRect(0, 0, W, H);
 
-    // grid
+    // grid vertical (X) uniforme; horizontal (Y) segue os ticks — com yTicks
+    // custom as linhas acompanham o mapeamento não-linear.
     ctx.strokeStyle = "#222"; ctx.lineWidth = 1;
     for (let i = 0; i <= 10; i++) {
-      const x = PAD.l + i * iW / 10, y = PAD.t + i * iH / 10;
+      const x = PAD.l + i * iW / 10;
       ctx.beginPath(); ctx.moveTo(x, PAD.t); ctx.lineTo(x, PAD.t + iH); ctx.stroke();
+    }
+    const yStep = (cfg.yMax - cfg.yMin) / 10;
+    const yTicks = cfg.yTicks ||
+      Array.from({ length: 11 }, (_, i) => cfg.yMin + i * yStep);
+    for (const v of yTicks) {
+      const y = ptY(v);
       ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(PAD.l + iW, y); ctx.stroke();
     }
 
     // axis labels
     ctx.fillStyle = "#666"; ctx.font = "11px monospace";
-    const yStep = (cfg.yMax - cfg.yMin) / 10;
     ctx.textAlign = "right";
-    for (let i = 0; i <= 10; i++) {
-      const v = cfg.yMin + i * yStep;
-      ctx.fillText(v % 1 === 0 ? v : v.toFixed(1), PAD.l - 5, PAD.t + iH - i * iH / 10 + 4);
+    for (const v of yTicks) {
+      ctx.fillText(v % 1 === 0 ? v : v.toFixed(1), PAD.l - 5, ptY(v) + 4);
     }
     ctx.textAlign = "center";
     if (cfg.xAxis) {
@@ -1567,17 +1855,18 @@ function makeDragCurve(cfg) {
     ctx.textAlign = "center"; ctx.fillText(cfg.yLabel || "", 0, 0); ctx.restore();
 
     // all series faint
-    cfg.values.forEach((vals, si) => {
-      if (si === cfg.active) return;
-      ctx.strokeStyle = cfg.colors[si] + "33"; ctx.lineWidth = 1.5;
+    list.forEach((vals, si) => {
+      if (si === act || !vals) return;
+      ctx.strokeStyle = (cfg.colors[si] || "#888") + "33"; ctx.lineWidth = 1.5;
       ctx.beginPath();
       vals.forEach((v, i) => { i === 0 ? ctx.moveTo(ptX(i), ptY(v)) : ctx.lineTo(ptX(i), ptY(v)); });
       ctx.stroke();
     });
 
     // active series
-    const vals = cfg.values[cfg.active];
-    ctx.strokeStyle = cfg.colors[cfg.active]; ctx.lineWidth = 2.5;
+    const vals = list[act] || [];
+    const col = cfg.colors[act] || "#e8a020";
+    ctx.strokeStyle = col; ctx.lineWidth = 2.5;
     ctx.beginPath();
     vals.forEach((v, i) => { i === 0 ? ctx.moveTo(ptX(i), ptY(v)) : ctx.lineTo(ptX(i), ptY(v)); });
     ctx.stroke();
@@ -1585,7 +1874,7 @@ function makeDragCurve(cfg) {
     // points
     vals.forEach((v, i) => {
       const x = ptX(i), y = ptY(v);
-      ctx.fillStyle = dragIdx === i ? "#fff" : cfg.colors[cfg.active];
+      ctx.fillStyle = dragIdx === i ? "#fff" : col;
       ctx.beginPath(); ctx.arc(x, y, dragIdx === i ? 7 : 5, 0, Math.PI * 2); ctx.fill();
       // value label on hover
       if (dragIdx === i) {
@@ -1596,7 +1885,7 @@ function makeDragCurve(cfg) {
   }
 
   function nearestPt(ex, ey) {
-    const vals = cfg.values[cfg.active];
+    const vals = activeSeries();
     const R = cfg.hitRadius || 12;
     let best = -1, bestD = R * R;
     vals.forEach((v, i) => {
@@ -1610,17 +1899,27 @@ function makeDragCurve(cfg) {
   function clampVal(idx, v) {
     v = Math.max(cfg.yMin, Math.min(cfg.yMax, v));
     if (cfg.mono) {
-      const vals = cfg.values[cfg.active];
+      const vals = activeSeries();
       if (idx > 0 && v < vals[idx - 1]) v = vals[idx - 1];
       if (idx < cfg.nPts - 1 && v > vals[idx + 1]) v = vals[idx + 1];
     }
     return v;
   }
 
+  function writeActive(idx, v) {
+    const list = seriesList();
+    const act = activeIdx();
+    if (!list[act]) return;
+    list[act][idx] = v;
+  }
+
   function evPos(e) {
     const r = cv.getBoundingClientRect();
     const src = e.touches ? e.touches[0] : e;
-    return [src.clientX - r.left, src.clientY - r.top];
+    // Scale CSS pixels → canvas buffer (handles max-width:100% shrink)
+    const sx = cv.width / (r.width || cv.width);
+    const sy = cv.height / (r.height || cv.height);
+    return [(src.clientX - r.left) * sx, (src.clientY - r.top) * sy];
   }
 
   cv.addEventListener("mousedown", e => {
@@ -1633,7 +1932,7 @@ function makeDragCurve(cfg) {
     if (dragIdx >= 0) {
       e.preventDefault();
       const v = clampVal(dragIdx, yFromPx(ey));
-      cfg.values[cfg.active][dragIdx] = v;
+      writeActive(dragIdx, v);
       cfg.onchange && cfg.onchange(dragIdx, v);
       draw();
     } else {
@@ -1663,7 +1962,7 @@ function makeDragCurve(cfg) {
     e.preventDefault();
     const [, ey] = evPos(e);
     const v = clampVal(dragIdx, yFromPx(ey));
-    cfg.values[cfg.active][dragIdx] = v;
+    writeActive(dragIdx, v);
     cfg.onchange && cfg.onchange(dragIdx, v);
     draw();
   }, {passive: false});
@@ -1679,22 +1978,25 @@ function buildPedalMapUI(data) {
 
   root.innerHTML = `
     <div class="pm-header">
-      <div class="pm-tabs">${PEDAL_MODES.map((m,i)=>`<button class="pm-tab${i===0?" active":""}" data-mode="${i}">${m}</button>`).join("")}</div>
-      <button class="primary" id="pmSend">Send (RAM)</button>
-      <button class="danger"  id="pmBurn">Burn → flash</button>
-      <button id="pmReload">Reload</button>
+      <div class="pm-tabs" role="tablist">${PEDAL_MODES.map((m,i)=>`<button type="button" role="tab" class="pm-tab${i===0?" active":""}" data-mode="${i}" aria-selected="${i===0?"true":"false"}">${m}</button>`).join("")}</div>
+      <button type="button" id="pmReload" title="Lê pedal map da ECU">Read</button>
+      <button type="button" class="primary" id="pmSend" title="Escreve mapa na RAM (edições já vão ao soltar o ponto)">Write</button>
+      <button type="button" class="danger"  id="pmBurn" title="Grava pedal map no flash">Save</button>
+      <span class="flash-dirty" id="pmFlashDirty" hidden>não gravado em flash</span>
     </div>
     <canvas id="pmCanvas" width="760" height="500"></canvas>`;
 
   async function sendPedal() {
     await api("/api/pages/8/cells", "PUT", {pedal_maps: pedalMaps});
+    const fd = $("#pmFlashDirty");
+    if (fd) fd.hidden = false;
   }
 
   let activeMode = 0;
   const curve = makeDragCurve({
     canvas: $("#pmCanvas"),
-    get values() { return pedalMaps; },
-    get active() { return activeMode; },
+    getValues: () => pedalMaps,
+    getActive: () => activeMode,
     colors: PEDAL_COLORS,
     nPts: 10,
     xAxis: PEDAL_AXIS,
@@ -1709,25 +2011,40 @@ function buildPedalMapUI(data) {
 
   function activate(mode) {
     activeMode = mode;
-    root.querySelectorAll(".pm-tab").forEach(b => b.classList.toggle("active", +b.dataset.mode === mode));
+    root.querySelectorAll(".pm-tab").forEach(b => {
+      const on = +b.dataset.mode === mode;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
     curve.draw();
   }
 
-  root.querySelectorAll(".pm-tab").forEach(b => b.onclick = () => activate(+b.dataset.mode));
+  const pedalTabs = root.querySelector(".pm-tabs");
+  if (pedalTabs) {
+    pedalTabs.addEventListener("click", e => {
+      const b = e.target.closest(".pm-tab");
+      if (!b || !pedalTabs.contains(b)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      activate(+b.dataset.mode);
+    });
+  }
 
   root.querySelector("#pmSend").onclick = async () => {
     try {
       await sendPedal();
-      toast("Pedal Map sent (RAM)");
+      toast("Write · Pedal Map → RAM");
     } catch(e) { toast(e.message, true); }
   };
   root.querySelector("#pmBurn").onclick = async () => {
-    // Envia sempre antes de queimar — sem isto, arrastar a curva e clicar
-    // logo em Burn (sem Send) persistia o valor ANTIGO em flash.
+    // Write sempre antes de Save — sem isto, arrastar a curva e clicar
+    // logo em Save persistia o valor ANTIGO em flash.
     try {
       await sendPedal();
       await api("/api/pages/8/burn", "POST");
-      toast("Pedal Map sent + burn OK");
+      const fd = $("#pmFlashDirty");
+      if (fd) fd.hidden = true;
+      toast("Save OK · Pedal Map");
     } catch(e) { toast(e.message, true); }
   };
   root.querySelector("#pmReload").onclick = async () => {
@@ -1735,6 +2052,7 @@ function buildPedalMapUI(data) {
       const data = await api("/api/pages/8");
       pedalMaps = data.pedal_maps.map(m => [...m]);
       activate(activeMode);
+      toast("Read · Pedal Map");
     } catch(e) { toast(e.message, true); }
   };
 
@@ -2093,9 +2411,27 @@ function loadOutputTest() {
   connectWS();
   try {
     INFO = await api("/api/info");
-    $("#fw").textContent = INFO.connected ? `${INFO.signature} · ${INFO.fw} · ${INFO.port}` : "";
-    logging = INFO.logging;
-  } catch (e) { toast(e.message, true); }
-  // Carregar VE automaticamente (aba padrão)
-  loadGrid($("#tab-grid-1"));
+    const fw = $("#fw");
+    if (fw) {
+      fw.textContent = INFO.connected
+        ? `${INFO.signature || "OpenEMS"} · ${INFO.fw || "?"} · ${INFO.port || ""}`
+        : (INFO.port ? `waiting · ${INFO.port}` : "server OK · no ECU");
+    }
+    setConnUI(!!INFO.connected, INFO.error || "");
+    logging = !!INFO.logging;
+    setLogBtn(logging);
+  } catch (e) {
+    setConnUI(false, e.message);
+    toast(e.message, true);
+  }
+  // Default surface: VE grid (tune workflow)
+  if (INFO && INFO.grid_pages) loadGrid($("#tab-grid-1"));
+  else {
+    const pane = $("#tab-grid-1");
+    if (pane) {
+      pane.innerHTML = `<div class="pane-head"><h2>VE</h2>
+        <p class="pane-sub">Waiting for /api/info · server must be running</p></div>
+        <div class="ot-banner">Cannot load grid metadata yet.</div>`;
+    }
+  }
 })();
