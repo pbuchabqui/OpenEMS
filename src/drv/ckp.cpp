@@ -615,6 +615,17 @@ volatile uint32_t g_dbg_loss_missing_gap = 0u;
 volatile uint32_t g_dbg_loss_stall = 0u;
 volatile uint32_t g_dbg_loss_avg = 0u;
 volatile uint32_t g_dbg_loss_delta = 0u;
+// Discriminação dos 3 gatilhos de perda de FULL_SYNC (sem debounce hoje):
+//   histogram = gate de dispersão do hist (mx > 1.5×mn) — re-bootstrap + drop
+//   wrap      = tooth_index chegou a 57 sem gap aceite (gap classificado normal)
+//   (o overrun tooth_count>kMaxTeethBeforeLoss continua em g_dbg_loss_missing_gap)
+// hist_mn/hist_mx capturam o par min/max do último trip de histograma:
+//   mx≈1.5×mn → gate no limiar (dispersão real de roda) → candidato a relaxar;
+//   mx≫mn      → contaminação grosseira (dente perdido real) → drop correto.
+volatile uint32_t g_dbg_loss_histogram = 0u;
+volatile uint32_t g_dbg_loss_wrap = 0u;
+volatile uint32_t g_dbg_loss_hist_mn = 0u;
+volatile uint32_t g_dbg_loss_hist_mx = 0u;
 
 // Osciloscópio CKP/CMP: rings de timestamps TIM5 das bordas cruas (pré-filtro).
 // 64 bordas CKP ≈ 1.1 revolução — cobre um gap inteiro; 8 CMP ≈ 4 ciclos de came.
@@ -779,6 +790,11 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
             g_state.consecutive_anomalies = 0u;
             if (g_state.snap.state == ems::drv::SyncState::HALF_SYNC ||
                 g_state.snap.state == ems::drv::SyncState::FULL_SYNC) {
+                // Só conta como perda de sync se estava sincronizado — bootstrap
+                // re-boot não é blip de PW. Captura mn/mx do trip p/ decidir gate.
+                ++ems::drv::g_dbg_loss_histogram;
+                ems::drv::g_dbg_loss_hist_mn = mn;
+                ems::drv::g_dbg_loss_hist_mx = mx;
                 g_state.snap.state = ems::drv::SyncState::LOSS_OF_SYNC;
                 close_cmp_seq_gate();
             }
@@ -873,7 +889,9 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
             g_state.snap.tooth_index =
                 static_cast<uint16_t>(g_state.snap.tooth_index + 1u);
         } else {
-            ++ems::drv::g_dbg_loss_missing_gap;
+            // WRAP: gap real classificado NORMAL → tooth_index chegou a 57.
+            // Distinto do overrun (tooth_count>kMaxTeethBeforeLoss) abaixo.
+            ++ems::drv::g_dbg_loss_wrap;
             ems::drv::g_dbg_loss_avg   = hist_avg();
             ems::drv::g_dbg_loss_delta = delta_ticks;
             g_state.snap.state  = ems::drv::SyncState::LOSS_OF_SYNC;
@@ -885,6 +903,8 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     // ── 7. Verificação de perda de sincronia por contagem excessiva ───────
     // Se passaram mais de kMaxTeethBeforeLoss dentes sem um gap:
     //   → o gap foi perdido (interferência, aceleração brusca, falha de sensor)
+    // OVERRUN: g_dbg_loss_missing_gap conta APENAS este caminho (o wrap 57→0
+    // migrou para g_dbg_loss_wrap acima).
     if (g_state.tooth_count > kMaxTeethBeforeLoss) {
         if (g_state.snap.state == ems::drv::SyncState::HALF_SYNC ||
             g_state.snap.state == ems::drv::SyncState::FULL_SYNC) {

@@ -130,11 +130,22 @@ extern volatile uint32_t g_diag_last_cmp_edge_tick;
 extern volatile uint32_t g_dbg_gap_accepted;
 extern volatile uint32_t g_dbg_gap_premature;
 extern volatile uint32_t g_dbg_gap_last_tc;
-// Perdas de sync por caminho + contexto da última perda por gap ausente
+// Perdas de sync por caminho + contexto da última perda por gap ausente.
+// Discriminação dos 3 gatilhos de perda de FULL_SYNC (blip PW=0 intermitente):
+//   g_dbg_gap_premature   → gap prematuro (count<55)   [já existente]
+//   g_dbg_loss_histogram  → gate de dispersão do hist (mx > 1.5×mn)
+//   g_dbg_loss_wrap       → tooth_index 57→0 sem gap aceite (gap → normal)
+//   g_dbg_loss_missing_gap→ overrun (tooth_count > kMaxTeethBeforeLoss)
+// hist_mn/hist_mx = par min/max do último trip de histograma (mx≈1.5×mn = gate
+// no limiar → candidato a relaxar; mx≫mn = falha real → drop correto).
 extern volatile uint32_t g_dbg_loss_missing_gap;
 extern volatile uint32_t g_dbg_loss_stall;
 extern volatile uint32_t g_dbg_loss_avg;
 extern volatile uint32_t g_dbg_loss_delta;
+extern volatile uint32_t g_dbg_loss_histogram;
+extern volatile uint32_t g_dbg_loss_wrap;
+extern volatile uint32_t g_dbg_loss_hist_mn;
+extern volatile uint32_t g_dbg_loss_hist_mx;
 
 // Osciloscópio CKP/CMP: rings de timestamps TIM5 das bordas cruas (comando 'K').
 // idx = próxima posição a escrever (elemento mais antigo do ring).

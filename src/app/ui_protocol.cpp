@@ -28,6 +28,11 @@
 #include "hal/flash.h"
 #include "engine/engine_config.h"
 
+// DIAG rev-limit (definidos em main_stm32.cpp, escopo global) — dump 'D' [41..43].
+extern uint32_t g_dbg_rev_limit_trips;
+extern uint32_t g_dbg_rev_limit_rpm_x10;
+extern uint32_t g_dbg_rev_limit_rpm_max;
+
 namespace ems::app::ui_detail {
 
 void parse_byte(uint8_t b) noexcept {
@@ -197,8 +202,8 @@ void parse_byte(uint8_t b) noexcept {
         if (b == static_cast<uint8_t>('D')) {
             EcuSchedDiagSnapshot sd{};
             ecu_sched_get_diag_snapshot(&sd);
-            // 37×u32 = 148 B (era 33×u32=132; +4 campos auto-learn/accum)
-            const uint32_t diag[37] = {
+            // 44×u32 = 176 B (era 41; +3 diag rev-limit trips/rpm)
+            const uint32_t diag[44] = {
                 sd.late_event_count,
                 sd.cycle_schedule_drop_count,
                 sd.inj1_arm,
@@ -238,6 +243,16 @@ void parse_byte(uint8_t b) noexcept {
                 // flags: b8-15 burn_ve, b16 burn_pending (b0-7 pad reserved=0)
                 (static_cast<uint32_t>(ems::engine::ltft_apply_burn_ve) << 8) |
                     (ems::engine::fuel_ltft_ve_burn_pending() ? (1u << 16) : 0u),
+                // [37..40] discriminação dos gatilhos de perda de FULL_SYNC (0-based).
+                // g_dbg_gap_premature já está em [20]; missing_gap (overrun) em [22].
+                ems::drv::g_dbg_loss_histogram,  // [37] gate hist mx>1.5×mn
+                ems::drv::g_dbg_loss_wrap,        // [38] tooth_index 57→0 sem gap
+                ems::drv::g_dbg_loss_hist_mn,     // [39] min do último trip hist
+                ems::drv::g_dbg_loss_hist_mx,     // [40] max do último trip hist
+                // [41..43] rev-limit: trips (borda subida), rpm que disparou, pico global
+                ::g_dbg_rev_limit_trips,     // [41]
+                ::g_dbg_rev_limit_rpm_x10,   // [42] rpm_x10 no último trip
+                ::g_dbg_rev_limit_rpm_max,   // [43] maior rpm_x10 já visto (glitch?)
             };
             tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), sizeof(diag));
             return;

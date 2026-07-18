@@ -101,6 +101,12 @@ static constexpr int16_t  kOvertempWarnX10   = 1050;    // 105 °C
 static constexpr int16_t  kOvertempCritX10   = 1150;    // 115 °C
 static bool g_limp_active = false;
 static bool g_rev_limit_active = false;   // fuel cut active via rev limiter
+// DIAG rev-limit: conta bordas de subida (false→true) do rev-limiter e latcha o
+// rpm_x10 que o disparou. Suspeita: glitch fantasma de rpm_x10 (corrida ISR↔main)
+// dispara o limiter ao ralenti → spikes de PW=0 de 1 loop. Expostos no dump 'D'.
+uint32_t g_dbg_rev_limit_trips = 0u;
+uint32_t g_dbg_rev_limit_rpm_x10 = 0u;   // último rpm_x10 que armou o trip
+uint32_t g_dbg_rev_limit_rpm_max = 0u;   // maior rpm_x10 alguma vez visto (glitch?)
 static bool g_engine_was_running = false;
 static bool g_runtime_seed_saved_for_stop = false;
 static bool g_runtime_seed_arm_window_active = false;
@@ -810,7 +816,14 @@ int main() {
                 const uint32_t hyst      = ems::engine::rev_limit_soft_window_x10;
                 const uint32_t resume    = (hard > hyst) ? hard - hyst : 0u;
 
+                if (snap.rpm_x10 > g_dbg_rev_limit_rpm_max) {
+                    g_dbg_rev_limit_rpm_max = snap.rpm_x10;  // pico global (apanha glitch)
+                }
                 if (snap.rpm_x10 >= hard) {
+                    if (!g_rev_limit_active) {           // borda de subida = 1 trip
+                        ++g_dbg_rev_limit_trips;
+                        g_dbg_rev_limit_rpm_x10 = snap.rpm_x10;  // rpm que disparou
+                    }
                     g_rev_limit_active = true;
                 } else if (snap.rpm_x10 <= resume) {
                     g_rev_limit_active = false;
