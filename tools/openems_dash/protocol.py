@@ -621,6 +621,12 @@ PAGE0_FIELDS = [
     ("mspark_max_rpm_x10",       170, 1, "H", 0.1),  # RPM max p/ multi-spark
     ("mspark_count",              172, 1, "B", 1.0),  # sparks adicionais (0-3)
     ("mspark_inter_dwell_ms_x10", 173, 1, "H", 0.1),  # dwell entre sparks (ms)
+    # byte 71 (era pad): skip de dentes CKP pós-silêncio (0=off, clamp FW 57)
+    ("ckp_skip_pulses_after_gap", 71, 1, "B", 1.0),
+    # bytes 246-251: MAP janela angular por cilindro (FOME #610)
+    ("map_window_enable",   246, 1, "B", 1.0),  # 0=off 1=medir
+    ("map_window_open_deg", 248, 1, "H", 1.0),  # ° ciclo 720 (slot0; +180°/slot)
+    ("map_window_len_deg",  250, 1, "H", 1.0),  # ° duração (10-180)
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
