@@ -627,6 +627,11 @@ volatile uint32_t g_dbg_loss_wrap = 0u;
 volatile uint32_t g_dbg_loss_hist_mn = 0u;
 volatile uint32_t g_dbg_loss_hist_mx = 0u;
 
+// Instant RPM 360°: timestamp TIM5 do mesmo slot de dente na volta anterior +
+// último dt de volta completa (escrito só na ISR; leitura atómica de u32).
+static uint32_t g_tooth_rev_ts[58];  // kRealTeethPerRev (definido abaixo)
+static volatile uint32_t g_instant_rev_dt_ticks = 0u;
+
 // Osciloscópio CKP/CMP: rings de timestamps TIM5 das bordas cruas (pré-filtro).
 // 64 bordas CKP ≈ 1.1 revolução — cobre um gap inteiro; 8 CMP ≈ 4 ciclos de came.
 // idx aponta para a PRÓXIMA posição a escrever (a mais antiga do ring).
@@ -877,6 +882,24 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     g_state.snap.rpm_x10 = rpm_if_synced(delta_ticks);
     g_state.prev_period_ticks = delta_ticks;
 
+    // ── Instant RPM 360° (estilo rusEFI instant_rpm_calculator) ──────────
+    // dt entre o MESMO dente de voltas consecutivas = 360° exatos → cancela o
+    // erro de geometria da roda (espaçamento irregular dente-a-dente). ISR só
+    // subtrai e guarda; a divisão fica no getter (fora do caminho crítico).
+    // Nota: após LOSS→resync a 1ª volta pode ler dt de timestamps antigos —
+    // consumidores devem gate por FULL_SYNC estável (o reset de sync limpa).
+    if (g_state.snap.state == ems::drv::SyncState::HALF_SYNC ||
+        g_state.snap.state == ems::drv::SyncState::FULL_SYNC) {
+        const uint16_t ti = g_state.snap.tooth_index;
+        if (ti < kRealTeethPerRev) {
+            const uint32_t prev_rev_ts = g_tooth_rev_ts[ti];
+            g_tooth_rev_ts[ti] = capture_now;
+            if (prev_rev_ts != 0u) {
+                g_instant_rev_dt_ticks = capture_now - prev_rev_ts;
+            }
+        }
+    }
+
     // tooth_count incrementa em todos os estados — alimenta o limiar de gap e
     // a detecção de LOSS_OF_SYNC por excesso de dentes sem gap.
     ++g_state.tooth_count;
@@ -1126,6 +1149,12 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
         g_state.tooth_count  = 0u;
         close_cmp_seq_gate();
         s_revs_since_cmp = 0u;
+        // Instant RPM: motor parado → dt inválido; limpa também os timestamps
+        // por dente para o resync não medir contra bordas da sessão anterior.
+        g_instant_rev_dt_ticks = 0u;
+        for (uint16_t i = 0u; i < kRealTeethPerRev; ++i) {
+            g_tooth_rev_ts[i] = 0u;
+        }
         transitioned = true;
     }
     exit_critical();
@@ -1162,10 +1191,23 @@ uint8_t ckp_get_cmp_ref_tooth() noexcept {
     return s_cmp_ref_tooth;
 }
 
+uint32_t ckp_instant_rpm_x10() noexcept {
+    const uint32_t dt = g_instant_rev_dt_ticks;
+    if (dt == 0u) {
+        return 0u;
+    }
+    // TIM5 62.5 MHz → 3.75e9 ticks/min; ×10 p/ rpm_x10.
+    return static_cast<uint32_t>(37500000000ULL / dt);
+}
+
 // ── API de teste (host only) ──────────────────────────────────────────────────
 #if defined(EMS_HOST_TEST)
 void ckp_test_reset() noexcept {
     g_state = DecoderState{};  // zero-init; SyncState::WAIT_GAP == 0
+    g_instant_rev_dt_ticks = 0u;
+    for (uint16_t i = 0u; i < kRealTeethPerRev; ++i) {
+        g_tooth_rev_ts[i] = 0u;
+    }
     ems_test_tim5_ccr1   = 0u;
     ems_test_tim5_ccr2   = 0u;
     ems_test_cam_gpio_idr = 0u;

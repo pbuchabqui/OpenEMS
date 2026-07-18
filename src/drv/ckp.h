@@ -157,6 +157,11 @@ extern volatile uint8_t  g_scope_cmp_idx;
 // tooth_index âncora da última borda CMP aceite (0xFF = não-ancorado).
 uint8_t ckp_get_cmp_ref_tooth() noexcept;
 
+// Instant RPM 360° (estilo rusEFI): rpm×10 medido entre o MESMO dente de
+// voltas consecutivas — imune ao erro de geometria da roda. 0 = sem medida
+// (pré-sync, stall, ou 1ª volta). Consumir só com FULL_SYNC estável.
+uint32_t ckp_instant_rpm_x10() noexcept;
+
 
 // ── Stall watchdog ────────────────────────────────────────────────────────────
 // Detecta motor parado entre dois dentes — situação em que tooth_count para de

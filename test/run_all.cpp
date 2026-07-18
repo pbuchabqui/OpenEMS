@@ -55,6 +55,7 @@ int main(void) {
     test_ckp_half_sync();
     test_ckp_full_sync();
     test_ckp_tooth_index_increments();
+    test_ckp_instant_rpm_360();
     test_ckp_loss_of_sync_too_many_teeth();
     test_ckp_loss_of_sync_early_gap();
     test_ckp_noise_rejection();

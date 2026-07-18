@@ -19,7 +19,7 @@ Foco: correlacionar blips de PW=0 com o gatilho de sync-loss (índices 0-based):
 import serial, struct, sys, time
 
 CMD = b'D'
-NFIELDS = 44
+NFIELDS = 45
 SIZE = NFIELDS * 4  # 176
 
 # (índice, chave, rótulo) — ordem = layout do firmware
@@ -68,6 +68,7 @@ FIELDS = [
     (41, 'rev_limit_trips',  'rev_limit_trips (bordas de subida do rev-limiter)'),
     (42, 'rev_limit_rpm_x10','rev_limit_rpm_x10 (rpm×10 no último trip)'),
     (43, 'rev_limit_rpm_max','rev_limit_rpm_max (maior rpm×10 já visto — glitch?)'),
+    (44, 'instant_rpm_x10',  'instant_rpm_x10 (volta-a-volta, mesmo dente 360°)'),
 ]
 
 # Campos com sinal (i32) — reinterpretar

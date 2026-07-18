@@ -94,6 +94,26 @@ void test_ckp_tooth_index_increments(void) {
     CHECK_EQ(ckp_snapshot().tooth_index, 5u, "tooth_index=5 after 5 teeth");
 }
 
+void test_ckp_instant_rpm_360(void) {
+    section("ckp: instant RPM volta-a-volta (mesmo dente, 360°)");
+    ckp_test_reset();
+    CHECK_EQ(ckp_instant_rpm_x10(), 0u, "sem bordas: instant rpm = 0");
+
+    ckp_reach_full_sync();
+    // Duas voltas completas do padrão da fixture (55 normais + gap 3×):
+    // o mesmo slot de dente repete com espaçamento de exactamente 1 volta =
+    // 55×10000 + 30000 = 580000 ticks.
+    ckp_feed_n_then_gap(55u, kNormalPeriod);
+    ckp_feed_n_then_gap(55u, kNormalPeriod);
+    // 37.5e9 / 580000 = 64655 (rpm×10)
+    CHECK_EQ(ckp_instant_rpm_x10(), 64655u,
+             "dt de 1 volta (580000 ticks) → 6465.5 rpm");
+
+    // Reset limpa timestamps e medida.
+    ckp_test_reset();
+    CHECK_EQ(ckp_instant_rpm_x10(), 0u, "reset zera instant rpm");
+}
+
 void test_ckp_loss_of_sync_too_many_teeth(void) {
     section("ckp: LOSS_OF_SYNC when gap missed (>63 teeth)");
     ckp_reach_full_sync();

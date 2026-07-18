@@ -295,17 +295,18 @@ class OpenEMSLink:
         "ltft_learn_flags",  # b0-7 reserved pad, b8-15 burn_ve, b16 burn_pending
         "loss_histogram", "loss_wrap", "loss_hist_mn", "loss_hist_mx",
         "rev_limit_trips", "rev_limit_rpm_x10", "rev_limit_rpm_max",
+        "instant_rpm_x10",  # [44] RPM×10 volta-a-volta (mesmo dente, 360°)
     ]
-    DEBUG_SIZE = 44 * 4  # must match FW diag[44]
+    DEBUG_SIZE = 45 * 4  # must match FW diag[45]
 
     def read_debug(self) -> dict:
         assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE
         buf = self._txn(b"D", self.DEBUG_SIZE)
-        # 31 u32 + 2 i32 + 11 u32
+        # 31 u32 + 2 i32 + 12 u32
         vals = (
             struct.unpack("<31I", buf[:124])
             + struct.unpack("<2i", buf[124:132])
-            + struct.unpack("<11I", buf[132:176])
+            + struct.unpack("<12I", buf[132:180])
         )
         return dict(zip(self.DEBUG_FIELDS, vals))
 
