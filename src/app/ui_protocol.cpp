@@ -28,6 +28,7 @@
 #include "hal/flash.h"
 #include "engine/engine_config.h"
 #include "engine/map_window.h"
+#include "engine/cut_reason.h"
 
 // DIAG rev-limit (definidos em main_stm32.cpp, escopo global) — dump 'D' [41..43].
 extern uint32_t g_dbg_rev_limit_trips;
@@ -212,8 +213,8 @@ void parse_byte(uint8_t b) noexcept {
         if (b == static_cast<uint8_t>('D')) {
             EcuSchedDiagSnapshot sd{};
             ecu_sched_get_diag_snapshot(&sd);
-            // 51×u32 = 204 B (era 46; +4 MAP janela angular [46-49] + ciclos [50])
-            const uint32_t diag[51] = {
+            // 52×u32 = 208 B (era 51; +1 razões de corte [51])
+            const uint32_t diag[52] = {
                 sd.late_event_count,
                 sd.cycle_schedule_drop_count,
                 sd.inj1_arm,
@@ -272,6 +273,9 @@ void parse_byte(uint8_t b) noexcept {
                 map_window_diag_word(2u),
                 map_window_diag_word(3u),
                 ems::engine::map_window_cycles(),    // [50] ciclos 720° completos
+                // [51] razões de corte: hi16 = spark, lo16 = fuel (cut_reason.h)
+                (static_cast<uint32_t>(ems::engine::g_spark_cut_reasons) << 16) |
+                    ems::engine::g_fuel_cut_reasons,
             };
             tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), sizeof(diag));
             return;

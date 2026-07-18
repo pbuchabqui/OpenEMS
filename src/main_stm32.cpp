@@ -39,6 +39,7 @@ int main() { return 0; }
 #include "engine/auxiliaries.h"
 #include "engine/calibration.h"
 #include "engine/constants.h"
+#include "engine/cut_reason.h"
 #include "engine/ecu_sched.h"
 #include "engine/engine_config.h"
 #include "engine/etb_control.h"
@@ -550,6 +551,22 @@ static void openems_init() noexcept {
 		ems::engine::launch_tc_apply_from_page0(g_calib_page0, kCalibPageBytes);
 		// CAN RX map: gear / vehicle / driven wheel (216-245)
 		ems::app::can_rx_map_apply_from_page0(g_calib_page0, kCalibPageBytes);
+		// CKP skip pós-silêncio (byte 71, era pad — blob antigo = 0 = off)
+		ems::engine::ckp_skip_pulses_after_gap =
+		    (g_calib_page0[71] > 57u) ? 57u : g_calib_page0[71];
+		// MAP janela angular (246-251); len=0 não substitui o default
+		ems::engine::map_window_enable = (g_calib_page0[246] != 0u) ? 1u : 0u;
+		{
+			uint16_t od = 0u, wl = 0u;
+			std::memcpy(&od, g_calib_page0 + 248, 2u);
+			std::memcpy(&wl, g_calib_page0 + 250, 2u);
+			ems::engine::map_window_open_deg =
+			    (od >= 720u) ? static_cast<uint16_t>(od % 720u) : od;
+			if (wl != 0u) {
+				ems::engine::map_window_len_deg =
+				    (wl < 10u) ? 10u : (wl > 180u) ? 180u : wl;
+			}
+		}
 	}
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
@@ -863,6 +880,29 @@ int main() {
                     ign_mask_cut | ems::engine::spark_skip_mask());
                 ::ecu_sched_set_inj_inhibit_mask(inj_mask);
                 ::ecu_sched_set_ign_inhibit_mask(ign_mask);
+
+                // Razões tipadas de corte (cut_reason.h) — telemetria 'D' [51].
+                // DFCO é decidido mais abaixo no caminho FULL_SYNC (OR posterior).
+                uint16_t fr = 0u;
+                if (g_rev_limit_active) fr |= ems::engine::kFuelCutRevLimit;
+                if (rev_cut)            fr |= ems::engine::kFuelCutLimpRpm;
+                if (map_fuel_cut)       fr |= ems::engine::kFuelCutMapFault;
+                if (oil_protect_cut)    fr |= ems::engine::kFuelCutOilPress;
+                if (fuel_rail_cut)      fr |= ems::engine::kFuelCutFuelRail;
+                if (overtemp_cut)       fr |= ems::engine::kFuelCutOvertemp;
+                if (diag_critical)      fr |= ems::engine::kFuelCutDiagCrit;
+                if (half_fuel_lockout)  fr |= ems::engine::kFuelCutNoSync;
+                if (flood_clear)        fr |= ems::engine::kFuelCutFlood;
+                uint16_t sr = 0u;
+                if (rev_cut)          sr |= ems::engine::kSparkCutLimpRpm;
+                if (oil_protect_cut)  sr |= ems::engine::kSparkCutOilPress;
+                if (overtemp_cut)     sr |= ems::engine::kSparkCutOvertemp;
+                if (diag_critical)    sr |= ems::engine::kSparkCutDiagCrit;
+                if (ems::engine::spark_skip_mask() != 0u) {
+                    sr |= ems::engine::kSparkSkipActive;
+                }
+                ems::engine::g_fuel_cut_reasons  = fr;
+                ems::engine::g_spark_cut_reasons = sr;
             }
 
             // Telemetry PW must match actuators: only when injectors are actually cut.
@@ -912,6 +952,8 @@ int main() {
                     ae_pw_us /= 2;
                 }
                 if (decel_cut_active) {
+                    ems::engine::g_fuel_cut_reasons = static_cast<uint16_t>(
+                        ems::engine::g_fuel_cut_reasons | ems::engine::kFuelCutDfco);
                     g_last_net_pw_us = 0u;
                     g_ae_active = false;
                     ems::engine::transient_fuel_reset();

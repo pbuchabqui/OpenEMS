@@ -301,17 +301,29 @@ class OpenEMSLink:
         # lo16=balance ×1000 (int16) — desempacotado abaixo em _w{N}_...
         "map_w0", "map_w1", "map_w2", "map_w3",
         "map_window_cycles",  # [50] ciclos 720° completos
+        "cut_reasons",  # [51] hi16=spark lo16=fuel — desempacotado abaixo
     ]
-    DEBUG_SIZE = 51 * 4  # must match FW diag[51]
+    DEBUG_SIZE = 52 * 4  # must match FW diag[52]
+
+    # Bits de src/engine/cut_reason.h (ordem = bit 0..N)
+    FUEL_CUT_BITS = ["rev_limit", "limp_rpm", "map_fault", "oil_press",
+                     "fuel_rail", "overtemp", "diag_crit", "no_sync",
+                     "dfco", "flood_clear"]
+    SPARK_CUT_BITS = ["limp_rpm", "oil_press", "overtemp", "diag_crit",
+                      "spark_skip"]
+
+    @staticmethod
+    def _decode_bits(mask: int, names: list) -> list:
+        return [n for i, n in enumerate(names) if mask & (1 << i)]
 
     def read_debug(self) -> dict:
         assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE
         buf = self._txn(b"D", self.DEBUG_SIZE)
-        # 31 u32 + 2 i32 + 18 u32
+        # 31 u32 + 2 i32 + 19 u32
         vals = (
             struct.unpack("<31I", buf[:124])
             + struct.unpack("<2i", buf[124:132])
-            + struct.unpack("<18I", buf[132:204])
+            + struct.unpack("<19I", buf[132:208])
         )
         d = dict(zip(self.DEBUG_FIELDS, vals))
         for n in range(4):
@@ -319,6 +331,11 @@ class OpenEMSLink:
             d[f"map_w{n}_bar_x1000"] = packed >> 16
             bal = packed & 0xFFFF
             d[f"map_w{n}_bal_x1000"] = bal - 0x10000 if bal >= 0x8000 else bal
+        cr = d.pop("cut_reasons")
+        d["fuel_cut_reasons"] = cr & 0xFFFF
+        d["spark_cut_reasons"] = cr >> 16
+        d["fuel_cut_list"] = self._decode_bits(cr & 0xFFFF, self.FUEL_CUT_BITS)
+        d["spark_cut_list"] = self._decode_bits(cr >> 16, self.SPARK_CUT_BITS)
         return d
 
     # ── osciloscópio CKP/CMP ('K': 294 bytes) ────────────────────────────
