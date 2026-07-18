@@ -69,7 +69,6 @@ extern uint8_t  inj_small_pulse_rate_q8;
 extern uint16_t spark_skip_window_rpm_x10;
 extern uint8_t  spark_skip_max_q8;
 
-
 extern uint16_t dwell_vbatt_axis_mv[kIgnitionDwellTableSize];
 extern uint16_t dwell_ms_x10_table[kIgnitionDwellTableSize];
 
