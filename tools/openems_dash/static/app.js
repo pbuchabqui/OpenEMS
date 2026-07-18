@@ -1054,6 +1054,8 @@ const FIELD_LABELS = {
   decel_cut_entry_rpm_x10:       "Decel cut entry RPM",
   decel_cut_exit_rpm_x10:        "Decel cut exit RPM",
   decel_cut_min_clt_x10:         "Decel cut min CLT (°C)",
+  inj_small_pulse_break_us:      "Injector small-pulse breakpoint (ms, 0=off)",
+  inj_small_pulse_rate_q8:       "Injector small-pulse rate (Q8, 128=0.5×, 0=off)",
 };
 
 /* calibração assistida: campo → fonte do raw ao vivo na telemetria */

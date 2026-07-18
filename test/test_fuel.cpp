@@ -1032,6 +1032,41 @@ void test_fuel_ltft_center_gate(void) {
     fuel_ltft_accum_reset();
 }
 
+void test_fuel_inj_two_slope(void) {
+    section("fuel_calc: injector 2-slope (small pulse + breakpoint)");
+
+    // Defaults (0/0) = OFF → comportamento linear idêntico ao anterior.
+    inj_small_pulse_break_us = 0u;
+    inj_small_pulse_rate_q8  = 0u;
+    CHECK_EQ(calc_final_pw_us(2000u, 256u, 256u, 900u), 2900u,
+             "OFF: net 2000 + dead 900 (linear puro)");
+
+    // r=0.5 (128 Q8), breakpoint 1000µs → net_break = 500µs.
+    inj_small_pulse_break_us = 1000u;
+    inj_small_pulse_rate_q8  = 128u;
+    CHECK_EQ(calc_final_pw_us(400u, 256u, 256u, 0u), 800u,
+             "abaixo do break: net 400 → t 800 (net/r)");
+    CHECK_EQ(calc_final_pw_us(500u, 256u, 256u, 0u), 1000u,
+             "em net_break: t = t_break (contínuo)");
+    CHECK_EQ(calc_final_pw_us(2000u, 256u, 256u, 0u), 2500u,
+             "acima do break: net + t_break·(1−r) = 2000+500");
+    CHECK_EQ(calc_final_pw_us(2000u, 256u, 256u, 900u), 3400u,
+             "dead-time soma DEPOIS da correção 2-slope");
+    CHECK_EQ(calc_final_pw_us(0u, 256u, 256u, 900u), 0u,
+             "PW zero continua zero (sem dead-time fantasma)");
+
+    // Monotónico na fronteira (498/499/500/501).
+    const uint32_t a = calc_final_pw_us(498u, 256u, 256u, 0u);
+    const uint32_t b = calc_final_pw_us(499u, 256u, 256u, 0u);
+    const uint32_t c = calc_final_pw_us(500u, 256u, 256u, 0u);
+    const uint32_t d = calc_final_pw_us(501u, 256u, 256u, 0u);
+    CHECK_TRUE(a <= b && b <= c && c <= d, "monotónico na fronteira do break");
+
+    // Restaura defaults (OFF) para não contaminar outros testes.
+    inj_small_pulse_break_us = 0u;
+    inj_small_pulse_rate_q8  = 0u;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // IGN CALC — SEGUNDA FASE
 // ═══════════════════════════════════════════════════════════════════════════

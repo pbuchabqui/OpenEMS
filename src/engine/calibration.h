@@ -59,6 +59,12 @@ extern uint16_t crank_min_pw_us;
 extern uint16_t crank_prime_tooth;
 extern uint16_t crank_prime_max_pw_us;
 
+// Injector 2-slope: breakpoint (µs de PW líquido) + razão small/main em Q8.
+// 0 = desligado (linear puro). Ver calc_final_pw_us.
+extern uint16_t inj_small_pulse_break_us;
+extern uint8_t  inj_small_pulse_rate_q8;
+
+
 extern uint16_t dwell_vbatt_axis_mv[kIgnitionDwellTableSize];
 extern uint16_t dwell_ms_x10_table[kIgnitionDwellTableSize];
 

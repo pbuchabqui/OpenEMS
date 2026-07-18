@@ -341,7 +341,22 @@ uint32_t calc_final_pw_us(uint32_t base_pw_us,
     const uint16_t c_iat = (corr_iat_x256 < kCorrMinQ8) ? kCorrMinQ8
                          : (corr_iat_x256 > kCorrMaxQ8) ? kCorrMaxQ8 : corr_iat_x256;
     const uint64_t num = static_cast<uint64_t>(base_pw_us) * c_clt * c_iat;
-    const uint64_t corrected = num / (256u * 256u);
+    uint64_t corrected = num / (256u * 256u);
+    // Injector 2-slope (modelo rusEFI): o PW líquido pedido assume fluxo
+    // linear (slope principal). Abaixo do breakpoint o bico rende só
+    // r = rate_q8/256 desse fluxo → tempo comandado = net/r nessa região e
+    // net + t_break·(1−r) acima (contínuo em net_break = r·t_break).
+    // rate_q8 = 0 desliga (net inalterado — comportamento anterior).
+    const uint16_t r_q8 = inj_small_pulse_rate_q8;
+    const uint32_t t_break = inj_small_pulse_break_us;
+    if (r_q8 != 0u && r_q8 < 256u && t_break != 0u) {
+        const uint64_t net_break = (static_cast<uint64_t>(t_break) * r_q8) / 256u;
+        if (corrected < net_break) {
+            corrected = (corrected * 256u) / r_q8;
+        } else {
+            corrected += (static_cast<uint64_t>(t_break) * (256u - r_q8)) / 256u;
+        }
+    }
     const uint64_t total = corrected + static_cast<uint64_t>(dead_time_us);
     if (total > kMaxFinalPwUs) { return kMaxFinalPwUs; }
     return static_cast<uint32_t>(total);

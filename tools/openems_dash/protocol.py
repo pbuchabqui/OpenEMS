@@ -499,6 +499,8 @@ PAGE6_FIELDS = [
     ("crank_min_pw_us",       70, 1, "H",  0.001), # ms
     ("crank_prime_tooth",     72, 1, "H",  1.0),
     ("crank_prime_max_pw_us", 74, 1, "H",  0.001), # ms
+    ("inj_small_pulse_break_us", 76, 1, "H", 0.001),  # ms (0 = off)
+    ("inj_small_pulse_rate_q8",  78, 1, "B", 1.0),    # Q8 (128 = 0.5×; 0 = off)
 ]
 
 PAGE7_FIELDS = [

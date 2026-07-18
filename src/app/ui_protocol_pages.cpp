@@ -471,6 +471,8 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(p + 70, &ems::engine::crank_min_pw_us,        2u);
         std::memcpy(p + 72, &ems::engine::crank_prime_tooth,      2u);
         std::memcpy(p + 74, &ems::engine::crank_prime_max_pw_us,  2u);
+        std::memcpy(p + 76, &ems::engine::inj_small_pulse_break_us, 2u);
+        p[78] = ems::engine::inj_small_pulse_rate_q8;
     } else if (page == 0x07u) {
         uint8_t* p = g_page7_dwell2d;
         std::memset(p, 0, sizeof(g_page7_dwell2d));
@@ -712,6 +714,8 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::crank_min_pw_us,       p + 70, 2u);
         std::memcpy(&ems::engine::crank_prime_tooth,     p + 72, 2u);
         std::memcpy(&ems::engine::crank_prime_max_pw_us, p + 74, 2u);
+        std::memcpy(&ems::engine::inj_small_pulse_break_us, p + 76, 2u);
+        ems::engine::inj_small_pulse_rate_q8 = p[78];
     } else if (page == 0x07u) {
         const uint8_t* p = g_page7_dwell2d;
         std::memcpy(ems::engine::dwell_rpm_axis_rpm,  p + 0,  8u);

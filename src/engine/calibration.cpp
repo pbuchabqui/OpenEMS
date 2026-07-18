@@ -113,6 +113,15 @@ uint16_t crank_min_pw_us = 2500u;
 uint16_t crank_prime_tooth = 3u;
 uint16_t crank_prime_max_pw_us = 30000u;
 
+// Injector 2-slope (modelo rusEFI): abaixo do breakpoint o bico entrega menos
+// combustível que o modelo linear ("kink") — o tempo comandado cresce mais
+// rápido nessa região. rate_q8 = slope_small/slope_main em Q8 (ex.: 128 = o
+// bico rende metade no pulso pequeno). 0 (ou ≥256 impossível em u8) = OFF —
+// default seguro: comportamento idêntico ao modelo linear atual.
+uint16_t inj_small_pulse_break_us = 0u;
+uint8_t  inj_small_pulse_rate_q8  = 0u;
+
+
 uint16_t dwell_vbatt_axis_mv[kIgnitionDwellTableSize] = {9000u, 10000u, 11000u, 12000u, 13000u, 14000u, 15000u, 16000u};
 uint16_t dwell_ms_x10_table[kIgnitionDwellTableSize] = {42u, 38u, 35u, 30u, 28u, 25u, 23u, 22u};
 
