@@ -84,6 +84,8 @@ int main(void) {
     test_fuel_calc_final_pw();
     test_fuel_corr_functions();
     test_fuel_decel_cut();
+    test_fuel_decel_cut_gates();
+    test_fuel_inj_duty_protection();
     test_fuel_baro();
 
     // ── Ignition Calc ─────────────────────────────────────────────────────────
@@ -105,6 +107,7 @@ int main(void) {
     test_knock_init_and_threshold();
     test_knock_window();
     test_knock_detection_and_recovery();
+    test_knock_dead_sensor();
 
     // ── Fuel Calc — Segunda Fase ──────────────────────────────────────────────
     printf("\n=== FUEL CALC (fase 2) ===");

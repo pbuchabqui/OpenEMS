@@ -159,6 +159,51 @@ void test_knock_detection_and_recovery(void) {
 // FUEL CALC — SEGUNDA FASE (funções não cobertas)
 // ═══════════════════════════════════════════════════════════════════════════
 
+void test_knock_dead_sensor(void) {
+    section("knock: sensor morto por ruído de fundo (FOME #578)");
+    knock_init();
+    knock_set_adc_threshold(3000u);  // acima do sinal de teste — sem eventos
+
+    // Desligado (default 0): sinal plano nunca marca morto.
+    ems::engine::knock_dead_min_p2p = 0u;
+    for (int w = 0; w < 120; ++w) {
+        knock_window_open(0u);
+        knock_test_set_adc_raw(2000u); knock_test_set_adc_raw(2000u);
+        knock_window_close(0u);
+        knock_cycle_complete(0u);
+    }
+    CHECK_FALSE(knock_sensor_dead(), "detecção off: nunca morto");
+
+    // Ligado: sinal plano (p2p=0) → morto após ~100 janelas.
+    knock_init();
+    knock_set_adc_threshold(3000u);
+    ems::engine::knock_dead_min_p2p = 8u;
+    for (int w = 0; w < 99; ++w) {
+        knock_window_open(0u);
+        knock_test_set_adc_raw(2000u); knock_test_set_adc_raw(2000u);
+        knock_window_close(0u);
+        knock_cycle_complete(0u);
+    }
+    CHECK_FALSE(knock_sensor_dead(), "99 janelas planas: ainda não");
+    knock_window_open(0u);
+    knock_test_set_adc_raw(2000u); knock_test_set_adc_raw(2000u);
+    knock_window_close(0u);
+    knock_cycle_complete(0u);
+    CHECK_TRUE(knock_sensor_dead(), "100 janelas planas: sensor morto");
+
+    // Ruído de fundo real (p2p=80) recupera: EMA sobe, contador zera.
+    for (int w = 0; w < 10; ++w) {
+        knock_window_open(0u);
+        knock_test_set_adc_raw(1960u); knock_test_set_adc_raw(2040u);
+        knock_window_close(0u);
+        knock_cycle_complete(0u);
+    }
+    CHECK_FALSE(knock_sensor_dead(), "ruído vivo: recupera");
+    CHECK_TRUE(knock_test_get_noise_p2p_ema() > 8u, "EMA do p2p subiu");
+    ems::engine::knock_dead_min_p2p = 0u;  // isolamento entre testes
+    knock_init();
+}
+
 void test_knock_window_cycle_end(void) {
     section("knock: knock_window_cycle_end");
     knock_init();

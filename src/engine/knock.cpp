@@ -18,6 +18,7 @@
 
 #include <cstdint>
 
+#include "engine/calibration.h"
 #include "hal/flash.h"
 
 namespace {
@@ -41,7 +42,16 @@ struct KnockState {
     uint8_t  window_cyl;
     bool     window_active;
     uint16_t adc_threshold; // 12-bit: amostra acima disto conta como evento de knock
+    // Sensor morto (FOME #578): pico-a-pico do raw por janela; um piezo vivo
+    // tem sempre ruído de fundo — EMA do p2p abaixo do piso por muitas
+    // janelas = sensor desligado/curto.
+    uint16_t win_min;         // min do raw na janela corrente
+    uint16_t win_max;         // max do raw na janela corrente
+    uint16_t noise_p2p_ema;   // EMA (α=1/8) do p2p por janela
+    uint16_t dead_windows;    // janelas consecutivas abaixo do piso
 };
+
+constexpr uint16_t kDeadWindowLimit = 100u;  // ~100 eventos de combustão
 
 static KnockState g = {};
 
@@ -112,6 +122,8 @@ void knock_window_open(uint8_t cyl) noexcept {
     g.window_active = true;
     // Reset counter for this cylinder so we start clean each window
     g.knock_count[g.window_cyl] = 0u;
+    g.win_min = 0xFFFFu;
+    g.win_max = 0u;
 }
 
 void knock_window_close(uint8_t cyl) noexcept {
@@ -124,6 +136,8 @@ void knock_adc_update(uint16_t raw) noexcept {
     // Called from sample_fast_channels() (CKP tooth ISR) on every tooth while
     // window is active. Counts samples that exceed the detection threshold.
     if (!g.window_active) { return; }
+    if (raw < g.win_min) { g.win_min = raw; }
+    if (raw > g.win_max) { g.win_max = raw; }
     if (raw > g.adc_threshold) {
         const uint8_t c = g.window_cyl;
         if (g.knock_count[c] < 255u) {
@@ -145,6 +159,23 @@ void knock_cycle_complete(uint8_t cyl) noexcept {
 #if defined(__arm__) || defined(__thumb__)
     __asm__ volatile("cpsie i" ::: "memory");
 #endif
+
+    // Sensor morto: avalia o p2p da janela que fechou (só se houve amostras;
+    // sentinela reposta para não reavaliar a mesma janela).
+    if (ems::engine::knock_dead_min_p2p != 0u && g.win_min <= g.win_max) {
+        const uint16_t p2p = static_cast<uint16_t>(g.win_max - g.win_min);
+        g.noise_p2p_ema = static_cast<uint16_t>(
+            static_cast<int32_t>(g.noise_p2p_ema) +
+            (static_cast<int32_t>(p2p) -
+             static_cast<int32_t>(g.noise_p2p_ema)) / 8);
+        if (g.noise_p2p_ema < ems::engine::knock_dead_min_p2p) {
+            if (g.dead_windows < 0xFFFFu) { ++g.dead_windows; }
+        } else {
+            g.dead_windows = 0u;
+        }
+        g.win_min = 0xFFFFu;
+        g.win_max = 0u;
+    }
 
     if (count > g.event_threshold) {
         // Knock detected: add retard, reset clean cycle counter
@@ -186,6 +217,11 @@ void knock_window_cycle_end() noexcept {
     }
 }
 
+bool knock_sensor_dead() noexcept {
+    return (ems::engine::knock_dead_min_p2p != 0u) &&
+           (g.dead_windows >= kDeadWindowLimit);
+}
+
 uint16_t knock_get_retard_x10(uint8_t cyl) noexcept {
     return knock_retard_x10[static_cast<uint8_t>(cyl & 0x3u)];
 }
@@ -197,6 +233,8 @@ uint8_t knock_test_get_knock_count(uint8_t cyl) noexcept {
 bool knock_test_window_active() noexcept { return g.window_active; }
 uint8_t knock_test_window_cyl() noexcept { return g.window_cyl; }
 void knock_test_set_adc_raw(uint16_t raw) noexcept { knock_adc_update(raw); }
+uint16_t knock_test_get_noise_p2p_ema() noexcept { return g.noise_p2p_ema; }
+uint16_t knock_test_get_dead_windows() noexcept { return g.dead_windows; }
 #endif
 
 }  // namespace ems::engine

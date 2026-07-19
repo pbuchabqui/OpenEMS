@@ -106,6 +106,22 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
                            int16_t clt_x10) noexcept;
 bool fuel_decel_cut_active() noexcept;
 void fuel_decel_cut_reset() noexcept;
+// Contexto extra do DFCO (estilo FOME #485/#487), fornecido antes do update:
+// MAP corrente p/ o gate de vácuo (decel_cut_map_max_bar_x100 > 0) e marcha
+// p/ a inibição pós-troca (decel_cut_gear_inhibit_ms10 > 0 — troca também
+// derruba um corte activo, evitando jerk na transmissão).
+void fuel_decel_cut_notify_map(uint16_t map_bar_x100) noexcept;
+void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept;
+
+// Protecção de duty do injector (FOME #215): chamar 1×/tick de 2 ms com o
+// PW final comandado. duty% (ciclo 720°) acima de inj_duty_max_pct por mais
+// de inj_duty_tol_ms10×10 ms → corte; retoma quando o duty pedido cai 5%
+// abaixo do limite. inj_duty_max_pct = 0 → inerte.
+bool     fuel_inj_duty_update(uint32_t pw_us, uint32_t rpm_x10,
+                              uint16_t dt_ms) noexcept;
+bool     fuel_inj_duty_cut_active() noexcept;
+uint16_t fuel_inj_duty_pct_x10() noexcept;
+void     fuel_inj_duty_reset() noexcept;
 
 // Compensação barométrica (MS42 TI_FAC_ALTI).
 void     fuel_set_baro_bar_x100(uint16_t baro) noexcept;

@@ -40,6 +40,7 @@ int main() { return 0; }
 #include "engine/calibration.h"
 #include "engine/constants.h"
 #include "engine/cut_reason.h"
+#include "engine/vehicle_inputs.h"
 #include "engine/ecu_sched.h"
 #include "engine/engine_config.h"
 #include "engine/etb_control.h"
@@ -567,6 +568,16 @@ static void openems_init() noexcept {
 				    (wl < 10u) ? 10u : (wl > 180u) ? 180u : wl;
 			}
 		}
+		// Protecção de duty INJ + gates DFCO + knock morto (252-257);
+		// blob antigo = zeros = tudo off (tol=0 mantém default 300 ms).
+		ems::engine::inj_duty_max_pct = g_calib_page0[252];
+		if (g_calib_page0[253] != 0u) {
+			ems::engine::inj_duty_tol_ms10 = g_calib_page0[253];
+		}
+		std::memcpy(&ems::engine::decel_cut_map_max_bar_x100,
+		            g_calib_page0 + 254, 2u);
+		ems::engine::decel_cut_gear_inhibit_ms10 = g_calib_page0[256];
+		ems::engine::knock_dead_min_p2p = g_calib_page0[257];
 	}
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
@@ -870,9 +881,13 @@ int main() {
                     s_prev_tooth = snap.tooth_index;
                 }
 
+                // Duty do injector: estado do tick anterior (o PW final só é
+                // conhecido mais abaixo) — 2 ms de latência, irrelevante vs
+                // a tolerância de centenas de ms da protecção.
+                const bool inj_duty_cut = ems::engine::fuel_inj_duty_cut_active();
                 const uint8_t inj_mask =
                     (fuel_protect_cut || g_rev_limit_active ||
-                     half_fuel_lockout) ? 0x0Fu : 0u;
+                     half_fuel_lockout || inj_duty_cut) ? 0x0Fu : 0u;
                 const uint8_t ign_mask_cut =
                     (rev_cut || oil_protect_cut || overtemp_cut ||
                      diag_critical) ? 0x0Fu : 0u;
@@ -893,6 +908,7 @@ int main() {
                 if (diag_critical)      fr |= ems::engine::kFuelCutDiagCrit;
                 if (half_fuel_lockout)  fr |= ems::engine::kFuelCutNoSync;
                 if (flood_clear)        fr |= ems::engine::kFuelCutFlood;
+                if (inj_duty_cut)       fr |= ems::engine::kFuelCutInjDuty;
                 uint16_t sr = 0u;
                 if (rev_cut)          sr |= ems::engine::kSparkCutLimpRpm;
                 if (oil_protect_cut)  sr |= ems::engine::kSparkCutOilPress;
@@ -907,7 +923,8 @@ int main() {
 
             // Telemetry PW must match actuators: only when injectors are actually cut.
             const bool fuel_cut_active =
-                g_rev_limit_active || fuel_protect_cut || half_fuel_lockout;
+                g_rev_limit_active || fuel_protect_cut || half_fuel_lockout ||
+                ems::engine::fuel_inj_duty_cut_active();
 
             // (1) FULL_SYNC: running fuel path (VE / trims / AE / X-τ when not crank-ASE).
             if (full_sync && !fuel_protect_cut) {
@@ -940,6 +957,15 @@ int main() {
                 // Corte de combustível na desaceleração (MS42 TI_PUR).
                 // Avaliado ANTES do X-Tau: evita alimentar o modelo de parede com PW
                 // real e depois descartar o resultado, contaminando a auto-calibração.
+                // Contexto DFCO: MAP p/ o gate de vácuo e marcha p/ inibição
+                // pós-troca (ambos inertes com as respectivas cals a 0).
+                ems::engine::fuel_decel_cut_notify_map(map_bar_x100);
+                {
+                    uint8_t gr = 0u;
+                    if (ems::engine::vehicle_gear(gr, now)) {
+                        ems::engine::fuel_decel_cut_notify_gear(gr, now);
+                    }
+                }
                 const bool decel_cut_active = !crank_or_ase &&
                     ems::engine::fuel_decel_cut_update(
                         snap.rpm_x10, sensors.etb_tps_pct_x10, sensors.clt_degc_x10);
@@ -1051,6 +1077,10 @@ int main() {
                 g_last_pw_ms_x10 = fuel_cut_active ? 0u
                     : static_cast<uint8_t>(pw_100 > 255u ? 255u : pw_100);
                 g_last_advance_deg = clamp_i8(sched_spark_deg, -10, 40);
+
+                // Protecção de duty (FOME #215): alimenta com o PW final
+                // comandado; o corte em si entra na mask do próximo tick.
+                ems::engine::fuel_inj_duty_update(final_pw_us, snap.rpm_x10, 2u);
 
                 const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
 
@@ -1188,6 +1218,20 @@ int main() {
             g_t100ms_ = now;
             ems::drv::sensors_tick_100ms();
             ems::hal::tle8888_poll_diag();
+
+            // Knock sensor morto (FOME #578): report único na transição.
+            {
+                static bool s_knock_dead_reported = false;
+                const bool dead = ems::engine::knock_sensor_dead();
+                if (dead && !s_knock_dead_reported) {
+                    ems::engine::DiagnosticManager::report_fault(
+                        ems::engine::DiagnosticCode::KNOCK_SENSOR_FAULT,
+                        ems::engine::FaultSeverity::WARNING);
+                    s_knock_dead_reported = true;
+                } else if (!dead) {
+                    s_knock_dead_reported = false;
+                }
+            }
 
             // Flex fuel: update stoich AFR based on ethanol %
             // E0=14.7 (1470), E100=9.0 (900), linear

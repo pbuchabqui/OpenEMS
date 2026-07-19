@@ -506,14 +506,55 @@ uint16_t fuel_get_baro_bar_x100() noexcept {
 
 // ── Corte de combustível na desaceleração (MS42 TI_PUR) ──────────────────────
 
+// Contexto extra do DFCO (setters — a assinatura do update fica estável).
+namespace {
+uint16_t g_dfco_map_bar_x100   = 0u;
+uint8_t  g_dfco_gear           = 0u;
+bool     g_dfco_gear_seen      = false;
+bool     g_dfco_gear_changed   = false;  // já houve ≥1 troca (valida timestamp)
+uint32_t g_dfco_gear_change_ms = 0u;
+uint32_t g_dfco_now_ms         = 0u;
+}  // namespace
+
+void fuel_decel_cut_notify_map(uint16_t map_bar_x100) noexcept {
+    g_dfco_map_bar_x100 = map_bar_x100;
+}
+
+void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept {
+    g_dfco_now_ms = now_ms;
+    if (!g_dfco_gear_seen) {
+        g_dfco_gear_seen = true;
+        g_dfco_gear = gear;
+        return;
+    }
+    if (gear != g_dfco_gear) {
+        g_dfco_gear = gear;
+        g_dfco_gear_changed = true;
+        g_dfco_gear_change_ms = now_ms;
+        // Troca de marcha derruba um corte activo (anti-jerk na transmissão).
+        if (decel_cut_gear_inhibit_ms10 != 0u) {
+            g_decel_cut = false;
+        }
+    }
+}
+
 bool fuel_decel_cut_update(uint32_t rpm_x10,
                            uint16_t tps_pct_x10,
                            int16_t clt_x10) noexcept {
     const bool throttle_closed = tps_pct_x10 <= decel_cut_tps_threshold_x10;
     const bool engine_warm     = clt_x10 >= decel_cut_min_clt_x10;
+    // Gate de MAP: só corta com vácuo real (carga baixa de facto). 0 = off.
+    const bool map_ok = (decel_cut_map_max_bar_x100 == 0u) ||
+                        (g_dfco_map_bar_x100 <= decel_cut_map_max_bar_x100);
+    // Inibição pós-troca de marcha (aritmética circular de uint32 em ms).
+    const uint32_t inhibit_ms =
+        static_cast<uint32_t>(decel_cut_gear_inhibit_ms10) * 10u;
+    const bool shift_inhibit = (inhibit_ms != 0u) && g_dfco_gear_changed &&
+        ((g_dfco_now_ms - g_dfco_gear_change_ms) < inhibit_ms);
 
     if (!g_decel_cut) {
-        if (throttle_closed && engine_warm && rpm_x10 >= decel_cut_entry_rpm_x10) {
+        if (throttle_closed && engine_warm && map_ok && !shift_inhibit &&
+            rpm_x10 >= decel_cut_entry_rpm_x10) {
             g_decel_cut = true;
         }
     } else {
@@ -532,6 +573,72 @@ bool fuel_decel_cut_active() noexcept {
 
 void fuel_decel_cut_reset() noexcept {
     g_decel_cut = false;
+    g_dfco_map_bar_x100 = 0u;
+    g_dfco_gear_seen = false;
+    g_dfco_gear_changed = false;
+    g_dfco_gear_change_ms = 0u;
+    g_dfco_now_ms = 0u;
+}
+
+// ── Protecção de duty do injector (FOME #215) ────────────────────────────────
+namespace {
+uint16_t g_inj_duty_pct_x10 = 0u;
+uint32_t g_inj_duty_over_ms = 0u;
+bool     g_inj_duty_cut     = false;
+}  // namespace
+
+bool fuel_inj_duty_update(uint32_t pw_us, uint32_t rpm_x10,
+                          uint16_t dt_ms) noexcept {
+    // Duty vs ciclo de 720° (1 injecção/injector/ciclo, sequencial):
+    // ciclo_us = 1.2e9 / rpm_x10 → duty%×10 = pw_us × rpm_x10 / 1.2e6.
+    const uint64_t duty_x10 =
+        (static_cast<uint64_t>(pw_us) * rpm_x10) / 1200000u;
+    g_inj_duty_pct_x10 = static_cast<uint16_t>(duty_x10 > 65535u ? 65535u
+                                                                 : duty_x10);
+    const uint8_t max_pct = inj_duty_max_pct;
+    if (max_pct == 0u || rpm_x10 == 0u) {
+        g_inj_duty_cut = false;
+        g_inj_duty_over_ms = 0u;
+        return false;
+    }
+    const uint16_t limit_x10 = static_cast<uint16_t>(max_pct) * 10u;
+    const uint32_t tol_ms = (inj_duty_tol_ms10 != 0u)
+        ? static_cast<uint32_t>(inj_duty_tol_ms10) * 10u
+        : 300u;  // habilitado sem tolerância explícita → 300 ms
+    if (!g_inj_duty_cut) {
+        if (g_inj_duty_pct_x10 > limit_x10) {
+            g_inj_duty_over_ms += dt_ms;
+            if (g_inj_duty_over_ms >= tol_ms) {
+                g_inj_duty_cut = true;
+            }
+        } else {
+            g_inj_duty_over_ms = 0u;
+        }
+    } else {
+        // Retoma com histerese de 5%: o PW comandado continua a ser calculado
+        // durante o corte (a mask é que suprime), logo o duty pedido cai
+        // quando o RPM/carga descem — não há deadlock.
+        const uint16_t resume_x10 = (limit_x10 > 50u) ? limit_x10 - 50u : 0u;
+        if (g_inj_duty_pct_x10 <= resume_x10) {
+            g_inj_duty_cut = false;
+            g_inj_duty_over_ms = 0u;
+        }
+    }
+    return g_inj_duty_cut;
+}
+
+bool fuel_inj_duty_cut_active() noexcept {
+    return g_inj_duty_cut;
+}
+
+uint16_t fuel_inj_duty_pct_x10() noexcept {
+    return g_inj_duty_pct_x10;
+}
+
+void fuel_inj_duty_reset() noexcept {
+    g_inj_duty_pct_x10 = 0u;
+    g_inj_duty_over_ms = 0u;
+    g_inj_duty_cut = false;
 }
 
 uint16_t calc_eoi_lead_deg(uint32_t rpm_x10) noexcept

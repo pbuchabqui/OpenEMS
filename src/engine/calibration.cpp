@@ -195,6 +195,14 @@ uint8_t cmp_window_open_tooth  = 0u;  // 0/0 = desabilitado
 uint8_t cmp_window_close_tooth = 0u;
 uint8_t ckp_skip_pulses_after_gap = 0u;  // 0 = desligado
 
+uint8_t  inj_duty_max_pct  = 0u;   // 0 = protecção desligada
+uint8_t  inj_duty_tol_ms10 = 30u;  // 300 ms de tolerância acima do limite
+
+uint16_t decel_cut_map_max_bar_x100  = 0u;  // 0 = sem gate de MAP
+uint8_t  decel_cut_gear_inhibit_ms10 = 0u;  // 0 = sem inibição pós-troca
+
+uint8_t knock_dead_min_p2p = 0u;   // 0 = detecção de sensor morto desligada
+
 uint8_t  map_window_enable   = 0u;    // 0 = desligado
 uint16_t map_window_open_deg = 0u;    // slot 0 abre no dente 0 (pós-gap)
 uint16_t map_window_len_deg  = 90u;   // meia fase de admissão

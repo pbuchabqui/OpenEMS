@@ -144,6 +144,22 @@ extern int8_t cyl_ign_trim_deg[::ems::engine::cfg::kCylinderCount];
 extern uint8_t cmp_window_open_tooth;
 extern uint8_t cmp_window_close_tooth;
 
+// Protecção de duty do injector (estilo FOME #215): acima de max_pct por
+// mais de tol (×10 ms, 0 = default 300 ms) corta injecção até o duty pedido
+// cair 5% abaixo do limite. max_pct = 0 desliga (default).
+extern uint8_t inj_duty_max_pct;
+extern uint8_t inj_duty_tol_ms10;
+
+// DFCO: gate de MAP (só corta com vácuo real; bar×100, 0 = off) e inibição
+// pós-troca de marcha (×10 ms, 0 = off) — evita corte/jerk durante a troca.
+extern uint16_t decel_cut_map_max_bar_x100;
+extern uint8_t  decel_cut_gear_inhibit_ms10;
+
+// Knock: pico-a-pico mínimo de ruído de fundo por janela (counts ADC).
+// EMA abaixo disto por muitas janelas = sensor morto/desligado (FOME #578).
+// 0 = detecção desligada (default).
+extern uint8_t knock_dead_min_p2p;
+
 // MAP janela angular por cilindro (engine/map_window, estilo FOME #610).
 // enable: 0=off (default), 1=medir (telemetria/balance; sem efeito no fuel).
 // open_deg: abertura da janela do slot 0 no ciclo 720° (0-719; slots seguintes

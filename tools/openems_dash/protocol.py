@@ -87,6 +87,8 @@ class RealtimeData:
     torque_spark_retard_deg: int  # 0–30° retard from TC/launch (reserved[33])
     loop2ms_last_us: int
     loop2ms_max_us: int
+    cpu_pct: float       # carga do loop de 2ms: last_us/2000 (estilo FOME CPU usage)
+    cpu_max_pct: float   # pior caso desde o boot: max_us/2000
     an1_raw: int      # APP1 (pedal 1) ADC bruto
     an2_raw: int      # APP2 (pedal 2)
     an3_raw: int      # ETB TPS1
@@ -154,6 +156,10 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         torque_spark_retard_deg=r[33],
         loop2ms_last_us=struct.unpack_from("<I", r, 35)[0],
         loop2ms_max_us=struct.unpack_from("<I", r, 39)[0],
+        # Carga de CPU derivada do orçamento do loop de 2 ms (ISRs de CKP não
+        # incluídas — ver g_dbg_isr_last_ticks no 'D' p/ essa fatia).
+        cpu_pct=round(struct.unpack_from("<I", r, 35)[0] / 20.0, 1),
+        cpu_max_pct=round(struct.unpack_from("<I", r, 39)[0] / 20.0, 1),
         an1_raw=struct.unpack_from("<H", r, 43)[0],
         an2_raw=struct.unpack_from("<H", r, 45)[0],
         an3_raw=struct.unpack_from("<H", r, 47)[0],
@@ -308,7 +314,7 @@ class OpenEMSLink:
     # Bits de src/engine/cut_reason.h (ordem = bit 0..N)
     FUEL_CUT_BITS = ["rev_limit", "limp_rpm", "map_fault", "oil_press",
                      "fuel_rail", "overtemp", "diag_crit", "no_sync",
-                     "dfco", "flood_clear"]
+                     "dfco", "flood_clear", "inj_duty"]
     SPARK_CUT_BITS = ["limp_rpm", "oil_press", "overtemp", "diag_crit",
                       "spark_skip"]
 
@@ -644,6 +650,12 @@ PAGE0_FIELDS = [
     ("map_window_enable",   246, 1, "B", 1.0),  # 0=off 1=medir
     ("map_window_open_deg", 248, 1, "H", 1.0),  # ° ciclo 720 (slot0; +180°/slot)
     ("map_window_len_deg",  250, 1, "H", 1.0),  # ° duração (10-180)
+    # bytes 252-257: duty INJ + gates DFCO + knock morto
+    ("inj_duty_max_pct",            252, 1, "B", 1.0),   # % (0=off)
+    ("inj_duty_tol_ms10",           253, 1, "B", 10.0),  # ms de tolerância
+    ("decel_cut_map_max_bar_x100",  254, 1, "H", 1.0),   # kPa (0=off)
+    ("decel_cut_gear_inhibit_ms10", 256, 1, "B", 10.0),  # ms pós-troca (0=off)
+    ("knock_dead_min_p2p",          257, 1, "B", 1.0),   # counts ADC (0=off)
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

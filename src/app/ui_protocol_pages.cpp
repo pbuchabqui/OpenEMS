@@ -428,6 +428,12 @@ void sync_page_from_table(uint8_t page) noexcept {
         g_page0[247] = 0u;  // pad
         std::memcpy(g_page0 + 248, &ems::engine::map_window_open_deg, 2u);
         std::memcpy(g_page0 + 250, &ems::engine::map_window_len_deg,  2u);
+        // Duty INJ + gates DFCO + knock morto (252-257)
+        g_page0[252] = ems::engine::inj_duty_max_pct;
+        g_page0[253] = ems::engine::inj_duty_tol_ms10;
+        std::memcpy(g_page0 + 254, &ems::engine::decel_cut_map_max_bar_x100, 2u);
+        g_page0[256] = ems::engine::decel_cut_gear_inhibit_ms10;
+        g_page0[257] = ems::engine::knock_dead_min_p2p;
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -689,6 +695,15 @@ bool sync_table_from_page(uint8_t page) noexcept {
                 ems::engine::map_window_len_deg =
                     (wlen < 10u) ? 10u : (wlen > 180u) ? 180u : wlen;
             }
+            // Duty INJ + gates DFCO + knock morto (252-257)
+            ems::engine::inj_duty_max_pct = g_page0[252];
+            if (g_page0[253] != 0u) {
+                ems::engine::inj_duty_tol_ms10 = g_page0[253];
+            }
+            std::memcpy(&ems::engine::decel_cut_map_max_bar_x100,
+                        g_page0 + 254, 2u);
+            ems::engine::decel_cut_gear_inhibit_ms10 = g_page0[256];
+            ems::engine::knock_dead_min_p2p = g_page0[257];
         }
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {

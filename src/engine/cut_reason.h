@@ -21,6 +21,7 @@ inline constexpr uint16_t kFuelCutDiagCrit = 1u << 6;  // diagnóstico crítico
 inline constexpr uint16_t kFuelCutNoSync   = 1u << 7;  // HALF lockout / sem sync
 inline constexpr uint16_t kFuelCutDfco     = 1u << 8;  // decel fuel cut (TI_PUR)
 inline constexpr uint16_t kFuelCutFlood    = 1u << 9;  // flood clear no cranking
+inline constexpr uint16_t kFuelCutInjDuty  = 1u << 10; // duty do injector acima do limite
 
 // spark (ignição)
 inline constexpr uint16_t kSparkCutLimpRpm  = 1u << 0;  // limp acima do tecto de RPM

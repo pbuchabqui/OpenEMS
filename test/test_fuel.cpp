@@ -125,6 +125,69 @@ void test_fuel_decel_cut(void) {
     CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, 600), "no cut: cold engine");
 }
 
+void test_fuel_decel_cut_gates(void) {
+    section("fuel_calc: DFCO gates de MAP e troca de marcha (FOME #485/#487)");
+    // Gate de MAP: com threshold, só corta em vácuo real.
+    fuel_decel_cut_reset();
+    ems::engine::decel_cut_map_max_bar_x100 = 40u;  // ≤ 40 kPa
+    fuel_decel_cut_notify_map(80u);                 // carga alta → sem corte
+    CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, 800), "MAP 80 > 40: sem corte");
+    fuel_decel_cut_notify_map(30u);                 // vácuo real
+    CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, 800), "MAP 30 ≤ 40: corta");
+    ems::engine::decel_cut_map_max_bar_x100 = 0u;   // off → comportamento antigo
+    fuel_decel_cut_reset();
+    fuel_decel_cut_notify_map(80u);
+    CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, 800), "gate off: MAP ignorado");
+
+    // Troca de marcha: derruba corte activo e inibe re-entrada por T ms.
+    fuel_decel_cut_reset();
+    ems::engine::decel_cut_gear_inhibit_ms10 = 50u;  // 500 ms
+    fuel_decel_cut_notify_gear(3u, 1000u);           // 1ª marcha vista (sem troca)
+    CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, 800), "sem troca: corta normal");
+    fuel_decel_cut_notify_gear(4u, 2000u);           // troca 3→4
+    CHECK_FALSE(fuel_decel_cut_active(), "troca derruba corte activo");
+    fuel_decel_cut_notify_gear(4u, 2200u);
+    CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, 800), "inibido a +200 ms");
+    fuel_decel_cut_notify_gear(4u, 2600u);
+    CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, 800), "re-entra após 500 ms");
+    ems::engine::decel_cut_gear_inhibit_ms10 = 0u;
+    fuel_decel_cut_reset();
+}
+
+void test_fuel_inj_duty_protection(void) {
+    section("fuel_calc: protecção de duty do injector (FOME #215)");
+    fuel_inj_duty_reset();
+    ems::engine::inj_duty_max_pct  = 0u;
+    // Desligado: mede mas nunca corta. 20 ms @ 6000 rpm = 100%.
+    CHECK_FALSE(fuel_inj_duty_update(20000u, 60000u, 2u), "off: sem corte");
+    CHECK_EQ(fuel_inj_duty_pct_x10(), 1000u, "duty 20ms@6000 = 100.0%");
+
+    // Ligado a 85% com tolerância de 100 ms.
+    ems::engine::inj_duty_max_pct  = 85u;
+    ems::engine::inj_duty_tol_ms10 = 10u;  // 100 ms
+    fuel_inj_duty_reset();
+    // 90% (18 ms @ 6000): acima do limite mas dentro da tolerância.
+    CHECK_FALSE(fuel_inj_duty_update(18000u, 60000u, 2u),
+                "acima do limite: tolerado no início");
+    bool cut_early = false;
+    for (int i = 0; i < 48; ++i) {
+        cut_early = cut_early || fuel_inj_duty_update(18000u, 60000u, 2u);
+    }
+    CHECK_FALSE(cut_early, "98 ms acima: ainda tolerado");
+    CHECK_TRUE(fuel_inj_duty_update(18000u, 60000u, 2u), "corta após 100 ms acima");
+    CHECK_TRUE(fuel_inj_duty_cut_active(), "cut_active latched");
+    // Ainda acima do resume (85−5=80%): mantém o corte.
+    CHECK_TRUE(fuel_inj_duty_update(16400u, 60000u, 2u), "82% > 80%: mantém corte");
+    // Cai abaixo do resume: retoma.
+    CHECK_FALSE(fuel_inj_duty_update(15000u, 60000u, 2u), "75% ≤ 80%: retoma");
+    // Transiente breve (< tolerância) nunca corta.
+    fuel_inj_duty_reset();
+    for (int i = 0; i < 20; ++i) { fuel_inj_duty_update(18000u, 60000u, 2u); }
+    CHECK_FALSE(fuel_inj_duty_update(10000u, 60000u, 2u), "transiente 40 ms: sem corte");
+    ems::engine::inj_duty_max_pct = 0u;
+    fuel_inj_duty_reset();
+}
+
 void test_fuel_baro(void) {
     section("fuel_calc: fuel_set/get_baro_bar_x100");
     fuel_set_baro_bar_x100(101u); CHECK_EQ(fuel_get_baro_bar_x100(), 101u, "baro=101");
