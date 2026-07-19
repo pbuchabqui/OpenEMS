@@ -1277,12 +1277,13 @@ async function loadLtftAccum() {
     let nReady = 0, nHits = 0;
     for (let r = 0; r < n; r++)
       for (let c = 0; c < n; c++) {
-        flat.push(data.mean_stft_x10[r][c]);
         if (data.ready[r][c]) nReady++;
-        if (data.hits[r][c] > 0) nHits++;
+        // Heatmap escala só sobre células com dados; vazias ficam neutras.
+        if (data.hits[r][c] > 0) { nHits++; flat.push(data.mean_stft_x10[r][c]); }
       }
     $("#ltftStats").textContent = `ready ${nReady} · hits>0 ${nHits}`;
-    const min = Math.min(...flat), max = Math.max(...flat);
+    const min = flat.length ? Math.min(...flat) : 0,
+          max = flat.length ? Math.max(...flat) : 0;
     const rpm = (INFO && INFO.axes && INFO.axes.rpm) || [];
     const map = (INFO && INFO.axes && INFO.axes.map_kpa) || [];
 
@@ -1294,11 +1295,13 @@ async function loadLtftAccum() {
         const x10 = data.mean_stft_x10[row][col];
         const ready = data.ready[row][col];
         const hits = data.hits[row][col];
-        const bg = H.heatColor(x10, min, max);
         // Verde = ready (qualidade). Hits>0 sem ready ficam só no heatmap.
         const outline = ready ? "outline:2px solid #22c55e;outline-offset:-2px" : "";
-        const txt = (x10 / 10).toFixed(1);
-        html += `<td style="background:${bg};color:${H.heatTextColor()};${outline}"
+        const empty = hits === 0;
+        const bg = empty ? "var(--panel-2)" : H.heatColor(x10, min, max);
+        const fg = empty ? "var(--muted)" : H.heatTextColor();
+        const txt = empty ? "·" : (x10 / 10).toFixed(1);
+        html += `<td style="background:${bg};color:${fg};${outline}"
           title="${map[row]} kPa · ${rpm[col]} rpm · hits ${hits}${ready ? " · ready" : ""}">${txt}</td>`;
       }
       html += "</tr>";
@@ -1831,7 +1834,10 @@ function makeDragCurve(cfg) {
     const act = activeIdx();
     const list = seriesList();
     ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = "#111"; ctx.fillRect(0, 0, W, H);
+    // Mesmo neutro do tema usado nas células vazias da tabela LTFT.
+    const panel2 = getComputedStyle(document.documentElement)
+      .getPropertyValue("--panel-2").trim() || "#111";
+    ctx.fillStyle = panel2; ctx.fillRect(0, 0, W, H);
 
     // grid vertical (X) uniforme; horizontal (Y) segue os ticks — com yTicks
     // custom as linhas acompanham o mapeamento não-linear.
