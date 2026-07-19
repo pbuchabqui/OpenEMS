@@ -1255,7 +1255,7 @@ async function loadLtftAccum() {
   root.dataset.loaded = "1";
   root.innerHTML = `
     <div class="grid-toolbar">
-      <strong>LEARN</strong>
+      <strong>LTFT</strong>
       <span class="muted" title="Mapa de aprendizado: mean STFT % por célula (RPM×MAP); contorno verde = ready; APPLY grava em VE células com hits>0; RESET zera o acumulador">mean STFT %</span>
       <span class="learn-stats" id="ltftStats"></span>
       <button data-act="read">READ</button>
@@ -1326,6 +1326,12 @@ async function loadLtftAccum() {
       const r = await api("/api/ltft/apply-ready", { method: "POST" });
       toast(`APPLY · ${r.committed ?? 0} célula(s) → VE`);
       await read();
+      // O bake muda a VE na RAM da ECU — recarrega a grid VE para a aba
+      // não mostrar valores velhos até um Read manual.
+      if ((r.committed ?? 0) > 0) {
+        const vePane = $("#tab-grid-1");
+        if (vePane) await loadGrid(vePane);
+      }
     } catch (e) { toast(e.message, true); }
   };
   root.querySelector("[data-act=reset]").onclick = async () => {
