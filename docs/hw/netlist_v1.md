@@ -362,15 +362,15 @@ no bit CMP. **Não bloqueia layout** do condicionamento Hall (pull-up externo no
 
 **2. ✅ Números físicos TLE8888 LQFP-100** — `docs/hw/tle8888_pinout.md` (DS Rev 1.2 + rusEFI lib).
 
-**3. ✅ Coreboard WeAct** — shape + sch: `weact_h562_coreboard.md`, `weact_h562_schematic.md`.  
-   ✅ **AMPSEAL plugs** envelope: `ampseal_connectors.md` (ENG_CD_2293782).  
-   ⚠️ **Header PCB** AMPSEAL (footprint de solda) ainda por descarregar.
+**3. ✅ Coreboard WeAct** — shape + sch: `weact_h562_*.md`.  
+   ✅ **AMPSEAL** plugs + headers RA: `ampseal_connectors.md` + PDFs TE no repo.  
+   Footprint KiCad: copiar página “RECOMMENDED P.C. BOARD LAYOUT” dos CDs.
 
-**4. ⚠️ Part numbers `TBD`:** buck, LDO, isolador USB, DC-DC isolado; bobinas (IGN = gate IGBT 20 mA).
+**4. ⚠️ BOM Tier C** — candidatos em `bom_v1_candidates.md` (não PNs finais de compra).
 
-**5. ✅ Relé principal v1:** key-on directo; `J2.MAIN_RLY` → pin 55 MR **DNP**.
+**5. ✅ Relé principal v1:** key-on; MR pin 55 **DNP**.
 
-**6. 🚨 No esquemático SPI:** SIN(6)=AGND, FCLN(8)=VDDIO — senão o hub não clocka.
+**6. 🚨 SPI strap:** SIN(6)=AGND, FCLN(8)=VDDIO.
 
 ---
 

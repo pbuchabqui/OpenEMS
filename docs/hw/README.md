@@ -29,7 +29,8 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 | Registadores/periféricos do MCU | `stm32h562_ref.md` | — |
 | **Forma / furos / headers do coreboard WeAct VGT6** | `weact_h562_coreboard.md` | assumir board 64 pinos |
 | **Esquemático WeAct V1.0 (P1/P2 nets)** | `weact_h562_schematic.md` + `weact_h562_v10_schdoc.pdf` | — |
-| **AMPSEAL 35/23 plugues + mating headers** | `ampseal_connectors.md` + `ENG_CD_2293782_E5.pdf` | inventar envelope |
+| **AMPSEAL 35/23 plugues + headers PCB** | `ampseal_connectors.md` + PDFs TE | inventar footprint |
+| **BOM candidatos** | `bom_v1_candidates.md` | — |
 | ~~Condicionamento VR discreto~~ | `vr_input_conditioning.md` | **supersedido** (MAX9926/9924 saiu) |
 
 ### A regra
@@ -112,10 +113,9 @@ Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundament
 
 | Item | Estado |
 |---|---|
-| **Footprint header AMPSEAL na PCB** | Family drawing plugues ✅ (`ampseal_connectors.md`). Falta drawing do **header** vertical/RA escolhido (776230/776180, 770669/…). |
-| **Part numbers Tier C** | Buck, LDO, isolador USB, DC-DC isolado. |
-| **Bobinas (smart vs IGBT)** | IGN do TLE = push-pull **20 mA** (rusEFI/datasheet). Confirmar V_IH da bobina **antes** de fechar BOM — pode exigir IGBT externo. |
-| **Caixa, vedação, coating, orçamento** | Precisa de alvo de custo. |
+| **Part numbers Tier C finais** | Candidatos em `bom_v1_candidates.md` — fechar stock/preço. |
+| **Bobinas** | IGN = gate IGBT 20 mA — escolher bobina/IGBT **antes** de chicote. |
+| **Caixa / coating / orçamento** | Aresta conector ≥ **125 mm** (dois AMPSEAL RA); alvo de custo. |
 
 **Já no código (bring-up ainda sem silício):**
 - Driver hub: unlock / InConfig / OE_SET / DD pump-fan
