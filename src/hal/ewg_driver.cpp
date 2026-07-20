@@ -13,11 +13,29 @@ namespace {
 constexpr uint8_t kIn1Pin = 7u;   // PA7
 constexpr uint8_t kIn2Pin = 3u;   // PD3
 
+// O EWG está DIFERIDO na placa de interface v1 (só footprint, sem estágio de
+// potência montado — ver docs/hw/interface_board_v1.md). Enquanto assim for, o
+// driver não deve reclamar pino nenhum.
+//
+// Não é cosmético. Com o EWG diferido, `ewg_driver_read_position_raw()` devolve
+// 0 fixo (PC3 passou a VBATT), portanto o PID de posição vê erro = demanda − 0.
+// Assim que a demanda sobe, o integrador satura e o driver passa a CONDUZIR
+// PA7/PD3 e a pôr PWM a fundo em PB10 — três pinos accionados a sério para um
+// estágio que não existe. Guardar aqui é o mesmo padrão de sdmmc_init().
+//
+// Ao repor o EWG (v2): pôr a 1, devolver-lhe um canal de ADC próprio para a
+// realimentação de posição, e rever o par DIR (PD3 só existe em packages com
+// GPIOD).
+#define EMS_EWG_POPULATED 0
+
 }  // namespace
 
 namespace ems::hal {
 
 bool ewg_driver_init() noexcept {
+#if !EMS_EWG_POPULATED
+    return false;
+#else
     // PA7 = IN1 (GPIO output)
     GPIOA_MODER = (GPIOA_MODER & ~(3u << (kIn1Pin * 2u))) | (1u << (kIn1Pin * 2u));
     // PD3 = IN2 (GPIO output)
@@ -28,9 +46,15 @@ bool ewg_driver_init() noexcept {
 
     ewg_driver_shutdown();
     return true;
+#endif
 }
 
 void ewg_driver_set_motor_pwm(int16_t pwm) noexcept {
+#if !EMS_EWG_POPULATED
+    // Estágio não montado: não tocar em PA7/PD3/PB10 (ver nota no topo).
+    static_cast<void>(pwm);
+    return;
+#else
     if (pwm >  1000) { pwm =  1000; }
     if (pwm < -1000) { pwm = -1000; }
 
@@ -47,6 +71,7 @@ void ewg_driver_set_motor_pwm(int16_t pwm) noexcept {
         GPIOD_BSRR = (1u << (kIn2Pin + 16u));          // IN2=0 (brake)
     }
     tim2_set_duty(duty);
+#endif
 }
 
 // EWG diferido na placa de interface v1: PC3/INP13 passou a ser VBATT (bloco 7), de
@@ -60,9 +85,13 @@ uint16_t ewg_driver_read_position_raw() noexcept {
 }
 
 void ewg_driver_shutdown() noexcept {
+#if !EMS_EWG_POPULATED
+    return;
+#else
     GPIOA_BSRR = (1u << (kIn1Pin + 16u));
     GPIOD_BSRR = (1u << (kIn2Pin + 16u));
     tim2_set_duty(0u);
+#endif
 }
 
 }  // namespace ems::hal
