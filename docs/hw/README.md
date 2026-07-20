@@ -74,13 +74,13 @@ Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundament
 | **Números físicos de pino do TLE8888** | Tirar da tabela de pinout do datasheet. **Bloqueia o layout.** |
 | **Dimensões do coreboard e das caixas AMPSEAL** | Medição manual + desenhos da TE. Ver §5. |
 | **Part numbers Tier C** | Buck, LDO, isolador USB, DC-DC isolado, bobinas (validar IGN vs smart coil). |
-| **Eco de endereço SPI + fingerprint consultivo** | Política decidida em `tle8888_crosscheck.md` / plano. **Por implementar.** |
-| **page0 bytes 56–70 no boot** | `cmp_window` / trims / antijerk gravados pela UI mas **não restaurados** no arranque. Bug latente. |
 | **Relé principal** | Três narrativas (key-on / driver CI / via J2) — fechar uma. |
 | **Caixa, vedação, coating, orçamento** | Precisa de alvo de custo. |
 
-**Driver hub (unlock / InConfig / OE_SET / DD pump-fan):** ✅ **implementado no código**;
-validação só no silício.
+**Já no código (bring-up ainda sem silício):**
+- Driver hub: unlock / InConfig / OE_SET / DD pump-fan
+- Eco de endereço SPI (gate) + fingerprint consultivo (só OpConfig0/OutConfig3)
+- page0 56–76 restaurado no boot (`apply_page0_trims_driveability`)
 
 ---
 

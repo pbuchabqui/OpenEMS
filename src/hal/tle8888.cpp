@@ -62,9 +62,21 @@ volatile uint8_t g_vrs_diag = 0u;
 /// [0]=WdStat0  [1]=WWDStat  [2]=FWDStat0  [3]=TECStat  [4]=WdDiag
 volatile uint8_t g_wd_status[5] = {};
 
-/// Bitmask do fingerprint do mapa de registadores: bit N = entrada N divergiu.
-/// 0 = mapa confirmado contra o silício. Ver verify_register_map().
+/// Bitmask do fingerprint (consultivo): bit N = entrada N divergiu.
+/// 0 = valores de reset batem. NÃO é gate de segurança — ver eco abaixo.
 volatile uint8_t g_map_mismatch = 0xFFu;
+
+/// Eco de endereço SPI (gate contínuo, estilo rusEFI spi_validate).
+/// A resposta devolve o endereço do frame *anterior*. 0x00 = REG_INVALID
+/// (Cmd0 é 0x01; 0x00 não é registador real).
+constexpr uint8_t kRegInvalid = 0x00u;
+volatile uint8_t g_last_tx_reg   = kRegInvalid;
+volatile uint8_t g_echo_por_cnt  = 0u;   // resposta OpStat0 → power-on reset
+volatile uint8_t g_echo_wdr_cnt  = 0u;   // FWDStat1 → watchdog reset
+volatile uint8_t g_echo_comfe_cnt = 0u;  // Diag0 → frame inválido
+volatile uint8_t g_echo_fail_cnt = 0u;   // divergência genérica
+volatile bool    g_echo_ok       = true;
+volatile bool    g_need_reinit   = false;
 
 // ── Transporte SPI ───────────────────────────────────────────────────────────
 constexpr uint32_t kSpiTimeout = 50000u;  // ~500 µs @250 MHz
@@ -72,7 +84,18 @@ constexpr uint32_t kSpiTimeout = 50000u;  // ~500 µs @250 MHz
 inline void cs_low()  noexcept { GPIOB_BSRR = (1u << (12u + 16u)); }  // PB12 = CSN
 inline void cs_high() noexcept { GPIOB_BSRR = (1u << 12u); }
 
-uint16_t spi2_txrx(uint16_t tx) noexcept {
+/// Monta o frame: dados em [15:8], endereço em [7:1], R/W no bit 0.
+inline uint16_t frame(uint16_t addr, uint8_t data, bool write) noexcept {
+    return static_cast<uint16_t>((static_cast<uint16_t>(data) << 8u)
+                               | ((addr & 0x7Fu) << 1u)
+                               | (write ? 1u : 0u));
+}
+
+inline uint8_t addr_from_frame(uint16_t word) noexcept {
+    return static_cast<uint8_t>((word >> 1u) & 0x7Fu);
+}
+
+uint16_t spi2_txrx_raw(uint16_t tx) noexcept {
     uint32_t tries = kSpiTimeout;
     while (!(SPI2_SR & SPI_SR_TXP) && --tries) {}
     if (!tries) { return 0xFFFFu; }
@@ -92,30 +115,44 @@ uint16_t spi2_txrx(uint16_t tx) noexcept {
     return rx;
 }
 
-/// Monta o frame: dados em [15:8], endereço em [7:1], R/W no bit 0.
-inline uint16_t frame(uint16_t addr, uint8_t data, bool write) noexcept {
-    return static_cast<uint16_t>((static_cast<uint16_t>(data) << 8u)
-                               | ((addr & 0x7Fu) << 1u)
-                               | (write ? 1u : 0u));
+/// Transacção com validação de eco (resposta = reg do frame anterior).
+uint16_t spi_xfer(uint16_t tx) noexcept {
+    cs_low();
+    const uint16_t rx = spi2_txrx_raw(tx);
+    cs_high();
+
+    if (g_last_tx_reg != kRegInvalid) {
+        const uint8_t got = addr_from_frame(rx);
+        if (got != g_last_tx_reg) {
+            // Eventos especiais do datasheet / rusEFI (não são “mapa errado”):
+            if (got == static_cast<uint8_t>(R::OP_STAT0)) {
+                ++g_echo_por_cnt;
+                g_need_reinit = true;
+            } else if (got == static_cast<uint8_t>(R::FWD_STAT1)) {
+                ++g_echo_wdr_cnt;
+                g_need_reinit = true;
+            } else if (got == static_cast<uint8_t>(R::DIAG0)) {
+                ++g_echo_comfe_cnt;
+                g_need_reinit = true;
+            } else {
+                ++g_echo_fail_cnt;
+            }
+            g_echo_ok = false;
+        }
+    }
+    g_last_tx_reg = addr_from_frame(tx);
+    return rx;
 }
 
 void tle_write(uint16_t addr, uint8_t data) noexcept {
-    cs_low();
-    (void)spi2_txrx(frame(addr, data, true));
-    cs_high();
+    (void)spi_xfer(frame(addr, data, true));
 }
 
 uint8_t tle_read(uint16_t addr) noexcept {
-    // 1ª transacção: comando de leitura. O conteúdo é carregado no shift
-    // register de saída na borda de subida de CSN.
-    cs_low();
-    (void)spi2_txrx(frame(addr, 0u, false));
-    cs_high();
-    // 2ª transacção: recolhe a resposta. Reemite o mesmo comando de leitura
-    // para não provocar escrita acidental.
-    cs_low();
-    const uint16_t resp = spi2_txrx(frame(addr, 0u, false));
-    cs_high();
+    // 1ª transacção: comando de leitura. Conteúdo carrega no SDO na subida CSN.
+    (void)spi_xfer(frame(addr, 0u, false));
+    // 2ª: recolhe a resposta (eco do 1º comando = addr + data).
+    const uint16_t resp = spi_xfer(frame(addr, 0u, false));
     return static_cast<uint8_t>((resp >> 8u) & 0xFFu);
 }
 
@@ -124,54 +161,25 @@ bool write_verify(uint16_t addr, uint8_t data) noexcept {
     return tle_read(addr) == data;
 }
 
-// ── Fingerprint do mapa de registadores ──────────────────────────────────────
-// PROBLEMA QUE ISTO RESOLVE: `write_verify()` valida o caminho de escrita, mas é
-// cego ao caso perigoso — se um endereço estiver errado mas calhar noutro
-// registador escrevível, a escrita "sucede", a releitura confere e o CI fica
-// configurado noutra coisa qualquer. Foi exactamente assim que o driver antigo
-// (mapa inventado) pareceu funcionar, e é o padrão de flash-nscr-nssr.
-//
-// COMO DISCRIMINA: os registadores de configuração têm valores de reset
-// documentados (Table 50). Lê-los ANTES de qualquer escrita e comparar prova, de
-// uma vez só: que o CI está presente, que o link SPI está vivo, que o formato do
-// frame (ordem de bits, largura, R/W) está certo, e que os endereços apontam
-// para os registadores que julgamos. Qualquer um destes errado faz TODAS as
-// leituras divergirem.
-//
-// ⚠️ ESCOLHA DOS REGISTADORES — não é arbitrária:
-//  • só registadores de CONFIGURAÇÃO. Os de estado/contador (WWDStat, TECStat,
-//    ambos reset 0x30) derivam com o estado do CI → dariam falso negativo.
-//  • valores DISTINTIVOS entre si. Um conjunto cheio de 0x3F (OutConfig1/2/4/5)
-//    não discrimina: um deslocamento de endereço que caia noutro 0x3F passa
-//    despercebido. Daí A4 / 0D / 09 / 47 / 03 / F7 / 30.
-//  • NENHUM valor de fronteira (0x00 ou 0xFF). Esta é subtil e importa para o
-//    diagnóstico: num barramento morto o MISO flutua para um dos extremos e
-//    todas as leituras dão 0x00 ou 0xFF. Se o conjunto incluísse OutConfig0
-//    (reset 0xFF), essa entrada passaria POR COINCIDÊNCIA num flutuar-alto, e a
-//    máscara viria 0xBF em vez de cheia — a parecer "mapa parcialmente errado"
-//    quando o problema é SPI mudo, mandando caçar endereços em vão. Sem valores
-//    de fronteira, barramento morto ⇒ SEMPRE todas as entradas divergem.
-//  • tem de correr ANTES de configure() — depois da primeira escrita os valores
-//    de reset desaparecem.
+// ── Fingerprint CONSULTIVO (não bloqueante) ──────────────────────────────────
+// Reduzido a endereços que o rusEFI também usa (mapa confirmado offline).
+// Valores de reset NÃO têm segunda fonte — um typo latched mataria INJ num CI
+// saudável. O gate de segurança é o eco de endereço + write_verify.
+// Ver docs/hw/tle8888_crosscheck.md §3 e política no interface_board_v1.md.
 struct ResetFingerprint {
     uint16_t addr;
     uint8_t  expected;
 };
 
 constexpr ResetFingerprint kResetFingerprint[] = {
-    { R::COM_CONFIG0, 0xA4u },
-    { R::COM_CONFIG1, 0x0Du },
     { R::OP_CONFIG0,  0x09u },
-    { R::WD_CONFIG0,  0x47u },
-    { R::WD_CONFIG1,  0x03u },
-    { R::FWD_CONFIG,  0xF7u },
     { R::OUT_CONFIG3, 0x30u },
 };
 constexpr uint8_t kFingerprintCount =
     static_cast<uint8_t>(sizeof(kResetFingerprint) / sizeof(kResetFingerprint[0]));
 static_assert(kFingerprintCount <= 8u, "g_map_mismatch só tem 8 bits");
 
-bool verify_register_map() noexcept {
+void verify_register_map_advisory() noexcept {
     uint8_t mismatch = 0u;
     for (uint8_t i = 0u; i < kFingerprintCount; ++i) {
         if (tle_read(kResetFingerprint[i].addr) != kResetFingerprint[i].expected) {
@@ -179,7 +187,6 @@ bool verify_register_map() noexcept {
         }
     }
     g_map_mismatch = mismatch;
-    return mismatch == 0u;
 }
 
 // ── Configuração ─────────────────────────────────────────────────────────────
@@ -261,53 +268,53 @@ void tle8888_init() noexcept {
     SPI2_CR2  = 1u;
     SPI2_CR1  = SPI_CR1_SPE;
 
-    // ── 4. Fingerprint do mapa de registadores ──────────────────────────────
-    // TEM de vir antes de qualquer escrita: depois da primeira, os valores de
-    // reset desaparecem e o teste deixa de significar nada.
-    // Falhar aqui é BLOQUEANTE — se o mapa não confere, configurar às cegas
-    // escreveria em registadores errados, e é preferível arrancar sem injecção
-    // nem ignição (power_stage_enable(false)) a arrancar com o CI num estado
-    // desconhecido.
-    if (!verify_register_map()) {
-        ++g_fault_count;
-        g_comms_ok   = false;
-        g_configured = false;
-        return;
-    }
+    // ── 4. Fingerprint CONSULTIVO (não bloqueia) ────────────────────────────
+    // Antes de qualquer escrita (valores de reset). Falhar aqui NÃO aborta:
+    // 5/7 entradas antigas usavam regs sem 2ª fonte (rusEFI). Telemetria só.
+    g_last_tx_reg = kRegInvalid;
+    g_echo_ok     = true;
+    g_need_reinit = false;
+    verify_register_map_advisory();
 
-    // ── 5. Unlock + verificação de comunicação (caminho de ESCRITA) ──────────
-    // Unlock tem de preceder qualquer write_verify: com o chip locked as
-    // escritas de config não pegam e o verify falha num CI saudável.
-    // Não existe registador de "chip ID". O fingerprint validou leitura/mapa;
-    // isto valida a escrita, relendo DDConfig0 com o valor de operação.
+    // ── 5. Unlock + verificação de comunicação (caminho de ESCRITA + eco) ──
+    // Unlock tem de preceder qualquer write_verify. O eco de endereço (spi_xfer)
+    // é o gate contínuo: prova link, frame e round-trip sem depender dos resets.
     tle_write(R::CMD_LOCK, R::CMD_CHIP_UNLOCK_DATA);
-    g_comms_ok = write_verify(R::DD_CONFIG0, R::DD_CONFIG0_OPENEMS);
+    g_comms_ok = write_verify(R::DD_CONFIG0, R::DD_CONFIG0_OPENEMS) && g_echo_ok;
     if (!g_comms_ok) {
         ++g_fault_count;
         g_configured = false;
         return;
     }
 
-    g_configured = configure();
-    if (!g_configured) { ++g_fault_count; }
+    g_configured = configure() && g_echo_ok;
+    if (!g_configured) {
+        g_comms_ok = false;
+        ++g_fault_count;
+    }
 }
 
 void tle8888_poll_diag() noexcept {
-    // Reprovação do fingerprint é LATCH: se o mapa de registadores não confere
-    // com o silício, nunca tentar recuperar. Sem isto, a recuperação abaixo
-    // (que só usa write_verify) marcaria o CI como bom e mascararia justamente
-    // a falha que o fingerprint existe para tornar visível. E não dá para
-    // reexecutar o fingerprint aqui: os valores de reset desapareceram na
-    // primeira escrita.
-    if (g_map_mismatch != 0u) { return; }
+    // Eco partido / POR / WDR / COMFE → reconfigurar (não latch de fingerprint).
+    if (g_need_reinit || !g_echo_ok) {
+        g_comms_ok    = false;
+        g_configured  = false;
+        g_need_reinit = false;
+        g_echo_ok     = true;
+        g_last_tx_reg = kRegInvalid;
+    }
 
     if (!g_comms_ok || !g_configured) {
         // Tenta reestabelecer: unlock → escrita → configuração completa.
         tle_write(R::CMD_LOCK, R::CMD_CHIP_UNLOCK_DATA);
-        g_comms_ok = write_verify(R::DD_CONFIG0, R::DD_CONFIG0_OPENEMS);
+        g_comms_ok = write_verify(R::DD_CONFIG0, R::DD_CONFIG0_OPENEMS) && g_echo_ok;
         if (!g_comms_ok) { ++g_fault_count; return; }
-        g_configured = configure();
-        if (!g_configured) { ++g_fault_count; return; }
+        g_configured = configure() && g_echo_ok;
+        if (!g_configured) {
+            g_comms_ok = false;
+            ++g_fault_count;
+            return;
+        }
     }
 
     // ── Diagnóstico por canal ───────────────────────────────────────────────
@@ -382,6 +389,18 @@ uint8_t tle8888_wd_status(uint8_t idx) noexcept {
 
 uint8_t tle8888_map_mismatch() noexcept { return g_map_mismatch; }
 
+uint8_t tle8888_echo_status(uint8_t idx) noexcept {
+    // 0=ok(1/0) 1=por 2=wdr 3=comfe 4=fail  — telemetria / bring-up
+    switch (idx) {
+    case 0: return g_echo_ok ? 1u : 0u;
+    case 1: return g_echo_por_cnt;
+    case 2: return g_echo_wdr_cnt;
+    case 3: return g_echo_comfe_cnt;
+    case 4: return g_echo_fail_cnt;
+    default: return 0u;
+    }
+}
+
 }  // namespace ems::hal
 
 /*
@@ -447,6 +466,7 @@ uint8_t tle8888_fault_bitmap() noexcept { return 0u; }
 uint8_t tle8888_vrs_diag() noexcept { return 0u; }
 uint8_t tle8888_wd_status(uint8_t) noexcept { return 0u; }
 uint8_t tle8888_map_mismatch() noexcept { return 0u; }
+uint8_t tle8888_echo_status(uint8_t) noexcept { return 0u; }
 }
 
 #endif

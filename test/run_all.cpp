@@ -238,6 +238,10 @@ int main(void) {
     printf("\n=== XTAU AUTOCALIB ===");
     test_xtau_autocalib_all();
 
+    // ── PAGE0 TRIMS / DRIVEABILITY (boot restore) ───────────────────────
+    printf("\n=== PAGE0 TRIMS/DRIVEABILITY ===");
+    test_page0_trims_driveability();
+
     // ── ECU SCHED FASE 2 ────────────────────────────────────────────────
     printf("\n=== ECU SCHED (fase 2) ===");
     test_ecu_sched_hardware_init();

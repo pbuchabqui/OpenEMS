@@ -518,6 +518,9 @@ static void openems_init() noexcept {
 	// Calibração de sensores persistida (página 0, bytes 16-55) → drivers
 	ems::engine::apply_etb_calibration_from_page(g_calib_page0 + 16, 40u);
 	ems::engine::push_sensor_calibration_to_drivers();
+	// Trims / CMP window / anti-jerk / rev limiter / ckp skip (56-76).
+	// Antes só a UI aplicava isto — reboot perdia a calibração.
+	ems::engine::apply_page0_trims_driveability(g_calib_page0, kCalibPageBytes);
 	// Closed-loop / LEARN (page0[80-85])
 	ems::engine::closed_loop_enable =
 	    (g_calib_page0[80] != 0u) ? 1u : 0u;
@@ -568,9 +571,6 @@ static void openems_init() noexcept {
 		ems::engine::launch_tc_apply_from_page0(g_calib_page0, kCalibPageBytes);
 		// CAN RX map: gear / vehicle / driven wheel (216-245)
 		ems::app::can_rx_map_apply_from_page0(g_calib_page0, kCalibPageBytes);
-		// CKP skip pós-silêncio (byte 71, era pad — blob antigo = 0 = off)
-		ems::engine::ckp_skip_pulses_after_gap =
-		    (g_calib_page0[71] > 57u) ? 57u : g_calib_page0[71];
 		// MAP janela angular (246-251); len=0 não substitui o default
 		ems::engine::map_window_enable = (g_calib_page0[246] != 0u) ? 1u : 0u;
 		{

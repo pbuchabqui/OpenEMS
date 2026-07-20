@@ -148,8 +148,10 @@ comandos, `write_verify` só nos registadores de armazenamento. Ver `src/hal/tle
 fire-and-forget e nunca os relê. Não podem passar pelo nosso `write_verify()`: a releitura falharia num
 CI saudável e abortaria a init.
 
-⚠️ **Ainda por implementar:** validação por eco de endereço (esta secção §4) e despromoção do
-fingerprint a consultivo.
+✅ **Implementado (2026-07-20):** `spi_xfer()` valida o eco de endereço a cada
+frame; POR/WDR/COMFE forçam reconfig em `poll_diag`. Fingerprint reduzido a
+`OpConfig0`+`OutConfig3` e **não bloqueia** `tle8888_ok()` (telemetria em
+`reserved[49]`).
 
 ---
 

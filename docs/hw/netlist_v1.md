@@ -377,14 +377,7 @@ o que tira a decisão do caminho crítico. Desenho apurado em 2026-07-20:
 
 ---
 
-## 🐛 Bug latente pré-existente (independente desta placa)
+## ✅ Bug page0 56–76 — **corrigido**
 
-Descoberto ao desenhar o item 1 acima, e **não corrigido**:
-
-**Os bytes 56-65 de page0 não são restaurados da flash no arranque.** `cmp_window_open_tooth`,
-`cmp_window_close_tooth` e os trims de combustível por cilindro são serializados e aplicados na escrita
-por UI, mas `grep cmp_window src/main_stm32.cpp` → **0 ocorrências**. Ou seja: configuram-se, gravam-se
-em flash, e **não sobrevivem a um reboot**.
-
-Corrigir em separado — não é específico da placa de interface, mas qualquer knob novo que copie este
-padrão herda o defeito.
+Os bytes 56–76 (trims, cmp_window, anti-jerk, rev limiter, ckp skip) passam por
+`apply_page0_trims_driveability()` no boot (`main_stm32`) e na escrita UI.

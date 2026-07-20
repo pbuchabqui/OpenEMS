@@ -303,27 +303,9 @@ parte do risco de mapa inventado.**
 3. **DD + OE** para INJ/IGN/VVT/relés (`DD_CONFIG0/1/3`, `OE_CONFIG0/1/3`)
 4. **`CMD_OE_SET`** (`0x1C ← 0x02`) — comando, sem `write_verify`
 
-⚠️ **Ainda por implementar:** eco de endereço como gate contínuo; fingerprint despromovido a
-consultivo (política abaixo). **Nunca clockou silício** — só o bring-up decide.
-
-### 🚨 PENDENTE — política do fingerprint a rever (decidido, não implementado)
-
-O cruzamento mostrou que **5 dos 7 registadores do fingerprint** (`ComConfig0/1`, `WdConfig0/1`,
-`FWDConfig`) usam endereços que o rusEFI **não** confirma, e que **nenhum valor de reset** foi
-confirmado por segunda fonte. Como o gate é hoje **bloqueante e latched**, um único valor mal
-transcrito deixaria um CI saudável **permanentemente sem injeção**.
-
-**Decidido (2026-07-20), por implementar:**
-- **Despromover o fingerprint a consultivo** (mantém `reserved[49]` na telemetria), reconstruído só
-  sobre os endereços confirmados: `OpConfig0` (0x4E) e `OutConfig3` (0x43).
-- **O gate de segurança passa a ser a validação por eco de endereço** — a resposta SPI do TLE8888
-  devolve o endereço do registador, o que prova link, frame e round-trip **continuamente e sem depender
-  da nossa leitura do datasheet**. Contadores para POR (`OpStat0`), watchdog reset (`FWDStat1`) e COMFE
-  (`Diag0`). Ver `tle8888_crosscheck.md` §4.
-
-✅ **Facto verificado, contra uma sugestão de usar soft-reset:** o `configure()` só escreve `0x57`,
-`0x5A`, `0x4A` e `0x5B` — **nenhum** dos registadores do fingerprint. Os valores de reset **sobrevivem**
-a um reboot morno do MCU, logo `CMD_SR` não é necessário para tornar o fingerprint determinístico.
+✅ **Eco + fingerprint consultivo (2026-07-20):** gate contínuo por eco de endereço (POR/WDR/COMFE
+→ reconfig); fingerprint só `OpConfig0`+`OutConfig3`, telemetria em `reserved[49]`, **não** bloqueia
+`tle8888_ok()`. **Nunca clockou silício** — só o bring-up decide.
 
 ---
 

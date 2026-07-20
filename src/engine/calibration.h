@@ -226,6 +226,14 @@ constexpr uint16_t kLaunchTcPage0Len = 25u;  // 191..215 inclusive
 void launch_tc_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept;
 void launch_tc_apply_from_page0(const uint8_t* page0, uint16_t len) noexcept;
 
+// page0 bytes 56–76: trims por cilindro, janela CMP, anti-jerk, rev limiter,
+// ckp skip. Partilhado entre boot (main_stm32) e escrita UI — antes o boot
+// saltava 56–70 e só aplicava o byte 71, logo trims/cmp_window/antijerk não
+// sobreviviam a reboot. Safe no-op se len < 77.
+constexpr uint16_t kTrimsDrivePage0Off = 56u;
+constexpr uint16_t kTrimsDrivePage0End = 77u;  // exclusive
+void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept;
+
 // Rev limiter: retardo progressivo de faísca removido em b565491 (rusEFI-style:
 // corte só de combustível, faísca nunca cortada). Offsets 80-85 da page 0
 // ficam reservados para não partir o layout do protocolo.

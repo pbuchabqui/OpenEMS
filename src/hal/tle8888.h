@@ -35,21 +35,15 @@ uint8_t tle8888_vrs_diag() noexcept;
 // diagnosticável em vez de misteriosa.
 uint8_t tle8888_wd_status(uint8_t idx) noexcept;
 
-// Fingerprint do mapa de registadores: bitmask das entradas cujo valor de reset
-// não bateu com o datasheet (0 = mapa confirmado contra o silício).
-//
-// Lido no arranque, ANTES de qualquer escrita, sobre registadores de
-// configuração com valores de reset distintivos. Prova de uma vez só que o CI
-// está presente, que o SPI está vivo, que o formato do frame está certo e que os
-// endereços apontam para os registadores que julgamos.
-//
-// Existe porque write_verify() é cego ao caso perigoso: um endereço errado que
-// calhe noutro registador escrevível faz a escrita "suceder" e a releitura
-// conferir, deixando o CI configurado noutra coisa. Foi assim que o driver
-// antigo, escrito contra um mapa inventado, pareceu funcionar.
-//
-// Diferente de zero é BLOQUEANTE e fica latched: tle8888_ok() nunca passa a
-// true e a recuperação em poll_diag não é tentada.
+// Fingerprint CONSULTIVO do mapa de registadores (bitmask; 0 = ok).
+// Só OpConfig0 + OutConfig3 (endereços confirmados pelo rusEFI). NÃO bloqueia
+// tle8888_ok() — um valor de reset mal transcrito não pode deixar o motor sem
+// injecção. Telemetria: reserved[49]. Gate de segurança = eco de endereço.
 uint8_t tle8888_map_mismatch() noexcept;
+
+// Eco de endereço SPI (estilo rusEFI). idx:
+//   0 = echo_ok (1/0) · 1 = POR count · 2 = WDR count · 3 = COMFE · 4 = fail
+// Divergência de eco (excepto 1ª transacção) força reconfig em poll_diag.
+uint8_t tle8888_echo_status(uint8_t idx) noexcept;
 
 }  // namespace ems::hal
