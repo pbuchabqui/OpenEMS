@@ -1,5 +1,16 @@
 # Condicionamento de entrada VR (CKP/CMP) — MAX9926
 
+> **⚠️ SUPERSEDIDO para o plano v1 — ver `docs/hw/interface_board_v1.md`.**
+> O CKP passou a usar a **interface VR integrada do TLE8888-1QK**, que tem a
+> mesma arquitectura do MAX9924 modo A2 (comutação no **zero-crossing**, armada
+> por detecção de pico) e ainda traz **clamp de entrada integrado** (50 mA,
+> 2–3 V) e **diagnóstico do sensor** (short-to-GND, short-to-BAT, open-load e
+> leitura ADC da tensão de entrada) — coisas que o MAX9924 não tem. O `VROUT` é
+> push-pull, portanto sem pull-up externo.
+> O **CMP é Hall** e vai direto ao `PA1`, sem condicionador (o TLE8888 tem um só
+> canal VR; o "modo Hall" é modo *daquele* canal, não um segundo canal).
+> Este documento fica como referência caso se opte por condicionador externo.
+
 Estado atual: PA0 (TIM5_CH1/CKP) e PA1 (TIM5_CH2/CMP) recebem sinal **digital**
 direto (estimulador ESP32 / sensor Hall), com pull-down interno e filtro IC
 N8/DTS8 ≈256 ns (`src/hal/stm32h562/timer.cpp:41-64`). Isto NÃO serve para

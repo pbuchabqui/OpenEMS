@@ -1,5 +1,16 @@
 # OpenEMS — Electrical Wiring Diagram
 
+> **⚠️⚠️ DOCUMENTO DESACTUALIZADO — ver `docs/hw/interface_board_v1.md`.**
+> Além do mapa de pinos, os **números do TLE8888 aqui estão errados**: este
+> ficheiro diz "INJ low-side OC 10 A" e "IGN push-pull OC 6 A"; o datasheet
+> **TLE8888-1QK Rev 1.2** dá **injectores 2,2 A** (OUT1–4) e **ignição = driver
+> de gate push-pull de 20 mA** para IGBT (IGN1–4), além de meias-pontes de
+> apenas **0,6 A**. A descrição do condicionador VRS ("threshold adaptativo,
+> histerese 20 mV") também está errada — a interface VR do TLE8888 comuta no
+> **zero-crossing** com armamento por detecção de pico.
+> Estes erros propagaram-se para `src/hal/tle8888.cpp`. Não usar este ficheiro
+> como fonte para BOM, registadores ou capacidade de saída.
+>
 > **⚠️ STALE DIAGRAM:** ASCII abaixo misturam mapas antigos (TIM OC / PE* / dual-use).
 > **Fonte de verdade do pinout:** `docs/hw/pinout.md` — RGT6 (default) vs VGT6.
 > Este ficheiro serve apenas os esquemáticos eléctricos (alimentação,
