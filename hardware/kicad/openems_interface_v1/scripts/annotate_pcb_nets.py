@@ -70,6 +70,13 @@ J1 = {
     30: "CMP2_GND",
     31: "TPS_INDEP",
 }
+# Star ground NetTie NT1 (KiCad NetTie-4): pads 1..4
+NETTIE = {
+    1: "PGND",
+    2: "SGND",
+    3: "AGND",
+    4: "SHIELD_GND",
+}
 
 
 def uid() -> str:
@@ -136,7 +143,7 @@ def main() -> None:
     for start, end, block in footprint_blocks(text):
         out.append(text[pos:start])
         ref = get_ref(block)
-        pinmap = {"J1": J1, "J2": J2}.get(ref or "")
+        pinmap = {"J1": J1, "J2": J2, "NT1": NETTIE}.get(ref or "")
         if pinmap:
 
             def repl_pad(m: re.Match[str]) -> str:
@@ -155,8 +162,14 @@ def main() -> None:
                     )
                 return full[:-1] + f' (net {code} "{netn}")' + ")"
 
+            # Quoted pad numbers (OpenEMS generator) and bare (rusEFI legacy)
             block = re.sub(
                 r'\(pad "(\d+)" ((?:[^()]|\([^()]*\))*)\)',
+                repl_pad,
+                block,
+            )
+            block = re.sub(
+                r"\(pad (\d+) ((?:[^()]|\([^()]*\))*)\)",
                 repl_pad,
                 block,
             )

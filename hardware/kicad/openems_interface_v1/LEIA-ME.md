@@ -64,6 +64,11 @@ python3 hardware/kicad/openems_interface_v1/scripts/generate_project.py
 4. Layout: star, pours, CKP longe de potência.
 5. Gerber só depois.
 
+## Speeduino / rusEFI
+
+Ver `docs/hw/kicad_vendor_review.md`. J1 usa footprint **rusEFI AMPSEAL 35 RA**;
+J2 o nosso TE 23; star **NetTie-4** (NT1).
+
 ## Bibliotecas
 
 - `libs/OpenEMS.kicad_sym` + `sym-lib-table`

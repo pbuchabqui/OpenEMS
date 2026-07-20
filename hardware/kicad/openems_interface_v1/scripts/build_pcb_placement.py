@@ -32,6 +32,9 @@ def embed_footprint(mod_text: str, lib_id: str, ref: str, at: tuple[float, float
     body = re.sub(r"^\(version [^)]+\)\s*", "", body)
     body = re.sub(r"^\(generator [^)]+\)\s*", "", body)
     body = body.replace('"REF**"', f'"{ref}"')
+    # rusEFI legacy: (fp_text reference REF** …) without quotes
+    body = re.sub(r"\(fp_text reference REF\*\*", f'(fp_text reference "{ref}"', body)
+    body = re.sub(r"\(fp_text value [^\n(]+", f'(fp_text value "{lib_id.split(":")[-1]}"', body, count=1)
     return (
         f'(footprint "{lib_id}" (layer "F.Cu")\n'
         f"    (tstamp {uid()})\n"
@@ -85,7 +88,10 @@ def gr_text(s: str, at: tuple[float, float], layer: str = "Cmts.User", size: flo
 
 
 def build() -> str:
-    j1_x, j1_y = 10.0, 82.5
+    # J1: rusEFI AMPSEAL_35 origin is geometric center (pad1 at -22,-4).
+    # Place so pad1 ≈ (10, 82.5): at = (10+22, 82.5+4) = (32, 86.5)
+    j1_x, j1_y = 32.0, 86.5
+    # J2: our TE_770669 origin at pad1; keep pin1 near (78, 82.5)
     j2_x, j2_y = 78.0, 82.5
     weact_sw = ((W - 38.62) / 2, 8.0)
     hdr_y = weact_sw[1] + 4.0
@@ -97,12 +103,26 @@ def build() -> str:
         (weact_sw[0] + 2.80, weact_sw[1] + 66.30),
         (weact_sw[0] + 33.28, weact_sw[1] + 66.30),
     ]
+    # Star NetTie near WeAct SW (outside keepout)
+    nettie_at = (weact_sw[0] - 8.0, weact_sw[1] + 2.0)
 
     parts = [
-        embed_footprint(load_mod("TE_776180_AMPSEAL_35_RA"), "OpenEMS:TE_776180_AMPSEAL_35_RA", "J1", (j1_x, j1_y)),
+        # Prefer rusEFI production footprint for J1 35 (tags 776180 / 1-776180)
+        embed_footprint(
+            load_mod("rusEFI_AMPSEAL_35_RA_776180"),
+            "OpenEMS:rusEFI_AMPSEAL_35_RA_776180",
+            "J1",
+            (j1_x, j1_y),
+        ),
         embed_footprint(load_mod("TE_770669_AMPSEAL_23_RA"), "OpenEMS:TE_770669_AMPSEAL_23_RA", "J2", (j2_x, j2_y)),
         embed_footprint(load_mod("WeAct_PinHeader_2x25_P2.54mm"), "OpenEMS:WeAct_PinHeader_2x25_P2.54mm", "J3", (j3_x, hdr_y)),
         embed_footprint(load_mod("WeAct_PinHeader_2x25_P2.54mm"), "OpenEMS:WeAct_PinHeader_2x25_P2.54mm", "J4", (j4_x, hdr_y)),
+        embed_footprint(
+            load_mod("NetTie-4_THT_Pad1.0mm"),
+            "OpenEMS:NetTie-4_THT_Pad1.0mm",
+            "NT1",
+            nettie_at,
+        ),
     ]
     for i, (hx, hy) in enumerate(holes, 1):
         parts.append(mounting_hole(f"H{i}", (hx, hy), 3.2))

@@ -2,10 +2,14 @@
 
 ## TE AMPSEAL RA
 
-| Footprint | PN alvo | Pins | Fonte |
-|-----------|---------|-----:|-------|
-| `TE_770669_AMPSEAL_23_RA` | `1-770669-1` (gold, black) | 23 | `docs/hw/TE_770669_header_RA_23.pdf` + padrão KiCad `TE_AMPSEAL_1-776087` |
-| `TE_776180_AMPSEAL_35_RA` | `1-776180-1` (gold, black) | 35 | `docs/hw/TE_776180_header_RA_35.pdf` (face: 1–12 / 13–23 / 24–35) |
+| Footprint | PN alvo | Pins | Fonte | Uso PCB |
+|-----------|---------|-----:|-------|---------|
+| `rusEFI_AMPSEAL_35_RA_776180` | `1-776180-1` | 35 | **rusEFI** `kicad-legacy` `AMPSEAL_35_RIGHT_ANGLE` | **J1 preferido** |
+| `TE_776180_AMPSEAL_35_RA` | `1-776180-1` | 35 | TE PDF + gerador OpenEMS (mesma grelha) | backup |
+| `TE_770669_AMPSEAL_23_RA` | `1-770669-1` | 23 | TE PDF + padrão KiCad `TE_AMPSEAL_1-776087` | **J2** |
+| `NetTie-4_THT_Pad1.0mm` | — | 4 | KiCad system | **NT1 star GND** |
+
+Revisão completa Speeduino/rusEFI: `docs/hw/kicad_vendor_review.md`.
 
 ### Dimensões PCB (TE, 1.57 mm board)
 

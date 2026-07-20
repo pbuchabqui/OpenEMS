@@ -30,6 +30,7 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 | **Forma / furos / headers do coreboard WeAct VGT6** | `weact_h562_coreboard.md` | assumir board 64 pinos |
 | **Esquemático WeAct V1.0 (P1/P2 nets)** | `weact_h562_schematic.md` + `weact_h562_v10_schdoc.pdf` | — |
 | **AMPSEAL 35/23 plugues + headers PCB** | `ampseal_connectors.md` + PDFs TE | inventar footprint |
+| **KiCad libs Speeduino/rusEFI (review)** | `kicad_vendor_review.md` | inventar footprint se já existe upstream |
 | **BOM candidatos** | `bom_v1_candidates.md` | — |
 | **Esquemático modular (sheets)** | `schematic/README.md` | um PDF monólito sem revisão |
 | ~~Condicionamento VR discreto~~ | `vr_input_conditioning.md` | **supersedido** (MAX9926/9924 saiu) |
