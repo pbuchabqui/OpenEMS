@@ -27,6 +27,7 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 | Contraprova do mapa TLE8888 | `tle8888_crosscheck.md` | — |
 | **Pinos de package LQFP-100 do TLE8888** | `tle8888_pinout.md` | inventar números |
 | Registadores/periféricos do MCU | `stm32h562_ref.md` | — |
+| **Forma / furos / headers do coreboard WeAct VGT6** | `weact_h562_coreboard.md` | assumir board 64 pinos |
 | ~~Condicionamento VR discreto~~ | `vr_input_conditioning.md` | **supersedido** (MAX9926/9924 saiu) |
 
 ### A regra
