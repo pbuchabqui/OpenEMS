@@ -64,26 +64,41 @@ proporcional à rotação — não é "absorvido pela calibração", como é fá
 
 ### O balanço final, com números reais
 
+⚠️ **Tabela revista (2026-07-20): o front-end mudou de MAX9924 para a interface VR do TLE8888.** As duas
+linhas de `tPDZ`/`tPD-JITTER` abaixo eram do MAX9924 e **não se aplicam** — ficam registadas só como
+referência histórica, porque a conclusão que delas se tirou continua a ser invocada.
+
 | Fonte de erro | Valor | @8000 rpm |
 |---|---|---|
 | Quantização TIM5 (16 ns) | 16 ns | 0,0008° |
-| **MAX9924 zero-crossing** (`tPDZ`, datasheet) | **50 ns** | **0,0024°** |
-| **MAX9924 jitter** (`tPD-JITTER`) | **20 ns** | **0,001°** |
+| **TLE8888 VR — threshold de zero-crossing** (`VVR,th` ±30 mV) | — | **0,0015°** (0,030° no cranking) |
+| **TLE8888 VR — atraso de propagação** | ⚠️ **NÃO ESPECIFICADO** | **desconhecido** |
 | Jitter do scheduler | ~0,4 µs | 0,019° |
 | **Runout da roda fônica / gap do sensor** | — | **0,1–0,5°** ← **piso** |
+| *(histórico) MAX9924 `tPDZ` / jitter — peça já não usada* | *50 / 20 ns* | *0,0024° / 0,001°* |
 
-**A conclusão que reordenou o projeto:** o front-end escolhido contribui **0,0024°** — 8× abaixo do
-jitter do scheduler e **40–200× abaixo do piso mecânico** da roda fônica. Timing de CKP **não é um
-problema neste projeto**, e não há trade-off a fazer na escolha do condicionador.
+**A conclusão, e o que dela sobrevive à troca de peça:** o termo que o front-end **garante** — a
+invariância com amplitude, via zero-crossing — dá 0,0015° a 8000 rpm, **ordens de grandeza abaixo do
+piso mecânico** de 0,1–0,5°. Nessa parte nada muda: timing de CKP não é um problema neste projeto.
+
+⚠️ **Mas o atraso de propagação deixou de ser um número garantido.** O MAX9924 dava `tPDZ` = 50 ns por
+datasheet; o TLE8888 **não especifica**. Isso é **dado ausente, não dado bom** — e é precisamente o termo
+que a relação 0,048°/µs converte em erro angular. Só deixa de importar se for medido: **passo 3 da
+verificação**. Um atraso de 1 µs daria 0,048° — ainda abaixo do piso, mas já não desprezável; 10 µs
+seriam 0,48°, acima dele. **Medir, não presumir.**
 
 Três coisas caem disso:
 
-1. **Compensação de atraso em firmware: CANCELADA.** O critério era "multiplicar o atraso real por
-   0,048°/µs e comparar com 0,1–0,5°". Deu 0,0024°. Não implementar, nem na v2.
-2. **O MAX9924 se justifica por CORREÇÃO, não por precisão** — imunidade a ruído, CMRR, e decodificar o
-   dente faltante com sinal fraco no cranking. Não por ser rápido (é rápido de sobra, e isso não importa).
-   Zero-crossing continua o modo certo porque a *variação* de threshold com amplitude seria o único termo
-   eletrônico capaz de estourar o piso mecânico — mas o zero-crossing simplesmente elimina esse termo.
+1. **Compensação de atraso em firmware: SUSPENSA, não cancelada.** ⚠️ **Revisto** — a versão anterior
+   dizia "CANCELADA... deu 0,0024°", número que era do MAX9924. Com o TLE8888 o atraso **não está
+   especificado**, portanto o critério original ("multiplicar o atraso real por 0,048°/µs e comparar com
+   0,1–0,5°") **ainda não pode ser aplicado**. Não implementar agora; **reavaliar com a medição do passo
+   3**. Se o atraso medido ficar em dezenas ou centenas de ns, cancela-se de vez.
+2. **O front-end justifica-se por CORREÇÃO, não por precisão** — imunidade a ruído e decodificar o dente
+   faltante com sinal fraco no cranking. Zero-crossing continua o modo certo porque a *variação* de
+   threshold com amplitude seria o único termo eletrônico capaz de estourar o piso mecânico — e o
+   zero-crossing elimina esse termo. Isto vale igualmente para o TLE8888, que usa a mesma arquitetura
+   (zero-crossing com armamento por deteção de pico) e ainda acrescenta clamp e diagnóstico integrados.
 3. **O refinamento que ainda paga é de AMPLITUDE, não de tempo.** MAP e TPS ratiométricos alimentam
    diretamente as tabelas de combustível e avanço, e **não têm piso mecânico nenhum**. Se houver orçamento
    para exatamente um refinamento, é o LDO limpo e a referência estável do bloco 1 — não o front-end do
@@ -185,7 +200,8 @@ MAX9924 · 4 MOSFETs de injetor + clamps · drivers de bobina · TJA1051 · driv
 · driver de relé principal · regulador 5 V · trackers de 5 V dos sensores ratiométricos · **drivers de solenoide de VVT e seus diodos de roda-livre**.
 
 ### O que permanece externo
-- **Ponte-H do ETB** (DRV8701 + FETs) — meias-pontes do CI são 0,6 A, falta uma ordem de grandeza.
+- **Ponte-H do ETB** (**BTS7960 @ 10 kHz** — decidido, ver bloco 8) — meias-pontes do CI são 0,6 A,
+  falta uma ordem de grandeza.
 - **EWG** (diferido de qualquer forma).
 - **LDO 3,3 V** para o MCU (o CI entrega 5 V).
 - Condicionamento analógico, divisor de VBATT, isolador USB.
@@ -575,8 +591,8 @@ Levantadas na revisão crítica. Nenhuma é de precisão, mas todas podem matar 
   integrada) — dimensionar para a corrente do CDC. Colocar o isolador **junto ao conector**, não junto
   ao MCU.
 - **Chicote é parte do projeto, não acessório.** Bitola por circuito (injetor e bobina puxam corrente),
-  pares trançados para CKP/CMP/CAN, blindagens com dreno num ponto só, fusíveis por ramo. O conector de
-  ~47 vias precisa disso definido para escolher o modelo.
+  pares trançados para CKP/CMP/CAN, blindagens com dreno num ponto só, fusíveis por ramo. ✅ **Conector
+  fechado**: AMPSEAL `776164-1` (35, sinais) + `770680-1` (23, potência) — ver a secção de montagem.
 
 ### 17. Logística do projeto
 - **KiCad, 4 camadas (decidido).** 4 camadas é o mínimo honesto para os pours PGND/SGND/AGND separados em
@@ -788,20 +804,25 @@ Nunca ligar injetores ou bobinas nas etapas 1–3.
    - Scope de INJ/IGN — latência e jitter contra o esperado (~0,4 µs / ~0,019° @8000), nos pinos
      `PE0/2/4/6` e `PE9/11/13/15` **com driver montado** e carga dummy resistiva.
    - Sync CKP/CMP de 200 a 8500 rpm com o estimulador (`tools/esp32_combined/`) **por TP-DIG** — a saída
-     digital do ESP32 não excita a entrada diferencial do MAX9924 —, verificando fase sequencial em todo
-     o range.
+     digital do ESP32 não excita a entrada diferencial VR do TLE8888 —, verificando fase sequencial em
+     todo o range.
 3. **Caracterizar o front-end CKP — a medição que valida o critério de precisão.**
    Não basta "sai pulso". **Por TP-VR**, com fonte analógica de verdade (gerador ou ESP32-DAC +
    atenuador): injetar seno VR de amplitude variável e medir o atraso entrada→`PA0` **em função da
    amplitude e da frequência**. Registrar **duas** grandezas, ambas importam (ver a correção do orçamento
    de erro): o **atraso médio** (vira a constante de compensação em firmware) e o **espalhamento**
    (parcela irrecuperável).
-   ⚠️ **Rebaixado a sanity check.** O datasheet dá `tPDZ` = 50 ns e `tPD-JITTER` = 20 ns — 0,0024° e
-   0,001° @8000 rpm, ordens de grandeza abaixo do piso mecânico. Não há o que qualificar aqui. O teste
-   serve só para **confirmar que a montagem está correta** (modo A2 ativo, pull-up certo, sem filtro
-   parasita) — se medir microssegundos em vez de dezenas de nanossegundos, há erro de montagem.
-   O que realmente importa medir nesta etapa é o **comportamento em amplitude baixa** (cranking): que o
-   threshold adaptativo arme e o dente faltante seja decodificado.
+   🚨 **RE-PROMOVIDO a medição obrigatória (2026-07-20). Não saltar.**
+   A versão anterior deste passo dizia "rebaixado a sanity check" porque "o datasheet dá `tPDZ` = 50 ns e
+   `tPD-JITTER` = 20 ns". **Esses números eram do MAX9924, peça que saiu da BOM.** O TLE8888 **não
+   especifica atraso de propagação** — é dado ausente, não dado bom, e esta é a única forma de o obter.
+   Pela relação 0,048°/µs: 1 µs → 0,048° (abaixo do piso, aceitável); **10 µs → 0,48°, acima do piso de
+   0,1–0,5°** e portanto material. **É a medição que decide se a compensação de atraso em firmware fica
+   cancelada ou tem de ser implementada** (ver ponto 1 do orçamento de erro).
+   Registrar as **duas** grandezas: **atraso médio** (viraria a constante de compensação) e
+   **espalhamento** (parcela irrecuperável).
+   Medir também o **comportamento em amplitude baixa** (cranking): que o modo auto adaptativo arme e o
+   dente faltante seja decodificado.
 4. **Ruído sob carga — o teste que fecha o loop do bloco 4b.** Com injetores e bobinas dummy comutando,
    observar o par CKP no scope e confirmar sync estável (`ckp_isr`, estado de sync via
    `/api/debug/counters`). Sintonizar os resistores de gate aqui. Este é o teste que teria pegado o
@@ -826,11 +847,17 @@ Nunca ligar injetores ou bobinas nas etapas 1–3.
 
 ### ✅ Resolvidas
 
-**1. Sensor CKP.** É **VR**. MAX9924 confirmado, sem risco de respin.
+**1. Sensor CKP.** É **VR** — confirmado, sem risco de respin. ⚠️ **O condicionador já NÃO é o MAX9924**:
+passou para a interface VR integrada do TLE8888 (bloco 2). O tipo de sensor é que se manteve.
 
-**2. Datasheet MAX9924.** Modo **A2** (`ZERO_EN`=GND, `INT_THRS`=GND, `BIAS`→GND, ref. interna 2,46 V),
-peça **MAX9924 single**, saída **open-drain** (pull-up 3,3 V, remover pull-down de `PA0`),
-`tPDZ`=50 ns / jitter 20 ns, desacoplamento 10 nF∥100 nF∥1 µF.
+**2. ~~Datasheet MAX9924~~ — 🚨 INTEIRAMENTE SUPERSEDIDO, NÃO SEGUIR.**
+Dizia: modo A2 (`ZERO_EN`/`INT_THRS`=GND, `BIAS`→GND), peça MAX9924 single, saída **open-drain** com
+pull-up 3,3 V e **remoção do pull-down de `PA0`**, `tPDZ`=50 ns / jitter 20 ns.
+**Nada disto se aplica.** O MAX9924 saiu da BOM; o `VROUT` do TLE8888 é **push-pull** (sem pull-up
+externo) e o **pull-down de `PA0` FICA** — removê-lo desfaz o fix de falso-sync
+([[ckp-noise-false-sync-injectors]]). Os 50 ns/20 ns eram daquela peça: o TLE8888 **não especifica**
+atraso de propagação (ver a tabela do orçamento de erro).
+Mantido só como registo de por que a peça foi trocada.
 
 **3. VREF+ — ✅ RESOLVIDO (2026-07-20): (a) VDDA 3,3 V filtrado, com (c) como DNP.**
 
