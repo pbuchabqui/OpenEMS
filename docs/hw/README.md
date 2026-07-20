@@ -156,9 +156,14 @@ Ver **`weact_h562_coreboard.md`** (PDF *Board Shape 外形* V1.0):
 **Ainda a medir na peça física:** altura total (USB-C + headers + componentes);
 confirmar pin 1 de cada conector face ao silkscreen.
 
-### AMPSEAL (ainda em aberto)
-**Desenhos da TE** para `776164-1` e `770680-1`: *customer drawing* do **header PCB**
-(não do plug), variante vertical vs cotovelo — DigiKey/Mouser/Farnell.
+### AMPSEAL — plugues ✅ / headers PCB ⚠️
+Family drawing **ENG_CD_2293782 E5** → `ampseal_connectors.md`:
+- Plug **35-pos** `776164-1`: envelope **A=63,4 / B=66 / C=27,45 mm**
+- Plug **23-pos** `770680-1`: **47,4 / 50 / 27,60 mm**
+- Mating headers: 35 → 776230/776180 (RED); 23 → 776200/770669 (GREEN)
+
+**Ainda em falta:** customer drawing do **header soldado na PCB** (pad pattern, pin 1,
+altura). Escolher vertical vs right-angle antes do outline final.
 
 ---
 
