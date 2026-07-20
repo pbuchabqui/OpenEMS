@@ -25,6 +25,7 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 | Alimentação, condicionamento, atuadores, conector, terra | `wiring_diagram.md` | — |
 | Ligações pino-a-pino (netlist) | `netlist_v1.md` | — |
 | Contraprova do mapa TLE8888 | `tle8888_crosscheck.md` | — |
+| **Pinos de package LQFP-100 do TLE8888** | `tle8888_pinout.md` | inventar números |
 | Registadores/periféricos do MCU | `stm32h562_ref.md` | — |
 | ~~Condicionamento VR discreto~~ | `vr_input_conditioning.md` | **supersedido** (MAX9926/9924 saiu) |
 
@@ -108,8 +109,7 @@ Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundament
 
 | Item | Estado |
 |---|---|
-| **Números físicos LQFP-100 do TLE8888** | Tirar da Table pinout do datasheet. MCU→INJEN/IGNEN já são PE1/PE3 (rusEFI usa GPIOs de board, não números de package fixos). **Bloqueia o layout.** |
-| **Dimensões do coreboard e das caixas AMPSEAL** | Medição manual + desenhos da TE. Ver §5. |
+| **Dimensões do coreboard e das caixas AMPSEAL** | Medição manual + desenhos da TE. Ver §5. **Bloqueia outline.** |
 | **Part numbers Tier C** | Buck, LDO, isolador USB, DC-DC isolado. |
 | **Bobinas (smart vs IGBT)** | IGN do TLE = push-pull **20 mA** (rusEFI/datasheet). Confirmar V_IH da bobina **antes** de fechar BOM — pode exigir IGBT externo. |
 | **Caixa, vedação, coating, orçamento** | Precisa de alvo de custo. |
@@ -136,7 +136,7 @@ confirmado contra fonte primária. Não construir em cima sem confirmar.
 | **Mapa de registadores do TLE8888** | ✅ **Endereços confirmados** por implementação independente (rusEFI) — ver `tle8888_crosscheck.md`. ⚠️ Mas **nenhum valor de reset** foi confirmado, e 5 dos 7 do fingerprint usam endereços que o rusEFI não toca. |
 | **Atraso de propagação do VR** | 🚨 **O datasheet NÃO especifica.** Os 50 ns que os docs citavam eram do **MAX9924**, peça que saiu da BOM. Medição obrigatória no passo 3. |
 | **VREF+ é pino separado no LQFP100** | ⚠️ Citação **não reconfirmada** — PDFs da ST deram timeout. Não afeta a decisão (a). |
-| **Números de pino do TLE8888** (ex. "pino 24/27") | ⚠️ Não verificados. |
+| **Números de pino do TLE8888** | ✅ **Verificados** DS Rev 1.2 §3 + rusEFI lib — `tle8888_pinout.md`. |
 | **Dimensões do coreboard** | ⚠️ Não obtidas — a repo pública da WeAct é a de **64 pinos**, não a VGT6. |
 | **Todo o driver TLE8888** | 🚨 **Nunca clockou silício.** Os 1234 host-tests mockam o SPI. Só o bring-up decide. |
 

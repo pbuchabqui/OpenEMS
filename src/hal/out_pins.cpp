@@ -22,7 +22,8 @@ uint32_t gpioa_bsrr = 0u, gpiob_bsrr = 0u, gpioc_bsrr = 0u, gpioe_bsrr = 0u;
 namespace ems::hal {
 
 #if EMS_BOARD_IS_VGT6
-// TLE8888: INJEN (pino 24) e IGNEN (pino 27) — enables de hardware.
+// TLE8888 LQFP-100: INJEN = package pin 24, IGNEN = pin 27 (DS Rev 1.2 §3;
+// docs/hw/tle8888_pinout.md). MCU: PE1 / PE3.
 static constexpr uint8_t kInjEnPin = 1U;  // PE1
 static constexpr uint8_t kIgnEnPin = 3U;  // PE3
 #endif

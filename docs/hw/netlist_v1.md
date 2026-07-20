@@ -13,8 +13,8 @@
 
 | Tier | O que é | Estado |
 |---|---|---|
-| **A — verificado** | Pinos do STM32 | ✅ Saem de `src/hal/out_pins.h` e `src/hal/adc.h`, que **compilam e correm**. Usar como estão. |
-| **B — funcional** | Pinos do TLE8888 (`IN1`, `OUT1`, `VRIN1`, …) | ⚠️ Os **nomes** são conhecidos e corretos. Os **números físicos do LQFP-100 NÃO estão verificados** — a mesma proveniência de "pino 24/27" para INJEN/IGNEN. **Tirar da tabela de pinout do datasheet ao desenhar.** Não inventar. |
+| **A — verificado** | Pinos do STM32 | ✅ `src/hal/out_pins.h` / `adc.h`. |
+| **A — TLE package** | Números LQFP-100 do TLE8888 | ✅ **Datasheet Rev 1.2 §3** + símbolo rusEFI `tle8888qk.lib`. Tabela completa: **`tle8888_pinout.md`**. |
 | **C — externo** | LDO, buck, TVS, BTS7960, headers AMPSEAL | ⚠️ Pinout de cada datasheet próprio. Marcado `TBD` onde não confirmado. |
 
 ⚠️ **Numeração de cavidade dos AMPSEAL:** as posições abaixo são **alocação lógica**. O mapeamento para
@@ -45,7 +45,7 @@ a numeração real de cavidade (3 filas) sai do desenho da TE. Manter o agrupame
 | `J2.VBAT+` (×2) | dreno do P-MOSFET | `VBAT_RAW` | 2 pinos em paralelo |
 | P-MOSFET | fusível 30 A | `VBAT_PROT` | proteção de polaridade invertida |
 | fusível | rail | `VBAT` | bulk 100 µF + 100 nF; **TVS SMBJ24CA** para `PGND` |
-| `VBAT` | `TLE8888.VBAT` | `VBAT` | bulk local 100 µF |
+| `VBAT` | `TLE8888` **pin 54** BAT (+ **87/90** BATPA/B) | `VBAT` | bulk local 100 µF |
 | `VBAT` | entrada do buck | `VBAT` | |
 | buck (**≥500 kHz, baixo ripple** — `TBD`, p.ex. TPS54302) | — | `+5V_MAIN` | 10 µF in / 22 µF + 100 nF out |
 | `+5V_MAIN` | entrada do LDO | — | |
@@ -54,8 +54,10 @@ a numeração real de cavidade (3 filas) sai do desenho da TE. Manter o agrupame
 | `+3V3` | ferrite → `MCU.VDDA` | `VDDA` | 1 µF ∥ 100 nF |
 | `VDDA` | `MCU.VREF+` | `VREF_P` | **VREF+ = VDDA filtrado** (opção (a)) |
 | — | `MCU.VSSA` | `AGND` | pour dedicado |
-| `TLE8888.DVT5V1` | rail de sensor A | `+5V_SENS_A` | tracker, ±10 mV |
-| `TLE8888.DVT5V2` | rail de sensor B | `+5V_SENS_B` | tracker |
+| `TLE8888` **pin 9** `T5V1` | rail de sensor A | `+5V_SENS_A` | tracker |
+| `TLE8888` **pin 10** `T5V2` | rail de sensor B | `+5V_SENS_B` | tracker |
+| `TLE8888` **pin 20** `VDDIO` | `+3V3` | — | lógica I/O + FCLN strap |
+| `TLE8888` PGND **25,50,75** + tab | `PGND` | — | pour potência |
 
 **DNP reservado — opção (c) de VREF+** (ver pendência 3): divisor `+5V_SENS_A` → ~3,0 V + buffer de
 baixa impedância → `VREF_P`. Footprint sim, **não popular**.
@@ -66,10 +68,10 @@ baixa impedância → `VREF_P`. Footprint sim, **não popular**.
 
 | De | Para | Net |
 |---|---|---|
-| `J1.CKP+` | `TLE8888.VRIN1` | `CKP_P` |
-| `J1.CKP−` | `TLE8888.VRIN2` | `CKP_N` |
+| `J1.CKP+` | `TLE8888` **pin 52** `VRIN1` | `CKP_P` |
+| `J1.CKP−` | `TLE8888` **pin 51** `VRIN2` | `CKP_N` |
 | `J1.CKP_SHLD` | `SHIELD_GND` | `SHIELD_GND` |
-| `TLE8888.VROUT` | **TP-DIG** → jumper 0 Ω → `MCU.PA0` | `CKP_DIG` |
+| `TLE8888` **pin 21** `VROUT` | **TP-DIG** → jumper 0 Ω → `MCU.PA0` | `CKP_DIG` |
 
 - ⚠️ **Sem rede externa** de resistor série + clamp: o clamp de entrada (50 mA) é interno ao CI.
 - ⚠️ **Sem pull-up** em `CKP_DIG` — `VROUT` é **push-pull**. O **pull-down interno do `PA0` mantém-se**
@@ -101,25 +103,24 @@ para **pull-up** no mesmo movimento — **o `PA0` não muda**.
 
 Pinos do MCU **tier A**, de `out_pins.h`. Atribuição `IN`→`OUT` é **fixa no silício**.
 
-| Canal | MCU | TLE8888 in | TLE8888 out | Conector |
+| Canal | MCU | TLE pin / símbolo | TLE out (package) | Conector |
 |---|---|---|---|---|
-| INJ1 | `PE0` | `IN1` | `OUT1` | `J2.INJ1` |
-| INJ2 | `PE2` | `IN2` | `OUT2` | `J2.INJ2` |
-| INJ3 | `PE4` | `IN3` | `OUT3` | `J2.INJ3` |
-| INJ4 | `PE6` | `IN4` | `OUT4` | `J2.INJ4` |
-| IGN1 | `PE9` | `IN5` | `IGN1` | `J2.IGN1` |
-| IGN2 | `PE11` | `IN6` | `IGN2` | `J2.IGN2` |
-| IGN3 | `PE13` | `IN7` | `IGN3` | `J2.IGN3` |
-| IGN4 | `PE15` | `IN8` | `IGN4` | `J2.IGN4` |
-| **INJEN** | `PE1` | `INJEN` | — | — |
-| **IGNEN** | `PE3` | `IGNEN` | — | — |
+| INJ1 | `PE0` | **28** IN1 | **59+60** OUT1A+OUT1B (juntos) | `J2.INJ1` |
+| INJ2 | `PE2` | **29** IN2 | **61+62** OUT2A+B | `J2.INJ2` |
+| INJ3 | `PE4` | **30** IN3 | **63+64** OUT3A+B | `J2.INJ3` |
+| INJ4 | `PE6` | **31** IN4 | **65+66** OUT4A+B | `J2.INJ4` |
+| IGN1 | `PE9` | **32** IN5 | **96** IGN1 | `J2.IGN1` |
+| IGN2 | `PE11` | **33** IN6 | **97** IGN2 | `J2.IGN2` |
+| IGN3 | `PE13` | **34** IN7 | **98** IGN3 | `J2.IGN3` |
+| IGN4 | `PE15` | **35** IN8 | **99** IGN4 | `J2.IGN4` |
+| **INJEN** | `PE1` | **24** INJEN | — | — |
+| **IGNEN** | `PE3` | **27** IGNEN | — | — |
 
-- **Sem resistores de pull-down de gate**: os `IN*` têm fonte de corrente de pull-down interna.
-- **Sem clamps de flyback** nos injetores: clamp integrado por canal.
-- `OUT1–OUT4` = low-side 2,2 A → **injetores de alta impedância**.
-- `IGN1–IGN4` = driver de gate push-pull 20 mA → **smart coils** (entrada lógica).
-- 🚨 **`+12 V` de injetores e bobinas NÃO passa pela placa** — vem do relé, no chicote. Ver a correção
-  no bloco do conector.
+- **Sem resistores de pull-down de gate**: os `IN*` têm pull-down interno.
+- **Sem clamps de flyback** nos injetores: clamp integrado.
+- `OUT1–OUT4` = low-side (A+B em paralelo) → **injetores HI-Z**.
+- `IGN1–4` = push-pull **gate IGBT** (20 mA) — validar bobina; não assumir smart-coil 5 V.
+- 🚨 **`+12 V` de injetores e bobinas NÃO passa pela placa** — relé no chicote.
 
 ---
 
@@ -171,28 +172,27 @@ em bancada antes do motor) é requisito de **projeto e de procedimento** — ver
 
 | De | Para | Net |
 |---|---|---|
-| `MCU.PB9` (FDCAN1_TX AF9) | `TLE8888.TXD` | `CAN_TX` |
-| `MCU.PB8` (FDCAN1_RX AF9) | `TLE8888.RXD` | `CAN_RX` |
-| `TLE8888.CANH` | `J1.CANH` | `CANH` |
-| `TLE8888.CANL` | `J1.CANL` | `CANL` |
+| `MCU.PB9` (FDCAN1_TX AF9) | `TLE8888` **pin 44** `CANTX` | `CAN_TX` |
+| `MCU.PB8` (FDCAN1_RX AF9) | `TLE8888` **pin 43** `CANRX` | `CAN_RX` |
+| `TLE8888` **pin 46** `CANH` | `J1.CANH` | `CANH` |
+| `TLE8888` **pin 47** `CANL` | `J1.CANL` | `CANL` |
 | `CANH`–`CANL` | resistor **120 Ω** com jumper | — |
 | `J1.CAN_SHLD` | `SHIELD_GND` | `SHIELD_GND` |
+| `+5V` adequado | **pin 45** `V5VCAN` | supply CAN (ver DS) |
 
 ---
 
 ## Blocos 10–11 — Relés
 
-| De | Para | Net |
-|---|---|---|
-| `MCU.PE10` | `TLE8888.IN9` | `PUMP_CMD` |
-| `MCU.PE12` | `TLE8888.IN10` | `FAN_CMD` |
-| `TLE8888.OUT14` | `J2.PUMP_RLY` | `PUMP_RLY_LS` | IN9, DD+OE via driver |
-| `TLE8888.OUT15` | `J2.FAN_RLY` | `FAN_RLY_LS` | IN10, DD+OE via driver |
-| `TLE8888.MR` (driver) | `J2.MAIN_RLY` | `MAIN_RLY_LS` | **DNP v1** — key-on directo; rusEFI Cmd0 MRON |
+| De | Para | Net | Package |
+|---|---|---|---|
+| `MCU.PE10` | IN9 | `PUMP_CMD` | **pin 36** |
+| `MCU.PE12` | IN10 | `FAN_CMD` | **pin 37** |
+| OUT14 | `J2.PUMP_RLY` | `PUMP_RLY_LS` | **pin 68** |
+| OUT15 | `J2.FAN_RLY` | `FAN_RLY_LS` | **pin 67** |
+| MR | `J2.MAIN_RLY` | `MAIN_RLY_LS` | **pin 55** — **DNP v1** (key-on) |
 
-Saídas low-side para a **bobina** do relé (~200 mA). Sem diodos de roda-livre discretos — clamp interno.
-⚠️ Números de pino LQFP-100 do TLE: **tier B**. OUT14/OUT15 e InConfig fechados no firmware
-(`IN_CONFIG*_OPENEMS` / `DD_CONFIG1_OPENEMS`).
+Saídas LS para bobina de relé (~200 mA); clamp interno. InConfig/DD no firmware.
 
 ---
 
@@ -210,30 +210,31 @@ Saídas low-side para a **bobina** do relé (~200 mA). Sem diodos de roda-livre 
 
 ## Bloco 15 — VVT
 
-| De | Para | Net |
-|---|---|---|
-| `MCU.PB6` (TIM4_CH1) | `TLE8888.IN11` | `VVT_EXH_CMD` — **15 Hz** |
-| `MCU.PB7` (TIM4_CH2) | `TLE8888.IN12` | `VVT_INT_CMD` — **15 Hz** |
-| `TLE8888.OUT5` | `J2.VVT_EXH` | `VVT_EXH_LS` |
-| `TLE8888.OUT6` | `J2.VVT_INT` | `VVT_INT_LS` |
+| De | Para | Net | Package |
+|---|---|---|---|
+| `MCU.PB6` (TIM4_CH1) | IN11 | `VVT_EXH_CMD` 15 Hz | **pin 38** |
+| `MCU.PB7` (TIM4_CH2) | IN12 | `VVT_INT_CMD` 15 Hz | **pin 39** |
+| OUT5A+B+C | `J2.VVT_EXH` | `VVT_EXH_LS` | **83+84+85** (juntos) |
+| OUT6A+B+C | `J2.VVT_INT` | `VVT_INT_LS` | **92+93+94** (juntos) |
 
-Low-side 4,5 A com **clamp ativo 50–60 V** → sem drivers nem diodos discretos. `+12 V` dos solenóides
-vem do relé, **no chicote**.
-⚠️ Comissionar **só o came instrumentado** (os dois PIDs partilham o único CMP).
+LS 4,5 A + clamp activo. `+12 V` dos solenóides no chicote. Comissionar só o came instrumentado.
 
 ---
 
-## Bloco 12 — SPI2 → TLE8888
+## Bloco 12 — SPI2 → TLE8888 (single-ended, DS §SPI)
 
-| MCU (tier A) | Função | TLE8888 |
-|---|---|---|
-| `PB12` | GPIO out | `CSN` |
-| `PB13` | SPI2_SCK AF5 | `SCLK` |
-| `PB14` | SPI2_MISO AF5 | `SDO` |
-| `PB15` | SPI2_MOSI AF5 | `SDI` |
+| MCU | Função | TLE pin | Símbolo |
+|---|---|---|---|
+| `PB12` | CS | **3** | CSN |
+| `PB13` | SCK AF5 | **7** | FCLP |
+| `PB14` | MISO AF5 | **4** | SDO |
+| `PB15` | MOSI AF5 | **5** | SIP |
+| — | mode select | **6** SIN | **→ AGND** |
+| — | mode select | **8** FCLN | **→ VDDIO (pin 20 / +3V3)** |
+| +3V3 | I/O supply | **20** | VDDIO |
 
-🚨 **`PB12`/`PB13` não podem ser reclamados por mais nada** — bomba e ventoinha migraram para
-`PE10`/`PE12` exatamente por isto. Sem SPI2 o TLE8888 não configura e o fingerprint dá máscara cheia.
+🚨 **Strapping SPI obrigatório:** SIN=AGND e FCLN=VDDIO. Sem isto o CI fica em MSC/LVDS e o
+SPI parece morto. `PB12`/`PB13` só SPI (bomba/fan em PE10/PE12).
 
 ---
 
@@ -359,14 +360,15 @@ faz CCxE→CCxP→CCxE e PUPDR em conjunto. Speeduino: `TrigEdge` / Hall “drag
 muitas vezes **RISING** no MCU se a rede inverte; Hall OC idle-HIGH típico pede **falling** + pull-up
 no bit CMP. **Não bloqueia layout** do condicionamento Hall (pull-up externo no esquema).
 
-**2. 🚨 Números físicos de pino do TLE8888** — tier B, tirar da tabela de pinout do datasheet.
-MCU pins (PE1/PE3 → INJEN/IGNEN) estão fechados; package LQFP-100 ainda não.
+**2. ✅ Números físicos TLE8888 LQFP-100** — `docs/hw/tle8888_pinout.md` (DS Rev 1.2 + rusEFI lib).
 
 **3. ⚠️ Dimensões do coreboard e das caixas AMPSEAL** — ver `README.md` §5 para o que medir.
 
-**4. ⚠️ Part numbers `TBD`:** buck, LDO, isolador USB, DC-DC isolado; bobinas (20 mA IGN vs smart coil).
+**4. ⚠️ Part numbers `TBD`:** buck, LDO, isolador USB, DC-DC isolado; bobinas (IGN = gate IGBT 20 mA).
 
-**5. ✅ Relé principal v1:** key-on directo; `J2.MAIN_RLY` reservado DNP (rusEFI: Cmd0 MRON).
+**5. ✅ Relé principal v1:** key-on directo; `J2.MAIN_RLY` → pin 55 MR **DNP**.
+
+**6. 🚨 No esquemático SPI:** SIN(6)=AGND, FCLN(8)=VDDIO — senão o hub não clocka.
 
 ---
 
