@@ -83,7 +83,7 @@ A estrategia pre-sync deve degradar para modo conservador se houver duvida de fa
 Fluxo esperado:
 
 ```text
-ADC/TIM6 -> sensors -> fuel_calc/ign_calc -> ecu_sched -> TIM2/TIM8 -> atuadores
+ADC/TIM6 -> sensors -> fuel_calc/ign_calc -> ecu_sched -> TIM5_CH3/BSRR -> atuadores
 ```
 
 Os calculos usam RPM, MAP, TPS, CLT, IAT, lambda e calibracoes. Tabelas devem operar com interpolacao deterministica e sem custo imprevisivel no caminho critico.
@@ -93,20 +93,25 @@ Aceleracoes repentinas apos o calculo principal devem ser tratadas por atualizac
 ### 4. Scheduling De Injecao E Ignicao
 
 - Modulo principal: `src/engine/ecu_sched.cpp`.
-- Injecao: TIM2 output compare.
-- Ignicao: TIM8 output compare.
-- Base temporal: 10 MHz, 100 ns por tick.
+- Injecao **e** ignicao: mesmo dispatcher **TIM5_CH3** (output compare) + fila
+  ordenada de eventos absolutos; a saída física é feita por **GPIO BSRR**
+  (`hal/out_pins.h`, `out_pin_write` inline). Sem TIM2/TIM8 OC no caminho INJ/IGN.
+- Base temporal: TIM5 32-bit @ **62.5 MHz** (16 ns/tick), livre-corrente e
+  partilhado com a captura CKP/CMP (CH1/CH2).
 
 Premissa de projeto:
 
-- O caminho critico deve ser agendado por hardware output compare.
-- ISR deve armar eventos e atualizar estado, nao bit-bangar saidas criticas.
+- O caminho critico é agendado por hardware output compare (TIM5_CH3): o OC arma
+  o tick de despacho e a ISR escreve o BSRR do canal — não há bit-bang em espera.
+- A ISR arma o proximo evento e actualiza estado; a escrita GPIO só é permitida
+  header-inline (`out_pin_write`), nunca lógica de fila noutro `.cpp`.
 - Janelas longas devem lidar com limite de contador por rearmamento/near-time, sem perder precisao perto do evento.
 - Eventos vencidos devem ser tratados explicitamente, nunca silenciosamente aceitos.
 
-Eventos de injecao ficam codificados no scheduler do motor, nao em um driver legado. O scheduler recebe dentes/angulo do CKP, calcula quando cada canal deve abrir/fechar e programa TIM2.
-
-Eventos de ignicao usam o mesmo conceito, mas programam TIM8 para dwell e centelha.
+Eventos de injecao e ignicao ficam codificados no scheduler do motor, nao num
+driver legado. O scheduler recebe dentes/angulo do CKP, calcula quando cada canal
+deve abrir/fechar (INJ) ou fazer dwell/centelha (IGN) e insere-os na mesma fila
+despachada por TIM5_CH3. Ordem de canais BSRR em `docs/hw/pinout.md`.
 
 ### 4a. Detecção De Knock (Detonação)
 
@@ -198,7 +203,7 @@ Impactos diretos no projeto:
 - ADC: manter amostragem regular disparada por TIM6. Nao usar fila de conversoes injetadas, modo dual interleaved, watchdog analogico misturado com canais nao guardados ou stop de conversao injetada sem aplicar os workarounds da errata.
 - FDCAN: nao habilitar edge filtering (`EFBI`) e evitar mistura de dedicated Tx buffer com Tx FIFO em prioridades diferentes. Se FDCAN1/FDCAN2 forem usados juntos, manter o mesmo nivel TrustZone/privilegio nos dois. O backend atual deve permanecer simples: sem edge filtering e com disciplina de fila unica/buffer unico.
 - USB: em transferencias OUT, a SRAM USB pode ainda estar sendo atualizada quando o CTR dispara. Driver USB real deve inserir atraso minimo antes de ler buffer OUT: 800 ns em Full Speed.
-- TIM: conexao de USB SOF para TIM2/TIM5 ITR12 pode falhar; o projeto nao deve usar USB SOF como referencia temporal de motor. TIM5 CKP e TIM2/TIM8 scheduler permanecem independentes.
+- TIM: conexao de USB SOF para TIM2/TIM5 ITR12 pode falhar; o projeto nao deve usar USB SOF como referencia temporal de motor. Toda a base temporal do motor (captura CKP/CMP e dispatcher de INJ/IGN) vive em TIM5 e nao depende de USB SOF.
 - IWDG nao acorda o sistema de Stop mode. O projeto de ECU nao deve depender de Stop mode para recuperacao por watchdog.
 
 Conclusao operacional: considerando silicio Rev X, a limitacao de histerese em PA1/CMP e as limitacoes de endurance/read-while-write de Flash das revisoes A/Z nao sao bloqueios esperados. Continuam relevantes em Rev X: congelamento da CPU na primeira escrita/erase de Flash, cautelas de ADC, FDCAN, USB, TIM USB SOF e IWDG em Stop mode. Placa WeAct e firmware atual seguem adequados para bancada sem atuadores energizados. Teste real de motor ainda exige confirmar fisicamente a Rev X, limitar escrita Flash durante motor girando e validar USB/FDCAN/ADC com os workarounds acima.
@@ -338,8 +343,8 @@ Definicao de pronto para o MVP de bancada:
 - `make host-test` cobre regressao minima (suites em `test/test_*.cpp` + `run_all.cpp`): CKP 60-2, quick crank, scheduler, tabelas, protocolo UI, ETB, torque, fuel/ign, X-τ, etc.
 - Firmware sobe na STM32H562 com ST-Link, sem bobinas/injetores energizados, sem reset loop ou hard fault.
 - TIM5 recebe CKP/CMP sintetico de 200 a 8500 rpm e telemetria mostra transicoes `WAIT_GAP`, `HALF_SYNC`, `FULL_SYNC`, perda e retomada de sync.
-- TIM2/TIM8 geram sinais verificaveis em osciloscopio para cranking, half-sync, full-sync, loss-of-sync e zero RPM.
-- ETB (TIM1/PA8) permanece desligado até `etb_cal_valid==1 && !throttle_fault_bits`.
+- As saídas INJ/IGN (GPIO BSRR, despachadas por TIM5_CH3) geram sinais verificaveis em osciloscopio para cranking, half-sync, full-sync, loss-of-sync e zero RPM.
+- ETB (PWM PA6/TIM3 no rgt6, PE5/TIM15 no vgt6) permanece desligado até `etb_cal_valid==1 && !throttle_fault_bits`.
 - UI bridge usa UART `PA9/PA10` a 115200 8N1 para assinatura, realtime data e escrita pequena de calibracao.
 - Durante ensaio, registrar `loop2_last`, `loop2_max`, `late_event_count`, `cycle_schedule_drop_count` e `calibration_clamp_count`.
 
@@ -372,8 +377,9 @@ Definicao de pronto para o MVP de bancada:
 
 ### ETB (Electronic Throttle Body)
 
-- PWM: TIM1 CH1 em PA8, frequência configurável (default 2kHz).
-- H-bridge: GPIO PB14 (DIR) + PB15 (EN) para driver DRV8701-style.
+- PWM: **PA6 TIM3_CH1** (rgt6) ou **PE5 TIM15_CH1** (vgt6), 20 kHz (`etb_pwm_init`).
+- H-bridge dual-DIR (BTS7960/VNH5019-style): IN1 open / IN2 close — rgt6 **PA8/PB4**,
+  vgt6 **PE7/PE8** (ver `docs/hw/pinout.md`).
 - Boot policy: ETB desativado (`EN=0`, PWM=0) até calibracao valida e sensores OK.
 - **Auto-cal de power-on** (`src/engine/etb_autocal.{h,cpp}`): a cada boot varre a
   borboleta aos batentes (fechado→aberto) no tick de 2 ms, ANTES do torque manager
@@ -410,7 +416,7 @@ Fora do MVP de bancada:
 ## Estado Atual
 
 - Codigo ativo direcionado ao STM32H562.
-- Backend de timers STM32 presente para TIM2/TIM3/TIM4/TIM5/TIM8.
+- Backend de timers STM32: TIM5 (CKP/CMP + dispatcher INJ/IGN CH3), TIM6 (trigger ADC), TIM2 (EWG PWM), TIM3 (ETB PWM rgt6), TIM15 (ETB PWM vgt6), TIM4 (VVT).
 - Scheduler principal consolidado em `src/engine/ecu_sched.cpp`.
 - Fonte ativa nao deve conter aliases de compatibilidade herdados de outras plataformas.
 - `make firmware` e `make host-test` devem continuar passando antes de qualquer entrega de MVP de bancada.
@@ -473,7 +479,7 @@ Fora do MVP de bancada:
 ### P2 — bancada / HIL / docs
 
 - Validar imagem `.bin` com ST-Link, sem bobinas/injetores no primeiro boot.
-- Scope TIM2/TIM8 (latência/jitter) e TIM5 CKP/CMP 200–8500 rpm.
+- Scope das saídas INJ/IGN (BSRR/TIM5_CH3, latência/jitter) e TIM5 CKP/CMP 200–8500 rpm.
 - USB CDC real: IRQ/endpoints, sem bloqueio do caminho crítico; RX ≥ envelope.
 - Host/HIL expandido: decode, sync, quick crank, scheduler, fuel/ign, sensores (já há host-test 1000+; HIL físico pendente).
 - Actualizar `docs/wiring_diagram.md` (esquemáticos eléctricos) ao pinout de `docs/hw/pinout.md` (ainda tem mapa TIM2/PC legado no ASCII).
