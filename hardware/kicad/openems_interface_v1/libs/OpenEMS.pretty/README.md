@@ -8,8 +8,11 @@
 | `TE_776180_AMPSEAL_35_RA` | `1-776180-1` | 35 | TE PDF + gerador OpenEMS (mesma grelha) | backup |
 | `TE_770669_AMPSEAL_23_RA` | `1-770669-1` | 23 | TE PDF + padrão KiCad `TE_AMPSEAL_1-776087` | **J2** |
 | `NetTie-4_THT_Pad1.0mm` | — | 4 | KiCad system | **NT1 star GND** |
+| `LQFP-100_14x14mm_P0.5mm` | TLE8888 | 100 | KiCad Package_QFP | **U3** |
+| `SOT-23` / `SOT-23-6` | FET / buck | | KiCad | **Q1** / **U1** |
+| `Fuse_1206_*`, `D_SMB`, caps | power chain | | KiCad | **F1 D1 C1 C2** |
 
-Revisão completa Speeduino/rusEFI: `docs/hw/kicad_vendor_review.md`.
+Revisão Speeduino/rusEFI: `docs/hw/kicad_vendor_review.md`.
 
 ### Dimensões PCB (TE, 1.57 mm board)
 

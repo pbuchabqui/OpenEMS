@@ -239,6 +239,9 @@ def main() -> None:
     from route_power import main as route
 
     route()
+    from place_power_stage import main as place_power
+
+    place_power()
 
 
 if __name__ == "__main__":

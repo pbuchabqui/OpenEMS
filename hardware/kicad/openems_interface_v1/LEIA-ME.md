@@ -28,7 +28,8 @@
 | Routing VBAT/PGND/ETB/CKP stubs | ✅ `route_power.py` (34 segs) |
 | Pours PGND F+B | ✅ (Fill Zones no Pcbnew) |
 | Fios TLE pin-exact no canvas | ⚠️ labels+fios aprox. |
-| Componentes power/TLE no copper | ❌ ainda não |
+| U3 TLE8888 LQFP-100 + nets chave | ✅ `place_power_stage.py` |
+| Power chain Q1/F1/D1/C1/C2/U1 buck | ✅ colocados + stubs |
 | Layout final / fabrico | ❌ |
 
 ## Mapa sheets ↔ docs
@@ -54,17 +55,23 @@
 ## Regenerar
 
 ```bash
+# Só esquemático (cuidado: reescreve .kicad_sch)
 python3 hardware/kicad/openems_interface_v1/scripts/generate_project.py
+
+# PCB: placement + nets + routing
+python3 hardware/kicad/openems_interface_v1/scripts/build_pcb_placement.py
 ```
 
-⚠️ Reescreve os `.kicad_sch`. Commit ou backup antes se editaste à mão.
+⚠️ `generate_project.py` reescreve os sheets. Commit/backup se editaste à mão.
+
+No Pcbnew: **Edit → Fill All Zones** (pours PGND).
 
 ## Próximos passos manuais
 
-1. Annotate + ERC (muitos avisos de pin não ligado nos headers WeAct são esperados).
-2. Ligar J3/J4 pin-a-pin com a tabela P1/P2 do sheet 09.
-3. Footprints TE (página RECOMMENDED PCB LAYOUT dos PDFs).
-4. Layout: star, pours, CKP longe de potência.
+1. Fill All Zones + DRC.
+2. Colocar TLE8888 LQFP-100 + FET/fuse/buck na zona Eco1 “TLE/PWR”.
+3. Completar copper SPI (WeAct PB12–15 → TLE) e ADC.
+4. Ligar J3/J4 pin-a-pin (tabela sheet 09).
 5. Gerber só depois.
 
 ## Speeduino / rusEFI
