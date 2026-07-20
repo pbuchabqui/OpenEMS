@@ -463,9 +463,10 @@ def conn_symbol(name: str, n: int, prefix: str = "P") -> str:
       )
     )
     (symbol "{name}_1_1\""""]
+    # Pin 1 at top (smaller Y), increasing downward — matches TE logical tables
     y0 = (n - 1) * 1.27 / 2
     for i in range(n):
-        y = y0 - i * 1.27
+        y = -y0 + i * 1.27
         lines.append(f"""      (pin passive line (at -2.54 {y} 0) (length 2.54)
         (name "Pin_{i+1}" (effects (font (size 1.016 1.016))))
         (number "{i+1}" (effects (font (size 1.016 1.016))))
@@ -741,9 +742,11 @@ def sheet_03_cmp() -> str:
 
 def _gl_wire(body: list, net: str, pin_xy: tuple[float, float],
              label_xy: tuple[float, float], shape: str = "bidirectional") -> None:
-    """Global label + wire to a pin coordinate (approximate)."""
-    body.append(global_label(net, label_xy, 0, shape))
-    body.append(wire(label_xy, pin_xy))
+    """Wire from pin to stub; global label mid-wire (KiCad connectivity)."""
+    # Extend slightly past pin so endpoint snaps onto pin
+    mid = ((pin_xy[0] + label_xy[0]) / 2, pin_xy[1])
+    body.append(wire(pin_xy, label_xy))
+    body.append(global_label(net, mid, 180, shape))
 
 
 def sheet_04_tle() -> str:
@@ -1061,10 +1064,10 @@ def sheet_09_connectors() -> str:
         21: "ETB_MOTOR_N", 22: "ETB_MOTOR_N",
         23: "NC_J2_23",
     }
-    y0 = j2_at[1] + (n2 - 1) * 1.27 / 2
+    y0 = j2_at[1] - (n2 - 1) * 1.27 / 2  # pin 1 at top
     pin_x = j2_at[0] - 2.54
     for pin, net in j2_nets.items():
-        y = y0 - (pin - 1) * 1.27
+        y = y0 + (pin - 1) * 1.27
         if net.startswith("NC_"):
             body.append(no_connect((pin_x, y)))
             body.append(text_block(f"p{pin} livre", (pin_x - 25, y - 0.5), 0.9))
@@ -1103,11 +1106,11 @@ def sheet_09_connectors() -> str:
         31: "TPS_INDEP",
         32: "NC_J1_32", 33: "NC_J1_33", 34: "NC_J1_34", 35: "NC_J1_35",
     }
-    y1 = j1_at[1] + (n1 - 1) * 1.27 / 2
+    y1 = j1_at[1] - (n1 - 1) * 1.27 / 2  # pin 1 at top
     pin1_x = j1_at[0] - 2.54
     reserved = {26, 27, 28, 29, 30, 31}
     for pin, net in j1_nets.items():
-        y = y1 - (pin - 1) * 1.27
+        y = y1 + (pin - 1) * 1.27
         if net.startswith("NC_"):
             body.append(no_connect((pin1_x, y)))
         elif pin in reserved:
@@ -1205,17 +1208,17 @@ def sheet_09_connectors() -> str:
 
     # ----- Star ground -----
     body.append(text_block(
-        "★ STAR GND — único ponto de união\\n"
-        "PGND + SGND + AGND + SHIELD_GND\\n"
-        "Correntes INJ/IGN/ETB NUNCA atravessam SGND/AGND",
+        "★ STAR GND — unir SÓ no layout (NetTie / ponte copper)\\n"
+        "PGND | SGND | AGND | SHIELD_GND = nets SEPARADAS no esquemático\\n"
+        "No PCB: um único ponto de união. Correntes INJ/IGN/ETB ≠ SGND/AGND",
         (30, 470), 1.27,
     ))
     star = (120.0, 520.0)
     for i, net in enumerate(["PGND", "SGND", "AGND", "SHIELD_GND"]):
         x = 60 + i * 40
         body.append(global_label(net, (x, star[1]), 0, "passive"))
-        body.append(wire((x, star[1]), star))
-    body.append(text_block("STAR", (star[0] - 5, star[1] + 8), 1.524))
+        # no wire between GND types — would short distinct global nets
+    body.append(text_block("STAR = PCB NetTie only", (star[0] - 20, star[1] + 8), 1.27))
 
     # Power to WeAct
     body.append(text_block(

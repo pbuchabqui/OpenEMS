@@ -212,6 +212,10 @@ def main() -> None:
     out = ROOT / "openems_interface_v1.kicad_pcb"
     out.write_text(build(), encoding="utf-8")
     print(f"Wrote {out} ({out.stat().st_size} bytes)")
+    # Pad nets + PGND zones from authoritative pinmap
+    from annotate_pcb_nets import main as annotate
+
+    annotate()
 
 
 if __name__ == "__main__":
