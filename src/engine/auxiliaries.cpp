@@ -22,6 +22,7 @@
 
 #include "hal/timer.h"
 #include "hal/regs.h"
+#include "hal/board_pinout.h"  // EMS_BOARD_IS_VGT6 — selecciona os pinos de relé
 
 #if defined(EMS_HOST_TEST)
 volatile uint32_t ems_test_aux_rcc_ahb2enr1 = 0u;
@@ -31,6 +32,11 @@ volatile uint32_t ems_test_aux_gpiob_bsrr = 0u;
 #define RCC_AHB2ENR1_GPIOBEN (1u << 1u)
 #define GPIOB_MODER ems_test_aux_gpiob_moder
 #define GPIOB_BSRR ems_test_aux_gpiob_bsrr
+// No VGT6 os relés vivem em GPIOE; os testes de host observam as mesmas
+// variáveis, por isso o alias aponta para os mesmos registos simulados.
+#define RCC_AHB2ENR1_GPIOEEN (1u << 4u)
+#define GPIOE_MODER ems_test_aux_gpiob_moder
+#define GPIOE_BSRR ems_test_aux_gpiob_bsrr
 #endif
 
 namespace {
@@ -51,7 +57,9 @@ constexpr int16_t kFanOnDegCX10 = 950;
 constexpr int16_t kFanOffDegCX10 = 900;
 
 constexpr uint32_t kPumpPrimeMs = 2000u;
-constexpr uint32_t kPumpOffDelayMs = 3000u;
+// 2 s (era 3 s): corta a bomba mais cedo num acidente sem cortar prematuramente
+// num calo momentâneo do motor.
+constexpr uint32_t kPumpOffDelayMs = 2000u;
 
 // Idle target RPM vs CLT — curva compartilhada com ETB idle spark
 #define kWarmupPts         ems::engine::kIacWarmupPts
@@ -100,8 +108,35 @@ constexpr int16_t kVvtEscTargetDegX10[kVvtPts][kVvtPts] = {
     {160, 160, 170, 180, 190, 200, 205, 210, 215, 220, 225, 230},
 };
 
-constexpr uint8_t kFanPin = 12u;
-constexpr uint8_t kPumpPin = 13u;
+// ── Bomba de combustível e ventoinha ────────────────────────────────────────
+// ⚠️ VGT6: PE12 = ventoinha, PE10 = bomba.
+// Antes eram PB12/PB13 nos dois packages — o que colide frontalmente com o
+// SPI2 do TLE8888 (PB12=CSN, PB13=SCK, PB14=MISO, PB15=MOSI). Como
+// auxiliaries_init() corre DEPOIS de tle8888_init() (main_stm32.cpp:638 vs 500),
+// reescrevia o MODER e **matava o SPI2_SCK no arranque**: o TLE8888 nunca era
+// clockado e o seu watchdog nunca era alimentado — com o CI montado, isso
+// desliga injecção e ignição. Ver docs/hw/interface_board_v1.md.
+//
+// GPIOE só existe no LQFP100, por isso o RGT6 mantém PB12/PB13 e mantém o
+// conflito — mas o RGT6 não é o alvo da placa de interface.
+//
+// Estes pinos comandam IN9/IN10 do TLE8888 (direct drive → saídas de relé
+// OUT14-20). Escrita por BSRR, que é set/reset atómico por bit e não perturba
+// os canais de INJ/IGN no mesmo porto.
+#if EMS_BOARD_IS_VGT6
+constexpr uint8_t kFanPin  = 12u;  // PE12
+constexpr uint8_t kPumpPin = 10u;  // PE10
+#define EMS_AUX_RELAY_BSRR  GPIOE_BSRR
+#define EMS_AUX_RELAY_MODER GPIOE_MODER
+#define EMS_AUX_RELAY_RCC_EN() (RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN)
+#else
+constexpr uint8_t kFanPin  = 12u;  // PB12 — ⚠️ colide com SPI2 CSN do TLE8888
+constexpr uint8_t kPumpPin = 13u;  // PB13 — ⚠️ colide com SPI2 SCK do TLE8888
+#define EMS_AUX_RELAY_BSRR  GPIOB_BSRR
+#define EMS_AUX_RELAY_MODER GPIOB_MODER
+#define EMS_AUX_RELAY_RCC_EN() (RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOBEN)
+#endif
+
 constexpr uint32_t kFanBit = (1u << kFanPin);
 constexpr uint32_t kPumpBit = (1u << kPumpPin);
 
@@ -264,18 +299,18 @@ int16_t lookup_vvt_target(const int16_t table[kVvtPts][kVvtPts],
 void set_fan(bool on) noexcept {
     g.fan_on = on;
     if (on) {
-        GPIOB_BSRR = kFanBit;
+        EMS_AUX_RELAY_BSRR = kFanBit;
     } else {
-        GPIOB_BSRR = (kFanBit << 16u);
+        EMS_AUX_RELAY_BSRR = (kFanBit << 16u);
     }
 }
 
 void set_pump(bool on) noexcept {
     g.pump_on = on;
     if (on) {
-        GPIOB_BSRR = kPumpBit;
+        EMS_AUX_RELAY_BSRR = kPumpBit;
     } else {
-        GPIOB_BSRR = (kPumpBit << 16u);
+        EMS_AUX_RELAY_BSRR = (kPumpBit << 16u);
     }
 }
 
@@ -445,9 +480,11 @@ void auxiliaries_init() noexcept {
     ems::hal::tim4_set_duty(0u, 0u);
     ems::hal::tim4_set_duty(1u, 0u);
 
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOBEN;
-    GPIOB_MODER = (GPIOB_MODER & ~(3u << (kFanPin * 2u))) | (1u << (kFanPin * 2u));
-    GPIOB_MODER = (GPIOB_MODER & ~(3u << (kPumpPin * 2u))) | (1u << (kPumpPin * 2u));
+    EMS_AUX_RELAY_RCC_EN();
+    EMS_AUX_RELAY_MODER =
+        (EMS_AUX_RELAY_MODER & ~(3u << (kFanPin * 2u))) | (1u << (kFanPin * 2u));
+    EMS_AUX_RELAY_MODER =
+        (EMS_AUX_RELAY_MODER & ~(3u << (kPumpPin * 2u))) | (1u << (kPumpPin * 2u));
 
     set_fan(false);
     set_pump(false);

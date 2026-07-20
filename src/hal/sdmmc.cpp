@@ -10,6 +10,7 @@
 
 #include "hal/sdmmc.h"
 #include "hal/regs.h"
+#include "hal/board_pinout.h"  // EMS_BOARD_IS_VGT6 — SDMMC só é seguro no LQFP100
 
 namespace {
 
@@ -63,6 +64,21 @@ namespace ems::hal {
 bool sdmmc_init() noexcept {
     g_card_ready = false;
     g_rca = 0u;
+
+#if !EMS_BOARD_IS_VGT6
+    // ⚠️ RGT6 (LQFP64): PC8 é **IGN3** e PC12/PD2 também não estão livres
+    // (ver docs/hw/pinout.md). Ligar o SDMMC aqui reconfiguraria o pino de uma
+    // bobina para AF12 — ignição morta, sem aviso.
+    //
+    // Isto nunca aconteceu porque sdmmc_init() não é chamado de lado nenhum
+    // (datalog_init() só consulta sdmmc_card_present(), que devolve false e
+    // deixa o datalog inerte). Esta guarda existe para que continue assim se
+    // alguém ligar o datalog no futuro.
+    //
+    // No VGT6 não há conflito: INJ/IGN vivem em GPIOE, PC8/PC12/PD2 estão
+    // livres — por isso o driver só é permitido nesse package.
+    return false;
+#else
 
     // Enable SDMMC1 clock
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_SDMMC1EN;
@@ -138,6 +154,7 @@ bool sdmmc_init() noexcept {
 
     g_card_ready = true;
     return true;
+#endif  // EMS_BOARD_IS_VGT6
 }
 
 bool sdmmc_write_block(uint32_t lba, const uint8_t* data) noexcept {

@@ -78,6 +78,24 @@ inline void out_pin_write(uint8_t channel, uint8_t high) noexcept {
  */
 void out_pins_hw_init() noexcept;
 
+/**
+ * Enables de hardware do estágio de potência (TLE8888, só VGT6):
+ *   INJEN = PE1  → habilita OUT1–OUT4 (os 4 injectores)
+ *   IGNEN = PE3  → habilita IGN1–IGN4 (as 4 bobinas)
+ *
+ * São pinos de enable **do próprio CI** (pinos 24 e 27), independentes do SPI e
+ * do escalonador: com eles em LOW nenhuma saída de injecção ou ignição conduz,
+ * aconteça o que acontecer ao firmware. É o caminho de corte que o estágio
+ * discreto não oferecia.
+ *
+ * Nascem em **LOW (desabilitado)** em out_pins_hw_init(), no mesmo arranque
+ * seguro precoce dos canais de INJ/IGN. Só devem subir depois de o TLE8888
+ * estar configurado com sucesso.
+ *
+ * No RGT6 não existe TLE8888 nem GPIOE — é no-op.
+ */
+void power_stage_enable(bool on) noexcept;
+
 #if defined(EMS_HOST_TEST)
 /** Port index: A=0 B=1 C=2 E=3 — last BSRR write value (host mock). */
 uint32_t out_pins_test_bsrr_snapshot(uint8_t port) noexcept;

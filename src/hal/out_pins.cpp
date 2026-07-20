@@ -21,6 +21,12 @@ uint32_t gpioa_bsrr = 0u, gpiob_bsrr = 0u, gpioc_bsrr = 0u, gpioe_bsrr = 0u;
 
 namespace ems::hal {
 
+#if EMS_BOARD_IS_VGT6
+// TLE8888: INJEN (pino 24) e IGNEN (pino 27) — enables de hardware.
+static constexpr uint8_t kInjEnPin = 1U;  // PE1
+static constexpr uint8_t kIgnEnPin = 3U;  // PE3
+#endif
+
 void out_pins_hw_init() noexcept {
     for (volatile uint32_t d = 0u; d < 8u; ++d) {}
 
@@ -28,16 +34,24 @@ void out_pins_hw_init() noexcept {
     // VGT6: all INJ/IGN on GPIOE — push-pull LOW (active-high actuators).
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
     for (volatile uint32_t d = 0u; d < 8u; ++d) {}
-    static const uint8_t pe_pins[] = {0U, 2U, 4U, 6U, 9U, 11U, 13U, 15U};
-    for (uint8_t i = 0U; i < 8U; ++i) {
+    // 8 canais INJ/IGN + os 2 enables do estágio de potência (INJEN=PE1,
+    // IGNEN=PE3). Os enables entram na MESMA disciplina de arranque seguro:
+    // push-pull, sem pull, e LOW = desabilitado.
+    static const uint8_t pe_pins[] = {0U, 2U, 4U, 6U, 9U, 11U, 13U, 15U,
+                                      kInjEnPin, kIgnEnPin};
+    for (uint8_t i = 0U; i < (sizeof(pe_pins) / sizeof(pe_pins[0])); ++i) {
         const uint8_t pin = pe_pins[i];
         GPIOE_OTYPER &= ~(1U << pin);
         GPIOE_PUPDR  = (GPIOE_PUPDR & ~(3U << (pin * 2U)));
         GPIOE_MODER  = (GPIOE_MODER & ~(3U << (pin * 2U))) | (1U << (pin * 2U));
     }
+    // Escrita ÚNICA e atómica: tudo ao estado seguro de uma vez. Não separar em
+    // duas escritas — além de deixar uma janela entre elas, o mock de host só
+    // regista a última e o teste de cobertura VGT6 deixaria de ver os canais.
     GPIOE_BSRR = (1U << (0U + 16U)) | (1U << (2U + 16U)) | (1U << (4U + 16U))
                | (1U << (6U + 16U)) | (1U << (9U + 16U)) | (1U << (11U + 16U))
-               | (1U << (13U + 16U)) | (1U << (15U + 16U));
+               | (1U << (13U + 16U)) | (1U << (15U + 16U))
+               | (1U << (kInjEnPin + 16U)) | (1U << (kIgnEnPin + 16U));
 #else
     // RGT6: INJ PA15/PB3/PC10/PC11 · IGN PC6–9
     // PA15 after reset is often JTDI with pull-up → HIGH until here.
@@ -65,6 +79,16 @@ void out_pins_hw_init() noexcept {
     GPIOC_BSRR = (1U << (6U + 16U)) | (1U << (7U + 16U))
                | (1U << (8U + 16U)) | (1U << (9U + 16U))
                | (1U << (10U + 16U)) | (1U << (11U + 16U));
+#endif
+}
+
+void power_stage_enable(bool on) noexcept {
+#if EMS_BOARD_IS_VGT6
+    const uint32_t bits = (1U << kInjEnPin) | (1U << kIgnEnPin);
+    GPIOE_BSRR = on ? bits : (bits << 16U);
+#else
+    // RGT6: sem TLE8888 e sem GPIOE — nada a fazer.
+    (void)on;
 #endif
 }
 
