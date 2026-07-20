@@ -51,21 +51,30 @@
 # Só esquemático (cuidado: reescreve .kicad_sch)
 python3 hardware/kicad/openems_interface_v1/scripts/generate_project.py
 
-# PCB: placement + nets + routing
-python3 hardware/kicad/openems_interface_v1/scripts/build_pcb_placement.py
+# PCB limpo (recomendado)
+bash hardware/kicad/openems_interface_v1/scripts/build_all.sh
+# = python3 scripts/layout_clean.py
 ```
 
 ⚠️ `generate_project.py` reescreve os sheets. Commit/backup se editaste à mão.
 
-No Pcbnew: **Edit → Fill All Zones** (pours PGND).
+### Ver o PCB limpo
+
+1. `kicad …/openems_interface_v1.kicad_pro`
+2. **PCB Editor**
+3. Tecla **Home** (zoom fit)
+4. **Edit → Fill All Zones** (pours PGND)
+5. Zonas: conectores em baixo · WeAct centro · power · U3 TLE
+
+Só há **bridges locais** (pares J2, A+B do TLE, cadeia Q1–F1–C1–BAT).  
+O resto rotea-se **à mão** no KiCad — não há mais auto-route emaranhado.
 
 ## Próximos passos manuais
 
 1. Fill All Zones + DRC.
-2. Colocar TLE8888 LQFP-100 + FET/fuse/buck na zona Eco1 “TLE/PWR”.
-3. Completar copper SPI (WeAct PB12–15 → TLE) e ADC.
-4. Ligar J3/J4 pin-a-pin (tabela sheet 09).
-5. Gerber só depois.
+2. Rotear SPI (J3.29–32 → U3), CAN, INJ/IGN à mão.
+3. Confirmar pin1 AMPSEAL/WeAct e pinout FET/LDO.
+4. Gerber só depois.
 
 ## Speeduino / rusEFI
 
