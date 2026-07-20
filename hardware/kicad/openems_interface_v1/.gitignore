@@ -1,0 +1,8 @@
+# KiCad local / cache (do not commit)
+fp-info-cache
+*.kicad_prl
+*-backups/
+~*
+*.lck
+__pycache__/
+*.pyc

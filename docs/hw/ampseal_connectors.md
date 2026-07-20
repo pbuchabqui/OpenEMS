@@ -71,6 +71,15 @@ caixa e alívio de tração em cima disto.
 
 ---
 
+## Footprints KiCad (gerados)
+
+| Header | Footprint | Path |
+|--------|-----------|------|
+| 23 RA `1-770669-1` | `TE_770669_AMPSEAL_23_RA` | `hardware/kicad/openems_interface_v1/libs/OpenEMS.pretty/` |
+| 35 RA `1-776180-1` | `TE_776180_AMPSEAL_35_RA` | idem |
+
+Cotas: pitch 4 mm, furo Ø1.75, mount Ø2.85 @ 6.5 mm. Ver `libs/OpenEMS.pretty/README.md`.
+
 ## Checklist KiCad
 
 - [ ] Footprint 35 RA a partir de `TE_776180_header_RA_35.pdf` (layout page)  

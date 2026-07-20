@@ -23,20 +23,24 @@ componentes. Um sheet por módulo = revisão barata e paralelizável.
 **Fonte de verdade cruzada:** porquê → `interface_board_v1.md`; pinos → `pinout.md` /
 `tle8888_pinout.md`; nets → `netlist_v1.md`. **Não duplicar racional** aqui.
 
-## Hierarquia KiCad sugerida
+## Hierarquia KiCad (projecto gerado)
+
+**Abrir:** `hardware/kicad/openems_interface_v1/openems_interface_v1.kicad_pro`  
+**Guia:** `hardware/kicad/openems_interface_v1/LEIA-ME.md`  
+**Pinmap lógico:** `hardware/kicad/openems_interface_v1/resources/pinmap_logical.md`
 
 ```
 openems_interface_v1.kicad_sch          (root)
-├── 01_power.kicad_sch
-├── 02_ckp.kicad_sch
-├── 03_cmp.kicad_sch
-├── 04_tle8888_hub.kicad_sch
-├── 05_analog.kicad_sch
-├── 06_etb.kicad_sch
-├── 07_flex.kicad_sch
-├── 08_usb.kicad_sch
-├── 09_connectors_weact.kicad_sch
-└── 10_knock_dnp.kicad_sch
+├── sheets/01_power.kicad_sch
+├── sheets/02_ckp.kicad_sch
+├── sheets/03_cmp.kicad_sch
+├── sheets/04_tle8888_hub.kicad_sch
+├── sheets/05_analog.kicad_sch
+├── sheets/06_etb.kicad_sch
+├── sheets/07_flex.kicad_sch
+├── sheets/08_usb.kicad_sch
+├── sheets/09_connectors_weact.kicad_sch
+└── sheets/10_knock_dnp.kicad_sch
 ```
 
 Nets globais (power / hierarchical labels):  
