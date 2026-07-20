@@ -143,7 +143,14 @@ bool write_verify(uint16_t addr, uint8_t data) noexcept {
 //    ambos reset 0x30) derivam com o estado do CI → dariam falso negativo.
 //  • valores DISTINTIVOS entre si. Um conjunto cheio de 0x3F (OutConfig1/2/4/5)
 //    não discrimina: um deslocamento de endereço que caia noutro 0x3F passa
-//    despercebido. Daí A4 / 0D / 09 / 47 / 03 / F7 / FF / 30.
+//    despercebido. Daí A4 / 0D / 09 / 47 / 03 / F7 / 30.
+//  • NENHUM valor de fronteira (0x00 ou 0xFF). Esta é subtil e importa para o
+//    diagnóstico: num barramento morto o MISO flutua para um dos extremos e
+//    todas as leituras dão 0x00 ou 0xFF. Se o conjunto incluísse OutConfig0
+//    (reset 0xFF), essa entrada passaria POR COINCIDÊNCIA num flutuar-alto, e a
+//    máscara viria 0xBF em vez de cheia — a parecer "mapa parcialmente errado"
+//    quando o problema é SPI mudo, mandando caçar endereços em vão. Sem valores
+//    de fronteira, barramento morto ⇒ SEMPRE todas as entradas divergem.
 //  • tem de correr ANTES de configure() — depois da primeira escrita os valores
 //    de reset desaparecem.
 struct ResetFingerprint {
@@ -158,7 +165,6 @@ constexpr ResetFingerprint kResetFingerprint[] = {
     { R::WD_CONFIG0,  0x47u },
     { R::WD_CONFIG1,  0x03u },
     { R::FWD_CONFIG,  0xF7u },
-    { R::OUT_CONFIG0, 0xFFu },
     { R::OUT_CONFIG3, 0x30u },
 };
 constexpr uint8_t kFingerprintCount =

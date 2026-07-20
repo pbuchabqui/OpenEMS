@@ -245,13 +245,19 @@ Implementado como `verify_register_map()`, com 8 entradas escolhidas por serem *
 | `WdConfig0` | `0x47` |
 | `WdConfig1` | `0x03` |
 | `FWDConfig` | `0xF7` |
-| `OutConfig0` | `0xFF` |
 | `OutConfig3` | `0x30` |
 
-⚠️ **A escolha não é arbitrária:** só registadores de **configuração** (os de estado/contador, `WWDStat`
-e `TECStat`, ambos reset `0x30`, derivam com o estado do CI → dariam falso negativo); e valores
-**distintos entre si**, porque um conjunto cheio de `0x3F` (`OutConfig1/2/4/5`) não discrimina — um
-deslocamento de endereço que caia noutro `0x3F` passaria despercebido.
+⚠️ **A escolha não é arbitrária**, e três critérios governam-na:
+1. Só registadores de **configuração**. Os de estado/contador (`WWDStat`, `TECStat`, ambos reset `0x30`)
+   derivam com o estado do CI → dariam falso negativo.
+2. Valores **distintos entre si**. Um conjunto cheio de `0x3F` (`OutConfig1/2/4/5`) não discrimina: um
+   deslocamento de endereço que caia noutro `0x3F` passaria despercebido.
+3. **Nenhum valor de fronteira** (`0x00` ou `0xFF`) — subtil, e é o que torna o diagnóstico legível.
+   Num barramento morto o MISO flutua para um extremo e todas as leituras dão `0x00` **ou** `0xFF`. Com
+   `OutConfig0` (reset `0xFF`) no conjunto, essa entrada passaria **por coincidência** num flutuar-alto e
+   a máscara viria `0xBF` em vez de cheia — a parecer "mapa parcialmente errado" quando o problema é SPI
+   mudo. Foi removido por isso. Sem valores de fronteira, **barramento morto ⇒ sempre todas as entradas
+   divergem**.
 
 **É bloqueante, não cosmético:** falhar impede `configure()`, deixa `tle8888_ok()` a false e, por
 consequência, `power_stage_enable(false)` — arranca sem injeção nem ignição, em vez de arrancar com o CI
@@ -647,10 +653,16 @@ Nunca ligar injetores ou bobinas nas etapas 1–3.
    Ler `reserved[49]` na telemetria assim que o CI tiver alimentação e o SPI clocar.
    - `0x00` → o mapa de registadores está confirmado contra o silício. **É o único momento em que este
      teste é possível** (os valores de reset desaparecem na primeira escrita).
-   - `0xFF` (todas as entradas) → o SPI não está a comunicar de todo: verificar `PB12–PB15`, e sobretudo
-     que `auxiliaries_init()` não voltou a reclamar `PB12`/`PB13`.
-   - Padrão misto → mapa parcialmente errado: comparar entrada a entrada com a Table 50. **Não
-     prosseguir**; injeção e ignição estarão inibidas de propósito.
+   - **Qualquer valor diferente de zero é bloqueante.** A leitura da máscara orienta o diagnóstico:
+     - **Todas as 7 entradas set (`0x7F`)** → quase de certeza **barramento mudo**, não mapa errado.
+       Verificar `PB12–PB15` e sobretudo que `auxiliaries_init()` não voltou a reclamar `PB12`/`PB13`.
+       (O conjunto não tem valores de fronteira justamente para que um MISO a flutuar — alto ou baixo —
+       dê sempre máscara cheia, em vez de um padrão que se confunde com mapa parcialmente errado.)
+     - **Padrão parcial** → mapa efetivamente errado nessas entradas: comparar uma a uma com a Table 50.
+     - ⚠️ **Máscara cheia num CI sabidamente bom** → suspeitar de **corrida de arranque**, não do mapa:
+       se `tle8888_init()` correr antes de o CI estar pronto a responder, o fingerprint falha e **fica
+       latched até reset**. Confirmar que a alimentação/ready do CI precede a init.
+   - **Não prosseguir** com máscara diferente de zero; injeção e ignição estarão inibidas de propósito.
 1. **Host** — `make host-test` e `make host-test-vgt6` verdes, incluindo o novo teste de VBATT.
 2. **Lacunas pendentes do README §P2** (ambas abertas, ambas pré-requisito de partida):
    - Scope de INJ/IGN — latência e jitter contra o esperado (~0,4 µs / ~0,019° @8000), nos pinos
