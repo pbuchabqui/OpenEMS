@@ -138,7 +138,7 @@ confirmado contra fonte primária. Não construir em cima sem confirmar.
 |---|---|
 | **Mapa de registadores do TLE8888** | ✅ **Endereços confirmados** por implementação independente (rusEFI) — ver `tle8888_crosscheck.md`. ⚠️ Mas **nenhum valor de reset** foi confirmado, e 5 dos 7 do fingerprint usam endereços que o rusEFI não toca. |
 | **Atraso de propagação do VR** | 🚨 **O datasheet NÃO especifica.** Os 50 ns que os docs citavam eram do **MAX9924**, peça que saiu da BOM. Medição obrigatória no passo 3. |
-| **VREF+ é pino separado no LQFP100** | ⚠️ Citação **não reconfirmada** — PDFs da ST deram timeout. Não afeta a decisão (a). |
+| **VREF+ é pino separado no LQFP100** | ✅ **Sim** no H562 LQFP100 (`stm32h562vg.pdf` pinout — VREF+ ≠ double-bond VDDA). Opção (a): VREF+→VDDA filtrado. |
 | **Números de pino do TLE8888** | ✅ **Verificados** DS Rev 1.2 §3 + rusEFI lib — `tle8888_pinout.md`. |
 | **Dimensões do coreboard** | ✅ **WeAct V1.0 Board Shape:** 38,62 × 69,10 mm, furos Φ3,2 @ 2,80 mm — `weact_h562_coreboard.md`. Altura USB ainda a medir. |
 | **Todo o driver TLE8888** | 🚨 **Nunca clockou silício.** Os 1234 host-tests mockam o SPI. Só o bring-up decide. |
@@ -156,14 +156,12 @@ Ver **`weact_h562_coreboard.md`** (PDF *Board Shape 外形* V1.0):
 **Ainda a medir na peça física:** altura total (USB-C + headers + componentes);
 confirmar pin 1 de cada conector face ao silkscreen.
 
-### AMPSEAL — plugues ✅ / headers PCB ⚠️
-Family drawing **ENG_CD_2293782 E5** → `ampseal_connectors.md`:
-- Plug **35-pos** `776164-1`: envelope **A=63,4 / B=66 / C=27,45 mm**
-- Plug **23-pos** `770680-1`: **47,4 / 50 / 27,60 mm**
-- Mating headers: 35 → 776230/776180 (RED); 23 → 776200/770669 (GREEN)
-
-**Ainda em falta:** customer drawing do **header soldado na PCB** (pad pattern, pin 1,
-altura). Escolher vertical vs right-angle antes do outline final.
+### AMPSEAL — plugues + headers PCB ✅
+Ver **`ampseal_connectors.md`**:
+- Plugs: `776164-1` (35) / `770680-1` (23)
+- Headers RA (recomendado cabine): **`1-776180-1`** (35 gold) + **`1-770669-1`** (23 gold)
+- Drawings no repo: `TE_776180_*.pdf`, `TE_770669_*.pdf`, `TE_776230_*.pdf` (vertical alt.)
+- Aresta mínima ≈ **125 mm**; altura header RA ≈ **18 mm** + plug
 
 ---
 
