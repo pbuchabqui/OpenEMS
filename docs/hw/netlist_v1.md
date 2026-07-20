@@ -92,10 +92,8 @@ baixa impedância → `VREF_P`. Footprint sim, **não popular**.
 | `N_CMP_RAW` | divisor → `N_CMP_DIV` | **10 k / 15 k** |
 | `N_CMP_DIV` | `MCU.PA1` | `CMP_DIG` — RC leve + **TVS 3,3 V** |
 
-🚨 **ABERTO — não desenhar sem fechar:** a polaridade de captura do CMP (e do CKP) está **adiada** à
-espera do part number do Hall. Hall open-collector idle HIGH/pulso LOW põe o dente na borda de
-**descida**, mas `TIM5` captura só subida. Ver `interface_board_v1.md`. O pull interno do `PA1` muda
-para **pull-up** no mesmo movimento — **o `PA0` não muda**.
+✅ **Polaridade em firmware:** page0[258] bit0=CKP / bit1=CMP falling; default 0 = subida.
+Hall OC idle-HIGH → bit1=1 + pull-up interno no PA1. Ver `schematic/03_cmp.md`.
 
 ---
 
