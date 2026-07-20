@@ -238,6 +238,12 @@ void update_realtime_page() noexcept {
     rt.reserved[46] = static_cast<uint8_t>((s.an2_raw >> 8u) & 0xFFu);
     rt.reserved[47] = static_cast<uint8_t>(s.an3_raw & 0xFFu);
     rt.reserved[48] = static_cast<uint8_t>((s.an3_raw >> 8u) & 0xFFu);
+    // [49] Fingerprint do mapa de registadores do TLE8888: bitmask das entradas
+    // cujo valor de reset não bateu com o datasheet. 0 = mapa confirmado contra
+    // o silício. Diferente de zero significa que o CI está presente mas o driver
+    // fala com os registadores errados — injecção e ignição ficam inibidas.
+    // É o que torna essa falha visível no bring-up em vez de misteriosa.
+    rt.reserved[49] = ems::hal::tle8888_map_mismatch();
     rt.reserved[50] = static_cast<uint8_t>(s.an4_raw & 0xFFu);
     rt.reserved[51] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
     rt.map_fused_bar_x100 = g_rt_map_fused_bar_x100;

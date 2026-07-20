@@ -35,4 +35,21 @@ uint8_t tle8888_vrs_diag() noexcept;
 // diagnosticável em vez de misteriosa.
 uint8_t tle8888_wd_status(uint8_t idx) noexcept;
 
+// Fingerprint do mapa de registadores: bitmask das entradas cujo valor de reset
+// não bateu com o datasheet (0 = mapa confirmado contra o silício).
+//
+// Lido no arranque, ANTES de qualquer escrita, sobre registadores de
+// configuração com valores de reset distintivos. Prova de uma vez só que o CI
+// está presente, que o SPI está vivo, que o formato do frame está certo e que os
+// endereços apontam para os registadores que julgamos.
+//
+// Existe porque write_verify() é cego ao caso perigoso: um endereço errado que
+// calhe noutro registador escrevível faz a escrita "suceder" e a releitura
+// conferir, deixando o CI configurado noutra coisa. Foi assim que o driver
+// antigo, escrito contra um mapa inventado, pareceu funcionar.
+//
+// Diferente de zero é BLOQUEANTE e fica latched: tle8888_ok() nunca passa a
+// true e a recuperação em poll_diag não é tentada.
+uint8_t tle8888_map_mismatch() noexcept;
+
 }  // namespace ems::hal

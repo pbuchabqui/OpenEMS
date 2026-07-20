@@ -62,6 +62,10 @@ volatile uint8_t g_vrs_diag = 0u;
 /// [0]=WdStat0  [1]=WWDStat  [2]=FWDStat0  [3]=TECStat  [4]=WdDiag
 volatile uint8_t g_wd_status[5] = {};
 
+/// Bitmask do fingerprint do mapa de registadores: bit N = entrada N divergiu.
+/// 0 = mapa confirmado contra o silício. Ver verify_register_map().
+volatile uint8_t g_map_mismatch = 0xFFu;
+
 // ── Transporte SPI ───────────────────────────────────────────────────────────
 constexpr uint32_t kSpiTimeout = 50000u;  // ~500 µs @250 MHz
 
@@ -120,6 +124,58 @@ bool write_verify(uint16_t addr, uint8_t data) noexcept {
     return tle_read(addr) == data;
 }
 
+// ── Fingerprint do mapa de registadores ──────────────────────────────────────
+// PROBLEMA QUE ISTO RESOLVE: `write_verify()` valida o caminho de escrita, mas é
+// cego ao caso perigoso — se um endereço estiver errado mas calhar noutro
+// registador escrevível, a escrita "sucede", a releitura confere e o CI fica
+// configurado noutra coisa qualquer. Foi exactamente assim que o driver antigo
+// (mapa inventado) pareceu funcionar, e é o padrão de flash-nscr-nssr.
+//
+// COMO DISCRIMINA: os registadores de configuração têm valores de reset
+// documentados (Table 50). Lê-los ANTES de qualquer escrita e comparar prova, de
+// uma vez só: que o CI está presente, que o link SPI está vivo, que o formato do
+// frame (ordem de bits, largura, R/W) está certo, e que os endereços apontam
+// para os registadores que julgamos. Qualquer um destes errado faz TODAS as
+// leituras divergirem.
+//
+// ⚠️ ESCOLHA DOS REGISTADORES — não é arbitrária:
+//  • só registadores de CONFIGURAÇÃO. Os de estado/contador (WWDStat, TECStat,
+//    ambos reset 0x30) derivam com o estado do CI → dariam falso negativo.
+//  • valores DISTINTIVOS entre si. Um conjunto cheio de 0x3F (OutConfig1/2/4/5)
+//    não discrimina: um deslocamento de endereço que caia noutro 0x3F passa
+//    despercebido. Daí A4 / 0D / 09 / 47 / 03 / F7 / FF / 30.
+//  • tem de correr ANTES de configure() — depois da primeira escrita os valores
+//    de reset desaparecem.
+struct ResetFingerprint {
+    uint16_t addr;
+    uint8_t  expected;
+};
+
+constexpr ResetFingerprint kResetFingerprint[] = {
+    { R::COM_CONFIG0, 0xA4u },
+    { R::COM_CONFIG1, 0x0Du },
+    { R::OP_CONFIG0,  0x09u },
+    { R::WD_CONFIG0,  0x47u },
+    { R::WD_CONFIG1,  0x03u },
+    { R::FWD_CONFIG,  0xF7u },
+    { R::OUT_CONFIG0, 0xFFu },
+    { R::OUT_CONFIG3, 0x30u },
+};
+constexpr uint8_t kFingerprintCount =
+    static_cast<uint8_t>(sizeof(kResetFingerprint) / sizeof(kResetFingerprint[0]));
+static_assert(kFingerprintCount <= 8u, "g_map_mismatch só tem 8 bits");
+
+bool verify_register_map() noexcept {
+    uint8_t mismatch = 0u;
+    for (uint8_t i = 0u; i < kFingerprintCount; ++i) {
+        if (tle_read(kResetFingerprint[i].addr) != kResetFingerprint[i].expected) {
+            mismatch = static_cast<uint8_t>(mismatch | (1u << i));
+        }
+    }
+    g_map_mismatch = mismatch;
+    return mismatch == 0u;
+}
+
 // ── Configuração ─────────────────────────────────────────────────────────────
 bool configure() noexcept {
     // 1. Direct drive: INJ1-4 (O1DD..O4DD) + VVT escape/admissão (O5DD/O6DD).
@@ -171,9 +227,24 @@ void tle8888_init() noexcept {
     SPI2_CR2  = 1u;
     SPI2_CR1  = SPI_CR1_SPE;
 
-    // ── 4. Verificação de comunicação ───────────────────────────────────────
-    // Não existe registador de "chip ID" no TLE8888. Confirmamos o barramento
-    // escrevendo e relendo DDConfig0 com o valor que queremos de facto usar.
+    // ── 4. Fingerprint do mapa de registadores ──────────────────────────────
+    // TEM de vir antes de qualquer escrita: depois da primeira, os valores de
+    // reset desaparecem e o teste deixa de significar nada.
+    // Falhar aqui é BLOQUEANTE — se o mapa não confere, configurar às cegas
+    // escreveria em registadores errados, e é preferível arrancar sem injecção
+    // nem ignição (power_stage_enable(false)) a arrancar com o CI num estado
+    // desconhecido.
+    if (!verify_register_map()) {
+        ++g_fault_count;
+        g_comms_ok   = false;
+        g_configured = false;
+        return;
+    }
+
+    // ── 5. Verificação de comunicação (caminho de ESCRITA) ──────────────────
+    // Não existe registador de "chip ID" no TLE8888. O fingerprint acima já
+    // validou o caminho de leitura e o mapa; isto valida a escrita, relendo
+    // DDConfig0 com o valor que queremos de facto usar.
     g_comms_ok = write_verify(R::DD_CONFIG0, R::DD_CONFIG0_OPENEMS);
     if (!g_comms_ok) {
         ++g_fault_count;
@@ -186,6 +257,14 @@ void tle8888_init() noexcept {
 }
 
 void tle8888_poll_diag() noexcept {
+    // Reprovação do fingerprint é LATCH: se o mapa de registadores não confere
+    // com o silício, nunca tentar recuperar. Sem isto, a recuperação abaixo
+    // (que só usa write_verify) marcaria o CI como bom e mascararia justamente
+    // a falha que o fingerprint existe para tornar visível. E não dá para
+    // reexecutar o fingerprint aqui: os valores de reset desapareceram na
+    // primeira escrita.
+    if (g_map_mismatch != 0u) { return; }
+
     if (!g_comms_ok || !g_configured) {
         // Tenta reestabelecer: barramento primeiro, configuração depois.
         g_comms_ok = write_verify(R::DD_CONFIG0, R::DD_CONFIG0_OPENEMS);
@@ -264,6 +343,8 @@ uint8_t tle8888_wd_status(uint8_t idx) noexcept {
     return g_wd_status[idx];
 }
 
+uint8_t tle8888_map_mismatch() noexcept { return g_map_mismatch; }
+
 }  // namespace ems::hal
 
 /*
@@ -327,6 +408,7 @@ uint8_t tle8888_channel_fault(uint8_t) noexcept { return 0u; }
 uint8_t tle8888_fault_bitmap() noexcept { return 0u; }
 uint8_t tle8888_vrs_diag() noexcept { return 0u; }
 uint8_t tle8888_wd_status(uint8_t) noexcept { return 0u; }
+uint8_t tle8888_map_mismatch() noexcept { return 0u; }
 }
 
 #endif

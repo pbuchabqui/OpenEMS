@@ -219,6 +219,50 @@ nada acontece no silício. Consequências concretas:
 hardware para firmware. Reescrever `tle8888.cpp` contra o Rev 1.2 é **pré-requisito da placa**, não
 tarefa posterior.
 
+### ✅ Mitigação implementada (2026-07-20) — fingerprint do mapa de registadores
+
+O driver foi reescrito, mas **isso não prova nada**: o mapa novo continua a ser a *minha leitura* da
+Table 50, e nenhum dos 1234 host-tests lhe toca (mockam o SPI). O risco não é "o driver está errado" —
+é **"o driver está errado e ninguém dá por isso"**, exatamente como em
+[[flash-nscr-nssr-register-map-bug]].
+
+`write_verify()` **não** fecha esse buraco: valida o caminho de escrita, mas se um endereço errado
+calhar noutro registador escrevível, a escrita "sucede", a releitura confere, e o CI fica configurado
+noutra coisa qualquer.
+
+**O que fecha: ler os valores de reset ANTES de qualquer escrita.** Os registadores de configuração
+têm reset documentado; lê-los e comparar prova de uma vez só que (a) o CI está presente, (b) o SPI está
+vivo, (c) o formato do frame está certo — ordem de bits, largura, R/W — e (d) os endereços apontam para
+os registadores que julgamos. Qualquer um destes errado faz **todas** as leituras divergirem.
+
+Implementado como `verify_register_map()`, com 8 entradas escolhidas por serem **distintivas**:
+
+| Registador | Reset |
+|---|---|
+| `ComConfig0` | `0xA4` |
+| `ComConfig1` | `0x0D` |
+| `OpConfig0` | `0x09` |
+| `WdConfig0` | `0x47` |
+| `WdConfig1` | `0x03` |
+| `FWDConfig` | `0xF7` |
+| `OutConfig0` | `0xFF` |
+| `OutConfig3` | `0x30` |
+
+⚠️ **A escolha não é arbitrária:** só registadores de **configuração** (os de estado/contador, `WWDStat`
+e `TECStat`, ambos reset `0x30`, derivam com o estado do CI → dariam falso negativo); e valores
+**distintos entre si**, porque um conjunto cheio de `0x3F` (`OutConfig1/2/4/5`) não discrimina — um
+deslocamento de endereço que caia noutro `0x3F` passaria despercebido.
+
+**É bloqueante, não cosmético:** falhar impede `configure()`, deixa `tle8888_ok()` a false e, por
+consequência, `power_stage_enable(false)` — arranca sem injeção nem ignição, em vez de arrancar com o CI
+num estado desconhecido. E fica **latched**: `poll_diag()` não tenta recuperar (só usa `write_verify`,
+que marcaria o CI como bom e mascararia justamente esta falha). Exposto na telemetria em
+`reserved[49]`.
+
+⚠️ **Isto NÃO fecha o risco antes do hardware.** Converte "mapa errado, silencioso, o motor não pega sem
+razão visível" em "mapa errado, alto e específico, no primeiro power-on". É a resolução disponível sem
+silício — o clock-out em bancada continua a ser o teste que decide.
+
 ---
 
 ## Blocos do PCB
@@ -599,6 +643,14 @@ divisor → `PC3`). Knock leva 2 vias **reservadas mas não cabladas** na v1. A 
 ## Verificação — ordem inegociável: bancada → ETB validado → motor
 Nunca ligar injetores ou bobinas nas etapas 1–3.
 
+0. **Fingerprint do TLE8888 — o PRIMEIRO teste com a placa alimentada, antes de tudo.**
+   Ler `reserved[49]` na telemetria assim que o CI tiver alimentação e o SPI clocar.
+   - `0x00` → o mapa de registadores está confirmado contra o silício. **É o único momento em que este
+     teste é possível** (os valores de reset desaparecem na primeira escrita).
+   - `0xFF` (todas as entradas) → o SPI não está a comunicar de todo: verificar `PB12–PB15`, e sobretudo
+     que `auxiliaries_init()` não voltou a reclamar `PB12`/`PB13`.
+   - Padrão misto → mapa parcialmente errado: comparar entrada a entrada com a Table 50. **Não
+     prosseguir**; injeção e ignição estarão inibidas de propósito.
 1. **Host** — `make host-test` e `make host-test-vgt6` verdes, incluindo o novo teste de VBATT.
 2. **Lacunas pendentes do README §P2** (ambas abertas, ambas pré-requisito de partida):
    - Scope de INJ/IGN — latência e jitter contra o esperado (~0,4 µs / ~0,019° @8000), nos pinos
@@ -727,9 +779,12 @@ compilado mas não ativado. Confirmar antes de assumir que os pinos estão livre
 
 ### Ainda dependem de ti
 
-**6. VVT com um came só.** Recomendação: **aceitar na v1** — montar os dois drivers, comissionar só o
-came instrumentado, reservar via no conector para o segundo sensor. Controle dual real exige 2º sensor
-de came **e** mudança de firmware, e nada disso é pré-requisito de primeira partida.
+**6. VVT com um came só.** ✅ **RESOLVIDO — aceite na v1** (2026-07-20). Montar os dois drivers,
+**comissionar só o came instrumentado**, e a via do 2º sensor de came já está reservada na tabela de 55
+vias do conector (grupo "Reserva"). Controle dual real exige 2º sensor **e** mudança de firmware (os dois
+PIDs partilham o `pos_deg_x10` do único CMP, `auxiliaries.cpp:379-384`), e nada disso é pré-requisito de
+primeira partida. **Comissionar depois do motor estável**, não antes — os solenoides comutam perto do par
+CKP.
 
 **8. Caixa, vedação, coating e orçamento.** Precisa de decisão tua sobre grau de proteção e custo alvo.
 
