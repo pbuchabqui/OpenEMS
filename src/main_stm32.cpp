@@ -519,6 +519,14 @@ static void openems_init() noexcept {
 	// Authority LTFT (176-184) só se layout version actual — blob v2 tem lixo/zeros.
 	if (g_calib_page0[ems::engine::kCalLayoutVersionOffset] ==
 	    ems::engine::kCalLayoutVersion) {
+		// EOI blend (164-168): idle EOI + janela RPM lo/hi. Serialize grava
+		// sempre os globals vivos aqui, então página na versão actual tem
+		// valores válidos; hi<=lo = blend off (honrado). Mesmo clamp do
+		// handler de escrita (eoi_idle_deg ∈ [0,719]).
+		std::memcpy(&ems::engine::eoi_idle_deg,     g_calib_page0 + 164, 2u);
+		std::memcpy(&ems::engine::eoi_blend_rpm_lo, g_calib_page0 + 166, 2u);
+		std::memcpy(&ems::engine::eoi_blend_rpm_hi, g_calib_page0 + 168, 2u);
+		if (ems::engine::eoi_idle_deg > 719u) { ems::engine::eoi_idle_deg = 719u; }
 		uint16_t mult_c = 0u, add_c = 0u, max_s = 0u;
 		std::memcpy(&mult_c, g_calib_page0 + 176, 2u);
 		std::memcpy(&add_c,  g_calib_page0 + 178, 2u);

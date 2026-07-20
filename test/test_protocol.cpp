@@ -180,6 +180,40 @@ void test_ts_envelope_read_write_burn(void) {
     CHECK_TRUE(r.frame_ok && (r.data[0] & 0x01u) == 0u, "dirty limpo após burn");
 }
 
+void test_eoi_blend_page0_roundtrip(void) {
+    // Cobre o contrato de persistência do EOI blend (bytes 164-168 da page0)
+    // que o boot-load em main_stm32.cpp restaura: serialize grava os globals
+    // vivos; write-handler aplica-os de volta com clamp idle∈[0,719] — mesma
+    // semântica do memcpy do boot-load.
+    section("page0 EOI blend: serialize + write handler (persistência)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+
+    // Serialize: globals vivos → bytes 164/166/168
+    eoi_idle_deg = 60u; eoi_blend_rpm_lo = 2000u; eoi_blend_rpm_hi = 4000u;
+    const uint8_t rd[6] = {'r', 0x00u, 0xA4u, 0x00u, 0x06u, 0x00u};  // page0 off=164 len=6
+    EnvResp r = env_txn(rd, 6u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 6u, "'r' page0 164..169 → 6B");
+    CHECK_EQ(static_cast<uint16_t>(r.data[0] | (r.data[1] << 8u)),   60u, "serialize eoi_idle_deg");
+    CHECK_EQ(static_cast<uint16_t>(r.data[2] | (r.data[3] << 8u)), 2000u, "serialize eoi_blend_rpm_lo");
+    CHECK_EQ(static_cast<uint16_t>(r.data[4] | (r.data[5] << 8u)), 4000u, "serialize eoi_blend_rpm_hi");
+
+    // Write-handler: aplica nos globals (idle=90, lo=1800, hi=3600)
+    const uint8_t wr[12] = {'w', 0x00u, 0xA4u, 0x00u, 0x06u, 0x00u,
+                            0x5Au, 0x00u, 0x08u, 0x07u, 0x10u, 0x0Eu};
+    r = env_txn(wr, 12u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'w' page0 EOI → OK");
+    CHECK_EQ(eoi_idle_deg,     90u,   "write aplicou eoi_idle_deg");
+    CHECK_EQ(eoi_blend_rpm_lo, 1800u, "write aplicou eoi_blend_rpm_lo");
+    CHECK_EQ(eoi_blend_rpm_hi, 3600u, "write aplicou eoi_blend_rpm_hi");
+
+    // Clamp: idle=800 (0x0320) → 719, igual ao boot-load
+    const uint8_t wc[8] = {'w', 0x00u, 0xA4u, 0x00u, 0x02u, 0x00u, 0x20u, 0x03u};
+    r = env_txn(wc, 8u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'w' eoi_idle=800 → OK");
+    CHECK_EQ(eoi_idle_deg, 719u, "write clampa eoi_idle_deg a 719");
+}
+
 void test_ts_envelope_burn_gate(void) {
     section("envelope TS: burn bloqueado com motor girando");
     ems::app::ui_test_reset();

@@ -273,6 +273,7 @@ int main(void) {
     test_ts_envelope_basic();
     test_ts_envelope_crc_reject();
     test_ts_envelope_read_write_burn();
+    test_eoi_blend_page0_roundtrip();
     test_ts_envelope_burn_gate();
     test_ts_axes_page();
     test_ts_envelope_canid_forms();

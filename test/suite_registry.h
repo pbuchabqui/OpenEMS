@@ -169,6 +169,7 @@ void test_legacy_protocol_regression(void);
 void test_ts_envelope_basic(void);
 void test_ts_envelope_crc_reject(void);
 void test_ts_envelope_read_write_burn(void);
+void test_eoi_blend_page0_roundtrip(void);
 void test_ts_envelope_burn_gate(void);
 void test_ts_axes_page(void);
 void test_ts_envelope_canid_forms(void);
