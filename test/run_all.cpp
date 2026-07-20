@@ -241,6 +241,7 @@ int main(void) {
     // ── PAGE0 TRIMS / DRIVEABILITY (boot restore) ───────────────────────
     printf("\n=== PAGE0 TRIMS/DRIVEABILITY ===");
     test_page0_trims_driveability();
+    test_page0_capture_polarity();
 
     // ── ECU SCHED FASE 2 ────────────────────────────────────────────────
     printf("\n=== ECU SCHED (fase 2) ===");

@@ -108,17 +108,21 @@ Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundament
 
 | Item | Estado |
 |---|---|
-| **Polaridade de borda CMP/CKP** | Desenho: byte de calibração em page0 (offset ≥258). Ver `netlist_v1.md`. Firmware **por implementar**; **não** bloqueia o cobre Hall. |
-| **Números físicos de pino do TLE8888** | Tirar da tabela de pinout do datasheet. **Bloqueia o layout.** |
+| **Números físicos LQFP-100 do TLE8888** | Tirar da Table pinout do datasheet. MCU→INJEN/IGNEN já são PE1/PE3 (rusEFI usa GPIOs de board, não números de package fixos). **Bloqueia o layout.** |
 | **Dimensões do coreboard e das caixas AMPSEAL** | Medição manual + desenhos da TE. Ver §5. |
-| **Part numbers Tier C** | Buck, LDO, isolador USB, DC-DC isolado, bobinas (validar IGN vs smart coil). |
-| **Relé principal** | Três narrativas (key-on / driver CI / via J2) — fechar uma. |
+| **Part numbers Tier C** | Buck, LDO, isolador USB, DC-DC isolado. |
+| **Bobinas (smart vs IGBT)** | IGN do TLE = push-pull **20 mA** (rusEFI/datasheet). Confirmar V_IH da bobina **antes** de fechar BOM — pode exigir IGBT externo. |
 | **Caixa, vedação, coating, orçamento** | Precisa de alvo de custo. |
 
 **Já no código (bring-up ainda sem silício):**
 - Driver hub: unlock / InConfig / OE_SET / DD pump-fan
 - Eco de endereço SPI (gate) + fingerprint consultivo (só OpConfig0/OutConfig3)
 - page0 56–76 restaurado no boot (`apply_page0_trims_driveability`)
+- **Polaridade CKP/CMP** page0[258] + `tim5_ic_set_capture_polarity` (Speeduino: TrigEdge; pull segue a borda)
+
+**Relé principal — ✅ decisão v1 (após rusEFI):** ECU alimentada por **key-on** (sem power-latch MCU).
+Via `MAIN_RLY` no AMPSEAL fica **reservada / DNP** para o driver de main-relay do TLE
+(`Cmd0` MRON/MRSE no rusEFI). Não comandar na v1 — evita matar flash a meio de burn.
 
 ---
 

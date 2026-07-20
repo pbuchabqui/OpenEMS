@@ -143,6 +143,7 @@ void test_hal_adc_all(void);
 void test_hal_flash_all(void);
 void test_xtau_autocalib_all(void);
 void test_page0_trims_driveability(void);
+void test_page0_capture_polarity(void);
 void test_ecu_sched_hardware_init(void);
 void test_ecu_sched_ccr_write(void);
 void test_ecu_sched_late_events(void);

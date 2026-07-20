@@ -73,6 +73,31 @@ void tim5_ic_init(void) {
     TIM5_CR1 = TIM_CR1_CEN;
 }
 
+void tim5_ic_set_capture_polarity(bool ckp_falling, bool cmp_falling) noexcept {
+    // CCER: limpar CCxE antes de mudar CCxP, depois repor CCxE (+ CC3E do dispatcher).
+    // PUPDR: 01=pull-up, 10=pull-down. Captura na descida → idle HIGH → pull-up;
+    // captura na subida → idle LOW → pull-down (fix de falso-sync).
+    uint32_t ccer = TIM5_CCER;
+    ccer &= ~(TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC1P | TIM_CCER_CC2P);
+    TIM5_CCER = ccer;
+
+    if (ckp_falling) {
+        ccer |= TIM_CCER_CC1P;
+    }
+    if (cmp_falling) {
+        ccer |= TIM_CCER_CC2P;
+    }
+    ccer |= TIM_CCER_CC1E | TIM_CCER_CC2E | TIM_CCER_CC3E;
+    TIM5_CCER = ccer;
+
+    uint32_t pupdr = GPIOA_PUPDR;
+    pupdr &= ~((0x3u << 0u) | (0x3u << 2u));
+    // bit field: 01 = pull-up, 10 = pull-down
+    pupdr |= ckp_falling ? (0x1u << 0u) : (0x2u << 0u);
+    pupdr |= cmp_falling ? (0x1u << 2u) : (0x2u << 2u);
+    GPIOA_PUPDR = pupdr;
+}
+
 uint32_t tim5_count() noexcept {
     return TIM5_CNT;
 }
@@ -303,6 +328,7 @@ void timer_etb_set_duty(uint16_t duty) {
 namespace ems::hal {
 static uint32_t g_mock_tim5_cnt = 0u;
 void tim5_ic_init(void) {}
+void tim5_ic_set_capture_polarity(bool, bool) noexcept {}
 void tim3_pwm_init(uint32_t) {}
 void tim4_pwm_init(uint32_t) {}
 void tim2_pwm_init(uint32_t) {}

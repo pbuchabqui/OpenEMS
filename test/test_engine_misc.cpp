@@ -820,6 +820,25 @@ void test_xtau_autocalib_all(void) {
                "células RPM×MAP distantes aprendem parâmetros distintos");
 }
 
+void test_page0_capture_polarity(void) {
+    section("page0 capture polarity: bit0 CKP / bit1 CMP");
+    capture_polarity = 0xFFu;
+    uint8_t page[260] = {};
+    page[258] = 0x02u;  // CMP falling only
+    apply_page0_capture_polarity(page, sizeof(page));
+    CHECK_EQ(capture_polarity, 0x02u, "bit1 CMP falling");
+    page[258] = 0x03u;
+    apply_page0_capture_polarity(page, sizeof(page));
+    CHECK_EQ(capture_polarity, 0x03u, "ambos falling");
+    page[258] = 0x00u;
+    apply_page0_capture_polarity(page, sizeof(page));
+    CHECK_EQ(capture_polarity, 0x00u, "default subida");
+    // short buffer
+    capture_polarity = 0xAAu;
+    apply_page0_capture_polarity(page, 100u);
+    CHECK_EQ(capture_polarity, 0xAAu, "len curto = no-op");
+}
+
 void test_page0_trims_driveability(void) {
     section("page0 trims/driveability: boot path restaura 56-76");
 

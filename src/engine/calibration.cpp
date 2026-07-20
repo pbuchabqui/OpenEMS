@@ -3,6 +3,7 @@
 #include <cstring>
 
 #include "drv/sensors.h"
+#include "hal/timer.h"
 
 namespace ems::engine {
 
@@ -194,6 +195,7 @@ int8_t cyl_ign_trim_deg[cfg::kCylinderCount]  = {};  // 0 = sem correção
 uint8_t cmp_window_open_tooth  = 0u;  // 0/0 = desabilitado
 uint8_t cmp_window_close_tooth = 0u;
 uint8_t ckp_skip_pulses_after_gap = 0u;  // 0 = desligado
+uint8_t capture_polarity = 0u;  // bit0 CKP falling, bit1 CMP falling
 
 uint8_t  inj_duty_max_pct  = 0u;   // 0 = protecção desligada
 uint8_t  inj_duty_tol_ms10 = 30u;  // 300 ms de tolerância acima do limite
@@ -436,6 +438,16 @@ void launch_tc_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
     std::memcpy(p + 19, &tc_max_reduction_pct_x10, 2u);
     std::memcpy(p + 21, &tc_spark_retard_max_deg,  2u);
     std::memcpy(p + 23, &tc_reduction_rate_x10,    2u);
+}
+
+void apply_page0_capture_polarity(const uint8_t* page0, uint16_t len) noexcept {
+    if (page0 == nullptr || len <= kCapturePolarityPage0Off) {
+        return;
+    }
+    capture_polarity = static_cast<uint8_t>(page0[kCapturePolarityPage0Off] & 0x03u);
+    ems::hal::tim5_ic_set_capture_polarity(
+        (capture_polarity & 0x01u) != 0u,
+        (capture_polarity & 0x02u) != 0u);
 }
 
 void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept {

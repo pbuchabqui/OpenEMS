@@ -440,6 +440,8 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 254, &ems::engine::decel_cut_map_max_bar_x100, 2u);
         g_page0[256] = ems::engine::decel_cut_gear_inhibit_ms10;
         g_page0[257] = ems::engine::knock_dead_min_p2p;
+        // 258: polaridade captura CKP/CMP (bit0/bit1 = falling)
+        g_page0[ems::engine::kCapturePolarityPage0Off] = ems::engine::capture_polarity;
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -677,6 +679,9 @@ bool sync_table_from_page(uint8_t page) noexcept {
             ems::engine::decel_cut_gear_inhibit_ms10 = g_page0[256];
             ems::engine::knock_dead_min_p2p = g_page0[257];
         }
+        // Polaridade TIM5 (page0[258]) — fora do gate de layout: blob antigo = 0
+        // = subida (default).
+        ems::engine::apply_page0_capture_polarity(g_page0, sizeof(g_page0));
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));

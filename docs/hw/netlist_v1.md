@@ -188,7 +188,7 @@ em bancada antes do motor) é requisito de **projeto e de procedimento** — ver
 | `MCU.PE12` | `TLE8888.IN10` | `FAN_CMD` |
 | `TLE8888.OUT14` | `J2.PUMP_RLY` | `PUMP_RLY_LS` | IN9, DD+OE via driver |
 | `TLE8888.OUT15` | `J2.FAN_RLY` | `FAN_RLY_LS` | IN10, DD+OE via driver |
-| `TLE8888.<main relay drv>` | `J2.MAIN_RLY` | `MAIN_RLY_LS` | ⚠️ dono eléctrico **em aberto** |
+| `TLE8888.MR` (driver) | `J2.MAIN_RLY` | `MAIN_RLY_LS` | **DNP v1** — key-on directo; rusEFI Cmd0 MRON |
 
 Saídas low-side para a **bobina** do relé (~200 mA). Sem diodos de roda-livre discretos — clamp interno.
 ⚠️ Números de pino LQFP-100 do TLE: **tier B**. OUT14/OUT15 e InConfig fechados no firmware
@@ -352,28 +352,21 @@ Esta é a propriedade que faz disto um esquemático e não prosa: **cada pino te
 
 ### Bloqueios que têm de fechar ANTES do layout
 
-**1. 🚨 Polaridade de borda CMP/CKP — tem saída conhecida, por implementar.**
-Já não é preciso esperar pelo part number do Hall: a polaridade pode ser um **byte de calibração**,
-o que tira a decisão do caminho crítico. Desenho apurado em 2026-07-20:
-- 1 byte em page0, **offset ≥ 258** (byte mais alto usado é 257; ≥258 fica coberto pelo gate
-  `cal_layout_ok` do byte 175, logo blobs antigos leem 0). `bit0` = CKP, `bit1` = CMP.
-  **Default `0` = subida = comportamento actual.**
-- Nova `tim5_ic_set_capture_polarity()`: **limpar `CCxE` → escrever `CCxP` → repor `CCxE`** (trocar a
-  polaridade com a captura activa pode latch-ar uma captura espúria).
-- ⚠️ **O pull tem de seguir a polaridade** — com captura na descida o nível seguro inverte e o default
-  passa a **pull-up**. Deixar PUPDR dessincronizado reintroduz o falso-sync.
-- ⚠️ **Duas armadilhas:** (a) a config carrega **depois** do `tim5_ic_init()` (`main_stm32.cpp:482` vs
-  `:513`), logo é preciso re-aplicar no bloco §5; (b) o caminho de boot **salta os bytes 56-65**, ver
-  o bug latente abaixo.
-- Impacto angular absorvido: o gate temporal do CMP é **invariante à polaridade** e o gate de posição
-  **re-ancora sozinho** (±3 dentes). Só `cmp_window_open/close_tooth` é referência fixa — e está
-  desligado por defeito.
+**1. ✅ Polaridade de borda CMP/CKP — implementada.**
+page0[258]: bit0=CKP falling, bit1=CMP falling. Default 0 = subida + pull-down.
+`apply_page0_capture_polarity()` no boot (após NVM) e na UI; `tim5_ic_set_capture_polarity()`
+faz CCxE→CCxP→CCxE e PUPDR em conjunto. Speeduino: `TrigEdge` / Hall “drags to ground” →
+muitas vezes **RISING** no MCU se a rede inverte; Hall OC idle-HIGH típico pede **falling** + pull-up
+no bit CMP. **Não bloqueia layout** do condicionamento Hall (pull-up externo no esquema).
 
 **2. 🚨 Números físicos de pino do TLE8888** — tier B, tirar da tabela de pinout do datasheet.
+MCU pins (PE1/PE3 → INJEN/IGNEN) estão fechados; package LQFP-100 ainda não.
 
 **3. ⚠️ Dimensões do coreboard e das caixas AMPSEAL** — ver `README.md` §5 para o que medir.
 
-**4. ⚠️ Part numbers `TBD`:** buck, LDO, isolador USB, DC-DC isolado.
+**4. ⚠️ Part numbers `TBD`:** buck, LDO, isolador USB, DC-DC isolado; bobinas (20 mA IGN vs smart coil).
+
+**5. ✅ Relé principal v1:** key-on directo; `J2.MAIN_RLY` reservado DNP (rusEFI: Cmd0 MRON).
 
 ---
 

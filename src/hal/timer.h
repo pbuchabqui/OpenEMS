@@ -7,6 +7,12 @@ namespace ems::hal {
 void tim5_ic_init(void);
 uint32_t tim5_count() noexcept;
 
+// Polaridade de captura TIM5 + pull GPIOA (CKP=PA0 / CMP=PA1).
+// falling=true → CC1P/CC2P e pull-up; false → subida e pull-down (default actual).
+// Sequência: limpar CCxE → CCxP → repor CCxE (evitar captura espúria).
+// Chamar após carregar page0 (tim5_ic_init corre antes da NVM).
+void tim5_ic_set_capture_polarity(bool ckp_falling, bool cmp_falling) noexcept;
+
 // TIM3_CH1 PA6 AF2 — general PWM (RGT6). Injeção/ignição usam GPIO BSRR.
 void tim3_pwm_init(uint32_t freq_hz);
 void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept;

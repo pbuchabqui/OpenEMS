@@ -521,6 +521,9 @@ static void openems_init() noexcept {
 	// Trims / CMP window / anti-jerk / rev limiter / ckp skip (56-76).
 	// Antes só a UI aplicava isto — reboot perdia a calibração.
 	ems::engine::apply_page0_trims_driveability(g_calib_page0, kCalibPageBytes);
+	// Polaridade CKP/CMP (page0[258]) — re-aplica TIM5 + pull (tim5_ic_init foi
+	// antes da NVM, default subida/pull-down).
+	ems::engine::apply_page0_capture_polarity(g_calib_page0, kCalibPageBytes);
 	// Closed-loop / LEARN (page0[80-85])
 	ems::engine::closed_loop_enable =
 	    (g_calib_page0[80] != 0u) ? 1u : 0u;

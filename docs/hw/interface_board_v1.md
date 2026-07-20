@@ -499,15 +499,17 @@ que também carrega o watchdog.
 ⚠️ **A migração de `PB12`/`PB13` é obrigatória de qualquer modo** — sem ela o SPI2 não existe e o
 TLE8888 inteiro não funciona. Ver o bug em [[pb12-pb13-pump-fan-vs-spi2-tle8888]].
 
-### 11. Relé principal — v1 sem controle por MCU
-⚠️ **Rever:** o TLE8888 traz **driver de relé principal**, detecção de chave e *engine off timer*
-integrados — feitos para exatamente este problema (manter o rail vivo até terminar as escritas em flash).
-A razão original de evitar o relé comandado deixa de valer; avaliar usar o mecanismo do CI.
+### 11. Relé principal — ✅ v1: key-on, sem MCU (após rusEFI)
 
-**Decisão anterior (a rever): a ECU é alimentada direto pelo key-on.** O firmware grava LTFT, calibração e `EtbCalRecord` em
-flash, e esse caminho já mostrou fragilidade (memória `flash-nscr-nssr-register-map-bug`). Relé cortado
-pelo MCU no key-off pode matar o rail no meio de uma escrita e corromper o setor. Fazer certo exige
-**power-latch** — complexidade desnecessária agora. Footprint reservado para a v2.
+**Decisão fechada:** ECU alimentada por **key-on** directo. Via `MAIN_RLY` no conector = **reserva/DNP**.
+
+**Referência rusEFI:** o TLE8888 expõe main-relay via `Cmd0` (`MRSE`/`MRON`) e o driver trata
+`TLE8888.MR` como saída lógica (`tle8888.cpp` update_output). Útil em produção com power-latch e
+*engine off timer*.
+
+**Porque não na v1:** flash já mostrou fragilidade (NSCR/NSSR); cortar rail no key-off sem latch
+correcto corrompe burn. Power-latch + serviço MR é trabalho de produto, não de primeira partida.
+Footprint + via no AMPSEAL ficam para migrar depois sem respin de conector.
 
 ### 12. — (movido) O inventário do TLE8888 está na seção de arquitetura, no topo.
 
