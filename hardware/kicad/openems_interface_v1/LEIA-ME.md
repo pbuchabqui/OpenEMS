@@ -48,6 +48,14 @@
 | ERC | Inspect → Electrical Rules Checker |
 | Annotate | Tools → Annotate Schematic |
 
+## PCB placement
+
+```bash
+python3 hardware/kicad/openems_interface_v1/scripts/build_pcb_placement.py
+```
+
+Coloca J1/J2 na aresta inferior, WeAct + headers + furos Φ3.2 ao centro.
+
 ## Regenerar
 
 ```bash
