@@ -110,7 +110,7 @@ Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundament
 
 | Item | Estado |
 |---|---|
-| **Dimensões do coreboard e das caixas AMPSEAL** | Medição manual + desenhos da TE. Ver §5. **Bloqueia outline.** |
+| **Dimensões das caixas AMPSEAL** | Desenhos TE dos headers PCB. Coreboard WeAct: ✅ ver `weact_h562_coreboard.md`. |
 | **Part numbers Tier C** | Buck, LDO, isolador USB, DC-DC isolado. |
 | **Bobinas (smart vs IGBT)** | IGN do TLE = push-pull **20 mA** (rusEFI/datasheet). Confirmar V_IH da bobina **antes** de fechar BOM — pode exigir IGBT externo. |
 | **Caixa, vedação, coating, orçamento** | Precisa de alvo de custo. |
@@ -138,19 +138,25 @@ confirmado contra fonte primária. Não construir em cima sem confirmar.
 | **Atraso de propagação do VR** | 🚨 **O datasheet NÃO especifica.** Os 50 ns que os docs citavam eram do **MAX9924**, peça que saiu da BOM. Medição obrigatória no passo 3. |
 | **VREF+ é pino separado no LQFP100** | ⚠️ Citação **não reconfirmada** — PDFs da ST deram timeout. Não afeta a decisão (a). |
 | **Números de pino do TLE8888** | ✅ **Verificados** DS Rev 1.2 §3 + rusEFI lib — `tle8888_pinout.md`. |
-| **Dimensões do coreboard** | ⚠️ Não obtidas — a repo pública da WeAct é a de **64 pinos**, não a VGT6. |
+| **Dimensões do coreboard** | ✅ **WeAct V1.0 Board Shape:** 38,62 × 69,10 mm, furos Φ3,2 @ 2,80 mm — `weact_h562_coreboard.md`. Altura USB ainda a medir. |
 | **Todo o driver TLE8888** | 🚨 **Nunca clockou silício.** Os 1234 host-tests mockam o SPI. Só o bring-up decide. |
 
 ---
 
-## 5. Antes do layout — medições em falta
+## 5. Antes do layout — medições
 
-**No coreboard físico:** comprimento × largura (±0,5 mm) · passo e posição dos headers (distância entre
-filas e do bordo a cada fila) · nº de pinos por fila e origem da numeração · altura com USB montado e
-altura sob a placa com barra de pinos · furos de fixação (diâmetro e coordenadas a partir de um canto).
+### Coreboard WeAct (VGT6) — ✅ shape fechado
+Ver **`weact_h562_coreboard.md`** (PDF *Board Shape 外形* V1.0):
+- Contorno **38,62 × 69,10 mm**
+- Furos **Φ 3,2**, offset **2,80 mm**, pitch horizontal **30,48 mm**
+- Headers laterais dual-row **2,54 mm**, GPIOE exposto
 
-**Desenhos da TE** para `776164-1` e `770680-1`: *customer drawing* do **header PCB** (não do plug), e a
-variante (vertical vs cotovelo). Disponíveis nas páginas de produto da TE e em DigiKey/Mouser/Farnell.
+**Ainda a medir na peça física:** altura total (USB-C + headers + componentes);
+confirmar pin 1 de cada conector face ao silkscreen.
+
+### AMPSEAL (ainda em aberto)
+**Desenhos da TE** para `776164-1` e `770680-1`: *customer drawing* do **header PCB**
+(não do plug), variante vertical vs cotovelo — DigiKey/Mouser/Farnell.
 
 ---
 
