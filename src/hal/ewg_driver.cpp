@@ -49,8 +49,14 @@ void ewg_driver_set_motor_pwm(int16_t pwm) noexcept {
     tim2_set_duty(duty);
 }
 
+// EWG diferido na placa de interface v1: PC3/INP13 passou a ser VBATT (bloco 7), de
+// modo que já não existe canal de realimentação de posição. Devolver o raw de VBATT
+// aqui alimentaria o PID do EWG com a tensão da bateria — daí o retorno fixo em 0,
+// que `ewg_read_position_pct_x10()` traduz em 0% e mantém o laço inerte enquanto a
+// saída do EWG não estiver populada. Ao repor o EWG (v2), atribuir-lhe um canal
+// próprio e restaurar a leitura.
 uint16_t ewg_driver_read_position_raw() noexcept {
-    return adc_secondary_read(ems::hal::AdcSecondaryChannel::EWG_POS);
+    return 0u;
 }
 
 void ewg_driver_shutdown() noexcept {

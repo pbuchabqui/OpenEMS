@@ -170,6 +170,7 @@ int main(void) {
     test_sensors_tick_50ms();
     test_sensors_set_range();
     test_sensors_etb_harness_present();
+    test_sensors_vbatt_dedicated_channel();
     test_sensors_table_entry_setters();
 
     // ── Knock — Segunda Fase ──────────────────────────────────────────────────

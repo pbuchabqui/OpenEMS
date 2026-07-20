@@ -114,6 +114,7 @@ void test_sensors_on_tooth(void);
 void test_sensors_tick_50ms(void);
 void test_sensors_set_range(void);
 void test_sensors_etb_harness_present(void);
+void test_sensors_vbatt_dedicated_channel(void);
 void test_sensors_table_entry_setters(void);
 void test_knock_window_cycle_end(void);
 void test_knock_save_to_nvm(void);

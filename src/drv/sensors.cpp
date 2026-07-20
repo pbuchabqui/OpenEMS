@@ -840,11 +840,20 @@ void sensors_tick_100ms() noexcept {
 
     refresh_throttle_fault_bits();
 
-    if (!g_etb_harness_present) {
-        const uint16_t vbatt_mv = vbatt_raw_to_mv(etb2_raw);
-        g_data_staging.vbatt_mv = (vbatt_mv >= 6000u && vbatt_mv <= 18000u) ? vbatt_mv : 12000u;
-    } else {
+    // VBATT tem canal próprio (PC3/INP13, bloco 7 do plano da placa v1) e já não
+    // divide o pino com o ETB_TPS2 — deixa de depender de `g_etb_harness_present`,
+    // que antes fixava 12000 mV com o chicote do ETB ligado. Isso importa porque
+    // `corr_vbatt()` e `dwell_ms_x10_from_vbatt_rpm()` consomem este valor: num
+    // cranking real a bateria cai a 9-10 V, e o literal subestimava o dead-time do
+    // injetor e encurtava o dwell exatamente quando falta energia.
+    // Em bancada não há divisor em PC3 — o pino flutua e leria lixo —, por isso o
+    // modo de bancada continua a fixar 12000 mV.
+    if (g_bench_clt_iat) {
         g_data_staging.vbatt_mv = 12000u;
+    } else {
+        const uint16_t vbatt_mv =
+            vbatt_raw_to_mv(ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::VBATT));
+        g_data_staging.vbatt_mv = (vbatt_mv >= 6000u && vbatt_mv <= 18000u) ? vbatt_mv : 12000u;
     }
 
     // Slow path also samples APP/ETB; publish full snapshot for sensors_get().
