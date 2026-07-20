@@ -1,7 +1,9 @@
 # OpenEMS — Electrical Wiring Diagram
 
 > **⚠️ STALE DIAGRAM:** ASCII abaixo misturam mapas antigos (TIM OC / PE* / dual-use).
-> **Fonte de verdade:** `README.md` §5 — pinout **RGT6 (activo)** vs **VGT6 (legado)**.
+> **Fonte de verdade do pinout:** `docs/hw/pinout.md` — RGT6 (default) vs VGT6.
+> Este ficheiro serve apenas os esquemáticos eléctricos (alimentação,
+> condicionamento, conector, terra); o mapa de pinos ASCII está desactualizado.
 > Firmware actual = **RGT6**: INJ PA15/PB3/**PC10/PC11**, IGN PC6–9, ETB PA6/PA8/PB4,
 > CKP/CMP PA0/PA1, OIL PC1. Não usar PE* nem PB10/PB11 para INJ (WeAct: não no header).
 

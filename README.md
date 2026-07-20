@@ -121,161 +121,37 @@ Eventos de ignicao usam o mesmo conceito, mas programam TIM8 para dwell e centel
 - Recuperação: -0,1° por ciclo limpo após 10 ciclos consecutivos limpos.
 - Persistência NVM: retardo em slot knock, threshold armazenado como int8_t (/32).
 
-### 5. Atuadores e pinout congelado (firmware)
+### 5. Atuadores e pinout (firmware)
 
-**Fonte de verdade:** este README + `ecu_sched.cpp` (INJ/IGN BSRR), `etb_driver.cpp`,
-`timer.cpp` (CKP/CMP/ETB PWM), `adc.cpp`.  
-**Firmware:** selecciona o package no **build** (não em runtime):
+**Pinout completo: [`docs/hw/pinout.md`](docs/hw/pinout.md)** — mapa por pino dos
+dois packages, conflitos WeAct e fiação. Código de referência: `ecu_sched.cpp`
+(INJ/IGN BSRR), `hal/out_pins.h` (`static_assert` por board), `etb_driver.cpp`,
+`timer.cpp`, `adc.cpp`. O firmware selecciona o package no **build**:
 
 ```bash
-make firmware BOARD=rgt6   # default — WeAct LQFP64
-make firmware BOARD=vgt6   # LQFP100 GPIOE (INJ/IGN/ETB em PE*)
-# bins: /tmp/openems-build/bin/openems-rgt6.bin | openems-vgt6.bin
+make firmware BOARD=rgt6   # default — WeAct LQFP64 (INJ/IGN em A/B/C)
+make firmware BOARD=vgt6   # LQFP100 (INJ/IGN/ETB em PE*, BSRR único)
+# bins: /tmp/openems-build/bin/openems-{rgt6,vgt6}.bin
 ```
 
-#### 5.0 RGT6 vs VGT6 — diferença de pinout
+Resumo das diferenças (o RGT6 **não tem port E** → INJ/IGN/ETB redistribuídos):
 
-| | **RGT6** (`BOARD=rgt6`, default) | **VGT6** (`BOARD=vgt6`) |
-|--|----------------------------------|---------------------------|
-| Package | LQFP64 | LQFP100 |
-| Portas GPIO | A, B, C | A–E |
-| WeAct típica | H562RGT6 | H562VGT6 |
-| Flag C | `-DEMS_BOARD_RGT6` | `-DEMS_BOARD_VGT6` |
-| Bin | `openems-rgt6.bin` | `openems-vgt6.bin` |
+| Função | **RGT6** (default) | **VGT6** |
+|--------|--------------------|----------|
+| CKP / CMP | PA0 / PA1 (TIM5) | igual |
+| UART / USB / CAN / LED | PA9-10 / PA11-12 / PB8-9 / PB2 | igual |
+| INJ1–4 | PA15 / PB3 / PC10 / PC11 | PE0 / PE2 / PE4 / PE6 |
+| IGN1–4 | PC6 / PC7 / PC8 / PC9 | PE9 / PE11 / PE13 / PE15 |
+| ETB PWM / DIR | PA6 (TIM3) / PA8 / PB4 | PE5 (TIM15) / PE7 / PE8 |
+| INJ/IGN drive | GPIO BSRR (A/B/C) | GPIO BSRR (só GPIOE) |
 
-**Porquê divergir:** o RGT6 **não tem port E**. O mapa VGT6 concentrou INJ/IGN/ETB DIR/PWM em **PE\*** (BSRR único, fiação limpa no LQFP100). No RGT6 esses pinos **não existem** — INJ/IGN/ETB foram redistribuídos por A/B/C.
+ADC (comum aos dois): MAP PA3 · TPS PA4 · KNOCK PA5 · ETB_TPS1/2 PA2/PC5 · APP1/2
+PC0/PC2 · CLT PB0 · IAT PB1 · FUEL_P PC4 · OIL_P PC1 · EWG_POS PC3. WBO2 λ só via
+CAN (sem ADC O2). Tabela ADC completa (ADC1/2 + INP): `docs/hw/pinout.md`.
 
-##### Comparação lado a lado (o que muda)
-
-| Função | **RGT6** (`BOARD=rgt6`) | **VGT6** (`BOARD=vgt6`) | Notas |
-|--------|--------------------------|--------------------------|--------|
-| CKP | **PA0** TIM5_CH1 AF2 | PA0 TIM5_CH1 AF2 | Igual |
-| CMP | **PA1** TIM5_CH2 AF2 | PA1 TIM5_CH2 AF2 | Igual |
-| UART1 TX/RX | **PA9 / PA10** | PA9 / PA10 | Igual |
-| USB DM/DP | **PA11 / PA12** | PA11 / PA12 | Igual |
-| CAN | **PB8 / PB9** | PB8 / PB9 | Igual |
-| LED | **PB2** | PB2 | Igual |
-| **INJ1** | **PA15** | **PE0** | Remap RGT6 |
-| **INJ2** | **PB3** | **PE2** | Remap RGT6 |
-| **INJ3** | **PC10** | **PE4** | Remap; WeAct: PB10/11 **não** no header |
-| **INJ4** | **PC11** | **PE6** | Remap RGT6 |
-| **IGN1** | **PC6** | **PE9** | Remap RGT6 |
-| **IGN2** | **PC7** | **PE11** | Remap RGT6 |
-| **IGN3** | **PC8** | **PE13** | Remap; ⚠️ vs SDMMC PC8 |
-| **IGN4** | **PC9** | **PE15** | Remap RGT6 |
-| **ETB PWM** | **PA6** TIM3_CH1 AF2 | **PE5** TIM15_CH1 AF4 | Timer e pino diferentes |
-| **ETB DIR open** | **PA8** | **PE7** | Remap RGT6 |
-| **ETB DIR close** | **PB4** | **PE8** | Remap RGT6 |
-| ETB_TPS1 / TPS2 | PA2 / PC5 | PA2 / PC5 | Igual (ADC) |
-| EWG PWM | PB10 TIM2_CH3 | PB10 TIM2_CH3 | PB10 livre de INJ no mapa actual (WeAct: pino pode não sair no header) |
-| EWG DIR | PA7 (+ PD3 no driver, **sem GPIOD no RGT6**) | PA7 / pino dedicado VGT6 | PD3 inválido no RGT6 |
-| Flex / VVT | PB5 / PB6–7 | PB5 / PB6–7 | Igual |
-| ADC sensores (MAP…OIL) | ver tabela §5.4 | mesma atribuição ADC actual | Igual no tree actual |
-
-##### Drive eléctrico
-
-| | RGT6 | VGT6 |
-|--|------|------|
-| INJ/IGN | GPIO **BSRR** multi-porto (A/B/C) | GPIO **BSRR** só **GPIOE** |
-| ETB PWM | TIM3 @ PA6 | TIM15 @ PE5 |
-| TIM OC (TIM2/TIM8) | **Não usado** | **Não usado** (também BSRR) |
-
-##### Conflitos / limitações WeAct RGT6
-
-| Pino | Nota |
-|------|------|
-| **PB10 / PB11** | No coreboard WeAct **não saem nos headers** — **não usar para INJ** (por isso INJ3/4 = PC10/11) |
-| **PC8 / PC9** | IGN3/4; se microSD (SDMMC) activo, colide com D0/D1 |
-| **PC10 / PC11** | INJ3/4; colidem com SDMMC D2/D3 se cartão |
-| **PD3** | EWG DIR IN2 no driver — **inexistente no RGT6** |
-
-##### Fiação ao mudar de placa
-
-- **VGT6 → RGT6:** religar todos os PE\* de INJ/IGN/ETB para a coluna RGT6; CKP/CMP/UART/USB/CAN/ADC iguais.
-- **RGT6 ↔ VGT6:** gravar o binário correcto (`BOARD=…`). Flash cruzado = pinos errados.
-
----
-
-#### 5.1 Crank / cam / comms (comum)
-
-| Funcao | Peripheral | Pino |
-|---|---|---|
-| CKP | TIM5_CH1 AF2 | **PA0** (pull-down) |
-| CMP | TIM5_CH2 AF2 | **PA1** (pull-down) |
-| UART TX | USART1 AF7 | **PA9** |
-| UART RX | USART1 AF7 | **PA10** (pull-up) |
-| USB DM/DP | USB AF10 | **PA11 / PA12** |
-| CAN RX/TX | FDCAN1 AF9 | **PB8 / PB9** |
-| LED heartbeat | GPIO | **PB2** |
-
-#### 5.2 Injecção / ignição — por board
-
-**RGT6** (`BOARD=rgt6`):
-
-| Funcao | Pino | Notas |
-|---|---|---|
-| INJ1 | **PA15** | low-side → TLE8888 (header WeAct) |
-| INJ2 | **PB3** | header WeAct |
-| INJ3 | **PC10** | header WeAct (não PB10) |
-| INJ4 | **PC11** | header WeAct (não PB11) |
-| IGN1 | **PC6** | push-pull → TLE8888 |
-| IGN2 | **PC7** | |
-| IGN3 | **PC8** | ⚠️ vs SDMMC D0 |
-| IGN4 | **PC9** | ⚠️ vs SDMMC D1 |
-
-**VGT6** (`BOARD=vgt6`):
-
-| Funcao | Pino | Notas |
-|---|---|---|
-| INJ1–4 | **PE0 / PE2 / PE4 / PE6** | BSRR GPIOE |
-| IGN1–4 | **PE9 / PE11 / PE13 / PE15** | BSRR GPIOE |
-
-#### 5.3 ETB / EWG / AUX — por board
-
-**RGT6:**
-
-| Funcao | Peripheral | Pino |
-|---|---|---|
-| ETB PWM | TIM3_CH1 AF2 | **PA6** |
-| ETB DIR open (IN1) | GPIO | **PA8** |
-| ETB DIR close (IN2) | GPIO | **PB4** |
-| ETB_TPS1 / TPS2 | ADC1 | **PA2 / PC5** |
-| EWG PWM | TIM2_CH3 | **PB10** (WeAct: pode não sair no header) |
-| EWG DIR | GPIO | PA7 / PD3 (PD3 só c/ GPIOD) |
-| Flex / VVT | EXTI / TIM4 | **PB5** / **PB6–PB7** |
-
-**VGT6:**
-
-| Funcao | Peripheral | Pino |
-|---|---|---|
-| ETB PWM | TIM15_CH1 AF4 | **PE5** |
-| ETB DIR open / close | GPIO | **PE7 / PE8** |
-| ETB_TPS / Flex / VVT / EWG PWM | | iguais à coluna RGT6 (ADC/PB5–7/PB10) |
-
-#### 5.4 ADC (sensores) — comum nos dois packages (tree actual)
-
-| Funcao | ADC | Pino / INP |
-|---|---|---|
-| MAP | ADC1 | **PA3** / INP15 |
-| TPS | ADC1 | **PA4** / INP18 |
-| KNOCK | ADC1 | **PA5** / INP19 |
-| ETB_TPS1 | ADC1 | **PA2** / INP14 |
-| ETB_TPS2 | ADC1 | **PC5** / INP8 |
-| APP1 | ADC1 | **PC0** / INP10 |
-| APP2 | ADC1 | **PC2** / INP12 |
-| CLT | ADC2 | **PB0** / INP9 |
-| IAT | ADC2 | **PB1** / INP5 |
-| FUEL_PRESS | ADC2 | **PC4** / INP4 |
-| OIL_PRESS | ADC2 | **PC1** / INP11 |
-| EWG_POS | ADC2 | **PC3** / INP13 |
-
-**Nota:** WBO2 lambda exclusivamente via CAN (FDCAN1). Sem ADC O2.
-
-**Histórico de pinout (2026-07):**
-- OIL: PC5 → **PC1** (PC5 fica ETB_TPS2).
-- Dual-board: `-DEMS_BOARD_RGT6` / `-DEMS_BOARD_VGT6` (`src/hal/board_pinout.h`).
-- RGT6 WeAct: INJ3/4 em **PC10/PC11** (PB10/11 não expostos nos headers).
-- Boot safe: `ecu_sched_outputs_safe_early()` — PA15 JTDI pull-up e PE* LOW no arranque.
+**Trocar de placa:** gravar o binário correcto (`BOARD=…`); flash cruzado = pinos
+errados. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
+(RGT6: PA15 JTDI pull-up; VGT6: PE\* LOW). Actuadores active-high.
 
 ## ADC E Sensores
 
@@ -360,7 +236,7 @@ isolado sem big-bang rewrite.
 make ci-local                   # secrets + host/fw dual WERROR + lint A + B
 # equivalentes manuais:
 make secrets-check
-make host-test WERROR=1         # referencia: 1113 PASS / 0 FAIL
+make host-test WERROR=1         # referencia: 1229 PASS / 0 FAIL
 make firmware-rgt6 WERROR=1
 make firmware-vgt6 WERROR=1
 make lint-includes LINT_PHASE=A LINT_ERROR=1   # ban ENGINE/DRV → app/
@@ -441,6 +317,8 @@ ordem e gate de layout de antes.
 | Documento | Papel |
 |-----------|--------|
 | **README.md** (este) | Fonte unica de decisoes duraveis |
+| `docs/hw/pinout.md` | **Pinout completo** RGT6/VGT6 (detalhe movido do §5) |
+| `docs/wiring_diagram.md` | Esquemáticos eléctricos (mapa de pinos ASCII **legado**) |
 | `spec.md` | **Deprecated** — historico; pode divergir |
 | `docs/ROADMAP.md` | Backlog de produto (ADC residual, SD, …) |
 | `docs/*.md` | Subsistemas (fuel, idle, …) |
@@ -497,7 +375,14 @@ Definicao de pronto para o MVP de bancada:
 - PWM: TIM1 CH1 em PA8, frequência configurável (default 2kHz).
 - H-bridge: GPIO PB14 (DIR) + PB15 (EN) para driver DRV8701-style.
 - Boot policy: ETB desativado (`EN=0`, PWM=0) até calibracao valida e sensores OK.
-- Plausibilidade dual-sensor (pinos = `src/hal/adc.cpp` / §5.4):
+- **Auto-cal de power-on** (`src/engine/etb_autocal.{h,cpp}`): a cada boot varre a
+  borboleta aos batentes (fechado→aberto) no tick de 2 ms, ANTES do torque manager
+  assumir, e aplica os limites TPS1/TPS2 em RAM. Aborta mantendo a cal de flash se o
+  motor girar, o driver faltar ou o curso for implausível (span/invertido). O
+  `EtbCalRecord` (16 B, magic `EC` + CRC-32, setor adaptativo) persiste a última cal
+  boa como **fallback** quando uma partida interrompe a varredura do power-on
+  seguinte (`nvm_save_etb_cal` / `nvm_load_etb_cal`). O pedal (APP) continua manual.
+- Plausibilidade dual-sensor (pinos = `src/hal/adc.cpp` / `docs/hw/pinout.md`):
   - APP plausibilidade: compara APP1 vs APP2 (**PC0 / PC2**), gera `THROTTLE_FAULT_APP_PLAUS` se delta exceder limite.
   - ETB_TPS plausibilidade: compara ETB_TPS1 vs ETB_TPS2 (**PA2 / PC5**), gera `THROTTLE_FAULT_ETB_PLAUS` se delta exceder limite.
   - Delta máximo default: 12% entre sensores redundantes.
@@ -549,6 +434,8 @@ Fora do MVP de bancada:
 - Limp: falha MAP corta combustivel a qualquer RPM; telemetria PW alinhada ao mask.
 - Fuel: `calc_final_pw_us` clampa corr Q8 0.25–2.0× e satura a 100 ms; AE interp signed.
 - Page0 apply: rev limit, STFT, decel hysteresis, CMP window, trim por cilindro clampados.
+- EOI blend (page0 164-168): `eoi_idle_deg` + janela RPM lo/hi restaurados no boot com
+  o mesmo clamp do write-handler (idle ∈ [0,719]); `hi<=lo` desliga o blend.
 - Flash: layout **LTF3** = magic + CRC-32 dos mapas adaptativos; seed no mesmo
   SM de flush (sem erase independente do setor 0); seed finaliza magic/CRC.
 - ETB: PID `etb_control_update` → `etb_driver_set_motor_pwm`; disable → shutdown.
@@ -563,14 +450,14 @@ Fora do MVP de bancada:
 
 ### Pinout — estado
 
-- **Dual board:** `make firmware BOARD=rgt6|vgt6` → `openems-rgt6.bin` / `openems-vgt6.bin` (§5.0).
+- **Dual board:** `make firmware BOARD=rgt6|vgt6` → `openems-rgt6.bin` / `openems-vgt6.bin` (`docs/hw/pinout.md`).
 - **RGT6:** INJ PA15/PB3/PC10/PC11 · IGN PC6–9 · ETB PA6/PA8/PB4 · OIL PC1.
 - **VGT6:** INJ PE0/2/4/6 · IGN PE9/11/13/15 · ETB PE5/7/8.
 - **Mapas INJ/IGN:** `hal/out_pins.h` (fonte unica; `static_assert` por board).
 - **Boot safe:** `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()` logo apos
   clock (RGT6: PA15 JTDI; VGT6: PE* LOW). Actuadores active-high.
 - **DFU:** `dfu-util -a 0 -s 0x08000000 -D openems-<board>.bin` + power-cycle BOOT0=0.
-- **docs/wiring_diagram.md** stale — usar README §5.
+- **docs/wiring_diagram.md** stale (mapa de pinos ASCII legado) — pinout válido em `docs/hw/pinout.md`.
 
 ### P1 — restante (decode / cam / proteccao)
 
@@ -589,7 +476,7 @@ Fora do MVP de bancada:
 - Scope TIM2/TIM8 (latência/jitter) e TIM5 CKP/CMP 200–8500 rpm.
 - USB CDC real: IRQ/endpoints, sem bloqueio do caminho crítico; RX ≥ envelope.
 - Host/HIL expandido: decode, sync, quick crank, scheduler, fuel/ign, sensores (já há host-test 1000+; HIL físico pendente).
-- Actualizar `docs/wiring_diagram.md` ao pinout §5 (ainda tem mapa TIM2/PC legado).
+- Actualizar `docs/wiring_diagram.md` (esquemáticos eléctricos) ao pinout de `docs/hw/pinout.md` (ainda tem mapa TIM2/PC legado no ASCII).
 
 ## Politica Documental
 
