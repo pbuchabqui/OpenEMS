@@ -1,263 +1,89 @@
-# OpenEMS — Electrical Wiring Diagram
+# OpenEMS — Esquemático Elétrico
 
-> **⚠️⚠️ DOCUMENTO DESACTUALIZADO — ver `docs/hw/interface_board_v1.md`.**
-> Além do mapa de pinos, os **números do TLE8888 aqui estão errados**: este
-> ficheiro diz "INJ low-side OC 10 A" e "IGN push-pull OC 6 A"; o datasheet
-> **TLE8888-1QK Rev 1.2** dá **injectores 2,2 A** (OUT1–4) e **ignição = driver
-> de gate push-pull de 20 mA** para IGBT (IGN1–4), além de meias-pontes de
-> apenas **0,6 A**. A descrição do condicionador VRS ("threshold adaptativo,
-> histerese 20 mV") também está errada — a interface VR do TLE8888 comuta no
-> **zero-crossing** com armamento por detecção de pico.
-> Estes erros propagaram-se para `src/hal/tle8888.cpp`. Não usar este ficheiro
-> como fonte para BOM, registadores ou capacidade de saída.
+> **Âmbito deste ficheiro:** alimentação, condicionamento de sinal, atuadores externos,
+> **conector** e terra. É o que não cabe no mapa de pinos.
 >
-> **⚠️ STALE DIAGRAM:** ASCII abaixo misturam mapas antigos (TIM OC / PE* / dual-use).
-> **Fonte de verdade do pinout:** `docs/hw/pinout.md` — RGT6 (default) vs VGT6.
-> Este ficheiro serve apenas os esquemáticos eléctricos (alimentação,
-> condicionamento, conector, terra); o mapa de pinos ASCII está desactualizado.
-> Firmware actual = **RGT6**: INJ PA15/PB3/**PC10/PC11**, IGN PC6–9, ETB PA6/PA8/PB4,
-> CKP/CMP PA0/PA1, OIL PC1. Não usar PE* nem PB10/PB11 para INJ (WeAct: não no header).
+> **NÃO é fonte de pinout, de registadores nem de capacidade de saída.** Essas vivem em:
+> | O quê | Onde |
+> |---|---|
+> | Mapa de pinos (RGT6 vs VGT6) | `docs/hw/pinout.md` |
+> | INJ/IGN, enables, BSRR | `src/hal/out_pins.h` |
+> | Registadores do TLE8888 | `src/hal/tle8888_regs.h` (verificado vs Rev 1.2) |
+> | Arquitetura da placa, blocos, BOM | `docs/hw/interface_board_v1.md` |
+>
+> ⚠️ **Porque esta separação é levada a sério:** a versão anterior deste ficheiro
+> continha um mapa de pinos ASCII (INJ em TIM2, IGN em TIM8) e uma descrição dos
+> registadores/capacidades do TLE8888 — **ambos inventados**. Essa narrativa
+> propagou-se para `src/hal/tle8888.cpp`, que ficou escrito contra um mapa de
+> registadores inexistente e teve de ser reescrito de raiz. Autoridade duplicada não
+> se mantém sincronizada à mão. **Não repor aqui detalhe de pino ou de registador.**
 
-## STM32H562 (LQFP100 / GPIOE) + TLE8888 Smart Power Stage
+Alvo da placa de interface v1: **STM32H562VGT6 (LQFP100)** + **TLE8888-2QK** como hub de
+potência. INJ/IGN por *direct drive* (GPIO → IN1–IN8 do CI), sem MOSFETs discretos.
 
-```
-                            ┌─────────────────────────────────┐
-                            │        STM32H562RGT6            │
-                            │       250 MHz Cortex-M33        │
-                            │                                 │
-  8 MHz HSE ───────────────►│ PH0/PH1 (OSC_IN/OUT)           │
-                            │                                 │
-  ┌─ CKP (60-2) ──► TLE8888 VRS_IN ──► VRS_OUT ──►│ PA0  TIM5_CH1 (AF2) ─┤── Input Capture (16ns)
-  │  CMP (cam) ───────────►│ PA1  TIM5_CH2  (AF2) ──────────┤── Phase detection
-  │                         │                                 │
-  │  ┌── MAP sensor ──────►│ PA3  ADC1_IN15 ─────────────────┤
-  │  │   TPS sensor ──────►│ PA4  ADC1_IN18 ─────────────────┤── ADC1 (TIM6 trigger)
-  │  │   Knock / O2 ──────►│ PA5  ADC1_IN6  ─────────────────┤
-  │  │   CLT sensor ──────►│ PB0  ADC2      ─────────────────┤
-  │  │   IAT sensor ──────►│ PB1  ADC2      ─────────────────┤── ADC2
-  │  │   APP1 pedal ──────►│ PC0  ADC2      ─────────────────┤
-  │  │   APP2 pedal ──────►│ PC1  ADC2      ─────────────────┤
-  │  │                      │                                 │
-  │  │                      │         INJECTION (TIM2 OC)     │
-  │  │                      │ PC6  TIM2_CH1  (AF3) ──────────┼──► TLE8888 IN0 (INJ1)
-  │  │                      │ PC7  TIM2_CH2  (AF3) ──────────┼──► TLE8888 IN1 (INJ2)
-  │  │                      │ PB10 TIM2_CH3  (AF1) ──────────┼──► TLE8888 IN2 (INJ3)
-  │  │                      │ PB11 TIM2_CH4  (AF1) ──────────┼──► TLE8888 IN3 (INJ4)
-  │  │                      │                                 │
-  │  │                      │         IGNITION (TIM8 OC)      │
-  │  │                      │ PC8  TIM8_CH1  (AF3) ──────────┼──► TLE8888 IGN0 (COIL1)
-  │  │                      │ PC9  TIM8_CH2  (AF3) ──────────┼──► TLE8888 IGN1 (COIL2)
-  │  │                      │ PA15 TIM8_CH3  (AF1) ──────────┼──► TLE8888 IGN2 (COIL3)
-  │  │                      │ PB3  TIM8_CH4  (AF1) ──────────┼──► TLE8888 IGN3 (COIL4)
-  │  │                      │                                 │
-  │  │                      │         SPI2 → TLE8888          │
-  │  │                      │ PB12 GPIO OUT  (CS)  ──────────┼──► TLE8888 CSN
-  │  │                      │ PB13 SPI2_SCK  (AF5) ──────────┼──► TLE8888 SCLK
-  │  │                      │ PB14 SPI2_MISO (AF5) ◄─────────┼─── TLE8888 SDO
-  │  │                      │ PB15 SPI2_MOSI (AF5) ──────────┼──► TLE8888 SDI
-  │  │                      │                                 │
-  │  │                      │         ETB (TIM1 PWM)          │
-  │  │                      │ PA8  TIM1_CH1  (AF1) ──────────┼──► H-Bridge PWM
-  │  │                      │ PA10 GPIO OUT  (IN1)  ──────────┼──► H-Bridge DIR1
-  │  │                      │ PB2  GPIO OUT  (IN2)  ──────────┼──► H-Bridge DIR2
-  │  │                      │ ETB TPS1 ◄──── AN3 (ADC) ──────┤
-  │  │                      │ ETB TPS2 ◄──── AN4 (ADC) ──────┤
-  │  │                      │                                 │
-  │  │                      │         EWG + AUXILIARIES        │
-  │  │                      │ PA6  TIM3_CH1  (AF2) ──────────┼──► EWG H-bridge PWM
-  │  │                      │ PA7  GPIO OUT  ─────────────────┼──► EWG H-bridge IN1
-  │  │                      │ PB4  GPIO OUT  ─────────────────┼──► EWG H-bridge IN2
-  │  │                      │ PB6  TIM4_CH1  (AF2) ──────────┼──► VVT Escape PWM
-  │  │                      │ PB7  TIM4_CH2  (AF2) ──────────┼──► VVT Intake PWM
-  │  │                      │                                 │
-  │  │                      │         FLEX FUEL SENSOR         │
-  │  │                      │ PB5  EXTI5 (input) ◄────────────┼─── Flex fuel freq signal
-  │  │                      │                                 │
-  │  │                      │         CAN BUS (FDCAN1)        │
-  │  │                      │ PB8  FDCAN1_RX (AF9) ◄─────────┼─── CAN transceiver RX
-  │  │                      │ PB9  FDCAN1_TX (AF9) ──────────┼──► CAN transceiver TX
-  │  │                      │                                 │
-  │  │                      │         COMMS                   │
-  │  │                      │ PA9  USART1_TX (AF7) ──────────┼──► USB-UART adapter
-  │  │                      │ PA10 USART1_RX (AF7) ◄─────────┼───   (bench debug)
-  │  │                      │ PA11 USB_DM    (AF10) ─────────┼──► USB CDC (tuning)
-  │  │                      │ PA12 USB_DP    (AF10) ─────────┼──►
-  │  │                      │                                 │
-  │  │                      │ PB2  GPIO OUT ─────────────────┼──► LED heartbeat
-  │  │                      └─────────────────────────────────┘
-  │  │
-  │  │
-  │  │  ┌─────────────────────────────────────────────────────────┐
-  │  │  │                    TLE8888                              │
-  │  │  │              Smart Power Stage                          │
-  │  │  │                                                         │
-  │  │  │  VRS Conditioner (CKP signal conditioning)              │
-  │  │  │    VRS_IN  ◄──── CKP reluctor (60-2)                   │
-  │  │  │    VRS_OUT ────► PA0 (TIM5_CH1, input capture)          │
-  │  │  │    Filter: medium, Hysteresis: 20mV, adaptive threshold │
-  │  │  │                                                         │
-  │  │  │  SPI Interface (config/diag only, 3.9 MHz)              │
-  │  │  │    CSN  ◄──── PB12                                      │
-  │  │  │    SCLK ◄──── PB13                                      │
-  │  │  │    SDI  ◄──── PB15                                      │
-  │  │  │    SDO  ────► PB14                                      │
-  │  │  │                                                         │
-  │  │  │  INJ Channels (Low-Side Switch, OC 10A, fast slew)      │
-  │  │  │    IN0 ◄── PC6  ────► OUT0 ─────────────► Injector 1   │
-  │  │  │    IN1 ◄── PC7  ────► OUT1 ─────────────► Injector 2   │
-  │  │  │    IN2 ◄── PB10 ────► OUT2 ─────────────► Injector 3   │
-  │  │  │    IN3 ◄── PB11 ────► OUT3 ─────────────► Injector 4   │
-  │  │  │                                                         │
-  │  │  │  IGN Channels (Push-Pull, OC 6A, fast slew)             │
-  │  │  │    IGN0 ◄── PC8  ────► COIL0 ───────────► Coil 1       │
-  │  │  │    IGN1 ◄── PC9  ────► COIL1 ───────────► Coil 2       │
-  │  │  │    IGN2 ◄── PA15 ────► COIL2 ───────────► Coil 3       │
-  │  │  │    IGN3 ◄── PB3  ────► COIL3 ───────────► Coil 4       │
-  │  │  │                                                         │
-  │  │  │  CAN Transceiver (HS-CAN, ISO 11898-2, integrated):      │
-  │  │  │    TXD  ◄──── PB9 (FDCAN1_TX)                          │
-  │  │  │    RXD  ────► PB8 (FDCAN1_RX)                          │
-  │  │  │    CANH ────► CAN bus (120Ω termination each end)       │
-  │  │  │    CANL ────►                                           │
-  │  │  │                                                         │
-  │  │  │  Protection (hardware, independent of MCU):             │
-  │  │  │    • Overcurrent shutdown per channel                   │
-  │  │  │    • Thermal shutdown                                   │
-  │  │  │    • Open-load detection                                │
-  │  │  │    • Short-to-GND / Short-to-VBAT detection             │
-  │  │  │    • SPI watchdog (100ms refresh from MCU)              │
-  │  │  │                                                         │
-  │  │  │  VBAT ◄────────────────────────────── +12V battery      │
-  │  │  │  GND  ◄────────────────────────────── chassis ground    │
-  │  │  └─────────────────────────────────────────────────────────┘
-  │  │
-  │  │  ┌─────────────────────────────────┐
-  │  └──│  Sensors                        │
-  │     │  MAP: PA3 (0.5-4.5V, 0-3 bar)  │
-  │     │  TPS: PA4 (0.5-4.5V)           │
-  │     │  CLT: PB0 (NTC thermistor)     │
-  │     │  IAT: PB1 (NTC thermistor)     │
-  │     │  APP1: PC0 (pedal pos 1)       │
-  │     │  APP2: PC1 (pedal pos 2)       │
-  │     │  Knock: PA5 (piezo)            │
-  │     └─────────────────────────────────┘
-  │
-  │     ┌─────────────────────────────────┐
-  └─────│  Crankshaft / Camshaft          │
-        │  CKP: PA0 (60-2 reluctor)      │
-        │  CMP: PA1 (cam sensor)         │
-        │  TIM5 @ 62.5 MHz (16ns/tick)   │
-        └─────────────────────────────────┘
+---
 
-        ┌─────────────────────────────────┐
-        │  CAN Bus (500 kbps)             │
-        │  PB8/PB9 → transceiver → bus   │
-        │  WBO2 lambda: ID 0x180 (cfg)   │
-        │  Tx: 0x400 (10ms), 0x401       │
-        │       (100ms), 0x402 (500ms)   │
-        └─────────────────────────────────┘
-```
-
-## Pin Allocation Summary (LQFP64)
-
-| Pin  | Function         | Peripheral | AF  | Notes                    |
-|------|------------------|------------|-----|--------------------------|
-| PA0  | CKP input        | TIM5_CH1   | AF2 | 60-2 tooth wheel         |
-| PA1  | CMP input        | TIM5_CH2   | AF2 | Cam phase sensor         |
-| PA3  | MAP sensor       | ADC1_IN15  | -   | 0-3 bar                  |
-| PA4  | TPS sensor       | ADC1_IN18  | -   |                          |
-| PA5  | Knock sensor     | ADC1_IN6   | -   |                          |
-| PA6  | EWG PWM          | TIM3_CH1   | AF2 | 10 kHz H-bridge          |
-| PA7  | EWG DIR IN1      | GPIO       | -   | H-bridge direction       |
-| PA8  | ETB PWM          | TIM1_CH1   | AF1 |                          |
-| PA9  | USART1 TX        | USART1     | AF7 | Debug/bench              |
-| PA10 | ETB DIR / RX     | GPIO/UART  | AF7 |                          |
-| PA11 | USB DM           | USB        | AF10| CDC tuning               |
-| PA12 | USB DP           | USB        | AF10|                          |
-| PA15 | IGN3 output      | TIM8_CH3   | AF1 | → TLE8888 IGN2           |
-| PB0  | CLT sensor       | ADC2       | -   | NTC                      |
-| PB1  | IAT sensor       | ADC2       | -   | NTC                      |
-| PB2  | LED / ETB DIR2   | GPIO       | -   |                          |
-| PB3  | IGN4 output      | TIM8_CH4   | AF1 | → TLE8888 IGN3           |
-| PB4  | EWG DIR IN2      | GPIO       | -   | TODO(VGT6): dedicated pin|
-| PB5  | Flex fuel sensor  | EXTI5      | -   | 50-150Hz freq input      |
-| PB6  | VVT escape PWM   | TIM4_CH1   | AF2 |                          |
-| PB7  | VVT intake PWM   | TIM4_CH2   | AF2 |                          |
-| PB8  | CAN RX           | FDCAN1     | AF9 |                          |
-| PB9  | CAN TX           | FDCAN1     | AF9 |                          |
-| PB10 | INJ3 output      | TIM2_CH3   | AF1 | → TLE8888 IN2            |
-| PB11 | INJ4 output      | TIM2_CH4   | AF1 | → TLE8888 IN3            |
-| PB12 | TLE8888 CS       | GPIO       | -   | SPI2 software CS         |
-| PB13 | TLE8888 SCK      | SPI2_SCK   | AF5 | 3.9 MHz                  |
-| PB14 | TLE8888 MISO     | SPI2_MISO  | AF5 |                          |
-| PB15 | TLE8888 MOSI     | SPI2_MOSI  | AF5 |                          |
-| PC0  | APP1 pedal       | ADC2       | -   |                          |
-| PC1  | APP2 pedal       | ADC2       | -   |                          |
-| PC6  | INJ1 output      | TIM2_CH1   | AF3 | → TLE8888 IN0            |
-| PC7  | INJ2 output      | TIM2_CH2   | AF3 | → TLE8888 IN1            |
-| PC8  | IGN1 output      | TIM8_CH1   | AF3 | → TLE8888 IGN0           |
-| PC9  | IGN2 output      | TIM8_CH2   | AF3 | → TLE8888 IGN1           |
-
-## Signal Flow
-
-```
-CKP (reluctor) → TLE8888 VRS → VRS_OUT → PA0/TIM5 IC → ckp driver → sync
-CMP (cam)      → PA1/TIM5 IC ──────────────────────────────────────────┘
-                                                                        │
-Sensors → ADC → fuel_calc / ign_calc → ecu_sched ◄─────────────────────┘
-                                           │
-                   TIM2 OC (INJ) ──────────┼──► TLE8888 low-side → Injectors
-                   TIM8 OC (IGN) ──────────┼──► TLE8888 push-pull → Coils
-                                           │
-                   SPI2 (config/diag) ─────┼──► TLE8888 registers (VRS+INJ+IGN+WD)
-                                           │
-                   EWG cascade ────────────┼──► boost PI (20ms) → pos PID (2ms) → motor
-```
-
-## Power Supply
+## Alimentação
 
 ```
                     ┌─────────────────────────────────────────────────┐
-                    │              POWER DISTRIBUTION                 │
+                    │              DISTRIBUIÇÃO DE POTÊNCIA           │
                     │                                                 │
-  Battery 12V ──►──┤ P-MOSFET (reverse polarity protection)         │
+  Bateria 12V ──►──┤ P-MOSFET (proteção de polaridade invertida)     │
                     │    │                                            │
-                    │  Fuse 30A                                       │
+                    │  Fusível 30A                                    │
                     │    │                                            │
-                    │  Main Relay (key-on or MCU-controlled)          │
+                    │  Relé principal (driver integrado no TLE8888)   │
                     │    │                                            │
-                    │    ├── VBAT rail ──────────────────────────────│
-                    │    │    │                                       │
-                    │    │    ├── TLE8888 VBAT (100µF + 100nF)      │
-                    │    │    ├── Fuel pump relay (fuse 15A)         │
-                    │    │    ├── WBO2 controller (fuse 5A)         │
-                    │    │    └── Flex fuel sensor 12V               │
+                    │    ├── rail VBAT ──────────────────────────────│
+                    │    │    ├── TLE8888 VBAT (100µF + 100nF)       │
+                    │    │    ├── Relé da bomba (fusível 15A)        │
+                    │    │    ├── WBO2 (fusível 5A)                  │
+                    │    │    ├── Sensor flex fuel 12V               │
+                    │    │    ├── Solenóides VVT                     │
+                    │    │    ├── SMBJ24CA TVS no rail VBAT          │
+                    │    │    └── divisor 0–18V ──► PC3 (VBATT ADC)  │
                     │    │                                            │
-                    │    │    └── SMBJ24CA TVS clamp on VBAT rail    │
+                    │    ├── 5V dos sensores: TRACKERS do TLE8888    │
+                    │    │    (DVT5Vx, ±10 mV — feitos para sensor   │
+                    │    │     ratiométrico; substituem o buck aqui) │
+                    │    │    ├── MAP, TPS, APP1/2                   │
+                    │    │    ├── P. combustível, P. óleo            │
+                    │    │    ├── pull-ups NTC (CLT, IAT)            │
+                    │    │    ├── ETB TPS1/TPS2                      │
+                    │    │    └── pull-up do flex fuel               │
                     │    │                                            │
-                    │    ├── DC-DC Buck 5V (LM2596-HV or TPS54302)  │
-                    │    │    │  Vin(max) 45V, load-dump survivable  │
-                    │    │    │  10µF in + 22µF + 100nF out          │
-                    │    │    ├── Sensor supply (MAP, TPS, APP1/2)  │
-                    │    │    ├── NTC pull-ups (CLT, IAT)           │
-                    │    │    ├── EWG position sensor                │
-                    │    │    ├── ETB TPS1/TPS2                     │
-                    │    │    └── Flex fuel pull-up                  │
-                    │    │                                            │
-                    │    └── LDO 3.3V from 5V (AMS1117-3.3, 10µF)  │
-                    │         │  Vin=5V → Vdrop=1.7V, cool in SOT223│
-                    │         ├── STM32 VDD (100nF per VDD pin)     │
-                    │         └── STM32 VDDA (1µF + 100nF)          │
+                    │    └── LDO 3.3V para o MCU                     │
+                    │         ├── STM32 VDD (100nF por pino VDD)     │
+                    │         ├── STM32 VDDA (ferrite + 1µF + 100nF) │
+                    │         └── VREF+ (pino separado — só LQFP100) │
                     │                                                 │
                     └─────────────────────────────────────────────────┘
 ```
 
-## Signal Conditioning
+⚠️ **Peças do desenho legado explicitamente rejeitadas** (critério de imunidade a ruído):
+
+| Rejeitado | Porquê | Usar |
+|---|---|---|
+| **LM2596-HV** | 150 kHz, ripple ~150 mV — dos switchers mais ruidosos | TPS54302 ou switcher ≥500 kHz de baixo ripple |
+| **AMS1117-3.3** | PSRR fraco em alta frequência — não rejeita o ripple que chega | LDO low-noise / high-PSRR |
+
+As duas trocas **andam juntas**: um LDO bom alimentado com 150 kHz de ripple não salva
+os sensores ratiométricos. Ver bloco 1 de `interface_board_v1.md`.
+
+⚠️ **VREF+ ainda em aberto.** É pino separado do VDDA no LQFP100 (não existe no LQFP64) e
+a escolha — (a) VDDA 3,3 V filtrado, (b) VREFBUF interno 1,8/2,048/2,5 V, (c) derivado do
+5 V dos sensores para cancelamento ratiométrico verdadeiro — **redimensiona todos os
+divisores** e a constante de `vbatt_raw_to_mv()`. Fechar antes do esquemático.
+
+---
+
+## Condicionamento de sinal
 
 ```
-Generic analog input circuit (MAP, TPS, APP1/2, EWG pos):
+Entrada analógica genérica (MAP, TPS, APP1/2, P.combustível, P.óleo):
 
-  Sensor (0.5-4.5V) ──[R1 10k]──┬──[R_filt 1k]──┬──► STM32 ADC (3.3V max)
+  Sensor (0.5-4.5V) ──[R1 10k]──┬──[R_filt 1k]──┬──► STM32 ADC (máx 3.3V)
                                  │               │
                                [R2 15k]      [C 100nF]
                                  │               │
@@ -267,126 +93,277 @@ Generic analog input circuit (MAP, TPS, APP1/2, EWG pos):
                                  │
                                 GND
 
-NTC thermistor input (CLT, IAT):
+NTC (CLT, IAT):
 
-  5V ──[R_pull 2.49kΩ]──┬── NTC to GND
+  5V ──[R_pull 2.49kΩ]──┬── NTC para GND
                          │
                     [R1 10k]──┬──[R_filt 1k]──┬──► STM32 ADC
                               │               │
                             [R2 15k]      [C 100nF]
                               │               │
                              GND             GND
+
+VBATT (interno à placa — não gasta pino de conector):
+
+  rail VBAT ──[R1]──┬──[RC generoso]──► PC3 / ADC2_INP13
+                     │
+                   [R2]        divisor 0–18V → 0–3.3V
+                     │         (VBATT é lenta: filtrar forte é grátis e
+                    GND         rejeita transientes de bobina)
 ```
 
-| Sensor | Input Range | Divider | ADC Range | Filter | Protection |
-|--------|-------------|---------|-----------|--------|------------|
+| Sensor | Entrada | Divisor | Faixa ADC | Filtro | Proteção |
+|--------|---------|---------|-----------|--------|----------|
 | MAP | 0.5–4.5V | 10k/15k | 0.3–2.7V | RC 1kΩ+100nF | TVS 3.3V |
 | TPS | 0.5–4.5V | 10k/15k | 0.3–2.7V | RC 1kΩ+100nF | TVS 3.3V |
 | APP1/APP2 | 0.5–4.5V | 10k/15k | 0.3–2.7V | RC 1kΩ+100nF | TVS 3.3V |
-| CLT (NTC) | 0–5V (via pull-up) | 10k/15k | 0–3.0V | RC 1kΩ+100nF | TVS 3.3V |
-| IAT (NTC) | 0–5V (via pull-up) | 10k/15k | 0–3.0V | RC 1kΩ+100nF | TVS 3.3V |
-| EWG pos | 0–5V (pot) | 10k/15k | 0–3.0V | RC 1kΩ+100nF | TVS 3.3V |
-| Knock | Piezo AC | Bandpass 6–8kHz + amp | ±1.5V | Dedicated | Clamping diodes |
-| Flex fuel | 0–12V square | 10k/3.3k | 0–3.0V | — | TVS 3.3V |
+| ETB TPS1/TPS2 | 0.5–4.5V | 10k/15k | 0.3–2.7V | RC 1kΩ+100nF | TVS 3.3V |
+| **P. combustível** | 0.5–4.5V | 10k/15k | 0.3–2.7V | RC 1kΩ+100nF | TVS 3.3V |
+| **P. óleo** | 0.5–4.5V | 10k/15k | 0.3–2.7V | RC 1kΩ+100nF | TVS 3.3V |
+| CLT (NTC) | 0–5V (pull-up) | 10k/15k | 0–3.0V | RC 1kΩ+100nF | TVS 3.3V |
+| IAT (NTC) | 0–5V (pull-up) | 10k/15k | 0–3.0V | RC 1kΩ+100nF | TVS 3.3V |
+| **VBATT** | 0–18V | ver acima | 0–3.3V | RC generoso | TVS |
+| Flex fuel | 0–12V quadrada | 10k/3.3k | 0–3.0V | — | TVS 3.3V |
+| ~~Knock~~ | *diferido v2* | — | — | envelope, **não** portadora | — |
 
-## External Actuators
+⚠️ O RC de 1k+100nF dá fc ≈ 1,6 kHz — confortável para grandezas lentas, mas **verificar
+contra a banda desejada de MAP** (tem conteúdo rápido por pulsação de coletor; filtrar
+demais atrasa a resposta transitória de carga).
+
+⚠️ **Knock não usa a rede padrão.** O ADC amostra 1×/dente (abaixo de Nyquist para 6–8 kHz),
+por isso o front-end tem de entregar **envelope** — bandpass → retificação → integrador,
+polarizado em meio-rail. Diferido para a v2; só footprint (TPIC8101) na v1.
+
+---
+
+## CKP / CMP — sync
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│          CAN Bus — TLE8888 Integrated Transceiver           │
+│  CKP (relutor VR, roda 60-2) — interface VR do TLE8888      │
 │                                                             │
-│  STM32 PB9 (FDCAN1_TX) ──► TLE8888 TXD                    │
-│  STM32 PB8 (FDCAN1_RX) ◄── TLE8888 RXD                    │
-│  TLE8888 CANH ──┬── bus ──┬── 120Ω termination             │
-│  TLE8888 CANL ──┘         └── (each end)                   │
+│  Sensor VR ──► par trançado e blindado ──► VRIN1 / VRIN2   │
+│    • clamp de entrada integrado (50 mA) → SEM rede externa  │
+│      de resistor série + clamp                              │
+│    • zero-crossing com armamento por deteção de pico        │
+│    • modo auto adaptativo; diagnóstico de sensor por SPI    │
+│  VROUT (PUSH-PULL) ──► PA0 (TIM5_CH1, input capture)       │
+│    • sem pull-up externo (não é open-drain)                 │
+│    • pull-down interno de PA0 MANTIDO (anti falso-sync)     │
+│  Blindagem aterrada SÓ no lado da ECU                       │
 │                                                             │
-│  No external CAN transceiver needed — HS-CAN PHY           │
-│  (ISO 11898-2) integrated in TLE8888.                       │
+│  Bancada: TP-DIG + jumper 0Ω entre VROUT e PA0 — removido,  │
+│  liberta o nó para o estimulador ESP32 injetar digital.     │
+│  TP-VR no par diferencial para fonte analógica VR real.     │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│          ETB — External H-Bridge (BTS7960 / VNH5019)        │
+│  CMP (Hall) — caminho próprio (o CI tem UM canal VR)        │
 │                                                             │
-│  STM32 PA8  (TIM1_CH1 PWM) ──► H-bridge PWM               │
-│  STM32 PA10 (GPIO OUT)     ──► H-bridge DIR1 (IN1)        │
-│  STM32 PB2  (GPIO OUT)     ──► H-bridge DIR2 (IN2)        │
-│  ETB TPS1/TPS2 ──► ADC (position feedback)                 │
-│  12V ──► H-bridge VCC      GND ──► H-bridge GND           │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│          EWG — External H-Bridge (BTS7960 / VNH5019)        │
+│  Hall open-collector ──[pull-up 10k → 5V]──┬── divisor ──► │
+│                                             │      PA1      │
+│                                          RC leve + clamp    │
 │                                                             │
-│  STM32 PA6  (TIM3_CH1 PWM) ──► H-bridge PWM (10kHz)       │
-│  STM32 PA7  (GPIO OUT)     ──► H-bridge DIR1 (IN1)        │
-│  STM32 PB4  (GPIO OUT)     ──► H-bridge DIR2 (IN2)        │
-│  EWG position pot ──► divider ──► ADC2 (feedback)          │
-│  12V ──► H-bridge VCC      GND ──► H-bridge GND           │
-│  TODO(VGT6): PB4 shared with LED — dedicate on LQFP100    │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│          WBO2 Lambda Controller                             │
-│          (Bosch CJ125 / AEM 30-0300 / similar)             │
-│                                                             │
-│  12V ──► power (fuse 5A)                                    │
-│  CANH/CANL ──► CAN bus (RX ID 0x180, configurable)         │
-│  LSU 4.9 sonda ──► 6-pin connector                          │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│          Flex Fuel Sensor (GM / Continental)                 │
-│                                                             │
-│  12V ──► sensor power                                       │
-│  Signal ──► [R1 10k]──┬──► PB5 (EXTI5)                    │
-│                       [R2 3.3k]                              │
-│                        │                                     │
-│                       GND                                    │
-│  Pull-up 10kΩ → 5V (if open-collector output)               │
-│  Frequency: 50Hz = 0% ethanol, 150Hz = 100%                 │
-│  Duty cycle: 10–90% = -40°C to +125°C fuel temp            │
+│  ⚠️ ABERTO — decidir antes do esquemático:                  │
+│     PA1 tem pull-down interno, que luta contra o pull-up    │
+│     externo → trocar para pull-up. MAS Hall open-collector  │
+│     idle HIGH/pulso LOW põe o início do dente na borda de   │
+│     DESCIDA, e TIM5 captura só SUBIDA (CC2E sem CC2P).      │
+│     Trocar só o resistor cronometraria o FIM do pulso.      │
+│     Ambas as polaridades passam no gate temporal da ISR →   │
+│     o erro sairia como deslocamento angular SILENCIOSO.     │
+│     O CKP tem a mesma pergunta (CC1E também é só subida).   │
+│     Decidir as duas juntas. Ver interface_board_v1.md.      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## ECU Connector Pinout (TBD — ~47 pins)
+---
 
-| Group | Count | Signals |
-|-------|-------|---------|
-| Power | 4 | VBAT, Main relay ctrl, Fuel pump ctrl, PGND |
-| Injection | 4 | INJ1–4 (TLE8888 OUT0–3 → injectors) |
-| Ignition | 4 | IGN1–4 (TLE8888 COIL0–3 → coils) |
-| CKP/CMP | 4 | CKP+ (VRS+), CKP- (VRS-), CMP signal, Shield GND |
-| Analog sensors | 10 | MAP, TPS, CLT, IAT, APP1, APP2, Knock, EWG pos, 5V ref, SGND |
-| ETB | 5 | Motor+, Motor-, TPS1, TPS2, 5V ref |
-| EWG | 4 | Motor+, Motor-, Position, 5V ref |
-| VVT | 2 | VVT escape (PB6), VVT intake (PB7) |
-| CAN | 3 | CANH, CANL, Shield GND |
-| Flex fuel | 3 | 12V supply, Signal, GND |
-| USB | 2 | USB_DM, USB_DP (internal connector) |
-| Reserve | 2 | Future expansion |
-| **Total** | **~47** | |
-
-## Grounding
+## Atuadores externos
 
 ```
-                   Chassis stud (single star point)
+┌─────────────────────────────────────────────────────────────┐
+│  INJEÇÃO / IGNIÇÃO — TLE8888, direct drive                  │
+│                                                             │
+│  INJ1–4: GPIO ──► IN1–IN4 ──► OUT1–OUT4                    │
+│    low-side 2,2 A → injetores de ALTA IMPEDÂNCIA           │
+│    (saturado, sem peak-and-hold)                            │
+│    clamp, OC, sobretemperatura e diagnóstico integrados     │
+│                                                             │
+│  IGN1–4: GPIO ──► IN5–IN8 ──► IGN1–IGN4                    │
+│    driver de gate push-pull 20 mA → SMART COILS            │
+│    (bobinas com ignitor integrado, entrada lógica)          │
+│                                                             │
+│  INJEN / IGNEN: enables de HARDWARE dos dois grupos.        │
+│    LOW = desabilitado; sobem só se o TLE8888 confirmou      │
+│    comunicação E configuração. Corte independente do SPI    │
+│    e do escalonador.                                        │
+│                                                             │
+│  Atribuição IN→OUT é FIXA no silício. Pinos: out_pins.h     │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  ETB — ponte-H EXTERNA (permanece discreta)                 │
+│                                                             │
+│  As meias-pontes do TLE8888 são de só 0,6 A — falta uma     │
+│  ordem de grandeza para o motor da borboleta.               │
+│                                                             │
+│  PWM (TIM15_CH1) ──► ponte PWM      [VGT6: PE5]            │
+│  DIR abrir  (GPIO) ──► IN1          [VGT6: PE7]            │
+│  DIR fechar (GPIO) ──► IN2          [VGT6: PE8]            │
+│  ETB TPS1/TPS2 ──► ADC (realimentação de posição)          │
+│  12V ──► ponte VCC       GND ──► ponte GND                 │
+│                                                             │
+│  ⚠️ Firmware pede 20 kHz — no limite de BTS7960 (~25 kHz)   │
+│     e acima do VNH5019. Recomendado: DRV8701 + 4 MOSFETs    │
+│     logic-level (folga + IDRIVE dá controlo de slew).       │
+│     Alternativa: baixar o PWM no firmware (uma linha).      │
+│                                                             │
+│  ⚠️ GATE DE SEGURANÇA — o ETB é a ÚNICA autoridade sobre a  │
+│     borboleta (o IACV foi removido) e o autocal+PID nunca   │
+│     correram em hardware. Travado aberto = motor em         │
+│     disparada. Exigir: mola default-closed verificada,      │
+│     corte de energia duro ao alcance, batente mecânico, e   │
+│     validação em bancada ANTES de montar no motor.          │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  VVT — 2 solenóides, TLE8888 OUT5/OUT6                      │
+│                                                             │
+│  PWM 15 Hz (TIM4_CH1/CH2) ──► IN11/IN12 ──► OUT5/OUT6      │
+│    low-side 4,5 A com CLAMP ATIVO 50–60 V                  │
+│    → saem da BOM os drivers de solenóide e os diodos de     │
+│      roda-livre                                             │
+│                                                             │
+│  ⚠️ Os DOIS PIDs consomem o MESMO pos_deg_x10, derivado do  │
+│     ÚNICO CMP. O came instrumentado fica em malha fechada;  │
+│     o outro persegue a posição do came errado. Controlo     │
+│     dual real pede 2º sensor de came + firmware.            │
+│     v1: montar os dois, comissionar só o instrumentado,     │
+│     reservar via no conector para o 2º sensor.              │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  RELÉS — bomba e ventoinha, saídas do TLE8888               │
+│                                                             │
+│  Saídas de relé (0,6 A — folgado para bobina de ~200 mA)    │
+│  + driver de relé principal integrado.                      │
+│  → saem da BOM os drivers discretos e os diodos.            │
+│                                                             │
+│  Bomba: prime 2 s no key-on, mantém com RPM > 0, corta 2 s  │
+│  após RPM = 0.  Ventoinha: histerese 95/90 °C.              │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  CAN — transceiver integrado no TLE8888                     │
+│                                                             │
+│  FDCAN1_TX ──► TXD        FDCAN1_RX ◄── RXD                │
+│  CANH/CANL ──► barramento, terminação 120Ω jumpeável        │
+│  Sem transceiver externo (TJA1051 sai da BOM).              │
+│  Serve WBO2 (RX 0x180) e telemetria (0x400/0x401/0x402).    │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  WBO2 (Bosch CJ125 / AEM 30-0300) — só por CAN             │
+│  12V (fusível 5A) · CANH/CANL · sonda LSU 4.9              │
+│  Não há ADC de O2.                                          │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  FLEX FUEL (GM / Continental)                               │
+│  12V ──► sensor                                             │
+│  Sinal ──[R1 10k]──┬──► PB5 (EXTI)                         │
+│                 [R2 3.3k]                                    │
+│                    GND                                       │
+│  Pull-up 10kΩ → 5V se a saída for coletor aberto            │
+│  50 Hz = 0% etanol, 150 Hz = 100%                           │
+│  Duty 10–90% = -40 a +125 °C de temperatura do combustível  │
+│  Onda quadrada lenta — filtrar com folga.                   │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  USB — COM ISOLADOR GALVÂNICO (conector interno)            │
+│                                                             │
+│  Ligar o laptop com o motor a rodar cria laço de terra      │
+│  entre a massa do veículo e a do portátil — matador         │
+│  clássico de ECU e injetor de ruído durante a calibração.   │
+│  Isolador JUNTO AO CONECTOR, não junto ao MCU.              │
+│  Requer alimentação isolada do lado do veículo.             │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  ~~EWG / boost~~ — DIFERIDO para a v2 (só footprint)        │
+│  Turbo-específico; o segundo pino DIR ainda é TODO(VGT6).   │
+│  É o que libertou PC3 para o VBATT.                         │
+│  O canal de realimentação de posição deixou de existir:     │
+│  ewg_driver_read_position_raw() devolve 0.                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Conector do chicote do motor
+
+Expresso no que **sai da placa** (saídas do TLE8888 + entradas de sensor + sync), não em
+pinos do MCU. USB e SPI são internos e não aparecem aqui.
+
+| Grupo | Vias | Sinais |
+|-------|------|--------|
+| Potência | 5 | VBAT+, PGND ×2, bobina do relé principal, sense de key-on |
+| Injeção | 5 | INJ1–4 low-side (OUT1–OUT4), +12V dos injetores |
+| Ignição | 6 | IGN1–4 trigger (gate lógico), +12V das bobinas, PGND das bobinas |
+| Sync | 6 | CKP+ (VRIN1), CKP− (VRIN2), blindagem CKP, CMP sinal, CMP +5V, CMP GND |
+| Analógicos | 12 | MAP, TPS, CLT, IAT, APP1, APP2, P.combustível, P.óleo, 5V_A, 5V_B, SGND ×2 |
+| ETB | 6 | Motor+, Motor−, TPS1, TPS2, 5V, SGND |
+| VVT | 3 | VVT escape (LS), VVT admissão (LS), +12V dos solenóides |
+| Relés | 2 | Bomba (bobina, LS), Ventoinha (bobina, LS) |
+| CAN | 3 | CANH, CANL, blindagem |
+| Flex fuel | 3 | +12V, sinal, GND |
+| *Knock (diferido)* | 2 | *sinal piezo, blindagem — via reservada, NÃO cablar na v1* |
+| Reserva | 2 | 2º sensor de came (VVT dual), expansão |
+| **Total** | **55** | |
+
+⚠️ **55 vias, não ~47.** A estimativa antiga de 47 vinha de uma tabela que contava
+`EWG pos` (diferido, e o pino de potenciómetro externo vai com ele), omitia pressão de
+combustível e de óleo (ambas **populadas** na v1) e listava VVT por pinos do MCU
+(`PB6`/`PB7`) em vez das saídas do CI que realmente vão ao chicote. **Escolher o modelo de
+conector contra 55, com margem.**
+
+**Regras:** separar fisicamente as vias de potência (INJ/IGN/relés/VVT) das de sinal; CKP e
+CAN em vias adjacentes com dreno de blindagem; bitola por circuito (injetor e bobina puxam
+corrente); pares trançados para CKP/CMP/CAN; fusíveis por ramo.
+
+⚠️ **VBATT não gasta via** — é medida do rail interno da placa (divisor → PC3).
+
+---
+
+## Terra
+
+```
+                   Parafuso do chassis (ponto estrela único)
                             │
                  ┌──────────┼──────────┐
                  │          │          │
                PGND       SGND     Shield GND
-            (power)     (signal)  (shielding)
+             (potência)  (sinal)  (blindagens)
                  │          │          │
            ┌─────┤    ┌─────┤    ┌─────┤
-           │ TLE8888   │ All     │ CAN bus
-           │ LDO regs  │ sensors │ CKP cable
-           │ H-bridge  │ ADC AGND│
-           │ Fuel pump │ Pull-ups│
-           └───────────┘─────────┘
+           │ TLE8888   │ sensores │ CAN
+           │ reguladores│ AGND ADC│ cabo CKP
+           │ ponte ETB │ pull-ups │
+           │ bomba     │          │
+           └───────────┘──────────┘
 
-  PCB rules:
-  • Separate copper pours for PGND and SGND, joined at star point
-  • Dedicated AGND pour for STM32 VSSA pin
-  • Shielded cables: CKP and CAN (shield grounded at ECU end only)
-  • 100nF bypass cap on every VDD pin of STM32
-  • Bulk capacitor 100µF at TLE8888 VBAT
+  Regras de PCB (4 camadas: sinal / TERRA CONTÍNUO / alimentação / sinal):
+  • Pours separados PGND / SGND / AGND / Shield, unidos num único ponto.
+    Correntes de injetor e bobina NUNCA atravessam o retorno de sinal.
+  • Par CKP é a rede mais sensível: curto, blindado, na camada superior sobre
+    terra ininterrupto, longe de INJ/IGN/ETB/relés, sem via desnecessária e
+    sem passar sob o indutor do buck.
+  • Loops de comutação (injetor, bobina, solenóides VVT) fisicamente pequenos
+    — área de laço é o que irradia.
+  • Cabo de knock é a 2ª rede mais sensível: longe das linhas de bobina e dos
+    solenóides VVT — escuta justamente a banda que a ignição emite.
+  • 100nF em cada pino VDD; bulk 100µF no estágio de potência; VDDA por ferrite.
+  • Blindagens de CKP e CAN aterradas só no lado da ECU.
 ```

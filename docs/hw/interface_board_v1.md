@@ -558,16 +558,26 @@ Nenhuma escolha de componente sobrevive a um layout ruim:
 | `src/hal/stm32h562/timer.cpp:283` | Só **se** a ponte-H escolhida não aguentar 20 kHz — baixar `etb_pwm_init()` |
 | `src/engine/auxiliaries.cpp` (103-106) | Só **se** bomba/ventoinha migrarem de `PB12`/`PB13` p/ liberar o SPI2 |
 | `docs/hw/pinout.md` | VBATT em `PC3`; bomba/ventoinha `PB13`/`PB12`; nota do pull do `PA1` |
-| `docs/wiring_diagram.md` | Reescrever ASCII para VGT6 real (PE*/BSRR/TIM15); preencher o conector §340 |
+| ~~`docs/wiring_diagram.md`~~ ✅ | **Feito** — purgado o mapa de pinos ASCII e a narrativa de registadores do TLE8888 (era a origem do mapa inventado); ficou só alimentação/condicionamento/atuadores/conector/terra, com ponteiros para as fontes de verdade. Conector fechado em **55 vias** |
 | `docs/hw/vr_input_conditioning.md` | CKP é VR-only com zero-crossing (e o porquê: variação de atraso é o único termo eletrônico acima do piso mecânico); CMP agora é Hall; jumper 0 Ω de bancada |
 | Novo `docs/hw/interface_board_v1.md` | Esquemático, BOM, orçamento de erro, notas de layout |
 | `test/` | Teste host do caminho de VBATT (padrão de `test_sensors_etb_harness_present`) |
 
 ---
 
-## Conector
-Fechar as ~47 vias, hoje **TBD** em `docs/wiring_diagram.md:340`. Separar fisicamente vias de potência
-(INJ/IGN/relés) das de sinal; CKP e CAN em vias adjacentes com dreno de blindagem.
+## Conector — ✅ fechado em **55 vias** (2026-07-20)
+
+Tabela completa em `docs/wiring_diagram.md` §"Conector do chicote do motor", expressa no que **sai da
+placa** (saídas do TLE8888 + entradas de sensor + sync), não em pinos do MCU.
+
+⚠️ **Não são ~47.** A estimativa antiga vinha de uma tabela que:
+- contava `EWG pos` — diferido, e o pino do potenciómetro externo vai com ele;
+- **omitia pressão de combustível e de óleo**, ambas populadas na v1;
+- listava VVT por pinos do MCU (`PB6`/`PB7`) em vez das saídas OUT5/OUT6 que realmente vão ao chicote.
+
+**Escolher o modelo de conector contra 55, com margem.** VBATT não gasta via (mede o rail interno via
+divisor → `PC3`). Knock leva 2 vias **reservadas mas não cabladas** na v1. A reserva inclui a via do
+2º sensor de came, para o caso do VVT dual.
 
 ---
 
