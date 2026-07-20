@@ -7,25 +7,25 @@
 **Pinmap:** `openems_interface_v1/resources/pinmap_logical.md`  
 **Vendor review (Speeduino/rusEFI):** `../docs/hw/kicad_vendor_review.md`
 
-### Rebuild PCB copper scaffold
+### Rebuild PCB (layout limpo)
 
 ```bash
 bash hardware/kicad/openems_interface_v1/scripts/build_all.sh
 ```
 
-Pipeline: placement → annotate nets → power routes → TLE/power stage → LDO/WeAct finish.
+Isto corre `layout_clean.py`: zonas organizadas + **só bridges locais**  
+(sem auto-route emaranhado). Routing fino = manual no Pcbnew.
 
-### Status (scaffold)
+### Status
 
 | Area | State |
 |------|--------|
 | Hierarchical schematic (10 sheets) | ✅ |
-| AMPSEAL J1 (rusEFI) + J2 (TE) | ✅ |
-| WeAct headers + MH + NetTie star | ✅ |
-| TLE8888 LQFP-100 + power chain | ✅ |
-| LDO 3V3 + VDDA ferrite | ✅ |
-| SPI/CAN/drive stubs WeAct↔TLE | ✅ |
-| PGND pours | ✅ (fill in Pcbnew) |
-| Production DRC / fab | ❌ manual review required |
+| Placement J1/J2/WeAct/TLE/power/LDO | ✅ limpo |
+| Pad nets (pinmap) | ✅ |
+| Local bridges (A+B, dual pins, power chain) | ✅ |
+| PGND pours | ✅ Fill Zones |
+| Full signal routing | ❌ hand-route |
+| Fab | ❌ DRC + pin1 first |
 
-⚠️ **Do not order PCBs** until pin1 silk, FET pinout, buck FB network, and full DRC are verified by hand.
+⚠️ **Do not order PCBs** without manual DRC and pin1 verification.

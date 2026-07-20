@@ -20,9 +20,9 @@
 | WeAct J3/J4 + MH Φ3.2 + NetTie star | ✅ |
 | U3 TLE8888 LQFP-100 + straps SPI | ✅ |
 | Power: Q1/F1/D1/C bulk/U1 buck/U2 LDO/FB1 | ✅ |
-| Copper: VBAT/PGND, INJ/IGN, CKP, SPI, CAN, drive | ✅ scaffold (~127 segs) |
+| Layout limpo (placement + bridges locais) | ✅ ~22 segs, sem spaghetti |
 | Pours PGND F+B | ✅ Fill Zones no Pcbnew |
-| Esquemático fios densos | ⚠️ labels; PCB pinmap é autoridade |
+| Routing fino completo | ❌ **à mão no KiCad** |
 | DRC manual / pin1 silk / FET DS | ❌ **bloqueia fabrico** |
 
 ## Mapa sheets ↔ docs
