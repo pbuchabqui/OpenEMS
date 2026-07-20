@@ -617,13 +617,15 @@ Levantadas na revisão crítica. Nenhuma é de precisão, mas todas podem matar 
   fechado**: AMPSEAL `776164-1` (35, sinais) + `770680-1` (23, potência) — ver a secção de montagem.
 
 ### 17. Logística do projeto
+- **⭐ Antes de cada bloco no KiCad:** consultar Speeduino + rusEFI (regra em `docs/hw/README.md` §1b).
+  Não inventar esquemático de módulo do zero se já existe board/driver de referência.
 - **KiCad, 4 camadas (decidido).** 4 camadas é o mínimo honesto para os pours PGND/SGND/AGND separados em
   que todo o bloco 18 se apoia — 2 camadas anularia boa parte do critério de imunidade a ruído.
   Empilhamento sugerido: sinal / **terra contínuo** / alimentação / sinal, com o par CKP na camada
   superior sobre terra ininterrupto.
-- **Ordem de execução:** fechar as pendências restantes → esquemático por blocos → **revisão do
-  esquemático antes do layout** (é onde erro custa barato) → layout → revisão → protótipo → sequência de
-  verificação.
+- **Ordem de execução:** fechar as pendências restantes → **por bloco: ref Speeduino/rusEFI** →
+  esquemático por blocos → **revisão do esquemático antes do layout** (é onde erro custa barato) →
+  layout → revisão → protótipo → sequência de verificação.
 - **Estimativa e custo** ainda não levantados. Fazer antes de comprar.
 
 ### 18. Layout — onde a precisão é ganha ou perdida

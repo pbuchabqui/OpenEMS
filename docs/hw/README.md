@@ -35,6 +35,44 @@ Código sempre ganha a documento. Se divergirem, o documento está errado.
 
 ---
 
+## 1b. ⭐ Antes de desenhar qualquer bloco — consultar Speeduino e rusEFI
+
+**Regra geral (obrigatória):** antes de elaborar um esquemático **do zero** para cada
+módulo (alimentação, VR/CKP, injectores, ignição, ETB, CAN, USB, knock, VVT, relés,
+conector, terra, …), **consultar primeiro** as implementações e o hardware de
+referência do **Speeduino** e do **rusEFI**. Só depois adaptar ao OpenEMS
+(STM32H562 VGT6 + TLE8888-2QK + contratos do firmware).
+
+Isto não é “copiar a placa”; é **não reinventar armadilhas** que a comunidade já
+pagou: pinout de CI, ordem de init SPI, polaridade, pull, clamp, direct-drive,
+layout de potência vs sync, fusíveis, terra.
+
+| O quê procurar | Speeduino | rusEFI |
+|---|---|---|
+| Esquemáticos / boards | `reference/`, hardware boards no repo/wiki | `hardware/`, schematics, board packages |
+| Drivers de estágio / CI | `speeduino/` (ex. MC33810, injectors) | `firmware/hw_layer/drivers/` (ex. `gpio/tle8888.cpp`) |
+| Condicionamento VR/Hall | wiki + boards | wiki + `hw_layer` + forum |
+| Knock / WBO2 / CAN | community boards | wiki + drivers |
+
+**Cópias locais neste ambiente (usar se existirem; senão upstream):**
+- Speeduino: `~/Downloads/speeduino-202501.6/speeduino` e `~/Arduino/speeduino`
+- rusEFI (firmware/hw): `~/RusefiH5/.work/rusefi` (e projectos em `~/RusefiH5/`)
+- Upstream: [speeduino/speeduino](https://github.com/speeduino/speeduino),
+  [rusefi/rusefi](https://github.com/rusefi/rusefi)
+
+**Checklist por módulo (antes do KiCad / netlist final):**
+1. Achar **pelo menos uma** implementação de referência (board ou driver) no Speeduino **ou** rusEFI.
+2. Anotar o que **adoptamos**, o que **adaptamos** (H562 / TLE8888 / pinout nosso) e o que **rejeitamos** (e porquê).
+3. Preferir contraprova independente (como `tle8888_crosscheck.md`) a inventar mapa/pinout a partir de memória ou de doc stale.
+4. Se o módulo for só footprint (ex. knock v2), registar a referência na netlist mesmo assim.
+
+⚠️ **Não substitui datasheet.** Speeduino/rusEFI validam *uso no mundo real*; o datasheet
+valida *limites eléctricos*. Os dois em conjunto.
+
+Memória de projecto: `always-check-speeduino-rusefi-ms` (já invocada no plano de knock).
+
+---
+
 ## 2. Registo de decisões
 
 Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundamentação em
