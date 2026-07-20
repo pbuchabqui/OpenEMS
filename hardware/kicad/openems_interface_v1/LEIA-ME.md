@@ -22,11 +22,14 @@
 | WeAct P1/P2 tabela crítica MCU | ✅ labels |
 | Star GND + aliases shield/CMP | ✅ |
 | Flex PB5, USB PA11/12, ADC nets | ✅ |
-| Footprints TE AMPSEAL 23/35 RA | ✅ `OpenEMS.pretty` (TE PDF + padrão KiCad) |
-| Footprint WeAct 2×25 | ✅ |
-| PCB outline 130×100 + keepouts | ✅ (não fabricar) |
-| Fios TLE pin-exact no canvas | ⚠️ labels+fios aprox. — afinar no KiCad |
-| Layout copper / pours | ❌ |
+| Footprints TE AMPSEAL 23/35 RA | ✅ rusEFI 35 + TE 23 |
+| Footprint WeAct 2×25 + NetTie star | ✅ |
+| PCB outline 130×100 + keepouts | ✅ |
+| Routing VBAT/PGND/ETB/CKP stubs | ✅ `route_power.py` (34 segs) |
+| Pours PGND F+B | ✅ (Fill Zones no Pcbnew) |
+| Fios TLE pin-exact no canvas | ⚠️ labels+fios aprox. |
+| Componentes power/TLE no copper | ❌ ainda não |
+| Layout final / fabrico | ❌ |
 
 ## Mapa sheets ↔ docs
 
