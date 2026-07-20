@@ -33,7 +33,7 @@ TLE_NETS = {
     9: "+5V_SENS_A",
     10: "+5V_SENS_B",
     20: "+3V3",  # VDDIO
-    21: "CKP_DIG",  # VROUT
+    21: "MCU_PA0",  # VROUT → PA0 (0Ω jumper R0 optional later)
     24: "MCU_PE1",  # INJEN
     25: "PGND",
     27: "MCU_PE3",  # IGNEN

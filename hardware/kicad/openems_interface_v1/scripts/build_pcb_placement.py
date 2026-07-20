@@ -242,6 +242,9 @@ def main() -> None:
     from place_power_stage import main as place_power
 
     place_power()
+    from place_finish import main as place_finish
+
+    place_finish()
 
 
 if __name__ == "__main__":

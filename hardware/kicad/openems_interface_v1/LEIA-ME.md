@@ -11,26 +11,19 @@
 3. **Schematic Editor** → folha raiz com 10 módulos → duplo-clique para entrar.
 4. **Backspace** para voltar à raiz.
 
-## O que está pronto
+## O que está pronto (scaffold v1 — **não fabricar ainda**)
 
 | Item | Estado |
 |------|--------|
-| Hierarquia 10 sheets | ✅ |
-| TLE8888 multi-unit A–G + straps SPI + shorts A/B | ✅ |
-| J2 23-pos pin→net completo (netlist) | ✅ lógicos |
-| J1 35-pos pin→net completo (netlist) | ✅ lógicos |
-| WeAct P1/P2 tabela crítica MCU | ✅ labels |
-| Star GND + aliases shield/CMP | ✅ |
-| Flex PB5, USB PA11/12, ADC nets | ✅ |
-| Footprints TE AMPSEAL 23/35 RA | ✅ rusEFI 35 + TE 23 |
-| Footprint WeAct 2×25 + NetTie star | ✅ |
-| PCB outline 130×100 + keepouts | ✅ |
-| Routing VBAT/PGND/ETB/CKP stubs | ✅ `route_power.py` (34 segs) |
-| Pours PGND F+B | ✅ (Fill Zones no Pcbnew) |
-| Fios TLE pin-exact no canvas | ⚠️ labels+fios aprox. |
-| U3 TLE8888 LQFP-100 + nets chave | ✅ `place_power_stage.py` |
-| Power chain Q1/F1/D1/C1/C2/U1 buck | ✅ colocados + stubs |
-| Layout final / fabrico | ❌ |
+| Hierarquia 10 sheets + netlist docs | ✅ |
+| J1 rusEFI AMPSEAL 35 + J2 TE 23 | ✅ |
+| WeAct J3/J4 + MH Φ3.2 + NetTie star | ✅ |
+| U3 TLE8888 LQFP-100 + straps SPI | ✅ |
+| Power: Q1/F1/D1/C bulk/U1 buck/U2 LDO/FB1 | ✅ |
+| Copper: VBAT/PGND, INJ/IGN, CKP, SPI, CAN, drive | ✅ scaffold (~127 segs) |
+| Pours PGND F+B | ✅ Fill Zones no Pcbnew |
+| Esquemático fios densos | ⚠️ labels; PCB pinmap é autoridade |
+| DRC manual / pin1 silk / FET DS | ❌ **bloqueia fabrico** |
 
 ## Mapa sheets ↔ docs
 
