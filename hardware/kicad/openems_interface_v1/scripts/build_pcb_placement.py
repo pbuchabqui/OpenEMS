@@ -236,6 +236,9 @@ def main() -> None:
     from annotate_pcb_nets import main as annotate
 
     annotate()
+    from route_power import main as route
+
+    route()
 
 
 if __name__ == "__main__":
