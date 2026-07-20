@@ -74,5 +74,6 @@ derivada: 69,10 − 2×2,80). A largura 30,48 mm está cotada no desenho.
 | Comprimento × largura | ✅ **69,10 × 38,62 mm** |
 | Furos montagem | ✅ Φ **3,2**, offset **2,80**, pitch X **30,48** |
 | Passo headers | ✅ **2,54 mm** (inferido + dual row) |
+| Nets P1/P2 | ✅ SchDoc — `weact_h562_schematic.md` |
 | Altura com USB / pinos | ⚠️ **ainda medir** na placa física |
-| Numeração exacta pin 1 de cada header | ⚠️ Conferir silkscreen na peça (pág. 2–3 do PDF) |
+| Numeração exacta pin 1 de cada header | ⚠️ Conferir silkscreen na peça vs SchDoc |

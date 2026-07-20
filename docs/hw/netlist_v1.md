@@ -362,8 +362,9 @@ no bit CMP. **Não bloqueia layout** do condicionamento Hall (pull-up externo no
 
 **2. ✅ Números físicos TLE8888 LQFP-100** — `docs/hw/tle8888_pinout.md` (DS Rev 1.2 + rusEFI lib).
 
-**3. ✅ Coreboard WeAct** — 38,62×69,10 mm, furos Φ3,2 — `weact_h562_coreboard.md`.  
-   ⚠️ **AMPSEAL** housings: desenhos TE ainda em falta.
+**3. ✅ Coreboard WeAct** — shape + sch: `weact_h562_coreboard.md`, `weact_h562_schematic.md`.  
+   ✅ **AMPSEAL plugs** envelope: `ampseal_connectors.md` (ENG_CD_2293782).  
+   ⚠️ **Header PCB** AMPSEAL (footprint de solda) ainda por descarregar.
 
 **4. ⚠️ Part numbers `TBD`:** buck, LDO, isolador USB, DC-DC isolado; bobinas (IGN = gate IGBT 20 mA).
 
