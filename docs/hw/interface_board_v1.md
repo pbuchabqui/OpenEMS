@@ -362,13 +362,28 @@ EWG enquanto o EWG estiver diferido**, na mesma mudança de `sensors.cpp`/`adc.c
 de forma limpa. (O `run_wastegate_control()` em si usa MAP e RPM, não `PC3` — não é afetado.)
 
 ### 8. ETB — ponte-H + failsafe mecânico obrigatório
-**BTS7960** ou **VNH5019**: PWM ← `PE5`, IN1 ← `PE7`, IN2 ← `PE8`, 12 V, feedback TPS1/TPS2 pelo bloco 6.
 
-⚠️ **Verificar frequência:** o firmware inicializa o PWM do ETB em **20 kHz**
-(`timer_etb_pwm_init()` → `etb_pwm_init(20000u)`, `src/hal/stm32h562/timer.cpp:282-283`). Isso está **no
-limite** das duas pontes candidatas (BTS7960 ~25 kHz máx, VNH5019 ~20 kHz) — perdas de comutação altas e
-pouca margem. Ou escolher ponte folgada para 20 kHz, ou baixar a frequência no firmware (o valor é
-parâmetro da função, mudança de uma linha). Não deixar isso para descobrir com a ponte esquentando.
+✅ **DECIDIDO (2026-07-20): BTS7960 a 10 kHz.** PWM ← `PE5` (TIM15_CH1 AF4), IN1 ← `PE7`, IN2 ← `PE8`,
+12 V, feedback TPS1/TPS2 pelo bloco 6.
+
+O firmware pedia **20 kHz**, contra o máximo de **25 kHz** do BTS7960 — 20% de margem, com perdas de
+comutação altas e FETs internos ao módulo, logo sem como aliviar. **Baixado para 10 kHz**
+(`etb_pwm_init(10000u)`, `src/hal/stm32h562/timer.cpp`). A resolução do duty até melhora: ARR = 6250
+passos (era 3125), bem acima dos 1000 que `etb_pwm_set_duty_x10()` precisa. **Custo aceite: chiado
+audível**, já que 10 kHz está dentro da banda audível.
+
+**O DRV8701 + 4 MOSFETs foi considerado e recusado.** Ganhava numa coisa real — o pino `IDRIVE`
+(6/12,5/25/100/150 mA de corrente de gate) é um botão de EMI no ponto exato onde este projeto já falhou
+(ruído de comutação → falso-sync → batch-fire, `ckp-noise-false-sync-injectors`). Perdeu por duas razões:
+1. **Descasamento de interface.** `etb_driver.cpp:128-145` aciona **3 pinos** (PWM + IN1 + IN2, com
+   travagem em ambos a 0) — convenção nativa do BTS7960, que mapeia **1:1 hoje**. O DRV8701E é PH/EN e o
+   DRV8701P é IN1/IN2, ambos de 2 pinos: nenhum é drop-in, e a mudança cairia num subsistema que **nunca
+   correu em hardware**.
+2. **Responsabilidade de layout.** O módulo traz os loops de comutação resolvidos; 4 FETs externos mal
+   dispostos ao lado do par CKP são **piores** que o módulo — controlo de slew não compensa área de laço.
+
+Se o ETB vier a acoplar ruído no CKP, os remédios são layout, blindagem e filtro — não há botão de slew.
+**Vigiar no passo 4 da verificação** (ruído sob carga).
 Motor do ETB é fonte pesada de ruído — alimentação separada, retorno próprio até o ponto estrela, e o par
 de feedback TPS longe do par de potência.
 
@@ -555,7 +570,7 @@ Nenhuma escolha de componente sobrevive a um layout ruim:
 | `src/engine/ewg_control.cpp` (59-64) | Guardar/desabilitar o feedback de posição do EWG enquanto o canal `PC3` for VBATT |
 | `src/hal/stm32h562/timer.cpp` (41-64) | ⚠️ **CORRIGIDO — só o `PA1` muda.** A versão anterior desta linha mandava remover o pull-down de `PA0` **e** `PA1`, mas era texto da era MAX9924. Com o CKP na interface VR do TLE8888, `VROUT` é **push-pull** (não open-drain) → **o pull-down de `PA0` FICA**, e removê-lo desfaz o fix de falso-sync (`ckp-noise-false-sync-injectors`). Só o `PA1` (CMP Hall, open-collector) passa a pull-**up** interno. Manter o filtro IC 256 ns nos dois. **Ver a questão de polaridade de borda abaixo — não é só trocar o resistor.** |
 | ~~`src/engine/auxiliaries.cpp` (`kPumpOffDelayMs`)~~ ✅ | **Feito** — corte da bomba 3 s → **2 s** (bloco 10) |
-| `src/hal/stm32h562/timer.cpp:283` | Só **se** a ponte-H escolhida não aguentar 20 kHz — baixar `etb_pwm_init()` |
+| ~~`src/hal/stm32h562/timer.cpp:283`~~ ✅ | **Feito** — `etb_pwm_init()` 20 kHz → **10 kHz** para a BTS7960 |
 | `src/engine/auxiliaries.cpp` (103-106) | Só **se** bomba/ventoinha migrarem de `PB12`/`PB13` p/ liberar o SPI2 |
 | `docs/hw/pinout.md` | VBATT em `PC3`; bomba/ventoinha `PB13`/`PB12`; nota do pull do `PA1` |
 | ~~`docs/wiring_diagram.md`~~ ✅ | **Feito** — purgado o mapa de pinos ASCII e a narrativa de registadores do TLE8888 (era a origem do mapa inventado); ficou só alimentação/condicionamento/atuadores/conector/terra, com ponteiros para as fontes de verdade. Conector fechado em **55 vias** |
@@ -681,17 +696,10 @@ todo bondado, já que PE0–PE15 são usados até o PE15): **`PE1`, `PE3`, `PE10
 Falta só escolher os part numbers para a BOM, o que **não trava esquemático**: o level-shift 3,3→5 V já
 está previsto como DNP no bloco 5, cobrindo bobinas que exijam 5 V no trigger.
 
-**7. ETB a 20 kHz.** O firmware pede 20 kHz (`etb_pwm_init(20000u)`). BTS7960 vai **até 25 kHz** — passa,
-com só 20 % de margem e perdas de comutação altas. VNH5019 fica no limite ou abaixo.
-**Um ETB não precisa de 20 kHz**; a única razão para ficar acima de ~20 kHz é sair da banda audível.
-Duas saídas coerentes:
-- **Ponte com folga + controle de slew: DRV8701 + 4 MOSFETs logic-level.** Suporta muito acima de
-  20 kHz, e o `IDRIVE` ajustável dá **controle de slew** — o mesmo eixo anti-EMI do bloco 4b, agora
-  também no motor do ETB, que é fonte pesada de ruído. É a resposta coerente com o critério de desempenho.
-- **Ou manter BTS7960 e baixar o PWM no firmware** (uma linha, `timer.cpp:283`) para ~10 kHz: alivia a
-  ponte, ao custo de possível chiado audível.
-
-**Recomendação: DRV8701 + FETs.** Mantém 20 kHz (inaudível), perdas baixas e slew ajustável.
+**7. ETB a 20 kHz.** ✅ **RESOLVIDO — BTS7960 a 10 kHz** (decidido 2026-07-20, ver bloco 8).
+Firmware alterado: `etb_pwm_init(20000u)` → `etb_pwm_init(10000u)`. O DRV8701 foi considerado e recusado
+por descasamento de interface (o firmware é PWM+IN1+IN2 de 3 pinos, o DRV8701 é de 2) e por transferir a
+responsabilidade do layout de potência. Chiado audível aceite.
 
 ### ⚠️ Reaberta pela investigação
 

@@ -203,21 +203,27 @@ polarizado em meio-rail. Diferido para a v2; só footprint (TPIC8101) na v1.
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│  ETB — ponte-H EXTERNA (permanece discreta)                 │
+│  ETB — ponte-H EXTERNA: BTS7960 @ 10 kHz (decidido)         │
 │                                                             │
 │  As meias-pontes do TLE8888 são de só 0,6 A — falta uma     │
 │  ordem de grandeza para o motor da borboleta.               │
 │                                                             │
-│  PWM (TIM15_CH1) ──► ponte PWM      [VGT6: PE5]            │
+│  PWM (TIM15_CH1) ──► BTS7960 PWM    [VGT6: PE5]            │
 │  DIR abrir  (GPIO) ──► IN1          [VGT6: PE7]            │
 │  DIR fechar (GPIO) ──► IN2          [VGT6: PE8]            │
+│    (ambos a 0 = travagem)                                   │
 │  ETB TPS1/TPS2 ──► ADC (realimentação de posição)          │
 │  12V ──► ponte VCC       GND ──► ponte GND                 │
 │                                                             │
-│  ⚠️ Firmware pede 20 kHz — no limite de BTS7960 (~25 kHz)   │
-│     e acima do VNH5019. Recomendado: DRV8701 + 4 MOSFETs    │
-│     logic-level (folga + IDRIVE dá controlo de slew).       │
-│     Alternativa: baixar o PWM no firmware (uma linha).      │
+│  PWM baixado de 20 kHz para 10 kHz: o BTS7960 vai até       │
+│  25 kHz, e a 20 kHz sobravam só 20% de margem com perdas    │
+│  de comutação altas (FETs internos, sem como aliviar).      │
+│  Custo aceite: chiado audível. A interface de 3 pinos       │
+│  (PWM+IN1+IN2) mapeia 1:1 no firmware actual.               │
+│                                                             │
+│  ⚠️ Sem botão de slew (FETs integrados). Se o ETB acoplar   │
+│     ruído no par CKP, os remédios são layout, blindagem e   │
+│     filtro. Vigiar no teste de ruído sob carga.             │
 │                                                             │
 │  ⚠️ GATE DE SEGURANÇA — o ETB é a ÚNICA autoridade sobre a  │
 │     borboleta (o IACV foi removido) e o autocal+PID nunca   │

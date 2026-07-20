@@ -276,11 +276,18 @@ extern "C" void TIM5_IRQHandler(void) {
 } // namespace ems::hal
 
 // ----------------------------------------------------------------------------
-// C API legacy: ETB PWM @ ~20 kHz on PA6/TIM3 (RGT6)
+// C API legacy: ETB PWM — VGT6: PE5/TIM15_CH1 (AF4); RGT6: PA6/TIM3_CH1 (AF2)
 // ----------------------------------------------------------------------------
 
+// 10 kHz (era 20 kHz): a ponte-H escolhida para a placa v1 é a BTS7960, cujo
+// máximo é 25 kHz. A 20 kHz sobravam 20% de margem e as perdas de comutação eram
+// altas — e os FETs são internos ao módulo, portanto não há como aliviar. A 10 kHz
+// a ponte trabalha folgada; o custo é chiado audível (10 kHz está dentro da banda
+// audível), que é incómodo e não risco.
+// Resolução do duty melhora: ARR = 62,5 MHz / 10 kHz = 6250 passos (era 3125),
+// bem acima dos 1000 passos que etb_pwm_set_duty_x10() precisa.
 void timer_etb_pwm_init(void) {
-    ems::hal::etb_pwm_init(20000u);
+    ems::hal::etb_pwm_init(10000u);
 }
 
 void timer_etb_set_duty(uint16_t duty) {
