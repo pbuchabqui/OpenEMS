@@ -285,6 +285,46 @@ que marcaria o CI como bom e mascararia justamente esta falha). Exposto na telem
 razão visível" em "mapa errado, alto e específico, no primeiro power-on". É a resolução disponível sem
 silício — o clock-out em bancada continua a ser o teste que decide.
 
+### 🚨 PENDENTE (2026-07-20) — contraprova rusEFI: mapa confirmado, mas **duas lacunas no driver**
+
+Cruzei `tle8888_regs.h` com a implementação **independente** do rusEFI. Registo completo em
+**`docs/hw/tle8888_crosscheck.md`**. Resumo:
+
+✅ **27 endereços, zero divergências**, e o formato do frame (`data[15:8]`, `addr[7:1]`, R/W bit 0)
+coincide. Inclui `DDConfig` (0x57) e `OEConfig` (0x5b), de que o direct drive depende. **Retira grande
+parte do risco de mapa inventado.**
+
+🚨 **Mas o nosso `configure()` tem duas lacunas reais, ambas por corrigir:**
+1. **Falta `CMD_CHIP_UNLOCK`** (`0x1E ← 0x01`) **antes** de qualquer escrita de configuração. Os
+   registadores de config são protegidos por lock; sem isto as escritas plausivelmente não pegam.
+2. **Falta `CMD_OE_SET`** (`0x1C ← 0x02`), o **output enable central**, no fim. Sem ele as saídas
+   plausivelmente nunca habilitam, mesmo com `OEConfig` correcto.
+
+⚠️ **Unlock e OE são registadores de COMANDO, não de armazenamento** — não podem passar por
+`write_verify()`, que os releria e abortaria a init num CI saudável. Emitir como escrita simples.
+
+**Consequência se não for corrigido:** o CI não configura e/ou não liga saídas — sem injeção nem
+ignição, e o sintoma seria mudo.
+
+### 🚨 PENDENTE — política do fingerprint a rever (decidido, não implementado)
+
+O cruzamento mostrou que **5 dos 7 registadores do fingerprint** (`ComConfig0/1`, `WdConfig0/1`,
+`FWDConfig`) usam endereços que o rusEFI **não** confirma, e que **nenhum valor de reset** foi
+confirmado por segunda fonte. Como o gate é hoje **bloqueante e latched**, um único valor mal
+transcrito deixaria um CI saudável **permanentemente sem injeção**.
+
+**Decidido (2026-07-20), por implementar:**
+- **Despromover o fingerprint a consultivo** (mantém `reserved[49]` na telemetria), reconstruído só
+  sobre os endereços confirmados: `OpConfig0` (0x4E) e `OutConfig3` (0x43).
+- **O gate de segurança passa a ser a validação por eco de endereço** — a resposta SPI do TLE8888
+  devolve o endereço do registador, o que prova link, frame e round-trip **continuamente e sem depender
+  da nossa leitura do datasheet**. Contadores para POR (`OpStat0`), watchdog reset (`FWDStat1`) e COMFE
+  (`Diag0`). Ver `tle8888_crosscheck.md` §4.
+
+✅ **Facto verificado, contra uma sugestão de usar soft-reset:** o `configure()` só escreve `0x57`,
+`0x5A`, `0x4A` e `0x5B` — **nenhum** dos registadores do fingerprint. Os valores de reset **sobrevivem**
+a um reboot morno do MCU, logo `CMD_SR` não é necessário para tornar o fingerprint determinístico.
+
 ---
 
 ## Blocos do PCB

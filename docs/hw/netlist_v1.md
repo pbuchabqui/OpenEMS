@@ -350,7 +350,40 @@ Esta é a propriedade que faz disto um esquemático e não prosa: **cada pino te
 - [ ] Nenhum `+12 V` de injetor, bobina ou solenóide atravessa a placa.
 
 ### Bloqueios que têm de fechar ANTES do layout
-1. 🚨 **Polaridade de borda CMP/CKP** — à espera do part number do Hall (bloco 3).
-2. 🚨 **Números físicos de pino do TLE8888** — tier B, tirar do datasheet.
-3. ⚠️ **Dimensões do coreboard e das caixas AMPSEAL** — medir/obter desenhos.
-4. ⚠️ Part numbers `TBD`: buck, LDO, isolador USB, DC-DC isolado.
+
+**1. 🚨 Polaridade de borda CMP/CKP — tem saída conhecida, por implementar.**
+Já não é preciso esperar pelo part number do Hall: a polaridade pode ser um **byte de calibração**,
+o que tira a decisão do caminho crítico. Desenho apurado em 2026-07-20:
+- 1 byte em page0, **offset ≥ 258** (byte mais alto usado é 257; ≥258 fica coberto pelo gate
+  `cal_layout_ok` do byte 175, logo blobs antigos leem 0). `bit0` = CKP, `bit1` = CMP.
+  **Default `0` = subida = comportamento actual.**
+- Nova `tim5_ic_set_capture_polarity()`: **limpar `CCxE` → escrever `CCxP` → repor `CCxE`** (trocar a
+  polaridade com a captura activa pode latch-ar uma captura espúria).
+- ⚠️ **O pull tem de seguir a polaridade** — com captura na descida o nível seguro inverte e o default
+  passa a **pull-up**. Deixar PUPDR dessincronizado reintroduz o falso-sync.
+- ⚠️ **Duas armadilhas:** (a) a config carrega **depois** do `tim5_ic_init()` (`main_stm32.cpp:482` vs
+  `:513`), logo é preciso re-aplicar no bloco §5; (b) o caminho de boot **salta os bytes 56-65**, ver
+  o bug latente abaixo.
+- Impacto angular absorvido: o gate temporal do CMP é **invariante à polaridade** e o gate de posição
+  **re-ancora sozinho** (±3 dentes). Só `cmp_window_open/close_tooth` é referência fixa — e está
+  desligado por defeito.
+
+**2. 🚨 Números físicos de pino do TLE8888** — tier B, tirar da tabela de pinout do datasheet.
+
+**3. ⚠️ Dimensões do coreboard e das caixas AMPSEAL** — ver `README.md` §5 para o que medir.
+
+**4. ⚠️ Part numbers `TBD`:** buck, LDO, isolador USB, DC-DC isolado.
+
+---
+
+## 🐛 Bug latente pré-existente (independente desta placa)
+
+Descoberto ao desenhar o item 1 acima, e **não corrigido**:
+
+**Os bytes 56-65 de page0 não são restaurados da flash no arranque.** `cmp_window_open_tooth`,
+`cmp_window_close_tooth` e os trims de combustível por cilindro são serializados e aplicados na escrita
+por UI, mas `grep cmp_window src/main_stm32.cpp` → **0 ocorrências**. Ou seja: configuram-se, gravam-se
+em flash, e **não sobrevivem a um reboot**.
+
+Corrigir em separado — não é específico da placa de interface, mas qualquer knob novo que copie este
+padrão herda o defeito.
