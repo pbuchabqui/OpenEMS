@@ -71,10 +71,26 @@ potência. INJ/IGN por *direct drive* (GPIO → IN1–IN8 do CI), sem MOSFETs di
 As duas trocas **andam juntas**: um LDO bom alimentado com 150 kHz de ripple não salva
 os sensores ratiométricos. Ver bloco 1 de `interface_board_v1.md`.
 
-⚠️ **VREF+ ainda em aberto.** É pino separado do VDDA no LQFP100 (não existe no LQFP64) e
-a escolha — (a) VDDA 3,3 V filtrado, (b) VREFBUF interno 1,8/2,048/2,5 V, (c) derivado do
-5 V dos sensores para cancelamento ratiométrico verdadeiro — **redimensiona todos os
-divisores** e a constante de `vbatt_raw_to_mv()`. Fechar antes do esquemático.
+✅ **VREF+ decidido: (a) VDDA 3,3 V filtrado**, com (c) reservado como **DNP**.
+
+O cancelamento ratiométrico de (c) — VREF+ derivado do mesmo 5 V, fazendo `V5` cancelar-se
+algebricamente — é real, mas ataca um termo que o firmware já cobre: deriva lenta de
+referência é absorvida pelo STFT/LTFT, e TPS/APP/ETB trabalham em **percentagem entre
+extremos calibrados** (com o ETB a recalibrar os batentes a cada power-on), onde um erro de
+escala comum se cancela sozinho.
+
+⭐ **Os trims absorvem deriva, não absorvem ruído.** O MAP é lido 1×/dente e perturba o
+combustível desse ciclo — os trims corrigem a média, não a variância. Por isso o esforço
+rende no **LDO high-PSRR + filtragem do VDDA + layout**, não numa referência mais exata.
+
+Bónus: (a) é o que o código já assume, incluindo o `18000` de `vbatt_raw_to_mv()` — zero
+rework. Reservar footprint do divisor 5 V→~3,0 V + buffer como DNP mantém (c) disponível
+sem respin, se o passo 5 da verificação mostrar que a amplitude é limitante.
+
+⚠️ A afirmação de que o LQFP100 tem VREF+ como **pino separado** vem do plano e **não foi
+reconfirmada** (PDFs da ST deram timeout; fontes secundárias divergem). Não afeta (a) — aí o
+VREF+ liga ao VDDA filtrado de qualquer modo. **Confirmar na tabela de pinout antes de ir
+para (c).**
 
 ---
 

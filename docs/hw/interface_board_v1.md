@@ -296,14 +296,9 @@ Os sensores MAP/TPS/APP são **ratiométricos**: a saída é proporção da alim
 - Chaveamento do buck **acima da banda dos filtros RC dos sensores** e longe de harmônicas da frequência
   de dente do CKP (60 dentes × 8000 rpm ≈ 8 kHz — folgado, mas verificar as harmônicas).
 
-**VREF+ — alavanca de precisão a explorar (verificar no VGT6):**
-No LQFP100 o **VREF+ costuma ser pino separado** do VDDA (ao contrário do LQFP64). **Confirmar no
-datasheet/pinout do H562VGT6.** Se for separado, alimentá-lo de uma **referência de precisão** (ou do
-VREFBUF interno) em vez do VDDA cru: para sensor ratiométrico a estabilidade da referência define
-diretamente a exatidão do ADC — exatamente o eixo que se quer otimizar.
-
-⚠️ Cancelamento ratiométrico verdadeiro exigiria VREF+ derivado do mesmo 5 V dos sensores. Com VREF+ ≈
-3,3 V **não há cancelamento** — a instabilidade do 5 V é medida direto. Daí a insistência no LDO dedicado.
+**VREF+ — ✅ DECIDIDO (2026-07-20): (a) VDDA 3,3 V filtrado, com (c) reservado como DNP.**
+Ferrite + 1 µF + 100 nF, pour AGND dedicado no VSSA, alimentado pelo LDO low-noise/high-PSRR.
+Fundamentação completa na pendência 3.
 
 ### 2. Front-end CKP — interface VR do TLE8888
 
@@ -712,26 +707,48 @@ Nunca ligar injetores ou bobinas nas etapas 1–3.
 peça **MAX9924 single**, saída **open-drain** (pull-up 3,3 V, remover pull-down de `PA0`),
 `tPDZ`=50 ns / jitter 20 ns, desacoplamento 10 nF∥100 nF∥1 µF.
 
-**3. VREF+ — SIM, é pino separado, e só no LQFP100.**
-*"The VREF+ pin is available only in LQFP100 and UFBGA100 packages"* — ou seja, **é uma vantagem
-exclusiva do VGT6 que o RGT6 (LQFP64) não tem**. Justifica a escolha de package por um motivo que o
-plano não tinha considerado.
+**3. VREF+ — ✅ RESOLVIDO (2026-07-20): (a) VDDA 3,3 V filtrado, com (c) como DNP.**
 
-Três formas de usá-lo, em ordem crescente de precisão:
-- **(a) VREF+ = VDDA 3,3 V filtrado.** O que quase todo projeto faz. Simples; a exatidão fica presa à
-  estabilidade do 3,3 V.
-- **(b) VREFBUF interno.** Sai **1,8 / 2,048 / 2,5 V** — ⚠️ **não 3,3 V**. Escolher isto **obriga a
-  redimensionar todos os divisores**: os atuais mapeiam 0,5–4,5 V → 0,3–2,7 V e **estourariam** um fundo
-  de escala de 2,5 V. Redimensionados, não há perda de resolução (o sinal ocupa a mesma fração da escala)
-  e ganha-se uma referência bufferizada.
-- **(c) VREF+ derivado do próprio 5 V dos sensores** (divisor 5 V→~3,0 V + buffer de baixa impedância).
-  **É a única opção que dá cancelamento ratiométrico de verdade:** se o 5 V oscilar, sensor e referência
-  oscilam juntos e a razão se mantém. Como o plano já concluiu que **exatidão de amplitude é o único
-  refinamento sem piso mecânico**, esta é a opção coerente com o critério declarado — ao custo de um
-  buffer e de VREF+ ≤ VDDA.
+⚠️ **Correção a este próprio documento.** A versão anterior recomendava **(c)** e afirmava, com aspas de
+datasheet, que *"The VREF+ pin is available only in LQFP100 and UFBGA100 packages"*. **Essa citação não
+foi reconfirmada:** as três tentativas de fetch dos PDFs primários da ST deram timeout, e fontes
+secundárias divergem até nas tensões do VREFBUF (1,8/2,048/2,4 numas, 1,65/1,8/2,048/2,5 noutras). A
+afirmação traça à mesma leitura que produziu os erros do TLE8888 e do pull-down do `PA0`.
+**Tratar como não verificada.** Não afeta a decisão — em (a) o VREF+ liga ao VDDA filtrado, exista pino
+dedicado ou não. **Se algum dia se for para (c) ou (d), confirmar o pino na tabela de pinout primeiro.**
 
-**Recomendação: (c)** se aceitar o op amp extra; **(a)** como fallback seguro. **(b)** só se houver razão
-específica — o redimensionamento dos divisores é trabalho e risco sem ganho claro sobre (c).
+**A física:** `código = 4095 × Vin / VREF+` — o VREF+ é a régua, e qualquer erro nele é erro proporcional
+em todas as leituras. Os sensores são ratiométricos (`V_out = k × V_alim`), portanto derivar o VREF+ do
+mesmo 5 V faria `V5` cancelar-se algebricamente. **O cancelamento de (c) é real.**
+
+**Porque (a) mesmo assim, e o argumento vem do firmware, não do hardware:**
+1. **A malha fechada já absorve.** Erro de escala no MAP → erro no combustível → erro de lambda → o STFT
+   corrige e o LTFT aprende. Deriva de referência é **lenta** (térmica), exatamente a escala de tempo que
+   os trims tratam.
+2. **TPS/APP/ETB nem precisam de exatidão absoluta.** `tps_raw_to_pct_x10()` dá uma **percentagem entre
+   extremos calibrados**, e o ETB recalibra os batentes a cada power-on (`etb_autocal`). Um erro de escala
+   comum desloca calibração e leitura na mesma proporção — **cancela-se sozinho, sem op amp**.
+
+Sobra beneficiar de (c) só o conjunto absoluto (MAP, pressão de combustível e de óleo) — e o MAP, único
+que alimenta as tabelas, é justamente o que a malha fechada corrige.
+
+⭐ **O reframe que decide: os trims absorvem DERIVA, não absorvem RUÍDO.** Ruído no 3,3 V aparece como
+dispersão amostra-a-amostra; o MAP é lido 1×/dente e perturba o combustível *desse ciclo*. Nenhum trim
+apanha isso — corrigem a média, não a variância. Logo o esforço rende no **LDO high-PSRR, na filtragem do
+VDDA e no layout**, não em tornar a referência absolutamente exata. **(c) ataca o termo já coberto e
+deixa o que não está.**
+
+**Custos de (c) que não se veem à primeira:** o offset e a deriva térmica do op amp entram em série com
+todas as medições (trocas uma fonte de erro por outra, sem ganho líquido garantido); VREF+ ≤ VDDA obriga
+a dividir 5 V → ~3,0 V, perdendo ~9% da escala; mais componentes na rede mais crítica; e se o divisor do
+VREF+ e o *tracker* do TLE8888 não virem **exatamente o mesmo nó** de 5 V, o cancelamento é imperfeito.
+
+**(b) VREFBUF é a pior das três aqui:** obriga a redimensionar todos os divisores (2,5 V de fundo de
+escala estoura os atuais 0,3–2,7 V) **e também não dá cancelamento ratiométrico**.
+
+**Consequência prática:** (a) é o que o código já assume, incluindo o `18000` de `vbatt_raw_to_mv()`.
+**Zero rework.** Reservar footprint do divisor + buffer como **DNP**, para que (c) continue disponível
+sem respin se o passo 5 da verificação mostrar que a exatidão de amplitude é limitante.
 
 **4. Colisão `PB12`/`PB13` — ⚠️ NÃO era risco futuro, é BUG ATIVO no firmware.**
 `tle8888_init()` (`main_stm32.cpp:500`) põe `PB12`=CS e `PB13/14/15`=AF5/SPI2. Depois
@@ -790,6 +807,9 @@ e `PC8` é **IGN3 no RGT6**. Não achei chamada a `sdmmc_init()` em `main_stm32.
 compilado mas não ativado. Confirmar antes de assumir que os pinos estão livres.
 
 ### Ainda dependem de ti
+
+**Estado 2026-07-20: só o item 8 continua aberto.** Os itens 3 (VREF+), 6 (VVT) e 7 (ponte-H do ETB)
+foram fechados — ver as respetivas secções.
 
 **6. VVT com um came só.** ✅ **RESOLVIDO — aceite na v1** (2026-07-20). Montar os dois drivers,
 **comissionar só o came instrumentado**, e a via do 2º sensor de came já está reservada na tabela de 55
