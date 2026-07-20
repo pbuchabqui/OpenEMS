@@ -1,6 +1,6 @@
 /**
  * @file tle8888.cpp
- * @brief Driver do TLE8888-1QK — reescrito contra o datasheet Rev. 1.2.
+ * @brief Driver do TLE8888 (-2QK na v1) — reescrito contra o datasheet Rev. 1.2.
  *
  * ⚠️ REESCRITA COMPLETA (2026-07-20). A versão anterior deste ficheiro não podia
  * funcionar: tinha o **mapa de registadores inventado** *e* o **frame SPI
@@ -183,19 +183,47 @@ bool verify_register_map() noexcept {
 }
 
 // ── Configuração ─────────────────────────────────────────────────────────────
+// Ordem alinhada com rusEFI chip_init(): unlock → InConfig → DD/OE → OE_SET.
+// Ver docs/hw/tle8888_crosscheck.md §5.
 bool configure() noexcept {
-    // 1. Direct drive: INJ1-4 (O1DD..O4DD) + VVT escape/admissão (O5DD/O6DD).
+    // 0. Unlock (comando — sem write_verify). Sem isto as escritas de config
+    //    ficam protegidas e não pegam.
+    tle_write(R::CMD_LOCK, R::CMD_CHIP_UNLOCK_DATA);
+
+    // 1. Mapa IN9..IN12 → saídas remapeáveis (bomba/fan/VVT).
+    //    Encoding: valor = (índice 0-based de OUTn) − 4 (rusEFI / Tab. 24).
+    if (!write_verify(R::IN_CONFIG0, R::IN_CONFIG0_OPENEMS)) { return false; }
+    if (!write_verify(R::IN_CONFIG1, R::IN_CONFIG1_OPENEMS)) { return false; }
+    if (!write_verify(R::IN_CONFIG2, R::IN_CONFIG2_OPENEMS)) { return false; }
+    if (!write_verify(R::IN_CONFIG3, R::IN_CONFIG3_OPENEMS)) { return false; }
+
+    // 2. Direct drive: INJ1-4 + VVT OUT5/6; bomba/fan OUT14/15; IGN1-4.
     if (!write_verify(R::DD_CONFIG0, R::DD_CONFIG0_OPENEMS)) { return false; }
-    // 2. Direct drive da ignição: IGN1-4.
+    if (!write_verify(R::DD_CONFIG1, R::DD_CONFIG1_OPENEMS)) { return false; }
     if (!write_verify(R::DD_CONFIG3, R::DD_CONFIG3_OPENEMS)) { return false; }
+
     // 3. Interface VR do CKP: modo auto-detecção, diagnóstico em modo normal.
     //    (VRSM=00 é o reset value; escrevemos explicitamente para não depender
     //     do estado de arranque. Em modo auto o CI ignora VRSPV/VRSPT.)
     if (!write_verify(R::VRS_CONFIG1, R::VRS_CONFIG1_OPENEMS)) { return false; }
-    // 4. Habilitar os canais usados. Estes bits são repostos a 0 pela função de
-    //    protecção de cada canal — daí a sequência de recuperação em poll_diag.
+
+    // 4. Output enable por canal. Estes bits são repostos a 0 pela protecção —
+    //    daí a sequência de recuperação em poll_diag.
     if (!write_verify(R::OE_CONFIG0, R::OE_CONFIG0_OPENEMS)) { return false; }
+    if (!write_verify(R::OE_CONFIG1, R::OE_CONFIG1_OPENEMS)) { return false; }
+    if (!write_verify(R::OE_CONFIG3, R::OE_CONFIG3_OPENEMS)) { return false; }
+
+    // 5. Enable central (comando — sem write_verify). Sem isto as saídas
+    //    plausivelmente nunca habilitam mesmo com OEConfig correcto.
+    tle_write(R::CMD_OE, R::CMD_OE_SET_DATA);
     return true;
+}
+
+void rearm_output_enables() noexcept {
+    (void)write_verify(R::OE_CONFIG0, R::OE_CONFIG0_OPENEMS);
+    (void)write_verify(R::OE_CONFIG1, R::OE_CONFIG1_OPENEMS);
+    (void)write_verify(R::OE_CONFIG3, R::OE_CONFIG3_OPENEMS);
+    tle_write(R::CMD_OE, R::CMD_OE_SET_DATA);
 }
 
 /// Descodifica um registador de diagnóstico com 4 canais × 2 bits.
@@ -247,10 +275,12 @@ void tle8888_init() noexcept {
         return;
     }
 
-    // ── 5. Verificação de comunicação (caminho de ESCRITA) ──────────────────
-    // Não existe registador de "chip ID" no TLE8888. O fingerprint acima já
-    // validou o caminho de leitura e o mapa; isto valida a escrita, relendo
-    // DDConfig0 com o valor que queremos de facto usar.
+    // ── 5. Unlock + verificação de comunicação (caminho de ESCRITA) ──────────
+    // Unlock tem de preceder qualquer write_verify: com o chip locked as
+    // escritas de config não pegam e o verify falha num CI saudável.
+    // Não existe registador de "chip ID". O fingerprint validou leitura/mapa;
+    // isto valida a escrita, relendo DDConfig0 com o valor de operação.
+    tle_write(R::CMD_LOCK, R::CMD_CHIP_UNLOCK_DATA);
     g_comms_ok = write_verify(R::DD_CONFIG0, R::DD_CONFIG0_OPENEMS);
     if (!g_comms_ok) {
         ++g_fault_count;
@@ -272,7 +302,8 @@ void tle8888_poll_diag() noexcept {
     if (g_map_mismatch != 0u) { return; }
 
     if (!g_comms_ok || !g_configured) {
-        // Tenta reestabelecer: barramento primeiro, configuração depois.
+        // Tenta reestabelecer: unlock → escrita → configuração completa.
+        tle_write(R::CMD_LOCK, R::CMD_CHIP_UNLOCK_DATA);
         g_comms_ok = write_verify(R::DD_CONFIG0, R::DD_CONFIG0_OPENEMS);
         if (!g_comms_ok) { ++g_fault_count; return; }
         g_configured = configure();
@@ -314,7 +345,7 @@ void tle8888_poll_diag() noexcept {
             if (g_channel_faults[i] != 0u) { still_faulted = true; break; }
         }
         if (!still_faulted) {
-            (void)write_verify(R::OE_CONFIG0, R::OE_CONFIG0_OPENEMS);
+            rearm_output_enables();
         }
     }
 }
@@ -356,7 +387,8 @@ uint8_t tle8888_map_mismatch() noexcept { return g_map_mismatch; }
 /*
  * ⚠️ WATCHDOG — DELIBERADAMENTE NÃO IMPLEMENTADO
  *
- * O TLE8888-1QK tem um módulo de monitorização em duas partes (cap. 6):
+ * O TLE8888 tem um módulo de monitorização em duas partes (cap. 6) — activo
+ * na variante -1QK; a v1 usa -2QK com watchdog desactivado de fábrica:
  *   - Window Watchdog (WWD): verificação temporal, por comando de serviço;
  *   - Functional Watchdog (FWD): verificação lógica por **pergunta/resposta**,
  *     em que o microcontrolador tem de executar rotinas de auto-teste e devolver

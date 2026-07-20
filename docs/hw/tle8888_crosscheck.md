@@ -140,13 +140,16 @@ CMD_OUTCONFIG(0..5)
 CMD_OE_SET               ← ÚLTIMO
 ```
 
-🚨 **O nosso `configure()` não faz nem `CMD_CHIP_UNLOCK` nem `CMD_OE_SET`.** Sem unlock, os registadores
-de configuração estão protegidos; sem OE central, as saídas plausivelmente nunca habilitam. Ver a
-pendência registada em `interface_board_v1.md`.
+✅ **Implementado (2026-07-20):** `configure()` emite `CMD_CHIP_UNLOCK` no início, escreve
+`InConfig0–3` + DD/OE (INJ/IGN/VVT/bomba/fan), e `CMD_OE_SET` no fim — fire-and-forget nos
+comandos, `write_verify` só nos registadores de armazenamento. Ver `src/hal/tle8888.cpp`.
 
 ⚠️ **Unlock, OE e SR são registadores de COMANDO, não de armazenamento** — o rusEFI emite-os
 fire-and-forget e nunca os relê. Não podem passar pelo nosso `write_verify()`: a releitura falharia num
 CI saudável e abortaria a init.
+
+⚠️ **Ainda por implementar:** validação por eco de endereço (esta secção §4) e despromoção do
+fingerprint a consultivo.
 
 ---
 

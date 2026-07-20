@@ -186,12 +186,13 @@ em bancada antes do motor) é requisito de **projeto e de procedimento** — ver
 |---|---|---|
 | `MCU.PE10` | `TLE8888.IN9` | `PUMP_CMD` |
 | `MCU.PE12` | `TLE8888.IN10` | `FAN_CMD` |
-| `TLE8888.OUT<bomba>` | `J2.PUMP_RLY` | `PUMP_RLY_LS` |
-| `TLE8888.OUT<ventoinha>` | `J2.FAN_RLY` | `FAN_RLY_LS` |
-| `TLE8888.<main relay drv>` | `J2.MAIN_RLY` | `MAIN_RLY_LS` |
+| `TLE8888.OUT14` | `J2.PUMP_RLY` | `PUMP_RLY_LS` | IN9, DD+OE via driver |
+| `TLE8888.OUT15` | `J2.FAN_RLY` | `FAN_RLY_LS` | IN10, DD+OE via driver |
+| `TLE8888.<main relay drv>` | `J2.MAIN_RLY` | `MAIN_RLY_LS` | ⚠️ dono eléctrico **em aberto** |
 
 Saídas low-side para a **bobina** do relé (~200 mA). Sem diodos de roda-livre discretos — clamp interno.
-⚠️ `OUT` exatos e o driver de relé principal: **tier B**, confirmar no datasheet.
+⚠️ Números de pino LQFP-100 do TLE: **tier B**. OUT14/OUT15 e InConfig fechados no firmware
+(`IN_CONFIG*_OPENEMS` / `DD_CONFIG1_OPENEMS`).
 
 ---
 

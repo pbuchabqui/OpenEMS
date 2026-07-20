@@ -2,12 +2,15 @@
   Origem: plano de design elaborado e aprovado em 2026-07-20.
   Persistido no repositório porque ~/.claude/plans/ é área efémera.
   Fontes primárias verificadas nesta análise:
-    - Infineon TLE8888-1QK Data Sheet Rev. 1.2 (2017-02-10)
+    - Infineon TLE8888-1QK/2QK Data Sheet Rev. 1.2 (2017-02-10)
     - Analog Devices MAX9924–MAX9927 Rev 5
     - STM32H562 (VREF+ só existe em LQFP100/UFBGA100)
     - Código do próprio repo (ver referências file:line ao longo do texto)
-  ⚠️ Onde este documento contradiz docs/wiring_diagram.md, ESTE prevalece:
-     aquele está desactualizado (mapas RGT6/TIM-OC e números do TLE8888 errados).
+  ⚠️ CANON v1: TLE8888-2QK (watchdog off de fábrica). O -1QK só em produção
+     com WWD+FWD implementados. Ver docs/hw/README.md.
+  ⚠️ Onde este documento contradiz docs/wiring_diagram.md, ESTE prevalece
+     no racional de blocos; pinout/regs → pinout.md / tle8888_regs.h.
+  ⚠️ Ponto de entrada: docs/hw/README.md (autoridade + decisões + em aberto).
 -->
 
 # Plano de Hardware — Placa de Interface OpenEMS v1 (VGT6) rumo ao motor
@@ -29,8 +32,8 @@ abaixo.
 
 ### Decisões fechadas
 - Alvo **VGT6 (LQFP100)** — GPIOE inteiro para INJ/IGN, sem os conflitos SDMMC/PB10-11 do RGT6.
-- **Estágio de potência: TLE8888-1QK na v1** (LQFP-100). Injeção e ignição por **direct drive** →
-  scheduler intacto. ⚠️ Exige **reescrever o driver** — ver a seção de arquitetura.
+- **Estágio de potência: TLE8888-2QK na v1** (LQFP-100). Injeção e ignição por **direct drive** →
+  scheduler intacto. Watchdog desactivado de fábrica (evitar Safe State no bring-up).
 - **CKP: VR confirmado, pela interface VR do TLE8888** (zero-crossing + armamento por pico, clamp e
   diagnóstico integrados). **MAX9924 sai da BOM.** **CMP: Hall** direto ao `PA1`.
 - **Knock diferido para a v2** — só footprint na v1.
@@ -148,7 +151,7 @@ de verificação reflete isso.
 
 ---
 
-## ⭐ Arquitetura v1 — TLE8888-1QK como hub (decidido 2026-07-20)
+## ⭐ Arquitetura v1 — TLE8888-2QK como hub (decidido 2026-07-20)
 
 O TLE8888 entra na **v1**, não na v2. Isto substitui os blocos de estágio de potência discreto.
 
@@ -214,7 +217,7 @@ Comparei o mapa de registradores do `src/hal/tle8888.cpp` com o datasheet Rev 1.
 |---|---|
 | `DDConfig0–3` (direct drive) | **ausente** |
 | `OEConfig0–3` (output enable) | **ausente** |
-| `InConfig0–3` (atribuição IN9–12) | **ausente** |
+| `InConfig0–3` (atribuição IN9–12) | ✅ implementado (IN9→OUT14, IN10→OUT15, IN11→OUT5, IN12→OUT6) |
 | `VRSConfig0/1/2` (bits VRSPV/VRSPT/VRSF/VRSM) | `REG_VRS_CTRL`+`REG_VRS_THRESH` com "histerese 20 mV" |
 | `Cont0–3`, `Cmd0`, `BriConfig0`, `VRSDiag0/1` | ausentes |
 
@@ -285,7 +288,7 @@ que marcaria o CI como bom e mascararia justamente esta falha). Exposto na telem
 razão visível" em "mapa errado, alto e específico, no primeiro power-on". É a resolução disponível sem
 silício — o clock-out em bancada continua a ser o teste que decide.
 
-### 🚨 PENDENTE (2026-07-20) — contraprova rusEFI: mapa confirmado, mas **duas lacunas no driver**
+### ✅ FEITO (2026-07-20) — contraprova rusEFI + lacunas unlock/OE/InConfig no driver
 
 Cruzei `tle8888_regs.h` com a implementação **independente** do rusEFI. Registo completo em
 **`docs/hw/tle8888_crosscheck.md`**. Resumo:
@@ -294,17 +297,14 @@ Cruzei `tle8888_regs.h` com a implementação **independente** do rusEFI. Regist
 coincide. Inclui `DDConfig` (0x57) e `OEConfig` (0x5b), de que o direct drive depende. **Retira grande
 parte do risco de mapa inventado.**
 
-🚨 **Mas o nosso `configure()` tem duas lacunas reais, ambas por corrigir:**
-1. **Falta `CMD_CHIP_UNLOCK`** (`0x1E ← 0x01`) **antes** de qualquer escrita de configuração. Os
-   registadores de config são protegidos por lock; sem isto as escritas plausivelmente não pegam.
-2. **Falta `CMD_OE_SET`** (`0x1C ← 0x02`), o **output enable central**, no fim. Sem ele as saídas
-   plausivelmente nunca habilitam, mesmo com `OEConfig` correcto.
+✅ **`configure()` agora inclui** (ordem rusEFI):
+1. **`CMD_CHIP_UNLOCK`** (`0x1E ← 0x01`) — comando, sem `write_verify`
+2. **`InConfig0–3`** — IN9→OUT14 (bomba), IN10→OUT15 (fan), IN11→OUT5 / IN12→OUT6 (VVT)
+3. **DD + OE** para INJ/IGN/VVT/relés (`DD_CONFIG0/1/3`, `OE_CONFIG0/1/3`)
+4. **`CMD_OE_SET`** (`0x1C ← 0x02`) — comando, sem `write_verify`
 
-⚠️ **Unlock e OE são registadores de COMANDO, não de armazenamento** — não podem passar por
-`write_verify()`, que os releria e abortaria a init num CI saudável. Emitir como escrita simples.
-
-**Consequência se não for corrigido:** o CI não configura e/ou não liga saídas — sem injeção nem
-ignição, e o sintoma seria mudo.
+⚠️ **Ainda por implementar:** eco de endereço como gate contínuo; fingerprint despromovido a
+consultivo (política abaixo). **Nunca clockou silício** — só o bring-up decide.
 
 ### 🚨 PENDENTE — política do fingerprint a rever (decidido, não implementado)
 
@@ -502,7 +502,7 @@ Terminação 120 Ω jumpeável na placa. Serve WBO2 (RX 0x180) e telemetria (0x4
 
 ### 10. Relés — bomba e ventoinha, via TLE8888
 Lógica de firmware **já existe e está correta** (`auxiliaries.cpp`): `run_pump_control()` faz prime de
-2 s no key-on, mantém com RPM > 0 e **corta 3 s após RPM = 0** (considerar reduzir p/ 1–2 s);
+2 s no key-on, mantém com RPM > 0 e **corta 2 s após RPM = 0** (`kPumpOffDelayMs = 2000`);
 `run_fan_control()` com histerese 95/90 °C. Ambos suspensos em `output_test_active()`.
 
 **Hardware:** saídas de relé do TLE8888 (OUT14–20, 0,6 A — folgado para bobina de relé de ~200 mA), mais
@@ -663,7 +663,7 @@ Nenhuma escolha de componente sobrevive a um layout ruim:
 
 | Arquivo | Mudança |
 |---|---|
-| **`src/hal/tle8888.cpp` — REESCREVER (bloqueio da placa)** | Mapa de registradores atual não corresponde ao datasheet Rev 1.2. Implementar `DDConfig0-3` (direct drive INJ/IGN), `OEConfig0-3` + enable central, `InConfig0-3` (relés), `VRSConfig0/1/2` (modo auto), sequência de recuperação pós-falha, `VRSDiag0/1` na telemetria, e `tle8888_set_output()` se os relés forem por SPI |
+| ~~**`src/hal/tle8888.cpp` — REESCREVER**~~ ✅ | Mapa + unlock + InConfig + DD/OE + OE_SET. Restante: eco de endereço, fingerprint consultivo, silício |
 | `src/engine/auxiliaries.cpp` (103-106) | Bomba/ventoinha `PB12`/`PB13` → `PE10`/`PE12`, condicional por board. **Obrigatório**: sem isso o SPI2 não existe |
 | `src/hal/stm32h562/timer.cpp` ou `out_pins` | Adicionar `INJEN`=`PE1` e `IGNEN`=`PE3` como saídas, altas após init seguro |
 | `src/drv/sensors.cpp` (~832–848) | Ler VBATT de `PC3`/INP13 via `vbatt_raw_to_mv()`; remover o literal 12000 |

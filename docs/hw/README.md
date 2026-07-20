@@ -45,7 +45,7 @@ Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundament
 | **Alvo VGT6 (LQFP100)** | GPIOE inteiro para INJ/IGN, sem os conflitos do RGT6 | — |
 | **TLE8888-2QK como hub de potência** | Substitui FETs, drivers de bobina, relés, transceiver CAN e reguladores de 5 V; a **-2QK** tem watchdog desativado de fábrica, e errar o watchdog mata o motor no bring-up | `a5f95fb` |
 | **INJ/IGN por direct drive** | `IN1–IN8` são ativo-alto com pull-down interno → **scheduler congelado fica intacto** | `a5f95fb` |
-| **Driver TLE8888 reescrito** | O mapa anterior era inventado e o frame SPI estava invertido | `a5f95fb` |
+| **Driver TLE8888 reescrito** | Mapa inventado + frame invertido; agora unlock + InConfig + OE_SET (rusEFI-aligned). **Ainda sem clock em silício** | `a5f95fb` + hub fix |
 | **INJEN=`PE1` / IGNEN=`PE3`** | Corte de injeção e ignição em hardware, independente do SPI *e* do escalonador | `380a0c5` |
 | **Bomba/ventoinha → `PE10`/`PE12`** | Em `PB12`/`PB13` matavam o `SPI2_SCK` no boot — o TLE8888 nunca seria clockado | `380a0c5` |
 | **SDMMC guardado no RGT6** | `PC8` é IGN3 no RGT6; ligar o datalog reconfiguraria o pino de uma bobina | `380a0c5` |
@@ -54,7 +54,7 @@ Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundament
 | **VBATT em `PC3`/INP13** | Antes era fixado em 12000 mV, o que subestimava dead-time e encurtava o dwell no cranking | `34b40e3` |
 | **EWG diferido para v2** | Turbo-específico; é o que liberta `PC3` para o VBATT | `34b40e3`, `8c3d282` |
 | **Knock diferido para v2** | Bloco analógico mais difícil, não contribui para a primeira partida, e o retard **mascara problema mecânico** | — |
-| **ETB: BTS7960 @ 10 kHz** | A 20 kHz sobravam 20% de margem; o DRV8701 não é drop-in (firmware é 3 pinos, ele é 2) e transferia o layout de potência | `11c39f4` |
+| **ETB: BTS7960 @ 10 kHz** | A 20 kHz sobravam 20% de margem; o DRV8701 não é drop-in (firmware é 3 pinos, ele é 2) e transferia o layout de potência. Path real: `etb_driver_init` → `etb_pwm_init(10000)` | `11c39f4` + fix path |
 | **VREF+ = VDDA 3,3 V filtrado**, (c) DNP | Os trims absorvem **deriva** mas não **ruído** → o esforço rende no LDO e no layout, não numa referência exata | `8df4dbc` |
 | **Conector: AMPSEAL `776164-1` (35, sinais) + `770680-1` (23, potência)** | Tamanhos diferentes são **impossíveis de trocar**; potência de bobinas/injetores **não atravessa a ECU** | `fd9faa0` |
 | **Montagem na cabine**, não no compartimento do motor | O coreboard é grau consumidor — nenhuma caixa resolve ciclo térmico; e põe a antepara aterrada entre a ECU e a ignição | `fd9faa0` |
@@ -70,12 +70,17 @@ Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundament
 
 | Item | Estado |
 |---|---|
-| **Polaridade de borda CMP/CKP** | Tem saída conhecida: byte de calibração em page0 (offset ≥258). Ver `netlist_v1.md`. **Bloqueia o layout.** |
+| **Polaridade de borda CMP/CKP** | Desenho: byte de calibração em page0 (offset ≥258). Ver `netlist_v1.md`. Firmware **por implementar**; **não** bloqueia o cobre Hall. |
 | **Números físicos de pino do TLE8888** | Tirar da tabela de pinout do datasheet. **Bloqueia o layout.** |
 | **Dimensões do coreboard e das caixas AMPSEAL** | Medição manual + desenhos da TE. Ver §5. |
-| **Part numbers Tier C** | Buck, LDO, isolador USB, DC-DC isolado. Não bloqueiam a estrutura do netlist. |
-| **Lacunas no driver TLE8888** | Falta `CMD_CHIP_UNLOCK` e `CMD_OE_SET`. Ver `tle8888_crosscheck.md` §5. **Documentado, não corrigido.** |
+| **Part numbers Tier C** | Buck, LDO, isolador USB, DC-DC isolado, bobinas (validar IGN vs smart coil). |
+| **Eco de endereço SPI + fingerprint consultivo** | Política decidida em `tle8888_crosscheck.md` / plano. **Por implementar.** |
+| **page0 bytes 56–70 no boot** | `cmp_window` / trims / antijerk gravados pela UI mas **não restaurados** no arranque. Bug latente. |
+| **Relé principal** | Três narrativas (key-on / driver CI / via J2) — fechar uma. |
 | **Caixa, vedação, coating, orçamento** | Precisa de alvo de custo. |
+
+**Driver hub (unlock / InConfig / OE_SET / DD pump-fan):** ✅ **implementado no código**;
+validação só no silício.
 
 ---
 

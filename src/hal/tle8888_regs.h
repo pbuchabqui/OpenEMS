@@ -1,10 +1,12 @@
 #pragma once
 /**
  * @file tle8888_regs.h
- * @brief Mapa de registradores do TLE8888-1QK — VERIFICADO contra o datasheet.
+ * @brief Mapa de registradores do TLE8888 — VERIFICADO contra o datasheet.
  *
- * Fonte: Infineon TLE8888-1QK "Engine Machine System IC", Data Sheet **Rev. 1.2**
+ * Fonte: Infineon TLE8888-1QK/2QK "Engine Machine System IC", Data Sheet **Rev. 1.2**
  * (2017-02-10), Table 50 "Register Overview" (cap. 14.1) e cap. 14.1.4/14.1.5.
+ * Mapa de endereços idêntico nas duas variantes; a v1 da placa usa **-2QK**
+ * (watchdog desactivado de fábrica — ver docs/hw/README.md).
  *
  * ⚠️ MOTIVO DESTE ARQUIVO
  * O mapa de registradores embutido em `tle8888.cpp` **não corresponde ao
@@ -44,12 +46,19 @@
 namespace ems::hal::tle {
 
 // ─── Comando ────────────────────────────────────────────────────────────────
+// ⚠️ Unlock e OE são registadores de COMANDO (não de armazenamento): fire-and-
+// forget — NÃO passar por write_verify (a releitura abortaria a init num CI bom).
+// Valores alinhados com rusEFI + datasheet; ver docs/hw/tle8888_crosscheck.md.
 constexpr uint16_t CMD0            = 0x001u;  ///< reset 0x00
 constexpr uint16_t WWD_SERVICE_CMD = 0x015u;
 constexpr uint16_t FWD_RESP_CMD    = 0x016u;
 constexpr uint16_t CMD_SR          = 0x01Au;
 constexpr uint16_t CMD_OE          = 0x01Cu;  ///< enable central das saídas
 constexpr uint16_t CMD_LOCK        = 0x01Eu;
+
+constexpr uint8_t CMD_OE_SET_DATA     = 0x02u;  ///< CMD_OE ← 0x02  (enable global)
+constexpr uint8_t CMD_OE_CLR_DATA     = 0x01u;  ///< CMD_OE ← 0x01  (disable global)
+constexpr uint8_t CMD_CHIP_UNLOCK_DATA = 0x01u; ///< CMD_LOCK ← 0x01 (abre config)
 
 // ─── Diagnóstico ────────────────────────────────────────────────────────────
 constexpr uint16_t DIAG0     = 0x020u;
@@ -131,8 +140,14 @@ constexpr uint8_t O6DD = 1u << 5;  ///< VVT admissão (OUT6, 4.5 A, clamp activo
 constexpr uint8_t O7DD = 1u << 6;
 constexpr uint8_t O8DD = 1u << 7;
 
-/// Direct drive dos 4 injectores + 2 solenoides de VVT.
+/// Direct drive dos 4 injectores + 2 solenoides de VVT (OUT5/OUT6).
 constexpr uint8_t DD_CONFIG0_OPENEMS = O1DD | O2DD | O3DD | O4DD | O5DD | O6DD;
+
+// ─── DDConfig1 (0x058): O9DD..O16DD ─────────────────────────────────────────
+// OUT14/OUT15 = relés bomba/ventoinha (0,6 A low-side), IN9/IN10 via InConfig.
+constexpr uint8_t O14DD = 1u << 5;  ///< OUT14 (bomba)
+constexpr uint8_t O15DD = 1u << 6;  ///< OUT15 (ventoinha)
+constexpr uint8_t DD_CONFIG1_OPENEMS = O14DD | O15DD;
 
 // ─── DDConfig3 (0x05A): bits 0..3 = IGN1..IGN4 direct drive ────────────────
 constexpr uint8_t IGN1DD = 1u << 0;
@@ -158,6 +173,27 @@ constexpr uint8_t O8E = 1u << 7;
 
 constexpr uint8_t OE_CONFIG0_OPENEMS = O1E | O2E | O3E | O4E | O5E | O6E;
 
+// ─── OEConfig1 (0x05C): O9E..O16E ───────────────────────────────────────────
+constexpr uint8_t O14E = 1u << 5;
+constexpr uint8_t O15E = 1u << 6;
+constexpr uint8_t OE_CONFIG1_OPENEMS = O14E | O15E;
+
+// ─── OEConfig3 (0x05E): bits 0..3 = IGN1E..IGN4E ────────────────────────────
+constexpr uint8_t IGN1E = 1u << 0;
+constexpr uint8_t IGN2E = 1u << 1;
+constexpr uint8_t IGN3E = 1u << 2;
+constexpr uint8_t IGN4E = 1u << 3;
+constexpr uint8_t OE_CONFIG3_OPENEMS = IGN1E | IGN2E | IGN3E | IGN4E;
+
+// ─── InConfig0..3 (0x053..0x056): IN9..IN12 → OUT5..OUT24 ───────────────────
+// Encoding (rusEFI / datasheet Tab. 24): valor = (índice 0-based de OUTn) − 4.
+//   OUT5  → 0, OUT6 → 1, …, OUT14 → 9, OUT15 → 10.
+// IN1..IN8 têm atribuição fixa (INJ/IGN); só IN9..IN12 são remapeáveis.
+constexpr uint8_t IN_CONFIG0_OPENEMS = 9u;   ///< IN9  → OUT14 (bomba)
+constexpr uint8_t IN_CONFIG1_OPENEMS = 10u;  ///< IN10 → OUT15 (ventoinha)
+constexpr uint8_t IN_CONFIG2_OPENEMS = 0u;   ///< IN11 → OUT5  (VVT escape)
+constexpr uint8_t IN_CONFIG3_OPENEMS = 1u;   ///< IN12 → OUT6  (VVT admissão)
+
 // ─── VRSConfig1 (0x04A) ────────────────────────────────────────────────────
 // [7:4] VRSI_SC — corrente do diagnóstico short-to-GND/Bat
 // [3:2] VRSM    — modo de detecção
@@ -177,14 +213,10 @@ constexpr uint8_t VRSDIAGM_ADC      = 3u;  ///< medida ADC da tensão de entrada
 /// Nota: em auto, escritas a VRSPV/VRSPT (VRSConfig0) são ignoradas pelo CI.
 constexpr uint8_t VRS_CONFIG1_OPENEMS = VRSM_AUTO | VRSDIAGM_NORMAL;
 
-// ─── Ainda POR VERIFICAR no datasheet antes de usar ────────────────────────
+// ─── Ainda POR VERIFICAR / diferido ─────────────────────────────────────────
 // - OutConfig0..5: limiares de sobrecorrente e slew rate por canal.
-// - InConfig0..3 : atribuição concreta de IN9..IN12 às saídas escolhidas
-//                  (bomba, ventoinha, VVT×2).
 // - BriConfig0/1 : só se as meias-pontes forem usadas (não são, no plano v1).
-// - Cmd0 / CmdOE : sequência exacta de enable central.
-// - Watchdog     : WWDConfig0/1, FWDConfig, WDConfig0/1 e o protocolo de
-//                  serviço (janela vs pergunta-resposta). O driver antigo
-//                  "alimentava" o watchdog escrevendo em DDConfig0.
+// - Watchdog     : WWD/FWD service — deliberadamente omitido na v1 (-2QK).
+// - Eco de endereço SPI como gate contínuo (política em tle8888_crosscheck.md).
 
 }  // namespace ems::hal::tle

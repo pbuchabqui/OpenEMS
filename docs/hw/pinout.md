@@ -153,8 +153,8 @@ safe = LOW. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
 
 Definidos em `src/engine/auxiliaries.cpp` sob `#if EMS_BOARD_IS_VGT6`.
 Lógica: `run_pump_control()` faz prime de 2 s no key-on, mantém ligada com
-RPM > 0 e **corta 3 s após RPM = 0** (`kPumpOffDelayMs`); `run_fan_control()` usa
-histerese CLT 95 °C liga / 90 °C desliga. Ambos suspensos durante
+RPM > 0 e **corta 2 s após RPM = 0** (`kPumpOffDelayMs = 2000`); `run_fan_control()`
+usa histerese CLT 95 °C liga / 90 °C desliga. Ambos suspensos durante
 `output_test_active()`.
 
 **Porquê o remap no VGT6:** `PB12`/`PB13` são o **CSN** e o **SCK** do SPI2 do
@@ -207,10 +207,10 @@ real (a bateria cai a 9–10 V). A realimentação de posição do EWG ficou sem
 
 ## Ver também
 
+- **`docs/hw/README.md`** — **ponto de entrada** (autoridade, decisões, em aberto).
 - **`docs/hw/interface_board_v1.md`** — **plano da placa de interface v1**
-  (TLE8888-1QK como estágio de potência, INJ/IGN por direct drive, alocação de
-  pinos, orçamento de erro de timing, sequência de verificação). É o documento
-  mais actual sobre a arquitectura de hardware.
+  (TLE8888-**2QK** como estágio de potência, INJ/IGN por direct drive, alocação de
+  pinos, orçamento de erro de timing, sequência de verificação).
 - **`docs/wiring_diagram.md`** — ⚠️ **DESACTUALIZADO em vários eixos**: mapa de
   pinos ASCII legado (TIM2/TIM8 OC), e os números do TLE8888 ali ("INJ OC 10 A,
   IGN push-pull 6 A") **estão errados** — o datasheet Rev 1.2 dá injectores

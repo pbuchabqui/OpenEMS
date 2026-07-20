@@ -1,7 +1,7 @@
 # Condicionamento de entrada VR (CKP/CMP) — MAX9926
 
 > **⚠️ SUPERSEDIDO para o plano v1 — ver `docs/hw/interface_board_v1.md`.**
-> O CKP passou a usar a **interface VR integrada do TLE8888-1QK**, que tem a
+> O CKP passou a usar a **interface VR integrada do TLE8888-2QK**, que tem a
 > mesma arquitectura do MAX9924 modo A2 (comutação no **zero-crossing**, armada
 > por detecção de pico) e ainda traz **clamp de entrada integrado** (50 mA,
 > 2–3 V) e **diagnóstico do sensor** (short-to-GND, short-to-BAT, open-load e
