@@ -625,7 +625,132 @@ Nenhuma escolha de componente sobrevive a um layout ruim:
 
 ---
 
-## Conector — ✅ fechado em **55 vias** (2026-07-20)
+## Montagem, formato da placa e conector — ✅ fechado (2026-07-20)
+
+### ⭐ Recomendação primária: montar na CABINE, não no compartimento do motor
+
+É a decisão com melhor relação benefício/custo de todo este documento, e resolve de uma vez três
+problemas que de outro modo se pagam em componentes:
+
+1. **O coreboard WeAct é grau consumidor** (o próprio plano diz isto no bloco 16). O cristal e os
+   eletrolíticos não foram feitos para ciclo térmico de compartimento de motor. Nenhuma caixa resolve
+   isso — só o ambiente resolve.
+2. **Põe a antepara aterrada entre a ECU e a ignição.** Ataca exatamente o acoplamento de EMI que já
+   derrubou este projeto uma vez (`ckp-noise-false-sync-injectors`), e de graça.
+3. **Colapsa o requisito de caixa** de "die-cast selada IP67" para "qualquer caixa decente", o que por
+   sua vez permite usar caixa de catálogo em vez de desenhar uma.
+
+Custo: o chicote atravessa a antepara por passa-cabos vedado, e a corrida fica mais longa. O par CKP
+aguenta bem — é par trançado e blindado, e o orçamento de erro mostrou que o timing tem margem de ordens
+de grandeza. Local típico: painel lateral dos pés (*kick panel*), atrás do painel.
+
+⚠️ **Isto implica furar a antepara — confirmar antes de assumir.** Se a montagem tiver mesmo de ser no
+compartimento do motor, a decisão de caixa muda para die-cast selada com passa-cabos, *conformal
+coating* obrigatório, e o coreboard passa a ser risco assumido (ou soldado direto em vez de em barra de
+pinos).
+
+### Conector: TE **AMPSEAL** — 776164-1 (35 vias) + 770680-1 (23 vias)
+
+**Porquê AMPSEAL:** é o padrão de facto do mundo EMS aftermarket (o que significa precedente, chicotes,
+tutoriais e ferramenta de crimpar acessíveis), selado, e barato. Especificações confirmadas: **4 mm de
+centerline, 3 filas, IP67, −40…+125 °C, fio 0,5–1,25 mm²** (≈20–16 AWG).
+
+**Porquê dois tamanhos diferentes, e não 2×35:** tamanhos distintos são **fisicamente impossíveis de
+trocar**. Com dois conectores iguais, um chicote mal ligado é uma questão de tempo — e aqui isso
+significa 12 V numa entrada de sensor. Isto também realiza a regra que o `wiring_diagram` já impunha:
+separar fisicamente potência de sinal.
+
+| | Conector | Vias | Grupo |
+|---|---|---|---|
+| **A** | `776164-1` (35 vias) | 35 | **Sinais** — sync, analógicos, CAN, flex |
+| **B** | `770680-1` (23 vias) | 23 | **Potência/atuadores** — INJ, IGN, VVT, relés, ETB |
+
+⚠️ **A alocação só fecha por causa de uma correção de encaminhamento** (ver abaixo): a potência das
+bobinas e dos injetores **não passa pela ECU**. Sem essa correção, o grupo de potência não cabia em 23
+vias — e, pior, teria contactos acima do que aguentam.
+
+### 🚨 Correção: potência de bobinas e injetores NÃO atravessa a ECU
+
+A tabela anterior deste documento levava `+12V das bobinas`, `PGND das bobinas` e `+12V dos injetores`
+pelo conector. **Está errado, e não é só desperdício de vias:**
+
+- **Bobinas com ignitor integrado** só precisam do **trigger lógico (~20 mA)** vindo da ECU. A corrente
+  primária (7–10 A de pico) vem do relé/bateria **no chicote**, e nunca deve atravessar um contacto de
+  8 A.
+- **Injetores:** o *low-side* (~1 A) passa mesmo pela ECU — `INJ1–4` ficam. Mas o **+12 V** vem do relé
+  no chicote.
+
+Isto tira 3 vias e, mais importante, tira do conector uma corrente que ele não suportaria.
+
+⚠️ **O que ainda esbarra no limite: o motor do ETB.** Puxa ~2–3 A em regime mas **8–10 A em stall**, e o
+contacto AMPSEAL dá **8 A em estanho** (17 A em ouro). **Duplicar os pinos do motor (2+2)** ou
+especificar contactos dourados. Não deixar em pino único.
+
+### Alocação final
+
+**Conector B — `770680-1`, 23 vias (potência/atuadores)**
+
+| Sinais | Vias |
+|---|---|
+| `VBAT+` (alimentação da placa) | 2 |
+| `PGND` | 3 |
+| `INJ1–4` low-side (OUT1–OUT4) | 4 |
+| `IGN1–4` trigger lógico (20 mA) | 4 |
+| VVT escape / admissão (LS, OUT5/OUT6) | 2 |
+| Bobinas de relé: bomba, ventoinha, principal | 3 |
+| ETB `Motor+` ×2, `Motor−` ×2 (**duplicados**, ver acima) | 4 |
+| **Usadas / livres** | **22 / 1** |
+
+**Conector A — `776164-1`, 35 vias (sinais)**
+
+| Sinais | Vias |
+|---|---|
+| CKP+ (`VRIN1`), CKP− (`VRIN2`), blindagem | 3 |
+| CMP sinal, CMP +5 V, CMP GND | 3 |
+| MAP, CLT, IAT, APP1, APP2, P.combustível, P.óleo | 7 |
+| ETB `TPS1`, `TPS2` | 2 |
+| `5V_A`, `5V_B` (trackers do TLE8888) | 2 |
+| `SGND` | 2 |
+| CANH, CANL, blindagem | 3 |
+| Flex fuel: +12 V, sinal, GND | 3 |
+| *Knock: sinal, blindagem* — **reservado, não cablar na v1** | 2 |
+| *2º sensor de came* (VVT dual) — reservado | 3 |
+| TPS independente (`PA4`) — reservado | 1 |
+| Livres | 4 |
+| **Total** | **35** |
+
+**57 vias provisionadas** (22 + 35), das quais ~10 são reserva deliberada. Substitui a estimativa de 55:
+aquela era uma contagem de sinais, esta é uma alocação a conectores reais.
+
+### Formato da placa
+
+**Regra, não número** — as dimensões dependem de duas medidas que **ainda não estão verificadas**:
+
+⚠️ **Medir antes de desenhar:**
+1. **O coreboard.** Não consegui obter as dimensões de fonte fiável, e a repo pública da WeAct que
+   aparece é a de **64 pinos** — que não é a placa que temos (o alvo é **VGT6/LQFP100**). Tirar
+   comprimento, largura, posição e passo dos headers **da placa física**.
+2. **As caixas dos AMPSEAL.** Puxar os desenhos dimensionais da TE para as duas referências — a largura
+   da aresta de conector é a soma das duas caixas mais folga de manobra.
+
+**Diretrizes de formato:**
+- **Os dois conectores na MESMA aresta**, lado a lado. Define a largura mínima da placa e concentra a
+  entrada do chicote num ponto — bom para vedação e alívio de tração.
+- **Zonas, na ordem em que a aresta manda:** entrada de potência e TLE8888 junto do conector B; coreboard
+  ao centro; **front-end de CKP/CMP junto do conector A e o mais longe possível do TLE8888, da ponte-H do
+  ETB e dos relés**. É a regra do bloco 18, agora vinculando o formato.
+- **Isolador USB junto ao seu próprio conector**, não junto ao MCU.
+- **4 camadas** (sinal / terra contínuo / alimentação / sinal), já decidido.
+- **Dimensionar para caixa de catálogo** — extrudido de alumínio (ex. Hammond 1455) ou die-cast. Escolher
+  a caixa **primeiro** e desenhar a placa para ela; o contrário custa um respin. O alumínio também dá
+  blindagem, o que num projeto com este histórico de EMI não é acessório.
+
+⚠️ **Não coberto aqui** (resto do item 8, precisa de alvo de custo teu): *conformal coating*, grau de
+proteção final, retenção mecânica do coreboard e orçamento da BOM.
+
+---
+
+## Conector — contagem original (superseded pela alocação acima)
 
 Tabela completa em `docs/wiring_diagram.md` §"Conector do chicote do motor", expressa no que **sai da
 placa** (saídas do TLE8888 + entradas de sensor + sync), não em pinos do MCU.

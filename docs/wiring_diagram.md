@@ -324,32 +324,50 @@ polarizado em meio-rail. Diferido para a v2; só footprint (TPIC8101) na v1.
 
 ---
 
-## Conector do chicote do motor
+## Conector do chicote — TE AMPSEAL, dois tamanhos
 
-Expresso no que **sai da placa** (saídas do TLE8888 + entradas de sensor + sync), não em
-pinos do MCU. USB e SPI são internos e não aparecem aqui.
+Expresso no que **sai da placa**, não em pinos do MCU. USB e SPI são internos.
 
-| Grupo | Vias | Sinais |
-|-------|------|--------|
-| Potência | 5 | VBAT+, PGND ×2, bobina do relé principal, sense de key-on |
-| Injeção | 5 | INJ1–4 low-side (OUT1–OUT4), +12V dos injetores |
-| Ignição | 6 | IGN1–4 trigger (gate lógico), +12V das bobinas, PGND das bobinas |
-| Sync | 6 | CKP+ (VRIN1), CKP− (VRIN2), blindagem CKP, CMP sinal, CMP +5V, CMP GND |
-| Analógicos | 12 | MAP, TPS, CLT, IAT, APP1, APP2, P.combustível, P.óleo, 5V_A, 5V_B, SGND ×2 |
-| ETB | 6 | Motor+, Motor−, TPS1, TPS2, 5V, SGND |
-| VVT | 3 | VVT escape (LS), VVT admissão (LS), +12V dos solenóides |
-| Relés | 2 | Bomba (bobina, LS), Ventoinha (bobina, LS) |
-| CAN | 3 | CANH, CANL, blindagem |
-| Flex fuel | 3 | +12V, sinal, GND |
-| *Knock (diferido)* | 2 | *sinal piezo, blindagem — via reservada, NÃO cablar na v1* |
-| Reserva | 2 | 2º sensor de came (VVT dual), expansão |
-| **Total** | **55** | |
+**Conector A — `776164-1` (35 vias) = SINAIS · Conector B — `770680-1` (23 vias) = POTÊNCIA**
 
-⚠️ **55 vias, não ~47.** A estimativa antiga de 47 vinha de uma tabela que contava
-`EWG pos` (diferido, e o pino de potenciómetro externo vai com ele), omitia pressão de
-combustível e de óleo (ambas **populadas** na v1) e listava VVT por pinos do MCU
-(`PB6`/`PB7`) em vez das saídas do CI que realmente vão ao chicote. **Escolher o modelo de
-conector contra 55, com margem.**
+Tamanhos diferentes são **impossíveis de trocar entre si** — com dois conectores iguais, um
+chicote mal ligado é questão de tempo, e aqui isso significa 12 V numa entrada de sensor.
+AMPSEAL: 4 mm centerline, 3 filas, IP67, −40…+125 °C, fio 0,5–1,25 mm² (≈20–16 AWG).
+
+| Conector | Grupo | Vias | Sinais |
+|---|---|------|--------|
+| **B** | Potência | 2 | VBAT+ (alimentação da placa) |
+| **B** | Potência | 3 | PGND |
+| **B** | Injeção | 4 | INJ1–4 low-side (OUT1–OUT4) |
+| **B** | Ignição | 4 | IGN1–4 **trigger lógico** (20 mA) |
+| **B** | VVT | 2 | escape (LS, OUT5), admissão (LS, OUT6) |
+| **B** | Relés | 3 | bobinas: bomba, ventoinha, principal |
+| **B** | ETB | 4 | Motor+ ×2, Motor− ×2 (**duplicados** — stall 8–10 A) |
+| | | **22/23** | *1 livre* |
+| **A** | Sync | 3 | CKP+ (VRIN1), CKP− (VRIN2), blindagem |
+| **A** | Sync | 3 | CMP sinal, CMP +5V, CMP GND |
+| **A** | Analógicos | 7 | MAP, CLT, IAT, APP1, APP2, P.combustível, P.óleo |
+| **A** | ETB | 2 | TPS1, TPS2 |
+| **A** | Alimentação de sensor | 4 | 5V_A, 5V_B (trackers), SGND ×2 |
+| **A** | CAN | 3 | CANH, CANL, blindagem |
+| **A** | Flex fuel | 3 | +12V, sinal, GND |
+| **A** | *Knock (diferido)* | 2 | *sinal, blindagem — reservado, NÃO cablar na v1* |
+| **A** | Reserva | 8 | 2º came (3), TPS indep. (1), livres (4) |
+| | | **35/35** | |
+
+🚨 **Potência de bobinas e injetores NÃO atravessa a ECU.** Bobinas com ignitor integrado só
+precisam do trigger lógico; a corrente primária (7–10 A de pico) vem do relé **no chicote** e
+nunca deve passar por um contacto de 8 A. Nos injetores, o low-side (~1 A) passa pela ECU mas
+o +12 V vem do relé. A tabela anterior levava `+12V bobinas`, `PGND bobinas` e `+12V
+injetores` pelo conector — errado, e não só por desperdício de vias.
+
+⚠️ **Motor do ETB é o que esbarra no limite:** ~2–3 A em regime, **8–10 A em stall**, contra
+8 A do contacto em estanho (17 A em ouro). Daí os pinos duplicados — ou especificar ouro.
+
+⚠️ **VBATT não gasta via** — mede o rail interno da placa (divisor → `PC3`).
+
+**Regras:** bitola por circuito; pares trançados para CKP/CMP/CAN; blindagens com dreno num
+ponto só (lado da ECU); fusíveis por ramo.
 
 **Regras:** separar fisicamente as vias de potência (INJ/IGN/relés/VVT) das de sinal; CKP e
 CAN em vias adjacentes com dreno de blindagem; bitola por circuito (injetor e bobina puxam
