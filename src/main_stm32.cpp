@@ -44,6 +44,7 @@ int main() { return 0; }
 #include "engine/ecu_sched.h"
 #include "engine/engine_config.h"
 #include "engine/etb_control.h"
+#include "engine/etb_autocal.h"
 #include "hal/etb_driver.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
@@ -624,6 +625,11 @@ static void openems_init() noexcept {
 
     // 6b) Inicializa ETB e Torque Manager (borboleta eletrônica)
     g_etb_initialized = etb_control_init();
+    // Auto-cal dos limites TPS a cada power-on (varre batentes no tick 2ms;
+    // pulada se harness ausente; falha mantém a calibração de flash).
+    if (g_etb_initialized) {
+        ems::engine::etb_autocal_start();
+    }
     torque_manager_init();
     iwdg_kick();
 
@@ -1431,24 +1437,29 @@ int main() {
             g_t_etb_ms = now;
             const auto sensors_etb = ems::drv::sensors_get();
             const auto snap_etb = ems::drv::ckp_snapshot();
-            const bool etb_rev_cut = g_limp_active && (snap_etb.rpm_x10 > kLimpRpmLimit_x10);
-            const auto torque_out = ems::engine::torque_manager_update(
-                snap_etb, sensors_etb, true, g_limp_active, etb_rev_cut,
-                ems::engine::auxiliaries_idle_target_rpm_x10(sensors_etb.clt_degc_x10), 2u);
-            g_torque_spark_retard_deg = torque_out.spark_retard_deg;
-            const auto etb = ems::engine::etb_control_update(
-                torque_out.etb_target_pct_x10, sensors_etb.etb_tps_pct_x10,
-                torque_out.etb_enable_request, 2u);
-            // Apply PID → H-bridge. On disable/fault/no-cal, spring-return safe.
-            if (!torque_out.etb_enable_request || !etb.active || !g_etb_initialized) {
-                ::etb_driver_shutdown();
+            // Auto-cal power-on em curso: varre batentes e pula torque/PID.
+            if (ems::engine::etb_autocal_active()) {
+                ems::engine::etb_autocal_tick(2u, snap_etb.rpm_x10);
             } else {
-                // output_pct_x10 ∈ [-1000, 1000] → driver PWM ∈ [-1023, 1023]
-                int32_t pwm = (static_cast<int32_t>(etb.output_pct_x10) * 1023) / 1000;
-                if (pwm > 1023) { pwm = 1023; }
-                if (pwm < -1023) { pwm = -1023; }
-                if (!::etb_driver_set_motor_pwm(static_cast<int16_t>(pwm))) {
+                const bool etb_rev_cut = g_limp_active && (snap_etb.rpm_x10 > kLimpRpmLimit_x10);
+                const auto torque_out = ems::engine::torque_manager_update(
+                    snap_etb, sensors_etb, true, g_limp_active, etb_rev_cut,
+                    ems::engine::auxiliaries_idle_target_rpm_x10(sensors_etb.clt_degc_x10), 2u);
+                g_torque_spark_retard_deg = torque_out.spark_retard_deg;
+                const auto etb = ems::engine::etb_control_update(
+                    torque_out.etb_target_pct_x10, sensors_etb.etb_tps_pct_x10,
+                    torque_out.etb_enable_request, 2u);
+                // Apply PID → H-bridge. On disable/fault/no-cal, spring-return safe.
+                if (!torque_out.etb_enable_request || !etb.active || !g_etb_initialized) {
                     ::etb_driver_shutdown();
+                } else {
+                    // output_pct_x10 ∈ [-1000, 1000] → driver PWM ∈ [-1023, 1023]
+                    int32_t pwm = (static_cast<int32_t>(etb.output_pct_x10) * 1023) / 1000;
+                    if (pwm > 1023) { pwm = 1023; }
+                    if (pwm < -1023) { pwm = -1023; }
+                    if (!::etb_driver_set_motor_pwm(static_cast<int16_t>(pwm))) {
+                        ::etb_driver_shutdown();
+                    }
                 }
             }
         }

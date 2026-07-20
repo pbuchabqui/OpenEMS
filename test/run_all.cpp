@@ -33,6 +33,14 @@ int main(void) {
     test_etb_control_loop_rpm_cutoff();
     test_etb_control_loop_sensor_fault_triggers_limp();
 
+    // ── ETB Autocal (power-on) ────────────────────────────────────────────────
+    printf("\n=== ETB AUTOCAL ===");
+    test_etb_autocal_success();
+    test_etb_autocal_abort_engine_turning();
+    test_etb_autocal_span_too_small();
+    test_etb_autocal_persist_and_fallback();
+    test_etb_autocal_skip_no_harness();
+
     // ── Torque Manager ────────────────────────────────────────────────────────
     printf("\n=== TORQUE MANAGER ===");
     test_torque_manager_init();

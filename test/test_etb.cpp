@@ -9,6 +9,7 @@
 #include <cmath>
 
 #include "engine/etb_control.h"
+#include "engine/etb_autocal.h"
 #include "hal/etb_driver.h"
 #include "engine/torque_manager.h"
 #include "engine/calibration.h"
@@ -33,6 +34,7 @@
 #include "engine/engine_config.h"
 #include "hal/timer.h"
 #include "hal/flash.h"
+#include "hal/runtime_seed.h"
 #include "app/ui_protocol.h"
 #include "app/status_bits.h"
 #include "hal/crc32.h"
@@ -304,6 +306,177 @@ void test_etb_control_loop_sensor_fault_triggers_limp(void) {
 
     etb_control_loop(50.0f, 3000.0f, 10.0f);
     CHECK_FALSE(etb_is_ready(), "limp mode engaged after TPS fault in loop");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ETB AUTOCAL (power-on) TESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static void autocal_tick_n(int n, uint32_t rpm_x10 = 0u) {
+    for (int i = 0; i < n; ++i) {
+        ems::engine::etb_autocal_tick(2u, rpm_x10);
+    }
+}
+
+static void autocal_setup(void) {
+    etb_ctrl_setup();
+    etb_control_init();
+    ems::engine::etb_autocal_test_reset();
+    ems::hal::nvm_test_reset();   // isola o registro EtbCalRecord entre testes
+    etb_harness_present = 1u;
+    etb_cal_valid       = 0u;
+    etb_tps1_raw_min = 200u;  etb_tps1_raw_max = 3895u;
+    etb_tps2_raw_min = 200u;  etb_tps2_raw_max = 3895u;
+}
+
+void test_etb_autocal_success(void) {
+    section("etb_autocal: varredura completa aplica cal em RAM");
+
+    autocal_setup();
+    ems::engine::etb_autocal_start();
+    CHECK_TRUE(ems::engine::etb_autocal_active(), "start → active");
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_state()),
+             static_cast<int>(ems::engine::EtbAutocalState::Closing),
+             "estado inicial = Closing");
+
+    // Batente fechado: raw estabiliza em 600/650
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 600u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 650u);
+    autocal_tick_n(250);   // 500 ms ≥ min-phase 400 ms + settle 50 ms
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_state()),
+             static_cast<int>(ems::engine::EtbAutocalState::Opening),
+             "batente fechado detectado → Opening");
+
+    // Batente aberto: raw estabiliza em 3500/3450.
+    // 200 ticks: transição p/ Release ocorre em ~150 (min-phase 400ms conta
+    // desde a entrada em Opening, 50 ticks atrás) — fica DENTRO do Release
+    // (100ms < 200ms) para validar o estado intermediário.
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 3500u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 3450u);
+    autocal_tick_n(200);
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_state()),
+             static_cast<int>(ems::engine::EtbAutocalState::Release),
+             "batente aberto detectado → Release");
+
+    autocal_tick_n(110);   // release 200 ms
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_state()),
+             static_cast<int>(ems::engine::EtbAutocalState::Done),
+             "varredura completa → Done");
+    CHECK_FALSE(ems::engine::etb_autocal_active(), "não mais active");
+    CHECK_EQ(etb_tps1_raw_min, 600u,  "tps1 min = raw fechado");
+    CHECK_EQ(etb_tps1_raw_max, 3500u, "tps1 max = raw aberto");
+    CHECK_EQ(etb_tps2_raw_min, 650u,  "tps2 min = raw fechado");
+    CHECK_EQ(etb_tps2_raw_max, 3450u, "tps2 max = raw aberto");
+    CHECK_EQ(etb_cal_valid, 1u, "etb_cal_valid=1 em RAM após sucesso");
+}
+
+void test_etb_autocal_abort_engine_turning(void) {
+    section("etb_autocal: aborta se o motor gira durante a varredura");
+
+    autocal_setup();
+    ems::engine::etb_autocal_start();
+    autocal_tick_n(10);
+    autocal_tick_n(1, 8000u);   // RPM aparece a meio da varredura
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_state()),
+             static_cast<int>(ems::engine::EtbAutocalState::Failed),
+             "rpm≠0 → Failed");
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_fail_reason()),
+             static_cast<int>(ems::engine::EtbAutocalFail::EngineTurning),
+             "razão = EngineTurning");
+    CHECK_EQ(etb_cal_valid, 0u, "cal de flash preservada (valid inalterado)");
+    CHECK_EQ(etb_tps1_raw_min, 200u, "raw_min inalterado após abort");
+}
+
+void test_etb_autocal_span_too_small(void) {
+    section("etb_autocal: curso implausível mantém cal de flash");
+
+    autocal_setup();
+    ems::engine::etb_autocal_start();
+
+    // Batentes a apenas 400 counts de distância (< kMinSpan 800)
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 2000u);
+    autocal_tick_n(250);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 2400u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 2400u);
+    autocal_tick_n(250);
+    autocal_tick_n(110);
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_state()),
+             static_cast<int>(ems::engine::EtbAutocalState::Failed),
+             "span < mínimo → Failed");
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_fail_reason()),
+             static_cast<int>(ems::engine::EtbAutocalFail::SpanTooSmall),
+             "razão = SpanTooSmall");
+    CHECK_EQ(etb_cal_valid, 0u, "cal_valid inalterado");
+    CHECK_EQ(etb_tps1_raw_min, 200u, "raw_min inalterado");
+}
+
+void test_etb_autocal_persist_and_fallback(void) {
+    section("etb_autocal: persiste última cal e aplica como fallback no boot");
+
+    // Power-on #1: varredura completa → deve persistir o registro NVM
+    autocal_setup();
+    ems::engine::etb_autocal_start();
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 600u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 650u);
+    autocal_tick_n(250);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 3500u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 3450u);
+    autocal_tick_n(250);
+    autocal_tick_n(110);
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_state()),
+             static_cast<int>(ems::engine::EtbAutocalState::Done), "power-on #1 → Done");
+
+    ems::hal::EtbCalRecord rec{};
+    CHECK_TRUE(ems::hal::nvm_load_etb_cal(&rec), "registro NVM gravado após sucesso");
+    // Contrato: um save de runtime seed (stop-sync) não pode perder o registro
+    // ETB (no firmware são co-escritos no mesmo setor).
+    ems::hal::RuntimeSyncSeed seed{};
+    seed.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_VALID;
+    (void)ems::hal::nvm_save_runtime_seed(&seed);
+    ems::hal::EtbCalRecord rec2{};
+    CHECK_TRUE(ems::hal::nvm_load_etb_cal(&rec2), "registro sobrevive a seed save");
+    CHECK_EQ(rec2.tps1_min, rec.tps1_min, "registro intacto após seed save");
+    CHECK_EQ(rec.tps1_min, 600u,  "NVM tps1_min");
+    CHECK_EQ(rec.tps1_max, 3500u, "NVM tps1_max");
+    CHECK_EQ(rec.tps2_min, 650u,  "NVM tps2_min");
+    CHECK_EQ(rec.tps2_max, 3450u, "NVM tps2_max");
+
+    // Power-on #2: RAM volta aos defaults de flash; start() deve aplicar o
+    // fallback ANTES da varredura terminar
+    ems::engine::etb_autocal_test_reset();
+    etb_cal_valid = 0u;
+    etb_tps1_raw_min = 200u;  etb_tps1_raw_max = 3895u;
+    etb_tps2_raw_min = 200u;  etb_tps2_raw_max = 3895u;
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 2050u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 2050u);
+
+    ems::engine::etb_autocal_start();
+    CHECK_TRUE(ems::engine::etb_autocal_active(), "power-on #2: varredura em curso");
+    CHECK_EQ(etb_tps1_raw_min, 600u,  "fallback tps1_min aplicado no start");
+    CHECK_EQ(etb_tps1_raw_max, 3500u, "fallback tps1_max aplicado no start");
+    CHECK_EQ(etb_cal_valid, 1u, "cal_valid=1 já no start (fallback)");
+
+    // Partida interrompe a varredura → mantém o fallback, não os defaults
+    autocal_tick_n(1, 8000u);
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_state()),
+             static_cast<int>(ems::engine::EtbAutocalState::Failed),
+             "partida a meio → Failed");
+    CHECK_EQ(etb_tps1_raw_min, 600u, "cal do power-on anterior preservada");
+    CHECK_EQ(etb_cal_valid, 1u, "ETB continua operável com a última cal");
+}
+
+void test_etb_autocal_skip_no_harness(void) {
+    section("etb_autocal: sem chicote ETB → Skipped");
+
+    autocal_setup();
+    etb_harness_present = 0u;
+    ems::engine::etb_autocal_start();
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_state()),
+             static_cast<int>(ems::engine::EtbAutocalState::Skipped),
+             "harness ausente → Skipped");
+    CHECK_FALSE(ems::engine::etb_autocal_active(), "não active");
+    CHECK_EQ(etb_cal_valid, 0u, "cal de flash preservada");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

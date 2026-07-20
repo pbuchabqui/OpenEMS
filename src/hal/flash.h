@@ -28,6 +28,30 @@ constexpr uint32_t kNvmOffLayoutMagic =
 constexpr uint32_t kNvmLayoutMagic    = 0x4C544633u;  // "LTF3" (CRC-protected maps)
 constexpr uint32_t kNvmOffMapsCrc     = kNvmOffLayoutMagic + 4u;
 constexpr uint32_t kNvmSeedOffset     = kNvmOffLayoutMagic + 16u;
+// EtbCalRecord @ seed+16 (16 B, quad-word alinhado)
+constexpr uint32_t kNvmEtbCalOffset   = kNvmSeedOffset + 16u;
+
+// ── Última calibração ETB bem-sucedida (auto-cal de power-on) ────────────────
+// Persistida no setor adaptativo para servir de fallback quando uma partida
+// interrompe a varredura do power-on seguinte. 16 bytes, CRC próprio.
+struct EtbCalRecord {
+    uint16_t magic;      // ETB_CAL_RECORD_MAGIC
+    uint8_t  version;    // ETB_CAL_RECORD_VERSION
+    uint8_t  reserved;
+    uint16_t tps1_min;
+    uint16_t tps1_max;
+    uint16_t tps2_min;
+    uint16_t tps2_max;
+    uint32_t crc32;      // CRC-32 dos 12 bytes anteriores
+};
+static_assert(sizeof(EtbCalRecord) == 16u, "EtbCalRecord deve ter 16 bytes");
+constexpr uint16_t ETB_CAL_RECORD_MAGIC   = 0x4345u;  // "EC"
+constexpr uint8_t  ETB_CAL_RECORD_VERSION = 1u;
+
+// Guarda no shadow RAM + agenda flush (asap) do setor adaptativo.
+bool nvm_save_etb_cal(const EtbCalRecord* rec) noexcept;
+// Lê shadow (se válido) ou flash; false se ausente/CRC inválido.
+bool nvm_load_etb_cal(EtbCalRecord* out) noexcept;
 
 // Valida layout: magic LTF3 + CRC dos mapas. Pura (testável em host).
 bool nvm_adaptive_sector_valid(const uint8_t* sector) noexcept;

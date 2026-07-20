@@ -25,6 +25,11 @@
 #include "hal/flash.h"
 #include "hal/crc32.h"
 #include "hal/runtime_seed.h"
+
+// kNvmEtbCalOffset = kNvmSeedOffset + 16: o EtbCalRecord assume que o seed
+// nunca ultrapassa 16 bytes — crescer o seed sobreporia o registro em silêncio.
+static_assert(sizeof(ems::hal::RuntimeSyncSeed) <= 16u,
+              "RuntimeSyncSeed > 16B sobrepõe EtbCalRecord (kNvmEtbCalOffset)");
 #include "hal/critical_section.h"
 #include <cstring>
 
@@ -32,6 +37,18 @@ static uint32_t runtime_seed_crc32(const ems::hal::RuntimeSyncSeed& seed) noexce
     const uint8_t* p = reinterpret_cast<const uint8_t*>(&seed);
     const uint16_t sz = static_cast<uint16_t>(sizeof(seed) - sizeof(seed.crc32));
     return ems::hal::crc32_calc(p, sz);
+}
+
+static uint32_t etb_cal_crc32(const ems::hal::EtbCalRecord& rec) noexcept {
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(&rec);
+    const uint16_t sz = static_cast<uint16_t>(sizeof(rec) - sizeof(rec.crc32));
+    return ems::hal::crc32_calc(p, sz);
+}
+
+static bool etb_cal_record_ok(const ems::hal::EtbCalRecord& rec) noexcept {
+    return rec.magic == ems::hal::ETB_CAL_RECORD_MAGIC &&
+           rec.version == ems::hal::ETB_CAL_RECORD_VERSION &&
+           rec.crc32 == etb_cal_crc32(rec);
 }
 
 namespace ems::hal {
@@ -88,6 +105,11 @@ static bool     g_sector0_flush_active    = false;
 // forces a sector rewrite even when LTFT/knock/add are clean.
 static ems::hal::RuntimeSyncSeed g_seed_ram{};
 static bool g_seed_dirty = false;
+// EtbCalRecord: mesma regra do seed — shadow no setor 0, nunca erase próprio.
+// pack só sobrepõe o registro quando o shadow é válido (magic ok), senão a
+// cópia da flash é preservada.
+static ems::hal::EtbCalRecord g_etbcal_ram{};
+static bool g_etbcal_dirty = false;
 
 // ── Endereços dos setores Bank2 ───────────────────────────────────────────────
 static constexpr uint32_t kSectorLtft  = 0u;   // Setor 0: LTFT + knock
@@ -225,10 +247,12 @@ bool nvm_load_adaptive_maps() noexcept {
         std::memset(g_knock_ram, 0, sizeof(g_knock_ram));
         std::memset(g_ltft_add_ram, 0, sizeof(g_ltft_add_ram));
         std::memset(&g_seed_ram, 0, sizeof(g_seed_ram));
+        std::memset(&g_etbcal_ram, 0, sizeof(g_etbcal_ram));
         g_ltft_dirty     = true;
         g_knock_dirty    = true;
         g_ltft_add_dirty = true;
         g_seed_dirty     = false;  // blank seed need not force rewrite alone
+        g_etbcal_dirty   = false;
         return true;
     }
 
@@ -244,11 +268,15 @@ bool nvm_load_adaptive_maps() noexcept {
     std::memcpy(&g_seed_ram,
                 reinterpret_cast<const void*>(kBank2Base + kNvmSeedOffset),
                 sizeof(g_seed_ram));
+    std::memcpy(&g_etbcal_ram,
+                reinterpret_cast<const void*>(kBank2Base + kNvmEtbCalOffset),
+                sizeof(g_etbcal_ram));
 
     g_ltft_dirty     = false;
     g_knock_dirty    = false;
     g_ltft_add_dirty = false;
     g_seed_dirty     = false;
+    g_etbcal_dirty   = false;
     return true;
 }
 
@@ -356,7 +384,8 @@ void nvm_request_adaptive_flush_now() noexcept {
 }
 
 bool nvm_adaptive_maps_dirty() noexcept {
-    return g_ltft_dirty || g_knock_dirty || g_ltft_add_dirty || g_seed_dirty;
+    return g_ltft_dirty || g_knock_dirty || g_ltft_add_dirty || g_seed_dirty ||
+           g_etbcal_dirty;
 }
 
 // Pack RAM maps + seed + LTF3 header into sector_buf (full FLASH_SECTOR_SIZE).
@@ -369,6 +398,9 @@ static void pack_adaptive_sector(uint8_t* sector_buf) noexcept {
     std::memcpy(sector_buf + kNvmOffLtftAdd, g_ltft_add_ram, sizeof(g_ltft_add_ram));
     nvm_stamp_adaptive_header(sector_buf);
     std::memcpy(sector_buf + kNvmSeedOffset, &g_seed_ram, sizeof(g_seed_ram));
+    if (etb_cal_record_ok(g_etbcal_ram)) {
+        std::memcpy(sector_buf + kNvmEtbCalOffset, &g_etbcal_ram, sizeof(g_etbcal_ram));
+    }
 }
 
 bool nvm_flush_adaptive_maps() noexcept {
@@ -391,12 +423,14 @@ bool nvm_flush_adaptive_maps() noexcept {
         g_knock_dirty    = true;
         g_ltft_add_dirty = true;
         g_seed_dirty     = true;  // re-attempt seed with maps
+        g_etbcal_dirty   = etb_cal_record_ok(g_etbcal_ram);  // re-attempt se shadow válido
         g_sector0_flush_active = false;
         return false;
     };
 
     if (state == FlushState::Idle) {
-        if (!g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_seed_dirty) {
+        if (!g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_seed_dirty &&
+            !g_etbcal_dirty) {
             return true;
         }
 
@@ -407,7 +441,7 @@ bool nvm_flush_adaptive_maps() noexcept {
             const uint32_t age = g_nvm_now_ms - g_last_adaptive_flush_ms;
             // Seed-only: allow without waiting 60 s (stop-sync must persist).
             const bool seed_only = g_seed_dirty &&
-                !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty;
+                !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_etbcal_dirty;
             if (!seed_only && age < kMinAdaptiveFlushIntervalMs) {
                 return true;  // defer — main re-agenda no próximo tick
             }
@@ -420,6 +454,7 @@ bool nvm_flush_adaptive_maps() noexcept {
         g_knock_dirty    = false;
         g_ltft_add_dirty = false;
         g_seed_dirty     = false;
+        g_etbcal_dirty   = false;
 
         flash_unlock_bank2();
         FLASH_NSCCR = 0xFFFFFFFFu;
@@ -503,7 +538,8 @@ bool nvm_flush_adaptive_maps() noexcept {
         g_sector0_flush_active = false;
         g_last_adaptive_flush_ms = g_nvm_now_ms;
         (void)held_seed_dirty;
-        return !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_seed_dirty;
+        return !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_seed_dirty &&
+               !g_etbcal_dirty;
     }
 
     return false;
@@ -535,6 +571,7 @@ bool nvm_save_runtime_seed(const RuntimeSyncSeed* seed) noexcept {
     // Idle: pack + blocking erase/program so seed survives power-cycle even
     // if main loop does not re-enter flush before shutdown.
     static uint8_t sector_buf[FLASH_SECTOR_SIZE] = {};
+    const bool etbcal_packed = etb_cal_record_ok(g_etbcal_ram);
     pack_adaptive_sector(sector_buf);
     flash_unlock_bank2();
     const bool ok = flash_erase_sector(kSectorLtft) &&
@@ -548,6 +585,9 @@ bool nvm_save_runtime_seed(const RuntimeSyncSeed* seed) noexcept {
         g_ltft_dirty = false;
         g_knock_dirty = false;
         g_ltft_add_dirty = false;
+        // EtbCalRecord foi co-escrito no pack quando o shadow era válido —
+        // limpar o dirty evita um erase extra do setor no próximo flush.
+        if (etbcal_packed) { g_etbcal_dirty = false; }
         g_last_adaptive_flush_ms = g_nvm_now_ms;
     }
     return ok;
@@ -575,6 +615,38 @@ bool nvm_clear_runtime_seed() noexcept {
     return nvm_save_runtime_seed(&blank);
 }
 
+// ── EtbCalRecord (última auto-cal ETB) ───────────────────────────────────────
+// Mesma disciplina do seed: shadow RAM + flush SM do setor 0. Diferente do
+// seed, não faz write bloqueante — a auto-cal acontece no key-on e o main
+// loop roda tempo de sobra para o flush não-bloqueante completar.
+
+bool nvm_save_etb_cal(const EtbCalRecord* rec) noexcept {
+    if (rec == nullptr) { return false; }
+    EtbCalRecord w = *rec;
+    w.magic    = ETB_CAL_RECORD_MAGIC;
+    w.version  = ETB_CAL_RECORD_VERSION;
+    w.reserved = 0u;
+    w.crc32    = 0u;
+    w.crc32    = etb_cal_crc32(w);
+    g_etbcal_ram = w;
+    g_etbcal_dirty = true;
+    g_adaptive_flush_asap = true;  // não esperar o rate-limit de 60 s
+    return true;
+}
+
+bool nvm_load_etb_cal(EtbCalRecord* out) noexcept {
+    if (out == nullptr) { return false; }
+    if (etb_cal_record_ok(g_etbcal_ram)) {
+        *out = g_etbcal_ram;
+        return true;
+    }
+    const uint32_t addr = kBank2Base + kNvmEtbCalOffset;
+    std::memcpy(out, reinterpret_cast<const void*>(addr), sizeof(EtbCalRecord));
+    if (!etb_cal_record_ok(*out)) { return false; }
+    g_etbcal_ram = *out;
+    return true;
+}
+
 } // namespace ems::hal
 
 #else  // EMS_HOST_TEST ─────────────────────────────────────────────────────
@@ -594,6 +666,30 @@ static uint32_t g_flash_busy_polls = 0u;     // non-zero → simulate timeout on
 // Runtime seed: slot array (mirrors the STM32 flash-backed slot layout)
 static RuntimeSyncSeed g_seed_slots[kTestSeedSlots] = {};
 static bool g_seed_slot_valid[kTestSeedSlots] = {};
+
+// EtbCalRecord (última auto-cal ETB)
+static EtbCalRecord g_etbcal_mock{};
+static bool g_etbcal_mock_valid = false;
+
+bool nvm_save_etb_cal(const EtbCalRecord* rec) noexcept {
+    if (rec == nullptr) { return false; }
+    EtbCalRecord w = *rec;
+    w.magic    = ETB_CAL_RECORD_MAGIC;
+    w.version  = ETB_CAL_RECORD_VERSION;
+    w.reserved = 0u;
+    w.crc32    = 0u;
+    w.crc32    = etb_cal_crc32(w);
+    g_etbcal_mock = w;
+    g_etbcal_mock_valid = true;
+    return true;
+}
+
+bool nvm_load_etb_cal(EtbCalRecord* out) noexcept {
+    if (out == nullptr || !g_etbcal_mock_valid) { return false; }
+    if (!etb_cal_record_ok(g_etbcal_mock)) { return false; }
+    *out = g_etbcal_mock;
+    return true;
+}
 
 bool nvm_write_ltft(uint8_t r, uint8_t l, int8_t v) noexcept {
     if (r >= kNvmLtftDim || l >= kNvmLtftDim) { return false; }
@@ -703,6 +799,8 @@ void nvm_test_reset() noexcept {
     g_flash_busy_polls = 0u;
     std::memset(g_seed_slots, 0, sizeof(g_seed_slots));
     std::memset(g_seed_slot_valid, 0, sizeof(g_seed_slot_valid));
+    std::memset(&g_etbcal_mock, 0, sizeof(g_etbcal_mock));
+    g_etbcal_mock_valid = false;
 }
 void flash_test_set_busy_polls(uint32_t polls) noexcept {
     g_flash_busy_polls = polls;
