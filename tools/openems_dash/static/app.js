@@ -962,6 +962,67 @@ const PAGE_0_SECTIONS = [
   },
 ];
 
+/* ── modo Básico: vista curada cross-page (tuning do dia-a-dia) ────────
+   Itens: {page, field} = escalar (.param-row) · {page, curve} = curva 1D
+   (título exato do <h4> gerado por render() a partir de PAGE_LAYOUT). */
+const BASIC_VIEW = [
+  { label: "IDLE", items: [
+      // etb_idle_rpm_target (escalar) fica só no Avançado: em produção o alvo
+      // real é a curva vs CLT (auxiliaries_idle_target_rpm_x10); o escalar só
+      // alimenta o config do ETB em host-test.
+      { page: 0, curve: "Idle target RPM vs CLT" },
+      { page: 0, field: "etb_idle_open_pct_x10" },
+      { page: 5, field: "idle_spark_deadband_rpm_x10" },
+      { page: 5, field: "idle_spark_rpm_per_deg_x10" },
+      { page: 5, field: "idle_spark_retard_limit_deg" },
+      { page: 5, field: "idle_spark_advance_limit_deg" } ] },
+  { label: "WARMUP / CORREÇÕES", items: [
+      { page: 5, curve: "Warmup" },
+      { page: 5, curve: "CLT correction" },
+      { page: 5, curve: "IAT correction" } ] },
+  { label: "ACCEL ENRICHMENT", items: [
+      { page: 5, field: "ae_tpsdot_threshold_x10" },
+      { page: 5, field: "ae_taper_cycles" },
+      { page: 5, field: "ae_max_pw_us" },
+      { page: 6, curve: "AE rate" },
+      { page: 5, curve: "AE vs CLT" } ] },
+  { label: "CLOSED-LOOP (λ)", items: [
+      { page: 0, field: "closed_loop_enable" },
+      { page: 0, field: "closed_loop_post_start_s" },
+      { page: 0, field: "stft_kp_x100" },
+      { page: 0, field: "stft_ki_x1000" },
+      { page: 0, field: "stft_clamp_pct_x10" },
+      { page: 0, field: "ltft_adapt_enable" },
+      { page: 0, field: "ltft_mult_clamp_pct_x10" } ] },
+  { label: "CRANKING", items: [
+      { page: 6, field: "crank_enter_rpm_x10" },
+      { page: 6, field: "crank_exit_rpm_x10" },
+      { page: 6, field: "crank_spark_deg" },
+      { page: 6, field: "crank_min_pw_us" },
+      { page: 6, field: "crank_prime_max_pw_us" } ] },
+  { label: "LIMITES / DIRIGIBILIDADE", items: [
+      { page: 0, field: "rev_limit_rpm_x10" },
+      { page: 0, field: "rev_limit_soft_window_x10" },
+      { page: 7, field: "spark_skip_window_rpm_x10" },
+      { page: 7, field: "spark_skip_max_q8" },
+      { page: 0, field: "decel_cut_tps_threshold_x10" },
+      { page: 0, field: "decel_cut_entry_rpm_x10" },
+      { page: 0, field: "decel_cut_exit_rpm_x10" },
+      { page: 0, field: "antijerk_tpsdot_threshold_x10" },
+      { page: 0, field: "antijerk_retard_deg" } ] },
+];
+const BASIC_FIELD_SET = new Set(
+  BASIC_VIEW.flatMap(s => s.items.filter(i => i.field).map(i => i.field)));
+const BASIC_PAGES = [...new Set(BASIC_VIEW.flatMap(s => s.items.map(i => i.page)))];
+
+/* Seções estruturais (só Avançado): valor errado pode impedir partida ou
+   danificar o motor → confirm 1×/sessão no primeiro edit. Campos que também
+   estão na vista Básica (dia-a-dia) ficam de fora. */
+const CRITICAL_SECTIONS = new Set(["ENGINE", "FUELING", "APP SENSORS", "THROTTLE BODY (ETB)", "CMP"]);
+const CRITICAL_FIELDS = new Set(
+  PAGE_0_SECTIONS.filter(s => CRITICAL_SECTIONS.has(s.label))
+    .flatMap(s => s.fields).filter(f => !BASIC_FIELD_SET.has(f)));
+
 /* friendly labels — unidades = valor já escalado por protocol.py (não o raw wire) */
 const FIELD_LABELS = {
   displacement_cc:           "Displacement (cc)",
@@ -973,14 +1034,14 @@ const FIELD_LABELS = {
   config_magic:              "Magic (0x4544 = valid config v2/EOI)",
   app1_raw_min:  "APP1 released (raw)",   app1_raw_max:  "APP1 floored (raw)",
   app2_raw_min:  "APP2 released (raw)",   app2_raw_max:  "APP2 floored (raw)",
-  etb_tps1_raw_min: "ETB TPS1 closed (raw)", etb_tps1_raw_max: "ETB TPS1 open (raw)",
-  etb_tps2_raw_min: "ETB TPS2 closed (raw)", etb_tps2_raw_max: "ETB TPS2 open (raw)",
+  etb_tps1_raw_min: "ETB TPS1 closed (raw, auto-cal)", etb_tps1_raw_max: "ETB TPS1 open (raw, auto-cal)",
+  etb_tps2_raw_min: "ETB TPS2 closed (raw, auto-cal)", etb_tps2_raw_max: "ETB TPS2 open (raw, auto-cal)",
   app_max_delta_pct_x10: "APP plausibility Δmax (%)",
   etb_max_delta_pct_x10: "ETB plausibility Δmax (%)",
   etb_max_open_pct_x10_limp: "ETB max opening limp (%)",
   etb_max_rate_pct_per_s: "ETB max rate (%/s)",
   etb_idle_open_pct_x10: "ETB idle opening (%)",
-  etb_cal_valid: "ETB cal valid (0/1)",
+  etb_cal_valid: "ETB cal valid (auto-cal power-on)",
   etb_harness_present: "ETB harness present (0/1)",
   etb_kp_x10: "ETB PID Kp", etb_ki_x10: "ETB PID Ki", etb_kd_x10: "ETB PID Kd",
   cyl_fuel_trim_pct_0: "Fuel trim cyl.1 (%)", cyl_fuel_trim_pct_1: "Fuel trim cyl.2 (%)",
@@ -1061,13 +1122,19 @@ const FIELD_LABELS = {
 };
 
 /* calibração assistida: campo → fonte do raw ao vivo na telemetria */
+/* calibração assistida do pedal: um clique captura APP1+APP2 juntos na mesma
+   posição do pedal (solto / no fundo). Botão fica na linha do campo-chave.
+   ETB TPS: sem capture manual — auto-cal varre os batentes a cada power-on
+   (etb_autocal.cpp) e escreve os limites em RAM; aqui é só leitura. */
 const CAL_CAPTURE = {
-  app1_raw_min: "an1_raw", app1_raw_max: "an1_raw",
-  app2_raw_min: "an2_raw", app2_raw_max: "an2_raw",
-  etb_tps1_raw_min: "an3_raw", etb_tps1_raw_max: "an3_raw",
-  etb_tps2_raw_min: "an4_raw", etb_tps2_raw_max: "an4_raw",
+  app1_raw_min: { label: "◉ capture solto (APP1+2)",
+                  fields: { app1_raw_min: "an1_raw", app2_raw_min: "an2_raw" } },
+  app1_raw_max: { label: "◉ capture fundo (APP1+2)",
+                  fields: { app1_raw_max: "an1_raw", app2_raw_max: "an2_raw" } },
 };
-const READONLY_FIELDS = new Set(["config_magic"]);
+const READONLY_FIELDS = new Set(["config_magic",
+  "etb_tps1_raw_min", "etb_tps1_raw_max",
+  "etb_tps2_raw_min", "etb_tps2_raw_max", "etb_cal_valid"]);
 
 /* Layout explícito: curvas 1D (eixo + 1..n linhas de valores), tabelas 2D
    e escalares. Nomes de campo = protocol.py / ui_protocol.cpp. */
@@ -1447,13 +1514,120 @@ async function buildCanRxUI(container) {
   };
 }
 
+/* ── modo Básico/Avançado: estado + vista básica ──────────────────────── */
+const paramPageCtl = {};   // page → {render, reload, sendModified, burn, isFlashDirty}
+let paramsMode = localStorage.getItem("params_mode") || "basic";
+let basicRebuilding = false, basicRebuildPending = false;
+
+function scheduleBasicRebuild() {
+  if (basicRebuilding || basicRebuildPending) return;
+  basicRebuildPending = true;
+  requestAnimationFrame(() => { basicRebuildPending = false; rebuildBasicView(); });
+}
+
+function updateBasicDirty() {
+  const el = document.querySelector(".bv-flash-dirty");
+  if (el) el.hidden = !Object.values(paramPageCtl).some(c => c.isFlashDirty());
+}
+
+/* Reconstrói a vista básica MOVENDO os nós DOM dos grupos por página
+   (preserva closures/onchange — zero mudança no fluxo write/burn).
+   Idempotente: re-renderiza cada página primeiro (restaura o DOM completo)
+   e só depois move os nós curados. */
+function rebuildBasicView() {
+  const root = $("#paramsRoot");
+  const bv = root && $("#basicView", root);
+  if (!bv || paramsMode !== "basic") return;
+  basicRebuilding = true;
+  for (const p of BASIC_PAGES) paramPageCtl[p]?.render();
+  basicRebuilding = false;
+  bv.innerHTML = `
+    <div class="param-row pg-btns bv-toolbar">
+      <button type="button" data-act="reload" title="Lê todas as páginas da ECU (RAM)">Read All</button>
+      <button type="button" class="primary" data-act="send" title="Escreve campos pendentes na RAM">Write All</button>
+      <button type="button" class="danger" data-act="burn" title="Grava no flash as páginas alteradas">Save All</button>
+      <span class="flash-dirty bv-flash-dirty" hidden>não gravado em flash</span>
+    </div>`;
+  const badge = p => {
+    const b = document.createElement("span");
+    b.className = "bv-badge";
+    b.textContent = `PG${p}`;
+    return b;
+  };
+  for (const sec of BASIC_VIEW) {
+    const h = document.createElement("div");
+    h.className = "pg-section-header";
+    h.textContent = sec.label;
+    bv.appendChild(h);
+    for (const it of sec.items) {
+      if (!paramPageCtl[it.page]) continue;   // página ainda a carregar — rebuild volta a correr
+      const grp = root.querySelector(`.param-group[data-page="${it.page}"]`);
+      if (!grp) { console.warn("basic view: página não carregada", it); continue; }
+      if (it.field) {
+        const inp = grp.querySelector(`input[data-f="${it.field}"]`);
+        if (!inp) { console.warn("basic view: campo não encontrado", it.field); continue; }
+        const row = inp.closest(".param-row");
+        row.appendChild(badge(it.page));
+        bv.appendChild(row);
+      } else {
+        const h4 = $$("h4", grp).find(x => x.textContent.trim() === it.curve);
+        if (!h4) { console.warn("basic view: curva não encontrada", it.curve); continue; }
+        const tbl = h4.nextElementSibling;
+        h4.appendChild(badge(it.page));
+        bv.appendChild(h4);
+        if (tbl && tbl.tagName === "TABLE") bv.appendChild(tbl);
+      }
+    }
+  }
+  bindBasicToolbar(bv);
+  updateBasicDirty();
+}
+
+function bindBasicToolbar(bv) {
+  const pages = BASIC_PAGES.filter(p => paramPageCtl[p]);
+  bv.querySelector('[data-act="reload"]').onclick = async () => {
+    try {
+      for (const p of pages) await paramPageCtl[p].reload();
+      toast("Read All OK");
+    } catch (e) { toast(e.message, true); }
+  };
+  bv.querySelector('[data-act="send"]').onclick = async () => {
+    try {
+      let n = 0;
+      for (const p of pages) n += await paramPageCtl[p].sendModified();
+      toast(n ? `Write All: ${n} campo(s) → RAM` : "nada a escrever");
+    } catch (e) { toast(e.message, true); }
+  };
+  bv.querySelector('[data-act="burn"]').onclick = async () => {
+    try {
+      let burned = 0;
+      for (const p of pages) {
+        const ctl = paramPageCtl[p];
+        const n = await ctl.sendModified();
+        if (n || ctl.isFlashDirty()) { await ctl.burn(); burned++; }
+      }
+      updateBasicDirty();
+      toast(burned ? `Save All OK · ${burned} página(s)` : "nada a gravar");
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
 async function loadParams() {
   const root = $("#paramsRoot");
   root.dataset.loaded = "1";
   root.innerHTML = `
     <div class="params-filter">
+      <div class="mode-toggle" id="paramsModeToggle">
+        <button type="button" class="mode-btn" data-mode="basic">Básico</button>
+        <button type="button" class="mode-btn" data-mode="advanced">Avançado</button>
+      </div>
       <input type="search" id="paramsFilter" placeholder="Filtrar parâmetros…" autocomplete="off">
-    </div>`;
+      <span class="bv-filter-hint" id="basicFilterHint" hidden>
+        <span class="bv-hint-n"></span> no Avançado —
+        <button type="button" id="basicFilterGo">ver</button>
+      </span>
+    </div>
+    <div id="basicView" hidden></div>`;
 
   const filterInp = $("#paramsFilter", root);
   filterInp.oninput = () => {
@@ -1489,8 +1663,25 @@ async function loadParams() {
     $$(".pg-accordion", root).forEach(acc => {
       if (q && !acc.open) acc.open = true;
     });
+    // Modo Básico: 0 matches na vista curada mas N no Avançado → hint
+    const hint = $("#basicFilterHint", root);
+    if (hint) {
+      let show = false, advMatches = 0;
+      if (paramsMode === "basic" && q) {
+        const bv = $("#basicView", root);
+        const visBasic = bv ? $$(".param-row, h4", bv).filter(el =>
+          !el.classList.contains("pg-btns") && el.style.display !== "none").length : 0;
+        $$(".pg-accordion .param-row", root).forEach(r => {
+          if (!r.classList.contains("pg-btns") && r.style.display !== "none") advMatches++;
+        });
+        show = visBasic === 0 && advMatches > 0;
+      }
+      hint.hidden = !show;
+      if (show) $(".bv-hint-n", hint).textContent = `${advMatches} parâmetro(s)`;
+    }
   };
 
+  const groupLoaders = [];
   for (const grp of PARAM_GROUPS) {
     const details = document.createElement("details");
     details.className = "pg-accordion";
@@ -1504,16 +1695,18 @@ async function loadParams() {
     </summary>`;
     root.appendChild(details);
 
-    let opened = false;
+    let opened = null;   // Promise: reutilizada por toggle e pelo modo Básico
     const loadGroup = () => {
-      if (opened) return;
-      opened = true;
-      if (grp.canRx) {
-        buildCanRxUI(details);
-      } else {
-        for (const page of grp.pages) {
+      if (opened) return opened;
+      opened = (async () => {
+        if (grp.canRx) {
+          buildCanRxUI(details);
+          return;
+        }
+        await Promise.all(grp.pages.map(page => {
           const div = document.createElement("div");
           div.className = "param-group";
+          div.dataset.page = page;
           div.innerHTML = `
             <div class="pg-page-label">PG${page} — ${PARAM_PAGES[page]}</div>
             <div class="rows muted">a carregar…</div>
@@ -1524,15 +1717,46 @@ async function loadParams() {
               <span class="flash-dirty" hidden>não gravado em flash</span>
             </div>`;
           details.appendChild(div);
-          bindParamGroup(div, page);
-        }
-      }
+          return bindParamGroup(div, page)
+            .catch(e => toast(`PG${page}: ${e.message}`, true));
+        }));
+      })();
+      return opened;
     };
+    if (!grp.canRx) groupLoaders.push(loadGroup);
     details.addEventListener("toggle", () => {
       if (details.open) loadGroup();
     });
     if (details.open) loadGroup();
   }
+
+  async function setParamsMode(m) {
+    paramsMode = m;
+    localStorage.setItem("params_mode", m);
+    root.dataset.mode = m;
+    $$("#paramsModeToggle button", root).forEach(b =>
+      b.classList.toggle("active", b.dataset.mode === m));
+    const bv = $("#basicView", root);
+    if (m === "basic") {
+      await Promise.all(groupLoaders.map(f => f()));
+      bv.hidden = false;
+      rebuildBasicView();
+    } else {
+      bv.hidden = true;
+      bv.innerHTML = "";
+      // devolve os nós movidos re-renderizando cada página no lugar
+      basicRebuilding = true;
+      Object.values(paramPageCtl).forEach(c => c.render());
+      basicRebuilding = false;
+    }
+    filterInp.oninput();   // re-aplica o filtro no novo modo
+  }
+  $$("#paramsModeToggle button", root).forEach(b =>
+    b.onclick = () => setParamsMode(b.dataset.mode).catch(e => toast(e.message, true)));
+  $("#basicFilterGo", root).onclick = () =>
+    setParamsMode("advanced").catch(e => toast(e.message, true));
+
+  await setParamsMode(paramsMode);
 }
 
 async function bindParamGroup(div, page) {
@@ -1544,6 +1768,7 @@ async function bindParamGroup(div, page) {
   function updateFlashDirty() {
     const el = $(".flash-dirty", div);
     if (el) el.hidden = !flashDirty;
+    updateBasicDirty();
   }
 
   async function reload() {
@@ -1599,7 +1824,8 @@ async function bindParamGroup(div, page) {
       for (const sec of scalarSections) {
         const secFields = sec.fields.filter(f => f in fieldMap);
         if (!secFields.length) continue;
-        html += `<div class="pg-section-header">${sec.label}</div>`;
+        const crit = CRITICAL_SECTIONS.has(sec.label);
+        html += `<div class="pg-section-header${crit ? " critical" : ""}">${crit ? "⚠ " : ""}${sec.label}</div>`;
         if (sec.curves) {
           for (const c of sec.curves) {
             rendered.add(c.axis);
@@ -1620,11 +1846,12 @@ async function bindParamGroup(div, page) {
           const v = fieldMap[name];
           const vals = Array.isArray(v) ? v : [v];
           const cap = CAL_CAPTURE[name]
-            ? `<button class="cap" data-cap="${name}" data-src="${CAL_CAPTURE[name]}"
-                       title="capture live value">◉ capture</button>
-               <span class="muted live-raw" data-src="${CAL_CAPTURE[name]}"></span>`
+            ? `<button class="cap" data-cap="${name}"
+                       title="captura os dois canais ao vivo">${CAL_CAPTURE[name].label}</button> ` +
+              Object.values(CAL_CAPTURE[name].fields)
+                .map(src => `<span class="muted live-raw" data-src="${src}"></span>`).join(" ")
             : "";
-          html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
+          html += `<div class="param-row${CRITICAL_FIELDS.has(name) ? " critical" : ""}"><label>${FIELD_LABELS[name] || name}</label>` +
             vals.map((x, i) => inp(name, i, x)).join("") + cap + "</div>";
         }
         if (sec.actions) {
@@ -1645,9 +1872,10 @@ async function bindParamGroup(div, page) {
       for (const [name, v] of remaining) {
         const vals = Array.isArray(v) ? v : [v];
         const cap = CAL_CAPTURE[name]
-          ? `<button class="cap" data-cap="${name}" data-src="${CAL_CAPTURE[name]}"
-                     title="capture live value">◉ capture</button>
-             <span class="muted live-raw" data-src="${CAL_CAPTURE[name]}"></span>`
+          ? `<button class="cap" data-cap="${name}"
+                     title="captura os dois canais ao vivo">${CAL_CAPTURE[name].label}</button> ` +
+            Object.values(CAL_CAPTURE[name].fields)
+              .map(src => `<span class="muted live-raw" data-src="${src}"></span>`).join(" ")
           : "";
         html += `<div class="param-row"><label>${FIELD_LABELS[name] || name}</label>` +
           vals.map((x, i) => inp(name, i, x)).join("") + cap + "</div>";
@@ -1656,30 +1884,51 @@ async function bindParamGroup(div, page) {
     rowsEl.innerHTML = html;
     $$("button.cap", rowsEl).forEach(btn => btn.onclick = () => {
       if (!RT) return toast("sem telemetria", true);
-      const v = RT[btn.dataset.src];
-      const input = rowsEl.querySelector(`input[data-f="${btn.dataset.cap}"]`);
-      input.value = v;
-      input.dispatchEvent(new Event("change"));
-      toast(`${btn.dataset.cap} ← ${v}`);
+      const cc = CAL_CAPTURE[btn.dataset.cap];
+      if (!cc) return;
+      // Clique de capture é intenção explícita de calibrar — dispensa o
+      // confirm de campo crítico desta sessão.
+      sessionStorage.setItem("critical_edit_ok", "1");
+      const msgs = [];
+      for (const [f, src] of Object.entries(cc.fields)) {
+        const v = RT[src];
+        const input = rowsEl.querySelector(`input[data-f="${f}"]`);
+        if (v === undefined || !input) continue;
+        input.value = v;
+        input.dispatchEvent(new Event("change"));
+        msgs.push(`${f} ← ${v}`);
+      }
+      toast(msgs.length ? msgs.join(" · ") : "sem valores ao vivo", !msgs.length);
     });
     $$("input", rowsEl).forEach(inp => inp.onchange = () => {
       const { f, i } = inp.dataset;
       const v = parseInt(inp.value, 10);
       if (Number.isNaN(v)) return;
+      if (CRITICAL_FIELDS.has(f) && !sessionStorage.getItem("critical_edit_ok")) {
+        if (!confirm("⚠ Parâmetro estrutural (config do motor / sensores / ETB / CMP).\n" +
+                     "Valor errado pode impedir a partida ou danificar o motor.\n" +
+                     "Confirmar edições críticas nesta sessão?")) {
+          inp.value = Array.isArray(fields[f]) ? fields[f][+i] : fields[f];
+          return;
+        }
+        sessionStorage.setItem("critical_edit_ok", "1");
+      }
       if (Array.isArray(fields[f])) fields[f][+i] = v; else fields[f] = v;
       modified.add(f);
       inp.classList.add("mod");
       // Envia de imediato para a RAM — não requer clicar "Send" à parte.
       sendModified().catch(err => toast(err.message, true));
     });
+    if (paramsMode === "basic" && !basicRebuilding) scheduleBasicRebuild();
   }
 
   async function sendModified() {
     // Força o commit de um input em edição antes de checar `modified` —
     // clicar em Burn/Send sem sair do campo antes disparava o click sem o
     // onchange ter corrido, deixando `modified` vazio (nada enviado).
+    // (inputs podem ter sido movidos p/ #basicView — checa data-f, não rowsEl)
     const active = document.activeElement;
-    if (active && active.tagName === "INPUT" && rowsEl.contains(active)) active.blur();
+    if (active && active.tagName === "INPUT" && active.dataset.f) active.blur();
     if (!modified.size) return 0;
     const body = { fields: {} };
     modified.forEach(f => body.fields[f] = fields[f]);
@@ -1691,7 +1940,7 @@ async function bindParamGroup(div, page) {
     // Não recria os inputs (render() completo) a cada envio automático —
     // só limpa a marca "não enviado" dos campos que acabaram de sair.
     modified.forEach(f => {
-      rowsEl.querySelectorAll(`input[data-f="${f}"]`).forEach(el => el.classList.remove("mod"));
+      document.querySelectorAll(`input[data-f="${f}"]`).forEach(el => el.classList.remove("mod"));
     });
     modified.clear();
     if (n) { flashDirty = true; updateFlashDirty(); }
@@ -1723,6 +1972,17 @@ async function bindParamGroup(div, page) {
     } catch (e) { toast(e.message, true); }
   };
   await reload();
+  // regista só após o 1º load — rebuild da vista básica pode chamar render()
+  // e uma página ainda sem fields quebraria nas curvas (undefined.map)
+  paramPageCtl[page] = {
+    render, reload, sendModified,
+    burn: async () => {
+      await api(`/api/pages/${page}/burn`, { method: "POST" });
+      flashDirty = false;
+      updateFlashDirty();
+    },
+    isFlashDirty: () => flashDirty,
+  };
 }
 
 /* ── bench-mode (comando 'B' no protocolo) ────────────────────────────── */

@@ -754,6 +754,70 @@ button.cap {
   color: var(--warn);
 }
 
+/* ── modo Básico/Avançado (reusa .mode-toggle/.mode-btn) ── */
+#paramsModeToggle { flex-shrink: 0; }
+#paramsModeToggle .mode-btn {
+  font: 700 10px var(--font);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 7px 12px;
+}
+#paramsRoot[data-mode="basic"] .pg-accordion { display: none; }
+#basicView {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 12px 14px;
+}
+#basicView h4 {
+  margin: 12px 0 4px;
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.bv-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel);
+  margin: 0 0 8px;
+  border-top: none;
+  border-bottom: 1px solid var(--border);
+  padding: 0 0 10px;
+}
+.bv-toolbar button { width: auto; }
+.bv-badge {
+  font-size: 9px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-left: 6px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.pg-section-header.critical {
+  color: var(--warn);
+  border-bottom-color: rgba(240,160,48,0.5);
+}
+.param-row.critical {
+  border-left: 2px solid rgba(240,160,48,0.4);
+  padding-left: 6px;
+}
+.bv-filter-hint {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.bv-filter-hint button {
+  padding: 3px 8px;
+  font-size: 10px;
+  width: auto;
+  margin-left: 4px;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
    PEDAL / BOOST MAPS (curve editors + preset tabs)
    ═══════════════════════════════════════════════════════════════════════ */
