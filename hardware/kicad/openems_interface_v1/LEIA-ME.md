@@ -60,6 +60,10 @@ bash hardware/kicad/openems_interface_v1/scripts/build_all.sh
 
 ### Ver o PCB limpo
 
+**Importante:** fecha o KiCad por completo e volta a abrir (senão podes estar a ver o ficheiro antigo em memória).
+
+
+
 1. `kicad …/openems_interface_v1.kicad_pro`
 2. **PCB Editor**
 3. Tecla **Home** (zoom fit)

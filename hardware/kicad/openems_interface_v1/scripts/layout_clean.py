@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Clean PCB layout: organised placement + local bridges only (no spaghetti).
+"""Clean, non-overlapping PCB floorplan for OpenEMS interface v1.
 
-Philosophy
-----------
-Auto-routing hundreds of stub tracks made the board unreadable. This script
-rebuilds a *placement-first* scaffold:
+Board 160×110 mm — enough room for AMPSEAL 35+23 side-by-side + WeAct + TLE.
 
-  • Clear zones (connectors / WeAct / power / TLE)
-  • Pad nets from pinmap (authoritative)
-  • Only *local* copper: pin-pair shorts on connectors + TLE OUT A+B
-  • PGND zones (fill in Pcbnew)
-  • Zone labels — route the rest by hand in KiCad
+Zones (y grows down in KiCad):
+  TOP-LEFT     WeAct coreboard keepout + dual headers + MH
+  TOP-RIGHT    empty / future USB
+  MID-LEFT     star NetTie + 3V3 LDO row
+  MID-RIGHT    TLE8888 (clear courtyard)
+  MID-CENTER   power chain (row, 8 mm pitch)
+  BOTTOM       J1 (35) left · gap · J2 (23) right
 
-Run:  python3 scripts/layout_clean.py
-  or: bash scripts/build_all.sh
+Copper: ONLY under-connector dual-pin shorts + TLE OUT A+B package ties.
+No long auto-routes. Hand-route in Pcbnew.
 """
 from __future__ import annotations
 
@@ -25,11 +24,11 @@ ROOT = Path(__file__).resolve().parents[1]
 PRETTY = ROOT / "libs" / "OpenEMS.pretty"
 PCB = ROOT / "openems_interface_v1.kicad_pcb"
 PCB_VER = "20221018"
-W, H = 130.0, 100.0
 
-# ---------------------------------------------------------------------------
-# Pin maps (docs/hw/netlist_v1.md)
-# ---------------------------------------------------------------------------
+# Larger board so AMPSEAL 35 (~77 mm) + 23 (~50 mm) + gap fit
+W, H = 160.0, 110.0
+
+# ---- pin maps ----
 J2 = {
     1: "VBAT_RAW", 2: "VBAT_RAW",
     3: "PGND", 4: "PGND", 5: "PGND",
@@ -55,7 +54,7 @@ J1 = {
     28: "CMP2_SIG", 29: "CMP2_5V", 30: "CMP2_GND",
     31: "TPS_INDEP",
 }
-J3 = {  # WeAct P1 critical
+J3 = {
     1: "MCU_PC0", 2: "MCU_PC1", 3: "MCU_PC2", 4: "MCU_PC3",
     5: "AGND", 6: "VREF_P",
     7: "MCU_PA0", 8: "MCU_PA1",
@@ -65,7 +64,7 @@ J3 = {  # WeAct P1 critical
     23: "MCU_PE10", 24: "MCU_PE11", 25: "MCU_PE12", 26: "MCU_PE13",
     29: "MCU_PB12", 30: "MCU_PB13", 31: "MCU_PB14", 32: "MCU_PB15",
 }
-J4 = {  # WeAct P2 critical
+J4 = {
     2: "MCU_PE6", 3: "MCU_PE4", 4: "MCU_PE5",
     5: "MCU_PE2", 6: "MCU_PE3", 7: "MCU_PE0",
     9: "MCU_PB8", 10: "MCU_PB9",
@@ -184,121 +183,121 @@ def pad_xy(block: str, at: tuple[float, float], pin: int) -> tuple[float, float]
     return at[0] + float(m.group(1)), at[1] + float(m.group(2))
 
 
-def segment(a, b, w, layer, net):
+def segment(a, b, w, layer, net) -> str:
     return (
         f"  (segment (start {a[0]:.3f} {a[1]:.3f}) (end {b[0]:.3f} {b[1]:.3f}) "
         f'(width {w}) (layer "{layer}") (net {net}) (tstamp {uid()}))\n'
     )
 
 
-def mounting_hole(ref: str, at: tuple[float, float], drill: float = 3.2) -> str:
+def mh(ref: str, at: tuple[float, float], drill: float = 3.2) -> str:
     return f"""  (footprint "MountingHole:{drill}mm" (layer "F.Cu")
     (tstamp {uid()})
     (at {at[0]} {at[1]})
     (attr through_hole exclude_from_pos_files exclude_from_bom)
-    (fp_text reference "{ref}" (at 0 {-drill - 1}) (layer "F.SilkS")
-      (effects (font (size 0.8 0.8) (thickness 0.12)))
-      (tstamp {uid()})
-    )
-    (fp_text value "MH" (at 0 {drill + 1}) (layer "F.Fab")
-      (effects (font (size 0.8 0.8) (thickness 0.12)))
-      (tstamp {uid()})
-    )
-    (fp_circle (center 0 0) (end {drill / 2 + 0.4} 0)
+    (fp_text reference "{ref}" (at 0 {-drill - 1.2}) (layer "F.SilkS")
+      (effects (font (size 0.9 0.9) (thickness 0.12))) (tstamp {uid()}))
+    (fp_text value "M3" (at 0 {drill + 1.2}) (layer "F.Fab")
+      (effects (font (size 0.8 0.8) (thickness 0.1))) (tstamp {uid()}))
+    (fp_circle (center 0 0) (end {drill / 2 + 0.5} 0)
       (stroke (width 0.12) (type solid)) (fill none) (layer "F.CrtYd") (tstamp {uid()}))
-    (pad "" np_thru_hole circle (at 0 0) (size {drill} {drill}) (drill {drill}) (layers "*.Cu" "*.Mask") (tstamp {uid()}))
+    (pad "" np_thru_hole circle (at 0 0) (size {drill} {drill}) (drill {drill})
+      (layers "*.Cu" "*.Mask") (tstamp {uid()}))
   )
 """
 
 
-def zone_rect(net: int, name: str, layer: str, x0, y0, x1, y1) -> str:
+def zone(net: int, name: str, layer: str) -> str:
     return f"""  (zone (net {net}) (net_name "{name}") (layer "{layer}") (tstamp {uid()}) (hatch edge 0.5)
-    (connect_pads (clearance 0.25))
+    (connect_pads (clearance 0.3))
     (min_thickness 0.25)
     (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
-    (polygon
-      (pts
-        (xy {x0} {y0})
-        (xy {x1} {y0})
-        (xy {x1} {y1})
-        (xy {x0} {y1})
-      )
-    )
+    (polygon (pts
+      (xy 2 2) (xy {W - 2} 2) (xy {W - 2} {H - 2}) (xy 2 {H - 2})
+    ))
   )
 """
 
 
-def label(txt: str, at: tuple[float, float], size: float = 1.2) -> str:
-    return f"""  (gr_text "{txt}" (at {at[0]} {at[1]} 0) (layer "Cmts.User") (tstamp {uid()})
-    (effects (font (size {size} {size}) (thickness 0.15)))
+def text(s: str, at: tuple[float, float], size: float = 1.4) -> str:
+    return f"""  (gr_text "{s}" (at {at[0]} {at[1]} 0) (layer "Cmts.User") (tstamp {uid()})
+    (effects (font (size {size} {size}) (thickness 0.18)))
   )
 """
 
 
-def box(x0, y0, x1, y1, layer="Dwgs.User") -> str:
+def rect(x0, y0, x1, y1, layer="Dwgs.User", dash=True) -> str:
+    style = "dash" if dash else "solid"
     lines = []
     for a, b in [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))]:
         lines.append(
             f"  (gr_line (start {a[0]} {a[1]}) (end {b[0]} {b[1]})\n"
-            f'    (stroke (width 0.15) (type dash)) (layer "{layer}") (tstamp {uid()}))'
+            f'    (stroke (width 0.2) (type {style})) (layer "{layer}") (tstamp {uid()}))'
         )
     return "\n".join(lines) + "\n"
 
 
 def main() -> None:
-    # ---- collect all nets ----
     maps = [J1, J2, J3, J4, NETTIE, TLE, Q1, F1, D1, C1, C2, U1, U2, FB1, C3, C4]
-    all_nets: set[str] = set()
+    names: set[str] = set()
     for m in maps:
-        all_nets |= set(m.values())
-    all_nets |= {"", "VBAT_RAW", "VBAT", "+5V_MAIN", "+3V3", "VDDA", "VREF_P"}
+        names |= set(m.values())
+    names |= {"VBAT_RAW", "VBAT", "+5V_MAIN", "+3V3", "VDDA", "VREF_P"}
 
     net_code: dict[str, int] = {"": 0}
     net_lines = ['  (net 0 "")']
-    for i, n in enumerate(sorted(n for n in all_nets if n), 1):
+    for i, n in enumerate(sorted(names), 1):
         net_code[n] = i
         net_lines.append(f'  (net {i} "{n}")')
 
-    # ---- placement (clean zones) ----
-    # Bottom edge connectors
-    # J1 rusEFI origin = center; pad1 ~ (-22,-4) → place so pad row near y=88
-    j1_at = (35.0, 88.0)
-    j2_at = (85.0, 85.0)  # our 23 origin = pad1
-
-    # WeAct center-top
-    weact_sw = (45.69, 8.0)
-    j3_at = (weact_sw[0] - 2.54, weact_sw[1] + 5.0)
-    j4_at = (weact_sw[0] + 38.62 + 2.54, weact_sw[1] + 5.0)
+    # ========== FLOORPLAN (mm) — no overlaps ==========
+    # WeAct 38.62 × 69.10  SW corner
+    weact = (12.0, 6.0)
+    we_w, we_h = 38.62, 69.10
+    # Headers outside WeAct long sides (5 mm clearance)
+    j3_at = (weact[0] - 5.0, weact[1] + 4.0)          # left of WeAct
+    j4_at = (weact[0] + we_w + 5.0, weact[1] + 4.0)    # right of WeAct
+    # Mounting holes on WeAct
     holes = [
-        (weact_sw[0] + 2.80, weact_sw[1] + 2.80),
-        (weact_sw[0] + 33.28, weact_sw[1] + 2.80),
-        (weact_sw[0] + 2.80, weact_sw[1] + 66.30),
-        (weact_sw[0] + 33.28, weact_sw[1] + 66.30),
+        (weact[0] + 2.80, weact[1] + 2.80),
+        (weact[0] + 2.80 + 30.48, weact[1] + 2.80),
+        (weact[0] + 2.80, weact[1] + 2.80 + 63.50),
+        (weact[0] + 2.80 + 30.48, weact[1] + 2.80 + 63.50),
     ]
-    nettie_at = (weact_sw[0] - 10.0, weact_sw[1] + 35.0)
+    # Star RIGHT of WeAct (J4 ends ~x=58) — clear of headers
+    nt_at = (65.0, weact[1] + 40.0)
 
-    # TLE right of WeAct, above connectors
-    u3_at = (100.0, 45.0)
+    # TLE far right, mid-height (courtyard ~±10 → x 115..145)
+    u3_at = (130.0, 38.0)
 
-    # Power chain: neat row left of TLE, mid board
-    #   Q1  F1  C1  C2     then U1 buck / U2 LDO below
-    q1_at = (58.0, 72.0)
-    f1_at = (66.0, 72.0)
-    d1_at = (66.0, 78.0)
-    c1_at = (74.0, 72.0)
-    c2_at = (80.0, 72.0)
-    u1_at = (58.0, 62.0)
-    u2_at = (50.0, 62.0)
-    fb1_at = (50.0, 55.0)
-    c3_at = (45.0, 55.0)
-    c4_at = (45.0, 62.0)
+    # Power row BELOW WeAct (WeAct ends y~75), ABOVE connectors (y~95)
+    # Keep x >= 72 so clear of J4 (x~58) and NT1
+    py = 84.0
+    q1_at = (75.0, py)
+    f1_at = (85.0, py)
+    c1_at = (95.0, py)
+    c2_at = (103.0, py)
+    d1_at = (85.0, py + 8.0)
+    # Regulators above power row, still right of WeAct/J4
+    u1_at = (85.0, 72.0)
+    u2_at = (75.0, 72.0)
+    fb1_at = (75.0, 64.0)
+    c3_at = (68.0, 64.0)
+    c4_at = (68.0, 72.0)
+
+    # Connectors bottom edge
+    # J1 rusEFI: origin center, ~±38.5 x, silk y -8..+11
+    # place so silk stays on board: center x=42, y=100 → x 3.5..80.5, y 92..111 (housing to edge)
+    j1_at = (42.0, 100.0)
+    # J2 our TE: pad1 origin, x -17..+45 → place pad1 at 110 → x 93..155
+    j2_at = (110.0, 97.0)
 
     parts: list[tuple[str, str, str, tuple[float, float], int, dict]] = [
         ("rusEFI_AMPSEAL_35_RA_776180", "OpenEMS:rusEFI_AMPSEAL_35_RA_776180", "J1", j1_at, 0, J1),
         ("TE_770669_AMPSEAL_23_RA", "OpenEMS:TE_770669_AMPSEAL_23_RA", "J2", j2_at, 0, J2),
         ("WeAct_PinHeader_2x25_P2.54mm", "OpenEMS:WeAct_PinHeader_2x25_P2.54mm", "J3", j3_at, 0, J3),
         ("WeAct_PinHeader_2x25_P2.54mm", "OpenEMS:WeAct_PinHeader_2x25_P2.54mm", "J4", j4_at, 0, J4),
-        ("NetTie-4_THT_Pad1.0mm", "OpenEMS:NetTie-4_THT_Pad1.0mm", "NT1", nettie_at, 0, NETTIE),
+        ("NetTie-4_THT_Pad1.0mm", "OpenEMS:NetTie-4_THT_Pad1.0mm", "NT1", nt_at, 0, NETTIE),
         ("LQFP-100_14x14mm_P0.5mm", "OpenEMS:LQFP-100_14x14mm_P0.5mm", "U3", u3_at, 0, TLE),
         ("SOT-23", "OpenEMS:SOT-23", "Q1", q1_at, 0, Q1),
         ("Fuse_1206_3216Metric", "OpenEMS:Fuse_1206_3216Metric", "F1", f1_at, 0, F1),
@@ -313,139 +312,106 @@ def main() -> None:
     ]
 
     fp_blocks: dict[str, tuple[str, tuple[float, float]]] = {}
-    fp_sexprs = []
+    sexprs = []
     for mod, lib, ref, at, rot, pmap in parts:
-        block = embed(load_mod(mod), lib, ref, at, rot)
-        block = assign_nets(block, pmap, net_code)
-        fp_sexprs.append(block)
-        fp_blocks[ref] = (block, at)
+        b = embed(load_mod(mod), lib, ref, at, rot)
+        b = assign_nets(b, pmap, net_code)
+        sexprs.append(b)
+        fp_blocks[ref] = (b, at)
+    for i, h in enumerate(holes, 1):
+        sexprs.append(mh(f"H{i}", h))
 
-    for i, (hx, hy) in enumerate(holes, 1):
-        fp_sexprs.append(mounting_hole(f"H{i}", (hx, hy)))
-
-    # ---- local bridges only ----
-    routes = []
-    n_vbat_raw = net_code["VBAT_RAW"]
-    n_pgnd = net_code["PGND"]
-    n_vbat = net_code["VBAT"]
-    n_etbp = net_code["ETB_MOTOR_P"]
-    n_etbn = net_code["ETB_MOTOR_N"]
+    # ---- copper: ONLY local package/connector bridges ----
+    routes: list[str] = []
 
     def p(ref: str, pin: int):
         return pad_xy(fp_blocks[ref][0], fp_blocks[ref][1], pin)
 
-    # J2 pair shorts
-    for a, b, net in [
-        (1, 2, n_vbat_raw),
-        (3, 4, n_pgnd),
-        (4, 5, n_pgnd),
-        (19, 20, n_etbp),
-        (21, 22, n_etbn),
+    # J2 duals
+    for a, b, n in [
+        (1, 2, "VBAT_RAW"),
+        (3, 4, "PGND"),
+        (4, 5, "PGND"),
+        (19, 20, "ETB_MOTOR_P"),
+        (21, 22, "ETB_MOTOR_N"),
     ]:
         pa, pb = p("J2", a), p("J2", b)
         if pa and pb:
-            routes.append(segment(pa, pb, 1.2 if net != n_etbp and net != n_etbn else 1.5, "F.Cu", net))
+            w = 1.5 if "ETB" in n else 1.0
+            routes.append(segment(pa, pb, w, "F.Cu", net_code[n]))
 
-    # Power chain local: Q1 drain → F1 → C1 (only if close)
-    q1d, f1a, f1b, c1p = p("Q1", 3), p("F1", 1), p("F1", 2), p("C1", 1)
-    if q1d and f1a:
-        routes.append(segment(q1d, f1a, 1.2, "F.Cu", n_vbat))
-    if f1b and c1p:
-        routes.append(segment(f1b, c1p, 1.2, "F.Cu", n_vbat))
-    # C1 → C2
-    c2p = p("C2", 1)
-    if c1p and c2p:
-        routes.append(segment(c1p, c2p, 0.8, "F.Cu", n_vbat))
-    # C1 → TLE BAT (54)
-    tbat = p("U3", 54)
-    if c1p and tbat:
-        routes.append(segment(c1p, tbat, 1.0, "F.Cu", n_vbat))
-    # BATPA/B short to BAT
-    for pin in (87, 90):
-        pt = p("U3", pin)
-        if pt and tbat:
-            routes.append(segment(pt, tbat, 0.8, "F.Cu", n_vbat))
+    # Power row nearest-neighbour only (10 mm pitch — short segments)
+    chain_pairs = [
+        ("Q1", 3, "F1", 1, "VBAT", 1.0),
+        ("F1", 2, "C1", 1, "VBAT", 1.0),
+        ("C1", 1, "C2", 1, "VBAT", 0.8),
+        ("U1", 2, "U2", 1, "+5V_MAIN", 0.5),
+        ("U2", 5, "FB1", 1, "+3V3", 0.5),
+        ("U2", 5, "C4", 1, "+3V3", 0.4),
+        ("FB1", 2, "C3", 1, "VDDA", 0.4),
+    ]
+    for r1, p1, r2, p2, net, w in chain_pairs:
+        a, b = p(r1, p1), p(r2, p2)
+        if a and b:
+            routes.append(segment(a, b, w, "F.Cu", net_code[net]))
 
-    # TLE OUT A+B / A+B+C local shorts only
-    for a, b in ((59, 60), (61, 62), (63, 64), (65, 66)):
+    # TLE package ties only (A+B / A+B+C / BATPA)
+    for a, b in ((59, 60), (61, 62), (63, 64), (65, 66), (54, 87), (54, 90)):
         pa, pb = p("U3", a), p("U3", b)
         if pa and pb:
             routes.append(segment(pa, pb, 0.6, "F.Cu", net_code[TLE[a]]))
-    for group in ((83, 84, 85), (92, 93, 94)):
-        pts = [p("U3", g) for g in group]
+    for grp in ((83, 84, 85), (92, 93, 94)):
+        pts = [p("U3", g) for g in grp]
         pts = [x for x in pts if x]
         for i in range(len(pts) - 1):
-            routes.append(segment(pts[i], pts[i + 1], 0.6, "F.Cu", net_code[TLE[group[0]]]))
+            routes.append(segment(pts[i], pts[i + 1], 0.6, "F.Cu", net_code[TLE[grp[0]]]))
 
-    # SPI straps local: pin 6 AGND and 8 +3V3 already netted — tiny via stubs ok
-    for pin, net in ((6, "AGND"), (8, "+3V3"), (20, "+3V3"), (25, "PGND"), (50, "PGND"), (75, "PGND"), (100, "AGND")):
-        pt = p("U3", pin)
-        if pt and net in net_code:
-            # thermal via next to pad (0.6mm offset)
-            routes.append(
-                f'  (via (at {pt[0] + 1.2:.3f} {pt[1]:.3f}) (size 0.7) (drill 0.35) '
-                f'(layers "F.Cu" "B.Cu") (net {net_code[net]}) (tstamp {uid()}))\n'
-            )
-
-    # LDO local: U1 pin2 → U2 pin1; U2 out → FB1
-    u1o, u2i, u2o = p("U1", 2), p("U2", 1), p("U2", 5)
-    fb1a, fb1b = p("FB1", 1), p("FB1", 2)
-    if u1o and u2i:
-        routes.append(segment(u1o, u2i, 0.6, "F.Cu", net_code["+5V_MAIN"]))
-    if u2o and fb1a:
-        routes.append(segment(u2o, fb1a, 0.5, "F.Cu", net_code["+3V3"]))
-    if u2o:
-        t20 = p("U3", 20)
-        if t20:
-            routes.append(segment(u2o, t20, 0.5, "F.Cu", net_code["+3V3"]))
-
-    # ---- graphics: zones + zone labels ----
-    graphics = []
-    # outline
+    # ---- drawings ----
+    gfx = []
     for a, b in [((0, 0), (W, 0)), ((W, 0), (W, H)), ((W, H), (0, H)), ((0, H), (0, 0))]:
-        graphics.append(
+        gfx.append(
             f"  (gr_line (start {a[0]} {a[1]}) (end {b[0]} {b[1]})\n"
             f'    (stroke (width 0.15) (type solid)) (layer "Edge.Cuts") (tstamp {uid()}))'
         )
     # WeAct keepout
-    wx0, wy0 = weact_sw
-    graphics.append(box(wx0, wy0, wx0 + 38.62, wy0 + 69.10))
-    graphics.append(label("WeAct H562\\nkeepout", (wx0 + 12, wy0 + 32), 1.3))
-    # Zone labels
-    graphics.append(label("J1 AMPSEAL 35 (signals)", (20, 96), 1.1))
-    graphics.append(label("J2 AMPSEAL 23 (power)", (85, 96), 1.1))
-    graphics.append(label("POWER\\nQ1 F1 C bulk\\nbuck + LDO", (52, 80), 1.1))
-    graphics.append(label("U3 TLE8888", (100, 32), 1.2))
-    graphics.append(label("NT1 star GND", (nettie_at[0] - 5, nettie_at[1] - 4), 1.0))
-    graphics.append(
-        label(
-            "CLEAN LAYOUT — only local bridges + PGND pours\\n"
-            "Route remaining nets by hand in Pcbnew\\n"
-            "Edit → Fill All Zones  |  Inspect → DRC\\n"
-            "NAO fabricar sem revisao pin1 / FET / DRC",
-            (65, 20),
-            1.15,
+    gfx.append(rect(weact[0], weact[1], weact[0] + we_w, weact[1] + we_h))
+    gfx.append(text("WeAct H562\\n38.6 x 69.1", (weact[0] + 8, weact[1] + 32), 1.5))
+    # TLE courtyard guide
+    gfx.append(rect(u3_at[0] - 12, u3_at[1] - 12, u3_at[0] + 12, u3_at[1] + 12))
+    gfx.append(text("U3 TLE8888\\nLQFP-100", (u3_at[0] - 8, u3_at[1] - 15), 1.3))
+    # Power zone guide
+    gfx.append(rect(48, 58, 105, 92))
+    gfx.append(text("POWER CHAIN", (55, 95), 1.2))
+    # Labels
+    gfx.append(text("J1  35-pos signals  (rusEFI AMPSEAL RA)", (15, 108), 1.2))
+    gfx.append(text("J2  23-pos power  (TE 770669 RA)", (105, 108), 1.2))
+    gfx.append(text("NT1 star", (nt_at[0] - 4, nt_at[1] - 5), 1.1))
+    gfx.append(
+        text(
+            "LAYOUT LIMPO 160x110 mm\\n"
+            "So bridges locais (sem auto-route)\\n"
+            "Home = zoom  |  Edit > Fill All Zones\\n"
+            "Roteie o resto a mao  |  NAO fabricar ainda",
+            (95, 15),
+            1.3,
         )
     )
 
-    # PGND zones F+B
-    zones = zone_rect(net_code["PGND"], "PGND", "F.Cu", 1, 1, 129, 99)
-    zones += zone_rect(net_code["PGND"], "PGND", "B.Cu", 1, 1, 129, 99)
+    zones = zone(net_code["PGND"], "PGND", "F.Cu") + zone(net_code["PGND"], "PGND", "B.Cu")
 
-    # ---- assemble PCB ----
     pcb = f"""(kicad_pcb (version {PCB_VER}) (generator openems_layout_clean)
 
   (general
     (thickness 1.6)
   )
 
-  (paper "A4")
+  (paper "A3")
   (title_block
     (title "OpenEMS Interface Board v1")
     (date "2026-07-20")
     (rev "v1-clean")
     (company "OpenEMS")
-    (comment 1 "Placement-first scaffold. Local bridges only. Fill zones + hand-route.")
+    (comment 1 "Clean floorplan 160x110. Local bridges only. Hand-route signals.")
   )
 
   (layers
@@ -511,20 +477,20 @@ def main() -> None:
 
 {chr(10).join(net_lines)}
 
-{chr(10).join(graphics)}
+{chr(10).join(gfx)}
 
 {zones}
 
-{chr(10).join(fp_sexprs)}
+{chr(10).join(sexprs)}
 
 {"".join(routes)}
 )
 """
     PCB.write_text(pcb, encoding="utf-8")
-    nseg = pcb.count("(segment ")
-    print(f"Clean layout → {PCB}")
-    print(f"  footprints: {len(parts) + 4}  segments: {nseg} (local only)")
-    print("  Open Pcbnew → Home → Edit → Fill All Zones")
+    print(f"Clean floorplan {W:.0f}x{H:.0f} mm → {PCB.name}")
+    print(f"  segments={pcb.count('(segment ')}  (local only)")
+    print("  Zones: WeAct top-left | Power mid | TLE right | AMPSEAL bottom")
+    print("  Reopen KiCad (close first!) → PCB Editor → Home → Fill All Zones")
 
 
 if __name__ == "__main__":
