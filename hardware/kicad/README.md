@@ -1,31 +1,31 @@
 # OpenEMS — KiCad hardware
 
-## Interface board v1
+## Caminho de fabrico (activo)
 
-**Project:** `openems_interface_v1/openems_interface_v1.kicad_pro`  
-**Guide:** `openems_interface_v1/LEIA-ME.md`  
-**Pinmap:** `openems_interface_v1/resources/pinmap_logical.md`  
-**Vendor review (Speeduino/rusEFI):** `../docs/hw/kicad_vendor_review.md`
-
-### Rebuild PCB (layout limpo)
+**Projecto:** [`../openems_ecu/openems_ecu.kicad_pro`](../openems_ecu/openems_ecu.kicad_pro)  
+**Base:** microRusEFI (`hardware/vendor/hw_microRusEfi`)  
+**Arquitectura:** [`../../docs/hw/microruseefi_as_base.md`](../../docs/hw/microruseefi_as_base.md)
 
 ```bash
-bash hardware/kicad/openems_interface_v1/scripts/build_all.sh
+kicad hardware/openems_ecu/openems_ecu.kicad_pro
 ```
-
-Isto corre `layout_clean.py`: zonas organizadas + **só bridges locais**  
-(sem auto-route emaranhado). Routing fino = manual no Pcbnew.
-
-### Status
 
 | Area | State |
 |------|--------|
-| Hierarchical schematic (10 sheets) | ✅ |
-| Placement J1/J2/WeAct/TLE/power/LDO | ✅ limpo |
-| Pad nets (pinmap) | ✅ |
-| Local bridges (A+B, dual pins, power chain) | ✅ |
-| PGND pours | ✅ Fill Zones |
-| Full signal routing | ❌ hand-route |
-| Fab | ❌ DRC + pin1 first |
+| Cópia de trabalho a partir do mRE | ✅ |
+| TLE8888 no esquemático/PCB vendor | ✅ (auditar) |
+| MCU H562 soldado | ❌ sheet a criar |
+| Conector / ETB OpenEMS | ⏳ decisões abertas |
+| Fab | ❌ só após adaptação + DRC |
 
-⚠️ **Do not order PCBs** without manual DRC and pin1 verification.
+## Scaffold experimental (NÃO fabricar)
+
+**Projecto:** `openems_interface_v1/` — útil para pinmap/docs e protótipo de hierarquia.  
+**Não** é o caminho de fabrico. Ver `openems_interface_v1/LEIA-ME.md`.
+
+Scripts `layout_clean.py` / `build_all.sh` **não** geram a PCB de produção.
+
+## Hellen-One
+
+**Não** usado como base da ECU OpenEMS. Módulos oficiais não têm TLE8888 nem H562.  
+Pode voltar a ser considerado mais tarde só para adaptadores PnP por veículo.

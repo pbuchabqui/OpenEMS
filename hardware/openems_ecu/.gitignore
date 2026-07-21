@@ -1,0 +1,8 @@
+# Local KiCad / OS
+*-backups/
+*.kicad_pcb-bak
+*.kicad_sch-bak
+fp-info-cache
+*.net
+__pycache__/
+.DS_Store

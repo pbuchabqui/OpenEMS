@@ -1,4 +1,9 @@
-# OpenEMS Interface Board v1 — projecto KiCad 7
+# OpenEMS Interface Board v1 — scaffold experimental
+
+> ⚠️ **DEPRECATED como caminho de fabrico (2026-07-21).**  
+> A ECU de produção é **`hardware/openems_ecu/`** (base microRusEFI).  
+> Ver `docs/hw/microruseefi_as_base.md` e `hardware/openems_ecu/README.md`.  
+> Este projecto fica como referência de pinmap/sheets/docs — **não encomendar PCB daqui**.
 
 ## Abrir (sem saber KiCad)
 
@@ -11,7 +16,7 @@
 3. **Schematic Editor** → folha raiz com 10 módulos → duplo-clique para entrar.
 4. **Backspace** para voltar à raiz.
 
-## O que está pronto (scaffold v1 — **não fabricar ainda**)
+## O que está pronto (scaffold v1 — **não fabricar**)
 
 | Item | Estado |
 |------|--------|

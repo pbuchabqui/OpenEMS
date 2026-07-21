@@ -3,8 +3,12 @@
 Ponto de entrada da documentação de hardware. **Ler esta página antes de qualquer outra.**
 
 **Objetivo do projeto:** sair da bancada para a **primeira partida em motor real** (4 cilindros, roda
-60-2, injeção e ignição sequenciais, borboleta eletrónica), com uma placa carrier/interface que recebe
-o coreboard WeAct STM32H562**VGT6**.
+60-2, injeção e ignição sequenciais, borboleta eletrónica).
+
+**Desenho KiCad de produção:** base **microRusEFI** → `hardware/openems_ecu/`  
+(MCU **H562 soldado**, TLE8888-2QK). Arquitectura: [`microruseefi_as_base.md`](microruseefi_as_base.md).  
+WeAct H562 = **só bancada de firmware**, não entra na PCB de produção.  
+Scaffold `hardware/kicad/openems_interface_v1/` e Hellen-One **não** são o caminho de fab.
 
 ---
 
@@ -33,6 +37,7 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 | **KiCad libs Speeduino/rusEFI (review)** | `kicad_vendor_review.md` | inventar footprint se já existe upstream |
 | **BOM candidatos** | `bom_v1_candidates.md` | — |
 | **Esquemático modular (sheets)** | `schematic/README.md` | um PDF monólito sem revisão |
+| **Base de desenho KiCad (mRE → openems_ecu)** | `microruseefi_as_base.md` + `hardware/openems_ecu/` | scaffold `openems_interface_v1`, Hellen-One merge |
 | ~~Condicionamento VR discreto~~ | `vr_input_conditioning.md` | **supersedido** (MAX9926/9924 saiu) |
 
 ### A regra
