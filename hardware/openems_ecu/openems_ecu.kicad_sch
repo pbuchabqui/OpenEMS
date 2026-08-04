@@ -7420,16 +7420,7 @@
 		)
 		(uuid "969d876f-dc87-40bf-9e96-03cbb9ea5e82")
 	)
-	(wire
-		(pts
-			(xy 201.93 156.845) (xy 203.835 156.845)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "986fa662-6dc8-4009-9871-995c9cfdbebc")
-	)
+	
 	(wire
 		(pts
 			(xy 340.36 54.61) (xy 341.63 54.61)
@@ -8794,7 +8785,7 @@
 		)
 		(uuid "bf6104a1-a529-4c00-b4ae-92001543f7ec")
 	)
-	(text "PE1 is yellow- warning\nPE2 is blue - communication\nPE3 is red - fatal\nPE4 is green - running"
+	(text "OpenEMS: INJEN=PE14, IGNEN=PE3 (TLE enables).\nStatus LEDs reassigned — PE1 not bonded on H562 LQFP100."
 		(exclude_from_sim no)
 		(at 372.11 157.48 0)
 		(effects
@@ -9435,16 +9426,7 @@
 		)
 		(uuid "2d16cb66-2809-411d-912c-d3db0f48bd04")
 	)
-	(label "PB11"
-		(at 169.545 203.835 180)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "2d916084-6196-4479-adf2-d8e271fa0c32")
-	)
+	
 	(label "5V1"
 		(at 228.6 147.955 180)
 		(effects
@@ -10625,8 +10607,8 @@
 		)
 		(uuid "aa23bfe3-454b-4a2b-bfe1-101c747eb84e")
 	)
-	(label "PE1"
-		(at 203.835 156.845 0)
+	(label "PE14"
+		(at 203.835 97.155 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -11427,7 +11409,7 @@
 		)
 		(uuid "fcfb3f77-487d-44de-bd4e-948fbeca3220")
 	)
-	(label "PE1"
+	(label "PE14"
 		(at 346.71 148.59 180)
 		(effects
 			(font
@@ -24288,7 +24270,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Sheetfile" "stm32.kicad_sch"
+		(property "Sheetfile" "mcu_h562.kicad_sch"
 			(at 170.18 244.4246 0)
 			(effects
 				(font
@@ -24437,16 +24419,7 @@
 			)
 			(uuid "d25a1e45-06d1-4c1c-9b3a-0fd8abd0bfed")
 		)
-		(pin "PB11" input
-			(at 170.18 203.835 180)
-			(effects
-				(font
-					(size 1.524 1.524)
-				)
-				(justify left)
-			)
-			(uuid "e8558fbd-ea42-43a6-966a-7bd304bdfaad")
-		)
+		
 		(pin "PB13" input
 			(at 170.18 193.04 180)
 			(effects
@@ -24897,16 +24870,7 @@
 			)
 			(uuid "33e40dd5-556d-4de0-ab08-235c61b7ba9f")
 		)
-		(pin "PE1" input
-			(at 201.93 156.845 0)
-			(effects
-				(font
-					(size 1.524 1.524)
-				)
-				(justify right)
-			)
-			(uuid "3a568413-17bd-4a87-b1ac-928e77fa1b6a")
-		)
+		
 		(pin "PB9" input
 			(at 201.93 224.155 0)
 			(effects
@@ -25542,4 +25506,63 @@
 			(page "1")
 		)
 	)
+	(wire
+		(pts
+			(xy 201.93 97.155) (xy 203.835 97.155)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "bdb7adfe-031c-4910-b380-3c03f2bbd7a4")
+	)
+
+	(label "PE14"
+		(at 230.0 186.055 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.254)
+				(bold yes)
+			)
+			(justify left bottom)
+		)
+		(uuid "28887a37-f974-4ab0-8b47-bf261a711ba6")
+	)
+
+	(label "PE3"
+		(at 230.0 183.515 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.254)
+				(bold yes)
+			)
+			(justify left bottom)
+		)
+		(uuid "7e8af6bf-fcb0-417a-981b-0b5f431740b6")
+	)
+
+	(wire
+		(pts
+			(xy 228.6 186.055) (xy 230.0 186.055)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9e351567-914a-4be6-947f-40a6639ef8f9")
+	)
+
+	(wire
+		(pts
+			(xy 228.6 183.515) (xy 230.0 183.515)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a0a6b0f1-4927-42e7-93c4-dfcc03dffc68")
+	)
+
 )

@@ -111,7 +111,7 @@ Pinos do MCU **tier A**, de `out_pins.h`. Atribuição `IN`→`OUT` é **fixa no
 | IGN2 | `PE11` | **33** IN6 | **97** IGN2 | `J2.IGN2` |
 | IGN3 | `PE13` | **34** IN7 | **98** IGN3 | `J2.IGN3` |
 | IGN4 | `PE15` | **35** IN8 | **99** IGN4 | `J2.IGN4` |
-| **INJEN** | `PE1` | **24** INJEN | — | — |
+| **INJEN** | `PE14` | **24** INJEN | — | ⚠️ não PE1: H562 LQFP100 não bonda PE1 |
 | **IGNEN** | `PE3` | **27** IGNEN | — | — |
 
 - **Sem resistores de pull-down de gate**: os `IN*` têm pull-down interno.

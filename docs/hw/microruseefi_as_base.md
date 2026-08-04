@@ -47,7 +47,7 @@ Obrigações de design com MCU soldado: SWD acessível, USB, BOOT0, decoupling p
 |-----------|----------|---------------|
 | Raiz | `micro_rusEFI.kicad_sch` | → `openems_ecu.kicad_sch` |
 | TLE8888 | `TLE8888-1QK.kicad_sch` | Adoptar; auditar vs `tle8888_pinout.md` |
-| MCU | `stm32.kicad_sch` (F7/F4) | **Substituir** por `mcu_h562.kicad_sch` |
+| MCU | `stm32.kicad_sch` (F7/F4) | ✅ **`mcu_h562.kicad_sch`** (H562VGTx, INJEN=PE14) |
 | ADC | `adc.kicad_sch` | Adaptar pinos H562 |
 | H-bridge | `TLE9201SG.kicad_sch` | Manter ou trocar por BTS7960 |
 | hi-lo | `hi-lo.kicad_sch` | USB / níveis |
@@ -78,9 +78,10 @@ Obrigações de design com MCU soldado: SWD acessível, USB, BOOT0, decoupling p
 ## Próximos passos (implementação)
 
 1. ~~`hardware/openems_ecu/` = cópia de trabalho do mRE~~ ✅  
-2. Sheet `mcu_h562` + footprint LQFP100 (substituir `stm32.kicad_sch` F407)  
-3. Auditoria TLE + decisões conector/ETB  
-4. Layout e Gerber a partir do PCB real  
+2. ~~Sheet `mcu_h562` + footprint LQFP100~~ ✅ (`hardware/openems_ecu/mcu_h562.kicad_sch`)  
+3. ~~Rework 6 pads H562 no PCB + VCAP 2,2 µF~~ ✅ (cobre + C25/C100; DRC visual pendente)  
+4. Auditoria TLE + decisões conector/ETB  
+5. Layout final / refill zones / Gerber  
 
 Abrir: `kicad hardware/openems_ecu/openems_ecu.kicad_pro`  
 

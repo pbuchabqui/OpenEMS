@@ -43,17 +43,19 @@ Neste working tree as libs estão em `rusefi_lib/` e `rusefi_lib_external/`.
 | `openems_ecu.kicad_sch` | Raiz hierárquica |
 | `openems_ecu.kicad_pcb` | Layout (herdado do mRE) |
 | `TLE8888-1QK.kicad_sch` | Hub TLE8888 (auditar vs docs OpenEMS) |
-| `stm32.kicad_sch` | MCU **vendor F7/F4** — a substituir por H562 |
+| `mcu_h562.kicad_sch` | MCU **STM32H562VGTx** LQFP100 (migrado do `stm32.kicad_sch` F407) |
+| `stm32.kicad_sch` | Arquivo vendor F407 — referência; sheet activo é `mcu_h562` |
 | `TLE9201SG.kicad_sch` | ETB H-bridge mRE |
 | `adc.kicad_sch`, `hi-lo.kicad_sch`, `pair.kicad_sch`, … | I/O e suporte |
 
 ## Plano de adaptação OpenEMS
 
-1. **MCU:** substituir sheet `stm32` → `mcu_h562` (LQFP100 soldado, não WeAct).  
-2. **TLE:** cruzar pinos/nets com `docs/hw/tle8888_pinout.md` e `netlist_v1.md`.  
-3. **Conector:** default OpenEMS AMPSEAL 35+23 *ou* manter 48-pin mRE (decisão aberta).  
-4. **ETB:** TLE9201 (HW mRE) vs BTS7960 (firmware actual) — decisão aberta.  
-5. Layout / DRC / Gerber a partir **deste** PCB, não do scaffold.
+1. ~~**MCU:** substituir sheet `stm32` → `mcu_h562`~~ ✅ (`mcu_h562.kicad_sch`, INJEN=`PE14`).  
+2. ~~**Rework 6 pads H562 no PCB**~~ ✅ (VCAP×2 + VDDUSB + VSSA/VSS; `INJ_EN`/`IGN_EN`→PE14/PE3).  
+3. **TLE:** cruzar pinos/nets com `docs/hw/tle8888_pinout.md` e `netlist_v1.md`.  
+4. **Conector:** default OpenEMS AMPSEAL 35+23 *ou* manter 48-pin mRE (decisão aberta).  
+5. **ETB:** TLE9201 (HW mRE) vs BTS7960 (firmware actual) — decisão aberta.  
+6. Layout / DRC / Gerber a partir **deste** PCB, não do scaffold.
 
 ## Créditos
 

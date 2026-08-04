@@ -499,7 +499,7 @@ static void openems_init() noexcept {
     ems::hal::uart0_init(115200u);
     ems::hal::uart0_enable_rx();  // RX fica desligado por padrão (uart.cpp:61)
     ems::hal::tle8888_init();
-    // Enables de hardware do estágio de potência (INJEN=PE1 / IGNEN=PE3).
+    // Enables de hardware do estágio de potência (INJEN=PE14 / IGNEN=PE3).
     // Nasceram LOW em out_pins_hw_init(); só sobem se o TLE8888 confirmou
     // comunicação E configuração (direct drive, VR, enables por canal). Se o CI
     // não respondeu, injecção e ignição ficam inibidas por hardware.

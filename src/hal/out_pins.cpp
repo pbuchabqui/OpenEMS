@@ -23,9 +23,11 @@ namespace ems::hal {
 
 #if EMS_BOARD_IS_VGT6
 // TLE8888 LQFP-100: INJEN = package pin 24, IGNEN = pin 27 (DS Rev 1.2 §3;
-// docs/hw/tle8888_pinout.md). MCU: PE1 / PE3.
-static constexpr uint8_t kInjEnPin = 1U;  // PE1
-static constexpr uint8_t kIgnEnPin = 3U;  // PE3
+// docs/hw/tle8888_pinout.md).
+// MCU: PE14 / PE3 — ⚠️ STM32H562VGTx LQFP100 **não bonda PE1** (pad 98 = VCAP).
+// PE14 é pad 45 nos F407 e H562 (compatível com cobre mRE nesse pino).
+static constexpr uint8_t kInjEnPin = 14U;  // PE14
+static constexpr uint8_t kIgnEnPin = 3U;   // PE3
 #endif
 
 void out_pins_hw_init() noexcept {
@@ -35,7 +37,7 @@ void out_pins_hw_init() noexcept {
     // VGT6: all INJ/IGN on GPIOE — push-pull LOW (active-high actuators).
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
     for (volatile uint32_t d = 0u; d < 8u; ++d) {}
-    // 8 canais INJ/IGN + os 2 enables do estágio de potência (INJEN=PE1,
+    // 8 canais INJ/IGN + os 2 enables do estágio de potência (INJEN=PE14,
     // IGNEN=PE3). Os enables entram na MESMA disciplina de arranque seguro:
     // push-pull, sem pull, e LOW = desabilitado.
     static const uint8_t pe_pins[] = {0U, 2U, 4U, 6U, 9U, 11U, 13U, 15U,

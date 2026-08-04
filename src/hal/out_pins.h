@@ -80,7 +80,8 @@ void out_pins_hw_init() noexcept;
 
 /**
  * Enables de hardware do estágio de potência (TLE8888, só VGT6):
- *   INJEN = PE1  → habilita OUT1–OUT4 (os 4 injectores)
+ *   INJEN = PE14 → habilita OUT1–OUT4 (os 4 injectores)
+ *                 (PE1 não existe no H562VGTx LQFP100)
  *   IGNEN = PE3  → habilita IGN1–IGN4 (as 4 bobinas)
  *
  * São pinos de enable **do próprio CI** (pinos 24 e 27), independentes do SPI e

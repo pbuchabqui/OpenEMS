@@ -180,7 +180,7 @@ firmware são satisfeitos nativamente.
 |---|---|---|
 | INJ1–4 | `PE0/PE2/PE4/PE6` | IN1–IN4 (**inalterado**) |
 | IGN1–4 | `PE9/PE11/PE13/PE15` | IN5–IN8 (**inalterado**) |
-| **INJEN** | `PE1` | pino 24 — enable de hardware dos 4 injetores |
+| **INJEN** | `PE14` | pino 24 — enable de hardware dos 4 injetores (⚠️ não `PE1`: H562VGTx LQFP100 não bonda esse pino) |
 | **IGNEN** | `PE3` | pino 27 — enable de hardware das 4 bobinas |
 | Bomba / ventoinha | `PE10` / `PE12` | IN9/IN10 → 2 saídas de relé (OUT14–20, 0,6 A) |
 | **VVT escape / admissão** | `PB6` / `PB7` (TIM4_CH1/CH2, **15 Hz**) | IN11/IN12 → **OUT5/OUT6** (4,5 A, clamp ativo 50–60 V) |
@@ -651,7 +651,7 @@ Nenhuma escolha de componente sobrevive a um layout ruim:
 |---|---|
 | ~~**`src/hal/tle8888.cpp` — REESCREVER**~~ ✅ | Mapa + unlock + InConfig + DD/OE + OE_SET. Restante: eco de endereço, fingerprint consultivo, silício |
 | `src/engine/auxiliaries.cpp` (103-106) | Bomba/ventoinha `PB12`/`PB13` → `PE10`/`PE12`, condicional por board. **Obrigatório**: sem isso o SPI2 não existe |
-| `src/hal/stm32h562/timer.cpp` ou `out_pins` | Adicionar `INJEN`=`PE1` e `IGNEN`=`PE3` como saídas, altas após init seguro |
+| `src/hal/stm32h562/timer.cpp` ou `out_pins` | Adicionar `INJEN`=`PE14` e `IGNEN`=`PE3` como saídas, altas após init seguro |
 | `src/drv/sensors.cpp` (~832–848) | Ler VBATT de `PC3`/INP13 via `vbatt_raw_to_mv()`; remover o literal 12000 |
 | `src/hal/adc.cpp` | Reatribuir INP13/`PC3` de EWG_POS → VBATT |
 | `src/engine/ewg_control.cpp` (59-64) | Guardar/desabilitar o feedback de posição do EWG enquanto o canal `PC3` for VBATT |
@@ -940,9 +940,10 @@ escrevem `GPIOB_BSRR` nos bits 12/13, ou seja **chacoalham CS e SCK** do CI.
 `tle_write(REG_WD_TRIG, 0x01u)` — o **watchdog do CI**. Sem SCK o watchdog nunca é alimentado e o
 TLE8888 **desliga as saídas**: sem injeção e sem ignição. Deixa de ser cosmético e vira "o motor não pega".
 
-**Resolução: mover bomba e ventoinha para `GPIOE`.** Pinos livres confirmados no VGT6 (o porto está
-todo bondado, já que PE0–PE15 são usados até o PE15): **`PE1`, `PE3`, `PE10`, `PE12`, `PE14`**.
-- **Bomba → `PE10`, ventoinha → `PE12`** (sobram PE1/PE3/PE14).
+**Resolução: mover bomba e ventoinha para `GPIOE`.** Pinos livres confirmados no VGT6: **`PE3`,
+`PE10`, `PE12`, `PE14`** (⚠️ `PE1` foi descartado: o LQFP100 do H562VGTx não bonda esse pad — pad 98
+é `VCAP` — ver `stm32h562_ref.md` §3.1).
+- **Bomba → `PE10`, ventoinha → `PE12`** (sobram PE3/PE14, usados por IGNEN/INJEN).
 - Seguro conviver com INJ/IGN no mesmo porto: o acionamento é por **BSRR**, que é set/reset atômico por
   bit e **não** faz read-modify-write — escrever o bit 10 não perturba os bits 0/2/4/6. Só o `MODER` é
   RMW, e roda uma vez no init, antes do scheduler.
@@ -1049,13 +1050,14 @@ State aparece na telemetria em vez de se manifestar como "o motor morreu sem raz
 
 ### INJEN / IGNEN — implementados
 
-`INJEN`=**PE1** (pino 24) e `IGNEN`=**PE3** (pino 27), configurados em `out_pins_hw_init()` na **mesma
-escrita BSRR atómica** dos 8 canais de INJ/IGN, e a **LOW = desabilitado**. Sobem via
-`power_stage_enable()`, chamada em `main_stm32.cpp` logo após `tle8888_init()` e **condicionada a
-`tle8888_ok()`** — se o CI não respondeu, injecção e ignição ficam inibidas por hardware.
+`INJEN`=**PE14** (pino 24, ⚠️ não `PE1` — não bondado no H562VGTx LQFP100) e `IGNEN`=**PE3** (pino 27),
+configurados em `out_pins_hw_init()` na **mesma escrita BSRR atómica** dos 8 canais de INJ/IGN, e a
+**LOW = desabilitado**. Sobem via `power_stage_enable()`, chamada em `main_stm32.cpp` logo após
+`tle8888_init()` e **condicionada a `tle8888_ok()`** — se o CI não respondeu, injecção e ignição ficam
+inibidas por hardware.
 
 É um caminho de corte independente do SPI *e* do escalonador, que o estágio discreto não oferecia.
-No RGT6 é no-op. Sobra `PE14` livre em GPIOE.
+No RGT6 é no-op.
 
 ### SDMMC — sem conflito hoje, agora impossível amanhã
 

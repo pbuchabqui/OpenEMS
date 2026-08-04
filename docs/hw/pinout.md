@@ -112,6 +112,7 @@ DIR/PWM em **PE\*** (BSRR único, fiação limpa no LQFP100). No RGT6 esses pino
 |---|---|---|
 | INJ1–4 | **PE0 / PE2 / PE4 / PE6** | BSRR GPIOE |
 | IGN1–4 | **PE9 / PE11 / PE13 / PE15** | BSRR GPIOE |
+| INJEN / IGNEN | **PE14 / PE3** | enables TLE8888 (não PE1 — sem bond no LQFP100) |
 
 Ordem de canais BSRR = `ECU_CH_*`:
 `[INJ3, INJ4, INJ1, INJ2, IGN4, IGN3, IGN2, IGN1]`. Actuadores active-high;
@@ -163,10 +164,11 @@ usa histerese CLT 95 °C liga / 90 °C desliga. Ambos suspensos durante
 SPI2_SCK no arranque** — o CI nunca era clockado e o seu watchdog nunca
 alimentado, o que com o TLE8888 montado desliga injecção e ignição.
 
-No VGT6 os relés passaram para `GPIOE`, que tem os pinos livres (PE1, PE3, PE10,
-PE12, PE14 — os restantes são INJ PE0/2/4/6, IGN PE9/11/13/15, ETB PE5/7/8).
-Partilhar o porto com INJ/IGN é seguro: o acionamento é por **BSRR**, set/reset
-atómico por bit, sem read-modify-write.
+No VGT6 os relés passaram para `GPIOE` (`PE10`/`PE12`). Os enables do TLE8888
+são `INJEN=PE14` e `IGNEN=PE3`. ⚠️ **`PE1` não existe no STM32H562VGTx LQFP100**
+(pad 98 = VCAP) — ver `stm32h562_ref.md` §3.1. Restantes PE: INJ PE0/2/4/6,
+IGN PE9/11/13/15, ETB PE5/7/8. Partilhar o porto com INJ/IGN é seguro: o
+acionamento é por **BSRR**, set/reset atómico por bit, sem read-modify-write.
 
 > ⚠️ **O RGT6 mantém o conflito** — `PB12`/`PB13` continuam a colidir com o SPI2
 > lá. O RGT6 não é o alvo da placa de interface; se vier a ser, tem de resolver

@@ -37,7 +37,7 @@ VDDIO (pino 20) = rail 3,3 V do MCU (mesma lógica dos direct-drive INx).
 | SPI SCK | PB13 | **7** | FCLP | |
 | SPI mode | — | **6** | SIN | **→ AGND** |
 | SPI mode | — | **8** | FCLN | **→ VDDIO** |
-| INJEN | PE1 | **24** | INJEN | enable OUT1–4 |
+| INJEN | PE14 | **24** | INJEN | enable OUT1–4 (⚠️ não PE1: H562VGTx LQFP100 não bonda esse pad) |
 | IGNEN | PE3 | **27** | IGNEN | enable IGN1–4 |
 | INJ1–4 | PE0/2/4/6 | **28–31** | IN1–IN4 | DD fixo → OUT1–4 |
 | IGN1–4 | PE9/11/13/15 | **32–35** | IN5–IN8 | DD fixo → IGN1–4 |

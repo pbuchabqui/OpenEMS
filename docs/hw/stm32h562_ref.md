@@ -139,6 +139,16 @@ Não existe COMP1_IRQn neste device. O knock usa ADC1_IN6 (PA5) com threshold so
 Fonte: STM32CubeMX .ioc examples + GPIO_AF defines em stm32h5xx_hal_gpio_ex.h.
 Registradores: `GPIOx_AFRL` (pinos 0-7, 4 bits/pino) e `GPIOx_AFRH` (pinos 8-15).
 
+### 3.1 Package LQFP100 — `PE1` não bondado
+
+No STM32H562VGTx (LQFP100), o pad físico **98 é `VCAP`** (capacitor de regulador interno), não `PE1`.
+`PE1` existe no die mas não é trazido a um pino do LQFP100 — só aparece em packages maiores (LQFP144+).
+Consequência: qualquer função atribuída a `PE1` no projeto (ex.: `INJEN`) tem de migrar para outro pino
+de `GPIOE` livre — decidido **`PE14`** (`docs/hw/pinout.md`, `docs/hw/interface_board_v1.md`).
+
+**VCAP (pads 48 e 98):** cada um com **2,2 µF** X7R a GND (confirmado WeAct H562VGT6 V1.0 sch).
+**VDDUSB (pad 73):** amarrar a VDD 3V3 local. Ver `mcu_f407_to_h562_pin_map.md`.
+
 ```
 Pino   AF#   Função           Uso no OpenEMS
 ──────────────────────────────────────────────────────────────

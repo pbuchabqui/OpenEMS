@@ -76,7 +76,7 @@ Fonte: `docs/hw/netlist_v1.md` (secção Conector) + `weact_h562_schematic.md`.
 | `MCU_PB12–15` | SPI2 CS/SCK/MISO/MOSI |
 | `MCU_PC0–5` | APP1 / OIL / APP2 / VBATT / FUEL / ETB_TPS2 |
 | `MCU_PE0/2/4/6` | INJ1–4 |
-| `MCU_PE1/3` | INJEN / IGNEN |
+| `MCU_PE14/3` | INJEN / IGNEN |
 | `MCU_PE5/7/8` | ETB PWM / DIR1 / DIR2 |
 | `MCU_PE9/11/13/15` | IGN1–4 |
 | `MCU_PE10/12` | Pump / Fan |
