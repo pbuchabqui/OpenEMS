@@ -25,12 +25,12 @@ componentes. Um sheet por módulo = revisão barata e paralelizável.
 
 ## Hierarquia KiCad (projecto gerado)
 
-**Abrir:** `hardware/kicad/openems_interface_v1/openems_interface_v1.kicad_pro`  
-**Guia:** `hardware/kicad/openems_interface_v1/LEIA-ME.md`  
-**Pinmap lógico:** `hardware/kicad/openems_interface_v1/resources/pinmap_logical.md`
+**Abrir (produção):** `hardware/openems_ecu/openems_ecu.kicad_pro`  
+**Arquitectura:** `docs/hw/microruseefi_as_base.md`  
+**Pinmap lógico:** `docs/hw/pinmap_logical.md`
 
 ```
-openems_interface_v1.kicad_sch          (root)
+openems_ecu.kicad_sch (produção)          (root)
 ├── sheets/01_power.kicad_sch
 ├── sheets/02_ckp.kicad_sch
 ├── sheets/03_cmp.kicad_sch

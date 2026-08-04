@@ -1,1 +1,0 @@
-openems_ecu from microRusEFI vendor; OpenEMS adaptation in progress

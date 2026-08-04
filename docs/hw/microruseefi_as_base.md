@@ -2,14 +2,13 @@
 
 > **Decisão (2026-07-21):** o desenho da ECU OpenEMS parte do projecto KiCad  
 > [rusefi/hw_microRusEfi](https://github.com/rusefi/hw_microRusEfi) (rev. vendor ~0.5.x),  
-> **não** do scaffold gerado em `hardware/kicad/openems_interface_v1/` nem do merge Hellen-One  
-> como caminho primário de fabrico.
+> **não** de um scaffold KiCad paralelo nem do merge Hellen-One como board de produção.
 
 ## Porquê
 
 1. **TLE8888-2QK** já está no esquemático e no layout do microRusEFI (mRE) — alinhado ao firmware OpenEMS.  
 2. Hierarquia real (TLE, ADC, MCU, H-bridge, hi-lo, pairs) e **PCB já fabricável**.  
-3. Evita reinventar cobre com scripts (o scaffold mostrou-se ilegível no Pcbnew).  
+3. Evita reinventar cobre fora do layout mRE já fabricável.  
 4. Hellen-One continua útil **depois**, para adaptadores PnP por carro (submodule no próprio mRE).
 
 ## Vendor no monorepo
@@ -63,7 +62,7 @@ Obrigações de design com MCU soldado: SWD acessível, USB, BOOT0, decoupling p
 
 ## O que **não** fazer
 
-- Não gerar o PCB final com `layout_clean.py` / `build_all.sh` do scaffold.  
+- Não reinventar a PCB fora de `hardware/openems_ecu/`.  
 - Não montar WeAct na ECU de motor (grau consumidor + headers).  
 - Não assumir pinout F767 = H562 — mapa explícito obrigatório.
 

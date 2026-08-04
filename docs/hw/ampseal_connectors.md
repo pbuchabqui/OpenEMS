@@ -75,7 +75,7 @@ caixa e alívio de tração em cima disto.
 
 | Header | Footprint | Path |
 |--------|-----------|------|
-| 23 RA `1-770669-1` | `TE_770669_AMPSEAL_23_RA` | `hardware/kicad/openems_interface_v1/libs/OpenEMS.pretty/` |
+| 23 RA `1-770669-1` | (footprint TE / a importar no `openems_ecu` se AMPSEAL) | ver `docs/hw/bom_v1_candidates.md` |
 | 35 RA `1-776180-1` | `TE_776180_AMPSEAL_35_RA` | idem |
 
 Cotas: pitch 4 mm, furo Ø1.75, mount Ø2.85 @ 6.5 mm. Ver `libs/OpenEMS.pretty/README.md`.

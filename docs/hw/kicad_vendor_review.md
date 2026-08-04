@@ -2,7 +2,7 @@
 
 > **Data:** 2026-07-20  
 > **Regra de projecto:** consultar Speeduino/rusEFI **antes** de inventar HW.  
-> Clones de referência (não versionados no git): `hardware/kicad/vendor/`
+> Clones de referência: usar o submodule `hardware/vendor/hw_microRusEfi` (e submodules internos).
 
 ## Fontes
 
@@ -15,7 +15,8 @@
 Re-clonar:
 
 ```bash
-mkdir -p hardware/kicad/vendor && cd hardware/kicad/vendor
+git submodule update --init hardware/vendor/hw_microRusEfi
+# cd hardware/vendor/hw_microRusEfi && git submodule update --init --recursive
 git clone --depth 1 https://github.com/rusefi/kicad6-libraries.git rusefi-kicad6-libraries
 git clone --depth 1 https://github.com/rusefi/kicad-legacy-libraries.git rusefi-kicad-legacy
 git clone --depth 1 https://github.com/speeduino/kicad-parts.git speeduino-kicad-parts

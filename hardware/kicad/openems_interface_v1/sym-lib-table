@@ -1,4 +1,0 @@
-(sym_lib_table
-  (version 7)
-  (lib (name "OpenEMS")(type "KiCad")(uri "${KIPRJMOD}/libs/OpenEMS.kicad_sym")(options "")(descr "OpenEMS interface board symbols"))
-)
