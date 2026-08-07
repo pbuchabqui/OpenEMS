@@ -32,7 +32,9 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 | Registadores do TLE8888 | `src/hal/tle8888_regs.h` | qualquer doc |
 | Arquitetura, blocos, BOM, **decisões e porquês** | `interface_board_v1.md` | — |
 | Alimentação, condicionamento, atuadores, conector, terra | [`../wiring_diagram.md`](../wiring_diagram.md) | — |
-| Ligações pino-a-pino (netlist) | `netlist_v1.md` | — |
+| **Números de pino e AF do MCU (v2)** | [`pinout_v2.md`](pinout_v2.md) | inventar/copiar de spec externa |
+| **Arquitectura v2 (MC33810/L9960T/TPS65381A/CJ125)** | [`architecture_v2.md`](architecture_v2.md) | — |
+| ~~Ligações pino-a-pino (netlist)~~ | `netlist_v1.md` | ⚠️ **pré-v2** — blocos do TLE8888 anulados |
 | Contraprova do mapa TLE8888 | `tle8888_crosscheck.md` | — |
 | **Pinos de package LQFP-100 do TLE8888** | `tle8888_pinout.md` | inventar números |
 | Registadores/periféricos do MCU | `stm32h562_ref.md` | — |
@@ -93,6 +95,11 @@ Memória de projecto: `always-check-speeduino-rusefi-ms` (já invocada no plano 
 ---
 
 ## 2. Registo de decisões
+
+🔄 **ATENÇÃO (2026-08-07):** a adopção da arquitectura v2 **anulou 7 destas decisões**
+(hub TLE8888, direct drive pelo TLE, CKP por VR do TLE, CAN pelo TLE, EWG diferido,
+racional da `-2QK`, e a rejeição de pontes de 2 pinos). O que anula o quê está em
+[`architecture_v2.md`](architecture_v2.md) — **ler antes desta tabela**.
 
 Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundamentação em
 `interface_board_v1.md` salvo indicação em contrário.
