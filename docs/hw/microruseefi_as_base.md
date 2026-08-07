@@ -70,9 +70,14 @@ Obrigações de design com MCU soldado: SWD acessível, USB, BOOT0, decoupling p
 
 | Artefacto | Papel |
 |-----------|--------|
-| `docs/hw/netlist_v1.md`, `tle8888_pinout.md` | O *quê* ligar (decisões OpenEMS) |
-| `src/hal/out_pins.h`, `adc.h` | Pinos firmware H562 |
-| Projecto mRE / `openems_ecu` | *Como* está desenhado no KiCad (após migração) |
+| `docs/hw/netlist_v1.md`, `tle8888_pinout.md` | O *quê* ligar (alvo eléctrico OpenEMS / board limpo) |
+| `docs/hw/pinout_mre_bringup.md` | **Bring-up:** GPIO = cobre [hw_microRusEfi](https://github.com/rusefi/hw_microRusEfi.git) |
+| `src/hal/out_pins.h` + `BOARD=mre` | Firmware H562 no pinout mRE |
+| `src/hal/out_pins.h` + `BOARD=vgt6` | Firmware mapa PE* OpenEMS (WeAct / PCB nativo) |
+| Projecto mRE / `openems_ecu` | *Como* está desenhado no KiCad |
+
+**H562 na PCB mRE:** sim — land pattern LQFP100 igual; 6 pads power H5; firmware
+`make firmware BOARD=mre` (não forçar re-route VGT6 neste board).
 
 ## Próximos passos (implementação)
 

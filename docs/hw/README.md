@@ -22,6 +22,7 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 | Assunto | Fonte de verdade | ⚠️ NÃO usar |
 |---|---|---|
 | Mapa de pinos RGT6 vs VGT6 | `pinout.md` | `wiring_diagram.md` |
+| H562 no cobre microRusEFI (bring-up) | `pinout_mre_bringup.md` | forçar VGT6 PE* no PCB mRE |
 | INJ/IGN, enables, BSRR | `src/hal/out_pins.h` | qualquer doc |
 | Canais e pinos de ADC | `src/hal/adc.h` | qualquer doc |
 | Registadores do TLE8888 | `src/hal/tle8888_regs.h` | qualquer doc |
