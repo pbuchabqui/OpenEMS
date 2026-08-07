@@ -45,11 +45,13 @@ para revisão barata e paralelizável.
 | `sheets/08_usb` | USB com isolador galvânico | `08_usb.md` | ✅ sobrevive |
 | `sheets/09_connectors` | AMPSEAL J1 (35 sinais) + J2 (23 potência) | `09_connectors_weact.md` | ✅ sobrevive — footprint do J2 (23 vias) ainda não existe, ver abaixo |
 | `sheets/10_knock_dnp` | Knock — só footprint, DNP na v1 | `10_knock_dnp.md` | ✅ sobrevive, continua diferido |
-| `sheets/11_mcu_h562` | **MCU H562VGT6** — decoupling, cristal, BOOT0, SWD, VCAP, VREF+ | ⚠️ **não existe** | — |
+| `sheets/11_mcu_h562` | **MCU H562VGT6** — decoupling, cristal, BOOT0, SWD, VCAP, VREF+ | `11_mcu_h562.md` ✅ | ✅ escrito de raiz p/ v2 (arquitectura-agnóstico — o MCU é igual em v1/v2) |
 
-⚠️ A sheet 11 não tem doc de bloco. No fork mRE o MCU vinha herdado (`stm32.kicad_sch`);
-num projecto em branco tem de ser desenhado, e o `docs/hw/schematic/` nunca teve um bloco
-para ele. Escrever `11_mcu_h562.md` **antes** de desenhar a sheet.
+✅ **Doc do bloco 11 escrito (2026-08-07).** Pinos verificados contra o symbol oficial;
+VCAP 2×2,2 µF confirmado por fonte primária H562 real (WeAct); decoupling por VDD e
+crystal adaptados de `stm32.kicad_sch` da rusEFI (F407, mesma filosofia ST). **Falta só**
+o part number do cristal 8 MHz — os caps de carga não podem fechar sem o CL do datasheet.
+**Próximo passo:** desenhar a sheet no KiCad.
 
 ⚠️ **A sheet 04 é a maior lacuna estrutural do esqueleto.** Foi criada a pensar num hub
 único; a arquitectura v2 não tem hub — tem quatro CIs cada um com o seu SPI CS. A sheet
@@ -109,8 +111,9 @@ A regra §1b do [`docs/hw/README.md`](../../docs/hw/README.md) é obrigatória e
 agora a **todos** os blocos, não só aos novos: consultar Speeduino/rusEFI antes de
 desenhar, e registar o que se adopta, adapta e rejeita.
 
-1. Escrever `docs/hw/schematic/11_mcu_h562.md`
-2. Desenhar `11_mcu_h562` → é o que dá pinos a todos os outros blocos
+1. ~~Escrever `docs/hw/schematic/11_mcu_h562.md`~~ ✅ feito (2026-08-07)
+2. Desenhar `11_mcu_h562` → é o que dá pinos a todos os outros blocos. Falta fechar o
+   part number do cristal 8 MHz (caps de carga dependem do CL do datasheet)
 3. ~~`04_tle8888_hub` → o hub de que quase tudo depende~~ **sem sentido na v2** — não há
    hub único. Decidir primeiro a divisão de sheets (ver aviso acima), *depois*:
    - `TPS65381A-Q1` (PMIC) → é o que dá `+3V3`/`+5V` a tudo o resto, faz as vezes do

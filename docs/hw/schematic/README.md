@@ -24,13 +24,15 @@ componentes. Um sheet por módulo = revisão barata e paralelizável.
 | 8 | USB isolado | `08_usb.md` | ✅ | ✅ sobrevive |
 | 9 | Conectores + WeAct | `09_connectors_weact.md` | ✅ | ✅ sobrevive — falta footprint AMPSEAL 23 |
 | 10 | Knock (footprint only) | `10_knock_dnp.md` | ✅ | ✅ sobrevive, diferido |
-| 11 | **MCU H562VGT6** (decoupling, cristal, BOOT0, SWD, VCAP, VREF+) | `11_mcu_h562.md` | ⚠️ **por escrever** | — |
+| 11 | **MCU H562VGT6** (decoupling, cristal, BOOT0, SWD, VCAP, VREF+) | `11_mcu_h562.md` | ✅ | — |
 
-⚠️ **A lacuna do bloco 11:** enquanto a base era o fork microRusEFI, o sheet do MCU vinha
-herdado (`stm32.kicad_sch` → `mcu_h562.kicad_sch`) e nunca precisou de doc próprio. Com o
-projecto em branco isso deixou de ser verdade — o MCU tem de ser desenhado, e é o bloco de
-que todos os outros dependem para ter pinos. **Escrever `11_mcu_h562.md` antes de desenhar
-a sheet.**
+✅ **Bloco 11 fechado (2026-08-07).** Enquanto a base era o fork microRusEFI, o sheet do
+MCU vinha herdado (`stm32.kicad_sch` → `mcu_h562.kicad_sch`) e nunca precisou de doc
+próprio. Com o projecto em branco isso deixou de ser verdade — o MCU teve de ser
+desenhado do zero, verificado contra o symbol oficial KiCad + `stm32h562_ref.md`
+(WeAct H562, board real) + `stm32.kicad_sch` da rusEFI (F407, mesma filosofia ST).
+**Próximo passo:** desenhar a sheet `11_mcu_h562` no KiCad — só falta escolher o part
+number do cristal 8 MHz para fechar os caps de carga.
 
 **Fonte de verdade cruzada:** porquê → `interface_board_v1.md` (v1) +
 [`../architecture_v2.md`](../architecture_v2.md) (o que a v2 anulou/mudou); pinos →
@@ -55,7 +57,7 @@ openems_v1.kicad_sch                      (root)
 ├── sheets/08_usb.kicad_sch
 ├── sheets/09_connectors.kicad_sch
 ├── sheets/10_knock_dnp.kicad_sch
-└── sheets/11_mcu_h562.kicad_sch          ← novo, sem doc de bloco
+└── sheets/11_mcu_h562.kicad_sch          ← sheet vazia, doc de bloco ✅ escrito
 ```
 
 Todas as sheets acima estão **vazias** — nenhuma foi desenhada ainda, incluindo a `04`.
