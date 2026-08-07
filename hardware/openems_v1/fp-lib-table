@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "rusefi_ref")(type "KiCad")(uri "${KIPRJMOD}/lib/rusefi_ref.pretty")(options "")(descr "Footprints verificados herdados do rusEFI/microRusEFI — AMPSEAL 35 e Net-Tie"))
+)

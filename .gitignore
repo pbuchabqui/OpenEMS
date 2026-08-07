@@ -92,6 +92,10 @@ node_modules/
 META-INF/
 
 # --- Hardware / KiCad local ---
+hardware/**/*.kicad_prl
+hardware/**/.mcp-backups/
+hardware/**/*-backups/
+hardware/**/fp-info-cache
 hardware/openems_ecu/.history/
 hardware/openems_ecu/*-backups/
 hardware/openems_ecu/*.kicad_prl

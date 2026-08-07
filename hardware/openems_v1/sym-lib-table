@@ -1,0 +1,5 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "tle8888qk")(type "KiCad")(uri "${KIPRJMOD}/lib/tle8888qk.kicad_sym")(options "")(descr "TLE8888 LQFP-100 — pinout verificado DS Rev 1.2 (docs/hw/tle8888_pinout.md)"))
+  (lib (name "pesd1can")(type "KiCad")(uri "${KIPRJMOD}/lib/pesd1can.kicad_sym")(options "")(descr "PESD1CAN — proteccao ESD do barramento CAN"))
+)
