@@ -1,6 +1,18 @@
-# Sheet 06 — ETB (BTS7960 @ 10 kHz)
+# Sheet 06 — ETB — ⚠️ STALE, descreve o BTS7960
 
-## Função
+> ⚠️ **Desactualizado (2026-08-07).** A arquitectura v2 substitui o módulo BTS7960 pelo
+> **L9960T** (ponte dupla, PWM+DIR+SPI) — o mesmo CI passa a servir **ETB e EWG**, que na
+> v1 eram separados (EWG estava diferido). Ver [`../architecture_v2.md`](../architecture_v2.md)
+> e `docs/hw/pinout_v2.md` (`ETB_PWM`=`PD12`/TIM4_CH1, `ETB_DIR`=`PD13`, `CS_L9960T`=`PD6`).
+>
+> **Continua válido:** feedback dual TPS (sheet 05), a rejeição do DRV8701 por não ser
+> drop-in **foi explicitamente revertida** — o L9960T tem a mesma forma de 2 pinos (+SPI) e
+> foi aceite, o que implica reescrever `etb_driver.cpp` de 3 pinos para 2+SPI (dívida de
+> firmware, não escrita).
+>
+> Redesenhar a topologia abaixo para o L9960T (datasheet ST) quando chegar a vez deste bloco.
+
+## Função (stale — BTS7960, ver banner acima)
 Ponte-H do motor da borboleta; feedback TPS no sheet 05.
 
 ## Referência
