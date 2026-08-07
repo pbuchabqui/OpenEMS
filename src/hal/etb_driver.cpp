@@ -83,7 +83,9 @@ bool etb_driver_init(void) {
     g_fault_count = 0u;
 
     etb_dir_gpio_init();
-    etb_pwm_init(20000u);
+    // 10 kHz: BTS7960 max 25 kHz; 20 kHz deixava só 20% de margem e perdas altas.
+    // Mesmo valor que timer_etb_pwm_init() — path de produção é este (etb_control_init).
+    etb_pwm_init(10000u);
 
     etb_driver_shutdown();
 

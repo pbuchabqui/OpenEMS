@@ -63,6 +63,7 @@ int main() { return 0; }
 #include "hal/can.h"
 #include "hal/flash.h"
 #include "hal/tle8888.h"
+#include "hal/out_pins.h"
 #include "hal/flex_fuel.h"
 #include "hal/runtime_seed.h"
 #include "hal/timer.h"
@@ -498,6 +499,12 @@ static void openems_init() noexcept {
     ems::hal::uart0_init(115200u);
     ems::hal::uart0_enable_rx();  // RX fica desligado por padrão (uart.cpp:61)
     ems::hal::tle8888_init();
+    // Enables de hardware do estágio de potência (INJEN=PE14 / IGNEN=PE3).
+    // Nasceram LOW em out_pins_hw_init(); só sobem se o TLE8888 confirmou
+    // comunicação E configuração (direct drive, VR, enables por canal). Se o CI
+    // não respondeu, injecção e ignição ficam inibidas por hardware.
+    // No RGT6 é no-op. Ver docs/hw/interface_board_v1.md.
+    ems::hal::power_stage_enable(ems::hal::tle8888_ok());
     ems::engine::ewg_control_init();
     ems::hal::flex_fuel_init();
     iwdg_kick();
@@ -511,6 +518,12 @@ static void openems_init() noexcept {
 	// Calibração de sensores persistida (página 0, bytes 16-55) → drivers
 	ems::engine::apply_etb_calibration_from_page(g_calib_page0 + 16, 40u);
 	ems::engine::push_sensor_calibration_to_drivers();
+	// Trims / CMP window / anti-jerk / rev limiter / ckp skip (56-76).
+	// Antes só a UI aplicava isto — reboot perdia a calibração.
+	ems::engine::apply_page0_trims_driveability(g_calib_page0, kCalibPageBytes);
+	// Polaridade CKP/CMP (page0[258]) — re-aplica TIM5 + pull (tim5_ic_init foi
+	// antes da NVM, default subida/pull-down).
+	ems::engine::apply_page0_capture_polarity(g_calib_page0, kCalibPageBytes);
 	// Closed-loop / LEARN (page0[80-85])
 	ems::engine::closed_loop_enable =
 	    (g_calib_page0[80] != 0u) ? 1u : 0u;
@@ -561,9 +574,6 @@ static void openems_init() noexcept {
 		ems::engine::launch_tc_apply_from_page0(g_calib_page0, kCalibPageBytes);
 		// CAN RX map: gear / vehicle / driven wheel (216-245)
 		ems::app::can_rx_map_apply_from_page0(g_calib_page0, kCalibPageBytes);
-		// CKP skip pós-silêncio (byte 71, era pad — blob antigo = 0 = off)
-		ems::engine::ckp_skip_pulses_after_gap =
-		    (g_calib_page0[71] > 57u) ? 57u : g_calib_page0[71];
 		// MAP janela angular (246-251); len=0 não substitui o default
 		ems::engine::map_window_enable = (g_calib_page0[246] != 0u) ? 1u : 0u;
 		{

@@ -170,6 +170,7 @@ int main(void) {
     test_sensors_tick_50ms();
     test_sensors_set_range();
     test_sensors_etb_harness_present();
+    test_sensors_vbatt_dedicated_channel();
     test_sensors_table_entry_setters();
 
     // ── Knock — Segunda Fase ──────────────────────────────────────────────────
@@ -236,6 +237,11 @@ int main(void) {
     // ── XTAU AUTOCALIB ──────────────────────────────────────────────────
     printf("\n=== XTAU AUTOCALIB ===");
     test_xtau_autocalib_all();
+
+    // ── PAGE0 TRIMS / DRIVEABILITY (boot restore) ───────────────────────
+    printf("\n=== PAGE0 TRIMS/DRIVEABILITY ===");
+    test_page0_trims_driveability();
+    test_page0_capture_polarity();
 
     // ── ECU SCHED FASE 2 ────────────────────────────────────────────────
     printf("\n=== ECU SCHED (fase 2) ===");

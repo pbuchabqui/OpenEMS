@@ -820,6 +820,88 @@ void test_xtau_autocalib_all(void) {
                "células RPM×MAP distantes aprendem parâmetros distintos");
 }
 
+void test_page0_capture_polarity(void) {
+    section("page0 capture polarity: bit0 CKP / bit1 CMP");
+    capture_polarity = 0xFFu;
+    uint8_t page[260] = {};
+    page[258] = 0x02u;  // CMP falling only
+    apply_page0_capture_polarity(page, sizeof(page));
+    CHECK_EQ(capture_polarity, 0x02u, "bit1 CMP falling");
+    page[258] = 0x03u;
+    apply_page0_capture_polarity(page, sizeof(page));
+    CHECK_EQ(capture_polarity, 0x03u, "ambos falling");
+    page[258] = 0x00u;
+    apply_page0_capture_polarity(page, sizeof(page));
+    CHECK_EQ(capture_polarity, 0x00u, "default subida");
+    // short buffer
+    capture_polarity = 0xAAu;
+    apply_page0_capture_polarity(page, 100u);
+    CHECK_EQ(capture_polarity, 0xAAu, "len curto = no-op");
+}
+
+void test_page0_trims_driveability(void) {
+    section("page0 trims/driveability: boot path restaura 56-76");
+
+    // Defaults de compilação (calibration.cpp) — limpar para provar apply.
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        cyl_fuel_trim_pct[i] = 0;
+        cyl_ign_trim_deg[i]  = 0;
+    }
+    cmp_window_open_tooth  = 0u;
+    cmp_window_close_tooth = 0u;
+    antijerk_tpsdot_threshold_x10 = 0u;
+    antijerk_retard_deg           = 0;
+    antijerk_decay_cycles         = 0u;
+    ckp_skip_pulses_after_gap     = 0u;
+    rev_limit_rpm_x10             = 10000u;
+    rev_limit_soft_window_x10     = 1000u;
+
+    uint8_t page[80] = {};
+    page[56] = 10;   // fuel trim cyl0 +10%
+    page[57] = static_cast<uint8_t>(-5);  // cyl1 -5%
+    page[60] = 3;    // ign trim cyl0 +3°
+    page[64] = 12u;  // cmp open
+    page[65] = 18u;  // cmp close
+    page[66] = 40u;  // antijerk thr low byte (×10)
+    page[67] = 0u;
+    page[68] = 7u;   // retard low
+    page[69] = 0u;
+    page[70] = 5u;   // decay
+    page[71] = 3u;   // ckp skip
+    // rev limit 6500 RPM = 65000 ×10
+    const uint32_t rev = 65000u;
+    std::memcpy(page + 72, &rev, 4u);
+    const uint32_t soft = 2000u;
+    std::memcpy(page + 76, &soft, 4u);
+
+    apply_page0_trims_driveability(page, sizeof(page));
+
+    CHECK_EQ(static_cast<int>(cyl_fuel_trim_pct[0]), 10, "fuel trim cyl0");
+    CHECK_EQ(static_cast<int>(cyl_fuel_trim_pct[1]), -5, "fuel trim cyl1");
+    CHECK_EQ(static_cast<int>(cyl_ign_trim_deg[0]), 3, "ign trim cyl0");
+    CHECK_EQ(cmp_window_open_tooth, 12u, "cmp open");
+    CHECK_EQ(cmp_window_close_tooth, 18u, "cmp close");
+    CHECK_EQ(antijerk_tpsdot_threshold_x10, 40u, "antijerk thr");
+    CHECK_EQ(static_cast<int>(antijerk_retard_deg), 7, "antijerk retard");
+    CHECK_EQ(antijerk_decay_cycles, 5u, "antijerk decay");
+    CHECK_EQ(ckp_skip_pulses_after_gap, 3u, "ckp skip");
+    CHECK_EQ(rev_limit_rpm_x10, 65000u, "rev limit");
+    CHECK_EQ(rev_limit_soft_window_x10, 2000u, "rev soft window");
+
+    // short buffer → no-op (não crasha, não corrompe)
+    const int8_t prev = cyl_fuel_trim_pct[0];
+    apply_page0_trims_driveability(page, 50u);
+    CHECK_EQ(static_cast<int>(cyl_fuel_trim_pct[0]), static_cast<int>(prev),
+             "len curto = no-op");
+
+    // clamp extremos
+    page[56] = 100;  // >50 → 50
+    page[64] = 90u;  // >57 → 57
+    apply_page0_trims_driveability(page, sizeof(page));
+    CHECK_EQ(static_cast<int>(cyl_fuel_trim_pct[0]), 50, "fuel trim clamp ±50");
+    CHECK_EQ(cmp_window_open_tooth, 57u, "cmp open clamp 57");
+}
+
 // ============================================================================
 // VERIFICAÇÃO MATEMÁTICA — valores independentes calculados analiticamente
 // ============================================================================

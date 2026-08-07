@@ -21,12 +21,29 @@
 
 namespace ems::hal {
 
-enum : uint8_t { kOutPortA = 0U, kOutPortB = 1U, kOutPortC = 2U, kOutPortE = 3U };
+enum : uint8_t {
+    kOutPortA = 0U,
+    kOutPortB = 1U,
+    kOutPortC = 2U,
+    kOutPortD = 3U,
+    kOutPortE = 4U
+};
 
 // Pin metric index 0..3 INJ, 4..7 IGN — same as former k_ch_to_pin_idx.
 inline constexpr uint8_t kOutChToPinIdx[8] = {2U, 3U, 0U, 1U, 7U, 6U, 5U, 4U};
 
-#if EMS_BOARD_IS_VGT6
+#if EMS_BOARD_IS_MRE
+// microRusEFI copper (docs/hw/pinout_mre_bringup.md):
+// INJ1–4 = PE14/13/12/11 · IGN1–4 = PD12/13/14/15 — ordered by ECU_CH_*
+inline constexpr uint8_t kOutBsrrPort[8] = {
+    kOutPortE, kOutPortE, kOutPortE, kOutPortE,
+    kOutPortD, kOutPortD, kOutPortD, kOutPortD
+};
+inline constexpr uint8_t kOutBsrrPin[8] = {
+    12U, 11U, 14U, 13U,
+    15U, 14U, 13U, 12U
+};
+#elif EMS_BOARD_IS_VGT6
 // VGT6: INJ PE0/2/4/6 · IGN PE9/11/13/15 — ordered by ECU_CH_*
 inline constexpr uint8_t kOutBsrrPort[8] = {
     kOutPortE, kOutPortE, kOutPortE, kOutPortE,
@@ -48,8 +65,11 @@ inline constexpr uint8_t kOutBsrrPin[8] = {
 };
 #endif
 
-// Compile-time pin sanity (host always RGT6 tables; VGT6 checked on firmware-vgt6).
-#if EMS_BOARD_IS_VGT6
+// Compile-time pin sanity (host default RGT6; VGT6/MRE on dedicated host-tests / fw).
+#if EMS_BOARD_IS_MRE
+static_assert(kOutBsrrPort[2] == kOutPortE && kOutBsrrPin[2] == 14U, "MRE INJ1=PE14");
+static_assert(kOutBsrrPort[7] == kOutPortD && kOutBsrrPin[7] == 12U, "MRE IGN1=PD12");
+#elif EMS_BOARD_IS_VGT6
 static_assert(kOutBsrrPort[2] == kOutPortE && kOutBsrrPin[2] == 0U, "INJ1=PE0");
 static_assert(kOutBsrrPort[7] == kOutPortE && kOutBsrrPin[7] == 9U, "IGN1=PE9");
 #else
@@ -67,6 +87,7 @@ inline void out_pin_write(uint8_t channel, uint8_t high) noexcept {
     switch (kOutBsrrPort[channel]) {
     case kOutPortA: GPIOA_BSRR = mask; break;
     case kOutPortB: GPIOB_BSRR = mask; break;
+    case kOutPortD: GPIOD_BSRR = mask; break;
     case kOutPortE: GPIOE_BSRR = mask; break;
     default:        GPIOC_BSRR = mask; break;
     }
@@ -77,6 +98,16 @@ inline void out_pin_write(uint8_t channel, uint8_t high) noexcept {
  * Bit-identical to former ecu_sched_outputs_safe_early().
  */
 void out_pins_hw_init() noexcept;
+
+/**
+ * Enables de hardware do estágio de potência (TLE8888):
+ *   VGT6: INJEN=PE14, IGNEN=PE3
+ *   MRE:  INJEN=PD11, IGNEN=PD10  (cobre microRusEFI)
+ *   RGT6: no-op (sem TLE)
+ *
+ * Nascem em LOW (desabilitado) em out_pins_hw_init().
+ */
+void power_stage_enable(bool on) noexcept;
 
 #if defined(EMS_HOST_TEST)
 /** Port index: A=0 B=1 C=2 E=3 — last BSRR write value (host mock). */

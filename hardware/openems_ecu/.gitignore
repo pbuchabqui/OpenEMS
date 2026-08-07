@@ -1,0 +1,17 @@
+# Local KiCad / OS — não versionar
+*-backups/
+*.kicad_pcb-bak
+*.kicad_sch-bak
+*.kicad_prl
+fp-info-cache
+*.net
+*.lck
+~*
+.history/
+__pycache__/
+.DS_Store
+
+# Previews / exports locais
+h562_*.png
+h562_*.svg
+*.bak-pre-*

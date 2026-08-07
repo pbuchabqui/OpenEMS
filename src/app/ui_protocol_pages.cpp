@@ -238,6 +238,12 @@ void update_realtime_page() noexcept {
     rt.reserved[46] = static_cast<uint8_t>((s.an2_raw >> 8u) & 0xFFu);
     rt.reserved[47] = static_cast<uint8_t>(s.an3_raw & 0xFFu);
     rt.reserved[48] = static_cast<uint8_t>((s.an3_raw >> 8u) & 0xFFu);
+    // [49] Fingerprint do mapa de registadores do TLE8888: bitmask das entradas
+    // cujo valor de reset não bateu com o datasheet. 0 = mapa confirmado contra
+    // o silício. Diferente de zero significa que o CI está presente mas o driver
+    // fala com os registadores errados — injecção e ignição ficam inibidas.
+    // É o que torna essa falha visível no bring-up em vez de misteriosa.
+    rt.reserved[49] = ems::hal::tle8888_map_mismatch();
     rt.reserved[50] = static_cast<uint8_t>(s.an4_raw & 0xFFu);
     rt.reserved[51] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
     rt.map_fused_bar_x100 = g_rt_map_fused_bar_x100;
@@ -434,6 +440,8 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 254, &ems::engine::decel_cut_map_max_bar_x100, 2u);
         g_page0[256] = ems::engine::decel_cut_gear_inhibit_ms10;
         g_page0[257] = ems::engine::knock_dead_min_p2p;
+        // 258: polaridade captura CKP/CMP (bit0/bit1 = falling)
+        g_page0[ems::engine::kCapturePolarityPage0Off] = ems::engine::capture_polarity;
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -540,42 +548,8 @@ bool sync_table_from_page(uint8_t page) noexcept {
         // Calibração de sensores (bytes 16-55) → globals + drivers
         ems::engine::apply_etb_calibration_from_page(g_page0 + 16, 40u);
         ems::engine::push_sensor_calibration_to_drivers();
-        // Trim por cilindro e janela CMP (bytes 56-65)
-        std::memcpy(ems::engine::cyl_fuel_trim_pct, g_page0 + 56, 4u);
-        std::memcpy(ems::engine::cyl_ign_trim_deg,  g_page0 + 60, 4u);
-        for (uint8_t i = 0u; i < 4u; ++i) {
-            int8_t& ft = ems::engine::cyl_fuel_trim_pct[i];
-            if (ft > 50) { ft = 50; } else if (ft < -50) { ft = -50; }
-            int8_t& it = ems::engine::cyl_ign_trim_deg[i];
-            if (it > 15) { it = 15; } else if (it < -15) { it = -15; }
-        }
-        ems::engine::cmp_window_open_tooth  = g_page0[64];
-        ems::engine::cmp_window_close_tooth = g_page0[65];
-        if (ems::engine::cmp_window_open_tooth > 57u) {
-            ems::engine::cmp_window_open_tooth = 57u;
-        }
-        if (ems::engine::cmp_window_close_tooth > 57u) {
-            ems::engine::cmp_window_close_tooth = 57u;
-        }
-        // Dirigibilidade (bytes 66-99)
-        std::memcpy(&ems::engine::antijerk_tpsdot_threshold_x10, g_page0 + 66, 2u);
-        std::memcpy(&ems::engine::antijerk_retard_deg,            g_page0 + 68, 2u);
-        ems::engine::antijerk_decay_cycles = g_page0[70];
-        // Byte 71 (era pad): skip de dentes CKP pós-silêncio. Clamp a 57 (1 volta).
-        ems::engine::ckp_skip_pulses_after_gap =
-            (g_page0[71] > 57u) ? 57u : g_page0[71];
-        std::memcpy(&ems::engine::rev_limit_rpm_x10,          g_page0 + 72, 4u);
-        std::memcpy(&ems::engine::rev_limit_soft_window_x10,  g_page0 + 76, 4u);
-        // Safety clamps: corrupt/host typos must not disable the rev limiter
-        // (0) or push it past physical range. Defaults match calibration.cpp.
-        if (ems::engine::rev_limit_rpm_x10 < 10000u) {
-            ems::engine::rev_limit_rpm_x10 = 10000u;   // 1000 RPM floor
-        } else if (ems::engine::rev_limit_rpm_x10 > 120000u) {
-            ems::engine::rev_limit_rpm_x10 = 120000u;  // 12000 RPM ceiling
-        }
-        if (ems::engine::rev_limit_soft_window_x10 > ems::engine::rev_limit_rpm_x10) {
-            ems::engine::rev_limit_soft_window_x10 = ems::engine::rev_limit_rpm_x10 / 2u;
-        }
+        // Trims / CMP / anti-jerk / rev limit / ckp skip (56-76) — mesmo path do boot
+        ems::engine::apply_page0_trims_driveability(g_page0, sizeof(g_page0));
         ems::engine::closed_loop_enable =
             (g_page0[80] != 0u) ? 1u : 0u;
         ems::engine::ltft_apply_burn_ve = (g_page0[81] != 0u) ? 1u : 0u;
@@ -705,6 +679,9 @@ bool sync_table_from_page(uint8_t page) noexcept {
             ems::engine::decel_cut_gear_inhibit_ms10 = g_page0[256];
             ems::engine::knock_dead_min_p2p = g_page0[257];
         }
+        // Polaridade TIM5 (page0[258]) — fora do gate de layout: blob antigo = 0
+        // = subida (default).
+        ems::engine::apply_page0_capture_polarity(g_page0, sizeof(g_page0));
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));

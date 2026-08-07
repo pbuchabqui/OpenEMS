@@ -224,11 +224,50 @@ void test_sensors_etb_harness_present(void) {
     section("sensors: sensors_set_etb_harness_present");
     sensor_setup(); sensors_init();
     sensors_set_etb_harness_present(true);
-    // When harness present, tick_100ms uses fixed vbatt=12000 instead of ADC.
-    // Just verify no crash.
     sensors_test_tick_100ms();
     CHECK_TRUE(true, "tick_100ms with harness_present=true: no crash");
     sensors_set_etb_harness_present(false);  // restore
+}
+
+// VBATT passou a ter canal próprio (PC3/INP13) em vez de partilhar o pino do
+// ETB_TPS2. Estes casos fixam o contrato de que `corr_vbatt()` e o cálculo de dwell
+// consomem: a tensão vem do ADC, já não do literal 12000 mV.
+void test_sensors_vbatt_dedicated_channel(void) {
+    section("sensors: VBATT em canal dedicado (PC3/INP13)");
+    using namespace ems::hal;
+    sensor_setup(); sensors_init();
+    sensors_set_bench_clt_iat(false, 0, 0);
+
+    // Divisor 0..18 V em 0..4095: 12 V → raw ≈ 12000*4095/18000 = 2730.
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2730u);
+    sensors_test_tick_100ms();
+    CHECK_NEAR(static_cast<float>(sensors_get().vbatt_mv), 12000.0f, 30.0f,
+               "raw 2730 → ~12000 mV");
+
+    // Cranking: a bateria cai a ~9,5 V. É o caso que o literal 12000 mascarava.
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2161u);
+    sensors_test_tick_100ms();
+    CHECK_NEAR(static_cast<float>(sensors_get().vbatt_mv), 9500.0f, 30.0f,
+               "raw 2161 → ~9500 mV (cranking)");
+
+    // O chicote do ETB já não interfere: VBATT tem pino próprio.
+    sensors_set_etb_harness_present(true);
+    sensors_test_tick_100ms();
+    CHECK_NEAR(static_cast<float>(sensors_get().vbatt_mv), 9500.0f, 30.0f,
+               "harness do ETB presente não fixa mais 12000 mV");
+    sensors_set_etb_harness_present(false);
+
+    // Fora de 6..18 V (pino aberto/curto) → fallback seguro de 12 V.
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 0u);
+    sensors_test_tick_100ms();
+    CHECK_EQ(sensors_get().vbatt_mv, 12000u, "raw 0 (implausível) → fallback 12000 mV");
+
+    // Bancada não tem divisor em PC3 — o modo de bancada tem de ignorar o ADC.
+    sensors_set_bench_clt_iat(true, 800, 250);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 4095u);
+    sensors_test_tick_100ms();
+    CHECK_EQ(sensors_get().vbatt_mv, 12000u, "bench mode fixa 12000 mV apesar do ADC");
+    sensors_set_bench_clt_iat(false, 0, 0);
 }
 
 void test_sensors_table_entry_setters(void) {

@@ -84,3 +84,23 @@ tools/esp32_combined/ardustim_gui/package-lock.json
 
 # --- Claude / cave local worktrees (if present) ---
 .cave/
+
+# --- Node deps (tscircuit toolchain) ---
+node_modules/
+
+# --- Jar/zip extraction leftovers ---
+META-INF/
+
+# --- Hardware / KiCad local ---
+hardware/openems_ecu/.history/
+hardware/openems_ecu/*-backups/
+hardware/openems_ecu/*.kicad_prl
+hardware/openems_ecu/*.lck
+hardware/openems_ecu/~*
+hardware/openems_ecu/h562_*.png
+hardware/openems_ecu/h562_*.svg
+hardware/openems_ecu/*.bak-pre-*
+hardware/openems_ecu/*.bak-hier-*
+hardware/openems_ecu/*.bak-preroute-*
+hardware/openems_ecu/*.bak-experimental-*
+hardware/**/fp-info-cache

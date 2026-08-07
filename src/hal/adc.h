@@ -44,7 +44,10 @@ enum class AdcSecondaryChannel : uint8_t {
     IAT        = 1,  // PB1 / INP5
     FUEL_PRESS = 2,  // PC4 / INP4
     OIL_PRESS  = 3,  // PC1 / INP11  (was PC5 — conflict with ETB_TPS2)
-    EWG_POS    = 4,  // PC3 / INP13
+    // PC3 passou de realimentação de posição do EWG para VBATT (bloco 7 do plano da
+    // placa de interface v1): o EWG fica diferido na v1, o que libera o canal. Divisor
+    // externo 0..18 V → 0..3,3 V; conversão em `vbatt_raw_to_mv()` (sensors.cpp).
+    VBATT      = 4,  // PC3 / INP13
 };
 
 void     adc_init() noexcept;

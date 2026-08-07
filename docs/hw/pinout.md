@@ -112,6 +112,7 @@ DIR/PWM em **PE\*** (BSRR único, fiação limpa no LQFP100). No RGT6 esses pino
 |---|---|---|
 | INJ1–4 | **PE0 / PE2 / PE4 / PE6** | BSRR GPIOE |
 | IGN1–4 | **PE9 / PE11 / PE13 / PE15** | BSRR GPIOE |
+| INJEN / IGNEN | **PE14 / PE3** | enables TLE8888 (não PE1 — sem bond no LQFP100) |
 
 Ordem de canais BSRR = `ECU_CH_*`:
 `[INJ3, INJ4, INJ1, INJ2, IGN4, IGN3, IGN2, IGN1]`. Actuadores active-high;
@@ -144,6 +145,35 @@ safe = LOW. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
 > batentes (`etb_autocal`); a última calibração boa é persistida (EtbCalRecord,
 > setor adaptativo) como fallback. Ver README §"ETB".
 
+## Relés — bomba e ventoinha (**difere por package**)
+
+| Funcao | **RGT6** | **VGT6** | Constante |
+|---|---|---|---|
+| Ventoinha | **PB12** (BSRR GPIOB) | **PE12** (BSRR GPIOE) | `kFanPin` |
+| Bomba de combustível | **PB13** (BSRR GPIOB) | **PE10** (BSRR GPIOE) | `kPumpPin` |
+
+Definidos em `src/engine/auxiliaries.cpp` sob `#if EMS_BOARD_IS_VGT6`.
+Lógica: `run_pump_control()` faz prime de 2 s no key-on, mantém ligada com
+RPM > 0 e **corta 2 s após RPM = 0** (`kPumpOffDelayMs = 2000`); `run_fan_control()`
+usa histerese CLT 95 °C liga / 90 °C desliga. Ambos suspensos durante
+`output_test_active()`.
+
+**Porquê o remap no VGT6:** `PB12`/`PB13` são o **CSN** e o **SCK** do SPI2 do
+**TLE8888**. Como `auxiliaries_init()` corre *depois* de `tle8888_init()`
+(`main_stm32.cpp:638` vs `:500`), reescrevia o `GPIOB_MODER` e **matava o
+SPI2_SCK no arranque** — o CI nunca era clockado e o seu watchdog nunca
+alimentado, o que com o TLE8888 montado desliga injecção e ignição.
+
+No VGT6 os relés passaram para `GPIOE` (`PE10`/`PE12`). Os enables do TLE8888
+são `INJEN=PE14` e `IGNEN=PE3`. ⚠️ **`PE1` não existe no STM32H562VGTx LQFP100**
+(pad 98 = VCAP) — ver `stm32h562_ref.md` §3.1. Restantes PE: INJ PE0/2/4/6,
+IGN PE9/11/13/15, ETB PE5/7/8. Partilhar o porto com INJ/IGN é seguro: o
+acionamento é por **BSRR**, set/reset atómico por bit, sem read-modify-write.
+
+> ⚠️ **O RGT6 mantém o conflito** — `PB12`/`PB13` continuam a colidir com o SPI2
+> lá. O RGT6 não é o alvo da placa de interface; se vier a ser, tem de resolver
+> isto (não tem GPIOE). O mesmo SPI2 é candidato a um futuro **TPIC8101** (knock).
+
 ## ADC (sensores) — comum nos dois packages (tree actual)
 
 | Funcao | ADC | Pino / INP |
@@ -159,9 +189,16 @@ safe = LOW. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
 | IAT | ADC2 | **PB1** / INP5 |
 | FUEL_PRESS | ADC2 | **PC4** / INP4 |
 | OIL_PRESS | ADC2 | **PC1** / INP11 |
-| EWG_POS | ADC2 | **PC3** / INP13 |
+| VBATT | ADC2 | **PC3** / INP13 |
 
 **Nota:** WBO2 lambda exclusivamente via CAN (FDCAN1). Sem ADC O2.
+
+**Nota (VBATT em PC3):** o canal era `EWG_POS`. Com o EWG diferido na placa de
+interface v1, `PC3` passou a VBATT com divisor externo 0–18 V → 0–3,3 V. Antes, VBATT
+partilhava o pino do `ETB_TPS2` e era **fixada em 12000 mV** com o chicote do ETB
+ligado — o que subestimava o dead-time do injetor e encurtava o dwell num cranking
+real (a bateria cai a 9–10 V). A realimentação de posição do EWG ficou sem canal:
+`ewg_driver_read_position_raw()` devolve 0 até o EWG voltar na v2.
 
 **Histórico de pinout (2026-07):**
 
@@ -172,8 +209,15 @@ safe = LOW. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
 
 ## Ver também
 
-- **`docs/wiring_diagram.md`** — esquemáticos eléctricos (alimentação,
-  condicionamento de sinal, conector, terra). ⚠️ O mapa de pinos ASCII ali é
-  **legado** (TIM2/TIM8 OC); o pinout válido é este documento.
-- **`docs/hw/vr_input_conditioning.md`** — condicionamento VR (MAX9926) para
-  CKP/CMP reais.
+- **`docs/hw/README.md`** — **ponto de entrada** (autoridade, decisões, em aberto).
+- **`docs/hw/interface_board_v1.md`** — **plano da placa de interface v1**
+  (TLE8888-**2QK** como estágio de potência, INJ/IGN por direct drive, alocação de
+  pinos, orçamento de erro de timing, sequência de verificação).
+- **`docs/wiring_diagram.md`** — ⚠️ **DESACTUALIZADO em vários eixos**: mapa de
+  pinos ASCII legado (TIM2/TIM8 OC), e os números do TLE8888 ali ("INJ OC 10 A,
+  IGN push-pull 6 A") **estão errados** — o datasheet Rev 1.2 dá injectores
+  2,2 A e ignição como driver de gate de 20 mA. Usar apenas como referência de
+  topologia eléctrica (terra, conector), e mesmo assim com desconfiança.
+- **`docs/hw/vr_input_conditioning.md`** — condicionamento VR. ⚠️ Recomenda o
+  MAX9926; no plano v1 o CKP passou a usar a **interface VR integrada do
+  TLE8888** (zero-crossing + armamento por pico, clamp e diagnóstico internos).
