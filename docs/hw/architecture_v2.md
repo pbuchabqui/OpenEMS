@@ -67,10 +67,19 @@ Nada disto foi escrito. É um projecto próprio, a dimensionar deliberadamente.
 | `adc.h` | remapear canais; entram `LAMBDA_UA`/`UR`, `APP1`/`APP2`, `EWG_POS` |
 | Expansor de I/O por SPI | novo, sem part number ainda |
 
+## ✅ CKP decidido: Hall, igual ao CMP (2026-08-07)
+
+Com o TLE8888 fora não há interface VR integrada — **CKP passa a Hall**, mesmo
+condicionamento do CMP (divisor 10k/3,3k + RC + clamp dual BAT54BRW, da spec §7).
+**Isto muda o sensor exigido ao motor**: uma roda dentada lida por VR deixa de servir:
+precisa de sensor Hall (ou VR + condicionador externo fora da placa, não avaliado).
+
+A polaridade de captura (front IC Hall = descida; TIM5 hoje só captura subida — ver
+memória `cmp-ckp-capture-edge-polarity`) **continua em aberto** e agora aplica-se
+também ao CKP, não só ao CMP: os dois canais têm a mesma pergunta.
+
 ## O que ficou por decidir
 
-- **CKP: VR ou Hall?** A spec assume Hall com divisor + RC + clamp BAT54BRW. Com o
-  TLE8888 fora, já não há interface VR integrada. Isto **muda o sensor exigido ao motor**
-  e interage com a polaridade de captura, que continua em aberto.
+- Polaridade de captura CKP/CMP (acima).
 - Part number do expansor de I/O.
 - Se `VVT`/`PUMP`/`FAN` precisam de PWM real — o GPIOE não tem timer utilizável.

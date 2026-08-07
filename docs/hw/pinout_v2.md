@@ -75,8 +75,8 @@ Foi **descartada e refeita**.
 | spi | `CS_L9960T` | `PD6` | 87 | GPIO |
 | spi | `CS_CJ125` | `PD7` | 88 | GPIO |
 | spi | `CS_IOEXP` | `PD8` | 55 | GPIO |
-| sync | `CKP_IN` | `PA0` | 23 | TIM5_CH1 |
-| sync | `CMP_IN` | `PA1` | 24 | TIM5_CH2 |
+| sync | `CKP_IN` (Hall — condicionamento igual ao CMP) | `PA0` | 23 | TIM5_CH1 |
+| sync | `CMP_IN` (Hall) | `PA1` | 24 | TIM5_CH2 |
 | usb | `USB_DM` | `PA11` | 70 | USB_DM |
 | usb | `USB_DP` | `PA12` | 71 | USB_DP |
 
@@ -89,8 +89,10 @@ Foi **descartada e refeita**.
 
 ## Pendente
 
-- Polaridade de captura CKP/CMP continua em aberto (ver memória
-  `cmp-ckp-capture-edge-polarity`) — não é resolvida por esta tabela.
+- **CKP decidido: Hall** (2026-08-07), mesmo condicionamento do CMP — muda o sensor
+  exigido ao motor (deixa de servir roda dentada VR). Ver `architecture_v2.md`.
+- Polaridade de captura CKP/CMP continua em aberto, e agora aplica-se aos dois canais
+  (ver memória `cmp-ckp-capture-edge-polarity`) — não é resolvida por esta tabela.
 - `VVT1`/`VVT2`, `PUMP`, `FAN` estão como GPIO puro. Se algum precisar de PWM real em vez
   de on/off, tem de sair do GPIOE para um pino com timer — o GPIOE não tem TIM2/3/5.
 - O expansor de I/O por SPI ainda não tem part number.
