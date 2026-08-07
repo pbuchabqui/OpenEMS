@@ -6,7 +6,8 @@ Ponto de entrada da documentação de hardware. **Ler esta página antes de qual
 60-2, injeção e ignição sequenciais, borboleta eletrónica).
 
 **Desenho KiCad de produção:** projecto **em branco** → `hardware/openems_v1/`  
-(MCU **H562 soldado** LQFP100, TLE8888-2QK, **4 camadas**).  
+(MCU **H562 soldado** LQFP100, **4 camadas**, arquitectura v2 — CIs dedicados,
+TLE8888 **saiu**, ver [`architecture_v2.md`](architecture_v2.md)).  
 WeAct H562 = **só bancada de firmware**, não entra na PCB de produção.
 
 ⛔ **O fork do microRusEFI deixou de ser a base de desenho (2026-08-07).** O mRE continua
