@@ -105,6 +105,11 @@ No layout microRusEFI, `INJ_EN`/`IGN_EN` do TLE8888 iam a `PD11`/`PD10`. OpenEMS
 
 ## MCU ↔ TLE8888 no esquemático (VGT6, netlist verificado)
 
+> 📌 **Esta secção descreve o board CONGELADO** `hardware/openems_ecu/`, no estado em que
+> ficou. Não descreve a board de produção. Para *ligações* a autoridade é
+> [`netlist_v1.md`](netlist_v1.md); para o estado do board congelado,
+> [`hardware/openems_ecu/README.md`](../../hardware/openems_ecu/README.md).
+
 Root sheet `openems_ecu.kicad_sch` alinhado a `out_pins.h` + `netlist_v1.md` / `tle8888_pinout.md`:
 
 ### Direct drive + enables (Port E)

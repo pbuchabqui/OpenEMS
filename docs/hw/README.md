@@ -26,12 +26,12 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 
 | Assunto | Fonte de verdade | ⚠️ NÃO usar |
 |---|---|---|
-| Mapa de pinos RGT6 vs VGT6 | `pinout.md` | `wiring_diagram.md` |
+| Mapa de pinos RGT6 vs VGT6 | `pinout.md` | `../wiring_diagram.md` |
 | INJ/IGN, enables, BSRR | `src/hal/out_pins.h` | qualquer doc |
 | Canais e pinos de ADC | `src/hal/adc.h` | qualquer doc |
 | Registadores do TLE8888 | `src/hal/tle8888_regs.h` | qualquer doc |
 | Arquitetura, blocos, BOM, **decisões e porquês** | `interface_board_v1.md` | — |
-| Alimentação, condicionamento, atuadores, conector, terra | `wiring_diagram.md` | — |
+| Alimentação, condicionamento, atuadores, conector, terra | [`../wiring_diagram.md`](../wiring_diagram.md) | — |
 | Ligações pino-a-pino (netlist) | `netlist_v1.md` | — |
 | Contraprova do mapa TLE8888 | `tle8888_crosscheck.md` | — |
 | **Pinos de package LQFP-100 do TLE8888** | `tle8888_pinout.md` | inventar números |
