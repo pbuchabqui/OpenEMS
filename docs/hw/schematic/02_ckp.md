@@ -1,6 +1,14 @@
-# Sheet 02 — CKP (VR via TLE8888)
+# Sheet 02 — CKP — ⚠️ STALE, descreve a interface VR do TLE8888
 
-## Função
+> ⚠️ **Desactualizado (2026-08-07).** Escrito quando o CKP passava pela interface VR
+> nativa do TLE8888. A arquitectura v2 tirou o TLE8888 — **CKP passa a Hall**, mesmo
+> condicionamento do CMP (`03_cmp.md`), decisão em
+> [`../architecture_v2.md`](../architecture_v2.md). O pino não muda (`PA0`/`TIM5_CH1`),
+> mas toda a topologia analógica abaixo (VRIN1/2, VROUT do TLE) **está morta**.
+>
+> Redesenhar espelhando `03_cmp.md` quando o part number do Hall do CKP fechar.
+
+## Função (stale — VR via TLE8888, ver banner acima)
 Sensor VR 60-2 → `VRIN1/2` → interface VR do TLE → `VROUT` → `PA0` (TIM5_CH1).
 
 ## Referência

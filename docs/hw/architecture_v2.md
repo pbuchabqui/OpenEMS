@@ -74,12 +74,38 @@ condicionamento do CMP (divisor 10k/3,3k + RC + clamp dual BAT54BRW, da spec §7
 **Isto muda o sensor exigido ao motor**: uma roda dentada lida por VR deixa de servir:
 precisa de sensor Hall (ou VR + condicionador externo fora da placa, não avaliado).
 
-A polaridade de captura (front IC Hall = descida; TIM5 hoje só captura subida — ver
-memória `cmp-ckp-capture-edge-polarity`) **continua em aberto** e agora aplica-se
-também ao CKP, não só ao CMP: os dois canais têm a mesma pergunta.
+### ✅ Mecanismo de polaridade FECHADO (2026-08-07) — só falta o RISING/FALLING
+
+Explorado e rejeitado: captura das **duas arestas** (`CCxP+CCxNP`, "modo Both" do rusEFI)
+como forma de evitar ter de escolher. Três razões, por ordem de peso:
+
+1. **O STM32 não diz qual aresta disparou** a captura nesse modo. As únicas formas de
+   inferir — ler o GPIO logo a seguir, ou alternar um flag por software — já falham por
+   razões que o nosso próprio `ckp_tim5_ch1_isr()` documenta (leitura de GPIO pós-captura
+   é o anti-padrão que o filtro por período mínimo foi escrito para evitar) ou porque o
+   filtro anti-glitch descarta pulsos de propósito, dessincronizando qualquer flag.
+2. **O próprio rusEFI usa `SyncEdge::RiseOnly`** para todo decoder de roda dentada
+   uniforme — incluindo o `TT_TOOTHED_WHEEL_60_2`, a mesma roda que a nossa
+   (`trigger_structure.cpp:665-666`). `Both` só aparece em decoders de came com
+   larguras de dente deliberadamente desiguais (Mazda/Mitsubishi/Nissan) — um problema
+   de codificar posição, não de contar dentes uniformes. Um autor do próprio projecto
+   documentou uma tentativa falhada de usar `Both` num caso **mais simples** que o nosso
+   (roda de um dente): *"the Trigger can't become synchronized by 'last' and followed
+   'first' events only... For now, ::Rise work well"* (`trigger_misc.cpp:127-141`).
+3. Mesmo que a identificação de aresta fosse resolvida, só dá espaçamento angular
+   uniforme com duty cycle **exactamente 50%** — propriedade do sensor Hall que ainda
+   não tem part number. Fora disso, introduz um segundo padrão de outlier por cima do
+   gap real, que o `TOOTH_GRD` (`src/drv/ckp.cpp`) não foi desenhado para separar.
+
+**O mecanismo em si já está implementado** (commit `4368e15`): `page0[258]` bits 0/1 +
+`tim5_ic_set_capture_polarity()` — RISING **ou** FALLING, um só, calibrável, o mesmo
+modelo do `TrigEdge` do Speeduino e do `RiseOnly` que o rusEFI usa para 60-2.
 
 ## O que ficou por decidir
 
-- Polaridade de captura CKP/CMP (acima).
+- **Só a escolha RISING vs FALLING** para CKP e CMP — pendente do datasheet do Hall
+  escolhido (idle HIGH + pulso LOW → descida é o início físico do dente; recomendação
+  registada é descida, ver memória `cmp-ckp-capture-edge-polarity`). Não é decisão de
+  esquemático nem exige reabrir o firmware — é escrever dois bits de calibração.
 - Part number do expansor de I/O.
 - Se `VVT`/`PUMP`/`FAN` precisam de PWM real — o GPIOE não tem timer utilizável.

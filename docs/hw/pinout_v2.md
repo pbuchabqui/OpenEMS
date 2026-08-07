@@ -91,8 +91,10 @@ Foi **descartada e refeita**.
 
 - **CKP decidido: Hall** (2026-08-07), mesmo condicionamento do CMP — muda o sensor
   exigido ao motor (deixa de servir roda dentada VR). Ver `architecture_v2.md`.
-- Polaridade de captura CKP/CMP continua em aberto, e agora aplica-se aos dois canais
-  (ver memória `cmp-ckp-capture-edge-polarity`) — não é resolvida por esta tabela.
+- Mecanismo de polaridade de captura CKP/CMP fechado (byte de calibração, já
+  implementado) — modo "ambas as arestas" foi explorado e rejeitado. Só falta a
+  escolha RISING/FALLING, pendente do datasheet do Hall — ver `architecture_v2.md`
+  e memória `cmp-ckp-capture-edge-polarity`.
 - `VVT1`/`VVT2`, `PUMP`, `FAN` estão como GPIO puro. Se algum precisar de PWM real em vez
   de on/off, tem de sair do GPIOE para um pino com timer — o GPIOE não tem TIM2/3/5.
 - O expansor de I/O por SPI ainda não tem part number.
