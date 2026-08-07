@@ -90,7 +90,65 @@ No layout microRusEFI, `INJ_EN`/`IGN_EN` do TLE8888 iam a `PD11`/`PD10`. OpenEMS
 
 | Sinal TLE | MCU OpenEMS | Net PCB | Nota |
 |-----------|-------------|---------|------|
-| `INJ_EN` (U2.24) | **PE14** | `/MCU/PE14` | alinhado a `out_pins.h` |
+| `INJ_EN` (U2.24) | **PE14** | `/PE14` | alinhado a `out_pins.h` |
 | `IGN_EN` (U2.27) | **PE3** | `/PE3` | alinhado a `out_pins.h` |
 
-Tracks manhattan adicionados no `openems_ecu.kicad_pcb`; **rever DRC/clearance** (podem cruzar outras redes — limpar no Pcbnew se necessário).
+## MCU ↔ TLE8888 no esquemático (VGT6, netlist verificado)
+
+Root sheet `openems_ecu.kicad_sch` alinhado a `out_pins.h` + `netlist_v1.md` / `tle8888_pinout.md`:
+
+### Direct drive + enables (Port E)
+
+| Função | MCU | TLE pin | Símbolo |
+|--------|-----|---------|---------|
+| INJ1–4 | PE0 / PE2 / PE4 / PE6 | 28–31 | IN1–IN4 |
+| IGN1–4 | PE9 / PE11 / PE13 / PE15 | 32–35 | IN5–IN8 |
+| PUMP / FAN | PE10 / PE12 | 36 / 37 | IN9 / IN10 |
+| INJEN / IGNEN | PE14 / PE3 | 24 / 27 | INJEN / IGNEN |
+| IGN outs | — | 96–99 | → Molex J51–J54 |
+
+### SPI2, CAN, CKP, VVT
+
+| Função | MCU | TLE pin | Símbolo |
+|--------|-----|---------|---------|
+| SPI CS / SCK / MISO / MOSI | PB12 / PB13 / PB14 / PB15 | 3 / 7 / 4 / 5 | CSN / FCLP / SDO / SIP |
+| SPI mode | — | 6 → GND, 8 → VDDIO | SIN / FCLN |
+| CAN RX / TX | PB8 / PB9 | 43 / 44 | CANRX / CANTX |
+| CKP digital | PA0 ← | 21 | VROUT |
+| VVT exh / adm | PB6 / PB7 | 38 / 39 | IN11 / IN12 |
+
+### Legado mRE removido destas nets
+
+| Antes (mRE) | Agora |
+|-------------|--------|
+| PD12–15 → IGN IN5–8 | PE9/11/13/15 |
+| PD5 → CSN; PB3/4/5 → SPI | PB12–15 |
+| PB6 → CANTX; PB12 → CANRX | PB9 / PB8 |
+| PC6 → VROUT | PA0 |
+| PE7/8 → IN11/12 | PB6/7; PE7/8 livres (ETB DIR) |
+| Flash SPI em PB13–15 | desligado do MCU (SPI2 é só TLE) |
+| LIN PD8/9 | desligado (não usado OpenEMS v1) |
+
+### Hierarquia KiCad (sheets)
+
+| Sheet | Estado |
+|-------|--------|
+| `openems_ecu.kicad_sch` (root) | Nets + labels VGT6; **pinos da sheet TLE** renomeados para GPIO (`PE9`, `PB12`, …) e saídas `IGN1–4` / `INJ1–4` |
+| `TLE8888-1QK.kicad_sch` | `hierarchical_label` alinhados aos mesmos nomes (ex-`IGN_IN_1`→`PE9`, ex-`CSN`→`PB12`, ex-`CRNK_IN`→`PA0`) |
+| `mcu_h562.kicad_sch` | Já usava nomes GPIO (`PE*`, `PB*`, `PA0`) — sem rename |
+| `hi-lo` / `adc` | Pinos pass-through GPIO mantidos (não são o mapa TLE) |
+
+### PCB (`openems_ecu.kicad_pcb`)
+
+| Passo | Estado |
+|-------|--------|
+| Sync pads do netlist esquemático | Feito (293 pads; 119 nets na **tabela** antes dos footprints) |
+| Fix pad C100 (double-net pré-existente mRE) | Feito |
+| Remoção de cobre legado | Feito (~567 items) |
+| Trilhas manhattan U1↔U2 (21 sinais VGT6) | Feito **F.Cu** 0,25 mm |
+| DRC / limpeza | **Pendente no Pcbnew** (L-tracks podem cruzar) |
+| Backup limpo pré-re-route | `openems_ecu.kicad_pcb.bak-preroute-vgt6` |
+
+**Nota crash:** a 1ª tentativa de re-route inseriu nets no sítio errado (depois do último pad do ficheiro) e corrompeu o `.kicad_pcb` → SIGSEGV no `LoadBoard`. Re-route seguro restaura o backup e só acrescenta nets na tabela oficial.
+
+Abrir no Pcbnew → DRC → corrigir clearance nas nets `/PE*`, `/PB12–15`, `/PB8/9`, `/PA0`, `/PB6/7`.
