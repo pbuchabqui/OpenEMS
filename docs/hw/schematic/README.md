@@ -31,8 +31,9 @@ MCU vinha herdado (`stm32.kicad_sch` → `mcu_h562.kicad_sch`) e nunca precisou 
 próprio. Com o projecto em branco isso deixou de ser verdade — o MCU teve de ser
 desenhado do zero, verificado contra o symbol oficial KiCad + `stm32h562_ref.md`
 (WeAct H562, board real) + `stm32.kicad_sch` da rusEFI (F407, mesma filosofia ST).
-**Próximo passo:** desenhar a sheet `11_mcu_h562` no KiCad — só falta escolher o part
-number do cristal 8 MHz para fechar os caps de carga.
+Cristal HSE fechado no mesmo dia: `3225-8.00-10-10-10/A` (CL 10 pF, lido do schematic
+PDF real da WeAct — não os 20 pF do rusEFI), Cload 12 pF/12 pF C0G.
+**Próximo passo:** desenhar a sheet `11_mcu_h562` no KiCad.
 
 **Fonte de verdade cruzada:** porquê → `interface_board_v1.md` (v1) +
 [`../architecture_v2.md`](../architecture_v2.md) (o que a v2 anulou/mudou); pinos →

@@ -48,9 +48,13 @@ para revisão barata e paralelizável.
 | `sheets/11_mcu_h562` | **MCU H562VGT6** — decoupling, cristal, BOOT0, SWD, VCAP, VREF+ | `11_mcu_h562.md` ✅ | ✅ escrito de raiz p/ v2 (arquitectura-agnóstico — o MCU é igual em v1/v2) |
 
 ✅ **Doc do bloco 11 escrito (2026-08-07).** Pinos verificados contra o symbol oficial;
-VCAP 2×2,2 µF confirmado por fonte primária H562 real (WeAct); decoupling por VDD e
-crystal adaptados de `stm32.kicad_sch` da rusEFI (F407, mesma filosofia ST). **Falta só**
-o part number do cristal 8 MHz — os caps de carga não podem fechar sem o CL do datasheet.
+VCAP 2×2,2 µF confirmado por fonte primária H562 real (WeAct); decoupling por VDD
+adaptado de `stm32.kicad_sch` da rusEFI (F407, mesma filosofia ST). Cristal HSE
+escolhido no mesmo dia — `3225-8.00-10-10-10/A` (JLCPCB/LCSC `C518154`), CL 10 pF (lido
+do schematic PDF real da WeAct, não os 20 pF do rusEFI), Cload 12 pF/12 pF C0G, mesmo
+par usado no WeAct. **Falta só** confirmar ESR/drive-level no datasheet completo do
+fabricante e correr o gain margin do AN2867 — o CL/Cload estão fechados por precedente
+(mesmo cristal arranca no board WeAct real), não por cálculo verificado.
 **Próximo passo:** desenhar a sheet no KiCad.
 
 ⚠️ **A sheet 04 é a maior lacuna estrutural do esqueleto.** Foi criada a pensar num hub
@@ -112,8 +116,8 @@ agora a **todos** os blocos, não só aos novos: consultar Speeduino/rusEFI ante
 desenhar, e registar o que se adopta, adapta e rejeita.
 
 1. ~~Escrever `docs/hw/schematic/11_mcu_h562.md`~~ ✅ feito (2026-08-07)
-2. Desenhar `11_mcu_h562` → é o que dá pinos a todos os outros blocos. Falta fechar o
-   part number do cristal 8 MHz (caps de carga dependem do CL do datasheet)
+2. Desenhar `11_mcu_h562` → é o que dá pinos a todos os outros blocos. Cristal já
+   escolhido (`3225-8.00-10-10-10/A`, Cload 12 pF/12 pF C0G)
 3. ~~`04_tle8888_hub` → o hub de que quase tudo depende~~ **sem sentido na v2** — não há
    hub único. Decidir primeiro a divisão de sheets (ver aviso acima), *depois*:
    - `TPS65381A-Q1` (PMIC) → é o que dá `+3V3`/`+5V` a tudo o resto, faz as vezes do
