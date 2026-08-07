@@ -5,10 +5,15 @@ Ponto de entrada da documentação de hardware. **Ler esta página antes de qual
 **Objetivo do projeto:** sair da bancada para a **primeira partida em motor real** (4 cilindros, roda
 60-2, injeção e ignição sequenciais, borboleta eletrónica).
 
-**Desenho KiCad de produção:** base **microRusEFI** → `hardware/openems_ecu/`  
-(MCU **H562 soldado**, TLE8888-2QK). Arquitectura: [`microruseefi_as_base.md`](microruseefi_as_base.md).  
-WeAct H562 = **só bancada de firmware**, não entra na PCB de produção.  
-Produção: `hardware/openems_ecu/` (base mRE). Hellen-One **não** é a base da ECU.
+**Desenho KiCad de produção:** projecto **em branco** → `hardware/openems_v1/`  
+(MCU **H562 soldado** LQFP100, TLE8888-2QK, **4 camadas**).  
+WeAct H562 = **só bancada de firmware**, não entra na PCB de produção.
+
+⛔ **O fork do microRusEFI deixou de ser a base de desenho (2026-08-07).** O mRE continua
+no repo como **referência** (`hardware/vendor/hw_microRusEfi`) — é a implementação que a
+regra §1b obriga a consultar antes de cada bloco. O board antigo `hardware/openems_ecu/`
+**não foi apagado**, mas não recebe mais trabalho. Porquê da mudança:
+[`microruseefi_as_base.md`](microruseefi_as_base.md). Hellen-One **não** é a base da ECU.
 
 ---
 
@@ -22,7 +27,6 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 | Assunto | Fonte de verdade | ⚠️ NÃO usar |
 |---|---|---|
 | Mapa de pinos RGT6 vs VGT6 | `pinout.md` | `wiring_diagram.md` |
-| H562 no cobre microRusEFI (bring-up) | `pinout_mre_bringup.md` | forçar VGT6 PE* no PCB mRE |
 | INJ/IGN, enables, BSRR | `src/hal/out_pins.h` | qualquer doc |
 | Canais e pinos de ADC | `src/hal/adc.h` | qualquer doc |
 | Registadores do TLE8888 | `src/hal/tle8888_regs.h` | qualquer doc |
@@ -38,7 +42,9 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 | **KiCad libs Speeduino/rusEFI (review)** | `kicad_vendor_review.md` | inventar footprint se já existe upstream |
 | **BOM candidatos** | `bom_v1_candidates.md` | — |
 | **Esquemático modular (sheets)** | `schematic/README.md` | um PDF monólito sem revisão |
-| **Base de desenho KiCad (mRE → openems_ecu)** | `microruseefi_as_base.md` + `hardware/openems_ecu/` | Hellen-One como board (só footprint USB) |
+| **Board de produção (KiCad em branco)** | `hardware/openems_v1/` | `hardware/openems_ecu/` (fork mRE, congelado) |
+| ~~Base de desenho a partir do mRE~~ | `microruseefi_as_base.md` | **supersedido** — mRE é referência, não cobre |
+| ~~H562 no cobre microRusEFI (bring-up)~~ | ~~`pinout_mre_bringup.md`~~ | **removido** com o `BOARD=mre` |
 | ~~Condicionamento VR discreto~~ | `vr_input_conditioning.md` | **supersedido** (MAX9926/9924 saiu) |
 
 ### A regra

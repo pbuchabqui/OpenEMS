@@ -1,20 +1,17 @@
 # OpenEMS — hardware
 
-Caminho de fabrico da ECU OpenEMS: **microRusEFI adaptado**, não scaffold próprio.
+Caminho de fabrico da ECU OpenEMS: projecto KiCad **próprio, desenhado de raiz**.
+O microRusEFI é **referência**, não cobre (mudou em 2026-08-07 —
+ver [`docs/hw/microruseefi_as_base.md`](../docs/hw/microruseefi_as_base.md)).
 
 ## Estrutura
 
 ```
 hardware/
 ├── README.md                 ← este ficheiro
-├── openems_ecu/              ← projecto KiCad de produção (editar aqui)
-│   ├── openems_ecu.kicad_pro
-│   ├── openems_ecu.kicad_sch  ← raiz hierárquica
-│   ├── openems_ecu.kicad_pcb
-│   ├── mcu_h562.kicad_sch    ← STM32H562VGTx (activo)
-│   ├── TLE8888-1QK.kicad_sch
-│   ├── adc / hi-lo / pair / Flash / TLE9201 …
-│   ├── rusefi_lib/           ← símbolos locais mRE
+├── openems_v1/               ← ✅ projecto KiCad de produção (editar AQUI)
+├── openems_ecu/              ← ⛔ fork mRE, CONGELADO (recuo + libs verificadas)
+│   ├── rusefi_lib/           ← símbolos reutilizados pela board nova
 │   ├── rusefi_lib_external/  ← footprints/libs mRE
 │   └── hellen-one → vendor   ← só USB footprint (symlink)
 └── vendor/
@@ -24,7 +21,8 @@ hardware/
 ## Abrir no KiCad 7+
 
 ```bash
-kicad hardware/openems_ecu/openems_ecu.kicad_pro
+kicad hardware/openems_v1/openems_v1.kicad_pro     # produção
+kicad hardware/openems_ecu/openems_ecu.kicad_pro   # congelado, só consulta
 ```
 
 ## Vendor (submodule)

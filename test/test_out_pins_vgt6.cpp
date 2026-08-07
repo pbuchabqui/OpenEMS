@@ -17,8 +17,8 @@
 
 namespace {
 
-// GPIOE snapshot port index (A=0 B=1 C=2 D=3 E=4) — matches kOutPortE.
-constexpr uint8_t kPortE = 4u;
+// GPIOE snapshot port index (A=0 B=1 C=2 E=3).
+constexpr uint8_t kPortE = 3u;
 
 // Assert one channel drives GPIOE set bit on high and reset bit on low.
 void check_channel(uint8_t channel, uint8_t pin, const char* inj_name,
