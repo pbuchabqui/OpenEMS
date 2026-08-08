@@ -411,7 +411,7 @@
 					(reference "R1")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9a2b7e29-675b-4446-bb03-2d1d0fb3a4a2" (reference "R1") (unit 1)))
 		)
 	)
 	(symbol
@@ -490,7 +490,7 @@
 					(reference "R2")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9a2b7e29-675b-4446-bb03-2d1d0fb3a4a2" (reference "R2") (unit 1)))
 		)
 	)
 	(symbol
@@ -569,7 +569,7 @@
 					(reference "R3")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9a2b7e29-675b-4446-bb03-2d1d0fb3a4a2" (reference "R3") (unit 1)))
 		)
 	)
 	(symbol
@@ -648,7 +648,7 @@
 					(reference "D1")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9a2b7e29-675b-4446-bb03-2d1d0fb3a4a2" (reference "D1") (unit 1)))
 		)
 	)
 	(global_label "J1.FLEX_SIG"

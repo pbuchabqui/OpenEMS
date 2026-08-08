@@ -32,7 +32,7 @@ nele nesta fase.**
 
 | Item | Estado |
 |---|---|
-| Hierarquia root (ficheiros legacy) | ✅ existe; **renomear** para hierarquia v2 (abaixo) |
+| Hierarquia root | ✅ renomeada p/ v2 2026-08-08 — `04_tle8888_hub`/`06_etb` substituídos por 04a–d; root agora A3 (13 sheets) |
 | Stackup 4 camadas + contorno provisório | ✅ moldura only |
 | Netclasses de partida | ✅ (valores a rever na fase PCB) |
 | Sheet `01_power` | ✅ desenhada 2026-08-08, ERC 0 erros (13 avisos esperados) |
@@ -43,20 +43,22 @@ nele nesta fase.**
 | Símbolos TPS65381A / MC33810 / L9960T / CJ125 | ❌ em falta (bloqueiam sheets 04*) |
 | PCB / copper | ⏸️ diferido |
 
-## Hierarquia alvo (v2)
+## Hierarquia (v2)
 
-O root no disco ainda usa nomes legacy (`04_tle8888_hub`, `06_etb`). A tabela abaixo é a
-**hierarquia que se vai materializar** no KiCad — zero cobre a perder ao renomear.
+Renomeada no root 2026-08-08 — `04_tle8888_hub` e `06_etb` (ambas vazias, zero cobre)
+foram removidas da hierarquia e substituídas pelos 4 sheets 04a–d abaixo. Root
+`openems_v1.kicad_sch` passou de A4 para **A3** (13 sheets já não cabiam sem sobrepor
+o cartão de título).
 
-| Sheet | Ficheiro alvo | Função | Doc | Estado |
+| Sheet | Ficheiro | Função | Doc | Estado |
 |---|---|---|---|---|
 | 01 | `01_power` | Protecção VBAT (P-FET, fusível, TVS, bulk) + star GND | `01_power.md` ✅ | ✅ sheet 2026-08-08 (ERC 0, F1/Q1/R1/R2/D1/C1/C2) |
 | 02 | `02_ckp` | CKP Hall → `PA0` (espelho do CMP) | `02_ckp.md` ✅ | ✅ sheet 2026-08-08 (ERC 0) |
 | 03 | `03_cmp` | CMP Hall → `PA1` | `03_cmp.md` ✅ | ⚠️ rascunho (alinhado ao CKP) |
-| 04a | `04_pmic_tps65381` | TPS65381A-Q1 (rails, SPI, WD, ENDRV) | *a escrever* | ❌ + falta símbolo |
-| 04b | `04_drive_mc33810` | MC33810 INJ/IGN | *a escrever* | ❌ + falta símbolo |
-| 04c | `04_bridge_l9960t` | L9960T ETB+EWG (substitui `06_etb`) | *a escrever* | ❌ + falta símbolo |
-| 04d | `04_wbo2_cj125` | CJ125 + heater | *a escrever* | ❌ + falta símbolo |
+| 04a | `04_pmic_tps65381` | TPS65381A-Q1 (rails, SPI, WD, ENDRV) | *a escrever* | ❌ sheet só com título — falta símbolo |
+| 04b | `04_drive_mc33810` | MC33810 INJ/IGN | *a escrever* | ❌ sheet só com título — falta símbolo |
+| 04c | `04_bridge_l9960t` | L9960T ETB+EWG (substitui `06_etb`) | *a escrever* | ❌ sheet só com título — falta símbolo |
+| 04d | `04_wbo2_cj125` | CJ125 + heater | *a escrever* | ❌ sheet só com título — falta símbolo |
 | 05 | `05_analog` | ADC conforme **pinout_v2** (13 ch) | `05_analog.md` ✅ | ✅ sheet 2026-08-08, ERC 0, netlist 13/13 |
 | 07 | `07_flex` | Flex → **`PB4`** (pinout_v2) | `07_flex.md` ✅ pino | ⚠️ rascunho (pino corrigido) |
 | 08 | `08_usb` | USB isolado | `08_usb.md` | ❌ vazio |
@@ -135,7 +137,7 @@ consultar Speeduino/rusEFI; registar adoptamos / adaptamos / rejeitamos.
 3. ~~CKP/CMP Hall~~ ✅ `02_ckp` ERC 0; `03_cmp` alinhado
 4. ~~Flex em `PB4`~~ ✅ pino corrigido
 5. ~~Refazer `05_analog`~~ ✅ ERC 0, netlist 13/13 (2026-08-08)
-6. **Hierarquia root v2** — renomear/substituir `04_tle8888_hub` e `06_etb` pelos 04a–d
+6. ~~Hierarquia root v2~~ ✅ `04_tle8888_hub`/`06_etb` substituídos por 04a–d (2026-08-08, root A3)
 7. ~~`01_power`~~ ✅ desenhada 2026-08-08 (ERC 0: F1/Q1/R1/R2/D1/C1/C2, star GND flags). **Falta ainda:** símbolo + sheet PMIC (`04_pmic_tps65381`)
 8. **MC33810 → L9960T → CJ125 → CAN → USB → conectores → knock DNP**
 9. ERC projecto completo + PDF + BOM schematic-level

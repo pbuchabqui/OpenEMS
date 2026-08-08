@@ -942,7 +942,7 @@
 					(reference "#FLG01")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9cb752de-cc5a-47f1-887e-0e2f11df13da" (reference "#FLG01") (unit 1)))
 		)
 	)
 	(symbol
@@ -1018,7 +1018,7 @@
 					(reference "#FLG02")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9cb752de-cc5a-47f1-887e-0e2f11df13da" (reference "#FLG02") (unit 1)))
 		)
 	)
 	(symbol
@@ -1094,7 +1094,7 @@
 					(reference "#FLG03")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9cb752de-cc5a-47f1-887e-0e2f11df13da" (reference "#FLG03") (unit 1)))
 		)
 	)
 	(symbol
@@ -1173,7 +1173,7 @@
 					(reference "F1")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9cb752de-cc5a-47f1-887e-0e2f11df13da" (reference "F1") (unit 1)))
 		)
 	)
 	(symbol
@@ -1257,7 +1257,7 @@
 					(reference "Q1")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9cb752de-cc5a-47f1-887e-0e2f11df13da" (reference "Q1") (unit 1)))
 		)
 	)
 	(symbol
@@ -1336,7 +1336,7 @@
 					(reference "D1")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9cb752de-cc5a-47f1-887e-0e2f11df13da" (reference "D1") (unit 1)))
 		)
 	)
 	(symbol
@@ -1417,7 +1417,7 @@
 					(reference "C1")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9cb752de-cc5a-47f1-887e-0e2f11df13da" (reference "C1") (unit 1)))
 		)
 	)
 	(symbol
@@ -1498,7 +1498,7 @@
 					(reference "C2")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9cb752de-cc5a-47f1-887e-0e2f11df13da" (reference "C2") (unit 1)))
 		)
 	)
 	(symbol
@@ -1577,7 +1577,7 @@
 					(reference "R1")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9cb752de-cc5a-47f1-887e-0e2f11df13da" (reference "R1") (unit 1)))
 		)
 	)
 	(symbol
@@ -1656,7 +1656,7 @@
 					(reference "R2")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/9cb752de-cc5a-47f1-887e-0e2f11df13da" (reference "R2") (unit 1)))
 		)
 	)
 	(global_label "PGND"

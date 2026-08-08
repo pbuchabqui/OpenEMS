@@ -550,7 +550,7 @@
 					(reference "R1")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/375cbaa1-0dd9-4ee5-9d66-d62d2e8350be" (reference "R1") (unit 1)))
 		)
 	)
 	(symbol
@@ -629,7 +629,7 @@
 					(reference "D1")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/375cbaa1-0dd9-4ee5-9d66-d62d2e8350be" (reference "D1") (unit 1)))
 		)
 	)
 	(symbol
@@ -708,7 +708,7 @@
 					(reference "R2")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/375cbaa1-0dd9-4ee5-9d66-d62d2e8350be" (reference "R2") (unit 1)))
 		)
 	)
 	(symbol
@@ -787,7 +787,7 @@
 					(reference "R3")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/375cbaa1-0dd9-4ee5-9d66-d62d2e8350be" (reference "R3") (unit 1)))
 		)
 	)
 	(symbol
@@ -866,7 +866,7 @@
 					(reference "R4")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/375cbaa1-0dd9-4ee5-9d66-d62d2e8350be" (reference "R4") (unit 1)))
 		)
 	)
 	(symbol
@@ -947,7 +947,7 @@
 					(reference "C1")
 					(unit 1)
 				)
-			)
+			 (path "/79296e4b-3ad2-414d-b607-9eaf9f8a1416/375cbaa1-0dd9-4ee5-9d66-d62d2e8350be" (reference "C1") (unit 1)))
 		)
 	)
 	(global_label "+5V_SENS_A"

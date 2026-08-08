@@ -1,0 +1,25 @@
+(kicad_sch
+	(version 20260101)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid a9679867-1d15-48a8-9078-24d3a1194c8e)
+	(paper "A4")
+	(lib_symbols)
+	(text "Sheet 04d — CJ125 wideband O2 + heater | substitui hub TLE8888"
+		(exclude_from_sim no)
+		(at 10.16 12.7 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left bottom)
+		)
+		(uuid "070d57d9-60cc-4790-87d7-118dcb74c466")
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)
