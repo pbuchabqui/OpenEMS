@@ -2,4 +2,5 @@
   (version 7)
   (lib (name "tle8888qk")(type "KiCad")(uri "${KIPRJMOD}/lib/tle8888qk.kicad_sym")(options "")(descr "TLE8888 LQFP-100 — pinout verificado DS Rev 1.2 (docs/hw/tle8888_pinout.md)"))
   (lib (name "pesd1can")(type "KiCad")(uri "${KIPRJMOD}/lib/pesd1can.kicad_sym")(options "")(descr "PESD1CAN — proteccao ESD do barramento CAN"))
+  (lib (name "STM32H562VGTx")(type "KiCad")(uri "/home/pedro/OpenEMS/hardware/openems_v1/lib/STM32H562VGTx.kicad_sym")(options "")(descr "STM32H562VGTx extraido de MCU_ST_STM32H5.kicad_sym oficial (100 pinos, 1..100 completos, pino98=VCAP) — a lib completa (52 simbolos) nao resolvia no add_schematic_component deste backend"))
 )

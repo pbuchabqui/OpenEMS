@@ -4,137 +4,148 @@ Projecto KiCad **desenhado de raiz**. Nenhum cobre herdado.
 Substitui o fork do microRusEFI em `../openems_ecu/` (congelado desde 2026-08-07 —
 porquê em [`docs/hw/microruseefi_as_base.md`](../../docs/hw/microruseefi_as_base.md)).
 
-⚠️ **Este ficheiro é do esqueleto inicial (v1 do plano, antes da troca de CIs).** A
-arquitectura activa é a **v2** — TLE8888 saiu, entraram TPS65381A-Q1/MC33810/L9960T/CJ125
-— ver [`docs/hw/architecture_v2.md`](../../docs/hw/architecture_v2.md) e
-[`docs/hw/pinout_v2.md`](../../docs/hw/pinout_v2.md), a autoridade de pinos. A hierarquia
-de sheets abaixo é a que foi **criada** (nomes de ficheiro reais); a coluna **Estado v2**
-diz o que mudou em cada uma.
+Arquitectura activa: **v2** — TLE8888 saiu; entraram TPS65381A-Q1 / MC33810 / L9960T /
+CJ125. Autoridade de pinos: [`docs/hw/pinout_v2.md`](../../docs/hw/pinout_v2.md).
+Arquitectura: [`docs/hw/architecture_v2.md`](../../docs/hw/architecture_v2.md).
 
 ```bash
 kicad hardware/openems_v1/openems_v1.kicad_pro
 ```
 
-## Estado — esqueleto, sem um único componente colocado
+## Fase actual — só esquemático profissional
 
-O que existe é a moldura. **Nenhum bloco foi desenhado ainda.**
+**Âmbito agora:** sheets KiCad correctas, legíveis, ERC limpo, docs de bloco alinhadas
+a `pinout_v2.md`. Definition of done por sheet em
+[`docs/hw/schematic/README.md`](../../docs/hw/schematic/README.md).
+
+**Fora de âmbito até o esquemático fechar:**
+
+- Placement, copper, pours, DRC de PCB, gerbers, PnP
+- Footprint AMPSEAL 23 (bloqueia **layout** da sheet 09, não o desenho eléctrico do mapa
+  de pinos no esquemático)
+- Drivers de firmware dos CIs novos
+
+O `.kicad_pcb` existe só como moldura (contorno + stackup de partida). **Não se trabalha
+nele nesta fase.**
+
+## Estado (2026-08-08)
 
 | Item | Estado |
 |---|---|
-| Hierarquia de sheets (12) | ✅ criada, todas vazias |
-| Stackup 4 camadas (`F.Cu`, `In1.Cu`, `In2.Cu`, `B.Cu`) | ✅ |
-| Contorno 160 × 110 mm, cantos R3 | ✅ provisório |
-| Design rules + 5 netclasses | ✅ valores de partida |
-| Libs verificadas registadas | ✅ (2 símbolos, 4 footprints) |
-| Componentes, nets, cobre | ❌ **nada** |
+| Hierarquia root (ficheiros legacy) | ✅ existe; **renomear** para hierarquia v2 (abaixo) |
+| Stackup 4 camadas + contorno provisório | ✅ moldura only |
+| Netclasses de partida | ✅ (valores a rever na fase PCB) |
+| Sheet `01_power` | ✅ desenhada 2026-08-08, ERC 0 erros (13 avisos esperados) |
+| Sheet `11_mcu_h562` | 🔄 desenhada, **limpeza ERC / title block** pendente |
+| Sheets `03_cmp`, `07_flex` | ⚠️ rascunho — rever pinos e qualidade |
+| Sheet `05_analog` | ⛔ rascunho no **mapa pré-v2** — **refazer**, não remendar |
+| Restantes sheets | ❌ vazias |
+| Símbolos TPS65381A / MC33810 / L9960T / CJ125 | ❌ em falta (bloqueiam sheets 04*) |
+| PCB / copper | ⏸️ diferido |
 
-## Hierarquia
+## Hierarquia alvo (v2)
 
-Espelha [`docs/hw/schematic/`](../../docs/hw/schematic/) — um sheet por bloco,
-para revisão barata e paralelizável.
+O root no disco ainda usa nomes legacy (`04_tle8888_hub`, `06_etb`). A tabela abaixo é a
+**hierarquia que se vai materializar** no KiCad — zero cobre a perder ao renomear.
 
-| Sheet | Bloco | Doc | Estado v2 |
-|---|---|---|---|
-| `sheets/01_power` | Alimentação — protecção, buck, LDO, rails de sensor | `01_power.md` | 🔄 buck/LDO agora dentro do **TPS65381A-Q1**; doc não revisto |
-| `sheets/02_ckp` | ~~CKP — front-end VR pela interface do TLE8888~~ | `02_ckp.md` ⚠️ stale | ⛔ **CKP passa a Hall**, mesmo condicionamento do `03_cmp` |
-| `sheets/03_cmp` | CMP — Hall directo ao `PA1` | `03_cmp.md` | ✅ sobrevive |
-| `sheets/04_tle8888_hub` | ~~Hub TLE8888-2QK — SPI, INJ, IGN, VVT, relés, CAN~~ | `04_tle8888_hub.md` ⛔ anulado | ⛔ **splita em 4**: MC33810 (INJ/IGN), L9960T (ver sheet 06), CJ125 (wideband), TPS65381A (PMIC) + expansor de I/O SPI. Nenhum doc de bloco novo escrito |
-| `sheets/05_analog` | Condicionamento ADC — divisores, clamps, VBATT `PC3` | `05_analog.md` | 🔄 canais novos entram (`LAMBDA_UA/UR`, `APP1/2`, `EWG_POS`) — doc não revisto |
-| `sheets/06_etb` | ~~ETB — ponte-H BTS7960 externa, PWM 10 kHz~~ | `06_etb.md` ⚠️ stale | 🔄 **L9960T** substitui o BTS7960, serve ETB **e** EWG |
-| `sheets/07_flex` | Flex fuel | `07_flex.md` | ✅ sobrevive |
-| `sheets/08_usb` | USB com isolador galvânico | `08_usb.md` | ✅ sobrevive |
-| `sheets/09_connectors` | AMPSEAL J1 (35 sinais) + J2 (23 potência) | `09_connectors_weact.md` | ✅ sobrevive — footprint do J2 (23 vias) ainda não existe, ver abaixo |
-| `sheets/10_knock_dnp` | Knock — só footprint, DNP na v1 | `10_knock_dnp.md` | ✅ sobrevive, continua diferido |
-| `sheets/11_mcu_h562` | **MCU H562VGT6** — decoupling, cristal, BOOT0, SWD, VCAP, VREF+ | `11_mcu_h562.md` ✅ | ✅ escrito de raiz p/ v2 (arquitectura-agnóstico — o MCU é igual em v1/v2) |
+| Sheet | Ficheiro alvo | Função | Doc | Estado |
+|---|---|---|---|---|
+| 01 | `01_power` | Protecção VBAT (P-FET, fusível, TVS, bulk) + star GND | `01_power.md` ✅ | ✅ sheet 2026-08-08 (ERC 0, F1/Q1/R1/R2/D1/C1/C2) |
+| 02 | `02_ckp` | CKP Hall → `PA0` (espelho do CMP) | `02_ckp.md` ✅ | ✅ sheet 2026-08-08 (ERC 0) |
+| 03 | `03_cmp` | CMP Hall → `PA1` | `03_cmp.md` ✅ | ⚠️ rascunho (alinhado ao CKP) |
+| 04a | `04_pmic_tps65381` | TPS65381A-Q1 (rails, SPI, WD, ENDRV) | *a escrever* | ❌ + falta símbolo |
+| 04b | `04_drive_mc33810` | MC33810 INJ/IGN | *a escrever* | ❌ + falta símbolo |
+| 04c | `04_bridge_l9960t` | L9960T ETB+EWG (substitui `06_etb`) | *a escrever* | ❌ + falta símbolo |
+| 04d | `04_wbo2_cj125` | CJ125 + heater | *a escrever* | ❌ + falta símbolo |
+| 05 | `05_analog` | ADC conforme **pinout_v2** (13 ch) | `05_analog.md` ✅ | ✅ sheet 2026-08-08, ERC 0, netlist 13/13 |
+| 07 | `07_flex` | Flex → **`PB4`** (pinout_v2) | `07_flex.md` ✅ pino | ⚠️ rascunho (pino corrigido) |
+| 08 | `08_usb` | USB isolado | `08_usb.md` | ❌ vazio |
+| 09 | `09_connectors` | AMPSEAL J1/J2 mapa de pinos | `09_connectors_weact.md` | ❌ vazio |
+| 10 | `10_knock_dnp` | Knock DNP | `10_knock_dnp.md` | ❌ vazio |
+| 11 | `11_mcu_h562` | MCU H562VGT6 local | `11_mcu_h562.md` ✅ | ✅ netlist U1 OK (2026-08-08); globals sync PA0/PA1/PB4 |
+| 12 | `12_can` (recomendado) | FDCAN1 + ESD | *a escrever* | ❌ |
 
-✅ **Doc do bloco 11 escrito (2026-08-07).** Pinos verificados contra o symbol oficial;
-VCAP 2×2,2 µF confirmado por fonte primária H562 real (WeAct); decoupling por VDD
-adaptado de `stm32.kicad_sch` da rusEFI (F407, mesma filosofia ST). Cristal HSE
-escolhido no mesmo dia — `3225-8.00-10-10-10/A` (JLCPCB/LCSC `C518154`), CL 10 pF (lido
-do schematic PDF real da WeAct, não os 20 pF do rusEFI), Cload 12 pF/12 pF C0G, mesmo
-par usado no WeAct. **Falta só** confirmar ESR/drive-level no datasheet completo do
-fabricante e correr o gain margin do AN2867 — o CL/Cload estão fechados por precedente
-(mesmo cristal arranca no board WeAct real), não por cálculo verificado.
-**Próximo passo:** desenhar a sheet no KiCad.
+Docs de bloco: [`docs/hw/schematic/`](../../docs/hw/schematic/).
 
-⚠️ **A sheet 04 é a maior lacuna estrutural do esqueleto.** Foi criada a pensar num hub
-único; a arquitectura v2 não tem hub — tem quatro CIs cada um com o seu SPI CS. A sheet
-existe no ficheiro (`sheets/04_tle8888_hub.kicad_sch`, vazia) mas **o nome e a hierarquia
-não foram actualizados**: continua por decidir se isto vira 4 sheets novas ou se `04` é
-renomeada e as outras 3 se somam à lista. Nenhuma destas sheets foi desenhada, então não
-há cobre/ligações a perder ao decidir — é só uma decisão de organização, adiada.
+### Sheet 11 (MCU) — o que já está fechado no papel
 
-## Netclasses (valores de partida, não finais)
+- Pinos verificados contra o symbol oficial; VCAP 2×2,2 µF (WeAct H562 real).
+- HSE: `3225-8.00-10-10-10/A` (CL 10 pF), Cload 12 pF/12 pF C0G.
+- Sheet desenhada (U1 + decoupling + cristal + BOOT0 + SWD + Y2 DNP).
+- ERC sheet isolado: 1 erro agregado de pinos GPIO por ligar (esperado).
 
-| Classe | Trace | Clearance | Para |
+### ✅ Netlist U1 corrigido (2026-08-08)
+
+**Causa:** em `lib_symbols` o símbolo estava como `"STM32H562VGTx"` mas a instância
+tinha `lib_id "STM32H562VGTx:STM32H562VGTx"` — o KiCad não resolvia os pinos
+(`Net-(U1-Pad??)`, 100 pinos na mesma net).
+
+**Fix:** `lib_id` da instância U1 → `"STM32H562VGTx"` (bate com o nome embutido).
+
+**Validado no netlist de projecto:**
+- `MCU.PA0` → U1/23 + R13/C2 (sheet 02_ckp)
+- `MCU.PA1` → U1/24 + R4/C1 (sheet 03_cmp)
+- `MCU.PB4` → U1/90 + flex (sheet 07)
+
+Globals `MCU.PA0` / `PA1` / `PB4` colocados na sheet 11. GPIO ainda sem sheet destino
+aparecem como `unconnected-(U1-…)` no netlist — esperado até as outras sheets.
+
+## Convenções de nets (esquemático)
+
+- Rails: `+3V3`, `+5V_SENS_A`, `+5V_SENS_B`, `VBAT`, `VDDA`, `PGND`, `SGND`, `AGND`
+- MCU inter-sheet: global labels `MCU.<PORTn>` (ex. `MCU.PA1`)
+- Conector: `J1.*` / `J2.*`
+- Locais de sheet: labels locais `N_*`
+- **Um** `PWR_FLAG` por rail, na sheet que **produz** o rail (PMIC / `01_power`)
+- Root = índice de sheets; **não** hierarchical pins nesta fase
+
+Autoridade de pinos: **só** [`pinout_v2.md`](../../docs/hw/pinout_v2.md).
+
+## Netclasses (partida — fase PCB)
+
+| Classe | Trace | Clearance | Nota |
 |---|---|---|---|
 | `Default` | 0,25 mm | 0,20 mm | lógica, SPI, GPIO |
-| `Power` | 1,00 mm | 0,35 mm | VBAT, +12 V, rails principais |
-| `Injector` | 0,80 mm | 0,30 mm | ⚠️ dimensionada para **2,2 A** (saída INJ do TLE, que saiu). O MC33810 tem saídas de **4,5 A** — revisitar largura com IPC-2152 antes de rotear |
-| `CKP_VR` | 0,25 mm | 0,40 mm | ⚠️ **nome desactualizado** — foi pensada para o par diferencial VR do CKP. Com CKP=Hall (v2), o sinal é single-ended, igual ao CMP — provavelmente não precisa de classe própria. Decidir ao desenhar `02_ckp` |
-| `CAN` | 0,25 mm | 0,25 mm | par diferencial, gap 0,2 mm — sobrevive, FDCAN1 continua diferencial |
-| `Analog` | 0,25 mm | 0,30 mm | divisores e entradas de ADC |
-
-As larguras vêm de regra de bolso, **não de cálculo de subida de temperatura**.
-Refazer com IPC-2152 quando as correntes reais estiverem fechadas
-(ver [`bom_v1_candidates.md`](../../docs/hw/bom_v1_candidates.md)) — **e depois da
-troca de arquitectura, `Injector` e `CKP_VR` são as duas que mais provavelmente mudam**.
+| `Power` | 1,00 mm | 0,35 mm | VBAT, rails |
+| `Injector` | 0,80 mm | 0,30 mm | ⚠️ MC33810 4,5 A — rever IPC-2152 no layout |
+| `CKP_VR` | 0,25 mm | 0,40 mm | ⚠️ nome legacy; CKP=Hall — provavelmente fundir com Default |
+| `CAN` | 0,25 mm | 0,25 mm | par diferencial |
+| `Analog` | 0,25 mm | 0,30 mm | divisores ADC |
 
 ## Libs
 
-`lib/` tem **só o que esta board usa** — o catálogo rusEFI completo (76 libs de símbolos,
-conectores Bosch/Nissan, joysticks) foi deliberadamente deixado de fora.
+| Lib | Uso v2 |
+|---|---|
+| `MCU_ST_STM32H5` (KiCad stock) + `lib/STM32H562VGTx.kicad_sym` | MCU |
+| `pesd1can.kicad_sym` | ESD CAN |
+| `rusefi_ref.pretty` | AMPSEAL 35 (+ net-tie) |
+| `tle8888qk.kicad_sym` | ⛔ referência só — TLE saiu |
+| TPS65381A / MC33810 / L9960T / CJ125 | ❌ **a criar** a partir de datasheet, um CI de cada vez |
 
-| Lib | Conteúdo | Proveniência | Uso na v2 |
-|---|---|---|---|
-| `tle8888qk.kicad_sym` | TLE8888 LQFP-100 | rusEFI; pinout verificado DS Rev 1.2 | ⛔ **nenhum** — TLE8888 saiu da arquitectura. Mantido só como referência do que substituir |
-| `pesd1can.kicad_sym` | PESD1CAN, ESD do CAN | rusEFI | ✅ CAN continua a existir (FDCAN1) |
-| `rusefi_ref.pretty` | `AMPSEAL_35_{RA,STRAIGHT,COMBINED}`, `Net-Tie_2_8.5mil` | rusEFI | ✅ conector sobrevive intacto |
+Footprint AMPSEAL 23: desenhar na **fase PCB** a partir de
+[`docs/hw/TE_770669_header_RA_23.pdf`](../../docs/hw/TE_770669_header_RA_23.pdf).
 
-O MCU vem da lib oficial do KiCad (`MCU_ST_STM32H5:STM32H562VGTx`) — é a mesma fonte
-com que o mapa pino-a-pino foi verificado.
+## Ordem de trabalho (esquemático)
 
-⚠️ **Faltam os símbolos dos 4 CIs da v2** — TPS65381A-Q1, MC33810, L9960T, CJ125. Nenhum
-está na lib do rusEFI (são famílias diferentes das que o mRE usava) e **nenhum foi
-verificado ainda**. Não inventar footprint/símbolo a partir de memória — a regra §1 do
-`docs/hw/README.md` existe por causa exactamente disto. Procurar lib oficial do
-fabricante ou desenhar contra o datasheet, um CI de cada vez, ao chegar a vez do bloco.
+Regra §1b de [`docs/hw/README.md`](../../docs/hw/README.md) em **todo** o bloco:
+consultar Speeduino/rusEFI; registar adoptamos / adaptamos / rejeitamos.
 
-### ⚠️ Falta o footprint do AMPSEAL 23
+1. ~~Doc + cristal + desenho inicial `11_mcu_h562`~~ ✅ (limpeza ERC ainda aberta)
+2. ~~Limpar sheet 11~~ ✅ (netlist U1 corrigido 2026-08-08)
+3. ~~CKP/CMP Hall~~ ✅ `02_ckp` ERC 0; `03_cmp` alinhado
+4. ~~Flex em `PB4`~~ ✅ pino corrigido
+5. ~~Refazer `05_analog`~~ ✅ ERC 0, netlist 13/13 (2026-08-08)
+6. **Hierarquia root v2** — renomear/substituir `04_tle8888_hub` e `06_etb` pelos 04a–d
+7. ~~`01_power`~~ ✅ desenhada 2026-08-08 (ERC 0: F1/Q1/R1/R2/D1/C1/C2, star GND flags). **Falta ainda:** símbolo + sheet PMIC (`04_pmic_tps65381`)
+8. **MC33810 → L9960T → CJ125 → CAN → USB → conectores → knock DNP**
+9. ERC projecto completo + PDF + BOM schematic-level
+10. **Só depois:** fase PCB (footprints em falta, placement, pours, DRC)
 
-A decisão do conector é **35 vias (sinais) + 23 vias (potência)**. O footprint de 35 existe
-e está verificado; **o de 23 não existe** em lado nenhum do repo — só há o modelo 3D
-(`../openems_ecu/rusefi_lib_external/3d/AMPSEAL_23_STRAIGHT.stp`).
+## O que **não** fazer nesta fase
 
-Tem de ser desenhado a partir de [`docs/hw/TE_770669_header_RA_23.pdf`](../../docs/hw/TE_770669_header_RA_23.pdf)
-(página *RECOMMENDED P.C. BOARD LAYOUT*). **Bloqueia a sheet 09.**
-
-## Ordem de trabalho
-
-A regra §1b do [`docs/hw/README.md`](../../docs/hw/README.md) é obrigatória e aplica-se
-agora a **todos** os blocos, não só aos novos: consultar Speeduino/rusEFI antes de
-desenhar, e registar o que se adopta, adapta e rejeita.
-
-1. ~~Escrever `docs/hw/schematic/11_mcu_h562.md`~~ ✅ feito (2026-08-07)
-2. Desenhar `11_mcu_h562` → é o que dá pinos a todos os outros blocos. Cristal já
-   escolhido (`3225-8.00-10-10-10/A`, Cload 12 pF/12 pF C0G)
-3. ~~`04_tle8888_hub` → o hub de que quase tudo depende~~ **sem sentido na v2** — não há
-   hub único. Decidir primeiro a divisão de sheets (ver aviso acima), *depois*:
-   - `TPS65381A-Q1` (PMIC) → é o que dá `+3V3`/`+5V` a tudo o resto, faz as vezes do
-     antigo passo "01_power depende disto"
-   - `MC33810` (INJ/IGN) → mesmo princípio do antigo hub: entradas directas no GPIOE,
-     não altera o scheduler
-   - `L9960T` (ETB+EWG), `CJ125` (wideband) → sem dependência entre si, paralelizáveis
-4. `01_power` → revisto: buck/LDO já vêm do TPS65381A, este sheet fica mais fino
-   (protecção de entrada + o que o PMIC não cobre)
-5. Restantes blocos, ERC por sheet à medida
-6. Só depois: footprints, placement, pours, DRC
-
-Pré-requisito silencioso destes passos: os símbolos dos 4 CIs (ver "Libs" acima) não
-existem. Sem eles, nenhum dos passos 3 chega a ter um componente para colocar.
-
-## O que **não** fazer
-
-- Não copiar cobre do `../openems_ecu/` — foi por isso que se recomeçou.
-- Não montar WeAct na ECU de motor (grau consumidor + headers). WeAct é **só bancada**.
-- Não tratar as netclasses acima como fechadas.
+- Não copiar cobre de `../openems_ecu/`
+- Não montar WeAct na ECU de motor (só bancada de firmware)
+- Não tratar netclasses como fechadas
+- Não inventar pinos/símbolos de CI de memória — datasheet + §1
+- Não abrir layout/copper até o DoD do esquemático
+- Não misturar experimentação tscircuit (raiz do repo) com este projecto KiCad

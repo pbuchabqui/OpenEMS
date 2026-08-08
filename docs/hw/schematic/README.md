@@ -1,86 +1,122 @@
-# Esquemático modular — OpenEMS interface board v1
+# Esquemático modular — OpenEMS ECU v2
 
-⚠️ **Arquitectura activa é a v2** (2026-08-07) — TLE8888 saiu, entraram
-TPS65381A-Q1/MC33810/L9960T/CJ125. Ver [`../architecture_v2.md`](../architecture_v2.md).
-A tabela abaixo mostra os 11 sheets tal como foram **criados**; a coluna **Estado v2**
-diz o que cada um herdou, perdeu ou ganhou.
+⚠️ **Arquitectura activa é a v2** (2026-08-07) — TLE8888 saiu; entraram
+TPS65381A-Q1 / MC33810 / L9960T / CJ125. Ver [`../architecture_v2.md`](../architecture_v2.md).
 
-## Porque módulos e não “um PDF gigante”
+## Fase actual — só esquemático profissional
 
-O netlist (`../netlist_v1.md`) diz **o que liga a quê**. Estes ficheiros dizem **como desenhar
-cada bloco no KiCad**: topologia, valores, refs Speeduino/rusEFI, traps, e lista de
-componentes. Um sheet por módulo = revisão barata e paralelizável.
+**Faz-se agora:** docs de bloco + sheets KiCad + ERC + PDF/BOM schematic.
 
-| Ordem | Sheet | Ficheiro | Estado | Estado v2 |
-|------:|-------|----------|--------|---|
-| 0 | Raiz / hierarquia | este README | ✅ | — |
-| 1 | Alimentação | `01_power.md` | ✅ | 🔄 buck/LDO agora dentro do TPS65381A-Q1 |
-| 2 | ~~CKP (VR / TLE)~~ | `02_ckp.md` | ⚠️ **stale** | ⛔ CKP passa a Hall, condicionamento igual ao CMP |
-| 3 | CMP (Hall) | `03_cmp.md` | ✅ | ✅ sobrevive |
-| 4 | ~~Hub TLE8888 (SPI, INJ, IGN, VVT, relés, CAN, trackers)~~ | `04_tle8888_hub.md` | ⛔ **anulado** | ⛔ splita em 4 CIs (MC33810/L9960T/CJ125/TPS65381A) + expansor SPI. Nenhum doc novo escrito |
-| 5 | Condicionamento ADC | `05_analog.md` | ✅ | 🔄 canais novos (`LAMBDA_UA/UR`, `APP1/2`, `EWG_POS`), doc não revisto |
-| 6 | ~~ETB (BTS7960)~~ | `06_etb.md` | ⚠️ **stale** | 🔄 L9960T substitui, serve ETB **e** EWG |
-| 7 | Flex fuel | `07_flex.md` | ✅ | ✅ sobrevive |
-| 8 | USB isolado | `08_usb.md` | ✅ | ✅ sobrevive |
-| 9 | Conectores + WeAct | `09_connectors_weact.md` | ✅ | ✅ sobrevive — falta footprint AMPSEAL 23 |
-| 10 | Knock (footprint only) | `10_knock_dnp.md` | ✅ | ✅ sobrevive, diferido |
-| 11 | **MCU H562VGT6** (decoupling, cristal, BOOT0, SWD, VCAP, VREF+) | `11_mcu_h562.md` | ✅ | — |
+**Não se faz agora:** layout, copper, pours, DRC de PCB, gerbers. Footprint AMPSEAL 23
+é dívida da **fase PCB**, não bloqueia o mapa eléctrico no esquemático.
 
-✅ **Bloco 11 fechado (2026-08-07).** Enquanto a base era o fork microRusEFI, o sheet do
-MCU vinha herdado (`stm32.kicad_sch` → `mcu_h562.kicad_sch`) e nunca precisou de doc
-próprio. Com o projecto em branco isso deixou de ser verdade — o MCU teve de ser
-desenhado do zero, verificado contra o symbol oficial KiCad + `stm32h562_ref.md`
-(WeAct H562, board real) + `stm32.kicad_sch` da rusEFI (F407, mesma filosofia ST).
-Cristal HSE fechado no mesmo dia: `3225-8.00-10-10-10/A` (CL 10 pF, lido do schematic
-PDF real da WeAct — não os 20 pF do rusEFI), Cload 12 pF/12 pF C0G.
-**Próximo passo:** desenhar a sheet `11_mcu_h562` no KiCad.
+Projecto: `hardware/openems_v1/openems_v1.kicad_pro`  
+Autoridade de pinos: [`../pinout_v2.md`](../pinout_v2.md)  
+Porquê / arquitectura: [`../architecture_v2.md`](../architecture_v2.md)  
+Nets pré-v2 (só blocos que sobreviveram): `../netlist_v1.md` — **não** copiar blocos TLE.
 
-**Fonte de verdade cruzada:** porquê → `interface_board_v1.md` (v1) +
-[`../architecture_v2.md`](../architecture_v2.md) (o que a v2 anulou/mudou); pinos →
-[`../pinout_v2.md`](../pinout_v2.md) — **não** `pinout.md`/`tle8888_pinout.md`, que são
-pré-v2; nets → `netlist_v1.md` **para os blocos que sobreviveram só** (o próprio ficheiro
-está marcado pré-v2 no `docs/hw/README.md` §1). **Não duplicar racional** aqui.
+## Definition of done (por sheet)
 
-## Hierarquia KiCad (projecto gerado)
+Um sheet só fecha quando cumprir **todos**:
 
-**Abrir (produção):** `hardware/openems_v1/openems_v1.kicad_pro` — ✅ **criado, sheets vazias**  
-**Pinmap lógico:** `docs/hw/pinmap_logical.md`
+| Critério | Nota |
+|---|---|
+| Correctness | Pinos/nets batem com `pinout_v2.md` |
+| §1b | Doc com Adoptamos / Adaptamos / Rejeitamos (Speeduino/rusEFI ou DS) |
+| ERC | 0 erros estruturais no sheet |
+| Legibilidade | Fios + junctions; power symbols; globals só inter-sheet |
+| Naming | Rails `+3V3`/`+5V_SENS_*`/`VBAT`/`*GND`; `MCU.*`; `J1.*`/`J2.*` |
+| Apresentação | `title_block`; valores + PN; DNP marcado |
+| Doc sync | Checklist do `.md` + este README actualizados |
+| Sem PCB | Não se faz placement/copper |
+
+**DoD do projecto (fase esquemático):** hierarquia v2 desenhada + ERC projecto sem erros
+bloqueantes + PDF multi-sheet + BOM schematic. Layout = fase seguinte.
+
+## Convenções
+
+- **Global labels** para nets inter-sheet (`MCU.*`, `J1.*`, rails). Root = índice.
+- **Um** `PWR_FLAG` por rail, na sheet que **produz** o rail.
+- Não misturar hierarchical pins e globals na mesma net nesta fase.
+
+## Docs de bloco e estado
+
+| Ordem | Sheet alvo | Ficheiro doc | Estado doc | Estado KiCad |
+|------:|------------|--------------|------------|--------------|
+| 0 | Raiz | este README | ✅ | hierarquia legacy no disco |
+| 1 | `01_power` | `01_power.md` | 🔄 stale (ainda fala em TLE/buck) | ❌ vazio |
+| 2 | `02_ckp` | `02_ckp.md` | ✅ Hall (espelho CMP) | ✅ sheet 2026-08-08, ERC 0 |
+| 3 | `03_cmp` | `03_cmp.md` | ✅ espelho CKP | ⚠️ rascunho (título ok; net MCU bloqueada) |
+| 4a | `04_pmic_tps65381` | *a escrever* | ❌ | ❌ + símbolo |
+| 4b | `04_drive_mc33810` | *a escrever* | ❌ | ❌ + símbolo |
+| 4c | `04_bridge_l9960t` | *a escrever* (substitui `06_etb.md`) | ⚠️ `06_etb.md` stale | ❌ + símbolo |
+| 4d | `04_wbo2_cj125` | *a escrever* | ❌ | ❌ + símbolo |
+| 5 | `05_analog` | `05_analog.md` | ✅ pinout_v2 13 ch | ✅ sheet 2026-08-08, ERC 0 |
+| 7 | `07_flex` | `07_flex.md` | 🔄 pino → **PB4** | ⚠️ rascunho (PB5 errado) |
+| 8 | `08_usb` | `08_usb.md` | ✅ esboço | ❌ vazio |
+| 9 | `09_connectors` | `09_connectors_weact.md` | ✅ | ❌ vazio |
+| 10 | `10_knock_dnp` | `10_knock_dnp.md` | ✅ | ❌ vazio |
+| 11 | `11_mcu_h562` | `11_mcu_h562.md` | ✅ | 🔄 limpeza ERC |
+| 12 | `12_can` | *a escrever* | ❌ | ❌ |
+
+Docs anulados / stale a não seguir:
+
+- `04_tle8888_hub.md` — ⛔ anulado (TLE saiu)
+- `06_etb.md` — ⚠️ stale (BTS7960); conteúdo migra para `04_bridge_l9960t`
+- `02_ckp.md` — ⚠️ até ser reescrito como Hall
+
+## Hierarquia KiCad (alvo)
 
 ```
-openems_v1.kicad_sch                      (root)
+openems_v1.kicad_sch                      (root — índice)
 ├── sheets/01_power.kicad_sch
-├── sheets/02_ckp.kicad_sch               ← nome/doc stale, CKP=Hall na v2
-├── sheets/03_cmp.kicad_sch
-├── sheets/04_tle8888_hub.kicad_sch       ← ⛔ anulado, por dividir em 4 (não feito)
-├── sheets/05_analog.kicad_sch
-├── sheets/06_etb.kicad_sch               ← nome/doc stale, L9960T na v2
-├── sheets/07_flex.kicad_sch
+├── sheets/02_ckp.kicad_sch               ← ✅ Hall, espelho CMP (2026-08-08)
+├── sheets/03_cmp.kicad_sch               ← ⚠️ rascunho
+├── sheets/04_pmic_tps65381.kicad_sch     ← substitui parte de 01 + hub
+├── sheets/04_drive_mc33810.kicad_sch
+├── sheets/04_bridge_l9960t.kicad_sch     ← substitui 06_etb
+├── sheets/04_wbo2_cj125.kicad_sch
+├── sheets/05_analog.kicad_sch            ← pinout_v2 only
+├── sheets/07_flex.kicad_sch              ← PB4
 ├── sheets/08_usb.kicad_sch
 ├── sheets/09_connectors.kicad_sch
 ├── sheets/10_knock_dnp.kicad_sch
-└── sheets/11_mcu_h562.kicad_sch          ← sheet vazia, doc de bloco ✅ escrito
+├── sheets/11_mcu_h562.kicad_sch          ← desenhada; limpeza
+└── sheets/12_can.kicad_sch               ← FDCAN1 + ESD
 ```
 
-Todas as sheets acima estão **vazias** — nenhuma foi desenhada ainda, incluindo a `04`.
-Renomear/dividir a `04` não perde trabalho: é decisão de organização, não de cobre.
+No disco, o root **ainda** aponta a `04_tle8888_hub` e `06_etb` (vazios). Renomear ao
+chegar à Fase 3–4 do plano de execução — sem perda de trabalho de copper.
 
-⛔ `hardware/openems_ecu/` (fork mRE) está **congelado** — ver
+⛔ `hardware/openems_ecu/` (fork mRE) **congelado** — ver
 [`../microruseefi_as_base.md`](../microruseefi_as_base.md).
-
-Nets globais (power / hierarchical labels):  
-`VBAT`, `+5V_MAIN`, `+3V3`, `VDDA`, `VREF_P`, `+5V_SENS_A`, `+5V_SENS_B`,  
-`PGND`, `SGND`, `AGND`, `SHIELD_GND`, e todos os `MCU.*` / `J1_*` / `J2_*`.
 
 ## Processo por módulo
 
-1. Ler o `.md` do módulo  
-2. Consultar Speeduino/rusEFI (secção “Referência”)  
-3. Desenhar no KiCad **só** esse sheet  
-4. ERC local: cada net do módulo termina em pino ou hierarquia  
-5. Marcar checkbox no sheet  
+1. Ler (ou reescrever) o `.md` do módulo  
+2. Consultar Speeduino/rusEFI + datasheet (§1b em `docs/hw/README.md`)  
+3. Confirmar **cada pino MCU** em `pinout_v2.md`  
+4. Desenhar **só** esse sheet no KiCad  
+5. ERC local (`kicad-cli sch erc`)  
+6. Marcar checklist no `.md` e actualizar estado aqui  
+
+## Ordem de execução
+
+1. Limpar sheet 11 (padrão de qualidade)  
+2. ~~CKP Hall~~ ✅ doc + sheet (2026-08-08); CMP rascunho a rever  
+3. ~~Flex `PB4`~~ ✅ doc + sheet  
+
+4. ~~Refazer `05_analog`~~ ✅ pinout_v2 + netlist 13/13 (2026-08-08)  
+
+5. Reorganizar root + PMIC + `01_power`  
+6. MC33810 → L9960T → CJ125 → CAN → USB → conectores → knock  
+7. ERC projecto + PDF + BOM  
+8. **Fase PCB** (só depois do DoD esquemático)  
 
 ## O que NÃO fazer ainda
 
-- Layout / copper  
+- Layout / copper / DRC  
 - Escolher caixa final  
 - Popular knock  
+- Inventar símbolos dos 4 CIs sem datasheet  
+- Tratar rascunhos `03`/`05`/`07` como “fechados”  
