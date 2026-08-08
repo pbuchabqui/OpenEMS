@@ -17,7 +17,6 @@
 		)
 		(uuid "f300656d-f81f-4f7c-9e71-260f8d00508b")
 	)
-
 	(lib_symbols
 		(symbol "Device:R"
 			(pin_numbers hide)
@@ -475,87 +474,8 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:R")
-		(at 25.4 88.9 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "62eacd7b-18a7-42b6-b56c-9db782f2bf3e")
-		(property "Reference" "R10"
-			(at 22.86 88.9 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "10k"
-			(at 27.94 88.9 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 23.622 88.9 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 25.4 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 25.4 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "32826cdc-798d-4a35-898b-7b5c520d83f9")
-		)
-		(pin "2"
-			(uuid "bf74e607-d285-4bd8-a58b-634e71064e45")
-		)
-		(instances
-			(project "openems_v1"
-				(path "/f0684a69-d0cb-44c7-ac45-6e293963d83e"
-					(reference "R10")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:D_TVS")
-		(at 12.7 88.9 0)
+		(at 30.48 69.85 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -563,9 +483,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "382aa6b0-6976-4d77-b362-401fbc01d6e0")
+		(uuid "f433011a-4f4b-42aa-abd2-290502f7ec63")
 		(property "Reference" "D2"
-			(at 12.7 86.36 0)
+			(at 30.48 72.39 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -574,8 +494,8 @@
 				)
 			)
 		)
-		(property "Value" "3V3 unidirectional"
-			(at 12.7 91.44 0)
+		(property "Value" "TVS 3V3"
+			(at 30.48 67.31 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -585,7 +505,7 @@
 			)
 		)
 		(property "Footprint" "Diode_SMD:D_SOD-123"
-			(at 12.7 88.9 0)
+			(at 30.48 69.85 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -596,7 +516,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 12.7 88.9 0)
+			(at 30.48 69.85 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -607,7 +527,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 12.7 88.9 0)
+			(at 30.48 69.85 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -618,10 +538,10 @@
 			)
 		)
 		(pin "1"
-			(uuid "a429bd0d-2108-46bc-b0a8-39aa88a4c75d")
+			(uuid "5cf29e1b-9c8f-43c2-a262-4d03cac73dd6")
 		)
 		(pin "2"
-			(uuid "82b12509-2ea8-4916-b36c-fc5af10bea32")
+			(uuid "241d76fd-057f-4c56-b233-15e785d57465")
 		)
 		(instances
 			(project "openems_v1"
@@ -634,7 +554,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 38.1 88.9 0)
+		(at 64.77 69.85 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -642,9 +562,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "02dbde02-b9ce-431e-903f-83f53655deb8")
-		(property "Reference" "R11"
-			(at 38.1 86.36 0)
+		(uuid "ff3f4a29-f7af-4ed1-8628-6110dfa1f094")
+		(property "Reference" "R10"
+			(at 66.802 69.85 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -654,7 +574,7 @@
 			)
 		)
 		(property "Value" "10k"
-			(at 38.1 91.44 0)
+			(at 64.77 69.85 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -664,7 +584,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 36.322 88.9 90)
+			(at 62.992 69.85 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -675,7 +595,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 38.1 88.9 0)
+			(at 64.77 69.85 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -686,7 +606,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 38.1 88.9 0)
+			(at 64.77 69.85 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -697,10 +617,89 @@
 			)
 		)
 		(pin "1"
-			(uuid "75fc6e2a-1883-464f-9149-4e2ab0ca31dc")
+			(uuid "6b79bf60-2a59-40ed-8801-20f93521630c")
 		)
 		(pin "2"
-			(uuid "7a30f781-ada6-4a37-a332-2804ac8d32ea")
+			(uuid "3c5c8474-0427-49f5-a18a-c4556218e05a")
+		)
+		(instances
+			(project "openems_v1"
+				(path "/f0684a69-d0cb-44c7-ac45-6e293963d83e"
+					(reference "R10")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 100.33 69.85 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "eb0621e0-846a-4c77-b6bf-089688df732b")
+		(property "Reference" "R11"
+			(at 102.362 69.85 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "10k"
+			(at 100.33 69.85 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+			(at 98.552 69.85 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 100.33 69.85 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 100.33 69.85 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "6f52bef1-fea3-4cfb-90c2-2779eae4f778")
+		)
+		(pin "2"
+			(uuid "e4f2d5df-1584-4bde-b48c-49576745c4f2")
 		)
 		(instances
 			(project "openems_v1"
@@ -713,7 +712,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 38.1 63.5 0)
+		(at 100.33 110.49 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -721,9 +720,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "00f8c3b8-cb52-4522-82e2-caedabc74798")
+		(uuid "4b2f1320-c809-45ab-a8f6-7d2b59b78fa5")
 		(property "Reference" "R12"
-			(at 38.1 60.96 0)
+			(at 102.362 110.49 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -733,7 +732,7 @@
 			)
 		)
 		(property "Value" "15k"
-			(at 38.1 66.04 0)
+			(at 100.33 110.49 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -743,7 +742,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 36.322 63.5 90)
+			(at 98.552 110.49 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -754,7 +753,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 38.1 63.5 0)
+			(at 100.33 110.49 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -765,7 +764,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 38.1 63.5 0)
+			(at 100.33 110.49 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -776,10 +775,10 @@
 			)
 		)
 		(pin "1"
-			(uuid "fc628526-5b53-4445-9e56-1b271dcebb5c")
+			(uuid "1b66c051-2f69-409e-9b51-584e41095778")
 		)
 		(pin "2"
-			(uuid "0682ff3c-8f60-4e72-a858-407be7964176")
+			(uuid "23570496-0ab8-463c-9748-2e5728c25471")
 		)
 		(instances
 			(project "openems_v1"
@@ -792,7 +791,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 50.8 63.5 0)
+		(at 134.62 110.49 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -800,9 +799,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "f687577c-d038-415e-9f0b-ebab57acde1b")
+		(uuid "d370f19a-ba15-4af4-9323-851b1012c7ce")
 		(property "Reference" "R13"
-			(at 50.8 60.96 0)
+			(at 136.652 110.49 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -812,7 +811,7 @@
 			)
 		)
 		(property "Value" "330"
-			(at 50.8 66.04 0)
+			(at 134.62 110.49 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -822,7 +821,7 @@
 			)
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 49.022 63.5 90)
+			(at 132.842 110.49 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -833,7 +832,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 50.8 63.5 0)
+			(at 134.62 110.49 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -844,7 +843,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 50.8 63.5 0)
+			(at 134.62 110.49 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -855,10 +854,10 @@
 			)
 		)
 		(pin "1"
-			(uuid "bc465e79-9876-4087-858b-edc0d03b002f")
+			(uuid "d80f5325-09a0-49e8-9fbf-b091397c0337")
 		)
 		(pin "2"
-			(uuid "74515586-b531-4cc4-a076-a51328167ce9")
+			(uuid "599d6dd3-773c-47da-b3b0-0d2b76e61af3")
 		)
 		(instances
 			(project "openems_v1"
@@ -871,7 +870,7 @@
 	)
 	(symbol
 		(lib_id "Device:C")
-		(at 63.5 63.5 0)
+		(at 170.18 110.49 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -879,9 +878,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "e619be27-846d-476a-81c3-59c20614d5ae")
+		(uuid "88dee3b9-30de-4c23-b300-4ca8ec476107")
 		(property "Reference" "C2"
-			(at 63.5 60.96 0)
+			(at 170.815 113.03 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -892,7 +891,7 @@
 			)
 		)
 		(property "Value" "330pF"
-			(at 63.5 66.04 0)
+			(at 170.815 107.95 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -903,7 +902,7 @@
 			)
 		)
 		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
-			(at 64.465 59.69 0)
+			(at 171.145 106.68 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -914,7 +913,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 63.5 63.5 0)
+			(at 170.18 110.49 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -925,7 +924,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 63.5 63.5 0)
+			(at 170.18 110.49 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -936,10 +935,10 @@
 			)
 		)
 		(pin "1"
-			(uuid "3c6512fa-9a0f-4cbd-b3d1-681b201b295b")
+			(uuid "3b130990-dbd4-4eab-a5a8-7d85d5f28efc")
 		)
 		(pin "2"
-			(uuid "704b1dc6-2d92-43ca-8143-b9eb8cecf8f6")
+			(uuid "28161cf9-c9b2-4db7-86fd-b9596a6d77b0")
 		)
 		(instances
 			(project "openems_v1"
@@ -951,184 +950,124 @@
 		)
 	)
 	(global_label "+5V_SENS_A"
-		(at 25.4 85.09 270)
+		(at 64.77 66.03999999999999 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "b32883d4-ea55-4485-85ba-5167b17a9256")
+	)
+	(global_label "J1.CKP_SIG"
+		(at 64.77 73.66 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "807aeadd-4d36-4483-8e87-e826ca35dd7b")
+	)
+	(global_label "J1.CKP_SIG"
+		(at 26.67 69.85 180)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
 			(justify right)
 		)
-		(uuid "2f61c71f-cbb3-4409-b69b-5fd0b1818f3e")
+		(uuid "6edbd717-aa72-4846-bdd2-97aee217fcac")
 	)
 	(global_label "AGND"
-		(at 16.509999999999998 88.9 180)
+		(at 34.29 69.85 0)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
-			(justify right)
+			(justify left)
 		)
-		(uuid "a702b955-00f1-4479-a2e7-9c3d9ca51a6d")
+		(uuid "b56a1a39-36e8-49be-ba0c-3eaff10d0fd4")
+	)
+	(global_label "J1.CKP_SIG"
+		(at 100.33 66.03999999999999 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "786baf21-50ba-4548-831f-fd4f6798c559")
+	)
+	(label "N_CKP_DIV"
+		(at 100.33 73.66 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "44d41224-1e31-494a-b6f5-2e1652c76172")
+	)
+	(label "N_CKP_DIV"
+		(at 100.33 106.67999999999999 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "6699e93b-c354-4cd9-bf7c-602e8a16dfa2")
 	)
 	(global_label "SGND"
-		(at 38.1 67.31 90)
+		(at 100.33 114.3 0)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
 			(justify left)
 		)
-		(uuid "2d1a677b-a509-40fb-aeb0-84b27fb120bd")
+		(uuid "bec07271-08b4-45c0-b290-f91e79db64e6")
+	)
+	(label "N_CKP_DIV"
+		(at 134.62 106.67999999999999 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "0222fa91-362f-4b6c-93dd-7edf0e4ad2d7")
 	)
 	(global_label "MCU.PA0"
-		(at 50.8 67.31 90)
+		(at 134.62 114.3 0)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
 			(justify left)
 		)
-		(uuid "25f8e498-5942-4bca-8ee2-9a7e5f0e4368")
-	)
-	(global_label "MCU.PA0"
-		(at 63.5 59.69 270)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "60226b24-884e-4d49-af43-1c41f53e5856")
+		(uuid "9fa08ea1-0121-4972-8bdb-69edff1f60f1")
 	)
 	(global_label "AGND"
-		(at 63.5 67.31 90)
+		(at 170.18 114.3 0)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
 			(justify left)
 		)
-		(uuid "bcfa5fbb-9c13-4e66-9c0a-460335fd32cc")
+		(uuid "6fff53a7-ac49-41c3-927e-7d37a54a4acc")
 	)
-	(wire
-		(pts
-			(xy 25.4 92.71000000000001) (xy 25.4 95.25)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "f15cddf4-c6bd-4304-8299-a1da240736ff")
-	)
-	(wire
-		(pts
-			(xy 38.1 85.09) (xy 38.1 82.55)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "97b55b47-c79d-4620-bb47-cd1e5438de90")
-	)
-	(wire
-		(pts
-			(xy 8.889999999999999 88.9) (xy 6.35 88.9)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "a5914edc-e9a7-4bc3-bb1b-039ee6946ff6")
-	)
-	(wire
-		(pts
-			(xy 38.1 92.71000000000001) (xy 38.1 95.25)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d38f9b7c-d5b2-4202-af26-ae7ace4653cf")
-	)
-	(wire
-		(pts
-			(xy 38.1 59.69) (xy 38.1 57.15)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "bc12c645-716f-49a0-88e3-c498870f7341")
-	)
-	(wire
-		(pts
-			(xy 50.8 59.69) (xy 50.8 57.15)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "4e1ba564-ffe9-4455-b2a8-c9d26253b79f")
-	)
-	(global_label "J1.CKP_SIG"
-		(at 25.4 95.25 0)
+	(global_label "MCU.PA0"
+		(at 170.18 106.67999999999999 90)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
 			(justify left)
 		)
-		(uuid "388137aa-6709-4330-8936-ffe39a5bedc3")
-	)
-	(global_label "J1.CKP_SIG"
-		(at 38.1 82.55 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "abcb1a54-dc0b-4155-9b0f-aad950772df1")
-	)
-	(global_label "J1.CKP_SIG"
-		(at 6.35 88.9 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "de0ae6f0-0419-484b-acc5-38c8e8b65bc2")
-	)
-	(label "N_CKP_DIV"
-		(at 38.1 95.25 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "ee765ca8-188b-422e-a187-2f07460a48be")
-	)
-	(label "N_CKP_DIV"
-		(at 38.1 57.15 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "8d8de0f6-1c6e-4b53-9e4c-71ec1bd7d390")
-	)
-	(label "N_CKP_DIV"
-		(at 50.8 57.15 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "c558a9ca-799e-4479-a4e6-035e341a3c1f")
+		(uuid "f355e70a-1d3b-4c69-b249-ce4ab388544b")
 	)
 	(sheet_instances
 		(path "/"
