@@ -207,6 +207,11 @@ int main(void) {
     test_ecu_sched_dwell_watchdog();
     test_ecu_sched_encoder_omega();
     test_ecu_sched_encoder_phase();
+    test_ecu_sched_encoder_queue_basic();
+    test_ecu_sched_encoder_queue_dispatch();
+    test_ecu_sched_encoder_queue_overflow();
+    test_ecu_sched_encoder_queue_purge_via_inhibit_mask();
+    test_ecu_sched_encoder_queue_clear_via_outputs_safe();
 
     // ── QUICK CRANK ─────────────────────────────────────────────────────
     printf("\n=== QUICK CRANK ===");

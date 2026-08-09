@@ -37,8 +37,35 @@
  */
 
 #include "engine/ecu_sched_internal.h"
+#include "hal/out_pins.h"
+#include "hal/critical_section.h"
+#if !defined(EMS_HOST_TEST)
+#include "hal/regs.h"
+#endif
 
 #include <stdint.h>
+
+namespace si = ems::engine::sched_internal;
+
+#if defined(EMS_HOST_TEST)
+// Mock de TIM2 para a fila TIM2/CH3 — mesmo padrão do mock TIM5 em
+// ecu_sched.cpp, registo próprio (nunca partilha estado com o mock TIM5,
+// mesma disciplina de "duas filas separadas" desta unidade).
+#ifndef TIM_SR_CC3IF
+#define TIM_SR_CC3IF 0x8U
+#endif
+#ifndef TIM_DIER_CC3IE
+#define TIM_DIER_CC3IE (1U << 3)
+#endif
+static uint32_t ems_test_tim2_ccr3 = 0u;
+static uint32_t ems_test_tim2_sr   = 0u;
+static uint32_t ems_test_tim2_dier = 0u;
+static uint32_t ems_test_tim2_cnt  = 0u;
+#define TIM2_CCR3   ems_test_tim2_ccr3
+#define TIM2_SR     ems_test_tim2_sr
+#define TIM2_DIER   ems_test_tim2_dier
+#define TIM2_CNT    ems_test_tim2_cnt
+#endif
 
 // ── Estimador de ω (ΔTIM2_CNT/ΔTIM5_CNT) ─────────────────────────────────
 // Sem roda dentada, não há evento de dente para estimar RPM — ω vem de duas
@@ -158,9 +185,207 @@ void ecu_sched_encoder_phase_test_reset(void) noexcept
 }
 #endif
 
+// ── Fila TIM2/CH3 — dispatcher em domínio de ângulo ─────────────────────
+// SEPARADA da fila TIM5/CH3 de ecu_sched.cpp — nunca partilha array nem
+// registo (ver aviso no topo do ficheiro e docs/dev/mt6835_encoder_fork.md,
+// secção 6). Mesma forma (array ordenado por inserção, insertion sort
+// wrap-safe com subtração de sinal, overflow policy que nunca larga
+// silenciosamente um de-assert, CC3IE dinâmico por episódio
+// fila-vazia↔não-vazia) — só a unidade muda: counts TIM2, não ticks TIM5.
+//
+// Ainda sem piso de lead mínimo (pendente — plano, secção 7): um alvo já
+// passado no momento do arm cai no caminho "late" do dispatch (processado
+// inline, contado em g_enc_late_event_count), nunca é perdido — piso é
+// refinamento de reação mínima, não requisito de correção.
+
+#define ENC_EVT_QUEUE_SIZE 48U
+
+struct EncSchedEvent {
+    uint32_t timestamp;   // TIM2 raw 32-bit target (counts, não ticks)
+    uint8_t  channel;     // ECU_CH_INJ1..IGN4
+    uint8_t  high;        // 1=ON/DWELL, 0=OFF/SPARK
+    uint8_t  valid;
+    uint8_t  _pad;
+};
+
+static EncSchedEvent g_enc_evt_queue[ENC_EVT_QUEUE_SIZE];
+static volatile uint8_t g_enc_evt_count = 0U;
+static volatile uint8_t g_enc_evt_armed = 0U;
+
+static volatile uint32_t g_enc_dbg_evt_inserted   = 0U;
+static volatile uint32_t g_enc_dbg_evt_dispatched = 0U;
+static volatile uint32_t g_enc_dbg_evt_overflow   = 0U;
+static volatile uint32_t g_enc_late_event_count   = 0U;
+
+static uint8_t enc_evt_drop_one_assert(uint8_t prefer_channel) noexcept
+{
+    int8_t drop = -1;
+    for (uint8_t i = 0U; i < g_enc_evt_count; ++i) {
+        if (g_enc_evt_queue[i].high == 0U) { continue; }
+        if (g_enc_evt_queue[i].channel == prefer_channel) { drop = (int8_t)i; break; }
+        if (drop < 0) { drop = (int8_t)i; }
+    }
+    if (drop < 0) { return 0U; }
+    for (uint8_t i = (uint8_t)drop; (uint8_t)(i + 1U) < g_enc_evt_count; ++i) {
+        g_enc_evt_queue[i] = g_enc_evt_queue[i + 1U];
+    }
+    --g_enc_evt_count;
+    return 1U;
+}
+
+static void enc_evt_insert(uint32_t ts, uint8_t channel, uint8_t high) noexcept
+{
+    if (g_enc_evt_count >= ENC_EVT_QUEUE_SIZE) {
+        ++g_enc_dbg_evt_overflow;
+        if (high == 0U) {
+            if (enc_evt_drop_one_assert(channel) == 0U) { return; }
+        } else {
+            return;  // prefer keeping de-asserts already queued
+        }
+    }
+    ++g_enc_dbg_evt_inserted;
+    uint8_t pos = g_enc_evt_count;
+    for (uint8_t i = 0U; i < g_enc_evt_count; ++i) {
+        if ((int32_t)(ts - g_enc_evt_queue[i].timestamp) < 0) { pos = i; break; }
+    }
+    for (uint8_t i = g_enc_evt_count; i > pos; --i) {
+        g_enc_evt_queue[i] = g_enc_evt_queue[i - 1U];
+    }
+    g_enc_evt_queue[pos].timestamp = ts;
+    g_enc_evt_queue[pos].channel = channel;
+    g_enc_evt_queue[pos].high = high;
+    g_enc_evt_queue[pos].valid = 1U;
+    ++g_enc_evt_count;
+
+    if (pos == 0U) {
+        TIM2_CCR3 = ts;
+        TIM2_SR   = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
+        TIM2_DIER |= TIM_DIER_CC3IE;
+        g_enc_evt_armed = 1U;
+    }
+}
+
+static inline void enc_evt_execute_head(void) noexcept
+{
+    const EncSchedEvent& e = g_enc_evt_queue[0];
+    ems::hal::out_pin_write(e.channel, e.high);
+    const uint8_t idx = (e.channel < 8U) ? ems::hal::kOutChToPinIdx[e.channel] : 0xFFU;
+    if (idx != 0xFFU) {
+        pin_transition(idx, e.high);  // watchdogs continuam sempre TIM5/tempo
+    }
+    ++g_enc_dbg_evt_dispatched;
+    --g_enc_evt_count;
+    for (uint8_t i = 0U; i < g_enc_evt_count; ++i) {
+        g_enc_evt_queue[i] = g_enc_evt_queue[i + 1U];
+    }
+}
+
+void ecu_sched_encoder_evt_dispatch(void) noexcept
+{
+    const uint32_t now = TIM2_CNT;
+    while (g_enc_evt_count > 0U) {
+        const EncSchedEvent& e = g_enc_evt_queue[0];
+        if ((int32_t)(e.timestamp - now) > 0) { break; }
+        enc_evt_execute_head();
+    }
+    while (g_enc_evt_count > 0U) {
+        const uint32_t next_ts = g_enc_evt_queue[0].timestamp;
+        if ((int32_t)(next_ts - TIM2_CNT) > 16) {
+            TIM2_CCR3 = next_ts;
+            TIM2_SR   = ~TIM_SR_CC3IF;
+            g_enc_evt_armed = 1U;
+            return;
+        }
+        ++g_enc_late_event_count;
+        enc_evt_execute_head();
+    }
+    TIM2_DIER &= ~TIM_DIER_CC3IE;
+    g_enc_evt_armed = 0U;
+}
+
+void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
+                                   uint8_t action) noexcept
+{
+    // Mesma razão do arm_channel() de ecu_sched.cpp: inserir na fila +
+    // tocar CCR3/DIER não pode intercalar com o dispatch ISR (TIM2 CH3).
+    ems::hal::CriticalSectionGuard guard;
+    const uint8_t high =
+        ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
+    enc_evt_insert(target_counts, ch, high);
+}
+
+#if defined(EMS_HOST_TEST)
+void ecu_sched_encoder_queue_test_reset(void) noexcept
+{
+    g_enc_evt_count = 0U;
+    g_enc_evt_armed = 0U;
+    for (uint8_t i = 0U; i < ENC_EVT_QUEUE_SIZE; ++i) { g_enc_evt_queue[i].valid = 0U; }
+    g_enc_dbg_evt_inserted = 0U;
+    g_enc_dbg_evt_dispatched = 0U;
+    g_enc_dbg_evt_overflow = 0U;
+    g_enc_late_event_count = 0U;
+    ems_test_tim2_ccr3 = 0U; ems_test_tim2_sr = 0U; ems_test_tim2_dier = 0U; ems_test_tim2_cnt = 0U;
+}
+void ecu_sched_encoder_test_set_tim2_cnt(uint32_t v) noexcept { ems_test_tim2_cnt = v; }
+uint8_t ecu_sched_encoder_test_get_evt_count(void) noexcept { return g_enc_evt_count; }
+uint32_t ecu_sched_encoder_test_get_ccr3(void) noexcept { return ems_test_tim2_ccr3; }
+uint8_t ecu_sched_encoder_test_get_evt(uint8_t index, uint32_t *ts,
+                                       uint8_t *channel, uint8_t *high) noexcept
+{
+    if (index >= g_enc_evt_count) { return 0U; }
+    if (ts != nullptr) { *ts = g_enc_evt_queue[index].timestamp; }
+    if (channel != nullptr) { *channel = g_enc_evt_queue[index].channel; }
+    if (high != nullptr) { *high = g_enc_evt_queue[index].high; }
+    return 1U;
+}
+uint32_t ecu_sched_encoder_test_get_evt_overflow(void) noexcept { return g_enc_dbg_evt_overflow; }
+uint32_t ecu_sched_encoder_test_get_late_event_count(void) noexcept { return g_enc_late_event_count; }
+uint32_t ecu_sched_encoder_test_get_dier(void) noexcept { return ems_test_tim2_dier; }
+#endif
+
+namespace ems::engine::sched_internal {
+
+// Varredura da fila TIM2/CH3 para purge_events_for_cyl_mask()/
+// clear_all_events_and_drive_safe_outputs() (ecu_sched.cpp) — ver aviso em
+// ecu_sched_internal.h. Mesma lógica de filtro que a varredura TIM5 já usa,
+// aplicada ao array desta fila.
+void encoder_purge_cyl_mask(uint8_t mask, uint8_t is_ign) noexcept
+{
+    if (mask == 0U) { return; }
+    uint8_t w = 0U;
+    for (uint8_t r = 0U; r < g_enc_evt_count; ++r) {
+        const uint8_t ch = g_enc_evt_queue[r].channel;
+        const uint8_t bit = (ch < 8U)
+            ? (is_ign != 0U ? k_ign_ch_to_bit[ch] : k_inj_ch_to_bit[ch])
+            : 0U;
+        if (bit != 0U && (mask & bit) != 0U) { continue; }  // drop
+        if (w != r) { g_enc_evt_queue[w] = g_enc_evt_queue[r]; }
+        ++w;
+    }
+    g_enc_evt_count = w;
+    if (g_enc_evt_count == 0U) {
+        TIM2_DIER &= ~TIM_DIER_CC3IE;
+        g_enc_evt_armed = 0U;
+    } else {
+        TIM2_CCR3 = g_enc_evt_queue[0].timestamp;
+        TIM2_SR   = ~TIM_SR_CC3IF;
+        TIM2_DIER |= TIM_DIER_CC3IE;
+        g_enc_evt_armed = 1U;
+    }
+}
+
+void encoder_clear_all(void) noexcept
+{
+    g_enc_evt_count = 0U;
+    g_enc_evt_armed = 0U;
+    TIM2_DIER &= ~TIM_DIER_CC3IE;
+}
+
+}  // namespace ems::engine::sched_internal
+
 namespace ems::engine::sched_internal::encoder {
 
-// Placeholder — preenchido pelas tarefas seguintes do plano (fila TIM2/CH3,
-// resposta ao heartbeat CH4, conversão graus→counts).
+// Placeholder — preenchido pelas tarefas seguintes do plano (resposta ao
+// heartbeat CH4, conversão graus→counts).
 
 }  // namespace ems::engine::sched_internal::encoder

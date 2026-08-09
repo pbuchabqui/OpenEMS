@@ -209,6 +209,22 @@ void ecu_sched_encoder_phase_set_anchor(uint32_t tim2_raw_at_cmp_edge,
 uint8_t ecu_sched_encoder_phase_at(uint32_t tim2_raw_now) noexcept;
 uint8_t ecu_sched_encoder_phase_valid(void) noexcept;
 
+// Fila TIM2/CH3 — SEPARADA da fila TIM5/CH3 acima (ecu_sched_evt_dispatch),
+// nunca partilha array nem registo. A fila TIM5 continua a servir só
+// fire_prime_pulse()/test_pulse_inj()/test_pulse_ign() (motor parado,
+// sempre por tempo) em qualquer um dos dois builds — ver
+// docs/dev/mt6835_encoder_fork.md, secção 6, para o porquê de duas filas
+// em vez de uma parametrizada.
+//
+// target_counts: alvo em counts CRUS de 32 bits do TIM2 (não mascarado a
+// 14 bits) — mesmo domínio que TIM2_CNT já vive, wrap tratado por subtração
+// com sinal, igual ao TIM5 hoje. Ainda sem piso de lead mínimo (pendente,
+// ver plano — não bloqueia correção: um alvo já passado é processado
+// inline como "late", nunca perdido).
+void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
+                                   uint8_t action) noexcept;
+void ecu_sched_encoder_evt_dispatch(void) noexcept;  // called from TIM2 ISR on CC3IF
+
 // Modo de ignição actual: 1 = sequencial (full sync + CMP confirmado),
 // 0 = wasted-spark (presync). Reflecte g_knock_sequential. Usado pela
 // observabilidade (status bit IGN_SEQUENTIAL) e pelos host tests.
@@ -222,6 +238,22 @@ void ecu_sched_test_reset(void);
 void ecu_sched_encoder_omega_test_reset(void) noexcept;
 // Idem para o rastreador de fase.
 void ecu_sched_encoder_phase_test_reset(void) noexcept;
+// Idem para a fila TIM2/CH3 (zera a fila + o mock de TIM2_CNT/CCR3/DIER).
+void ecu_sched_encoder_queue_test_reset(void) noexcept;
+// Mock de TIM2_CNT para os testes da fila TIM2/CH3 (nome sem colisão com os
+// aliases legados ecu_sched_test_set_tim2_cnt/get_tim1_ccr — esses mexem em
+// ems_test_tim5_cnt por baixo, ver "TIM1 placeholders" acima; não são o
+// mesmo mock que este).
+void ecu_sched_encoder_test_set_tim2_cnt(uint32_t v) noexcept;
+uint8_t ecu_sched_encoder_test_get_evt_count(void) noexcept;
+uint32_t ecu_sched_encoder_test_get_ccr3(void) noexcept;
+uint8_t ecu_sched_encoder_test_get_evt(uint8_t index,
+                                       uint32_t *ts,
+                                       uint8_t *channel,
+                                       uint8_t *high) noexcept;
+uint32_t ecu_sched_encoder_test_get_evt_overflow(void) noexcept;
+uint32_t ecu_sched_encoder_test_get_late_event_count(void) noexcept;
+uint32_t ecu_sched_encoder_test_get_dier(void) noexcept;  // CC3IE bit dinâmico
 uint8_t ecu_sched_test_angle_table_size(void);
 uint8_t ecu_sched_test_get_angle_event(uint8_t index,
                                        uint8_t *tooth,

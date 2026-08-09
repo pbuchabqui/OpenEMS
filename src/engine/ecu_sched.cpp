@@ -58,13 +58,10 @@ static_assert(ECU_SCHED_NS_PER_TICK == 16U,
 // Pin-metric index — alias of hal/out_pins.h single source.
 #define k_ch_to_pin_idx ems::hal::kOutChToPinIdx
 
-// Inhibit mask bit for INJ/IGN channels (cyl 0..3). Indexed by ECU_CH_* for 0..3 / 4..7.
-static constexpr uint8_t k_inj_ch_to_bit[8] = {
-    (1U << 2), (1U << 3), (1U << 0), (1U << 1), 0U, 0U, 0U, 0U
-};
-static constexpr uint8_t k_ign_ch_to_bit[8] = {
-    0U, 0U, 0U, 0U, (1U << 3), (1U << 2), (1U << 1), (1U << 0)
-};
+// Inhibit mask bit for INJ/IGN channels (cyl 0..3). Indexed by ECU_CH_* for
+// 0..3 / 4..7. Movido para ecu_sched_internal.h (si::k_inj_ch_to_bit /
+// si::k_ign_ch_to_bit) — a fila TIM2/CH3 (ecu_sched_angle_encoder.cpp)
+// precisa da mesma tabela para a sua própria varredura de purge.
 
 // Angle table lives in ecu_sched_angle.cpp (cold builders). Aliases for local use.
 // Hot path reads si::g_angle_table* at tooth time only.
@@ -186,7 +183,8 @@ static inline void gpio_set_pin(uint8_t channel, uint8_t high) {
     ems::hal::out_pin_write(channel, high);
 }
 
-static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state = 0U);
+// pin_transition() forward-declaration com default agora vive em
+// ecu_sched_internal.h (exposta para a fila TIM2/CH3 — ver aviso lá).
 static inline uint8_t channel_pin_idx(uint8_t ch) {
     return (ch < 8U) ? k_ch_to_pin_idx[ch] : 0xFFU;
 }
@@ -309,7 +307,9 @@ volatile uint32_t g_pin_low_count[8];
 volatile uint32_t g_pin_seq_error[8];   // consecutive same-direction transitions
 static uint8_t    g_pin_last_state[8];  // 0=LOW, 1=HIGH, 0xFF=unknown
 
-static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
+// Linkage externa (era static inline) — chamada também por
+// ecu_sched_angle_encoder.cpp (fila TIM2/CH3), ver ecu_sched_internal.h.
+void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
     if (idx >= 8U) { return; }
     if (g_pin_last_state[idx] == high && high != 0xFFU) {
         if (is_safe_state == 0U) { ++g_pin_seq_error[idx]; }
@@ -353,11 +353,15 @@ static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U)
 static void purge_events_for_cyl_mask(uint8_t mask, uint8_t is_ign)
 {
     if (mask == 0U) { return; }
+    // Um corte de cilindro/rev-limit tem de afetar as DUAS filas — a de
+    // tempo (abaixo) e a de ângulo (MT6835/TIM2, se existir algum evento lá
+    // pendente). No-op quando EMS_MT6835_ENCODER=0 ou a fila TIM2 está vazia.
+    si::encoder_purge_cyl_mask(mask, is_ign);
     uint8_t w = 0U;
     for (uint8_t r = 0U; r < g_evt_count; ++r) {
         const uint8_t ch = g_evt_queue[r].channel;
         const uint8_t bit = (ch < 8U)
-            ? (is_ign != 0U ? k_ign_ch_to_bit[ch] : k_inj_ch_to_bit[ch])
+            ? (is_ign != 0U ? si::k_ign_ch_to_bit[ch] : si::k_inj_ch_to_bit[ch])
             : 0U;
         if (bit != 0U && (mask & bit) != 0U) {
             continue;  // drop
@@ -416,11 +420,11 @@ static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state)
     if (is_safe_state == 0U) {
         const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
         if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
-            const uint8_t cyl_bit = (ch < 8U) ? k_inj_ch_to_bit[ch] : 0U;
+            const uint8_t cyl_bit = (ch < 8U) ? si::k_inj_ch_to_bit[ch] : 0U;
             if (cyl_bit != 0U && (g_inj_inhibit_mask & cyl_bit) != 0U) { return; }
         }
         if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
-            const uint8_t cyl_bit = (ch < 8U) ? k_ign_ch_to_bit[ch] : 0U;
+            const uint8_t cyl_bit = (ch < 8U) ? si::k_ign_ch_to_bit[ch] : 0U;
             if (cyl_bit != 0U && (g_ign_inhibit_mask & cyl_bit) != 0U) { return; }
         }
     }
@@ -445,11 +449,11 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 
     // Inhibit masks: skip INJ_ON / DWELL_START for masked cylinders.
     if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
-        const uint8_t cyl_bit = (ch < 8U) ? k_inj_ch_to_bit[ch] : 0U;
+        const uint8_t cyl_bit = (ch < 8U) ? si::k_inj_ch_to_bit[ch] : 0U;
         if (cyl_bit != 0U && (g_inj_inhibit_mask & cyl_bit) != 0U) { return; }
     }
     if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
-        const uint8_t cyl_bit = (ch < 8U) ? k_ign_ch_to_bit[ch] : 0U;
+        const uint8_t cyl_bit = (ch < 8U) ? si::k_ign_ch_to_bit[ch] : 0U;
         if (cyl_bit != 0U && (g_ign_inhibit_mask & cyl_bit) != 0U) { return; }
     }
 
@@ -490,6 +494,7 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
 static void clear_all_events_and_drive_safe_outputs(void)
 {
     si::clear_angle_table();
+    si::encoder_clear_all();  // fila TIM2/CH3, se existir algum evento pendente
     // Clear TIM5 event queue
     g_evt_count = 0U;
     g_evt_armed = 0U;
@@ -877,6 +882,7 @@ void ecu_sched_test_reset(void)
     // MT6835/TIM2 encoder — ver ecu_sched_angle_encoder.cpp.
     ecu_sched_encoder_omega_test_reset();
     ecu_sched_encoder_phase_test_reset();
+    ecu_sched_encoder_queue_test_reset();
 }
 uint8_t ecu_sched_test_angle_table_size(void) { return si::g_angle_table_count; }
 uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *sub_frac, uint8_t *ch, uint8_t *action, uint8_t *phase)

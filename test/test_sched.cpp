@@ -722,6 +722,137 @@ void test_ecu_sched_encoder_phase(void) {
     CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "test_reset() clears phase anchor");
 }
 
+void test_ecu_sched_encoder_queue_basic(void) {
+    section("ecu_sched: encoder queue (TIM2/CH3) — insert order + CCR3 arm");
+    ecu_sched_test_reset();
+
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u, "empty at start");
+    CHECK_EQ(ecu_sched_encoder_test_get_dier(), 0u, "CC3IE off at start");
+
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 500u, ECU_ACT_INJ_ON);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 1u, "count=1 after first arm");
+    CHECK_EQ(ecu_sched_encoder_test_get_ccr3(), 500u, "CCR3=500 (only/earliest event)");
+    CHECK_TRUE(ecu_sched_encoder_test_get_dier() != 0u,
+               "CC3IE on after first insert");
+
+    uint32_t ts = 0u; uint8_t ch = 0xFFu; uint8_t high = 0xFFu;
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts, &ch, &high) != 0u, "get_evt(0) ok");
+    CHECK_EQ(ts, 500u, "evt[0].ts=500");
+    CHECK_EQ(ch, (uint8_t)ECU_CH_INJ1, "evt[0].channel=INJ1");
+    CHECK_EQ(high, 1u, "evt[0].high=1 (ON)");
+
+    // Earlier target becomes the new head — CCR3 rearms to it, not appended.
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 300u, ECU_ACT_SPARK);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 2u, "count=2 after second arm");
+    CHECK_EQ(ecu_sched_encoder_test_get_ccr3(), 300u, "CCR3 rearmed to earlier target");
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts, &ch, &high) != 0u, "get_evt(0) ok");
+    CHECK_EQ(ts, 300u, "evt[0]=IGN1/300 (sorted ahead of INJ1/500)");
+    CHECK_EQ(ch, (uint8_t)ECU_CH_IGN1, "evt[0].channel=IGN1");
+    CHECK_EQ(high, 0u, "evt[0].high=0 (SPARK)");
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(1, &ts, &ch, &high) != 0u, "get_evt(1) ok");
+    CHECK_EQ(ts, 500u, "evt[1]=INJ1/500 (unchanged, now second)");
+
+    ecu_sched_test_reset();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u, "test_reset() clears encoder queue");
+}
+
+void test_ecu_sched_encoder_queue_dispatch(void) {
+    section("ecu_sched: encoder queue — dispatch + CC3IE dynamic disable");
+    ecu_sched_test_reset();
+
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 100u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 200u, ECU_ACT_SPARK);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 2u, "2 events armed");
+
+    ecu_sched_encoder_test_set_tim2_cnt(100u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 1u, "1 event fired at ts=100");
+    CHECK_EQ(ecu_sched_encoder_test_get_ccr3(), 200u, "CCR3 rearmed to remaining event");
+    CHECK_TRUE(ecu_sched_encoder_test_get_dier() != 0u,
+               "CC3IE still on — queue not empty");
+
+    ecu_sched_encoder_test_set_tim2_cnt(200u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u, "queue empty after second fire");
+    CHECK_TRUE(ecu_sched_encoder_test_get_dier() == 0u,
+               "CC3IE off — queue emptied (dynamic disable, mirrors TIM5)");
+
+    // Simultaneous-at-dispatch: two events due in the same ISR entry both fire.
+    ecu_sched_test_reset();
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 50u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ2, 50u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_test_set_tim2_cnt(50u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "both simultaneous events fire in one dispatch entry");
+    CHECK_EQ(ecu_sched_encoder_test_get_late_event_count(), 0u,
+             "on-time dispatch is not counted as late");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_queue_overflow(void) {
+    section("ecu_sched: encoder queue — overflow policy (never drop a pending OFF)");
+    ecu_sched_test_reset();
+
+    // Fill the queue with 48 ON events (alternating channels so none collide
+    // as the "same channel" preference in the drop policy).
+    for (uint32_t i = 0u; i < 48u; ++i) {
+        const uint8_t ch = (i % 2u == 0u) ? ECU_CH_INJ1 : ECU_CH_INJ2;
+        ecu_sched_encoder_arm_channel(ch, 1000u + i, ECU_ACT_INJ_ON);
+    }
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 48u, "queue full at 48");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_overflow(), 0u, "no overflow yet — exactly full");
+
+    // 49th ON with a full queue: dropped (queue keeps de-asserts already
+    // queued in preference over a new assert).
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ3, 2000u, ECU_ACT_INJ_ON);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 48u, "still 48 — new ON dropped");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_overflow(), 1u, "overflow counted");
+
+    // A de-assert (OFF/SPARK) on a full queue evicts one ON to make room —
+    // never silently dropped itself (an open injector must be closable).
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 3000u, ECU_ACT_SPARK);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 48u,
+             "still 48 — OFF evicted an ON to fit");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_queue_purge_via_inhibit_mask(void) {
+    section("ecu_sched: encoder queue — purge sweep via inj inhibit mask");
+    ecu_sched_test_reset();
+
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 5000u, ECU_ACT_INJ_ON);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 1u, "INJ1 event armed on encoder queue");
+
+    // INJ1 = cyl 0 -> inhibit mask bit0. purge_events_for_cyl_mask()
+    // (ecu_sched.cpp) must sweep BOTH queues — this is the real wiring
+    // path, not a direct call into the internal sweep function.
+    ecu_sched_set_inj_inhibit_mask(0x01u);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "encoder queue purged by inj inhibit mask (cross-queue sweep)");
+
+    ecu_sched_set_inj_inhibit_mask(0x00u);
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_queue_clear_via_outputs_safe(void) {
+    section("ecu_sched: encoder queue — cleared by ecu_sched_test_all_outputs_safe()");
+    ecu_sched_test_reset();
+
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 7000u, ECU_ACT_DWELL_START);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 1u, "IGN1 event armed on encoder queue");
+
+    ecu_sched_test_all_outputs_safe();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "encoder queue cleared by clear_all_events_and_drive_safe_outputs()");
+    CHECK_TRUE(ecu_sched_encoder_test_get_dier() == 0u,
+               "CC3IE off after clear-all");
+
+    ecu_sched_test_reset();
+}
+
 // ============================================================================
 // QUICK CRANK
 // ============================================================================
