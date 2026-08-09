@@ -273,6 +273,44 @@ void tim2_encoder_arm_next(uint32_t target_counts) noexcept {
 }
 
 // ----------------------------------------------------------------------------
+// CMP via TIM3_CH1/PC6 (VGT6 apenas, MT6835) — ver aviso em hal/timer.h.
+// Captura de hardware, não EXTI: PC6/AF2 dá TIM3_CH1 de verdade (Tabela 15
+// do DS14258), livre na VGT6, com IRQ_TIM3=46 já nomeado no vetor — ao
+// contrário de PB3 (sem canal de captura em nenhuma AF) e do número de
+// vetor EXTI não confirmado que essa rota exigiria.
+// ----------------------------------------------------------------------------
+
+namespace {
+volatile uint32_t g_cmp_angle_snapshot = 0u;
+volatile uint32_t g_cmp_edge_count     = 0u;
+}  // namespace
+
+void tim3_cmp_ic_init() noexcept {
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOCEN;
+    RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
+
+    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 6u, GPIO_AF2);
+    // Pull-up: sensor Hall idle-HIGH aberto-coletor, mesmo raciocínio de
+    // tim5_ic_set_capture_polarity() para o CMP antigo em PA1.
+    GPIOC_PUPDR = (GPIOC_PUPDR & ~(0x3u << 12u)) | (0x1u << 12u);
+
+    TIM3_CR1 = 0u;
+    TIM3_PSC = 0u;
+    TIM3_ARR = 0xFFFFu;  // TIM3 é 16-bit; CNT não interessa, só o IRQ de captura
+    TIM3_CCMR1 = TIM_CCMR1_CC1S_TI1 | TIM_CCMR1_IC1F_N8_DTS8;
+    TIM3_CCER  = TIM_CCER_CC1E | TIM_CCER_CC1P;  // captura na descida
+    TIM3_DIER  = TIM_DIER_CC1IE;
+    TIM3_EGR   = 1u;
+
+    nvic_set_priority(IRQ_TIM3, 1u);
+    nvic_enable_irq(IRQ_TIM3);
+    TIM3_CR1 = TIM_CR1_CEN;
+}
+
+uint32_t cmp_angle_snapshot() noexcept { return g_cmp_angle_snapshot; }
+uint32_t cmp_edge_count() noexcept { return g_cmp_edge_count; }
+
+// ----------------------------------------------------------------------------
 // ETB motor PWM (etb_pwm_*):
 //   VGT6: PE5 / TIM15_CH1 AF4
 //   RGT6: PA6 / TIM3_CH1  AF2
@@ -379,6 +417,20 @@ extern "C" void TIM2_IRQHandler(void) {
     }
 }
 
+/**
+ * @brief TIM3_IRQHandler — captura do CMP (CH1/PC6). Grava TIM2->CNT (ângulo
+ * do encoder no flanco do CMP), não um timestamp de tempo — ver aviso em
+ * hal/timer.h.
+ */
+extern "C" void TIM3_IRQHandler(void) {
+    const uint32_t sr = TIM3_SR;
+    if (sr & TIM_SR_CC1IF) {
+        TIM3_SR = ~TIM_SR_CC1IF;
+        g_cmp_angle_snapshot = TIM2_CNT;
+        ++g_cmp_edge_count;
+    }
+}
+
 } // namespace ems::hal
 
 // ----------------------------------------------------------------------------
@@ -424,6 +476,9 @@ void tim2_encoder_init() noexcept {}
 uint32_t tim2_encoder_count() noexcept { return g_mock_tim2_cnt; }
 void tim2_encoder_set_count(uint32_t counts) noexcept { g_mock_tim2_cnt = counts; }
 void tim2_encoder_arm_next(uint32_t) noexcept {}
+void tim3_cmp_ic_init() noexcept {}
+uint32_t cmp_angle_snapshot() noexcept { return 0u; }
+uint32_t cmp_edge_count() noexcept { return 0u; }
 } // namespace ems::hal
 
 void timer_etb_pwm_init(void) {}

@@ -382,48 +382,59 @@ no desenho original do gate 2. Isto significa que PA1 sai de `TIM5_CH2`/CMP —
 o CMP precisa de um pino novo. Implementado em `tim2_encoder_init()`
 (`hal/stm32h562/timer.cpp`) e documentado em `hal/timer.h`.
 
-### 2. CMP move para PB3 — mecanismo muda de classe (input capture → EXTI)
+### 2. CMP move para PC6/TIM3_CH1 — captura de hardware, não EXTI
 
-Verificado nas **duas** tabelas do datasheet (`Table 15`, AF0–AF7, e
-`Table 16`, AF8–AF15, DS14258 Rev 6): PB3 não tem **nenhum** canal de
-captura de timer em nenhuma das 16 AFs.
+Primeira tentativa foi PB3 via EXTI (ver histórico abaixo), mas o
+utilizador pediu explicitamente para procurar uma solução melhor antes de
+aceitar o custo do vetor IRQ não verificado. Achada: **PC6, TIM3_CH1
+(AF2)** — canal de captura de timer de verdade, com tudo verificado contra
+fonte primária, sem nenhum número adivinhado.
 
-```
-PB3  AF0-7:  JTDO/TRACESWO | TIM2_CH2 | - | - | I2C2_SDA | SPI1_SCK | SPI3_SCK | UART12
-PB3  AF8-15: SPI6_SCK | SDMMC2_D2 | CRS_SYNC | UART7_RX | - | - | LPTIM6_ETR | EVENTOUT
-```
+- **Livre na VGT6**: confirmado em `out_pins.cpp` — o bloco que reclama
+  `GPIOC` pinos 6–9 para IGN1-4 só compila no `#else` (RGT6); o `#elif
+  EMS_BOARD_IS_VGT6` usa exclusivamente `GPIOE`. `sdmmc.cpp` também usa
+  PC8, mas `sdmmc_init()` não é chamado de lado nenhum no boot — não é uma
+  reclamação ativa.
+- **AF confirmada**: `Table 15` do DS14258 Rev 6, linha `PC6`: AF2 =
+  `TIM3_CH1` (junto de `TIM8_CH1` em AF3, não usado). PC7/PC8/PC9 dariam
+  `TIM3_CH2/CH3/CH4` pela mesma tabela, caso PC6 precise mudar no futuro.
+- **IRQ já nomeado, não adivinhado**: `IRQ_TIM3 = 46` já existe em
+  `hal/stm32h562/regs.h` (usado por `tim3_pwm_init()`), e
+  `startup_stm32h562.cpp` já lista `TIM3_IRQHandler` na posição 46 do
+  vetor (`"IRQ44=TIM1_CC, 45=TIM2, 46=TIM3, 47=TIM4"`). Isto elimina por
+  completo o problema que bloqueava a rota EXTI: não há vetor
+  desconhecido, não há endereço-base de `EXTI`/`SYSCFG` a verificar — a
+  captura usa exatamente o mesmo padrão de registradores (`CCMR1`, `CCER`,
+  `DIER`, `SR`) já em uso por `tim5_ic_init()`.
+- **Custo aceito**: `TIM3` é partilhado com `tim3_pwm_init()` (PWM legado,
+  só usado por RGT6, sem chamador hoje — ver `auxiliaries.cpp:478`, que
+  registra o histórico de um bug real quando os dois tentaram coexistir).
+  Documentado como aviso permanente em `hal/timer.h`, mesmo padrão do
+  aviso já existente para o conflito `TIM2` EWG/encoder.
 
-(`TIM2_CH2` em AF1 é a mesma linha lógica que canal B do encoder — não pode
-servir simultaneamente para CMP, é o mesmo canal fisicamente reatribuído a
-PA1 pelo item 1.) Logo, capturar CMP em PB3 exige **EXTI** (interrupção de
-borda em GPIO puro), não input capture de timer — mudança de mecanismo, não
-só de pino. Isto foi sinalizado ao utilizador antes de implementar (ver
-`advisor()` desta sessão), em vez de assumido silenciosamente.
-
-Arquiteturalmente isto não é uma regressão: ler `TIM2->CNT` dentro do ISR de
-EXTI dá o **ângulo** exato no instante do flanco do CMP diretamente — mais
-direto do que o esquema atual (timestamp em `TIM5`, correlacionado com dentes
-do CKP à parte). Orçamento de erro: CMP é ~75 Hz no redline; a latência de
-ISR já medida neste projeto (~0,4 µs) equivale a 0,022° a 9.000 RPM,
+O ISR (`TIM3_IRQHandler`, `hal/stm32h562/timer.cpp`) grava `TIM2->CNT` —
+o **ângulo** do encoder no instante do flanco do CMP — num snapshot
+exposto por `cmp_angle_snapshot()`/`cmp_edge_count()`. Isto é mais direto
+do que o esquema atual (timestamp em `TIM5`, correlacionado com dentes do
+CKP à parte): a captura já entrega o ângulo, não precisa de conversão.
+Orçamento de erro: CMP é ~75 Hz no redline; mesmo a latência de ISR mais
+alta já medida neste projeto (~0,4 µs) equivale a 0,022° a 9.000 RPM,
 irrelevante para uma função que só precisa de desambiguar qual metade do
 ciclo de 720°.
 
-**Bloqueio real, ainda não resolvido:** o número do vetor IRQ na NVIC deste
-`startup_stm32h562.cpp` para EXTI3 (ou o grupo combinado que o contém). O
-vetor atual só define `EXTI5_9_IRQHandler`; as posições correspondentes a
-EXTI0–4 estão todas em `Default_Handler`, sem nome. Múltiplas buscas
-(comunidade STM32H5, comparação com STM32H7 — família diferente, não
-confiável diretamente, CMSIS `stm32h562xx.h`) não confirmaram o número
-específico deste chip. Risco de adivinhar: **limitado, não catastrófico** —
-como nada mais hoje ocupa essas posições (todas `Default_Handler`), um
-número errado faz o handler simplesmente nunca disparar (visível de imediato
-como "contador de bordas do CMP fica em 0" na bancada), não colide com outro
-periférico. Mesmo assim, não implementado às cegas: falta también verificar
-os endereços-base de `EXTI`/`SYSCFG` neste HAL (H5 não usa o mapa clássico
-F4 — o próprio `startup_stm32h562.cpp` já mostra `RCC` num endereço
-incomum, `0x44020C00`), portanto **nenhum registador de EXTI/SYSCFG foi
-adicionado a `regs.h` ainda**. Pendente: confirmar via capítulo NVIC do
-RM0481 antes de escrever qualquer código de EXTI.
+**Histórico (descartado): PB3 via EXTI.** Verificado nas **duas** tabelas
+do datasheet (`Table 15` AF0–7 e `Table 16` AF8–15): PB3 não tem nenhum
+canal de captura de timer em nenhuma AF (`JTDO/TIM2_CH2/-/-/I2C2_SDA/
+SPI1_SCK/SPI3_SCK/UART12` seguido de `SPI6_SCK/SDMMC2_D2/CRS_SYNC/
+UART7_RX/-/-/LPTIM6_ETR/EVENTOUT`) — capturar ali exigiria EXTI, e o
+vetor IRQ de EXTI0-4 neste `startup_stm32h562.cpp` não estava nomeado
+(só `EXTI5_9_IRQHandler` existe), nem os endereços-base de
+`EXTI`/`SYSCFG` deste HAL H5 (que não usa o mapa clássico F4) estavam
+verificados. O risco real de adivinhar era limitado — nada mais ocupa
+essas posições do vetor hoje, então um número errado só faria o handler
+nunca disparar, não colidir com outro periférico — mas não implementado
+às cegas mesmo assim. PC6/TIM3 tornou essa análise de risco irrelevante:
+não há nada para adivinhar.
 
 ### 3. TLE8888 descartado — SPI2 simplificado
 
@@ -461,13 +472,19 @@ make host-test       → 1252 PASS, 0 FAIL (binário corrido diretamente)
 make host-test-vgt6  → 24 PASS, 0 FAIL
 ```
 
+Implementado nesta revisão: `tim3_cmp_ic_init()` + `TIM3_IRQHandler` +
+`cmp_angle_snapshot()`/`cmp_edge_count()` (`hal/timer.h`,
+`hal/stm32h562/timer.cpp`) — não chamado do boot ainda, mesmo padrão de
+"código pronto, não ligado" que `tim2_encoder_init()` já segue.
+
 ### Pendências abertas por esta revisão
 
-1. Confirmar o vetor IRQ de EXTI3 (ou grupo combinado) e os endereços-base
-   `EXTI`/`SYSCFG` deste HAL, contra o RM0481 — bloqueia qualquer código de
-   captura do CMP.
-2. Implementar a captura do CMP via EXTI em PB3 (pull-up, borda de descida —
-   sensor Hall idle-HIGH open-collector, mesmo raciocínio de
-   [[cmp-ckp-capture-edge-polarity]]) uma vez resolvida a pendência 1.
+1. ~~Confirmar o vetor IRQ de EXTI3~~ — **resolvido ao trocar de mecanismo**:
+   PC6/TIM3_CH1 usa `IRQ_TIM3=46`, já nomeado no vetor, sem EXTI/SYSCFG
+   nenhum.
+2. Ligar `tim3_cmp_ic_init()` ao boot junto com `tim2_encoder_init()`/
+   `mt6835_init()` quando a decisão de ligar tudo ao `main_stm32.cpp` for
+   tomada — hoje deliberadamente fora de escopo (mesma razão dos outros
+   dois: periférico real sem sensor real por trás).
 3. Resolver o gap do `TIM5_CEN`: nova função de init enxuta, só contador
    livre-corrente, sem reclamar PA0/PA1.
