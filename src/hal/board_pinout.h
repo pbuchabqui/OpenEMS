@@ -30,3 +30,12 @@
 #  endif
 #  define EMS_BOARD_NAME "RGT6"
 #endif
+
+// Fork MT6835/TIM2-encoder (docs/dev/mt6835_encoder_fork.md), VGT6 apenas.
+// Default 0: boot idêntico à produção (tim5_ic_init(), CKP/CMP via Hall).
+// Com 1: troca para tim5_freerun_init()+tim2_encoder_init()+
+// tim3_cmp_ic_init()+mt6835_init() em main_stm32.cpp — mutuamente exclusivo
+// com o caminho de produção, nunca os dois no mesmo boot.
+#ifndef EMS_MT6835_ENCODER
+#  define EMS_MT6835_ENCODER 0
+#endif

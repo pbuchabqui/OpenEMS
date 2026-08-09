@@ -35,7 +35,9 @@ namespace {
 
 namespace R = ems::hal::mt6835;
 
+#ifndef MT6835_HW_PRESENT
 #define MT6835_HW_PRESENT 0
+#endif
 
 volatile bool     g_ok           = false;
 volatile uint16_t g_fault_count  = 0u;

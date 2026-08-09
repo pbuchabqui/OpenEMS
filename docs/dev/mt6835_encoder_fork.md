@@ -497,9 +497,95 @@ Implementado nesta revisão: `tim3_cmp_ic_init()` + `TIM3_IRQHandler` +
 1. ~~Confirmar o vetor IRQ de EXTI3~~ — **resolvido ao trocar de mecanismo**:
    PC6/TIM3_CH1 usa `IRQ_TIM3=46`, já nomeado no vetor, sem EXTI/SYSCFG
    nenhum.
-2. Ligar `tim3_cmp_ic_init()` + `tim5_freerun_init()` ao boot junto com
-   `tim2_encoder_init()`/`mt6835_init()` quando a decisão de ligar tudo ao
-   `main_stm32.cpp` for tomada — hoje deliberadamente fora de escopo (mesma
-   razão dos outros: periférico real sem sensor real por trás).
+2. ~~Ligar `tim3_cmp_ic_init()` + `tim5_freerun_init()` ao boot~~ —
+   **resolvido**, ver "Wiring ao boot" abaixo.
 3. ~~Resolver o gap do `TIM5_CEN`~~ — **resolvido**, ver seção "Gap
    TIM5_CEN" acima.
+
+## Wiring ao boot — `EMS_MT6835_ENCODER` (2026-08-09)
+
+Os quatro mecanismos (`tim2_encoder_init`, `mt6835_init`, `tim3_cmp_ic_init`,
+`tim5_freerun_init`) estavam implementados mas eram código morto — nada os
+chamava. Ligados agora atrás de uma flag de compilação nova,
+`EMS_MT6835_ENCODER` (`hal/board_pinout.h`, default `0`, mesmo padrão de
+`EMS_MT6835_ENCODER`/`MT6835_HW_PRESENT`/`EMS_EWG_POPULATED`):
+
+```c
+#if EMS_MT6835_ENCODER
+    tim5_freerun_init();
+    tim2_encoder_init();
+    tim3_cmp_ic_init();
+    mt6835_init();
+#else
+    tim5_ic_init();
+#endif
+```
+
+no lugar exato onde `main_stm32.cpp` já chamava `tim5_ic_init()`. Com a
+flag em `0` (default), o binário gerado é idêntico ao de antes desta
+revisão — só a estrutura `#if/#else` torna a exclusão mútua entre os dois
+caminhos (produção-Hall vs. MT6835) **estrutural** em vez de um comentário;
+antes disto eram duas funções que um leitor futuro podia chamar juntas por
+engano.
+
+**Verificação real, não apenas "compila com a flag em 0":**
+`mt6835_init()` nunca tinha sido chamado de lado nenhum, e o seu corpo real
+(a parte que toca SPI2/GPIO de verdade) vive atrás de
+`MT6835_HW_PRESENT=0` — **nunca tinha passado pelo compilador**. Era
+exatamente essa parte que escondeu o bug de chave `{` desalinhada corrigido
+numa sessão anterior. Para não repetir o erro de assumir que "compila com a
+flag desligada" prova algo sobre o código atrás dela:
+1. `MT6835_HW_PRESENT` passou a `#ifndef`-guardado (era `#define` fixo) —
+   permite compilar o corpo real via `-DMT6835_HW_PRESENT=1` sem mudar o
+   default de produção.
+2. Compilado isoladamente `mt6835.cpp` com `-DMT6835_HW_PRESENT=1
+   -DEMS_MT6835_ENCODER=1 -Werror` (arm-none-eabi-g++ direto, mesmas flags
+   do `Makefile`) — limpo, zero avisos. Primeira vez que o SPI2 setup,
+   `spi2_init_mt6835_mode()`, `configure_ppr_4096()`, `crc8()` e a cadeia
+   `mt6835_xfer()` passaram pelo compilador.
+3. Compilado `main_stm32.cpp` com `-DEMS_MT6835_ENCODER=1 -Werror` — limpo.
+4. `make firmware-vgt6` com o default temporariamente trocado para `1` —
+   link completo bem-sucedido (`MT6835_HW_PRESENT` continuou em `0` aqui,
+   então `mt6835_init()` só retorna `false`; isto exercitou o *wiring* do
+   boot, não o corpo SPI real — os passos 1-2 cobrem esse).
+5. Default revertido para `0`; `make clean && make firmware-vgt6/rgt6/mre`
+   + `host-test` (1252 PASS) + `host-test-vgt6` (24 PASS) — confirma que o
+   estado de produção não mudou.
+
+**Duas questões levantadas e verificadas, sem mudança de código:**
+- *`tim3_cmp_ic_init()` habilita o clock do GPIOC e escreve `AFRL`
+  imediatamente, sem o delay que `out_pins.cpp` usa depois de ligar clocks
+  de porta.* Confirmado que isto **não é uma inconsistência nova**: nenhuma
+  das outras funções de init deste ficheiro que usam `gpio_set_af()`
+  (`tim2_pwm_init`, `tim4_pwm_init`, `tim2_encoder_init`, e o `mt6835_init`
+  desta mesma sessão) insere esse delay — só `out_pins.cpp` o faz, ao
+  escrever `MODER`/`OTYPER`/`PUPDR` diretamente para várias portas de uma
+  vez. `tim3_cmp_ic_init()` segue o padrão dominante, não um caminho novo.
+- *`cmp_angle_snapshot()`/`cmp_edge_count()` não são amostrados juntos.*
+  Real — documentado como aviso em `hal/timer.h` junto às duas funções
+  (cada leitura é atômica isoladamente, mas o par pode vir de flancos
+  diferentes se lido a meio de uma atualização do ISR).
+
+### Verificação desta revisão
+
+```
+arm-none-eabi-g++ ... -DMT6835_HW_PRESENT=1 -DEMS_MT6835_ENCODER=1 -Werror \
+  -c src/hal/mt6835.cpp        → limpo, 0 avisos (corpo real, 1ª vez compilado)
+arm-none-eabi-g++ ... -DEMS_MT6835_ENCODER=1 -Werror \
+  -c src/main_stm32.cpp        → limpo
+make firmware-vgt6 (flag=1)    → link completo OK
+make clean && make firmware-vgt6/rgt6/mre (flag=0, default) → build limpo
+make host-test                 → 1252 PASS, 0 FAIL
+make host-test-vgt6            → 24 PASS, 0 FAIL
+```
+
+### Fora de escopo, continua para depois
+
+- O corpo real de `mt6835_init()` (`MT6835_HW_PRESENT=1`) continua sem
+  hardware para validar contra — compilar não é o mesmo que correr contra
+  um sensor real. `CS=PC13` continua placeholder.
+- Dispatcher em domínio de ângulo real (`TIM2_IRQHandler`) — fora de
+  escopo desde o início, exige adaptar `ecu_sched*.cpp`.
+- `tim2_encoder_init()`/`tim3_cmp_ic_init()` não fazem nada com os dados
+  que capturam ainda (não há consumidor no scheduler) — o wiring liga os
+  periféricos, não o comportamento observável do motor.

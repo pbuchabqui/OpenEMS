@@ -67,6 +67,7 @@ int main() { return 0; }
 #include "hal/flex_fuel.h"
 #include "hal/runtime_seed.h"
 #include "hal/timer.h"
+#include "hal/mt6835.h"
 
 // =============================================================================
 // Estado de background (do firmware)
@@ -479,7 +480,17 @@ static void openems_init() noexcept {
     // BSS (zero), mas 0 é um índice de cilindro válido — o ISR do CKP leria cyl=0
     // para todos os dentes antes da tabela ser preenchida, gerando DTCs falsos.
     ems::engine::misfire_init();
+#if EMS_MT6835_ENCODER
+    // Fork MT6835/TIM2-encoder (docs/dev/mt6835_encoder_fork.md) — substitui
+    // CKP/CMP via Hall por encoder magnético absoluto. Mutuamente exclusivo
+    // com tim5_ic_init(): os dois reclamam PA0/PA1 para papéis diferentes.
+    ems::hal::tim5_freerun_init();  // watchdogs de dwell/injeção continuam
+    ems::hal::tim2_encoder_init();  // CKP: TIM2_CH1/CH2 = PA0/PA1
+    ems::hal::tim3_cmp_ic_init();   // CMP: TIM3_CH1 = PC6
+    ems::hal::mt6835_init();        // leitura absoluta SPI no key-on
+#else
     ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
+#endif
     iwdg_kick();
 
     // 2a) Scheduler unificado (re-asserts pin safe + clears event queue)

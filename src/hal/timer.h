@@ -53,6 +53,12 @@ void tim2_encoder_arm_next(uint32_t target_counts) noexcept;
 // Captura na descida (Hall idle-HIGH aberto-coletor, mesmo raciocínio de
 // tim5_ic_set_capture_polarity). No CC1IF, o ISR grava TIM2->CNT (ângulo do
 // encoder no instante do flanco do CMP) — não um timestamp de tempo.
+// ⚠️ cmp_angle_snapshot()/cmp_edge_count() não são amostrados juntos: cada
+// leitura é atômica isoladamente (uint32_t alinhado em M33), mas o par pode
+// ser lido a meio de uma atualização do ISR — um consumidor futuro não pode
+// assumir que os dois vêm do mesmo flanco. Mesma classe de corrida já vista
+// neste projeto entre ISR e main loop (ver [[ckp-cmp-scope-diag]]); usar
+// CriticalSectionGuard se precisar dos dois consistentes entre si.
 void tim3_cmp_ic_init() noexcept;
 uint32_t cmp_angle_snapshot() noexcept;
 uint32_t cmp_edge_count() noexcept;
