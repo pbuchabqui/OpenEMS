@@ -212,6 +212,7 @@ int main(void) {
     test_ecu_sched_encoder_queue_overflow();
     test_ecu_sched_encoder_queue_purge_via_inhibit_mask();
     test_ecu_sched_encoder_queue_clear_via_outputs_safe();
+    test_ecu_sched_encoder_heartbeat();
 
     // ── QUICK CRANK ─────────────────────────────────────────────────────
     printf("\n=== QUICK CRANK ===");

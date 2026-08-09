@@ -488,6 +488,10 @@ static void openems_init() noexcept {
     ems::hal::tim2_encoder_init();  // CKP: TIM2_CH1/CH2 = PA0/PA1
     ems::hal::tim3_cmp_ic_init();   // CMP: TIM3_CH1 = PC6
     ems::hal::mt6835_init();        // leitura absoluta SPI no key-on
+    // Heartbeat TIM2_CH4 (1×/volta) — depois de mt6835_init() para que o
+    // 1º alvo de CCR4 (now+16384) parta do TIM2_CNT já pré-carregado pela
+    // leitura SPI absoluta, não de um valor de reset arbitrário.
+    ems::hal::tim2_heartbeat_start();
 #else
     ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
 #endif

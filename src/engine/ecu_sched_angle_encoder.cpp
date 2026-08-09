@@ -383,9 +383,45 @@ void encoder_clear_all(void) noexcept
 
 }  // namespace ems::engine::sched_internal
 
+// ── Heartbeat TIM2_CH4 — resposta ao tick ────────────────────────────────
+// Chamado 1×/volta pelo TIM2_IRQHandler (CC4IF, hal/stm32h562/timer.cpp),
+// que já cuida do rearme de CCR4 e das leituras de registo — esta função só
+// recebe os valores já lidos (mesma disciplina de host-testabilidade do
+// resto do ficheiro).
+
+static volatile uint32_t g_hb_last_cmp_edge_count = 0U;
+
+void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
+                                      uint32_t cmp_angle,
+                                      uint32_t cmp_edge_count) noexcept
+{
+    ecu_sched_encoder_omega_sample(tim2_now, tim5_now);
+
+    // Novo flanco do CMP desde o último tick? Só regista por agora — a fase
+    // que esse flanco representa é uma constante de calibração de hardware
+    // ainda não medida em bancada (ecu_sched_encoder_phase_set_anchor()
+    // precisa dela), não algo que este heartbeat possa inventar. Resolver
+    // isso + o recompute barato de dwell/PW + bank-toggle do presync é a
+    // próxima tarefa do plano.
+    if (cmp_edge_count != g_hb_last_cmp_edge_count) {
+        g_hb_last_cmp_edge_count = cmp_edge_count;
+        (void)cmp_angle;  // TODO: ecu_sched_encoder_phase_set_anchor(cmp_angle, <fase calibrada>)
+    }
+    // TODO: recompute barato de dwell_deg/inj_pw_deg + bank-toggle presync
+    // (tarefa seguinte do plano — "Conversão graus→counts + recompute
+    // partilhado").
+}
+
+#if defined(EMS_HOST_TEST)
+void ecu_sched_encoder_heartbeat_test_reset(void) noexcept
+{
+    g_hb_last_cmp_edge_count = 0U;
+}
+#endif
+
 namespace ems::engine::sched_internal::encoder {
 
-// Placeholder — preenchido pelas tarefas seguintes do plano (resposta ao
-// heartbeat CH4, conversão graus→counts).
+// Placeholder — preenchido pela tarefa seguinte do plano (conversão
+// graus→counts + recompute partilhado com ecu_sched_commit_calibration()).
 
 }  // namespace ems::engine::sched_internal::encoder

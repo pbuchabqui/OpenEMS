@@ -141,6 +141,7 @@ void test_ecu_sched_encoder_queue_dispatch(void);
 void test_ecu_sched_encoder_queue_overflow(void);
 void test_ecu_sched_encoder_queue_purge_via_inhibit_mask(void);
 void test_ecu_sched_encoder_queue_clear_via_outputs_safe(void);
+void test_ecu_sched_encoder_heartbeat(void);
 void test_quick_crank_all(void);
 void test_transient_fuel_all(void);
 void test_map_estimator_all(void);

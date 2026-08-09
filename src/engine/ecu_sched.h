@@ -225,6 +225,26 @@ void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
                                    uint8_t action) noexcept;
 void ecu_sched_encoder_evt_dispatch(void) noexcept;  // called from TIM2 ISR on CC3IF
 
+// Heartbeat TIM2_CH4 — chamado 1×/volta de cambota (16384 counts) pelo
+// TIM2_IRQHandler em CC4IF. tim2_now/tim5_now: já lidos pelo HAL no
+// instante do heartbeat, alimentam o estimador de ω
+// (ecu_sched_encoder_omega_sample(), chamado internamente). cmp_angle/
+// cmp_edge_count: leitura mais recente de cmp_angle_snapshot()/
+// cmp_edge_count() (hal/timer.h) — usada para detectar um novo flanco do
+// CMP desde o último tick (delta de cmp_edge_count).
+//
+// ⚠️ Ainda não faz o recompute barato de dwell/PW nem o bank-toggle do
+// presync nem a verificação de deriva do CMP (próxima tarefa do plano,
+// docs/dev/mt6835_encoder_fork.md — "Conversão graus→counts + recompute
+// partilhado"): a fase que um flanco do CMP representa é uma constante de
+// calibração de hardware ainda não medida em bancada
+// (ecu_sched_encoder_phase_set_anchor() precisa dela), não algo que este
+// heartbeat possa inventar. Por agora só alimenta ω, que não depende dessa
+// constante.
+void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
+                                      uint32_t cmp_angle,
+                                      uint32_t cmp_edge_count) noexcept;
+
 // Modo de ignição actual: 1 = sequencial (full sync + CMP confirmado),
 // 0 = wasted-spark (presync). Reflecte g_knock_sequential. Usado pela
 // observabilidade (status bit IGN_SEQUENTIAL) e pelos host tests.
@@ -240,6 +260,8 @@ void ecu_sched_encoder_omega_test_reset(void) noexcept;
 void ecu_sched_encoder_phase_test_reset(void) noexcept;
 // Idem para a fila TIM2/CH3 (zera a fila + o mock de TIM2_CNT/CCR3/DIER).
 void ecu_sched_encoder_queue_test_reset(void) noexcept;
+// Idem para o heartbeat (delta de cmp_edge_count entre ticks).
+void ecu_sched_encoder_heartbeat_test_reset(void) noexcept;
 // Mock de TIM2_CNT para os testes da fila TIM2/CH3 (nome sem colisão com os
 // aliases legados ecu_sched_test_set_tim2_cnt/get_tim1_ccr — esses mexem em
 // ems_test_tim5_cnt por baixo, ver "TIM1 placeholders" acima; não são o

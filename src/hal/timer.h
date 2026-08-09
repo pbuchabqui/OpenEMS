@@ -42,6 +42,15 @@ void tim2_encoder_set_count(uint32_t counts) noexcept;
 // Arma o próximo compare-match do dispatcher em domínio de ângulo (CH3).
 void tim2_encoder_arm_next(uint32_t target_counts) noexcept;
 
+// Heartbeat TIM2_CH4 — independente da fila de disparo (CH3), sem pino
+// físico (mesmo padrão "frozen" do CH3). Auto-rearma a cada 16384 counts
+// (1×/volta de cambota); alimenta o estimador de ω e o recompute barato de
+// dwell/PW/bank-toggle do presync/verificação de deriva do CMP (ver
+// ecu_sched_encoder_heartbeat_tick(), docs/dev/mt6835_encoder_fork.md).
+// Chamar uma vez, depois de mt6835_init() ter estabelecido o TIM2_CNT
+// inicial (a 1ª meta de CCR4 é now+16384, precisa de um "now" já válido).
+void tim2_heartbeat_start() noexcept;
+
 // ── CMP via TIM3_CH1/PC6 (VGT6 apenas, MT6835) ──────────────────────────────
 // Substitui TIM5_CH2/PA1 (que agora é canal B do encoder). PC6/AF2/TIM3_CH1
 // verificado livre na VGT6 nas duas tabelas AF do DS14258 e contra

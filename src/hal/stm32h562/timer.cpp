@@ -314,6 +314,17 @@ void tim2_encoder_arm_next(uint32_t target_counts) noexcept {
 }
 
 // ----------------------------------------------------------------------------
+// Heartbeat TIM2_CH4 — ver aviso em hal/timer.h. CC4E fica em 0 de propósito
+// (mesmo "frozen" do CH3): só o comparador interno + CC4IF/CC4IE interessam.
+// ----------------------------------------------------------------------------
+
+void tim2_heartbeat_start() noexcept {
+    const uint32_t now = TIM2_CNT;
+    TIM2_CCR4 = now + 16384u;
+    TIM2_DIER |= TIM_DIER_CC4IE;
+}
+
+// ----------------------------------------------------------------------------
 // CMP via TIM3_CH1/PC6 (VGT6 apenas, MT6835) — ver aviso em hal/timer.h.
 // Captura de hardware, não EXTI: PC6/AF2 dá TIM3_CH1 de verdade (Tabela 15
 // do DS14258), livre na VGT6, com IRQ_TIM3=46 já nomeado no vetor — ao
@@ -441,20 +452,28 @@ extern "C" void TIM5_IRQHandler(void) {
 }
 
 /**
- * @brief TIM2_IRQHandler — dispatcher de eventos em domínio de ângulo (CH3).
- *
- * ⚠️ Fora de escopo desta etapa (docs/dev/mt6835_encoder_fork.md): a fila de
- * eventos em domínio de ângulo ainda não existe (isso é a adaptação de
- * ecu_sched*.cpp, deliberadamente não feita aqui). Por agora só limpa a flag
- * para não deixar a interrupção presa — sem isto, com CC3IE ligado e nada a
- * limpar TIM2_SR, a IRQ TIM2 dispararia em loop.
+ * @brief TIM2_IRQHandler — CH3 = dispatcher de eventos em domínio de ângulo,
+ * CH4 = heartbeat (1×/volta, 16384 counts). Mesmo periférico/vetor que a
+ * fila TIM2/CH3 (ecu_sched_angle_encoder.cpp) — CC3IF e CC4IF chegam pela
+ * mesma IRQ, tratados em sequência com releitura de SR entre um e outro
+ * (mesmo padrão do TIM5_IRQHandler acima, para não perder um flag que suba
+ * durante o tratamento do outro).
  */
 extern "C" void TIM2_IRQHandler(void) {
-    const uint32_t sr = TIM2_SR;
+    uint32_t sr = TIM2_SR;
     if (sr & TIM_SR_CC3IF) {
         TIM2_SR = ~TIM_SR_CC3IF;
-        // TODO: chamar aqui o dispatcher em domínio de ângulo quando
-        // ecu_sched for adaptado — ver "Itens em aberto" no design doc.
+        ecu_sched_encoder_evt_dispatch();
+    }
+    sr = TIM2_SR;
+    if (sr & TIM_SR_CC4IF) {
+        TIM2_SR = ~TIM_SR_CC4IF;
+        TIM2_CCR4 += 16384u;  // auto-rearma para a próxima volta, sem UEV/ARR
+        const uint32_t tim2_now = TIM2_CNT;
+        const uint32_t tim5_now = TIM5_CNT;
+        const uint32_t cmp_angle = cmp_angle_snapshot();
+        const uint32_t cmp_edges = cmp_edge_count();
+        ecu_sched_encoder_heartbeat_tick(tim2_now, tim5_now, cmp_angle, cmp_edges);
     }
 }
 
@@ -518,6 +537,7 @@ void tim2_encoder_init() noexcept {}
 uint32_t tim2_encoder_count() noexcept { return g_mock_tim2_cnt; }
 void tim2_encoder_set_count(uint32_t counts) noexcept { g_mock_tim2_cnt = counts; }
 void tim2_encoder_arm_next(uint32_t) noexcept {}
+void tim2_heartbeat_start() noexcept {}
 void tim3_cmp_ic_init() noexcept {}
 uint32_t cmp_angle_snapshot() noexcept { return 0u; }
 uint32_t cmp_edge_count() noexcept { return 0u; }

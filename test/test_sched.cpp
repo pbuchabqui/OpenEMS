@@ -853,6 +853,35 @@ void test_ecu_sched_encoder_queue_clear_via_outputs_safe(void) {
     ecu_sched_test_reset();
 }
 
+void test_ecu_sched_encoder_heartbeat(void) {
+    section("ecu_sched: encoder heartbeat tick — feeds omega estimator");
+    ecu_sched_test_reset();
+
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "omega invalid before any heartbeat tick");
+
+    // First tick only seeds the omega estimator's previous sample.
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "still invalid after single tick");
+
+    // Second tick: d_tim2=1000, d_tim5=1000 -> omega=1.0 -> x256=256.
+    // Confirms the heartbeat really calls ecu_sched_encoder_omega_sample()
+    // with the values it was handed (HAL reads them, this just verifies the
+    // wiring, not the estimator's own math — that's covered separately).
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 1u, "valid after second tick");
+    CHECK_EQ(ecu_sched_encoder_omega_x256(), 256, "omega fed correctly through the heartbeat");
+
+    // cmp_edge_count delta detection doesn't crash / doesn't touch omega —
+    // phase anchoring itself is deliberately not wired yet (needs a
+    // calibration constant not yet measured, see plan).
+    ecu_sched_encoder_heartbeat_tick(2500u, 3000u, 12345u, 1u);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
+             "phase anchor NOT set by the heartbeat yet (calibration constant pending)");
+
+    ecu_sched_test_reset();
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "test_reset() clears heartbeat-fed state");
+}
+
 // ============================================================================
 // QUICK CRANK
 // ============================================================================
