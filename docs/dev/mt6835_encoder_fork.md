@@ -22,9 +22,10 @@ de conversa que originou este fork; o resumo técnico relevante está abaixo.
 
 - `TIM2` em modo encoder: `CH1`/`CH2` decodificam quadratura ABZ do MT6835
   (posição angular absoluta, contada em hardware, sem ISR por borda).
-- `CH3`/`CH4` do mesmo `TIM2` ficam livres (não usados pelo modo encoder) e
-  passam a gerar compare-match diretamente contra `TIM2->CNT` — ou seja,
-  disparo por **ângulo alvo**, não por timestamp previsto.
+- `CH3` do mesmo `TIM2` fica livre (não usado pelo modo encoder, que só
+  consome `CH1`/`CH2`) e passa a gerar compare-match diretamente contra
+  `TIM2->CNT` — ou seja, disparo por **ângulo alvo**, não por timestamp
+  previsto. `CH4` fica livre também, sem uso atribuído por agora.
 - Isto elimina a conversão ângulo→tempo que hoje é feita uma vez por gap em
   `ecu_sched_angle.cpp` (aproximação que assume RPM ~constante até o próximo
   dente) — o disparo por ângulo é imune a essa aproximação porque compara
@@ -41,15 +42,16 @@ com a bobina a meio da carga, sem giro nenhum para gerar novos pulsos de
 cenário — não serve como base de tempo para o watchdog.
 
 Consequência de projeto: mesmo adotando disparo em ângulo via `TIM2`, é
-obrigatório manter uma referência de tempo pequena e **independente da
-rotação**, só para:
+obrigatório manter uma referência de tempo **independente da rotação**, só
+para:
 - watchdog de over-dwell,
 - lógica de "motor parou → forçar saídas seguras".
 
-Candidato natural: `TIM6` — hoje só usado como trigger do ADC
-(`src/hal/stm32h562/regs.h:445`), livre para ser reaproveitado como contador
-de tempo leve para este propósito. Não precisa da sofisticação do `TIM5`
-atual (32 bits, fila de eventos) — só precisa nunca parar de contar.
+**Decisão (revista, ver "Arquitetura base" abaixo): não é `TIM6`.** `TIM6` é
+timer básico, sem canal de captura — não serviria nem para o CMP se
+quiséssemos. `TIM5` **não desaparece, encolhe**: mantém a captura do CMP
+(`CH2`) e continua sendo a referência de tempo sempre-corrente que o
+watchdog já usa hoje — é o papel que `TIM5` já exerce, sem peça nova.
 
 ## Gates — FECHADOS, com fonte primária (2026-08-08)
 
@@ -146,6 +148,78 @@ TIM15 (não TIM1/TIM8 como o documento revisado assumia). Isto não muda a
 conclusão já registada sobre BKIN ser incompatível com o mecanismo BSRR do
 scheduler atual — só é uma nota para se essa discussão for reaberta depois.
 
+## Arquitetura base — FECHADA (2026-08-08)
+
+Decisões travadas antes de qualquer código de driver, para que a implementação
+não fique "descobrindo" a arquitetura no processo.
+
+### Verificação do mecanismo central antes de travar
+
+A peça mais crítica do desenho — `CH1`/`CH2` em modo encoder e `CH3`/`CH4`
+livres para compare-match independente, no **mesmo** `TIM2` — foi
+verificada, porque se estivesse errada a arquitetura toda cairia. Duas
+fontes independentes da comunidade ST corroboram: o modo encoder (bits SMS)
+só governa o roteamento de TI1/TI2 para o contador via `CCMR1`; `CCMR2`/
+`CCR3`/`CCR4` são circuitos de compare independentes, não afetados pelo SMS.
+Citação direta de uma resposta de suporte ST: *"set up CH3 or CH4 for the
+output compare (you don't need to actually enable it as output, nor set up
+a GPIO pin for it) and bind the interrupt to the chosen channel in DIER."*
+**Não confirmado ainda contra o texto do RM0481 (capítulo TIM2) primário**
+— duas tentativas de baixar o AN4776/RM0481 completo via WebFetch deram
+timeout; o excerto local (`docs/alternatefunctions.pdf`) só cobre o
+capítulo GPIO. Tratar como **alta confiança, não fonte primária fechada** —
+ver item aberto 3 abaixo.
+
+### Decisões locked
+
+1. **Papel dos timers:**
+   - `TIM2` (32-bit): `CH1`/`CH2` modo encoder (PA0/PA1 via AF1, confirmado
+     no gate 2) = ângulo do CKP a partir do ABZ do MT6835. `CH3` = compare-
+     match em domínio de ângulo, reaproveitando o mesmo padrão fila-ordenada
+     + rearmar-um-canal-HW que `TIM5_CH3` já usa hoje — só troca o "relógio"
+     de base (tempo→ângulo); a lógica da fila não muda de forma.
+   - `TIM5` (32-bit): encolhe, não desaparece. Mantém `CH2` = captura do CMP
+     (inalterado — 1 pulso Hall a cada 720°, sem problema de taxa) e
+     continua como referência de tempo sempre-corrente para o watchdog de
+     dwell/stall. `CH1` (CKP) e `CH3` (dispatcher por tempo) ficam livres.
+   - Saídas INJ/IGN: **inalteradas** — GPIO BSRR por software na ISR,
+     mecanismo congelado preservado. Sem output compare físico do `TIM2` nos
+     pinos de saída: com só 2 canais livres (`CH3`/`CH4`) para até 8 saídas
+     lógicas com fases dinâmicas (dwell recalculado por VBat/RPM), OC
+     reintroduziria exatamente a classe de falha (evento perdido, não só
+     jitter) que já derrubou essa abordagem no scheduler atual — comparação
+     detalhada de latência/jitter OC vs. BSRR na conversa que originou este
+     documento.
+2. **PPR programado: 4.096**, não os 16.384 máximos. Gate 1: a 16.384 PPR o
+   fabricante só garante INL até 7.500 RPM (abaixo do redline de 9.000 RPM);
+   a 4.096 PPR o teto sobe para ~30.000 RPM, com folga de ~3,3× a 9.000 RPM.
+   Resolução resultante: 16.384 CPR pós-decodificação X4 → 0,0219°/passo.
+3. **Leitura absoluta no key-on**: SPI lê os 21 bits de ângulo do MT6835
+   antes do primeiro movimento, converte para a escala de `TIM2->CNT` e
+   pré-carrega o contador. CMP continua obrigatório para desambiguar qual
+   metade do ciclo de 720° (compressão vs. exaustão) — papel inalterado, só
+   ancora contra o ângulo do `TIM2` em vez da contagem de dentes de hoje.
+4. **Dwell**: continua exigindo conversão duração(tempo)→janela(ângulo) via
+   RPM instantâneo — não desaparece, só encolhe de horizonte (hoje é
+   recalculado 1×/gap inteiro; no novo desenho é 1×/cálculo de dwell,
+   tipicamente 2–5 ms de antecedência). Mesma classe de erro de
+   [[trigger-offset-angular-vs-time-delay]], horizonte menor.
+
+### Itens em aberto ANTES do driver (não bloqueiam o registo da arquitetura)
+
+1. **Compensação do atraso de propagação** (10 µs, achado do gate 1):
+   fórmula proposta `correção_graus(RPM) = 10µs × RPM × 6e-6`, mas o ponto de
+   aplicação (na leitura de posição atual? no alvo do evento?) ainda não foi
+   derivado.
+2. **Rotação reversa durante cranking** (kick-back de compressão): modo
+   encoder decrementa `CNT` em hardware se o motor girar para trás — mais
+   fiel à física real do que a contagem só-para-frente de hoje, mas muda a
+   semântica de "esperar o próximo compare-match" (o alvo pode ser
+   ultrapassado, recuar, e re-cruzar). Não resolvido; pendência de design
+   antes de codar o modo cranking.
+3. **Confirmar CH3/CH4-independente-do-SMS contra o RM0481** (capítulo
+   TIM2), não só fontes de comunidade — antes de `tim2_encoder_init()`.
+
 ## Diferença conhecida entre este fork e `hw/v1-clean-board`
 
 Este branch parte de `main`, que está **15 commits atrás** de
@@ -162,24 +236,12 @@ divergência está isolada em HAL/pinout/hardware. Quem for portar trabalho
 deste fork de volta para `hw/v1-clean-board` precisa revisar esses ficheiros
 manualmente — não é um merge direto.
 
-## Estado: gates fechados, driver ainda não escrito
+## Estado: arquitetura base fechada, driver ainda não escrito
 
-Com os dois gates fechados (fonte primária confirmada), o próximo passo fica
-desbloqueado — mas ainda não foi feito nesta etapa, por decisão explícita de
-escopo, não por bloqueio técnico:
-
-- Driver SPI do MT6835 (leitura de ângulo absoluto no key-on).
-- `tim2_encoder_init()` (modo encoder em `TIM2_CH1/CH2`, `GPIOA_AFRL` para
-  AF1 em PA0/PA1).
-- Decisão explícita de PPR programado: **recomendação, com base no gate 1,
-  é ficar bem abaixo de 16.384** — a própria folga do fabricante (7.500 RPM
-  no teto de INL) já exclui resolução máxima para um motor que vai a
-  9.000 RPM; 4.096 PPR (como no documento revisado) dá margem de ~3,3× a
-  9.000 RPM E mantém o teto de INL do fabricante em ~30.000 RPM.
-- Compensação do atraso de propagação (10 µs, achado do gate 1) — decidir
-  onde essa correção entra: se o disparo passa a ser por ângulo via `TIM2`,
-  a correção deixa de ser "subtrair µs de um timestamp" (que fazia sentido
-  no domínio de tempo do TIM5) e passa a ser um **offset angular
-  dependente de RPM** aplicado ao alvo de `CNT` — matemática ainda não
-  derivada, marcar como pendência de projeto antes do driver.
-- Qualquer mudança em `ecu_sched*.cpp`.
+Com os dois gates e a arquitetura base fechados, o próximo passo (driver SPI
+do MT6835 + `tim2_encoder_init()`) fica desbloqueado em termos de dados —
+mas ainda não foi feito, por decisão explícita de escopo. Os 3 itens listados
+em "Itens em aberto ANTES do driver" (acima) são as únicas pendências reais;
+tudo o resto (papel dos timers, PPR, key-on, dwell) está travado. Nenhuma
+mudança em `ecu_sched*.cpp` nem em `src/` até esses 3 itens fecharem ou até
+decisão explícita de prosseguir mesmo assim.
