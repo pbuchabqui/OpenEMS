@@ -192,6 +192,23 @@ void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexce
 int32_t ecu_sched_encoder_omega_x256(void) noexcept;
 uint8_t ecu_sched_encoder_omega_valid(void) noexcept;
 
+// Rastreador de fase: TIM2_CNT só dá posição mod 360° (1 volta de cambota);
+// o motor tem ciclo de 720° (ECU_PHASE_A/B, ver acima). O CMP (sensor Hall
+// inalterado, tim3_cmp_ic_init()) desambigua qual metade — mas ESTE módulo
+// não decide sozinho a que fase corresponde um flanco do CMP (é uma
+// constante de calibração de hardware — onde o sensor está montado — ainda
+// não determinada; bloqueia bancada, não este dispatcher). Quem chama
+// ecu_sched_encoder_phase_set_anchor() (o heartbeat CH4, quando existir)
+// é responsável por saber essa fase; este módulo só mantém o anchor
+// absoluto de 32 bits e conta voltas completas (16384 counts) desde o
+// anchor para responder "que fase é agora" em qualquer instante — nunca por
+// toggle, sempre recalculado a partir do anchor absoluto mais recente.
+void ecu_sched_encoder_phase_set_anchor(uint32_t tim2_raw_at_cmp_edge,
+                                        uint8_t phase) noexcept;
+// ECU_PHASE_A ou ECU_PHASE_B — chamar só depois de ecu_sched_encoder_phase_valid().
+uint8_t ecu_sched_encoder_phase_at(uint32_t tim2_raw_now) noexcept;
+uint8_t ecu_sched_encoder_phase_valid(void) noexcept;
+
 // Modo de ignição actual: 1 = sequencial (full sync + CMP confirmado),
 // 0 = wasted-spark (presync). Reflecte g_knock_sequential. Usado pela
 // observabilidade (status bit IGN_SEQUENTIAL) e pelos host tests.
@@ -203,6 +220,8 @@ void ecu_sched_test_reset(void);
 // Zera o estimador de ω do encoder — chamado por ecu_sched_test_reset()
 // (ecu_sched_angle_encoder.cpp), evita estado a vazar entre testes.
 void ecu_sched_encoder_omega_test_reset(void) noexcept;
+// Idem para o rastreador de fase.
+void ecu_sched_encoder_phase_test_reset(void) noexcept;
 uint8_t ecu_sched_test_angle_table_size(void);
 uint8_t ecu_sched_test_get_angle_event(uint8_t index,
                                        uint8_t *tooth,

@@ -100,9 +100,67 @@ void ecu_sched_encoder_omega_test_reset(void) noexcept
 }
 #endif
 
+// ── Rastreador de fase (anchor CMP → ECU_PHASE_A/B) ─────────────────────
+// TIM2_CNT só dá posição mod 360° (1 volta de cambota); o motor tem ciclo
+// de 720°. O CMP (sensor Hall inalterado, tim3_cmp_ic_init()) desambigua
+// qual metade — mas ESTE módulo não decide a que fase corresponde um
+// flanco do CMP (constante de calibração de hardware, ainda por medir em
+// bancada); recebe a fase já resolvida via
+// ecu_sched_encoder_phase_set_anchor() e só responde "que fase é agora"
+// contando voltas completas (16384 counts) desde o anchor absoluto mais
+// recente — nunca por toggle incremental, sempre recalculado do anchor.
+//
+// Pura aritmética, sem acesso a registo — mesmo raciocínio de
+// host-testabilidade do estimador de ω acima.
+
+static volatile uint32_t g_phase_anchor_raw   = 0U;
+static volatile uint8_t  g_phase_anchor_value = ECU_PHASE_A;
+static volatile uint8_t  g_phase_valid        = 0U;
+
+// Floor division por 16384 (2^14) — só a paridade do quociente interessa
+// (nº de voltas completas desde o anchor, par/ímpar decide a fase), mas a
+// paridade só está correta se a divisão arredondar para -∞, não para zero.
+// Ex.: delta=-1 (1 count antes do anchor) tem de cair na volta anterior
+// (quociente -1, ímpar/fase invertida) — divisão truncada daria 0 (par),
+// errado: fisicamente esse count já pertence à revolução anterior.
+static inline int32_t floor_div_16384(int32_t delta) noexcept
+{
+    int32_t q = delta / 16384;
+    if ((delta % 16384 != 0) && (delta < 0)) { --q; }
+    return q;
+}
+
+void ecu_sched_encoder_phase_set_anchor(uint32_t tim2_raw_at_cmp_edge,
+                                        uint8_t phase) noexcept
+{
+    g_phase_anchor_raw = tim2_raw_at_cmp_edge;
+    g_phase_anchor_value = phase;
+    g_phase_valid = 1U;
+}
+
+uint8_t ecu_sched_encoder_phase_at(uint32_t tim2_raw_now) noexcept
+{
+    const int32_t delta = (int32_t)(tim2_raw_now - g_phase_anchor_raw);
+    const int32_t revs = floor_div_16384(delta);
+    const uint8_t flipped = (uint8_t)((uint32_t)revs & 1U);
+    if (flipped == 0U) { return g_phase_anchor_value; }
+    return (g_phase_anchor_value == ECU_PHASE_A) ? ECU_PHASE_B : ECU_PHASE_A;
+}
+
+uint8_t ecu_sched_encoder_phase_valid(void) noexcept { return g_phase_valid; }
+
+#if defined(EMS_HOST_TEST)
+void ecu_sched_encoder_phase_test_reset(void) noexcept
+{
+    g_phase_anchor_raw = 0U;
+    g_phase_anchor_value = ECU_PHASE_A;
+    g_phase_valid = 0U;
+}
+#endif
+
 namespace ems::engine::sched_internal::encoder {
 
 // Placeholder — preenchido pelas tarefas seguintes do plano (fila TIM2/CH3,
-// rastreador de fase, resposta ao heartbeat CH4, conversão graus→counts).
+// resposta ao heartbeat CH4, conversão graus→counts).
 
 }  // namespace ems::engine::sched_internal::encoder

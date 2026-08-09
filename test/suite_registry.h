@@ -135,6 +135,7 @@ void test_eoi_blend(void);
 void test_ecu_sched_presync(void);
 void test_ecu_sched_dwell_watchdog(void);
 void test_ecu_sched_encoder_omega(void);
+void test_ecu_sched_encoder_phase(void);
 void test_quick_crank_all(void);
 void test_transient_fuel_all(void);
 void test_map_estimator_all(void);

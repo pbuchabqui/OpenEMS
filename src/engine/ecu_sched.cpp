@@ -876,6 +876,7 @@ void ecu_sched_test_reset(void)
     si::g_knock_sequential = 0U; g_cmp_phase_seen = 0U;
     // MT6835/TIM2 encoder — ver ecu_sched_angle_encoder.cpp.
     ecu_sched_encoder_omega_test_reset();
+    ecu_sched_encoder_phase_test_reset();
 }
 uint8_t ecu_sched_test_angle_table_size(void) { return si::g_angle_table_count; }
 uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *sub_frac, uint8_t *ch, uint8_t *action, uint8_t *phase)

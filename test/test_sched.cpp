@@ -681,6 +681,47 @@ void test_ecu_sched_encoder_omega(void) {
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "test_reset() clears omega state");
 }
 
+void test_ecu_sched_encoder_phase(void) {
+    section("ecu_sched: encoder phase tracker");
+    ecu_sched_test_reset();
+
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "invalid before first anchor");
+
+    // Anchor: raw=100000 marks entering ECU_PHASE_B.
+    ecu_sched_encoder_phase_set_anchor(100000u, ECU_PHASE_B);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "valid after set_anchor");
+    CHECK_EQ(ecu_sched_encoder_phase_at(100000u), ECU_PHASE_B,
+             "at anchor: same phase (revs=0, even)");
+
+    // +1 full rev (16384 counts) -> phase flips.
+    CHECK_EQ(ecu_sched_encoder_phase_at(116384u), ECU_PHASE_A,
+             "+1 rev: flipped (revs=1, odd)");
+    // +2 full revs -> back to anchor phase.
+    CHECK_EQ(ecu_sched_encoder_phase_at(132768u), ECU_PHASE_B,
+             "+2 revs: same phase again (revs=2, even)");
+
+    // Boundary just BEFORE the anchor: still belongs to the previous
+    // (flipped) revolution — this is the floor-division correctness case
+    // (truncated division would wrongly give revs=0/unflipped here).
+    CHECK_EQ(ecu_sched_encoder_phase_at(99999u), ECU_PHASE_A,
+             "1 count before anchor: flipped (floor(-1/16384)=-1, odd)");
+    // Exactly 1 rev before the anchor -> flipped (revs=-1 exact).
+    CHECK_EQ(ecu_sched_encoder_phase_at(83616u), ECU_PHASE_A,
+             "-1 rev exact: flipped (revs=-1, odd)");
+    // 1 count further back crosses into the next-older revolution -> unflipped.
+    CHECK_EQ(ecu_sched_encoder_phase_at(83615u), ECU_PHASE_B,
+             "-1 rev -1 count: unflipped (revs=-2, even)");
+
+    // Re-anchoring is absolute, not incremental — a second set_anchor with a
+    // different phase overrides the previous state entirely (no toggle).
+    ecu_sched_encoder_phase_set_anchor(500000u, ECU_PHASE_A);
+    CHECK_EQ(ecu_sched_encoder_phase_at(500000u), ECU_PHASE_A,
+             "re-anchor: absolute, reflects new anchor immediately");
+
+    ecu_sched_test_reset();
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "test_reset() clears phase anchor");
+}
+
 // ============================================================================
 // QUICK CRANK
 // ============================================================================
