@@ -18,8 +18,22 @@ void tim3_pwm_init(uint32_t freq_hz);
 void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept;
 
 // TIM2_CH3 (PB10) — PWM EWG; ⚠️ conflito com INJ3 no RGT6.
+// ⚠️ TAMBÉM conflito com tim2_encoder_init() abaixo — mesmo periférico, ver
+// aviso em hal/stm32h562/regs.h junto a TIM2_CR1. Nunca chamar os dois.
 void tim2_pwm_init(uint32_t freq_hz);
 void tim2_set_duty(uint16_t duty_pct_x10) noexcept;
+
+// ── TIM2 modo encoder — MT6835 (VGT6 apenas) ────────────────────────────────
+// CH1=PA0 (AF1, canal A) · CH2=PB3 (AF1, canal B, livre na VGT6 — é INJ2 só na
+// RGT6) · CH3 = compare-match em domínio de ângulo, sem pino físico (ver
+// docs/dev/mt6835_encoder_fork.md, "Arquitetura base"). PA1 fica intocado —
+// continua TIM5_CH2/CMP.
+// ⚠️ Conflita com tim2_pwm_init() (EWG) — ver aviso acima e em regs.h.
+void tim2_encoder_init() noexcept;
+uint32_t tim2_encoder_count() noexcept;
+void tim2_encoder_set_count(uint32_t counts) noexcept;
+// Arma o próximo compare-match do dispatcher em domínio de ângulo (CH3).
+void tim2_encoder_arm_next(uint32_t target_counts) noexcept;
 
 void tim4_pwm_init(uint32_t freq_hz);
 void tim4_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept;

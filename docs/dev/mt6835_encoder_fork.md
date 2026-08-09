@@ -148,6 +148,21 @@ TIM15 (não TIM1/TIM8 como o documento revisado assumia). Isto não muda a
 conclusão já registada sobre BKIN ser incompatível com o mecanismo BSRR do
 scheduler atual — só é uma nota para se essa discussão for reaberta depois.
 
+**⚠️ Correção (encontrada só ao escrever `tim2_encoder_init()`, não durante o
+fechamento da arquitetura): PA1 não pode ir para TIM2.** A leitura acima
+mostra o mapeamento AF correto, mas a decisão original ("CH1/CH2 em
+PA0/PA1") ignorava que **PA1 continua sendo `TIM5_CH2`/CMP** (decisão já
+travada — "TIM5 encolhe, mantém CH2 = CMP"). Um pino físico só tem uma AF
+ativa por vez: não dá para PA1 ser `TIM2_CH2` (canal B do MT6835) e
+`TIM5_CH2` (CMP) ao mesmo tempo. Resolvido usando **PB3** (também
+`TIM2_CH2`, AF1, confirmado na mesma Tabela 15 — livre na VGT6, é `INJ2`
+só na variante RGT6) para o canal B, deixando PA1 intocado. `CH1` (canal A)
+fica em PA0 normalmente, já que nada mais precisa desse pino uma vez que o
+Hall CKP for retirado nesta hipótese. Lição: a checagem de conflito de pino
+tem de ser feita pino a pino contra TODOS os usos simultâneos, não só
+contra o mapeamento AF em isolado — o gate 2 confirmou que o AF existe,
+não que o pino estava livre para esse uso específico.
+
 ## Arquitetura base — FECHADA (2026-08-08)
 
 Decisões travadas antes de qualquer código de driver, para que a implementação
@@ -187,8 +202,9 @@ bater na bancada, este é o primeiro ponto a reabrir.
 ### Decisões locked
 
 1. **Papel dos timers:**
-   - `TIM2` (32-bit): `CH1`/`CH2` modo encoder (PA0/PA1 via AF1, confirmado
-     no gate 2) = ângulo do CKP a partir do ABZ do MT6835. `CH3` = compare-
+   - `TIM2` (32-bit): `CH1`/`CH2` modo encoder (PA0 + **PB3**, ambos AF1,
+     confirmados no gate 2 — não PA1, ver correção acima) = ângulo do CKP a
+     partir do ABZ do MT6835. `CH3` = compare-
      match em domínio de ângulo, reaproveitando o mesmo padrão fila-ordenada
      + rearmar-um-canal-HW que `TIM5_CH3` já usa hoje — só troca o "relógio"
      de base (tempo→ângulo); a lógica da fila não muda de forma.
@@ -284,13 +300,75 @@ divergência está isolada em HAL/pinout/hardware. Quem for portar trabalho
 deste fork de volta para `hw/v1-clean-board` precisa revisar esses ficheiros
 manualmente — não é um merge direto.
 
-## Estado: arquitetura base fechada, driver ainda não escrito
+## Estado: driver SPI + tim2_encoder_init() implementados (2026-08-08)
 
-Gates, arquitetura base e os 3 itens que ainda estavam em aberto (CH3/CH4,
-compensação de atraso, rotação reversa) estão todos fechados — os dois
-últimos por design/derivação, não por bloqueio de pesquisa; o resíduo real
-(precisão do dwell sob bounce de compressão) só se fecha em bancada, não
-em código. O próximo passo (driver SPI do MT6835 + `tim2_encoder_init()`)
-está desbloqueado tanto em dados quanto em decisão de arquitetura — ainda
-não foi feito nesta etapa, por decisão explícita de escopo, não por
-bloqueio técnico. Nenhuma mudança em `ecu_sched*.cpp` nem em `src/` ainda.
+Gates, arquitetura base e os 3 itens que estavam em aberto (CH3/CH4,
+compensação de atraso, rotação reversa) fechados — ver seções acima.
+Implementado nesta etapa, compilado e testado (VGT6/RGT6/MRE + host-test +
+host-test-vgt6, todos limpos — ver verificação abaixo):
+
+- **`src/hal/mt6835_regs.h`**: mapa de registradores + protocolo SPI (frame
+  de 24 bits, comandos, CRC-8), verificado byte a byte contra o datasheet
+  primário (§7.6, §10) nesta sessão.
+- **`src/hal/mt6835.{h,cpp}`**: driver SPI. Configura ABZ_RES=4096 PPR
+  (write+readback a cada boot, não grava EEPROM — mesma filosofia do
+  `tle8888.cpp`), lê ângulo de 21 bits com verificação de CRC-8, converte
+  para escala de `TIM2->CNT`.
+  - **`MT6835_HW_PRESENT = 0`** — mesmo padrão do EWG diferido
+    (`ewg_driver.cpp`): o MT6835 não tem footprint em nenhuma PCB ainda,
+    então nenhuma função toca GPIO/SPI de verdade enquanto a flag estiver
+    em 0. O protocolo (a parte que não depende de hardware) está
+    implementado e correto contra a fonte primária; a pinagem é
+    placeholder.
+  - **Barramento: SPI2 partilhado com o TLE8888** (não um SPI3 novo) — evita
+    depender de um endereço-base de periférico não verificado neste HAL.
+    Custo: modos SPI diferentes (MT6835 é CPOL=1/CPHA=1, 8 bits; TLE8888 é
+    CPOL=0/CPHA=1, 16 bits), então cada transação do MT6835
+    salva/reconfigura/restaura `SPI2_CFG1`/`CFG2` em vez de assumir um
+    periférico dedicado.
+  - **CS: PC13, placeholder** — só verificado como "não referenciado em
+    nenhum outro ficheiro de `src/`" nesta sessão, não é uma decisão de
+    hardware confirmada (ver aviso no topo de `mt6835.cpp`).
+- **`src/hal/timer.{h,cpp}`**: `tim2_encoder_init()` + `tim2_encoder_count()`
+  + `tim2_encoder_set_count()` + `tim2_encoder_arm_next()` + `TIM2_IRQHandler`
+  (limpa `CC3IF`, dispatcher em domínio de ângulo ainda não ligado — TODO
+  explícito no código, fora de escopo). **CH1=PA0, CH2=PB3** (não PA1 — ver
+  correção na seção "Arquitetura base" acima, conflito só descoberto ao
+  escrever este código).
+- **`src/hal/stm32h562/regs.h`**: `TIM2_SMCR` + `TIM_SMCR_SMS_ENCODER_MODE3`
+  + `SPI_CFG1_DSIZE_8BIT`, e um aviso permanente junto a `TIM2_CR1` sobre o
+  conflito latente com `tim2_pwm_init()` (EWG).
+- **`Makefile`**: `mt6835.cpp` adicionado a `HAL_COMMON_SRC`.
+
+### Verificação feita nesta etapa
+
+```
+make firmware-vgt6   → build limpo, ELF/HEX/BIN gerados
+make firmware-rgt6   → build limpo
+make firmware-mre    → build limpo
+make host-test       → 1252 PASS, 0 FAIL (binário corrido diretamente;
+                        `make host-test` sozinho truncou a saída no terminal,
+                        mas o binário em /tmp/openems-build/host/mvp_bench_tests
+                        confirma o número real)
+make host-test-vgt6  → 24 PASS, 0 FAIL
+```
+
+Nenhum teste novo foi escrito para `mt6835.cpp`/`tim2_encoder_init()` nesta
+etapa — ambos ficam atrás de guards (`MT6835_HW_PRESENT=0`, e
+`tim2_encoder_init()` não é chamado de lado nenhum ainda) que os tornam
+inertes no build atual; os 1252+24 PASS confirmam ausência de regressão no
+que já existia, não cobertura do código novo.
+
+### Fora de escopo, continua para depois
+
+- Ligar `tim2_encoder_init()`/`mt6835_init()` ao boot (`main_stm32.cpp`) —
+  não feito de propósito: chamar isto agora ligaria um periférico
+  (`TIM2`/`GPIOA0`/`PB3`) que ainda não tem sensor real por trás, e mudaria
+  o comportamento observável do firmware sem hardware para validar contra.
+- Dispatcher em domínio de ângulo real (substituir o `TODO` no
+  `TIM2_IRQHandler`) — exige adaptar `ecu_sched*.cpp`, explicitamente fora
+  de escopo desde o início deste fork.
+- Confirmar CS real (hoje PC13 placeholder) contra layout quando o MT6835
+  tiver footprint.
+- Verificar o valor inicial assumido do CRC-8 (0x00) contra uma leitura real
+  do sensor.

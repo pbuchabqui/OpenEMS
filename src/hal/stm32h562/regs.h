@@ -298,6 +298,12 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM_DIER_CC3IE (1u << 3)
 #define TIM_DIER_CC4IE (1u << 4)
 
+// TIM_SMCR — Slave Mode Control (usado para modo encoder no CH1/CH2)
+// SMS[2:0]: 001=encoder mode 1 (conta só em TI1), 010=encoder mode 2 (só TI2),
+// 011=encoder mode 3 (conta em ambas as bordas de TI1 E TI2 = decodificação X4).
+// Decisão travada (docs/dev/mt6835_encoder_fork.md): X4, 4096 PPR → 16384 CPR.
+#define TIM_SMCR_SMS_ENCODER_MODE3  (3u << 0)
+
 // TIM_CCMR1 — Capture/Compare Mode (CH1 e CH2)
 // Input Capture
 #define TIM_CCMR1_CC1S_TI1  (1u << 0)   // CH1 → IC, mapeado em TI1
@@ -370,8 +376,15 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM1_CCR4  STM32_REG32(TIM1_BASE + TIM_CCR4_OFF)
 #define TIM1_BDTR  STM32_REG32(TIM1_BASE + TIM_BDTR_OFF)
 
-// TIM2 — 32-bit timer (master timebase / flex fuel, not yet used)
+// TIM2 — 32-bit timer.
+// ⚠️ USO DUPLO EM CONFLITO: tim2_pwm_init() (EWG, CH3/PB10) vs tim2_encoder_init()
+// (MT6835, CH1/CH2 modo encoder + CH3 dispatcher de ângulo, ver mt6835.h) reclamam
+// o MESMO periférico (ARR/PSC partilhados por todos os canais). Hoje sem conflito
+// real: EWG está atrás de EMS_EWG_POPULATED=0 (ver ewg_driver.cpp), logo
+// tim2_pwm_init() nunca corre. Se o EWG for repovoado, tem de migrar para outro
+// timer antes de tim2_encoder_init() poder ser usado. Nunca chamar os dois.
 #define TIM2_CR1   STM32_REG32(TIM2_BASE + TIM_CR1_OFF)
+#define TIM2_SMCR  STM32_REG32(TIM2_BASE + TIM_SMCR_OFF)
 #define TIM2_DIER  STM32_REG32(TIM2_BASE + TIM_DIER_OFF)
 #define TIM2_SR    STM32_REG32(TIM2_BASE + TIM_SR_OFF)
 #define TIM2_EGR   STM32_REG32(TIM2_BASE + TIM_EGR_OFF)
@@ -1040,6 +1053,7 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 #define SPI_CR1_CSTART    (1u << 9u)
 
 // SPI_CFG1 — DSIZE[4:0] bits 0-4, MBR[30:28] prescaler
+#define SPI_CFG1_DSIZE_8BIT   (7u << 0u)   // 8-bit frame (encoding: tamanho-1)
 #define SPI_CFG1_DSIZE_16BIT  (15u << 0u)  // 16-bit frame
 
 // SPI_CFG2

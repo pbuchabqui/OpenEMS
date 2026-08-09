@@ -210,6 +210,66 @@ void tim2_set_duty(uint16_t duty_pct_x10) noexcept {
 }
 
 // ----------------------------------------------------------------------------
+// TIM2 modo encoder — MT6835 (VGT6 apenas). CH1=PA0/AF1 (canal A), CH2=PB3/AF1
+// (canal B — livre na VGT6, é INJ2 só na RGT6). CH3 = compare-match em
+// domínio de ângulo, sem GPIO associado (a interrupção não depende de CC3E,
+// só de CC3IE — confirmado contra 3 fontes independentes, ver
+// docs/dev/mt6835_encoder_fork.md, "Arquitetura base").
+// ⚠️ Conflita com tim2_pwm_init() (EWG) — mesmo ARR/PSC, nunca chamar os dois.
+// PA1 fica intocado — continua TIM5_CH2/CMP, ver tim5_ic_init() acima.
+// ----------------------------------------------------------------------------
+
+void tim2_encoder_init() noexcept {
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN | RCC_AHB2ENR1_GPIOBEN;
+    RCC_APB1LENR |= RCC_APB1LENR_TIM2EN;
+
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 0u, GPIO_AF1);
+    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 3u, GPIO_AF1);
+
+    TIM2_CR1  = 0u;
+    TIM2_PSC  = 0u;             // não se aplica à contagem em modo encoder (RM) — 0 por padrão
+    TIM2_ARR  = 0xFFFFFFFFu;    // 32-bit livre-corrente, mesmo padrão do "virabrequim virtual" do TIM5
+
+    // CH1→TI1, CH2→TI2 (mesmos bits de mapeamento usados para input capture em
+    // TIM5), com filtro de entrada N=8 amostras — mesma proteção anti-EMI que
+    // já existe no CKP/CMP atual (tim5_ic_init(), ~256 ns de janela).
+    TIM2_CCMR1 = TIM_CCMR1_CC1S_TI1 | TIM_CCMR1_IC1F_N8_DTS8
+               | TIM_CCMR1_CC2S_TI2 | TIM_CCMR1_IC2F_N8_DTS8;
+
+    // CH3: "Frozen" (sem ação de saída) — só precisamos do comparador interno
+    // e da flag CC3IF/interrupção CC3IE, não de um pino físico. CC3E fica em 0
+    // de propósito.
+    TIM2_CCMR2 = 0u;
+    TIM2_CCER  = 0u;
+
+    // Modo encoder 3 (SMS=011): conta em ambas as bordas de TI1 e TI2 →
+    // decodificação X4. A 4.096 PPR isto dá 16.384 contagens/volta.
+    TIM2_SMCR = TIM_SMCR_SMS_ENCODER_MODE3;
+
+    TIM2_EGR = 1u;
+    TIM2_DIER = TIM_DIER_CC3IE;
+
+    nvic_set_priority(IRQ_TIM2, 1u);
+    nvic_enable_irq(IRQ_TIM2);
+    TIM2_CR1 = TIM_CR1_CEN;
+}
+
+uint32_t tim2_encoder_count() noexcept {
+    return TIM2_CNT;
+}
+
+void tim2_encoder_set_count(uint32_t counts) noexcept {
+    // Usado no key-on: pré-carrega TIM2->CNT com o ângulo absoluto lido por
+    // SPI do MT6835 (ems::hal::mt6835_angle21_to_tim2_counts()), decisão 3 da
+    // arquitetura base.
+    TIM2_CNT = counts;
+}
+
+void tim2_encoder_arm_next(uint32_t target_counts) noexcept {
+    TIM2_CCR3 = target_counts;
+}
+
+// ----------------------------------------------------------------------------
 // ETB motor PWM (etb_pwm_*):
 //   VGT6: PE5 / TIM15_CH1 AF4
 //   RGT6: PA6 / TIM3_CH1  AF2
@@ -298,6 +358,24 @@ extern "C" void TIM5_IRQHandler(void) {
     }
 }
 
+/**
+ * @brief TIM2_IRQHandler — dispatcher de eventos em domínio de ângulo (CH3).
+ *
+ * ⚠️ Fora de escopo desta etapa (docs/dev/mt6835_encoder_fork.md): a fila de
+ * eventos em domínio de ângulo ainda não existe (isso é a adaptação de
+ * ecu_sched*.cpp, deliberadamente não feita aqui). Por agora só limpa a flag
+ * para não deixar a interrupção presa — sem isto, com CC3IE ligado e nada a
+ * limpar TIM2_SR, a IRQ TIM2 dispararia em loop.
+ */
+extern "C" void TIM2_IRQHandler(void) {
+    const uint32_t sr = TIM2_SR;
+    if (sr & TIM_SR_CC3IF) {
+        TIM2_SR = ~TIM_SR_CC3IF;
+        // TODO: chamar aqui o dispatcher em domínio de ângulo quando
+        // ecu_sched for adaptado — ver "Itens em aberto" no design doc.
+    }
+}
+
 } // namespace ems::hal
 
 // ----------------------------------------------------------------------------
@@ -327,6 +405,7 @@ void timer_etb_set_duty(uint16_t duty) {
 #include "hal/timer.h"
 namespace ems::hal {
 static uint32_t g_mock_tim5_cnt = 0u;
+static uint32_t g_mock_tim2_cnt = 0u;
 void tim5_ic_init(void) {}
 void tim5_ic_set_capture_polarity(bool, bool) noexcept {}
 void tim3_pwm_init(uint32_t) {}
@@ -338,6 +417,10 @@ void tim4_set_duty(uint8_t, uint16_t) noexcept {}
 void etb_pwm_init(uint32_t) {}
 void etb_pwm_set_duty_x10(uint16_t) noexcept {}
 uint32_t tim5_count() noexcept { return g_mock_tim5_cnt; }
+void tim2_encoder_init() noexcept {}
+uint32_t tim2_encoder_count() noexcept { return g_mock_tim2_cnt; }
+void tim2_encoder_set_count(uint32_t counts) noexcept { g_mock_tim2_cnt = counts; }
+void tim2_encoder_arm_next(uint32_t) noexcept {}
 } // namespace ems::hal
 
 void timer_etb_pwm_init(void) {}
