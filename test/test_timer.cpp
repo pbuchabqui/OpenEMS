@@ -66,6 +66,24 @@ void test_timer_stubs(void) {
     etb_pwm_init(20000u);
     etb_pwm_set_duty_x10(500u);
     CHECK_TRUE(true, "all timer stubs: no crash");
+
+    // MT6835/TIM2 encoder HAL stubs (VGT6-only real logic lives under
+    // #ifndef EMS_HOST_TEST in stm32h562/timer.cpp — the ISR/CCR4 rearm
+    // itself isn't host-testable, same reasoning as ecu_sched_angle_encoder
+    // taking already-read values as plain params). This just confirms the
+    // host-test mock layer (task #9) is wired: init/arm/heartbeat_start
+    // don't crash, and the count getter/setter round-trips.
+    tim5_freerun_init();
+    tim2_encoder_init();
+    CHECK_EQ(tim2_encoder_count(), 0u, "tim2_encoder_count() mock default 0");
+    tim2_encoder_set_count(12345u);
+    CHECK_EQ(tim2_encoder_count(), 12345u, "tim2_encoder_set_count/count round-trip");
+    tim2_encoder_arm_next(6789u);
+    tim2_heartbeat_start();
+    tim3_cmp_ic_init();
+    CHECK_EQ(cmp_angle_snapshot(), 0u, "cmp_angle_snapshot() mock default 0");
+    CHECK_EQ(cmp_edge_count(), 0u, "cmp_edge_count() mock default 0");
+    CHECK_TRUE(true, "MT6835/TIM2 HAL stubs: no crash");
 }
 
 void test_out_pins_bsrr_rgt6(void) {
