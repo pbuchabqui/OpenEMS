@@ -24,10 +24,11 @@ void tim2_pwm_init(uint32_t freq_hz);
 void tim2_set_duty(uint16_t duty_pct_x10) noexcept;
 
 // ── TIM2 modo encoder — MT6835 (VGT6 apenas) ────────────────────────────────
-// CH1=PA0 (AF1, canal A) · CH2=PB3 (AF1, canal B, livre na VGT6 — é INJ2 só na
-// RGT6) · CH3 = compare-match em domínio de ângulo, sem pino físico (ver
-// docs/dev/mt6835_encoder_fork.md, "Arquitetura base"). PA1 fica intocado —
-// continua TIM5_CH2/CMP.
+// CH1=PA0 (AF1, canal A) · CH2=PA1 (AF1, canal B) · CH3 = compare-match em
+// domínio de ângulo, sem pino físico (ver docs/dev/mt6835_encoder_fork.md,
+// "Arquitetura base"). PA1 sai de TIM5_CH2/CMP — CMP move para PB3 via EXTI
+// (sem canal de captura de timer livre nesse pino, confirmado nas duas
+// tabelas AF do DS14258).
 // ⚠️ Conflita com tim2_pwm_init() (EWG) — ver aviso acima e em regs.h.
 void tim2_encoder_init() noexcept;
 uint32_t tim2_encoder_count() noexcept;

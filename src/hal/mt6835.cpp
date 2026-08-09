@@ -13,13 +13,15 @@
  * placeholder PC13 — só verificado como "não usado em lado nenhum do código",
  * NÃO verificado contra layout/AF real); (2) por a flag a 1.
  *
- * BARRAMENTO: partilha o SPI2 já usado pelo tle8888.cpp (PB13/14/15
- * SCK/MISO/MOSI, já configurados por tle8888_init()) em vez de reclamar um
+ * BARRAMENTO: usa o SPI2 (PB13/14/15 SCK/MISO/MOSI) em vez de reclamar um
  * periférico novo — evita depender de um endereço-base de SPI3 não verificado
- * neste HAL. Custo: o MT6835 usa SPI modo 3 (CPOL=1/CPHA=1) e frame de 8 bits
- * partido em 3 bytes, diferente do modo do TLE8888 (CPOL=0/CPHA=1, 16 bits) —
- * cada transação do MT6835 salva/restaura CFG1/CFG2 para não quebrar o
- * TLE8888. SPE tem de estar a 0 para mudar CFG1/CFG2 (RM0481).
+ * neste HAL. Configurado uma vez em mt6835_init() para o modo fixo do MT6835
+ * (modo 3, CPOL=1/CPHA=1, frame 8 bits partido em 3 bytes) e mantido assim.
+ * ⚠️ Este fork descartou o TLE8888 na arquitetura real (architecture_v2, ver
+ * memória do projeto); tle8888.cpp continua na árvore mas usa SPI2 num modo
+ * diferente (CPOL=0/CPHA=1, 16 bits) — os dois drivers NUNCA podem ser
+ * inicializados no mesmo build. Se algum dia coexistirem, reintroduzir o
+ * save/restore de CFG1/CFG2 removido nesta revisão.
  */
 
 #include "hal/mt6835.h"
@@ -52,25 +54,15 @@ constexpr uint8_t kCsPin = 13u;  // GPIOC
 inline void cs_low()  noexcept { GPIOC_BSRR = (1u << (kCsPin + 16u)); }
 inline void cs_high() noexcept { GPIOC_BSRR = (1u << kCsPin); }
 
-// Guarda o modo do TLE8888 para restaurar depois de cada transação MT6835.
-uint32_t g_saved_cfg1 = 0u;
-uint32_t g_saved_cfg2 = 0u;
-
-void spi2_enter_mt6835_mode() noexcept {
-    g_saved_cfg1 = SPI2_CFG1;
-    g_saved_cfg2 = SPI2_CFG2;
+// Configura o SPI2 uma única vez, no modo fixo do MT6835. Sem save/restore:
+// este fork não coexiste com tle8888.cpp (ver aviso no topo do ficheiro).
+void spi2_init_mt6835_mode() noexcept {
     SPI2_CR1 &= ~SPI_CR1_SPE;  // SPE=0 obrigatório antes de mudar CFG1/CFG2
     SPI2_CFG1 = SPI_CFG1_DSIZE_8BIT | (5u << 28u);  // MBR=101b → /64, margem extra
     // Modo 3: CPOL=1, CPHA=1 (datasheet MT6835 §7.6.2).
     SPI2_CFG2 = SPI_CFG2_MASTER | SPI_CFG2_SSM | SPI_CFG2_CPHA | SPI_CFG2_CPOL
               | SPI_CFG2_COMM_FULLDUPLEX;
-    SPI2_CR1 |= SPI_CR1_SPE;
-}
-
-void spi2_restore_tle8888_mode() noexcept {
-    SPI2_CR1 &= ~SPI_CR1_SPE;
-    SPI2_CFG1 = g_saved_cfg1;
-    SPI2_CFG2 = g_saved_cfg2;
+    SPI2_CR2 = 1u;  // TSIZE=1: um CSTART por byte, ver spi2_byte()
     SPI2_CR1 |= SPI_CR1_SPE;
 }
 
@@ -101,14 +93,12 @@ uint8_t spi2_byte(uint8_t tx) noexcept {
 /// byte2=dado (escrita) ou dummy (leitura — MISO devolve o dado real).
 /// Os 3 bytes têm de sair na mesma sessão CS-low.
 bool mt6835_xfer(R::Cmd cmd, uint16_t addr, uint8_t data_out, uint8_t* data_in) noexcept {
-    spi2_enter_mt6835_mode();
     cs_low();
     (void)spi2_byte(static_cast<uint8_t>((static_cast<uint8_t>(cmd) << 4u)
                                         | ((addr >> 8u) & 0x0Fu)));
     (void)spi2_byte(static_cast<uint8_t>(addr & 0xFFu));
     const uint8_t rx = spi2_byte(data_out);
     cs_high();
-    spi2_restore_tle8888_mode();
     if (data_in != nullptr) { *data_in = rx; }
     return true;
 }
@@ -171,9 +161,20 @@ bool mt6835_init() noexcept {
 #if !MT6835_HW_PRESENT
     return false;
 #else
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOCEN;
+    // SPI2 (PB13/14/15 SCK/MISO/MOSI, AF5) — este driver é o único dono do
+    // SPI2 nesta arquitetura (TLE8888 descartado, ver aviso no topo do
+    // ficheiro); antes dependia implicitamente de tle8888_init() já ter
+    // configurado estes pinos, o que deixou de existir.
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOBEN | RCC_AHB2ENR1_GPIOCEN;
+    RCC_APB1LENR |= RCC_APB1LENR_SPI2EN;
+    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 13u, GPIO_AF5);
+    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 14u, GPIO_AF5);
+    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 15u, GPIO_AF5);
+
     gpio_set_output(&GPIOC_MODER, &GPIOC_OSPEEDR, kCsPin);
     cs_high();
+
+    spi2_init_mt6835_mode();
 
     g_ok = configure_ppr_4096();
     if (!g_ok) {

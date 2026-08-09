@@ -210,21 +210,24 @@ void tim2_set_duty(uint16_t duty_pct_x10) noexcept {
 }
 
 // ----------------------------------------------------------------------------
-// TIM2 modo encoder — MT6835 (VGT6 apenas). CH1=PA0/AF1 (canal A), CH2=PB3/AF1
-// (canal B — livre na VGT6, é INJ2 só na RGT6). CH3 = compare-match em
-// domínio de ângulo, sem GPIO associado (a interrupção não depende de CC3E,
-// só de CC3IE — confirmado contra 3 fontes independentes, ver
-// docs/dev/mt6835_encoder_fork.md, "Arquitetura base").
+// TIM2 modo encoder — MT6835 (VGT6 apenas). CH1=PA0/AF1 (canal A), CH2=PA1/AF1
+// (canal B). CH3 = compare-match em domínio de ângulo, sem GPIO associado (a
+// interrupção não depende de CC3E, só de CC3IE — confirmado contra 3 fontes
+// independentes, ver docs/dev/mt6835_encoder_fork.md, "Arquitetura base").
 // ⚠️ Conflita com tim2_pwm_init() (EWG) — mesmo ARR/PSC, nunca chamar os dois.
-// PA1 fica intocado — continua TIM5_CH2/CMP, ver tim5_ic_init() acima.
+// ⚠️ PA1 sai de TIM5_CH2/CMP (AF2) e passa a TIM2_CH2 (AF1) — CMP move para
+// PB3 via EXTI (não há canal de captura de timer livre em PB3, confirmado
+// contra as duas tabelas AF0-7 e AF8-15 do DS14258; ver design doc,
+// "CMP via EXTI"). tim5_ic_init() acima precisa de ser adaptado para não
+// mais configurar PA1/CH2 quando este modo estiver ativo — pendente.
 // ----------------------------------------------------------------------------
 
 void tim2_encoder_init() noexcept {
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN | RCC_AHB2ENR1_GPIOBEN;
+    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN;
     RCC_APB1LENR |= RCC_APB1LENR_TIM2EN;
 
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 0u, GPIO_AF1);
-    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 3u, GPIO_AF1);
+    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 1u, GPIO_AF1);
 
     TIM2_CR1  = 0u;
     TIM2_PSC  = 0u;             // não se aplica à contagem em modo encoder (RM) — 0 por padrão

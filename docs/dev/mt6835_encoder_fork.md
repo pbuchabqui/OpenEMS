@@ -202,16 +202,18 @@ bater na bancada, este é o primeiro ponto a reabrir.
 ### Decisões locked
 
 1. **Papel dos timers:**
-   - `TIM2` (32-bit): `CH1`/`CH2` modo encoder (PA0 + **PB3**, ambos AF1,
-     confirmados no gate 2 — não PA1, ver correção acima) = ângulo do CKP a
-     partir do ABZ do MT6835. `CH3` = compare-
-     match em domínio de ângulo, reaproveitando o mesmo padrão fila-ordenada
-     + rearmar-um-canal-HW que `TIM5_CH3` já usa hoje — só troca o "relógio"
-     de base (tempo→ângulo); a lógica da fila não muda de forma.
-   - `TIM5` (32-bit): encolhe, não desaparece. Mantém `CH2` = captura do CMP
-     (inalterado — 1 pulso Hall a cada 720°, sem problema de taxa) e
-     continua como referência de tempo sempre-corrente para o watchdog de
-     dwell/stall. `CH1` (CKP) e `CH3` (dispatcher por tempo) ficam livres.
+   - `TIM2` (32-bit): `CH1`/`CH2` modo encoder (**PA0 + PA1**, ambos AF1,
+     confirmados no gate 2) = ângulo do CKP a partir do ABZ do MT6835. `CH3`
+     = compare-match em domínio de ângulo, reaproveitando o mesmo padrão
+     fila-ordenada + rearmar-um-canal-HW que `TIM5_CH3` já usa hoje — só
+     troca o "relógio" de base (tempo→ângulo); a lógica da fila não muda de
+     forma. ⚠️ Revisão 2026-08-09: PA1 volta a ser canal B (decisão do
+     utilizador, reverte a correção anterior) — ver seção "Revisão
+     2026-08-09" abaixo para o CMP, que sai de PA1/TIM5 e passa a PB3/EXTI.
+   - `TIM5` (32-bit): encolhe mais do que o previsto aqui originalmente —
+     ver "Revisão 2026-08-09": CMP também sai de `TIM5_CH2`, então `TIM5`
+     fica só com o papel de referência de tempo livre-corrente para o
+     watchdog de dwell/stall (nenhum canal de captura em uso).
    - Saídas INJ/IGN: **inalteradas** — GPIO BSRR por software na ISR,
      mecanismo congelado preservado. Sem output compare físico do `TIM2` nos
      pinos de saída: com só 2 canais livres (`CH3`/`CH4`) para até 8 saídas
@@ -320,21 +322,16 @@ host-test-vgt6, todos limpos — ver verificação abaixo):
     em 0. O protocolo (a parte que não depende de hardware) está
     implementado e correto contra a fonte primária; a pinagem é
     placeholder.
-  - **Barramento: SPI2 partilhado com o TLE8888** (não um SPI3 novo) — evita
-    depender de um endereço-base de periférico não verificado neste HAL.
-    Custo: modos SPI diferentes (MT6835 é CPOL=1/CPHA=1, 8 bits; TLE8888 é
-    CPOL=0/CPHA=1, 16 bits), então cada transação do MT6835
-    salva/reconfigura/restaura `SPI2_CFG1`/`CFG2` em vez de assumir um
-    periférico dedicado.
+  - **Barramento: SPI2, dono exclusivo** — ver "Revisão 2026-08-09" abaixo
+    (o desenho original partilhava com o TLE8888; deixou de fazer sentido).
   - **CS: PC13, placeholder** — só verificado como "não referenciado em
     nenhum outro ficheiro de `src/`" nesta sessão, não é uma decisão de
     hardware confirmada (ver aviso no topo de `mt6835.cpp`).
 - **`src/hal/timer.{h,cpp}`**: `tim2_encoder_init()` + `tim2_encoder_count()`
   + `tim2_encoder_set_count()` + `tim2_encoder_arm_next()` + `TIM2_IRQHandler`
   (limpa `CC3IF`, dispatcher em domínio de ângulo ainda não ligado — TODO
-  explícito no código, fora de escopo). **CH1=PA0, CH2=PB3** (não PA1 — ver
-  correção na seção "Arquitetura base" acima, conflito só descoberto ao
-  escrever este código).
+  explícito no código, fora de escopo). **CH1=PA0, CH2=PA1** — ver "Revisão
+  2026-08-09" abaixo para o histórico (foi PB3, depois voltou a PA1).
 - **`src/hal/stm32h562/regs.h`**: `TIM2_SMCR` + `TIM_SMCR_SMS_ENCODER_MODE3`
   + `SPI_CFG1_DSIZE_8BIT`, e um aviso permanente junto a `TIM2_CR1` sobre o
   conflito latente com `tim2_pwm_init()` (EWG).
@@ -363,7 +360,7 @@ que já existia, não cobertura do código novo.
 
 - Ligar `tim2_encoder_init()`/`mt6835_init()` ao boot (`main_stm32.cpp`) —
   não feito de propósito: chamar isto agora ligaria um periférico
-  (`TIM2`/`GPIOA0`/`PB3`) que ainda não tem sensor real por trás, e mudaria
+  (`TIM2`/`GPIOA0`/`PA1`) que ainda não tem sensor real por trás, e mudaria
   o comportamento observável do firmware sem hardware para validar contra.
 - Dispatcher em domínio de ângulo real (substituir o `TODO` no
   `TIM2_IRQHandler`) — exige adaptar `ecu_sched*.cpp`, explicitamente fora
@@ -372,3 +369,105 @@ que já existia, não cobertura do código novo.
   tiver footprint.
 - Verificar o valor inicial assumido do CRC-8 (0x00) contra uma leitura real
   do sensor.
+
+## Revisão 2026-08-09 — PA1↔PB3, TLE8888 descartado, gap do TIM5
+
+Três pedidos do utilizador, um deles abre uma pendência nova.
+
+### 1. Canal B do MT6835 volta a PA1
+
+A correção anterior (mover canal B para PB3 por conflito com CMP em PA1) foi
+**revertida a pedido explícito**: canal B fica em PA1/AF1 (`TIM2_CH2`), como
+no desenho original do gate 2. Isto significa que PA1 sai de `TIM5_CH2`/CMP —
+o CMP precisa de um pino novo. Implementado em `tim2_encoder_init()`
+(`hal/stm32h562/timer.cpp`) e documentado em `hal/timer.h`.
+
+### 2. CMP move para PB3 — mecanismo muda de classe (input capture → EXTI)
+
+Verificado nas **duas** tabelas do datasheet (`Table 15`, AF0–AF7, e
+`Table 16`, AF8–AF15, DS14258 Rev 6): PB3 não tem **nenhum** canal de
+captura de timer em nenhuma das 16 AFs.
+
+```
+PB3  AF0-7:  JTDO/TRACESWO | TIM2_CH2 | - | - | I2C2_SDA | SPI1_SCK | SPI3_SCK | UART12
+PB3  AF8-15: SPI6_SCK | SDMMC2_D2 | CRS_SYNC | UART7_RX | - | - | LPTIM6_ETR | EVENTOUT
+```
+
+(`TIM2_CH2` em AF1 é a mesma linha lógica que canal B do encoder — não pode
+servir simultaneamente para CMP, é o mesmo canal fisicamente reatribuído a
+PA1 pelo item 1.) Logo, capturar CMP em PB3 exige **EXTI** (interrupção de
+borda em GPIO puro), não input capture de timer — mudança de mecanismo, não
+só de pino. Isto foi sinalizado ao utilizador antes de implementar (ver
+`advisor()` desta sessão), em vez de assumido silenciosamente.
+
+Arquiteturalmente isto não é uma regressão: ler `TIM2->CNT` dentro do ISR de
+EXTI dá o **ângulo** exato no instante do flanco do CMP diretamente — mais
+direto do que o esquema atual (timestamp em `TIM5`, correlacionado com dentes
+do CKP à parte). Orçamento de erro: CMP é ~75 Hz no redline; a latência de
+ISR já medida neste projeto (~0,4 µs) equivale a 0,022° a 9.000 RPM,
+irrelevante para uma função que só precisa de desambiguar qual metade do
+ciclo de 720°.
+
+**Bloqueio real, ainda não resolvido:** o número do vetor IRQ na NVIC deste
+`startup_stm32h562.cpp` para EXTI3 (ou o grupo combinado que o contém). O
+vetor atual só define `EXTI5_9_IRQHandler`; as posições correspondentes a
+EXTI0–4 estão todas em `Default_Handler`, sem nome. Múltiplas buscas
+(comunidade STM32H5, comparação com STM32H7 — família diferente, não
+confiável diretamente, CMSIS `stm32h562xx.h`) não confirmaram o número
+específico deste chip. Risco de adivinhar: **limitado, não catastrófico** —
+como nada mais hoje ocupa essas posições (todas `Default_Handler`), um
+número errado faz o handler simplesmente nunca disparar (visível de imediato
+como "contador de bordas do CMP fica em 0" na bancada), não colide com outro
+periférico. Mesmo assim, não implementado às cegas: falta también verificar
+os endereços-base de `EXTI`/`SYSCFG` neste HAL (H5 não usa o mapa clássico
+F4 — o próprio `startup_stm32h562.cpp` já mostra `RCC` num endereço
+incomum, `0x44020C00`), portanto **nenhum registador de EXTI/SYSCFG foi
+adicionado a `regs.h` ainda**. Pendente: confirmar via capítulo NVIC do
+RM0481 antes de escrever qualquer código de EXTI.
+
+### 3. TLE8888 descartado — SPI2 simplificado
+
+`mt6835.cpp` deixou de fazer save/restore de `SPI2_CFG1`/`CFG2` a cada
+transação (existia só para coexistir com o modo diferente do TLE8888).
+MT6835 agora configura o SPI2 uma vez, em `mt6835_init()`, e o mantém fixo
+(modo 3, 8 bits). Como `mt6835_init()` deixou de poder assumir que
+`tle8888_init()` já correu antes (não corre mais neste fork), também passou
+a configurar os próprios pinos GPIOB (PB13/14/15, AF5) e o clock do SPI2 —
+antes isto vinha de graça do `tle8888_init()`. `tle8888.cpp` continua na
+árvore (não removido — é limpeza fora de escopo), mas com um aviso no topo
+de `mt6835.cpp`: os dois drivers não podem ser inicializados no mesmo build
+enquanto ambos disputarem o SPI2 num modo diferente.
+
+### Gap descoberto: quem liga o TIM5 se o CMP também sai dele?
+
+A decisão #1 da arquitetura base ("`TIM5` encolhe, mantém `CH2`=CMP") já não
+é exata: com o CMP também de saída, `TIM5` fica **sem nenhum canal de
+captura em uso** — só o papel de contador livre-corrente para o watchdog de
+dwell continua vivo. Isso é um papel real e necessário, mas
+`tim5_ic_init()` é hoje a única função que liga `TIM5_CR1 |= CEN`; nesta
+arquitetura nova nada chamaria essa função inteira (ela também configura
+PA0/PA1 para captura, que deixa de fazer sentido). **Não corrigido agora** —
+registado aqui para não ser descoberto de surpresa no bring-up: será preciso
+uma função nova (ou uma variante enxuta de `tim5_ic_init()`) que só liga o
+contador livre, sem input capture nenhum.
+
+### Verificação desta revisão
+
+```
+make firmware-vgt6   → build limpo
+make firmware-rgt6   → build limpo
+make firmware-mre    → build limpo
+make host-test       → 1252 PASS, 0 FAIL (binário corrido diretamente)
+make host-test-vgt6  → 24 PASS, 0 FAIL
+```
+
+### Pendências abertas por esta revisão
+
+1. Confirmar o vetor IRQ de EXTI3 (ou grupo combinado) e os endereços-base
+   `EXTI`/`SYSCFG` deste HAL, contra o RM0481 — bloqueia qualquer código de
+   captura do CMP.
+2. Implementar a captura do CMP via EXTI em PB3 (pull-up, borda de descida —
+   sensor Hall idle-HIGH open-collector, mesmo raciocínio de
+   [[cmp-ckp-capture-edge-polarity]]) uma vez resolvida a pendência 1.
+3. Resolver o gap do `TIM5_CEN`: nova função de init enxuta, só contador
+   livre-corrente, sem reclamar PA0/PA1.
