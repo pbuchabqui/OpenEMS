@@ -735,6 +735,75 @@ void test_ecu_sched_encoder_phase(void) {
     CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "test_reset() clears phase anchor");
 }
 
+void test_ecu_sched_encoder_min_lead(void) {
+    section("ecu_sched: encoder arm — min-lead floor via omega (task #8)");
+    ecu_sched_test_reset();
+
+    // Omega invalid (never sampled): floor is 0, target passes through
+    // unmodified even at lead=0 — the "late" dispatch path is what handles
+    // an already-due target in this state, not a synthesized margin.
+    ecu_sched_encoder_test_set_tim2_cnt(1000u);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 1000u, ECU_ACT_INJ_ON);
+    uint32_t ts = 0u; uint8_t ch = 0xFFu; uint8_t high = 0xFFu;
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts, &ch, &high) != 0u, "get_evt(0) ok");
+    CHECK_EQ(ts, 1000u, "omega invalid: no floor applied, target unchanged");
+    ecu_sched_test_reset();
+
+    // Seed omega=1.0 exact (d_tim2=1000/d_tim5=1000, same recipe as
+    // test_ecu_sched_encoder_omega) -> x65536=65536. Floor = 2us worth of
+    // counts at this rate = ECU_SCHED_US_TO_TICKS_INTERNAL(2)=125 ticks *
+    // 65536/65536 = 125 counts.
+    ecu_sched_encoder_omega_sample(1000u, 1000u);
+    ecu_sched_encoder_omega_sample(2000u, 2000u);
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 65536, "omega seeded to 1.0");
+
+    // Target exactly at "now": lead=0 < floor(125) -> clamped to now+125.
+    ecu_sched_encoder_test_set_tim2_cnt(5000u);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 5000u, ECU_ACT_INJ_ON);
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts, &ch, &high) != 0u, "get_evt(0) ok");
+    CHECK_EQ(ts, 5125u, "lead=0 < floor: clamped to now+125");
+    ecu_sched_test_reset();
+    ecu_sched_encoder_omega_sample(1000u, 1000u);
+    ecu_sched_encoder_omega_sample(2000u, 2000u);
+
+    // Target just short of the floor (lead=124): still clamped.
+    ecu_sched_encoder_test_set_tim2_cnt(5000u);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 5124u, ECU_ACT_INJ_ON);
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts, &ch, &high) != 0u, "get_evt(0) ok");
+    CHECK_EQ(ts, 5125u, "lead=124 < floor=125: still clamped to now+125");
+    ecu_sched_test_reset();
+    ecu_sched_encoder_omega_sample(1000u, 1000u);
+    ecu_sched_encoder_omega_sample(2000u, 2000u);
+
+    // Target exactly at the floor (lead=125): passes through unchanged.
+    ecu_sched_encoder_test_set_tim2_cnt(5000u);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 5125u, ECU_ACT_INJ_ON);
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts, &ch, &high) != 0u, "get_evt(0) ok");
+    CHECK_EQ(ts, 5125u, "lead=125 == floor: passes through unchanged");
+    ecu_sched_test_reset();
+    ecu_sched_encoder_omega_sample(1000u, 1000u);
+    ecu_sched_encoder_omega_sample(2000u, 2000u);
+
+    // Comfortably far target: unaffected by the floor.
+    ecu_sched_encoder_test_set_tim2_cnt(5000u);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 9000u, ECU_ACT_INJ_ON);
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts, &ch, &high) != 0u, "get_evt(0) ok");
+    CHECK_EQ(ts, 9000u, "far target: unaffected by floor");
+
+    // Half-rate omega (0.5, x65536=32768): floor scales down proportionally
+    // -> 125*32768/65536 = 62 (integer truncation).
+    ecu_sched_test_reset();
+    ecu_sched_encoder_omega_sample(1000u, 1000u);
+    ecu_sched_encoder_omega_sample(1500u, 2000u);
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 32768, "omega seeded to 0.5");
+    ecu_sched_encoder_test_set_tim2_cnt(5000u);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 5000u, ECU_ACT_INJ_ON);
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts, &ch, &high) != 0u, "get_evt(0) ok");
+    CHECK_EQ(ts, 5062u, "omega=0.5: floor scales down to 62 counts");
+
+    ecu_sched_test_reset();
+}
+
 void test_ecu_sched_encoder_queue_basic(void) {
     section("ecu_sched: encoder queue (TIM2/CH3) — insert order + CCR3 arm");
     ecu_sched_test_reset();

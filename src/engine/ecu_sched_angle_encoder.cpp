@@ -53,6 +53,10 @@ namespace ems::engine::sched_internal::encoder {
 // declare aqui porque ecu_sched_encoder_heartbeat_tick() (mais acima no
 // ficheiro que a definição) precisa de a chamar.
 void recompute_presync(uint32_t now_raw) noexcept;
+// Definida mais abaixo ("Conversão graus→counts", junto de
+// duration_ticks_to_span_counts()) — forward declare porque
+// ecu_sched_encoder_arm_channel() (mais acima) precisa de a chamar.
+uint32_t min_lead_counts(void) noexcept;
 }  // namespace ems::engine::sched_internal::encoder
 
 #if defined(EMS_HOST_TEST)
@@ -208,10 +212,11 @@ void ecu_sched_encoder_phase_test_reset(void) noexcept
 // silenciosamente um de-assert, CC3IE dinâmico por episódio
 // fila-vazia↔não-vazia) — só a unidade muda: counts TIM2, não ticks TIM5.
 //
-// Ainda sem piso de lead mínimo (pendente — plano, secção 7): um alvo já
-// passado no momento do arm cai no caminho "late" do dispatch (processado
-// inline, contado em g_enc_late_event_count), nunca é perdido — piso é
-// refinamento de reação mínima, não requisito de correção.
+// Piso de lead mínimo aplicado em ecu_sched_encoder_arm_channel() (via
+// si::encoder::min_lead_counts(), plano secção 7). Mesmo sem piso, um alvo
+// já passado no momento do arm cairia no caminho "late" do dispatch
+// (processado inline, contado em g_enc_late_event_count) — nunca perdido; o
+// piso é refinamento de reação mínima, não requisito de correção.
 
 #define ENC_EVT_QUEUE_SIZE 48U
 
@@ -326,7 +331,19 @@ void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
     ems::hal::CriticalSectionGuard guard;
     const uint8_t high =
         ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
-    enc_evt_insert(target_counts, ch, high);
+    // Piso mínimo de lead (plano, secção 7) — mesmo padrão do arm_channel()
+    // de ecu_sched.cpp (STM32_MIN_COMPARE_LEAD_TICKS), mas em counts via ω
+    // (si::encoder::min_lead_counts()). Um alvo já passado ou tarde demais
+    // não conta como "late" aqui (mesma razão da versão TIM5: min-lead não é
+    // sinal de atraso, é margem de reação normal).
+    const uint32_t now = TIM2_CNT;
+    const uint32_t min_lead = si::encoder::min_lead_counts();
+    const int32_t lead = (int32_t)(target_counts - now);
+    if (lead < (int32_t)min_lead) {
+        enc_evt_insert(now + min_lead, ch, high);
+    } else {
+        enc_evt_insert(target_counts, ch, high);
+    }
 }
 
 #if defined(EMS_HOST_TEST)
@@ -501,6 +518,20 @@ static uint32_t duration_ticks_to_span_counts(uint32_t duration_ticks) noexcept
     const int64_t span = (static_cast<int64_t>(duration_ticks)
                           * static_cast<int64_t>(omega)) / 65536;
     return (span < 0) ? 0U : static_cast<uint32_t>(span);
+}
+
+// Piso mínimo de lead do compare (plano, secção 7) — equivalente ao
+// STM32_MIN_COMPARE_LEAD_TICKS de ecu_sched.cpp (125 ticks = 2 µs @
+// 62,5 MHz), mas convertido para counts via ω em vez de hardcodado: os
+// mesmos 2 µs valem ~0,001 count a idle e ~5 counts perto do redline (ver
+// estimador de ω acima) — um piso fixo em counts seria irrelevante numa
+// ponta e exagerado na outra. ω inválido (motor parado / estimativa ainda
+// não pronta): piso 0, sem margem extra — correto por construção, um alvo
+// já passado ainda cai no caminho "late" do dispatch (g_enc_late_event_count),
+// nunca é perdido (ver comentário acima da fila TIM2/CH3).
+uint32_t min_lead_counts(void) noexcept
+{
+    return duration_ticks_to_span_counts(ECU_SCHED_US_TO_TICKS_INTERNAL(2U));
 }
 
 // ── Recompute presync — chamado pelo heartbeat TIM2_CH4 quando a fase A/B

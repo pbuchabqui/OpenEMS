@@ -142,6 +142,7 @@ void test_ecu_sched_encoder_queue_overflow(void);
 void test_ecu_sched_encoder_queue_purge_via_inhibit_mask(void);
 void test_ecu_sched_encoder_queue_clear_via_outputs_safe(void);
 void test_ecu_sched_encoder_heartbeat(void);
+void test_ecu_sched_encoder_min_lead(void);
 void test_ecu_sched_encoder_conversion(void);
 void test_ecu_sched_encoder_recompute_presync(void);
 void test_ecu_sched_encoder_recompute_presync_bank_toggle(void);

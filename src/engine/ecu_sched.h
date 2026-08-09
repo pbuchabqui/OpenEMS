@@ -221,9 +221,10 @@ uint8_t ecu_sched_encoder_phase_valid(void) noexcept;
 //
 // target_counts: alvo em counts CRUS de 32 bits do TIM2 (não mascarado a
 // 14 bits) — mesmo domínio que TIM2_CNT já vive, wrap tratado por subtração
-// com sinal, igual ao TIM5 hoje. Ainda sem piso de lead mínimo (pendente,
-// ver plano — não bloqueia correção: um alvo já passado é processado
-// inline como "late", nunca perdido).
+// com sinal, igual ao TIM5 hoje. Aplica um piso de lead mínimo (via ω,
+// equivalente aos 2 µs do STM32_MIN_COMPARE_LEAD_TICKS de ecu_sched.cpp,
+// convertido a counts) antes de inserir na fila — mas mesmo sem piso um
+// alvo já passado seria processado inline como "late", nunca perdido.
 void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
                                    uint8_t action) noexcept;
 void ecu_sched_encoder_evt_dispatch(void) noexcept;  // called from TIM2 ISR on CC3IF

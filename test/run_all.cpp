@@ -213,6 +213,7 @@ int main(void) {
     test_ecu_sched_encoder_queue_purge_via_inhibit_mask();
     test_ecu_sched_encoder_queue_clear_via_outputs_safe();
     test_ecu_sched_encoder_heartbeat();
+    test_ecu_sched_encoder_min_lead();
     test_ecu_sched_encoder_conversion();
     test_ecu_sched_encoder_recompute_presync();
     test_ecu_sched_encoder_recompute_presync_bank_toggle();
