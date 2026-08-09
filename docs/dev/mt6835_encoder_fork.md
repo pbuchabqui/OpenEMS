@@ -584,8 +584,138 @@ make host-test-vgt6            → 24 PASS, 0 FAIL
 - O corpo real de `mt6835_init()` (`MT6835_HW_PRESENT=1`) continua sem
   hardware para validar contra — compilar não é o mesmo que correr contra
   um sensor real. `CS=PC13` continua placeholder.
-- Dispatcher em domínio de ângulo real (`TIM2_IRQHandler`) — fora de
-  escopo desde o início, exige adaptar `ecu_sched*.cpp`.
-- `tim2_encoder_init()`/`tim3_cmp_ic_init()` não fazem nada com os dados
-  que capturam ainda (não há consumidor no scheduler) — o wiring liga os
-  periféricos, não o comportamento observável do motor.
+- ~~Dispatcher em domínio de ângulo real (`TIM2_IRQHandler`)~~ —
+  **implementado**, ver "Dispatcher em domínio de ângulo — implementação"
+  abaixo. `TIM2_IRQHandler` já chama `ecu_sched_encoder_evt_dispatch()`
+  (CC3IF) e `ecu_sched_encoder_heartbeat_tick()` (CC4IF) de verdade.
+- `tim2_encoder_init()`/`tim3_cmp_ic_init()` capturam dados e alimentam o
+  dispatcher (estimador de ω, recompute presync) — mas o disparo
+  **sequencial** continua sem consumidor real: precisa da fase A/B
+  calibrada em bancada (`EMS_MT6835_CMP_PHASE_CALIBRATED=0`, ver abaixo),
+  que ainda não foi medida.
+
+## Dispatcher em domínio de ângulo — implementação (2026-08-09)
+
+Plano de desenho: `docs/dev/mt6835_encoder_fork.md` (este ficheiro, seções
+acima) + o plano dedicado que o originou (10 tarefas). Todas as 10
+concluídas nesta branch. Ficheiro novo, paralelo a `ecu_sched_angle.cpp`
+(que fica intocado): `src/engine/ecu_sched_angle_encoder.cpp`. Resumo por
+tarefa (código + commits, não repete o racional completo — ver comentários
+no próprio ficheiro, são a fonte primária):
+
+1. **`TIM2_DIER` incondicional no boot corrigido** — `TIM2_DIER=0u` no boot
+   (padrão do `TIM5`), `CC3IE` liga/desliga dinamicamente por episódio
+   fila-vazia↔não-vazia, nunca fica ligado permanente.
+2. **Fila `TIM2`/`CH3` própria** — mesma forma que a fila `TIM5` existente
+   (array ordenado, insertion sort wrap-safe, overflow nunca larga um
+   de-assert pendente), unidade counts em vez de ticks, símbolos/array
+   totalmente separados. `purge_events_for_cyl_mask()`/
+   `clear_all_events_and_drive_safe_outputs()` (`ecu_sched.cpp`) varrem as
+   duas filas.
+3. Esqueleto do ficheiro + mocks de `TIM2_CNT`/`CCR3`/`SR`/`DIER` para
+   host-test (mesmo padrão dos mocks `TIM5`).
+4. **Estimador de ω** — `ΔTIM2_CNT/ΔTIM5_CNT`, delta com sinal (sobrevive a
+   kick-back de cranking). Fixed-point `×65536` (não `×256` — ver bug
+   abaixo).
+5. **Rastreador de fase** — anchor absoluto de 32 bits, `ECU_PHASE_A/B` via
+   paridade de revoluções desde o anchor; `ecu_sched_encoder_phase_valid()`
+   é o análogo do `FULL_SYNC` da roda dentada, sem precisar de redesenhar
+   nenhuma máquina de estados (motivo: um encoder absoluto não tem conceito
+   de "perda de sync" por dente, só a ambiguidade A/B que o CMP resolve).
+6. **Heartbeat `TIM2_CH4`** — HAL (`tim2_heartbeat_start()`, auto-rearme
+   `+16384`/volta) + `TIM2_IRQHandler` já chama
+   `ecu_sched_encoder_heartbeat_tick()` de verdade no `CC4IF`.
+7. **Conversão graus→counts + recompute partilhado** — `engine_deg_to_counts_in_rev()`/
+   `rev_target_to_absolute()`/`engine_deg_to_absolute()` (geometria pura,
+   ciclo de 360° do `TIM2`, não 720° do motor) e `recompute_presync()`
+   (chamado pelo heartbeat sempre que `phase_valid()==0`, i.e. sempre no
+   estado atual — sequencial fica para quando a fase estiver calibrada).
+   Descoberta não prevista no plano original: `mt6835_angle21_to_tim2_counts()`
+   nunca referenciava o TDC real do motor — resolvido reaproveitando
+   `cfg::g_eng_cfg.trigger_tooth0_engine_deg` (mesmo campo NVM-backed já
+   usado pelo caminho roda-dentada, só a residual `%360` é significativa
+   aqui).
+8. **Piso de lead mínimo** — equivalente ao `STM32_MIN_COMPARE_LEAD_TICKS`
+   (2 µs) da fila `TIM5`, mas convertido para counts via ω a cada `arm`
+   (`si::encoder::min_lead_counts()`) em vez de uma constante fixa — o
+   mesmo intervalo físico vale ~0,001 count a idle e ~5 counts perto do
+   redline.
+9. **Host-test hooks do domínio `TIM2`** — auditoria encontrou os mocks HAL
+   (`tim2_encoder_init/count/set_count/arm_next`, `tim2_heartbeat_start`,
+   `tim3_cmp_ic_init`, `cmp_angle_snapshot`, `cmp_edge_count`) já existiam
+   mas nunca eram chamados por nenhum teste — cobertura morta. Fechado com
+   um smoke test em `test_timer_stubs()`.
+10. Esta seção — build/test completo + commit de fecho.
+
+### `EMS_MT6835_CMP_PHASE_CALIBRATED` — porta de segurança para o sequencial
+
+`hal/board_pinout.h`, default `0`. Que fase (`ECU_PHASE_A`/`B`) um flanco do
+CMP representa é uma constante de calibração de hardware (posição do sensor
+Hall face ao ciclo de 720°) que **ainda não foi medida em bancada**. Com a
+flag em `0`, `ecu_sched_encoder_phase_set_anchor()` nunca é chamada a partir
+de hardware real (só o `TODO` no heartbeat regista a contagem de flancos),
+`phase_valid()` fica sempre `0`, e o recompute cai sempre em presync — nunca
+dispara sequencial com uma constante adivinhada. Flag **separada** de
+`EMS_MT6835_ENCODER` de propósito: activar o encoder sozinho nunca pode, por
+si só, activar o sequencial.
+
+### Bug encontrado e corrigido durante a implementação: truncamento do ω
+
+O primeiro fixed-point do estimador de ω era `×256`. Verificado por cálculo
+directo que isto trunca a zero a ~200 rpm (cranking leria "sem rotação":
+`0,224 → 0` em inteiro) e dá só ~10 valores distintos até ao redline —
+resolução insuficiente em toda a gama, não só no extremo. Rescalado para
+`×65536` (~57 a 200 rpm, ~2577 a 9000 rpm, nunca trunca a zero) — nome da
+variável/função mudado junto com a escala (`omega_x256`→`omega_x65536`),
+não só o valor, para não deixar um nome estável sobre um valor re-escalado
+(a mesma armadilha que os aliases legados `TIM1`/`TIM2` de teste já tinham
+demonstrado neste projeto). Regressão coberta por teste dedicado à taxa de
+~200 rpm.
+
+### Duas filas independentes, não uma parametrizada
+
+Decisão do plano original (seção 6), confirmada na implementação: a fila
+`TIM5`/`CH3` existente serve **só** `fire_prime_pulse()`/`test_pulse_inj()`/
+`test_pulse_ign()` (motor parado, sempre por tempo) em qualquer um dos dois
+builds — nunca foi migrada. A fila `TIM2`/`CH3` nova serve só os eventos
+derivados do rastreador de fase/heartbeat. Um alvo em tempo é sempre
+alcançável; um alvo em ângulo é inalcançável com o motor parado — não são a
+mesma unidade, partilhar teria travado o prime pulse para sempre em modo
+encoder.
+
+### Verificação final (todas as 10 tarefas)
+
+```
+make host-test        → 1361 PASS, 0 FAIL
+make host-test-vgt6   → 24 PASS, 0 FAIL
+make firmware-vgt6/rgt6/mre (EMS_MT6835_ENCODER=0, default) → build limpo
+make clean && WERROR=1 make firmware-vgt6 (EMS_MT6835_ENCODER=1,
+  temporário, revertido depois) → build limpo, 0 avisos
+git diff --stat board_pinout.h (após reverter)  → vazio
+```
+
+`hw/v1-clean-board` verificado intocado antes e depois de cada commit desta
+branch (`git branch --show-current && git status --short` no worktree
+principal).
+
+### Fora de escopo, permanece para uma etapa futura
+
+Herdado do plano original, nada disto mudou nesta implementação:
+
+- **Redesenho de `FULL_SYNC`/`HALF_SYNC`** — com encoder absoluto o
+  conceito de "perda de sync" muda de natureza (nunca se perde posição, só
+  se perde fase A/B até o CMP confirmar); `phase_valid()` já cobre o
+  suficiente para o presync funcionar, mas uma máquina de estados dedicada
+  não foi desenhada.
+- **Disparo sequencial real** — precisa da fase calibrada em bancada
+  (`EMS_MT6835_CMP_PHASE_CALIBRATED`, TODO explícito no heartbeat).
+- Tolerância exacta de deriva do CMP (verificação de anchor vs. leitura
+  real) — decisão de bancada, não de arquitetura.
+- Precisão residual do dwell em bounce de cranking.
+- Mecânica exacta da transição presync→sequencial.
+- Multi-spark em domínio de ângulo.
+- Compensação de atraso de propagação do sensor (fórmula já locked no
+  plano, não aplicada ao dispatcher ainda).
+- Validação em bancada do item "watchdog de dwell como proteção primária"
+  (seção 9 do plano) — motor parado a meio de um dwell, `TIM2` congela com
+  o motor, só o watchdog `TIM5` desliga a bobina.
