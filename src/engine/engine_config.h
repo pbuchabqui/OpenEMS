@@ -31,6 +31,18 @@ inline constexpr uint16_t kDefaultEoiLeadDeg = 355u;  // open-valve (Speeduino-s
 //   4. Calcular: trigger_tooth0_engine_deg = (720 - offset_graus_antes_TDC) % 720
 //      Exemplo: dente 0 está 84° antes do TDC do cil.0 → valor = 636.
 //   5. Escrever via comando UART SET_CONFIG antes do primeiro arranque.
+//
+// Modo encoder MT6835 (EMS_MT6835_ENCODER=1, hal/board_pinout.h): este mesmo
+// campo é REAPROVEITADO com o mesmo papel físico — "que ângulo de motor
+// corresponde à posição bruta zero" — só que a posição bruta já não é o
+// dente 0 da roda 60-2, é TIM2_CNT==0 (ver ecu_sched_angle_encoder.cpp,
+// engine_deg_to_counts_in_rev()). Só a resídua MOD 360 é significativa nesse
+// caminho (TIM2 embrulha a cada 16384 contagens = 1 volta, não 720° como o
+// campo sugere pelo nome) — um calibrador escrevendo 400 ou 40 produz o
+// MESMO timing em modo encoder. O default abaixo é um artefacto do bring-up
+// da roda 60-2 e TEM de ser remedido (mesmo procedimento, dial indicator +
+// leitura de TIM2_CNT em vez do osciloscópio no dente 0) antes de um motor
+// girar com uma placa encoder — não é intercambiável entre os dois modos.
 inline constexpr uint16_t kTriggerTooth0EngineDeg = 0u;  // MEDIR NO MOTOR REAL
 
 // Convenção de canal: ECU_CH_IGNn/ECU_CH_INJn = cilindro físico n−1, SEMPRE.

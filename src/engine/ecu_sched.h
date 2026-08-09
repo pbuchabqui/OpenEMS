@@ -237,13 +237,15 @@ void ecu_sched_encoder_evt_dispatch(void) noexcept;  // called from TIM2 ISR on 
 // CMP desde o último tick (delta de cmp_edge_count).
 //
 // ⚠️ Ainda não faz o recompute barato de dwell/PW nem o bank-toggle do
-// presync nem a verificação de deriva do CMP (próxima tarefa do plano,
-// docs/dev/mt6835_encoder_fork.md — "Conversão graus→counts + recompute
-// partilhado"): a fase que um flanco do CMP representa é uma constante de
-// calibração de hardware ainda não medida em bancada
+// presync — recompute completo (spark/dwell/eoi/inj_on/inj_off, bank
+// toggle) via si::encoder::recompute_presync(), rodando sempre que
+// ecu_sched_encoder_phase_valid()==0 (sempre verdade sem
+// EMS_MT6835_CMP_PHASE_CALIBRATED, hal/board_pinout.h). Ainda não faz o
+// ramo sequencial (precisa do anchor de fase real, tarefa futura) nem a
+// verificação de deriva do CMP: a fase que um flanco do CMP representa é
+// uma constante de calibração de hardware ainda não medida em bancada
 // (ecu_sched_encoder_phase_set_anchor() precisa dela), não algo que este
-// heartbeat possa inventar. Por agora só alimenta ω, que não depende dessa
-// constante.
+// heartbeat possa inventar.
 void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
                                       uint32_t cmp_angle,
                                       uint32_t cmp_edge_count) noexcept;
@@ -279,6 +281,13 @@ uint8_t ecu_sched_encoder_test_get_evt(uint8_t index,
 uint32_t ecu_sched_encoder_test_get_evt_overflow(void) noexcept;
 uint32_t ecu_sched_encoder_test_get_late_event_count(void) noexcept;
 uint32_t ecu_sched_encoder_test_get_dier(void) noexcept;  // CC3IE bit dinâmico
+// Conversão pura graus de motor -> counts dentro da volta (0..16383),
+// origem cfg::g_eng_cfg.trigger_tooth0_engine_deg % 360 (engine_config.h).
+uint32_t ecu_sched_encoder_test_engine_deg_to_counts(uint32_t engine_angle_deg) noexcept;
+// Janela semi-aberta (now_raw, now_raw+16384] — caso-limite alvo==posição
+// atual cai no FIM da janela, não no início (ver comentário na definição).
+uint32_t ecu_sched_encoder_test_rev_target_to_absolute(uint32_t target_counts_in_rev,
+                                                        uint32_t now_raw) noexcept;
 uint8_t ecu_sched_test_angle_table_size(void);
 uint8_t ecu_sched_test_get_angle_event(uint8_t index,
                                        uint8_t *tooth,

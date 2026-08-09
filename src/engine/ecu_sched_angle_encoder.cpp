@@ -37,6 +37,7 @@
  */
 
 #include "engine/ecu_sched_internal.h"
+#include "engine/engine_config.h"
 #include "hal/out_pins.h"
 #include "hal/critical_section.h"
 #if !defined(EMS_HOST_TEST)
@@ -46,6 +47,13 @@
 #include <stdint.h>
 
 namespace si = ems::engine::sched_internal;
+
+namespace ems::engine::sched_internal::encoder {
+// Definida mais abaixo neste ficheiro ("Conversão graus→counts") — forward
+// declare aqui porque ecu_sched_encoder_heartbeat_tick() (mais acima no
+// ficheiro que a definição) precisa de a chamar.
+void recompute_presync(uint32_t now_raw) noexcept;
+}  // namespace ems::engine::sched_internal::encoder
 
 #if defined(EMS_HOST_TEST)
 // Mock de TIM2 para a fila TIM2/CH3 — mesmo padrão do mock TIM5 em
@@ -406,17 +414,21 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
 
     // Novo flanco do CMP desde o último tick? Só regista por agora — a fase
     // que esse flanco representa é uma constante de calibração de hardware
-    // ainda não medida em bancada (ecu_sched_encoder_phase_set_anchor()
-    // precisa dela), não algo que este heartbeat possa inventar. Resolver
-    // isso + o recompute barato de dwell/PW + bank-toggle do presync é a
-    // próxima tarefa do plano.
+    // ainda não medida em bancada (EMS_MT6835_CMP_PHASE_CALIBRATED=0,
+    // hal/board_pinout.h), não algo que este heartbeat possa inventar.
     if (cmp_edge_count != g_hb_last_cmp_edge_count) {
         g_hb_last_cmp_edge_count = cmp_edge_count;
-        (void)cmp_angle;  // TODO: ecu_sched_encoder_phase_set_anchor(cmp_angle, <fase calibrada>)
+        (void)cmp_angle;  // TODO: ecu_sched_encoder_phase_set_anchor(cmp_angle, <fase calibrada>) atrás do gate acima
     }
-    // TODO: recompute barato de dwell_deg/inj_pw_deg + bank-toggle presync
-    // (tarefa seguinte do plano — "Conversão graus→counts + recompute
-    // partilhado").
+
+    // Sem calibração de fase, phase_valid() é sempre 0 (por construção, ver
+    // gate acima) — o recompute cai sempre em presync, nunca dispara
+    // sequencial com um anchor adivinhado. O ramo sequencial fica para uma
+    // tarefa futura (precisa do anchor real; sem cobertura de runtime nesta
+    // configuração default, só testável injetando o anchor via test hook).
+    if (ecu_sched_encoder_phase_valid() == 0U) {
+        si::encoder::recompute_presync(tim2_now);
+    }
 }
 
 #if defined(EMS_HOST_TEST)
@@ -428,7 +440,156 @@ void ecu_sched_encoder_heartbeat_test_reset(void) noexcept
 
 namespace ems::engine::sched_internal::encoder {
 
-// Placeholder — preenchido pela tarefa seguinte do plano (conversão
-// graus→counts + recompute partilhado com ecu_sched_commit_calibration()).
+// ── Conversão graus de motor → counts TIM2 ───────────────────────────────
+//
+// TIM2_CNT embrulha a cada 16384 contagens = 1 volta de cambota (360°), não
+// 720° como o ciclo do motor. A origem (que ângulo de motor corresponde a
+// TIM2_CNT==0) é uma constante de calibração de hardware — reaproveitada de
+// cfg::g_eng_cfg.trigger_tooth0_engine_deg, o mesmo campo já usado pelo
+// caminho roda-dentada (mesmo conceito físico: "que ângulo corresponde à
+// posição bruta zero"), NVM-backed e já com procedimento de bancada — ver
+// engine_config.h e docs/dev/mt6835_encoder_fork.md. Só a resídua MOD 360
+// do campo é significativa aqui.
+//
+// Duplicado deliberadamente de engine_angle_to_trigger_angle()
+// (ecu_sched_angle.cpp:47-53) em vez de partilhado: essa função usa
+// cycle_deg=720 (ciclo do motor); aqui o domínio de embrulho É 360 (uma
+// volta de TIM2). Partilhar reintroduziria exatamente a confusão 720/360
+// que este ficheiro já teve de resolver.
+static uint32_t engine_deg_to_counts_in_rev(uint32_t engine_angle_deg) noexcept
+{
+    const uint32_t origin_mod360 =
+        static_cast<uint32_t>(cfg::g_eng_cfg.trigger_tooth0_engine_deg) % 360U;
+    const uint32_t crank_deg =
+        (engine_angle_deg % 360U + 360U - origin_mod360) % 360U;
+    return (crank_deg * 16384U) / 360U;
+}
+
+// Posição-alvo dentro da volta (0..16383) → próxima ocorrência absoluta em
+// counts de 32 bits. Sempre em (now_raw, now_raw+16384] — janela semi-aberta
+// que casa com a cadência do heartbeat TIM2_CH4 (1×/volta): alvo==posição
+// atual cai no FIM da janela (próxima volta), nunca no início, para não
+// coincidir com o instante em que o próprio heartbeat acabou de disparar.
+static uint32_t rev_target_to_absolute(uint32_t target_counts_in_rev,
+                                       uint32_t now_raw) noexcept
+{
+    const uint32_t now_mod = now_raw & 0x3FFFU;
+    const uint32_t fwd = (target_counts_in_rev > now_mod)
+        ? (target_counts_in_rev - now_mod)
+        : (16384U - now_mod + target_counts_in_rev);
+    return now_raw + fwd;
+}
+
+static uint32_t engine_deg_to_absolute(uint32_t engine_angle_deg,
+                                       uint32_t now_raw) noexcept
+{
+    return rev_target_to_absolute(engine_deg_to_counts_in_rev(engine_angle_deg), now_raw);
+}
+
+// Duração (ticks TIM5) → extensão angular em counts, via ω mais recente —
+// NÃO via graus. dwell/PW são tempo de bobina/injector convertido em
+// comprimento angular; ir por graus só duplicaria arredondamento sem
+// necessidade (ver estimador de ω acima e a nota "Iteração de desenho" do
+// plano). ω inválido ou ≤0 (motor parado/estimativa não pronta): span 0 —
+// esta chamada nunca deveria acontecer nesse estado, mas 0 é o valor seguro
+// (dwell nulo é preferível a um span inventado).
+static uint32_t duration_ticks_to_span_counts(uint32_t duration_ticks) noexcept
+{
+    if (ecu_sched_encoder_omega_valid() == 0U) { return 0U; }
+    const int32_t omega = ecu_sched_encoder_omega_x65536();
+    if (omega <= 0) { return 0U; }
+    const int64_t span = (static_cast<int64_t>(duration_ticks)
+                          * static_cast<int64_t>(omega)) / 65536;
+    return (span < 0) ? 0U : static_cast<uint32_t>(span);
+}
+
+// ── Recompute presync — chamado pelo heartbeat TIM2_CH4 quando a fase A/B
+// ainda não está confirmada (ecu_sched_encoder_phase_valid()==0, sempre
+// verdade sem EMS_MT6835_CMP_PHASE_CALIBRATED — ver board_pinout.h).
+// Equivalente a rebuild_presync_revolution() (ecu_sched_angle.cpp) em
+// counts: mesma matemática de ângulo (spark/eoi/inj_on/inj_off, bank
+// toggle), mas SPARK/EOI vão por engine_deg_to_absolute() (geometria pura)
+// e dwell/PW vão por duration_ticks_to_span_counts() (ω), nunca por graus —
+// ver nota acima.
+//
+// Multi-spark (emit_multispark) e a compensação de atraso do sensor (10 µs,
+// ver plano) ficam fora desta passagem — presync básico primeiro.
+void recompute_presync(uint32_t now_raw) noexcept
+{
+    static const uint8_t inj_a[2] = {ECU_CH_INJ1, ECU_CH_INJ4};
+    static const uint8_t inj_b[2] = {ECU_CH_INJ2, ECU_CH_INJ3};
+
+    // Purga TUDO das 4 IGN + 4 INJ antes de reconstruir — garante que nunca
+    // fica uma DWELL_START pendente sem o SPARK emparelhado (ou um INJ_ON
+    // sem o INJ_OFF): o par é sempre inserido junto, na mesma passagem, logo
+    // após limpar. Sem isto, uma janela sobreposta (RPM mudou entre
+    // heartbeats, IRQ atrasada) podia deixar um par órfão na fila — o
+    // cenário que danifica hardware (bobina a carregar sem descarga
+    // agendada), não só correr mal.
+    encoder_purge_cyl_mask(0x0FU, 1U);
+    encoder_purge_cyl_mask(0x0FU, 0U);
+
+    const uint32_t dwell_span = duration_ticks_to_span_counts(g_dwell_ticks);
+    const uint32_t raw_inj_pw_ticks =
+        (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS)
+            ? (g_inj_pw_ticks / 2U)
+            : g_inj_pw_ticks;
+    uint32_t inj_pw_span = duration_ticks_to_span_counts(raw_inj_pw_ticks);
+    // Clamp de duty — equivalente em counts a kMaxPresyncInjPwDeg (90% de
+    // uma volta), mesma proteção do caminho por dentes.
+    constexpr uint32_t kMaxPresyncInjPwCounts = (16384U * 9U) / 10U;
+    if (inj_pw_span > kMaxPresyncInjPwCounts) {
+        inj_pw_span = kMaxPresyncInjPwCounts;
+        ++g_pw_duty_clamp_count;
+    }
+
+    const uint32_t spark_deg = (360U - (g_advance_deg % 360U)) % 360U;
+    const uint32_t eoi_deg   = (360U - (g_eoi_lead_deg % 360U)) % 360U;
+
+    const uint32_t spark_target  = engine_deg_to_absolute(spark_deg, now_raw);
+    const uint32_t dwell_target  = spark_target - dwell_span;
+    const uint32_t eoi_target    = engine_deg_to_absolute(eoi_deg, now_raw);
+    const uint32_t inj_on_target = eoi_target - inj_pw_span;
+
+    for (uint8_t i = 0U; i < 4U; ++i) {
+        ecu_sched_encoder_arm_channel(kIgnCh[i], dwell_target, ECU_ACT_DWELL_START);
+        ecu_sched_encoder_arm_channel(kIgnCh[i], spark_target, ECU_ACT_SPARK);
+    }
+
+    if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
+        for (uint8_t i = 0U; i < 4U; ++i) {
+            ecu_sched_encoder_arm_channel(kInjCh[i], inj_on_target, ECU_ACT_INJ_ON);
+            ecu_sched_encoder_arm_channel(kInjCh[i], eoi_target, ECU_ACT_INJ_OFF);
+        }
+    } else {
+        // bank_off == bank_on sempre (mesmo banco liga/desliga na mesma
+        // volta) — simplificação provada equivalente à derivação em dois
+        // passos de rebuild_presync_revolution() (toggle após o ON, reler
+        // para o OFF): com toggle inicial T, bank_on=(T==0)?a:b e, após
+        // T^=1, bank_off=(novo T==1)?a:b == bank_on sempre. Usar o mesmo
+        // banco directamente evita reler o toggle duas vezes.
+        const uint8_t *bank = (g_presync_bank_toggle == 0U) ? inj_a : inj_b;
+        for (uint8_t i = 0U; i < 2U; ++i) {
+            ecu_sched_encoder_arm_channel(bank[i], inj_on_target, ECU_ACT_INJ_ON);
+            ecu_sched_encoder_arm_channel(bank[i], eoi_target, ECU_ACT_INJ_OFF);
+        }
+        g_presync_bank_toggle ^= 1U;
+    }
+}
 
 }  // namespace ems::engine::sched_internal::encoder
+
+#if defined(EMS_HOST_TEST)
+// Hooks de teste — extern "C", free functions (mesma convenção do resto do
+// ficheiro/ecu_sched.h), não namespaced: test_sched.cpp só vê o que estiver
+// declarado em ecu_sched.h.
+uint32_t ecu_sched_encoder_test_engine_deg_to_counts(uint32_t engine_angle_deg) noexcept
+{
+    return si::encoder::engine_deg_to_counts_in_rev(engine_angle_deg);
+}
+uint32_t ecu_sched_encoder_test_rev_target_to_absolute(uint32_t target_counts_in_rev,
+                                                        uint32_t now_raw) noexcept
+{
+    return si::encoder::rev_target_to_absolute(target_counts_in_rev, now_raw);
+}
+#endif

@@ -39,3 +39,14 @@
 #ifndef EMS_MT6835_ENCODER
 #  define EMS_MT6835_ENCODER 0
 #endif
+
+// Que fase (ECU_PHASE_A/B) um flanco do CMP representa é uma constante de
+// calibração de hardware (onde o Hall está montado face ao ciclo de 720°) —
+// ainda NÃO medida em bancada. Default 0: ecu_sched_encoder_phase_set_anchor()
+// nunca é chamada a partir de hardware real, phase_valid() fica sempre 0, e
+// o recompute do dispatcher em ângulo cai sempre em presync — nunca dispara
+// sequencial com uma constante adivinhada. Só passar a 1 depois da medição
+// em bancada (ver docs/dev/mt6835_encoder_fork.md).
+#ifndef EMS_MT6835_CMP_PHASE_CALIBRATED
+#  define EMS_MT6835_CMP_PHASE_CALIBRATED 0
+#endif

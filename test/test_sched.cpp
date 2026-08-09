@@ -895,6 +895,144 @@ void test_ecu_sched_encoder_heartbeat(void) {
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "test_reset() clears heartbeat-fed state");
 }
 
+void test_ecu_sched_encoder_conversion(void) {
+    section("ecu_sched: encoder degrees<->counts conversion (pure math)");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+
+    CHECK_EQ(ecu_sched_encoder_test_engine_deg_to_counts(0u), 0u, "0 deg -> 0 counts");
+    CHECK_EQ(ecu_sched_encoder_test_engine_deg_to_counts(90u), 4096u, "90 deg -> 1/4 rev (4096)");
+    CHECK_EQ(ecu_sched_encoder_test_engine_deg_to_counts(270u), 12288u, "270 deg -> 3/4 rev (12288)");
+    CHECK_EQ(ecu_sched_encoder_test_engine_deg_to_counts(360u), 0u, "360 deg wraps to 0 (mod 360 domain)");
+    CHECK_EQ(ecu_sched_encoder_test_engine_deg_to_counts(359u), 16338u,
+             "359 deg -> 16338 (359*16384/360, truncated)");
+
+    // Origin residue property: a calibrator writing 400 or 40 must produce
+    // IDENTICAL encoder-mode timing (only trigger_tooth0_engine_deg % 360 is
+    // load-bearing here — TIM2 wraps every 360, not 720 like the field's
+    // tooth-wheel domain suggests). If this ever diverges, the field is
+    // silently carrying phase information again (the exact bug class this
+    // session has been avoiding).
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 40u;
+    const uint32_t with_40 = ecu_sched_encoder_test_engine_deg_to_counts(90u);
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 400u;
+    const uint32_t with_400 = ecu_sched_encoder_test_engine_deg_to_counts(90u);
+    CHECK_EQ(with_400, with_40, "origin=400 and origin=40 (400%360) give identical counts");
+    CHECK_EQ(with_40, 2275u, "90 deg, origin=40 -> crank_deg=410%360=50 -> 50*16384/360=2275");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+
+    // rev_target_to_absolute: half-open window (now_raw, now_raw+16384].
+    CHECK_EQ(ecu_sched_encoder_test_rev_target_to_absolute(100u, 50u), 100u,
+             "forward within same image: target ahead of now, no wrap");
+    CHECK_EQ(ecu_sched_encoder_test_rev_target_to_absolute(100u, 100u), 16484u,
+             "boundary: target==now must land at now+16384 (next rev), not now+0");
+    CHECK_EQ(ecu_sched_encoder_test_rev_target_to_absolute(10u, 16380u), 16394u,
+             "wrap forward: target just past the 16384 boundary");
+    CHECK_EQ(ecu_sched_encoder_test_rev_target_to_absolute(100u, 0x10000032u), 0x10000064u,
+             "upper bits of a 32-bit raw count preserved across the addition");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_recompute_presync(void) {
+    section("ecu_sched: encoder heartbeat recompute — presync (default: phase always invalid)");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+
+    ecu_sched_set_advance_deg(10u);            // spark_deg = (360-10)%360 = 350
+    ecu_sched_set_eoi_lead_deg(355u);          // eoi_deg   = (360-355)%360 = 5
+    ecu_sched_set_dwell_ticks(2000u);
+    ecu_sched_set_inj_pw_ticks(2000u);
+    ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
+
+    // Seed omega at exactly 0.5 (d_tim2=500, d_tim5=1000) so spans are small,
+    // deterministic integers, easy to hand-verify — a physically realistic
+    // (<<1) ratio, unlike omega=1.0 used in the pure omega-estimator tests.
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);   // seeds prev; omega invalid -> first recompute pass is a harmless no-span no-op
+    ecu_sched_encoder_heartbeat_tick(1500u, 2000u, 0u, 0u);   // d_tim2=500, d_tim5=1000 -> omega=0.5 -> x65536=32768
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 32768, "omega seeded to 0.5 for deterministic spans");
+
+    // Hand-computed expectations (origin=0, now_raw=1500 at the 2nd tick):
+    //   spark_deg=350 -> counts_in_rev=15928; now_mod=1500 < 15928 -> spark_target=15928
+    //   eoi_deg=5     -> counts_in_rev=227;   now_mod=1500 > 227   -> eoi_target=1500+(16384-1500+227)=16611
+    //   dwell_span = 2000 * 0.5 = 1000 -> dwell_target = 15928-1000 = 14928
+    //   inj_pw_span (SIMULTANEOUS halves 2000->1000 ticks) = 500 -> inj_on_target = 16611-500 = 16111
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
+             "4 IGN (dwell+spark) + 4 INJ (on+off), SIMULTANEOUS mode");
+
+    uint32_t ts = 0u; uint8_t ch = 0u; uint8_t high = 0u;
+    ecu_sched_encoder_test_get_evt(0u, &ts, &ch, &high);
+    CHECK_EQ(ts, 14928u, "evt0: dwell target");
+    CHECK_EQ(high, 1u, "evt0: DWELL_START is high=1");
+    ecu_sched_encoder_test_get_evt(4u, &ts, &ch, &high);
+    CHECK_EQ(ts, 15928u, "evt4: spark target");
+    CHECK_EQ(high, 0u, "evt4: SPARK is high=0");
+    ecu_sched_encoder_test_get_evt(8u, &ts, &ch, &high);
+    CHECK_EQ(ts, 16111u, "evt8: inj_on target");
+    CHECK_EQ(high, 1u, "evt8: INJ_ON is high=1");
+    ecu_sched_encoder_test_get_evt(15u, &ts, &ch, &high);
+    CHECK_EQ(ts, 16611u, "evt15: inj_off target");
+    CHECK_EQ(high, 0u, "evt15: INJ_OFF is high=0");
+
+    // Pairing/purge safety: a repeated heartbeat (RPM effectively unchanged,
+    // nothing dispatched yet) must purge-and-rebuild cleanly, never
+    // accumulate duplicates or leave an orphaned dwell/spark.
+    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
+             "repeated heartbeat: still exactly 16, no duplication from purge+rebuild");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_recompute_presync_bank_toggle(void) {
+    section("ecu_sched: encoder heartbeat recompute — presync semi-sequential bank toggle");
+    ecu_sched_test_reset();
+
+    ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SEMI_SEQUENTIAL);
+    ecu_sched_set_dwell_ticks(0u);
+    ecu_sched_set_inj_pw_ticks(0u);
+
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 2000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 12u,
+             "4 IGN (dwell+spark) + 2 INJ (on+off), semi-sequential: half the injectors");
+
+    uint32_t ts = 0u; uint8_t ch_a = 0u; uint8_t high = 0u;
+    ecu_sched_encoder_test_get_evt(8u, &ts, &ch_a, &high);  // first INJ_ON of this heartbeat's bank
+
+    ecu_sched_encoder_heartbeat_tick(2000u, 3000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 12u, "still 12 after toggle");
+    uint8_t ch_b = 0u;
+    ecu_sched_encoder_test_get_evt(8u, &ts, &ch_b, &high);
+    CHECK_TRUE(ch_a != ch_b, "bank toggled: different injector channel fires between consecutive heartbeats");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_recompute_presync_pw_clamp(void) {
+    section("ecu_sched: encoder heartbeat recompute — presync PW duty clamp");
+    ecu_sched_test_reset();
+
+    const uint32_t before = ecu_sched_pw_duty_clamp_count();
+    ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
+    ecu_sched_set_inj_pw_ticks(2000000u);   // huge PW ticks, forces a span > 90% of a rev at omega=1.0
+    ecu_sched_set_dwell_ticks(0u);
+
+    ecu_sched_encoder_heartbeat_tick(0u, 0u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);  // omega=1.0 -> inj_pw_span way over a rev
+
+    CHECK_TRUE(ecu_sched_pw_duty_clamp_count() > before,
+               "oversized presync PW span clamped to 90% of a revolution");
+
+    ecu_sched_test_reset();
+}
+
 // ============================================================================
 // QUICK CRANK
 // ============================================================================
