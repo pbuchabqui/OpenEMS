@@ -184,12 +184,15 @@ void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 // única cadeia de amostras consecutivas — chamar de dois sítios corrompe a
 // estimativa).
 void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexcept;
-// Estimativa corrente: contagens de TIM2 por tick de TIM5, fixed-point ×256
-// (com sinal — negativo em rotação reversa/kick-back de cranking, o modo
-// encoder de hardware decrementa TIM2_CNT nativamente). 0 se ainda não
-// houver amostra válida — checar ecu_sched_encoder_omega_valid() antes de
-// usar para conversões (dwell/PW em counts, piso de lead).
-int32_t ecu_sched_encoder_omega_x256(void) noexcept;
+// Estimativa corrente: contagens de TIM2 por tick de TIM5, fixed-point
+// ×65536 (com sinal — negativo em rotação reversa/kick-back de cranking, o
+// modo encoder de hardware decrementa TIM2_CNT nativamente). ×65536, não
+// ×256: ω real (~0,0009 a idle/cranking, ~0,039 a redline, counts/tick)
+// trunca para 0 em ×256 já a 200 rpm — ×65536 mantém resolução útil em
+// toda a gama (~57 a 200 rpm, ~2577 a 9000 rpm). 0 se ainda não houver
+// amostra válida — checar ecu_sched_encoder_omega_valid() antes de usar
+// para conversões (dwell/PW em counts, piso de lead).
+int32_t ecu_sched_encoder_omega_x65536(void) noexcept;
 uint8_t ecu_sched_encoder_omega_valid(void) noexcept;
 
 // Rastreador de fase: TIM2_CNT só dá posição mod 360° (1 volta de cambota);

@@ -648,34 +648,47 @@ void test_ecu_sched_encoder_omega(void) {
     ecu_sched_test_reset();
 
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "invalid before first sample");
-    CHECK_EQ(ecu_sched_encoder_omega_x256(), 0, "x256=0 before first sample");
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 0, "x65536=0 before first sample");
 
     // First sample only seeds prev — still no rate to compute.
     ecu_sched_encoder_omega_sample(1000u, 1000u);
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "invalid after single sample");
 
-    // d_tim2=1000, d_tim5=1000 -> ω=1.0 exact -> x256=256.
+    // d_tim2=1000, d_tim5=1000 -> ω=1.0 exact -> x65536=65536.
     ecu_sched_encoder_omega_sample(2000u, 2000u);
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 1u, "valid after second sample");
-    CHECK_EQ(ecu_sched_encoder_omega_x256(), 256, "omega=1.0 -> x256=256");
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 65536, "omega=1.0 -> x65536=65536");
 
-    // d_tim2=500, d_tim5=1000 -> ω=0.5 -> x256=128.
+    // d_tim2=500, d_tim5=1000 -> ω=0.5 -> x65536=32768.
     ecu_sched_encoder_omega_sample(2500u, 3000u);
-    CHECK_EQ(ecu_sched_encoder_omega_x256(), 128, "omega=0.5 -> x256=128");
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 32768, "omega=0.5 -> x65536=32768");
 
     // Reverse rotation (kick-back): TIM2 decrements, TIM5 keeps advancing —
     // sign must survive, not be clamped to zero/positive.
     ecu_sched_encoder_omega_sample(2300u, 4000u);
-    CHECK_EQ(ecu_sched_encoder_omega_x256(), -51,
-             "reverse rotation: negative x256 (d_tim2=-200/d_tim5=1000)");
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), -13107,
+             "reverse rotation: negative x65536 (d_tim2=-200/d_tim5=1000)");
 
     // d_tim5<=0 (stale/out-of-order sample): estimate must hold, not update
     // (division-by-zero / sign-inversion guard).
-    const int32_t before = ecu_sched_encoder_omega_x256();
+    const int32_t before = ecu_sched_encoder_omega_x65536();
     ecu_sched_encoder_omega_sample(9999u, 4000u);  // same tim5_now as previous
-    CHECK_EQ(ecu_sched_encoder_omega_x256(), before,
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), before,
              "d_tim5<=0: estimate unchanged, no divide-by-zero");
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 1u, "still valid after stale sample");
+
+    // Regression guard for the x256 truncation-to-zero bug: a realistic
+    // ~200 rpm cranking rate (d_tim2=874 counts / d_tim5=1e6 ticks, the
+    // same ratio as 200 rpm @ 16384 counts/rev, 62.5 MHz TIM5) must NOT
+    // read as zero rotation. Under the old ×256 scale this rounded to 0
+    // (0.224 truncated); at ×65536 it must land at 57.
+    ecu_sched_test_reset();
+    ecu_sched_encoder_omega_sample(0u, 0u);
+    ecu_sched_encoder_omega_sample(874u, 1000000u);
+    CHECK_TRUE(ecu_sched_encoder_omega_x65536() != 0,
+               "200rpm-equivalent rate must not truncate to zero (x256 bug regression)");
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 57,
+             "200rpm-equivalent rate -> x65536=57");
 
     ecu_sched_test_reset();
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "test_reset() clears omega state");
@@ -863,13 +876,13 @@ void test_ecu_sched_encoder_heartbeat(void) {
     ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "still invalid after single tick");
 
-    // Second tick: d_tim2=1000, d_tim5=1000 -> omega=1.0 -> x256=256.
+    // Second tick: d_tim2=1000, d_tim5=1000 -> omega=1.0 -> x65536=65536.
     // Confirms the heartbeat really calls ecu_sched_encoder_omega_sample()
     // with the values it was handed (HAL reads them, this just verifies the
     // wiring, not the estimator's own math — that's covered separately).
     ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 0u, 0u);
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 1u, "valid after second tick");
-    CHECK_EQ(ecu_sched_encoder_omega_x256(), 256, "omega fed correctly through the heartbeat");
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 65536, "omega fed correctly through the heartbeat");
 
     // cmp_edge_count delta detection doesn't crash / doesn't touch omega —
     // phase anchoring itself is deliberately not wired yet (needs a

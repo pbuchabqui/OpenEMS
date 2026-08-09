@@ -84,14 +84,21 @@ static uint32_t ems_test_tim2_cnt  = 0u;
 // amostra) descarta a atualização em vez de dividir por zero ou inverter o
 // sinal.
 //
-// Fixed-point ×256 (contagens de TIM2 por tick de TIM5) para não perder
-// precisão numa razão tipicamente << 1 em ponto inteiro — mesma convenção
-// _x256 já usada no projeto (sub_frac_x256).
+// Fixed-point ×65536 (contagens de TIM2 por tick de TIM5) — NÃO ×256.
+// ω real cabe entre ~0,00087 counts/tick (200 rpm) e ~0,039 counts/tick
+// (9000 rpm): em ×256 isso trunca para 0 a 200 rpm (0,224 → 0 em inteiro,
+// cranking leria "sem rotação") e dá só ~10 valores discretos distintos
+// até ao redline — resolução insuficiente em toda a gama, não só no
+// extremo. ×65536 dá ~57 (200 rpm) a ~2577 (9000 rpm), sem truncar a zero
+// em nenhum ponto do range operacional. Nome inclui a escala (não
+// "omega_q" genérico) de propósito: um nome estável sobre um valor
+// re-escalado é exatamente a armadilha que os aliases legados de teste
+// TIM1/TIM2 (ecu_sched.cpp) já demonstraram neste projeto.
 
 static volatile uint32_t g_omega_prev_tim2  = 0U;
 static volatile uint32_t g_omega_prev_tim5  = 0U;
 static volatile uint8_t  g_omega_have_prev  = 0U;
-static volatile int32_t  g_omega_x256       = 0;
+static volatile int32_t  g_omega_x65536     = 0;
 static volatile uint8_t  g_omega_valid      = 0U;
 
 void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexcept
@@ -100,7 +107,7 @@ void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexce
         const int32_t d_tim5 = (int32_t)(tim5_now - g_omega_prev_tim5);
         if (d_tim5 > 0) {
             const int32_t d_tim2 = (int32_t)(tim2_now - g_omega_prev_tim2);
-            g_omega_x256 = (int32_t)(((int64_t)d_tim2 * 256) / (int64_t)d_tim5);
+            g_omega_x65536 = (int32_t)(((int64_t)d_tim2 * 65536) / (int64_t)d_tim5);
             g_omega_valid = 1U;
         }
         // d_tim5 <= 0: relógio não avançou (ou amostra fora de ordem) —
@@ -111,7 +118,7 @@ void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexce
     g_omega_have_prev = 1U;
 }
 
-int32_t ecu_sched_encoder_omega_x256(void) noexcept { return g_omega_x256; }
+int32_t ecu_sched_encoder_omega_x65536(void) noexcept { return g_omega_x65536; }
 uint8_t ecu_sched_encoder_omega_valid(void) noexcept { return g_omega_valid; }
 
 #if defined(EMS_HOST_TEST)
@@ -122,7 +129,7 @@ void ecu_sched_encoder_omega_test_reset(void) noexcept
     g_omega_prev_tim2 = 0U;
     g_omega_prev_tim5 = 0U;
     g_omega_have_prev = 0U;
-    g_omega_x256 = 0;
+    g_omega_x65536 = 0;
     g_omega_valid = 0U;
 }
 #endif
