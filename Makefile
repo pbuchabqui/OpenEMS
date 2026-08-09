@@ -72,6 +72,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/spark_skip.cpp \
              $(SRC_DIR)/engine/ecu_sched.cpp \
              $(SRC_DIR)/engine/ecu_sched_angle.cpp \
+             $(SRC_DIR)/engine/ecu_sched_angle_encoder.cpp \
              $(SRC_DIR)/engine/diagnostic_manager.cpp \
              $(SRC_DIR)/engine/map_estimator.cpp \
              $(SRC_DIR)/engine/map_window.cpp \
