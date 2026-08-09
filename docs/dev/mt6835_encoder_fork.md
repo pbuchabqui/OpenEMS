@@ -449,18 +449,33 @@ antes isto vinha de graça do `tle8888_init()`. `tle8888.cpp` continua na
 de `mt6835.cpp`: os dois drivers não podem ser inicializados no mesmo build
 enquanto ambos disputarem o SPI2 num modo diferente.
 
-### Gap descoberto: quem liga o TIM5 se o CMP também sai dele?
+### Gap TIM5_CEN — RESOLVIDO (2026-08-09)
 
 A decisão #1 da arquitetura base ("`TIM5` encolhe, mantém `CH2`=CMP") já não
-é exata: com o CMP também de saída, `TIM5` fica **sem nenhum canal de
-captura em uso** — só o papel de contador livre-corrente para o watchdog de
-dwell continua vivo. Isso é um papel real e necessário, mas
-`tim5_ic_init()` é hoje a única função que liga `TIM5_CR1 |= CEN`; nesta
-arquitetura nova nada chamaria essa função inteira (ela também configura
-PA0/PA1 para captura, que deixa de fazer sentido). **Não corrigido agora** —
-registado aqui para não ser descoberto de surpresa no bring-up: será preciso
-uma função nova (ou uma variante enxuta de `tim5_ic_init()`) que só liga o
-contador livre, sem input capture nenhum.
+era exata: com o CMP também de saída (PC6/TIM3), `TIM5` ficava sem nenhum
+canal de captura em uso — só o papel de contador livre-corrente para os
+watchdogs de dwell/injeção continua vivo. `tim5_ic_init()` era a única
+função que ligava `TIM5_CR1 |= CEN`, e nesta arquitetura nova nada a
+chamaria (ela também reclama PA0/PA1 para captura, que já são
+`TIM2_CH1/CH2` do encoder).
+
+**Implementado**: `tim5_freerun_init()` (`hal/timer.{h,cpp}`) — mesmo
+`PSC=3` (62,5 MHz/16 ns, `kTimPrescaler`) que `tim5_ic_init()` sempre usou,
+sem GPIO/CCMR/CCER/DIER/NVIC nenhum, só `CR1=CEN` num contador de 32 bits
+livre-corrente. Justificação do porquê o tick tem de ser idêntico:
+`ecu_sched.cpp` lê `TIM5_CNT` **diretamente** (não via `tim5_count()`) em
+`ecu_sched_dwell_watchdog()` e `ecu_sched_inj_watchdog()`, e todo o
+orçamento de tempo do scheduler (`ECU_SCHED_CLOCK_HZ=62 500 000`,
+`ecu_sched.h:47`, com `static_assert` em `ecu_sched.cpp:49-52`) assume esse
+tick — um `PSC` diferente quebraria silenciosamente `g_dwell_ticks`,
+`STM32_MIN_COMPARE_LEAD_TICKS` e todos os clamps já calibrados em ticks.
+
+Os dois mapeamentos (`tim5_ic_init()` produção-Hall vs.
+`tim5_freerun_init()` + `tim2_encoder_init()` + `tim3_cmp_ic_init()`
+MT6835) são **mutuamente exclusivos** — documentado no cabeçalho de
+`hal/stm32h562/timer.cpp` e em `hal/timer.h`. Ainda não ligado ao boot
+(mesmo padrão dos outros três: periférico pronto, não chamado até haver
+sensor real).
 
 ### Verificação desta revisão
 
@@ -482,9 +497,9 @@ Implementado nesta revisão: `tim3_cmp_ic_init()` + `TIM3_IRQHandler` +
 1. ~~Confirmar o vetor IRQ de EXTI3~~ — **resolvido ao trocar de mecanismo**:
    PC6/TIM3_CH1 usa `IRQ_TIM3=46`, já nomeado no vetor, sem EXTI/SYSCFG
    nenhum.
-2. Ligar `tim3_cmp_ic_init()` ao boot junto com `tim2_encoder_init()`/
-   `mt6835_init()` quando a decisão de ligar tudo ao `main_stm32.cpp` for
-   tomada — hoje deliberadamente fora de escopo (mesma razão dos outros
-   dois: periférico real sem sensor real por trás).
-3. Resolver o gap do `TIM5_CEN`: nova função de init enxuta, só contador
-   livre-corrente, sem reclamar PA0/PA1.
+2. Ligar `tim3_cmp_ic_init()` + `tim5_freerun_init()` ao boot junto com
+   `tim2_encoder_init()`/`mt6835_init()` quando a decisão de ligar tudo ao
+   `main_stm32.cpp` for tomada — hoje deliberadamente fora de escopo (mesma
+   razão dos outros: periférico real sem sensor real por trás).
+3. ~~Resolver o gap do `TIM5_CEN`~~ — **resolvido**, ver seção "Gap
+   TIM5_CEN" acima.

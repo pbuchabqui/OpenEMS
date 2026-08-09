@@ -3,14 +3,22 @@
  * @brief Implementacao da HAL de timers para STM32H562RGT6
  *        - backend STM32-only.
  *
- * Mapeamento de perifericos:
+ * Mapeamento de perifericos (produção, tim5_ic_init() — CKP/CMP via Hall):
  *   TIM5_CH1 PA0: CKP input capture (62.5 MHz, 16 ns/tick)
  *   TIM5_CH2 PA1: CMP input capture
  *   TIM5_CH3   --: event dispatcher (OC)
- *   TIM3_CH1-4 PC6-9: Injecao (OC, ARR=0xFFFF, ECU_Hardware_Init)
+ *   TIM3_CH1-4 PC6-9: Injecao (OC, ARR=0xFFFF, ECU_Hardware_Init) — RGT6 only
  *   TIM2_CH3 PB10: EWG PWM (motor wastegate)
  *   TIM4_CH1 PB6: VVT escape PWM
  *   TIM4_CH2 PB7: VVT admissao PWM
+ *
+ * Mapeamento alternativo (fork MT6835 — VGT6, tim5_freerun_init()):
+ *   TIM2_CH1/CH2 PA0/PA1: encoder MT6835 (ver tim2_encoder_init())
+ *   TIM3_CH1 PC6: CMP input capture (ver tim3_cmp_ic_init())
+ *   TIM5: free-running sem captura, só watchdog de dwell/injeção
+ *   docs/dev/mt6835_encoder_fork.md, "Gap TIM5_CEN" — os dois mapeamentos
+ *   são mutuamente exclusivos, nunca chamar tim5_ic_init() e
+ *   tim2_encoder_init()/tim3_cmp_ic_init() no mesmo boot.
  *
  * Clock dos timers:
  *   TIM5, TIM3, TIM4, TIM2 (APB1): timer clock = 250 MHz (timer doubler ativo)
@@ -100,6 +108,31 @@ void tim5_ic_set_capture_polarity(bool ckp_falling, bool cmp_falling) noexcept {
 
 uint32_t tim5_count() noexcept {
     return TIM5_CNT;
+}
+
+// ------------------------------------------------------------------------------
+// TIM5 free-running, sem input capture (MT6835 apenas — VGT6).
+// CKP e CMP saíram de TIM5 (TIM2 modo encoder + TIM3_CH1/PC6, ver
+// docs/dev/mt6835_encoder_fork.md, "Gap TIM5_CEN"), mas ecu_sched.cpp
+// continua a ler TIM5_CNT diretamente para os watchdogs de dwell/injeção
+// (ecu_sched_dwell_watchdog(), ecu_sched_inj_watchdog()) — depende do mesmo
+// tick de 62,5 MHz/16 ns que tim5_ic_init() sempre configurou
+// (ECU_SCHED_CLOCK_HZ, ecu_sched.h:47, static_assert em ecu_sched.cpp:49-52).
+// Sem captura/GPIO/NVIC: só o contador livre-corrente que o watchdog
+// precisa. Usar no lugar de tim5_ic_init() quando o pipeline MT6835
+// estiver ativo — nunca os dois (tim5_ic_init() reclama PA0/PA1, que já
+// são TIM2_CH1/CH2 do encoder).
+// ------------------------------------------------------------------------------
+
+void tim5_freerun_init() noexcept {
+    RCC_APB1LENR |= RCC_APB1LENR_TIM5EN;
+    TIM5_CR1  = 0u;
+    TIM5_PSC  = kTimPrescaler;   // 250 MHz / 4 = 62,5 MHz — mesmo tick de sempre
+    TIM5_ARR  = 0xFFFFFFFFu;
+    TIM5_CCER = 0u;              // nenhuma captura
+    TIM5_DIER = 0u;              // nenhuma interrupção — não precisa de NVIC
+    TIM5_EGR  = 1u;
+    TIM5_CR1  = TIM_CR1_CEN;
 }
 
 // ----------------------------------------------------------------------------
@@ -463,6 +496,7 @@ static uint32_t g_mock_tim5_cnt = 0u;
 static uint32_t g_mock_tim2_cnt = 0u;
 void tim5_ic_init(void) {}
 void tim5_ic_set_capture_polarity(bool, bool) noexcept {}
+void tim5_freerun_init() noexcept {}
 void tim3_pwm_init(uint32_t) {}
 void tim4_pwm_init(uint32_t) {}
 void tim2_pwm_init(uint32_t) {}
