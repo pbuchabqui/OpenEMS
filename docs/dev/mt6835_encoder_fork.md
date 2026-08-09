@@ -153,22 +153,36 @@ scheduler atual — só é uma nota para se essa discussão for reaberta depois.
 Decisões travadas antes de qualquer código de driver, para que a implementação
 não fique "descobrindo" a arquitetura no processo.
 
-### Verificação do mecanismo central antes de travar
+### Verificação do mecanismo central — FECHADA (3 fontes independentes)
 
 A peça mais crítica do desenho — `CH1`/`CH2` em modo encoder e `CH3`/`CH4`
 livres para compare-match independente, no **mesmo** `TIM2` — foi
-verificada, porque se estivesse errada a arquitetura toda cairia. Duas
-fontes independentes da comunidade ST corroboram: o modo encoder (bits SMS)
-só governa o roteamento de TI1/TI2 para o contador via `CCMR1`; `CCMR2`/
-`CCR3`/`CCR4` são circuitos de compare independentes, não afetados pelo SMS.
-Citação direta de uma resposta de suporte ST: *"set up CH3 or CH4 for the
-output compare (you don't need to actually enable it as output, nor set up
-a GPIO pin for it) and bind the interrupt to the chosen channel in DIER."*
-**Não confirmado ainda contra o texto do RM0481 (capítulo TIM2) primário**
-— duas tentativas de baixar o AN4776/RM0481 completo via WebFetch deram
-timeout; o excerto local (`docs/alternatefunctions.pdf`) só cobre o
-capítulo GPIO. Tratar como **alta confiança, não fonte primária fechada** —
-ver item aberto 3 abaixo.
+verificada, porque se estivesse errada a arquitetura toda cairia.
+
+Três fontes independentes da comunidade ST convergem: o modo encoder (bits
+SMS) só governa o roteamento de TI1/TI2 para o contador via `CCMR1`;
+`CCMR2`/`CCR3`/`CCR4` são circuitos de compare independentes, não afetados
+pelo SMS. A mais forte das três é uma resposta de um moderador técnico ST,
+citando a figura exata do reference manual da família STM32H7 (mesmo bloco
+de IP de timer que o H5 herda): *"The encoder interface is only connected
+to the internal signals TI1FP1 and TI2FP2, which in turn are only routed to
+CH1 and CH2 (see RM0468, e.g. fig. 373)"* — e conclui explicitamente que
+essa restrição **é só do modo encoder em si**; `CH3`/`CH4` continuam
+plenamente capazes de output compare ou input capture no mesmo timer. Uma
+segunda fonte (outro thread ST) dá a receita concreta: *"set up CH3 or CH4
+for the output compare (you don't need to actually enable it as output, nor
+set up a GPIO pin for it) and bind the interrupt to the chosen channel in
+DIER."*
+
+**Ressalva de método:** não é uma citação literal do texto do RM0481
+(capítulo TIM2) — duas tentativas de baixar o RM0481/AN4776 completos via
+WebFetch deram timeout (documentos de milhares/dezenas de páginas). A
+citação de figura é da família RM0468 (H7), não RM0481 (H5) — mesmo bloco
+de IP, alta confiança de que a numeração de figura/nota é equivalente, mas
+não confirmado byte a byte. Tratar como **fechado por convergência de 3
+fontes técnicas independentes, com uma delas citando figura do RM da
+família irmã** — não como citação primária H5 word-for-word. Se algo não
+bater na bancada, este é o primeiro ponto a reabrir.
 
 ### Decisões locked
 
@@ -205,20 +219,54 @@ ver item aberto 3 abaixo.
    tipicamente 2–5 ms de antecedência). Mesma classe de erro de
    [[trigger-offset-angular-vs-time-delay]], horizonte menor.
 
-### Itens em aberto ANTES do driver (não bloqueiam o registo da arquitetura)
+### Itens antes abertos — agora resolvidos por design (2026-08-08)
 
-1. **Compensação do atraso de propagação** (10 µs, achado do gate 1):
-   fórmula proposta `correção_graus(RPM) = 10µs × RPM × 6e-6`, mas o ponto de
-   aplicação (na leitura de posição atual? no alvo do evento?) ainda não foi
-   derivado.
-2. **Rotação reversa durante cranking** (kick-back de compressão): modo
-   encoder decrementa `CNT` em hardware se o motor girar para trás — mais
-   fiel à física real do que a contagem só-para-frente de hoje, mas muda a
-   semântica de "esperar o próximo compare-match" (o alvo pode ser
-   ultrapassado, recuar, e re-cruzar). Não resolvido; pendência de design
-   antes de codar o modo cranking.
-3. **Confirmar CH3/CH4-independente-do-SMS contra o RM0481** (capítulo
-   TIM2), não só fontes de comunidade — antes de `tim2_encoder_init()`.
+1. ✅ **CH3/CH4 independentes do SMS** — fechado acima (3 fontes
+   convergentes). Ver ressalva de método: revisitar se bancada discordar.
+
+2. ✅ **Compensação do atraso de propagação — ponto de aplicação derivado.**
+   `TDelay` = 10 µs significa que o ângulo reportado pelo sensor está
+   atrasado em relação ao ângulo mecânico real: `ângulo_reportado(t) ≈
+   ângulo_real(t − TDelay)`. Como `TIM2->CNT` é incrementado diretamente
+   pelas bordas ABZ do sensor, o próprio `CNT` **já é** a leitura atrasada —
+   não há como "corrigir o passado" nele. A correção certa é **subtrativa,
+   no alvo do evento** (`CCR` de disparo), não na leitura de posição atual:
+   ```
+   correção_counts(RPM) = round(RPM × 6 × 10e-6 × (16384/360))
+   target_cnt_compensado = target_cnt_desejado − correção_counts(RPM)
+   ```
+   A 9.000 RPM isso é ≈25 contagens (de 16.384/volta) — pequeno mas não
+   desprezível (~0,15% da volta). O RPM usado na fórmula vem da mesma
+   fonte que hoje alimenta `ecu_sched_angle.cpp`: amostrar `TIM2->CNT`
+   junto com `TIM5->CNT` (que continua sendo a base de tempo) em cada
+   volta/gap para estimar RPM instantâneo. **Isto cai exatamente no mesmo
+   lugar arquitetural que `trigger_tooth0_engine_deg` ocupa hoje**
+   (`engine_angle_to_trigger_angle()`, `ecu_sched_angle.cpp:47-53`) — só
+   que passa de uma constante fixa em graus para uma correção
+   dependente de RPM. Não é um mecanismo novo, é o mesmo mecanismo generalizado.
+
+3. ✅ **Rotação reversa durante cranking — resolvido por composição das
+   decisões já travadas, resíduo marcado para bancada.**
+   Dois efeitos protegem contra o pior caso, nenhum deles novo:
+   - **Disparo duplicado no mesmo alvo (bounce cruza o CCR duas vezes):**
+     o padrão de fila já existente (mesmo em uso hoje no `TIM5`) rearma o
+     canal de HW para o **próximo** alvo da fila imediatamente ao disparar
+     o atual — então, no instante em que um segundo cruzamento do mesmo
+     valor antigo pudesse ocorrer, o `CCR` já não aponta mais para ele.
+     Proteção existente, não precisa de código novo.
+   - **Dwell alongado/encurtado por oscilação do virabrequim durante o
+     bounce:** o watchdog de over-dwell continua vivendo em `TIM5`
+     (tempo real, independente de rotação — decisão já travada acima),
+     então mesmo que a duração real do dwell em ângulo fique imprecisa
+     durante um bounce de compressão, o limite de segurança (tempo
+     máximo com a bobina ligada) continua valendo sem depender do
+     `TIM2`. Isto não é uma proteção nova — é a mesma razão pela qual
+     `TIM5` foi mantido em vez de mover tudo para `TIM2`.
+   - **Resíduo não fechável por raciocínio, só por bancada:** a
+     *precisão* do dwell (não a segurança) durante cranking com bounce
+     real ainda precisa de validação empírica — osciloscópio no pino da
+     bobina durante partida com compressão alta. Marcar como item de
+     bancada, não de código.
 
 ## Diferença conhecida entre este fork e `hw/v1-clean-board`
 
@@ -238,10 +286,11 @@ manualmente — não é um merge direto.
 
 ## Estado: arquitetura base fechada, driver ainda não escrito
 
-Com os dois gates e a arquitetura base fechados, o próximo passo (driver SPI
-do MT6835 + `tim2_encoder_init()`) fica desbloqueado em termos de dados —
-mas ainda não foi feito, por decisão explícita de escopo. Os 3 itens listados
-em "Itens em aberto ANTES do driver" (acima) são as únicas pendências reais;
-tudo o resto (papel dos timers, PPR, key-on, dwell) está travado. Nenhuma
-mudança em `ecu_sched*.cpp` nem em `src/` até esses 3 itens fecharem ou até
-decisão explícita de prosseguir mesmo assim.
+Gates, arquitetura base e os 3 itens que ainda estavam em aberto (CH3/CH4,
+compensação de atraso, rotação reversa) estão todos fechados — os dois
+últimos por design/derivação, não por bloqueio de pesquisa; o resíduo real
+(precisão do dwell sob bounce de compressão) só se fecha em bancada, não
+em código. O próximo passo (driver SPI do MT6835 + `tim2_encoder_init()`)
+está desbloqueado tanto em dados quanto em decisão de arquitetura — ainda
+não foi feito nesta etapa, por decisão explícita de escopo, não por
+bloqueio técnico. Nenhuma mudança em `ecu_sched*.cpp` nem em `src/` ainda.
