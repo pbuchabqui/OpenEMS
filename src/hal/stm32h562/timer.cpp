@@ -283,7 +283,15 @@ void tim2_encoder_init() noexcept {
     TIM2_SMCR = TIM_SMCR_SMS_ENCODER_MODE3;
 
     TIM2_EGR = 1u;
-    TIM2_DIER = TIM_DIER_CC3IE;
+    // CC3IE fica desligado no boot (mesmo padrão do TIM5_DIER em tim5_ic_init():
+    // só o que já tem dado válido fica ligado). CCR3 não é inicializado aqui de
+    // propósito — o dispatcher (ecu_sched, ver docs/dev/mt6835_encoder_fork.md,
+    // "Dispatcher em domínio de ângulo") liga CC3IE dinamicamente ao inserir o
+    // primeiro evento na fila, e desliga quando ela esvazia — exatamente como
+    // evt_insert()/ecu_sched_evt_dispatch() já fazem para TIM5_DIER/CC3IE hoje.
+    // Sem isto, CC3IE ligado com CCR3 no valor de reset dispara um CC3 espúrio
+    // na primeira passagem por esse valor, antes de existir qualquer evento real.
+    TIM2_DIER = 0u;
 
     nvic_set_priority(IRQ_TIM2, 1u);
     nvic_enable_irq(IRQ_TIM2);
