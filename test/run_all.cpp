@@ -205,6 +205,7 @@ int main(void) {
     test_eoi_blend();
     test_ecu_sched_presync();
     test_ecu_sched_dwell_watchdog();
+    test_ecu_sched_encoder_omega();
 
     // ── QUICK CRANK ─────────────────────────────────────────────────────
     printf("\n=== QUICK CRANK ===");

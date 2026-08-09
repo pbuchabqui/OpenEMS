@@ -40,9 +40,69 @@
 
 #include <stdint.h>
 
+// ── Estimador de ω (ΔTIM2_CNT/ΔTIM5_CNT) ─────────────────────────────────
+// Sem roda dentada, não há evento de dente para estimar RPM — ω vem de duas
+// amostras consecutivas de (TIM2_CNT, TIM5_CNT), tiradas pelo heartbeat
+// TIM2_CH4 (1×/volta de cambota, hal/stm32h562/timer.cpp — ainda não
+// implementado, ver TODO abaixo). Pura aritmética, sem acesso a registo —
+// o chamador já leu os valores; por isso compila e testa-se identicamente
+// em host-test e alvo real, sem #ifdef nenhum aqui.
+//
+// Delta com sinal em TIM2 é obrigatório: o modo encoder de hardware
+// decrementa TIM2_CNT nativamente em rotação reversa (kick-back de
+// compressão no cranking) — um ω negativo transitório é dado real, não
+// erro. Delta de TIM5 (tempo) assume-se positivo dentro do intervalo entre
+// dois ticks do heartbeat (muito menor que os ~68,7 s de wrap do TIM5 a
+// qualquer RPM realista); um delta ≤0 (relógio não avançou, ou primeira
+// amostra) descarta a atualização em vez de dividir por zero ou inverter o
+// sinal.
+//
+// Fixed-point ×256 (contagens de TIM2 por tick de TIM5) para não perder
+// precisão numa razão tipicamente << 1 em ponto inteiro — mesma convenção
+// _x256 já usada no projeto (sub_frac_x256).
+
+static volatile uint32_t g_omega_prev_tim2  = 0U;
+static volatile uint32_t g_omega_prev_tim5  = 0U;
+static volatile uint8_t  g_omega_have_prev  = 0U;
+static volatile int32_t  g_omega_x256       = 0;
+static volatile uint8_t  g_omega_valid      = 0U;
+
+void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexcept
+{
+    if (g_omega_have_prev != 0U) {
+        const int32_t d_tim5 = (int32_t)(tim5_now - g_omega_prev_tim5);
+        if (d_tim5 > 0) {
+            const int32_t d_tim2 = (int32_t)(tim2_now - g_omega_prev_tim2);
+            g_omega_x256 = (int32_t)(((int64_t)d_tim2 * 256) / (int64_t)d_tim5);
+            g_omega_valid = 1U;
+        }
+        // d_tim5 <= 0: relógio não avançou (ou amostra fora de ordem) —
+        // mantém a última estimativa válida, não atualiza.
+    }
+    g_omega_prev_tim2 = tim2_now;
+    g_omega_prev_tim5 = tim5_now;
+    g_omega_have_prev = 1U;
+}
+
+int32_t ecu_sched_encoder_omega_x256(void) noexcept { return g_omega_x256; }
+uint8_t ecu_sched_encoder_omega_valid(void) noexcept { return g_omega_valid; }
+
+#if defined(EMS_HOST_TEST)
+// Chamado por ecu_sched_test_reset() (ecu_sched.cpp) — evita estado do
+// estimador vazar entre casos de teste no mesmo binário.
+void ecu_sched_encoder_omega_test_reset(void) noexcept
+{
+    g_omega_prev_tim2 = 0U;
+    g_omega_prev_tim5 = 0U;
+    g_omega_have_prev = 0U;
+    g_omega_x256 = 0;
+    g_omega_valid = 0U;
+}
+#endif
+
 namespace ems::engine::sched_internal::encoder {
 
-// Placeholder — preenchido pelas tarefas do plano (fila TIM2/CH3, rastreador
-// de fase, estimador de ω, heartbeat CH4, conversão graus→counts).
+// Placeholder — preenchido pelas tarefas seguintes do plano (fila TIM2/CH3,
+// rastreador de fase, resposta ao heartbeat CH4, conversão graus→counts).
 
 }  // namespace ems::engine::sched_internal::encoder

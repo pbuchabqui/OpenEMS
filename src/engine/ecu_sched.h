@@ -176,6 +176,22 @@ void ecu_sched_test_all_outputs_safe(void);
 
 void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 
+// ── MT6835/TIM2 encoder — domínio de ângulo (EMS_MT6835_ENCODER apenas) ──────
+// Ver docs/dev/mt6835_encoder_fork.md ("Dispatcher em domínio de ângulo") no
+// fork feat/mt6835-encoder. Sem roda dentada, não há evento de dente para
+// estimar RPM — ω vem de ΔTIM2_CNT/ΔTIM5_CNT amostrado pelo heartbeat
+// TIM2_CH4 (hal/stm32h562/timer.cpp), não de outro contexto (mantém uma
+// única cadeia de amostras consecutivas — chamar de dois sítios corrompe a
+// estimativa).
+void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexcept;
+// Estimativa corrente: contagens de TIM2 por tick de TIM5, fixed-point ×256
+// (com sinal — negativo em rotação reversa/kick-back de cranking, o modo
+// encoder de hardware decrementa TIM2_CNT nativamente). 0 se ainda não
+// houver amostra válida — checar ecu_sched_encoder_omega_valid() antes de
+// usar para conversões (dwell/PW em counts, piso de lead).
+int32_t ecu_sched_encoder_omega_x256(void) noexcept;
+uint8_t ecu_sched_encoder_omega_valid(void) noexcept;
+
 // Modo de ignição actual: 1 = sequencial (full sync + CMP confirmado),
 // 0 = wasted-spark (presync). Reflecte g_knock_sequential. Usado pela
 // observabilidade (status bit IGN_SEQUENTIAL) e pelos host tests.
@@ -184,6 +200,9 @@ uint8_t ecu_sched_presync_inj_mode(void);
 
 #if defined(EMS_HOST_TEST)
 void ecu_sched_test_reset(void);
+// Zera o estimador de ω do encoder — chamado por ecu_sched_test_reset()
+// (ecu_sched_angle_encoder.cpp), evita estado a vazar entre testes.
+void ecu_sched_encoder_omega_test_reset(void) noexcept;
 uint8_t ecu_sched_test_angle_table_size(void);
 uint8_t ecu_sched_test_get_angle_event(uint8_t index,
                                        uint8_t *tooth,

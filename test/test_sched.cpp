@@ -640,6 +640,48 @@ void test_ecu_sched_dwell_watchdog(void) {
 }
 
 // ============================================================================
+// MT6835/TIM2 ENCODER — estimador de ω (ecu_sched_angle_encoder.cpp)
+// ============================================================================
+
+void test_ecu_sched_encoder_omega(void) {
+    section("ecu_sched: encoder omega estimator");
+    ecu_sched_test_reset();
+
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "invalid before first sample");
+    CHECK_EQ(ecu_sched_encoder_omega_x256(), 0, "x256=0 before first sample");
+
+    // First sample only seeds prev — still no rate to compute.
+    ecu_sched_encoder_omega_sample(1000u, 1000u);
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "invalid after single sample");
+
+    // d_tim2=1000, d_tim5=1000 -> ω=1.0 exact -> x256=256.
+    ecu_sched_encoder_omega_sample(2000u, 2000u);
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 1u, "valid after second sample");
+    CHECK_EQ(ecu_sched_encoder_omega_x256(), 256, "omega=1.0 -> x256=256");
+
+    // d_tim2=500, d_tim5=1000 -> ω=0.5 -> x256=128.
+    ecu_sched_encoder_omega_sample(2500u, 3000u);
+    CHECK_EQ(ecu_sched_encoder_omega_x256(), 128, "omega=0.5 -> x256=128");
+
+    // Reverse rotation (kick-back): TIM2 decrements, TIM5 keeps advancing —
+    // sign must survive, not be clamped to zero/positive.
+    ecu_sched_encoder_omega_sample(2300u, 4000u);
+    CHECK_EQ(ecu_sched_encoder_omega_x256(), -51,
+             "reverse rotation: negative x256 (d_tim2=-200/d_tim5=1000)");
+
+    // d_tim5<=0 (stale/out-of-order sample): estimate must hold, not update
+    // (division-by-zero / sign-inversion guard).
+    const int32_t before = ecu_sched_encoder_omega_x256();
+    ecu_sched_encoder_omega_sample(9999u, 4000u);  // same tim5_now as previous
+    CHECK_EQ(ecu_sched_encoder_omega_x256(), before,
+             "d_tim5<=0: estimate unchanged, no divide-by-zero");
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 1u, "still valid after stale sample");
+
+    ecu_sched_test_reset();
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "test_reset() clears omega state");
+}
+
+// ============================================================================
 // QUICK CRANK
 // ============================================================================
 
