@@ -756,10 +756,18 @@ estar correcta antes de calibrar a fase sobre ela.
    actual é um artefacto do bring-up da roda dentada (osciloscópio no dente 0);
    para o encoder é relógio comparador + leitura de `TIM2_CNT`, não osciloscópio
    (nota já em `engine_config.h`).
-7. Só depois de 1-6: ligar o TODO em `ecu_sched_encoder_heartbeat_tick()`
-   (`ecu_sched_angle_encoder.cpp:436-438` à data desta nota) para chamar
-   `ecu_sched_encoder_phase_set_anchor()` com a fase calibrada, e mudar
-   `EMS_MT6835_CMP_PHASE_CALIBRATED` de `0` para `1` — nunca ao contrário.
+7. **Actualizado (2026-08-10, pós Parte 1 do plano de sync-state)**: o TODO que
+   este passo mandava ligar já está ligado — `ecu_sched_encoder_heartbeat_tick()`
+   (`ecu_sched_angle_encoder.cpp:499-503`) já chama
+   `ecu_sched_encoder_phase_set_anchor(cmp_angle, EMS_MT6835_CMP_PHASE_VALUE)`
+   automaticamente a cada flanco de CMP aceite (validado por
+   `drv/encoder_sync.cpp`, também da mesma etapa), sempre que
+   `EMS_MT6835_CMP_PHASE_CALIBRATED==1`. Não sobra código para escrever — só
+   dois `#define` em `hal/board_pinout.h`: `EMS_MT6835_CMP_PHASE_VALUE` com o
+   valor `ECU_PHASE_A`/`ECU_PHASE_B` medido nos passos 1-6, e só depois
+   `EMS_MT6835_CMP_PHASE_CALIBRATED` de `0` para `1` — nunca ao contrário
+   (a ordem importa: mudar `CALIBRATED` antes de `VALUE` estar correcto faria
+   o motor disparar sequencial sobre uma fase adivinhada).
 
 ### 2. Bring-up do hardware MT6835 real (`MT6835_HW_PRESENT=1`)
 
