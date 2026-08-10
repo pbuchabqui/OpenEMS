@@ -292,6 +292,8 @@ int main(void) {
     test_ckp_snap_fields();
     test_ckp_tooth_index_progression();
     test_ckp_phase_toggle();
+    test_encoder_sync_cmp_edge();
+    test_encoder_sync_staleness();
 
     // ── UI PROTOCOL / TUNERSTUDIO ENVELOPE ────────────────────────────────
     printf("\n=== UI PROTOCOL / TS ENVELOPE ===");

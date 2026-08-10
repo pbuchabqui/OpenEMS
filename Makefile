@@ -84,7 +84,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/misfire_detect.cpp \
              $(SRC_DIR)/engine/ewg_control.cpp
 
-DRV_SRC = $(SRC_DIR)/drv/ckp.cpp $(SRC_DIR)/drv/sensors.cpp
+DRV_SRC = $(SRC_DIR)/drv/ckp.cpp $(SRC_DIR)/drv/sensors.cpp $(SRC_DIR)/drv/encoder_sync.cpp
 APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp \
           $(SRC_DIR)/app/ui_protocol_state.cpp \
           $(SRC_DIR)/app/ui_protocol_pages.cpp \
@@ -121,6 +121,7 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_torque.cpp \
            $(TEST_DIR)/test_spark_skip.cpp \
                    $(TEST_DIR)/test_ckp.cpp \
+                   $(TEST_DIR)/test_encoder_sync.cpp \
                    $(TEST_DIR)/test_sensors.cpp \
                    $(TEST_DIR)/test_fuel.cpp \
                    $(TEST_DIR)/test_ign.cpp \

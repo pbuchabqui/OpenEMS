@@ -185,6 +185,8 @@ void test_ckp_prime_on_tooth(void);
 void test_ckp_snap_fields(void);
 void test_ckp_tooth_index_progression(void);
 void test_ckp_phase_toggle(void);
+void test_encoder_sync_cmp_edge(void);
+void test_encoder_sync_staleness(void);
 void test_crc32_vectors(void);
 void test_legacy_protocol_regression(void);
 void test_ts_envelope_basic(void);
