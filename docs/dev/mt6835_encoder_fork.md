@@ -719,3 +719,108 @@ Herdado do plano original, nada disto mudou nesta implementação:
 - Validação em bancada do item "watchdog de dwell como proteção primária"
   (seção 9 do plano) — motor parado a meio de um dwell, `TIM2` congela com
   o motor, só o watchdog `TIM5` desliga a bobina.
+
+## Procedimento de bancada — quando o hardware MT6835 estiver disponível (2026-08-09)
+
+Nenhum destes quatro itens foi executado — este é o roteiro para quando houver um
+MT6835 real ligado à placa. Ordem de dependência: 2 antes de 1 (precisa de posição
+absoluta a funcionar antes de calibrar fase), 3 pode correr assim que 2 estiver
+validado (não depende da fase calibrada), 4 depende de 1 e de RPM real de bancada.
+
+### 1. Medir a constante de fase do CMP (`EMS_MT6835_CMP_PHASE_CALIBRATED`)
+
+Pré-requisito: item 2 (bring-up) concluído — posição absoluta (`TIM2_CNT`) tem de
+estar correcta antes de calibrar a fase sobre ela.
+
+1. Colocar o cilindro 1 no PMS de compressão usando uma referência mecânica
+   (relógio comparador/roda de graus — mesmo método já usado para calibrar
+   `trigger_tooth0_engine_deg` na roda dentada, ver `engine_config.h`).
+2. Nessa posição exacta, ler `TIM2->CNT` (via comando de debug/UART — se não
+   existir ainda um que exponha o valor cru, é o primeiro passo de código deste
+   item) e registar como `origin_raw`.
+3. Rodar o motor (à mão, ou arranque lento) por pelo menos 2 voltas de cambota
+   completas (1 volta de came = 1 ciclo do CMP), capturando `cmp_angle_snapshot()`
+   a cada flanco aceite (leitura debug/UART, ou osciloscópio em PC6 correlacionado
+   manualmente com `TIM2_CNT`).
+4. O CMP é um lóbulo Hall por volta de came (720° de cambota) — há exactamente um
+   flanco aceite por 32768 counts de `TIM2`. Determinar qual flanco corresponde ao
+   PMS de compressão do cilindro 1 vs. o de escape — i.e., o ângulo do flanco
+   aceite (mod 32768, referenciado a `origin_raw`) é consistente com `ECU_PHASE_A`
+   (0-360°) ou `ECU_PHASE_B` (360-720°), pela convenção física já usada pelo
+   caminho roda-dentada (a numeração de cilindros nas tabelas de combustível/
+   ignição assume essa mesma convenção — não inventar uma nova).
+5. Registar a fase calibrada e o resíduo (`cmp_angle_raw − origin_raw mod 16384`)
+   necessários para `ecu_sched_encoder_phase_set_anchor(cmp_angle, <fase
+   calibrada>)`.
+6. Re-medir `trigger_tooth0_engine_deg` para a montagem do encoder — o valor
+   actual é um artefacto do bring-up da roda dentada (osciloscópio no dente 0);
+   para o encoder é relógio comparador + leitura de `TIM2_CNT`, não osciloscópio
+   (nota já em `engine_config.h`).
+7. Só depois de 1-6: ligar o TODO em `ecu_sched_encoder_heartbeat_tick()`
+   (`ecu_sched_angle_encoder.cpp:436-438` à data desta nota) para chamar
+   `ecu_sched_encoder_phase_set_anchor()` com a fase calibrada, e mudar
+   `EMS_MT6835_CMP_PHASE_CALIBRATED` de `0` para `1` — nunca ao contrário.
+
+### 2. Bring-up do hardware MT6835 real (`MT6835_HW_PRESENT=1`)
+
+1. Confirmar ligação SPI2 (SCK/MISO/MOSI, simplificado após a remoção do TLE8888)
+   e `CS=PC13` (placeholder no código — confirmar o pino final contra a placa/
+   interface real assim que existir).
+2. Ligar a placa e confirmar que **não** entra em boot-loop (histórico conhecido
+   deste projecto: um bus-stall de ADC já causou boot-loop de 8s por endereços
+   errados — o mesmo tipo de falha é possível aqui se o SPI2 travar o barramento).
+3. Com `MT6835_HW_PRESENT=1` e `EMS_MT6835_ENCODER=1`: verificar a comunicação
+   SPI — ler o registo de estado/ID do chip, confirmar que os checks CRC8
+   (`crc8()`, já implementado) passam. Usar debug/UART ou osciloscópio nas linhas
+   SPI para a primeira verificação.
+4. Confirmar que `mt6835_init()` popula um `angle21` plausível e que `TIM2_CNT`
+   fica pré-carregado corretamente a partir dele.
+5. Rodar a cambota exactamente 1 volta completa (roda de graus/marca de
+   distribuição) e confirmar: `TIM2_CNT` avança ≈16384 counts (±quantização),
+   e o sentido é o esperado (crescente na direcção real de rotação — verificar
+   contra o mapeamento de canais A/B de `tim2_encoder_init()`, PA0/PA1).
+6. Confirmar que `mt6835_ok()`/`mt6835_last_status()` reportam saudável (força de
+   campo, sem falhas) em operação normal — estas são as entradas de que o gap 5
+   do plano de sync (`LOSS_OF_SYNC`) vai depender.
+7. Vigiar a classe de falha já vista neste projecto: entradas flutuantes/ruidosas
+   a produzir estado falso-positivo — osciloscópio em PA0/PA1 e nas linhas SPI no
+   primeiro power-up.
+
+### 3. Validar o watchdog de dwell como proteção primária
+
+Não depende da fase calibrada (item 1) — pode correr logo após o item 2.
+
+1. Motor a girar lentamente (à mão ou estimulador de baixo RPM),
+   `EMS_MT6835_ENCODER=1` (presync já arma dwell mesmo sem fase calibrada).
+2. Iniciar um dwell normalmente e, a meio, parar a rotação do motor de forma
+   abrupta — `TIM2` congela (única fonte de avanço do `SPARK` é ângulo).
+3. Confirmar: o watchdog de dwell (`ecu_sched_dwell_watchdog()`, `TIM5`-based,
+   continua vivo via `tim5_freerun_init()`) desliga o pino da bobina dentro do
+   prazo esperado (~1,4× `dwell_ticks` configurado) — sem esperar por um `SPARK`
+   que nunca vai chegar.
+4. Repetir em pelo menos 3 pontos de paragem dentro do dwell (10%, 50%, 90% do
+   tempo) e em pelo menos 2 RPMs de partida diferentes.
+5. Critério de aceitação: bobina sempre desligada dentro da janela do watchdog,
+   sem sobreaquecimento, comportamento determinístico e repetível — mesma
+   disciplina já usada em `[[ckp-cmp-scope-diag]]`.
+
+### 4. Aplicar a compensação de atraso de propagação do sensor
+
+Depende de RPM real de bancada para validar — não faz sentido medir contra uma
+simulação. Fórmula já fechada no plano original:
+
+```
+target_compensado = target_desejado − round(RPM × 6 × 10e-6 × 16384 / 360)
+```
+
+1. Onde aplicar: dentro de `engine_deg_to_absolute()`
+   (`ecu_sched_angle_encoder.cpp`) antes de converter para counts absolutos, ou
+   como ajuste final ao alvo antes de `arm_channel()` — decisão de implementação,
+   não de bancada.
+2. RPM já disponível via `ecu_sched_encoder_omega_x65536()` — converter para RPM
+   pela mesma via que outros pontos do código já derivam `rpm_x10`.
+3. **Ordem recomendada**: validar o dispatcher básico em bancada primeiro
+   **sem** esta compensação (mais fácil de depurar sem uma correcção adicional a
+   interferir) — só depois medir o efeito real com osciloscópio (comparar timing
+   do `SPARK` real vs. alvo, antes/depois de aplicar a fórmula) e confirmar que
+   reduz o erro em vez de introduzir um novo.
