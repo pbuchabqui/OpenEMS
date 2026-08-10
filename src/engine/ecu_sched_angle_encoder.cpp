@@ -689,6 +689,17 @@ void recompute_presync(uint32_t now_raw) noexcept
     const uint32_t eoi_target    = engine_deg_to_absolute(eoi_deg, now_raw);
     const uint32_t inj_on_target = eoi_target - inj_pw_span;
 
+    // Os 4 canais de ignição armam no MESMO dwell_target/spark_target — não
+    // há disparo sequencial por cilindro aqui, nem em nenhum outro caminho
+    // deste dispatcher (recompute_presync() é o único construtor de disparo
+    // em modo encoder; quando a fase fica válida, o heartbeat só pára de o
+    // chamar — não existe ainda um construtor sequencial para o substituir,
+    // ver docs/dev/mt6835_encoder_fork.md, "Fora de escopo"). Por isso
+    // g_knock_sequential (ecu_sched.cpp/ecu_sched_angle.cpp) NUNCA é tocado
+    // aqui: não há cilindro único identificável a que atribuir uma janela de
+    // knock — ligar essa flag seria incorrecto (UI reportaria "sequencial"
+    // quando não é), não uma correcção. Windowing de knock em modo encoder
+    // fica dependente dessa tarefa futura de disparo sequencial real.
     for (uint8_t i = 0U; i < 4U; ++i) {
         ecu_sched_encoder_arm_channel(kIgnCh[i], dwell_target, ECU_ACT_DWELL_START);
         ecu_sched_encoder_arm_channel(kIgnCh[i], spark_target, ECU_ACT_SPARK);
