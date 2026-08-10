@@ -27,6 +27,7 @@
 #include "engine/transient_fuel.h"
 #include "engine/map_estimator.h"
 #include "engine/misfire_detect.h"
+#include "engine/misfire_encoder.h"
 #include "engine/diagnostic_manager.h"
 #include "engine/xtau_autocalib.h"
 #include "engine/output_test.h"
@@ -1118,6 +1119,33 @@ void test_ecu_sched_encoder_heartbeat_subtick_cadence(void) {
     }
     CHECK_EQ(ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(), 2u,
              "2º ciclo de 64: caminho pesado corre de novo exactamente 1×");
+
+    ecu_sched_test_reset();
+}
+
+// Prova a LIGAÇÃO (não a lógica — essa está coberta em detalhe em
+// test_misfire_encoder.cpp): heartbeat_subtick() alimenta mesmo
+// misfire_encoder_on_sample(), não só chama o caminho pesado. Mesma
+// sequência numérica de test_misfire_encoder_threshold_debounce_and_inertness
+// (1 ciclo lento só, o suficiente para confirmar a ligação), mas conduzida
+// através de ecu_sched_encoder_heartbeat_subtick() em vez de chamar
+// misfire_encoder_on_sample() directamente.
+void test_ecu_sched_encoder_heartbeat_subtick_feeds_misfire(void) {
+    section("ecu_sched: heartbeat_subtick alimenta misfire_encoder (wiring)");
+    ecu_sched_test_reset();
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    misfire_encoder_init();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+
+    ecu_sched_encoder_heartbeat_subtick(15360u, 0u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_subtick(15616u, 1000u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_subtick(15872u, 2000u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_subtick(16128u, 3000u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_subtick(32768u, 4200u, 0u, 0u);  // entra cyl0, Δ=1200 (lento)
+    ecu_sched_encoder_heartbeat_subtick(35840u, 5200u, 0u, 0u);  // sai → avalia
+
+    CHECK_EQ(misfire_encoder_test_get_debounce(0u), 1u,
+             "heartbeat_subtick alimenta misfire_encoder_on_sample via wiring real");
 
     ecu_sched_test_reset();
 }

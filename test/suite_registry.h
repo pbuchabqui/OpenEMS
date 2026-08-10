@@ -148,6 +148,7 @@ void test_ecu_sched_encoder_heartbeat(void);
 void test_ecu_sched_encoder_heartbeat_cmp_tracking(void);
 void test_ecu_sched_encoder_heartbeat_publish_snapshot(void);
 void test_ecu_sched_encoder_heartbeat_subtick_cadence(void);
+void test_ecu_sched_encoder_heartbeat_subtick_feeds_misfire(void);
 void test_ecu_sched_encoder_min_lead(void);
 void test_ecu_sched_encoder_conversion(void);
 void test_ecu_sched_encoder_recompute_presync(void);

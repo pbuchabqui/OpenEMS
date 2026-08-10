@@ -43,6 +43,7 @@
 #include "hal/board_pinout.h"
 #include "drv/ckp.h"
 #include "drv/encoder_sync.h"
+#include "engine/misfire_encoder.h"
 #include "drv/sensors.h"
 #if !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
@@ -552,20 +553,23 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
 }
 
 // Sub-tick do heartbeat — chamado a CADA CC4IF (256 counts, ~64×/volta),
-// não só 1×/volta como ecu_sched_encoder_heartbeat_tick() acima. Só o
-// caminho pesado (ω, CMP, staleness, recompute_presync, publish) continua
-// 1×/volta, chamado daqui a cada 64º sub-tick — cadência total idêntica à
-// de antes desta tarefa (16384 counts), agora composta de 64 passos em vez
-// de 1. Tarefa isolada de propósito: o caminho leve fica vazio aqui (TODO:
-// ligar misfire_encoder_on_sample(), tarefa seguinte) — primeiro prova-se
-// que o split de cadência em si não altera nada no caminho pesado (ver
-// testes test_ecu_sched_encoder_heartbeat_subtick_cadence e os 3 testes
-// pré-existentes test_ecu_sched_encoder_heartbeat*, que continuam a passar
-// bit-a-bit chamando ecu_sched_encoder_heartbeat_tick() directamente).
+// não só 1×/volta como ecu_sched_encoder_heartbeat_tick() acima. Caminho
+// leve (misfire_encoder_on_sample(), sempre — precisa da cadência fina;
+// uma janela de cilindro de 62° só tem ~11 sub-ticks de resolução
+// angular) roda em CADA chamada. Caminho pesado (ω, CMP, staleness,
+// recompute_presync, publish) continua 1×/volta, chamado daqui a cada 64º
+// sub-tick — cadência total idêntica à de antes desta tarefa (16384
+// counts), agora composta de 64 passos em vez de 1 (ver
+// test_ecu_sched_encoder_heartbeat_subtick_cadence, que prova isto
+// isoladamente, e os 3 testes pré-existentes test_ecu_sched_encoder_heartbeat*,
+// que continuam a passar bit-a-bit chamando ecu_sched_encoder_heartbeat_tick()
+// directamente).
 void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
                                          uint32_t cmp_angle,
                                          uint32_t cmp_edge_count) noexcept
 {
+    ems::engine::misfire_encoder_on_sample(tim2_now, tim5_now);
+
     ++g_hb_subtick_count;
     if (g_hb_subtick_count >= 64U) {
         g_hb_subtick_count = 0U;
