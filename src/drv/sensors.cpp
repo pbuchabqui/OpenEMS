@@ -18,6 +18,7 @@
 
 #include "engine/calibration.h"
 #include "engine/map_window.h"
+#include "engine/ecu_sched.h"
 
 namespace {
 
@@ -696,6 +697,25 @@ void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
             g_fast_sample_accum - kRealTeethPerRev);
         sample_fast_channels();
     }
+}
+
+void sensors_sample_fast_channels_encoder(uint32_t rpm_x10) noexcept {
+    g_last_rpm_x10 = rpm_x10;  // cache p/ check de plausibilidade MAP×TPS
+    sample_fast_channels();
+}
+
+void sensors_map_window_poll_encoder(uint32_t tim2_now) noexcept {
+    if (ems::engine::map_window_enable == 0u ||
+        ems::hal::adc_is_recovering() || ems::hal::adc_recovery_failed()) {
+        return;
+    }
+    // tooth_index e phase_A vêm AMBOS de tim2_now — ver aviso em sensors.h.
+    CkpSnapshot snap = ckp_snapshot();
+    snap.tooth_index = static_cast<uint16_t>((tim2_now % 16384u) * 60u / 16384u);
+    snap.phase_A = (ecu_sched_encoder_phase_at(tim2_now) == ECU_PHASE_A);
+    const uint16_t raw =
+        ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAP);
+    ems::engine::map_window_on_tooth(snap, map_raw_to_bar_x1000(raw));
 }
 
 void sensors_tick_50ms() noexcept {

@@ -111,6 +111,8 @@ void test_ckp_seed_confirmed(void);
 void test_ckp_seed_rejected(void);
 void test_ckp_cmp_glitch_count(void);
 void test_sensors_on_tooth(void);
+void test_sensors_sample_fast_channels_encoder(void);
+void test_sensors_map_window_poll_encoder(void);
 void test_sensors_tick_50ms(void);
 void test_sensors_set_range(void);
 void test_sensors_etb_harness_present(void);

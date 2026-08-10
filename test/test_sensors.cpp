@@ -130,6 +130,96 @@ void test_sensors_on_tooth(void) {
     CHECK_TRUE(true, "sensors_on_tooth completes without crash");
 }
 
+void test_sensors_sample_fast_channels_encoder(void) {
+    section("sensors: sensors_sample_fast_channels_encoder (fork MT6835/TIM2)");
+    using ems::hal::AdcPrimaryChannel;
+    sensor_setup(); sensors_init();
+
+    // raw=1365 → map_raw_to_bar_x1000 = 1365×3000/4095 = 1000 (1 bar exacto).
+    ems::hal::adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 1365u);
+    // g_map_filt parte de 0 e converge por IIR α=0.3/chamada — (0.7)^20≈0.0008,
+    // 20 chamadas é suficiente p/ convergir dentro de poucas unidades.
+    for (int i = 0; i < 20; ++i) {
+        ems::drv::sensors_sample_fast_channels_encoder(3000u);
+    }
+    const SensorData sd = sensors_get();
+    CHECK_TRUE(sd.map_bar_x1000 > 900u && sd.map_bar_x1000 < 1100u,
+               "MAP convirgiu para ~1000 (1 bar) via caminho encoder, sem hook de dente");
+
+    // Sem chamar a função nenhuma, sensors_get() nunca se moveria deste
+    // valor — muda o raw e confirma que o wrapper continua vivo.
+    ems::hal::adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 2730u);  // → 2000 (2 bar)
+    for (int i = 0; i < 20; ++i) {
+        ems::drv::sensors_sample_fast_channels_encoder(3000u);
+    }
+    const SensorData sd2 = sensors_get();
+    CHECK_TRUE(sd2.map_bar_x1000 > 1900u && sd2.map_bar_x1000 < 2100u,
+               "MAP acompanha um novo raw ADC (2 bar) — caminho continua vivo");
+}
+
+void test_sensors_map_window_poll_encoder(void) {
+    section("sensors: sensors_map_window_poll_encoder — fronteira de volta TIM2 (fork MT6835/TIM2)");
+    using namespace ems::engine;
+    using ems::drv::CkpSnapshot;
+    using ems::hal::AdcPrimaryChannel;
+
+    sensor_setup(); sensors_init();
+    map_window_reset();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+
+    CkpSnapshot base{};
+    base.state = SyncState::FULL_SYNC;
+    base.cmp_confirms = 2u;
+    ems::drv::ckp_publish_encoder_snapshot(base);
+
+    // Desligado (default): no-op, mesmo com FULL_SYNC seeded acima.
+    map_window_enable = 0u;
+    ems::hal::adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 1365u);
+    ems::drv::sensors_map_window_poll_encoder(4096u);
+    CHECK_EQ(map_window_cycles(), 0u, "enable=0: nenhum ciclo");
+
+    map_window_enable   = 1u;
+    map_window_open_deg = 0u;
+    map_window_len_deg  = 90u;
+
+    // Início de cada quadrante de 180° do ciclo de 720° (deg=0/180/360/540,
+    // off=0 dentro da sub-janela de acumulação de 90° — map_window_on_tooth
+    // só acumula em off<map_window_len_deg, a segunda metade de cada slot de
+    // 180° é "morta" por desenho) — tooth_index inteiro exacto (0/30/0/30) e
+    // phase_A/B correctos via ecu_sched_encoder_phase_at(tim2_now), tudo
+    // derivado da MESMA leitura tim2_now dentro de
+    // sensors_map_window_poll_encoder(). Quad2/quad3 (deg 360-719) só
+    // existem depois da fronteira de volta do TIM2 (tim2_now≥16384, revs
+    // ímpar) — se tooth_index vivo se combinasse com um phase_A congelado
+    // (o bug que motivou este desenho), quad2 seria mal-atribuído a
+    // quad0/quad1. Ver docs/dev/mt6835_encoder_fork.md, Parte 3b.
+    constexpr uint32_t kTim2Quad[4] = {0u, 8192u, 16384u, 24576u};
+    constexpr uint16_t kRawQuad[4]  = {1365u, 2730u, 1365u, 4095u};  // →1000/2000/1000/3000
+    constexpr uint16_t kBarQuad[4]  = {1000u, 2000u, 1000u, 3000u};
+
+    for (uint8_t cycle = 0u; cycle < 2u; ++cycle) {
+        for (uint8_t q = 0u; q < 4u; ++q) {
+            ems::hal::adc_test_set_raw_primary(AdcPrimaryChannel::MAP, kRawQuad[q]);
+            for (uint8_t rep = 0u; rep < 2u; ++rep) {
+                ems::drv::sensors_map_window_poll_encoder(kTim2Quad[q]);
+            }
+        }
+    }
+    // Fecha a última janela (quad3) ainda aberta, avançando p/ o quad0 seguinte.
+    ems::hal::adc_test_set_raw_primary(AdcPrimaryChannel::MAP, kRawQuad[0]);
+    ems::drv::sensors_map_window_poll_encoder(kTim2Quad[0]);
+
+    CHECK_EQ(map_window_cycles(), 2u, "2 ciclos completos (4 janelas cada)");
+    CHECK_EQ(map_window_slot_bar_x1000(0u), kBarQuad[0], "slot 0 (quad0, phase_A) = 1000");
+    CHECK_EQ(map_window_slot_bar_x1000(1u), kBarQuad[1], "slot 1 (quad1, phase_A) = 2000");
+    CHECK_EQ(map_window_slot_bar_x1000(2u), kBarQuad[2],
+             "slot 2 (quad2, cruza a fronteira de volta A→B) = 1000 — tooth_index/phase_A coerentes");
+    CHECK_EQ(map_window_slot_bar_x1000(3u), kBarQuad[3], "slot 3 (quad3, phase_B) = 3000");
+
+    map_window_enable = 0u;  // isolamento entre testes
+    map_window_reset();
+}
+
 void test_map_window_angular(void) {
     section("map_window: janela angular por cilindro + balance");
     using ems::engine::map_window_on_tooth;

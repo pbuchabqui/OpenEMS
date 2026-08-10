@@ -53,6 +53,17 @@ enum class AdcSecondaryChannel : uint8_t {
 void     adc_init() noexcept;
 void     adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept;
 
+/**
+ * @brief Fork MT6835/TIM2 (modo encoder): arranca TIM6 em modo periódico
+ *        (não one-pulse) — sem CKP físico, adc_trigger_on_tooth() nunca é
+ *        chamada, então TIM6 ficaria para sempre parado (CR1=OPM sem CEN,
+ *        ver adc_init()) e ADC1/ADC2 nunca converteriam apesar do
+ *        DMA/ADSTART já armados. Chamar uma única vez, depois de adc_init(),
+ *        no ramo EMS_MT6835_ENCODER — nunca junto de adc_trigger_on_tooth()
+ *        (mutuamente exclusivos, mesmo TIM6_CR1).
+ */
+void     adc_start_free_running_encoder() noexcept;
+
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept;
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept;
 
@@ -70,6 +81,7 @@ void     adc_test_set_recovering(bool recovering) noexcept;
 void     adc_test_set_recovery_failed(bool failed) noexcept;
 void     adc_test_set_timeout_count(uint32_t count) noexcept;
 void     adc_test_set_recovery_retries(uint32_t retries) noexcept;
+uint32_t adc_test_free_running_started_count() noexcept;
 #endif
 
 }  // namespace ems::hal

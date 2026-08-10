@@ -680,6 +680,12 @@ void test_hal_adc_all(void) {
     adc_test_set_recovery_retries(7u);
     CHECK_EQ(adc_get_recovery_retries(), 7u, "get_recovery_retries=7");
     adc_test_set_recovery_retries(0u);
+
+    section("hal/adc: adc_start_free_running_encoder (fork MT6835/TIM2, Parte 3a)");
+    const uint32_t before = adc_test_free_running_started_count();
+    adc_start_free_running_encoder();
+    CHECK_EQ(adc_test_free_running_started_count(), before + 1u,
+             "chamada regista arranque do TIM6 livre-corrente");
 }
 
 // ============================================================================

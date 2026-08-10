@@ -166,6 +166,8 @@ int main(void) {
     // ── Sensors — Segunda Fase ───────────────────────────────────────────────
     printf("\n=== SENSORS (fase 2) ===");
     test_sensors_on_tooth();
+    test_sensors_sample_fast_channels_encoder();
+    test_sensors_map_window_poll_encoder();
     test_map_window_angular();
     test_sensors_tick_50ms();
     test_sensors_set_range();

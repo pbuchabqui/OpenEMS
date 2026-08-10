@@ -507,6 +507,13 @@ static void openems_init() noexcept {
 
     // 3) ADC (ADC1/ADC2 + TIM6 trigger)
     ems::hal::adc_init();
+#if EMS_MT6835_ENCODER
+    // Sem CKP físico, adc_trigger_on_tooth() nunca é chamada (só existe hook
+    // de sensors_on_tooth() no caminho CKP) — TIM6 ficaria parado para
+    // sempre e o ADC nunca converteria. Arranca-o livre-corrente uma única
+    // vez (docs/dev/mt6835_encoder_fork.md, Parte 3a).
+    ems::hal::adc_start_free_running_encoder();
+#endif
     iwdg_kick();
 
     // 4) CAN + bench communication. MVP transport: USART1 PA9/PA10.
@@ -754,6 +761,17 @@ int main() {
             // Dwell / injector open watchdogs (lost SPARK / lost INJ_OFF).
             ecu_sched_dwell_watchdog();
             ecu_sched_inj_watchdog();
+
+#if EMS_MT6835_ENCODER
+            // Sem hook por-dente disponível: refresca MAP/TPS/MAF/knock
+            // (filtro + fault-check) e a janela MAP angular ANTES do
+            // sensors_get() abaixo, para que este ciclo de 2 ms já veja
+            // valores frescos em vez de ficar 1 iteração atrasado
+            // (docs/dev/mt6835_encoder_fork.md, Parte 3a/3b).
+            ems::drv::sensors_sample_fast_channels_encoder(
+                ems::drv::ckp_snapshot().rpm_x10);
+            ems::drv::sensors_map_window_poll_encoder(ems::hal::tim2_encoder_count());
+#endif
 
             const auto snap    = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();

@@ -65,6 +65,32 @@ struct SensorRange {
 
 void sensors_init() noexcept;
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept;
+
+/**
+ * @brief Fork MT6835/TIM2 (modo encoder): equivalente à metade "canais
+ *        rápidos" de sensors_on_tooth() (MAP/MAF/TPS/knock — filtro IIR,
+ *        fault-check, plausibilidade, commit no snapshot público), exposto
+ *        para ser chamado do slot de 2 ms do loop principal em vez de 12×/rev
+ *        via hook de dente (que não existe em modo encoder). NÃO dispara o
+ *        ADC (isso é hardware puro — ver TIM6 free-running em hal/adc.h) nem
+ *        toca map_window (chamada separada, mesmo slot). Actualiza o RPM
+ *        cacheado usado pelo check de plausibilidade MAP×TPS — sem isto
+ *        ficaria congelado em 0 (sensors_on_tooth nunca corre neste modo).
+ */
+void sensors_sample_fast_channels_encoder(uint32_t rpm_x10) noexcept;
+
+/**
+ * @brief Fork MT6835/TIM2 (modo encoder): equivalente ao bloco map_window de
+ *        sensors_on_tooth() (leitura MAP crua + map_window_on_tooth()),
+ *        exposto para o mesmo slot de 2 ms. Recebe só `tim2_now` (posição
+ *        viva) e deriva tooth_index/phase_A internamente AMBOS da mesma
+ *        leitura — nunca combinar um tooth_index vivo com o phase_A
+ *        congelado do heartbeat (1×/volta): produziria um erro de 360°
+ *        exactamente na fronteira de cada volta. state/cmp_confirms vêm de
+ *        ckp_snapshot() (heartbeat) sem alteração — granularidade grosseira
+ *        é aceitável para esses dois campos.
+ */
+void sensors_map_window_poll_encoder(uint32_t tim2_now) noexcept;
 void sensors_tick_50ms() noexcept;
 void sensors_tick_100ms() noexcept;
 void sensors_maf_freq_capture_isr(uint16_t period_ticks) noexcept;

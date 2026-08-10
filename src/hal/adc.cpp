@@ -375,6 +375,25 @@ void adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept {
     }
 }
 
+void adc_start_free_running_encoder() noexcept {
+    // Período: 100 µs (10 kHz). TIM6 é timer básico de 16 bit; com PSC=0 @
+    // kTimClockHz o período mínimo é ~1.05 ms (ARR=0xFFFF) — não há chão
+    // real aqui, a escolha é sobre até que ponto vale a pena ir. 10 kHz dá
+    // ~8% de duty face à sequência ADC1 de 8 canais (~8 µs @ 47.5+12.5
+    // ciclos/canal, 62.5 MHz ADC clock) — margem confortável, com OVRMOD=1
+    // (já configurado em adc_init()) a cobrir qualquer overrun residual.
+    // Cobre o canal KNOCK (SQ2 da sequência ADC1) até ~10000 RPM-equivalente
+    // de taxa de dente — acima do rev-limit default (7000 RPM ⇒ ~7 kHz no
+    // caminho por-dente; ver knock-adc-tooth-rate-nyquist na memória do
+    // projecto). Sem isto o caminho encoder amostraria knock a taxa fixa
+    // mais baixa que o caminho CKP (nunca substituído por este fork) usa.
+    TIM6_CR1 = 0u;
+    TIM6_ARR = (kTimClockHz / 10000u) - 1u;  // 6249 → 6250 counts = 100 µs
+    TIM6_EGR = 1u;
+    TIM6_SR  = 0u;
+    TIM6_CR1 = TIM_CR1_URS | TIM_CR1_CEN;  // periódico (sem OPM) — livre-corrente
+}
+
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept {
     const uint8_t idx = static_cast<uint8_t>(ch);
     if (idx >= 8u) { return 0u; }
@@ -487,8 +506,11 @@ static bool g_adc_recovery_failed_mock = false;
 static uint32_t g_adc_timeout_count_mock = 0u;
 static uint32_t g_adc_recovery_retries_mock = 0u;
 
+static uint32_t g_free_running_started_count = 0u;
+
 void     adc_init() noexcept {}
 void     adc_trigger_on_tooth(uint32_t t) noexcept { g_last_trigger_mod = t; }
+void     adc_start_free_running_encoder() noexcept { ++g_free_running_started_count; }
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept { return g_adc_primary[static_cast<uint8_t>(ch)]; }
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept { return g_adc_secondary[static_cast<uint8_t>(ch)]; }
 void adc_test_set_raw_primary(AdcPrimaryChannel ch, uint16_t v) noexcept { g_adc_primary[static_cast<uint8_t>(ch)] = v; }
@@ -506,6 +528,7 @@ void adc_test_set_recovering(bool recovering) noexcept { g_adc_recovering_mock =
 void adc_test_set_recovery_failed(bool failed) noexcept { g_adc_recovery_failed_mock = failed; }
 void adc_test_set_timeout_count(uint32_t count) noexcept { g_adc_timeout_count_mock = count; }
 void adc_test_set_recovery_retries(uint32_t retries) noexcept { g_adc_recovery_retries_mock = retries; }
+uint32_t adc_test_free_running_started_count() noexcept { return g_free_running_started_count; }
 
 } // namespace ems::hal
 
