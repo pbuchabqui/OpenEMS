@@ -1077,6 +1077,51 @@ void test_ecu_sched_encoder_heartbeat_publish_snapshot(void) {
     ckp_test_reset();
 }
 
+// ── Split light/heavy do heartbeat TIM2_CH4 ─────────────────────────────────
+// ecu_sched_encoder_heartbeat_subtick() é chamada a CADA CC4IF (256 counts,
+// ~64×/volta), não só 1×/volta como ecu_sched_encoder_heartbeat_tick()
+// (testada directamente nos 3 testes acima, que continuam a passar
+// inalterados — não passam por este wrapper). Verifica só a cadência do
+// split em si: o caminho pesado (aqui detectado via
+// cmp_heartbeats_since_ok, que só o caminho pesado incrementa) dispara
+// exactamente 1×/64 chamadas, nunca nas outras 63.
+void test_ecu_sched_encoder_heartbeat_subtick_cadence(void) {
+    section("ecu_sched: heartbeat_subtick — split light/heavy, cadência 1/64");
+    ecu_sched_test_reset();
+
+    CHECK_EQ(ecu_sched_encoder_test_get_subtick_count(), 0u, "pré-condição: subtick_count=0");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(), 0u,
+             "pré-condição: caminho pesado nunca correu");
+
+    // cmp_edge_count constante (0) em todas as chamadas — a avaliação de
+    // flanco CMP fica sempre inactiva (delta=0), isolando o teste só à
+    // cadência do split, sem interferência da lógica de validação de CMP.
+    for (uint32_t i = 1u; i <= 63u; ++i) {
+        ecu_sched_encoder_heartbeat_subtick(i * 256u, i * 100u, 0u, 0u);
+        CHECK_EQ(ecu_sched_encoder_test_get_subtick_count(), static_cast<uint8_t>(i),
+                 "subtick_count incrementa a cada sub-tick");
+    }
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(), 0u,
+             "63 sub-ticks: caminho pesado ainda não correu nenhuma vez");
+
+    // 64ª chamada: dispara o caminho pesado, reseta subtick_count.
+    ecu_sched_encoder_heartbeat_subtick(64u * 256u, 64u * 100u, 0u, 0u);
+    CHECK_EQ(ecu_sched_encoder_test_get_subtick_count(), 0u,
+             "64º sub-tick: subtick_count reseta a 0");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(), 1u,
+             "64º sub-tick: caminho pesado correu exactamente 1×");
+
+    // Segundo ciclo completo de 64 — confirma que a cadência se repete, não
+    // é um efeito de arranque único.
+    for (uint32_t i = 1u; i <= 64u; ++i) {
+        ecu_sched_encoder_heartbeat_subtick((64u + i) * 256u, (64u + i) * 100u, 0u, 0u);
+    }
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(), 2u,
+             "2º ciclo de 64: caminho pesado corre de novo exactamente 1×");
+
+    ecu_sched_test_reset();
+}
+
 void test_ecu_sched_encoder_conversion(void) {
     section("ecu_sched: encoder degrees<->counts conversion (pure math)");
     ecu_sched_test_reset();

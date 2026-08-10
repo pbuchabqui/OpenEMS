@@ -257,6 +257,20 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
                                       uint32_t cmp_angle,
                                       uint32_t cmp_edge_count) noexcept;
 
+// Sub-tick do heartbeat TIM2_CH4 — chamado a CADA CC4IF (256 counts,
+// ~64×/volta, ver hal/stm32h562/timer.cpp tim2_heartbeat_start()), não só
+// 1×/volta. Sempre alimenta misfire_encoder_on_sample() (leve — precisa de
+// cadência fina, uma janela de cilindro de 62° só tem ~11 sub-ticks de
+// resolução angular). Só chama ecu_sched_encoder_heartbeat_tick() (pesado —
+// ω, avaliação de CMP, staleness, recompute_presync, publish do snapshot)
+// a cada 64º sub-tick, preservando exactamente a cadência 1×/volta que
+// esses cálculos já tinham antes desta tarefa — ecu_sched_encoder_omega_sample()
+// em particular foi afinado para deltas de 16384 counts, nunca deve ver
+// deltas de 256.
+void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
+                                         uint32_t cmp_angle,
+                                         uint32_t cmp_edge_count) noexcept;
+
 // Modo de ignição actual: 1 = sequencial (full sync + CMP confirmado),
 // 0 = wasted-spark (presync). Reflecte g_knock_sequential. Usado pela
 // observabilidade (status bit IGN_SEQUENTIAL) e pelos host tests.
@@ -279,6 +293,10 @@ void ecu_sched_encoder_heartbeat_test_reset(void) noexcept;
 uint32_t ecu_sched_encoder_test_get_cmp_reject_count(void) noexcept;
 uint32_t ecu_sched_encoder_test_get_cmp_missed_edge_count(void) noexcept;
 uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept;
+// Contador de sub-ticks desde o último tick pesado (0..63) — testa a
+// cadência do split light/heavy directamente, sem depender de efeitos
+// secundários do caminho pesado.
+uint8_t ecu_sched_encoder_test_get_subtick_count(void) noexcept;
 // Mock de TIM2_CNT para os testes da fila TIM2/CH3 (nome sem colisão com os
 // aliases legados ecu_sched_test_set_tim2_cnt/get_tim1_ccr — esses mexem em
 // ems_test_tim5_cnt por baixo, ver "TIM1 placeholders" acima; não são o

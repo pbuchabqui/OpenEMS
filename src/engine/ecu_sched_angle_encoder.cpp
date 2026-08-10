@@ -451,6 +451,12 @@ static uint32_t g_cmp_heartbeats_since_ok   = 0U;
 static uint32_t g_cmp_reject_count          = 0U;  // diagnóstico
 static uint32_t g_cmp_missed_edge_count     = 0U;  // diagnóstico (multiple>1)
 
+// Split light/heavy do heartbeat (ver ecu_sched_encoder_heartbeat_subtick()
+// abaixo) — conta sub-ticks (256 counts) desde o último tick pesado
+// (16384 counts = 64 sub-ticks). Satura implicitamente a 64 pelo próprio
+// reset a 0 dentro da função; nunca lido fora dela em produção, só em teste.
+static uint8_t g_hb_subtick_count = 0U;
+
 // ω (×65536, counts TIM2 por tick TIM5) → rpm_x10, para o CkpSnapshot
 // partilhado. Mesma unidade/escala que ckp_instant_rpm_x10() já usa
 // (rpm×10), derivação equivalente a rpm_x10_from_period_ticks() (ckp.cpp)
@@ -539,10 +545,32 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
     }
     snap.phase_A = (ecu_sched_encoder_phase_at(tim2_now) == ECU_PHASE_A);
     snap.rpm_x10 = omega_x65536_to_rpm_x10();
-    snap.tooth_period_ns = 0U;  // sem equivalente encoder ainda (misfire — fora de escopo)
+    snap.tooth_period_ns = 0U;  // sem equivalente encoder — misfire lê tim2/tim5 directo (ecu_sched_encoder_heartbeat_subtick), não este campo
     snap.tooth_index = 0U;      // sintético fica para o tick TIM6 (MAP window, tarefa futura)
     snap.last_tim5_capture = tim5_now;
     ems::drv::ckp_publish_encoder_snapshot(snap);
+}
+
+// Sub-tick do heartbeat — chamado a CADA CC4IF (256 counts, ~64×/volta),
+// não só 1×/volta como ecu_sched_encoder_heartbeat_tick() acima. Só o
+// caminho pesado (ω, CMP, staleness, recompute_presync, publish) continua
+// 1×/volta, chamado daqui a cada 64º sub-tick — cadência total idêntica à
+// de antes desta tarefa (16384 counts), agora composta de 64 passos em vez
+// de 1. Tarefa isolada de propósito: o caminho leve fica vazio aqui (TODO:
+// ligar misfire_encoder_on_sample(), tarefa seguinte) — primeiro prova-se
+// que o split de cadência em si não altera nada no caminho pesado (ver
+// testes test_ecu_sched_encoder_heartbeat_subtick_cadence e os 3 testes
+// pré-existentes test_ecu_sched_encoder_heartbeat*, que continuam a passar
+// bit-a-bit chamando ecu_sched_encoder_heartbeat_tick() directamente).
+void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
+                                         uint32_t cmp_angle,
+                                         uint32_t cmp_edge_count) noexcept
+{
+    ++g_hb_subtick_count;
+    if (g_hb_subtick_count >= 64U) {
+        g_hb_subtick_count = 0U;
+        ecu_sched_encoder_heartbeat_tick(tim2_now, tim5_now, cmp_angle, cmp_edge_count);
+    }
 }
 
 #if defined(EMS_HOST_TEST)
@@ -555,11 +583,13 @@ void ecu_sched_encoder_heartbeat_test_reset(void) noexcept
     g_cmp_heartbeats_since_ok = 0U;
     g_cmp_reject_count        = 0U;
     g_cmp_missed_edge_count   = 0U;
+    g_hb_subtick_count        = 0U;
     ems::drv::encoder_sync::set_health_ok(true);
 }
 uint32_t ecu_sched_encoder_test_get_cmp_reject_count(void) noexcept { return g_cmp_reject_count; }
 uint32_t ecu_sched_encoder_test_get_cmp_missed_edge_count(void) noexcept { return g_cmp_missed_edge_count; }
 uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept { return g_cmp_heartbeats_since_ok; }
+uint8_t  ecu_sched_encoder_test_get_subtick_count(void) noexcept { return g_hb_subtick_count; }
 #endif
 
 namespace ems::engine::sched_internal::encoder {

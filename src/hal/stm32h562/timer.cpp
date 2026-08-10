@@ -316,11 +316,18 @@ void tim2_encoder_arm_next(uint32_t target_counts) noexcept {
 // ----------------------------------------------------------------------------
 // Heartbeat TIM2_CH4 — ver aviso em hal/timer.h. CC4E fica em 0 de propósito
 // (mesmo "frozen" do CH3): só o comparador interno + CC4IF/CC4IE interessam.
+//
+// Rearme a cada 256 counts (~64×/volta), não 16384 (1×/volta) — split
+// light/heavy do heartbeat (ver ecu_sched_encoder_heartbeat_subtick(),
+// ecu_sched_angle_encoder.cpp): o caminho leve (misfire) precisa de
+// cadência fina, o pesado (ω/CMP/presync/publish) continua 1×/volta,
+// chamado internamente a cada 64º sub-tick — cadência total idêntica à
+// anterior a esta tarefa.
 // ----------------------------------------------------------------------------
 
 void tim2_heartbeat_start() noexcept {
     const uint32_t now = TIM2_CNT;
-    TIM2_CCR4 = now + 16384u;
+    TIM2_CCR4 = now + 256u;
     TIM2_DIER |= TIM_DIER_CC4IE;
 }
 
@@ -453,7 +460,9 @@ extern "C" void TIM5_IRQHandler(void) {
 
 /**
  * @brief TIM2_IRQHandler — CH3 = dispatcher de eventos em domínio de ângulo,
- * CH4 = heartbeat (1×/volta, 16384 counts). Mesmo periférico/vetor que a
+ * CH4 = sub-tick do heartbeat (256 counts, ~64×/volta — o caminho pesado
+ * dentro de ecu_sched_encoder_heartbeat_subtick() continua 1×/volta, ver
+ * ecu_sched_angle_encoder.cpp). Mesmo periférico/vetor que a
  * fila TIM2/CH3 (ecu_sched_angle_encoder.cpp) — CC3IF e CC4IF chegam pela
  * mesma IRQ, tratados em sequência com releitura de SR entre um e outro
  * (mesmo padrão do TIM5_IRQHandler acima, para não perder um flag que suba
@@ -468,12 +477,12 @@ extern "C" void TIM2_IRQHandler(void) {
     sr = TIM2_SR;
     if (sr & TIM_SR_CC4IF) {
         TIM2_SR = ~TIM_SR_CC4IF;
-        TIM2_CCR4 += 16384u;  // auto-rearma para a próxima volta, sem UEV/ARR
+        TIM2_CCR4 += 256u;  // auto-rearma para o próximo sub-tick, sem UEV/ARR
         const uint32_t tim2_now = TIM2_CNT;
         const uint32_t tim5_now = TIM5_CNT;
         const uint32_t cmp_angle = cmp_angle_snapshot();
         const uint32_t cmp_edges = cmp_edge_count();
-        ecu_sched_encoder_heartbeat_tick(tim2_now, tim5_now, cmp_angle, cmp_edges);
+        ecu_sched_encoder_heartbeat_subtick(tim2_now, tim5_now, cmp_angle, cmp_edges);
     }
 }
 
