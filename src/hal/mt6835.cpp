@@ -236,6 +236,12 @@ uint32_t mt6835_angle21_to_tim2_counts(uint32_t angle21) noexcept {
 bool mt6835_ok() noexcept { return g_ok; }
 uint16_t mt6835_fault_count() noexcept { return g_fault_count; }
 uint8_t mt6835_last_status() noexcept { return g_last_status; }
+// Espelha MT6835_HW_PRESENT (privado a este ficheiro, ver aviso no topo) como
+// valor de runtime — sem isto, drv/encoder_sync.cpp/main_stm32.cpp não têm
+// como distinguir "sem hardware populado" (skip, não é falha) de "hardware
+// populado mas leitura falhou" (falha real, ver
+// docs/dev/mt6835_encoder_fork.md, "Sync-state em modo encoder").
+bool mt6835_hw_present() noexcept { return MT6835_HW_PRESENT != 0; }
 
 }  // namespace ems::hal
 
@@ -254,6 +260,11 @@ uint32_t mt6835_angle21_to_tim2_counts(uint32_t angle21) noexcept {
 bool mt6835_ok() noexcept { return true; }
 uint16_t mt6835_fault_count() noexcept { return 0u; }
 uint8_t mt6835_last_status() noexcept { return 0u; }
+// Host-test: sem conceito de MT6835_HW_PRESENT (esse gate só existe no
+// caminho TARGET_STM32H562 acima) — default true, mesma convenção de
+// mt6835_ok() acima (host-test simula "tudo bem" por omissão; o comportamento
+// real do gate é testado via host-test hooks dedicados, não por este stub).
+bool mt6835_hw_present() noexcept { return true; }
 }  // namespace ems::hal
 
 #endif  // TARGET_STM32H562

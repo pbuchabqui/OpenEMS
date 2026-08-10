@@ -68,6 +68,7 @@ int main() { return 0; }
 #include "hal/runtime_seed.h"
 #include "hal/timer.h"
 #include "hal/mt6835.h"
+#include "drv/encoder_sync.h"
 
 // =============================================================================
 // Estado de background (do firmware)
@@ -733,13 +734,22 @@ int main() {
             g_t2ms_ = now;
             const uint32_t loop2ms_start_us = micros();
 
+#if !EMS_MT6835_ENCODER
             // Stall watchdog: detecta virabrequim parado entre dentes.
             // Deve preceder ckp_snapshot() para que o snapshot deste ciclo
             // já reflicta LOSS_OF_SYNC se o motor parou.
             // Reactivado: os falsos stalls vinham do wrap 16-bit do TIM3;
             // desde a migração para TIM5 (32-bit) o elapsed é correcto.
             // Também decai rpm_x10 fantasma de ruído em CKP sem sync.
+            // Gate atrás de !EMS_MT6835_ENCODER (docs/dev/mt6835_encoder_fork.md,
+            // "Sync-state em modo encoder"): em modo encoder as ISRs TIM5 do CKP
+            // nunca disparam (tim5_freerun_init() não configura captura), então
+            // g_state.prev_capture nunca avança — este poll, sem o gate, ficaria
+            // a decair rpm_x10/state por cima do que
+            // ecu_sched_encoder_heartbeat_tick() acabou de publicar via
+            // ckp_publish_encoder_snapshot() (task #13).
             ems::drv::ckp_stall_poll(ems::hal::tim5_count());
+#endif
 
             // Dwell / injector open watchdogs (lost SPARK / lost INJ_OFF).
             ecu_sched_dwell_watchdog();
@@ -1257,6 +1267,27 @@ int main() {
             g_t100ms_ = now;
             ems::drv::sensors_tick_100ms();
             ems::hal::tle8888_poll_diag();
+
+#if EMS_MT6835_ENCODER
+            // Poll de saúde do MT6835 (docs/dev/mt6835_encoder_fork.md,
+            // "Sync-state em modo encoder") — 100ms, não 2ms:
+            // mt6835_read_angle_raw21() é uma transação SPI real (4 leituras
+            // de registo + CS toggle), o próprio driver já documenta
+            // "baixa frequência (key-on + poll de saúde ocasional)". O
+            // ângulo lido é descartado — a posição de verdade continua a
+            // vir do TIM2 por hardware; só o sucesso/CRC/status interessam
+            // aqui. Gate em mt6835_hw_present(): sem hardware populado
+            // (MT6835_HW_PRESENT=0, default de produção), a leitura falha
+            // sempre e sem este gate o build ficaria permanentemente em
+            // LOSS_OF_SYNC por ausência de hardware, não por falha real.
+            if (ems::hal::mt6835_hw_present()) {
+                uint32_t health_angle21_unused = 0u;
+                uint8_t  health_status_unused  = 0u;
+                const bool health_ok = ems::hal::mt6835_read_angle_raw21(
+                    &health_angle21_unused, &health_status_unused);
+                ems::drv::encoder_sync::set_health_ok(health_ok);
+            }
+#endif
 
             // Knock sensor morto (FOME #578): report único na transição.
             {
