@@ -60,4 +60,9 @@ bool staleness_exceeded(uint32_t heartbeats_since_accepted, bool bench_mode) noe
     return heartbeats_since_accepted >= limit;
 }
 
+static volatile bool g_health_ok = true;
+
+void set_health_ok(bool ok) noexcept { g_health_ok = ok; }
+bool health_ok() noexcept { return g_health_ok; }
+
 }  // namespace ems::drv::encoder_sync

@@ -69,6 +69,19 @@ struct CkpSnapshot {
  */
 CkpSnapshot ckp_snapshot() noexcept;
 
+/**
+ * @brief Publica um CkpSnapshot vindo do caminho MT6835/TIM2 (fork encoder),
+ *        não de uma ISR de dente do CKP.
+ *
+ * Único escritor de g_state.snap fora das ISRs TIM5 do CKP — em modo encoder
+ * (EMS_MT6835_ENCODER=1) essas ISRs nunca disparam, então sem isto o
+ * snapshot ficaria congelado em WAIT_GAP para sempre. Reutiliza a mesma
+ * struct/enum para que todos os consumidores existentes (main loop, VVT,
+ * misfire, protocolo UI) continuem a funcionar sem qualquer alteração — ver
+ * docs/dev/mt6835_encoder_fork.md, secção "Sync-state em modo encoder".
+ */
+void ckp_publish_encoder_snapshot(const CkpSnapshot& snap) noexcept;
+
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 // Chamados pela ISR de CKP a cada dente (símbolos fracos — sobrescreva para
 // adicionar comportamento sem modificar este módulo).

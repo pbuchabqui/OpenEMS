@@ -33,6 +33,7 @@
 #include "engine/engine_config.h"
 #include "hal/timer.h"
 #include "hal/flash.h"
+#include "drv/encoder_sync.h"
 #include "app/ui_protocol.h"
 #include "app/status_bits.h"
 #include "hal/crc32.h"
@@ -46,6 +47,7 @@ extern volatile uint32_t ems_test_tim5_ccr2;
 extern volatile uint32_t ems_test_cam_gpio_idr;
 
 using namespace ems::drv;
+using namespace ems::drv::encoder_sync;
 using namespace ems::engine;
 using namespace ems::app;
 using namespace ems::hal;
@@ -953,15 +955,126 @@ void test_ecu_sched_encoder_heartbeat(void) {
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 1u, "valid after second tick");
     CHECK_EQ(ecu_sched_encoder_omega_x65536(), 65536, "omega fed correctly through the heartbeat");
 
-    // cmp_edge_count delta detection doesn't crash / doesn't touch omega —
-    // phase anchoring itself is deliberately not wired yet (needs a
-    // calibration constant not yet measured, see plan).
+    // cmp_edge_count delta is tracked/validated (drv/encoder_sync.cpp, task
+    // #13) — but the actual phase_set_anchor() call stays gated behind
+    // EMS_MT6835_CMP_PHASE_CALIBRATED (0 by default: calibration constant
+    // not yet measured on a bench, see plan), so phase_valid() stays 0 even
+    // though the edge itself was accepted as a valid first reference. See
+    // test_ecu_sched_encoder_heartbeat_cmp_tracking() for direct coverage of
+    // the tracking/validation logic itself.
     ecu_sched_encoder_heartbeat_tick(2500u, 3000u, 12345u, 1u);
     CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
              "phase anchor NOT set by the heartbeat yet (calibration constant pending)");
 
     ecu_sched_test_reset();
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "test_reset() clears heartbeat-fed state");
+}
+
+void test_ecu_sched_encoder_heartbeat_cmp_tracking(void) {
+    section("ecu_sched: encoder heartbeat — CMP edge tracking/validation (task #13)");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 0u, "reject count=0 at start");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_missed_edge_count(), 0u, "missed-edge count=0 at start");
+
+    // A: first edge (cmp_edge_count 0->1) — arms reference, no validation.
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 1000u, 1u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 0u, "A: first edge — no reject");
+
+    // B: normal span (delta=32768 exact) — accepted, multiple=1.
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 1000u + kCmpSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 0u, "B: normal span — no reject");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_missed_edge_count(), 0u, "B: multiple=1 — not counted as missed");
+
+    // C: implausible span (delta=16384, half a revolution) — rejected.
+    ecu_sched_encoder_heartbeat_tick(3000u, 3000u, 1000u + kCmpSpanCounts + 16384u, 3u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 1u, "C: implausible span — rejected");
+
+    // D: missed edge (delta=2x32768 from B's angle, C's reject didn't move
+    // the reference) — accepted as multiple=2.
+    ecu_sched_encoder_heartbeat_tick(4000u, 4000u, 1000u + kCmpSpanCounts + 2u * kCmpSpanCounts, 4u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 1u, "D: accepted — reject count unchanged");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_missed_edge_count(), 1u, "D: multiple=2 — missed edge counted");
+
+    // E/F/G: 3 consecutive bad edges (delta=100, nowhere near a multiple) ->
+    // reject-streak reaches the resync threshold on the 3rd.
+    const uint32_t ref = 1000u + kCmpSpanCounts + 2u * kCmpSpanCounts;  // D's accepted angle
+    ecu_sched_encoder_heartbeat_tick(5000u, 5000u, ref + 100u, 5u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 2u, "E: 1st consecutive reject");
+    ecu_sched_encoder_heartbeat_tick(6000u, 6000u, ref + 100u, 6u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 3u, "F: 2nd consecutive reject");
+    ecu_sched_encoder_heartbeat_tick(7000u, 7000u, ref + 100u, 7u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 4u, "G: 3rd consecutive reject (streak resync)");
+
+    // H: reference was dropped by the resync — next edge is treated as a
+    // fresh "first edge" again, no reject regardless of its angle.
+    ecu_sched_encoder_heartbeat_tick(8000u, 8000u, 999999u, 8u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 4u, "H: post-resync first edge — no new reject");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_missed_edge_count(), 1u, "H: missed-edge count unchanged");
+
+    ecu_sched_test_reset();
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 0u, "test_reset() clears CMP tracking state");
+}
+
+void test_ecu_sched_encoder_heartbeat_publish_snapshot(void) {
+    section("ecu_sched: encoder heartbeat — publishes ckp_snapshot() (task #13)");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+
+    // Default: phase invalid (uncalibrated), health ok -> HALF_SYNC.
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
+    CkpSnapshot snap = ckp_snapshot();
+    CHECK_TRUE(snap.state == ems::drv::SyncState::HALF_SYNC,
+               "phase invalid + health ok -> HALF_SYNC published");
+    CHECK_EQ(snap.cmp_confirms, 0u, "HALF_SYNC: cmp_confirms=0");
+
+    // rpm_x10: seed omega to a known ratio (874/1e6, the same 200rpm-
+    // equivalent recipe used by the omega estimator's own regression test)
+    // and hand-verify the conversion: omega=57 -> rpm_x10=1990 (600e9*57 /
+    // (16*16384*65536), integer truncation).
+    ecu_sched_encoder_heartbeat_tick(0u, 0u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_tick(874u, 1000000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 57, "omega seeded to 57 (200rpm-equivalent)");
+    snap = ckp_snapshot();
+    CHECK_EQ(snap.rpm_x10, 1990u, "rpm_x10 derived correctly from omega_x65536");
+
+    // Health fault (encoder_sync::set_health_ok(false), simulating task #14's
+    // mt6835_ok() poll having detected a failure) -> LOSS_OF_SYNC overrides
+    // everything else, regardless of phase state.
+    ems::drv::encoder_sync::set_health_ok(false);
+    ecu_sched_encoder_heartbeat_tick(875u, 1000001u, 0u, 0u);
+    snap = ckp_snapshot();
+    CHECK_TRUE(snap.state == ems::drv::SyncState::LOSS_OF_SYNC,
+               "health_ok()=false -> LOSS_OF_SYNC published");
+    ems::drv::encoder_sync::set_health_ok(true);
+
+    // Phase valid (seeded directly — bypasses the EMS_MT6835_CMP_PHASE_CALIBRATED
+    // gate, which only guards the call site inside the heartbeat, not the
+    // underlying phase tracker itself) -> FULL_SYNC, cmp_confirms=2.
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    ecu_sched_encoder_heartbeat_tick(876u, 1000002u, 0u, 0u);
+    snap = ckp_snapshot();
+    CHECK_TRUE(snap.state == ems::drv::SyncState::FULL_SYNC,
+               "phase valid + health ok -> FULL_SYNC published");
+    CHECK_EQ(snap.cmp_confirms, 2u, "FULL_SYNC: cmp_confirms=2");
+    CHECK_TRUE(snap.phase_A, "phase_A reflects ecu_sched_encoder_phase_at() at publish time");
+
+    // Staleness: many heartbeats with no new CMP edge eventually invalidate
+    // the phase (fallback FULL_SYNC->HALF_SYNC) — exact threshold already
+    // covered by test_encoder_sync_staleness(); here just confirm the
+    // integration actually fires within a safe margin above it.
+    for (uint32_t i = 0u; i < 10u; ++i) {
+        ecu_sched_encoder_heartbeat_tick(877u + i, 1000003u + i, 0u, 0u);
+    }
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
+             "10 heartbeats without a new CMP edge (> prod limit=6): phase invalidated");
+    snap = ckp_snapshot();
+    CHECK_TRUE(snap.state == ems::drv::SyncState::HALF_SYNC,
+               "staleness fallback published as HALF_SYNC, not stuck at FULL_SYNC");
+
+    ecu_sched_test_reset();
+    ckp_test_reset();
 }
 
 void test_ecu_sched_encoder_conversion(void) {

@@ -50,3 +50,13 @@
 #ifndef EMS_MT6835_CMP_PHASE_CALIBRATED
 #  define EMS_MT6835_CMP_PHASE_CALIBRATED 0
 #endif
+
+// Que fase (ECU_PHASE_A=1 / ECU_PHASE_B=0, engine/ecu_sched.h) um flanco CMP
+// aceite representa — o valor medido em bancada (docs/dev/mt6835_encoder_fork.md,
+// "Procedimento de bancada", item 1). Só é lido quando
+// EMS_MT6835_CMP_PHASE_CALIBRATED=1; o default (ECU_PHASE_A=1) é um
+// placeholder sem efeito nenhum enquanto essa flag estiver em 0 — nunca
+// confiar neste valor sem confirmar o gate acima primeiro.
+#ifndef EMS_MT6835_CMP_PHASE_VALUE
+#  define EMS_MT6835_CMP_PHASE_VALUE 1U  // ECU_PHASE_A — placeholder, ver comentário acima
+#endif

@@ -85,4 +85,17 @@ CmpEdgeResult evaluate_cmp_edge(uint32_t cmp_angle_now, bool has_prev,
 /// ems::drv::sensors_is_bench_mode() no chamador, não decidido aqui.
 bool staleness_exceeded(uint32_t heartbeats_since_accepted, bool bench_mode) noexcept;
 
+/// Saúde do sensor MT6835 — separado do gate de fase/CMP acima porque tem
+/// origem diferente (poll periódico de mt6835_ok()/mt6835_last_status(),
+/// atrás de MT6835_HW_PRESENT, não a cada heartbeat) e cadência diferente
+/// (~100ms, não 1×/revolução). Default true: sem hardware populado
+/// (MT6835_HW_PRESENT=0) o poll nunca corre e este flag nunca é escrito —
+/// ausência de hardware não deve ler como falha de sensor (ver
+/// docs/dev/mt6835_encoder_fork.md). O heartbeat (ecu_sched_angle_encoder.cpp)
+/// lê isto a cada tick para compor o SyncState publicado; só um escritor
+/// (o poll de 100ms em main_stm32.cpp) evita que dois publicadores
+/// independentes de CkpSnapshot se pisem.
+void set_health_ok(bool ok) noexcept;
+bool health_ok() noexcept;
+
 }  // namespace ems::drv::encoder_sync

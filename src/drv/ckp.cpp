@@ -696,6 +696,21 @@ CkpSnapshot ckp_snapshot() noexcept {
     return out;
 }
 
+// ── Publicação do snapshot pelo caminho MT6835/TIM2 (fork encoder) ─────────
+// Único ponto de escrita em g_state.snap que não vem das ISRs TIM5 do CKP —
+// em modo encoder (EMS_MT6835_ENCODER=1) essas ISRs nunca disparam
+// (tim5_freerun_init() não configura captura), então g_state.snap ficaria
+// congelado em WAIT_GAP/RPM=0 para sempre sem isto. Todos os consumidores
+// (main_stm32.cpp full_sync/half_sync, auxiliaries.cpp VVT, misfire_detect,
+// ui_protocol*.cpp) já leem só ckp_snapshot() sem se importar com a origem —
+// reutilizar CkpSnapshot/SyncState tal como existem é o que os mantém a
+// funcionar sem qualquer alteração (ver docs/dev/mt6835_encoder_fork.md,
+// "Sync-state em modo encoder"). Chamador: drv/encoder_sync.cpp.
+void ckp_publish_encoder_snapshot(const CkpSnapshot& snap) noexcept {
+    ems::hal::CriticalSectionGuard guard;
+    std::memcpy(&g_state.snap, &snap, sizeof(g_state.snap));
+}
+
 // ── ISR do CKP: TIM5 CH1 (PA0/CKP, rising edge) ─────────────────────────────
 //
 // CONTEXTO: chamada por TIM5_IRQHandler() em hal/stm32h562/timer.cpp, NVIC prioridade 1.

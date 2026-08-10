@@ -211,6 +211,12 @@ void ecu_sched_encoder_phase_set_anchor(uint32_t tim2_raw_at_cmp_edge,
 // ECU_PHASE_A ou ECU_PHASE_B — chamar só depois de ecu_sched_encoder_phase_valid().
 uint8_t ecu_sched_encoder_phase_at(uint32_t tim2_raw_now) noexcept;
 uint8_t ecu_sched_encoder_phase_valid(void) noexcept;
+// Limpa phase_valid() de volta a 0 — chamado por drv/encoder_sync.cpp no
+// fallback de staleness (heartbeats sem flanco CMP aceite acima do limite),
+// para manter phase_valid() e o SyncState publicado via
+// ckp_publish_encoder_snapshot() coerentes entre si (o dispatcher branca no
+// primeiro, os outros consumidores no segundo).
+void ecu_sched_encoder_phase_invalidate(void) noexcept;
 
 // Fila TIM2/CH3 — SEPARADA da fila TIM5/CH3 acima (ecu_sched_evt_dispatch),
 // nunca partilha array nem registo. A fila TIM5 continua a servir só
@@ -268,6 +274,11 @@ void ecu_sched_encoder_phase_test_reset(void) noexcept;
 void ecu_sched_encoder_queue_test_reset(void) noexcept;
 // Idem para o heartbeat (delta de cmp_edge_count entre ticks).
 void ecu_sched_encoder_heartbeat_test_reset(void) noexcept;
+// Diagnóstico do rastreador de flancos CMP (heartbeat) — expostos para teste
+// directo, mesmo padrão dos contadores g_enc_dbg_* da fila TIM2/CH3.
+uint32_t ecu_sched_encoder_test_get_cmp_reject_count(void) noexcept;
+uint32_t ecu_sched_encoder_test_get_cmp_missed_edge_count(void) noexcept;
+uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept;
 // Mock de TIM2_CNT para os testes da fila TIM2/CH3 (nome sem colisão com os
 // aliases legados ecu_sched_test_set_tim2_cnt/get_tim1_ccr — esses mexem em
 // ems_test_tim5_cnt por baixo, ver "TIM1 placeholders" acima; não são o

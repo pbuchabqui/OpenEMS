@@ -40,6 +40,10 @@
 #include "engine/engine_config.h"
 #include "hal/out_pins.h"
 #include "hal/critical_section.h"
+#include "hal/board_pinout.h"
+#include "drv/ckp.h"
+#include "drv/encoder_sync.h"
+#include "drv/sensors.h"
 #if !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
 #endif
@@ -194,6 +198,18 @@ uint8_t ecu_sched_encoder_phase_at(uint32_t tim2_raw_now) noexcept
 }
 
 uint8_t ecu_sched_encoder_phase_valid(void) noexcept { return g_phase_valid; }
+
+// Único caminho de produção que limpa g_phase_valid — até esta função existir
+// só havia SET (phase_set_anchor) e um clear host-test-only. Sem isto, um
+// fallback de staleness em drv/encoder_sync.cpp que publicasse
+// SyncState::HALF_SYNC no CkpSnapshot partilhado (ckp_publish_encoder_snapshot())
+// deixaria phase_valid() preso em 1 — o dispatcher (recompute_presync() em
+// ecu_sched_encoder_heartbeat_tick(), que branca em phase_valid(), não em
+// snap.state) continuaria a disparar sequencial sobre uma fase já considerada
+// perdida pelo resto do sistema. Chamador: drv/encoder_sync.cpp, na mesma
+// transição que publica HALF_SYNC por staleness (ver
+// docs/dev/mt6835_encoder_fork.md, "Sync-state em modo encoder").
+void ecu_sched_encoder_phase_invalidate(void) noexcept { g_phase_valid = 0U; }
 
 #if defined(EMS_HOST_TEST)
 void ecu_sched_encoder_phase_test_reset(void) noexcept
@@ -423,36 +439,127 @@ void encoder_clear_all(void) noexcept
 
 static volatile uint32_t g_hb_last_cmp_edge_count = 0U;
 
+// Estado do rastreador de flancos CMP — mantido aqui (não em encoder_sync.cpp,
+// que só tem funções puras) porque é o heartbeat que sabe a cadência (1
+// avaliação por flanco novo, não por tick) e é quem decide quando descartar a
+// referência (streak_resync) ou reset (staleness). Ver
+// docs/dev/mt6835_encoder_fork.md, "Sync-state em modo encoder".
+static uint8_t  g_cmp_has_prev              = 0U;
+static uint32_t g_cmp_prev_angle            = 0U;
+static uint8_t  g_cmp_reject_streak         = 0U;
+static uint32_t g_cmp_heartbeats_since_ok   = 0U;
+static uint32_t g_cmp_reject_count          = 0U;  // diagnóstico
+static uint32_t g_cmp_missed_edge_count     = 0U;  // diagnóstico (multiple>1)
+
+// ω (×65536, counts TIM2 por tick TIM5) → rpm_x10, para o CkpSnapshot
+// partilhado. Mesma unidade/escala que ckp_instant_rpm_x10() já usa
+// (rpm×10), derivação equivalente a rpm_x10_from_period_ticks() (ckp.cpp)
+// mas para 1 revolução inteira (16384 counts), não 1/60 (1 dente): rpm_x10 =
+// 600e9/(60×tooth_period_ns) no CKP vira 600e9/(1×rev_period_ns) aqui.
+// rev_period_ticks = 16384×65536/ω ⇒ rpm_x10 = 600e9×ω/(16×16384×65536).
+// ω negativo (rotação inversa, kick-back) ou inválido: 0 — mesmo princípio
+// de "sem RPM sem posição fiável" já usado em rpm_if_synced() (ckp.cpp).
+static uint32_t omega_x65536_to_rpm_x10(void) noexcept
+{
+    if (ecu_sched_encoder_omega_valid() == 0U) { return 0U; }
+    const int32_t omega = ecu_sched_encoder_omega_x65536();
+    if (omega <= 0) { return 0U; }
+    constexpr uint64_t kNumerator = 600000000000ULL;
+    constexpr uint64_t kDenominator = 16ULL * 16384ULL * 65536ULL;
+    const uint64_t rpm_x10 = (kNumerator * static_cast<uint64_t>(omega)) / kDenominator;
+    return static_cast<uint32_t>(rpm_x10);
+}
+
 void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
                                       uint32_t cmp_angle,
                                       uint32_t cmp_edge_count) noexcept
 {
     ecu_sched_encoder_omega_sample(tim2_now, tim5_now);
 
-    // Novo flanco do CMP desde o último tick? Só regista por agora — a fase
-    // que esse flanco representa é uma constante de calibração de hardware
-    // ainda não medida em bancada (EMS_MT6835_CMP_PHASE_CALIBRATED=0,
-    // hal/board_pinout.h), não algo que este heartbeat possa inventar.
+    // Rastreio/validação de flancos CMP corre SEMPRE, mesmo sem calibração —
+    // é diagnóstico seguro (conta rejeições/flancos perdidos) e testável em
+    // host sem precisar recompilar com a flag. Só o passo final ("confiar
+    // nisto para disparar sequencial", ecu_sched_encoder_phase_set_anchor())
+    // fica atrás de EMS_MT6835_CMP_PHASE_CALIBRATED — expresso como `if`
+    // sobre a macro (0/1 sempre definida em board_pinout.h), não `#if`: com a
+    // flag em 0 o compilador elimina o ramo por constant-folding (custo zero
+    // em produção), mas o texto continua um `if` normal — não esconde este
+    // bloco inteiro de compilar/testar em host-test como um `#if` faria.
     if (cmp_edge_count != g_hb_last_cmp_edge_count) {
         g_hb_last_cmp_edge_count = cmp_edge_count;
-        (void)cmp_angle;  // TODO: ecu_sched_encoder_phase_set_anchor(cmp_angle, <fase calibrada>) atrás do gate acima
+        const ems::drv::encoder_sync::CmpEdgeResult r =
+            ems::drv::encoder_sync::evaluate_cmp_edge(
+                cmp_angle, g_cmp_has_prev != 0U, g_cmp_prev_angle, g_cmp_reject_streak);
+        if (r.accepted) {
+            g_cmp_has_prev            = 1U;
+            g_cmp_prev_angle          = cmp_angle;
+            g_cmp_reject_streak       = 0U;
+            g_cmp_heartbeats_since_ok = 0U;
+            if (r.multiple > 1U) { ++g_cmp_missed_edge_count; }
+            if (EMS_MT6835_CMP_PHASE_CALIBRATED) {
+                // Definição absoluta, nunca toggle — mesmo flanco pode
+                // re-ancorar repetidamente sem se acumular.
+                ecu_sched_encoder_phase_set_anchor(
+                    cmp_angle, static_cast<uint8_t>(EMS_MT6835_CMP_PHASE_VALUE));
+            }
+        } else {
+            ++g_cmp_reject_count;
+            g_cmp_reject_streak = r.reject_streak;
+            if (r.streak_resync) { g_cmp_has_prev = 0U; }  // descarta referência, re-arma no próximo flanco
+        }
+    }
+
+    if (g_cmp_heartbeats_since_ok < 0xFFFFFFFFU) { ++g_cmp_heartbeats_since_ok; }
+    if (ecu_sched_encoder_phase_valid() != 0U &&
+        ems::drv::encoder_sync::staleness_exceeded(
+            g_cmp_heartbeats_since_ok, ems::drv::sensors_is_bench_mode())) {
+        ecu_sched_encoder_phase_invalidate();
     }
 
     // Sem calibração de fase, phase_valid() é sempre 0 (por construção, ver
     // gate acima) — o recompute cai sempre em presync, nunca dispara
-    // sequencial com um anchor adivinhado. O ramo sequencial fica para uma
-    // tarefa futura (precisa do anchor real; sem cobertura de runtime nesta
-    // configuração default, só testável injetando o anchor via test hook).
+    // sequencial com um anchor adivinhado.
     if (ecu_sched_encoder_phase_valid() == 0U) {
         si::encoder::recompute_presync(tim2_now);
     }
+
+    // Publica no CkpSnapshot partilhado — único ponto deste ficheiro que o
+    // faz; o poll de saúde do MT6835 (main_stm32.cpp, ~100ms) só escreve
+    // ems::drv::encoder_sync::set_health_ok(), lido aqui, para nunca haver
+    // dois publicadores independentes de g_state.snap a pisarem-se.
+    ems::drv::CkpSnapshot snap{};
+    if (!ems::drv::encoder_sync::health_ok()) {
+        snap.state = ems::drv::SyncState::LOSS_OF_SYNC;
+    } else if (ecu_sched_encoder_phase_valid() != 0U) {
+        snap.state = ems::drv::SyncState::FULL_SYNC;
+        snap.cmp_confirms = 2U;
+    } else {
+        snap.state = ems::drv::SyncState::HALF_SYNC;
+        snap.cmp_confirms = 0U;
+    }
+    snap.phase_A = (ecu_sched_encoder_phase_at(tim2_now) == ECU_PHASE_A);
+    snap.rpm_x10 = omega_x65536_to_rpm_x10();
+    snap.tooth_period_ns = 0U;  // sem equivalente encoder ainda (misfire — fora de escopo)
+    snap.tooth_index = 0U;      // sintético fica para o tick TIM6 (MAP window, tarefa futura)
+    snap.last_tim5_capture = tim5_now;
+    ems::drv::ckp_publish_encoder_snapshot(snap);
 }
 
 #if defined(EMS_HOST_TEST)
 void ecu_sched_encoder_heartbeat_test_reset(void) noexcept
 {
-    g_hb_last_cmp_edge_count = 0U;
+    g_hb_last_cmp_edge_count  = 0U;
+    g_cmp_has_prev            = 0U;
+    g_cmp_prev_angle          = 0U;
+    g_cmp_reject_streak       = 0U;
+    g_cmp_heartbeats_since_ok = 0U;
+    g_cmp_reject_count        = 0U;
+    g_cmp_missed_edge_count   = 0U;
+    ems::drv::encoder_sync::set_health_ok(true);
 }
+uint32_t ecu_sched_encoder_test_get_cmp_reject_count(void) noexcept { return g_cmp_reject_count; }
+uint32_t ecu_sched_encoder_test_get_cmp_missed_edge_count(void) noexcept { return g_cmp_missed_edge_count; }
+uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept { return g_cmp_heartbeats_since_ok; }
 #endif
 
 namespace ems::engine::sched_internal::encoder {
