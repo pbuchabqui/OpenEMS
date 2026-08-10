@@ -240,6 +240,8 @@ int main(void) {
     // ── MISFIRE DETECT ──────────────────────────────────────────────────
     printf("\n=== MISFIRE DETECT ===");
     test_misfire_all();
+    test_misfire_encoder_cyl_window_boundaries();
+    test_misfire_encoder_threshold_debounce_and_inertness();
 
     // ── DIAGNOSTIC MANAGER ──────────────────────────────────────────────
     printf("\n=== DIAGNOSTIC MANAGER ===");

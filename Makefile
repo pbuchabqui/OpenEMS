@@ -82,6 +82,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/etb_autocal.cpp \
              $(SRC_DIR)/engine/torque_manager.cpp \
              $(SRC_DIR)/engine/misfire_detect.cpp \
+             $(SRC_DIR)/engine/misfire_encoder.cpp \
              $(SRC_DIR)/engine/ewg_control.cpp
 
 DRV_SRC = $(SRC_DIR)/drv/ckp.cpp $(SRC_DIR)/drv/sensors.cpp $(SRC_DIR)/drv/encoder_sync.cpp
@@ -132,7 +133,8 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_engine_misc.cpp \
                    $(TEST_DIR)/test_math.cpp \
                    $(TEST_DIR)/test_protocol.cpp \
-                   $(TEST_DIR)/test_output.cpp
+                   $(TEST_DIR)/test_output.cpp \
+                   $(TEST_DIR)/test_misfire_encoder.cpp
 HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(SRC_DIR)/hal/stm32h562/timer.cpp \
                 $(SRC_DIR)/hal/stm32h562/system.cpp \
