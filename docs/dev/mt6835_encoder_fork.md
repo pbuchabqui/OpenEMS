@@ -763,6 +763,57 @@ estar correcta antes de calibrar a fase sobre ela.
 
 ### 2. Bring-up do hardware MT6835 real (`MT6835_HW_PRESENT=1`)
 
+#### Hardware: módulo pronto, sem PCB dedicada (decidido 2026-08-10)
+
+Considerou-se desenhar uma placa de breakout dedicada, mas existe um módulo
+comercial pronto que cobre tudo o que a bancada precisa — **módulo SZHJW
+MT6835** (AliExpress; chip real `MagnTek 6835-STD` confirmado na foto do
+anúncio, mesmo part number `MT6835GT-STD` do datasheet), vendido como
+substituto do AS5048 na comunidade SimpleFOC/robótica FOC, com íman
+disponível para envio junto. Elimina o passo de fabricar/montar PCB.
+
+Pinout do módulo (headers já soldados, 2,54mm):
+- **Header esquerdo**: `CAL_EN, VCC, MISO, MOSI, SCK, CSN, GND` (SPI completo).
+- **Header superior**: `GND, W, V, U, Z, B, A, VCC` (inclui A/B/Z; U/V/W não
+  usado por este fork).
+- **Header inferior**: `GND, OUT, VCC` (PWM, não usado).
+
+Tabela de pinos verificada contra a fonte primária (`MT6835_Rev.1.3.pdf`,
+`magntek.com.cn`, §1 Pin Configuration — cross-verificado também contra
+Rev.1.0/2021.04, tabela idêntica):
+
+| Pino módulo | # físico TSSOP-16 | Tipo | Ligar a (WeAct H562VGT6) |
+|---|---|---|---|
+| VCC | 9 | Power | **3V3** (não 5V — ver nota abaixo) |
+| GND | 12 | Power | GND |
+| CSN | 8 | Digital In | PC13 (placeholder, ver item 1 abaixo) |
+| SCK | 7 | Digital In | PB13 (SPI2_SCK, AF5) |
+| MOSI | 6 | Digital In | PB15 (SPI2_MOSI, AF5) |
+| MISO | 5 | Digital Out | PB14 (SPI2_MISO, AF5) |
+| A | 16 | Digital Out | PA0 (TIM2_CH1) |
+| B | 15 | Digital Out | PA1 (TIM2_CH2) |
+| Z | 14 | Digital Out | **não ligar ao MCU** — deixar livre para prova de osciloscópio (item 5 abaixo: 1 pulso/volta, forma independente de confirmar que `TIM2_CNT` avança ≈16384/volta) |
+| CAL_EN | 4 | Digital In | **GND, fio directo** — ver nota de segurança abaixo |
+
+**VDD=3,3V é decisão obrigatória, não só conveniência**: A/CSN/SCK/MOSI ligam
+directo a pinos GPIO do STM32H562, que não são 5V-tolerantes na maioria dos
+pinos. O datasheet fixa "Terminal Voltage at Input and Output Pins = VDD" —
+alimentar o módulo a 5V puxaria A/B/MISO a 5V, fora do limite absoluto do
+MCU. Usar sempre o 3V3 do coreboard, nunca o 5V.
+
+**CAL_EN não pode ficar a flutuar**: a Figura 5 do datasheet ("Reference
+Circuit without User Auto-Calibration") mostra um resistor de 250K desenhado
+dentro do símbolo do chip perto de CAL_EN/TEST_EN — pode ser pull-down
+interno (nesse caso CAL_EN flutuante seria seguro) ou não é claro o
+suficiente na imagem para confiar cegamente nessa leitura. Como é uma entrada
+digital CMOS e o módulo expõe CAL_EN num pino de header solto (risco real de
+ficar a apanhar ruído da bancada e entrar em auto-calibração sem querer),
+a escolha conservadora é um fio directo a GND — este fork nunca usa
+auto-calibração (a calibração de ABZ_RES é feita por SPI em `mt6835_init()`,
+write+readback, não pelo pino CAL_EN). TEST/TEST_EN não estão expostos no
+módulo — fora do nosso controlo, presume-se resolvido no desenho do próprio
+módulo (não verificável sem o esquemático dele).
+
 1. Confirmar ligação SPI2 (SCK/MISO/MOSI, simplificado após a remoção do TLE8888)
    e `CS=PC13` (placeholder no código — confirmar o pino final contra a placa/
    interface real assim que existir).
