@@ -1002,3 +1002,127 @@ EMS_MT6835_ENCODER=1 EMS_MT6835_CMP_PHASE_CALIBRATED=1 WERROR=1 firmware-vgt6 �
 
 `hw/v1-clean-board` (branch principal, fora deste worktree) confirmado
 intocado antes e depois de cada commit desta sessão.
+
+## Misfire e knock em modo encoder — implementação (2026-08-10)
+
+Plano dedicado, os dois itens deixados de fora do plano anterior. Duas
+correcções críticas às premissas iniciais, verificadas directamente contra o
+código antes de desenhar: (1) o dispatcher encoder **não tem disparo
+sequencial por cilindro** — `recompute_presync()` arma os 4 canais de
+ignição no mesmo alvo, sempre (é o único construtor de disparo em modo
+encoder hoje); (2) a regressão do knock (ver abaixo) está presente em
+**ambos os branches**, não é um artefacto deste fork.
+
+### Misfire — `engine/misfire_encoder.h`/`.cpp` (novo, `misfire_detect.cpp` intocado)
+
+Detector de queda de velocidade angular por janela de cilindro, paralelo ao
+caminho CKP (que fica exactamente como estava — nenhum teste existente
+tocado). Diferenças deliberadas, não uma porta directa:
+
+- Mapeamento de cilindro via `cfg::cyl_tdc_deg()` (domínio de graus, já
+  partilhado) em vez do cálculo tooth-domain próprio de `misfire_detect.cpp`,
+  que nunca tinha sido reconciliado com `cyl_tdc_deg()`. Tabela `[fase][64
+  sub-tick buckets]` construída uma vez, mesma forma que `g_tooth_to_cyl`.
+- Avaliação na SAÍDA da janela (mudança de cilindro), não numa contagem fixa
+  de amostras — sub-ticks de 256 counts não estão pré-alinhados a uma janela
+  de 62° como dentes discretos de 6° estão.
+- Previsor de tendência local (mesmo clamp ±12.5% de
+  `predict_next_period_ticks()`, `ckp.cpp`), calculado a partir do histórico
+  ANTES da amostra actual chegar — não da própria amostra.
+- Reutiliza `kMisfireThresholdQ8`/`kMisfireDebounceCycles`/`kMisfireFaultThreshold`
+  de `misfire_detect.h` sem alteração — só o domínio muda.
+- `EMS_MISFIRE_ENCODER_ENABLE` (novo, `board_pinout.h`, default 0): a lógica
+  de threshold/debounce corre sempre (testável em host sem build especial);
+  só o incremento final do contador DTC-facing fica atrás da flag.
+
+**Cadência de amostragem — a decisão central deste plano**: em vez de um
+`TIM6_DAC_IRQHandler` novo (vector table, mesmo risco que a Parte 3a do
+plano anterior evitou), o heartbeat `TIM2_CH4` foi dividido em light/heavy —
+rearme a cada 256 counts (~64×/volta) em vez de 16384 (1×/volta); o caminho
+leve novo, `ecu_sched_encoder_heartbeat_subtick()`, alimenta
+`misfire_encoder_on_sample()` a CADA sub-tick, mas só chama o caminho pesado
+já existente (`ecu_sched_encoder_heartbeat_tick()` — ω, CMP, staleness,
+`recompute_presync`, publish — sem NENHUMA alteração ao corpo da função) a
+cada 64º sub-tick, preservando exactamente a cadência de 16384 counts que
+esses cálculos já tinham. Zero interrupção nova. Implementado em duas
+tarefas deliberadamente separadas — split isolado e testado primeiro (3
+testes pré-existentes do heartbeat continuam a passar bit-a-bit, chamando
+`ecu_sched_encoder_heartbeat_tick()` directamente, nunca o wrapper nem
+_touch_ o caminho pesado), só depois o consumidor ligado por cima — para que
+uma regressão no split não fosse confundida com um bug do misfire.
+
+`misfire_encoder_init()` tem o MESMO risco de BSS-zero que `misfire_init()`
+já tinha documentado para `g_tooth_to_cyl` (`int8_t 0` é cilindro 0, não o
+sentinela -1) — corrigido chamando-a logo a seguir a `misfire_init()`.
+
+### Knock — regressão de scheduler restaurada, gated por hardware ausente
+
+**Achado maior**: `knock_window_open()`/`knock_window_cycle_end()` foram
+ligados a `arm_channel()` no commit `39e3b65` e apagados por acidente no
+commit `f42c450` ("remove dead TIM1/TIM3 OC code" — varredura demasiado
+ampla). Confirmado em falta em **ambos** os branches
+(`git log hw/v1-clean-board | grep f42c450` → vazio; `git grep
+knock_window_open hw/v1-clean-board` → só a definição, sem chamador) — bug
+de produção, não específico deste fork. Nenhum teste apanhou isto porque
+`test_aux_knock.cpp` chama `knock_window_open()`/`close()` directamente,
+contornando o scheduler por completo.
+
+O hardware analógico de knock está **DNP na v1**
+(`docs/hw/schematic/10_knock_dnp.md`) — restaurar o wiring sem gate ligaria
+`knock_adc_update()` a um PA5 flutuante, e o ratchet de threshold de
+`knock_cycle_complete()` (`adc_threshold -= 64` a cada hit) produziria
+retard falso real cada vez mais sensível. Restaurado atrás de nova flag
+`EMS_KNOCK_HW_PRESENT` (`board_pinout.h`, default 0) — `ecu_sched.cpp`,
+dentro do bloco já existente `ECU_ACT_DWELL_START` em `arm_channel()`.
+
+Novo teste de integração (`test_knock_hw_wiring.cpp`, compilado duas vezes):
+suite principal (`EMS_KNOCK_HW_PRESENT=0`) afirma que a janela nunca abre
+mesmo em sequencial pleno; binário próprio (`make host-test-knock-hw`,
+`=1`) conduz o scheduler pelo caminho real (não chama `knock_window_open()`
+directamente — é exactamente essa diferença que teria apanhado `f42c450`) e
+confirma que a janela abre e roda pelos cilindros seguindo
+`cfg::kFiringOrder`.
+
+Dois bugs distintos corrigidos em commits separados (candidatos a
+cherry-pick para `hw/v1-clean-board`, acção de seguimento fora desta
+sessão): a regressão do wiring em si, e `main_stm32.cpp:1105` que só lia o
+retard do cilindro 0 apesar de `knock_retard_x10[]` ser genuinamente por
+cilindro — trocado por máximo entre os 4 (retard verdadeiramente por
+cilindro precisaria de infra-estrutura nova em `AdvanceCorrections`/
+`calc_total_advance`, escalar único hoje — fora de escopo).
+
+`g_knock_sequential` **não é tocado** em modo encoder (Grupo B) — dado que
+não há disparo sequencial por cilindro ali, ligá-la seria incorrecto
+(mentiria à UI), não uma correcção. Comentário deixado em
+`ecu_sched_angle_encoder.cpp` a documentar a dependência da futura tarefa de
+disparo sequencial real.
+
+### Fora de escopo, achados registados
+
+- Disparo sequencial real por cilindro no dispatcher encoder — bloqueador de
+  fundo para qualquer knock genuíno em modo encoder.
+- Retard de knock verdadeiramente por cilindro.
+- Cherry-pick dos fixes de knock para `hw/v1-clean-board`.
+- `KNOCK_DETECTED` DTC nunca disparado; sem telemetria UI/datalog de
+  contagens/retard por cilindro.
+- Deriva doc/código no ritmo de amostragem do knock (`interface_board_v1.md`
+  afirma 58×/rev, código real é 12×/rev via `kFastSamplesPerRev`).
+
+### Verificação
+
+```
+make host-test                  → 1528 PASS, 0 FAIL
+make host-test-vgt6             → 24 PASS, 0 FAIL
+make host-test-knock-hw         → 5 PASS, 0 FAIL (EMS_KNOCK_HW_PRESENT=1)
+make firmware-vgt6/rgt6/mre     → build limpo, flags default
+EMS_MT6835_ENCODER=1 EMS_MT6835_CMP_PHASE_CALIBRATED=1
+  EMS_MISFIRE_ENCODER_ENABLE=1 EMS_KNOCK_HW_PRESENT=1 WERROR=1
+  firmware-vgt6                 → limpo, revertido depois
+```
+
+`hw/v1-clean-board` confirmado intocado antes e depois de cada commit desta
+sessão (7 commits: `97c04d2` wiring+testes do knock, `0bbaa65` doc
+g_knock_sequential, `0cccda8` fix retard cyl0, `6f872ce` módulo
+misfire_encoder, `b9ed217` split do heartbeat, `8771480` wiring do misfire
+ao sub-tick, `96801dd` wiring em main_stm32.cpp — mais este commit de
+fecho).
