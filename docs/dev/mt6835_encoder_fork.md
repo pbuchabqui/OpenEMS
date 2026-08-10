@@ -824,3 +824,122 @@ target_compensado = target_desejado − round(RPM × 6 × 10e-6 × 16384 / 360)
    interferir) — só depois medir o efeito real com osciloscópio (comparar timing
    do `SPARK` real vs. alvo, antes/depois de aplicar a fórmula) e confirmar que
    reduz o erro em vez de introduzir um novo.
+
+## Sync-state em modo encoder + hooks órfãos — implementação (2026-08-10)
+
+Plano dedicado (17 tarefas), continuação directa do dispatcher acima — a etapa
+que ficou deliberadamente adiada no fecho desse plano ("com encoder absoluto o
+conceito de perda de sync muda de natureza"). Âmbito alargado por escolha
+explícita: sync/fase **e** reconectar os três hooks por-dente do CKP que nunca
+disparam em modo encoder (`sensors_on_tooth` → MAP window + canais rápidos,
+`prime_on_tooth` → quick-crank). `misfire_on_tooth` fica de fora — precisa de
+matemática nova, não um rewire (ver "fora de escopo" abaixo).
+
+**Descoberta que reordenou a prioridade**: verificado por grep directo que, sem
+este plano, o motor em modo encoder não conseguia chegar a running-fuel de
+todo — `ckp_snapshot()` ficava congelado em `WAIT_GAP`/RPM=0 para sempre (as
+ISRs `TIM5` do CKP, únicas escritoras do snapshot partilhado, nunca disparam
+sem roda dentada) e toda a amostragem ADC estava morta pelo mesmo motivo
+(`adc_trigger_on_tooth()` só é chamada por `sensors_on_tooth()`).
+
+### Parte 1 — Sync-state (`drv/ckp.h`/`.cpp`, `drv/encoder_sync.h`/`.cpp` novo,
+`ecu_sched_angle_encoder.cpp`)
+
+`ems::drv::SyncState`/`CkpSnapshot` reutilizados tal como existem — nenhum
+enum/campo de wire novo, para `full_sync`/VVT/UI continuarem a funcionar sem
+alteração. `ckp_publish_encoder_snapshot()` (novo, `drv/ckp.cpp`, mesmo padrão
+de `ckp_seed_arm`) é o único escritor não-ISR de `g_state.snap`, chamado pelo
+heartbeat `TIM2_CH4` a cada volta.
+
+Validação de flanco CMP redesenhada, não portada 1:1 da roda dentada:
+`drv/encoder_sync.cpp` usa uma tolerância de folga mecânica **fixa** (200
+counts) em vez da tolerância percentual RPM-dependente do CKP (±25%/50%) —
+fisicamente correcto aqui porque ambas as leituras são posição absoluta no
+mesmo contador contínuo (comparação mais forte que a reconstrução por
+contagem de dentes do CKP), e a banda ±50% do CKP teria aceitado sem detectar
+um delta de meia-volta (16384 counts) claramente errado. As duas verificações
+independentes do CKP (razão temporal + consistência de janela por dente)
+colapsam numa só: um múltiplo de 32768 é necessariamente congruente mod 16384,
+a segunda verificação do CKP só re-derivaria o que a primeira já provou.
+Múltiplos aceites até N=4 (dentes perdidos são falha esperada de um sensor
+Hall), acima disso tratado como implausível.
+
+`LOSS_OF_SYNC` alcançável a partir de falha real do encoder: poll de saúde a
+100 ms (`g_t100ms_`, mesmo padrão de `tle8888_poll_diag()`) chama
+`mt6835_read_angle_raw21()` periodicamente — descoberta durante a execução de
+que `mt6835_ok()` só actualizava no key-on (chamada única em `mt6835_init()`),
+nunca detectando uma falha a meio da condução. Gate atrás de
+`mt6835_hw_present()` (novo, mirror runtime de `MT6835_HW_PRESENT`) para não
+confundir "sem sensor populado" (produção actual, sem footprint na PCB) com
+"sensor falhou". `ckp_stall_poll()` (watchdog de stall do CKP) ganhou o
+**segundo** (e único outro) gate `#if EMS_MT6835_ENCODER` do ficheiro — sem
+isto competiria com o heartbeat pelo mesmo `rpm_x10`/`state`.
+
+Gap de arquitectura fechado: `ecu_sched_encoder_phase_invalidate()` (novo) — a
+fase só tinha caminho de SET em produção; sem CLEAR, o fallback de staleness
+publicaria `HALF_SYNC` enquanto `phase_valid()` continuava `1`, e o dispatcher
+(que branca em `phase_valid()`, não em `snap.state`) continuaria a disparar
+sequencial sobre uma fase já considerada perdida.
+
+### Parte 2 — Quick-crank prime (`engine/quick_crank.cpp`)
+
+`quick_crank_encoder_poll(tim2_now, now_ms)` — sem hook por-dente disponível,
+corre do slot de 2 ms. Deriva RPM cru de delta de posição/tempo entre polls
+(nunca de `tooth_period_ns`, sempre 0 em modo encoder). Alvo em counts:
+`sanitized_prime_tooth() × 6°` (mesma unidade "dente" de 6° que
+`map_window.cpp` já usa, 1/60 de volta), mesma margem de overshoot-reset
+(+5 "dentes") do caminho por-dente.
+
+### Parte 3a/3b — ADC + MAP window (`hal/adc.h`/`.cpp`, `drv/sensors.h`/`.cpp`)
+
+**Redesenhadas na execução** — o desenho original do plano (novo
+`TIM6_DAC_IRQHandler` no vector table) revelou-se desnecessário depois de ler
+o pipeline GPDMA/ADC real: a conversão já é inteiramente autónoma por
+hardware (DMA circular auto-referente, armado uma vez em `adc_init()`); o
+único elo em falta é o `TIM6` nunca correr (`adc_trigger_on_tooth()`, única
+fonte do seu `CEN`, só é chamada por `sensors_on_tooth()`). Fix:
+`adc_start_free_running_encoder()` arranca `TIM6` periódico (100 µs/10 kHz,
+cobre o canal KNOCK acima do rev-limit default) uma única vez — zero
+interrupção nova, zero risco do `SYSRESETREQ` que um `Default_Handler` não
+tratado teria causado.
+
+Segunda descoberta, não prevista no plano original: restaurar o `TRGO` não
+bastava. `sample_fast_channels()` (interno a `sensors.cpp`, chamado 12×/rev
+por `sensors_on_tooth()`) é quem filtra/valida-falha e comita MAP/TPS/MAF/
+knock no double-buffer que `sensors_get()` devolve — sem ele o ADC converte
+mas `sensors_get()` fica congelado nos valores de arranque para sempre.
+`sensors_sample_fast_channels_encoder(rpm_x10)` (novo, wrapper público sobre a
+função interna) fecha este gap.
+
+`sensors_map_window_poll_encoder(tim2_now)` deriva `tooth_index` **e**
+`phase_A` da mesma leitura `tim2_now`, dentro da própria função — não
+montados pelo caller. Um `tooth_index` vivo combinado com o `phase_A`
+congelado do heartbeat (1×/volta) produziria um erro de 360° exactamente na
+fronteira de cada volta; consolidar dentro de `sensors.cpp` (em vez de
+`main_stm32.cpp`, não testável em host) tornou isto directamente coberto por
+host test.
+
+### Fora de escopo — plano dedicado futuro
+
+- `misfire_detect.cpp` — precisa de detector de queda de velocidade angular
+  novo (amostras `(TIM2_CNT, TIM5_CNT)` no tick de 10 kHz do TIM6 recém-vivo),
+  não um rewire. Deixado para depois de haver dados reais de cadência.
+- Knock em modo encoder: `sample_fast_channels()` chama `knock_adc_update()`
+  (no-op sem janela activa), mas `knock_window_open/close()` vêm do scheduler
+  — comportamento sob encoder não verificado, mesmo tratamento que
+  `misfire_detect.cpp` já tinha.
+- Medição em bancada da constante de fase do CMP e das 4 verificações do
+  procedimento de bancada acima — trabalho físico, não firmware.
+
+### Verificação
+
+```
+make host-test                  → 1439 PASS, 0 FAIL
+make host-test-vgt6             → 24 PASS, 0 FAIL
+make firmware-vgt6/rgt6/mre      → build limpo, flags default
+EMS_MT6835_ENCODER=1 WERROR=1 make firmware-vgt6                          → limpo
+EMS_MT6835_ENCODER=1 EMS_MT6835_CMP_PHASE_CALIBRATED=1 WERROR=1 firmware-vgt6 → limpo
+```
+
+`hw/v1-clean-board` (branch principal, fora deste worktree) confirmado
+intocado antes e depois de cada commit desta sessão.
