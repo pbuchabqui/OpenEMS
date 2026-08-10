@@ -53,6 +53,7 @@ int main() { return 0; }
 #include "engine/output_test.h"
 #include "engine/diagnostic_manager.h"
 #include "engine/misfire_detect.h"
+#include "engine/misfire_encoder.h"
 #include "engine/quick_crank.h"
 #include "engine/torque_manager.h"
 #include "engine/transient_fuel.h"
@@ -481,6 +482,13 @@ static void openems_init() noexcept {
     // BSS (zero), mas 0 é um índice de cilindro válido — o ISR do CKP leria cyl=0
     // para todos os dentes antes da tabela ser preenchida, gerando DTCs falsos.
     ems::engine::misfire_init();
+    // Mesmo risco no caminho encoder: g_cyl_window (misfire_encoder.cpp)
+    // também parte de BSS (int8_t 0 = cilindro 0, não o -1 sentinela de
+    // "sem cilindro"), e tim2_heartbeat_start() (mais abaixo, dentro do
+    // bloco EMS_MT6835_ENCODER) já arma o 1º sub-tick — sem isto, todo o
+    // ciclo, em qualquer posição, seria atribuído ao cilindro 0 até o
+    // primeiro init() correr, em vez de ficar inerte (-1).
+    ems::engine::misfire_encoder_init();
 #if EMS_MT6835_ENCODER
     // Fork MT6835/TIM2-encoder (docs/dev/mt6835_encoder_fork.md) — substitui
     // CKP/CMP via Hall por encoder magnético absoluto. Mutuamente exclusivo
@@ -1044,6 +1052,8 @@ int main() {
                         snap.rpm_x10, sensors.etb_tps_pct_x10, sensors.clt_degc_x10);
                 ems::engine::misfire_set_all_inhibit(
                     decel_cut_active || crank_or_ase || flood_clear);
+                ems::engine::misfire_encoder_set_all_inhibit(
+                    decel_cut_active || crank_or_ase || flood_clear);
                 // X-τ desde !cranking (inclui afterstart frio — pior wall-wetting).
                 // AE residual a 50% quando X-τ activo (evita empilhar enrich).
                 const bool xtau_enabled = !qc.cranking;
@@ -1180,6 +1190,7 @@ int main() {
                 // Force mode in case auto was off or race with tooth ISR.
                 ::ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
                 ems::engine::misfire_set_all_inhibit(true);
+                ems::engine::misfire_encoder_set_all_inhibit(true);
                 g_ae_active = false;
                 ems::engine::transient_fuel_reset();
 
@@ -1376,12 +1387,21 @@ int main() {
                     ems::engine::DiagnosticCode::MISFIRE_CYLINDER_4,
                 };
                 for (uint8_t c = 0u; c < 4u; ++c) {
-                    if (ems::engine::misfire_get_event_count(c) >=
-                        ems::engine::kMisfireFaultThreshold) {
+                    // Soma os dois domínios — só um está realmente activo em
+                    // qualquer build (CKP vs. encoder), o outro fica sempre
+                    // em 0 (misfire_encoder_get_event_count() só publica
+                    // atrás de EMS_MISFIRE_ENCODER_ENABLE, default 0). Mesmo
+                    // padrão aditivo de clear_all_events_and_drive_safe_outputs()
+                    // (ecu_sched.cpp) para as duas filas TIM5/TIM2.
+                    const uint8_t count =
+                        static_cast<uint8_t>(ems::engine::misfire_get_event_count(c) +
+                                              ems::engine::misfire_encoder_get_event_count(c));
+                    if (count >= ems::engine::kMisfireFaultThreshold) {
                         ems::engine::DiagnosticManager::report_fault(
                             kMisfireCodes[c],
                             ems::engine::FaultSeverity::WARNING);
                         ems::engine::misfire_clear_events(c);
+                        ems::engine::misfire_encoder_clear_events(c);
                     }
                 }
             }
