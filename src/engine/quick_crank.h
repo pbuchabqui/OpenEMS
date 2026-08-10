@@ -15,6 +15,25 @@ struct QuickCrankOutput {
 
 void quick_crank_reset() noexcept;
 
+/**
+ * @brief Prime pulse por posição absoluta (fork MT6835/TIM2, modo encoder).
+ *
+ * Sem hook por-dente disponível em modo encoder (não há wheel de dentes) —
+ * corre a partir do slot de 2 ms do loop principal, ramo EMS_MT6835_ENCODER,
+ * em vez de prime_on_tooth() (drv::ckp, caminho por-dente do CKP físico).
+ * Deriva RPM cru de delta de posição TIM2 / delta de tempo entre polls —
+ * NUNCA de CkpSnapshot::tooth_period_ns (fica sempre 0 em modo encoder, ver
+ * ecu_sched_encoder_heartbeat_tick()). Alvo em counts TIM2:
+ * sanitized_prime_tooth() × 6° (kDegPerTooth de map_window.cpp), convertido
+ * via 16384 counts/volta. Mesma margem de overshoot-reset (+5 "dentes") do
+ * caminho por-dente.
+ *
+ * @param tim2_now Posição absoluta actual (TIM2->CNT, contagem X4 do
+ *                 encoder).
+ * @param now_ms   Timestamp do loop principal (millis()).
+ */
+void quick_crank_encoder_poll(uint32_t tim2_now, uint32_t now_ms) noexcept;
+
 QuickCrankOutput quick_crank_update(uint32_t now_ms,
                                     uint32_t rpm_x10,
                                     bool sync_available,

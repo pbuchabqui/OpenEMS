@@ -60,6 +60,15 @@ volatile uint32_t g_prime_pw_us       = 0u;   ///< PW calculada para disparo
 int16_t           g_prime_clt_x10    = 900;   ///< CLT mais recente (do loop de fundo)
 uint16_t          g_prime_dead_time_us = 900u; ///< Dead time mais recente, corr. por Vbatt
 
+// ── Estado do prime pulse via encoder (posição/tempo, não dente) ─────────────
+// Só tocado do loop principal (2 ms) em modo encoder — sem ISR envolvida,
+// ao contrário do g_prime_* acima (partilhados com prime_on_tooth via CKP ISR).
+uint32_t g_prime_enc_prev_tim2     = 0u;
+uint32_t g_prime_enc_prev_ms       = 0u;
+bool     g_prime_enc_have_prev     = false;
+uint32_t g_prime_enc_baseline_tim2 = 0u;
+bool     g_prime_enc_armed         = false;
+
 uint16_t interp_u16(const P2* table, uint8_t n, int16_t x) noexcept {
     if (x <= table[0].x) {
         return table[0].y;
@@ -233,6 +242,76 @@ void quick_crank_reset() noexcept {
     g_prime_done        = false;
     g_prime_pending     = false;
     g_prime_pw_us       = 0u;
+    g_prime_enc_have_prev = false;
+    g_prime_enc_armed     = false;
+}
+
+void quick_crank_encoder_poll(uint32_t tim2_now, uint32_t now_ms) noexcept {
+    if (g_prime_done) { return; }
+
+    if (!g_prime_enc_have_prev) {
+        g_prime_enc_prev_tim2 = tim2_now;
+        g_prime_enc_prev_ms   = now_ms;
+        g_prime_enc_have_prev = true;
+        return;
+    }
+
+    const int32_t  delta_counts = static_cast<int32_t>(tim2_now - g_prime_enc_prev_tim2);
+    const uint32_t delta_ms     = now_ms - g_prime_enc_prev_ms;
+    g_prime_enc_prev_tim2 = tim2_now;
+    g_prime_enc_prev_ms   = now_ms;
+
+    if (delta_ms == 0u || delta_counts <= 0) {
+        return;  // sem avanço entre polls, ou rotação inversa — nada para derivar
+    }
+
+    // rpm_x10 = (delta_counts/16384 rev) / (delta_ms/60000 min) × 10
+    //         = delta_counts × 600000 / (16384 × delta_ms)
+    const uint32_t raw_rpm_x10 = static_cast<uint32_t>(
+        (static_cast<uint64_t>(delta_counts) * 600000ull) /
+        (16384ull * static_cast<uint64_t>(delta_ms)));
+
+    if (raw_rpm_x10 == 0u || raw_rpm_x10 >= sanitized_crank_exit_rpm_x10()) {
+        // Parado, ou já fora da janela de cranking — desarma a baseline.
+        g_prime_enc_armed = false;
+        return;
+    }
+
+    if (!g_prime_enc_armed) {
+        g_prime_enc_baseline_tim2 = tim2_now;
+        g_prime_enc_armed = true;
+        return;
+    }
+
+    const uint8_t  target_tooth     = sanitized_prime_tooth();
+    const uint32_t target_counts    = (static_cast<uint32_t>(target_tooth) * 16384u) / 60u;
+    const uint32_t overshoot_counts =
+        (static_cast<uint32_t>(target_tooth + 5u) * 16384u) / 60u;
+    const uint32_t advanced =
+        static_cast<uint32_t>(tim2_now - g_prime_enc_baseline_tim2);
+
+    if (advanced > overshoot_counts) {
+        // Ultrapassou o alvo com margem de segurança sem disparar — mesma
+        // lógica de FIX P1 (BUG-8, ver prime_on_tooth() acima): rearma para a
+        // próxima tentativa em vez de bloquear indefinidamente.
+        g_prime_enc_armed = false;
+        return;
+    }
+    if (advanced < target_counts) { return; }
+
+    // Dente-alvo (equivalente angular): mesma fórmula de PW de prime_on_tooth().
+    const uint32_t mult = interp_u16(
+        kCrankFuelMult,
+        static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
+        g_prime_clt_x10);
+    uint32_t pw = ((kDefaultReqFuelUs * mult) >> 8u) +
+        static_cast<uint32_t>(g_prime_dead_time_us);
+    const uint16_t prime_max_pw_us = sanitized_prime_max_pw_us();
+    if (pw > prime_max_pw_us) { pw = prime_max_pw_us; }
+
+    g_prime_pw_us   = pw;
+    g_prime_pending = true;
+    g_prime_done    = true;
 }
 
 QuickCrankOutput quick_crank_update(uint32_t now_ms,
@@ -254,6 +333,8 @@ QuickCrankOutput quick_crank_update(uint32_t now_ms,
         g_prime_done = false;
         g_prime_pending = false;
         g_prime_pw_us = 0u;
+        g_prime_enc_have_prev = false;
+        g_prime_enc_armed     = false;
     }
 
     if (cranking) {

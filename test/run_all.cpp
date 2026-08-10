@@ -224,6 +224,7 @@ int main(void) {
     // ── QUICK CRANK ─────────────────────────────────────────────────────
     printf("\n=== QUICK CRANK ===");
     test_quick_crank_all();
+    test_quick_crank_encoder_poll();
 
     // ── TRANSIENT FUEL ──────────────────────────────────────────────────
     printf("\n=== TRANSIENT FUEL ===");

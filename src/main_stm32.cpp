@@ -873,6 +873,12 @@ int main() {
             // SIMULTANEOUS, ETB crank open-loop, and HALF batch fuel.
             ems::engine::quick_crank_set_prime_context(sensors.clt_degc_x10,
                                                        fuel_corr.dead_time_us);
+#if EMS_MT6835_ENCODER
+            // Sem hook por-dente em modo encoder: deriva RPM cru de posição/
+            // tempo (docs/dev/mt6835_encoder_fork.md, "Sync-state em modo
+            // encoder", Parte 2 — quick_crank_encoder_poll()).
+            ems::engine::quick_crank_encoder_poll(ems::hal::tim2_encoder_count(), now);
+#endif
             const auto qc = ems::engine::quick_crank_update(
                 now, snap.rpm_x10, sched_sync, sensors.clt_degc_x10, 0);
             // Gate closed-loop enrichments during crank + afterstart (not raw RPM).

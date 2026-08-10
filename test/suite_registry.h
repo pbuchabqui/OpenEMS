@@ -150,6 +150,7 @@ void test_ecu_sched_encoder_recompute_presync(void);
 void test_ecu_sched_encoder_recompute_presync_bank_toggle(void);
 void test_ecu_sched_encoder_recompute_presync_pw_clamp(void);
 void test_quick_crank_all(void);
+void test_quick_crank_encoder_poll(void);
 void test_transient_fuel_all(void);
 void test_map_estimator_all(void);
 void test_misfire_all(void);

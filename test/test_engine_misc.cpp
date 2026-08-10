@@ -265,6 +265,82 @@ void test_quick_crank_all(void) {
     CHECK_FALSE(crank_flood_clear_active(1000u), "not cranking → no flood clear");
 }
 
+void test_quick_crank_encoder_poll(void) {
+    using namespace ems::engine;
+
+    // Espelha crank_prime_tooth=3 assumido por test_ckp_prime_on_tooth() —
+    // fixado aqui para não depender da ordem de execução dos testes.
+    crank_prime_tooth = 3u;
+    crank_exit_rpm_x10 = 7000u;
+    crank_enter_rpm_x10 = 4500u;
+    // target_counts = 3 tooth × 16384 counts/rev / 60 tooth/rev = 819 (trunc)
+    // overshoot_counts = 8 tooth × 16384 / 60 = 2184 (trunc)
+
+    section("quick_crank_encoder_poll: fires after baseline + target counts");
+    quick_crank_reset();
+    quick_crank_set_prime_context(-400, 500u);  // CLT=-40°C, cold engine
+
+    // Primeira chamada: só estabelece prev (sem baseline ainda) — sem RPM cru.
+    quick_crank_encoder_poll(0u, 0u);
+    CHECK_EQ(quick_crank_consume_prime(), 0u, "no prime after first poll (no baseline yet)");
+
+    // Segunda chamada: delta=2000 counts / 50 ms → rpm_x10≈1465 (< exit) →
+    // arma a baseline no tim2_now actual (2000), ainda não conta avanço.
+    quick_crank_encoder_poll(2000u, 50u);
+    CHECK_EQ(quick_crank_consume_prime(), 0u, "no prime on arming poll");
+
+    // Terceira chamada: avança 900 counts desde a baseline (≥819 alvo) —
+    // dispara.
+    quick_crank_encoder_poll(2900u, 100u);
+    const uint32_t prime_pw = quick_crank_consume_prime();
+    CHECK_TRUE(prime_pw > 0u, "prime pulse generated once target counts reached");
+    CHECK_TRUE(prime_pw <= 30000u, "prime_pw ≤ max clamp (30 ms)");
+    CHECK_EQ(quick_crank_consume_prime(), 0u, "prime is one-shot");
+
+    section("quick_crank_encoder_poll: overshoot resets, next attempt fires");
+    quick_crank_reset();
+    quick_crank_set_prime_context(-400, 500u);
+
+    quick_crank_encoder_poll(0u, 0u);           // estabelece prev
+    quick_crank_encoder_poll(2000u, 50u);        // arma baseline=2000
+    // Salto directo de 2284 counts (>overshoot=2184) desde a baseline, sem
+    // parar na janela [819, 2184] — mesma lógica de FIX P1 (BUG-8) do
+    // caminho por-dente: rearma em vez de bloquear.
+    quick_crank_encoder_poll(4284u, 100u);
+    CHECK_EQ(quick_crank_consume_prime(), 0u, "overshoot without hitting window → no prime");
+
+    // Próxima chamada válida rearma a partir da posição actual (não da
+    // baseline antiga) — confirma que o rearme produz uma baseline fresca.
+    quick_crank_encoder_poll(6284u, 150u);       // rearma baseline=6284
+    quick_crank_encoder_poll(7184u, 200u);       // avança 900 ≥ 819 → dispara
+    CHECK_TRUE(quick_crank_consume_prime() > 0u, "prime fires after re-arm past overshoot");
+
+    section("quick_crank_encoder_poll: rpm above crank_exit disarms baseline");
+    quick_crank_reset();
+    quick_crank_set_prime_context(-400, 500u);
+
+    quick_crank_encoder_poll(0u, 0u);
+    quick_crank_encoder_poll(2000u, 50u);        // arma baseline=2000
+    // delta=20000 counts / 50 ms → rpm_x10≈14648 (≥ exit=7000) → desarma,
+    // mesmo que o avanço bruto já ultrapassasse o alvo em counts.
+    quick_crank_encoder_poll(22000u, 100u);
+    CHECK_EQ(quick_crank_consume_prime(), 0u,
+             "rpm above crank_exit never counts toward target, even past overshoot");
+
+    section("quick_crank_encoder_poll: stopped after firing does not re-fire");
+    quick_crank_reset();
+    quick_crank_set_prime_context(-400, 500u);
+    quick_crank_encoder_poll(0u, 0u);
+    quick_crank_encoder_poll(2000u, 50u);
+    quick_crank_encoder_poll(2900u, 100u);
+    CHECK_TRUE(quick_crank_consume_prime() > 0u, "pre-cond: fired");
+    quick_crank_encoder_poll(4000u, 150u);       // g_prime_done já true → early-return
+    CHECK_EQ(quick_crank_consume_prime(), 0u, "no re-fire after g_prime_done latched");
+
+    quick_crank_reset();
+    CHECK_EQ(quick_crank_consume_prime(), 0u, "no prime pending after quick_crank_reset");
+}
+
 // ============================================================================
 // TRANSIENT FUEL (X-Tau)
 // ============================================================================
