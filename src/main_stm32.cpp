@@ -1102,7 +1102,19 @@ int main() {
                     g_ae_active = (ae_pw_us > 0);
                 }
                 const int16_t base_advance_deg = ems::engine::get_advance_prepared(fuel_lookup);
-                const uint16_t knock_retard_x10 = ems::engine::knock_get_retard_x10(0u);
+                // Máximo entre os 4 cilindros, não só o cilindro 0 (FIX:
+                // knock_retard_x10[] é genuinamente por cilindro, mas este
+                // valor é aplicado como escalar único e partilhado a todos
+                // os cilindros abaixo — máximo é a escolha conservadora,
+                // nunca sub-retarda o cilindro que mais precisa. Retard
+                // verdadeiramente por cilindro precisa de infra-estrutura
+                // nova que não existe hoje — ver AdvanceCorrections/
+                // calc_total_advance, escalar único, fora de escopo aqui).
+                uint16_t knock_retard_x10 = 0u;
+                for (uint8_t kc = 0u; kc < 4u; ++kc) {
+                    const uint16_t r = ems::engine::knock_get_retard_x10(kc);
+                    if (r > knock_retard_x10) { knock_retard_x10 = r; }
+                }
                 const uint16_t idle_target_rpm_x10 =
                     ems::engine::auxiliaries_idle_target_rpm_x10(sensors.clt_degc_x10);
                 // Idle spark OK during afterstart (helps settle); suppressed only while cranking.
