@@ -198,6 +198,7 @@ int main(void) {
     test_ecu_sched_setters();
     test_ecu_sched_angle_table();
     test_ecu_sched_wasted_to_sequential();
+    test_knock_window_scheduler_wiring();
     test_ecu_sched_cmp_revalidation_after_sync_loss();
     test_ecu_sched_noise_rejects_sequential();
     test_ecu_sched_recovers_after_fallback();

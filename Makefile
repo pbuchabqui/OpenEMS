@@ -2,7 +2,7 @@
 # BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE) | BOARD=mre (mRE copper)
 # Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
-.PHONY: all clean host-test host-test-vgt6 host-test-mre firmware firmware-rgt6 \
+.PHONY: all clean host-test host-test-vgt6 host-test-mre host-test-knock-hw firmware firmware-rgt6 \
         firmware-vgt6 firmware-mre help \
         secrets-check lint-includes format format-all format-check ci-local
 
@@ -126,6 +126,7 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_fuel.cpp \
                    $(TEST_DIR)/test_ign.cpp \
                    $(TEST_DIR)/test_aux_knock.cpp \
+                   $(TEST_DIR)/test_knock_hw_wiring.cpp \
                    $(TEST_DIR)/test_timer.cpp \
                    $(TEST_DIR)/test_sched.cpp \
                    $(TEST_DIR)/test_engine_misc.cpp \
@@ -136,6 +137,17 @@ HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(SRC_DIR)/hal/stm32h562/timer.cpp \
                 $(SRC_DIR)/hal/stm32h562/system.cpp \
                 $(HOST_TEST_HARNESS) $(HOST_TEST_SUITES)
+# Binário próprio p/ knock com EMS_KNOCK_HW_PRESENT=1 (make host-test-knock-hw)
+# — mesma lógica de teste de test_knock_hw_wiring.cpp que a suite principal já
+# compila com a flag em 0; aqui só troca o main() (test_knock_hw_main.cpp em
+# vez de run_all.cpp) e o define. Contagem PASS/FAIL da suite principal intocada.
+HOST_TEST_KNOCK_HW_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
+                         $(SRC_DIR)/hal/stm32h562/timer.cpp \
+                         $(SRC_DIR)/hal/stm32h562/system.cpp \
+                         $(TEST_DIR)/harness.cpp $(TEST_DIR)/fixtures.cpp \
+                         $(TEST_DIR)/ui_helpers.cpp \
+                         $(TEST_DIR)/test_knock_hw_wiring.cpp \
+                         $(TEST_DIR)/test_knock_hw_main.cpp
 HOST_TEST_BIN = $(HOST_DIR)/mvp_bench_tests
 
 all: help
@@ -148,6 +160,7 @@ help:
 	@echo "  host-test       Host regression (always RGT6 pin map stubs)"
 	@echo "  host-test-vgt6  Standalone VGT6 GPIOE INJ/IGN BSRR coverage"
 	@echo "  host-test-mre   Standalone MRE (microRusEFI copper) pin map coverage"
+	@echo "  host-test-knock-hw  Standalone knock wiring coverage (EMS_KNOCK_HW_PRESENT=1)"
 	@echo "  firmware        Build for BOARD (default rgt6)"
 	@echo "  firmware-rgt6   Build RGT6 bin"
 	@echo "  firmware-vgt6   Build VGT6 bin (GPIOE INJ/IGN/ETB OpenEMS ideal)"
@@ -197,6 +210,13 @@ host-test-mre:
 		$(SRC_DIR)/hal/out_pins.cpp $(TEST_DIR)/harness.cpp \
 		$(TEST_DIR)/test_out_pins_mre.cpp -o $(HOST_DIR)/out_pins_mre_tests -lm
 	@$(HOST_DIR)/out_pins_mre_tests
+
+host-test-knock-hw:
+	@mkdir -p $(HOST_DIR)
+	@echo "  HOST $(HOST_DIR)/knock_hw_wiring_tests"
+	@$(CXX_HOST) $(CFLAGS_HOST) -DEMS_KNOCK_HW_PRESENT=1 $(HOST_TEST_KNOCK_HW_SRC) \
+		-o $(HOST_DIR)/knock_hw_wiring_tests -lm
+	@$(HOST_DIR)/knock_hw_wiring_tests
 
 firmware: $(OBJ_DIR) $(ELF_DIR) $(BIN_DIR) $(FIRMWARE_ELF) $(FIRMWARE_HEX) $(FIRMWARE_BIN)
 	@cp -f $(FIRMWARE_BIN) $(FIRMWARE_BIN_ALIAS)

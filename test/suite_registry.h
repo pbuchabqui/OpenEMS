@@ -127,6 +127,7 @@ void test_table3d_all(void);
 void test_ecu_sched_setters(void);
 void test_ecu_sched_angle_table(void);
 void test_ecu_sched_wasted_to_sequential(void);
+void test_knock_window_scheduler_wiring(void);
 void test_ecu_sched_cmp_revalidation_after_sync_loss(void);
 void test_ecu_sched_noise_rejects_sequential(void);
 void test_ecu_sched_recovers_after_fallback(void);

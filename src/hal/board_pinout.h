@@ -60,3 +60,19 @@
 #ifndef EMS_MT6835_CMP_PHASE_VALUE
 #  define EMS_MT6835_CMP_PHASE_VALUE 1U  // ECU_PHASE_A — placeholder, ver comentário acima
 #endif
+
+// O hardware analógico de knock (bandpass→rectificador→peak-hold) está DNP na
+// v1 (docs/hw/schematic/10_knock_dnp.md) — o footprint TPIC8101 nunca foi
+// populado. `knock_window_open()` foi apagado por acidente do scheduler
+// (commit f42c450, varredura de "dead code" que levou consigo o wiring de
+// knock introduzido em 39e3b65) — confirmado em falta em ambos os branches,
+// não é específico deste fork. Restaurar esse wiring sem gate ligaria
+// knock_adc_update() a um pino PA5 flutuante: ruído cruza o threshold de
+// forma imprevisível e knock_cycle_complete() tem um ratchet positivo
+// (adc_threshold -= 64 a cada hit) que o tornaria cada vez mais sensível —
+// produziria retard falso real num motor a correr. Default 0: o wiring fica
+// restaurado no código (testável em host) mas nunca abre uma janela de
+// verdade. Só passar a 1 quando o front-end analógico existir fisicamente.
+#ifndef EMS_KNOCK_HW_PRESENT
+#  define EMS_KNOCK_HW_PRESENT 0
+#endif
