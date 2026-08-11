@@ -3,6 +3,7 @@
 #include "hal/adc.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
+#include "engine/ecu_sched.h"
 
 using namespace ems::drv;
 using namespace ems::hal;
@@ -71,5 +72,14 @@ void sensor_setup(void) {
     adc_test_set_raw_secondary(AdcSecondaryChannel::IAT,        2000u);
     adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS, 2000u);
     adc_test_set_raw_secondary(AdcSecondaryChannel::OIL_PRESS,  2000u);
+}
+
+void encoder_seq_seed_omega(void) {
+    // omega=0.5 (d_tim2=500, d_tim5=1000). End at tim2=1400 so the next
+    // sequential heartbeat (typ. 1500) does not repeat tim2_now (Δ=0 ⇒ ω=0).
+    ecu_sched_encoder_test_set_tim2_cnt(900u);
+    ecu_sched_encoder_heartbeat_tick(900u, 1000u, 0u, 0u);
+    ecu_sched_encoder_test_set_tim2_cnt(1400u);
+    ecu_sched_encoder_heartbeat_tick(1400u, 2000u, 0u, 0u);
 }
 

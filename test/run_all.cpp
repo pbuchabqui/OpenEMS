@@ -199,6 +199,7 @@ int main(void) {
     test_ecu_sched_angle_table();
     test_ecu_sched_wasted_to_sequential();
     test_knock_window_scheduler_wiring();
+    test_knock_window_encoder_arm_wiring();
     test_ecu_sched_cmp_revalidation_after_sync_loss();
     test_ecu_sched_noise_rejects_sequential();
     test_ecu_sched_recovers_after_fallback();
@@ -231,6 +232,9 @@ int main(void) {
     test_ecu_sched_encoder_sequential_phase_progression();
     test_ecu_sched_encoder_presync_to_sequential_transition();
     test_ecu_sched_encoder_sequential_min_lead_skip();
+    test_ecu_sched_encoder_sequential_min_lead_dwell_behind();
+    test_ecu_sched_encoder_sequential_long_lead_refresh();
+    test_ecu_sched_encoder_sequential_multispark();
 
     // ── QUICK CRANK ─────────────────────────────────────────────────────
     printf("\n=== QUICK CRANK ===");

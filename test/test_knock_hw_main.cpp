@@ -11,11 +11,13 @@
 #include <cstdio>
 
 void test_knock_window_scheduler_wiring(void);
+void test_knock_window_encoder_arm_wiring(void);
 
 int main(void) {
     printf("OpenEMS Knock HW-Present Wiring Test\n");
     printf("============================================================\n");
     test_knock_window_scheduler_wiring();
+    test_knock_window_encoder_arm_wiring();
     printf("\n============================================================\n");
     printf("Knock HW wiring: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

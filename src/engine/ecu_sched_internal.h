@@ -13,6 +13,8 @@
 #pragma once
 
 #include "engine/ecu_sched.h"
+#include "engine/knock.h"
+#include "hal/board_pinout.h"
 #include "drv/ckp.h"
 
 #include <stdint.h>
@@ -22,6 +24,7 @@ namespace ems::engine::sched_internal {
 // ── Clock helpers (same as ecu_sched.cpp) ───────────────────────────────────
 inline constexpr uint32_t kCycleDeg = 720U;
 inline constexpr uint32_t kMaxSeqInjPwDeg = 648U;      // 90% of 720°
+inline constexpr uint32_t kMaxSeqInjPwCounts = (32768U * 9U) / 10U;  // 90% of 2 TIM2 revs
 inline constexpr uint32_t kMaxPresyncInjPwDeg = 324U;  // 90% of 360°
 
 #define ECU_SCHED_US_TO_TICKS_INTERNAL(us) ((us) * 125U / 2U)
@@ -46,12 +49,6 @@ inline constexpr uint8_t k_ign_ch_to_bit[8] = {
     0U, 0U, 0U, 0U, (1U << 3), (1U << 2), (1U << 1), (1U << 0)
 };
 
-// ── Angle table (defined in ecu_sched_angle.cpp) ────────────────────────────
-extern AngleEvent_t g_angle_table[ECU_ANGLE_TABLE_SIZE];
-extern uint8_t g_angle_table_count;
-extern uint32_t g_angle_tooth_mask_lo;
-extern uint32_t g_angle_tooth_mask_hi;
-
 // ── Calibration / mode read by builders (defined in ecu_sched.cpp) ──────────
 extern volatile uint32_t g_advance_deg;
 extern volatile uint32_t g_dwell_ticks;
@@ -64,6 +61,42 @@ extern volatile uint8_t  g_mspark_count;
 extern volatile uint32_t g_mspark_inter_dwell_ticks;
 extern volatile uint32_t g_mspark_atdc_limit_deg;
 extern volatile uint32_t g_pw_duty_clamp_count;
+
+// Knock window on DWELL_START — single site for TIM5 + TIM2 arm paths.
+// Gate: IGN channel, EMS_KNOCK_HW_PRESENT, sequential mode.
+inline void maybe_knock_on_dwell_start(uint8_t ch) noexcept
+{
+    if (ch < ECU_CH_IGN4) { return; }
+    if (!EMS_KNOCK_HW_PRESENT || g_knock_sequential == 0U) { return; }
+    knock_window_cycle_end();
+    knock_window_open(static_cast<uint8_t>(7U - ch));
+}
+
+// Multi-spark offset loop (deg domain). Call sites supply inter_deg
+// (CKP: via tooth_period; encoder: via ω→counts→deg).
+template <typename EmitFn>
+inline void emit_multispark_deg(uint32_t spark_ang, uint32_t cycle_deg,
+                                uint32_t inter_deg, EmitFn emit)
+{
+    const uint8_t ms_count = g_mspark_count;
+    if (ms_count == 0U) { return; }
+    const uint32_t step = inter_deg + 1U;
+    const uint32_t window = g_advance_deg + g_mspark_atdc_limit_deg;
+    for (uint8_t n = 1U; n <= ms_count; ++n) {
+        const uint32_t add_spark_off = static_cast<uint32_t>(n) * step;
+        if (add_spark_off >= window) { break; }
+        const uint32_t add_dwell_off =
+            static_cast<uint32_t>(n - 1U) * step + 1U;
+        emit((spark_ang + add_dwell_off) % cycle_deg,
+             (spark_ang + add_spark_off) % cycle_deg);
+    }
+}
+
+// ── Angle table (defined in ecu_sched_angle.cpp) ────────────────────────────
+extern AngleEvent_t g_angle_table[ECU_ANGLE_TABLE_SIZE];
+extern uint8_t g_angle_table_count;
+extern uint32_t g_angle_tooth_mask_lo;
+extern uint32_t g_angle_tooth_mask_hi;
 
 // ── Cold builders (ecu_sched_angle.cpp) — called only at rev gap ─────────────
 void clear_angle_table(void);

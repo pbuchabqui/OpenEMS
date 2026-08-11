@@ -1149,36 +1149,64 @@ chamar `recompute_presync()` sem nada a substituí-lo. Agora chama
    esses 2 cilindros — purgar os 4 destruiria eventos do outro par ainda
    não disparados. Handoff presync→sequencial: `g_enc_last_builder_was_sequential`
    força uma purga total 4+4 na primeira passagem sequencial. Guarda
-   min-lead: se spark/EOI está dentro de `min_lead_counts()` do `now_raw`
-   do heartbeat, salta o par inteiro (contador de diagnóstico) — TIM2 pode
-   decrementar em kickback.
+   min-lead: se **qualquer** extremo do par (dwell/spark ou inj_on/eoi) está
+   dentro de `min_lead_counts()` do `now_raw` do heartbeat, salta o par
+   inteiro (contador de diagnóstico) — TIM2 pode decrementar em kickback;
+   evita `arm_channel()` a clampar ON e OFF com leituras independentes.
 
 `g_knock_sequential` = 1 em `rebuild_sequential()`, = 0 no topo de
 `recompute_presync()` (paridade com o CKP). UI e halving de PW em
-`main_stm32.cpp` passam a reflectir sequencial correctamente. Windowing de
-knock no `arm_channel()` do encoder continua fora de escopo.
+`main_stm32.cpp` passam a reflectir sequencial correctamente.
+`ecu_sched_encoder_arm_channel()` abre `knock_window_*` no `DWELL_START`
+quando `EMS_KNOCK_HW_PRESENT && g_knock_sequential` (mesmo gate do TIM5).
 
-### Limitação v1 nomeada
+### Refresh de spans da outra fase (ω fresco)
 
-Dentro de uma metade-de-fase os dois cilindros estão a 180°; o mais
-distante (ou o cujo spark cai na outra fase e leva `+16384`) é construído
-quase duas voltas antes de disparar — `dwell_span`/`inj_pw_span` podem
-estar ~720° desactualizados face ao ω real. Inofensivo em regime
-permanente; follow-up candidato: re-arme de dwell a meio de ciclo.
+Dentro de uma metade-de-fase o cilindro distante (ou spark com `+16384`) é
+construído quase duas voltas antes. Em cada `rebuild_sequential`, após armar
+a fase corrente, `refresh_other_phase_spans()` re-arma a **outra** fase se o
+SPARK ainda está pendente com lead > min-lead: mantém timestamps absolutos
+de SPARK/EOI e recalcula dwell/PW com o ω actual (só faz purge se o novo
+span ainda passa min-lead).
+
+### Multi-spark
+
+`rebuild_sequential` emite pares dwell/spark adicionais (paridade com
+`emit_multispark` no CKP), convertendo `g_mspark_inter_dwell_ticks` → graus
+via ω/counts. Presync continua sem multi-spark.
 
 ### Fora de escopo
 
-- Multi-spark no construtor sequencial.
 - Confiança graduada tipo `cmp_confirms>=2`.
-- `knock_window_open()` no arm encoder.
-- Mitigação do lead ~720° do cilindro distante.
-- Medição em bancada de `EMS_MT6835_CMP_PHASE_CALIBRATED`.
+- Activar `EMS_MT6835_CMP_PHASE_CALIBRATED=1` no default do repo sem medição
+  em bancada (ver checklist abaixo).
+
+### Checklist bancada — `EMS_MT6835_CMP_PHASE_CALIBRATED`
+
+Não mudar o default em `board_pinout.h` sem medição. Procedimento:
+
+1. Seguir a secção de calibração CMP / `trigger_tooth0_engine_deg` acima
+   (passos 1–6): determinar se o flanco Hall aceite é `ECU_PHASE_A` ou
+   `ECU_PHASE_B` face ao PMS de compressão do cilindro 1.
+2. Build de bancada (não commit da flag no default):
+   ```
+   make firmware-vgt6 EMS_MT6835_ENCODER=1 \
+     EMS_MT6835_CMP_PHASE_VALUE=<A_ou_B> \
+     EMS_MT6835_CMP_PHASE_CALIBRATED=1 WERROR=1
+   ```
+3. Critérios de aceite: `phase_valid()==1` após flanco CMP aceite;
+   `ecu_sched_is_sequential()==1`; disparo IGN na ordem física 1-3-4-2;
+   sem `g_enc_seq_min_lead_skip_count` a correr em regime estável.
+4. Só depois: gravar `EMS_MT6835_CMP_PHASE_VALUE` correcto e então
+   `CALIBRATED=1` no board/build de bancada local — **nunca** `CALIBRATED`
+   antes de `VALUE` estar certo.
 
 ### Verificação
 
 ```
-make host-test                  → 1584 PASS, 0 FAIL
-make host-test-vgt6             → 24 PASS, 0 FAIL
+make host-test                  → PASS (incl. min-lead dwell, refresh, multispark, knock encoder)
+make host-test-knock-hw         → PASS (TIM5 + encoder arm wiring)
+make host-test-vgt6             → PASS
 make firmware-vgt6/rgt6/mre     → build limpo, flags default
 EMS_MT6835_ENCODER=1 EMS_MT6835_CMP_PHASE_CALIBRATED=1 WERROR=1
   firmware-vgt6                 → limpo, board_pinout.h revertido depois

@@ -475,17 +475,10 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
         g_dwell_wdog_ticks[ign_idx] = (si::g_dwell_ticks * 7U) / 5U;
     }
     // Knock window: restaurado (era removido por acidente, commit f42c450 —
-    // ver aviso em hal/board_pinout.h). Gated atrás de EMS_KNOCK_HW_PRESENT
-    // (default 0, hardware analógico DNP na v1) — `if`, não `#if`, para ficar
-    // sempre compilado e testável nos dois estados. g_knock_sequential só é
-    // 1 no caminho CKP (ecu_sched_angle.cpp); nunca é tocado em modo encoder
-    // (ver hal/board_pinout.h / mt6835_encoder_fork.md — dispatcher encoder
-    // ainda dispara os 4 canais juntos, sem cilindro único identificável).
-    if (is_inj == 0U && action == ECU_ACT_DWELL_START &&
-        EMS_KNOCK_HW_PRESENT && si::g_knock_sequential != 0U) {
-        const uint8_t knock_cyl = static_cast<uint8_t>(7U - ch);
-        ems::engine::knock_window_cycle_end();
-        ems::engine::knock_window_open(knock_cyl);
+    // ver aviso em hal/board_pinout.h). Shared helper — TIM2 arm path uses
+    // the same maybe_knock_on_dwell_start().
+    if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
+        si::maybe_knock_on_dwell_start(ch);
     }
     (void)now;
 

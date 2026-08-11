@@ -123,3 +123,43 @@ void test_knock_window_scheduler_wiring(void) {
                 "EMS_KNOCK_HW_PRESENT=0: janela nunca abre mesmo em sequencial");
 #endif
 }
+
+void test_knock_window_encoder_arm_wiring(void) {
+#if EMS_KNOCK_HW_PRESENT
+    section("knock: encoder arm_channel() abre janela em sequencial (EMS_KNOCK_HW_PRESENT=1)");
+#else
+    section("knock: encoder arm_channel() inerte em sequencial (EMS_KNOCK_HW_PRESENT=0)");
+#endif
+    ecu_sched_test_reset();
+    knock_init();
+
+    // omega seed (encoder_seq_seed_omega in fixtures)
+    encoder_seq_seed_omega();
+
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_dwell_ticks(2000u);
+    ecu_sched_set_inj_pw_ticks(0u);
+
+    // Presync path: g_knock_sequential=0 → janela não deve abrir.
+    ecu_sched_encoder_test_set_tim2_cnt(1500u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "pré: ainda presync");
+    CHECK_FALSE(knock_test_window_active(),
+                "presync encoder: knock window closed (g_knock_sequential=0)");
+
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    ecu_sched_encoder_test_set_tim2_cnt(1600u);
+    ecu_sched_encoder_heartbeat_tick(1600u, 4000u, 1u, 1u);
+    CHECK_EQ(ecu_sched_is_sequential(), 1u, "phase valid → sequential");
+
+#if EMS_KNOCK_HW_PRESENT
+    CHECK_TRUE(knock_test_window_active(),
+               "encoder sequential DWELL_START abre janela de knock");
+    const uint8_t cyl = knock_test_window_cyl();
+    CHECK_TRUE(cyl <= 3u, "knock cyl id válido");
+#else
+    CHECK_FALSE(knock_test_window_active(),
+                "EMS_KNOCK_HW_PRESENT=0: encoder sequencial não abre janela");
+#endif
+    ecu_sched_test_reset();
+}

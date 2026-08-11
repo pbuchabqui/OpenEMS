@@ -21,19 +21,15 @@
  * unidade. Por isso esta fila é nova e separada, não uma variante
  * parametrizada da existente.
  *
- * Estrutura prevista (preenchida pelas tarefas seguintes, ainda vazias):
- *   - Fila TIM2/CH3 própria (evt_insert/dispatch equivalentes, unidade
- *     counts) — TODO.
- *   - Rastreador de fase: anchor absoluto de 32 bits, atualizado por
- *     definição absoluta a cada flanco do CMP (sensor Hall inalterado,
- *     cmp_angle_snapshot()) — TODO.
- *   - Estimador de ω: ΔTIM2_CNT/ΔTIM5_CNT, delta com sinal (sobrevive a
- *     bounce de cranking) — TODO.
- *   - Heartbeat TIM2_CH4: recompute barato de dwell/PW, bank-toggle do
- *     presync, verificação de deriva do CMP — TODO (HAL em
- *     hal/stm32h562/timer.cpp; este ficheiro só a lógica de resposta).
- *   - Conversão graus→counts + função de recompute partilhada com
- *     ecu_sched_commit_calibration() — TODO.
+ * Estado actual (ver docs/dev/mt6835_encoder_fork.md):
+ *   - Fila TIM2/CH3 própria (evt_insert/dispatch, unidade counts).
+ *   - Fase A/B: anchor absoluto + floor_div_16384; CMP via
+ *     ecu_sched_encoder_phase_set_anchor() quando calibrado.
+ *   - Estimador de ω: ΔTIM2_CNT/ΔTIM5_CNT (signed), fixed-point ×65536.
+ *   - Heartbeat: sub-tick (misfire) + tick pesado 1×/volta (ω, CMP,
+ *     recompute_presync / rebuild_sequential, publish snapshot).
+ *   - Construtor sequencial: engine_deg720_to_absolute, 2 cyls/fase,
+ *     refresh de lead longo, multi-spark; presync continua wasted-spark.
  */
 
 #include "engine/ecu_sched_internal.h"
@@ -51,6 +47,9 @@
 #endif
 
 #include <stdint.h>
+#if defined(EMS_HOST_TEST)
+#include <cassert>
+#endif
 
 namespace si = ems::engine::sched_internal;
 
@@ -343,27 +342,35 @@ void ecu_sched_encoder_evt_dispatch(void) noexcept
     g_enc_evt_armed = 0U;
 }
 
-void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
-                                   uint8_t action) noexcept
+static void arm_channel_with_lead(uint8_t ch, uint32_t target_counts,
+                                  uint8_t action, uint32_t min_lead) noexcept
 {
     // Mesma razão do arm_channel() de ecu_sched.cpp: inserir na fila +
     // tocar CCR3/DIER não pode intercalar com o dispatch ISR (TIM2 CH3).
     ems::hal::CriticalSectionGuard guard;
     const uint8_t high =
         ((action == ECU_ACT_INJ_ON) || (action == ECU_ACT_DWELL_START)) ? 1U : 0U;
-    // Piso mínimo de lead (plano, secção 7) — mesmo padrão do arm_channel()
-    // de ecu_sched.cpp (STM32_MIN_COMPARE_LEAD_TICKS), mas em counts via ω
-    // (si::encoder::min_lead_counts()). Um alvo já passado ou tarde demais
-    // não conta como "late" aqui (mesma razão da versão TIM5: min-lead não é
-    // sinal de atraso, é margem de reação normal).
+
+    if (action == ECU_ACT_DWELL_START) {
+        si::maybe_knock_on_dwell_start(ch);
+    }
+
+    // Piso mínimo de lead — caller passa min_lead já hoistado no rebuild
+    // (evita recalcular ω→span em cada insert).
     const uint32_t now = TIM2_CNT;
-    const uint32_t min_lead = si::encoder::min_lead_counts();
     const int32_t lead = (int32_t)(target_counts - now);
     if (lead < (int32_t)min_lead) {
         enc_evt_insert(now + min_lead, ch, high);
     } else {
         enc_evt_insert(target_counts, ch, high);
     }
+}
+
+void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
+                                   uint8_t action) noexcept
+{
+    arm_channel_with_lead(ch, target_counts, action,
+                          si::encoder::min_lead_counts());
 }
 
 #if defined(EMS_HOST_TEST)
@@ -689,7 +696,8 @@ static uint32_t engine_deg720_to_absolute(uint32_t engine_angle_deg /* 0..719 */
 // eoi_lead e podiam partir um par entre fases. Código 0-based
 // kFiringOrder={0,2,3,1} = ordem física 1-3-4-2: fase A = {0,2} (físicos
 // 1 e 3), fase B = {3,1} (físicos 4 e 2).
-static void cyls_for_phase(uint8_t phase, uint8_t out2[2]) noexcept
+// Devolve quantos cilindros foram escritos (espera-se 2 com a config actual).
+static uint8_t cyls_for_phase(uint8_t phase, uint8_t out2[2]) noexcept
 {
     uint8_t n = 0U;
     for (uint8_t seq = 0U; seq < cfg::kCylinderCount; ++seq) {
@@ -700,6 +708,7 @@ static void cyls_for_phase(uint8_t phase, uint8_t out2[2]) noexcept
         out2[n++] = cyl;
         if (n >= 2U) { break; }
     }
+    return n;
 }
 
 // Duração (ticks TIM5) → extensão angular em counts, via ω mais recente —
@@ -733,6 +742,160 @@ uint32_t min_lead_counts(void) noexcept
     return duration_ticks_to_span_counts(ECU_SCHED_US_TO_TICKS_INTERNAL(2U));
 }
 
+static bool lead_ge_min(uint32_t target, uint32_t now_raw,
+                        uint32_t min_lead) noexcept
+{
+    return static_cast<int32_t>(target - now_raw) >=
+           static_cast<int32_t>(min_lead);
+}
+
+static uint32_t inj_pw_span_for_cyl(uint8_t cyl) noexcept
+{
+    const int32_t fuel_trim = static_cast<int32_t>(cyl_fuel_trim_pct[cyl]);
+    const int32_t pw_trimmed =
+        static_cast<int32_t>(g_inj_pw_ticks) * (100 + fuel_trim) / 100;
+    const uint32_t raw_pw_ticks =
+        (pw_trimmed < 0) ? 0u : static_cast<uint32_t>(pw_trimmed);
+    uint32_t inj_pw_span = duration_ticks_to_span_counts(raw_pw_ticks);
+    if (inj_pw_span > kMaxSeqInjPwCounts) {
+        inj_pw_span = kMaxSeqInjPwCounts;
+        ++g_pw_duty_clamp_count;
+    }
+    return inj_pw_span;
+}
+
+// Arm ON+OFF as a pair, or skip both (kickback / clamp-invert guard).
+static void arm_pair_if_lead(uint8_t ch, uint32_t on_ts, uint32_t off_ts,
+                             uint32_t now_raw, uint32_t min_lead,
+                             uint8_t on_act, uint8_t off_act) noexcept
+{
+    if (!lead_ge_min(on_ts, now_raw, min_lead) ||
+        !lead_ge_min(off_ts, now_raw, min_lead)) {
+        ++g_enc_seq_min_lead_skip_count;
+        return;
+    }
+    arm_channel_with_lead(ch, on_ts, on_act, min_lead);
+    arm_channel_with_lead(ch, off_ts, off_act, min_lead);
+}
+
+// Arma IGN (+ multi-spark) e INJ de um cilindro.
+// ms_inter_deg: graus entre sparks multi (0 se mspark desligado) — hoistado
+// pelo caller para não repetir ω→deg por cilindro.
+static void arm_sequential_cyl(uint8_t cyl, uint32_t now_raw,
+                               uint32_t dwell_span, uint32_t min_lead,
+                               uint32_t ms_inter_deg) noexcept
+{
+    const uint32_t tdc = cfg::cyl_tdc_deg(cyl);
+
+    const int32_t ign_trim = static_cast<int32_t>(cyl_ign_trim_deg[cyl]);
+    const int32_t trimmed_advance =
+        static_cast<int32_t>(g_advance_deg) + ign_trim;
+    const uint32_t eff_advance = (trimmed_advance < 0)
+        ? 0u
+        : static_cast<uint32_t>(trimmed_advance);
+
+    const uint32_t spark_deg =
+        (tdc + kCycleDeg - eff_advance) % kCycleDeg;
+    const uint32_t eoi_deg =
+        (tdc + kCycleDeg - g_eoi_lead_deg) % kCycleDeg;
+
+    const uint32_t spark_target =
+        engine_deg720_to_absolute(spark_deg, now_raw);
+    const uint32_t dwell_target = spark_target - dwell_span;
+
+    arm_pair_if_lead(kIgnCh[cyl], dwell_target, spark_target, now_raw, min_lead,
+                     ECU_ACT_DWELL_START, ECU_ACT_SPARK);
+
+    if (lead_ge_min(spark_target, now_raw, min_lead) &&
+        lead_ge_min(dwell_target, now_raw, min_lead)) {
+        emit_multispark_deg(spark_deg, kCycleDeg, ms_inter_deg,
+            [&](uint32_t add_dwell_deg, uint32_t add_spark_deg) {
+                const uint32_t add_dwell_t =
+                    engine_deg720_to_absolute(add_dwell_deg, now_raw);
+                const uint32_t add_spark_t =
+                    engine_deg720_to_absolute(add_spark_deg, now_raw);
+                arm_pair_if_lead(kIgnCh[cyl], add_dwell_t, add_spark_t, now_raw,
+                                 min_lead, ECU_ACT_DWELL_START, ECU_ACT_SPARK);
+            });
+    }
+
+    const uint32_t eoi_target = engine_deg720_to_absolute(eoi_deg, now_raw);
+    const uint32_t inj_on_target = eoi_target - inj_pw_span_for_cyl(cyl);
+    arm_pair_if_lead(kInjCh[cyl], inj_on_target, eoi_target, now_raw, min_lead,
+                     ECU_ACT_INJ_ON, ECU_ACT_INJ_OFF);
+}
+
+// Re-arma a outra fase: mantém SPARK/EOI absolutos na fila e refresca
+// dwell/PW com ω actual (evita spans congelados ~720°). Só faz purge se o
+// novo span ainda passa min-lead — senão deixa os eventos antigos.
+// Uma varredura da fila indexa spark/EOI por cilindro; depois processa a máscara.
+static void refresh_other_phase_spans(uint32_t now_raw, uint8_t other_mask,
+                                     uint32_t dwell_span,
+                                     uint32_t min_lead) noexcept
+{
+    if (other_mask == 0U) { return; }
+
+    uint32_t spark_ts[4] = {};
+    uint8_t  have_spark[4] = {};
+    uint32_t eoi_ts[4] = {};
+    uint8_t  have_eoi[4] = {};
+
+    for (uint8_t i = 0U; i < g_enc_evt_count; ++i) {
+        const uint8_t ch = g_enc_evt_queue[i].channel;
+        const uint8_t high = g_enc_evt_queue[i].high;
+        if (ch >= ECU_CH_IGN4 && ch <= ECU_CH_IGN1) {
+            const uint8_t cyl = static_cast<uint8_t>(7U - ch);
+            if ((other_mask & static_cast<uint8_t>(1U << cyl)) == 0U) { continue; }
+            // First match = earliest (queue is time-ordered); skip multispark tails.
+            if (high == 0U && have_spark[cyl] == 0U) {
+                spark_ts[cyl] = g_enc_evt_queue[i].timestamp;
+                have_spark[cyl] = 1U;
+            }
+        } else if (ch <= 3U) {
+            uint8_t cyl = 0xFFU;
+            for (uint8_t c = 0U; c < cfg::kCylinderCount; ++c) {
+                if (kInjCh[c] == ch) { cyl = c; break; }
+            }
+            if (cyl >= cfg::kCylinderCount) { continue; }
+            if ((other_mask & static_cast<uint8_t>(1U << cyl)) == 0U) { continue; }
+            if (high == 0U && have_eoi[cyl] == 0U) {
+                eoi_ts[cyl] = g_enc_evt_queue[i].timestamp;
+                have_eoi[cyl] = 1U;
+            }
+        }
+    }
+
+    for (uint8_t cyl = 0U; cyl < cfg::kCylinderCount; ++cyl) {
+        if ((other_mask & static_cast<uint8_t>(1U << cyl)) == 0U) { continue; }
+        if (have_spark[cyl] == 0U) { continue; }
+        if (!lead_ge_min(spark_ts[cyl], now_raw, min_lead)) { continue; }
+
+        const uint32_t dwell_target = spark_ts[cyl] - dwell_span;
+        if (lead_ge_min(dwell_target, now_raw, min_lead)) {
+            encoder_purge_cyl_mask(static_cast<uint8_t>(1U << cyl), 1U);
+            arm_channel_with_lead(kIgnCh[cyl], dwell_target,
+                                  ECU_ACT_DWELL_START, min_lead);
+            arm_channel_with_lead(kIgnCh[cyl], spark_ts[cyl],
+                                  ECU_ACT_SPARK, min_lead);
+        } else {
+            ++g_enc_seq_min_lead_skip_count;
+        }
+
+        if (have_eoi[cyl] == 0U) { continue; }
+        const uint32_t inj_on_target = eoi_ts[cyl] - inj_pw_span_for_cyl(cyl);
+        if (lead_ge_min(inj_on_target, now_raw, min_lead) &&
+            lead_ge_min(eoi_ts[cyl], now_raw, min_lead)) {
+            encoder_purge_cyl_mask(static_cast<uint8_t>(1U << cyl), 0U);
+            arm_channel_with_lead(kInjCh[cyl], inj_on_target,
+                                  ECU_ACT_INJ_ON, min_lead);
+            arm_channel_with_lead(kInjCh[cyl], eoi_ts[cyl],
+                                  ECU_ACT_INJ_OFF, min_lead);
+        } else {
+            ++g_enc_seq_min_lead_skip_count;
+        }
+    }
+}
+
 // ── Recompute presync — chamado pelo heartbeat TIM2_CH4 quando a fase A/B
 // ainda não está confirmada (ecu_sched_encoder_phase_valid()==0, sempre
 // verdade sem EMS_MT6835_CMP_PHASE_CALIBRATED — ver board_pinout.h).
@@ -742,8 +905,7 @@ uint32_t min_lead_counts(void) noexcept
 // e dwell/PW vão por duration_ticks_to_span_counts() (ω), nunca por graus —
 // ver nota acima.
 //
-// Multi-spark (emit_multispark) e a compensação de atraso do sensor (10 µs,
-// ver plano) ficam fora desta passagem — presync básico primeiro.
+// Multi-spark fica no construtor sequencial; presync permanece básico.
 void recompute_presync(uint32_t now_raw) noexcept
 {
     static const uint8_t inj_a[2] = {ECU_CH_INJ1, ECU_CH_INJ4};
@@ -766,6 +928,7 @@ void recompute_presync(uint32_t now_raw) noexcept
     encoder_purge_cyl_mask(0x0FU, 0U);
 
     const uint32_t dwell_span = duration_ticks_to_span_counts(g_dwell_ticks);
+    const uint32_t min_lead = min_lead_counts();
     const uint32_t raw_inj_pw_ticks =
         (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS)
             ? (g_inj_pw_ticks / 2U)
@@ -791,17 +954,17 @@ void recompute_presync(uint32_t now_raw) noexcept
     // wasted-spark / cego à fase. Disparo sequencial por cilindro vive em
     // rebuild_sequential() (chamado quando phase_valid()==1). g_knock_sequential
     // fica 0 aqui (limpo no topo) — a UI e o halving de PW em main_stm32.cpp
-    // reflectem correctamente "não sequencial". Windowing de knock no
-    // arm_channel() do encoder continua fora de escopo (HW DNP).
+    // reflectem correctamente "não sequencial". Knock window no arm_channel
+    // encoder exige g_knock_sequential!=0, logo inerte em presync.
     for (uint8_t i = 0U; i < 4U; ++i) {
-        ecu_sched_encoder_arm_channel(kIgnCh[i], dwell_target, ECU_ACT_DWELL_START);
-        ecu_sched_encoder_arm_channel(kIgnCh[i], spark_target, ECU_ACT_SPARK);
+        arm_channel_with_lead(kIgnCh[i], dwell_target, ECU_ACT_DWELL_START, min_lead);
+        arm_channel_with_lead(kIgnCh[i], spark_target, ECU_ACT_SPARK, min_lead);
     }
 
     if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
         for (uint8_t i = 0U; i < 4U; ++i) {
-            ecu_sched_encoder_arm_channel(kInjCh[i], inj_on_target, ECU_ACT_INJ_ON);
-            ecu_sched_encoder_arm_channel(kInjCh[i], eoi_target, ECU_ACT_INJ_OFF);
+            arm_channel_with_lead(kInjCh[i], inj_on_target, ECU_ACT_INJ_ON, min_lead);
+            arm_channel_with_lead(kInjCh[i], eoi_target, ECU_ACT_INJ_OFF, min_lead);
         }
     } else {
         // bank_off == bank_on sempre (mesmo banco liga/desliga na mesma
@@ -812,8 +975,8 @@ void recompute_presync(uint32_t now_raw) noexcept
         // banco directamente evita reler o toggle duas vezes.
         const uint8_t *bank = (g_presync_bank_toggle == 0U) ? inj_a : inj_b;
         for (uint8_t i = 0U; i < 2U; ++i) {
-            ecu_sched_encoder_arm_channel(bank[i], inj_on_target, ECU_ACT_INJ_ON);
-            ecu_sched_encoder_arm_channel(bank[i], eoi_target, ECU_ACT_INJ_OFF);
+            arm_channel_with_lead(bank[i], inj_on_target, ECU_ACT_INJ_ON, min_lead);
+            arm_channel_with_lead(bank[i], eoi_target, ECU_ACT_INJ_OFF, min_lead);
         }
         g_presync_bank_toggle ^= 1U;
     }
@@ -823,7 +986,7 @@ void recompute_presync(uint32_t now_raw) noexcept
 // Cadência: heartbeat pesado 1×/volta = 2×/ciclo 720°; cada passagem constrói
 // só o par cuja fase de TDC coincide com phase_at(now). Sem isto, purgar
 // os 4 canais a cada volta destruiria eventos ainda não disparados do
-// outro par.
+// outro par. Depois refresca spans da outra fase (ω fresco).
 void rebuild_sequential(uint32_t now_raw) noexcept
 {
     static_assert(cfg::kCylinderCount == 4u, "ign/inj channel tables are 4-cyl");
@@ -832,9 +995,16 @@ void rebuild_sequential(uint32_t now_raw) noexcept
 
     const uint8_t phase = ecu_sched_encoder_phase_at(now_raw);
     uint8_t cyls[2] = {0U, 0U};
-    cyls_for_phase(phase, cyls);
+    const uint8_t n = cyls_for_phase(phase, cyls);
+    // Config invariante (2 TDCs/metade); early-return defensivo se partição falhar.
+#if defined(EMS_HOST_TEST)
+    assert(n == 2U);
+#endif
+    if (n < 2U) { return; }
+
     const uint8_t mask =
         static_cast<uint8_t>((1U << cyls[0]) | (1U << cyls[1]));
+    const uint8_t other_mask = static_cast<uint8_t>(0x0FU & ~mask);
 
     if (g_enc_last_builder_was_sequential == 0U) {
         // Primeira passagem após presync: limpar eventos 4-largos obsoletos.
@@ -848,66 +1018,17 @@ void rebuild_sequential(uint32_t now_raw) noexcept
 
     const uint32_t dwell_span = duration_ticks_to_span_counts(g_dwell_ticks);
     const uint32_t min_lead = min_lead_counts();
-    // 90% de um ciclo 720° (= 2 voltas TIM2) — paridade com kMaxSeqInjPwDeg.
-    constexpr uint32_t kMaxSeqInjPwCounts = (32768U * 9U) / 10U;
+    uint32_t ms_inter_deg = 0U;
+    if (g_mspark_count > 0U) {
+        ms_inter_deg = (duration_ticks_to_span_counts(g_mspark_inter_dwell_ticks)
+                        * kCycleDeg) / 32768U;
+    }
 
     for (uint8_t i = 0U; i < 2U; ++i) {
-        const uint8_t cyl = cyls[i];
-        const uint32_t tdc = cfg::cyl_tdc_deg(cyl);
-
-        const int32_t ign_trim = static_cast<int32_t>(cyl_ign_trim_deg[cyl]);
-        const int32_t trimmed_advance =
-            static_cast<int32_t>(g_advance_deg) + ign_trim;
-        const uint32_t eff_advance = (trimmed_advance < 0)
-            ? 0u
-            : static_cast<uint32_t>(trimmed_advance);
-
-        const uint32_t spark_deg =
-            (tdc + kCycleDeg - eff_advance) % kCycleDeg;
-        const uint32_t eoi_deg =
-            (tdc + kCycleDeg - g_eoi_lead_deg) % kCycleDeg;
-
-        const uint32_t spark_target =
-            engine_deg720_to_absolute(spark_deg, now_raw);
-        const uint32_t dwell_target = spark_target - dwell_span;
-
-        // Guarda defensiva: TIM2 pode decrementar em kickback — saltar o
-        // par inteiro em vez de deixar arm_channel() clampar dwell e spark
-        // com duas leituras independentes de TIM2_CNT (podiam inverter).
-        if (static_cast<int32_t>(spark_target - now_raw) <
-            static_cast<int32_t>(min_lead)) {
-            ++g_enc_seq_min_lead_skip_count;
-        } else {
-            ecu_sched_encoder_arm_channel(
-                kIgnCh[cyl], dwell_target, ECU_ACT_DWELL_START);
-            ecu_sched_encoder_arm_channel(
-                kIgnCh[cyl], spark_target, ECU_ACT_SPARK);
-        }
-
-        const int32_t fuel_trim = static_cast<int32_t>(cyl_fuel_trim_pct[cyl]);
-        const int32_t pw_trimmed =
-            static_cast<int32_t>(g_inj_pw_ticks) * (100 + fuel_trim) / 100;
-        const uint32_t raw_pw_ticks =
-            (pw_trimmed < 0) ? 0u : static_cast<uint32_t>(pw_trimmed);
-        uint32_t inj_pw_span = duration_ticks_to_span_counts(raw_pw_ticks);
-        if (inj_pw_span > kMaxSeqInjPwCounts) {
-            inj_pw_span = kMaxSeqInjPwCounts;
-            ++g_pw_duty_clamp_count;
-        }
-
-        const uint32_t eoi_target = engine_deg720_to_absolute(eoi_deg, now_raw);
-        const uint32_t inj_on_target = eoi_target - inj_pw_span;
-
-        if (static_cast<int32_t>(eoi_target - now_raw) <
-            static_cast<int32_t>(min_lead)) {
-            ++g_enc_seq_min_lead_skip_count;
-        } else {
-            ecu_sched_encoder_arm_channel(
-                kInjCh[cyl], inj_on_target, ECU_ACT_INJ_ON);
-            ecu_sched_encoder_arm_channel(
-                kInjCh[cyl], eoi_target, ECU_ACT_INJ_OFF);
-        }
+        arm_sequential_cyl(cyls[i], now_raw, dwell_span, min_lead, ms_inter_deg);
     }
+
+    refresh_other_phase_spans(now_raw, other_mask, dwell_span, min_lead);
 }
 
 }  // namespace ems::engine::sched_internal::encoder

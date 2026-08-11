@@ -89,30 +89,17 @@ static uint32_t ticks_to_cycle_degrees(uint32_t ticks,
         : 0U;
 }
 
-// Multi-spark timing MS42 — single site for sequential and presync.
+// Multi-spark — shared emit_multispark_deg; inter_deg from tooth period.
 template <typename EmitFn>
 static inline void emit_multispark(uint32_t spark_ang,
                                    uint32_t cycle_deg,
                                    uint32_t tooth_period_ns,
                                    EmitFn emit)
 {
-    const uint8_t ms_count = g_mspark_count;
-    if (ms_count == 0U || tooth_period_ns == 0U) {
-        return;
-    }
+    if (g_mspark_count == 0U || tooth_period_ns == 0U) { return; }
     const uint32_t inter_deg =
         ticks_to_cycle_degrees(g_mspark_inter_dwell_ticks, tooth_period_ns, cycle_deg);
-    const uint32_t step = inter_deg + 1U;
-    const uint32_t window = g_advance_deg + g_mspark_atdc_limit_deg;
-    for (uint8_t n = 1U; n <= ms_count; ++n) {
-        const uint32_t add_spark_off = static_cast<uint32_t>(n) * step;
-        if (add_spark_off >= window) {
-            break;
-        }
-        const uint32_t add_dwell_off = static_cast<uint32_t>(n - 1U) * step + 1U;
-        emit((spark_ang + add_dwell_off) % cycle_deg,
-             (spark_ang + add_spark_off) % cycle_deg);
-    }
+    emit_multispark_deg(spark_ang, cycle_deg, inter_deg, emit);
 }
 
 void rebuild_sequential_cycle(const ems::drv::CkpSnapshot& snap)

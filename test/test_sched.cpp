@@ -1295,17 +1295,7 @@ void test_ecu_sched_encoder_recompute_presync_pw_clamp(void) {
 // independentes — testes multi-passagem têm de os sincronizar. Qualquer
 // sequência com phase_valid tem de ficar abaixo de kMaxHeartbeatsWithoutCmp=6
 // (ou reancorar via flanco CMP aceite) senão o staleness invalida a fase.
-
-static void encoder_seq_seed_omega(void) {
-    // omega=0.5 (d_tim2=500, d_tim5=1000) — spans inteiros pequenos.
-    // Termina em tim2=1400 para o heartbeat sequencial seguinte (tip. 1500)
-    // NÃO repetir o mesmo tim2_now: Δtim2=0 ⇒ omega_sample grava ω=0 e
-    // duration_ticks_to_span_counts devolve 0 (PW/dwell nulos).
-    ecu_sched_encoder_test_set_tim2_cnt(900u);
-    ecu_sched_encoder_heartbeat_tick(900u, 1000u, 0u, 0u);
-    ecu_sched_encoder_test_set_tim2_cnt(1400u);
-    ecu_sched_encoder_heartbeat_tick(1400u, 2000u, 0u, 0u);
-}
+// omega seed: encoder_seq_seed_omega() em test/fixtures.h.
 
 static uint8_t encoder_evt_find_ch(uint8_t want_ch, uint8_t want_high,
                                    uint32_t *out_ts) {
@@ -1640,6 +1630,135 @@ void test_ecu_sched_encoder_sequential_min_lead_skip(void) {
     CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 1u,
              "cyl0 (phase-B spark, long lead) still armed");
 
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_min_lead_dwell_behind(void) {
+    section("ecu_sched: encoder sequential — min-lead skip when dwell behind now");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    // omega=1.0 → dwell_span == dwell_ticks. Spark for cyl2 @ 120° = 5461,
+    // now=4000 → spark lead OK; dwell_ticks=3000 → dwell=2461 < now → skip.
+    ecu_sched_set_advance_deg(60u);
+    ecu_sched_set_eoi_lead_deg(355u);
+    ecu_sched_set_dwell_ticks(3000u);
+    ecu_sched_set_inj_pw_ticks(0u);
+
+    ecu_sched_encoder_test_set_tim2_cnt(0u);
+    ecu_sched_encoder_heartbeat_tick(0u, 0u, 0u, 0u);
+    ecu_sched_encoder_test_set_tim2_cnt(1000u);
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
+
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    const uint32_t now = 4000u;
+    const uint32_t skips_before = ecu_sched_encoder_test_get_seq_min_lead_skip_count();
+    ecu_sched_encoder_test_set_tim2_cnt(now);
+    ecu_sched_encoder_heartbeat_tick(now, 1000u + (now - 1000u), 1u, 1u);
+
+    CHECK_TRUE(ecu_sched_encoder_test_get_seq_min_lead_skip_count() > skips_before,
+               "dwell-behind spark increments skip counter");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, nullptr), 0u,
+             "cyl2 IGN pair skipped when dwell is behind now");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 1u, nullptr), 0u,
+             "cyl2 dwell also absent (whole pair skipped)");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_long_lead_refresh(void) {
+    section("ecu_sched: encoder sequential — refresh other-phase dwell spans");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    // advance=10 → cyl0 spark at 710° lands with +16384 (lead > 1 rev).
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(2000u);
+    ecu_sched_set_inj_pw_ticks(0u);
+
+    // omega=0.5 first
+    encoder_seq_seed_omega();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    ecu_sched_encoder_test_set_tim2_cnt(1500u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 1u, 1u);
+
+    uint32_t spark0 = 0u, dwell0 = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0), 1u, "cyl0 spark armed");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell0), 1u, "cyl0 dwell armed");
+    CHECK_TRUE((spark0 - 1500u) > 16384u, "precondition: cyl0 spark lead > 1 rev");
+    const uint32_t span0 = spark0 - dwell0;
+
+    // Change omega to 1.0 without repeating same tim2 (seed ends at 1400;
+    // phase-B HB at 1500+16384). Sample omega via heartbeat on the way:
+    // d_tim2 from last sample (1400→17884) with matching tim5.
+    const uint32_t now_b = 1500u + 16384u;
+    ecu_sched_encoder_test_set_tim2_cnt(now_b);
+    // Force omega=1.0: previous sample was (1400,2000) from seed; this tick
+    // d_tim2=16484, choose d_tim5=16484 → omega≈1.0.
+    ecu_sched_encoder_heartbeat_tick(now_b, 2000u + 16484u, 2u, 2u);
+
+    uint32_t spark0_after = 0u, dwell0_after = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0_after), 1u,
+             "cyl0 spark still present after other-phase HB");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell0_after), 1u,
+             "cyl0 dwell refreshed");
+    CHECK_EQ(spark0_after, spark0, "spark absolute timestamp unchanged by refresh");
+    const uint32_t span1 = spark0_after - dwell0_after;
+    CHECK_TRUE(span1 != span0, "dwell span updated with new omega");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_multispark(void) {
+    section("ecu_sched: encoder sequential — multi-spark extra IGN events");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    ecu_sched_set_advance_deg(20u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(0u);
+    ecu_sched_set_inj_pw_ticks(0u);
+    // 1 multi-spark, tiny inter-dwell so offsets stay inside advance+atdc window.
+    ecu_sched_set_mspark(1u, 100u, 18u);
+
+    encoder_seq_seed_omega();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    ecu_sched_encoder_test_set_tim2_cnt(1500u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 1u, 1u);
+
+    uint8_t ign1_count = 0u;
+    for (uint8_t i = 0u; i < ecu_sched_encoder_test_get_evt_count(); ++i) {
+        uint32_t ts = 0u; uint8_t ch = 0u; uint8_t high = 0u;
+        ecu_sched_encoder_test_get_evt(i, &ts, &ch, &high);
+        if (ch == ECU_CH_IGN1) { ++ign1_count; }
+    }
+    // Primary dwell+spark (2) + multi-spark dwell+spark (2) = 4 on IGN1.
+    CHECK_EQ(ign1_count, 4u,
+             "cyl0 has primary + 1 multi-spark pair (4 IGN1 events)");
+
+    ecu_sched_set_mspark(0u, 0u, 18u);
     ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
     ecu_sched_test_reset();
 }
