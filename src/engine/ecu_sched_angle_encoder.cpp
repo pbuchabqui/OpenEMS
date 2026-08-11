@@ -38,6 +38,7 @@
 
 #include "engine/ecu_sched_internal.h"
 #include "engine/engine_config.h"
+#include "engine/calibration.h"
 #include "hal/out_pins.h"
 #include "hal/critical_section.h"
 #include "hal/board_pinout.h"
@@ -58,6 +59,7 @@ namespace ems::engine::sched_internal::encoder {
 // declare aqui porque ecu_sched_encoder_heartbeat_tick() (mais acima no
 // ficheiro que a definição) precisa de a chamar.
 void recompute_presync(uint32_t now_raw) noexcept;
+void rebuild_sequential(uint32_t now_raw) noexcept;
 // Definida mais abaixo ("Conversão graus→counts", junto de
 // duration_ticks_to_span_counts()) — forward declare porque
 // ecu_sched_encoder_arm_channel() (mais acima) precisa de a chamar.
@@ -204,12 +206,13 @@ uint8_t ecu_sched_encoder_phase_valid(void) noexcept { return g_phase_valid; }
 // só havia SET (phase_set_anchor) e um clear host-test-only. Sem isto, um
 // fallback de staleness em drv/encoder_sync.cpp que publicasse
 // SyncState::HALF_SYNC no CkpSnapshot partilhado (ckp_publish_encoder_snapshot())
-// deixaria phase_valid() preso em 1 — o dispatcher (recompute_presync() em
-// ecu_sched_encoder_heartbeat_tick(), que branca em phase_valid(), não em
-// snap.state) continuaria a disparar sequencial sobre uma fase já considerada
-// perdida pelo resto do sistema. Chamador: drv/encoder_sync.cpp, na mesma
-// transição que publica HALF_SYNC por staleness (ver
-// docs/dev/mt6835_encoder_fork.md, "Sync-state em modo encoder").
+// deixaria phase_valid() preso em 1 — o dispatcher (recompute_presync() /
+// rebuild_sequential() em ecu_sched_encoder_heartbeat_tick(), que branca em
+// phase_valid(), não em snap.state) continuaria a disparar sequencial sobre
+// uma fase já considerada perdida pelo resto do sistema. Chamador:
+// drv/encoder_sync.cpp, na mesma transição que publica HALF_SYNC por
+// staleness (ver docs/dev/mt6835_encoder_fork.md, "Sync-state em modo
+// encoder").
 void ecu_sched_encoder_phase_invalidate(void) noexcept { g_phase_valid = 0U; }
 
 #if defined(EMS_HOST_TEST)
@@ -458,6 +461,15 @@ static uint32_t g_cmp_missed_edge_count     = 0U;  // diagnóstico (multiple>1)
 // reset a 0 dentro da função; nunca lido fora dela em produção, só em teste.
 static uint8_t g_hb_subtick_count = 0U;
 
+// Handoff presync→sequencial: a última chamada a recompute_presync() deixa
+// 4+4 canais armados a alvos partilhados; o primeiro rebuild_sequential()
+// só purgaria 2 cilindros — os outros 2 ficariam com eventos de presync
+// obsoletos. Flag 0 ⇒ purga total 4+4 uma vez; depois só a máscara da fase.
+static uint8_t g_enc_last_builder_was_sequential = 0U;
+// Pares dwell/spark ou inj_on/off saltados porque o alvo de spark/EOI
+// estava dentro do piso min-lead (kickback / TIM2 a decrementar).
+static volatile uint32_t g_enc_seq_min_lead_skip_count = 0U;
+
 // ω (×65536, counts TIM2 por tick TIM5) → rpm_x10, para o CkpSnapshot
 // partilhado. Mesma unidade/escala que ckp_instant_rpm_x10() já usa
 // (rpm×10), derivação equivalente a rpm_x10_from_period_ticks() (ckp.cpp)
@@ -525,9 +537,12 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
 
     // Sem calibração de fase, phase_valid() é sempre 0 (por construção, ver
     // gate acima) — o recompute cai sempre em presync, nunca dispara
-    // sequencial com um anchor adivinhado.
+    // sequencial com um anchor adivinhado. Com fase válida: construtor
+    // sequencial real (2 cilindros por metade-de-fase).
     if (ecu_sched_encoder_phase_valid() == 0U) {
         si::encoder::recompute_presync(tim2_now);
+    } else {
+        si::encoder::rebuild_sequential(tim2_now);
     }
 
     // Publica no CkpSnapshot partilhado — único ponto deste ficheiro que o
@@ -557,9 +572,9 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
 // leve (misfire_encoder_on_sample(), sempre — precisa da cadência fina;
 // uma janela de cilindro de 62° só tem ~11 sub-ticks de resolução
 // angular) roda em CADA chamada. Caminho pesado (ω, CMP, staleness,
-// recompute_presync, publish) continua 1×/volta, chamado daqui a cada 64º
-// sub-tick — cadência total idêntica à de antes desta tarefa (16384
-// counts), agora composta de 64 passos em vez de 1 (ver
+// recompute_presync/rebuild_sequential, publish) continua 1×/volta, chamado
+// daqui a cada 64º sub-tick — cadência total idêntica à de antes desta
+// tarefa (16384 counts), agora composta de 64 passos em vez de 1 (ver
 // test_ecu_sched_encoder_heartbeat_subtick_cadence, que prova isto
 // isoladamente, e os 3 testes pré-existentes test_ecu_sched_encoder_heartbeat*,
 // que continuam a passar bit-a-bit chamando ecu_sched_encoder_heartbeat_tick()
@@ -588,12 +603,18 @@ void ecu_sched_encoder_heartbeat_test_reset(void) noexcept
     g_cmp_reject_count        = 0U;
     g_cmp_missed_edge_count   = 0U;
     g_hb_subtick_count        = 0U;
+    g_enc_last_builder_was_sequential = 0U;
+    g_enc_seq_min_lead_skip_count = 0U;
     ems::drv::encoder_sync::set_health_ok(true);
 }
 uint32_t ecu_sched_encoder_test_get_cmp_reject_count(void) noexcept { return g_cmp_reject_count; }
 uint32_t ecu_sched_encoder_test_get_cmp_missed_edge_count(void) noexcept { return g_cmp_missed_edge_count; }
 uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept { return g_cmp_heartbeats_since_ok; }
 uint8_t  ecu_sched_encoder_test_get_subtick_count(void) noexcept { return g_hb_subtick_count; }
+uint32_t ecu_sched_encoder_test_get_seq_min_lead_skip_count(void) noexcept
+{
+    return g_enc_seq_min_lead_skip_count;
+}
 #endif
 
 namespace ems::engine::sched_internal::encoder {
@@ -644,6 +665,43 @@ static uint32_t engine_deg_to_absolute(uint32_t engine_angle_deg,
     return rev_target_to_absolute(engine_deg_to_counts_in_rev(engine_angle_deg), now_raw);
 }
 
+// Conversão fase-consciente grau→posição absoluta (ciclo 720°). Irmã de
+// engine_deg_to_absolute() — essa fica intocada para recompute_presync()
+// (cego à fase). phase_at() é o oráculo: g_phase_anchor_raw (CMP) não é
+// congruente com 0 mod 16384, logo "início-do-bin + resíduo" misturaria
+// dois referenciais. Somar exactamente um +16384 inverte a paridade de
+// fase; +32768 preservá-la-ia e passaria 720° do alvo.
+static uint32_t engine_deg720_to_absolute(uint32_t engine_angle_deg /* 0..719 */,
+                                          uint32_t now_raw) noexcept
+{
+    const uint8_t target_phase =
+        (engine_angle_deg < 360U) ? ECU_PHASE_A : ECU_PHASE_B;
+    uint32_t candidate =
+        rev_target_to_absolute(engine_deg_to_counts_in_rev(engine_angle_deg), now_raw);
+    if (ecu_sched_encoder_phase_at(candidate) != target_phase) {
+        candidate += 16384U;
+    }
+    return candidate;
+}
+
+// Partição fixa por identidade de cilindro (fase do TDC), não por onde
+// dwell/spark/inj acabam por cair — esses ângulos dependem de advance/
+// eoi_lead e podiam partir um par entre fases. Código 0-based
+// kFiringOrder={0,2,3,1} = ordem física 1-3-4-2: fase A = {0,2} (físicos
+// 1 e 3), fase B = {3,1} (físicos 4 e 2).
+static void cyls_for_phase(uint8_t phase, uint8_t out2[2]) noexcept
+{
+    uint8_t n = 0U;
+    for (uint8_t seq = 0U; seq < cfg::kCylinderCount; ++seq) {
+        const uint8_t cyl = cfg::kFiringOrder[seq];
+        const uint8_t cyl_phase =
+            (cfg::cyl_tdc_deg(cyl) < 360U) ? ECU_PHASE_A : ECU_PHASE_B;
+        if (cyl_phase != phase) { continue; }
+        out2[n++] = cyl;
+        if (n >= 2U) { break; }
+    }
+}
+
 // Duração (ticks TIM5) → extensão angular em counts, via ω mais recente —
 // NÃO via graus. dwell/PW são tempo de bobina/injector convertido em
 // comprimento angular; ir por graus só duplicaria arredondamento sem
@@ -691,6 +749,12 @@ void recompute_presync(uint32_t now_raw) noexcept
     static const uint8_t inj_a[2] = {ECU_CH_INJ1, ECU_CH_INJ4};
     static const uint8_t inj_b[2] = {ECU_CH_INJ2, ECU_CH_INJ3};
 
+    // Paridade com rebuild_presync_revolution() (CKP): wasted-spark ⇒
+    // g_knock_sequential=0. Também limpa o handoff flag — a próxima
+    // transição para sequencial fará purga total 4+4.
+    g_knock_sequential = 0U;
+    g_enc_last_builder_was_sequential = 0U;
+
     // Purga TUDO das 4 IGN + 4 INJ antes de reconstruir — garante que nunca
     // fica uma DWELL_START pendente sem o SPARK emparelhado (ou um INJ_ON
     // sem o INJ_OFF): o par é sempre inserido junto, na mesma passagem, logo
@@ -723,17 +787,12 @@ void recompute_presync(uint32_t now_raw) noexcept
     const uint32_t eoi_target    = engine_deg_to_absolute(eoi_deg, now_raw);
     const uint32_t inj_on_target = eoi_target - inj_pw_span;
 
-    // Os 4 canais de ignição armam no MESMO dwell_target/spark_target — não
-    // há disparo sequencial por cilindro aqui, nem em nenhum outro caminho
-    // deste dispatcher (recompute_presync() é o único construtor de disparo
-    // em modo encoder; quando a fase fica válida, o heartbeat só pára de o
-    // chamar — não existe ainda um construtor sequencial para o substituir,
-    // ver docs/dev/mt6835_encoder_fork.md, "Fora de escopo"). Por isso
-    // g_knock_sequential (ecu_sched.cpp/ecu_sched_angle.cpp) NUNCA é tocado
-    // aqui: não há cilindro único identificável a que atribuir uma janela de
-    // knock — ligar essa flag seria incorrecto (UI reportaria "sequencial"
-    // quando não é), não uma correcção. Windowing de knock em modo encoder
-    // fica dependente dessa tarefa futura de disparo sequencial real.
+    // Os 4 canais de ignição armam no MESMO dwell_target/spark_target —
+    // wasted-spark / cego à fase. Disparo sequencial por cilindro vive em
+    // rebuild_sequential() (chamado quando phase_valid()==1). g_knock_sequential
+    // fica 0 aqui (limpo no topo) — a UI e o halving de PW em main_stm32.cpp
+    // reflectem correctamente "não sequencial". Windowing de knock no
+    // arm_channel() do encoder continua fora de escopo (HW DNP).
     for (uint8_t i = 0U; i < 4U; ++i) {
         ecu_sched_encoder_arm_channel(kIgnCh[i], dwell_target, ECU_ACT_DWELL_START);
         ecu_sched_encoder_arm_channel(kIgnCh[i], spark_target, ECU_ACT_SPARK);
@@ -760,6 +819,97 @@ void recompute_presync(uint32_t now_raw) noexcept
     }
 }
 
+// Construtor sequencial real — 2 cilindros por heartbeat (fase do TDC).
+// Cadência: heartbeat pesado 1×/volta = 2×/ciclo 720°; cada passagem constrói
+// só o par cuja fase de TDC coincide com phase_at(now). Sem isto, purgar
+// os 4 canais a cada volta destruiria eventos ainda não disparados do
+// outro par.
+void rebuild_sequential(uint32_t now_raw) noexcept
+{
+    static_assert(cfg::kCylinderCount == 4u, "ign/inj channel tables are 4-cyl");
+
+    g_knock_sequential = 1U;
+
+    const uint8_t phase = ecu_sched_encoder_phase_at(now_raw);
+    uint8_t cyls[2] = {0U, 0U};
+    cyls_for_phase(phase, cyls);
+    const uint8_t mask =
+        static_cast<uint8_t>((1U << cyls[0]) | (1U << cyls[1]));
+
+    if (g_enc_last_builder_was_sequential == 0U) {
+        // Primeira passagem após presync: limpar eventos 4-largos obsoletos.
+        encoder_purge_cyl_mask(0x0FU, 1U);
+        encoder_purge_cyl_mask(0x0FU, 0U);
+    } else {
+        encoder_purge_cyl_mask(mask, 1U);
+        encoder_purge_cyl_mask(mask, 0U);
+    }
+    g_enc_last_builder_was_sequential = 1U;
+
+    const uint32_t dwell_span = duration_ticks_to_span_counts(g_dwell_ticks);
+    const uint32_t min_lead = min_lead_counts();
+    // 90% de um ciclo 720° (= 2 voltas TIM2) — paridade com kMaxSeqInjPwDeg.
+    constexpr uint32_t kMaxSeqInjPwCounts = (32768U * 9U) / 10U;
+
+    for (uint8_t i = 0U; i < 2U; ++i) {
+        const uint8_t cyl = cyls[i];
+        const uint32_t tdc = cfg::cyl_tdc_deg(cyl);
+
+        const int32_t ign_trim = static_cast<int32_t>(cyl_ign_trim_deg[cyl]);
+        const int32_t trimmed_advance =
+            static_cast<int32_t>(g_advance_deg) + ign_trim;
+        const uint32_t eff_advance = (trimmed_advance < 0)
+            ? 0u
+            : static_cast<uint32_t>(trimmed_advance);
+
+        const uint32_t spark_deg =
+            (tdc + kCycleDeg - eff_advance) % kCycleDeg;
+        const uint32_t eoi_deg =
+            (tdc + kCycleDeg - g_eoi_lead_deg) % kCycleDeg;
+
+        const uint32_t spark_target =
+            engine_deg720_to_absolute(spark_deg, now_raw);
+        const uint32_t dwell_target = spark_target - dwell_span;
+
+        // Guarda defensiva: TIM2 pode decrementar em kickback — saltar o
+        // par inteiro em vez de deixar arm_channel() clampar dwell e spark
+        // com duas leituras independentes de TIM2_CNT (podiam inverter).
+        if (static_cast<int32_t>(spark_target - now_raw) <
+            static_cast<int32_t>(min_lead)) {
+            ++g_enc_seq_min_lead_skip_count;
+        } else {
+            ecu_sched_encoder_arm_channel(
+                kIgnCh[cyl], dwell_target, ECU_ACT_DWELL_START);
+            ecu_sched_encoder_arm_channel(
+                kIgnCh[cyl], spark_target, ECU_ACT_SPARK);
+        }
+
+        const int32_t fuel_trim = static_cast<int32_t>(cyl_fuel_trim_pct[cyl]);
+        const int32_t pw_trimmed =
+            static_cast<int32_t>(g_inj_pw_ticks) * (100 + fuel_trim) / 100;
+        const uint32_t raw_pw_ticks =
+            (pw_trimmed < 0) ? 0u : static_cast<uint32_t>(pw_trimmed);
+        uint32_t inj_pw_span = duration_ticks_to_span_counts(raw_pw_ticks);
+        if (inj_pw_span > kMaxSeqInjPwCounts) {
+            inj_pw_span = kMaxSeqInjPwCounts;
+            ++g_pw_duty_clamp_count;
+        }
+
+        const uint32_t eoi_target = engine_deg720_to_absolute(eoi_deg, now_raw);
+        const uint32_t inj_on_target = eoi_target - inj_pw_span;
+
+        if (static_cast<int32_t>(eoi_target - now_raw) <
+            static_cast<int32_t>(min_lead)) {
+            ++g_enc_seq_min_lead_skip_count;
+        } else {
+            ecu_sched_encoder_arm_channel(
+                kInjCh[cyl], inj_on_target, ECU_ACT_INJ_ON);
+            ecu_sched_encoder_arm_channel(
+                kInjCh[cyl], eoi_target, ECU_ACT_INJ_OFF);
+        }
+    }
+}
+
 }  // namespace ems::engine::sched_internal::encoder
 
 #if defined(EMS_HOST_TEST)
@@ -774,5 +924,10 @@ uint32_t ecu_sched_encoder_test_rev_target_to_absolute(uint32_t target_counts_in
                                                         uint32_t now_raw) noexcept
 {
     return si::encoder::rev_target_to_absolute(target_counts_in_rev, now_raw);
+}
+uint32_t ecu_sched_encoder_test_deg720_to_absolute(uint32_t engine_angle_deg,
+                                                     uint32_t now_raw) noexcept
+{
+    return si::encoder::engine_deg720_to_absolute(engine_angle_deg, now_raw);
 }
 #endif

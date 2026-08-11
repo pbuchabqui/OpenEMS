@@ -707,18 +707,18 @@ Herdado do plano original, nada disto mudou nesta implementação:
   se perde fase A/B até o CMP confirmar); `phase_valid()` já cobre o
   suficiente para o presync funcionar, mas uma máquina de estados dedicada
   não foi desenhada.
-- **Disparo sequencial real** — precisa da fase calibrada em bancada
-  (`EMS_MT6835_CMP_PHASE_CALIBRATED`, TODO explícito no heartbeat).
 - Tolerância exacta de deriva do CMP (verificação de anchor vs. leitura
   real) — decisão de bancada, não de arquitetura.
 - Precisão residual do dwell em bounce de cranking.
-- Mecânica exacta da transição presync→sequencial.
 - Multi-spark em domínio de ângulo.
 - Compensação de atraso de propagação do sensor (fórmula já locked no
   plano, não aplicada ao dispatcher ainda).
 - Validação em bancada do item "watchdog de dwell como proteção primária"
   (seção 9 do plano) — motor parado a meio de um dwell, `TIM2` congela com
   o motor, só o watchdog `TIM5` desliga a bobina.
+- Medição em bancada de `EMS_MT6835_CMP_PHASE_CALIBRATED` — o construtor
+  sequencial existe (ver secção abaixo), mas sem a constante de fase
+  medida o ramo `phase_valid()==1` nunca corre em hardware real.
 
 ## Procedimento de bancada — quando o hardware MT6835 estiver disponível (2026-08-09)
 
@@ -1007,11 +1007,11 @@ intocado antes e depois de cada commit desta sessão.
 
 Plano dedicado, os dois itens deixados de fora do plano anterior. Duas
 correcções críticas às premissas iniciais, verificadas directamente contra o
-código antes de desenhar: (1) o dispatcher encoder **não tem disparo
-sequencial por cilindro** — `recompute_presync()` arma os 4 canais de
-ignição no mesmo alvo, sempre (é o único construtor de disparo em modo
-encoder hoje); (2) a regressão do knock (ver abaixo) está presente em
-**ambos os branches**, não é um artefacto deste fork.
+código antes de desenhar: (1) o dispatcher encoder **na altura** não tinha
+disparo sequencial por cilindro — `recompute_presync()` arma os 4 canais de
+ignição no mesmo alvo (era o único construtor; o gap foi fechado depois,
+ver secção "Disparo sequencial real"); (2) a regressão do knock (ver abaixo)
+está presente em **ambos os branches**, não é um artefacto deste fork.
 
 ### Misfire — `engine/misfire_encoder.h`/`.cpp` (novo, `misfire_detect.cpp` intocado)
 
@@ -1091,16 +1091,15 @@ cilindro — trocado por máximo entre os 4 (retard verdadeiramente por
 cilindro precisaria de infra-estrutura nova em `AdvanceCorrections`/
 `calc_total_advance`, escalar único hoje — fora de escopo).
 
-`g_knock_sequential` **não é tocado** em modo encoder (Grupo B) — dado que
-não há disparo sequencial por cilindro ali, ligá-la seria incorrecto
-(mentiria à UI), não uma correcção. Comentário deixado em
-`ecu_sched_angle_encoder.cpp` a documentar a dependência da futura tarefa de
-disparo sequencial real.
+`g_knock_sequential` **passa a ser tocado** em modo encoder pelo construtor
+sequencial (ver secção seguinte). Na altura deste plano misfire/knock a
+flag ficava a 0 para sempre — correcto enquanto só existia
+`recompute_presync()`.
 
 ### Fora de escopo, achados registados
 
-- Disparo sequencial real por cilindro no dispatcher encoder — bloqueador de
-  fundo para qualquer knock genuíno em modo encoder.
+- Fiar `knock_window_open()`/`_cycle_end()` ao `arm_channel()` do encoder
+  (gap real; inerte enquanto `EMS_KNOCK_HW_PRESENT=0`).
 - Retard de knock verdadeiramente por cilindro.
 - Cherry-pick dos fixes de knock para `hw/v1-clean-board`.
 - `KNOCK_DETECTED` DTC nunca disparado; sem telemetria UI/datalog de
@@ -1126,3 +1125,67 @@ g_knock_sequential, `0cccda8` fix retard cyl0, `6f872ce` módulo
 misfire_encoder, `b9ed217` split do heartbeat, `8771480` wiring do misfire
 ao sub-tick, `96801dd` wiring em main_stm32.cpp — mais este commit de
 fecho).
+
+## Disparo sequencial real no dispatcher encoder (2026-08-10)
+
+Fecha o gap deixado explícito pelos planos do dispatcher e do misfire/knock:
+quando `ecu_sched_encoder_phase_valid()==1`, o heartbeat pesado deixava de
+chamar `recompute_presync()` sem nada a substituí-lo. Agora chama
+`rebuild_sequential()`.
+
+### Duas peças novas (não é porting do CKP)
+
+1. **`engine_deg720_to_absolute()`** — conversão fase-consciente grau→posição
+   absoluta. `engine_deg_to_counts_in_rev()` continua a reduzir `% 360`
+   (presync intocado); a correcção de fase usa `ecu_sched_encoder_phase_at()`
+   como oráculo e soma exactamente `+16384` quando a paridade está errada
+   (nunca "início-do-bin + resíduo" — o anchor CMP não é congruente com 0
+   mod 16384). Vectores discriminadores: 32818 e 35768.
+2. **`rebuild_sequential()` + `cyls_for_phase()`** — partição fixa pela fase
+   do TDC (`cfg::cyl_tdc_deg(cyl) < 360` ⇒ A). Código 0-based
+   `kFiringOrder={0,2,3,1}` = ordem de ignição física **1-3-4-2**. Fase A
+   arma os físicos **{1,3}** (índices `{0,2}`); fase B arma **{4,2}**
+   (índices `{3,1}`). Cada heartbeat (1×/volta) constrói e purga **só**
+   esses 2 cilindros — purgar os 4 destruiria eventos do outro par ainda
+   não disparados. Handoff presync→sequencial: `g_enc_last_builder_was_sequential`
+   força uma purga total 4+4 na primeira passagem sequencial. Guarda
+   min-lead: se spark/EOI está dentro de `min_lead_counts()` do `now_raw`
+   do heartbeat, salta o par inteiro (contador de diagnóstico) — TIM2 pode
+   decrementar em kickback.
+
+`g_knock_sequential` = 1 em `rebuild_sequential()`, = 0 no topo de
+`recompute_presync()` (paridade com o CKP). UI e halving de PW em
+`main_stm32.cpp` passam a reflectir sequencial correctamente. Windowing de
+knock no `arm_channel()` do encoder continua fora de escopo.
+
+### Limitação v1 nomeada
+
+Dentro de uma metade-de-fase os dois cilindros estão a 180°; o mais
+distante (ou o cujo spark cai na outra fase e leva `+16384`) é construído
+quase duas voltas antes de disparar — `dwell_span`/`inj_pw_span` podem
+estar ~720° desactualizados face ao ω real. Inofensivo em regime
+permanente; follow-up candidato: re-arme de dwell a meio de ciclo.
+
+### Fora de escopo
+
+- Multi-spark no construtor sequencial.
+- Confiança graduada tipo `cmp_confirms>=2`.
+- `knock_window_open()` no arm encoder.
+- Mitigação do lead ~720° do cilindro distante.
+- Medição em bancada de `EMS_MT6835_CMP_PHASE_CALIBRATED`.
+
+### Verificação
+
+```
+make host-test                  → 1584 PASS, 0 FAIL
+make host-test-vgt6             → 24 PASS, 0 FAIL
+make firmware-vgt6/rgt6/mre     → build limpo, flags default
+EMS_MT6835_ENCODER=1 EMS_MT6835_CMP_PHASE_CALIBRATED=1 WERROR=1
+  firmware-vgt6                 → limpo, board_pinout.h revertido depois
+```
+
+Host tests provam o construtor em isolamento — **não** provam disparo
+sequencial real em motor (`EMS_MT6835_CMP_PHASE_CALIBRATED` nunca medido
+em bancada). Mesma postura do `misfire_encoder`.
+
+`hw/v1-clean-board` confirmado intocado.

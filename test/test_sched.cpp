@@ -1219,6 +1219,8 @@ void test_ecu_sched_encoder_recompute_presync(void) {
     //   inj_pw_span (SIMULTANEOUS halves 2000->1000 ticks) = 500 -> inj_on_target = 16611-500 = 16111
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
              "4 IGN (dwell+spark) + 4 INJ (on+off), SIMULTANEOUS mode");
+    CHECK_EQ(ecu_sched_is_sequential(), 0u,
+             "presync builder clears g_knock_sequential (wasted-spark)");
 
     uint32_t ts = 0u; uint8_t ch = 0u; uint8_t high = 0u;
     ecu_sched_encoder_test_get_evt(0u, &ts, &ch, &high);
@@ -1285,6 +1287,360 @@ void test_ecu_sched_encoder_recompute_presync_pw_clamp(void) {
     CHECK_TRUE(ecu_sched_pw_duty_clamp_count() > before,
                "oversized presync PW span clamped to 90% of a revolution");
 
+    ecu_sched_test_reset();
+}
+
+// ── Disparo sequencial encoder (fase-consciente) ───────────────────────────
+// Helpers: o mock TIM2_CNT e o parâmetro tim2_now do heartbeat são
+// independentes — testes multi-passagem têm de os sincronizar. Qualquer
+// sequência com phase_valid tem de ficar abaixo de kMaxHeartbeatsWithoutCmp=6
+// (ou reancorar via flanco CMP aceite) senão o staleness invalida a fase.
+
+static void encoder_seq_seed_omega(void) {
+    // omega=0.5 (d_tim2=500, d_tim5=1000) — spans inteiros pequenos.
+    // Termina em tim2=1400 para o heartbeat sequencial seguinte (tip. 1500)
+    // NÃO repetir o mesmo tim2_now: Δtim2=0 ⇒ omega_sample grava ω=0 e
+    // duration_ticks_to_span_counts devolve 0 (PW/dwell nulos).
+    ecu_sched_encoder_test_set_tim2_cnt(900u);
+    ecu_sched_encoder_heartbeat_tick(900u, 1000u, 0u, 0u);
+    ecu_sched_encoder_test_set_tim2_cnt(1400u);
+    ecu_sched_encoder_heartbeat_tick(1400u, 2000u, 0u, 0u);
+}
+
+static uint8_t encoder_evt_find_ch(uint8_t want_ch, uint8_t want_high,
+                                   uint32_t *out_ts) {
+    for (uint8_t i = 0u; i < ecu_sched_encoder_test_get_evt_count(); ++i) {
+        uint32_t ts = 0u; uint8_t ch = 0u; uint8_t high = 0u;
+        ecu_sched_encoder_test_get_evt(i, &ts, &ch, &high);
+        if (ch == want_ch && high == want_high) {
+            if (out_ts != nullptr) { *out_ts = ts; }
+            return 1u;
+        }
+    }
+    return 0u;
+}
+
+void test_ecu_sched_encoder_placement(void) {
+    section("ecu_sched: encoder engine_deg720_to_absolute placement");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+
+    // Discriminator vectors (hand-verified) — composition identical to
+    // engine_deg720_to_absolute's body. Integer deg→counts cannot hit residue
+    // 50/3000 exactly; these lock the +16384 correction oracle.
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    uint32_t cand = ecu_sched_encoder_test_rev_target_to_absolute(50u, 100u);
+    CHECK_EQ(cand, 16434u, "disc1: rev_target_to_absolute(50,100)=16434");
+    CHECK_EQ(ecu_sched_encoder_phase_at(cand), ECU_PHASE_B,
+             "disc1: candidate lands in wrong phase (B)");
+    CHECK_EQ(cand + 16384u, 32818u, "disc1: +16384 correction -> 32818");
+
+    ecu_sched_encoder_phase_set_anchor(5000u, ECU_PHASE_A);
+    cand = ecu_sched_encoder_test_rev_target_to_absolute(3000u, 6000u);
+    CHECK_EQ(cand, 19384u, "disc2: rev_target_to_absolute(3000,6000)=19384");
+    CHECK_EQ(ecu_sched_encoder_phase_at(cand), ECU_PHASE_A,
+             "disc2: candidate lands in wrong phase for B-target (A)");
+    CHECK_EQ(cand + 16384u, 35768u, "disc2: +16384 correction -> 35768");
+
+    // End-to-end deg720: target phase A at 0° with anchor=0/A, now=100.
+    // counts_in_rev(0)=0 -> candidate=16384 (phase B) -> +16384 -> 32768.
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    CHECK_EQ(ecu_sched_encoder_test_deg720_to_absolute(0u, 100u), 32768u,
+             "deg720(0°, now=100, anchor=0/A) -> 32768 (phase A)");
+    CHECK_EQ(ecu_sched_encoder_phase_at(32768u), ECU_PHASE_A,
+             "result phase matches target A");
+    // Target phase B at 360°: same counts, candidate=16384 already B -> no fix.
+    CHECK_EQ(ecu_sched_encoder_test_deg720_to_absolute(360u, 100u), 16384u,
+             "deg720(360°, now=100, anchor=0/A) -> 16384 (phase B, no +16384)");
+    CHECK_EQ(ecu_sched_encoder_phase_at(16384u), ECU_PHASE_B,
+             "result phase matches target B");
+
+    // Misaligned anchor (disc2 geometry via deg720): 3000 counts ≈ 65.9° →
+    // use 66° (66*16384/360=3003). Close enough to exercise the oracle path.
+    ecu_sched_encoder_phase_set_anchor(5000u, ECU_PHASE_A);
+    const uint32_t abs_b = ecu_sched_encoder_test_deg720_to_absolute(360u + 66u, 6000u);
+    CHECK_EQ(ecu_sched_encoder_phase_at(abs_b), ECU_PHASE_B,
+             "misaligned-anchor deg720 B-target lands in phase B");
+
+    // Negative-delta / wrap cases reuse phase_at coverage (99999/83616 vs
+    // anchor=100000) — phase oracle inherits wrap-safety; no new logic here.
+    ecu_sched_encoder_phase_set_anchor(100000u, ECU_PHASE_A);
+    CHECK_EQ(ecu_sched_encoder_phase_at(99999u), ECU_PHASE_B,
+             "phase_at just before anchor: previous phase (neg delta)");
+    CHECK_EQ(ecu_sched_encoder_phase_at(83616u), ECU_PHASE_B,
+             "phase_at -1 rev from anchor=100000: phase flips");
+    CHECK_EQ(ecu_sched_encoder_phase_at(83615u), ECU_PHASE_A,
+             "phase_at just before -1 rev boundary");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_distinct_targets(void) {
+    section("ecu_sched: encoder sequential — distinct per-cyl targets");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(2000u);
+    ecu_sched_set_inj_pw_ticks(2000u);
+
+    encoder_seq_seed_omega();
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "pre: still presync");
+
+    // Phase A @ now=1500 → cyls {0,2}. 8 events (2 cyl × dwell+spark+on+off).
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    ecu_sched_encoder_test_set_tim2_cnt(1500u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
+
+    CHECK_EQ(ecu_sched_is_sequential(), 1u, "phase valid -> sequential");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 8u,
+             "2 cylinders × 4 events (contrast: presync arms 16 with equal targets)");
+
+    uint32_t spark0 = 0u, spark2 = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0), 1u, "cyl0 SPARK present");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, &spark2), 1u, "cyl2 SPARK present");
+    CHECK_TRUE(spark0 != spark2, "cyl0 and cyl2 spark targets are distinct");
+
+    // Presync contrast: equal targets across all 4 IGN — already asserted in
+    // test_ecu_sched_encoder_recompute_presync (evt0..3 share dwell, etc.).
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_trims(void) {
+    section("ecu_sched: encoder sequential — per-cyl ign/fuel trims");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(0u);
+    ecu_sched_set_inj_pw_ticks(2000u);
+
+    encoder_seq_seed_omega();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    ecu_sched_encoder_test_set_tim2_cnt(1500u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
+
+    uint32_t spark0_base = 0u, inj_on0_base = 0u, inj_off0_base = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0_base), 1u, "base cyl0 spark");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 1u, &inj_on0_base), 1u, "base cyl0 inj_on");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 0u, &inj_off0_base), 1u, "base cyl0 inj_off");
+    const uint32_t pw0_base = inj_off0_base - inj_on0_base;
+
+    // +5° ign trim +50% fuel trim on cyl0 only.
+    ecu_sched_test_reset();
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+    ems::engine::cyl_ign_trim_deg[0] = 5;
+    ems::engine::cyl_fuel_trim_pct[0] = 50;
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(0u);
+    ecu_sched_set_inj_pw_ticks(2000u);
+
+    encoder_seq_seed_omega();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    ecu_sched_encoder_test_set_tim2_cnt(1500u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
+
+    uint32_t spark0_trim = 0u, spark2_trim = 0u;
+    uint32_t inj_on0_trim = 0u, inj_off0_trim = 0u;
+    uint32_t inj_on2_trim = 0u, inj_off2_trim = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0_trim), 1u, "trimmed cyl0 spark");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, &spark2_trim), 1u, "untrimmed cyl2 spark");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 1u, &inj_on0_trim), 1u, "trimmed cyl0 inj_on");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 0u, &inj_off0_trim), 1u, "trimmed cyl0 inj_off");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ3, 1u, &inj_on2_trim), 1u, "untrimmed cyl2 inj_on");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ3, 0u, &inj_off2_trim), 1u, "untrimmed cyl2 inj_off");
+
+    CHECK_TRUE(spark0_trim != spark0_base, "ign trim moved cyl0 spark vs untrimmed baseline");
+    CHECK_TRUE(spark0_trim != spark2_trim, "ign trim applies only to cyl0, not cyl2");
+
+    const uint32_t pw0_trim = inj_off0_trim - inj_on0_trim;
+    const uint32_t pw2 = inj_off2_trim - inj_on2_trim;
+    CHECK_TRUE(pw0_trim > pw0_base,
+               "fuel trim +50% on cyl0 widens PW vs its own untrimmed baseline");
+    CHECK_EQ(pw2, pw0_base,
+             "untrimmed cyl2 PW matches cyl0 baseline (same inj_pw_ticks, omega)");
+
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_phase_progression(void) {
+    section("ecu_sched: encoder sequential — phase A/B cylinder partition");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(0u);
+    ecu_sched_set_inj_pw_ticks(0u);
+
+    encoder_seq_seed_omega();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+
+    // Phase A @ 1500 → {0,2}
+    ecu_sched_encoder_test_set_tim2_cnt(1500u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 1u, 1u);  // cmp edge resets staleness
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 1u, "phase A: cyl0 armed");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, nullptr), 1u, "phase A: cyl2 armed");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN4, 0u, nullptr), 0u, "phase A: cyl3 (IGN4) absent");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN2, 0u, nullptr), 0u, "phase A: cyl1 (IGN2) absent");
+
+    // Capture long-lead visibility (v1 limitation): with advance=10, cyl0
+    // spark lands in phase B (710°) so deg720 pushes it +16384 — lead exceeds
+    // one TIM2 rev. Makes the "built almost two revs early" limitation visible.
+    uint32_t spark0 = 0u, spark2 = 0u;
+    encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0);
+    encoder_evt_find_ch(ECU_CH_IGN3, 0u, &spark2);
+    const uint32_t lead0 = spark0 - 1500u;
+    const uint32_t lead2 = spark2 - 1500u;
+    CHECK_TRUE(lead0 > 16384u || lead2 > 16384u,
+               "at least one cyl spark lead exceeds 1 TIM2 rev (v1 long-lead limitation)");
+
+    // Phase B @ 1500+16384 → {3,1}. Re-seed phase (CALIBRATED=0 won't set_anchor
+    // from the cmp edge) and advance now by one TIM2 rev. Phase-A events for
+    // {0,2} are intentionally NOT purged here (disjunct masks) — they stay
+    // until that half-phase's next heartbeat.
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    const uint32_t now_b = 1500u + 16384u;
+    ecu_sched_encoder_test_set_tim2_cnt(now_b);
+    ecu_sched_encoder_heartbeat_tick(now_b, 4000u, 2u, 2u);
+
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN4, 0u, nullptr), 1u, "phase B: cyl3 armed");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN2, 0u, nullptr), 1u, "phase B: cyl1 armed");
+    // Prior half-phase events may still be queued (disjunct purge) — that is
+    // the cadence invariant, not a bug.
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt_count() >= 8u,
+               "phase B added its 8 events; prior half-phase may still be present");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_presync_to_sequential_transition(void) {
+    section("ecu_sched: encoder presync↔sequential handoff");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(0u);
+    ecu_sched_set_inj_pw_ticks(0u);
+    ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
+
+    encoder_seq_seed_omega();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u, "presync: 16 events");
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "g_knock_sequential=0 in presync");
+
+    // Enter sequential: first rebuild must full-purge (no leftover 4-wide
+    // shared-target events from the other pair).
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    ecu_sched_encoder_test_set_tim2_cnt(1500u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 1u, 1u);
+    CHECK_EQ(ecu_sched_is_sequential(), 1u, "g_knock_sequential=1 in sequential");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 8u,
+             "after handoff: exactly 8 events, no leftover presync 4-wide");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN2, 0u, nullptr), 0u,
+             "presync IGN2 shared-target gone after sequential handoff");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN4, 0u, nullptr), 0u,
+             "presync IGN4 shared-target gone after sequential handoff");
+
+    // Back to presync: invalidate phase → recompute_presync purges all +
+    // clears flag.
+    ecu_sched_encoder_phase_invalidate();
+    ecu_sched_encoder_test_set_tim2_cnt(2000u);
+    ecu_sched_encoder_heartbeat_tick(2000u, 4000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "g_knock_sequential=0 after return to presync");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
+             "presync rebuild restores 16-wide simultaneous schedule");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_min_lead_skip(void) {
+    section("ecu_sched: encoder sequential — min-lead pair skip");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    // Phase A @ now≈5451: cyl2 spark at 120° (advance=60, tdc=180) has
+    // counts=5461 → lead≈10 < min_lead=125 (omega=1.0) → pair skipped.
+    // cyl0 spark (710°, phase B) is a full image away and still arms.
+    ecu_sched_set_advance_deg(60u);
+    ecu_sched_set_eoi_lead_deg(355u);  // EOI far from the near spark
+    ecu_sched_set_dwell_ticks(2000u);
+    ecu_sched_set_inj_pw_ticks(2000u);
+
+    ecu_sched_encoder_test_set_tim2_cnt(0u);
+    ecu_sched_encoder_heartbeat_tick(0u, 0u, 0u, 0u);
+    ecu_sched_encoder_test_set_tim2_cnt(1000u);
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);  // omega=1.0
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 65536, "omega=1.0 seeded");
+
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    const uint32_t near_now = 5451u;
+    CHECK_EQ(ecu_sched_encoder_phase_at(near_now), ECU_PHASE_A,
+             "precondition: now is in phase A (builds {0,2})");
+    CHECK_EQ(ecu_sched_encoder_test_deg720_to_absolute(120u, near_now), 5461u,
+             "precondition: cyl2 spark_abs=5461, lead=10 < min_lead=125");
+    const uint32_t skips_before = ecu_sched_encoder_test_get_seq_min_lead_skip_count();
+
+    ecu_sched_encoder_test_set_tim2_cnt(near_now);
+    ecu_sched_encoder_heartbeat_tick(near_now, 1000u + (near_now - 1000u), 1u, 1u);
+
+    CHECK_TRUE(ecu_sched_encoder_test_get_seq_min_lead_skip_count() > skips_before,
+               "near-lead spark increments skip counter");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, nullptr), 0u,
+             "cyl2 spark pair skipped — never inverted via arm_channel clamp");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 1u,
+             "cyl0 (phase-B spark, long lead) still armed");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
     ecu_sched_test_reset();
 }
 

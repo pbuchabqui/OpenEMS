@@ -225,6 +225,12 @@ int main(void) {
     test_ecu_sched_encoder_recompute_presync();
     test_ecu_sched_encoder_recompute_presync_bank_toggle();
     test_ecu_sched_encoder_recompute_presync_pw_clamp();
+    test_ecu_sched_encoder_placement();
+    test_ecu_sched_encoder_sequential_distinct_targets();
+    test_ecu_sched_encoder_sequential_trims();
+    test_ecu_sched_encoder_sequential_phase_progression();
+    test_ecu_sched_encoder_presync_to_sequential_transition();
+    test_ecu_sched_encoder_sequential_min_lead_skip();
 
     // ── QUICK CRANK ─────────────────────────────────────────────────────
     printf("\n=== QUICK CRANK ===");

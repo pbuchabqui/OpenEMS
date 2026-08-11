@@ -243,12 +243,11 @@ void ecu_sched_encoder_evt_dispatch(void) noexcept;  // called from TIM2 ISR on 
 // cmp_edge_count() (hal/timer.h) — usada para detectar um novo flanco do
 // CMP desde o último tick (delta de cmp_edge_count).
 //
-// ⚠️ Ainda não faz o recompute barato de dwell/PW nem o bank-toggle do
-// presync — recompute completo (spark/dwell/eoi/inj_on/inj_off, bank
-// toggle) via si::encoder::recompute_presync(), rodando sempre que
-// ecu_sched_encoder_phase_valid()==0 (sempre verdade sem
-// EMS_MT6835_CMP_PHASE_CALIBRATED, hal/board_pinout.h). Ainda não faz o
-// ramo sequencial (precisa do anchor de fase real, tarefa futura) nem a
+// ⚠️ Faz o recompute de dwell/PW + bank-toggle do presync via
+// si::encoder::recompute_presync() quando ecu_sched_encoder_phase_valid()==0
+// (sempre verdade sem EMS_MT6835_CMP_PHASE_CALIBRATED, hal/board_pinout.h),
+// e o ramo sequencial via si::encoder::rebuild_sequential() quando a fase
+// A/B está confirmada (2 cilindros por metade-de-fase). Ainda não faz a
 // verificação de deriva do CMP: a fase que um flanco do CMP representa é
 // uma constante de calibração de hardware ainda não medida em bancada
 // (ecu_sched_encoder_phase_set_anchor() precisa dela), não algo que este
@@ -262,11 +261,11 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
 // 1×/volta. Sempre alimenta misfire_encoder_on_sample() (leve — precisa de
 // cadência fina, uma janela de cilindro de 62° só tem ~11 sub-ticks de
 // resolução angular). Só chama ecu_sched_encoder_heartbeat_tick() (pesado —
-// ω, avaliação de CMP, staleness, recompute_presync, publish do snapshot)
-// a cada 64º sub-tick, preservando exactamente a cadência 1×/volta que
-// esses cálculos já tinham antes desta tarefa — ecu_sched_encoder_omega_sample()
-// em particular foi afinado para deltas de 16384 counts, nunca deve ver
-// deltas de 256.
+// ω, avaliação de CMP, staleness, recompute_presync/rebuild_sequential,
+// publish do snapshot) a cada 64º sub-tick, preservando exactamente a
+// cadência 1×/volta que esses cálculos já tinham antes desta tarefa —
+// ecu_sched_encoder_omega_sample() em particular foi afinado para deltas
+// de 16384 counts, nunca deve ver deltas de 256.
 void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
                                          uint32_t cmp_angle,
                                          uint32_t cmp_edge_count) noexcept;
@@ -297,6 +296,9 @@ uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept;
 // cadência do split light/heavy directamente, sem depender de efeitos
 // secundários do caminho pesado.
 uint8_t ecu_sched_encoder_test_get_subtick_count(void) noexcept;
+// Contador de pares dwell/spark ou inj saltados por rebuild_sequential()
+// quando o alvo de spark/EOI estava dentro do piso min-lead.
+uint32_t ecu_sched_encoder_test_get_seq_min_lead_skip_count(void) noexcept;
 // Mock de TIM2_CNT para os testes da fila TIM2/CH3 (nome sem colisão com os
 // aliases legados ecu_sched_test_set_tim2_cnt/get_tim1_ccr — esses mexem em
 // ems_test_tim5_cnt por baixo, ver "TIM1 placeholders" acima; não são o
@@ -318,6 +320,9 @@ uint32_t ecu_sched_encoder_test_engine_deg_to_counts(uint32_t engine_angle_deg) 
 // atual cai no FIM da janela, não no início (ver comentário na definição).
 uint32_t ecu_sched_encoder_test_rev_target_to_absolute(uint32_t target_counts_in_rev,
                                                         uint32_t now_raw) noexcept;
+// Conversão fase-consciente grau→posição absoluta (ciclo 720°).
+uint32_t ecu_sched_encoder_test_deg720_to_absolute(uint32_t engine_angle_deg,
+                                                     uint32_t now_raw) noexcept;
 uint8_t ecu_sched_test_angle_table_size(void);
 uint8_t ecu_sched_test_get_angle_event(uint8_t index,
                                        uint8_t *tooth,

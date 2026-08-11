@@ -49,6 +49,7 @@ inline constexpr uint16_t kTriggerTooth0EngineDeg = 0u;  // MEDIR NO MOTOR REAL
 // A ordem de disparo entra apenas via kFiringOrder/cyl_tdc_deg — nunca na
 // escolha do canal. Invariante partilhado por Calculate_Sequential_Cycle,
 // pares presync (companheiros 0↔3, 2↔1), ign_ch_to_cyl_bit e misfire_detect.
+// kFiringOrder={0,2,3,1} = ordem de ignição física 1-3-4-2.
 inline constexpr uint8_t kFiringOrder[kCylinderCount] = {0u, 2u, 3u, 1u};
 
 // CMP reference half: which 360° half the cam rising edge marks.
@@ -59,8 +60,9 @@ inline constexpr uint8_t kCmpRefHalf = 0u;
 
 constexpr uint16_t cyl_tdc_deg(uint8_t cyl) noexcept {
     // TDC baseado na POSIÇÃO do cilindro na ordem de disparo, não no número.
-    // Ex: kFiringOrder={0,2,3,1} → cyl 0 na pos 0 (0°), cyl 2 na pos 1 (180°),
-    //     cyl 3 na pos 2 (360°), cyl 1 na pos 3 (540°).
+    // Ex: kFiringOrder={0,2,3,1} (= físicos 1-3-4-2) → cyl 0/físico 1 na
+    //     pos 0 (0°), cyl 2/físico 3 na pos 1 (180°), cyl 3/físico 4 na
+    //     pos 2 (360°), cyl 1/físico 2 na pos 3 (540°).
     uint8_t pos = 0u;
     for (; pos < kCylinderCount; ++pos) {
         if (kFiringOrder[pos] == cyl) { break; }
