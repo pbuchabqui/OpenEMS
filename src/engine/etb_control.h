@@ -88,10 +88,6 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
                                    uint16_t period_ms) noexcept;
 /** Integrador PID (pct×10) — host tests / diag. */
 int32_t         etb_control_get_integrator() noexcept;
-/** @deprecated use etb_control_get_integrator */
-inline int32_t  etb_control_test_get_integrator() noexcept {
-    return etb_control_get_integrator();
-}
 
 #if defined(EMS_HOST_TEST)
 // Override do weak stub em ign_calc — só relevante com float idle path nos tests.

@@ -66,7 +66,6 @@ int main() { return 0; }
 #include "hal/tle8888.h"
 #include "hal/out_pins.h"
 #include "hal/flex_fuel.h"
-#include "hal/runtime_seed.h"
 #include "hal/timer.h"
 #include "hal/mt6835.h"
 #include "drv/encoder_sync.h"
@@ -115,26 +114,15 @@ static bool g_rev_limit_active = false;   // fuel cut active via rev limiter
 uint32_t g_dbg_rev_limit_trips = 0u;
 uint32_t g_dbg_rev_limit_rpm_x10 = 0u;   // último rpm_x10 que armou o trip
 uint32_t g_dbg_rev_limit_rpm_max = 0u;   // maior rpm_x10 alguma vez visto (glitch?)
-static bool g_engine_was_running = false;
-static bool g_runtime_seed_saved_for_stop = false;
-static bool g_runtime_seed_arm_window_active = false;
 static bool     g_ae_active        = false;
 static uint32_t g_last_net_pw_us   = 0u;
 // Barometric correction: amostrar MAP quando motor parado por >300ms após key-on
 static uint32_t g_baro_stopped_since_ms = 0u;
 static bool     g_baro_sampled          = false;
-static uint32_t g_zero_rpm_since_ms = 0u;
-static uint32_t g_runtime_seed_arm_window_start_ms = 0u;
 static uint16_t g_prev_tps_pct_x10 = 0u;
-static bool g_have_last_full_sync = false;
-static ems::drv::CkpSnapshot g_last_full_sync_snapshot{};  // WAIT_GAP + zeros
-static bool g_have_last_gap_sync = false;
-static ems::drv::CkpSnapshot g_last_gap_sync_snapshot{};
 static uint32_t g_loop2ms_last_us = 0u;
 static uint32_t g_loop2ms_max_us = 0u;
 
-static constexpr uint32_t kRuntimeSeedSaveDelayMs = 100u;
-static constexpr uint32_t kRuntimeSeedArmWindowMs = 300000u;  // 5 minutos para start-stop
 static constexpr uint32_t kSchedulerTicksPerMs = 62500u;  // TIM5_CNT @ 62.5 MHz
 static constexpr uint32_t kCalibSaveMinIntervalMs = 300000u;
 static constexpr uint16_t kMapMinBarX100 = 10u;
@@ -497,8 +485,8 @@ static void openems_init() noexcept {
     ems::hal::tim2_encoder_init();  // CKP: TIM2_CH1/CH2 = PA0/PA1
     ems::hal::tim3_cmp_ic_init();   // CMP: TIM3_CH1 = PC6
     ems::hal::mt6835_init();        // leitura absoluta SPI no key-on
-    // Heartbeat TIM2_CH4 (1×/volta) — depois de mt6835_init() para que o
-    // 1º alvo de CCR4 (now+16384) parta do TIM2_CNT já pré-carregado pela
+    // Heartbeat TIM2_CH4 — depois de mt6835_init() para que o 1º alvo de
+    // CCR4 (now+256, sub-tick) parta do TIM2_CNT já pré-carregado pela
     // leitura SPI absoluta, não de um valor de reset arbitrário.
     ems::hal::tim2_heartbeat_start();
 #else
@@ -640,21 +628,6 @@ static void openems_init() noexcept {
 	if (!ems::hal::nvm_load_adaptive_maps()) {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
-    {
-        ems::hal::RuntimeSyncSeed seed = {};
-        if (ems::hal::nvm_load_runtime_seed(&seed) &&
-            ems::hal::runtime_seed_fast_reacquire_compatible_60_2(seed)) {
-            const bool phase_a =
-                ((seed.flags & ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A) != 0u);
-            ems::drv::ckp_seed_arm(phase_a);
-            g_runtime_seed_arm_window_active = true;
-            g_runtime_seed_arm_window_start_ms = millis();
-	if (!ems::hal::nvm_clear_runtime_seed()) {
-		++g_flash_write_faults; // FIX: rastrear falha de limpeza NVM
-	}
-        }
-    }
-
     // 6) Drivers
     ems::drv::sensors_init();
     iwdg_kick();
@@ -789,23 +762,6 @@ int main() {
             ems::engine::output_test_poll(now, snap.rpm_x10);
             const bool full_sync = (snap.state == ems::drv::SyncState::FULL_SYNC);
             const bool sched_sync = (snap.state == ems::drv::SyncState::HALF_SYNC || full_sync);
-
-            if (g_runtime_seed_arm_window_active) {
-                if (elapsed(now, g_runtime_seed_arm_window_start_ms,
-                            kRuntimeSeedArmWindowMs)) {
-                    ems::drv::ckp_seed_disarm();
-                    g_runtime_seed_arm_window_active = false;
-                }
-            }
-
-            if (full_sync) {
-                g_have_last_full_sync = true;
-                g_last_full_sync_snapshot = snap;
-            }
-            if (sched_sync && snap.tooth_index == 0u) {
-                g_have_last_gap_sync = true;
-                g_last_gap_sync_snapshot = snap;
-            }
 
             const bool map_fault = (sensors.fault_bits & kFaultBitMap) != 0u;
             const uint16_t map_bar_x100_raw = static_cast<uint16_t>(sensors.map_bar_x1000 / 10u);
@@ -1289,9 +1245,6 @@ int main() {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
                 g_calibration_clamp_count,
-                ems::drv::ckp_seed_loaded_count(),
-                ems::drv::ckp_seed_confirmed_count(),
-                ems::drv::ckp_seed_rejected_count(),
                 static_cast<uint8_t>(snap.state));
             // Transporte (UART+USB RX/TX/parse) vive em comms_pump() a 2 ms.
             ems::engine::auxiliaries_tick_20ms();
@@ -1464,37 +1417,6 @@ int main() {
                 g_last_stft_pct = 0;
             }
 
-            // Runtime seed — salva posição para re-sincronização rápida
-            const uint32_t rpm = snap.rpm_x10;
-            if (rpm > 0u) {
-                g_engine_was_running = true;
-                g_zero_rpm_since_ms  = 0u;
-                g_runtime_seed_saved_for_stop = false;
-            } else {
-                if (g_engine_was_running && g_zero_rpm_since_ms == 0u) {
-                    g_zero_rpm_since_ms = now;
-                }
-                if (g_engine_was_running && !g_runtime_seed_saved_for_stop &&
-                    g_zero_rpm_since_ms != 0u &&
-                    elapsed(now, g_zero_rpm_since_ms, kRuntimeSeedSaveDelayMs) &&
-                    g_have_last_gap_sync) {
-                    const auto seed_snap = g_last_gap_sync_snapshot;
-                    ems::hal::RuntimeSyncSeed seed = {};
-                    seed.flags = static_cast<uint8_t>(
-                        ems::hal::RUNTIME_SYNC_SEED_FLAG_VALID |
-                        ems::hal::RUNTIME_SYNC_SEED_FLAG_FULL_SYNC |
-                        (seed_snap.phase_A
-                             ? ems::hal::RUNTIME_SYNC_SEED_FLAG_PHASE_A : 0u));
-                    seed.tooth_index = seed_snap.tooth_index;
-                    seed.decoder_tag =
-                        ems::hal::RUNTIME_SYNC_SEED_DECODER_TAG_60_2;
-	if (!ems::hal::nvm_save_runtime_seed(&seed)) {
-		// FIX: não descartar retorno — falha de flash deve ser rastreada
-		++g_flash_write_faults; // fault counter para diagnóstico
-	}
-	g_runtime_seed_saved_for_stop = true;
-                }
-            }
         }
 
         // ── 500ms: agenda flush Flash + LED heartbeat (PB2 WeAct blue LED) ─

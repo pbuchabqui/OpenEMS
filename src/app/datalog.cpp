@@ -1,6 +1,7 @@
 /**
  * @file app/datalog.cpp
  * @brief Ring buffer datalog with SD card flush via SDMMC1.
+ * DEFERRED: not linked in Makefile until SD hardware exists.
  *
  * Raw LBA append (no filesystem). Each ignition cycle starts at the
  * next LBA after the previous session. A header block at LBA 0 tracks

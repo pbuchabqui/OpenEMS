@@ -89,3 +89,6 @@
 #ifndef EMS_MISFIRE_ENCODER_ENABLE
 #  define EMS_MISFIRE_ENCODER_ENABLE 0
 #endif
+
+// Convenience for call sites that only need a boolean (same as EMS_MT6835_ENCODER).
+#define EMS_ENCODER_MODE (EMS_MT6835_ENCODER != 0)

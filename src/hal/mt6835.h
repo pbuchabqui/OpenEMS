@@ -42,17 +42,10 @@ bool mt6835_read_angle_raw21(uint32_t* out_angle21, uint8_t* out_status) noexcep
 /// "virabrequim virtual" no key-on, decisão 3 da arquitetura base.
 uint32_t mt6835_angle21_to_tim2_counts(uint32_t angle21) noexcept;
 
-bool mt6835_ok() noexcept;
-uint16_t mt6835_fault_count() noexcept;
-
 /// Espelha MT6835_HW_PRESENT (compile-time, privado a mt6835.cpp) como
 /// runtime bool — permite a um chamador (poll de saúde 100ms,
 /// main_stm32.cpp) distinguir "sem hardware populado" (skip, não é falha)
-/// de "hardware populado mas leitura falhou" (falha real). Host-test:
-/// sempre true (mesma convenção de mt6835_ok() no stub).
+/// de "hardware populado mas leitura falhou" (falha real). Host-test: true.
 bool mt6835_hw_present() noexcept;
-
-/// STATUS[2:0] da última leitura de ângulo bem-sucedida (0 se nenhuma ainda).
-uint8_t mt6835_last_status() noexcept;
 
 }  // namespace ems::hal

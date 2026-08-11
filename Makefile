@@ -92,7 +92,6 @@ APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp \
           $(SRC_DIR)/app/ui_protocol_envelope.cpp \
           $(SRC_DIR)/app/can_stack.cpp \
           $(SRC_DIR)/app/can_rx_map.cpp \
-          $(SRC_DIR)/app/datalog.cpp \
           $(SRC_DIR)/app/nvm_boot.cpp \
           $(SRC_DIR)/app/vehicle_inputs_bridge.cpp
 HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp \
@@ -100,7 +99,6 @@ HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp \
                   $(SRC_DIR)/hal/etb_driver.cpp $(SRC_DIR)/hal/tle8888.cpp \
                   $(SRC_DIR)/hal/ewg_driver.cpp \
                   $(SRC_DIR)/hal/flex_fuel.cpp \
-                  $(SRC_DIR)/hal/sdmmc.cpp \
                   $(SRC_DIR)/hal/out_pins.cpp \
                   $(SRC_DIR)/hal/mt6835.cpp
 HAL_STM32H562_SRC = $(SRC_DIR)/hal/stm32h562/system.cpp \

@@ -456,7 +456,7 @@ void ui_init() noexcept {
     reset_pages();
     reset_parser();
     ui_update_rt_metrics(0u, 0, 0);
-    ui_update_rt_sched_diag(0u, 0u, 0u, 0u, 0u, 0u, 0u);
+    ui_update_rt_sched_diag(0u, 0u, 0u, 0u);
 }
 
 void ui_rx_byte(uint8_t byte) noexcept {
@@ -519,16 +519,11 @@ void ui_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p10
 void ui_update_rt_sched_diag(uint32_t late_events,
                              uint32_t cycle_schedule_drop_count,
                              uint32_t calibration_clamp_count,
-                             uint32_t seed_loaded_count,
-                             uint32_t seed_confirmed_count,
-                             uint32_t seed_rejected_count,
                              uint8_t sync_state_raw) noexcept {
     g_rt_sched_late_events = late_events;
     g_rt_sched_cycle_schedule_drop_count = cycle_schedule_drop_count;
     g_rt_sched_calibration_clamp_count = calibration_clamp_count;
-    g_rt_seed_loaded_count = seed_loaded_count;
-    g_rt_seed_confirmed_count = seed_confirmed_count;
-    g_rt_seed_rejected_count = seed_rejected_count;
+    // Wire reserved seed counters stay 0 (CKP seed scaffolding removed).
     g_rt_sync_state_raw = sync_state_raw;
 }
 

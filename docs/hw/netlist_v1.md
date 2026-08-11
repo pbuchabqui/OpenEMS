@@ -269,7 +269,7 @@ pode ser acionado sem destino**. Esta varredura encontrou um caso real.
 | `PA7`, `PD3`, `PB10` | **EWG** — ✅ **corrigido**. `ewg_driver_init()` reclamava `PA7`/`PD3` como saídas e punha `PB10` em PWM TIM2_CH3, apesar de o EWG estar diferido. Pior: com a realimentação fixada em 0, o PID via erro = demanda − 0 e, ao subir a demanda, **conduzia** os três pinos a fundo — para um estágio que não existe. Guardado com `EMS_EWG_POPULATED 0`, mesmo padrão de `sdmmc_init()`. **Deixar sem ligação na v1.** |
 | `PB2` | LED de heartbeat **do coreboard WeAct** — não sai para a placa carrier. Não usar. |
 | `PA9`, `PA10` | USART1 de bancada. Não cablados na v1; **reservar como pontos de teste**, não encaminhar ao conector. |
-| `PC8`, `PC12`, `PD2` | SDMMC — `sdmmc_init()` nunca é chamado e está guardado. Livres no VGT6, mas **não reutilizar** sem rever o datalog. |
+| `PC8`, `PC12`, `PD2` | SDMMC — `sdmmc.cpp`/`datalog.cpp` existem mas **não estão no Makefile** (deferred). Livres no VGT6; **não reutilizar** sem rever o datalog. |
 
 ---
 

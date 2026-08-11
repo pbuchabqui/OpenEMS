@@ -260,15 +260,6 @@ static DecoderState g_state{};  // zero-init; SyncState::WAIT_GAP == 0
 // NOTA: g_state NÃO é volatile porque é usada diretamente dentro de ISRs,
 // onde o acesso volatileness é desnecessário (a ISR não pode ser interrompida
 // por si mesma). A proteção de snapshot usa critical section + memcpy.
-static volatile bool g_seed_armed = false;
-static volatile bool g_seed_phase_a = false;
-static volatile bool g_seed_probation = false;
-static volatile uint16_t g_seed_probation_teeth = 0u;
-static volatile uint32_t g_seed_loaded_count = 0u;
-static volatile uint32_t g_seed_confirmed_count = 0u;
-static volatile uint32_t g_seed_rejected_count = 0u;
-static constexpr uint16_t kSeedCamConfirmMaxTeeth = 70u;
-
 // ── Utilitários inline ────────────────────────────────────────────────────────
 
 // Converte delta de ticks TIM5 para nanossegundos.
@@ -354,8 +345,6 @@ inline bool is_gap(uint32_t period, uint32_t avg) noexcept {
             static_cast<uint64_t>(avg) * kGapRatioNum);
 }
 
-static uint32_t g_prev_valid_period_ns = 0u;
-static uint8_t g_coherent_periods_count = 0u;
 static uint32_t s_prev_cmp_capture = 0u;
 // Revoluções (gaps aceites em FULL_SYNC) desde a última borda CMP validada.
 // Zerado na ISR do came; se exceder kMaxRevsWithoutCmp, força fallback a wasted.
@@ -459,38 +448,6 @@ inline void exit_critical() noexcept {
 #endif
 }
 
-// Valida se período CKP é coerente com rotação forward estável
-// Períodos coerentes: variação < 25% entre amostras consecutivas
-inline bool is_forward_rotation_coherent(uint32_t period_ns) noexcept {
-    if (period_ns == 0u || period_ns > 10000000u) {  // > 10ms = RPM < 100
-        return false;
-    }
-
-    if (g_prev_valid_period_ns == 0u) {
-        g_prev_valid_period_ns = period_ns;
-        g_coherent_periods_count = 1u;
-        return true;
-    }
-
-    // Verifica se variação está dentro de ±25% (rotação estável forward)
-    const uint32_t max_valid = g_prev_valid_period_ns + (g_prev_valid_period_ns >> 2u);
-    const uint32_t min_valid = g_prev_valid_period_ns - (g_prev_valid_period_ns >> 2u);
-
-    if (period_ns >= min_valid && period_ns <= max_valid) {
-        g_prev_valid_period_ns = period_ns;
-        if (g_coherent_periods_count < 255u) {
-            ++g_coherent_periods_count;
-        }
-        // Requer 3 períodos coerentes consecutivos para validar forward rotation
-        return g_coherent_periods_count >= 3u;
-    } else {
-        // Variação brusca: possível reversão ou ruído
-        g_prev_valid_period_ns = period_ns;
-        g_coherent_periods_count = 1u;
-        return false;
-    }
-}
-
 // ── Processamento de gap na máquina de estados ───────────────────────────────
 // Chamado pela ISR quando period > 1,5 × avg E tooth_count satisfaz a condição.
 // Retorna true se o gap foi aceito (transição válida).
@@ -533,11 +490,6 @@ inline bool process_gap_event() noexcept {
             goto sync_transition_common;
 
         sync_transition_common:
-            // FIX 2026-06-29: seed desativado p/ diagnóstico. O seed armado pela
-            // NVM pode impedir sync se is_forward_rotation_coherent nunca retornar
-            // true devido a contaminação do tooth_period_ns.
-            // TODO: re-activar seed (via is_forward_rotation_coherent) quando
-            //       a classificação de dentes estiver robusta.
             g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
             g_state.tooth_count      = 0u;
             g_state.snap.tooth_index = 0u;
@@ -998,18 +950,6 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     }
 
     // ── 8. Hooks ──────────────────────────────────────────────────────────
-    if (g_seed_probation) {
-        ++g_seed_probation_teeth;
-        if (g_seed_probation_teeth > kSeedCamConfirmMaxTeeth) {
-            // Seed could not be validated by cam edge in time: fallback to safe sync path.
-            g_seed_probation = false;
-            g_seed_probation_teeth = 0u;
-            ++g_seed_rejected_count;
-            g_state.snap.state = ems::drv::SyncState::HALF_SYNC;
-            g_state.tooth_count = 0u;
-            g_state.snap.tooth_index = 0u;
-        }
-    }
     sensors_on_tooth(g_state.snap);
     schedule_on_tooth(g_state.snap);
     prime_on_tooth(g_state.snap);
@@ -1143,11 +1083,6 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     // Store pre-toggle value: after XOR in advance_phase_half, result = kCmpRefHalf.
     g_state.cmp_phase_pending = 1u;
     g_state.cmp_ref_value = ems::engine::cfg::kCmpRefHalf ^ 1u;
-    if (g_seed_probation) {
-        g_seed_probation = false;
-        g_seed_probation_teeth = 0u;
-        ++g_seed_confirmed_count;
-    }
     if (g_state.cmp_confirms < 2u) {
         ++g_state.cmp_confirms;
     }
@@ -1217,28 +1152,6 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
     return transitioned;
 }
 
-void ckp_seed_arm(bool phase_A) noexcept {
-    g_seed_armed = true;
-    g_seed_phase_a = phase_A;
-    ++g_seed_loaded_count;
-}
-
-void ckp_seed_disarm() noexcept {
-    g_seed_armed = false;
-}
-
-uint32_t ckp_seed_loaded_count() noexcept {
-    return g_seed_loaded_count;
-}
-
-uint32_t ckp_seed_confirmed_count() noexcept {
-    return g_seed_confirmed_count;
-}
-
-uint32_t ckp_seed_rejected_count() noexcept {
-    return g_seed_rejected_count;
-}
-
 uint32_t ckp_get_cmp_glitch_count() noexcept {
     return g_state.cmp_glitch_count;
 }
@@ -1267,15 +1180,6 @@ void ckp_test_reset() noexcept {
     ems_test_tim5_ccr1   = 0u;
     ems_test_tim5_ccr2   = 0u;
     ems_test_cam_gpio_idr = 0u;
-    g_seed_armed = false;
-    g_seed_phase_a = false;
-    g_seed_probation = false;
-    g_seed_probation_teeth = 0u;
-    g_seed_loaded_count = 0u;
-    g_seed_confirmed_count = 0u;
-    g_seed_rejected_count = 0u;
-    g_prev_valid_period_ns = 0u;
-    g_coherent_periods_count = 0u;
     s_prev_cmp_capture = 0u;
     s_revs_since_cmp = 0u;
     s_cmp_ref_tooth = 0xFFu;

@@ -20,13 +20,6 @@ namespace si = ems::engine::sched_internal;
 
 #if defined(EMS_HOST_TEST)
 // Host stubs: TIM5 dispatcher only. GPIO BSRR/MODER live in hal/out_pins.
-// TIM1 placeholders retained for legacy test API surface.
-static uint32_t ems_test_tim1_ign_cnt;
-static uint32_t ems_test_tim1_ign_ccr1;
-static uint32_t ems_test_tim1_ign_ccr2;
-static uint32_t ems_test_tim1_ign_ccr3;
-static uint32_t ems_test_tim1_ign_ccr4;
-
 #define TIM_SR_CC3IF 0x8U
 #define TIM_DIER_CC3IE (1U << 3)
 
@@ -127,7 +120,6 @@ volatile uint8_t g_inj_pw_override = 0U;  // 1=lock si::g_inj_pw_ticks, ignore m
 // EOI targeting notes: builders use si::g_eoi_lead_deg (shared).
 static volatile uint8_t g_presync_enable = 1U;
 static volatile uint8_t g_presync_inj_auto = 1U;
-static volatile uint8_t g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
 static volatile uint8_t g_hook_prev_valid = 0U;
 static volatile uint16_t g_hook_prev_tooth = 0U;
 static volatile uint8_t g_hook_schedule_this_gap = 1U;
@@ -159,13 +151,10 @@ struct SchedEvent {
     uint32_t timestamp;   // TIM5 absolute tick
     uint8_t  channel;     // ECU_CH_INJ1..IGN4
     uint8_t  high;        // 1=ON/DWELL, 0=OFF/SPARK
-    uint8_t  valid;
-    uint8_t  _pad;
 };
 
 static SchedEvent g_evt_queue[EVT_QUEUE_SIZE];
 static volatile uint8_t g_evt_count = 0U;
-static volatile uint8_t g_evt_armed = 0U;  // 1 if CCR3 is loaded with next event
 volatile uint32_t g_dbg_evt_dispatched = 0U;
 volatile uint32_t g_dbg_evt_inserted = 0U;
 volatile uint32_t g_dbg_evt_overflow = 0U;
@@ -239,7 +228,6 @@ static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
     g_evt_queue[pos].timestamp = ts;
     g_evt_queue[pos].channel = channel;
     g_evt_queue[pos].high = high;
-    g_evt_queue[pos].valid = 1U;
     ++g_evt_count;
 
     // If this is the earliest event, arm CCR3
@@ -247,7 +235,6 @@ static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
         TIM5_CCR3 = ts;
         TIM5_SR  = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
         TIM5_DIER |= TIM_DIER_CC3IE;
-        g_evt_armed = 1U;
     }
 }
 
@@ -290,7 +277,6 @@ void ecu_sched_evt_dispatch(void) {
         if ((int32_t)(next_ts - TIM5_CNT) > 16) {  // >16 ticks (~0.25µs) in future
             TIM5_CCR3 = next_ts;
             TIM5_SR  = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
-            g_evt_armed = 1U;
             return;
         }
         // Already past — process inline (no ts_ring; count as late for diag only)
@@ -298,7 +284,6 @@ void ecu_sched_evt_dispatch(void) {
         evt_execute_head(TIM5_CNT, 0U);
     }
     TIM5_DIER &= ~TIM_DIER_CC3IE;
-    g_evt_armed = 0U;
 }
 
 
@@ -382,12 +367,10 @@ static void purge_events_for_cyl_mask(uint8_t mask, uint8_t is_ign)
     }
     if (g_evt_count == 0U) {
         TIM5_DIER &= ~TIM_DIER_CC3IE;
-        g_evt_armed = 0U;
     } else {
         TIM5_CCR3 = g_evt_queue[0].timestamp;
         TIM5_SR   = ~TIM_SR_CC3IF;
         TIM5_DIER |= TIM_DIER_CC3IE;
-        g_evt_armed = 1U;
     }
 }
 
@@ -409,7 +392,6 @@ static void sanitize_runtime_calibration(void)
     // quente — candidato a eoi_idle). Presync mapeia via % 360.
     if (si::g_eoi_lead_deg >= ECU_CYCLE_DEG) { si::g_eoi_lead_deg = ECU_CYCLE_DEG - 1U; clamped = 1U; }
     if (si::g_presync_inj_mode > ECU_PRESYNC_INJ_SEMI_SEQUENTIAL) { si::g_presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS; clamped = 1U; }
-    if (g_presync_ign_mode > ECU_PRESYNC_IGN_WASTED_SPARK) { g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK; clamped = 1U; }
     if (clamped != 0U) { ++g_calibration_clamp_count; }
 }
 
@@ -504,7 +486,6 @@ static void clear_all_events_and_drive_safe_outputs(void)
     si::encoder_clear_all();  // fila TIM2/CH3, se existir algum evento pendente
     // Clear TIM5 event queue
     g_evt_count = 0U;
-    g_evt_armed = 0U;
     TIM5_DIER &= ~TIM_DIER_CC3IE;
     for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) { force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK, 1U); }
     for (uint8_t i = 0U; i < 4U; ++i) {
@@ -554,7 +535,6 @@ void ecu_sched_set_presync_enable(uint8_t enable) { ems::hal::CriticalSectionGua
 void ecu_sched_set_presync_inj_auto(uint8_t on) { ems::hal::CriticalSectionGuard guard; g_presync_inj_auto = on ? 1U : 0U; }
 
 void ecu_sched_set_presync_inj_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; si::g_presync_inj_mode = mode; sanitize_runtime_calibration(); }
-void ecu_sched_set_presync_ign_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_ign_mode = mode; sanitize_runtime_calibration(); }
 uint32_t ecu_sched_pw_duty_clamp_count(void) { return si::g_pw_duty_clamp_count; }
 
 void ecu_sched_dwell_watchdog(void)
@@ -796,7 +776,6 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         const uint8_t mode = use_presync ? 0U : 1U;
         if (s_prev_sched_mode != 0xFFU && s_prev_sched_mode != mode) {
             g_evt_count = 0U;
-            g_evt_armed = 0U;
             TIM5_DIER &= ~TIM_DIER_CC3IE;
             for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) {
                 force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK, 1U);
@@ -862,7 +841,7 @@ void schedule_on_tooth(const CkpSnapshot& snap) noexcept { ems::engine::ecu_sche
 void ecu_sched_test_reset(void)
 {
     g_late_event_count = 0U; g_cycle_schedule_drop_count = 0U; g_calibration_clamp_count = 0U;
-    g_presync_enable = 1U; g_presync_inj_auto = 0U; si::g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
+    g_presync_enable = 1U; g_presync_inj_auto = 0U; si::g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
     si::g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
     si::g_advance_deg = 10U; si::g_dwell_ticks = 140625U; si::g_inj_pw_ticks = 140625U; si::g_eoi_lead_deg = 355U;
     si::g_angle_table_count = 0U; si::g_angle_tooth_mask_lo = 0U; si::g_angle_tooth_mask_hi = 0U;
@@ -879,8 +858,7 @@ void ecu_sched_test_reset(void)
     g_inj_watchdog_count = 0U;
     g_inj_pw_override = 0U;
     // Reset TIM5 event queue
-    g_evt_count = 0U; g_evt_armed = 0U;
-    for (uint8_t i = 0U; i < EVT_QUEUE_SIZE; ++i) { g_evt_queue[i].valid = 0U; }
+    g_evt_count = 0U;
     ems_test_tim5_ccr3 = 0U; ems_test_tim5_sr = 0U; ems_test_tim5_dier = 0U; ems_test_tim5_cnt = 0U;
     // Reset mode/diag counters — testes de transição presync↔sequencial dependem
     // de arrancar em estado limpo (senão herdam contagem de testes anteriores).
@@ -914,30 +892,16 @@ void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32
     ecu_sched_set_mspark(count, inter_dwell_ticks, atdc_limit_deg);
 }
 uint8_t ecu_sched_test_get_mspark_count(void) { return si::g_mspark_count; }
-void ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept { ems_test_tim1_ign_cnt = cnt; }
-void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim5_cnt = cnt; }
+void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim5_cnt = cnt; }  // alias legado → TIM5
 void ecu_sched_test_reset_ccr(void) noexcept {
-    ems_test_tim1_ign_ccr1 = 0u; ems_test_tim1_ign_ccr2 = 0u;
-    ems_test_tim1_ign_ccr3 = 0u; ems_test_tim1_ign_ccr4 = 0u;
-    ems_test_tim5_ccr3 = 0u; g_evt_count = 0U; g_evt_armed = 0U;
-}
-uint32_t ecu_sched_test_get_tim1_ccr(uint8_t ch) noexcept {
-    switch (ch) {
-        case 1u: return ems_test_tim1_ign_ccr1;
-        case 2u: return ems_test_tim1_ign_ccr2;
-        case 3u: return ems_test_tim1_ign_ccr3;
-        case 4u: return ems_test_tim1_ign_ccr4;
-        default: return 0u;
-    }
+    ems_test_tim5_ccr3 = 0u; g_evt_count = 0U;
 }
 // TIM5 event-queue accessors for tests
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept { return g_evt_count; }
 uint32_t ecu_sched_test_get_tim5_ccr3(void)  noexcept { return ems_test_tim5_ccr3; }
 void     ecu_sched_test_set_tim5_cnt(uint32_t v) noexcept { ems_test_tim5_cnt = v; }
-uint8_t  ecu_sched_test_get_evt(uint8_t index,
-                                uint32_t *ts,
-                                uint8_t *channel,
-                                uint8_t *high) noexcept
+uint8_t  ecu_sched_test_get_evt(uint8_t index, uint32_t *ts,
+                                uint8_t *channel, uint8_t *high) noexcept
 {
     if (index >= g_evt_count) { return 0U; }
     if (ts != nullptr) { *ts = g_evt_queue[index].timestamp; }

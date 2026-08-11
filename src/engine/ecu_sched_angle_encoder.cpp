@@ -87,9 +87,9 @@ static uint32_t ems_test_tim2_cnt  = 0u;
 
 // ── Estimador de ω (ΔTIM2_CNT/ΔTIM5_CNT) ─────────────────────────────────
 // Sem roda dentada, não há evento de dente para estimar RPM — ω vem de duas
-// amostras consecutivas de (TIM2_CNT, TIM5_CNT), tiradas pelo heartbeat
-// TIM2_CH4 (1×/volta de cambota, hal/stm32h562/timer.cpp — ainda não
-// implementado, ver TODO abaixo). Pura aritmética, sem acesso a registo —
+// amostras consecutivas de (TIM2_CNT, TIM5_CNT), tiradas pelo heavy tick
+// do heartbeat TIM2_CH4 (1×/volta via subtick). Pura aritmética, sem
+// acesso a registo —
 // o chamador já leu os valores; por isso compila e testa-se identicamente
 // em host-test e alvo real, sem #ifdef nenhum aqui.
 //
@@ -203,15 +203,10 @@ uint8_t ecu_sched_encoder_phase_valid(void) noexcept { return g_phase_valid; }
 
 // Único caminho de produção que limpa g_phase_valid — até esta função existir
 // só havia SET (phase_set_anchor) e um clear host-test-only. Sem isto, um
-// fallback de staleness em drv/encoder_sync.cpp que publicasse
-// SyncState::HALF_SYNC no CkpSnapshot partilhado (ckp_publish_encoder_snapshot())
-// deixaria phase_valid() preso em 1 — o dispatcher (recompute_presync() /
-// rebuild_sequential() em ecu_sched_encoder_heartbeat_tick(), que branca em
-// phase_valid(), não em snap.state) continuaria a disparar sequencial sobre
-// uma fase já considerada perdida pelo resto do sistema. Chamador:
-// drv/encoder_sync.cpp, na mesma transição que publica HALF_SYNC por
-// staleness (ver docs/dev/mt6835_encoder_fork.md, "Sync-state em modo
-// encoder").
+// fallback de staleness que publicasse HALF_SYNC no CkpSnapshot deixaria
+// phase_valid() preso em 1 — o dispatcher branca em phase_valid(), não em
+// snap.state. Chamador: ecu_sched_encoder_heartbeat_tick() após
+// staleness_exceeded() (ver docs/dev/mt6835_encoder_fork.md).
 void ecu_sched_encoder_phase_invalidate(void) noexcept { g_phase_valid = 0U; }
 
 #if defined(EMS_HOST_TEST)
@@ -243,18 +238,13 @@ struct EncSchedEvent {
     uint32_t timestamp;   // TIM2 raw 32-bit target (counts, não ticks)
     uint8_t  channel;     // ECU_CH_INJ1..IGN4
     uint8_t  high;        // 1=ON/DWELL, 0=OFF/SPARK
-    uint8_t  valid;
-    uint8_t  _pad;
 };
 
 static EncSchedEvent g_enc_evt_queue[ENC_EVT_QUEUE_SIZE];
 static volatile uint8_t g_enc_evt_count = 0U;
-static volatile uint8_t g_enc_evt_armed = 0U;
 
-static volatile uint32_t g_enc_dbg_evt_inserted   = 0U;
-static volatile uint32_t g_enc_dbg_evt_dispatched = 0U;
-static volatile uint32_t g_enc_dbg_evt_overflow   = 0U;
-static volatile uint32_t g_enc_late_event_count   = 0U;
+static volatile uint32_t g_enc_dbg_evt_overflow = 0U;
+static volatile uint32_t g_enc_late_event_count = 0U;
 
 static uint8_t enc_evt_drop_one_assert(uint8_t prefer_channel) noexcept
 {
@@ -282,7 +272,6 @@ static void enc_evt_insert(uint32_t ts, uint8_t channel, uint8_t high) noexcept
             return;  // prefer keeping de-asserts already queued
         }
     }
-    ++g_enc_dbg_evt_inserted;
     uint8_t pos = g_enc_evt_count;
     for (uint8_t i = 0U; i < g_enc_evt_count; ++i) {
         if ((int32_t)(ts - g_enc_evt_queue[i].timestamp) < 0) { pos = i; break; }
@@ -293,14 +282,12 @@ static void enc_evt_insert(uint32_t ts, uint8_t channel, uint8_t high) noexcept
     g_enc_evt_queue[pos].timestamp = ts;
     g_enc_evt_queue[pos].channel = channel;
     g_enc_evt_queue[pos].high = high;
-    g_enc_evt_queue[pos].valid = 1U;
     ++g_enc_evt_count;
 
     if (pos == 0U) {
         TIM2_CCR3 = ts;
         TIM2_SR   = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
         TIM2_DIER |= TIM_DIER_CC3IE;
-        g_enc_evt_armed = 1U;
     }
 }
 
@@ -312,7 +299,6 @@ static inline void enc_evt_execute_head(void) noexcept
     if (idx != 0xFFU) {
         pin_transition(idx, e.high);  // watchdogs continuam sempre TIM5/tempo
     }
-    ++g_enc_dbg_evt_dispatched;
     --g_enc_evt_count;
     for (uint8_t i = 0U; i < g_enc_evt_count; ++i) {
         g_enc_evt_queue[i] = g_enc_evt_queue[i + 1U];
@@ -332,14 +318,12 @@ void ecu_sched_encoder_evt_dispatch(void) noexcept
         if ((int32_t)(next_ts - TIM2_CNT) > 16) {
             TIM2_CCR3 = next_ts;
             TIM2_SR   = ~TIM_SR_CC3IF;
-            g_enc_evt_armed = 1U;
             return;
         }
         ++g_enc_late_event_count;
         enc_evt_execute_head();
     }
     TIM2_DIER &= ~TIM_DIER_CC3IE;
-    g_enc_evt_armed = 0U;
 }
 
 static void arm_channel_with_lead(uint8_t ch, uint32_t target_counts,
@@ -377,10 +361,6 @@ void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
 void ecu_sched_encoder_queue_test_reset(void) noexcept
 {
     g_enc_evt_count = 0U;
-    g_enc_evt_armed = 0U;
-    for (uint8_t i = 0U; i < ENC_EVT_QUEUE_SIZE; ++i) { g_enc_evt_queue[i].valid = 0U; }
-    g_enc_dbg_evt_inserted = 0U;
-    g_enc_dbg_evt_dispatched = 0U;
     g_enc_dbg_evt_overflow = 0U;
     g_enc_late_event_count = 0U;
     ems_test_tim2_ccr3 = 0U; ems_test_tim2_sr = 0U; ems_test_tim2_dier = 0U; ems_test_tim2_cnt = 0U;
@@ -424,29 +404,24 @@ void encoder_purge_cyl_mask(uint8_t mask, uint8_t is_ign) noexcept
     g_enc_evt_count = w;
     if (g_enc_evt_count == 0U) {
         TIM2_DIER &= ~TIM_DIER_CC3IE;
-        g_enc_evt_armed = 0U;
     } else {
         TIM2_CCR3 = g_enc_evt_queue[0].timestamp;
         TIM2_SR   = ~TIM_SR_CC3IF;
         TIM2_DIER |= TIM_DIER_CC3IE;
-        g_enc_evt_armed = 1U;
     }
 }
 
 void encoder_clear_all(void) noexcept
 {
     g_enc_evt_count = 0U;
-    g_enc_evt_armed = 0U;
     TIM2_DIER &= ~TIM_DIER_CC3IE;
 }
 
 }  // namespace ems::engine::sched_internal
 
-// ── Heartbeat TIM2_CH4 — resposta ao tick ────────────────────────────────
-// Chamado 1×/volta pelo TIM2_IRQHandler (CC4IF, hal/stm32h562/timer.cpp),
-// que já cuida do rearme de CCR4 e das leituras de registo — esta função só
-// recebe os valores já lidos (mesma disciplina de host-testabilidade do
-// resto do ficheiro).
+// ── Heartbeat TIM2_CH4 — heavy tick (1×/volta) ───────────────────────────
+// Chamado a cada 64º sub-tick por ecu_sched_encoder_heartbeat_subtick()
+// (ISR CC4IF rearma CCR4 +256). Recebe valores já lidos pelo HAL.
 
 static volatile uint32_t g_hb_last_cmp_edge_count = 0U;
 
@@ -569,7 +544,7 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
     snap.phase_A = (ecu_sched_encoder_phase_at(tim2_now) == ECU_PHASE_A);
     snap.rpm_x10 = omega_x65536_to_rpm_x10();
     snap.tooth_period_ns = 0U;  // sem equivalente encoder — misfire lê tim2/tim5 directo (ecu_sched_encoder_heartbeat_subtick), não este campo
-    snap.tooth_index = 0U;      // sintético fica para o tick TIM6 (MAP window, tarefa futura)
+    snap.tooth_index = 0U;      // MAP window usa tim2_now via sensors_map_window_poll_encoder()
     snap.last_tim5_capture = tim5_now;
     ems::drv::ckp_publish_encoder_snapshot(snap);
 }
@@ -934,9 +909,7 @@ void recompute_presync(uint32_t now_raw) noexcept
             ? (g_inj_pw_ticks / 2U)
             : g_inj_pw_ticks;
     uint32_t inj_pw_span = duration_ticks_to_span_counts(raw_inj_pw_ticks);
-    // Clamp de duty — equivalente em counts a kMaxPresyncInjPwDeg (90% de
-    // uma volta), mesma proteção do caminho por dentes.
-    constexpr uint32_t kMaxPresyncInjPwCounts = (16384U * 9U) / 10U;
+    // Clamp de duty — paridade com kMaxPresyncInjPwDeg no caminho CKP.
     if (inj_pw_span > kMaxPresyncInjPwCounts) {
         inj_pw_span = kMaxPresyncInjPwCounts;
         ++g_pw_duty_clamp_count;

@@ -405,7 +405,7 @@ uint8_t find_angle_event(uint8_t want_ch, uint8_t want_act,
 void build_seq_table_with_pw(uint32_t pw_ticks) {
     ecu_sched_test_reset();
     for (uint8_t i = 0u; i < 4u; ++i) { ems::engine::cyl_fuel_trim_pct[i] = 0; }
-    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_test_set_tim5_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(pw_ticks);
@@ -448,7 +448,7 @@ void test_ecu_sched_eoi_targeting(void) {
     // atravessa a fronteira 720→0 do ciclo — o caso que o SOI fixo não cobria.
     ecu_sched_test_reset();
     for (uint8_t i = 0u; i < 4u; ++i) { ems::engine::cyl_fuel_trim_pct[i] = 0; }
-    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_test_set_tim5_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(833333u);
@@ -496,7 +496,6 @@ void test_ecu_sched_eoi_targeting(void) {
     section("ecu_sched EOI: presync usa EOI targeting na janela de 360°");
     // presync: eoi=(360−60)%360=300 → tooth 50, frac 0, PHASE_ANY.
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(10u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
@@ -522,7 +521,6 @@ void test_ecu_sched_eoi_targeting(void) {
     // eventos existem na tabela (o OFF da tabela nova fecha o injetor aberto
     // na rev anterior; toggle de bancos já validado acima).
     ecu_sched_test_reset();  // usa o default eoi_lead=355 — sem set explícito
-    ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(10u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
@@ -618,7 +616,6 @@ void test_ecu_sched_presync(void) {
     ecu_sched_set_presync_enable(1u);
     ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
     ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SEMI_SEQUENTIAL);
-    ecu_sched_set_presync_ign_mode(ECU_PRESYNC_IGN_WASTED_SPARK);
     ecu_sched_fire_prime_pulse(5000u);  // prime pulse: no crash with valid pw
     CHECK_TRUE(true, "presync setters and prime_pulse 5000: no crash");
 
@@ -1769,8 +1766,7 @@ void test_ecu_sched_encoder_sequential_multispark(void) {
 
 void test_ecu_sched_hardware_init(void) {
     section("ecu_sched: ECU_Hardware_Init runs without crash");
-    // ECU_Hardware_Init writes to TIM2/TIM1/GPIO mock registers (file-scope statics
-    // in ecu_sched.cpp, not externally observable). Only testable behavior:
+    // ECU_Hardware_Init clears angle table + TIM5 queue mocks. Only testable:
     //   1. No crash.
     //   2. Angle table cleared — ecu_sched_test_angle_table_size()=0 after init.
     //   3. Diagnostic counters cleared.
@@ -2076,7 +2072,6 @@ void test_ecu_sched_presync_table(void) {
     // Rev boundary is tooth_index reset by an accepted gap (not a phantom wrap
     // past 57). With no CMP, FULL_SYNC still uses presync / wasted builders.
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(10u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);

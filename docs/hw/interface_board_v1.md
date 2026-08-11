@@ -1061,8 +1061,7 @@ No RGT6 é no-op.
 
 ### SDMMC — sem conflito hoje, agora impossível amanhã
 
-`sdmmc_init()` **nunca é chamado**; `datalog_init()` só consulta `sdmmc_card_present()`, que devolve
-false, deixando o datalog inerte. A configuração dos GPIO vive só dentro de `sdmmc_init()`, portanto
+`sdmmc.cpp`/`datalog.cpp` **não estão linkados no Makefile** (deferred até haver SD). A configuração dos GPIO vive só dentro de `sdmmc_init()`, portanto
 `PC8`/`PC12`/`PD2` nunca são reclamados — **não havia conflito real**.
 
 Mas era armadilha latente: no **RGT6**, `PC8` é **IGN3**. Ligar o datalog no futuro reconfiguraria o pino

@@ -1,3 +1,5 @@
+ * DEFERRED: not linked in the firmware Makefile until SD hardware exists.
+ * Keep sources in-tree; do not call from main_stm32.cpp.
 #pragma once
 
 #include <cstdint>

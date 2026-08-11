@@ -307,7 +307,7 @@ ordem e gate de layout de antes.
 `ui_protocol_pages.cpp` + `ui_protocol_envelope.cpp` + `ui_protocol_internal.h`.
 
 **ETB PWM:** API preferida `etb_pwm_init` / `etb_pwm_set_duty_x10`. Aliases
-`tim15_etb_*` deprecated em `hal/timer.h`.
+ETB PWM: `etb_pwm_*` em `hal/timer.h`.
 
 ### Secrets e vendor
 

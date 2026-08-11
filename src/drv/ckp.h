@@ -100,18 +100,6 @@ void misfire_on_tooth(const CkpSnapshot& snap) noexcept;
 void ckp_tim5_ch1_isr() noexcept;   ///< CKP rising edge (TIM5 CH1 / PA0)
 void ckp_tim5_ch2_isr() noexcept;   ///< Cam sensor rising edge (TIM5 CH2 / PA1)
 
-/**
- * @brief Arm a persisted sync seed for fast reacquire on next valid gap.
- *
- * Safety note: this does not bypass gap validation; it only allows promotion
- * WAIT_GAP/LOSS_OF_SYNC -> FULL_SYNC at the first accepted gap.
- */
-void ckp_seed_arm(bool phase_A) noexcept;
-void ckp_seed_disarm() noexcept;
-
-uint32_t ckp_seed_loaded_count() noexcept;
-uint32_t ckp_seed_confirmed_count() noexcept;
-uint32_t ckp_seed_rejected_count() noexcept;
 uint32_t ckp_get_cmp_glitch_count() noexcept;
 
 // DIAG: valores internos de classify_tooth (expostos para snapshot)

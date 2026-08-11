@@ -496,7 +496,7 @@ void test_trigger_offset(void) {
     g_eng_cfg.trigger_tooth0_engine_deg = 0u;
     ecu_sched_test_reset();
     ecu_sched_test_reset_ccr();
-    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_test_set_tim5_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
@@ -538,7 +538,7 @@ void test_trigger_offset(void) {
     g_eng_cfg.trigger_tooth0_engine_deg = 78u;
     ecu_sched_test_reset();
     ecu_sched_test_reset_ccr();
-    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_test_set_tim5_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);

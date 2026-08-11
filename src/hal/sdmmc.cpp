@@ -4,6 +4,7 @@
  *
  * Pins: PC8=D0(AF12), PC12=CLK(AF12), PD2=CMD(AF12)
  * Uses FIFO polling for block writes (512 bytes).
+  * DEFERRED: not linked in Makefile until SD hardware exists.
  */
 
 #ifndef EMS_HOST_TEST

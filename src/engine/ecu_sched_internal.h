@@ -26,6 +26,7 @@ inline constexpr uint32_t kCycleDeg = 720U;
 inline constexpr uint32_t kMaxSeqInjPwDeg = 648U;      // 90% of 720°
 inline constexpr uint32_t kMaxSeqInjPwCounts = (32768U * 9U) / 10U;  // 90% of 2 TIM2 revs
 inline constexpr uint32_t kMaxPresyncInjPwDeg = 324U;  // 90% of 360°
+inline constexpr uint32_t kMaxPresyncInjPwCounts = (16384U * 9U) / 10U;  // 90% of 1 TIM2 rev
 
 #define ECU_SCHED_US_TO_TICKS_INTERNAL(us) ((us) * 125U / 2U)
 #define TOOTH_NS_TO_SCHED_INTERNAL(ns) \

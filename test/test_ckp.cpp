@@ -258,58 +258,6 @@ void test_ckp_stall_poll_no_false_positive(void) {
     CHECK_TRUE(ckp_snapshot().rpm_x10 != 0u, "RPM preservado na corrida");
 }
 
-void test_ckp_seed_arm_disarm(void) {
-    section("ckp: seed arm/disarm counters");
-    ckp_test_reset(); g_ckp_cap = 0u;
-    CHECK_EQ(ckp_seed_loaded_count(), 0u, "loaded=0 before arm");
-    ckp_seed_arm(true);
-    CHECK_EQ(ckp_seed_loaded_count(), 1u, "loaded=1 after arm");
-    ckp_seed_disarm();
-    CHECK_EQ(ckp_seed_loaded_count(), 1u, "loaded still 1 after disarm");
-}
-
-
-
-void test_ckp_seed_confirmed(void) {
-    section("ckp: seed_confirmed_count after cam edge during probation");
-
-    // NOTA: o seed está desativado em produção (ckp.cpp "FIX 2026-06-29: seed
-    // desativado p/ diagnóstico", TODO: re-activar). g_seed_probation nunca é
-    // posto a true em nenhum caminho de código atual — o 1º gap vai sempre
-    // para HALF_SYNC, nunca para FULL_SYNC+probation, e ckp_seed_arm() não
-    // tem qualquer efeito observável. Este teste reflete esse estado actual;
-    // quando o seed for reativado, restaurar a expectativa de FULL_SYNC aqui.
-    ckp_test_reset(); g_ckp_cap = 0u;
-    ckp_seed_arm(true);
-
-    for (uint32_t i = 0; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
-    ckp_fire(kNormalPeriod * 3u);  // gap: seed desativado → HALF_SYNC (não FULL_SYNC)
-    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
-             static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC (seed desativado)");
-
-    // Cam ISR sem probation ativa não confirma nada.
-    cam_fire(g_ckp_cap + kNormalPeriod * 58u);
-    CHECK_EQ(ckp_seed_confirmed_count(), 0u, "seed_confirmed_count=0 (seed desativado)");
-}
-
-void test_ckp_seed_rejected(void) {
-    section("ckp: seed_rejected_count after probation timeout");
-
-    // NOTA: mesmo motivo do teste acima — seed desativado, nunca entra em
-    // probation, logo nunca rejeita por timeout.
-    ckp_test_reset(); g_ckp_cap = 0u;
-    ckp_seed_arm(true);
-
-    for (uint32_t i = 0; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
-    ckp_fire(kNormalPeriod * 3u);  // gap: seed desativado → HALF_SYNC
-    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
-             static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC (seed desativado)");
-
-    // Sem probation ativa, nenhuma quantidade de dentes gera rejeição.
-    for (uint32_t i = 0; i < 71u; ++i) { ckp_fire(kNormalPeriod); }
-    CHECK_EQ(ckp_seed_rejected_count(), 0u, "seed_rejected_count=0 (seed desativado)");
-}
-
 void test_ckp_cmp_glitch_count(void) {
     section("ckp: ckp_get_cmp_glitch_count on invalid cam timing");
 

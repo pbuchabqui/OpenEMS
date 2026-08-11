@@ -72,7 +72,6 @@ int main(void) {
     test_ckp_phantom_rpm_unsync();
     test_ckp_rpm_jump_recovery();
     test_ckp_stall_poll_no_false_positive();
-    test_ckp_seed_arm_disarm();
 
     // ── Sensors ───────────────────────────────────────────────────────────────
     printf("\n=== SENSORS ===");
@@ -159,8 +158,6 @@ int main(void) {
 
     // ── CKP — Segunda Fase ───────────────────────────────────────────────────
     printf("\n=== CKP (fase 2) ===");
-    test_ckp_seed_confirmed();
-    test_ckp_seed_rejected();
     test_ckp_cmp_glitch_count();
 
     // ── Sensors — Segunda Fase ───────────────────────────────────────────────

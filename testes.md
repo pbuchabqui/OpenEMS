@@ -1,7 +1,8 @@
 # OpenEMS — Auditoria de Cobertura de Testes
 
-**Build:** `make host-test` | **Resultado de referência:** **1104 PASS / 0 FAIL** (2026-07; revalidar após mudanças)  
-**Nota:** snapshot antigo 509 PASS (2026-06-06) está **stale** — usar só o número impresso pelo binário actual.  
+**Build:** `make host-test` | **Resultado de referência:** revalidar com o binário actual (`make host-test`).  
+**Nota (2026-08):** este ficheiro é auditoria histórica — contagens PASS e secções seed/TIM OC estão **stale**.  
+CKP seed scaffolding foi removido; IGN/INJ usam GPIO BSRR + TIM5 queue (não TIM1/TIM3 OC).  
 **Data da auditoria original:** 2026-06-06 | **Auditor:** análise estática + revisão por subagentes
 
 ---
@@ -67,7 +68,6 @@ Classificação de cada problema:
 | `ecu_sched_set_advance_deg/dwell/inj_pw/soi` | 🟢 | Setters e getters verificados |
 | `ecu_sched_set_presync_enable` | 🟢 | Enable/disable verificados |
 | `ecu_sched_set_presync_inj_mode` | 🟡 | Setter chamado; efeito no comportamento de injeção em HALF_SYNC não verificado |
-| `ecu_sched_set_presync_ign_mode` | 🟡 | Idem para ignição |
 | `ecu_sched_set_ivc` | 🟢 | IVC clamp verificado (ângulo > IVC encurta PW e incrementa clamp_count) |
 | `ecu_sched_ivc_clamp_count` | 🟢 | Verificado |
 | `ecu_sched_dwell_watchdog` | 🟢 | Disparo após 1.4× dwell verificado; one-shot verificado |
@@ -96,9 +96,6 @@ Classificação de cada problema:
 | `ckp_snapshot` — tooth_period_ns | 🟢 | = ticks × 16 verificado |
 | `ckp_snapshot` — predicted_tooth_period_ns | 🟢 | = actual em velocidade constante verificado |
 | `ckp_snapshot` — last_tim5_capture | 🟢 | > 0 após dentes verificado |
-| `ckp_seed_arm / disarm` | 🟢 | Counters testados |
-| `ckp_seed_confirmed_count` | 🟢 | Seed confirmado após cam válido durante probação |
-| `ckp_seed_rejected_count` | 🟢 | Seed rejeitado após timeout de probação |
 | `ckp_get_cmp_glitch_count` | 🟢 | Glitch contado em edge inválido |
 | `ckp_stall_poll` | 🟢 | Stall quando tim5 parado; não-stall com dentes recentes |
 | `ckp_tim5_ch1_isr` — LOSS_OF_SYNC por >63 dentes | 🟢 | Testado |

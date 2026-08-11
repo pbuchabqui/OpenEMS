@@ -1,5 +1,8 @@
 # OpenEMS HIL Test
 
+> **STALE wiring diagram:** IGN/INJ labels below still describe TIM1/TIM2 OC.
+> Firmware actual drives IGN/INJ via GPIO BSRR (`out_pins.cpp`). Re-map before bench.
+
 Teste automatizado Hardware-in-the-Loop.
 
 ## Hardware necessário

@@ -328,7 +328,7 @@ host-test-vgt6, todos limpos — ver verificação abaixo):
     nenhum outro ficheiro de `src/`" nesta sessão, não é uma decisão de
     hardware confirmada (ver aviso no topo de `mt6835.cpp`).
 - **`src/hal/timer.{h,cpp}`**: `tim2_encoder_init()` + `tim2_encoder_count()`
-  + `tim2_encoder_set_count()` + `tim2_encoder_arm_next()` + `TIM2_IRQHandler`
+  + `tim2_encoder_set_count()` + `TIM2_IRQHandler`
   (limpa `CC3IF`, dispatcher em domínio de ângulo ainda não ligado — TODO
   explícito no código, fora de escopo). **CH1=PA0, CH2=PA1** — ver "Revisão
   2026-08-09" abaixo para o histórico (foi PB3, depois voltou a PA1).
@@ -838,7 +838,7 @@ módulo (não verificável sem o esquemático dele).
    distribuição) e confirmar: `TIM2_CNT` avança ≈16384 counts (±quantização),
    e o sentido é o esperado (crescente na direcção real de rotação — verificar
    contra o mapeamento de canais A/B de `tim2_encoder_init()`, PA0/PA1).
-6. Confirmar que `mt6835_ok()`/`mt6835_last_status()` reportam saudável (força de
+6. Confirmar que `mt6835_read_angle_raw21()` reportam saudável (força de
    campo, sem falhas) em operação normal — estas são as entradas de que o gap 5
    do plano de sync (`LOSS_OF_SYNC`) vai depender.
 7. Vigiar a classe de falha já vista neste projecto: entradas flutuantes/ruidosas
@@ -926,7 +926,7 @@ Hall), acima disso tratado como implausível.
 `LOSS_OF_SYNC` alcançável a partir de falha real do encoder: poll de saúde a
 100 ms (`g_t100ms_`, mesmo padrão de `tle8888_poll_diag()`) chama
 `mt6835_read_angle_raw21()` periodicamente — descoberta durante a execução de
-que `mt6835_ok()` só actualizava no key-on (chamada única em `mt6835_init()`),
+que a saúde SPI só era amostrada no key-on (`mt6835_init()`),
 nunca detectando uma falha a meio da condução. Gate atrás de
 `mt6835_hw_present()` (novo, mirror runtime de `MT6835_HW_PRESENT`) para não
 confundir "sem sensor populado" (produção actual, sem footprint na PCB) com

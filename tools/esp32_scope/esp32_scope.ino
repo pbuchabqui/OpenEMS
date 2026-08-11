@@ -11,6 +11,9 @@
  * Latência   : 2–5 µs por bordo (ISR context)
  *
  * Sinais monitorizados:
+ * STALE: TIM1/TIM3 OC labels below are pre-BSRR migration.
+ * Firmware now toggles IGN/INJ via GPIO BSRR — verify pins in out_pins.cpp.
+ *
  *   CH0 IGN1  ← PE9  TIM1_CH1  (bobina cil.1)
  *   CH1 IGN2  ← PE11 TIM1_CH2  (bobina cil.2)
  *   CH2 IGN3  ← PE13 TIM1_CH3  (bobina cil.3)

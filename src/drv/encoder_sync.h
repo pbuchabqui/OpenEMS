@@ -86,7 +86,7 @@ CmpEdgeResult evaluate_cmp_edge(uint32_t cmp_angle_now, bool has_prev,
 bool staleness_exceeded(uint32_t heartbeats_since_accepted, bool bench_mode) noexcept;
 
 /// Saúde do sensor MT6835 — separado do gate de fase/CMP acima porque tem
-/// origem diferente (poll periódico de mt6835_ok()/mt6835_last_status(),
+/// origem diferente (poll periódico de mt6835_read_angle_raw21(),
 /// atrás de MT6835_HW_PRESENT, não a cada heartbeat) e cadência diferente
 /// (~100ms, não 1×/revolução). Default true: sem hardware populado
 /// (MT6835_HW_PRESENT=0) o poll nunca corre e este flag nunca é escrito —

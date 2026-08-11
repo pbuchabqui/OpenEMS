@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Dump and decode PC6/PE9 debug trace ring buffers via CDC 'T' command."""
+"""Dump and decode PC6/PE9 debug trace ring buffers via CDC 'T' command.
+
+STALE labels: PC6/PE9 were TIM3/TIM1 OC channels pre-BSRR migration.
+Confirm current pin map in out_pins.cpp before trusting channel names.
+"""
 import serial, struct, sys, time
 
 PORT = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyACM0'

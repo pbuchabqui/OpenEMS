@@ -57,9 +57,6 @@ void test_timer_stubs(void) {
     tim5_ic_init();
     const uint32_t cnt = tim5_count();
     CHECK_EQ(cnt, 0u, "tim5_count() returns mock value (0)");
-    tim3_pwm_init(15u);
-    tim3_set_duty(0u, 500u);
-    tim3_set_duty(1u, 250u);
     tim4_pwm_init(15u);
     tim4_set_duty(0u, 750u);
     tim4_set_duty(1u, 1000u);
@@ -78,7 +75,6 @@ void test_timer_stubs(void) {
     CHECK_EQ(tim2_encoder_count(), 0u, "tim2_encoder_count() mock default 0");
     tim2_encoder_set_count(12345u);
     CHECK_EQ(tim2_encoder_count(), 12345u, "tim2_encoder_set_count/count round-trip");
-    tim2_encoder_arm_next(6789u);
     tim2_heartbeat_start();
     tim3_cmp_ic_init();
     CHECK_EQ(cmp_angle_snapshot(), 0u, "cmp_angle_snapshot() mock default 0");

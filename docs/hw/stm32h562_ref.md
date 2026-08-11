@@ -1,5 +1,10 @@
 # STM32H562 — Referência de Hardware (OpenEMS)
 
+> **STALE PIN MAP (parcial):** secções de INJ/IGN via TIM OC (TIM1/TIM2/TIM3)
+> descrevem a arquitectura **pré-f42c450**. Produção actual: IGN/INJ = GPIO BSRR;
+> dispatcher = TIM5 compare queue; VGT6 encoder = TIM2 + CMP TIM3/PC6.
+> Fonte de verdade de pinout: `src/hal/out_pins.cpp` + `README.md`.
+
 Extrato curado do RM0481 (Rev 4) e CMSIS stm32h562xx.h.
 Contém apenas o que é relevante para o projeto OpenEMS.
 Fonte autoritativa: RM0481 + stm32h562xx.h (WeAct STM32H5 SDK).

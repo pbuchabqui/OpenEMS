@@ -14,7 +14,6 @@ extern "C" {
 
 #define ECU_PRESYNC_INJ_SIMULTANEOUS    0U
 #define ECU_PRESYNC_INJ_SEMI_SEQUENTIAL 1U
-#define ECU_PRESYNC_IGN_WASTED_SPARK    0U
 
 #define ECU_PHASE_A    1U
 #define ECU_PHASE_B    0U
@@ -79,7 +78,6 @@ void ecu_sched_set_presync_enable(uint8_t enable);
 void ecu_sched_set_presync_inj_mode(uint8_t mode);
 void ecu_sched_set_presync_inj_auto(uint8_t on);
 uint8_t ecu_sched_presync_inj_auto(void);
-void ecu_sched_set_presync_ign_mode(uint8_t mode);
 void ecu_sched_reset_diagnostic_counters(void);
 
 // Dwell watchdog — chamar do main loop (slot 2ms); compara TIM5_CNT.
@@ -176,96 +174,28 @@ void ecu_sched_test_all_outputs_safe(void);
 
 void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 
-// ── MT6835/TIM2 encoder — domínio de ângulo (EMS_MT6835_ENCODER apenas) ──────
-// Ver docs/dev/mt6835_encoder_fork.md ("Dispatcher em domínio de ângulo") no
-// fork feat/mt6835-encoder. Sem roda dentada, não há evento de dente para
-// estimar RPM — ω vem de ΔTIM2_CNT/ΔTIM5_CNT amostrado pelo heartbeat
-// TIM2_CH4 (hal/stm32h562/timer.cpp), não de outro contexto (mantém uma
-// única cadeia de amostras consecutivas — chamar de dois sítios corrompe a
-// estimativa).
+// ── MT6835/TIM2 encoder — domínio de ângulo (EMS_MT6835_ENCODER) ──────────
+// Design: docs/dev/mt6835_encoder_fork.md. Fila TIM2/CH3 separada da TIM5.
+// Heartbeat: subtick 256 counts → heavy tick 1×/volta (ω, CMP, rebuild).
 void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexcept;
-// Estimativa corrente: contagens de TIM2 por tick de TIM5, fixed-point
-// ×65536 (com sinal — negativo em rotação reversa/kick-back de cranking, o
-// modo encoder de hardware decrementa TIM2_CNT nativamente). ×65536, não
-// ×256: ω real (~0,0009 a idle/cranking, ~0,039 a redline, counts/tick)
-// trunca para 0 em ×256 já a 200 rpm — ×65536 mantém resolução útil em
-// toda a gama (~57 a 200 rpm, ~2577 a 9000 rpm). 0 se ainda não houver
-// amostra válida — checar ecu_sched_encoder_omega_valid() antes de usar
-// para conversões (dwell/PW em counts, piso de lead).
-int32_t ecu_sched_encoder_omega_x65536(void) noexcept;
+int32_t ecu_sched_encoder_omega_x65536(void) noexcept;  // counts/tick ×65536
 uint8_t ecu_sched_encoder_omega_valid(void) noexcept;
 
-// Rastreador de fase: TIM2_CNT só dá posição mod 360° (1 volta de cambota);
-// o motor tem ciclo de 720° (ECU_PHASE_A/B, ver acima). O CMP (sensor Hall
-// inalterado, tim3_cmp_ic_init()) desambigua qual metade — mas ESTE módulo
-// não decide sozinho a que fase corresponde um flanco do CMP (é uma
-// constante de calibração de hardware — onde o sensor está montado — ainda
-// não determinada; bloqueia bancada, não este dispatcher). Quem chama
-// ecu_sched_encoder_phase_set_anchor() (o heartbeat CH4, quando existir)
-// é responsável por saber essa fase; este módulo só mantém o anchor
-// absoluto de 32 bits e conta voltas completas (16384 counts) desde o
-// anchor para responder "que fase é agora" em qualquer instante — nunca por
-// toggle, sempre recalculado a partir do anchor absoluto mais recente.
 void ecu_sched_encoder_phase_set_anchor(uint32_t tim2_raw_at_cmp_edge,
                                         uint8_t phase) noexcept;
-// ECU_PHASE_A ou ECU_PHASE_B — chamar só depois de ecu_sched_encoder_phase_valid().
 uint8_t ecu_sched_encoder_phase_at(uint32_t tim2_raw_now) noexcept;
 uint8_t ecu_sched_encoder_phase_valid(void) noexcept;
-// Limpa phase_valid() de volta a 0 — chamado por drv/encoder_sync.cpp no
-// fallback de staleness (heartbeats sem flanco CMP aceite acima do limite),
-// para manter phase_valid() e o SyncState publicado via
-// ckp_publish_encoder_snapshot() coerentes entre si (o dispatcher branca no
-// primeiro, os outros consumidores no segundo).
-void ecu_sched_encoder_phase_invalidate(void) noexcept;
+void ecu_sched_encoder_phase_invalidate(void) noexcept;  // heartbeat on CMP staleness
 
-// Fila TIM2/CH3 — SEPARADA da fila TIM5/CH3 acima (ecu_sched_evt_dispatch),
-// nunca partilha array nem registo. A fila TIM5 continua a servir só
-// fire_prime_pulse()/test_pulse_inj()/test_pulse_ign() (motor parado,
-// sempre por tempo) em qualquer um dos dois builds — ver
-// docs/dev/mt6835_encoder_fork.md, secção 6, para o porquê de duas filas
-// em vez de uma parametrizada.
-//
-// target_counts: alvo em counts CRUS de 32 bits do TIM2 (não mascarado a
-// 14 bits) — mesmo domínio que TIM2_CNT já vive, wrap tratado por subtração
-// com sinal, igual ao TIM5 hoje. Aplica um piso de lead mínimo (via ω,
-// equivalente aos 2 µs do STM32_MIN_COMPARE_LEAD_TICKS de ecu_sched.cpp,
-// convertido a counts) antes de inserir na fila — mas mesmo sem piso um
-// alvo já passado seria processado inline como "late", nunca perdido.
 void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
                                    uint8_t action) noexcept;
-void ecu_sched_encoder_evt_dispatch(void) noexcept;  // called from TIM2 ISR on CC3IF
+void ecu_sched_encoder_evt_dispatch(void) noexcept;  // TIM2 ISR CC3IF
 
-// Heartbeat TIM2_CH4 — chamado 1×/volta de cambota (16384 counts) pelo
-// TIM2_IRQHandler em CC4IF. tim2_now/tim5_now: já lidos pelo HAL no
-// instante do heartbeat, alimentam o estimador de ω
-// (ecu_sched_encoder_omega_sample(), chamado internamente). cmp_angle/
-// cmp_edge_count: leitura mais recente de cmp_angle_snapshot()/
-// cmp_edge_count() (hal/timer.h) — usada para detectar um novo flanco do
-// CMP desde o último tick (delta de cmp_edge_count).
-//
-// ⚠️ Faz o recompute de dwell/PW + bank-toggle do presync via
-// si::encoder::recompute_presync() quando ecu_sched_encoder_phase_valid()==0
-// (sempre verdade sem EMS_MT6835_CMP_PHASE_CALIBRATED, hal/board_pinout.h),
-// e o ramo sequencial via si::encoder::rebuild_sequential() quando a fase
-// A/B está confirmada (2 cilindros por metade-de-fase). Ainda não faz a
-// verificação de deriva do CMP: a fase que um flanco do CMP representa é
-// uma constante de calibração de hardware ainda não medida em bancada
-// (ecu_sched_encoder_phase_set_anchor() precisa dela), não algo que este
-// heartbeat possa inventar.
+// Heavy tick (1×/volta). CMP span/staleness evaluated; phase anchor gated by
+// EMS_MT6835_CMP_PHASE_CALIBRATED.
 void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
                                       uint32_t cmp_angle,
                                       uint32_t cmp_edge_count) noexcept;
-
-// Sub-tick do heartbeat TIM2_CH4 — chamado a CADA CC4IF (256 counts,
-// ~64×/volta, ver hal/stm32h562/timer.cpp tim2_heartbeat_start()), não só
-// 1×/volta. Sempre alimenta misfire_encoder_on_sample() (leve — precisa de
-// cadência fina, uma janela de cilindro de 62° só tem ~11 sub-ticks de
-// resolução angular). Só chama ecu_sched_encoder_heartbeat_tick() (pesado —
-// ω, avaliação de CMP, staleness, recompute_presync/rebuild_sequential,
-// publish do snapshot) a cada 64º sub-tick, preservando exactamente a
-// cadência 1×/volta que esses cálculos já tinham antes desta tarefa —
-// ecu_sched_encoder_omega_sample() em particular foi afinado para deltas
-// de 16384 counts, nunca deve ver deltas de 256.
 void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
                                          uint32_t cmp_angle,
                                          uint32_t cmp_edge_count) noexcept;
@@ -299,10 +229,8 @@ uint8_t ecu_sched_encoder_test_get_subtick_count(void) noexcept;
 // Contador de pares dwell/spark ou inj saltados por rebuild_sequential()
 // quando o alvo de spark/EOI estava dentro do piso min-lead.
 uint32_t ecu_sched_encoder_test_get_seq_min_lead_skip_count(void) noexcept;
-// Mock de TIM2_CNT para os testes da fila TIM2/CH3 (nome sem colisão com os
-// aliases legados ecu_sched_test_set_tim2_cnt/get_tim1_ccr — esses mexem em
-// ems_test_tim5_cnt por baixo, ver "TIM1 placeholders" acima; não são o
-// mesmo mock que este).
+// Mock de TIM2_CNT para os testes da fila TIM2/CH3 (distinto de
+// ecu_sched_test_set_tim2_cnt, que é alias legado de ems_test_tim5_cnt).
 void ecu_sched_encoder_test_set_tim2_cnt(uint32_t v) noexcept;
 uint8_t ecu_sched_encoder_test_get_evt_count(void) noexcept;
 uint32_t ecu_sched_encoder_test_get_ccr3(void) noexcept;
@@ -342,10 +270,8 @@ uint32_t ecu_sched_test_get_calibration_clamp_count(void);
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 uint32_t ecu_sched_test_get_late_event_count(void);
 uint32_t ecu_sched_test_get_pw_duty_clamp_count(void);
-void     ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept;
-uint32_t ecu_sched_test_get_tim1_ccr(uint8_t channel) noexcept;
-void     ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept;
-void     ecu_sched_test_reset_ccr(void) noexcept;   // zero all TIM1/TIM2 CCR mocks
+void     ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept;  // alias legado → TIM5
+void     ecu_sched_test_reset_ccr(void) noexcept;   // zero TIM5 CCR3 mock + queue
 void     ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg);
 uint8_t  ecu_sched_test_get_mspark_count(void);
 // TIM5 event-queue accessors

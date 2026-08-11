@@ -493,13 +493,13 @@ void test_etb_cpp_update(void) {
     etb_kd_x10  = 40u;
 
     ems::engine::etb_control_reset();
-    CHECK_EQ(ems::engine::etb_control_test_get_integrator(), 0, "integrator=0 after reset");
+    CHECK_EQ(ems::engine::etb_control_get_integrator(), 0, "integrator=0 after reset");
 
     // Disabled: enable_request=false → output inactive, integrator stays 0
     auto s = ems::engine::etb_control_update(500u, 0u, false, 10u);
     CHECK_FALSE(s.active, "enable=false → not active");
     CHECK_EQ(s.output_pct_x10, 0, "disabled → output=0");
-    CHECK_EQ(ems::engine::etb_control_test_get_integrator(), 0, "integrator=0 when disabled");
+    CHECK_EQ(ems::engine::etb_control_get_integrator(), 0, "integrator=0 when disabled");
 
     // Invalid calibration: etb_cal_valid=0 → disabled
     etb_cal_valid = 0u;
@@ -520,13 +520,13 @@ void test_etb_cpp_update(void) {
     for (int i = 0; i < 5; ++i) {
         ems::engine::etb_control_update(50u, 0u, true, 10u);  // 5% error, small P
     }
-    CHECK_TRUE(ems::engine::etb_control_test_get_integrator() > 0,
+    CHECK_TRUE(ems::engine::etb_control_get_integrator() > 0,
                "integrator grows with sustained small error");
 
     // No error (target == measured): integrator should stop growing
     ems::engine::etb_control_reset();
     ems::engine::etb_control_update(300u, 300u, true, 10u);
-    CHECK_EQ(ems::engine::etb_control_test_get_integrator(), 0, "no error → integrator stays 0");
+    CHECK_EQ(ems::engine::etb_control_get_integrator(), 0, "no error → integrator stays 0");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

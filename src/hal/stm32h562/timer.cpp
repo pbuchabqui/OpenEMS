@@ -136,42 +136,6 @@ void tim5_freerun_init() noexcept {
 }
 
 // ----------------------------------------------------------------------------
-// TIM3 - PWM legacy (CH1: EWG motor) - NAO USAR
-// ----------------------------------------------------------------------------
-
-void tim3_pwm_init(uint32_t freq_hz) {
-    if (freq_hz == 0u) { return; }
-    RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
-
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 6u, GPIO_AF2);
-
-    uint32_t psc = 0u;
-    uint32_t arr = kTimClockHz / freq_hz;
-    while (arr > 0xFFFFu) { ++psc; arr = kTimClockHz / (freq_hz * (psc + 1u)); }
-    if (arr > 0u) { arr -= 1u; }
-
-    TIM3_CR1 = 0u;
-    TIM3_PSC = psc;
-    TIM3_ARR = arr;
-    TIM3_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
-    TIM3_CCER = TIM_CCER_CC1E;
-    TIM3_CCR1 = 0u;
-    TIM3_EGR  = 1u;
-    TIM3_CR1  = TIM_CR1_CEN | TIM_CR1_ARPE;
-}
-
-void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
-    if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
-    const uint32_t arr = TIM3_ARR;
-    const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
-    if (ch == 0u) {
-        TIM3_CCR1 = ccr;
-    } else {
-        TIM3_CCR2 = ccr;
-    }
-}
-
-// ----------------------------------------------------------------------------
 // TIM4 - PWM (VVT Exhaust CH1 + VVT Intake CH2)
 // ----------------------------------------------------------------------------
 
@@ -249,10 +213,7 @@ void tim2_set_duty(uint16_t duty_pct_x10) noexcept {
 // independentes, ver docs/dev/mt6835_encoder_fork.md, "Arquitetura base").
 // ⚠️ Conflita com tim2_pwm_init() (EWG) — mesmo ARR/PSC, nunca chamar os dois.
 // ⚠️ PA1 sai de TIM5_CH2/CMP (AF2) e passa a TIM2_CH2 (AF1) — CMP move para
-// PB3 via EXTI (não há canal de captura de timer livre em PB3, confirmado
-// contra as duas tabelas AF0-7 e AF8-15 do DS14258; ver design doc,
-// "CMP via EXTI"). tim5_ic_init() acima precisa de ser adaptado para não
-// mais configurar PA1/CH2 quando este modo estiver ativo — pendente.
+// TIM3_CH1/PC6 (tim3_cmp_ic_init). Mutuamente exclusivo com tim5_ic_init().
 // ----------------------------------------------------------------------------
 
 void tim2_encoder_init() noexcept {
@@ -307,10 +268,6 @@ void tim2_encoder_set_count(uint32_t counts) noexcept {
     // SPI do MT6835 (ems::hal::mt6835_angle21_to_tim2_counts()), decisão 3 da
     // arquitetura base.
     TIM2_CNT = counts;
-}
-
-void tim2_encoder_arm_next(uint32_t target_counts) noexcept {
-    TIM2_CCR3 = target_counts;
 }
 
 // ----------------------------------------------------------------------------
@@ -502,28 +459,6 @@ extern "C" void TIM3_IRQHandler(void) {
 
 } // namespace ems::hal
 
-// ----------------------------------------------------------------------------
-// C API legacy: ETB PWM — VGT6: PE5/TIM15_CH1 (AF4); RGT6: PA6/TIM3_CH1 (AF2)
-// ----------------------------------------------------------------------------
-
-// 10 kHz (era 20 kHz): a ponte-H escolhida para a placa v1 é a BTS7960, cujo
-// máximo é 25 kHz. A 20 kHz sobravam 20% de margem e as perdas de comutação eram
-// altas — e os FETs são internos ao módulo, portanto não há como aliviar. A 10 kHz
-// a ponte trabalha folgada; o custo é chiado audível (10 kHz está dentro da banda
-// audível), que é incómodo e não risco.
-// Resolução do duty melhora: ARR = 62,5 MHz / 10 kHz = 6250 passos (era 3125),
-// bem acima dos 1000 passos que etb_pwm_set_duty_x10() precisa.
-void timer_etb_pwm_init(void) {
-    ems::hal::etb_pwm_init(10000u);
-}
-
-void timer_etb_set_duty(uint16_t duty) {
-    if (duty > 1023u) { duty = 1023u; }
-    const uint16_t duty_x10 =
-        static_cast<uint16_t>((static_cast<uint32_t>(duty) * 1000u) / 1023u);
-    ems::hal::etb_pwm_set_duty_x10(duty_x10);
-}
-
 #else  // EMS_HOST_TEST -------------------------------------------------------
 
 #include "hal/timer.h"
@@ -533,10 +468,8 @@ static uint32_t g_mock_tim2_cnt = 0u;
 void tim5_ic_init(void) {}
 void tim5_ic_set_capture_polarity(bool, bool) noexcept {}
 void tim5_freerun_init() noexcept {}
-void tim3_pwm_init(uint32_t) {}
 void tim4_pwm_init(uint32_t) {}
 void tim2_pwm_init(uint32_t) {}
-void tim3_set_duty(uint8_t, uint16_t) noexcept {}
 void tim2_set_duty(uint16_t) noexcept {}
 void tim4_set_duty(uint8_t, uint16_t) noexcept {}
 void etb_pwm_init(uint32_t) {}
@@ -545,14 +478,10 @@ uint32_t tim5_count() noexcept { return g_mock_tim5_cnt; }
 void tim2_encoder_init() noexcept {}
 uint32_t tim2_encoder_count() noexcept { return g_mock_tim2_cnt; }
 void tim2_encoder_set_count(uint32_t counts) noexcept { g_mock_tim2_cnt = counts; }
-void tim2_encoder_arm_next(uint32_t) noexcept {}
 void tim2_heartbeat_start() noexcept {}
 void tim3_cmp_ic_init() noexcept {}
 uint32_t cmp_angle_snapshot() noexcept { return 0u; }
 uint32_t cmp_edge_count() noexcept { return 0u; }
 } // namespace ems::hal
-
-void timer_etb_pwm_init(void) {}
-void timer_etb_set_duty(uint16_t duty) { (void)duty; }
 
 #endif  // EMS_HOST_TEST
