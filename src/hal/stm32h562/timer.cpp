@@ -6,23 +6,30 @@
  * Mapeamento de perifericos (produção, tim5_ic_init() — CKP/CMP via Hall):
  *   TIM5_CH1 PA0: CKP input capture (62.5 MHz, 16 ns/tick)
  *   TIM5_CH2 PA1: CMP input capture
- *   TIM5_CH3   --: event dispatcher (OC)
- *   TIM3_CH1-4 PC6-9: Injecao (OC, ARR=0xFFFF, ECU_Hardware_Init) — RGT6 only
+ *   TIM5_CH3   --: event dispatcher — sem modo OC, compare puro (CCR3) +
+ *                  GPIO BSRR por software na ISR (ver ecu_sched.cpp)
  *   TIM2_CH3 PB10: EWG PWM (motor wastegate)
  *   TIM4_CH1 PB6: VVT escape PWM
  *   TIM4_CH2 PB7: VVT admissao PWM
+ *   TIM3_CH1 PA6: ETB PWM (RGT6) — ver etb_pwm_init()
  *
  * Mapeamento alternativo (fork MT6835 — VGT6, tim5_freerun_init()):
  *   TIM2_CH1/CH2 PA0/PA1: encoder MT6835 (ver tim2_encoder_init())
+ *   TIM2_CH3: event dispatcher em domínio de ângulo — mesmo mecanismo do
+ *             TIM5_CH3 acima (compare + BSRR), unidade counts em vez de ticks
+ *             (ver ecu_sched_angle_encoder.cpp)
  *   TIM3_CH1 PC6: CMP input capture (ver tim3_cmp_ic_init())
  *   TIM5: free-running sem captura, só watchdog de dwell/injeção
  *   docs/dev/mt6835_encoder_fork.md, "Gap TIM5_CEN" — os dois mapeamentos
  *   são mutuamente exclusivos, nunca chamar tim5_ic_init() e
  *   tim2_encoder_init()/tim3_cmp_ic_init() no mesmo boot.
  *
+ * Injeção/ignição (INJ/IGN): nenhum canal TIM OC — sempre GPIOE BSRR por
+ * software, disparado pela ISR do event dispatcher acima (ecu_sched.cpp /
+ * ecu_sched_angle_encoder.cpp), não por este ficheiro.
+ *
  * Clock dos timers:
  *   TIM5, TIM3, TIM4, TIM2 (APB1): timer clock = 250 MHz (timer doubler ativo)
- *   TIM3/TIM1 scheduling: configurados em engine/ecu_sched.cpp a 10 MHz
  *   TIM5 prescaler = 3 -> tick = 250 MHz / 4 = 62.5 MHz -> 16 ns/tick
  */
 

@@ -172,22 +172,6 @@ static inline uint32_t min_stall_timeout_ticks() noexcept {
     return ems::drv::sensors_is_bench_mode() ? kMinStallTimeoutTicksBench : kMinStallTimeoutTicks;
 }
 
-// ── Limiares TOOTH_GRD (MS42 §1.2.3.1.3, NC_TOOTH_GRD_MIN/MAX_GAP) ──────
-// TOOTH_GRD(n) = [T(n) × T(n-2)] / T(n-1)²
-//
-// Gap válido:  1.5 < TOOTH_GRD ≤ 3.5  (janela que cobre o gap 60-2 ≈ 3.0×)
-//   Limite inf:  delta×t_n2×2 > t_n1²×3  (TOOTH_GRD > 3/2)
-//   Limite sup:  delta×t_n2×2 > t_n1²×7  → fora da janela → SPIKE_NOISE
-//
-// Spike/glitch: TOOTH_GRD < 1/4 → delta×t_n2×4 < t_n1²
-//
-// Usa uint64_t: T(n-1)² estoura uint32_t abaixo de ~650 RPM.
-static constexpr uint32_t kGrdGapNum       = 3u;  // gap inf: 3/2 = 1.5
-static constexpr uint32_t kGrdGapDen       = 2u;
-static constexpr uint32_t kGrdGapMaxNum    = 7u;  // gap sup: 7/2 = 3.5
-static constexpr uint32_t kGrdGapMaxDen    = 2u;
-static constexpr uint32_t kGrdSpikeDen     = 4u;  // spike:   1/4 = 0.25
-
 // ---- Acesso a registradores TIM5 ------------------------------------------------
 // STM32H562 TIM5 e GPIO sao configurados em hal/stm32h562/timer.cpp.
 // O modulo usa aliases HAL para manter o decode desacoplado de offsets.
@@ -216,13 +200,20 @@ static constexpr uint32_t kGrdSpikeDen     = 4u;  // spike:   1/4 = 0.25
 // ── Estado interno do decodificador ──────────────────────────────────────────
 //
 // INVARIANTE DE ACESSO — NUNCA VIOLAR:
-//   g_state é escrito EXCLUSIVAMENTE pela ISR ckp_tim5_ch1_isr() (prioridade 1).
+//   g_state é escrito EXCLUSIVAMENTE pela ISR ckp_tim5_ch1_isr() (prioridade 1),
+//   com DUAS exceções deliberadas, cada uma sob seção crítica própria:
+//     - ckp_publish_encoder_snapshot() — em modo encoder (EMS_MT6835_ENCODER=1)
+//       a ISR TIM5_CH1 nunca dispara (tim5_ic_init() não é chamado), e esta
+//       função passa a ser o ÚNICO escritor ativo de g_state.snap.
+//     - ckp_stall_poll() — main loop, escreve rpm_x10/state/tooth_count sob
+//       enter_critical()/exit_critical() ao detetar stall.
 //   Qualquer outro contexto (main loop, ISRs de prioridade < 1) DEVE usar
 //   ckp_snapshot() para ler g_state.snap — que aplica seção crítica CPSID/CPSIE.
 //
-//   Acessar g_state.snap diretamente fora da ISR de prioridade 1 é PROIBIDO
-//   porque a leitura pode observar um snapshot parcialmente actualizado
-//   (ex: tooth_index actualizado mas rpm_x10 ainda com valor anterior).
+//   Acessar g_state.snap diretamente fora da ISR de prioridade 1 (ou das duas
+//   exceções acima) é PROIBIDO porque a leitura pode observar um snapshot
+//   parcialmente actualizado (ex: tooth_index actualizado mas rpm_x10 ainda
+//   com valor anterior).
 //
 //   Se uma nova ISR de prioridade < 1 for adicionada e precisar de dados CKP,
 //   ela DEVE chamar ckp_snapshot() ou ser elevada para prioridade 1 (com
@@ -384,33 +375,7 @@ inline void close_cmp_seq_gate() noexcept {
     s_cmp_reject_streak = 0u;
 }
 
-// ── TOOTH_GRD (MS42 §1.2.3.1.3) ──────────────────────────────────────────────
-// gap:   delta × t_n2 × kGrdGapDen  > t_n1² × kGrdGapNum
-// spike: delta × t_n2 × kGrdSpikeDen < t_n1²
-inline bool tooth_grd_is_gap(uint32_t delta, uint32_t t_n1, uint32_t t_n2) noexcept {
-    const uint64_t lhs = static_cast<uint64_t>(delta) * t_n2 * kGrdGapDen;
-    const uint64_t rhs = static_cast<uint64_t>(t_n1) * t_n1 * kGrdGapNum;
-    return lhs > rhs;
-}
-
-inline bool tooth_grd_is_spike(uint32_t delta, uint32_t t_n1, uint32_t t_n2) noexcept {
-    const uint64_t lhs = static_cast<uint64_t>(delta) * t_n2 * kGrdSpikeDen;
-    const uint64_t rhs = static_cast<uint64_t>(t_n1) * t_n1;
-    return lhs < rhs;
-}
-
-// TOOTH_GRD > 3.5: dente demasiado longo para ser o gap 60-2 (que é ≈3.0×).
-// Ocorre durante recuperação de stall ou escorregamento de roda — não é um gap válido.
-inline bool tooth_grd_over_gap_max(uint32_t delta, uint32_t t_n1, uint32_t t_n2) noexcept {
-    const uint64_t lhs = static_cast<uint64_t>(delta) * t_n2 * kGrdGapMaxDen;
-    const uint64_t rhs = static_cast<uint64_t>(t_n1) * t_n1 * kGrdGapMaxNum;
-    return lhs > rhs;
-}
-
 // Classifica o período atual do dente.
-// Com histórico completo (hist_ready == kHistSize) usa TOOTH_GRD — robusto a
-// aceleração/desaceleração rápida e rejeita spikes bidirecionais.
-// No bootstrap (hist_ready < kHistSize) recai em is_gap / is_normal_tooth.
 enum class ToothClass : uint8_t { GAP, SPIKE_NOISE, NORMAL };
 
 inline ToothClass classify_tooth(uint32_t delta_ticks) noexcept {
@@ -786,8 +751,9 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
 
     // ── 4b. Validação de consistência do histograma pós-bootstrap ────────
     // Após bootstrap, verificar se os valores em tooth_hist são coerentes.
-    // Se um gap entrou no hist durante o bootstrap, o TOOTH_GRD compara
-    // dentes normais contra ele e classifica-os como GAP/SPIKE — nunca
+    // Se um gap entrou no hist durante o bootstrap, a média (hist_avg(),
+    // usada por classify_tooth() logo abaixo) fica distorcida por esse
+    // valor e passa a classificar dentes normais como GAP/SPIKE — nunca
     // se atinge FULL_SYNC.
     {
         const uint32_t h0 = g_state.tooth_hist[0];
@@ -795,8 +761,9 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
         const uint32_t h2 = g_state.tooth_hist[2];
         const uint32_t mn = (h0 < h1) ? ((h0 < h2) ? h0 : h2) : ((h1 < h2) ? h1 : h2);
         const uint32_t mx = (h0 > h1) ? ((h0 > h2) ? h0 : h2) : ((h1 > h2) ? h1 : h2);
-        // mx > mn×1.5: tolerância de 50% cobre gap 3T enquanto rejeita t_n2
-        // contaminado (ex: 1.6T vs T normal que causa falso GAP no TOOTH_GRD)
+        // mx > mn×1.5: tolerância de 50% cobre gap 3T enquanto rejeita um
+        // histórico contaminado (ex: 1.6T vs T normal, que distorceria a
+        // média usada por classify_tooth() e causaria um falso GAP)
         if (mn > 0u && mx > mn + mn / 2u) {
             // Hist contaminado → re-bootstrap. Drop sync first so schedule_on_tooth
             // cannot re-arm inject/ign on a stale tooth_index while HALF/FULL.
@@ -820,9 +787,9 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     }
 
     // ── 5. Classificação do dente ─────────────────────────────────────────
-    // Com histórico completo usa TOOTH_GRD (MS42 §1.2.3.1.3) — trend-compensado,
-    // robusto a aceleração/desaceleração rápida e rejeita spikes de ambos os
-    // sentidos. No bootstrap (hist_ready < kHistSize) recai em razão de média.
+    // Classificação por razão de média (ver classify_tooth() acima) — usa
+    // TODOS os valores do histórico, mais robusta a contaminação do que um
+    // classificador de 3 pontos (t_n, t_n1, t_n2) seria.
     const ToothClass tc = classify_tooth(delta_ticks);
     {
         extern volatile uint32_t g_dbg_tc_gap, g_dbg_tc_spike, g_dbg_tc_normal;

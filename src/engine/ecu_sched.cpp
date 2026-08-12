@@ -125,8 +125,6 @@ static volatile uint8_t g_hook_prev_valid = 0U;
 static volatile uint16_t g_hook_prev_tooth = 0U;
 static volatile uint8_t g_hook_schedule_this_gap = 1U;
 static volatile uint8_t g_cmp_phase_seen = 0U;
-volatile uint32_t g_dbg_inj_force_early = 0U;
-volatile uint32_t g_dbg_ign_force_early = 0U;
 volatile uint32_t g_dbg_clear_all_count = 0U;
 volatile uint32_t g_dbg_presync_count = 0U;
 volatile uint32_t g_dbg_phase_skip = 0U;
@@ -395,7 +393,8 @@ static void sanitize_runtime_calibration(void)
 {
     uint8_t clamped = 0U;
     if (si::g_advance_deg > 60U) { si::g_advance_deg = 60U; clamped = 1U; }
-    // Clamps em ticks TIM5 (62.5 MHz): 100000 ticks ≈ 1.6ms dwell máx
+    // Clamps em ticks TIM5 (62.5 MHz): 625000 ticks = 10ms dwell máx,
+    // 1250000 ticks = 20ms PW máx.
     if (si::g_dwell_ticks > 625000U) { si::g_dwell_ticks = 625000U; clamped = 1U; }
     if (si::g_inj_pw_ticks > 1250000U) { si::g_inj_pw_ticks = 1250000U; clamped = 1U; }
     // EOI lead ∈ [0, 719]: 0–129 = fim na compressão (closed-valve, soak longo);
