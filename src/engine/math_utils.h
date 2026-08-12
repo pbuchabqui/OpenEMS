@@ -4,6 +4,28 @@
 
 namespace ems::engine {
 
+// Extrapolação de tendência linear entre duas amostras consecutivas (a mais
+// recente `a`, a anterior `b`), clampada a ±(clamp_base/clamp_den) para não
+// deixar um outlier isolado disparar uma previsão descontrolada. `clamp_base`
+// é explícito (não hardcoded a `a` nem a `b`) porque os dois usos existentes
+// (drv/ckp.cpp::predict_next_period_ticks, engine/misfire_encoder.cpp::
+// predict_current_delta_ticks) clampam em bases diferentes — a mais antiga
+// (`b`) num caso, a mais recente (`a`) no outro — e colapsar isso
+// silenciosamente mudaria o valor previsto de um dos dois. Guarda contra
+// amostras patológicas (>INT32_MAX) antes de entrar em aritmética com sinal,
+// devolvendo `a` sem previsão nesse caso.
+inline uint32_t linear_trend_predict(uint32_t a, uint32_t b,
+                                     uint32_t clamp_base,
+                                     uint32_t clamp_den) noexcept {
+    if (a > 0x7FFFFFFFu || b > 0x7FFFFFFFu) { return a; }
+    int32_t trend = static_cast<int32_t>(a) - static_cast<int32_t>(b);
+    const int32_t limit = static_cast<int32_t>(clamp_base / clamp_den);
+    if (trend > limit) { trend = limit; }
+    if (trend < -limit) { trend = -limit; }
+    const int32_t predicted = static_cast<int32_t>(a) + trend;
+    return (predicted > 0) ? static_cast<uint32_t>(predicted) : a;
+}
+
 inline int16_t clamp_i16(int16_t v, int16_t lo, int16_t hi) noexcept {
     if (v < lo) return lo;
     if (v > hi) return hi;

@@ -65,6 +65,7 @@
 #include "hal/timer.h"
 #include "hal/critical_section.h"
 #include "engine/calibration.h"
+#include "engine/math_utils.h"
 #include "drv/sensors.h"
 #if defined(TARGET_STM32H562) && !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
@@ -292,18 +293,11 @@ inline uint32_t rpm_if_synced(uint32_t period_ticks) noexcept {
 inline uint32_t predict_next_period_ticks(uint32_t current_ticks) noexcept {
     const uint32_t prev = g_state.prev_period_ticks;
     if (prev == 0u) { return current_ticks; }
-    // Pathological periods (noise / stall residue) must not enter signed math.
-    if (current_ticks > 0x7FFFFFFFu || prev > 0x7FFFFFFFu) {
-        return current_ticks;
-    }
-
-    int32_t trend = static_cast<int32_t>(current_ticks) - static_cast<int32_t>(prev);
-    const int32_t limit = static_cast<int32_t>(prev / kPredictionClampDen);
-    if (trend > limit) { trend = limit; }
-    if (trend < -limit) { trend = -limit; }
-
-    const int32_t predicted = static_cast<int32_t>(current_ticks) + trend;
-    return (predicted > 0) ? static_cast<uint32_t>(predicted) : current_ticks;
+    // Clamp base = prev (the older sample) — see linear_trend_predict()
+    // (engine/math_utils.h) for why this differs from the misfire_encoder.cpp
+    // sibling, which clamps against the newer sample instead.
+    return ems::engine::linear_trend_predict(current_ticks, prev, prev,
+                                             kPredictionClampDen);
 }
 
 // Insere novo período na janela deslizante (shift FIFO).

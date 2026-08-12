@@ -2,6 +2,7 @@
 #include "engine/misfire_detect.h"
 #include "engine/engine_config.h"
 #include "engine/ecu_sched.h"
+#include "engine/math_utils.h"
 #include "hal/board_pinout.h"
 
 namespace ems::engine {
@@ -46,9 +47,9 @@ bool    g_all_inhibit    = false;
 
 // Previsão do Δticks da amostra actual, a partir SÓ do histórico anterior
 // (t-1, t-2) — nunca do valor actual, senão deixaria de ser previsão.
-// Tendência linear análoga a predict_next_period_ticks() (ckp.cpp), mas
-// nova e local (domínio sub-tick, não dente). Mesmo clamp ±12.5%
-// (kPredictionClampDen=8 lá).
+// Reusa a mesma extrapolação de tendência que predict_next_period_ticks()
+// (ckp.cpp) usa para o dente seguinte — engine/math_utils.h:linear_trend_predict()
+// — aplicada ao domínio sub-tick em vez do domínio-dente.
 //
 // LIMITE CONHECIDO (auto-recuperação do heartbeat TIM2_CH4, ver
 // tim2_heartbeat_next_ccr4() em hal/timer.h): se o atendimento da IRQ
@@ -67,12 +68,10 @@ bool    g_all_inhibit    = false;
 uint32_t predict_current_delta_ticks() noexcept {
     if (g_delta_hist_count < 1u) { return 0u; }       // sem histórico: sem previsão útil
     if (g_delta_hist_count < 2u) { return g_delta_t1; }  // 1 ponto: previsão de ordem zero
-    int32_t trend = static_cast<int32_t>(g_delta_t1) - static_cast<int32_t>(g_delta_t2);
-    const int32_t clamp = static_cast<int32_t>(g_delta_t1 / 8u);
-    if (trend > clamp) { trend = clamp; }
-    if (trend < -clamp) { trend = -clamp; }
-    const int32_t predicted = static_cast<int32_t>(g_delta_t1) + trend;
-    return (predicted > 0) ? static_cast<uint32_t>(predicted) : g_delta_t1;
+    // Clamp base = g_delta_t1 (a amostra mais recente) — ver
+    // linear_trend_predict() (engine/math_utils.h) para a razão de diferir
+    // do irmão predict_next_period_ticks() em ckp.cpp, que clampa por prev.
+    return ems::engine::linear_trend_predict(g_delta_t1, g_delta_t2, g_delta_t1, 8u);
 }
 
 // Avalia a janela do cilindro `cyl` que acabou de fechar (saída detectada).
