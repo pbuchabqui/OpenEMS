@@ -493,28 +493,24 @@ uint32_t transient_fuel_xtau_event(uint8_t cyl,
         ? interpolate_xtau_2d(rpm_x10, map_bar_x100)
         : xtau_get_current_params(clt_x10);
 
-    uint16_t dt = dt_ms;
-    if (dt == 0u) {
-        // Estima intervalo entre sprays sequenciais (4 cyl, 720°): cycle_ms/4.
-        uint32_t rpm = rpm_x10 / 10u;
-        if (rpm < 200u) { rpm = 200u; }
-        const uint32_t cycle_ms = 120000u / rpm;
-        dt = static_cast<uint16_t>((cycle_ms / 4u) < 1u ? 1u : (cycle_ms / 4u));
-        if (dt > 200u) { dt = 200u; }
-    }
-
+    // dt_ms é contrato do chamador (header: "clamp 1..200") — o único
+    // chamador de produção, enc_cyl_setpoints.cpp, já garante isso via
+    // estimate_spray_dt_ms(); nunca passa 0. Removida a antiga
+    // reimplementação local desse mesmo cálculo (fallback dt==0), morta por
+    // construção e desalinhada de estimate_spray_dt_ms() (faltava o clamp
+    // rpm>15000 que este tem).
     if (!commit) {
         // Peek: avalia sobre uma cópia local, sem tocar g_cyl_wall_us_q8/
         // g_cyl_last_ms/g_wall_state — ver comentário no header.
         int32_t peek_wall = g_cyl_wall_us_q8[cyl];
         return xtau_step_wall(peek_wall, commanded_flow_us,
                               params.x_fraction_q8, params.tau_cycles,
-                              dt, rpm_x10);
+                              dt_ms, rpm_x10);
     }
 
     const uint32_t inj = xtau_step_wall(g_cyl_wall_us_q8[cyl], commanded_flow_us,
                                         params.x_fraction_q8, params.tau_cycles,
-                                        dt, rpm_x10);
+                                        dt_ms, rpm_x10);
     g_cyl_last_ms[cyl] = millis();
     // Mantém filme escalar alinhado ao último evento (telemetria/DFCO).
     g_wall_state.wall_fuel_us_q8 = g_cyl_wall_us_q8[cyl];
