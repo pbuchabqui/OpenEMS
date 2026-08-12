@@ -850,26 +850,13 @@ static void enc_evt_retarget_high(uint8_t ch, uint32_t new_ts) noexcept
         g_enc_evt_queue[i] = g_enc_evt_queue[i + 1U];
     }
     --g_enc_evt_count;
-    // Reinsert sorted (no knock re-open — dwell already armed).
-    uint8_t pos = g_enc_evt_count;
-    for (uint8_t i = 0U; i < g_enc_evt_count; ++i) {
-        if (static_cast<int32_t>(new_ts - g_enc_evt_queue[i].timestamp) < 0) {
-            pos = i;
-            break;
-        }
-    }
-    for (uint8_t i = g_enc_evt_count; i > pos; --i) {
-        g_enc_evt_queue[i] = g_enc_evt_queue[i - 1U];
-    }
-    g_enc_evt_queue[pos].timestamp = new_ts;
-    g_enc_evt_queue[pos].channel = ch;
-    g_enc_evt_queue[pos].high = 1U;
-    ++g_enc_evt_count;
-    if (pos == 0U) {
-        TIM2_CCR3 = new_ts;
-        TIM2_SR   = ~TIM_SR_CC3IF;
-        TIM2_DIER |= TIM_DIER_CC3IE;
-    }
+    // Reinsert sorted (no knock re-open — dwell already armed): mesma cauda
+    // "posição ordenada + rearm CCR3 se pos==0" de enc_evt_insert() — reusa-a
+    // em vez de duplicar. Não passa pelo ramo de overflow (enc_evt_insert
+    // ainda o verifica, mas é inatingível aqui: a entrada acabada de remover
+    // acima garante espaço). enc_evt_insert() não toma guard própria, por
+    // isso é seguro chamá-la dentro da CriticalSectionGuard já aberta.
+    enc_evt_insert(new_ts, ch, 1U);
 }
 
 static bool omega_rel_change_ge(int32_t omega_now, int32_t omega_ref,
