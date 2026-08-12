@@ -43,6 +43,25 @@ void tim2_encoder_set_count(uint32_t counts) noexcept;
 // ter pré-carregado TIM2_CNT.
 void tim2_heartbeat_start() noexcept;
 
+// Próximo CCR4 do heartbeat, dado o valor já incrementado (+256) e o
+// TIM2_CNT actual no momento do IRQ. Caminho saudável: o incremento normal
+// já deixa CCR4 à frente de CNT — devolve-o sem alteração. Caminho
+// degradado (auto-recuperação): se o atendimento da IRQ atrasou mais de 256
+// counts, CCR4 já incrementado continua atrás de CNT — nesse caso o próximo
+// compare-match só dispararia depois de o contador de 32 bits dar a volta
+// completa (TIM2_ARR = 0xFFFFFFFF em modo encoder), travando o heartbeat.
+// Devolve CNT+256 nesse caso, para o comparador voltar a estar à frente.
+// Função pura (sem acesso a registo) para ser testável em host — chamada
+// pelo TIM2_IRQHandler (hal/stm32h562/timer.cpp) logo após `TIM2_CCR4 += 256u`.
+inline uint32_t tim2_heartbeat_next_ccr4(uint32_t ccr4_after_increment,
+                                         uint32_t cnt) noexcept
+{
+    if (static_cast<int32_t>(ccr4_after_increment - cnt) < 0) {
+        return cnt + 256u;
+    }
+    return ccr4_after_increment;
+}
+
 // ── CMP via TIM3_CH1/PC6 (VGT6 apenas, MT6835) ──────────────────────────────
 // Substitui TIM5_CH2/PA1 (que agora é canal B do encoder). PC6/AF2/TIM3_CH1
 // verificado livre na VGT6 nas duas tabelas AF do DS14258 e contra

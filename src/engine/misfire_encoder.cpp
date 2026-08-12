@@ -49,6 +49,21 @@ bool    g_all_inhibit    = false;
 // Tendência linear análoga a predict_next_period_ticks() (ckp.cpp), mas
 // nova e local (domínio sub-tick, não dente). Mesmo clamp ±12.5%
 // (kPredictionClampDen=8 lá).
+//
+// LIMITE CONHECIDO (auto-recuperação do heartbeat TIM2_CH4, ver
+// tim2_heartbeat_next_ccr4() em hal/timer.h): se o atendimento da IRQ
+// atrasar o suficiente para o catch-up disparar, a amostra de
+// misfire_encoder_on_sample() imediatamente a seguir tem delta_ticks
+// (Δtim5_now) anormalmente grande — cobre todo o intervalo perdido, não só
+// um sub-tick — enquanto esta previsão (clamp ±12.5% sobre t-1) não tem
+// como o antecipar. Isso pode gerar UM incremento de debounce isolado e
+// não-persistente para o cilindro activo nesse instante (evaluate_window()
+// compara g_power_ticks_sum vs. g_pred_ticks_sum). Não desalinha
+// g_cyl_window (o bucket é derivado do ângulo, não deste histórico) e não
+// persiste além dessa amostra — aceite como limitação, não corrigido (a
+// alternativa seria invalidar g_have_prev/g_delta_hist_count neste ramo
+// para descartar a amostra de fronteira, descartada por agora para manter
+// o fix do heartbeat isolado e de risco mínimo).
 uint32_t predict_current_delta_ticks() noexcept {
     if (g_delta_hist_count < 1u) { return 0u; }       // sem histórico: sem previsão útil
     if (g_delta_hist_count < 2u) { return g_delta_t1; }  // 1 ponto: previsão de ordem zero

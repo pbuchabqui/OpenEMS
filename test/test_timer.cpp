@@ -65,9 +65,11 @@ void test_timer_stubs(void) {
     CHECK_TRUE(true, "all timer stubs: no crash");
 
     // MT6835/TIM2 encoder HAL stubs (VGT6-only real logic lives under
-    // #ifndef EMS_HOST_TEST in stm32h562/timer.cpp — the ISR/CCR4 rearm
-    // itself isn't host-testable, same reasoning as ecu_sched_angle_encoder
-    // taking already-read values as plain params). This just confirms the
+    // #ifndef EMS_HOST_TEST in stm32h562/timer.cpp — the ISR register
+    // access itself isn't host-testable, same reasoning as
+    // ecu_sched_angle_encoder taking already-read values as plain params;
+    // the pure catch-up decision inside the ISR IS testable, see
+    // test_tim2_heartbeat_next_ccr4() below). This just confirms the
     // host-test mock layer (task #9) is wired: init/arm/heartbeat_start
     // don't crash, and the count getter/setter round-trips.
     tim5_freerun_init();
@@ -80,6 +82,42 @@ void test_timer_stubs(void) {
     CHECK_EQ(cmp_angle_snapshot(), 0u, "cmp_angle_snapshot() mock default 0");
     CHECK_EQ(cmp_edge_count(), 0u, "cmp_edge_count() mock default 0");
     CHECK_TRUE(true, "MT6835/TIM2 HAL stubs: no crash");
+}
+
+void test_tim2_heartbeat_next_ccr4(void) {
+    section("timer HAL: tim2_heartbeat_next_ccr4() — TIM2_CH4 catch-up");
+    using namespace ems::hal;
+
+    // Caminho saudável: CCR4 (já incrementado +256 pelo chamador) continua
+    // à frente de CNT — devolvido sem alteração, zero custo extra no
+    // caminho nominal.
+    CHECK_EQ(tim2_heartbeat_next_ccr4(1256u, 1000u), 1256u,
+             "healthy: ccr4 ahead of cnt -> unchanged");
+    CHECK_EQ(tim2_heartbeat_next_ccr4(256u, 0u), 256u,
+             "healthy: ccr4 exactly at cnt+256 -> unchanged");
+
+    // Fronteira: ccr4 == cnt não é "atrás" (delta assinado == 0, não < 0) —
+    // fica tal como está, coerente com o resto do dispatcher (TIM2/TIM5 usam
+    // sempre ">" ou "<" para o teste de "já passou", nunca ">=").
+    CHECK_EQ(tim2_heartbeat_next_ccr4(1000u, 1000u), 1000u,
+             "boundary: ccr4 == cnt -> unchanged (not treated as behind)");
+
+    // Caminho degradado: IRQ atendida com atraso > 256 counts — o
+    // incremento do chamador não foi suficiente para pôr CCR4 à frente de
+    // CNT. Auto-recuperação: reancora em cnt+256, nunca deixa o comparador
+    // preso atrás do contador (que só voltaria a disparar após um wrap
+    // completo de 32 bits em modo encoder livre-corrente).
+    CHECK_EQ(tim2_heartbeat_next_ccr4(1000u, 2000u), 2256u,
+             "catch-up: ccr4 behind cnt -> re-armed at cnt+256");
+    CHECK_TRUE(
+        static_cast<int32_t>(tim2_heartbeat_next_ccr4(1000u, 2000u) - 2000u) > 0,
+        "catch-up: next ccr4 always ahead of cnt");
+
+    // Wrap-safe: subtração com sinal em aritmética modular de 32 bits — um
+    // ccr4 "logicamente atrás" perto do wrap do uint32_t ainda é detectado
+    // corretamente (mesma disciplina usada em todo o dispatcher TIM2/CH3).
+    CHECK_EQ(tim2_heartbeat_next_ccr4(0xFFFFFFF0u, 0x00000010u), 0x00000110u,
+             "catch-up: detected correctly across uint32_t wrap");
 }
 
 void test_out_pins_bsrr_rgt6(void) {

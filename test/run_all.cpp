@@ -184,6 +184,7 @@ int main(void) {
     // ── Timer HAL ────────────────────────────────────────────────────────────
     printf("\n=== TIMER HAL ===");
     test_timer_stubs();
+    test_tim2_heartbeat_next_ccr4();
     test_out_pins_bsrr_rgt6();
 
     // ── TABLE3D ──────────────────────────────────────────────────────────

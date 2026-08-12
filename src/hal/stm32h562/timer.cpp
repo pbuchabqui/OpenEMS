@@ -442,6 +442,12 @@ extern "C" void TIM2_IRQHandler(void) {
     if (sr & TIM_SR_CC4IF) {
         TIM2_SR = ~TIM_SR_CC4IF;
         TIM2_CCR4 += 256u;  // auto-rearma para o próximo sub-tick, sem UEV/ARR
+        // Auto-recuperação: se o atendimento desta IRQ atrasou mais de 256
+        // counts, o incremento acima ainda deixaria CCR4 atrás de CNT — sem
+        // isto o heartbeat ficaria preso até o TIM2 de 32-bit dar a volta
+        // completa. Ver tim2_heartbeat_next_ccr4() (hal/timer.h) — no
+        // caminho saudável (o caso normal) é sempre um no-op.
+        TIM2_CCR4 = tim2_heartbeat_next_ccr4(TIM2_CCR4, TIM2_CNT);
         const uint32_t tim2_now = TIM2_CNT;
         const uint32_t tim5_now = TIM5_CNT;
         const uint32_t cmp_angle = cmp_angle_snapshot();
