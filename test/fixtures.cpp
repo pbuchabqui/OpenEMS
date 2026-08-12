@@ -83,3 +83,27 @@ void encoder_seq_seed_omega(void) {
     ecu_sched_encoder_heartbeat_tick(1400u, 2000u, 0u, 0u);
 }
 
+uint32_t encoder_seq_arm_cyl_in_window(uint8_t cyl, uint32_t tim5_now,
+                                       uint32_t cmp_angle, uint32_t cmp_edges) {
+    const uint32_t window = ecu_sched_encoder_test_arm_window_counts();
+    // Predict with the currently seeded ω (typ. 0.5 from encoder_seq_seed_omega).
+    uint32_t now = 0u;
+    for (int i = 0; i < 3; ++i) {
+        const uint32_t arm = ecu_sched_encoder_test_predict_arm_at(cyl, now);
+        now = arm - (window / 2u);
+    }
+    // Re-seed ω at the destination with the same 0.5 ratio. A raw heartbeat
+    // jump from the seed tip (~1400) to `now` would spike ω and push dwell/PW
+    // spans outside the 60° arm window.
+    constexpr uint32_t kD2 = 500u;
+    constexpr uint32_t kD5 = 1000u;
+    ecu_sched_encoder_omega_test_reset();
+    const uint32_t t5_prev = (tim5_now > kD5) ? (tim5_now - kD5) : 0u;
+    ecu_sched_encoder_omega_sample(now - kD2, t5_prev);
+    ecu_sched_encoder_omega_sample(now, tim5_now);
+    ecu_sched_encoder_test_set_tim2_cnt(now);
+    // Same (tim2,tim5) as last omega sample ⇒ d_tim5==0 ⇒ ω unchanged.
+    ecu_sched_encoder_heartbeat_tick(now, tim5_now, cmp_angle, cmp_edges);
+    return now;
+}
+

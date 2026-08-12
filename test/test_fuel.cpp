@@ -338,6 +338,19 @@ void test_fuel_ae(void) {
     int32_t ae_t4 = calc_ae_pw_us(500u, 500u, 10u, 800);  // decay tick 4
     CHECK_TRUE(ae_t1 >= ae_t4, "AE taper: pulse non-increasing over cycles");
     CHECK_EQ(ae_t4, 0, "AE taper: pulse = 0 at or after taper_cycles=4");
+
+    // STFT freeze flag: tip-in sets, pulse==0 clears immediately (not sticky).
+    fuel_ae_reset();
+    fuel_ae_notify_pulse(2000);
+    CHECK_TRUE(fuel_ae_stft_freeze_active(), "tip-in pulse → STFT freeze on");
+    fuel_ae_notify_pulse(0);
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(),
+               "pulse=0 clears freeze on same 2 ms tick (not sticky to 100 ms)");
+    fuel_ae_notify_pulse(-500);  // tip-out
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(), "tip-out does not freeze STFT");
+    fuel_ae_notify_pulse(1000);
+    fuel_ae_stft_freeze_clear();
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(), "explicit clear after 100 ms STFT slot");
 }
 
 void test_fuel_adaptives_reset(void) {

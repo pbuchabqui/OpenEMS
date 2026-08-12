@@ -148,8 +148,7 @@ void test_knock_window_encoder_arm_wiring(void) {
                 "presync encoder: knock window closed (g_knock_sequential=0)");
 
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
-    ecu_sched_encoder_test_set_tim2_cnt(1600u);
-    ecu_sched_encoder_heartbeat_tick(1600u, 4000u, 1u, 1u);
+    encoder_seq_arm_cyl_in_window(0u, 4000u, 1u, 1u);
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "phase valid → sequential");
 
 #if EMS_KNOCK_HW_PRESENT

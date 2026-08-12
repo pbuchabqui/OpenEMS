@@ -43,6 +43,8 @@ extern uint16_t fuel_press_nominal_bar_x1000;
 extern int16_t ae_clt_corr_axis_x10[kCorrectionTableSize];
 extern uint16_t ae_clt_sens[kCorrectionTableSize];
 extern uint16_t ae_tpsdot_threshold_x10;
+// Contagem de ticks do loop de fuel (2 ms), não ciclos de combustão.
+// Default 8 → ~16 ms de taper wall-clock. Layout NVM/page0 inalterado.
 extern uint16_t ae_taper_cycles;
 extern uint16_t ae_max_pw_us;
 extern uint16_t ae_tpsdot_axis_x10[kAeRateTableSize];
@@ -161,7 +163,7 @@ extern uint8_t  decel_cut_gear_inhibit_ms10;
 extern uint8_t knock_dead_min_p2p;
 
 // MAP janela angular por cilindro (engine/map_window, estilo FOME #610).
-// enable: 0=off (default), 1=medir (telemetria/balance; sem efeito no fuel).
+// enable: 0=off (default); 1=medir + no finalize encoder (ΔP/scale por cyl).
 // open_deg: abertura da janela do slot 0 no ciclo 720° (0-719; slots seguintes
 // a +180° cada). len_deg: duração da janela (10-180°).
 extern uint8_t  map_window_enable;

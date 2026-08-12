@@ -1,5 +1,6 @@
 #include "engine/ecu_sched.h"
 #include "engine/ecu_sched_internal.h"
+#include "engine/enc_cyl_setpoints.h"
 #include "drv/ckp.h"
 #include "engine/engine_config.h"
 #include "engine/constants.h"
@@ -869,6 +870,7 @@ void ecu_sched_test_reset(void)
     ecu_sched_encoder_phase_test_reset();
     ecu_sched_encoder_queue_test_reset();
     ecu_sched_encoder_heartbeat_test_reset();
+    ems::engine::enc_cyl_setpoints_reset();
 }
 uint8_t ecu_sched_test_angle_table_size(void) { return si::g_angle_table_count; }
 uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *sub_frac, uint8_t *ch, uint8_t *action, uint8_t *phase)

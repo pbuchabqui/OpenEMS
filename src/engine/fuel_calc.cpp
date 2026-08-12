@@ -52,6 +52,7 @@ uint32_t isqrt_u32(uint32_t x) noexcept {
 
 uint8_t g_ae_decay_cycles = 0u;
 int32_t g_ae_pulse_us = 0;
+bool g_ae_stft_freeze = false;
 
 bool g_decel_cut = false;
 // Referência barométrica: inicializada com map_ref estático, atualizada no key-on
@@ -104,6 +105,20 @@ namespace ems::engine {
 void fuel_ae_reset() noexcept {
     g_ae_decay_cycles = 0u;
     g_ae_pulse_us = 0;
+    g_ae_stft_freeze = false;
+}
+
+void fuel_ae_notify_pulse(int32_t ae_pw_us) noexcept {
+    // Tip-in (µs > 0) freezes STFT / blocks X-τ learn. Tip-out (negativo) não.
+    g_ae_stft_freeze = (ae_pw_us > 0);
+}
+
+bool fuel_ae_stft_freeze_active() noexcept {
+    return g_ae_stft_freeze;
+}
+
+void fuel_ae_stft_freeze_clear() noexcept {
+    g_ae_stft_freeze = false;
 }
 
 uint8_t get_ve(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
@@ -420,6 +435,7 @@ void fuel_ae_set_threshold(uint16_t threshold_tpsdot_x10) noexcept {
 }
 
 void fuel_ae_set_taper(uint8_t taper_cycles) noexcept {
+    // taper_cycles = nº de ticks do loop 2 ms (wall-clock), não ciclos motor.
     ae_taper_cycles = (taper_cycles == 0u) ? 1u : taper_cycles;
 }
 

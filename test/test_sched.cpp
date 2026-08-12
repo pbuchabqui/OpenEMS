@@ -23,6 +23,8 @@
 #include "engine/knock.h"
 #include "engine/table3d.h"
 #include "engine/ecu_sched.h"
+#include "engine/enc_cyl_setpoints.h"
+#include "engine/map_window.h"
 #include "engine/quick_crank.h"
 #include "engine/transient_fuel.h"
 #include "engine/map_estimator.h"
@@ -110,10 +112,8 @@ void test_ecu_sched_angle_table(void) {
     CHECK_TRUE(tbl_sz > 0u, "angle table has events after FULL_SYNC");
     // Modo de presync default é SEMI_SEQUENTIAL (g_presync_inj_mode em
     // ecu_sched_test_reset()), não SIMULTANEOUS: injeta em só 2 dos 4
-    // cilindros por revolução em presync. Ignição continua 1/cilindro
-    // (DWELL+SPARK = 4×2 = 8), injeção só 2 cilindros (ON+OFF = 2×2 = 4) →
-    // 12 eventos, não os 16 que a expectativa antiga assumia (modo
-    // SIMULTANEOUS, que só é ativado automaticamente durante cranking).
+    // cilindros por revolução em presync. Ignição wasted: 2 pares × 2 bobinas
+    // (DWELL+SPARK = 8), injeção só 2 cilindros (ON+OFF = 4) → 12 eventos.
     CHECK_TRUE(tbl_sz >= 12u, "angle table has ≥12 events (presync SEMI_SEQUENTIAL)");
 
     // Inspect first valid event: should be one of ECU_ACT_*
@@ -1189,53 +1189,66 @@ void test_ecu_sched_encoder_conversion(void) {
     ecu_sched_test_reset();
 }
 
+// Shared by encoder presync + sequential tests (find first matching queue evt).
+static uint8_t encoder_evt_find_ch(uint8_t want_ch, uint8_t want_high,
+                                   uint32_t *out_ts) {
+    for (uint8_t i = 0u; i < ecu_sched_encoder_test_get_evt_count(); ++i) {
+        uint32_t ts = 0u; uint8_t ch = 0u; uint8_t high = 0u;
+        ecu_sched_encoder_test_get_evt(i, &ts, &ch, &high);
+        if (ch == want_ch && high == want_high) {
+            if (out_ts != nullptr) { *out_ts = ts; }
+            return 1u;
+        }
+    }
+    return 0u;
+}
+
 void test_ecu_sched_encoder_recompute_presync(void) {
-    section("ecu_sched: encoder heartbeat recompute — presync (default: phase always invalid)");
+    section("ecu_sched: encoder heartbeat recompute — presync wasted pairs @ 180°");
     ecu_sched_test_reset();
 
     const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
     ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
 
-    ecu_sched_set_advance_deg(10u);            // spark_deg = (360-10)%360 = 350
-    ecu_sched_set_eoi_lead_deg(355u);          // eoi_deg   = (360-355)%360 = 5
+    ecu_sched_set_advance_deg(10u);            // spark_a=350, spark_b=170
+    ecu_sched_set_eoi_lead_deg(355u);          // eoi_deg=5
     ecu_sched_set_dwell_ticks(2000u);
     ecu_sched_set_inj_pw_ticks(2000u);
     ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
 
-    // Seed omega at exactly 0.5 (d_tim2=500, d_tim5=1000) so spans are small,
-    // deterministic integers, easy to hand-verify — a physically realistic
-    // (<<1) ratio, unlike omega=1.0 used in the pure omega-estimator tests.
-    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);   // seeds prev; omega invalid -> first recompute pass is a harmless no-span no-op
-    ecu_sched_encoder_heartbeat_tick(1500u, 2000u, 0u, 0u);   // d_tim2=500, d_tim5=1000 -> omega=0.5 -> x65536=32768
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 2000u, 0u, 0u);   // omega=0.5
     CHECK_EQ(ecu_sched_encoder_omega_x65536(), 32768, "omega seeded to 0.5 for deterministic spans");
 
-    // Hand-computed expectations (origin=0, now_raw=1500 at the 2nd tick):
-    //   spark_deg=350 -> counts_in_rev=15928; now_mod=1500 < 15928 -> spark_target=15928
-    //   eoi_deg=5     -> counts_in_rev=227;   now_mod=1500 > 227   -> eoi_target=1500+(16384-1500+227)=16611
-    //   dwell_span = 2000 * 0.5 = 1000 -> dwell_target = 15928-1000 = 14928
-    //   inj_pw_span (SIMULTANEOUS halves 2000->1000 ticks) = 500 -> inj_on_target = 16611-500 = 16111
+    // Hand-computed (origin=0, now_raw=1500, dwell_span=1000):
+    //   pair A (IGN1/IGN4): spark_a=350 → 15928, dwell=14928
+    //   pair B (IGN3/IGN2): spark_b=170 → 7736,  dwell=6736
+    //   inj: eoi=5 → 16611, inj_on=16111 (SIMULTANEOUS halves PW)
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
-             "4 IGN (dwell+spark) + 4 INJ (on+off), SIMULTANEOUS mode");
+             "2 pairs × 2 coils × (dwell+spark) + 4 INJ (on+off)");
     CHECK_EQ(ecu_sched_is_sequential(), 0u,
              "presync builder clears g_knock_sequential (wasted-spark)");
 
-    uint32_t ts = 0u; uint8_t ch = 0u; uint8_t high = 0u;
-    ecu_sched_encoder_test_get_evt(0u, &ts, &ch, &high);
-    CHECK_EQ(ts, 14928u, "evt0: dwell target");
-    CHECK_EQ(high, 1u, "evt0: DWELL_START is high=1");
-    ecu_sched_encoder_test_get_evt(4u, &ts, &ch, &high);
-    CHECK_EQ(ts, 15928u, "evt4: spark target");
-    CHECK_EQ(high, 0u, "evt4: SPARK is high=0");
-    ecu_sched_encoder_test_get_evt(8u, &ts, &ch, &high);
-    CHECK_EQ(ts, 16111u, "evt8: inj_on target");
-    CHECK_EQ(high, 1u, "evt8: INJ_ON is high=1");
-    ecu_sched_encoder_test_get_evt(15u, &ts, &ch, &high);
-    CHECK_EQ(ts, 16611u, "evt15: inj_off target");
-    CHECK_EQ(high, 0u, "evt15: INJ_OFF is high=0");
+    uint32_t spark_a = 0u, spark_b = 0u, dwell_a = 0u, dwell_b = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark_a), 1u, "pair A IGN1 SPARK");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN4, 0u, nullptr), 1u, "pair A IGN4 SPARK");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, &spark_b), 1u, "pair B IGN3 SPARK");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN2, 0u, nullptr), 1u, "pair B IGN2 SPARK");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell_a), 1u, "pair A IGN1 DWELL");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 1u, &dwell_b), 1u, "pair B IGN3 DWELL");
 
-    // Pairing/purge safety: a repeated heartbeat (RPM effectively unchanged,
-    // nothing dispatched yet) must purge-and-rebuild cleanly, never
-    // accumulate duplicates or leave an orphaned dwell/spark.
+    CHECK_EQ(spark_a, 15928u, "pair A spark @ 350°");
+    CHECK_EQ(dwell_a, 14928u, "pair A dwell = spark − span");
+    CHECK_EQ(spark_b, 7736u, "pair B spark @ 170°");
+    CHECK_EQ(dwell_b, 6736u, "pair B dwell = spark − span");
+    CHECK_TRUE(spark_a != spark_b, "pairs at distinct crank angles (180° apart)");
+
+    uint32_t ts = 0u; uint8_t ch = 0u; uint8_t high = 0u;
+    // Chronological: pair-B dwell first in queue.
+    ecu_sched_encoder_test_get_evt(0u, &ts, &ch, &high);
+    CHECK_EQ(ts, 6736u, "evt0: earliest = pair B dwell");
+    CHECK_EQ(high, 1u, "evt0: DWELL high=1");
+
     ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
              "repeated heartbeat: still exactly 16, no duplication from purge+rebuild");
@@ -1287,25 +1300,59 @@ void test_ecu_sched_encoder_recompute_presync_pw_clamp(void) {
     ecu_sched_test_reset();
 }
 
+void test_ecu_sched_encoder_presync_multispark(void) {
+    section("ecu_sched: encoder presync — multi-spark per wasted pair");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+
+    ecu_sched_set_advance_deg(20u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(0u);
+    ecu_sched_set_inj_pw_ticks(0u);
+    ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
+    ecu_sched_set_mspark(1u, 100u, 18u);
+
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 2000u, 0u, 0u);
+
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "presync stays wasted-spark");
+
+    // Primary: 2 pairs × 2 coils × 2 = 8; multi: +8; inj sim: 8 → 24.
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 24u,
+             "presync+1 mspark/pair: 16 IGN + 8 INJ");
+
+    uint32_t spark_a = 0u, spark_b = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark_a), 1u, "pair A primary spark");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, &spark_b), 1u, "pair B primary spark");
+    CHECK_TRUE(spark_a != spark_b, "multi-spark still on distinct pair angles");
+
+    uint8_t ign1_count = 0u;
+    for (uint8_t i = 0u; i < ecu_sched_encoder_test_get_evt_count(); ++i) {
+        uint32_t ts = 0u; uint8_t ch = 0u; uint8_t high = 0u;
+        ecu_sched_encoder_test_get_evt(i, &ts, &ch, &high);
+        if (ch == ECU_CH_IGN1) { ++ign1_count; }
+    }
+    CHECK_EQ(ign1_count, 4u,
+             "pair-A coil: primary + 1 multi-spark pair (4 events)");
+
+    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 24u,
+             "repeated heartbeat: still 24, no duplication");
+
+    ecu_sched_set_mspark(0u, 0u, 18u);
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
 // ── Disparo sequencial encoder (fase-consciente) ───────────────────────────
 // Helpers: o mock TIM2_CNT e o parâmetro tim2_now do heartbeat são
 // independentes — testes multi-passagem têm de os sincronizar. Qualquer
 // sequência com phase_valid tem de ficar abaixo de kMaxHeartbeatsWithoutCmp=6
 // (ou reancorar via flanco CMP aceite) senão o staleness invalida a fase.
 // omega seed: encoder_seq_seed_omega() em test/fixtures.h.
-
-static uint8_t encoder_evt_find_ch(uint8_t want_ch, uint8_t want_high,
-                                   uint32_t *out_ts) {
-    for (uint8_t i = 0u; i < ecu_sched_encoder_test_get_evt_count(); ++i) {
-        uint32_t ts = 0u; uint8_t ch = 0u; uint8_t high = 0u;
-        ecu_sched_encoder_test_get_evt(i, &ts, &ch, &high);
-        if (ch == want_ch && high == want_high) {
-            if (out_ts != nullptr) { *out_ts = ts; }
-            return 1u;
-        }
-    }
-    return 0u;
-}
+// encoder_evt_find_ch() está definido acima (antes dos testes de presync).
 
 void test_ecu_sched_encoder_placement(void) {
     section("ecu_sched: encoder engine_deg720_to_absolute placement");
@@ -1384,22 +1431,22 @@ void test_ecu_sched_encoder_sequential_distinct_targets(void) {
     encoder_seq_seed_omega();
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "pre: still presync");
 
-    // Phase A @ now=1500 → cyls {0,2}. 8 events (2 cyl × dwell+spark+on+off).
+    // Late-arm ≤60°: arm cyl0 then cyl2 in their windows (events accumulate).
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
-    ecu_sched_encoder_test_set_tim2_cnt(1500u);
-    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
-
+    encoder_seq_arm_cyl_in_window(0u, 3000u, 0u, 0u);
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "phase valid -> sequential");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 1u, "cyl0 armed in window");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 4u,
+             "only cyl0 (4 events) while cyl2 still outside window");
+
+    encoder_seq_arm_cyl_in_window(2u, 4000u, 0u, 0u);
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 8u,
-             "2 cylinders × 4 events (contrast: presync arms 16 with equal targets)");
+             "cyl0+cyl2 = 8 events after second window arm");
 
     uint32_t spark0 = 0u, spark2 = 0u;
     CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0), 1u, "cyl0 SPARK present");
     CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, &spark2), 1u, "cyl2 SPARK present");
     CHECK_TRUE(spark0 != spark2, "cyl0 and cyl2 spark targets are distinct");
-
-    // Presync contrast: equal targets across all 4 IGN — already asserted in
-    // test_ecu_sched_encoder_recompute_presync (evt0..3 share dwell, etc.).
 
     ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
     ecu_sched_test_reset();
@@ -1423,8 +1470,8 @@ void test_ecu_sched_encoder_sequential_trims(void) {
 
     encoder_seq_seed_omega();
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
-    ecu_sched_encoder_test_set_tim2_cnt(1500u);
-    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
+    encoder_seq_arm_cyl_in_window(0u, 3000u, 0u, 0u);
+    encoder_seq_arm_cyl_in_window(2u, 4000u, 0u, 0u);
 
     uint32_t spark0_base = 0u, inj_on0_base = 0u, inj_off0_base = 0u;
     CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0_base), 1u, "base cyl0 spark");
@@ -1448,8 +1495,8 @@ void test_ecu_sched_encoder_sequential_trims(void) {
 
     encoder_seq_seed_omega();
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
-    ecu_sched_encoder_test_set_tim2_cnt(1500u);
-    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
+    encoder_seq_arm_cyl_in_window(0u, 3000u, 0u, 0u);
+    encoder_seq_arm_cyl_in_window(2u, 4000u, 0u, 0u);
 
     uint32_t spark0_trim = 0u, spark2_trim = 0u;
     uint32_t inj_on0_trim = 0u, inj_off0_trim = 0u;
@@ -1498,40 +1545,27 @@ void test_ecu_sched_encoder_sequential_phase_progression(void) {
     encoder_seq_seed_omega();
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
 
-    // Phase A @ 1500 → {0,2}
-    ecu_sched_encoder_test_set_tim2_cnt(1500u);
-    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 1u, 1u);  // cmp edge resets staleness
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 1u, "phase A: cyl0 armed");
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, nullptr), 1u, "phase A: cyl2 armed");
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN4, 0u, nullptr), 0u, "phase A: cyl3 (IGN4) absent");
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN2, 0u, nullptr), 0u, "phase A: cyl1 (IGN2) absent");
+    // Late-arm: only cylinders whose arm_at is inside ≤60° get events.
+    const uint32_t now0 = encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 1u, "cyl0 armed in window");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN4, 0u, nullptr), 0u, "cyl3 not yet in window");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN2, 0u, nullptr), 0u, "cyl1 not yet in window");
 
-    // Capture long-lead visibility (v1 limitation): with advance=10, cyl0
-    // spark lands in phase B (710°) so deg720 pushes it +16384 — lead exceeds
-    // one TIM2 rev. Makes the "built almost two revs early" limitation visible.
-    uint32_t spark0 = 0u, spark2 = 0u;
+    uint32_t spark0 = 0u;
     encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0);
-    encoder_evt_find_ch(ECU_CH_IGN3, 0u, &spark2);
-    const uint32_t lead0 = spark0 - 1500u;
-    const uint32_t lead2 = spark2 - 1500u;
-    CHECK_TRUE(lead0 > 16384u || lead2 > 16384u,
-               "at least one cyl spark lead exceeds 1 TIM2 rev (v1 long-lead limitation)");
+    CHECK_TRUE(static_cast<int32_t>(spark0 - now0) <=
+               static_cast<int32_t>(ecu_sched_encoder_test_arm_window_counts() + 5000u),
+               "cyl0 spark lead is near the arm window (not ~1 rev early)");
 
-    // Phase B @ 1500+16384 → {3,1}. Re-seed phase (CALIBRATED=0 won't set_anchor
-    // from the cmp edge) and advance now by one TIM2 rev. Phase-A events for
-    // {0,2} are intentionally NOT purged here (disjunct masks) — they stay
-    // until that half-phase's next heartbeat.
-    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
-    const uint32_t now_b = 1500u + 16384u;
-    ecu_sched_encoder_test_set_tim2_cnt(now_b);
-    ecu_sched_encoder_heartbeat_tick(now_b, 4000u, 2u, 2u);
+    encoder_seq_arm_cyl_in_window(2u, 3500u, 1u, 1u);
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, nullptr), 1u, "cyl2 armed in its window");
 
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN4, 0u, nullptr), 1u, "phase B: cyl3 armed");
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN2, 0u, nullptr), 1u, "phase B: cyl1 armed");
-    // Prior half-phase events may still be queued (disjunct purge) — that is
-    // the cadence invariant, not a bug.
-    CHECK_TRUE(ecu_sched_encoder_test_get_evt_count() >= 8u,
-               "phase B added its 8 events; prior half-phase may still be present");
+    encoder_seq_arm_cyl_in_window(3u, 4000u, 2u, 2u);
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN4, 0u, nullptr), 1u, "cyl3 armed in its window");
+    encoder_seq_arm_cyl_in_window(1u, 4500u, 2u, 2u);
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN2, 0u, nullptr), 1u, "cyl1 armed in its window");
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt_count() >= 16u,
+               "all 4 cylinders armed across successive windows");
 
     ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
     ecu_sched_test_reset();
@@ -1558,14 +1592,13 @@ void test_ecu_sched_encoder_presync_to_sequential_transition(void) {
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u, "presync: 16 events");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "g_knock_sequential=0 in presync");
 
-    // Enter sequential: first rebuild must full-purge (no leftover 4-wide
-    // shared-target events from the other pair).
+    // Enter sequential: handoff purges presync 4-wide; late-arm may add 0..4
+    // events depending on window (here arm cyl0 only).
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
-    ecu_sched_encoder_test_set_tim2_cnt(1500u);
-    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 1u, 1u);
+    encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "g_knock_sequential=1 in sequential");
-    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 8u,
-             "after handoff: exactly 8 events, no leftover presync 4-wide");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 1u,
+             "cyl0 armed after handoff+window");
     CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN2, 0u, nullptr), 0u,
              "presync IGN2 shared-target gone after sequential handoff");
     CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN4, 0u, nullptr), 0u,
@@ -1585,7 +1618,7 @@ void test_ecu_sched_encoder_presync_to_sequential_transition(void) {
 }
 
 void test_ecu_sched_encoder_sequential_min_lead_skip(void) {
-    section("ecu_sched: encoder sequential — min-lead pair skip");
+    section("ecu_sched: encoder sequential — lead below min stays unarmed (window gate)");
     ecu_sched_test_reset();
 
     const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
@@ -1595,13 +1628,13 @@ void test_ecu_sched_encoder_sequential_min_lead_skip(void) {
         ems::engine::cyl_fuel_trim_pct[i] = 0;
     }
 
-    // Phase A @ now≈5451: cyl2 spark at 120° (advance=60, tdc=180) has
-    // counts=5461 → lead≈10 < min_lead=125 (omega=1.0) → pair skipped.
-    // cyl0 spark (710°, phase B) is a full image away and still arms.
+    // Window is [min_lead, 60°]. cyl2 spark @ 120° = 5461; now=5451 → lead=10
+    // which is below min_lead ⇒ outside the arm window ⇒ no insert, no skip
+    // counter (gate never calls arm_pair). cyl0 remains far away.
     ecu_sched_set_advance_deg(60u);
-    ecu_sched_set_eoi_lead_deg(355u);  // EOI far from the near spark
-    ecu_sched_set_dwell_ticks(2000u);
-    ecu_sched_set_inj_pw_ticks(2000u);
+    ecu_sched_set_eoi_lead_deg(355u);
+    ecu_sched_set_dwell_ticks(0u);
+    ecu_sched_set_inj_pw_ticks(0u);
 
     ecu_sched_encoder_test_set_tim2_cnt(0u);
     ecu_sched_encoder_heartbeat_tick(0u, 0u, 0u, 0u);
@@ -1611,21 +1644,16 @@ void test_ecu_sched_encoder_sequential_min_lead_skip(void) {
 
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
     const uint32_t near_now = 5451u;
-    CHECK_EQ(ecu_sched_encoder_phase_at(near_now), ECU_PHASE_A,
-             "precondition: now is in phase A (builds {0,2})");
     CHECK_EQ(ecu_sched_encoder_test_deg720_to_absolute(120u, near_now), 5461u,
-             "precondition: cyl2 spark_abs=5461, lead=10 < min_lead=125");
-    const uint32_t skips_before = ecu_sched_encoder_test_get_seq_min_lead_skip_count();
+             "precondition: cyl2 spark_abs=5461, lead=10");
 
     ecu_sched_encoder_test_set_tim2_cnt(near_now);
     ecu_sched_encoder_heartbeat_tick(near_now, 1000u + (near_now - 1000u), 1u, 1u);
 
-    CHECK_TRUE(ecu_sched_encoder_test_get_seq_min_lead_skip_count() > skips_before,
-               "near-lead spark increments skip counter");
     CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, nullptr), 0u,
-             "cyl2 spark pair skipped — never inverted via arm_channel clamp");
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 1u,
-             "cyl0 (phase-B spark, long lead) still armed");
+             "cyl2 not armed — lead below window floor (min_lead)");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 0u,
+             "cyl0 outside 60° window — not armed early");
 
     ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
     ecu_sched_test_reset();
@@ -1642,10 +1670,12 @@ void test_ecu_sched_encoder_sequential_min_lead_dwell_behind(void) {
         ems::engine::cyl_fuel_trim_pct[i] = 0;
     }
 
-    // omega=1.0 → dwell_span == dwell_ticks. Spark for cyl2 @ 120° = 5461,
-    // now=4000 → spark lead OK; dwell_ticks=3000 → dwell=2461 < now → skip.
+    // omega=1.0 → dwell_span == dwell_ticks. Spark/EOI for cyl2 @ 120° = 5461
+    // (eoi_lead=60 ⇒ same angle as spark). now=4500 → dwell=2461 behind;
+    // arm_at falls to inj_on=5461 with lead=961 ∈ [min_lead, 60°] → try arm
+    // then IGN pair skipped (dwell behind).
     ecu_sched_set_advance_deg(60u);
-    ecu_sched_set_eoi_lead_deg(355u);
+    ecu_sched_set_eoi_lead_deg(60u);
     ecu_sched_set_dwell_ticks(3000u);
     ecu_sched_set_inj_pw_ticks(0u);
 
@@ -1655,7 +1685,7 @@ void test_ecu_sched_encoder_sequential_min_lead_dwell_behind(void) {
     ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
 
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
-    const uint32_t now = 4000u;
+    const uint32_t now = 4500u;
     const uint32_t skips_before = ecu_sched_encoder_test_get_seq_min_lead_skip_count();
     ecu_sched_encoder_test_set_tim2_cnt(now);
     ecu_sched_encoder_heartbeat_tick(now, 1000u + (now - 1000u), 1u, 1u);
@@ -1672,7 +1702,7 @@ void test_ecu_sched_encoder_sequential_min_lead_dwell_behind(void) {
 }
 
 void test_ecu_sched_encoder_sequential_long_lead_refresh(void) {
-    section("ecu_sched: encoder sequential — refresh other-phase dwell spans");
+    section("ecu_sched: encoder sequential — no arm outside 60° window");
     ecu_sched_test_reset();
 
     const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
@@ -1682,41 +1712,28 @@ void test_ecu_sched_encoder_sequential_long_lead_refresh(void) {
         ems::engine::cyl_fuel_trim_pct[i] = 0;
     }
 
-    // advance=10 → cyl0 spark at 710° lands with +16384 (lead > 1 rev).
     ecu_sched_set_advance_deg(10u);
     ecu_sched_set_eoi_lead_deg(60u);
     ecu_sched_set_dwell_ticks(2000u);
     ecu_sched_set_inj_pw_ticks(0u);
 
-    // omega=0.5 first
     encoder_seq_seed_omega();
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    // Far from all arm points (now=1500, next EOI/dwell many thousands of counts away).
     ecu_sched_encoder_test_set_tim2_cnt(1500u);
     ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 1u, 1u);
+    CHECK_EQ(ecu_sched_is_sequential(), 1u, "sequential after phase");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "no events while all arm_at leads exceed 60°");
 
+    // Enter cyl0 window → events appear with lead ≤ window.
+    const uint32_t now0 = encoder_seq_arm_cyl_in_window(0u, 4000u, 1u, 1u);
     uint32_t spark0 = 0u, dwell0 = 0u;
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0), 1u, "cyl0 spark armed");
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell0), 1u, "cyl0 dwell armed");
-    CHECK_TRUE((spark0 - 1500u) > 16384u, "precondition: cyl0 spark lead > 1 rev");
-    const uint32_t span0 = spark0 - dwell0;
-
-    // Change omega to 1.0 without repeating same tim2 (seed ends at 1400;
-    // phase-B HB at 1500+16384). Sample omega via heartbeat on the way:
-    // d_tim2 from last sample (1400→17884) with matching tim5.
-    const uint32_t now_b = 1500u + 16384u;
-    ecu_sched_encoder_test_set_tim2_cnt(now_b);
-    // Force omega=1.0: previous sample was (1400,2000) from seed; this tick
-    // d_tim2=16484, choose d_tim5=16484 → omega≈1.0.
-    ecu_sched_encoder_heartbeat_tick(now_b, 2000u + 16484u, 2u, 2u);
-
-    uint32_t spark0_after = 0u, dwell0_after = 0u;
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0_after), 1u,
-             "cyl0 spark still present after other-phase HB");
-    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell0_after), 1u,
-             "cyl0 dwell refreshed");
-    CHECK_EQ(spark0_after, spark0, "spark absolute timestamp unchanged by refresh");
-    const uint32_t span1 = spark0_after - dwell0_after;
-    CHECK_TRUE(span1 != span0, "dwell span updated with new omega");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0), 1u, "cyl0 spark after window");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell0), 1u, "cyl0 dwell after window");
+    CHECK_TRUE(static_cast<int32_t>(dwell0 - now0) <=
+               static_cast<int32_t>(ecu_sched_encoder_test_arm_window_counts()),
+               "dwell lead ≤ 60° arm window");
 
     ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
     ecu_sched_test_reset();
@@ -1742,8 +1759,7 @@ void test_ecu_sched_encoder_sequential_multispark(void) {
 
     encoder_seq_seed_omega();
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
-    ecu_sched_encoder_test_set_tim2_cnt(1500u);
-    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 1u, 1u);
+    encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
 
     uint8_t ign1_count = 0u;
     for (uint8_t i = 0u; i < ecu_sched_encoder_test_get_evt_count(); ++i) {
@@ -1757,6 +1773,217 @@ void test_ecu_sched_encoder_sequential_multispark(void) {
 
     ecu_sched_set_mspark(0u, 0u, 18u);
     ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_prep_pw_overrides_global(void) {
+    section("ecu_sched: encoder sequential — prep PW overrides g_inj_pw_ticks");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(0u);
+    // Global PW deliberately different from prep flow.
+    ecu_sched_set_inj_pw_ticks(999999u);
+
+    ems::engine::EncFuelIgnPrep prep{};
+    prep.valid = 1u;
+    prep.flow_pw_us = 1000u;  // host ticks = 1000*60 = 60000
+    prep.dwell_ticks = 0u;
+    prep.eoi_lead_deg = 60u;
+    prep.base_advance_deg = 10;
+    prep.map_bar_x100 = 100u;
+    prep.fuel_press_bar_x1000 = 3000u;
+    ems::engine::enc_fuel_ign_prep_test_publish(prep);
+
+    encoder_seq_seed_omega();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
+
+    uint32_t inj_on = 0u, inj_off = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 1u, &inj_on), 1u, "inj_on present");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 0u, &inj_off), 1u, "inj_off present");
+    const uint32_t span = inj_off - inj_on;
+    // omega=0.5 → span_counts = ticks/2 = 30000 (plus scurve/delta_p ≈ identity at MAP=1bar)
+    CHECK_TRUE(span < 50000u,
+               "armed PW span from prep, not huge g_inj_pw_ticks");
+    CHECK_TRUE(span > 1000u, "armed PW span non-trivial from prep flow");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_prep_knock_per_cyl(void) {
+    section("ecu_sched: encoder sequential — knock retard only on armed cyl");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+        ems::engine::knock_retard_x10[i] = 0u;
+    }
+    ems::engine::knock_retard_x10[0] = 50u;  // 5°
+
+    ems::engine::EncFuelIgnPrep prep{};
+    prep.valid = 1u;
+    prep.base_advance_deg = 20;
+    prep.eoi_lead_deg = 60u;
+    prep.dwell_ticks = 0u;
+    prep.flow_pw_us = 0u;
+    ems::engine::enc_fuel_ign_prep_test_publish(prep);
+
+    encoder_seq_seed_omega();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
+    encoder_seq_arm_cyl_in_window(2u, 4000u, 1u, 1u);
+
+    uint32_t spark0 = 0u, spark2 = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0), 1u, "cyl0 spark");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, &spark2), 1u, "cyl2 spark");
+
+    // cyl0 advance 15°, cyl2 advance 20° → distinct absolute targets.
+    CHECK_TRUE(spark0 != spark2, "knock on cyl0 moves its spark vs unknocked cyl2");
+
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::knock_retard_x10[i] = 0u;
+    }
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_omega_refresh(void) {
+    section("ecu_sched: encoder sequential — Δω refreshes dwell, spark fixed");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(4000u);
+    ecu_sched_set_inj_pw_ticks(0u);
+
+    encoder_seq_seed_omega();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    const uint32_t now = encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
+
+    uint32_t dwell0 = 0u, spark0 = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell0), 1u, "dwell before refresh");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0), 1u, "spark before refresh");
+    const uint32_t refreshes_before = ecu_sched_encoder_test_get_omega_refresh_count();
+
+    // Mild ω rise (~0.5 → 0.7, >2% threshold) so new dwell stays ahead of now.
+    ecu_sched_encoder_omega_test_reset();
+    ecu_sched_encoder_omega_sample(0u, 0u);
+    ecu_sched_encoder_omega_sample(700u, 1000u);  // ω=0.7
+    ecu_sched_encoder_test_set_tim2_cnt(now);
+    ecu_sched_encoder_heartbeat_tick(now, 1000u, 1u, 1u);
+
+    uint32_t dwell1 = 0u, spark1 = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell1), 1u, "dwell after refresh");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark1), 1u, "spark after refresh");
+    CHECK_EQ(spark1, spark0, "spark absolute unchanged after ω refresh");
+    CHECK_TRUE(dwell1 < dwell0,
+               "dwell moves earlier (more angle) when ω rises");
+    CHECK_TRUE(ecu_sched_encoder_test_get_omega_refresh_count() > refreshes_before,
+               "omega refresh counter increments");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_omega_refresh_lock(void) {
+    section("ecu_sched: encoder sequential — no refresh past limit angle");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(4000u);
+    ecu_sched_set_inj_pw_ticks(0u);
+
+    encoder_seq_seed_omega();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
+
+    uint32_t dwell0 = 0u, spark0 = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell0), 1u, "dwell armed");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark0), 1u, "spark armed");
+
+    // Park just before spark (inside lock / min_lead zone).
+    const uint32_t near = spark0 - 2u;
+    ecu_sched_encoder_omega_sample(near + 100u, 4100u);
+    ecu_sched_encoder_omega_sample(near + 2100u, 4200u);
+    const uint32_t refreshes_before = ecu_sched_encoder_test_get_omega_refresh_count();
+    ecu_sched_encoder_test_set_tim2_cnt(near);
+    ecu_sched_encoder_heartbeat_tick(near, 4200u, 1u, 1u);
+
+    uint32_t dwell1 = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell1), 1u, "dwell still queued");
+    CHECK_EQ(dwell1, dwell0, "dwell frozen after limit-angle lock");
+    CHECK_EQ(ecu_sched_encoder_test_get_omega_refresh_count(), refreshes_before,
+             "no refresh after lock");
+
+    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_enc_finalize_map_window_per_cyl(void) {
+    section("enc_cyl_setpoints: map_window scales PW per cyl in finalize");
+    ecu_sched_test_reset();
+    map_window_reset();
+
+    CHECK_EQ(map_window_slot_for_cyl(0u), 0u, "cyl0 TDC 0° → slot 0");
+    CHECK_EQ(map_window_slot_for_cyl(2u), 1u, "cyl2 TDC 180° → slot 1");
+
+    ems::engine::EncFuelIgnPrep prep{};
+    prep.valid = 1u;
+    prep.flow_pw_us = 5000u;
+    prep.map_bar_x100 = 100u;           // fused 1.00 bar
+    prep.fuel_press_bar_x1000 = 3000u;  // 3.0 bar abs → ΔP vs MAP
+    prep.dead_time_us = 0u;
+    prep.base_advance_deg = 10;
+    prep.eoi_lead_deg = 60u;
+    enc_fuel_ign_prep_test_publish(prep);
+
+    map_window_enable = 0u;
+    const CylArmSetpoints base0 = finalize_cyl_setpoints(0u);
+    const CylArmSetpoints base2 = finalize_cyl_setpoints(2u);
+    CHECK_EQ(base0.inj_pw_ticks, base2.inj_pw_ticks,
+             "enable=0: same PW for cyl0 and cyl2");
+
+    map_window_enable = 1u;
+    map_window_test_set_slot_bar_x1000(0u, 800u);   // 0.80 bar
+    map_window_test_set_slot_bar_x1000(1u, 1200u);  // 1.20 bar
+    const CylArmSetpoints win0 = finalize_cyl_setpoints(0u);
+    const CylArmSetpoints win2 = finalize_cyl_setpoints(2u);
+    CHECK_TRUE(win0.inj_pw_ticks != win2.inj_pw_ticks,
+               "enable=1 + distinct slots → different PW per cyl");
+    CHECK_TRUE(win2.inj_pw_ticks > win0.inj_pw_ticks,
+               "higher MAP slot → higher PW (scale + ΔP)");
+
+    map_window_enable = 0u;
+    map_window_reset();
+    enc_cyl_setpoints_reset();
     ecu_sched_test_reset();
 }
 
@@ -2101,8 +2328,7 @@ void test_ecu_sched_presync_table(void) {
     }
     CHECK_TRUE(found_any, "at least one presync event uses ECU_PHASE_ANY");
 
-    // Presync IGN events include DWELL_START and SPARK for all 4 coils simultaneously
-    // → table should have ≥ 2 ignition actions (at minimum: DWELL_START + SPARK)
+    // Presync IGN: wasted pairs (2 coils @ spark_a, 2 @ spark_b) → ≥4 IGN actions.
     uint8_t n_ign = 0u;
     for (uint8_t i = 0u; i < tsz; ++i) {
         uint8_t tooth, frac, ch, action, phase;
@@ -2110,7 +2336,7 @@ void test_ecu_sched_presync_table(void) {
             if (action == ECU_ACT_DWELL_START || action == ECU_ACT_SPARK) { ++n_ign; }
         }
     }
-    CHECK_TRUE(n_ign >= 2u, "presync table: ≥2 ignition events");
+    CHECK_TRUE(n_ign >= 4u, "presync table: ≥4 ignition events (2 pairs × dwell/spark)");
 }
 
 // ============================================================================

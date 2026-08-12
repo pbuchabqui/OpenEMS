@@ -27,6 +27,10 @@ inline constexpr uint32_t kMaxSeqInjPwDeg = 648U;      // 90% of 720°
 inline constexpr uint32_t kMaxSeqInjPwCounts = (32768U * 9U) / 10U;  // 90% of 2 TIM2 revs
 inline constexpr uint32_t kMaxPresyncInjPwDeg = 324U;  // 90% of 360°
 inline constexpr uint32_t kMaxPresyncInjPwCounts = (16384U * 9U) / 10U;  // 90% of 1 TIM2 rev
+// Max look-ahead to arm a sequential cylinder (dwell/inj_on): 60° of crank.
+inline constexpr uint32_t kSeqArmWindowCounts = (16384U * 60U) / 360U;  // 2730
+// Relative |Δω|/ω ×1000 to rewrite pending dwell/inj_on (2% default).
+inline constexpr uint32_t kOmegaRefreshRelX1000 = 20U;
 
 #define ECU_SCHED_US_TO_TICKS_INTERNAL(us) ((us) * 125U / 2U)
 #define TOOTH_NS_TO_SCHED_INTERNAL(ns) \
@@ -37,6 +41,12 @@ inline constexpr uint8_t kInjCh[4] = {
     ECU_CH_INJ1, ECU_CH_INJ2, ECU_CH_INJ3, ECU_CH_INJ4};
 inline constexpr uint8_t kIgnCh[4] = {
     ECU_CH_IGN1, ECU_CH_IGN2, ECU_CH_IGN3, ECU_CH_IGN4};
+
+// Wasted-spark companions (engine_config.h): 0↔3 @ TDC 0°/360°, 2↔1 @ 180°/540°.
+// Em presync (cego à fase) cada par dispara 1×/volta no ângulo do seu TDC
+// colapsado — nunca as 4 bobinas no mesmo alvo.
+inline constexpr uint8_t kWastedIgnPairA[2] = {ECU_CH_IGN1, ECU_CH_IGN4};  // cyl 0,3
+inline constexpr uint8_t kWastedIgnPairB[2] = {ECU_CH_IGN3, ECU_CH_IGN2};  // cyl 2,1
 
 // Inhibit mask bit for INJ/IGN channels (cyl 0..3), indexado por ECU_CH_*.
 // Movido de ecu_sched.cpp (era static ali) — ecu_sched_angle_encoder.cpp

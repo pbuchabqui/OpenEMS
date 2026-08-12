@@ -90,6 +90,12 @@ void fuel_ae_set_threshold(uint16_t threshold_tpsdot_x10) noexcept;
 void fuel_ae_set_taper(uint8_t taper_cycles) noexcept;
 void fuel_ae_reset() noexcept;
 
+// STFT / X-τ learn freeze enquanto o pulso AE tip-in (µs > 0) estiver activo.
+// Chamar a cada tick 2 ms com o ae_pw_us calculado (também quando 0).
+void fuel_ae_notify_pulse(int32_t ae_pw_us) noexcept;
+bool fuel_ae_stft_freeze_active() noexcept;
+void fuel_ae_stft_freeze_clear() noexcept;
+
 // AE/DE from precomputed TPSdot (map fusion ring).
 // tpsdot > +threshold → tip-in enrichment (µs > 0);
 // tpsdot < −threshold → tip-out enleanment (µs < 0, 50% authority).

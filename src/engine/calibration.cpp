@@ -97,7 +97,7 @@ int16_t ae_clt_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 7
 uint16_t ae_clt_sens[kCorrectionTableSize] = {11u, 10u, 9u, 8u, 7u, 6u, 5u, 4u};
 // Limiar 3 %/s (×10) — evita AE em ruído de TPS; tip-in real fica acima de light-transient.
 uint16_t ae_tpsdot_threshold_x10 = 30u;
-uint16_t ae_taper_cycles = 8u;
+uint16_t ae_taper_cycles = 8u;  // 8 × 2 ms ≈ 16 ms wall-clock (não ciclos motor)
 uint16_t ae_max_pw_us = 5000u;
 // Eixo de taxa tip-in/tip-out (%/s ×10). Começa no limiar default.
 uint16_t ae_tpsdot_axis_x10[kAeRateTableSize] = {30u, 80u, 200u, 500u};

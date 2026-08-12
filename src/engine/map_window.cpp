@@ -1,5 +1,6 @@
 #include "engine/map_window.h"
 #include "engine/calibration.h"
+#include "engine/engine_config.h"
 
 namespace ems::engine {
 
@@ -102,6 +103,11 @@ uint32_t map_window_cycles() noexcept {
     return g_cycles;
 }
 
+uint8_t map_window_slot_for_cyl(uint8_t cyl) noexcept {
+    if (cyl >= cfg::kCylinderCount) { return 0u; }
+    return static_cast<uint8_t>((cfg::cyl_tdc_deg(cyl) / kSlotSpanDeg) % kSlots);
+}
+
 void map_window_reset() noexcept {
     g_acc = 0u;
     g_cnt = 0u;
@@ -113,5 +119,13 @@ void map_window_reset() noexcept {
         g_balance_x8[i] = 0;
     }
 }
+
+#if defined(EMS_HOST_TEST)
+void map_window_test_set_slot_bar_x1000(uint8_t slot, uint16_t bar_x1000) noexcept {
+    if (slot < kSlots) {
+        g_slot_bar_x1000[slot] = bar_x1000;
+    }
+}
+#endif
 
 }  // namespace ems::engine

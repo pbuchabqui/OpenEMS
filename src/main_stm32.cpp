@@ -42,6 +42,7 @@ int main() { return 0; }
 #include "engine/cut_reason.h"
 #include "engine/vehicle_inputs.h"
 #include "engine/ecu_sched.h"
+#include "engine/enc_cyl_setpoints.h"
 #include "engine/engine_config.h"
 #include "engine/etb_control.h"
 #include "engine/etb_autocal.h"
@@ -114,7 +115,7 @@ static bool g_rev_limit_active = false;   // fuel cut active via rev limiter
 uint32_t g_dbg_rev_limit_trips = 0u;
 uint32_t g_dbg_rev_limit_rpm_x10 = 0u;   // último rpm_x10 que armou o trip
 uint32_t g_dbg_rev_limit_rpm_max = 0u;   // maior rpm_x10 alguma vez visto (glitch?)
-static bool     g_ae_active        = false;
+
 static uint32_t g_last_net_pw_us   = 0u;
 // Barometric correction: amostrar MAP quando motor parado por >300ms após key-on
 static uint32_t g_baro_stopped_since_ms = 0u;
@@ -1020,7 +1021,7 @@ int main() {
                     ems::engine::g_fuel_cut_reasons = static_cast<uint16_t>(
                         ems::engine::g_fuel_cut_reasons | ems::engine::kFuelCutDfco);
                     g_last_net_pw_us = 0u;
-                    g_ae_active = false;
+                    ems::engine::fuel_ae_notify_pulse(0);
                     ems::engine::transient_fuel_reset();
                 } else if (final_pw_us_base > fuel_corr.dead_time_us) {
                     uint32_t fuel_pw_us =
@@ -1064,8 +1065,11 @@ int main() {
                     } else {
                         final_pw_us_base = static_cast<uint32_t>(adj);
                     }
-                    // STFT freeze only on tip-in enrich (not DE).
-                    g_ae_active = (ae_pw_us > 0);
+                }
+                // Sempre: tip-in (µs>0) freezes STFT; pulse==0 limpa no próprio 2 ms
+                // (antes ficava sticky até ao slot 100 ms).
+                if (!decel_cut_active) {
+                    ems::engine::fuel_ae_notify_pulse(ae_pw_us);
                 }
                 const int16_t base_advance_deg = ems::engine::get_advance_prepared(fuel_lookup);
                 // Máximo entre os 4 cilindros, não só o cilindro 0 (FIX:
@@ -1134,12 +1138,38 @@ int main() {
                 ems::engine::fuel_inj_duty_update(final_pw_us, snap.rpm_x10, 2u);
 
                 const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
+                const uint32_t eoi_lead =
+                    static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(snap.rpm_x10));
+
+#if EMS_MT6835_ENCODER
+                {
+                    ems::engine::EncFuelIgnPrep prep{};
+                    prep.valid = 1u;
+                    prep.fuel_cut = static_cast<uint8_t>(
+                        fuel_cut_active || decel_cut_active || flood_clear);
+                    prep.cranking = static_cast<uint8_t>(qc.cranking);
+                    prep.map_bar_x100 = map_bar_x100;
+                    prep.fuel_press_bar_x1000 = sensors.fuel_press_bar_x1000;
+                    prep.dead_time_us = fuel_corr.dead_time_us;
+                    prep.flow_pw_us = quick_crank_pw_us;
+                    prep.base_advance_deg = base_advance_deg;
+                    prep.crank_spark_deg = ems::engine::crank_spark_deg;
+                    prep.iat_spark_deg = iat_spark_deg;
+                    prep.clt_spark_deg = clt_spark_deg;
+                    prep.idle_spark_deg = idle_spark_corr_deg;
+                    prep.antijerk_retard_deg = antijerk_retard;
+                    prep.torque_retard_deg = g_torque_spark_retard_deg;
+                    prep.dwell_ticks = dwell_ticks;
+                    prep.eoi_lead_deg = eoi_lead;
+                    ems::engine::enc_fuel_ign_prep_publish(prep);
+                }
+#endif
 
                 ::ecu_sched_commit_calibration(
                     static_cast<uint32_t>(sched_spark_deg < 0 ? 0 : sched_spark_deg),
                     dwell_ticks,
                     inj_pw_ticks,
-                    static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(snap.rpm_x10)));
+                    eoi_lead);
             } else if (allow_half_crank_batch) {
                 // (2) HALF_SYNC + cranking: simultaneous batch, crank PW only (no VE/STFT/AE).
                 // Presync auto already selects SIMULTANEOUS while is_cranking().
@@ -1147,7 +1177,7 @@ int main() {
                 ::ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
                 ems::engine::misfire_set_all_inhibit(true);
                 ems::engine::misfire_encoder_set_all_inhibit(true);
-                g_ae_active = false;
+                ems::engine::fuel_ae_notify_pulse(0);
                 ems::engine::transient_fuel_reset();
 
                 const uint32_t req_us = ems::engine::default_req_fuel_us();
@@ -1188,7 +1218,7 @@ int main() {
                 g_last_pw_ms_x10 = 0u;
                 g_last_net_pw_us = 0u;
                 g_last_advance_deg = clamp_i8(sched_spark_deg, -10, 40);
-                g_ae_active = false;
+                ems::engine::fuel_ae_notify_pulse(0);
             }
             g_prev_tps_pct_x10 = sensors.etb_tps_pct_x10;
             ems::app::ui_update_rt_map_fuel(map_bar_x100, g_last_net_pw_us);
@@ -1372,7 +1402,7 @@ int main() {
                     ems::engine::get_lambda_target_x1000(snap.rpm_x10, map_bar_x100);
                 const bool rev_cut = g_limp_active &&
                     (snap.rpm_x10 > kLimpRpmLimit_x10);
-                const bool ae_active = g_ae_active;
+                const bool ae_active = ems::engine::fuel_ae_stft_freeze_active();
                 // STFT congelado em qualquer condição de corte intencional de combustível:
                 // - rev_cut: limp mode
                 // - decel_cut: borboleta fechada em desaceleração
@@ -1391,7 +1421,7 @@ int main() {
                     sensors.clt_degc_x10, lambda_valid,
                     ae_active, stft_inhibit, g_last_net_pw_us,
                     sensors.app_pct_x10);
-                g_ae_active = false;
+                ems::engine::fuel_ae_stft_freeze_clear();
                 g_last_stft_pct = clamp_i8(static_cast<int16_t>(stft / 10), -25, 25);
                 // ÷5 (não ÷4): ÷4 saturava o u8 em 1020 — alvos 1.02-1.27 exibiam 1.02
                 g_last_lambda_target_d4 = ems::engine::clamp_u8(lambda_target_x1000 / 5u);

@@ -226,9 +226,14 @@ uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept;
 // cadência do split light/heavy directamente, sem depender de efeitos
 // secundários do caminho pesado.
 uint8_t ecu_sched_encoder_test_get_subtick_count(void) noexcept;
-// Contador de pares dwell/spark ou inj saltados por rebuild_sequential()
+// Contador de pares dwell/spark ou inj saltados por try_arm_sequential_due()
 // quando o alvo de spark/EOI estava dentro do piso min-lead.
 uint32_t ecu_sched_encoder_test_get_seq_min_lead_skip_count(void) noexcept;
+uint32_t ecu_sched_encoder_test_get_omega_refresh_count(void) noexcept;
+// Janela máxima de armamento sequencial (counts TIM2 ≡ 60°).
+uint32_t ecu_sched_encoder_test_arm_window_counts(void) noexcept;
+// Prediz o alvo absoluto mais cedo (dwell vs inj_on) para `cyl` em `now_raw`.
+uint32_t ecu_sched_encoder_test_predict_arm_at(uint8_t cyl, uint32_t now_raw) noexcept;
 // Mock de TIM2_CNT para os testes da fila TIM2/CH3 (distinto de
 // ecu_sched_test_set_tim2_cnt, que é alias legado de ems_test_tim5_cnt).
 void ecu_sched_encoder_test_set_tim2_cnt(uint32_t v) noexcept;

@@ -223,6 +223,7 @@ int main(void) {
     test_ecu_sched_encoder_recompute_presync();
     test_ecu_sched_encoder_recompute_presync_bank_toggle();
     test_ecu_sched_encoder_recompute_presync_pw_clamp();
+    test_ecu_sched_encoder_presync_multispark();
     test_ecu_sched_encoder_placement();
     test_ecu_sched_encoder_sequential_distinct_targets();
     test_ecu_sched_encoder_sequential_trims();
@@ -232,6 +233,11 @@ int main(void) {
     test_ecu_sched_encoder_sequential_min_lead_dwell_behind();
     test_ecu_sched_encoder_sequential_long_lead_refresh();
     test_ecu_sched_encoder_sequential_multispark();
+    test_ecu_sched_encoder_sequential_prep_pw_overrides_global();
+    test_ecu_sched_encoder_sequential_prep_knock_per_cyl();
+    test_ecu_sched_encoder_sequential_omega_refresh();
+    test_ecu_sched_encoder_sequential_omega_refresh_lock();
+    test_enc_finalize_map_window_per_cyl();
 
     // ── QUICK CRANK ─────────────────────────────────────────────────────
     printf("\n=== QUICK CRANK ===");

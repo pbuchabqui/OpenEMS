@@ -18,17 +18,22 @@ namespace ems::engine {
 //
 // Slot ≠ cilindro físico: o mapeamento depende do offset do trigger e da ordem
 // de ignição — calibrar map_window_open_deg observando qual slot responde a
-// qual cilindro. Requer FULL_SYNC + fase de came confirmada (cmp_confirms ≥ 2);
+// qual cilindro. Helper map_window_slot_for_cyl() usa TDC/180 (convenção
+// open_deg alinhado). Requer FULL_SYNC + fase de came confirmada (cmp_confirms ≥ 2);
 // sem came a atribuição 720° é ambígua (slots emparelhados trocariam).
 //
 // Contexto: chamado da ISR do CKP (via sensors_on_tooth) — só inteiros; a
-// única divisão ocorre no fecho de janela (~4×/ciclo). Nesta fase o resultado
-// é medição/telemetria; aplicação ao fuel por cilindro é fase posterior.
+// única divisão ocorre no fecho de janela (~4×/ciclo). Com map_window_enable,
+// o finalize encoder (enc_cyl_setpoints) usa o MAP do slot por cilindro
+// para ΔP e escala de fluxo; senão continua telemetria-only no path CKP.
 
 // Chamada por dente. map_bar_x1000 = leitura instantânea já convertida.
 // Gate interno: map_window_enable == 0 → no-op imediato.
 void map_window_on_tooth(const ems::drv::CkpSnapshot& snap,
                          uint16_t map_bar_x1000) noexcept;
+
+// Slot 0..3 para o cilindro físico (TDC/180), assumindo open_deg calibrado.
+uint8_t map_window_slot_for_cyl(uint8_t cyl) noexcept;
 
 // Última média fechada do slot (bar × 1000; 0 = ainda sem janela fechada).
 uint16_t map_window_slot_bar_x1000(uint8_t slot) noexcept;
@@ -41,5 +46,9 @@ uint32_t map_window_cycles() noexcept;
 
 // Reset total (init / host tests / perda de sync prolongada).
 void map_window_reset() noexcept;
+
+#if defined(EMS_HOST_TEST)
+void map_window_test_set_slot_bar_x1000(uint8_t slot, uint16_t bar_x1000) noexcept;
+#endif
 
 }  // namespace ems::engine
