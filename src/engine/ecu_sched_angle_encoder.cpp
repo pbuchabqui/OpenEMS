@@ -1219,18 +1219,13 @@ uint32_t ecu_sched_encoder_test_predict_arm_at(uint8_t cyl, uint32_t now_raw) no
         ecu_sched_encoder_test_deg720_to_absolute(spark_deg, now_raw);
     const uint32_t eoi_abs =
         ecu_sched_encoder_test_deg720_to_absolute(eoi_deg, now_raw);
-    int32_t omega = 0;
-    if (ecu_sched_encoder_omega_valid() != 0u) {
-        omega = ecu_sched_encoder_omega_x65536();
-    }
-    uint32_t dwell_span = 0u;
-    uint32_t inj_span = 0u;
-    if (omega > 0) {
-        dwell_span = static_cast<uint32_t>(
-            (static_cast<int64_t>(sp.dwell_ticks) * omega) / 65536);
-        inj_span = static_cast<uint32_t>(
-            (static_cast<int64_t>(sp.inj_pw_ticks) * omega) / 65536);
-    }
+    // Mesma fórmula ω→span da produção (duration_ticks_to_span_counts), em
+    // vez de reimplementá-la aqui: evita que este hook de teste "se prove a
+    // si mesmo" caso a fórmula real mude sem o teste acompanhar.
+    const uint32_t dwell_span =
+        si::encoder::duration_ticks_to_span_counts(sp.dwell_ticks);
+    const uint32_t inj_span =
+        si::encoder::duration_ticks_to_span_counts(sp.inj_pw_ticks);
     const uint32_t dwell_abs = spark_abs - dwell_span;
     const uint32_t inj_on_abs = eoi_abs - inj_span;
     const int32_t ld = static_cast<int32_t>(dwell_abs - now_raw);
