@@ -8,7 +8,14 @@ namespace ems::engine {
 
 namespace {
 
-constexpr uint32_t kMisfireEncoderWindowDeg      = 62u;  // ~10/58×360°, paridade com a janela CKP (10 dentes)
+// Nominal 62° (~10/58×360°, paridade pretendida com a janela CKP de 10
+// dentes) — mas o bucketing em grão de 256 counts (kSubTickCounts, ver
+// init() abaixo) arredonda por excesso (ceil) para 12 buckets = 3072 counts
+// = 67.5° reais, ~9% mais larga que o nominal. Não é um bug corrigido nesta
+// revisão — só documentado; apertar o arredondamento para chegar aos 62°
+// exatos é uma mudança de comportamento de deteção, precisa de validação em
+// bancada à parte.
+constexpr uint32_t kMisfireEncoderWindowDeg      = 62u;
 constexpr uint32_t kMisfireEncoderSubticksPerRev = 64u;  // 64×256 = 16384, exacto
 constexpr uint32_t kSubTickCounts                = 16384u / kMisfireEncoderSubticksPerRev;  // 256
 

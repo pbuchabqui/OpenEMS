@@ -94,8 +94,16 @@ void xtau_seed_table_if_needed() noexcept {
     if (g_xtau_table_seeded) {
         return;
     }
+    // Seed conservador a -40°C (índice [0] de xtau_clt_axis_x10, calibration.cpp
+    // — eixo {-400,-100,0,200,...} em x10 °C; [0] é o ponto mais frio da
+    // tabela, não 0°C). Fração de parede mais alta / τ mais longo — escolhido
+    // de propósito como ponto de partida conservador para arranque a frio
+    // antes de as 16 células serem aprendidas individualmente. Como
+    // g_wall_state.calibration_state é um flag GLOBAL (não por-célula, ver
+    // xtau_autocalib.h), uma única célula aprendida marca a tabela inteira
+    // como calibrada — as células ainda não visitadas continuam com este seed.
     ems::engine::XTauParams seed = {};
-    seed.x_fraction_q8 = ems::engine::xtau_x_fraction_q8[0];  // baseline a 0°C
+    seed.x_fraction_q8 = ems::engine::xtau_x_fraction_q8[0];
     seed.tau_cycles = ems::engine::xtau_tau_cycles[0];
     seed.learned_x_min_q8 = 64u;   // 25%
     seed.learned_x_max_q8 = 192u;  // 75%

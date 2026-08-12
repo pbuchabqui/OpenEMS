@@ -1169,6 +1169,18 @@ int main() {
 
                 // Protecção de duty (FOME #215): alimenta com o PW final
                 // comandado; o corte em si entra na mask do próximo tick.
+                //
+                // LIMITE CONHECIDO (EMS_MT6835_ENCODER): final_pw_us usa o MAP
+                // FUNDIDO do motor inteiro (map_bar_x100). Quando o slot de MAP
+                // por-cilindro está válido (map_window_slot_valid_for_cyl(),
+                // ver enc_cyl_setpoints.cpp:finalize_cyl_setpoints()), o PW
+                // REALMENTE armado no injetor usa esse MAP por-cilindro, que
+                // pode ser maior num motor com pulsação de admissão real — a
+                // proteção fica PERMISSIVA nesse caso (sub-reporta o duty
+                // real), nunca conservadora. Documentado, não corrigido nesta
+                // revisão — mudar a fonte do valor vigiado é uma alteração de
+                // superfície de proteção de hardware, precisa de desenho e
+                // validação em bancada à parte.
                 ems::engine::fuel_inj_duty_update(final_pw_us, snap.rpm_x10, 2u);
 
                 const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);

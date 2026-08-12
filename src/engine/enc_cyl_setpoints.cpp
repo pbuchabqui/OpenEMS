@@ -111,6 +111,14 @@ CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl, bool commit_fuel) noexcept
 
             uint32_t flow_u = 0U;
             // Fase 4: com slot MAP válido, re-lookup VE/λ + base PW (não scale).
+            //
+            // LIMITE CONHECIDO: o pw_us resultante deste ramo (MAP por-cilindro,
+            // map_cyl) é o que fica efetivamente armado no injetor via
+            // arm_sequential_cyl() — mas fuel_inj_duty_update() (main_stm32.cpp)
+            // continua a ser alimentado com o PW calculado sobre o MAP FUNDIDO
+            // do motor. Se map_cyl > MAP fundido (pulsação de admissão real), a
+            // proteção de duty sub-reporta o duty real. Documentado no ponto de
+            // chamada de fuel_inj_duty_update(); não corrigido nesta revisão.
             if (map_window_slot_valid_for_cyl(cyl) && prep.rpm_x10 != 0U) {
                 const uint8_t ve = get_ve(prep.rpm_x10, map_cyl);
                 const uint16_t lambda =

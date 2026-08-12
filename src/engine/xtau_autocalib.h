@@ -8,7 +8,12 @@ namespace ems::engine {
 struct WallFuelState {
     int32_t wall_fuel_us_q8;      // Combustível acumulado na parede (Q8)
     uint32_t last_update_ms;       // Timestamp da última atualização
-    uint8_t calibration_state;     // 0=inactive, 1=learning, 2=calibrated
+    // 0=inactive, 1=learning, 2=calibrated — flag GLOBAL, não por-célula da
+    // tabela 2D RPM×MAP: uma única célula que acumula amostras suficientes
+    // marca as 16 células como "calibrado" (xtau_autocalib.cpp:366), mesmo
+    // que as restantes ainda tenham o seed conservador de xtau_seed_table_if_needed().
+    uint8_t calibration_state;
+
     uint8_t learning_attempts;     // Contador de tentativas de calibração
 };
 
