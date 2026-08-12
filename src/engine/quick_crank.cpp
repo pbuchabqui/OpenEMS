@@ -145,6 +145,25 @@ uint16_t sanitized_prime_max_pw_us() noexcept {
     return max_pw;
 }
 
+// Calcula + arma a PW de prime pulse — mesma fórmula para os dois domínios
+// de trigger (dente CKP em prime_on_tooth(), posição/tempo do encoder em
+// quick_crank_encoder_poll()): tabela de enriquecimento de cranking por CLT
+// + dead time mais recente, clampado ao teto configurado.
+void arm_prime_pulse() noexcept {
+    const uint32_t mult = interp_u16(
+        kCrankFuelMult,
+        static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
+        g_prime_clt_x10);
+    uint32_t pw = ((ems::engine::kDefaultReqFuelUs * mult) >> 8u) +
+        static_cast<uint32_t>(g_prime_dead_time_us);
+    const uint16_t prime_max_pw_us = sanitized_prime_max_pw_us();
+    if (pw > prime_max_pw_us) { pw = prime_max_pw_us; }
+
+    g_prime_pw_us   = pw;
+    g_prime_pending = true;
+    g_prime_done    = true;
+}
+
 uint16_t afterstart_mult_x256(uint32_t now_ms, int16_t clt_x10) noexcept {
     if (g_afterstart_duration_ms == 0u) {
         return 256u;
@@ -210,20 +229,9 @@ void prime_on_tooth(const CkpSnapshot& snap) noexcept {
     
     if (g_prime_tooth_count < target_tooth) { return; }
 
-    // Dente-alvo: calcula PW usando a tabela de enriquecimento de cranking,
-    // CLT e dead time mais recentes atualizados pelo loop de fundo.
-    const uint32_t mult = interp_u16(
-        kCrankFuelMult,
-        static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
-        g_prime_clt_x10);
-    uint32_t pw = ((ems::engine::kDefaultReqFuelUs * static_cast<uint32_t>(mult)) >> 8u) +
-        static_cast<uint32_t>(g_prime_dead_time_us);
-    const uint16_t prime_max_pw_us = sanitized_prime_max_pw_us();
-    if (pw > prime_max_pw_us) { pw = prime_max_pw_us; }
-
-    g_prime_pw_us  = pw;
-    g_prime_pending = true;
-    g_prime_done   = true;
+    // Dente-alvo: calcula + arma a PW usando a tabela de enriquecimento de
+    // cranking, CLT e dead time mais recentes atualizados pelo loop de fundo.
+    arm_prime_pulse();
 }
 
 }  // namespace ems::drv
@@ -299,19 +307,9 @@ void quick_crank_encoder_poll(uint32_t tim2_now, uint32_t now_ms) noexcept {
     }
     if (advanced < target_counts) { return; }
 
-    // Dente-alvo (equivalente angular): mesma fórmula de PW de prime_on_tooth().
-    const uint32_t mult = interp_u16(
-        kCrankFuelMult,
-        static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
-        g_prime_clt_x10);
-    uint32_t pw = ((kDefaultReqFuelUs * mult) >> 8u) +
-        static_cast<uint32_t>(g_prime_dead_time_us);
-    const uint16_t prime_max_pw_us = sanitized_prime_max_pw_us();
-    if (pw > prime_max_pw_us) { pw = prime_max_pw_us; }
-
-    g_prime_pw_us   = pw;
-    g_prime_pending = true;
-    g_prime_done    = true;
+    // Dente-alvo (equivalente angular): arm_prime_pulse() acima — mesma
+    // fórmula de PW usada por prime_on_tooth().
+    arm_prime_pulse();
 }
 
 QuickCrankOutput quick_crank_update(uint32_t now_ms,
