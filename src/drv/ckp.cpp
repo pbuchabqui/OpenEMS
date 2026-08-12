@@ -654,10 +654,12 @@ CkpSnapshot ckp_snapshot() noexcept {
 // (tim5_freerun_init() não configura captura), então g_state.snap ficaria
 // congelado em WAIT_GAP/RPM=0 para sempre sem isto. Todos os consumidores
 // (main_stm32.cpp full_sync/half_sync, auxiliaries.cpp VVT, misfire_detect,
-// ui_protocol*.cpp) já leem só ckp_snapshot() sem se importar com a origem —
-// reutilizar CkpSnapshot/SyncState tal como existem é o que os mantém a
-// funcionar sem qualquer alteração (ver docs/dev/mt6835_encoder_fork.md,
-// "Sync-state em modo encoder"). Chamador: drv/encoder_sync.cpp.
+// ui_protocol*.cpp) já leem só ckp_snapshot() sem se importar com a origem,
+// mas isso só chega ao nível do tipo/API — semanticamente, tooth_index tem
+// de carregar uma posição real (não ficar a 0), senão auxiliaries.cpp's VVT
+// PID corrompe-se em silêncio; ecu_sched_angle_encoder.cpp deriva-o de
+// tim2_now na publicação. Ver docs/dev/mt6835_encoder_fork.md, "Sync-state
+// em modo encoder". Chamador: drv/encoder_sync.cpp.
 void ckp_publish_encoder_snapshot(const CkpSnapshot& snap) noexcept {
     ems::hal::CriticalSectionGuard guard;
     std::memcpy(&g_state.snap, &snap, sizeof(g_state.snap));

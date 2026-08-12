@@ -210,12 +210,15 @@ int main(void) {
     test_ecu_sched_encoder_phase();
     test_ecu_sched_encoder_queue_basic();
     test_ecu_sched_encoder_queue_dispatch();
+    test_ecu_sched_encoder_dispatch_margin_domain();
     test_ecu_sched_encoder_queue_overflow();
     test_ecu_sched_encoder_queue_purge_via_inhibit_mask();
     test_ecu_sched_encoder_queue_clear_via_outputs_safe();
+    test_ecu_sched_encoder_handoff_force_closes_pins();
     test_ecu_sched_encoder_heartbeat();
     test_ecu_sched_encoder_heartbeat_cmp_tracking();
     test_ecu_sched_encoder_heartbeat_publish_snapshot();
+    test_ecu_sched_encoder_heartbeat_publish_tooth_index();
     test_ecu_sched_encoder_heartbeat_subtick_cadence();
     test_ecu_sched_encoder_heartbeat_subtick_feeds_misfire();
     test_ecu_sched_encoder_min_lead();
@@ -237,6 +240,7 @@ int main(void) {
     test_ecu_sched_encoder_sequential_prep_knock_per_cyl();
     test_ecu_sched_encoder_sequential_omega_refresh();
     test_ecu_sched_encoder_sequential_omega_refresh_lock();
+    test_enc_finalize_xtau_peek_no_commit();
     test_enc_finalize_map_window_per_cyl();
 
     // ── QUICK CRANK ─────────────────────────────────────────────────────
@@ -256,6 +260,7 @@ int main(void) {
     printf("\n=== MISFIRE DETECT ===");
     test_misfire_all();
     test_misfire_encoder_cyl_window_boundaries();
+    test_misfire_encoder_reinit_after_trigger_offset_change();
     test_misfire_encoder_threshold_debounce_and_inertness();
 
     // ── DIAGNOSTIC MANAGER ──────────────────────────────────────────────

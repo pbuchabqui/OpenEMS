@@ -23,6 +23,7 @@
 #include "engine/knock.h"
 #include "engine/table3d.h"
 #include "engine/ecu_sched.h"
+#include "hal/out_pins.h"
 #include "engine/enc_cyl_setpoints.h"
 #include "engine/map_window.h"
 #include "engine/quick_crank.h"
@@ -873,6 +874,61 @@ void test_ecu_sched_encoder_queue_dispatch(void) {
     ecu_sched_test_reset();
 }
 
+void test_ecu_sched_encoder_dispatch_margin_domain(void) {
+    section("ecu_sched: dispatch — margem TIM2 via ω, não literal 16 TIM5-tick (fix bug 5)");
+
+    // ω inválido (estado limpo de reset): fallback ao literal 16, idêntico
+    // ao comportamento pré-fix. Alvo a now+17 (>16): CCR3 reprogramado, não
+    // dispara já.
+    ecu_sched_test_reset();
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 17u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_test_set_tim2_cnt(0u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 1u,
+             "ω inválido, alvo a +17: ainda pendente (margem=16 fallback)");
+    CHECK_EQ(ecu_sched_encoder_test_get_ccr3(), 17u,
+             "ω inválido, alvo a +17: CCR3 reprogramado, não disparado como late");
+
+    // Alvo a now+16 (não > 16): dispara já como late — mesma fronteira do
+    // literal pré-fix.
+    ecu_sched_test_reset();
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 16u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_test_set_tim2_cnt(0u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "ω inválido, alvo a +16: dispara já (fronteira do fallback=16)");
+    CHECK_EQ(ecu_sched_encoder_test_get_late_event_count(), 1u,
+             "ω inválido, alvo a +16: contado como late");
+
+    // ω válido, ratio=2.0 (omega_x65536=131072, sintético — não corresponde a
+    // RPM real, só para provar a fórmula) -> margem = 16×131072/65536 = 32.
+    // Alvo absoluto bem distante (100000) para não ser clampado pelo piso
+    // min_lead_counts() de arm_channel (também escalado por ω — a 2.0× dá
+    // min_lead=250, que sobrepõe alvos próximos de "agora" no momento do
+    // arme). O TIM2_CNT do dispatch é controlado à parte, isolando só a
+    // margem do dispatcher em teste.
+    ecu_sched_test_reset();
+    ecu_sched_encoder_heartbeat_tick(0u, 0u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_tick(2000u, 1000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 131072, "ω sintético seeded a ratio=2.0");
+
+    ecu_sched_encoder_queue_test_reset();
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 100000u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_test_set_tim2_cnt(100000u - 33u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 1u,
+             "ω=2.0×, alvo a +33: ainda pendente (margem=32, escalada via ω)");
+
+    ecu_sched_encoder_queue_test_reset();
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 100000u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_test_set_tim2_cnt(100000u - 32u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "ω=2.0×, alvo a +32: dispara já (fronteira da margem escalada)");
+
+    ecu_sched_test_reset();
+}
+
 void test_ecu_sched_encoder_queue_overflow(void) {
     section("ecu_sched: encoder queue — overflow policy (never drop a pending OFF)");
     ecu_sched_test_reset();
@@ -933,6 +989,49 @@ void test_ecu_sched_encoder_queue_clear_via_outputs_safe(void) {
                "CC3IE off after clear-all");
 
     ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_handoff_force_closes_pins(void) {
+    section("ecu_sched: handoff presync->sequencial força fecho de pinos (fix bug 4)");
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+
+    // INJ1 (canal 2 = PA15 na RGT6 default) é o único canal no port A — a
+    // fila de force-close (0x0F) reescreve GPIOC várias vezes (IGN1-4/INJ3-4
+    // partilham port C), por isso o snapshot final desse port não prova nada
+    // sobre um canal específico. PA15 nunca é tocado por outro canal, o que
+    // torna o snapshot final determinístico para esta asserção.
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 100u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 100u, ECU_ACT_DWELL_START);
+    ecu_sched_encoder_test_set_tim2_cnt(100u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u, "INJ_ON+DWELL_START despachados");
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) & (1u << 15u)) != 0u,
+               "INJ1 (PA15) HIGH após dispatch do INJ_ON");
+    CHECK_TRUE(ecu_sched_test_get_dwell_arm_tick(0u) != 0u,
+               "g_dwell_arm_tick[0] armado após DWELL_START");
+
+    // Arma as contrapartes de-assert para alvos futuros — ficam PENDENTES na
+    // fila TIM2/CH3 quando o handoff acontecer a seguir.
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 5000u, ECU_ACT_INJ_OFF);
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 5000u, ECU_ACT_SPARK);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 2u, "INJ_OFF+SPARK pendentes na fila");
+
+    // Handoff presync→sequencial: fase passa a válida com
+    // g_enc_last_builder_was_sequential==0 (estado limpo do reset acima) —
+    // dispara o purge da fila + (fix) o force-close dos pinos.
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    ecu_sched_encoder_heartbeat_tick(6000u, 6000u, 0u, 0u);
+
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "fila TIM2 purgada no handoff (eventos pendentes descartados)");
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) & (1u << (15u + 16u))) != 0u,
+               "INJ1 (PA15) forçado LOW no handoff — antes do fix ficava HIGH até o watchdog");
+    CHECK_EQ(ecu_sched_test_get_dwell_arm_tick(0u), 0u,
+             "g_dwell_arm_tick[0] limpo no handoff — sem isto o watchdog ainda achava a bobina em carga");
+
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
 }
 
 void test_ecu_sched_encoder_heartbeat(void) {
@@ -1070,6 +1169,33 @@ void test_ecu_sched_encoder_heartbeat_publish_snapshot(void) {
     snap = ckp_snapshot();
     CHECK_TRUE(snap.state == ems::drv::SyncState::HALF_SYNC,
                "staleness fallback published as HALF_SYNC, not stuck at FULL_SYNC");
+
+    ecu_sched_test_reset();
+    ckp_test_reset();
+}
+
+void test_ecu_sched_encoder_heartbeat_publish_tooth_index(void) {
+    section("ecu_sched: encoder heartbeat — tooth_index derivado de tim2_now (fix VVT)");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+
+    // tim2_now=0 -> tooth_index=0 (início da revolução).
+    ecu_sched_encoder_heartbeat_tick(0u, 0u, 0u, 0u);
+    CHECK_EQ(ckp_snapshot().tooth_index, 0u, "tim2_now=0 -> tooth_index=0");
+
+    // tim2_now=4096 (1/4 de volta, 16384 counts/rev) -> tooth_index=15
+    // ((4096*60)/16384 = 15) — antes do fix ficava sempre 0.
+    ecu_sched_encoder_heartbeat_tick(4096u, 100u, 0u, 0u);
+    CHECK_EQ(ckp_snapshot().tooth_index, 15u, "tim2_now=4096 -> tooth_index=15");
+
+    // tim2_now=8192 (1/2 volta) -> tooth_index=30.
+    ecu_sched_encoder_heartbeat_tick(8192u, 200u, 0u, 0u);
+    CHECK_EQ(ckp_snapshot().tooth_index, 30u, "tim2_now=8192 -> tooth_index=30");
+
+    // Wrap: tim2_now=16384+4096 (1 volta + 1/4) -> mod 16384 = 4096 -> tooth_index=15,
+    // confirmando que é (tim2_now % 16384), não tim2_now bruto.
+    ecu_sched_encoder_heartbeat_tick(16384u + 4096u, 300u, 0u, 0u);
+    CHECK_EQ(ckp_snapshot().tooth_index, 15u, "wrap de revolução: tooth_index continua correto");
 
     ecu_sched_test_reset();
     ckp_test_reset();
@@ -1945,6 +2071,62 @@ void test_ecu_sched_encoder_sequential_omega_refresh_lock(void) {
 
     ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
     ecu_sched_test_reset();
+}
+
+void test_enc_finalize_xtau_peek_no_commit(void) {
+    section("enc_cyl_setpoints: finalize(commit_fuel=false) não muta o filme X-τ (fix bug 3)");
+    ecu_sched_test_reset();
+    map_window_reset();
+    enc_cyl_setpoints_reset();
+    ems::engine::xtau_wall_fuel_reset();
+
+    ems::engine::EncFuelIgnPrep prep{};
+    prep.valid = 1u;
+    prep.cranking = 0u;
+    prep.xtau_event_enable = 1u;   // caminho X-τ por evento (encoder sequencial)
+    prep.flow_pw_us = 5000u;
+    prep.base_flow_pw_us = 5000u;
+    prep.map_bar_x100 = 100u;
+    prep.dead_time_us = 0u;
+    prep.rpm_x10 = 30000u;         // 3000 RPM
+    prep.corr_clt_x256 = 256u;
+    prep.corr_iat_x256 = 256u;
+    prep.clt_x10 = 800;
+    prep.base_advance_deg = 10;
+    prep.eoi_lead_deg = 60u;
+    enc_fuel_ign_prep_test_publish(prep);
+
+    CHECK_EQ(ems::engine::xtau_wall_fuel_us_q8_for_cyl(0u), 0,
+             "filme de parede começa em 0");
+
+    // 1ª chamada COMITADA (equivalente à finalização vencedora de uma
+    // tentativa de arme dentro da janela) — estabelece um filme não-nulo.
+    (void)finalize_cyl_setpoints(0u, /*commit_fuel=*/true);
+    const int32_t wall_after_commit =
+        ems::engine::xtau_wall_fuel_us_q8_for_cyl(0u);
+    CHECK_TRUE(wall_after_commit != 0,
+               "commit_fuel=true integra o modelo — filme passa a não-nulo");
+
+    // Simula ~5 tentativas especulativas de try_arm_sequential_due() para um
+    // cilindro fora da janela de 60° (sub-tick chamado ~65×/volta) — ANTES
+    // do fix, cada uma destas chamadas mutava g_cyl_wall_us_q8 mesmo sendo
+    // depois descartada por lead_in_arm_window(); o filme sobre-integrava
+    // dezenas de vezes por spray real e neutralizava o AE.
+    for (uint8_t i = 0u; i < 5u; ++i) {
+        (void)finalize_cyl_setpoints(0u, /*commit_fuel=*/false);
+    }
+    CHECK_EQ(ems::engine::xtau_wall_fuel_us_q8_for_cyl(0u), wall_after_commit,
+             "5× peek (commit_fuel=false) — filme inalterado (fix bug 3)");
+
+    // Nova chamada comitada (a "vencedora", já dentro da janela) volta a
+    // integrar o modelo — prova que peek não deixou o caminho de commit
+    // partido, só suprimiu a mutação nas tentativas especulativas.
+    (void)finalize_cyl_setpoints(0u, /*commit_fuel=*/true);
+    CHECK_TRUE(ems::engine::xtau_wall_fuel_us_q8_for_cyl(0u) != wall_after_commit,
+               "commit seguinte volta a integrar — caminho de commit continua vivo");
+
+    ecu_sched_test_reset();
+    ems::engine::xtau_wall_fuel_reset();
 }
 
 void test_enc_finalize_map_window_per_cyl(void) {

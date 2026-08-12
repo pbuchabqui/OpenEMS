@@ -135,3 +135,10 @@ void encoder_clear_all(void) noexcept;
 // ângulo. Escopo global (não dentro de sched_internal) porque é onde a
 // definição já vive em ecu_sched.cpp.
 void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state = 0U);
+
+// force_close_cyl_mask: fecha fisicamente os pinos de um cyl mask (SPARK/
+// INJ_OFF) + limpa o watchdog de dwell — definição em ecu_sched.cpp, exposta
+// (era a lógica interna de purge_events_for_cyl_mask) para o handoff
+// presync→sequencial do encoder poder replicar o mesmo fecho físico que o
+// purge legado já faz, sem duplicar o loop. Ver pin_transition acima.
+void force_close_cyl_mask(uint8_t mask, uint8_t is_ign);

@@ -335,6 +335,25 @@ void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
 
 static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U);
 
+// Força pinos a estado seguro (SPARK/INJ_OFF) + limpa watchdog de dwell para
+// cada cilindro do mask — extraído de purge_events_for_cyl_mask() (mesmo
+// corpo, comportamento idêntico para o caminho TIM5) para ser reutilizável
+// pelo handoff presync→sequencial do encoder (ecu_sched_angle_encoder.cpp),
+// que só purga a fila TIM2/CH3 (via encoder_purge_cyl_mask) sem nunca ter
+// feito este fecho físico dos pinos — ver ecu_sched_internal.h.
+void force_close_cyl_mask(uint8_t mask, uint8_t is_ign)
+{
+    for (uint8_t cyl = 0U; cyl < 4U; ++cyl) {
+        if ((mask & (1U << cyl)) == 0U) { continue; }
+        if (is_ign != 0U) {
+            force_output(si::kIgnCh[cyl], ECU_ACT_SPARK, 1U);
+            g_dwell_arm_tick[cyl] = 0U;
+        } else {
+            force_output(si::kInjCh[cyl], ECU_ACT_INJ_OFF, 1U);
+        }
+    }
+}
+
 // Drop pending events for channels matching bit mask (inj or ign cylinder map).
 // Also drive matching pins to safe (INJ_OFF / SPARK) and clear dwell arm.
 static void purge_events_for_cyl_mask(uint8_t mask, uint8_t is_ign)
@@ -357,15 +376,7 @@ static void purge_events_for_cyl_mask(uint8_t mask, uint8_t is_ign)
         ++w;
     }
     g_evt_count = w;
-    for (uint8_t cyl = 0U; cyl < 4U; ++cyl) {
-        if ((mask & (1U << cyl)) == 0U) { continue; }
-        if (is_ign != 0U) {
-            force_output(si::kIgnCh[cyl], ECU_ACT_SPARK, 1U);
-            g_dwell_arm_tick[cyl] = 0U;
-        } else {
-            force_output(si::kInjCh[cyl], ECU_ACT_INJ_OFF, 1U);
-        }
-    }
+    force_close_cyl_mask(mask, is_ign);
     if (g_evt_count == 0U) {
         TIM5_DIER &= ~TIM_DIER_CC3IE;
     } else {
@@ -890,6 +901,7 @@ uint32_t ecu_sched_test_get_calibration_clamp_count(void) { return g_calibration
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void) { return g_cycle_schedule_drop_count; }
 uint32_t ecu_sched_test_get_late_event_count(void) { return g_late_event_count; }
 uint32_t ecu_sched_test_get_pw_duty_clamp_count(void) { return si::g_pw_duty_clamp_count; }
+uint32_t ecu_sched_test_get_dwell_arm_tick(uint8_t cyl) { return (cyl < 4U) ? g_dwell_arm_tick[cyl] : 0U; }
 void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg) {
     ecu_sched_set_mspark(count, inter_dwell_ticks, atdc_limit_deg);
 }

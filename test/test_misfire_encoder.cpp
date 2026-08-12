@@ -58,6 +58,33 @@ void test_misfire_encoder_cyl_window_boundaries(void) {
              "phase_idx inválido (>1) → -1, sem crash");
 }
 
+void test_misfire_encoder_reinit_after_trigger_offset_change(void) {
+    section("misfire_encoder: re-init reconstrói g_cyl_window com novo trigger_tooth0_engine_deg (fix boot-order/runtime-staleness)");
+
+    // Baseline: offset=0, cyl0 (TDC=0°) cai no bucket0/phase A.
+    cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    misfire_encoder_init();
+    CHECK_EQ(misfire_encoder_test_cyl_at(0u, 0u), 0,
+             "offset=0: bucket0/phase A -> cyl0");
+
+    // Simula um tuner a escrever um novo trigger_tooth0_engine_deg em runtime
+    // (sync_table_from_page(0x00) em ui_protocol_pages.cpp) e a reconstrução
+    // que o fix agora dispara logo a seguir. offset=90 desloca a origem:
+    // crank_deg(cyl0) = (0+360-90)%360 = 270 -> start_counts=270*16384/360=12288
+    // -> start_bucket=48.
+    cfg::g_eng_cfg.trigger_tooth0_engine_deg = 90u;
+    misfire_encoder_init();
+    CHECK_EQ(misfire_encoder_test_cyl_at(0u, 0u), -1,
+             "offset=90 após re-init: bucket0/phase A já NÃO é cyl0 (tabela realmente mudou)");
+    CHECK_EQ(misfire_encoder_test_cyl_at(0u, 48u * 256u), 0,
+             "offset=90 após re-init: cyl0 agora no bucket48 (janela deslocada com o novo offset)");
+
+    // Sem o fix (init nunca re-chamado após o offset mudar), a tabela ficaria
+    // presa no layout offset=0 acima — este teste falharia antes do fix.
+    cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    misfire_encoder_init();
+}
+
 void test_misfire_encoder_threshold_debounce_and_inertness(void) {
     section("misfire_encoder: threshold/debounce (paridade CKP) + inércia sem ENABLE");
 

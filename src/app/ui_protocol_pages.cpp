@@ -17,6 +17,7 @@
 #include "engine/fuel_calc.h"
 #include "engine/torque_manager.h"
 #include "engine/map_estimator.h"
+#include "engine/misfire_encoder.h"
 #include "app/status_bits.h"
 #include "engine/ign_calc.h"
 #include "engine/math_utils.h"
@@ -555,6 +556,11 @@ bool sync_table_from_page(uint8_t page) noexcept {
         // engine_config_load valida magic 0x4543 em bytes [14-15] — a escrita via
         // 'w' deve sempre incluir os 16 bytes completos com magic correcto.
         ems::engine::cfg::engine_config_load(g_page0, 16u);
+        // Página 0 pode alterar trigger_tooth0_engine_deg em runtime (tuner
+        // escreve RAM sem reboot) — reconstrói g_cyl_window (misfire_encoder.cpp)
+        // para não ficar dessincronizado do novo offset pelo resto da sessão.
+        // Idempotente/barato, mesmo padrão do boot (main_stm32.cpp).
+        ems::engine::misfire_encoder_init();
         ems::engine::map_estimator_sync_engine_config();
         // Calibração de sensores (bytes 16-55) → globals + drivers
         ems::engine::apply_etb_calibration_from_page(g_page0 + 16, 40u);

@@ -53,7 +53,10 @@ uint8_t enc_fuel_ign_prep_valid(void) noexcept;
 // Finalize leve: knock do cyl + trims + (opcional VE bilineal) + X-τ evento +
 // ΔP/S-curve/dead a partir do prep.
 // Se prep.valid==0, deriva de g_* (sem reaplicar knock — já no commit) + trims.
-CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl) noexcept;
+// commit_fuel=false: propaga para transient_fuel_xtau_event() como peek (não
+// persiste o filme de parede) — usado por try_arm_sequential_due() enquanto
+// avalia candidatos fora da janela de armamento (ver xtau_autocalib.h).
+CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl, bool commit_fuel = true) noexcept;
 
 void enc_cyl_setpoints_reset(void) noexcept;
 

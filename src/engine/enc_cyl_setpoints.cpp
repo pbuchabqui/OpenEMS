@@ -76,7 +76,7 @@ uint8_t enc_fuel_ign_prep_valid(void) noexcept
     return enc_fuel_ign_prep_read().valid;
 }
 
-CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl) noexcept
+CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl, bool commit_fuel) noexcept
 {
     namespace si = sched_internal;
     CylArmSetpoints out{};
@@ -154,7 +154,7 @@ CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl) noexcept
                     static_cast<uint16_t>(estimate_spray_dt_ms(prep.rpm_x10));
                 flow_u = transient_fuel_xtau_event(
                     cyl, static_cast<uint32_t>(commanded),
-                    prep.rpm_x10, map_cyl, prep.clt_x10, dt);
+                    prep.rpm_x10, map_cyl, prep.clt_x10, dt, commit_fuel);
             } else if (prep.ae_pw_us != 0 &&
                        prep.base_flow_pw_us != 0U) {
                 // Sem event X-τ: AE aditivo no fluxo (path legado de testes).

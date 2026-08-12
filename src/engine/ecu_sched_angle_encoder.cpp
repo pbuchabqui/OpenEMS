@@ -310,6 +310,28 @@ static inline void enc_evt_execute_head(void) noexcept
     }
 }
 
+// Piso hardware-latency do dispatcher (mirror do ">16 ticks (~0,25µs)" do
+// dispatcher TIM5 legado, ecu_sched.cpp) — convertido via ω porque 16 counts
+// TIM2 NÃO é uma margem de tempo constante como 16 ticks TIM5 fixos a
+// 62,5 MHz: varia de ~73µs a 800rpm a ~6,5µs a 9000rpm. Cálculo inline (não
+// via duration_ticks_to_span_counts()/si::encoder, definidas mais abaixo no
+// ficheiro — esta função só usa ecu_sched_encoder_omega_valid()/omega_x65536(),
+// já globais e visíveis aqui). ω inválido (arranque antes da 1ª estimativa
+// válida, ou logo após perda de sync): ao contrário de min_lead_counts()
+// (piso 0 seguro, só atrasa o armamento), aqui um piso 0 arriscaria
+// reprogramar CCR3 com margem zero sobre um alvo já quase alcançado,
+// perdendo o compare (só recuperável no próximo wrap de TIM2, uma volta
+// inteira). Por isso mantém-se o literal 16 nesse estado, idêntico ao
+// comportamento pré-fix.
+static uint32_t dispatch_ccr_margin_counts(void) noexcept
+{
+    if (ecu_sched_encoder_omega_valid() == 0U) { return 16U; }
+    const int32_t omega = ecu_sched_encoder_omega_x65536();
+    if (omega <= 0) { return 16U; }
+    const int64_t span = (static_cast<int64_t>(16U) * static_cast<int64_t>(omega)) / 65536;
+    return (span < 1) ? 1U : static_cast<uint32_t>(span);
+}
+
 void ecu_sched_encoder_evt_dispatch(void) noexcept
 {
     const uint32_t now = TIM2_CNT;
@@ -320,7 +342,7 @@ void ecu_sched_encoder_evt_dispatch(void) noexcept
     }
     while (g_enc_evt_count > 0U) {
         const uint32_t next_ts = g_enc_evt_queue[0].timestamp;
-        if ((int32_t)(next_ts - TIM2_CNT) > 16) {
+        if ((int32_t)(next_ts - TIM2_CNT) > (int32_t)dispatch_ccr_margin_counts()) {
             TIM2_CCR3 = next_ts;
             TIM2_SR   = ~TIM_SR_CC3IF;
             return;
@@ -534,6 +556,13 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
         if (g_enc_last_builder_was_sequential == 0U) {
             si::encoder_purge_cyl_mask(0x0FU, 1U);
             si::encoder_purge_cyl_mask(0x0FU, 0U);
+            // Fecha fisicamente qualquer pino deixado HIGH por um DWELL_START/
+            // INJ_ON já dispatched pelo presync cuja contraparte (SPARK/INJ_OFF)
+            // acabou de ser purgada acima — sem isto a bobina/injector ficava a
+            // carregar até o watchdog (1.4×) cortar tarde. Mesmo mecanismo do
+            // purge legado (ecu_sched.cpp:purge_events_for_cyl_mask).
+            force_close_cyl_mask(0x0FU, 1U);
+            force_close_cyl_mask(0x0FU, 0U);
             si::encoder::clear_cyl_arm_latches();
             g_enc_last_builder_was_sequential = 1U;
         }
@@ -559,7 +588,16 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
     snap.phase_A = (ecu_sched_encoder_phase_at(tim2_now) == ECU_PHASE_A);
     snap.rpm_x10 = omega_x65536_to_rpm_x10();
     snap.tooth_period_ns = 0U;  // sem equivalente encoder — misfire lê tim2/tim5 directo (ecu_sched_encoder_heartbeat_subtick), não este campo
-    snap.tooth_index = 0U;      // MAP window usa tim2_now via sensors_map_window_poll_encoder()
+    // Derivado de tim2_now (mesma fórmula que sensors_map_window_poll_encoder(),
+    // sensors.cpp, usa localmente para o MAP window) — publicado aqui no
+    // snapshot GLOBAL para que auxiliaries.cpp (run_vvt_control() /
+    // calc_cam_pos_est_x10()) veja uma posição de came contínua em vez de
+    // ficar preso em 0 (colapsava para um sinal quase-binário 0°/180° via
+    // phase_A, corrompendo o PID de VVT em tempo real). misfire lê tim2/tim5
+    // directo via caminho próprio (misfire_encoder_on_sample), nunca este
+    // campo — ver misfire_detect.cpp:misfire_on_tooth(), dormant em modo
+    // encoder (só corre a partir do ISR TIM5, que nunca dispara aqui).
+    snap.tooth_index = static_cast<uint16_t>((tim2_now % 16384u) * 60u / 16384u);
     snap.last_tim5_capture = tim5_now;
     ems::drv::ckp_publish_encoder_snapshot(snap);
 }
@@ -995,8 +1033,13 @@ void try_arm_sequential_due(uint32_t now_raw) noexcept
     for (uint8_t cyl = 0U; cyl < cfg::kCylinderCount; ++cyl) {
         if (cyl_has_pending_events(cyl)) { continue; }
 
+        // Peek: avalia o candidato (inclui X-τ) sem comitar o modelo de
+        // parede — este loop corre ~65×/volta por cilindro pendente, e a
+        // maioria das tentativas falha o teste de janela abaixo (continue).
+        // Comitar aqui sobre-integrava o filme de parede dezenas de vezes
+        // por spray real, neutralizando o enriquecimento de AE (fix bug 3).
         const ems::engine::CylArmSetpoints sp =
-            ems::engine::finalize_cyl_setpoints(cyl);
+            ems::engine::finalize_cyl_setpoints(cyl, /*commit_fuel=*/false);
         const uint32_t dwell_span =
             duration_ticks_to_span_counts(sp.dwell_ticks);
         const uint32_t inj_span = inj_pw_span_from_ticks(sp.inj_pw_ticks);
@@ -1020,7 +1063,14 @@ void try_arm_sequential_due(uint32_t now_raw) noexcept
             continue;
         }
 
-        arm_sequential_cyl(cyl, now_raw, sp, min_lead, ms_inter_deg);
+        // Janela confirmada — comita agora o passo do modelo X-τ. Reavalia
+        // (não reutiliza o sp do peek acima) para garantir que o setpoint
+        // armado é exatamente o que produziu a mutação persistida: contexto
+        // single-threaded (heartbeat/sub-tick), sem outro escritor de
+        // g_cyl_wall_us_q8 entre as duas chamadas nesta iteração.
+        const ems::engine::CylArmSetpoints sp_committed =
+            ems::engine::finalize_cyl_setpoints(cyl, /*commit_fuel=*/true);
+        arm_sequential_cyl(cyl, now_raw, sp_committed, min_lead, ms_inter_deg);
     }
 }
 

@@ -534,6 +534,13 @@ static void openems_init() noexcept {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
 	ems::engine::cfg::engine_config_load(g_calib_page0, kCalibPageBytes);
+	// Reconstrói g_cyl_window (misfire_encoder.cpp) com o trigger_tooth0_engine_deg
+	// REAL agora que engine_config_load() o carregou — a chamada em ~480 só zerou
+	// a tabela antes do 1º sub-tick armar (tim2_heartbeat_start), usando o valor
+	// por omissão (BSS zero) de trigger_tooth0_engine_deg. misfire_encoder_init()
+	// é idempotente (sem alloc/NVIC/MMIO — ver test_misfire_encoder.cpp/test_sched.cpp
+	// que já a chamam múltiplas vezes), por isso repetir a chamada aqui é seguro.
+	ems::engine::misfire_encoder_init();
 	ems::engine::map_estimator_sync_engine_config();  // displacement → MAP model
 	// Calibração de sensores persistida (página 0, bytes 16-55) → drivers
 	ems::engine::apply_etb_calibration_from_page(g_calib_page0 + 16, 40u);

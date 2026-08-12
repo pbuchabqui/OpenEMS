@@ -275,6 +275,7 @@ uint32_t ecu_sched_test_get_calibration_clamp_count(void);
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 uint32_t ecu_sched_test_get_late_event_count(void);
 uint32_t ecu_sched_test_get_pw_duty_clamp_count(void);
+uint32_t ecu_sched_test_get_dwell_arm_tick(uint8_t cyl);  // g_dwell_arm_tick[cyl] — fix bug 4 (handoff force-close)
 void     ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept;  // alias legado → TIM5
 void     ecu_sched_test_reset_ccr(void) noexcept;   // zero TIM5 CCR3 mock + queue
 void     ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg);

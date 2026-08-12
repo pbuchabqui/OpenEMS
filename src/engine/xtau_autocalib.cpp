@@ -474,7 +474,8 @@ uint32_t transient_fuel_xtau_event(uint8_t cyl,
                                    uint32_t rpm_x10,
                                    uint16_t map_bar_x100,
                                    int16_t clt_x10,
-                                   uint16_t dt_ms) noexcept {
+                                   uint16_t dt_ms,
+                                   bool commit) noexcept {
     if (cyl >= kXtauCylCount || commanded_flow_us == 0u) {
         return commanded_flow_us;
     }
@@ -492,6 +493,15 @@ uint32_t transient_fuel_xtau_event(uint8_t cyl,
         const uint32_t cycle_ms = 120000u / rpm;
         dt = static_cast<uint16_t>((cycle_ms / 4u) < 1u ? 1u : (cycle_ms / 4u));
         if (dt > 200u) { dt = 200u; }
+    }
+
+    if (!commit) {
+        // Peek: avalia sobre uma cópia local, sem tocar g_cyl_wall_us_q8/
+        // g_cyl_last_ms/g_wall_state — ver comentário no header.
+        int32_t peek_wall = g_cyl_wall_us_q8[cyl];
+        return xtau_step_wall(peek_wall, commanded_flow_us,
+                              params.x_fraction_q8, params.tau_cycles,
+                              dt, rpm_x10);
     }
 
     const uint32_t inj = xtau_step_wall(g_cyl_wall_us_q8[cyl], commanded_flow_us,

@@ -52,12 +52,18 @@ XTauParams xtau_get_current_params_2d(uint32_t rpm_x10, uint16_t map_bar_x100) n
 // commanded_flow_us = fluxo desejado no cyl (base + tip-in AE ≥0).
 // dt_ms = tempo desde o último spray desse cyl (clamp 1..200).
 // Retorna PW injectado (fluxo, sem dead-time).
+// commit=false: avalia o modelo sobre uma cópia local do filme de parede,
+// sem persistir (peek) — usado por try_arm_sequential_due()
+// (ecu_sched_angle_encoder.cpp) para estimar o alvo de armamento em cada
+// sub-tick (~65×/volta) sem corromper g_cyl_wall_us_q8[cyl] a cada tentativa
+// fora da janela de 60° (só a chamada vencedora, dentro da janela, comita).
 uint32_t transient_fuel_xtau_event(uint8_t cyl,
                                    uint32_t commanded_flow_us,
                                    uint32_t rpm_x10,
                                    uint16_t map_bar_x100,
                                    int16_t clt_x10,
-                                   uint16_t dt_ms) noexcept;
+                                   uint16_t dt_ms,
+                                   bool commit = true) noexcept;
 
 #if defined(EMS_HOST_TEST)
 int32_t xtau_wall_fuel_us_q8_for_cyl(uint8_t cyl) noexcept;
