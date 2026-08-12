@@ -617,6 +617,10 @@ static void openems_init() noexcept {
 		            g_calib_page0 + 254, 2u);
 		ems::engine::decel_cut_gear_inhibit_ms10 = g_calib_page0[256];
 		ems::engine::knock_dead_min_p2p = g_calib_page0[257];
+		if (kCalibPageBytes > (ems::engine::kDecelCutRampMsPage0Off + 1u)) {
+			std::memcpy(&ems::engine::decel_cut_ramp_ms,
+			            g_calib_page0 + ems::engine::kDecelCutRampMsPage0Off, 2u);
+		}
 	}
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
@@ -1022,7 +1026,10 @@ int main() {
                         ems::engine::g_fuel_cut_reasons | ems::engine::kFuelCutDfco);
                     g_last_net_pw_us = 0u;
                     ems::engine::fuel_ae_notify_pulse(0);
-                    ems::engine::transient_fuel_reset();
+                    // Filme: reset só na entrada (não a cada tick do cut).
+                    if (ems::engine::fuel_decel_cut_just_entered()) {
+                        ems::engine::transient_fuel_reset();
+                    }
                 } else if (final_pw_us_base > fuel_corr.dead_time_us) {
                     uint32_t fuel_pw_us =
                         final_pw_us_base - static_cast<uint32_t>(fuel_corr.dead_time_us);
@@ -1038,15 +1045,24 @@ int main() {
                     }
                     g_last_net_pw_us = fuel_pw_us;
 
+                    // Encoder FULL_SYNC: X-τ de produção avança por evento de spray
+                    // no finalize (por cilindro). Loop 2 ms só mantém telemetria/
+                    // learn; CKP/presync continua no path de 2 ms.
+#if EMS_MT6835_ENCODER
+                    const bool xtau_2ms_prod = false;
+#else
+                    const bool xtau_2ms_prod = xtau_enabled;
+#endif
                     // Learn X-τ: apenas no slot 100ms (λ + STFT + tpsdot gates).
                     // Modelo de parede com τ escalado a wall-clock (period_ms).
-                    const uint32_t xtau_fuel_pw_us =
-                        ems::engine::transient_fuel_xtau_with_autocalib(fuel_pw_us,
+                    const uint32_t xtau_fuel_pw_us = xtau_2ms_prod
+                        ? ems::engine::transient_fuel_xtau_with_autocalib(fuel_pw_us,
                                                                         snap.rpm_x10,
                                                                         map_bar_x100,
                                                                         sensors.clt_degc_x10,
                                                                         xtau_enabled,
-                                                                        kAePeriodMs);
+                                                                        kAePeriodMs)
+                        : fuel_pw_us;
                     // Só a parcela de FLUXO segue no pipeline; o dead-time
                     // eléctrico é somado no fim, depois de ΔP/S-curve
                     // (convenção de calc_final_pw_us — dead-time nunca escala).
@@ -1055,7 +1071,13 @@ int main() {
                     ems::engine::transient_fuel_reset();
                     final_pw_us_base = 0u;  // fluxo ≈ 0 (base ≤ dead-time)
                 }
+                // Fluxo base (pós X-τ 2 ms ou skip encoder) antes do AE aditivo.
+#if EMS_MT6835_ENCODER
+                const uint32_t base_flow_before_ae = final_pw_us_base;
+#endif
                 // AE tip-in (add) ou DE tip-out (subtract), clamp a [0, 100ms].
+                // Encoder: AE também vai no prep p/ depósito no evento de spray;
+                // no commit 2 ms ainda soma p/ telemetria/duty.
                 if (!decel_cut_active && ae_pw_us != 0) {
                     const int64_t adj = static_cast<int64_t>(final_pw_us_base) + ae_pw_us;
                     if (adj <= 0) {
@@ -1065,6 +1087,11 @@ int main() {
                     } else {
                         final_pw_us_base = static_cast<uint32_t>(adj);
                     }
+                }
+                // Soft ramp-in pós-DFCO (antes de quick_crank / ΔP).
+                if (!decel_cut_active) {
+                    final_pw_us_base =
+                        ems::engine::fuel_decel_cut_ramp_pw(final_pw_us_base, 2u);
                 }
                 // Sempre: tip-in (µs>0) freezes STFT; pulse==0 limpa no próprio 2 ms
                 // (antes ficava sticky até ao slot 100 ms).
@@ -1148,9 +1175,24 @@ int main() {
                     prep.fuel_cut = static_cast<uint8_t>(
                         fuel_cut_active || decel_cut_active || flood_clear);
                     prep.cranking = static_cast<uint8_t>(qc.cranking);
+                    prep.xtau_event_enable = static_cast<uint8_t>(xtau_enabled ? 1u : 0u);
                     prep.map_bar_x100 = map_bar_x100;
                     prep.fuel_press_bar_x1000 = sensors.fuel_press_bar_x1000;
                     prep.dead_time_us = fuel_corr.dead_time_us;
+                    prep.rpm_x10 = snap.rpm_x10;
+                    prep.corr_clt_x256 = fuel_corr.corr_clt_x256;
+                    prep.corr_iat_x256 = fuel_corr.corr_iat_x256;
+                    prep.fuel_trim_pct_x10 = fuel_trim_pct_x10;
+                    prep.clt_x10 = sensors.clt_degc_x10;
+                    // Base sem AE (quick_crank sobre fluxo pré-AE); AE residual
+                    // separado p/ depósito no filme do cyl no finalize.
+                    const uint32_t base_qc = (decel_cut_active || flood_clear) ? 0u
+                        : ems::engine::quick_crank_apply_pw_us(base_flow_before_ae,
+                                                               qc.fuel_mult_x256,
+                                                               qc.min_pw_us);
+                    prep.base_flow_pw_us = base_qc;
+                    prep.ae_pw_us = (decel_cut_active || flood_clear)
+                        ? 0 : ae_pw_us;
                     prep.flow_pw_us = quick_crank_pw_us;
                     prep.base_advance_deg = base_advance_deg;
                     prep.crank_spark_deg = ems::engine::crank_spark_deg;

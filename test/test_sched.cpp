@@ -1948,9 +1948,10 @@ void test_ecu_sched_encoder_sequential_omega_refresh_lock(void) {
 }
 
 void test_enc_finalize_map_window_per_cyl(void) {
-    section("enc_cyl_setpoints: map_window scales PW per cyl in finalize");
+    section("enc_cyl_setpoints: map_window VE bilineal + ΔP no finalize");
     ecu_sched_test_reset();
     map_window_reset();
+    enc_cyl_setpoints_reset();
 
     CHECK_EQ(map_window_slot_for_cyl(0u), 0u, "cyl0 TDC 0° → slot 0");
     CHECK_EQ(map_window_slot_for_cyl(2u), 1u, "cyl2 TDC 180° → slot 1");
@@ -1958,9 +1959,15 @@ void test_enc_finalize_map_window_per_cyl(void) {
     ems::engine::EncFuelIgnPrep prep{};
     prep.valid = 1u;
     prep.flow_pw_us = 5000u;
+    prep.base_flow_pw_us = 5000u;
     prep.map_bar_x100 = 100u;           // fused 1.00 bar
     prep.fuel_press_bar_x1000 = 3000u;  // 3.0 bar abs → ΔP vs MAP
     prep.dead_time_us = 0u;
+    prep.rpm_x10 = 30000u;              // 3000 RPM — VE re-lookup
+    prep.corr_clt_x256 = 256u;
+    prep.corr_iat_x256 = 256u;
+    prep.fuel_trim_pct_x10 = 0;
+    prep.clt_x10 = 800;
     prep.base_advance_deg = 10;
     prep.eoi_lead_deg = 60u;
     enc_fuel_ign_prep_test_publish(prep);
@@ -1979,7 +1986,22 @@ void test_enc_finalize_map_window_per_cyl(void) {
     CHECK_TRUE(win0.inj_pw_ticks != win2.inj_pw_ticks,
                "enable=1 + distinct slots → different PW per cyl");
     CHECK_TRUE(win2.inj_pw_ticks > win0.inj_pw_ticks,
-               "higher MAP slot → higher PW (scale + ΔP)");
+               "higher MAP slot → higher PW (VE×MAP, não só scale linear)");
+
+    // Coerência: PW do slot alto ≈ calc_fuel_pw_us_default_fast(ve, map_cyl, …)
+    {
+        const uint8_t ve_hi = get_ve(30000u, 120u);
+        const uint16_t lam_hi = get_lambda_target_x1000(30000u, 120u);
+        uint32_t expect_hi = calc_fuel_pw_us_default_fast(
+            ve_hi, 120u, lam_hi, 0, 256u, 256u, 0u);
+        expect_hi = apply_delta_p_compensation(expect_hi, 3000u, 120u);
+        expect_hi = apply_injector_scurve(expect_hi);
+        const uint32_t expect_ticks = inj_pw_us_to_scheduler_ticks(expect_hi);
+        // VE path + ΔP/S-curve — tolera ±5% por aritmética inteira.
+        CHECK_TRUE(win2.inj_pw_ticks > (expect_ticks * 95u) / 100u &&
+                   win2.inj_pw_ticks < (expect_ticks * 105u) / 100u,
+                   "slot MAP alto → PW coerente com tabela VE/λ");
+    }
 
     map_window_enable = 0u;
     map_window_reset();

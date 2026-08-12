@@ -50,9 +50,12 @@ uint32_t isqrt_u32(uint32_t x) noexcept {
     return res;
 }
 
-uint8_t g_ae_decay_cycles = 0u;
+uint16_t g_ae_decay_ms = 0u;
 int32_t g_ae_pulse_us = 0;
 bool g_ae_stft_freeze = false;
+constexpr uint16_t kAePeriodMs = 2u;
+// NVM raw ≤64: legado (ticks de 2 ms) → ms = ticks×2. >64: já em ms.
+constexpr uint16_t kAeTaperLegacyTicksMax = 64u;
 
 bool g_decel_cut = false;
 // Referência barométrica: inicializada com map_ref estático, atualizada no key-on
@@ -103,9 +106,20 @@ uint8_t clt_bucket(int16_t clt_x10) noexcept {
 namespace ems::engine {
 
 void fuel_ae_reset() noexcept {
-    g_ae_decay_cycles = 0u;
+    g_ae_decay_ms = 0u;
     g_ae_pulse_us = 0;
     g_ae_stft_freeze = false;
+}
+
+void fuel_ae_apply_taper_raw(uint16_t raw) noexcept {
+    if (raw == 0u) {
+        raw = 1u;
+    }
+    if (raw <= kAeTaperLegacyTicksMax) {
+        ae_taper_ms = static_cast<uint16_t>(raw * kAePeriodMs);
+    } else {
+        ae_taper_ms = raw;
+    }
 }
 
 void fuel_ae_notify_pulse(int32_t ae_pw_us) noexcept {
@@ -435,8 +449,8 @@ void fuel_ae_set_threshold(uint16_t threshold_tpsdot_x10) noexcept {
 }
 
 void fuel_ae_set_taper(uint8_t taper_cycles) noexcept {
-    // taper_cycles = nº de ticks do loop 2 ms (wall-clock), não ciclos motor.
-    ae_taper_cycles = (taper_cycles == 0u) ? 1u : taper_cycles;
+    // API de teste / legado: interpreta como ticks (≤64) via heurística NVM.
+    fuel_ae_apply_taper_raw(taper_cycles);
 }
 
 int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
@@ -445,11 +459,10 @@ int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
     const bool tip_in  = (tpsdot_x10 > thr);
     const bool tip_out = (tpsdot_x10 < -thr);
 
+    const uint16_t taper_ms = (ae_taper_ms == 0u) ? kAePeriodMs : ae_taper_ms;
+
     if (tip_in || tip_out) {
         const uint8_t b = clt_bucket(clt_x10);
-        const uint16_t taper = ae_taper_cycles > 255u
-            ? 255u
-            : (ae_taper_cycles == 0u ? 1u : ae_taper_cycles);
         const uint16_t tpsdot_u16 = static_cast<uint16_t>(
             abs_dot > 1000 ? 1000 : abs_dot);
         const uint16_t base_pw_us =
@@ -465,17 +478,18 @@ int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
             pulse = -(pulse / 2);
         }
         g_ae_pulse_us = pulse;
-        g_ae_decay_cycles = static_cast<uint8_t>(taper);
+        g_ae_decay_ms = taper_ms;
         return g_ae_pulse_us;
     }
 
-    if (g_ae_decay_cycles > 0u) {
-        const uint16_t taper = ae_taper_cycles > 255u
-            ? 255u
-            : (ae_taper_cycles == 0u ? 1u : ae_taper_cycles);
-        --g_ae_decay_cycles;
-        return (g_ae_pulse_us * static_cast<int32_t>(g_ae_decay_cycles)) /
-               static_cast<int32_t>(taper);
+    if (g_ae_decay_ms > 0u) {
+        if (g_ae_decay_ms > kAePeriodMs) {
+            g_ae_decay_ms = static_cast<uint16_t>(g_ae_decay_ms - kAePeriodMs);
+        } else {
+            g_ae_decay_ms = 0u;
+        }
+        return (g_ae_pulse_us * static_cast<int32_t>(g_ae_decay_ms)) /
+               static_cast<int32_t>(taper_ms);
     }
 
     g_ae_pulse_us = 0;
@@ -530,6 +544,21 @@ bool     g_dfco_gear_seen      = false;
 bool     g_dfco_gear_changed   = false;  // já houve ≥1 troca (valida timestamp)
 uint32_t g_dfco_gear_change_ms = 0u;
 uint32_t g_dfco_now_ms         = 0u;
+bool     g_dfco_just_entered   = false;
+uint16_t g_dfco_ramp_elapsed_ms = 0u;
+bool     g_dfco_ramp_active    = false;
+// Histerese de saída por MAP (bar×100) acima do gate de entrada.
+constexpr uint16_t kDfcoMapExitHystBarX100 = 5u;
+
+void dfco_start_ramp_on_exit() noexcept {
+    if (decel_cut_ramp_ms == 0u) {
+        g_dfco_ramp_active = false;
+        g_dfco_ramp_elapsed_ms = 0u;
+        return;
+    }
+    g_dfco_ramp_active = true;
+    g_dfco_ramp_elapsed_ms = 0u;
+}
 }  // namespace
 
 void fuel_decel_cut_notify_map(uint16_t map_bar_x100) noexcept {
@@ -548,8 +577,9 @@ void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept {
         g_dfco_gear_changed = true;
         g_dfco_gear_change_ms = now_ms;
         // Troca de marcha derruba um corte activo (anti-jerk na transmissão).
-        if (decel_cut_gear_inhibit_ms10 != 0u) {
+        if (decel_cut_gear_inhibit_ms10 != 0u && g_decel_cut) {
             g_decel_cut = false;
+            dfco_start_ramp_on_exit();
         }
     }
 }
@@ -557,6 +587,7 @@ void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept {
 bool fuel_decel_cut_update(uint32_t rpm_x10,
                            uint16_t tps_pct_x10,
                            int16_t clt_x10) noexcept {
+    g_dfco_just_entered = false;
     const bool throttle_closed = tps_pct_x10 <= decel_cut_tps_threshold_x10;
     const bool engine_warm     = clt_x10 >= decel_cut_min_clt_x10;
     // Gate de MAP: só corta com vácuo real (carga baixa de facto). 0 = off.
@@ -572,12 +603,20 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
         if (throttle_closed && engine_warm && map_ok && !shift_inhibit &&
             rpm_x10 >= decel_cut_entry_rpm_x10) {
             g_decel_cut = true;
+            g_dfco_just_entered = true;
+            g_dfco_ramp_active = false;
+            g_dfco_ramp_elapsed_ms = 0u;
         }
     } else {
-        // Sai do corte se o acelerador abrir OU o RPM cair abaixo do limiar de saída.
-        // A histerese (entry > exit) evita oscilações ao redor do limiar.
-        if (!throttle_closed || rpm_x10 < decel_cut_exit_rpm_x10) {
+        // Exit: TPS aberto, RPM < exit, ou MAP sobe acima do gate (+ hyst)
+        // mesmo com TPS fechado (ex. downhill load).
+        const bool map_exit = (decel_cut_map_max_bar_x100 != 0u) &&
+            (g_dfco_map_bar_x100 >
+             static_cast<uint16_t>(decel_cut_map_max_bar_x100 +
+                                   kDfcoMapExitHystBarX100));
+        if (!throttle_closed || rpm_x10 < decel_cut_exit_rpm_x10 || map_exit) {
             g_decel_cut = false;
+            dfco_start_ramp_on_exit();
         }
     }
     return g_decel_cut;
@@ -587,6 +626,32 @@ bool fuel_decel_cut_active() noexcept {
     return g_decel_cut;
 }
 
+bool fuel_decel_cut_just_entered() noexcept {
+    return g_dfco_just_entered;
+}
+
+uint32_t fuel_decel_cut_ramp_pw(uint32_t flow_us, uint16_t dt_ms) noexcept {
+    if (!g_dfco_ramp_active || decel_cut_ramp_ms == 0u || flow_us == 0u) {
+        return flow_us;
+    }
+    uint16_t step = dt_ms;
+    if (step == 0u) {
+        step = 2u;
+    }
+    // Acumula elapsed antes de aplicar frac → 1º tick já tem frac > 0 mas < 1.
+    const uint32_t next =
+        static_cast<uint32_t>(g_dfco_ramp_elapsed_ms) + step;
+    if (next >= decel_cut_ramp_ms) {
+        g_dfco_ramp_elapsed_ms = decel_cut_ramp_ms;
+        g_dfco_ramp_active = false;
+        return flow_us;
+    }
+    g_dfco_ramp_elapsed_ms = static_cast<uint16_t>(next);
+    return static_cast<uint32_t>(
+        (static_cast<uint64_t>(flow_us) * g_dfco_ramp_elapsed_ms) /
+        decel_cut_ramp_ms);
+}
+
 void fuel_decel_cut_reset() noexcept {
     g_decel_cut = false;
     g_dfco_map_bar_x100 = 0u;
@@ -594,6 +659,9 @@ void fuel_decel_cut_reset() noexcept {
     g_dfco_gear_changed = false;
     g_dfco_gear_change_ms = 0u;
     g_dfco_now_ms = 0u;
+    g_dfco_just_entered = false;
+    g_dfco_ramp_elapsed_ms = 0u;
+    g_dfco_ramp_active = false;
 }
 
 // ── Protecção de duty do injector (FOME #215) ────────────────────────────────

@@ -87,7 +87,9 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
                                       uint16_t dead_time_us) noexcept;
 
 void fuel_ae_set_threshold(uint16_t threshold_tpsdot_x10) noexcept;
+// taper: ticks legados (≤64) ou ms (>64) — ver fuel_ae_apply_taper_raw.
 void fuel_ae_set_taper(uint8_t taper_cycles) noexcept;
+void fuel_ae_apply_taper_raw(uint16_t raw) noexcept;
 void fuel_ae_reset() noexcept;
 
 // STFT / X-τ learn freeze enquanto o pulso AE tip-in (µs > 0) estiver activo.
@@ -112,10 +114,15 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
                            int16_t clt_x10) noexcept;
 bool fuel_decel_cut_active() noexcept;
 void fuel_decel_cut_reset() noexcept;
+// Rising edge do DFCO (válido até ao próximo update) — reset de filme só na entrada.
+bool fuel_decel_cut_just_entered() noexcept;
+// Soft ramp-in linear 0→1 após exit (decel_cut_ramp_ms; 0 = passthrough).
+uint32_t fuel_decel_cut_ramp_pw(uint32_t flow_us, uint16_t dt_ms) noexcept;
 // Contexto extra do DFCO (estilo FOME #485/#487), fornecido antes do update:
 // MAP corrente p/ o gate de vácuo (decel_cut_map_max_bar_x100 > 0) e marcha
 // p/ a inibição pós-troca (decel_cut_gear_inhibit_ms10 > 0 — troca também
 // derruba um corte activo, evitando jerk na transmissão).
+// Exit por MAP: MAP > gate + 5 bar×100 mesmo com TPS fechado.
 void fuel_decel_cut_notify_map(uint16_t map_bar_x100) noexcept;
 void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept;
 

@@ -29,7 +29,7 @@ void xtau_autocalib_init() noexcept;
 void xtau_autocalib_reset() noexcept;
 
 // Zera só o filme de parede de produção (DFCO / fuel cut / disable).
-// Não apaga a tabela 2D aprendida.
+// Não apaga a tabela 2D aprendida. Zera o filme escalar + os 4 filmes por cyl.
 void xtau_wall_fuel_reset() noexcept;
 
 // Atualiza parâmetros X-τ baseado em erro de lambda durante transientes
@@ -47,6 +47,21 @@ XTauParams xtau_get_current_params(int16_t clt_x10) noexcept;
 // Obtém parâmetros X-τ aprendidos na célula RPM×MAP (interpolado), para
 // diagnóstico/dash e testes — não aplica fallback 1D por CLT.
 XTauParams xtau_get_current_params_2d(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
+
+// Aplica modelo X-τ num único evento de spray (encoder sequencial).
+// commanded_flow_us = fluxo desejado no cyl (base + tip-in AE ≥0).
+// dt_ms = tempo desde o último spray desse cyl (clamp 1..200).
+// Retorna PW injectado (fluxo, sem dead-time).
+uint32_t transient_fuel_xtau_event(uint8_t cyl,
+                                   uint32_t commanded_flow_us,
+                                   uint32_t rpm_x10,
+                                   uint16_t map_bar_x100,
+                                   int16_t clt_x10,
+                                   uint16_t dt_ms) noexcept;
+
+#if defined(EMS_HOST_TEST)
+int32_t xtau_wall_fuel_us_q8_for_cyl(uint8_t cyl) noexcept;
+#endif
 
 // Aplica modelo X-τ com parâmetros aprendidos, indexados por RPM×MAP (carga).
 // τ está em ciclos de motor (720°); period_ms escala a evaporação ao wall-clock

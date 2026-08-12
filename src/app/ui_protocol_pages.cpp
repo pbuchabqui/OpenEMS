@@ -442,6 +442,8 @@ void sync_page_from_table(uint8_t page) noexcept {
         g_page0[257] = ems::engine::knock_dead_min_p2p;
         // 258: polaridade captura CKP/CMP (bit0/bit1 = falling)
         g_page0[ems::engine::kCapturePolarityPage0Off] = ems::engine::capture_polarity;
+        std::memcpy(g_page0 + ems::engine::kDecelCutRampMsPage0Off,
+                    &ems::engine::decel_cut_ramp_ms, 2u);
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -466,7 +468,16 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(p + 204, ems::engine::lambda_delay_load_axis_bar_x100, 12u);
         std::memcpy(p + 216, ems::engine::lambda_delay_ms_table,      18u);
         std::memcpy(p + 234, &ems::engine::ae_tpsdot_threshold_x10, 2u);
-        std::memcpy(p + 236, &ems::engine::ae_taper_cycles,         2u);
+        {
+            // Round-trip estável com heurística de load (≤64 = ticks legados):
+            // grava ticks = ms/2 quando cabe em ≤64; senão grava ms (>64).
+            uint16_t taper_out = ems::engine::ae_taper_ms;
+            if (taper_out >= 2u && (taper_out % 2u) == 0u &&
+                (taper_out / 2u) <= 64u) {
+                taper_out = static_cast<uint16_t>(taper_out / 2u);
+            }
+            std::memcpy(p + 236, &taper_out, 2u);
+        }
         std::memcpy(p + 238, &ems::engine::ae_max_pw_us,            2u);
         std::memcpy(p + 240, &ems::engine::idle_spark_tps_max_x10,             2u);
         std::memcpy(p + 242, &ems::engine::idle_spark_map_max_bar_x100,             2u);
@@ -682,6 +693,11 @@ bool sync_table_from_page(uint8_t page) noexcept {
         // Polaridade TIM5 (page0[258]) — fora do gate de layout: blob antigo = 0
         // = subida (default).
         ems::engine::apply_page0_capture_polarity(g_page0, sizeof(g_page0));
+        // DFCO ramp-in ms (259-260); blob antigo = 0 = off.
+        if (sizeof(g_page0) > (ems::engine::kDecelCutRampMsPage0Off + 1u)) {
+            std::memcpy(&ems::engine::decel_cut_ramp_ms,
+                        g_page0 + ems::engine::kDecelCutRampMsPage0Off, 2u);
+        }
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
@@ -707,7 +723,11 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(ems::engine::lambda_delay_load_axis_bar_x100, p + 204, 12u);
         std::memcpy(ems::engine::lambda_delay_ms_table,      p + 216, 18u);
         std::memcpy(&ems::engine::ae_tpsdot_threshold_x10, p + 234, 2u);
-        std::memcpy(&ems::engine::ae_taper_cycles,         p + 236, 2u);
+        {
+            uint16_t taper_raw = 0u;
+            std::memcpy(&taper_raw, p + 236, 2u);
+            ems::engine::fuel_ae_apply_taper_raw(taper_raw);
+        }
         std::memcpy(&ems::engine::ae_max_pw_us,            p + 238, 2u);
         std::memcpy(&ems::engine::idle_spark_tps_max_x10,             p + 240, 2u);
         std::memcpy(&ems::engine::idle_spark_map_max_bar_x100,             p + 242, 2u);

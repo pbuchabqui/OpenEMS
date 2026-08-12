@@ -900,6 +900,30 @@ void test_xtau_autocalib_all(void) {
 
     CHECK_TRUE(p_low.x_fraction_q8 != p_high.x_fraction_q8 || p_low.tau_cycles != p_high.tau_cycles,
                "células RPM×MAP distantes aprendem parâmetros distintos");
+
+    section("xtau_autocalib: per-cyl wall film + tip-in deposit + DFCO reset");
+    xtau_autocalib_reset();
+    host_set_millis(5000u);
+    const uint32_t inj0 = transient_fuel_xtau_event(
+        0u, 5000u, 30000u, 100u, 800, 20u);
+    CHECK_TRUE(inj0 > 5000u, "parede vazia: 1º spray overshoot (tip-in deposit path)");
+    CHECK_TRUE(xtau_wall_fuel_us_q8_for_cyl(0u) > 0, "cyl0 filme > 0 após spray");
+    CHECK_EQ(xtau_wall_fuel_us_q8_for_cyl(1u), 0, "cyl1 filme independente (=0)");
+    (void)transient_fuel_xtau_event(1u, 4000u, 30000u, 100u, 800, 20u);
+    CHECK_TRUE(xtau_wall_fuel_us_q8_for_cyl(1u) > 0, "cyl1 filme após o seu spray");
+    const int32_t film0 = xtau_wall_fuel_us_q8_for_cyl(0u);
+    const int32_t film1 = xtau_wall_fuel_us_q8_for_cyl(1u);
+    CHECK_TRUE(film0 != film1, "filmes cyl0/cyl1 independentes");
+    // Tip-in AE aumenta commanded → mais depósito no filme do cyl armado
+    const int32_t before_ae = xtau_wall_fuel_us_q8_for_cyl(0u);
+    (void)transient_fuel_xtau_event(0u, 5000u + 2000u, 30000u, 100u, 800, 20u);
+    CHECK_TRUE(xtau_wall_fuel_us_q8_for_cyl(0u) > before_ae,
+               "tip-in commanded deposita no filme do cyl armado");
+    xtau_wall_fuel_reset();
+    CHECK_EQ(xtau_wall_fuel_us_q8_for_cyl(0u), 0, "DFCO reset zera cyl0");
+    CHECK_EQ(xtau_wall_fuel_us_q8_for_cyl(1u), 0, "DFCO reset zera cyl1");
+    CHECK_EQ(xtau_wall_fuel_us_q8_for_cyl(2u), 0, "DFCO reset zera cyl2");
+    CHECK_EQ(xtau_wall_fuel_us_q8_for_cyl(3u), 0, "DFCO reset zera cyl3");
 }
 
 void test_page0_capture_polarity(void) {

@@ -1052,7 +1052,7 @@ const FIELD_LABELS = {
   cmp_window_close_tooth: "CMP window close (tooth; 0/0=disabled)",
   // Page 5 scalars (valores já em unidade natural)
   ae_tpsdot_threshold_x10: "AE TPSdot threshold (%/s)",
-  ae_taper_cycles:         "AE taper (cycles)",
+  ae_taper_cycles:         "AE taper (ms; ≤64=ticks×2)",
   ae_max_pw_us:            "AE max PW (ms)",
   idle_spark_tps_max_x10:              "Idle spark TPS max (%)",
   idle_spark_map_max_bar_x100:         "Idle spark MAP max (bar)",

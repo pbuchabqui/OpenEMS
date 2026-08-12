@@ -9,6 +9,7 @@
 #include "engine/calibration.h"
 #include "engine/engine_config.h"
 #include "engine/etb_control.h"
+#include "engine/fuel_calc.h"
 #include "engine/table3d.h"
 #include "hal/flash.h"
 
@@ -93,7 +94,11 @@ void load_corr_calibration_from_nvm() noexcept {
     std::memcpy(ems::engine::lambda_delay_ms_table,      p + 216, 18u);
     if (!page_range_is_zero(page, 234u, 6u)) {
         std::memcpy(&ems::engine::ae_tpsdot_threshold_x10, p + 234, 2u);
-        std::memcpy(&ems::engine::ae_taper_cycles,         p + 236, 2u);
+        {
+            uint16_t taper_raw = 0u;
+            std::memcpy(&taper_raw, p + 236, 2u);
+            ems::engine::fuel_ae_apply_taper_raw(taper_raw);
+        }
         std::memcpy(&ems::engine::ae_max_pw_us,            p + 238, 2u);
     }
     if (page_range_is_zero(page, 240u, 16u)) {

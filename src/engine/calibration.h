@@ -43,9 +43,10 @@ extern uint16_t fuel_press_nominal_bar_x1000;
 extern int16_t ae_clt_corr_axis_x10[kCorrectionTableSize];
 extern uint16_t ae_clt_sens[kCorrectionTableSize];
 extern uint16_t ae_tpsdot_threshold_x10;
-// Contagem de ticks do loop de fuel (2 ms), não ciclos de combustão.
-// Default 8 → ~16 ms de taper wall-clock. Layout NVM/page0 inalterado.
-extern uint16_t ae_taper_cycles;
+// Duração do taper AE em ms wall-clock (loop 2 ms). Offset page5 236 (u16).
+// Load heurístico: raw≤64 → legado (ticks×2); raw>64 → já é ms.
+// Default 16 ms (equiv. 8 ticks legados × 2 ms).
+extern uint16_t ae_taper_ms;
 extern uint16_t ae_max_pw_us;
 extern uint16_t ae_tpsdot_axis_x10[kAeRateTableSize];
 extern uint16_t ae_pw_adder_us[kAeRateTableSize];
@@ -156,6 +157,9 @@ extern uint8_t inj_duty_tol_ms10;
 // pós-troca de marcha (×10 ms, 0 = off) — evita corte/jerk durante a troca.
 extern uint16_t decel_cut_map_max_bar_x100;
 extern uint8_t  decel_cut_gear_inhibit_ms10;
+// Soft ramp-in após saída do DFCO (ms wall-clock). 0 = off (PW pleno no 1º tick).
+// page0 offset 259 (u16). Blob antigo = 0 → comportamento legado.
+extern uint16_t decel_cut_ramp_ms;
 
 // Knock: pico-a-pico mínimo de ruído de fundo por janela (counts ADC).
 // EMA abaixo disto por muitas janelas = sensor morto/desligado (FOME #578).
@@ -242,6 +246,8 @@ void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept
 // Hall open-collector idle-HIGH/pulso-LOW típico: bit1=1 (CMP falling) + pull-up.
 // Aplica TIM5 CCxP + GPIOA PUPDR via tim5_ic_set_capture_polarity().
 constexpr uint16_t kCapturePolarityPage0Off = 258u;
+// DFCO soft ramp-in (u16 ms); imediatamente após polaridade.
+constexpr uint16_t kDecelCutRampMsPage0Off = 259u;
 extern uint8_t capture_polarity;  // bit0 CKP, bit1 CMP; 1 = falling
 void apply_page0_capture_polarity(const uint8_t* page0, uint16_t len) noexcept;
 

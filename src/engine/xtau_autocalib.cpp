@@ -1,5 +1,6 @@
 #include "engine/xtau_autocalib.h"
 #include "engine/calibration.h"
+#include "engine/engine_config.h"
 #include "engine/math_utils.h"
 #include "engine/transient_fuel.h"
 #include "hal/system.h"
@@ -13,8 +14,13 @@ using ems::engine::interp_u16_8pt;
 using ems::engine::table_axis_index;
 using ems::engine::table_axis_frac_q8;
 
-// Estado global do sistema de auto-calibração
+// Estado global do sistema de auto-calibração (filme escalar = path 2 ms / CKP)
 ems::engine::WallFuelState g_wall_state = {};
+
+// Filmes por cilindro (encoder sequencial — tip-in deposita no cyl armado).
+constexpr uint8_t kXtauCylCount = ems::engine::cfg::kCylinderCount;
+int32_t g_cyl_wall_us_q8[kXtauCylCount] = {};
+uint32_t g_cyl_last_ms[kXtauCylCount] = {};
 
 // Tabela 2D (RPM × MAP) de parâmetros X-τ aprendidos. wall_fuel_us_q8 continua
 // escalar (há fisicamente uma só parede de coletor); só X e τ variam com o
@@ -195,6 +201,10 @@ namespace ems::engine {
 void xtau_autocalib_init() noexcept {
     g_wall_state = {};
     g_xtau_table_seeded = false;
+    for (uint8_t i = 0u; i < kXtauCylCount; ++i) {
+        g_cyl_wall_us_q8[i] = 0;
+        g_cyl_last_ms[i] = 0u;
+    }
     xtau_seed_table_if_needed();
     g_last_cell_rpm_idx = 0u;
     g_last_cell_map_idx = 0u;
@@ -213,6 +223,10 @@ void xtau_autocalib_reset() noexcept {
 void xtau_wall_fuel_reset() noexcept {
     g_wall_state.wall_fuel_us_q8 = 0;
     g_wall_state.last_update_ms = 0u;
+    for (uint8_t i = 0u; i < kXtauCylCount; ++i) {
+        g_cyl_wall_us_q8[i] = 0;
+        g_cyl_last_ms[i] = 0u;
+    }
 }
 
 bool xtau_autocalib_update(uint32_t rpm_x10,
@@ -378,6 +392,124 @@ XTauParams xtau_get_current_params_2d(uint32_t rpm_x10, uint16_t map_bar_x100) n
     return interpolate_xtau_2d(rpm_x10, map_bar_x100);
 }
 
+namespace {
+
+constexpr uint32_t kMaxPwUs = 100000u;
+
+uint32_t xtau_step_wall(int32_t& wall_us_q8,
+                        uint32_t fuel_pw_us,
+                        uint16_t x_q8,
+                        uint16_t tau,
+                        uint16_t dt_ms,
+                        uint32_t rpm_x10) noexcept {
+    if (x_q8 > 192u) {
+        x_q8 = 192u;
+    }
+    if (tau == 0u) {
+        tau = 1u;
+    }
+    if (tau > 255u) {
+        tau = 255u;
+    }
+    uint16_t dt = dt_ms;
+    if (dt == 0u) {
+        dt = 2u;
+    }
+    if (dt > 200u) {
+        dt = 200u;
+    }
+    uint32_t rpm = rpm_x10 / 10u;
+    if (rpm < 200u) {
+        rpm = 200u;
+    }
+    if (rpm > 15000u) {
+        rpm = 15000u;
+    }
+    const uint32_t cycle_ms = 120000u / rpm;
+    const uint32_t tau_cycle_ms =
+        static_cast<uint32_t>(tau) * ((cycle_ms < 1u) ? 1u : cycle_ms);
+
+    const uint32_t clamped_pw = fuel_pw_us > kMaxPwUs ? kMaxPwUs : fuel_pw_us;
+    const int32_t desired_q8 = static_cast<int32_t>(clamped_pw << 8u);
+
+    int32_t evap_q8 = static_cast<int32_t>(
+        (static_cast<int64_t>(wall_us_q8) * static_cast<int32_t>(dt)) /
+        static_cast<int64_t>(tau_cycle_ms));
+    if (evap_q8 > wall_us_q8) {
+        evap_q8 = wall_us_q8;
+    }
+    if (evap_q8 < 0) {
+        evap_q8 = 0;
+    }
+
+    int32_t numerator_q8 = desired_q8 - evap_q8;
+    if (numerator_q8 < 0) {
+        numerator_q8 = 0;
+    }
+
+    const int32_t dry_fraction_q8 = 256 - static_cast<int32_t>(x_q8);
+    int32_t injected_q8 = static_cast<int32_t>(
+        (static_cast<int64_t>(numerator_q8) * 256) / dry_fraction_q8);
+    const int32_t max_q8 = static_cast<int32_t>(kMaxPwUs << 8u);
+    if (injected_q8 > max_q8) {
+        injected_q8 = max_q8;
+    }
+
+    wall_us_q8 +=
+        ((injected_q8 * static_cast<int32_t>(x_q8)) >> 8) - evap_q8;
+    if (wall_us_q8 < 0) {
+        wall_us_q8 = 0;
+    }
+    if (wall_us_q8 > max_q8) {
+        wall_us_q8 = max_q8;
+    }
+
+    return static_cast<uint32_t>(injected_q8 >> 8);
+}
+
+}  // namespace
+
+uint32_t transient_fuel_xtau_event(uint8_t cyl,
+                                   uint32_t commanded_flow_us,
+                                   uint32_t rpm_x10,
+                                   uint16_t map_bar_x100,
+                                   int16_t clt_x10,
+                                   uint16_t dt_ms) noexcept {
+    if (cyl >= kXtauCylCount || commanded_flow_us == 0u) {
+        return commanded_flow_us;
+    }
+
+    xtau_seed_table_if_needed();
+    const XTauParams params = (g_wall_state.calibration_state >= 2u)
+        ? interpolate_xtau_2d(rpm_x10, map_bar_x100)
+        : xtau_get_current_params(clt_x10);
+
+    uint16_t dt = dt_ms;
+    if (dt == 0u) {
+        // Estima intervalo entre sprays sequenciais (4 cyl, 720°): cycle_ms/4.
+        uint32_t rpm = rpm_x10 / 10u;
+        if (rpm < 200u) { rpm = 200u; }
+        const uint32_t cycle_ms = 120000u / rpm;
+        dt = static_cast<uint16_t>((cycle_ms / 4u) < 1u ? 1u : (cycle_ms / 4u));
+        if (dt > 200u) { dt = 200u; }
+    }
+
+    const uint32_t inj = xtau_step_wall(g_cyl_wall_us_q8[cyl], commanded_flow_us,
+                                        params.x_fraction_q8, params.tau_cycles,
+                                        dt, rpm_x10);
+    g_cyl_last_ms[cyl] = millis();
+    // Mantém filme escalar alinhado ao último evento (telemetria/DFCO).
+    g_wall_state.wall_fuel_us_q8 = g_cyl_wall_us_q8[cyl];
+    g_wall_state.last_update_ms = g_cyl_last_ms[cyl];
+    return inj;
+}
+
+#if defined(EMS_HOST_TEST)
+int32_t xtau_wall_fuel_us_q8_for_cyl(uint8_t cyl) noexcept {
+    return (cyl < kXtauCylCount) ? g_cyl_wall_us_q8[cyl] : 0;
+}
+#endif
+
 uint32_t transient_fuel_xtau_with_autocalib(uint32_t fuel_pw_us,
                                              uint32_t rpm_x10,
                                              uint16_t map_bar_x100,
@@ -401,83 +533,11 @@ uint32_t transient_fuel_xtau_with_autocalib(uint32_t fuel_pw_us,
         ? interpolate_xtau_2d(rpm_x10, map_bar_x100)
         : xtau_get_current_params(clt_x10);
 
-    uint16_t x_q8 = params.x_fraction_q8;
-    if (x_q8 > 192u) {
-        x_q8 = 192u;
-    }
-
-    uint16_t tau = params.tau_cycles;
-    if (tau == 0u) {
-        tau = 1u;
-    }
-    if (tau > 255u) {
-        tau = 255u;
-    }
-
-    // τ em ciclos de motor (720°). Escala evaporação ao wall-clock do loop:
-    //   cycle_ms = 1200000 / rpm_x10   (4-stroke: 2 revs por ciclo)
-    //   evap = wall/τ × (dt / cycle_ms)
-    // Assim idle (ciclo longo) evapora devagar; alto RPM mais rápido.
-    uint16_t dt = period_ms;
-    if (dt == 0u) {
-        dt = 2u;
-    }
-    if (dt > 50u) {
-        dt = 50u;  // clamp glitch de loop
-    }
-    uint32_t rpm = rpm_x10 / 10u;
-    if (rpm < 200u) {
-        rpm = 200u;  // piso: evita cycle_ms enorme / div0
-    }
-    if (rpm > 15000u) {
-        rpm = 15000u;
-    }
-    // cycle_ms = 120000 / rpm  (720°); em inteiros: 120000 / rpm
-    const uint32_t cycle_ms = 120000u / rpm;
-    // denom = τ × cycle_ms  (mín. 1)
-    const uint32_t tau_cycle_ms =
-        static_cast<uint32_t>(tau) * ((cycle_ms < 1u) ? 1u : cycle_ms);
-
-    constexpr uint32_t kMaxPwUs = 100000u;
-    const uint32_t clamped_pw = fuel_pw_us > kMaxPwUs ? kMaxPwUs : fuel_pw_us;
-    const int32_t desired_q8 = static_cast<int32_t>(clamped_pw << 8u);
-
-    // evap_q8 = wall × dt / (τ × cycle_ms); clamp a wall (não evapora mais que existe)
-    int32_t evap_q8 = static_cast<int32_t>(
-        (static_cast<int64_t>(g_wall_state.wall_fuel_us_q8) * static_cast<int32_t>(dt)) /
-        static_cast<int64_t>(tau_cycle_ms));
-    if (evap_q8 > g_wall_state.wall_fuel_us_q8) {
-        evap_q8 = g_wall_state.wall_fuel_us_q8;
-    }
-    if (evap_q8 < 0) {
-        evap_q8 = 0;
-    }
-
-    int32_t numerator_q8 = desired_q8 - evap_q8;
-    if (numerator_q8 < 0) {
-        numerator_q8 = 0;
-    }
-
-    const int32_t dry_fraction_q8 = 256 - static_cast<int32_t>(x_q8);
-    int32_t injected_q8 = static_cast<int32_t>(
-        (static_cast<int64_t>(numerator_q8) * 256) / dry_fraction_q8);
-    const int32_t max_q8 = static_cast<int32_t>(kMaxPwUs << 8u);
-    if (injected_q8 > max_q8) {
-        injected_q8 = max_q8;
-    }
-
-    g_wall_state.wall_fuel_us_q8 +=
-        ((injected_q8 * static_cast<int32_t>(x_q8)) >> 8) - evap_q8;
-    if (g_wall_state.wall_fuel_us_q8 < 0) {
-        g_wall_state.wall_fuel_us_q8 = 0;
-    }
-    if (g_wall_state.wall_fuel_us_q8 > max_q8) {
-        g_wall_state.wall_fuel_us_q8 = max_q8;
-    }
-
+    const uint32_t inj = xtau_step_wall(g_wall_state.wall_fuel_us_q8, fuel_pw_us,
+                                        params.x_fraction_q8, params.tau_cycles,
+                                        period_ms, rpm_x10);
     g_wall_state.last_update_ms = millis();
-
-    return static_cast<uint32_t>(injected_q8 >> 8);
+    return inj;
 }
 
 bool xtau_is_learning() noexcept {

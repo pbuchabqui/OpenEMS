@@ -126,18 +126,41 @@ void test_fuel_decel_cut(void) {
 }
 
 void test_fuel_decel_cut_gates(void) {
-    section("fuel_calc: DFCO gates de MAP e troca de marcha (FOME #485/#487)");
-    // Gate de MAP: com threshold, só corta em vácuo real.
+    section("fuel_calc: DFCO MAP gate + gear inhibit + MAP exit + ramp");
     fuel_decel_cut_reset();
     ems::engine::decel_cut_map_max_bar_x100 = 40u;  // ≤ 40 kPa
     fuel_decel_cut_notify_map(80u);                 // carga alta → sem corte
     CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, 800), "MAP 80 > 40: sem corte");
     fuel_decel_cut_notify_map(30u);                 // vácuo real
     CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, 800), "MAP 30 ≤ 40: corta");
+    CHECK_TRUE(fuel_decel_cut_just_entered(), "rising edge on enter");
+    fuel_decel_cut_notify_map(30u);
+    CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, 800), "ainda em cut");
+    CHECK_FALSE(fuel_decel_cut_just_entered(), "no rising edge while held");
+
+    // Exit por MAP (downhill load): MAP > gate+5 mesmo com TPS fechado
+    fuel_decel_cut_notify_map(46u);  // 40+5+1
+    CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, 800), "MAP exit com TPS fechado");
+
     ems::engine::decel_cut_map_max_bar_x100 = 0u;   // off → comportamento antigo
     fuel_decel_cut_reset();
     fuel_decel_cut_notify_map(80u);
     CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, 800), "gate off: MAP ignorado");
+
+    // Soft ramp-in monotónico
+    fuel_decel_cut_reset();
+    ems::engine::decel_cut_ramp_ms = 100u;
+    fuel_decel_cut_notify_map(0u);
+    CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, 800), "enter for ramp test");
+    CHECK_FALSE(fuel_decel_cut_update(20000u, 100u, 800), "TPS open → exit + ramp");
+    const uint32_t r1 = fuel_decel_cut_ramp_pw(10000u, 20u);
+    const uint32_t r2 = fuel_decel_cut_ramp_pw(10000u, 20u);
+    const uint32_t r3 = fuel_decel_cut_ramp_pw(10000u, 20u);
+    CHECK_TRUE(r1 < r2 && r2 < r3, "ramp-in PW monotónico crescente");
+    CHECK_TRUE(r1 > 0u && r3 < 10000u, "ramp parcial nos primeiros ticks");
+    (void)fuel_decel_cut_ramp_pw(10000u, 50u);
+    CHECK_EQ(fuel_decel_cut_ramp_pw(10000u, 20u), 10000u, "após ramp: PW pleno");
+    ems::engine::decel_cut_ramp_ms = 0u;
 
     // Troca de marcha: derruba corte activo e inibe re-entrada por T ms.
     fuel_decel_cut_reset();
@@ -338,6 +361,13 @@ void test_fuel_ae(void) {
     int32_t ae_t4 = calc_ae_pw_us(500u, 500u, 10u, 800);  // decay tick 4
     CHECK_TRUE(ae_t1 >= ae_t4, "AE taper: pulse non-increasing over cycles");
     CHECK_EQ(ae_t4, 0, "AE taper: pulse = 0 at or after taper_cycles=4");
+
+    // Heurística NVM: raw≤64 = ticks legados×2; raw>64 = ms directo
+    fuel_ae_apply_taper_raw(8u);
+    CHECK_EQ(ems::engine::ae_taper_ms, 16u, "taper raw=8 legado → 16 ms");
+    fuel_ae_apply_taper_raw(100u);
+    CHECK_EQ(ems::engine::ae_taper_ms, 100u, "taper raw=100 → 100 ms");
+    fuel_ae_set_taper(4u);  // restaura para outros testes via ticks
 
     // STFT freeze flag: tip-in sets, pulse==0 clears immediately (not sticky).
     fuel_ae_reset();

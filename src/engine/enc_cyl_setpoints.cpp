@@ -6,6 +6,7 @@
 #include "engine/ign_calc.h"
 #include "engine/knock.h"
 #include "engine/map_window.h"
+#include "engine/xtau_autocalib.h"
 #include "hal/critical_section.h"
 
 #include <stdint.h>
@@ -26,19 +27,24 @@ uint16_t map_bar_x100_for_cyl(uint8_t cyl, uint16_t fused_map_x100) noexcept
     return static_cast<uint16_t>(slot_x1000 / 10U);
 }
 
-uint32_t scale_flow_by_map(uint32_t flow_us, uint16_t map_cyl_x100,
-                           uint16_t map_fused_x100) noexcept
+bool map_window_slot_valid_for_cyl(uint8_t cyl) noexcept
 {
-    if (map_fused_x100 == 0U || map_cyl_x100 == map_fused_x100) {
-        return flow_us;
-    }
-    // Clamp ratio 50%..150% to avoid wild PW from a bad window sample.
-    uint32_t num = static_cast<uint32_t>(map_cyl_x100);
-    uint32_t den = static_cast<uint32_t>(map_fused_x100);
-    if (num * 2U < den) { num = den / 2U; }
-    if (num > (den * 3U) / 2U) { num = (den * 3U) / 2U; }
-    return static_cast<uint32_t>(
-        (static_cast<uint64_t>(flow_us) * num) / den);
+    if (map_window_enable == 0U) { return false; }
+    const uint8_t slot = map_window_slot_for_cyl(cyl);
+    return map_window_slot_bar_x1000(slot) != 0U;
+}
+
+uint32_t estimate_spray_dt_ms(uint32_t rpm_x10) noexcept
+{
+    uint32_t rpm = rpm_x10 / 10U;
+    if (rpm < 200U) { rpm = 200U; }
+    if (rpm > 15000U) { rpm = 15000U; }
+    // 4 sprays / ciclo 720° → cycle_ms / 4
+    const uint32_t cycle_ms = 120000U / rpm;
+    uint32_t dt = cycle_ms / 4U;
+    if (dt < 1U) { dt = 1U; }
+    if (dt > 200U) { dt = 200U; }
+    return dt;
 }
 
 }  // namespace
@@ -99,14 +105,70 @@ CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl) noexcept
         if (advance < 0) { advance = 0; }
 
         uint32_t pw_us = 0U;
-        if (prep.fuel_cut == 0U && prep.flow_pw_us > 0U) {
-            int32_t flow = static_cast<int32_t>(prep.flow_pw_us)
-                * (100 + static_cast<int32_t>(fuel_trim)) / 100;
-            if (flow < 0) { flow = 0; }
-            uint32_t flow_u = static_cast<uint32_t>(flow);
+        if (prep.fuel_cut == 0U) {
             const uint16_t map_cyl =
                 map_bar_x100_for_cyl(cyl, prep.map_bar_x100);
-            flow_u = scale_flow_by_map(flow_u, map_cyl, prep.map_bar_x100);
+
+            uint32_t flow_u = 0U;
+            // Fase 4: com slot MAP válido, re-lookup VE/λ + base PW (não scale).
+            if (map_window_slot_valid_for_cyl(cyl) && prep.rpm_x10 != 0U) {
+                const uint8_t ve = get_ve(prep.rpm_x10, map_cyl);
+                const uint16_t lambda =
+                    get_lambda_target_x1000(prep.rpm_x10, map_cyl);
+                const uint16_t corr_clt =
+                    (prep.corr_clt_x256 != 0U) ? prep.corr_clt_x256 : 256U;
+                const uint16_t corr_iat =
+                    (prep.corr_iat_x256 != 0U) ? prep.corr_iat_x256 : 256U;
+                const uint32_t full = calc_fuel_pw_us_default_fast(
+                    ve, map_cyl, lambda, prep.fuel_trim_pct_x10,
+                    corr_clt, corr_iat, prep.dead_time_us);
+                flow_u = (full > prep.dead_time_us)
+                    ? (full - static_cast<uint32_t>(prep.dead_time_us))
+                    : 0U;
+            } else {
+                // Prefer base_flow (sem AE); fallback a flow_pw_us legado.
+                flow_u = (prep.base_flow_pw_us != 0U || prep.ae_pw_us != 0)
+                    ? prep.base_flow_pw_us
+                    : prep.flow_pw_us;
+            }
+
+            // Trim por cilindro no fluxo.
+            {
+                int32_t flow = static_cast<int32_t>(flow_u)
+                    * (100 + static_cast<int32_t>(fuel_trim)) / 100;
+                if (flow < 0) { flow = 0; }
+                flow_u = static_cast<uint32_t>(flow);
+            }
+
+            // Fase 3: AE tip-in no commanded + X-τ por evento de spray.
+            if (prep.xtau_event_enable != 0U && prep.cranking == 0U) {
+                int64_t commanded = static_cast<int64_t>(flow_u);
+                if (prep.ae_pw_us > 0) {
+                    commanded += prep.ae_pw_us;
+                } else if (prep.ae_pw_us < 0) {
+                    commanded += prep.ae_pw_us;  // tip-out enlean
+                }
+                if (commanded < 0) { commanded = 0; }
+                if (commanded > 100000) { commanded = 100000; }
+                const uint16_t dt =
+                    static_cast<uint16_t>(estimate_spray_dt_ms(prep.rpm_x10));
+                flow_u = transient_fuel_xtau_event(
+                    cyl, static_cast<uint32_t>(commanded),
+                    prep.rpm_x10, map_cyl, prep.clt_x10, dt);
+            } else if (prep.ae_pw_us != 0 &&
+                       prep.base_flow_pw_us != 0U) {
+                // Sem event X-τ: AE aditivo no fluxo (path legado de testes).
+                const int64_t adj =
+                    static_cast<int64_t>(flow_u) + prep.ae_pw_us;
+                if (adj <= 0) {
+                    flow_u = 0U;
+                } else if (adj > 100000) {
+                    flow_u = 100000U;
+                } else {
+                    flow_u = static_cast<uint32_t>(adj);
+                }
+            }
+
             flow_u = apply_delta_p_compensation(
                 flow_u, prep.fuel_press_bar_x1000, map_cyl);
             flow_u = apply_injector_scurve(flow_u);
