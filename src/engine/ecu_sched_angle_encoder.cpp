@@ -1091,11 +1091,9 @@ void recompute_presync(uint32_t now_raw) noexcept
         ++g_pw_duty_clamp_count;
     }
 
-    const uint32_t spark_a = (360U - (g_advance_deg % 360U)) % 360U;
-    const uint32_t spark_b = (180U + 360U - (g_advance_deg % 360U)) % 360U;
-    const uint32_t eoi_deg   = (360U - (g_eoi_lead_deg % 360U)) % 360U;
+    const PresyncWastedTargets pwt = presync_wasted_targets();
 
-    const uint32_t eoi_target    = engine_deg_to_absolute(eoi_deg, now_raw);
+    const uint32_t eoi_target    = engine_deg_to_absolute(pwt.eoi, now_raw);
     const uint32_t inj_on_target = eoi_target - inj_pw_span;
 
     // Wasted-spark: 2 bobinas por evento, pares a 180° — nunca as 4 no
@@ -1124,8 +1122,8 @@ void recompute_presync(uint32_t now_raw) noexcept
                 }
             });
     };
-    arm_wasted_pair(spark_a, kWastedIgnPairA);
-    arm_wasted_pair(spark_b, kWastedIgnPairB);
+    arm_wasted_pair(pwt.spark_a, kWastedIgnPairA);
+    arm_wasted_pair(pwt.spark_b, kWastedIgnPairB);
 
     if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
         for (uint8_t i = 0U; i < 4U; ++i) {

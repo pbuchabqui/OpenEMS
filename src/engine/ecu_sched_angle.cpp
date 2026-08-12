@@ -194,11 +194,9 @@ void rebuild_presync_revolution(const ems::drv::CkpSnapshot& snap)
         ++g_pw_duty_clamp_count;
     }
     // Wasted: par A @ TDC 0°, par B @ TDC 180° — 2 bobinas por evento.
-    const uint32_t spark_a = (360U - (g_advance_deg % 360U)) % 360U;
-    const uint32_t spark_b = (180U + 360U - (g_advance_deg % 360U)) % 360U;
-    const uint32_t eoi = (360U - (g_eoi_lead_deg % 360U)) % 360U;
-    const uint32_t inj_on = (eoi + 360U - inj_pw_deg) % 360U;
-    const uint32_t inj_off = eoi;
+    const PresyncWastedTargets pwt = presync_wasted_targets();
+    const uint32_t inj_on = (pwt.eoi + 360U - inj_pw_deg) % 360U;
+    const uint32_t inj_off = pwt.eoi;
 
     const auto arm_wasted_pair = [&](uint32_t spark_ang, const uint8_t pair[2]) {
         const uint32_t dwell_ang = (spark_ang + 360U - dwell_deg) % 360U;
@@ -229,8 +227,8 @@ void rebuild_presync_revolution(const ems::drv::CkpSnapshot& snap)
                 }
             });
     };
-    arm_wasted_pair(spark_a, kWastedIgnPairA);
-    arm_wasted_pair(spark_b, kWastedIgnPairB);
+    arm_wasted_pair(pwt.spark_a, kWastedIgnPairA);
+    arm_wasted_pair(pwt.spark_b, kWastedIgnPairB);
 
     angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, 360U),
                          &tooth, &frac, &phase);

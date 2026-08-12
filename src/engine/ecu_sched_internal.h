@@ -73,6 +73,26 @@ extern volatile uint32_t g_mspark_inter_dwell_ticks;
 extern volatile uint32_t g_mspark_atdc_limit_deg;
 extern volatile uint32_t g_pw_duty_clamp_count;
 
+// Alvos angulares (0..359, domínio 360°) do par wasted-spark A/B e do fim de
+// injeção presync — partilhado entre os dois builders presync (roda-dentada
+// em ecu_sched_angle.cpp e encoder em ecu_sched_angle_encoder.cpp), que só
+// diferem em como despacham o par (tabela de ângulo vs fila TIM2/CH3), nunca
+// nesta geometria. Par A @ TDC 0°, par B @ TDC 180° — 2 bobinas por evento.
+struct PresyncWastedTargets {
+    uint32_t spark_a;
+    uint32_t spark_b;
+    uint32_t eoi;
+};
+
+inline PresyncWastedTargets presync_wasted_targets(void) noexcept
+{
+    PresyncWastedTargets t;
+    t.spark_a = (360U - (g_advance_deg % 360U)) % 360U;
+    t.spark_b = (180U + 360U - (g_advance_deg % 360U)) % 360U;
+    t.eoi     = (360U - (g_eoi_lead_deg % 360U)) % 360U;
+    return t;
+}
+
 // Knock window on DWELL_START — single site for TIM5 + TIM2 arm paths.
 // Gate: IGN channel, EMS_KNOCK_HW_PRESENT, sequential mode.
 inline void maybe_knock_on_dwell_start(uint8_t ch) noexcept
