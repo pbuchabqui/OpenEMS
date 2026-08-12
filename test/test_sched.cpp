@@ -875,11 +875,10 @@ void test_ecu_sched_encoder_queue_dispatch(void) {
 }
 
 void test_ecu_sched_encoder_dispatch_margin_domain(void) {
-    section("ecu_sched: dispatch — margem TIM2 via ω, não literal 16 TIM5-tick (fix bug 5)");
+    section("ecu_sched: dispatch — margem TIM2 = 3 µs via ω (fallback 16 sem ω)");
 
-    // ω inválido (estado limpo de reset): fallback ao literal 16, idêntico
-    // ao comportamento pré-fix. Alvo a now+17 (>16): CCR3 reprogramado, não
-    // dispara já.
+    // ω inválido (estado limpo de reset): fallback ao literal 16 counts.
+    // Alvo a now+17 (>16): CCR3 reprogramado, não dispara já.
     ecu_sched_test_reset();
     ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 17u, ECU_ACT_INJ_ON);
     ecu_sched_encoder_test_set_tim2_cnt(0u);
@@ -889,8 +888,7 @@ void test_ecu_sched_encoder_dispatch_margin_domain(void) {
     CHECK_EQ(ecu_sched_encoder_test_get_ccr3(), 17u,
              "ω inválido, alvo a +17: CCR3 reprogramado, não disparado como late");
 
-    // Alvo a now+16 (não > 16): dispara já como late — mesma fronteira do
-    // literal pré-fix.
+    // Alvo a now+16 (não > 16): dispara já como late — fronteira do fallback.
     ecu_sched_test_reset();
     ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 16u, ECU_ACT_INJ_ON);
     ecu_sched_encoder_test_set_tim2_cnt(0u);
@@ -900,13 +898,10 @@ void test_ecu_sched_encoder_dispatch_margin_domain(void) {
     CHECK_EQ(ecu_sched_encoder_test_get_late_event_count(), 1u,
              "ω inválido, alvo a +16: contado como late");
 
-    // ω válido, ratio=2.0 (omega_x65536=131072, sintético — não corresponde a
-    // RPM real, só para provar a fórmula) -> margem = 16×131072/65536 = 32.
+    // ω válido, ratio=2.0 (omega_x65536=131072) → margem =
+    //   ticks(3µs)=3*125/2=187 → 187*131072/65536 = 374 counts.
     // Alvo absoluto bem distante (100000) para não ser clampado pelo piso
-    // min_lead_counts() de arm_channel (também escalado por ω — a 2.0× dá
-    // min_lead=250, que sobrepõe alvos próximos de "agora" no momento do
-    // arme). O TIM2_CNT do dispatch é controlado à parte, isolando só a
-    // margem do dispatcher em teste.
+    // min_lead_counts() de arm_channel.
     ecu_sched_test_reset();
     ecu_sched_encoder_heartbeat_tick(0u, 0u, 0u, 0u);
     ecu_sched_encoder_heartbeat_tick(2000u, 1000u, 0u, 0u);
@@ -914,17 +909,17 @@ void test_ecu_sched_encoder_dispatch_margin_domain(void) {
 
     ecu_sched_encoder_queue_test_reset();
     ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 100000u, ECU_ACT_INJ_ON);
-    ecu_sched_encoder_test_set_tim2_cnt(100000u - 33u);
+    ecu_sched_encoder_test_set_tim2_cnt(100000u - 375u);
     ecu_sched_encoder_evt_dispatch();
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 1u,
-             "ω=2.0×, alvo a +33: ainda pendente (margem=32, escalada via ω)");
+             "ω=2.0×, alvo a +375: ainda pendente (margem=374 = 3 µs via ω)");
 
     ecu_sched_encoder_queue_test_reset();
     ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 100000u, ECU_ACT_INJ_ON);
-    ecu_sched_encoder_test_set_tim2_cnt(100000u - 32u);
+    ecu_sched_encoder_test_set_tim2_cnt(100000u - 374u);
     ecu_sched_encoder_evt_dispatch();
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
-             "ω=2.0×, alvo a +32: dispara já (fronteira da margem escalada)");
+             "ω=2.0×, alvo a +374: dispara já (fronteira da margem 3 µs)");
 
     ecu_sched_test_reset();
 }

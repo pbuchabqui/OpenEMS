@@ -310,27 +310,10 @@ static inline void enc_evt_execute_head(void) noexcept
     }
 }
 
-// Piso hardware-latency do dispatcher (mirror do ">16 ticks (~0,25µs)" do
-// dispatcher TIM5 legado, ecu_sched.cpp) — convertido via ω porque 16 counts
-// TIM2 NÃO é uma margem de tempo constante como 16 ticks TIM5 fixos a
-// 62,5 MHz: varia de ~73µs a 800rpm a ~6,5µs a 9000rpm. Cálculo inline (não
-// via duration_ticks_to_span_counts()/si::encoder, definidas mais abaixo no
-// ficheiro — esta função só usa ecu_sched_encoder_omega_valid()/omega_x65536(),
-// já globais e visíveis aqui). ω inválido (arranque antes da 1ª estimativa
-// válida, ou logo após perda de sync): ao contrário de min_lead_counts()
-// (piso 0 seguro, só atrasa o armamento), aqui um piso 0 arriscaria
-// reprogramar CCR3 com margem zero sobre um alvo já quase alcançado,
-// perdendo o compare (só recuperável no próximo wrap de TIM2, uma volta
-// inteira). Por isso mantém-se o literal 16 nesse estado, idêntico ao
-// comportamento pré-fix.
-static uint32_t dispatch_ccr_margin_counts(void) noexcept
-{
-    if (ecu_sched_encoder_omega_valid() == 0U) { return 16U; }
-    const int32_t omega = ecu_sched_encoder_omega_x65536();
-    if (omega <= 0) { return 16U; }
-    const int64_t span = (static_cast<int64_t>(16U) * static_cast<int64_t>(omega)) / 65536;
-    return (span < 1) ? 1U : static_cast<uint32_t>(span);
-}
+static constexpr uint32_t kDispatchCcrMarginUs = 3U;
+static constexpr uint32_t kDispatchCcrMarginFallbackCounts = 16U;
+
+static uint32_t dispatch_ccr_margin_counts(void) noexcept;
 
 void ecu_sched_encoder_evt_dispatch(void) noexcept
 {
@@ -1179,6 +1162,25 @@ void recompute_presync(uint32_t now_raw) noexcept
 }
 
 }  // namespace ems::engine::sched_internal::encoder
+
+// Margem de latência do dispatcher TIM2/CH3: kDispatchCcrMarginUs convertidos
+// em counts via si::encoder::duration_ticks_to_span_counts() — mesmo helper
+// que min_lead_counts() já usa, em vez de reimplementar a fórmula ω→span
+// (era o que este ficheiro fazia antes desta limpeza, uma segunda cópia da
+// mesma aritmética). ω inválido: fallback kDispatchCcrMarginFallbackCounts
+// counts (duration_ticks_to_span_counts() por si só devolveria 0 nesse caso,
+// que não serve aqui — 0 counts de margem arriscaria reprogramar CCR3 em
+// cima de um alvo já quase alcançado).
+static uint32_t dispatch_ccr_margin_counts(void) noexcept
+{
+    if (ecu_sched_encoder_omega_valid() == 0U ||
+        ecu_sched_encoder_omega_x65536() <= 0) {
+        return kDispatchCcrMarginFallbackCounts;
+    }
+    const uint32_t margin = si::encoder::duration_ticks_to_span_counts(
+        ECU_SCHED_US_TO_TICKS_INTERNAL(kDispatchCcrMarginUs));
+    return (margin < 1U) ? 1U : margin;
+}
 
 #if defined(EMS_HOST_TEST)
 // Hooks de teste — extern "C", free functions (mesma convenção do resto do
