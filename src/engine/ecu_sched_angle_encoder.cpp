@@ -36,6 +36,7 @@
 
 #include "engine/ecu_sched_internal.h"
 #include "engine/enc_cyl_setpoints.h"
+#include "engine/xtau_autocalib.h"
 #include "engine/engine_config.h"
 #include "engine/calibration.h"
 #include "hal/out_pins.h"
@@ -318,6 +319,7 @@ static uint32_t dispatch_ccr_margin_counts(void) noexcept;
 void ecu_sched_encoder_evt_dispatch(void) noexcept
 {
     const uint32_t now = TIM2_CNT;
+    const uint32_t ccr_margin = dispatch_ccr_margin_counts();
     while (g_enc_evt_count > 0U) {
         const EncSchedEvent& e = g_enc_evt_queue[0];
         if ((int32_t)(e.timestamp - now) > 0) { break; }
@@ -325,7 +327,7 @@ void ecu_sched_encoder_evt_dispatch(void) noexcept
     }
     while (g_enc_evt_count > 0U) {
         const uint32_t next_ts = g_enc_evt_queue[0].timestamp;
-        if ((int32_t)(next_ts - TIM2_CNT) > (int32_t)dispatch_ccr_margin_counts()) {
+        if ((int32_t)(next_ts - TIM2_CNT) > (int32_t)ccr_margin) {
             TIM2_CCR3 = next_ts;
             TIM2_SR   = ~TIM_SR_CC3IF;
             return;
@@ -387,10 +389,25 @@ uint8_t ecu_sched_encoder_test_get_evt(uint8_t index, uint32_t *ts,
     if (high != nullptr) { *high = g_enc_evt_queue[index].high; }
     return 1U;
 }
-uint32_t ecu_sched_encoder_test_get_evt_overflow(void) noexcept { return g_enc_dbg_evt_overflow; }
-uint32_t ecu_sched_encoder_test_get_late_event_count(void) noexcept { return g_enc_late_event_count; }
+uint32_t ecu_sched_encoder_test_get_evt_overflow(void) noexcept
+{
+    return ecu_sched_encoder_evt_overflow();
+}
+uint32_t ecu_sched_encoder_test_get_late_event_count(void) noexcept
+{
+    return ecu_sched_encoder_late_event_count();
+}
 uint32_t ecu_sched_encoder_test_get_dier(void) noexcept { return ems_test_tim2_dier; }
 #endif
+
+uint32_t ecu_sched_encoder_late_event_count(void) noexcept
+{
+    return g_enc_late_event_count;
+}
+uint32_t ecu_sched_encoder_evt_overflow(void) noexcept
+{
+    return g_enc_dbg_evt_overflow;
+}
 
 namespace ems::engine::sched_internal {
 
@@ -462,6 +479,11 @@ static uint8_t g_enc_last_builder_was_sequential = 0U;
 static volatile uint32_t g_enc_seq_min_lead_skip_count = 0U;
 static volatile uint32_t g_enc_omega_refresh_count = 0U;
 
+uint32_t ecu_sched_encoder_seq_min_lead_skip_count(void) noexcept
+{
+    return g_enc_seq_min_lead_skip_count;
+}
+
 // ω (×65536, counts TIM2 por tick TIM5) → rpm_x10, para o CkpSnapshot
 // partilhado. Mesma unidade/escala que ckp_instant_rpm_x10() já usa
 // (rpm×10), derivação equivalente a rpm_x10_from_period_ticks() (ckp.cpp)
@@ -483,7 +505,8 @@ static uint32_t omega_x65536_to_rpm_x10(void) noexcept
 
 void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
                                       uint32_t cmp_angle,
-                                      uint32_t cmp_edge_count) noexcept
+                                      uint32_t cmp_edge_count,
+                                      uint8_t run_seq_arm) noexcept
 {
     // Também amostra aqui: host tests / seed chamam o tick pesado sem
     // passar pelo sub-tick. Em produção o sub-tick já actualizou ω.
@@ -536,6 +559,7 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
         g_enc_last_builder_was_sequential = 0U;
         si::encoder::recompute_presync(tim2_now);
     } else {
+        uint8_t did_handoff = 0U;
         if (g_enc_last_builder_was_sequential == 0U) {
             si::encoder_purge_cyl_mask(0x0FU, 1U);
             si::encoder_purge_cyl_mask(0x0FU, 0U);
@@ -548,10 +572,15 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
             force_close_cyl_mask(0x0FU, 0U);
             si::encoder::clear_cyl_arm_latches();
             g_enc_last_builder_was_sequential = 1U;
+            did_handoff = 1U;
         }
         si::g_knock_sequential = 1U;
-        si::encoder::refresh_pending_omega_spans(tim2_now);
-        si::encoder::try_arm_sequential_due(tim2_now);
+        // run_seq_arm=0: subtick já fez refresh+try_arm neste CC4IF — evita
+        // duplicar. Após handoff (purge) ainda precisamos de try_arm já.
+        if (run_seq_arm != 0U || did_handoff != 0U) {
+            si::encoder::refresh_pending_omega_spans(tim2_now);
+            si::encoder::try_arm_sequential_due(tim2_now);
+        }
     }
 
     // Publica no CkpSnapshot partilhado — único ponto deste ficheiro que o
@@ -614,7 +643,9 @@ void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
     ++g_hb_subtick_count;
     if (g_hb_subtick_count >= 64U) {
         g_hb_subtick_count = 0U;
-        ecu_sched_encoder_heartbeat_tick(tim2_now, tim5_now, cmp_angle, cmp_edge_count);
+        // Já fizemos refresh+try_arm acima — tick pesado só handoff/publish.
+        ecu_sched_encoder_heartbeat_tick(tim2_now, tim5_now, cmp_angle,
+                                         cmp_edge_count, /*run_seq_arm=*/0U);
     }
 }
 
@@ -641,7 +672,7 @@ uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept { ret
 uint8_t  ecu_sched_encoder_test_get_subtick_count(void) noexcept { return g_hb_subtick_count; }
 uint32_t ecu_sched_encoder_test_get_seq_min_lead_skip_count(void) noexcept
 {
-    return g_enc_seq_min_lead_skip_count;
+    return ecu_sched_encoder_seq_min_lead_skip_count();
 }
 uint32_t ecu_sched_encoder_test_get_omega_refresh_count(void) noexcept
 {
@@ -927,32 +958,29 @@ void refresh_pending_omega_spans(uint32_t now_raw) noexcept
     }
 }
 
+// Alvos absolutos TIM2 já calculados no peek de try_arm_sequential_due —
+// evita re-derivar spans + engine_deg720_to_absolute no arm vencedor.
+struct SeqArmAbsTargets {
+    uint32_t spark_abs;
+    uint32_t dwell_abs;
+    uint32_t eoi_abs;
+    uint32_t inj_on_abs;
+    uint32_t spark_deg;
+};
+
 // Arma IGN (+ multi-spark) e INJ a partir de setpoints já finalizados.
 static void arm_sequential_cyl(uint8_t cyl, uint32_t now_raw,
                                const ems::engine::CylArmSetpoints& sp,
+                               const SeqArmAbsTargets& t,
                                uint32_t min_lead,
                                uint32_t ms_inter_deg) noexcept
 {
-    const uint32_t tdc = cfg::cyl_tdc_deg(cyl);
-    const uint32_t dwell_span =
-        duration_ticks_to_span_counts(sp.dwell_ticks);
-    const uint32_t inj_span = inj_pw_span_from_ticks(sp.inj_pw_ticks);
-
-    const uint32_t spark_deg =
-        (tdc + kCycleDeg - sp.advance_deg) % kCycleDeg;
-    const uint32_t eoi_deg =
-        (tdc + kCycleDeg - sp.eoi_lead_deg) % kCycleDeg;
-
-    const uint32_t spark_target =
-        engine_deg720_to_absolute(spark_deg, now_raw);
-    const uint32_t dwell_target = spark_target - dwell_span;
-
-    arm_pair_if_lead(kIgnCh[cyl], dwell_target, spark_target, now_raw, min_lead,
+    arm_pair_if_lead(kIgnCh[cyl], t.dwell_abs, t.spark_abs, now_raw, min_lead,
                      ECU_ACT_DWELL_START, ECU_ACT_SPARK);
 
-    if (lead_ge_min(spark_target, now_raw, min_lead) &&
-        lead_ge_min(dwell_target, now_raw, min_lead)) {
-        emit_multispark_deg(spark_deg, kCycleDeg, ms_inter_deg,
+    if (lead_ge_min(t.spark_abs, now_raw, min_lead) &&
+        lead_ge_min(t.dwell_abs, now_raw, min_lead)) {
+        emit_multispark_deg(t.spark_deg, kCycleDeg, ms_inter_deg,
             [&](uint32_t add_dwell_deg, uint32_t add_spark_deg) {
                 const uint32_t add_dwell_t =
                     engine_deg720_to_absolute(add_dwell_deg, now_raw);
@@ -963,9 +991,7 @@ static void arm_sequential_cyl(uint8_t cyl, uint32_t now_raw,
             });
     }
 
-    const uint32_t eoi_target = engine_deg720_to_absolute(eoi_deg, now_raw);
-    const uint32_t inj_on_target = eoi_target - inj_span;
-    arm_pair_if_lead(kInjCh[cyl], inj_on_target, eoi_target, now_raw, min_lead,
+    arm_pair_if_lead(kInjCh[cyl], t.inj_on_abs, t.eoi_abs, now_raw, min_lead,
                      ECU_ACT_INJ_ON, ECU_ACT_INJ_OFF);
 
     if (cyl_has_pending_events(cyl) &&
@@ -976,8 +1002,8 @@ static void arm_sequential_cyl(uint8_t cyl, uint32_t now_raw,
         L.inj_locked = 0U;
         L.dwell_ticks = sp.dwell_ticks;
         L.inj_pw_ticks = sp.inj_pw_ticks;
-        L.spark_abs = spark_target;
-        L.eoi_abs = eoi_target;
+        L.spark_abs = t.spark_abs;
+        L.eoi_abs = t.eoi_abs;
         L.omega_x65536 = ecu_sched_encoder_omega_x65536();
     }
 }
@@ -1020,27 +1046,26 @@ void try_arm_sequential_due(uint32_t now_raw) noexcept
         const uint32_t eoi_deg =
             (tdc + kCycleDeg - sp.eoi_lead_deg) % kCycleDeg;
 
-        const uint32_t spark_target =
-            engine_deg720_to_absolute(spark_deg, now_raw);
-        const uint32_t dwell_target = spark_target - dwell_span;
-        const uint32_t eoi_target =
-            engine_deg720_to_absolute(eoi_deg, now_raw);
-        const uint32_t inj_on_target = eoi_target - inj_span;
+        const uint32_t spark_abs = engine_deg720_to_absolute(spark_deg, now_raw);
+        const uint32_t eoi_abs = engine_deg720_to_absolute(eoi_deg, now_raw);
+        const SeqArmAbsTargets t = {
+            spark_abs,
+            spark_abs - dwell_span,
+            eoi_abs,
+            eoi_abs - inj_span,
+            spark_deg,
+        };
 
         const uint32_t arm_at =
-            earlier_abs_target(dwell_target, inj_on_target, now_raw);
+            earlier_abs_target(t.dwell_abs, t.inj_on_abs, now_raw);
         if (!lead_in_arm_window(arm_at, now_raw, min_lead, window)) {
             continue;
         }
 
-        // Janela confirmada — comita agora o passo do modelo X-τ. Reavalia
-        // (não reutiliza o sp do peek acima) para garantir que o setpoint
-        // armado é exatamente o que produziu a mutação persistida: contexto
-        // single-threaded (heartbeat/sub-tick), sem outro escritor de
-        // g_cyl_wall_us_q8 entre as duas chamadas nesta iteração.
-        const ems::engine::CylArmSetpoints sp_committed =
-            ems::engine::finalize_cyl_setpoints(cyl, /*commit_fuel=*/true);
-        arm_sequential_cyl(cyl, now_raw, sp_committed, min_lead, ms_inter_deg);
+        // Janela confirmada — comita só o filme X-τ do último peek (sem
+        // re-VE/λ/ΔP/S-curve). PW/avanço armados são os do peek.
+        (void)ems::engine::transient_fuel_xtau_commit_last_peek(cyl);
+        arm_sequential_cyl(cyl, now_raw, sp, t, min_lead, ms_inter_deg);
     }
 }
 

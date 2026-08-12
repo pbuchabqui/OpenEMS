@@ -191,11 +191,19 @@ void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
                                    uint8_t action) noexcept;
 void ecu_sched_encoder_evt_dispatch(void) noexcept;  // TIM2 ISR CC3IF
 
+// Contadores da fila TIM2/CH3 (produção — dash/bancada; TIM5 tem g_late_event_count).
+uint32_t ecu_sched_encoder_late_event_count(void) noexcept;
+uint32_t ecu_sched_encoder_evt_overflow(void) noexcept;
+uint32_t ecu_sched_encoder_seq_min_lead_skip_count(void) noexcept;
+
 // Heavy tick (1×/volta). CMP span/staleness evaluated; phase anchor gated by
 // EMS_MT6835_CMP_PHASE_CALIBRATED.
+// run_seq_arm: 1 = refresh+try_arm no ramo sequencial (default). 0 = só
+// handoff/purge/publish — usado pelo subtick no 64º passo (já armou).
 void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
                                       uint32_t cmp_angle,
-                                      uint32_t cmp_edge_count) noexcept;
+                                      uint32_t cmp_edge_count,
+                                      uint8_t run_seq_arm = 1U) noexcept;
 void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
                                          uint32_t cmp_angle,
                                          uint32_t cmp_edge_count) noexcept;

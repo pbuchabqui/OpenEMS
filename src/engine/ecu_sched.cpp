@@ -730,11 +730,17 @@ void ecu_sched_get_pin_counts_u32x24(uint32_t out[24])
 void ecu_sched_get_diag_snapshot(EcuSchedDiagSnapshot *out)
 {
     if (out == nullptr) { return; }
+#if EMS_MT6835_ENCODER
+    // Domínio TIM2/CH3 — dash/UART 'D' vêem late/overflow do encoder.
+    out->late_event_count = ecu_sched_encoder_late_event_count();
+    out->evt_overflow = ecu_sched_encoder_evt_overflow();
+#else
     out->late_event_count = g_late_event_count;
+    out->evt_overflow = g_dbg_evt_overflow;
+#endif
     out->cycle_schedule_drop_count = g_cycle_schedule_drop_count;
     out->inj1_arm = g_dbg_inj1_arm;
     out->seq_calls = g_dbg_seq_calls;
-    out->evt_overflow = g_dbg_evt_overflow;
     out->clear_all_count = g_dbg_clear_all_count;
     out->presync_count = g_dbg_presync_count;
     out->dwell_watchdog_count = g_dwell_watchdog_count;

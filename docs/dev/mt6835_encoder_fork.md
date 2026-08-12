@@ -683,6 +683,20 @@ alcançável; um alvo em ângulo é inalcançável com o motor parado — não s
 mesma unidade, partilhar teria travado o prime pulse para sempre em modo
 encoder.
 
+**Fusão DRY TIM5+TIM2 (traits/`ecu_sched_evt_queue.h`) — adiada (2026-08-12).**
+Um plano pós-/simplify propôs um motor genérico por traits para as ~150
+linhas quase-duplicadas de insert/dispatch. Triagem aceite: os outros
+achados desse lote (pré-filtro de `try_arm`, extract do snapshot CKP,
+omega 2× no heavy-tick, refresh sob CS, purge encoder no path TIM5,
+`#if` espalhado no loop 2 ms) **permanecem ignorados/adiados**. A fusão
+das filas **não** se implementa agora: o TIM5/`CH3` está validado em
+bancada (`v0.2-sched-validated`); o TIM2 ainda não correu em hardware.
+Host verde ≠ codegen TIM5 idêntico; `execute_head` também não é
+quase-duplicado (TIM5 tem `capture_ts`/`g_ts_ring`/path-1 vs path-2).
+Pré-condições para reabrir: bring-up MT6835 (secção abaixo) estável;
+baseline de teste `evt_inserted`/`evt_dispatched`; preferir extract só
+TIM2 ou helpers mínimos **sem** mexer no corpo de `ecu_sched_evt_dispatch`.
+
 ### Verificação final (todas as 10 tarefas)
 
 ```
@@ -721,6 +735,12 @@ Herdado do plano original, nada disto mudou nesta implementação:
   medida o ramo `phase_valid()==1` nunca corre em hardware real.
 
 ## Procedimento de bancada — quando o hardware MT6835 estiver disponível (2026-08-09)
+
+**Prioridade do fork face a DRY no dispatcher TIM5:** executar este
+roteiro (bring-up + métricas `late_event_count`, margem CCR 3 µs via ω,
+handoff force-close, X-τ peek/commit) **antes** de qualquer refactor que
+toque `ecu_sched_evt_dispatch` / a fila TIM5. Ver nota de adiamento em
+"Duas filas independentes" acima.
 
 Nenhum destes quatro itens foi executado — este é o roteiro para quando houver um
 MT6835 real ligado à placa. Ordem de dependência: 2 antes de 1 (precisa de posição

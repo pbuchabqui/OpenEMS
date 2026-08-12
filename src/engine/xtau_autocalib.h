@@ -70,6 +70,11 @@ uint32_t transient_fuel_xtau_event(uint8_t cyl,
                                    uint16_t dt_ms,
                                    bool commit = true) noexcept;
 
+// Após peek (commit=false): persiste o último passo X-τ desse cyl no filme
+// real sem re-lookup VE/λ. No-op se não houve peek válido. Usado pelo arm
+// vencedor em try_arm_sequential_due (reusa CylArmSetpoints do peek).
+bool transient_fuel_xtau_commit_last_peek(uint8_t cyl) noexcept;
+
 #if defined(EMS_HOST_TEST)
 int32_t xtau_wall_fuel_us_q8_for_cyl(uint8_t cyl) noexcept;
 #endif

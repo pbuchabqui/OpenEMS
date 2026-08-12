@@ -1333,7 +1333,11 @@ int main() {
 	            g_last_advance_deg, g_last_stft_pct,
                                            g_last_lambda_target_d4, g_last_ltft_pct);
             ems::app::ui_update_rt_sched_diag(
+#if EMS_MT6835_ENCODER
+                ecu_sched_encoder_late_event_count(),
+#else
                 g_late_event_count,
+#endif
                 g_cycle_schedule_drop_count,
                 g_calibration_clamp_count,
                 static_cast<uint8_t>(snap.state));

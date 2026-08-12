@@ -22,6 +22,18 @@ constexpr uint8_t kXtauCylCount = ems::engine::cfg::kCylinderCount;
 int32_t g_cyl_wall_us_q8[kXtauCylCount] = {};
 uint32_t g_cyl_last_ms[kXtauCylCount] = {};
 
+// Último peek X-τ por cyl (try_arm_sequential_due): commit_last_peek reaplica
+// xtau_step_wall no filme real com os mesmos inputs, sem re-lookup VE/λ.
+struct XtauPeekPending {
+    uint8_t valid;
+    uint32_t commanded_flow_us;
+    uint32_t rpm_x10;
+    uint16_t dt_ms;
+    uint16_t x_q8;
+    uint16_t tau;
+};
+XtauPeekPending g_xtau_peek[kXtauCylCount] = {};
+
 // Tabela 2D (RPM × MAP) de parâmetros X-τ aprendidos. wall_fuel_us_q8 continua
 // escalar (há fisicamente uma só parede de coletor); só X e τ variam com o
 // ponto de operação — a velocidade do ar no coletor depende de RPM e carga.
@@ -234,6 +246,7 @@ void xtau_wall_fuel_reset() noexcept {
     for (uint8_t i = 0u; i < kXtauCylCount; ++i) {
         g_cyl_wall_us_q8[i] = 0;
         g_cyl_last_ms[i] = 0u;
+        g_xtau_peek[i].valid = 0u;
     }
 }
 
@@ -501,13 +514,22 @@ uint32_t transient_fuel_xtau_event(uint8_t cyl,
     // rpm>15000 que este tem).
     if (!commit) {
         // Peek: avalia sobre uma cópia local, sem tocar g_cyl_wall_us_q8/
-        // g_cyl_last_ms/g_wall_state — ver comentário no header.
+        // g_cyl_last_ms/g_wall_state — ver comentário no header. Guarda
+        // inputs para commit_last_peek() no arm vencedor.
         int32_t peek_wall = g_cyl_wall_us_q8[cyl];
-        return xtau_step_wall(peek_wall, commanded_flow_us,
-                              params.x_fraction_q8, params.tau_cycles,
-                              dt_ms, rpm_x10);
+        const uint32_t inj = xtau_step_wall(peek_wall, commanded_flow_us,
+                                            params.x_fraction_q8, params.tau_cycles,
+                                            dt_ms, rpm_x10);
+        g_xtau_peek[cyl].valid = 1u;
+        g_xtau_peek[cyl].commanded_flow_us = commanded_flow_us;
+        g_xtau_peek[cyl].rpm_x10 = rpm_x10;
+        g_xtau_peek[cyl].dt_ms = dt_ms;
+        g_xtau_peek[cyl].x_q8 = params.x_fraction_q8;
+        g_xtau_peek[cyl].tau = params.tau_cycles;
+        return inj;
     }
 
+    g_xtau_peek[cyl].valid = 0u;
     const uint32_t inj = xtau_step_wall(g_cyl_wall_us_q8[cyl], commanded_flow_us,
                                         params.x_fraction_q8, params.tau_cycles,
                                         dt_ms, rpm_x10);
@@ -516,6 +538,20 @@ uint32_t transient_fuel_xtau_event(uint8_t cyl,
     g_wall_state.wall_fuel_us_q8 = g_cyl_wall_us_q8[cyl];
     g_wall_state.last_update_ms = g_cyl_last_ms[cyl];
     return inj;
+}
+
+bool transient_fuel_xtau_commit_last_peek(uint8_t cyl) noexcept {
+    if (cyl >= kXtauCylCount || g_xtau_peek[cyl].valid == 0u) {
+        return false;
+    }
+    const XtauPeekPending& p = g_xtau_peek[cyl];
+    (void)xtau_step_wall(g_cyl_wall_us_q8[cyl], p.commanded_flow_us,
+                         p.x_q8, p.tau, p.dt_ms, p.rpm_x10);
+    g_cyl_last_ms[cyl] = millis();
+    g_wall_state.wall_fuel_us_q8 = g_cyl_wall_us_q8[cyl];
+    g_wall_state.last_update_ms = g_cyl_last_ms[cyl];
+    g_xtau_peek[cyl].valid = 0u;
+    return true;
 }
 
 #if defined(EMS_HOST_TEST)

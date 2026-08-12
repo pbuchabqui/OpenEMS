@@ -897,6 +897,10 @@ void test_ecu_sched_encoder_dispatch_margin_domain(void) {
              "ω inválido, alvo a +16: dispara já (fronteira do fallback=16)");
     CHECK_EQ(ecu_sched_encoder_test_get_late_event_count(), 1u,
              "ω inválido, alvo a +16: contado como late");
+    CHECK_EQ(ecu_sched_encoder_late_event_count(), 1u,
+             "getter de produção late TIM2 ≠0 após late forçado");
+    CHECK_EQ(ecu_sched_encoder_evt_overflow(), 0u,
+             "getter de produção overflow TIM2 ainda 0");
 
     // ω válido, ratio=2.0 (omega_x65536=131072) → margem =
     //   ticks(3µs)=3*125/2=187 → 187*131072/65536 = 374 counts.
@@ -1818,6 +1822,14 @@ void test_ecu_sched_encoder_sequential_min_lead_dwell_behind(void) {
     CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 1u, nullptr), 0u,
              "cyl2 dwell also absent (whole pair skipped)");
 
+    // Já sequencial: tick pesado com run_seq_arm=0 não duplica try_arm
+    // (mesmo contrato do 64º subtick após o light path já ter armado).
+    const uint32_t skips_after_arm = ecu_sched_encoder_seq_min_lead_skip_count();
+    ecu_sched_encoder_heartbeat_tick(now, 1000u + (now - 1000u), 1u, 1u,
+                                     /*run_seq_arm=*/0u);
+    CHECK_EQ(ecu_sched_encoder_seq_min_lead_skip_count(), skips_after_arm,
+             "run_seq_arm=0 — sem segundo try_arm (skip count estável)");
+
     ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
     ecu_sched_test_reset();
 }
@@ -2069,7 +2081,7 @@ void test_ecu_sched_encoder_sequential_omega_refresh_lock(void) {
 }
 
 void test_enc_finalize_xtau_peek_no_commit(void) {
-    section("enc_cyl_setpoints: finalize(commit_fuel=false) não muta o filme X-τ (fix bug 3)");
+    section("enc_cyl_setpoints: finalize peek + commit_last_peek (filme 1×, PW do peek)");
     ecu_sched_test_reset();
     map_window_reset();
     enc_cyl_setpoints_reset();
@@ -2113,12 +2125,30 @@ void test_enc_finalize_xtau_peek_no_commit(void) {
     CHECK_EQ(ems::engine::xtau_wall_fuel_us_q8_for_cyl(0u), wall_after_commit,
              "5× peek (commit_fuel=false) — filme inalterado (fix bug 3)");
 
-    // Nova chamada comitada (a "vencedora", já dentro da janela) volta a
-    // integrar o modelo — prova que peek não deixou o caminho de commit
-    // partido, só suprimiu a mutação nas tentativas especulativas.
-    (void)finalize_cyl_setpoints(0u, /*commit_fuel=*/true);
-    CHECK_TRUE(ems::engine::xtau_wall_fuel_us_q8_for_cyl(0u) != wall_after_commit,
-               "commit seguinte volta a integrar — caminho de commit continua vivo");
+    // Caminho do arm vencedor: reutiliza sp do peek + commit_last_peek
+    // (só o filme; sem segundo finalize completo).
+    const ems::engine::CylArmSetpoints sp_peek =
+        finalize_cyl_setpoints(0u, /*commit_fuel=*/false);
+    CHECK_EQ(ems::engine::xtau_wall_fuel_us_q8_for_cyl(0u), wall_after_commit,
+             "peek pré-commit — filme ainda inalterado");
+    CHECK_TRUE(ems::engine::transient_fuel_xtau_commit_last_peek(0u),
+               "commit_last_peek aplica o passo do peek ao filme real");
+    const int32_t wall_after_peek_commit =
+        ems::engine::xtau_wall_fuel_us_q8_for_cyl(0u);
+    CHECK_TRUE(wall_after_peek_commit != wall_after_commit,
+               "após peek+commit API, filme muda exactamente 1×");
+    CHECK_TRUE(!ems::engine::transient_fuel_xtau_commit_last_peek(0u),
+               "segundo commit_last_peek é no-op (peek já consumido)");
+    CHECK_EQ(ems::engine::xtau_wall_fuel_us_q8_for_cyl(0u), wall_after_peek_commit,
+             "no-op não volta a integrar o filme");
+
+    // PW que o arm usaria é o do peek — não o de um segundo finalize
+    // (que veria o filme já mutado e produziria PW diferente).
+    const ems::engine::CylArmSetpoints sp_if_refinalize =
+        finalize_cyl_setpoints(0u, /*commit_fuel=*/false);
+    CHECK_TRUE(sp_peek.inj_pw_ticks != sp_if_refinalize.inj_pw_ticks,
+               "re-finalize após commit veria filme novo — PW mudaria");
+    // O contrato do arm: sp_peek.inj_pw_ticks é o que fica armado.
 
     ecu_sched_test_reset();
     ems::engine::xtau_wall_fuel_reset();
