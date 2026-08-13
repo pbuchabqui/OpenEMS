@@ -736,6 +736,19 @@ Herdado do plano original, nada disto mudou nesta implementação:
 
 ## Procedimento de bancada — quando o hardware MT6835 estiver disponível (2026-08-09)
 
+### Estimulador ESP32 sem MT6835 (ABZ sintético)
+
+Antes do módulo real (ou em paralelo), dá para exercitar TIM2/TIM3 + scheduler
+encoder com o sketch **`tools/esp32_encoder_stim/`**:
+
+- GPIO2/4 → PA0/PA1 (quadratura A/B, 16384 counts/volta)
+- GPIO5 → PC6 (CMP, 1 pulso/720°)
+- Protocolo StimLink (serial / TCP :3333) + sensores analógicos
+
+O `esp32_combined` (CKP 60-2 em PA0/PA1) **não** serve neste build. Ver
+[`tools/esp32_encoder_stim/README.md`](../../tools/esp32_encoder_stim/README.md)
+e smoke HIL `tools/hil_test/hil_encoder_test.py`.
+
 **Prioridade do fork face a DRY no dispatcher TIM5:** executar este
 roteiro (bring-up + métricas `late_event_count`, margem CCR 3 µs via ω,
 handoff force-close, X-τ peek/commit) **antes** de qualquer refactor que

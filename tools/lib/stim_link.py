@@ -1,7 +1,8 @@
 """Stim Link — ESP32 stimulator communication (serial or TCP).
 
-Extracted from tools/hil_test/hil_test.py. Supports both the legacy
-esp32_stimulator (serial/TCP) and the new esp32_combined (serial).
+Extracted from tools/hil_test/hil_test.py. Supports:
+  - legacy esp32_stimulator / esp32_combined (CKP 60-2)
+  - esp32_encoder_stim (quadratura AB + CMP em PC6)
 
 Usage:
     from tools.lib.stim_link import StimLink
@@ -10,6 +11,7 @@ Usage:
     stim.set_rpm(1500)
     stim.set_map(55)
     stim.set_clt(90)
+    stim.set_cmp_tooth(8192)  # só encoder_stim; no-op / ignorado no CKP stim
     stim.preset("IDLE")
 """
 
@@ -81,6 +83,11 @@ class StimLink:
 
     def set_tps(self, pct: int) -> None:
         self._send(f"TPS {pct}")
+
+    def set_cmp_tooth(self, tooth: int) -> None:
+        """Offset do flanco CMP no ciclo 720° (0..16383). Só esp32_encoder_stim."""
+        tooth = max(0, min(16383, int(tooth)))
+        self._send(f"CMP_TOOTH {tooth}")
 
     def preset(self, name: str) -> None:
         self._send(name.upper())
