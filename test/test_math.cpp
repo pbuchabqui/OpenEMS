@@ -238,30 +238,35 @@ void test_math_corrections(void) {
 
 void test_math_stft_gains(void) {
     section("MATH: fuel_update_stft ganhos Kp e Ki exactos");
-    // Kp=stft_kp_x100=3, Ki_x1000=10 (default desde 2026-08-14, era 5 — Ki
-    // dobrado p/ ~10s de convergência a um erro de 1%λ, ver
-    // test_fuel_stft_convergence_time). p e integrador combinam em ×1000
+    // Kp=stft_kp_x100=3, Ki_x1000=5 — default de PRODUÇÃO (host-test compila
+    // sem EMS_MT6835_ENCODER, cai no ramo `else` do ternário em
+    // calibration.cpp; o caminho encoder usa 10, gated, ver
+    // test_fuel_stft_convergence_time, que define o valor explicitamente em
+    // vez de depender do default global). p e integrador combinam em ×1000
     // antes de UM único /100 no fim (fuel_trim.cpp) — dividir o P sozinho
-    // antes de somar truncava a zero erros pequenos, por isso agora é feito
-    // junto. Por error=200 x1000 (20% lean): p_x1000 = 200×3 = 600;
-    // Δintegrador_x1000 = (200×10)/10 = 200/call (exacto, sem clamp).
-    // Após N chamadas: stft_x10(N) = (600 + 200N)/100 = 6 + 2N (exacto).
-    // Verificar após 1 chamada: stft=8; após 10: stft=26; após 300: stft=250 (clampado)
+    // antes de somar truncava a zero erros pequenos; para o erro grande
+    // testado aqui (200 x1000 = 20% lean) isso já não truncava mesmo antes
+    // do fix (p_x1000=600 é múltiplo exacto de 100), por isso os valores
+    // abaixo não mudam com o fix — só passam a ser exactos por construção,
+    // não por coincidência. Por error=200 x1000: p_x1000 = 200×3 = 600;
+    // Δintegrador_x1000 = (200×5)/10 = 100/call (exacto, sem clamp).
+    // Após N chamadas: stft_x10(N) = (600 + 100N)/100 = 6 + N (exacto).
+    // Verificar após 1 chamada: stft=7; após 10: stft=16; após 300: stft=250 (clampado)
 
     fuel_reset_adaptives();
-    // 1 chamada: p_x1000=600, integrador_x1000=200, stft=(600+200)/100=8
+    // 1 chamada: p_x1000=600, integrador_x1000=100, stft=(600+100)/100=7
     const int16_t s1 = fuel_update_stft(
         30000u, 100u, 1000, 1200, 900, true, false, false, 30000u, 500u);
-    CHECK_EQ(s1, 8, "STFT após 1 call (lean 20%): (p_x1000=600 + I_x1000=200)/100 = 8");
+    CHECK_EQ(s1, 7, "STFT após 1 call (lean 20%): (p_x1000=600 + I_x1000=100)/100 = 7");
 
-    // Após 9 calls adicionais (total 10): integrador_x1000=2000, stft=(600+2000)/100=26
+    // Após 9 calls adicionais (total 10): integrador_x1000=1000, stft=(600+1000)/100=16
     for (int i = 0; i < 9; ++i) {
         fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 30000u, 500u);
     }
-    CHECK_EQ(fuel_get_stft_pct_x10(), 26, "STFT após 10 calls: (p_x1000=600 + I_x1000=2000)/100 = 26");
+    CHECK_EQ(fuel_get_stft_pct_x10(), 16, "STFT após 10 calls: (p_x1000=600 + I_x1000=1000)/100 = 16");
 
     section("MATH: fuel_update_stft clamp kStftClampX10=250");
-    // Integrador atinge o clamp ×1000 (25000) em N=125 (200×125=25000);
+    // Integrador atinge o clamp ×1000 (25000) em N=250 (100×250=25000);
     // 300 chamadas está bem além disso → já saturado, clamp_i16 final=250.
     for (int i = 0; i < 290; ++i) {
         fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 30000u, 500u);

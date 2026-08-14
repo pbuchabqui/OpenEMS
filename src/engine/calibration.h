@@ -323,7 +323,7 @@ extern uint16_t eoi_idle_deg;        // ° BTDC combustão, default 60 (closed-v
 extern uint16_t eoi_blend_rpm_lo;    // RPM início do blend, default 0 (off)
 extern uint16_t eoi_blend_rpm_hi;    // RPM fim do blend,    default 0 (off)
 
-extern uint16_t stft_ki_x1000;       // Ki × 1000, default 10 (= 0.010)
+extern uint16_t stft_ki_x1000;       // Ki × 1000, default 5 (produção) / 10 (encoder, EMS_MT6835_ENCODER)
 extern uint16_t stft_clamp_pct_x10;  // clamp ±%, default 250 (= 25.0%)
 
 // X-τ auto-calibration limits (página 0, offsets 146-153)

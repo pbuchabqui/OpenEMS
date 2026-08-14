@@ -1,5 +1,7 @@
 #include "engine/calibration.h"
 
+#include "hal/board_pinout.h"  // EMS_MT6835_ENCODER — default de stft_ki_x1000
+
 #include <cstring>
 
 #include "drv/sensors.h"
@@ -299,7 +301,15 @@ uint16_t eoi_idle_deg      = 60u;   // closed-valve (fim na compressão)
 uint16_t eoi_blend_rpm_lo  = 2000u; // abaixo: closed-valve (60°)
 uint16_t eoi_blend_rpm_hi  = 4000u; // acima: open-valve (355°)
 
-uint16_t stft_ki_x1000      = 10u;   // 0.010 (era 5/0.005 — ~10s p/ cancelar erro de 1%λ, era ~20s)
+// Ki dobrado (5→10) só no caminho encoder (decisão do utilizador,
+// 2026-08-14): ~10s p/ cancelar erro de 1%λ em vez de ~20s — mudança de
+// afinação ainda não validada contra ruído de sensor λ real (só bancada com
+// λ simulado limpo). Produção/Hall mantém o Ki=5 original até essa
+// validação. `if`, não `#if`, sobre a macro sempre definida
+// (board_pinout.h) — mesmo raciocínio já usado em main_stm32.cpp: custo
+// zero em produção via constant-folding, sem esconder o ramo de compilar em
+// host-test.
+uint16_t stft_ki_x1000      = EMS_MT6835_ENCODER ? 10u : 5u;  // 0.010 encoder / 0.005 produção
 uint16_t stft_clamp_pct_x10 = 250u;  // 25.0%
 
 uint16_t xtau_x_min_q8  = 64u;   // 0.25

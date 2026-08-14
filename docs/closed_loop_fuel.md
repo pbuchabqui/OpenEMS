@@ -110,20 +110,27 @@ Clear ~2 s fora do sat. Severidade WARNING.
       página realtime reporta STFT em passos de 1% (`clamp_i8(stft/10,…)`)
       — com o degrau de 0,010λ, é uma "escada" lenta, não uma curva suave;
       esperado, não bug.
-   5. Baseline quantitativo (ganhos ajustados 2026-08-14, sem plant
-      feedback — λ medido não reage ao trim neste bench):
+   5. Baseline quantitativo do **caminho encoder** (`stft_ki_x1000=10`, sem
+      plant feedback — λ medido não reage ao trim neste bench):
       `test_fuel_stft_convergence_time` (`test/test_fuel.cpp`) mede
       **97 ticks × 100ms ≈ 9,7s** até o trim atingir 1,0% (o valor que
       cancelaria um erro constante de 1%λ) e ~2497 ticks (~250s) até
       saturar o clamp ±25% — a saturação é artefacto do clamp sem plant
-      feedback, não é o número relevante para decisão de afinação.
+      feedback, não é o número relevante para decisão de afinação. Em
+      produção (`stft_ki_x1000=5`, Hall) o mesmo degrau leva ~20s a
+      cancelar 1%λ — ver `test_math_stft_gains` (`test/test_math.cpp`), que
+      cobre o default de produção.
       Histórico: até 2026-08-14 o termo proporcional (`p_x10 = error×Kp/100`)
       truncava a zero para qualquer erro <3,3% por dividir antes de somar
       ao integrador — a faixa que o STFT vê de facto em operação normal.
       Corrigido em `fuel_trim.cpp` (P e integrador combinam em ×1000, um só
-      `/100` no fim) e `stft_ki_x1000` dobrado de 5→10 (baseline anterior:
-      ~20s até cancelar 1%λ). Qualquer afinação futura de Kp/Ki/clamp deve
-      atualizar essa conta de propósito.
+      `/100` no fim) — este fix é universal, ambos os caminhos.
+      `stft_ki_x1000` dobrado de 5→10 **só no caminho encoder**
+      (`EMS_MT6835_ENCODER`, `calibration.cpp`) — mudança de afinação real,
+      ainda não validada contra ruído de sensor λ real (só bancada com λ
+      simulado limpo), por isso não foi estendida à produção. Qualquer
+      afinação futura de Kp/Ki/clamp deve atualizar essa conta de
+      propósito.
 
 ## Layout page0 (closed-loop)
 

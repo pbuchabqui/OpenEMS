@@ -452,10 +452,12 @@ void test_fuel_stft(void) {
 
     // Closed loop disabled (cold engine): STFT congela (anti-windup), não decai —
     // evita um "degrau" de combustível perceptível quando volta a closed-loop.
+    // clt=390 (39°C) < kClosedLoopMinCltX10=400 (40°C, 2026-08-14) — abaixo
+    // do limiar atual; 600 (60°C) já não serve, ficou acima do novo limiar.
     fuel_reset_adaptives();
     fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);  // set non-zero
     const int16_t before = fuel_get_stft_pct_x10();
-    fuel_update_stft(30000u, 100u, 1000, 1050, 600, true, false, false, 5000u, 500u);  // clt too cold
+    fuel_update_stft(30000u, 100u, 1000, 1050, 390, true, false, false, 5000u, 500u);  // clt too cold
     const int16_t after = fuel_get_stft_pct_x10();
     CHECK_EQ(after, before, "closed loop disabled → STFT congela (freeze)");
 }
@@ -497,20 +499,26 @@ void test_fuel_stft_convergence_time(void) {
     // ticks até convergir" sob ganhos default, não "quando o delay liberta
     // o closed loop".
 
-    // Ganhos default assumidos explicitamente (não herdados de testes
-    // anteriores) — a asserção abaixo é uma conta exata em aritmética
-    // inteira; depender da ordem da suite quebraria silenciosamente.
-    // Ki dobrado 5→10 (2026-08-14): baseline anterior media ~20s para
-    // cancelar um erro de 1%λ; utilizador pediu alvo ~10s. Ao mesmo tempo,
-    // fuel_trim.cpp deixou de dividir o termo P por 100 antes de somar ao
-    // integrador — essa divisão prematura truncava a zero qualquer erro
-    // <3,3% (Kp=0,03), a faixa que o STFT vê de facto em operação normal;
-    // agora P e integrador combinam em ×1000 e só há um /100 no fim.
+    // Ganhos assumidos explicitamente (não herdados de testes anteriores,
+    // nem do default global — ver nota abaixo) — a asserção abaixo é uma
+    // conta exata em aritmética inteira; depender da ordem da suite ou do
+    // ramo de compilação quebraria silenciosamente.
+    // Ki=10 (2026-08-14) é o valor SÓ do caminho encoder
+    // (EMS_MT6835_ENCODER, calibration.cpp) — produção mantém Ki=5; gated
+    // porque é mudança real de afinação (~10s para cancelar erro de 1%λ em
+    // vez de ~20s) ainda não validada contra ruído de sensor λ real. Este
+    // teste fixa o valor explicitamente para exercitar o caminho encoder
+    // independentemente de qual seja o default de host-test. Ao mesmo
+    // tempo, fuel_trim.cpp deixou de dividir o termo P por 100 antes de
+    // somar ao integrador (esse fix É universal, não gated) — essa divisão
+    // prematura truncava a zero qualquer erro <3,3% (Kp=0,03), a faixa que
+    // o STFT vê de facto em operação normal; agora P e integrador combinam
+    // em ×1000 e só há um /100 no fim.
     fuel_reset_adaptives();
     closed_loop_enable = 1u;
     closed_loop_post_start_s = 0u;
-    stft_kp_x100 = 3u;          // 0.03 (default)
-    stft_ki_x1000 = 10u;        // 0.010 (default, era 5/0.005)
+    stft_kp_x100 = 3u;          // 0.03 (default, ambos os caminhos)
+    stft_ki_x1000 = 10u;        // 0.010 — valor do caminho encoder, fixado explicitamente
     stft_clamp_pct_x10 = 250u;  // ±25.0% (default)
 
     // Erro fixo REALISTA: target=1.000, measured=1.010 → error_x1000=10, a
@@ -543,6 +551,11 @@ void test_fuel_stft_convergence_time(void) {
 
     fuel_reset_adaptives();
     closed_loop_post_start_s = 15u;  // restaura default
+    stft_ki_x1000 = 5u;  // restaura default de produção (host-test) — este
+                          // teste fixa 10 (valor do caminho encoder) de
+                          // propósito; sem isto, testes seguintes que
+                          // dependem do default global (ex.:
+                          // test_math_stft_gains) herdavam 10 em vez de 5.
 }
 
 void test_injector_scurve(void) {
