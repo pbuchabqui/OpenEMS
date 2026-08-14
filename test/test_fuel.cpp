@@ -500,50 +500,46 @@ void test_fuel_stft_convergence_time(void) {
     // Ganhos default assumidos explicitamente (não herdados de testes
     // anteriores) — a asserção abaixo é uma conta exata em aritmética
     // inteira; depender da ordem da suite quebraria silenciosamente.
+    // Ki dobrado 5→10 (2026-08-14): baseline anterior media ~20s para
+    // cancelar um erro de 1%λ; utilizador pediu alvo ~10s. Ao mesmo tempo,
+    // fuel_trim.cpp deixou de dividir o termo P por 100 antes de somar ao
+    // integrador — essa divisão prematura truncava a zero qualquer erro
+    // <3,3% (Kp=0,03), a faixa que o STFT vê de facto em operação normal;
+    // agora P e integrador combinam em ×1000 e só há um /100 no fim.
     fuel_reset_adaptives();
     closed_loop_enable = 1u;
     closed_loop_post_start_s = 0u;
     stft_kp_x100 = 3u;          // 0.03 (default)
-    stft_ki_x1000 = 5u;         // 0.005 (default)
+    stft_ki_x1000 = 10u;        // 0.010 (default, era 5/0.005)
     stft_clamp_pct_x10 = 250u;  // ±25.0% (default)
 
-    // Erro fixo REALISTA (não os 0,200λ artificiais da 1ª versão deste
-    // teste — corrigido a pedido do utilizador, 2026-08-14): target=1.000,
-    // measured=1.010 → error_x1000=10, a ordem de grandeza que o STFT
-    // corrige de facto em operação normal (sem plant feedback — modela o
-    // bench atual: λ medido não reage ao trim, ver can_stack_set_bench_lambda).
-    // Com os ganhos default: p_x10=(10*3)/100=0 (TRUNCA — o termo
-    // proporcional desaparece nesta magnitude de erro, não é bug do teste,
-    // é aritmética inteira real do controlador); Δintegrador=(10*5)/10=5/tick
-    // (exato); stft_x10(N)=floor(5N/100)=floor(N/20) exato (5N/100 e N/20
-    // são o mesmo racional, sem perda extra na divisão inteira). Só o
-    // integrador move o trim aqui — confirmado pelos checkpoints abaixo.
-    // Satura no clamp ±250 em N=5000 (floor(5000/20)=250,
-    // floor(4999/20)=249) — o teste só fica 2 ticks no clamp (5000, 5001),
-    // longe do limiar de 50 ticks que confirmaria o DTC STFT_LIMIT_REACHED
-    // (kTrimSatConfirmTicks, fuel_trim.cpp), então não precisa de limpar
-    // DiagnosticManager (mesmo raciocínio da versão anterior deste teste).
+    // Erro fixo REALISTA: target=1.000, measured=1.010 → error_x1000=10, a
+    // ordem de grandeza que o STFT corrige de facto em operação normal (sem
+    // plant feedback — modela o bench atual: λ medido não reage ao trim, ver
+    // can_stack_set_bench_lambda). Com os ganhos actuais: p_x1000=10*3=30
+    // (constante, já não trunca a zero); Δintegrador_x1000=(10*10)/10=10/tick
+    // (exato); stft_x10(N)=floor((30+10N)/100) exato.
     auto tick = [&]() {
         return fuel_update_stft(30000u, 100u, 1000, 1010, 900,
                                 true, false, false, 5000u, 500u);
     };
-    for (int i = 1; i < 20; ++i) { tick(); }
-    CHECK_EQ(tick(), 1, "tick 20: floor(20/20)=1 (0,1% — só o integrador move)");
-    for (int i = 21; i < 200; ++i) { tick(); }
-    CHECK_EQ(tick(), 10, "tick 200: floor(200/20)=10 (1,0%)");
-    for (int i = 201; i < 2000; ++i) { tick(); }
-    CHECK_EQ(tick(), 100, "tick 2000: floor(2000/20)=100 (10,0%)");
-    for (int i = 2001; i < 5000; ++i) { tick(); }
-    CHECK_EQ(tick(), 250, "tick 5000: primeiro tick a saturar no clamp (floor(5000/20)=250)");
+    for (int i = 1; i < 7; ++i) { tick(); }
+    CHECK_EQ(tick(), 1, "tick 7: floor(100/100)=1 (0,1% — P deixou de estar morto nesta magnitude)");
+    for (int i = 8; i < 97; ++i) { tick(); }
+    CHECK_EQ(tick(), 10, "tick 97 (~9,7s): floor(1000/100)=10 (1,0% — cancela o erro de 1%λ, alvo ~10s)");
+    for (int i = 98; i < 997; ++i) { tick(); }
+    CHECK_EQ(tick(), 100, "tick 997: floor(10000/100)=100 (10,0%)");
+    for (int i = 998; i < 2497; ++i) { tick(); }
+    CHECK_EQ(tick(), 250, "tick 2497: primeiro tick a saturar no clamp (floor(25000/100)=250)");
     CHECK_EQ(fuel_get_stft_pct_x10(), 250, "fuel_get_stft_pct_x10 consistente");
-    CHECK_EQ(tick(), 250, "tick 5001: mantém-se saturado");
+    CHECK_EQ(tick(), 250, "tick 2498: mantém-se saturado");
 
-    // Baseline documentado: 5000 ticks × 100ms/tick (cadência real de
-    // fuel_update_stft_delayed, main_stm32.cpp) = 500s (8,3 min) até saturar
-    // ±25% com um degrau realista de 0,010λ sob ganhos default — bem mais
-    // lento que os 24,4s que os antigos 0,200λ artificiais davam a entender.
-    // Não é um alvo — é o número de hoje; mudar Kp/Ki/clamp deve atualizar
-    // esta conta de propósito.
+    // Baseline documentado: 2497 ticks × 100ms/tick (cadência real de
+    // fuel_update_stft_delayed, main_stm32.cpp) = ~250s (4,2 min) até saturar
+    // ±25% com um degrau realista de 0,010λ. O número relevante para decisão
+    // de afinação não é este (artefacto do clamp sem plant feedback) — é o
+    // tick 97/~9,7s até cancelar o erro de 1%λ. Mudar Kp/Ki/clamp de novo
+    // deve atualizar esta conta de propósito.
 
     fuel_reset_adaptives();
     closed_loop_post_start_s = 15u;  // restaura default

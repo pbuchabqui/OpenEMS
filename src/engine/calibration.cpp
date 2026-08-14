@@ -299,7 +299,7 @@ uint16_t eoi_idle_deg      = 60u;   // closed-valve (fim na compressão)
 uint16_t eoi_blend_rpm_lo  = 2000u; // abaixo: closed-valve (60°)
 uint16_t eoi_blend_rpm_hi  = 4000u; // acima: open-valve (355°)
 
-uint16_t stft_ki_x1000      = 5u;    // 0.005
+uint16_t stft_ki_x1000      = 10u;   // 0.010 (era 5/0.005 — ~10s p/ cancelar erro de 1%λ, era ~20s)
 uint16_t stft_clamp_pct_x10 = 250u;  // 25.0%
 
 uint16_t xtau_x_min_q8  = 64u;   // 0.25

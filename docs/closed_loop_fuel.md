@@ -108,15 +108,22 @@ Clear ~2 s fora do sat. Severidade WARNING.
       corrige de facto em operação normal (ver `test_fuel_stft_convergence_time`).
    4. Observar o traço de `stft_pct` no gráfico. **Nota de resolução**: a
       página realtime reporta STFT em passos de 1% (`clamp_i8(stft/10,…)`)
-      — com o degrau de 0,010λ, o termo proporcional trunca a zero nesta
-      magnitude de erro (só o integrador move o trim) e o primeiro passo de
-      1% visível só aparece aos ~20s (200 ticks); é uma "escada" lenta, não
-      uma curva suave — esperado, não bug.
-   5. Baseline quantitativo (ganhos default, sem plant feedback — λ medido
-      não reage ao trim neste bench): `test_fuel_stft_convergence_time`
-      (`test/test_fuel.cpp`) mede 5000 ticks × 100ms = 500s (8,3 min) até
-      saturar o clamp ±25% sob um degrau de 0,010λ. Qualquer afinação futura de
-      Kp/Ki/clamp deve atualizar essa conta de propósito.
+      — com o degrau de 0,010λ, é uma "escada" lenta, não uma curva suave;
+      esperado, não bug.
+   5. Baseline quantitativo (ganhos ajustados 2026-08-14, sem plant
+      feedback — λ medido não reage ao trim neste bench):
+      `test_fuel_stft_convergence_time` (`test/test_fuel.cpp`) mede
+      **97 ticks × 100ms ≈ 9,7s** até o trim atingir 1,0% (o valor que
+      cancelaria um erro constante de 1%λ) e ~2497 ticks (~250s) até
+      saturar o clamp ±25% — a saturação é artefacto do clamp sem plant
+      feedback, não é o número relevante para decisão de afinação.
+      Histórico: até 2026-08-14 o termo proporcional (`p_x10 = error×Kp/100`)
+      truncava a zero para qualquer erro <3,3% por dividir antes de somar
+      ao integrador — a faixa que o STFT vê de facto em operação normal.
+      Corrigido em `fuel_trim.cpp` (P e integrador combinam em ×1000, um só
+      `/100` no fim) e `stft_ki_x1000` dobrado de 5→10 (baseline anterior:
+      ~20s até cancelar 1%λ). Qualquer afinação futura de Kp/Ki/clamp deve
+      atualizar essa conta de propósito.
 
 ## Layout page0 (closed-loop)
 
