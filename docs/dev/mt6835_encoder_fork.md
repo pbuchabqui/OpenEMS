@@ -504,6 +504,17 @@ Implementado nesta revisão: `tim3_cmp_ic_init()` + `TIM3_IRQHandler` +
 
 ## Wiring ao boot — `EMS_MT6835_ENCODER` (2026-08-09)
 
+> **Como ligar a flag na prática (2026-08-14):** `EMS_MT6835_ENCODER=1 make
+> firmware-vgt6` (env var ou `make VAR=1`) **não funciona** — o Makefile
+> nunca referencia esta variável, o build corre em silêncio como produção
+> (confirmado por grep + `nm` no ELF resultante). O único mecanismo real é
+> editar `hal/board_pinout.h:39-40` temporariamente (`#define
+> EMS_MT6835_ENCODER 0` → `1`), `make clean && WERROR=1 make firmware-vgt6`,
+> copiar o `.bin`, e reverter o header antes de commitar (`git diff` deve
+> ficar vazio). Onde este documento mostra `EMS_MT6835_ENCODER=1 make ...`
+> como comando, leia-o como notação abreviada desse procedimento, não como
+> uma invocação real.
+
 Os quatro mecanismos (`tim2_encoder_init`, `mt6835_init`, `tim3_cmp_ic_init`,
 `tim5_freerun_init`) estavam implementados mas eram código morto — nada os
 chamava. Ligados agora atrás de uma flag de compilação nova,
@@ -1029,9 +1040,14 @@ host test.
 make host-test                  → 1439 PASS, 0 FAIL
 make host-test-vgt6             → 24 PASS, 0 FAIL
 make firmware-vgt6/rgt6/mre      → build limpo, flags default
-EMS_MT6835_ENCODER=1 WERROR=1 make firmware-vgt6                          → limpo
-EMS_MT6835_ENCODER=1 EMS_MT6835_CMP_PHASE_CALIBRATED=1 WERROR=1 firmware-vgt6 → limpo
 ```
+
+`EMS_MT6835_ENCODER=1 make firmware-vgt6` **não liga a flag** — o Makefile
+nunca a referencia, o build corre em silêncio como produção (ver nota no
+topo do documento). Para build de bancada: editar `board_pinout.h:39-40`
+(`#define EMS_MT6835_ENCODER 0` → `1`, e `EMS_MT6835_CMP_PHASE_CALIBRATED`
+em `:50-52` se aplicável), `make clean && WERROR=1 make firmware-vgt6`,
+copiar o `.bin`, reverter o header (`git diff` deve ficar vazio) → limpo.
 
 `hw/v1-clean-board` (branch principal, fora deste worktree) confirmado
 intocado antes e depois de cada commit desta sessão.
@@ -1147,10 +1163,13 @@ make host-test                  → 1528 PASS, 0 FAIL
 make host-test-vgt6             → 24 PASS, 0 FAIL
 make host-test-knock-hw         → 5 PASS, 0 FAIL (EMS_KNOCK_HW_PRESENT=1)
 make firmware-vgt6/rgt6/mre     → build limpo, flags default
-EMS_MT6835_ENCODER=1 EMS_MT6835_CMP_PHASE_CALIBRATED=1
-  EMS_MISFIRE_ENCODER_ENABLE=1 EMS_KNOCK_HW_PRESENT=1 WERROR=1
-  firmware-vgt6                 → limpo, revertido depois
 ```
+
+Build de bancada (header editado temporariamente, ver nota no início do
+documento): `EMS_MT6835_ENCODER=1`, `EMS_MT6835_CMP_PHASE_CALIBRATED=1`,
+`EMS_MISFIRE_ENCODER_ENABLE=1`, `EMS_KNOCK_HW_PRESENT=1` juntos em
+`board_pinout.h` → `WERROR=1 make firmware-vgt6` limpo, header revertido
+depois.
 
 `hw/v1-clean-board` confirmado intocado antes e depois de cada commit desta
 sessão (7 commits: `97c04d2` wiring+testes do knock, `0bbaa65` doc
@@ -1221,12 +1240,16 @@ Não mudar o default em `board_pinout.h` sem medição. Procedimento:
 1. Seguir a secção de calibração CMP / `trigger_tooth0_engine_deg` acima
    (passos 1–6): determinar se o flanco Hall aceite é `ECU_PHASE_A` ou
    `ECU_PHASE_B` face ao PMS de compressão do cilindro 1.
-2. Build de bancada (não commit da flag no default):
+2. Build de bancada (não commit da flag no default). `EMS_MT6835_ENCODER=1
+   make firmware-vgt6 ...` **não funciona** (ver nota no início do
+   documento) — editar em `board_pinout.h`:
+   ```c
+   #define EMS_MT6835_ENCODER 1
+   #define EMS_MT6835_CMP_PHASE_VALUE <ECU_PHASE_A_ou_ECU_PHASE_B>
+   #define EMS_MT6835_CMP_PHASE_CALIBRATED 1
    ```
-   make firmware-vgt6 EMS_MT6835_ENCODER=1 \
-     EMS_MT6835_CMP_PHASE_VALUE=<A_ou_B> \
-     EMS_MT6835_CMP_PHASE_CALIBRATED=1 WERROR=1
-   ```
+   depois `make clean && WERROR=1 make firmware-vgt6`, copiar o `.bin`, e
+   reverter as três linhas antes de commitar.
 3. Critérios de aceite: `phase_valid()==1` após flanco CMP aceite;
    `ecu_sched_is_sequential()==1`; disparo IGN na ordem física 1-3-4-2;
    sem `g_enc_seq_min_lead_skip_count` a correr em regime estável.
@@ -1241,9 +1264,12 @@ make host-test                  → PASS (incl. min-lead dwell, refresh, multisp
 make host-test-knock-hw         → PASS (TIM5 + encoder arm wiring)
 make host-test-vgt6             → PASS
 make firmware-vgt6/rgt6/mre     → build limpo, flags default
-EMS_MT6835_ENCODER=1 EMS_MT6835_CMP_PHASE_CALIBRATED=1 WERROR=1
-  firmware-vgt6                 → limpo, board_pinout.h revertido depois
 ```
+
+Build de bancada (header editado temporariamente, ver nota no início do
+documento): `EMS_MT6835_ENCODER=1` + `EMS_MT6835_CMP_PHASE_CALIBRATED=1` em
+`board_pinout.h` → `WERROR=1 make firmware-vgt6` limpo, header revertido
+depois.
 
 Host tests provam o construtor em isolamento — **não** provam disparo
 sequencial real em motor (`EMS_MT6835_CMP_PHASE_CALIBRATED` nunca medido

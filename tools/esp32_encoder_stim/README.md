@@ -42,9 +42,15 @@ IGN3/4 e INJ3/4 não cabem sem remapar LEDC — use osciloscópio ou segundo ESP
 
 ## Firmware STM32
 
+`EMS_MT6835_ENCODER=1 make firmware-vgt6` **não liga a flag** — o Makefile
+nunca a referencia, o build corre em silêncio como produção. Editar
+`src/hal/board_pinout.h:39-40` temporariamente (`#define
+EMS_MT6835_ENCODER 0` → `1`):
+
 ```bash
-make firmware-vgt6 EMS_MT6835_ENCODER=1 WERROR=1
+make clean && WERROR=1 make firmware-vgt6
 # MT6835_HW_PRESENT=0 (default) — sem SPI; TIM2 conta só AB externo
+# reverter board_pinout.h antes de commitar (git diff deve ficar vazio)
 ```
 
 Após DFU: **power-cycle** (não só `:leave`).
