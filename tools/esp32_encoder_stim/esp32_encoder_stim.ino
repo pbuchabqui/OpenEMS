@@ -4,7 +4,13 @@
  * Substitui o CKP 60-2 do esp32_stimulator/combined quando o firmware STM32
  * está compilado com EMS_MT6835_ENCODER=1 (sem chip MT6835 — TIM2 conta AB).
  *
- * Plataforma: ESP32 (Arduino core ≥ 2.0 / ESP-IDF ≥ 4.4)
+ * Plataforma: ESP32 clássico (testado) e variantes compatíveis.
+ *   Quadratura A/B via LEDC (driver/ledc.h, dois canais no mesmo timer,
+ *   fase fixada por hpoint) — não depende de rmt_new_sync_manager(), que
+ *   falha sempre no ESP32 clássico (ESP_ERR_NOT_SUPPORTED, ver nota junto a
+ *   kRmtResHz). Sem requisito de Arduino core ≥ 3.0 / IDF ≥ 5.1 por causa
+ *   disto (o resto do ficheiro — DAC, LEDC do PWM analógico, esp_timer —
+ *   já não tinha essa dependência).
  *
  * ── Ligações mínimas (WeAct STM32H562VGT6) ───────────────────────────────
  *
@@ -36,8 +42,6 @@
 #include "driver/gpio.h"
 #include "driver/dac.h"
 #include "driver/ledc.h"
-#include "driver/rmt_tx.h"
-#include "driver/rmt_encoder.h"
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
@@ -123,67 +127,95 @@ static uint16_t press_bar_x10_to_raw(uint16_t bar_x10) {
 static uint8_t raw_to_dac8(uint16_t raw) { return (uint8_t)(raw >> 4u); }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Quadratura AB via RMT — 4 fases Gray em loop (16384 counts/volta X4)
+// Quadratura AB via LEDC — dois canais no MESMO timer, hpoint fixo (16384
+// counts/volta X4)
 // ═══════════════════════════════════════════════════════════════════════════
 // TIM2 SMS=encoder mode 3 conta ambas as bordas de A e B → 4 counts por
 // ciclo elétrico. 4096 ciclos/volta × 4 = 16384 (paridade MT6835 4096 PPR).
 //
-// Resolução RMT 10 MHz (0.1 µs/tick) → 6000 RPM ≈ 6 ticks/fase (ok).
+// Histórico: a 1ª versão gerava A/B via RMT (2 canais TX independentes) com
+// rmt_new_sync_manager() para arrancar os dois no mesmo ciclo de clock. Em
+// bancada (ESP32 clássico) rmt_new_sync_manager() falha sempre
+// (ESP_ERR_NOT_SUPPORTED — esse sync manager só existe em chips novos:
+// S3/C3/H2). Sem ele, a fase inicial entre os dois rmt_transmit() ficava à
+// mercê da latência de software (µs), e cada boot/troca de RPM tinha ~50% de
+// sair com a quadratura invertida (TIM2 do STM32 conta ao contrário → RPM
+// lido = 0, sem nada de errado na fiação — confirmado em bancada, RPM ficou
+// preso a 0 mesmo depois de trocar os fios A/B à mão).
+//
+// Troca para LEDC: A e B são dois canais do MESMO timer LEDC, cada um com
+// duty=50% e um `hpoint` (fase de início dentro do período) fixo — B a 1/4
+// de período à frente de A. Os dois canais só existem em relação ao MESMO
+// contador de hardware do timer, portanto a relação de fase é uma
+// propriedade do registrador, não uma corrida entre duas chamadas de API —
+// não há "não suportado" possível aqui, LEDC com hpoint é standard em todo
+// o silício ESP32 (clássico incluído).
+//
+// kRmtResHz deixa de ser uma resolução de RMT real (não há RMT nenhum aqui
+// para A/B) — fica só como o "relógio virtual" comum que converte a mesma
+// unidade `ticks` (usada por phase_ticks_for_rpm) em Hz para o LEDC (A/B) e
+// em µs para o esp_timer do CMP (ticks_to_us). Garante que A/B e CMP
+// continuam derivados da mesma base, como já era antes desta troca.
 // Cap documentado: se jitter falhar na bancada, baixar kRpmMax para 4000.
 
 static constexpr uint32_t kCountsPerRev = 16384u;
 static constexpr uint32_t kRpmMin       = 50u;
 static constexpr uint32_t kRpmMax       = 6000u;
-static constexpr uint32_t kRmtResHz     = 10000000u;  // 0.1 µs
+static constexpr uint32_t kRmtResHz     = 40000000u;  // relógio virtual (25 ns/tick) — ver nota acima
 static constexpr uint16_t kRmtMaxDur    = 32767u;
-static constexpr int      kGrayPhases  = 4;
 
-static rmt_channel_handle_t g_a_chan = nullptr;
-static rmt_channel_handle_t g_b_chan = nullptr;
-static rmt_encoder_handle_t g_a_enc  = nullptr;
-static rmt_encoder_handle_t g_b_enc  = nullptr;
-static rmt_symbol_word_t    g_a_sym[kGrayPhases];
-static rmt_symbol_word_t    g_b_sym[kGrayPhases];
+static constexpr ledc_mode_t      kEncSpeedMode = LEDC_LOW_SPEED_MODE;
+static constexpr ledc_timer_t     kEncTimer     = LEDC_TIMER_2;   // grupo low-speed: livre (PWM analógico usa high-speed 0/1)
+static constexpr ledc_channel_t   kEncChA       = LEDC_CHANNEL_0; // idem — canais 0-7 do grupo low-speed, sem conflito
+static constexpr ledc_channel_t   kEncChB       = LEDC_CHANNEL_1;
+static constexpr ledc_timer_bit_t kEncBits      = LEDC_TIMER_4_BIT;  // 16 níveis — hpoint exato em 1/4 (=4)
+static constexpr uint32_t         kEncDutyMax   = (1u << 4) - 1u;    // 15, resolução de kEncBits
+
 static volatile uint32_t    g_enc_rpm_active = 0u;
 static volatile uint32_t    g_cmp_pulse_count = 0u;
-
-// Gray: fase → (A,B): 0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)
-static const uint8_t kGrayA[kGrayPhases] = { 0, 1, 1, 0 };
-static const uint8_t kGrayB[kGrayPhases] = { 0, 0, 1, 1 };
+static bool                 g_enc_ledc_ready = false;
 
 static uint16_t phase_ticks_for_rpm(uint32_t rpm) {
     if (rpm < kRpmMin) rpm = kRpmMin;
     // ticks = res_hz / f_step ; f_step = rpm/60 * 16384
     //       = res_hz * 60 / (rpm * 16384)
-    uint64_t ticks = (uint64_t)kRmtResHz * 60ull / ((uint64_t)rpm * kCountsPerRev);
-    if (ticks < 1ull) ticks = 1ull;
+    // ARREDONDA (antes truncava): a 5307 RPM o truncamento dava 6 ticks em vez
+    // de 6.9 → crank real a 6103 RPM, erro de 15%.
+    const uint64_t den = (uint64_t)rpm * kCountsPerRev;
+    uint64_t ticks = ((uint64_t)kRmtResHz * 60ull + den / 2ull) / den;
+    if (ticks < 2ull) ticks = 2ull;
     if (ticks > (uint64_t)kRmtMaxDur) ticks = kRmtMaxDur;
     return (uint16_t)ticks;
 }
 
-static void build_quad_pattern(uint32_t rpm) {
-    // Cada fase Gray = 1 count TIM2. Total ticks = d0+d1 com mesmo nível.
-    uint16_t d = phase_ticks_for_rpm(rpm);
-    if (d < 2u) d = 2u;
-    const uint16_t d0 = (uint16_t)(d - 1u);
-    const uint16_t d1 = 1u;
-    for (int i = 0; i < kGrayPhases; ++i) {
-        g_a_sym[i].level0 = kGrayA[i];
-        g_a_sym[i].duration0 = d0;
-        g_a_sym[i].level1 = kGrayA[i];
-        g_a_sym[i].duration1 = d1;
-        g_b_sym[i].level0 = kGrayB[i];
-        g_b_sym[i].duration0 = d0;
-        g_b_sym[i].level1 = kGrayB[i];
-        g_b_sym[i].duration1 = d1;
-    }
+// RPM realmente sintetizado depois da quantização em ticks inteiros — a
+// mesma unidade `ticks` que agora vira a frequência LEDC (ver
+// elec_hz_from_ticks), então esta continua a prever o erro real.
+static uint32_t rpm_from_ticks(uint16_t ticks) {
+    const uint64_t den = (uint64_t)ticks * kCountsPerRev;
+    return (uint32_t)(((uint64_t)kRmtResHz * 60ull + den / 2ull) / den);
 }
 
-static void transmit_ab() {
-    rmt_transmit_config_t txcfg = {};
-    txcfg.loop_count = -1;  // infinito
-    rmt_transmit(g_a_chan, g_a_enc, g_a_sym, sizeof(g_a_sym), &txcfg);
-    rmt_transmit(g_b_chan, g_b_enc, g_b_sym, sizeof(g_b_sym), &txcfg);
+// f_elec = kRmtResHz / (4 × ticks): 1 ciclo elétrico = 4 counts TIM2 = 4×ticks
+// do relógio virtual. É a frequência de A (e de B, mesmo timer).
+static uint32_t elec_hz_from_ticks(uint16_t ticks) {
+    const uint64_t den = 4ull * (uint64_t)ticks;
+    uint32_t hz = (uint32_t)((kRmtResHz + den / 2ull) / den);
+    return hz < 1u ? 1u : hz;
+}
+
+static void enc_apply_freq(uint32_t rpm) {
+    const uint16_t ticks = phase_ticks_for_rpm(rpm);
+    const uint32_t hz = elec_hz_from_ticks(ticks);
+    const esp_err_t e = ledc_set_freq(kEncSpeedMode, kEncTimer, hz);
+    if (e != ESP_OK) {
+        // Falha aqui já mordeu uma vez em silêncio (ver nota em enc_init() —
+        // LEDC_AUTO_CLK escolhia um clock lento demais para RPM alto).
+        // Reportar sempre, não só na 1ª vez: outra causa de falha no futuro
+        // não deve voltar a ficar invisível.
+        Serial.printf("  [ENC-STIM] ledc_set_freq falhou (%lu Hz, %s)\n",
+                      (unsigned long)hz, esp_err_to_name(e));
+    }
 }
 
 // ── CMP via esp_timer (1 pulso / 720° = 2 voltas) ─────────────────────────
@@ -204,25 +236,36 @@ static void IRAM_ATTR cmp_period_cb(void* /*arg*/) {
     esp_timer_start_once(g_cmp_release_tmr, kCmpPulseUs);
 }
 
-static uint64_t cmp_period_us_for_rpm(uint32_t rpm) {
-    if (rpm < kRpmMin) rpm = kRpmMin;
-    // 2 voltas: T = 2 * 60e6 / rpm µs
-    return (120000000ull) / (uint64_t)rpm;
+// O ciclo 720° tem de ser medido na MESMA base de tempo do virabrequim, ou
+// seja em ticks RMT quantizados — não no RPM pedido. Com o RPM pedido, a 6000
+// RPM o crank corre a 19.66 ms/ciclo e o CMP a 20.00 ms: o flanco do came
+// caminhava ~12° de cambota por ciclo e dava a volta aos 720° em ~1.1 s.
+//   720° = 2 voltas = 32768 counts, cada um com `ticks` do relógio RMT
+static uint64_t ticks_to_us(uint64_t t) {   // independente de kRmtResHz
+    return (t * 1000000ull + kRmtResHz / 2ull) / (uint64_t)kRmtResHz;
 }
 
-// Offset CMP_TOOTH: atrasa o 1º pulso em (tooth/16384) * 1_rev_us.
-// tooth=0 → flanco no início do ciclo 720°; tooth=8192 → meio da 2ª volta.
-static uint64_t cmp_first_delay_us(uint32_t rpm, uint16_t tooth) {
+static uint64_t cmp_period_us_from_ticks(uint16_t ticks) {
+    return ticks_to_us((uint64_t)ticks * 2ull * (uint64_t)kCountsPerRev);
+}
+
+// Offset CMP_TOOTH: 0..16383 mapeado sobre o CICLO COMPLETO de 720°
+// (antes era sobre 1 volta — o came nunca conseguia cair na 2ª volta).
+//   tooth =     0 →   0°      tooth =  8192 → 360° (início da 2ª volta)
+//   tooth = 12288 → 540° (meio da 2ª volta)   tooth = 16383 → ~720°
+// Resolução: 720/16384 = 0.0439° de cambota por unidade.
+static uint64_t cmp_first_delay_us(uint16_t ticks, uint16_t tooth) {
     if (tooth > 16383u) tooth = 16383u;
-    const uint64_t rev_us = 60000000ull / (uint64_t)rpm;
-    return (rev_us * (uint64_t)tooth) / kCountsPerRev;
+    // (32768 × ticks) × tooth / 16384 = 2 × ticks × tooth  [ticks RMT]
+    return ticks_to_us((uint64_t)ticks * (uint64_t)tooth * 2ull);
 }
 
 static esp_timer_handle_t g_cmp_first_tmr = nullptr;
+static volatile uint64_t  g_cmp_period_us = 0ull;
 
 static void cmp_first_cb(void* /*arg*/) {
     cmp_period_cb(nullptr);
-    esp_timer_start_periodic(g_cmp_period_tmr, cmp_period_us_for_rpm(g_sim.rpm));
+    esp_timer_start_periodic(g_cmp_period_tmr, g_cmp_period_us);
 }
 
 static void cmp_timer_restart(uint32_t rpm) {
@@ -232,8 +275,10 @@ static void cmp_timer_restart(uint32_t rpm) {
     if (g_cmp_first_tmr != nullptr) esp_timer_stop(g_cmp_first_tmr);
     gpio_set_level(CMP_GPIO, 1);  // idle HIGH
 
-    const uint64_t period = cmp_period_us_for_rpm(rpm);
-    const uint64_t delay0 = cmp_first_delay_us(rpm, g_sim.cmp_tooth);
+    const uint16_t ticks  = phase_ticks_for_rpm(rpm);
+    const uint64_t period = cmp_period_us_from_ticks(ticks);
+    const uint64_t delay0 = cmp_first_delay_us(ticks, g_sim.cmp_tooth);
+    g_cmp_period_us = period;
     if (delay0 > 0ull) {
         if (g_cmp_first_tmr == nullptr) {
             esp_timer_create_args_t args = {};
@@ -250,40 +295,136 @@ static void cmp_timer_restart(uint32_t rpm) {
 static void enc_set_rpm(uint32_t rpm) {
     if (rpm < kRpmMin) rpm = kRpmMin;
     if (rpm > kRpmMax) rpm = kRpmMax;
-    if (rpm == g_enc_rpm_active && g_a_chan != nullptr) {
-        // Ainda actualiza CMP (tooth pode ter mudado).
-        cmp_timer_restart(rpm);
-        return;
-    }
-    build_quad_pattern(rpm);
-    if (g_a_chan != nullptr) {
-        rmt_disable(g_a_chan);
-        rmt_disable(g_b_chan);
-        rmt_encoder_reset(g_a_enc);
-        rmt_encoder_reset(g_b_enc);
-        rmt_enable(g_a_chan);
-        rmt_enable(g_b_chan);
-        transmit_ab();
+    if (g_enc_ledc_ready) {
+        // Só muda a frequência do timer partilhado — hpoint de cada canal
+        // (fixo desde enc_init()) não precisa de re-arme, a fase entre A e B
+        // é uma propriedade do par duty/hpoint sobre o MESMO contador, não
+        // algo que se perca ao trocar de RPM.
+        enc_apply_freq(rpm);
     }
     g_enc_rpm_active = rpm;
     cmp_timer_restart(rpm);
 }
 
+// ── Rampa suave de RPM ───────────────────────────────────────────────────
+// g_sim.rpm é o ALVO (o que RPM/presets pedem); g_enc_rpm_active é o que
+// está de facto a ser sintetizado. Sem isto, IDLE→WOT era um salto
+// instantâneo de frequência — nenhum motor real acelera em 0 s, e o STM32
+// via um "teleporte" de RPM em vez de uma aceleração real (pedido do
+// utilizador, 2026-08-13, depois de observar os saltos nos presets).
+// enc_ramp_tick() aproxima g_enc_rpm_active de g_sim.rpm a um ritmo
+// limitado, chamado de loop() a cada kRampStepMs.
+static constexpr uint32_t kRampStepMs    = 50u;
+static constexpr uint32_t kRampRpmPerSec = 3000u;  // 0→6000 RPM em ~2 s
+static uint32_t g_ramp_last_ms = 0u;
+static bool     g_enc_signal_lost = false;  // ver enc_signal_lost_set()
+
+static void enc_ramp_tick() {
+    if (!g_enc_ledc_ready || g_enc_signal_lost) return;
+    const uint32_t now_ms = (uint32_t)millis();
+    if (now_ms - g_ramp_last_ms < kRampStepMs) return;
+    g_ramp_last_ms = now_ms;
+
+    const uint32_t target = g_sim.rpm;
+    if (g_enc_rpm_active == target) return;
+
+    const uint32_t max_step = (kRampRpmPerSec * kRampStepMs) / 1000u;
+    uint32_t next;
+    if (g_enc_rpm_active < target) {
+        const uint32_t remaining = target - g_enc_rpm_active;
+        next = g_enc_rpm_active + (remaining < max_step ? remaining : max_step);
+    } else {
+        const uint32_t remaining = g_enc_rpm_active - target;
+        next = g_enc_rpm_active - (remaining < max_step ? remaining : max_step);
+    }
+    enc_set_rpm(next);
+}
+
+// ── Simulação de perda de sinal (comando STOP / RESUME) ─────────────────
+// Testa o watchdog novo do STM32 (ckp_stall_poll_encoder(), ckp.cpp): mata
+// A/B (ledc_stop — pino fica preso no idle_level, zero transições, TIM2
+// congela de verdade) e o CMP (pára os esp_timer), em vez de só levar o RPM
+// a kRpmMin — isso ainda geraria bordas reais, não testava o caso "sensor
+// morto" que o watchdog existe para cobrir.
+static void enc_signal_lost_set(bool lost) {
+    if (lost == g_enc_signal_lost) return;
+    g_enc_signal_lost = lost;
+    if (lost) {
+        if (g_enc_ledc_ready) {
+            ledc_stop(kEncSpeedMode, kEncChA, 0);
+            ledc_stop(kEncSpeedMode, kEncChB, 0);
+        }
+        esp_timer_stop(g_cmp_period_tmr);
+        esp_timer_stop(g_cmp_release_tmr);
+        if (g_cmp_first_tmr != nullptr) esp_timer_stop(g_cmp_first_tmr);
+        gpio_set_level(CMP_GPIO, 1);  // idle HIGH, sem mais pulsos
+        Serial.println("  [ENC-STIM] SINAL PERDIDO (A/B/CMP mortos) — "
+                        "RPM/CMP no STM32 devem cair a 0/LOSS_OF_SYNC");
+    } else {
+        if (g_enc_ledc_ready) {
+            // ledc_stop() desliga o CANAL (pino preso no idle_level) — só
+            // ledc_set_freq() (dentro de enc_set_rpm(), via enc_apply_freq())
+            // mexe no TIMER partilhado, nunca reactiva um canal parado.
+            // Confirmado em bancada: sem isto, RESUME fazia CMP voltar (usa
+            // esp_timer/gpio_set_level directo, não LEDC) mas A/B ficavam
+            // mudos — TIM2 do STM32 nunca recomeçava a contar, sync preso em
+            // LOSS_OF_SYNC apesar do ESP32 já reportar RPM activo correcto.
+            // ledc_set_duty()+ledc_update_duty() reaplica o duty/hpoint fixo
+            // (ver enc_init()) e volta a gerar o sinal.
+            ledc_set_duty_with_hpoint(kEncSpeedMode, kEncChA,
+                                       kEncDutyMax / 2u, (kEncDutyMax + 1u) / 4u);
+            ledc_update_duty(kEncSpeedMode, kEncChA);
+            ledc_set_duty_with_hpoint(kEncSpeedMode, kEncChB, kEncDutyMax / 2u, 0);
+            ledc_update_duty(kEncSpeedMode, kEncChB);
+        }
+        g_ramp_last_ms = (uint32_t)millis();
+        enc_set_rpm(g_enc_rpm_active);  // religa CMP + garante a frequência certa
+        Serial.println("  [ENC-STIM] Sinal restaurado");
+    }
+}
+
 static void enc_init() {
-    auto make_ch = [](gpio_num_t gpio, rmt_channel_handle_t* ch,
-                      rmt_encoder_handle_t* enc) {
-        rmt_tx_channel_config_t cfg = {};
-        cfg.gpio_num          = gpio;
-        cfg.clk_src           = RMT_CLK_SRC_DEFAULT;
-        cfg.resolution_hz     = kRmtResHz;
-        cfg.mem_block_symbols = 64;
-        cfg.trans_queue_depth = 4;
-        ESP_ERROR_CHECK(rmt_new_tx_channel(&cfg, ch));
-        rmt_copy_encoder_config_t ec = {};
-        ESP_ERROR_CHECK(rmt_new_copy_encoder(&ec, enc));
-    };
-    make_ch(ENC_A_GPIO, &g_a_chan, &g_a_enc);
-    make_ch(ENC_B_GPIO, &g_b_chan, &g_b_enc);
+    ledc_timer_config_t t = {};
+    t.speed_mode      = kEncSpeedMode;
+    t.duty_resolution = kEncBits;
+    t.timer_num       = kEncTimer;
+    t.freq_hz         = elec_hz_from_ticks(phase_ticks_for_rpm(g_sim.rpm));
+    // LEDC_AUTO_CLK escolhia REF_TICK (1 MHz) no grupo low-speed — máximo
+    // 1MHz/2^kEncBits = 62.5 kHz, suficiente só até ~900 RPM. Acima disso
+    // ledc_set_freq() falhava silenciosamente (não verificávamos o retorno)
+    // e a frequência ficava presa no último valor válido — confirmado em
+    // bancada: RPM saltava correctamente 700→200 (CRANK, desce) mas ficava
+    // preso a 698 em CRUISE/WOT/COAST (RPM pedido > ~900, precisa de
+    // 80MHz/16=5 MHz de tecto). Fixar APB_CLK explicitamente resolve.
+    t.clk_cfg         = LEDC_USE_APB_CLK;
+    ESP_ERROR_CHECK(ledc_timer_config(&t));
+
+    // A e B no MESMO timer (kEncTimer): duty=50% nos dois, hpoint de A a 1/4
+    // de período à frente de B. A relação de fase fica gravada nos
+    // registradores duty/hpoint de cada canal, referenciados ao mesmo
+    // contador de hardware — não há sequência de chamadas de API cujo
+    // atraso relativo possa inverter a direção (ver nota no topo do
+    // ficheiro: era exactamente esse o problema com RMT+sync manager).
+    // Sentido (A adianta B, não o contrário) verificado em bancada: com
+    // B a adiantar A o TIM2 do STM32 contava para trás (RPM=0 sempre,
+    // determinístico — ver histórico git). Trocado aqui, não é arbitrário.
+    ledc_channel_config_t ca = {};
+    ca.gpio_num   = (int)ENC_A_GPIO;
+    ca.speed_mode = kEncSpeedMode;
+    ca.channel    = kEncChA;
+    ca.intr_type  = LEDC_INTR_DISABLE;
+    ca.timer_sel  = kEncTimer;
+    ca.duty       = kEncDutyMax / 2u;   // 50%
+    ca.hpoint     = (kEncDutyMax + 1u) / 4u;  // 1/4 de período = 90° eléctricos
+    ESP_ERROR_CHECK(ledc_channel_config(&ca));
+
+    ledc_channel_config_t cb = ca;
+    cb.gpio_num = (int)ENC_B_GPIO;
+    cb.channel  = kEncChB;
+    cb.hpoint   = 0;
+    ESP_ERROR_CHECK(ledc_channel_config(&cb));
+
+    g_enc_ledc_ready = true;
 
     {
         esp_timer_create_args_t args = {};
@@ -302,10 +443,6 @@ static void enc_init() {
     gpio_set_direction(CMP_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_level(CMP_GPIO, 1);
 
-    build_quad_pattern(g_sim.rpm);
-    rmt_enable(g_a_chan);
-    rmt_enable(g_b_chan);
-    transmit_ab();
     g_enc_rpm_active = g_sim.rpm;
     cmp_timer_restart(g_sim.rpm);
 }
@@ -338,7 +475,9 @@ static void apply_preset(const SimState& p, const char* label) {
     g_sim = p;
     g_sim.cmp_tooth = tooth;
     update_analog(g_sim);
-    if (g_a_chan != nullptr) enc_set_rpm(g_sim.rpm);
+    // Só actualiza o ALVO — enc_ramp_tick() (loop()) aproxima g_enc_rpm_active
+    // gradualmente, em vez de saltar direto para o RPM do preset.
+    enc_signal_lost_set(false);
     Serial.printf("  [ENC-STIM] Preset: %s\n", label);
 }
 
@@ -423,16 +562,37 @@ static void scope_print() {
 
 static void print_status() {
     const SimState& s = g_sim;
-    const uint16_t ticks = phase_ticks_for_rpm(s.rpm);
-    const float f_a_hz = (s.rpm / 60.0f) * 4096.0f;  // freq eléctrica de A
+    // g_enc_rpm_active é o que está DE FACTO a ser sintetizado agora — com a
+    // rampa (enc_ramp_tick()), pode diferir do alvo (s.rpm) durante uma
+    // transição. Todos os cálculos de frequência/CMP abaixo têm de usar o
+    // activo, senão o STATUS mostrava a frequência do alvo em vez da real
+    // enquanto o motor "acelera".
+    const uint32_t active  = g_enc_rpm_active;
+    const uint16_t ticks   = phase_ticks_for_rpm(active);
+    const uint32_t rpm_act = rpm_from_ticks(ticks);   // depois da quantização
+    const float f_a_hz = (rpm_act / 60.0f) * 4096.0f;  // freq eléctrica de A
+    const float err_pct = 100.0f * ((float)rpm_act - (float)active) / (float)active;
+    const float cmp_deg = (s.cmp_tooth * 720.0f) / 16384.0f;
     Serial.println();
     Serial.println("  ╔═══════════════════════════════════════════════════════════╗");
     Serial.println("  ║  OpenEMS Encoder Stim — Estado                            ║");
     Serial.println("  ╚═══════════════════════════════════════════════════════════╝");
-    Serial.printf("  RPM:        %lu\n", (unsigned long)s.rpm);
-    Serial.printf("  A freq:     %.1f Hz  (expect ~4096×RPM/60)\n", f_a_hz);
-    Serial.printf("  phase_tick: %u (0.1 µs units @ 10 MHz RMT)\n", ticks);
-    Serial.printf("  CMP_TOOTH:  %u / 16383\n", s.cmp_tooth);
+    if (g_enc_signal_lost) {
+        Serial.println("  SINAL PERDIDO (STOP activo) — A/B/CMP mortos, sem transições");
+    }
+    Serial.printf("  RPM alvo:   %lu\n", (unsigned long)s.rpm);
+    Serial.printf("  RPM activo: %lu%s\n", (unsigned long)active,
+                  (active == s.rpm) ? "" : "  (a rampar)");
+    Serial.printf("  RPM real:   %lu  (erro %+.2f%% — quantização de ticks)\n",
+                  (unsigned long)rpm_act, err_pct);
+    Serial.printf("  A freq:     %.1f Hz  (4096×RPM_real/60)\n", f_a_hz);
+    Serial.printf("  phase_tick: %u ticks @ %.1f MHz (relógio virtual)\n", ticks,
+                  kRmtResHz / 1000000.0);
+    Serial.printf("  A/B sync:   LEDC hpoint (garantido por hardware)\n");
+    Serial.printf("  CMP_TOOTH:  %u / 16383  (%.1f° cambota no ciclo 720°)\n",
+                  s.cmp_tooth, cmp_deg);
+    Serial.printf("  CMP per:    %.3f ms  (= 32768 counts × %u ticks)\n",
+                  (double)g_cmp_period_us / 1000.0, ticks);
     Serial.printf("  CMP pulses: %lu\n", (unsigned long)g_cmp_pulse_count);
     Serial.printf("  MAP: %u kPa  TPS: %u%%  CLT: %d°C  IAT: %d°C\n",
                   s.map_kpa, s.tps_pct, s.clt_degc, s.iat_degc);
@@ -446,8 +606,11 @@ static void print_help() {
     Serial.println("  OpenEMS ESP32 Encoder Stim (ABZ + CMP → TIM2/TIM3)");
     Serial.println("  ─────────────────────────────────────────────────");
     Serial.println("  RPM MAP TPS CLT IAT APP FUEL OIL ETB <n>");
-    Serial.println("  CMP_TOOTH <0-16383>   offset do pulso CMP no ciclo 720°");
-    Serial.println("  IDLE CRANK CRUISE WOT COAST");
+    Serial.println("  CMP_TOOTH <0-16383>   offset do CMP no ciclo 720°");
+    Serial.println("                        0=0°  8192=360°  12288=540°");
+    Serial.println("  IDLE CRANK CRUISE WOT COAST   (RPM ramps a 3000 RPM/s, sem saltos)");
+    Serial.println("  STOP    mata A/B/CMP — simula sensor morto (testa watchdog do STM32)");
+    Serial.println("  RESUME  religa A/B/CMP na cadência actual");
     Serial.println("  STATUS  SCOPE  ?");
     Serial.println();
     Serial.printf("  GPIO%-2d → PA0  A (quad)\n", (int)ENC_A_GPIO);
@@ -475,8 +638,17 @@ static void parse_cmd(const char* raw) {
 
     if (strcmp(cmd, "RPM") == 0 && has_val) {
         g_sim.rpm = (uint32_t)constrain(val, (int)kRpmMin, (int)kRpmMax);
-        enc_set_rpm(g_sim.rpm);
-        Serial.printf("  [ENC-STIM] RPM=%lu\n", (unsigned long)g_sim.rpm);
+        // Só actualiza o ALVO — enc_ramp_tick() (loop()) faz a transição
+        // gradual, não um salto instantâneo de frequência.
+        enc_signal_lost_set(false);
+        Serial.printf("  [ENC-STIM] RPM alvo=%lu (a rampar)\n", (unsigned long)g_sim.rpm);
+    } else if (strcmp(cmd, "STOP") == 0) {
+        enc_signal_lost_set(true);
+        changed = false;
+    } else if (strcmp(cmd, "RESUME") == 0) {
+        enc_signal_lost_set(false);
+        Serial.println("  [ENC-STIM] RESUME");
+        changed = false;
     } else if (strcmp(cmd, "CMP_TOOTH") == 0 && has_val) {
         g_sim.cmp_tooth = (uint16_t)constrain(val, 0, 16383);
         cmp_timer_restart(g_sim.rpm);
@@ -635,7 +807,8 @@ void setup() {
         ESP_ERROR_CHECK(ledc_channel_config(&cc));
     }
 
-    g_sim = { 700, 35, 3, 90, 25, 0, 35, 20, 3, 8192 };  // CMP mid 2ª volta
+    // 12288/16384 × 720° = 540° → meio da 2ª volta (com 8192 dava 360°)
+    g_sim = { 700, 35, 3, 90, 25, 0, 35, 20, 3, 12288 };
     update_analog(g_sim);
     enc_init();
     scope_init();
@@ -647,5 +820,6 @@ void setup() {
 void loop() {
     while (Serial.available()) feed_char((char)Serial.read());
     wifi_poll();
+    enc_ramp_tick();
     delay(1);
 }
