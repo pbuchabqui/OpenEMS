@@ -1476,7 +1476,22 @@ int main() {
                 }
             }
 
-            if (snap.state == ems::drv::SyncState::FULL_SYNC) {
+#if EMS_MT6835_ENCODER
+            // Mesmo raciocínio já aprovado para o disparo dos injetores
+            // (allow_half_running, acima): em modo encoder, HALF_SYNC não é
+            // "posição incerta" — é posição 100% fiável via TIM2, só falta
+            // saber qual das duas metades de 720° é esta. O STFT/λ-target
+            // (100ms) ficava preso a 0 nesta bancada porque nunca alcança
+            // FULL_SYNC (fase do CMP não calibrada) — decisão do utilizador
+            // (2026-08-14): correr também em HALF_SYNC, exceto durante
+            // cranking (fuel de arranque é o caminho quick_crank dedicado,
+            // não STFT/VE).
+            const bool stft_sync_ok = (snap.state == ems::drv::SyncState::FULL_SYNC) ||
+                (snap.state == ems::drv::SyncState::HALF_SYNC && !ems::engine::is_cranking());
+#else
+            const bool stft_sync_ok = (snap.state == ems::drv::SyncState::FULL_SYNC);
+#endif
+            if (stft_sync_ok) {
                 // MAP fundido (mesma fonte do cálculo de combustível de 2ms):
                 // o cru daqui divergia na fronteira de célula → alvo λ do
                 // gauge oscilava sem o ponto de operação mudar.
