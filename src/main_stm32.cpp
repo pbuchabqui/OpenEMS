@@ -741,14 +741,15 @@ int main() {
             // Reactivado: os falsos stalls vinham do wrap 16-bit do TIM3;
             // desde a migração para TIM5 (32-bit) o elapsed é correcto.
             // Também decai rpm_x10 fantasma de ruído em CKP sem sync.
-            // Gate atrás de !EMS_MT6835_ENCODER (docs/dev/mt6835_encoder_fork.md,
-            // "Sync-state em modo encoder"): em modo encoder as ISRs TIM5 do CKP
-            // nunca disparam (tim5_freerun_init() não configura captura), então
-            // g_state.prev_capture nunca avança — este poll, sem o gate, ficaria
-            // a decair rpm_x10/state por cima do que
-            // ecu_sched_encoder_heartbeat_tick() acabou de publicar via
-            // ckp_publish_encoder_snapshot() (task #13).
             ems::drv::ckp_stall_poll(ems::hal::tim5_count());
+#else
+            // Equivalente encoder (ckp_stall_poll_encoder, ver ckp.h): sem
+            // isto, um encoder que pare de verdade (fio partido, sensor
+            // morto) deixava o heartbeat TIM2_CH4 congelado — ele próprio só
+            // dispara enquanto TIM2 avança — e rpm_x10 preso no último valor
+            // válido para sempre, nunca a decair a 0 sozinho. Deve preceder
+            // ckp_snapshot() pela mesma razão do caminho Hall acima.
+            ems::drv::ckp_stall_poll_encoder(ems::hal::tim5_count());
 #endif
 
             // Dwell / injector open watchdogs (lost SPARK / lost INJ_OFF).
@@ -883,8 +884,27 @@ int main() {
             // HALF batch: cranking only, no flood/protect. Auto presync → SIMULTANEOUS.
             const bool allow_half_crank_batch =
                 half_sync && qc.cranking && !flood_clear && !fuel_protect_cut;
-            // Lock out angular fuel in HALF unless batch-allowed (exit crank / flood / cut).
-            const bool half_fuel_lockout = half_sync && !allow_half_crank_batch;
+#if EMS_MT6835_ENCODER
+            // HALF_SYNC no caminho encoder não é "ainda a resolver posição" (o
+            // risco que este gate foi escrito para o caminho roda-dentada) —
+            // é "posição absoluta 100% fiável via TIM2, só não sei ainda qual
+            // das duas metades de 720° é esta" (ecu_sched_encoder_phase_valid()
+            // ==0). g_presync_inj_mode fica sempre SEMI_SEQUENTIAL neste
+            // caminho (o auto-select por cranking em ecu_sched.cpp:779 só
+            // corre no dispatch Hall, nunca aqui) — cada par disparado é
+            // 360° à parte, então uma das duas hipóteses de fase está sempre
+            // certa para cada cilindro do par. Fora de cranking (que continua
+            // no branch (2) dedicado, PW de arranque simplificado, abaixo):
+            // decisão do utilizador (2026-08-13) — correr o pipeline completo
+            // de combustível (VE/trims/X-τ) também em HALF, não só FULL_SYNC.
+            const bool allow_half_running =
+                half_sync && !qc.cranking && !flood_clear && !fuel_protect_cut;
+#else
+            const bool allow_half_running = false;
+#endif
+            // Lock out angular fuel in HALF unless batch- or running-allowed.
+            const bool half_fuel_lockout =
+                half_sync && !allow_half_crank_batch && !allow_half_running;
 
             // Limitador de RPM — rusEFI-style: fuel cut only, total cut + hysteresis.
             // Corta 100% injecção ao atingir hard limit; reativa ao descer
@@ -975,8 +995,10 @@ int main() {
                 g_rev_limit_active || fuel_protect_cut || half_fuel_lockout ||
                 ems::engine::fuel_inj_duty_cut_active();
 
-            // (1) FULL_SYNC: running fuel path (VE / trims / AE / X-τ when not crank-ASE).
-            if (full_sync && !fuel_protect_cut) {
+            // (1) FULL_SYNC (ou HALF_SYNC fora de cranking em encoder, ver
+            // allow_half_running acima): running fuel path (VE / trims / AE /
+            // X-τ when not crank-ASE).
+            if ((full_sync || allow_half_running) && !fuel_protect_cut) {
                 const ems::engine::Table2dLookup fuel_lookup =
                     ems::engine::table3d_prepare_lookup(ems::engine::kRpmAxisX10,
                                                         ems::engine::kLoadAxisBarX100,

@@ -1115,6 +1115,49 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
     return transitioned;
 }
 
+// Granularidade diferente do watchdog acima: aqui "1 evento" = 1 volta
+// completa (heartbeat pesado 1×/volta, ecu_sched_encoder_heartbeat_tick()),
+// não 1 dente — o timeout tem de cobrir a volta mais lenta plausível
+// (cranking baixo), não a distância entre dentes. 800 ms cobre até ~75 RPM
+// (60/75 = 800 ms/volta) com folga; abaixo disso o motor já não está
+// realmente a arrancar. Bench-mode reaproveita kMinStallTimeoutTicksBench
+// (2 s) — cobre o kRpmMin=50 do estimulador ESP32 (1,2 s/volta) com folga,
+// mesma filosofia do watchdog Hall (HIL pode ter gaps maiores sem ser sinal
+// real perdido).
+static constexpr uint32_t kEncoderStallTimeoutTicksProd = 50000000u;  // 800 ms @ 62.5 MHz
+static inline uint32_t min_stall_timeout_ticks_encoder() noexcept {
+    return ems::drv::sensors_is_bench_mode() ? kMinStallTimeoutTicksBench
+                                              : kEncoderStallTimeoutTicksProd;
+}
+
+bool ckp_stall_poll_encoder(uint32_t tim5_cnt_now) noexcept {
+    const int32_t elapsed_signed =
+        static_cast<int32_t>(tim5_cnt_now - g_state.snap.last_tim5_capture);
+    const uint32_t elapsed_ticks =
+        (elapsed_signed < 0) ? 0u : static_cast<uint32_t>(elapsed_signed);
+    if (elapsed_ticks < min_stall_timeout_ticks_encoder()) {
+        return false;
+    }
+    // Seção crítica necessária: g_state.snap também é escrito pelo heartbeat
+    // TIM2 (ckp_publish_encoder_snapshot, chamado do CC4IF) — revalida elapsed
+    // com last_tim5_capture fresco dentro da seção, mesma corrida do watchdog
+    // Hall acima (um heartbeat pode publicar entre o teste e o CPSID).
+    enter_critical();
+    const int32_t elapsed_now =
+        static_cast<int32_t>(tim5_cnt_now - g_state.snap.last_tim5_capture);
+    const bool still_stalled = elapsed_now >= 0 &&
+        static_cast<uint32_t>(elapsed_now) >= min_stall_timeout_ticks_encoder();
+    bool transitioned = false;
+    if (still_stalled && g_state.snap.rpm_x10 != 0u) {
+        ++ems::drv::g_dbg_loss_stall;
+        g_state.snap.state   = SyncState::LOSS_OF_SYNC;
+        g_state.snap.rpm_x10 = 0u;
+        transitioned = true;
+    }
+    exit_critical();
+    return transitioned;
+}
+
 uint32_t ckp_get_cmp_glitch_count() noexcept {
     return g_state.cmp_glitch_count;
 }

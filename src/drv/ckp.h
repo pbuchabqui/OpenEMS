@@ -174,6 +174,18 @@ uint32_t ckp_instant_rpm_x10() noexcept;
 // Retorna true se stall foi detectado nesta chamada (transição → LOSS_OF_SYNC).
 bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept;
 
+// Equivalente para o caminho MT6835/TIM2 (EMS_MT6835_ENCODER=1): ckp_stall_poll()
+// não serve aqui porque usa g_state.prev_capture, que só a ISR TIM5 do CKP
+// escreve — nunca dispara em modo encoder (tim5_freerun_init() não configura
+// captura). Usa snap.last_tim5_capture (timestamp TIM5 do último heartbeat
+// pesado completo, ecu_sched_encoder_heartbeat_tick() — só avança se TIM2
+// continuar a receber bordas A/B reais) como referência independente de
+// rotação. Sem isto, se o sinal do encoder parar (fio partido, sensor morto),
+// TIM2 congela, o heartbeat que o CC4IF dispara também congela (ele próprio
+// depende de TIM2 avançar até ao alvo), e rpm_x10 fica preso no último valor
+// válido para sempre — nunca cai a 0 sozinho.
+bool ckp_stall_poll_encoder(uint32_t tim5_cnt_now) noexcept;
+
 // ── API de teste (somente em build host) ──────────────────────────────────────
 #if defined(EMS_HOST_TEST)
 void     ckp_test_reset() noexcept;

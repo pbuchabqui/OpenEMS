@@ -23,6 +23,7 @@
 #include "engine/math_utils.h"
 #include "engine/output_test.h"
 #include "hal/timer.h"
+#include "hal/board_pinout.h"
 #include "engine/constants.h"
 #include "engine/table3d.h"
 #include "hal/crc32.h"
@@ -252,6 +253,24 @@ void update_realtime_page() noexcept {
 
     // Diagnóstico CKP/CMP: bordas cruas + idade da última borda (TIM5 62.5MHz
     // → ms). last_tick==0 = nenhuma borda desde o boot → idade saturada.
+#if EMS_MT6835_ENCODER
+    // g_diag_isr_count/g_diag_cmp_isr_count só são escritos pelo ISR TIM5 IC
+    // (ckp.cpp) — nunca disparam em modo encoder (bring-up: mostravam sempre
+    // 0, disfarçando se TIM2/TIM3 estavam sequer a contar). Aqui expomos o
+    // que este caminho tem para dar: posição crua do TIM2 (prova bordas A/B
+    // a chegar) e cmp_edge_count() do TIM3 (prova captura do CMP). Sem
+    // equivalente de idade ainda — bring-up only, não ligado a nenhum reset.
+    write_u32_le(&rt.ckpcmp_diag[0], ems::hal::tim2_encoder_count());
+    write_u32_le(&rt.ckpcmp_diag[4], ems::hal::cmp_edge_count());
+    // [8..11] temporariamente TIM5 raw (era tooth_period_ns, sempre 0 aqui —
+    // ver comentário em ecu_sched_angle_encoder.cpp) — bring-up: confirma se
+    // tim5_freerun_init() está mesmo a avançar (base de ω, ecu_sched_angle_encoder.cpp:132).
+    write_u32_le(&rt.ckpcmp_diag[8], ems::hal::tim5_count());
+    rt.ckpcmp_diag[12] = 0u;
+    rt.ckpcmp_diag[13] = 0u;
+    rt.ckpcmp_diag[14] = 0u;
+    rt.ckpcmp_diag[15] = 0u;
+#else
     write_u32_le(&rt.ckpcmp_diag[0], ems::drv::g_diag_isr_count);
     write_u32_le(&rt.ckpcmp_diag[4], ems::drv::g_diag_cmp_isr_count);
     write_u32_le(&rt.ckpcmp_diag[8], c.tooth_period_ns);
@@ -267,6 +286,7 @@ void update_realtime_page() noexcept {
     rt.ckpcmp_diag[13] = static_cast<uint8_t>(ckp_age >> 8u);
     rt.ckpcmp_diag[14] = static_cast<uint8_t>(cmp_age & 0xFFu);
     rt.ckpcmp_diag[15] = static_cast<uint8_t>(cmp_age >> 8u);
+#endif
 
     std::memcpy(g_page3_rt, &rt, sizeof(rt));
 }
