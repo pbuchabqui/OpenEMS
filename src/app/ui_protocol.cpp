@@ -149,6 +149,25 @@ void parse_byte(uint8_t b) noexcept {
             tx_push(static_cast<uint8_t>((n > 255u) ? 255u : n));
             return;
         }
+        if (b == static_cast<uint8_t>('X')) {
+            // Calibração TDC1 (caminho encoder): a chamar com o cilindro 1
+            // fisicamente no PMS de compressão (mesmo procedimento de bancada
+            // de trigger_tooth0_engine_deg — ver engine_config.h). Lê o TIM2
+            // ao vivo, calcula e aplica encoder_tdc1_origin_deg em RAM —
+            // burn fica a cargo do comando 'b' existente (mesmo fluxo de
+            // qualquer outro campo de page0), não é persistido aqui.
+            // Resposta: [ACK][origin_deg u16 LE].
+            const uint32_t tim2_raw = ems::hal::tim2_encoder_count();
+            const uint16_t origin_deg =
+                ecu_sched_encoder_tdc1_calibrate_from_raw(tim2_raw);
+            ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = origin_deg;
+            ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+            mark_page_dirty(0x00u);
+            tx_push(kAckOk);
+            tx_push(static_cast<uint8_t>(origin_deg & 0xFFu));
+            tx_push(static_cast<uint8_t>((origin_deg >> 8u) & 0xFFu));
+            return;
+        }
         if (b == static_cast<uint8_t>('T')) {
             g_state = ParseState::TEST_ARGS;
             g_arg_pos = 0u;

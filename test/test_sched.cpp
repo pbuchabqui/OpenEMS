@@ -1255,7 +1255,7 @@ void test_ecu_sched_encoder_heartbeat_subtick_cadence(void) {
 void test_ecu_sched_encoder_heartbeat_subtick_feeds_misfire(void) {
     section("ecu_sched: heartbeat_subtick alimenta misfire_encoder (wiring)");
     ecu_sched_test_reset();
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     misfire_encoder_init();
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
 
@@ -1276,8 +1276,8 @@ void test_ecu_sched_encoder_conversion(void) {
     section("ecu_sched: encoder degrees<->counts conversion (pure math)");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
 
     CHECK_EQ(ecu_sched_encoder_test_engine_deg_to_counts(0u), 0u, "0 deg -> 0 counts");
     CHECK_EQ(ecu_sched_encoder_test_engine_deg_to_counts(90u), 4096u, "90 deg -> 1/4 rev (4096)");
@@ -1287,19 +1287,20 @@ void test_ecu_sched_encoder_conversion(void) {
              "359 deg -> 16338 (359*16384/360, truncated)");
 
     // Origin residue property: a calibrator writing 400 or 40 must produce
-    // IDENTICAL encoder-mode timing (only trigger_tooth0_engine_deg % 360 is
-    // load-bearing here — TIM2 wraps every 360, not 720 like the field's
-    // tooth-wheel domain suggests). If this ever diverges, the field is
-    // silently carrying phase information again (the exact bug class this
-    // session has been avoiding).
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 40u;
+    // IDENTICAL encoder-mode timing (only encoder_tdc1_origin_deg % 360 is
+    // load-bearing here — TIM2 wraps every 360, not 720 like
+    // trigger_tooth0_engine_deg's tooth-wheel domain, the Hall-path field
+    // this one used to share before it got its own dedicated field). If
+    // this ever diverges, the field is silently carrying phase information
+    // again (the exact bug class this session has been avoiding).
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 40u;
     const uint32_t with_40 = ecu_sched_encoder_test_engine_deg_to_counts(90u);
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 400u;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 400u;
     const uint32_t with_400 = ecu_sched_encoder_test_engine_deg_to_counts(90u);
     CHECK_EQ(with_400, with_40, "origin=400 and origin=40 (400%360) give identical counts");
     CHECK_EQ(with_40, 2275u, "90 deg, origin=40 -> crank_deg=410%360=50 -> 50*16384/360=2275");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
 
     // rev_target_to_absolute: half-open window (now_raw, now_raw+16384].
     CHECK_EQ(ecu_sched_encoder_test_rev_target_to_absolute(100u, 50u), 100u,
@@ -1311,6 +1312,49 @@ void test_ecu_sched_encoder_conversion(void) {
     CHECK_EQ(ecu_sched_encoder_test_rev_target_to_absolute(100u, 0x10000032u), 0x10000064u,
              "upper bits of a 32-bit raw count preserved across the addition");
 
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_tdc1_calibrate(void) {
+    section("ecu_sched: encoder TDC1 calibration (pure math, round-trip with conversion)");
+
+    CHECK_EQ(ecu_sched_encoder_tdc1_calibrate_from_raw(0u), 0u,
+             "TIM2==0 at TDC1 -> origin=0 (raw zero already IS TDC1)");
+    CHECK_EQ(ecu_sched_encoder_tdc1_calibrate_from_raw(8192u), 180u,
+             "TIM2==8192 (half a rev) at TDC1 -> origin=180");
+    CHECK_EQ(ecu_sched_encoder_tdc1_calibrate_from_raw(4096u), 270u,
+             "TIM2==4096 (1/4 rev = 90 deg) at TDC1 -> origin=270 (360-90)");
+    CHECK_EQ(ecu_sched_encoder_tdc1_calibrate_from_raw(0x10001000u), 270u,
+             "upper bits of a 32-bit raw count ignored — only mod 16384 matters");
+
+    // Round-trip: whatever calibrate_from_raw() returns, feeding it back as
+    // the origin must make engine_deg_to_counts_in_rev(0) reproduce the
+    // ORIGINAL raw reading (mod 16384) — this is the actual contract the
+    // field exists to satisfy (TDC1 in engine-degree space maps back to the
+    // exact TIM2 position it was measured at).
+    ecu_sched_test_reset();
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    const uint32_t raws[] = {0u, 1u, 4095u, 4096u, 8191u, 8192u, 12288u, 16383u};
+    for (uint8_t i = 0u; i < sizeof(raws) / sizeof(raws[0]); ++i) {
+        const uint32_t raw = raws[i];
+        const uint16_t origin = ecu_sched_encoder_tdc1_calibrate_from_raw(raw);
+        ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = origin;
+        const uint32_t back = ecu_sched_encoder_test_engine_deg_to_counts(0u);
+        // origin_deg é um INTEIRO 0-359 — 360 não divide 16384 exactamente
+        // (1 grau ≈ 45,5 counts), então o round-trip nunca é exacto ao
+        // count: a tolerância real é ~meio grau (±23 counts), não ±1 (esse
+        // seria só o caso onde os dois lados arredondam para o mesmo
+        // valor por coincidência). Distância circular (mod 16384): raw=16383
+        // e back=0 são POSIÇÕES ADJACENTES (a 1 count uma da outra através
+        // do wrap), não uma diferença de ~16384 — diff ingénuo confundia as
+        // duas.
+        int32_t diff = static_cast<int32_t>(back) - static_cast<int32_t>(raw);
+        if (diff > 8192) { diff -= 16384; }
+        if (diff < -8192) { diff += 16384; }
+        CHECK_TRUE(diff >= -46 && diff <= 46,
+                   "round-trip TIM2 raw -> origin_deg -> counts_in_rev, dentro de meio grau (distância circular)");
+    }
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1332,8 +1376,8 @@ void test_ecu_sched_encoder_recompute_presync(void) {
     section("ecu_sched: encoder heartbeat recompute — presync wasted pairs @ 180°");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
 
     ecu_sched_set_advance_deg(10u);            // spark_a=350, spark_b=170
     ecu_sched_set_eoi_lead_deg(355u);          // eoi_deg=5
@@ -1378,7 +1422,7 @@ void test_ecu_sched_encoder_recompute_presync(void) {
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
              "repeated heartbeat: still exactly 16, no duplication from purge+rebuild");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1429,8 +1473,8 @@ void test_ecu_sched_encoder_presync_multispark(void) {
     section("ecu_sched: encoder presync — multi-spark per wasted pair");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
 
     ecu_sched_set_advance_deg(20u);
     ecu_sched_set_eoi_lead_deg(60u);
@@ -1467,7 +1511,7 @@ void test_ecu_sched_encoder_presync_multispark(void) {
              "repeated heartbeat: still 24, no duplication");
 
     ecu_sched_set_mspark(0u, 0u, 18u);
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1483,8 +1527,8 @@ void test_ecu_sched_encoder_placement(void) {
     section("ecu_sched: encoder engine_deg720_to_absolute placement");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
 
     // Discriminator vectors (hand-verified) — composition identical to
     // engine_deg720_to_absolute's body. Integer deg→counts cannot hit residue
@@ -1533,7 +1577,7 @@ void test_ecu_sched_encoder_placement(void) {
     CHECK_EQ(ecu_sched_encoder_phase_at(83615u), ECU_PHASE_A,
              "phase_at just before -1 rev boundary");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1541,8 +1585,8 @@ void test_ecu_sched_encoder_sequential_distinct_targets(void) {
     section("ecu_sched: encoder sequential — distinct per-cyl targets");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1573,7 +1617,7 @@ void test_ecu_sched_encoder_sequential_distinct_targets(void) {
     CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, &spark2), 1u, "cyl2 SPARK present");
     CHECK_TRUE(spark0 != spark2, "cyl0 and cyl2 spark targets are distinct");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1581,8 +1625,8 @@ void test_ecu_sched_encoder_sequential_trims(void) {
     section("ecu_sched: encoder sequential — per-cyl ign/fuel trims");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1606,7 +1650,7 @@ void test_ecu_sched_encoder_sequential_trims(void) {
 
     // +5° ign trim +50% fuel trim on cyl0 only.
     ecu_sched_test_reset();
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1647,7 +1691,7 @@ void test_ecu_sched_encoder_sequential_trims(void) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
     }
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1655,8 +1699,8 @@ void test_ecu_sched_encoder_sequential_phase_progression(void) {
     section("ecu_sched: encoder sequential — phase A/B cylinder partition");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1692,7 +1736,7 @@ void test_ecu_sched_encoder_sequential_phase_progression(void) {
     CHECK_TRUE(ecu_sched_encoder_test_get_evt_count() >= 16u,
                "all 4 cylinders armed across successive windows");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1700,8 +1744,8 @@ void test_ecu_sched_encoder_presync_to_sequential_transition(void) {
     section("ecu_sched: encoder presync↔sequential handoff");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1738,7 +1782,7 @@ void test_ecu_sched_encoder_presync_to_sequential_transition(void) {
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
              "presync rebuild restores 16-wide simultaneous schedule");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1746,8 +1790,8 @@ void test_ecu_sched_encoder_sequential_min_lead_skip(void) {
     section("ecu_sched: encoder sequential — lead below min stays unarmed (window gate)");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1780,7 +1824,7 @@ void test_ecu_sched_encoder_sequential_min_lead_skip(void) {
     CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 0u,
              "cyl0 outside 60° window — not armed early");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1788,8 +1832,8 @@ void test_ecu_sched_encoder_sequential_min_lead_dwell_behind(void) {
     section("ecu_sched: encoder sequential — min-lead skip when dwell behind now");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1830,7 +1874,7 @@ void test_ecu_sched_encoder_sequential_min_lead_dwell_behind(void) {
     CHECK_EQ(ecu_sched_encoder_seq_min_lead_skip_count(), skips_after_arm,
              "run_seq_arm=0 — sem segundo try_arm (skip count estável)");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1838,8 +1882,8 @@ void test_ecu_sched_encoder_sequential_long_lead_refresh(void) {
     section("ecu_sched: encoder sequential — no arm outside 60° window");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1868,7 +1912,7 @@ void test_ecu_sched_encoder_sequential_long_lead_refresh(void) {
                static_cast<int32_t>(ecu_sched_encoder_test_arm_window_counts()),
                "dwell lead ≤ 60° arm window");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1876,8 +1920,8 @@ void test_ecu_sched_encoder_sequential_multispark(void) {
     section("ecu_sched: encoder sequential — multi-spark extra IGN events");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1905,7 +1949,7 @@ void test_ecu_sched_encoder_sequential_multispark(void) {
              "cyl0 has primary + 1 multi-spark pair (4 IGN1 events)");
 
     ecu_sched_set_mspark(0u, 0u, 18u);
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1913,8 +1957,8 @@ void test_ecu_sched_encoder_sequential_prep_pw_overrides_global(void) {
     section("ecu_sched: encoder sequential — prep PW overrides g_inj_pw_ticks");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1949,7 +1993,7 @@ void test_ecu_sched_encoder_sequential_prep_pw_overrides_global(void) {
                "armed PW span from prep, not huge g_inj_pw_ticks");
     CHECK_TRUE(span > 1000u, "armed PW span non-trivial from prep flow");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1957,8 +2001,8 @@ void test_ecu_sched_encoder_sequential_prep_knock_per_cyl(void) {
     section("ecu_sched: encoder sequential — knock retard only on armed cyl");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -1989,7 +2033,7 @@ void test_ecu_sched_encoder_sequential_prep_knock_per_cyl(void) {
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::knock_retard_x10[i] = 0u;
     }
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1997,8 +2041,8 @@ void test_ecu_sched_encoder_sequential_omega_refresh(void) {
     section("ecu_sched: encoder sequential — Δω refreshes dwell, spark fixed");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -2034,7 +2078,7 @@ void test_ecu_sched_encoder_sequential_omega_refresh(void) {
     CHECK_TRUE(ecu_sched_encoder_test_get_omega_refresh_count() > refreshes_before,
                "omega refresh counter increments");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -2042,8 +2086,8 @@ void test_ecu_sched_encoder_sequential_omega_refresh_lock(void) {
     section("ecu_sched: encoder sequential — no refresh past limit angle");
     ecu_sched_test_reset();
 
-    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg;
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = 0u;
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
     for (uint8_t i = 0u; i < 4u; ++i) {
         ems::engine::cyl_ign_trim_deg[i] = 0;
         ems::engine::cyl_fuel_trim_pct[i] = 0;
@@ -2076,7 +2120,7 @@ void test_ecu_sched_encoder_sequential_omega_refresh_lock(void) {
     CHECK_EQ(ecu_sched_encoder_test_get_omega_refresh_count(), refreshes_before,
              "no refresh after lock");
 
-    ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_origin;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 

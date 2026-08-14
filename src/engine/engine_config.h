@@ -45,6 +45,27 @@ inline constexpr uint16_t kDefaultEoiLeadDeg = 355u;  // open-valve (Speeduino-s
 // girar com uma placa encoder — não é intercambiável entre os dois modos.
 inline constexpr uint16_t kTriggerTooth0EngineDeg = 0u;  // MEDIR NO MOTOR REAL
 
+// Campo dedicado ao caminho encoder (EMS_MT6835_ENCODER=1) — decisão do
+// utilizador (2026-08-13) de NÃO reaproveitar trigger_tooth0_engine_deg
+// (que fica exclusivo do caminho roda-dentada): permite trocar entre Hall e
+// encoder na mesma placa sem perder/sobrescrever a calibração do outro modo.
+// Mesmo papel físico ("que ângulo de motor corresponde à posição bruta
+// zero"), mas domínio de embrulho é 360° (1 volta de TIM2), não 720° como o
+// nome de trigger_tooth0_engine_deg sugere — só valores 0-359 fazem sentido
+// aqui (ver validação em engine_config.cpp).
+//
+// Como calibrar (mesmo procedimento físico de trigger_tooth0_engine_deg —
+// dial indicator / roda de graus na polia — mas lendo TIM2_CNT em vez de
+// osciloscópio no dente 0; ver docs/dev/mt6835_encoder_fork.md,
+// "Procedimento de bancada"):
+//   1. Colocar o cilindro 1 no PMS de compressão (referência mecânica).
+//   2. Nessa posição exacta, chamar ecu_sched_encoder_tdc1_calibrate_from_raw()
+//      com o valor cru de tim2_encoder_count() — devolve o valor pronto a
+//      escrever aqui (ver ecu_sched.h). Exposto via UI protocol (comando 'X'),
+//      não precisa de calcular à mão.
+//   3. Escrever o valor devolvido neste campo e fazer burn.
+inline constexpr uint16_t kEncoderTdc1OriginDeg = 0u;  // MEDIR NO MOTOR REAL
+
 // Convenção de canal: ECU_CH_IGNn/ECU_CH_INJn = cilindro físico n−1, SEMPRE.
 // A ordem de disparo entra apenas via kFiringOrder/cyl_tdc_deg — nunca na
 // escolha do canal. Invariante partilhado por Calculate_Sequential_Cycle,
@@ -81,6 +102,7 @@ struct EngineConfigRam {
     uint16_t map_ref_bar_x100;
     uint16_t trigger_tooth0_engine_deg;
     uint16_t default_eoi_lead_deg;
+    uint16_t encoder_tdc1_origin_deg;
 };
 
 // Runtime config — initialized to compile-time defaults at startup.

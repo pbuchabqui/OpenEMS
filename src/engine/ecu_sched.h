@@ -181,6 +181,12 @@ void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexce
 int32_t ecu_sched_encoder_omega_x65536(void) noexcept;  // counts/tick ×65536
 uint8_t ecu_sched_encoder_omega_valid(void) noexcept;
 
+// Calibração de engine_config.h::encoder_tdc1_origin_deg: dado um valor cru
+// de TIM2->CNT lido com o cilindro 1 no PMS de compressão, devolve o valor
+// pronto a escrever nesse campo (0-359). Pura — não toca em NVM/RAM shadow;
+// ver comentário em ecu_sched_angle_encoder.cpp.
+uint16_t ecu_sched_encoder_tdc1_calibrate_from_raw(uint32_t tim2_raw_at_tdc1) noexcept;
+
 void ecu_sched_encoder_phase_set_anchor(uint32_t tim2_raw_at_cmp_edge,
                                         uint8_t phase) noexcept;
 uint8_t ecu_sched_encoder_phase_at(uint32_t tim2_raw_now) noexcept;

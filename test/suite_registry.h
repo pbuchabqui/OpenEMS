@@ -153,6 +153,7 @@ void test_ecu_sched_encoder_heartbeat_subtick_cadence(void);
 void test_ecu_sched_encoder_heartbeat_subtick_feeds_misfire(void);
 void test_ecu_sched_encoder_min_lead(void);
 void test_ecu_sched_encoder_conversion(void);
+void test_ecu_sched_encoder_tdc1_calibrate(void);
 void test_ecu_sched_encoder_recompute_presync(void);
 void test_ecu_sched_encoder_recompute_presync_bank_toggle(void);
 void test_ecu_sched_encoder_recompute_presync_pw_clamp(void);

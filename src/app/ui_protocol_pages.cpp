@@ -371,10 +371,11 @@ bool burn_rpm_safe() noexcept {
 
 void sync_page_from_table(uint8_t page) noexcept {
     if (page == 0x00u) {
-        // Popula bytes 2-15 do buffer UI a partir de g_eng_cfg.
-        // Byte 0: reserved (was IVC ABDC; unused after EOI targeting).
+        // Popula bytes 0-15 do buffer UI a partir de g_eng_cfg — inclui
+        // [0-1]=encoder_tdc1_origin_deg (era reserved/IVC ABDC, sempre
+        // zerado aqui até engine_config.cpp v3; zerar depois do serialize
+        // apagava a calibração TDC1 nesta mesma chamada).
         ems::engine::cfg::engine_config_serialize(g_page0, 16u);
-        g_page0[0] = 0u;
         // Bytes 16-55: calibração de sensores APP/ETB/TPS + plausibilidade
         ems::engine::sync_etb_calibration_to_page(g_page0 + 16, 40u);
         // Bytes 56-63: trim de combustível e ignição por cilindro (int8 × 4 cada)
@@ -570,8 +571,9 @@ void sync_page_from_table(uint8_t page) noexcept {
 // caller deve restaurar com sync_page_from_table()).
 bool sync_table_from_page(uint8_t page) noexcept {
     if (page == 0x00u) {
-        // page0[0] reserved (IVC removed from wire); ignore host writes to that byte.
-        g_page0[0] = 0u;
+        // [0-1]=encoder_tdc1_origin_deg (era reserved/IVC, ignorado aqui até
+        // engine_config.cpp v3 — zerar antes do load descartava qualquer
+        // escrita 'w' à calibração TDC1 antes de chegar a g_eng_cfg).
         // Aplica engine config (displacement, injector, AFR, trigger offset, etc.)
         // engine_config_load valida magic 0x4543 em bytes [14-15] — a escrita via
         // 'w' deve sempre incluir os 16 bytes completos com magic correcto.

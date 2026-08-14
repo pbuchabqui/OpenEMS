@@ -224,6 +224,7 @@ int main(void) {
     test_ecu_sched_encoder_heartbeat_subtick_feeds_misfire();
     test_ecu_sched_encoder_min_lead();
     test_ecu_sched_encoder_conversion();
+    test_ecu_sched_encoder_tdc1_calibrate();
     test_ecu_sched_encoder_recompute_presync();
     test_ecu_sched_encoder_recompute_presync_bank_toggle();
     test_ecu_sched_encoder_recompute_presync_pw_clamp();

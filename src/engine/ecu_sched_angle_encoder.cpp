@@ -680,18 +680,39 @@ uint32_t ecu_sched_encoder_test_get_omega_refresh_count(void) noexcept
 }
 #endif
 
+// Calcula o valor de cfg::g_eng_cfg.encoder_tdc1_origin_deg a partir de uma
+// leitura crua de TIM2->CNT feita com o cilindro 1 fisicamente no PMS de
+// compressão (mesmo procedimento de bancada de trigger_tooth0_engine_deg —
+// dial indicator/roda de graus, ver engine_config.h e
+// docs/dev/mt6835_encoder_fork.md, "Procedimento de bancada"). Pura — não lê
+// nem escreve g_eng_cfg; o chamador (UI protocol, comando 'X') decide
+// se/quando persistir o valor devolvido.
+//
+// Inverte engine_deg_to_counts_in_rev(0) abaixo: engine_angle_deg=0 é o TDC
+// do cilindro 1 (cyl_tdc_deg(0)==0, engine_config.h) e tem de mapear para
+// counts_in_rev==tim2_raw_at_tdc1 (mod 16384), logo
+// origin_mod360 = (360 − round(counts_in_rev×360/16384)) mod 360.
+uint16_t ecu_sched_encoder_tdc1_calibrate_from_raw(uint32_t tim2_raw_at_tdc1) noexcept
+{
+    const uint32_t counts_in_rev = tim2_raw_at_tdc1 & 0x3FFFU;
+    const uint32_t origin_deg = (counts_in_rev * 360U + 8192U) / 16384U;  // arredonda
+    return static_cast<uint16_t>((360U - (origin_deg % 360U)) % 360U);
+}
+
 namespace ems::engine::sched_internal::encoder {
 
 // ── Conversão graus de motor → counts TIM2 ───────────────────────────────
 //
 // TIM2_CNT embrulha a cada 16384 contagens = 1 volta de cambota (360°), não
 // 720° como o ciclo do motor. A origem (que ângulo de motor corresponde a
-// TIM2_CNT==0) é uma constante de calibração de hardware — reaproveitada de
-// cfg::g_eng_cfg.trigger_tooth0_engine_deg, o mesmo campo já usado pelo
-// caminho roda-dentada (mesmo conceito físico: "que ângulo corresponde à
-// posição bruta zero"), NVM-backed e já com procedimento de bancada — ver
-// engine_config.h e docs/dev/mt6835_encoder_fork.md. Só a resídua MOD 360
-// do campo é significativa aqui.
+// TIM2_CNT==0) é uma constante de calibração de hardware —
+// cfg::g_eng_cfg.encoder_tdc1_origin_deg, campo dedicado ao caminho encoder
+// (NVM-backed, engine_config.h) — deliberadamente separado de
+// trigger_tooth0_engine_deg (esse fica exclusivo do caminho roda-dentada;
+// decisão do utilizador, 2026-08-13, para poder trocar entre os dois modos
+// na mesma placa sem perder a calibração do outro). Só a resídua MOD 360 do
+// campo é significativa aqui — ver ecu_sched_encoder_tdc1_calibrate_from_raw()
+// abaixo para o preencher a partir de uma leitura real de TIM2.
 //
 // Duplicado deliberadamente de engine_angle_to_trigger_angle()
 // (ecu_sched_angle.cpp:47-53) em vez de partilhado: essa função usa
@@ -701,7 +722,7 @@ namespace ems::engine::sched_internal::encoder {
 static uint32_t engine_deg_to_counts_in_rev(uint32_t engine_angle_deg) noexcept
 {
     const uint32_t origin_mod360 =
-        static_cast<uint32_t>(cfg::g_eng_cfg.trigger_tooth0_engine_deg) % 360U;
+        static_cast<uint32_t>(cfg::g_eng_cfg.encoder_tdc1_origin_deg) % 360U;
     const uint32_t crank_deg =
         (engine_angle_deg % 360U + 360U - origin_mod360) % 360U;
     return (crank_deg * 16384U) / 360U;
