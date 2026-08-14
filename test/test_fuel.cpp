@@ -894,8 +894,8 @@ void test_fuel_ltft_accum(void) {
 
     CHECK_FALSE(ltft_accum_sample_valid(
                     30000u, 30000u, 500u, 500u, true,
-                    1000, 1015, 40, 600, true, false, false),
-                "CLT frio → inválido");
+                    1000, 1015, 40, 390, true, false, false),
+                "CLT frio (<40°C) → inválido");
 
     // ── Integração via fuel_update_stft (λ perto do alvo) ────────────────
     // err=15 (1015-1000) ≤ max; 1ª amostra sem prev → 0 hits
