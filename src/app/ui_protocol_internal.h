@@ -38,6 +38,9 @@ enum class ParseState : uint8_t {
     ENV_SIZE_LO = 6u,
     ENV_PAYLOAD = 7u,
     ENV_CRC = 8u,
+    // 'L': λ simulado de bancada, valor variável (independente do on/off de
+    // 'B') — ver docs/closed_loop_fuel.md, comandos.
+    BENCH_LAMBDA_ARG = 10u,
 };
 
 constexpr uint16_t kEnvMaxChunk   = 800u;

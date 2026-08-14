@@ -168,6 +168,17 @@ void parse_byte(uint8_t b) noexcept {
             tx_push(static_cast<uint8_t>((origin_deg >> 8u) & 0xFFu));
             return;
         }
+        if (b == static_cast<uint8_t>('L')) {
+            // λ simulado de bancada, valor variável — independente do on/off
+            // de 'B' (esse continua a controlar CLT/IAT bench + reset λ→1000).
+            // Permite sequências de degraus ('L' repetido) sem re-armar o
+            // bench a cada passo. Sem efeito prático até 'B' estar ON — ver
+            // can_stack_lambda_milli_safe(), só lê g_bench_lambda_milli
+            // quando g_bench_lambda_on.
+            g_state = ParseState::BENCH_LAMBDA_ARG;
+            g_arg_pos = 0u;
+            return;
+        }
         if (b == static_cast<uint8_t>('T')) {
             g_state = ParseState::TEST_ARGS;
             g_arg_pos = 0u;
@@ -356,6 +367,35 @@ void parse_byte(uint8_t b) noexcept {
         // (exercita integrador e aprendizagem; não converge, por design).
         ems::app::can_stack_set_bench_lambda(b != 0u, 1000u);
         tx_push(kAckOk);
+        reset_parser();
+        return;
+    }
+
+    if (g_state == ParseState::BENCH_LAMBDA_ARG) {
+        // Acumula u16 LE — reaproveita g_cmd_off (já usado como scratch de
+        // 2 bytes em READ_ARGS/WRITE_ARGS) para não introduzir uma variável
+        // global só para isto.
+        if (g_arg_pos == 0u) {
+            g_cmd_off = b;
+            ++g_arg_pos;
+            return;
+        }
+        g_cmd_off = static_cast<uint16_t>(g_cmd_off | (static_cast<uint16_t>(b) << 8u));
+        // [700,1275]: 700 = kLambdaMinMilli (main_stm32.cpp); 1275 não é o
+        // kLambdaMaxMilli=1400 do motor — é o teto do encoding u8 λ/5 da
+        // página realtime (ui_protocol_pages.cpp) — acima disso o gauge/
+        // gráfico mostraria um valor errado mesmo com o valor real aplicado
+        // corretamente internamente. Rejeitar fora daqui evita essa mentira
+        // silenciosa no dash.
+        if (g_cmd_off < 700u || g_cmd_off > 1275u) {
+            tx_push(kAckErr);
+            reset_parser();
+            return;
+        }
+        ems::app::can_stack_set_bench_lambda_value(g_cmd_off);
+        tx_push(kAckOk);
+        tx_push(static_cast<uint8_t>(g_cmd_off & 0xFFu));
+        tx_push(static_cast<uint8_t>((g_cmd_off >> 8u) & 0xFFu));
         reset_parser();
         return;
     }

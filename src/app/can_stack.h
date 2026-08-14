@@ -44,6 +44,11 @@ bool can_stack_wbo2_fault() noexcept;
 // Liberta o gate closed_loop_allowed do STFT/LTFT sem WBO2 físico no CAN.
 void can_stack_set_bench_lambda(bool enable, uint16_t lambda_milli) noexcept;
 
+// Ajusta só o valor λ simulado, sem tocar no enable ('B' continua a
+// controlar isso) — permite sequências de step-response ('L' repetido, ver
+// docs/closed_loop_fuel.md) sem re-armar o bench CLT/IAT/λ entre passos.
+void can_stack_set_bench_lambda_value(uint16_t lambda_milli) noexcept;
+
 uint8_t can_stack_wbo2_status() noexcept;
 
 #if defined(EMS_HOST_TEST)

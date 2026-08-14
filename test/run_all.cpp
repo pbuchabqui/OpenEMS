@@ -127,6 +127,7 @@ int main(void) {
     test_fuel_lambda_delay();
     test_fuel_stft();
     test_fuel_stft_delayed();
+    test_fuel_stft_convergence_time();
     test_injector_scurve();
     test_fuel_delta_p_compensation();
     test_fuel_ltft();

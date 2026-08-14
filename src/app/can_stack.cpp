@@ -269,6 +269,10 @@ void can_stack_set_bench_lambda(bool enable, uint16_t lambda_milli) noexcept {
     g_bench_lambda_milli = lambda_milli;
 }
 
+void can_stack_set_bench_lambda_value(uint16_t lambda_milli) noexcept {
+    g_bench_lambda_milli = lambda_milli;
+}
+
 uint8_t can_stack_wbo2_status() noexcept {
     return g_wbo2_status;
 }

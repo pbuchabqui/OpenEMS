@@ -82,6 +82,8 @@ Clear ~2 s fora do sat. Severidade WARNING.
 |------|-----|--------|
 | `'Z'` | `/api/ltft/reset` e `/api/adaptives/reset` | STFT+LEARN+LTFT shadow zero + flush ASAP |
 | `'Y'` | `/api/ltft/apply-ready` | APPLY all accumulated (hits>0) → VE |
+| `'B'` | `/api/bench_mode` | Liga/desliga bench CLT/IAT/λ (reseta λ→1.000 ao ligar) |
+| `'L'` | `/api/bench_lambda` | Define λ simulado (u16 LE, 700-1275) — independente do enable de `'B'`, permite sequência de degraus sem re-armar o bench |
 | page 10 | — | visualização LTFT mult+add |
 | page 12 | LEARN tab | hits + mean STFT + ready bit |
 
@@ -94,6 +96,23 @@ Clear ~2 s fora do sat. Severidade WARNING.
 5. Regime estável: page12 ready bit; APPLY altera VE.  
 6. Z: STFT=0, hits=0, LTFT shadows 0.  
 7. (Opcional) saturar STFT ~5 s → DTC STFT_LIMIT no DiagnosticManager.
+8. **Degrau de λ para observar a resposta do STFT** (requer
+   `closed_loop_post_start_s` já decorrido, ou zerado via write RAM de
+   page0 para iteração rápida em bancada):
+   1. `'B'` ON (bench CLT/IAT + arma λ simulado, reset para 1.000).
+   2. Na aba Telemetria, ligar as séries `stft_pct` e `lambda_x1000` no
+      gráfico deslizante (desligadas por default).
+   3. `'L'` com um valor diferente de 1.000 (ex. 1.200) — botão "SET λ" no
+      dash, ao lado do BENCH.
+   4. Observar o traço de `stft_pct` no gráfico. **Nota de resolução**: a
+      página realtime reporta STFT em passos de 1% (`clamp_i8(stft/10,…)`)
+      — com o degrau default de teste (5%λ) o traço sobe em "escada" de
+      ~4s por passo visível, não uma curva suave; isto é esperado, não bug.
+   5. Baseline quantitativo (ganhos default, sem plant feedback — λ medido
+      não reage ao trim neste bench): `test_fuel_stft_convergence_time`
+      (`test/test_fuel.cpp`) mede 244 ticks × 100ms ≈ 24,4s até saturar o
+      clamp ±25% sob um degrau de 0,200λ. Qualquer afinação futura de
+      Kp/Ki/clamp deve atualizar essa conta de propósito.
 
 ## Layout page0 (closed-loop)
 

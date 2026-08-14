@@ -486,6 +486,54 @@ void test_fuel_stft_delayed(void) {
                "stft_delayed in valid range [-25%,+25%]");
 }
 
+void test_fuel_stft_convergence_time(void) {
+    section("fuel_trim: fuel_update_stft convergence time (baseline, default gains)");
+
+    // Bypassa fuel_update_stft_delayed() de propósito: isola a dinâmica PI
+    // pura do controlador (o alvo de qualquer afinação futura de Kp/Ki) do
+    // atraso de transporte do exhaust (lambda_delay_ms_table, ainda não
+    // exercitado — ver testes.md, item F2). test_fuel_stft_delayed() já
+    // cobre a ativação do caminho com delay; este teste cobre "quantos
+    // ticks até convergir" sob ganhos default, não "quando o delay liberta
+    // o closed loop".
+
+    // Ganhos default assumidos explicitamente (não herdados de testes
+    // anteriores) — a asserção abaixo é uma conta exata em aritmética
+    // inteira; depender da ordem da suite quebraria silenciosamente.
+    fuel_reset_adaptives();
+    closed_loop_enable = 1u;
+    closed_loop_post_start_s = 0u;
+    stft_kp_x100 = 3u;          // 0.03 (default)
+    stft_ki_x1000 = 5u;         // 0.005 (default)
+    stft_clamp_pct_x10 = 250u;  // ±25.0% (default)
+
+    // Erro fixo (sem plant feedback — modela o bench atual: λ medido não
+    // reage ao trim, ver can_stack_set_bench_lambda). target=1.000,
+    // measured=1.200 → error_x1000=200. Com os ganhos acima:
+    // p_x10=(200*3)/100=6 (constante, recalculado a cada tick, não
+    // acumula); Δintegrador=(200*5)/10=100/tick; stft_x10(N)=6+N exato
+    // (sem perda de arredondamento) até saturar no clamp ±250 em N=244
+    // (6+244=250) — apenas ~2 ticks no clamp, longe do limiar de 50 ticks
+    // que confirmaria o DTC STFT_LIMIT_REACHED (kTrimSatConfirmTicks,
+    // fuel_trim.cpp), então este teste não precisa de limpar DiagnosticManager.
+    auto tick = [&]() {
+        return fuel_update_stft(30000u, 100u, 1000, 1200, 900,
+                                true, false, false, 5000u, 500u);
+    };
+    for (int i = 1; i < 244; ++i) { tick(); }
+    CHECK_EQ(tick(), 250, "tick 244: primeiro tick a saturar no clamp (6+244=250)");
+    CHECK_EQ(fuel_get_stft_pct_x10(), 250, "fuel_get_stft_pct_x10 consistente");
+    CHECK_EQ(tick(), 250, "tick 245: mantém-se saturado (soma bruta seria 251)");
+
+    // Baseline documentado: 244 ticks × 100ms/tick (cadência real de
+    // fuel_update_stft_delayed, main_stm32.cpp) ≈ 24,4s até saturar com
+    // este degrau de 0,200λ sob ganhos default. Não é um alvo — é o número
+    // de hoje; mudar Kp/Ki/clamp deve atualizar esta conta de propósito.
+
+    fuel_reset_adaptives();
+    closed_loop_post_start_s = 15u;  // restaura default
+}
+
 void test_injector_scurve(void) {
     section("fuel_calc: apply_injector_scurve");
     using namespace ems::engine;

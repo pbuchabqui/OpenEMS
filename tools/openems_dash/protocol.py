@@ -11,6 +11,7 @@ Comandos (ui_protocol.cpp):
   x <page> <off u16le> <len u16le> <data>   → escreve só RAM, ACK 1B
   w ...                                      → escreve RAM + flash, ACK 1B
   b <page>                                   → burn página p/ flash, ACK 1B
+  L <lambda_milli u16le>                     → λ simulado de bancada (700-1275), ACK+eco
 """
 
 from __future__ import annotations
@@ -268,6 +269,19 @@ class OpenEMSLink:
         ack = self._txn(b"B" + bytes([1 if on else 0]), 1)
         if ack != b"\x00":
             raise IOError(f"bench_mode: ACK {ack.hex()}")
+
+    # ── bench λ valor ('L': ajusta só o λ simulado, sem religar 'B') ─────
+    def set_bench_lambda(self, lambda_milli: int) -> int:
+        """Define o λ simulado (bench-mode) — independente do enable de 'B'.
+        Range aceite pelo FW: 700-1275 (limite superior = encoding u8 λ/5 da
+        página realtime; acima disso o gauge/gráfico mostraria valor errado
+        mesmo com o valor real aplicado corretamente). Sem efeito prático
+        até 'B' estar ON. Devolve o valor aplicado (eco do FW), como
+        tdc1_calibrate()."""
+        resp = self._txn(b"L" + struct.pack("<H", lambda_milli), 3)
+        if resp[0] != 0x00:
+            raise IOError(f"set_bench_lambda: ACK {resp[0]:02x}")
+        return struct.unpack("<H", resp[1:3])[0]
 
     # ── calibração TDC1 encoder ('X': lê TIM2 ao vivo, aplica em RAM) ────
     def tdc1_calibrate(self) -> int:

@@ -457,6 +457,20 @@ def api_bench_mode(body: dict):
     return {"ok": True, "bench": on}
 
 
+@app.post("/api/bench_lambda")
+def api_bench_lambda(body: dict):
+    """Define λ simulado de bancada (comando 'L') — separado do toggle 'B',
+    para permitir uma sequência de degraus sem re-armar o bench. Ver
+    docs/closed_loop_fuel.md, secção Comandos."""
+    lambda_milli = int(body.get("lambda_milli", 1000))
+    try:
+        applied = worker.submit(lambda l: l.set_bench_lambda(lambda_milli))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"bench_lambda: {e}"}, status_code=502)
+    return {"ok": True, "lambda_milli": applied,
+            "msg": f"bench λ = {applied/1000:.3f}"}
+
+
 @app.get("/api/debug/counters")
 def api_debug_counters():
     try:

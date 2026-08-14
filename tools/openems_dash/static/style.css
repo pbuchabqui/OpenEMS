@@ -188,6 +188,26 @@ html, body {
   gap: 5px;
 }
 
+.bench-lambda-set {
+  display: flex;
+  gap: 4px;
+}
+.bench-lambda-set input {
+  width: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--panel-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 6px;
+  font: 11px var(--font);
+}
+.bench-lambda-set button {
+  width: auto;
+  flex: 0 0 auto;
+}
+
 /* ── Buttons ─────────────────────────────────────────────────────────── */
 button {
   background: var(--panel-2);

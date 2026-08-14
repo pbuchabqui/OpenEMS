@@ -66,6 +66,10 @@
     <div id="sb-bottom">
       <div class="sb-actions">
         <button id="benchBtn" type="button" title="Bench-mode: CLT/IAT/λ simulated + relaxed CKP (HIL)">BENCH</button>
+        <span class="bench-lambda-set" title="Bench λ variável (comando 'L') — para exercitar a resposta do STFT sob um degrau, requer BENCH ligado">
+          <input id="benchLambdaVal" type="number" step="0.001" min="0.700" max="1.275" value="1.000">
+          <button id="benchLambdaBtn" type="button">SET λ</button>
+        </span>
         <button id="logBtn" type="button" title="Record datalog CSV">● LOG</button>
         <button id="logExportBtn" type="button" title="Export log for analysis">⇩ EXPORT</button>
         <button id="logMlgBtn" type="button" title="Download último log em MLG (MegaLogViewer)">⇩ MLG</button>

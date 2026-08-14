@@ -87,6 +87,7 @@ void test_fuel_adaptives_reset(void);
 void test_fuel_lambda_delay(void);
 void test_fuel_stft(void);
 void test_fuel_stft_delayed(void);
+void test_fuel_stft_convergence_time(void);
 void test_injector_scurve(void);
 void test_fuel_delta_p_compensation(void);
 void test_fuel_ltft(void);
