@@ -196,6 +196,13 @@ void ecu_sched_encoder_phase_set_anchor(uint32_t tim2_raw_at_cmp_edge,
     g_phase_valid = 1U;
 }
 
+// Confia cegamente no anchor recebido — pura aritmética de paridade de
+// revolução, sem verificação própria nenhuma. Isso é seguro só porque o
+// ÚNICO chamador de ecu_sched_encoder_phase_set_anchor() (heartbeat_tick(),
+// abaixo) nunca re-ancora sem o flanco CMP ter passado primeiro por
+// evaluate_cmp_edge() (encoder_sync.h/.cpp) — um salto de dente da
+// corrente/correia de distribuição apareceria ali como flanco REJEITADO,
+// nunca chegaria a esta função com um anchor errado.
 uint8_t ecu_sched_encoder_phase_at(uint32_t tim2_raw_now) noexcept
 {
     const int32_t delta = (int32_t)(tim2_raw_now - g_phase_anchor_raw);
@@ -535,6 +542,19 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
             if (EMS_MT6835_CMP_PHASE_CALIBRATED) {
                 // Definição absoluta, nunca toggle — mesmo flanco pode
                 // re-ancorar repetidamente sem se acumular.
+                //
+                // Re-ancorar em TODO flanco aceite (não só uma vez) não é
+                // checagem redundante: CKP e CMP têm ligação mecânica fixa
+                // (corrente/correia de distribuição) só enquanto essa
+                // ligação estiver saudável. `r.accepted` acima já passou
+                // por evaluate_cmp_edge() (encoder_sync.h), cuja tolerância
+                // de espaçamento é explicitamente um "orçamento de folga
+                // MECÂNICA" — um salto de dente da corrente/correia
+                // apareceria ali como flanco rejeitado, não como um anchor
+                // silenciosamente errado. Sem este re-anchor contínuo,
+                // ecu_sched_encoder_phase_at() (pura aritmética de
+                // paridade) continuaria a confiar num anchor desatualizado
+                // indefinidamente após um slip real.
                 ecu_sched_encoder_phase_set_anchor(
                     cmp_angle, static_cast<uint8_t>(EMS_MT6835_CMP_PHASE_VALUE));
             }
