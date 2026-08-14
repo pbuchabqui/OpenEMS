@@ -102,16 +102,20 @@ Clear ~2 s fora do sat. Severidade WARNING.
    1. `'B'` ON (bench CLT/IAT + arma λ simulado, reset para 1.000).
    2. Na aba Telemetria, ligar as séries `stft_pct` e `lambda_x1000` no
       gráfico deslizante (desligadas por default).
-   3. `'L'` com um valor diferente de 1.000 (ex. 1.200) — botão "SET λ" no
-      dash, ao lado do BENCH.
+   3. `'L'` com um valor diferente de 1.000 — botão "SET λ" no dash, ao
+      lado do BENCH. **Usar um degrau realista, 0.010** (ex. 1.000→1.010),
+      não um erro grosseiro artificial — é a ordem de grandeza que o STFT
+      corrige de facto em operação normal (ver `test_fuel_stft_convergence_time`).
    4. Observar o traço de `stft_pct` no gráfico. **Nota de resolução**: a
       página realtime reporta STFT em passos de 1% (`clamp_i8(stft/10,…)`)
-      — com o degrau default de teste (5%λ) o traço sobe em "escada" de
-      ~4s por passo visível, não uma curva suave; isto é esperado, não bug.
+      — com o degrau de 0,010λ, o termo proporcional trunca a zero nesta
+      magnitude de erro (só o integrador move o trim) e o primeiro passo de
+      1% visível só aparece aos ~20s (200 ticks); é uma "escada" lenta, não
+      uma curva suave — esperado, não bug.
    5. Baseline quantitativo (ganhos default, sem plant feedback — λ medido
       não reage ao trim neste bench): `test_fuel_stft_convergence_time`
-      (`test/test_fuel.cpp`) mede 244 ticks × 100ms ≈ 24,4s até saturar o
-      clamp ±25% sob um degrau de 0,200λ. Qualquer afinação futura de
+      (`test/test_fuel.cpp`) mede 5000 ticks × 100ms = 500s (8,3 min) até
+      saturar o clamp ±25% sob um degrau de 0,010λ. Qualquer afinação futura de
       Kp/Ki/clamp deve atualizar essa conta de propósito.
 
 ## Layout page0 (closed-loop)

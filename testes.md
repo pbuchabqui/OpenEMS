@@ -43,7 +43,7 @@ Classificação de cada problema:
 | `fuel_reset_adaptives` | 🟢 | STFT → 0 após reset verificado |
 | `fuel_lambda_delay_reset` | 🔴 | `CHECK_TRUE(true, "no crash")` — **tautologia pura** (linha 1155) |
 | `lambda_delay_ms_from_rpm_load` | 🟢 | Valores interpolados verificados por 3 pontos |
-| `fuel_update_stft` | 🟢 | Direcção (pos/neg) e freeze verificados; clamp ±250 verificado via `test_fuel_stft_convergence_time` (baseline de tempo de convergência sob ganhos default — 244 ticks até saturar um degrau de 0,200λ); split additive/multiplicative não testado |
+| `fuel_update_stft` | 🟢 | Direcção (pos/neg) e freeze verificados; clamp ±250 verificado via `test_fuel_stft_convergence_time` (baseline de tempo de convergência sob ganhos default e degrau realista de 0,010λ — 5000 ticks/500s até saturar; termo proporcional trunca a zero nesta magnitude, só o integrador move); split additive/multiplicative não testado |
 | `fuel_update_stft_delayed` | 🔴 | Só verifica `range [-250,250]` (linha 1226); **lógica de delay/ring-buffer nunca exercitada** |
 | `fuel_get_stft_pct_x10` | 🟢 | Consistência com retorno de `fuel_update_stft` verificada |
 | `fuel_get_ltft_pct_x10` | 🟡 | Out-of-range → 0 verificado; valor após aprendizado não verificado |
