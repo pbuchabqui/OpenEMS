@@ -509,6 +509,20 @@ def api_wbo2_can_id_set(body: dict):
     return {"ok": True, "id": can_id}
 
 
+@app.post("/api/tdc1_calibrate")
+def api_tdc1_calibrate():
+    """Calibração TDC1 do caminho encoder (comando 'X'): chamar com o
+    cilindro 1 fisicamente no PMS de compressão. Lê TIM2 ao vivo, aplica
+    encoder_tdc1_origin_deg em RAM (page0[0-1]) — burn continua manual
+    (botão de burn da página 0 no dash), mesmo fluxo de qualquer outro
+    campo de page0."""
+    try:
+        origin_deg = worker.submit(lambda l: l.tdc1_calibrate())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"tdc1_calibrate: {e}"}, status_code=502)
+    return {"ok": True, "origin_deg": origin_deg, "msg": f"origin_deg={origin_deg}° (RAM — falta burn)"}
+
+
 @app.post("/api/ltft/reset")
 def api_ltft_reset():
     """Zera trims de combustível aprendidos via comando 'Z' (FW):

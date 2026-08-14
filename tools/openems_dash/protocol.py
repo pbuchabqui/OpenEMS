@@ -269,6 +269,18 @@ class OpenEMSLink:
         if ack != b"\x00":
             raise IOError(f"bench_mode: ACK {ack.hex()}")
 
+    # ── calibração TDC1 encoder ('X': lê TIM2 ao vivo, aplica em RAM) ────
+    def tdc1_calibrate(self) -> int:
+        """Chamar com o cilindro 1 fisicamente no PMS de compressão (mesmo
+        procedimento físico de trigger_tooth0_engine_deg — dial indicator/
+        roda de graus). Aplica encoder_tdc1_origin_deg em RAM (page0[0-1]);
+        burn continua manual (botão de burn da página 0), como qualquer
+        outro campo de page0. Devolve o valor calibrado (0-359)."""
+        resp = self._txn(b"X", 3)
+        if resp[0] != 0x00:
+            raise IOError(f"tdc1_calibrate: ACK {resp[0]:02x}")
+        return struct.unpack("<H", resp[1:3])[0]
+
     # ── reset LEARN session ('Z': STFT+LEARN+LTFT NVM-shadow zero) ─────
     def reset_adaptives(self) -> None:
         """Zera STFT, acumulador LEARN e shadows LTFT (marca dirty p/ flush
@@ -546,10 +558,12 @@ PAGE7_FIELDS = [
 ]
 
 # Página 0 — bytes 0-15: engine config; bytes 16+: calibração e dirigibilidade.
-# offset 0 reserved (IVC ABDC removed from wire; always 0)
-# targeting (ecu_sched.cpp — "mantido por compatibilidade de API e
-# protocolo, contador de clamp permanece 0"); scheduler já não o lê.
+# offset 0-1: encoder_tdc1_origin_deg (era reserved/IVC ABDC até magic v3,
+# ver engine_config.cpp) — calibração TDC1 dedicada ao caminho encoder
+# (EMS_MT6835_ENCODER), preenchida pelo comando 'X' (ver tdc1_calibrate()
+# abaixo), não pelo trigger_tooth0_engine_deg do caminho roda-dentada.
 PAGE0_FIELDS = [
+    ("encoder_tdc1_origin_deg",    0, 1, "H",  1.0),  # ° (TIM2==0 residue, encoder-only)
     ("displacement_cc",           2, 1, "H",  1.0),  # cc
     ("injector_flow_cc_min",      4, 1, "H",  1.0),  # cc/min
     ("stoich_afr_x100",           6, 1, "H",  0.01), # AFR

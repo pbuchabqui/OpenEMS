@@ -896,7 +896,13 @@ const PAGE_0_SECTIONS = [
   {
     label: "ENGINE",
     fields: ["displacement_cc","trigger_tooth0_engine_deg",
+             "encoder_tdc1_origin_deg",
              "default_eoi_lead_deg","config_magic"],
+    actions: [{ label: "Calibrar TDC1 (encoder, TIM2 ao vivo)", cls: "primary",
+                endpoint: "/api/tdc1_calibrate",
+                confirm: "Cilindro 1 está fisicamente no PMS de compressão? " +
+                         "Isto lê o TIM2 agora e aplica encoder_tdc1_origin_deg " +
+                         "em RAM (falta burn depois)." }],
   },
   {
     label: "FUELING",
@@ -1030,6 +1036,7 @@ const FIELD_LABELS = {
   stoich_afr_x100:           "Stoich AFR",
   map_ref_bar_x100:          "Reference MAP (bar)",
   trigger_tooth0_engine_deg: "Trigger tooth 0 offset (°, 0-719)",
+  encoder_tdc1_origin_deg:   "Encoder TDC1 origin (°, 0-359 — só EMS_MT6835_ENCODER)",
   default_eoi_lead_deg:      "EOI target (° BTDC — fim da injeção)",
   config_magic:              "Magic (0x4544 = valid config v2/EOI)",
   app1_raw_min:  "APP1 released (raw)",   app1_raw_max:  "APP1 floored (raw)",
@@ -1857,7 +1864,7 @@ async function bindParamGroup(div, page) {
         if (sec.actions) {
           for (const act of sec.actions) {
             html += `<div class="param-row"><button class="${act.cls || 'primary'}"
-              onclick="if(confirm('${act.confirm || 'Are you sure?'}'))fetch('${act.endpoint}',{method:'POST'}).then(r=>r.json()).then(()=>toast('${act.label} OK')).catch(e=>toast(e.message,true))">${act.label}</button></div>`;
+              onclick="if(confirm('${act.confirm || 'Are you sure?'}'))fetch('${act.endpoint}',{method:'POST'}).then(r=>r.json()).then(j=>toast(j.msg||('${act.label} OK'))).catch(e=>toast(e.message,true))">${act.label}</button></div>`;
           }
         }
       }
