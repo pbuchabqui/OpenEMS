@@ -331,7 +331,8 @@ void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
     g_pin_last_state[idx] = high;
 }
 
-static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U);
+static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U,
+                          uint8_t bypass_inhibit = 0U);
 
 // Força pinos a estado seguro (SPARK/INJ_OFF) + limpa watchdog de dwell para
 // cada cilindro do mask — extraído de purge_events_for_cyl_mask() (mesmo
@@ -406,12 +407,22 @@ static void sanitize_runtime_calibration(void)
     if (clamped != 0U) { ++g_calibration_clamp_count; }
 }
 
-static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state)
+static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state,
+                          uint8_t bypass_inhibit)
 {
     // Safe-state transitions (INJ_OFF / SPARK) always allowed — never block a cut.
-    // Non-safe ON paths honor inhibit masks so prime / test pulse cannot bypass
-    // fuel-protect, half lockout, rev-limit, or flood-driven mask=0x0F.
-    if (is_safe_state == 0U) {
+    // Non-safe ON paths honor inhibit masks so prime cannot bypass fuel-protect,
+    // half lockout, rev-limit, or flood-driven mask=0x0F.
+    //
+    // bypass_inhibit (2026-08-15, decisão do utilizador): o modo de teste de
+    // saídas é um comando manual explícito do operador na bancada, não uma
+    // decisão automática do motor — ao contrário do prime (automático,
+    // continua sujeito à máscara), o disparo de teste deve fazer o que foi
+    // pedido mesmo com sensores em falha/máscara presa (achado: sem bench
+    // mode, a máscara fica em 0x0F congelada e o fire devolvia "ok" mas o
+    // pino nunca comutava, em silêncio). Só os dois call sites de
+    // ecu_sched_test_pulse_inj/_ign passam isto a 1 — prime continua bloqueado.
+    if (is_safe_state == 0U && bypass_inhibit == 0U) {
         const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
         if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
             const uint8_t cyl_bit = (ch < 8U) ? si::k_inj_ch_to_bit[ch] : 0U;
@@ -620,7 +631,7 @@ void ecu_sched_test_pulse_inj(uint8_t cyl, uint32_t pw_us)
     if (pw_us > 30000U) { pw_us = 30000U; }
     const uint8_t ch = si::kInjCh[cyl];
     const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
-    force_output(ch, ECU_ACT_INJ_ON);
+    force_output(ch, ECU_ACT_INJ_ON, 0U, 1U);  // teste manual explícito: bypass_inhibit
     arm_channel(ch, off_cnv, ECU_ACT_INJ_OFF);
 }
 
@@ -631,7 +642,7 @@ void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
     if (dwell_us > 10000U) { dwell_us = 10000U; }
     const uint8_t ch = si::kIgnCh[cyl];
     const uint32_t spark_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(dwell_us);
-    force_output(ch, ECU_ACT_DWELL_START);
+    force_output(ch, ECU_ACT_DWELL_START, 0U, 1U);  // teste manual explícito: bypass_inhibit
     // Arm watchdog for this manual dwell (DWELL already forced HIGH; SPARK is
     // only queued). pin_transition(LOW) / watchdog release the arm tick.
     {

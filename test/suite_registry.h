@@ -240,6 +240,7 @@ void test_output_test_enter_gate(void);
 void test_output_test_fire_inj(void);
 void test_output_test_busy_window(void);
 void test_output_test_fire_ign_watchdog(void);
+void test_output_test_fire_bypasses_inhibit_mask(void);
 void test_output_test_rpm_abort(void);
 void test_output_test_keepalive_timeout(void);
 void test_output_test_suspends_aux(void);

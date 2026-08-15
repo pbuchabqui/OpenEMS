@@ -352,6 +352,7 @@ int main(void) {
     test_output_test_fire_inj();
     test_output_test_busy_window();
     test_output_test_fire_ign_watchdog();
+    test_output_test_fire_bypasses_inhibit_mask();
     test_output_test_rpm_abort();
     test_output_test_keepalive_timeout();
     test_output_test_suspends_aux();

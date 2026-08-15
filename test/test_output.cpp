@@ -154,6 +154,41 @@ void test_output_test_fire_ign_watchdog(void) {
     ems::engine::output_test_exit();
 }
 
+void test_output_test_fire_bypasses_inhibit_mask(void) {
+    section("output_test: FIRE_INJ/FIRE_IGN ignora máscara de inhibit (teste manual explícito)");
+    ot_reset_all();
+
+    uint8_t buf[8] = {};
+    ecu_sched_test_set_tim5_cnt(3000000u);
+    ot_txn(0x01u, 0u, 0xA55Au, buf, sizeof(buf));
+
+    // Máscara "tudo bloqueado" — o estado real desta bancada sem bench mode
+    // (sensores em falha → fuel_protect_cut/diag_critical → 0x0F, congelado
+    // até o motor voltar a correr em sync; achado 2026-08-15). Um comando
+    // FIRE manual explícito deve ignorar isto — decisão do utilizador.
+    ecu_sched_set_inj_inhibit_mask(0xFFu);
+    ecu_sched_set_ign_inhibit_mask(0xFFu);
+
+    CHECK_EQ(ecu_sched_test_get_dwell_arm_tick(0u), 0u, "pré: dwell não armado");
+    uint16_t n = ot_txn(0x11u, 0u, 3000u, buf, sizeof(buf));  // FIRE_IGN cyl0
+    CHECK_TRUE(n == 1u && buf[0] == 0x00u, "FIRE_IGN → ACK mesmo com máscara 0xFF");
+    CHECK_TRUE(ecu_sched_test_get_dwell_arm_tick(0u) != 0u,
+               "pino IGN foi mesmo a HIGH (dwell armado) apesar da máscara");
+
+    // Janela busy do pulso IGN anterior (3ms + 100ms de gap) — avançar o
+    // relógio simulado antes do próximo fire, mesmo padrão de
+    // test_output_test_busy_window.
+    ems::engine::output_test_poll(200u, 0u);
+    n = ot_txn(0x10u, 0u, 3000u, buf, sizeof(buf));  // FIRE_INJ cyl0
+    CHECK_TRUE(n == 1u && buf[0] == 0x00u, "FIRE_INJ → ACK mesmo com máscara 0xFF");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 2u,
+             "OFF/SPARK dos dois disparos agendados (evt de-assert nunca é bloqueado)");
+
+    ecu_sched_set_inj_inhibit_mask(0u);
+    ecu_sched_set_ign_inhibit_mask(0u);
+    ems::engine::output_test_exit();
+}
+
 void test_output_test_rpm_abort(void) {
     section("output_test: aborto por RPM restaura estado seguro");
     ot_reset_all();
