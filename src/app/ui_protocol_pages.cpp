@@ -622,7 +622,7 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::stft_clamp_pct_x10, g_page0 + 144, 2u);
         // STFT clamp as uint16 cast to int16 for PI — keep 1..500 (±0.1..50%).
         if (ems::engine::stft_clamp_pct_x10 == 0u) {
-            ems::engine::stft_clamp_pct_x10 = 250u;  // default 25%
+            ems::engine::stft_clamp_pct_x10 = 150u;  // default 15% (era 25%, 2026-08-14)
         } else if (ems::engine::stft_clamp_pct_x10 > 500u) {
             ems::engine::stft_clamp_pct_x10 = 500u;
         }

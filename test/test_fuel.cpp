@@ -519,7 +519,10 @@ void test_fuel_stft_convergence_time(void) {
     closed_loop_post_start_s = 0u;
     stft_kp_x100 = 3u;          // 0.03 (default, ambos os caminhos)
     stft_ki_x1000 = 10u;        // 0.010 — valor do caminho encoder, fixado explicitamente
-    stft_clamp_pct_x10 = 250u;  // ±25.0% (default)
+    stft_clamp_pct_x10 = 250u;  // ±25.0% fixado explicitamente para este baseline
+                                // (default real é 150/15,0% desde 2026-08-14 —
+                                // este teste isola o tempo de convergência de
+                                // Kp/Ki do valor do clamp de propósito)
 
     // Erro fixo REALISTA: target=1.000, measured=1.010 → error_x1000=10, a
     // ordem de grandeza que o STFT corrige de facto em operação normal (sem
@@ -706,7 +709,7 @@ void test_fuel_trim_dtcs(void) {
     closed_loop_enable = 1u;
     closed_loop_post_start_s = 0u;
     ltft_adapt_min_rpm_x10 = 0u;
-    stft_clamp_pct_x10 = 250u;
+    stft_clamp_pct_x10 = 150u;  // default (2026-08-14, era 250)
     ltft_mult_clamp_pct_x10 = 250u;
     ltft_learn_div = 64u;
     fuel_reset_adaptives();
@@ -762,6 +765,7 @@ void test_fuel_ltft_authority(void) {
     CHECK_TRUE(step <= 5, "max_step_x10=5 limita |Δ| por tick");
 
     // restore defaults
+    stft_clamp_pct_x10 = 150u;  // default (2026-08-14, era 250) — set em :728
     ltft_mult_clamp_pct_x10 = 250u;
     ltft_add_clamp_us = 6350u;
     ltft_learn_div = 64u;

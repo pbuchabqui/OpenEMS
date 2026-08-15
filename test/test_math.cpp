@@ -265,24 +265,29 @@ void test_math_stft_gains(void) {
     }
     CHECK_EQ(fuel_get_stft_pct_x10(), 16, "STFT após 10 calls: (p_x1000=600 + I_x1000=1000)/100 = 16");
 
-    section("MATH: fuel_update_stft clamp kStftClampX10=250");
-    // Integrador atinge o clamp ×1000 (25000) em N=250 (100×250=25000);
-    // 300 chamadas está bem além disso → já saturado, clamp_i16 final=250.
+    section("MATH: fuel_update_stft clamp kStftClampX10=150");
+    // clamp default 150 (15,0%, decisão do utilizador 2026-08-14, era 250).
+    // clamp_i16 final satura em N=144 ((600+14400)/100=150), antes do
+    // próprio integrador atingir o seu limite ×1000 (15000, em N=150) — o P
+    // constante (600) empurra a soma acima do limite um pouco antes. 300
+    // chamadas está bem além dos dois → já saturado, clamp_i16 final=150.
     for (int i = 0; i < 290; ++i) {
         fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 30000u, 500u);
     }
-    CHECK_EQ(fuel_get_stft_pct_x10(), 250, "STFT saturado no clamp kStftClampX10=250");
+    CHECK_EQ(fuel_get_stft_pct_x10(), 150, "STFT saturado no clamp kStftClampX10=150");
 
     section("MATH: fuel_update_stft congela (freeze) quando loop fechado desabilitado");
-    // Com CLT fria (clt=600 < 700=70°C): closed_loop_allowed=false.
-    // Anti-windup: stft congela no último valor (250, saturado no clamp acima),
-    // não decai — evita degrau de combustível ao voltar a closed-loop.
+    // clt=390 (39°C) < kClosedLoopMinCltX10=400 (40°C, 2026-08-14) —
+    // genuinamente frio sob o limiar actual (600/60°C deixou de servir,
+    // ficou acima do novo limiar e não exerceria o freeze de facto).
+    // Anti-windup: stft congela no último valor (150, saturado no clamp
+    // acima), não decai — evita degrau de combustível ao voltar a closed-loop.
     const int16_t s_cold1 = fuel_update_stft(
-        30000u, 100u, 1000, 1200, 600, true, false, false, 30000u, 500u);
-    CHECK_EQ(s_cold1, 250, "STFT congelado após 1 chamada fria: mantém 250");
+        30000u, 100u, 1000, 1200, 390, true, false, false, 30000u, 500u);
+    CHECK_EQ(s_cold1, 150, "STFT congelado após 1 chamada fria: mantém 150");
     const int16_t s_cold2 = fuel_update_stft(
-        30000u, 100u, 1000, 1200, 600, true, false, false, 30000u, 500u);
-    CHECK_EQ(s_cold2, 250, "STFT congelado após 2 chamadas frias: mantém 250");
+        30000u, 100u, 1000, 1200, 390, true, false, false, 30000u, 500u);
+    CHECK_EQ(s_cold2, 150, "STFT congelado após 2 chamadas frias: mantém 150");
 }
 
 void test_math_inj_scheduler_ticks(void) {

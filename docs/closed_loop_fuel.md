@@ -38,6 +38,14 @@ Não usar floor da bilineal para trims — mid-bin errava a autoridade (WP0).
 | `ltft_adapt_min_rpm_x10` | abaixo: STFT ok, LTFT/LEARN freeze | [84] = 1200 RPM |
 | MAP-dot > 8 kPa/tick | freeze LTFT/LEARN | constexpr |
 
+## Ganhos STFT (page0 140–145)
+
+| Campo | Default | Notas |
+|-------|---------|--------|
+| `stft_kp_x100` | 3 (0,03) | Igual nos dois caminhos |
+| `stft_ki_x1000` | 5 (0,005) produção / 10 (0,010) encoder | Gated `EMS_MT6835_ENCODER`, ver `fuel_trim.cpp` |
+| `stft_clamp_pct_x10` | 150 (±15%, desde 2026-08-14, era 250/±25%) | Igual nos dois caminhos |
+
 ## Authority / rates (page0 176–183)
 
 | Campo | Default | Notas |
@@ -115,11 +123,14 @@ Clear ~2 s fora do sat. Severidade WARNING.
       `test_fuel_stft_convergence_time` (`test/test_fuel.cpp`) mede
       **97 ticks × 100ms ≈ 9,7s** até o trim atingir 1,0% (o valor que
       cancelaria um erro constante de 1%λ) e ~2497 ticks (~250s) até
-      saturar o clamp ±25% — a saturação é artefacto do clamp sem plant
-      feedback, não é o número relevante para decisão de afinação. Em
-      produção (`stft_ki_x1000=5`, Hall) o mesmo degrau leva ~20s a
+      saturar o clamp ±25% (`stft_clamp_pct_x10=250` fixado explicitamente
+      no teste — o default real desde 2026-08-14 é ±15%, ver tabela
+      "Ganhos STFT" abaixo; a saturação em si é artefacto do clamp sem
+      plant feedback, não é o número relevante para decisão de afinação).
+      Em produção (`stft_ki_x1000=5`, Hall) o mesmo degrau leva ~20s a
       cancelar 1%λ — ver `test_math_stft_gains` (`test/test_math.cpp`), que
-      cobre o default de produção.
+      cobre o default de produção (inclui o clamp ±15% real, não os ±25% do
+      baseline acima).
       Histórico: até 2026-08-14 o termo proporcional (`p_x10 = error×Kp/100`)
       truncava a zero para qualquer erro <3,3% por dividir antes de somar
       ao integrador — a faixa que o STFT vê de facto em operação normal.

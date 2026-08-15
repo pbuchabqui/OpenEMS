@@ -310,7 +310,7 @@ uint16_t eoi_blend_rpm_hi  = 4000u; // acima: open-valve (355°)
 // zero em produção via constant-folding, sem esconder o ramo de compilar em
 // host-test.
 uint16_t stft_ki_x1000      = EMS_MT6835_ENCODER ? 10u : 5u;  // 0.010 encoder / 0.005 produção
-uint16_t stft_clamp_pct_x10 = 250u;  // 25.0%
+uint16_t stft_clamp_pct_x10 = 150u;  // 15.0% (era 25.0%, decisão do utilizador 2026-08-14)
 
 uint16_t xtau_x_min_q8  = 64u;   // 0.25
 uint16_t xtau_x_max_q8  = 192u;  // 0.75
