@@ -2606,15 +2606,18 @@ async function otArm() {
 async function otFire(kind, cyl, usInputId) {
   const us = parseInt($(usInputId).value, 10);
   if (!us || us <= 0) { toast("largura de pulso inválida", true); return; }
+  const label = (kind === "inj" ? "INJ" : "IGN") + (cyl + 1);
   try {
     await api("/api/output_test/fire", "POST", { kind, cyl, us });
-  } catch (e) { toast(e.message, true); }
+    toast(`${label} disparado (${us}µs)`);
+  } catch (e) { toast(`${label}: ${e.message}`, true); }
 }
 
-async function otSet(target, value) {
+async function otSet(target, value, quiet = false) {
   try {
     await api("/api/output_test/set", "POST", { target, value });
-  } catch (e) { toast(e.message, true); }
+    if (!quiet) toast(`${target} = ${value}`);
+  } catch (e) { toast(`${target}: ${e.message}`, true); }
 }
 
 function loadOutputTest() {
@@ -2680,14 +2683,14 @@ function loadOutputTest() {
     const pct = +sl.value;
     const span = sl.dataset.vvt === "vvt_exh" ? "#otVvtExhVal" : "#otVvtIntVal";
     $(span, root).textContent = pct + "%";
-    otSet(sl.dataset.vvt, pct * 10);   // duty_pct_x10
+    otSet(sl.dataset.vvt, pct * 10, true);   // duty_pct_x10, quiet (slider contínuo)
   });
 
   $$("[data-motor]", root).forEach(sl => sl.oninput = () => {
     const pct = +sl.value;
     const span = sl.dataset.motor === "etb" ? "#otEtbVal" : "#otEwgVal";
     $(span, root).textContent = pct + "%";
-    otSet(sl.dataset.motor, Math.round(pct * +sl.dataset.scale));
+    otSet(sl.dataset.motor, Math.round(pct * +sl.dataset.scale), true);   // quiet (slider contínuo)
   });
 
   $("#otStopBtn", root).onclick = () => {
