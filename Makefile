@@ -39,7 +39,16 @@ else
   BIN_SUFFIX   = -rgt6
 endif
 
-CFLAGS_COMMON = -std=c++17 -Wall -Wextra $(WERROR_FLAG)
+# -Wno-volatile: C++20 (P1152) deprecates ++/+=/-= etc. on volatile-qualified
+# objects. This codebase uses volatile exactly for its legitimate purpose —
+# ISR-shared counters and hardware registers, not the misuse the deprecation
+# targets — in ~105 sites across 18 files (incl. the frozen scheduler core,
+# ecu_sched.cpp). Rewriting every site to `x = x + 1` would be a mechanical,
+# behavior-identical change, but a 105-site diff isn't justified by the
+# benefit realized so far (std::span in nvm_boot.cpp) — suppress this one
+# warning explicitly rather than either blocking C++20/23 or touching that
+# much frozen-adjacent code. Every other warning stays fatal under WERROR=1.
+CFLAGS_COMMON = -std=c++23 -Wall -Wextra -Wno-volatile $(WERROR_FLAG)
 CFLAGS_ARM = $(CFLAGS_COMMON) -DTARGET_STM32H562 -DNDEBUG -mcpu=cortex-m33 -mthumb \
              -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections \
              -g0 -O2 -I./src $(BOARD_CFLAGS)

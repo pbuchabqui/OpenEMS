@@ -5,12 +5,18 @@
  * Called from openems_init() after page0 load; behaviour preserved.
  */
 #include <cstdint>
+#include <span>
 
 namespace ems::app {
 
-bool page_range_is_zero(const uint8_t* data, uint16_t off, uint16_t len) noexcept;
-bool page_range_is_erased(const uint8_t* data, uint16_t off, uint16_t len) noexcept;
-bool page_is_erased(const uint8_t* data, uint16_t len) noexcept;
+// std::span em vez de ponteiro cru: off+len deixam de ser confiança cega no
+// chamador — a função vê o tamanho real do buffer e pode recusar um range
+// fora dos limites em vez de ler lixo. Chamadas com um array (ex.
+// `page_is_erased(page, sizeof(page))`) continuam a compilar sem alteração
+// — `page` converte implicitamente para span, só o ponteiro cru desaparece.
+bool page_range_is_zero(std::span<const uint8_t> data, uint16_t off, uint16_t len) noexcept;
+bool page_range_is_erased(std::span<const uint8_t> data, uint16_t off, uint16_t len) noexcept;
+bool page_is_erased(std::span<const uint8_t> data, uint16_t len) noexcept;
 
 void load_ve_table_from_nvm() noexcept;
 void load_spark_table_from_nvm() noexcept;

@@ -13,6 +13,7 @@
 #include "engine/torque_manager.h"
 #include "engine/calibration.h"
 #include "app/can_rx_map.h"
+#include "app/nvm_boot.h"
 #include "hal/adc.h"
 #include "hal/system.h"
 #include "drv/ckp.h"
@@ -650,4 +651,37 @@ void test_ts_envelope_signature_via_r(void) {
     r = env_txn(req6, 6u);
     CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 12u,
                "'r' page 0x0F sem canId → também OK");
+}
+
+void test_nvm_boot_page_helpers(void) {
+    section("nvm_boot: page_range_is_zero / page_range_is_erased / page_is_erased");
+    using namespace ems::app;
+
+    uint8_t page[32] = {};
+    CHECK_TRUE(page_is_erased(page, sizeof(page)) == false,
+               "buffer a zeros não é 'erased' (0xFF)");
+    CHECK_TRUE(page_range_is_zero(page, 0u, sizeof(page)) == true,
+               "buffer a zeros é 'zero' no range inteiro");
+
+    std::memset(page, 0xFF, sizeof(page));
+    CHECK_TRUE(page_is_erased(page, sizeof(page)) == true,
+               "buffer a 0xFF é 'erased'");
+    CHECK_TRUE(page_range_is_zero(page, 0u, sizeof(page)) == false,
+               "buffer a 0xFF não é 'zero'");
+
+    // len parcial: page_is_erased só olha para os primeiros N bytes — usado
+    // em load_dwell2d_calibration_from_nvm() (page[32], len=16).
+    std::memset(page, 0u, sizeof(page));
+    std::memset(page, 0xFF, 16u);
+    CHECK_TRUE(page_is_erased(page, 16u) == true,
+               "len parcial: só os primeiros 16 bytes contam");
+    CHECK_TRUE(page_range_is_zero(page, 16u, 16u) == true,
+               "off≠0: metade de trás continua a zeros");
+
+    // Fora dos limites do span (off+len > data.size()) — não lê lixo, falha
+    // em segurança (achado ao converter para std::span, 2026-08-15).
+    CHECK_TRUE(page_range_is_zero(page, 20u, 20u) == false,
+               "off+len > tamanho do buffer → false, sem UB");
+    CHECK_TRUE(page_range_is_erased(page, 30u, 10u) == false,
+               "idem para page_range_is_erased");
 }

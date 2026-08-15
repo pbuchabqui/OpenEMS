@@ -4,6 +4,7 @@
  */
 #include "app/nvm_boot.h"
 
+#include <cstddef>
 #include <cstring>
 
 #include "engine/calibration.h"
@@ -15,7 +16,8 @@
 
 namespace ems::app {
 
-bool page_range_is_zero(const uint8_t* data, uint16_t off, uint16_t len) noexcept {
+bool page_range_is_zero(std::span<const uint8_t> data, uint16_t off, uint16_t len) noexcept {
+    if (static_cast<std::size_t>(off) + len > data.size()) { return false; }
     for (uint16_t i = 0u; i < len; ++i) {
         if (data[off + i] != 0u) {
             return false;
@@ -24,14 +26,15 @@ bool page_range_is_zero(const uint8_t* data, uint16_t off, uint16_t len) noexcep
     return true;
 }
 
-bool page_range_is_erased(const uint8_t* data, uint16_t off, uint16_t len) noexcept {
+bool page_range_is_erased(std::span<const uint8_t> data, uint16_t off, uint16_t len) noexcept {
+    if (static_cast<std::size_t>(off) + len > data.size()) { return false; }
     for (uint16_t i = 0u; i < len; ++i) {
         if (data[off + i] != 0xFFu) { return false; }
     }
     return true;
 }
 
-bool page_is_erased(const uint8_t* data, uint16_t len) noexcept {
+bool page_is_erased(std::span<const uint8_t> data, uint16_t len) noexcept {
     return page_range_is_erased(data, 0u, len);
 }
 

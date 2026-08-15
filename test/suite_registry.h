@@ -229,6 +229,7 @@ void test_ts_axes_page(void);
 void test_ts_envelope_canid_forms(void);
 void test_och_launch_tc_status(void);
 void test_ts_envelope_signature_via_r(void);
+void test_nvm_boot_page_helpers(void);
 void test_ts_whole_page_800(void);
 void test_adaptives_reset_cmd_z(void);
 void test_ltft_apply_cmd_y(void);
