@@ -1556,6 +1556,7 @@ int main() {
         // FIX P0: Only allow flash writes when engine is stopped or below safe RPM
         static bool adaptive_flush_pending = false;
         static uint32_t last_calib_save_ms = 0u;
+        static bool engine_was_running = false;
         ems::hal::nvm_set_now_ms(now);
         if (elapsed(now, g_t500ms_, 500u)) {
             g_t500ms_ = now;
@@ -1563,6 +1564,18 @@ int main() {
             GPIOB_MODER = (GPIOB_MODER & ~(3u << 4u)) | (1u << 4u);
             GPIOB_ODR ^= (1u << 2u);  // toggle PB2
             const auto snap = ems::drv::ckp_snapshot();
+            // Motor acabou de parar (RPM>0 → 0): força flush do LTFT/knock/etbcal
+            // imediatamente, ignorando os 60s de kMinAdaptiveFlushIntervalMs.
+            // Sem isto, nenhum caminho de produção chamava
+            // nvm_request_adaptive_flush_now() fora do 'Z' manual — uma sessão
+            // mais curta que 60s desde o último flush automático perdia
+            // aprendizagem de LTFT em silêncio numa queda de energia pós key-off
+            // (achado da revisão da mesa de 5 conselheiros, 2026-08-14).
+            const bool engine_running_now = (snap.rpm_x10 > 0u);
+            if (engine_was_running && !engine_running_now) {
+                ems::hal::nvm_request_adaptive_flush_now();
+            }
+            engine_was_running = engine_running_now;
             // FIX: gate ALL flash writes behind the same RPM threshold — calibration
             // writes had no RPM check, creating a latent bug (see Blocker #3).
             const bool engine_running_fast = (snap.rpm_x10 > ems::engine::kFlashWriteSafeRpmX10);
