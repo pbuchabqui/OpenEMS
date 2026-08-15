@@ -44,7 +44,11 @@ CFLAGS_ARM = $(CFLAGS_COMMON) -DTARGET_STM32H562 -DNDEBUG -mcpu=cortex-m33 -mthu
              -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections \
              -g0 -O2 -I./src $(BOARD_CFLAGS)
 # -I. so test/*.cpp can #include "test/harness.h"
-CFLAGS_HOST = $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_RGT6 -O2 -g -I. -I./src
+# ASan+UBSan: hosted g++ build only, never CFLAGS_ARM (no sanitizer runtime
+# on a freestanding target) — catches UB (signed overflow, misaligned
+# access, OOB) that -Wall -Wextra -Werror alone doesn't.
+CFLAGS_HOST = $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_RGT6 -O2 -g \
+              -fsanitize=address,undefined -fno-sanitize-recover=all -I. -I./src
 
 SRC_DIR = src
 TEST_DIR = test

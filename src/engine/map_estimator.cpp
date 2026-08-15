@@ -240,7 +240,11 @@ uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
     g_map_delta_remainder_q8 += static_cast<int32_t>(
         (dpdt_x100_per_s * static_cast<int32_t>(dt_ms) * 256) / 1000);
     const int32_t map_delta = g_map_delta_remainder_q8 >> 8;
-    g_map_delta_remainder_q8 -= (map_delta << 8);
+    // map_delta pode ser negativo (MAP a descer) — left-shift de negativo é
+    // UB até C++17 (só ficou bem definido em C++20); multiplicação dá o
+    // mesmo resultado em qualquer standard, sem UB (achado por UBSan,
+    // 2026-08-15, ao ligar sanitizers no host-test).
+    g_map_delta_remainder_q8 -= (map_delta * 256);
 
     const int32_t map_predicted = static_cast<int32_t>(g_map_state.map_estimated_bar_x100) +
                                    map_delta;
