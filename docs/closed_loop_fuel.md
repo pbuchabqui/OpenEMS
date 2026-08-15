@@ -10,7 +10,7 @@ WBO2 CAN (fresh)
     ▼ 100 ms  (FULL_SYNC)
 fuel_update_stft_delayed
     ├─ history + delay 3×3 (rpm/MAP/λtgt atrasados)
-    ├─ gates: CL enable, CLT>70°C, O2, !AE, !cut, post-start
+    ├─ gates: CL enable, CLT>40°C, O2, !AE, !cut, post-start
     ├─ PI → STFT global (freeze anti-windup se bloqueado)
     ├─ LTFT IIR (mult ou add por PW) se adapt_enable + RPM + MAP estável
     └─ LEARN accum (só mult) se sample_valid
@@ -69,7 +69,7 @@ Ready wire page12: **bit7** de hits_wire = ready (fonte FW; host não reimplemen
 
 ## Persistência
 
-- Shadows LTFT mult/add em NVM adaptativo (Bank2, magic `LTF2`).  
+- Shadows LTFT mult/add em NVM adaptativo (Bank2, magic `LTF3`).  
 - Dirty só se valor muda.  
 - Flush: no máx. **1×/min** em run; **force** após `'Z'` / reset LTFT.  
 - RPM seguro para qualquer write flash.
