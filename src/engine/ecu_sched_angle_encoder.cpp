@@ -162,8 +162,9 @@ void ecu_sched_encoder_omega_test_reset(void) noexcept
 // TIM2_CNT só dá posição mod 360° (1 volta de cambota); o motor tem ciclo
 // de 720°. O CMP (sensor Hall inalterado, tim3_cmp_ic_init()) desambigua
 // qual metade — mas ESTE módulo não decide a que fase corresponde um
-// flanco do CMP (constante de calibração de hardware, ainda por medir em
-// bancada); recebe a fase já resolvida via
+// flanco do CMP (constante de calibração de hardware — cfg::g_eng_cfg.
+// cmp_phase_state, NVM, calibrável ao vivo via comando 'M'/dash, ver
+// engine_config.h); recebe a fase já resolvida via
 // ecu_sched_encoder_phase_set_anchor() e só responde "que fase é agora"
 // contando voltas completas (16384 counts) desde o anchor absoluto mais
 // recente — nunca por toggle incremental, sempre recalculado do anchor.
@@ -521,13 +522,15 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
 
     // Rastreio/validação de flancos CMP corre SEMPRE, mesmo sem calibração —
     // é diagnóstico seguro (conta rejeições/flancos perdidos) e testável em
-    // host sem precisar recompilar com a flag. Só o passo final ("confiar
-    // nisto para disparar sequencial", ecu_sched_encoder_phase_set_anchor())
-    // fica atrás de EMS_MT6835_CMP_PHASE_CALIBRATED — expresso como `if`
-    // sobre a macro (0/1 sempre definida em board_pinout.h), não `#if`: com a
-    // flag em 0 o compilador elimina o ramo por constant-folding (custo zero
-    // em produção), mas o texto continua um `if` normal — não esconde este
-    // bloco inteiro de compilar/testar em host-test como um `#if` faria.
+    // host sem precisar de nada calibrado. Só o passo final ("confiar nisto
+    // para disparar sequencial", ecu_sched_encoder_phase_set_anchor()) fica
+    // atrás de cfg::g_eng_cfg.cmp_phase_state (2026-08-15: campo NVM
+    // calibrável ao vivo — comando 'M', ui_protocol.cpp — substitui os
+    // antigos EMS_MT6835_CMP_PHASE_CALIBRATED/_VALUE de compilação,
+    // removidos de board_pinout.h). Default kCmpPhaseUncalibrated=0 ⇒ este
+    // `if` nunca corre até uma calibração real acontecer — mesma garantia
+    // de segurança de antes ("nunca adivinha"), agora sem precisar de
+    // recompilar/reflash para ativar depois de medido.
     if (cmp_edge_count != g_hb_last_cmp_edge_count) {
         g_hb_last_cmp_edge_count = cmp_edge_count;
         const ems::drv::encoder_sync::CmpEdgeResult r =
@@ -539,7 +542,8 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
             g_cmp_reject_streak       = 0U;
             g_cmp_heartbeats_since_ok = 0U;
             if (r.multiple > 1U) { ++g_cmp_missed_edge_count; }
-            if (EMS_MT6835_CMP_PHASE_CALIBRATED) {
+            if (ems::engine::cfg::g_eng_cfg.cmp_phase_state !=
+                ems::engine::cfg::kCmpPhaseUncalibrated) {
                 // Definição absoluta, nunca toggle — mesmo flanco pode
                 // re-ancorar repetidamente sem se acumular.
                 //
@@ -555,8 +559,11 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
                 // ecu_sched_encoder_phase_at() (pura aritmética de
                 // paridade) continuaria a confiar num anchor desatualizado
                 // indefinidamente após um slip real.
-                ecu_sched_encoder_phase_set_anchor(
-                    cmp_angle, static_cast<uint8_t>(EMS_MT6835_CMP_PHASE_VALUE));
+                const uint8_t phase_value =
+                    (ems::engine::cfg::g_eng_cfg.cmp_phase_state ==
+                     ems::engine::cfg::kCmpPhaseCalibratedA)
+                        ? ECU_PHASE_A : ECU_PHASE_B;
+                ecu_sched_encoder_phase_set_anchor(cmp_angle, phase_value);
             }
         } else {
             ++g_cmp_reject_count;
@@ -717,6 +724,25 @@ uint16_t ecu_sched_encoder_tdc1_calibrate_from_raw(uint32_t tim2_raw_at_tdc1) no
     const uint32_t counts_in_rev = tim2_raw_at_tdc1 & 0x3FFFU;
     const uint32_t origin_deg = (counts_in_rev * 360U + 8192U) / 16384U;  // arredonda
     return static_cast<uint16_t>((360U - (origin_deg % 360U)) % 360U);
+}
+
+// Calcula cfg::g_eng_cfg.cmp_phase_state a partir de duas leituras cruas de
+// TIM2->CNT: agora (cilindro 1 no PMS de COMPRESSÃO — por convenção,
+// engine_deg=0 cai sempre na janela de ECU_PHASE_A, [0°,360°)) e a do
+// último flanco CMP capturado (ems::hal::cmp_angle_snapshot()). Mesma
+// aritmética de floor_div_16384/ecu_sched_encoder_phase_at() acima —
+// paridade de voltas completas de 360° entre os dois pontos: par → o
+// flanco caiu na MESMA janela do PMS1 (fase A); ímpar → janela oposta
+// (fase B). Pura — não lê nem escreve g_eng_cfg nem o anchor de fase ao
+// vivo; o chamador (UI protocol, comando 'M') decide se/quando persistir.
+uint8_t ecu_sched_encoder_cmp_phase_calibrate_from_raw(
+    uint32_t tim2_raw_at_tdc1_compression, uint32_t tim2_raw_at_cmp_edge) noexcept
+{
+    const int32_t delta = static_cast<int32_t>(
+        tim2_raw_at_tdc1_compression - tim2_raw_at_cmp_edge);
+    const int32_t revs = floor_div_16384(delta);
+    return ((revs & 1) == 0) ? ems::engine::cfg::kCmpPhaseCalibratedA
+                             : ems::engine::cfg::kCmpPhaseCalibratedB;
 }
 
 namespace ems::engine::sched_internal::encoder {
@@ -1016,20 +1042,36 @@ static void arm_sequential_cyl(uint8_t cyl, uint32_t now_raw,
                                uint32_t min_lead,
                                uint32_t ms_inter_deg) noexcept
 {
-    arm_pair_if_lead(kIgnCh[cyl], t.dwell_abs, t.spark_abs, now_raw, min_lead,
-                     ECU_ACT_DWELL_START, ECU_ACT_SPARK);
+    // Máscara de inibição de ignição (oil_protect_cut/overtemp_cut/
+    // diag_critical, ign_mask_cut em main_stm32.cpp) — achado #3 da revisão
+    // 2026-08-15: em modo encoder esta máscara nunca era consultada aqui,
+    // só purgava a fila TIM2/CH3 UMA VEZ na borda de subida
+    // (ecu_sched_set_ign_inhibit_mask, ecu_sched.cpp). Sem este gate,
+    // try_arm_sequential_due (que corre ~64×/volta) voltava a armar
+    // dwell/faísca no ciclo seguinte, tornando oil/overtemp/diag-critical
+    // um blip momentâneo em vez de um corte sustentado. Espelha o gate já
+    // existente em force_output() (ecu_sched.cpp) para o caminho legado.
+    const uint8_t ign_bit =
+        (kIgnCh[cyl] < 8U) ? si::k_ign_ch_to_bit[kIgnCh[cyl]] : 0U;
+    const uint8_t ign_inhibited = (ign_bit != 0U &&
+        (::ecu_sched_get_ign_inhibit_mask() & ign_bit) != 0U) ? 1U : 0U;
 
-    if (lead_ge_min(t.spark_abs, now_raw, min_lead) &&
-        lead_ge_min(t.dwell_abs, now_raw, min_lead)) {
-        emit_multispark_deg(t.spark_deg, kCycleDeg, ms_inter_deg,
-            [&](uint32_t add_dwell_deg, uint32_t add_spark_deg) {
-                const uint32_t add_dwell_t =
-                    engine_deg720_to_absolute(add_dwell_deg, now_raw);
-                const uint32_t add_spark_t =
-                    engine_deg720_to_absolute(add_spark_deg, now_raw);
-                arm_pair_if_lead(kIgnCh[cyl], add_dwell_t, add_spark_t, now_raw,
-                                 min_lead, ECU_ACT_DWELL_START, ECU_ACT_SPARK);
-            });
+    if (ign_inhibited == 0U) {
+        arm_pair_if_lead(kIgnCh[cyl], t.dwell_abs, t.spark_abs, now_raw, min_lead,
+                         ECU_ACT_DWELL_START, ECU_ACT_SPARK);
+
+        if (lead_ge_min(t.spark_abs, now_raw, min_lead) &&
+            lead_ge_min(t.dwell_abs, now_raw, min_lead)) {
+            emit_multispark_deg(t.spark_deg, kCycleDeg, ms_inter_deg,
+                [&](uint32_t add_dwell_deg, uint32_t add_spark_deg) {
+                    const uint32_t add_dwell_t =
+                        engine_deg720_to_absolute(add_dwell_deg, now_raw);
+                    const uint32_t add_spark_t =
+                        engine_deg720_to_absolute(add_spark_deg, now_raw);
+                    arm_pair_if_lead(kIgnCh[cyl], add_dwell_t, add_spark_t, now_raw,
+                                     min_lead, ECU_ACT_DWELL_START, ECU_ACT_SPARK);
+                });
+        }
     }
 
     arm_pair_if_lead(kInjCh[cyl], t.inj_on_abs, t.eoi_abs, now_raw, min_lead,
@@ -1169,10 +1211,19 @@ void recompute_presync(uint32_t now_raw) noexcept
         ms_inter_deg = (duration_ticks_to_span_counts(g_mspark_inter_dwell_ticks)
                         * 360U) / 16384U;
     }
+    // Mesmo gate de máscara de ignição do arm_sequential_cyl (achado #3,
+    // revisão 2026-08-15) — aplicado aqui também porque recompute_presync()
+    // é o caminho REALMENTE ativo hoje (EMS_MT6835_CMP_PHASE_CALIBRATED=0
+    // ⇒ phase_valid() nunca fica válido ⇒ try_arm_sequential_due nunca
+    // corre em produção); corrigir só o caminho sequencial deixaria o gate
+    // sem efeito nenhum na config atual.
+    const uint8_t ign_mask_presync = ::ecu_sched_get_ign_inhibit_mask();
     const auto arm_wasted_pair = [&](uint32_t spark_deg, const uint8_t pair[2]) {
         const uint32_t spark_target = engine_deg_to_absolute(spark_deg, now_raw);
         const uint32_t dwell_target = spark_target - dwell_span;
         for (uint8_t i = 0U; i < 2U; ++i) {
+            const uint8_t bit = (pair[i] < 8U) ? si::k_ign_ch_to_bit[pair[i]] : 0U;
+            if (bit != 0U && (ign_mask_presync & bit) != 0U) { continue; }
             arm_channel_with_lead(pair[i], dwell_target, ECU_ACT_DWELL_START, min_lead);
             arm_channel_with_lead(pair[i], spark_target, ECU_ACT_SPARK, min_lead);
         }
@@ -1183,6 +1234,8 @@ void recompute_presync(uint32_t now_raw) noexcept
                 const uint32_t add_spark_t =
                     engine_deg_to_absolute(add_spark_deg, now_raw);
                 for (uint8_t i = 0U; i < 2U; ++i) {
+                    const uint8_t bit = (pair[i] < 8U) ? si::k_ign_ch_to_bit[pair[i]] : 0U;
+                    if (bit != 0U && (ign_mask_presync & bit) != 0U) { continue; }
                     arm_pair_if_lead(pair[i], add_dwell_t, add_spark_t, now_raw,
                                      min_lead, ECU_ACT_DWELL_START, ECU_ACT_SPARK);
                 }

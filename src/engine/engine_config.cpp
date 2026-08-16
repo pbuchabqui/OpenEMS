@@ -12,8 +12,9 @@ namespace ems::engine::cfg {
 //  [6-7]  : stoich_afr_x100 (uint16_t LE)
 //  [8-9]  : map_ref_bar_x100 (uint16_t LE)
 //  [10-11]: trigger_tooth0_engine_deg (uint16_t LE)
-//  [12-13]: default_eoi_lead_deg (uint16_t LE)
-//  [14-15]: magic 0x4545 (v3)
+//  [12]   : cmp_phase_state (uint8_t)
+//  [13]   : não usado (pad)
+//  [14-15]: magic 0x4548 (v6)
 //
 // Magic v1 (0x4543) → v2 (0x4544): o campo [12-13] mudou de semântica
 // (SOI lead → EOI lead). Páginas gravadas com magic v1 são rejeitadas e a
@@ -23,10 +24,29 @@ namespace ems::engine::cfg {
 // de firmwares antigos, nunca eram lidos) a encoder_tdc1_origin_deg —
 // reinterpretar esse lixo como calibração TDC1 sem bump de magic dispararia
 // sequencial sobre uma fase adivinhada. Mesma disciplina do bump v1→v2.
+// Magic v3 → v4: [12-13] (então livre — ver v4→v5 abaixo) tentou ganhar
+// cmp_phase_state num byte ISOLADO em [191] em vez de aqui — decisão
+// revertida no bump seguinte (ver 2026-08-16 abaixo), nunca chegou a ser
+// usada em bancada real.
+// Magic v4 → v5: [12-13] deixa de ser default_eoi_lead_deg — campo
+// removido, substituído pela tabela EOI 2D (page0 261-296, gate próprio
+// por kCalLayoutVersion, ver table3d.h).
+// Magic v5 → v6 (2026-08-16): cmp_phase_state MOVIDO de [191] (byte
+// isolado, fora deste bloco contíguo) para [12] — achado nesse mesmo dia:
+// [191] colide com launch_enable (Launch Control, calibration.h, layout
+// v5 do kCalLayoutVersion — mecanismo de versão DIFERENTE e independente
+// deste, mas mesmo byte de page0). Gravar um corrompia o outro
+// silenciosamente. [12-13] estava livre desde a remoção do
+// default_eoi_lead_deg (bump v4→v5) — reaproveitá-lo aqui elimina a
+// necessidade de um byte isolado fora do bloco 0-15 e a colisão de vez.
+// Sem bump, um NVM antigo (byte 12 ainda a decodificar como o antigo
+// default_eoi_lead_deg, ou como lixo do v4→v5) podia por acaso decodificar
+// como CalibratedA/B(1/2) e disparar sequencial sobre uma fase nunca
+// medida — o mesmo risco que motivou a criação deste campo.
 
-static constexpr uint16_t kMagicValue  = 0x4545u;  // v3 — soma encoder_tdc1_origin_deg
+static constexpr uint16_t kMagicValue  = 0x4548u;  // v6 — cmp_phase_state movido para [12]
 static constexpr uint16_t kMagicOffset = 14u;
-static constexpr uint16_t kMinPageLen  = 16u;
+static constexpr uint16_t kMinPageLen  = kEngineConfigMinPageLen;
 
 static constexpr uint16_t kOffsetEncoderTdc1OriginDeg   = 0u;
 static constexpr uint16_t kOffsetDisplacementCc         = 2u;
@@ -34,7 +54,7 @@ static constexpr uint16_t kOffsetInjectorFlowCcMin      = 4u;
 static constexpr uint16_t kOffsetStoichAfrX100          = 6u;
 static constexpr uint16_t kOffsetMapRefKpa              = 8u;
 static constexpr uint16_t kOffsetTriggerTooth0EngineDeg = 10u;
-static constexpr uint16_t kOffsetDefaultEoiLeadDeg      = 12u;
+static constexpr uint16_t kOffsetCmpPhaseState          = 12u;
 
 // Global runtime config, initialized to compile-time defaults.
 EngineConfigRam g_eng_cfg = {
@@ -43,8 +63,8 @@ EngineConfigRam g_eng_cfg = {
     kStoichAfrX100,
     kMapRefBarX100,
     kTriggerTooth0EngineDeg,
-    kDefaultEoiLeadDeg,
     kEncoderTdc1OriginDeg,
+    kCmpPhaseUncalibrated,
 };
 
 static inline uint16_t read_u16_le(const uint8_t* buf, uint16_t offset) noexcept {
@@ -73,12 +93,12 @@ bool engine_config_valid(const EngineConfigRam& c) noexcept {
     if (c.trigger_tooth0_engine_deg > 719u) {
         return false;
     }
-    if (c.default_eoi_lead_deg > 719u) {
-        return false;
-    }
     // Domínio de embrulho de 1 volta de TIM2 (360°), não 720° do ciclo do
     // motor — ver comentário junto a kEncoderTdc1OriginDeg.
     if (c.encoder_tdc1_origin_deg > 359u) {
+        return false;
+    }
+    if (c.cmp_phase_state > kCmpPhaseCalibratedB) {
         return false;
     }
     return true;
@@ -100,8 +120,8 @@ void engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept {
     tmp.stoich_afr_x100         = read_u16_le(page0_buf, kOffsetStoichAfrX100);
     tmp.map_ref_bar_x100             = read_u16_le(page0_buf, kOffsetMapRefKpa);
     tmp.trigger_tooth0_engine_deg = read_u16_le(page0_buf, kOffsetTriggerTooth0EngineDeg);
-    tmp.default_eoi_lead_deg    = read_u16_le(page0_buf, kOffsetDefaultEoiLeadDeg);
     tmp.encoder_tdc1_origin_deg  = read_u16_le(page0_buf, kOffsetEncoderTdc1OriginDeg);
+    tmp.cmp_phase_state         = page0_buf[kOffsetCmpPhaseState];
 
     if (engine_config_valid(tmp)) {
         g_eng_cfg = tmp;
@@ -122,8 +142,8 @@ void engine_config_serialize(uint8_t* page0_buf, uint16_t len) noexcept {
     write_u16_le(page0_buf, kOffsetStoichAfrX100,           g_eng_cfg.stoich_afr_x100);
     write_u16_le(page0_buf, kOffsetMapRefKpa,               g_eng_cfg.map_ref_bar_x100);
     write_u16_le(page0_buf, kOffsetTriggerTooth0EngineDeg,  g_eng_cfg.trigger_tooth0_engine_deg);
-    write_u16_le(page0_buf, kOffsetDefaultEoiLeadDeg,       g_eng_cfg.default_eoi_lead_deg);
     write_u16_le(page0_buf, kOffsetEncoderTdc1OriginDeg,    g_eng_cfg.encoder_tdc1_origin_deg);
+    page0_buf[kOffsetCmpPhaseState] = g_eng_cfg.cmp_phase_state;
     write_u16_le(page0_buf, kMagicOffset,                   kMagicValue);
 }
 

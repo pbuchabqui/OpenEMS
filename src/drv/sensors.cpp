@@ -664,7 +664,14 @@ uint8_t get_sensor_health_status() noexcept {
 }
 
 void sensors_init() noexcept {
-    ems::hal::adc_init();
+    // NÃO chamar ems::hal::adc_init() aqui — main_stm32.cpp já chama antes
+    // de sensors_init() (e, em modo encoder, adc_start_free_running_encoder()
+    // logo a seguir). Uma segunda chamada aqui reiniciava TIM6 de volta a
+    // one-pulse/parado (adc_init() nunca arma CEN), desfazendo o modo
+    // livre-corrente sem nada para o rearmar depois — achado 2026-08-16,
+    // bancada: MAP/APP1-4 liam valores reais por um curto período após boot,
+    // depois congelavam para sempre num valor de meia-escala (0x800, nunca
+    // convertido). Ver adc.h:adc_start_free_running_encoder().
     init_tables();
     reset_state();
 }
@@ -762,10 +769,26 @@ void sensors_tick_100ms() noexcept {
     g_iat_pos = static_cast<uint8_t>((g_iat_pos + 1u) & 0x7u);
 
     if (g_bench_clt_iat) {
-        // Banco HIL: sensores físicos ausentes — força valores válidos e limpa
-        // ALL faults para que não acionem limp mode (rev-cut a 3000 RPM).
-        for (auto& f : g_fault) { f.active = false; f.consecutive_bad = 0u; }
-        g_data_staging.fault_bits = 0u;
+        // Banco HIL: sensores físicos ausentes p/ CLT/IAT — força valores
+        // válidos e limpa a falha SÓ desses dois sensores. Achado #4 da
+        // revisão 2026-08-15: o loop anterior limpava g_fault[] e
+        // fault_bits por inteiro, apagando também MAP/MAF/TPS/O2/
+        // FUEL_PRESS/OIL_PRESS — sensores amostrados de hardware real
+        // mesmo em bench mode (ver notas nesta função e mais abaixo neste
+        // ficheiro), incluindo o caminho de falha de ADC (linhas ~412-453)
+        // que depende destes bits chegarem ao loop principal. Ficavam
+        // invisíveis por até 100ms de cada vez sempre que este tick corria
+        // com bench mode ligado, mascarando faults genuínos e alimentando
+        // fuel_protect_cut (main_stm32.cpp) com dados errados.
+        auto& clt_fault = g_fault[static_cast<uint8_t>(SensorId::CLT)];
+        auto& iat_fault = g_fault[static_cast<uint8_t>(SensorId::IAT)];
+        clt_fault.active = false;
+        clt_fault.consecutive_bad = 0u;
+        iat_fault.active = false;
+        iat_fault.consecutive_bad = 0u;
+        g_data_staging.fault_bits = static_cast<uint8_t>(g_data_staging.fault_bits &
+            ~((1u << static_cast<uint8_t>(SensorId::CLT)) |
+              (1u << static_cast<uint8_t>(SensorId::IAT))));
         g_data_staging.clt_degc_x10 = g_bench_clt_x10;
         g_data_staging.iat_degc_x10 = g_bench_iat_x10;
     } else {

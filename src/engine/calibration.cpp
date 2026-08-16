@@ -297,9 +297,16 @@ uint16_t iac_idle_target_rpm_x10[kIacWarmupPts]  = {12000u, 11500u, 10800u, 1000
 uint16_t wbo2_can_id = 0x180u;
 
 uint16_t stft_kp_x100       = 3u;    // 0.03
-uint16_t eoi_idle_deg      = 60u;   // closed-valve (fim na compressão)
-uint16_t eoi_blend_rpm_lo  = 2000u; // abaixo: closed-valve (60°)
-uint16_t eoi_blend_rpm_hi  = 4000u; // acima: open-valve (355°)
+
+// Tabela EOI 2D (RPM × CLT) — placeholder, ver calibration.h. Linhas =
+// eoi_clt_axis_x10 (-20/20/90°C), colunas = eoi_rpm_axis_x10 (500/2000/5000).
+uint32_t eoi_rpm_axis_x10[kEoiTableSize] = {5000u, 20000u, 50000u};
+int16_t  eoi_clt_axis_x10[kEoiTableSize] = {-200, 200, 900};
+uint16_t eoi_table_deg[kEoiTableSize][kEoiTableSize] = {
+    {250u, 300u, 355u},  // -20°C
+    {150u, 250u, 355u},  //  20°C
+    { 60u, 150u, 355u},  //  90°C
+};
 
 // Ki dobrado (5→10) só no caminho encoder (decisão do utilizador,
 // 2026-08-14): ~10s p/ cancelar erro de 1%λ em vez de ~20s — mudança de

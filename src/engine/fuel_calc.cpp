@@ -725,33 +725,51 @@ void fuel_inj_duty_reset() noexcept {
     g_inj_duty_cut = false;
 }
 
-uint16_t calc_eoi_lead_deg(uint32_t rpm_x10) noexcept
+// Bias fixo p/ converter o eixo CLT assinado (pode ser negativo, ex.
+// arranque a frio <0°C) para o domínio uint32_t que table_axis_index()/
+// table_axis_frac_q8() exigem (table3d.h) — cobre CLT até -100,0°C, folga
+// ampla. Só interno a esta função; NVM/UI continuam em °C×10 natural.
+constexpr int32_t kEoiClAxisBiasX10 = 1000;
+
+// Mesmo padrão de interp_lambda_delay_3x3() (fuel_trim.cpp) — bilinear 3×3
+// à mão sobre os primitivos genéricos de table3d.h (NÃO
+// table3d_prepare_lookup/table3d_lookup_*_prepared, que estão fixos a
+// kTableAxisSize=20). Substitui o antigo blend 1D só-RPM — ver
+// calibration.h para o racional físico (closed-valve depende de calor,
+// que falta a frio) e o aviso de que os defaults das células são
+// placeholder, não medição.
+static uint16_t interp_eoi_3x3(uint32_t rpm_x10, int16_t clt_x10) noexcept
 {
-    const uint16_t main_deg = cfg::g_eng_cfg.default_eoi_lead_deg;
-    const uint16_t lo = eoi_blend_rpm_lo;
-    const uint16_t hi = eoi_blend_rpm_hi;
-
-    if (hi <= lo) {  // desligado (inclui 0/0 — page 0 antiga zerada)
-        return (main_deg > 719u) ? 719u : main_deg;
+    uint32_t clt_axis_biased[kEoiTableSize];
+    for (uint8_t i = 0u; i < kEoiTableSize; ++i) {
+        clt_axis_biased[i] = static_cast<uint32_t>(
+            static_cast<int32_t>(eoi_clt_axis_x10[i]) + kEoiClAxisBiasX10);
     }
+    const uint32_t clt_biased = static_cast<uint32_t>(
+        static_cast<int32_t>(clt_x10) + kEoiClAxisBiasX10);
 
-    const uint32_t rpm = rpm_x10 / 10u;
-    uint16_t idle = eoi_idle_deg;
-    if (idle > 719u) { idle = 719u; }
+    const uint8_t xi = table_axis_index(eoi_rpm_axis_x10, kEoiTableSize, rpm_x10);
+    const uint8_t yi = table_axis_index(clt_axis_biased, kEoiTableSize, clt_biased);
+    const uint8_t fx = table_axis_frac_q8(eoi_rpm_axis_x10, xi, rpm_x10);
+    const uint8_t fy = table_axis_frac_q8(clt_axis_biased, yi, clt_biased);
 
-    if (rpm <= lo) { return idle; }
-    if (rpm >= hi) { return (main_deg > 719u) ? 719u : main_deg; }
+    const int32_t v00 = eoi_table_deg[yi][xi];
+    const int32_t v10 = eoi_table_deg[yi][xi + 1u];
+    const int32_t v01 = eoi_table_deg[yi + 1u][xi];
+    const int32_t v11 = eoi_table_deg[yi + 1u][xi + 1u];
 
-    // Interpolação linear em int32: |main−idle| ≤ 719 e (rpm−lo) < 65535
-    // → |produto| < 47.2M — folga ampla em int32. Divisor > 0 garantido
-    // pelo gate hi > lo acima.
-    const int32_t span   = static_cast<int32_t>(main_deg) - static_cast<int32_t>(idle);
-    const int32_t num    = span * static_cast<int32_t>(rpm - lo);
-    const int32_t eoi    = static_cast<int32_t>(idle) + num / static_cast<int32_t>(hi - lo);
+    const int32_t v0 = v00 + (((v10 - v00) * static_cast<int32_t>(fx)) >> 8u);
+    const int32_t v1 = v01 + (((v11 - v01) * static_cast<int32_t>(fx)) >> 8u);
+    const int32_t v  = v0 + (((v1 - v0) * static_cast<int32_t>(fy)) >> 8u);
 
-    if (eoi < 0)    { return 0u; }
-    if (eoi > 719)  { return 719u; }
-    return static_cast<uint16_t>(eoi);
+    if (v < 0)   { return 0u; }
+    if (v > 719) { return 719u; }
+    return static_cast<uint16_t>(v);
+}
+
+uint16_t calc_eoi_lead_deg(uint32_t rpm_x10, int16_t clt_x10) noexcept
+{
+    return interp_eoi_3x3(rpm_x10, clt_x10);
 }
 
 }  // namespace ems::engine

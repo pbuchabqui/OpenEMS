@@ -539,65 +539,11 @@ void test_ecu_sched_eoi_targeting(void) {
     CHECK_EQ(f_on, 85u, "presync 355°: SOI frac=85");
 }
 
-void test_eoi_blend(void) {
-    section("fuel_calc: EOI blend de 2 pontos por RPM");
-    // main = g_eng_cfg.default_eoi_lead_deg (355 por default de compilação)
-    const uint16_t saved_main = ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg;
-    ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg = 355u;
-
-    // Desligado (0/0 — page 0 antiga zerada): devolve sempre o main
-    ems::engine::eoi_idle_deg = 60u;
-    ems::engine::eoi_blend_rpm_lo = 0u;
-    ems::engine::eoi_blend_rpm_hi = 0u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(8500u), 355u, "blend off (0/0): main a 850 RPM");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(85000u), 355u, "blend off (0/0): main a 8500 RPM");
-
-    // Desligado (hi < lo): gate contra janela invertida / divisão por zero
-    ems::engine::eoi_blend_rpm_lo = 2500u;
-    ems::engine::eoi_blend_rpm_hi = 1500u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(20000u), 355u, "blend off (hi<lo): main");
-    ems::engine::eoi_blend_rpm_hi = 2500u;  // hi == lo também desliga
-    ems::engine::eoi_blend_rpm_lo = 2500u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(20000u), 355u, "blend off (hi==lo): main");
-
-    // Janela 1500→2500, idle=60, main=355 (ascendente)
-    ems::engine::eoi_blend_rpm_lo = 1500u;
-    ems::engine::eoi_blend_rpm_hi = 2500u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(8500u),  60u, "850 RPM (< lo): idle");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(15000u), 60u, "1500 RPM (== lo): idle");
-    // 2000 RPM: 60 + 295×500/1000 = 60 + 147 = 207 (trunc)
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(20000u), 207u, "2000 RPM (meio): 207");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(25000u), 355u, "2500 RPM (== hi): main");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(85000u), 355u, "8500 RPM (> hi): main");
-
-    // Descendente (idle=365 pré-IVO > main=355): interpola para baixo
-    ems::engine::eoi_idle_deg = 365u;
-    // 2000 RPM: 365 + (−10)×500/1000 = 365 − 5 = 360
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(20000u), 360u, "descendente: 365→355 dá 360 no meio");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(8500u),  365u, "descendente: idle=365 abaixo da janela");
-
-    // Extremos int32: idle=0, main=719, janela de 1 RPM
-    ems::engine::eoi_idle_deg = 0u;
-    ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg = 719u;
-    ems::engine::eoi_blend_rpm_lo = 1000u;
-    ems::engine::eoi_blend_rpm_hi = 1001u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(10000u), 0u,   "janela 1 RPM: == lo → idle");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(10010u), 719u, "janela 1 RPM: == hi → main");
-
-    // Entradas fora de gama são clampadas a 719 (defesa antes do sanitize)
-    ems::engine::eoi_idle_deg = 60000u;
-    ems::engine::eoi_blend_rpm_lo = 1500u;
-    ems::engine::eoi_blend_rpm_hi = 2500u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(8500u), 719u, "idle fora de gama → clamp 719");
-    ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg = 60000u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(85000u), 719u, "main fora de gama → clamp 719");
-
-    // restaurar estado partilhado
-    ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg = saved_main;
-    ems::engine::eoi_idle_deg = 60u;
-    ems::engine::eoi_blend_rpm_lo = 0u;
-    ems::engine::eoi_blend_rpm_hi = 0u;
-
+// O blend 1D só-RPM (eoi_idle_deg/eoi_blend_rpm_lo/hi/default_eoi_lead_deg)
+// foi removido 2026-08-16, substituído pela tabela EOI 2D RPM×CLT — ver
+// test_fuel_eoi_2d (test_fuel.cpp). A parte de sanitize (independente do
+// blend, testa o setter direto do scheduler legacy) fica retida aqui.
+void test_ecu_sched_eoi_lead_deg_sanitize(void) {
     section("ecu_sched: sanitize aceita EOI até 719 (pré-IVO)");
     ecu_sched_test_reset();
     ecu_sched_set_eoi_lead_deg(719u);
@@ -1358,6 +1304,81 @@ void test_ecu_sched_encoder_tdc1_calibrate(void) {
     ecu_sched_test_reset();
 }
 
+void test_ecu_sched_encoder_cmp_phase_calibrate(void) {
+    section("ecu_sched: encoder CMP phase calibration (pure math, comando 'M')");
+
+    CHECK_EQ(ecu_sched_encoder_cmp_phase_calibrate_from_raw(0u, 0u),
+             ems::engine::cfg::kCmpPhaseCalibratedA,
+             "flanco CMP no mesmo raw do PMS1 (delta=0, par) -> fase A");
+    CHECK_EQ(ecu_sched_encoder_cmp_phase_calibrate_from_raw(16384u, 0u),
+             ems::engine::cfg::kCmpPhaseCalibratedB,
+             "flanco CMP 1 volta antes do PMS1 (delta=16384, ímpar) -> fase B");
+    CHECK_EQ(ecu_sched_encoder_cmp_phase_calibrate_from_raw(32768u, 0u),
+             ems::engine::cfg::kCmpPhaseCalibratedA,
+             "flanco CMP 2 voltas antes do PMS1 (delta=32768, par) -> fase A");
+    CHECK_EQ(ecu_sched_encoder_cmp_phase_calibrate_from_raw(0u, 100u),
+             ems::engine::cfg::kCmpPhaseCalibratedB,
+             "flanco CMP 'à frente' do PMS1 (delta=-100, floor_div arredonda "
+             "p/ -infinito -> quociente -1, ímpar) -> fase B");
+    // Wraparound perto do limite de uint32_t: tim2_raw_at_cmp_edge=0xFFFFFFFF
+    // com tim2_raw_at_tdc1=100 — subtração sem sinal envolve (100 - 0xFFFFFFFF
+    // mod 2^32 = 101), caso físico real de "o flanco foi capturado mesmo
+    // antes do contador dar a volta" — confirma que o cast p/ int32_t não
+    // quebra perto do limite.
+    CHECK_EQ(ecu_sched_encoder_cmp_phase_calibrate_from_raw(100u, 0xFFFFFFFFu),
+             ems::engine::cfg::kCmpPhaseCalibratedA,
+             "flanco CMP a 101 counts do PMS1 através do wrap de uint32_t -> fase A");
+}
+
+// Gap identificado na revisão 2026-08-15: nunca existiu teste de
+// engine_config_valid()/serialize()/load() (nem para encoder_tdc1_origin_deg,
+// nem agora para cmp_phase_state) — não há test_engine_config.cpp dedicado.
+// Cobre aqui o suficiente para o campo novo: round-trip válido, rejeição de
+// valor fora do domínio (cai nos defaults, não aplica parcial) e rejeição
+// por magic errado.
+void test_engine_config_cmp_phase_state_roundtrip(void) {
+    section("engine_config: cmp_phase_state — valid()/serialize()/load() round-trip");
+
+    using namespace ems::engine::cfg;
+    const EngineConfigRam saved = g_eng_cfg;
+
+    // Round-trip válido.
+    g_eng_cfg.cmp_phase_state = kCmpPhaseCalibratedB;
+    uint8_t buf[256] = {};
+    engine_config_serialize(buf, kEngineConfigMinPageLen);
+    g_eng_cfg.cmp_phase_state = kCmpPhaseUncalibrated;  // adultera antes do load
+    engine_config_load(buf, kEngineConfigMinPageLen);
+    CHECK_EQ(g_eng_cfg.cmp_phase_state, static_cast<uint8_t>(kCmpPhaseCalibratedB),
+             "serialize(B) -> load() reproduz cmp_phase_state=B");
+
+    // Valor fora do domínio (byte 12 corrompido diretamente, simula NVM
+    // antigo/lixo) — engine_config_valid() deve rejeitar o struct INTEIRO,
+    // não só o campo mau: g_eng_cfg fica intocado, não parcialmente aplicado.
+    g_eng_cfg.cmp_phase_state = kCmpPhaseCalibratedA;
+    const uint8_t sentinel_before = g_eng_cfg.cmp_phase_state;
+    buf[12] = 3u;  // > kCmpPhaseCalibratedB — inválido
+    engine_config_load(buf, kEngineConfigMinPageLen);
+    CHECK_EQ(g_eng_cfg.cmp_phase_state, sentinel_before,
+             "cmp_phase_state=3 (fora do domínio) rejeitado — g_eng_cfg não muda");
+
+    EngineConfigRam probe = saved;
+    probe.cmp_phase_state = 3u;
+    CHECK_FALSE(engine_config_valid(probe), "engine_config_valid() rejeita cmp_phase_state>2 diretamente");
+
+    // Magic errado — load() não deve tocar g_eng_cfg mesmo com bytes 0-13
+    // válidos (mesma disciplina já usada por encoder_tdc1_origin_deg).
+    g_eng_cfg.cmp_phase_state = kCmpPhaseCalibratedB;
+    const uint8_t sentinel2 = g_eng_cfg.cmp_phase_state;
+    engine_config_serialize(buf, kEngineConfigMinPageLen);
+    buf[12] = static_cast<uint8_t>(kCmpPhaseCalibratedA);  // válido, mas...
+    buf[14] = 0xFFu; buf[15] = 0xFFu;                        // ...magic errado
+    engine_config_load(buf, kEngineConfigMinPageLen);
+    CHECK_EQ(g_eng_cfg.cmp_phase_state, sentinel2,
+             "magic errado -> load() não aplica nada, mesmo com cmp_phase_state válido no buffer");
+
+    g_eng_cfg = saved;
+}
+
 // Shared by encoder presync + sequential tests (find first matching queue evt).
 static uint8_t encoder_evt_find_ch(uint8_t want_ch, uint8_t want_high,
                                    uint32_t *out_ts) {
@@ -1422,6 +1443,46 @@ void test_ecu_sched_encoder_recompute_presync(void) {
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
              "repeated heartbeat: still exactly 16, no duplication from purge+rebuild");
 
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_recompute_presync_ign_inhibit_mask_gate(void) {
+    section("ecu_sched: encoder heartbeat recompute — máscara de ignição corta metade de um par "
+            "wasted-spark (fix 2026-08-15, achado #3: recompute_presync() é o caminho REALMENTE "
+            "ativo hoje, EMS_MT6835_CMP_PHASE_CALIBRATED=0 ⇒ try_arm_sequential_due nunca corre "
+            "em produção — corrigir só o caminho sequencial não teria efeito nenhum na config atual)");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
+
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(355u);
+    ecu_sched_set_dwell_ticks(2000u);
+    ecu_sched_set_inj_pw_ticks(2000u);
+    ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
+
+    // kWastedIgnPairA = {IGN1, IGN4}. IGN1=ECU_CH_IGN1(7)→k_ign_ch_to_bit=bit0;
+    // IGN4=ECU_CH_IGN4(4)→bit3. Máscara 0x01 corta só IGN1 — prova que o gate
+    // é por canal, não pelo par inteiro (a companion IGN4 continua a armar).
+    ecu_sched_set_ign_inhibit_mask(0x01u);
+
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_tick(1500u, 2000u, 0u, 0u);   // omega=0.5
+
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, nullptr), 0u,
+             "IGN1 DWELL_START NÃO armado — bit0 mascarado");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, nullptr), 0u,
+             "IGN1 SPARK também não armado");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN4, 1u, nullptr), 1u,
+             "IGN4 (companion do mesmo par) continua armado — gate por canal, não por par");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 1u, nullptr), 1u,
+             "pair B (IGN3/IGN2) intocado pela máscara de pair A");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 1u, nullptr), 1u,
+             "INJ continua a armar — máscara de ignição não corta fuel");
+
+    ecu_sched_set_ign_inhibit_mask(0u);
     ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
@@ -1992,6 +2053,101 @@ void test_ecu_sched_encoder_sequential_prep_pw_overrides_global(void) {
     CHECK_TRUE(span < 50000u,
                "armed PW span from prep, not huge g_inj_pw_ticks");
     CHECK_TRUE(span > 1000u, "armed PW span non-trivial from prep flow");
+
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_enc_cyl_setpoints_fuel_cut_read_modify_write_preserves_spark(void) {
+    section("enc_cyl_setpoints: fuel_cut read-modify-write zera PW mas preserva dwell/advance "
+            "(fix 2026-08-15: main_stm32.cpp branch (3) republica prep com fuel_cut=1 quando "
+            "fuel_protect_cut trava o branch (1) que publicava)");
+    ecu_sched_test_reset();
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+
+    ems::engine::EncFuelIgnPrep prep{};
+    prep.valid = 1u;
+    prep.fuel_cut = 0u;
+    prep.flow_pw_us = 1000u;
+    prep.dwell_ticks = 1234u;
+    prep.eoi_lead_deg = 60u;
+    prep.base_advance_deg = 10;
+    prep.map_bar_x100 = 100u;
+    prep.fuel_press_bar_x1000 = 3000u;
+    ems::engine::enc_fuel_ign_prep_test_publish(prep);
+
+    const ems::engine::CylArmSetpoints running =
+        ems::engine::finalize_cyl_setpoints(0u, false);
+    CHECK_TRUE(running.inj_pw_ticks != 0u, "PW real com fuel_cut=0");
+    CHECK_EQ(running.dwell_ticks, 1234u, "dwell publicado tal qual");
+
+    // Mesmo padrão do fix: read-modify-write, só fuel_cut muda.
+    ems::engine::EncFuelIgnPrep cut = ems::engine::enc_fuel_ign_prep_read();
+    cut.fuel_cut = 1u;
+    cut.valid = 1u;
+    ems::engine::enc_fuel_ign_prep_test_publish(cut);
+
+    const ems::engine::CylArmSetpoints cutout =
+        ems::engine::finalize_cyl_setpoints(0u, false);
+    CHECK_EQ(cutout.inj_pw_ticks, 0u, "PW zerado por fuel_cut=1 (sem isto, injeção real continuava)");
+    CHECK_EQ(cutout.dwell_ticks, 1234u, "dwell/spark preservado — map_fault não corta ignição por desenho");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_sequential_ign_inhibit_mask_gate(void) {
+    section("ecu_sched: encoder sequential — máscara de ignição corta dwell/spark de forma sustentada "
+            "(fix 2026-08-15, achado #3: antes só purgava a fila UMA VEZ na borda de subida, "
+            "try_arm_sequential_due voltava a armar no ciclo seguinte sem nunca consultar a máscara)");
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
+    for (uint8_t i = 0u; i < 4u; ++i) {
+        ems::engine::cyl_ign_trim_deg[i] = 0;
+        ems::engine::cyl_fuel_trim_pct[i] = 0;
+    }
+    ems::engine::EncFuelIgnPrep prep{};
+    prep.valid = 1u;
+    prep.flow_pw_us = 1000u;
+    prep.dwell_ticks = 100u;
+    prep.eoi_lead_deg = 60u;
+    prep.base_advance_deg = 10;
+    prep.map_bar_x100 = 100u;
+    prep.fuel_press_bar_x1000 = 3000u;
+
+    // kIgnCh[0] = ECU_CH_IGN1 (7); k_ign_ch_to_bit[7] = bit0 — mesma tabela
+    // usada por force_output() (ecu_sched.cpp) e agora também por
+    // arm_sequential_cyl() (ecu_sched_angle_encoder.cpp).
+    {
+        ecu_sched_test_reset();
+        ems::engine::enc_fuel_ign_prep_test_publish(prep);
+        encoder_seq_seed_omega();
+        ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+        ecu_sched_set_ign_inhibit_mask(0x01u);
+        encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
+
+        CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, nullptr), 0u,
+                 "IGN1 DWELL_START NÃO armado com máscara a cortar cyl0");
+        CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 1u, nullptr), 1u,
+                 "INJ1 continua a armar — máscara de ignição não corta fuel (gates independentes)");
+        ecu_sched_set_ign_inhibit_mask(0u);
+    }
+
+    // Máscara limpa: mesma sequência deve armar dwell/spark normalmente.
+    {
+        ecu_sched_test_reset();
+        ems::engine::enc_fuel_ign_prep_test_publish(prep);
+        encoder_seq_seed_omega();
+        ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+        ecu_sched_set_ign_inhibit_mask(0x00u);
+        encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
+
+        CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, nullptr), 1u,
+                 "IGN1 DWELL_START armado normalmente com máscara limpa");
+    }
 
     ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();

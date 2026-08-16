@@ -427,6 +427,64 @@ void test_fuel_lambda_delay(void) {
     CHECK_TRUE(true, "lambda_delay extremes: no crash");
 }
 
+// Tabela EOI 2D (RPM×CLT), substitui o antigo blend 1D — mesmo padrão de
+// test_fuel_lambda_delay acima (interp_eoi_3x3 é static; testa via o
+// wrapper público calc_eoi_lead_deg). Defaults de compilação
+// (calibration.cpp): eixo RPM {500,2000,5000}, eixo CLT {-20,20,90}°C,
+// células [clt][rpm] = {{250,300,355},{150,250,355},{60,150,355}}.
+//
+// Só o canto (idx=0 exato nos dois eixos, sem interpolação) é testado por
+// igualdade exata — qualquer ponto que precise de interpolação no eixo
+// SUPERIOR usa fx/fy=255 (não 256: Q8 não representa 1,0 exato), e
+// table_axis_index() resolve um valor EXATAMENTE num ponto interior do
+// eixo como "topo do segmento de baixo" (idx do segmento anterior,
+// frac=255), não "base do segmento de cima" — confirmado por leitura de
+// table3d.cpp, não assumido. Isto significa que o valor interpolado nos
+// outros cantos/pontos fica sistematicamente ~1° abaixo do que a
+// aritmética "ingénua" sugere — tolerância ±2° (CHECK_NEAR), e
+// invariantes de monotonicidade em vez de valores exatos à mão no meio da
+// tabela (menos frágil a este arredondamento do que recalcular à mão).
+void test_fuel_eoi_2d(void) {
+    section("fuel_calc: calc_eoi_lead_deg (tabela 2D RPM×CLT)");
+
+    // Único canto sem qualquer interpolação (idx=0 exato nos dois eixos,
+    // fx=fy=0) — igualdade exata.
+    CHECK_EQ(ems::engine::calc_eoi_lead_deg(5000u, -200), 250u,
+             "canto (500 RPM, -20°C) → 250, exato (sem interpolação)");
+
+    // Âncoras já validadas hoje (60° idle quente, 355° alto RPM) —
+    // tolerância ±2° pelo arredondamento Q8 do eixo superior.
+    CHECK_NEAR(ems::engine::calc_eoi_lead_deg(50000u, 900), 355, 2.0f,
+               "canto (5000 RPM, 90°C) ≈ 355 (âncora alto RPM)");
+    CHECK_NEAR(ems::engine::calc_eoi_lead_deg(5000u, 900), 60, 2.0f,
+               "canto (500 RPM, 90°C) ≈ 60 (âncora idle quente)");
+    CHECK_NEAR(ems::engine::calc_eoi_lead_deg(50000u, -200), 355, 2.0f,
+               "canto (5000 RPM, -20°C) ≈ 355");
+
+    // Invariantes de monotonicidade — verdadeiras independentemente de
+    // arredondamento: a 2000 RPM, EOI desce quando o motor aquece (menos
+    // BTDC, mais perto de closed-valve); a CLT fixa, EOI sobe com o RPM
+    // (mais perto de open-valve).
+    const uint16_t eoi_2000_cold = ems::engine::calc_eoi_lead_deg(20000u, -200);
+    const uint16_t eoi_2000_warm = ems::engine::calc_eoi_lead_deg(20000u, 550);
+    const uint16_t eoi_2000_hot  = ems::engine::calc_eoi_lead_deg(20000u, 900);
+    CHECK_TRUE(eoi_2000_cold >= eoi_2000_warm && eoi_2000_warm >= eoi_2000_hot,
+               "2000 RPM: EOI desce monotonamente com CLT crescente");
+
+    const uint16_t eoi_500_hot  = ems::engine::calc_eoi_lead_deg(5000u, 900);
+    const uint16_t eoi_2000_hot2 = ems::engine::calc_eoi_lead_deg(20000u, 900);
+    const uint16_t eoi_5000_hot = ems::engine::calc_eoi_lead_deg(50000u, 900);
+    CHECK_TRUE(eoi_500_hot <= eoi_2000_hot2 && eoi_2000_hot2 <= eoi_5000_hot,
+               "90°C: EOI sobe monotonamente com RPM crescente");
+
+    // Extremos fora do domínio: não crash, resultado plausível (clampa ao
+    // canto mais próximo — mesmo espírito do smoke test de lambda_delay).
+    const uint16_t below = ems::engine::calc_eoi_lead_deg(0u, -1000);
+    CHECK_TRUE(below <= 719u, "extremo abaixo do domínio: plausível, sem crash");
+    const uint16_t above = ems::engine::calc_eoi_lead_deg(200000u, 2000);
+    CHECK_TRUE(above <= 719u, "extremo acima do domínio: plausível, sem crash");
+}
+
 void test_fuel_stft(void) {
     section("fuel_calc: fuel_update_stft / fuel_get_stft_pct_x10");
 

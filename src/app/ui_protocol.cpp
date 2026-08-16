@@ -7,6 +7,7 @@
 
 #include "app/can_stack.h"
 #include "app/can_rx_map.h"
+#include "hal/adc.h"
 #include "hal/tle8888.h"
 #include "hal/flex_fuel.h"
 #include "drv/ckp.h"
@@ -161,11 +162,41 @@ void parse_byte(uint8_t b) noexcept {
             const uint16_t origin_deg =
                 ecu_sched_encoder_tdc1_calibrate_from_raw(tim2_raw);
             ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = origin_deg;
-            ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+            ems::engine::cfg::engine_config_serialize(g_page0, ems::engine::cfg::kEngineConfigMinPageLen);
             mark_page_dirty(0x00u);
             tx_push(kAckOk);
             tx_push(static_cast<uint8_t>(origin_deg & 0xFFu));
             tx_push(static_cast<uint8_t>((origin_deg >> 8u) & 0xFFu));
+            return;
+        }
+        if (b == static_cast<uint8_t>('M')) {
+            // Calibração de fase CMP (caminho encoder), 2026-08-15 — a
+            // chamar com o cilindro 1 fisicamente no PMS de COMPRESSÃO (não
+            // escape — mesma referência física do 'X'/TDC1), DEPOIS de
+            // encoder_tdc1_origin_deg já calibrado nesta mesma sessão de
+            // bancada. Requer ≥1 flanco CMP já visto (motor rodado por ≥1
+            // ciclo de 720° antes) — sem isso ems::hal::cmp_angle_snapshot()
+            // é lixo de boot, não um flanco real. Lê TIM2 + o último flanco
+            // CMP capturado, deriva e aplica cmp_phase_state em RAM — burn
+            // fica a cargo do comando 'b' existente, não é persistido aqui.
+            // Resposta: sempre [ACK][u8] (2 bytes) — mesmo no erro, para o
+            // cliente (_txn de comprimento fixo) nunca ficar à espera de um
+            // byte que não vem até estourar o timeout do porto série.
+            // [ACK_ERR][0] se nenhum flanco CMP visto ainda.
+            if (ems::hal::cmp_edge_count() == 0u) {
+                tx_push(kAckErr);
+                tx_push(0u);
+                return;
+            }
+            const uint32_t tim2_now = ems::hal::tim2_encoder_count();
+            const uint32_t cmp_raw  = ems::hal::cmp_angle_snapshot();
+            const uint8_t state =
+                ecu_sched_encoder_cmp_phase_calibrate_from_raw(tim2_now, cmp_raw);
+            ems::engine::cfg::g_eng_cfg.cmp_phase_state = state;
+            ems::engine::cfg::engine_config_serialize(g_page0, ems::engine::cfg::kEngineConfigMinPageLen);
+            mark_page_dirty(0x00u);
+            tx_push(kAckOk);
+            tx_push(state);
             return;
         }
         if (b == static_cast<uint8_t>('L')) {
@@ -243,8 +274,8 @@ void parse_byte(uint8_t b) noexcept {
         if (b == static_cast<uint8_t>('D')) {
             EcuSchedDiagSnapshot sd{};
             ecu_sched_get_diag_snapshot(&sd);
-            // 52×u32 = 208 B (era 51; +1 razões de corte [51])
-            const uint32_t diag[52] = {
+            // 53×u32 = 212 B (era 52; +1 diagnóstico ADC temporário [52])
+            const uint32_t diag[53] = {
                 sd.late_event_count,
                 sd.cycle_schedule_drop_count,
                 sd.inj1_arm,
@@ -306,6 +337,12 @@ void parse_byte(uint8_t b) noexcept {
                 // [51] razões de corte: hi16 = spark, lo16 = fuel (cut_reason.h)
                 (static_cast<uint32_t>(ems::engine::g_spark_cut_reasons) << 16) |
                     ems::engine::g_fuel_cut_reasons,
+                // [52] diagnóstico ADC1: hi16 = slot bruto 4 (APP1/SQ5), lo16 =
+                // slot bruto 0 (MAP/SQ1) — compara dois pontos da sequência
+                // para confirmar que o DMA continua a converter (achou o bug
+                // do adc_init() duplicado em sensors_init(), 2026-08-16).
+                (static_cast<uint32_t>(ems::hal::adc_debug_raw_slot(4u)) << 16) |
+                    ems::hal::adc_debug_raw_slot(0u),
             };
             tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), sizeof(diag));
             return;
@@ -483,7 +520,7 @@ void reset_pages() noexcept {
     // Popula campos de engine config com valores actuais (de NVM ou defaults de
     // compilação). Garante que 'r' page 0 devolve valores coerentes antes de
     // qualquer 'w'.
-    ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+    ems::engine::cfg::engine_config_serialize(g_page0, ems::engine::cfg::kEngineConfigMinPageLen);
     ems::engine::sync_etb_calibration_to_page(g_page0 + 16, 40u);
     std::memcpy(g_page1_ve,    ems::engine::ve_table,    sizeof(g_page1_ve));
     std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));

@@ -375,7 +375,7 @@ void sync_page_from_table(uint8_t page) noexcept {
         // [0-1]=encoder_tdc1_origin_deg (era reserved/IVC ABDC, sempre
         // zerado aqui até engine_config.cpp v3; zerar depois do serialize
         // apagava a calibração TDC1 nesta mesma chamada).
-        ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+        ems::engine::cfg::engine_config_serialize(g_page0, ems::engine::cfg::kEngineConfigMinPageLen);
         // Bytes 16-55: calibração de sensores APP/ETB/TPS + plausibilidade
         ems::engine::sync_etb_calibration_to_page(g_page0 + 16, 40u);
         // Bytes 56-63: trim de combustível e ignição por cilindro (int8 × 4 cada)
@@ -425,9 +425,6 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 158, &ems::engine::ewg_kd_x10,       2u);
         std::memcpy(g_page0 + 160, &ems::engine::ewg_pos_min_raw,  2u);
         std::memcpy(g_page0 + 162, &ems::engine::ewg_pos_max_raw,  2u);
-        std::memcpy(g_page0 + 164, &ems::engine::eoi_idle_deg,      2u);
-        std::memcpy(g_page0 + 166, &ems::engine::eoi_blend_rpm_lo,  2u);
-        std::memcpy(g_page0 + 168, &ems::engine::eoi_blend_rpm_hi,  2u);
         std::memcpy(g_page0 + 170, &ems::engine::mspark_max_rpm_x10, 2u);
         g_page0[172] = ems::engine::mspark_count;
         std::memcpy(g_page0 + 173, &ems::engine::mspark_inter_dwell_ms_x10, 2u);
@@ -525,6 +522,12 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(p + 74, &ems::engine::crank_prime_max_pw_us,  2u);
         std::memcpy(p + 76, &ems::engine::inj_small_pulse_break_us, 2u);
         p[78] = ems::engine::inj_small_pulse_rate_q8;
+        // Tabela EOI 2D (79-114, RPM×CLT) — 2026-08-16: movida de page0
+        // para aqui, junto de X-τ/AE/quick-crank (mesmo tema de timing de
+        // combustível, e já na aba FUELING do dash — page0 é ENGINE).
+        std::memcpy(p + 79, ems::engine::eoi_rpm_axis_x10, 12u);
+        std::memcpy(p + 91, ems::engine::eoi_clt_axis_x10, 6u);
+        std::memcpy(p + 97, ems::engine::eoi_table_deg,    18u);
     } else if (page == 0x07u) {
         uint8_t* p = g_page7_dwell2d;
         std::memset(p, 0, sizeof(g_page7_dwell2d));
@@ -575,9 +578,11 @@ bool sync_table_from_page(uint8_t page) noexcept {
         // engine_config.cpp v3 — zerar antes do load descartava qualquer
         // escrita 'w' à calibração TDC1 antes de chegar a g_eng_cfg).
         // Aplica engine config (displacement, injector, AFR, trigger offset, etc.)
-        // engine_config_load valida magic 0x4543 em bytes [14-15] — a escrita via
-        // 'w' deve sempre incluir os 16 bytes completos com magic correcto.
-        ems::engine::cfg::engine_config_load(g_page0, 16u);
+        // engine_config_load valida magic em bytes [14-15] — a escrita via
+        // 'w' deve sempre incluir os 16 bytes completos com magic correcto
+        // (g_page0 é um buffer persistente partilhado — byte 12
+        // cmp_phase_state já lá está de uma calibração/burn anterior).
+        ems::engine::cfg::engine_config_load(g_page0, ems::engine::cfg::kEngineConfigMinPageLen);
         // Página 0 pode alterar trigger_tooth0_engine_deg em runtime (tuner
         // escreve RAM sem reboot) — reconstrói g_cyl_window (misfire_encoder.cpp)
         // para não ficar dessincronizado do novo offset pelo resto da sessão.
@@ -637,9 +642,6 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::ewg_kd_x10,       g_page0 + 158, 2u);
         std::memcpy(&ems::engine::ewg_pos_min_raw,  g_page0 + 160, 2u);
         std::memcpy(&ems::engine::ewg_pos_max_raw,  g_page0 + 162, 2u);
-        std::memcpy(&ems::engine::eoi_idle_deg,      g_page0 + 164, 2u);
-        std::memcpy(&ems::engine::eoi_blend_rpm_lo,  g_page0 + 166, 2u);
-        std::memcpy(&ems::engine::eoi_blend_rpm_hi,  g_page0 + 168, 2u);
         // count=0 é válido: desliga multi-spark (calibration.h). Só valores >3
         // (corrupção/página antiga) são rejeitados.
         if (g_page0[172] <= 3u) {
@@ -654,8 +656,6 @@ bool sync_table_from_page(uint8_t page) noexcept {
             ems::engine::mspark_count = g_page0[172];
             std::memcpy(&ems::engine::mspark_inter_dwell_ms_x10, g_page0 + 173, 2u);
         }
-        // eoi_idle_deg fora de [0,719] seria clampado pelo blend; normaliza aqui
-        if (ems::engine::eoi_idle_deg > 719u) { ems::engine::eoi_idle_deg = 719u; }
         // LTFT authority (176-184): só layout v3+
         if (g_page0[ems::engine::kCalLayoutVersionOffset] ==
             ems::engine::kCalLayoutVersion) {
@@ -780,6 +780,10 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(&ems::engine::crank_prime_max_pw_us, p + 74, 2u);
         std::memcpy(&ems::engine::inj_small_pulse_break_us, p + 76, 2u);
         ems::engine::inj_small_pulse_rate_q8 = p[78];
+        // Tabela EOI 2D (79-114) — ver comentário no serialize acima.
+        std::memcpy(ems::engine::eoi_rpm_axis_x10, p + 79, 12u);
+        std::memcpy(ems::engine::eoi_clt_axis_x10, p + 91, 6u);
+        std::memcpy(ems::engine::eoi_table_deg,    p + 97, 18u);
     } else if (page == 0x07u) {
         const uint8_t* p = g_page7_dwell2d;
         std::memcpy(ems::engine::dwell_rpm_axis_rpm,  p + 0,  8u);
@@ -824,8 +828,9 @@ void clear_page_dirty(uint8_t page) noexcept {
 
 bool burn_page_to_flash(uint8_t page) noexcept {
     if (page == 0x00u) {
-        // Serializa g_eng_cfg → g_page0[2-15] e guarda o slot NVM 0 completo.
-        ems::engine::cfg::engine_config_serialize(g_page0, 16u);
+        // Serializa g_eng_cfg → g_page0[0-15] (inclui cmp_phase_state em
+        // [12]) e guarda o slot NVM 0 completo.
+        ems::engine::cfg::engine_config_serialize(g_page0, ems::engine::cfg::kEngineConfigMinPageLen);
         g_page0[ems::engine::kCalLayoutVersionOffset] = ems::engine::kCalLayoutVersion;
         const bool ok = ems::hal::nvm_save_calibration(0u, g_page0,
                                             static_cast<uint16_t>(sizeof(g_page0)));

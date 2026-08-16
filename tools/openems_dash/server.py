@@ -266,7 +266,20 @@ def api_read_page(page: int):
             data["auto_learn_burn_ve"] = None
         return {"page": page, **data}
     if page in proto.FIELD_PAGES:
-        return {"page": page, "fields": proto.decode_fields(page, buf)}
+        try:
+            return {"page": page, "fields": proto.decode_fields(page, buf)}
+        except struct.error as e:
+            # page6 cresceu 80→116 bytes em 2026-08-16 (tabela EOI 2D movida
+            # de page0 para aqui) — firmware antigo em flash ainda devolve
+            # só 80 bytes. Mesmo padrão da page 12 acima.
+            if page == 6:
+                return JSONResponse(
+                    {"error": "page 6 (X-Tau/AE/quick-crank/EOI) grew from 80 to "
+                              "116 bytes — flash this worktree (make firmware + "
+                              "dfu/st-flash) and retry",
+                     "detail": str(e)},
+                    status_code=501)
+            raise
     return {"page": page, "raw": buf.hex()}
 
 
@@ -535,6 +548,21 @@ def api_tdc1_calibrate():
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"tdc1_calibrate: {e}"}, status_code=502)
     return {"ok": True, "origin_deg": origin_deg, "msg": f"origin_deg={origin_deg}° (RAM — falta burn)"}
+
+
+@app.post("/api/cmp_phase_calibrate")
+def api_cmp_phase_calibrate():
+    """Calibração de fase CMP do caminho encoder (comando 'M'): chamar
+    DEPOIS de /api/tdc1_calibrate na mesma sessão de bancada, com o
+    cilindro 1 fisicamente no PMS de COMPRESSÃO e o motor já rodado por ≥1
+    ciclo de 720° antes. Aplica cmp_phase_state em RAM (page0[191]) — burn
+    continua manual, mesmo fluxo do TDC1."""
+    try:
+        state = worker.submit(lambda l: l.cmp_phase_calibrate())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"cmp_phase_calibrate: {e}"}, status_code=502)
+    label = {0: "não calibrado (sem flanco CMP visto)", 1: "fase A", 2: "fase B"}.get(state, str(state))
+    return {"ok": True, "state": state, "msg": f"cmp_phase={label} (RAM — falta burn)"}
 
 
 @app.post("/api/ltft/reset")

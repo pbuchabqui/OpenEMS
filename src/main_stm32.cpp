@@ -560,14 +560,6 @@ static void openems_init() noexcept {
 	// Authority LTFT (176-184) só se layout version actual — blob v2 tem lixo/zeros.
 	if (g_calib_page0[ems::engine::kCalLayoutVersionOffset] ==
 	    ems::engine::kCalLayoutVersion) {
-		// EOI blend (164-168): idle EOI + janela RPM lo/hi. Serialize grava
-		// sempre os globals vivos aqui, então página na versão actual tem
-		// valores válidos; hi<=lo = blend off (honrado). Mesmo clamp do
-		// handler de escrita (eoi_idle_deg ∈ [0,719]).
-		std::memcpy(&ems::engine::eoi_idle_deg,     g_calib_page0 + 164, 2u);
-		std::memcpy(&ems::engine::eoi_blend_rpm_lo, g_calib_page0 + 166, 2u);
-		std::memcpy(&ems::engine::eoi_blend_rpm_hi, g_calib_page0 + 168, 2u);
-		if (ems::engine::eoi_idle_deg > 719u) { ems::engine::eoi_idle_deg = 719u; }
 		uint16_t mult_c = 0u, add_c = 0u, max_s = 0u;
 		std::memcpy(&mult_c, g_calib_page0 + 176, 2u);
 		std::memcpy(&add_c,  g_calib_page0 + 178, 2u);
@@ -889,14 +881,23 @@ int main() {
             // risco que este gate foi escrito para o caminho roda-dentada) —
             // é "posição absoluta 100% fiável via TIM2, só não sei ainda qual
             // das duas metades de 720° é esta" (ecu_sched_encoder_phase_valid()
-            // ==0). g_presync_inj_mode fica sempre SEMI_SEQUENTIAL neste
-            // caminho (o auto-select por cranking em ecu_sched.cpp:779 só
-            // corre no dispatch Hall, nunca aqui) — cada par disparado é
-            // 360° à parte, então uma das duas hipóteses de fase está sempre
-            // certa para cada cilindro do par. Fora de cranking (que continua
-            // no branch (2) dedicado, PW de arranque simplificado, abaixo):
-            // decisão do utilizador (2026-08-13) — correr o pipeline completo
-            // de combustível (VE/trims/X-τ) também em HALF, não só FULL_SYNC.
+            // ==0). O auto-select por cranking em ecu_sched.cpp:790 só corre
+            // no dispatch Hall (tooth hook), nunca aqui — por isso o modo tem
+            // de ser mantido manualmente (achado 2026-08-15: nada revertia
+            // para SEMI_SEQUENTIAL depois do branch (2) abaixo pôr
+            // SIMULTANEOUS para o batch de cranking; sem isto, TODA transição
+            // cranking→running na config default — EMS_MT6835_CMP_PHASE_CALIBRATED=0,
+            // logo phase_valid() nunca fica válido — ficava presa em batch
+            // simultâneo em vez do bank-fire SEMI_SEQUENTIAL pretendido).
+            // Espelha allow_half_crank_batch: fora do batch de cranking, cada
+            // par disparado é 360° à parte, então uma das duas hipóteses de
+            // fase está sempre certa para cada cilindro do par. Fora de
+            // cranking: decisão do utilizador (2026-08-13) — correr o
+            // pipeline completo de combustível (VE/trims/X-τ) também em
+            // HALF, não só FULL_SYNC.
+            ::ecu_sched_set_presync_inj_mode(allow_half_crank_batch
+                ? ECU_PRESYNC_INJ_SIMULTANEOUS
+                : ECU_PRESYNC_INJ_SEMI_SEQUENTIAL);
             const bool allow_half_running =
                 half_sync && !qc.cranking && !flood_clear && !fuel_protect_cut;
 #else
@@ -1207,7 +1208,8 @@ int main() {
 
                 const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
                 const uint32_t eoi_lead =
-                    static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(snap.rpm_x10));
+                    static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(
+                        snap.rpm_x10, sensors.clt_degc_x10));
 
 #if EMS_MT6835_ENCODER
                 {
@@ -1284,7 +1286,8 @@ int main() {
                     static_cast<uint32_t>(sched_spark_deg < 0 ? 0 : sched_spark_deg),
                     dwell_ticks,
                     inj_pw_ticks,
-                    static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(snap.rpm_x10)));
+                    static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(
+                        snap.rpm_x10, sensors.clt_degc_x10)));
             } else if (sched_sync &&
                        (fuel_protect_cut || half_fuel_lockout || g_rev_limit_active)) {
                 // (3) Spark-only: exit-crank HALF, flood, protect, rev-limit, anomaly path.
@@ -1297,12 +1300,64 @@ int main() {
                     static_cast<uint32_t>(sched_spark_deg < 0 ? 0 : sched_spark_deg),
                     dwell_ticks,
                     0u,
-                    static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(snap.rpm_x10)));
+                    static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(
+                        snap.rpm_x10, sensors.clt_degc_x10)));
                 g_last_pw_ms_x10 = 0u;
                 g_last_net_pw_us = 0u;
                 g_last_advance_deg = clamp_i8(sched_spark_deg, -10, 40);
                 ems::engine::fuel_ae_notify_pulse(0);
             }
+#if EMS_MT6835_ENCODER
+            // Sempre que o branch (1) acima NÃO publicou (fuel_protect_cut,
+            // HALF sem allow_half_running, ou sync perdido de todo) —
+            // fora do if/else-if de propósito, não só dentro do branch (3) —
+            // republica o prep. Sem isto, o dispatcher sequencial
+            // (try_arm_sequential_due, ecu_sched_angle_encoder.cpp) continua
+            // a ler o prep congelado de ANTES do corte e arma injeção real
+            // indefinidamente: nem g_inj_inhibit_mask nem fuel_protect_cut
+            // são consultados no caminho de disparo do encoder
+            // (enc_evt_execute_head chama out_pin_write diretamente), e
+            // ecu_sched_encoder_omega_valid() não depende de sched_sync —
+            // fica "válido" mesmo com sync total perdido, então o branch (3)
+            // sozinho (gated em sched_sync) não bastava. Achado 2026-08-15:
+            // LEDs INJ a piscar continuamente com sensor_fault_bits!=0 e
+            // pw_ms=0 na telemetria (outro global, não o que este
+            // dispatcher realmente arma).
+            //
+            // Recalcula avanço/dwell/eoi_lead/cranking aqui também (achado
+            // #2 da revisão 2026-08-15, mesma classe de bug do fuel_cut,
+            // desta vez para a faísca): deixar esses campos apenas
+            // "preservados" do último branch (1) parecia inofensivo para um
+            // corte breve, mas com fuel_protect_cut/half_fuel_lockout
+            // sustentados por segundos o dwell ficava errado para o
+            // RPM/tensão atuais e o avanço não refletia mais IAT/CLT/idle
+            // reais. Mesmos termos que o branch (3) usa (spark-only) — só
+            // avanço base + crank spark, sem as correções finas de IAT/CLT/
+            // idle/antijerk/torque (essas só existem dentro do pipeline
+            // completo do branch (1); zeradas aqui tal como o branch (3) já
+            // as omite do commit legado, não é uma redução de segurança
+            // nova).
+            if (!((full_sync || allow_half_running) && !fuel_protect_cut)) {
+                const int16_t base_advance_deg =
+                    ems::engine::get_advance(snap.rpm_x10, map_bar_x100);
+                ems::engine::EncFuelIgnPrep prep = ems::engine::enc_fuel_ign_prep_read();
+                prep.valid = 1u;
+                prep.fuel_cut = 1u;
+                prep.cranking = static_cast<uint8_t>(qc.cranking);
+                prep.base_advance_deg = base_advance_deg;
+                prep.crank_spark_deg = ems::engine::crank_spark_deg;
+                prep.iat_spark_deg = 0;
+                prep.clt_spark_deg = 0;
+                prep.idle_spark_deg = 0;
+                prep.antijerk_retard_deg = 0;
+                prep.torque_retard_deg = 0;
+                prep.dwell_ticks = dwell_ticks;
+                prep.eoi_lead_deg =
+                    static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(
+                        snap.rpm_x10, sensors.clt_degc_x10));
+                ems::engine::enc_fuel_ign_prep_publish(prep);
+            }
+#endif
             g_prev_tps_pct_x10 = sensors.etb_tps_pct_x10;
             ems::app::ui_update_rt_map_fuel(map_bar_x100, g_last_net_pw_us);
             g_last_map_fused_x100 = map_bar_x100;

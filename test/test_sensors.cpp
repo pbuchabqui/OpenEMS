@@ -360,6 +360,46 @@ void test_sensors_vbatt_dedicated_channel(void) {
     sensors_set_bench_clt_iat(false, 0, 0);
 }
 
+// Achado #4 da revisão 2026-08-15: sensors_tick_100ms() em bench mode
+// limpava g_fault[]/fault_bits por INTEIRO (todos os 8 SensorId), não só
+// CLT/IAT como o resto do ficheiro documenta — mascarando faults reais de
+// MAP/MAF/TPS/O2 (incl. o caminho de falha de hardware ADC, que escreve
+// fault_bits diretamente) por até 100ms de cada vez, alimentando
+// fuel_protect_cut com dados errados.
+void test_sensors_bench_mode_preserves_non_clt_iat_faults(void) {
+    using namespace ems::hal;
+    section("sensors: bench mode só limpa fault CLT/IAT, preserva os outros 6 (fix 2026-08-15)");
+    sensor_setup(); sensors_init();
+    sensors_set_bench_clt_iat(false, 0, 0);
+
+    // Caminho de falha de hardware ADC (sensors.cpp:412-429) — OR direto em
+    // fault_bits para MAP/MAF/TPS/O2, sem passar por g_fault[]/apply_fault.
+    // sample_fast_channels() só publica em g_data_committed no ramo normal
+    // (linha 564) — o ramo adc_unavailable faz `return` mais cedo (linha
+    // 452) e não comita nada sozinho, por isso um tick_100ms (bench ainda
+    // desligado, sem tocar CLT/IAT) força a publicação antes da leitura.
+    adc_test_set_recovery_failed(true);
+    ems::drv::sensors_sample_fast_channels_encoder(3000u);
+    sensors_test_tick_100ms();
+    const uint8_t map_bit = static_cast<uint8_t>(1u << static_cast<uint8_t>(SensorId::MAP));
+    CHECK_TRUE((sensors_get().fault_bits & map_bit) != 0u,
+               "pré: MAP fault ativo (ADC recovery failed)");
+
+    // Liga bench mode e corre um tick de 100ms — antes do fix isto zerava
+    // fault_bits por inteiro, apagando o MAP fault que não tem nada a ver
+    // com CLT/IAT.
+    sensors_set_bench_clt_iat(true, 800, 250);
+    sensors_test_tick_100ms();
+    const SensorData sd = sensors_get();
+    CHECK_TRUE((sd.fault_bits & map_bit) != 0u,
+               "MAP fault sobrevive ao tick de 100ms com bench mode ligado");
+    CHECK_EQ(sd.clt_degc_x10, 800, "CLT continua forçado para 80.0°C pelo bench mode");
+    CHECK_EQ(sd.iat_degc_x10, 250, "IAT continua forçado para 25.0°C pelo bench mode");
+
+    adc_test_set_recovery_failed(false);
+    sensors_set_bench_clt_iat(false, 0, 0);
+}
+
 void test_sensors_table_entry_setters(void) {
     section("sensors: sensors_test_set_clt_table_entry / set_iat_table_entry");
     sensor_setup(); sensors_init();

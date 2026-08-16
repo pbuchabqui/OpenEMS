@@ -41,7 +41,9 @@ uint8_t get_ve_prepared(const Table2dLookup& lookup) noexcept;
 uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 
 // EOI blend de 2 pontos por RPM.
-uint16_t calc_eoi_lead_deg(uint32_t rpm_x10) noexcept;
+// EOI (° BTDC combustão, fim da injeção) por RPM×CLT — bilinear 3×3, ver
+// calibration.h (eoi_rpm_axis_x10/eoi_clt_axis_x10/eoi_table_deg).
+uint16_t calc_eoi_lead_deg(uint32_t rpm_x10, int16_t clt_x10) noexcept;
 uint16_t get_lambda_target_x1000_prepared(const Table2dLookup& lookup) noexcept;
 
 uint32_t calc_req_fuel_us(uint16_t displacement_cc,

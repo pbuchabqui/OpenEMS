@@ -38,7 +38,7 @@ MAP_AXIS_BAR_X100 = [
 RPM_AXIS = [v // 10 for v in RPM_AXIS_X10]
 MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
-PAGE_SIZES = {0: 512, 1: N*N, 2: N*N, 3: 86, 4: 2*N*N, 5: 256, 6: 80, 7: 32, 8: 80,
+PAGE_SIZES = {0: 512, 1: N*N, 2: N*N, 3: 86, 4: 2*N*N, 5: 256, 6: 116, 7: 32, 8: 80,
               9: 112, 10: N*N + ((N+1)//2)**2, 11: 4*N,
               12: 2 * N * N}  # LTFT accum: hits_wire u8 + mean_stft i8
 
@@ -295,6 +295,22 @@ class OpenEMSLink:
             raise IOError(f"tdc1_calibrate: ACK {resp[0]:02x}")
         return struct.unpack("<H", resp[1:3])[0]
 
+    # ── calibração de fase CMP encoder ('M': deriva de TIM2 + último flanco
+    #    CMP, aplica em RAM) ─────────────────────────────────────────────
+    def cmp_phase_calibrate(self) -> int:
+        """Chamar DEPOIS de tdc1_calibrate() na mesma sessão de bancada, com
+        o cilindro 1 fisicamente no PMS de COMPRESSÃO (não escape) e o motor
+        já rodado por ≥1 ciclo de 720° antes (precisa de ≥1 flanco CMP já
+        visto). Aplica cmp_phase_state em RAM (page0[12]); burn continua
+        manual. Devolve o estado (0=não calibrado — nenhum flanco CMP visto
+        ainda, comando falhou; 1=fase A; 2=fase B)."""
+        resp = self._txn(b"M", 2)
+        if resp[0] != 0x00:
+            raise IOError(f"cmp_phase_calibrate: ACK {resp[0]:02x} "
+                           "(nenhum flanco CMP visto ainda? rodar o motor "
+                           "≥1 ciclo de 720° primeiro)")
+        return resp[1]
+
     # ── reset LEARN session ('Z': STFT+LEARN+LTFT NVM-shadow zero) ─────
     def reset_adaptives(self) -> None:
         """Zera STFT, acumulador LEARN e shadows LTFT (marca dirty p/ flush
@@ -334,8 +350,11 @@ class OpenEMSLink:
         "map_w0", "map_w1", "map_w2", "map_w3",
         "map_window_cycles",  # [50] ciclos 720° completos
         "cut_reasons",  # [51] hi16=spark lo16=fuel — desempacotado abaixo
+        # [52] diagnóstico ADC1: hi16=slot bruto 4 (APP1/SQ5), lo16=slot
+        # bruto 0 (MAP/SQ1) — dois pontos da sequência p/ confirmar DMA vivo.
+        "adc_debug",
     ]
-    DEBUG_SIZE = 52 * 4  # must match FW diag[52]
+    DEBUG_SIZE = 53 * 4  # must match FW diag[53]
 
     # Bits de src/engine/cut_reason.h (ordem = bit 0..N)
     FUEL_CUT_BITS = ["rev_limit", "limp_rpm", "map_fault", "oil_press",
@@ -351,11 +370,11 @@ class OpenEMSLink:
     def read_debug(self) -> dict:
         assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE
         buf = self._txn(b"D", self.DEBUG_SIZE)
-        # 31 u32 + 2 i32 + 19 u32
+        # 31 u32 + 2 i32 + 20 u32
         vals = (
             struct.unpack("<31I", buf[:124])
             + struct.unpack("<2i", buf[124:132])
-            + struct.unpack("<19I", buf[132:208])
+            + struct.unpack("<20I", buf[132:212])
         )
         d = dict(zip(self.DEBUG_FIELDS, vals))
         for n in range(4):
@@ -368,6 +387,9 @@ class OpenEMSLink:
         d["spark_cut_reasons"] = cr >> 16
         d["fuel_cut_list"] = self._decode_bits(cr & 0xFFFF, self.FUEL_CUT_BITS)
         d["spark_cut_list"] = self._decode_bits(cr >> 16, self.SPARK_CUT_BITS)
+        adc = d.pop("adc_debug")
+        d["adc_raw_app1_sq5"] = adc >> 16
+        d["adc_raw_map_sq1"] = adc & 0xFFFF
         return d
 
     # ── osciloscópio CKP/CMP ('K': 294 bytes) ────────────────────────────
@@ -562,6 +584,11 @@ PAGE6_FIELDS = [
     ("crank_prime_max_pw_us", 74, 1, "H",  0.001), # ms
     ("inj_small_pulse_break_us", 76, 1, "H", 0.001),  # ms (0 = off)
     ("inj_small_pulse_rate_q8",  78, 1, "B", 1.0),    # Q8 (128 = 0.5×; 0 = off)
+    # Tabela EOI 2D (79-114, RPM×CLT) — movida de page0 em 2026-08-16
+    # (aba FUELING do dash, junto de X-τ/AE/quick-crank).
+    ("eoi_rpm_axis_x10", 79, 3, "I", 0.1),  # RPM
+    ("eoi_clt_axis_x10", 91, 3, "h", 0.1),  # °C (assinado)
+    ("eoi_table_deg",    97, 9, "H", 1.0),  # ° BTDC — [clt][rpm], row-major
 ]
 
 PAGE7_FIELDS = [
@@ -583,7 +610,10 @@ PAGE0_FIELDS = [
     ("stoich_afr_x100",           6, 1, "H",  0.01), # AFR
     ("map_ref_bar_x100",          8, 1, "H",  0.01), # bar
     ("trigger_tooth0_engine_deg", 10, 1, "H", 1.0),  # °
-    ("default_eoi_lead_deg",     12, 1, "H",  1.0),  # ° (EOI targeting — magic v2 0x4544)
+    # byte 12: cmp_phase_state (movido de 191 em 2026-08-16 — colidia com
+    # launch_enable, mesmo byte). 0=não calibrado, 1=fase A, 2=fase B.
+    ("cmp_phase_state",          12, 1, "B",  1.0),
+    # byte 13: não usado (pad)
     ("config_magic",             14, 1, "H",  1.0),
     # bytes 16-55: sensores APP/ETB
     ("app1_raw_min",             16, 1, "H",  1.0),
@@ -666,9 +696,8 @@ PAGE0_FIELDS = [
     ("ewg_kd_x10",             158, 1, "H", 1.0),
     ("ewg_pos_min_raw",        160, 1, "H", 1.0),
     ("ewg_pos_max_raw",        162, 1, "H", 1.0),
-    ("eoi_idle_deg",           164, 1, "H", 1.0),  # ° BTDC — EOI em idle (blend)
-    ("eoi_blend_rpm_lo",       166, 1, "H", 1.0),  # RPM início do blend (0/0=off)
-    ("eoi_blend_rpm_hi",       168, 1, "H", 1.0),  # RPM fim do blend
+    # bytes 164-169: não usados (v6) — era o blend 1D só-RPM do EOI, ver
+    # tabela EOI 2D (261-296) abaixo.
     ("mspark_max_rpm_x10",       170, 1, "H", 0.1),  # RPM max p/ multi-spark
     ("mspark_count",              172, 1, "B", 1.0),  # sparks adicionais (0-3)
     ("mspark_inter_dwell_ms_x10", 173, 1, "H", 0.1),  # dwell entre sparks (ms)

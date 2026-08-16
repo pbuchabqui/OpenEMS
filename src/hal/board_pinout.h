@@ -41,25 +41,17 @@
 #endif
 
 // Que fase (ECU_PHASE_A/B) um flanco do CMP representa é uma constante de
-// calibração de hardware (onde o Hall está montado face ao ciclo de 720°) —
-// ainda NÃO medida em bancada. Default 0: ecu_sched_encoder_phase_set_anchor()
-// nunca é chamada a partir de hardware real, phase_valid() fica sempre 0, e
-// o recompute do dispatcher em ângulo cai sempre em presync — nunca dispara
-// sequencial com uma constante adivinhada. Só passar a 1 depois da medição
-// em bancada (ver docs/dev/mt6835_encoder_fork.md).
-#ifndef EMS_MT6835_CMP_PHASE_CALIBRATED
-#  define EMS_MT6835_CMP_PHASE_CALIBRATED 0
-#endif
-
-// Que fase (ECU_PHASE_A=1 / ECU_PHASE_B=0, engine/ecu_sched.h) um flanco CMP
-// aceite representa — o valor medido em bancada (docs/dev/mt6835_encoder_fork.md,
-// "Procedimento de bancada", item 1). Só é lido quando
-// EMS_MT6835_CMP_PHASE_CALIBRATED=1; o default (ECU_PHASE_A=1) é um
-// placeholder sem efeito nenhum enquanto essa flag estiver em 0 — nunca
-// confiar neste valor sem confirmar o gate acima primeiro.
-#ifndef EMS_MT6835_CMP_PHASE_VALUE
-#  define EMS_MT6835_CMP_PHASE_VALUE 1U  // ECU_PHASE_A — placeholder, ver comentário acima
-#endif
+// calibração de hardware (onde o Hall está montado face ao ciclo de 720°).
+// 2026-08-15: deixou de ser flag de compilação — passou a
+// cfg::g_eng_cfg.cmp_phase_state (NVM, engine/engine_config.h), calibrável
+// ao vivo via comando 'M' (src/app/ui_protocol.cpp) + burn ('b'), mesmo
+// padrão de encoder_tdc1_origin_deg/comando 'X'. Default
+// kCmpPhaseUncalibrated=0: ecu_sched_encoder_phase_set_anchor() nunca é
+// chamada a partir de hardware real, phase_valid() fica sempre 0, e o
+// recompute do dispatcher em ângulo cai sempre em presync — nunca dispara
+// sequencial com uma fase adivinhada (mesma garantia que a antiga
+// EMS_MT6835_CMP_PHASE_CALIBRATED=0 dava, sem precisar de recompilar depois
+// de medida em bancada — ver docs/dev/mt6835_encoder_fork.md).
 
 // O hardware analógico de knock (bandpass→rectificador→peak-hold) está DNP na
 // v1 (docs/hw/schematic/10_knock_dnp.md) — o footprint TPIC8101 nunca foi

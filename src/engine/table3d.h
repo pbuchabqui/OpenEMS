@@ -18,6 +18,12 @@ constexpr uint8_t  kLtftAddAxisSize = (kTableAxisSize + 1u) / 2u;
 // kTableAxisSize (ou o layout serializado das tabelas) mudar.
 // 4: LEARN thresholds page0 185-190
 // 5: Launch + TC knobs page0 191-215; CAN RX map 216-245 (id=0 = off, safe blank)
+// (2026-08-16: a tabela EOI 2D — eoi_rpm_axis_x10/eoi_clt_axis_x10/
+//  eoi_table_deg, calibration.h — viveu brevemente em page0 261-296 sob
+//  v6, depois movida para page6 (junto de X-τ/AE/quick-crank, já na aba
+//  FUELING do dash — page5/page6 não tinham espaço livre nenhures mais
+//  perto tematicamente) antes de qualquer bancada real a usar v6 — sem
+//  rasto a proteger, kCalLayoutVersion volta a 5.)
 constexpr uint8_t kCalLayoutVersion       = 5u;
 constexpr uint16_t kCalLayoutVersionOffset = 175u;
 

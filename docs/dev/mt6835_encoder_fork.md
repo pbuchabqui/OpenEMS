@@ -793,25 +793,19 @@ estar correcta antes de calibrar a fase sobre ela.
    (0-360°) ou `ECU_PHASE_B` (360-720°), pela convenção física já usada pelo
    caminho roda-dentada (a numeração de cilindros nas tabelas de combustível/
    ignição assume essa mesma convenção — não inventar uma nova).
-5. Registar a fase calibrada e o resíduo (`cmp_angle_raw − origin_raw mod 16384`)
-   necessários para `ecu_sched_encoder_phase_set_anchor(cmp_angle, <fase
-   calibrada>)`.
-6. Re-medir `trigger_tooth0_engine_deg` para a montagem do encoder — o valor
-   actual é um artefacto do bring-up da roda dentada (osciloscópio no dente 0);
-   para o encoder é relógio comparador + leitura de `TIM2_CNT`, não osciloscópio
-   (nota já em `engine_config.h`).
-7. **Actualizado (2026-08-10, pós Parte 1 do plano de sync-state)**: o TODO que
-   este passo mandava ligar já está ligado — `ecu_sched_encoder_heartbeat_tick()`
-   (`ecu_sched_angle_encoder.cpp:499-503`) já chama
-   `ecu_sched_encoder_phase_set_anchor(cmp_angle, EMS_MT6835_CMP_PHASE_VALUE)`
-   automaticamente a cada flanco de CMP aceite (validado por
-   `drv/encoder_sync.cpp`, também da mesma etapa), sempre que
-   `EMS_MT6835_CMP_PHASE_CALIBRATED==1`. Não sobra código para escrever — só
-   dois `#define` em `hal/board_pinout.h`: `EMS_MT6835_CMP_PHASE_VALUE` com o
-   valor `ECU_PHASE_A`/`ECU_PHASE_B` medido nos passos 1-6, e só depois
-   `EMS_MT6835_CMP_PHASE_CALIBRATED` de `0` para `1` — nunca ao contrário
-   (a ordem importa: mudar `CALIBRATED` antes de `VALUE` estar correcto faria
-   o motor disparar sequencial sobre uma fase adivinhada).
+5-7. **SUPERSEDED (2026-08-15)** — os passos 5-7 originais (registar a fase
+   à mão, re-medir `trigger_tooth0_engine_deg`, depois editar
+   `EMS_MT6835_CMP_PHASE_VALUE`/`_CALIBRATED` no header e recompilar) foram
+   substituídos por um comando ao vivo: passos 3-4 acima (rodar ≥2 voltas,
+   ler o flanco CMP) resumem-se a "rodar o motor ≥1 ciclo de 720°" — o
+   comando `'M'`/"Medir fase CMP" (dash, secção ENGINE) lê `TIM2->CNT` +
+   `cmp_angle_snapshot()` e deriva a fase automaticamente (mesma matemática
+   de paridade de `phase_at()`, não precisa de correlacionar múltiplos
+   flancos à mão). Ver secção "Checklist bancada" mais abaixo, já
+   atualizada, para o procedimento completo. `trigger_tooth0_engine_deg`
+   continua a ser exclusivo do caminho roda-dentada (não se aplica ao
+   encoder) — `encoder_tdc1_origin_deg`/`'X'` é o equivalente correto, e já
+   estava implementado antes desta mudança.
 
 ### 2. Bring-up do hardware MT6835 real (`MT6835_HW_PRESENT=1`)
 
@@ -1233,29 +1227,45 @@ via ω/counts. Presync continua sem multi-spark.
 - Activar `EMS_MT6835_CMP_PHASE_CALIBRATED=1` no default do repo sem medição
   em bancada (ver checklist abaixo).
 
-### Checklist bancada — `EMS_MT6835_CMP_PHASE_CALIBRATED`
+### ~~Checklist bancada — `EMS_MT6835_CMP_PHASE_CALIBRATED`~~ SUPERSEDED (2026-08-15)
 
-Não mudar o default em `board_pinout.h` sem medição. Procedimento:
+O procedimento abaixo (editar 2 `#define`, recompilar, reflash, reverter
+antes do commit) descrevia o único caminho quando a fase CMP era uma
+constante de **compilação**. Deixou de ser: `EMS_MT6835_CMP_PHASE_CALIBRATED`/
+`_VALUE` foram **removidos** de `board_pinout.h`. A fase agora é
+`cfg::g_eng_cfg.cmp_phase_state` — campo NVM (`engine/engine_config.h`),
+calibrável ao vivo pelo comando `'M'` (`src/app/ui_protocol.cpp`) + botão
+"Medir fase CMP" no dash (secção ENGINE, page0), mesmo padrão já usado por
+`encoder_tdc1_origin_deg`/`'X'`/"Calibrar TDC1". Ver
+`ecu_sched_encoder_cmp_phase_calibrate_from_raw()`
+(`ecu_sched_angle_encoder.cpp`) para a matemática — mesma paridade de
+`floor_div_16384` que `phase_at()` já usava, só aplicada a duas leituras
+cruas de `TIM2->CNT` em vez de exigir múltiplos flancos observados
+manualmente.
 
-1. Seguir a secção de calibração CMP / `trigger_tooth0_engine_deg` acima
-   (passos 1–6): determinar se o flanco Hall aceite é `ECU_PHASE_A` ou
-   `ECU_PHASE_B` face ao PMS de compressão do cilindro 1.
-2. Build de bancada (não commit da flag no default). `EMS_MT6835_ENCODER=1
-   make firmware-vgt6 ...` **não funciona** (ver nota no início do
-   documento) — editar em `board_pinout.h`:
-   ```c
-   #define EMS_MT6835_ENCODER 1
-   #define EMS_MT6835_CMP_PHASE_VALUE <ECU_PHASE_A_ou_ECU_PHASE_B>
-   #define EMS_MT6835_CMP_PHASE_CALIBRATED 1
-   ```
-   depois `make clean && WERROR=1 make firmware-vgt6`, copiar o `.bin`, e
-   reverter as três linhas antes de commitar.
-3. Critérios de aceite: `phase_valid()==1` após flanco CMP aceite;
-   `ecu_sched_is_sequential()==1`; disparo IGN na ordem física 1-3-4-2;
-   sem `g_enc_seq_min_lead_skip_count` a correr em regime estável.
-4. Só depois: gravar `EMS_MT6835_CMP_PHASE_VALUE` correcto e então
-   `CALIBRATED=1` no board/build de bancada local — **nunca** `CALIBRATED`
-   antes de `VALUE` estar certo.
+**Procedimento atual** (mesma referência física dos passos 1-4 antigos, sem
+o hand-edit/recompile):
+
+1. Calibrar `encoder_tdc1_origin_deg` primeiro (`'X'`/"Calibrar TDC1"),
+   mesma sessão de bancada — a fase CMP é medida em relação a essa mesma
+   referência de PMS1-compressão.
+2. Rodar o motor por ≥1 ciclo completo de 720° (garante ≥1 flanco CMP
+   capturado — `cmp_edge_count()>0`; sem isto o comando `'M'` falha com
+   ACK_ERR de propósito, em vez de calibrar sobre lixo de boot).
+3. Cilindro 1 de volta ao PMS de **compressão** (não escape). Acionar
+   "Medir fase CMP" no dash — aplica `cmp_phase_state` em RAM
+   imediatamente (1 clique, sem recompilar/reflash).
+4. Critérios de aceite (inalterados): `phase_valid()==1` após o próximo
+   flanco CMP aceite; `ecu_sched_is_sequential()==1`; disparo IGN na ordem
+   física 1-3-4-2; sem `g_enc_seq_min_lead_skip_count` a correr em regime
+   estável.
+5. Só depois de confirmado em bancada: burn (`'b'`, botão de burn da
+   página 0) para persistir em NVM — sem isto a calibração vive só em RAM
+   e perde-se no próximo reset.
+
+Continua a NÃO ser seguro mudar o default de compilação (não há mais
+default de compilação para isto — `kCmpPhaseUncalibrated=0` é o único
+default, e só muda por medição real via `'M'` + burn explícito).
 
 ### Verificação
 
@@ -1267,12 +1277,14 @@ make firmware-vgt6/rgt6/mre     → build limpo, flags default
 ```
 
 Build de bancada (header editado temporariamente, ver nota no início do
-documento): `EMS_MT6835_ENCODER=1` + `EMS_MT6835_CMP_PHASE_CALIBRATED=1` em
-`board_pinout.h` → `WERROR=1 make firmware-vgt6` limpo, header revertido
-depois.
+documento): `EMS_MT6835_ENCODER=1` em `board_pinout.h` →
+`WERROR=1 make firmware-vgt6` limpo, header revertido depois.
+`EMS_MT6835_CMP_PHASE_CALIBRATED` (citado no log histórico abaixo) foi
+**removido** 2026-08-15 — já não faz parte deste passo, ver secção
+"Checklist bancada" acima.
 
 Host tests provam o construtor em isolamento — **não** provam disparo
-sequencial real em motor (`EMS_MT6835_CMP_PHASE_CALIBRATED` nunca medido
-em bancada). Mesma postura do `misfire_encoder`.
+sequencial real em motor (`cmp_phase_state` nunca medido em bancada real
+ainda). Mesma postura do `misfire_encoder`.
 
 `hw/v1-clean-board` confirmado intocado.

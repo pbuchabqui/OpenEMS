@@ -406,6 +406,11 @@ uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept {
     return g_adc2_raw[idx];
 }
 
+uint16_t adc_debug_raw_slot(uint8_t idx) noexcept {
+    if (idx >= 8u) { return 0xFFFFu; }
+    return g_adc_secondary_raw[idx];
+}
+
 // P0 #3: ADC Recovery System - API pública para verificação de status
 bool adc_is_recovering() noexcept {
     return g_adc_recovering;
@@ -513,6 +518,7 @@ void     adc_trigger_on_tooth(uint32_t t) noexcept { g_last_trigger_mod = t; }
 void     adc_start_free_running_encoder() noexcept { ++g_free_running_started_count; }
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept { return g_adc_primary[static_cast<uint8_t>(ch)]; }
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept { return g_adc_secondary[static_cast<uint8_t>(ch)]; }
+uint16_t adc_debug_raw_slot(uint8_t idx) noexcept { return (idx < 8u) ? g_adc_primary[idx] : 0xFFFFu; }
 void adc_test_set_raw_primary(AdcPrimaryChannel ch, uint16_t v) noexcept { g_adc_primary[static_cast<uint8_t>(ch)] = v; }
 void adc_test_set_raw_secondary(AdcSecondaryChannel ch, uint16_t v) noexcept { g_adc_secondary[static_cast<uint8_t>(ch)] = v; }
 uint32_t adc_test_last_trigger_mod() noexcept { return g_last_trigger_mod; }

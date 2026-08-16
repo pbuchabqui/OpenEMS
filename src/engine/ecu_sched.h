@@ -187,6 +187,17 @@ uint8_t ecu_sched_encoder_omega_valid(void) noexcept;
 // ver comentário em ecu_sched_angle_encoder.cpp.
 uint16_t ecu_sched_encoder_tdc1_calibrate_from_raw(uint32_t tim2_raw_at_tdc1) noexcept;
 
+// Calibração de engine_config.h::cfg::cmp_phase_state: dado o TIM2->CNT
+// atual (cilindro 1 no PMS de COMPRESSÃO agora) e o TIM2->CNT capturado no
+// último flanco CMP visto (ems::hal::cmp_angle_snapshot()), devolve
+// kCmpPhaseCalibratedA/B — qual das duas janelas de 360° esse flanco
+// representa. Pura — não toca em NVM/RAM shadow; ver comentário em
+// ecu_sched_angle_encoder.cpp. Chamador (UI protocol, comando 'M') deve
+// garantir ems::hal::cmp_edge_count() > 0 antes de chamar (pelo menos um
+// flanco já capturado) — sem isso o valor de cmp_raw é lixo de boot.
+uint8_t ecu_sched_encoder_cmp_phase_calibrate_from_raw(
+    uint32_t tim2_raw_at_tdc1_compression, uint32_t tim2_raw_at_cmp_edge) noexcept;
+
 void ecu_sched_encoder_phase_set_anchor(uint32_t tim2_raw_at_cmp_edge,
                                         uint8_t phase) noexcept;
 uint8_t ecu_sched_encoder_phase_at(uint32_t tim2_raw_now) noexcept;
@@ -203,7 +214,7 @@ uint32_t ecu_sched_encoder_evt_overflow(void) noexcept;
 uint32_t ecu_sched_encoder_seq_min_lead_skip_count(void) noexcept;
 
 // Heavy tick (1×/volta). CMP span/staleness evaluated; phase anchor gated by
-// EMS_MT6835_CMP_PHASE_CALIBRATED.
+// cfg::g_eng_cfg.cmp_phase_state (engine/engine_config.h).
 // run_seq_arm: 1 = refresh+try_arm no ramo sequencial (default). 0 = só
 // handoff/purge/publish — usado pelo subtick no 64º passo (já armou).
 void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,

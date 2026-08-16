@@ -14,10 +14,11 @@ inline constexpr uint16_t kFuelDensityMgPerCc = 755u;
 inline constexpr uint16_t kAirDensityMgPerCcX1000 = 1184u;
 
 inline constexpr uint16_t kMapRefBarX100 = 100u;
-// EOI targeting: ângulo (° BTDC de combustão) em que a injecção TERMINA.
-// SOI é derivado para trás (SOI = EOI − PW°). BREAKING CHANGE vs kDefaultSoiLeadDeg:
-// mesma ordem de grandeza numérica, semântica oposta (fim vs início do pulso).
-inline constexpr uint16_t kDefaultEoiLeadDeg = 355u;  // open-valve (Speeduino-style): 5° após o TDC de cruzamento (início da admissão)
+// EOI: ângulo (° BTDC de combustão) em que a injecção TERMINA (SOI é
+// derivado para trás, SOI = EOI − PW°). 2026-08-16: deixou de ser um único
+// valor de compilação aqui — passou a uma tabela 2D RPM×CLT
+// (eoi_rpm_axis_x10/eoi_clt_axis_x10/eoi_table_deg, engine/calibration.h),
+// substituindo o antigo default_eoi_lead_deg+blend 1D só-RPM.
 
 // Default para g_eng_cfg.trigger_tooth0_engine_deg (usado antes de NVM válida).
 // NOTA: este valor de compilação é apenas o default inicial.
@@ -66,6 +67,30 @@ inline constexpr uint16_t kTriggerTooth0EngineDeg = 0u;  // MEDIR NO MOTOR REAL
 //   3. Escrever o valor devolvido neste campo e fazer burn.
 inline constexpr uint16_t kEncoderTdc1OriginDeg = 0u;  // MEDIR NO MOTOR REAL
 
+// Fase CMP do caminho encoder (EMS_MT6835_ENCODER=1) — qual das duas janelas
+// de 360° do ciclo de 720° o flanco do CMP (Hall na came, PC6/TIM3) marca.
+// Substitui EMS_MT6835_CMP_PHASE_CALIBRATED/EMS_MT6835_CMP_PHASE_VALUE
+// (board_pinout.h, removidos — eram compile-time, sem persistência nem
+// interface) por um campo NVM calibrável ao vivo, mesmo espírito de
+// encoder_tdc1_origin_deg acima. 3 valores em vez de "calibrado + valor"
+// separados: evita a combinação inválida "calibrado=1, valor=lixo".
+//
+// Como calibrar (depois de encoder_tdc1_origin_deg já medido — mesma
+// referência física, mesma sessão de bancada):
+//   1. Rodar o motor por ≥1 ciclo completo de 720° (garante que
+//      ems::hal::cmp_edge_count() > 0 — pelo menos um flanco CMP visto).
+//   2. Colocar o cilindro 1 no PMS de COMPRESSÃO (não escape — mesma
+//      referência mecânica do TDC1).
+//   3. Nessa posição exacta, chamar
+//      ecu_sched_encoder_cmp_phase_calibrate_from_raw() com
+//      tim2_encoder_count() e ems::hal::cmp_angle_snapshot() — devolve o
+//      valor pronto a escrever aqui. Exposto via UI protocol (comando 'M'),
+//      não precisa de calcular à mão.
+//   4. Escrever o valor devolvido neste campo e fazer burn ('b').
+inline constexpr uint8_t kCmpPhaseUncalibrated = 0u;  // default — presync sempre (nunca adivinha)
+inline constexpr uint8_t kCmpPhaseCalibratedA  = 1u;
+inline constexpr uint8_t kCmpPhaseCalibratedB  = 2u;
+
 // Convenção de canal: ECU_CH_IGNn/ECU_CH_INJn = cilindro físico n−1, SEMPRE.
 // A ordem de disparo entra apenas via kFiringOrder/cyl_tdc_deg — nunca na
 // escolha do canal. Invariante partilhado por Calculate_Sequential_Cycle,
@@ -101,13 +126,20 @@ struct EngineConfigRam {
     uint16_t stoich_afr_x100;
     uint16_t map_ref_bar_x100;
     uint16_t trigger_tooth0_engine_deg;
-    uint16_t default_eoi_lead_deg;
     uint16_t encoder_tdc1_origin_deg;
+    uint8_t  cmp_phase_state;  // kCmpPhaseUncalibrated/CalibratedA/CalibratedB
 };
 
 // Runtime config — initialized to compile-time defaults at startup.
 // Overwritten by engine_config_load() if valid data found in Flash.
 extern EngineConfigRam g_eng_cfg;
+
+// Comprimento mínimo de page0_buf exigido por load()/serialize() — cobre o
+// bloco contíguo [0-15] (inclui cmp_phase_state em [12], 2026-08-16: já
+// não é um byte isolado noutro gap de page0 — ver engine_config.cpp para o
+// achado da colisão que motivou isto). Todos os chamadores devem passar
+// isto, não um literal.
+inline constexpr uint16_t kEngineConfigMinPageLen = 16u;
 
 // Call at boot after nvm_load_calibration(0, page0_buf, 512).
 // If page0 magic is valid, populates g_eng_cfg from page0_buf offsets 2-15.

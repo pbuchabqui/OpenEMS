@@ -297,9 +297,17 @@ const INJ_MODES = { 0: "SIM", 1: "SEMI", 2: "SEQ" };
 // FAULT agrega sensores analógicos + WBO2 (CAN) + LIMP/ETB-limp — clique
 // lista as fontes ativas (sensor a sensor via sensor_fault_bits, r[34]).
 // TLE8888 excluído de propósito (ver STATUS_CHIPS abaixo).
+// SyncState (drv/ckp.h): 0=WAIT_GAP, 1=HALF_SYNC, 2=FULL_SYNC, 3=LOSS_OF_SYNC.
+// SYNC usa `state` (3 níveis) em vez de `on` (binário): FULL_SYNC continua
+// verde, mas HALF_SYNC passa a âmbar em vez de apagado — no fork encoder,
+// com EMS_MT6835_CMP_PHASE_CALIBRATED=0 (fase CMP ainda não medida em
+// bancada), FULL_SYNC é arquitetonicamente inatingível e o motor passa a
+// maior parte do tempo em HALF_SYNC legítimo (RPM real, presync/wasted-
+// spark) — o chip ficava sempre apagado como se não houvesse sync nenhum.
 const STATUS_CHIPS = [
-  { id: "SYNC",  label: "SYNC",     goodWhenOn: true,
-    on: d => !!(d.status && d.status.FULL_SYNC) },
+  { id: "SYNC",  label: "SYNC",
+    state: d => (d.status && d.status.FULL_SYNC) ? "good"
+               : d.sync_state === 1 ? "warn" : "off" },
   { id: "REV",   label: "REV LIM",  goodWhenOn: false,
     on: d => !!(d.status && d.status.REV_LIMIT) },
   { id: "FAULT", label: "FAULT",    goodWhenOn: false,
@@ -420,10 +428,17 @@ function pushTelemetry(d) {
   const fd = faultDetails(d);
   $("#led_FAULT").title = fd.length ? fd.join(" · ") : "Sem falhas ativas";
   for (const c of STATUS_CHIPS) {
-    const on = c.on(d);
     let cls = "led";
-    if (on) cls += c.info ? " on-info"
-                          : (c.goodWhenOn ? " on-good" : (c.warn ? " on-warn" : " on-bad"));
+    if (c.state) {
+      // 3 níveis explícitos (ex: SYNC) — "off" fica sem classe extra (mudo).
+      const s = c.state(d);
+      if (s === "good") cls += " on-good";
+      else if (s === "warn") cls += " on-warn";
+    } else {
+      const on = c.on(d);
+      if (on) cls += c.info ? " on-info"
+                            : (c.goodWhenOn ? " on-good" : (c.warn ? " on-warn" : " on-bad"));
+    }
     $(`#led_${c.id}`).className = cls;
   }
   // Chip BENCH segue o bit real da ECU (STATUS_BENCH_MODE) — apanha o caso
@@ -893,13 +908,8 @@ const PAGE_0_SECTIONS = [
   {
     label: "ENGINE",
     fields: ["displacement_cc","trigger_tooth0_engine_deg",
-             "encoder_tdc1_origin_deg",
-             "default_eoi_lead_deg","config_magic"],
-    actions: [{ label: "Calibrar TDC1 (encoder, TIM2 ao vivo)", cls: "primary",
-                endpoint: "/api/tdc1_calibrate",
-                confirm: "Cilindro 1 está fisicamente no PMS de compressão? " +
-                         "Isto lê o TIM2 agora e aplica encoder_tdc1_origin_deg " +
-                         "em RAM (falta burn depois)." }],
+             "encoder_tdc1_origin_deg","cmp_phase_state",
+             "config_magic"],
   },
   {
     label: "FUELING",
@@ -951,10 +961,6 @@ const PAGE_0_SECTIONS = [
   {
     label: "EWG (ELECTRONIC WASTEGATE)",
     fields: ["ewg_kp_x10","ewg_ki_x10","ewg_kd_x10","ewg_pos_min_raw","ewg_pos_max_raw"],
-  },
-  {
-    label: "EOI BLEND (FASE DE INJEÇÃO)",
-    fields: ["eoi_idle_deg","eoi_blend_rpm_lo","eoi_blend_rpm_hi"],
   },
   {
     label: "DRIVABILITY",
@@ -1034,8 +1040,8 @@ const FIELD_LABELS = {
   map_ref_bar_x100:          "Reference MAP (bar)",
   trigger_tooth0_engine_deg: "Trigger tooth 0 offset (°, 0-719)",
   encoder_tdc1_origin_deg:   "Encoder TDC1 origin (°, 0-359 — só EMS_MT6835_ENCODER)",
-  default_eoi_lead_deg:      "EOI target (° BTDC — fim da injeção)",
-  config_magic:              "Magic (0x4544 = valid config v2/EOI)",
+  cmp_phase_state:           "CMP phase (0=não calibrado, 1=fase A, 2=fase B — só EMS_MT6835_ENCODER)",
+  config_magic:              "Magic (0x4548 = valid config v6)",
   app1_raw_min:  "APP1 released (raw)",   app1_raw_max:  "APP1 floored (raw)",
   app2_raw_min:  "APP2 released (raw)",   app2_raw_max:  "APP2 floored (raw)",
   etb_tps1_raw_min: "ETB TPS1 closed (raw, auto-cal)", etb_tps1_raw_max: "ETB TPS1 open (raw, auto-cal)",
@@ -1102,9 +1108,6 @@ const FIELD_LABELS = {
   ewg_kd_x10:               "EWG Kd (raw ×10 no wire)",
   ewg_pos_min_raw:          "EWG pos closed (raw)",
   ewg_pos_max_raw:          "EWG pos open (raw)",
-  eoi_idle_deg:             "EOI idle (° BTDC — 60=compressão, 365=pré-IVO)",
-  eoi_blend_rpm_lo:         "Blend RPM início (0/0 = desligado)",
-  eoi_blend_rpm_hi:         "Blend RPM fim (→ EOI target 355°)",
   mspark_max_rpm_x10:       "Multi-spark max RPM",
   mspark_count:             "Multi-spark extra sparks (0-3)",
   mspark_inter_dwell_ms_x10: "Multi-spark inter-dwell (ms)",
@@ -1130,6 +1133,30 @@ const FIELD_LABELS = {
    posição do pedal (solto / no fundo). Botão fica na linha do campo-chave.
    ETB TPS: sem capture manual — auto-cal varre os batentes a cada power-on
    (etb_autocal.cpp) e escreve os limites em RAM; aqui é só leitura. */
+/* ação POST inline por campo (mesmo endpoint/confirm de sec.actions, mas
+   renderizada na própria linha do campo em vez do fim da secção — pedido
+   do utilizador: "Calibrar TDC1" ao lado de encoder_tdc1_origin_deg, não
+   no fim da secção ENGINE). */
+const INLINE_FIELD_ACTIONS = {
+  encoder_tdc1_origin_deg: {
+    label: "Calibrar TDC1 (encoder, TIM2 ao vivo)", cls: "primary",
+    endpoint: "/api/tdc1_calibrate",
+    confirm: "Cilindro 1 está fisicamente no PMS de compressão? " +
+             "Isto lê o TIM2 agora e aplica encoder_tdc1_origin_deg " +
+             "em RAM (falta burn depois).",
+  },
+  cmp_phase_state: {
+    label: "Medir fase CMP (encoder, TIM2 ao vivo)", cls: "primary",
+    endpoint: "/api/cmp_phase_calibrate",
+    confirm: "Fazer DEPOIS de calibrar o TDC1 nesta mesma sessão. " +
+             "Cilindro 1 está fisicamente no PMS de COMPRESSÃO (não " +
+             "escape)? O motor já rodou pelo menos 1 ciclo completo de " +
+             "720° antes disto (senão falha — precisa de ver 1 flanco CMP " +
+             "primeiro)? Isto aplica cmp_phase_state em RAM (falta burn " +
+             "depois).",
+  },
+};
+
 const CAL_CAPTURE = {
   app1_raw_min: { label: "◉ capture solto (APP1+2)",
                   fields: { app1_raw_min: "an1_raw", app2_raw_min: "an2_raw" } },
@@ -1179,7 +1206,11 @@ const PAGE_LAYOUT = {
       { title: "AE rate", axis: "ae_tpsdot_axis_x10", axisLabel: "TPSdot (%/s)",
         rows: [["ae_pw_adder_us", "PW adder (ms)"]] },
     ],
-    tables2d: [],
+    tables2d: [
+      { title: "EOI (° BTDC — fim da injeção)", x: "eoi_rpm_axis_x10", xLabel: "RPM",
+        y: "eoi_clt_axis_x10", yLabel: "CLT (°C)",
+        values: "eoi_table_deg" },
+    ],
   },
   7: {
     curves: [
@@ -1855,13 +1886,18 @@ async function bindParamGroup(div, page) {
               Object.values(CAL_CAPTURE[name].fields)
                 .map(src => `<span class="muted live-raw" data-src="${src}"></span>`).join(" ")
             : "";
+          const act = INLINE_FIELD_ACTIONS[name];
+          const inlineAct = act
+            ? `<button class="${act.cls || 'primary'}"
+                onclick="if(confirm('${act.confirm}'))fetch('${act.endpoint}',{method:'POST'}).then(r=>r.json()).then(j=>toast(j.error||j.msg||('${act.label} OK'), !!j.error)).catch(e=>toast(e.message,true))">${act.label}</button>`
+            : "";
           html += `<div class="param-row${CRITICAL_FIELDS.has(name) ? " critical" : ""}"><label>${FIELD_LABELS[name] || name}</label>` +
-            vals.map((x, i) => inp(name, i, x)).join("") + cap + "</div>";
+            vals.map((x, i) => inp(name, i, x)).join("") + cap + inlineAct + "</div>";
         }
         if (sec.actions) {
           for (const act of sec.actions) {
             html += `<div class="param-row"><button class="${act.cls || 'primary'}"
-              onclick="if(confirm('${act.confirm || 'Are you sure?'}'))fetch('${act.endpoint}',{method:'POST'}).then(r=>r.json()).then(j=>toast(j.msg||('${act.label} OK'))).catch(e=>toast(e.message,true))">${act.label}</button></div>`;
+              onclick="if(confirm('${act.confirm || 'Are you sure?'}'))fetch('${act.endpoint}',{method:'POST'}).then(r=>r.json()).then(j=>toast(j.error||j.msg||('${act.label} OK'), !!j.error)).catch(e=>toast(e.message,true))">${act.label}</button></div>`;
           }
         }
       }

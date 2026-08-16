@@ -314,14 +314,29 @@ extern uint16_t wbo2_can_id;
 
 // STFT closed-loop tuning (página 0, offsets 140-145)
 extern uint16_t stft_kp_x100;        // Kp × 100, default 3 (= 0.03)
-// ── EOI blend por RPM (fase de injeção) ─────────────────────────────────
-// EOI efetivo interpolado linearmente entre eoi_idle_deg (rpm ≤ lo) e
-// g_eng_cfg.default_eoi_lead_deg (rpm ≥ hi). hi ≤ lo (incl. 0/0) = DESLIGADO
-// → usa sempre default_eoi_lead_deg (comportamento pré-blend). RPM em
-// unidades planas (não ×10): u16 ×10 saturaria a 6553 RPM.
-extern uint16_t eoi_idle_deg;        // ° BTDC combustão, default 60 (closed-valve)
-extern uint16_t eoi_blend_rpm_lo;    // RPM início do blend, default 0 (off)
-extern uint16_t eoi_blend_rpm_hi;    // RPM fim do blend,    default 0 (off)
+// ── EOI 2D (RPM × CLT) — fase de injeção ────────────────────────────────
+// 2026-08-16: substitui o antigo blend 1D só-RPM (eoi_idle_deg/
+// eoi_blend_rpm_lo/hi, removidos) — esse não tinha noção de temperatura do
+// motor, então ralenti frio e ralenti quente usavam o mesmo EOI. Mesmo
+// padrão estrutural de lambda_delay_ms_table (3×3 bilinear, eixos
+// calibráveis) — ver interp_eoi_3x3() em fuel_calc.cpp.
+//
+// Racional físico: closed-valve (EOI baixo, perto da combustão) depende de
+// calor da porta/válvula para vaporizar o combustível pousado — a frio não
+// há esse calor. Open-valve (EOI alto, perto do cruzamento de válvulas)
+// atomiza por arrasto do próprio ar de admissão, menos dependente de
+// temperatura — mas ao ralenti o fluxo de ar é fraco mesmo com a válvula
+// aberta, então o ganho de open-valve é menor do que a RPM alto.
+//
+// Defaults das células são PLACEHOLDER, não medição — preservam as duas
+// âncoras já validadas (60°@quente/baixoRPM, 355°@qualquer/altoRPM) e
+// extrapolam a frio subindo para mais perto de open-valve sem ir ao
+// extremo (ver calibration.cpp). Confirmar/ajustar em bancada antes de
+// confiar nestes valores.
+constexpr uint8_t kEoiTableSize = 3u;
+extern uint32_t eoi_rpm_axis_x10[kEoiTableSize];  // RPM×10, default 500/2000/5000
+extern int16_t  eoi_clt_axis_x10[kEoiTableSize];  // °C×10, default -20/20/90 (assinado — CLT pode ser negativo)
+extern uint16_t eoi_table_deg[kEoiTableSize][kEoiTableSize];  // [clt][rpm], ° BTDC combustão
 
 extern uint16_t stft_ki_x1000;       // Ki × 1000, default 5 (produção) / 10 (encoder, EMS_MT6835_ENCODER)
 extern uint16_t stft_clamp_pct_x10;  // clamp ±%, default 150 (= 15.0%)

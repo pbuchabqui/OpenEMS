@@ -686,7 +686,7 @@ void test_launch_tc_page0_roundtrip(void) {
     // Layout constants
     CHECK_EQ(kLaunchTcPage0Off, 191u, "kLaunchTcPage0Off");
     CHECK_EQ(kLaunchTcPage0Len, 25u, "kLaunchTcPage0Len");
-    CHECK_EQ(kCalLayoutVersion, 5u, "layout version 5");
+    CHECK_EQ(kCalLayoutVersion, 5u, "layout version 5 (EOI 2D table lives in page6, not page0)");
 
     // Restore
     launch_enable = s_le;

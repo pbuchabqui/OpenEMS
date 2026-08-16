@@ -125,6 +125,7 @@ int main(void) {
     test_fuel_ae();
     test_fuel_adaptives_reset();
     test_fuel_lambda_delay();
+    test_fuel_eoi_2d();
     test_fuel_stft();
     test_fuel_stft_delayed();
     test_fuel_stft_convergence_time();
@@ -171,6 +172,7 @@ int main(void) {
     test_sensors_set_range();
     test_sensors_etb_harness_present();
     test_sensors_vbatt_dedicated_channel();
+    test_sensors_bench_mode_preserves_non_clt_iat_faults();
     test_sensors_table_entry_setters();
 
     // ── Knock — Segunda Fase ──────────────────────────────────────────────────
@@ -205,7 +207,7 @@ int main(void) {
     test_ecu_sched_inhibit_masks();
     test_ecu_sched_mspark();
     test_ecu_sched_eoi_targeting();
-    test_eoi_blend();
+    test_ecu_sched_eoi_lead_deg_sanitize();
     test_ecu_sched_presync();
     test_ecu_sched_dwell_watchdog();
     test_ecu_sched_encoder_omega();
@@ -226,7 +228,10 @@ int main(void) {
     test_ecu_sched_encoder_min_lead();
     test_ecu_sched_encoder_conversion();
     test_ecu_sched_encoder_tdc1_calibrate();
+    test_ecu_sched_encoder_cmp_phase_calibrate();
+    test_engine_config_cmp_phase_state_roundtrip();
     test_ecu_sched_encoder_recompute_presync();
+    test_ecu_sched_encoder_recompute_presync_ign_inhibit_mask_gate();
     test_ecu_sched_encoder_recompute_presync_bank_toggle();
     test_ecu_sched_encoder_recompute_presync_pw_clamp();
     test_ecu_sched_encoder_presync_multispark();
@@ -240,6 +245,8 @@ int main(void) {
     test_ecu_sched_encoder_sequential_long_lead_refresh();
     test_ecu_sched_encoder_sequential_multispark();
     test_ecu_sched_encoder_sequential_prep_pw_overrides_global();
+    test_enc_cyl_setpoints_fuel_cut_read_modify_write_preserves_spark();
+    test_ecu_sched_encoder_sequential_ign_inhibit_mask_gate();
     test_ecu_sched_encoder_sequential_prep_knock_per_cyl();
     test_ecu_sched_encoder_sequential_omega_refresh();
     test_ecu_sched_encoder_sequential_omega_refresh_lock();
@@ -333,8 +340,7 @@ int main(void) {
     test_ts_envelope_basic();
     test_ts_envelope_crc_reject();
     test_ts_envelope_read_write_burn();
-    test_eoi_blend_page0_roundtrip();
-    test_ts_envelope_burn_gate();
+        test_ts_envelope_burn_gate();
     test_ts_axes_page();
     test_ts_envelope_canid_forms();
     test_och_launch_tc_status();

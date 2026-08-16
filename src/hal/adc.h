@@ -67,6 +67,13 @@ void     adc_start_free_running_encoder() noexcept;
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept;
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept;
 
+// Expõe o slot bruto do array DMA ADC1 por índice de sequência (0=MAP/SQ1,
+// 4=APP1/SQ5, etc.) — útil para diagnosticar se a sequência ADC1 está
+// mesmo a converter continuamente (encontrou o bug do adc_init() duplicado
+// em sensors_init(), 2026-08-16: TIM6 congelava em one-pulse e todos os
+// slots paravam de atualizar minutos após o boot). Ver debug/counters [52].
+uint16_t adc_debug_raw_slot(uint8_t idx) noexcept;
+
 // P0 #3: ADC Recovery System - status flags para verificação em tempo de execução
 bool     adc_is_recovering() noexcept;
 bool     adc_recovery_failed() noexcept;

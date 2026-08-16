@@ -764,6 +764,16 @@ button.cap {
   margin-left: 4px;
   width: auto;
 }
+/* Qualquer botão dentro de uma linha de parâmetro (ex: ação inline por
+   campo, INLINE_FIELD_ACTIONS em app.js) fica ao lado do input, não
+   abaixo — sem isto herda width:100% do botão genérico e quebra a linha
+   no flex-wrap do .param-row. */
+.param-row button {
+  width: auto;
+  padding: 3px 8px;
+  font-size: 10px;
+  margin-left: 4px;
+}
 .live-raw {
   font-variant-numeric: tabular-nums;
   font-size: 10px;

@@ -61,7 +61,7 @@ extern uint8_t g_page2_spark[ems::engine::kTableCells];
 extern uint8_t g_page3_rt[86];
 extern uint8_t g_page4_lambda[2u * ems::engine::kTableCells];
 extern uint8_t g_page5_corr[256];
-extern uint8_t g_page6_xtau[80];
+extern uint8_t g_page6_xtau[116];
 extern uint8_t g_page7_dwell2d[32];
 extern uint8_t g_page8_pedalmap[80];
 extern uint8_t g_page9_boost[112];
