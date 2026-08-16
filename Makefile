@@ -39,6 +39,27 @@ else
   BIN_SUFFIX   = -rgt6
 endif
 
+# Opt-in encoder-fork build (EMS_MT6835_ENCODER, src/hal/board_pinout.h,
+# default 0/production — its #ifndef guard already accepts a compiler -D,
+# this just wires that through instead of requiring a manual header edit).
+# Was exactly that manual-edit-before-build step until 2026-08-16 — real
+# footgun: a plain `make firmware-vgt6` silently produced production-mode
+# firmware while bench-testing the encoder stimulator, and the ECU never
+# saw RPM (decoded the AB quadrature as a 60-2 wheel) for an entire debug
+# session before the missing flag was found. ENCODER keys OBJ_DIR/BIN_SUFFIX
+# so toggling it never links stale objects built with the other setting —
+# no `make clean` required between variants, same isolation BOARD already
+# gets.
+ENCODER ?= 0
+ifeq ($(ENCODER),1)
+  ENCODER_CFLAGS = -DEMS_MT6835_ENCODER=1
+  ENCODER_SUFFIX = -enc
+else
+  ENCODER_CFLAGS =
+  ENCODER_SUFFIX =
+endif
+BIN_SUFFIX := $(BIN_SUFFIX)$(ENCODER_SUFFIX)
+
 # -Wno-volatile: C++20 (P1152) deprecates ++/+=/-= etc. on volatile-qualified
 # objects. This codebase uses volatile exactly for its legitimate purpose —
 # ISR-shared counters and hardware registers, not the misuse the deprecation
@@ -51,7 +72,7 @@ endif
 CFLAGS_COMMON = -std=c++23 -Wall -Wextra -Wno-volatile $(WERROR_FLAG)
 CFLAGS_ARM = $(CFLAGS_COMMON) -DTARGET_STM32H562 -DNDEBUG -mcpu=cortex-m33 -mthumb \
              -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections \
-             -g0 -O2 -I./src $(BOARD_CFLAGS)
+             -g0 -O2 -I./src $(BOARD_CFLAGS) $(ENCODER_CFLAGS)
 # -I. so test/*.cpp can #include "test/harness.h"
 # ASan+UBSan: hosted g++ build only, never CFLAGS_ARM (no sanitizer runtime
 # on a freestanding target) — catches UB (signed overflow, misaligned
@@ -63,7 +84,7 @@ SRC_DIR = src
 TEST_DIR = test
 BUILD_DIR = /tmp/openems-build
 BIN_DIR = $(BUILD_DIR)/bin
-OBJ_DIR = $(BUILD_DIR)/obj/$(BOARD)
+OBJ_DIR = $(BUILD_DIR)/obj/$(BOARD)$(ENCODER_SUFFIX)
 ELF_DIR = $(BUILD_DIR)/elf
 HOST_DIR = $(BUILD_DIR)/host
 LINKER_SCRIPT = linker/stm32h562.ld
@@ -169,7 +190,7 @@ all: help
 help:
 	@echo "OpenEMS Build System"
 	@echo "======================================"
-	@echo "Usage: make [target] [BOARD=rgt6|vgt6|mre] [WERROR=0|1]"
+	@echo "Usage: make [target] [BOARD=rgt6|vgt6|mre] [WERROR=0|1] [ENCODER=0|1]"
 	@echo ""
 	@echo "  host-test       Host regression (always RGT6 pin map stubs)"
 	@echo "  host-test-vgt6  Standalone VGT6 GPIOE INJ/IGN BSRR coverage"
@@ -180,6 +201,10 @@ help:
 	@echo "  firmware-vgt6   Build VGT6 bin (GPIOE INJ/IGN/ETB OpenEMS ideal)"
 	@echo "  firmware-mre    Build MRE bin (H562 on microRusEFI pinout)"
 	@echo "  clean           Remove /tmp/openems-build"
+	@echo ""
+	@echo "  ENCODER=1       MT6835 encoder fork (tools/esp32_encoder_stim) —"
+	@echo "                  default 0/production; suffixes bin/obj with -enc,"
+	@echo "                  never mixes stale objects across the two variants"
 	@echo ""
 	@echo "Quality gates:"
 	@echo "  secrets-check   Fail if wifi_credentials.h (etc.) is tracked"

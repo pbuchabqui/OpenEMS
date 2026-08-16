@@ -42,16 +42,21 @@ IGN3/4 e INJ3/4 não cabem sem remapar LEDC — use osciloscópio ou segundo ESP
 
 ## Firmware STM32
 
-`EMS_MT6835_ENCODER=1 make firmware-vgt6` **não liga a flag** — o Makefile
-nunca a referencia, o build corre em silêncio como produção. Editar
-`src/hal/board_pinout.h:39-40` temporariamente (`#define
-EMS_MT6835_ENCODER 0` → `1`):
+`ENCODER=1` é uma flag própria do Makefile (2026-08-16) — antes disso era
+preciso editar `src/hal/board_pinout.h` manualmente e reverter depois, um
+footgun real: um `make firmware-vgt6` normal gravava firmware de produção
+em silêncio e a ECU nunca via RPM (decodificava a quadratura AB como roda
+60-2). `ENCODER` isola `OBJ_DIR`/nome do `.bin` (sufixo `-enc`), então
+alternar entre variantes nunca mistura objetos `.o` obsoletos — não
+precisa de `make clean` entre elas.
 
 ```bash
-make clean && WERROR=1 make firmware-vgt6
+WERROR=1 make firmware-vgt6 ENCODER=1
+# gera /tmp/openems-build/bin/openems-vgt6-enc.bin (+ alias openems.bin)
 # MT6835_HW_PRESENT=0 (default) — sem SPI; TIM2 conta só AB externo
-# reverter board_pinout.h antes de commitar (git diff deve ficar vazio)
 ```
+
+Voltar a produção: `make firmware-vgt6` (sem `ENCODER=1`, é o default).
 
 Após DFU: **power-cycle** (não só `:leave`).
 
