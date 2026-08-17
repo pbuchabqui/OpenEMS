@@ -472,6 +472,18 @@ static uint32_t g_cmp_heartbeats_since_ok   = 0U;
 static uint32_t g_cmp_reject_count          = 0U;  // diagnóstico
 static uint32_t g_cmp_missed_edge_count     = 0U;  // diagnóstico (multiple>1)
 
+// Watchdog do TIM3 CMP IC: pedido de rearm de hardware quando
+// g_cmp_heartbeats_since_ok cruza o mesmo limiar de staleness_exceeded(),
+// mas DELIBERADAMENTE fora do `if (phase_valid())` que guarda o bloco
+// acima — phase_valid() só fica 1 depois de cmp_phase_state calibrado
+// (ecu_sched_encoder_phase_set_anchor()), então um watchdog pendurado
+// nesse bloco nunca dispararia numa bancada fria/presync, exatamente o
+// cenário onde mais falta faz. Ver ecu_sched_encoder_heartbeat_tick()
+// abaixo e ecu_sched_encoder_cmp_watchdog_poll_and_clear() (consumido
+// pelo loop de 2ms em main_stm32.cpp).
+static volatile uint8_t  g_cmp_watchdog_rearm_pending  = 0U;
+static volatile uint32_t g_cmp_watchdog_request_count  = 0U;
+
 // Split light/heavy do heartbeat (ver ecu_sched_encoder_heartbeat_subtick()
 // abaixo) — conta sub-ticks (256 counts) desde o último tick pesado
 // (16384 counts = 64 sub-ticks). Satura implicitamente a 64 pelo próprio
@@ -490,6 +502,23 @@ static volatile uint32_t g_enc_omega_refresh_count = 0U;
 uint32_t ecu_sched_encoder_seq_min_lead_skip_count(void) noexcept
 {
     return g_enc_seq_min_lead_skip_count;
+}
+
+// Consumido 1×/2ms pelo loop principal (main_stm32.cpp), fora de
+// contexto de ISR — rearma ems::hal::tim3_cmp_ic_init() quando true.
+// Poll+clear atômico: evita perder um pedido se outro heartbeat_tick
+// correr entre a leitura e a limpeza da flag.
+uint8_t ecu_sched_encoder_cmp_watchdog_poll_and_clear(void) noexcept
+{
+    ems::hal::CriticalSectionGuard guard;
+    const uint8_t pending = g_cmp_watchdog_rearm_pending;
+    g_cmp_watchdog_rearm_pending = 0U;
+    return pending;
+}
+
+uint32_t ecu_sched_encoder_cmp_watchdog_request_count(void) noexcept
+{
+    return g_cmp_watchdog_request_count;
 }
 
 // ω (×65536, counts TIM2 por tick TIM5) → rpm_x10, para o CkpSnapshot
@@ -577,6 +606,21 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
         ems::drv::encoder_sync::staleness_exceeded(
             g_cmp_heartbeats_since_ok, ems::drv::sensors_is_bench_mode())) {
         ecu_sched_encoder_phase_invalidate();
+    }
+
+    // Watchdog do TIM3 CMP IC — independente do bloco acima (não exige
+    // phase_valid()). "==" em vez de ">=": g_cmp_heartbeats_since_ok é
+    // monótono não-decrescente até o próximo flanco aceite (que o zera),
+    // então isto só é verdadeiro numa única volta por episódio de
+    // silêncio — auto rate-limit sem precisar de cooldown/timer novo.
+    {
+        const uint32_t limit = ems::drv::sensors_is_bench_mode()
+            ? ems::drv::encoder_sync::kMaxHeartbeatsWithoutCmpBench
+            : ems::drv::encoder_sync::kMaxHeartbeatsWithoutCmp;
+        if (g_cmp_heartbeats_since_ok == limit) {
+            g_cmp_watchdog_rearm_pending = 1U;
+            ++g_cmp_watchdog_request_count;
+        }
     }
 
     // Sem calibração de fase, phase_valid() é sempre 0 — presync. Com fase
@@ -690,6 +734,8 @@ void ecu_sched_encoder_heartbeat_test_reset(void) noexcept
     g_enc_last_builder_was_sequential = 0U;
     g_enc_seq_min_lead_skip_count = 0U;
     g_enc_omega_refresh_count = 0U;
+    g_cmp_watchdog_rearm_pending  = 0U;
+    g_cmp_watchdog_request_count  = 0U;
     si::encoder::clear_cyl_arm_latches();
     ems::drv::encoder_sync::set_health_ok(true);
 }

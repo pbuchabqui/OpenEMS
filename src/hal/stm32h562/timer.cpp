@@ -318,6 +318,13 @@ void tim3_cmp_ic_init() noexcept {
     GPIOC_PUPDR = (GPIOC_PUPDR & ~(0x3u << 12u)) | (0x1u << 12u);
 
     TIM3_CR1 = 0u;
+    // rc_w0: escrever 0 limpa todas as flags de TIM3_SR (inclui CC1OF,
+    // overcapture — nada em TIM3_IRQHandler a lê hoje, então um trem de
+    // pulsos glitchado podia deixá-la presa indefinidamente sem isto).
+    // Higiene, não a correção em si: quem desatasca o periférico é o
+    // re-init completo abaixo (CEN=0 → reconfigura → CEN=1), que já
+    // existia — isto só garante que não sobra lixo de SR de antes.
+    TIM3_SR = 0u;
     TIM3_PSC = 0u;
     TIM3_ARR = 0xFFFFu;  // TIM3 é 16-bit; CNT não interessa, só o IRQ de captura
     TIM3_CCMR1 = TIM_CCMR1_CC1S_TI1 | TIM_CCMR1_IC1F_N8_DTS8;
@@ -464,7 +471,12 @@ extern "C" void TIM2_IRQHandler(void) {
 extern "C" void TIM3_IRQHandler(void) {
     const uint32_t sr = TIM3_SR;
     if (sr & TIM_SR_CC1IF) {
-        TIM3_SR = ~TIM_SR_CC1IF;
+        // Limpa CC1OF também: esta ISR nunca lê TIM3_CCR1, então um
+        // segundo flanco antes do primeiro ser servido marca overcapture
+        // e, sem isto, a flag ficava presa indefinidamente (não trava
+        // CC1IF nem a IRQ por si só, mas não há razão para deixá-la
+        // acumulada — ver tim3_cmp_ic_init() acima).
+        TIM3_SR = ~(TIM_SR_CC1IF | TIM_SR_CC1OF);
         g_cmp_angle_snapshot = TIM2_CNT;
         ++g_cmp_edge_count;
     }

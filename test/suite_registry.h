@@ -150,6 +150,8 @@ void test_ecu_sched_encoder_queue_clear_via_outputs_safe(void);
 void test_ecu_sched_encoder_handoff_force_closes_pins(void);
 void test_ecu_sched_encoder_heartbeat(void);
 void test_ecu_sched_encoder_heartbeat_cmp_tracking(void);
+void test_ecu_sched_encoder_cmp_watchdog_presync(void);
+void test_ecu_sched_encoder_cmp_watchdog_alongside_staleness(void);
 void test_ecu_sched_encoder_heartbeat_publish_snapshot(void);
 void test_ecu_sched_encoder_heartbeat_publish_tooth_index(void);
 void test_ecu_sched_encoder_heartbeat_subtick_cadence(void);

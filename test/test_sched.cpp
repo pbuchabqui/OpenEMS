@@ -1059,6 +1059,104 @@ void test_ecu_sched_encoder_heartbeat_cmp_tracking(void) {
     CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 0u, "test_reset() clears CMP tracking state");
 }
 
+void test_ecu_sched_encoder_cmp_watchdog_presync(void) {
+    section("ecu_sched: encoder heartbeat — CMP watchdog fires without phase_valid() (presync)");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+    // Força threshold de produção (kMaxHeartbeatsWithoutCmp=6), independente
+    // do que testes anteriores tenham deixado em g_bench_clt_iat (não é
+    // resetado por sensors_test_reset() — é config de bancada persistente).
+    sensors_set_bench_clt_iat(false, 0, 0);
+
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_request_count(), 0u, "request count=0 at start");
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_poll_and_clear(), 0u, "nothing pending at start");
+
+    // cmp_phase_state nunca calibrado nesta bancada -> phase_valid() fica 0
+    // o tempo todo (mesmo cenário do bug de campo: presync, CMP morto desde
+    // o boot). O bloco staleness_exceeded() existente (linhas ~588-592)
+    // nunca roda aqui — é exatamente o caso que ele NÃO cobre.
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "phase never valid — uncalibrated bench");
+
+    // cmp_edge_count constante (0) em toda chamada: g_hb_last_cmp_edge_count
+    // também começa em 0 (test_reset), então o bloco de aceitação nunca
+    // roda — heartbeats_since_ok só incrementa.
+    for (uint32_t i = 1u; i < kMaxHeartbeatsWithoutCmp; ++i) {
+        ecu_sched_encoder_heartbeat_tick(i * 1000u, i * 1000u, 0u, 0u);
+        CHECK_EQ(ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(), i,
+                 "heartbeats_since_ok tracks tick count before threshold");
+        CHECK_EQ(ecu_sched_encoder_cmp_watchdog_poll_and_clear(), 0u,
+                 "no rearm requested before threshold");
+    }
+
+    // Tick que cruza o limiar (== kMaxHeartbeatsWithoutCmp): dispara.
+    ecu_sched_encoder_heartbeat_tick(kMaxHeartbeatsWithoutCmp * 1000u,
+                                     kMaxHeartbeatsWithoutCmp * 1000u, 0u, 0u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(), kMaxHeartbeatsWithoutCmp,
+             "heartbeats_since_ok == limit on the triggering tick");
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_request_count(), 1u, "watchdog fired exactly once");
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_poll_and_clear(), 1u, "poll returns the pending rearm");
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_poll_and_clear(), 0u, "poll clears — second call sees nothing");
+
+    // Continua sem flanco aceite por mais um bocado: "==" não retrigger.
+    for (uint32_t i = 1u; i <= kMaxHeartbeatsWithoutCmp; ++i) {
+        ecu_sched_encoder_heartbeat_tick((kMaxHeartbeatsWithoutCmp + i) * 1000u,
+                                         (kMaxHeartbeatsWithoutCmp + i) * 1000u, 0u, 0u);
+    }
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_request_count(), 1u,
+             "no re-trigger while heartbeats_since_ok stays above the threshold");
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_poll_and_clear(), 0u, "still nothing pending");
+
+    // Um flanco aceite (primeira referência, mesmo padrão do teste A acima)
+    // zera heartbeats_since_ok — prova que não é um latch permanente.
+    ecu_sched_encoder_heartbeat_tick(90000u, 90000u, 12345u, 1u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(), 1u,
+             "accepted edge resets heartbeats_since_ok (then this same tick re-increments once)");
+
+    // Novo episódio de silêncio (mesmo cmp_edge_count=1 dali em diante) volta
+    // a cruzar o limiar e pede rearm de novo — não é latch, é por episódio.
+    for (uint32_t i = 2u; i < kMaxHeartbeatsWithoutCmp; ++i) {
+        ecu_sched_encoder_heartbeat_tick((90000u + i * 1000u), (90000u + i * 1000u), 12345u, 1u);
+    }
+    ecu_sched_encoder_heartbeat_tick(90000u + kMaxHeartbeatsWithoutCmp * 1000u,
+                                     90000u + kMaxHeartbeatsWithoutCmp * 1000u, 12345u, 1u);
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_request_count(), 2u,
+             "second silence episode requests a second rearm");
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_poll_and_clear(), 1u, "second rearm is pending");
+
+    ecu_sched_test_reset();
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_request_count(), 0u, "test_reset() clears watchdog state");
+}
+
+void test_ecu_sched_encoder_cmp_watchdog_alongside_staleness(void) {
+    section("ecu_sched: encoder heartbeat — CMP watchdog fires alongside phase_invalidate() (calibrated)");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+    sensors_set_bench_clt_iat(false, 0, 0);
+    ems::engine::cfg::g_eng_cfg.cmp_phase_state = ems::engine::cfg::kCmpPhaseCalibratedA;
+
+    // Primeiro flanco: aceite como referência E ancora a fase (calibrado).
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 1000u, 1u);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "phase anchored — calibrated + accepted edge");
+
+    // Sem novo flanco (cmp_edge_count constante=1) até cruzar o limiar: o
+    // bloco de staleness_exceeded() existente e o watchdog novo disparam
+    // no mesmo tick, sem interferir um no outro.
+    uint32_t heartbeats_since_ok = ecu_sched_encoder_test_get_cmp_heartbeats_since_ok();
+    uint32_t t = 2000u;
+    while (heartbeats_since_ok < kMaxHeartbeatsWithoutCmp) {
+        ecu_sched_encoder_heartbeat_tick(t, t, 1000u, 1u);
+        heartbeats_since_ok = ecu_sched_encoder_test_get_cmp_heartbeats_since_ok();
+        t += 1000u;
+    }
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
+             "phase_invalidate() still fires on staleness (existing behavior unchanged)");
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_request_count(), 1u,
+             "watchdog also requested a rearm on the same tick");
+    CHECK_EQ(ecu_sched_encoder_cmp_watchdog_poll_and_clear(), 1u, "rearm is pending");
+
+    ecu_sched_test_reset();
+}
+
 void test_ecu_sched_encoder_heartbeat_publish_snapshot(void) {
     section("ecu_sched: encoder heartbeat — publishes ckp_snapshot() (task #13)");
     ecu_sched_test_reset();

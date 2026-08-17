@@ -274,8 +274,8 @@ void parse_byte(uint8_t b) noexcept {
         if (b == static_cast<uint8_t>('D')) {
             EcuSchedDiagSnapshot sd{};
             ecu_sched_get_diag_snapshot(&sd);
-            // 53×u32 = 212 B (era 52; +1 diagnóstico ADC temporário [52])
-            const uint32_t diag[53] = {
+            // 54×u32 = 216 B (era 53; +1 contador do watchdog TIM3 CMP IC [53])
+            const uint32_t diag[54] = {
                 sd.late_event_count,
                 sd.cycle_schedule_drop_count,
                 sd.inj1_arm,
@@ -343,6 +343,12 @@ void parse_byte(uint8_t b) noexcept {
                 // do adc_init() duplicado em sensors_init(), 2026-08-16).
                 (static_cast<uint32_t>(ems::hal::adc_debug_raw_slot(4u)) << 16) |
                     ems::hal::adc_debug_raw_slot(0u),
+                // [53] watchdog TIM3 CMP IC: nº de vezes que
+                // ems::hal::tim3_cmp_ic_init() foi rearmado após revoluções
+                // demais sem flanco CMP aceite (virabrequim vivo, CMP
+                // mudo) — ver ecu_sched_angle_encoder.cpp (2026-08-17).
+                // Sempre 0 em builds de produção (EMS_MT6835_ENCODER=0).
+                ecu_sched_encoder_cmp_watchdog_request_count(),
             };
             tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), sizeof(diag));
             return;

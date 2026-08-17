@@ -327,7 +327,7 @@ class OpenEMSLink:
             raise IOError(f"apply_ltft_ready: resp {resp.hex() if resp else 'empty'}")
         return int(resp[1])
 
-    # ── contadores de debug ('D': 41 × u32 LE = 164 B) ──────────────────
+    # ── contadores de debug ('D': 54 × u32 LE = 216 B) ──────────────────
     # Índices 31-32 (stft_last_err, stft_integ_x1000) são i32 no wire.
     # 37-40: discriminação dos gatilhos de perda de FULL_SYNC (blip PW=0).
     DEBUG_FIELDS = [
@@ -353,8 +353,12 @@ class OpenEMSLink:
         # [52] diagnóstico ADC1: hi16=slot bruto 4 (APP1/SQ5), lo16=slot
         # bruto 0 (MAP/SQ1) — dois pontos da sequência p/ confirmar DMA vivo.
         "adc_debug",
+        # [53] watchdog TIM3 CMP IC (modo encoder): nº de vezes que o
+        # periférico foi rearmado após revoluções demais sem flanco CMP
+        # aceite. Sempre 0 em builds de produção.
+        "cmp_watchdog_rearms",
     ]
-    DEBUG_SIZE = 53 * 4  # must match FW diag[53]
+    DEBUG_SIZE = 54 * 4  # must match FW diag[54]
 
     # Bits de src/engine/cut_reason.h (ordem = bit 0..N)
     FUEL_CUT_BITS = ["rev_limit", "limp_rpm", "map_fault", "oil_press",
@@ -370,11 +374,11 @@ class OpenEMSLink:
     def read_debug(self) -> dict:
         assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE
         buf = self._txn(b"D", self.DEBUG_SIZE)
-        # 31 u32 + 2 i32 + 20 u32
+        # 31 u32 + 2 i32 + 21 u32 (era 20; +1 cmp_watchdog_rearms [53], 2026-08-17)
         vals = (
             struct.unpack("<31I", buf[:124])
             + struct.unpack("<2i", buf[124:132])
-            + struct.unpack("<20I", buf[132:212])
+            + struct.unpack("<21I", buf[132:216])
         )
         d = dict(zip(self.DEBUG_FIELDS, vals))
         for n in range(4):

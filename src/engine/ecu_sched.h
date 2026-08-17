@@ -213,6 +213,12 @@ uint32_t ecu_sched_encoder_late_event_count(void) noexcept;
 uint32_t ecu_sched_encoder_evt_overflow(void) noexcept;
 uint32_t ecu_sched_encoder_seq_min_lead_skip_count(void) noexcept;
 
+// Watchdog do TIM3 CMP IC (ver ecu_sched_angle_encoder.cpp): poll+clear
+// chamado 1×/2ms pelo loop principal, fora de ISR — quando retorna
+// diferente de 0, o chamador deve rearmar ems::hal::tim3_cmp_ic_init().
+uint8_t  ecu_sched_encoder_cmp_watchdog_poll_and_clear(void) noexcept;
+uint32_t ecu_sched_encoder_cmp_watchdog_request_count(void) noexcept;
+
 // Heavy tick (1×/volta). CMP span/staleness evaluated; phase anchor gated by
 // cfg::g_eng_cfg.cmp_phase_state (engine/engine_config.h).
 // run_seq_arm: 1 = refresh+try_arm no ramo sequencial (default). 0 = só

@@ -69,6 +69,7 @@ int main() { return 0; }
 #include "hal/flex_fuel.h"
 #include "hal/timer.h"
 #include "hal/mt6835.h"
+#include "hal/critical_section.h"
 #include "drv/encoder_sync.h"
 
 // =============================================================================
@@ -742,6 +743,16 @@ int main() {
             // válido para sempre, nunca a decair a 0 sozinho. Deve preceder
             // ckp_snapshot() pela mesma razão do caminho Hall acima.
             ems::drv::ckp_stall_poll_encoder(ems::hal::tim5_count());
+
+            // Watchdog do TIM3 CMP IC: se revoluções demais se passaram
+            // sem um flanco CMP aceite (virabrequim vivo, CMP mudo — ver
+            // ecu_sched_encoder_cmp_watchdog_poll_and_clear() em
+            // ecu_sched_angle_encoder.cpp), rearma o periférico. Fora de
+            // contexto de ISR, mesmo padrão dos watchdogs abaixo.
+            if (ecu_sched_encoder_cmp_watchdog_poll_and_clear() != 0U) {
+                ems::hal::CriticalSectionGuard guard;
+                ems::hal::tim3_cmp_ic_init();
+            }
 #endif
 
             // Dwell / injector open watchdogs (lost SPARK / lost INJ_OFF).

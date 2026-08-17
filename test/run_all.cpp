@@ -221,6 +221,8 @@ int main(void) {
     test_ecu_sched_encoder_handoff_force_closes_pins();
     test_ecu_sched_encoder_heartbeat();
     test_ecu_sched_encoder_heartbeat_cmp_tracking();
+    test_ecu_sched_encoder_cmp_watchdog_presync();
+    test_ecu_sched_encoder_cmp_watchdog_alongside_staleness();
     test_ecu_sched_encoder_heartbeat_publish_snapshot();
     test_ecu_sched_encoder_heartbeat_publish_tooth_index();
     test_ecu_sched_encoder_heartbeat_subtick_cadence();
