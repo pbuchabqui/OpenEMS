@@ -83,10 +83,10 @@ void sensors_sample_fast_channels_encoder(uint32_t rpm_x10) noexcept;
  * @brief Fork MT6835/TIM2 (modo encoder): equivalente ao bloco map_window de
  *        sensors_on_tooth() (leitura MAP crua + map_window_on_tooth()),
  *        exposto para o mesmo slot de 2 ms. Recebe só `tim2_now` (posição
- *        viva) e deriva tooth_index/phase_A internamente AMBOS da mesma
- *        leitura — nunca combinar um tooth_index vivo com o phase_A
- *        congelado do heartbeat (1×/volta): produziria um erro de 360°
- *        exactamente na fronteira de cada volta. state/cmp_confirms vêm de
+ *        viva) e deriva cycle_deg + phase_A internamente AMBOS da mesma
+ *        leitura — nunca combinar um ângulo vivo com o phase_A congelado
+ *        do heartbeat (1×/volta): produziria um erro de 360° exactamente
+ *        na fronteira de cada volta. state/cmp_confirms vêm de
  *        ckp_snapshot() (heartbeat) sem alteração — granularidade grosseira
  *        é aceitável para esses dois campos.
  */

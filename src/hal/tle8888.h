@@ -5,6 +5,7 @@ namespace ems::hal {
 
 void tle8888_init() noexcept;
 void tle8888_poll_diag() noexcept;
+// Com EMS_TLE8888_PRESENT=0 (default deste fork) devolve sempre true.
 bool tle8888_ok() noexcept;
 uint16_t tle8888_fault_count() noexcept;
 

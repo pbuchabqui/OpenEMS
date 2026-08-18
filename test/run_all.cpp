@@ -56,23 +56,6 @@ int main(void) {
     test_torque_manager_loop_null_guards();
     test_torque_manager_loop_speed_limiter();
 
-    // ── CKP Decoder ───────────────────────────────────────────────────────────
-    printf("\n=== CKP DECODER / SYNC ===");
-    test_ckp_rpm_math();
-    test_ckp_initial_state();
-    test_ckp_half_sync();
-    test_ckp_full_sync();
-    test_ckp_tooth_index_increments();
-    test_ckp_instant_rpm_360();
-    test_ckp_skip_after_silence();
-    test_ckp_loss_of_sync_too_many_teeth();
-    test_ckp_loss_of_sync_early_gap();
-    test_ckp_noise_rejection();
-    test_ckp_stall_poll();
-    test_ckp_phantom_rpm_unsync();
-    test_ckp_rpm_jump_recovery();
-    test_ckp_stall_poll_no_false_positive();
-
     // ── Sensors ───────────────────────────────────────────────────────────────
     printf("\n=== SENSORS ===");
     test_sensors_validate_range();
@@ -89,6 +72,7 @@ int main(void) {
     test_fuel_apply_lambda_target();
     test_fuel_apply_trim();
     test_fuel_calc_final_pw();
+    test_fuel_inj_pulse_pw();
     test_fuel_corr_functions();
     test_fuel_decel_cut();
     test_fuel_decel_cut_gates();
@@ -160,7 +144,7 @@ int main(void) {
 
     // ── CKP — Segunda Fase ───────────────────────────────────────────────────
     printf("\n=== CKP (fase 2) ===");
-    test_ckp_cmp_glitch_count();
+
 
     // ── Sensors — Segunda Fase ───────────────────────────────────────────────
     printf("\n=== SENSORS (fase 2) ===");
@@ -197,18 +181,9 @@ int main(void) {
     // ── ECU SCHED ───────────────────────────────────────────────────────
     printf("\n=== ECU SCHED ===");
     test_ecu_sched_setters();
-    test_ecu_sched_angle_table();
-    test_ecu_sched_wasted_to_sequential();
-    test_knock_window_scheduler_wiring();
     test_knock_window_encoder_arm_wiring();
-    test_ecu_sched_cmp_revalidation_after_sync_loss();
-    test_ecu_sched_noise_rejects_sequential();
-    test_ecu_sched_recovers_after_fallback();
     test_ecu_sched_inhibit_masks();
-    test_ecu_sched_mspark();
-    test_ecu_sched_eoi_targeting();
     test_ecu_sched_eoi_lead_deg_sanitize();
-    test_ecu_sched_presync();
     test_ecu_sched_dwell_watchdog();
     test_ecu_sched_encoder_omega();
     test_ecu_sched_encoder_phase();
@@ -223,9 +198,15 @@ int main(void) {
     test_ecu_sched_encoder_heartbeat_cmp_tracking();
     test_ecu_sched_encoder_cmp_watchdog_presync();
     test_ecu_sched_encoder_cmp_watchdog_alongside_staleness();
+    test_ecu_sched_encoder_cmp_confirm_gate();
+    test_ecu_sched_encoder_seq_arm_stall_watchdog();
+    test_ecu_sched_encoder_due_head_dispatches_inline();
+    test_ecu_sched_encoder_seq_to_presync_force_closes_pins();
+    test_ecu_sched_encoder_presync_after_cmp_loss_keeps_dispatcher();
     test_ecu_sched_encoder_heartbeat_publish_snapshot();
-    test_ecu_sched_encoder_heartbeat_publish_tooth_index();
+    test_ecu_sched_encoder_heartbeat_publish_crank_deg();
     test_ecu_sched_encoder_heartbeat_subtick_cadence();
+    test_ecu_sched_encoder_omega_only_on_heavy_tick();
     test_ecu_sched_encoder_heartbeat_subtick_feeds_misfire();
     test_ecu_sched_encoder_min_lead();
     test_ecu_sched_encoder_conversion();
@@ -233,6 +214,7 @@ int main(void) {
     test_ecu_sched_encoder_cmp_phase_calibrate();
     test_engine_config_cmp_phase_state_roundtrip();
     test_ecu_sched_encoder_recompute_presync();
+    test_ecu_sched_encoder_recompute_presync_next_rev_if_on_past();
     test_ecu_sched_encoder_recompute_presync_ign_inhibit_mask_gate();
     test_ecu_sched_encoder_recompute_presync_bank_toggle();
     test_ecu_sched_encoder_recompute_presync_pw_clamp();
@@ -254,6 +236,7 @@ int main(void) {
     test_ecu_sched_encoder_sequential_omega_refresh_lock();
     test_enc_finalize_xtau_peek_no_commit();
     test_enc_finalize_map_window_per_cyl();
+    test_enc_finalize_map_window_ve0_keeps_prep_flow();
 
     // ── QUICK CRANK ─────────────────────────────────────────────────────
     printf("\n=== QUICK CRANK ===");
@@ -270,7 +253,6 @@ int main(void) {
 
     // ── MISFIRE DETECT ──────────────────────────────────────────────────
     printf("\n=== MISFIRE DETECT ===");
-    test_misfire_all();
     test_misfire_encoder_cyl_window_boundaries();
     test_misfire_encoder_reinit_after_trigger_offset_change();
     test_misfire_encoder_threshold_debounce_and_inertness();
@@ -299,18 +281,8 @@ int main(void) {
     // ── ECU SCHED FASE 2 ────────────────────────────────────────────────
     printf("\n=== ECU SCHED (fase 2) ===");
     test_ecu_sched_hardware_init();
-    test_ecu_sched_ccr_write();
-    test_ecu_sched_late_events();
-    test_ecu_sched_golden_min_lead_timestamp();
-    test_ecu_sched_golden_far_target_timestamp();
-    test_ecu_sched_golden_dispatch_past_counts_late();
-    test_ecu_sched_golden_queue_sorted();
-    test_ecu_sched_golden_seq_angle_table_size();
-    test_ecu_sched_mspark_angle_table_margin();
-    test_ecu_sched_golden_dispatch_identity();
     test_ecu_sched_dwell_watchdog_fires();
     test_ecu_sched_inj_watchdog_fires();
-    test_ecu_sched_presync_table();
 
     // ── VERIFICAÇÃO MATEMÁTICA ─────────────────────────────────────────────
     printf("\n=== VERIFICAÇÃO MATEMÁTICA ===");
@@ -323,15 +295,6 @@ int main(void) {
     test_math_inj_scheduler_ticks();
     test_math_xtau_convergence();
     test_math_production_tables();
-    test_math_misfire_threshold();
-    test_trigger_offset();
-
-    // ── CKP FASE 2 (snap fields, prime, phase_A, tooth_index) ─────────────
-    printf("\n=== CKP (fase 3) ===");
-    test_ckp_prime_on_tooth();
-    test_ckp_snap_fields();
-    test_ckp_tooth_index_progression();
-    test_ckp_phase_toggle();
     test_encoder_sync_cmp_edge();
     test_encoder_sync_staleness();
 

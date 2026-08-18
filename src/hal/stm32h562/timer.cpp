@@ -19,7 +19,8 @@
  *             TIM5_CH3 acima (compare + BSRR), unidade counts em vez de ticks
  *             (ver ecu_sched_angle_encoder.cpp)
  *   TIM3_CH1 PC6: CMP input capture (ver tim3_cmp_ic_init())
- *   TIM5: free-running sem captura, só watchdog de dwell/injeção
+ *   TIM5: free-running sem captura; CNT para watchdogs/ω; CH3 compare
+ *         (sem pino) para prime/teste — NVIC TIM5 + CC3IE dinâmico
  *   docs/dev/mt6835_encoder_fork.md, "Gap TIM5_CEN" — os dois mapeamentos
  *   são mutuamente exclusivos, nunca chamar tim5_ic_init() e
  *   tim2_encoder_init()/tim3_cmp_ic_init() no mesmo boot.
@@ -37,6 +38,7 @@
 
 #include "hal/timer.h"
 #include "hal/regs.h"
+#include "hal/board_pinout.h"
 #include "drv/ckp.h"    // ckp_tim5_ch1_isr / ckp_tim5_ch2_isr
 #include "engine/ecu_sched.h"  // ecu_sched_evt_dispatch
 
@@ -125,10 +127,10 @@ uint32_t tim5_count() noexcept {
 // (ecu_sched_dwell_watchdog(), ecu_sched_inj_watchdog()) — depende do mesmo
 // tick de 62,5 MHz/16 ns que tim5_ic_init() sempre configurou
 // (ECU_SCHED_CLOCK_HZ, ecu_sched.h:47, static_assert em ecu_sched.cpp:49-52).
-// Sem captura/GPIO/NVIC: só o contador livre-corrente que o watchdog
-// precisa. Usar no lugar de tim5_ic_init() quando o pipeline MT6835
-// estiver ativo — nunca os dois (tim5_ic_init() reclama PA0/PA1, que já
-// são TIM2_CH1/CH2 do encoder).
+// Sem captura/GPIO em PA0/PA1. CH3 é compare interno (CCMR2=0 = Frozen,
+// CC3E=0): evt_insert() liga CC3IE quando há OFF/SPARK de prime/teste.
+// NVIC TIM5 tem de estar ligado — sem ele o OFF fica na fila e só o
+// inj_watchdog fecha o pino.
 // ------------------------------------------------------------------------------
 
 void tim5_freerun_init() noexcept {
@@ -136,9 +138,13 @@ void tim5_freerun_init() noexcept {
     TIM5_CR1  = 0u;
     TIM5_PSC  = kTimPrescaler;   // 250 MHz / 4 = 62,5 MHz — mesmo tick de sempre
     TIM5_ARR  = 0xFFFFFFFFu;
-    TIM5_CCER = 0u;              // nenhuma captura
-    TIM5_DIER = 0u;              // nenhuma interrupção — não precisa de NVIC
+    TIM5_CCMR2 = 0u;             // CH3 Frozen — compare sem pino
+    TIM5_CCER = 0u;              // sem captura CH1/CH2, sem OC no pino CH3
+    TIM5_DIER = 0u;              // CC3IE só quando a fila TIM5 tem eventos
     TIM5_EGR  = 1u;
+    TIM5_SR   = 0u;
+    nvic_set_priority(IRQ_TIM5, 1u);
+    nvic_enable_irq(IRQ_TIM5);
     TIM5_CR1  = TIM_CR1_CEN;
 }
 
@@ -325,12 +331,23 @@ void tim3_cmp_ic_init() noexcept {
     // re-init completo abaixo (CEN=0 → reconfigura → CEN=1), que já
     // existia — isto só garante que não sobra lixo de SR de antes.
     TIM3_SR = 0u;
+    // No boot, CC1E já é 0 (reset de hardware) — mas num rearm (watchdog),
+    // CCER ainda carrega o valor da armação anterior (CC1E=1). Escrever
+    // CCMR1 com a captura já habilitada não é a sequência recomendada
+    // pelo fabricante e pode gerar uma captura espúria no próprio instante
+    // do rearm. Desarma primeiro, reconfigura, só reabilita no fim.
+    TIM3_CCER = 0u;
     TIM3_PSC = 0u;
     TIM3_ARR = 0xFFFFu;  // TIM3 é 16-bit; CNT não interessa, só o IRQ de captura
     TIM3_CCMR1 = TIM_CCMR1_CC1S_TI1 | TIM_CCMR1_IC1F_N8_DTS8;
-    TIM3_CCER  = TIM_CCER_CC1E | TIM_CCER_CC1P;  // captura na descida
     TIM3_DIER  = TIM_DIER_CC1IE;
+    // UG com CC1E=0: gerar o update (reinicia CNT) sem o detector de
+    // captura armado. UG+CC1E juntos produzem um CC1IF espúrio no próprio
+    // instante do rearm — um flanco fantasma no pino já flutuante (CMP
+    // desligado) que o rastreador podia aceitar e re-ancorar.
     TIM3_EGR   = 1u;
+    TIM3_SR    = 0u;
+    TIM3_CCER  = TIM_CCER_CC1E | TIM_CCER_CC1P;  // captura na descida, só no fim
 
     nvic_set_priority(IRQ_TIM3, 1u);
     nvic_enable_irq(IRQ_TIM3);
@@ -413,6 +430,13 @@ void etb_pwm_set_duty_x10(uint16_t duty_pct_x10) noexcept {
  */
 extern "C" void TIM5_IRQHandler(void) {
     uint32_t sr = TIM5_SR;
+#if EMS_MT6835_ENCODER
+    // Freerun: só prime/teste na fila TIM5/CH3. CH1/CH2 não capturam.
+    if (sr & TIM_SR_CC3IF) {
+        TIM5_SR = ~TIM_SR_CC3IF;
+        ecu_sched_evt_dispatch();
+    }
+#else
     if (sr & TIM_SR_CC1IF) {
         TIM5_SR = ~TIM_SR_CC1IF;
         ems::drv::ckp_tim5_ch1_isr();
@@ -427,6 +451,7 @@ extern "C" void TIM5_IRQHandler(void) {
         TIM5_SR = ~TIM_SR_CC3IF;
         ecu_sched_evt_dispatch();
     }
+#endif
 }
 
 /**

@@ -80,6 +80,15 @@ uint32_t calc_final_pw_us(uint32_t base_pw_us,
                           uint16_t corr_clt_x256,
                           uint16_t corr_iat_x256,
                           uint16_t dead_time_us) noexcept;
+
+// Cycle electrical formula: flow + dead × openings.
+// Sequential (1) = flow+dead; semi/sim (2) = flow+2×dead.
+// Dead is never folded into flow and then halved. flow=0 → 0.
+uint32_t inj_cycle_pw_us(uint32_t flow_us, uint16_t dead_time_us,
+                         uint8_t squirts) noexcept;
+// One opening so the squirts sum to inj_cycle_pw_us (pin width).
+uint32_t inj_pulse_pw_us(uint32_t flow_us, uint16_t dead_time_us,
+                         uint8_t squirts) noexcept;
 uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
                                       uint16_t map_bar_x100,
                                       uint16_t lambda_target_x1000,

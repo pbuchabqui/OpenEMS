@@ -1,6 +1,7 @@
 #include "engine/map_window.h"
 #include "engine/calibration.h"
 #include "engine/engine_config.h"
+#include "drv/crank_angle.h"
 
 namespace ems::engine {
 
@@ -8,8 +9,7 @@ namespace {
 
 constexpr uint8_t  kSlots        = 4u;
 constexpr uint16_t kSlotSpanDeg  = 180u;
-constexpr uint16_t kCycleDeg     = 720u;
-constexpr uint16_t kDegPerTooth  = 6u;
+constexpr uint16_t kCycleDeg     = ems::drv::kCycleDeg;
 
 // Acumulador da janela activa (uma de cada vez — as janelas não se sobrepõem).
 uint32_t g_acc = 0u;
@@ -53,19 +53,21 @@ void close_active_window() noexcept {
 
 }  // namespace
 
-void map_window_on_tooth(const ems::drv::CkpSnapshot& snap,
-                         uint16_t map_bar_x1000) noexcept {
+void map_window_on_sample(uint16_t cycle_deg, uint16_t map_bar_x1000,
+                          bool full_sync, bool cmp_ok) noexcept {
     if (map_window_enable == 0u) {
         return;
     }
     // Atribuição 720° exige sync pleno + fase de came confirmada.
-    if (snap.state != ems::drv::SyncState::FULL_SYNC || snap.cmp_confirms < 2u) {
+    if (!full_sync || !cmp_ok) {
         g_active_slot = -1;  // aborta janela parcial (média não contaminada)
         g_fresh_mask  = 0u;
         return;
     }
-    const uint16_t deg = static_cast<uint16_t>(
-        snap.tooth_index * kDegPerTooth + (snap.phase_A ? 0u : 360u));
+    uint16_t deg = cycle_deg;
+    if (deg >= kCycleDeg) {
+        deg = static_cast<uint16_t>(deg % kCycleDeg);
+    }
     uint16_t rel = static_cast<uint16_t>(deg + kCycleDeg - map_window_open_deg);
     if (rel >= kCycleDeg) {
         rel = static_cast<uint16_t>(rel - kCycleDeg);

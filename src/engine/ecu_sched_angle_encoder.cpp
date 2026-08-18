@@ -43,8 +43,10 @@
 #include "hal/critical_section.h"
 #include "hal/board_pinout.h"
 #include "drv/ckp.h"
+#include "drv/crank_angle.h"
 #include "drv/encoder_sync.h"
 #include "engine/misfire_encoder.h"
+#include "engine/spark_skip.h"
 #include "drv/sensors.h"
 #if !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
@@ -63,6 +65,8 @@ namespace ems::engine::sched_internal::encoder {
 // ficheiro que a definição) precisa de a chamar.
 void recompute_presync(uint32_t now_raw) noexcept;
 void try_arm_sequential_due(uint32_t now_raw) noexcept;
+uint32_t seq_arm_success_count(void) noexcept;
+void seq_arm_success_count_test_reset(void) noexcept;
 void refresh_pending_omega_spans(uint32_t now_raw) noexcept;
 void clear_cyl_arm_latches(void) noexcept;
 // Definida mais abaixo ("Conversão graus→counts", junto de
@@ -125,17 +129,32 @@ static volatile uint8_t  g_omega_have_prev  = 0U;
 static volatile int32_t  g_omega_x65536     = 0;
 static volatile uint8_t  g_omega_valid      = 0U;
 
+// Piso de Δt: 16 µs @ 62.5 MHz. Amostra de ISR encolhida (sub-tick atrasado
+// + seguinte imediato) não actualiza.
+static constexpr int32_t kOmegaMinDtTicks = 1000;
+// Firmware: ~21 000 RPM. Host: os testes semeiam ω=0.5/1/2 (x65536 até
+// 131072) para span==ticks — o tecto físico quebrava a suite inteira.
+#if defined(EMS_HOST_TEST)
+static constexpr int32_t kOmegaMaxX65536 = 2000000;
+#else
+static constexpr int32_t kOmegaMaxX65536 = 6000;
+#endif
+
 void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexcept
 {
     if (g_omega_have_prev != 0U) {
         const int32_t d_tim5 = (int32_t)(tim5_now - g_omega_prev_tim5);
-        if (d_tim5 > 0) {
+        if (d_tim5 >= kOmegaMinDtTicks) {
             const int32_t d_tim2 = (int32_t)(tim2_now - g_omega_prev_tim2);
-            g_omega_x65536 = (int32_t)(((int64_t)d_tim2 * 65536) / (int64_t)d_tim5);
-            g_omega_valid = 1U;
+            const int32_t raw = (int32_t)(((int64_t)d_tim2 * 65536) / (int64_t)d_tim5);
+            if (raw <= kOmegaMaxX65536) {
+                g_omega_x65536 = raw;
+                g_omega_valid = 1U;
+            }
         }
-        // d_tim5 <= 0: relógio não avançou (ou amostra fora de ordem) —
-        // mantém a última estimativa válida, não atualiza.
+        // d_tim5 curto, pico de ω ou relógio sem avanço: mantém a última
+        // estimativa. prev actualiza sempre para o glitch não entrar no
+        // intervalo seguinte.
     }
     g_omega_prev_tim2 = tim2_now;
     g_omega_prev_tim5 = tim5_now;
@@ -175,6 +194,10 @@ void ecu_sched_encoder_omega_test_reset(void) noexcept
 static volatile uint32_t g_phase_anchor_raw   = 0U;
 static volatile uint8_t  g_phase_anchor_value = ECU_PHASE_A;
 static volatile uint8_t  g_phase_valid        = 0U;
+// Confirm-count do rastreador CMP vive aqui (junto de phase_valid) para
+// ecu_sched_encoder_phase_invalidate() o poder zerar: depois de uma perda
+// de fase, um único flanco aceite não pode re-ancorar. Ver heartbeat_tick.
+static uint8_t g_cmp_confirm_count = 0U;
 
 // Floor division por 16384 (2^14) — só a paridade do quociente interessa
 // (nº de voltas completas desde o anchor, par/ímpar decide a fase), mas a
@@ -219,9 +242,16 @@ uint8_t ecu_sched_encoder_phase_valid(void) noexcept { return g_phase_valid; }
 // só havia SET (phase_set_anchor) e um clear host-test-only. Sem isto, um
 // fallback de staleness que publicasse HALF_SYNC no CkpSnapshot deixaria
 // phase_valid() preso em 1 — o dispatcher branca em phase_valid(), não em
-// snap.state. Chamador: ecu_sched_encoder_heartbeat_tick() após
-// staleness_exceeded() (ver docs/dev/mt6835_encoder_fork.md).
-void ecu_sched_encoder_phase_invalidate(void) noexcept { g_phase_valid = 0U; }
+// snap.state. Também zera o gate de 2 flancos (Fix B): senão o primeiro
+// flanco aceite depois da perda (ruído no pino flutuante, captura espúria
+// do rearm TIM3) re-ancorava já com confirm_count ainda em 2.
+// Chamador: ecu_sched_encoder_heartbeat_tick() após staleness_exceeded()
+// ou o watchdog de stall do builder sequencial.
+void ecu_sched_encoder_phase_invalidate(void) noexcept
+{
+    g_phase_valid = 0U;
+    g_cmp_confirm_count = 0U;
+}
 
 #if defined(EMS_HOST_TEST)
 void ecu_sched_encoder_phase_test_reset(void) noexcept
@@ -229,6 +259,7 @@ void ecu_sched_encoder_phase_test_reset(void) noexcept
     g_phase_anchor_raw = 0U;
     g_phase_anchor_value = ECU_PHASE_A;
     g_phase_valid = 0U;
+    g_cmp_confirm_count = 0U;
 }
 #endif
 
@@ -259,6 +290,29 @@ static volatile uint8_t g_enc_evt_count = 0U;
 
 static volatile uint32_t g_enc_dbg_evt_overflow = 0U;
 static volatile uint32_t g_enc_late_event_count = 0U;
+static volatile uint32_t g_enc_dbg_insert_count  = 0U;  // DIAG temporário
+static volatile uint32_t g_enc_dbg_execute_count = 0U;  // DIAG temporário
+
+// TIM2 é contador de POSIÇÃO, não de tempo: programar CCR3 num alvo já
+// passado (ou igual a CNT) e limpar CC3IF deixa o compare-match mudo até
+// o wrap de 32 bits. Alvos ainda à frente geram match quando CNT chega;
+// os já devidos vão pelo caminho "late" de ecu_sched_encoder_evt_dispatch.
+static void enc_evt_rearm_or_dispatch(void) noexcept
+{
+    if (g_enc_evt_count == 0U) {
+        TIM2_DIER &= ~TIM_DIER_CC3IE;
+        return;
+    }
+    const uint32_t now = TIM2_CNT;
+    const uint32_t ts = g_enc_evt_queue[0].timestamp;
+    if ((int32_t)(ts - now) > 0) {
+        TIM2_CCR3 = ts;
+        TIM2_SR   = ~TIM_SR_CC3IF;
+        TIM2_DIER |= TIM_DIER_CC3IE;
+        return;
+    }
+    ecu_sched_encoder_evt_dispatch();
+}
 
 static uint8_t enc_evt_drop_one_assert(uint8_t prefer_channel) noexcept
 {
@@ -297,11 +351,10 @@ static void enc_evt_insert(uint32_t ts, uint8_t channel, uint8_t high) noexcept
     g_enc_evt_queue[pos].channel = channel;
     g_enc_evt_queue[pos].high = high;
     ++g_enc_evt_count;
+    ++g_enc_dbg_insert_count;
 
     if (pos == 0U) {
-        TIM2_CCR3 = ts;
-        TIM2_SR   = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
-        TIM2_DIER |= TIM_DIER_CC3IE;
+        enc_evt_rearm_or_dispatch();
     }
 }
 
@@ -313,6 +366,7 @@ static inline void enc_evt_execute_head(void) noexcept
     if (idx != 0xFFU) {
         pin_transition(idx, e.high);  // watchdogs continuam sempre TIM5/tempo
     }
+    ++g_enc_dbg_execute_count;
     --g_enc_evt_count;
     for (uint8_t i = 0U; i < g_enc_evt_count; ++i) {
         g_enc_evt_queue[i] = g_enc_evt_queue[i + 1U];
@@ -383,6 +437,8 @@ void ecu_sched_encoder_queue_test_reset(void) noexcept
     g_enc_evt_count = 0U;
     g_enc_dbg_evt_overflow = 0U;
     g_enc_late_event_count = 0U;
+    g_enc_dbg_insert_count = 0U;
+    g_enc_dbg_execute_count = 0U;
     ems_test_tim2_ccr3 = 0U; ems_test_tim2_sr = 0U; ems_test_tim2_dier = 0U; ems_test_tim2_cnt = 0U;
 }
 void ecu_sched_encoder_test_set_tim2_cnt(uint32_t v) noexcept { ems_test_tim2_cnt = v; }
@@ -437,13 +493,7 @@ void encoder_purge_cyl_mask(uint8_t mask, uint8_t is_ign) noexcept
         ++w;
     }
     g_enc_evt_count = w;
-    if (g_enc_evt_count == 0U) {
-        TIM2_DIER &= ~TIM_DIER_CC3IE;
-    } else {
-        TIM2_CCR3 = g_enc_evt_queue[0].timestamp;
-        TIM2_SR   = ~TIM_SR_CC3IF;
-        TIM2_DIER |= TIM_DIER_CC3IE;
-    }
+    enc_evt_rearm_or_dispatch();
 }
 
 void encoder_clear_all(void) noexcept
@@ -472,6 +522,18 @@ static uint32_t g_cmp_heartbeats_since_ok   = 0U;
 static uint32_t g_cmp_reject_count          = 0U;  // diagnóstico
 static uint32_t g_cmp_missed_edge_count     = 0U;  // diagnóstico (multiple>1)
 
+// Confirmação extra antes de re-ancorar a fase depois de uma referência
+// perdida (streak_resync ou phase_invalidate). "1 flanco após has_prev==
+// false" trata de forma idêntica dois cenários diferentes: "nunca vi nada
+// desde o boot" (tem de aceitar o primeiro, sem alternativa) e "acabei de
+// descartar por 3 rejeições seguidas" (o próximo pode muito bem ser mais
+// um flanco espúrio — ex.: TIM3/PC6 armado pelo watchdog sobre um pino
+// agora flutuante). g_cmp_confirm_count (definido junto de g_phase_valid)
+// exige 2 flancos aceites CONSECUTIVOS (o 2º já passa pela checagem de
+// plausibilidade de evaluate_cmp_edge() contra o 1º) antes de aplicar o
+// anchor de verdade. phase_invalidate() zera o contador para o mesmo
+// gate valer depois de staleness/stall.
+
 // Watchdog do TIM3 CMP IC: pedido de rearm de hardware quando
 // g_cmp_heartbeats_since_ok cruza o mesmo limiar de staleness_exceeded(),
 // mas DELIBERADAMENTE fora do `if (phase_valid())` que guarda o bloco
@@ -483,6 +545,33 @@ static uint32_t g_cmp_missed_edge_count     = 0U;  // diagnóstico (multiple>1)
 // pelo loop de 2ms em main_stm32.cpp).
 static volatile uint8_t  g_cmp_watchdog_rearm_pending  = 0U;
 static volatile uint32_t g_cmp_watchdog_request_count  = 0U;
+
+// Watchdog do builder sequencial: rede de segurança se phase_valid()==1
+// mas nenhum cilindro consegue armar por várias voltas seguidas (âncora
+// possivelmente corrompida por um re-anchor espúrio — Fix B reduz a
+// probabilidade, não elimina; ruído é probabilístico). Independente do
+// watchdog do TIM3 acima: aquele reage a "sem flanco CMP", este reage a
+// "com flanco(s) CMP aceites, mas o sequencial nunca arma nada" — o
+// sintoma real reportado (INJ/IGN mudos com CKP vivo).
+static uint32_t g_seq_arm_watch_last_count    = 0U;
+static uint32_t g_seq_heavy_ticks_without_arm = 0U;
+static volatile uint32_t g_seq_arm_stall_count = 0U;  // diagnóstico
+static volatile uint32_t g_presync_call_count  = 0U;  // DIAG temporário
+
+uint32_t ecu_sched_encoder_presync_call_count(void) noexcept
+{
+    return g_presync_call_count;
+}
+
+uint32_t ecu_sched_encoder_enc_evt_insert_count(void) noexcept
+{
+    return g_enc_dbg_insert_count;
+}
+
+uint32_t ecu_sched_encoder_enc_evt_execute_count(void) noexcept
+{
+    return g_enc_dbg_execute_count;
+}
 
 // Split light/heavy do heartbeat (ver ecu_sched_encoder_heartbeat_subtick()
 // abaixo) — conta sub-ticks (256 counts) desde o último tick pesado
@@ -521,6 +610,11 @@ uint32_t ecu_sched_encoder_cmp_watchdog_request_count(void) noexcept
     return g_cmp_watchdog_request_count;
 }
 
+uint32_t ecu_sched_encoder_seq_arm_stall_count(void) noexcept
+{
+    return g_seq_arm_stall_count;
+}
+
 // ω (×65536, counts TIM2 por tick TIM5) → rpm_x10, para o CkpSnapshot
 // partilhado. Mesma unidade/escala que ckp_instant_rpm_x10() já usa
 // (rpm×10), derivação equivalente a rpm_x10_from_period_ticks() (ckp.cpp)
@@ -545,8 +639,6 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
                                       uint32_t cmp_edge_count,
                                       uint8_t run_seq_arm) noexcept
 {
-    // Também amostra aqui: host tests / seed chamam o tick pesado sem
-    // passar pelo sub-tick. Em produção o sub-tick já actualizou ω.
     ecu_sched_encoder_omega_sample(tim2_now, tim5_now);
 
     // Rastreio/validação de flancos CMP corre SEMPRE, mesmo sem calibração —
@@ -570,8 +662,10 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
             g_cmp_prev_angle          = cmp_angle;
             g_cmp_reject_streak       = 0U;
             g_cmp_heartbeats_since_ok = 0U;
+            if (g_cmp_confirm_count < 2U) { ++g_cmp_confirm_count; }
             if (r.multiple > 1U) { ++g_cmp_missed_edge_count; }
-            if (ems::engine::cfg::g_eng_cfg.cmp_phase_state !=
+            if (g_cmp_confirm_count >= 2U &&
+                ems::engine::cfg::g_eng_cfg.cmp_phase_state !=
                 ems::engine::cfg::kCmpPhaseUncalibrated) {
                 // Definição absoluta, nunca toggle — mesmo flanco pode
                 // re-ancorar repetidamente sem se acumular.
@@ -597,7 +691,10 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
         } else {
             ++g_cmp_reject_count;
             g_cmp_reject_streak = r.reject_streak;
-            if (r.streak_resync) { g_cmp_has_prev = 0U; }  // descarta referência, re-arma no próximo flanco
+            if (r.streak_resync) {
+                g_cmp_has_prev = 0U;       // descarta referência, re-arma no próximo flanco
+                g_cmp_confirm_count = 0U;  // exige 2 flancos consistentes de novo antes de re-ancorar
+            }
         }
     }
 
@@ -623,11 +720,27 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
         }
     }
 
+    // Refresh de spans só aqui (1×/volta), nunca no sub-tick: ω de 256
+    // counts é ruidoso e puxava o dwell para trás até o watchdog cortar.
+    if (ecu_sched_encoder_phase_valid() != 0U) {
+        si::encoder::refresh_pending_omega_spans(tim2_now);
+    }
+
     // Sem calibração de fase, phase_valid() é sempre 0 — presync. Com fase
     // válida: armamento sequencial tardio (janela ≤60°) via try_arm; o
     // sub-tick também chama try_arm a cada CC4IF.
     if (ecu_sched_encoder_phase_valid() == 0U) {
+        // Queda sequencial→presync (CMP desligado / stall / uncalibrated):
+        // um INJ_ON/DWELL já despachado cuja contraparte ficou na fila
+        // seria purgada por recompute_presync() e o pino ficava HIGH até
+        // o watchdog — o "INJ descontrolado" do fallback. Fecha já, uma
+        // vez, na borda da transição; rebuilds seguintes não fecham.
+        if (g_enc_last_builder_was_sequential != 0U) {
+            force_close_cyl_mask(0x0FU, 1U);
+            force_close_cyl_mask(0x0FU, 0U);
+        }
         g_enc_last_builder_was_sequential = 0U;
+        ++g_presync_call_count;  // DIAG temporário: confirma se este branch corre
         si::encoder::recompute_presync(tim2_now);
     } else {
         uint8_t did_handoff = 0U;
@@ -652,6 +765,27 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
             si::encoder::refresh_pending_omega_spans(tim2_now);
             si::encoder::try_arm_sequential_due(tim2_now);
         }
+
+        // Watchdog de "nada armado" — roda incondicionalmente aqui (não só
+        // quando run_seq_arm/did_handoff), cadência de 1×/volta: em regime
+        // normal try_arm_sequential_due já é chamado ~64×/volta pelo
+        // sub-tick, então este contador se move bem antes do timeout numa
+        // sequência saudável (cada cilindro tem de conseguir armar pelo
+        // menos 1×/720° = a cada 2 heavy-ticks).
+        {
+            const uint32_t arm_count_now = si::encoder::seq_arm_success_count();
+            if (arm_count_now != g_seq_arm_watch_last_count) {
+                g_seq_arm_watch_last_count = arm_count_now;
+                g_seq_heavy_ticks_without_arm = 0U;
+            } else {
+                ++g_seq_heavy_ticks_without_arm;
+                if (g_seq_heavy_ticks_without_arm >= ECU_SEQ_ARM_STALL_HEAVY_TICKS) {
+                    ecu_sched_encoder_phase_invalidate();
+                    g_seq_heavy_ticks_without_arm = 0U;
+                    ++g_seq_arm_stall_count;
+                }
+            }
+        }
     }
 
     // Publica no CkpSnapshot partilhado — único ponto deste ficheiro que o
@@ -670,19 +804,15 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
     }
     snap.phase_A = (ecu_sched_encoder_phase_at(tim2_now) == ECU_PHASE_A);
     snap.rpm_x10 = omega_x65536_to_rpm_x10();
-    snap.tooth_period_ns = 0U;  // sem equivalente encoder — misfire lê tim2/tim5 directo (ecu_sched_encoder_heartbeat_subtick), não este campo
-    // Derivado de tim2_now (mesma fórmula que sensors_map_window_poll_encoder(),
-    // sensors.cpp, usa localmente para o MAP window) — publicado aqui no
-    // snapshot GLOBAL para que auxiliaries.cpp (run_vvt_control() /
-    // calc_cam_pos_est_x10()) veja uma posição de came contínua em vez de
-    // ficar preso em 0 (colapsava para um sinal quase-binário 0°/180° via
-    // phase_A, corrompendo o PID de VVT em tempo real). misfire lê tim2/tim5
-    // directo via caminho próprio (misfire_encoder_on_sample), nunca este
-    // campo — ver misfire_detect.cpp:misfire_on_tooth(), dormant em modo
-    // encoder (só corre a partir do ISR TIM5, que nunca dispara aqui).
-    snap.tooth_index = static_cast<uint16_t>((tim2_now % 16384u) * 60u / 16384u);
+    snap.tooth_period_ns = 0U;
+    snap.tim2_cnt = tim2_now;
+    snap.crank_deg = ems::drv::crank_deg(tim2_now);
     snap.last_tim5_capture = tim5_now;
     ems::drv::ckp_publish_encoder_snapshot(snap);
+
+    // One rev per heavy tick — spark-skip Bresenham. Not inferred from a
+    // fake tooth_index wrap in the 2 ms loop (that misses wraps at high RPM).
+    ems::engine::spark_skip_on_rev();
 }
 
 // Sub-tick do heartbeat — chamado a CADA CC4IF (256 counts, ~64×/volta),
@@ -701,13 +831,14 @@ void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
                                          uint32_t cmp_angle,
                                          uint32_t cmp_edge_count) noexcept
 {
+    // Amostra ω já no 2º sub-tick (~1 ms) para o sequencial poder armar
+    // sem esperar 2 voltas. O refresh de dwell NÃO corre aqui (ver tick
+    // pesado) — janela de 256 counts é ruidosa demais para reposicionar ON.
     ecu_sched_encoder_omega_sample(tim2_now, tim5_now);
     ems::engine::misfire_encoder_on_sample(tim2_now, tim5_now);
 
-    // Armamento sequencial tardio + refresh de spans sob Δω.
     if (ecu_sched_encoder_phase_valid() != 0U) {
         si::g_knock_sequential = 1U;
-        si::encoder::refresh_pending_omega_spans(tim2_now);
         si::encoder::try_arm_sequential_due(tim2_now);
     }
 
@@ -730,18 +861,25 @@ void ecu_sched_encoder_heartbeat_test_reset(void) noexcept
     g_cmp_heartbeats_since_ok = 0U;
     g_cmp_reject_count        = 0U;
     g_cmp_missed_edge_count   = 0U;
+    g_cmp_confirm_count       = 0U;
     g_hb_subtick_count        = 0U;
     g_enc_last_builder_was_sequential = 0U;
     g_enc_seq_min_lead_skip_count = 0U;
     g_enc_omega_refresh_count = 0U;
     g_cmp_watchdog_rearm_pending  = 0U;
     g_cmp_watchdog_request_count  = 0U;
+    g_seq_arm_watch_last_count    = 0U;
+    g_seq_heavy_ticks_without_arm = 0U;
+    g_seq_arm_stall_count         = 0U;
+    g_presync_call_count          = 0U;
+    si::encoder::seq_arm_success_count_test_reset();
     si::encoder::clear_cyl_arm_latches();
     ems::drv::encoder_sync::set_health_ok(true);
 }
 uint32_t ecu_sched_encoder_test_get_cmp_reject_count(void) noexcept { return g_cmp_reject_count; }
 uint32_t ecu_sched_encoder_test_get_cmp_missed_edge_count(void) noexcept { return g_cmp_missed_edge_count; }
 uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept { return g_cmp_heartbeats_since_ok; }
+uint8_t  ecu_sched_encoder_test_get_cmp_confirm_count(void) noexcept { return g_cmp_confirm_count; }
 uint8_t  ecu_sched_encoder_test_get_subtick_count(void) noexcept { return g_hb_subtick_count; }
 uint32_t ecu_sched_encoder_test_get_seq_min_lead_skip_count(void) noexcept
 {
@@ -874,7 +1012,14 @@ static uint32_t duration_ticks_to_span_counts(uint32_t duration_ticks) noexcept
     if (omega <= 0) { return 0U; }
     const int64_t span = (static_cast<int64_t>(duration_ticks)
                           * static_cast<int64_t>(omega)) / 65536;
-    return (span < 0) ? 0U : static_cast<uint32_t>(span);
+    if (span <= 0) { return 0U; }
+    // Rede de segurança: uma bobina/injector nunca cobre mais de 360°.
+    // O filtro de ω acima é o que evita o dwell-watchdog a idle.
+    constexpr uint32_t kMaxDurationSpanCounts = 16384U;
+    if (span > static_cast<int64_t>(kMaxDurationSpanCounts)) {
+        return kMaxDurationSpanCounts;
+    }
+    return static_cast<uint32_t>(span);
 }
 
 // Piso mínimo de lead do compare (plano, secção 7) — equivalente ao
@@ -896,6 +1041,20 @@ static bool lead_ge_min(uint32_t target, uint32_t now_raw,
 {
     return static_cast<int32_t>(target - now_raw) >=
            static_cast<int32_t>(min_lead);
+}
+
+// Presync: se o ON (dwell / inj_on) já passou ou está dentro do min-lead,
+// o par inteiro (ON+OFF) vai para a próxima volta — preserva a duração.
+// Sem isto arm_channel_with_lead() empurrava o ON para "agora" e o pulso
+// ficava só com o resto até ao spark/EOI (PW/dwell truncados no scope).
+static void shift_pair_one_rev_if_on_too_soon(uint32_t& on_ts, uint32_t& off_ts,
+                                              uint32_t now_raw,
+                                              uint32_t min_lead) noexcept
+{
+    if (static_cast<int32_t>(on_ts - now_raw) < static_cast<int32_t>(min_lead)) {
+        on_ts  += 16384U;
+        off_ts += 16384U;
+    }
 }
 
 static uint32_t inj_pw_span_from_ticks(uint32_t pw_ticks) noexcept
@@ -1045,8 +1204,19 @@ void refresh_pending_omega_spans(uint32_t now_raw) noexcept
             continue;
         }
 
-        const uint32_t dwell_span =
+        uint32_t dwell_span =
             duration_ticks_to_span_counts(L.dwell_ticks);
+        // Tecto 5/4 do span de armação: um ω ruidoso não pode alongar o
+        // dwell em tempo até ao watchdog (1.4×). 5/4 deixa folga para RPM
+        // a subir de verdade sem disparar o corte de 1.4×.
+        if (L.omega_x65536 > 0) {
+            const uint32_t armed_span = static_cast<uint32_t>(
+                (static_cast<int64_t>(L.dwell_ticks) * L.omega_x65536) / 65536);
+            const uint32_t max_span = (armed_span * 5U) / 4U;
+            if (max_span != 0U && dwell_span > max_span) {
+                dwell_span = max_span;
+            }
+        }
         const uint32_t inj_span = inj_pw_span_from_ticks(L.inj_pw_ticks);
 
         if (L.ign_locked == 0U) {
@@ -1140,6 +1310,16 @@ static void arm_sequential_cyl(uint8_t cyl, uint32_t now_raw,
 // Armamento sequencial tardio: só insere eventos quando dwell ou inj_on
 // entram na janela [min_lead, 60°]. Chamado a cada sub-tick TIM2_CH4 e no
 // heartbeat pesado (handoff). Não reconstrói meia-fase com 360° de antecipação.
+// Diagnóstico do watchdog de "nada armado" (ecu_sched_encoder_heartbeat_tick()):
+// monotónico, nunca reseta — o chamador compara valores sucessivos para
+// detetar heavy-ticks consecutivos sem nenhum cilindro armado enquanto
+// phase_valid()==1 (âncora possivelmente corrompida por um re-anchor
+// espúrio — ver Fix C, mesma sessão do watchdog do TIM3 CMP IC).
+static uint32_t g_seq_arm_success_count = 0U;
+
+uint32_t seq_arm_success_count(void) noexcept { return g_seq_arm_success_count; }
+void seq_arm_success_count_test_reset(void) noexcept { g_seq_arm_success_count = 0U; }
+
 void try_arm_sequential_due(uint32_t now_raw) noexcept
 {
     static_assert(cfg::kCylinderCount == 4u, "ign/inj channel tables are 4-cyl");
@@ -1195,6 +1375,7 @@ void try_arm_sequential_due(uint32_t now_raw) noexcept
         // re-VE/λ/ΔP/S-curve). PW/avanço armados são os do peek.
         (void)ems::engine::transient_fuel_xtau_commit_last_peek(cyl);
         arm_sequential_cyl(cyl, now_raw, sp, t, min_lead, ms_inter_deg);
+        ++g_seq_arm_success_count;
     }
 }
 
@@ -1202,8 +1383,8 @@ void try_arm_sequential_due(uint32_t now_raw) noexcept
 // ainda não está confirmada (ecu_sched_encoder_phase_valid()==0, sempre
 // verdade sem EMS_MT6835_CMP_PHASE_CALIBRATED — ver board_pinout.h).
 // Equivalente a rebuild_presync_revolution() (ecu_sched_angle.cpp) em
-// counts: mesma matemática de ângulo (spark/eoi/inj_on/inj_off, bank
-// toggle), mas SPARK/EOI vão por engine_deg_to_absolute() (geometria pura)
+// counts: mesma matemática de ângulo (spark/eoi/inj_on/inj_off; semi
+// arma os dois bancos a 180°), mas SPARK/EOI vão por engine_deg_to_absolute() (geometria pura)
 // e dwell/PW vão por duration_ticks_to_span_counts() (ω), nunca por graus —
 // ver nota acima.
 //
@@ -1234,10 +1415,9 @@ void recompute_presync(uint32_t now_raw) noexcept
 
     const uint32_t dwell_span = duration_ticks_to_span_counts(g_dwell_ticks);
     const uint32_t min_lead = min_lead_counts();
-    const uint32_t raw_inj_pw_ticks =
-        (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS)
-            ? (g_inj_pw_ticks / 2U)
-            : g_inj_pw_ticks;
+    // g_inj_pw_ticks is one opening (cycle formula / squirts).
+    // Do not halve here — dead was already applied per opening.
+    const uint32_t raw_inj_pw_ticks = g_inj_pw_ticks;
     uint32_t inj_pw_span = duration_ticks_to_span_counts(raw_inj_pw_ticks);
     // Clamp de duty — paridade com kMaxPresyncInjPwDeg no caminho CKP.
     if (inj_pw_span > kMaxPresyncInjPwCounts) {
@@ -1247,8 +1427,9 @@ void recompute_presync(uint32_t now_raw) noexcept
 
     const PresyncWastedTargets pwt = presync_wasted_targets();
 
-    const uint32_t eoi_target    = engine_deg_to_absolute(pwt.eoi, now_raw);
-    const uint32_t inj_on_target = eoi_target - inj_pw_span;
+    uint32_t eoi_target    = engine_deg_to_absolute(pwt.eoi, now_raw);
+    uint32_t inj_on_target = eoi_target - inj_pw_span;
+    shift_pair_one_rev_if_on_too_soon(inj_on_target, eoi_target, now_raw, min_lead);
 
     // Wasted-spark: 2 bobinas por evento, pares a 180° — nunca as 4 no
     // mesmo alvo. g_knock_sequential fica 0 (limpo no topo).
@@ -1265,8 +1446,9 @@ void recompute_presync(uint32_t now_raw) noexcept
     // sem efeito nenhum na config atual.
     const uint8_t ign_mask_presync = ::ecu_sched_get_ign_inhibit_mask();
     const auto arm_wasted_pair = [&](uint32_t spark_deg, const uint8_t pair[2]) {
-        const uint32_t spark_target = engine_deg_to_absolute(spark_deg, now_raw);
-        const uint32_t dwell_target = spark_target - dwell_span;
+        uint32_t spark_target = engine_deg_to_absolute(spark_deg, now_raw);
+        uint32_t dwell_target = spark_target - dwell_span;
+        shift_pair_one_rev_if_on_too_soon(dwell_target, spark_target, now_raw, min_lead);
         for (uint8_t i = 0U; i < 2U; ++i) {
             const uint8_t bit = (pair[i] < 8U) ? si::k_ign_ch_to_bit[pair[i]] : 0U;
             if (bit != 0U && (ign_mask_presync & bit) != 0U) { continue; }
@@ -1275,10 +1457,12 @@ void recompute_presync(uint32_t now_raw) noexcept
         }
         emit_multispark_deg(spark_deg, 360U, ms_inter_deg,
             [&](uint32_t add_dwell_deg, uint32_t add_spark_deg) {
-                const uint32_t add_dwell_t =
+                uint32_t add_dwell_t =
                     engine_deg_to_absolute(add_dwell_deg, now_raw);
-                const uint32_t add_spark_t =
+                uint32_t add_spark_t =
                     engine_deg_to_absolute(add_spark_deg, now_raw);
+                shift_pair_one_rev_if_on_too_soon(add_dwell_t, add_spark_t,
+                                                  now_raw, min_lead);
                 for (uint8_t i = 0U; i < 2U; ++i) {
                     const uint8_t bit = (pair[i] < 8U) ? si::k_ign_ch_to_bit[pair[i]] : 0U;
                     if (bit != 0U && (ign_mask_presync & bit) != 0U) { continue; }
@@ -1296,18 +1480,19 @@ void recompute_presync(uint32_t now_raw) noexcept
             arm_channel_with_lead(kInjCh[i], eoi_target, ECU_ACT_INJ_OFF, min_lead);
         }
     } else {
-        // bank_off == bank_on sempre (mesmo banco liga/desliga na mesma
-        // volta) — simplificação provada equivalente à derivação em dois
-        // passos de rebuild_presync_revolution() (toggle após o ON, reler
-        // para o OFF): com toggle inicial T, bank_on=(T==0)?a:b e, após
-        // T^=1, bank_off=(novo T==1)?a:b == bank_on sempre. Usar o mesmo
-        // banco directamente evita reler o toggle duas vezes.
-        const uint8_t *bank = (g_presync_bank_toggle == 0U) ? inj_a : inj_b;
+        // Semi: bank A @ EOI, bank B @ EOI+180°. Two openings / 720°
+        // whose widths sum to flow+2×dead.
         for (uint8_t i = 0U; i < 2U; ++i) {
-            arm_channel_with_lead(bank[i], inj_on_target, ECU_ACT_INJ_ON, min_lead);
-            arm_channel_with_lead(bank[i], eoi_target, ECU_ACT_INJ_OFF, min_lead);
+            arm_channel_with_lead(inj_a[i], inj_on_target, ECU_ACT_INJ_ON, min_lead);
+            arm_channel_with_lead(inj_a[i], eoi_target, ECU_ACT_INJ_OFF, min_lead);
         }
-        g_presync_bank_toggle ^= 1U;
+        uint32_t eoi_b = engine_deg_to_absolute((pwt.eoi + 180U) % 360U, now_raw);
+        uint32_t inj_on_b = eoi_b - inj_pw_span;
+        shift_pair_one_rev_if_on_too_soon(inj_on_b, eoi_b, now_raw, min_lead);
+        for (uint8_t i = 0U; i < 2U; ++i) {
+            arm_channel_with_lead(inj_b[i], inj_on_b, ECU_ACT_INJ_ON, min_lead);
+            arm_channel_with_lead(inj_b[i], eoi_b, ECU_ACT_INJ_OFF, min_lead);
+        }
     }
 }
 

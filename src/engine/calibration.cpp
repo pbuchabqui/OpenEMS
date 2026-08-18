@@ -165,14 +165,14 @@ uint16_t idle_spark_rpm_per_deg_x10 = 500u;
 int16_t idle_spark_retard_limit_deg = -8;
 int16_t idle_spark_advance_limit_deg = 12;
 
-uint16_t app1_raw_min = 200u;
-uint16_t app1_raw_max = 3895u;
-uint16_t app2_raw_min = 200u;
-uint16_t app2_raw_max = 3895u;
-uint16_t etb_tps1_raw_min = 200u;
-uint16_t etb_tps1_raw_max = 3895u;
-uint16_t etb_tps2_raw_min = 200u;
-uint16_t etb_tps2_raw_max = 3895u;
+uint16_t app1_raw_min = 0u;
+uint16_t app1_raw_max = 4095u;
+uint16_t app2_raw_min = 0u;
+uint16_t app2_raw_max = 4095u;
+uint16_t etb_tps1_raw_min = 0u;
+uint16_t etb_tps1_raw_max = 4095u;
+uint16_t etb_tps2_raw_min = 0u;
+uint16_t etb_tps2_raw_max = 4095u;
 uint16_t app_max_delta_pct_x10 = 120u;
 uint16_t etb_max_delta_pct_x10 = 120u;
 uint16_t etb_max_open_pct_x10_limp = 250u;
@@ -189,8 +189,8 @@ uint16_t etb_pedal_map[4][10] = {
     {   0, 180, 350, 500, 600, 700, 780, 850, 920, 1000},  // SPORT
     {   0,  50, 100, 150, 220, 300, 400, 520, 650, 1000},  // RAIN
 };
-uint16_t tps_raw_min = 200u;
-uint16_t tps_raw_max = 3895u;
+uint16_t tps_raw_min = 0u;
+uint16_t tps_raw_max = 4095u;
 
 int8_t cyl_fuel_trim_pct[cfg::kCylinderCount] = {};  // 0 = sem correção
 int8_t cyl_ign_trim_deg[cfg::kCylinderCount]  = {};  // 0 = sem correção

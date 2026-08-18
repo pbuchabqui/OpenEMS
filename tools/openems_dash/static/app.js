@@ -2454,13 +2454,13 @@ async function drawScope() {
     return;
   }
 
-  // ângulo absoluto por borda (âncora: tooth_index/fase do dump)
+  // ângulo absoluto por borda (âncora: crank_deg/fase do dump)
   const n = s.ckp_ms.length;
   const deltas = [];
   for (let i = 1; i < n; i++) deltas.push(s.ckp_ms[i] - s.ckp_ms[i-1]);
   const med = [...deltas].sort((a, b) => a - b)[Math.floor(deltas.length / 2)];
   const angles = new Array(n);
-  let a = (s.phase_a ? 0 : 360) + s.tooth_index * 6;
+  let a = (s.phase_a ? 0 : 360) + (s.crank_deg || 0);
   angles[n-1] = ((a % 720) + 720) % 720;
   for (let i = n - 2; i >= 0; i--) {
     a -= Math.max(1, Math.round(deltas[i] / med)) * 6;

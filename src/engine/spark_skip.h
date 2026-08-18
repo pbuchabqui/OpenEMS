@@ -24,7 +24,7 @@ namespace ems::engine {
 void spark_skip_set_ratio_q8(uint8_t ratio_q8) noexcept;
 uint8_t spark_skip_get_ratio_q8() noexcept;
 
-// Chamar UMA vez por revolução (edge de wrap do tooth_index, contexto main).
+// Chamar UMA vez por revolução (heavy tick TIM2_CH4 do encoder).
 // Actualiza a máscara devolvida por spark_skip_mask().
 void spark_skip_on_rev() noexcept;
 

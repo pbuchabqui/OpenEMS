@@ -314,9 +314,10 @@ void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
             const uint8_t ign_idx = (uint8_t)(idx - ECU_IGN_CH_FIRST);
             // OR 1: arm tick 0 is the inactive sentinel (TIM5_CNT can be 0).
             g_dwell_arm_tick[ign_idx] = TIM5_CNT | 1U;
-            if (g_dwell_wdog_ticks[ign_idx] == 0U) {
-                g_dwell_wdog_ticks[ign_idx] = (si::g_dwell_ticks * 7U) / 5U;
-            }
+            // Sempre refresca o timeout: um valor residual do ciclo
+            // anterior (LOW não o limpava) ficava preso no 1º dwell do
+            // boot. Cada HIGH usa o g_dwell_ticks actual.
+            g_dwell_wdog_ticks[ign_idx] = (si::g_dwell_ticks * 7U) / 5U;
         }
     } else {
         ++g_pin_low_count[idx];
@@ -324,8 +325,9 @@ void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
             g_inj_open_tick[idx] = 0U;
             g_inj_wdog_ticks[idx] = 0U;
         } else if (idx >= ECU_IGN_CH_FIRST && idx < (ECU_IGN_CH_FIRST + 4U)) {
-            // IGN pin LOW = spark/safe: release dwell watchdog for that coil.
+            // IGN pin LOW = spark/safe: solta o watchdog (arm + timeout).
             g_dwell_arm_tick[idx - ECU_IGN_CH_FIRST] = 0U;
+            g_dwell_wdog_ticks[idx - ECU_IGN_CH_FIRST] = 0U;
         }
     }
     g_pin_last_state[idx] = high;
@@ -764,100 +766,20 @@ void ecu_sched_get_diag_snapshot(EcuSchedDiagSnapshot *out)
     out->diag_clear_all_count = g_diag_clear_all_count;
 }
 
+namespace ems::engine::sched_internal {
+AngleEvent_t g_angle_table[ECU_ANGLE_TABLE_SIZE] = {};
+uint8_t g_angle_table_count = 0U;
+uint32_t g_angle_tooth_mask_lo = 0U;
+uint32_t g_angle_tooth_mask_hi = 0U;
+void clear_angle_table(void) { g_angle_table_count = 0U; }
+void rebuild_sequential_cycle(const ems::drv::CkpSnapshot&) {}
+void rebuild_presync_revolution(const ems::drv::CkpSnapshot&) {}
+}  // namespace ems::engine::sched_internal
+
 namespace ems::engine {
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
-    static uint8_t s_unsync_teeth = 0U;
-    if ((snap.state != ems::drv::SyncState::FULL_SYNC) && (snap.state != ems::drv::SyncState::HALF_SYNC)) {
-        ++s_unsync_teeth;
-        if (s_unsync_teeth > g_diag_unsync_teeth_peak) { g_diag_unsync_teeth_peak = s_unsync_teeth; }
-        if (s_unsync_teeth >= 60U && g_hook_prev_valid != 0U) {
-            clear_all_events_and_drive_safe_outputs();
-            g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U; g_cmp_phase_seen = 0U;
-            ++g_dbg_clear_all_count;
-            ++g_diag_clear_all_count;
-        }
-        return;
-    }
-    s_unsync_teeth = 0U;
-
-    // Cam-present gate: decoupled from phase_A (which now toggles at every gap).
-    // Requires 2 validated CMP edges since last sync loss.
-    g_cmp_phase_seen = (snap.cmp_confirms >= 2U) ? 1U : 0U;
-
-    // Auto-select presync injection mode by cranking state
-    // SIMULTANEOUS during crank (batch-fire), SEMI_SEQUENTIAL after
-    if (g_presync_inj_auto) {
-        si::g_presync_inj_mode = ems::engine::is_cranking()
-            ? ECU_PRESYNC_INJ_SIMULTANEOUS
-            : ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
-    }
-
-    const uint8_t rev_boundary = ((g_hook_prev_valid != 0U) && (snap.tooth_index == 0U) && (g_hook_prev_tooth != 0U)) ? 1U : 0U;
-    if (rev_boundary != 0U) {
-        g_last_gap_ts = snap.last_tim5_capture;  // TIM5 timestamp of gap (tooth 0)
-        const bool use_presync = (snap.state == ems::drv::SyncState::HALF_SYNC && g_presync_enable != 0U && g_cmp_phase_seen == 0U)
-                              || (snap.state == ems::drv::SyncState::FULL_SYNC && g_cmp_phase_seen == 0U);
-        // Mode change presync↔sequential: drop pending events from the previous
-        // table (wrong phase / bank / half-PW) before rebuilding.
-        static uint8_t s_prev_sched_mode = 0xFFU;  // 0=presync, 1=seq, 0xFF=none
-        const uint8_t mode = use_presync ? 0U : 1U;
-        if (s_prev_sched_mode != 0xFFU && s_prev_sched_mode != mode) {
-            g_evt_count = 0U;
-            TIM5_DIER &= ~TIM_DIER_CC3IE;
-            for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) {
-                force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK, 1U);
-            }
-            for (uint8_t i = 0U; i < 4U; ++i) {
-                g_dwell_arm_tick[i] = 0U;
-                g_inj_open_tick[i] = 0U;
-                g_inj_wdog_ticks[i] = 0U;
-            }
-        }
-        s_prev_sched_mode = mode;
-        if (use_presync) {
-            ++g_dbg_presync_count;
-            ++g_diag_presync_revs;
-            si::rebuild_presync_revolution(snap);
-            // Rearma o toggle p/ que a PRIMEIRA fronteira sequencial após presync
-            // compute sempre a tabela (Calculate_Sequential_Cycle). Sem isto, se um
-            // ciclo sequencial anterior deixou o toggle em 0, a re-entrada saltava
-            // uma volta — mantendo a tabela wasted (PHASE_ANY, meia-PW) por +360°.
-            g_hook_schedule_this_gap = 1U;
-        } else {
-            if (g_hook_schedule_this_gap != 0U) {
-                ++g_dbg_seq_calls;
-                ++g_diag_seq_revs;
-                si::rebuild_sequential_cycle(snap);
-                g_hook_schedule_this_gap = 0U;
-            } else {
-                g_hook_schedule_this_gap = 1U;
-            }
-        }
-    }
-
-    const uint8_t tooth_index = (uint8_t)snap.tooth_index;
-    const uint32_t tooth_mask = (tooth_index < 32U)
-        ? (si::g_angle_tooth_mask_lo & (1UL << tooth_index))
-        : (si::g_angle_tooth_mask_hi & (1UL << (tooth_index - 32U)));
-    if (tooth_mask != 0U) {
-        const uint32_t period_ns = (snap.predicted_tooth_period_ns != 0U)
-            ? snap.predicted_tooth_period_ns
-            : snap.tooth_period_ns;
-        uint32_t tooth_ticks = TOOTH_NS_TO_SCHED(period_ns);
-        const uint32_t now = scheduler_counter();
-        const uint8_t current_phase = snap.phase_A ? ECU_PHASE_A : ECU_PHASE_B;
-        for (uint8_t i = 0U; i < si::g_angle_table_count; ++i) {
-            const AngleEvent_t *e = &si::g_angle_table[i];
-            if (e->tooth_index != tooth_index) { continue; }
-            if ((e->phase_A != ECU_PHASE_ANY) && (e->phase_A != current_phase)) { ++g_dbg_phase_skip; continue; }
-            ++g_dbg_phase_fire;
-            const uint32_t sub = (uint32_t)(((uint64_t)e->sub_frac_x256 * (uint64_t)tooth_ticks) >> 8U);
-            arm_channel(e->channel, now + sub, e->action);
-        }
-    }
-
-    g_hook_prev_valid = 1U; g_hook_prev_tooth = snap.tooth_index;
+    static_cast<void>(snap);
 }
 }
 

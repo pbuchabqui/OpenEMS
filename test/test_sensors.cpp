@@ -182,17 +182,9 @@ void test_sensors_map_window_poll_encoder(void) {
     map_window_open_deg = 0u;
     map_window_len_deg  = 90u;
 
-    // Início de cada quadrante de 180° do ciclo de 720° (deg=0/180/360/540,
-    // off=0 dentro da sub-janela de acumulação de 90° — map_window_on_tooth
-    // só acumula em off<map_window_len_deg, a segunda metade de cada slot de
-    // 180° é "morta" por desenho) — tooth_index inteiro exacto (0/30/0/30) e
-    // phase_A/B correctos via ecu_sched_encoder_phase_at(tim2_now), tudo
-    // derivado da MESMA leitura tim2_now dentro de
-    // sensors_map_window_poll_encoder(). Quad2/quad3 (deg 360-719) só
-    // existem depois da fronteira de volta do TIM2 (tim2_now≥16384, revs
-    // ímpar) — se tooth_index vivo se combinasse com um phase_A congelado
-    // (o bug que motivou este desenho), quad2 seria mal-atribuído a
-    // quad0/quad1. Ver docs/dev/mt6835_encoder_fork.md, Parte 3b.
+    // Início de cada quadrante de 180° do ciclo de 720° (deg=0/180/360/540).
+    // cycle_deg + phase_A vêm da mesma leitura tim2_now. Quad2/quad3
+    // (deg 360-719) só existem depois da fronteira de volta do TIM2.
     constexpr uint32_t kTim2Quad[4] = {0u, 8192u, 16384u, 24576u};
     constexpr uint16_t kRawQuad[4]  = {1365u, 2730u, 1365u, 4095u};  // →1000/2000/1000/3000
     constexpr uint16_t kBarQuad[4]  = {1000u, 2000u, 1000u, 3000u};
@@ -213,7 +205,7 @@ void test_sensors_map_window_poll_encoder(void) {
     CHECK_EQ(map_window_slot_bar_x1000(0u), kBarQuad[0], "slot 0 (quad0, phase_A) = 1000");
     CHECK_EQ(map_window_slot_bar_x1000(1u), kBarQuad[1], "slot 1 (quad1, phase_A) = 2000");
     CHECK_EQ(map_window_slot_bar_x1000(2u), kBarQuad[2],
-             "slot 2 (quad2, cruza a fronteira de volta A→B) = 1000 — tooth_index/phase_A coerentes");
+             "slot 2 (quad2, cruza a fronteira de volta A→B) = 1000 — cycle_deg/phase_A coerentes");
     CHECK_EQ(map_window_slot_bar_x1000(3u), kBarQuad[3], "slot 3 (quad3, phase_B) = 3000");
 
     map_window_enable = 0u;  // isolamento entre testes
@@ -222,22 +214,17 @@ void test_sensors_map_window_poll_encoder(void) {
 
 void test_map_window_angular(void) {
     section("map_window: janela angular por cilindro + balance");
-    using ems::engine::map_window_on_tooth;
+    using ems::engine::map_window_on_sample;
     using ems::engine::map_window_slot_bar_x1000;
     using ems::engine::map_window_balance_x1000;
     using ems::engine::map_window_cycles;
     using ems::engine::map_window_reset;
 
     map_window_reset();
-    ems::drv::CkpSnapshot s{};
-    s.state = SyncState::FULL_SYNC;
-    s.cmp_confirms = 2u;
-    s.phase_A = true;
-    s.tooth_index = 0u;
 
     // Desligado (default): no-op.
     ems::engine::map_window_enable = 0u;
-    map_window_on_tooth(s, 500u);
+    map_window_on_sample(0u, 500u, true, true);
     CHECK_EQ(map_window_cycles(), 0u, "enable=0: nenhum ciclo");
     CHECK_EQ(map_window_slot_bar_x1000(0u), 0u, "enable=0: slot vazio");
 
@@ -247,15 +234,10 @@ void test_map_window_angular(void) {
     ems::engine::map_window_open_deg = 0u;
     ems::engine::map_window_len_deg  = 90u;
     for (uint8_t cycle = 0u; cycle < 8u; ++cycle) {
-        for (uint8_t rev = 0u; rev < 2u; ++rev) {
-            s.phase_A = (rev == 0u);
-            for (uint16_t t = 0u; t < 58u; ++t) {
-                s.tooth_index = t;
-                const uint16_t deg  = static_cast<uint16_t>(t * 6u + (rev ? 360u : 0u));
-                const uint8_t  quad = static_cast<uint8_t>(deg / 180u);
-                const uint16_t map  = (quad == 1u) ? 520u : (quad == 2u) ? 480u : 500u;
-                map_window_on_tooth(s, map);
-            }
+        for (uint16_t deg = 0u; deg < 720u; deg = static_cast<uint16_t>(deg + 6u)) {
+            const uint8_t  quad = static_cast<uint8_t>(deg / 180u);
+            const uint16_t map  = (quad == 1u) ? 520u : (quad == 2u) ? 480u : 500u;
+            map_window_on_sample(deg, map, true, true);
         }
     }
     CHECK_EQ(map_window_cycles(), 8u, "8 ciclos completos (4 janelas cada)");
@@ -273,11 +255,8 @@ void test_map_window_angular(void) {
 
     // Perda de fase de came a meio: aborta janela parcial, sem ciclo novo.
     const uint32_t cycles_before = map_window_cycles();
-    s.phase_A = true;
-    s.tooth_index = 2u;          // dentro da janela do slot 0
-    map_window_on_tooth(s, 900u);
-    s.cmp_confirms = 1u;         // fase deixou de estar confirmada
-    map_window_on_tooth(s, 900u);
+    map_window_on_sample(12u, 900u, true, true);   // dentro da janela do slot 0
+    map_window_on_sample(12u, 900u, true, false);  // CMP deixou de estar confirmado
     CHECK_EQ(map_window_cycles(), cycles_before, "sem came: nenhum ciclo novo");
     CHECK_EQ(map_window_slot_bar_x1000(0u), 500u,
              "janela parcial abortada não contamina a média");

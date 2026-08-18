@@ -479,21 +479,15 @@ static void openems_init() noexcept {
     // ciclo, em qualquer posição, seria atribuído ao cilindro 0 até o
     // primeiro init() correr, em vez de ficar inerte (-1).
     ems::engine::misfire_encoder_init();
-#if EMS_MT6835_ENCODER
-    // Fork MT6835/TIM2-encoder (docs/dev/mt6835_encoder_fork.md) — substitui
-    // CKP/CMP via Hall por encoder magnético absoluto. Mutuamente exclusivo
-    // com tim5_ic_init(): os dois reclamam PA0/PA1 para papéis diferentes.
-    ems::hal::tim5_freerun_init();  // watchdogs de dwell/injeção continuam
-    ems::hal::tim2_encoder_init();  // CKP: TIM2_CH1/CH2 = PA0/PA1
-    ems::hal::tim3_cmp_ic_init();   // CMP: TIM3_CH1 = PC6
-    ems::hal::mt6835_init();        // leitura absoluta SPI no key-on
-    // Heartbeat TIM2_CH4 — depois de mt6835_init() para que o 1º alvo de
-    // CCR4 (now+256, sub-tick) parta do TIM2_CNT já pré-carregado pela
-    // leitura SPI absoluta, não de um valor de reset arbitrário.
+    // Encoder-only: TIM5 is the freerun timebase (dwell/inj watchdogs).
+    // TIM2 AB = crank angle; TIM3_CH1 = CMP. No Hall/60-2 IC path.
+    ems::hal::tim5_freerun_init();
+    ems::hal::tim2_encoder_init();
+    ems::hal::tim3_cmp_ic_init();
+    ems::hal::mt6835_init();
+    // Heartbeat TIM2_CH4 after SPI preload so the first CCR4 target
+    // (now+256) starts from a real TIM2_CNT, not reset garbage.
     ems::hal::tim2_heartbeat_start();
-#else
-    ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
-#endif
     iwdg_kick();
 
     // 2a) Scheduler unificado (re-asserts pin safe + clears event queue)
@@ -519,13 +513,15 @@ static void openems_init() noexcept {
     ems::hal::can0_init();
     ems::hal::uart0_init(115200u);
     ems::hal::uart0_enable_rx();  // RX fica desligado por padrão (uart.cpp:61)
+#if EMS_TLE8888_PRESENT
     ems::hal::tle8888_init();
-    // Enables de hardware do estágio de potência (INJEN=PE14 / IGNEN=PE3).
-    // Nasceram LOW em out_pins_hw_init(); só sobem se o TLE8888 confirmou
-    // comunicação E configuração (direct drive, VR, enables por canal). Se o CI
-    // não respondeu, injecção e ignição ficam inibidas por hardware.
-    // No RGT6 é no-op. Ver docs/hw/interface_board_v1.md.
+    // INJEN/IGNEN só sobem se o CI confirmou SPI + configure().
     ems::hal::power_stage_enable(ems::hal::tle8888_ok());
+#else
+    // Sem TLE8888: INJ/IGN são GPIO directo. INJEN/IGNEN sobem sempre
+    // (nascem LOW em out_pins_hw_init()).
+    ems::hal::power_stage_enable(true);
+#endif
     ems::engine::ewg_control_init();
     ems::hal::flex_fuel_init();
     iwdg_kick();
@@ -727,21 +723,6 @@ int main() {
             g_t2ms_ = now;
             const uint32_t loop2ms_start_us = micros();
 
-#if !EMS_MT6835_ENCODER
-            // Stall watchdog: detecta virabrequim parado entre dentes.
-            // Deve preceder ckp_snapshot() para que o snapshot deste ciclo
-            // já reflicta LOSS_OF_SYNC se o motor parou.
-            // Reactivado: os falsos stalls vinham do wrap 16-bit do TIM3;
-            // desde a migração para TIM5 (32-bit) o elapsed é correcto.
-            // Também decai rpm_x10 fantasma de ruído em CKP sem sync.
-            ems::drv::ckp_stall_poll(ems::hal::tim5_count());
-#else
-            // Equivalente encoder (ckp_stall_poll_encoder, ver ckp.h): sem
-            // isto, um encoder que pare de verdade (fio partido, sensor
-            // morto) deixava o heartbeat TIM2_CH4 congelado — ele próprio só
-            // dispara enquanto TIM2 avança — e rpm_x10 preso no último valor
-            // válido para sempre, nunca a decair a 0 sozinho. Deve preceder
-            // ckp_snapshot() pela mesma razão do caminho Hall acima.
             ems::drv::ckp_stall_poll_encoder(ems::hal::tim5_count());
 
             // Watchdog do TIM3 CMP IC: se revoluções demais se passaram
@@ -753,7 +734,6 @@ int main() {
                 ems::hal::CriticalSectionGuard guard;
                 ems::hal::tim3_cmp_ic_init();
             }
-#endif
 
             // Dwell / injector open watchdogs (lost SPARK / lost INJ_OFF).
             ecu_sched_dwell_watchdog();
@@ -954,12 +934,8 @@ int main() {
                             (static_cast<uint32_t>(mx) * into) / win);
                     }
                     ems::engine::spark_skip_set_ratio_q8(ratio);
-                    // Edge de revolução: tooth_index recua (wrap no gap).
-                    static uint16_t s_prev_tooth = 0u;
-                    if (snap.tooth_index < s_prev_tooth) {
-                        ems::engine::spark_skip_on_rev();
-                    }
-                    s_prev_tooth = snap.tooth_index;
+                    // spark_skip_on_rev() corre no heavy tick do encoder
+                    // (1×/volta), não inferido de wrap de dente.
                 }
 
                 // Duty do injector: estado do tick anterior (o PW final só é
@@ -1190,13 +1166,18 @@ int main() {
                 const uint32_t delta_p_pw_us = ems::engine::apply_delta_p_compensation(
                     quick_crank_pw_us, sensors.fuel_press_bar_x1000, map_bar_x100);
                 const uint32_t scurve_pw_us = ems::engine::apply_injector_scurve(delta_p_pw_us);
-                const uint32_t final_pw_us = (scurve_pw_us > 0u)
-                    ? scurve_pw_us + static_cast<uint32_t>(fuel_corr.dead_time_us)
-                    : 0u;
+                // Formula is flow + dead×openings (seq: +1 dead, semi: +2).
+                // The pin splits that total across the openings; the gauge
+                // shows the formula, not one opening.
+                const uint8_t squirts = ::ecu_sched_is_sequential() ? 1u : 2u;
+                const uint32_t cycle_on_us = ems::engine::inj_cycle_pw_us(
+                    scurve_pw_us, fuel_corr.dead_time_us, squirts);
+                const uint32_t pulse_pw_us = ems::engine::inj_pulse_pw_us(
+                    scurve_pw_us, fuel_corr.dead_time_us, squirts);
                 // Com fuel cut (rev limiter/limp) os injectores estão inibidos pela
                 // mask — a telemetria (dash/CAN) tem de mostrar 0, não o PW calculado
                 // que continua a ser comitado para retoma suave.
-                const uint32_t pw_100 = final_pw_us / 100u;
+                const uint32_t pw_100 = cycle_on_us / 100u;
                 g_last_pw_ms_x10 = fuel_cut_active ? 0u
                     : static_cast<uint8_t>(pw_100 > 255u ? 255u : pw_100);
                 g_last_advance_deg = clamp_i8(sched_spark_deg, -10, 40);
@@ -1204,7 +1185,7 @@ int main() {
                 // Protecção de duty (FOME #215): alimenta com o PW final
                 // comandado; o corte em si entra na mask do próximo tick.
                 //
-                // LIMITE CONHECIDO (EMS_MT6835_ENCODER): final_pw_us usa o MAP
+                // LIMITE CONHECIDO (EMS_MT6835_ENCODER): cycle_on_us usa o MAP
                 // FUNDIDO do motor inteiro (map_bar_x100). Quando o slot de MAP
                 // por-cilindro está válido (map_window_slot_valid_for_cyl(),
                 // ver enc_cyl_setpoints.cpp:finalize_cyl_setpoints()), o PW
@@ -1215,9 +1196,9 @@ int main() {
                 // revisão — mudar a fonte do valor vigiado é uma alteração de
                 // superfície de proteção de hardware, precisa de desenho e
                 // validação em bancada à parte.
-                ems::engine::fuel_inj_duty_update(final_pw_us, snap.rpm_x10, 2u);
+                ems::engine::fuel_inj_duty_update(cycle_on_us, snap.rpm_x10, 2u);
 
-                const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
+                const uint32_t inj_pw_ticks = ems::engine::inj_pw_us_to_scheduler_ticks(pulse_pw_us);
                 const uint32_t eoi_lead =
                     static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(
                         snap.rpm_x10, sensors.clt_degc_x10));
@@ -1283,16 +1264,18 @@ int main() {
                 const uint32_t delta_p_pw_us = ems::engine::apply_delta_p_compensation(
                     crank_flow_us, sensors.fuel_press_bar_x1000, map_bar_x100);
                 const uint32_t scurve_pw_us = ems::engine::apply_injector_scurve(delta_p_pw_us);
-                const uint32_t final_pw_us = (scurve_pw_us > 0u)
-                    ? scurve_pw_us + static_cast<uint32_t>(fuel_corr.dead_time_us)
-                    : 0u;
-                const uint32_t pw_100 = final_pw_us / 100u;
+                // Cranking batch is simultaneous: formula flow+2×dead.
+                const uint32_t cycle_on_us = ems::engine::inj_cycle_pw_us(
+                    scurve_pw_us, fuel_corr.dead_time_us, 2u);
+                const uint32_t pulse_pw_us = ems::engine::inj_pulse_pw_us(
+                    scurve_pw_us, fuel_corr.dead_time_us, 2u);
+                const uint32_t pw_100 = cycle_on_us / 100u;
                 g_last_pw_ms_x10 = fuel_cut_active ? 0u
                     : static_cast<uint8_t>(pw_100 > 255u ? 255u : pw_100);
                 const int16_t sched_spark_deg = ems::engine::crank_spark_deg;
                 g_last_advance_deg = clamp_i8(sched_spark_deg, -10, 40);
                 const uint32_t inj_pw_ticks =
-                    ems::engine::inj_pw_us_to_scheduler_ticks(final_pw_us);
+                    ems::engine::inj_pw_us_to_scheduler_ticks(pulse_pw_us);
                 ::ecu_sched_commit_calibration(
                     static_cast<uint32_t>(sched_spark_deg < 0 ? 0 : sched_spark_deg),
                     dwell_ticks,
@@ -1415,9 +1398,8 @@ int main() {
             const auto snap = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
             ems::app::ui_update_rt_metrics(
-	            // In presync+SIMULTANEOUS the scheduler halves PW per pulse
-	            (!ecu_sched_is_sequential() && ecu_sched_presync_inj_mode() == 0u)
-	                ? static_cast<uint8_t>(g_last_pw_ms_x10 / 2u) : g_last_pw_ms_x10,
+	            // Formula result: flow + dead×openings (not flow/2+dead).
+	            g_last_pw_ms_x10,
 	            g_last_advance_deg, g_last_stft_pct,
                                            g_last_lambda_target_d4, g_last_ltft_pct);
             ems::app::ui_update_rt_sched_diag(
@@ -1449,7 +1431,9 @@ int main() {
         if (elapsed(now, g_t100ms_, 100u)) {
             g_t100ms_ = now;
             ems::drv::sensors_tick_100ms();
+#if EMS_TLE8888_PRESENT
             ems::hal::tle8888_poll_diag();
+#endif
 
 #if EMS_MT6835_ENCODER
             // Poll de saúde do MT6835 (docs/dev/mt6835_encoder_fork.md,

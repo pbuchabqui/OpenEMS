@@ -125,8 +125,9 @@ def parse_realtime(buf: bytes) -> RealtimeData:
     map_fused_bar_x100, net_pw_us = struct.unpack_from("<HH", buf, 66)
     (ckp_edges, cmp_edges, tooth_ns,
      ckp_age, cmp_age) = struct.unpack_from("<IIIHH", buf, 70)
-    # Injector duty cycle (contra ciclo 720°): DC% = PW_ms × RPM / 1200.
-    # pw_x10 está em décimos de ms → PW_ms = pw_x10/10 → divisor 12000.
+    inj_mode = r[30] >> 4
+    # Telemetry PW is the cycle formula (flow + dead×openings), already
+    # the full electrical ON time per 720°. DC% = PW_ms × RPM / 1200.
     dc_pct = round(pw_x10 * rpm / 12000.0, 1) if rpm > 0 else 0.0
     return RealtimeData(
         rpm=rpm,
@@ -151,7 +152,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         seed_confirmed=struct.unpack_from("<I", r, 22)[0],
         seed_rejected=struct.unpack_from("<I", r, 26)[0],
         sync_state=r[30] & 0x0F,
-        inj_mode=r[30] >> 4,
+        inj_mode=inj_mode,
         # r+31..34: tc_reduction_pct_x10 (u16) + spark_retard (u8) + pad
         tc_reduction_pct=struct.unpack_from("<H", r, 31)[0] / 10.0,
         torque_spark_retard_deg=r[33],
@@ -242,6 +243,25 @@ class OpenEMSLink:
     def read_realtime(self) -> RealtimeData:
         return parse_realtime(self._txn(b"A", PAGE_SIZES[3]))
 
+    # 'V': 8 pinos × (high, low, seq_err) u32 LE = 96 B.
+    # Índice = pin metric: 0–3 INJ1–4, 4–7 IGN1–4 (ecu_sched.cpp).
+    PIN_COUNT_NAMES = (
+        "INJ1", "INJ2", "INJ3", "INJ4",
+        "IGN1", "IGN2", "IGN3", "IGN4",
+    )
+
+    def read_pin_counts(self) -> dict:
+        buf = self._txn(b"V", 96)
+        vals = struct.unpack("<24I", buf)
+        out = {}
+        for i, name in enumerate(self.PIN_COUNT_NAMES):
+            out[name] = {
+                "high": vals[i * 3 + 0],
+                "low": vals[i * 3 + 1],
+                "seq_err": vals[i * 3 + 2],
+            }
+        return out
+
     # ── páginas ─────────────────────────────────────────────────────────
     def read_page(self, page: int, off: int = 0, length: int | None = None) -> bytes:
         size = PAGE_SIZES[page]
@@ -327,7 +347,7 @@ class OpenEMSLink:
             raise IOError(f"apply_ltft_ready: resp {resp.hex() if resp else 'empty'}")
         return int(resp[1])
 
-    # ── contadores de debug ('D': 54 × u32 LE = 216 B) ──────────────────
+    # ── contadores de debug ('D': 55 × u32 LE = 220 B) ──────────────────
     # Índices 31-32 (stft_last_err, stft_integ_x1000) são i32 no wire.
     # 37-40: discriminação dos gatilhos de perda de FULL_SYNC (blip PW=0).
     DEBUG_FIELDS = [
@@ -357,8 +377,20 @@ class OpenEMSLink:
         # periférico foi rearmado após revoluções demais sem flanco CMP
         # aceite. Sempre 0 em builds de produção.
         "cmp_watchdog_rearms",
+        # [54] watchdog do builder sequencial: nº de vezes que o fallback
+        # para presync foi forçado por phase_valid()==1 sem nenhum cilindro
+        # conseguir armar por várias voltas seguidas (âncora possivelmente
+        # corrompida por um re-anchor espúrio). Sempre 0 em produção.
+        "seq_arm_stalls",
+        # [55] DIAG TEMPORÁRIO — remover depois de fechar o bug do INJ mudo/
+        # descontrolado em presync sustentado (2026-08-17).
+        "presync_call_count",
+        # [56-57] DIAG TEMPORÁRIO — contadores reais da fila TIM2/CH3
+        # (evt_inserted/evt_dispatched acima são só da fila legada TIM5,
+        # sempre 0 em modo encoder).
+        "enc_evt_insert_count", "enc_evt_execute_count",
     ]
-    DEBUG_SIZE = 54 * 4  # must match FW diag[54]
+    DEBUG_SIZE = 58 * 4  # must match FW diag[58]
 
     # Bits de src/engine/cut_reason.h (ordem = bit 0..N)
     FUEL_CUT_BITS = ["rev_limit", "limp_rpm", "map_fault", "oil_press",
@@ -374,11 +406,11 @@ class OpenEMSLink:
     def read_debug(self) -> dict:
         assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE
         buf = self._txn(b"D", self.DEBUG_SIZE)
-        # 31 u32 + 2 i32 + 21 u32 (era 20; +1 cmp_watchdog_rearms [53], 2026-08-17)
+        # 31 u32 + 2 i32 + 25 u32 (era 23; +2 enc_evt insert/execute [56-57], 2026-08-17)
         vals = (
             struct.unpack("<31I", buf[:124])
             + struct.unpack("<2i", buf[124:132])
-            + struct.unpack("<21I", buf[132:216])
+            + struct.unpack("<25I", buf[132:232])
         )
         d = dict(zip(self.DEBUG_FIELDS, vals))
         for n in range(4):
@@ -399,20 +431,20 @@ class OpenEMSLink:
     # ── osciloscópio CKP/CMP ('K': 294 bytes) ────────────────────────────
     def read_scope(self) -> dict:
         """Rings de timestamps TIM5 (62.5 MHz) das bordas cruas CKP/CMP +
-        âncora angular (tooth_index/fase/sync no instante do dump).
+        âncora angular (crank_deg 0–359 / fase / sync no instante do dump).
         Devolve listas ordenadas da mais antiga → mais recente, em ticks."""
         buf = self._txn(b"K", 294)
         ckp_idx, cmp_idx, cmp_ref_tooth = buf[0], buf[1], buf[2]
         ckp = list(struct.unpack_from("<64I", buf, 3))
         cmp = list(struct.unpack_from("<8I", buf, 259))
-        tooth_index, phase_a, sync_state = buf[291], buf[292], buf[293]
+        crank_deg, phase_a, sync_state = buf[291], buf[292], buf[293]
         # idx aponta para a próxima escrita (mais antiga) → rotaciona
         ckp = ckp[ckp_idx:] + ckp[:ckp_idx]
         cmp = cmp[cmp_idx:] + cmp[:cmp_idx]
         return {"ckp_ts": [t for t in ckp if t != 0],
                 "cmp_ts": [t for t in cmp if t != 0],
                 "cmp_ref_tooth": cmp_ref_tooth,
-                "tooth_index": tooth_index,
+                "crank_deg": crank_deg,
                 "phase_a": bool(phase_a),
                 "sync_state": sync_state}
 
@@ -638,6 +670,9 @@ PAGE0_FIELDS = [
     ("etb_kp_x10",               44, 1, "H",  0.1),
     ("etb_ki_x10",               46, 1, "H",  0.1),
     ("etb_kd_x10",               48, 1, "H",  0.1),
+    # bytes 52-55: TPS cabo (PA4) — 0–4095 = 0–3.3 V ADC
+    ("tps_raw_min",              52, 1, "H",  1.0),
+    ("tps_raw_max",              54, 1, "H",  1.0),
     # bytes 56-65: trim + CMP
     ("cyl_fuel_trim_pct_0",    56, 1, "b",  1.0),  # %
     ("cyl_fuel_trim_pct_1",    57, 1, "b",  1.0),

@@ -624,6 +624,17 @@ void test_ecu_sched_encoder_omega(void) {
              "d_tim5<=0: estimate unchanged, no divide-by-zero");
     CHECK_EQ(ecu_sched_encoder_omega_valid(), 1u, "still valid after stale sample");
 
+    // ISR bunched (Δt de poucos ticks, Δposição grande): não adoptar o pico.
+    ecu_sched_encoder_omega_sample(9999u + 256u, 4010u);  // d_tim5=10, d_tim2=256
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), before,
+             "d_tim5 curto: estimaçao anterior mantida");
+
+    // Pico absurdo (d_tim2/d_tim5 ⇒ x65536 > tecto de host 2e6).
+    // No firmware o tecto é 6000 (~21 kRPM); a suite host semeia ω=1.0.
+    ecu_sched_encoder_omega_sample(10255u + 100000u, 4010u + 2000u);
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), before,
+             "omega acima do tecto: pico rejeitado, estimaçao anterior mantida");
+
     // Regression guard for the x256 truncation-to-zero bug: a realistic
     // ~200 rpm cranking rate (d_tim2=874 counts / d_tim5=1e6 ticks, the
     // same ratio as 200 rpm @ 16384 counts/rev, 62.5 MHz TIM5) must NOT
@@ -686,14 +697,17 @@ void test_ecu_sched_encoder_min_lead(void) {
     section("ecu_sched: encoder arm — min-lead floor via omega (task #8)");
     ecu_sched_test_reset();
 
-    // Omega invalid (never sampled): floor is 0, target passes through
-    // unmodified even at lead=0 — the "late" dispatch path is what handles
-    // an already-due target in this state, not a synthesized margin.
+    // Omega invalid (never sampled): floor is 0, so a target at CNT is
+    // already due. TIM2 is a position counter — insert executes it inline
+    // (late path). Parking CCR3==CNT and clearing CC3IF would stall the
+    // dispatcher until the 32-bit wrap (pulses stop).
     ecu_sched_encoder_test_set_tim2_cnt(1000u);
     ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 1000u, ECU_ACT_INJ_ON);
     uint32_t ts = 0u; uint8_t ch = 0xFFu; uint8_t high = 0xFFu;
-    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts, &ch, &high) != 0u, "get_evt(0) ok");
-    CHECK_EQ(ts, 1000u, "omega invalid: no floor applied, target unchanged");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "omega invalid, target==CNT: executed inline (no stuck CCR3)");
+    CHECK_TRUE(ecu_sched_encoder_enc_evt_execute_count() >= 1u,
+               "due insert executed (on-time path of dispatch)");
     ecu_sched_test_reset();
 
     // Seed omega=1.0 exact (d_tim2=1000/d_tim5=1000, same recipe as
@@ -1134,26 +1148,242 @@ void test_ecu_sched_encoder_cmp_watchdog_alongside_staleness(void) {
     sensors_set_bench_clt_iat(false, 0, 0);
     ems::engine::cfg::g_eng_cfg.cmp_phase_state = ems::engine::cfg::kCmpPhaseCalibratedA;
 
-    // Primeiro flanco: aceite como referência E ancora a fase (calibrado).
+    // Primeiro flanco: aceite como referência, mas com o Fix B (exige 2
+    // flancos consecutivos confirmados antes de ancorar) ainda NÃO ancora.
     ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 1000u, 1u);
-    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "phase anchored — calibrated + accepted edge");
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
+             "1 flanco sozinho não ancora (Fix B: exige confirmação)");
 
-    // Sem novo flanco (cmp_edge_count constante=1) até cruzar o limiar: o
+    // Segundo flanco, consistente com o primeiro (delta = kCmpSpanCounts) —
+    // confirma e ancora a fase.
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 1000u + kCmpSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u,
+             "phase anchored — 2º flanco consecutivo confirma (Fix B)");
+
+    // Sem novo flanco (cmp_edge_count constante=2) até cruzar o limiar: o
     // bloco de staleness_exceeded() existente e o watchdog novo disparam
     // no mesmo tick, sem interferir um no outro.
     uint32_t heartbeats_since_ok = ecu_sched_encoder_test_get_cmp_heartbeats_since_ok();
-    uint32_t t = 2000u;
+    uint32_t t = 3000u;
     while (heartbeats_since_ok < kMaxHeartbeatsWithoutCmp) {
-        ecu_sched_encoder_heartbeat_tick(t, t, 1000u, 1u);
+        ecu_sched_encoder_heartbeat_tick(t, t, 1000u + kCmpSpanCounts, 2u);
         heartbeats_since_ok = ecu_sched_encoder_test_get_cmp_heartbeats_since_ok();
         t += 1000u;
     }
     CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
              "phase_invalidate() still fires on staleness (existing behavior unchanged)");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 0u,
+             "phase_invalidate zera confirm_count — 1 flanco só não re-ancora");
     CHECK_EQ(ecu_sched_encoder_cmp_watchdog_request_count(), 1u,
              "watchdog also requested a rearm on the same tick");
     CHECK_EQ(ecu_sched_encoder_cmp_watchdog_poll_and_clear(), 1u, "rearm is pending");
 
+    // Um flanco aceite depois da perda (span válido contra o último real)
+    // sobe confirm a 1 mas NÃO re-ancora — o caso "desliguei o CMP e o
+    // rearm do TIM3 / ruído no pino gerou um flanco fantasma".
+    ecu_sched_encoder_heartbeat_tick(t, t, 1000u + 2u * kCmpSpanCounts, 3u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 1u,
+             "1º flanco após perda: confirm=1");
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
+             "1 flanco após perda de CMP não re-ancora (fica em presync)");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_cmp_confirm_gate(void) {
+    section("ecu_sched: encoder heartbeat — re-anchor exige 2 flancos consecutivos após streak_resync (Fix B)");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+    ems::engine::cfg::g_eng_cfg.cmp_phase_state = ems::engine::cfg::kCmpPhaseCalibratedA;
+
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 0u, "confirm_count=0 no início");
+
+    // 1º flanco: confirm_count sobe a 1, ainda não ancora.
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 1000u, 1u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 1u, "1º flanco: confirm_count=1");
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "1º flanco sozinho não ancora (Fix B)");
+
+    // 2º flanco consistente (delta=kCmpSpanCounts): confirm_count satura em
+    // 2, agora ancora.
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 1000u + kCmpSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 2u, "2º flanco: confirm_count=2 (satura)");
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "2º flanco confirma e ancora");
+
+    // 3 flancos ruins seguidos (delta=100, longe de qualquer múltiplo
+    // plausível) -> streak_resync na 3ª rejeição — descarta referência E
+    // confirm_count (mesmo padrão E/F/G de test_ecu_sched_encoder_heartbeat_cmp_tracking).
+    const uint32_t ref = 1000u + kCmpSpanCounts;
+    ecu_sched_encoder_heartbeat_tick(3000u, 3000u, ref + 100u, 3u);
+    ecu_sched_encoder_heartbeat_tick(4000u, 4000u, ref + 100u, 4u);
+    ecu_sched_encoder_heartbeat_tick(5000u, 5000u, ref + 100u, 5u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 0u,
+             "streak_resync zera confirm_count (3ª rejeição consecutiva)");
+
+    // Flanco isolado pós-resync (ângulo arbitrário/espúrio, ex.: ruído num
+    // pino agora flutuante) — confirm_count sobe só a 1;
+    // phase_set_anchor() NÃO é chamado (gate ainda fechado), phase_valid()
+    // não muda por causa deste flanco isolado.
+    const uint8_t prev_valid = ecu_sched_encoder_phase_valid();
+    ecu_sched_encoder_heartbeat_tick(6000u, 6000u, 999999u, 6u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 1u,
+             "flanco isolado pós-resync: confirm_count=1, ainda não confirma");
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), prev_valid,
+             "gate fechado: phase_valid() não muda por causa do flanco isolado");
+
+    // Segundo flanco consistente com o isolado — agora confirma e reancora.
+    ecu_sched_encoder_heartbeat_tick(7000u, 7000u, 999999u + kCmpSpanCounts, 7u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 2u,
+             "2º flanco pós-resync: confirm_count=2");
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u,
+             "2º flanco consistente reancora depois do resync");
+
+    ecu_sched_test_reset();
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 0u, "test_reset() zera confirm_count");
+}
+
+void test_ecu_sched_encoder_seq_arm_stall_watchdog(void) {
+    section("ecu_sched: encoder heartbeat — watchdog do builder sequencial cai p/ presync se nada arma (Fix C)");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+    // bench_mode (limiar de staleness=60, não 6): sem novos flancos CMP,
+    // o watchdog de staleness pré-existente (mesmo padrão "6 heartbeats")
+    // não pode invalidar a fase antes do loop abaixo terminar — isolando
+    // este teste ao mecanismo do Fix C especificamente.
+    sensors_set_bench_clt_iat(true, 900, 250);
+    ems::engine::cfg::g_eng_cfg.cmp_phase_state = ems::engine::cfg::kCmpPhaseCalibratedA;
+
+    // Ancora diretamente (bypassa o gate de confirmação do Fix B de
+    // propósito — este teste é sobre o Fix C isoladamente).
+    ecu_sched_encoder_phase_set_anchor(500000u, ECU_PHASE_A);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "âncora marcada, phase_valid()=1");
+    CHECK_EQ(ecu_sched_encoder_seq_arm_stall_count(), 0u, "stall count=0 no início");
+
+    // Garante zero armamentos de forma determinística: tim5_now CONSTANTE
+    // (nunca avança) faz ecu_sched_encoder_omega_sample() descartar toda
+    // atualização (delta_tim5≤0 é tratado como "relógio não avançou" —
+    // ver comentário da função), então ω nunca fica válido e
+    // try_arm_sequential_due() retorna cedo sempre (omega_valid()==0) —
+    // mesmo efeito prático de uma âncora corrompida que nunca encontra
+    // janela, mas sem depender da geometria exata de fuel_calc/janela
+    // ≤60° coincidir ou não com os números sintéticos deste teste.
+    uint32_t t = 1000u;
+    for (uint32_t i = 0; i < ECU_SEQ_ARM_STALL_HEAVY_TICKS; ++i) {
+        ecu_sched_encoder_heartbeat_tick(t, 1000u, 0u, 0u);
+        t += 1000u;
+    }
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
+             "watchdog de stall forçou fallback para presync");
+    CHECK_EQ(ecu_sched_encoder_seq_arm_stall_count(), 1u,
+             "contador de diagnóstico incrementou 1×");
+
+    sensors_set_bench_clt_iat(false, 0, 0);
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_due_head_dispatches_inline(void) {
+    section("ecu_sched: encoder queue — alvo já devido/passado não trava CCR3 (TIM2 posição)");
+    ecu_sched_test_reset();
+
+    // Alvo no passado com ω inválido: arm_channel_with_lead empurra para
+    // now+min_lead=CNT e, sem o despacho inline, CCR3==CNT + CC3IF limpo
+    // deixava a fila muda até o wrap de 32 bits.
+    ecu_sched_encoder_test_set_tim2_cnt(5000u);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 1000u, ECU_ACT_INJ_ON);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "alvo no passado executado inline — fila não fica presa");
+    CHECK_TRUE(ecu_sched_encoder_enc_evt_execute_count() >= 1u,
+               "passado despachado pelo caminho due (ts<=CNT)");
+    CHECK_EQ(ecu_sched_encoder_test_get_dier(), 0u,
+             "CC3IE off — fila vazia depois do despacho inline");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_seq_to_presync_force_closes_pins(void) {
+    section("ecu_sched: queda sequencial→presync (CMP off) força fecho de pinos");
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+
+    // Primeiro heartbeat com fase válida e ω ainda inválido: marca
+    // last_builder=sequencial (handoff) sem armar cilindros.
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    ecu_sched_encoder_heartbeat_tick(50u, 50u, 0u, 0u);
+
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 100u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 100u, ECU_ACT_DWELL_START);
+    ecu_sched_encoder_test_set_tim2_cnt(100u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) & (1u << 15u)) != 0u,
+               "INJ1 HIGH após INJ_ON sequencial");
+    CHECK_TRUE(ecu_sched_test_get_dwell_arm_tick(0u) != 0u,
+               "dwell armado após DWELL_START sequencial");
+
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 5000u, ECU_ACT_INJ_OFF);
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 5000u, ECU_ACT_SPARK);
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 2u, "OFF/SPARK ainda pendentes");
+
+    // Queda para presync: o heartbeat vê last_builder=seq e tem de fechar
+    // os pinos cujo OFF/SPARK vai ser purgado pelo rebuild.
+    ecu_sched_encoder_phase_invalidate();
+    ecu_sched_encoder_test_set_tim2_cnt(2000u);
+    ecu_sched_encoder_heartbeat_tick(2000u, 4000u, 0u, 0u);
+
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "caiu para presync");
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) & (1u << (15u + 16u))) != 0u,
+               "INJ1 forçado LOW na queda para presync");
+    CHECK_EQ(ecu_sched_test_get_dwell_arm_tick(0u), 0u,
+             "dwell watchdog libertado na queda para presync");
+
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+}
+
+void test_ecu_sched_encoder_presync_after_cmp_loss_keeps_dispatcher(void) {
+    section("ecu_sched: presync após perda de CMP — CCR3 fica à frente de CNT");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+    sensors_set_bench_clt_iat(false, 0, 0);
+    ems::engine::cfg::g_eng_cfg.cmp_phase_state = ems::engine::cfg::kCmpPhaseCalibratedA;
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
+
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 1000u, 1u);
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 1000u + kCmpSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "fase ancorada antes da perda");
+
+    uint32_t t = 3000u;
+    uint32_t heartbeats_since_ok = ecu_sched_encoder_test_get_cmp_heartbeats_since_ok();
+    while (heartbeats_since_ok < kMaxHeartbeatsWithoutCmp) {
+        ecu_sched_encoder_heartbeat_tick(t, t, 1000u + kCmpSpanCounts, 2u);
+        heartbeats_since_ok = ecu_sched_encoder_test_get_cmp_heartbeats_since_ok();
+        t += 1000u;
+    }
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "staleness caiu para presync");
+
+    // Hardware-like: CNT == now_raw do heartbeat. Dwell/PW default são
+    // longos → vários alvos caem no passado e, sem o despacho inline,
+    // a cabeça da fila armava CCR3 <= CNT e os pulsos paravam.
+    const uint32_t now = t;
+    ecu_sched_encoder_test_set_tim2_cnt(now);
+    ecu_sched_encoder_heartbeat_tick(now, now + 1000u, 1000u + kCmpSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "continua em presync");
+    CHECK_TRUE(ecu_sched_encoder_presync_call_count() > 0u,
+               "builder presync correu depois da perda de CMP");
+
+    const uint8_t n = ecu_sched_encoder_test_get_evt_count();
+    if (n == 0u) {
+        CHECK_EQ(ecu_sched_encoder_test_get_dier(), 0u,
+                 "fila vazia (alvos devidos já despachados) — CC3IE off");
+    } else {
+        CHECK_TRUE((int32_t)(ecu_sched_encoder_test_get_ccr3() - now) > 0,
+                   "cabeça da fila à frente de CNT — dispatcher vivo");
+        CHECK_TRUE(ecu_sched_encoder_test_get_dier() != 0u,
+                   "CC3IE on enquanto há eventos futuros");
+    }
+
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
+    sensors_set_bench_clt_iat(false, 0, 0);
     ecu_sched_test_reset();
 }
 
@@ -1217,28 +1447,25 @@ void test_ecu_sched_encoder_heartbeat_publish_snapshot(void) {
     ckp_test_reset();
 }
 
-void test_ecu_sched_encoder_heartbeat_publish_tooth_index(void) {
-    section("ecu_sched: encoder heartbeat — tooth_index derivado de tim2_now (fix VVT)");
+void test_ecu_sched_encoder_heartbeat_publish_crank_deg(void) {
+    section("ecu_sched: encoder heartbeat — crank_deg derivado de tim2_now");
     ecu_sched_test_reset();
     ckp_test_reset();
 
-    // tim2_now=0 -> tooth_index=0 (início da revolução).
     ecu_sched_encoder_heartbeat_tick(0u, 0u, 0u, 0u);
-    CHECK_EQ(ckp_snapshot().tooth_index, 0u, "tim2_now=0 -> tooth_index=0");
+    CHECK_EQ(ckp_snapshot().crank_deg, 0u, "tim2_now=0 -> crank_deg=0");
+    CHECK_EQ(ckp_snapshot().tim2_cnt, 0u, "tim2_now=0 -> tim2_cnt=0");
 
-    // tim2_now=4096 (1/4 de volta, 16384 counts/rev) -> tooth_index=15
-    // ((4096*60)/16384 = 15) — antes do fix ficava sempre 0.
     ecu_sched_encoder_heartbeat_tick(4096u, 100u, 0u, 0u);
-    CHECK_EQ(ckp_snapshot().tooth_index, 15u, "tim2_now=4096 -> tooth_index=15");
+    CHECK_EQ(ckp_snapshot().crank_deg, 90u, "tim2_now=4096 -> crank_deg=90");
+    CHECK_EQ(ckp_snapshot().tim2_cnt, 4096u, "tim2_now=4096 -> tim2_cnt");
 
-    // tim2_now=8192 (1/2 volta) -> tooth_index=30.
     ecu_sched_encoder_heartbeat_tick(8192u, 200u, 0u, 0u);
-    CHECK_EQ(ckp_snapshot().tooth_index, 30u, "tim2_now=8192 -> tooth_index=30");
+    CHECK_EQ(ckp_snapshot().crank_deg, 180u, "tim2_now=8192 -> crank_deg=180");
 
-    // Wrap: tim2_now=16384+4096 (1 volta + 1/4) -> mod 16384 = 4096 -> tooth_index=15,
-    // confirmando que é (tim2_now % 16384), não tim2_now bruto.
     ecu_sched_encoder_heartbeat_tick(16384u + 4096u, 300u, 0u, 0u);
-    CHECK_EQ(ckp_snapshot().tooth_index, 15u, "wrap de revolução: tooth_index continua correto");
+    CHECK_EQ(ckp_snapshot().crank_deg, 90u, "wrap de revolução: crank_deg correcto");
+    CHECK_EQ(ckp_snapshot().tim2_cnt, 16384u + 4096u, "tim2_cnt raw preserved");
 
     ecu_sched_test_reset();
     ckp_test_reset();
@@ -1286,6 +1513,41 @@ void test_ecu_sched_encoder_heartbeat_subtick_cadence(void) {
     CHECK_EQ(ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(), 2u,
              "2º ciclo de 64: caminho pesado corre de novo exactamente 1×");
 
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_omega_only_on_heavy_tick(void) {
+    section("ecu_sched: refresh de dwell só no tick pesado, não a cada sub-tick");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(60u);
+    ecu_sched_set_dwell_ticks(4000u);
+    ecu_sched_set_inj_pw_ticks(0u);
+
+    encoder_seq_seed_omega();
+    ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
+    const uint32_t now = encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
+    const uint32_t refreshes0 = ecu_sched_encoder_test_get_omega_refresh_count();
+
+    // ω sobe >2% mas só via sub-tick (não completa 64): refresh NÃO corre.
+    ecu_sched_encoder_omega_test_reset();
+    ecu_sched_encoder_omega_sample(0u, 0u);
+    ecu_sched_encoder_omega_sample(700u, 1000u);
+    ecu_sched_encoder_test_set_tim2_cnt(now);
+    for (uint32_t i = 1u; i <= 10u; ++i) {
+        ecu_sched_encoder_heartbeat_subtick(now + i, 1000u + i, 0u, 1u);
+    }
+    CHECK_EQ(ecu_sched_encoder_test_get_omega_refresh_count(), refreshes0,
+             "sub-tick não reposiciona dwell (refresh só no tick pesado)");
+
+    ecu_sched_encoder_heartbeat_tick(now, 1000u, 0u, 1u);
+    CHECK_TRUE(ecu_sched_encoder_test_get_omega_refresh_count() > refreshes0,
+               "tick pesado faz o refresh de dwell");
+
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -1511,7 +1773,7 @@ void test_ecu_sched_encoder_recompute_presync(void) {
     // Hand-computed (origin=0, now_raw=1500, dwell_span=1000):
     //   pair A (IGN1/IGN4): spark_a=350 → 15928, dwell=14928
     //   pair B (IGN3/IGN2): spark_b=170 → 7736,  dwell=6736
-    //   inj: eoi=5 → 16611, inj_on=16111 (SIMULTANEOUS halves PW)
+    //   inj: eoi=5 → 16611, inj_on=15611 (g_inj_pw_ticks is per-opening, no /2)
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
              "2 pairs × 2 coils × (dwell+spark) + 4 INJ (on+off)");
     CHECK_EQ(ecu_sched_is_sequential(), 0u,
@@ -1540,6 +1802,58 @@ void test_ecu_sched_encoder_recompute_presync(void) {
     ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
              "repeated heartbeat: still exactly 16, no duplication from purge+rebuild");
+
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_recompute_presync_next_rev_if_on_past(void) {
+    section("ecu_sched: encoder presync — ON no passado empurra o par p/ a próxima volta");
+    ecu_sched_test_reset();
+
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
+
+    ecu_sched_set_advance_deg(10u);            // spark_a=350 → 15928
+    ecu_sched_set_eoi_lead_deg(355u);          // eoi=5 → 227
+    ecu_sched_set_dwell_ticks(2000u);          // span=2000 @ ω=1
+    ecu_sched_set_inj_pw_ticks(2000u);         // per-opening PW; span=2000 @ ω=1
+    ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SIMULTANEOUS);
+
+    ecu_sched_encoder_omega_sample(1000u, 1000u);
+    ecu_sched_encoder_omega_sample(2000u, 2000u);
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 65536, "omega=1.0");
+
+    // now=15000: spark_a=15928 nesta volta, dwell=13928 já passou;
+    // eoi=16611, inj_on=14611 já passou. Sem o shift o ON ia para "agora"
+    // e o pulso ficava com o resto até ao spark/EOI.
+    const uint32_t now = 15000u;
+    ecu_sched_encoder_test_set_tim2_cnt(now);
+    ecu_sched_encoder_heartbeat_tick(now, now, 0u, 0u);
+
+    uint32_t spark_a = 0u, dwell_a = 0u, inj_on = 0u, inj_off = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 0u, &spark_a), 1u, "pair A SPARK presente");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, &dwell_a), 1u, "pair A DWELL presente");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 1u, &inj_on), 1u, "INJ_ON presente");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 0u, &inj_off), 1u, "INJ_OFF presente");
+
+    CHECK_EQ(spark_a, 15928u + 16384u, "spark_a adiado 1 volta (dwell estava no passado)");
+    CHECK_EQ(dwell_a, 13928u + 16384u, "dwell_a adiado 1 volta");
+    CHECK_EQ(spark_a - dwell_a, 2000u, "dwell completo preservado (não truncado)");
+    CHECK_TRUE((int32_t)(dwell_a - now) > 0, "dwell agora está à frente de now");
+
+    CHECK_EQ(inj_off, 16611u + 16384u, "EOI adiado 1 volta (inj_on estava no passado)");
+    CHECK_EQ(inj_on, 14611u + 16384u, "inj_on adiado 1 volta");
+    CHECK_EQ(inj_off - inj_on, 2000u, "PW completo preservado (não truncado)");
+    CHECK_TRUE((int32_t)(inj_on - now) > 0, "inj_on agora está à frente de now");
+
+    // pair B: spark_b=170° já passou esta volta → próxima ocorrência nesta
+    // geometria já fica à frente; dwell também — sem shift extra.
+    uint32_t spark_b = 0u, dwell_b = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 0u, &spark_b), 1u, "pair B SPARK");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN3, 1u, &dwell_b), 1u, "pair B DWELL");
+    CHECK_EQ(spark_b, 24120u, "pair B spark = próxima ocorrência (sem +16384 extra)");
+    CHECK_EQ(dwell_b, 22120u, "pair B dwell = spark − 2000, já à frente");
 
     ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
@@ -1586,27 +1900,43 @@ void test_ecu_sched_encoder_recompute_presync_ign_inhibit_mask_gate(void) {
 }
 
 void test_ecu_sched_encoder_recompute_presync_bank_toggle(void) {
-    section("ecu_sched: encoder heartbeat recompute — presync semi-sequential bank toggle");
+    section("ecu_sched: encoder heartbeat recompute — presync semi-sequential both banks @ 180°");
     ecu_sched_test_reset();
 
+    const uint16_t saved_origin = ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg;
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = 0u;
+
     ecu_sched_set_presync_inj_mode(ECU_PRESYNC_INJ_SEMI_SEQUENTIAL);
+    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_eoi_lead_deg(355u);          // eoi=5°, bank B = 185°
     ecu_sched_set_dwell_ticks(0u);
-    ecu_sched_set_inj_pw_ticks(0u);
+    ecu_sched_set_inj_pw_ticks(2000u);         // /2 → 1000 ticks; ω=0.5 → span=1000
 
     ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
     ecu_sched_encoder_heartbeat_tick(1500u, 2000u, 0u, 0u);
-    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 12u,
-             "4 IGN (dwell+spark) + 2 INJ (on+off), semi-sequential: half the injectors");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
+             "4 IGN (dwell+spark) + 4 INJ (on+off), semi: both banks every rev");
 
-    uint32_t ts = 0u; uint8_t ch_a = 0u; uint8_t high = 0u;
-    ecu_sched_encoder_test_get_evt(8u, &ts, &ch_a, &high);  // first INJ_ON of this heartbeat's bank
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 1u, nullptr), 1u, "bank A INJ1");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ4, 1u, nullptr), 1u, "bank A INJ4");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ2, 1u, nullptr), 1u, "bank B INJ2");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ3, 1u, nullptr), 1u, "bank B INJ3");
+
+    uint32_t inj_on_a = 0u, inj_off_a = 0u, inj_on_b = 0u, inj_off_b = 0u;
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 1u, &inj_on_a), 1u, "bank A INJ1 ON");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 0u, &inj_off_a), 1u, "bank A INJ1 OFF");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ2, 1u, &inj_on_b), 1u, "bank B INJ2 ON");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ2, 0u, &inj_off_b), 1u, "bank B INJ2 OFF");
+    CHECK_EQ(inj_off_a - inj_on_a, 1000u, "semi uses committed per-opening PW (2000 ticks, ω=0.5 → span=1000)");
+    CHECK_EQ(inj_off_b - inj_on_b, 1000u, "bank B same per-opening PW");
+    CHECK_TRUE(inj_off_a != inj_off_b, "banks at distinct crank angles (180°)");
 
     ecu_sched_encoder_heartbeat_tick(2000u, 3000u, 0u, 0u);
-    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 12u, "still 12 after toggle");
-    uint8_t ch_b = 0u;
-    ecu_sched_encoder_test_get_evt(8u, &ts, &ch_b, &high);
-    CHECK_TRUE(ch_a != ch_b, "bank toggled: different injector channel fires between consecutive heartbeats");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u, "still 16 next rev (no bank drop)");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 1u, nullptr), 1u, "INJ1 still armed next rev");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ2, 1u, nullptr), 1u, "INJ2 still armed next rev");
 
+    ems::engine::cfg::g_eng_cfg.encoder_tdc1_origin_deg = saved_origin;
     ecu_sched_test_reset();
 }
 
@@ -2508,6 +2838,43 @@ void test_enc_finalize_map_window_per_cyl(void) {
                    "slot MAP alto → PW coerente com tabela VE/λ");
     }
 
+    map_window_enable = 0u;
+    map_window_reset();
+    enc_cyl_setpoints_reset();
+    ecu_sched_test_reset();
+}
+
+void test_enc_finalize_map_window_ve0_keeps_prep_flow(void) {
+    section("enc_cyl_setpoints: VE=0 no slot MAP não zera o PW do prep (INJ visível)");
+    ecu_sched_test_reset();
+    map_window_reset();
+    enc_cyl_setpoints_reset();
+
+    uint8_t ve_saved[kTableAxisSize][kTableAxisSize];
+    std::memcpy(ve_saved, ve_table, sizeof(ve_table));
+    std::memset(ve_table, 0, sizeof(ve_table));
+
+    EncFuelIgnPrep prep{};
+    prep.valid = 1u;
+    prep.flow_pw_us = 4000u;
+    prep.base_flow_pw_us = 4000u;
+    prep.map_bar_x100 = 50u;
+    prep.fuel_press_bar_x1000 = 3000u;
+    prep.dead_time_us = 0u;
+    prep.rpm_x10 = 7000u;
+    prep.corr_clt_x256 = 256u;
+    prep.corr_iat_x256 = 256u;
+    prep.base_advance_deg = 10;
+    prep.eoi_lead_deg = 60u;
+    enc_fuel_ign_prep_test_publish(prep);
+
+    map_window_enable = 1u;
+    map_window_test_set_slot_bar_x1000(0u, 500u);
+    const CylArmSetpoints sp = finalize_cyl_setpoints(0u, false);
+    CHECK_TRUE(sp.inj_pw_ticks != 0u,
+               "VE=0 + janela MAP válida: PW cai no fluxo do prep, não no span 0");
+
+    std::memcpy(ve_table, ve_saved, sizeof(ve_table));
     map_window_enable = 0u;
     map_window_reset();
     enc_cyl_setpoints_reset();

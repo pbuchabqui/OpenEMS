@@ -391,6 +391,29 @@ uint32_t calc_final_pw_us(uint32_t base_pw_us,
     return static_cast<uint32_t>(total);
 }
 
+uint32_t inj_cycle_pw_us(uint32_t flow_us, uint16_t dead_time_us,
+                         uint8_t squirts) noexcept {
+    if (flow_us == 0u) {
+        return 0u;
+    }
+    const uint8_t n = (squirts < 1u) ? 1u : squirts;
+    const uint64_t total = static_cast<uint64_t>(flow_us)
+                         + static_cast<uint64_t>(dead_time_us) * n;
+    constexpr uint32_t kMaxFinalPwUs = 100000u;
+    if (total > kMaxFinalPwUs) { return kMaxFinalPwUs; }
+    return static_cast<uint32_t>(total);
+}
+
+uint32_t inj_pulse_pw_us(uint32_t flow_us, uint16_t dead_time_us,
+                         uint8_t squirts) noexcept {
+    const uint32_t cycle = inj_cycle_pw_us(flow_us, dead_time_us, squirts);
+    if (cycle == 0u) {
+        return 0u;
+    }
+    const uint8_t n = (squirts < 1u) ? 1u : squirts;
+    return cycle / n;
+}
+
 uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
                                       uint16_t map_bar_x100,
                                       uint16_t lambda_target_x1000,

@@ -7,6 +7,7 @@
 
 #include "app/can_stack.h"
 #include "app/can_rx_map.h"
+#include "hal/board_pinout.h"
 #include "hal/tle8888.h"
 #include "hal/flex_fuel.h"
 #include "drv/ckp.h"
@@ -174,9 +175,11 @@ void update_realtime_page() noexcept {
     if (ems::app::can_stack_wbo2_fault()) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_WBO2_FAULT);
     }
+#if EMS_TLE8888_PRESENT
     if (!ems::hal::tle8888_ok()) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_TLE8888_FAULT);
     }
+#endif
     if (ecu_sched_is_sequential()) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_IGN_SEQUENTIAL);
     }
@@ -240,12 +243,9 @@ void update_realtime_page() noexcept {
     rt.reserved[46] = static_cast<uint8_t>((s.an2_raw >> 8u) & 0xFFu);
     rt.reserved[47] = static_cast<uint8_t>(s.an3_raw & 0xFFu);
     rt.reserved[48] = static_cast<uint8_t>((s.an3_raw >> 8u) & 0xFFu);
-    // [49] Fingerprint do mapa de registadores do TLE8888: bitmask das entradas
-    // cujo valor de reset não bateu com o datasheet. 0 = mapa confirmado contra
-    // o silício. Diferente de zero significa que o CI está presente mas o driver
-    // fala com os registadores errados — injecção e ignição ficam inibidas.
-    // É o que torna essa falha visível no bring-up em vez de misteriosa.
-    rt.reserved[49] = ems::hal::tle8888_map_mismatch();
+    // reserved[49] = live get_ve() (escrito acima). TLE8888 está fora deste
+    // fork — não sobrescrever com tle8888_map_mismatch() (é 0 sem CI e o
+    // dash lê este byte como VE%).
     rt.reserved[50] = static_cast<uint8_t>(s.an4_raw & 0xFFu);
     rt.reserved[51] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
     rt.map_fused_bar_x100 = g_rt_map_fused_bar_x100;

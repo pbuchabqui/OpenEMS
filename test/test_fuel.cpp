@@ -102,6 +102,16 @@ void test_fuel_calc_final_pw(void) {
              "final PW saturates at 100 ms");
 }
 
+void test_fuel_inj_pulse_pw(void) {
+    section("fuel_calc: inj_cycle_pw_us — formula is flow + dead×openings");
+    CHECK_EQ(inj_cycle_pw_us(4000u, 800u, 1u), 4800u, "seq formula: flow+dead");
+    CHECK_EQ(inj_cycle_pw_us(4000u, 800u, 2u), 5600u, "semi formula: flow+2×dead (not flow/2+dead)");
+    CHECK_EQ(inj_cycle_pw_us(0u, 800u, 2u), 0u, "cut: no dead");
+    CHECK_EQ(inj_pulse_pw_us(4000u, 800u, 1u), 4800u, "seq pin = formula");
+    CHECK_EQ(inj_pulse_pw_us(4000u, 800u, 2u), 2800u, "two openings sum to the formula");
+    CHECK_EQ(inj_pulse_pw_us(4000u, 800u, 2u) * 2u, 5600u, "pin×2 = cycle formula");
+}
+
 void test_fuel_corr_functions(void) {
     section("fuel_calc: corr_clt / corr_iat / corr_vbatt");
     CHECK_TRUE(corr_clt(850) <= 270u,  "corr_clt at 85°C ≤ 270");

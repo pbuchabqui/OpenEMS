@@ -1,28 +1,9 @@
 /**
  * @file drv/ckp.h
- * @brief Decodificador de roda fônica 60-2 e máquina de sincronismo — OpenEMS
+ * @brief Crank snapshot publicado pelo heartbeat do encoder TIM2.
  *
- * RODA FÔNICA 60-2
- * ────────────────
- *   60 posições angulares; 2 dentes consecutivos ausentes = 58 dentes reais.
- *   Espaçamento normal: 360°/60 = 6,0° por posição.
- *   Gap: ≈ 3 × período normal (18°).
- *
- * MÁQUINA DE ESTADOS (SyncState)
- * ───────────────────────────────
- *
- *                      gap && count≥55
- *   WAIT_GAP  ─────────────────────────►  HALF_SYNC
- *       ▲                                     │  gap && count≥55
- *       │   gap detected                      ▼
- *   LOSS_OF_SYNC  ◄─── count>61 ────  FULL_SYNC
- *       │                                     │
- *       └──────────── gap detected ───────────┘
- *                       (re-sync)
- *
- * HARDWARE: TIM5 CH1 (PA0/CKP) em modo Input Capture, rising edge.
- *   ISR: ckp_tim5_ch1_isr() — chamada por TIM5_IRQHandler() em hal/stm32h562/timer.cpp
- *   Prioridade NVIC: 1 (mais alta do sistema) — §CLAUDE.md tabela IRQ
+ * Sem decoder 60-2. SyncState: WAIT_GAP unused, HALF_SYNC = presync,
+ * FULL_SYNC = CMP confirmado, LOSS_OF_SYNC = stall / sensor.
  */
 
 #pragma once
@@ -59,6 +40,8 @@ struct CkpSnapshot {
     SyncState state;             ///< Estado corrente da máquina de sincronismo
     bool phase_A;                ///< Fase do ciclo de 720°: true=PHASE_A (0-360°), false=PHASE_B (360-720°). Toggles at each gap, SET by CMP.
     uint8_t cmp_confirms;        ///< Number of validated CMP edges since last sync loss (0-2). Gate for sequential mode.
+    uint32_t tim2_cnt;           ///< TIM2 encoder count at publish (encoder path).
+    uint16_t crank_deg;          ///< 0–359 from TIM2; not a 60-2 tooth index.
 };
 
 /**

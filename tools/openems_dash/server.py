@@ -446,7 +446,7 @@ def api_scope():
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"scope: {e}"}, status_code=502)
     ckp, cmp = s["ckp_ts"], s["cmp_ts"]
-    meta = {"cmp_ref_tooth": s["cmp_ref_tooth"], "tooth_index": s["tooth_index"],
+    meta = {"cmp_ref_tooth": s["cmp_ref_tooth"], "crank_deg": s["crank_deg"],
             "phase_a": s["phase_a"], "sync_state": s["sync_state"]}
     if not ckp:
         return {"ckp_ms": [], "cmp_ms": [], **meta}
@@ -490,6 +490,14 @@ def api_debug_counters():
         return worker.submit(lambda l: l.read_debug())
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"debug counters: {e}"}, status_code=502)
+
+
+@app.get("/api/debug/pins")
+def api_debug_pins():
+    try:
+        return worker.submit(lambda l: l.read_pin_counts())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"pin counts: {e}"}, status_code=502)
 
 
 @app.get("/api/can_rx_map")

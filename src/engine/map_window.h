@@ -2,14 +2,12 @@
 
 #include <cstdint>
 
-#include "drv/ckp.h"
-
 namespace ems::engine {
 
 // ── Amostragem de MAP em janela angular por cilindro + auto-balanceamento ────
 // (estilo FOME modules/map_averaging, changelog #610)
 //
-// A cada dente do CKP (6° de virabrequim), o valor corrente do MAP é acumulado
+// A cada amostra (poll 2 ms no encoder), o valor corrente do MAP é acumulado
 // na janela angular activa. O ciclo de 720° é dividido em 4 slots de 180°;
 // a janela do slot k abre em map_window_open_deg + k·180° e dura
 // map_window_len_deg. Ao fechar cada janela guarda-se a média; quando as 4
@@ -27,10 +25,11 @@ namespace ems::engine {
 // o finalize encoder (enc_cyl_setpoints) usa o MAP do slot por cilindro
 // para ΔP e escala de fluxo; senão continua telemetria-only no path CKP.
 
-// Chamada por dente. map_bar_x1000 = leitura instantânea já convertida.
+// Amostra angular (poll 2 ms no encoder). cycle_deg = 0..719.
 // Gate interno: map_window_enable == 0 → no-op imediato.
-void map_window_on_tooth(const ems::drv::CkpSnapshot& snap,
-                         uint16_t map_bar_x1000) noexcept;
+// Sem FULL_SYNC + CMP confirmado aborta a janela parcial.
+void map_window_on_sample(uint16_t cycle_deg, uint16_t map_bar_x1000,
+                          bool full_sync, bool cmp_ok) noexcept;
 
 // Slot 0..3 para o cilindro físico (TDC/180), assumindo open_deg calibrado.
 uint8_t map_window_slot_for_cyl(uint8_t cyl) noexcept;

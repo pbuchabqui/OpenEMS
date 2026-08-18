@@ -41,23 +41,19 @@ Regras praticas:
 
 ## Pipeline De Controle Do Motor
 
-### 1. Captura CKP/CMP
+### 1. Posicao do virabrequim (encoder MT6835)
 
-- Modulo principal: `src/drv/ckp.cpp`.
-- Backend STM32: `src/hal/stm32h562/timer.cpp`.
-- Timer usado: TIM5.
-- Canais:
-  - CKP: TIM5 CH1 em PA0.
-  - CMP: TIM5 CH2 em PA1.
+- TIM2 CH1/CH2: quadratura AB (16384 counts/volta), pinos PA0/PA1.
+- TIM2 CH3: compare-match em angulo (fila INJ/IGN).
+- TIM2 CH4: heartbeat (omega, CMP, armar).
+- TIM3 CH1/PC6: captura do CMP (fase 720°).
+- TIM5: relogio livre (watchdogs de dwell/injetor). Sem captura 60-2.
 
-A captura mede bordas do virabrequim e comando, detecta dente faltante e alimenta a maquina de sincronismo.
+Estados:
 
-Estados principais:
-
-- `WAIT_GAP`: aguardando padrao confiavel de gap.
-- `HALF_SYNC`: fase angular parcial suficiente para estrategias de partida rapida.
-- `FULL_SYNC`: fase e ciclo conhecidos para injecao sequencial e ignicao correta.
-- `LOSS_OF_SYNC`: falha de coerencia, ruido, timeout ou perda de padrao.
+- `NO_SYNC` / `LOSS_OF_SYNC`: sem rotacao valida.
+- `HALF_SYNC` (presync): omega valido, CMP nao confirmado — wasted-spark.
+- `FULL_SYNC`: CMP confirmado — sequencial 720°.
 
 ### 2. Quick Crank E Pre-Sync
 

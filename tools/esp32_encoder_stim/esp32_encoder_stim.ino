@@ -102,13 +102,14 @@ struct SimState {
 
 static SimState g_sim;
 
+// STM32 ADC is 0–3.3 V = raw 0–4095. Same scale here (ESP32 DAC/PWM 3.3 V).
 static uint16_t map_kpa_to_raw(uint16_t kpa) {
     if (kpa > 300u) kpa = 300u;
     return (uint16_t)((uint32_t)kpa * 4095u / 300u);
 }
 static uint16_t tps_pct_to_raw(uint8_t pct) {
     if (pct > 100u) pct = 100u;
-    return (uint16_t)(200u + (uint32_t)pct * 3695u / 100u);
+    return (uint16_t)((uint32_t)pct * 4095u / 100u);
 }
 static uint16_t temp_to_raw(int16_t degc) {
     int32_t tx10 = (int32_t)degc * 10;
@@ -482,7 +483,7 @@ static void apply_preset(const SimState& p, const char* label) {
 }
 
 static void preset_idle() {
-    apply_preset({ 700, 35, 3, 90, 25, 0, 35, 20, 3, 0 }, "IDLE");
+    apply_preset({ 1500, 35, 3, 90, 25, 0, 35, 20, 3, 0 }, "IDLE");
 }
 static void preset_crank() {
     apply_preset({ 200, 101, 0, 20, 15, 0, 20, 5, 0, 0 }, "CRANK");
@@ -808,7 +809,7 @@ void setup() {
     }
 
     // 12288/16384 × 720° = 540° → meio da 2ª volta (com 8192 dava 360°)
-    g_sim = { 700, 35, 3, 90, 25, 0, 35, 20, 3, 12288 };
+    g_sim = { 1500, 35, 3, 90, 25, 0, 35, 20, 3, 12288 };
     update_analog(g_sim);
     enc_init();
     scope_init();

@@ -32,9 +32,9 @@
  */
 
 #include "hal/tle8888.h"
-
-#ifdef TARGET_STM32H562
 #include "hal/board_pinout.h"
+
+#if defined(TARGET_STM32H562) && EMS_TLE8888_PRESENT
 #include "hal/stm32h562/regs.h"
 #include "hal/tle8888_regs.h"
 
@@ -485,7 +485,7 @@ uint8_t tle8888_echo_status(uint8_t idx) noexcept {
  * Ver docs/hw/interface_board_v1.md.
  */
 
-#else  // host test stub
+#else  // host test, ou EMS_TLE8888_PRESENT=0 (este fork)
 
 namespace ems::hal {
 void tle8888_init() noexcept {}

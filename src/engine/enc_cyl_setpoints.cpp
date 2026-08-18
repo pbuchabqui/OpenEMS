@@ -121,19 +121,25 @@ CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl, bool commit_fuel) noexcept
             // chamada de fuel_inj_duty_update(); não corrigido nesta revisão.
             if (map_window_slot_valid_for_cyl(cyl) && prep.rpm_x10 != 0U) {
                 const uint8_t ve = get_ve(prep.rpm_x10, map_cyl);
-                const uint16_t lambda =
-                    get_lambda_target_x1000(prep.rpm_x10, map_cyl);
-                const uint16_t corr_clt =
-                    (prep.corr_clt_x256 != 0U) ? prep.corr_clt_x256 : 256U;
-                const uint16_t corr_iat =
-                    (prep.corr_iat_x256 != 0U) ? prep.corr_iat_x256 : 256U;
-                const uint32_t full = calc_fuel_pw_us_default_fast(
-                    ve, map_cyl, lambda, prep.fuel_trim_pct_x10,
-                    corr_clt, corr_iat, prep.dead_time_us);
-                flow_u = (full > prep.dead_time_us)
-                    ? (full - static_cast<uint32_t>(prep.dead_time_us))
-                    : 0U;
-            } else {
+                // VE=0 nesta célula (tabela NVM vazia no canto idle, ou
+                // ASE/min_pw só no loop 2 ms): o re-lookup zerava o fluxo
+                // → inj_on==EOI → pulso de ns, IGN visível e INJ "mudo".
+                if (ve != 0U) {
+                    const uint16_t lambda =
+                        get_lambda_target_x1000(prep.rpm_x10, map_cyl);
+                    const uint16_t corr_clt =
+                        (prep.corr_clt_x256 != 0U) ? prep.corr_clt_x256 : 256U;
+                    const uint16_t corr_iat =
+                        (prep.corr_iat_x256 != 0U) ? prep.corr_iat_x256 : 256U;
+                    const uint32_t full = calc_fuel_pw_us_default_fast(
+                        ve, map_cyl, lambda, prep.fuel_trim_pct_x10,
+                        corr_clt, corr_iat, prep.dead_time_us);
+                    flow_u = (full > prep.dead_time_us)
+                        ? (full - static_cast<uint32_t>(prep.dead_time_us))
+                        : 0U;
+                }
+            }
+            if (flow_u == 0U) {
                 // Prefer base_flow (sem AE); fallback a flow_pw_us legado.
                 flow_u = (prep.base_flow_pw_us != 0U || prep.ae_pw_us != 0)
                     ? prep.base_flow_pw_us
@@ -188,6 +194,11 @@ CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl, bool commit_fuel) noexcept
         out.advance_deg = static_cast<uint32_t>(advance);
         out.dwell_ticks = prep.dwell_ticks;
         out.inj_pw_ticks = inj_pw_us_to_scheduler_ticks(pw_us);
+        // 'P' / lock de bancada: o sequencial não pode ignorar o PW
+        // comitado (finalize ia pela VE e voltava a 0).
+        if (prep.fuel_cut == 0U && ecu_sched_bench_pw_override_state() != 0U) {
+            out.inj_pw_ticks = si::g_inj_pw_ticks;
+        }
         out.eoi_lead_deg = prep.eoi_lead_deg;
         return out;
     }

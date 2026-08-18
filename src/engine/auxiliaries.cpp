@@ -23,6 +23,7 @@
 #include "hal/timer.h"
 #include "hal/regs.h"
 #include "hal/board_pinout.h"  // EMS_BOARD_IS_VGT6 — selecciona os pinos de relé
+#include "drv/crank_angle.h"
 
 #if defined(EMS_HOST_TEST)
 volatile uint32_t ems_test_aux_rcc_ahb2enr1 = 0u;
@@ -315,10 +316,11 @@ void set_pump(bool on) noexcept {
 }
 
 uint16_t calc_cam_pos_est_x10(const ems::drv::CkpSnapshot& snap) noexcept {
-    // tooth_index × 6,0° × 10 = tooth_index × 60 (roda 60-2: 360°/60 posições = 6°/dente)
-    const uint16_t crank_deg_x10 = static_cast<uint16_t>(static_cast<uint32_t>(snap.tooth_index) * 60u);
-    const uint16_t cycle_deg_x10 = snap.phase_A ? crank_deg_x10 : static_cast<uint16_t>(crank_deg_x10 + 3600u);
-    return static_cast<uint16_t>(cycle_deg_x10 / 2u);
+    const uint16_t crank_x10 = ems::drv::crank_deg_x10(snap.tim2_cnt);
+    const uint16_t cycle_x10 = snap.phase_A
+        ? crank_x10
+        : static_cast<uint16_t>(crank_x10 + 3600u);
+    return static_cast<uint16_t>(cycle_x10 / 2u);
 }
 
 uint16_t iac_target_rpm_x10(int16_t clt_x10) noexcept {

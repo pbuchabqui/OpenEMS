@@ -8,10 +8,10 @@ void tim5_ic_init(void);
 uint32_t tim5_count() noexcept;
 
 // TIM5 free-running, sem input capture (MT6835 apenas — VGT6). CKP/CMP saíram
-// de TIM5 (TIM2 encoder + TIM3_CH1/PC6), mas ecu_sched.cpp lê TIM5_CNT
-// diretamente para os watchdogs de dwell/injeção — precisa do contador vivo,
-// não de captura. Usar em vez de tim5_ic_init() quando o pipeline MT6835
-// estiver ativo (tim5_ic_init() reclamaria PA0/PA1, já usados pelo encoder).
+// de TIM5 (TIM2 encoder + TIM3_CH1/PC6). CNT continua a ser o relógio dos
+// watchdogs e de ω. CH3 é compare interno (sem pino) para prime/teste:
+// evt_insert liga CC3IE; NVIC TIM5 é armado aqui. Sem captura CH1/CH2.
+// Mutuamente exclusivo com tim5_ic_init() (PA0/PA1 já são TIM2 AB).
 void tim5_freerun_init() noexcept;
 
 // Polaridade de captura TIM5 + pull GPIOA (CKP=PA0 / CMP=PA1).

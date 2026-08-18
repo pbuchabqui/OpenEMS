@@ -19,6 +19,13 @@ extern "C" {
 #define ECU_PHASE_B    0U
 #define ECU_PHASE_ANY  2U
 
+// Watchdog do builder sequencial (ecu_sched_angle_encoder.cpp): heavy-ticks
+// consecutivos com phase_valid()==1 e ZERO cilindros armados antes de forçar
+// fallback para presync — ~3 voltas de 720° completas (folga generosa acima
+// do padrão normal, onde cada cilindro tem de armar pelo menos 1×/720° =
+// a cada 2 heavy-ticks). Público para ser referenciável em host-test.
+#define ECU_SEQ_ARM_STALL_HEAVY_TICKS  6U
+
 #define ECU_CH_INJ1   2U
 #define ECU_CH_INJ2   3U
 #define ECU_CH_INJ3   0U
@@ -202,7 +209,7 @@ void ecu_sched_encoder_phase_set_anchor(uint32_t tim2_raw_at_cmp_edge,
                                         uint8_t phase) noexcept;
 uint8_t ecu_sched_encoder_phase_at(uint32_t tim2_raw_now) noexcept;
 uint8_t ecu_sched_encoder_phase_valid(void) noexcept;
-void ecu_sched_encoder_phase_invalidate(void) noexcept;  // heartbeat on CMP staleness
+void ecu_sched_encoder_phase_invalidate(void) noexcept;  // heartbeat on CMP staleness; also zeros confirm-count gate
 
 void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
                                    uint8_t action) noexcept;
@@ -218,6 +225,20 @@ uint32_t ecu_sched_encoder_seq_min_lead_skip_count(void) noexcept;
 // diferente de 0, o chamador deve rearmar ems::hal::tim3_cmp_ic_init().
 uint8_t  ecu_sched_encoder_cmp_watchdog_poll_and_clear(void) noexcept;
 uint32_t ecu_sched_encoder_cmp_watchdog_request_count(void) noexcept;
+
+// Watchdog do builder sequencial (ver ecu_sched_angle_encoder.cpp): conta
+// quantas vezes o fallback para presync foi forçado por phase_valid()==1
+// sem nenhum cilindro conseguir armar por várias voltas seguidas.
+uint32_t ecu_sched_encoder_seq_arm_stall_count(void) noexcept;
+// DIAG TEMPORÁRIO (2026-08-17) — remover depois de fechar o bug do INJ
+// mudo/descontrolado em presync sustentado. Conta chamadas ao branch
+// recompute_presync() de ecu_sched_encoder_heartbeat_tick().
+uint32_t ecu_sched_encoder_presync_call_count(void) noexcept;
+// DIAG TEMPORÁRIO — contadores reais da fila TIM2/CH3 do encoder
+// (evt_inserted/evt_dispatched do EcuSchedDiagSnapshot são só da fila
+// legada TIM5, sempre 0 em modo encoder — não confiar neles aqui).
+uint32_t ecu_sched_encoder_enc_evt_insert_count(void) noexcept;
+uint32_t ecu_sched_encoder_enc_evt_execute_count(void) noexcept;
 
 // Heavy tick (1×/volta). CMP span/staleness evaluated; phase anchor gated by
 // cfg::g_eng_cfg.cmp_phase_state (engine/engine_config.h).
@@ -253,6 +274,9 @@ void ecu_sched_encoder_heartbeat_test_reset(void) noexcept;
 uint32_t ecu_sched_encoder_test_get_cmp_reject_count(void) noexcept;
 uint32_t ecu_sched_encoder_test_get_cmp_missed_edge_count(void) noexcept;
 uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept;
+// Contador de confirmação do Fix B (2 flancos consecutivos exigidos antes
+// de re-ancorar após boot/streak_resync) — 0..2, satura em 2.
+uint8_t ecu_sched_encoder_test_get_cmp_confirm_count(void) noexcept;
 // Contador de sub-ticks desde o último tick pesado (0..63) — testa a
 // cadência do split light/heavy directamente, sem depender de efeitos
 // secundários do caminho pesado.

@@ -31,13 +31,10 @@
 #  define EMS_BOARD_NAME "RGT6"
 #endif
 
-// Fork MT6835/TIM2-encoder (docs/dev/mt6835_encoder_fork.md), VGT6 apenas.
-// Default 0: boot idêntico à produção (tim5_ic_init(), CKP/CMP via Hall).
-// Com 1: troca para tim5_freerun_init()+tim2_encoder_init()+
-// tim3_cmp_ic_init()+mt6835_init() em main_stm32.cpp — mutuamente exclusivo
-// com o caminho de produção, nunca os dois no mesmo boot.
+// Fork MT6835/TIM2-encoder — este repo é só encoder. TIM2 AB + TIM5 freerun
+// + TIM3 CMP. Não há build Hall/60-2 aqui (docs/dev/mt6835_encoder_fork.md).
 #ifndef EMS_MT6835_ENCODER
-#  define EMS_MT6835_ENCODER 0
+#  define EMS_MT6835_ENCODER 1
 #endif
 
 // Que fase (ECU_PHASE_A/B) um flanco do CMP representa é uma constante de
@@ -67,6 +64,14 @@
 // verdade. Só passar a 1 quando o front-end analógico existir fisicamente.
 #ifndef EMS_KNOCK_HW_PRESENT
 #  define EMS_KNOCK_HW_PRESENT 0
+#endif
+
+// TLE8888 — descartado neste fork (docs/dev/mt6835_encoder_fork.md,
+// architecture_v2). INJ/IGN são GPIO directo; INJEN/IGNEN sobem no boot
+// sem esperar SPI. Default 0: driver não toca em SPI2 (conflito com
+// MT6835) e tle8888_ok() é true. Só passar a 1 se o CI voltar à placa.
+#ifndef EMS_TLE8888_PRESENT
+#  define EMS_TLE8888_PRESENT 0
 #endif
 
 // Detector de misfire em modo encoder (engine/misfire_encoder.h/.cpp) —

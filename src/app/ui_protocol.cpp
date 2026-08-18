@@ -218,10 +218,9 @@ void parse_byte(uint8_t b) noexcept {
         if (b == static_cast<uint8_t>('K')) {
             // Osciloscópio CKP/CMP: [ckp_idx][cmp_idx][cmp_ref_tooth]
             // + 64×u32 LE (ring CKP) + 8×u32 LE (ring CMP)
-            // + âncora angular: [tooth_index u8][phase_A u8][sync_state u8]
-            //   do snapshot no instante do dump — a borda CKP mais recente
-            //   corresponde a tooth_index (±1 dente), permitindo ao host
-            //   propagar o ângulo 0-720° borda-a-borda. Total = 294 bytes.
+            // + âncora angular: [crank_deg u8][phase_A u8][sync_state u8]
+            //   do snapshot no instante do dump (crank_deg 0–359, não dente).
+            //   Total = 294 bytes.
             // Leitura dos rings sem critical section: u32 alinhado é atômico
             // no M33; tearing entre elementos é aceitável para visualização.
             tx_push(ems::drv::g_scope_ckp_idx);
@@ -237,8 +236,8 @@ void parse_byte(uint8_t b) noexcept {
                 tx_push_bytes(tmp, 4u);
             }
             const ems::drv::CkpSnapshot snap = ems::drv::ckp_snapshot();
-            tx_push(static_cast<uint8_t>(snap.tooth_index > 57u ? 57u
-                                         : snap.tooth_index));
+            tx_push(static_cast<uint8_t>(snap.crank_deg > 359u ? 359u
+                                         : snap.crank_deg));
             tx_push(snap.phase_A ? 1u : 0u);
             tx_push(static_cast<uint8_t>(snap.state));
             return;
@@ -274,8 +273,8 @@ void parse_byte(uint8_t b) noexcept {
         if (b == static_cast<uint8_t>('D')) {
             EcuSchedDiagSnapshot sd{};
             ecu_sched_get_diag_snapshot(&sd);
-            // 54×u32 = 216 B (era 53; +1 contador do watchdog TIM3 CMP IC [53])
-            const uint32_t diag[54] = {
+            // 58×u32 = 232 B (era 56; +2 DIAG TEMPORÁRIO enc_evt insert/execute [56-57])
+            const uint32_t diag[58] = {
                 sd.late_event_count,
                 sd.cycle_schedule_drop_count,
                 sd.inj1_arm,
@@ -349,6 +348,19 @@ void parse_byte(uint8_t b) noexcept {
                 // mudo) — ver ecu_sched_angle_encoder.cpp (2026-08-17).
                 // Sempre 0 em builds de produção (EMS_MT6835_ENCODER=0).
                 ecu_sched_encoder_cmp_watchdog_request_count(),
+                // [54] watchdog do builder sequencial: nº de vezes que o
+                // fallback para presync foi forçado por phase_valid()==1
+                // sem nenhum cilindro conseguir armar por várias voltas
+                // seguidas (âncora possivelmente corrompida por um
+                // re-anchor espúrio) — ver ecu_sched_angle_encoder.cpp
+                // (2026-08-17). Sempre 0 em builds de produção.
+                ecu_sched_encoder_seq_arm_stall_count(),
+                // [55] DIAG TEMPORÁRIO — remover depois de fechar o bug do
+                // INJ mudo/descontrolado em presync sustentado (2026-08-17).
+                ecu_sched_encoder_presync_call_count(),
+                // [56-57] DIAG TEMPORÁRIO — contadores reais da fila TIM2/CH3.
+                ecu_sched_encoder_enc_evt_insert_count(),
+                ecu_sched_encoder_enc_evt_execute_count(),
             };
             tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), sizeof(diag));
             return;
