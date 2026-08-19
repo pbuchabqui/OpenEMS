@@ -89,6 +89,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/transient_fuel.cpp \
              $(SRC_DIR)/engine/spark_skip.cpp \
              $(SRC_DIR)/engine/ecu_sched.cpp \
+             $(SRC_DIR)/engine/ecu_sched_pins.cpp \
              $(SRC_DIR)/engine/ecu_sched_encoder_omega.cpp \
              $(SRC_DIR)/engine/ecu_sched_encoder_phase.cpp \
              $(SRC_DIR)/engine/ecu_sched_encoder_queue.cpp \

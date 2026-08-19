@@ -1,7 +1,7 @@
 /**
  * @file ecu_sched_internal.h
- * @brief Shared state between ecu_sched.cpp (TIM5 time queue: prime,
- *        test pulse, dwell/inj watchdogs) and the TIM2 encoder files
+ * @brief Shared state between ecu_sched.cpp (fila TIM5), ecu_sched_pins.cpp
+ *        (GPIO + watchdogs de parede + prime) and the TIM2 encoder files
  *        (ecu_sched_encoder_*.cpp).
  *
  * GPIO write is header-inline via hal/out_pins.h (out_pin_write).
@@ -12,9 +12,39 @@
 #include "engine/ecu_sched.h"
 #include "engine/knock.h"
 #include "hal/board_pinout.h"
+#include "hal/out_pins.h"
 #include "drv/ckp.h"
 
 #include <stdint.h>
+
+#if defined(EMS_HOST_TEST)
+// Um único mock TIM5 partilhado por ecu_sched.cpp (fila) e
+// ecu_sched_pins.cpp (relógios de pino). Definido em ecu_sched.cpp.
+extern uint32_t ems_test_tim5_ccr3;
+extern uint32_t ems_test_tim5_sr;
+extern uint32_t ems_test_tim5_dier;
+extern uint32_t ems_test_tim5_cnt;
+#ifndef TIM_SR_CC3IF
+#define TIM_SR_CC3IF 0x8U
+#endif
+#ifndef TIM_DIER_CC3IE
+#define TIM_DIER_CC3IE (1U << 3)
+#endif
+#ifndef TIM5_CNT
+#define TIM5_CCR3 ems_test_tim5_ccr3
+#define TIM5_SR   ems_test_tim5_sr
+#define TIM5_DIER ems_test_tim5_dier
+#define TIM5_CNT  ems_test_tim5_cnt
+#endif
+#endif
+
+inline constexpr uint8_t kEcuChannels = 8U;
+inline constexpr uint8_t kIgnChFirst  = 4U;
+
+inline uint8_t channel_pin_idx(uint8_t ch)
+{
+    return (ch < 8U) ? ems::hal::kOutChToPinIdx[ch] : 0xFFU;
+}
 
 namespace ems::engine::sched_internal {
 
@@ -32,6 +62,8 @@ inline constexpr uint32_t kOmegaRefreshRelX1000 = 20U;
 #define ECU_SCHED_US_TO_TICKS_INTERNAL(us) ((us) * 125U / 2U)
 #define TOOTH_NS_TO_SCHED_INTERNAL(ns) \
     (static_cast<uint32_t>((ns) / ECU_SCHED_NS_PER_TICK))
+inline constexpr uint32_t kInjOpenWdogHardTicks =
+    ECU_SCHED_US_TO_TICKS_INTERNAL(36000U);
 
 // Channel order cyl 0..3 — values match ECU_CH_* (legacy TIM map).
 inline constexpr uint8_t kInjCh[4] = {
@@ -141,18 +173,38 @@ void encoder_clear_all(void) noexcept;
 }  // namespace ems::engine::sched_internal
 
 // pin_transition: bookkeeping de transição de pino + arme dos watchdogs de
-// dwell/injeção (definição em ecu_sched.cpp, ligado sempre a TIM5/tempo —
-// os watchdogs não mudam de domínio, ver "Watchdogs — papel novo" no design
-// doc). Exposto (era static) para a fila TIM2/CH3 poder disparar o mesmo
-// mecanismo quando um evento em counts liga/desliga um pino — sem isto os
-// watchdogs nunca armariam para eventos disparados pelo dispatcher em
-// ângulo. Escopo global (não dentro de sched_internal) porque é onde a
-// definição já vive em ecu_sched.cpp.
+// dwell/injeção (definição em ecu_sched_pins.cpp, ligado sempre a TIM5/tempo).
+// Exposto para a fila TIM2/CH3 poder disparar o mesmo mecanismo quando um
+// evento em counts liga/desliga um pino.
 void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state = 0U);
 
-// force_close_cyl_mask: fecha fisicamente os pinos de um cyl mask (SPARK/
-// INJ_OFF) + limpa o watchdog de dwell — definição em ecu_sched.cpp, exposta
-// (era a lógica interna de purge_events_for_cyl_mask) para o handoff
-// presync→sequencial do encoder poder replicar o mesmo fecho físico que o
-// purge legado já faz, sem duplicar o loop. Ver pin_transition acima.
+// force_close_cyl_mask: fecha pinos (SPARK/INJ_OFF) + limpa watchdog de dwell.
+// Definição em ecu_sched_pins.cpp. Handoff encoder e purge TIM5 usam isto.
 void force_close_cyl_mask(uint8_t mask, uint8_t is_ign);
+
+// GPIO imediato + inhibit. Definição em ecu_sched_pins.cpp.
+void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U,
+                  uint8_t bypass_inhibit = 0U);
+
+// Fila TIM5 — definição em ecu_sched.cpp. Prime/teste e watchdogs chamam.
+void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action);
+void purge_events_for_cyl_mask(uint8_t mask, uint8_t is_ign);
+
+// Relógios de pino (ecu_sched_pins.cpp). arm_channel programa o timeout;
+// pin_transition arma o relógio no HIGH.
+extern volatile uint32_t g_pin_high_count[8];
+extern volatile uint32_t g_pin_low_count[8];
+extern volatile uint32_t g_pin_seq_error[8];
+
+extern volatile uint32_t g_dwell_arm_tick[4];
+extern volatile uint32_t g_dwell_wdog_ticks[4];
+extern volatile uint32_t g_dwell_watchdog_count;
+extern volatile uint32_t g_inj_open_tick[4];
+extern volatile uint32_t g_inj_wdog_ticks[4];
+extern volatile uint32_t g_inj_watchdog_count;
+
+// Inhibit + bench PW lock — escritos em ecu_sched.cpp, lidos por pins/watchdogs.
+extern volatile uint8_t  g_inj_inhibit_mask;
+extern volatile uint8_t  g_ign_inhibit_mask;
+extern volatile uint8_t  g_inj_pw_override;
+extern volatile uint32_t g_diag_prime_fired;

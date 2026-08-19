@@ -4,4 +4,5 @@
 # ecu_sched: TIM5 CCR/SR only (INJ/IGN GPIO via out_pins). auxiliaries fan/pump
 # stays until PR-17 (Phase C / aux_gpio).
 src/engine/ecu_sched.cpp
+src/engine/ecu_sched_pins.cpp
 src/engine/auxiliaries.cpp

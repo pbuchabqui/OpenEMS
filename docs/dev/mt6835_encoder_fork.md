@@ -78,7 +78,7 @@ em `hal/stm32h562/timer.cpp`.
 
 Não partilham array nem CCR. Um corte (`purge_events_for_cyl_mask`) varre as
 duas. O pino é o ponto comum: qualquer despacho ou `force_output` chama
-`pin_transition` (`ecu_sched.cpp`), que arma/solta os relógios TIM5.
+`pin_transition` (`ecu_sched_pins.cpp`), que arma/solta os relógios TIM5.
 
 ### Ficheiros do dispatcher encoder
 
@@ -88,7 +88,8 @@ duas. O pino é o ponto comum: qualquer despacho ou `force_output` chama
 - `ecu_sched_encoder_heartbeat.cpp` — subtick + heavy tick + watchdogs de ângulo
 - `ecu_sched_encoder_builders.cpp` — presync + `try_arm` + °→counts
 - `ecu_sched_encoder_priv.h` — estado interno
-- `ecu_sched.cpp` — fila TIM5, `pin_transition`, dwell/inj watchdog, prime
+- `ecu_sched.cpp` — fila TIM5 (prime/teste OFF), calibração, inhibit
+- `ecu_sched_pins.cpp` — `pin_transition`, force_output, dwell/inj watchdog, prime
 
 API pública: `ecu_sched.h`.
 
