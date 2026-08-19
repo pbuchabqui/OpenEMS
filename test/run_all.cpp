@@ -200,6 +200,7 @@ int main(void) {
     test_ecu_sched_encoder_heartbeat_cmp_tracking();
     test_ecu_sched_encoder_cmp_watchdog_presync();
     test_ecu_sched_encoder_cmp_watchdog_alongside_staleness();
+    test_ecu_sched_encoder_cmp_ref_dropped_on_staleness();
     test_ecu_sched_encoder_cmp_confirm_gate();
     test_ecu_sched_encoder_seq_arm_stall_watchdog();
     test_ecu_sched_encoder_due_head_dispatches_inline();

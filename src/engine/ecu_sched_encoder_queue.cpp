@@ -30,12 +30,8 @@ namespace si = ems::engine::sched_internal;
 // Mock de TIM2 para a fila TIM2/CH3 — mesmo padrão do mock TIM5 em
 // ecu_sched.cpp, registo próprio (nunca partilha estado com o mock TIM5,
 // mesma disciplina de "duas filas separadas" desta unidade).
-#ifndef TIM_SR_CC3IF
-#define TIM_SR_CC3IF 0x8U
-#endif
-#ifndef TIM_DIER_CC3IE
-#define TIM_DIER_CC3IE (1U << 3)
-#endif
+// TIM_SR_CC3IF / TIM_DIER_CC3IE são partilhados com o mock TIM5 e vêm de
+// ecu_sched_internal.h (via ecu_sched_encoder_priv.h) — definição única.
 static uint32_t ems_test_tim2_ccr3 = 0u;
 static uint32_t ems_test_tim2_sr   = 0u;
 static uint32_t ems_test_tim2_dier = 0u;

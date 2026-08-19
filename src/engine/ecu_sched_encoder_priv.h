@@ -13,14 +13,8 @@
 
 #include <stdint.h>
 
-#if defined(EMS_HOST_TEST)
-#ifndef TIM_SR_CC3IF
-#define TIM_SR_CC3IF 0x8U
-#endif
-#ifndef TIM_DIER_CC3IE
-#define TIM_DIER_CC3IE (1U << 3)
-#endif
-#endif
+// TIM_SR_CC3IF / TIM_DIER_CC3IE (mocks de host-test) vêm de
+// ecu_sched_internal.h, incluído acima — definição única.
 
 namespace ems::engine::sched_internal::encoder {
 

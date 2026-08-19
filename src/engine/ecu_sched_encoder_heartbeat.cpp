@@ -226,10 +226,38 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
     }
 
     if (g_cmp_heartbeats_since_ok < 0xFFFFFFFFU) { ++g_cmp_heartbeats_since_ok; }
-    if (ecu_sched_encoder_phase_valid() != 0U &&
-        ems::drv::encoder_sync::staleness_exceeded(
-            g_cmp_heartbeats_since_ok, ems::drv::sensors_is_bench_mode())) {
-        ecu_sched_encoder_phase_invalidate();
+    {
+        const bool cmp_stale = ems::drv::encoder_sync::staleness_exceeded(
+            g_cmp_heartbeats_since_ok, ems::drv::sensors_is_bench_mode());
+        if (cmp_stale) {
+            // Descarta a referência angular — independente de phase_valid(),
+            // mesmo princípio do watchdog do TIM3 abaixo. Sem isto, o 1º
+            // flanco depois de um silêncio longo do CMP COM A CAMBOTA A RODAR
+            // era comparado por evaluate_cmp_edge() contra um g_cmp_prev_angle
+            // de antes do silêncio: o ângulo andou dezenas de spans entretanto,
+            // delta ≫ 4×32768 (kCmpMaxAcceptedMultiple) ⇒ REJEITADO, e a
+            // recuperação só acontecia pela via lenta das 3 rejeições até
+            // streak_resync. Note-se o âmbito: isto só cobre o caso em que os
+            // flancos VOLTAM a chegar (cmp_edge_count a mexer). Se o contador
+            // cru ficar parado, este bloco nem corre — esse é o modo de falha
+            // do watchdog do TIM3 abaixo.
+            // Aqui a referência é velha POR CONSTRUÇÃO: heartbeats_since_ok
+            // só é zerado por um flanco ACEITE (rejeitados deixam-no crescer),
+            // logo staleness ⇒ nada foi aceite há ≥6 heartbeats.
+            //
+            // Gate de 2 flancos preservado: isto reproduz exatamente o estado
+            // que streak_resync já produz acima (has_prev=0 + confirm_count=0),
+            // um caminho existente e testado — flanco 1 só arma a referência
+            // (!has_prev ⇒ accepted, sem anchor), flanco 2 é que re-ancora.
+            //
+            // Store repetido enquanto stale é deliberado e idempotente — NÃO
+            // trocar por "==" como o watchdog do TIM3 abaixo (esse guarda um
+            // contador; este não guarda estado nenhum).
+            g_cmp_has_prev = 0U;   // g_cmp_prev_angle só é lido com has_prev!=0
+            if (ecu_sched_encoder_phase_valid() != 0U) {
+                ecu_sched_encoder_phase_invalidate();
+            }
+        }
     }
 
     // Watchdog do TIM3 CMP IC — independente do bloco acima (não exige

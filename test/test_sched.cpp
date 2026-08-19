@@ -818,6 +818,57 @@ void test_ecu_sched_encoder_cmp_watchdog_alongside_staleness(void) {
     ecu_sched_test_reset();
 }
 
+// Regressão: o silêncio do CMP tem de descartar TAMBÉM a referência angular,
+// não só phase_valid/confirm_count. Cenário: silêncio longo do CMP com a
+// cambota a rodar, e os flancos DEPOIS voltam a chegar — o 1º flanco de volta
+// vem dezenas de spans depois do último aceite. Comparado contra a referência
+// pré-silêncio, evaluate_cmp_edge() dá n ≫ kCmpMaxAcceptedMultiple ⇒
+// REJEITADO, e a recuperação só acontecia pela via lenta (3 rejeições até
+// streak_resync + 2 flancos de confirm).
+void test_ecu_sched_encoder_cmp_ref_dropped_on_staleness(void) {
+    section("ecu_sched: encoder heartbeat — staleness descarta a referência angular do CMP");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+    sensors_set_bench_clt_iat(false, 0, 0);
+    ems::engine::cfg::g_eng_cfg.cmp_phase_state = ems::engine::cfg::kCmpPhaseCalibratedA;
+
+    // Ancorar com 2 flancos consistentes.
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 1000u, 1u);
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 1000u + kCmpSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "pré-cond: fase ancorada");
+
+    // Silêncio do CMP até cruzar o limiar de staleness.
+    uint32_t heartbeats_since_ok = ecu_sched_encoder_test_get_cmp_heartbeats_since_ok();
+    uint32_t t = 3000u;
+    while (heartbeats_since_ok < kMaxHeartbeatsWithoutCmp) {
+        ecu_sched_encoder_heartbeat_tick(t, t, 1000u + kCmpSpanCounts, 2u);
+        heartbeats_since_ok = ecu_sched_encoder_test_get_cmp_heartbeats_since_ok();
+        t += 1000u;
+    }
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "staleness invalidou a fase");
+
+    const uint32_t rejects_before = ecu_sched_encoder_test_get_cmp_reject_count();
+
+    // 1º flanco de volta, MUITO além de kCmpMaxAcceptedMultiple spans.
+    const uint32_t far_angle = 1000u + 40u * kCmpSpanCounts;
+    t += 1000u;
+    ecu_sched_encoder_heartbeat_tick(t, t, far_angle, 3u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), rejects_before,
+             "1º flanco após silêncio NÃO é rejeitado (referência velha descartada)");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 1u,
+             "1º flanco após silêncio só arma a referência: confirm=1");
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
+             "gate de 2 flancos preservado: 1 flanco não re-ancora");
+
+    // 2º flanco, um span depois: re-ancora — recuperação em 2 flancos.
+    t += 1000u;
+    ecu_sched_encoder_heartbeat_tick(t, t, far_angle + kCmpSpanCounts, 4u);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u,
+             "2º flanco re-ancora (2 flancos, não 3 rejeições + 2)");
+
+    ecu_sched_test_reset();
+}
+
 void test_ecu_sched_encoder_cmp_confirm_gate(void) {
     section("ecu_sched: encoder heartbeat — re-anchor exige 2 flancos consecutivos após streak_resync (Fix B)");
     ecu_sched_test_reset();
