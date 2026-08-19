@@ -59,7 +59,7 @@ XTauParams xtau_get_current_params_2d(uint32_t rpm_x10, uint16_t map_bar_x100) n
 // Retorna PW injectado (fluxo, sem dead-time).
 // commit=false: avalia o modelo sobre uma cópia local do filme de parede,
 // sem persistir (peek) — usado por try_arm_sequential_due()
-// (ecu_sched_angle_encoder.cpp) para estimar o alvo de armamento em cada
+// (ecu_sched_encoder_builders.cpp) para estimar o alvo de armamento em cada
 // sub-tick (~65×/volta) sem corromper g_cyl_wall_us_q8[cyl] a cada tentativa
 // fora da janela de 60° (só a chamada vencedora, dentro da janela, comita).
 uint32_t transient_fuel_xtau_event(uint8_t cyl,

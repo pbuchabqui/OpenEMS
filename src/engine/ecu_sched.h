@@ -19,7 +19,7 @@ extern "C" {
 #define ECU_PHASE_B    0U
 #define ECU_PHASE_ANY  2U
 
-// Watchdog do builder sequencial (ecu_sched_angle_encoder.cpp): heavy-ticks
+// Watchdog do builder sequencial (ecu_sched_encoder_heartbeat.cpp): heavy-ticks
 // consecutivos com phase_valid()==1 e ZERO cilindros armados antes de forçar
 // fallback para presync — ~3 voltas de 720° completas (folga generosa acima
 // do padrão normal, onde cada cilindro tem de armar pelo menos 1×/720° =
@@ -191,7 +191,7 @@ uint8_t ecu_sched_encoder_omega_valid(void) noexcept;
 // Calibração de engine_config.h::encoder_tdc1_origin_deg: dado um valor cru
 // de TIM2->CNT lido com o cilindro 1 no PMS de compressão, devolve o valor
 // pronto a escrever nesse campo (0-359). Pura — não toca em NVM/RAM shadow;
-// ver comentário em ecu_sched_angle_encoder.cpp.
+// ver comentário em ecu_sched_encoder_phase.cpp.
 uint16_t ecu_sched_encoder_tdc1_calibrate_from_raw(uint32_t tim2_raw_at_tdc1) noexcept;
 
 // Calibração de engine_config.h::cfg::cmp_phase_state: dado o TIM2->CNT
@@ -199,7 +199,7 @@ uint16_t ecu_sched_encoder_tdc1_calibrate_from_raw(uint32_t tim2_raw_at_tdc1) no
 // último flanco CMP visto (ems::hal::cmp_angle_snapshot()), devolve
 // kCmpPhaseCalibratedA/B — qual das duas janelas de 360° esse flanco
 // representa. Pura — não toca em NVM/RAM shadow; ver comentário em
-// ecu_sched_angle_encoder.cpp. Chamador (UI protocol, comando 'M') deve
+// ecu_sched_encoder_phase.cpp. Chamador (UI protocol, comando 'M') deve
 // garantir ems::hal::cmp_edge_count() > 0 antes de chamar (pelo menos um
 // flanco já capturado) — sem isso o valor de cmp_raw é lixo de boot.
 uint8_t ecu_sched_encoder_cmp_phase_calibrate_from_raw(
@@ -220,13 +220,13 @@ uint32_t ecu_sched_encoder_late_event_count(void) noexcept;
 uint32_t ecu_sched_encoder_evt_overflow(void) noexcept;
 uint32_t ecu_sched_encoder_seq_min_lead_skip_count(void) noexcept;
 
-// Watchdog do TIM3 CMP IC (ver ecu_sched_angle_encoder.cpp): poll+clear
+// Watchdog do TIM3 CMP IC (ver ecu_sched_encoder_heartbeat.cpp): poll+clear
 // chamado 1×/2ms pelo loop principal, fora de ISR — quando retorna
 // diferente de 0, o chamador deve rearmar ems::hal::tim3_cmp_ic_init().
 uint8_t  ecu_sched_encoder_cmp_watchdog_poll_and_clear(void) noexcept;
 uint32_t ecu_sched_encoder_cmp_watchdog_request_count(void) noexcept;
 
-// Watchdog do builder sequencial (ver ecu_sched_angle_encoder.cpp): conta
+// Watchdog do builder sequencial (ver ecu_sched_encoder_heartbeat.cpp): conta
 // quantas vezes o fallback para presync foi forçado por phase_valid()==1
 // sem nenhum cilindro conseguir armar por várias voltas seguidas.
 uint32_t ecu_sched_encoder_seq_arm_stall_count(void) noexcept;
@@ -264,7 +264,7 @@ uint8_t ecu_sched_presync_inj_mode(void);
 #if defined(EMS_HOST_TEST)
 void ecu_sched_test_reset(void);
 // Zera o estimador de ω do encoder — chamado por ecu_sched_test_reset()
-// (ecu_sched_angle_encoder.cpp), evita estado a vazar entre testes.
+// (ecu_sched_encoder_omega.cpp), evita estado a vazar entre testes.
 void ecu_sched_encoder_omega_test_reset(void) noexcept;
 // Idem para o rastreador de fase.
 void ecu_sched_encoder_phase_test_reset(void) noexcept;

@@ -46,7 +46,7 @@ inline constexpr uint8_t kWastedIgnPairA[2] = {ECU_CH_IGN1, ECU_CH_IGN4};  // cy
 inline constexpr uint8_t kWastedIgnPairB[2] = {ECU_CH_IGN3, ECU_CH_IGN2};  // cyl 2,1
 
 // Inhibit mask bit for INJ/IGN channels (cyl 0..3), indexado por ECU_CH_*.
-// Movido de ecu_sched.cpp (era static ali) — ecu_sched_angle_encoder.cpp
+// Movido de ecu_sched.cpp (era static ali) — ecu_sched_encoder_queue.cpp
 // precisa da mesma tabela para a varredura de purge da fila TIM2/CH3, e
 // duplicar 8 bytes que têm de andar sempre em sincronia com ECU_CH_* é mais
 // risco do que partilhar a única fonte.
@@ -71,7 +71,7 @@ extern volatile uint32_t g_mspark_atdc_limit_deg;
 extern volatile uint32_t g_pw_duty_clamp_count;
 
 // Alvos angulares (0..359, domínio 360°) do par wasted-spark A/B e do fim de
-// injeção presync — geometria só (ecu_sched_angle_encoder.cpp despacha na
+// injeção presync — geometria só (ecu_sched_encoder_builders.cpp despacha na
 // fila TIM2/CH3). Par A @ TDC 0°, par B @ TDC 180° — 2 bobinas por evento.
 struct PresyncWastedTargets {
     uint32_t spark_a;

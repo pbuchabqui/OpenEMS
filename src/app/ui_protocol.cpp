@@ -355,13 +355,13 @@ void parse_byte(uint8_t b) noexcept {
                 // [53] watchdog TIM3 CMP IC: nº de vezes que
                 // ems::hal::tim3_cmp_ic_init() foi rearmado após revoluções
                 // demais sem flanco CMP aceite (virabrequim vivo, CMP
-                // mudo) — ver ecu_sched_angle_encoder.cpp (2026-08-17).
+                // mudo) — ver ecu_sched_encoder_heartbeat.cpp (2026-08-17).
                 ecu_sched_encoder_cmp_watchdog_request_count(),
                 // [54] watchdog do builder sequencial: nº de vezes que o
                 // fallback para presync foi forçado por phase_valid()==1
                 // sem nenhum cilindro conseguir armar por várias voltas
                 // seguidas (âncora possivelmente corrompida por um
-                // re-anchor espúrio) — ver ecu_sched_angle_encoder.cpp
+                // re-anchor espúrio) — ver ecu_sched_encoder_heartbeat.cpp
                 // (2026-08-17). Sempre 0 em builds de produção.
                 ecu_sched_encoder_seq_arm_stall_count(),
                 // [55] DIAG TEMPORÁRIO — remover depois de fechar o bug do

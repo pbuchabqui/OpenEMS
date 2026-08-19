@@ -215,7 +215,7 @@ void test_ecu_sched_dwell_watchdog(void) {
 }
 
 // ============================================================================
-// MT6835/TIM2 ENCODER — estimador de ω (ecu_sched_angle_encoder.cpp)
+// MT6835/TIM2 ENCODER — estimador de ω (ecu_sched_encoder_omega.cpp)
 // ============================================================================
 
 void test_ecu_sched_encoder_omega(void) {
@@ -2182,7 +2182,7 @@ void test_ecu_sched_encoder_sequential_ign_inhibit_mask_gate(void) {
 
     // kIgnCh[0] = ECU_CH_IGN1 (7); k_ign_ch_to_bit[7] = bit0 — mesma tabela
     // usada por force_output() (ecu_sched.cpp) e agora também por
-    // arm_sequential_cyl() (ecu_sched_angle_encoder.cpp).
+    // arm_sequential_cyl() (ecu_sched_encoder_builders.cpp).
     {
         ecu_sched_test_reset();
         ems::engine::enc_fuel_ign_prep_test_publish(prep);

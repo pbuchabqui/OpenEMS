@@ -644,7 +644,7 @@ int main() {
             // Watchdog do TIM3 CMP IC: se revoluções demais se passaram
             // sem um flanco CMP aceite (virabrequim vivo, CMP mudo — ver
             // ecu_sched_encoder_cmp_watchdog_poll_and_clear() em
-            // ecu_sched_angle_encoder.cpp), rearma o periférico. Fora de
+            // ecu_sched_encoder_heartbeat.cpp), rearma o periférico. Fora de
             // contexto de ISR, mesmo padrão dos watchdogs abaixo.
             if (ecu_sched_encoder_cmp_watchdog_poll_and_clear() != 0U) {
                 ems::hal::CriticalSectionGuard guard;

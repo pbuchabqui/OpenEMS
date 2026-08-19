@@ -18,7 +18,7 @@ namespace ems::engine {
  * Diferença deliberada face ao caminho CKP: a avaliação da janela ocorre
  * na SAÍDA da janela (mudança de cilindro detectada), não numa contagem
  * fixa de amostras — sub-amostras (256 counts, ver
- * ecu_sched_angle_encoder.cpp "split light/heavy") não estão alinhadas à
+ * ecu_sched_encoder_heartbeat.cpp "split light/heavy") não estão alinhadas à
  * janela de 62° da mesma forma que dentes discretos de 6° estão no
  * caminho CKP.
  *

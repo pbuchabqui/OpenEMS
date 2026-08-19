@@ -17,7 +17,7 @@
  *   TIM2_CH1/CH2 PA0/PA1: encoder MT6835 (ver tim2_encoder_init())
  *   TIM2_CH3: event dispatcher em domínio de ângulo — mesmo mecanismo do
  *             TIM5_CH3 acima (compare + BSRR), unidade counts em vez de ticks
- *             (ver ecu_sched_angle_encoder.cpp)
+ *             (ver ecu_sched_encoder_queue.cpp)
  *   TIM3_CH1 PC6: CMP input capture (ver tim3_cmp_ic_init())
  *   TIM5: free-running sem captura; CNT para watchdogs/ω; CH3 compare
  *         (sem pino) para prime/teste — NVIC TIM5 + CC3IE dinâmico
@@ -27,7 +27,7 @@
  *
  * Injeção/ignição (INJ/IGN): nenhum canal TIM OC — sempre GPIOE BSRR por
  * software, disparado pela ISR do event dispatcher acima (ecu_sched.cpp /
- * ecu_sched_angle_encoder.cpp), não por este ficheiro.
+ * ecu_sched_encoder_queue.cpp), não por este ficheiro.
  *
  * Clock dos timers:
  *   TIM5, TIM3, TIM4, TIM2 (APB1): timer clock = 250 MHz (timer doubler ativo)
@@ -289,7 +289,7 @@ void tim2_encoder_set_count(uint32_t counts) noexcept {
 //
 // Rearme a cada 256 counts (~64×/volta), não 16384 (1×/volta) — split
 // light/heavy do heartbeat (ver ecu_sched_encoder_heartbeat_subtick(),
-// ecu_sched_angle_encoder.cpp): o caminho leve (misfire) precisa de
+// ecu_sched_encoder_heartbeat.cpp): o caminho leve (misfire) precisa de
 // cadência fina, o pesado (ω/CMP/presync/publish) continua 1×/volta,
 // chamado internamente a cada 64º sub-tick — cadência total idêntica à
 // anterior a esta tarefa.
@@ -441,8 +441,8 @@ extern "C" void TIM5_IRQHandler(void) {
  * @brief TIM2_IRQHandler — CH3 = dispatcher de eventos em domínio de ângulo,
  * CH4 = sub-tick do heartbeat (256 counts, ~64×/volta — o caminho pesado
  * dentro de ecu_sched_encoder_heartbeat_subtick() continua 1×/volta, ver
- * ecu_sched_angle_encoder.cpp). Mesmo periférico/vetor que a
- * fila TIM2/CH3 (ecu_sched_angle_encoder.cpp) — CC3IF e CC4IF chegam pela
+ * ecu_sched_encoder_heartbeat.cpp). Mesmo periférico/vetor que a
+ * fila TIM2/CH3 (ecu_sched_encoder_queue.cpp) — CC3IF e CC4IF chegam pela
  * mesma IRQ, tratados em sequência com releitura de SR entre um e outro
  * (mesmo padrão do TIM5_IRQHandler acima, para não perder um flag que suba
  * durante o tratamento do outro).

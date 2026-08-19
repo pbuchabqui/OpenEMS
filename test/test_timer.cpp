@@ -67,7 +67,7 @@ void test_timer_stubs(void) {
     // MT6835/TIM2 encoder HAL stubs (VGT6-only real logic lives under
     // #ifndef EMS_HOST_TEST in stm32h562/timer.cpp — the ISR register
     // access itself isn't host-testable, same reasoning as
-    // ecu_sched_angle_encoder taking already-read values as plain params;
+    // ecu_sched_encoder_* taking already-read values as plain params;
     // the pure catch-up decision inside the ISR IS testable, see
     // test_tim2_heartbeat_next_ccr4() below). This just confirms the
     // host-test mock layer (task #9) is wired: init/arm/heartbeat_start

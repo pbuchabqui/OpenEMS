@@ -610,7 +610,7 @@ void loop_2ms_fuel_ign(uint32_t now,
     // HALF sem allow_half_running, ou sync perdido de todo) —
     // fora do if/else-if de propósito, não só dentro do branch (3) —
     // republica o prep. Sem isto, o dispatcher sequencial
-    // (try_arm_sequential_due, ecu_sched_angle_encoder.cpp) continua
+    // (try_arm_sequential_due, ecu_sched_encoder_builders.cpp) continua
     // a ler o prep congelado de ANTES do corte e arma injeção real
     // indefinidamente: nem g_inj_inhibit_mask nem fuel_protect_cut
     // são consultados no caminho de disparo do encoder

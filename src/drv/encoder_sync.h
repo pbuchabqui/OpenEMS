@@ -2,7 +2,7 @@
 /**
  * @file encoder_sync.h
  * @brief Validação de flancos CMP e detecção de staleness para o rastreador
- *        de fase do fork MT6835/TIM2 (ver ecu_sched_angle_encoder.cpp e
+ *        de fase do fork MT6835/TIM2 (ver ecu_sched_encoder_heartbeat.cpp e
  *        docs/dev/mt6835_encoder_fork.md).
  *
  * Funções puras — parâmetros já lidos, sem MMIO directo aqui — mesma
@@ -31,7 +31,7 @@
  * de engrenagem) — não ruído electrónico: o filtro digital do TIM3 (N=8 @
  * fDTS/8, mesmo ajuste do TIM5, hal/stm32h562/timer.cpp) atrasa bem menos de
  * 1 count a qualquer RPM realista (ver a tabela de ω em
- * ecu_sched_angle_encoder.cpp — mesmo no redline o atraso do filtro não
+ * ecu_sched_encoder_omega.cpp — mesmo no redline o atraso do filtro não
  * chega a 1 count).
  */
 
@@ -91,7 +91,7 @@ bool staleness_exceeded(uint32_t heartbeats_since_accepted, bool bench_mode) noe
 /// (~100ms, não 1×/revolução). Default true: sem hardware populado
 /// (MT6835_HW_PRESENT=0) o poll nunca corre e este flag nunca é escrito —
 /// ausência de hardware não deve ler como falha de sensor (ver
-/// docs/dev/mt6835_encoder_fork.md). O heartbeat (ecu_sched_angle_encoder.cpp)
+/// docs/dev/mt6835_encoder_fork.md). O heartbeat (ecu_sched_encoder_heartbeat.cpp)
 /// lê isto a cada tick para compor o SyncState publicado; só um escritor
 /// (o poll de 100ms em main_stm32.cpp) evita que dois publicadores
 /// independentes de CkpSnapshot se pisem.

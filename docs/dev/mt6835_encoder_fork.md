@@ -51,6 +51,70 @@ dentro do dispatcher TIM2/CH3. Três sítios legais:
 `sensors_on_tooth` / `ecu_sched_on_tooth_hook` / `misfire_detect.cpp` não são
 pontos de extensão — estão mortos ou só no host-test.
 
+## Mapa actual — timers, filas, watchdogs
+
+Fonte de verdade do tree **agora**. Secções abaixo desta (2026-08-08+) são
+diário de desenho; onde discordarem, vale esta.
+
+### Timers (VGT6)
+
+| Periférico | Papel |
+|---|---|
+| TIM2 CH1/CH2 (PA0/PA1) | Encoder AB, 16384 counts/volta |
+| TIM2 CH3 | Fila de produção (ângulo): INJ/IGN |
+| TIM2 CH4 | Heartbeat: subtick 256 counts (~64×/volta); pesado 1×/volta |
+| TIM3 CH1 (PC6) | Captura CMP — grava `TIM2->CNT`, não tempo |
+| TIM5 | Timebase 62,5 MHz (watchdogs, ω, prime/teste). Sem captura CKP/CMP |
+
+`TIM2_IRQHandler`: CC3IF despacha pinos; CC4IF chama o subtick. O corpo está
+em `hal/stm32h562/timer.cpp`.
+
+### Duas filas
+
+| Fila | Unidade | Quem arma | Quem despacha | Uso |
+|---|---|---|---|---|
+| TIM2/CH3 | counts | `ecu_sched_encoder_arm_channel` | `ecu_sched_encoder_evt_dispatch` | produção |
+| TIM5/CH3 | ticks | `arm_channel` (interno a `ecu_sched.cpp`) | `ecu_sched_evt_dispatch` | prime + pulsos de bancada |
+
+Não partilham array nem CCR. Um corte (`purge_events_for_cyl_mask`) varre as
+duas. O pino é o ponto comum: qualquer despacho ou `force_output` chama
+`pin_transition` (`ecu_sched.cpp`), que arma/solta os relógios TIM5.
+
+### Ficheiros do dispatcher encoder
+
+- `ecu_sched_encoder_omega.cpp` — ω = ΔTIM2/ΔTIM5 ×65536
+- `ecu_sched_encoder_phase.cpp` — âncora CMP / `phase_valid` / Never-Guess
+- `ecu_sched_encoder_queue.cpp` — fila TIM2/CH3
+- `ecu_sched_encoder_heartbeat.cpp` — subtick + heavy tick + watchdogs de ângulo
+- `ecu_sched_encoder_builders.cpp` — presync + `try_arm` + °→counts
+- `ecu_sched_encoder_priv.h` — estado interno
+- `ecu_sched.cpp` — fila TIM5, `pin_transition`, dwell/inj watchdog, prime
+
+API pública: `ecu_sched.h`.
+
+### Três famílias de watchdog
+
+| Família | Domínio | Sintoma | Efeito |
+|---|---|---|---|
+| TIM3 IC | ângulo / silêncio CMP | captura morta (6/60 heartbeats) | rearm `tim3_cmp_ic_init` no slot 2 ms |
+| Stall sequencial | ângulo / builder | `phase_valid` mas zero arms (6 heavy-ticks) | `phase_invalidate` → presync |
+| TIM5 dwell / inj | tempo / pino | HIGH órfão | corta o pino (dwell 1,4×; inj 1,2× PW só via `arm_channel`, senão 36 ms) |
+
+### Duas APIs de arm — não unificar
+
+- `encoder_arm_channel` — produção, alvo em counts TIM2. Timeout de inj no
+  caminho encoder é o tecto duro de 36 ms (`pin_transition` se o timeout
+  ainda era 0).
+- `arm_channel` — tempo TIM5. Programa inj a 1,2× PW (piso 2 ms, tecto 36 ms).
+  Só prime e teste.
+
+### Never-Guess (fase CMP)
+
+`evaluate_cmp_edge` (`encoder_sync.cpp`) só mede span (32768±200). Quem
+ancora é o heartbeat: `g_cmp_confirm_count >= 2` **e**
+`cmp_phase_state != Uncalibrated` (comando `M`). Sem calibração o builder
+fica em presync.
+
 ## Mecanismo proposto
 
 - `TIM2` em modo encoder: `CH1`/`CH2` decodificam quadratura ABZ do MT6835
@@ -58,7 +122,8 @@ pontos de extensão — estão mortos ou só no host-test.
 - `CH3` do mesmo `TIM2` fica livre (não usado pelo modo encoder, que só
   consome `CH1`/`CH2`) e passa a gerar compare-match diretamente contra
   `TIM2->CNT` — ou seja, disparo por **ângulo alvo**, não por timestamp
-  previsto. `CH4` fica livre também, sem uso atribuído por agora.
+  previsto. `CH4` é o heartbeat (compare interno, 256 counts; ver
+  «Mapa actual» acima) — a frase original «sem uso» está desactualizada.
 - Isto elimina a conversão ângulo→tempo que hoje é feita uma vez por gap em
   `ecu_sched_angle.cpp` (aproximação que assume RPM ~constante até o próximo
   dente) — o disparo por ângulo é imune a essa aproximação porque compara
@@ -642,8 +707,10 @@ make host-test-vgt6            → 24 PASS, 0 FAIL
 
 Plano de desenho: `docs/dev/mt6835_encoder_fork.md` (este ficheiro, seções
 acima) + o plano dedicado que o originou (10 tarefas). Todas as 10
-concluídas nesta branch. Ficheiro novo, paralelo a `ecu_sched_angle.cpp`
-(que fica intocado): `src/engine/ecu_sched_angle_encoder.cpp`. Resumo por
+concluídas nesta branch. O dispatcher nasceu num único
+`ecu_sched_angle_encoder.cpp`; hoje está partido em
+`ecu_sched_encoder_{omega,phase,queue,heartbeat,builders}.cpp` + `priv.h`
+(ver «Mapa actual»). Resumo por
 tarefa (código + commits, não repete o racional completo — ver comentários
 no próprio ficheiro, são a fonte primária):
 
@@ -944,7 +1011,7 @@ target_compensado = target_desejado − round(RPM × 6 × 10e-6 × 16384 / 360)
 ```
 
 1. Onde aplicar: dentro de `engine_deg_to_absolute()`
-   (`ecu_sched_angle_encoder.cpp`) antes de converter para counts absolutos, ou
+   (`ecu_sched_encoder_builders.cpp`) antes de converter para counts absolutos, ou
    como ajuste final ao alvo antes de `arm_channel()` — decisão de implementação,
    não de bancada.
 2. RPM já disponível via `ecu_sched_encoder_omega_x65536()` — converter para RPM
@@ -973,7 +1040,7 @@ sem roda dentada) e toda a amostragem ADC estava morta pelo mesmo motivo
 (`adc_trigger_on_tooth()` só é chamada por `sensors_on_tooth()`).
 
 ### Parte 1 — Sync-state (`drv/ckp.h`/`.cpp`, `drv/encoder_sync.h`/`.cpp` novo,
-`ecu_sched_angle_encoder.cpp`)
+`ecu_sched_encoder_heartbeat.cpp`)
 
 `ems::drv::SyncState`/`CkpSnapshot` reutilizados tal como existem — nenhum
 enum/campo de wire novo, para `full_sync`/VVT/UI continuarem a funcionar sem
@@ -1271,7 +1338,7 @@ calibrável ao vivo pelo comando `'M'` (`src/app/ui_protocol.cpp`) + botão
 "Medir fase CMP" no dash (secção ENGINE, page0), mesmo padrão já usado por
 `encoder_tdc1_origin_deg`/`'X'`/"Calibrar TDC1". Ver
 `ecu_sched_encoder_cmp_phase_calibrate_from_raw()`
-(`ecu_sched_angle_encoder.cpp`) para a matemática — mesma paridade de
+(`ecu_sched_encoder_phase.cpp`) para a matemática — mesma paridade de
 `floor_div_16384` que `phase_at()` já usava, só aplicada a duas leituras
 cruas de `TIM2->CNT` em vez de exigir múltiplos flancos observados
 manualmente.

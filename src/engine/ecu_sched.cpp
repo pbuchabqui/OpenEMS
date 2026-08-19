@@ -1,3 +1,13 @@
+/**
+ * @file ecu_sched.cpp
+ * @brief Fila TIM5 (prime/teste) + GPIO bookkeeping + watchdogs de parede.
+ *
+ * Não é o dispatcher de produção. Pulso INJ/IGN de motor vai pela fila
+ * TIM2/CH3 (`ecu_sched_encoder_queue.cpp`). Este ficheiro: relógio TIM5
+ * (62,5 MHz) para dwell 1,4× / inj 36 ms, prime, pulsos de bancada, e
+ * `pin_transition` — a ponte que arma esses relógios quando qualquer
+ * caminho (TIM2, TIM5 ou force_output) muda um pino.
+ */
 #include "engine/ecu_sched.h"
 #include "engine/ecu_sched_internal.h"
 #include "engine/enc_cyl_setpoints.h"
@@ -55,7 +65,7 @@ static_assert(ECU_SCHED_NS_PER_TICK == 16U,
 
 // Inhibit mask bit for INJ/IGN channels (cyl 0..3). Indexed by ECU_CH_* for
 // 0..3 / 4..7. Movido para ecu_sched_internal.h (si::k_inj_ch_to_bit /
-// si::k_ign_ch_to_bit) — a fila TIM2/CH3 (ecu_sched_angle_encoder.cpp)
+// si::k_ign_ch_to_bit) — a fila TIM2/CH3 (ecu_sched_encoder_queue.cpp)
 // precisa da mesma tabela para a sua própria varredura de purge.
 
 // Hollow angle table (60-2 builders removed). Encoder uses the TIM2 queue.
@@ -292,7 +302,7 @@ volatile uint32_t g_pin_seq_error[8];   // consecutive same-direction transition
 static uint8_t    g_pin_last_state[8];  // 0=LOW, 1=HIGH, 0xFF=unknown
 
 // Linkage externa (era static inline) — chamada também por
-// ecu_sched_angle_encoder.cpp (fila TIM2/CH3), ver ecu_sched_internal.h.
+// ecu_sched_encoder_queue.cpp (fila TIM2/CH3), ver ecu_sched_internal.h.
 void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
     if (idx >= 8U) { return; }
     if (g_pin_last_state[idx] == high && high != 0xFFU) {
@@ -338,7 +348,7 @@ static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U,
 // Força pinos a estado seguro (SPARK/INJ_OFF) + limpa watchdog de dwell para
 // cada cilindro do mask — extraído de purge_events_for_cyl_mask() (mesmo
 // corpo, comportamento idêntico para o caminho TIM5) para ser reutilizável
-// pelo handoff presync→sequencial do encoder (ecu_sched_angle_encoder.cpp),
+// pelo handoff presync→sequencial do encoder (ecu_sched_encoder_heartbeat.cpp),
 // que só purga a fila TIM2/CH3 (via encoder_purge_cyl_mask) sem nunca ter
 // feito este fecho físico dos pinos — ver ecu_sched_internal.h.
 void force_close_cyl_mask(uint8_t mask, uint8_t is_ign)
@@ -810,7 +820,7 @@ void ecu_sched_test_reset(void)
     // de arrancar em estado limpo (senão herdam contagem de testes anteriores).
     g_diag_presync_revs = 0U; g_diag_seq_revs = 0U;
     si::g_knock_sequential = 0U; g_cmp_phase_seen = 0U;
-    // MT6835/TIM2 encoder — ver ecu_sched_angle_encoder.cpp.
+    // MT6835/TIM2 encoder — omega/phase/queue/heartbeat test_reset.
     ecu_sched_encoder_omega_test_reset();
     ecu_sched_encoder_phase_test_reset();
     ecu_sched_encoder_queue_test_reset();

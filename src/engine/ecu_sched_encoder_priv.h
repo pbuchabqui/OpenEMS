@@ -5,8 +5,7 @@
  * API pública continua em ecu_sched.h. Não incluir fora de
  * ecu_sched_encoder_*.cpp.
  *
- * Split (move-only) de ecu_sched_angle_encoder.cpp:
- *   omega / phase / queue / heartbeat / builders
+ * Partes: omega / phase / queue / heartbeat / builders.
  */
 #pragma once
 

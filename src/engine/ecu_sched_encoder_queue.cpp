@@ -52,6 +52,8 @@ static uint32_t ems_test_tim2_cnt  = 0u;
 // wrap-safe com subtração de sinal, overflow policy que nunca larga
 // silenciosamente um de-assert, CC3IE dinâmico por episódio
 // fila-vazia↔não-vazia) — só a unidade muda: counts TIM2, não ticks TIM5.
+// No despacho, enc_evt_execute_head() chama pin_transition() — os
+// watchdogs de dwell/inj continuam TIM5/tempo (ecu_sched.cpp).
 //
 // Piso de lead mínimo aplicado em ecu_sched_encoder_arm_channel() (via
 // si::encoder::min_lead_counts(), plano secção 7). Mesmo sem piso, um alvo

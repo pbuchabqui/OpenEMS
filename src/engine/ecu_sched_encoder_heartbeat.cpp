@@ -1,6 +1,9 @@
 /**
  * @file ecu_sched_encoder_heartbeat.cpp
  * @brief Heartbeat TIM2_CH4: subtick + heavy tick + publish snapshot.
+ *
+ * ISR: TIM2_IRQHandler CC4IF em hal/stm32h562/timer.cpp (CCR4 += 256,
+ * depois este subtick). Caminho leve ~64×/volta; pesado 1×/volta.
  */
 #include "engine/ecu_sched_encoder_priv.h"
 #include "engine/enc_cyl_setpoints.h"

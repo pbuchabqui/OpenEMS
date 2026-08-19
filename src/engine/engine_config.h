@@ -36,7 +36,7 @@ inline constexpr uint16_t kMapRefBarX100 = 100u;
 // Modo encoder MT6835 (EMS_MT6835_ENCODER=1, hal/board_pinout.h): este mesmo
 // campo é REAPROVEITADO com o mesmo papel físico — "que ângulo de motor
 // corresponde à posição bruta zero" — só que a posição bruta já não é o
-// dente 0 da roda 60-2, é TIM2_CNT==0 (ver ecu_sched_angle_encoder.cpp,
+// dente 0 da roda 60-2, é TIM2_CNT==0 (ver ecu_sched_encoder_builders.cpp,
 // engine_deg_to_counts_in_rev()). Só a resídua MOD 360 é significativa nesse
 // caminho (TIM2 embrulha a cada 16384 contagens = 1 volta, não 720° como o
 // campo sugere pelo nome) — um calibrador escrevendo 400 ou 40 produz o
