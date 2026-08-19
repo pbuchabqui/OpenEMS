@@ -1,13 +1,10 @@
 /**
  * @file ecu_sched_internal.h
- * @brief Shared state between ecu_sched.cpp (hot path) and ecu_sched_angle.cpp
- *        (cold angle-table builders at rev boundary only).
+ * @brief Shared state between ecu_sched.cpp (TIM5 time queue: prime,
+ *        test pulse, dwell/inj watchdogs) and the TIM2 encoder files
+ *        (ecu_sched_encoder_*.cpp).
  *
- * Hot-path rule (Tier 1.5): do NOT move evt_insert / arm_channel /
- * ecu_sched_evt_dispatch / tooth arm loop out of ecu_sched.cpp.
- * GPIO write is header-inline via hal/out_pins.h (out_pin_write) — not a
- * separate .cpp call — so it still inlines without LTO.
- *
+ * GPIO write is header-inline via hal/out_pins.h (out_pin_write).
  * This header is private to the scheduler; public API remains ecu_sched.h.
  */
 #pragma once
@@ -74,10 +71,8 @@ extern volatile uint32_t g_mspark_atdc_limit_deg;
 extern volatile uint32_t g_pw_duty_clamp_count;
 
 // Alvos angulares (0..359, domínio 360°) do par wasted-spark A/B e do fim de
-// injeção presync — partilhado entre os dois builders presync (roda-dentada
-// em ecu_sched_angle.cpp e encoder em ecu_sched_angle_encoder.cpp), que só
-// diferem em como despacham o par (tabela de ângulo vs fila TIM2/CH3), nunca
-// nesta geometria. Par A @ TDC 0°, par B @ TDC 180° — 2 bobinas por evento.
+// injeção presync — geometria só (ecu_sched_angle_encoder.cpp despacha na
+// fila TIM2/CH3). Par A @ TDC 0°, par B @ TDC 180° — 2 bobinas por evento.
 struct PresyncWastedTargets {
     uint32_t spark_a;
     uint32_t spark_b;
@@ -123,18 +118,17 @@ inline void emit_multispark_deg(uint32_t spark_ang, uint32_t cycle_deg,
     }
 }
 
-// ── Angle table (defined in ecu_sched_angle.cpp) ────────────────────────────
+// Hollow 60-2 angle table (builders are no-ops). Encoder uses TIM2 queue.
 extern AngleEvent_t g_angle_table[ECU_ANGLE_TABLE_SIZE];
 extern uint8_t g_angle_table_count;
 extern uint32_t g_angle_tooth_mask_lo;
 extern uint32_t g_angle_tooth_mask_hi;
 
-// ── Cold builders (ecu_sched_angle.cpp) — called only at rev gap ─────────────
 void clear_angle_table(void);
 void rebuild_sequential_cycle(const ems::drv::CkpSnapshot& snap);
 void rebuild_presync_revolution(const ems::drv::CkpSnapshot& snap);
 
-// ── MT6835/TIM2 encoder — fila TIM2/CH3 (ecu_sched_angle_encoder.cpp) ───────
+// ── MT6835/TIM2 encoder — fila TIM2/CH3 (ecu_sched_encoder_queue.cpp) ────
 // Varredura adicional chamada por purge_events_for_cyl_mask()/
 // clear_all_events_and_drive_safe_outputs() (ecu_sched.cpp) para também
 // dropar eventos pendentes na fila em domínio de ângulo — um corte de

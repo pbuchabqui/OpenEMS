@@ -89,7 +89,12 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/transient_fuel.cpp \
              $(SRC_DIR)/engine/spark_skip.cpp \
              $(SRC_DIR)/engine/ecu_sched.cpp \
-             $(SRC_DIR)/engine/ecu_sched_angle_encoder.cpp \
+             $(SRC_DIR)/engine/ecu_sched_encoder_omega.cpp \
+             $(SRC_DIR)/engine/ecu_sched_encoder_phase.cpp \
+             $(SRC_DIR)/engine/ecu_sched_encoder_queue.cpp \
+             $(SRC_DIR)/engine/ecu_sched_encoder_heartbeat.cpp \
+             $(SRC_DIR)/engine/ecu_sched_encoder_builders.cpp \
+             $(SRC_DIR)/engine/loop_2ms_fuel_ign.cpp \
              $(SRC_DIR)/engine/enc_cyl_setpoints.cpp \
              $(SRC_DIR)/engine/diagnostic_manager.cpp \
              $(SRC_DIR)/engine/map_estimator.cpp \
@@ -99,7 +104,6 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/etb_control.cpp \
              $(SRC_DIR)/engine/etb_autocal.cpp \
              $(SRC_DIR)/engine/torque_manager.cpp \
-             $(SRC_DIR)/engine/misfire_detect.cpp \
              $(SRC_DIR)/engine/misfire_encoder.cpp \
              $(SRC_DIR)/engine/ewg_control.cpp
 
@@ -151,6 +155,7 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_output.cpp \
                    $(TEST_DIR)/test_misfire_encoder.cpp
 HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
+                $(SRC_DIR)/engine/misfire_detect.cpp \
                 $(SRC_DIR)/hal/stm32h562/timer.cpp \
                 $(SRC_DIR)/hal/stm32h562/system.cpp \
                 $(HOST_TEST_HARNESS) $(HOST_TEST_SUITES)

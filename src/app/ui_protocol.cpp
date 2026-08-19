@@ -35,6 +35,10 @@
 extern uint32_t g_dbg_rev_limit_trips;
 extern uint32_t g_dbg_rev_limit_rpm_x10;
 extern uint32_t g_dbg_rev_limit_rpm_max;
+extern uint16_t g_dbg_dead_time_us;
+extern uint32_t g_dbg_pulse_pw_us;
+extern uint32_t g_dbg_cycle_pw_us;
+extern uint8_t  g_dbg_squirts;
 
 namespace ems::app::ui_detail {
 
@@ -273,8 +277,14 @@ void parse_byte(uint8_t b) noexcept {
         if (b == static_cast<uint8_t>('D')) {
             EcuSchedDiagSnapshot sd{};
             ecu_sched_get_diag_snapshot(&sd);
-            // 58×u32 = 232 B (era 56; +2 DIAG TEMPORÁRIO enc_evt insert/execute [56-57])
-            const uint32_t diag[58] = {
+            const auto snap = ems::drv::ckp_snapshot();
+            const auto sens = ems::drv::sensors_get();
+            const uint8_t builder = (snap.rpm_x10 == 0u) ? 0u
+                : (::ecu_sched_is_sequential() ? 2u : 1u);
+            const uint8_t float_sus = (snap.rpm_x10 == 0u
+                && sens.map_raw > 800u && sens.map_raw < 2800u) ? 1u : 0u;
+            // 64×u32 = 256 B (+6 encoder debug: dead/pulse/cycle/squirts/map_raw/crank)
+            const uint32_t diag[64] = {
                 sd.late_event_count,
                 sd.cycle_schedule_drop_count,
                 sd.inj1_arm,
@@ -346,7 +356,6 @@ void parse_byte(uint8_t b) noexcept {
                 // ems::hal::tim3_cmp_ic_init() foi rearmado após revoluções
                 // demais sem flanco CMP aceite (virabrequim vivo, CMP
                 // mudo) — ver ecu_sched_angle_encoder.cpp (2026-08-17).
-                // Sempre 0 em builds de produção (EMS_MT6835_ENCODER=0).
                 ecu_sched_encoder_cmp_watchdog_request_count(),
                 // [54] watchdog do builder sequencial: nº de vezes que o
                 // fallback para presync foi forçado por phase_valid()==1
@@ -361,6 +370,15 @@ void parse_byte(uint8_t b) noexcept {
                 // [56-57] DIAG TEMPORÁRIO — contadores reais da fila TIM2/CH3.
                 ecu_sched_encoder_enc_evt_insert_count(),
                 ecu_sched_encoder_enc_evt_execute_count(),
+                // [58-63] encoder debug (2026-08-18): fórmula vs pino, ADC MAP, ângulo.
+                ::g_dbg_dead_time_us,                                    // [58]
+                ::g_dbg_pulse_pw_us,                                     // [59]
+                ::g_dbg_cycle_pw_us,                                     // [60]
+                static_cast<uint32_t>(::g_dbg_squirts)
+                    | (static_cast<uint32_t>(builder) << 8)
+                    | (static_cast<uint32_t>(float_sus) << 16),          // [61]
+                sens.map_raw,                                            // [62]
+                static_cast<uint32_t>(snap.crank_deg),                   // [63]
             };
             tx_push_bytes(reinterpret_cast<const uint8_t*>(diag), sizeof(diag));
             return;

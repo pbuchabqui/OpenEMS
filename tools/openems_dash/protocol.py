@@ -389,8 +389,11 @@ class OpenEMSLink:
         # (evt_inserted/evt_dispatched acima são só da fila legada TIM5,
         # sempre 0 em modo encoder).
         "enc_evt_insert_count", "enc_evt_execute_count",
+        # [58-63] encoder debug: formula vs pin, MAP ADC, crank
+        "dead_time_us", "pulse_pw_us", "cycle_pw_us", "pw_pack",
+        "map_raw", "crank_deg",
     ]
-    DEBUG_SIZE = 58 * 4  # must match FW diag[58]
+    DEBUG_SIZE = 64 * 4  # must match FW diag[64]
 
     # Bits de src/engine/cut_reason.h (ordem = bit 0..N)
     FUEL_CUT_BITS = ["rev_limit", "limp_rpm", "map_fault", "oil_press",
@@ -406,13 +409,17 @@ class OpenEMSLink:
     def read_debug(self) -> dict:
         assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE
         buf = self._txn(b"D", self.DEBUG_SIZE)
-        # 31 u32 + 2 i32 + 25 u32 (era 23; +2 enc_evt insert/execute [56-57], 2026-08-17)
+        # 31 u32 + 2 i32 + 31 u32 (era 25; +6 encoder debug [58-63], 2026-08-18)
         vals = (
             struct.unpack("<31I", buf[:124])
             + struct.unpack("<2i", buf[124:132])
-            + struct.unpack("<25I", buf[132:232])
+            + struct.unpack("<31I", buf[132:256])
         )
         d = dict(zip(self.DEBUG_FIELDS, vals))
+        pack = d.pop("pw_pack", 0)
+        d["squirts"] = pack & 0xFF
+        d["builder"] = (pack >> 8) & 0xFF
+        d["adc_float_suspect"] = bool((pack >> 16) & 0x1)
         for n in range(4):
             packed = d.pop(f"map_w{n}")
             d[f"map_w{n}_bar_x1000"] = packed >> 16

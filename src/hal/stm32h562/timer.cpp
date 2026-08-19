@@ -429,29 +429,12 @@ void etb_pwm_set_duty_x10(uint16_t duty_pct_x10) noexcept {
  * @brief TIM5_IRQHandler — CKP (CH1) + CMP (CH2) + event dispatcher (CH3)
  */
 extern "C" void TIM5_IRQHandler(void) {
-    uint32_t sr = TIM5_SR;
-#if EMS_MT6835_ENCODER
+    const uint32_t sr = TIM5_SR;
     // Freerun: só prime/teste na fila TIM5/CH3. CH1/CH2 não capturam.
     if (sr & TIM_SR_CC3IF) {
         TIM5_SR = ~TIM_SR_CC3IF;
         ecu_sched_evt_dispatch();
     }
-#else
-    if (sr & TIM_SR_CC1IF) {
-        TIM5_SR = ~TIM_SR_CC1IF;
-        ems::drv::ckp_tim5_ch1_isr();
-    }
-    sr = TIM5_SR;
-    if (sr & TIM_SR_CC2IF) {
-        TIM5_SR = ~TIM_SR_CC2IF;
-        ems::drv::ckp_tim5_ch2_isr();
-    }
-    sr = TIM5_SR;
-    if (sr & TIM_SR_CC3IF) {
-        TIM5_SR = ~TIM_SR_CC3IF;
-        ecu_sched_evt_dispatch();
-    }
-#endif
 }
 
 /**

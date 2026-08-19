@@ -234,6 +234,9 @@ uint32_t ecu_sched_encoder_seq_arm_stall_count(void) noexcept;
 // mudo/descontrolado em presync sustentado. Conta chamadas ao branch
 // recompute_presync() de ecu_sched_encoder_heartbeat_tick().
 uint32_t ecu_sched_encoder_presync_call_count(void) noexcept;
+// Heavy ticks spent in try_arm_sequential_due (1×/rev while phase_valid).
+// Dump 'D' seq_calls — not the unused TIM5 g_dbg_seq_calls.
+uint32_t ecu_sched_encoder_seq_call_count(void) noexcept;
 // DIAG TEMPORÁRIO — contadores reais da fila TIM2/CH3 do encoder
 // (evt_inserted/evt_dispatched do EcuSchedDiagSnapshot são só da fila
 // legada TIM5, sempre 0 em modo encoder — não confiar neles aqui).

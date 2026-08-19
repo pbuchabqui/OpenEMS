@@ -112,6 +112,7 @@ uint32_t ckp_get_cmp_glitch_count() noexcept { return 0u; }
 uint8_t  ckp_get_cmp_ref_tooth() noexcept { return 0xFFu; }
 uint32_t ckp_instant_rpm_x10() noexcept { return g_state.snap.rpm_x10; }
 
+// Unused on encoder: TIM5 has no CKP/CMP IC. CMP is TIM3_CH1.
 void ckp_tim5_ch1_isr() noexcept {}
 void ckp_tim5_ch2_isr() noexcept {}
 bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept

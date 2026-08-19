@@ -18,6 +18,39 @@ pseudocódigo hipotético de firmware usando MT6835) que não correspondia à
 arquitetura real do OpenEMS. A avaliação completa está preservada no histórico
 de conversa que originou este fork; o resumo técnico relevante está abaixo.
 
+## Como ler o dash (encoder-only)
+
+A aba Telemetry tem a faixa **ENCODER / SCHED**. Não confundir gauges com o pino:
+
+| No dash | Significado |
+|---|---|
+| **PW ciclo** | `fluxo + n×dead` (n=1 seq, n=2 semi/sim). Não é a largura de um pulso no GPIO. |
+| **PW pulso** | Uma abertura — o que o scope deve medir. |
+| **ETB %** | Lâmina da borboleta (`etb_tps`). Não é o comando `TPS`/`APP` do stim. |
+| **MAP sens** | ADC do pino MAP. Combustível usa **MAP fund**. |
+| **builder** | `PRESYNC` = `recompute_presync`; `SEQ` = `try_arm_sequential_due`. |
+| **seq_calls** | Heavy ticks no builder SEQ (1×/volta com fase CMP). 0 = ainda em presync. |
+| **TIM2 insert/exec** | Fila angular viva. `evt_inserted` do dump antigo é TIM5 e fica 0. |
+| **MAP raw** ~meio da escala com RPM=0 | Pino a flutuar (stim desligado), não um MAP “real”. |
+
+## Onde encaixar uma função nova
+
+Este tree é encoder-only. Não acrescentar `*_on_tooth` nem lógica de combustível
+dentro do dispatcher TIM2/CH3. Três sítios legais:
+
+1. **Tempo de parede** — slot do `main` (2 / 10 / 20 / 50 / 100 / 500 ms).
+   Combustível/ignição do 2 ms está em `loop_2ms_fuel_ign.cpp` (prep +
+   telemetria). ETB, STFT, auxiliares, NVM ficam nos slots do `main`.
+2. **Ângulo** — `ecu_sched_encoder_heartbeat.cpp` (`subtick` leve ou heavy
+   tick 1×/volta) ou um evento em `ecu_sched_encoder_queue.cpp`. Knock
+   window, MAP window, misfire, qualquer coisa “neste grau”.
+3. **Por cilindro no arm** — `EncFuelIgnPrep` (loop 2 ms publica sensores/VE/AE)
+   + `finalize_cyl_setpoints()` (quando o cyl entra na janela ≤60°). Correção
+   de PW/avanço por cilindro.
+
+`sensors_on_tooth` / `ecu_sched_on_tooth_hook` / `misfire_detect.cpp` não são
+pontos de extensão — estão mortos ou só no host-test.
+
 ## Mecanismo proposto
 
 - `TIM2` em modo encoder: `CH1`/`CH2` decodificam quadratura ABZ do MT6835

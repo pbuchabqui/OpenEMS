@@ -2,8 +2,8 @@
  * @file drv/ckp.h
  * @brief Crank snapshot publicado pelo heartbeat do encoder TIM2.
  *
- * Sem decoder 60-2. SyncState: WAIT_GAP unused, HALF_SYNC = presync,
- * FULL_SYNC = CMP confirmado, LOSS_OF_SYNC = stall / sensor.
+ * Sem decoder 60-2. No encoder: WAIT_GAP unused, HALF_SYNC = presync
+ * (ω válido, sem fase CMP), FULL_SYNC = CMP confirmado, LOSS_OF_SYNC = stall.
  */
 
 #pragma once
@@ -19,10 +19,10 @@ namespace ems::drv {
  *       todo código que usa comparação direta com o inteiro subjacente.
  */
 enum class SyncState : uint8_t {
-    WAIT_GAP,       ///< Aguardando primeiro gap — sem referência angular
-    HALF_SYNC,      ///< Primeiro gap detectado — contando dentes para confirmar
-    FULL_SYNC,      ///< Sincronismo pleno — tooth_index e crank angle válidos
-    LOSS_OF_SYNC,   ///< Sincronia perdida — aguardando re-sync via próximo gap
+    WAIT_GAP,       ///< Unused on encoder (kept for wire/enum stability)
+    HALF_SYNC,      ///< Presync: omega valid, CMP phase not confirmed
+    FULL_SYNC,      ///< CMP confirmed (2 edges) — sequential 720°
+    LOSS_OF_SYNC,   ///< Stall / sensor loss
 };
 
 /**
@@ -32,16 +32,16 @@ enum class SyncState : uint8_t {
  * ckp_snapshot() (captura atômica via seção crítica).
  */
 struct CkpSnapshot {
-    uint32_t tooth_period_ns;    ///< Período do último dente normal (ns); 0 antes de HALF_SYNC
-    uint32_t predicted_tooth_period_ns; ///< Próximo período estimado para agendamento intra-dente
-    uint16_t tooth_index;        ///< Índice do dente (0–57) contado desde o último gap; válido em FULL_SYNC
-    uint32_t last_tim5_capture;  ///< Timestamp TIM5 (ticks) do último dente — para angle-to-ticks
-    uint32_t rpm_x10;            ///< RPM × 10 (ex: 8000 = 800,0 RPM); 0 antes de dados suficientes
-    SyncState state;             ///< Estado corrente da máquina de sincronismo
-    bool phase_A;                ///< Fase do ciclo de 720°: true=PHASE_A (0-360°), false=PHASE_B (360-720°). Toggles at each gap, SET by CMP.
-    uint8_t cmp_confirms;        ///< Number of validated CMP edges since last sync loss (0-2). Gate for sequential mode.
-    uint32_t tim2_cnt;           ///< TIM2 encoder count at publish (encoder path).
-    uint16_t crank_deg;          ///< 0–359 from TIM2; not a 60-2 tooth index.
+    uint32_t tooth_period_ns;    ///< Unused on encoder (kept for struct layout)
+    uint32_t predicted_tooth_period_ns; ///< Unused on encoder
+    uint16_t tooth_index;        ///< Unused on encoder — use crank_deg
+    uint32_t last_tim5_capture;  ///< TIM5 tick at last publish (stall)
+    uint32_t rpm_x10;            ///< RPM × 10; 0 before omega / after stall
+    SyncState state;
+    bool phase_A;                ///< 720° half: true = 0–360°, false = 360–720°. CMP sets it.
+    uint8_t cmp_confirms;        ///< Validated CMP edges since loss (0–2). Sequential gate.
+    uint32_t tim2_cnt;           ///< TIM2 encoder count at publish
+    uint16_t crank_deg;          ///< 0–359 from TIM2
 };
 
 /**
@@ -65,27 +65,24 @@ CkpSnapshot ckp_snapshot() noexcept;
  */
 void ckp_publish_encoder_snapshot(const CkpSnapshot& snap) noexcept;
 
-// ── Hooks ─────────────────────────────────────────────────────────────────────
-// Chamados pela ISR de CKP a cada dente (símbolos fracos — sobrescreva para
-// adicionar comportamento sem modificar este módulo).
-//
-// sensors_on_tooth  → drv/sensors.cpp  (amostragem sincronizada ao dente)
-// schedule_on_tooth → engine/ecu_sched.cpp (agendamento injeção/ignição)
-// prime_on_tooth    → engine/quick_crank.cpp (prime pulse — 5º dente de cranking)
-// misfire_on_tooth  → engine/misfire_detect.cpp (detecção de falha de combustão)
-
+// ── Hooks 60-2 (unused on encoder — do not extend) ──────────────────────────
+// Nunca chamados neste tree (ISRs TIM5 CKP são no-op; heartbeat TIM2 é o
+// caminho vivo). Função nova: slot de tempo no main, subtick/heavy tick
+// TIM2, ou EncFuelIgnPrep / finalize_cyl_setpoints — ver
+// docs/dev/mt6835_encoder_fork.md "Onde encaixar uma função nova".
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept;
 void schedule_on_tooth(const CkpSnapshot& snap) noexcept;
 void prime_on_tooth(const CkpSnapshot& snap) noexcept;
 void misfire_on_tooth(const CkpSnapshot& snap) noexcept;
 
-// ── ISR handlers (chamados de hal/stm32h562/timer.cpp) ────────────────────────────────────
-void ckp_tim5_ch1_isr() noexcept;   ///< CKP rising edge (TIM5 CH1 / PA0)
-void ckp_tim5_ch2_isr() noexcept;   ///< Cam sensor rising edge (TIM5 CH2 / PA1)
+// TIM5 CH1/CH2 ISRs: empty on encoder (TIM5 is freerun only).
+void ckp_tim5_ch1_isr() noexcept;
+void ckp_tim5_ch2_isr() noexcept;
 
 uint32_t ckp_get_cmp_glitch_count() noexcept;
 
-// DIAG: valores internos de classify_tooth (expostos para snapshot)
+// DIAG 60-2: always 0 on this tree (no tooth decoder). Kept for dump 'D'
+// / wire layout. Do not treat a rising counter as a live CKP event.
 extern volatile uint32_t g_diag_tn1;
 extern volatile uint32_t g_diag_tn2;
 extern volatile uint32_t g_diag_delta;

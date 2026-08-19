@@ -421,6 +421,47 @@ button.primary:hover { background: rgba(240,160,48,0.1); }
   margin-top: 2px;
 }
 
+.enc-debug {
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 6px 8px 8px;
+}
+.enc-debug-title {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+  margin: 0 2px 6px;
+}
+.enc-debug-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 0;
+}
+.enc-cell {
+  padding: 4px 6px;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+.enc-cell:nth-child(8n) { border-right: none; }
+.enc-cell .v {
+  font: 700 13px/1.1 var(--font);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.enc-cell .l {
+  color: var(--muted);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-top: 2px;
+}
+
 .grid-hint {
   color: var(--muted);
   font-size: 10px;
@@ -1145,6 +1186,9 @@ button.cap {
 /* ── Responsive ──────────────────────────────────────────────────────── */
 @media (max-width: 1100px) {
   .gauge .v { font-size: 16px; }
+  .enc-debug-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .enc-cell:nth-child(8n) { border-right: 1px solid var(--border); }
+  .enc-cell:nth-child(4n) { border-right: none; }
   .leds { max-width: 200px; }
   .charts { grid-template-columns: 1fr; }
 }

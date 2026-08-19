@@ -45,6 +45,7 @@ struct SensorData {
     uint16_t an2_raw;
     uint16_t an3_raw;
     uint16_t an4_raw;
+    uint16_t map_raw;             // ADC MAP 0–4095 (0–3.3 V)
 };
 
 enum class SensorId : uint8_t {
@@ -64,6 +65,7 @@ struct SensorRange {
 };
 
 void sensors_init() noexcept;
+// Unused on encoder — do not extend. Use sensors_sample_fast_channels_encoder().
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept;
 
 /**

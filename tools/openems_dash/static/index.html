@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenEMS · Calibration</title>
 <link rel="stylesheet" href="uplot.min.css">
-<link rel="stylesheet" href="style.css?v=20260718aa">
+<link rel="stylesheet" href="style.css?v=20260818enc">
 </head>
 <body>
 
@@ -87,6 +87,10 @@
     <main id="content">
       <section id="tab-telemetry" class="pane">
         <div id="gaugesExtra" class="gauges-extra"></div>
+        <div id="encDebug" class="enc-debug" title="Encoder / scheduler — o que a ECU está a fazer, não o stim">
+          <div class="enc-debug-title">ENCODER / SCHED</div>
+          <div id="encDebugGrid" class="enc-debug-grid"></div>
+        </div>
         <div id="scopeWrap">
           <div id="scopeHeader">
             <span id="scopeTitle">CKP / CMP SCOPE</span>

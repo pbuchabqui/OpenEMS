@@ -58,8 +58,7 @@ static_assert(ECU_SCHED_NS_PER_TICK == 16U,
 // si::k_ign_ch_to_bit) — a fila TIM2/CH3 (ecu_sched_angle_encoder.cpp)
 // precisa da mesma tabela para a sua própria varredura de purge.
 
-// Angle table lives in ecu_sched_angle.cpp (cold builders). Aliases for local use.
-// Hot path reads si::g_angle_table* at tooth time only.
+// Hollow angle table (60-2 builders removed). Encoder uses the TIM2 queue.
 
 volatile uint32_t g_late_event_count = 0U;
 volatile uint32_t g_calibration_clamp_count = 0U;
@@ -99,7 +98,7 @@ volatile uint32_t g_diag_prime_fired = 0U;     // prime pulse disparado
 volatile uint32_t g_diag_clear_all_count = 0U; // clear_all_events calls (non-init)
 volatile uint32_t g_diag_unsync_teeth_peak = 0U; // pico de dentes sem sync
 
-// Shared with ecu_sched_angle.cpp (cold builders) — see ecu_sched_internal.h
+// Shared calibration / mode (ecu_sched_internal.h).
 namespace ems::engine::sched_internal {
 volatile uint8_t  g_mspark_count            = 0U;
 volatile uint32_t g_mspark_inter_dwell_ticks = 0U;
@@ -743,19 +742,15 @@ void ecu_sched_get_pin_counts_u32x24(uint32_t out[24])
 void ecu_sched_get_diag_snapshot(EcuSchedDiagSnapshot *out)
 {
     if (out == nullptr) { return; }
-#if EMS_MT6835_ENCODER
-    // Domínio TIM2/CH3 — dash/UART 'D' vêem late/overflow do encoder.
+    // TIM2/CH3 — dump 'D' / dash. TIM5 late/overflow stay in their own globals
+    // (prime / test pulse only).
     out->late_event_count = ecu_sched_encoder_late_event_count();
     out->evt_overflow = ecu_sched_encoder_evt_overflow();
-#else
-    out->late_event_count = g_late_event_count;
-    out->evt_overflow = g_dbg_evt_overflow;
-#endif
     out->cycle_schedule_drop_count = g_cycle_schedule_drop_count;
     out->inj1_arm = g_dbg_inj1_arm;
-    out->seq_calls = g_dbg_seq_calls;
+    out->seq_calls = ecu_sched_encoder_seq_call_count();
     out->clear_all_count = g_dbg_clear_all_count;
-    out->presync_count = g_dbg_presync_count;
+    out->presync_count = ecu_sched_encoder_presync_call_count();
     out->dwell_watchdog_count = g_dwell_watchdog_count;
     out->phase_skip = g_dbg_phase_skip;
     out->phase_fire = g_dbg_phase_fire;
@@ -777,6 +772,7 @@ void rebuild_presync_revolution(const ems::drv::CkpSnapshot&) {}
 }  // namespace ems::engine::sched_internal
 
 namespace ems::engine {
+// Unused on encoder — do not put new work here. Angle path is TIM2 heartbeat.
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
     static_cast<void>(snap);

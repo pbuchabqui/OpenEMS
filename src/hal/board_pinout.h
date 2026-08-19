@@ -74,15 +74,12 @@
 #  define EMS_TLE8888_PRESENT 0
 #endif
 
-// Detector de misfire em modo encoder (engine/misfire_encoder.h/.cpp) —
-// matemática nova (queda de velocidade angular por janela de cilindro),
-// paralela a engine/misfire_detect.cpp (caminho CKP, intocado). O módulo
-// corre e acumula internamente sempre, independentemente desta flag
-// (testável em host sem build especial) — só a publicação nos contadores
-// DTC-facing (main_stm32.cpp, consumidos por misfire_get_event_count()
-// equivalente) fica atrás dela. Default 0: mesmo padrão de
-// EMS_MT6835_CMP_PHASE_CALIBRATED — prova-se em isolamento antes de
-// confiar. Só passar a 1 depois de validar o módulo em bancada.
+// Detector de misfire encoder (engine/misfire_encoder.h/.cpp).
+// misfire_detect.cpp (60-2) não está no firmware. O módulo corre e
+// acumula internamente sempre — só a publicação DTC
+// (misfire_encoder_get_event_count) fica atrás desta flag. Default 0:
+// prova-se em isolamento antes de confiar. Só passar a 1 depois de
+// validar em bancada.
 #ifndef EMS_MISFIRE_ENCODER_ENABLE
 #  define EMS_MISFIRE_ENCODER_ENABLE 0
 #endif

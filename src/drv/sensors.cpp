@@ -396,8 +396,8 @@ inline uint16_t maf_period_avg4() noexcept {
 }
 
 // -----------------------------------------------------------------------------
-// Canais rápidos — chamado ~12× por revolução via sensors_on_tooth()
-// MAP, MAF-V, TPS, O2 — todos sincronizados ao mesmo ângulo de virabrequim
+// Canais rápidos — no encoder: sensors_sample_fast_channels_encoder() no slot 2 ms.
+// sensors_on_tooth() abaixo nunca é chamado neste tree.
 // -----------------------------------------------------------------------------
 void commit_sensor_snapshot() noexcept;
 
@@ -461,6 +461,7 @@ inline void sample_fast_channels() noexcept {
     const uint16_t knock_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::KNOCK);
 
     g_map_filt = iir(g_map_filt, map_raw, 3, 10);
+    g_data_staging.map_raw = map_raw;
 
     g_tps_buf[g_tps_pos] = tps_raw;
     g_tps_pos = static_cast<uint8_t>((g_tps_pos + 1u) & 0x3u);
@@ -591,6 +592,7 @@ void commit_sensor_snapshot() noexcept {
     g_data_committed.an2_raw                = g_data_staging.an2_raw;
     g_data_committed.an3_raw                = g_data_staging.an3_raw;
     g_data_committed.an4_raw                = g_data_staging.an4_raw;
+    g_data_committed.map_raw                = g_data_staging.map_raw;
 #if defined(__arm__) || defined(__thumb__)
     __asm__ volatile("cpsie i" ::: "memory");
 #endif
@@ -683,6 +685,8 @@ void sensors_init() noexcept {
 //   ticks = ns / 16
 // TIM6 trigger opera no mesmo clock efetivo → razão 1:1,
 // adc_trigger_on_tooth usa o valor diretamente sem nova conversão.
+// Unused on encoder — do not extend. Fast path is
+// sensors_sample_fast_channels_encoder() + sensors_map_window_poll_encoder().
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
     g_last_rpm_x10 = snap.rpm_x10;            // cache p/ check de plausibilidade MAP×TPS
     const uint32_t ticks = snap.tooth_period_ns >> 4u;
@@ -992,6 +996,7 @@ SensorData sensors_get() noexcept {
     out.an2_raw             = g_data_committed.an2_raw;
     out.an3_raw             = g_data_committed.an3_raw;
     out.an4_raw             = g_data_committed.an4_raw;
+    out.map_raw             = g_data_committed.map_raw;
     return out;
 }
 

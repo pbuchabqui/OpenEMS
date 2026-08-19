@@ -183,7 +183,9 @@ int main(void) {
     test_ecu_sched_setters();
     test_knock_window_encoder_arm_wiring();
     test_ecu_sched_inhibit_masks();
+    test_ecu_sched_mspark();
     test_ecu_sched_eoi_lead_deg_sanitize();
+    test_ecu_sched_presync();
     test_ecu_sched_dwell_watchdog();
     test_ecu_sched_encoder_omega();
     test_ecu_sched_encoder_phase();
@@ -281,6 +283,11 @@ int main(void) {
     // ── ECU SCHED FASE 2 ────────────────────────────────────────────────
     printf("\n=== ECU SCHED (fase 2) ===");
     test_ecu_sched_hardware_init();
+    test_ecu_sched_golden_min_lead_timestamp();
+    test_ecu_sched_golden_dispatch_past_counts_late();
+    test_ecu_sched_golden_far_target_timestamp();
+    test_ecu_sched_golden_queue_sorted();
+    test_ecu_sched_golden_dispatch_identity();
     test_ecu_sched_dwell_watchdog_fires();
     test_ecu_sched_inj_watchdog_fires();
 

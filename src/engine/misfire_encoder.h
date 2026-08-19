@@ -1,16 +1,15 @@
 #pragma once
 
 #include <cstdint>
+#include "engine/misfire_detect.h"  // shared thresholds (kMisfireThresholdQ8, …)
 
 namespace ems::engine {
 
 /**
  * @file misfire_encoder.h
- * @brief Detector de misfire para o fork MT6835/TIM2 (modo encoder) —
- *        matemática nova (queda de velocidade angular por janela de
- *        cilindro), paralela a misfire_detect.h/.cpp (caminho CKP,
- *        intocado por este par de ficheiros). Ver
- *        docs/dev/mt6835_encoder_fork.md.
+ * @brief Detector de misfire deste tree (MT6835/TIM2). misfire_detect.cpp
+ *        (janela-por-dente 60-2) não entra no firmware — só no host-test.
+ *        Ver docs/dev/mt6835_encoder_fork.md.
  *
  * Reutiliza os limiares de misfire_detect.h (kMisfireThresholdQ8,
  * kMisfireDebounceCycles, kMisfireFaultThreshold) — só o domínio muda

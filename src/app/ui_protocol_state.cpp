@@ -28,6 +28,11 @@
 #include "hal/flash.h"
 #include "engine/engine_config.h"
 
+uint16_t g_dbg_dead_time_us = 0u;
+uint32_t g_dbg_pulse_pw_us  = 0u;
+uint32_t g_dbg_cycle_pw_us  = 0u;
+uint8_t  g_dbg_squirts      = 1u;
+
 namespace ems::app::ui_detail {
 
 // Page / ring / RT / parser state (single definition TU).

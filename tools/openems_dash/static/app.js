@@ -266,16 +266,19 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
 /* ── telemetria: gauges + charts ──────────────────────────────────────── */
 // Statusbar: 10 primários (largura toda — chips vivem no rodapé). Resto só em Telemetry.
 const GAUGES = [
-  ["rpm",                 "RPM",     v => H.formatGauge("rpm", v)],
-  ["map_kpa",             "MAP kPa", v => H.formatGauge("map_kpa", v)],
-  ["tps_pct",             "TPS %",   v => H.formatGauge("tps_pct", v)],
-  ["ve",                  "VE %",    v => H.formatGauge("ve", v)],
-  ["lambda_x1000",        "λ",       v => H.formatGauge("lambda_x1000", v)],
-  ["lambda_target_x1000", "λ tgt",   v => H.formatGauge("lambda_target_x1000", v)],
-  ["pw_ms",               "PW ms",   v => H.formatGauge("pw_ms", v)],
-  ["advance_deg",         "Ign °",   v => H.formatGauge("advance_deg", v)],
-  ["clt_c",               "CLT °C",  v => H.formatGauge("clt_c", v)],
-  ["iat_c",               "IAT °C",  v => H.formatGauge("iat_c", v)],
+  ["rpm",                 "RPM",      v => H.formatGauge("rpm", v)],
+  ["map_kpa",             "MAP sens", v => H.formatGauge("map_kpa", v),
+   "MAP do ADC (pino). Combustível usa o fundido."],
+  ["tps_pct",             "ETB %",    v => H.formatGauge("tps_pct", v),
+   "Lâmina ETB, não o comando TPS/APP do stim."],
+  ["ve",                  "VE %",     v => H.formatGauge("ve", v)],
+  ["lambda_x1000",        "λ",        v => H.formatGauge("lambda_x1000", v)],
+  ["lambda_target_x1000", "λ tgt",    v => H.formatGauge("lambda_target_x1000", v)],
+  ["pw_ms",               "PW ciclo", v => H.formatGauge("pw_ms", v),
+   "Fórmula fluxo + n×dead. Em semi o pino é ~metade."],
+  ["advance_deg",         "Ign °",    v => H.formatGauge("advance_deg", v)],
+  ["clt_c",               "CLT °C",   v => H.formatGauge("clt_c", v)],
+  ["iat_c",               "IAT °C",   v => H.formatGauge("iat_c", v)],
 ];
 const GAUGES_EXTRA = [
   ["stft_pct",    "STFT %", v => H.formatGauge("stft_pct", v)],
@@ -284,8 +287,8 @@ const GAUGES_EXTRA = [
   ["dc_pct",      "DC %",   v => H.formatGauge("dc_pct", v ?? 0)],
 ];
 function renderGaugeRow(el, list, idPrefix = "g_") {
-  el.innerHTML = list.map(([k, l]) =>
-    `<div class="gauge"><div class="v" id="${idPrefix}${k}">—</div><div class="l">${l}</div></div>`
+  el.innerHTML = list.map(([k, l, , tip]) =>
+    `<div class="gauge"${tip ? ` title="${tip}"` : ""}><div class="v" id="${idPrefix}${k}">—</div><div class="l">${l}</div></div>`
   ).join("");
 }
 renderGaugeRow($("#gauges"), GAUGES);
@@ -450,7 +453,88 @@ function pushTelemetry(d) {
     `late ${d.late_events} · drops ${d.sched_drops} · clamps ${d.cal_clamps} · ` +
     `sync_state ${d.sync_state} · cmp_confirms ${d.cmp_confirms} · ` +
     `cmp_glitch ${d.cmp_glitch}`;
+  renderEncDebug(d, lastDbg, lastPins);
 }
+
+const ENC_CELLS = [
+  ["builder", "builder"],
+  ["seq",     "seq_calls"],
+  ["presync", "presync"],
+  ["insert",  "TIM2 insert"],
+  ["exec",    "TIM2 exec"],
+  ["cmp",     "CMP ok"],
+  ["wdog",    "CMP wdog"],
+  ["mapf",    "MAP fund"],
+  ["mapr",    "MAP raw"],
+  ["app",     "APP raw"],
+  ["etb",     "ETB raw"],
+  ["inj",     "INJ edges"],
+  ["ign",     "IGN edges"],
+  ["dead",    "dead µs"],
+  ["pulse",   "PW pulso"],
+  ["sq",      "squirts"],
+];
+
+function encCellHtml() {
+  return ENC_CELLS.map(([id, lab]) =>
+    `<div class="enc-cell"><div class="v" id="enc_${id}">—</div><div class="l">${lab}</div></div>`
+  ).join("");
+}
+const encGrid = $("#encDebugGrid");
+if (encGrid) encGrid.innerHTML = encCellHtml();
+
+let lastDbg = null;
+let lastPins = null;
+
+function pinEdges(pins, prefix) {
+  if (!pins) return "—";
+  let h = 0, l = 0;
+  Object.keys(pins).forEach(k => {
+    if (!k.startsWith(prefix)) return;
+    h += pins[k].high || 0;
+    l += pins[k].low || 0;
+  });
+  return `${h}/${l}`;
+}
+
+function renderEncDebug(d, dbg, pins) {
+  const set = (id, v) => { const el = $(`#enc_${id}`); if (el) el.textContent = v; };
+  const builder = (dbg && typeof dbg.builder === "number")
+    ? (dbg.builder === 2 ? "SEQ" : dbg.builder === 1 ? "PRESYNC" : "—")
+    : (d.inj_mode === 2 ? "SEQ?" : "PRESYNC?");
+  set("builder", builder);
+  if (dbg) {
+    set("seq", dbg.seq_calls ?? "—");
+    set("presync", dbg.presync_call_count ?? dbg.presync_count ?? "—");
+    set("insert", dbg.enc_evt_insert_count ?? "—");
+    set("exec", dbg.enc_evt_execute_count ?? "—");
+    set("wdog", dbg.cmp_watchdog_rearms ?? "—");
+    const adc = dbg.adc_debug;
+    if (adc !== undefined && adc !== null) set("mapr", String(adc & 0xFFFF));
+    if (dbg.dead_time_us !== undefined) set("dead", String(dbg.dead_time_us));
+    if (dbg.pulse_pw_us !== undefined) set("pulse", (dbg.pulse_pw_us / 1000).toFixed(2));
+    if (dbg.squirts !== undefined) set("sq", String(dbg.squirts));
+  }
+  set("cmp", d.cmp_confirms ?? "—");
+  set("mapf", d.map_fused_kpa != null ? String(Math.round(d.map_fused_kpa)) : "—");
+  set("app", d.an1_raw != null ? String(d.an1_raw) : "—");
+  set("etb", d.an3_raw != null ? String(d.an3_raw) : "—");
+  set("inj", pinEdges(pins, "INJ"));
+  set("ign", pinEdges(pins, "IGN"));
+}
+
+async function pollEncDebug() {
+  try {
+    const [dbg, pins] = await Promise.all([
+      api("/api/debug/counters").catch(() => null),
+      api("/api/debug/pins").catch(() => null),
+    ]);
+    if (dbg && !dbg.error) lastDbg = dbg;
+    if (pins && !pins.error) lastPins = pins;
+    if (lastRT) renderEncDebug(lastRT, lastDbg, lastPins);
+  } catch (_) { /* ECU busy / dash down */ }
+}
+setInterval(pollEncDebug, 400);
 
 /* ── WebSocket ────────────────────────────────────────────────────────── */
 function setConnUI(online, detail) {

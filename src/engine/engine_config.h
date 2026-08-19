@@ -94,7 +94,7 @@ inline constexpr uint8_t kCmpPhaseCalibratedB  = 2u;
 // Convenção de canal: ECU_CH_IGNn/ECU_CH_INJn = cilindro físico n−1, SEMPRE.
 // A ordem de disparo entra apenas via kFiringOrder/cyl_tdc_deg — nunca na
 // escolha do canal. Invariante partilhado por Calculate_Sequential_Cycle,
-// pares presync (companheiros 0↔3, 2↔1), ign_ch_to_cyl_bit e misfire_detect.
+// pares presync (companheiros 0↔3, 2↔1), ign_ch_to_cyl_bit e misfire_encoder.
 // kFiringOrder={0,2,3,1} = ordem de ignição física 1-3-4-2.
 inline constexpr uint8_t kFiringOrder[kCylinderCount] = {0u, 2u, 3u, 1u};
 
