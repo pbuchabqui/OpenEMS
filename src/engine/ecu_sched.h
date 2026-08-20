@@ -130,6 +130,7 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us);
 // Prefer this over poking g_inj_pw_override via raw symbol linkage.
 void ecu_sched_bench_pw_lock_next_commit(void);
 uint8_t ecu_sched_bench_pw_override_state(void);
+uint32_t ecu_sched_get_inj_pw_ticks(void);
 
 // ── Protocol / host observability (main-loop / UART only — not ISR hot path) ──
 

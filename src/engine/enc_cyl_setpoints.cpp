@@ -195,9 +195,12 @@ CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl, bool commit_fuel) noexcept
         out.dwell_ticks = prep.dwell_ticks;
         out.inj_pw_ticks = inj_pw_us_to_scheduler_ticks(pw_us);
         // 'P' / lock de bancada: o sequencial não pode ignorar o PW
-        // comitado (finalize ia pela VE e voltava a 0).
-        if (prep.fuel_cut == 0U && ecu_sched_bench_pw_override_state() != 0U) {
-            out.inj_pw_ticks = si::g_inj_pw_ticks;
+        // comitado (finalize ia pela VE e voltava a 0). Publicado em
+        // EncFuelIgnPrep pelo loop de 2ms (achado #7 da revisão
+        // 2fa1513..bc30ca6, 2026-08-19) — antes lia si::g_inj_pw_ticks
+        // diretamente, bypassando o contrato do prep.
+        if (prep.fuel_cut == 0U && prep.bench_pw_locked != 0U) {
+            out.inj_pw_ticks = prep.bench_pw_lock_ticks;
         }
         out.eoi_lead_deg = prep.eoi_lead_deg;
         return out;

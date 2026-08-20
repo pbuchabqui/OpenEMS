@@ -188,6 +188,7 @@ void test_ecu_sched_encoder_sequential_prep_knock_per_cyl(void);
 void test_ecu_sched_encoder_sequential_omega_refresh(void);
 void test_ecu_sched_encoder_sequential_omega_refresh_lock(void);
 void test_enc_finalize_xtau_peek_no_commit(void);
+void test_enc_finalize_bench_pw_lock_via_prep(void);
 void test_enc_finalize_map_window_per_cyl(void);
 void test_enc_finalize_map_window_ve0_keeps_prep_flow(void);
 void test_quick_crank_all(void);

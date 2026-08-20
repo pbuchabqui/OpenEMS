@@ -500,6 +500,16 @@ uint8_t ecu_sched_bench_pw_override_state(void)
     return g_inj_pw_override;
 }
 
+// Getter público (não-test-prefixed) sobre si::g_inj_pw_ticks — mesmo padrão
+// de ecu_sched_get_inj_inhibit_mask() acima. Existia só ecu_sched_test_get_
+// inj_pw_ticks(); achado #7 da revisão 2fa1513..bc30ca6 (2026-08-19): o
+// consumidor de produção é loop_2ms_fuel_ign.cpp (publica o lock de bancada
+// em EncFuelIgnPrep), não devia depender de um símbolo com nome de teste.
+uint32_t ecu_sched_get_inj_pw_ticks(void)
+{
+    return si::g_inj_pw_ticks;
+}
+
 void ecu_sched_get_angle_trace(uint32_t *gap_ts,
                                uint8_t *ring_idx,
                                EcuSchedTsSample out_last8[8])

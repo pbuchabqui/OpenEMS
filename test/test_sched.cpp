@@ -2555,6 +2555,57 @@ void test_enc_finalize_xtau_peek_no_commit(void) {
     ems::engine::xtau_wall_fuel_reset();
 }
 
+// Regressão: lock de bancada ('P') publicado em EncFuelIgnPrep em vez de
+// finalize_cyl_setpoints() ir buscar si::g_inj_pw_ticks diretamente (achado
+// #7 da revisão 2fa1513..bc30ca6, 2026-08-19). Sem cobertura antes — este é
+// o 1º teste do mecanismo, na forma nova.
+void test_enc_finalize_bench_pw_lock_via_prep(void) {
+    section("enc_cyl_setpoints: lock de bancada ('P') vem do prep, não de si::g_inj_pw_ticks");
+    ecu_sched_test_reset();
+    map_window_reset();
+    enc_cyl_setpoints_reset();
+
+    ems::engine::EncFuelIgnPrep prep{};
+    prep.valid = 1u;
+    prep.flow_pw_us = 5000u;
+    prep.base_flow_pw_us = 5000u;
+    prep.map_bar_x100 = 100u;
+    prep.rpm_x10 = 30000u;
+    prep.corr_clt_x256 = 256u;
+    prep.corr_iat_x256 = 256u;
+    prep.base_advance_deg = 10;
+    prep.eoi_lead_deg = 60u;
+    prep.bench_pw_locked = 1u;
+    prep.bench_pw_lock_ticks = 999999u;  // valor sentinela, bem longe do cálculo normal via VE
+    enc_fuel_ign_prep_test_publish(prep);
+
+    const ems::engine::CylArmSetpoints locked =
+        finalize_cyl_setpoints(0u, /*commit_fuel=*/false);
+    CHECK_EQ(locked.inj_pw_ticks, 999999u,
+             "bench_pw_locked=1: PW vem verbatim de bench_pw_lock_ticks");
+
+    // fuel_cut tem precedência sobre o lock — corte de segurança não pode
+    // ser mascarado por um lock de bancada esquecido ligado.
+    prep.fuel_cut = 1u;
+    enc_fuel_ign_prep_test_publish(prep);
+    const ems::engine::CylArmSetpoints cut =
+        finalize_cyl_setpoints(0u, /*commit_fuel=*/false);
+    CHECK_EQ(cut.inj_pw_ticks, 0u, "fuel_cut=1 ignora o lock — PW=0");
+
+    // Sem lock: cálculo normal via VE, não o valor sentinela.
+    prep.fuel_cut = 0u;
+    prep.bench_pw_locked = 0u;
+    enc_fuel_ign_prep_test_publish(prep);
+    const ems::engine::CylArmSetpoints unlocked =
+        finalize_cyl_setpoints(0u, /*commit_fuel=*/false);
+    CHECK_TRUE(unlocked.inj_pw_ticks != 999999u,
+               "bench_pw_locked=0: PW calculado normalmente, ignora bench_pw_lock_ticks");
+
+    map_window_reset();
+    enc_cyl_setpoints_reset();
+    ecu_sched_test_reset();
+}
+
 void test_enc_finalize_map_window_per_cyl(void) {
     section("enc_cyl_setpoints: map_window VE bilineal + ΔP no finalize");
     ecu_sched_test_reset();

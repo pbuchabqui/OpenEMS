@@ -241,6 +241,7 @@ test_map_window_skipped_slot();
     test_ecu_sched_encoder_sequential_omega_refresh();
     test_ecu_sched_encoder_sequential_omega_refresh_lock();
     test_enc_finalize_xtau_peek_no_commit();
+    test_enc_finalize_bench_pw_lock_via_prep();
     test_enc_finalize_map_window_per_cyl();
     test_enc_finalize_map_window_ve0_keeps_prep_flow();
 

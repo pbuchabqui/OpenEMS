@@ -37,6 +37,12 @@ struct EncFuelIgnPrep {
     int16_t  torque_retard_deg;
     uint32_t dwell_ticks;
     uint32_t eoi_lead_deg;
+    // !=0 = 'P' bench lock ativo, usar bench_pw_lock_ticks verbatim. Colapsa
+    // o tri-state de ecu_sched_bench_pw_override_state() (0=livre/1=trancado/
+    // 2=armado-a-trancar-no-próximo-commit) num booleano — finalize só
+    // testa "!=0", nunca distingue 1 de 2.
+    uint8_t  bench_pw_locked;
+    uint32_t bench_pw_lock_ticks;    // valor a usar quando bench_pw_locked!=0 (ignorado senão)
 };
 
 struct CylArmSetpoints {

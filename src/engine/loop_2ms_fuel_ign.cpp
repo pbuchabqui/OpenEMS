@@ -541,14 +541,29 @@ void loop_2ms_fuel_ign(uint32_t now,
             prep.torque_retard_deg = g_torque_spark_retard_deg;
             prep.dwell_ticks = dwell_ticks;
             prep.eoi_lead_deg = eoi_lead;
+
+            // commit_calibration ANTES do lock de bancada de propósito:
+            // é esta chamada que transita g_inj_pw_override 2→1 e escreve
+            // o valor congelado em si::g_inj_pw_ticks (ecu_sched.cpp:409-
+            // 418). Se o prep fosse publicado primeiro (ordem original),
+            // no tick exato em que o lock 'P' arma, bench_pw_lock_ticks
+            // capturava o valor de ANTES do freeze — um tick atrasado.
+            ::ecu_sched_commit_calibration(
+                static_cast<uint32_t>(sched_spark_deg < 0 ? 0 : sched_spark_deg),
+                dwell_ticks,
+                inj_pw_ticks,
+                eoi_lead);
+
+            // Lock de bancada ('P'): publicado aqui em vez de finalize_cyl_
+            // setpoints() ir buscar si::g_inj_pw_ticks diretamente — o
+            // contrato geral fica expresso no prep, qualquer necessidade
+            // futura de "usar este PW verbatim" (flow-bench, output test)
+            // só tem de preencher este campo, sem novo side-channel.
+            prep.bench_pw_locked =
+                (ecu_sched_bench_pw_override_state() != 0U) ? 1U : 0U;
+            prep.bench_pw_lock_ticks = ecu_sched_get_inj_pw_ticks();
             ems::engine::enc_fuel_ign_prep_publish(prep);
         }
-
-        ::ecu_sched_commit_calibration(
-            static_cast<uint32_t>(sched_spark_deg < 0 ? 0 : sched_spark_deg),
-            dwell_ticks,
-            inj_pw_ticks,
-            eoi_lead);
     } else if (allow_half_crank_batch) {
         // (2) HALF_SYNC + cranking: simultaneous batch, crank PW only (no VE/STFT/AE).
         // Presync auto already selects SIMULTANEOUS while is_cranking().
