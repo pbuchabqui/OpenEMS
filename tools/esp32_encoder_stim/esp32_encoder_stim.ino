@@ -174,6 +174,7 @@ static constexpr uint32_t         kEncDutyMax   = (1u << 4) - 1u;    // 15, reso
 
 static volatile uint32_t    g_enc_rpm_active = 0u;
 static volatile uint32_t    g_cmp_pulse_count = 0u;
+static bool                 g_cmp_only_lost = false;  // ver cmp_only_lost_set()
 static bool                 g_enc_ledc_ready = false;
 
 static uint16_t phase_ticks_for_rpm(uint32_t rpm) {
@@ -304,7 +305,9 @@ static void enc_set_rpm(uint32_t rpm) {
         enc_apply_freq(rpm);
     }
     g_enc_rpm_active = rpm;
-    cmp_timer_restart(rpm);
+    // CMP_STOP não deve reviver sozinho por causa de uma rampa/preset de RPM
+    // a correr durante o silêncio — só CMP_RESUME religa.
+    if (!g_cmp_only_lost) cmp_timer_restart(rpm);
 }
 
 // ── Rampa suave de RPM ───────────────────────────────────────────────────
@@ -381,6 +384,30 @@ static void enc_signal_lost_set(bool lost) {
         g_ramp_last_ms = (uint32_t)millis();
         enc_set_rpm(g_enc_rpm_active);  // religa CMP + garante a frequência certa
         Serial.println("  [ENC-STIM] Sinal restaurado");
+    }
+}
+
+// ── Silêncio SÓ do CMP (comando CMP_STOP / CMP_RESUME) ───────────────────
+// Diferente de STOP/RESUME acima: A/B (logo TIM2/CKP no STM32) continuam
+// vivos e a contar — só o pino CMP para. Cenário real: cambota a rodar,
+// CMP mudo (ESP32 reinicia, conector do CMP bate). Testa
+// ecu_sched_encoder_phase_invalidate() + a referência angular
+// (g_cmp_has_prev/g_cmp_prev_angle, ecu_sched_encoder_heartbeat.cpp) —
+// staleness_exceeded() só é avaliado quando cmp_edge_count MUDA (novo
+// flanco chega), então isto testa o caminho "flancos voltam depois do
+// silêncio", não o de cmp_edge_count preso (esse é o watchdog do TIM3 IC).
+static void cmp_only_lost_set(bool lost) {
+    if (lost == g_cmp_only_lost) return;
+    g_cmp_only_lost = lost;
+    if (lost) {
+        esp_timer_stop(g_cmp_period_tmr);
+        esp_timer_stop(g_cmp_release_tmr);
+        if (g_cmp_first_tmr != nullptr) esp_timer_stop(g_cmp_first_tmr);
+        gpio_set_level(CMP_GPIO, 1);  // idle HIGH, sem mais pulsos — A/B intocados
+        Serial.println("  [ENC-STIM] CMP SILENCIADO (A/B continuam vivos)");
+    } else {
+        cmp_timer_restart(g_enc_rpm_active);  // religa só o CMP
+        Serial.println("  [ENC-STIM] CMP restaurado");
     }
 }
 
@@ -612,6 +639,8 @@ static void print_help() {
     Serial.println("  IDLE CRANK CRUISE WOT COAST   (RPM ramps a 3000 RPM/s, sem saltos)");
     Serial.println("  STOP    mata A/B/CMP — simula sensor morto (testa watchdog do STM32)");
     Serial.println("  RESUME  religa A/B/CMP na cadência actual");
+    Serial.println("  CMP_STOP    mata só o CMP — A/B continuam (cambota a rodar)");
+    Serial.println("  CMP_RESUME  religa só o CMP na cadência actual");
     Serial.println("  STATUS  SCOPE  ?");
     Serial.println();
     Serial.printf("  GPIO%-2d → PA0  A (quad)\n", (int)ENC_A_GPIO);
@@ -649,6 +678,12 @@ static void parse_cmd(const char* raw) {
     } else if (strcmp(cmd, "RESUME") == 0) {
         enc_signal_lost_set(false);
         Serial.println("  [ENC-STIM] RESUME");
+        changed = false;
+    } else if (strcmp(cmd, "CMP_STOP") == 0) {
+        cmp_only_lost_set(true);
+        changed = false;
+    } else if (strcmp(cmd, "CMP_RESUME") == 0) {
+        cmp_only_lost_set(false);
         changed = false;
     } else if (strcmp(cmd, "CMP_TOOTH") == 0 && has_val) {
         g_sim.cmp_tooth = (uint16_t)constrain(val, 0, 16383);
