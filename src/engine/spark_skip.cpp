@@ -6,10 +6,25 @@ namespace {
 constexpr uint8_t kMaxRatioQ8 = 128u;   // 50% — acima disso é caso p/ fuel cut
 constexpr uint8_t kFiresPerRev = 2u;    // 4-cil 4T: ~2 eventos IGN por volta
 
-uint8_t  g_ratio_q8 = 0u;
-uint16_t g_acc_q8   = 0u;   // acumulador Bresenham (Q8)
-uint8_t  g_rot      = 0u;   // cilindro inicial da próxima inibição (rotação)
-uint8_t  g_mask     = 0u;
+// g_ratio_q8/g_acc_q8/g_mask atravessam contexto: spark_skip_on_rev() corre
+// na ISR TIM2 CC4 (heavy tick do heartbeat do encoder), enquanto
+// spark_skip_set_ratio_q8()/spark_skip_mask() correm no loop de 2ms
+// (loop_2ms_fuel_ign.cpp) — mesmo padrão de g_inj_inhibit_mask
+// (ecu_sched_internal.h), que já é volatile por esta razão. Sem isto, nada
+// impede o compilador de assumir que o valor não muda entre duas leituras
+// dentro da mesma função (nunca acontece hoje só porque o acesso é sempre
+// via chamada a função fora da TU, e este Makefile não liga -flto —
+// invariante frágil do build atual, não uma garantia da linguagem).
+// g_rot fica de fora de propósito, não por suposição: o único outro
+// escritor seria spark_skip_reset(), mas essa função não tem NENHUM
+// chamador em src/ hoje — só em test/test_spark_skip.cpp (host-only). Se
+// spark_skip_reset() alguma vez for chamada a partir do loop de 2ms em
+// produção, g_rot passa a ter o mesmo problema e tem de ganhar volatile
+// também.
+volatile uint8_t  g_ratio_q8 = 0u;
+volatile uint16_t g_acc_q8   = 0u;   // acumulador Bresenham (Q8)
+uint8_t           g_rot      = 0u;   // cilindro inicial da próxima inibição (rotação)
+volatile uint8_t  g_mask     = 0u;
 }  // namespace
 
 void spark_skip_set_ratio_q8(uint8_t ratio_q8) noexcept {
