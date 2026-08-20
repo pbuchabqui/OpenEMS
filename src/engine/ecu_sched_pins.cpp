@@ -105,40 +105,53 @@ void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state,
     }
 }
 
-void ecu_sched_dwell_watchdog(void)
+// Achado #8 da revisão 2fa1513..bc30ca6 (2026-08-20): dwell e injector-open
+// eram a mesma forma copiada duas vezes (arrays arm/timeout de 4 canais,
+// "(now - arm) >= tout", purge + clear + contador). Extraído aqui só este
+// par — os outros dois watchdogs citados no achado original (TIM3 CMP IC
+// rearm e seq-arm-stall, ambos em ecu_sched_encoder_heartbeat.cpp) NÃO são
+// a mesma espécie: usam estado escalar (não array por canal), gatilho por
+// "==" com auto-rate-limit deliberado (CMP) ou reset por delta de um
+// contador externo (seq-arm-stall), nenhum dos dois se encaixa nesta forma
+// sem um struct de config a mais para acomodar as diferenças — abstração
+// prematura sobre trajeto de purge de segurança. Ver code-review-
+// 2fa1513-bc30ca6-progress.md.
+//
+// CriticalSectionGuard fica DENTRO do loop de propósito — hoisting para
+// fora do for quadruplica o tempo com interrupções desligadas num
+// scheduler cuja premissa é controlar jitter.
+static void run_channel_watchdog(volatile uint32_t* arm_tick,
+                                  volatile uint32_t* wdog_ticks,
+                                  volatile uint32_t& count,
+                                  uint8_t is_ign)
 {
     if (g_inj_pw_override != 0U) { return; }  // test mode — disable watchdog
     const uint32_t now = TIM5_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
         ems::hal::CriticalSectionGuard guard;
-        const uint32_t arm  = g_dwell_arm_tick[i];
-        const uint32_t tout = g_dwell_wdog_ticks[i];
+        const uint32_t arm  = arm_tick[i];
+        const uint32_t tout = wdog_ticks[i];
         if (arm != 0U && tout != 0U && (now - arm) >= tout) {
-            purge_events_for_cyl_mask(static_cast<uint8_t>(1U << i), 1U);
-            g_dwell_arm_tick[i] = 0U;
-            g_dwell_wdog_ticks[i] = 0U;
-            ++g_dwell_watchdog_count;
+            purge_events_for_cyl_mask(static_cast<uint8_t>(1U << i), is_ign);
+            arm_tick[i] = 0U;
+            wdog_ticks[i] = 0U;
+            ++count;
         }
     }
+}
+
+void ecu_sched_dwell_watchdog(void)
+{
+    run_channel_watchdog(g_dwell_arm_tick, g_dwell_wdog_ticks,
+                          g_dwell_watchdog_count, 1U);
 }
 
 uint32_t ecu_sched_dwell_watchdog_count(void) { return g_dwell_watchdog_count; }
 
 void ecu_sched_inj_watchdog(void)
 {
-    if (g_inj_pw_override != 0U) { return; }
-    const uint32_t now = TIM5_CNT;
-    for (uint8_t i = 0U; i < 4U; ++i) {
-        ems::hal::CriticalSectionGuard guard;
-        const uint32_t open = g_inj_open_tick[i];
-        const uint32_t tout = g_inj_wdog_ticks[i];
-        if (open != 0U && tout != 0U && (now - open) >= tout) {
-            purge_events_for_cyl_mask(static_cast<uint8_t>(1U << i), 0U);
-            g_inj_open_tick[i] = 0U;
-            g_inj_wdog_ticks[i] = 0U;
-            ++g_inj_watchdog_count;
-        }
-    }
+    run_channel_watchdog(g_inj_open_tick, g_inj_wdog_ticks,
+                          g_inj_watchdog_count, 0U);
 }
 
 uint32_t ecu_sched_inj_watchdog_count(void) { return g_inj_watchdog_count; }
