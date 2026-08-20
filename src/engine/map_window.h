@@ -20,10 +20,13 @@ namespace ems::engine {
 // open_deg alinhado). Requer FULL_SYNC + fase de came confirmada (cmp_confirms ≥ 2);
 // sem came a atribuição 720° é ambígua (slots emparelhados trocariam).
 //
-// Contexto: chamado da ISR do CKP (via sensors_on_tooth) — só inteiros; a
-// única divisão ocorre no fecho de janela (~4×/ciclo). Com map_window_enable,
-// o finalize encoder (enc_cyl_setpoints) usa o MAP do slot por cilindro
-// para ΔP e escala de fluxo; senão continua telemetria-only no path CKP.
+// Contexto: chamado do loop de 2ms via sensors_map_window_poll_encoder()
+// (src/drv/sensors.cpp) — só inteiros; a única divisão ocorre no fecho de
+// janela (~4×/ciclo). Com map_window_enable, o finalize encoder
+// (enc_cyl_setpoints) usa o MAP do slot por cilindro para ΔP e escala de
+// fluxo; senão continua telemetria-only. (sensors_on_tooth() já foi o
+// caminho — achado #6 da revisão 2fa1513..bc30ca6, 2026-08-19: nunca
+// corre em produção nesta árvore, bloco morto removido de lá.)
 
 // Amostra angular (poll 2 ms no encoder). cycle_deg = 0..719.
 // Gate interno: map_window_enable == 0 → no-op imediato.

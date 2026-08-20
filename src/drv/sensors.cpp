@@ -692,21 +692,6 @@ void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
     const uint32_t ticks = snap.tooth_period_ns >> 4u;
     ems::hal::adc_trigger_on_tooth(ticks);
 
-    // MAP em janela angular por cilindro (engine/map_window) — gate barato
-    // pelo enable antes de tocar no ADC; mesmo critério de recovery dos
-    // canais rápidos (amostra de ADC em recuperação não entra na média).
-    if (ems::engine::map_window_enable != 0u &&
-        !ems::hal::adc_is_recovering() && !ems::hal::adc_recovery_failed()) {
-        const uint16_t raw =
-            ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAP);
-        const uint16_t deg = static_cast<uint16_t>(
-            snap.tooth_index * 6u + (snap.phase_A ? 0u : 360u));
-        ems::engine::map_window_on_sample(
-            deg, map_raw_to_bar_x1000(raw),
-            snap.state == SyncState::FULL_SYNC,
-            snap.cmp_confirms >= 2u);
-    }
-
     g_fast_sample_accum = static_cast<uint16_t>(
         g_fast_sample_accum + kFastSamplesPerRev);
     if (g_fast_sample_accum >= kRealTeethPerRev) {
