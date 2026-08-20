@@ -147,6 +147,7 @@ void test_ecu_sched_encoder_handoff_force_closes_pins(void);
 void test_ecu_sched_encoder_heartbeat(void);
 void test_ecu_sched_encoder_heartbeat_cmp_tracking(void);
 void test_ecu_sched_encoder_cmp_watchdog_presync(void);
+void test_ckp_get_cmp_glitch_count_wired(void);
 void test_ecu_sched_encoder_cmp_watchdog_alongside_staleness(void);
 void test_ecu_sched_encoder_cmp_ref_dropped_on_staleness(void);
 void test_ecu_sched_encoder_cmp_confirm_gate(void);

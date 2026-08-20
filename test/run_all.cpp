@@ -199,6 +199,7 @@ test_map_window_skipped_slot();
     test_ecu_sched_encoder_handoff_force_closes_pins();
     test_ecu_sched_encoder_heartbeat();
     test_ecu_sched_encoder_heartbeat_cmp_tracking();
+    test_ckp_get_cmp_glitch_count_wired();
     test_ecu_sched_encoder_cmp_watchdog_presync();
     test_ecu_sched_encoder_cmp_watchdog_alongside_staleness();
     test_ecu_sched_encoder_cmp_ref_dropped_on_staleness();

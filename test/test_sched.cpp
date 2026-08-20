@@ -701,6 +701,29 @@ void test_ecu_sched_encoder_heartbeat_cmp_tracking(void) {
     CHECK_EQ(ecu_sched_encoder_test_get_cmp_reject_count(), 0u, "test_reset() clears CMP tracking state");
 }
 
+// Regressão: ckp_get_cmp_glitch_count() ficava sempre preso em stub (0),
+// mascarando ruído real do CMP no dash (achado #4 da revisão
+// 2fa1513..bc30ca6, 2026-08-19). Agora é publicado em CkpSnapshot a cada
+// heavy tick, mesmo padrão de cmp_confirms.
+void test_ckp_get_cmp_glitch_count_wired(void) {
+    section("ckp: ckp_get_cmp_glitch_count() reflete rejeições reais (não fica preso em stub)");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 1000u, 1u);  // A: arma referência
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "glitch count=0 antes de qualquer rejeição");
+
+    // Span implausível — rejeitado.
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 1000u + 16384u, 2u);
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 1u,
+             "glitch count sobe para 1 depois da 1ª rejeição — publicado, não stub");
+
+    ecu_sched_encoder_heartbeat_tick(3000u, 3000u, 1000u + 16384u + 50u, 3u);
+    CHECK_EQ(ckp_get_cmp_glitch_count(), 2u, "2ª rejeição consecutiva: glitch count=2");
+
+    ecu_sched_test_reset();
+}
+
 void test_ecu_sched_encoder_cmp_watchdog_presync(void) {
     section("ecu_sched: encoder heartbeat — CMP watchdog fires without phase_valid() (presync)");
     ecu_sched_test_reset();

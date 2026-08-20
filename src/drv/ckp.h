@@ -42,6 +42,10 @@ struct CkpSnapshot {
     uint8_t cmp_confirms;        ///< Validated CMP edges since loss (0–2). Sequential gate.
     uint32_t tim2_cnt;           ///< TIM2 encoder count at publish
     uint16_t crank_deg;          ///< 0–359 from TIM2
+    uint32_t cmp_reject_count;   ///< Flancos CMP rejeitados pela janela de
+                                  ///< plausibilidade (encoder_sync::evaluate_cmp_edge()).
+                                  ///< "Glitch count" real do sinal CMP — ver
+                                  ///< ckp_get_cmp_glitch_count().
 };
 
 /**
@@ -79,6 +83,10 @@ void misfire_on_tooth(const CkpSnapshot& snap) noexcept;
 void ckp_tim5_ch1_isr() noexcept;
 void ckp_tim5_ch2_isr() noexcept;
 
+// Nº de flancos CMP rejeitados pela janela de plausibilidade (ver
+// CkpSnapshot::cmp_reject_count — publicado por ecu_sched_encoder_heartbeat_tick(),
+// nunca escrito diretamente aqui, mesmo padrão de cmp_confirms). 0 até o
+// primeiro heavy tick publicar um snapshot (arranque).
 uint32_t ckp_get_cmp_glitch_count() noexcept;
 
 // DIAG 60-2: always 0 on this tree (no tooth decoder). Kept for dump 'D'
@@ -138,6 +146,15 @@ extern volatile uint32_t g_scope_cmp_ts[8];
 extern volatile uint8_t  g_scope_cmp_idx;
 
 // tooth_index âncora da última borda CMP aceite (0xFF = não-ancorado).
+// Conceito de decoder 60-2 — o rastreador de fase do encoder (TIM2, ver
+// ecu_sched_encoder_phase.cpp) usa um ângulo absoluto (TIM2->CNT), não um
+// índice de dente; não há mapeamento 1:1 honesto para este byte nesta
+// árvore. Fica 0xFF sempre (achado #4 da revisão 2fa1513..bc30ca6,
+// 2026-08-19) — a informação equivalente ("CMP confirmado, gate do
+// sequencial") já vive em CkpSnapshot::cmp_confirms, exposta à parte no
+// protocolo 'A' (rt.reserved[7]). A UI do dash ('K' scope, app.js/drawScope)
+// deixou de depender deste byte para o texto "(ancorado/não-ancorado)" —
+// usa sync_state/phase_a, já presentes no mesmo payload.
 uint8_t ckp_get_cmp_ref_tooth() noexcept;
 
 // Instant RPM 360° (estilo rusEFI): rpm×10 medido entre o MESMO dente de

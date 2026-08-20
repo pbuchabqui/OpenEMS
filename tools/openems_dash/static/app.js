@@ -2625,13 +2625,18 @@ async function drawScope() {
   ctx.fillText("CKP", 10, yTop - 4);
   ctx.fillText("CMP", 10, yCmp - 4);
 
-  const ref = s.cmp_ref_tooth;
+  // cmp_ref_tooth é sempre 255 nesta árvore (encoder rastreia fase por
+  // ângulo, não por dente — ver ckp.h) — usar sync_state/phase_a, que já
+  // vêm no mesmo payload 'K', em vez do byte stub.
   const gapDelta = deltas.find(d => d > med * 1.5);
+  const ancoraTxt = s.sync_state === 2
+    ? ` (ancorado, fase ${s.phase_a ? "A" : "B"})`
+    : " (não-ancorado)";
   info.textContent =
     `ângulo actual: ${Math.round(angNow)}° de 720° · dente ${med.toFixed(2)}ms` +
     (gapDelta ? ` · GAP ${gapDelta.toFixed(2)}ms (${(gapDelta/med).toFixed(1)}×)` : "") +
     (cmpList.length ? ` · CMP @ ${cmpList.join("°, ")}°` : " · sem CMP visto") +
-    (ref !== 255 ? ` (ancorado no dente ${ref})` : " (não-ancorado)");
+    ancoraTxt;
 }
 setInterval(drawScope, 333);
 

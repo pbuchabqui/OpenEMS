@@ -108,7 +108,9 @@ bool ckp_stall_poll_encoder(uint32_t tim5_cnt_now) noexcept
     return transitioned;
 }
 
-uint32_t ckp_get_cmp_glitch_count() noexcept { return 0u; }
+uint32_t ckp_get_cmp_glitch_count() noexcept { return g_state.snap.cmp_reject_count; }
+// Ver comentário em ckp.h: sem tooth_index nesta árvore (rastreador de fase
+// é por ângulo, não por dente) — fica sempre 0xFF de propósito.
 uint8_t  ckp_get_cmp_ref_tooth() noexcept { return 0xFFu; }
 uint32_t ckp_instant_rpm_x10() noexcept { return g_state.snap.rpm_x10; }
 

@@ -364,6 +364,10 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
     snap.tim2_cnt = tim2_now;
     snap.crank_deg = ems::drv::crank_deg(tim2_now);
     snap.last_tim5_capture = tim5_now;
+    // Glitch count real do CMP (achado #4 da revisão 2fa1513..bc30ca6,
+    // 2026-08-19): ckp_get_cmp_glitch_count() lê isto via CkpSnapshot em vez
+    // de ficar preso em stub — mesmo padrão de push já usado por cmp_confirms.
+    snap.cmp_reject_count = g_cmp_reject_count;
     ems::drv::ckp_publish_encoder_snapshot(snap);
 
     // One rev per heavy tick — spark-skip Bresenham. Not inferred from a
