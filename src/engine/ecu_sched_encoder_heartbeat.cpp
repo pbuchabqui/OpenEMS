@@ -313,6 +313,16 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
             si::encoder::clear_cyl_arm_latches();
             g_enc_last_builder_was_sequential = 1U;
             did_handoff = 1U;
+            // Reentrada em sequencial após uma excursão por presync (CMP
+            // stale/stall/uncalibrated): zera o crédito parcial do watchdog
+            // de "nada armado" abaixo. Sem isto, ticks já acumulados antes
+            // da excursão (recompute_presync() nunca chama try_arm, então
+            // seq_arm_success_count() fica parado durante o presync — não
+            // há "arm count change" para zerar isto sozinho) sobreviviam e
+            // o episódio sequencial novo dispunha de menos que a margem
+            // pretendida (~6 ticks/~3 revoluções) antes de um trip
+            // desnecessário de volta a presync.
+            g_seq_heavy_ticks_without_arm = 0U;
         }
         si::g_knock_sequential = 1U;
         // run_seq_arm=0: subtick já fez refresh+try_arm neste CC4IF — evita

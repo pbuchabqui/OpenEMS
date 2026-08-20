@@ -205,6 +205,7 @@ test_map_window_skipped_slot();
     test_ecu_sched_encoder_cmp_ref_dropped_on_staleness();
     test_ecu_sched_encoder_cmp_confirm_gate();
     test_ecu_sched_encoder_seq_arm_stall_watchdog();
+    test_ecu_sched_encoder_seq_arm_stall_resets_on_presync_reentry();
     test_ecu_sched_encoder_due_head_dispatches_inline();
     test_ecu_sched_encoder_seq_to_presync_force_closes_pins();
     test_ecu_sched_encoder_presync_after_cmp_loss_keeps_dispatcher();

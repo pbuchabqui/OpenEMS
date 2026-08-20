@@ -982,6 +982,71 @@ void test_ecu_sched_encoder_seq_arm_stall_watchdog(void) {
     ecu_sched_test_reset();
 }
 
+// Regressão: crédito parcial do watchdog de "nada armado" sobrevivia a uma
+// excursão por presync (achado #5 da revisão 2fa1513..bc30ca6, 2026-08-19).
+// Sequência: acumula ticks parciais em sequencial, cai para presync (perda
+// de fase não relacionada), reancora — o episódio sequencial NOVO tem de
+// dispor da margem inteira (~6 ticks), não herdar o que já tinha acumulado
+// antes da excursão.
+void test_ecu_sched_encoder_seq_arm_stall_resets_on_presync_reentry(void) {
+    section("ecu_sched: watchdog seq-arm-stall reseta ao reentrar em sequencial pós-presync");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+    sensors_set_bench_clt_iat(true, 900, 250);
+    ems::engine::cfg::g_eng_cfg.cmp_phase_state = ems::engine::cfg::kCmpPhaseCalibratedA;
+
+    ecu_sched_encoder_phase_set_anchor(500000u, ECU_PHASE_A);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "âncora marcada, phase_valid()=1");
+
+    // tim5_now CONSTANTE (mesmo truque do teste acima): ω nunca fica válido,
+    // try_arm_sequential_due() retorna cedo sempre — zero armamentos
+    // determinístico, sem depender de geometria de janela.
+    uint32_t t = 1000u;
+    for (uint32_t i = 0; i < 4u; ++i) {
+        ecu_sched_encoder_heartbeat_tick(t, 1000u, 0u, 0u);
+        t += 1000u;
+    }
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u,
+             "4 de 6 ticks acumulados — ainda sequencial (sem crédito p/ trip)");
+    CHECK_EQ(ecu_sched_encoder_seq_arm_stall_count(), 0u, "stall count=0 ainda");
+
+    // Excursão por presync: perda de fase não relacionada (ex.: staleness
+    // do CMP), NADA a ver com o watchdog de "nada armado".
+    ecu_sched_encoder_phase_invalidate();
+    ecu_sched_encoder_heartbeat_tick(t, 1000u, 0u, 0u);
+    t += 1000u;
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "em presync depois do invalidate");
+
+    // Reancora — reentrada em sequencial.
+    ecu_sched_encoder_phase_set_anchor(500000u, ECU_PHASE_A);
+    ecu_sched_encoder_heartbeat_tick(t, 1000u, 0u, 0u);  // tick de reentrada (handoff)
+    t += 1000u;
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "reancorado, sequencial de novo");
+
+    // Ponto discriminante: SEM o fix, o crédito herdado (4) + o tick de
+    // reentrada (1) + este tick (1) = 6 → trip AQUI. COM o fix, a reentrada
+    // zerou o contador — isto é só o 2º tick do episódio novo.
+    ecu_sched_encoder_heartbeat_tick(t, 1000u, 0u, 0u);
+    t += 1000u;
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u,
+             "2º tick pós-reentrada NÃO dispara — crédito antigo foi zerado");
+    CHECK_EQ(ecu_sched_encoder_seq_arm_stall_count(), 0u,
+             "stall count continua 0 — sem trip prematuro");
+
+    // Confirma que o watchdog continua vivo: mais 4 ticks (total 6 desde a
+    // reentrada) devem disparar normalmente.
+    for (uint32_t i = 0; i < 4u; ++i) {
+        ecu_sched_encoder_heartbeat_tick(t, 1000u, 0u, 0u);
+        t += 1000u;
+    }
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
+             "6 ticks completos desde a reentrada — watchdog dispara normalmente");
+    CHECK_EQ(ecu_sched_encoder_seq_arm_stall_count(), 1u, "stall count=1 no trip certo");
+
+    sensors_set_bench_clt_iat(false, 0, 0);
+    ecu_sched_test_reset();
+}
+
 void test_ecu_sched_encoder_due_head_dispatches_inline(void) {
     section("ecu_sched: encoder queue — alvo já devido/passado não trava CCR3 (TIM2 posição)");
     ecu_sched_test_reset();

@@ -152,6 +152,7 @@ void test_ecu_sched_encoder_cmp_watchdog_alongside_staleness(void);
 void test_ecu_sched_encoder_cmp_ref_dropped_on_staleness(void);
 void test_ecu_sched_encoder_cmp_confirm_gate(void);
 void test_ecu_sched_encoder_seq_arm_stall_watchdog(void);
+void test_ecu_sched_encoder_seq_arm_stall_resets_on_presync_reentry(void);
 void test_ecu_sched_encoder_due_head_dispatches_inline(void);
 void test_ecu_sched_encoder_seq_to_presync_force_closes_pins(void);
 void test_ecu_sched_encoder_presync_after_cmp_loss_keeps_dispatcher(void);
