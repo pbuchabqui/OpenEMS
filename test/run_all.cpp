@@ -152,6 +152,7 @@ int main(void) {
     test_sensors_sample_fast_channels_encoder();
     test_sensors_map_window_poll_encoder();
     test_map_window_angular();
+test_map_window_skipped_slot();
     test_sensors_tick_50ms();
     test_sensors_set_range();
     test_sensors_etb_harness_present();

@@ -43,6 +43,12 @@ int16_t map_window_balance_x1000(uint8_t slot) noexcept;
 // Nº de ciclos completos (4 janelas fechadas) — diagnóstico.
 uint32_t map_window_cycles() noexcept;
 
+// Nº de janelas inteiras saltadas (poll de 2ms mais largo que a janela, a
+// RPM alto ou map_window_len_deg curto) — diagnóstico. Slot saltado mantém
+// o último valor válido em map_window_slot_bar_x1000(); este contador é a
+// forma de detetar essa staleness em vez de confiar cegamente no valor.
+uint32_t map_window_skip_count() noexcept;
+
 // Reset total (init / host tests / perda de sync prolongada).
 void map_window_reset() noexcept;
 

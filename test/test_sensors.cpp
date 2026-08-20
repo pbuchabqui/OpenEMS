@@ -265,6 +265,72 @@ void test_map_window_angular(void) {
     map_window_reset();
 }
 
+// Regressão: poll de 2ms a RPM alto (ou map_window_len_deg calibrado curto)
+// pode saltar uma janela inteira entre duas chamadas — sem detecção, o bit
+// do slot saltado nunca entrava em fresh_mask, o ciclo nunca completava
+// (nem para os outros 3 slots) e o slot saltado ficava congelado no último
+// valor válido para sempre, sem fault nenhum a avisar (achado #2 da
+// revisão dos commits 2fa1513..bc30ca6, 2026-08-19).
+void test_map_window_skipped_slot(void) {
+    section("map_window: janela inteira saltada (poll grosso a RPM alto) não trava o ciclo");
+    using ems::engine::map_window_on_sample;
+    using ems::engine::map_window_slot_bar_x1000;
+    using ems::engine::map_window_balance_x1000;
+    using ems::engine::map_window_cycles;
+    using ems::engine::map_window_skip_count;
+    using ems::engine::map_window_reset;
+
+    map_window_reset();
+    ems::engine::map_window_enable   = 1u;
+    ems::engine::map_window_open_deg = 0u;
+    ems::engine::map_window_len_deg  = 90u;
+    // Janelas: slot0=[0,90) slot1=[180,270) slot2=[360,450) slot3=[540,630)
+
+    CHECK_EQ(map_window_skip_count(), 0u, "skip_count=0 no início");
+
+    // Amostra dentro do slot 0.
+    map_window_on_sample(45u, 500u, true, true);
+    CHECK_EQ(map_window_skip_count(), 0u, "1ª amostra nunca conta como salto");
+
+    // Salta DIRETO para dentro do slot 2 — slot 1 nunca visitado.
+    map_window_on_sample(405u, 480u, true, true);
+    CHECK_EQ(map_window_skip_count(), 1u, "slot 1 saltado: skip_count=1");
+    CHECK_EQ(map_window_slot_bar_x1000(1u), 0u,
+             "slot 1 saltado mantém o último valor conhecido (0, nunca escrito)");
+
+    // Continua slot 3, depois fecha o ciclo entrando de novo no slot 0.
+    map_window_on_sample(585u, 520u, true, true);
+    map_window_on_sample(45u, 500u, true, true);  // fecha slot3, fresh_mask completa
+    CHECK_EQ(map_window_cycles(), 1u,
+             "ciclo completa mesmo com 1 slot saltado (fresh_mask não trava)");
+    CHECK_EQ(map_window_slot_bar_x1000(0u), 500u, "slot 0 correto");
+    CHECK_EQ(map_window_slot_bar_x1000(2u), 480u, "slot 2 correto");
+    CHECK_EQ(map_window_slot_bar_x1000(3u), 520u, "slot 3 correto");
+    // balance entra no cálculo mesmo com slot1 stale (0) — só confirma que
+    // o EMA avançou (não travou em 0 para sempre).
+    CHECK_TRUE(map_window_balance_x1000(1u) != 0,
+               "balance do slot 1 avança mesmo saltado (ciclo não travou)");
+
+    // Saltar 2 slots seguidos (RPM ainda mais alto): slot0 → direto slot3.
+    map_window_reset();
+    ems::engine::map_window_enable = 1u;
+    map_window_on_sample(45u, 500u, true, true);   // slot 0
+    map_window_on_sample(585u, 500u, true, true);  // salta slot 1 E slot 2
+    CHECK_EQ(map_window_skip_count(), 2u, "2 slots saltados de uma vez: skip_count=2");
+
+    // Perda de sync não conta como salto de cadência de poll.
+    map_window_reset();
+    ems::engine::map_window_enable = 1u;
+    map_window_on_sample(45u, 500u, true, true);   // slot 0
+    map_window_on_sample(45u, 500u, false, true);  // perde FULL_SYNC
+    map_window_on_sample(405u, 480u, true, true);  // slot 2, sync recuperado
+    CHECK_EQ(map_window_skip_count(), 0u,
+             "hiato de sync não é contado como janela saltada");
+
+    ems::engine::map_window_enable = 0u;  // isolamento entre testes
+    map_window_reset();
+}
+
 void test_sensors_tick_50ms(void) {
     section("sensors: sensors_tick_50ms");
     sensor_setup(); sensors_init();
