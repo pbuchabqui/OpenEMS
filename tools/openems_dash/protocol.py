@@ -331,6 +331,21 @@ class OpenEMSLink:
                            "≥1 ciclo de 720° primeiro)")
         return resp[1]
 
+    # ── lock de PW de bancada ('P': trava injetor num valor fixo p/ flow-
+    #    bench, ignora VE/λ/AE até reset) ─────────────────────────────────
+    def bench_pw_lock(self) -> None:
+        """Comando de bancada 'P': arma o override de bench (2), o próprio
+        FW comita de imediato um PW fixo (ecu_sched_bench_pw_lock_next_commit
+        + commit_calibration(10°, dwell=22500 ticks, pw=50000 ticks=800µs,
+        eoi_lead=30°) em ui_protocol.cpp) e trava (1) — a partir daí
+        finalize_cyl_setpoints() usa bench_pw_lock_ticks verbatim via
+        EncFuelIgnPrep (achado #7 da revisão 2fa1513..bc30ca6, commit
+        c76c9b3) até um reset do FW ou novo 'P'. Sem parâmetros — o valor
+        travado é sempre o fixo do FW, não configurável por aqui."""
+        ack = self._txn(b"P", 1)
+        if ack != b"\x00":
+            raise IOError(f"bench_pw_lock: ACK {ack.hex()}")
+
     # ── reset LEARN session ('Z': STFT+LEARN+LTFT NVM-shadow zero) ─────
     def reset_adaptives(self) -> None:
         """Zera STFT, acumulador LEARN e shadows LTFT (marca dirty p/ flush

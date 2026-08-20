@@ -573,6 +573,20 @@ def api_cmp_phase_calibrate():
     return {"ok": True, "state": state, "msg": f"cmp_phase={label} (RAM — falta burn)"}
 
 
+@app.post("/api/bench_pw_lock")
+def api_bench_pw_lock():
+    """Lock de PW de bancada (comando 'P'): trava o injetor num PW fixo do
+    FW (800µs/50000 ticks), ignorando VE/λ/AE, até reset ou novo 'P'.
+    Usado para validar em bancada o achado #7 da revisão 2fa1513..bc30ca6
+    (commit c76c9b3) — confirmar via scope físico (INJ1/2) que o PW
+    observado reflete o valor travado desde o 1º tick pós-comando."""
+    try:
+        worker.submit(lambda l: l.bench_pw_lock())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"bench_pw_lock: {e}"}, status_code=502)
+    return {"ok": True, "msg": "PW travado @ 800µs (50000 ticks) — confirmar via scope"}
+
+
 @app.post("/api/ltft/reset")
 def api_ltft_reset():
     """Zera trims de combustível aprendidos via comando 'Z' (FW):
