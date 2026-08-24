@@ -58,6 +58,25 @@ void iwdg_kick(void) noexcept {
     IWDG_KR = IWDG_KR_REFRESH;
 }
 
+static void iwdg_wait_update(void) noexcept
+{
+    for (uint32_t n = 10000u; (IWDG_SR & (IWDG_SR_PVU | IWDG_SR_RVU)) != 0u; --n) {
+        if (n == 0u) { break; }
+    }
+}
+
+void iwdg_enter_runtime(void) noexcept
+{
+    // Boot programmed /256 + RLR=1249 (~10 s). IWDG_RLR_100MS=99 is 100 ms
+    // only with /32 (LSI 32 kHz / 32 = 1 kHz). Leaving PR at /256 made
+    // "100 ms" actually ~0.8 s — a hung coil/injector ISR would live that long.
+    IWDG_KR  = IWDG_KR_ACCESS;
+    IWDG_PR  = IWDG_PR_DIV32;
+    IWDG_RLR = IWDG_RLR_100MS;
+    iwdg_wait_update();
+    IWDG_KR  = IWDG_KR_REFRESH;
+}
+
 // ── Inicialização do sistema ──────────────────────────────────────────────────
 
 void system_stm32_init(void) noexcept {
@@ -222,6 +241,7 @@ void system_stm32_init(void) noexcept {
 static uint32_t g_mock_ms = 0u;
 void system_stm32_init(void) noexcept { }
 void iwdg_kick(void) noexcept { }
+void iwdg_enter_runtime(void) noexcept { }
 uint32_t millis(void) noexcept { return g_mock_ms; }
 uint32_t micros(void) noexcept { return g_mock_ms * 1000u; }
 void host_set_millis(uint32_t ms) noexcept { g_mock_ms = ms; }

@@ -1,5 +1,6 @@
 #include "engine/fuel_calc.h"
 #include "engine/calibration.h"
+#include "engine/constants.h"
 #include "engine/engine_config.h"
 #include "engine/math_utils.h"
 #include "engine/table3d.h"
@@ -722,11 +723,10 @@ bool fuel_inj_duty_update(uint32_t pw_us, uint32_t rpm_x10,
             g_inj_duty_over_ms = 0u;
         }
     } else {
-        // Retoma com histerese de 5%: o PW comandado continua a ser calculado
-        // durante o corte (a mask é que suprime), logo o duty pedido cai
-        // quando o RPM/carga descem — não há deadlock.
-        const uint16_t resume_x10 = (limit_x10 > 50u) ? limit_x10 - 50u : 0u;
-        if (g_inj_duty_pct_x10 <= resume_x10) {
+        // FOME: resume only below 20% duty so the driver must lift.
+        const uint16_t resume_x10 =
+            static_cast<uint16_t>(kInjDutyResumePct) * 10u;
+        if (g_inj_duty_pct_x10 < resume_x10) {
             g_inj_duty_cut = false;
             g_inj_duty_over_ms = 0u;
         }

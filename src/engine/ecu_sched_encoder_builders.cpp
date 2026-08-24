@@ -390,8 +390,13 @@ static void arm_sequential_cyl(uint8_t cyl, uint32_t now_raw,
         }
     }
 
-    arm_pair_if_lead(kInjCh[cyl], t.inj_on_abs, t.eoi_abs, now_raw, min_lead,
-                     ECU_ACT_INJ_ON, ECU_ACT_INJ_OFF);
+    const uint8_t inj_bit =
+        (kInjCh[cyl] < 8U) ? si::k_inj_ch_to_bit[kInjCh[cyl]] : 0U;
+    if (inj_bit == 0U ||
+        (::ecu_sched_get_inj_inhibit_mask() & inj_bit) == 0U) {
+        arm_pair_if_lead(kInjCh[cyl], t.inj_on_abs, t.eoi_abs, now_raw, min_lead,
+                         ECU_ACT_INJ_ON, ECU_ACT_INJ_OFF);
+    }
 
     if (cyl_has_pending_events(cyl) &&
         ecu_sched_encoder_omega_valid() != 0U) {
@@ -424,6 +429,7 @@ void try_arm_sequential_due(uint32_t now_raw) noexcept
 {
     static_assert(cfg::kCylinderCount == 4u, "ign/inj channel tables are 4-cyl");
     if (ecu_sched_encoder_omega_valid() == 0U) { return; }
+    if (ecu_sched_encoder_omega_x65536() <= 0) { return; }
 
     g_knock_sequential = 1U;
 
@@ -513,6 +519,12 @@ void recompute_presync(uint32_t now_raw) noexcept
     encoder_purge_cyl_mask(0x0FU, 1U);
     encoder_purge_cyl_mask(0x0FU, 0U);
 
+    // After purge: no new ON if the shaft is stopped or reversing.
+    if (ecu_sched_encoder_omega_valid() == 0U ||
+        ecu_sched_encoder_omega_x65536() <= 0) {
+        return;
+    }
+
     const uint32_t dwell_span = duration_ticks_to_span_counts(g_dwell_ticks);
     const uint32_t min_lead = min_lead_counts();
     // g_inj_pw_ticks is one opening (cycle formula / squirts).
@@ -574,24 +586,28 @@ void recompute_presync(uint32_t now_raw) noexcept
     arm_wasted_pair(pwt.spark_a, kWastedIgnPairA);
     arm_wasted_pair(pwt.spark_b, kWastedIgnPairB);
 
+    const uint8_t inj_mask_presync = ::ecu_sched_get_inj_inhibit_mask();
+    const auto arm_inj_if_allowed = [&](uint8_t ch, uint32_t on_t, uint32_t off_t) {
+        const uint8_t bit = (ch < 8U) ? si::k_inj_ch_to_bit[ch] : 0U;
+        if (bit != 0U && (inj_mask_presync & bit) != 0U) { return; }
+        arm_channel_with_lead(ch, on_t, ECU_ACT_INJ_ON, min_lead);
+        arm_channel_with_lead(ch, off_t, ECU_ACT_INJ_OFF, min_lead);
+    };
     if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
         for (uint8_t i = 0U; i < 4U; ++i) {
-            arm_channel_with_lead(kInjCh[i], inj_on_target, ECU_ACT_INJ_ON, min_lead);
-            arm_channel_with_lead(kInjCh[i], eoi_target, ECU_ACT_INJ_OFF, min_lead);
+            arm_inj_if_allowed(kInjCh[i], inj_on_target, eoi_target);
         }
     } else {
         // Semi: bank A @ EOI, bank B @ EOI+180°. Two openings / 720°
         // whose widths sum to flow+2×dead.
         for (uint8_t i = 0U; i < 2U; ++i) {
-            arm_channel_with_lead(inj_a[i], inj_on_target, ECU_ACT_INJ_ON, min_lead);
-            arm_channel_with_lead(inj_a[i], eoi_target, ECU_ACT_INJ_OFF, min_lead);
+            arm_inj_if_allowed(inj_a[i], inj_on_target, eoi_target);
         }
         uint32_t eoi_b = engine_deg_to_absolute((pwt.eoi + 180U) % 360U, now_raw);
         uint32_t inj_on_b = eoi_b - inj_pw_span;
         shift_pair_one_rev_if_on_too_soon(inj_on_b, eoi_b, now_raw, min_lead);
         for (uint8_t i = 0U; i < 2U; ++i) {
-            arm_channel_with_lead(inj_b[i], inj_on_b, ECU_ACT_INJ_ON, min_lead);
-            arm_channel_with_lead(inj_b[i], eoi_b, ECU_ACT_INJ_OFF, min_lead);
+            arm_inj_if_allowed(inj_b[i], inj_on_b, eoi_b);
         }
     }
 }

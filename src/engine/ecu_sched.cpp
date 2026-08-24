@@ -9,6 +9,8 @@
 #include "engine/ecu_sched.h"
 #include "engine/ecu_sched_internal.h"
 #include "engine/enc_cyl_setpoints.h"
+#include "engine/limp_gating.h"
+#include "engine/output_test.h"
 #include "drv/ckp.h"
 #include "engine/engine_config.h"
 #include "engine/constants.h"
@@ -209,10 +211,16 @@ static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
     }
 }
 
-// Fire queue head: BSRR + optional ts_ring + pin metrics + dequeue.
+// Fire queue head: copy + dequeue first so pin_transition may insert the
+// 1.5× overdwell SPARK (or drop a spent backup) without shifting the event
+// still being executed.
 // capture_ts: path-1 (due) only — path-2 (already late) keeps prior work set (no ts_ring).
 static inline void evt_execute_head(uint32_t now, uint8_t capture_ts) {
-    const SchedEvent& e = g_evt_queue[0];
+    const SchedEvent e = g_evt_queue[0];
+    --g_evt_count;
+    for (uint8_t i = 0; i < g_evt_count; ++i) {
+        g_evt_queue[i] = g_evt_queue[i + 1U];
+    }
     gpio_set_pin(e.channel, e.high);
     if (capture_ts != 0U && (e.channel == ECU_CH_INJ1 || e.channel == ECU_CH_IGN1)) {
         const uint8_t ri = g_ts_ring_idx;
@@ -226,10 +234,6 @@ static inline void evt_execute_head(uint32_t now, uint8_t capture_ts) {
         pin_transition(idx, e.high);
     }
     ++g_dbg_evt_dispatched;
-    --g_evt_count;
-    for (uint8_t i = 0; i < g_evt_count; ++i) {
-        g_evt_queue[i] = g_evt_queue[i + 1U];
-    }
 }
 
 // Called from TIM5 ISR when CC3IF fires
@@ -289,6 +293,27 @@ void purge_events_for_cyl_mask(uint8_t mask, uint8_t is_ign)
     }
 }
 
+void drop_pending_tim5_deassert(uint8_t ch)
+{
+    uint8_t w = 0U;
+    for (uint8_t r = 0U; r < g_evt_count; ++r) {
+        if (g_evt_queue[r].channel == ch && g_evt_queue[r].high == 0U) {
+            continue;
+        }
+        if (w != r) { g_evt_queue[w] = g_evt_queue[r]; }
+        ++w;
+    }
+    if (w == g_evt_count) { return; }
+    g_evt_count = w;
+    if (g_evt_count == 0U) {
+        TIM5_DIER &= ~TIM_DIER_CC3IE;
+    } else {
+        TIM5_CCR3 = g_evt_queue[0].timestamp;
+        TIM5_SR   = ~TIM_SR_CC3IF;
+        TIM5_DIER |= TIM_DIER_CC3IE;
+    }
+}
+
 static inline uint32_t scheduler_counter(void)
 {
     return TIM5_CNT;  // 32-bit, 62.5 MHz — sem wrap de 16-bit
@@ -339,10 +364,7 @@ void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     // Program watchdog timeouts at queue time; pin_transition starts the clock
     // only when the pin actually goes HIGH.
     if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
-        uint32_t t = (si::g_inj_pw_ticks * 6U) / 5U;  // 1.2 × PW
-        if (t < ECU_SCHED_US_TO_TICKS(2000U)) { t = ECU_SCHED_US_TO_TICKS(2000U); }
-        if (t > si::kInjOpenWdogHardTicks) { t = si::kInjOpenWdogHardTicks; }
-        g_inj_wdog_ticks[pin_idx] = t;
+        g_inj_wdog_ticks[pin_idx] = si::inj_open_wdog_timeout_ticks();
     }
     if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
         const uint8_t ign_idx = (uint8_t)(pin_idx - ECU_IGN_CH_FIRST);
@@ -405,7 +427,13 @@ void ECU_Hardware_Init(void)
 
 void ecu_sched_commit_calibration(uint32_t advance_deg, uint32_t dwell_ticks, uint32_t inj_pw_ticks, uint32_t eoi_lead_deg)
 {
+    // Sample spinning outside the CS: ckp_snapshot takes its own guard
+    // (nested CPSID is not recursive — inner cpsie would re-enable IRQs).
+    const uint8_t spinning = (ecu_sched_engine_is_stopped() == 0U) ? 1U : 0U;
     ems::hal::CriticalSectionGuard guard;
+    if (spinning != 0U) {
+        g_inj_pw_override = 0U;  // restore computed PW on a running engine
+    }
     if (g_inj_pw_override == 0U) {
         si::g_advance_deg = advance_deg;
         si::g_dwell_ticks = dwell_ticks;
@@ -444,10 +472,23 @@ void ecu_sched_reset_diagnostic_counters(void)
     g_inj_watchdog_count = 0U;
 }
 
-void ecu_sched_test_all_outputs_safe(void)
+void ecu_sched_drive_outputs_safe(void)
 {
     ems::hal::CriticalSectionGuard guard;
     clear_all_events_and_drive_safe_outputs();
+}
+
+void ecu_sched_test_all_outputs_safe(void)
+{
+    ecu_sched_drive_outputs_safe();
+}
+
+void ecu_sched_on_encoder_stall(void)
+{
+    ecu_sched_encoder_phase_invalidate();
+    ecu_sched_encoder_omega_reset();
+    ecu_sched_encoder_heartbeat_drop_cmp_ref();
+    ecu_sched_drive_outputs_safe();
 }
 
 void ecu_sched_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg)
@@ -488,11 +529,36 @@ void ecu_sched_set_ign_inhibit_mask(uint8_t mask)
 }
 uint8_t ecu_sched_get_ign_inhibit_mask(void) { return g_ign_inhibit_mask; }
 
-// Bench / protocol: lock PW for one commit then ignore main-loop PW writes (was raw g_inj_pw_override poke).
-void ecu_sched_bench_pw_lock_next_commit(void)
+uint8_t ecu_sched_engine_is_stopped(void)
 {
+    if (ems::drv::ckp_snapshot().rpm_x10 != 0U) { return 0U; }
+    if (ecu_sched_encoder_omega_valid() != 0U &&
+        ecu_sched_encoder_omega_x65536() != 0) {
+        return 0U;
+    }
+    return 1U;
+}
+
+// Bench / protocol: lock PW for one commit then ignore main-loop PW writes
+// (was raw g_inj_pw_override poke). Inert on a spinning engine; only while
+// output_test is active (never a request to skip watchdogs — those stay on).
+uint8_t ecu_sched_bench_pw_lock_next_commit(void)
+{
+    if (ecu_sched_engine_is_stopped() == 0U) {
+        g_inj_pw_override = 0U;
+        return 0U;
+    }
+    if (!ems::engine::output_test_active()) {
+        return 0U;
+    }
     ems::hal::CriticalSectionGuard guard;
     g_inj_pw_override = 2U;  // write-once then lock
+    return 1U;
+}
+
+void ecu_sched_bench_pw_lock_clear(void)
+{
+    g_inj_pw_override = 0U;
 }
 
 uint8_t ecu_sched_bench_pw_override_state(void)
@@ -615,6 +681,7 @@ void ecu_sched_test_reset(void)
     ecu_sched_encoder_queue_test_reset();
     ecu_sched_encoder_heartbeat_test_reset();
     ems::engine::enc_cyl_setpoints_reset();
+    ems::engine::limp_gating_reset();
 }
 uint8_t ecu_sched_test_angle_table_size(void) { return si::g_angle_table_count; }
 uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint8_t *sub_frac, uint8_t *ch, uint8_t *action, uint8_t *phase)

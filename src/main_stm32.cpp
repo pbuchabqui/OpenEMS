@@ -619,13 +619,8 @@ int main() {
     uint32_t g_t_etb_ms = g_t2ms_;
     uint32_t g_t_comms_ms = g_t2ms_;
 
-    // Estreitar IWDG de 10s (boot) para 100ms (runtime): o main loop kica a cada
-    // ciclo; 100ms detecta travamento de runtime sem tolerar os inits longos do boot.
-    // Nota: IWDG_PR segue /256 (boot) → RLR=99 dá ~0.8s efetivo; suficiente p/ runtime
-    // e evita esperar PVU/RVU de novo no caminho crítico.
-    IWDG_KR  = IWDG_KR_ACCESS;
-    IWDG_RLR = IWDG_RLR_100MS;
-    IWDG_KR  = IWDG_KR_REFRESH;
+    // Boot IWDG is ~10 s (/256). Runtime is /32 + RLR=99 → ~100 ms.
+    iwdg_enter_runtime();
 
     for (;;) {
         // ── Watchdog kick (primeiro statement) ───────────────────────────
@@ -639,7 +634,10 @@ int main() {
             g_t2ms_ = now;
             const uint32_t loop2ms_start_us = micros();
 
-            ems::drv::ckp_stall_poll_encoder(ems::hal::tim5_count());
+            if (ems::drv::ckp_stall_poll_encoder(ems::hal::tim5_count()) ||
+                !ems::drv::encoder_sync::health_ok()) {
+                ecu_sched_on_encoder_stall();
+            }
 
             // Watchdog do TIM3 CMP IC: se revoluções demais se passaram
             // sem um flanco CMP aceite (virabrequim vivo, CMP mudo — ver
@@ -738,6 +736,9 @@ int main() {
                 const bool health_ok = ems::hal::mt6835_read_angle_raw21(
                     &health_angle21_unused, &health_status_unused);
                 ems::drv::encoder_sync::set_health_ok(health_ok);
+                if (!health_ok) {
+                    ecu_sched_on_encoder_stall();
+                }
             }
 
             // Knock sensor morto (FOME #578): report único na transição.

@@ -23,6 +23,8 @@
 #include "engine/knock.h"
 #include "engine/table3d.h"
 #include "engine/ecu_sched.h"
+#include "engine/loop_2ms_fuel_ign.h"
+#include "engine/cut_reason.h"
 #include "hal/out_pins.h"
 #include "engine/enc_cyl_setpoints.h"
 #include "engine/map_window.h"
@@ -49,6 +51,7 @@ namespace ems::engine {
 extern volatile uint32_t ems_test_tim5_ccr1;
 extern volatile uint32_t ems_test_tim5_ccr2;
 extern volatile uint32_t ems_test_cam_gpio_idr;
+extern volatile uint8_t  g_inj_pw_override;
 
 using namespace ems::drv;
 using namespace ems::drv::encoder_sync;
@@ -100,6 +103,7 @@ void test_ecu_sched_setters(void) {
 void test_ecu_sched_inhibit_masks(void) {
     section("ecu_sched: injection / ignition inhibit masks");
     ecu_sched_test_reset();
+    ckp_test_reset();
 
     CHECK_EQ(ecu_sched_get_inj_inhibit_mask(), 0u, "inj_inhibit=0 after reset");
     CHECK_EQ(ecu_sched_get_ign_inhibit_mask(), 0u, "ign_inhibit=0 after reset");
@@ -119,6 +123,7 @@ void test_ecu_sched_inhibit_masks(void) {
     section("ecu_sched: prime cannot bypass inj inhibit mask");
     {
         ecu_sched_test_reset();
+        ckp_test_reset();
         uint32_t pins[24] = {};
         ecu_sched_get_pin_counts_u32x24(pins);
         const uint32_t h0 = pins[0];   // INJ1 high count
@@ -920,6 +925,8 @@ void test_ecu_sched_encoder_cmp_confirm_gate(void) {
     ecu_sched_encoder_heartbeat_tick(5000u, 5000u, ref + 100u, 5u);
     CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 0u,
              "streak_resync zera confirm_count (3ª rejeição consecutiva)");
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
+             "streak_resync phase_invalidate — sequential must not keep the old half");
 
     // Flanco isolado pós-resync (ângulo arbitrário/espúrio, ex.: ruído num
     // pino agora flutuante) — confirm_count sobe só a 1;
@@ -1566,7 +1573,9 @@ void test_ecu_sched_encoder_recompute_presync(void) {
     CHECK_EQ(ts, 6736u, "evt0: earliest = pair B dwell");
     CHECK_EQ(high, 1u, "evt0: DWELL high=1");
 
-    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
+    // Same ω=0.5 (ΔTIM2=500, ΔTIM5=1000). A tick with ΔTIM2=0 is treated as
+    // stopped/reverse and must purge — that is stall-safe, not duplication.
+    ecu_sched_encoder_heartbeat_tick(2000u, 3000u, 0u, 0u);
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
              "repeated heartbeat: still exactly 16, no duplication from purge+rebuild");
 
@@ -1762,7 +1771,7 @@ void test_ecu_sched_encoder_presync_multispark(void) {
     CHECK_EQ(ign1_count, 4u,
              "pair-A coil: primary + 1 multi-spark pair (4 events)");
 
-    ecu_sched_encoder_heartbeat_tick(1500u, 3000u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_tick(2000u, 3000u, 0u, 0u);
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 24u,
              "repeated heartbeat: still 24, no duplication");
 
@@ -2024,7 +2033,7 @@ void test_ecu_sched_encoder_presync_to_sequential_transition(void) {
     // Enter sequential: handoff purges presync 4-wide; late-arm may add 0..4
     // events depending on window (here arm cyl0 only).
     ecu_sched_encoder_phase_set_anchor(0u, ECU_PHASE_A);
-    encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
+    const uint32_t arm_now = encoder_seq_arm_cyl_in_window(0u, 3000u, 1u, 1u);
     CHECK_TRUE(ecu_sched_encoder_seq_call_count() > 0u,
                "seq_calls sobe no builder SEQ (dump 'D' / dash)");
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "g_knock_sequential=1 in sequential");
@@ -2036,10 +2045,14 @@ void test_ecu_sched_encoder_presync_to_sequential_transition(void) {
              "presync IGN4 shared-target gone after sequential handoff");
 
     // Back to presync: invalidate phase → recompute_presync purges all +
-    // clears flag.
+    // clears flag. tim2 must keep advancing forward from arm_now (same 0.5
+    // ratio seeded above, tim5 3000->4000) — a smaller tim2 here reads as
+    // reverse rotation (omega<=0) and takes the drive-safe path instead of
+    // recompute_presync, which never rebuilds the 16-wide schedule.
     ecu_sched_encoder_phase_invalidate();
-    ecu_sched_encoder_test_set_tim2_cnt(2000u);
-    ecu_sched_encoder_heartbeat_tick(2000u, 4000u, 0u, 0u);
+    const uint32_t back_to_presync_tim2 = arm_now + 500u;
+    ecu_sched_encoder_test_set_tim2_cnt(back_to_presync_tim2);
+    ecu_sched_encoder_heartbeat_tick(back_to_presync_tim2, 4000u, 0u, 0u);
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "g_knock_sequential=0 after return to presync");
     CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 16u,
              "presync rebuild restores 16-wide simultaneous schedule");
@@ -2562,6 +2575,7 @@ void test_enc_finalize_xtau_peek_no_commit(void) {
 void test_enc_finalize_bench_pw_lock_via_prep(void) {
     section("enc_cyl_setpoints: lock de bancada ('P') vem do prep, não de si::g_inj_pw_ticks");
     ecu_sched_test_reset();
+    ckp_test_reset();
     map_window_reset();
     enc_cyl_setpoints_reset();
 
@@ -2570,7 +2584,7 @@ void test_enc_finalize_bench_pw_lock_via_prep(void) {
     prep.flow_pw_us = 5000u;
     prep.base_flow_pw_us = 5000u;
     prep.map_bar_x100 = 100u;
-    prep.rpm_x10 = 30000u;
+    prep.rpm_x10 = 0u;  // motor parado: lock aplica
     prep.corr_clt_x256 = 256u;
     prep.corr_iat_x256 = 256u;
     prep.base_advance_deg = 10;
@@ -2582,10 +2596,19 @@ void test_enc_finalize_bench_pw_lock_via_prep(void) {
     const ems::engine::CylArmSetpoints locked =
         finalize_cyl_setpoints(0u, /*commit_fuel=*/false);
     CHECK_EQ(locked.inj_pw_ticks, 999999u,
-             "bench_pw_locked=1: PW vem verbatim de bench_pw_lock_ticks");
+             "rpm=0 + bench_pw_locked=1: PW vem verbatim de bench_pw_lock_ticks");
+
+    // Motor a correr: sequencial ignora o lock (PW calculado, não o sentinela).
+    prep.rpm_x10 = 30000u;
+    enc_fuel_ign_prep_test_publish(prep);
+    const ems::engine::CylArmSetpoints running =
+        finalize_cyl_setpoints(0u, /*commit_fuel=*/false);
+    CHECK_TRUE(running.inj_pw_ticks != 999999u,
+               "rpm>0: sequencial ignora o lock — PW calculado");
 
     // fuel_cut tem precedência sobre o lock — corte de segurança não pode
     // ser mascarado por um lock de bancada esquecido ligado.
+    prep.rpm_x10 = 0u;
     prep.fuel_cut = 1u;
     enc_fuel_ign_prep_test_publish(prep);
     const ems::engine::CylArmSetpoints cut =
@@ -2861,28 +2884,15 @@ void test_ecu_sched_dwell_watchdog_fires(void) {
 void test_ecu_sched_inj_watchdog_fires(void) {
     section("ecu_sched: injector open watchdog fires after timeout (lost INJ_OFF)");
 
-    // Force INJ HIGH without OFF (simulate queue drop of OFF). force_output path
-    // uses hard 36 ms timeout.
+    // Force INJ HIGH without OFF (simulate queue drop of OFF). Timeout is
+    // 1.2× the 5000 µs pulse (floor 2 ms), not the old 36 ms hard cap.
     const uint32_t kNow = 5000u;
-    const uint32_t kHardTicks = (36000u * 125u) / 2u;  // 36 ms @ 62.5 MHz
+    const uint32_t kHardTicks = ((5000u * 125u) / 2u * 6u) / 5u;
     ecu_sched_test_reset();
     ecu_sched_test_set_tim5_cnt(kNow);
-    // test_pulse schedules OFF — fire raw force path via test pulse then clear OFF
-    // by advancing past OFF without dispatch: use pulse then wipe queue.
-    ecu_sched_test_pulse_inj(0u, 3000u);  // ON + OFF queued
-    // Drop OFF from queue by resetting event queue only, keep pin state via
-    // another open: re-force through pulse then zero events after arm.
-    // Simpler: pulse with PW, discard OFF by resetting CCR/queue after ON.
-    {
-        // Re-open: force via second pulse; then clear queue so OFF never runs.
-        ecu_sched_test_reset_ccr();
-        // Pin may be LOW after reset_ccr — re-open with pulse and immediately
-        // drop all events (lost OFF).
-        ecu_sched_test_set_tim5_cnt(kNow);
-        ecu_sched_test_pulse_inj(0u, 5000u);
-        // Wipe queue: OFF is gone, pin still HIGH from force_output.
-        ecu_sched_test_reset_ccr();
-    }
+    ecu_sched_test_pulse_inj(0u, 5000u);
+    // Lost INJ_OFF: wipe the time queue, pin stays HIGH, 1.2× poll remains.
+    ecu_sched_test_reset_ccr();
     CHECK_EQ(ecu_sched_inj_watchdog_count(), 0u, "pre: inj wdog count=0");
     ecu_sched_test_set_tim5_cnt(kNow + kHardTicks - 1u);
     ecu_sched_inj_watchdog();
@@ -2893,5 +2903,501 @@ void test_ecu_sched_inj_watchdog_fires(void) {
              "inj watchdog fires: pin HIGH past hard timeout without OFF");
     ecu_sched_inj_watchdog();
     CHECK_EQ(ecu_sched_inj_watchdog_count(), 1u, "inj wdog fires once per open");
+}
+
+static void sched_test_raise_inj1_ign1(void)
+{
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 100u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 100u, ECU_ACT_DWELL_START);
+    ecu_sched_encoder_test_set_tim2_cnt(100u);
+    ecu_sched_encoder_evt_dispatch();
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 8000u, ECU_ACT_INJ_OFF);
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 8000u, ECU_ACT_SPARK);
+}
+
+void test_encoder_stall_safe_state(void)
+{
+    section("stall: pins LOW, queues empty, phase invalid, confirm_count 0");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+    sensors_set_bench_clt_iat(false, 0, 0);
+    ems::engine::cfg::g_eng_cfg.cmp_phase_state =
+        ems::engine::cfg::kCmpPhaseCalibratedA;
+
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 1000u, 1u);
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 1000u + kCmpSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "pre: FULL_SYNC phase");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 2u,
+             "pre: 2 CMP confirms");
+    CHECK_TRUE(ckp_snapshot().rpm_x10 != 0u, "pre: rpm != 0 so stall can trip");
+
+    sched_test_raise_inj1_ign1();
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) & (1u << 15u)) != 0u,
+               "pre: INJ1 HIGH");
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt_count() >= 1u, "pre: encoder queue");
+    ecu_sched_test_pulse_inj(0u, 3000u);
+    CHECK_TRUE(ecu_sched_test_get_evt_count() >= 1u, "pre: TIM5 queue");
+
+    const uint32_t last = ckp_snapshot().last_tim5_capture;
+    const uint32_t stall_now = last + 50000001u;  // 800 ms prod timeout
+    CHECK_TRUE(ckp_stall_poll_encoder(stall_now),
+               "stall_poll trips after 800 ms without heartbeat");
+    ecu_sched_on_encoder_stall();
+
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "stall invalidates phase");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 0u,
+             "stall zeros confirm_count");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u, "encoder queue empty");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "TIM5 queue empty");
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "omega estimator reset");
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) &
+                (1u << (15u + 16u))) != 0u,
+               "INJ1 forced LOW immediately (not after 800 ms of HIGH)");
+    CHECK_EQ(ckp_snapshot().state, ems::drv::SyncState::LOSS_OF_SYNC,
+             "stall_poll published LOSS_OF_SYNC");
+
+    ecu_sched_test_reset();
+    ckp_test_reset();
+}
+
+void test_encoder_health_ok_false_safe_state(void)
+{
+    section("health_ok false: same safe-state as stall");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+    ems::engine::cfg::g_eng_cfg.cmp_phase_state =
+        ems::engine::cfg::kCmpPhaseCalibratedA;
+
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 1000u, 1u);
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 1000u + kCmpSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "pre: phase valid");
+    sched_test_raise_inj1_ign1();
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) & (1u << 15u)) != 0u,
+               "pre: INJ1 HIGH");
+
+    ems::drv::encoder_sync::set_health_ok(false);
+    ecu_sched_encoder_heartbeat_tick(3000u, 3000u, 1000u + kCmpSpanCounts, 2u);
+
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "health_ok false invalidates");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 0u,
+             "health_ok false zeros confirm_count");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u, "encoder queue empty");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "TIM5 queue empty");
+    CHECK_EQ(ecu_sched_encoder_omega_valid(), 0u, "omega reset");
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) &
+                (1u << (15u + 16u))) != 0u,
+               "INJ1 forced LOW on encoder health fault");
+    CHECK_EQ(ckp_snapshot().state, ems::drv::SyncState::LOSS_OF_SYNC,
+             "health_ok false publishes LOSS_OF_SYNC");
+
+    ems::drv::encoder_sync::set_health_ok(true);
+    ecu_sched_test_reset();
+    ckp_test_reset();
+}
+
+void test_encoder_reverse_omega_no_inj_ign_on(void)
+{
+    section("reverse omega: no new INJ_ON/DWELL_START executed");
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 0u, 0u);
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 0u, 0u);
+    CHECK_TRUE(ecu_sched_encoder_omega_x65536() > 0, "pre: forward omega");
+
+    sched_test_raise_inj1_ign1();
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) & (1u << 15u)) != 0u,
+               "pre: INJ1 HIGH");
+    const uint32_t exec_before = ecu_sched_encoder_enc_evt_execute_count();
+    const uint8_t queued = ecu_sched_encoder_test_get_evt_count();
+    CHECK_TRUE(queued >= 1u, "pre: future OFF/SPARK queued");
+
+    // Kick-back: TIM2 decrements, TIM5 advances.
+    ecu_sched_encoder_heartbeat_tick(1800u, 3000u, 0u, 0u);
+    CHECK_TRUE(ecu_sched_encoder_omega_x65536() <= 0, "omega reversed");
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) &
+                (1u << (15u + 16u))) != 0u,
+               "INJ1 force-closed on reverse");
+    CHECK_EQ(ecu_sched_encoder_enc_evt_execute_count(), exec_before,
+             "no queued INJ_ON/DWELL_START executed during reverse");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "queues purged — builders must not re-arm on omega<=0");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_INJ1, 1u, nullptr), 0u,
+             "no INJ_ON left in encoder queue");
+    CHECK_EQ(encoder_evt_find_ch(ECU_CH_IGN1, 1u, nullptr), 0u,
+             "no DWELL_START left in encoder queue");
+
+    ecu_sched_test_reset();
+}
+
+void test_half_sync_not_cranking_inj_inhibit(void)
+{
+    section("HALF_SYNC + not cranking → inj inhibit (leave-crank fuel cut)");
+    ecu_sched_test_reset();
+    ems::engine::DiagnosticManager::init();
+    ems::engine::DiagnosticManager::clear_all_faults();
+    ems::engine::fuel_inj_duty_reset();
+    ems::engine::quick_crank_reset();
+    g_rev_limit_active = false;
+    g_limp_active = false;
+    ems::engine::crank_enter_rpm_x10 = 4500u;
+    ems::engine::crank_exit_rpm_x10 = 7000u;
+
+    ems::drv::SensorData s{};
+    s.vbatt_mv = 12000u;
+    s.clt_degc_x10 = 800;
+    s.iat_degc_x10 = 250;
+    s.map_bar_x1000 = 1000u;
+    s.fuel_press_bar_x1000 = 3000u;
+    s.oil_press_bar_x1000 = 3000u;
+    s.app_pct_x10 = 0u;
+    s.etb_tps_pct_x10 = 0u;
+
+    ems::drv::CkpSnapshot snap{};
+    snap.state = ems::drv::SyncState::HALF_SYNC;
+    snap.rpm_x10 = 3000u;
+    loop_2ms_fuel_ign(0u, snap, s);
+    CHECK_TRUE(ems::engine::is_cranking(), "300 rpm HALF → cranking batch");
+    CHECK_EQ(ecu_sched_get_inj_inhibit_mask(), 0u,
+             "HALF + cranking: inj not inhibited (batch allowed)");
+
+    snap.rpm_x10 = 8000u;
+    loop_2ms_fuel_ign(100u, snap, s);
+    CHECK_FALSE(ems::engine::is_cranking(), "left crank in HALF_SYNC");
+    CHECK_EQ(ecu_sched_get_inj_inhibit_mask(), 0x0Fu,
+             "HALF_SYNC after crank: all inj inhibited");
+    CHECK_TRUE((ems::engine::g_fuel_cut_reasons & ems::engine::kFuelCutNoSync) != 0u,
+               "kFuelCutNoSync latched on leave-crank HALF");
+
+    ems::engine::quick_crank_reset();
+    ecu_sched_test_reset();
+}
+
+void test_encoder_stall_resync_needs_two_cmp(void)
+{
+    section("after stall, one CMP edge is NOT enough to re-enter sequential");
+    ecu_sched_test_reset();
+    ckp_test_reset();
+    ems::engine::cfg::g_eng_cfg.cmp_phase_state =
+        ems::engine::cfg::kCmpPhaseCalibratedA;
+
+    ecu_sched_encoder_heartbeat_tick(1000u, 1000u, 1000u, 1u);
+    ecu_sched_encoder_heartbeat_tick(2000u, 2000u, 1000u + kCmpSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u, "pre: sequential");
+    CHECK_EQ(ecu_sched_is_sequential(), 1u, "pre: knock sequential");
+
+    ecu_sched_on_encoder_stall();
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u, "stall dropped phase");
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 0u,
+             "stale confirm-count not remembered");
+
+    const uint32_t a0 = 1000u + 8u * kCmpSpanCounts;
+    ecu_sched_encoder_heartbeat_tick(4000u, 4000u, a0, 3u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 1u,
+             "1st CMP after stall only arms the reference");
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 0u,
+             "one CMP edge after stall does not re-enter sequential");
+    CHECK_EQ(ecu_sched_is_sequential(), 0u, "still presync after 1 edge");
+
+    ecu_sched_encoder_heartbeat_tick(5000u, 5000u, a0 + kCmpSpanCounts, 4u);
+    CHECK_EQ(ecu_sched_encoder_test_get_cmp_confirm_count(), 2u,
+             "2nd consistent CMP restores confirm gate");
+    CHECK_EQ(ecu_sched_encoder_phase_valid(), 1u,
+             "2 CMP confirms + calibration required after stall");
+
+    ecu_sched_test_reset();
+    ckp_test_reset();
+}
+
+void test_encoder_frozen_dwell_watchdog_not_800ms(void)
+{
+    section("coil HIGH + encoder frozen: 1.4× dwell watchdog LOW, not 800 ms");
+    const uint32_t kNow = 1000u;
+    const uint32_t kDwellUs = 3000u;
+    const uint32_t kDwellTicks = (kDwellUs * 125u) / 2u;
+    const uint32_t kWdogTicks = (kDwellTicks * 7u) / 5u;  // 1.4×
+    const uint32_t kStallTicks = 50000000u;               // 800 ms
+
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+    ecu_sched_set_dwell_ticks(kDwellTicks);
+    ecu_sched_test_set_tim5_cnt(kNow);
+
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 100u, ECU_ACT_DWELL_START);
+    ecu_sched_encoder_test_set_tim2_cnt(100u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_TRUE(ecu_sched_test_get_dwell_arm_tick(0u) != 0u,
+               "pre: coil charged, TIM2 frozen at 100");
+
+    ecu_sched_test_set_tim5_cnt(kNow + kWdogTicks - 1u);
+    ecu_sched_dwell_watchdog();
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
+             "silent inside 1.4× (encoder still frozen)");
+
+    ecu_sched_test_set_tim5_cnt(kNow + kWdogTicks + 1u);
+    ecu_sched_dwell_watchdog();
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u,
+             "dwell watchdog fires at 1.4× with encoder frozen");
+    CHECK_TRUE((kWdogTicks + 1u) < kStallTicks,
+               "1.4× dwell << 800 ms stall declaration");
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(2u) &
+                (1u << (6u + 16u))) != 0u,
+               "IGN1 (PC6) LOW — pin did not stay HIGH for 800 ms");
+
+    // Stall safe-state also closes immediately (no 800 ms wait).
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+    ecu_sched_test_set_tim5_cnt(kNow);
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 100u, ECU_ACT_DWELL_START);
+    ecu_sched_encoder_test_set_tim2_cnt(100u);
+    ecu_sched_encoder_evt_dispatch();
+    ecu_sched_on_encoder_stall();
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(2u) &
+                (1u << (6u + 16u))) != 0u,
+               "stall path closes coil immediately, not after 800 ms");
+    CHECK_EQ(ecu_sched_test_get_dwell_arm_tick(0u), 0u,
+             "dwell arm released by stall safe-state");
+
+    ecu_sched_test_reset();
+}
+
+static uint32_t sched_ticks_to_us(uint32_t ticks)
+{
+    return (ticks * 2u) / 125u;
+}
+
+void test_ecu_sched_encoder_inj_watchdog_1_2x_pw(void)
+{
+    section("encoder inj watchdog trips at 1.2x PW, not 36 ms");
+    const uint32_t kNow = 1000u;
+    const uint32_t kPwUs = 5000u;                         // 5 ms
+    const uint32_t kPwTicks = (kPwUs * 125u) / 2u;        // 312500
+    const uint32_t kToutTicks = (kPwTicks * 6u) / 5u;     // 1.2× = 375000
+    const uint32_t kToutUs = sched_ticks_to_us(kToutTicks);  // 6000 us
+    const uint32_t kHardUs = 36000u;
+
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+    ecu_sched_test_all_outputs_safe();
+    ecu_sched_set_inj_pw_ticks(kPwTicks);
+    ecu_sched_test_set_tim5_cnt(kNow);
+    ecu_sched_encoder_test_set_tim2_cnt(0u);
+
+    CHECK_EQ(ecu_sched_test_get_inj_wdog_ticks(0u), 0u,
+             "pre: inj wdog timeout unset");
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 5000u, ECU_ACT_INJ_ON);
+    CHECK_EQ(ecu_sched_test_get_inj_wdog_ticks(0u), kToutTicks,
+             "1.2x PW programmed at encoder INJ_ON arm (before pin HIGH)");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 1u,
+             "INJ_ON still queued — pin not HIGH yet");
+
+    ecu_sched_encoder_test_set_tim2_cnt(5000u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) & (1u << 15u)) != 0u,
+               "INJ1 HIGH after encoder dispatch");
+
+    const uint32_t arm = kNow | 1u;  // pin_transition: TIM5_CNT | 1
+    CHECK_EQ(ecu_sched_inj_watchdog_count(), 0u, "pre: inj wdog count=0");
+
+    ecu_sched_test_set_tim5_cnt(arm + kToutTicks - 1u);
+    ecu_sched_inj_watchdog();
+    CHECK_EQ(ecu_sched_inj_watchdog_count(), 0u,
+             "silent 1 tick inside 1.2x PW");
+
+    ecu_sched_test_set_tim5_cnt(arm + kToutTicks);
+    ecu_sched_inj_watchdog();
+    char msg[160];
+    std::snprintf(msg, sizeof(msg),
+        "encoder inj wdog force-off latency %u us (1.2x %u us PW; NOT %u us hard cap)",
+        (unsigned)kToutUs, (unsigned)kPwUs, (unsigned)kHardUs);
+    CHECK_EQ(ecu_sched_inj_watchdog_count(), 1u, msg);
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) &
+                (1u << (15u + 16u))) != 0u,
+               "INJ1 forced LOW at 1.2x PW");
+    CHECK_TRUE(kToutUs < kHardUs, "1.2x timeout is well below 36 ms cap");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_overdwell_tim5_spark_1_5x(void)
+{
+    section("overdwell TIM5 SPARK force-closes at 1.5x dwell without 2ms poll");
+    const uint32_t kNow = 1000u;
+    const uint32_t kDwellUs = 3000u;
+    const uint32_t kDwellTicks = (kDwellUs * 125u) / 2u;          // 187500
+    const uint32_t kOverTicks = (kDwellTicks * 3u) / 2u;          // 1.5× = 281250
+    const uint32_t kOverUs = sched_ticks_to_us(kOverTicks);       // 4500 us
+
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+    ecu_sched_test_all_outputs_safe();
+    ecu_sched_set_dwell_ticks(kDwellTicks);
+    ecu_sched_test_set_tim5_cnt(kNow);
+    ecu_sched_encoder_test_set_tim2_cnt(0u);
+
+    // Angular SPARK is never armed — trigger/encoder loss.
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 200u, ECU_ACT_DWELL_START);
+    ecu_sched_encoder_test_set_tim2_cnt(200u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_TRUE(ecu_sched_test_get_dwell_arm_tick(0u) != 0u, "coil HIGH");
+    CHECK_EQ(ecu_sched_encoder_test_get_evt_count(), 0u,
+             "no angular SPARK queued");
+
+    uint32_t ts = 0u;
+    uint8_t ch = 0u, high = 0xffu;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u,
+             "TIM5 overdwell SPARK queued on pin HIGH");
+    CHECK_EQ(high, 0u, "overdwell is force-off");
+    CHECK_EQ(ch, ECU_CH_IGN1, "overdwell on IGN1");
+    CHECK_EQ(ts, kNow + kOverTicks, "overdwell ts = charge + 1.5x dwell");
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u, "poll has not run");
+
+    // TIM5 path-2 late window is 16 ticks — stay outside it for "just under".
+    ecu_sched_test_set_tim5_cnt(ts - 17u);
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 1u,
+             "just under 1.5x: overdwell SPARK still queued");
+    CHECK_TRUE(ecu_sched_test_get_dwell_arm_tick(0u) != 0u,
+               "just under 1.5x: coil still HIGH (no 2ms poll)");
+
+    ecu_sched_test_set_tim5_cnt(ts);
+    ecu_sched_evt_dispatch();  // poll skipped on purpose
+    char msg[160];
+    std::snprintf(msg, sizeof(msg),
+        "overdwell TIM5 SPARK force-off latency %u us (1.5x %u us dwell; poll skipped)",
+        (unsigned)kOverUs, (unsigned)kDwellUs);
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "overdwell SPARK consumed");
+    CHECK_EQ(ecu_sched_test_get_dwell_arm_tick(0u), 0u, msg);
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u,
+             "2ms poll did not fire — scheduled event closed the coil");
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(2u) &
+                (1u << (6u + 16u))) != 0u,
+               "IGN1 (PC6) LOW at 1.5x dwell");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_watchdogs_trip_with_pw_override(void)
+{
+    section("g_inj_pw_override=1 still trips dwell and inj watchdogs");
+    const uint32_t kNow = 4000u;
+    const uint32_t kDwellUs = 3000u;
+    const uint32_t kDwellTicks = (kDwellUs * 125u) / 2u;
+    const uint32_t kDwellWdog = (kDwellTicks * 7u) / 5u;  // 1.4×
+    const uint32_t kPwUs = 5000u;
+    const uint32_t kPwTicks = (kPwUs * 125u) / 2u;
+    const uint32_t kInjTout = (kPwTicks * 6u) / 5u;       // 1.2×
+    const uint32_t kDwellUsLat = sched_ticks_to_us(kDwellWdog);
+    const uint32_t kInjUsLat = sched_ticks_to_us(kInjTout);
+
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+    ecu_sched_test_all_outputs_safe();
+    g_inj_pw_override = 1u;
+    CHECK_EQ(ecu_sched_bench_pw_override_state(), 1u, "override=1");
+
+    ecu_sched_set_dwell_ticks(kDwellTicks);
+    ecu_sched_test_set_tim5_cnt(kNow);
+    ecu_sched_encoder_test_set_tim2_cnt(0u);
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 100u, ECU_ACT_DWELL_START);
+    ecu_sched_encoder_test_set_tim2_cnt(100u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_TRUE(ecu_sched_test_get_dwell_arm_tick(0u) != 0u,
+               "coil HIGH with PW override");
+
+    const uint32_t dwell_arm = kNow | 1u;
+    ecu_sched_test_set_tim5_cnt(dwell_arm + kDwellWdog);
+    ecu_sched_dwell_watchdog();
+    char dmsg[160];
+    std::snprintf(dmsg, sizeof(dmsg),
+        "dwell wdog force-off latency %u us with g_inj_pw_override=1",
+        (unsigned)kDwellUsLat);
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u, dmsg);
+
+    ecu_sched_set_inj_pw_ticks(kPwTicks);  // override=1 blocks this setter
+    // Encoder arm still reads g_inj_pw_ticks; lock only blocks main-loop writes.
+    // Re-apply via commit which honors override==1 (keeps previous PW) — so
+    // poke ticks through the encoder path by unlocking just for the PW write.
+    g_inj_pw_override = 0u;
+    ecu_sched_set_inj_pw_ticks(kPwTicks);
+    g_inj_pw_override = 1u;
+
+    const uint32_t kInjNow = 8000u;
+    ecu_sched_test_set_tim5_cnt(kInjNow);
+    ecu_sched_encoder_test_set_tim2_cnt(0u);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 300u, ECU_ACT_INJ_ON);
+    ecu_sched_encoder_test_set_tim2_cnt(300u);
+    ecu_sched_encoder_evt_dispatch();
+
+    const uint32_t inj_arm = kInjNow | 1u;
+    ecu_sched_test_set_tim5_cnt(inj_arm + kInjTout);
+    ecu_sched_inj_watchdog();
+    char imsg[160];
+    std::snprintf(imsg, sizeof(imsg),
+        "inj wdog force-off latency %u us with g_inj_pw_override=1",
+        (unsigned)kInjUsLat);
+    CHECK_EQ(ecu_sched_inj_watchdog_count(), 1u, imsg);
+
+    g_inj_pw_override = 0u;
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_dwell_started_deasserts_under_inhibit(void)
+{
+    section("dwell that started de-asserts even if spark-inhibit is later set");
+    const uint32_t kNow = 2000u;
+    const uint32_t kDwellTicks = (3000u * 125u) / 2u;
+
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+    ecu_sched_test_all_outputs_safe();
+    ecu_sched_set_dwell_ticks(kDwellTicks);
+    ecu_sched_test_set_tim5_cnt(kNow);
+    ecu_sched_encoder_test_set_tim2_cnt(0u);
+
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 100u, ECU_ACT_DWELL_START);
+    ecu_sched_encoder_test_set_tim2_cnt(100u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_TRUE(ecu_sched_test_get_dwell_arm_tick(0u) != 0u, "dwell started");
+    CHECK_TRUE(ecu_sched_test_get_evt_count() >= 1u, "overdwell SPARK queued");
+
+    // Spark later limited: inhibit must still force-close (is_safe_state SPARK).
+    ecu_sched_set_ign_inhibit_mask(0x01u);
+    CHECK_EQ(ecu_sched_test_get_dwell_arm_tick(0u), 0u,
+             "inhibit after dwell-start force-closes coil (SPARK not blocked)");
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(2u) &
+                (1u << (6u + 16u))) != 0u,
+               "IGN1 LOW after inhibit — dwell that started de-asserted");
+
+    // Encoder SPARK with inhibit already set still drives the pin LOW.
+    ems::hal::out_pins_test_reset_stubs();
+    ecu_sched_encoder_arm_channel(ECU_CH_IGN1, 400u, ECU_ACT_SPARK);
+    ecu_sched_encoder_test_set_tim2_cnt(400u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(2u) &
+                (1u << (6u + 16u))) != 0u,
+               "encoder SPARK de-assert not blocked by ign inhibit");
+
+    ecu_sched_set_ign_inhibit_mask(0u);
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_dispatch_honors_inj_inhibit(void)
+{
+    section("TIM2 dispatch: queued INJ_ON does not raise pin when inhibited");
+    ecu_sched_test_reset();
+    ems::hal::out_pins_test_reset_stubs();
+    ecu_sched_set_inj_inhibit_mask(0x0Fu);
+    ecu_sched_encoder_test_set_tim2_cnt(0u);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 100u, ECU_ACT_INJ_ON);
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt_count() >= 1u, "INJ_ON still queued");
+    ecu_sched_encoder_test_set_tim2_cnt(100u);
+    ecu_sched_encoder_evt_dispatch();
+    CHECK_TRUE((ems::hal::out_pins_test_bsrr_snapshot(0u) & (1u << 15u)) == 0u,
+               "inhibited INJ_ON did not assert PA15");
+    ecu_sched_set_inj_inhibit_mask(0u);
+    ecu_sched_test_reset();
 }
 

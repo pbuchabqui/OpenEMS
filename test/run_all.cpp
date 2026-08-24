@@ -295,6 +295,17 @@ test_map_window_skipped_slot();
     test_ecu_sched_golden_dispatch_identity();
     test_ecu_sched_dwell_watchdog_fires();
     test_ecu_sched_inj_watchdog_fires();
+    test_ecu_sched_encoder_inj_watchdog_1_2x_pw();
+    test_ecu_sched_overdwell_tim5_spark_1_5x();
+    test_ecu_sched_watchdogs_trip_with_pw_override();
+    test_ecu_sched_dwell_started_deasserts_under_inhibit();
+    test_ecu_sched_encoder_dispatch_honors_inj_inhibit();
+    test_encoder_stall_safe_state();
+    test_encoder_health_ok_false_safe_state();
+    test_encoder_reverse_omega_no_inj_ign_on();
+    test_half_sync_not_cranking_inj_inhibit();
+    test_encoder_stall_resync_needs_two_cmp();
+    test_encoder_frozen_dwell_watchdog_not_800ms();
 
     // ── VERIFICAÇÃO MATEMÁTICA ─────────────────────────────────────────────
     printf("\n=== VERIFICAÇÃO MATEMÁTICA ===");
@@ -339,6 +350,28 @@ test_map_window_skipped_slot();
     test_output_test_rpm_abort();
     test_output_test_keepalive_timeout();
     test_output_test_suspends_aux();
+    test_output_test_pw_lock_ignored_when_running();
+    test_output_test_watchdog_armed_during_pw_override();
+    test_output_test_prime_refused_when_rpm();
+    test_output_test_encoder_motion_abort();
+
+    printf("\n=== SAFETY METRICS (vs FOME) ===");
+    test_safety_metrics_encoder_quantisation();
+    test_safety_metrics_isr_lag_degrees();
+    test_safety_metrics_min_lead_counts();
+    test_safety_metrics_fome_tooth_hold();
+
+    printf("\n=== LIMP GATING (vs FOME test_limp) ===");
+    test_limp_gating_fatal();
+    test_limp_gating_rev_limit();
+    test_limp_gating_boost_cut();
+    test_limp_gating_oil_after_start();
+    test_limp_gating_lambda();
+    test_limp_gating_etb_problem();
+    test_limp_gating_flood_and_phase();
+    test_limp_gating_oil_running_timeout();
+    test_limp_gating_oil_fault_cuts_at_idle();
+    test_ecu_sched_on_encoder_stall_safe_state();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

@@ -133,10 +133,28 @@ void enc_evt_insert(uint32_t ts, uint8_t channel, uint8_t high) noexcept
 static inline void enc_evt_execute_head(void) noexcept
 {
     const EncSchedEvent& e = g_enc_evt_queue[0];
-    ems::hal::out_pin_write(e.channel, e.high);
+    uint8_t high = e.high;
+    // Never raise INJ/IGN on kick-back, fuel cut, or spark cut.
+    // OFF/SPARK (high==0) always execute — dwell that started must spark.
+    if (high != 0U) {
+        if (ecu_sched_encoder_omega_valid() != 0U &&
+            ecu_sched_encoder_omega_x65536() <= 0) {
+            high = 0U;
+        } else if (e.channel < 8U) {
+            const uint8_t inj_bit = si::k_inj_ch_to_bit[e.channel];
+            const uint8_t ign_bit = si::k_ign_ch_to_bit[e.channel];
+            if (inj_bit != 0U && (g_inj_inhibit_mask & inj_bit) != 0U) {
+                high = 0U;
+            }
+            if (ign_bit != 0U && (g_ign_inhibit_mask & ign_bit) != 0U) {
+                high = 0U;
+            }
+        }
+    }
+    ems::hal::out_pin_write(e.channel, high);
     const uint8_t idx = (e.channel < 8U) ? ems::hal::kOutChToPinIdx[e.channel] : 0xFFU;
     if (idx != 0xFFU) {
-        pin_transition(idx, e.high);  // watchdogs continuam sempre TIM5/tempo
+        pin_transition(idx, high);  // watchdogs continuam sempre TIM5/tempo
     }
     ++g_enc_dbg_execute_count;
     --g_enc_evt_count;
@@ -182,6 +200,12 @@ void arm_channel_with_lead(uint8_t ch, uint32_t target_counts,
 
     if (action == ECU_ACT_DWELL_START) {
         si::maybe_knock_on_dwell_start(ch);
+    }
+    if (action == ECU_ACT_INJ_ON) {
+        const uint8_t pin_idx = channel_pin_idx(ch);
+        if (pin_idx < 4U) {
+            g_inj_wdog_ticks[pin_idx] = si::inj_open_wdog_timeout_ticks();
+        }
     }
 
     // Piso mínimo de lead — caller passa min_lead já hoistado no rebuild

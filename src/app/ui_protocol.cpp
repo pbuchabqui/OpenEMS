@@ -263,9 +263,14 @@ void parse_byte(uint8_t b) noexcept {
             return;
         }
         if (b == static_cast<uint8_t>('P')) {
-            ecu_sched_bench_pw_lock_next_commit();
+            // PW lock: only while output_test is active and engine stopped.
+            // NAK if rpm!=0 / omega valid / not in output_test.
+            if (ecu_sched_bench_pw_lock_next_commit() == 0U) {
+                tx_push(kAckErr);
+                return;
+            }
             ecu_sched_commit_calibration(10U, 22500U, 50000U, 30U);  // eoi_lead=30° (EOI targeting, valor de bench)
-            tx_push(0x00u);
+            tx_push(kAckOk);
             return;
         }
         if (b == static_cast<uint8_t>('V')) {

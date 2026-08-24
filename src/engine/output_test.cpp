@@ -19,10 +19,17 @@ uint8_t  g_abort_reason = ems::engine::kOutputTestAbortNone;
 uint32_t g_deadline_ms = 0u;
 uint32_t g_busy_until_ms = 0u;
 uint32_t g_now_ms = 0u;
+uint32_t g_tim2_at_enter = 0u;
+
+// Ignore 1–2 counts of quadrature bounce; 4 counts ≈ 0.09° @ 16384/rev —
+// well below any real crank motion. Covers rpm-estimator lag / 800 ms stall
+// timeout where published rpm_x10 can stay 0 while TIM2 is already advancing.
+constexpr uint32_t kEncoderMotionAbortCounts = 4u;
 
 void restore_safe() noexcept
 {
     ::ecu_sched_test_all_outputs_safe();
+    ::ecu_sched_bench_pw_lock_clear();
     ems::engine::auxiliaries_force_pump(false);
     ems::engine::auxiliaries_force_fan(false);
     ems::hal::tim4_set_duty(0u, 0u);
@@ -58,6 +65,7 @@ bool output_test_enter() noexcept
     g_active = true;
     g_abort_reason = kOutputTestAbortNone;
     g_busy_until_ms = g_now_ms;
+    g_tim2_at_enter = ems::hal::tim2_encoder_count();
     refresh_keepalive();
     return true;
 }
@@ -81,6 +89,15 @@ void output_test_poll(uint32_t now_ms, uint32_t rpm_x10) noexcept
     g_now_ms = now_ms;
     if (!g_active) { return; }
     if (rpm_x10 > 0u) {
+        g_abort_reason = kOutputTestAbortRpm;
+        restore_safe();
+        return;
+    }
+    const uint32_t tim2 = ems::hal::tim2_encoder_count();
+    const int32_t d = static_cast<int32_t>(tim2 - g_tim2_at_enter);
+    const uint32_t ad = (d < 0) ? static_cast<uint32_t>(-d)
+                                : static_cast<uint32_t>(d);
+    if (ad > kEncoderMotionAbortCounts) {
         g_abort_reason = kOutputTestAbortRpm;
         restore_safe();
         return;
@@ -173,6 +190,7 @@ void output_test_test_reset() noexcept
     g_deadline_ms = 0u;
     g_busy_until_ms = 0u;
     g_now_ms = 0u;
+    g_tim2_at_enter = 0u;
 }
 #endif
 

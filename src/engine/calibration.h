@@ -149,7 +149,7 @@ extern uint8_t cmp_window_close_tooth;
 
 // Protecção de duty do injector (estilo FOME #215): acima de max_pct por
 // mais de tol (×10 ms, 0 = default 300 ms) corta injecção até o duty pedido
-// cair 5% abaixo do limite. max_pct = 0 desliga (default).
+// cair abaixo de 20%. max_pct = 0 desliga (default).
 extern uint8_t inj_duty_max_pct;
 extern uint8_t inj_duty_tol_ms10;
 

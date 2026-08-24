@@ -6,8 +6,9 @@
 // individualmente INJ1-4, IGN1-4, bomba, ventoinha, VVT×2, ETB e EWG com o
 // motor parado. Enquanto activo, os controladores de malha fechada (ETB PID,
 // EWG PID, VVT, bomba/ventoinha automáticos) ficam suspensos. O modo aborta
-// sozinho se RPM > 0 for detectado ou se o keepalive (5 s) expirar — sempre
-// restaurando o estado seguro de todas as saídas.
+// sozinho se RPM > 0 for detectado, se TIM2 avançar >4 counts (ruído 1–2
+// ignorado; cobre lag do estimador / stall 800 ms), ou se o keepalive (5 s)
+// expirar — sempre restaurando o estado seguro de todas as saídas.
 
 namespace ems::engine {
 
@@ -22,7 +23,7 @@ bool output_test_enter() noexcept;   // false se rpm_x10 != 0
 void output_test_exit() noexcept;    // restore-safe + desactiva
 bool output_test_active() noexcept;
 void output_test_keepalive() noexcept;
-// Chamar do slot de 2 ms: aborto por RPM e por timeout de keepalive.
+// Chamar do slot de 2 ms: aborto por RPM, movimento TIM2, keepalive.
 void output_test_poll(uint32_t now_ms, uint32_t rpm_x10) noexcept;
 
 // Comandos — devolvem false (=> NAK) se inactivo, args inválidos ou busy.

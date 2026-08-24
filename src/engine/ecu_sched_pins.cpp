@@ -4,7 +4,7 @@
  *
  * Não é o dispatcher de produção (isso é TIM2/CH3). Qualquer caminho que
  * mude um pino — fila TIM2, fila TIM5 ou force_output — passa por
- * pin_transition() e arma os relógios de dwell 1,4× / inj 36 ms.
+ * pin_transition() e arma os relógios de dwell 1,4× / inj 1,2× PW.
  */
 #include "engine/ecu_sched.h"
 #include "engine/ecu_sched_internal.h"
@@ -31,7 +31,8 @@ volatile uint32_t g_dwell_wdog_ticks[4] = {0U, 0U, 0U, 0U};
 volatile uint32_t g_dwell_watchdog_count = 0U;
 
 // ── Injector open watchdog (lost INJ_OFF / queue overflow backstop) ────────
-// Timeout: 1.2 × PW quando arm_channel programa; senão tecto 36 ms.
+// Timeout: 1.2 × PW programmed at INJ_ON arm; pin_transition fallback 36 ms
+// only if arm never ran (force_output / prime without queue).
 volatile uint32_t g_inj_open_tick[4]   = {0U, 0U, 0U, 0U};
 volatile uint32_t g_inj_wdog_ticks[4]  = {0U, 0U, 0U, 0U};
 volatile uint32_t g_inj_watchdog_count = 0U;
@@ -47,21 +48,33 @@ void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
         if (idx < 4U) {
             g_inj_open_tick[idx] = TIM5_CNT | 1U;
             if (g_inj_wdog_ticks[idx] == 0U) {
-                g_inj_wdog_ticks[idx] = si::kInjOpenWdogHardTicks;
+                g_inj_wdog_ticks[idx] = si::inj_open_wdog_timeout_ticks();
             }
+            // Time-domain INJ_OFF backup (FOME has none). Same shape as
+            // 1.5× SPARK overdwell — do not wait for the 2 ms poll.
+            arm_channel(si::kInjCh[idx],
+                        TIM5_CNT + g_inj_wdog_ticks[idx],
+                        ECU_ACT_INJ_OFF);
         } else if (idx >= kIgnChFirst && idx < (kIgnChFirst + 4U)) {
             const uint8_t ign_idx = (uint8_t)(idx - kIgnChFirst);
             g_dwell_arm_tick[ign_idx] = TIM5_CNT | 1U;
             g_dwell_wdog_ticks[ign_idx] = (si::g_dwell_ticks * 7U) / 5U;
+            // Time-domain SPARK backup (FOME 1.5× overdwell). Fires even if
+            // the angular SPARK is lost. Inhibit does not block SPARK.
+            arm_channel(si::kIgnCh[ign_idx],
+                        TIM5_CNT + si::overdwell_force_off_ticks(si::g_dwell_ticks),
+                        ECU_ACT_SPARK);
         }
     } else {
         ++g_pin_low_count[idx];
         if (idx < 4U) {
             g_inj_open_tick[idx] = 0U;
             g_inj_wdog_ticks[idx] = 0U;
+            drop_pending_tim5_deassert(si::kInjCh[idx]);
         } else if (idx >= kIgnChFirst && idx < (kIgnChFirst + 4U)) {
             g_dwell_arm_tick[idx - kIgnChFirst] = 0U;
             g_dwell_wdog_ticks[idx - kIgnChFirst] = 0U;
+            drop_pending_tim5_deassert(si::kIgnCh[idx - kIgnChFirst]);
         }
     }
     g_pin_last_state[idx] = high;
@@ -125,7 +138,9 @@ static void run_channel_watchdog(volatile uint32_t* arm_tick,
                                   volatile uint32_t& count,
                                   uint8_t is_ign)
 {
-    if (g_inj_pw_override != 0U) { return; }  // test mode — disable watchdog
+    // Always armed: bench PW lock / output-test pulses must not disable
+    // dwell or injector-open backstops (a locked PW must not leave a coil
+    // or injector HIGH). 1.4× poll + 1.5× TIM5 overdwell / 1.2× PW inj.
     const uint32_t now = TIM5_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
         ems::hal::CriticalSectionGuard guard;
@@ -159,6 +174,9 @@ uint32_t ecu_sched_inj_watchdog_count(void) { return g_inj_watchdog_count; }
 void ecu_sched_fire_prime_pulse(uint32_t pw_us)
 {
     if (pw_us == 0U) { return; }
+    // Not just inj inhibit: a spinning engine must never get a prime spray
+    // (rpm snapshot, plus omega so estimator lag cannot sneak a pulse).
+    if (ecu_sched_engine_is_stopped() == 0U) { return; }
     if (pw_us > 30000U) { pw_us = 30000U; }
     const uint32_t off_cnv = TIM5_CNT + ECU_SCHED_US_TO_TICKS_INTERNAL(pw_us);
     for (uint8_t i = 0U; i < 4U; ++i) { force_output(si::kInjCh[i], ECU_ACT_INJ_ON); }
@@ -171,7 +189,11 @@ void ecu_sched_test_pulse_inj(uint8_t cyl, uint32_t pw_us)
     if (cyl > 3U || pw_us == 0U) { return; }
     if (pw_us > 30000U) { pw_us = 30000U; }
     const uint8_t ch = si::kInjCh[cyl];
-    const uint32_t off_cnv = TIM5_CNT + ECU_SCHED_US_TO_TICKS_INTERNAL(pw_us);
+    const uint32_t pw_ticks = ECU_SCHED_US_TO_TICKS_INTERNAL(pw_us);
+    // pin_transition queues 1.2× g_inj_pw_ticks — match this pulse so a
+    // short leftover PW cannot clip the bench shot.
+    ecu_sched_set_inj_pw_ticks(pw_ticks);
+    const uint32_t off_cnv = TIM5_CNT + pw_ticks;
     force_output(ch, ECU_ACT_INJ_ON, 0U, 1U);
     arm_channel(ch, off_cnv, ECU_ACT_INJ_OFF);
 }
@@ -182,12 +204,16 @@ void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
     if (dwell_us == 0U) { dwell_us = 3000U; }
     if (dwell_us > 10000U) { dwell_us = 10000U; }
     const uint8_t ch = si::kIgnCh[cyl];
-    const uint32_t spark_cnv = TIM5_CNT + ECU_SCHED_US_TO_TICKS_INTERNAL(dwell_us);
+    const uint32_t dwell_ticks = ECU_SCHED_US_TO_TICKS_INTERNAL(dwell_us);
+    // pin_transition queues overdwell at 1.5× g_dwell_ticks — match the pulse
+    // so a longer bench SPARK is not cut short by the default dwell.
+    ecu_sched_set_dwell_ticks(dwell_ticks);
+    const uint32_t spark_cnv = TIM5_CNT + dwell_ticks;
     force_output(ch, ECU_ACT_DWELL_START, 0U, 1U);
     {
         ems::hal::CriticalSectionGuard guard;
         g_dwell_arm_tick[cyl]  = TIM5_CNT | 1U;
-        g_dwell_wdog_ticks[cyl] = (ECU_SCHED_US_TO_TICKS_INTERNAL(dwell_us) * 7U) / 5U;
+        g_dwell_wdog_ticks[cyl] = (dwell_ticks * 7U) / 5U;
     }
     arm_channel(ch, spark_cnv, ECU_ACT_SPARK);
 }
@@ -196,5 +222,9 @@ void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
 uint32_t ecu_sched_test_get_dwell_arm_tick(uint8_t cyl)
 {
     return (cyl < 4U) ? g_dwell_arm_tick[cyl] : 0U;
+}
+uint32_t ecu_sched_test_get_inj_wdog_ticks(uint8_t cyl)
+{
+    return (cyl < 4U) ? g_inj_wdog_ticks[cyl] : 0U;
 }
 #endif

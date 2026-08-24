@@ -22,6 +22,9 @@ void system_stm32_init(void) noexcept;
 /** Kick (reload) do IWDG — deve ser chamado a cada iteração do loop principal. */
 void iwdg_kick(void) noexcept;
 
+/** After boot inits: IWDG /32, RLR=99 → ~100 ms (boot used /256, ~10 s). */
+void iwdg_enter_runtime(void) noexcept;
+
 /** Milissegundos desde o boot (incrementado pelo SysTick_Handler). */
 uint32_t millis(void) noexcept;
 #if defined(EMS_HOST_TEST)

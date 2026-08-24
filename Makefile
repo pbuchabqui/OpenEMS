@@ -96,6 +96,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/ecu_sched_encoder_heartbeat.cpp \
              $(SRC_DIR)/engine/ecu_sched_encoder_builders.cpp \
              $(SRC_DIR)/engine/loop_2ms_fuel_ign.cpp \
+             $(SRC_DIR)/engine/limp_gating.cpp \
              $(SRC_DIR)/engine/enc_cyl_setpoints.cpp \
              $(SRC_DIR)/engine/diagnostic_manager.cpp \
              $(SRC_DIR)/engine/map_estimator.cpp \
@@ -154,7 +155,9 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_math.cpp \
                    $(TEST_DIR)/test_protocol.cpp \
                    $(TEST_DIR)/test_output.cpp \
-                   $(TEST_DIR)/test_misfire_encoder.cpp
+                   $(TEST_DIR)/test_misfire_encoder.cpp \
+                   $(TEST_DIR)/test_safety_metrics.cpp \
+                   $(TEST_DIR)/test_limp_gating.cpp
 HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(SRC_DIR)/engine/misfire_detect.cpp \
                 $(SRC_DIR)/hal/stm32h562/timer.cpp \

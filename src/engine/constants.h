@@ -127,4 +127,34 @@ inline constexpr uint32_t kMinDwellTimeMs = 1u;
 /** Maximum dwell time in milliseconds */
 inline constexpr uint32_t kMaxDwellTimeMs = 8u;
 
+// ============================================================================
+// Fault gating (limp_gating) — 0-threshold knobs stay off for benches
+// ============================================================================
+
+/** Boost cut MAP threshold, bar × 100 (≡ kPa). 0 = disabled. */
+inline constexpr uint16_t kBoostCutMapBarX100 = 0u;
+/** Resume hysteresis after boost cut (20 kPa). */
+inline constexpr uint16_t kBoostCutHystBarX100 = 20u;
+/** Min oil pressure after start, bar × 1000. Sensor range-fault skips this. */
+inline constexpr uint16_t kOilMinAfterStartBarX1000 = 1500u;
+/** After-start oil-pressure timeout. */
+inline constexpr uint32_t kOilAfterStartTimeoutMs = 5000u;
+/** Running oil-pressure timeout (sensor live, pressure below min). */
+inline constexpr uint32_t kOilRunningTimeoutMs = 500u;
+/** Overtemp protect RPM floor (×10). Oil *range-fault* cuts at any RPM>0
+ *  once cranking ends — a dead sensor must not idle. */
+inline constexpr uint32_t kOilProtectRpmX10 = 15000u;
+/** Fuel-rail range-fault RPM floor (×10). */
+inline constexpr uint32_t kFuelRailProtectRpmX10 = 5000u;
+/** ETB-problem fault rev limit (RPM × 10). Fuel cut above this. */
+inline constexpr uint32_t kEtbFaultRevLimitRpmX10 = 15000u;
+/** Injector-duty resume threshold (percent). FOME: lift until < 20%. */
+inline constexpr uint8_t kInjDutyResumePct = 20u;
+/** Lambda protection timeout (lean at load). */
+inline constexpr uint16_t kLambdaProtectTimeoutMs = 2000u;
+/** Allowed lambda above target before the timeout starts (λ × 1000). */
+inline constexpr uint16_t kLambdaProtectDevX1000 = 200u;
+inline constexpr uint32_t kLambdaProtectMinRpmX10 = 20000u;
+inline constexpr uint16_t kLambdaProtectMinLoadBarX100 = 50u;
+
 } // namespace ems::engine

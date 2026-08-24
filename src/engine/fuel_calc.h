@@ -139,8 +139,8 @@ void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept;
 
 // Protecção de duty do injector (FOME #215): chamar 1×/tick de 2 ms com o
 // PW final comandado. duty% (ciclo 720°) acima de inj_duty_max_pct por mais
-// de inj_duty_tol_ms10×10 ms → corte; retoma quando o duty pedido cai 5%
-// abaixo do limite. inj_duty_max_pct = 0 → inerte.
+// de inj_duty_tol_ms10×10 ms → corte; retoma só abaixo de 20% (FOME).
+// inj_duty_max_pct = 0 → inerte.
 bool     fuel_inj_duty_update(uint32_t pw_us, uint32_t rpm_x10,
                               uint16_t dt_ms) noexcept;
 bool     fuel_inj_duty_cut_active() noexcept;

@@ -1,6 +1,7 @@
 #include "engine/enc_cyl_setpoints.h"
 
 #include "engine/calibration.h"
+#include "engine/ecu_sched.h"
 #include "engine/ecu_sched_internal.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
@@ -194,12 +195,15 @@ CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl, bool commit_fuel) noexcept
         out.advance_deg = static_cast<uint32_t>(advance);
         out.dwell_ticks = prep.dwell_ticks;
         out.inj_pw_ticks = inj_pw_us_to_scheduler_ticks(pw_us);
-        // 'P' / lock de bancada: o sequencial não pode ignorar o PW
-        // comitado (finalize ia pela VE e voltava a 0). Publicado em
-        // EncFuelIgnPrep pelo loop de 2ms (achado #7 da revisão
-        // 2fa1513..bc30ca6, 2026-08-19) — antes lia si::g_inj_pw_ticks
-        // diretamente, bypassando o contrato do prep.
-        if (prep.fuel_cut == 0U && prep.bench_pw_locked != 0U) {
+        // 'P' / lock de bancada: só com motor parado. Em marcha o
+        // sequencial ignora o lock — senão um 'P' esquecido pulveriza
+        // PW fixo a RPM real. Omega válido cobre lag do rpm_x10 no prep.
+        const bool engine_stopped =
+            (prep.rpm_x10 == 0U) &&
+            (ecu_sched_encoder_omega_valid() == 0U ||
+             ecu_sched_encoder_omega_x65536() == 0);
+        if (prep.fuel_cut == 0U && prep.bench_pw_locked != 0U &&
+            engine_stopped) {
             out.inj_pw_ticks = prep.bench_pw_lock_ticks;
         }
         out.eoi_lead_deg = prep.eoi_lead_deg;

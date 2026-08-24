@@ -142,6 +142,20 @@ uint32_t ecu_sched_encoder_seq_arm_stall_count(void) noexcept
     return g_seq_arm_stall_count;
 }
 
+void ecu_sched_encoder_heartbeat_drop_cmp_ref(void) noexcept
+{
+    g_cmp_has_prev = 0U;
+    g_cmp_reject_streak = 0U;
+    g_enc_last_builder_was_sequential = 0U;
+    si::encoder::clear_cyl_arm_latches();
+}
+
+static bool encoder_omega_forward(void) noexcept
+{
+    return (ecu_sched_encoder_omega_valid() != 0U) &&
+           (ecu_sched_encoder_omega_x65536() > 0);
+}
+
 // ω (×65536, counts TIM2 por tick TIM5) → rpm_x10, para o CkpSnapshot
 // partilhado. Mesma unidade/escala que ckp_instant_rpm_x10() já usa
 // (rpm×10), derivação equivalente a rpm_x10_from_period_ticks() (ckp.cpp)
@@ -219,8 +233,13 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
             ++g_cmp_reject_count;
             g_cmp_reject_streak = r.reject_streak;
             if (r.streak_resync) {
-                g_cmp_has_prev = 0U;       // descarta referência, re-arma no próximo flanco
-                g_cmp_confirm_count = 0U;  // exige 2 flancos consistentes de novo antes de re-ancorar
+                g_cmp_has_prev = 0U;
+                g_cmp_confirm_count = 0U;
+                // Same as staleness: keep sequential on a rejected cam
+                // (jumped chain) is spark-on-exhaust. Drop the 720° half.
+                if (ecu_sched_encoder_phase_valid() != 0U) {
+                    ecu_sched_encoder_phase_invalidate();
+                }
             }
         }
     }
@@ -275,16 +294,27 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
         }
     }
 
+    const bool health_bad = !ems::drv::encoder_sync::health_ok();
+    const bool reverse = (ecu_sched_encoder_omega_valid() != 0U) &&
+                         (ecu_sched_encoder_omega_x65536() <= 0);
+
     // Refresh de spans só aqui (1×/volta), nunca no sub-tick: ω de 256
     // counts é ruidoso e puxava o dwell para trás até o watchdog cortar.
-    if (ecu_sched_encoder_phase_valid() != 0U) {
+    if (!health_bad && encoder_omega_forward() &&
+        ecu_sched_encoder_phase_valid() != 0U) {
         si::encoder::refresh_pending_omega_spans(tim2_now);
     }
 
     // Sem calibração de fase, phase_valid() é sempre 0 — presync. Com fase
     // válida: armamento sequencial tardio (janela ≤60°) via try_arm; o
     // sub-tick também chama try_arm a cada CC4IF.
-    if (ecu_sched_encoder_phase_valid() == 0U) {
+    // health_ok=false / reverse: do not arm; close any HIGH pins (kick-back
+    // / wrong encoder = hydrolock or spark-in-open-valve).
+    if (health_bad) {
+        ecu_sched_on_encoder_stall();
+    } else if (reverse) {
+        ecu_sched_drive_outputs_safe();
+    } else if (ecu_sched_encoder_phase_valid() == 0U) {
         // Queda sequencial→presync (CMP desligado / stall / uncalibrated):
         // um INJ_ON/DWELL já despachado cuja contraparte ficou na fila
         // seria purgada por recompute_presync() e o pino ficava HIGH até
@@ -407,7 +437,12 @@ void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
     ecu_sched_encoder_omega_sample(tim2_now, tim5_now);
     ems::engine::misfire_encoder_on_sample(tim2_now, tim5_now);
 
-    if (ecu_sched_encoder_phase_valid() != 0U) {
+    if (!ems::drv::encoder_sync::health_ok()) {
+        // Heavy tick does the full stall; skip arm here (64×/rev).
+    } else if ((ecu_sched_encoder_omega_valid() != 0U) &&
+               (ecu_sched_encoder_omega_x65536() <= 0)) {
+        ecu_sched_drive_outputs_safe();
+    } else if (ecu_sched_encoder_phase_valid() != 0U) {
         si::g_knock_sequential = 1U;
         si::encoder::try_arm_sequential_due(tim2_now);
     }

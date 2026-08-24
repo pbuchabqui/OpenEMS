@@ -10,6 +10,7 @@ extern "C" {
 #endif
 void system_stm32_init(void) noexcept;
 void iwdg_kick(void) noexcept;
+void iwdg_enter_runtime(void) noexcept;
 uint32_t millis(void) noexcept;
 uint32_t micros(void) noexcept;
 // Host-test only: control mock wall clock for duration-gated logic (X-τ learn, etc.).

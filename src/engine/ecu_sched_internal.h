@@ -64,6 +64,8 @@ inline constexpr uint32_t kOmegaRefreshRelX1000 = 20U;
     (static_cast<uint32_t>((ns) / ECU_SCHED_NS_PER_TICK))
 inline constexpr uint32_t kInjOpenWdogHardTicks =
     ECU_SCHED_US_TO_TICKS_INTERNAL(36000U);
+inline constexpr uint32_t kInjOpenWdogFloorTicks =
+    ECU_SCHED_US_TO_TICKS_INTERNAL(2000U);
 
 // Channel order cyl 0..3 — values match ECU_CH_* (legacy TIM map).
 inline constexpr uint8_t kInjCh[4] = {
@@ -101,6 +103,22 @@ extern volatile uint8_t  g_mspark_count;
 extern volatile uint32_t g_mspark_inter_dwell_ticks;
 extern volatile uint32_t g_mspark_atdc_limit_deg;
 extern volatile uint32_t g_pw_duty_clamp_count;
+
+// 1.2 × current PW, floor 2 ms, cap 36 ms — TIM5 arm_channel and encoder
+// INJ_ON arm share this so a lost INJ_OFF cannot sit at the 36 ms hard cap.
+inline uint32_t inj_open_wdog_timeout_ticks(void) noexcept
+{
+    uint32_t t = (g_inj_pw_ticks * 6U) / 5U;
+    if (t < kInjOpenWdogFloorTicks) { t = kInjOpenWdogFloorTicks; }
+    if (t > kInjOpenWdogHardTicks) { t = kInjOpenWdogHardTicks; }
+    return t;
+}
+
+// FOME overdwell: time-domain SPARK at charge + 1.5 × dwell.
+inline uint32_t overdwell_force_off_ticks(uint32_t dwell_ticks) noexcept
+{
+    return (dwell_ticks * 3U) / 2U;
+}
 
 // Alvos angulares (0..359, domínio 360°) do par wasted-spark A/B e do fim de
 // injeção presync — geometria só (ecu_sched_encoder_builders.cpp despacha na
@@ -189,6 +207,9 @@ void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U,
 // Fila TIM5 — definição em ecu_sched.cpp. Prime/teste e watchdogs chamam.
 void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action);
 void purge_events_for_cyl_mask(uint8_t mask, uint8_t is_ign);
+// Drop pending TIM5 de-asserts (SPARK/INJ_OFF) for one channel. Used when
+// the pin already went LOW (angular SPARK beat the 1.5× overdwell backup).
+void drop_pending_tim5_deassert(uint8_t ch);
 
 // Relógios de pino (ecu_sched_pins.cpp). arm_channel programa o timeout;
 // pin_transition arma o relógio no HIGH.
@@ -203,7 +224,9 @@ extern volatile uint32_t g_inj_open_tick[4];
 extern volatile uint32_t g_inj_wdog_ticks[4];
 extern volatile uint32_t g_inj_watchdog_count;
 
-// Inhibit + bench PW lock — escritos em ecu_sched.cpp, lidos por pins/watchdogs.
+// Inhibit + bench PW lock — escritos em ecu_sched.cpp.
+// Watchdogs NÃO leem g_inj_pw_override (sempre armados, lock de bancada
+// inclusive).
 extern volatile uint8_t  g_inj_inhibit_mask;
 extern volatile uint8_t  g_ign_inhibit_mask;
 extern volatile uint8_t  g_inj_pw_override;

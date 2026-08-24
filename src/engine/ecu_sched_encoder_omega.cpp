@@ -95,15 +95,18 @@ void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexce
 int32_t ecu_sched_encoder_omega_x65536(void) noexcept { return g_omega_x65536; }
 uint8_t ecu_sched_encoder_omega_valid(void) noexcept { return g_omega_valid; }
 
-#if defined(EMS_HOST_TEST)
-// Chamado por ecu_sched_test_reset() (ecu_sched.cpp) — evita estado do
-// estimador vazar entre casos de teste no mesmo binário.
-void ecu_sched_encoder_omega_test_reset(void) noexcept
+void ecu_sched_encoder_omega_reset(void) noexcept
 {
     g_omega_prev_tim2 = 0U;
     g_omega_prev_tim5 = 0U;
     g_omega_have_prev = 0U;
     g_omega_x65536 = 0;
     g_omega_valid = 0U;
+}
+
+#if defined(EMS_HOST_TEST)
+void ecu_sched_encoder_omega_test_reset(void) noexcept
+{
+    ecu_sched_encoder_omega_reset();
 }
 #endif

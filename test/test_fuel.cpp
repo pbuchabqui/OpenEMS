@@ -209,10 +209,10 @@ void test_fuel_inj_duty_protection(void) {
     CHECK_FALSE(cut_early, "98 ms acima: ainda tolerado");
     CHECK_TRUE(fuel_inj_duty_update(18000u, 60000u, 2u), "corta após 100 ms acima");
     CHECK_TRUE(fuel_inj_duty_cut_active(), "cut_active latched");
-    // Ainda acima do resume (85−5=80%): mantém o corte.
-    CHECK_TRUE(fuel_inj_duty_update(16400u, 60000u, 2u), "82% > 80%: mantém corte");
-    // Cai abaixo do resume: retoma.
-    CHECK_FALSE(fuel_inj_duty_update(15000u, 60000u, 2u), "75% ≤ 80%: retoma");
+    // FOME: resume only below 20%. 82% and 25% stay cut; 19% lifts.
+    CHECK_TRUE(fuel_inj_duty_update(16400u, 60000u, 2u), "82% > 20%: mantém corte");
+    CHECK_TRUE(fuel_inj_duty_update(5000u, 60000u, 2u), "25% > 20%: mantém corte");
+    CHECK_FALSE(fuel_inj_duty_update(3800u, 60000u, 2u), "19% < 20%: retoma");
     // Transiente breve (< tolerância) nunca corta.
     fuel_inj_duty_reset();
     for (int i = 0; i < 20; ++i) { fuel_inj_duty_update(18000u, 60000u, 2u); }

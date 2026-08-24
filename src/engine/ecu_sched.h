@@ -88,14 +88,14 @@ uint8_t ecu_sched_presync_inj_auto(void);
 void ecu_sched_reset_diagnostic_counters(void);
 
 // Dwell watchdog — chamar do main loop (slot 2ms); compara TIM5_CNT.
-// Se uma bobina ficou activa por > 1.4 × dwell_ticks sem evento SPARK,
-// força a saída LOW imediatamente para proteger o módulo de ignição.
+// Primary: pin HIGH also queues a TIM5 SPARK at +1.5× dwell (FOME overdwell).
+// Poll at 1.4× is the second backstop if that event is lost.
 void ecu_sched_dwell_watchdog(void);
 uint32_t ecu_sched_dwell_watchdog_count(void);
 
-// Injector open watchdog — same 2 ms slot. If an injector pin stays HIGH
-// beyond 1.2× current PW (hard cap 36 ms; covers prime ≤30 ms), force OFF
-// and purge pending events for that cylinder (lost INJ_OFF backstop).
+// Injector open watchdog — same 2 ms slot. Timeout is 1.2× current PW
+// (floor 2 ms, hard cap 36 ms; covers prime ≤30 ms), programmed at INJ_ON
+// arm (TIM5 and encoder). Force OFF + purge if INJ_OFF is lost.
 void ecu_sched_inj_watchdog(void);
 uint32_t ecu_sched_inj_watchdog_count(void);
 
@@ -126,9 +126,15 @@ uint8_t ecu_sched_get_ign_inhibit_mask(void);
 uint32_t ecu_sched_pw_duty_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
 
+// 1 = rpm_x10==0 and encoder omega invalid or zero. Bench PW lock / prime gate.
+uint8_t ecu_sched_engine_is_stopped(void);
+
 // Bench protocol: next commit_calibration applies PW then locks (override=1).
+// Only arms while output_test is active AND the engine is stopped; refused
+// otherwise (no state change). Auto-clears if the engine is already spinning.
 // Prefer this over poking g_inj_pw_override via raw symbol linkage.
-void ecu_sched_bench_pw_lock_next_commit(void);
+uint8_t ecu_sched_bench_pw_lock_next_commit(void);  // 1=armed, 0=refused
+void    ecu_sched_bench_pw_lock_clear(void);
 uint8_t ecu_sched_bench_pw_override_state(void);
 uint32_t ecu_sched_get_inj_pw_ticks(void);
 
@@ -180,6 +186,15 @@ void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us);
 // Descarta eventos TIM5 pendentes e leva todos os INJ/IGN ao estado seguro.
 void ecu_sched_test_all_outputs_safe(void);
 
+// Purge TIM2+TIM5 queues and force-close all INJ/IGN (FOME trigger-loss safe).
+void ecu_sched_drive_outputs_safe(void);
+
+// Stall / MT6835 health_ok=false: phase_invalidate + omega reset + CMP ref
+// drop + drive_outputs_safe. Idempotent. Call from the 2 ms slot (and from
+// heartbeat when health_ok is already false). Does not wait for the 800 ms
+// stall *declaration* — pins close immediately.
+void ecu_sched_on_encoder_stall(void);
+
 void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 
 // ── MT6835/TIM2 encoder — domínio de ângulo (EMS_MT6835_ENCODER) ──────────
@@ -188,6 +203,11 @@ void ecu_sched_evt_dispatch(void);  // called from TIM5 ISR on CC3IF
 void ecu_sched_encoder_omega_sample(uint32_t tim2_now, uint32_t tim5_now) noexcept;
 int32_t ecu_sched_encoder_omega_x65536(void) noexcept;  // counts/tick ×65536
 uint8_t ecu_sched_encoder_omega_valid(void) noexcept;
+void ecu_sched_encoder_omega_reset(void) noexcept;  // stall / health_ok false
+
+// Drop CMP has_prev after stall so the next edge only arms the reference
+// (confirm-count already zeroed by phase_invalidate).
+void ecu_sched_encoder_heartbeat_drop_cmp_ref(void) noexcept;
 
 // Calibração de engine_config.h::encoder_tdc1_origin_deg: dado um valor cru
 // de TIM2->CNT lido com o cilindro 1 no PMS de compressão, devolve o valor
@@ -264,8 +284,7 @@ uint8_t ecu_sched_presync_inj_mode(void);
 
 #if defined(EMS_HOST_TEST)
 void ecu_sched_test_reset(void);
-// Zera o estimador de ω do encoder — chamado por ecu_sched_test_reset()
-// (ecu_sched_encoder_omega.cpp), evita estado a vazar entre testes.
+// Alias de ecu_sched_encoder_omega_reset() — chamado por ecu_sched_test_reset().
 void ecu_sched_encoder_omega_test_reset(void) noexcept;
 // Idem para o rastreador de fase.
 void ecu_sched_encoder_phase_test_reset(void) noexcept;
@@ -335,6 +354,7 @@ uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 uint32_t ecu_sched_test_get_late_event_count(void);
 uint32_t ecu_sched_test_get_pw_duty_clamp_count(void);
 uint32_t ecu_sched_test_get_dwell_arm_tick(uint8_t cyl);  // g_dwell_arm_tick[cyl] — fix bug 4 (handoff force-close)
+uint32_t ecu_sched_test_get_inj_wdog_ticks(uint8_t cyl);  // timeout programmed at INJ_ON arm
 void     ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept;  // alias legado → TIM5
 void     ecu_sched_test_reset_ccr(void) noexcept;   // zero TIM5 CCR3 mock + queue
 void     ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg);
