@@ -460,6 +460,16 @@ def api_scope():
             **meta}
 
 
+@app.post("/api/protect_bypass")
+def api_protect_bypass(body: dict):
+    on = bool(body.get("on", False))
+    try:
+        applied = worker.submit(lambda l: l.set_protect_bypass(on))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"protect_bypass: {e}"}, status_code=502)
+    return {"ok": True, "bypass": applied}
+
+
 @app.post("/api/bench_mode")
 def api_bench_mode(body: dict):
     on = bool(body.get("on", False))

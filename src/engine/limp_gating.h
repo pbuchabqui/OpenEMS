@@ -72,4 +72,10 @@ bool limp_gating_half_fuel_lockout() noexcept;
 // DFCO is decided later in the fuel path; still a single writer of the bit.
 void limp_gating_or_fuel_reason(uint16_t bit) noexcept;
 
+// Bench UI: skip sensor-based cuts (oil/MAP/lambda/overtemp/rail/diag/ETB
+// limp-rpm). Never skips rev-limit, flood, fatal, or pin watchdogs.
+// RAM only — lost on reset.
+void limp_gating_set_sensor_bypass(uint8_t on) noexcept;
+uint8_t limp_gating_sensor_bypass(void) noexcept;
+
 }  // namespace ems::engine

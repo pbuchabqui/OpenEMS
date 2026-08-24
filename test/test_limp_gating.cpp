@@ -262,6 +262,36 @@ void test_limp_gating_oil_fault_cuts_at_idle(void)
     CHECK_TRUE(r.allow_injection, "cranking: oil_fault does not block start");
 }
 
+void test_limp_gating_sensor_bypass(void)
+{
+    section("limp_gating: sensor bypass skips oil/MAP/lambda, keeps rev-limit");
+    ecu_sched_test_reset();
+    limp_gating_reset();
+    ems::engine::rev_limit_rpm_x10 = 25000u;
+    ems::engine::rev_limit_soft_window_x10 = 2000u;
+
+    LimpGatingInputs in = base_in();
+    in.map_fault = true;
+    in.oil_fault = true;
+    in.overtemp_crit = true;
+    in.now_ms = 20000u;
+    in.rpm_x10 = 20000u;
+    auto r = limp_gating_update(in);
+    CHECK_FALSE(r.allow_injection, "sensors faulting: fuel cut");
+
+    ems::engine::limp_gating_set_sensor_bypass(1u);
+    r = limp_gating_update(in);
+    CHECK_TRUE(r.allow_injection, "bypass: MAP/oil/overtemp ignored");
+    CHECK_TRUE(r.allow_ignition, "bypass: spark stays");
+    CHECK_EQ(ems::engine::limp_gating_sensor_bypass(), 1u, "bypass flag on");
+
+    in.rpm_x10 = 30000u;
+    r = limp_gating_update(in);
+    CHECK_FALSE(r.allow_injection, "bypass still honors hard rev-limit");
+
+    ems::engine::limp_gating_set_sensor_bypass(0u);
+}
+
 void test_limp_gating_oil_running_timeout(void)
 {
     section("limp_gating: running oil below min for 500 ms");

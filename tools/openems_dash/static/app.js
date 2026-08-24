@@ -531,6 +531,10 @@ async function pollEncDebug() {
     ]);
     if (dbg && !dbg.error) lastDbg = dbg;
     if (pins && !pins.error) lastPins = pins;
+    if (lastDbg && typeof lastDbg.protect_bypass === "boolean" &&
+        lastDbg.protect_bypass !== protectBypass) {
+      setProtectBtn(lastDbg.protect_bypass);
+    }
     if (lastRT) renderEncDebug(lastRT, lastDbg, lastPins);
   } catch (_) { /* ECU busy / dash down */ }
 }
@@ -2113,7 +2117,19 @@ async function bindParamGroup(div, page) {
 // Força CLT=90°C / IAT=25°C (sem SENSOR_FAULT), λ=1.000 simulado no CAN stack,
 // e relaxa timeouts CKP/CMP no firmware (HIL com estimulador). O FW expõe
 // STATUS_BENCH_MODE (bit 15) no realtime — benchOn segue a ECU, não o host.
+// 'B' também liga/desliga o bypass de cortes por sensor (igual a PROTECT).
 let benchOn = false;
+let protectBypass = false;
+function setProtectBtn(bypass) {
+  protectBypass = !!bypass;
+  const b = $("#protectBtn");
+  if (b) {
+    b.textContent = protectBypass ? "PROTECT OFF" : "PROTECT ON";
+    b.classList.toggle("off", protectBypass);
+  }
+  const banner = $("#protectBanner");
+  if (banner) banner.hidden = !protectBypass;
+}
 function setBenchBtn(on) {
   benchOn = on;
   const b = $("#benchBtn");
@@ -2125,15 +2141,27 @@ function setBenchBtn(on) {
   // anterior.
   const lv = $("#benchLambdaVal");
   if (lv) lv.value = "1.000";
+  // Firmware 'B' also sets sensor-protect bypass.
+  setProtectBtn(on);
 }
+$("#protectBtn").onclick = async () => {
+  const next = !protectBypass;
+  try {
+    const r = await api("/api/protect_bypass", "POST", { on: next });
+    setProtectBtn(!!r.bypass);
+    toast(next
+      ? "PROTECT OFF · óleo/MAP/λ/overtemp ignorados · watchdogs ligados"
+      : "PROTECT ON · cortes por sensor activos");
+  } catch (e) { toast(e.message, true); }
+};
 $("#benchBtn").onclick = async () => {
   const next = !benchOn;
   try {
     await api("/api/bench_mode", "POST", { on: next });
     setBenchBtn(next);
     toast(next
-      ? "Bench ON · CLT=90°C IAT=25°C λ=1.000"
-      : "Bench OFF · sensores reais");
+      ? "Bench ON · CLT/IAT/λ simulados · cortes por sensor OFF"
+      : "Bench OFF · sensores reais · protecções ON");
   } catch (e) { toast(e.message, true); }
 };
 $("#benchLambdaBtn").onclick = async () => {

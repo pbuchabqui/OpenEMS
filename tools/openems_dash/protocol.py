@@ -285,6 +285,15 @@ class OpenEMSLink:
             raise IOError(f"write page {page} off {off}: ACK {ack.hex()}")
 
     # ── bench-mode ('B': força CLT=90°C/IAT=25°C p/ HIL sem sondas) ──────
+    def set_protect_bypass(self, on: bool) -> bool:
+        """Comando 'I': desliga cortes por sensor (óleo/MAP/λ/overtemp/rail).
+        Watchdogs, stall, rev-limit e flood ficam ligados. RAM, perde no reset.
+        """
+        ack = self._txn(b"I" + (b"\x01" if on else b"\x00"), 2)
+        if ack[0] != 0x00:
+            raise IOError(f"protect_bypass: ACK {ack.hex()}")
+        return ack[1] != 0
+
     def bench_mode(self, on: bool) -> None:
         ack = self._txn(b"B" + bytes([1 if on else 0]), 1)
         if ack != b"\x00":
@@ -435,6 +444,7 @@ class OpenEMSLink:
         d["squirts"] = pack & 0xFF
         d["builder"] = (pack >> 8) & 0xFF
         d["adc_float_suspect"] = bool((pack >> 16) & 0x1)
+        d["protect_bypass"] = bool((pack >> 17) & 0x1)
         for n in range(4):
             packed = d.pop(f"map_w{n}")
             d[f"map_w{n}_bar_x1000"] = packed >> 16

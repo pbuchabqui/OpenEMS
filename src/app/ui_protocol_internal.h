@@ -41,6 +41,7 @@ enum class ParseState : uint8_t {
     // 'L': λ simulado de bancada, valor variável (independente do on/off de
     // 'B') — ver docs/closed_loop_fuel.md, comandos.
     BENCH_LAMBDA_ARG = 10u,
+    PROTECT_ARG = 11u,
 };
 
 constexpr uint16_t kEnvMaxChunk   = 800u;

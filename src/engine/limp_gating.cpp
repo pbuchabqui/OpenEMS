@@ -57,6 +57,7 @@ bool g_allow_ign      = true;
 bool g_fuel_protect   = false;
 bool g_half_lockout   = false;
 bool g_rev_active     = false;
+bool g_sensor_bypass  = false;
 
 void set_fault_rev_limit_x10(uint32_t limit_x10) noexcept {
     if (limit_x10 < g_fault_rev_x10) {
@@ -76,6 +77,20 @@ bool limp_gating_allow_injection() noexcept { return g_allow_inj; }
 bool limp_gating_allow_ignition() noexcept { return g_allow_ign; }
 bool limp_gating_fuel_protect() noexcept { return g_fuel_protect; }
 bool limp_gating_half_fuel_lockout() noexcept { return g_half_lockout; }
+
+void limp_gating_set_sensor_bypass(uint8_t on) noexcept {
+    g_sensor_bypass = (on != 0);
+    if (g_sensor_bypass) {
+        g_lambda_cut = false;
+        g_lambda_seen = false;
+        g_oil_low_seen = false;
+        g_had_oil_after_start = true;  // don't trip the 5 s window on release
+    }
+}
+
+uint8_t limp_gating_sensor_bypass(void) noexcept {
+    return g_sensor_bypass ? 1u : 0u;
+}
 
 void limp_gating_or_fuel_reason(uint16_t bit) noexcept {
     g_fuel_cut_reasons = static_cast<uint16_t>(g_fuel_cut_reasons | bit);
@@ -102,6 +117,7 @@ void limp_gating_reset() noexcept {
     g_fuel_protect = false;
     g_half_lockout = false;
     g_rev_active = false;
+    g_sensor_bypass = false;
     g_rev_limit_active = false;
     boost_cut_map_bar_x100 = kBoostCutMapBarX100;
     oil_min_after_start_bar_x1000 = kOilMinAfterStartBarX1000;
@@ -133,7 +149,8 @@ void limp_gating_report_etb_problem() noexcept {
 }
 
 LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
-    if (in.etb_fault) {
+    const bool bypass = g_sensor_bypass;
+    if (in.etb_fault && !bypass) {
         limp_gating_report_etb_problem();
     }
 
@@ -169,7 +186,9 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
         }
         const uint16_t min_oil = oil_min_after_start_bar_x1000;
         const uint32_t elapsed = in.now_ms - g_run_start_ms;
-        if (in.oil_fault) {
+        if (bypass) {
+            // UI sensor-bypass: do not accumulate oil-cut timers.
+        } else if (in.oil_fault) {
             // Dead sensor: same 5 s window as "never saw pressure".
             if (elapsed > kOilAfterStartTimeoutMs) {
                 oil_after_start_cut = true;
@@ -185,7 +204,7 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
             }
         }
         // Running protect: live sensor below min for kOilRunningTimeoutMs.
-        if (min_oil > 0u && !in.oil_fault &&
+        if (!bypass && min_oil > 0u && !in.oil_fault &&
             (in.rpm_x10 > kOilProtectRpmX10)) {
             if (in.oil_press_bar_x1000 >= min_oil) {
                 g_oil_low_seen = false;
@@ -221,7 +240,7 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
         !in.full_sync && !in.half_sync && !in.cranking && (in.rpm_x10 > 0u);
 
     const uint16_t lam_timeout = lambda_protect_timeout_ms;
-    if (lam_timeout == 0u) {
+    if (bypass || lam_timeout == 0u) {
         g_lambda_cut = false;
         g_lambda_seen = false;
     } else {
@@ -254,13 +273,13 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     }
 
     const bool etb_rev_cut =
-        g_etb_problem && (in.rpm_x10 > g_fault_rev_x10);
+        !bypass && g_etb_problem && (in.rpm_x10 > g_fault_rev_x10);
     const bool fatal_rev_cut = g_fatal && (in.rpm_x10 > g_fault_rev_x10);
 
     const bool fuel_protect =
-        in.limp_rpm_cut || in.map_fault || fuel_rail_cut ||
-        overtemp_cut || in.diag_critical || g_fatal || oil_after_start_cut ||
-        engine_phase_cut || fatal_rev_cut;
+        g_fatal || fatal_rev_cut || engine_phase_cut ||
+        (!bypass && (in.limp_rpm_cut || in.map_fault || fuel_rail_cut ||
+                     overtemp_cut || in.diag_critical || oil_after_start_cut));
     // HALF_SYNC is TIM2 360° absolute without CMP — wasted spark + semi-seq
     // fuel are the intended presync path, not "unknown crank". Lock fuel
     // only on flood/protect, or when there is no sync at all.
@@ -269,32 +288,33 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
         no_sync_running;
 
     const bool inj_cut =
-        fuel_protect || rev_cut || half_lockout || inj_duty_hold ||
-        in.flood_clear || boost_cut || g_lambda_cut || etb_rev_cut;
+        fuel_protect || rev_cut || half_lockout || in.flood_clear ||
+        etb_rev_cut ||
+        (!bypass && (inj_duty_hold || boost_cut || g_lambda_cut));
     const bool ign_cut =
-        in.limp_rpm_cut || overtemp_cut ||
-        in.diag_critical || g_fatal || engine_phase_cut;
+        g_fatal || engine_phase_cut ||
+        (!bypass && (in.limp_rpm_cut || overtemp_cut || in.diag_critical));
 
     uint16_t fr = 0u;
     uint16_t sr = 0u;
     if (g_fatal)            { fr |= kFuelCutFatal;     sr |= kSparkCutFatal; }
     if (rev_cut)            { fr |= kFuelCutRevLimit; }
-    if (in.limp_rpm_cut)    { fr |= kFuelCutLimpRpm;   sr |= kSparkCutLimpRpm; }
-    if (in.map_fault)       { fr |= kFuelCutMapFault; }
-    if (oil_after_start_cut) {
+    if (!bypass && in.limp_rpm_cut)    { fr |= kFuelCutLimpRpm;   sr |= kSparkCutLimpRpm; }
+    if (!bypass && in.map_fault)       { fr |= kFuelCutMapFault; }
+    if (!bypass && oil_after_start_cut) {
         fr |= kFuelCutOilPress;
     }
-    if (fuel_rail_cut)      { fr |= kFuelCutFuelRail; }
-    if (overtemp_cut)       { fr |= kFuelCutOvertemp;  sr |= kSparkCutOvertemp; }
-    if (in.diag_critical)   { fr |= kFuelCutDiagCrit;  sr |= kSparkCutDiagCrit; }
+    if (!bypass && fuel_rail_cut)      { fr |= kFuelCutFuelRail; }
+    if (!bypass && overtemp_cut)       { fr |= kFuelCutOvertemp;  sr |= kSparkCutOvertemp; }
+    if (!bypass && in.diag_critical)   { fr |= kFuelCutDiagCrit;  sr |= kSparkCutDiagCrit; }
     if (half_lockout || engine_phase_cut) {
         fr |= kFuelCutNoSync;
         if (engine_phase_cut) { sr |= kSparkCutNoSync; }
     }
     if (in.flood_clear)     { fr |= kFuelCutFlood; }
-    if (inj_duty_hold)      { fr |= kFuelCutInjDuty; }
-    if (boost_cut)          { fr |= kFuelCutBoost; }
-    if (g_lambda_cut)       { fr |= kFuelCutLambda; }
+    if (!bypass && inj_duty_hold)      { fr |= kFuelCutInjDuty; }
+    if (!bypass && boost_cut)          { fr |= kFuelCutBoost; }
+    if (!bypass && g_lambda_cut)       { fr |= kFuelCutLambda; }
     if (etb_rev_cut)        { fr |= kFuelCutEtbFault; }
 
     const uint8_t skip = spark_skip_mask();
@@ -306,7 +326,7 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     const uint8_t ign_mask = static_cast<uint8_t>(
         (ign_cut ? 0x0Fu : 0u) | skip);
 
-    g_allow_etb = !g_fatal && !g_etb_problem;
+    g_allow_etb = !g_fatal && (bypass || !g_etb_problem);
     g_allow_inj = !inj_cut;
     g_allow_ign = !ign_cut;
     g_fuel_protect = fuel_protect;

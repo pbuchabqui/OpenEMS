@@ -36,6 +36,7 @@
 #include "hal/flash.h"
 #include "app/ui_protocol.h"
 #include "app/status_bits.h"
+#include "engine/limp_gating.h"
 #include "hal/crc32.h"
 
 namespace ems::engine {
@@ -93,6 +94,18 @@ void test_legacy_protocol_regression(void) {
     ui_feed(&d, 1u);
     n = ui_drain(buf, sizeof(buf));
     CHECK_TRUE(n == 1u && (buf[0] & 0x01u) != 0u, "'d' → 1 byte, página 1 dirty");
+
+    const uint8_t prot_on[2] = {'I', 0x01u};
+    ui_feed(prot_on, 2u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_TRUE(n == 2u && buf[0] == 0x00u && buf[1] == 0x01u,
+               "'I' 1 → ACK + bypass=1");
+    CHECK_EQ(ems::engine::limp_gating_sensor_bypass(), 1u, "bypass armed");
+    const uint8_t prot_off[2] = {'I', 0x00u};
+    ui_feed(prot_off, 2u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_TRUE(n == 2u && buf[0] == 0x00u && buf[1] == 0x00u,
+               "'I' 0 → ACK + bypass=0");
 }
 
 void test_ts_envelope_basic(void) {
