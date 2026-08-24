@@ -148,10 +148,9 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     g_rev_active = rev_cut;
     g_rev_limit_active = rev_cut;
 
-    // Dead/unplugged oil sensor: do not idle. Cranking still allowed
-    // (pressure is not up yet); the cut hits as soon as cranking ends.
-    const bool oil_range_cut =
-        in.oil_fault && !in.cranking && (in.rpm_x10 > 0u);
+    // Oil range-fault is fuel-only (FOME). Spark stays so wasted-spark on a
+    // bench without an oil sensor still pulses. Instant idle kill made the
+    // encoder stim go silent (floating OIL ADC → fault → ign mask 0x0F).
     const bool fuel_rail_cut =
         in.fuel_press_fault && (in.rpm_x10 > kFuelRailProtectRpmX10);
     const bool overtemp_cut =
@@ -169,8 +168,13 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
             g_seen_running = true;
         }
         const uint16_t min_oil = oil_min_after_start_bar_x1000;
-        if (min_oil > 0u && !in.oil_fault) {
-            const uint32_t elapsed = in.now_ms - g_run_start_ms;
+        const uint32_t elapsed = in.now_ms - g_run_start_ms;
+        if (in.oil_fault) {
+            // Dead sensor: same 5 s window as "never saw pressure".
+            if (elapsed > kOilAfterStartTimeoutMs) {
+                oil_after_start_cut = true;
+            }
+        } else if (min_oil > 0u) {
             if (elapsed <= kOilAfterStartTimeoutMs) {
                 if (in.oil_press_bar_x1000 >= min_oil) {
                     g_had_oil_after_start = true;
@@ -254,20 +258,21 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     const bool fatal_rev_cut = g_fatal && (in.rpm_x10 > g_fault_rev_x10);
 
     const bool fuel_protect =
-        in.limp_rpm_cut || in.map_fault || oil_range_cut || fuel_rail_cut ||
+        in.limp_rpm_cut || in.map_fault || fuel_rail_cut ||
         overtemp_cut || in.diag_critical || g_fatal || oil_after_start_cut ||
         engine_phase_cut || fatal_rev_cut;
-    // HALF running lockout: batch only while cranking. Leaving crank in
-    // HALF_SYNC cuts fuel (FOME EnginePhase) until full cam sync.
+    // HALF_SYNC is TIM2 360° absolute without CMP — wasted spark + semi-seq
+    // fuel are the intended presync path, not "unknown crank". Lock fuel
+    // only on flood/protect, or when there is no sync at all.
     const bool half_lockout =
-        (in.half_sync && (!in.cranking || in.flood_clear || fuel_protect)) ||
+        (in.half_sync && (in.flood_clear || fuel_protect)) ||
         no_sync_running;
 
     const bool inj_cut =
         fuel_protect || rev_cut || half_lockout || inj_duty_hold ||
         in.flood_clear || boost_cut || g_lambda_cut || etb_rev_cut;
     const bool ign_cut =
-        in.limp_rpm_cut || oil_range_cut || overtemp_cut ||
+        in.limp_rpm_cut || overtemp_cut ||
         in.diag_critical || g_fatal || engine_phase_cut;
 
     uint16_t fr = 0u;
@@ -276,9 +281,8 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     if (rev_cut)            { fr |= kFuelCutRevLimit; }
     if (in.limp_rpm_cut)    { fr |= kFuelCutLimpRpm;   sr |= kSparkCutLimpRpm; }
     if (in.map_fault)       { fr |= kFuelCutMapFault; }
-    if (oil_range_cut || oil_after_start_cut) {
+    if (oil_after_start_cut) {
         fr |= kFuelCutOilPress;
-        if (oil_range_cut) { sr |= kSparkCutOilPress; }
     }
     if (fuel_rail_cut)      { fr |= kFuelCutFuelRail; }
     if (overtemp_cut)       { fr |= kFuelCutOvertemp;  sr |= kSparkCutOvertemp; }

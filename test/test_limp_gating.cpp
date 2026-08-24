@@ -231,19 +231,25 @@ void test_limp_gating_flood_and_phase(void)
 
 void test_limp_gating_oil_fault_cuts_at_idle(void)
 {
-    section("limp_gating: oil_fault cuts fuel at idle, not only above 1500 rpm");
+    section("limp_gating: oil_fault is fuel-only after 5 s running, never spark");
     ecu_sched_test_reset();
     limp_gating_reset();
 
     LimpGatingInputs in = base_in();
     in.oil_fault = true;
     in.cranking = false;
-    in.rpm_x10 = 8000u;  // 800 rpm idle
+    in.rpm_x10 = 8000u;
+    in.now_ms = 1000u;
     auto r = limp_gating_update(in);
-    CHECK_FALSE(r.allow_injection, "oil_fault at 800 rpm: fuel cut");
-    CHECK_FALSE(r.allow_ignition, "oil_fault at 800 rpm: spark cut");
+    CHECK_TRUE(r.allow_injection, "oil_fault inside 5 s: inj still on");
+    CHECK_TRUE(r.allow_ignition, "oil_fault never cuts spark");
+
+    in.now_ms = 7000u;
+    r = limp_gating_update(in);
+    CHECK_FALSE(r.allow_injection, "oil_fault after 5 s running: fuel cut");
+    CHECK_TRUE(r.allow_ignition, "spark stays (wasted-spark bench)");
     CHECK_TRUE((ems::engine::g_fuel_cut_reasons & ems::engine::kFuelCutOilPress) != 0u,
-               "kFuelCutOilPress on dead sensor at idle");
+               "kFuelCutOilPress after 5 s dead sensor");
 
     in.rpm_x10 = 0u;
     r = limp_gating_update(in);
@@ -251,6 +257,7 @@ void test_limp_gating_oil_fault_cuts_at_idle(void)
 
     in.rpm_x10 = 8000u;
     in.cranking = true;
+    in.now_ms = 20000u;
     r = limp_gating_update(in);
     CHECK_TRUE(r.allow_injection, "cranking: oil_fault does not block start");
 }

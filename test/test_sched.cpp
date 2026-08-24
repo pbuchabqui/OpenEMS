@@ -3066,10 +3066,8 @@ void test_half_sync_not_cranking_inj_inhibit(void)
     snap.rpm_x10 = 8000u;
     loop_2ms_fuel_ign(100u, snap, s);
     CHECK_FALSE(ems::engine::is_cranking(), "left crank in HALF_SYNC");
-    CHECK_EQ(ecu_sched_get_inj_inhibit_mask(), 0x0Fu,
-             "HALF_SYNC after crank: all inj inhibited");
-    CHECK_TRUE((ems::engine::g_fuel_cut_reasons & ems::engine::kFuelCutNoSync) != 0u,
-               "kFuelCutNoSync latched on leave-crank HALF");
+    CHECK_EQ(ecu_sched_get_inj_inhibit_mask(), 0u,
+             "HALF after crank: semi-seq fuel allowed (TIM2 360° is known)");
 
     ems::engine::quick_crank_reset();
     ecu_sched_test_reset();

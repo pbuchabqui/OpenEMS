@@ -145,9 +145,9 @@ void loop_2ms_fuel_ign(uint32_t now,
         !ems::engine::DiagnosticManager::is_system_ready();
     g_limp_active = map_fault || clt_fault || oil_fault || overtemp_warn;
     // Fuel angular policy (cuts themselves live in limp_gating):
-    //   (1) FULL_SYNC → running fuel (VE / ASE / semi-seq / sequential)
-    //   (2) HALF_SYNC + is_cranking → batch only (simultaneous, crank PW)
-    //   (3) else (exit crank, flood, protect, anomaly/no-sync) → inj cut
+    //   (1) FULL_SYNC → running fuel (VE / ASE / sequential)
+    //   (2) HALF_SYNC + cranking → batch; HALF + running → semi-seq
+    //   (3) flood / protect / LOSS_OF_SYNC → inj cut
     const bool limp_rpm_cut = g_limp_active &&
         (snap.rpm_x10 > kLimpRpmLimit_x10);
     const CachedFuelCorrections& fuel_corr = fuel_corrections_for(sensors);
@@ -255,6 +255,8 @@ void loop_2ms_fuel_ign(uint32_t now,
     // HALF batch: cranking only, no flood/protect. Auto presync → SIMULTANEOUS.
     const bool allow_half_crank_batch =
         half_sync && qc.cranking && !flood_clear && !fuel_protect_cut;
+    const bool allow_half_running =
+        half_sync && !qc.cranking && !flood_clear && !fuel_protect_cut;
     // HALF_SYNC não é "posição incerta" — é TIM2 absoluto, sem fase
     // CMP. O auto-select por cranking no tooth hook nunca corre aqui;
     // o modo tem de ser mantido neste slot (achado 2026-08-15).
@@ -266,8 +268,9 @@ void loop_2ms_fuel_ign(uint32_t now,
         g_rev_limit_active || fuel_protect_cut || half_fuel_lockout ||
         ems::engine::fuel_inj_duty_cut_active();
 
-    // (1) FULL_SYNC: running fuel path (VE / trims / AE / X-τ when not crank-ASE).
-    if (full_sync && !fuel_protect_cut) {
+    // (1) FULL_SYNC or HALF running: VE / trims / AE. HALF is 360° TIM2
+    // without CMP — semi-seq, not a guessed 720° half.
+    if ((full_sync || allow_half_running) && !fuel_protect_cut) {
         const ems::engine::Table2dLookup fuel_lookup =
             ems::engine::table3d_prepare_lookup(ems::engine::kRpmAxisX10,
                                                 ems::engine::kLoadAxisBarX100,
@@ -613,7 +616,7 @@ void loop_2ms_fuel_ign(uint32_t now,
     // completo do branch (1); zeradas aqui tal como o branch (3) já
     // as omite do commit legado, não é uma redução de segurança
     // nova).
-    if (!(full_sync && !fuel_protect_cut)) {
+    if (!((full_sync || allow_half_running) && !fuel_protect_cut)) {
         const int16_t base_advance_deg =
             ems::engine::get_advance(snap.rpm_x10, map_bar_x100);
         ems::engine::EncFuelIgnPrep prep = ems::engine::enc_fuel_ign_prep_read();
