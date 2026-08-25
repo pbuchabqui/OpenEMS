@@ -248,23 +248,6 @@ button.primary:hover { background: rgba(240,160,48,0.1); }
   background: rgba(240,160,48,0.12);
   font-weight: 700;
 }
-#protectBtn.off {
-  color: var(--err);
-  border-color: var(--err);
-  background: rgba(240,67,67,0.14);
-  font-weight: 700;
-}
-#protectBanner {
-  flex-shrink: 0;
-  padding: 4px 12px;
-  background: rgba(240,67,67,0.18);
-  color: #ffb4b4;
-  font-size: 11px;
-  letter-spacing: 0.4px;
-  font-weight: 700;
-  border-bottom: 1px solid rgba(240,67,67,0.35);
-}
-
 /* ═══════════════════════════════════════════════════════════════════════
    MAIN + STATUS BAR
    ═══════════════════════════════════════════════════════════════════════ */
@@ -1146,6 +1129,81 @@ button.cap {
 .ot-fire { min-width: 60px; }
 .ot-stop { color: var(--err) !important; border-color: var(--err) !important; }
 .ot-slider { width: 140px; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   PROTECT
+   ═══════════════════════════════════════════════════════════════════════ */
+.pr-wrap { max-width: 720px; padding: 4px 0 16px; }
+.pr-wrap h4 {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin: 18px 0 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.pr-hint { font-size: 11px; color: var(--muted); margin: 0 0 12px; line-height: 1.4; }
+.pr-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(26,30,40,0.6);
+}
+.pr-row .pr-name { flex: 1; min-width: 0; }
+.pr-row .pr-cuts { color: var(--muted); font-size: 10px; letter-spacing: 0.3px; }
+.pr-row.locked { opacity: 0.55; }
+.pr-pill {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  color: var(--muted);
+}
+.pr-pill.cut {
+  color: var(--err);
+  border-color: rgba(240,67,67,0.45);
+  background: rgba(240,67,67,0.12);
+}
+.pr-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.pr-switch input { opacity: 0; width: 0; height: 0; }
+.pr-switch span {
+  position: absolute;
+  inset: 0;
+  background: var(--panel-2, #1a1e28);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.pr-switch span::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 2px;
+  top: 2px;
+  background: var(--muted);
+  border-radius: 50%;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+.pr-switch input:checked + span {
+  border-color: var(--err);
+  background: rgba(240,67,67,0.18);
+}
+.pr-switch input:checked + span::after {
+  transform: translateX(16px);
+  background: var(--err);
+}
+.pr-switch input:disabled + span { cursor: default; opacity: 0.7; }
 
 /* ═══════════════════════════════════════════════════════════════════════
    SCOPE

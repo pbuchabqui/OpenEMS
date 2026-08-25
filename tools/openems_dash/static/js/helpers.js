@@ -88,14 +88,16 @@
   }
 
   /**
-   * Scale a step by bilinear weight; never rounds a non-zero delta to 0
-   * (so low-weight nodes still move on step-1 tables).
+   * Scale a step by bilinear interpolation weight, with a carried remainder
+   * so integer tables (VE step=1) still honour fractional weights over
+   * repeated +/-. Symmetric rounding: 0.5 → 1, −0.5 → −1.
+   * @returns {{ n: number, rem: number }} add `n` to the cell; keep `rem`.
    */
-  function weightedStep(delta, weight) {
+  function weightedStep(delta, weight, remainder) {
     const w = weight == null ? 1 : weight;
-    const raw = delta * w;
-    if (raw === 0) return 0;
-    return Math.sign(raw) * Math.max(1, Math.round(Math.abs(raw)));
+    const acc = (remainder || 0) + delta * w;
+    const n = acc < 0 ? -Math.round(-acc) : Math.round(acc);
+    return { n: n, rem: acc - n };
   }
 
   /** Primary gauge formatters used by the status bar. */
@@ -107,6 +109,9 @@
         return (v / 1000).toFixed(2);
       case "pw_ms":
         return Number(v).toFixed(2);
+      case "map_kpa":
+      case "map_fused_kpa":
+        return String(Math.round(Number(v)));
       case "dc_pct":
         return Number(v).toFixed(1);
       default:

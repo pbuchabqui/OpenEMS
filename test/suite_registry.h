@@ -279,5 +279,6 @@ void test_limp_gating_etb_problem(void);
 void test_limp_gating_flood_and_phase(void);
 void test_limp_gating_oil_running_timeout(void);
 void test_limp_gating_sensor_bypass(void);
+void test_limp_gating_protect_mask_oil_only(void);
 void test_limp_gating_oil_fault_cuts_at_idle(void);
 void test_ecu_sched_on_encoder_stall_safe_state(void);

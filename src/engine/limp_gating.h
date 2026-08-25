@@ -72,10 +72,27 @@ bool limp_gating_half_fuel_lockout() noexcept;
 // DFCO is decided later in the fuel path; still a single writer of the bit.
 void limp_gating_or_fuel_reason(uint16_t bit) noexcept;
 
-// Bench UI: skip sensor-based cuts (oil/MAP/lambda/overtemp/rail/diag/ETB
-// limp-rpm). Never skips rev-limit, flood, fatal, or pin watchdogs.
-// RAM only — lost on reset.
+// Per-cut disable mask (RAM, lost on reset). Bit=1 → that cut is ignored.
+// Never covers rev-limit, flood, fatal, stall, watchdogs, or no-sync/phase.
+inline constexpr uint16_t kProtectDisOil      = 1u << 0;
+inline constexpr uint16_t kProtectDisMap      = 1u << 1;
+inline constexpr uint16_t kProtectDisRail     = 1u << 2;
+inline constexpr uint16_t kProtectDisOvertemp = 1u << 3;
+inline constexpr uint16_t kProtectDisDiag     = 1u << 4;
+inline constexpr uint16_t kProtectDisLambda   = 1u << 5;
+inline constexpr uint16_t kProtectDisEtbLimp  = 1u << 6;
+inline constexpr uint16_t kProtectDisLimpRpm  = 1u << 7;
+inline constexpr uint16_t kProtectDisBoost    = 1u << 8;
+inline constexpr uint16_t kProtectDisInjDuty  = 1u << 9;
+inline constexpr uint16_t kProtectDisSensorGroup = 0x00FFu;  // bits 0–7
+inline constexpr uint16_t kProtectDisWritable    = 0x03FFu;  // bits 0–9
+
+// Master PROTECT/BENCH: OR/AND the sensor group. Does not touch bits 8–9.
 void limp_gating_set_sensor_bypass(uint8_t on) noexcept;
+// 1 iff every sensor-group bit is set (PROTECT OFF).
 uint8_t limp_gating_sensor_bypass(void) noexcept;
+
+void limp_gating_set_protect_disable(uint16_t mask) noexcept;
+uint16_t limp_gating_protect_disable(void) noexcept;
 
 }  // namespace ems::engine

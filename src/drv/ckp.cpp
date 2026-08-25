@@ -70,6 +70,24 @@ volatile uint8_t  g_scope_ckp_idx = 0u;
 volatile uint32_t g_scope_cmp_ts[8] = {};
 volatile uint8_t  g_scope_cmp_idx = 0u;
 
+void ckp_scope_push_ckp_deg720(uint16_t deg720) noexcept
+{
+    g_scope_ckp_ts[g_scope_ckp_idx] = static_cast<uint32_t>(deg720 % 720u);
+    g_scope_ckp_idx = static_cast<uint8_t>((g_scope_ckp_idx + 1u) & 63u);
+}
+
+void ckp_scope_push_cmp_deg720(uint16_t deg720) noexcept
+{
+    g_scope_cmp_ts[g_scope_cmp_idx] = static_cast<uint32_t>(deg720 % 720u);
+    g_scope_cmp_idx = static_cast<uint8_t>((g_scope_cmp_idx + 1u) % 8u);
+}
+
+void ckp_scope_clear_cmp(void) noexcept
+{
+    for (uint8_t i = 0u; i < 8u; ++i) { g_scope_cmp_ts[i] = 0u; }
+    g_scope_cmp_idx = 0u;
+}
+
 CkpSnapshot ckp_snapshot() noexcept
 {
     CkpSnapshot out;

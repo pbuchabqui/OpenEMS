@@ -371,6 +371,7 @@ test_map_window_skipped_slot();
     test_limp_gating_flood_and_phase();
     test_limp_gating_oil_running_timeout();
     test_limp_gating_sensor_bypass();
+    test_limp_gating_protect_mask_oil_only();
     test_limp_gating_oil_fault_cuts_at_idle();
     test_ecu_sched_on_encoder_stall_safe_state();
 

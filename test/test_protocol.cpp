@@ -106,6 +106,27 @@ void test_legacy_protocol_regression(void) {
     n = ui_drain(buf, sizeof(buf));
     CHECK_TRUE(n == 2u && buf[0] == 0x00u && buf[1] == 0x00u,
                "'I' 0 → ACK + bypass=0");
+
+    // 'j' u16 LE: oil bit only; reserved bits stripped.
+    const uint8_t j_oil[3] = {'j', 0x01u, 0x00u};
+    ui_feed(j_oil, 3u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_TRUE(n == 3u && buf[0] == 0x00u && buf[1] == 0x01u && buf[2] == 0x00u,
+               "'j' oil → ACK + mask 0x0001");
+    CHECK_EQ(ems::engine::limp_gating_protect_disable(),
+             ems::engine::kProtectDisOil, "mask oil only");
+    CHECK_EQ(ems::engine::limp_gating_sensor_bypass(), 0u,
+             "partial mask is not full sensor bypass");
+
+    const uint8_t j_hi[3] = {'j', 0xFFu, 0xFFu};
+    ui_feed(j_hi, 3u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_TRUE(n == 3u && buf[0] == 0x00u && buf[1] == 0xFFu && buf[2] == 0x03u,
+               "'j' 0xFFFF clamped to writable 0x03FF");
+    CHECK_EQ(ems::engine::limp_gating_protect_disable(),
+             ems::engine::kProtectDisWritable, "writable bits only");
+    CHECK_EQ(ems::engine::limp_gating_sensor_bypass(), 1u,
+             "full writable includes sensor group");
 }
 
 void test_ts_envelope_basic(void) {

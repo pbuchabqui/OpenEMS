@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenEMS · Calibration</title>
 <link rel="stylesheet" href="uplot.min.css">
-<link rel="stylesheet" href="style.css?v=20260820protect">
+<link rel="stylesheet" href="style.css?v=20260825nobanner">
 </head>
 <body>
 
@@ -50,6 +50,9 @@
         <button class="tab" data-tab="params" title="Engine config &amp; corrections">
           <span class="tab-icon">≡</span><span class="tab-label">Params</span>
         </button>
+        <button class="tab" data-tab="protect" title="Cortes limp: ligar/desligar individualmente">
+          <span class="tab-icon">🛡</span><span class="tab-label">Protect</span>
+        </button>
         <button class="tab" data-tab="output-test" title="Output tests (engine stopped)">
           <span class="tab-icon">⚙</span><span class="tab-label">Outputs</span>
         </button>
@@ -65,7 +68,6 @@
 
     <div id="sb-bottom">
       <div class="sb-actions">
-        <button id="protectBtn" type="button" title="Sensor cuts: oil/MAP/lambda/overtemp. Watchdogs and rev-limit stay on.">PROTECT ON</button>
         <button id="benchBtn" type="button" title="Bench-mode: CLT/IAT/λ simulated + sensor cuts off (HIL)">BENCH</button>
         <span class="bench-lambda-set" title="Bench λ variável (comando 'L') — para exercitar a resposta do STFT sob um degrau, requer BENCH ligado">
           <input id="benchLambdaVal" type="number" step="0.001" min="0.700" max="1.275" value="1.000">
@@ -81,7 +83,6 @@
   <!-- ── Main column ─────────────────────────────────────────────────── -->
   <div id="main-wrap">
 
-    <div id="protectBanner" hidden>PROTECT OFF · cortes por sensor desligados (óleo/MAP/λ/overtemp) · watchdogs e rev-limit activos</div>
     <header id="statusbar">
       <div id="gauges" class="gauges" aria-label="Primary gauges"></div>
     </header>
@@ -95,7 +96,7 @@
         </div>
         <div id="scopeWrap">
           <div id="scopeHeader">
-            <span id="scopeTitle">CKP / CMP SCOPE</span>
+            <span id="scopeTitle">ENCODER / CMP SCOPE</span>
             <button id="scopeFreezeBtn" type="button">⏸ FREEZE</button>
           </div>
           <canvas id="scopeCanvas" height="155"></canvas>
@@ -111,6 +112,10 @@
 
       <section id="tab-params" class="pane">
         <div id="paramsRoot"></div>
+      </section>
+
+      <section id="tab-protect" class="pane">
+        <div id="protectRoot"></div>
       </section>
 
       <section id="tab-boost" class="pane">
@@ -144,7 +149,7 @@
 <footer id="toast" aria-live="polite"></footer>
 
 <script src="uplot.min.js"></script>
-<script src="js/helpers.js?v=20260718aa"></script>
-<script src="app.js?v=20260820protect"></script>
+<script src="js/helpers.js?v=20260825mapfused"></script>
+<script src="app.js?v=20260825cmpinfo"></script>
 </body>
 </html>

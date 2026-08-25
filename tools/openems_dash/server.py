@@ -440,7 +440,7 @@ def api_output_test_set(body: dict):
 
 @app.get("/api/scope")
 def api_scope():
-    """Osciloscópio CKP/CMP: bordas em ms relativos à borda CKP mais recente."""
+    """Osciloscópio: encoder 720° (ângulos 0–719) ou legado 60-2 (ms)."""
     try:
         s = worker.submit(lambda l: l.read_scope())
     except Exception as e:  # noqa: BLE001
@@ -448,16 +448,72 @@ def api_scope():
     ckp, cmp = s["ckp_ts"], s["cmp_ts"]
     meta = {"cmp_ref_tooth": s["cmp_ref_tooth"], "crank_deg": s["crank_deg"],
             "phase_a": s["phase_a"], "sync_state": s["sync_state"]}
+    # Encoder: ring ≤719. TIM5 ticks de 60-2 são >> 1000 mesmo a 1 ms.
+    samples = ckp + cmp
+    encoder = (s["cmp_ref_tooth"] == 255) or (
+        bool(samples) and max(samples) < 720)
+    if encoder:
+        ckp_deg = [int(t) % 720 for t in ckp]
+        # 0 no ring CMP = slot vazio, não TDC.
+        cmp_deg = [int(t) % 720 for t in cmp if t != 0]
+        if not ckp or max(ckp) == 0:
+            ckp_deg = []
+        return {"mode": "encoder", "ckp_deg": ckp_deg, "cmp_deg": cmp_deg,
+                "ckp_ms": [], "cmp_ms": [], **meta}
     if not ckp:
-        return {"ckp_ms": [], "cmp_ms": [], **meta}
+        return {"mode": "ckp60", "ckp_ms": [], "cmp_ms": [], **meta}
     ref = ckp[-1]
-    # ticks 62.5 MHz → ms, relativo à borda mais recente (negativo = passado).
-    # Subtração circular u32 para sobreviver ao wrap do TIM5.
     def rel_ms(t):
         return -(((ref - t) & 0xFFFFFFFF) / 62500.0)
-    return {"ckp_ms": [round(rel_ms(t), 3) for t in ckp],
+    return {"mode": "ckp60",
+            "ckp_ms": [round(rel_ms(t), 3) for t in ckp],
             "cmp_ms": [round(rel_ms(t), 3) for t in cmp],
             **meta}
+
+
+def _protect_payload(mask: int) -> dict:
+    m = int(mask) & proto.OpenEMSLink.PROTECT_WRITABLE
+    sens = m & proto.OpenEMSLink.PROTECT_SENSOR_GROUP
+    return {
+        "ok": True,
+        "mask": m,
+        "flags": proto.OpenEMSLink.protect_flags_from_mask(m),
+        "bypass": sens == proto.OpenEMSLink.PROTECT_SENSOR_GROUP,
+        "mix": sens not in (0, proto.OpenEMSLink.PROTECT_SENSOR_GROUP),
+        "bits": [
+            {"id": n, "bit": b, "label": lab, "cuts": cuts, "off": bool(m & b)}
+            for n, b, lab, cuts in proto.OpenEMSLink.PROTECT_FLAGS
+        ],
+    }
+
+
+@app.get("/api/protect")
+def api_protect_get():
+    try:
+        dbg = worker.submit(lambda l: l.read_debug())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"protect: {e}"}, status_code=502)
+    return _protect_payload(int(dbg.get("protect_disable_mask", 0)))
+
+
+@app.post("/api/protect")
+def api_protect_set(body: dict):
+    if "mask" in body:
+        mask = int(body.get("mask", 0))
+    elif "flags" in body and isinstance(body.get("flags"), dict):
+        mask = 0
+        flags = body["flags"]
+        for name, bit, *_ in proto.OpenEMSLink.PROTECT_FLAGS:
+            if flags.get(name):
+                mask |= bit
+    else:
+        return JSONResponse({"error": "protect: esperado mask ou flags"},
+                            status_code=400)
+    try:
+        applied = worker.submit(lambda l: l.set_protect_mask(mask))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"protect: {e}"}, status_code=502)
+    return _protect_payload(applied)
 
 
 @app.post("/api/protect_bypass")

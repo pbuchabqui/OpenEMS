@@ -188,13 +188,17 @@ document.addEventListener("keydown", e => {
   else return;
   e.preventDefault();
   pushUndo(st);
+  if (!st.stepRem) st.stepRem = new Map();
   selCells.forEach(key => {
     const [r, c] = key.split(",").map(Number);
     // Peso bilinear (trace auto-select) escala o delta — célula dominante
     // move-se mais depressa que as vizinhas de influência menor.
+    // Resto fraccionário: VE step=1 não pode arredondar 0.2→1 em todas.
     const w = selWeights.get(key) ?? 1.0;
-    const weighted = H.weightedStep(delta, w);
-    st.values[r][c] = H.clampCell(selPage, st.values[r][c] + weighted);
+    const { n, rem } = H.weightedStep(delta, w, st.stepRem.get(key) || 0);
+    st.stepRem.set(key, rem);
+    if (n === 0) return;
+    st.values[r][c] = H.clampCell(selPage, st.values[r][c] + n);
     st.modified.add(key);
   });
   // Update visible cells — recalcula min/max da tabela para a cor do
@@ -253,8 +257,12 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
   $$("#sb-nav .tab").forEach(x => x.classList.toggle("active", x === b));
   $$(".pane").forEach(p => p.classList.toggle("active", p.id === "tab-" + b.dataset.tab));
   const pane = $("#tab-" + b.dataset.tab);
-  if (pane.classList.contains("grid-pane") && !pane.dataset.loaded) loadGrid(pane);
+  if (pane.classList.contains("grid-pane")) {
+    if (!pane.dataset.loaded) loadGrid(pane);
+    else highlightLiveCell();
+  }
   if (b.dataset.tab === "params"    && !$("#paramsRoot").dataset.loaded)   loadParams();
+  if (b.dataset.tab === "protect"   && !$("#protectRoot").dataset.loaded)  loadProtect();
   if (b.dataset.tab === "pedal-map" && !$("#pedalMapRoot").dataset.loaded) loadPedalMap();
   if (b.dataset.tab === "boost"     && !$("#boostRoot").dataset.loaded)    loadBoostMap();
   if (b.dataset.tab === "ltft-accum" && !$("#ltftAccumRoot").dataset.loaded) loadLtftAccum();
@@ -267,8 +275,8 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
 // Statusbar: 10 primários (largura toda — chips vivem no rodapé). Resto só em Telemetry.
 const GAUGES = [
   ["rpm",                 "RPM",      v => H.formatGauge("rpm", v)],
-  ["map_kpa",             "MAP sens", v => H.formatGauge("map_kpa", v),
-   "MAP do ADC (pino). Combustível usa o fundido."],
+  ["map_fused_kpa",       "MAP",      v => H.formatGauge("map_fused_kpa", v),
+   "MAP fundido (sensor+modelo) — o que VE/Spark/λ usam."],
   ["tps_pct",             "ETB %",    v => H.formatGauge("tps_pct", v),
    "Lâmina ETB, não o comando TPS/APP do stim."],
   ["ve",                  "VE %",     v => H.formatGauge("ve", v)],
@@ -281,6 +289,8 @@ const GAUGES = [
   ["iat_c",               "IAT °C",   v => H.formatGauge("iat_c", v)],
 ];
 const GAUGES_EXTRA = [
+  ["map_kpa",     "MAP ADC", v => H.formatGauge("map_kpa", v),
+   "MAP do pino ADC, antes da fusão."],
   ["stft_pct",    "STFT %", v => H.formatGauge("stft_pct", v)],
   ["ltft_pct",    "LTFT %", v => H.formatGauge("ltft_pct", v)],
   ["ethanol_pct", "E%",     v => H.formatGauge("ethanol_pct", v)],
@@ -363,7 +373,8 @@ const WINDOW_S = 60, MAX_PTS = 60 * 35;
 const CHART_SERIES = [
   // [key, cor, label, on por default]
   ["rpm",          "#e8a020", "RPM",    true],
-  ["map_kpa",      "#4ea1ff", "MAP",    true],
+  ["map_fused_kpa","#4ea1ff", "MAP",    true],
+  ["map_kpa",      "#7dd3fc", "MAP ADC", false],
   ["tps_pct",      "#22c55e", "TPS",    true],
   ["lambda_x1000", "#ef4444", "λ",      false],
   ["stft_pct",     "#a78bfa", "STFT %", false],
@@ -531,10 +542,14 @@ async function pollEncDebug() {
     ]);
     if (dbg && !dbg.error) lastDbg = dbg;
     if (pins && !pins.error) lastPins = pins;
-    if (lastDbg && typeof lastDbg.protect_bypass === "boolean" &&
-        lastDbg.protect_bypass !== protectBypass) {
-      setProtectBtn(lastDbg.protect_bypass);
+    if (lastDbg && typeof lastDbg.protect_disable_mask === "number") {
+      if (lastDbg.protect_disable_mask !== protectMask)
+        setProtectUi(lastDbg.protect_disable_mask);
+    } else if (lastDbg && typeof lastDbg.protect_bypass === "boolean" &&
+               lastDbg.protect_bypass !== protectBypass) {
+      setProtectUi(lastDbg.protect_bypass ? PROTECT_SENSOR : 0);
     }
+    refreshProtectCuts();
     if (lastRT) renderEncDebug(lastRT, lastDbg, lastPins);
   } catch (_) { /* ECU busy / dash down */ }
 }
@@ -558,7 +573,11 @@ function connectWS() {
     const conn = d.connected;
     setConnUI(conn, d.error || (conn ? "ECU linked" : "sem ECU"));
     if (conn && d.rpm !== undefined) {
-      RT = d; pushTelemetry(d); highlightLiveCell();
+      RT = d;
+      // Trace first: uPlot setData on a hidden telemetry pane must not
+      // skip the VE/Spark/Lambda overlay.
+      highlightLiveCell();
+      try { pushTelemetry(d); } catch (_) { /* chart/gauge paint */ }
       $$(".live-raw").forEach(el => el.textContent = `live: ${d[el.dataset.src]}`);
     }
   };
@@ -890,31 +909,56 @@ async function loadGrid(pane) {
    pela posição real. Destacamos os 4 (dominante mais forte). */
 const TRAIL_MS = 10000;
 function highlightLiveCell() {
-  if (!RT || !INFO) return;
+  if (!RT || !INFO || !H || !INFO.axes) return;
   const pane = $(".grid-pane.active");
   if (!pane) return;
   const page = +pane.dataset.page;
   const st = gridState[page];
-  const cv = pane.querySelector("canvas.trail");
-  if (!st || !cv) return;
-  // Modo manual: trace completamente desligado para este pane — não toca
-  // em .sel/canvas nem compete com a selecção/edição em curso.
-  if (st.mode !== "trace") return;
+  if (!st || st.mode !== "trace" || !st.values) return;
 
-  const lx = H.axisLookup(INFO.axes.rpm, RT.rpm);
-  const ly = H.axisLookup(INFO.axes.map_kpa, RT.map_kpa);
+  const wrap = $(".grid-wrap", pane);
+  const tbl = wrap && $("table.tune", wrap);
+  const cv = wrap && $("canvas.trail", wrap);
+  if (!wrap || !tbl) return;
 
-  // posição real interpolada em pixels: centro do nó idx + frac até o nó idx+1
-  const center = (sel) => {
-    const td = pane.querySelector(sel);
-    return td ? { x: td.offsetLeft + td.offsetWidth / 2,
-                  y: td.offsetTop + td.offsetHeight / 2 } : null;
+  // VE/Spark/λ lookup uses fused MAP (loop_2ms), not the raw ADC pin.
+  // Bench with a floating MAP pin sits at ~15 kPa — tracing that pins
+  // the cursor in the corner while the engine is interpolating at fused load.
+  const rpm = Number(RT.rpm) || 0;
+  const map = (typeof RT.map_fused_kpa === "number" && RT.map_fused_kpa > 0)
+    ? RT.map_fused_kpa : (Number(RT.map_kpa) || 0);
+  const lx = H.axisLookup(INFO.axes.rpm, rpm);
+  const ly = H.axisLookup(INFO.axes.map_kpa, map);
+
+  const lastR = INFO.axes.map_kpa.length - 1;
+  const lastC = INFO.axes.rpm.length - 1;
+  const tdAt = (r, c) => pane.querySelector(
+    `td[data-r="${Math.max(0, Math.min(lastR, r))}"][data-c="${Math.max(0, Math.min(lastC, c))}"]`);
+  const td00 = tdAt(ly.idx, lx.idx);
+  if (!td00) return;
+  const td10 = tdAt(ly.idx, lx.idx + 1) || td00;
+  const td01 = tdAt(ly.idx + 1, lx.idx) || td00;
+
+  const wrapR = wrap.getBoundingClientRect();
+  const mid = (td) => {
+    const r = td.getBoundingClientRect();
+    return {
+      x: r.left - wrapR.left + r.width / 2,
+      y: r.top - wrapR.top + r.height / 2,
+    };
   };
-  const c0 = center(`td[data-r="${ly.idx}"][data-c="${lx.idx}"]`);
-  const c1 = center(`td[data-r="${ly.idx + 1}"][data-c="${lx.idx + 1}"]`);
-  if (!c0 || !c1) return;
-  const x = c0.x + lx.frac * (c1.x - c0.x);
-  const y = c0.y + ly.frac * (c1.y - c0.y);
+  const p00 = mid(td00), p10 = mid(td10), p01 = mid(td01);
+  const x = p00.x + lx.frac * (p10.x - p00.x);
+  const y = p00.y + ly.frac * (p01.y - p00.y);
+
+  if (cv) {
+    const w = Math.max(1, Math.round(tbl.offsetWidth));
+    const h = Math.max(1, Math.round(tbl.offsetHeight));
+    if (cv.width !== w || cv.height !== h) {
+      cv.width = w;
+      cv.height = h;
+    }
+  }
 
   // rastro dos últimos TRAIL_MS
   const now = performance.now();
@@ -939,6 +983,7 @@ function highlightLiveCell() {
   if (changed) {
     $$("td.sel", pane).forEach(td => td.classList.remove("sel"));
     selCells.clear(); selWeights.clear();
+    st.stepRem = new Map();
     corners.forEach(p => {
       const key = `${p.r},${p.c}`;
       selCells.add(key);
@@ -947,6 +992,9 @@ function highlightLiveCell() {
       if (td) td.classList.add("sel");
     });
     selPage = page; selPane = pane; selAnchor = [domR, domC];
+  } else {
+    // Mesmo quadrante: os pesos mudam com RPM/MAP — +/- tem de usar o frac actual.
+    corners.forEach(p => selWeights.set(`${p.r},${p.c}`, p.w));
   }
 
   st.cells = (st.cells || []).filter(p => now - p.t < TRAIL_MS);
@@ -954,6 +1002,7 @@ function highlightLiveCell() {
   if (hit) hit.t = now;                       // renova o tempo se já visitada
   else st.cells.push({ r: domR, c: domC, t: now });
 
+  if (!cv || cv.width < 2 || cv.height < 2) return;
   const g = cv.getContext("2d");
   g.clearRect(0, 0, cv.width, cv.height);
   g.lineCap = g.lineJoin = "round";
@@ -963,8 +1012,9 @@ function highlightLiveCell() {
     const td = pane.querySelector(`td[data-r="${p.r}"][data-c="${p.c}"]`);
     if (!td) continue;
     const age = (now - p.t) / TRAIL_MS;        // 0 = recente, 1 = velho
+    const r = td.getBoundingClientRect();
     g.fillStyle = `rgba(255,213,79,${(1 - age) * 0.30})`;
-    g.fillRect(td.offsetLeft, td.offsetTop, td.offsetWidth, td.offsetHeight);
+    g.fillRect(r.left - wrapR.left, r.top - wrapR.top, r.width, r.height);
   }
   for (let i = 1; i < st.trail.length; i++) {
     const a = st.trail[i - 1], b = st.trail[i];
@@ -2117,19 +2167,31 @@ async function bindParamGroup(div, page) {
 // Força CLT=90°C / IAT=25°C (sem SENSOR_FAULT), λ=1.000 simulado no CAN stack,
 // e relaxa timeouts CKP/CMP no firmware (HIL com estimulador). O FW expõe
 // STATUS_BENCH_MODE (bit 15) no realtime — benchOn segue a ECU, não o host.
-// 'B' também liga/desliga o bypass de cortes por sensor (igual a PROTECT).
+// 'B' também liga/desliga o grupo sensor da máscara Protect (bits 0–7).
 let benchOn = false;
 let protectBypass = false;
-function setProtectBtn(bypass) {
-  protectBypass = !!bypass;
-  const b = $("#protectBtn");
-  if (b) {
-    b.textContent = protectBypass ? "PROTECT OFF" : "PROTECT ON";
-    b.classList.toggle("off", protectBypass);
-  }
-  const banner = $("#protectBanner");
-  if (banner) banner.hidden = !protectBypass;
+let protectMask = 0;
+const PROTECT_SENSOR = 0x00FF;
+const PROTECT_CUT_KEY = {
+  oil:      { fuel: "oil_press",  spark: "oil_press" },
+  map:      { fuel: "map_fault" },
+  rail:     { fuel: "fuel_rail" },
+  overtemp: { fuel: "overtemp",   spark: "overtemp" },
+  diag:     { fuel: "diag_crit",  spark: "diag_crit" },
+  lambda:   { fuel: "lambda" },
+  etb_limp: { fuel: "etb_fault" },
+  limp_rpm: { fuel: "limp_rpm",   spark: "limp_rpm" },
+  boost:    { fuel: "boost" },
+  inj_duty: { fuel: "inj_duty" },
+};
+
+function setProtectUi(mask) {
+  protectMask = (mask | 0) & 0x03FF;
+  const sens = protectMask & PROTECT_SENSOR;
+  protectBypass = sens === PROTECT_SENSOR;
+  syncProtectTabSwitches();
 }
+
 function setBenchBtn(on) {
   benchOn = on;
   const b = $("#benchBtn");
@@ -2141,19 +2203,9 @@ function setBenchBtn(on) {
   // anterior.
   const lv = $("#benchLambdaVal");
   if (lv) lv.value = "1.000";
-  // Firmware 'B' also sets sensor-protect bypass.
-  setProtectBtn(on);
+  // Firmware 'B' OR/AND the sensor group; leave boost/inj_duty bits.
+  setProtectUi(on ? (protectMask | PROTECT_SENSOR) : (protectMask & ~PROTECT_SENSOR));
 }
-$("#protectBtn").onclick = async () => {
-  const next = !protectBypass;
-  try {
-    const r = await api("/api/protect_bypass", "POST", { on: next });
-    setProtectBtn(!!r.bypass);
-    toast(next
-      ? "PROTECT OFF · óleo/MAP/λ/overtemp ignorados · watchdogs ligados"
-      : "PROTECT ON · cortes por sensor activos");
-  } catch (e) { toast(e.message, true); }
-};
 $("#benchBtn").onclick = async () => {
   const next = !benchOn;
   try {
@@ -2524,27 +2576,93 @@ async function loadPedalMap() {
   }
 }
 
-/* ── osciloscópio CKP/CMP ─────────────────────────────────────────────── */
-// Desenha as bordas cruas dos rings do firmware ('K' via /api/scope):
-// CKP na pista de cima com o GAP 60-2 destacado; CMP na pista de baixo com
-// o dente âncora anotado; régua de ângulo do ciclo 720° (dente 0 pós-gap =
-// 0°/360° conforme a fase CMP). Poll 3 Hz só com a aba TELEMETRY visível.
+/* ── osciloscópio encoder / CMP ───────────────────────────────────────── */
+// Fork MT6835: não há dentes 60-2. O 'K' traz ângulos 0–719 (ciclo) +
+// crank_deg/fase/sync. Poll 3 Hz só com TELEMETRY visível.
 let scopeFrozen = false;
-// Vista de ciclo completo: linha do tempo FIXA 0-720° (2 voltas de
-// virabrequim). Cada poll traz ~1.1 volta de bordas; o acumulador
-// client-side preenche o ciclo inteiro em ~2 polls e mantém o desenho
-// estático — só o cursor (ângulo actual) se move. Onda quadrada estilo
-// analisador lógico: dente = pulso de 3°, GAP = ausência de pulsos,
-// CMP = pulso na pista de baixo no seu ângulo do ciclo.
 const scopeSeen = { ckp: new Map(), cmp: new Map() };  // pos → wall-clock ms
+
+function scopeX(deg, W) { return deg / 720 * (W - 20) + 10; }
+
+function foldCmpDeg720(degs) {
+  // CMP marca fase A: 1 flanco / 720°, sempre 0–359. 466° = 106°+360.
+  const seen = new Set();
+  for (let d of degs) {
+    d = ((d % 720) + 720) % 720;
+    if (d === 0) continue;
+    seen.add(d % 360);
+  }
+  return [...seen];
+}
+
+function drawEncoderScope(ctx, W, H, s, info) {
+  const x = deg => scopeX(deg, W);
+  const now = performance.now();
+  const yTop = 26, hPulse = 34, yCmp = 80, hCmp = 38, yBase = H - 16;
+  const pw = x(4) - x(0);
+
+  ctx.strokeStyle = "#1c1c1c";
+  ctx.fillStyle = "#4a4a4a";
+  for (let d = 0; d <= 720; d += 90) {
+    const px = x(d);
+    ctx.beginPath(); ctx.moveTo(px, yTop - 8); ctx.lineTo(px, yBase); ctx.stroke();
+    ctx.fillText(`${d}°`, px - (d === 720 ? 22 : 8), H - 4);
+  }
+
+  const ckpDeg = s.ckp_deg || [];
+  // 1 CMP / 720°. Pares a 360° são o mesmo flanco com fase A vs B.
+  const cmpDeg = foldCmpDeg720(s.cmp_deg || []);
+  for (const d of ckpDeg) scopeSeen.ckp.set(((d % 720) + 720) % 720, now);
+  scopeSeen.cmp.clear();
+  for (const d of cmpDeg) scopeSeen.cmp.set(((d % 720) + 720) % 720, now);
+  for (const m of [scopeSeen.ckp, scopeSeen.cmp])
+    for (const [k, v] of m) if (now - v > 3000) m.delete(k);
+
+  ctx.strokeStyle = "#e8a020";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x(0), yTop + hPulse);
+  ctx.lineTo(x(720), yTop + hPulse);
+  ctx.stroke();
+  ctx.fillStyle = "#e8a020";
+  for (const pos of scopeSeen.ckp.keys())
+    ctx.fillRect(x(pos), yTop, pw, hPulse);
+
+  ctx.strokeStyle = "#8b5cf6";
+  ctx.beginPath();
+  ctx.moveTo(x(0), yCmp + hCmp);
+  ctx.lineTo(x(720), yCmp + hCmp);
+  ctx.stroke();
+  ctx.fillStyle = "#8b5cf6";
+  const cmpList = [...scopeSeen.cmp.keys()].sort((p, q) => p - q);
+  for (const pos of cmpList) {
+    ctx.fillRect(x(Math.max(0, pos - 3)), yCmp, pw * 2, hCmp);
+    ctx.fillText(`${pos}°`, x(pos) + 5, yCmp + 12);
+  }
+
+  const crank = Number(s.crank_deg) || 0;
+  const angNow = ((s.phase_a ? 0 : 360) + crank) % 720;
+  const rpm = (RT && RT.rpm) ? RT.rpm : 0;
+  scopeAnchor = {
+    angle: angNow, t: performance.now(),
+    degPerMs: rpm * 6 / 1000,
+    W, yTop, yBase,
+  };
+
+  ctx.fillStyle = "#4a4a4a";
+  ctx.fillText("ENC", 10, yTop - 4);
+  ctx.fillText("CMP", 10, yCmp - 4);
+
+  info.textContent = cmpList.length
+    ? `CMP @ ${cmpList.map(d => `${d}°`).join(", ")} / 720°`
+    : "CMP —";
+}
 
 async function drawScope() {
   const pane = $("#tab-telemetry");
   if (!pane.classList.contains("active") || scopeFrozen) return;
   let s;
   try { s = await api("/api/scope"); } catch { return; }
-  // desenha o conteúdo estático num canvas offscreen; o cursor é animado
-  // por requestAnimationFrame (scopeAnim) extrapolando o ângulo pelo RPM.
   if (!drawScope.off) drawScope.off = document.createElement("canvas");
   const vis = $("#scopeCanvas");
   const cv = drawScope.off;
@@ -2555,6 +2673,11 @@ async function drawScope() {
   ctx.clearRect(0, 0, W, H);
   ctx.font = "10px monospace";
   const info = $("#scopeInfo");
+
+  if (s.mode === "encoder" || s.cmp_ref_tooth === 255) {
+    drawEncoderScope(ctx, W, H, s, info);
+    return;
+  }
 
   const synced = s.sync_state === 1 || s.sync_state === 2;
   if (!s.ckp_ms || s.ckp_ms.length < 4 || !synced) {
@@ -2656,15 +2779,9 @@ async function drawScope() {
   // cmp_ref_tooth é sempre 255 nesta árvore (encoder rastreia fase por
   // ângulo, não por dente — ver ckp.h) — usar sync_state/phase_a, que já
   // vêm no mesmo payload 'K', em vez do byte stub.
-  const gapDelta = deltas.find(d => d > med * 1.5);
-  const ancoraTxt = s.sync_state === 2
-    ? ` (ancorado, fase ${s.phase_a ? "A" : "B"})`
-    : " (não-ancorado)";
-  info.textContent =
-    `ângulo actual: ${Math.round(angNow)}° de 720° · dente ${med.toFixed(2)}ms` +
-    (gapDelta ? ` · GAP ${gapDelta.toFixed(2)}ms (${(gapDelta/med).toFixed(1)}×)` : "") +
-    (cmpList.length ? ` · CMP @ ${cmpList.join("°, ")}°` : " · sem CMP visto") +
-    ancoraTxt;
+  info.textContent = cmpList.length
+    ? `CMP @ ${cmpList.map(d => `${d}°`).join(", ")} / 720°`
+    : "CMP —";
 }
 setInterval(drawScope, 333);
 
@@ -2771,6 +2888,108 @@ async function otSet(target, value, quiet = false) {
     await api("/api/output_test/set", "POST", { target, value });
     if (!quiet) toast(`${target} = ${value}`);
   } catch (e) { toast(`${target}: ${e.message}`, true); }
+}
+
+const PR_GROUPS = [
+  { label: "Sensores", ids: ["oil", "map", "rail", "overtemp", "diag", "lambda"] },
+  { label: "Limp", ids: ["etb_limp", "limp_rpm"] },
+  { label: "Fuel policy", ids: ["boost", "inj_duty"] },
+];
+const PR_LOCKED = [
+  { label: "Rev-limit", cuts: "fuel — tecto em Params" },
+  { label: "Flood clear", cuts: "fuel" },
+  { label: "Fatal / stall / watchdogs", cuts: "fuel+spark" },
+  { label: "No-sync / engine phase", cuts: "fuel+spark" },
+];
+
+function prRowHtml(bit) {
+  return `<div class="pr-row" data-pr="${bit.id}">
+    <label class="pr-switch" title="OFF = corte ignorado">
+      <input type="checkbox" data-pr-bit="${bit.bit}">
+      <span></span>
+    </label>
+    <div class="pr-name">${bit.label}
+      <div class="pr-cuts">${bit.cuts}</div>
+    </div>
+    <span class="pr-pill" data-pr-pill>OK</span>
+  </div>`;
+}
+
+function syncProtectTabSwitches() {
+  const root = $("#protectRoot");
+  if (!root || !root.dataset.loaded) return;
+  $$("input[data-pr-bit]", root).forEach(inp => {
+    const bit = +inp.dataset.prBit;
+    inp.checked = (protectMask & bit) !== 0;
+  });
+}
+
+function refreshProtectCuts() {
+  const root = $("#protectRoot");
+  if (!root || !root.dataset.loaded) return;
+  const fuel = (lastDbg && lastDbg.fuel_cut_list) || [];
+  const spark = (lastDbg && lastDbg.spark_cut_list) || [];
+  $$(".pr-row[data-pr]", root).forEach(row => {
+    const id = row.dataset.pr;
+    const keys = PROTECT_CUT_KEY[id] || {};
+    const active = (keys.fuel && fuel.includes(keys.fuel)) ||
+                   (keys.spark && spark.includes(keys.spark));
+    const pill = row.querySelector("[data-pr-pill]");
+    if (!pill) return;
+    pill.classList.toggle("cut", !!active);
+    pill.textContent = active ? "CUT" : "OK";
+  });
+}
+
+async function loadProtect() {
+  const root = $("#protectRoot");
+  root.dataset.loaded = "1";
+  let st;
+  try {
+    st = await api("/api/protect");
+  } catch (e) {
+    root.innerHTML = `<div class="pr-wrap"><p class="pr-hint">ECU offline: ${e.message}</p></div>`;
+    return;
+  }
+  const byId = {};
+  (st.bits || []).forEach(b => { byId[b.id] = b; });
+  const groups = PR_GROUPS.map(g => {
+    const rows = g.ids.map(id => byId[id]).filter(Boolean);
+    if (!rows.length) return "";
+    return `<h4>${g.label}</h4>` + rows.map(prRowHtml).join("");
+  }).join("");
+  const locked = PR_LOCKED.map(x =>
+    `<div class="pr-row locked">
+      <label class="pr-switch"><input type="checkbox" disabled><span></span></label>
+      <div class="pr-name">${x.label}<div class="pr-cuts">${x.cuts}</div></div>
+      <span class="pr-pill">ON</span>
+    </div>`).join("");
+  root.innerHTML = `
+    <div class="pr-wrap">
+      <p class="pr-hint">Máscara RAM — perde no reset. Switch <b>ligado</b> = aquele corte
+        <b>desactivado</b>. Watchdogs, stall, flood, fatal e rev-limit não se desligam aqui.</p>
+      ${groups}
+      <h4>Sempre ligadas</h4>
+      ${locked}
+    </div>`;
+  setProtectUi(st.mask || 0);
+  $$("input[data-pr-bit]", root).forEach(inp => {
+    inp.onchange = async () => {
+      let mask = 0;
+      $$("input[data-pr-bit]", root).forEach(x => {
+        if (x.checked) mask |= +x.dataset.prBit;
+      });
+      try {
+        const r = await api("/api/protect", "POST", { mask });
+        setProtectUi(r.mask);
+        toast(mask ? `Protect mask 0x${r.mask.toString(16)}` : "todas as protecções opcionais ligadas");
+      } catch (e) {
+        toast(e.message, true);
+        syncProtectTabSwitches();
+      }
+    };
+  });
+  refreshProtectCuts();
 }
 
 function loadOutputTest() {

@@ -130,12 +130,35 @@ describe("stepSize / weightedStep", () => {
     assert.equal(helpers.stepSize(2), 1);
   });
 
-  it("weights steps and never zeros non-zero delta", () => {
-    assert.equal(helpers.weightedStep(1, 1), 1);
-    assert.equal(helpers.weightedStep(1, 0.1), 1);
-    assert.equal(helpers.weightedStep(10, 0.25), 3);
-    assert.equal(helpers.weightedStep(-10, 0.25), -3);
-    assert.equal(helpers.weightedStep(0, 0.5), 0);
+  it("weights steps; remainder carries fractional VE steps", () => {
+    assert.deepEqual(helpers.weightedStep(1, 1), { n: 1, rem: 0 });
+    assert.deepEqual(helpers.weightedStep(1, 0.1), { n: 0, rem: 0.1 });
+    assert.equal(helpers.weightedStep(10, 0.25).n, 3);
+    assert.equal(helpers.weightedStep(-10, 0.25).n, -3);
+    assert.equal(helpers.weightedStep(0, 0.5).n, 0);
+    // 0.6 cell: first + applies 1, remainder −0.4
+    const a = helpers.weightedStep(1, 0.6, 0);
+    assert.equal(a.n, 1);
+    assert.ok(Math.abs(a.rem + 0.4) < 1e-9);
+    const b = helpers.weightedStep(1, 0.6, a.rem);
+    assert.equal(b.n, 0);
+  });
+
+  it("20× +1 at bilinear weights tracks influence, not equal bumps", () => {
+    const ws = [0.5, 0.3, 0.15, 0.05];
+    const applied = [0, 0, 0, 0];
+    const rem = [0, 0, 0, 0];
+    for (let k = 0; k < 20; k++) {
+      ws.forEach((w, i) => {
+        const r = helpers.weightedStep(1, w, rem[i]);
+        applied[i] += r.n;
+        rem[i] = r.rem;
+      });
+    }
+    assert.equal(applied[0], 10);
+    assert.equal(applied[1], 6);
+    assert.equal(applied[2], 3);
+    assert.equal(applied[3], 1);
   });
 });
 
@@ -145,6 +168,8 @@ describe("formatGauge", () => {
     assert.equal(helpers.formatGauge("lambda_target_x1000", 1000), "1.00");
     assert.equal(helpers.formatGauge("pw_ms", 3.456), "3.46");
     assert.equal(helpers.formatGauge("rpm", 3500), "3500");
+    assert.equal(helpers.formatGauge("map_fused_kpa", 87.4), "87");
+    assert.equal(helpers.formatGauge("map_kpa", 14), "14");
     assert.equal(helpers.formatGauge("rpm", null), "—");
   });
 });

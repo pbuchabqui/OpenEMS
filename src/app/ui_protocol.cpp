@@ -141,8 +141,16 @@ void parse_byte(uint8_t b) noexcept {
             return;
         }
         if (b == static_cast<uint8_t>('I')) {
-            // Sensor-protect bypass (dash PROTECT). 0=cuts on, !=0=bypass.
+            // Sensor-protect bypass (dash PROTECT). 0=cuts on, !=0=bypass
+            // of the sensor group (bits 0–7). Does not touch bits 8–9.
             g_state = ParseState::PROTECT_ARG;
+            return;
+        }
+        if (b == static_cast<uint8_t>('j')) {
+            // Per-cut disable mask (u16 LE). Writable bits 0–9 only.
+            g_state = ParseState::PROTECT_MASK_ARG;
+            g_arg_pos = 0u;
+            g_cmd_off = 0u;
             return;
         }
         if (b == static_cast<uint8_t>('Z')) {
@@ -387,9 +395,9 @@ void parse_byte(uint8_t b) noexcept {
                 ::g_dbg_cycle_pw_us,                                     // [60]
                 static_cast<uint32_t>(::g_dbg_squirts)
                     | (static_cast<uint32_t>(builder) << 8)
-                    | (static_cast<uint32_t>(float_sus) << 16)
+                    | (static_cast<uint32_t>(float_sus) << 15)
                     | (static_cast<uint32_t>(
-                           ems::engine::limp_gating_sensor_bypass()) << 17), // [61]
+                           ems::engine::limp_gating_protect_disable()) << 16), // [61]
                 sens.map_raw,                                            // [62]
                 static_cast<uint32_t>(snap.crank_deg),                   // [63]
             };
@@ -463,6 +471,23 @@ void parse_byte(uint8_t b) noexcept {
         ems::engine::limp_gating_set_sensor_bypass(b != 0u ? 1u : 0u);
         tx_push(kAckOk);
         tx_push(ems::engine::limp_gating_sensor_bypass());
+        reset_parser();
+        return;
+    }
+
+    if (g_state == ParseState::PROTECT_MASK_ARG) {
+        if (g_arg_pos == 0u) {
+            g_cmd_off = b;
+            ++g_arg_pos;
+            return;
+        }
+        g_cmd_off = static_cast<uint16_t>(
+            g_cmd_off | (static_cast<uint16_t>(b) << 8u));
+        ems::engine::limp_gating_set_protect_disable(g_cmd_off);
+        const uint16_t applied = ems::engine::limp_gating_protect_disable();
+        tx_push(kAckOk);
+        tx_push(static_cast<uint8_t>(applied & 0xFFu));
+        tx_push(static_cast<uint8_t>((applied >> 8u) & 0xFFu));
         reset_parser();
         return;
     }
@@ -700,7 +725,7 @@ void ui_update_rt_map_fuel(uint16_t map_fused_bar_x100, uint32_t net_pw_us) noex
 #if defined(EMS_HOST_TEST)
 void ui_test_reset() noexcept {
     ui_init();
-    ems::engine::limp_gating_set_sensor_bypass(0u);
+    ems::engine::limp_gating_set_protect_disable(0u);
 }
 #endif
 

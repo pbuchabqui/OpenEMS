@@ -138,12 +138,17 @@ extern volatile uint32_t g_dbg_loss_hist_mx;
 // Dentes descartados pelo skip pós-silêncio (ckp_skip_pulses_after_gap > 0).
 extern volatile uint32_t g_dbg_skip_after_silence;
 
-// Osciloscópio CKP/CMP: rings de timestamps TIM5 das bordas cruas (comando 'K').
+// Osciloscópio encoder (comando 'K'): rings de ângulo 0–719 (ciclo 720°),
+// não timestamps TIM5 (o TIM5 já não captura CKP/CMP neste fork).
 // idx = próxima posição a escrever (elemento mais antigo do ring).
 extern volatile uint32_t g_scope_ckp_ts[64];
 extern volatile uint8_t  g_scope_ckp_idx;
 extern volatile uint32_t g_scope_cmp_ts[8];
 extern volatile uint8_t  g_scope_cmp_idx;
+
+void ckp_scope_push_ckp_deg720(uint16_t deg720) noexcept;
+void ckp_scope_push_cmp_deg720(uint16_t deg720) noexcept;
+void ckp_scope_clear_cmp(void) noexcept;
 
 // tooth_index âncora da última borda CMP aceite (0xFF = não-ancorado).
 // Conceito de decoder 60-2 — o rastreador de fase do encoder (TIM2, ver

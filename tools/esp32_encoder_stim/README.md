@@ -3,7 +3,9 @@
 Estimulador de bancada para firmware `EMS_MT6835_ENCODER=1` **sem chip MT6835**.
 
 Gera quadratura **A/B** (4096 PPR → 16384 counts/volta no TIM2) e **CMP**
-(1 pulso / 720° em PC6), mais sensores analógicos no protocolo StimLink.
+(1 pulso / 720° em PC6, **preso às bordas de A via PCNT** — não um
+`esp_timer` livre, que caminhava no ciclo 720°), mais sensores analógicos
+no protocolo StimLink.
 
 O `esp32_combined` / `esp32_stimulator` (CKP 60-2 em PA0/PA1) **não** serve
 para este build — pinos e domínio de sincronismo são outros.

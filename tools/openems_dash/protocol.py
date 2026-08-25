@@ -286,13 +286,41 @@ class OpenEMSLink:
 
     # ── bench-mode ('B': força CLT=90°C/IAT=25°C p/ HIL sem sondas) ──────
     def set_protect_bypass(self, on: bool) -> bool:
-        """Comando 'I': desliga cortes por sensor (óleo/MAP/λ/overtemp/rail).
+        """Comando 'I': desliga o grupo de cortes por sensor (bits 0–7).
         Watchdogs, stall, rev-limit e flood ficam ligados. RAM, perde no reset.
         """
         ack = self._txn(b"I" + (b"\x01" if on else b"\x00"), 2)
         if ack[0] != 0x00:
             raise IOError(f"protect_bypass: ACK {ack.hex()}")
         return ack[1] != 0
+
+    # Bit = 1 → corte ignorado. Deve bater com limp_gating.h kProtectDis*.
+    PROTECT_FLAGS = (
+        ("oil",      1 << 0, "Óleo",           "fuel+spark"),
+        ("map",      1 << 1, "MAP fault",      "fuel"),
+        ("rail",     1 << 2, "Rail combustível","fuel"),
+        ("overtemp", 1 << 3, "Overtemp",       "fuel+spark"),
+        ("diag",     1 << 4, "Diag crítico",   "fuel+spark"),
+        ("lambda",   1 << 5, "Lambda",         "fuel"),
+        ("etb_limp", 1 << 6, "ETB limp RPM",   "fuel"),
+        ("limp_rpm", 1 << 7, "Limp RPM",       "fuel+spark"),
+        ("boost",    1 << 8, "Boost cut",      "fuel"),
+        ("inj_duty", 1 << 9, "Injector duty",  "fuel"),
+    )
+    PROTECT_SENSOR_GROUP = 0x00FF
+    PROTECT_WRITABLE = 0x03FF
+
+    def set_protect_mask(self, mask: int) -> int:
+        """Comando 'j': máscara por corte (u16 LE). ACK + eco da máscara aplicada."""
+        ack = self._txn(b"j" + struct.pack("<H", int(mask) & 0xFFFF), 3)
+        if ack[0] != 0x00:
+            raise IOError(f"protect_mask: ACK {ack.hex()}")
+        return struct.unpack("<H", ack[1:3])[0]
+
+    @classmethod
+    def protect_flags_from_mask(cls, mask: int) -> dict:
+        m = int(mask) & cls.PROTECT_WRITABLE
+        return {name: bool(m & bit) for name, bit, *_ in cls.PROTECT_FLAGS}
 
     def bench_mode(self, on: bool) -> None:
         ack = self._txn(b"B" + bytes([1 if on else 0]), 1)
@@ -422,9 +450,10 @@ class OpenEMSLink:
     # Bits de src/engine/cut_reason.h (ordem = bit 0..N)
     FUEL_CUT_BITS = ["rev_limit", "limp_rpm", "map_fault", "oil_press",
                      "fuel_rail", "overtemp", "diag_crit", "no_sync",
-                     "dfco", "flood_clear", "inj_duty"]
+                     "dfco", "flood_clear", "inj_duty", "boost",
+                     "lambda", "fatal", "etb_fault"]
     SPARK_CUT_BITS = ["limp_rpm", "oil_press", "overtemp", "diag_crit",
-                      "spark_skip"]
+                      "spark_skip", "fatal", "no_sync"]
 
     @staticmethod
     def _decode_bits(mask: int, names: list) -> list:
@@ -442,9 +471,12 @@ class OpenEMSLink:
         d = dict(zip(self.DEBUG_FIELDS, vals))
         pack = d.pop("pw_pack", 0)
         d["squirts"] = pack & 0xFF
-        d["builder"] = (pack >> 8) & 0xFF
-        d["adc_float_suspect"] = bool((pack >> 16) & 0x1)
-        d["protect_bypass"] = bool((pack >> 17) & 0x1)
+        d["builder"] = (pack >> 8) & 0x7F
+        d["adc_float_suspect"] = bool((pack >> 15) & 0x1)
+        d["protect_disable_mask"] = (pack >> 16) & 0xFFFF
+        d["protect_bypass"] = (
+            (d["protect_disable_mask"] & self.PROTECT_SENSOR_GROUP)
+            == self.PROTECT_SENSOR_GROUP)
         for n in range(4):
             packed = d.pop(f"map_w{n}")
             d[f"map_w{n}_bar_x1000"] = packed >> 16
@@ -462,19 +494,17 @@ class OpenEMSLink:
 
     # ── osciloscópio CKP/CMP ('K': 294 bytes) ────────────────────────────
     def read_scope(self) -> dict:
-        """Rings de timestamps TIM5 (62.5 MHz) das bordas cruas CKP/CMP +
-        âncora angular (crank_deg 0–359 / fase / sync no instante do dump).
-        Devolve listas ordenadas da mais antiga → mais recente, em ticks."""
+        """'K' 294 B: rings + âncora. Neste fork o ring guarda ângulo 0–719
+        (ciclo encoder), não ticks TIM5 de dentes 60-2."""
         buf = self._txn(b"K", 294)
         ckp_idx, cmp_idx, cmp_ref_tooth = buf[0], buf[1], buf[2]
         ckp = list(struct.unpack_from("<64I", buf, 3))
         cmp = list(struct.unpack_from("<8I", buf, 259))
         crank_deg, phase_a, sync_state = buf[291], buf[292], buf[293]
-        # idx aponta para a próxima escrita (mais antiga) → rotaciona
         ckp = ckp[ckp_idx:] + ckp[:ckp_idx]
         cmp = cmp[cmp_idx:] + cmp[:cmp_idx]
-        return {"ckp_ts": [t for t in ckp if t != 0],
-                "cmp_ts": [t for t in cmp if t != 0],
+        return {"ckp_ts": ckp,
+                "cmp_ts": cmp,
                 "cmp_ref_tooth": cmp_ref_tooth,
                 "crank_deg": crank_deg,
                 "phase_a": bool(phase_a),

@@ -42,6 +42,8 @@ enum class ParseState : uint8_t {
     // 'B') — ver docs/closed_loop_fuel.md, comandos.
     BENCH_LAMBDA_ARG = 10u,
     PROTECT_ARG = 11u,
+    // 'j': per-cut protect disable mask (u16 LE).
+    PROTECT_MASK_ARG = 12u,
 };
 
 constexpr uint16_t kEnvMaxChunk   = 800u;

@@ -205,6 +205,7 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
             g_cmp_heartbeats_since_ok = 0U;
             if (g_cmp_confirm_count < 2U) { ++g_cmp_confirm_count; }
             if (r.multiple > 1U) { ++g_cmp_missed_edge_count; }
+            const uint8_t was_phase_valid = ecu_sched_encoder_phase_valid();
             if (g_cmp_confirm_count >= 2U &&
                 ems::engine::cfg::g_eng_cfg.cmp_phase_state !=
                 ems::engine::cfg::kCmpPhaseUncalibrated) {
@@ -223,11 +224,16 @@ void ecu_sched_encoder_heartbeat_tick(uint32_t tim2_now, uint32_t tim5_now,
                 // ecu_sched_encoder_phase_at() (pura aritmética de
                 // paridade) continuaria a confiar num anchor desatualizado
                 // indefinidamente após um slip real.
-                const uint8_t phase_value =
-                    (ems::engine::cfg::g_eng_cfg.cmp_phase_state ==
-                     ems::engine::cfg::kCmpPhaseCalibratedA)
-                        ? ECU_PHASE_A : ECU_PHASE_B;
-                ecu_sched_encoder_phase_set_anchor(cmp_angle, phase_value);
+                // Hardware: o flanco CMP marca sempre a fase A (nunca B).
+                ecu_sched_encoder_phase_set_anchor(cmp_angle, ECU_PHASE_A);
+            }
+            // Scope: 1 lóbulo / 720°, na metade A (0–359).
+            if (ecu_sched_encoder_phase_valid() != 0U) {
+                if (was_phase_valid == 0U) {
+                    ems::drv::ckp_scope_clear_cmp();
+                }
+                ems::drv::ckp_scope_push_cmp_deg720(
+                    ems::drv::cycle_deg(cmp_angle, true));
             }
         } else {
             ++g_cmp_reject_count;
@@ -436,6 +442,10 @@ void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
     // pesado) — janela de 256 counts é ruidosa demais para reposicionar ON.
     ecu_sched_encoder_omega_sample(tim2_now, tim5_now);
     ems::engine::misfire_encoder_on_sample(tim2_now, tim5_now);
+    {
+        const bool pa = (ecu_sched_encoder_phase_at(tim2_now) == ECU_PHASE_A);
+        ems::drv::ckp_scope_push_ckp_deg720(ems::drv::cycle_deg(tim2_now, pa));
+    }
 
     if (!ems::drv::encoder_sync::health_ok()) {
         // Heavy tick does the full stall; skip arm here (64×/rev).
