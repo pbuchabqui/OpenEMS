@@ -118,3 +118,110 @@ void test_encoder_sync_staleness(void) {
     CHECK_TRUE(!staleness_exceeded(59u, true), "59 heartbeats: não excedeu (bench)");
     CHECK_TRUE(staleness_exceeded(60u, true), "60 heartbeats: excedeu (bench, limite=60)");
 }
+
+void test_encoder_sync_circular_diff16384(void) {
+    section("encoder_sync: circular_diff16384() — distância com sinal no anel de 16384");
+
+    CHECK_EQ(static_cast<uint32_t>(circular_diff16384(100u, 100u)), 0u, "a==b: diff=0");
+    CHECK_EQ(static_cast<uint32_t>(circular_diff16384(105u, 100u)), 5u, "a à frente de b: diff=+5");
+    CHECK_EQ(static_cast<uint32_t>(circular_diff16384(100u, 105u)),
+             static_cast<uint32_t>(-5), "a atrás de b: diff=-5");
+
+    // Wrap em torno de 0/16384: 2 counts de distância nos dois sentidos.
+    CHECK_EQ(static_cast<uint32_t>(circular_diff16384(1u, 16383u)), 2u,
+             "wrap 16383→1 (sentido normal): diff=+2");
+    CHECK_EQ(static_cast<uint32_t>(circular_diff16384(16383u, 1u)),
+             static_cast<uint32_t>(-2), "wrap 1→16383 (sentido inverso): diff=-2");
+
+    // Exactamente meia-volta (8192): caso de fronteira do "mais curto" — a
+    // implementação escolhe o lado positivo quando empatado.
+    CHECK_EQ(static_cast<uint32_t>(circular_diff16384(8192u, 0u)), 8192u,
+             "exactamente meia-volta: diff=+8192 (empate resolvido para positivo)");
+}
+
+void test_encoder_sync_z_edge(void) {
+    section("encoder_sync: evaluate_z_edge() — span/multiple gate (Correção de drift via Z)");
+
+    // Primeiro flanco (has_prev=false): só arma referência, não valida.
+    {
+        const ZEdgeResult r = evaluate_z_edge(1000u, false, 0u, 0u);
+        CHECK_TRUE(r.accepted, "primeiro flanco: sempre aceite (arma referência)");
+        CHECK_EQ(r.multiple, 0u, "primeiro flanco: multiple=0 (não validado)");
+        CHECK_TRUE(!r.streak_resync, "primeiro flanco: sem resync");
+    }
+
+    // Span exacto (delta=16384, 1 volta): N=1, aceite.
+    {
+        const ZEdgeResult r = evaluate_z_edge(16384u, true, 0u, 0u);
+        CHECK_TRUE(r.accepted, "delta=16384 exacto: aceite");
+        CHECK_EQ(r.multiple, 1u, "delta=16384 exacto: multiple=1");
+    }
+
+    // Dentro da tolerância (+31, tolerância=32): aceite.
+    {
+        const ZEdgeResult r = evaluate_z_edge(16415u, true, 0u, 0u);
+        CHECK_TRUE(r.accepted, "delta=16384+31 (dentro de ±32): aceite");
+        CHECK_EQ(r.multiple, 1u, "multiple=1");
+    }
+
+    // Fora da tolerância (+33): rejeitado.
+    {
+        const ZEdgeResult r = evaluate_z_edge(16417u, true, 0u, 0u);
+        CHECK_TRUE(!r.accepted, "delta=16384+33 (fora de ±32): rejeitado");
+        CHECK_EQ(r.reject_streak, 1u, "rejeitado: streak=1");
+    }
+
+    // Flanco Z perdido: delta≈2×16384 aceite como multiple=2 — só telemetria,
+    // o chamador (ecu_sched_encoder_heartbeat_z_tick) é quem decide não
+    // corrigir quando multiple!=1 (ambiguidade flanco-perdido vs. 2 voltas
+    // normais).
+    {
+        const ZEdgeResult r = evaluate_z_edge(32800u, true, 0u, 0u);
+        CHECK_TRUE(r.accepted, "delta≈2×16384 (1 flanco Z perdido): aceite");
+        CHECK_EQ(r.multiple, 2u, "multiple=2 (flanco perdido detectado)");
+    }
+
+    // Reject-streak: 3 rejeições consecutivas -> streak_resync=true.
+    {
+        uint8_t streak = 0u;
+        ZEdgeResult r = evaluate_z_edge(0u, true, 0u, streak);  // delta=0: rejeitado
+        CHECK_TRUE(!r.accepted, "1ª rejeição consecutiva");
+        streak = r.reject_streak;
+        r = evaluate_z_edge(0u, true, 0u, streak);
+        streak = r.reject_streak;
+        r = evaluate_z_edge(0u, true, 0u, streak);
+        CHECK_TRUE(r.streak_resync, "3ª rejeição consecutiva: streak_resync=true");
+    }
+
+    // Wrap-safe: mesmo padrão do CMP.
+    {
+        const uint32_t prev = 0xFFFFFFFFu - 100u;
+        const uint32_t now  = prev + kZSpanCounts;
+        const ZEdgeResult r = evaluate_z_edge(now, true, prev, 0u);
+        CHECK_TRUE(r.accepted, "delta através do wrap de 32 bits: aceite");
+        CHECK_EQ(r.multiple, 1u, "multiple=1 através do wrap");
+    }
+}
+
+void test_encoder_sync_angle_plausibility(void) {
+    section("encoder_sync: evaluate_angle_plausibility() — Camada 3 (detecção grosseira)");
+
+    CHECK_TRUE(evaluate_angle_plausibility(1000u, 1000u, 0u),
+               "TIM2==SPI, tolerância 0: plausível");
+    CHECK_TRUE(!evaluate_angle_plausibility(1000u, 1050u, 0u),
+               "TIM2 vs SPI +50, tolerância 0: implausível");
+
+    CHECK_TRUE(evaluate_angle_plausibility(1000u, 1100u, 100u),
+               "desvio=100, tolerância=100: no limite, plausível");
+    CHECK_TRUE(!evaluate_angle_plausibility(1000u, 1101u, 100u),
+               "desvio=101, tolerância=100: implausível");
+    CHECK_TRUE(evaluate_angle_plausibility(1100u, 1000u, 100u),
+               "desvio=-100 (SPI atrás de TIM2), tolerância=100: plausível");
+
+    // Wrap em torno de 0/16384: TIM2 perto de 16383, SPI logo depois do 0 —
+    // distância real é pequena, não ~16384.
+    CHECK_TRUE(evaluate_angle_plausibility(16383u, 2u, 100u),
+               "wrap 16383↔2 (distância real=3): plausível com tolerância=100");
+    CHECK_TRUE(!evaluate_angle_plausibility(16383u, 300u, 100u),
+               "wrap 16383↔300 (distância real=317): implausível com tolerância=100");
+}

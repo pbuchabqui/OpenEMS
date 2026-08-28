@@ -215,6 +215,13 @@ test_map_window_skipped_slot();
     test_ecu_sched_encoder_omega_only_on_heavy_tick();
     test_ecu_sched_encoder_heartbeat_subtick_feeds_misfire();
     test_ecu_sched_encoder_min_lead();
+    test_ecu_sched_encoder_phase_correction();
+    test_ecu_sched_encoder_phase_correction_gate();
+    test_ecu_sched_encoder_phase_correction_no_retroactive_effect();
+    test_ecu_sched_encoder_drift_detection_escalates_to_limp();
+    test_ecu_sched_encoder_heartbeat_z_tracking();
+    test_ecu_sched_encoder_z_correction_ignores_spi_gate();
+    test_ecu_sched_encoder_z_target_spi_crosscheck();
     test_ecu_sched_encoder_conversion();
     test_ecu_sched_encoder_tdc1_calibrate();
     test_ecu_sched_encoder_cmp_phase_calibrate();
@@ -320,6 +327,9 @@ test_map_window_skipped_slot();
     test_math_production_tables();
     test_encoder_sync_cmp_edge();
     test_encoder_sync_staleness();
+    test_encoder_sync_circular_diff16384();
+    test_encoder_sync_z_edge();
+    test_encoder_sync_angle_plausibility();
 
     // ── UI PROTOCOL / TUNERSTUDIO ENVELOPE ────────────────────────────────
     printf("\n=== UI PROTOCOL / TS ENVELOPE ===");

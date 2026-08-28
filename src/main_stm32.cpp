@@ -727,17 +727,24 @@ int main() {
             ems::hal::tle8888_poll_diag();
 #endif
 
-            // Poll de saúde do MT6835 a 100 ms (SPI, não 2 ms). O ângulo
-            // lido é descartado — posição vem do TIM2. Sem hardware
+            // Poll de saúde do MT6835 a 100 ms (SPI, não 2 ms). O ângulo lido
+            // agora alimenta a mitigação de drift TIM2(AB) vs. SPI — ver
+            // docs/dev/mt6835_encoder_fork.md, "Mitigação de drift
+            // silencioso": Camada 2 (correção contínua, nunca escreve
+            // TIM2_CNT) + Camada 3 (detecção grosseira + corte via
+            // DiagnosticManager/limp_gating), ambas em
+            // ems::drv::encoder_sync::poll_100ms(). Sem hardware
             // (MT6835_HW_PRESENT=0) a leitura falharia sempre.
             if (ems::hal::mt6835_hw_present()) {
-                uint32_t health_angle21_unused = 0u;
-                uint8_t  health_status_unused  = 0u;
-                const bool health_ok = ems::hal::mt6835_read_angle_raw21(
-                    &health_angle21_unused, &health_status_unused);
-                ems::drv::encoder_sync::set_health_ok(health_ok);
-                if (!health_ok) {
+                uint32_t angle21 = 0u;
+                uint8_t  status  = 0u;
+                const bool comm_ok = ems::hal::mt6835_read_angle_raw21(&angle21, &status);
+                ems::drv::encoder_sync::set_health_ok(comm_ok);
+                if (!comm_ok) {
                     ecu_sched_on_encoder_stall();
+                } else {
+                    ems::drv::encoder_sync::poll_100ms(
+                        angle21, status, ems::hal::tim2_encoder_count());
                 }
             }
 

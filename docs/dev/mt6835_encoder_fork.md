@@ -1389,3 +1389,252 @@ sequencial real em motor (`cmp_phase_state` nunca medido em bancada real
 ainda). Mesma postura do `misfire_encoder`.
 
 `hw/v1-clean-board` confirmado intocado.
+
+## Mitigação de drift silencioso TIM2(AB) vs. MT6835(SPI) — implementada (2026-08-27)
+
+### O risco
+
+`TIM2` em modo encoder decodifica AB em hardware, sem CPU, sem verificação.
+Uma borda perdida ou espúria (ruído/EMI) deixa `TIM2->CNT` com um offset
+silencioso — nada corrigia isso em runtime antes desta mudança: a leitura
+absoluta por SPI só acontecia uma vez, no boot (`mt6835_init()`), e o poll de
+100 ms lia o ângulo só para checar CRC/comunicação, descartando o valor.
+`evaluate_cmp_edge()` (span CMP-a-CMP, ±200 counts) só rejeita erros maiores
+que essa folga mecânica — drift lento, ou um erro que caiba nessa banda a
+cada ciclo de 720°, era invisível.
+
+### Três camadas
+
+1. **Prevenção física** — par trançado/blindado nas linhas A/B (PA0/PA1),
+   documentado em `docs/wiring_diagram.md` junto da regra já existente para
+   CKP/CMP/CAN. Reduz a chance do drift acontecer.
+2. **Correção contínua em software** — offset de software (`ecu_sched_encoder_phase_correction_update()`,
+   `ecu_sched_encoder_phase_correction_counts()`, `ecu_sched.h`) somado
+   exclusivamente dentro de `engine_deg_to_counts_in_rev()`
+   (`ecu_sched_encoder_builders.cpp`) — o único ponto por onde **todo** alvo
+   absoluto do dispatcher passa. **Nunca escreve em `TIM2_CNT`/`CCR3`/`CCR4`**
+   (ver "Por que não mexer no registrador" abaixo). Eventos já enfileirados
+   guardam um `timestamp` absoluto já calculado — mudar o offset depois não
+   os afeta retroativamente, só as próximas conversões.
+3. **Detecção grosseira + corte de segurança** — `ems::drv::encoder_sync::poll_100ms()`
+   (`drv/encoder_sync.cpp`) reage à mesma leitura SPI de 100 ms: bits de
+   status do sensor (overspeed/weak-field/undervoltage, antes descartados) +
+   `evaluate_angle_plausibility()` (comparador puro, tolerância = piso fixo +
+   margem escalada por ω). Escada de severidade via `DiagnosticCode::CKP_SIGNAL_FAULT`
+   (reservado no enum, nunca usado antes desta mudança): 1ª ocorrência =
+   WARNING (só telemetria); 3 ocorrências consecutivas = CRITICAL, que já
+   flipa `DiagnosticManager::is_system_ready()` → já corta fuel/ignição via
+   `diag_critical`/`kFuelCutDiagCrit`/`kSparkCutDiagCrit`
+   (`limp_gating.cpp`) — **nenhuma mudança feita em `limp_gating.cpp`**, o
+   corte já existia e estava ocioso.
+
+### Por que não mexer no registrador `TIM2->CNT`
+
+`tim2_encoder_set_count()` é uma escrita direta e desprotegida. O heartbeat
+(`CH4`, `tim2_heartbeat_start()`) arma `CCR4` como valor absoluto com
+auto-rearme `+16384`. Reescrever `CNT` em runtime faria o heartbeat pular o
+alvo (sem novo heartbeat até um wrap de 32 bits) ou disparar um `CC4IF`
+espúrio — a mesma classe de bug já registrada nesta árvore (CC3IE com CCR3
+obsoleto, ver "Verificação feita nesta etapa" acima). Por isso a correção
+vive inteiramente em software, um degrau acima do hardware — ver
+`ecu_sched_encoder_builders.cpp`, comentário junto de
+`g_encoder_phase_correction_counts`.
+
+### Limitação real, medida e não apenas estimada de leve
+
+A janela em que a Camada 2 corrige de verdade é **mais estreita** do que
+pareceria à primeira vista. `mt6835_read_angle_raw21()` faz 4 transações SPI
+de 24 bits (`SPI2` `MBR=÷64`) — orçamento estimado `kSpiWorstCaseUs=150 µs`
+(não medido em bancada). Fazendo a conta com os números reais do projeto:
+
+| RPM | skew estimado (counts) |
+|---|---|
+| ~50 (quase parado) | ~2 |
+| ~200 (cranking) | ~8 |
+| ~390 | ~16 |
+| ~800 (marcha-lenta) | ~33 |
+| 9000 (redline) | ~369 |
+
+O portão de confiança (`spi_reference_trustworthy()`) compara o skew contra
+**1/4 do teto acumulado da correção** (`kMaxTrustedSkewCounts = kMaxTotalCorrectionCounts/4 = 16`),
+não contra o passo por atualização — o passo é pequeno de propósito
+(suavização), não é o critério de "esta leitura presta como referência".
+Isso abre a correção até **~390 RPM (cranking)** — não até marcha-lenta ou
+cruzeiro, como uma iteração anterior deste desenho assumiu sem fazer a
+conta. Acima disso, a Camada 3 (detecção) continua como rede de segurança;
+a Camada 2 simplesmente pausa (não corrige, não atrapalha).
+
+Alargar essa janela de verdade exige uma das duas coisas — nenhuma feita
+nesta etapa: **(a)** medir a latência real da transação em bancada
+(osciloscópio no `CSn`) em vez de estimar `kSpiWorstCaseUs`, ou **(b)** um
+SPI2 mais rápido que `÷64` (reduz o próprio skew, não só a estimativa dele).
+
+### Por que a tolerância da Camada 3 é maior que o teto da Camada 2
+
+`kGrossDriftFloorCounts=100` > `kMaxTotalCorrectionCounts=64` de propósito:
+drift que a correção contínua já absorve (até ±64 counts) nunca deve, por si
+só, soar o alarme de detecção. A Camada 3 só dispara para drift que a Camada
+2 não consegue (ou não pode, por estar fora da janela de confiança) corrigir.
+
+### Caso de borda conhecido, não coberto por teste automatizado
+
+`engine_deg720_to_absolute()` decide a paridade de fase A/B do alvo já
+corrigido via `ecu_sched_encoder_phase_at(candidate)`. Um alvo a
+≤`kMaxSlewPerStepCounts` (2) contagens exatas da fronteira de revolução
+(múltiplo de 16384) poderia, em teoria, cair no bin de revolução errado por
+causa do offset. Risco considerado baixo (janela de 2 contagens em 16384,
+~0,04° de crank) e auto-limitado pelos watchdogs já existentes (stall
+sequencial detecta "phase_valid mas zero arms" em 6 heavy-ticks) — não foi
+escrito um teste dedicado para este caso específico; é um item de bancada,
+não de código, se algum dia for reaberto.
+
+### Testes
+
+`test/test_encoder_sync.cpp`: `circular_diff16384()` e
+`evaluate_angle_plausibility()` (funções puras). `test/test_sched.cpp`:
+`test_ecu_sched_encoder_phase_correction{,_gate,_no_retroactive_effect}()`
+(passo/teto/convergência, portão de confiança, zero-efeito-retroativo em
+eventos já armados) e
+`test_ecu_sched_encoder_drift_detection_escalates_to_limp()` (integração
+completa: leitura implausível → WARNING → 3 ocorrências → CRITICAL →
+`is_system_ready()==false` → `limp_gating_update()` corta injeção/ignição →
+recuperação limpa o fault).
+
+### Fora de escopo, por decisão de segurança
+
+**Escrever em `TIM2->CNT` em runtime**, sob qualquer forma — inclusive
+"só quando o motor está parado" (avaliado e descartado: o heartbeat `CH4`
+não depende de `CNT` estar parado, `CCR4` fica obsoleto de qualquer jeito).
+Corrigir isso direito exigiria uma rotina nova com purga da fila `CH3` +
+máscara de `CC3IE`/`CC4IE` + seção crítica + reescrita + rearme do heartbeat
+a partir do novo `CNT` — mudança bem maior que o problema justifica hoje, e
+que a Camada 2 (offset de software) já resolve sem precisar dela.
+
+## Correção de drift via Z do MT6835 — implementada (2026-08-28)
+
+Depois de implementar e testar a mitigação de 3 camadas acima (SPI/Camada 2
++ Camada 3), a arquitetura foi reavaliada: 2 rodadas de 5 consultores
+independentes + uma consulta ao advisor. O achado central: **a Camada 2
+nunca protegeu o motor** — seu teto (`kMaxTotalCorrectionCounts=64` counts ≈
+±1,41° de cambota) já cabe folgado em qualquer margem tolerável de disparo,
+em qualquer RPM. Quem protege é a Camada 3, que compara TIM2 vs. SPI
+diretamente e nunca dependeu da Camada 2. A pergunta certa não é "qual
+mecanismo corrige melhor", é "que falha a Camada 3 ainda não pega":
+
+| Falha | Z pega (cabo separado)? | SPI (Camada 2) pega? |
+|---|---|---|
+| Corrupção interna do chip (mesmo cálculo, mesma fonte) | Não | Indiretamente via STATUS[2:0] |
+| EMI de modo comum na linha — mecanismo mais provável na prática | **Sim, com cabo blindado dedicado** | Parcial |
+| Glitch que se autocancela na mesma volta | Não | Não |
+| Drift grosseiro | Já coberto pela Camada 3, com ou sem Z | Sim |
+| Drift lento, direção única, dentro da tolerância da Camada 3 | **Sim — o ganho real** | Fraco (~390 RPM só) |
+
+O ganho de Z é estreito — cobre nuisance-limp (evitar corte por drift que se
+acumula devagar), não é uma nova camada de segurança. A Camada 3 continua
+sendo o único backstop de segurança, inalterada.
+
+### Premissa corrigida: Z não é canal independente de A/B
+
+Z sai do MESMO chip, MESMA alimentação, MESMO ímã que A/B — não é uma
+segunda fonte de informação. Um glitch em Z invalida uma volta inteira
+(pior que 1 count perdido em A/B). O único ganho real de independência vem
+de rodar Z num **cabo blindado fisicamente separado** de A/B (ver
+`docs/wiring_diagram.md`) — isso neutraliza o mecanismo de EMI de linha
+(plausivelmente o mais provável na prática), mas não o de corrupção interna
+do chip (que a Camada 3/SPI já cobre por outro caminho).
+
+### Dois gates fechados por datasheet oficial (`MT6835_Rev.1.3.pdf`, `magntek.com.cn`)
+
+1. **Saída AB(Z) é Push-Pull**, não open-drain (tabela de características
+   elétricas: `VOH=VDD-0.4V@-2mA`, `VOL=0.4V@2mA`). Confirma que o pull-down
+   adicionado em PA0/PA1 (`tim2_encoder_init()`) é puramente defensivo.
+2. **`Z_PUL_WID[2:0]`** (registro `0x00A`, bits[2:0], §7.3) é configurável:
+   1/2/4/8/16 LSBs ou 60°/120°/180° fixos. Configurado nesta fork em `0x7`
+   (180°) — máxima margem contra o filtro do TIM3 (N=8@fDTS/8, ~256 ns) em
+   qualquer RPM realista (a 1 LSB o cruzamento já seria só a ~14.305 RPM; a
+   180° a margem é folgada bem além de qualquer redline automotivo).
+   `Z_EDGE` (bit[3] do mesmo registro) = 0 (borda de subida alinhada ao 0°).
+
+### Arquitetura implementada
+
+- **Registro** (`hal/mt6835_regs.h`, `hal/mt6835.cpp` `configure_z_pulse()`):
+  escreve `kRegZeroPosHi=0x00`, `kRegZeroPosLo=0x07` (Z_EDGE=0, Z_PUL_WID=180°)
+  no register map volátil a cada boot, mesma filosofia de
+  `configure_ppr_4096()` — não depende de estado persistido em EEPROM.
+- **Captura** (`hal/stm32h562/timer.cpp`): `tim3_cmp_ic_init()` estendida
+  com TIM3_CH2/PC7 (mesmo filtro `IC2F=N8@fDTS/8` do CH1/CMP), captura só na
+  borda de subida (`CC2P=0`, consistente com `Z_EDGE=0`). `TIM3_IRQHandler`
+  grava `TIM2->CNT` em `g_z_angle_snapshot`/`g_z_edge_count` no CC2IF, mesmo
+  padrão do CMP no CC1IF. ⚠️ PC7/AF2/TIM3_CH2 não foi reconfirmado pino a
+  pino contra a Tabela 15 do DS14258 nesta revisão (só PC6/CH1 foi
+  verificado byte a byte) — confirmar antes de layout real, mesmo espírito
+  do placeholder de CS em `mt6835.cpp`.
+- **Validação** (`drv/encoder_sync.h/.cpp`): `evaluate_z_edge()` espelha
+  `evaluate_cmp_edge()`, mas com span esperado de 1 volta (`kZSpanCounts=16384`,
+  não 2 como o CMP) e tolerância `kZSpanToleranceCounts=32` — orçamento de
+  ruído/glitch de captura, não folga mecânica (Z sai do mesmo encoder que
+  AB, não há folga de corrente/correia aqui).
+- **Correção** (`engine/ecu_sched_encoder_builders.cpp`): o núcleo de
+  slew+teto foi extraído para `apply_phase_correction_step()`, partilhado
+  por `encoder_phase_correction_update()` (SPI, mantém o gate
+  `spi_reference_trustworthy()`) e a nova `encoder_phase_correction_update_from_z()`
+  (Z, **deliberadamente sem esse gate** — reusar o gate do SPI aqui
+  anularia o motivo de implementar Z, já que ele existe só por causa da
+  latência estimada da transação SPI, irrelevante para uma captura de
+  hardware via ISR). Os dois escrevem no mesmo
+  `g_encoder_phase_correction_counts`, mesmo slew (`kMaxSlewPerStepCounts=2`)
+  e mesmo teto (`kMaxTotalCorrectionCounts=64`) — não há disputa, só dois
+  gatilhos diferentes.
+- **Rastreamento** (`engine/ecu_sched_encoder_heartbeat.cpp`,
+  `ecu_sched_encoder_heartbeat_z_tick()`): função irmã de
+  `ecu_sched_encoder_heartbeat_tick()`, chamada separadamente do
+  `TIM2_IRQHandler` (CC4IF) — não muda a assinatura de nenhuma função
+  existente. Mesmo Fix B do CMP (2 flancos aceites consecutivos antes de
+  confiar): o 1º arma a referência de span, o 2º estabelece o **alvo fixo**
+  (mod 16384) — nunca re-ancorado depois disso, ao contrário do CMP (cujo
+  anchor é sobre FASE, não uma referência de drift; re-ancorar a cada
+  flanco cancelaria exatamente o drift que Z existe para detectar). Correção
+  só é aplicada quando `evaluate_z_edge()` reporta `multiple==1` — um span
+  de 2×`kZSpanCounts` é ambíguo (1 flanco perdido vs. 2 voltas normais) e
+  fica só como contagem diagnóstica. `streak_resync` (3 rejeições seguidas)
+  descarta o alvo — mais seguro re-estabelecer do zero que confiar num
+  anchor pós-ruído. Watchdog de Z morto é telemetria pura
+  (`g_z_heartbeats_since_ok`), nunca ligado a `phase_invalidate()`/stall —
+  Z não é safety-critical.
+- **Validação cruzada do alvo contra SPI** (achado do advisor,
+  `ecu_sched_encoder_z_target_check()`): o `streak_resync` acima só reage a
+  spans ruins entre flancos Z — mas um alvo ancorado em cima de drift de AB
+  JÁ EXISTENTE (ex.: um glitch durante o cranking, antes do 2º flanco
+  confirmado) produz spans perfeitamente normais (~16384) para sempre,
+  porque o span mede a distância ENTRE flancos Z, não a posição absoluta
+  deles — nada no rastreador de span detectaria um anchor errado desde a
+  origem. Por isso `poll_100ms()` chama `ecu_sched_encoder_z_target_check(spi_mod)`
+  a cada leitura SPI (~100ms): se o alvo fixo discordar do SPI além de
+  `kZAnchorSpiToleranceCounts=32`, o alvo é descartado e reconstruído a
+  partir do próximo par de flancos Z confirmados. Não pode ser validado no
+  próprio instante do 2º flanco (dentro da ISR do TIM3) porque a leitura
+  SPI é bloqueante (~150µs+) — nunca deve rodar em contexto de ISR de
+  timer.
+
+### Testes
+
+`test/test_encoder_sync.cpp`: `test_encoder_sync_z_edge()` (span/tolerância/
+múltiplo/streak, espelha `test_encoder_sync_cmp_edge()`). `test/test_sched.cpp`:
+`test_ecu_sched_encoder_heartbeat_z_tracking()` (confirm gate, estabelecimento
+do alvo, correção com sinal correto, multiple==1, streak_resync descarta o
+alvo), `test_ecu_sched_encoder_z_correction_ignores_spi_gate()` — prova
+dedicada de que a correção via Z permanece ativa exatamente na mesma
+condição de ω em que `test_ecu_sched_encoder_phase_correction_gate()` prova
+que a correção via SPI fica bloqueada (regressão do achado crítico desta
+implementação) — e `test_ecu_sched_encoder_z_target_spi_crosscheck()`
+(alvo mantido quando SPI concorda, descartado quando discorda além da
+tolerância, no-op seguro sem alvo — regressão do achado do advisor sobre
+anchor não-validado).
+
+### Fora de escopo
+
+Medir a latência real do SPI via TIM5 (item da 1ª mesa de consultores) —
+trabalho de bancada futuro, não bloqueia esta implementação. Qualquer
+mudança em `heartbeat_tick()`/`heartbeat_subtick()` existentes ou nos seus
+call sites de teste. Remover ou enfraquecer a Camada 3 — continua o único
+backstop de segurança, agora e depois de Z implementado.

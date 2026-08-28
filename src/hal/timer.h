@@ -83,6 +83,22 @@ void tim3_cmp_ic_init() noexcept;
 uint32_t cmp_angle_snapshot() noexcept;
 uint32_t cmp_edge_count() noexcept;
 
+// ── Z (índice) via TIM3_CH2/PC7 (VGT6 apenas, MT6835) ───────────────────────
+// Correção de drift via Z — docs/dev/mt6835_encoder_fork.md, "Correção de
+// drift via Z". Mesmo periférico/init que o CMP acima (tim3_cmp_ic_init()
+// configura os dois canais); captura só na borda de subida (CC2P=0,
+// consistente com Z_EDGE=0 programado no MT6835, ver mt6835.cpp
+// configure_z_pulse()). No CC2IF, o ISR grava TIM2->CNT (mesmo princípio do
+// CMP: ângulo do encoder no instante do flanco Z, não um timestamp de
+// tempo). Requer par Z em cabo blindado dedicado, fisicamente separado de
+// AB (ver docs/wiring_diagram.md) — sem isso, Z não é independente de AB
+// contra EMI de linha (achado da 2ª mesa de consultores).
+// ⚠️ Mesma ressalva de não-atomicidade do par que cmp_angle_snapshot()/
+// cmp_edge_count() acima: cada leitura é atômica isoladamente, mas o par
+// pode vir de flancos diferentes se lido a meio de uma actualização do ISR.
+uint32_t z_angle_snapshot() noexcept;
+uint32_t z_edge_count() noexcept;
+
 void tim4_pwm_init(uint32_t freq_hz);
 void tim4_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept;
 

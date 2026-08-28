@@ -29,6 +29,51 @@ namespace si = ems::engine::sched_internal;
 
 volatile uint32_t g_enc_seq_min_lead_skip_count = 0U;
 volatile uint32_t g_enc_omega_refresh_count = 0U;
+
+// ── Mitigação de drift TIM2(AB) vs. MT6835(SPI) — Camada 2 ────────────────
+// docs/dev/mt6835_encoder_fork.md, "Mitigação de drift silencioso". Offset de
+// software somado só ao PRÓXIMO alvo calculado por
+// engine_deg_to_counts_in_rev() (abaixo) — NUNCA em TIM2_CNT/CCR3/CCR4.
+// Eventos já enfileirados guardam um timestamp absoluto já calculado; mudar
+// este offset não os afeta retroativamente, só as conversões seguintes.
+static volatile int32_t g_encoder_phase_correction_counts = 0;
+
+// Passo máximo por atualização (uma vez por poll SPI de 100 ms) e teto do
+// total acumulado — bem abaixo de kCmpSpanToleranceCounts (200,
+// drv/encoder_sync.h) para nunca se aproximar da banda que
+// evaluate_cmp_edge() já usa para o CMP.
+static constexpr int32_t kMaxSlewPerStepCounts     = 2;
+static constexpr int32_t kMaxTotalCorrectionCounts = 64;
+
+// Orçamento de latência da leitura de ângulo por SPI (4 registos × 24 bits,
+// SPI2 ÷64, mt6835_read_angle_raw21()) — ESTIMATIVA, não medida em bancada.
+// Usado para (a) decidir se a leitura ainda serve de referência para a
+// correção contínua, e (b) dar margem extra à tolerância de detecção grosseira
+// (Camada 3). Confirmar com osciloscópio antes de confiar nisto com hardware
+// real (ver docs/dev/mt6835_encoder_fork.md).
+static constexpr uint32_t kSpiWorstCaseUs = 150U;
+
+// Limiar de confiança da leitura SPI como referência: comparado contra o
+// TETO acumulado da correção (kMaxTotalCorrectionCounts), NÃO contra o passo
+// por atualização (kMaxSlewPerStepCounts). O passo é pequeno de propósito
+// (suavização, não critério de confiança) — a pergunta certa é "este skew é
+// pequeno o bastante para não dominar o valor final da correção", não
+// "menor que 2 counts". Achado ao validar os números: com
+// kSpiWorstCaseUs=150 µs, o skew já passa de 30 counts em marcha-lenta
+// (~800 RPM) — comparar contra kMaxSlewPerStepCounts fecharia o portão
+// sempre que o motor estivesse girando, contrariando a intenção de desenho
+// (corrigir durante cranking/parada, não só com ω inválido). 1/4 do teto
+// deixa o portão aberto até ~390 RPM (cranking) — ainda ESTREITO, não
+// "idle/cruzeiro" como uma versão anterior deste comentário assumia sem
+// fazer a conta. Alargar isto de verdade exige (a) medir a latência real em
+// bancada em vez de estimar, ou (b) um SPI2 mais rápido que ÷64.
+static constexpr uint32_t kMaxTrustedSkewCounts =
+    static_cast<uint32_t>(kMaxTotalCorrectionCounts) / 4U;
+
+// Camada 3 (detecção grosseira) — piso deliberadamente MAIOR que
+// kMaxTotalCorrectionCounts: drift que a Camada 2 já absorve nunca deve, por
+// si só, disparar o fault de detecção (ems::drv::encoder_sync::poll_100ms()).
+static constexpr uint32_t kGrossDriftFloorCounts = 100U;
 namespace ems::engine::sched_internal::encoder {
 
 // ── Conversão graus de motor → counts TIM2 ───────────────────────────────
@@ -55,8 +100,98 @@ uint32_t engine_deg_to_counts_in_rev(uint32_t engine_angle_deg) noexcept
         static_cast<uint32_t>(cfg::g_eng_cfg.encoder_tdc1_origin_deg) % 360U;
     const uint32_t crank_deg =
         (engine_angle_deg % 360U + 360U - origin_mod360) % 360U;
-    return (crank_deg * 16384U) / 360U;
+    const uint32_t raw = (crank_deg * 16384U) / 360U;
+    // Camada 2 de mitigação de drift (ver g_encoder_phase_correction_counts
+    // acima) — soma o offset de software, nunca o registrador TIM2.
+    return (raw + static_cast<uint32_t>(g_encoder_phase_correction_counts)) & 0x3FFFU;
 }
+
+// true se o orçamento de skew da leitura SPI (kSpiWorstCaseUs convertido em
+// counts via ω) for menor que kMaxTrustedSkewCounts (1/4 do teto acumulado
+// da correção — ver comentário junto da constante acima; NÃO o passo por
+// atualização). ω inválido (motor parado): duration_ticks_to_span_counts()
+// devolve 0, que sempre passa neste gate — correto, o desvio físico esperado
+// com o motor parado é desprezível.
+bool spi_reference_trustworthy(void) noexcept
+{
+    const uint32_t skew_budget = duration_ticks_to_span_counts(
+        ECU_SCHED_US_TO_TICKS_INTERNAL(kSpiWorstCaseUs));
+    return skew_budget < kMaxTrustedSkewCounts;
+}
+
+int32_t encoder_phase_correction_counts(void) noexcept
+{
+    return g_encoder_phase_correction_counts;
+}
+
+// Único escritor de g_encoder_phase_correction_counts. Chamado 1×/poll SPI de
+// 100 ms (ems::drv::encoder_sync::poll_100ms(), via o wrapper público
+// ecu_sched_encoder_phase_correction_update() em ecu_sched.h) com o ângulo
+// absoluto recém-lido e o TIM2_CNT cru da mesma amostra. Nunca escreve em
+// TIM2_CNT/CCR3/CCR4 — ver docs/dev/mt6835_encoder_fork.md, "Por que não
+// mexer no registrador".
+// Núcleo comum de slew+teto, partilhado por SPI (gated por
+// spi_reference_trustworthy()) e Z (gated pelo chamador via
+// evaluate_z_edge()/multiple==1 — ver encoder_phase_correction_update_from_z()
+// abaixo). `truth_mod16384` é a referência de verdade (leitura SPI ao vivo,
+// ou o alvo fixo estabelecido no primeiro flanco Z aceite).
+static void apply_phase_correction_step(uint32_t truth_mod16384,
+                                         uint32_t tim2_raw_mod16384) noexcept
+{
+    const uint32_t corrected_mod16384 =
+        (tim2_raw_mod16384 + static_cast<uint32_t>(g_encoder_phase_correction_counts))
+        & 0x3FFFU;
+    int32_t error = ems::drv::encoder_sync::circular_diff16384(
+        truth_mod16384, corrected_mod16384);
+    if (error > kMaxSlewPerStepCounts)  { error = kMaxSlewPerStepCounts; }
+    if (error < -kMaxSlewPerStepCounts) { error = -kMaxSlewPerStepCounts; }
+
+    int32_t updated = g_encoder_phase_correction_counts + error;
+    if (updated > kMaxTotalCorrectionCounts)  { updated = kMaxTotalCorrectionCounts; }
+    if (updated < -kMaxTotalCorrectionCounts) { updated = -kMaxTotalCorrectionCounts; }
+    g_encoder_phase_correction_counts = updated;
+}
+
+void encoder_phase_correction_update(uint32_t spi_counts_mod16384,
+                                      uint32_t tim2_raw_mod16384) noexcept
+{
+    if (!spi_reference_trustworthy()) { return; }
+    apply_phase_correction_step(spi_counts_mod16384, tim2_raw_mod16384);
+}
+
+// Correção via Z (TIM3_CH2/PC7) — mesmo offset partilhado
+// (g_encoder_phase_correction_counts), mesmo slew/teto, mas
+// DELIBERADAMENTE sem o gate spi_reference_trustworthy(): esse gate existe
+// só por causa da latência ESTIMADA da transação SPI (kSpiWorstCaseUs),
+// irrelevante para uma captura de hardware via ISR (latência sub-µs) — se
+// reusássemos o mesmo gate aqui, Z ficaria tão limitado a baixo RPM quanto
+// o SPI, anulando exatamente o motivo de implementar Z (ver
+// docs/dev/mt6835_encoder_fork.md, "Correção de drift via Z"). A validade
+// da leitura de Z é garantida pelo chamador antes desta chamada
+// (evaluate_z_edge() + regra multiple==1 — ver
+// ecu_sched_encoder_heartbeat_z_tick()), não por um orçamento de tempo.
+void encoder_phase_correction_update_from_z(uint32_t z_target_mod16384,
+                                             uint32_t z_raw_mod16384) noexcept
+{
+    apply_phase_correction_step(z_target_mod16384, z_raw_mod16384);
+}
+
+// Camada 3 (detecção grosseira, ems::drv::encoder_sync::poll_100ms()) — piso
+// fixo (kGrossDriftFloorCounts) + margem escalada por ω, mesmo helper que a
+// Camada 2 usa. Deliberadamente maior que kMaxTotalCorrectionCounts: drift
+// que a correção contínua já absorve nunca deve, por si só, soar o alarme.
+uint32_t gross_drift_tolerance_counts(void) noexcept
+{
+    return kGrossDriftFloorCounts
+         + duration_ticks_to_span_counts(ECU_SCHED_US_TO_TICKS_INTERNAL(kSpiWorstCaseUs));
+}
+
+#if defined(EMS_HOST_TEST)
+void encoder_phase_correction_test_reset(void) noexcept
+{
+    g_encoder_phase_correction_counts = 0;
+}
+#endif
 
 // Posição-alvo dentro da volta (0..16383) → próxima ocorrência absoluta em
 // counts de 32 bits. Sempre em (now_raw, now_raw+16384] — janela semi-aberta
@@ -613,6 +748,36 @@ void recompute_presync(uint32_t now_raw) noexcept
 }
 
 }  // namespace ems::engine::sched_internal::encoder
+
+// Wrappers públicos (ecu_sched.h) — chamados por ems::drv::encoder_sync::
+// poll_100ms() (drv/encoder_sync.cpp), fora da árvore engine-internal.
+void ecu_sched_encoder_phase_correction_update(uint32_t spi_counts_mod16384,
+                                               uint32_t tim2_raw_mod16384) noexcept
+{
+    si::encoder::encoder_phase_correction_update(spi_counts_mod16384, tim2_raw_mod16384);
+}
+
+int32_t ecu_sched_encoder_phase_correction_counts(void) noexcept
+{
+    return si::encoder::encoder_phase_correction_counts();
+}
+
+uint32_t ecu_sched_encoder_gross_drift_tolerance_counts(void) noexcept
+{
+    return si::encoder::gross_drift_tolerance_counts();
+}
+
+#if defined(EMS_HOST_TEST)
+void ecu_sched_encoder_phase_correction_test_reset(void) noexcept
+{
+    si::encoder::encoder_phase_correction_test_reset();
+}
+
+uint8_t ecu_sched_encoder_test_spi_reference_trustworthy(void) noexcept
+{
+    return si::encoder::spi_reference_trustworthy() ? 1U : 0U;
+}
+#endif
 
 #if defined(EMS_HOST_TEST)
 // Hooks de teste — extern "C", free functions (mesma convenção do resto do

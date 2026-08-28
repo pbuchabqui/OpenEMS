@@ -236,6 +236,19 @@ void ecu_sched_encoder_arm_channel(uint8_t ch, uint32_t target_counts,
                                    uint8_t action) noexcept;
 void ecu_sched_encoder_evt_dispatch(void) noexcept;  // TIM2 ISR CC3IF
 
+// ── Mitigação de drift TIM2(AB) vs. MT6835(SPI) ───────────────────────────
+// docs/dev/mt6835_encoder_fork.md, "Mitigação de drift silencioso". Chamado
+// por ems::drv::encoder_sync::poll_100ms() (drv/encoder_sync.cpp), não
+// diretamente por main_stm32.cpp. NUNCA escreve em TIM2_CNT/CCR3/CCR4 — só
+// desloca o próximo alvo calculado por engine_deg_to_counts_in_rev().
+void ecu_sched_encoder_phase_correction_update(uint32_t spi_counts_mod16384,
+                                               uint32_t tim2_raw_mod16384) noexcept;
+int32_t ecu_sched_encoder_phase_correction_counts(void) noexcept;
+// Tolerância (counts) para a checagem de plausibilidade grosseira — piso fixo
+// (bem acima do teto que a correção contínua já absorve) + termo escalado
+// por ω. Ver ems::drv::encoder_sync::evaluate_angle_plausibility().
+uint32_t ecu_sched_encoder_gross_drift_tolerance_counts(void) noexcept;
+
 // Contadores da fila TIM2/CH3 (produção — dash/bancada; TIM5 tem g_late_event_count).
 uint32_t ecu_sched_encoder_late_event_count(void) noexcept;
 uint32_t ecu_sched_encoder_evt_overflow(void) noexcept;
@@ -276,6 +289,32 @@ void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
                                          uint32_t cmp_angle,
                                          uint32_t cmp_edge_count) noexcept;
 
+// Correção de drift via Z (índice, TIM3_CH2/PC7) — docs/dev/mt6835_encoder_fork.md,
+// "Correção de drift via Z". Função irmã, chamada separadamente de
+// heartbeat_subtick() acima (não muda a assinatura dela) — ver
+// hal/stm32h562/timer.cpp, TIM2_IRQHandler CC4IF. Rastreia flancos Z
+// (mesmo padrão do rastreador CMP em ecu_sched_encoder_heartbeat_tick()):
+// primeiro flanco aceite arma a referência de span; ao 2º flanco aceite
+// consecutivo (confirm gate, mesmo Fix B do CMP) estabelece o alvo fixo
+// (mod 16384) e, dali em diante, corrige via
+// ecu_sched_encoder_phase_correction_update_from_z() só quando
+// evaluate_z_edge() reporta multiple==1 (evita a ambiguidade flanco-perdido
+// vs. múltiplas voltas). Watchdog de Z morto é telemetria pura — nunca
+// invalida fase nem aciona limp_gating (Z não é safety-critical; quem cobre
+// isso é a Camada 3/SPI, inalterada).
+void ecu_sched_encoder_heartbeat_z_tick(uint32_t z_angle_raw,
+                                        uint32_t z_edge_count) noexcept;
+
+// Validação cruzada do alvo Z contra o SPI (achado do advisor, ver
+// docs/dev/mt6835_encoder_fork.md, "Correção de drift via Z") — chamado por
+// ems::drv::encoder_sync::poll_100ms() a cada leitura SPI bem-sucedida
+// (~100ms). Se o alvo fixo estabelecido pelo rastreador de Z (2º flanco
+// confirmado) discordar do SPI além de uma tolerância pequena, descarta o
+// alvo para ser reconstruído a partir do próximo par de flancos — sem isto,
+// um alvo ancorado em cima de drift pré-existente (ex.: cranking) ficaria
+// permanentemente errado, sem nada no rastreador de span capaz de detectar.
+void ecu_sched_encoder_z_target_check(uint32_t spi_mod16384) noexcept;
+
 // Modo de ignição actual: 1 = sequencial (full sync + CMP confirmado),
 // 0 = wasted-spark (presync). Reflecte g_knock_sequential. Usado pela
 // observabilidade (status bit IGN_SEQUENTIAL) e pelos host tests.
@@ -292,6 +331,12 @@ void ecu_sched_encoder_phase_test_reset(void) noexcept;
 void ecu_sched_encoder_queue_test_reset(void) noexcept;
 // Idem para o heartbeat (delta de cmp_edge_count entre ticks).
 void ecu_sched_encoder_heartbeat_test_reset(void) noexcept;
+// Idem para o offset de correção contínua (Camada 2 da mitigação de drift).
+void ecu_sched_encoder_phase_correction_test_reset(void) noexcept;
+// true se o orçamento de skew da leitura SPI (kSpiWorstCaseUs) for pequeno
+// demais para render a leitura confiável no ω actual — expõe o gate interno
+// de ecu_sched_encoder_phase_correction_update() para teste directo.
+uint8_t ecu_sched_encoder_test_spi_reference_trustworthy(void) noexcept;
 // Diagnóstico do rastreador de flancos CMP (heartbeat) — expostos para teste
 // directo, mesmo padrão dos contadores g_enc_dbg_* da fila TIM2/CH3.
 uint32_t ecu_sched_encoder_test_get_cmp_reject_count(void) noexcept;
@@ -300,6 +345,13 @@ uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept;
 // Contador de confirmação do Fix B (2 flancos consecutivos exigidos antes
 // de re-ancorar após boot/streak_resync) — 0..2, satura em 2.
 uint8_t ecu_sched_encoder_test_get_cmp_confirm_count(void) noexcept;
+// Diagnóstico do rastreador de flancos Z (heartbeat_z_tick) — mesmo padrão
+// dos getters de CMP acima, ver docs/dev/mt6835_encoder_fork.md.
+uint32_t ecu_sched_encoder_test_get_z_reject_count(void) noexcept;
+uint32_t ecu_sched_encoder_test_get_z_missed_edge_count(void) noexcept;
+uint32_t ecu_sched_encoder_test_get_z_heartbeats_since_ok(void) noexcept;
+uint8_t  ecu_sched_encoder_test_get_z_confirm_count(void) noexcept;
+uint8_t  ecu_sched_encoder_test_has_z_target(void) noexcept;
 // Contador de sub-ticks desde o último tick pesado (0..63) — testa a
 // cadência do split light/heavy directamente, sem depender de efeitos
 // secundários do caminho pesado.

@@ -680,6 +680,7 @@ void ecu_sched_test_reset(void)
     ecu_sched_encoder_phase_test_reset();
     ecu_sched_encoder_queue_test_reset();
     ecu_sched_encoder_heartbeat_test_reset();
+    ecu_sched_encoder_phase_correction_test_reset();
     ems::engine::enc_cyl_setpoints_reset();
     ems::engine::limp_gating_reset();
 }

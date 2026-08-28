@@ -27,6 +27,22 @@ void clear_cyl_arm_latches(void) noexcept;
 uint32_t min_lead_counts(void) noexcept;
 uint32_t duration_ticks_to_span_counts(uint32_t duration_ticks) noexcept;
 
+// Mitigação de drift TIM2(AB) vs. MT6835(SPI) — docs/dev/mt6835_encoder_fork.md.
+// Estado/lógica privados; API pública (chamada por drv/encoder_sync.cpp) são
+// os wrappers globais ecu_sched_encoder_phase_correction_* em ecu_sched.h.
+bool spi_reference_trustworthy(void) noexcept;
+void encoder_phase_correction_update(uint32_t spi_counts_mod16384,
+                                      uint32_t tim2_raw_mod16384) noexcept;
+// Correção via Z — sem o gate de spi_reference_trustworthy(), ver
+// docs/dev/mt6835_encoder_fork.md, "Correção de drift via Z".
+void encoder_phase_correction_update_from_z(uint32_t z_target_mod16384,
+                                             uint32_t z_raw_mod16384) noexcept;
+int32_t encoder_phase_correction_counts(void) noexcept;
+uint32_t gross_drift_tolerance_counts(void) noexcept;
+#if defined(EMS_HOST_TEST)
+void encoder_phase_correction_test_reset(void) noexcept;
+#endif
+
 #if defined(EMS_HOST_TEST)
 uint32_t engine_deg_to_counts_in_rev(uint32_t engine_angle_deg) noexcept;
 uint32_t rev_target_to_absolute(uint32_t target_counts_in_rev,

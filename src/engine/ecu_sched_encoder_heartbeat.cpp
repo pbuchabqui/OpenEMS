@@ -466,6 +466,112 @@ void ecu_sched_encoder_heartbeat_subtick(uint32_t tim2_now, uint32_t tim5_now,
     }
 }
 
+// ── Correção de drift via Z (índice, TIM3_CH2/PC7) ───────────────────────
+// docs/dev/mt6835_encoder_fork.md, "Correção de drift via Z". Espelha o
+// rastreador de CMP acima, mas mais simples: Z não ancora fase (isso
+// continua exclusivo do CMP), só corrige o offset de software partilhado
+// via ecu_sched_encoder_phase_correction_update_from_z(). Estado próprio,
+// função irmã — não toca em nenhum dos globais/funções do CMP acima.
+
+static uint32_t g_hb_last_z_edge_count   = 0U;
+static uint8_t  g_z_has_prev             = 0U;
+static uint32_t g_z_prev_raw             = 0U;
+static uint8_t  g_z_reject_streak        = 0U;
+static uint8_t  g_z_confirm_count        = 0U;  // mesmo Fix B do CMP: 2 flancos antes de confiar
+static uint8_t  g_z_has_target           = 0U;
+static uint32_t g_z_target_mod16384      = 0U;  // alvo fixo, estabelecido 1x ao confirmar
+static uint32_t g_z_heartbeats_since_ok  = 0U;  // telemetria pura — nunca invalida fase/stall
+static uint32_t g_z_reject_count         = 0U;  // diagnóstico
+static uint32_t g_z_missed_edge_count    = 0U;  // diagnóstico (multiple>1)
+
+void ecu_sched_encoder_heartbeat_z_tick(uint32_t z_angle_raw,
+                                        uint32_t z_edge_count) noexcept
+{
+    if (z_edge_count != g_hb_last_z_edge_count) {
+        g_hb_last_z_edge_count = z_edge_count;
+        const ems::drv::encoder_sync::ZEdgeResult r =
+            ems::drv::encoder_sync::evaluate_z_edge(
+                z_angle_raw, g_z_has_prev != 0U, g_z_prev_raw, g_z_reject_streak);
+        if (r.accepted) {
+            g_z_has_prev            = 1U;
+            g_z_prev_raw            = z_angle_raw;
+            g_z_reject_streak       = 0U;
+            g_z_heartbeats_since_ok = 0U;
+            if (r.multiple > 1U) { ++g_z_missed_edge_count; }
+            if (g_z_confirm_count < 2U) { ++g_z_confirm_count; }
+            if (g_z_confirm_count >= 2U) {
+                const uint32_t z_mod = z_angle_raw & 0x3FFFU;
+                if (!g_z_has_target) {
+                    // Estabelece o alvo fixo uma única vez — Z sempre
+                    // dispara na mesma posição física do ímã, então não há
+                    // razão para re-ancorar a cada flanco (ao contrário do
+                    // CMP, cujo anchor é sobre FASE, não uma referência de
+                    // drift). Re-ancorar aqui a cada flanco cancelaria
+                    // exatamente o drift que queremos detectar.
+                    g_z_target_mod16384 = z_mod;
+                    g_z_has_target       = 1U;
+                } else if (r.multiple == 1U) {
+                    // Só corrige em volta única — span de 2×kZSpanCounts é
+                    // ambíguo (1 flanco perdido vs. 2 voltas normais), ver
+                    // encoder_sync.h.
+                    si::encoder::encoder_phase_correction_update_from_z(
+                        g_z_target_mod16384, z_mod);
+                }
+            }
+        } else {
+            ++g_z_reject_count;
+            g_z_reject_streak = r.reject_streak;
+            if (r.streak_resync) {
+                g_z_has_prev     = 0U;
+                g_z_confirm_count = 0U;
+                // Descarta também o alvo fixo: depois de 3 rejeições
+                // seguidas, não há razão para continuar a confiar num
+                // anchor estabelecido antes do episódio de ruído — mais
+                // seguro re-estabelecer do zero na próxima sequência boa.
+                g_z_has_target    = 0U;
+            }
+        }
+    }
+
+    // Watchdog de Z morto — telemetria pura. Deliberadamente NÃO chama
+    // phase_invalidate()/ecu_sched_on_encoder_stall(): Z não é
+    // safety-critical (a Camada 3/SPI continua sendo o backstop de
+    // segurança, inalterada); um cabo Z partido não deve, por si só, tirar
+    // o motor de sincronismo.
+    if (g_z_heartbeats_since_ok < 0xFFFFFFFFU) { ++g_z_heartbeats_since_ok; }
+}
+
+// Validação cruzada do alvo Z contra o SPI — achado do advisor
+// (docs/dev/mt6835_encoder_fork.md, "Correção de drift via Z"): sem isto,
+// um alvo Z estabelecido em cima de um drift de AB já existente (ex.: um
+// glitch durante o cranking, antes das primeiras 2 voltas confirmadas)
+// ficaria permanentemente errado — o rastreador de span nunca detecta isso,
+// porque os spans entre flancos Z continuam ~kZSpanCounts independente de
+// ONDE o alvo está ancorado. Chamado 1×/poll SPI de 100 ms
+// (ems::drv::encoder_sync::poll_100ms(), que já tem spi_mod calculado) —
+// não dá para validar no próprio instante do 2º flanco Z porque a leitura
+// SPI é bloqueante (~150 µs+, ver kSpiWorstCaseUs) e nunca deve rodar
+// dentro de uma ISR de timer.
+static constexpr uint32_t kZAnchorSpiToleranceCounts = 32U;
+
+void ecu_sched_encoder_z_target_check(uint32_t spi_mod16384) noexcept
+{
+    if (!g_z_has_target) { return; }
+    const int32_t delta = ems::drv::encoder_sync::circular_diff16384(
+        spi_mod16384, g_z_target_mod16384);
+    const int32_t abs_delta = (delta < 0) ? -delta : delta;
+    if (static_cast<uint32_t>(abs_delta) > kZAnchorSpiToleranceCounts) {
+        // Alvo suspeito — descarta e deixa o rastreador reconstruir a
+        // partir do próximo par de flancos Z confirmados. Mesmo espírito
+        // do streak_resync: mais seguro reconstruir do zero do que
+        // continuar a confiar num anchor que pode estar a corrigir na
+        // direção errada. g_z_has_prev/prev_raw ficam intactos — a
+        // validade do SPAN entre flancos não depende de onde o alvo está.
+        g_z_has_target    = 0U;
+        g_z_confirm_count = 0U;
+    }
+}
+
 #if defined(EMS_HOST_TEST)
 void ecu_sched_encoder_heartbeat_test_reset(void) noexcept
 {
@@ -491,11 +597,26 @@ void ecu_sched_encoder_heartbeat_test_reset(void) noexcept
     si::encoder::seq_arm_success_count_test_reset();
     si::encoder::clear_cyl_arm_latches();
     ems::drv::encoder_sync::set_health_ok(true);
+    g_hb_last_z_edge_count   = 0U;
+    g_z_has_prev             = 0U;
+    g_z_prev_raw             = 0U;
+    g_z_reject_streak        = 0U;
+    g_z_confirm_count        = 0U;
+    g_z_has_target           = 0U;
+    g_z_target_mod16384      = 0U;
+    g_z_heartbeats_since_ok  = 0U;
+    g_z_reject_count         = 0U;
+    g_z_missed_edge_count    = 0U;
 }
 uint32_t ecu_sched_encoder_test_get_cmp_reject_count(void) noexcept { return g_cmp_reject_count; }
 uint32_t ecu_sched_encoder_test_get_cmp_missed_edge_count(void) noexcept { return g_cmp_missed_edge_count; }
 uint32_t ecu_sched_encoder_test_get_cmp_heartbeats_since_ok(void) noexcept { return g_cmp_heartbeats_since_ok; }
 uint8_t  ecu_sched_encoder_test_get_cmp_confirm_count(void) noexcept { return g_cmp_confirm_count; }
+uint32_t ecu_sched_encoder_test_get_z_reject_count(void) noexcept { return g_z_reject_count; }
+uint32_t ecu_sched_encoder_test_get_z_missed_edge_count(void) noexcept { return g_z_missed_edge_count; }
+uint32_t ecu_sched_encoder_test_get_z_heartbeats_since_ok(void) noexcept { return g_z_heartbeats_since_ok; }
+uint8_t  ecu_sched_encoder_test_get_z_confirm_count(void) noexcept { return g_z_confirm_count; }
+uint8_t  ecu_sched_encoder_test_has_z_target(void) noexcept { return g_z_has_target; }
 uint8_t  ecu_sched_encoder_test_get_subtick_count(void) noexcept { return g_hb_subtick_count; }
 uint32_t ecu_sched_encoder_test_get_seq_min_lead_skip_count(void) noexcept
 {

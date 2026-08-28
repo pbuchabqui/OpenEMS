@@ -34,6 +34,7 @@
 #include "engine/misfire_detect.h"
 #include "engine/misfire_encoder.h"
 #include "engine/diagnostic_manager.h"
+#include "engine/limp_gating.h"
 #include "engine/xtau_autocalib.h"
 #include "engine/output_test.h"
 #include "engine/engine_config.h"
@@ -394,6 +395,303 @@ void test_ecu_sched_encoder_min_lead(void) {
     ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 5000u, ECU_ACT_INJ_ON);
     CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts, &ch, &high) != 0u, "get_evt(0) ok");
     CHECK_EQ(ts, 5062u, "omega=0.5: floor scales down to 62 counts");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_phase_correction(void) {
+    section("ecu_sched: mitigação de drift — Camada 2 (correção contínua, passo/teto)");
+    ecu_sched_test_reset();
+
+    // ω inválido (motor parado, sem amostra): duration_ticks_to_span_counts()
+    // devolve 0 -> sempre abaixo de kMaxTrustedSkewCounts -> confiável.
+    CHECK_EQ(ecu_sched_encoder_test_spi_reference_trustworthy(), 1u,
+             "ω inválido: leitura SPI considerada confiável (skew=0)");
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 0,
+             "offset começa em 0");
+
+    // SPI à frente de TIM2 por +10 counts -> passo clampado a +2 (não o erro inteiro).
+    ecu_sched_encoder_phase_correction_update(/*spi=*/1010u, /*tim2=*/1000u);
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 2,
+             "1ª atualização: passo clampado a +kMaxSlewPerStepCounts (2)");
+
+    ecu_sched_encoder_phase_correction_update(1010u, 1000u);
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 4,
+             "2ª atualização: mais +2 (erro residual ainda maior que o passo)");
+
+    // Convergência: com um erro FIXO e pequeno (spi sempre 10 counts à frente
+    // de tim2), o controlador persegue a diferença real e PARA em offset=10
+    // (erro chega a 0) — não continua a crescer indefinidamente.
+    for (int i = 0; i < 20; ++i) {
+        ecu_sched_encoder_phase_correction_update(1010u, 1000u);
+    }
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 10,
+             "convergência: offset estabiliza em 10 (erro residual chega a 0)");
+
+    // Erro persistente e MAIOR que o teto acumulado (diff=1000): satura em
+    // kMaxTotalCorrectionCounts (64) e nunca ultrapassa, mesmo insistindo.
+    ecu_sched_test_reset();
+    for (int i = 0; i < 100; ++i) {
+        ecu_sched_encoder_phase_correction_update(/*spi=*/2000u, /*tim2=*/1000u);
+    }
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 64,
+             "erro maior que o teto: satura em kMaxTotalCorrectionCounts (64), nunca ultrapassa");
+
+    // Erro no sentido oposto: desce de volta (não trava no teto para sempre).
+    ecu_sched_encoder_phase_correction_update(/*spi=*/1000u, /*tim2=*/2000u);
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 62,
+             "erro no sentido oposto: offset desce (passo -2)");
+
+    ecu_sched_test_reset();
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 0,
+             "test_reset() zera o offset");
+}
+
+void test_ecu_sched_encoder_phase_correction_gate(void) {
+    section("ecu_sched: mitigação de drift — gate de confiabilidade (ω alto bloqueia)");
+    ecu_sched_test_reset();
+
+    // Semeia ω=1.0 exato (mesma receita de test_ecu_sched_encoder_omega) —
+    // nesse ω o skew da leitura SPI (kSpiWorstCaseUs) já passa muito de
+    // kMaxTrustedSkewCounts, então a leitura deixa de servir de referência.
+    ecu_sched_encoder_omega_sample(1000u, 1000u);
+    ecu_sched_encoder_omega_sample(2000u, 2000u);
+    CHECK_EQ(ecu_sched_encoder_omega_x65536(), 65536, "omega semeado em 1.0");
+    CHECK_EQ(ecu_sched_encoder_test_spi_reference_trustworthy(), 0u,
+             "ω alto: leitura SPI NÃO confiável (skew >> kMaxTrustedSkewCounts)");
+
+    // Erro grande alimentado mesmo assim -> offset não muda (gate bloqueia).
+    ecu_sched_encoder_phase_correction_update(2000u, 1000u);
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 0,
+             "gate bloqueado: offset permanece 0 apesar do erro grande");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_phase_correction_no_retroactive_effect(void) {
+    section("ecu_sched: mitigação de drift — offset não afeta eventos já armados");
+    ecu_sched_test_reset();
+
+    const uint32_t raw_before_offset = ecu_sched_encoder_test_engine_deg_to_counts(0u);
+
+    ecu_sched_encoder_test_set_tim2_cnt(5000u);
+    ecu_sched_encoder_arm_channel(ECU_CH_INJ1, 9000u, ECU_ACT_INJ_ON);
+    uint32_t ts_before = 0u; uint8_t ch = 0xFFu; uint8_t high = 0xFFu;
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts_before, &ch, &high) != 0u,
+               "evento armado com sucesso");
+    CHECK_EQ(ts_before, 9000u, "timestamp inicial = alvo pedido (bem além do min-lead)");
+
+    // Muda o offset depois do evento já estar na fila (ω inválido -> confiável).
+    ecu_sched_encoder_phase_correction_update(1020u, 1000u);
+    const int32_t offset = ecu_sched_encoder_phase_correction_counts();
+    CHECK_TRUE(offset != 0, "offset mudou de verdade");
+
+    uint32_t ts_after = 0u;
+    CHECK_TRUE(ecu_sched_encoder_test_get_evt(0, &ts_after, &ch, &high) != 0u,
+               "evento ainda na fila");
+    CHECK_EQ(ts_after, ts_before,
+             "timestamp do evento já armado NÃO muda quando o offset muda depois");
+
+    // Uma conversão grau->counts feita DEPOIS da mudança já reflete o offset novo.
+    const uint32_t raw_after_offset = ecu_sched_encoder_test_engine_deg_to_counts(0u);
+    CHECK_EQ(raw_after_offset,
+             (raw_before_offset + static_cast<uint32_t>(offset)) & 0x3FFFu,
+             "nova conversão em 0° já reflete o offset atual (só afeta o PRÓXIMO cálculo)");
+
+    ecu_sched_test_reset();
+}
+
+void test_ecu_sched_encoder_drift_detection_escalates_to_limp(void) {
+    section("ecu_sched: mitigação de drift — Camada 3 (WARNING->CRITICAL->corte limp)");
+    ecu_sched_test_reset();
+    ems::drv::encoder_sync::test_reset();
+    ems::engine::DiagnosticManager::init();
+
+    using ems::engine::DiagnosticManager;
+    using ems::engine::DiagnosticCode;
+    using ems::engine::FaultSeverity;
+    using ems::engine::LimpGatingInputs;
+    using ems::engine::limp_gating_update;
+    using ems::engine::limp_gating_reset;
+
+    limp_gating_reset();
+
+    LimpGatingInputs in{};
+    in.rpm_x10 = 20000u;
+    in.map_bar_x100 = 80u;
+    in.clt_degc_x10 = 800;
+    in.oil_press_bar_x1000 = 3000u;
+    in.lambda_x1000 = 1000u;
+    in.lambda_valid = true;
+    in.lambda_target_x1000 = 1000u;
+    in.tps_pct_x10 = 100u;
+    in.full_sync = true;
+    in.phase_valid = true;
+    in.sequential = true;
+    in.now_ms = 1000u;
+    in.diag_critical = !DiagnosticManager::is_system_ready();
+
+    CHECK_TRUE(!in.diag_critical, "antes de qualquer poll: sistema pronto");
+    auto result = limp_gating_update(in);
+    CHECK_TRUE(result.allow_injection, "sem fault: injeção liberada");
+    CHECK_TRUE(result.allow_ignition, "sem fault: ignição liberada");
+
+    // TIM2 e SPI concordam, sem bits de status -> poll_100ms() não reporta nada.
+    ems::drv::encoder_sync::poll_100ms(/*angle21=*/0u, /*status=*/0u, /*tim2_raw_now=*/0u);
+    CHECK_TRUE(!DiagnosticManager::is_fault_active(DiagnosticCode::CKP_SIGNAL_FAULT),
+               "leitura plausível: nenhum fault reportado");
+
+    // Ângulo SPI grosseiramente destoante do TIM2 (bem além da tolerância de
+    // detecção) -> 1ª ocorrência = WARNING, não corta nada ainda.
+    // spi_mod = mt6835_angle21_to_tim2_counts(angle21); usar angle21 tal que
+    // spi_mod fique ~8192 counts (meia volta) longe de tim2_raw_now=0.
+    const uint32_t kFarAngle21 = 1u << 20;  // ~metade da escala de 21 bits
+    ems::drv::encoder_sync::poll_100ms(kFarAngle21, 0u, 0u);
+    CHECK_TRUE(DiagnosticManager::is_fault_active(DiagnosticCode::CKP_SIGNAL_FAULT),
+               "1ª leitura implausível: fault reportado");
+    CHECK_TRUE(DiagnosticManager::get_event(DiagnosticCode::CKP_SIGNAL_FAULT)->severity
+               == FaultSeverity::WARNING,
+               "1ª ocorrência: severidade WARNING");
+    in.diag_critical = !DiagnosticManager::is_system_ready();
+    CHECK_TRUE(!in.diag_critical, "WARNING sozinho não flipa is_system_ready()");
+    result = limp_gating_update(in);
+    CHECK_TRUE(result.allow_injection, "WARNING sozinho: ainda não corta injeção");
+
+    // Mais leituras implausíveis consecutivas -> escalada para CRITICAL.
+    ems::drv::encoder_sync::poll_100ms(kFarAngle21, 0u, 0u);
+    ems::drv::encoder_sync::poll_100ms(kFarAngle21, 0u, 0u);
+    CHECK_TRUE(DiagnosticManager::get_event(DiagnosticCode::CKP_SIGNAL_FAULT)->severity
+               == FaultSeverity::CRITICAL,
+               "3ª ocorrência consecutiva: escalada para CRITICAL");
+
+    in.diag_critical = !DiagnosticManager::is_system_ready();
+    CHECK_TRUE(in.diag_critical, "CRITICAL flipa is_system_ready() -> diag_critical=true");
+    result = limp_gating_update(in);
+    CHECK_TRUE(!result.allow_injection, "CRITICAL: injeção cortada via diag_critical/limp_gating");
+    CHECK_TRUE(!result.allow_ignition, "CRITICAL: ignição cortada via diag_critical/limp_gating");
+
+    // Recuperação: leitura plausível de novo -> fault limpo.
+    ems::drv::encoder_sync::poll_100ms(0u, 0u, 0u);
+    CHECK_TRUE(!DiagnosticManager::is_fault_active(DiagnosticCode::CKP_SIGNAL_FAULT),
+               "leitura plausível de novo: fault limpo (clear_fault)");
+    in.diag_critical = !DiagnosticManager::is_system_ready();
+    CHECK_TRUE(!in.diag_critical, "recuperado: is_system_ready() volta a true");
+    result = limp_gating_update(in);
+    CHECK_TRUE(result.allow_injection, "recuperado: injeção liberada de novo");
+
+    ecu_sched_test_reset();
+    ems::drv::encoder_sync::test_reset();
+    DiagnosticManager::init();
+    limp_gating_reset();
+}
+
+void test_ecu_sched_encoder_heartbeat_z_tracking(void) {
+    section("ecu_sched: encoder heartbeat — Z edge tracking/validation (Correção de drift via Z)");
+    ecu_sched_test_reset();
+
+    CHECK_EQ(ecu_sched_encoder_test_get_z_reject_count(), 0u, "reject count=0 no início");
+    CHECK_EQ(ecu_sched_encoder_test_has_z_target(), 0u, "sem alvo estabelecido no início");
+
+    // A: primeiro flanco (edge_count 0->1) — arma referência, sem alvo ainda.
+    ecu_sched_encoder_heartbeat_z_tick(1000u, 1u);
+    CHECK_EQ(ecu_sched_encoder_test_get_z_confirm_count(), 1u, "A: confirm_count=1");
+    CHECK_EQ(ecu_sched_encoder_test_has_z_target(), 0u, "A: alvo ainda não estabelecido (Fix B)");
+
+    // B: 2º flanco consecutivo (delta=kZSpanCounts exato) — confirma, estabelece alvo.
+    ecu_sched_encoder_heartbeat_z_tick(1000u + kZSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_test_get_z_confirm_count(), 2u, "B: confirm_count=2");
+    CHECK_EQ(ecu_sched_encoder_test_has_z_target(), 1u, "B: alvo estabelecido no 2º flanco");
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 0,
+             "B: sem correção no próprio flanco que estabelece o alvo");
+
+    // C: 3º flanco, sem drift (mesma posição mod que o alvo) — erro=0.
+    ecu_sched_encoder_heartbeat_z_tick(1000u + 2u * kZSpanCounts, 3u);
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 0, "C: sem drift — offset continua 0");
+
+    // D: 4º flanco com drift de +5 counts (raw ADIANTADO do alvo) — erro
+    // clampado ao passo, sentido NEGATIVO (mesma convenção do SPI: quando o
+    // raw está à FRENTE da verdade, o offset desce para trazê-lo de volta).
+    ecu_sched_encoder_heartbeat_z_tick(1000u + 3u * kZSpanCounts + 5u, 4u);
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), -2,
+             "D: raw adiantado +5 — passo clampado a -2");
+
+    // E: flanco Z perdido (delta≈2×kZSpanCounts) — conta, mas NÃO corrige
+    // (regra multiple==1, evita ambiguidade com 2 voltas normais).
+    const uint32_t last_raw = 1000u + 3u * kZSpanCounts + 5u;
+    ecu_sched_encoder_heartbeat_z_tick(last_raw + 2u * kZSpanCounts, 5u);
+    CHECK_EQ(ecu_sched_encoder_test_get_z_missed_edge_count(), 1u, "E: flanco perdido contado");
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), -2,
+             "E: multiple=2 — correção não aplicada (offset inalterado)");
+
+    // F/G/H: 3 flancos ruins consecutivos -> streak_resync, descarta o alvo.
+    const uint32_t ref = last_raw + 2u * kZSpanCounts;
+    ecu_sched_encoder_heartbeat_z_tick(ref + 100u, 6u);
+    ecu_sched_encoder_heartbeat_z_tick(ref + 100u, 7u);
+    ecu_sched_encoder_heartbeat_z_tick(ref + 100u, 8u);
+    CHECK_EQ(ecu_sched_encoder_test_get_z_reject_count(), 3u, "F/G/H: 3 rejeições consecutivas");
+    CHECK_EQ(ecu_sched_encoder_test_has_z_target(), 0u, "H: streak_resync descarta o alvo");
+    CHECK_EQ(ecu_sched_encoder_test_get_z_confirm_count(), 0u, "H: confirm_count reposto a 0");
+
+    ecu_sched_test_reset();
+    CHECK_EQ(ecu_sched_encoder_test_get_z_reject_count(), 0u, "test_reset() limpa o rastreador Z");
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 0, "test_reset() zera o offset partilhado");
+}
+
+// Regressão do achado crítico desta implementação: reusar
+// spi_reference_trustworthy() para Z anularia o motivo de implementar Z (ver
+// docs/dev/mt6835_encoder_fork.md, "Correção de drift via Z"). Prova que a
+// correção via Z continua ativa exatamente na mesma condição de ω em que
+// test_ecu_sched_encoder_phase_correction_gate() prova que o SPI fica
+// bloqueado.
+void test_ecu_sched_encoder_z_correction_ignores_spi_gate(void) {
+    section("ecu_sched: mitigação de drift — Z corrige mesmo com ω alto (SPI gate não se aplica)");
+    ecu_sched_test_reset();
+
+    ecu_sched_encoder_omega_sample(1000u, 1000u);
+    ecu_sched_encoder_omega_sample(2000u, 2000u);
+    CHECK_EQ(ecu_sched_encoder_test_spi_reference_trustworthy(), 0u,
+             "ω alto: leitura SPI não confiável (mesma condição do teste do gate SPI)");
+
+    // Arma + confirma referência Z (2 flancos, sem drift ainda).
+    ecu_sched_encoder_heartbeat_z_tick(1000u, 1u);
+    ecu_sched_encoder_heartbeat_z_tick(1000u + kZSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), 0,
+             "confirmação: ainda sem correção (2º flanco só estabelece o alvo)");
+
+    // Flanco com drift, mesmo com ω alto — SPI ficaria bloqueado aqui, Z não.
+    ecu_sched_encoder_heartbeat_z_tick(1000u + 2u * kZSpanCounts + 5u, 3u);
+    CHECK_EQ(ecu_sched_encoder_phase_correction_counts(), -2,
+             "Z corrige mesmo com ω alto — diferente do gate de spi_reference_trustworthy()");
+
+    ecu_sched_test_reset();
+}
+
+// Achado do advisor: um alvo Z ancorado em cima de drift de AB
+// pré-existente (ex.: glitch durante o cranking) ficaria permanentemente
+// errado sem esta validação — o rastreador de span nunca detectaria isso.
+void test_ecu_sched_encoder_z_target_spi_crosscheck(void) {
+    section("ecu_sched: mitigação de drift — validação cruzada do alvo Z contra SPI (achado do advisor)");
+    ecu_sched_test_reset();
+
+    // Arma + confirma um alvo Z em 1000 (mod 16384).
+    ecu_sched_encoder_heartbeat_z_tick(1000u, 1u);
+    ecu_sched_encoder_heartbeat_z_tick(1000u + kZSpanCounts, 2u);
+    CHECK_EQ(ecu_sched_encoder_test_has_z_target(), 1u, "alvo estabelecido");
+
+    // SPI concorda (delta=10, dentro da tolerância de 32) — alvo mantido.
+    ecu_sched_encoder_z_target_check(1010u);
+    CHECK_EQ(ecu_sched_encoder_test_has_z_target(), 1u, "SPI concorda (delta=10): alvo mantido");
+
+    // SPI discorda muito (delta=100, além da tolerância) — alvo descartado,
+    // confirm_count reposto para reconstruir a partir do próximo par de
+    // flancos Z.
+    ecu_sched_encoder_z_target_check(1100u);
+    CHECK_EQ(ecu_sched_encoder_test_has_z_target(), 0u, "SPI discorda (delta=100): alvo descartado");
+    CHECK_EQ(ecu_sched_encoder_test_get_z_confirm_count(), 0u, "confirm_count reposto a 0");
+
+    // Sem alvo nenhum, a checagem é no-op seguro.
+    ecu_sched_encoder_z_target_check(9999u);
+    CHECK_EQ(ecu_sched_encoder_test_has_z_target(), 0u, "sem alvo: no-op seguro");
 
     ecu_sched_test_reset();
 }

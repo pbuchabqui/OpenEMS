@@ -191,6 +191,47 @@ polarizado em meio-rail. Diferido para a v2; só footprint (TPIC8101) na v1.
 │     O CKP tem a mesma pergunta (CC1E também é só subida).   │
 │     Decidir as duas juntas. Ver interface_board_v1.md.      │
 └─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  ENCODER MT6835 (fork TIM2/AB) — SUBSTITUI o bloco CKP/CMP  │
+│  acima nesta branch. Pinout/registradores NÃO vivem aqui —  │
+│  fonte: docs/dev/mt6835_encoder_fork.md. Regra de fiação:    │
+│                                                             │
+│  Linhas A/B (PA0/PA1, TIM2_CH1/CH2) ──► par trançado e      │
+│    blindado, MESMA regra do CKP/CMP/CAN acima — filtro      │
+│    digital (N=8) só protege contra ruído sub-count na       │
+│    entrada, não substitui o cuidado de layout/cabo.         │
+│  Blindagem aterrada SÓ no lado da ECU (mesma regra CKP/CAN). │
+│  SPI (CSn/SCK/MISO/MOSI, módulo MT6835) — cabo curto, longe  │
+│    de INJ/IGN/ETB/VVT (mesma justificativa de "loop de       │
+│    comutação pequeno" da seção Terra, abaixo).               │
+│                                                             │
+│  ⚠️ Motivo: uma borda perdida/espúria em A/B por EMI vira   │
+│     drift silencioso no contador de ângulo (TIM2). Existe   │
+│     mitigação em software (correção contínua + detecção +   │
+│     corte — mt6835_encoder_fork.md, "Mitigação de drift      │
+│     silencioso"), mas blindagem física reduz a CAUSA, não    │
+│     só a consequência — é a primeira linha de defesa, não a  │
+│     única.                                                   │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  Z / índice (PC7, TIM3_CH2) — correção de drift via Z        │
+│  Fonte: mt6835_encoder_fork.md, "Correção de drift via Z".   │
+│                                                             │
+│  Par Z ──► cabo blindado DEDICADO, fisicamente SEPARADO do  │
+│    par A/B acima — não é o mesmo par nem o mesmo chicote.    │
+│    Longe de INJ/IGN/ETB/VVT, mesma regra do resto desta      │
+│    seção. Blindagem aterrada só no lado da ECU.              │
+│                                                             │
+│  ⚠️ Motivo: Z sai do MESMO chip/ímã que A/B — não é canal   │
+│     independente contra falha interna do sensor. O único    │
+│     ganho real de Z é contra EMI de linha, e só existe SE o  │
+│     cabo for fisicamente separado do de A/B; correndo no     │
+│     mesmo par/chicote, um glitch de EMI atinge os dois ao    │
+│     mesmo tempo e Z deixa de acrescentar nada. Não tratar     │
+│     este cabo como "mais um fio do mesmo conector".          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---

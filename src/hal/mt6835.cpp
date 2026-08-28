@@ -153,6 +153,21 @@ bool configure_ppr_4096() noexcept {
     return true;
 }
 
+// Configura a saída Z (índice) para a correção de drift via Z — ver
+// docs/dev/mt6835_encoder_fork.md, "Correção de drift via Z". ZERO_POS=0
+// (zero de fábrica do ímã, §12 do datasheet — este driver não calibra
+// zero-position), Z_EDGE=0 (borda de subida alinhada ao 0°),
+// Z_PUL_WID=180° (0x7, máxima margem contra o filtro do TIM3). Escrito no
+// register map volátil a cada boot, mesma filosofia de configure_ppr_4096()
+// (não grava em EEPROM, não depende de estado persistido).
+bool configure_z_pulse() noexcept {
+    if (!mt6835_write_verify(R::kRegZeroPosHi, 0x00u)) { return false; }
+    const uint8_t lo = static_cast<uint8_t>(
+        (R::kZEdgeRisingAtZero << R::kZEdgeBit) | R::kZPulWid180Deg);
+    if (!mt6835_write_verify(R::kRegZeroPosLo, lo)) { return false; }
+    return true;
+}
+
 #endif  // MT6835_HW_PRESENT
 
 }  // namespace
@@ -179,6 +194,12 @@ bool mt6835_init() noexcept {
     spi2_init_mt6835_mode();
 
     g_ok = configure_ppr_4096();
+    if (!g_ok) {
+        ++g_fault_count;
+        return false;
+    }
+
+    g_ok = configure_z_pulse();
     if (!g_ok) {
         ++g_fault_count;
         return false;

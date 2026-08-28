@@ -62,4 +62,27 @@ constexpr uint8_t kCrc8Init = 0x00u;
 // Decisão travada: PPR=4096 → registrador = 4095 = 0x0FFF.
 constexpr uint16_t kAbzResPpr4096 = 4096u - 1u;
 
+// kRegZeroPosLo (0x00A), §8: bits[7:4]=ZERO_POS[3:0], bit[3]=Z_EDGE,
+// bits[2:0]=Z_PUL_WID[2:0]. Usado pela correção de drift via Z
+// (docs/dev/mt6835_encoder_fork.md, "Correção de drift via Z").
+constexpr uint8_t kZEdgeBit = 3u;
+
+// Z_EDGE: qual borda do pulso Z está alinhada ao 0° (§7.3, Figura 13).
+constexpr uint8_t kZEdgeRisingAtZero  = 0u;  // Z_EDGE=0
+constexpr uint8_t kZEdgeFallingAtZero = 1u;  // Z_EDGE=1
+
+// Z_PUL_WID[2:0] (§7.3): largura do pulso Z, em LSBs (1 LSB = 1 count) ou em
+// graus fixos — 0x7 (180°) escolhido nesta fork por dar a maior margem
+// possível contra o filtro digital do TIM3 (N=8@fDTS/8, ~256 ns) em
+// qualquer RPM realista (ver docs/dev/mt6835_encoder_fork.md, gate fechado
+// 2026-08-28).
+constexpr uint8_t kZPulWid1Lsb    = 0x0u;
+constexpr uint8_t kZPulWid2Lsb    = 0x1u;
+constexpr uint8_t kZPulWid4Lsb    = 0x2u;
+constexpr uint8_t kZPulWid8Lsb    = 0x3u;
+constexpr uint8_t kZPulWid16Lsb   = 0x4u;
+constexpr uint8_t kZPulWid60Deg   = 0x5u;
+constexpr uint8_t kZPulWid120Deg  = 0x6u;
+constexpr uint8_t kZPulWid180Deg  = 0x7u;
+
 }  // namespace ems::hal::mt6835

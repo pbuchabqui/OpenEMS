@@ -235,6 +235,15 @@ void tim2_encoder_init() noexcept {
 
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 0u, GPIO_AF1);
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 1u, GPIO_AF1);
+    // Pull-down em PA0(A)/PA1(B): saída do MT6835 é push-pull (confirmado no
+    // datasheet, docs/dev/mt6835_encoder_fork.md), então isto é puramente
+    // defensivo — só age se um fio partir e deixar o pino a flutuar, evitando
+    // que ruído de baixa frequência num pino aberto gere bordas fantasma
+    // (mesmo raciocínio de tim5_ic_init() para CKP/CMP, que complementa o
+    // filtro IC1F/IC2F abaixo, esse sim já no máximo do periférico contra
+    // glitch fino — ver comentário do filtro logo a seguir).
+    GPIOA_PUPDR = (GPIOA_PUPDR & ~((0x3u << 0u) | (0x3u << 2u)))
+                | (0x2u << 0u) | (0x2u << 2u);  // PA0(A)+PA1(B), 0b10 = pull-down
 
     TIM2_CR1  = 0u;
     TIM2_PSC  = 0u;             // não se aplica à contagem em modo encoder (RM) — 0 por padrão
@@ -312,6 +321,8 @@ void tim2_heartbeat_start() noexcept {
 namespace {
 volatile uint32_t g_cmp_angle_snapshot = 0u;
 volatile uint32_t g_cmp_edge_count     = 0u;
+volatile uint32_t g_z_angle_snapshot   = 0u;
+volatile uint32_t g_z_edge_count       = 0u;
 }  // namespace
 
 void tim3_cmp_ic_init() noexcept {
@@ -323,6 +334,16 @@ void tim3_cmp_ic_init() noexcept {
     // tim5_ic_set_capture_polarity() para o CMP antigo em PA1.
     GPIOC_PUPDR = (GPIOC_PUPDR & ~(0x3u << 12u)) | (0x1u << 12u);
 
+    // PC7/TIM3_CH2, AF2 — mesmo grupo de AF do CH1/PC6 acima (padrão comum
+    // à família STM32: PC6..PC9 = TIM3_CH1..CH4, todos AF2). ⚠️ Não
+    // reconfirmado nesta revisão contra a Tabela 15 do DS14258 pino a pino
+    // (só PC6 foi verificado byte a byte, ver docs/dev/mt6835_encoder_fork.md,
+    // "Arquitetura base") — confirmar antes de layout real, mesmo espírito
+    // do placeholder de CS em mt6835.cpp. Saída Z é push-pull (datasheet
+    // MT6835, confirmado nesta revisão) — sem pull necessário, ao contrário
+    // do CMP (Hall aberto-coletor) acima.
+    gpio_set_af(&GPIOC_MODER, &GPIOC_AFRL, &GPIOC_AFRH, &GPIOC_OSPEEDR, 7u, GPIO_AF2);
+
     TIM3_CR1 = 0u;
     // rc_w0: escrever 0 limpa todas as flags de TIM3_SR (inclui CC1OF,
     // overcapture — nada em TIM3_IRQHandler a lê hoje, então um trem de
@@ -331,23 +352,27 @@ void tim3_cmp_ic_init() noexcept {
     // re-init completo abaixo (CEN=0 → reconfigura → CEN=1), que já
     // existia — isto só garante que não sobra lixo de SR de antes.
     TIM3_SR = 0u;
-    // No boot, CC1E já é 0 (reset de hardware) — mas num rearm (watchdog),
-    // CCER ainda carrega o valor da armação anterior (CC1E=1). Escrever
-    // CCMR1 com a captura já habilitada não é a sequência recomendada
-    // pelo fabricante e pode gerar uma captura espúria no próprio instante
-    // do rearm. Desarma primeiro, reconfigura, só reabilita no fim.
+    // No boot, CC1E/CC2E já são 0 (reset de hardware) — mas num rearm
+    // (watchdog), CCER ainda carrega o valor da armação anterior. Escrever
+    // CCMR com a captura já habilitada não é a sequência recomendada pelo
+    // fabricante e pode gerar uma captura espúria no próprio instante do
+    // rearm. Desarma primeiro, reconfigura, só reabilita no fim.
     TIM3_CCER = 0u;
     TIM3_PSC = 0u;
     TIM3_ARR = 0xFFFFu;  // TIM3 é 16-bit; CNT não interessa, só o IRQ de captura
-    TIM3_CCMR1 = TIM_CCMR1_CC1S_TI1 | TIM_CCMR1_IC1F_N8_DTS8;
-    TIM3_DIER  = TIM_DIER_CC1IE;
-    // UG com CC1E=0: gerar o update (reinicia CNT) sem o detector de
-    // captura armado. UG+CC1E juntos produzem um CC1IF espúrio no próprio
-    // instante do rearm — um flanco fantasma no pino já flutuante (CMP
+    TIM3_CCMR1 = TIM_CCMR1_CC1S_TI1 | TIM_CCMR1_IC1F_N8_DTS8
+               | TIM_CCMR1_CC2S_TI2 | TIM_CCMR1_IC2F_N8_DTS8;
+    TIM3_DIER  = TIM_DIER_CC1IE | TIM_DIER_CC2IE;
+    // UG com CC1E/CC2E=0: gerar o update (reinicia CNT) sem o detector de
+    // captura armado. UG+CCxE juntos produzem um CCxIF espúrio no próprio
+    // instante do rearm — um flanco fantasma no pino já flutuante (CMP/Z
     // desligado) que o rastreador podia aceitar e re-ancorar.
     TIM3_EGR   = 1u;
     TIM3_SR    = 0u;
-    TIM3_CCER  = TIM_CCER_CC1E | TIM_CCER_CC1P;  // captura na descida, só no fim
+    // CMP: captura na descida (Hall idle-HIGH aberto-coletor). Z: captura na
+    // subida (CC2P=0), consistente com Z_EDGE=0 programado no MT6835
+    // (mt6835.cpp, configure_z_pulse()) — só no fim, evita captura espúria.
+    TIM3_CCER  = TIM_CCER_CC1E | TIM_CCER_CC1P | TIM_CCER_CC2E;
 
     nvic_set_priority(IRQ_TIM3, 1u);
     nvic_enable_irq(IRQ_TIM3);
@@ -356,6 +381,8 @@ void tim3_cmp_ic_init() noexcept {
 
 uint32_t cmp_angle_snapshot() noexcept { return g_cmp_angle_snapshot; }
 uint32_t cmp_edge_count() noexcept { return g_cmp_edge_count; }
+uint32_t z_angle_snapshot() noexcept { return g_z_angle_snapshot; }
+uint32_t z_edge_count() noexcept { return g_z_edge_count; }
 
 // ----------------------------------------------------------------------------
 // ETB motor PWM (etb_pwm_*):
@@ -468,6 +495,15 @@ extern "C" void TIM2_IRQHandler(void) {
         const uint32_t cmp_angle = cmp_angle_snapshot();
         const uint32_t cmp_edges = cmp_edge_count();
         ecu_sched_encoder_heartbeat_subtick(tim2_now, tim5_now, cmp_angle, cmp_edges);
+        // Correção de drift via Z — chamada nova, não mexe na assinatura de
+        // heartbeat_subtick()/heartbeat_tick() acima (evita quebrar os call
+        // sites de teste já existentes, ver docs/dev/mt6835_encoder_fork.md,
+        // "Correção de drift via Z"). Cadência de sub-tick (~64×/volta) em
+        // vez de 1×/volta: Z só muda quando o edge_count muda (mesmo padrão
+        // de diff do CMP), e a cadência mais fina é o que permite ao
+        // watchdog de telemetria (Z morto) reagir sem depender de um tick
+        // pesado que já teria de mudar de assinatura para receber isto.
+        ecu_sched_encoder_heartbeat_z_tick(z_angle_snapshot(), z_edge_count());
     }
 }
 
@@ -487,6 +523,16 @@ extern "C" void TIM3_IRQHandler(void) {
         TIM3_SR = ~(TIM_SR_CC1IF | TIM_SR_CC1OF);
         g_cmp_angle_snapshot = TIM2_CNT;
         ++g_cmp_edge_count;
+    }
+    if (sr & TIM_SR_CC2IF) {
+        // Mesmo tratamento do CC1 acima, canal Z (CH2/PC7) — ver
+        // tim3_cmp_ic_init(). Consumido por
+        // ecu_sched_encoder_heartbeat_z_tick() via TIM2_IRQHandler (CC4IF),
+        // não daqui directamente — mesma disciplina de "leitura fora do
+        // instante de escrita" já aceita para o par CMP acima.
+        TIM3_SR = ~(TIM_SR_CC2IF | TIM_SR_CC2OF);
+        g_z_angle_snapshot = TIM2_CNT;
+        ++g_z_edge_count;
     }
 }
 
@@ -515,6 +561,8 @@ void tim2_heartbeat_start() noexcept {}
 void tim3_cmp_ic_init() noexcept {}
 uint32_t cmp_angle_snapshot() noexcept { return 0u; }
 uint32_t cmp_edge_count() noexcept { return 0u; }
+uint32_t z_angle_snapshot() noexcept { return 0u; }
+uint32_t z_edge_count() noexcept { return 0u; }
 } // namespace ems::hal
 
 #endif  // EMS_HOST_TEST

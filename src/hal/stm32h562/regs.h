@@ -290,6 +290,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM_SR_CC3IF  (1u << 3)   // Capture/compare 3
 #define TIM_SR_CC4IF  (1u << 4)   // Capture/compare 4
 #define TIM_SR_CC1OF  (1u << 9)   // Overcapture 1
+#define TIM_SR_CC2OF  (1u << 10)  // Overcapture 2
 
 // TIM_DIER bits
 #define TIM_DIER_UIE  (1u << 0)
