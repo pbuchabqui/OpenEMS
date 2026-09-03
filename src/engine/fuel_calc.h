@@ -50,6 +50,12 @@ uint32_t calc_req_fuel_us(uint16_t displacement_cc,
                           uint16_t stoich_afr_x100) noexcept;
 uint32_t default_req_fuel_us() noexcept;
 
+// PW = REQ_FUEL × VE/100 × MAP/map_ref_bar_x100, com map_ref_bar_x100 FIXO
+// (sem compensação de altitude). Não é o caminho de produção — main_stm32.cpp
+// chama calc_fuel_pw_us_default_fast, que usa o baro dinâmico
+// (fuel_get_baro_bar_x100) no denominador em vez de map_ref_bar_x100. Estas
+// duas existem para teste unitário isolado da fórmula base e uso em
+// bancada/simulação onde não há baro dinâmico disponível.
 uint32_t calc_base_pw_us(uint16_t req_fuel_us,
                          uint8_t ve,
                          uint16_t map_bar_x100,

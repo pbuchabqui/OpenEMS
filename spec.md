@@ -374,15 +374,15 @@ bit 5: THROTTLE_FAULT_ETB_PLAUS  — Delta TPS1/TPS2 > etb_max_delta
 ### 7.2 Tabelas 3D (`engine/table3d.h`)
 
 **Eixos globais:**
-- `kRpmAxisX10[16]` = {5000, 7500, 10000, …, 120000} (RPM × 10)
-- `kLoadAxisBarX100[16]` = {20, 30, 40, …, 300} (bar)
+- `kRpmAxisX10[20]` = {5000, 7500, 10000, …, 80000} (RPM × 10)
+- `kLoadAxisBarX100[20]` = {20, 30, 40, …, 300} (bar × 100)
 
 **Funções:**
 ```cpp
 Table2dLookup table3d_prepare_lookup(x_axis, y_axis, rpm_x10, map_bar_x100);
-uint8_t  table3d_lookup_u8_prepared(table[16][16], lookup);   // VE
-int16_t  table3d_lookup_i8_prepared(table[16][16], lookup);   // Spark
-int16_t  table3d_lookup_s16_prepared(table[16][16], lookup);  // Lambda
+uint8_t  table3d_lookup_u8_prepared(table[20][20], lookup);   // VE
+int16_t  table3d_lookup_i8_prepared(table[20][20], lookup);   // Spark
+int16_t  table3d_lookup_s16_prepared(table[20][20], lookup);  // Lambda
 ```
 
 Interpolação bilinear em Q8: resolve xi, yi, fx_q8, fy_q8 por busca binária.
