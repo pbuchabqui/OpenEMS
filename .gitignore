@@ -87,6 +87,17 @@ tools/esp32_combined/ardustim_gui/package-lock.json
 
 # --- Node deps (tscircuit toolchain) ---
 node_modules/
+.tscircuit/cache/
+
+# --- KiCad local-history plugin (nested .git per directory, not project source) ---
+hardware/openems_v1/.history/
+
+# --- KiCad local sym-lib-table (hardcoded absolute machine path) ---
+/kicad/
+
+# --- Tool-installed skill content (reproducible, not authored project source) ---
+/.agents/
+.claude/skills/tscircuit/
 
 # --- Jar/zip extraction leftovers ---
 META-INF/
