@@ -36,6 +36,14 @@ void knock_cycle_complete(uint8_t cyl) noexcept;
 // Chamado no ECU_ACT_DWELL_START do próximo cilindro (ISR-safe).
 void knock_window_cycle_end() noexcept;
 
+// True se a janela aberta é deste cilindro — ignora DWELL_START extra de
+// multi-spark na mesma combustão (não fechar/reabrir a meio).
+bool knock_window_open_for(uint8_t cyl) noexcept;
+
+// Fecha+avalia a janela se o cilindro aberto está em cyl_mask (bit N = cyl N).
+// Spark-cut não pode deixar a janela a acumular ADC no cilindro inibido.
+void knock_window_cycle_end_if_cyl_mask(uint8_t cyl_mask) noexcept;
+
 uint16_t knock_get_retard_x10(uint8_t cyl) noexcept;
 
 // Sensor morto (FOME #578): EMA do pico-a-pico por janela abaixo de

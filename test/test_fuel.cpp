@@ -277,6 +277,7 @@ void test_fuel_default_fast(void) {
     const uint32_t pw = calc_fuel_pw_us_default_fast(
         80u,    // ve
         100u,   // map_bar_x100
+        256u,   // iat_density_q8 (neutral)
         1000u,  // lambda_target_x1000 (stoich)
         0,      // trim_pct_x10
         256u,   // corr_clt_x256 (neutral)
@@ -286,19 +287,19 @@ void test_fuel_default_fast(void) {
     CHECK_TRUE(pw > 0u, "calc_fuel_pw_us_default_fast > 0 for valid inputs");
 
     // VE=0 → 0
-    CHECK_EQ(calc_fuel_pw_us_default_fast(0u, 100u, 1000u, 0, 256u, 256u, 0u), 0u,
+    CHECK_EQ(calc_fuel_pw_us_default_fast(0u, 100u, 256u, 1000u, 0, 256u, 256u, 0u), 0u,
              "ve=0 → pw=0");
 
     // lambda out of range → 0
-    CHECK_EQ(calc_fuel_pw_us_default_fast(80u, 100u, 600u, 0, 256u, 256u, 0u), 0u,
+    CHECK_EQ(calc_fuel_pw_us_default_fast(80u, 100u, 256u, 600u, 0, 256u, 256u, 0u), 0u,
              "lambda<650 → pw=0");
 
     // Altitude compensation (F4): lower baro → larger PW (denominator shrinks).
     // baro=70 (0.70 bar, ~3000m altitude) vs baro=101 (1.01 bar, sea level).
     fuel_set_baro_bar_x100(101u);
-    const uint32_t pw_sea   = calc_fuel_pw_us_default_fast(80u, 100u, 1000u, 0, 256u, 256u, 0u);
+    const uint32_t pw_sea   = calc_fuel_pw_us_default_fast(80u, 100u, 256u, 1000u, 0, 256u, 256u, 0u);
     fuel_set_baro_bar_x100(70u);
-    const uint32_t pw_alt   = calc_fuel_pw_us_default_fast(80u, 100u, 1000u, 0, 256u, 256u, 0u);
+    const uint32_t pw_alt   = calc_fuel_pw_us_default_fast(80u, 100u, 256u, 1000u, 0, 256u, 256u, 0u);
     CHECK_TRUE(pw_alt > pw_sea,
                "altitude compensation: lower baro → higher PW (TI_FAC_ALTI)");
     // Ratio should be approximately baro_sea/baro_alt = 101/70 ≈ 1.44
@@ -307,6 +308,20 @@ void test_fuel_default_fast(void) {
     CHECK_TRUE(ratio_x100 >= 130u && ratio_x100 <= 160u,
                "altitude PW ratio ≈ 1.44 (sea_baro/alt_baro=101/70)");
     fuel_set_baro_bar_x100(101u);  // restore
+
+    // iat_density_q8 must actually scale PW (not only corr_iat_density_q8
+    // in isolation). dead_time=0 so the ratio is a pure Q8 multiply.
+    const uint32_t pw_d256 = calc_fuel_pw_us_default_fast(
+        80u, 100u, 256u, 1000u, 0, 256u, 256u, 0u);
+    const uint32_t pw_d194 = calc_fuel_pw_us_default_fast(
+        80u, 100u, 194u, 1000u, 0, 256u, 256u, 0u);
+    const uint32_t pw_d301 = calc_fuel_pw_us_default_fast(
+        80u, 100u, 301u, 1000u, 0, 256u, 256u, 0u);
+    CHECK_TRUE(pw_d256 > 0u, "dens 256: PW > 0");
+    const uint32_t r194 = (pw_d194 * 256u) / pw_d256;
+    const uint32_t r301 = (pw_d301 * 256u) / pw_d256;
+    CHECK_TRUE(r194 >= 193u && r194 <= 195u, "PW(194)/PW(256) ≈ 194/256");
+    CHECK_TRUE(r301 >= 300u && r301 <= 302u, "PW(301)/PW(256) ≈ 301/256");
 }
 
 void test_fuel_corr_warmup(void) {
@@ -321,6 +336,30 @@ void test_fuel_corr_warmup(void) {
 
     // Monotonic: colder → more enrichment
     CHECK_TRUE(corr_warmup(-100) > corr_warmup(700), "corr_warmup monotonically decreasing");
+}
+
+void test_fuel_corr_iat_density(void) {
+    section("fuel_calc: corr_iat_density_q8 (ideal gas, T_ref/T)");
+
+    // T_ref = 298.0K (25.0°C) → factor exato 256 (2980*256/2980).
+    CHECK_EQ(corr_iat_density_q8(250), 256u, "25°C (T_ref) → 256 (1.0x exato)");
+
+    // -20°C: k_x10=2530 → 762880/2530 = 301 (truncado). Ar mais frio → mais denso → fator > 256.
+    CHECK_EQ(corr_iat_density_q8(-200), 301u, "-20°C → 301 (~1.176x, mais rico)");
+
+    // 120°C: k_x10=3930 → 762880/3930 = 194 (truncado). Ar mais quente → menos denso → fator < 256.
+    CHECK_EQ(corr_iat_density_q8(1200), 194u, "120°C → 194 (~0.758x, mais pobre)");
+
+    // Monotonicamente decrescente com a temperatura (sem V-shape — física pura).
+    CHECK_TRUE(corr_iat_density_q8(-200) > corr_iat_density_q8(0), "mais frio → fator maior");
+    CHECK_TRUE(corr_iat_density_q8(0) > corr_iat_density_q8(250), "0°C > 25°C");
+    CHECK_TRUE(corr_iat_density_q8(250) > corr_iat_density_q8(1200), "25°C > 120°C");
+
+    // Extremos do range assertado neste arquivo (ASSERT_VALID_TEMP_X10:
+    // -40°C..150°C) — coincidem com o clamp interno de corr_iat_density_q8,
+    // então são o piso/teto reais de autoridade do termo em qualquer build.
+    CHECK_EQ(corr_iat_density_q8(-400), 327u, "-40°C (extremo frio) → 327 (~1.277x)");
+    CHECK_EQ(corr_iat_density_q8(1500), 180u, "150°C (extremo quente) → 180 (~0.703x)");
 }
 
 void test_fuel_ae(void) {

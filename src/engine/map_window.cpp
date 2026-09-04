@@ -106,12 +106,10 @@ void map_window_on_sample(uint16_t cycle_deg, uint16_t map_bar_x1000,
         return;
     }
     // Atribuição 720° exige sync pleno + fase de came confirmada.
+    // Sem isso a média deixa de ser viva: zera cycles (e slots) para
+    // enc_cyl_setpoints não servir MAP de pré-dropout no re-lock.
     if (!full_sync || !cmp_ok) {
-        g_active_slot = -1;  // aborta janela parcial (média não contaminada)
-        g_fresh_mask  = 0u;
-        // Saída de sync não é um "salto" de cadência de poll — reinicia a
-        // detecção para não contar o hiato de sync como janela perdida.
-        g_last_slot   = 0xFFu;
+        map_window_reset();
         return;
     }
     uint16_t deg = cycle_deg;

@@ -81,8 +81,11 @@ int8_t spark_table[kTableAxisSize][kTableAxisSize] = {
 int16_t clt_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
 uint16_t clt_corr_x256[kCorrectionTableSize] = {384u, 352u, 320u, 288u, 272u, 256u, 256u, 256u};
 
+// Densidade do ar já é compensada por física pura em corr_iat_density_q8()
+// (fuel_calc.cpp), então esta tabela não precisa (e não deve) tentar
+// aproximar 1/T — fica neutra (256) até ~60°C e sobe modestamente acima.
 int16_t iat_corr_axis_x10[kCorrectionTableSize] = {-200, 0, 200, 400, 600, 800, 1000, 1200};
-uint16_t iat_corr_x256[kCorrectionTableSize] = {272u, 264u, 256u, 256u, 264u, 272u, 280u, 288u};
+uint16_t iat_corr_x256[kCorrectionTableSize] = {256u, 256u, 256u, 256u, 256u, 266u, 276u, 288u};
 
 int16_t warmup_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
 uint16_t warmup_corr_x256[kCorrectionTableSize] = {420u, 380u, 350u, 320u, 290u, 256u, 256u, 256u};

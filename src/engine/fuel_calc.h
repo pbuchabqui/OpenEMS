@@ -70,6 +70,11 @@ uint16_t corr_iat(int16_t iat_x10) noexcept;
 uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept;
 uint16_t corr_warmup(int16_t clt_x10) noexcept;
 
+// Densidade do ar (lei dos gases ideais, T_ref/T_iat em Q8) — física pura,
+// não calibrável. T_ref = 298.0K (25°C), mesma referência de
+// cfg::kAirDensityMgPerCcX1000. Ver comentário em fuel_calc.cpp.
+uint16_t corr_iat_density_q8(int16_t iat_x10) noexcept;
+
 uint32_t apply_injector_scurve(uint32_t pw_us) noexcept;
 
 uint32_t apply_delta_p_compensation(uint32_t pw_us,
@@ -91,6 +96,7 @@ uint32_t inj_pulse_pw_us(uint32_t flow_us, uint16_t dead_time_us,
                          uint8_t squirts) noexcept;
 uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
                                       uint16_t map_bar_x100,
+                                      uint16_t iat_density_q8,
                                       uint16_t lambda_target_x1000,
                                       int16_t trim_pct_x10,
                                       uint16_t corr_clt_x256,

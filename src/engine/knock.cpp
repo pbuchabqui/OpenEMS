@@ -217,6 +217,17 @@ void knock_window_cycle_end() noexcept {
     }
 }
 
+bool knock_window_open_for(uint8_t cyl) noexcept {
+    return g.window_active && (g.window_cyl == static_cast<uint8_t>(cyl & 0x3u));
+}
+
+void knock_window_cycle_end_if_cyl_mask(uint8_t cyl_mask) noexcept {
+    if (g.window_active &&
+        ((static_cast<uint8_t>(1u << g.window_cyl) & cyl_mask) != 0u)) {
+        knock_window_cycle_end();
+    }
+}
+
 bool knock_sensor_dead() noexcept {
     return (ems::engine::knock_dead_min_p2p != 0u) &&
            (g.dead_windows >= kDeadWindowLimit);

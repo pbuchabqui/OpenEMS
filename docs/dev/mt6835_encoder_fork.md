@@ -18,6 +18,31 @@ pseudocódigo hipotético de firmware usando MT6835) que não correspondia à
 arquitetura real do OpenEMS. A avaliação completa está preservada no histórico
 de conversa que originou este fork; o resumo técnico relevante está abaixo.
 
+## Porte desde `hw/v1-clean-board` (2026-09)
+
+Reescrito nos call-sites encoder — **não** foi `git merge` nem cherry-pick.
+Branch de trabalho: `feat/mt6835-encoder-port-v1`.
+
+| Veio da v1 | Onde no encoder |
+|---|---|
+| `corr_iat_density_q8` (T_ref/T, 298.0 K) + tabela IAT neutra + recusa NVM da V-shape | `fuel_calc.cpp`, `loop_2ms_fuel_ign.cpp`, `nvm_boot.cpp` |
+| `clamp_iat_kelvin_x10` partilhado; estimator deixa o literal 2930 | `math_utils.h`, `map_estimator.cpp` |
+| `map_window_reset` no dropout de FULL_SYNC/CMP | `map_window_on_sample` |
+| Knock só no dwell primário + fecho no spark-cut | `maybe_knock_on_dwell_start`, `knock_window_open_for` |
+| `BOARD=mre` removido | Makefile + `board_pinout.h` |
+
+Já existia no encoder (não reaplicado): ASan, STFT P-term, flush NVM no stop,
+bench PW lock, FIRE bypass inhibit, `EMS_KNOCK_HW_PRESENT`, knock retard max,
+oil limp, `EMS_TLE8888_PRESENT=0`.
+
+**De fora de propósito:** KiCad `hardware/openems_v1/` (Hall em `PA0`/`PA1`),
+`architecture_v2.md` como autoridade de pinos, `map_window_use_for_fuel`.
+O encoder já consome MAP por cilindro via `enc_cyl_setpoints`.
+
+`make host-test-knock-hw` no caminho 60-2 (`test_knock_window_scheduler_wiring`)
+já falhava neste tree encoder-only (builders 60-2 ocos) **antes** deste porte;
+o caminho encoder do mesmo binário passa. Não entra no `ci_local`.
+
 ## Como ler o dash (encoder-only)
 
 A aba Telemetry tem a faixa **ENCODER / SCHED**. Não confundir gauges com o pino:

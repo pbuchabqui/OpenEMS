@@ -20,6 +20,10 @@ extern int8_t spark_table[kTableAxisSize][kTableAxisSize];
 extern int16_t clt_corr_axis_x10[kCorrectionTableSize];
 extern uint16_t clt_corr_x256[kCorrectionTableSize];
 
+// Margem de proteção calibrável (ex.: anti-detonação em IAT alto) — NÃO é
+// compensação de densidade do ar, que agora é física pura via
+// corr_iat_density_q8() (fuel_calc.cpp), aplicada no cálculo base.
+// Default é um placeholder conservador não calibrado — ver calibration.cpp.
 extern int16_t iat_corr_axis_x10[kCorrectionTableSize];
 extern uint16_t iat_corr_x256[kCorrectionTableSize];
 

@@ -38,27 +38,7 @@ inline constexpr uint8_t kCylinderCount = 4u;
 /** Crank degrees per engine cycle (4-stroke) */
 inline constexpr uint32_t kCrankDegreesPerCycle = 720u;
 
-// ============================================================================
-// Fuel Calculation Constants
-// ============================================================================
-
-/** Air density at 1.00 bar, 25°C in mg/cc × 1000 (1.184 mg/cc) */
-inline constexpr uint32_t kAirDensityMgPerCcX1000 = 1184u;
-
-/** Gasoline fuel density in mg/cc */
-inline constexpr uint32_t kFuelDensityMgPerCc = 740u;
-
-/** Stoichiometric air-fuel ratio × 100 (14.64:1) */
-inline constexpr uint16_t kStoichAfrX100 = 1464u;
-
-/** Default VE table value (percentage × 100) */
-inline constexpr uint16_t kDefaultVeX100 = 8000u;  // 80.0%
-
-/** Minimum base pulse width in microseconds */
-inline constexpr uint32_t kMinBasePwUs = 100u;
-
-/** Maximum base pulse width in microseconds */
-inline constexpr uint32_t kMaxBasePwUs = 20000u;
+// Fuel density / stoich / VE / PW limits: engine::cfg in engine_config.h.
 
 // ============================================================================
 // Sensor Limits & Defaults

@@ -54,6 +54,16 @@ inline uint32_t clamp_u32(uint32_t v, uint32_t lo, uint32_t hi) noexcept {
     return v;
 }
 
+// Kelvin×10 (°C×10 + 2730) for air-density terms (ρ ∝ 1/T). Shared by
+// fuel_calc and map_estimator. Range [-73°C, 150°C] covers both callers;
+// T_ref/T at 298.0 K maps to Q8 [180, 381].
+inline int32_t clamp_iat_kelvin_x10(int16_t iat_x10) noexcept {
+    int32_t iat_k_x10 = static_cast<int32_t>(iat_x10) + 2730;
+    if (iat_k_x10 < 2000) { iat_k_x10 = 2000; }
+    if (iat_k_x10 > 4230) { iat_k_x10 = 4230; }
+    return iat_k_x10;
+}
+
 inline uint16_t interp_u16_8pt_u16x(const uint16_t* x_axis,
                                      const uint16_t* table,
                                      uint8_t n,

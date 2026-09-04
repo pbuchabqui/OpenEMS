@@ -2973,7 +2973,7 @@ void test_enc_finalize_map_window_per_cyl(void) {
         const uint8_t ve_hi = get_ve(30000u, 120u);
         const uint16_t lam_hi = get_lambda_target_x1000(30000u, 120u);
         uint32_t expect_hi = calc_fuel_pw_us_default_fast(
-            ve_hi, 120u, lam_hi, 0, 256u, 256u, 0u);
+            ve_hi, 120u, 256u, lam_hi, 0, 256u, 256u, 0u);
         expect_hi = apply_delta_p_compensation(expect_hi, 3000u, 120u);
         expect_hi = apply_injector_scurve(expect_hi);
         const uint32_t expect_ticks = inj_pw_us_to_scheduler_ticks(expect_hi);

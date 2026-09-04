@@ -23,6 +23,7 @@ struct EncFuelIgnPrep {
     uint32_t rpm_x10;
     uint16_t corr_clt_x256;
     uint16_t corr_iat_x256;
+    uint16_t iat_density_q8;        // T_ref/T (0 = neutro 256 no fast path)
     int16_t  fuel_trim_pct_x10;     // STFT+LTFT do tick 2 ms
     int16_t  clt_x10;
     uint32_t base_flow_pw_us;       // fluxo sem AE (pré evento X-τ)

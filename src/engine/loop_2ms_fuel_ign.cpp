@@ -72,6 +72,7 @@ struct CachedFuelCorrections {
     uint16_t vbatt_mv;
     uint16_t corr_clt_x256;
     uint16_t corr_iat_x256;
+    uint16_t iat_density_q8;
     uint16_t dead_time_us;
 };
 
@@ -90,6 +91,8 @@ const CachedFuelCorrections& fuel_corrections_for(
         g_fuel_corr_cache.vbatt_mv = sensors.vbatt_mv;
         g_fuel_corr_cache.corr_clt_x256 = ems::engine::corr_clt(sensors.clt_degc_x10);
         g_fuel_corr_cache.corr_iat_x256 = ems::engine::corr_iat(sensors.iat_degc_x10);
+        g_fuel_corr_cache.iat_density_q8 =
+            ems::engine::corr_iat_density_q8(sensors.iat_degc_x10);
         g_fuel_corr_cache.dead_time_us = ems::engine::corr_vbatt(sensors.vbatt_mv);
     }
     return g_fuel_corr_cache;
@@ -292,6 +295,7 @@ void loop_2ms_fuel_ign(uint32_t now,
         uint32_t final_pw_us_base =
             ems::engine::calc_fuel_pw_us_default_fast(ve,
                                                        map_bar_x100,
+                                                       fuel_corr.iat_density_q8,
                                                        lambda_target_x1000,
                                                        fuel_trim_pct_x10,
                                                        fuel_corr.corr_clt_x256,
@@ -480,6 +484,7 @@ void loop_2ms_fuel_ign(uint32_t now,
             prep.rpm_x10 = snap.rpm_x10;
             prep.corr_clt_x256 = fuel_corr.corr_clt_x256;
             prep.corr_iat_x256 = fuel_corr.corr_iat_x256;
+            prep.iat_density_q8 = fuel_corr.iat_density_q8;
             prep.fuel_trim_pct_x10 = fuel_trim_pct_x10;
             prep.clt_x10 = sensors.clt_degc_x10;
             // Base sem AE (quick_crank sobre fluxo pré-AE); AE residual

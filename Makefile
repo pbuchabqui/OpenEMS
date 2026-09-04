@@ -1,9 +1,9 @@
 # OpenEMS: STM32H562 Firmware Build System
-# BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE) | BOARD=mre (mRE copper)
+# BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE)
 # Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
-.PHONY: all clean host-test host-test-vgt6 host-test-mre host-test-knock-hw firmware firmware-rgt6 \
-        firmware-vgt6 firmware-mre help \
+.PHONY: all clean host-test host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 \
+        firmware-vgt6 help \
         secrets-check lint-includes format format-all format-check ci-local
 
 COMPILER_ARM = arm-none-eabi-g++
@@ -25,11 +25,7 @@ LINT_ERROR ?= 0
 LINT_PHASE ?= A
 
 BOARD ?= rgt6
-ifeq ($(BOARD),mre)
-  BOARD_CFLAGS = -DEMS_BOARD_MRE
-  BOARD_LABEL  = MRE
-  BIN_SUFFIX   = -mre
-else ifeq ($(BOARD),vgt6)
+ifeq ($(BOARD),vgt6)
   BOARD_CFLAGS = -DEMS_BOARD_VGT6
   BOARD_LABEL  = VGT6
   BIN_SUFFIX   = -vgt6
@@ -181,16 +177,14 @@ all: help
 help:
 	@echo "OpenEMS Build System"
 	@echo "======================================"
-	@echo "Usage: make [target] [BOARD=rgt6|vgt6|mre] [WERROR=0|1]"
+	@echo "Usage: make [target] [BOARD=rgt6|vgt6] [WERROR=0|1]"
 	@echo ""
 	@echo "  host-test       Host regression (always RGT6 pin map stubs)"
 	@echo "  host-test-vgt6  Standalone VGT6 GPIOE INJ/IGN BSRR coverage"
-	@echo "  host-test-mre   Standalone MRE (microRusEFI copper) pin map coverage"
 	@echo "  host-test-knock-hw  Standalone knock wiring coverage (EMS_KNOCK_HW_PRESENT=1)"
 	@echo "  firmware        Build for BOARD (default rgt6)"
 	@echo "  firmware-rgt6   Build RGT6 bin"
 	@echo "  firmware-vgt6   Build VGT6 bin (GPIOE INJ/IGN/ETB OpenEMS ideal)"
-	@echo "  firmware-mre    Build MRE bin (H562 on microRusEFI pinout)"
 	@echo "  clean           Remove /tmp/openems-build"
 	@echo ""
 	@echo "  Encoder-only tree (EMS_MT6835_ENCODER=1 always)."
@@ -203,7 +197,7 @@ help:
 	@echo "  format-check    Dry-run format on dirty files"
 	@echo "  ci-local        secrets + host/fw WERROR + lint A/B (tools/ci_local.sh)"
 	@echo ""
-	@echo "Outputs: openems-rgt6.bin | openems-vgt6.bin | openems-mre.bin"
+	@echo "Outputs: openems-rgt6.bin | openems-vgt6.bin"
 
 host-test:
 	@mkdir -p $(HOST_DIR)
@@ -227,17 +221,6 @@ firmware-rgt6:
 
 firmware-vgt6:
 	@$(MAKE) firmware BOARD=vgt6
-
-firmware-mre:
-	@$(MAKE) firmware BOARD=mre
-
-host-test-mre:
-	@mkdir -p $(HOST_DIR)
-	@echo "  HOST $(HOST_DIR)/out_pins_mre_tests"
-	@$(CXX_HOST) $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_MRE -O2 -g -I. -I./src \
-		$(SRC_DIR)/hal/out_pins.cpp $(TEST_DIR)/harness.cpp \
-		$(TEST_DIR)/test_out_pins_mre.cpp -o $(HOST_DIR)/out_pins_mre_tests -lm
-	@$(HOST_DIR)/out_pins_mre_tests
 
 host-test-knock-hw:
 	@mkdir -p $(HOST_DIR)

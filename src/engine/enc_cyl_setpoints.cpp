@@ -133,8 +133,9 @@ CylArmSetpoints finalize_cyl_setpoints(uint8_t cyl, bool commit_fuel) noexcept
                     const uint16_t corr_iat =
                         (prep.corr_iat_x256 != 0U) ? prep.corr_iat_x256 : 256U;
                     const uint32_t full = calc_fuel_pw_us_default_fast(
-                        ve, map_cyl, lambda, prep.fuel_trim_pct_x10,
-                        corr_clt, corr_iat, prep.dead_time_us);
+                        ve, map_cyl, prep.iat_density_q8, lambda,
+                        prep.fuel_trim_pct_x10, corr_clt, corr_iat,
+                        prep.dead_time_us);
                     flow_u = (full > prep.dead_time_us)
                         ? (full - static_cast<uint32_t>(prep.dead_time_us))
                         : 0U;

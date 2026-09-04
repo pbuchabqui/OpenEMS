@@ -27,6 +27,8 @@ namespace {
 using ems::engine::clamp_i16;
 using ems::engine::clamp_u16;
 using ems::engine::interp_u16_8pt;
+using ems::engine::clamp_iat_kelvin_x10;
+using ems::engine::cfg::kIatDensityRefKelvinX10;
 
 constexpr uint8_t kCorrPoints = ems::engine::kCorrectionTableSize;
 
@@ -293,6 +295,19 @@ uint16_t corr_iat(int16_t iat_x10) noexcept {
     return interp_u16_8pt(iat_corr_axis_x10, iat_corr_x256, kCorrPoints, iat_x10);
 }
 
+// Densidade do ar por lei dos gases ideais (ρ ∝ 1/T a P constante): fator Q8
+// = T_ref/T_iat. Diferente de corr_iat (que hoje é só margem de proteção
+// calibrável — ver comentário em calibration.cpp), este termo é física pura,
+// sem tabela, e entra no cálculo BASE (junto com MAP/baro), não como
+// correção tardia. T_ref e o clamp de Kelvin são compartilhados com
+// map_estimator.cpp — ver cfg::kIatDensityRefKelvinX10 (engine_config.h) e
+// clamp_iat_kelvin_x10 (math_utils.h).
+uint16_t corr_iat_density_q8(int16_t iat_x10) noexcept {
+    ASSERT_VALID_TEMP_X10(iat_x10);
+    const int32_t iat_k_x10 = clamp_iat_kelvin_x10(iat_x10);
+    return static_cast<uint16_t>((kIatDensityRefKelvinX10 * 256) / iat_k_x10);
+}
+
 uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept {
     ASSERT_VALID_VOLTAGE_MV(vbatt_mv);
     // Clamp ao range da tabela vbatt_corr_axis_mv [9000, 16000] mV.
@@ -417,6 +432,7 @@ uint32_t inj_pulse_pw_us(uint32_t flow_us, uint16_t dead_time_us,
 
 uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
                                       uint16_t map_bar_x100,
+                                      uint16_t iat_density_q8,
                                       uint16_t lambda_target_x1000,
                                       int16_t trim_pct_x10,
                                       uint16_t corr_clt_x256,
@@ -433,11 +449,15 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
         // não calibrada na altitude (WOT a 0.90bar não é igual a 90% carga no nível do mar).
         const uint16_t baro = (g_baro_bar_x100 != 0u)
                               ? g_baro_bar_x100 : cfg::g_eng_cfg.map_ref_bar_x100;
-        base_pw_us = static_cast<uint32_t>(
-            num / (100u * static_cast<uint64_t>(baro)));
-        if (base_pw_us > 100000u) {
-            base_pw_us = 100000u;
-        }
+        uint64_t pw = num / (100u * static_cast<uint64_t>(baro));
+        // Termo físico de densidade do ar (ideal gas, T_ref/T_iat — ver
+        // corr_iat_density_q8). Multiplicado aqui, junto com MAP/baro, porque
+        // é propriedade de densidade do ar (base física), não uma correção
+        // de calibração tardia como corr_clt_x256/corr_iat_x256 abaixo.
+        // iat_density_q8=0 (chamador não forneceu) → neutro, sem alterar PW.
+        const uint16_t dens_q8 = (iat_density_q8 != 0u) ? iat_density_q8 : 256u;
+        pw = (pw * dens_q8) / 256u;
+        base_pw_us = static_cast<uint32_t>(pw > 100000u ? 100000u : pw);
     }
 
     uint32_t lambda_pw_us = 0u;

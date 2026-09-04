@@ -222,6 +222,33 @@ void test_knock_window_cycle_end(void) {
     CHECK_TRUE(knock_get_retard_x10(0u) > 0u, "retard applied by cycle_end");
 }
 
+void test_knock_window_primary_dwell_only(void) {
+    section("knock: open_for ignora DWELL extra; spark-cut fecha a janela");
+    knock_init();
+    knock_set_adc_threshold(2000u);
+    knock_set_event_threshold(10u);  // alto: samples não disparam retard
+
+    knock_window_open(1u);
+    knock_test_set_adc_raw(2500u);
+    CHECK_TRUE(knock_window_open_for(1u), "janela aberta é do cyl 1");
+    CHECK_FALSE(knock_window_open_for(2u), "cyl diferente → false");
+    CHECK_EQ(knock_test_get_knock_count(1u), 1u, "uma amostra acima do limiar");
+
+    // Extra dwell do mesmo cilindro (multi-spark) NÃO fecha/reabre.
+    if (!knock_window_open_for(1u)) {
+        knock_window_cycle_end();
+        knock_window_open(1u);
+    }
+    CHECK_EQ(knock_test_get_knock_count(1u), 1u,
+             "mesmo cyl: knock_count sobrevive (não cycle_complete/reset)");
+    CHECK_TRUE(knock_test_window_active(), "janela continua aberta");
+
+    knock_window_cycle_end_if_cyl_mask(0x01u);  // bit0 = cyl 0, janela é cyl 1
+    CHECK_TRUE(knock_test_window_active(), "mask de outro cyl não fecha");
+    knock_window_cycle_end_if_cyl_mask(0x02u);  // bit1 = cyl 1
+    CHECK_FALSE(knock_test_window_active(), "spark-cut do cyl aberto fecha");
+}
+
 void test_knock_save_to_nvm(void) {
     section("knock: knock_save_to_nvm");
     knock_init();

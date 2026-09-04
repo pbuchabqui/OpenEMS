@@ -11,7 +11,15 @@ inline constexpr uint16_t kInjectorFlowCcMin = 450u;
 // E30: lambda 1.00 equivale aproximadamente a AFR 13.0.
 inline constexpr uint16_t kStoichAfrX100 = 1300u;
 inline constexpr uint16_t kFuelDensityMgPerCc = 755u;
+// ρ = P/(R·T), R=287.05 J/(kg·K): 1184 mg/cc confere com P=101325 Pa
+// (1 atm ≈ 1.013 bar, não 1.00 bar exatos), T=298.15 K (25°C).
 inline constexpr uint16_t kAirDensityMgPerCcX1000 = 1184u;
+
+// T_ref para termos físicos de densidade do ar (ρ ∝ 1/T): 298.0 K (25.0°C),
+// a mesma referência de kAirDensityMgPerCcX1000 acima. Convenção K×10 =
+// °C×10 + 2730. Fonte única — usado por corr_iat_density_q8 (fuel_calc.cpp)
+// e pelo termo de temperatura em map_estimator.cpp; não duplicar o literal.
+inline constexpr int32_t kIatDensityRefKelvinX10 = 2980;
 
 inline constexpr uint16_t kMapRefBarX100 = 100u;
 // EOI: ângulo (° BTDC de combustão) em que a injecção TERMINA (SOI é

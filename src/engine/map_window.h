@@ -30,7 +30,8 @@ namespace ems::engine {
 
 // Amostra angular (poll 2 ms no encoder). cycle_deg = 0..719.
 // Gate interno: map_window_enable == 0 → no-op imediato.
-// Sem FULL_SYNC + CMP confirmado aborta a janela parcial.
+// Sem FULL_SYNC + CMP confirmado chama map_window_reset() para o fuel
+// não reutilizar MAP de pré-dropout no re-lock.
 void map_window_on_sample(uint16_t cycle_deg, uint16_t map_bar_x1000,
                           bool full_sync, bool cmp_ok) noexcept;
 
@@ -44,6 +45,8 @@ uint16_t map_window_slot_bar_x1000(uint8_t slot) noexcept;
 int16_t map_window_balance_x1000(uint8_t slot) noexcept;
 
 // Nº de ciclos completos (4 janelas fechadas) — diagnóstico.
+// Perda de FULL_SYNC / came zera este contador (e os slots) para o fuel
+// não reutilizar MAP de pré-dropout no re-lock.
 uint32_t map_window_cycles() noexcept;
 
 // Nº de janelas inteiras saltadas (poll de 2ms mais largo que a janela, a

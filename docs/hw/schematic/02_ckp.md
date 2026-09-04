@@ -1,43 +1,44 @@
-# Sheet 02 — CKP (VR via TLE8888)
+# Sheet 02 — posição angular (MT6835, fork encoder)
+
+> **Este ficheiro é do fork `feat/mt6835-encoder`.** A PCB de produção
+> (`hw/v1-clean-board`, `hardware/openems_v1/`) usa Hall 60-2 em `PA0`.
+> Aqui `PA0`/`PA1` são o par AB do encoder. Não copiar o Hall da v1 para cima.
 
 ## Função
-Sensor VR 60-2 → `VRIN1/2` → interface VR do TLE → `VROUT` → `PA0` (TIM5_CH1).
+Encoder magnético absoluto **MT6835** (SPI + ABZ) → `TIM2` em modo encoder.
+`CH1`/`CH2` decodificam quadratura AB (16384 counts/volta). O CMP Hall
+continua separado, capturado em `TIM3_CH1` (`PC6`) — grava `TIM2->CNT`,
+não tempo. `TIM5` fica só como timebase (watchdogs / ω).
+
+Autoridade: [`../../dev/mt6835_encoder_fork.md`](../../dev/mt6835_encoder_fork.md).
+Datasheet: MagnTek MT6835 Rev 1.3 (2022.12) — ABFreq máx 2,048 MHz;
+`RS_MAX` a 16384 PPR = 7500 RPM (INL não garantido acima); TDelay típ. 10 µs.
 
 ## Referência
-- rusEFI: TLE8888 VR interface (zero-crossing + peak arm); `tle8888.cpp` VRSConfig.  
-- Speeduino / rusEFI VR boards: par trançado blindado, shield só no ECU.  
-- MAX9924 **fora** da BOM (atraso e open-drain — supersedido).  
-**Adoptamos:** VR nativo do TLE, clamp interno, push-pull out.  
-**Adaptamos:** TP-VR + jumper 0 Ω TP-DIG para bancada (ESP32 digital).  
-**Rejeitamos:** filtro RC agressivo na entrada diferencial; pull-up em VROUT.
+- rusEFI / Speeduino: Hall de came em captura, não em TIM encoder.
+- STM32H562 RM: TIM2 encoder mode, CH1/CH2 only.
 
-## Topologia
+**Adoptamos:** TIM2 hardware encoder (zero ISR por borda AB); CMP em TIM3.
+**Adaptamos:** Z (index) para âncora/correção de drift AB vs SPI; CMP ainda
+é Hall (fase 720°).
+**Rejeitamos:** VR via TLE8888; Hall 60-2 em `PA0`; TIM6 como timebase.
+
+## Topologia (bancada WeAct)
 
 ```
-J1.CKP+ ────┬──── TLE pin 52 VRIN1
-            │
-J1.CKP- ────┴──── TLE pin 51 VRIN2     (par trançado no chicote)
-J1.CKP_SHLD ────── SHIELD_GND          (só lado ECU)
+MT6835  A  ──── MCU.PA0  (TIM2_CH1)
+        B  ──── MCU.PA1  (TIM2_CH2)
+        Z  ──── MCU.<Z>  (captura / EXTI — ver fork doc)
+        SPI ─── SPI2 (TLE8888 ausente neste fork, EMS_TLE8888_PRESENT=0)
 
-TLE pin 21 VROUT ──┬── R0 0Ω (jumper) ── MCU.PA0  (CKP_DIG)
-                   │
-                   └── TP-DIG (header 2.54, para estimulador)
-
-TP-VR+ / TP-VR- nos nós VRIN (antes do IC), para gerador/DAC.
+CMP Hall ──── MCU.PC6  (TIM3_CH1, captura de TIM2_CNT)
 ```
-
-**MCU:** PA0 pull-down interno **fica** (falso-sync). Captura: page0[258] bit0 (default subida).
-
-## Componentes
-| Ref | Valor | Notas |
-|-----|-------|-------|
-| R0 | 0 Ω 0805 | DNP = bancada ESP32 no TP-DIG |
-| TP×3 | test points | VROUT, VRIN1, VRIN2 |
-
-Sem diodos de clamp externos (50 mA internos). Sem R série se o DS do sensor não exigir.
 
 ## Nets
-`CKP_P`, `CKP_N`, `CKP_DIG`, `SHIELD_GND`, `MCU.PA0`
+`ENC_A`, `ENC_B`, `ENC_Z`, `MCU.PA0`, `MCU.PA1`, `MCU.PC6`
+
+SPI, PPR e pinos exactos de Z/CS ficam no firmware (`src/hal/mt6835.*`)
+e no fork doc — esta sheet não inventa footprint de produção.
 
 ## Checklist
 - [ ] Shield single-end ECU  

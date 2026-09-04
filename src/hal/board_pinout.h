@@ -2,23 +2,20 @@
 
 /**
  * @file board_pinout.h
- * @brief Pinout at compile time: VGT6 | MRE | RGT6 (default).
+ * @brief Pinout at compile time: VGT6 vs RGT6 (default).
  *
  * VGT6 = STM32H562VGT6 LQFP100 — OpenEMS ideal (GPIOE INJ/IGN PE0/2/4/6 + PE9/…)
- * MRE  = H562 on microRusEFI copper — PD12–15 IGN, PE14–11 INJ, SPI PD5+PB3/4/5
- *        (see docs/hw/pinout_mre_bringup.md + github.com/rusefi/hw_microRusEfi)
  * RGT6 = STM32H562RGT6 LQFP64  — WeAct headers A/B/C
  *
  *   make firmware BOARD=rgt6   # default
  *   make firmware BOARD=vgt6
- *   make firmware BOARD=mre
+ *
+ * BOARD=mre (cobre microRusEFI) saiu: TIM2 AB em PA0/PA1 é pinout H562/WeAct,
+ * não F407 mRE. #define EMS_BOARD_IS_MRE 0 mantém os #if existentes em
+ * out_pins/tle8888 a compilar sem o alvo.
  */
 
-#if defined(EMS_BOARD_MRE)
-#  define EMS_BOARD_IS_MRE  1
-#  define EMS_BOARD_IS_VGT6 0
-#  define EMS_BOARD_NAME "MRE"
-#elif defined(EMS_BOARD_VGT6)
+#if defined(EMS_BOARD_VGT6)
 #  define EMS_BOARD_IS_MRE  0
 #  define EMS_BOARD_IS_VGT6 1
 #  define EMS_BOARD_NAME "VGT6"

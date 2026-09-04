@@ -253,13 +253,13 @@ void test_map_window_angular(void) {
     CHECK_TRUE(map_window_balance_x1000(0u) >= -1 && map_window_balance_x1000(0u) <= 1,
                "balance slot 0 ≈ 0");
 
-    // Perda de fase de came a meio: aborta janela parcial, sem ciclo novo.
-    const uint32_t cycles_before = map_window_cycles();
+    // Perda de fase de came: zera cycles e slots para o fuel não reutilizar
+    // MAP de pré-dropout no re-lock.
     map_window_on_sample(12u, 900u, true, true);   // dentro da janela do slot 0
     map_window_on_sample(12u, 900u, true, false);  // CMP deixou de estar confirmado
-    CHECK_EQ(map_window_cycles(), cycles_before, "sem came: nenhum ciclo novo");
-    CHECK_EQ(map_window_slot_bar_x1000(0u), 500u,
-             "janela parcial abortada não contamina a média");
+    CHECK_EQ(map_window_cycles(), 0u, "dropout zera cycles");
+    CHECK_EQ(map_window_slot_bar_x1000(0u), 0u, "dropout zera slots");
+    CHECK_EQ(map_window_slot_bar_x1000(1u), 0u, "dropout zera todos os slots");
 
     ems::engine::map_window_enable = 0u;  // isolamento entre testes
     map_window_reset();
@@ -318,11 +318,13 @@ void test_map_window_skipped_slot(void) {
     map_window_on_sample(585u, 500u, true, true);  // salta slot 1 E slot 2
     CHECK_EQ(map_window_skip_count(), 2u, "2 slots saltados de uma vez: skip_count=2");
 
-    // Perda de sync não conta como salto de cadência de poll.
+    // Perda de sync zera estado (não conta o hiato como salto).
     map_window_reset();
     ems::engine::map_window_enable = 1u;
     map_window_on_sample(45u, 500u, true, true);   // slot 0
     map_window_on_sample(45u, 500u, false, true);  // perde FULL_SYNC
+    CHECK_EQ(map_window_cycles(), 0u, "FULL_SYNC drop zera cycles");
+    CHECK_EQ(map_window_slot_bar_x1000(0u), 0u, "FULL_SYNC drop zera slots");
     map_window_on_sample(405u, 480u, true, true);  // slot 2, sync recuperado
     CHECK_EQ(map_window_skip_count(), 0u,
              "hiato de sync não é contado como janela saltada");

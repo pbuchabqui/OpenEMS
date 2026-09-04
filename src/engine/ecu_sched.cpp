@@ -525,6 +525,7 @@ void ecu_sched_set_ign_inhibit_mask(uint8_t mask)
     // the coil charged. Rev-limit production is fuel-only and leaves mask=0.
     if (newly != 0U) {
         purge_events_for_cyl_mask(newly, 1U);
+        ems::engine::knock_window_cycle_end_if_cyl_mask(newly);
     }
 }
 uint8_t ecu_sched_get_ign_inhibit_mask(void) { return g_ign_inhibit_mask; }

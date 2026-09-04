@@ -138,14 +138,20 @@ inline PresyncWastedTargets presync_wasted_targets(void) noexcept
     return t;
 }
 
-// Knock window on DWELL_START — single site for TIM5 + TIM2 arm paths.
-// Gate: IGN channel, EMS_KNOCK_HW_PRESENT, sequential mode.
+// Knock window on the primary dwell only. Extra DWELL_STARTs from
+// multi-spark are the same combustion — reopening would call
+// knock_cycle_complete() early and reset knock_count. Single site for
+// TIM5 + TIM2 arm paths. Gate is a runtime `if` so both PRESENT states
+// stay compiled.
 inline void maybe_knock_on_dwell_start(uint8_t ch) noexcept
 {
     if (ch < ECU_CH_IGN4) { return; }
     if (!EMS_KNOCK_HW_PRESENT || g_knock_sequential == 0U) { return; }
-    knock_window_cycle_end();
-    knock_window_open(static_cast<uint8_t>(7U - ch));
+    const uint8_t knock_cyl = static_cast<uint8_t>(7U - ch);
+    if (!knock_window_open_for(knock_cyl)) {
+        knock_window_cycle_end();
+        knock_window_open(knock_cyl);
+    }
 }
 
 // Multi-spark offset loop (deg domain). Call sites supply inter_deg

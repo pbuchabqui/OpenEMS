@@ -106,6 +106,7 @@ int main(void) {
     test_fuel_default_req_and_base_default();
     test_fuel_default_fast();
     test_fuel_corr_warmup();
+    test_fuel_corr_iat_density();
     test_fuel_ae();
     test_fuel_adaptives_reset();
     test_fuel_lambda_delay();
@@ -163,6 +164,7 @@ test_map_window_skipped_slot();
     // ── Knock — Segunda Fase ──────────────────────────────────────────────────
     printf("\n=== KNOCK (fase 2) ===");
     test_knock_window_cycle_end();
+    test_knock_window_primary_dwell_only();
     test_knock_save_to_nvm();
 
     // ── Auxiliaries — Segunda Fase ────────────────────────────────────────────
