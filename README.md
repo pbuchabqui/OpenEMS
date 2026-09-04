@@ -39,9 +39,64 @@ Regras praticas:
 - **INJ/IGN GPIO:** mapas BSRR e write hot-path em `hal/out_pins.h` (`out_pin_write` inline). Init/safe em `out_pins_hw_init()`. `ecu_sched` nao reimplementa tabelas de pinos.
 - Novos documentos Markdown paralelos nao devem ser criados; atualize este `README.md`.
 
+## Dois firmwares (Hall / Encoder)
+
+Dois firmwares, uma fisica de motor. A captacao de rotacao e independente.
+Tudo o resto (combustivel, ignicao, trims, MAP, knock math, limp, NVM, tabelas)
+aterra nos dois, salvo impossibilidade declarada ao utilizador **antes** de
+escrever codigo.
+
+Trees: Hall = `/home/pedro/PROJETOS/OpenEMS` (`hw/v1-clean-board` e derivados).
+Encoder = este tree (`feat/mt6835-encoder` e derivados).
+
+**R1 — Captura e privada.** Hall: roda 60-2, TIM5 CH1/CH2 em PA0/PA1,
+`drv/ckp.cpp`. Encoder: MT6835, TIM2 AB + TIM3 CMP, `hal/mt6835.*`,
+`drv/encoder_sync.*`. Nenhum reutiliza o decoder do outro. PA0/PA1 no Hall
+sao CKP/CMP; no encoder sao A/B.
+
+**R2 — Fisica e comum.** Mudanca do que o motor *faz* (PW, avanco, densidade,
+STFT/LTFT, X-τ, AE, MAP estimator, knock retard, limp, NVM, tabelas) aterra
+nos dois na mesma sessao. Semantica identica; o call-site pode diferir.
+
+**R3 — Default e dual-land.** Classificar o ficheiro *antes* de editar.
+`shared` → os dois trees. `adapter` → API em shared + wiring nos dois
+capturadores. `capture` → um so lado.
+
+**R4 — Excepcao e previa, nunca surpresa.** Se dual-land for impossivel,
+parar e avisar o utilizador antes de implementar. Nao aterrar num lado e
+"portar depois". O aviso nomeia o que muda, porque nao cabe no outro, e a
+divida. Impossivel (lista fechada): input e dente/`tooth_index` vs
+`TIM2->CNT` sem abstrair sem retiming do scheduler congelado; hardware
+inexistente nesse firmware (SPI MT6835; front-end Hall 60-2); extrair a API
+mexeria no caminho quente congelado (Hall `out_pin_write`/TIM5; encoder
+TIM2/CH3). "Da mais trabalho" nao e excepcao.
+
+**R5 — DoD dual.** `make host-test` verde no tree Hall **e** no tree encoder.
+Teste novo de fisica corre nos dois (ou o adapter de teste chama a mesma
+funcao).
+
+| Classe | Hall | Encoder | Dual-land |
+|---|---|---|---|
+| **capture** | `drv/ckp.cpp`, `ecu_sched_angle.cpp`, TIM5 IC | `hal/mt6835.*`, `drv/encoder_sync.*`, `drv/crank_angle.h`, `ecu_sched_encoder_*.cpp` | Nao |
+| **shared** | `fuel_calc`, `fuel_trim`, `ign_calc`, `table3d`, `calibration`, `map_estimator`, `math_utils`, `knock` (API/math), `quick_crank`, `spark_skip`, `xtau_*`, `torque_manager`, `transient_fuel`, `auxiliaries`, `etb_*`, `ewg_*`, `diagnostic_manager`, `engine_config`, `constants` | os mesmos nomes | Sim |
+| **adapter** | `main_stm32.cpp` (loop 2 ms), `sensors_on_tooth`, `ecu_sched.cpp::arm_channel` | `loop_2ms_fuel_ign.cpp`, `enc_cyl_setpoints.cpp`, `sensors_map_window_poll_encoder`, `maybe_knock_on_dwell_start` | API shared; wiring nos dois |
+
+`map_window.cpp` e shared na matematica (slots, reset no dropout). O sampler
+e adapter (`on_tooth` vs `on_sample`). O encoder ja consome MAP por cilindro
+via `enc_cyl_setpoints` — nao inventar `map_window_use_for_fuel` la.
+
+`limp_gating.cpp` / `loop_2ms_fuel_ign.cpp` hoje so existem no encoder; no
+Hall a protect/fuel equivalente vive em `main_stm32.cpp`. Ate extrair,
+dual-land = a mesma semantica nos dois sitios.
+
+Divida: unificar os trees com `ENCODER=0|1` (unico modo de `fuel_calc.cpp`
+ser o mesmo inode). Nao e trabalho desta regra.
+
+Agentes: skill `dual-firmware` (procedimento). A regra e esta seccao.
+
 ## Pipeline De Controle Do Motor
 
-### 1. Posicao do virabrequim (encoder MT6835)
+### 1. Posicao do virabrequim (firmware Encoder — R1)
 
 - TIM2 CH1/CH2: quadratura AB (16384 counts/volta), pinos PA0/PA1.
 - TIM2 CH3: compare-match em angulo (fila INJ/IGN).
@@ -318,6 +373,7 @@ ETB PWM: `etb_pwm_*` em `hal/timer.h`.
 | Documento | Papel |
 |-----------|--------|
 | **README.md** (este) | Fonte unica de decisoes duraveis |
+| README § Dois firmwares | Hall vs Encoder: captura privada, fisica comum (R1–R5) |
 | `docs/hw/pinout.md` | **Pinout completo** RGT6/VGT6 (detalhe movido do §5) |
 | `docs/wiring_diagram.md` | Esquemáticos eléctricos (mapa de pinos ASCII **legado**) |
 | `spec.md` | **Deprecated** — historico; pode divergir |

@@ -1,5 +1,9 @@
 # Fork MT6835 / TIM2 encoder — objetivo e estado
 
+**Regra dual-firmware:** captura privada, física comum. Autoridade:
+[`README.md` § Dois firmwares](../../README.md#dois-firmwares-hall--encoder)
+(R1–R5). Este ficheiro não a repete.
+
 Branch: `feat/mt6835-encoder`, criado a partir de `main` (58c71d9), isolado em
 worktree separado (`~/openems-mt6835-encoder`) para não tocar em
 `hw/v1-clean-board`, que tinha alterações não commitadas no momento da criação
