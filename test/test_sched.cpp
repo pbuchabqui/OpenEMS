@@ -529,6 +529,7 @@ void test_ecu_sched_encoder_drift_detection_escalates_to_limp(void) {
     in.phase_valid = true;
     in.sequential = true;
     in.now_ms = 1000u;
+    in.half_sync_allows_fuel = true;
     in.diag_critical = !DiagnosticManager::is_system_ready();
 
     CHECK_TRUE(!in.diag_critical, "antes de qualquer poll: sistema pronto");

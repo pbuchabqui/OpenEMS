@@ -51,7 +51,7 @@ uint16_t g_last_map_fused_x100 = 0u;
 int8_t   g_last_ltft_pct = 0;
 uint32_t g_last_net_pw_us = 0u;
 bool     g_limp_active = false;
-bool     g_rev_limit_active = false;
+
 
 namespace {
 
@@ -249,6 +249,7 @@ void loop_2ms_fuel_ign(uint32_t now,
     gate_in.diag_critical = diag_critical;
     gate_in.flood_clear = flood_clear;
     gate_in.limp_rpm_cut = limp_rpm_cut;
+    gate_in.half_sync_allows_fuel = true;
     const ems::engine::LimpGatingResult gate =
         ems::engine::limp_gating_update(gate_in);
     ems::app::ui_set_rev_limit_active(g_rev_limit_active);

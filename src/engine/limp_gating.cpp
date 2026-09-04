@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-extern bool     g_rev_limit_active;
+bool            g_rev_limit_active = false;
 extern uint32_t g_dbg_rev_limit_trips;
 extern uint32_t g_dbg_rev_limit_rpm_x10;
 
@@ -304,11 +304,11 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
         (!map_off && in.map_fault) ||
         oil_range_cut || oil_after_start_cut || fuel_rail_cut || overtemp_cut ||
         (!diag_off && in.diag_critical);
-    // HALF_SYNC is TIM2 360° absolute without CMP — wasted spark + semi-seq
-    // fuel are the intended presync path, not "unknown crank". Lock fuel
-    // only on flood/protect, or when there is no sync at all.
+    // Encoder (half_sync_allows_fuel): TIM2 360° — lock only on flood/protect
+    // or no-sync. Hall: HALF after crank is unknown 720° — lock running fuel.
     const bool half_lockout =
         (in.half_sync && (in.flood_clear || fuel_protect)) ||
+        (in.half_sync && !in.half_sync_allows_fuel && !in.cranking) ||
         no_sync_running;
 
     const bool inj_cut =

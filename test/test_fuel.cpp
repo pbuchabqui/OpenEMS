@@ -540,12 +540,12 @@ void test_fuel_stft(void) {
     fuel_reset_adaptives();
     CHECK_EQ(fuel_get_stft_pct_x10(), 0, "STFT=0 after reset");
 
-    // Conditions for closed loop: clt>700, o2_valid=true, ae_active=false, rev_cut=false
+    // Conditions for closed loop: clt>400 (40°C), o2_valid=true, ae_active=false, rev_cut=false
     // lambda measured > target → lean signal → positive error → STFT increases (adds fuel)
     int16_t stft = fuel_update_stft(30000u, 100u,
         1000,   // target lambda (stoich)
         1050,   // measured lambda (lean by 5%)
-        900,    // clt 90°C > 70°C → closed loop OK
+        900,    // clt 90°C > 40°C → closed loop OK
         true, false, false, 5000u, 500u);
     CHECK_TRUE(stft > 0, "lean signal → STFT positive (add fuel)");
     CHECK_EQ(stft, fuel_get_stft_pct_x10(), "fuel_get_stft_pct_x10 matches return value");

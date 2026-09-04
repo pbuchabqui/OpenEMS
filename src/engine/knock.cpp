@@ -6,9 +6,9 @@
  * ADC1_IN6 (PA5) para o sensor de knock (piezo + filtro passa-banda externo).
  *
  * Hardware: sensor piezo → filtro BP externo → PA5 / ADC1_IN6.
- * Software: sample_fast_channels() chama knock_adc_update(raw) a cada dente
- * CKP enquanto a janela estiver ativa; conta amostras acima do threshold;
- * knock_cycle_complete() aplica retard/recovery usando esse contador.
+ * Software: sample_fast_channels() chama knock_adc_update(raw) 12×/rev
+ * (acumulador kFastSamplesPerRev, não a cada dente) enquanto a janela
+ * estiver ativa; knock_cycle_complete() aplica retard/recovery.
  *
  * Sem periférico COMP interno (STM32H562 não o possui) — detecção 100% em
  * software a partir das amostras ADC.

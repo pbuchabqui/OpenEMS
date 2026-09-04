@@ -213,6 +213,7 @@ errados. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
 
 - Modulos: `src/hal/adc.cpp`, `src/hal/stm32h562/adc.cpp`, `src/drv/sensors.cpp`.
 - ADC primario/secundario representam ADC1/ADC2 no STM32.
+- ADC 12-bit 0–3.3 V (raw 4095), tensão aceite pelo STM32H5. MAP 0–3.3 V → 0–3.00 bar (`raw × 3000 / 4095`). TPS/APP/ETB default 0–4095.
 - TIM6 deve ser o gatilho periodico de amostragem.
 - Validacao de sensores deve bloquear valores absurdos e preservar estado de falha para diagnostico.
 
@@ -492,8 +493,9 @@ Fora do MVP de bancada:
 - Limp: falha MAP corta combustivel a qualquer RPM; telemetria PW alinhada ao mask.
 - Fuel: `calc_final_pw_us` clampa corr Q8 0.25–2.0× e satura a 100 ms; AE interp signed.
 - Page0 apply: rev limit, STFT, decel hysteresis, CMP window, trim por cilindro clampados.
-- EOI blend (page0 164-168): `eoi_idle_deg` + janela RPM lo/hi restaurados no boot com
-  o mesmo clamp do write-handler (idle ∈ [0,719]); `hi<=lo` desliga o blend.
+- EOI 2D RPM×CLT (page6 79-114): `eoi_rpm_axis_x10` / `eoi_clt_axis_x10` /
+  `eoi_table_deg` (bilinear 3×3). Sem bump de magic v6; page0 164-168 deixa de
+  guardar o blend 1D.
 - Flash: layout **LTF3** = magic + CRC-32 dos mapas adaptativos; seed no mesmo
   SM de flush (sem erase independente do setor 0); seed finaliza magic/CRC.
 - ETB: PID `etb_control_update` → `etb_driver_set_motor_pwm`; disable → shutdown.

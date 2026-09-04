@@ -50,6 +50,17 @@ using ems::engine::cfg::kIatDensityRefKelvinX10;
 
 // Fluxo de ar admitido pela borboleta (mg/ciclo aprox.), função de abertura,
 // ΔP atmosfera-coletor e temperatura do ar admitido.
+//
+// NOTA: usa ΔP LINEAR, não √ΔP como a equação de orifício usada para o bico
+// injetor em apply_delta_p_compensation (fuel_calc.cpp) — fisicamente a vazão
+// através de uma restrição (borboleta) segue √ΔP, não ΔP. A linearização foi
+// mantida deliberadamente aqui: este fluxo só alimenta o preditor de MAP (um
+// filtro complementar sensor+modelo, ver map_estimator_update), nunca a
+// dosagem de combustível diretamente, e a faixa de ΔP típica em regime é
+// estreita o suficiente para o erro de linearização ficar dentro da margem
+// já absorvida pelo blend com o sensor. Se a precisão do modelo em
+// transientes grandes (ex.: tip-in a alta altitude) se mostrar insuficiente,
+// trocar para √ΔP é o primeiro lugar a revisar.
 uint16_t calc_throttle_flow_impl(uint16_t tps_pct_x10, uint16_t map_bar_x100,
                                  int16_t iat_x10, uint16_t baro_bar_x100) noexcept {
     constexpr uint32_t kMaxFlowMg = 800u;

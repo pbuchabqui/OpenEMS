@@ -9,6 +9,8 @@
 
 #include <cstdint>
 
+extern bool g_rev_limit_active;
+
 namespace ems::engine {
 
 struct LimpGatingInputs {
@@ -36,6 +38,9 @@ struct LimpGatingInputs {
     bool     diag_critical;
     bool     flood_clear;
     bool     limp_rpm_cut;
+    // Encoder TIM2: HALF_SYNC already has 360° — running fuel allowed.
+    // Hall 60-2: HALF_SYNC after crank is unknown cycle — lock fuel.
+    bool     half_sync_allows_fuel;
 };
 
 struct LimpGatingResult {

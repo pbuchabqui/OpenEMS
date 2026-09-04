@@ -35,6 +35,7 @@ LimpGatingInputs base_in() noexcept
     in.phase_valid = true;
     in.sequential = true;
     in.now_ms = 1000u;
+    in.half_sync_allows_fuel = true;
     return in;
 }
 
