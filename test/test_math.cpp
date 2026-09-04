@@ -274,6 +274,18 @@ void test_math_stft_gains(void) {
     const int16_t s_cold2 = fuel_update_stft(
         30000u, 100u, 1000, 1200, 600, true, false, false, 30000u, 500u);
     CHECK_EQ(s_cold2, 250, "STFT congelado após 2 chamadas frias: mantém 250");
+
+    section("MATH: fuel_update_stft termo P não trunca a zero em erro pequeno");
+    // error=33 x1000 (3,3% lean) está na faixa normal de operação — antes do
+    // fix, p_x10=(33×3)/100=0 (trunca) E integrator/100=floor(16/100)=0, então
+    // a 1ª chamada não aplicava NENHUMA correção apesar do erro real. Com o
+    // fix, p e integrator somam-se em ×1000 antes de dividir por 100 uma
+    // única vez: (33×3 + floor(33×5/10)) / 100 = (99+16)/100 = 1.
+    fuel_reset_adaptives();
+    const int16_t s_small_err = fuel_update_stft(
+        30000u, 100u, 1000, 1033, 900, true, false, false, 30000u, 500u);
+    CHECK_EQ(s_small_err, 1,
+             "erro pequeno (3,3%) já corrige após 1 chamada — P não é perdido no truncamento");
 }
 
 void test_math_inj_scheduler_ticks(void) {

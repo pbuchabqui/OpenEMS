@@ -6,6 +6,7 @@
 #include "engine/knock.h"
 #include "engine/calibration.h"
 #include "engine/quick_crank.h"
+#include "hal/board_pinout.h"
 #include "hal/out_pins.h"
 #include "hal/critical_section.h"
 #if !defined(EMS_HOST_TEST)
@@ -346,7 +347,7 @@ static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_sta
     g_pin_last_state[idx] = high;
 }
 
-static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U);
+static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state = 0U, uint8_t bypass_inhibit = 0U);
 
 // Drop pending events for channels matching bit mask (inj or ign cylinder map).
 // Also drive matching pins to safe (INJ_OFF / SPARK) and clear dwell arm.
@@ -408,12 +409,14 @@ static void sanitize_runtime_calibration(void)
     if (clamped != 0U) { ++g_calibration_clamp_count; }
 }
 
-static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state)
+static void force_output(uint8_t ch, uint8_t action, uint8_t is_safe_state, uint8_t bypass_inhibit)
 {
     // Safe-state transitions (INJ_OFF / SPARK) always allowed — never block a cut.
-    // Non-safe ON paths honor inhibit masks so prime / test pulse cannot bypass
-    // fuel-protect, half lockout, rev-limit, or flood-driven mask=0x0F.
-    if (is_safe_state == 0U) {
+    // Non-safe ON paths honor inhibit masks so prime cannot bypass fuel-protect,
+    // half lockout, rev-limit, or flood-driven mask=0x0F. Explicit bench
+    // test-pulse commands (bypass_inhibit=1) are exempt — a fault-latched
+    // inhibit mask must not make an operator's FIRE_INJ/FIRE_IGN silently no-op.
+    if (is_safe_state == 0U && bypass_inhibit == 0U) {
         const uint8_t is_inj = (ch < ECU_IGN_CH_FIRST) ? 1U : 0U;
         if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
             const uint8_t cyl_bit = (ch < 8U) ? k_inj_ch_to_bit[ch] : 0U;
@@ -468,6 +471,17 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     if (is_inj == 0U && action == ECU_ACT_DWELL_START) {
         const uint8_t ign_idx = (uint8_t)(pin_idx - ECU_IGN_CH_FIRST);
         g_dwell_wdog_ticks[ign_idx] = (si::g_dwell_ticks * 7U) / 5U;
+    }
+
+    // Knock window: restaurado (era removido por acidente, commit f42c450 —
+    // ver aviso em hal/board_pinout.h). Gated atrás de EMS_KNOCK_HW_PRESENT
+    // (default 0, hardware analógico DNP na v1) — `if`, não `#if`, para ficar
+    // sempre compilado e testável nos dois estados.
+    if (is_inj == 0U && action == ECU_ACT_DWELL_START &&
+        EMS_KNOCK_HW_PRESENT && si::g_knock_sequential != 0U) {
+        const uint8_t knock_cyl = static_cast<uint8_t>(7U - ch);
+        ems::engine::knock_window_cycle_end();
+        ems::engine::knock_window_open(knock_cyl);
     }
     (void)now;
 
@@ -617,7 +631,7 @@ void ecu_sched_test_pulse_inj(uint8_t cyl, uint32_t pw_us)
     if (pw_us > 30000U) { pw_us = 30000U; }
     const uint8_t ch = si::kInjCh[cyl];
     const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
-    force_output(ch, ECU_ACT_INJ_ON);
+    force_output(ch, ECU_ACT_INJ_ON, 0U, 1U);
     arm_channel(ch, off_cnv, ECU_ACT_INJ_OFF);
 }
 
@@ -628,7 +642,7 @@ void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
     if (dwell_us > 10000U) { dwell_us = 10000U; }
     const uint8_t ch = si::kIgnCh[cyl];
     const uint32_t spark_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(dwell_us);
-    force_output(ch, ECU_ACT_DWELL_START);
+    force_output(ch, ECU_ACT_DWELL_START, 0U, 1U);
     // Arm watchdog for this manual dwell (DWELL already forced HIGH; SPARK is
     // only queued). pin_transition(LOW) / watchdog release the arm tick.
     {
@@ -694,6 +708,12 @@ void ecu_sched_bench_pw_lock_next_commit(void)
 uint8_t ecu_sched_bench_pw_override_state(void)
 {
     return g_inj_pw_override;
+}
+
+void ecu_sched_bench_pw_lock_clear(void)
+{
+    ems::hal::CriticalSectionGuard guard;
+    g_inj_pw_override = 0U;
 }
 
 void ecu_sched_get_angle_trace(uint32_t *gap_ts,

@@ -2,7 +2,7 @@
 # BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE pinout)
 # Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
-.PHONY: all clean host-test host-test-vgt6 firmware firmware-rgt6 firmware-vgt6 help \
+.PHONY: all clean host-test host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
         secrets-check lint-includes format format-all format-check ci-local
 
 COMPILER_ARM = arm-none-eabi-g++
@@ -39,7 +39,10 @@ CFLAGS_ARM = $(CFLAGS_COMMON) -DTARGET_STM32H562 -DNDEBUG -mcpu=cortex-m33 -mthu
              -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections \
              -g0 -O2 -I./src $(BOARD_CFLAGS)
 # -I. so test/*.cpp can #include "test/harness.h"
-CFLAGS_HOST = $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_RGT6 -O2 -g -I. -I./src
+# ASan+UBSan: host-only (never CFLAGS_ARM) — catches real UB (e.g. shift of a
+# negative signed value) that a plain build silently tolerates.
+CFLAGS_HOST = $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_RGT6 -O2 -g -I. -I./src \
+              -fsanitize=address,undefined -fno-sanitize-recover=all
 
 SRC_DIR = src
 TEST_DIR = test
@@ -118,6 +121,7 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_fuel.cpp \
                    $(TEST_DIR)/test_ign.cpp \
                    $(TEST_DIR)/test_aux_knock.cpp \
+                   $(TEST_DIR)/test_knock_hw_wiring.cpp \
                    $(TEST_DIR)/test_timer.cpp \
                    $(TEST_DIR)/test_sched.cpp \
                    $(TEST_DIR)/test_engine_misc.cpp \
@@ -130,6 +134,18 @@ HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(HOST_TEST_HARNESS) $(HOST_TEST_SUITES)
 HOST_TEST_BIN = $(HOST_DIR)/mvp_bench_tests
 
+# Binário próprio p/ knock com EMS_KNOCK_HW_PRESENT=1 (make host-test-knock-hw)
+# — mesma lógica de teste de test_knock_hw_wiring.cpp que a suite principal já
+# compila com a flag em 0; aqui só troca o main() (test_knock_hw_main.cpp em
+# vez de run_all.cpp) e o define. Contagem PASS/FAIL da suite principal intocada.
+HOST_TEST_KNOCK_HW_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
+                         $(SRC_DIR)/hal/stm32h562/timer.cpp \
+                         $(SRC_DIR)/hal/stm32h562/system.cpp \
+                         $(TEST_DIR)/harness.cpp $(TEST_DIR)/fixtures.cpp \
+                         $(TEST_DIR)/ui_helpers.cpp \
+                         $(TEST_DIR)/test_knock_hw_wiring.cpp \
+                         $(TEST_DIR)/test_knock_hw_main.cpp
+
 all: help
 
 help:
@@ -139,6 +155,7 @@ help:
 	@echo ""
 	@echo "  host-test       Host regression (always RGT6 pin map stubs)"
 	@echo "  host-test-vgt6  Standalone VGT6 GPIOE INJ/IGN BSRR coverage"
+	@echo "  host-test-knock-hw  Standalone knock wiring coverage (EMS_KNOCK_HW_PRESENT=1)"
 	@echo "  firmware        Build for BOARD (default rgt6)"
 	@echo "  firmware-rgt6   Build RGT6 bin"
 	@echo "  firmware-vgt6   Build VGT6 bin (GPIOE INJ/IGN/ETB)"
@@ -170,6 +187,13 @@ host-test-vgt6:
 		$(SRC_DIR)/hal/out_pins.cpp $(TEST_DIR)/harness.cpp \
 		$(TEST_DIR)/test_out_pins_vgt6.cpp -o $(HOST_DIR)/out_pins_vgt6_tests -lm
 	@$(HOST_DIR)/out_pins_vgt6_tests
+
+host-test-knock-hw:
+	@mkdir -p $(HOST_DIR)
+	@echo "  HOST $(HOST_DIR)/knock_hw_wiring_tests"
+	@$(CXX_HOST) $(CFLAGS_HOST) -DEMS_KNOCK_HW_PRESENT=1 $(HOST_TEST_KNOCK_HW_SRC) \
+		-o $(HOST_DIR)/knock_hw_wiring_tests -lm
+	@$(HOST_DIR)/knock_hw_wiring_tests
 
 firmware-rgt6:
 	@$(MAKE) firmware BOARD=rgt6

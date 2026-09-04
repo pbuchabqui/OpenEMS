@@ -125,6 +125,9 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us);
 // Prefer this over poking g_inj_pw_override via raw symbol linkage.
 void ecu_sched_bench_pw_lock_next_commit(void);
 uint8_t ecu_sched_bench_pw_override_state(void);
+// Clears the bench PW lock — real ARM firmware has no other unlock path
+// besides this (ecu_sched_test_reset() is host-test-only).
+void ecu_sched_bench_pw_lock_clear(void);
 
 // ── Protocol / host observability (main-loop / UART only — not ISR hot path) ──
 

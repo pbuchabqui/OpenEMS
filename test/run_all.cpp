@@ -197,6 +197,7 @@ int main(void) {
     test_ecu_sched_setters();
     test_ecu_sched_angle_table();
     test_ecu_sched_wasted_to_sequential();
+    test_knock_window_scheduler_wiring();
     test_ecu_sched_cmp_revalidation_after_sync_loss();
     test_ecu_sched_noise_rejects_sequential();
     test_ecu_sched_recovers_after_fallback();
@@ -309,6 +310,8 @@ int main(void) {
     test_output_test_rpm_abort();
     test_output_test_keepalive_timeout();
     test_output_test_suspends_aux();
+    test_output_test_bypasses_inhibit_mask();
+    test_output_test_bench_pw_lock();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

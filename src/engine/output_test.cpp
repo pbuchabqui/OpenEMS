@@ -23,6 +23,7 @@ uint32_t g_now_ms = 0u;
 void restore_safe() noexcept
 {
     ::ecu_sched_test_all_outputs_safe();
+    ::ecu_sched_bench_pw_lock_clear();
     ems::engine::auxiliaries_force_pump(false);
     ems::engine::auxiliaries_force_fan(false);
     ems::hal::tim4_set_duty(0u, 0u);

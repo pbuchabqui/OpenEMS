@@ -199,9 +199,18 @@ void parse_byte(uint8_t b) noexcept {
             return;
         }
         if (b == static_cast<uint8_t>('P')) {
-            ecu_sched_bench_pw_lock_next_commit();
-            ecu_sched_commit_calibration(10U, 22500U, 50000U, 30U);  // eoi_lead=30° (EOI targeting, valor de bench)
-            tx_push(0x00u);
+            // Trava PW/dwell/avanço de bancada — só permitida em output-test
+            // (que já exige motor parado para entrar) e com o motor
+            // efetivamente parado agora; sem isto, o firmware real não tem
+            // como destravar (ecu_sched_test_reset() é host-test-only) além
+            // de power-cycle. Destrave automático em output_test restore_safe().
+            const auto p_snap = ems::drv::ckp_snapshot();
+            const bool ok = ems::engine::output_test_active() && (p_snap.rpm_x10 == 0u);
+            if (ok) {
+                ecu_sched_bench_pw_lock_next_commit();
+                ecu_sched_commit_calibration(10U, 22500U, 50000U, 30U);  // eoi_lead=30° (EOI targeting, valor de bench)
+            }
+            tx_push(ok ? kAckOk : kAckErr);
             return;
         }
         if (b == static_cast<uint8_t>('V')) {

@@ -825,7 +825,10 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     const int32_t clamp_x1000 = static_cast<int32_t>(clamp) * 100;
     const int16_t error_x1000 = static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
     g_dbg_stft_last_err = error_x1000;
-    const int32_t p_x10 = (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_kp_x100)) / 100;
+    // P em ×1000 (não ÷100 ainda — kp_x100=3 truncava a zero p/ |erro|<3,4%, a
+    // faixa normal de operação em malha fechada). Só divide por 100 no fim,
+    // já somado ao integrador (também em ×1000).
+    const int32_t p_x1000 = static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_kp_x100);
     // incremento em ×1000: error×ki/10 (era /1000 em ×10 — truncava a zero)
     g_stft_integrator_x1000 += (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_ki_x1000)) / 10;
 
@@ -835,7 +838,7 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
         g_stft_integrator_x1000 = -clamp_x1000;
     }
 
-    const int32_t stft = p_x10 + g_stft_integrator_x1000 / 100;
+    const int32_t stft = (p_x1000 + g_stft_integrator_x1000) / 100;
     g_stft_pct_x10 = clamp_i16(static_cast<int16_t>(stft), -clamp, clamp);
 
     // Célula de crédito = nó dominante (nearest), igual ao trace do VE no dash.

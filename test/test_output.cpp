@@ -217,3 +217,76 @@ void test_output_test_suspends_aux(void) {
     ems::engine::auxiliaries_set_key_on(false);
 }
 
+void test_output_test_bypasses_inhibit_mask(void) {
+    section("output_test: FIRE_INJ/FIRE_IGN ignoram máscara de inibição (bancada sem chicote)");
+    ot_reset_all();
+
+    uint8_t buf[8] = {};
+    ecu_sched_test_set_tim5_cnt(1000000u);
+    ot_txn(0x01u, 0u, 0xA55Au, buf, sizeof(buf));
+
+    // Simula fault/diag_critical latching as máscaras a 0x0F, como aconteceria
+    // numa bancada sem chicote completo — antes do fix, force_output() bloqueava
+    // o FIRE silenciosamente (ACK mas pino nunca move).
+    ecu_sched_set_inj_inhibit_mask(0x0Fu);
+    ecu_sched_set_ign_inhibit_mask(0x0Fu);
+
+    uint32_t v_before[24] = {};
+    ecu_sched_get_pin_counts_u32x24(v_before);
+
+    uint16_t n = ot_txn(0x10u, 0u, 5000u, buf, sizeof(buf));  // FIRE_INJ cyl0
+    CHECK_TRUE(n == 1u && buf[0] == 0x00u, "FIRE_INJ com inj_inhibit_mask=0x0F → ACK");
+    uint32_t v_after_inj[24] = {};
+    ecu_sched_get_pin_counts_u32x24(v_after_inj);
+    uint32_t high_before = 0u, high_after_inj = 0u;
+    for (uint8_t i = 0u; i < 8u; ++i) {
+        high_before    += v_before[i * 3u];
+        high_after_inj += v_after_inj[i * 3u];
+    }
+    CHECK_TRUE(high_after_inj > high_before,
+               "pino INJ realmente foi a HIGH apesar da máscara — bypass_inhibit funcionou");
+
+    // Avança além da janela busy do FIRE_INJ anterior (5ms pulso + 100ms gap).
+    ems::engine::output_test_poll(200u, 0u);
+    n = ot_txn(0x11u, 1u, 3000u, buf, sizeof(buf));  // FIRE_IGN cyl1
+    CHECK_TRUE(n == 1u && buf[0] == 0x00u, "FIRE_IGN com ign_inhibit_mask=0x0F → ACK");
+    uint32_t v_after_ign[24] = {};
+    ecu_sched_get_pin_counts_u32x24(v_after_ign);
+    uint32_t high_after_ign = 0u;
+    for (uint8_t i = 0u; i < 8u; ++i) { high_after_ign += v_after_ign[i * 3u]; }
+    CHECK_TRUE(high_after_ign > high_after_inj,
+               "pino IGN (dwell) também foi a HIGH apesar da máscara — bypass_inhibit funcionou");
+
+    ecu_sched_set_inj_inhibit_mask(0u);
+    ecu_sched_set_ign_inhibit_mask(0u);
+    ems::engine::output_test_exit();
+}
+
+void test_output_test_bench_pw_lock(void) {
+    section("output_test: 'P' (trava PW bancada) exige output-test + RPM=0, destrava em restore_safe");
+    ot_reset_all();
+
+    uint8_t buf[8] = {};
+    const uint8_t p_cmd = 'P';
+
+    // 'P' fora de output-test → NAK, lock não aplicado. Sem isto, o firmware
+    // real não teria como destravar depois (ecu_sched_test_reset() é
+    // host-test-only) além de power-cycle.
+    ui_feed(&p_cmd, 1u);
+    uint16_t n = ui_drain(buf, sizeof(buf));
+    CHECK_TRUE(n == 1u && buf[0] == 0x01u, "'P' sem output-test → NAK");
+    CHECK_EQ(ecu_sched_bench_pw_override_state(), 0u, "lock não aplicado sem output-test");
+
+    ot_txn(0x01u, 0u, 0xA55Au, buf, sizeof(buf));
+    CHECK_TRUE(ems::engine::output_test_active(), "pré-condição: modo activo");
+
+    ui_feed(&p_cmd, 1u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_TRUE(n == 1u && buf[0] == 0x00u, "'P' em output-test + RPM=0 → ACK");
+    CHECK_TRUE(ecu_sched_bench_pw_override_state() != 0u, "lock aplicado");
+
+    ems::engine::output_test_exit();
+    CHECK_EQ(ecu_sched_bench_pw_override_state(), 0u,
+             "destrava automaticamente ao sair de output-test (restore_safe)");
+}
+
