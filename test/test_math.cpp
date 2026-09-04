@@ -214,11 +214,12 @@ void test_math_corrections(void) {
 
     section("MATH: corr_iat valores exactos");
     // iat_corr_axis_x10 = {-200,0,200,400,600,800,1000,1200}
-    // iat_corr_x256     = {272, 264,256,256,264,272, 280, 288}
-    // Ponto 100 (midpoint 0..200):
-    //   frac = 100×256/200 = 128
-    //   lerp(264,256,128) = 264 + (256-264)×128/256 = 264-4 = 260
-    CHECK_EQ(corr_iat(100), 260u, "corr_iat(100) = 260 (interp exacta)");
+    // iat_corr_x256     = {256, 256,256,256,256,266, 276, 288}
+    // (margem de proteção apenas, não compensação de densidade — ver
+    // corr_iat_density_q8 para a parte física. Placeholder não calibrado:
+    // neutro até 40°C, subida modesta acima disso.)
+    // Ponto 100 (midpoint 0..200, ambos os nós valem 256):
+    CHECK_EQ(corr_iat(100), 256u, "corr_iat(100) = 256 (ambos os nós neutros)");
     CHECK_EQ(corr_iat(200), 256u, "corr_iat(200) = 256 (valor ref, frac=255→b)");
 
     section("MATH: corr_vbatt valores exactos (dead-time do injector)");

@@ -83,6 +83,7 @@ void test_fuel_table_lookups(void);
 void test_fuel_default_req_and_base_default(void);
 void test_fuel_default_fast(void);
 void test_fuel_corr_warmup(void);
+void test_fuel_corr_iat_density(void);
 void test_fuel_ae(void);
 void test_fuel_adaptives_reset(void);
 void test_fuel_lambda_delay(void);

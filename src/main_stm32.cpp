@@ -196,6 +196,7 @@ struct CachedFuelCorrections {
     uint16_t vbatt_mv;
     uint16_t corr_clt_x256;
     uint16_t corr_iat_x256;
+    uint16_t iat_density_q8;
     uint16_t dead_time_us;
     // dwell_ms_x10 não é cacheado: depende de RPM que varia a cada dente.
     // Calculado inline via dwell_ms_x10_from_vbatt_rpm() em cada slot de 2ms.
@@ -215,6 +216,7 @@ static inline const CachedFuelCorrections& fuel_corrections_for(
         g_fuel_corr_cache.vbatt_mv = sensors.vbatt_mv;
         g_fuel_corr_cache.corr_clt_x256 = ems::engine::corr_clt(sensors.clt_degc_x10);
         g_fuel_corr_cache.corr_iat_x256 = ems::engine::corr_iat(sensors.iat_degc_x10);
+        g_fuel_corr_cache.iat_density_q8 = ems::engine::corr_iat_density_q8(sensors.iat_degc_x10);
         g_fuel_corr_cache.dead_time_us = ems::engine::corr_vbatt(sensors.vbatt_mv);
     }
     return g_fuel_corr_cache;
@@ -973,6 +975,7 @@ int main() {
                 uint32_t final_pw_us_base =
                     ems::engine::calc_fuel_pw_us_default_fast(ve,
                                                                map_bar_x100,
+                                                               fuel_corr.iat_density_q8,
                                                                lambda_target_x1000,
                                                                fuel_trim_pct_x10,
                                                                fuel_corr.corr_clt_x256,

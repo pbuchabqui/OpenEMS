@@ -434,13 +434,19 @@ REQ_FUEL_us = (disp_cc × air_mg_cc × 60_000_000)
 
 **Pipeline de cálculo:**
 ```
-VE + MAP → BASE_PW = REQ_FUEL × VE/100 × MAP/MAP_REF
-         → LAMBDA_PW = BASE_PW × 1000 / lambda_target_x1000
-         → TRIM_PW = LAMBDA_PW × (1 + trim_pct_x10/1000)
-         → CLT_CORR = TRIM_PW × clt_x256/256
-         → IAT_CORR = CLT_CORR × iat_x256/256
-         → FINAL_PW = IAT_CORR + dead_time_us
+VE + MAP + IAT → BASE_PW = REQ_FUEL × VE/100 × MAP/baro × T_ref/T_iat
+              → LAMBDA_PW = BASE_PW × 1000 / lambda_target_x1000
+              → TRIM_PW = LAMBDA_PW × (1 + trim_pct_x10/1000)
+              → CLT_CORR = TRIM_PW × clt_x256/256
+              → IAT_PROTECT = CLT_CORR × iat_x256/256
+              → FINAL_PW = IAT_PROTECT + dead_time_us
 ```
+`T_ref/T_iat` (`corr_iat_density_q8`) é física pura (lei dos gases ideais,
+T_ref=298.0K/25°C — mesma referência de `kAirDensityMgPerCcX1000`), não
+calibrável, aplicada no cálculo BASE junto com MAP/baro. `iat_x256`
+(`corr_iat`/`iat_corr_x256`) passou a ser só margem de proteção calibrável
+(ex.: anti-detonação em IAT alto) — a densidade não é mais responsabilidade
+dela.
 
 **Interface:**
 ```cpp
@@ -448,14 +454,15 @@ uint8_t  get_ve(uint32_t rpm_x10, uint16_t map_bar_x100);
 uint8_t  get_ve_prepared(const Table2dLookup&);
 uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_bar_x100);
 uint32_t calc_fuel_pw_us_default_fast(uint8_t ve, uint16_t map_bar_x100,
-    uint16_t lambda_x1000, int16_t trim_pct_x10,
+    uint16_t iat_density_q8, uint16_t lambda_x1000, int16_t trim_pct_x10,
     uint16_t corr_clt_x256, uint16_t corr_iat_x256, uint16_t dead_time_us);
 int32_t  calc_ae_pw_us(uint16_t tps_now_x10, uint16_t tps_prev_x10,
     uint16_t dt_ms, int16_t clt_x10);
 
 // Correções
 uint16_t corr_clt(int16_t clt_x10);
-uint16_t corr_iat(int16_t iat_x10);
+uint16_t corr_iat(int16_t iat_x10);               // margem de proteção (calibrável)
+uint16_t corr_iat_density_q8(int16_t iat_x10);    // densidade do ar (física, T_ref/T)
 uint16_t corr_vbatt(uint16_t vbatt_mv);       // dead time
 uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv);
 

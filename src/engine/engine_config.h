@@ -11,6 +11,8 @@ inline constexpr uint16_t kInjectorFlowCcMin = 450u;
 // E30: lambda 1.00 equivale aproximadamente a AFR 13.0.
 inline constexpr uint16_t kStoichAfrX100 = 1300u;
 inline constexpr uint16_t kFuelDensityMgPerCc = 755u;
+// ρ = P/(R·T), R=287.05 J/(kg·K): 1184 mg/cc confere com P=101325 Pa
+// (1 atm ≈ 1.013 bar, não 1.00 bar exatos), T=298.15 K (25°C).
 inline constexpr uint16_t kAirDensityMgPerCcX1000 = 1184u;
 
 inline constexpr uint16_t kMapRefBarX100 = 100u;

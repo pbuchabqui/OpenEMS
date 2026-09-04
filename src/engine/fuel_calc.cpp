@@ -29,6 +29,24 @@ using ems::engine::interp_u16_8pt;
 
 constexpr uint8_t kCorrPoints = ems::engine::kCorrectionTableSize;
 
+// T_ref para o termo de densidade do ar = 298.0 K (25.0°C), a mesma
+// referência de cfg::kAirDensityMgPerCcX1000 (ver comentário na constante).
+// Convenção K×10 = °C×10 + 2730 (mesma de map_estimator.cpp).
+constexpr int32_t kIatDensityRefKelvinX10 = 2980;
+
+// Clamp em Kelvin×10 alinhado ao range do ASSERT_VALID_TEMP_X10 deste arquivo
+// (-40°C a 150°C, não o range mais largo de map_estimator.cpp — mantém o
+// clamp consistente com o range já assertado nas outras funções de corr_*
+// aqui). Inerte para qualquer entrada que já passe no assert; protege só
+// release builds (NDEBUG) contra leitura de sensor fora de faixa, limitando
+// a autoridade do termo a [180, 327] em Q8 (~0.70×–1.28×) nos extremos.
+int32_t clamp_iat_kelvin_x10(int16_t iat_x10) noexcept {
+    int32_t iat_k_x10 = static_cast<int32_t>(iat_x10) + 2730;
+    if (iat_k_x10 < 2330) { iat_k_x10 = 2330; }
+    if (iat_k_x10 > 4230) { iat_k_x10 = 4230; }
+    return iat_k_x10;
+}
+
 uint32_t isqrt_u32(uint32_t x) noexcept {
     if (x == 0u) {
         return 0u;
@@ -139,7 +157,9 @@ uint32_t calc_req_fuel_us(uint16_t displacement_cc,
         return 0u;
     }
 
-    // REQ_FUEL @ 1.00 bar, 100% VE, lambda 1.00:
+    // REQ_FUEL @ P_ref/T_ref de kAirDensityMgPerCcX1000 (1 atm ≈ 1.013 bar,
+    // 25°C — não 1.00 bar exatos: ρ=P/(R·T), R=287.05, confere com 101325 Pa,
+    // não 100000 Pa), 100% VE, lambda 1.00:
     // air/cyl = (displacement / cylinders) * air_density
     // fuel/cyl = air/cyl / stoich_afr
     // pulse = fuel/cyl / injector_mass_flow
@@ -263,6 +283,17 @@ uint16_t corr_iat(int16_t iat_x10) noexcept {
     return interp_u16_8pt(iat_corr_axis_x10, iat_corr_x256, kCorrPoints, iat_x10);
 }
 
+// Densidade do ar por lei dos gases ideais (ρ ∝ 1/T a P constante): fator Q8
+// = T_ref/T_iat. Diferente de corr_iat (que hoje é só margem de proteção
+// calibrável — ver comentário em calibration.cpp), este termo é física pura,
+// sem tabela, e entra no cálculo BASE (junto com MAP/baro), não como
+// correção tardia. Ver kIatDensityRefKelvinX10/clamp_iat_kelvin_x10 acima.
+uint16_t corr_iat_density_q8(int16_t iat_x10) noexcept {
+    ASSERT_VALID_TEMP_X10(iat_x10);
+    const int32_t iat_k_x10 = clamp_iat_kelvin_x10(iat_x10);
+    return static_cast<uint16_t>((kIatDensityRefKelvinX10 * 256) / iat_k_x10);
+}
+
 uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept {
     ASSERT_VALID_VOLTAGE_MV(vbatt_mv);
     // Clamp ao range da tabela vbatt_corr_axis_mv [9000, 16000] mV.
@@ -364,6 +395,7 @@ uint32_t calc_final_pw_us(uint32_t base_pw_us,
 
 uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
                                       uint16_t map_bar_x100,
+                                      uint16_t iat_density_q8,
                                       uint16_t lambda_target_x1000,
                                       int16_t trim_pct_x10,
                                       uint16_t corr_clt_x256,
@@ -380,11 +412,15 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
         // não calibrada na altitude (WOT a 0.90bar não é igual a 90% carga no nível do mar).
         const uint16_t baro = (g_baro_bar_x100 != 0u)
                               ? g_baro_bar_x100 : cfg::g_eng_cfg.map_ref_bar_x100;
-        base_pw_us = static_cast<uint32_t>(
-            num / (100u * static_cast<uint64_t>(baro)));
-        if (base_pw_us > 100000u) {
-            base_pw_us = 100000u;
-        }
+        uint64_t pw = num / (100u * static_cast<uint64_t>(baro));
+        // Termo físico de densidade do ar (ideal gas, T_ref/T_iat — ver
+        // corr_iat_density_q8). Multiplicado aqui, junto com MAP/baro, porque
+        // é propriedade de densidade do ar (base física), não uma correção
+        // de calibração tardia como corr_clt_x256/corr_iat_x256 abaixo.
+        // iat_density_q8=0 (chamador não forneceu) → neutro, sem alterar PW.
+        const uint16_t dens_q8 = (iat_density_q8 != 0u) ? iat_density_q8 : 256u;
+        pw = (pw * dens_q8) / 256u;
+        base_pw_us = static_cast<uint32_t>(pw > 100000u ? 100000u : pw);
     }
 
     uint32_t lambda_pw_us = 0u;

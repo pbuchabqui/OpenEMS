@@ -123,6 +123,7 @@ int main(void) {
     test_fuel_default_req_and_base_default();
     test_fuel_default_fast();
     test_fuel_corr_warmup();
+    test_fuel_corr_iat_density();
     test_fuel_ae();
     test_fuel_adaptives_reset();
     test_fuel_lambda_delay();
