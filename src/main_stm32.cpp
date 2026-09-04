@@ -835,13 +835,6 @@ int main() {
             const bool map_fuel_cut = map_fault;
             const bool oil_protect_cut =
                 oil_fault && (snap.rpm_x10 > kOilProtectRpmX10);
-            // Corte de ignição por falha de óleo só em operação normal — em
-            // output-test (bancada) o corte de combustível já para o motor
-            // (ignição sem combustível é inerte), então dispensar o corte de
-            // ignição evita silenciar o wasted-spark numa bancada sem óleo
-            // plumbado, sem mudar a postura fail-safe em estrada.
-            const bool oil_ign_cut =
-                oil_protect_cut && !ems::engine::output_test_active();
             const bool fuel_rail_cut =
                 fuel_press_fault && (snap.rpm_x10 > kFuelRailMinRpmX10);
             const bool overtemp_cut =
@@ -945,7 +938,7 @@ int main() {
                     (fuel_protect_cut || g_rev_limit_active ||
                      half_fuel_lockout || inj_duty_cut) ? 0x0Fu : 0u;
                 const uint8_t ign_mask_cut =
-                    (rev_cut || oil_ign_cut || overtemp_cut ||
+                    (rev_cut || oil_protect_cut || overtemp_cut ||
                      diag_critical) ? 0x0Fu : 0u;
                 const uint8_t ign_mask = static_cast<uint8_t>(
                     ign_mask_cut | ems::engine::spark_skip_mask());
@@ -967,7 +960,7 @@ int main() {
                 if (inj_duty_cut)       fr |= ems::engine::kFuelCutInjDuty;
                 uint16_t sr = 0u;
                 if (rev_cut)          sr |= ems::engine::kSparkCutLimpRpm;
-                if (oil_ign_cut)      sr |= ems::engine::kSparkCutOilPress;
+                if (oil_protect_cut)  sr |= ems::engine::kSparkCutOilPress;
                 if (overtemp_cut)     sr |= ems::engine::kSparkCutOvertemp;
                 if (diag_critical)    sr |= ems::engine::kSparkCutDiagCrit;
                 if (ems::engine::spark_skip_mask() != 0u) {

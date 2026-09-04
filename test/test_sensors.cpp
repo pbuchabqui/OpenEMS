@@ -185,16 +185,31 @@ void test_map_window_angular(void) {
     CHECK_TRUE(map_window_balance_x1000(0u) >= -1 && map_window_balance_x1000(0u) <= 1,
                "balance slot 0 ≈ 0");
 
-    // Perda de fase de came a meio: aborta janela parcial, sem ciclo novo.
-    const uint32_t cycles_before = map_window_cycles();
+    // Perda de fase de came: média deixa de ser viva (cycles=0) para o
+    // fuel path não servir MAP de pré-dropout no re-lock.
     s.phase_A = true;
     s.tooth_index = 2u;          // dentro da janela do slot 0
     map_window_on_tooth(s, 900u);
     s.cmp_confirms = 1u;         // fase deixou de estar confirmada
     map_window_on_tooth(s, 900u);
-    CHECK_EQ(map_window_cycles(), cycles_before, "sem came: nenhum ciclo novo");
-    CHECK_EQ(map_window_slot_bar_x1000(0u), 500u,
-             "janela parcial abortada não contamina a média");
+    CHECK_EQ(map_window_cycles(), 0u, "perda de came: cycles invalidado");
+    CHECK_EQ(map_window_mean_bar_x1000(), 0u, "perda de came: slots zerados");
+
+    // Re-sync: fuel deve ficar no IIR até fechar um ciclo novo de 720°.
+    s.cmp_confirms = 2u;
+    s.phase_A = true;
+    s.tooth_index = 0u;
+    map_window_on_tooth(s, 500u);
+    CHECK_EQ(map_window_cycles(), 0u, "re-sync: ainda sem ciclo completo");
+    for (uint8_t rev = 0u; rev < 2u; ++rev) {
+        s.phase_A = (rev == 0u);
+        for (uint16_t t = 0u; t < 58u; ++t) {
+            s.tooth_index = t;
+            map_window_on_tooth(s, 500u);
+        }
+    }
+    CHECK_EQ(map_window_cycles(), 1u, "após 720° fresco: um ciclo vivo");
+    CHECK_EQ(map_window_mean_bar_x1000(), 500u, "média do ciclo novo");
 
     ems::engine::map_window_enable = 0u;  // isolamento entre testes
     map_window_reset();

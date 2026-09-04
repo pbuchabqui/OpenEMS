@@ -108,6 +108,56 @@ void test_knock_window_scheduler_wiring(void) {
     const uint8_t expected_second = cfg::kFiringOrder[(pos + 1u) % 4u];
     CHECK_EQ(static_cast<uint8_t>(second_cyl), expected_second,
              "2º cilindro bate com kFiringOrder — wiring segue a ordem de disparo real");
+
+    // Multi-spark extras must not cycle_end/reopen the same cylinder
+    // (that would zero knock_count mid-combustion).
+    ecu_sched_set_mspark(2u, 1000u, 18u);
+    int32_t ms_cyl = -1;
+    for (uint32_t rev = 0u; rev < 8u && ms_cyl < 0; ++rev) {
+        for (uint32_t t = 0u; t < 55u; ++t) {
+            ckp_fire(kNormalPeriod);
+            if (knock_test_window_active()) {
+                ms_cyl = static_cast<int32_t>(knock_test_window_cyl());
+                break;
+            }
+        }
+        ckp_fire(kNormalPeriod * 3u);
+        if ((rev % 2u) == 1u) { cam_fire(g_ckp_cap); }
+    }
+    CHECK_TRUE(ms_cyl >= 0 && ms_cyl <= 3, "mspark: janela abriu");
+    knock_test_set_adc_raw(3000u);
+    CHECK_TRUE(knock_test_get_knock_count(static_cast<uint8_t>(ms_cyl)) > 0u,
+               "mspark: ADC acima do threshold conta");
+    const uint8_t count_at_open =
+        knock_test_get_knock_count(static_cast<uint8_t>(ms_cyl));
+    uint8_t min_count = count_at_open;
+    for (uint32_t t = 0u; t < 20u; ++t) {
+        ckp_fire(kNormalPeriod);
+        if (!knock_test_window_active()) { break; }
+        if (knock_test_window_cyl() != static_cast<uint8_t>(ms_cyl)) { break; }
+        const uint8_t c =
+            knock_test_get_knock_count(static_cast<uint8_t>(ms_cyl));
+        if (c < min_count) { min_count = c; }
+    }
+    CHECK_TRUE(min_count >= count_at_open,
+               "mspark extras não resetam knock_count no mesmo cilindro");
+    ecu_sched_set_mspark(0u, 0u, 18u);
+
+    // Spark-cut of the open cylinder must close the window (no ADC
+    // accumulation across a cut).
+    for (uint32_t rev = 0u; rev < 8u && !knock_test_window_active(); ++rev) {
+        for (uint32_t t = 0u; t < 55u && !knock_test_window_active(); ++t) {
+            ckp_fire(kNormalPeriod);
+        }
+        ckp_fire(kNormalPeriod * 3u);
+        if ((rev % 2u) == 1u) { cam_fire(g_ckp_cap); }
+    }
+    CHECK_TRUE(knock_test_window_active(), "pré-inhibit: janela aberta");
+    const uint8_t open_cyl = knock_test_window_cyl();
+    ecu_sched_set_ign_inhibit_mask(static_cast<uint8_t>(1u << open_cyl));
+    CHECK_FALSE(knock_test_window_active(),
+                "inhibit do cilindro aberto fecha a janela de knock");
+    ecu_sched_set_ign_inhibit_mask(0u);
 #else
     // Mesmo drive, mas sem hardware: a janela nunca deve abrir.
     bool ever_active = knock_test_window_active();

@@ -59,6 +59,12 @@ Não usar floor da bilineal para trims — mid-bin errava a autoridade (WP0).
 
 Ready wire page12: **bit7** de hits_wire = ready (fonte FW; host não reimplementa).
 
+## Densidade IAT (`T_ref/T`)
+
+A densidade do ar no PW base é `corr_iat_density_q8` (gás ideal, `T_ref` = 298.0 K). `iat_corr_x256` é só margem de proteção (anti-detonação em IAT alto), default neutro até ~60 °C.
+
+Uma tabela IAT antiga em NVM (page 4) com o V-shape pré-`T_ref/T` `{272,264,256,256,264,272,280,288}` **não é carregada** — empilhava ~18 % de fuel extra a −20 °C em cima do termo físico. VE tunada contra o IAT velho fica magra acima de 25 °C em malha aberta (STFT ±25 % esconde em fechada) até retune.
+
 ## Persistência
 
 - Shadows LTFT mult/add em NVM adaptativo (Bank2, magic `LTF3`).  

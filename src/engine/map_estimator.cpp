@@ -75,10 +75,7 @@ uint16_t calc_throttle_flow_impl(uint16_t tps_pct_x10, uint16_t map_bar_x100,
     }
     const uint32_t delta_p_frac_q8 = (static_cast<uint32_t>(delta_p_bar_x100) * 256u) / baro;
 
-    // T_ref = 298.0K/25°C (kIatDensityRefKelvinX10), a mesma referência
-    // física usada por corr_iat_density_q8 em fuel_calc.cpp — antes este
-    // arquivo usava 293.0K (20°C) local, uma referência diferente para o
-    // mesmo fenômeno físico. Alinhado nesta sessão.
+    // T_ref = 298.0 K / 25°C — same reference as corr_iat_density_q8.
     const int32_t iat_k_x10 = clamp_iat_kelvin_x10(iat_x10);
     const uint32_t temp_comp_q8 = (static_cast<uint32_t>(kIatDensityRefKelvinX10) * 256u) /
                                   static_cast<uint32_t>(iat_k_x10);

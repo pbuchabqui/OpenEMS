@@ -390,9 +390,9 @@ Interpolação bilinear em Q8: resolve xi, yi, fx_q8, fy_q8 por busca binária.
 ### 7.3 Calibração (`engine/calibration.h`)
 
 **Tabelas 3D (20×20):**
-- `ve_table[16][16]` — Eficiência volumétrica (45–254 %)
-- `lambda_target_table_x1000[16][16]` — Lambda alvo ×1000 (765–1050)
-- `spark_table[16][16]` — Avanço base em graus (−10 a +40)
+- `ve_table[20][20]` — Eficiência volumétrica (45–254 %)
+- `lambda_target_table_x1000[20][20]` — Lambda alvo ×1000 (765–1050)
+- `spark_table[20][20]` — Avanço base em graus (−10 a +40)
 
 **Tabelas de correção (8 pontos):**
 | Tabela | Eixo | Range |
@@ -936,7 +936,7 @@ make clean      # remove /tmp/openems-build
 
 | Slot | Endereço Flash | Conteúdo | Tamanho |
 |---|---|---|---|
-| Setor 0 | 0x08100000 | LTFT 400B (20×20 int8, off.0) + Knock 64B (8×8 int8, off.400) + LTFT_add 100B (10×10 int8, off.464) + magic LTF2 (off.576) + RuntimeSeed 32B (off.592) | 8 KB |
+| Setor 0 | 0x08100000 | LTFT 400B (20×20 int8, off.0) + Knock 64B (8×8 int8, off.400) + LTFT_add 100B (10×10 int8, off.464) + magic LTF3 (off.576) + maps CRC (off.580) + RuntimeSeed 32B (off.592) | 8 KB |
 | Setor 1 | 0x08102000 | Calibração página 0 (config + ETB + IVC) | 512 B |
 | Setor 2 | 0x08104000 | Calibração página 1 (VE table) | 512 B |
 | Setor 3 | 0x08106000 | Calibração página 2 (Spark table) | 512 B |

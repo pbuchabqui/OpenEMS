@@ -38,11 +38,7 @@ inline constexpr uint8_t kCylinderCount = 4u;
 /** Crank degrees per engine cycle (4-stroke) */
 inline constexpr uint32_t kCrankDegreesPerCycle = 720u;
 
-// Fuel calculation constants (air/fuel density, stoich AFR, VE, PW limits)
-// live in engine::cfg (engine_config.h) — that's the namespace fuel_calc.cpp
-// actually uses. A duplicate set used to live here with different values
-// (e.g. stoich AFR 14.64 vs the real 13.00); it was unused and removed to
-// avoid a second, wrong "source of truth" for the same physical constants.
+// Fuel density / stoich / VE / PW limits: engine::cfg in engine_config.h.
 
 // ============================================================================
 // Sensor Limits & Defaults

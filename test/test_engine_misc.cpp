@@ -33,6 +33,7 @@
 #include "engine/engine_config.h"
 #include "hal/timer.h"
 #include "hal/flash.h"
+#include "app/nvm_boot.h"
 #include "app/ui_protocol.h"
 #include "app/status_bits.h"
 #include "hal/crc32.h"
@@ -721,6 +722,54 @@ void test_hal_flash_all(void) {
                "última célula LTFT-add aceita");
     CHECK_FALSE(nvm_write_ltft_add(kNvmLtftAddDim, 0u, 3),
                 "além do sub-grid → false");
+
+    section("nvm_boot: IAT V-shape legado não empilha no T_ref/T");
+    {
+        using ems::engine::iat_corr_x256;
+        using ems::engine::kCorrectionTableSize;
+        uint16_t iat_backup[kCorrectionTableSize];
+        std::memcpy(iat_backup, iat_corr_x256, sizeof(iat_backup));
+
+        // Snapshot RAM into page 4 so the load is identity except the IAT slice.
+        uint8_t corr_page[256] = {};
+        std::memcpy(corr_page +   0, ems::engine::clt_corr_axis_x10, 16u);
+        std::memcpy(corr_page +  16, ems::engine::clt_corr_x256, 16u);
+        std::memcpy(corr_page +  32, ems::engine::iat_corr_axis_x10, 16u);
+        std::memcpy(corr_page +  48, iat_corr_x256, 16u);
+        std::memcpy(corr_page +  64, ems::engine::warmup_corr_axis_x10, 16u);
+        std::memcpy(corr_page +  80, ems::engine::warmup_corr_x256, 16u);
+        std::memcpy(corr_page +  96, ems::engine::vbatt_corr_axis_mv, 16u);
+        std::memcpy(corr_page + 112, ems::engine::injector_dead_time_us, 16u);
+        std::memcpy(corr_page + 128, ems::engine::ae_clt_corr_axis_x10, 16u);
+        std::memcpy(corr_page + 144, ems::engine::ae_clt_sens, 16u);
+        std::memcpy(corr_page + 160, ems::engine::dwell_vbatt_axis_mv, 16u);
+        std::memcpy(corr_page + 176, ems::engine::dwell_ms_x10_table, 16u);
+        std::memcpy(corr_page + 192, ems::engine::lambda_delay_rpm_axis_x10, 12u);
+        std::memcpy(corr_page + 204, ems::engine::lambda_delay_load_axis_bar_x100, 12u);
+        std::memcpy(corr_page + 216, ems::engine::lambda_delay_ms_table, 18u);
+
+        const uint16_t kLegacyIat[kCorrectionTableSize] = {
+            272u, 264u, 256u, 256u, 264u, 272u, 280u, 288u
+        };
+        std::memcpy(corr_page + 48, kLegacyIat, 16u);
+        nvm_test_reset();
+        CHECK_TRUE(nvm_save_calibration(4u, corr_page, sizeof(corr_page)),
+                   "grava page 4 com IAT legado");
+        ems::app::load_corr_calibration_from_nvm();
+        CHECK_EQ(iat_corr_x256[0], 256u, "legado recusado: nó frio fica 256");
+        CHECK_EQ(iat_corr_x256[5], 266u, "legado recusado: default de proteção");
+
+        const uint16_t kCustomIat[kCorrectionTableSize] = {
+            256u, 256u, 256u, 256u, 260u, 270u, 280u, 300u
+        };
+        std::memcpy(corr_page + 48, kCustomIat, 16u);
+        CHECK_TRUE(nvm_save_calibration(4u, corr_page, sizeof(corr_page)),
+                   "grava page 4 com IAT custom");
+        ems::app::load_corr_calibration_from_nvm();
+        CHECK_EQ(iat_corr_x256[7], 300u, "tabela custom (não-legado) carrega");
+
+        std::memcpy(iat_corr_x256, iat_backup, sizeof(iat_backup));
+    }
 
     section("hal/flash: flash_test_set_busy_polls blocks writes");
     nvm_test_reset();

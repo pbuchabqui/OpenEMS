@@ -58,9 +58,11 @@ void map_window_on_tooth(const ems::drv::CkpSnapshot& snap,
         return;
     }
     // Atribuição 720° exige sync pleno + fase de came confirmada.
+    // Sem isso a média deixa de ser viva: zera cycles (e slots) para o
+    // caller (map_window_use_for_fuel) não servir MAP de pré-dropout no
+    // primeiro tick após o re-sync.
     if (snap.state != ems::drv::SyncState::FULL_SYNC || snap.cmp_confirms < 2u) {
-        g_active_slot = -1;  // aborta janela parcial (média não contaminada)
-        g_fresh_mask  = 0u;
+        map_window_reset();
         return;
     }
     const uint16_t deg = static_cast<uint16_t>(

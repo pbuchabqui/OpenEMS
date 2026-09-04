@@ -118,7 +118,7 @@ despachada por TIM5_CH3. Ordem de canais BSRR em `docs/hw/pinout.md`.
 - Sensor piezoelétrico knock conectado em PA5/ADC1_IN6.
 - Hardware: filtro passa-banda externo → PA5 → ADC1.
 - Detecção: software via threshold ADC (STM32H562 não possui periférico COMP).
-- Amostragem: `knock_adc_update(raw)` chamado de `sample_fast_channels()` a cada dente CKP durante janela ativa.
+- Amostragem: `knock_adc_update(raw)` chamado de `sample_fast_channels()` 12×/rev (acumulador `kFastSamplesPerRev`, não a cada dente CKP) durante janela ativa.
 - Threshold ADC: padrão 2048 (12-bit), range [256, 4000].
   - Adaptativo: -64 por evento de knock, +32 após 100 ciclos limpos.
 - Janela de knock: `knock_window_cycle_end()`/`knock_window_open()` ligados a `arm_channel()` no evento `ECU_ACT_DWELL_START` (modo sequencial), atrás da flag `EMS_KNOCK_HW_PRESENT` (`hal/board_pinout.h`, default 0 — front-end analógico DNP na v1, `docs/hw/schematic/10_knock_dnp.md`). Com a flag em 0 a janela nunca abre de facto.

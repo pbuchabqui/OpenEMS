@@ -53,7 +53,9 @@ uint16_t map_window_slot_bar_x1000(uint8_t slot) noexcept;
 int16_t map_window_balance_x1000(uint8_t slot) noexcept;
 
 // Nº de ciclos completos (4 janelas fechadas) — diagnóstico e gate de
-// validade (map_window_cycles() == 0 → nenhuma média ainda, não confiar).
+// validade (map_window_cycles() == 0 → nenhuma média viva, não confiar).
+// Perda de FULL_SYNC / came zera este contador (e os slots) para o fuel
+// não reutilizar MAP de pré-dropout no re-lock.
 uint32_t map_window_cycles() noexcept;
 
 // Média dos 4 slots do ciclo mais recente (bar × 1000). Não decide

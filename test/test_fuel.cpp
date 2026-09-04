@@ -275,6 +275,20 @@ void test_fuel_default_fast(void) {
     CHECK_TRUE(ratio_x100 >= 130u && ratio_x100 <= 160u,
                "altitude PW ratio ≈ 1.44 (sea_baro/alt_baro=101/70)");
     fuel_set_baro_bar_x100(101u);  // restore
+
+    // iat_density_q8 must actually scale PW (not only corr_iat_density_q8
+    // in isolation). dead_time=0 so the ratio is a pure Q8 multiply.
+    const uint32_t pw_d256 = calc_fuel_pw_us_default_fast(
+        80u, 100u, 256u, 1000u, 0, 256u, 256u, 0u);
+    const uint32_t pw_d194 = calc_fuel_pw_us_default_fast(
+        80u, 100u, 194u, 1000u, 0, 256u, 256u, 0u);
+    const uint32_t pw_d301 = calc_fuel_pw_us_default_fast(
+        80u, 100u, 301u, 1000u, 0, 256u, 256u, 0u);
+    CHECK_TRUE(pw_d256 > 0u, "dens 256: PW > 0");
+    const uint32_t r194 = (pw_d194 * 256u) / pw_d256;
+    const uint32_t r301 = (pw_d301 * 256u) / pw_d256;
+    CHECK_TRUE(r194 >= 193u && r194 <= 195u, "PW(194)/PW(256) ≈ 194/256");
+    CHECK_TRUE(r301 >= 300u && r301 <= 302u, "PW(301)/PW(256) ≈ 301/256");
 }
 
 void test_fuel_corr_warmup(void) {

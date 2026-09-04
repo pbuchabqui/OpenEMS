@@ -18,6 +18,7 @@ case "$STAGE" in
     # Post PR-11/12: ban ENGINE→app + engine regs allowlist (phase B)
     make host-test WERROR="$WERROR"
     make host-test-vgt6 WERROR="$WERROR"
+    make host-test-knock-hw WERROR="$WERROR"
     make firmware-rgt6 WERROR="$WERROR"
     make firmware-vgt6 WERROR="$WERROR"
     make lint-includes LINT_PHASE=A LINT_ERROR=1
@@ -26,6 +27,7 @@ case "$STAGE" in
   2)
     make host-test WERROR="$WERROR"
     make host-test-vgt6 WERROR="$WERROR"
+    make host-test-knock-hw WERROR="$WERROR"
     make firmware-rgt6 WERROR="$WERROR"
     make firmware-vgt6 WERROR="$WERROR"
     make lint-includes LINT_PHASE=A LINT_ERROR=1
@@ -34,6 +36,7 @@ case "$STAGE" in
   3)
     make host-test WERROR="$WERROR"
     make host-test-vgt6 WERROR="$WERROR"
+    make host-test-knock-hw WERROR="$WERROR"
     make firmware-rgt6 WERROR="$WERROR"
     make firmware-vgt6 WERROR="$WERROR"
     make lint-includes LINT_PHASE=A LINT_ERROR=1
