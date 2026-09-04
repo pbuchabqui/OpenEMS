@@ -121,7 +121,7 @@ despachada por TIM5_CH3. Ordem de canais BSRR em `docs/hw/pinout.md`.
 - Amostragem: `knock_adc_update(raw)` chamado de `sample_fast_channels()` a cada dente CKP durante janela ativa.
 - Threshold ADC: padrão 2048 (12-bit), range [256, 4000].
   - Adaptativo: -64 por evento de knock, +32 após 100 ciclos limpos.
-- Janela de knock: aberta/fechada por `knock_window_cycle_end()` no evento `ECU_ACT_DWELL_START` (modo sequencial).
+- Janela de knock: `knock_window_cycle_end()`/`knock_window_open()` ligados a `arm_channel()` no evento `ECU_ACT_DWELL_START` (modo sequencial), atrás da flag `EMS_KNOCK_HW_PRESENT` (`hal/board_pinout.h`, default 0 — front-end analógico DNP na v1, `docs/hw/schematic/10_knock_dnp.md`). Com a flag em 0 a janela nunca abre de facto.
 - Retardo: +2,0° por evento de knock, máximo 10,0°.
 - Recuperação: -0,1° por ciclo limpo após 10 ciclos consecutivos limpos.
 - Persistência NVM: retardo em slot knock, threshold armazenado como int8_t (/32).

@@ -61,7 +61,7 @@ Ready wire page12: **bit7** de hits_wire = ready (fonte FW; host não reimplemen
 
 ## Persistência
 
-- Shadows LTFT mult/add em NVM adaptativo (Bank2, magic `LTF2`).  
+- Shadows LTFT mult/add em NVM adaptativo (Bank2, magic `LTF3`).  
 - Dirty só se valor muda.  
 - Flush: no máx. **1×/min** em run; **force** após `'Z'` / reset LTFT.  
 - RPM seguro para qualquer write flash.
