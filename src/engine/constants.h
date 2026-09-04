@@ -107,4 +107,22 @@ inline constexpr uint32_t kMinDwellTimeMs = 1u;
 /** Maximum dwell time in milliseconds */
 inline constexpr uint32_t kMaxDwellTimeMs = 8u;
 
+// ============================================================================
+// Fault gating (limp_gating) — 0-threshold knobs stay off for benches
+// ============================================================================
+
+inline constexpr uint16_t kBoostCutMapBarX100 = 0u;
+inline constexpr uint16_t kBoostCutHystBarX100 = 20u;
+inline constexpr uint16_t kOilMinAfterStartBarX1000 = 1500u;
+inline constexpr uint32_t kOilAfterStartTimeoutMs = 5000u;
+inline constexpr uint32_t kOilRunningTimeoutMs = 500u;
+inline constexpr uint32_t kOilProtectRpmX10 = 15000u;
+inline constexpr uint32_t kFuelRailProtectRpmX10 = 5000u;
+inline constexpr uint32_t kEtbFaultRevLimitRpmX10 = 15000u;
+inline constexpr uint8_t kInjDutyResumePct = 20u;
+inline constexpr uint16_t kLambdaProtectTimeoutMs = 2000u;
+inline constexpr uint16_t kLambdaProtectDevX1000 = 200u;
+inline constexpr uint32_t kLambdaProtectMinRpmX10 = 20000u;
+inline constexpr uint16_t kLambdaProtectMinLoadBarX100 = 50u;
+
 } // namespace ems::engine

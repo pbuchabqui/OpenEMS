@@ -79,7 +79,8 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/etb_autocal.cpp \
              $(SRC_DIR)/engine/torque_manager.cpp \
              $(SRC_DIR)/engine/misfire_detect.cpp \
-             $(SRC_DIR)/engine/ewg_control.cpp
+             $(SRC_DIR)/engine/ewg_control.cpp \
+             $(SRC_DIR)/engine/limp_gating.cpp
 
 DRV_SRC = $(SRC_DIR)/drv/ckp.cpp $(SRC_DIR)/drv/sensors.cpp
 APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp \

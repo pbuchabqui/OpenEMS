@@ -176,10 +176,9 @@ void test_fuel_inj_duty_protection(void) {
     CHECK_FALSE(cut_early, "98 ms acima: ainda tolerado");
     CHECK_TRUE(fuel_inj_duty_update(18000u, 60000u, 2u), "corta após 100 ms acima");
     CHECK_TRUE(fuel_inj_duty_cut_active(), "cut_active latched");
-    // Ainda acima do resume (85−5=80%): mantém o corte.
-    CHECK_TRUE(fuel_inj_duty_update(16400u, 60000u, 2u), "82% > 80%: mantém corte");
-    // Cai abaixo do resume: retoma.
-    CHECK_FALSE(fuel_inj_duty_update(15000u, 60000u, 2u), "75% ≤ 80%: retoma");
+    CHECK_TRUE(fuel_inj_duty_update(16400u, 60000u, 2u), "82% > 20%: mantém corte");
+    CHECK_TRUE(fuel_inj_duty_update(5000u, 60000u, 2u), "25% > 20%: mantém corte");
+    CHECK_FALSE(fuel_inj_duty_update(3800u, 60000u, 2u), "19% < 20%: retoma");
     // Transiente breve (< tolerância) nunca corta.
     fuel_inj_duty_reset();
     for (int i = 0; i < 20; ++i) { fuel_inj_duty_update(18000u, 60000u, 2u); }
@@ -377,6 +376,23 @@ void test_fuel_ae(void) {
     int32_t ae_t4 = calc_ae_pw_us(500u, 500u, 10u, 800);  // decay tick 4
     CHECK_TRUE(ae_t1 >= ae_t4, "AE taper: pulse non-increasing over cycles");
     CHECK_EQ(ae_t4, 0, "AE taper: pulse = 0 at or after taper_cycles=4");
+
+    // Heurística NVM: raw≤64 = ticks legados×2; raw>64 = ms directo
+    fuel_ae_apply_taper_raw(8u);
+    CHECK_EQ(ems::engine::ae_taper_ms, 16u, "taper raw=8 legado → 16 ms");
+    fuel_ae_apply_taper_raw(100u);
+    CHECK_EQ(ems::engine::ae_taper_ms, 100u, "taper raw=100 → 100 ms");
+    fuel_ae_set_taper(4u);  // restaura para outros testes via ticks
+
+    // STFT freeze flag: tip-in sets, pulse==0 clears immediately (not sticky).
+    fuel_ae_reset();
+    fuel_ae_notify_pulse(2000);
+    CHECK_TRUE(fuel_ae_stft_freeze_active(), "tip-in pulse → STFT freeze on");
+    fuel_ae_notify_pulse(0);
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(),
+               "pulse=0 clears freeze on same 2 ms tick (not sticky to 100 ms)");
+    fuel_ae_notify_pulse(-500);  // tip-out
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(), "tip-out does not freeze STFT");
 }
 
 void test_fuel_adaptives_reset(void) {
@@ -423,18 +439,76 @@ void test_fuel_lambda_delay(void) {
     CHECK_TRUE(true, "lambda_delay extremes: no crash");
 }
 
+// Tabela EOI 2D (RPM×CLT), substitui o antigo blend 1D — mesmo padrão de
+// test_fuel_lambda_delay acima (interp_eoi_3x3 é static; testa via o
+// wrapper público calc_eoi_lead_deg). Defaults de compilação
+// (calibration.cpp): eixo RPM {500,2000,5000}, eixo CLT {-20,20,90}°C,
+// células [clt][rpm] = {{250,300,355},{150,250,355},{60,150,355}}.
+//
+// Só o canto (idx=0 exato nos dois eixos, sem interpolação) é testado por
+// igualdade exata — qualquer ponto que precise de interpolação no eixo
+// SUPERIOR usa fx/fy=255 (não 256: Q8 não representa 1,0 exato), e
+// table_axis_index() resolve um valor EXATAMENTE num ponto interior do
+// eixo como "topo do segmento de baixo" (idx do segmento anterior,
+// frac=255), não "base do segmento de cima" — confirmado por leitura de
+// table3d.cpp, não assumido. Isto significa que o valor interpolado nos
+// outros cantos/pontos fica sistematicamente ~1° abaixo do que a
+// aritmética "ingénua" sugere — tolerância ±2° (CHECK_NEAR), e
+// invariantes de monotonicidade em vez de valores exatos à mão no meio da
+// tabela (menos frágil a este arredondamento do que recalcular à mão).
+void test_fuel_eoi_2d(void) {
+    section("fuel_calc: calc_eoi_lead_deg (tabela 2D RPM×CLT)");
+
+    // Único canto sem qualquer interpolação (idx=0 exato nos dois eixos,
+    // fx=fy=0) — igualdade exata.
+    CHECK_EQ(ems::engine::calc_eoi_lead_deg(5000u, -200), 250u,
+             "canto (500 RPM, -20°C) → 250, exato (sem interpolação)");
+
+    // Âncoras já validadas hoje (60° idle quente, 355° alto RPM) —
+    // tolerância ±2° pelo arredondamento Q8 do eixo superior.
+    CHECK_NEAR(ems::engine::calc_eoi_lead_deg(50000u, 900), 355, 2.0f,
+               "canto (5000 RPM, 90°C) ≈ 355 (âncora alto RPM)");
+    CHECK_NEAR(ems::engine::calc_eoi_lead_deg(5000u, 900), 60, 2.0f,
+               "canto (500 RPM, 90°C) ≈ 60 (âncora idle quente)");
+    CHECK_NEAR(ems::engine::calc_eoi_lead_deg(50000u, -200), 355, 2.0f,
+               "canto (5000 RPM, -20°C) ≈ 355");
+
+    // Invariantes de monotonicidade — verdadeiras independentemente de
+    // arredondamento: a 2000 RPM, EOI desce quando o motor aquece (menos
+    // BTDC, mais perto de closed-valve); a CLT fixa, EOI sobe com o RPM
+    // (mais perto de open-valve).
+    const uint16_t eoi_2000_cold = ems::engine::calc_eoi_lead_deg(20000u, -200);
+    const uint16_t eoi_2000_warm = ems::engine::calc_eoi_lead_deg(20000u, 550);
+    const uint16_t eoi_2000_hot  = ems::engine::calc_eoi_lead_deg(20000u, 900);
+    CHECK_TRUE(eoi_2000_cold >= eoi_2000_warm && eoi_2000_warm >= eoi_2000_hot,
+               "2000 RPM: EOI desce monotonamente com CLT crescente");
+
+    const uint16_t eoi_500_hot  = ems::engine::calc_eoi_lead_deg(5000u, 900);
+    const uint16_t eoi_2000_hot2 = ems::engine::calc_eoi_lead_deg(20000u, 900);
+    const uint16_t eoi_5000_hot = ems::engine::calc_eoi_lead_deg(50000u, 900);
+    CHECK_TRUE(eoi_500_hot <= eoi_2000_hot2 && eoi_2000_hot2 <= eoi_5000_hot,
+               "90°C: EOI sobe monotonamente com RPM crescente");
+
+    // Extremos fora do domínio: não crash, resultado plausível (clampa ao
+    // canto mais próximo — mesmo espírito do smoke test de lambda_delay).
+    const uint16_t below = ems::engine::calc_eoi_lead_deg(0u, -1000);
+    CHECK_TRUE(below <= 719u, "extremo abaixo do domínio: plausível, sem crash");
+    const uint16_t above = ems::engine::calc_eoi_lead_deg(200000u, 2000);
+    CHECK_TRUE(above <= 719u, "extremo acima do domínio: plausível, sem crash");
+}
+
 void test_fuel_stft(void) {
     section("fuel_calc: fuel_update_stft / fuel_get_stft_pct_x10");
 
     fuel_reset_adaptives();
     CHECK_EQ(fuel_get_stft_pct_x10(), 0, "STFT=0 after reset");
 
-    // Conditions for closed loop: clt>700, o2_valid=true, ae_active=false, rev_cut=false
+    // Conditions for closed loop: clt>400 (40°C), o2_valid=true, ae_active=false, rev_cut=false
     // lambda measured > target → lean signal → positive error → STFT increases (adds fuel)
     int16_t stft = fuel_update_stft(30000u, 100u,
         1000,   // target lambda (stoich)
         1050,   // measured lambda (lean by 5%)
-        900,    // clt 90°C > 70°C → closed loop OK
+        900,    // clt 90°C > 40°C → closed loop OK
         true, false, false, 5000u, 500u);
     CHECK_TRUE(stft > 0, "lean signal → STFT positive (add fuel)");
     CHECK_EQ(stft, fuel_get_stft_pct_x10(), "fuel_get_stft_pct_x10 matches return value");
@@ -448,10 +522,12 @@ void test_fuel_stft(void) {
 
     // Closed loop disabled (cold engine): STFT congela (anti-windup), não decai —
     // evita um "degrau" de combustível perceptível quando volta a closed-loop.
+    // clt=390 (39°C) < kClosedLoopMinCltX10=400 (40°C, 2026-08-14) — abaixo
+    // do limiar atual; 600 (60°C) já não serve, ficou acima do novo limiar.
     fuel_reset_adaptives();
     fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);  // set non-zero
     const int16_t before = fuel_get_stft_pct_x10();
-    fuel_update_stft(30000u, 100u, 1000, 1050, 600, true, false, false, 5000u, 500u);  // clt too cold
+    fuel_update_stft(30000u, 100u, 1000, 1050, 390, true, false, false, 5000u, 500u);  // clt too cold
     const int16_t after = fuel_get_stft_pct_x10();
     CHECK_EQ(after, before, "closed loop disabled → STFT congela (freeze)");
 }
@@ -831,8 +907,8 @@ void test_fuel_ltft_accum(void) {
 
     CHECK_FALSE(ltft_accum_sample_valid(
                     30000u, 30000u, 500u, 500u, true,
-                    1000, 1015, 40, 600, true, false, false),
-                "CLT frio → inválido");
+                    1000, 1015, 40, 390, true, false, false),
+                "CLT frio (<40°C) → inválido");
 
     // ── Integração via fuel_update_stft (λ perto do alvo) ────────────────
     // err=15 (1015-1000) ≤ max; 1ª amostra sem prev → 0 hits

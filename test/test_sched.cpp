@@ -537,65 +537,11 @@ void test_ecu_sched_eoi_targeting(void) {
     CHECK_EQ(f_on, 85u, "presync 355°: SOI frac=85");
 }
 
-void test_eoi_blend(void) {
-    section("fuel_calc: EOI blend de 2 pontos por RPM");
-    // main = g_eng_cfg.default_eoi_lead_deg (355 por default de compilação)
-    const uint16_t saved_main = ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg;
-    ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg = 355u;
-
-    // Desligado (0/0 — page 0 antiga zerada): devolve sempre o main
-    ems::engine::eoi_idle_deg = 60u;
-    ems::engine::eoi_blend_rpm_lo = 0u;
-    ems::engine::eoi_blend_rpm_hi = 0u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(8500u), 355u, "blend off (0/0): main a 850 RPM");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(85000u), 355u, "blend off (0/0): main a 8500 RPM");
-
-    // Desligado (hi < lo): gate contra janela invertida / divisão por zero
-    ems::engine::eoi_blend_rpm_lo = 2500u;
-    ems::engine::eoi_blend_rpm_hi = 1500u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(20000u), 355u, "blend off (hi<lo): main");
-    ems::engine::eoi_blend_rpm_hi = 2500u;  // hi == lo também desliga
-    ems::engine::eoi_blend_rpm_lo = 2500u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(20000u), 355u, "blend off (hi==lo): main");
-
-    // Janela 1500→2500, idle=60, main=355 (ascendente)
-    ems::engine::eoi_blend_rpm_lo = 1500u;
-    ems::engine::eoi_blend_rpm_hi = 2500u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(8500u),  60u, "850 RPM (< lo): idle");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(15000u), 60u, "1500 RPM (== lo): idle");
-    // 2000 RPM: 60 + 295×500/1000 = 60 + 147 = 207 (trunc)
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(20000u), 207u, "2000 RPM (meio): 207");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(25000u), 355u, "2500 RPM (== hi): main");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(85000u), 355u, "8500 RPM (> hi): main");
-
-    // Descendente (idle=365 pré-IVO > main=355): interpola para baixo
-    ems::engine::eoi_idle_deg = 365u;
-    // 2000 RPM: 365 + (−10)×500/1000 = 365 − 5 = 360
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(20000u), 360u, "descendente: 365→355 dá 360 no meio");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(8500u),  365u, "descendente: idle=365 abaixo da janela");
-
-    // Extremos int32: idle=0, main=719, janela de 1 RPM
-    ems::engine::eoi_idle_deg = 0u;
-    ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg = 719u;
-    ems::engine::eoi_blend_rpm_lo = 1000u;
-    ems::engine::eoi_blend_rpm_hi = 1001u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(10000u), 0u,   "janela 1 RPM: == lo → idle");
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(10010u), 719u, "janela 1 RPM: == hi → main");
-
-    // Entradas fora de gama são clampadas a 719 (defesa antes do sanitize)
-    ems::engine::eoi_idle_deg = 60000u;
-    ems::engine::eoi_blend_rpm_lo = 1500u;
-    ems::engine::eoi_blend_rpm_hi = 2500u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(8500u), 719u, "idle fora de gama → clamp 719");
-    ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg = 60000u;
-    CHECK_EQ(ems::engine::calc_eoi_lead_deg(85000u), 719u, "main fora de gama → clamp 719");
-
-    // restaurar estado partilhado
-    ems::engine::cfg::g_eng_cfg.default_eoi_lead_deg = saved_main;
-    ems::engine::eoi_idle_deg = 60u;
-    ems::engine::eoi_blend_rpm_lo = 0u;
-    ems::engine::eoi_blend_rpm_hi = 0u;
-
+// O blend 1D só-RPM (eoi_idle_deg/eoi_blend_rpm_lo/hi/default_eoi_lead_deg)
+// foi substituído pela tabela EOI 2D RPM×CLT — ver test_fuel_eoi_2d
+// (test_fuel.cpp). A parte de sanitize (independente do blend, testa o
+// setter direto do scheduler) fica retida aqui.
+void test_ecu_sched_eoi_lead_deg_sanitize(void) {
     section("ecu_sched: sanitize aceita EOI até 719 (pré-IVO)");
     ecu_sched_test_reset();
     ecu_sched_set_eoi_lead_deg(719u);

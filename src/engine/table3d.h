@@ -18,6 +18,8 @@ constexpr uint8_t  kLtftAddAxisSize = (kTableAxisSize + 1u) / 2u;
 // kTableAxisSize (ou o layout serializado das tabelas) mudar.
 // 4: LEARN thresholds page0 185-190
 // 5: Launch + TC knobs page0 191-215; CAN RX map 216-245 (id=0 = off, safe blank)
+// EOI 2D (eoi_rpm_axis_x10/eoi_clt_axis_x10/eoi_table_deg) vive em page6
+// 79-114 — não bump de magic/layout (não é v6; page0 TDC1-CMP fica no Encoder).
 constexpr uint8_t kCalLayoutVersion       = 5u;
 constexpr uint16_t kCalLayoutVersionOffset = 175u;
 

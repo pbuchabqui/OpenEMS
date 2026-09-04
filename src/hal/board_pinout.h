@@ -29,3 +29,9 @@
 #ifndef EMS_KNOCK_HW_PRESENT
 #  define EMS_KNOCK_HW_PRESENT 0
 #endif
+
+// 0 on Hall 60-2. Encoder tree defines 1. Used only for STFT Ki default
+// (5 production / 10 encoder) — capture paths stay separate.
+#ifndef EMS_MT6835_ENCODER
+#  define EMS_MT6835_ENCODER 0
+#endif

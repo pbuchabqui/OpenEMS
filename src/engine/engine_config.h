@@ -22,9 +22,12 @@ inline constexpr uint16_t kAirDensityMgPerCcX1000 = 1184u;
 inline constexpr int32_t kIatDensityRefKelvinX10 = 2980;
 
 inline constexpr uint16_t kMapRefBarX100 = 100u;
-// EOI targeting: ângulo (° BTDC de combustão) em que a injecção TERMINA.
-// SOI é derivado para trás (SOI = EOI − PW°). BREAKING CHANGE vs kDefaultSoiLeadDeg:
-// mesma ordem de grandeza numérica, semântica oposta (fim vs início do pulso).
+// EOI: ângulo (° BTDC de combustão) em que a injecção TERMINA (SOI é
+// derivado para trás, SOI = EOI − PW°). Default de compilação / NVM page0
+// [12-13] (g_eng_cfg.default_eoi_lead_deg) permanece por compatibilidade
+// de layout; o EOI efectivo vem da tabela 2D RPM×CLT
+// (eoi_rpm_axis_x10/eoi_clt_axis_x10/eoi_table_deg, engine/calibration.h),
+// em page6 79-114 — não magic v6 / não page0 TDC1-CMP do Encoder.
 inline constexpr uint16_t kDefaultEoiLeadDeg = 355u;  // open-valve (Speeduino-style): 5° após o TDC de cruzamento (início da admissão)
 
 // Default para g_eng_cfg.trigger_tooth0_engine_deg (usado antes de NVM válida).

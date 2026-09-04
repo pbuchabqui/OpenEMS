@@ -127,6 +127,7 @@ int main(void) {
     test_fuel_ae();
     test_fuel_adaptives_reset();
     test_fuel_lambda_delay();
+    test_fuel_eoi_2d();
     test_fuel_stft();
     test_fuel_stft_delayed();
     test_injector_scurve();
@@ -204,7 +205,7 @@ int main(void) {
     test_ecu_sched_inhibit_masks();
     test_ecu_sched_mspark();
     test_ecu_sched_eoi_targeting();
-    test_eoi_blend();
+    test_ecu_sched_eoi_lead_deg_sanitize();
     test_ecu_sched_presync();
     test_ecu_sched_dwell_watchdog();
 
@@ -289,7 +290,6 @@ int main(void) {
     test_ts_envelope_basic();
     test_ts_envelope_crc_reject();
     test_ts_envelope_read_write_burn();
-    test_eoi_blend_page0_roundtrip();
     test_ts_envelope_burn_gate();
     test_ts_axes_page();
     test_ts_envelope_canid_forms();

@@ -536,6 +536,10 @@ PAGE6_FIELDS = [
     ("crank_prime_max_pw_us", 74, 1, "H",  0.001), # ms
     ("inj_small_pulse_break_us", 76, 1, "H", 0.001),  # ms (0 = off)
     ("inj_small_pulse_rate_q8",  78, 1, "B", 1.0),    # Q8 (128 = 0.5×; 0 = off)
+    # Tabela EOI 2D (79-114, RPM×CLT) — page6, não page0 / não magic v6.
+    ("eoi_rpm_axis_x10", 79, 3, "I", 0.1),  # RPM
+    ("eoi_clt_axis_x10", 91, 3, "h", 0.1),  # °C (assinado)
+    ("eoi_table_deg",    97, 9, "H", 1.0),  # ° BTDC — [clt][rpm], row-major
 ]
 
 PAGE7_FIELDS = [
@@ -638,9 +642,6 @@ PAGE0_FIELDS = [
     ("ewg_kd_x10",             158, 1, "H", 1.0),
     ("ewg_pos_min_raw",        160, 1, "H", 1.0),
     ("ewg_pos_max_raw",        162, 1, "H", 1.0),
-    ("eoi_idle_deg",           164, 1, "H", 1.0),  # ° BTDC — EOI em idle (blend)
-    ("eoi_blend_rpm_lo",       166, 1, "H", 1.0),  # RPM início do blend (0/0=off)
-    ("eoi_blend_rpm_hi",       168, 1, "H", 1.0),  # RPM fim do blend
     ("mspark_max_rpm_x10",       170, 1, "H", 0.1),  # RPM max p/ multi-spark
     ("mspark_count",              172, 1, "B", 1.0),  # sparks adicionais (0-3)
     ("mspark_inter_dwell_ms_x10", 173, 1, "H", 0.1),  # dwell entre sparks (ms)
