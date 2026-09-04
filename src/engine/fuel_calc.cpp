@@ -29,23 +29,8 @@ using ems::engine::interp_u16_8pt;
 
 constexpr uint8_t kCorrPoints = ems::engine::kCorrectionTableSize;
 
-// T_ref para o termo de densidade do ar = 298.0 K (25.0°C), a mesma
-// referência de cfg::kAirDensityMgPerCcX1000 (ver comentário na constante).
-// Convenção K×10 = °C×10 + 2730 (mesma de map_estimator.cpp).
-constexpr int32_t kIatDensityRefKelvinX10 = 2980;
-
-// Clamp em Kelvin×10 alinhado ao range do ASSERT_VALID_TEMP_X10 deste arquivo
-// (-40°C a 150°C, não o range mais largo de map_estimator.cpp — mantém o
-// clamp consistente com o range já assertado nas outras funções de corr_*
-// aqui). Inerte para qualquer entrada que já passe no assert; protege só
-// release builds (NDEBUG) contra leitura de sensor fora de faixa, limitando
-// a autoridade do termo a [180, 327] em Q8 (~0.70×–1.28×) nos extremos.
-int32_t clamp_iat_kelvin_x10(int16_t iat_x10) noexcept {
-    int32_t iat_k_x10 = static_cast<int32_t>(iat_x10) + 2730;
-    if (iat_k_x10 < 2330) { iat_k_x10 = 2330; }
-    if (iat_k_x10 > 4230) { iat_k_x10 = 4230; }
-    return iat_k_x10;
-}
+using ems::engine::clamp_iat_kelvin_x10;
+using ems::engine::cfg::kIatDensityRefKelvinX10;
 
 uint32_t isqrt_u32(uint32_t x) noexcept {
     if (x == 0u) {
@@ -287,7 +272,9 @@ uint16_t corr_iat(int16_t iat_x10) noexcept {
 // = T_ref/T_iat. Diferente de corr_iat (que hoje é só margem de proteção
 // calibrável — ver comentário em calibration.cpp), este termo é física pura,
 // sem tabela, e entra no cálculo BASE (junto com MAP/baro), não como
-// correção tardia. Ver kIatDensityRefKelvinX10/clamp_iat_kelvin_x10 acima.
+// correção tardia. T_ref e o clamp de Kelvin são compartilhados com
+// map_estimator.cpp — ver cfg::kIatDensityRefKelvinX10 (engine_config.h) e
+// clamp_iat_kelvin_x10 (math_utils.h).
 uint16_t corr_iat_density_q8(int16_t iat_x10) noexcept {
     ASSERT_VALID_TEMP_X10(iat_x10);
     const int32_t iat_k_x10 = clamp_iat_kelvin_x10(iat_x10);

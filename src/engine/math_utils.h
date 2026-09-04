@@ -32,6 +32,26 @@ inline uint32_t clamp_u32(uint32_t v, uint32_t lo, uint32_t hi) noexcept {
     return v;
 }
 
+// Kelvin×10 (convenção K×10 = °C×10 + 2730) clampado para uso em termos
+// físicos de densidade do ar (ρ ∝ 1/T). Fonte única compartilhada por
+// fuel_calc.cpp (corr_iat_density_q8) e map_estimator.cpp (calc_throttle_
+// flow_impl/calc_engine_pumping_impl) — antes cada um tinha sua própria
+// cópia com bounds diferentes, o que já causou uma vez um desalinhamento
+// de física entre os dois arquivos.
+//
+// Range [2000, 4230] (-73°C..150°C) é a UNIÃO dos dois ranges anteriores,
+// não a interseção: mantém o piso mais largo que map_estimator.cpp usava
+// (não tem assert protegendo a entrada) e o teto mais largo que fuel_calc.cpp
+// precisa (bate com o ASSERT_VALID_TEMP_X10 daquele arquivo, teto 150°C).
+// Nenhum dos dois contextos perde proteção. Autoridade resultante do termo
+// T_ref/T (T_ref=298.0K) sob este range: [180, 381] em Q8 (~0.70×-1.49×).
+inline int32_t clamp_iat_kelvin_x10(int16_t iat_x10) noexcept {
+    int32_t iat_k_x10 = static_cast<int32_t>(iat_x10) + 2730;
+    if (iat_k_x10 < 2000) { iat_k_x10 = 2000; }
+    if (iat_k_x10 > 4230) { iat_k_x10 = 4230; }
+    return iat_k_x10;
+}
+
 inline uint16_t interp_u16_8pt_u16x(const uint16_t* x_axis,
                                      const uint16_t* table,
                                      uint8_t n,

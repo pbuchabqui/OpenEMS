@@ -10,6 +10,8 @@ namespace {
 using ems::engine::clamp_u16;
 using ems::engine::clamp_i16;
 using ems::engine::clamp_u32;
+using ems::engine::clamp_iat_kelvin_x10;
+using ems::engine::cfg::kIatDensityRefKelvinX10;
 
 // Estado global do estimador
 ems::engine::MapEstimatorState g_map_state = {};
@@ -45,13 +47,6 @@ constexpr int16_t kLightTransientTpsdotX10 = 50u;    // 5 %/s
 constexpr int16_t kMediumTransientTpsdotX10 = 150u;  // 15 %/s
 constexpr int16_t kHeavyTransientTpsdotX10 = 300u;   // 30 %/s
 
-int32_t clamp_iat_kelvin_x10(int16_t iat_x10) noexcept {
-    int32_t iat_k_x10 = static_cast<int32_t>(iat_x10) + 2730;
-    if (iat_k_x10 < 2000) iat_k_x10 = 2000;
-    if (iat_k_x10 > 4000) iat_k_x10 = 4000;
-    return iat_k_x10;
-}
-
 // Fluxo de ar admitido pela borboleta (mg/ciclo aprox.), função de abertura,
 // ΔP atmosfera-coletor e temperatura do ar admitido.
 //
@@ -80,8 +75,13 @@ uint16_t calc_throttle_flow_impl(uint16_t tps_pct_x10, uint16_t map_bar_x100,
     }
     const uint32_t delta_p_frac_q8 = (static_cast<uint32_t>(delta_p_bar_x100) * 256u) / baro;
 
+    // T_ref = 298.0K/25°C (kIatDensityRefKelvinX10), a mesma referência
+    // física usada por corr_iat_density_q8 em fuel_calc.cpp — antes este
+    // arquivo usava 293.0K (20°C) local, uma referência diferente para o
+    // mesmo fenômeno físico. Alinhado nesta sessão.
     const int32_t iat_k_x10 = clamp_iat_kelvin_x10(iat_x10);
-    const uint32_t temp_comp_q8 = (2930u * 256u) / static_cast<uint32_t>(iat_k_x10);
+    const uint32_t temp_comp_q8 = (static_cast<uint32_t>(kIatDensityRefKelvinX10) * 256u) /
+                                  static_cast<uint32_t>(iat_k_x10);
 
     // Produto de três fatores Q8 (abertura × ΔP × temperatura) requer deslocar 24 bits
     // (8 bits por fator) — não 16, que era o erro da proposta original.
@@ -171,8 +171,16 @@ namespace ems::engine {
 
 void map_estimator_init() noexcept {
     g_map_state = {};
-    g_map_state.map_estimated_bar_x100 = 50u;  // Valor inicial seguro
-    
+    // Chute inicial = referência barométrica (pressão atmosférica), não
+    // meio-vácuo — motor desligado no key-on está na atmosférica, não a
+    // 0.50 bar. Roda antes de qualquer amostra real de baro (que só chega
+    // no loop de 100ms via fuel_set_baro_bar_x100, key-on MAP@RPM=0), então
+    // aqui fuel_get_baro_bar_x100() ainda retorna o default de compilação
+    // cfg::kMapRefBarX100 (100) — não uma medição ao vivo. Mesmo assim é um
+    // chute fisicamente melhor que o "50" fixo anterior, e a amostra real
+    // chega em pouco tempo pelo caminho normal de map_estimator_update().
+    g_map_state.map_estimated_bar_x100 = fuel_get_baro_bar_x100();
+
     for (uint8_t i = 0u; i < kTpsHistorySize; ++i) {
         g_tps_history[i] = 0u;
         g_tps_time_history[i] = 0u;

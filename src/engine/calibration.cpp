@@ -213,6 +213,7 @@ uint8_t knock_dead_min_p2p = 0u;   // 0 = detecção de sensor morto desligada
 uint8_t  map_window_enable   = 0u;    // 0 = desligado
 uint16_t map_window_open_deg = 0u;    // slot 0 abre no dente 0 (pós-gap)
 uint16_t map_window_len_deg  = 90u;   // meia fase de admissão
+uint8_t  map_window_use_for_fuel = 0u;  // 0 = desligado — ver AVISO em map_window.h
 
 uint16_t boost_target_bar_x1000[7][8] = {
     {1000u, 1020u, 1050u, 1080u, 1100u, 1120u, 1150u, 1180u},  // 0: neutro

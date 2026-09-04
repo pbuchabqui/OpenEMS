@@ -431,7 +431,7 @@ void sync_page_from_table(uint8_t page) noexcept {
         ems::app::can_rx_map_serialize_to_page0(g_page0, sizeof(g_page0));
         // MAP janela angular por cilindro (246-251)
         g_page0[246] = ems::engine::map_window_enable;
-        g_page0[247] = 0u;  // pad
+        g_page0[247] = ems::engine::map_window_use_for_fuel;
         std::memcpy(g_page0 + 248, &ems::engine::map_window_open_deg, 2u);
         std::memcpy(g_page0 + 250, &ems::engine::map_window_len_deg,  2u);
         // Duty INJ + gates DFCO + knock morto (252-257)
@@ -658,6 +658,9 @@ bool sync_table_from_page(uint8_t page) noexcept {
             // MAP janela angular (246-251). Blob antigo = zeros → fica off e
             // len mantém o default (0 nunca substitui — janela vazia inútil).
             ems::engine::map_window_enable = (g_page0[246] != 0u) ? 1u : 0u;
+            // use_for_fuel: gate separado — ver AVISO de calibração em
+            // map_window.h antes de ligar num motor real.
+            ems::engine::map_window_use_for_fuel = (g_page0[247] != 0u) ? 1u : 0u;
             std::memcpy(&ems::engine::map_window_open_deg, g_page0 + 248, 2u);
             if (ems::engine::map_window_open_deg >= 720u) {
                 ems::engine::map_window_open_deg =

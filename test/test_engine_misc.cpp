@@ -315,6 +315,15 @@ void test_map_estimator_all(void) {
     section("map_estimator: init / update / getters");
     map_estimator_init();
 
+    // Seed inicial = referência barométrica (fuel_get_baro_bar_x100()), não
+    // mais o "50" (meio-vácuo) hardcoded — motor desligado está na
+    // atmosférica, não em vácuo. Antes de qualquer amostra real de key-on,
+    // fuel_get_baro_bar_x100() retorna o default de compilação
+    // cfg::kMapRefBarX100 (100).
+    CHECK_EQ(map_estimator_get_state().map_estimated_bar_x100,
+             fuel_get_baro_bar_x100(),
+             "seed inicial = baro (default 100), não 50 hardcoded");
+
     // First update: estimated should track sensor
     const uint16_t est = map_estimator_update(100u, 500u, 10u, 30000u, 220);
     CHECK_TRUE(est > 0u && est <= 300u, "estimated MAP in (0, 300 kPa]");

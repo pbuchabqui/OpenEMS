@@ -40,6 +40,7 @@ int main() { return 0; }
 #include "engine/calibration.h"
 #include "engine/constants.h"
 #include "engine/cut_reason.h"
+#include "engine/map_window.h"
 #include "engine/vehicle_inputs.h"
 #include "engine/ecu_sched.h"
 #include "engine/engine_config.h"
@@ -578,6 +579,9 @@ static void openems_init() noexcept {
 		ems::app::can_rx_map_apply_from_page0(g_calib_page0, kCalibPageBytes);
 		// MAP janela angular (246-251); len=0 não substitui o default
 		ems::engine::map_window_enable = (g_calib_page0[246] != 0u) ? 1u : 0u;
+		// 247: use_for_fuel — gate separado, exige calibração prévia de
+		// open_deg/len_deg no motor real (ver AVISO em map_window.h).
+		ems::engine::map_window_use_for_fuel = (g_calib_page0[247] != 0u) ? 1u : 0u;
 		{
 			uint16_t od = 0u, wl = 0u;
 			std::memcpy(&od, g_calib_page0 + 248, 2u);
@@ -759,7 +763,26 @@ int main() {
             }
 
             const bool map_fault = (sensors.fault_bits & kFaultBitMap) != 0u;
-            const uint16_t map_bar_x100_raw = static_cast<uint16_t>(sensors.map_bar_x1000 / 10u);
+            // MAP "sensor": por padrão o IIR ao vivo de sensors.cpp (suaviza
+            // no tempo, não sincronizado ao ângulo de admissão). Quando
+            // map_window_use_for_fuel=1 (opt-in separado, exige calibração
+            // prévia de open_deg/len_deg — ver AVISO em map_window.h) E sync
+            // pleno/cam confirmada NO INSTANTE ATUAL (não só quando a janela
+            // fechou — evita servir média congelada após perda de sync) E
+            // já há pelo menos 1 ciclo medido, usa a média das 4 janelas
+            // angulares por cilindro em vez do IIR — livre de ripple de
+            // pulso síncrono ao motor, ao custo de até ~1 ciclo de lag
+            // (aceitável: map_estimator já reduz o peso do "sensor" durante
+            // transientes detectados via TPSdot, a favor do modelo).
+            uint16_t map_bar_x100_raw = static_cast<uint16_t>(sensors.map_bar_x1000 / 10u);
+            if (ems::engine::map_window_use_for_fuel != 0u &&
+                ems::engine::map_window_enable != 0u &&
+                snap.state == ems::drv::SyncState::FULL_SYNC &&
+                snap.cmp_confirms >= 2u &&
+                ems::engine::map_window_cycles() > 0u) {
+                map_bar_x100_raw = static_cast<uint16_t>(
+                    ems::engine::map_window_mean_bar_x1000() / 10u);
+            }
             const uint16_t map_bar_x100_sensor = clamp_u16(map_bar_x100_raw, kMapMinBarX100, kMapMaxBarX100);
             // Throttle signal for manifold model: ETB blade if harness present, else APP.
             const uint16_t tps_for_map = (ems::engine::etb_harness_present != 0u)

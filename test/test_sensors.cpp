@@ -137,6 +137,7 @@ void test_map_window_angular(void) {
     using ems::engine::map_window_balance_x1000;
     using ems::engine::map_window_cycles;
     using ems::engine::map_window_reset;
+    using ems::engine::map_window_mean_bar_x1000;
 
     map_window_reset();
     ems::drv::CkpSnapshot s{};
@@ -150,6 +151,7 @@ void test_map_window_angular(void) {
     map_window_on_tooth(s, 500u);
     CHECK_EQ(map_window_cycles(), 0u, "enable=0: nenhum ciclo");
     CHECK_EQ(map_window_slot_bar_x1000(0u), 0u, "enable=0: slot vazio");
+    CHECK_EQ(map_window_mean_bar_x1000(), 0u, "enable=0: média de slots vazios = 0");
 
     // 8 ciclos de 720° com MAP distinto por quadrante de 180°:
     // 500 / 520 / 480 / 500 → média 500, desvios 0 / +20 / -20 / 0.
@@ -173,6 +175,8 @@ void test_map_window_angular(void) {
     CHECK_EQ(map_window_slot_bar_x1000(1u), 520u, "slot 1 média = 520");
     CHECK_EQ(map_window_slot_bar_x1000(2u), 480u, "slot 2 média = 480");
     CHECK_EQ(map_window_slot_bar_x1000(3u), 500u, "slot 3 média = 500");
+    CHECK_EQ(map_window_mean_bar_x1000(), 500u,
+             "média dos 4 slots (500+520+480+500)/4 = 500");
     // EMA α=1/8 a partir de 0: após 8 ciclos ≈ dev × 0,66.
     CHECK_TRUE(map_window_balance_x1000(1u) >= 10 && map_window_balance_x1000(1u) <= 20,
                "balance slot 1 → +20 (EMA parcial)");

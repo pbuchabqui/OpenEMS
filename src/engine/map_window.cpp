@@ -102,6 +102,14 @@ uint32_t map_window_cycles() noexcept {
     return g_cycles;
 }
 
+uint16_t map_window_mean_bar_x1000() noexcept {
+    uint32_t sum = 0u;
+    for (uint8_t i = 0u; i < kSlots; ++i) {
+        sum += g_slot_bar_x1000[i];
+    }
+    return static_cast<uint16_t>(sum / kSlots);
+}
+
 void map_window_reset() noexcept {
     g_acc = 0u;
     g_cnt = 0u;

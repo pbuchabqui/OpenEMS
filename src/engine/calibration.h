@@ -165,12 +165,19 @@ extern uint8_t  decel_cut_gear_inhibit_ms10;
 extern uint8_t knock_dead_min_p2p;
 
 // MAP janela angular por cilindro (engine/map_window, estilo FOME #610).
-// enable: 0=off (default), 1=medir (telemetria/balance; sem efeito no fuel).
-// open_deg: abertura da janela do slot 0 no ciclo 720° (0-719; slots seguintes
-// a +180° cada). len_deg: duração da janela (10-180°).
+// enable: 0=off (default), 1=medir (telemetria/balance; sem efeito no fuel
+// por si só — ver use_for_fuel). open_deg: abertura da janela do slot 0 no
+// ciclo 720° (0-719; slots seguintes a +180° cada). len_deg: duração da
+// janela (10-180°).
 extern uint8_t  map_window_enable;
 extern uint16_t map_window_open_deg;
 extern uint16_t map_window_len_deg;
+// use_for_fuel: 0=off (default) — gate SEPARADO de enable, exige opt-in
+// explícito. Só ligar depois de calibrar open_deg/len_deg observando MAP
+// real por cilindro no motor (ver AVISO em map_window.h) — no default
+// (open_deg=0, len_deg=90° de 180°) a média dos 4 slots é um arco arbitrário
+// não-calibrado, pode enviesar o combustível em vez de limpar ruído.
+extern uint8_t  map_window_use_for_fuel;
 
 // CKP: nº de dentes descartados após silêncio ≥ timeout de stall (arranque,
 // stall, religação do sensor) antes de re-entrar no bootstrap do histórico —
