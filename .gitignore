@@ -119,3 +119,6 @@ hardware/openems_ecu/*.bak-hier-*
 hardware/openems_ecu/*.bak-preroute-*
 hardware/openems_ecu/*.bak-experimental-*
 hardware/**/fp-info-cache
+
+output.pdf
+*.rpt
