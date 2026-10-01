@@ -47,6 +47,7 @@ struct Table2dLookup {
 
 uint8_t table_axis_index(const uint32_t* axis, uint8_t size, uint32_t value) noexcept;
 uint8_t table_axis_frac_q8(const uint32_t* axis, uint8_t idx, uint32_t value) noexcept;
+int32_t lerp_q8_s32(int32_t a, int32_t b, uint8_t frac_q8) noexcept;
 
 // Nó de eixo mais próximo do valor (para crédito de célula única: LTFT/LEARN).
 // Diferente de table_axis_index, que devolve o canto baixo da interpolação

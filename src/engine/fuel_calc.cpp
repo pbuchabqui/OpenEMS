@@ -66,33 +66,8 @@ static uint16_t g_baro_bar_x100 = ems::engine::cfg::kMapRefBarX100;
 uint16_t interp_u16_4pt_u16x(const uint16_t* x_axis,
                              const uint16_t* table,
                              uint16_t x) noexcept {
-    constexpr uint8_t n = ems::engine::kAeRateTableSize;
-    if (x <= x_axis[0]) {
-        return table[0];
-    }
-    if (x >= x_axis[n - 1u]) {
-        return table[n - 1u];
-    }
-
-    uint8_t idx = 0u;
-    while (idx < (n - 2u) && x > x_axis[idx + 1u]) { ++idx; }
-
-    const uint16_t x0 = x_axis[idx];
-    const uint16_t x1 = x_axis[idx + 1u];
-    const uint16_t y0 = table[idx];
-    const uint16_t y1 = table[idx + 1u];
-    const uint16_t span = static_cast<uint16_t>(x1 - x0);
-    if (span == 0u) {
-        return y0;
-    }
-
-    // Signed dy: non-monotonic AE tables (y1 < y0) must not wrap to huge PW.
-    const int32_t dy = static_cast<int32_t>(y1) - static_cast<int32_t>(y0);
-    const int32_t y = static_cast<int32_t>(y0) +
-        (dy * static_cast<int32_t>(x - x0)) / static_cast<int32_t>(span);
-    if (y <= 0) { return 0u; }
-    if (y > 65535) { return 65535u; }
-    return static_cast<uint16_t>(y);
+    return ems::engine::interp_8pt<uint16_t, uint16_t>(
+        x_axis, table, ems::engine::kAeRateTableSize, x);
 }
 
 uint8_t clt_bucket(int16_t clt_x10) noexcept {

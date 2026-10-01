@@ -4,6 +4,7 @@
 
 #include "engine/output_test.h"
 
+#include "engine/math_utils.h"
 #include "engine/table3d.h"
 #include "engine/calibration.h"
 #include "engine/vehicle_inputs.h"
@@ -41,6 +42,8 @@ volatile uint32_t ems_test_aux_gpiob_bsrr = 0u;
 
 namespace {
 
+using ems::engine::clamp_i16;
+
 constexpr uint32_t kTick10ms = 10u;
 constexpr uint32_t kTick20ms = 20u;
 constexpr uint32_t kAuxTim3PwmHz = 15u;
@@ -76,7 +79,7 @@ constexpr uint32_t kBoostRpmAxisX10[kBoostRpmPts] = {
 
 constexpr uint8_t kVvtPts = 12u;
 constexpr uint32_t kVvtRpmAxisX10[kVvtPts] = {10000u, 15000u, 20000u, 25000u, 30000u, 35000u, 40000u, 45000u, 50000u, 60000u, 70000u, 80000u};
-constexpr uint16_t kVvtLoadAxisBarX1000[kVvtPts] = {300u, 400u, 500u, 600u, 700u, 800u, 900u, 1000u, 1100u, 1200u, 1400u, 1700u};
+constexpr uint32_t kVvtLoadAxisBarX1000[kVvtPts] = {300u, 400u, 500u, 600u, 700u, 800u, 900u, 1000u, 1100u, 1200u, 1400u, 1700u};
 
 constexpr int16_t kVvtAdmTargetDegX10[kVvtPts][kVvtPts] = {
     {180, 180, 170, 160, 150, 140, 130, 120, 110, 100, 90, 80},
@@ -169,94 +172,6 @@ struct AuxState {
 
 static AuxState g = {};
 
-int16_t clamp_i16(int16_t v, int16_t lo, int16_t hi) noexcept {
-    if (v < lo) {
-        return lo;
-    }
-    if (v > hi) {
-        return hi;
-    }
-    return v;
-}
-
-uint8_t axis_index_u16(const uint16_t* axis, uint8_t size, uint16_t x) noexcept {
-    if (size < 2u) {
-        return 0u;
-    }
-    if (x <= axis[0]) {
-        return 0u;
-    }
-    const uint8_t last = static_cast<uint8_t>(size - 1u);
-    if (x >= axis[last]) {
-        return static_cast<uint8_t>(last - 1u);
-    }
-    uint8_t idx = 0u;
-    while (idx < static_cast<uint8_t>(size - 2u) && x > axis[idx + 1u]) { ++idx; }
-    return idx;
-}
-
-uint8_t axis_frac_q8_u16(const uint16_t* axis, uint8_t idx, uint16_t x) noexcept {
-    const uint16_t x0 = axis[idx];
-    const uint16_t x1 = axis[idx + 1u];
-
-    if (x <= x0) {
-        return 0u;
-    }
-    if (x >= x1) {
-        return 255u;
-    }
-
-    const uint16_t span = static_cast<uint16_t>(x1 - x0);
-    if (span == 0u) {
-        return 0u;
-    }
-
-    const uint32_t num = static_cast<uint32_t>(x - x0) << 8u;
-    uint32_t frac = num / span;
-    if (frac > 255u) {
-        frac = 255u;
-    }
-    return static_cast<uint8_t>(frac);
-}
-
-
-int32_t lerp_q8_s32(int32_t a, int32_t b, uint8_t fq8) noexcept {
-    return a + (((b - a) * static_cast<int32_t>(fq8)) >> 8u);
-}
-
-uint16_t interp1_u16_8(const int16_t* axis, const uint16_t* values, int16_t x) noexcept {
-    if (x <= axis[0]) {
-        return values[0];
-    }
-    if (x >= axis[kWarmupPts - 1u]) {
-        return values[kWarmupPts - 1u];
-    }
-
-    uint8_t idx = 0u;
-    while (idx < (kWarmupPts - 2u) && x > axis[idx + 1u]) { ++idx; }
-
-    const int16_t x0 = axis[idx];
-    const int16_t x1 = axis[idx + 1u];
-    const uint16_t y0 = values[idx];
-    const uint16_t y1 = values[idx + 1u];
-
-    const int32_t dx = static_cast<int32_t>(x) - static_cast<int32_t>(x0);
-    const int32_t span = static_cast<int32_t>(x1) - static_cast<int32_t>(x0);
-    if (span <= 0) {
-        return y0;
-    }
-
-    const int32_t y = static_cast<int32_t>(y0) +
-                      ((static_cast<int32_t>(y1) - static_cast<int32_t>(y0)) * dx) / span;
-    if (y <= 0) {
-        return 0u;
-    }
-    if (y >= 65535) {
-        return 65535u;
-    }
-    return static_cast<uint16_t>(y);
-}
-
 // gear: 0=neutro/desconhecido, 1-6; índice direto na tabela (sem interpolação no eixo Y)
 uint16_t lookup_boost_target(uint32_t rpm_x10, uint8_t gear) noexcept {
     const uint8_t g  = (gear >= kBoostGears) ? (kBoostGears - 1u) : gear;
@@ -265,7 +180,7 @@ uint16_t lookup_boost_target(uint32_t rpm_x10, uint8_t gear) noexcept {
 
     const int32_t v0 = static_cast<int32_t>(ems::engine::boost_target_bar_x1000[g][xi]);
     const int32_t v1 = static_cast<int32_t>(ems::engine::boost_target_bar_x1000[g][xi + 1u]);
-    const int32_t v  = lerp_q8_s32(v0, v1, fx);
+    const int32_t v  = ems::engine::lerp_q8_s32(v0, v1, fx);
 
     if (v <= 0) {
         return 0u;
@@ -280,18 +195,18 @@ int16_t lookup_vvt_target(const int16_t table[kVvtPts][kVvtPts],
                           uint32_t rpm_x10,
                           uint16_t load_bar_x1000) noexcept {
     const uint8_t xi = ems::engine::table_axis_index(kVvtRpmAxisX10, kVvtPts, rpm_x10);
-    const uint8_t yi = axis_index_u16(kVvtLoadAxisBarX1000, kVvtPts, load_bar_x1000);
+    const uint8_t yi = ems::engine::table_axis_index(kVvtLoadAxisBarX1000, kVvtPts, load_bar_x1000);
     const uint8_t fx = ems::engine::table_axis_frac_q8(kVvtRpmAxisX10, xi, rpm_x10);
-    const uint8_t fy = axis_frac_q8_u16(kVvtLoadAxisBarX1000, yi, load_bar_x1000);
+    const uint8_t fy = ems::engine::table_axis_frac_q8(kVvtLoadAxisBarX1000, yi, load_bar_x1000);
 
     const int32_t v00 = table[yi][xi];
     const int32_t v10 = table[yi][xi + 1u];
     const int32_t v01 = table[yi + 1u][xi];
     const int32_t v11 = table[yi + 1u][xi + 1u];
 
-    const int32_t v0 = lerp_q8_s32(v00, v10, fx);
-    const int32_t v1 = lerp_q8_s32(v01, v11, fx);
-    const int32_t v = lerp_q8_s32(v0, v1, fy);
+    const int32_t v0 = ems::engine::lerp_q8_s32(v00, v10, fx);
+    const int32_t v1 = ems::engine::lerp_q8_s32(v01, v11, fx);
+    const int32_t v = ems::engine::lerp_q8_s32(v0, v1, fy);
 
     return clamp_i16(static_cast<int16_t>(v), -1000, 3600);
 }
@@ -322,7 +237,7 @@ uint16_t calc_cam_pos_est_x10(const ems::drv::CkpSnapshot& snap) noexcept {
 }
 
 uint16_t iac_target_rpm_x10(int16_t clt_x10) noexcept {
-    return interp1_u16_8(kWarmupCltAxisX10, kIdleTargetRpmX10, clt_x10);
+    return ems::engine::interp_u16_8pt(kWarmupCltAxisX10, kIdleTargetRpmX10, kWarmupPts, clt_x10);
 }
 
 void run_wastegate_control(const ems::drv::CkpSnapshot& snap,

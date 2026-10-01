@@ -19,9 +19,12 @@
 #include <cstdint>
 
 #include "engine/calibration.h"
+#include "engine/math_utils.h"
 #include "hal/flash.h"
 
 namespace {
+
+using ems::engine::clamp_u16;
 
 // ── Constantes do algoritmo ───────────────────────────────────────────────────
 constexpr uint8_t  kDefaultEventThreshold  = 3u;    // amostras acima do threshold por janela
@@ -56,11 +59,6 @@ constexpr uint16_t kDeadWindowLimit = 100u;  // ~100 eventos de combustão
 static KnockState g = {};
 
 // ── Utilitários ───────────────────────────────────────────────────────────────
-static inline uint16_t clamp_u16(uint16_t v, uint16_t lo, uint16_t hi) noexcept {
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
-}
 
 }  // namespace
 

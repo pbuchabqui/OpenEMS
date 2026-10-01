@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "hal/can.h"
+#include "engine/math_utils.h"
 #include "app/can_rx_map.h"
 
 namespace {
@@ -35,9 +36,7 @@ static uint32_t g_fco_accum_ul   = 0u;  // accumulated fuel [µl], wraps at ~429
 static uint32_t g_fco_nl_frac    = 0u;  // sub-µl remainder [nl]
 static uint32_t g_fco_snap_ul    = 0u;  // accum at last 0x402 TX (for delta)
 
-inline uint8_t clamp_u8(uint32_t v) noexcept {
-    return static_cast<uint8_t>((v > 255u) ? 255u : v);
-}
+using ems::engine::clamp_u8;
 
 inline uint8_t clamp_u8_i32(int32_t v) noexcept {
     if (v < 0)    { return 0u; }
