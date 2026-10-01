@@ -172,22 +172,6 @@ static inline uint32_t min_stall_timeout_ticks() noexcept {
     return ems::drv::sensors_is_bench_mode() ? kMinStallTimeoutTicksBench : kMinStallTimeoutTicks;
 }
 
-// ── Limiares TOOTH_GRD (MS42 §1.2.3.1.3, NC_TOOTH_GRD_MIN/MAX_GAP) ──────
-// TOOTH_GRD(n) = [T(n) × T(n-2)] / T(n-1)²
-//
-// Gap válido:  1.5 < TOOTH_GRD ≤ 3.5  (janela que cobre o gap 60-2 ≈ 3.0×)
-//   Limite inf:  delta×t_n2×2 > t_n1²×3  (TOOTH_GRD > 3/2)
-//   Limite sup:  delta×t_n2×2 > t_n1²×7  → fora da janela → SPIKE_NOISE
-//
-// Spike/glitch: TOOTH_GRD < 1/4 → delta×t_n2×4 < t_n1²
-//
-// Usa uint64_t: T(n-1)² estoura uint32_t abaixo de ~650 RPM.
-static constexpr uint32_t kGrdGapNum       = 3u;  // gap inf: 3/2 = 1.5
-static constexpr uint32_t kGrdGapDen       = 2u;
-static constexpr uint32_t kGrdGapMaxNum    = 7u;  // gap sup: 7/2 = 3.5
-static constexpr uint32_t kGrdGapMaxDen    = 2u;
-static constexpr uint32_t kGrdSpikeDen     = 4u;  // spike:   1/4 = 0.25
-
 // ---- Acesso a registradores TIM5 ------------------------------------------------
 // STM32H562 TIM5 e GPIO sao configurados em hal/stm32h562/timer.cpp.
 // O modulo usa aliases HAL para manter o decode desacoplado de offsets.
@@ -354,8 +338,6 @@ inline bool is_gap(uint32_t period, uint32_t avg) noexcept {
             static_cast<uint64_t>(avg) * kGapRatioNum);
 }
 
-static uint32_t g_prev_valid_period_ns = 0u;
-static uint8_t g_coherent_periods_count = 0u;
 static uint32_t s_prev_cmp_capture = 0u;
 // Revoluções (gaps aceites em FULL_SYNC) desde a última borda CMP validada.
 // Zerado na ISR do came; se exceder kMaxRevsWithoutCmp, força fallback a wasted.
@@ -393,29 +375,6 @@ inline void close_cmp_seq_gate() noexcept {
     s_prev_cmp_capture = 0u;
     s_cmp_ref_tooth = 0xFFu;
     s_cmp_reject_streak = 0u;
-}
-
-// ── TOOTH_GRD (MS42 §1.2.3.1.3) ──────────────────────────────────────────────
-// gap:   delta × t_n2 × kGrdGapDen  > t_n1² × kGrdGapNum
-// spike: delta × t_n2 × kGrdSpikeDen < t_n1²
-inline bool tooth_grd_is_gap(uint32_t delta, uint32_t t_n1, uint32_t t_n2) noexcept {
-    const uint64_t lhs = static_cast<uint64_t>(delta) * t_n2 * kGrdGapDen;
-    const uint64_t rhs = static_cast<uint64_t>(t_n1) * t_n1 * kGrdGapNum;
-    return lhs > rhs;
-}
-
-inline bool tooth_grd_is_spike(uint32_t delta, uint32_t t_n1, uint32_t t_n2) noexcept {
-    const uint64_t lhs = static_cast<uint64_t>(delta) * t_n2 * kGrdSpikeDen;
-    const uint64_t rhs = static_cast<uint64_t>(t_n1) * t_n1;
-    return lhs < rhs;
-}
-
-// TOOTH_GRD > 3.5: dente demasiado longo para ser o gap 60-2 (que é ≈3.0×).
-// Ocorre durante recuperação de stall ou escorregamento de roda — não é um gap válido.
-inline bool tooth_grd_over_gap_max(uint32_t delta, uint32_t t_n1, uint32_t t_n2) noexcept {
-    const uint64_t lhs = static_cast<uint64_t>(delta) * t_n2 * kGrdGapMaxDen;
-    const uint64_t rhs = static_cast<uint64_t>(t_n1) * t_n1 * kGrdGapMaxNum;
-    return lhs > rhs;
 }
 
 // Classifica o período atual do dente.
@@ -457,38 +416,6 @@ inline void exit_critical() noexcept {
 #if defined(__arm__) || defined(__thumb__)
     asm volatile("cpsie i" ::: "memory");
 #endif
-}
-
-// Valida se período CKP é coerente com rotação forward estável
-// Períodos coerentes: variação < 25% entre amostras consecutivas
-inline bool is_forward_rotation_coherent(uint32_t period_ns) noexcept {
-    if (period_ns == 0u || period_ns > 10000000u) {  // > 10ms = RPM < 100
-        return false;
-    }
-
-    if (g_prev_valid_period_ns == 0u) {
-        g_prev_valid_period_ns = period_ns;
-        g_coherent_periods_count = 1u;
-        return true;
-    }
-
-    // Verifica se variação está dentro de ±25% (rotação estável forward)
-    const uint32_t max_valid = g_prev_valid_period_ns + (g_prev_valid_period_ns >> 2u);
-    const uint32_t min_valid = g_prev_valid_period_ns - (g_prev_valid_period_ns >> 2u);
-
-    if (period_ns >= min_valid && period_ns <= max_valid) {
-        g_prev_valid_period_ns = period_ns;
-        if (g_coherent_periods_count < 255u) {
-            ++g_coherent_periods_count;
-        }
-        // Requer 3 períodos coerentes consecutivos para validar forward rotation
-        return g_coherent_periods_count >= 3u;
-    } else {
-        // Variação brusca: possível reversão ou ruído
-        g_prev_valid_period_ns = period_ns;
-        g_coherent_periods_count = 1u;
-        return false;
-    }
 }
 
 // ── Processamento de gap na máquina de estados ───────────────────────────────
@@ -1259,8 +1186,6 @@ void ckp_test_reset() noexcept {
     g_seed_loaded_count = 0u;
     g_seed_confirmed_count = 0u;
     g_seed_rejected_count = 0u;
-    g_prev_valid_period_ns = 0u;
-    g_coherent_periods_count = 0u;
     s_prev_cmp_capture = 0u;
     s_revs_since_cmp = 0u;
     s_cmp_ref_tooth = 0xFFu;

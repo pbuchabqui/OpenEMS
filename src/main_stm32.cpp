@@ -102,7 +102,6 @@ static constexpr uint8_t  kFaultBitFuel = (1u << 6u);  // SensorId::FUEL_PRESS
 static constexpr uint8_t  kFaultBitOil  = (1u << 7u);  // SensorId::OIL_PRESS
 // Oil must be present above this RPM; fuel-rail fault cuts after cranking.
 static constexpr uint32_t kOilProtectRpmX10  = 15000u;  // 1500 RPM
-static constexpr uint32_t kFuelRailMinRpmX10 = 5000u;   // 500 RPM
 // Coolant protection (value-based, not just open/short fault_bits).
 static constexpr int16_t  kOvertempWarnX10   = 1050;    // 105 °C
 static constexpr int16_t  kOvertempCritX10   = 1150;    // 115 °C
@@ -123,7 +122,6 @@ static uint32_t g_baro_stopped_since_ms = 0u;
 static bool     g_baro_sampled          = false;
 static uint32_t g_zero_rpm_since_ms = 0u;
 static uint32_t g_runtime_seed_arm_window_start_ms = 0u;
-static uint16_t g_prev_tps_pct_x10 = 0u;
 static bool g_have_last_full_sync = false;
 static ems::drv::CkpSnapshot g_last_full_sync_snapshot{};  // WAIT_GAP + zeros
 static bool g_have_last_gap_sync = false;
@@ -274,169 +272,6 @@ static inline void comms_pump() noexcept {
 // Inicialização — sequência idêntica ao main.cpp
 // =============================================================================
 
-// Modo diagnóstico: descomente para teste isolado de USB CDC (clock + usb_cdc_init + echo).
-// Em produção fica DESATIVADO → usa o openems_init() real (ECU completa + usb_cdc_init).
-// #define MINIMAL_BOOT 1  // uncomment for USB CDC echo-only diagnostic mode
-
-#ifdef MINIMAL_BOOT
-static void openems_init() noexcept {
-    // ABSOLUTE MINIMUM TEST: kick WWDG + DPPU=1
-    // Objectivo: confirmar que firmware executa (dmesg USB) ou detectar WWDG loop
-
-    // 0. Kick WWDG imediatamente (hardware WWDG activo!)
-    // WWDG_CR @ APB1_BASE + 0x2C00 = 0x40002C00
-    // bit 7 (WDGA) e bits[6:0] T[6:0] = 0x7F: refresh com T=0x7F
-    STM32_REG32(0x40002C00) = 0x7Fu;  // WWDG kick
-
-    // 1. GPIOA clock — dummy read DEVE ser do GPIOA (nao do AHB2ENR!)
-    STM32_REG32(0x44020C8C) |= (1u << 0);  // AHB2ENR GPIOAEN
-    (void)STM32_REG32(0x42020000);  // dummy read GPIOA_MODER — garante clock propagado
-
-    // 2. PA9 = OUTPUT para teste GPIO (MODER[19:18]=01)
-    //    PA9 HIGH = 3.3V visivel no adaptador serie RXD
-    STM32_REG32(0x42020000) = (STM32_REG32(0x42020000) & ~(3u<<18)) | (1u<<18);
-    STM32_REG32(0x42020018) = (1u << 9);  // BSRR: set PA9 HIGH
-
-    // 3. UART init PA9=AF7 USART1
-    STM32_REG32(0x42020000) = (STM32_REG32(0x42020000) & ~(3u<<18)) | (2u<<18);
-    STM32_REG32(0x42020024) = (STM32_REG32(0x42020024) & ~(0xFu<<4)) | (7u<<4);
-    STM32_REG32(0x44020CA4) |= (1u << 14);  // APB2ENR USART1EN
-    (void)STM32_REG32(0x40013800);  // dummy read USART1 — garante clock propagado
-
-    auto uart_putc = [](char c) noexcept {
-        for (volatile uint32_t t = 5000u; t > 0; --t) {
-            STM32_REG32(0x40002C00) = 0x7Fu;  // WWDG kick
-            if (STM32_REG32(0x40013800 + 0x1C) & (1u<<7)) break;
-        }
-        STM32_REG32(0x40013800 + 0x28) = static_cast<uint8_t>(c);
-    };
-    auto uart_puts = [&uart_putc](const char* s) noexcept {
-        while (*s) uart_putc(*s++);
-    };
-
-    // SYSCLK = 64 MHz (confirmado por clock sweep: DFU exit deixa PLL @ 64 MHz)
-    // PCLK2 = 64 MHz, BRR = 64e6/115200 = 556 = 0x22C
-    STM32_REG32(0x40013800 + 0x0C) = 0x22Cu;
-    STM32_REG32(0x40013800 + 0x00) = (1u<<3)|(1u<<0);   // CR1 TE+UE
-    for (volatile uint32_t i = 0; i < 1000u; ++i) { __asm__("nop"); }
-
-    uart_puts("\r\n=== OpenEMS BOOT64 ===\r\n");
-
-    // Helper: print hex (4 digits)
-    auto uart_hex16 = [&uart_putc](uint32_t v) noexcept {
-        const char* hex = "0123456789ABCDEF";
-        uart_putc(hex[(v >> 12) & 0xF]);
-        uart_putc(hex[(v >> 8)  & 0xF]);
-        uart_putc(hex[(v >> 4)  & 0xF]);
-        uart_putc(hex[v & 0xF]);
-    };
-    auto uart_hex32 = [&uart_hex16](uint32_t v) noexcept {
-        uart_hex16(v >> 16);
-        uart_hex16(v);
-    };
-    auto delay_ms_64 = [](uint32_t ms) noexcept {
-        // 64 MHz: ~6400 NOPs por ms (com pipeline ~2 ciclos/loop)
-        for (uint32_t m = 0; m < ms; ++m) {
-            STM32_REG32(0x40002C00) = 0x7Fu;
-            for (volatile uint32_t i = 0; i < 6400u; ++i) { __asm__("nop"); }
-        }
-    };
-
-    // Dump state inicial
-    uart_puts("RCC_CR=");      uart_hex32(STM32_REG32(0x44020C00)); uart_puts("\r\n");
-    uart_puts("RCC_CFGR1=");   uart_hex32(STM32_REG32(0x44020C1C)); uart_puts("\r\n");
-    uart_puts("PWR_VOSCR=");   uart_hex32(STM32_REG32(0x44020810)); uart_puts("\r\n");
-    uart_puts("PWR_USBSCR=");  uart_hex32(STM32_REG32(0x44020838)); uart_puts("\r\n");
-
-    // 4. VDDUSB enable + delay longo (>= 1 ms)
-    STM32_REG32(0x44020838) |= (1u << 25);
-    delay_ms_64(5);
-    uart_puts("VDDUSB_OK PWR_USBSCR="); uart_hex32(STM32_REG32(0x44020838)); uart_puts("\r\n");
-
-    // 5. HSI48 (USB clock) — confirmar HSI48RDY
-    STM32_REG32(0x44020C00) |= (1u << 12);
-    {
-        bool ready = false;
-        for (uint32_t n = 0; n < 200000u; ++n) {
-            STM32_REG32(0x40002C00) = 0x7Fu;
-            if (STM32_REG32(0x44020C00) & (1u<<13)) { ready = true; break; }
-        }
-        uart_puts(ready ? "HSI48_RDY " : "HSI48_TIMEOUT ");
-        uart_puts("RCC_CR="); uart_hex32(STM32_REG32(0x44020C00)); uart_puts("\r\n");
-    }
-
-    // 6. Inicialização USB CDC completa pelo driver REAL (ems::hal::usb_cdc_init):
-    //    seleciona USBSEL=HSI48 (0b11, NÃO 00=NOCLOCK), configura PA11/PA12 AF10,
-    //    power-up do transceiver, BDTable + descritores, NVIC e DPPU. Substitui os
-    //    pokes crus anteriores (que usavam USBSEL=00 e nunca serviam descritores).
-    STM32_REG32(0x40002C00) = 0x7Fu;  // kick WWDG antes da init
-    ems::hal::usb_cdc_init();
-    STM32_REG32(0x40002C00) = 0x7Fu;  // kick WWDG depois da init
-
-    // CRÍTICO: o Reset_Handler faz cpsid i e nunca reabilita. O firmware completo
-    // reabilita por acidente no 1º cpsie de uma seção crítica do openems_init; o caminho
-    // MINIMAL não chama nenhuma → sem isto, PRIMASK=1 e a ISR do USB NUNCA dispara.
-    __asm__ volatile("cpsie i" ::: "memory");
-    uart_puts("usb_cdc_init OK CCIPR4="); uart_hex32(STM32_REG32(0x44020CE4));
-    uart_puts(" CNTR=");  uart_hex32(STM32_REG32(0x40016040));
-    uart_puts(" ISTR=");  uart_hex32(STM32_REG32(0x40016044));
-    uart_puts(" BCDR=");  uart_hex32(STM32_REG32(0x40016058)); uart_puts("\r\n");
-
-    delay_ms_64(100);  // dar tempo ao host de detectar/enumerar
-    uart_puts("100ms ISTR="); uart_hex32(STM32_REG32(0x40016044));
-    uart_puts(" DADDR=");      uart_hex32(STM32_REG32(0x4001604C)); uart_puts("\r\n");
-
-    // Configura PB2 (LED da placa WeAct) como saída para o "ladder" de diagnóstico:
-    // o LED pisca N vezes = maior estágio de enumeração alcançado (1..6), pausa, repete.
-    STM32_REG32(0x44020C8C) |= (1u << 1);  // RCC AHB2ENR1 GPIOBEN
-    (void)STM32_REG32(0x42020400);          // dummy read p/ propagar clock
-    STM32_REG32(0x42020400) = (STM32_REG32(0x42020400) & ~(3u << 4)) | (1u << 4);  // PB2 output
-
-    // AF brute-force test: cycle AF0-AF15 on PC6 with TIM3 FORCE_ACTIVE
-    // Enable GPIOC + TIM3 clocks
-    STM32_REG32(0x44020C8C) |= (1u << 2);   // GPIOCEN
-    STM32_REG32(0x44020C9C) |= (1u << 1);   // TIM3EN (APB1LENR bit 1)
-    (void)STM32_REG32(0x42020800);           // dummy read GPIOC
-
-    // TIM3: PSC=24 (10MHz), FORCE_ACTIVE on CH1, CCER CC1E=1, CEN=1
-    STM32_REG32(0x40000400 + 0x28) = 24u;   // TIM3_PSC
-    STM32_REG32(0x40000400 + 0x18) = 0x50u; // TIM3_CCMR1 = FORCE_ACTIVE CH1
-    STM32_REG32(0x40000400 + 0x20) = 1u;    // TIM3_CCER = CC1E
-    STM32_REG32(0x40000400 + 0x00) = 1u;    // TIM3_CR1 = CEN
-
-    auto delay_2s = [](void) {
-        for (volatile uint32_t d = 0; d < 8000000u; ++d) {
-            if ((d & 0xFFFu) == 0) STM32_REG32(0x40002C00) = 0x7Fu;
-        }
-    };
-
-    auto blink_n = [](uint8_t n) {
-        for (uint8_t i = 0; i < n; ++i) {
-            STM32_REG32(0x42020414) |= (1u << 2);
-            for (volatile uint32_t d = 0; d < 500000u; ++d) {
-                if ((d & 0xFFFu) == 0) STM32_REG32(0x40002C00) = 0x7Fu;
-            }
-            STM32_REG32(0x42020414) &= ~(1u << 2);
-            for (volatile uint32_t d = 0; d < 500000u; ++d) {
-                if ((d & 0xFFFu) == 0) STM32_REG32(0x40002C00) = 0x7Fu;
-            }
-        }
-    };
-
-    while (true) {
-        for (uint8_t af = 0u; af < 16u; ++af) {
-            // Set PC6 to AF mode (MODER=10) with AFRL[27:24] = af
-            uint32_t afrl = STM32_REG32(0x42020820);  // GPIOC_AFRL
-            afrl = (afrl & ~(0xFu << 24u)) | ((uint32_t)af << 24u);
-            STM32_REG32(0x42020820) = afrl;
-            STM32_REG32(0x42020800) = (STM32_REG32(0x42020800) & ~(3u << 12u)) | (2u << 12u);
-
-            blink_n(af + 1u);  // blink AF number (1-16)
-            delay_2s();        // hold — measure PC6 with multimeter
-        }
-    }
-}
-#else
 static void openems_init() noexcept {
     // 1) PLL → 250 MHz + SysTick 1ms + IWDG 100ms
     system_stm32_init();
@@ -681,7 +516,6 @@ static void openems_init() noexcept {
     // não ultrapassa o timeout de 100 ms do IWDG.
     iwdg_kick();
 }
-#endif // MINIMAL_BOOT
 
 
 // =============================================================================
@@ -1180,7 +1014,6 @@ int main() {
                 g_last_advance_deg = clamp_i8(sched_spark_deg, -10, 40);
                 ems::engine::fuel_ae_notify_pulse(0);
             }
-            g_prev_tps_pct_x10 = sensors.etb_tps_pct_x10;
             ems::app::ui_update_rt_map_fuel(map_bar_x100, g_last_net_pw_us);
             g_last_map_fused_x100 = map_bar_x100;
 
