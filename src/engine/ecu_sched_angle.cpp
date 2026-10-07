@@ -2,8 +2,20 @@
  * @file ecu_sched_angle.cpp
  * @brief Cold-path angle table builders for the event scheduler.
  *
- * Called only at crank rev boundary (gap), never from TIM5 compare ISR.
+ * Called only at a crank rev boundary (gap), never from the TIM5 compare ISR.
  * Hot path (queue insert/dispatch/GPIO arm) remains in ecu_sched.cpp.
+ *
+ * Each table entry says WHERE an event is armed (a real tooth + phase) and
+ * the angle from that tooth edge to the event, in 1/256 tooth. Only angles
+ * live here; durations are applied in time when the event is armed:
+ *   SPARK        fires at the angle.
+ *   DWELL_START  angle = its SPARK; coil ON at (spark time − dwell ticks).
+ *                Armed early enough (estimated dwell + margin) to start on time.
+ *   INJ_ON       opens at the angle (SOI = EOI − estimated PW angle);
+ *                INJ_OFF is queued at ON + PW ticks — the pulse is exact in
+ *                time whatever the speed does meanwhile.
+ * Angles in the 12° missing-tooth gap are armed from tooth 57 with an
+ * offset up to 3 tooth periods.
  */
 #include "engine/ecu_sched_internal.h"
 
@@ -26,208 +38,119 @@ void clear_angle_table(void)
     g_angle_tooth_mask_hi = 0U;
 }
 
-static void angle_to_tooth_event(uint32_t angle_deg,
-                                 uint8_t *out_tooth,
-                                 uint8_t *out_sub_frac,
-                                 uint8_t *out_phase_A)
+namespace {
+
+constexpr int32_t kToothX10 = 60;        // 6.0° per tooth position
+constexpr int32_t kRevX10 = 3600;
+constexpr int32_t kMaxDwellSpanX10 = 3000;
+
+int32_t wrap(int32_t a, int32_t cycle) { return ((a % cycle) + cycle) % cycle; }
+
+// Duration (ticks) → crank angle ×10 at the given tooth period (estimate).
+int32_t ticks_to_x10(uint32_t ticks, uint32_t tooth_ticks)
 {
-    const uint32_t ang = angle_deg % 360U;
-    uint32_t pos_x256 = (ang * 256U) / 6U;
-    uint8_t tooth = static_cast<uint8_t>(pos_x256 >> 8U);
-    uint8_t frac = static_cast<uint8_t>(pos_x256 & 0xFFU);
-    if (tooth > 57U) {
-        tooth = 57U;
-        frac = 255U;
-    }
-    *out_phase_A = (angle_deg < 360U) ? ECU_PHASE_A : ECU_PHASE_B;
-    *out_tooth = tooth;
-    *out_sub_frac = frac;
+    if (tooth_ticks == 0U) { return 0; }
+    return static_cast<int32_t>((static_cast<uint64_t>(ticks) * kToothX10) / tooth_ticks);
 }
 
-static uint32_t engine_angle_to_trigger_angle(uint32_t engine_angle_deg,
-                                             uint32_t cycle_deg)
-{
-    const uint32_t trigger_offset =
-        static_cast<uint32_t>(cfg::g_eng_cfg.trigger_tooth0_engine_deg) % cycle_deg;
-    return (engine_angle_deg + cycle_deg - trigger_offset) % cycle_deg;
-}
-
-static void table_add(uint8_t tooth,
-                      uint8_t sub_frac,
-                      uint8_t phase_A,
-                      uint8_t channel,
-                      uint8_t action)
+// One table entry: armed at trigger angle `arm`, fires at `target` (both ×10,
+// cycle-relative). The arming tooth is the last real tooth at or before
+// `arm`; the offset is measured from that tooth edge.
+void add_entry(int32_t arm, int32_t target, int32_t cycle, uint8_t ch, uint8_t action)
 {
     if (g_angle_table_count >= ECU_ANGLE_TABLE_SIZE) {
         ++g_cycle_schedule_drop_count;
         return;
     }
-    AngleEvent_t *e = &g_angle_table[g_angle_table_count++];
-    e->tooth_index = tooth;
-    e->sub_frac_x256 = sub_frac;
-    e->phase_A = phase_A;
-    e->channel = channel;
+    arm = wrap(arm, cycle);
+    const int32_t in_rev = arm % kRevX10;
+    int32_t tooth = in_rev / kToothX10;
+    if (tooth > 57) { tooth = 57; }                      // gap: arm from tooth 57
+    const int32_t tooth_ang = arm - in_rev + tooth * kToothX10;
+    const int32_t delta = wrap(target - tooth_ang, cycle);
+
+    AngleEvent_t* e = &g_angle_table[g_angle_table_count++];
+    e->tooth_index = static_cast<uint8_t>(tooth);
+    e->offset_x256 = static_cast<uint16_t>((delta * 256 + kToothX10 / 2) / kToothX10);
+    e->phase_A = (cycle == static_cast<int32_t>(kCycleDeg * 10U))
+        ? ((arm < kRevX10) ? ECU_PHASE_A : ECU_PHASE_B)
+        : ECU_PHASE_ANY;
+    e->channel = ch;
     e->action = action;
-    e->valid = 1U;
-    if (tooth < 32U) {
+    if (tooth < 32) {
         g_angle_tooth_mask_lo |= (1UL << tooth);
     } else {
-        g_angle_tooth_mask_hi |= (1UL << (tooth - 32U));
+        g_angle_tooth_mask_hi |= (1UL << (tooth - 32));
     }
 }
 
-static uint32_t ticks_to_cycle_degrees(uint32_t ticks,
-                                       uint32_t tooth_period_ns,
-                                       uint32_t cycle_deg)
+// `now` = trigger angle of the tooth 0 being processed (the rebuild point).
+// An event armed ahead of its target (dwell) whose arming window spans `now`
+// is listed twice: at its natural arming point (serves the next cycle) and
+// at `now` for this cycle's target — the latter matters when the window
+// grew past the rebuild point (accelerating) and the previous table never
+// armed it. The hook drops the duplicate when it had.
+void table_add(int32_t arm, int32_t target, int32_t cycle, int32_t now,
+               uint8_t ch, uint8_t action)
 {
-    const uint64_t tooth_ticks =
-        static_cast<uint64_t>(TOOTH_NS_TO_SCHED_INTERNAL(tooth_period_ns));
-    const uint64_t factor = (cycle_deg == kCycleDeg) ? 120ULL : 60ULL;
-    const uint64_t denom = tooth_ticks * factor;
-    return (denom > 0ULL)
-        ? static_cast<uint32_t>((static_cast<uint64_t>(ticks) * cycle_deg) / denom)
-        : 0U;
+    add_entry(arm, target, cycle, ch, action);
+    if (wrap(target - now, cycle) < wrap(target - arm, cycle)) {
+        add_entry(now, target, cycle, ch, action);
+    }
 }
 
-// Multi-spark timing MS42 — single site for sequential and presync.
-template <typename EmitFn>
-static inline void emit_multispark(uint32_t spark_ang,
-                                   uint32_t cycle_deg,
-                                   uint32_t tooth_period_ns,
-                                   EmitFn emit)
+// One coil + one injector for a cylinder whose TDC is at `tdc` (engine ×10).
+void add_cylinder(uint8_t cyl, int32_t tdc, int32_t cycle, int32_t now, int32_t inj_ref,
+                  int32_t dwell_span, int32_t pw_x10, int32_t trig_off)
 {
-    const uint8_t ms_count = g_mspark_count;
-    if (ms_count == 0U || tooth_period_ns == 0U) {
-        return;
-    }
-    const uint32_t inter_deg =
-        ticks_to_cycle_degrees(g_mspark_inter_dwell_ticks, tooth_period_ns, cycle_deg);
-    const uint32_t step = inter_deg + 1U;
-    const uint32_t window = g_advance_deg + g_mspark_atdc_limit_deg;
-    for (uint8_t n = 1U; n <= ms_count; ++n) {
-        const uint32_t add_spark_off = static_cast<uint32_t>(n) * step;
-        if (add_spark_off >= window) {
-            break;
-        }
-        const uint32_t add_dwell_off = static_cast<uint32_t>(n - 1U) * step + 1U;
-        emit((spark_ang + add_dwell_off) % cycle_deg,
-             (spark_ang + add_spark_off) % cycle_deg);
+    const int32_t adv = g_advance_x10 + static_cast<int32_t>(cyl_ign_trim_deg[cyl]) * 10;
+    const int32_t spark = wrap(tdc - adv - trig_off, cycle);
+    table_add(spark - dwell_span, spark, cycle, now, kIgnCh[cyl], ECU_ACT_DWELL_START);
+    table_add(spark, spark, cycle, now, kIgnCh[cyl], ECU_ACT_SPARK);
+
+    const int32_t eoi = inj_ref - static_cast<int32_t>(g_eoi_lead_deg) * 10 - trig_off;
+    const int32_t soi = wrap(eoi - pw_x10, cycle);
+    table_add(soi, soi, cycle, now, kInjCh[cyl], ECU_ACT_INJ_ON);
+}
+
+void build(const ems::drv::CkpSnapshot& snap, int32_t cycle, bool presync)
+{
+    const int32_t now = (!presync && !snap.phase_A) ? kRevX10 : 0;  // this tooth 0
+    clear_angle_table();
+    const uint32_t tooth_ticks = TOOTH_NS_TO_SCHED_INTERNAL(snap.tooth_period_ns);
+    const int32_t dwell_x10 = ticks_to_x10(g_dwell_ticks, tooth_ticks);
+    // Arm one tooth + 25 % early: the exact start is computed in time.
+    int32_t dwell_span = dwell_x10 + kToothX10 + dwell_x10 / 4;
+    if (dwell_span > kMaxDwellSpanX10) { dwell_span = kMaxDwellSpanX10; }
+    int32_t pw_x10 = ticks_to_x10(g_inj_pw_ticks, tooth_ticks);
+    if (pw_x10 > cycle * 9 / 10) { pw_x10 = cycle * 9 / 10; }
+    const int32_t trig_off =
+        static_cast<int32_t>(cfg::g_eng_cfg.trigger_tooth0_engine_deg) * 10;
+    const bool simultaneous = (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS);
+
+    for (uint8_t cyl = 0U; cyl < cfg::kCylinderCount; ++cyl) {
+        int32_t tdc = static_cast<int32_t>(cfg::cyl_tdc_deg(cyl)) * 10;
+        if (presync) { tdc %= kRevX10; }
+        // Presync: wasted spark (each coil at its own TDC mod 360) and two
+        // openings per cycle; simultaneous mode times all injectors to cyl 0.
+        const int32_t inj_ref = (presync && simultaneous) ? 0 : tdc;
+        add_cylinder(cyl, tdc, cycle, now, inj_ref, dwell_span, pw_x10, trig_off);
     }
 }
+
+}  // namespace
 
 void rebuild_sequential_cycle(const ems::drv::CkpSnapshot& snap)
 {
     static_assert(cfg::kCylinderCount == 4u, "ign/inj channel tables are 4-cyl");
-    const uint8_t* const ign_ch = kIgnCh;
-    const uint8_t* const inj_ch = kInjCh;
-
     g_knock_sequential = 1U;
-    clear_angle_table();
-
-    const uint32_t dwell_deg =
-        ticks_to_cycle_degrees(g_dwell_ticks, snap.tooth_period_ns, kCycleDeg);
-    const uint32_t base_inj_pw_deg =
-        ticks_to_cycle_degrees(g_inj_pw_ticks, snap.tooth_period_ns, kCycleDeg);
-
-    for (uint8_t seq = 0U; seq < cfg::kCylinderCount; ++seq) {
-        const uint8_t cyl = cfg::kFiringOrder[seq];
-        const uint32_t tdc = cfg::cyl_tdc_deg(cyl);
-
-        const int32_t ign_trim = static_cast<int32_t>(cyl_ign_trim_deg[cyl]);
-        const int32_t trimmed_advance = static_cast<int32_t>(g_advance_deg) + ign_trim;
-        const uint32_t eff_advance = (trimmed_advance < 0)
-            ? 0u
-            : static_cast<uint32_t>(trimmed_advance);
-
-        const uint32_t spark = (tdc + kCycleDeg - eff_advance) % kCycleDeg;
-        const uint32_t dwell = (spark + kCycleDeg - dwell_deg) % kCycleDeg;
-        const uint32_t eoi = (tdc + kCycleDeg - g_eoi_lead_deg) % kCycleDeg;
-
-        const int32_t fuel_trim = static_cast<int32_t>(cyl_fuel_trim_pct[cyl]);
-        const int32_t pw_trimmed =
-            static_cast<int32_t>(base_inj_pw_deg) * (100 + fuel_trim) / 100;
-        uint32_t inj_pw = (pw_trimmed < 0) ? 0u : static_cast<uint32_t>(pw_trimmed);
-
-        if (inj_pw > kMaxSeqInjPwDeg) {
-            inj_pw = kMaxSeqInjPwDeg;
-            ++g_pw_duty_clamp_count;
-        }
-
-        const uint32_t inj_on = (eoi + kCycleDeg - inj_pw) % kCycleDeg;
-        const uint32_t inj_off = eoi;
-        uint8_t tooth = 0U, frac = 0U, phase = 0U;
-
-        angle_to_tooth_event(engine_angle_to_trigger_angle(dwell, kCycleDeg),
-                             &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
-        angle_to_tooth_event(engine_angle_to_trigger_angle(spark, kCycleDeg),
-                             &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
-
-        emit_multispark(spark, kCycleDeg, snap.tooth_period_ns,
-            [&](uint32_t add_dwell_ang, uint32_t add_spark_ang) {
-                angle_to_tooth_event(
-                    engine_angle_to_trigger_angle(add_dwell_ang, kCycleDeg),
-                    &tooth, &frac, &phase);
-                table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_DWELL_START);
-                angle_to_tooth_event(
-                    engine_angle_to_trigger_angle(add_spark_ang, kCycleDeg),
-                    &tooth, &frac, &phase);
-                table_add(tooth, frac, phase, ign_ch[cyl], ECU_ACT_SPARK);
-            });
-
-        angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, kCycleDeg),
-                             &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, inj_ch[cyl], ECU_ACT_INJ_ON);
-        angle_to_tooth_event(engine_angle_to_trigger_angle(inj_off, kCycleDeg),
-                             &tooth, &frac, &phase);
-        table_add(tooth, frac, phase, inj_ch[cyl], ECU_ACT_INJ_OFF);
-    }
+    build(snap, static_cast<int32_t>(kCycleDeg * 10U), false);
 }
 
-// Pre-cam (phase unknown): one 360° table repeated every revolution.
-// Ignition = true wasted spark: each coil fires at its own cylinder's TDC
-// modulo 360 (pairs 0↔3 at 0°, 2↔1 at 180°), i.e. once on compression and
-// once on exhaust. Fuel = 2 openings per cycle per injector, matching the
-// main-loop contract (PW per opening sized for 2 squirts):
-//   SEMI_SEQUENTIAL — each injector every rev, timed to its own pair TDC;
-//   SIMULTANEOUS    — all four every rev at the cyl-0/3 reference.
 void rebuild_presync_revolution(const ems::drv::CkpSnapshot& snap)
 {
     g_knock_sequential = 0U;
-    clear_angle_table();
-
-    const uint32_t dwell_deg =
-        ticks_to_cycle_degrees(g_dwell_ticks, snap.tooth_period_ns, 360U);
-    uint32_t inj_pw_deg =
-        ticks_to_cycle_degrees(g_inj_pw_ticks, snap.tooth_period_ns, 360U);
-    if (inj_pw_deg > kMaxPresyncInjPwDeg) {
-        inj_pw_deg = kMaxPresyncInjPwDeg;
-        ++g_pw_duty_clamp_count;
-    }
-    const bool simultaneous = (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS);
-    uint8_t tooth = 0U, frac = 0U, phase = 0U;
-    auto add = [&](uint32_t ang, uint8_t ch, uint8_t action) {
-        angle_to_tooth_event(engine_angle_to_trigger_angle(ang, 360U), &tooth, &frac, &phase);
-        table_add(tooth, frac, ECU_PHASE_ANY, ch, action);
-    };
-
-    for (uint8_t cyl = 0U; cyl < cfg::kCylinderCount; ++cyl) {
-        const uint32_t tdc = cfg::cyl_tdc_deg(cyl) % 360U;
-        const uint32_t spark = (tdc + 360U - (g_advance_deg % 360U)) % 360U;
-        add((spark + 360U - (dwell_deg % 360U)) % 360U, kIgnCh[cyl], ECU_ACT_DWELL_START);
-        add(spark, kIgnCh[cyl], ECU_ACT_SPARK);
-        emit_multispark(spark, 360U, snap.tooth_period_ns,
-            [&](uint32_t add_dwell_ang, uint32_t add_spark_ang) {
-                add(add_dwell_ang, kIgnCh[cyl], ECU_ACT_DWELL_START);
-                add(add_spark_ang, kIgnCh[cyl], ECU_ACT_SPARK);
-            });
-
-        const uint32_t ref = simultaneous ? 0U : tdc;
-        const uint32_t eoi = (ref + 360U - (g_eoi_lead_deg % 360U)) % 360U;
-        add((eoi + 360U - inj_pw_deg) % 360U, kInjCh[cyl], ECU_ACT_INJ_ON);
-        add(eoi, kInjCh[cyl], ECU_ACT_INJ_OFF);
-    }
+    build(snap, kRevX10, true);
 }
 
 }  // namespace ems::engine::sched_internal

@@ -21,8 +21,6 @@ namespace ems::engine::sched_internal {
 
 // ── Clock helpers (same as ecu_sched.cpp) ───────────────────────────────────
 inline constexpr uint32_t kCycleDeg = 720U;
-inline constexpr uint32_t kMaxSeqInjPwDeg = 648U;      // 90% of 720°
-inline constexpr uint32_t kMaxPresyncInjPwDeg = 324U;  // 90% of 360°
 
 #define ECU_SCHED_US_TO_TICKS_INTERNAL(us) ((us) * 125U / 2U)
 #define TOOTH_NS_TO_SCHED_INTERNAL(ns) \
@@ -41,7 +39,7 @@ extern uint32_t g_angle_tooth_mask_lo;
 extern uint32_t g_angle_tooth_mask_hi;
 
 // ── Calibration / mode read by builders (defined in ecu_sched.cpp) ──────────
-extern volatile uint32_t g_advance_deg;
+extern volatile int32_t  g_advance_x10;   // 0.1° BTDC, signed
 extern volatile uint32_t g_dwell_ticks;
 extern volatile uint32_t g_inj_pw_ticks;
 extern volatile uint32_t g_eoi_lead_deg;
@@ -53,6 +51,7 @@ extern volatile uint32_t g_mspark_atdc_limit_deg;
 extern volatile uint32_t g_pw_duty_clamp_count;
 
 // ── Cold builders (ecu_sched_angle.cpp) — called only at rev gap ─────────────
+// Sequential rebuilds every revolution (events carry their 720° phase).
 void clear_angle_table(void);
 void rebuild_sequential_cycle(const ems::drv::CkpSnapshot& snap);
 void rebuild_presync_revolution(const ems::drv::CkpSnapshot& snap);

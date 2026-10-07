@@ -22,7 +22,7 @@ using namespace sim;
 
 namespace {
 
-constexpr int kStage = 1;  // review stage this tree is at
+constexpr int kStage = 2;  // review stage this tree is at
 
 int g_pass = 0, g_fail = 0, g_xfail = 0, g_xpass = 0;
 
@@ -121,6 +121,24 @@ int main()
         check_seq("6500 rpm", run_and_print("6500 rpm", base(6500), 0.8, false), l65);
     }
 
+    // ── EOI far from TDC + long PW: the pulse crosses the 720° cycle origin
+    {
+        Config c = base(3000);
+        c.cmd.eoi_deg = 300.0;
+        c.cmd.fuel_us = 12000.0;   // 216° at 3000 rpm
+        check_seq("EOI 300 long PW", run_and_print("EOI 300, PW 12 ms", c, 0.8, false), Limits{});
+    }
+
+    // ── PW above 90 % of the cycle → clamped, pulses never merge ────────
+    {
+        Config c = base(3000);     // cycle = 40 ms
+        c.cmd.fuel_us = 39000.0;
+        const Metrics m = run_and_print("PW 39 ms (> 90 % duty)", c, 0.8, false);
+        check("duty clamp", "fuel delivered vs 90% cycle (%)",
+              std::fabs((1.0 - m.fuel_err_max_pct / 100.0) * 39000.0 - 36000.0) / 360.0, 0.5);
+        check("duty clamp", "missing+spurious sparks", m.missing + m.spurious, 0);
+    }
+
     // ── Trigger gap region (348..360 trigger deg) ───────────────────────
     {
         Config c = base(800);
@@ -149,10 +167,11 @@ int main()
         c.duration_s = 2.0;
         Limits l;
         l.spark = 0.5;
-        l.xf_dwell = 2; l.xf_fuel = 2; l.xf_count = 2;   // + one spark lost
+        // EOI is a soft target: SOI = EOI − PW angle estimated at the last
+        // table build; the injected quantity itself is exact (PW in time).
+        l.eoi = 2.0;
         check_seq("accel", run_and_print("accel +2667 rpm/s", c, 0.6, false), l);
         c.rpm = {{0.0, 5500.0}, {0.5, 5500.0}, {2.0, 1500.0}};
-        l.xf_count = 0;
         check_seq("decel", run_and_print("decel -2667 rpm/s", c, 0.6, false), l);
     }
 
@@ -182,8 +201,7 @@ int main()
         c.tooth_error_deg = 0.2;
         Limits lm;
         lm.spark = 0.3;     // 0.2 deg wheel error itself + prediction
-        lm.xf_fuel = 2;
-        lm.xf_eoi = 3;      // period prediction amplifies tooth-to-tooth error
+
         check_seq("tooth err 0.2", run_and_print("tooth error +-0.2 deg", c, 0.8, false), lm);
     }
 
