@@ -308,10 +308,10 @@ void test_math_production_tables(void) {
 
     // spark_table[6][6]=19,[6][7]=18,[7][6]=17,[7][7]=16
     //   v0=lerp(19,18,255)=18; v1=lerp(17,16,255)=16; v=lerp(18,16,255)=16
-    CHECK_EQ(get_advance(30000u, 100u), 16,
-             "get_advance(3000RPM,100kPa) = 16\u00b0 (tabela real)");
-    CHECK_EQ(get_advance_prepared(lk), 16,
-             "get_advance_prepared == 16");
+    CHECK_EQ(get_advance_x10(30000u, 100u), 160,
+             "get_advance_x10(3000RPM,100kPa) = 16.0\u00b0 (tabela real)");
+    CHECK_EQ(get_advance_x10_prepared(lk), 160,
+             "get_advance_x10_prepared == 160");
 
     section("MATH: dwell_ms_x10_from_vbatt valor exacto");
     // dwell_vbatt_axis_mv={9000,...,12000,...},dwell_ms_x10={42,...,30,...}

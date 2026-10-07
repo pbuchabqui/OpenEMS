@@ -7,99 +7,72 @@
 namespace {
 
 static uint8_t g_antijerk_cycles_rem = 0u;
-static int16_t g_antijerk_active_deg = 0;
-
-uint16_t normalize_7200(int32_t deg_x10) noexcept {
-    int32_t out = deg_x10 % 7200;
-    if (out < 0) {
-        out += 7200;
-    }
-    return static_cast<uint16_t>(out);
-}
+static int16_t g_antijerk_active_x10 = 0;
 
 }  // namespace
 
 namespace ems::engine {
 
-// Stub fraco: path de produção usa calc_idle_spark_correction_deg().
-// Em EMS_HOST_TEST, etb_control.cpp pode override com trim do float loop.
-#if defined(__GNUC__)
-__attribute__((weak))
-#endif
-int16_t etb_get_idle_spark_trim() noexcept { return 0; }
-
-
-
-int16_t get_advance(uint32_t rpm_x10, uint16_t load_bar_x100) noexcept {
-    return table3d_lookup_i8_prepared(
-        spark_table, table3d_prepare_lookup(kRpmAxisX10, kLoadAxisBarX100, rpm_x10, load_bar_x100));
+int16_t get_advance_x10_prepared(const Table2dLookup& lookup) noexcept {
+    return table3d_lookup_i8_x10_prepared(spark_table, lookup);
 }
 
-int16_t get_advance_prepared(const Table2dLookup& lookup) noexcept {
-    return table3d_lookup_i8_prepared(spark_table, lookup);
+int16_t get_advance_x10(uint32_t rpm_x10, uint16_t load_bar_x100) noexcept {
+    return get_advance_x10_prepared(
+        table3d_prepare_lookup(kRpmAxisX10, kLoadAxisBarX100, rpm_x10, load_bar_x100));
 }
 
-int16_t clamp_advance_deg(int16_t advance_deg) noexcept {
-    // 40° BTDC — margem de octanagem para E30/alta compressão.
-    return clamp_i16(advance_deg, -10, 40);
+int16_t clamp_advance_x10(int32_t advance_x10) noexcept {
+    if (advance_x10 < kAdvanceMinX10) { return kAdvanceMinX10; }
+    if (advance_x10 > kAdvanceMaxX10) { return kAdvanceMaxX10; }
+    return static_cast<int16_t>(advance_x10);
 }
 
-int16_t calc_ign_iat_correction_deg(int16_t iat_x10) noexcept {
+int16_t calc_ign_iat_correction_x10(int16_t iat_x10) noexcept {
     return interp_i16_8pt(iat_spark_axis_x10, iat_spark_corr_deg,
-                          kCorrectionTableSize, iat_x10);
+                          kCorrectionTableSize, iat_x10, 10);
 }
 
-int16_t calc_ign_clt_correction_deg(int16_t clt_x10) noexcept {
+int16_t calc_ign_clt_correction_x10(int16_t clt_x10) noexcept {
     return interp_i16_8pt(clt_spark_axis_x10, clt_spark_corr_deg,
-                          kCorrectionTableSize, clt_x10);
+                          kCorrectionTableSize, clt_x10, 10);
 }
 
-int16_t calc_antijerk_retard_deg(int16_t tpsdot_x10) noexcept {
+int16_t calc_antijerk_retard_x10(int16_t tpsdot_x10) noexcept {
     const int16_t thr = static_cast<int16_t>(antijerk_tpsdot_threshold_x10);
-    const int16_t max_ret = (antijerk_retard_deg < 0) ? 0
-        : (antijerk_retard_deg > 20 ? 20 : antijerk_retard_deg);
+    const int32_t max_ret_x10 = 10 * ((antijerk_retard_deg < 0) ? 0
+        : (antijerk_retard_deg > 20 ? 20 : antijerk_retard_deg));
 
     // Re-arm only on rising tip-in above threshold (not tip-out).
-    if (tpsdot_x10 > thr && g_antijerk_cycles_rem == 0u && max_ret > 0) {
+    if (tpsdot_x10 > thr && g_antijerk_cycles_rem == 0u && max_ret_x10 > 0) {
         // Proportional: full retard at 100 %/s (tpsdot_x10=1000).
-        int32_t ret = (static_cast<int32_t>(tpsdot_x10) * max_ret) / 1000;
-        if (ret < 1) {
-            ret = 1;
-        }
-        if (ret > max_ret) {
-            ret = max_ret;
-        }
-        g_antijerk_active_deg = static_cast<int16_t>(ret);
+        int32_t ret = (static_cast<int32_t>(tpsdot_x10) * max_ret_x10 + 500) / 1000;
+        if (ret < 1) { ret = 1; }
+        if (ret > max_ret_x10) { ret = max_ret_x10; }
+        g_antijerk_active_x10 = static_cast<int16_t>(ret);
         g_antijerk_cycles_rem = (antijerk_decay_cycles == 0u) ? 1u : antijerk_decay_cycles;
     }
 
     if (g_antijerk_cycles_rem > 0u) {
         --g_antijerk_cycles_rem;
-        return g_antijerk_active_deg;
+        return g_antijerk_active_x10;
     }
-    g_antijerk_active_deg = 0;
+    g_antijerk_active_x10 = 0;
     return 0;
 }
 
 void antijerk_reset() noexcept {
     g_antijerk_cycles_rem = 0u;
-    g_antijerk_active_deg = 0;
+    g_antijerk_active_x10 = 0;
 }
 
-int16_t calc_total_advance(int16_t base_advance_deg,
-                           AdvanceCorrections corr) noexcept {
-    const int32_t total = static_cast<int32_t>(base_advance_deg)
-        + corr.iat_deg
-        + corr.clt_deg
-        + corr.idle_spark_deg
-        - corr.knock_retard_deg
-        - corr.antijerk_retard_deg
-        - corr.torque_retard_deg;
-    return clamp_advance_deg(static_cast<int16_t>(
-        total < -32768 ? -32768 : total > 32767 ? 32767 : total));
+int16_t calc_total_advance_x10(int16_t base_x10, AdvanceCorrectionsX10 corr) noexcept {
+    return clamp_advance_x10(static_cast<int32_t>(base_x10)
+        + corr.iat + corr.clt + corr.idle
+        - corr.antijerk_retard - corr.torque_retard);
 }
 
-int16_t calc_idle_spark_correction_deg(uint32_t rpm_x10,
+int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,
                                        uint16_t idle_target_rpm_x10,
                                        uint16_t tps_pct_x10,
                                        uint16_t map_bar_x100) noexcept {
@@ -125,10 +98,11 @@ int16_t calc_idle_spark_correction_deg(uint32_t rpm_x10,
         error_x10 += deadband;
     }
 
-    const int32_t corr = error_x10 / static_cast<int32_t>(idle_spark_rpm_per_deg_x10);
-    return clamp_i16(static_cast<int16_t>(corr),
-                     idle_spark_retard_limit_deg,
-                     idle_spark_advance_limit_deg);
+    // Proportional gain in 0.1°: error (rpm×10) × 10 / (rpm×10 per degree).
+    const int32_t corr_x10 = (error_x10 * 10) / static_cast<int32_t>(idle_spark_rpm_per_deg_x10);
+    const int32_t lo = static_cast<int32_t>(idle_spark_retard_limit_deg) * 10;
+    const int32_t hi = static_cast<int32_t>(idle_spark_advance_limit_deg) * 10;
+    return static_cast<int16_t>(corr_x10 < lo ? lo : (corr_x10 > hi ? hi : corr_x10));
 }
 
 uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv) noexcept {
@@ -149,33 +123,6 @@ uint16_t dwell_ms_x10_from_vbatt_rpm(uint16_t vbatt_mv, uint32_t rpm_x10) noexce
     // base × factor / 256, arredondado
     const uint32_t result = (static_cast<uint32_t>(base) * factor + 128u) / 256u;
     return static_cast<uint16_t>(result > 65535u ? 65535u : result);
-}
-
-uint16_t calc_dwell_angle_x10(uint16_t dwell_ms_x10, uint16_t rpm) noexcept {
-    // max intermediate: 420×8000×36 = 120M, fits uint32
-    const uint32_t num = static_cast<uint32_t>(dwell_ms_x10) * rpm * 36u;
-    const uint32_t raw = num / 6000u;
-    return static_cast<uint16_t>(raw > 3599u ? 3599u : raw);
-}
-
-int32_t calc_dwell_start_deg_x10(int16_t spark_deg_x10,
-                                 uint16_t dwell_ms_x10,
-                                 uint16_t rpm) noexcept {
-    const uint16_t dwell_angle_x10 = calc_dwell_angle_x10(dwell_ms_x10, rpm);
-    return static_cast<int32_t>(spark_deg_x10) + dwell_angle_x10;
-}
-
-IgnScheduleParams build_ign_schedule(uint8_t cyl,
-                                     int16_t spark_deg_x10,
-                                     uint16_t dwell_ms_x10,
-                                     uint16_t rpm) noexcept {
-    const int32_t dwell_start = calc_dwell_start_deg_x10(spark_deg_x10, dwell_ms_x10, rpm);
-
-    IgnScheduleParams out{};
-    out.cyl = static_cast<uint8_t>(cyl & 0x3u);
-    out.spark_x10 = normalize_7200(spark_deg_x10);
-    out.dwell_start_x10 = normalize_7200(dwell_start);
-    return out;
 }
 
 uint32_t inj_pw_us_to_scheduler_ticks(uint32_t pw_us) noexcept {

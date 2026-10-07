@@ -31,6 +31,7 @@ struct Command {
     double fuel_us     = 2500.0;  // effective (flow) injector open time per cycle per cylinder
     double dead_us     = 0.0;     // injector dead time added per opening
     double eoi_deg     = 355.0;   // end of injection, deg BTDC of combustion TDC
+    double cyl_retard_deg[4] = {0.0, 0.0, 0.0, 0.0};  // knock retard per cylinder
 };
 
 struct Config {

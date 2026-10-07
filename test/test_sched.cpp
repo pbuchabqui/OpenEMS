@@ -55,14 +55,14 @@ void test_ecu_sched_setters(void) {
     ecu_sched_test_reset();
 
     // Defaults after reset: advance=10, dwell=140625, inj_pw=140625, eoi=355
-    CHECK_EQ(ecu_sched_test_get_advance_deg(),  10u, "default advance=10°");
+    CHECK_EQ(ecu_sched_test_get_advance_x10(), 100, "default advance=10.0°");
     CHECK_EQ(ecu_sched_test_get_dwell_ticks(), 140625u, "default dwell=140625");
     CHECK_EQ(ecu_sched_test_get_inj_pw_ticks(), 140625u, "default inj_pw=140625");
     CHECK_EQ(ecu_sched_test_get_eoi_lead_deg(), 355u, "default eoi=355° (open-valve)");
 
     // Individual setters
-    ecu_sched_set_advance_deg(20u);
-    CHECK_EQ(ecu_sched_test_get_advance_deg(), 20u, "set_advance_deg(20)");
+    ecu_sched_set_advance_x10(-35);
+    CHECK_EQ(ecu_sched_test_get_advance_x10(), -35, "set_advance_x10(-3.5°) keeps sign and tenth");
 
     ecu_sched_set_dwell_ticks(30000u);
     CHECK_EQ(ecu_sched_test_get_dwell_ticks(), 30000u, "set_dwell_ticks(187500)");
@@ -74,15 +74,15 @@ void test_ecu_sched_setters(void) {
     CHECK_EQ(ecu_sched_test_get_eoi_lead_deg(), 50u, "set_eoi_lead_deg(50)");
 
     // commit_calibration sets all four atomically
-    ecu_sched_commit_calibration(25u, 25000u, 18000u, 55u);
-    CHECK_EQ(ecu_sched_test_get_advance_deg(),   25u, "commit: advance=25");
+    ecu_sched_commit_calibration_x10(253, 25000u, 18000u, 55u);
+    CHECK_EQ(ecu_sched_test_get_advance_x10(), 253, "commit: advance=25.3°");
     CHECK_EQ(ecu_sched_test_get_dwell_ticks(),  25000u, "commit: dwell=25000");
     CHECK_EQ(ecu_sched_test_get_inj_pw_ticks(), 18000u, "commit: inj_pw=18000");
     CHECK_EQ(ecu_sched_test_get_eoi_lead_deg(),  55u, "commit: eoi=55");
 
     // Calibration clamp: advance > 719 → clamped
-    ecu_sched_set_advance_deg(800u);
-    CHECK_TRUE(ecu_sched_test_get_advance_deg() <= 719u, "advance > 720 → clamped");
+    ecu_sched_set_advance_x10(800);
+    CHECK_EQ(ecu_sched_test_get_advance_x10(), 600, "advance > 60° → clamped to 60°");
     CHECK_EQ(ecu_sched_test_get_calibration_clamp_count(), 1u, "clamp count=1");
 
     // reset_diagnostic_counters
@@ -94,7 +94,7 @@ void test_ecu_sched_setters(void) {
 void test_ecu_sched_angle_table(void) {
     section("ecu_sched: schedule_on_tooth populates angle table in FULL_SYNC");
     ecu_sched_test_reset();
-    ecu_sched_set_advance_deg(15u);
+    ecu_sched_set_advance_x10(150);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_eoi_lead_deg(60u);
@@ -452,7 +452,7 @@ void test_ecu_sched_ccr_write(void) {
     // TIM1 CCRs are no longer written by arm_channel.
     // Verify: after firing 13 teeth, at least one event is in the TIM5 queue.
     ecu_sched_test_reset();
-    ecu_sched_set_advance_deg(15u);
+    ecu_sched_set_advance_x10(150);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_eoi_lead_deg(60u);
@@ -475,7 +475,7 @@ void test_ecu_sched_late_events(void) {
     // of being rejected. The old g_late_event_count path is no longer reached.
     // Verify: with advance=0 (delta≈0 at tooth 0), events still reach the queue.
     ecu_sched_test_reset();
-    ecu_sched_set_advance_deg(0u);
+    ecu_sched_set_advance_x10(0);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_eoi_lead_deg(60u);
@@ -577,7 +577,7 @@ void test_ecu_sched_golden_seq_angle_table_size(void) {
     // point + rebuild point; the hook de-duplicates) → 4..8 DWELL entries.
     ecu_sched_test_reset();
     ecu_sched_set_mspark(0u, 0u, 18u);
-    ecu_sched_set_advance_deg(15u);
+    ecu_sched_set_advance_x10(150);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_eoi_lead_deg(60u);
@@ -610,7 +610,7 @@ void test_ecu_sched_mspark_angle_table_margin(void) {
     section("ecu_sched: multi-spark queues extra dwell/spark pairs");
     ecu_sched_test_reset();
     ecu_sched_set_mspark(2u, 1000u, 18u);  // 2 extras, short inter-dwell
-    ecu_sched_set_advance_deg(30u);        // window = 30+18 = 48°
+    ecu_sched_set_advance_x10(300);        // window = 30+18 = 48°
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_eoi_lead_deg(60u);
@@ -727,7 +727,7 @@ void test_ecu_sched_presync_table(void) {
     // Rev boundary is tooth_index reset by an accepted gap (not a phantom wrap
     // past 57). With no CMP, FULL_SYNC still uses presync / wasted builders.
     ecu_sched_test_reset();
-    ecu_sched_set_advance_deg(10u);
+    ecu_sched_set_advance_x10(100);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_eoi_lead_deg(60u);

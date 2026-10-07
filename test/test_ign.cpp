@@ -51,24 +51,25 @@ using namespace ems::app;
 using namespace ems::hal;
 
 void test_ign_iat_correction(void) {
-    section("ign_calc: calc_ign_iat_correction_deg");
-    CHECK_EQ(calc_ign_iat_correction_deg(-200),  2,  "IAT=-20°C → +2°");
-    CHECK_EQ(calc_ign_iat_correction_deg(0),     1,  "IAT=0°C → +1°");
-    CHECK_EQ(calc_ign_iat_correction_deg(200),   0,  "IAT=20°C → 0° (ref)");
-    CHECK_EQ(calc_ign_iat_correction_deg(400),  -1,  "IAT=40°C → -1°");
-    CHECK_EQ(calc_ign_iat_correction_deg(800),  -5,  "IAT=80°C → -5°");
-    CHECK_EQ(calc_ign_iat_correction_deg(1000), -5,  "IAT=100°C → clamped -5°");
+    section("ign_calc: calc_ign_iat_correction_x10");
+    CHECK_EQ(calc_ign_iat_correction_x10(-200),  20, "IAT=-20°C → +2.0°");
+    CHECK_EQ(calc_ign_iat_correction_x10(0),     10, "IAT=0°C → +1.0°");
+    CHECK_EQ(calc_ign_iat_correction_x10(100),    5, "IAT=10°C → +0.5° (between nodes, no truncation)");
+    CHECK_EQ(calc_ign_iat_correction_x10(200),    0, "IAT=20°C → 0 (ref)");
+    CHECK_EQ(calc_ign_iat_correction_x10(400),  -10, "IAT=40°C → -1.0°");
+    CHECK_EQ(calc_ign_iat_correction_x10(800),  -50, "IAT=80°C → -5.0°");
+    CHECK_EQ(calc_ign_iat_correction_x10(1000), -50, "IAT=100°C → clamped -5.0°");
 }
 
 void test_ign_clt_correction(void) {
-    section("ign_calc: calc_ign_clt_correction_deg");
-    CHECK_EQ(calc_ign_clt_correction_deg(-400), 0,  "CLT=-40°C → 0°");
-    CHECK_EQ(calc_ign_clt_correction_deg(200),  -8, "CLT=20°C → -8° (cat warm-up)");
-    CHECK_EQ(calc_ign_clt_correction_deg(600),  0,  "CLT=60°C → 0°");
+    section("ign_calc: calc_ign_clt_correction_x10");
+    CHECK_EQ(calc_ign_clt_correction_x10(-400), 0,   "CLT=-40°C → 0");
+    CHECK_EQ(calc_ign_clt_correction_x10(200),  -80, "CLT=20°C → -8.0° (cat warm-up)");
+    CHECK_EQ(calc_ign_clt_correction_x10(600),  0,   "CLT=60°C → 0");
 }
 
 void test_ign_antijerk(void) {
-    section("ign_calc: calc_antijerk_retard_deg");
+    section("ign_calc: calc_antijerk_retard_x10");
     antijerk_reset();
     const uint16_t saved_thr = antijerk_tpsdot_threshold_x10;
     const int16_t saved_ret = antijerk_retard_deg;
@@ -77,18 +78,17 @@ void test_ign_antijerk(void) {
     antijerk_retard_deg = 5;
     antijerk_decay_cycles = 4u;
 
-    CHECK_EQ(calc_antijerk_retard_deg(static_cast<int16_t>(0)), 0, "tpsdot=0 → 0");
-    CHECK_EQ(calc_antijerk_retard_deg(static_cast<int16_t>(20)), 0, "below threshold → 0");
-    // 1000 ×5 /1000 = 5°
-    CHECK_EQ(calc_antijerk_retard_deg(static_cast<int16_t>(1000)), 5, "full tip-in → max 5°");
+    CHECK_EQ(calc_antijerk_retard_x10(static_cast<int16_t>(0)), 0, "tpsdot=0 → 0");
+    CHECK_EQ(calc_antijerk_retard_x10(static_cast<int16_t>(20)), 0, "below threshold → 0");
+    CHECK_EQ(calc_antijerk_retard_x10(static_cast<int16_t>(1000)), 50, "full tip-in → max 5.0°");
     antijerk_reset();
-    // 200 ×5 /1000 = 1°
-    CHECK_EQ(calc_antijerk_retard_deg(static_cast<int16_t>(200)), 1, "mild tip-in → 1°");
+    // 300 %/s×10 of 1000 → 30 % of 5° = 1.5° (whole degrees gave 1°)
+    CHECK_EQ(calc_antijerk_retard_x10(static_cast<int16_t>(300)), 15, "mild tip-in → 1.5°");
     // Decay: armed for 4 cycles (including arm tick), then zeros
-    calc_antijerk_retard_deg(static_cast<int16_t>(0));
-    calc_antijerk_retard_deg(static_cast<int16_t>(0));
-    calc_antijerk_retard_deg(static_cast<int16_t>(0));
-    CHECK_EQ(calc_antijerk_retard_deg(static_cast<int16_t>(0)), 0, "decays to 0 after decay_cycles");
+    calc_antijerk_retard_x10(static_cast<int16_t>(0));
+    calc_antijerk_retard_x10(static_cast<int16_t>(0));
+    calc_antijerk_retard_x10(static_cast<int16_t>(0));
+    CHECK_EQ(calc_antijerk_retard_x10(static_cast<int16_t>(0)), 0, "decays to 0 after decay_cycles");
 
     antijerk_tpsdot_threshold_x10 = saved_thr;
     antijerk_retard_deg = saved_ret;
@@ -97,35 +97,27 @@ void test_ign_antijerk(void) {
 }
 
 void test_ign_clamp_and_total_advance(void) {
-    section("ign_calc: clamp_advance_deg / calc_total_advance");
-    CHECK_EQ(clamp_advance_deg(40),  40,  "40° at max");
-    CHECK_EQ(clamp_advance_deg(50),  40,  "50° clamped to 40°");
-    CHECK_EQ(clamp_advance_deg(-10), -10, "-10° at min");
-    CHECK_EQ(clamp_advance_deg(-15), -10, "-15° clamped to -10°");
-    AdvanceCorrections c{};
-    CHECK_EQ(calc_total_advance(25, c), 25, "base=25 no corr → 25");
-    c.iat_deg = -3;
-    CHECK_EQ(calc_total_advance(25, c), 22, "iat=-3 → 22");
-    c = {}; c.clt_deg = -8; c.knock_retard_deg = 5;
-    CHECK_EQ(calc_total_advance(25, c), 12, "clt=-8 knock=5 → 12");
-    c = {}; c.idle_spark_deg = 5;
-    CHECK_EQ(calc_total_advance(15, c), 20, "idle_spark=+5 → 20");
+    section("ign_calc: clamp_advance_x10 / calc_total_advance_x10");
+    CHECK_EQ(clamp_advance_x10(600),  600,  "60.0° at max");
+    CHECK_EQ(clamp_advance_x10(615),  600,  "61.5° clamped to 60.0°");
+    CHECK_EQ(clamp_advance_x10(-200), -200, "-20.0° at min");
+    CHECK_EQ(clamp_advance_x10(-215), -200, "-21.5° clamped to -20.0°");
+    AdvanceCorrectionsX10 c{};
+    CHECK_EQ(calc_total_advance_x10(253, c), 253, "base=25.3 no corr → 25.3");
+    c.iat = -35;
+    CHECK_EQ(calc_total_advance_x10(253, c), 218, "iat=-3.5 → 21.8");
+    c = {}; c.clt = -80; c.antijerk_retard = 15;
+    CHECK_EQ(calc_total_advance_x10(250, c), 155, "clt=-8 antijerk=1.5 → 15.5");
+    c = {}; c.idle = 50; c.torque_retard = 20;
+    CHECK_EQ(calc_total_advance_x10(150, c), 180, "idle=+5 torque=2 → 18.0");
+    c = {}; c.clt = -400;
+    CHECK_EQ(calc_total_advance_x10(50, c), -200, "after-TDC result clamped at -20.0");
 }
 
 void test_ign_dwell(void) {
-    section("ign_calc: dwell_ms_x10_from_vbatt / calc_dwell_angle_x10 / build_ign_schedule");
+    section("ign_calc: dwell_ms_x10_from_vbatt / inj_pw_us_to_scheduler_ticks");
     CHECK_NEAR(static_cast<float>(dwell_ms_x10_from_vbatt(12000u)), 30.0f, 5.0f, "dwell@12V≈3.0ms");
     CHECK_TRUE(dwell_ms_x10_from_vbatt(9000u) > dwell_ms_x10_from_vbatt(14000u), "monotonic dwell");
-    // angle: dwell=30 x10 @ 3000 RPM = 30×3000×36/6000 = 540
-    CHECK_EQ(calc_dwell_angle_x10(30u, 3000u), 540u,  "3ms@3000RPM=54.0°");
-    CHECK_EQ(calc_dwell_angle_x10(30u, 6000u), 1080u, "3ms@6000RPM=108.0°");
-    CHECK_EQ(calc_dwell_angle_x10(420u, 8000u), 3599u, "capped at 359.9°");
-    // dwell_start = spark + dwell_angle
-    CHECK_EQ(calc_dwell_start_deg_x10(300, 30u, 3000u), 840, "dwell_start=300+540=840");
-    // build schedule
-    const IgnScheduleParams p = build_ign_schedule(0u, 250, 30u, 3000u);
-    CHECK_EQ(p.cyl, 0u, "cyl=0"); CHECK_EQ(p.spark_x10, 250u, "spark=250"); CHECK_EQ(p.dwell_start_x10, 790u, "dwell_start=790");
-    CHECK_EQ(build_ign_schedule(5u, 100, 30u, 3000u).cyl, 1u, "cyl=5 masked to 1");
     CHECK_EQ(inj_pw_us_to_scheduler_ticks(1000u), 62500u, "1000µs = 62500 ticks (16 ns)");
     CHECK_EQ(inj_pw_us_to_scheduler_ticks(0u), 0u, "0µs→0");
 }
@@ -135,21 +127,25 @@ void test_ign_dwell(void) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 void test_ign_get_advance(void) {
-    section("ign_calc: get_advance / get_advance_prepared");
-
-    // spark_table is int8_t — values depend on defaults. Just verify consistency.
-    const int16_t adv = get_advance(30000u, 100u);  // 3000 RPM, 100 kPa
-    CHECK_TRUE(adv >= -40 && adv <= 80, "get_advance in plausible range [-40,80]°");
-
-    // Prepared path must match
-    const Table2dLookup lk = table3d_prepare_lookup(kRpmAxisX10, kLoadAxisBarX100, 30000u, 100u);
-    const int16_t adv_prep = get_advance_prepared(lk);
-    CHECK_EQ(adv, adv_prep, "get_advance_prepared == get_advance for same point");
-
-    // Axis clamping: below min axis → uses first cell
-    const int16_t adv_lo = get_advance(100u, 10u);   // below all axis values
-    const int16_t adv_lo2 = get_advance(4999u, 19u); // just below first axis point
-    CHECK_EQ(adv_lo, adv_lo2, "below-axis values both clamp to first cell");
+    section("ign_calc: get_advance_x10 interpolates the table at 0.1°");
+    static int8_t saved[kTableAxisSize][kTableAxisSize];
+    std::memcpy(saved, spark_table, sizeof(saved));
+    // Two adjacent RPM cells 20° and 25°: halfway must be 22.5° (whole-degree
+    // pipeline gave 22°).
+    for (uint8_t y = 0u; y < kTableAxisSize; ++y) {
+        for (uint8_t x = 0u; x < kTableAxisSize; ++x) {
+            spark_table[y][x] = static_cast<int8_t>(x < 1u ? 20 : 25);
+        }
+    }
+    const uint32_t mid = (kRpmAxisX10[0] + kRpmAxisX10[1]) / 2u;
+    CHECK_EQ(get_advance_x10(mid, 100u), 225, "midpoint 20..25° → 22.5°");
+    const Table2dLookup lk = table3d_prepare_lookup(kRpmAxisX10, kLoadAxisBarX100, mid, 100u);
+    CHECK_EQ(get_advance_x10_prepared(lk), 225, "prepared == direct");
+    CHECK_EQ(get_advance_x10(100u, 10u), 200, "below axis → first cell 20.0°");
+    // Negative (after TDC) cells survive.
+    spark_table[0][0] = -5; spark_table[1][0] = -5;
+    CHECK_EQ(get_advance_x10(kRpmAxisX10[0], kLoadAxisBarX100[0]), -50, "cell -5° → -5.0°");
+    std::memcpy(spark_table, saved, sizeof(saved));
 }
 
 void test_ign_dwell_vbatt_rpm(void) {
@@ -169,7 +165,7 @@ void test_ign_dwell_vbatt_rpm(void) {
 }
 
 void test_ign_idle_spark_correction(void) {
-    section("ign_calc: calc_idle_spark_correction_deg");
+    section("ign_calc: calc_idle_spark_correction_x10");
 
     // Calibration defaults:
     //   idle_spark_tps_max_x10=25, idle_spark_map_max_bar_x100=80
@@ -178,30 +174,30 @@ void test_ign_idle_spark_correction(void) {
     //   retard_limit=-8, advance_limit=12
 
     // Conditions NOT met: TPS too high
-    CHECK_EQ(calc_idle_spark_correction_deg(8500u, 8500u, 30u, 60u), 0,
+    CHECK_EQ(calc_idle_spark_correction_x10(8500u, 8500u, 30u, 60u), 0,
              "tps > max → 0");
 
     // Conditions NOT met: MAP too high
-    CHECK_EQ(calc_idle_spark_correction_deg(8500u, 8500u, 0u, 90u), 0,
+    CHECK_EQ(calc_idle_spark_correction_x10(8500u, 8500u, 0u, 90u), 0,
              "map > max → 0");
 
     // Within deadband: error=0 < 500
-    CHECK_EQ(calc_idle_spark_correction_deg(8500u, 8500u, 0u, 60u), 0,
+    CHECK_EQ(calc_idle_spark_correction_x10(8500u, 8500u, 0u, 60u), 0,
              "rpm == target (within deadband) → 0");
 
     // Below target by 1500 x10 (150 RPM): error=1500, -deadband=1000 → corr=1000/500=2° advance
-    const int16_t corr_low = calc_idle_spark_correction_deg(7000u, 8500u, 0u, 60u);
-    CHECK_EQ(corr_low, 2, "150 RPM below target → +2° advance");
+    const int16_t corr_low = calc_idle_spark_correction_x10(7000u, 8500u, 0u, 60u);
+    CHECK_EQ(corr_low, 20, "150 RPM below target → +2.0° advance");
 
     // Above target by 1500 x10: error=-1500, +deadband=-1000 → corr=-1000/500=-2° retard
-    const int16_t corr_high = calc_idle_spark_correction_deg(10000u, 8500u, 0u, 60u);
-    CHECK_EQ(corr_high, -2, "150 RPM above target → -2° retard");
+    const int16_t corr_high = calc_idle_spark_correction_x10(10000u, 8500u, 0u, 60u);
+    CHECK_EQ(corr_high, -20, "150 RPM above target → -2.0° retard");
 
     // Advance clamped at advance_limit=12: need idle_target big enough so
     // rpm (>= rpm_min=5000) still has error > deadband + 12*rpm_per_deg (=6500).
     // Use idle_target=20000, rpm=5000: error=15000, -deadband=14500 → 29° → clamped at 12.
-    const int16_t corr_clamp = calc_idle_spark_correction_deg(5000u, 20000u, 0u, 60u);
-    CHECK_EQ(corr_clamp, 12, "large underspeed (5000 vs target 20000) → clamped at +12°");
+    const int16_t corr_clamp = calc_idle_spark_correction_x10(5000u, 20000u, 0u, 60u);
+    CHECK_EQ(corr_clamp, 120, "large underspeed (5000 vs target 20000) → clamped at +12.0°");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

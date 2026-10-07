@@ -104,6 +104,7 @@ volatile uint8_t  g_mspark_count            = 0U;
 volatile uint32_t g_mspark_inter_dwell_ticks = 0U;
 volatile uint32_t g_mspark_atdc_limit_deg    = 18U;
 volatile int32_t  g_advance_x10 = 100;
+volatile int16_t  g_cyl_retard_x10[4] = {0, 0, 0, 0};
 volatile uint32_t g_dwell_ticks = 187500U;  // 3 ms @ 62.5 MHz
 // Default 0 until first main commit — avoids angular fuel with default PW
 // between first CKP edges and the first 2 ms policy tick (inhibit may still be 0).
@@ -378,7 +379,7 @@ static void sanitize_runtime_calibration(void)
     uint8_t clamped = 0U;
     if (si::g_advance_x10 > 600) { si::g_advance_x10 = 600; clamped = 1U; }
     if (si::g_advance_x10 < -200) { si::g_advance_x10 = -200; clamped = 1U; }
-    // Clamps em ticks TIM5 (62.5 MHz): 100000 ticks ≈ 1.6ms dwell máx
+    // Dwell ≤ 10 ms (625000 ticks de 16 ns).
     if (si::g_dwell_ticks > 625000U) { si::g_dwell_ticks = 625000U; clamped = 1U; }
     // 100 ms absolute (same as fuel_calc); per-cycle duty is clamped at arm time.
     if (si::g_inj_pw_ticks > 6250000U) { si::g_inj_pw_ticks = 6250000U; clamped = 1U; }
@@ -567,12 +568,14 @@ void ecu_sched_commit_calibration_x10(int32_t advance_x10, uint32_t dwell_ticks,
     si::g_eoi_lead_deg = eoi_lead_deg;
     sanitize_runtime_calibration();
 }
-void ecu_sched_commit_calibration(uint32_t advance_deg, uint32_t dwell_ticks, uint32_t inj_pw_ticks, uint32_t eoi_lead_deg)
+void ecu_sched_set_advance_x10(int32_t advance_x10) { ems::hal::CriticalSectionGuard guard; si::g_advance_x10 = advance_x10; sanitize_runtime_calibration(); }
+void ecu_sched_set_cyl_retard_x10(const uint16_t retard_x10[4])
 {
-    const int32_t adv_x10 = (advance_deg > 600U) ? 6000 : static_cast<int32_t>(advance_deg) * 10;
-    ecu_sched_commit_calibration_x10(adv_x10, dwell_ticks, inj_pw_ticks, eoi_lead_deg);
+    ems::hal::CriticalSectionGuard guard;
+    for (uint8_t i = 0U; i < 4U; ++i) {
+        si::g_cyl_retard_x10[i] = (retard_x10[i] > 300U) ? 300 : static_cast<int16_t>(retard_x10[i]);
+    }
 }
-void ecu_sched_set_advance_deg(uint32_t adv) { ems::hal::CriticalSectionGuard guard; si::g_advance_x10 = (adv > 600U) ? 6000 : static_cast<int32_t>(adv) * 10; sanitize_runtime_calibration(); }
 void ecu_sched_set_dwell_ticks(uint32_t dwell) { ems::hal::CriticalSectionGuard guard; si::g_dwell_ticks = dwell; sanitize_runtime_calibration(); }
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { ems::hal::CriticalSectionGuard guard; if (g_inj_pw_override == 0U) { si::g_inj_pw_ticks = pw_ticks; } sanitize_runtime_calibration(); }
 void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ems::hal::CriticalSectionGuard guard; si::g_eoi_lead_deg = eoi_lead_deg; sanitize_runtime_calibration(); }
@@ -963,6 +966,7 @@ void ecu_sched_test_reset(void)
     g_presync_enable = 1U; g_presync_inj_auto = 0U; si::g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
     g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U;
     forget_armed_targets();
+    for (uint8_t i = 0U; i < 4U; ++i) { si::g_cyl_retard_x10[i] = 0; }
     si::g_advance_x10 = 100; si::g_dwell_ticks = 140625U; si::g_inj_pw_ticks = 140625U; si::g_eoi_lead_deg = 355U;
     si::g_angle_table_count = 0U; si::g_angle_tooth_mask_lo = 0U; si::g_angle_tooth_mask_hi = 0U;
     si::g_pw_duty_clamp_count = 0U;
@@ -992,11 +996,10 @@ uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint16_t *
     if (index >= si::g_angle_table_count) { return 0U; }
     *tooth = si::g_angle_table[index].tooth_index; *offset_x256 = si::g_angle_table[index].offset_x256; *ch = si::g_angle_table[index].channel; *action = si::g_angle_table[index].action; *phase = si::g_angle_table[index].phase_A; return 1U;
 }
-void ecu_sched_test_set_advance_deg(uint32_t adv) { ecu_sched_set_advance_deg(adv); }
 void ecu_sched_test_set_dwell_ticks(uint32_t dwell) { ecu_sched_set_dwell_ticks(dwell); }
 void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks) { ecu_sched_set_inj_pw_ticks(pw_ticks); }
 void ecu_sched_test_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ecu_sched_set_eoi_lead_deg(eoi_lead_deg); }
-uint32_t ecu_sched_test_get_advance_deg(void) { return (si::g_advance_x10 < 0) ? 0U : (uint32_t)(si::g_advance_x10 / 10); }
+int32_t ecu_sched_test_get_advance_x10(void) { return si::g_advance_x10; }
 uint32_t ecu_sched_test_get_dwell_ticks(void) { return si::g_dwell_ticks; }
 uint32_t ecu_sched_test_get_inj_pw_ticks(void) { return si::g_inj_pw_ticks; }
 uint32_t ecu_sched_test_get_eoi_lead_deg(void) { return si::g_eoi_lead_deg; }

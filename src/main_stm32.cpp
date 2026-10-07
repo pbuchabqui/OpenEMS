@@ -227,12 +227,20 @@ static uint32_t inj_finish_pw(uint32_t flow_us, uint8_t squirts, uint16_t dead_u
         ems::engine::inj_pulse_pw_us(scurve_pw_us, dead_us, squirts));
 }
 
-static void commit_sched(int16_t spark_deg, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
+static void commit_sched(int16_t spark_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
                          const ems::drv::CkpSnapshot& snap,
                          const ems::drv::SensorData& sensors) noexcept {
-    g_last_advance_deg = clamp_i8(spark_deg, -10, 40);
-    ::ecu_sched_commit_calibration(
-        static_cast<uint32_t>(spark_deg < 0 ? 0 : spark_deg),
+    // Telemetry keeps whole degrees (rounded); the scheduler gets 0.1°.
+    const int16_t deg = static_cast<int16_t>((spark_x10 + (spark_x10 >= 0 ? 5 : -5)) / 10);
+    g_last_advance_deg = clamp_i8(deg, -20, 60);
+    // Knock retard is per cylinder (each coil retards on its own).
+    uint16_t knock_x10[4];
+    for (uint8_t c = 0u; c < 4u; ++c) {
+        knock_x10[c] = ems::engine::knock_get_retard_x10(c);
+    }
+    ::ecu_sched_set_cyl_retard_x10(knock_x10);
+    ::ecu_sched_commit_calibration_x10(
+        spark_x10,
         dwell_ticks,
         inj_pw_ticks,
         static_cast<uint32_t>(ems::engine::calc_eoi_lead_deg(
@@ -868,44 +876,26 @@ int main() {
                 if (!decel_cut_active) {
                     ems::engine::fuel_ae_notify_pulse(ae_pw_us);
                 }
-                const int16_t base_advance_deg = ems::engine::get_advance_prepared(fuel_lookup);
-                // Máximo entre os 4 cilindros, não só o cilindro 0 (FIX:
-                // knock_retard_x10[] é genuinamente por cilindro, mas este
-                // valor é aplicado como escalar único e partilhado a todos
-                // os cilindros abaixo — máximo é a escolha conservadora,
-                // nunca sub-retarda o cilindro que mais precisa. Retard
-                // verdadeiramente por cilindro precisa de infra-estrutura
-                // nova que não existe hoje — ver AdvanceCorrections/
-                // calc_total_advance, escalar único, fora de escopo aqui).
-                uint16_t knock_retard_x10 = 0u;
-                for (uint8_t kc = 0u; kc < 4u; ++kc) {
-                    const uint16_t r = ems::engine::knock_get_retard_x10(kc);
-                    if (r > knock_retard_x10) { knock_retard_x10 = r; }
-                }
+                const int16_t base_advance_x10 =
+                    ems::engine::get_advance_x10_prepared(fuel_lookup);
                 const uint16_t idle_target_rpm_x10 =
                     ems::engine::auxiliaries_idle_target_rpm_x10(sensors.clt_degc_x10);
-                // Idle spark OK during afterstart (helps settle); suppressed only while cranking.
-                const int16_t idle_spark_corr_deg = qc.cranking ? 0 :
-                    ems::engine::calc_idle_spark_correction_deg(snap.rpm_x10,
-                                                                idle_target_rpm_x10,
-                                                                sensors.app_pct_x10,
-                                                                map_bar_x100);
-                const int16_t iat_spark_deg = qc.cranking ? 0 :
-                    ems::engine::calc_ign_iat_correction_deg(sensors.iat_degc_x10);
-                const int16_t clt_spark_deg = qc.cranking ? 0 :
-                    ems::engine::calc_ign_clt_correction_deg(sensors.clt_degc_x10);
-                const int16_t antijerk_retard = crank_or_ase ? 0 :
-                    ems::engine::calc_antijerk_retard_deg(ae_tpsdot);
-                const int16_t advance_deg = ems::engine::calc_total_advance(
-                    base_advance_deg,
-                    {iat_spark_deg, clt_spark_deg,
-                     static_cast<int16_t>(knock_retard_x10 / 10u),
-                     idle_spark_corr_deg, antijerk_retard,
-                     g_torque_spark_retard_deg});
-                // Cranking spark from qc (base was 0 at update); else table+corr.
-                const int16_t sched_spark_deg = qc.cranking
-                    ? ems::engine::crank_spark_deg
-                    : advance_deg;
+                // Cranking: fixed crank spark, no corrections.
+                ems::engine::AdvanceCorrectionsX10 corr{};
+                if (!qc.cranking) {
+                    // Idle spark OK during afterstart (helps settle).
+                    corr.idle = ems::engine::calc_idle_spark_correction_x10(
+                        snap.rpm_x10, idle_target_rpm_x10, sensors.app_pct_x10, map_bar_x100);
+                    corr.iat = ems::engine::calc_ign_iat_correction_x10(sensors.iat_degc_x10);
+                    corr.clt = ems::engine::calc_ign_clt_correction_x10(sensors.clt_degc_x10);
+                    corr.torque_retard = static_cast<int16_t>(g_torque_spark_retard_deg * 10);
+                }
+                if (!crank_or_ase) {
+                    corr.antijerk_retard = ems::engine::calc_antijerk_retard_x10(ae_tpsdot);
+                }
+                const int16_t sched_spark_x10 = qc.cranking
+                    ? static_cast<int16_t>(ems::engine::crank_spark_deg * 10)
+                    : ems::engine::calc_total_advance_x10(base_advance_x10, corr);
                 // Decel / flood: force PW=0 (do not apply min_pw floor).
                 const uint32_t quick_crank_pw_us =
                     (decel_cut_active || flood_clear) ? 0u :
@@ -923,7 +913,7 @@ int main() {
                 // comandado; o corte em si entra na mask do próximo tick.
                 ems::engine::fuel_inj_duty_update(cycle_on_us, snap.rpm_x10, 2u);
 
-                commit_sched(sched_spark_deg, dwell_ticks, inj_pw_ticks, snap, sensors);
+                commit_sched(sched_spark_x10, dwell_ticks, inj_pw_ticks, snap, sensors);
             } else if (allow_half_crank_batch) {
                 // (2) HALF_SYNC + cranking: simultaneous batch, crank PW only (no VE/STFT/AE).
                 // Presync auto already selects SIMULTANEOUS while is_cranking().
@@ -940,17 +930,16 @@ int main() {
                 const uint32_t inj_pw_ticks = inj_finish_pw(
                     crank_flow_us, 2u, fuel_corr.dead_time_us, sensors,
                     map_bar_x100, fuel_cut_active, cycle_on_us);
-                commit_sched(ems::engine::crank_spark_deg, dwell_ticks, inj_pw_ticks,
-                             snap, sensors);
+                commit_sched(static_cast<int16_t>(ems::engine::crank_spark_deg * 10),
+                             dwell_ticks, inj_pw_ticks, snap, sensors);
             } else if (sched_sync &&
                        (fuel_protect_cut || half_fuel_lockout || g_rev_limit_active)) {
                 // (3) Spark-only: exit-crank HALF, flood, protect, rev-limit, anomaly path.
                 // qc already updated — use crank spark only while still latched cranking.
-                const int16_t base_advance_deg = ems::engine::get_advance(snap.rpm_x10, map_bar_x100);
-                const int16_t sched_spark_deg = qc.cranking
-                    ? ems::engine::crank_spark_deg
-                    : base_advance_deg;
-                commit_sched(sched_spark_deg, dwell_ticks, 0u, snap, sensors);
+                const int16_t sched_spark_x10 = qc.cranking
+                    ? static_cast<int16_t>(ems::engine::crank_spark_deg * 10)
+                    : ems::engine::get_advance_x10(snap.rpm_x10, map_bar_x100);
+                commit_sched(sched_spark_x10, dwell_ticks, 0u, snap, sensors);
                 g_last_pw_ms_x10 = 0u;
                 g_last_net_pw_us = 0u;
                 ems::engine::fuel_ae_notify_pulse(0);

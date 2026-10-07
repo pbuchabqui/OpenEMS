@@ -67,7 +67,7 @@ typedef struct {
 void    etb_control_loop(float pedal, float rpm, float dt);
 void    etb_set_idle_control(bool active, float target_rpm);
 float   etb_get_throttle_position(void);
-int16_t etb_get_idle_spark_trim(void);  /* float-path trim; prod usa calc_idle_spark_correction_deg */
+int16_t etb_get_idle_spark_trim(void);  /* float-path trim; prod usa calc_idle_spark_correction_x10 */
 #endif  // EMS_HOST_TEST
 
 #ifdef __cplusplus

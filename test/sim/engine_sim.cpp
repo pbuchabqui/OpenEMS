@@ -72,6 +72,11 @@ void commit(const Command& c)
 {
     const uint32_t squirts = (ecu_sched_is_sequential() != 0U) ? 1U : 2U;
     const double pw_us = (c.fuel_us + c.dead_us * squirts) / squirts;
+    uint16_t retard_x10[4];
+    for (int i = 0; i < 4; ++i) {
+        retard_x10[i] = static_cast<uint16_t>(std::lround(c.cyl_retard_deg[i] * 10.0));
+    }
+    ecu_sched_set_cyl_retard_x10(retard_x10);
     ecu_sched_commit_calibration_x10(
         static_cast<int32_t>(std::lround(c.advance_deg * 10.0)),
         static_cast<uint32_t>(std::llround(c.dwell_ms * 62500.0)),
@@ -289,7 +294,8 @@ Metrics analyze(const Result& r, double t_from, bool wasted)
         const double tdc = ems::engine::cfg::cyl_tdc_deg(static_cast<uint8_t>(cyl));
         for (double base = std::floor(th_from / 720.0) * 720.0 - 720.0; base < th_to + 720.0; base += cycle_step) {
             const double t_guess = r.time_at(base + tdc);
-            const double expect = base + tdc - r.cmd_at(t_guess).advance_deg;
+            const Command& cmd = r.cmd_at(t_guess);
+            const double expect = base + tdc - (cmd.advance_deg - cmd.cyl_retard_deg[cyl]);
             if (expect < th_from || expect > th_to) { continue; }
             int best = -1;
             double best_err = 1e9;

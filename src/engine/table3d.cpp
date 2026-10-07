@@ -202,6 +202,13 @@ int16_t table3d_lookup_i8_prepared(const int8_t table[kTableAxisSize][kTableAxis
     return static_cast<int16_t>(bilerp_table(table, lookup));
 }
 
+int16_t table3d_lookup_i8_x10_prepared(const int8_t table[kTableAxisSize][kTableAxisSize],
+                                       const Table2dLookup& lk) noexcept {
+    return static_cast<int16_t>(bilerp(10 * table[lk.yi][lk.xi], 10 * table[lk.yi][lk.xi + 1u],
+                                       10 * table[lk.yi + 1u][lk.xi],
+                                       10 * table[lk.yi + 1u][lk.xi + 1u], lk));
+}
+
 int16_t table3d_lookup_s16_prepared(const int16_t table[kTableAxisSize][kTableAxisSize],
                                     const Table2dLookup& lookup) noexcept {
     const int32_t v = bilerp_table(table, lookup);

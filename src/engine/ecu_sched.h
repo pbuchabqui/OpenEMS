@@ -65,16 +65,15 @@ void ecu_sched_outputs_safe_early(void);
 // eoi_lead_deg: EOI targeting — ângulo (° BTDC de combustão) em que a
 // injecção TERMINA. O início é calculado para trás (SOI = EOI − PW°),
 // recuando automaticamente com PW grande. Clampado a [0, 359] em runtime.
-void ecu_sched_commit_calibration(uint32_t advance_deg,
-                                  uint32_t dwell_ticks,
-                                  uint32_t inj_pw_ticks,
-                                  uint32_t eoi_lead_deg);
-// Same, advance in 0.1° BTDC, signed (negative = after TDC), [-20.0, 60.0].
+// advance in 0.1° BTDC, signed (negative = after TDC), [-20.0, 60.0].
 void ecu_sched_commit_calibration_x10(int32_t advance_x10,
                                       uint32_t dwell_ticks,
                                       uint32_t inj_pw_ticks,
                                       uint32_t eoi_lead_deg);
-void ecu_sched_set_advance_deg(uint32_t adv);
+void ecu_sched_set_advance_x10(int32_t advance_x10);
+// Per-cylinder retard (knock) in 0.1°, subtracted from the common advance.
+// Index = cylinder (same as the knock window). Clamped to 0..30.0°.
+void ecu_sched_set_cyl_retard_x10(const uint16_t retard_x10[4]);
 void ecu_sched_set_dwell_ticks(uint32_t dwell);
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
 void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg);
@@ -197,11 +196,10 @@ uint8_t ecu_sched_test_get_angle_event(uint8_t index,
                                        uint8_t *ch,
                                        uint8_t *action,
                                        uint8_t *phase);
-void ecu_sched_test_set_advance_deg(uint32_t adv);
 void ecu_sched_test_set_dwell_ticks(uint32_t dwell);
 void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks);
 void ecu_sched_test_set_eoi_lead_deg(uint32_t eoi_lead_deg);
-uint32_t ecu_sched_test_get_advance_deg(void);
+int32_t ecu_sched_test_get_advance_x10(void);
 uint32_t ecu_sched_test_get_dwell_ticks(void);
 uint32_t ecu_sched_test_get_inj_pw_ticks(void);
 uint32_t ecu_sched_test_get_eoi_lead_deg(void);
