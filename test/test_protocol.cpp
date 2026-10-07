@@ -617,3 +617,34 @@ void test_ts_envelope_signature_via_r(void) {
     CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 12u,
                "'r' page 0x0F sem canId → também OK");
 }
+
+void test_page0_tail_fields_do_not_collide(void) {
+    section("page0: capture polarity / DFCO ramp / MAP window keep their own bytes");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    const uint8_t s_pol = ems::engine::capture_polarity;
+    const uint16_t s_ramp = ems::engine::decel_cut_ramp_ms;
+    const uint8_t s_mwe = ems::engine::map_window_enable;
+    const uint16_t s_mwo = ems::engine::map_window_open_deg;
+    const uint16_t s_mwl = ems::engine::map_window_len_deg;
+    ems::engine::capture_polarity = 0x02u;
+    ems::engine::decel_cut_ramp_ms = 0x0155u;
+    ems::engine::map_window_enable = 1u;
+    ems::engine::map_window_open_deg = 0x0123u;
+    ems::engine::map_window_len_deg = 0x0045u;
+
+    const uint8_t rd[6] = {'r', 0x00u, 0x02u, 0x01u, 0x0Cu, 0x00u};  // off 258, 12 B
+    const EnvResp r = env_txn(rd, 6u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 12u, "'r' page0 258..269 OK");
+    CHECK_EQ(r.data[0], 0x02u, "258 = capture polarity");
+    CHECK_EQ(r.data[1] | (r.data[2] << 8u), 0x0155u, "259..260 = DFCO ramp ms");
+    CHECK_EQ(r.data[6], 1u, "264 = MAP window enable");
+    CHECK_EQ(r.data[8] | (r.data[9] << 8u), 0x0123u, "266..267 = MAP window open");
+    CHECK_EQ(r.data[10] | (r.data[11] << 8u), 0x0045u, "268..269 = MAP window len");
+
+    ems::engine::capture_polarity = s_pol;
+    ems::engine::decel_cut_ramp_ms = s_ramp;
+    ems::engine::map_window_enable = s_mwe;
+    ems::engine::map_window_open_deg = s_mwo;
+    ems::engine::map_window_len_deg = s_mwl;
+}

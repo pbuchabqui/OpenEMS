@@ -29,8 +29,13 @@
 #include "engine/engine_config.h"
 
 // page0 layout guards: CAN RX map 216..251 | duty/DFCO/knock 252..257 |
-// MAP window 258..263. A collision must not compile.
-static constexpr uint16_t kPage0MapWindowOff = 258u;
+// capture polarity 258 | DFCO ramp 259..260 | MAP window 264..269.
+// A collision must not compile.
+static constexpr uint16_t kPage0MapWindowOff = 264u;
+static_assert(ems::engine::kCapturePolarityPage0Off == 258u &&
+              ems::engine::kDecelCutRampMsPage0Off == 259u, "page0 258..260 moved");
+static_assert(kPage0MapWindowOff >= ems::engine::kDecelCutRampMsPage0Off + 2u,
+              "MAP window overlaps DFCO ramp / capture polarity");
 static_assert(ems::app::kCanRxMapPage0Off + ems::app::kCanRxMapPage0Len <= 252u,
               "CAN RX map overlaps page0 bytes 252+");
 static_assert(kPage0MapWindowOff + 6u <= 512u, "MAP window outside page0");
@@ -433,7 +438,7 @@ void sync_page_from_table(uint8_t page) noexcept {
         ems::engine::launch_tc_serialize_to_page0(g_page0, sizeof(g_page0));
         // CAN RX map: gear / vehicle speed / driven wheel (216-251)
         ems::app::can_rx_map_serialize_to_page0(g_page0, sizeof(g_page0));
-        // MAP janela angular por cilindro (258-263)
+        // MAP janela angular por cilindro (264-269)
         g_page0[kPage0MapWindowOff + 0u] = ems::engine::map_window_enable;
         g_page0[kPage0MapWindowOff + 1u] = ems::engine::map_window_use_for_fuel;
         std::memcpy(g_page0 + kPage0MapWindowOff + 2u, &ems::engine::map_window_open_deg, 2u);
@@ -669,7 +674,7 @@ bool sync_table_from_page(uint8_t page) noexcept {
             ems::engine::launch_tc_apply_from_page0(g_page0, sizeof(g_page0));
             // CAN RX map 216-251 (id=0 disables each signal — safe on blank flash)
             ems::app::can_rx_map_apply_from_page0(g_page0, sizeof(g_page0));
-            // MAP janela angular (258-263; was 246-251, overlapping the 3rd CAN
+            // MAP janela angular (264-269; was 246-251, overlapping the 3rd CAN
             // signal). Blob antigo = zeros → fica off e len mantém o default.
             ems::engine::map_window_enable = (g_page0[kPage0MapWindowOff + 0u] != 0u) ? 1u : 0u;
             // use_for_fuel: gate separado — ver AVISO de calibração em
