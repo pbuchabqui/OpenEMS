@@ -258,57 +258,6 @@ void test_ckp_stall_poll_no_false_positive(void) {
     CHECK_TRUE(ckp_snapshot().rpm_x10 != 0u, "RPM preservado na corrida");
 }
 
-void test_ckp_seed_arm_disarm(void) {
-    section("ckp: seed arm/disarm counters");
-    ckp_test_reset(); g_ckp_cap = 0u;
-    CHECK_EQ(ckp_seed_loaded_count(), 0u, "loaded=0 before arm");
-    ckp_seed_arm(true);
-    CHECK_EQ(ckp_seed_loaded_count(), 1u, "loaded=1 after arm");
-    ckp_seed_disarm();
-    CHECK_EQ(ckp_seed_loaded_count(), 1u, "loaded still 1 after disarm");
-}
-
-
-
-void test_ckp_seed_confirmed(void) {
-    section("ckp: seed_confirmed_count after cam edge during probation");
-
-    // NOTA: o seed está desativado em produção (ckp.cpp "FIX 2026-06-29: seed
-    // desativado p/ diagnóstico", TODO: re-activar). g_seed_probation nunca é
-    // posto a true em nenhum caminho de código atual — o 1º gap vai sempre
-    // para HALF_SYNC, nunca para FULL_SYNC+probation, e ckp_seed_arm() não
-    // tem qualquer efeito observável. Este teste reflete esse estado actual;
-    // quando o seed for reativado, restaurar a expectativa de FULL_SYNC aqui.
-    ckp_test_reset(); g_ckp_cap = 0u;
-    ckp_seed_arm(true);
-
-    for (uint32_t i = 0; i < kWheelNormalTeeth; ++i) { ckp_fire(kNormalPeriod); }
-    ckp_fire(kNormalPeriod * 3u);  // gap: seed desativado → HALF_SYNC (não FULL_SYNC)
-    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
-             static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC (seed desativado)");
-
-    // Cam ISR sem probation ativa não confirma nada.
-    cam_fire(g_ckp_cap + kNormalPeriod * 58u);
-    CHECK_EQ(ckp_seed_confirmed_count(), 0u, "seed_confirmed_count=0 (seed desativado)");
-}
-
-void test_ckp_seed_rejected(void) {
-    section("ckp: seed_rejected_count after probation timeout");
-
-    // NOTA: mesmo motivo do teste acima — seed desativado, nunca entra em
-    // probation, logo nunca rejeita por timeout.
-    ckp_test_reset(); g_ckp_cap = 0u;
-    ckp_seed_arm(true);
-
-    for (uint32_t i = 0; i < kWheelNormalTeeth; ++i) { ckp_fire(kNormalPeriod); }
-    ckp_fire(kNormalPeriod * 3u);  // gap: seed desativado → HALF_SYNC
-    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
-             static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC (seed desativado)");
-
-    // Sem probation ativa, nenhuma quantidade de dentes gera rejeição.
-    for (uint32_t i = 0; i < 71u; ++i) { ckp_fire(kNormalPeriod); }
-    CHECK_EQ(ckp_seed_rejected_count(), 0u, "seed_rejected_count=0 (seed desativado)");
-}
 
 void test_ckp_cmp_glitch_count(void) {
     section("ckp: ckp_get_cmp_glitch_count on invalid cam timing");
@@ -449,3 +398,58 @@ void test_ckp_phase_toggle(void) {
 // TABLE3D
 // ============================================================================
 
+
+// A real tooth edge missed by the sensor must never shift the angle of the
+// following teeth: the gap then arrives after 56 teeth → explicit sync loss.
+void test_ckp_lost_tooth_loses_sync(void) {
+    section("ckp: one lost tooth → LOSS_OF_SYNC at the next gap (no off-by-one angle)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    for (uint32_t i = 0u; i < 20u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(2u * kNormalPeriod);                 // tooth 21 missing (2 periods)
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::LOSS_OF_SYNC),
+             "2-period interval at tooth 20 is a misplaced gap → LOSS_OF_SYNC at once");
+    for (uint32_t i = 0u; i < 36u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kGapPeriod);                         // real gap: 36 teeth since loss
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::LOSS_OF_SYNC), "first gap after loss not trusted");
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::HALF_SYNC), "next full revolution → HALF_SYNC");
+}
+
+// Noise mid-tooth: before 0.5 period it is ignored; after, it stands in for
+// the real edge, and the real edge then replaces it — never an extra tooth.
+void test_ckp_noise_never_adds_or_loses_teeth(void) {
+    section("ckp: noise pulse at f = 0.2 / 0.6 / 0.8 / 0.9 of a tooth keeps tooth_index exact");
+    const uint32_t fr[4] = {2u, 6u, 8u, 9u};
+    for (uint32_t k = 0u; k < 4u; ++k) {
+        ckp_test_reset(); g_ckp_cap = 0u;
+        ckp_reach_full_sync();
+        for (uint32_t i = 0u; i < 10u; ++i) { ckp_fire(kNormalPeriod); }
+        const uint32_t early = kNormalPeriod * fr[k] / 10u;
+        ckp_fire(early);                          // noise
+        ckp_fire(kNormalPeriod - early);          // real tooth 11
+        CHECK_EQ(ckp_snapshot().tooth_index, 11u, "tooth_index exact after noise");
+        for (uint32_t i = 0u; i < 46u; ++i) { ckp_fire(kNormalPeriod); }
+        ckp_fire(kGapPeriod);
+        CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+                 static_cast<uint8_t>(SyncState::FULL_SYNC), "gap still accepted (57 teeth)");
+        CHECK_EQ(ckp_snapshot().tooth_index, 0u, "index 0 after gap");
+    }
+}
+
+// Noise right AFTER a real tooth must not replace that tooth's timestamp.
+void test_ckp_noise_after_tooth_keeps_real_edge(void) {
+    section("ckp: noise 0.2 period after a real tooth leaves its capture untouched");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    for (uint32_t i = 0u; i < 10u; ++i) { ckp_fire(kNormalPeriod); }
+    const uint32_t real_edge = g_ckp_cap;
+    ckp_fire(kNormalPeriod / 5u);                 // noise at +0.2
+    CHECK_EQ(ckp_snapshot().last_tim5_capture, real_edge, "real tooth capture kept");
+    CHECK_EQ(ckp_snapshot().tooth_index, 10u, "index unchanged");
+    ckp_fire(kNormalPeriod - kNormalPeriod / 5u); // next real tooth
+    CHECK_EQ(ckp_snapshot().tooth_index, 11u, "next tooth counted once");
+}

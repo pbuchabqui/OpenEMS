@@ -72,7 +72,7 @@ int main(void) {
     test_ckp_phantom_rpm_unsync();
     test_ckp_rpm_jump_recovery();
     test_ckp_stall_poll_no_false_positive();
-    test_ckp_seed_arm_disarm();
+    
 
     // ── Sensors ───────────────────────────────────────────────────────────────
     printf("\n=== SENSORS ===");
@@ -161,8 +161,8 @@ int main(void) {
 
     // ── CKP — Segunda Fase ───────────────────────────────────────────────────
     printf("\n=== CKP (fase 2) ===");
-    test_ckp_seed_confirmed();
-    test_ckp_seed_rejected();
+    
+    
     test_ckp_cmp_glitch_count();
 
     // ── Sensors — Segunda Fase ───────────────────────────────────────────────
@@ -279,6 +279,9 @@ int main(void) {
     test_ckp_prime_on_tooth();
     test_ckp_snap_fields();
     test_ckp_tooth_index_progression();
+    test_ckp_lost_tooth_loses_sync();
+    test_ckp_noise_never_adds_or_loses_teeth();
+    test_ckp_noise_after_tooth_keeps_real_edge();
     test_ckp_phase_toggle();
 
     // ── UI PROTOCOL / TUNERSTUDIO ENVELOPE ────────────────────────────────

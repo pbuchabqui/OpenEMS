@@ -708,9 +708,9 @@ void test_hal_flash_all(void) {
                        kNvmOffLtftAdd + kNvmLtftAddDim * kNvmLtftAddDim,
                    "magic após LTFT-add");
         CHECK_TRUE(kNvmOffMapsCrc == kNvmOffLayoutMagic + 4u, "CRC após magic");
-        CHECK_TRUE(kNvmSeedOffset >= kNvmOffMapsCrc + 4u, "seed após CRC");
+        CHECK_TRUE(kNvmReservedOffset >= kNvmOffMapsCrc + 4u, "reservado após CRC");
         CHECK_TRUE((kNvmOffLayoutMagic % 16u) == 0u, "magic 16-alinhado");
-        CHECK_TRUE((kNvmSeedOffset % 16u) == 0u, "seed 16-alinhado");
+        CHECK_TRUE((kNvmReservedOffset % 16u) == 0u, "reservado 16-alinhado");
     }
 
     section("hal/flash: bounds LTFT seguem as dimensões NVM");

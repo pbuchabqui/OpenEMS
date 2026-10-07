@@ -11,14 +11,12 @@
  * MÁQUINA DE ESTADOS (SyncState)
  * ───────────────────────────────
  *
- *                      gap && count≥55
- *   WAIT_GAP  ─────────────────────────►  HALF_SYNC
- *       ▲                                     │  gap && count≥55
- *       │   gap detected                      ▼
- *   LOSS_OF_SYNC  ◄─── count>61 ────  FULL_SYNC
- *       │                                     │
- *       └──────────── gap detected ───────────┘
- *                       (re-sync)
+ *   WAIT_GAP ──gap (≥3 dentes)──► HALF_SYNC ──gap, 57 dentes──► FULL_SYNC
+ *                                      │                          │
+ *              gap com contagem ≠ 57, 58º dente sem gap, ruído persistente,
+ *              stall ▼                                            ▼
+ *                               LOSS_OF_SYNC ──gap, 57 dentes──► HALF_SYNC
+ *   (detalhe e regras de ruído: drv/ckp.cpp)
  *
  * HARDWARE: TIM5 CH1 (PA0/CKP) em modo Input Capture, rising edge.
  *   ISR: ckp_tim5_ch1_isr() — chamada por TIM5_IRQHandler() em hal/stm32h562/timer.cpp
@@ -87,18 +85,6 @@ void misfire_on_tooth(const CkpSnapshot& snap) noexcept;
 void ckp_tim5_ch1_isr() noexcept;   ///< CKP rising edge (TIM5 CH1 / PA0)
 void ckp_tim5_ch2_isr() noexcept;   ///< Cam sensor rising edge (TIM5 CH2 / PA1)
 
-/**
- * @brief Arm a persisted sync seed for fast reacquire on next valid gap.
- *
- * Safety note: this does not bypass gap validation; it only allows promotion
- * WAIT_GAP/LOSS_OF_SYNC -> FULL_SYNC at the first accepted gap.
- */
-void ckp_seed_arm(bool phase_A) noexcept;
-void ckp_seed_disarm() noexcept;
-
-uint32_t ckp_seed_loaded_count() noexcept;
-uint32_t ckp_seed_confirmed_count() noexcept;
-uint32_t ckp_seed_rejected_count() noexcept;
 uint32_t ckp_get_cmp_glitch_count() noexcept;
 
 // DIAG: valores internos de classify_tooth (expostos para snapshot)
@@ -111,7 +97,7 @@ extern volatile uint32_t g_diag_isr_count;
 extern volatile uint32_t g_diag_hist_ready;
 extern volatile uint32_t g_diag_tooth_count;
 extern volatile uint32_t g_diag_consec_anom;
-// DIAG: classify_tooth class histogram (GAP / SPIKE_NOISE / normal)
+// DIAG: classificação das bordas (GAP / NOISE / dente normal)
 extern volatile uint32_t g_dbg_tc_gap;
 extern volatile uint32_t g_dbg_tc_spike;
 extern volatile uint32_t g_dbg_tc_normal;
@@ -124,20 +110,14 @@ extern volatile uint32_t g_diag_cmp_isr_count;
 extern volatile uint32_t g_diag_last_ckp_edge_tick;
 extern volatile uint32_t g_diag_last_cmp_edge_tick;
 
-// DIAG gap 60-2: aceites, prematuros (FULL_SYNC + count<55 → LOSS) e o
-// tooth_count do último prematuro — discrimina perda por gap deslizado
-// (estimulador off-by-one) vs gap ausente (kMaxTeethBeforeLoss).
+// DIAG gap 60-2: aceites, com contagem errada (≠57 → LOSS) e a contagem do
+// último rejeitado (56 = dente perdido, 58 = dente extra/ruído).
 extern volatile uint32_t g_dbg_gap_accepted;
 extern volatile uint32_t g_dbg_gap_premature;
 extern volatile uint32_t g_dbg_gap_last_tc;
-// Perdas de sync por caminho + contexto da última perda por gap ausente.
-// Discriminação dos 3 gatilhos de perda de FULL_SYNC (blip PW=0 intermitente):
-//   g_dbg_gap_premature   → gap prematuro (count<55)   [já existente]
-//   g_dbg_loss_histogram  → gate de dispersão do hist (mx > 1.5×mn)
-//   g_dbg_loss_wrap       → tooth_index 57→0 sem gap aceite (gap → normal)
-//   g_dbg_loss_missing_gap→ overrun (tooth_count > kMaxTeethBeforeLoss)
-// hist_mn/hist_mx = par min/max do último trip de histograma (mx≈1.5×mn = gate
-// no limiar → candidato a relaxar; mx≫mn = falha real → drop correto).
+// Perdas de sync por caminho (ver drv/ckp.cpp): wrap = gap perdido,
+// histogram = ruído persistente, stall = sem bordas. missing_gap e
+// hist_mn/mx ficam a 0 (slots do protocolo 'D' mantidos).
 extern volatile uint32_t g_dbg_loss_missing_gap;
 extern volatile uint32_t g_dbg_loss_stall;
 extern volatile uint32_t g_dbg_loss_avg;

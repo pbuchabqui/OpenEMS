@@ -245,14 +245,14 @@ void test_ecu_sched_noise_rejects_sequential(void) {
     CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "1ª borda só arma timestamp");
 
     // Borda 2 ~2 revs no mesmo dente 5 → 1.º confirm (ancora posição).
-    for (uint32_t i = 0; i < 50u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
+    for (uint32_t i = 0; i < 52u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
     ckp_feed_n_then_gap(kWheelNormalTeeth);
     for (uint32_t i = 0; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
     cam_fire(g_ckp_cap);
     CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "2ª borda coerente → confirms=1");
 
     // Borda 3 noutro dente (25≠5): passa temporal, falha posição → confirms→0.
-    for (uint32_t i = 0; i < 50u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
+    for (uint32_t i = 0; i < 52u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
     ckp_feed_n_then_gap(kWheelNormalTeeth);
     for (uint32_t i = 0; i < 25u; ++i) { ckp_fire(kNormalPeriod); }   // tooth 25
     cam_fire(g_ckp_cap);
@@ -737,9 +737,9 @@ void test_ecu_sched_presync_table(void) {
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC");
 
-    // 55+ normals then gap → FULL_SYNC, tooth_index=0, rev_boundary → presync table
+    // 57 normals then gap → FULL_SYNC, tooth_index=0, rev_boundary → presync table
     // (cmp_confirms < 2 → wasted/presync path).
-    for (uint32_t i = 0u; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    for (uint32_t i = 0u; i < kWheelNormalTeeth; ++i) { ckp_fire(kNormalPeriod); }
     ckp_fire(kGapPeriod);
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::FULL_SYNC), "post-gap: FULL_SYNC");
