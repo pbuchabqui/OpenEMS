@@ -14,8 +14,8 @@ This export is from the **current working tree** board, which includes:
 **DRC at export:** 566 error-level violations, 50 unconnected items.
 
 **Do not order production PCBs until DRC is clean** (or you accept scrap risk).  
-Preferred bring-up path: restore microRusEFI copper + `BOARD=mre` firmware  
-(see `docs/hw/pinout_mre_bringup.md`).
+The `BOARD=mre` firmware and `docs/hw/pinout_mre_bringup.md` were removed; no current
+firmware build matches this copper.
 
 ## Contents
 

@@ -254,7 +254,8 @@ errados. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
   UART<->protocolo roda no slot de 2 ms (`comms_pump()`), nao-bloqueante, com
   TX FIFO (FIFOEN) — throughput efetivo ~4 kB/s, suficiente para realtime TS a
   10-20 Hz. USB CDC espelha o TX e mantem RX no slot de 20 ms.
-- USB CDC: pos-MVP; o backend atual permanece stub/no-op e nao deve ser tratado como transporte validado.
+- USB CDC: driver USB DRD FS completo (`hal/stm32h562/usb_cdc.cpp`), ainda nao validado em
+  hardware; ate la a UART e o transporte de referencia.
 - CAN/FDCAN: diagnostico e integracao com sensores externos.
 
 Comunicacao nao deve bloquear decode, sync, scheduling ou atuadores.
@@ -402,7 +403,7 @@ ordem e gate de layout de antes.
 | Documento | Papel |
 |-----------|--------|
 | **README.md** (este) | Fonte unica de decisoes duraveis |
-| README § Dois firmwares | Hall vs Encoder: captura privada, fisica comum (R1–R5) |
+| `docs/bench_test_manual.md` | Teste de bancada na WeAct VGT6 (sem atuadores) |
 | `docs/hw/pinout.md` | **Pinout completo** RGT6/VGT6 (detalhe movido do §5) |
 | `docs/wiring_diagram.md` | Esquemáticos eléctricos (mapa de pinos ASCII **legado**) |
 | `docs/ROADMAP.md` | Backlog de produto (ADC residual, SD, …) |
@@ -410,7 +411,6 @@ ordem e gate de layout de antes.
 
 ### Fora de escopo do programa de higiene (opcional)
 
-- Reactivar CKP seed (`// TODO` em `ckp.cpp`) — feature de produto.
 - `hal/aux_gpio` para fan/pump (hoje `auxiliaries.cpp` ainda usa `regs.h` /
   BSRR — allowlist Phase C).
 - Split adicional de monolitios grandes (`ckp.cpp`, `fuel_trim`, etc.).

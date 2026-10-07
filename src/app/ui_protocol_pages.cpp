@@ -226,12 +226,16 @@ void update_realtime_page() noexcept {
     write_u32_le(&rt.reserved[14], g_rt_sched_calibration_clamp_count);
     // reserved[18..21] (abs 32..35): install / calibration aids.
     //   [18] engine config reject mask (engine_config.h), [19] bit0 timing light,
-    //   [20..21] advance sent to the coils, 0.1° signed. [22..29] spare (0).
+    //   [20..21] advance sent to the coils, 0.1° signed.
+    //   [22] TLE8888 register-map fingerprint (bitmask of reset values that did
+    //        not match the datasheet; 0 = map confirmed or no TLE8888).
+    //        Was [49], where it overwrote the live VE. [23..29] spare (0).
     rt.reserved[18] = ems::engine::cfg::engine_config_reject_mask();
     rt.reserved[19] = ems::engine::timing_light_enable;
     rt.reserved[20] = static_cast<uint8_t>(static_cast<uint16_t>(g_rt_advance_x10) & 0xFFu);
     rt.reserved[21] = static_cast<uint8_t>(static_cast<uint16_t>(g_rt_advance_x10) >> 8u);
-    for (uint8_t i = 22u; i < 30u; ++i) { rt.reserved[i] = 0u; }
+    rt.reserved[22] = ems::hal::tle8888_map_mismatch();
+    for (uint8_t i = 23u; i < 30u; ++i) { rt.reserved[i] = 0u; }
     const uint8_t inj_mode = ::ecu_sched_is_sequential() ? 2u
                             : ::ecu_sched_presync_inj_mode();
     rt.reserved[30] = static_cast<uint8_t>((inj_mode << 4u) | (g_rt_sync_state_raw & 0x0Fu));
@@ -259,12 +263,6 @@ void update_realtime_page() noexcept {
     rt.reserved[46] = static_cast<uint8_t>((s.an2_raw >> 8u) & 0xFFu);
     rt.reserved[47] = static_cast<uint8_t>(s.an3_raw & 0xFFu);
     rt.reserved[48] = static_cast<uint8_t>((s.an3_raw >> 8u) & 0xFFu);
-    // [49] Fingerprint do mapa de registadores do TLE8888: bitmask das entradas
-    // cujo valor de reset não bateu com o datasheet. 0 = mapa confirmado contra
-    // o silício. Diferente de zero significa que o CI está presente mas o driver
-    // fala com os registadores errados — injecção e ignição ficam inibidas.
-    // É o que torna essa falha visível no bring-up em vez de misteriosa.
-    rt.reserved[49] = ems::hal::tle8888_map_mismatch();
     rt.reserved[50] = static_cast<uint8_t>(s.an4_raw & 0xFFu);
     rt.reserved[51] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
     rt.map_fused_bar_x100 = g_rt_map_fused_bar_x100;

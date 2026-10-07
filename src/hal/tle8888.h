@@ -38,7 +38,7 @@ uint8_t tle8888_wd_status(uint8_t idx) noexcept;
 // Fingerprint CONSULTIVO do mapa de registadores (bitmask; 0 = ok).
 // Só OpConfig0 + OutConfig3 (endereços confirmados pelo rusEFI). NÃO bloqueia
 // tle8888_ok() — um valor de reset mal transcrito não pode deixar o motor sem
-// injecção. Telemetria: reserved[49]. Gate de segurança = eco de endereço.
+// injecção. Telemetria: RT reserved[22] (byte 36). Gate de segurança = eco de endereço.
 uint8_t tle8888_map_mismatch() noexcept;
 
 // Eco de endereço SPI (estilo rusEFI). idx:

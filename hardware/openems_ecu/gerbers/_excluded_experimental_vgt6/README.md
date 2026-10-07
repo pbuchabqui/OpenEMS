@@ -14,8 +14,8 @@ count; **not** the production path.
 | Also | `hardware/openems_ecu/production/openems_mre_h562.kicad_pcb` |
 | Gerbers | `hardware/openems_ecu/gerbers/mre_h562/` |
 | ZIP | `hardware/openems_ecu/gerbers/openems_mre_h562_*.zip` |
-| Firmware | `make firmware BOARD=mre` |
-| Pinout | `docs/hw/pinout_mre_bringup.md` |
+| Firmware | ~~`BOARD=mre`~~ removed; no current firmware build matches this copper (see `docs/hw/README.md`) |
+| Pinout | ~~`docs/hw/pinout_mre_bringup.md`~~ (removed) |
 
 ## Restore experimental board (if needed)
 

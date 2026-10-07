@@ -10,24 +10,15 @@
  * Resolução  : 1 µs  (esp_timer_get_time)
  * Latência   : 2–5 µs por bordo (ISR context)
  *
- * Sinais monitorizados:
- *   CH0 IGN1  ← PE9  TIM1_CH1  (bobina cil.1)
- *   CH1 IGN2  ← PE11 TIM1_CH2  (bobina cil.2)
- *   CH2 IGN3  ← PE13 TIM1_CH3  (bobina cil.3)
- *   CH3 IGN4  ← PE14 TIM1_CH4  (bobina cil.4)
- *   CH4 INJ1  ← PC6  TIM3_CH1  (injector cil.1)
- *   CH5 INJ2  ← PC7  TIM3_CH2  (injector cil.2)
- *   CH6 INJ3  ← PC8  TIM3_CH3  (injector cil.3)
- *   CH7 INJ4  ← PC9  TIM3_CH4  (injector cil.4)
- *   CH8 CKP   ← PA0  (loopback — ligar ao gerador CKP do stimulator)
- *   CH9 CMP   ← PA1  (loopback — ligar ao gerador CMP do stimulator)
+ * Sinais monitorizados (BOARD=vgt6, src/hal/out_pins.h; saídas por GPIO a
+ * partir do compare TIM5_CH3):
+ *   CH0 IGN4  ← PE15   CH1 IGN3 ← PE13   CH2 IGN2 ← PE11   CH3 IGN1 ← PE9
+ *   CH4 INJ4  ← PE6    CH5 INJ3 ← PE4    CH6 INJ2 ← PE2    CH7 INJ1 ← PE0
+ *   CH8 CKP   ← PA0  (loopback)          CH9 CMP  ← PA1  (loopback)
+ *   BOARD=rgt6: INJ1-4 = PA15/PB3/PC10/PC11, IGN1-4 = PC6/PC7/PC8/PC9.
  *
- * Ligações STM32H562 → ESP32-C6 (GPIO 0-7 + 10-11):
- *   PE9  → GPIO 0     PE11 → GPIO 1
- *   PE13 → GPIO 2     PE14 → GPIO 3
- *   PC6  → GPIO 4     PC7  → GPIO 5
- *   PC8  → GPIO 6     PC9  → GPIO 7
- *   PA0  → GPIO 10    PA1  → GPIO 11   GND → GND  ← OBRIGATÓRIO
+ * Ligações ESP32-C6: canal N no GPIO N (0-7), CKP GPIO 10, CMP GPIO 11,
+ *   GND → GND  ← OBRIGATÓRIO
  *
  *   (CKP/CMP: ligar GPIO2/4 do stimulator a GPIO10/11 + PA0/PA1 do STM32)
  *
@@ -69,14 +60,14 @@ struct ChanDef {
 // ESP32 original: GPIO 0-11 também existem, mas 6-11 são flash SPI — preferir
 // GPIO32-39 (input-only) editando kChan[] abaixo.
 static ChanDef kChan[] = {
-    { GPIO_NUM_0,  "IGN4", "PE14", true },   // TIM1_CH4 — cil.4 (GPIO0→PE14 na bancada)
-    { GPIO_NUM_1,  "IGN3", "PE13", true },   // TIM1_CH3 — cil.3 (GPIO1→PE13)
-    { GPIO_NUM_2,  "IGN2", "PE11", true },   // TIM1_CH2 — cil.2 (GPIO2→PE11)
-    { GPIO_NUM_3,  "IGN1", "PE9",  true },   // TIM1_CH1 — cil.1 (GPIO3→PE9)
-    { GPIO_NUM_4,  "INJ4", "PC9",  false },  // TIM3_CH4 — cil.4
-    { GPIO_NUM_5,  "INJ3", "PC8",  false },  // TIM3_CH3 — cil.3
-    { GPIO_NUM_6,  "INJ2", "PC7",  false },  // TIM3_CH2 — cil.2 (GPIO6→PC7)
-    { GPIO_NUM_7,  "INJ1", "PC6",  false },  // TIM3_CH1 — cil.1 (GPIO7→PC6)
+    { GPIO_NUM_0,  "IGN4", "PE15", true },   // cil.4
+    { GPIO_NUM_1,  "IGN3", "PE13", true },   // cil.3
+    { GPIO_NUM_2,  "IGN2", "PE11", true },   // cil.2
+    { GPIO_NUM_3,  "IGN1", "PE9",  true },   // cil.1
+    { GPIO_NUM_4,  "INJ4", "PE6",  true },   // cil.4
+    { GPIO_NUM_5,  "INJ3", "PE4",  true },   // cil.3
+    { GPIO_NUM_6,  "INJ2", "PE2",  true },   // cil.2
+    { GPIO_NUM_7,  "INJ1", "PE0",  true },   // cil.1
     { GPIO_NUM_10, "CKP",  "PA0",  true },   // loopback CKP do stimulator
     { GPIO_NUM_11, "CMP",  "PA1",  true },   // loopback CMP do stimulator
 };
@@ -153,7 +144,7 @@ static constexpr int kCylCount = 4;
 // Cil.4=IGN4: TDC @ dente 60 (360°); Cil.2=IGN2: TDC @ dente 90 (540°)
 static constexpr float kTdcDente[kCylCount] = { 0.0f, 30.0f, 60.0f, 90.0f };
 // kTdcDente[i] = TDC do cilindro cujo IGN é kExpectedFiringOrder[i]
-// CH0=IGN4(PE14), CH1=IGN3(PE13), CH2=IGN2(PE11), CH3=IGN1(PE9)
+// CH0=IGN4(PE15), CH1=IGN3(PE13), CH2=IGN2(PE11), CH3=IGN1(PE9)
 // Firing order 1-3-4-2: IGN1→IGN3→IGN4→IGN2 → CH3→CH1→CH0→CH2
 static constexpr uint8_t kExpectedFiringOrder[kIgnCount] = {3, 1, 0, 2};
 

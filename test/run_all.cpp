@@ -289,6 +289,7 @@ int main(void) {
     test_ts_axes_page();
     test_ts_envelope_canid_forms();
     test_och_launch_tc_status();
+    test_och_live_ve_byte();
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();
     test_page0_tail_fields_do_not_collide();

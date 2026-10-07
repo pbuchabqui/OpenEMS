@@ -601,6 +601,32 @@ void test_och_launch_tc_status(void) {
     ems::engine::torque_manager_reset();
 }
 
+// OCH page3 byte 63 = live VE at the current rpm x MAP point. It used to be
+// overwritten by the TLE8888 map fingerprint (0 on any board without a
+// TLE8888), so the dashboard and TunerStudio showed VE 0.
+void test_och_live_ve_byte(void) {
+    section("OCH: byte 63 = live VE (not overwritten)");
+    ems::app::ui_test_reset();
+    sensor_setup();
+    sensors_init();
+    {
+        ems::drv::CkpSnapshot snap{};
+        snap.tooth_period_ns = 160000u;
+        snap.rpm_x10 = 62500u;
+        for (int i = 0; i < 5; ++i) { sensors_on_tooth(snap); }
+        sensors_test_tick_100ms();
+    }
+    uint8_t saved[ems::engine::kTableAxisSize][ems::engine::kTableAxisSize];
+    std::memcpy(saved, ems::engine::ve_table, sizeof(saved));
+    std::memset(ems::engine::ve_table, 83, sizeof(saved));
+    const uint8_t och[7] = {'r', 0x00u, 0x03u, 0x00u, 0x00u, 0x56u, 0x00u};
+    EnvResp r = env_txn(och, 7u);
+    CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u && r.len == 86u, "och 86B OK");
+    CHECK_EQ(r.data[63], 83u, "byte 63 = live VE from a flat 83 table");
+    CHECK_EQ(r.data[36], 0u, "byte 36 = TLE8888 map fingerprint (host: 0)");
+    std::memcpy(ems::engine::ve_table, saved, sizeof(saved));
+}
+
 void test_ts_envelope_signature_via_r(void) {
     section("envelope TS: 'r' page 0x0F → assinatura (convenção Comm Manager)");
     ems::app::ui_test_reset();
