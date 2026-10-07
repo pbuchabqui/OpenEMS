@@ -71,23 +71,23 @@ uint8_t ltft_iir_div() noexcept {
     return (d == 0u) ? 64u : d;
 }
 
-// IIR: current + (target−current)/div, com cap opcional de passo (%×10).
-int16_t ltft_iir_toward(int16_t current, int16_t target, int16_t clamp_lim) noexcept {
-    const uint8_t div = ltft_iir_div();
-    int32_t next = static_cast<int32_t>(current) +
-        (static_cast<int32_t>(target) - static_cast<int32_t>(current)) /
-            static_cast<int32_t>(div);
-    const uint16_t max_step = ems::engine::ltft_max_step_x10;
-    if (max_step != 0u) {
-        const int32_t d = next - static_cast<int32_t>(current);
+// Integrate err/div into a cell, carrying the division remainder so small
+// errors are learned too (plain err/div truncates |err| < div to 0 forever).
+// The remainder belongs to the cell being learned and restarts on a new cell.
+int16_t ltft_integrate(int16_t cell, int32_t err, int32_t& rem, uint16_t& rem_cell,
+                       uint16_t cell_id, int16_t clamp_lim, bool pct_step_cap) noexcept {
+    if (rem_cell != cell_id) { rem = 0; rem_cell = cell_id; }
+    const int32_t div = static_cast<int32_t>(ltft_iir_div());
+    const int32_t num = err + rem;
+    int32_t step = num / div;
+    rem = num - step * div;
+    const uint16_t max_step = ems::engine::ltft_max_step_x10;   // %×10 units
+    if (pct_step_cap && max_step != 0u) {
         const int32_t cap = static_cast<int32_t>(max_step);
-        if (d > cap) {
-            next = static_cast<int32_t>(current) + cap;
-        } else if (d < -cap) {
-            next = static_cast<int32_t>(current) - cap;
-        }
+        if (step > cap) { step = cap; }
+        if (step < -cap) { step = -cap; }
     }
-    return clamp_i16(static_cast<int16_t>(next),
+    return clamp_i16(static_cast<int16_t>(static_cast<int32_t>(cell) + step),
                      static_cast<int16_t>(-clamp_lim), clamp_lim);
 }
 
@@ -876,19 +876,24 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
             const uint8_t mi = map_idx >> 1u;
             int16_t& cell_add = g_ltft_add_us[mi][ri];
             const int16_t add_lim = ltft_add_clamp();
-            // IIR em µs: mesmo div; max_step_x10 não aplica (unidade diferente).
-            const uint8_t div = ltft_iir_div();
-            cell_add = clamp_i16(
-                static_cast<int16_t>(
-                    static_cast<int32_t>(cell_add) +
-                    (error_us - static_cast<int32_t>(cell_add)) /
-                        static_cast<int32_t>(div)),
-                static_cast<int16_t>(-add_lim), add_lim);
+            // Integrate the STFT error into the cell (LTFT holds the whole
+            // steady correction; STFT then returns to ~0).
+            static int32_t s_add_rem = 0;
+            static uint16_t s_add_rem_cell = 0xFFFFu;
+            cell_add = ltft_integrate(cell_add, error_us, s_add_rem, s_add_rem_cell,
+                                      static_cast<uint16_t>(mi * 32u + ri), add_lim,
+                                      /*pct_step_cap=*/false);   // µs: % cap n/a
             fuel_ltft_add_store_cell(map_idx, rpm_idx, cell_add);
         } else {
             // PW normal: LTFT multiplicativo (clamp/rate calibráveis).
             int16_t& cell = g_ltft_pct_x10[map_idx][rpm_idx];
-            cell = ltft_iir_toward(cell, g_stft_pct_x10, ltft_mult_clamp());
+            // Integrate STFT into the cell: total = STFT + LTFT, so the old
+            // "move toward STFT" settled at LTFT = STFT = half the error.
+            static int32_t s_mult_rem = 0;
+            static uint16_t s_mult_rem_cell = 0xFFFFu;
+            cell = ltft_integrate(cell, g_stft_pct_x10, s_mult_rem, s_mult_rem_cell,
+                                  static_cast<uint16_t>(map_idx * 32u + rpm_idx),
+                                  ltft_mult_clamp(), /*pct_step_cap=*/true);
             fuel_ltft_store_cell(map_idx, rpm_idx, cell);
         }
 

@@ -380,7 +380,7 @@ XTauParams xtau_get_current_params_2d(uint32_t rpm_x10, uint16_t map_bar_x100) n
 
 uint32_t transient_fuel_xtau_with_autocalib(uint32_t fuel_pw_us,
                                              uint32_t rpm_x10,
-                                             uint16_t map_bar_x100,
+                                             uint16_t /*map_bar_x100*/,
                                              int16_t clt_x10,
                                              bool enabled,
                                              uint16_t period_ms) noexcept {
@@ -394,86 +394,44 @@ uint32_t transient_fuel_xtau_with_autocalib(uint32_t fuel_pw_us,
         return fuel_pw_us;
     }
 
-    // Enquanto não há aprendizado suficiente, usa o fallback 1D por CLT;
-    // depois de calibrado, usa a tabela 2D RPM×MAP interpolada.
+    // X/τ from the CLT table: wall wetting is dominated by port temperature.
+    // (The learned RPM×MAP table has no temperature axis — a cold engine would
+    // get warm-engine values — so it does not drive fuel.)
     xtau_seed_table_if_needed();
-    const XTauParams params = (g_wall_state.calibration_state >= 2u)
-        ? interpolate_xtau_2d(rpm_x10, map_bar_x100)
-        : xtau_get_current_params(clt_x10);
+    const XTauParams params = xtau_get_current_params(clt_x10);
 
-    uint16_t x_q8 = params.x_fraction_q8;
-    if (x_q8 > 192u) {
-        x_q8 = 192u;
-    }
+    int64_t x_q8 = params.x_fraction_q8;
+    if (x_q8 > 192) { x_q8 = 192; }
+    int64_t tau = params.tau_cycles;           // engine cycles (720°)
+    if (tau < 1) { tau = 1; }
+    if (tau > 255) { tau = 255; }
 
-    uint16_t tau = params.tau_cycles;
-    if (tau == 0u) {
-        tau = 1u;
-    }
-    if (tau > 255u) {
-        tau = 255u;
-    }
-
-    // τ em ciclos de motor (720°). Escala evaporação ao wall-clock do loop:
-    //   cycle_ms = 1200000 / rpm_x10   (4-stroke: 2 revs por ciclo)
-    //   evap = wall/τ × (dt / cycle_ms)
-    // Assim idle (ciclo longo) evapora devagar; alto RPM mais rápido.
-    uint16_t dt = period_ms;
-    if (dt == 0u) {
-        dt = 2u;
-    }
-    if (dt > 50u) {
-        dt = 50u;  // clamp glitch de loop
-    }
+    // Aquino film model, per engine cycle: the cylinder gets
+    // (1−X)·m_inj + M/τ and the film M gains X·m_inj − M/τ. Compensation
+    //   m_inj = (m_des − M/τ) / (1 − X)
+    // delivers exactly m_des every cycle (steady state: m_inj = m_des).
+    // This runs every period_ms, a fraction dt/cycle of an engine cycle:
+    // the film integrates (X·m_inj − M/τ)·dt/cycle.
+    uint32_t dt_us = static_cast<uint32_t>(period_ms == 0u ? 2u : period_ms) * 1000u;
+    if (dt_us > 50000u) { dt_us = 50000u; }
     uint32_t rpm = rpm_x10 / 10u;
-    if (rpm < 200u) {
-        rpm = 200u;  // piso: evita cycle_ms enorme / div0
-    }
-    if (rpm > 15000u) {
-        rpm = 15000u;
-    }
-    // cycle_ms = 120000 / rpm  (720°); em inteiros: 120000 / rpm
-    const uint32_t cycle_ms = 120000u / rpm;
-    // denom = τ × cycle_ms  (mín. 1)
-    const uint32_t tau_cycle_ms =
-        static_cast<uint32_t>(tau) * ((cycle_ms < 1u) ? 1u : cycle_ms);
+    if (rpm < 200u) { rpm = 200u; }
+    if (rpm > 15000u) { rpm = 15000u; }
+    const int64_t cycle_us = 120000000 / static_cast<int64_t>(rpm);
 
-    constexpr uint32_t kMaxPwUs = 100000u;
-    const uint32_t clamped_pw = fuel_pw_us > kMaxPwUs ? kMaxPwUs : fuel_pw_us;
-    const int32_t desired_q8 = static_cast<int32_t>(clamped_pw << 8u);
+    constexpr int64_t kMaxPwUs = 100000;
+    const int64_t desired_q8 = static_cast<int64_t>(fuel_pw_us > kMaxPwUs ? kMaxPwUs : fuel_pw_us) << 8;
+    const int64_t wall_q8 = g_wall_state.wall_fuel_us_q8;
+    const int64_t evap_cycle_q8 = wall_q8 / tau;
 
-    // evap_q8 = wall × dt / (τ × cycle_ms); clamp a wall (não evapora mais que existe)
-    int32_t evap_q8 = static_cast<int32_t>(
-        (static_cast<int64_t>(g_wall_state.wall_fuel_us_q8) * static_cast<int32_t>(dt)) /
-        static_cast<int64_t>(tau_cycle_ms));
-    if (evap_q8 > g_wall_state.wall_fuel_us_q8) {
-        evap_q8 = g_wall_state.wall_fuel_us_q8;
-    }
-    if (evap_q8 < 0) {
-        evap_q8 = 0;
-    }
+    int64_t injected_q8 = ((desired_q8 - evap_cycle_q8) * 256) / (256 - x_q8);
+    if (injected_q8 < 0) { injected_q8 = 0; }
+    if (injected_q8 > (kMaxPwUs << 8)) { injected_q8 = kMaxPwUs << 8; }
 
-    int32_t numerator_q8 = desired_q8 - evap_q8;
-    if (numerator_q8 < 0) {
-        numerator_q8 = 0;
-    }
-
-    const int32_t dry_fraction_q8 = 256 - static_cast<int32_t>(x_q8);
-    int32_t injected_q8 = static_cast<int32_t>(
-        (static_cast<int64_t>(numerator_q8) * 256) / dry_fraction_q8);
-    const int32_t max_q8 = static_cast<int32_t>(kMaxPwUs << 8u);
-    if (injected_q8 > max_q8) {
-        injected_q8 = max_q8;
-    }
-
-    g_wall_state.wall_fuel_us_q8 +=
-        ((injected_q8 * static_cast<int32_t>(x_q8)) >> 8) - evap_q8;
-    if (g_wall_state.wall_fuel_us_q8 < 0) {
-        g_wall_state.wall_fuel_us_q8 = 0;
-    }
-    if (g_wall_state.wall_fuel_us_q8 > max_q8) {
-        g_wall_state.wall_fuel_us_q8 = max_q8;
-    }
+    int64_t wall_next = wall_q8 + ((((injected_q8 * x_q8) >> 8) - evap_cycle_q8) * dt_us) / cycle_us;
+    if (wall_next < 0) { wall_next = 0; }
+    g_wall_state.wall_fuel_us_q8 = static_cast<int32_t>(
+        wall_next > INT32_MAX ? INT32_MAX : wall_next);
 
     g_wall_state.last_update_ms = millis();
 

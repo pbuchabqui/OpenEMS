@@ -118,6 +118,7 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_ckp.cpp \
                    $(TEST_DIR)/test_sensors.cpp \
                    $(TEST_DIR)/test_fuel.cpp \
+                   $(TEST_DIR)/test_fuel_physics.cpp \
                    $(TEST_DIR)/test_ign.cpp \
                    $(TEST_DIR)/test_aux_knock.cpp \
                    $(TEST_DIR)/test_knock_hw_wiring.cpp \

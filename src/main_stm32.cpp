@@ -215,8 +215,10 @@ static uint32_t inj_finish_pw(uint32_t flow_us, uint8_t squirts, uint16_t dead_u
                               uint16_t map_bar_x100, bool fuel_cut_active,
                               uint32_t& cycle_on_us) noexcept {
     const uint32_t scurve_pw_us = ems::engine::apply_injector_scurve(
-        ems::engine::apply_delta_p_compensation(flow_us, sensors.fuel_press_bar_x1000,
-                                                map_bar_x100));
+        ems::engine::apply_delta_p_compensation(
+            flow_us,
+            ((sensors.fault_bits & kFaultBitFuel) != 0u) ? 0u : sensors.fuel_press_bar_x1000,
+            map_bar_x100));
     cycle_on_us = ems::engine::inj_cycle_pw_us(scurve_pw_us, dead_us, squirts);
     const uint32_t pw_100 = cycle_on_us / 100u;
     g_last_pw_ms_x10 = fuel_cut_active ? 0u
@@ -792,9 +794,12 @@ int main() {
                         ems::engine::fuel_decel_cut_notify_gear(gr, now);
                     }
                 }
+                // Pedal (APP) = driver intent, valid with or without ETB (the
+                // ETB blade opens by itself for idle air; without ETB the
+                // ETB TPS input reads 0 and would allow a cut under load).
                 const bool decel_cut_active = !crank_or_ase &&
                     ems::engine::fuel_decel_cut_update(
-                        snap.rpm_x10, sensors.etb_tps_pct_x10, sensors.clt_degc_x10);
+                        snap.rpm_x10, sensors.app_pct_x10, sensors.clt_degc_x10);
                 ems::engine::misfire_set_all_inhibit(
                     decel_cut_active || crank_or_ase || flood_clear);
                 // X-τ desde !cranking (inclui afterstart frio — pior wall-wetting).
@@ -883,7 +888,7 @@ int main() {
                 const int16_t idle_spark_corr_deg = qc.cranking ? 0 :
                     ems::engine::calc_idle_spark_correction_deg(snap.rpm_x10,
                                                                 idle_target_rpm_x10,
-                                                                sensors.etb_tps_pct_x10,
+                                                                sensors.app_pct_x10,
                                                                 map_bar_x100);
                 const int16_t iat_spark_deg = qc.cranking ? 0 :
                     ems::engine::calc_ign_iat_correction_deg(sensors.iat_degc_x10);
@@ -904,9 +909,7 @@ int main() {
                 // Decel / flood: force PW=0 (do not apply min_pw floor).
                 const uint32_t quick_crank_pw_us =
                     (decel_cut_active || flood_clear) ? 0u :
-                    ems::engine::quick_crank_apply_pw_us(final_pw_us_base,
-                                                         qc.fuel_mult_x256,
-                                                         qc.min_pw_us);
+                    ems::engine::quick_crank_flow_us(qc, final_pw_us_base);
                 // Formula is flow + dead×openings (seq: +1 dead, semi: +2).
                 // The pin splits that total across the openings; the gauge
                 // shows the formula, not one opening.
@@ -930,9 +933,7 @@ int main() {
                 ems::engine::fuel_ae_notify_pulse(0);
                 ems::engine::transient_fuel_reset();
 
-                const uint32_t req_us = ems::engine::default_req_fuel_us();
-                const uint32_t crank_flow_us = ems::engine::quick_crank_apply_pw_us(
-                    req_us, qc.fuel_mult_x256, qc.min_pw_us);
+                const uint32_t crank_flow_us = ems::engine::quick_crank_flow_us(qc, 0u);
                 g_last_net_pw_us = crank_flow_us;
                 // Cranking batch is simultaneous: formula flow+2×dead.
                 uint32_t cycle_on_us = 0u;
@@ -998,11 +999,7 @@ int main() {
             g_t20ms_ = now;
             const auto snap = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
-            ems::app::ui_update_rt_metrics(
-	            // In presync+SIMULTANEOUS the scheduler halves PW per pulse
-	            (!ecu_sched_is_sequential() && ecu_sched_presync_inj_mode() == 0u)
-	                ? static_cast<uint8_t>(g_last_pw_ms_x10 / 2u) : g_last_pw_ms_x10,
-	            g_last_advance_deg, g_last_stft_pct,
+            ems::app::ui_update_rt_metrics(g_last_pw_ms_x10, g_last_advance_deg, g_last_stft_pct,
                                            g_last_lambda_target_d4, g_last_ltft_pct);
             ems::app::ui_update_rt_sched_diag(
                 g_late_event_count,
@@ -1046,13 +1043,13 @@ int main() {
                 }
             }
 
-            // Flex fuel: update stoich AFR based on ethanol %
-            // E0=14.7 (1470), E100=9.0 (900), linear
-            if (ems::hal::flex_fuel_valid()) {
-                const uint16_t eth = ems::hal::flex_fuel_ethanol_pct();
-                ems::engine::cfg::g_eng_cfg.stoich_afr_x100 =
-                    static_cast<uint16_t>(1470u - (eth * 570u) / 100u);
-            }
+            // Flex fuel: stoich AFR from ethanol % (E0 = 14.7, E100 = 9.0,
+            // linear) as a runtime override — the configured stoich (page 0)
+            // is never overwritten, so it cannot be burned to flash.
+            ems::engine::fuel_set_stoich_override_x100(
+                ems::hal::flex_fuel_valid()
+                    ? static_cast<uint16_t>(1470u - (ems::hal::flex_fuel_ethanol_pct() * 570u) / 100u)
+                    : 0u);
             const auto snap    = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
 

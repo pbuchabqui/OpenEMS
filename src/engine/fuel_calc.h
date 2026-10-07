@@ -8,34 +8,6 @@
 
 namespace ems::engine {
 
-constexpr uint32_t calc_req_fuel_us_constexpr(uint16_t displacement_cc,
-                                              uint8_t cylinders,
-                                              uint16_t injector_flow_cc_min,
-                                              uint16_t stoich_afr_x100) noexcept {
-    if (displacement_cc == 0u || cylinders == 0u ||
-        injector_flow_cc_min == 0u || stoich_afr_x100 == 0u) {
-        return 0u;
-    }
-
-    const uint64_t num = static_cast<uint64_t>(displacement_cc) *
-                         cfg::kAirDensityMgPerCcX1000 *
-                         100u *
-                         60000000u;
-    const uint64_t den = static_cast<uint64_t>(cylinders) *
-                         stoich_afr_x100 *
-                         injector_flow_cc_min *
-                         cfg::kFuelDensityMgPerCc *
-                         1000u;
-    const uint32_t req = static_cast<uint32_t>(num / den);
-    return (req > 50000u) ? 50000u : req;
-}
-
-inline constexpr uint32_t kDefaultReqFuelUs =
-    calc_req_fuel_us_constexpr(cfg::kDisplacementCc,
-                               cfg::kCylinderCount,
-                               cfg::kInjectorFlowCcMin,
-                               cfg::kStoichAfrX100);
-
 uint8_t get_ve(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 uint8_t get_ve_prepared(const Table2dLookup& lookup) noexcept;
 uint16_t get_lambda_target_x1000(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
@@ -50,30 +22,12 @@ uint32_t calc_req_fuel_us(uint16_t displacement_cc,
                           uint16_t injector_flow_cc_min,
                           uint16_t stoich_afr_x100) noexcept;
 uint32_t default_req_fuel_us() noexcept;
-
-// PW = REQ_FUEL × VE/100 × MAP/map_ref_bar_x100, com map_ref_bar_x100 FIXO
-// (sem compensação de altitude). Não é o caminho de produção — main_stm32.cpp
-// chama calc_fuel_pw_us_default_fast, que usa o baro dinâmico
-// (fuel_get_baro_bar_x100) no denominador em vez de map_ref_bar_x100. Estas
-// duas existem para teste unitário isolado da fórmula base e uso em
-// bancada/simulação onde não há baro dinâmico disponível.
-uint32_t calc_base_pw_us(uint16_t req_fuel_us,
-                         uint8_t ve,
-                         uint16_t map_bar_x100,
-                         uint16_t map_ref_bar_x100) noexcept;
-uint32_t calc_base_pw_us_default(uint8_t ve,
-                                 uint16_t map_bar_x100) noexcept;
-
-uint32_t apply_lambda_target_pw_us(uint32_t base_pw_us,
-                                   uint16_t lambda_target_x1000) noexcept;
-
-uint32_t apply_fuel_trim_pw_us(uint32_t base_pw_us,
-                               int16_t trim_pct_x10) noexcept;
+// Flex fuel: runtime stoich AFR ×100 (0 = configured value). Not persisted.
+void fuel_set_stoich_override_x100(uint16_t afr_x100) noexcept;
 
 uint16_t corr_clt(int16_t clt_x10) noexcept;
 uint16_t corr_iat(int16_t iat_x10) noexcept;
 uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept;
-uint16_t corr_warmup(int16_t clt_x10) noexcept;
 
 // Densidade do ar (lei dos gases ideais, T_ref/T_iat em Q8) — física pura,
 // não calibrável. T_ref = 298.0K (25°C), mesma referência de
@@ -108,9 +62,7 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
                                       uint16_t corr_iat_x256,
                                       uint16_t dead_time_us) noexcept;
 
-void fuel_ae_set_threshold(uint16_t threshold_tpsdot_x10) noexcept;
-// taper: ticks legados (≤64) ou ms (>64) — ver fuel_ae_apply_taper_raw.
-void fuel_ae_set_taper(uint8_t taper_cycles) noexcept;
+// taper: ticks legados (≤64) ou ms (>64).
 void fuel_ae_apply_taper_raw(uint16_t raw) noexcept;
 void fuel_ae_reset() noexcept;
 
@@ -124,11 +76,6 @@ void fuel_ae_stft_freeze_clear() noexcept;
 // tpsdot > +threshold → tip-in enrichment (µs > 0);
 // tpsdot < −threshold → tip-out enleanment (µs < 0, 50% authority).
 int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept;
-
-int32_t calc_ae_pw_us(uint16_t tps_now_x10,
-                      uint16_t tps_prev_x10,
-                      uint16_t dt_ms,
-                      int16_t clt_x10) noexcept;
 
 // Corte de combustível na desaceleração (MS42 TI_PUR).
 bool fuel_decel_cut_update(uint32_t rpm_x10,

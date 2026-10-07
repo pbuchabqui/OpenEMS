@@ -167,98 +167,20 @@ uint32_t calc_req_fuel_us(uint16_t displacement_cc,
     return req;
 }
 
+// Runtime stoichiometric AFR from a flex-fuel sensor (0 = use the configured
+// value). Kept apart from g_eng_cfg so it never ends up burned into page 0.
+static uint16_t g_stoich_override_x100 = 0u;
+
+void fuel_set_stoich_override_x100(uint16_t afr_x100) noexcept {
+    g_stoich_override_x100 = afr_x100;
+}
+
 uint32_t default_req_fuel_us() noexcept {
     return calc_req_fuel_us(cfg::g_eng_cfg.displacement_cc,
                             cfg::kCylinderCount,
                             cfg::g_eng_cfg.injector_flow_cc_min,
-                            cfg::g_eng_cfg.stoich_afr_x100);
-}
-
-uint32_t calc_base_pw_us(uint16_t req_fuel_us,
-                         uint8_t ve,
-                         uint16_t map_bar_x100,
-                         uint16_t map_ref_bar_x100) noexcept {
-    // Verificações de produção (ativas mesmo em release): retorno seguro 0
-    // evita divisão por zero e overflow de uint64_t na fórmula abaixo.
-    if (map_ref_bar_x100 == 0u || ve == 0u || req_fuel_us == 0u) {
-        return 0u;
-    }
-    if (map_bar_x100 > 300u) {
-        return 0u;  // MAP > 3.00 bar: sensor em fault, não calcular PW
-    }
-    if (req_fuel_us > 50000u) {
-        return 0u;  // REQ_FUEL > 50 ms: valor absurdo, não calcular PW
-    }
-
-    ASSERT_VALID_MAP_KPA(map_bar_x100);
-    ASSERT_VALID_MAP_KPA(map_ref_bar_x100);
-    ASSERT_VALID_VE(ve);
-
-    // PW = REQ_FUEL * (VE / 100) * (MAP / MAP_REF)
-    const uint64_t num = static_cast<uint64_t>(req_fuel_us) *
-                         static_cast<uint64_t>(ve) *
-                         static_cast<uint64_t>(map_bar_x100);
-    const uint32_t den = 100u * static_cast<uint32_t>(map_ref_bar_x100);
-    uint32_t temp = static_cast<uint32_t>(num / den);
-    if (temp > 100000u) {
-        temp = 100000u;
-    }
-    return temp;
-}
-
-uint32_t calc_base_pw_us_default(uint8_t ve,
-                                 uint16_t map_bar_x100) noexcept {
-    if (ve == 0u) {
-        return 0u;
-    }
-    if (map_bar_x100 > 300u) {
-        return 0u;
-    }
-
-    const uint32_t req_fuel_us = default_req_fuel_us();
-    const uint32_t num = req_fuel_us *
-                         static_cast<uint32_t>(ve) *
-                         static_cast<uint32_t>(map_bar_x100);
-    uint32_t out = num / (100u * static_cast<uint32_t>(cfg::g_eng_cfg.map_ref_bar_x100));
-    if (out > 100000u) {
-        out = 100000u;
-    }
-    return out;
-}
-
-uint32_t apply_lambda_target_pw_us(uint32_t base_pw_us,
-                                        uint16_t lambda_target_x1000) noexcept {
-    if (base_pw_us == 0u) {
-        return 0u;
-    }
-    if (lambda_target_x1000 < 650u || lambda_target_x1000 > 1200u) {
-        return base_pw_us;
-    }
-
-    uint32_t out = (base_pw_us * 1000u) / lambda_target_x1000;
-    if (out > 100000u) {
-        out = 100000u;
-    }
-    return out;
-}
-
-uint32_t apply_fuel_trim_pw_us(uint32_t base_pw_us,
-                                    int16_t trim_pct_x10) noexcept {
-    if (base_pw_us == 0u) {
-        return 0u;
-    }
-
-    const int16_t trim = clamp_i16(trim_pct_x10, -500, 500);
-    const int32_t mult_x1000 = 1000 + static_cast<int32_t>(trim);
-    if (mult_x1000 <= 0) {
-        return 0u;
-    }
-
-    uint32_t out = (base_pw_us * static_cast<uint32_t>(mult_x1000)) / 1000u;
-    if (out > 100000u) {
-        out = 100000u;
-    }
-    return out;
+                            (g_stoich_override_x100 != 0u) ? g_stoich_override_x100
+                                                           : cfg::g_eng_cfg.stoich_afr_x100);
 }
 
 uint16_t corr_clt(int16_t clt_x10) noexcept {
@@ -297,11 +219,6 @@ uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept {
     return interp_u16_8pt_u16x(vbatt_corr_axis_mv, injector_dead_time_us, kCorrPoints, v);
 }
 
-uint16_t corr_warmup(int16_t clt_x10) noexcept {
-    ASSERT_VALID_TEMP_X10(clt_x10);
-    return interp_u16_8pt(warmup_corr_axis_x10, warmup_corr_x256, kCorrPoints, clt_x10);
-}
-
 uint32_t apply_injector_scurve(uint32_t pw_us) noexcept {
     if (pw_us == 0u) {
         return 0u;
@@ -319,29 +236,24 @@ uint32_t apply_injector_scurve(uint32_t pw_us) noexcept {
 uint32_t apply_delta_p_compensation(uint32_t pw_us,
                                     uint16_t fuel_press_bar_x1000,
                                     uint16_t map_bar_x100) noexcept {
-    if (pw_us == 0u) {
-        return 0u;
+    // Injector flow ∝ √ΔP across the nozzle; its flow rating holds at
+    // ΔP = fuel_press_nominal_bar_x1000. ΔP_actual = rail (gauge) + baro − MAP.
+    //   PW ×= √(ΔP_rated / ΔP_actual)
+    // A MAP-referenced regulator keeps ΔP constant → factor 1 at any load.
+    // fuel_press_bar_x1000 = 0 means "no valid reading" (sensor absent or
+    // faulted — the caller passes 0): no correction.
+    if (pw_us == 0u || fuel_press_bar_x1000 == 0u || fuel_press_nominal_bar_x1000 == 0u) {
+        return pw_us;
     }
-    // Sensor sem leitura válida: usa o nominal, sem correção (ratio_q8 = 256).
-    const uint16_t actual_press_bar_x1000 =
-        (fuel_press_bar_x1000 > 0u) ? fuel_press_bar_x1000 : fuel_press_nominal_bar_x1000;
-
-    // ΔP absoluto no bico = pressão do rail - pressão do coletor (ambas absolutas,
-    // bar × 1000). map_bar_x100 (bar × 100) → × 10 para bar × 1000.
-    int32_t delta_p_actual = static_cast<int32_t>(actual_press_bar_x1000) -
-                             static_cast<int32_t>(map_bar_x100) * 10;
-    int32_t delta_p_nominal = static_cast<int32_t>(fuel_press_nominal_bar_x1000) -
-                              static_cast<int32_t>(map_bar_x100) * 10;
-    // Piso de 0.2 bar: evita divisão por ~0 / raiz de negativo em falhas de sensor.
-    if (delta_p_actual < 200) delta_p_actual = 200;
-    if (delta_p_nominal < 200) delta_p_nominal = 200;
-
-    // Fluxo do bico ∝ sqrt(ΔP) → PW_corrigido = PW_base × sqrt(ΔP_nominal / ΔP_atual)
-    const uint32_t ratio_q8 = static_cast<uint32_t>(
-        (static_cast<int64_t>(delta_p_nominal) * 256) / delta_p_actual);
-    const uint32_t sqrt_factor_q8 = isqrt_u32(ratio_q8 * 256u);
-
-    const uint64_t pw_corrected = (static_cast<uint64_t>(pw_us) * sqrt_factor_q8) / 256u;
+    int32_t dp_actual = static_cast<int32_t>(fuel_press_bar_x1000) +
+                        (static_cast<int32_t>(g_baro_bar_x100) - static_cast<int32_t>(map_bar_x100)) * 10;
+    // Floor 0.5 bar: a lower reading is a sensor/pump fault, not physics —
+    // limit the enrichment to √(rated/0.5) instead of dividing by ~0.
+    if (dp_actual < 500) { dp_actual = 500; }
+    const uint32_t ratio_q16 = static_cast<uint32_t>(
+        (static_cast<uint64_t>(fuel_press_nominal_bar_x1000) << 16) / static_cast<uint32_t>(dp_actual));
+    const uint32_t sqrt_factor_q8 = isqrt_u32(ratio_q16);   // √(ratio)·256
+    const uint64_t pw_corrected = (static_cast<uint64_t>(pw_us) * sqrt_factor_q8 + 128u) / 256u;
     return static_cast<uint32_t>(pw_corrected > 200000u ? 200000u : pw_corrected);
 }
 
@@ -392,19 +304,20 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
                                       uint16_t corr_iat_x256,
                                       uint16_t dead_time_us) noexcept {
     uint32_t base_pw_us = 0u;
-    if (ve != 0u && map_bar_x100 <= 300u) {
+    if (ve != 0u) {
+        // Speed-density: cylinder air ∝ VE × MAP / P_ref × T_ref / T_iat, with
+        // P_ref = 101.325 kPa, T_ref = 298 K — the state of
+        // kAirDensityMgPerCcX1000 that REQ_FUEL is computed at. Barometric
+        // pressure does not enter: at a given MAP the cylinder holds the same
+        // air whatever the altitude (old MAP/baro added +18 % at 0.85 bar).
+        // map_bar_x100 is kPa; above the sensor range it is NOT cut to 0.
         const uint32_t req_fuel_us = default_req_fuel_us();
         const uint64_t num = static_cast<uint64_t>(req_fuel_us) *
                              static_cast<uint64_t>(ve) *
-                             static_cast<uint64_t>(map_bar_x100);
-        // Denominador usa baro dinâmico (MS42 TI_FAC_ALTI): MAP/baro em vez de MAP/100.
-        // A altitude reduz o baro → denominador menor → PW sobe para compensar VE
-        // não calibrada na altitude (WOT a 0.90bar não é igual a 90% carga no nível do mar).
-        const uint16_t baro = (g_baro_bar_x100 != 0u)
-                              ? g_baro_bar_x100 : cfg::g_eng_cfg.map_ref_bar_x100;
-        uint64_t pw = num / (100u * static_cast<uint64_t>(baro));
+                             static_cast<uint64_t>(map_bar_x100) * 1000u;
+        uint64_t pw = (num + 100u * 101325u / 2u) / (100u * 101325u);
         // Termo físico de densidade do ar (ideal gas, T_ref/T_iat — ver
-        // corr_iat_density_q8). Multiplicado aqui, junto com MAP/baro, porque
+        // corr_iat_density_q8). Multiplicado aqui, junto com MAP/P_ref, porque
         // é propriedade de densidade do ar (base física), não uma correção
         // de calibração tardia como corr_clt_x256/corr_iat_x256 abaixo.
         // iat_density_q8=0 (chamador não forneceu) → neutro, sem alterar PW.
@@ -464,14 +377,6 @@ uint32_t inj_pulse_pw_us(uint32_t flow_us, uint16_t dead_time_us,
     return cycle / n;
 }
 
-void fuel_ae_set_threshold(uint16_t threshold_tpsdot_x10) noexcept {
-    ae_tpsdot_threshold_x10 = threshold_tpsdot_x10;
-}
-
-void fuel_ae_set_taper(uint8_t taper_cycles) noexcept {
-    fuel_ae_apply_taper_raw(taper_cycles);
-}
-
 int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
     const int16_t thr = static_cast<int16_t>(ae_tpsdot_threshold_x10);
     const int16_t abs_dot = (tpsdot_x10 >= 0) ? tpsdot_x10 : static_cast<int16_t>(-tpsdot_x10);
@@ -512,31 +417,6 @@ int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
     g_ae_pulse_us = 0;
     return 0;
 }
-
-int32_t calc_ae_pw_us(uint16_t tps_now_x10,
-                      uint16_t tps_prev_x10,
-                      uint16_t dt_ms,
-                      int16_t clt_x10) noexcept {
-    if (dt_ms == 0u) {
-        return 0;
-    }
-
-    // Signed ΔTPS → tip-in (AE) e tip-out (DE).
-    const int32_t delta_tps_x10 =
-        static_cast<int32_t>(tps_now_x10) - static_cast<int32_t>(tps_prev_x10);
-
-    // (%×10)/ms → %/s×10
-    int32_t tpsdot_x10 =
-        (delta_tps_x10 * 1000) / static_cast<int32_t>(dt_ms);
-    if (tpsdot_x10 > 1000) {
-        tpsdot_x10 = 1000;
-    }
-    if (tpsdot_x10 < -1000) {
-        tpsdot_x10 = -1000;
-    }
-    return calc_ae_pw_from_tpsdot(static_cast<int16_t>(tpsdot_x10), clt_x10);
-}
-
 
 // ── Compensação barométrica (MS42 TI_FAC_ALTI) ───────────────────────────────
 

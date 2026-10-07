@@ -161,21 +161,6 @@ void test_table3d_all(void) {
     CHECK_EQ(table3d_lookup_s16(flat_s16, kRpmAxisX10, kLoadAxisBarX100, 30000u, 100u),
              (int16_t)1000, "table3d_lookup_s16 matches prepared");
 
-    // ─ table3d_lookup_ve_q8 ───────────────────────────────────────────
-    section("table3d: lookup_ve_q8");
-    // flat VE=80 → result in Q8 = 80<<8=20480
-    const uint16_t ve_q8 = table3d_lookup_ve_q8(flat_u8,
-                                                  kRpmAxisX10, kLoadAxisBarX100,
-                                                  30000u, 100u);
-    CHECK_EQ(ve_q8, 80u << 8u, "flat VE=80 → ve_q8=80<<8");
-
-    // ─ table3d_lookup_advance_q10 ─────────────────────────────────
-    section("table3d: lookup_advance_q10");
-    // flat advance=30° → result in Q10 = 30<<10=30720
-    const int32_t adv_q10 = table3d_lookup_advance_q10(flat_s16,
-                                                         kRpmAxisX10, kLoadAxisBarX100,
-                                                         30000u, 100u);
-    CHECK_EQ(adv_q10, 1000 << 10, "flat adv=1000 → adv_q10=1000<<10");
 }
 
 // ============================================================================

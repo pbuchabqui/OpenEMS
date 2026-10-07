@@ -29,7 +29,7 @@ struct CanSignalDef {
 // Wire size: 12 bytes LE per signal (see can_rx_map_serialize_to_page0).
 // Layout: id u16, byte_lo, byte_hi, shift, pad, mask u16, offset i16, timeout u16
 static constexpr uint16_t kCanRxSignalWireLen = 12u;
-// page0 216–245: 3 signals × 10 B
+// page0 216–251: 3 signals × 12 B
 static constexpr uint16_t kCanRxMapPage0Off = 216u;
 static constexpr uint16_t kCanRxMapPage0Len =
     static_cast<uint16_t>(static_cast<uint8_t>(CanRxSignal::COUNT) * kCanRxSignalWireLen);

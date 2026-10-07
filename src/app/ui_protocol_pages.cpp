@@ -28,6 +28,18 @@
 #include "hal/flash.h"
 #include "engine/engine_config.h"
 
+// page0 layout guards: CAN RX map 216..251 | duty/DFCO/knock 252..257 |
+// capture polarity 258 | DFCO ramp 259..260 | MAP window 264..269.
+// A collision must not compile.
+static constexpr uint16_t kPage0MapWindowOff = 264u;
+static_assert(ems::engine::kCapturePolarityPage0Off == 258u &&
+              ems::engine::kDecelCutRampMsPage0Off == 259u, "page0 258..260 moved");
+static_assert(kPage0MapWindowOff >= ems::engine::kDecelCutRampMsPage0Off + 2u,
+              "MAP window overlaps DFCO ramp / capture polarity");
+static_assert(ems::app::kCanRxMapPage0Off + ems::app::kCanRxMapPage0Len <= 252u,
+              "CAN RX map overlaps page0 bytes 252+");
+static_assert(kPage0MapWindowOff + 6u <= 512u, "MAP window outside page0");
+
 namespace ems::app::ui_detail {
 
 void enter_critical() noexcept {
@@ -424,13 +436,13 @@ void sync_page_from_table(uint8_t page) noexcept {
         g_page0[190] = ems::engine::ltft_learn_ready_max_stft_x10;
         // Launch + TC (191-215, layout v5)
         ems::engine::launch_tc_serialize_to_page0(g_page0, sizeof(g_page0));
-        // CAN RX map: gear / vehicle speed / driven wheel (216-245)
+        // CAN RX map: gear / vehicle speed / driven wheel (216-251)
         ems::app::can_rx_map_serialize_to_page0(g_page0, sizeof(g_page0));
-        // MAP janela angular por cilindro (246-251)
-        g_page0[246] = ems::engine::map_window_enable;
-        g_page0[247] = ems::engine::map_window_use_for_fuel;
-        std::memcpy(g_page0 + 248, &ems::engine::map_window_open_deg, 2u);
-        std::memcpy(g_page0 + 250, &ems::engine::map_window_len_deg,  2u);
+        // MAP janela angular por cilindro (264-269)
+        g_page0[kPage0MapWindowOff + 0u] = ems::engine::map_window_enable;
+        g_page0[kPage0MapWindowOff + 1u] = ems::engine::map_window_use_for_fuel;
+        std::memcpy(g_page0 + kPage0MapWindowOff + 2u, &ems::engine::map_window_open_deg, 2u);
+        std::memcpy(g_page0 + kPage0MapWindowOff + 4u, &ems::engine::map_window_len_deg,  2u);
         // Duty INJ + gates DFCO + knock morto (252-257)
         g_page0[252] = ems::engine::inj_duty_max_pct;
         g_page0[253] = ems::engine::inj_duty_tol_ms10;
@@ -660,21 +672,21 @@ bool sync_table_from_page(uint8_t page) noexcept {
             }
             // Launch + TC (191-215): only layout v5+ — older blobs are zeros/garbage.
             ems::engine::launch_tc_apply_from_page0(g_page0, sizeof(g_page0));
-            // CAN RX map 216-245 (id=0 disables each signal — safe on blank flash)
+            // CAN RX map 216-251 (id=0 disables each signal — safe on blank flash)
             ems::app::can_rx_map_apply_from_page0(g_page0, sizeof(g_page0));
-            // MAP janela angular (246-251). Blob antigo = zeros → fica off e
-            // len mantém o default (0 nunca substitui — janela vazia inútil).
-            ems::engine::map_window_enable = (g_page0[246] != 0u) ? 1u : 0u;
+            // MAP janela angular (264-269; was 246-251, overlapping the 3rd CAN
+            // signal). Blob antigo = zeros → fica off e len mantém o default.
+            ems::engine::map_window_enable = (g_page0[kPage0MapWindowOff + 0u] != 0u) ? 1u : 0u;
             // use_for_fuel: gate separado — ver AVISO de calibração em
             // map_window.h antes de ligar num motor real.
-            ems::engine::map_window_use_for_fuel = (g_page0[247] != 0u) ? 1u : 0u;
-            std::memcpy(&ems::engine::map_window_open_deg, g_page0 + 248, 2u);
+            ems::engine::map_window_use_for_fuel = (g_page0[kPage0MapWindowOff + 1u] != 0u) ? 1u : 0u;
+            std::memcpy(&ems::engine::map_window_open_deg, g_page0 + kPage0MapWindowOff + 2u, 2u);
             if (ems::engine::map_window_open_deg >= 720u) {
                 ems::engine::map_window_open_deg =
                     static_cast<uint16_t>(ems::engine::map_window_open_deg % 720u);
             }
             uint16_t wlen = 0u;
-            std::memcpy(&wlen, g_page0 + 250, 2u);
+            std::memcpy(&wlen, g_page0 + kPage0MapWindowOff + 4u, 2u);
             if (wlen != 0u) {
                 ems::engine::map_window_len_deg =
                     (wlen < 10u) ? 10u : (wlen > 180u) ? 180u : wlen;

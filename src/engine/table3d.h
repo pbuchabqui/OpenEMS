@@ -17,7 +17,7 @@ constexpr uint8_t  kLtftAddAxisSize = (kTableAxisSize + 1u) / 2u;
 // de 256B interpretado como 400B = células a 255). Incrementar sempre que
 // kTableAxisSize (ou o layout serializado das tabelas) mudar.
 // 4: LEARN thresholds page0 185-190
-// 5: Launch + TC knobs page0 191-215; CAN RX map 216-245 (id=0 = off, safe blank)
+// 5: Launch + TC knobs page0 191-215; CAN RX map 216-251 (id=0 = off, safe blank)
 // EOI 2D (eoi_rpm_axis_x10/eoi_clt_axis_x10/eoi_table_deg) vive em page6
 // 79-114 — não bump de magic/layout (não é v6; page0 TDC1-CMP fica no Encoder).
 constexpr uint8_t kCalLayoutVersion       = 5u;
@@ -81,17 +81,5 @@ int16_t table3d_lookup_s16(const int16_t table[kTableAxisSize][kTableAxisSize],
                            uint32_t x,
                            uint32_t y) noexcept;
 
-// Funções otimizadas para VE e Advance lookup com fixed-point arithmetic
-uint16_t table3d_lookup_ve_q8(const uint8_t ve_table[kTableAxisSize][kTableAxisSize],
-                             const uint32_t* x_axis,
-                             const uint32_t* y_axis,
-                             uint32_t x,
-                             uint32_t y) noexcept;
-
-int32_t table3d_lookup_advance_q10(const int16_t advance_table[kTableAxisSize][kTableAxisSize],
-                                 const uint32_t* x_axis,
-                                 const uint32_t* y_axis,
-                                 uint32_t x,
-                                 uint32_t y) noexcept;
 
 }  // namespace ems::engine
