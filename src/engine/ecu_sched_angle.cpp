@@ -43,6 +43,11 @@ namespace {
 constexpr int32_t kToothX10 = 60;        // 6.0° per tooth position
 constexpr int32_t kRevX10 = 3600;
 constexpr int32_t kMaxDwellSpanX10 = 3000;
+// Point events (SPARK, INJ_ON) are armed at least this far before their
+// target. Armed on the very tooth they fall on, they would fire after the
+// tooth ISR has run (~2-4 us late, 0.08 deg at 3000 rpm); 1.0 deg is >= 24 us
+// up to 7000 rpm, well above the ISR latency.
+constexpr int32_t kArmLeadX10 = 10;
 
 int32_t wrap(int32_t a, int32_t cycle) { return ((a % cycle) + cycle) % cycle; }
 
@@ -107,11 +112,11 @@ void add_cylinder(uint8_t cyl, int32_t tdc, int32_t cycle, int32_t now, int32_t 
                         g_cyl_retard_x10[cyl];
     const int32_t spark = wrap(tdc - adv - trig_off, cycle);
     table_add(spark - dwell_span, spark, cycle, now, kIgnCh[cyl], ECU_ACT_DWELL_START);
-    table_add(spark, spark, cycle, now, kIgnCh[cyl], ECU_ACT_SPARK);
+    table_add(spark - kArmLeadX10, spark, cycle, now, kIgnCh[cyl], ECU_ACT_SPARK);
 
     const int32_t eoi = inj_ref - static_cast<int32_t>(g_eoi_lead_deg) * 10 - trig_off;
     const int32_t soi = wrap(eoi - pw_x10, cycle);
-    table_add(soi, soi, cycle, now, kInjCh[cyl], ECU_ACT_INJ_ON);
+    table_add(soi - kArmLeadX10, soi, cycle, now, kInjCh[cyl], ECU_ACT_INJ_ON);
 }
 
 void build(const ems::drv::CkpSnapshot& snap, int32_t cycle, bool presync)

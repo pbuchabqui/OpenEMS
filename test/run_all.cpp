@@ -324,6 +324,10 @@ int main(void) {
     test_fuel_physics_map_estimator_unbiased();
     test_table_interpolation_unbiased();
     test_fuel_physics_crank_fuel_continuous();
+    test_engine_calc_pw_matches_physics();
+    test_engine_calc_advance_and_timing_light();
+    test_engine_calc_cranking();
+    test_engine_calc_cuts();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

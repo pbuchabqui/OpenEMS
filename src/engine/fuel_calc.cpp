@@ -223,14 +223,25 @@ uint32_t apply_injector_scurve(uint32_t pw_us) noexcept {
     if (pw_us == 0u) {
         return 0u;
     }
-    const uint16_t pw_clamped = static_cast<uint16_t>(pw_us > 65535u ? 65535u : pw_us);
-    const uint16_t corr_q8 = ems::engine::interp_u16_8pt_u16x(
-        injector_scurve_pw_axis_us, injector_scurve_corr_q8, kCorrPoints, pw_clamped);
-    if (corr_q8 == 0u) {
-        return pw_us;  // tabela mal calibrada — não divide por zero, sem correção
+    // The table is the injector's delivery efficiency vs the electrical
+    // opening (flow time) it is commanded. Solve cmd x eff(cmd) = pw_us: the
+    // efficiency must be read at the commanded opening, not at pw_us, so one
+    // refinement step follows the first estimate (the curve is smooth).
+    auto eff_q8 = [](uint32_t t_us) noexcept {
+        const uint16_t t = static_cast<uint16_t>(t_us > 65535u ? 65535u : t_us);
+        return ems::engine::interp_u16_8pt_u16x(
+            injector_scurve_pw_axis_us, injector_scurve_corr_q8, kCorrPoints, t);
+    };
+    uint32_t cmd = pw_us;
+    for (uint8_t i = 0u; i < 2u; ++i) {
+        const uint16_t corr_q8 = eff_q8(cmd);
+        if (corr_q8 == 0u) {
+            return pw_us;  // tabela mal calibrada — não divide por zero, sem correção
+        }
+        const uint64_t c = (static_cast<uint64_t>(pw_us) * 256u + corr_q8 / 2u) / corr_q8;
+        cmd = static_cast<uint32_t>(c > 200000u ? 200000u : c);
     }
-    const uint64_t pw_corrected = (static_cast<uint64_t>(pw_us) * 256u) / corr_q8;
-    return static_cast<uint32_t>(pw_corrected > 200000u ? 200000u : pw_corrected);
+    return cmd;
 }
 
 uint32_t apply_delta_p_compensation(uint32_t pw_us,

@@ -75,6 +75,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/map_window.cpp \
              $(SRC_DIR)/engine/output_test.cpp \
              $(SRC_DIR)/engine/xtau_autocalib.cpp \
+             $(SRC_DIR)/engine/engine_calc.cpp \
              $(SRC_DIR)/engine/etb_control.cpp \
              $(SRC_DIR)/engine/etb_autocal.cpp \
              $(SRC_DIR)/engine/torque_manager.cpp \
@@ -119,6 +120,7 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_sensors.cpp \
                    $(TEST_DIR)/test_fuel.cpp \
                    $(TEST_DIR)/test_fuel_physics.cpp \
+                   $(TEST_DIR)/test_engine_calc.cpp \
                    $(TEST_DIR)/test_ign.cpp \
                    $(TEST_DIR)/test_aux_knock.cpp \
                    $(TEST_DIR)/test_knock_hw_wiring.cpp \

@@ -209,3 +209,7 @@ void test_knock_threshold_never_drifts_above_calibration(void);
 void test_fuel_physics_map_estimator_unbiased(void);
 void test_table_interpolation_unbiased(void);
 void test_fuel_physics_crank_fuel_continuous(void);
+void test_engine_calc_pw_matches_physics(void);
+void test_engine_calc_advance_and_timing_light(void);
+void test_engine_calc_cranking(void);
+void test_engine_calc_cuts(void);
