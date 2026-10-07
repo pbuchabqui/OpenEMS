@@ -1,5 +1,7 @@
 # TLE8888 — contraprova independente contra o rusEFI
 
+> ⛔ **Documento histórico.** O TLE8888 não é usado nesta ECU: o driver foi removido do firmware e as saídas INJ/IGN saem direto por GPIO. Mantido só como referência.
+
 > **Porque este ficheiro existe.** O nosso `src/hal/tle8888_regs.h` foi escrito a partir de **uma**
 > leitura do datasheet Rev 1.2, depois de se descobrir que o driver anterior tinha um mapa de
 > registadores **inventado** (ver `interface_board_v1.md`). Uma segunda leitura minha não prova nada —

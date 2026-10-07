@@ -94,8 +94,6 @@ Confira a pinagem do ESP32 no cabeçalho de
 
 **O que é esperado nesta placa:**
 
-- As linhas de habilitação do TLE8888 (INJEN/IGNEN) ficam em LOW e não há
-  TLE8888 no SPI. O bit `TLE8888_FAULT` (status bit 10) aceso é **normal** aqui.
 - O LED de heartbeat do firmware é PB2. O LED da WeAct é PC13, então ele **não
   pisca**. Use o dashboard para saber se o firmware está vivo.
 - O USB CDC tem driver completo (`src/hal/stm32h562/usb_cdc.cpp`), mas ainda
@@ -345,14 +343,14 @@ Lido pelo comando `r` da página de tempo real (`OpenEMSLink.read_realtime()`). 
 | 19 | LTFT | % s8 |
 | 20 | glitches de CMP | u8 |
 | 21 | confirmações de CMP (0–2) | u8 |
-| 22 | falhas TLE8888 | bitmask |
+| 22 | reservado | sempre 0 |
 | 23 | etanol | % |
 | 24–27 | drops do agendador | u32 |
 | 28–31 | clamps de calibração | u32 |
 | 32 | máscara de rejeição da config | u8 |
 | 33 | modo lâmpada ativo | bit 0 |
 | 34–35 | avanço enviado às bobinas | 0,1° s16 |
-| 36 | impressão digital do TLE8888 | bitmask (0 = ok) |
+| 36 | reservado | sempre 0 |
 | 44 | sync (nibble baixo) / modo de injeção (nibble alto) | 0 WAIT_GAP, 1 HALF, 2 FULL, 3 LOSS / 0 simult., 1 semi, 2 seq |
 | 45–46 | redução do controle de tração | 0,1 % |
 | 47 | retardo de torque | ° |
@@ -375,7 +373,7 @@ Lido pelo comando `r` da página de tempo real (`OpenEMSLink.read_realtime()`). 
 |---|---|---|---|
 | 0 | FULL_SYNC | 8 | SCHED_CLAMP |
 | 1 | PHASE_A | 9 | WBO2_FAULT |
-| 2 | SENSOR_FAULT | 10 | TLE8888_FAULT (esperado na WeAct) |
+| 2 | SENSOR_FAULT | 10 | reservado (sempre 0) |
 | 3 | LIMP_MODE | 11 | IGN_SEQUENTIAL (0 = faísca perdida) |
 | 4 | ETB_LIMP | 12 | REV_LIMIT |
 | 5 | XTAU_LEARN | 13 | LAUNCH_ACTIVE |

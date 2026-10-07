@@ -1,5 +1,7 @@
 # OpenEMS — Esquemático Elétrico
 
+> ⛔ **Documento histórico.** O TLE8888 não é usado nesta ECU: o driver foi removido do firmware e as saídas INJ/IGN saem direto por GPIO. Mantido só como referência.
+
 > **Âmbito deste ficheiro:** alimentação, condicionamento de sinal, atuadores externos,
 > **conector** e terra. É o que não cabe no mapa de pinos.
 >

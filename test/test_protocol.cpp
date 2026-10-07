@@ -602,8 +602,8 @@ void test_och_launch_tc_status(void) {
 }
 
 // OCH page3 byte 63 = live VE at the current rpm x MAP point. It used to be
-// overwritten by the TLE8888 map fingerprint (0 on any board without a
-// TLE8888), so the dashboard and TunerStudio showed VE 0.
+// overwritten by a constant 0 diagnostic byte, so the dashboard and
+// TunerStudio showed VE 0. Bytes 22 and 36 are reserved (always 0).
 void test_och_live_ve_byte(void) {
     section("OCH: byte 63 = live VE (not overwritten)");
     ems::app::ui_test_reset();
@@ -623,7 +623,9 @@ void test_och_live_ve_byte(void) {
     EnvResp r = env_txn(och, 7u);
     CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u && r.len == 86u, "och 86B OK");
     CHECK_EQ(r.data[63], 83u, "byte 63 = live VE from a flat 83 table");
-    CHECK_EQ(r.data[36], 0u, "byte 36 = TLE8888 map fingerprint (host: 0)");
+    CHECK_EQ(r.data[22], 0u, "byte 22 reserved = 0");
+    CHECK_EQ(r.data[36], 0u, "byte 36 reserved = 0");
+    CHECK_EQ(static_cast<uint8_t>(r.data[13] & 0x04u), 0u, "status bit 10 reserved = 0");
     std::memcpy(ems::engine::ve_table, saved, sizeof(saved));
 }
 

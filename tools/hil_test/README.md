@@ -19,17 +19,17 @@ Um único ESP32 gera o sinal CKP e (opcionalmente) monitoriza IGN/INJ.
 ESP32 GPIO 2  ────────────────→  STM32 PA0   (CKP 60-2, TIM5_CH1)
 ESP32 GPIO 4  ────────────────→  STM32 PA1   (CMP, TIM5_CH2)
 
-                          IGN (saída — TIM1)
-ESP32 GPIO 32 ←────────────────  STM32 PA8   (IGN0 TIM1_CH1)
-ESP32 GPIO 33 ←────────────────  STM32 PE11  (IGN1 TIM1_CH2)
-ESP32 GPIO 25 ←────────────────  STM32 PE13  (IGN2 TIM1_CH3)
-ESP32 GPIO 26 ←────────────────  STM32 PE14  (IGN3 TIM1_CH4)
+                          IGN (saída — GPIO, compare TIM5_CH3)
+ESP32 GPIO 32 ←────────────────  STM32 PE9   (IGN1)
+ESP32 GPIO 33 ←────────────────  STM32 PE11  (IGN2)
+              (osciloscópio)     STM32 PE13  (IGN3)
+              (osciloscópio)     STM32 PE15  (IGN4)
 
-                          INJ (saída — TIM2)
-ESP32 GPIO 27 ←────────────────  STM32 PC6   (INJ0 TIM2_CH1)
-ESP32 GPIO 14 ←────────────────  STM32 PC7   (INJ1 TIM2_CH2)
-ESP32 GPIO 12 ←────────────────  STM32 PB10  (INJ2 TIM2_CH3)
-ESP32 GPIO 13 ←────────────────  STM32 PC4   (INJ3 TIM2_CH4)
+                          INJ (saída — GPIO, compare TIM5_CH3)
+ESP32 GPIO 27 ←────────────────  STM32 PE0   (INJ1)
+ESP32 GPIO 14 ←────────────────  STM32 PE2   (INJ2)
+ESP32 GPIO 12 ←────────────────  STM32 PE4   (INJ3)
+ESP32 GPIO 13 ←────────────────  STM32 PE6   (INJ4)
 
 ESP32 GND     ─────────────────  STM32 GND   (OBRIGATÓRIO)
 ```

@@ -14,7 +14,7 @@ static constexpr uint16_t STATUS_SCHED_LATE = (1u << 6);
 static constexpr uint16_t STATUS_SCHED_DROP = (1u << 7);
 static constexpr uint16_t STATUS_SCHED_CLAMP = (1u << 8);
 static constexpr uint16_t STATUS_WBO2_FAULT = (1u << 9);
-static constexpr uint16_t STATUS_TLE8888_FAULT = (1u << 10);
+// bit 10 reserved (was TLE8888_FAULT; no TLE8888 on this ECU) — always 0.
 static constexpr uint16_t STATUS_IGN_SEQUENTIAL = (1u << 11);
 static constexpr uint16_t STATUS_REV_LIMIT     = (1u << 12);  // fuel cut active
 static constexpr uint16_t STATUS_LAUNCH_ACTIVE = (1u << 13);  // launch control holding

@@ -57,7 +57,7 @@ void ECU_Hardware_Init(void);
  * @brief Força INJ/IGN a saída push-pull LOW o mais cedo possível no boot.
  *
  * PA15 reset = JTDI com pull-up interno → HIGH activa injectores activos-high.
- * PC10/PC11 flutuam e podem subir por pull-ups externos no TLE/placa.
+ * PC10/PC11 flutuam e podem subir por pull-ups externos na placa.
  * Chamar logo após clocks GPIO (antes de delays USB / DFU).
  */
 void ecu_sched_outputs_safe_early(void);

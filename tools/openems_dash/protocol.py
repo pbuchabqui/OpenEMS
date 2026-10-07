@@ -52,7 +52,6 @@ STATUS_BITS = {
     "SCHED_DROP":       0x0080,  # bit 7
     "SCHED_CLAMP":      0x0100,  # bit 8
     "WBO2_FAULT":       0x0200,  # bit 9
-    "TLE8888_FAULT":    0x0400,  # bit 10
     "IGN_SEQUENTIAL":   0x0800,  # bit 11 — 1=sequencial, 0=wasted-spark (presync)
     "REV_LIMIT":        0x1000,  # bit 12 — fuel cut active
     "LAUNCH_ACTIVE":    0x2000,  # bit 13 — launch control holding
@@ -95,7 +94,6 @@ class RealtimeData:
     an4_raw: int      # ETB TPS2
     lambda_target_x1000: int
     ltft_pct: int
-    tle8888_fault_bm: int
     sensor_fault_bits: int  # bitmask SensorId (reserved[34]): b0=MAP b1=MAF b2=TPS b3=CLT b4=IAT b5=O2 b6=FUEL b7=OIL
     ethanol_pct: int
     cmp_confirms: int   # gate do sequencial (0/1/2); 2 = CMP confirmado → sequencial
@@ -166,7 +164,6 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         an4_raw=struct.unpack_from("<H", r, 50)[0],
         lambda_target_x1000=r[4] * 5,
         ltft_pct=struct.unpack_from("<b", r, 5)[0],
-        tle8888_fault_bm=r[8],
         sensor_fault_bits=r[34],
         ethanol_pct=r[9],
         cmp_confirms=r[7],

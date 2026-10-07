@@ -450,7 +450,7 @@ Definicao de pronto para o MVP de bancada:
   - `STATUS_SCHED_DROP` (bit 7): evento descartado no scheduler.
   - `STATUS_SCHED_CLAMP` (bit 8): ajuste limitado na calibracao — em `0x401 data[6]` bit 0.
   - `STATUS_WBO2_FAULT` (bit 9): sensor WBO2 offline — em `0x401 data[6]` bit 1.
-  - `STATUS_TLE8888_FAULT` (bit 10), `STATUS_IGN_SEQUENTIAL` (bit 11), `STATUS_REV_LIMIT` (bit 12).
+  - bit 10 reservado (era TLE8888_FAULT; sempre 0), `STATUS_IGN_SEQUENTIAL` (bit 11), `STATUS_REV_LIMIT` (bit 12).
   - `STATUS_LAUNCH_ACTIVE` (bit 13): launch control holding ETB/RPM.
   - `STATUS_TC_ACTIVE` (bit 14): traction control reducing torque.
   - OCH also exposes `tcReduction` (%×10 @ off 45) and `torqueSparkRetard` (deg @ off 47).

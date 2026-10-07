@@ -295,7 +295,7 @@ renderGaugeRow($("#gaugesExtra"), GAUGES_EXTRA, "gx_");
 const INJ_MODES = { 0: "SIM", 1: "SEMI", 2: "SEQ" };
 // Chips: off=muted; goodWhenOn → verde se on; senão vermelho se on (fault/cut).
 // kind "warn" = âmbar quando on (activo mas não fault).
-// FAULT agrega sensores analógicos + WBO2 (CAN) + TLE8888 + LIMP/ETB-limp —
+// FAULT agrega sensores analógicos + WBO2 (CAN) + LIMP/ETB-limp —
 // clique lista as fontes ativas (sensor a sensor via sensor_fault_bits, r[34]).
 const STATUS_CHIPS = [
   { id: "SYNC",  label: "SYNC",     goodWhenOn: true,
@@ -303,12 +303,9 @@ const STATUS_CHIPS = [
   { id: "REV",   label: "REV LIM",  goodWhenOn: false,
     on: d => !!(d.status && d.status.REV_LIMIT) },
   { id: "FAULT", label: "FAULT",    goodWhenOn: false,
-    // TLE8888 é só informativo (nenhum gating no firmware; INJ/IGN saem por
-    // GPIOE) e em bancada o chip está ausente → suprimido com BENCH ativo.
-    // WBO2 NÃO é suprimido: bloqueia o closed-loop, e o bench simula λ que
-    // o limpa — se acender em bench, é falha real da simulação.
+    // WBO2 NÃO é suprimido em bench: bloqueia o closed-loop, e o bench simula
+    // λ que o limpa — se acender em bench, é falha real da simulação.
     on: d => !!(d.status && (d.status.SENSOR_FAULT || d.status.WBO2_FAULT ||
-                             (d.status.TLE8888_FAULT && !d.status.BENCH_MODE) ||
                              d.status.LIMP_MODE || d.status.ETB_LIMP)) },
   { id: "TC",    label: "TRACTION", goodWhenOn: false, warn: true,
     on: d => !!(d.status && d.status.TC_ACTIVE) },
@@ -341,10 +338,6 @@ function faultDetails(d) {
   if (d.status.LIMP_MODE) out.push("LIMP mode ativo (corte de PW)");
   if (d.status.ETB_LIMP) out.push("ETB limp ativo");
   if (d.status.WBO2_FAULT) out.push("WBO2 (CAN) sem sinal/fault");
-  if (d.status.TLE8888_FAULT)
-    out.push(`TLE8888 driver${d.tle8888_fault_bm
-      ? ` (bm 0x${d.tle8888_fault_bm.toString(16).toUpperCase()})` : " ausente"}${
-      d.status.BENCH_MODE ? " — suprimido em bench" : ""}`);
   return out;
 }
 $("#led_FAULT").style.cursor = "pointer";
@@ -442,13 +435,11 @@ function pushTelemetry(d) {
   // do bench (RAM) morrer num reset da ECU com o toggle do host ainda ON.
   const ecuBench = !!(d.status && d.status.BENCH_MODE);
   if (ecuBench !== benchOn) setBenchBtn(ecuBench);
-  const tleBm = d.tle8888_fault_bm || 0;
-  const tleStr = tleBm ? ` · TLE8888 fault 0x${tleBm.toString(16).toUpperCase()}` : "";
   $("#diag").textContent =
     `loop2ms ${d.loop2ms_last_us}µs (max ${d.loop2ms_max_us}µs) · ` +
     `late ${d.late_events} · drops ${d.sched_drops} · clamps ${d.cal_clamps} · ` +
     `sync_state ${d.sync_state} · cmp_confirms ${d.cmp_confirms} · ` +
-    `cmp_glitch ${d.cmp_glitch}${tleStr}`;
+    `cmp_glitch ${d.cmp_glitch}`;
 }
 
 /* ── WebSocket ────────────────────────────────────────────────────────── */
