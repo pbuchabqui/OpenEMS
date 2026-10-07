@@ -1,3 +1,0 @@
-[submodule "hardware/vendor/hw_microRusEfi"]
-	path = hardware/vendor/hw_microRusEfi
-	url = https://github.com/rusefi/hw_microRusEfi.git
