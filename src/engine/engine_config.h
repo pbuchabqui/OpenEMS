@@ -84,10 +84,15 @@ struct EngineConfigRam {
 // Overwritten by engine_config_load() if valid data found in Flash.
 extern EngineConfigRam g_eng_cfg;
 
-// Call at boot after nvm_load_calibration(0, page0_buf, 512).
-// If page0 magic is valid, populates g_eng_cfg from page0_buf offsets 2-15.
-// Otherwise keeps compile-time defaults.
-void engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept;
+// Call at boot after nvm_load_calibration(0, page0_buf, 512), and on every
+// page 0 write. With a valid magic, each field of page0 offsets 2-13 is
+// validated on its own: valid fields apply, an out-of-range field keeps its
+// current value. Returns the reject mask (also shown in TunerStudio):
+//   bit0 displacement, bit1 injector flow, bit2 stoich AFR, bit3 MAP ref,
+//   bit4 trigger offset, bit5 EOI lead, bit7 bad magic (nothing applied).
+inline constexpr uint8_t kEngineConfigRejectMagic = 0x80u;
+uint8_t engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept;
+uint8_t engine_config_reject_mask() noexcept;
 
 // Validates runtime config: returns false if any value is out of safe range.
 bool engine_config_valid(const EngineConfigRam& cfg) noexcept;

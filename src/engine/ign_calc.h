@@ -35,6 +35,10 @@ int16_t get_advance_x10_prepared(const Table2dLookup& lookup) noexcept;
 int16_t clamp_advance_x10(int32_t advance_x10) noexcept;
 
 int16_t calc_total_advance_x10(int16_t base_x10, AdvanceCorrectionsX10 corr) noexcept;
+
+// Running advance actually sent to the coils: the computed value, or the
+// fixed timing-light advance while that mode is on (calibration.h).
+int16_t ign_running_advance_x10(int16_t computed_x10) noexcept;
 int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,
                                        uint16_t idle_target_rpm_x10,
                                        uint16_t tps_pct_x10,

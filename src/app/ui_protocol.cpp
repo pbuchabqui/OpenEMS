@@ -428,13 +428,11 @@ void parse_byte(uint8_t b) noexcept {
 }
 
 void reset_pages() noexcept {
+    // The whole page 0 mirrors the live values before any 'w': a partial
+    // write (one TunerStudio field) applies the full buffer, so every byte
+    // must already hold the current value, not zero.
     std::memset(g_page0, 0, sizeof(g_page0));
-    // page0[0] reserved (IVC removed)
-    // Popula campos de engine config com valores actuais (de NVM ou defaults de
-    // compilação). Garante que 'r' page 0 devolve valores coerentes antes de
-    // qualquer 'w'.
-    ems::engine::cfg::engine_config_serialize(g_page0, 16u);
-    ems::engine::sync_etb_calibration_to_page(g_page0 + 16, 40u);
+    sync_page_from_table(0x00u);
     std::memcpy(g_page1_ve,    ems::engine::ve_table,    sizeof(g_page1_ve));
     std::memcpy(g_page2_spark, ems::engine::spark_table, sizeof(g_page2_spark));
     std::memset(g_page3_rt, 0, sizeof(g_page3_rt));
@@ -465,7 +463,7 @@ void ui_init() noexcept {
     reset_pages();
     reset_parser();
     ui_update_rt_metrics(0u, 0, 0);
-    ui_update_rt_sched_diag(0u, 0u, 0u, 0u, 0u, 0u, 0u);
+    ui_update_rt_sched_diag(0u, 0u, 0u, 0, 0u);
 }
 
 void ui_rx_byte(uint8_t byte) noexcept {
@@ -520,16 +518,12 @@ void ui_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p10
 void ui_update_rt_sched_diag(uint32_t late_events,
                              uint32_t cycle_schedule_drop_count,
                              uint32_t calibration_clamp_count,
-                             uint32_t seed_loaded_count,
-                             uint32_t seed_confirmed_count,
-                             uint32_t seed_rejected_count,
+                             int16_t advance_x10,
                              uint8_t sync_state_raw) noexcept {
     g_rt_sched_late_events = late_events;
     g_rt_sched_cycle_schedule_drop_count = cycle_schedule_drop_count;
     g_rt_sched_calibration_clamp_count = calibration_clamp_count;
-    g_rt_seed_loaded_count = seed_loaded_count;
-    g_rt_seed_confirmed_count = seed_confirmed_count;
-    g_rt_seed_rejected_count = seed_rejected_count;
+    g_rt_advance_x10 = advance_x10;
     g_rt_sync_state_raw = sync_state_raw;
 }
 

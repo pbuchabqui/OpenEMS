@@ -89,8 +89,6 @@ uint16_t clt_corr_x256[kCorrectionTableSize] = {384u, 352u, 320u, 288u, 272u, 25
 int16_t iat_corr_axis_x10[kCorrectionTableSize] = {-200, 0, 200, 400, 600, 800, 1000, 1200};
 uint16_t iat_corr_x256[kCorrectionTableSize] = {256u, 256u, 256u, 256u, 256u, 266u, 276u, 288u};
 
-int16_t warmup_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
-uint16_t warmup_corr_x256[kCorrectionTableSize] = {420u, 380u, 350u, 320u, 290u, 256u, 256u, 256u};
 
 uint16_t vbatt_corr_axis_mv[kCorrectionTableSize] = {9000u, 10000u, 11000u, 12000u, 13000u, 14000u, 15000u, 16000u};
 uint16_t injector_dead_time_us[kCorrectionTableSize] = {1400u, 1200u, 1050u, 900u, 800u, 700u, 650u, 600u};
@@ -455,6 +453,36 @@ void apply_page0_capture_polarity(const uint8_t* page0, uint16_t len) noexcept {
     ems::hal::tim5_ic_set_capture_polarity(
         (capture_polarity & 0x01u) != 0u,
         (capture_polarity & 0x02u) != 0u);
+}
+
+uint8_t timing_light_enable = 0u;
+int16_t timing_light_advance_x10 = 100;
+int16_t trigger_fine_x10 = 0;
+
+void apply_page0_timing(const uint8_t* page0, uint16_t len, bool at_boot) noexcept {
+    if (page0 == nullptr || len < kTimingPage0Off + 6u) {
+        return;
+    }
+    timing_light_enable = (!at_boot && page0[kTimingPage0Off] != 0u) ? 1u : 0u;
+    int16_t adv = 0;
+    int16_t fine = 0;
+    std::memcpy(&adv, page0 + kTimingPage0Off + 2u, 2u);
+    std::memcpy(&fine, page0 + kTimingPage0Off + 4u, 2u);
+    // Blank flash (0) keeps the 10.0° default.
+    if (adv != 0) {
+        timing_light_advance_x10 = (adv < 0) ? 0 : (adv > 300 ? 300 : adv);
+    }
+    trigger_fine_x10 = (fine < -50) ? -50 : (fine > 50 ? 50 : fine);
+}
+
+void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept {
+    if (page0 == nullptr || len < kTimingPage0Off + 6u) {
+        return;
+    }
+    page0[kTimingPage0Off] = timing_light_enable;
+    page0[kTimingPage0Off + 1u] = 0u;
+    std::memcpy(page0 + kTimingPage0Off + 2u, &timing_light_advance_x10, 2u);
+    std::memcpy(page0 + kTimingPage0Off + 4u, &trigger_fine_x10, 2u);
 }
 
 void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept {

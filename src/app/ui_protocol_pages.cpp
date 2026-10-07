@@ -36,6 +36,8 @@ static_assert(ems::engine::kCapturePolarityPage0Off == 258u &&
               ems::engine::kDecelCutRampMsPage0Off == 259u, "page0 258..260 moved");
 static_assert(kPage0MapWindowOff >= ems::engine::kDecelCutRampMsPage0Off + 2u,
               "MAP window overlaps DFCO ramp / capture polarity");
+static_assert(ems::engine::kTimingPage0Off >= kPage0MapWindowOff + 6u &&
+              ems::engine::kTimingPage0Off + 6u <= 512u, "timing light overlaps page0");
 static_assert(ems::app::kCanRxMapPage0Off + ems::app::kCanRxMapPage0Len <= 252u,
               "CAN RX map overlaps page0 bytes 252+");
 static_assert(kPage0MapWindowOff + 6u <= 512u, "MAP window outside page0");
@@ -220,9 +222,14 @@ void update_realtime_page() noexcept {
                     ? ems::hal::flex_fuel_ethanol_pct() : 0u;
     write_u32_le(&rt.reserved[10], g_rt_sched_cycle_schedule_drop_count);
     write_u32_le(&rt.reserved[14], g_rt_sched_calibration_clamp_count);
-    write_u32_le(&rt.reserved[18], g_rt_seed_loaded_count);
-    write_u32_le(&rt.reserved[22], g_rt_seed_confirmed_count);
-    write_u32_le(&rt.reserved[26], g_rt_seed_rejected_count);
+    // reserved[18..21] (abs 32..35): install / calibration aids.
+    //   [18] engine config reject mask (engine_config.h), [19] bit0 timing light,
+    //   [20..21] advance sent to the coils, 0.1° signed. [22..29] spare (0).
+    rt.reserved[18] = ems::engine::cfg::engine_config_reject_mask();
+    rt.reserved[19] = ems::engine::timing_light_enable;
+    rt.reserved[20] = static_cast<uint8_t>(static_cast<uint16_t>(g_rt_advance_x10) & 0xFFu);
+    rt.reserved[21] = static_cast<uint8_t>(static_cast<uint16_t>(g_rt_advance_x10) >> 8u);
+    for (uint8_t i = 22u; i < 30u; ++i) { rt.reserved[i] = 0u; }
     const uint8_t inj_mode = ::ecu_sched_is_sequential() ? 2u
                             : ::ecu_sched_presync_inj_mode();
     rt.reserved[30] = static_cast<uint8_t>((inj_mode << 4u) | (g_rt_sync_state_raw & 0x0Fu));
@@ -300,11 +307,13 @@ void reset_parser() noexcept {
 // Formato: 'T' + subcmd(1) + arg1(1) + arg2(u16 LE). Resposta: 1 byte ACK,
 // excepto STATUS (0x03) → 4 bytes {active, abort_reason, keepalive_s, busy}.
 
-void handle_test_cmd() noexcept {
-    const uint8_t sub  = g_test_args[0];
-    const uint8_t a1   = g_test_args[1];
-    const uint16_t a2  = static_cast<uint16_t>(g_test_args[2] |
-                         (static_cast<uint16_t>(g_test_args[3]) << 8u));
+// Executes one test sub-command. Writes the reply to out (1 ACK byte, or
+// 4 status bytes for STATUS) and returns its length.
+uint8_t test_cmd_exec(const uint8_t args[4], uint8_t out[4]) noexcept {
+    const uint8_t sub  = args[0];
+    const uint8_t a1   = args[1];
+    const uint16_t a2  = static_cast<uint16_t>(args[2] |
+                         (static_cast<uint16_t>(args[3]) << 8u));
     bool ok = false;
     switch (sub) {
         case 0x00u:  // EXIT
@@ -318,12 +327,9 @@ void handle_test_cmd() noexcept {
             ok = ems::engine::output_test_active();
             ems::engine::output_test_keepalive();
             break;
-        case 0x03u: {  // STATUS — resposta de 4 bytes, sem ACK
-            uint8_t st[4];
-            ems::engine::output_test_status(st);
-            tx_push_bytes(st, 4u);
-            return;
-        }
+        case 0x03u:  // STATUS — 4 bytes, sem ACK
+            ems::engine::output_test_status(out);
+            return 4u;
         case 0x10u: ok = ems::engine::output_test_fire_injector(a1, a2); break;
         case 0x11u: ok = ems::engine::output_test_fire_coil(a1, a2); break;
         case 0x20u: ok = ems::engine::output_test_set_pump(a1 != 0u); break;
@@ -333,7 +339,13 @@ void handle_test_cmd() noexcept {
         case 0x41u: ok = ems::engine::output_test_set_ewg(static_cast<int16_t>(a2)); break;
         default: break;
     }
-    tx_push(ok ? kAckOk : kAckErr);
+    out[0] = ok ? kAckOk : kAckErr;
+    return 1u;
+}
+
+void handle_test_cmd() noexcept {
+    uint8_t out[4];
+    tx_push_bytes(out, test_cmd_exec(g_test_args, out));
 }
 
 bool bounds_ok(uint8_t page, uint16_t off, uint16_t len) noexcept {
@@ -451,6 +463,7 @@ void sync_page_from_table(uint8_t page) noexcept {
         g_page0[257] = ems::engine::knock_dead_min_p2p;
         // 258: polaridade captura CKP/CMP (bit0/bit1 = falling)
         g_page0[ems::engine::kCapturePolarityPage0Off] = ems::engine::capture_polarity;
+        ems::engine::serialize_page0_timing(g_page0, sizeof(g_page0));
         std::memcpy(g_page0 + ems::engine::kDecelCutRampMsPage0Off,
                     &ems::engine::decel_cut_ramp_ms, 2u);
     } else if (page == 0x01u) {
@@ -465,8 +478,7 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(p +  16, ems::engine::clt_corr_x256,              16u);
         std::memcpy(p +  32, ems::engine::iat_corr_axis_x10,          16u);
         std::memcpy(p +  48, ems::engine::iat_corr_x256,              16u);
-        std::memcpy(p +  64, ems::engine::warmup_corr_axis_x10,       16u);
-        std::memcpy(p +  80, ems::engine::warmup_corr_x256,           16u);
+        std::memset(p + 64, 0, 32u);  // 64-95 reserved (dead warmup curve removed)
         std::memcpy(p +  96, ems::engine::vbatt_corr_axis_mv,         16u);
         std::memcpy(p + 112, ems::engine::injector_dead_time_us,      16u);
         std::memcpy(p + 128, ems::engine::ae_clt_corr_axis_x10,       16u);
@@ -704,6 +716,7 @@ bool sync_table_from_page(uint8_t page) noexcept {
         // Polaridade TIM5 (page0[258]) — fora do gate de layout: blob antigo = 0
         // = subida (default).
         ems::engine::apply_page0_capture_polarity(g_page0, sizeof(g_page0));
+        ems::engine::apply_page0_timing(g_page0, sizeof(g_page0), false);
         // DFCO ramp-in ms (259-260); blob antigo = 0 = off.
         if (sizeof(g_page0) > (ems::engine::kDecelCutRampMsPage0Off + 1u)) {
             std::memcpy(&ems::engine::decel_cut_ramp_ms,
@@ -722,8 +735,6 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(ems::engine::clt_corr_x256,              p +  16, 16u);
         std::memcpy(ems::engine::iat_corr_axis_x10,          p +  32, 16u);
         std::memcpy(ems::engine::iat_corr_x256,              p +  48, 16u);
-        std::memcpy(ems::engine::warmup_corr_axis_x10,       p +  64, 16u);
-        std::memcpy(ems::engine::warmup_corr_x256,           p +  80, 16u);
         std::memcpy(ems::engine::vbatt_corr_axis_mv,         p +  96, 16u);
         std::memcpy(ems::engine::injector_dead_time_us,      p + 112, 16u);
         std::memcpy(ems::engine::ae_clt_corr_axis_x10,       p + 128, 16u);

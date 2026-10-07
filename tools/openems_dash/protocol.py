@@ -79,9 +79,9 @@ class RealtimeData:
     late_events: int
     sched_drops: int
     cal_clamps: int
-    seed_loaded: int
-    seed_confirmed: int
-    seed_rejected: int
+    config_reject_mask: int   # engine config fields rejected (bit0 displ .. bit5 EOI, bit7 magic)
+    timing_light: bool        # fixed-advance strobe mode active
+    advance_deg_fine: float   # advance sent to the coils, 0.1 deg
     sync_state: int
     tc_reduction_pct: float   # 0–100 % throttle cut from TC (reserved[31..32])
     torque_spark_retard_deg: int  # 0–30° retard from TC/launch (reserved[33])
@@ -146,9 +146,9 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         late_events=struct.unpack_from("<I", r, 0)[0],
         sched_drops=struct.unpack_from("<I", r, 10)[0],
         cal_clamps=struct.unpack_from("<I", r, 14)[0],
-        seed_loaded=struct.unpack_from("<I", r, 18)[0],
-        seed_confirmed=struct.unpack_from("<I", r, 22)[0],
-        seed_rejected=struct.unpack_from("<I", r, 26)[0],
+        config_reject_mask=r[18],
+        timing_light=bool(r[19] & 0x01),
+        advance_deg_fine=struct.unpack_from("<h", r, 20)[0] / 10.0,
         sync_state=r[30] & 0x0F,
         inj_mode=r[30] >> 4,
         # r+31..34: tc_reduction_pct_x10 (u16) + spark_retard (u8) + pad
@@ -498,8 +498,7 @@ PAGE5_FIELDS = [
     ("clt_corr_x256",               16, 8, "H",  1.0),   # fator ×256 (adimensional)
     ("iat_corr_axis_x10",           32, 8, "h",  0.1),   # °C
     ("iat_corr_x256",               48, 8, "H",  1.0),
-    ("warmup_corr_axis_x10",        64, 8, "h",  0.1),   # °C
-    ("warmup_corr_x256",            80, 8, "H",  1.0),
+    # 64-95 reserved (dead warmup curve removed; CLT correction is the live one)
     ("vbatt_corr_axis_mv",          96, 8, "H",  0.001), # V
     ("injector_dead_time_us",      112, 8, "H",  0.001), # ms
     ("ae_clt_corr_axis_x10",       128, 8, "h",  0.1),   # °C

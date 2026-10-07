@@ -645,9 +645,6 @@ def api_log_export(rows: int = 120, min_samples: int = 8):
             "IAT fuel correction", corr_5["iat_corr_axis_x10"], corr_5["iat_corr_x256"],
             "°C", "factor x256")
         md += _format_corr_table(
-            "Warmup enrichment", corr_5["warmup_corr_axis_x10"], corr_5["warmup_corr_x256"],
-            "°C", "factor x256")
-        md += _format_corr_table(
             "Dead time vs VBatt", corr_5["vbatt_corr_axis_mv"],
             corr_5["injector_dead_time_us"], "V", "ms")
         md += _format_corr_table(

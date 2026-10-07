@@ -2,7 +2,7 @@
 # BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE pinout)
 # Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
-.PHONY: all clean host-test precision-test host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
+.PHONY: all clean host-test precision-test ini-check host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
         secrets-check lint-includes format format-all format-check ci-local
 
 COMPILER_ARM = arm-none-eabi-g++
@@ -254,6 +254,10 @@ clean:
 # ── Quality / hygiene ─────────────────────────────────────────────────────────
 secrets-check:
 	@bash tools/secrets_check.sh
+
+# TunerStudio ini: references, byte overlaps, ranges = firmware limits.
+ini-check:
+	@python3 tools/ts/check_ini.py tools/ts/openems.ini
 
 lint-includes:
 	@LINT_ERROR=$(LINT_ERROR) $(PYTHON) tools/lint_includes.py --phase $(LINT_PHASE) \

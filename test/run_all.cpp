@@ -292,6 +292,10 @@ int main(void) {
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();
     test_page0_tail_fields_do_not_collide();
+    test_page0_rewrite_is_identity();
+    test_install_engine_config_per_field();
+    test_install_timing_light_mode();
+    test_install_output_test_over_envelope();
     test_adaptives_reset_cmd_z();
     test_ltft_apply_cmd_y();
     test_ltft_hit_matches_ve_dominant_cell();

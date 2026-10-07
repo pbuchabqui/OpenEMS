@@ -126,7 +126,7 @@ void build(const ems::drv::CkpSnapshot& snap, int32_t cycle, bool presync)
     int32_t pw_x10 = ticks_to_x10(g_inj_pw_ticks, tooth_ticks);
     if (pw_x10 > cycle * 9 / 10) { pw_x10 = cycle * 9 / 10; }
     const int32_t trig_off =
-        static_cast<int32_t>(cfg::g_eng_cfg.trigger_tooth0_engine_deg) * 10;
+        static_cast<int32_t>(cfg::g_eng_cfg.trigger_tooth0_engine_deg) * 10 + trigger_fine_x10;
     const bool simultaneous = (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS);
 
     for (uint8_t cyl = 0U; cyl < cfg::kCylinderCount; ++cyl) {
