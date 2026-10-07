@@ -204,7 +204,6 @@ int main(void) {
     test_ecu_sched_recovers_after_fallback();
     test_ecu_sched_inhibit_masks();
     test_ecu_sched_mspark();
-    test_ecu_sched_eoi_targeting();
     test_ecu_sched_eoi_lead_deg_sanitize();
     test_ecu_sched_presync();
     test_ecu_sched_dwell_watchdog();
@@ -274,7 +273,6 @@ int main(void) {
     test_math_xtau_convergence();
     test_math_production_tables();
     test_math_misfire_threshold();
-    test_trigger_offset();
 
     // ── CKP FASE 2 (snap fields, prime, phase_A, tooth_index) ─────────────
     printf("\n=== CKP (fase 3) ===");

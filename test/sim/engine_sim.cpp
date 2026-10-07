@@ -72,9 +72,8 @@ void commit(const Command& c)
 {
     const uint32_t squirts = (ecu_sched_is_sequential() != 0U) ? 1U : 2U;
     const double pw_us = (c.fuel_us + c.dead_us * squirts) / squirts;
-    const double adv = c.advance_deg < 0.0 ? 0.0 : c.advance_deg;
-    ecu_sched_commit_calibration(
-        static_cast<uint32_t>(std::lround(adv)),
+    ecu_sched_commit_calibration_x10(
+        static_cast<int32_t>(std::lround(c.advance_deg * 10.0)),
         static_cast<uint32_t>(std::llround(c.dwell_ms * 62500.0)),
         static_cast<uint32_t>(std::llround(pw_us * 62.5)),
         static_cast<uint32_t>(std::lround(c.eoi_deg)));

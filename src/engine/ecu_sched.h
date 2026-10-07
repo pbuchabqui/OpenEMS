@@ -29,18 +29,16 @@ extern "C" {
 #define ECU_CH_IGN3   5U
 #define ECU_CH_IGN4   4U
 
-// Sequential: 4 cyl × (DWELL+SPARK+INJ_ON+INJ_OFF) = 16
-// + multi-spark: max 3 extra × 2 events × 4 cyl = 24 → 40. Presync wasted can
-// reach ~40 with simultaneous inj + multi-spark. Keep margin.
-#define ECU_ANGLE_TABLE_SIZE  48U
+// 4 cyl × (DWELL ×2 + SPARK + INJ_ON) = 16; INJ_OFF and multi-spark extras
+// are queued in time when their parent event is armed.
+#define ECU_ANGLE_TABLE_SIZE  16U
 
 typedef struct {
-    uint8_t tooth_index;
-    uint8_t sub_frac_x256;
+    uint16_t offset_x256;  // angle from the arming tooth edge, 1/256 tooth (may span teeth)
+    uint8_t tooth_index;   // arming tooth (real tooth 0..57)
     uint8_t channel;
     uint8_t action;
     uint8_t phase_A;
-    uint8_t valid;
 } AngleEvent_t;
 
 #define ECU_SYSTEM_CLOCK_HZ       250000000U
@@ -71,6 +69,11 @@ void ecu_sched_commit_calibration(uint32_t advance_deg,
                                   uint32_t dwell_ticks,
                                   uint32_t inj_pw_ticks,
                                   uint32_t eoi_lead_deg);
+// Same, advance in 0.1° BTDC, signed (negative = after TDC), [-20.0, 60.0].
+void ecu_sched_commit_calibration_x10(int32_t advance_x10,
+                                      uint32_t dwell_ticks,
+                                      uint32_t inj_pw_ticks,
+                                      uint32_t eoi_lead_deg);
 void ecu_sched_set_advance_deg(uint32_t adv);
 void ecu_sched_set_dwell_ticks(uint32_t dwell);
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
@@ -89,7 +92,7 @@ void ecu_sched_dwell_watchdog(void);
 uint32_t ecu_sched_dwell_watchdog_count(void);
 
 // Injector open watchdog — same 2 ms slot. If an injector pin stays HIGH
-// beyond 1.2× current PW (hard cap 36 ms; covers prime ≤30 ms), force OFF
+// beyond 1.2× its queued pulse (36 ms for prime/bench pulses ≤30 ms), force OFF
 // and purge pending events for that cylinder (lost INJ_OFF backstop).
 void ecu_sched_inj_watchdog(void);
 uint32_t ecu_sched_inj_watchdog_count(void);
@@ -116,8 +119,8 @@ uint8_t ecu_sched_get_inj_inhibit_mask(void);
 // (não deixar bobina carregada a meio do dwell).
 void ecu_sched_set_ign_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_ign_inhibit_mask(void);
-// Contador do duty clamp: incrementado quando PW_deg excede 90% do ciclo
-// (648° sequencial / 324° presync) e é clampado. >0 = fuel shortfall.
+// Contador do duty clamp: incrementado quando o PW excede 90% do tempo de
+// ciclo (720° sequencial / 360° presync) e é clampado. >0 = fuel shortfall.
 uint32_t ecu_sched_pw_duty_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
 
@@ -190,7 +193,7 @@ void ecu_sched_test_reset(void);
 uint8_t ecu_sched_test_angle_table_size(void);
 uint8_t ecu_sched_test_get_angle_event(uint8_t index,
                                        uint8_t *tooth,
-                                       uint8_t *sub_frac,
+                                       uint16_t *offset_x256,
                                        uint8_t *ch,
                                        uint8_t *action,
                                        uint8_t *phase);
