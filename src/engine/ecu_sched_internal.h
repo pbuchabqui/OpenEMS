@@ -46,7 +46,6 @@ extern volatile uint32_t g_dwell_ticks;
 extern volatile uint32_t g_inj_pw_ticks;
 extern volatile uint32_t g_eoi_lead_deg;
 extern volatile uint8_t  g_presync_inj_mode;
-extern volatile uint8_t  g_presync_bank_toggle;
 extern volatile uint8_t  g_knock_sequential;
 extern volatile uint8_t  g_mspark_count;
 extern volatile uint32_t g_mspark_inter_dwell_ticks;

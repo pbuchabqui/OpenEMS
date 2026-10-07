@@ -185,84 +185,48 @@ void rebuild_sequential_cycle(const ems::drv::CkpSnapshot& snap)
     }
 }
 
+// Pre-cam (phase unknown): one 360° table repeated every revolution.
+// Ignition = true wasted spark: each coil fires at its own cylinder's TDC
+// modulo 360 (pairs 0↔3 at 0°, 2↔1 at 180°), i.e. once on compression and
+// once on exhaust. Fuel = 2 openings per cycle per injector, matching the
+// main-loop contract (PW per opening sized for 2 squirts):
+//   SEMI_SEQUENTIAL — each injector every rev, timed to its own pair TDC;
+//   SIMULTANEOUS    — all four every rev at the cyl-0/3 reference.
 void rebuild_presync_revolution(const ems::drv::CkpSnapshot& snap)
 {
-    static const uint8_t inj_a[2U] = {ECU_CH_INJ1, ECU_CH_INJ4};
-    static const uint8_t inj_b[2U] = {ECU_CH_INJ2, ECU_CH_INJ3};
-    const uint8_t* const inj_all = kInjCh;
-    const uint8_t* const ign = kIgnCh;
-    uint8_t tooth = 0U, frac = 0U, phase = 0U;
-
     g_knock_sequential = 0U;
     clear_angle_table();
 
     const uint32_t dwell_deg =
         ticks_to_cycle_degrees(g_dwell_ticks, snap.tooth_period_ns, 360U);
-    uint32_t inj_pw_deg = ticks_to_cycle_degrees(
-        (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS)
-            ? (g_inj_pw_ticks / 2U)
-            : g_inj_pw_ticks,
-        snap.tooth_period_ns, 360U);
+    uint32_t inj_pw_deg =
+        ticks_to_cycle_degrees(g_inj_pw_ticks, snap.tooth_period_ns, 360U);
     if (inj_pw_deg > kMaxPresyncInjPwDeg) {
         inj_pw_deg = kMaxPresyncInjPwDeg;
         ++g_pw_duty_clamp_count;
     }
-    const uint32_t spark = (360U - (g_advance_deg % 360U)) % 360U;
-    const uint32_t dwell = (spark + 360U - dwell_deg) % 360U;
-    const uint32_t eoi = (360U - (g_eoi_lead_deg % 360U)) % 360U;
-    const uint32_t inj_on = (eoi + 360U - inj_pw_deg) % 360U;
-    const uint32_t inj_off = eoi;
+    const bool simultaneous = (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS);
+    uint8_t tooth = 0U, frac = 0U, phase = 0U;
+    auto add = [&](uint32_t ang, uint8_t ch, uint8_t action) {
+        angle_to_tooth_event(engine_angle_to_trigger_angle(ang, 360U), &tooth, &frac, &phase);
+        table_add(tooth, frac, ECU_PHASE_ANY, ch, action);
+    };
 
-    angle_to_tooth_event(engine_angle_to_trigger_angle(dwell, 360U),
-                         &tooth, &frac, &phase);
-    for (uint8_t i = 0U; i < 4U; ++i) {
-        table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_DWELL_START);
-    }
-    angle_to_tooth_event(engine_angle_to_trigger_angle(spark, 360U),
-                         &tooth, &frac, &phase);
-    for (uint8_t i = 0U; i < 4U; ++i) {
-        table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_SPARK);
-    }
+    for (uint8_t cyl = 0U; cyl < cfg::kCylinderCount; ++cyl) {
+        const uint32_t tdc = cfg::cyl_tdc_deg(cyl) % 360U;
+        const uint32_t spark = (tdc + 360U - (g_advance_deg % 360U)) % 360U;
+        add((spark + 360U - (dwell_deg % 360U)) % 360U, kIgnCh[cyl], ECU_ACT_DWELL_START);
+        add(spark, kIgnCh[cyl], ECU_ACT_SPARK);
+        emit_multispark(spark, 360U, snap.tooth_period_ns,
+            [&](uint32_t add_dwell_ang, uint32_t add_spark_ang) {
+                add(add_dwell_ang, kIgnCh[cyl], ECU_ACT_DWELL_START);
+                add(add_spark_ang, kIgnCh[cyl], ECU_ACT_SPARK);
+            });
 
-    emit_multispark(spark, 360U, snap.tooth_period_ns,
-        [&](uint32_t add_dwell_ang, uint32_t add_spark_ang) {
-            angle_to_tooth_event(engine_angle_to_trigger_angle(add_dwell_ang, 360U),
-                                 &tooth, &frac, &phase);
-            for (uint8_t i = 0U; i < 4U; ++i) {
-                table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_DWELL_START);
-            }
-            angle_to_tooth_event(engine_angle_to_trigger_angle(add_spark_ang, 360U),
-                                 &tooth, &frac, &phase);
-            for (uint8_t i = 0U; i < 4U; ++i) {
-                table_add(tooth, frac, ECU_PHASE_ANY, ign[i], ECU_ACT_SPARK);
-            }
-        });
-
-    angle_to_tooth_event(engine_angle_to_trigger_angle(inj_on, 360U),
-                         &tooth, &frac, &phase);
-    if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
-        for (uint8_t i = 0U; i < 4U; ++i) {
-            table_add(tooth, frac, ECU_PHASE_ANY, inj_all[i], ECU_ACT_INJ_ON);
-        }
-    } else {
-        const uint8_t *bank = (g_presync_bank_toggle == 0U) ? inj_a : inj_b;
-        for (uint8_t i = 0U; i < 2U; ++i) {
-            table_add(tooth, frac, ECU_PHASE_ANY, bank[i], ECU_ACT_INJ_ON);
-        }
-        g_presync_bank_toggle ^= 1U;
-    }
-
-    angle_to_tooth_event(engine_angle_to_trigger_angle(inj_off, 360U),
-                         &tooth, &frac, &phase);
-    if (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS) {
-        for (uint8_t i = 0U; i < 4U; ++i) {
-            table_add(tooth, frac, ECU_PHASE_ANY, inj_all[i], ECU_ACT_INJ_OFF);
-        }
-    } else {
-        const uint8_t *bank = (g_presync_bank_toggle == 1U) ? inj_a : inj_b;
-        for (uint8_t i = 0U; i < 2U; ++i) {
-            table_add(tooth, frac, ECU_PHASE_ANY, bank[i], ECU_ACT_INJ_OFF);
-        }
+        const uint32_t ref = simultaneous ? 0U : tdc;
+        const uint32_t eoi = (ref + 360U - (g_eoi_lead_deg % 360U)) % 360U;
+        add((eoi + 360U - inj_pw_deg) % 360U, kInjCh[cyl], ECU_ACT_INJ_ON);
+        add(eoi, kInjCh[cyl], ECU_ACT_INJ_OFF);
     }
 }
 

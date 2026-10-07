@@ -925,8 +925,9 @@ void test_ecu_sched_presync_table(void) {
     }
     CHECK_TRUE(found_any, "at least one presync event uses ECU_PHASE_ANY");
 
-    // Presync IGN events include DWELL_START and SPARK for all 4 coils simultaneously
-    // → table should have ≥ 2 ignition actions (at minimum: DWELL_START + SPARK)
+    // Presync = wasted spark per pair (0↔3, 2↔1): every coil gets its own
+    // DWELL_START + SPARK. Per-cylinder spark ANGLES are verified end-to-end
+    // by make precision-test ("no cam" scenarios).
     uint8_t n_ign = 0u;
     for (uint8_t i = 0u; i < tsz; ++i) {
         uint8_t tooth, frac, ch, action, phase;
@@ -934,7 +935,7 @@ void test_ecu_sched_presync_table(void) {
             if (action == ECU_ACT_DWELL_START || action == ECU_ACT_SPARK) { ++n_ign; }
         }
     }
-    CHECK_TRUE(n_ign >= 2u, "presync table: ≥2 ignition events");
+    CHECK_EQ(n_ign, 8u, "presync table: DWELL_START + SPARK for each of 4 coils");
 }
 
 // ============================================================================

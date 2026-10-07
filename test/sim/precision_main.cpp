@@ -22,7 +22,7 @@ using namespace sim;
 
 namespace {
 
-constexpr int kStage = 0;  // review stage this tree is at
+constexpr int kStage = 1;  // review stage this tree is at
 
 int g_pass = 0, g_fail = 0, g_xfail = 0, g_xpass = 0;
 
@@ -192,8 +192,8 @@ int main()
         Config c = base(3000);
         c.cam = false;
         Limits l;
-        l.xf_count = 2;   // all four coils fire at the cyl 0/3 angle
-        l.xf_fuel = 1;    // semi-sequential: one opening per 720 deg sized for two
+        l.xf_count = 1;   // all four coils fired at the cyl 0/3 angle (fixed stage 1)
+        l.xf_fuel = 2;    // PW in whole degrees (was -51 %: opening count, fixed stage 1)
         l.eoi = 1e9;      // not meaningful in batch mode
         check_seq("no cam", run_and_print("no cam (wasted)", c, 0.8, true), l);
         c.presync_inj_mode = ECU_PRESYNC_INJ_SIMULTANEOUS;
@@ -220,6 +220,24 @@ int main()
         const Metrics m = run_and_print("noise mid-tooth", c, 0.8, false, &r);
         check("noise", "spark error max (deg)", m.spark_err_max, 0.2, 3);
         check("noise", "sparks with dwell < 50%", m.short_dwell, 0);
+    }
+
+    // ── CKP dropout during a dwell → sync loss (outputs must end on time) ─
+    {
+        // 3000 rpm = 18 deg/ms, θ(t) = 18000·t. Cyl 0 sparks at 710 deg
+        // (dwell from 656); its spark tooth is 12 (engine 708 with offset
+        // 636). Dropping engine 700..709.5 loses teeth 11-12: the coil is ON
+        // when sync is lost and no tooth will ever arm its SPARK.
+        Config c = base(3000);
+        c.duration_s = 1.6;
+        for (int n : {20, 30}) {
+            c.dropout_s.push_back({(700.0 + 720.0 * n) / 18000.0, (709.5 + 720.0 * n) / 18000.0});
+        }
+        Result r;
+        const Metrics m = run_and_print("CKP dropout in dwell", c, 0.0, false, &r);
+        check("dropout", "dwell watchdog trips", r.dwell_wdog, 0, 1);
+        check("dropout", "coil held >120% dwell", m.long_dwell, 0, 1);
+        check("dropout", "injector watchdog trips", r.inj_wdog, 0, 1);
     }
 
     // ── TIM5 32-bit wrap during run ─────────────────────────────────────
