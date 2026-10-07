@@ -160,7 +160,9 @@ Result run(const Config& cfg)
         if (th > th_max) { break; }
         double ts = r.time_at(th);
         if (cfg.edge_jitter_us > 0.0) { ts += cfg.edge_jitter_us * 1e-6 * gauss(rng); }
-        ckp.push_back(to_tick(ts));
+        bool lost = false;
+        for (const auto& d : cfg.dropout_s) { lost = lost || (ts >= d.first && ts < d.second); }
+        if (!lost) { ckp.push_back(to_tick(ts)); }
     }
     for (double ts : cfg.noise_s) { ckp.push_back(to_tick(ts)); }
     std::sort(ckp.begin(), ckp.end());
@@ -343,7 +345,7 @@ Metrics analyze(const Result& r, double t_from, bool wasted)
             const double err = std::fabs(act - cmd) / cmd * 100.0;
             m.dwell_err_max_pct = std::max(m.dwell_err_max_pct, err);
             if (act < 0.5 * cmd) { ++m.short_dwell; }
-            if (act > 1.5 * cmd) { ++m.long_dwell; }
+            if (act > 1.2 * cmd) { ++m.long_dwell; }
         } else {
             inj[cyl].push_back({on, e.t_s});
             ++m.inj_pulses;
@@ -364,9 +366,9 @@ Metrics analyze(const Result& r, double t_from, bool wasted)
     for (int cyl = 0; cyl < 4; ++cyl) {
         const auto& p = inj[cyl];
         if (p.empty()) { ++m.inj_missing; continue; }
-        // Windows centred on the pulses (start half a cycle before the first).
-        const double th0 = r.theta_at(p.front().first) - 360.0;
-        for (double w = th0; w + 720.0 <= r.theta_at(p.back().first) + 360.0; w += 720.0) {
+        // Window edges 90 deg before a pulse: never on a pulse (360/720 spacing).
+        const double th0 = r.theta_at(p.front().first) - 90.0;
+        for (double w = th0; w + 720.0 <= r.theta_at(p.back().first) + 90.0; w += 720.0) {
             double eff = 0;
             const double cmd_fuel = r.cmd_at(r.time_at(w)).fuel_us;
             const double dead = r.cmd_at(r.time_at(w)).dead_us;

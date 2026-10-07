@@ -110,7 +110,6 @@ volatile uint32_t g_dwell_ticks = 187500U;  // 3 ms @ 62.5 MHz
 volatile uint32_t g_inj_pw_ticks = 0U;
 volatile uint32_t g_eoi_lead_deg = 355U;
 volatile uint8_t  g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
-volatile uint8_t  g_presync_bank_toggle = 0U;
 volatile uint8_t  g_knock_sequential = 0U;
 volatile uint32_t g_pw_duty_clamp_count = 0U;
 }  // namespace ems::engine::sched_internal
@@ -203,6 +202,8 @@ static uint8_t evt_drop_one_assert(uint8_t prefer_channel)
     return 1U;
 }
 
+static void rearm_head(void);
+
 // Insert event in sorted order (by timestamp). Called from tooth ISR.
 // Overflow policy: never silently drop OFF/SPARK — drop an ON/DWELL first so
 // an open injector/coil can still be closed. Drop new ON/DWELL if still full.
@@ -234,13 +235,7 @@ static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
     g_evt_queue[pos].valid = 1U;
     ++g_evt_count;
 
-    // If this is the earliest event, arm CCR3
-    if (pos == 0U) {
-        TIM5_CCR3 = ts;
-        TIM5_SR  = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
-        TIM5_DIER |= TIM_DIER_CC3IE;
-        g_evt_armed = 1U;
-    }
+    if (pos == 0U) { rearm_head(); }
 }
 
 // Fire queue head: BSRR + optional ts_ring + pin metrics + dequeue.
@@ -266,6 +261,28 @@ static inline void evt_execute_head(uint32_t now, uint8_t capture_ts) {
     }
 }
 
+// Load CCR3 with the queue head — the ONLY place CCR3/CC3IF are written.
+// Caller is the TIM5 ISR or holds a critical section. A head that is already
+// due (or too close to arm reliably) is executed inline: writing a past value
+// into CCR3 and clearing CC3IF would mean no compare match until the 32-bit
+// counter wraps (~68.7 s) — the whole schedule would freeze.
+static void rearm_head(void) {
+    while (g_evt_count > 0U) {
+        const uint32_t next_ts = g_evt_queue[0].timestamp;
+        if ((int32_t)(next_ts - TIM5_CNT) > 16) {  // >16 ticks (~0.25µs) in future
+            TIM5_CCR3 = next_ts;
+            TIM5_SR  = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
+            TIM5_DIER |= TIM_DIER_CC3IE;
+            g_evt_armed = 1U;
+            return;
+        }
+        ++g_late_event_count;
+        evt_execute_head(TIM5_CNT, 0U);
+    }
+    TIM5_DIER &= ~TIM_DIER_CC3IE;
+    g_evt_armed = 0U;
+}
+
 // Called from TIM5 ISR when CC3IF fires
 void ecu_sched_evt_dispatch(void) {
     const uint32_t now = TIM5_CNT;
@@ -275,22 +292,7 @@ void ecu_sched_evt_dispatch(void) {
         if ((int32_t)(e.timestamp - now) > 0) { break; }  // still in future
         evt_execute_head(now, 1U);
     }
-    // Arm next event or disable interrupt
-    // Loop: if the next event is already past, process it immediately
-    while (g_evt_count > 0U) {
-        const uint32_t next_ts = g_evt_queue[0].timestamp;
-        if ((int32_t)(next_ts - TIM5_CNT) > 16) {  // >16 ticks (~0.25µs) in future
-            TIM5_CCR3 = next_ts;
-            TIM5_SR  = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
-            g_evt_armed = 1U;
-            return;
-        }
-        // Already past — process inline (no ts_ring; count as late for diag only)
-        ++g_late_event_count;
-        evt_execute_head(TIM5_CNT, 0U);
-    }
-    TIM5_DIER &= ~TIM_DIER_CC3IE;
-    g_evt_armed = 0U;
+    rearm_head();
 }
 
 
@@ -366,15 +368,7 @@ static void purge_events_for_cyl_mask(uint8_t mask, uint8_t is_ign)
             force_output(si::kInjCh[cyl], ECU_ACT_INJ_OFF, 1U);
         }
     }
-    if (g_evt_count == 0U) {
-        TIM5_DIER &= ~TIM_DIER_CC3IE;
-        g_evt_armed = 0U;
-    } else {
-        TIM5_CCR3 = g_evt_queue[0].timestamp;
-        TIM5_SR   = ~TIM_SR_CC3IF;
-        TIM5_DIER |= TIM_DIER_CC3IE;
-        g_evt_armed = 1U;
-    }
+    rearm_head();
 }
 
 static inline uint32_t scheduler_counter(void)
@@ -491,6 +485,40 @@ static void arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
         }
         return;
     }
+}
+
+// Teeth stop arming events (sync lost / table switched): drop queued
+// assertions and end every output that is already ON after its commanded
+// duration — the coil fires near its intended angle instead of on the
+// watchdog at a random one, and the injector delivers its pulse. De-asserts
+// already queued are kept (they are on time).
+static void end_active_outputs_on_time(void)
+{
+    ems::hal::CriticalSectionGuard guard;
+    uint8_t w = 0U;
+    for (uint8_t r = 0U; r < g_evt_count; ++r) {
+        if (g_evt_queue[r].high != 0U) { continue; }
+        if (w != r) { g_evt_queue[w] = g_evt_queue[r]; }
+        ++w;
+    }
+    g_evt_count = w;
+    auto deassert_queued = [](uint8_t ch) {
+        for (uint8_t i = 0U; i < g_evt_count; ++i) {
+            if (g_evt_queue[i].channel == ch) { return true; }
+        }
+        return false;
+    };
+    for (uint8_t cyl = 0U; cyl < 4U; ++cyl) {
+        const uint32_t dwell_on = g_dwell_arm_tick[cyl];
+        if (dwell_on != 0U && !deassert_queued(si::kIgnCh[cyl])) {
+            arm_channel(si::kIgnCh[cyl], dwell_on + si::g_dwell_ticks, ECU_ACT_SPARK);
+        }
+        const uint32_t inj_on = g_inj_open_tick[cyl];
+        if (inj_on != 0U && !deassert_queued(si::kInjCh[cyl])) {
+            arm_channel(si::kInjCh[cyl], inj_on + si::g_inj_pw_ticks, ECU_ACT_INJ_OFF);
+        }
+    }
+    rearm_head();
 }
 
 static void clear_all_events_and_drive_safe_outputs(void)
@@ -762,7 +790,8 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
     static uint8_t s_unsync_teeth = 0U;
     if ((snap.state != ems::drv::SyncState::FULL_SYNC) && (snap.state != ems::drv::SyncState::HALF_SYNC)) {
-        ++s_unsync_teeth;
+        if (s_unsync_teeth == 0U && g_hook_prev_valid != 0U) { end_active_outputs_on_time(); }
+        if (s_unsync_teeth < 0xFFU) { ++s_unsync_teeth; }
         if (s_unsync_teeth > g_diag_unsync_teeth_peak) { g_diag_unsync_teeth_peak = s_unsync_teeth; }
         if (s_unsync_teeth >= 60U && g_hook_prev_valid != 0U) {
             clear_all_events_and_drive_safe_outputs();
@@ -796,17 +825,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         static uint8_t s_prev_sched_mode = 0xFFU;  // 0=presync, 1=seq, 0xFF=none
         const uint8_t mode = use_presync ? 0U : 1U;
         if (s_prev_sched_mode != 0xFFU && s_prev_sched_mode != mode) {
-            g_evt_count = 0U;
-            g_evt_armed = 0U;
-            TIM5_DIER &= ~TIM_DIER_CC3IE;
-            for (uint8_t i = 0U; i < ECU_CHANNELS; ++i) {
-                force_output(i, (i < ECU_IGN_CH_FIRST) ? ECU_ACT_INJ_OFF : ECU_ACT_SPARK, 1U);
-            }
-            for (uint8_t i = 0U; i < 4U; ++i) {
-                g_dwell_arm_tick[i] = 0U;
-                g_inj_open_tick[i] = 0U;
-                g_inj_wdog_ticks[i] = 0U;
-            }
+            end_active_outputs_on_time();
         }
         s_prev_sched_mode = mode;
         if (use_presync) {
@@ -864,7 +883,7 @@ void ecu_sched_test_reset(void)
 {
     g_late_event_count = 0U; g_cycle_schedule_drop_count = 0U; g_calibration_clamp_count = 0U;
     g_presync_enable = 1U; g_presync_inj_auto = 0U; si::g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL; g_presync_ign_mode = ECU_PRESYNC_IGN_WASTED_SPARK;
-    si::g_presync_bank_toggle = 0U; g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
+    g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_hook_schedule_this_gap = 1U;
     si::g_advance_deg = 10U; si::g_dwell_ticks = 140625U; si::g_inj_pw_ticks = 140625U; si::g_eoi_lead_deg = 355U;
     si::g_angle_table_count = 0U; si::g_angle_tooth_mask_lo = 0U; si::g_angle_tooth_mask_hi = 0U;
     si::g_pw_duty_clamp_count = 0U;

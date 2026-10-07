@@ -46,6 +46,7 @@ struct Config {
     double edge_jitter_us = 0.0;      // gaussian σ on each CKP edge
     double tooth_error_deg = 0.0;     // ± uniform machining error per tooth (fixed)
     std::vector<double> noise_s;      // extra (spurious) CKP edges at these times
+    std::vector<std::pair<double, double>> dropout_s;  // CKP edges lost in [a,b)
 
     // ISR timing model (µs). pre_sched = work before the scheduler reads TIM5_CNT.
     double isr_entry_us = 0.1;
@@ -76,7 +77,7 @@ struct Metrics {
     double spark_err_max = 0, spark_err_rms = 0, spark_err_mean = 0;  // deg, +late
     double dwell_err_max_pct = 0;    // |actual-cmd|/cmd
     int    short_dwell = 0;          // sparks after < 50 % of commanded dwell
-    int    long_dwell = 0;           // coil held > 150 % of commanded dwell
+    int    long_dwell = 0;           // coil held > 120 % of commanded dwell
     int    inj_pulses = 0, inj_missing = 0;
     double fuel_err_max_pct = 0;     // per-cylinder per-cycle effective fuel
     double fuel_err_mean_pct = 0;
