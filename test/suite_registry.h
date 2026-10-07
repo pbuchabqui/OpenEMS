@@ -198,3 +198,11 @@ void test_output_test_keepalive_timeout(void);
 void test_output_test_suspends_aux(void);
 void test_output_test_bypasses_inhibit_mask(void);
 void test_output_test_bench_pw_lock(void);
+
+// test_fuel_physics.cpp
+void test_fuel_physics_req_fuel(void);
+void test_fuel_physics_pw_points(void);
+void test_fuel_physics_altitude_and_limits(void);
+void test_fuel_physics_xtau_steady_state(void);
+void test_fuel_physics_delta_p(void);
+void test_fuel_physics_ltft_learns_whole_error(void);

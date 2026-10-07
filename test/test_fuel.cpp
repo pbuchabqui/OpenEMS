@@ -260,19 +260,14 @@ void test_fuel_default_fast(void) {
     CHECK_EQ(calc_fuel_pw_us_default_fast(80u, 100u, 256u, 600u, 0, 256u, 256u, 0u), 0u,
              "lambda<650 → pw=0");
 
-    // Altitude compensation (F4): lower baro → larger PW (denominator shrinks).
-    // baro=70 (0.70 bar, ~3000m altitude) vs baro=101 (1.01 bar, sea level).
+    // Barometric pressure does not change cylinder air at a given MAP
+    // (speed-density): the old MAP/baro term added 44 % fuel at 0.70 bar.
+    // Physics oracle: test_fuel_physics_altitude_and_limits.
     fuel_set_baro_bar_x100(101u);
     const uint32_t pw_sea   = calc_fuel_pw_us_default_fast(80u, 100u, 256u, 1000u, 0, 256u, 256u, 0u);
     fuel_set_baro_bar_x100(70u);
     const uint32_t pw_alt   = calc_fuel_pw_us_default_fast(80u, 100u, 256u, 1000u, 0, 256u, 256u, 0u);
-    CHECK_TRUE(pw_alt > pw_sea,
-               "altitude compensation: lower baro → higher PW (TI_FAC_ALTI)");
-    // Ratio should be approximately baro_sea/baro_alt = 101/70 ≈ 1.44
-    // Allow ±10% tolerance.
-    const uint32_t ratio_x100 = (pw_alt * 100u) / (pw_sea > 0u ? pw_sea : 1u);
-    CHECK_TRUE(ratio_x100 >= 130u && ratio_x100 <= 160u,
-               "altitude PW ratio ≈ 1.44 (sea_baro/alt_baro=101/70)");
+    CHECK_EQ(pw_alt, pw_sea, "baro does not scale speed-density fuel at a given MAP");
     fuel_set_baro_bar_x100(101u);  // restore
 
     // iat_density_q8 must actually scale PW (not only corr_iat_density_q8
@@ -591,11 +586,9 @@ void test_fuel_delta_p_compensation(void) {
     CHECK_NEAR(static_cast<int32_t>(pw_nominal), 5000, 20,
                "pressão nominal: PW ~inalterado");
 
-    // Sensor sem leitura (0): usa o nominal como fallback → mesmo resultado
-    // que passar o nominal explicitamente.
+    // Sensor sem leitura válida (0, ou em falha — o main passa 0): sem correção.
     const uint32_t pw_fallback = apply_delta_p_compensation(5000u, 0u, 100u);
-    CHECK_NEAR(static_cast<int32_t>(pw_fallback), static_cast<int32_t>(pw_nominal), 5,
-               "fuel_press=0 → usa nominal (mesmo resultado)");
+    CHECK_EQ(pw_fallback, 5000u, "fuel_press=0 → sem correção");
 
     // Pressão real ABAIXO da nominal → ΔP_atual < ΔP_nominal → fluxo do bico
     // menor que o esperado → PW tem de aumentar para compensar (enriquece).

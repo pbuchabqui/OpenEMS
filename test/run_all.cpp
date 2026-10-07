@@ -314,6 +314,14 @@ int main(void) {
     test_output_test_bypasses_inhibit_mask();
     test_output_test_bench_pw_lock();
 
+    printf("\n=== FUEL PHYSICS (oráculo físico independente) ===");
+    test_fuel_physics_req_fuel();
+    test_fuel_physics_pw_points();
+    test_fuel_physics_altitude_and_limits();
+    test_fuel_physics_xtau_steady_state();
+    test_fuel_physics_delta_p();
+    test_fuel_physics_ltft_learns_whole_error();
+
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");
     printf("Results: %d PASS  %d FAIL\n", g_pass, g_fail);

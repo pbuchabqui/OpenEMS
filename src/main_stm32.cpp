@@ -215,8 +215,10 @@ static uint32_t inj_finish_pw(uint32_t flow_us, uint8_t squirts, uint16_t dead_u
                               uint16_t map_bar_x100, bool fuel_cut_active,
                               uint32_t& cycle_on_us) noexcept {
     const uint32_t scurve_pw_us = ems::engine::apply_injector_scurve(
-        ems::engine::apply_delta_p_compensation(flow_us, sensors.fuel_press_bar_x1000,
-                                                map_bar_x100));
+        ems::engine::apply_delta_p_compensation(
+            flow_us,
+            ((sensors.fault_bits & kFaultBitFuel) != 0u) ? 0u : sensors.fuel_press_bar_x1000,
+            map_bar_x100));
     cycle_on_us = ems::engine::inj_cycle_pw_us(scurve_pw_us, dead_us, squirts);
     const uint32_t pw_100 = cycle_on_us / 100u;
     g_last_pw_ms_x10 = fuel_cut_active ? 0u
@@ -792,9 +794,12 @@ int main() {
                         ems::engine::fuel_decel_cut_notify_gear(gr, now);
                     }
                 }
+                // Pedal (APP) = driver intent, valid with or without ETB (the
+                // ETB blade opens by itself for idle air; without ETB the
+                // ETB TPS input reads 0 and would allow a cut under load).
                 const bool decel_cut_active = !crank_or_ase &&
                     ems::engine::fuel_decel_cut_update(
-                        snap.rpm_x10, sensors.etb_tps_pct_x10, sensors.clt_degc_x10);
+                        snap.rpm_x10, sensors.app_pct_x10, sensors.clt_degc_x10);
                 ems::engine::misfire_set_all_inhibit(
                     decel_cut_active || crank_or_ase || flood_clear);
                 // X-τ desde !cranking (inclui afterstart frio — pior wall-wetting).
@@ -883,7 +888,7 @@ int main() {
                 const int16_t idle_spark_corr_deg = qc.cranking ? 0 :
                     ems::engine::calc_idle_spark_correction_deg(snap.rpm_x10,
                                                                 idle_target_rpm_x10,
-                                                                sensors.etb_tps_pct_x10,
+                                                                sensors.app_pct_x10,
                                                                 map_bar_x100);
                 const int16_t iat_spark_deg = qc.cranking ? 0 :
                     ems::engine::calc_ign_iat_correction_deg(sensors.iat_degc_x10);
