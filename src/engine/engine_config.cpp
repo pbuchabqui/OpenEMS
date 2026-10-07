@@ -97,10 +97,6 @@ void engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept {
     }
 }
 
-void engine_config_apply(const uint8_t* page0_buf, uint16_t len) noexcept {
-    engine_config_load(page0_buf, len);
-}
-
 void engine_config_serialize(uint8_t* page0_buf, uint16_t len) noexcept {
     if (page0_buf == nullptr || len < kMinPageLen) {
         return;

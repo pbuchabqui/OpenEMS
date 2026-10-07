@@ -368,7 +368,4 @@ void apply_etb_calibration_from_page(const uint8_t* page, uint16_t len) noexcept
 // Empurra a calibração de sensores (APP/ETB/TPS/plausibilidade) p/ drv::sensors.
 void push_sensor_calibration_to_drivers() noexcept;
 void sync_etb_calibration_to_page(uint8_t* page, uint16_t len) noexcept;
-void apply_xtau_autocal_from_page(const uint8_t* page, uint16_t len) noexcept;
-void sync_xtau_autocal_to_page(uint8_t* page, uint16_t len) noexcept;
-
 }  // namespace ems::engine

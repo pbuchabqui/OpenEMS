@@ -235,10 +235,6 @@ void can_stack_process(uint32_t now_ms,
     }
 }
 
-uint32_t can_stack_fco_accum_ul() noexcept {
-    return g_fco_accum_ul;
-}
-
 uint16_t can_stack_lambda_milli() noexcept {
     if (g_bench_lambda_on) { return g_bench_lambda_milli; }
     return g_lambda_milli;
@@ -268,14 +264,7 @@ void can_stack_set_bench_lambda(bool enable, uint16_t lambda_milli) noexcept {
     g_bench_lambda_milli = lambda_milli;
 }
 
-uint8_t can_stack_wbo2_status() noexcept {
-    return g_wbo2_status;
-}
-
 #if defined(EMS_HOST_TEST)
-void can_stack_test_reset() noexcept {
-    can_stack_init(0x180u);
-}
 #endif
 
 } // namespace ems::app

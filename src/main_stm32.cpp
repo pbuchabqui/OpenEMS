@@ -811,11 +811,9 @@ int main() {
                 ems::engine::misfire_set_all_inhibit(
                     decel_cut_active || crank_or_ase || flood_clear);
                 // X-τ desde !cranking (inclui afterstart frio — pior wall-wetting).
-                // AE residual a 50% quando X-τ activo (evita empilhar enrich).
+                // AE e X-τ são fenómenos distintos (AE = ar previsto pelo TPSdot,
+                // X-τ = filme de parede); ambos entram inteiros.
                 const bool xtau_enabled = !qc.cranking;
-                if (xtau_enabled && ae_pw_us > 0) {
-                    ae_pw_us /= 2;
-                }
                 if (decel_cut_active) {
                     ems::engine::limp_gating_or_fuel_reason(ems::engine::kFuelCutDfco);
                     g_last_net_pw_us = 0u;

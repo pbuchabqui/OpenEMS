@@ -584,8 +584,6 @@ void ecu_sched_set_presync_inj_auto(uint8_t on) { ems::hal::CriticalSectionGuard
 
 void ecu_sched_set_presync_inj_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; si::g_presync_inj_mode = mode; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_ign_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_ign_mode = mode; sanitize_runtime_calibration(); }
-uint32_t ecu_sched_pw_duty_clamp_count(void) { return si::g_pw_duty_clamp_count; }
-
 void ecu_sched_dwell_watchdog(void)
 {
     if (g_inj_pw_override != 0U) { return; }  // test mode — disable watchdog
@@ -629,8 +627,6 @@ uint32_t ecu_sched_inj_watchdog_count(void) { return g_inj_watchdog_count; }
 
 uint8_t ecu_sched_is_sequential(void) { return si::g_knock_sequential; }
 uint8_t ecu_sched_presync_inj_mode(void) { return si::g_presync_inj_mode; }
-uint8_t ecu_sched_presync_inj_auto(void) { return g_presync_inj_auto; }
-
 void ecu_sched_reset_diagnostic_counters(void)
 {
     ems::hal::CriticalSectionGuard guard;
@@ -996,9 +992,6 @@ uint8_t ecu_sched_test_get_angle_event(uint8_t index, uint8_t *tooth, uint16_t *
     if (index >= si::g_angle_table_count) { return 0U; }
     *tooth = si::g_angle_table[index].tooth_index; *offset_x256 = si::g_angle_table[index].offset_x256; *ch = si::g_angle_table[index].channel; *action = si::g_angle_table[index].action; *phase = si::g_angle_table[index].phase_A; return 1U;
 }
-void ecu_sched_test_set_dwell_ticks(uint32_t dwell) { ecu_sched_set_dwell_ticks(dwell); }
-void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks) { ecu_sched_set_inj_pw_ticks(pw_ticks); }
-void ecu_sched_test_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ecu_sched_set_eoi_lead_deg(eoi_lead_deg); }
 int32_t ecu_sched_test_get_advance_x10(void) { return si::g_advance_x10; }
 uint32_t ecu_sched_test_get_dwell_ticks(void) { return si::g_dwell_ticks; }
 uint32_t ecu_sched_test_get_inj_pw_ticks(void) { return si::g_inj_pw_ticks; }
@@ -1006,10 +999,6 @@ uint32_t ecu_sched_test_get_eoi_lead_deg(void) { return si::g_eoi_lead_deg; }
 uint32_t ecu_sched_test_get_calibration_clamp_count(void) { return g_calibration_clamp_count; }
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void) { return g_cycle_schedule_drop_count; }
 uint32_t ecu_sched_test_get_late_event_count(void) { return g_late_event_count; }
-uint32_t ecu_sched_test_get_pw_duty_clamp_count(void) { return si::g_pw_duty_clamp_count; }
-void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg) {
-    ecu_sched_set_mspark(count, inter_dwell_ticks, atdc_limit_deg);
-}
 uint8_t ecu_sched_test_get_mspark_count(void) { return si::g_mspark_count; }
 void ecu_sched_test_reset_ccr(void) noexcept {
     ems_test_tim5_ccr3 = 0u; g_evt_count = 0U; g_evt_armed = 0U;

@@ -89,9 +89,6 @@ extern EngineConfigRam g_eng_cfg;
 // Otherwise keeps compile-time defaults.
 void engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept;
 
-// Call when UI writes page 0 and requests burn: updates g_eng_cfg from buf.
-void engine_config_apply(const uint8_t* page0_buf, uint16_t len) noexcept;
-
 // Validates runtime config: returns false if any value is out of safe range.
 bool engine_config_valid(const EngineConfigRam& cfg) noexcept;
 

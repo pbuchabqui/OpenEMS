@@ -72,12 +72,6 @@ void commit_masks(uint8_t inj, uint8_t ign) noexcept {
 
 }  // namespace
 
-bool limp_gating_allow_etb() noexcept { return g_allow_etb; }
-bool limp_gating_allow_injection() noexcept { return g_allow_inj; }
-bool limp_gating_allow_ignition() noexcept { return g_allow_ign; }
-bool limp_gating_fuel_protect() noexcept { return g_fuel_protect; }
-bool limp_gating_half_fuel_lockout() noexcept { return g_half_lockout; }
-
 void limp_gating_set_protect_disable(uint16_t mask) noexcept {
     g_protect_disable = static_cast<uint16_t>(mask & kProtectDisWritable);
     if ((g_protect_disable & kProtectDisOil) != 0u) {
@@ -90,58 +84,8 @@ void limp_gating_set_protect_disable(uint16_t mask) noexcept {
     }
 }
 
-uint16_t limp_gating_protect_disable(void) noexcept {
-    return g_protect_disable;
-}
-
-void limp_gating_set_sensor_bypass(uint8_t on) noexcept {
-    const uint16_t next = (on != 0)
-        ? static_cast<uint16_t>(g_protect_disable | kProtectDisSensorGroup)
-        : static_cast<uint16_t>(g_protect_disable & ~kProtectDisSensorGroup);
-    limp_gating_set_protect_disable(next);
-}
-
-uint8_t limp_gating_sensor_bypass(void) noexcept {
-    return ((g_protect_disable & kProtectDisSensorGroup) == kProtectDisSensorGroup)
-        ? 1u : 0u;
-}
-
 void limp_gating_or_fuel_reason(uint16_t bit) noexcept {
     g_fuel_cut_reasons = static_cast<uint16_t>(g_fuel_cut_reasons | bit);
-}
-
-void limp_gating_reset() noexcept {
-    g_rev_hyst.state = false;
-    g_boost_hyst.state = false;
-    g_inj_duty_hyst.state = false;
-    g_fatal = false;
-    g_etb_problem = false;
-    g_fault_rev_x10 = 0xFFFFFFFFu;
-    g_had_oil_after_start = false;
-    g_seen_running = false;
-    g_run_start_ms = 0u;
-    g_lambda_cut = false;
-    g_lambda_seen = false;
-    g_lambda_good_ms = 0u;
-    g_oil_low_ms = 0u;
-    g_oil_low_seen = false;
-    g_allow_etb = true;
-    g_allow_inj = true;
-    g_allow_ign = true;
-    g_fuel_protect = false;
-    g_half_lockout = false;
-    g_rev_active = false;
-    g_protect_disable = 0u;
-    g_rev_limit_active = false;
-    boost_cut_map_bar_x100 = kBoostCutMapBarX100;
-    oil_min_after_start_bar_x1000 = kOilMinAfterStartBarX1000;
-    lambda_protect_timeout_ms = kLambdaProtectTimeoutMs;
-    lambda_protect_dev_x1000 = kLambdaProtectDevX1000;
-    lambda_protect_min_rpm_x10 = kLambdaProtectMinRpmX10;
-    lambda_protect_min_load_bar_x100 = kLambdaProtectMinLoadBarX100;
-    g_fuel_cut_reasons = 0u;
-    g_spark_cut_reasons = 0u;
-    commit_masks(0u, 0u);
 }
 
 void limp_gating_fatal() noexcept {

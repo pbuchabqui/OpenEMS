@@ -80,7 +80,6 @@ void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg);
 void ecu_sched_set_presync_enable(uint8_t enable);
 void ecu_sched_set_presync_inj_mode(uint8_t mode);
 void ecu_sched_set_presync_inj_auto(uint8_t on);
-uint8_t ecu_sched_presync_inj_auto(void);
 void ecu_sched_set_presync_ign_mode(uint8_t mode);
 void ecu_sched_reset_diagnostic_counters(void);
 
@@ -118,9 +117,6 @@ uint8_t ecu_sched_get_inj_inhibit_mask(void);
 // (não deixar bobina carregada a meio do dwell).
 void ecu_sched_set_ign_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_ign_inhibit_mask(void);
-// Contador do duty clamp: incrementado quando o PW excede 90% do tempo de
-// ciclo (720° sequencial / 360° presync) e é clampado. >0 = fuel shortfall.
-uint32_t ecu_sched_pw_duty_clamp_count(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
 
 // Bench protocol: next commit_calibration applies PW then locks (override=1).
@@ -196,9 +192,6 @@ uint8_t ecu_sched_test_get_angle_event(uint8_t index,
                                        uint8_t *ch,
                                        uint8_t *action,
                                        uint8_t *phase);
-void ecu_sched_test_set_dwell_ticks(uint32_t dwell);
-void ecu_sched_test_set_inj_pw_ticks(uint32_t pw_ticks);
-void ecu_sched_test_set_eoi_lead_deg(uint32_t eoi_lead_deg);
 int32_t ecu_sched_test_get_advance_x10(void);
 uint32_t ecu_sched_test_get_dwell_ticks(void);
 uint32_t ecu_sched_test_get_inj_pw_ticks(void);
@@ -206,9 +199,7 @@ uint32_t ecu_sched_test_get_eoi_lead_deg(void);
 uint32_t ecu_sched_test_get_calibration_clamp_count(void);
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 uint32_t ecu_sched_test_get_late_event_count(void);
-uint32_t ecu_sched_test_get_pw_duty_clamp_count(void);
 void     ecu_sched_test_reset_ccr(void) noexcept;   // drop queue + zero TIM5 CCR3
-void     ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32_t atdc_limit_deg);
 uint8_t  ecu_sched_test_get_mspark_count(void);
 // TIM5 event-queue accessors
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept;
