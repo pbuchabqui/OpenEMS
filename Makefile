@@ -2,7 +2,7 @@
 # BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE pinout)
 # Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
-.PHONY: all clean host-test precision-test ini-check host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
+.PHONY: all clean host-test precision-test ini-check sim-ecu sim-ecu-build dash-check host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
         secrets-check lint-includes format format-all format-check ci-local
 
 COMPILER_ARM = arm-none-eabi-g++
@@ -146,6 +146,13 @@ PRECISION_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                      $(TEST_DIR)/sim/precision_main.cpp
 PRECISION_TEST_BIN = $(HOST_DIR)/precision_tests
 
+# Simulated ECU on a pty for the dashboard (firmware protocol + NVM on host).
+SIM_ECU_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
+              $(SRC_DIR)/hal/stm32h562/timer.cpp \
+              $(SRC_DIR)/hal/stm32h562/system.cpp \
+              $(TEST_DIR)/sim/sim_ecu_main.cpp
+SIM_ECU_BIN = $(HOST_DIR)/sim_ecu
+
 # Binário próprio p/ knock com EMS_KNOCK_HW_PRESENT=1 (make host-test-knock-hw)
 # — mesma lógica de teste de test_knock_hw_wiring.cpp que a suite principal já
 # compila com a flag em 0; aqui só troca o main() (test_knock_hw_main.cpp em
@@ -189,6 +196,15 @@ host-test:
 	@echo "  HOST $(HOST_TEST_BIN)"
 	@$(CXX_HOST) $(CFLAGS_HOST) $(HOST_TEST_SRC) -o $(HOST_TEST_BIN) -lm
 	@$(HOST_TEST_BIN)
+
+sim-ecu-build:
+	@mkdir -p $(HOST_DIR)
+	@echo "  HOST $(SIM_ECU_BIN)"
+	@$(CXX_HOST) $(CFLAGS_HOST) $(SIM_ECU_SRC) -o $(SIM_ECU_BIN) -lm
+
+# make sim-ecu [NVM=file]: serve the firmware protocol on a pty (prints its path).
+sim-ecu: sim-ecu-build
+	@$(SIM_ECU_BIN) $(if $(NVM),--nvm $(NVM),)
 
 precision-test:
 	@mkdir -p $(HOST_DIR)
@@ -256,6 +272,15 @@ clean:
 # ── Quality / hygiene ─────────────────────────────────────────────────────────
 secrets-check:
 	@bash tools/secrets_check.sh
+
+# Dashboard: JS helper tests + Python protocol tests against the sim ECU.
+# DASH_PY = an interpreter with tools/openems_dash/requirements.txt installed.
+DASH_PY ?= python3
+dash-check: sim-ecu-build
+	@node --test tools/openems_dash/tests/*.test.js
+	@if $(DASH_PY) -c "import serial, fastapi" 2>/dev/null; then \
+		cd tools/openems_dash && SIM_ECU=$(SIM_ECU_BIN) $(DASH_PY) -m unittest discover -s tests -t . ; \
+	else echo "dash-check: SKIP python tests ($(DASH_PY) lacks pyserial/fastapi; set DASH_PY)"; fi
 
 # TunerStudio ini: references, byte overlaps, ranges = firmware limits.
 ini-check:

@@ -293,91 +293,9 @@ static void openems_init() noexcept {
 	if (!ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes)) {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
-	ems::engine::cfg::engine_config_load(g_calib_page0, kCalibPageBytes);
-	ems::engine::map_estimator_sync_engine_config();  // displacement → MAP model
-	// Calibração de sensores persistida (página 0, bytes 16-55) → drivers
-	ems::engine::apply_etb_calibration_from_page(g_calib_page0 + 16, 40u);
-	ems::engine::push_sensor_calibration_to_drivers();
-	// Trims / CMP window / anti-jerk / rev limiter / ckp skip (56-76).
-	// Antes só a UI aplicava isto — reboot perdia a calibração.
-	ems::engine::apply_page0_trims_driveability(g_calib_page0, kCalibPageBytes);
-	// Polaridade CKP/CMP (page0[258]) — re-aplica TIM5 + pull (tim5_ic_init foi
-	// antes da NVM, default subida/pull-down).
-	ems::engine::apply_page0_capture_polarity(g_calib_page0, kCalibPageBytes);
-	ems::engine::apply_page0_timing(g_calib_page0, kCalibPageBytes, true);
-	// Closed-loop / LEARN (page0[80-85])
-	ems::engine::closed_loop_enable =
-	    (g_calib_page0[80] != 0u) ? 1u : 0u;
-	ems::engine::ltft_apply_burn_ve = (g_calib_page0[81] != 0u) ? 1u : 0u;
-	std::memcpy(&ems::engine::closed_loop_post_start_s, g_calib_page0 + 82, 2u);
-	std::memcpy(&ems::engine::ltft_adapt_min_rpm_x10,   g_calib_page0 + 84, 2u);
-	// Authority LTFT (176-184) só se layout version actual — blob v2 tem lixo/zeros.
-	if (g_calib_page0[ems::engine::kCalLayoutVersionOffset] ==
-	    ems::engine::kCalLayoutVersion) {
-		uint16_t mult_c = 0u, add_c = 0u, max_s = 0u;
-		std::memcpy(&mult_c, g_calib_page0 + 176, 2u);
-		std::memcpy(&add_c,  g_calib_page0 + 178, 2u);
-		std::memcpy(&max_s,  g_calib_page0 + 182, 2u);
-		if (mult_c != 0u) { ems::engine::ltft_mult_clamp_pct_x10 = mult_c; }
-		if (add_c  != 0u) { ems::engine::ltft_add_clamp_us = add_c; }
-		if (g_calib_page0[180] != 0u) { ems::engine::ltft_learn_div = g_calib_page0[180]; }
-		if (g_calib_page0[181] != 0u) { ems::engine::ltft_commit_gain_pct = g_calib_page0[181]; }
-		ems::engine::ltft_max_step_x10 = max_s;
-		if (g_calib_page0[184] <= 1u) {
-			ems::engine::ltft_adapt_enable = g_calib_page0[184];
-		}
-		{
-			uint16_t hits = 0u;
-			std::memcpy(&hits, g_calib_page0 + 185, 2u);
-			if (hits != 0u) { ems::engine::ltft_learn_ready_hits = hits; }
-			if (g_calib_page0[187] != 0u) {
-				ems::engine::ltft_learn_max_err_x1000 = g_calib_page0[187];
-			}
-			if (g_calib_page0[188] != 0u) {
-				ems::engine::ltft_learn_ready_max_mean_err = g_calib_page0[188];
-			}
-			if (g_calib_page0[189] != 0u) {
-				ems::engine::ltft_learn_ready_min_stft_x10 = g_calib_page0[189];
-			}
-			if (g_calib_page0[190] != 0u) {
-				ems::engine::ltft_learn_ready_max_stft_x10 = g_calib_page0[190];
-			}
-		}
-		// Launch + TC knobs (page0 191-215, layout v5)
-		ems::engine::launch_tc_apply_from_page0(g_calib_page0, kCalibPageBytes);
-		// CAN RX map: gear / vehicle / driven wheel (216-245)
-		ems::app::can_rx_map_apply_from_page0(g_calib_page0, kCalibPageBytes);
-		// MAP janela angular (246-251); len=0 não substitui o default
-		ems::engine::map_window_enable = (g_calib_page0[246] != 0u) ? 1u : 0u;
-		// 247: use_for_fuel — gate separado, exige calibração prévia de
-		// open_deg/len_deg no motor real (ver AVISO em map_window.h).
-		ems::engine::map_window_use_for_fuel = (g_calib_page0[247] != 0u) ? 1u : 0u;
-		{
-			uint16_t od = 0u, wl = 0u;
-			std::memcpy(&od, g_calib_page0 + 248, 2u);
-			std::memcpy(&wl, g_calib_page0 + 250, 2u);
-			ems::engine::map_window_open_deg =
-			    (od >= 720u) ? static_cast<uint16_t>(od % 720u) : od;
-			if (wl != 0u) {
-				ems::engine::map_window_len_deg =
-				    (wl < 10u) ? 10u : (wl > 180u) ? 180u : wl;
-			}
-		}
-		// Protecção de duty INJ + gates DFCO + knock morto (252-257);
-		// blob antigo = zeros = tudo off (tol=0 mantém default 300 ms).
-		ems::engine::inj_duty_max_pct = g_calib_page0[252];
-		if (g_calib_page0[253] != 0u) {
-			ems::engine::inj_duty_tol_ms10 = g_calib_page0[253];
-		}
-		std::memcpy(&ems::engine::decel_cut_map_max_bar_x100,
-		            g_calib_page0 + 254, 2u);
-		ems::engine::decel_cut_gear_inhibit_ms10 = g_calib_page0[256];
-		ems::engine::knock_dead_min_p2p = g_calib_page0[257];
-		if (kCalibPageBytes > (ems::engine::kDecelCutRampMsPage0Off + 1u)) {
-			std::memcpy(&ems::engine::decel_cut_ramp_ms,
-			            g_calib_page0 + ems::engine::kDecelCutRampMsPage0Off, 2u);
-		}
-	}
+	// Page 0 → globals through the protocol's own apply (one path for boot
+	// and for a TunerStudio/dashboard write; timing light forced off).
+	ems::app::ui_boot_apply_page0(g_calib_page0, kCalibPageBytes);
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
 	// lido com o tamanho novo ganharia cauda 0xFF (VE=255!). Sem versão →

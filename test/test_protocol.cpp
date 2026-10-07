@@ -174,8 +174,12 @@ void test_ts_envelope_read_write_burn(void) {
     const uint8_t burn[2] = {'b', 0x01u};
     r = env_txn(burn, 2u);
     CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'b' page1 @ 0 RPM → OK");
-    CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before + 1u,
-             "burn gravou 1 página");
+    // Blank flash: the first table burn also writes page 0 (layout version).
+    CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before + 2u,
+             "1º burn em flash vazia: página 1 + page 0 (versão de layout)");
+    r = env_txn(burn, 2u);
+    CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before + 3u,
+             "burn seguinte grava só a página pedida");
 
     r = env_txn(&d, 1u);
     CHECK_TRUE(r.frame_ok && (r.data[0] & 0x01u) == 0u, "dirty limpo após burn");
@@ -795,4 +799,67 @@ void test_page0_rewrite_is_identity(void) {
         }
     }
     CHECK_EQ(diffs, 0, "page0 round trip is the identity");
+}
+
+void test_page0_survives_reboot(void) {
+    section("page0: what is burned comes back after a reboot (boot uses the protocol apply)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    // Distinct values in fields across the whole page.
+    const uint8_t s_mwe = ems::engine::map_window_enable;
+    const uint16_t s_mwo = ems::engine::map_window_open_deg;
+    const uint16_t s_kp = ems::engine::stft_kp_x100;
+    const uint16_t s_tps = ems::engine::decel_cut_tps_threshold_x10;
+    const int16_t s_fine = ems::engine::trigger_fine_x10;
+    const uint16_t s_ramp = ems::engine::decel_cut_ramp_ms;
+    ems::engine::map_window_enable = 1u;
+    ems::engine::map_window_open_deg = 123u;
+    ems::engine::stft_kp_x100 = 77u;
+    ems::engine::decel_cut_tps_threshold_x10 = 15u;
+    ems::engine::trigger_fine_x10 = -7;
+    ems::engine::timing_light_enable = 1u;
+    ems::engine::decel_cut_ramp_ms = 345u;
+
+    uint8_t flash[512];
+    for (uint16_t off = 0u; off < 512u; off += 32u) {
+        const EnvResp r = page0_read(off, 32u);
+        std::memcpy(flash + off, r.data, 32u);
+    }
+    // "Power cycle": globals back to other values, then boot applies flash.
+    ems::engine::map_window_enable = 0u;
+    ems::engine::map_window_open_deg = 0u;
+    ems::engine::stft_kp_x100 = 1u;
+    ems::engine::decel_cut_tps_threshold_x10 = 1u;
+    ems::engine::trigger_fine_x10 = 0;
+    ems::engine::decel_cut_ramp_ms = 0u;
+    ems::app::ui_boot_apply_page0(flash, sizeof(flash));
+    CHECK_EQ(ems::engine::map_window_enable, 1u, "MAP window enable (264) restored");
+    CHECK_EQ(ems::engine::map_window_open_deg, 123u, "MAP window open (266) restored");
+    CHECK_EQ(ems::engine::stft_kp_x100, 77u, "STFT Kp (140) restored");
+    CHECK_EQ(ems::engine::decel_cut_tps_threshold_x10, 15u, "DFCO TPS (88) restored");
+    CHECK_EQ(ems::engine::trigger_fine_x10, -7, "trigger fine (274) restored");
+    CHECK_EQ(ems::engine::decel_cut_ramp_ms, 345u, "DFCO ramp (259) restored");
+    CHECK_EQ(ems::engine::timing_light_enable, 0u, "timing light always off after boot");
+
+    ems::engine::map_window_enable = s_mwe;
+    ems::engine::map_window_open_deg = s_mwo;
+    ems::engine::stft_kp_x100 = s_kp;
+    ems::engine::decel_cut_tps_threshold_x10 = s_tps;
+    ems::engine::trigger_fine_x10 = s_fine;
+    ems::engine::decel_cut_ramp_ms = s_ramp;
+    ems::app::ui_test_reset();
+}
+
+void test_table_burn_persists_layout(void) {
+    section("burn: a table burned before page 0 still loads after power-up");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    ems::hal::nvm_test_reset();  // blank flash: page 0 never burned
+    const uint8_t burn_ve[2] = {'b', 0x01u};
+    const EnvResp r = env_txn(burn_ve, 2u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'b' page 1 (VE) OK");
+    uint8_t p0[ems::engine::kCalLayoutVersionOffset + 1u] = {};
+    ems::hal::nvm_load_calibration(0u, p0, sizeof(p0));
+    CHECK_EQ(p0[ems::engine::kCalLayoutVersionOffset], ems::engine::kCalLayoutVersion,
+             "page 0 layout version written too (boot will load the VE table)");
 }

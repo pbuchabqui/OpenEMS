@@ -37,6 +37,9 @@ struct UiRealtimeData {
 static_assert(sizeof(UiRealtimeData) == 86u, "UiRealtimeData must be 86 bytes");
 
 void ui_init() noexcept;
+// Boot: apply a page 0 read from flash through the same path as a protocol
+// write (one apply for every page 0 field). Timing-light mode stays off.
+void ui_boot_apply_page0(const uint8_t* page0, uint16_t len) noexcept;
 void ui_rx_byte(uint8_t byte) noexcept;
   // compat wrapper
 void ui_process() noexcept;

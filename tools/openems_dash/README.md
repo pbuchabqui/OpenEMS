@@ -77,10 +77,23 @@ Sem activar o venv:
   - `app.js` — telemetria, grelhas, params, maps, output tests
   - `uplot.min.*` — charts vendorizados
 
-## Testes (helpers puras)
+## Sem placa: ECU simulada
+
+O firmware real (parser do protocolo, páginas, burn) roda no PC sobre um
+pseudo-terminal; o motor fica parado (calibração, burn e teste de saídas).
 
 ```bash
-node --test tests/helpers.test.js
+make sim-ecu NVM=/tmp/openems_nvm.bin     # imprime: OpenEMS sim ECU on /dev/pts/N
+python server.py --port /dev/pts/N        # noutro terminal
+```
+
+O ficheiro `NVM` guarda o que for gravado (Burn) entre reinícios.
+
+## Testes
+
+```bash
+make dash-check DASH_PY=.venv/bin/python   # helpers JS + protocolo vs ECU simulada
+node --test tests/helpers.test.js          # só os helpers
 ```
 
 > A página 7 (dwell 2D) requer firmware com o fix de acesso à página 7
