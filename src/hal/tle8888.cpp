@@ -34,7 +34,6 @@
 #include "hal/tle8888.h"
 
 #ifdef TARGET_STM32H562
-#include "hal/board_pinout.h"
 #include "hal/stm32h562/regs.h"
 #include "hal/tle8888_regs.h"
 
@@ -80,33 +79,10 @@ volatile bool    g_echo_ok       = true;
 volatile bool    g_need_reinit   = false;
 
 // ── Transporte SPI ───────────────────────────────────────────────────────────
-// VGT6 / default: SPI2 on PB12(CSN)+PB13/14/15
-// MRE copper:     SPI1 on PD5(CSN)+PB3/4/5  (docs/hw/pinout_mre_bringup.md)
 constexpr uint32_t kSpiTimeout = 50000u;  // ~500 µs @250 MHz
 
-#if EMS_BOARD_IS_MRE
-inline void cs_low()  noexcept { GPIOD_BSRR = (1u << (5u + 16u)); }  // PD5 = CSN
-inline void cs_high() noexcept { GPIOD_BSRR = (1u << 5u); }
-#define TLE_SPI_CR1   SPI1_CR1
-#define TLE_SPI_CFG1  SPI1_CFG1
-#define TLE_SPI_CFG2  SPI1_CFG2
-#define TLE_SPI_CR2   SPI1_CR2
-#define TLE_SPI_SR    SPI1_SR
-#define TLE_SPI_IFCR  SPI1_IFCR
-#define TLE_SPI_TXDR  SPI1_TXDR
-#define TLE_SPI_RXDR  SPI1_RXDR
-#else
 inline void cs_low()  noexcept { GPIOB_BSRR = (1u << (12u + 16u)); }  // PB12 = CSN
 inline void cs_high() noexcept { GPIOB_BSRR = (1u << 12u); }
-#define TLE_SPI_CR1   SPI2_CR1
-#define TLE_SPI_CFG1  SPI2_CFG1
-#define TLE_SPI_CFG2  SPI2_CFG2
-#define TLE_SPI_CR2   SPI2_CR2
-#define TLE_SPI_SR    SPI2_SR
-#define TLE_SPI_IFCR  SPI2_IFCR
-#define TLE_SPI_TXDR  SPI2_TXDR
-#define TLE_SPI_RXDR  SPI2_RXDR
-#endif
 
 /// Monta o frame: dados em [15:8], endereço em [7:1], R/W no bit 0.
 inline uint16_t frame(uint16_t addr, uint8_t data, bool write) noexcept {
@@ -119,22 +95,22 @@ inline uint8_t addr_from_frame(uint16_t word) noexcept {
     return static_cast<uint8_t>((word >> 1u) & 0x7Fu);
 }
 
-uint16_t spi_txrx_raw(uint16_t tx) noexcept {
+uint16_t spi2_txrx_raw(uint16_t tx) noexcept {
     uint32_t tries = kSpiTimeout;
-    while (!(TLE_SPI_SR & SPI_SR_TXP) && --tries) {}
+    while (!(SPI2_SR & SPI_SR_TXP) && --tries) {}
     if (!tries) { return 0xFFFFu; }
-    TLE_SPI_TXDR = tx;
+    SPI2_TXDR = tx;
 
-    TLE_SPI_CR1 |= SPI_CR1_CSTART;
-
-    tries = kSpiTimeout;
-    while (!(TLE_SPI_SR & SPI_SR_RXP) && --tries) {}
-    if (!tries) { TLE_SPI_IFCR = SPI_IFCR_EOTC | SPI_IFCR_TXTFC; return 0xFFFFu; }
-    const uint16_t rx = static_cast<uint16_t>(TLE_SPI_RXDR);
+    SPI2_CR1 |= SPI_CR1_CSTART;
 
     tries = kSpiTimeout;
-    while (!(TLE_SPI_SR & SPI_SR_EOT) && --tries) {}
-    TLE_SPI_IFCR = SPI_IFCR_EOTC | SPI_IFCR_TXTFC;
+    while (!(SPI2_SR & SPI_SR_RXP) && --tries) {}
+    if (!tries) { SPI2_IFCR = SPI_IFCR_EOTC | SPI_IFCR_TXTFC; return 0xFFFFu; }
+    const uint16_t rx = static_cast<uint16_t>(SPI2_RXDR);
+
+    tries = kSpiTimeout;
+    while (!(SPI2_SR & SPI_SR_EOT) && --tries) {}
+    SPI2_IFCR = SPI_IFCR_EOTC | SPI_IFCR_TXTFC;
 
     return rx;
 }
@@ -142,7 +118,7 @@ uint16_t spi_txrx_raw(uint16_t tx) noexcept {
 /// Transacção com validação de eco (resposta = reg do frame anterior).
 uint16_t spi_xfer(uint16_t tx) noexcept {
     cs_low();
-    const uint16_t rx = spi_txrx_raw(tx);
+    const uint16_t rx = spi2_txrx_raw(tx);
     cs_high();
 
     if (g_last_tx_reg != kRegInvalid) {
@@ -270,34 +246,27 @@ void decode_quad(uint8_t reg, uint8_t first_ch) noexcept {
 namespace ems::hal {
 
 void tle8888_init() noexcept {
-#if EMS_BOARD_IS_MRE
-    // ── 1–2. mRE: PD5 CSN, PB3/4/5 = SPI1 SCK/MISO/MOSI (AF5) ──────────────
-    RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOBEN | RCC_AHB2ENR1_GPIODEN;
-    RCC_APB2ENR  |= RCC_APB2ENR_SPI1EN;
-    gpio_set_output(&GPIOD_MODER, &GPIOD_OSPEEDR, 5u);
-    cs_high();
-    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 3u, GPIO_AF5);
-    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 4u, GPIO_AF5);
-    gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 5u, GPIO_AF5);
-#else
-    // ── 1–2. VGT6: PB12 CSN, PB13/14/15 = SPI2 SCK/MISO/MOSI (AF5) ─────────
-    // ⚠️ auxiliaries_init() não pode reclamar PB12/PB13 (bomba/fan → PE10/12).
+    // ── 1. Clocks ────────────────────────────────────────────────────────────
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOBEN;
     RCC_APB1LENR |= RCC_APB1LENR_SPI2EN;
+
+    // ── 2. GPIO: PB12 = CSN (saída), PB13/14/15 = SPI2 SCK/MISO/MOSI (AF5) ──
+    // ⚠️ auxiliaries_init() TEM de deixar de reclamar PB12/PB13 para
+    // ventoinha/bomba, senão sobrescreve o MODER e mata o SCK. Ver
+    // docs/hw/interface_board_v1.md.
     gpio_set_output(&GPIOB_MODER, &GPIOB_OSPEEDR, 12u);
-    cs_high();
+    cs_high();  // CSN em repouso alto
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 13u, GPIO_AF5);
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 14u, GPIO_AF5);
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 15u, GPIO_AF5);
-#endif
 
-    // ── 3. SPI mestre, 16 bits, CPOL=0/CPHA=1, ~3.9 MHz (< 5 MHz máx) ───────
-    TLE_SPI_CR1  = 0u;
-    TLE_SPI_CFG1 = SPI_CFG1_DSIZE_16BIT | (4u << 28u);  // MBR=100b → /32
-    TLE_SPI_CFG2 = SPI_CFG2_MASTER | SPI_CFG2_SSM | SPI_CFG2_CPHA
-                 | SPI_CFG2_COMM_FULLDUPLEX;
-    TLE_SPI_CR2  = 1u;
-    TLE_SPI_CR1  = SPI_CR1_SPE;
+    // ── 3. SPI2: mestre, 16 bits, CPOL=0/CPHA=1, ~3.9 MHz (< 5 MHz máx) ─────
+    SPI2_CR1  = 0u;
+    SPI2_CFG1 = SPI_CFG1_DSIZE_16BIT | (4u << 28u);  // MBR=100b → /32
+    SPI2_CFG2 = SPI_CFG2_MASTER | SPI_CFG2_SSM | SPI_CFG2_CPHA
+              | SPI_CFG2_COMM_FULLDUPLEX;
+    SPI2_CR2  = 1u;
+    SPI2_CR1  = SPI_CR1_SPE;
 
     // ── 4. Fingerprint CONSULTIVO (não bloqueia) ────────────────────────────
     // Antes de qualquer escrita (valores de reset). Falhar aqui NÃO aborta:

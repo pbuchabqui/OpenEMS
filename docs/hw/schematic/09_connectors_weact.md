@@ -1,5 +1,16 @@
 # Sheet 09 — Conectores AMPSEAL + socket WeAct
 
+> ⚠️ **Parcialmente stale (2026-08-07).** Escrito quando a board podia levar o coreboard
+> WeAct em headers. A decisão fechada é **H562 soldado** — o WeAct é *só bancada de
+> firmware*. Na board nova (`hardware/openems_v1/`) a sheet chama-se `09_connectors` e o
+> MCU tem sheet própria, a `11_mcu_h562`.
+>
+> **Continua válido:** J1/J2 AMPSEAL RA, test points, star GND.
+> **Ignorar:** tudo sobre socket/headers dual-row do WeAct.
+>
+> 🚫 **Bloqueado:** o footprint do AMPSEAL **23 vias** não existe no repo — ver
+> [`../ampseal_connectors.md`](../ampseal_connectors.md).
+
 ## Função
 Fronteira mecânica/eléctrica: J1/J2 AMPSEAL RA, headers dual-row WeAct, TP, star GND.
 

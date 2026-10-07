@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 
 namespace ems::engine {
 
@@ -32,36 +33,20 @@ inline uint32_t clamp_u32(uint32_t v, uint32_t lo, uint32_t hi) noexcept {
     return v;
 }
 
-inline uint16_t interp_u16_8pt_u16x(const uint16_t* x_axis,
-                                     const uint16_t* table,
-                                     uint8_t n,
-                                     uint16_t x) noexcept {
-    if (x <= x_axis[0]) return table[0];
-    if (x >= x_axis[n - 1u]) return table[n - 1u];
-
-    uint8_t idx = 0u;
-    while (idx < (n - 2u) && x > x_axis[idx + 1u]) { ++idx; }
-
-    const uint16_t x0 = x_axis[idx];
-    const uint16_t x1 = x_axis[idx + 1u];
-    const uint16_t y0 = table[idx];
-    const uint16_t y1 = table[idx + 1u];
-    const uint32_t dx = static_cast<uint32_t>(x - x0);
-    const uint32_t span = static_cast<uint32_t>(x1 - x0);
-    if (span == 0u) return y0;
-
-    const int32_t dy = static_cast<int32_t>(y1) - static_cast<int32_t>(y0);
-    const int32_t y = static_cast<int32_t>(y0) +
-        static_cast<int32_t>((dy * static_cast<int32_t>(dx)) / static_cast<int32_t>(span));
-    if (y <= 0) return 0u;
-    if (y >= 65535) return 65535u;
-    return static_cast<uint16_t>(y);
+// Kelvin×10 (°C×10 + 2730) for air-density terms (ρ ∝ 1/T). Shared by
+// fuel_calc and map_estimator. Range [-73°C, 150°C] covers both callers;
+// T_ref/T at 298.0 K maps to Q8 [180, 381].
+inline int32_t clamp_iat_kelvin_x10(int16_t iat_x10) noexcept {
+    int32_t iat_k_x10 = static_cast<int32_t>(iat_x10) + 2730;
+    if (iat_k_x10 < 2000) { iat_k_x10 = 2000; }
+    if (iat_k_x10 > 4230) { iat_k_x10 = 4230; }
+    return iat_k_x10;
 }
 
-inline uint16_t interp_u16_8pt(const int16_t* axis,
-                               const uint16_t* table,
-                               uint8_t n,
-                               int16_t x) noexcept {
+// Piecewise-linear lookup over n monotonic axis points; clamps to the end
+// values and to Y's range. Non-monotonic segment (span<=0) returns y0.
+template <typename X, typename Y>
+inline Y interp_8pt(const X* axis, const Y* table, uint8_t n, X x) noexcept {
     if (x <= axis[0]) return table[0];
     if (x >= axis[n - 1u]) return table[n - 1u];
 
@@ -69,39 +54,30 @@ inline uint16_t interp_u16_8pt(const int16_t* axis,
     while (idx < (n - 2u) && x > axis[idx + 1u]) { ++idx; }
 
     const int32_t x0 = axis[idx];
-    const int32_t x1 = axis[idx + 1u];
     const int32_t y0 = table[idx];
-    const int32_t y1 = table[idx + 1u];
-    const int32_t span = x1 - x0;
-    if (span <= 0) return static_cast<uint16_t>(y0);
+    const int32_t span = static_cast<int32_t>(axis[idx + 1u]) - x0;
+    if (span <= 0) return static_cast<Y>(y0);
 
-    const int32_t y = y0 + ((y1 - y0) * (static_cast<int32_t>(x) - x0)) / span;
-    if (y <= 0) return 0u;
-    if (y >= 65535) return 65535u;
-    return static_cast<uint16_t>(y);
+    const int32_t y = y0 + ((static_cast<int32_t>(table[idx + 1u]) - y0) *
+                            (static_cast<int32_t>(x) - x0)) / span;
+    constexpr int32_t kMin = std::numeric_limits<Y>::min();
+    constexpr int32_t kMax = std::numeric_limits<Y>::max();
+    return static_cast<Y>(y < kMin ? kMin : (y > kMax ? kMax : y));
 }
 
-inline int16_t interp_i16_8pt(const int16_t* axis,
-                              const int16_t* table,
-                              uint8_t n,
-                              int16_t x) noexcept {
-    if (x <= axis[0]) return table[0];
-    if (x >= axis[n - 1u]) return table[n - 1u];
+inline uint16_t interp_u16_8pt_u16x(const uint16_t* x_axis, const uint16_t* table,
+                                     uint8_t n, uint16_t x) noexcept {
+    return interp_8pt<uint16_t, uint16_t>(x_axis, table, n, x);
+}
 
-    uint8_t idx = 0u;
-    while (idx < (n - 2u) && x > axis[idx + 1u]) { ++idx; }
+inline uint16_t interp_u16_8pt(const int16_t* axis, const uint16_t* table,
+                               uint8_t n, int16_t x) noexcept {
+    return interp_8pt<int16_t, uint16_t>(axis, table, n, x);
+}
 
-    const int32_t x0 = axis[idx];
-    const int32_t x1 = axis[idx + 1u];
-    const int32_t y0 = table[idx];
-    const int32_t y1 = table[idx + 1u];
-    const int32_t span = x1 - x0;
-    if (span <= 0) return static_cast<int16_t>(y0);
-
-    const int32_t y = y0 + ((y1 - y0) * (static_cast<int32_t>(x) - x0)) / span;
-    if (y < -32768) return -32768;
-    if (y > 32767) return 32767;
-    return static_cast<int16_t>(y);
+inline int16_t interp_i16_8pt(const int16_t* axis, const int16_t* table,
+                              uint8_t n, int16_t x) noexcept {
+    return interp_8pt<int16_t, int16_t>(axis, table, n, x);
 }
 
 }  // namespace ems::engine

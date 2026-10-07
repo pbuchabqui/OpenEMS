@@ -228,11 +228,11 @@ O protocolo é **binário**, stateless e funciona em cima de UART ou USB-CDC com
 | 6–7 | u16 LE | `stoich_afr_x100` | AFR×100 | 1300 → `0x14 0x05` |
 | 8–9 | u16 LE | `map_ref_bar_x100` | bar×100 | 100 → `0x64 0x00` |
 | 10–11 | u16 LE | `trigger_tooth0_engine_deg` | graus | **MEDIR** |
-| 12–13 | u16 LE | `default_eoi_lead_deg` | graus | 355 → `0x63 0x01` |
+| 12–13 | u16 LE | `default_eoi_lead_deg` | graus | 355 → `0x63 0x01` (compat NVM; EOI efectivo = tabela 2D) |
 | 14–15 | u16 LE | magic | — | **0x44 0x45** (v2/EOI — obrigatório) |
-| 164–165 | u16 LE | `eoi_idle_deg` | graus | 60 (blend: EOI em idle; 365 = pré-IVO) |
-| 166–167 | u16 LE | `eoi_blend_rpm_lo` | RPM | 0 (0/0 = blend desligado) |
-| 168–169 | u16 LE | `eoi_blend_rpm_hi` | RPM | 0 — EOI interpola linearmente lo→hi até `default_eoi_lead_deg` |
+
+EOI 2D (RPM×CLT) vive em **page6 offsets 79–114** (`eoi_rpm_axis_x10` 12 B,
+`eoi_clt_axis_x10` 6 B, `eoi_table_deg` 18 B). Sem bump de magic v6.
 
 > **ATENÇÃO — magic obrigatório:** `engine_config_load()` verifica os bytes
 > 14–15 (`0x44 0x45` em little-endian = 0x4544, versão v2/EOI). Se estiverem

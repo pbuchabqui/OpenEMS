@@ -179,6 +179,10 @@ bool lambda_history_get_delayed(uint32_t now_ms,
     return found;
 }
 
+// CLT mínima para closed-loop — 40,0°C (decisão do utilizador, 2026-08-14;
+// era 70,0°C). Usada aqui e em post_start_elapsed().
+constexpr int16_t kClosedLoopMinCltX10 = 400;
+
 bool closed_loop_allowed(int16_t clt_x10,
                          bool o2_valid,
                          bool ae_active,
@@ -186,7 +190,7 @@ bool closed_loop_allowed(int16_t clt_x10,
     if (ems::engine::closed_loop_enable == 0u) {
         return false;
     }
-    return (clt_x10 > 700) && o2_valid && (!ae_active) && (!rev_cut);
+    return (clt_x10 > kClosedLoopMinCltX10) && o2_valid && (!ae_active) && (!rev_cut);
 }
 
 // Regime estável entre amostras consecutivas em closed-loop.
@@ -304,7 +308,7 @@ bool post_start_elapsed(uint32_t now_ms, int16_t clt_x10, bool o2_valid) noexcep
     if (now_ms == 0u) {
         return true;
     }
-    if (!(clt_x10 > 700 && o2_valid)) {
+    if (!(clt_x10 > kClosedLoopMinCltX10 && o2_valid)) {
         g_cl_warm_latched = false;
         g_cl_warm_since_ms = 0u;
         return false;
@@ -802,7 +806,7 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     if (!closed_loop_allowed(clt_x10, o2_valid, ae_active, rev_cut)) {
         // DIAG: conta o motivo do bloqueio (prioridade na ordem do gate)
         if (closed_loop_enable == 0u) { /* master off — sem contador dedicado */ }
-        else if (clt_x10 <= 700)      { ++g_dbg_stft_blocked_clt; }
+        else if (clt_x10 <= kClosedLoopMinCltX10) { ++g_dbg_stft_blocked_clt; }
         else if (!o2_valid)      { ++g_dbg_stft_blocked_o2; }
         else if (ae_active)      { ++g_dbg_stft_blocked_ae; }
         else                     { ++g_dbg_stft_blocked_cut; }
@@ -825,7 +829,10 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     const int32_t clamp_x1000 = static_cast<int32_t>(clamp) * 100;
     const int16_t error_x1000 = static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
     g_dbg_stft_last_err = error_x1000;
-    const int32_t p_x10 = (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_kp_x100)) / 100;
+    // P em ×1000 (não ÷100 ainda — kp_x100=3 truncava a zero p/ |erro|<3,4%, a
+    // faixa normal de operação em malha fechada). Só divide por 100 no fim,
+    // já somado ao integrador (também em ×1000).
+    const int32_t p_x1000 = static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_kp_x100);
     // incremento em ×1000: error×ki/10 (era /1000 em ×10 — truncava a zero)
     g_stft_integrator_x1000 += (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_ki_x1000)) / 10;
 
@@ -835,7 +842,7 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
         g_stft_integrator_x1000 = -clamp_x1000;
     }
 
-    const int32_t stft = p_x10 + g_stft_integrator_x1000 / 100;
+    const int32_t stft = (p_x1000 + g_stft_integrator_x1000) / 100;
     g_stft_pct_x10 = clamp_i16(static_cast<int16_t>(stft), -clamp, clamp);
 
     // Célula de crédito = nó dominante (nearest), igual ao trace do VE no dash.

@@ -1,5 +1,7 @@
 #include "engine/calibration.h"
 
+#include "hal/board_pinout.h"  // EMS_MT6835_ENCODER — default de stft_ki_x1000
+
 #include <cstring>
 
 #include "drv/sensors.h"
@@ -79,8 +81,13 @@ int8_t spark_table[kTableAxisSize][kTableAxisSize] = {
 int16_t clt_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
 uint16_t clt_corr_x256[kCorrectionTableSize] = {384u, 352u, 320u, 288u, 272u, 256u, 256u, 256u};
 
+// Placeholder NÃO calibrado — margem de proteção apenas (ex.: anti-detonação
+// em IAT alto), pendente de dado real de bancada/dinamômetro. A densidade do
+// ar já é compensada por física pura em corr_iat_density_q8() (fuel_calc.cpp),
+// então esta tabela não precisa (e não deve) tentar aproximar 1/T — fica
+// neutra (256) até ~60°C e sobe modestamente acima disso.
 int16_t iat_corr_axis_x10[kCorrectionTableSize] = {-200, 0, 200, 400, 600, 800, 1000, 1200};
-uint16_t iat_corr_x256[kCorrectionTableSize] = {272u, 264u, 256u, 256u, 264u, 272u, 280u, 288u};
+uint16_t iat_corr_x256[kCorrectionTableSize] = {256u, 256u, 256u, 256u, 256u, 266u, 276u, 288u};
 
 int16_t warmup_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 700, 900, 1100};
 uint16_t warmup_corr_x256[kCorrectionTableSize] = {420u, 380u, 350u, 320u, 290u, 256u, 256u, 256u};
@@ -97,7 +104,7 @@ int16_t ae_clt_corr_axis_x10[kCorrectionTableSize] = {-400, -100, 0, 200, 400, 7
 uint16_t ae_clt_sens[kCorrectionTableSize] = {11u, 10u, 9u, 8u, 7u, 6u, 5u, 4u};
 // Limiar 3 %/s (×10) — evita AE em ruído de TPS; tip-in real fica acima de light-transient.
 uint16_t ae_tpsdot_threshold_x10 = 30u;
-uint16_t ae_taper_cycles = 8u;
+uint16_t ae_taper_ms = 16u;  // wall-clock ms (legado 8 ticks × 2 ms)
 uint16_t ae_max_pw_us = 5000u;
 // Eixo de taxa tip-in/tip-out (%/s ×10). Começa no limiar default.
 uint16_t ae_tpsdot_axis_x10[kAeRateTableSize] = {30u, 80u, 200u, 500u};
@@ -163,14 +170,14 @@ uint16_t idle_spark_rpm_per_deg_x10 = 500u;
 int16_t idle_spark_retard_limit_deg = -8;
 int16_t idle_spark_advance_limit_deg = 12;
 
-uint16_t app1_raw_min = 200u;
-uint16_t app1_raw_max = 3895u;
-uint16_t app2_raw_min = 200u;
-uint16_t app2_raw_max = 3895u;
-uint16_t etb_tps1_raw_min = 200u;
-uint16_t etb_tps1_raw_max = 3895u;
-uint16_t etb_tps2_raw_min = 200u;
-uint16_t etb_tps2_raw_max = 3895u;
+uint16_t app1_raw_min = 0u;
+uint16_t app1_raw_max = 4095u;
+uint16_t app2_raw_min = 0u;
+uint16_t app2_raw_max = 4095u;
+uint16_t etb_tps1_raw_min = 0u;
+uint16_t etb_tps1_raw_max = 4095u;
+uint16_t etb_tps2_raw_min = 0u;
+uint16_t etb_tps2_raw_max = 4095u;
 uint16_t app_max_delta_pct_x10 = 120u;
 uint16_t etb_max_delta_pct_x10 = 120u;
 uint16_t etb_max_open_pct_x10_limp = 250u;
@@ -187,8 +194,8 @@ uint16_t etb_pedal_map[4][10] = {
     {   0, 180, 350, 500, 600, 700, 780, 850, 920, 1000},  // SPORT
     {   0,  50, 100, 150, 220, 300, 400, 520, 650, 1000},  // RAIN
 };
-uint16_t tps_raw_min = 200u;
-uint16_t tps_raw_max = 3895u;
+uint16_t tps_raw_min = 0u;
+uint16_t tps_raw_max = 4095u;
 
 int8_t cyl_fuel_trim_pct[cfg::kCylinderCount] = {};  // 0 = sem correção
 int8_t cyl_ign_trim_deg[cfg::kCylinderCount]  = {};  // 0 = sem correção
@@ -202,12 +209,14 @@ uint8_t  inj_duty_tol_ms10 = 30u;  // 300 ms de tolerância acima do limite
 
 uint16_t decel_cut_map_max_bar_x100  = 0u;  // 0 = sem gate de MAP
 uint8_t  decel_cut_gear_inhibit_ms10 = 0u;  // 0 = sem inibição pós-troca
+uint16_t decel_cut_ramp_ms           = 0u;  // 0 = soft ramp off (NVM blank)
 
 uint8_t knock_dead_min_p2p = 0u;   // 0 = detecção de sensor morto desligada
 
 uint8_t  map_window_enable   = 0u;    // 0 = desligado
 uint16_t map_window_open_deg = 0u;    // slot 0 abre no dente 0 (pós-gap)
 uint16_t map_window_len_deg  = 90u;   // meia fase de admissão
+uint8_t  map_window_use_for_fuel = 0u;  // 0 = desligado — ver AVISO em map_window.h
 
 uint16_t boost_target_bar_x1000[7][8] = {
     {1000u, 1020u, 1050u, 1080u, 1100u, 1120u, 1150u, 1180u},  // 0: neutro
@@ -294,12 +303,27 @@ uint16_t iac_idle_target_rpm_x10[kIacWarmupPts]  = {12000u, 11500u, 10800u, 1000
 uint16_t wbo2_can_id = 0x180u;
 
 uint16_t stft_kp_x100       = 3u;    // 0.03
-uint16_t eoi_idle_deg      = 60u;   // closed-valve (fim na compressão)
-uint16_t eoi_blend_rpm_lo  = 2000u; // abaixo: closed-valve (60°)
-uint16_t eoi_blend_rpm_hi  = 4000u; // acima: open-valve (355°)
 
-uint16_t stft_ki_x1000      = 5u;    // 0.005
-uint16_t stft_clamp_pct_x10 = 250u;  // 25.0%
+// Tabela EOI 2D (RPM × CLT) — placeholder, ver calibration.h. Linhas =
+// eoi_clt_axis_x10 (-20/20/90°C), colunas = eoi_rpm_axis_x10 (500/2000/5000).
+uint32_t eoi_rpm_axis_x10[kEoiTableSize] = {5000u, 20000u, 50000u};
+int16_t  eoi_clt_axis_x10[kEoiTableSize] = {-200, 200, 900};
+uint16_t eoi_table_deg[kEoiTableSize][kEoiTableSize] = {
+    {250u, 300u, 355u},  // -20°C
+    {150u, 250u, 355u},  //  20°C
+    { 60u, 150u, 355u},  //  90°C
+};
+
+// Ki dobrado (5→10) só no caminho encoder (decisão do utilizador,
+// 2026-08-14): ~10s p/ cancelar erro de 1%λ em vez de ~20s — mudança de
+// afinação ainda não validada contra ruído de sensor λ real (só bancada com
+// λ simulado limpo). Produção/Hall mantém o Ki=5 original até essa
+// validação. `if`, não `#if`, sobre a macro sempre definida
+// (board_pinout.h) — mesmo raciocínio já usado em main_stm32.cpp: custo
+// zero em produção via constant-folding, sem esconder o ramo de compilar em
+// host-test.
+uint16_t stft_ki_x1000      = EMS_MT6835_ENCODER ? 10u : 5u;  // 0.010 encoder / 0.005 produção
+uint16_t stft_clamp_pct_x10 = 150u;  // 15.0% (era 25.0%, decisão do utilizador 2026-08-14)
 
 uint16_t xtau_x_min_q8  = 64u;   // 0.25
 uint16_t xtau_x_max_q8  = 192u;  // 0.75

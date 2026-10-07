@@ -20,6 +20,10 @@ extern int8_t spark_table[kTableAxisSize][kTableAxisSize];
 extern int16_t clt_corr_axis_x10[kCorrectionTableSize];
 extern uint16_t clt_corr_x256[kCorrectionTableSize];
 
+// Margem de proteção calibrável (ex.: anti-detonação em IAT alto) — NÃO é
+// compensação de densidade do ar, que agora é física pura via
+// corr_iat_density_q8() (fuel_calc.cpp), aplicada no cálculo base.
+// Default é um placeholder conservador não calibrado — ver calibration.cpp.
 extern int16_t iat_corr_axis_x10[kCorrectionTableSize];
 extern uint16_t iat_corr_x256[kCorrectionTableSize];
 
@@ -43,7 +47,10 @@ extern uint16_t fuel_press_nominal_bar_x1000;
 extern int16_t ae_clt_corr_axis_x10[kCorrectionTableSize];
 extern uint16_t ae_clt_sens[kCorrectionTableSize];
 extern uint16_t ae_tpsdot_threshold_x10;
-extern uint16_t ae_taper_cycles;
+// Duração do taper AE em ms wall-clock (loop 2 ms). Offset page5 236 (u16).
+// Load heurístico: raw≤64 → legado (ticks×2); raw>64 → já é ms.
+// Default 16 ms (equiv. 8 ticks legados × 2 ms).
+extern uint16_t ae_taper_ms;
 extern uint16_t ae_max_pw_us;
 extern uint16_t ae_tpsdot_axis_x10[kAeRateTableSize];
 extern uint16_t ae_pw_adder_us[kAeRateTableSize];
@@ -146,7 +153,7 @@ extern uint8_t cmp_window_close_tooth;
 
 // Protecção de duty do injector (estilo FOME #215): acima de max_pct por
 // mais de tol (×10 ms, 0 = default 300 ms) corta injecção até o duty pedido
-// cair 5% abaixo do limite. max_pct = 0 desliga (default).
+// cair abaixo de 20%. max_pct = 0 desliga (default).
 extern uint8_t inj_duty_max_pct;
 extern uint8_t inj_duty_tol_ms10;
 
@@ -154,6 +161,9 @@ extern uint8_t inj_duty_tol_ms10;
 // pós-troca de marcha (×10 ms, 0 = off) — evita corte/jerk durante a troca.
 extern uint16_t decel_cut_map_max_bar_x100;
 extern uint8_t  decel_cut_gear_inhibit_ms10;
+// Soft ramp-in após saída do DFCO (ms wall-clock). 0 = off (PW pleno no 1º tick).
+// page0 offset 259 (u16). Blob antigo = 0 → comportamento legado.
+extern uint16_t decel_cut_ramp_ms;
 
 // Knock: pico-a-pico mínimo de ruído de fundo por janela (counts ADC).
 // EMA abaixo disto por muitas janelas = sensor morto/desligado (FOME #578).
@@ -161,12 +171,19 @@ extern uint8_t  decel_cut_gear_inhibit_ms10;
 extern uint8_t knock_dead_min_p2p;
 
 // MAP janela angular por cilindro (engine/map_window, estilo FOME #610).
-// enable: 0=off (default), 1=medir (telemetria/balance; sem efeito no fuel).
-// open_deg: abertura da janela do slot 0 no ciclo 720° (0-719; slots seguintes
-// a +180° cada). len_deg: duração da janela (10-180°).
+// enable: 0=off (default), 1=medir (telemetria/balance; sem efeito no fuel
+// por si só — ver use_for_fuel). open_deg: abertura da janela do slot 0 no
+// ciclo 720° (0-719; slots seguintes a +180° cada). len_deg: duração da
+// janela (10-180°).
 extern uint8_t  map_window_enable;
 extern uint16_t map_window_open_deg;
 extern uint16_t map_window_len_deg;
+// use_for_fuel: 0=off (default) — gate SEPARADO de enable, exige opt-in
+// explícito. Só ligar depois de calibrar open_deg/len_deg observando MAP
+// real por cilindro no motor (ver AVISO em map_window.h) — no default
+// (open_deg=0, len_deg=90° de 180°) a média dos 4 slots é um arco arbitrário
+// não-calibrado, pode enviesar o combustível em vez de limpar ruído.
+extern uint8_t  map_window_use_for_fuel;
 
 // CKP: nº de dentes descartados após silêncio ≥ timeout de stall (arranque,
 // stall, religação do sensor) antes de re-entrar no bootstrap do histórico —
@@ -240,6 +257,8 @@ void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept
 // Hall open-collector idle-HIGH/pulso-LOW típico: bit1=1 (CMP falling) + pull-up.
 // Aplica TIM5 CCxP + GPIOA PUPDR via tim5_ic_set_capture_polarity().
 constexpr uint16_t kCapturePolarityPage0Off = 258u;
+// DFCO soft ramp-in (u16 ms); imediatamente após polaridade.
+constexpr uint16_t kDecelCutRampMsPage0Off = 259u;
 extern uint8_t capture_polarity;  // bit0 CKP, bit1 CMP; 1 = falling
 void apply_page0_capture_polarity(const uint8_t* page0, uint16_t len) noexcept;
 
@@ -306,17 +325,31 @@ extern uint16_t wbo2_can_id;
 
 // STFT closed-loop tuning (página 0, offsets 140-145)
 extern uint16_t stft_kp_x100;        // Kp × 100, default 3 (= 0.03)
-// ── EOI blend por RPM (fase de injeção) ─────────────────────────────────
-// EOI efetivo interpolado linearmente entre eoi_idle_deg (rpm ≤ lo) e
-// g_eng_cfg.default_eoi_lead_deg (rpm ≥ hi). hi ≤ lo (incl. 0/0) = DESLIGADO
-// → usa sempre default_eoi_lead_deg (comportamento pré-blend). RPM em
-// unidades planas (não ×10): u16 ×10 saturaria a 6553 RPM.
-extern uint16_t eoi_idle_deg;        // ° BTDC combustão, default 60 (closed-valve)
-extern uint16_t eoi_blend_rpm_lo;    // RPM início do blend, default 0 (off)
-extern uint16_t eoi_blend_rpm_hi;    // RPM fim do blend,    default 0 (off)
+// ── EOI 2D (RPM × CLT) — fase de injeção ────────────────────────────────
+// Substitui o antigo blend 1D só-RPM (eoi_idle_deg/eoi_blend_rpm_lo/hi).
+// Mesmo padrão estrutural de lambda_delay_ms_table (3×3 bilinear, eixos
+// calibráveis) — ver interp_eoi_3x3() em fuel_calc.cpp.
+//
+// Racional físico: closed-valve (EOI baixo, perto da combustão) depende de
+// calor da porta/válvula para vaporizar o combustível pousado — a frio não
+// há esse calor. Open-valve (EOI alto, perto do cruzamento de válvulas)
+// atomiza por arrasto do próprio ar de admissão, menos dependente de
+// temperatura — mas ao ralenti o fluxo de ar é fraco mesmo com a válvula
+// aberta, então o ganho de open-valve é menor do que a RPM alto.
+//
+// Defaults das células são PLACEHOLDER, não medição — preservam as duas
+// âncoras já validadas (60°@quente/baixoRPM, 355°@qualquer/altoRPM) e
+// extrapolam a frio subindo para mais perto de open-valve sem ir ao
+// extremo (ver calibration.cpp). Confirmar/ajustar em bancada antes de
+// confiar nestes valores.
+// NVM: page6 offsets 79-114 (não page0 / não magic v6).
+constexpr uint8_t kEoiTableSize = 3u;
+extern uint32_t eoi_rpm_axis_x10[kEoiTableSize];  // RPM×10, default 500/2000/5000
+extern int16_t  eoi_clt_axis_x10[kEoiTableSize];  // °C×10, default -20/20/90 (assinado — CLT pode ser negativo)
+extern uint16_t eoi_table_deg[kEoiTableSize][kEoiTableSize];  // [clt][rpm], ° BTDC combustão
 
-extern uint16_t stft_ki_x1000;       // Ki × 1000, default 5 (= 0.005)
-extern uint16_t stft_clamp_pct_x10;  // clamp ±%, default 250 (= 25.0%)
+extern uint16_t stft_ki_x1000;       // Ki × 1000, default 5 (produção) / 10 (encoder, EMS_MT6835_ENCODER)
+extern uint16_t stft_clamp_pct_x10;  // clamp ±%, default 150 (= 15.0%)
 
 // X-τ auto-calibration limits (página 0, offsets 146-153)
 extern uint16_t xtau_x_min_q8;       // X min Q8, default 64 (= 0.25)

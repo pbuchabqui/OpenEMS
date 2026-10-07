@@ -5,6 +5,7 @@
 
 #include "etb_control.h"
 #include "engine/calibration.h"
+#include "engine/limp_gating.h"
 #include "engine/math_utils.h"
 #include "hal/etb_driver.h"
 
@@ -144,6 +145,7 @@ bool etb_is_ready(void) {
 
 void etb_enter_limp_mode(void) {
     g_limp_mode = true;
+    ems::engine::limp_gating_report_etb_problem();
 #if defined(EMS_HOST_TEST)
     g_data.fault_count++;
     g_data.throttle_target = g_config.limp_opening;

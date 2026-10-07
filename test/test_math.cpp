@@ -214,11 +214,12 @@ void test_math_corrections(void) {
 
     section("MATH: corr_iat valores exactos");
     // iat_corr_axis_x10 = {-200,0,200,400,600,800,1000,1200}
-    // iat_corr_x256     = {272, 264,256,256,264,272, 280, 288}
-    // Ponto 100 (midpoint 0..200):
-    //   frac = 100×256/200 = 128
-    //   lerp(264,256,128) = 264 + (256-264)×128/256 = 264-4 = 260
-    CHECK_EQ(corr_iat(100), 260u, "corr_iat(100) = 260 (interp exacta)");
+    // iat_corr_x256     = {256, 256,256,256,256,266, 276, 288}
+    // (margem de proteção apenas, não compensação de densidade — ver
+    // corr_iat_density_q8 para a parte física. Placeholder não calibrado:
+    // neutro até 40°C, subida modesta acima disso.)
+    // Ponto 100 (midpoint 0..200, ambos os nós valem 256):
+    CHECK_EQ(corr_iat(100), 256u, "corr_iat(100) = 256 (ambos os nós neutros)");
     CHECK_EQ(corr_iat(200), 256u, "corr_iat(200) = 256 (valor ref, frac=255→b)");
 
     section("MATH: corr_vbatt valores exactos (dead-time do injector)");
@@ -273,6 +274,18 @@ void test_math_stft_gains(void) {
     const int16_t s_cold2 = fuel_update_stft(
         30000u, 100u, 1000, 1200, 600, true, false, false, 30000u, 500u);
     CHECK_EQ(s_cold2, 250, "STFT congelado após 2 chamadas frias: mantém 250");
+
+    section("MATH: fuel_update_stft termo P não trunca a zero em erro pequeno");
+    // error=33 x1000 (3,3% lean) está na faixa normal de operação — antes do
+    // fix, p_x10=(33×3)/100=0 (trunca) E integrator/100=floor(16/100)=0, então
+    // a 1ª chamada não aplicava NENHUMA correção apesar do erro real. Com o
+    // fix, p e integrator somam-se em ×1000 antes de dividir por 100 uma
+    // única vez: (33×3 + floor(33×5/10)) / 100 = (99+16)/100 = 1.
+    fuel_reset_adaptives();
+    const int16_t s_small_err = fuel_update_stft(
+        30000u, 100u, 1000, 1033, 900, true, false, false, 30000u, 500u);
+    CHECK_EQ(s_small_err, 1,
+             "erro pequeno (3,3%) já corrige após 1 chamada — P não é perdido no truncamento");
 }
 
 void test_math_inj_scheduler_ticks(void) {

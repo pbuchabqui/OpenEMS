@@ -140,7 +140,7 @@ uint8_t table_axis_frac_q8(const uint32_t* axis, uint8_t idx, uint32_t value) no
     return static_cast<uint8_t>(frac);
 }
 
-static int32_t lerp_q8_s32(int32_t a, int32_t b, uint8_t frac_q8) noexcept {
+int32_t lerp_q8_s32(int32_t a, int32_t b, uint8_t frac_q8) noexcept {
     if (frac_q8 == 255u) { return b; }
     return a + (((b - a) * static_cast<int32_t>(frac_q8)) >> 8u);
 }

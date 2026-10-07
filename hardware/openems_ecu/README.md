@@ -1,4 +1,14 @@
-# OpenEMS ECU — KiCad (produção)
+# OpenEMS ECU — KiCad (fork mRE) — ⛔ CONGELADO
+
+> **Não editar. Não é a board de produção.** Desde **2026-08-07** o desenho de produção
+> é [`hardware/openems_v1/`](../openems_v1/), um projecto KiCad em branco.
+> Porquê da mudança: [`docs/hw/microruseefi_as_base.md`](../../docs/hw/microruseefi_as_base.md).
+>
+> Isto fica por dois motivos: é o **recuo** se o desenho novo encalhar, e guarda as libs
+> verificadas em `rusefi_lib/` (`tle8888qk.lib`, Net-Tie, AMPSEAL) que a board nova reutiliza.
+>
+> Estado em que ficou: DRC **nunca passou**, 2 camadas de sinal (a v1 pede 4), e restam
+> nets fantasma do mRE (ex. `/PE1`, que no H562 LQFP100 é VCAP).
 
 Cópia de trabalho a partir de [rusefi/hw_microRusEfi](https://github.com/rusefi/hw_microRusEfi),
 adaptada ao firmware OpenEMS (**STM32H562VGT6** + **TLE8888-2QK**).

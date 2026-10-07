@@ -1,0 +1,25 @@
+(kicad_sch
+	(version 20260101)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid 9e6fc630-01bd-49fc-a7b5-08e07573ba6d)
+	(paper "A4")
+	(lib_symbols)
+	(text "Sheet 04c — L9960T bridge ETB+EWG | substitui 06_etb (BTS7960 externo)"
+		(exclude_from_sim no)
+		(at 10.16 12.7 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left bottom)
+		)
+		(uuid "767258b8-f893-4bb3-8a61-25d25c9fb551")
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)

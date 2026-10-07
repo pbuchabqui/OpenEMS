@@ -1,0 +1,25 @@
+(kicad_sch
+	(version 20260101)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid fb8ea30e-0624-4748-8579-6508d29b493f)
+	(paper "A4")
+	(lib_symbols)
+	(text "Sheet 04a — PMIC TPS65381A-Q1 (rails, SPI, WD, ENDRV) | substitui hub TLE8888"
+		(exclude_from_sim no)
+		(at 10.16 12.7 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left bottom)
+		)
+		(uuid "34d4239c-9e34-43c0-b2b5-0cf8d90a8360")
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)

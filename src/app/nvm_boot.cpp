@@ -8,6 +8,7 @@
 
 #include "engine/calibration.h"
 #include "engine/engine_config.h"
+#include "engine/fuel_calc.h"
 #include "engine/etb_control.h"
 #include "engine/table3d.h"
 #include "hal/flash.h"
@@ -68,6 +69,20 @@ void load_lambda_target_table_from_nvm() noexcept {
                 sizeof(ems::engine::lambda_target_table_x1000));
 }
 
+// Pre-T_ref/T compile-time IAT table approximated 1/T. Loading it on top of
+// corr_iat_density_q8 would double-count density (~18% extra fuel at −20 °C).
+static bool iat_corr_is_legacy_density_shape(const uint16_t* tbl) noexcept {
+    static constexpr uint16_t kLegacy[ems::engine::kCorrectionTableSize] = {
+        272u, 264u, 256u, 256u, 264u, 272u, 280u, 288u
+    };
+    for (uint8_t i = 0u; i < ems::engine::kCorrectionTableSize; ++i) {
+        if (tbl[i] != kLegacy[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void load_corr_calibration_from_nvm() noexcept {
     alignas(4) uint8_t page[256] = {};
     if (!ems::hal::nvm_load_calibration(4u, page, sizeof(page)) ||
@@ -79,7 +94,11 @@ void load_corr_calibration_from_nvm() noexcept {
     std::memcpy(ems::engine::clt_corr_axis_x10,          p +   0, 16u);
     std::memcpy(ems::engine::clt_corr_x256,              p +  16, 16u);
     std::memcpy(ems::engine::iat_corr_axis_x10,          p +  32, 16u);
-    std::memcpy(ems::engine::iat_corr_x256,              p +  48, 16u);
+    uint16_t iat_loaded[ems::engine::kCorrectionTableSize] = {};
+    std::memcpy(iat_loaded, p + 48, 16u);
+    if (!iat_corr_is_legacy_density_shape(iat_loaded)) {
+        std::memcpy(ems::engine::iat_corr_x256, iat_loaded, 16u);
+    }
     std::memcpy(ems::engine::warmup_corr_axis_x10,       p +  64, 16u);
     std::memcpy(ems::engine::warmup_corr_x256,           p +  80, 16u);
     std::memcpy(ems::engine::vbatt_corr_axis_mv,         p +  96, 16u);
@@ -93,7 +112,11 @@ void load_corr_calibration_from_nvm() noexcept {
     std::memcpy(ems::engine::lambda_delay_ms_table,      p + 216, 18u);
     if (!page_range_is_zero(page, 234u, 6u)) {
         std::memcpy(&ems::engine::ae_tpsdot_threshold_x10, p + 234, 2u);
-        std::memcpy(&ems::engine::ae_taper_cycles,         p + 236, 2u);
+        {
+            uint16_t taper_raw = 0u;
+            std::memcpy(&taper_raw, p + 236, 2u);
+            ems::engine::fuel_ae_apply_taper_raw(taper_raw);
+        }
         std::memcpy(&ems::engine::ae_max_pw_us,            p + 238, 2u);
     }
     if (page_range_is_zero(page, 240u, 16u)) {
@@ -154,7 +177,7 @@ void load_pedal_map_from_nvm() noexcept {
 }
 
 void load_xtau_calibration_from_nvm() noexcept {
-    alignas(4) uint8_t page[80] = {};
+    alignas(4) uint8_t page[116] = {};
     if (!ems::hal::nvm_load_calibration(5u, page, sizeof(page)) ||
         page_is_erased(page, sizeof(page)) ||
         page_range_is_zero(page, 0u, 48u)) {
@@ -177,6 +200,16 @@ void load_xtau_calibration_from_nvm() noexcept {
         std::memcpy(&ems::engine::crank_min_pw_us,       p + 70, 2u);
         std::memcpy(&ems::engine::crank_prime_tooth,     p + 72, 2u);
         std::memcpy(&ems::engine::crank_prime_max_pw_us, p + 74, 2u);
+    }
+    // Tabela EOI 2D (79-114, RPM×CLT). Blob antigo (page6 tinha só 80
+    // bytes) deixa o byte 79 como pad gravado 0x00, enquanto 80-114 fica
+    // apagado (0xFF). Guard só sobre 80-114: se a cauda está toda
+    // apagada, a página nunca foi gravada com a tabela 2D — mantém os
+    // defaults de compilação. Não bump de kCalLayoutVersion (não é magic v6).
+    if (!page_range_is_erased(page, 80u, 35u)) {
+        std::memcpy(ems::engine::eoi_rpm_axis_x10, p + 79, 12u);
+        std::memcpy(ems::engine::eoi_clt_axis_x10, p + 91, 6u);
+        std::memcpy(ems::engine::eoi_table_deg,    p + 97, 18u);
     }
 }
 

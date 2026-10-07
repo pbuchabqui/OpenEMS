@@ -176,10 +176,9 @@ void test_fuel_inj_duty_protection(void) {
     CHECK_FALSE(cut_early, "98 ms acima: ainda tolerado");
     CHECK_TRUE(fuel_inj_duty_update(18000u, 60000u, 2u), "corta após 100 ms acima");
     CHECK_TRUE(fuel_inj_duty_cut_active(), "cut_active latched");
-    // Ainda acima do resume (85−5=80%): mantém o corte.
-    CHECK_TRUE(fuel_inj_duty_update(16400u, 60000u, 2u), "82% > 80%: mantém corte");
-    // Cai abaixo do resume: retoma.
-    CHECK_FALSE(fuel_inj_duty_update(15000u, 60000u, 2u), "75% ≤ 80%: retoma");
+    CHECK_TRUE(fuel_inj_duty_update(16400u, 60000u, 2u), "82% > 20%: mantém corte");
+    CHECK_TRUE(fuel_inj_duty_update(5000u, 60000u, 2u), "25% > 20%: mantém corte");
+    CHECK_FALSE(fuel_inj_duty_update(3800u, 60000u, 2u), "19% < 20%: retoma");
     // Transiente breve (< tolerância) nunca corta.
     fuel_inj_duty_reset();
     for (int i = 0; i < 20; ++i) { fuel_inj_duty_update(18000u, 60000u, 2u); }
@@ -244,6 +243,7 @@ void test_fuel_default_fast(void) {
     const uint32_t pw = calc_fuel_pw_us_default_fast(
         80u,    // ve
         100u,   // map_bar_x100
+        256u,   // iat_density_q8 (neutral, 25°C reference)
         1000u,  // lambda_target_x1000 (stoich)
         0,      // trim_pct_x10
         256u,   // corr_clt_x256 (neutral)
@@ -253,19 +253,19 @@ void test_fuel_default_fast(void) {
     CHECK_TRUE(pw > 0u, "calc_fuel_pw_us_default_fast > 0 for valid inputs");
 
     // VE=0 → 0
-    CHECK_EQ(calc_fuel_pw_us_default_fast(0u, 100u, 1000u, 0, 256u, 256u, 0u), 0u,
+    CHECK_EQ(calc_fuel_pw_us_default_fast(0u, 100u, 256u, 1000u, 0, 256u, 256u, 0u), 0u,
              "ve=0 → pw=0");
 
     // lambda out of range → 0
-    CHECK_EQ(calc_fuel_pw_us_default_fast(80u, 100u, 600u, 0, 256u, 256u, 0u), 0u,
+    CHECK_EQ(calc_fuel_pw_us_default_fast(80u, 100u, 256u, 600u, 0, 256u, 256u, 0u), 0u,
              "lambda<650 → pw=0");
 
     // Altitude compensation (F4): lower baro → larger PW (denominator shrinks).
     // baro=70 (0.70 bar, ~3000m altitude) vs baro=101 (1.01 bar, sea level).
     fuel_set_baro_bar_x100(101u);
-    const uint32_t pw_sea   = calc_fuel_pw_us_default_fast(80u, 100u, 1000u, 0, 256u, 256u, 0u);
+    const uint32_t pw_sea   = calc_fuel_pw_us_default_fast(80u, 100u, 256u, 1000u, 0, 256u, 256u, 0u);
     fuel_set_baro_bar_x100(70u);
-    const uint32_t pw_alt   = calc_fuel_pw_us_default_fast(80u, 100u, 1000u, 0, 256u, 256u, 0u);
+    const uint32_t pw_alt   = calc_fuel_pw_us_default_fast(80u, 100u, 256u, 1000u, 0, 256u, 256u, 0u);
     CHECK_TRUE(pw_alt > pw_sea,
                "altitude compensation: lower baro → higher PW (TI_FAC_ALTI)");
     // Ratio should be approximately baro_sea/baro_alt = 101/70 ≈ 1.44
@@ -274,6 +274,20 @@ void test_fuel_default_fast(void) {
     CHECK_TRUE(ratio_x100 >= 130u && ratio_x100 <= 160u,
                "altitude PW ratio ≈ 1.44 (sea_baro/alt_baro=101/70)");
     fuel_set_baro_bar_x100(101u);  // restore
+
+    // iat_density_q8 must actually scale PW (not only corr_iat_density_q8
+    // in isolation). dead_time=0 so the ratio is a pure Q8 multiply.
+    const uint32_t pw_d256 = calc_fuel_pw_us_default_fast(
+        80u, 100u, 256u, 1000u, 0, 256u, 256u, 0u);
+    const uint32_t pw_d194 = calc_fuel_pw_us_default_fast(
+        80u, 100u, 194u, 1000u, 0, 256u, 256u, 0u);
+    const uint32_t pw_d301 = calc_fuel_pw_us_default_fast(
+        80u, 100u, 301u, 1000u, 0, 256u, 256u, 0u);
+    CHECK_TRUE(pw_d256 > 0u, "dens 256: PW > 0");
+    const uint32_t r194 = (pw_d194 * 256u) / pw_d256;
+    const uint32_t r301 = (pw_d301 * 256u) / pw_d256;
+    CHECK_TRUE(r194 >= 193u && r194 <= 195u, "PW(194)/PW(256) ≈ 194/256");
+    CHECK_TRUE(r301 >= 300u && r301 <= 302u, "PW(301)/PW(256) ≈ 301/256");
 }
 
 void test_fuel_corr_warmup(void) {
@@ -288,6 +302,30 @@ void test_fuel_corr_warmup(void) {
 
     // Monotonic: colder → more enrichment
     CHECK_TRUE(corr_warmup(-100) > corr_warmup(700), "corr_warmup monotonically decreasing");
+}
+
+void test_fuel_corr_iat_density(void) {
+    section("fuel_calc: corr_iat_density_q8 (ideal gas, T_ref/T)");
+
+    // T_ref = 298.0K (25.0°C) → factor exato 256 (2980*256/2980).
+    CHECK_EQ(corr_iat_density_q8(250), 256u, "25°C (T_ref) → 256 (1.0x exato)");
+
+    // -20°C: k_x10=2530 → 762880/2530 = 301 (truncado). Ar mais frio → mais denso → fator > 256.
+    CHECK_EQ(corr_iat_density_q8(-200), 301u, "-20°C → 301 (~1.176x, mais rico)");
+
+    // 120°C: k_x10=3930 → 762880/3930 = 194 (truncado). Ar mais quente → menos denso → fator < 256.
+    CHECK_EQ(corr_iat_density_q8(1200), 194u, "120°C → 194 (~0.758x, mais pobre)");
+
+    // Monotonicamente decrescente com a temperatura (sem V-shape — física pura).
+    CHECK_TRUE(corr_iat_density_q8(-200) > corr_iat_density_q8(0), "mais frio → fator maior");
+    CHECK_TRUE(corr_iat_density_q8(0) > corr_iat_density_q8(250), "0°C > 25°C");
+    CHECK_TRUE(corr_iat_density_q8(250) > corr_iat_density_q8(1200), "25°C > 120°C");
+
+    // Extremos do range assertado neste arquivo (ASSERT_VALID_TEMP_X10:
+    // -40°C..150°C) — coincidem com o clamp interno de corr_iat_density_q8,
+    // então são o piso/teto reais de autoridade do termo em qualquer build.
+    CHECK_EQ(corr_iat_density_q8(-400), 327u, "-40°C (extremo frio) → 327 (~1.277x)");
+    CHECK_EQ(corr_iat_density_q8(1500), 180u, "150°C (extremo quente) → 180 (~0.703x)");
 }
 
 void test_fuel_ae(void) {
@@ -338,6 +376,23 @@ void test_fuel_ae(void) {
     int32_t ae_t4 = calc_ae_pw_us(500u, 500u, 10u, 800);  // decay tick 4
     CHECK_TRUE(ae_t1 >= ae_t4, "AE taper: pulse non-increasing over cycles");
     CHECK_EQ(ae_t4, 0, "AE taper: pulse = 0 at or after taper_cycles=4");
+
+    // Heurística NVM: raw≤64 = ticks legados×2; raw>64 = ms directo
+    fuel_ae_apply_taper_raw(8u);
+    CHECK_EQ(ems::engine::ae_taper_ms, 16u, "taper raw=8 legado → 16 ms");
+    fuel_ae_apply_taper_raw(100u);
+    CHECK_EQ(ems::engine::ae_taper_ms, 100u, "taper raw=100 → 100 ms");
+    fuel_ae_set_taper(4u);  // restaura para outros testes via ticks
+
+    // STFT freeze flag: tip-in sets, pulse==0 clears immediately (not sticky).
+    fuel_ae_reset();
+    fuel_ae_notify_pulse(2000);
+    CHECK_TRUE(fuel_ae_stft_freeze_active(), "tip-in pulse → STFT freeze on");
+    fuel_ae_notify_pulse(0);
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(),
+               "pulse=0 clears freeze on same 2 ms tick (not sticky to 100 ms)");
+    fuel_ae_notify_pulse(-500);  // tip-out
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(), "tip-out does not freeze STFT");
 }
 
 void test_fuel_adaptives_reset(void) {
@@ -384,18 +439,76 @@ void test_fuel_lambda_delay(void) {
     CHECK_TRUE(true, "lambda_delay extremes: no crash");
 }
 
+// Tabela EOI 2D (RPM×CLT), substitui o antigo blend 1D — mesmo padrão de
+// test_fuel_lambda_delay acima (interp_eoi_3x3 é static; testa via o
+// wrapper público calc_eoi_lead_deg). Defaults de compilação
+// (calibration.cpp): eixo RPM {500,2000,5000}, eixo CLT {-20,20,90}°C,
+// células [clt][rpm] = {{250,300,355},{150,250,355},{60,150,355}}.
+//
+// Só o canto (idx=0 exato nos dois eixos, sem interpolação) é testado por
+// igualdade exata — qualquer ponto que precise de interpolação no eixo
+// SUPERIOR usa fx/fy=255 (não 256: Q8 não representa 1,0 exato), e
+// table_axis_index() resolve um valor EXATAMENTE num ponto interior do
+// eixo como "topo do segmento de baixo" (idx do segmento anterior,
+// frac=255), não "base do segmento de cima" — confirmado por leitura de
+// table3d.cpp, não assumido. Isto significa que o valor interpolado nos
+// outros cantos/pontos fica sistematicamente ~1° abaixo do que a
+// aritmética "ingénua" sugere — tolerância ±2° (CHECK_NEAR), e
+// invariantes de monotonicidade em vez de valores exatos à mão no meio da
+// tabela (menos frágil a este arredondamento do que recalcular à mão).
+void test_fuel_eoi_2d(void) {
+    section("fuel_calc: calc_eoi_lead_deg (tabela 2D RPM×CLT)");
+
+    // Único canto sem qualquer interpolação (idx=0 exato nos dois eixos,
+    // fx=fy=0) — igualdade exata.
+    CHECK_EQ(ems::engine::calc_eoi_lead_deg(5000u, -200), 250u,
+             "canto (500 RPM, -20°C) → 250, exato (sem interpolação)");
+
+    // Âncoras já validadas hoje (60° idle quente, 355° alto RPM) —
+    // tolerância ±2° pelo arredondamento Q8 do eixo superior.
+    CHECK_NEAR(ems::engine::calc_eoi_lead_deg(50000u, 900), 355, 2.0f,
+               "canto (5000 RPM, 90°C) ≈ 355 (âncora alto RPM)");
+    CHECK_NEAR(ems::engine::calc_eoi_lead_deg(5000u, 900), 60, 2.0f,
+               "canto (500 RPM, 90°C) ≈ 60 (âncora idle quente)");
+    CHECK_NEAR(ems::engine::calc_eoi_lead_deg(50000u, -200), 355, 2.0f,
+               "canto (5000 RPM, -20°C) ≈ 355");
+
+    // Invariantes de monotonicidade — verdadeiras independentemente de
+    // arredondamento: a 2000 RPM, EOI desce quando o motor aquece (menos
+    // BTDC, mais perto de closed-valve); a CLT fixa, EOI sobe com o RPM
+    // (mais perto de open-valve).
+    const uint16_t eoi_2000_cold = ems::engine::calc_eoi_lead_deg(20000u, -200);
+    const uint16_t eoi_2000_warm = ems::engine::calc_eoi_lead_deg(20000u, 550);
+    const uint16_t eoi_2000_hot  = ems::engine::calc_eoi_lead_deg(20000u, 900);
+    CHECK_TRUE(eoi_2000_cold >= eoi_2000_warm && eoi_2000_warm >= eoi_2000_hot,
+               "2000 RPM: EOI desce monotonamente com CLT crescente");
+
+    const uint16_t eoi_500_hot  = ems::engine::calc_eoi_lead_deg(5000u, 900);
+    const uint16_t eoi_2000_hot2 = ems::engine::calc_eoi_lead_deg(20000u, 900);
+    const uint16_t eoi_5000_hot = ems::engine::calc_eoi_lead_deg(50000u, 900);
+    CHECK_TRUE(eoi_500_hot <= eoi_2000_hot2 && eoi_2000_hot2 <= eoi_5000_hot,
+               "90°C: EOI sobe monotonamente com RPM crescente");
+
+    // Extremos fora do domínio: não crash, resultado plausível (clampa ao
+    // canto mais próximo — mesmo espírito do smoke test de lambda_delay).
+    const uint16_t below = ems::engine::calc_eoi_lead_deg(0u, -1000);
+    CHECK_TRUE(below <= 719u, "extremo abaixo do domínio: plausível, sem crash");
+    const uint16_t above = ems::engine::calc_eoi_lead_deg(200000u, 2000);
+    CHECK_TRUE(above <= 719u, "extremo acima do domínio: plausível, sem crash");
+}
+
 void test_fuel_stft(void) {
     section("fuel_calc: fuel_update_stft / fuel_get_stft_pct_x10");
 
     fuel_reset_adaptives();
     CHECK_EQ(fuel_get_stft_pct_x10(), 0, "STFT=0 after reset");
 
-    // Conditions for closed loop: clt>700, o2_valid=true, ae_active=false, rev_cut=false
+    // Conditions for closed loop: clt>400 (40°C), o2_valid=true, ae_active=false, rev_cut=false
     // lambda measured > target → lean signal → positive error → STFT increases (adds fuel)
     int16_t stft = fuel_update_stft(30000u, 100u,
         1000,   // target lambda (stoich)
         1050,   // measured lambda (lean by 5%)
-        900,    // clt 90°C > 70°C → closed loop OK
+        900,    // clt 90°C > 40°C → closed loop OK
         true, false, false, 5000u, 500u);
     CHECK_TRUE(stft > 0, "lean signal → STFT positive (add fuel)");
     CHECK_EQ(stft, fuel_get_stft_pct_x10(), "fuel_get_stft_pct_x10 matches return value");
@@ -409,10 +522,12 @@ void test_fuel_stft(void) {
 
     // Closed loop disabled (cold engine): STFT congela (anti-windup), não decai —
     // evita um "degrau" de combustível perceptível quando volta a closed-loop.
+    // clt=390 (39°C) < kClosedLoopMinCltX10=400 (40°C, 2026-08-14) — abaixo
+    // do limiar atual; 600 (60°C) já não serve, ficou acima do novo limiar.
     fuel_reset_adaptives();
     fuel_update_stft(30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);  // set non-zero
     const int16_t before = fuel_get_stft_pct_x10();
-    fuel_update_stft(30000u, 100u, 1000, 1050, 600, true, false, false, 5000u, 500u);  // clt too cold
+    fuel_update_stft(30000u, 100u, 1000, 1050, 390, true, false, false, 5000u, 500u);  // clt too cold
     const int16_t after = fuel_get_stft_pct_x10();
     CHECK_EQ(after, before, "closed loop disabled → STFT congela (freeze)");
 }
@@ -792,8 +907,8 @@ void test_fuel_ltft_accum(void) {
 
     CHECK_FALSE(ltft_accum_sample_valid(
                     30000u, 30000u, 500u, 500u, true,
-                    1000, 1015, 40, 600, true, false, false),
-                "CLT frio → inválido");
+                    1000, 1015, 40, 390, true, false, false),
+                "CLT frio (<40°C) → inválido");
 
     // ── Integração via fuel_update_stft (λ perto do alvo) ────────────────
     // err=15 (1015-1000) ≤ max; 1ª amostra sem prev → 0 hits

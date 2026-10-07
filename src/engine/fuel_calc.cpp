@@ -1,5 +1,6 @@
 #include "engine/fuel_calc.h"
 #include "engine/calibration.h"
+#include "engine/constants.h"
 #include "engine/engine_config.h"
 #include "engine/math_utils.h"
 #include "engine/table3d.h"
@@ -29,6 +30,9 @@ using ems::engine::interp_u16_8pt;
 
 constexpr uint8_t kCorrPoints = ems::engine::kCorrectionTableSize;
 
+using ems::engine::clamp_iat_kelvin_x10;
+using ems::engine::cfg::kIatDensityRefKelvinX10;
+
 uint32_t isqrt_u32(uint32_t x) noexcept {
     if (x == 0u) {
         return 0u;
@@ -50,8 +54,11 @@ uint32_t isqrt_u32(uint32_t x) noexcept {
     return res;
 }
 
-uint8_t g_ae_decay_cycles = 0u;
+uint16_t g_ae_decay_ms = 0u;
 int32_t g_ae_pulse_us = 0;
+bool g_ae_stft_freeze = false;
+constexpr uint16_t kAePeriodMs = 2u;
+constexpr uint16_t kAeTaperLegacyTicksMax = 64u;
 
 bool g_decel_cut = false;
 // Referência barométrica: inicializada com map_ref estático, atualizada no key-on
@@ -59,33 +66,8 @@ static uint16_t g_baro_bar_x100 = ems::engine::cfg::kMapRefBarX100;
 uint16_t interp_u16_4pt_u16x(const uint16_t* x_axis,
                              const uint16_t* table,
                              uint16_t x) noexcept {
-    constexpr uint8_t n = ems::engine::kAeRateTableSize;
-    if (x <= x_axis[0]) {
-        return table[0];
-    }
-    if (x >= x_axis[n - 1u]) {
-        return table[n - 1u];
-    }
-
-    uint8_t idx = 0u;
-    while (idx < (n - 2u) && x > x_axis[idx + 1u]) { ++idx; }
-
-    const uint16_t x0 = x_axis[idx];
-    const uint16_t x1 = x_axis[idx + 1u];
-    const uint16_t y0 = table[idx];
-    const uint16_t y1 = table[idx + 1u];
-    const uint16_t span = static_cast<uint16_t>(x1 - x0);
-    if (span == 0u) {
-        return y0;
-    }
-
-    // Signed dy: non-monotonic AE tables (y1 < y0) must not wrap to huge PW.
-    const int32_t dy = static_cast<int32_t>(y1) - static_cast<int32_t>(y0);
-    const int32_t y = static_cast<int32_t>(y0) +
-        (dy * static_cast<int32_t>(x - x0)) / static_cast<int32_t>(span);
-    if (y <= 0) { return 0u; }
-    if (y > 65535) { return 65535u; }
-    return static_cast<uint16_t>(y);
+    return ems::engine::interp_8pt<uint16_t, uint16_t>(
+        x_axis, table, ems::engine::kAeRateTableSize, x);
 }
 
 uint8_t clt_bucket(int16_t clt_x10) noexcept {
@@ -102,8 +84,32 @@ uint8_t clt_bucket(int16_t clt_x10) noexcept {
 namespace ems::engine {
 
 void fuel_ae_reset() noexcept {
-    g_ae_decay_cycles = 0u;
+    g_ae_decay_ms = 0u;
     g_ae_pulse_us = 0;
+    g_ae_stft_freeze = false;
+}
+
+void fuel_ae_apply_taper_raw(uint16_t raw) noexcept {
+    if (raw == 0u) {
+        raw = 1u;
+    }
+    if (raw <= kAeTaperLegacyTicksMax) {
+        ae_taper_ms = static_cast<uint16_t>(raw * kAePeriodMs);
+    } else {
+        ae_taper_ms = raw;
+    }
+}
+
+void fuel_ae_notify_pulse(int32_t ae_pw_us) noexcept {
+    g_ae_stft_freeze = (ae_pw_us > 0);
+}
+
+bool fuel_ae_stft_freeze_active() noexcept {
+    return g_ae_stft_freeze;
+}
+
+void fuel_ae_stft_freeze_clear() noexcept {
+    g_ae_stft_freeze = false;
 }
 
 uint8_t get_ve(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
@@ -139,7 +145,9 @@ uint32_t calc_req_fuel_us(uint16_t displacement_cc,
         return 0u;
     }
 
-    // REQ_FUEL @ 1.00 bar, 100% VE, lambda 1.00:
+    // REQ_FUEL @ P_ref/T_ref de kAirDensityMgPerCcX1000 (1 atm ≈ 1.013 bar,
+    // 25°C — não 1.00 bar exatos: ρ=P/(R·T), R=287.05, confere com 101325 Pa,
+    // não 100000 Pa), 100% VE, lambda 1.00:
     // air/cyl = (displacement / cylinders) * air_density
     // fuel/cyl = air/cyl / stoich_afr
     // pulse = fuel/cyl / injector_mass_flow
@@ -263,6 +271,19 @@ uint16_t corr_iat(int16_t iat_x10) noexcept {
     return interp_u16_8pt(iat_corr_axis_x10, iat_corr_x256, kCorrPoints, iat_x10);
 }
 
+// Densidade do ar por lei dos gases ideais (ρ ∝ 1/T a P constante): fator Q8
+// = T_ref/T_iat. Diferente de corr_iat (que hoje é só margem de proteção
+// calibrável — ver comentário em calibration.cpp), este termo é física pura,
+// sem tabela, e entra no cálculo BASE (junto com MAP/baro), não como
+// correção tardia. T_ref e o clamp de Kelvin são compartilhados com
+// map_estimator.cpp — ver cfg::kIatDensityRefKelvinX10 (engine_config.h) e
+// clamp_iat_kelvin_x10 (math_utils.h).
+uint16_t corr_iat_density_q8(int16_t iat_x10) noexcept {
+    ASSERT_VALID_TEMP_X10(iat_x10);
+    const int32_t iat_k_x10 = clamp_iat_kelvin_x10(iat_x10);
+    return static_cast<uint16_t>((kIatDensityRefKelvinX10 * 256) / iat_k_x10);
+}
+
 uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept {
     ASSERT_VALID_VOLTAGE_MV(vbatt_mv);
     // Clamp ao range da tabela vbatt_corr_axis_mv [9000, 16000] mV.
@@ -364,6 +385,7 @@ uint32_t calc_final_pw_us(uint32_t base_pw_us,
 
 uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
                                       uint16_t map_bar_x100,
+                                      uint16_t iat_density_q8,
                                       uint16_t lambda_target_x1000,
                                       int16_t trim_pct_x10,
                                       uint16_t corr_clt_x256,
@@ -380,11 +402,15 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
         // não calibrada na altitude (WOT a 0.90bar não é igual a 90% carga no nível do mar).
         const uint16_t baro = (g_baro_bar_x100 != 0u)
                               ? g_baro_bar_x100 : cfg::g_eng_cfg.map_ref_bar_x100;
-        base_pw_us = static_cast<uint32_t>(
-            num / (100u * static_cast<uint64_t>(baro)));
-        if (base_pw_us > 100000u) {
-            base_pw_us = 100000u;
-        }
+        uint64_t pw = num / (100u * static_cast<uint64_t>(baro));
+        // Termo físico de densidade do ar (ideal gas, T_ref/T_iat — ver
+        // corr_iat_density_q8). Multiplicado aqui, junto com MAP/baro, porque
+        // é propriedade de densidade do ar (base física), não uma correção
+        // de calibração tardia como corr_clt_x256/corr_iat_x256 abaixo.
+        // iat_density_q8=0 (chamador não forneceu) → neutro, sem alterar PW.
+        const uint16_t dens_q8 = (iat_density_q8 != 0u) ? iat_density_q8 : 256u;
+        pw = (pw * dens_q8) / 256u;
+        base_pw_us = static_cast<uint32_t>(pw > 100000u ? 100000u : pw);
     }
 
     uint32_t lambda_pw_us = 0u;
@@ -415,12 +441,35 @@ uint32_t calc_fuel_pw_us_default_fast(uint8_t ve,
     return calc_final_pw_us(trimmed_pw_us, corr_clt_x256, corr_iat_x256, dead_time_us);
 }
 
+uint32_t inj_cycle_pw_us(uint32_t flow_us, uint16_t dead_time_us,
+                         uint8_t squirts) noexcept {
+    if (flow_us == 0u) {
+        return 0u;
+    }
+    const uint8_t n = (squirts < 1u) ? 1u : squirts;
+    const uint64_t total = static_cast<uint64_t>(flow_us)
+                         + static_cast<uint64_t>(dead_time_us) * n;
+    constexpr uint32_t kMaxFinalPwUs = 100000u;
+    if (total > kMaxFinalPwUs) { return kMaxFinalPwUs; }
+    return static_cast<uint32_t>(total);
+}
+
+uint32_t inj_pulse_pw_us(uint32_t flow_us, uint16_t dead_time_us,
+                         uint8_t squirts) noexcept {
+    const uint32_t cycle = inj_cycle_pw_us(flow_us, dead_time_us, squirts);
+    if (cycle == 0u) {
+        return 0u;
+    }
+    const uint8_t n = (squirts < 1u) ? 1u : squirts;
+    return cycle / n;
+}
+
 void fuel_ae_set_threshold(uint16_t threshold_tpsdot_x10) noexcept {
     ae_tpsdot_threshold_x10 = threshold_tpsdot_x10;
 }
 
 void fuel_ae_set_taper(uint8_t taper_cycles) noexcept {
-    ae_taper_cycles = (taper_cycles == 0u) ? 1u : taper_cycles;
+    fuel_ae_apply_taper_raw(taper_cycles);
 }
 
 int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
@@ -429,11 +478,10 @@ int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
     const bool tip_in  = (tpsdot_x10 > thr);
     const bool tip_out = (tpsdot_x10 < -thr);
 
+    const uint16_t taper_ms = (ae_taper_ms == 0u) ? kAePeriodMs : ae_taper_ms;
+
     if (tip_in || tip_out) {
         const uint8_t b = clt_bucket(clt_x10);
-        const uint16_t taper = ae_taper_cycles > 255u
-            ? 255u
-            : (ae_taper_cycles == 0u ? 1u : ae_taper_cycles);
         const uint16_t tpsdot_u16 = static_cast<uint16_t>(
             abs_dot > 1000 ? 1000 : abs_dot);
         const uint16_t base_pw_us =
@@ -443,23 +491,22 @@ int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
         if (pulse > static_cast<int32_t>(ae_max_pw_us)) {
             pulse = static_cast<int32_t>(ae_max_pw_us);
         }
-        // Tip-out (DE): mesma magnitude, sinal negativo (enleanment).
-        // Authority DE = 50% do AE tip-in — evita lean hole agressivo.
         if (tip_out) {
             pulse = -(pulse / 2);
         }
         g_ae_pulse_us = pulse;
-        g_ae_decay_cycles = static_cast<uint8_t>(taper);
+        g_ae_decay_ms = taper_ms;
         return g_ae_pulse_us;
     }
 
-    if (g_ae_decay_cycles > 0u) {
-        const uint16_t taper = ae_taper_cycles > 255u
-            ? 255u
-            : (ae_taper_cycles == 0u ? 1u : ae_taper_cycles);
-        --g_ae_decay_cycles;
-        return (g_ae_pulse_us * static_cast<int32_t>(g_ae_decay_cycles)) /
-               static_cast<int32_t>(taper);
+    if (g_ae_decay_ms > 0u) {
+        if (g_ae_decay_ms > kAePeriodMs) {
+            g_ae_decay_ms = static_cast<uint16_t>(g_ae_decay_ms - kAePeriodMs);
+        } else {
+            g_ae_decay_ms = 0u;
+        }
+        return (g_ae_pulse_us * static_cast<int32_t>(g_ae_decay_ms)) /
+               static_cast<int32_t>(taper_ms);
     }
 
     g_ae_pulse_us = 0;
@@ -514,6 +561,20 @@ bool     g_dfco_gear_seen      = false;
 bool     g_dfco_gear_changed   = false;  // já houve ≥1 troca (valida timestamp)
 uint32_t g_dfco_gear_change_ms = 0u;
 uint32_t g_dfco_now_ms         = 0u;
+bool     g_dfco_just_entered   = false;
+uint16_t g_dfco_ramp_elapsed_ms = 0u;
+bool     g_dfco_ramp_active    = false;
+constexpr uint16_t kDfcoMapExitHystBarX100 = 5u;
+
+void dfco_start_ramp_on_exit() noexcept {
+    if (decel_cut_ramp_ms == 0u) {
+        g_dfco_ramp_active = false;
+        g_dfco_ramp_elapsed_ms = 0u;
+        return;
+    }
+    g_dfco_ramp_active = true;
+    g_dfco_ramp_elapsed_ms = 0u;
+}
 }  // namespace
 
 void fuel_decel_cut_notify_map(uint16_t map_bar_x100) noexcept {
@@ -532,8 +593,9 @@ void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept {
         g_dfco_gear_changed = true;
         g_dfco_gear_change_ms = now_ms;
         // Troca de marcha derruba um corte activo (anti-jerk na transmissão).
-        if (decel_cut_gear_inhibit_ms10 != 0u) {
+        if (decel_cut_gear_inhibit_ms10 != 0u && g_decel_cut) {
             g_decel_cut = false;
+            dfco_start_ramp_on_exit();
         }
     }
 }
@@ -541,6 +603,7 @@ void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept {
 bool fuel_decel_cut_update(uint32_t rpm_x10,
                            uint16_t tps_pct_x10,
                            int16_t clt_x10) noexcept {
+    g_dfco_just_entered = false;
     const bool throttle_closed = tps_pct_x10 <= decel_cut_tps_threshold_x10;
     const bool engine_warm     = clt_x10 >= decel_cut_min_clt_x10;
     // Gate de MAP: só corta com vácuo real (carga baixa de facto). 0 = off.
@@ -556,15 +619,46 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
         if (throttle_closed && engine_warm && map_ok && !shift_inhibit &&
             rpm_x10 >= decel_cut_entry_rpm_x10) {
             g_decel_cut = true;
+            g_dfco_just_entered = true;
+            g_dfco_ramp_active = false;
+            g_dfco_ramp_elapsed_ms = 0u;
         }
     } else {
-        // Sai do corte se o acelerador abrir OU o RPM cair abaixo do limiar de saída.
-        // A histerese (entry > exit) evita oscilações ao redor do limiar.
-        if (!throttle_closed || rpm_x10 < decel_cut_exit_rpm_x10) {
+        const bool map_exit = (decel_cut_map_max_bar_x100 != 0u) &&
+            (g_dfco_map_bar_x100 >
+             static_cast<uint16_t>(decel_cut_map_max_bar_x100 +
+                                   kDfcoMapExitHystBarX100));
+        if (!throttle_closed || rpm_x10 < decel_cut_exit_rpm_x10 || map_exit) {
             g_decel_cut = false;
+            dfco_start_ramp_on_exit();
         }
     }
     return g_decel_cut;
+}
+
+bool fuel_decel_cut_just_entered() noexcept {
+    return g_dfco_just_entered;
+}
+
+uint32_t fuel_decel_cut_ramp_pw(uint32_t flow_us, uint16_t dt_ms) noexcept {
+    if (!g_dfco_ramp_active || decel_cut_ramp_ms == 0u || flow_us == 0u) {
+        return flow_us;
+    }
+    uint16_t step = dt_ms;
+    if (step == 0u) {
+        step = 2u;
+    }
+    const uint32_t next =
+        static_cast<uint32_t>(g_dfco_ramp_elapsed_ms) + step;
+    if (next >= decel_cut_ramp_ms) {
+        g_dfco_ramp_elapsed_ms = decel_cut_ramp_ms;
+        g_dfco_ramp_active = false;
+        return flow_us;
+    }
+    g_dfco_ramp_elapsed_ms = static_cast<uint16_t>(next);
+    return static_cast<uint32_t>(
+        (static_cast<uint64_t>(flow_us) * g_dfco_ramp_elapsed_ms) /
+        decel_cut_ramp_ms);
 }
 
 bool fuel_decel_cut_active() noexcept {
@@ -578,6 +672,9 @@ void fuel_decel_cut_reset() noexcept {
     g_dfco_gear_changed = false;
     g_dfco_gear_change_ms = 0u;
     g_dfco_now_ms = 0u;
+    g_dfco_just_entered = false;
+    g_dfco_ramp_elapsed_ms = 0u;
+    g_dfco_ramp_active = false;
 }
 
 // ── Protecção de duty do injector (FOME #215) ────────────────────────────────
@@ -615,11 +712,10 @@ bool fuel_inj_duty_update(uint32_t pw_us, uint32_t rpm_x10,
             g_inj_duty_over_ms = 0u;
         }
     } else {
-        // Retoma com histerese de 5%: o PW comandado continua a ser calculado
-        // durante o corte (a mask é que suprime), logo o duty pedido cai
-        // quando o RPM/carga descem — não há deadlock.
-        const uint16_t resume_x10 = (limit_x10 > 50u) ? limit_x10 - 50u : 0u;
-        if (g_inj_duty_pct_x10 <= resume_x10) {
+        // FOME: resume only below 20% duty so the driver must lift.
+        const uint16_t resume_x10 =
+            static_cast<uint16_t>(kInjDutyResumePct) * 10u;
+        if (g_inj_duty_pct_x10 < resume_x10) {
             g_inj_duty_cut = false;
             g_inj_duty_over_ms = 0u;
         }
@@ -641,33 +737,51 @@ void fuel_inj_duty_reset() noexcept {
     g_inj_duty_cut = false;
 }
 
-uint16_t calc_eoi_lead_deg(uint32_t rpm_x10) noexcept
+// Bias fixo p/ converter o eixo CLT assinado (pode ser negativo, ex.
+// arranque a frio <0°C) para o domínio uint32_t que table_axis_index()/
+// table_axis_frac_q8() exigem (table3d.h) — cobre CLT até -100,0°C, folga
+// ampla. Só interno a esta função; NVM/UI continuam em °C×10 natural.
+constexpr int32_t kEoiClAxisBiasX10 = 1000;
+
+// Mesmo padrão de interp_lambda_delay_3x3() (fuel_trim.cpp) — bilinear 3×3
+// à mão sobre os primitivos genéricos de table3d.h (NÃO
+// table3d_prepare_lookup/table3d_lookup_*_prepared, que estão fixos a
+// kTableAxisSize=20). Substitui o antigo blend 1D só-RPM — ver
+// calibration.h para o racional físico (closed-valve depende de calor,
+// que falta a frio) e o aviso de que os defaults das células são
+// placeholder, não medição.
+static uint16_t interp_eoi_3x3(uint32_t rpm_x10, int16_t clt_x10) noexcept
 {
-    const uint16_t main_deg = cfg::g_eng_cfg.default_eoi_lead_deg;
-    const uint16_t lo = eoi_blend_rpm_lo;
-    const uint16_t hi = eoi_blend_rpm_hi;
-
-    if (hi <= lo) {  // desligado (inclui 0/0 — page 0 antiga zerada)
-        return (main_deg > 719u) ? 719u : main_deg;
+    uint32_t clt_axis_biased[kEoiTableSize];
+    for (uint8_t i = 0u; i < kEoiTableSize; ++i) {
+        clt_axis_biased[i] = static_cast<uint32_t>(
+            static_cast<int32_t>(eoi_clt_axis_x10[i]) + kEoiClAxisBiasX10);
     }
+    const uint32_t clt_biased = static_cast<uint32_t>(
+        static_cast<int32_t>(clt_x10) + kEoiClAxisBiasX10);
 
-    const uint32_t rpm = rpm_x10 / 10u;
-    uint16_t idle = eoi_idle_deg;
-    if (idle > 719u) { idle = 719u; }
+    const uint8_t xi = table_axis_index(eoi_rpm_axis_x10, kEoiTableSize, rpm_x10);
+    const uint8_t yi = table_axis_index(clt_axis_biased, kEoiTableSize, clt_biased);
+    const uint8_t fx = table_axis_frac_q8(eoi_rpm_axis_x10, xi, rpm_x10);
+    const uint8_t fy = table_axis_frac_q8(clt_axis_biased, yi, clt_biased);
 
-    if (rpm <= lo) { return idle; }
-    if (rpm >= hi) { return (main_deg > 719u) ? 719u : main_deg; }
+    const int32_t v00 = eoi_table_deg[yi][xi];
+    const int32_t v10 = eoi_table_deg[yi][xi + 1u];
+    const int32_t v01 = eoi_table_deg[yi + 1u][xi];
+    const int32_t v11 = eoi_table_deg[yi + 1u][xi + 1u];
 
-    // Interpolação linear em int32: |main−idle| ≤ 719 e (rpm−lo) < 65535
-    // → |produto| < 47.2M — folga ampla em int32. Divisor > 0 garantido
-    // pelo gate hi > lo acima.
-    const int32_t span   = static_cast<int32_t>(main_deg) - static_cast<int32_t>(idle);
-    const int32_t num    = span * static_cast<int32_t>(rpm - lo);
-    const int32_t eoi    = static_cast<int32_t>(idle) + num / static_cast<int32_t>(hi - lo);
+    const int32_t v0 = v00 + (((v10 - v00) * static_cast<int32_t>(fx)) >> 8u);
+    const int32_t v1 = v01 + (((v11 - v01) * static_cast<int32_t>(fx)) >> 8u);
+    const int32_t v  = v0 + (((v1 - v0) * static_cast<int32_t>(fy)) >> 8u);
 
-    if (eoi < 0)    { return 0u; }
-    if (eoi > 719)  { return 719u; }
-    return static_cast<uint16_t>(eoi);
+    if (v < 0)   { return 0u; }
+    if (v > 719) { return 719u; }
+    return static_cast<uint16_t>(v);
+}
+
+uint16_t calc_eoi_lead_deg(uint32_t rpm_x10, int16_t clt_x10) noexcept
+{
+    return interp_eoi_3x3(rpm_x10, clt_x10);
 }
 
 }  // namespace ems::engine

@@ -1,95 +1,100 @@
-# microRusEFI como base de hardware OpenEMS
+# microRusEFI como base de hardware OpenEMS — ⛔ SUPERSEDIDO
 
-> **Decisão (2026-07-21):** o desenho da ECU OpenEMS parte do projecto KiCad  
-> [rusefi/hw_microRusEfi](https://github.com/rusefi/hw_microRusEfi) (rev. vendor ~0.5.x),  
-> **não** de um scaffold KiCad paralelo nem do merge Hellen-One como board de produção.
+> **Estado (2026-08-07):** o fork do microRusEFI **deixou de ser a base de desenho**
+> da ECU OpenEMS. O desenho de produção passa a ser um projecto KiCad **em branco**:
+> [`hardware/openems_v1/`](../../hardware/openems_v1/).
+>
+> O microRusEFI **continua no repo como referência** (`hardware/vendor/hw_microRusEfi`,
+> submódulo) — é a implementação de referência que a regra §1b do
+> [`README.md`](README.md) obriga a consultar antes de desenhar cada bloco.
+> Mudou o papel: era o **cobre**, agora é a **bibliografia**.
 
-## Porquê
+Este documento fica por duas razões: registar o porquê da escolha original e o porquê
+do abandono, para nenhuma das duas ser re-litigada. **Nada aqui é autoridade.**
 
-1. **TLE8888-2QK** já está no esquemático e no layout do microRusEFI (mRE) — alinhado ao firmware OpenEMS.  
-2. Hierarquia real (TLE, ADC, MCU, H-bridge, hi-lo, pairs) e **PCB já fabricável**.  
-3. Evita reinventar cobre fora do layout mRE já fabricável.  
-4. Hellen-One continua útil **depois**, para adaptadores PnP por carro (submodule no próprio mRE).
+---
 
-## Vendor no monorepo
+## Porquê se escolheu o mRE (2026-07-21)
+
+1. **TLE8888-2QK** já estava no esquemático e no layout — alinhado ao firmware OpenEMS.
+2. Hierarquia real (TLE, ADC, MCU, H-bridge, hi-lo, pairs) e **PCB já fabricável**.
+3. Evitava reinventar cobre fora de um layout já provado.
+4. Hellen-One ficava para depois, como adaptadores PnP por carro.
+
+O raciocínio estava certo em princípio. O que falhou foi a prática.
+
+## Porquê se abandonou (2026-08-07)
+
+O fork trouxe consigo o layout de **outra** ECU, e o custo de o dobrar ao pinout
+OpenEMS acabou por ser maior que o de desenhar de novo:
+
+| Sintoma | Medido |
+|---|---|
+| Cobre legado a remover à mão | ~567 items |
+| Pad com duplo-net herdado (C100) | corrigido, mas só foi encontrado por acidente |
+| Nets fantasma do mRE ainda no board | ex. `/PE1`, que no H562 LQFP100 é **VCAP** |
+| Camadas de sinal | **2** — a decisão v1 pede **4** (pours PGND/SGND/AGND separados) |
+| Diff de um único re-route | 103 123 linhas — irrevisável |
+| Corrupção do `.kicad_pcb` | 1 vez, SIGSEGV no `LoadBoard`, recuperada por backup |
+| DRC | nunca chegou a passar |
+
+O ponto de viragem: **um diff de 103 mil linhas não é revisável**, e num projecto cuja
+causa-raiz dos dois piores incidentes foi *autoridade que se dessincronizou em silêncio*,
+não se pode aceitar um artefacto onde ninguém consegue ver o que mudou.
+
+A cada bloco redesenhado, a fracção do mRE que sobrevivia encolhia — e cada bloco
+custava mais a adaptar do que custaria a desenhar. Nesse ponto o fork só carregava risco.
+
+## O que se aproveita do trabalho feito
+
+Nada disto se perde ao mudar de board:
+
+| Artefacto | Onde |
+|---|---|
+| As 20 decisões fechadas, com refs de commit | [`README.md`](README.md) §2 |
+| Netlist pino-a-pino | [`netlist_v1.md`](netlist_v1.md) |
+| Esquemático modular, 10 blocos | [`schematic/`](schematic/) |
+| Pinout TLE8888 LQFP-100, verificado DS Rev 1.2 | [`tle8888_pinout.md`](tle8888_pinout.md) |
+| Contraprova do mapa de registadores (rusEFI) | [`tle8888_crosscheck.md`](tle8888_crosscheck.md) |
+| Conector AMPSEAL 35+23 + footprints | [`ampseal_connectors.md`](ampseal_connectors.md) |
+| Libs KiCad verificadas (`tle8888qk.lib`, Net-Tie, AMPSEAL) | `hardware/openems_ecu/rusefi_lib/` |
+| Firmware inteiro | `src/` — o pinout de produção sempre foi o VGT6 |
+
+## Decisões que sobreviveram intactas
+
+### MCU: STM32H562 **soldado** (LQFP100) — continua fechado
+
+| Opção | Uso |
+|-------|-----|
+| **H562 LQFP100 na PCB principal** | **Produção / cabine** |
+| WeAct H562 | **Só bancada de firmware** — não entra na board de produção |
+| Socket + soldado em paralelo | **Rejeitado** (espaço, BOM, confusão) |
+
+Obrigações de design com MCU soldado: SWD acessível, USB, BOOT0, decoupling por pinos
+VDD, cristal conforme firmware H562, silkscreen pin 1.
+
+### Conector e ETB — fechados desde então
+
+O que este documento listava como "ainda aberto" foi decidido e vive no
+[`README.md`](README.md) §2: AMPSEAL 35+23, e ETB por **BTS7960 @ 10 kHz**
+(o TLE9201 do mRE ficou de fora — o firmware é de 3 pinos, ele é de 2).
+
+## Vendor no monorepo (mantém-se — agora como referência)
 
 ```bash
 git submodule update --init hardware/vendor/hw_microRusEfi
-# libs KiCad do mRE (após clone do vendor):
 cd hardware/vendor/hw_microRusEfi && git submodule update --init --recursive
 ```
 
 Caminho: `hardware/vendor/hw_microRusEfi/`
 
-## Decisões de arquitectura OpenEMS
+## O board antigo
 
-### MCU: STM32H562 **soldado** (LQFP100) — fechado
-
-| Opção | Uso |
-|-------|-----|
-| **H562 LQFP100 na PCB principal** | **Produção / cabine** (igual filosofia mRE) |
-| WeAct H562 | **Só bancada de firmware** — não entra na board de produção |
-| Socket + soldado em paralelo | **Rejeitado** (espaço, BOM, confusão) |
-
-Obrigações de design com MCU soldado: SWD acessível, USB, BOOT0, decoupling por pinos VDD, cristal conforme firmware H562, silkscreen pin 1.
-
-### Ainda abertas (defaults sugeridos)
-
-| Tema | Default sugerido | Alternativa |
-|------|------------------|-------------|
-| Conector | **AMPSEAL 35+23** (`interface_board_v1.md`) | 48-pin mRE + case CKKB |
-| ETB | **TLE9201** (HW mRE) + adaptar SW | BTS7960 (firmware actual 3 pinos) |
-
-## Mapa de sheets mRE → OpenEMS
-
-| Sheet mRE | Ficheiro | Acção OpenEMS |
-|-----------|----------|---------------|
-| Raiz | `micro_rusEFI.kicad_sch` | → `openems_ecu.kicad_sch` |
-| TLE8888 | `TLE8888-1QK.kicad_sch` | Adoptar; auditar vs `tle8888_pinout.md` |
-| MCU | `stm32.kicad_sch` (F7/F4) | ✅ **`mcu_h562.kicad_sch`** (H562VGTx, INJEN=PE14) |
-| ADC | `adc.kicad_sch` | Adaptar pinos H562 |
-| H-bridge | `TLE9201SG.kicad_sch` | Manter ou trocar por BTS7960 |
-| hi-lo | `hi-lo.kicad_sch` | USB / níveis |
-| LowSides | `pair.kicad_sch` | Rever vs outs TLE |
-| Flash | `FlashMemory.kicad_sch` | Opcional datalog |
-| PCB | `micro_rusEFI.kicad_pcb` | Base de layout |
-
-## Capacidades mRE (referência)
-
-- 4× INJ high-Z, 4× IGN logic, 2× LS power, 4× LS relay  
-- VR/Hall configurável, ETB, CAN, USB no plug  
-- Caixa CKKB48-1-A (se conector 48 pin)
-
-## O que **não** fazer
-
-- Não reinventar a PCB fora de `hardware/openems_ecu/`.  
-- Não montar WeAct na ECU de motor (grau consumidor + headers).  
-- Não assumir pinout F767 = H562 — mapa explícito obrigatório.
-
-## Autoridade de sinais
-
-| Artefacto | Papel |
-|-----------|--------|
-| `docs/hw/netlist_v1.md`, `tle8888_pinout.md` | O *quê* ligar (alvo eléctrico OpenEMS / board limpo) |
-| `docs/hw/pinout_mre_bringup.md` | **Bring-up:** GPIO = cobre [hw_microRusEfi](https://github.com/rusefi/hw_microRusEfi.git) |
-| `src/hal/out_pins.h` + `BOARD=mre` | Firmware H562 no pinout mRE |
-| `src/hal/out_pins.h` + `BOARD=vgt6` | Firmware mapa PE* OpenEMS (WeAct / PCB nativo) |
-| Projecto mRE / `openems_ecu` | *Como* está desenhado no KiCad |
-
-**H562 na PCB mRE:** sim — land pattern LQFP100 igual; 6 pads power H5; firmware
-`make firmware BOARD=mre` (não forçar re-route VGT6 neste board).
-
-## Próximos passos (implementação)
-
-1. ~~`hardware/openems_ecu/` = cópia de trabalho do mRE~~ ✅  
-2. ~~Sheet `mcu_h562` + footprint LQFP100~~ ✅ (`hardware/openems_ecu/mcu_h562.kicad_sch`)  
-3. ~~Rework 6 pads H562 no PCB + VCAP 2,2 µF~~ ✅ (cobre + C25/C100; DRC visual pendente)  
-4. Auditoria TLE + decisões conector/ETB  
-5. Layout final / refill zones / Gerber  
-
-Abrir: `kicad hardware/openems_ecu/openems_ecu.kicad_pro`  
-
+`hardware/openems_ecu/` **não foi apagado**. Fica como referência e como recuo se o
+desenho novo encalhar. Não recebe mais trabalho — ver
+[`hardware/openems_ecu/README.md`](../../hardware/openems_ecu/README.md).
 
 ## Créditos
 
-Hardware base © rusEFI / microRusEFI contributors. OpenEMS adapta com atribuição no README do board.
+Hardware de referência © rusEFI / microRusEFI contributors. O OpenEMS consulta-o com
+atribuição; nenhum cobre do mRE segue para a PCB de produção v1.

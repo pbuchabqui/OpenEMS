@@ -950,10 +950,6 @@ const PAGE_0_SECTIONS = [
     fields: ["ewg_kp_x10","ewg_ki_x10","ewg_kd_x10","ewg_pos_min_raw","ewg_pos_max_raw"],
   },
   {
-    label: "EOI BLEND (FASE DE INJEÇÃO)",
-    fields: ["eoi_idle_deg","eoi_blend_rpm_lo","eoi_blend_rpm_hi"],
-  },
-  {
     label: "DRIVABILITY",
     fields: ["antijerk_tpsdot_threshold_x10","antijerk_retard_deg","antijerk_decay_cycles",
              "rev_limit_rpm_x10","rev_limit_soft_window_x10",
@@ -1052,7 +1048,7 @@ const FIELD_LABELS = {
   cmp_window_close_tooth: "CMP window close (tooth; 0/0=disabled)",
   // Page 5 scalars (valores já em unidade natural)
   ae_tpsdot_threshold_x10: "AE TPSdot threshold (%/s)",
-  ae_taper_cycles:         "AE taper (cycles)",
+  ae_taper_cycles:         "AE taper (ms; ≤64=ticks×2)",
   ae_max_pw_us:            "AE max PW (ms)",
   idle_spark_tps_max_x10:              "Idle spark TPS max (%)",
   idle_spark_map_max_bar_x100:         "Idle spark MAP max (bar)",
@@ -1098,9 +1094,6 @@ const FIELD_LABELS = {
   ewg_kd_x10:               "EWG Kd (raw ×10 no wire)",
   ewg_pos_min_raw:          "EWG pos closed (raw)",
   ewg_pos_max_raw:          "EWG pos open (raw)",
-  eoi_idle_deg:             "EOI idle (° BTDC — 60=compressão, 365=pré-IVO)",
-  eoi_blend_rpm_lo:         "Blend RPM início (0/0 = desligado)",
-  eoi_blend_rpm_hi:         "Blend RPM fim (→ EOI target 355°)",
   mspark_max_rpm_x10:       "Multi-spark max RPM",
   mspark_count:             "Multi-spark extra sparks (0-3)",
   mspark_inter_dwell_ms_x10: "Multi-spark inter-dwell (ms)",
@@ -1175,7 +1168,11 @@ const PAGE_LAYOUT = {
       { title: "AE rate", axis: "ae_tpsdot_axis_x10", axisLabel: "TPSdot (%/s)",
         rows: [["ae_pw_adder_us", "PW adder (ms)"]] },
     ],
-    tables2d: [],
+    tables2d: [
+      { title: "EOI (° BTDC — fim da injeção)", x: "eoi_rpm_axis_x10", xLabel: "RPM",
+        y: "eoi_clt_axis_x10", yLabel: "CLT (°C)",
+        values: "eoi_table_deg" },
+    ],
   },
   7: {
     curves: [

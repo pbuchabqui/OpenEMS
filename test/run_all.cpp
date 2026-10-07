@@ -123,9 +123,11 @@ int main(void) {
     test_fuel_default_req_and_base_default();
     test_fuel_default_fast();
     test_fuel_corr_warmup();
+    test_fuel_corr_iat_density();
     test_fuel_ae();
     test_fuel_adaptives_reset();
     test_fuel_lambda_delay();
+    test_fuel_eoi_2d();
     test_fuel_stft();
     test_fuel_stft_delayed();
     test_injector_scurve();
@@ -196,13 +198,14 @@ int main(void) {
     test_ecu_sched_setters();
     test_ecu_sched_angle_table();
     test_ecu_sched_wasted_to_sequential();
+    test_knock_window_scheduler_wiring();
     test_ecu_sched_cmp_revalidation_after_sync_loss();
     test_ecu_sched_noise_rejects_sequential();
     test_ecu_sched_recovers_after_fallback();
     test_ecu_sched_inhibit_masks();
     test_ecu_sched_mspark();
     test_ecu_sched_eoi_targeting();
-    test_eoi_blend();
+    test_ecu_sched_eoi_lead_deg_sanitize();
     test_ecu_sched_presync();
     test_ecu_sched_dwell_watchdog();
 
@@ -287,7 +290,6 @@ int main(void) {
     test_ts_envelope_basic();
     test_ts_envelope_crc_reject();
     test_ts_envelope_read_write_burn();
-    test_eoi_blend_page0_roundtrip();
     test_ts_envelope_burn_gate();
     test_ts_axes_page();
     test_ts_envelope_canid_forms();
@@ -308,6 +310,8 @@ int main(void) {
     test_output_test_rpm_abort();
     test_output_test_keepalive_timeout();
     test_output_test_suspends_aux();
+    test_output_test_bypasses_inhibit_mask();
+    test_output_test_bench_pw_lock();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

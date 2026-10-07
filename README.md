@@ -39,9 +39,64 @@ Regras praticas:
 - **INJ/IGN GPIO:** mapas BSRR e write hot-path em `hal/out_pins.h` (`out_pin_write` inline). Init/safe em `out_pins_hw_init()`. `ecu_sched` nao reimplementa tabelas de pinos.
 - Novos documentos Markdown paralelos nao devem ser criados; atualize este `README.md`.
 
+## Dois firmwares (Hall / Encoder)
+
+Dois firmwares, uma fisica de motor. A captacao de rotacao e independente.
+Tudo o resto (combustivel, ignicao, trims, MAP, knock math, limp, NVM, tabelas)
+aterra nos dois, salvo impossibilidade declarada ao utilizador **antes** de
+escrever codigo.
+
+Trees: Hall = este repo (`hw/v1-clean-board` e derivados). Encoder =
+worktree `openems-mt6835-encoder` (`feat/mt6835-encoder` e derivados).
+
+**R1 — Captura e privada.** Hall: roda 60-2, TIM5 CH1/CH2 em PA0/PA1,
+`drv/ckp.cpp`. Encoder: MT6835, TIM2 AB + TIM3 CMP, `hal/mt6835.*`,
+`drv/encoder_sync.*`. Nenhum reutiliza o decoder do outro. PA0/PA1 no Hall
+sao CKP/CMP; no encoder sao A/B.
+
+**R2 — Fisica e comum.** Mudanca do que o motor *faz* (PW, avanco, densidade,
+STFT/LTFT, X-τ, AE, MAP estimator, knock retard, limp, NVM, tabelas) aterra
+nos dois na mesma sessao. Semantica identica; o call-site pode diferir.
+
+**R3 — Default e dual-land.** Classificar o ficheiro *antes* de editar.
+`shared` → os dois trees. `adapter` → API em shared + wiring nos dois
+capturadores. `capture` → um so lado.
+
+**R4 — Excepcao e previa, nunca surpresa.** Se dual-land for impossivel,
+parar e avisar o utilizador antes de implementar. Nao aterrar num lado e
+"portar depois". O aviso nomeia o que muda, porque nao cabe no outro, e a
+divida. Impossivel (lista fechada): input e dente/`tooth_index` vs
+`TIM2->CNT` sem abstrair sem retiming do scheduler congelado; hardware
+inexistente nesse firmware (SPI MT6835; front-end Hall 60-2); extrair a API
+mexeria no caminho quente congelado (Hall `out_pin_write`/TIM5; encoder
+TIM2/CH3). "Da mais trabalho" nao e excepcao.
+
+**R5 — DoD dual.** `make host-test` verde no tree Hall **e** no tree encoder.
+Teste novo de fisica corre nos dois (ou o adapter de teste chama a mesma
+funcao).
+
+| Classe | Hall | Encoder | Dual-land |
+|---|---|---|---|
+| **capture** | `drv/ckp.cpp`, `ecu_sched_angle.cpp`, TIM5 IC | `hal/mt6835.*`, `drv/encoder_sync.*`, `drv/crank_angle.h`, `ecu_sched_encoder_*.cpp` | Nao |
+| **shared** | `fuel_calc`, `fuel_trim`, `ign_calc`, `table3d`, `calibration`, `map_estimator`, `math_utils`, `knock` (API/math), `quick_crank`, `spark_skip`, `xtau_*`, `torque_manager`, `transient_fuel`, `auxiliaries`, `etb_*`, `ewg_*`, `diagnostic_manager`, `engine_config`, `constants` | os mesmos nomes | Sim |
+| **adapter** | `main_stm32.cpp` (loop 2 ms), `sensors_on_tooth`, `ecu_sched.cpp::arm_channel` | `loop_2ms_fuel_ign.cpp`, `enc_cyl_setpoints.cpp`, `sensors_map_window_poll_encoder`, `maybe_knock_on_dwell_start` | API shared; wiring nos dois |
+
+`map_window.cpp` e shared na matematica (slots, reset no dropout). O sampler
+e adapter (`on_tooth` vs `on_sample`). O encoder ja consome MAP por cilindro
+via `enc_cyl_setpoints` — nao inventar `map_window_use_for_fuel` la.
+
+`limp_gating.cpp` / `loop_2ms_fuel_ign.cpp` hoje so existem no encoder; no
+Hall a protect/fuel equivalente vive em `main_stm32.cpp`. Ate extrair,
+dual-land = a mesma semantica nos dois sitios.
+
+Divida: unificar os trees com `ENCODER=0|1` (unico modo de `fuel_calc.cpp`
+ser o mesmo inode). Nao e trabalho desta regra.
+
+Agentes: skill `dual-firmware` (procedimento). A regra e esta seccao.
+
 ## Pipeline De Controle Do Motor
 
-### 1. Captura CKP/CMP
+### 1. Captura CKP/CMP (firmware Hall — R1)
 
 - Modulo principal: `src/drv/ckp.cpp`.
 - Backend STM32: `src/hal/stm32h562/timer.cpp`.
@@ -50,7 +105,7 @@ Regras praticas:
   - CKP: TIM5 CH1 em PA0.
   - CMP: TIM5 CH2 em PA1.
 
-A captura mede bordas do virabrequim e comando, detecta dente faltante e alimenta a maquina de sincronismo.
+A captura mede bordas do virabrequim e comando, detecta dente faltante e alimenta a maquina de sincronismo. O firmware encoder e outro tree (R1); nao misturar decoders nem pinos PA0/PA1.
 
 Estados principais:
 
@@ -118,10 +173,10 @@ despachada por TIM5_CH3. Ordem de canais BSRR em `docs/hw/pinout.md`.
 - Sensor piezoelétrico knock conectado em PA5/ADC1_IN6.
 - Hardware: filtro passa-banda externo → PA5 → ADC1.
 - Detecção: software via threshold ADC (STM32H562 não possui periférico COMP).
-- Amostragem: `knock_adc_update(raw)` chamado de `sample_fast_channels()` a cada dente CKP durante janela ativa.
+- Amostragem: `knock_adc_update(raw)` chamado de `sample_fast_channels()` 12×/rev (acumulador `kFastSamplesPerRev`, não a cada dente CKP) durante janela ativa.
 - Threshold ADC: padrão 2048 (12-bit), range [256, 4000].
   - Adaptativo: -64 por evento de knock, +32 após 100 ciclos limpos.
-- Janela de knock: aberta/fechada por `knock_window_cycle_end()` no evento `ECU_ACT_DWELL_START` (modo sequencial).
+- Janela de knock: `knock_window_cycle_end()`/`knock_window_open()` ligados a `arm_channel()` no evento `ECU_ACT_DWELL_START` (modo sequencial), atrás da flag `EMS_KNOCK_HW_PRESENT` (`hal/board_pinout.h`, default 0 — front-end analógico DNP na v1, `docs/hw/schematic/10_knock_dnp.md`). Com a flag em 0 a janela nunca abre de facto.
 - Retardo: +2,0° por evento de knock, máximo 10,0°.
 - Recuperação: -0,1° por ciclo limpo após 10 ciclos consecutivos limpos.
 - Persistência NVM: retardo em slot knock, threshold armazenado como int8_t (/32).
@@ -162,6 +217,7 @@ errados. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
 
 - Modulos: `src/hal/adc.cpp`, `src/hal/stm32h562/adc.cpp`, `src/drv/sensors.cpp`.
 - ADC primario/secundario representam ADC1/ADC2 no STM32.
+- ADC 12-bit 0–3.3 V (raw 4095), tensão aceite pelo STM32H5. MAP 0–3.3 V → 0–3.00 bar (`raw × 3000 / 4095`). TPS/APP/ETB default 0–4095.
 - TIM6 deve ser o gatilho periodico de amostragem.
 - Validacao de sensores deve bloquear valores absurdos e preservar estado de falha para diagnostico.
 
@@ -322,6 +378,7 @@ ordem e gate de layout de antes.
 | Documento | Papel |
 |-----------|--------|
 | **README.md** (este) | Fonte unica de decisoes duraveis |
+| README § Dois firmwares | Hall vs Encoder: captura privada, fisica comum (R1–R5) |
 | `docs/hw/pinout.md` | **Pinout completo** RGT6/VGT6 (detalhe movido do §5) |
 | `docs/wiring_diagram.md` | Esquemáticos eléctricos (mapa de pinos ASCII **legado**) |
 | `spec.md` | **Deprecated** — historico; pode divergir |
@@ -440,8 +497,9 @@ Fora do MVP de bancada:
 - Limp: falha MAP corta combustivel a qualquer RPM; telemetria PW alinhada ao mask.
 - Fuel: `calc_final_pw_us` clampa corr Q8 0.25–2.0× e satura a 100 ms; AE interp signed.
 - Page0 apply: rev limit, STFT, decel hysteresis, CMP window, trim por cilindro clampados.
-- EOI blend (page0 164-168): `eoi_idle_deg` + janela RPM lo/hi restaurados no boot com
-  o mesmo clamp do write-handler (idle ∈ [0,719]); `hi<=lo` desliga o blend.
+- EOI 2D RPM×CLT (page6 79-114): `eoi_rpm_axis_x10` / `eoi_clt_axis_x10` /
+  `eoi_table_deg` (bilinear 3×3). Sem bump de magic v6; page0 164-168 deixa de
+  guardar o blend 1D.
 - Flash: layout **LTF3** = magic + CRC-32 dos mapas adaptativos; seed no mesmo
   SM de flush (sem erase independente do setor 0); seed finaliza magic/CRC.
 - ETB: PID `etb_control_update` → `etb_driver_set_motor_pwm`; disable → shutdown.

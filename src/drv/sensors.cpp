@@ -96,17 +96,17 @@ constexpr uint16_t kTpsGrdMaxX10 = 150u;  // 15.0 % por janela de amostragem
 static uint16_t g_tps_validated_x10    = 0u;   // último valor aceite/validado
 static bool     g_tps_gradient_pending = false; // gradiente excedido no ciclo anterior
 
-static uint16_t g_tps_raw_min = 200u;
-static uint16_t g_tps_raw_max = 3895u;
+static uint16_t g_tps_raw_min = 0u;
+static uint16_t g_tps_raw_max = 4095u;
 
-static uint16_t g_app1_raw_min = 200u;
-static uint16_t g_app1_raw_max = 3895u;
-static uint16_t g_app2_raw_min = 200u;
-static uint16_t g_app2_raw_max = 3895u;
-static uint16_t g_etb_tps1_raw_min = 200u;
-static uint16_t g_etb_tps1_raw_max = 3895u;
-static uint16_t g_etb_tps2_raw_min = 200u;
-static uint16_t g_etb_tps2_raw_max = 3895u;
+static uint16_t g_app1_raw_min = 0u;
+static uint16_t g_app1_raw_max = 4095u;
+static uint16_t g_app2_raw_min = 0u;
+static uint16_t g_app2_raw_max = 4095u;
+static uint16_t g_etb_tps1_raw_min = 0u;
+static uint16_t g_etb_tps1_raw_max = 4095u;
+static uint16_t g_etb_tps2_raw_min = 0u;
+static uint16_t g_etb_tps2_raw_max = 4095u;
 static uint16_t g_app_max_delta_pct_x10 = 120u;
 static uint16_t g_etb_max_delta_pct_x10 = 120u;
 static bool g_etb_harness_present = false;
@@ -208,16 +208,16 @@ inline void reset_state() noexcept {
     g_tps_validated_x10    = 0u;
     g_tps_gradient_pending = false;
 
-    g_tps_raw_min = 200u;
-    g_tps_raw_max = 3895u;
-    g_app1_raw_min = 200u;
-    g_app1_raw_max = 3895u;
-    g_app2_raw_min = 200u;
-    g_app2_raw_max = 3895u;
-    g_etb_tps1_raw_min = 200u;
-    g_etb_tps1_raw_max = 3895u;
-    g_etb_tps2_raw_min = 200u;
-    g_etb_tps2_raw_max = 3895u;
+    g_tps_raw_min = 0u;
+    g_tps_raw_max = 4095u;
+    g_app1_raw_min = 0u;
+    g_app1_raw_max = 4095u;
+    g_app2_raw_min = 0u;
+    g_app2_raw_max = 4095u;
+    g_etb_tps1_raw_min = 0u;
+    g_etb_tps1_raw_max = 4095u;
+    g_etb_tps2_raw_min = 0u;
+    g_etb_tps2_raw_max = 4095u;
     g_app_max_delta_pct_x10 = 120u;
     g_etb_max_delta_pct_x10 = 120u;
     g_etb_harness_present = false;
@@ -318,12 +318,12 @@ inline void init_tables() noexcept {
     }
 }
 
-// MAP: 0-5V linear → 0..3.00 bar (×10)
+// MAP: ADC 12-bit 0–3.3 V (raw 4095) → 0..3.00 bar (×1000).
 inline uint16_t map_raw_to_bar_x1000(uint16_t raw) noexcept {
     return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 3000u) / 4095u);
 }
 
-// O2: 0-5V linear → 0..1000 mV
+// Spare linear scale: 0–3.3 V → 0..1000 (not the CAN WBO2 path).
 inline uint16_t raw_to_mv(uint16_t raw) noexcept {
     return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 1000u) / 4095u);
 }

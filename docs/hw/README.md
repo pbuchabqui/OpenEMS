@@ -5,10 +5,16 @@ Ponto de entrada da documentação de hardware. **Ler esta página antes de qual
 **Objetivo do projeto:** sair da bancada para a **primeira partida em motor real** (4 cilindros, roda
 60-2, injeção e ignição sequenciais, borboleta eletrónica).
 
-**Desenho KiCad de produção:** base **microRusEFI** → `hardware/openems_ecu/`  
-(MCU **H562 soldado**, TLE8888-2QK). Arquitectura: [`microruseefi_as_base.md`](microruseefi_as_base.md).  
-WeAct H562 = **só bancada de firmware**, não entra na PCB de produção.  
-Produção: `hardware/openems_ecu/` (base mRE). Hellen-One **não** é a base da ECU.
+**Desenho KiCad de produção:** projecto **em branco** → `hardware/openems_v1/`  
+(MCU **H562 soldado** LQFP100, **4 camadas**, arquitectura v2 — CIs dedicados,
+TLE8888 **saiu**, ver [`architecture_v2.md`](architecture_v2.md)).  
+WeAct H562 = **só bancada de firmware**, não entra na PCB de produção.
+
+⛔ **O fork do microRusEFI deixou de ser a base de desenho (2026-08-07).** O mRE continua
+no repo como **referência** (`hardware/vendor/hw_microRusEfi`) — é a implementação que a
+regra §1b obriga a consultar antes de cada bloco. O board antigo `hardware/openems_ecu/`
+**não foi apagado**, mas não recebe mais trabalho. Porquê da mudança:
+[`microruseefi_as_base.md`](microruseefi_as_base.md). Hellen-One **não** é a base da ECU.
 
 ---
 
@@ -21,14 +27,15 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 
 | Assunto | Fonte de verdade | ⚠️ NÃO usar |
 |---|---|---|
-| Mapa de pinos RGT6 vs VGT6 | `pinout.md` | `wiring_diagram.md` |
-| H562 no cobre microRusEFI (bring-up) | `pinout_mre_bringup.md` | forçar VGT6 PE* no PCB mRE |
+| Mapa de pinos RGT6 vs VGT6 | `pinout.md` | `../wiring_diagram.md` |
 | INJ/IGN, enables, BSRR | `src/hal/out_pins.h` | qualquer doc |
 | Canais e pinos de ADC | `src/hal/adc.h` | qualquer doc |
 | Registadores do TLE8888 | `src/hal/tle8888_regs.h` | qualquer doc |
 | Arquitetura, blocos, BOM, **decisões e porquês** | `interface_board_v1.md` | — |
-| Alimentação, condicionamento, atuadores, conector, terra | `wiring_diagram.md` | — |
-| Ligações pino-a-pino (netlist) | `netlist_v1.md` | — |
+| Alimentação, condicionamento, atuadores, conector, terra | [`../wiring_diagram.md`](../wiring_diagram.md) | — |
+| **Números de pino e AF do MCU (v2)** | [`pinout_v2.md`](pinout_v2.md) | inventar/copiar de spec externa |
+| **Arquitectura v2 (MC33810/L9960T/TPS65381A/CJ125)** | [`architecture_v2.md`](architecture_v2.md) | — |
+| ~~Ligações pino-a-pino (netlist)~~ | `netlist_v1.md` | ⚠️ **pré-v2** — blocos do TLE8888 anulados |
 | Contraprova do mapa TLE8888 | `tle8888_crosscheck.md` | — |
 | **Pinos de package LQFP-100 do TLE8888** | `tle8888_pinout.md` | inventar números |
 | Registadores/periféricos do MCU | `stm32h562_ref.md` | — |
@@ -38,7 +45,9 @@ de falso-sync. **Ambos vieram de autoridade duplicada que se dessincronizou.**
 | **KiCad libs Speeduino/rusEFI (review)** | `kicad_vendor_review.md` | inventar footprint se já existe upstream |
 | **BOM candidatos** | `bom_v1_candidates.md` | — |
 | **Esquemático modular (sheets)** | `schematic/README.md` | um PDF monólito sem revisão |
-| **Base de desenho KiCad (mRE → openems_ecu)** | `microruseefi_as_base.md` + `hardware/openems_ecu/` | Hellen-One como board (só footprint USB) |
+| **Board de produção (KiCad em branco)** | `hardware/openems_v1/` | `hardware/openems_ecu/` (fork mRE, congelado) |
+| ~~Base de desenho a partir do mRE~~ | `microruseefi_as_base.md` | **supersedido** — mRE é referência, não cobre |
+| ~~H562 no cobre microRusEFI (bring-up)~~ | ~~`pinout_mre_bringup.md`~~ | **removido** com o `BOARD=mre` |
 | ~~Condicionamento VR discreto~~ | `vr_input_conditioning.md` | **supersedido** (MAX9926/9924 saiu) |
 
 ### A regra
@@ -88,32 +97,36 @@ Memória de projecto: `always-check-speeduino-rusefi-ms` (já invocada no plano 
 
 ## 2. Registo de decisões
 
-Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`. Fundamentação em
-`interface_board_v1.md` salvo indicação em contrário.
+Todas fechadas em **2026-07-20**, na branch `feat/interface-board-v1`, salvo indicação em
+contrário. Fundamentação em `interface_board_v1.md` salvo indicação em contrário. A coluna
+**Estado v2** regista o que a arquitectura de CIs dedicados (2026-08-07,
+[`architecture_v2.md`](architecture_v2.md)) fez a cada uma — ⛔ **anulada**, 🔄 **mudou**
+(o conceito sobrevive, o detalhe não — ver `pinout_v2.md`), ✅ **sobrevive** sem alteração.
+Não repetir aqui o racional da troca — vive só em `architecture_v2.md`.
 
-| Decisão | Porquê, em uma frase | Commit |
-|---|---|---|
-| **Alvo VGT6 (LQFP100)** | GPIOE inteiro para INJ/IGN, sem os conflitos do RGT6 | — |
-| **TLE8888-2QK como hub de potência** | Substitui FETs, drivers de bobina, relés, transceiver CAN e reguladores de 5 V; a **-2QK** tem watchdog desativado de fábrica, e errar o watchdog mata o motor no bring-up | `a5f95fb` |
-| **INJ/IGN por direct drive** | `IN1–IN8` são ativo-alto com pull-down interno → **scheduler congelado fica intacto** | `a5f95fb` |
-| **Driver TLE8888 reescrito** | Mapa inventado + frame invertido; agora unlock + InConfig + OE_SET (rusEFI-aligned). **Ainda sem clock em silício** | `a5f95fb` + hub fix |
-| **INJEN=`PE14` / IGNEN=`PE3`** | Corte de injeção e ignição em hardware, independente do SPI *e* do escalonador. `PE14` porque o LQFP100 do H562VGTx não bonda `PE1` | `380a0c5` + fix PE1→PE14 |
-| **Bomba/ventoinha → `PE10`/`PE12`** | Em `PB12`/`PB13` matavam o `SPI2_SCK` no boot — o TLE8888 nunca seria clockado | `380a0c5` |
-| **SDMMC guardado no RGT6** | `PC8` é IGN3 no RGT6; ligar o datalog reconfiguraria o pino de uma bobina | `380a0c5` |
-| **CKP pela interface VR do TLE8888** | Zero-crossing com armamento por pico, clamp e diagnóstico integrados → **MAX9924 sai da BOM** | — |
-| **CMP: Hall** direto ao `PA1` | O CI tem **um** canal VR, gasto no CKP | — |
-| **VBATT em `PC3`/INP13** | Antes era fixado em 12000 mV, o que subestimava dead-time e encurtava o dwell no cranking | `34b40e3` |
-| **EWG diferido para v2** | Turbo-específico; é o que liberta `PC3` para o VBATT | `34b40e3`, `8c3d282` |
-| **Knock diferido para v2** | Bloco analógico mais difícil, não contribui para a primeira partida, e o retard **mascara problema mecânico** | — |
-| **ETB: BTS7960 @ 10 kHz** | A 20 kHz sobravam 20% de margem; o DRV8701 não é drop-in (firmware é 3 pinos, ele é 2) e transferia o layout de potência. Path real: `etb_driver_init` → `etb_pwm_init(10000)` | `11c39f4` + fix path |
-| **VREF+ = VDDA 3,3 V filtrado**, (c) DNP | Os trims absorvem **deriva** mas não **ruído** → o esforço rende no LDO e no layout, não numa referência exata | `8df4dbc` |
-| **Conector: AMPSEAL `776164-1` (35, sinais) + `770680-1` (23, potência)** | Tamanhos diferentes são **impossíveis de trocar**; potência de bobinas/injetores **não atravessa a ECU** | `fd9faa0` |
-| **Montagem na cabine**, não no compartimento do motor | O coreboard é grau consumidor — nenhuma caixa resolve ciclo térmico; e põe a antepara aterrada entre a ECU e a ignição | `fd9faa0` |
-| **VVT: montar dois, comissionar um** | Os dois PIDs partilham o `pos_deg_x10` do único CMP | `43a2ff0` |
-| **Fingerprint de reset values** | `write_verify` é cego ao endereço errado-mas-válido | `43a2ff0`, `529b1ec` |
-| **KiCad, 4 camadas** | Mínimo honesto para os pours PGND/SGND/AGND separados | — |
-| **USB com isolador galvânico** | Laço de terra com o portátil é matador clássico de ECU | — |
-| **Corte da bomba 3 s → 2 s** | Corta mais cedo num acidente sem cortar num calo momentâneo | `380a0c5` |
+| Decisão | Porquê, em uma frase | Commit | Estado v2 |
+|---|---|---|---|
+| **Alvo VGT6 (LQFP100)** | GPIOE inteiro para INJ/IGN, sem os conflitos do RGT6 | — | ✅ sobrevive |
+| ~~TLE8888-2QK como hub de potência~~ | Substitui FETs, drivers de bobina, relés, transceiver CAN e reguladores de 5 V; a **-2QK** tem watchdog desativado de fábrica, e errar o watchdog mata o motor no bring-up | `a5f95fb` | ⛔ anulada — CIs dedicados |
+| **INJ/IGN por direct drive** | `IN1–IN8` são ativo-alto com pull-down interno → **scheduler congelado fica intacto** | `a5f95fb` | 🔄 mudou — mesmo princípio, agora via MC33810 (entradas paralelas directas, mesmos pinos GPIOE) |
+| ~~Driver TLE8888 reescrito~~ | Mapa inventado + frame invertido; agora unlock + InConfig + OE_SET (rusEFI-aligned). **Ainda sem clock em silício** | `a5f95fb` + hub fix | ⛔ anulada — `tle8888.cpp`/`tle8888_regs.h` reformam-se (dívida de firmware, não escrito) |
+| ~~INJEN=`PE14` / IGNEN=`PE3`~~ | Corte de injeção e ignição em hardware, independente do SPI *e* do escalonador. `PE14` porque o LQFP100 do H562VGTx não bonda `PE1` | `380a0c5` + fix PE1→PE14 | ⛔ anulada — MC33810 usa `EN`(`PD11`)/`RSTB`(`PD10`)/`FAULTB`(`PD9`), um enable só, não INJ/IGN separados. `PE14` e `PE3` foram reciclados (`MAIN_RELAY` e `TPS65381_ENDRV`) |
+| **Bomba/ventoinha** | Em `PB12`/`PB13` matavam o `SPI2_SCK` no boot | `380a0c5` | 🔄 mudou — razão mantém-se (SPI2 continua em `PB12-15` para PMIC/MC33810/L9960T/CJ125), mas o pino mudou: `PE10`/`PE12` agora são VVT1/VVT2; bomba/ventoinha foram para `PE7`/`PE8` |
+| **SDMMC guardado no RGT6** | `PC8` é IGN3 no RGT6; ligar o datalog reconfiguraria o pino de uma bobina | `380a0c5` | ✅ sobrevive — não depende do hub |
+| ~~CKP pela interface VR do TLE8888~~ | Zero-crossing com armamento por pico, clamp e diagnóstico integrados → **MAX9924 sai da BOM** | — | ⛔ anulada — sem TLE8888 não há interface VR; **CKP passa a Hall** |
+| **CMP: Hall** direto ao `PA1` | ~~O CI tem **um** canal VR, gasto no CKP~~ | — | 🔄 mudou — pino e sensor sobrevivem, mas a razão morreu com o TLE (não há mais canal VR a partilhar). Motivo actual: CKP **também** é Hall, decisão irmã em `architecture_v2.md` |
+| **VBATT em `PC3`/INP13** | Antes era fixado em 12000 mV, o que subestimava dead-time e encurtava o dwell no cranking | `34b40e3` | ✅ sobrevive |
+| ~~EWG diferido para v2~~ | Turbo-específico; é o que liberta `PC3` para o VBATT | `34b40e3`, `8c3d282` | ⛔ anulada — **populado na v2**, no L9960T junto com o ETB. (O "v2" aqui era genérico, revisão futura — coincide, mas não é a arquitectura v2 de CIs dedicados) |
+| **Knock diferido** | Bloco analógico mais difícil, não contribui para a primeira partida, e o retard **mascara problema mecânico** | — | ✅ sobrevive — continua diferido, sem relação com a troca de CIs. (Mesmo aviso: "v2" no nome original é genérico, não a arquitectura de CIs dedicados) |
+| ~~ETB: BTS7960 @ 10 kHz~~ | A 20 kHz sobravam 20% de margem; o DRV8701 não é drop-in (firmware é 3 pinos, ele é 2) e transferia o layout de potência. Path real: `etb_driver_init` → `etb_pwm_init(10000)` | `11c39f4` + fix path | ⛔ anulada — **L9960T substitui o BTS7960**, ETB e EWG na mesma ponte dupla. A rejeição do DRV8701 por ser de 2 pinos foi explicitamente revertida: o L9960T é igualmente PWM+DIR e foi aceite. `etb_driver.cpp` **reescreve-se** de 3 pinos para 2+SPI (dívida de firmware) |
+| **VREF+ = VDDA 3,3 V filtrado**, (c) DNP | Os trims absorvem **deriva** mas não **ruído** → o esforço rende no LDO e no layout, não numa referência exata | `8df4dbc` | ✅ sobrevive |
+| **Conector: AMPSEAL `776164-1` (35, sinais) + `770680-1` (23, potência)** | Tamanhos diferentes são **impossíveis de trocar**; potência de bobinas/injetores **não atravessa a ECU** | `fd9faa0` | ✅ sobrevive |
+| **Montagem na cabine**, não no compartimento do motor | O coreboard é grau consumidor — nenhuma caixa resolve ciclo térmico; e põe a antepara aterrada entre a ECU e a ignição | `fd9faa0` | ✅ sobrevive |
+| **VVT: montar dois, comissionar um** | Os dois PIDs partilham o `pos_deg_x10` do único CMP | `43a2ff0` | ✅ sobrevive — `PE10`/`PE12` no pinout v2 |
+| ~~Fingerprint de reset values~~ | `write_verify` é cego ao endereço errado-mas-válido | `43a2ff0`, `529b1ec` | ⛔ anulada — era técnica específica do TLE8888. Os CIs novos têm os seus próprios sinais de diagnóstico (`MC33810_FAULTB`, `TPS65381A` via SPI) mas **não têm equivalente ao fingerprint desenhado ainda** — dívida de firmware, não só de hardware |
+| **KiCad, 4 camadas** | Mínimo honesto para os pours PGND/SGND/AGND separados | — | ✅ sobrevive |
+| **USB com isolador galvânico** | Laço de terra com o portátil é matador clássico de ECU | — | ✅ sobrevive |
+| **Corte da bomba 3 s → 2 s** | Corta mais cedo num acidente sem cortar num calo momentâneo | `380a0c5` | ✅ sobrevive — lógica de firmware, independente do pino físico |
 
 ---
 
@@ -176,13 +189,27 @@ Ver **`ampseal_connectors.md`**:
 ## 6. Sequência de verificação
 
 Ordem inegociável — **bancada → ETB validado → motor**. Detalhe em `interface_board_v1.md`.
+⚠️ **Escrita pré-v2** (2026-07-20); os passos 0 e 3 assumiam o TLE8888/VR e ficaram void
+com a arquitectura de CIs dedicados (`architecture_v2.md`, 2026-08-07). A ordem geral
+continua válida — bancada antes de ETB, ETB antes de motor.
 
-0. **Fingerprint + eco do TLE8888** no primeiro power-on — único momento possível, os valores de reset
-   desaparecem na primeira escrita.
+0. ~~Fingerprint + eco do TLE8888~~ 🚨 **sem substituto desenhado.** O TLE8888 saiu da
+   produção; o passo existia porque o `write_verify` do TLE era cego ao endereço
+   errado-mas-válido (ver decisão "Fingerprint de reset values" anulada em §2). Os CIs
+   novos (MC33810, L9960T, CJ125, TPS65381A) têm os seus próprios sinais de diagnóstico
+   (`MC33810_FAULTB`, SPI do TPS65381A) mas **não têm um passo 0 equivalente definido** —
+   dívida de firmware/bring-up, não só de hardware. Escrever antes do primeiro power-on
+   dos CIs novos.
 1. Host tests verdes (`make host-test`, `make host-test-vgt6`).
 2. Scope de INJ/IGN e sync CKP/CMP de 200 a 8500 rpm com o estimulador.
-3. **Caracterizar o front-end CKP** — medir o atraso de propagação do VR (o datasheet não o dá).
+3. **Caracterizar o front-end CKP** — 🔄 **reformulado.** CKP deixou de ser VR (era pela
+   interface do TLE8888) e passou a **Hall**, mesmo condicionamento do CMP. Já não se mede
+   "atraso de propagação do VR" — mede-se o atraso do front-end Hall escolhido, e fecha-se
+   a par da polaridade RISING/FALLING pendente (ver `cmp-ckp-capture-edge-polarity` em
+   memória) assim que o datasheet do sensor existir.
 4. **Ruído sob carga** — o teste que teria apanhado o falso-sync original.
 5. Analógicos, VBATT contra multímetro; depois flex e VVT.
-6. **Gate do ETB** — autocal e PID com chicote real, **desacoplado do motor**.
+6. **Gate do ETB** — autocal e PID com chicote real, **desacoplado do motor**. 🔄
+   O driver muda de BTS7960 (3 pinos) para **L9960T** (PWM+DIR+SPI, `etb_driver.cpp` por
+   reescrever) — o gate em si não muda de posição na sequência, só o que há para testar.
 7. Motor, escalonado: cranking sem faísca → faísca sem combustível → partida.

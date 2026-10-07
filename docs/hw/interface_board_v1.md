@@ -516,29 +516,31 @@ Footprint + via no AMPSEAL ficam para migrar depois sem respin de conector.
 ### 13. Knock — o bloco que exige envelope em hardware (não é só um bandpass)
 
 **Como o firmware detecta:** `knock_adc_update(raw)` é chamado de `sample_fast_channels()`
-(`src/drv/sensors.cpp:474-477`) **uma vez por dente do CKP**, dentro da janela angular; conta amostras
+(`src/drv/sensors.cpp:474-477`), dentro da janela angular; conta amostras
 acima de um threshold e aplica retard (+2,0° por evento, até 10,0°, recovery -0,1°/ciclo limpo).
 O cabeçalho de `knock.cpp:13` é explícito: *"Sem periférico COMP interno (STM32H562 não o possui) —
 detecção 100% em software a partir das amostras ADC."* **Não há filtro digital nem FFT.**
 
-**A consequência dura — Nyquist.** A taxa de amostragem é a taxa de dente, e a roda 60-2 tem 58 dentes
-por volta:
+**A consequência dura — Nyquist.** A taxa de amostragem NÃO é a taxa de dente: `sample_fast_channels()`
+só dispara quando o acumulador `g_fast_sample_accum` (incrementado em `kFastSamplesPerRev = 12` por
+dente) transpõe `kRealTeethPerRev = 58` — ou seja, **12 amostras por volta**, não 58
+(`src/drv/sensors.cpp:32-33,692-697`):
 
 | RPM | Amostras/s |
 |---|---|
-| 1500 | ~1,45 kHz |
-| 3000 | ~2,9 kHz |
-| 6000 | ~5,8 kHz |
-| 8000 | ~7,7 kHz |
+| 1500 | ~300 Hz |
+| 3000 | ~600 Hz |
+| 6000 | ~1,2 kHz |
+| 8000 | ~1,6 kHz |
 
-Detonação vive em **6–8 kHz**, que exigiria amostrar acima de ~12–16 kHz. **Em nenhum RPM a taxa de dente
-alcança isso.** Ou seja: entregar a onda AC filtrada crua ao ADC produz aliasing, e a contagem de amostras
-acima do threshold vira ruído sem significado.
+Detonação vive em **6–8 kHz**, que exigiria amostrar acima de ~12–16 kHz. **Em nenhum RPM a taxa de
+amostragem alcança isso.** Ou seja: entregar a onda AC filtrada crua ao ADC produz aliasing, e a
+contagem de amostras acima do threshold vira ruído sem significado.
 
 **Portanto o front-end analógico precisa entregar um envelope, não a portadora:**
 `piezo → bandpass 6–8 kHz → retificação de onda completa → integrador/peak-hold com decaimento
 controlado → bias em meio-rail → PA5`.
-Só o envelope é lento o bastante para a taxa de dente ler com sentido. O default
+Só o envelope é lento o bastante para essa taxa de amostragem ler com sentido. O default
 `kAdcThresholdDefault = 2048` (meio de escala 12-bit) confirma que o firmware espera exatamente um sinal
 polarizado em meio-rail.
 

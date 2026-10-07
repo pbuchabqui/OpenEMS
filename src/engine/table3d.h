@@ -18,6 +18,8 @@ constexpr uint8_t  kLtftAddAxisSize = (kTableAxisSize + 1u) / 2u;
 // kTableAxisSize (ou o layout serializado das tabelas) mudar.
 // 4: LEARN thresholds page0 185-190
 // 5: Launch + TC knobs page0 191-215; CAN RX map 216-245 (id=0 = off, safe blank)
+// EOI 2D (eoi_rpm_axis_x10/eoi_clt_axis_x10/eoi_table_deg) vive em page6
+// 79-114 — não bump de magic/layout (não é v6; page0 TDC1-CMP fica no Encoder).
 constexpr uint8_t kCalLayoutVersion       = 5u;
 constexpr uint16_t kCalLayoutVersionOffset = 175u;
 
@@ -45,6 +47,7 @@ struct Table2dLookup {
 
 uint8_t table_axis_index(const uint32_t* axis, uint8_t size, uint32_t value) noexcept;
 uint8_t table_axis_frac_q8(const uint32_t* axis, uint8_t idx, uint32_t value) noexcept;
+int32_t lerp_q8_s32(int32_t a, int32_t b, uint8_t frac_q8) noexcept;
 
 // Nó de eixo mais próximo do valor (para crédito de célula única: LTFT/LEARN).
 // Diferente de table_axis_index, que devolve o canto baixo da interpolação

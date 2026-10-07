@@ -1,0 +1,25 @@
+(kicad_sch
+	(version 20260101)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid 7574066e-9c3d-49f2-bf70-466353c59cb9)
+	(paper "A4")
+	(lib_symbols)
+	(text "Sheet 04b — MC33810 drive INJ/IGN | substitui hub TLE8888"
+		(exclude_from_sim no)
+		(at 10.16 12.7 0)
+		(effects
+			(font
+				(size 2 2)
+				(bold yes)
+			)
+			(justify left bottom)
+		)
+		(uuid "84f7dcd5-e207-4f67-a54b-9cc4e813183d")
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)

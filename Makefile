@@ -1,9 +1,8 @@
 # OpenEMS: STM32H562 Firmware Build System
-# BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE) | BOARD=mre (mRE copper)
+# BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE pinout)
 # Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
-.PHONY: all clean host-test host-test-vgt6 host-test-mre firmware firmware-rgt6 \
-        firmware-vgt6 firmware-mre help \
+.PHONY: all clean host-test host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
         secrets-check lint-includes format format-all format-check ci-local
 
 COMPILER_ARM = arm-none-eabi-g++
@@ -25,11 +24,7 @@ LINT_ERROR ?= 0
 LINT_PHASE ?= A
 
 BOARD ?= rgt6
-ifeq ($(BOARD),mre)
-  BOARD_CFLAGS = -DEMS_BOARD_MRE
-  BOARD_LABEL  = MRE
-  BIN_SUFFIX   = -mre
-else ifeq ($(BOARD),vgt6)
+ifeq ($(BOARD),vgt6)
   BOARD_CFLAGS = -DEMS_BOARD_VGT6
   BOARD_LABEL  = VGT6
   BIN_SUFFIX   = -vgt6
@@ -44,7 +39,10 @@ CFLAGS_ARM = $(CFLAGS_COMMON) -DTARGET_STM32H562 -DNDEBUG -mcpu=cortex-m33 -mthu
              -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections \
              -g0 -O2 -I./src $(BOARD_CFLAGS)
 # -I. so test/*.cpp can #include "test/harness.h"
-CFLAGS_HOST = $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_RGT6 -O2 -g -I. -I./src
+# ASan+UBSan: host-only (never CFLAGS_ARM) — catches real UB (e.g. shift of a
+# negative signed value) that a plain build silently tolerates.
+CFLAGS_HOST = $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_RGT6 -O2 -g -I. -I./src \
+              -fsanitize=address,undefined -fno-sanitize-recover=all
 
 SRC_DIR = src
 TEST_DIR = test
@@ -81,7 +79,8 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/etb_autocal.cpp \
              $(SRC_DIR)/engine/torque_manager.cpp \
              $(SRC_DIR)/engine/misfire_detect.cpp \
-             $(SRC_DIR)/engine/ewg_control.cpp
+             $(SRC_DIR)/engine/ewg_control.cpp \
+             $(SRC_DIR)/engine/limp_gating.cpp
 
 DRV_SRC = $(SRC_DIR)/drv/ckp.cpp $(SRC_DIR)/drv/sensors.cpp
 APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp \
@@ -123,6 +122,7 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_fuel.cpp \
                    $(TEST_DIR)/test_ign.cpp \
                    $(TEST_DIR)/test_aux_knock.cpp \
+                   $(TEST_DIR)/test_knock_hw_wiring.cpp \
                    $(TEST_DIR)/test_timer.cpp \
                    $(TEST_DIR)/test_sched.cpp \
                    $(TEST_DIR)/test_engine_misc.cpp \
@@ -135,20 +135,31 @@ HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(HOST_TEST_HARNESS) $(HOST_TEST_SUITES)
 HOST_TEST_BIN = $(HOST_DIR)/mvp_bench_tests
 
+# Binário próprio p/ knock com EMS_KNOCK_HW_PRESENT=1 (make host-test-knock-hw)
+# — mesma lógica de teste de test_knock_hw_wiring.cpp que a suite principal já
+# compila com a flag em 0; aqui só troca o main() (test_knock_hw_main.cpp em
+# vez de run_all.cpp) e o define. Contagem PASS/FAIL da suite principal intocada.
+HOST_TEST_KNOCK_HW_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
+                         $(SRC_DIR)/hal/stm32h562/timer.cpp \
+                         $(SRC_DIR)/hal/stm32h562/system.cpp \
+                         $(TEST_DIR)/harness.cpp $(TEST_DIR)/fixtures.cpp \
+                         $(TEST_DIR)/ui_helpers.cpp \
+                         $(TEST_DIR)/test_knock_hw_wiring.cpp \
+                         $(TEST_DIR)/test_knock_hw_main.cpp
+
 all: help
 
 help:
 	@echo "OpenEMS Build System"
 	@echo "======================================"
-	@echo "Usage: make [target] [BOARD=rgt6|vgt6|mre] [WERROR=0|1]"
+	@echo "Usage: make [target] [BOARD=rgt6|vgt6] [WERROR=0|1]"
 	@echo ""
 	@echo "  host-test       Host regression (always RGT6 pin map stubs)"
 	@echo "  host-test-vgt6  Standalone VGT6 GPIOE INJ/IGN BSRR coverage"
-	@echo "  host-test-mre   Standalone MRE (microRusEFI copper) pin map coverage"
+	@echo "  host-test-knock-hw  Standalone knock wiring coverage (EMS_KNOCK_HW_PRESENT=1)"
 	@echo "  firmware        Build for BOARD (default rgt6)"
 	@echo "  firmware-rgt6   Build RGT6 bin"
-	@echo "  firmware-vgt6   Build VGT6 bin (GPIOE INJ/IGN/ETB OpenEMS ideal)"
-	@echo "  firmware-mre    Build MRE bin (H562 on microRusEFI pinout)"
+	@echo "  firmware-vgt6   Build VGT6 bin (GPIOE INJ/IGN/ETB)"
 	@echo "  clean           Remove /tmp/openems-build"
 	@echo ""
 	@echo "Quality gates:"
@@ -159,7 +170,7 @@ help:
 	@echo "  format-check    Dry-run format on dirty files"
 	@echo "  ci-local        secrets + host/fw WERROR + lint A/B (tools/ci_local.sh)"
 	@echo ""
-	@echo "Outputs: openems-rgt6.bin | openems-vgt6.bin | openems-mre.bin"
+	@echo "Outputs: /tmp/openems-build/bin/openems-rgt6.bin | openems-vgt6.bin"
 
 host-test:
 	@mkdir -p $(HOST_DIR)
@@ -178,22 +189,18 @@ host-test-vgt6:
 		$(TEST_DIR)/test_out_pins_vgt6.cpp -o $(HOST_DIR)/out_pins_vgt6_tests -lm
 	@$(HOST_DIR)/out_pins_vgt6_tests
 
+host-test-knock-hw:
+	@mkdir -p $(HOST_DIR)
+	@echo "  HOST $(HOST_DIR)/knock_hw_wiring_tests"
+	@$(CXX_HOST) $(CFLAGS_HOST) -DEMS_KNOCK_HW_PRESENT=1 $(HOST_TEST_KNOCK_HW_SRC) \
+		-o $(HOST_DIR)/knock_hw_wiring_tests -lm
+	@$(HOST_DIR)/knock_hw_wiring_tests
+
 firmware-rgt6:
 	@$(MAKE) firmware BOARD=rgt6
 
 firmware-vgt6:
 	@$(MAKE) firmware BOARD=vgt6
-
-firmware-mre:
-	@$(MAKE) firmware BOARD=mre
-
-host-test-mre:
-	@mkdir -p $(HOST_DIR)
-	@echo "  HOST $(HOST_DIR)/out_pins_mre_tests"
-	@$(CXX_HOST) $(CFLAGS_COMMON) -DEMS_HOST_TEST -DEMS_BOARD_MRE -O2 -g -I. -I./src \
-		$(SRC_DIR)/hal/out_pins.cpp $(TEST_DIR)/harness.cpp \
-		$(TEST_DIR)/test_out_pins_mre.cpp -o $(HOST_DIR)/out_pins_mre_tests -lm
-	@$(HOST_DIR)/out_pins_mre_tests
 
 firmware: $(OBJ_DIR) $(ELF_DIR) $(BIN_DIR) $(FIRMWARE_ELF) $(FIRMWARE_HEX) $(FIRMWARE_BIN)
 	@cp -f $(FIRMWARE_BIN) $(FIRMWARE_BIN_ALIAS)

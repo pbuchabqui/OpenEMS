@@ -220,6 +220,15 @@ void test_knock_window_cycle_end(void) {
     knock_window_cycle_end();
     CHECK_FALSE(knock_test_window_active(), "window closed by cycle_end");
     CHECK_TRUE(knock_get_retard_x10(0u) > 0u, "retard applied by cycle_end");
+
+    knock_init();
+    knock_window_open(1u);
+    CHECK_TRUE(knock_window_open_for(1u), "open_for matches open cyl");
+    CHECK_FALSE(knock_window_open_for(0u), "open_for false for other cyl");
+    knock_window_cycle_end_if_cyl_mask(0x01u);  // bit 0 = cyl 0
+    CHECK_TRUE(knock_test_window_active(), "mask de outro cilindro não fecha");
+    knock_window_cycle_end_if_cyl_mask(0x02u);  // bit 1 = cyl 1
+    CHECK_FALSE(knock_test_window_active(), "mask do cilindro aberto fecha");
 }
 
 void test_knock_save_to_nvm(void) {

@@ -1,5 +1,15 @@
 # STM32F407VGTx → STM32H562VGTx — mapa de migração (LQFP100)
 
+> ⛔ **SUPERSEDIDO (2026-08-07) para efeitos de desenho.** Este documento existia para
+> pousar o H562 no cobre F407 do microRusEFI. Esse fork foi abandonado —
+> ver [`microruseefi_as_base.md`](microruseefi_as_base.md). A board nova parte de um
+> esquemático em branco, onde não há F407 nenhum para mapear.
+>
+> **Continua útil como referência de peça:** a comparação pino-a-pino 1–100 e as 6
+> diferenças de alimentação do H5 estão verificadas contra os symbols oficiais e
+> aplicam-se a qualquer desenho com H562VGTx. Para *ligações*, a autoridade é
+> [`netlist_v1.md`](netlist_v1.md) — não este ficheiro.
+
 > Fonte: pinos extraídos diretamente dos symbols oficiais KiCad
 > (`MCU_ST_STM32F4:STM32F407V_E-G_Tx`, `MCU_ST_STM32H5:STM32H562VGTx`,
 > `/usr/share/kicad/symbols/`), comparados pino-a-pino (1–100). O footprint
@@ -94,6 +104,11 @@ No layout microRusEFI, `INJ_EN`/`IGN_EN` do TLE8888 iam a `PD11`/`PD10`. OpenEMS
 | `IGN_EN` (U2.27) | **PE3** | `/PE3` | alinhado a `out_pins.h` |
 
 ## MCU ↔ TLE8888 no esquemático (VGT6, netlist verificado)
+
+> 📌 **Esta secção descreve o board CONGELADO** `hardware/openems_ecu/`, no estado em que
+> ficou. Não descreve a board de produção. Para *ligações* a autoridade é
+> [`netlist_v1.md`](netlist_v1.md); para o estado do board congelado,
+> [`hardware/openems_ecu/README.md`](../../hardware/openems_ecu/README.md).
 
 Root sheet `openems_ecu.kicad_sch` alinhado a `out_pins.h` + `netlist_v1.md` / `tle8888_pinout.md`:
 

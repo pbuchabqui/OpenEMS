@@ -38,27 +38,7 @@ inline constexpr uint8_t kCylinderCount = 4u;
 /** Crank degrees per engine cycle (4-stroke) */
 inline constexpr uint32_t kCrankDegreesPerCycle = 720u;
 
-// ============================================================================
-// Fuel Calculation Constants
-// ============================================================================
-
-/** Air density at 1.00 bar, 25°C in mg/cc × 1000 (1.184 mg/cc) */
-inline constexpr uint32_t kAirDensityMgPerCcX1000 = 1184u;
-
-/** Gasoline fuel density in mg/cc */
-inline constexpr uint32_t kFuelDensityMgPerCc = 740u;
-
-/** Stoichiometric air-fuel ratio × 100 (14.64:1) */
-inline constexpr uint16_t kStoichAfrX100 = 1464u;
-
-/** Default VE table value (percentage × 100) */
-inline constexpr uint16_t kDefaultVeX100 = 8000u;  // 80.0%
-
-/** Minimum base pulse width in microseconds */
-inline constexpr uint32_t kMinBasePwUs = 100u;
-
-/** Maximum base pulse width in microseconds */
-inline constexpr uint32_t kMaxBasePwUs = 20000u;
+// Fuel density / stoich / VE / PW limits: engine::cfg in engine_config.h.
 
 // ============================================================================
 // Sensor Limits & Defaults
@@ -126,5 +106,23 @@ inline constexpr uint32_t kMinDwellTimeMs = 1u;
 
 /** Maximum dwell time in milliseconds */
 inline constexpr uint32_t kMaxDwellTimeMs = 8u;
+
+// ============================================================================
+// Fault gating (limp_gating) — 0-threshold knobs stay off for benches
+// ============================================================================
+
+inline constexpr uint16_t kBoostCutMapBarX100 = 0u;
+inline constexpr uint16_t kBoostCutHystBarX100 = 20u;
+inline constexpr uint16_t kOilMinAfterStartBarX1000 = 1500u;
+inline constexpr uint32_t kOilAfterStartTimeoutMs = 5000u;
+inline constexpr uint32_t kOilRunningTimeoutMs = 500u;
+inline constexpr uint32_t kOilProtectRpmX10 = 15000u;
+inline constexpr uint32_t kFuelRailProtectRpmX10 = 5000u;
+inline constexpr uint32_t kEtbFaultRevLimitRpmX10 = 15000u;
+inline constexpr uint8_t kInjDutyResumePct = 20u;
+inline constexpr uint16_t kLambdaProtectTimeoutMs = 2000u;
+inline constexpr uint16_t kLambdaProtectDevX1000 = 200u;
+inline constexpr uint32_t kLambdaProtectMinRpmX10 = 20000u;
+inline constexpr uint16_t kLambdaProtectMinLoadBarX100 = 50u;
 
 } // namespace ems::engine
