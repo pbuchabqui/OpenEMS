@@ -208,7 +208,7 @@ void parse_byte(uint8_t b) noexcept {
             const bool ok = ems::engine::output_test_active() && (p_snap.rpm_x10 == 0u);
             if (ok) {
                 ecu_sched_bench_pw_lock_next_commit();
-                ecu_sched_commit_calibration(10U, 22500U, 50000U, 30U);  // eoi_lead=30° (EOI targeting, valor de bench)
+                ecu_sched_commit_calibration_x10(100, 22500U, 50000U, 30U);  // eoi_lead=30° (EOI targeting, valor de bench)
             }
             tx_push(ok ? kAckOk : kAckErr);
             return;

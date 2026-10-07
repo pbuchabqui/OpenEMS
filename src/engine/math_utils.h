@@ -46,20 +46,29 @@ inline int32_t clamp_iat_kelvin_x10(int16_t iat_x10) noexcept {
 // Piecewise-linear lookup over n monotonic axis points; clamps to the end
 // values and to Y's range. Non-monotonic segment (span<=0) returns y0.
 template <typename X, typename Y>
-inline Y interp_8pt(const X* axis, const Y* table, uint8_t n, X x) noexcept {
-    if (x <= axis[0]) return table[0];
-    if (x >= axis[n - 1u]) return table[n - 1u];
+inline Y interp_8pt(const X* axis, const Y* table, uint8_t n, X x,
+                    int32_t scale = 1) noexcept {
+    int32_t y;
+    if (x <= axis[0]) {
+        y = static_cast<int32_t>(table[0]) * scale;
+    } else if (x >= axis[n - 1u]) {
+        y = static_cast<int32_t>(table[n - 1u]) * scale;
+    } else {
+        uint8_t idx = 0u;
+        while (idx < (n - 2u) && x > axis[idx + 1u]) { ++idx; }
 
-    uint8_t idx = 0u;
-    while (idx < (n - 2u) && x > axis[idx + 1u]) { ++idx; }
-
-    const int32_t x0 = axis[idx];
-    const int32_t y0 = table[idx];
-    const int32_t span = static_cast<int32_t>(axis[idx + 1u]) - x0;
-    if (span <= 0) return static_cast<Y>(y0);
-
-    const int32_t y = y0 + ((static_cast<int32_t>(table[idx + 1u]) - y0) *
-                            (static_cast<int32_t>(x) - x0)) / span;
+        const int32_t x0 = axis[idx];
+        const int32_t y0 = static_cast<int32_t>(table[idx]) * scale;
+        const int32_t span = static_cast<int32_t>(axis[idx + 1u]) - x0;
+        if (span <= 0) {
+            y = y0;
+        } else {
+            // Round to nearest (truncation biased every correction by -0.5 LSB).
+            const int32_t num = (static_cast<int32_t>(table[idx + 1u]) * scale - y0) *
+                                (static_cast<int32_t>(x) - x0);
+            y = y0 + (num + ((num >= 0) ? span / 2 : -span / 2)) / span;
+        }
+    }
     constexpr int32_t kMin = std::numeric_limits<Y>::min();
     constexpr int32_t kMax = std::numeric_limits<Y>::max();
     return static_cast<Y>(y < kMin ? kMin : (y > kMax ? kMax : y));
@@ -76,8 +85,8 @@ inline uint16_t interp_u16_8pt(const int16_t* axis, const uint16_t* table,
 }
 
 inline int16_t interp_i16_8pt(const int16_t* axis, const int16_t* table,
-                              uint8_t n, int16_t x) noexcept {
-    return interp_8pt<int16_t, int16_t>(axis, table, n, x);
+                              uint8_t n, int16_t x, int32_t scale = 1) noexcept {
+    return interp_8pt<int16_t, int16_t>(axis, table, n, x, scale);
 }
 
 }  // namespace ems::engine

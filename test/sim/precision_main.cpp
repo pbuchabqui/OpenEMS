@@ -14,7 +14,10 @@
 #include <cstdio>
 #include <cstring>
 
+#include "engine/calibration.h"
 #include "engine/ecu_sched.h"
+#include "engine/ign_calc.h"
+#include "engine/table3d.h"
 #include "hal/tim5_host.h"
 #include "test/sim/engine_sim.h"
 
@@ -22,7 +25,7 @@ using namespace sim;
 
 namespace {
 
-constexpr int kStage = 3;  // review stage this tree is at
+constexpr int kStage = 5;  // review stage this tree is at
 
 int g_pass = 0, g_fail = 0, g_xfail = 0, g_xpass = 0;
 
@@ -37,7 +40,7 @@ void check(const char* scen, const char* what, double value, double limit, int x
     else if (!ok && expected_fail) { tag = "XFAIL"; ++g_xfail; }
     else                           { tag = "FAIL "; ++g_fail; }
     std::printf("  %s %-24s %-26s %9.3f <= %-7.3f%s\n", tag, scen, what, value, limit,
-                expected_fail ? (xfail_stage == 1 ? "  [stage 1]" : xfail_stage == 2 ? "  [stage 2]" : "  [stage 3]") : "");
+                expected_fail ? (xfail_stage == 1 ? "  [stage 1]" : xfail_stage == 2 ? "  [stage 2]" : "  [stage 3+]") : "");
 }
 
 Metrics run_and_print(const char* name, const Config& c, double t_from, bool wasted, Result* out = nullptr)
@@ -158,6 +161,35 @@ int main()
         check_seq("advance 12.5", run_and_print("advance 12.5 deg", c, 0.8, false), l);
         c.cmd.advance_deg = -4.0;
         check_seq("advance -4 (ATDC)", run_and_print("advance -4 deg ATDC", c, 0.8, false), l);
+    }
+
+    // ── Ignition chain end to end: table -> 0.1° advance -> spark ───────
+    {
+        static int8_t saved[ems::engine::kTableAxisSize][ems::engine::kTableAxisSize];
+        std::memcpy(saved, ems::engine::spark_table, sizeof(saved));
+        for (auto& row : ems::engine::spark_table) {
+            for (uint8_t x = 0u; x < ems::engine::kTableAxisSize; ++x) {
+                row[x] = static_cast<int8_t>(x < 10u ? 20 : 25);   // 20° up to 3000 rpm, then 25°
+            }
+        }
+        const uint32_t mid = (ems::engine::kRpmAxisX10[9] + ems::engine::kRpmAxisX10[10]) / 2u;
+        const int16_t adv_x10 = ems::engine::get_advance_x10(mid, 100u);
+        check("table advance", "table midpoint 20..25 deg -> |adv - 22.5|",
+              std::fabs(adv_x10 / 10.0 - 22.5), 0.0);
+        Config c = base(mid / 10.0);
+        c.cmd.advance_deg = adv_x10 / 10.0;
+        check_seq("table 22.5 deg", run_and_print("advance from table (22.5 deg)", c, 0.8, false),
+                  Limits{});
+        std::memcpy(ems::engine::spark_table, saved, sizeof(saved));
+    }
+
+    // ── Knock retard is per cylinder: only the knocking coil moves ──────
+    {
+        Config c = base(3000);
+        c.cmd.advance_deg = 20.0;
+        c.cmd.cyl_retard_deg[2] = 3.7;   // cylinder 2 knocks
+        const Metrics m = run_and_print("knock retard 3.7 deg on cyl 2 only", c, 0.8, false);
+        check_seq("knock per cylinder", m, Limits{});
     }
 
     // ── Transients ───────────────────────────────────────────────────────

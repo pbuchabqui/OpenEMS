@@ -40,6 +40,7 @@ extern uint32_t g_angle_tooth_mask_hi;
 
 // ── Calibration / mode read by builders (defined in ecu_sched.cpp) ──────────
 extern volatile int32_t  g_advance_x10;   // 0.1° BTDC, signed
+extern volatile int16_t  g_cyl_retard_x10[4];  // knock, 0.1°, per cylinder
 extern volatile uint32_t g_dwell_ticks;
 extern volatile uint32_t g_inj_pw_ticks;
 extern volatile uint32_t g_eoi_lead_deg;

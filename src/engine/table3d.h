@@ -66,6 +66,10 @@ uint8_t table3d_lookup_u8_prepared(const uint8_t table[kTableAxisSize][kTableAxi
 int16_t table3d_lookup_i8_prepared(const int8_t table[kTableAxisSize][kTableAxisSize],
                                    const Table2dLookup& lookup) noexcept;
 
+// int8 table (whole units) interpolated at 0.1-unit resolution (×10).
+int16_t table3d_lookup_i8_x10_prepared(const int8_t table[kTableAxisSize][kTableAxisSize],
+                                       const Table2dLookup& lookup) noexcept;
+
 int16_t table3d_lookup_s16_prepared(const int16_t table[kTableAxisSize][kTableAxisSize],
                                     const Table2dLookup& lookup) noexcept;
 
