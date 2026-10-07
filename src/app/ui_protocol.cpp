@@ -478,10 +478,6 @@ void ui_rx_byte(uint8_t byte) noexcept {
 }
 
 
-void ui_uart0_rx_isr_byte(uint8_t byte) noexcept {
-    ui_rx_byte(byte);
-}
-
 void ui_process() noexcept {
     // Auto-learn: flush VE → flash se pedido e RPM seguro (nunca em alta rotação).
     if (ems::engine::fuel_ltft_ve_burn_pending() &&
@@ -510,10 +506,6 @@ bool ui_tx_pop(uint8_t& byte) noexcept {
     byte = g_tx_buf[g_tx_tail];
     g_tx_tail = static_cast<uint16_t>((g_tx_tail + 1u) & kTxMask);
     return true;
-}
-
-uint16_t ui_tx_available() noexcept {
-    return static_cast<uint16_t>((g_tx_head - g_tx_tail) & kTxMask);
 }
 
 void ui_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p100,

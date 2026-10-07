@@ -66,14 +66,6 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept;
 
 void limp_gating_fatal() noexcept;
 void limp_gating_report_etb_problem() noexcept;
-void limp_gating_reset() noexcept;
-
-bool limp_gating_allow_etb() noexcept;
-bool limp_gating_allow_injection() noexcept;
-bool limp_gating_allow_ignition() noexcept;
-bool limp_gating_fuel_protect() noexcept;
-bool limp_gating_half_fuel_lockout() noexcept;
-
 // DFCO is decided later in the fuel path; still a single writer of the bit.
 void limp_gating_or_fuel_reason(uint16_t bit) noexcept;
 
@@ -92,12 +84,5 @@ inline constexpr uint16_t kProtectDisInjDuty  = 1u << 9;
 inline constexpr uint16_t kProtectDisSensorGroup = 0x00FFu;  // bits 0–7
 inline constexpr uint16_t kProtectDisWritable    = 0x03FFu;  // bits 0–9
 
-// Master PROTECT/BENCH: OR/AND the sensor group. Does not touch bits 8–9.
-void limp_gating_set_sensor_bypass(uint8_t on) noexcept;
-// 1 iff every sensor-group bit is set (PROTECT OFF).
-uint8_t limp_gating_sensor_bypass(void) noexcept;
-
 void limp_gating_set_protect_disable(uint16_t mask) noexcept;
-uint16_t limp_gating_protect_disable(void) noexcept;
-
 }  // namespace ems::engine

@@ -239,34 +239,11 @@ bool can0_rx_pop(CanFrame& out) noexcept {
 
 #include "hal/can.h"
 namespace ems::hal {
-static CanFrame g_tx_buf[8];
-static CanFrame g_rx_inject[8];
-static uint8_t  g_tx_cnt = 0u, g_rx_cnt = 0u, g_rx_pop_idx = 0u;
-static uint32_t g_test_ctrl1 = 0u;
-
+// Host stub: no bus. TX accepted and dropped, RX always empty.
 void can0_init() noexcept {}
 uint32_t can0_get_init_faults() noexcept { return 0u; }
-bool can0_tx(const CanFrame& f) noexcept {
-    if (g_tx_cnt < 8u) { g_tx_buf[g_tx_cnt++] = f; }
-    return true;
-}
-bool can0_rx_pop(CanFrame& out) noexcept {
-    if (g_rx_pop_idx >= g_rx_cnt) { return false; }
-    out = g_rx_inject[g_rx_pop_idx++];
-    return true;
-}
-void can_test_reset() noexcept {
-    g_tx_cnt = g_rx_cnt = g_rx_pop_idx = 0u;
-}
-bool can_test_inject_rx(const CanFrame& f) noexcept {
-    if (g_rx_cnt < 8u) { g_rx_inject[g_rx_cnt++] = f; return true; }
-    return false;
-}
-bool can_test_pop_tx(CanFrame& out) noexcept {
-    if (g_tx_cnt == 0u) { return false; }
-    out = g_tx_buf[--g_tx_cnt]; return true;
-}
-uint32_t can_test_ctrl1() noexcept { return g_test_ctrl1; }
+bool can0_tx(const CanFrame&) noexcept { return true; }
+bool can0_rx_pop(CanFrame&) noexcept { return false; }
 } // namespace ems::hal
 
 #endif  // EMS_HOST_TEST

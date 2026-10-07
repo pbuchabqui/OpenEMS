@@ -425,23 +425,6 @@ void push_sensor_calibration_to_drivers() noexcept {
     }
 }
 
-void apply_xtau_autocal_from_page(const uint8_t* page, uint16_t len) noexcept {
-    if (page == nullptr || len < 86u) {
-        return;
-    }
-    xtau_autocal_enabled = page[76];
-    std::memcpy(xtau_autocal_tau_delta, page + 78, 8u);
-}
-
-void sync_xtau_autocal_to_page(uint8_t* page, uint16_t len) noexcept {
-    if (page == nullptr || len < 86u) {
-        return;
-    }
-    page[76] = xtau_autocal_enabled;
-    page[77] = 1u;
-    std::memcpy(page + 78, xtau_autocal_tau_delta, 8u);
-}
-
 // page0 layout v5: launch 191-201, TC 202-215 (see calibration.h).
 void launch_tc_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
     if (page0 == nullptr || len < (kLaunchTcPage0Off + kLaunchTcPage0Len)) {

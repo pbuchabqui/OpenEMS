@@ -27,12 +27,5 @@ bool can0_tx(const CanFrame& frame) noexcept;
 bool can0_rx_pop(CanFrame& out) noexcept;
 uint32_t can0_get_init_faults() noexcept;
 
-#if defined(EMS_HOST_TEST)
-void can_test_reset() noexcept;
-bool can_test_inject_rx(const CanFrame& frame) noexcept;
-bool can_test_pop_tx(CanFrame& out) noexcept;
-uint32_t can_test_ctrl1() noexcept;
-#endif
-
 }  // namespace ems::hal
 

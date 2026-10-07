@@ -38,7 +38,7 @@ static_assert(sizeof(UiRealtimeData) == 86u, "UiRealtimeData must be 86 bytes");
 
 void ui_init() noexcept;
 void ui_rx_byte(uint8_t byte) noexcept;
-void ui_uart0_rx_isr_byte(uint8_t byte) noexcept;  // compat wrapper
+  // compat wrapper
 void ui_process() noexcept;
 void ui_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p100,
                           uint8_t lambda_target_d4 = 0u, int8_t ltft_pct = 0) noexcept;
@@ -61,8 +61,6 @@ void ui_set_rev_limit_active(bool active) noexcept;
 void ui_update_rt_map_fuel(uint16_t map_fused_bar_x100, uint32_t net_pw_us) noexcept;
 
 bool ui_tx_pop(uint8_t& byte) noexcept;
-uint16_t ui_tx_available() noexcept;
-
 #if defined(EMS_HOST_TEST)
 void ui_test_reset() noexcept;
 #endif

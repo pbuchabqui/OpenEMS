@@ -28,10 +28,4 @@ void tim4_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept;
 void etb_pwm_init(uint32_t freq_hz);
 void etb_pwm_set_duty_x10(uint16_t duty_pct_x10) noexcept;
 
-// Deprecated aliases (hygiene PR-13) — prefer etb_pwm_*.
-inline void tim15_etb_pwm_init(uint32_t freq_hz) { etb_pwm_init(freq_hz); }
-inline void tim15_etb_set_duty_x10(uint16_t duty_pct_x10) noexcept {
-    etb_pwm_set_duty_x10(duty_pct_x10);
-}
-
 } // namespace ems::hal

@@ -237,7 +237,6 @@ bool knock_test_window_active() noexcept { return g.window_active; }
 uint8_t knock_test_window_cyl() noexcept { return g.window_cyl; }
 void knock_test_set_adc_raw(uint16_t raw) noexcept { knock_adc_update(raw); }
 uint16_t knock_test_get_noise_p2p_ema() noexcept { return g.noise_p2p_ema; }
-uint16_t knock_test_get_dead_windows() noexcept { return g.dead_windows; }
 #endif
 
 }  // namespace ems::engine

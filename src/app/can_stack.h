@@ -24,9 +24,6 @@ void can_stack_process(uint32_t now_ms,
                        uint8_t vvt_exhaust_pct,
                        uint16_t status_bits) noexcept;
 
-// Combustível acumulado desde boot em µl (wraps em ~4295 L)
-uint32_t can_stack_fco_accum_ul() noexcept;
-
 // Lambda × 1000 do último frame WBO2 recebido (raw, sem fallback)
 uint16_t can_stack_lambda_milli() noexcept;
 
@@ -44,10 +41,7 @@ bool can_stack_wbo2_fault() noexcept;
 // Liberta o gate closed_loop_allowed do STFT/LTFT sem WBO2 físico no CAN.
 void can_stack_set_bench_lambda(bool enable, uint16_t lambda_milli) noexcept;
 
-uint8_t can_stack_wbo2_status() noexcept;
-
 #if defined(EMS_HOST_TEST)
-void can_stack_test_reset() noexcept;
 #endif
 
 } // namespace ems::app
