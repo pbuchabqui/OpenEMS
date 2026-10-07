@@ -126,8 +126,7 @@ void test_ign_dwell(void) {
     const IgnScheduleParams p = build_ign_schedule(0u, 250, 30u, 3000u);
     CHECK_EQ(p.cyl, 0u, "cyl=0"); CHECK_EQ(p.spark_x10, 250u, "spark=250"); CHECK_EQ(p.dwell_start_x10, 790u, "dwell_start=790");
     CHECK_EQ(build_ign_schedule(5u, 100, 30u, 3000u).cyl, 1u, "cyl=5 masked to 1");
-    // inj_pw_to_ticks (host mode: ×60)
-    CHECK_EQ(inj_pw_us_to_scheduler_ticks(1000u), 60000u, "1000µs×60=60000 ticks");
+    CHECK_EQ(inj_pw_us_to_scheduler_ticks(1000u), 62500u, "1000µs = 62500 ticks (16 ns)");
     CHECK_EQ(inj_pw_us_to_scheduler_ticks(0u), 0u, "0µs→0");
 }
 

@@ -21,7 +21,7 @@ constexpr uint8_t kIn2Pin = 3u;   // PD3
 // 0 fixo (PC3 passou a VBATT), portanto o PID de posição vê erro = demanda − 0.
 // Assim que a demanda sobe, o integrador satura e o driver passa a CONDUZIR
 // PA7/PD3 e a pôr PWM a fundo em PB10 — três pinos accionados a sério para um
-// estágio que não existe. Guardar aqui é o mesmo padrão de sdmmc_init().
+// estágio que não existe. Guardar aqui evita accionar hardware não montado.
 //
 // Ao repor o EWG (v2): pôr a 1, devolver-lhe um canal de ADC próprio para a
 // realimentação de posição, e rever o par DIR (PD3 só existe em packages com

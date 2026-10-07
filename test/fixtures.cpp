@@ -42,10 +42,11 @@ void ckp_feed_n_then_gap(uint32_t n, uint32_t p) {
     for (uint32_t i = 0; i < n; ++i) { ckp_fire(p); }
     ckp_fire(p * 3u);
 }
+// Real 60-2: tooth 0 (gap edge) + 57 normal edges, then the 3-period gap edge.
 void ckp_reach_full_sync(uint32_t p) {
     ckp_test_reset(); g_ckp_cap = 0u;
-    ckp_feed_n_then_gap(55u, p);
-    ckp_feed_n_then_gap(55u, p);
+    ckp_feed_n_then_gap(57u, p);
+    ckp_feed_n_then_gap(57u, p);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

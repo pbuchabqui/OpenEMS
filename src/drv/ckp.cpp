@@ -72,10 +72,7 @@
 
 // ── Mock de registradores para testes host ───────────────────────────────────
 #if defined(EMS_HOST_TEST)
-volatile uint32_t ems_test_tim5_ccr1  = 0u;
-volatile uint32_t ems_test_tim5_ccr2  = 0u;
-volatile uint32_t ems_test_cam_gpio_idr = 0u;
-volatile uint32_t ems_test_tim5_cnt   = 0u;
+#include "hal/tim5_host.h"
 #define TIM5_CNT ems_test_tim5_cnt
 #endif
 

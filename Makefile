@@ -2,7 +2,7 @@
 # BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE pinout)
 # Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
-.PHONY: all clean host-test host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
+.PHONY: all clean host-test precision-test host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
         secrets-check lint-includes format format-all format-check ci-local
 
 COMPILER_ARM = arm-none-eabi-g++
@@ -89,7 +89,6 @@ APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp \
           $(SRC_DIR)/app/ui_protocol_envelope.cpp \
           $(SRC_DIR)/app/can_stack.cpp \
           $(SRC_DIR)/app/can_rx_map.cpp \
-          $(SRC_DIR)/app/datalog.cpp \
           $(SRC_DIR)/app/nvm_boot.cpp \
           $(SRC_DIR)/app/vehicle_inputs_bridge.cpp
 HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp \
@@ -97,7 +96,6 @@ HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp \
                   $(SRC_DIR)/hal/etb_driver.cpp $(SRC_DIR)/hal/tle8888.cpp \
                   $(SRC_DIR)/hal/ewg_driver.cpp \
                   $(SRC_DIR)/hal/flex_fuel.cpp \
-                  $(SRC_DIR)/hal/sdmmc.cpp \
                   $(SRC_DIR)/hal/out_pins.cpp
 HAL_STM32H562_SRC = $(SRC_DIR)/hal/stm32h562/system.cpp \
                     $(SRC_DIR)/hal/stm32h562/timer.cpp \
@@ -135,6 +133,16 @@ HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(HOST_TEST_HARNESS) $(HOST_TEST_SUITES)
 HOST_TEST_BIN = $(HOST_DIR)/mvp_bench_tests
 
+# Virtual-engine timing tests (make precision-test): the real CKP decoder +
+# scheduler driven by a kinematic engine model through one simulated TIM5.
+PRECISION_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
+                     $(SRC_DIR)/hal/stm32h562/timer.cpp \
+                     $(SRC_DIR)/hal/stm32h562/system.cpp \
+                     $(TEST_DIR)/harness.cpp \
+                     $(TEST_DIR)/sim/engine_sim.cpp \
+                     $(TEST_DIR)/sim/precision_main.cpp
+PRECISION_TEST_BIN = $(HOST_DIR)/precision_tests
+
 # Binário próprio p/ knock com EMS_KNOCK_HW_PRESENT=1 (make host-test-knock-hw)
 # — mesma lógica de teste de test_knock_hw_wiring.cpp que a suite principal já
 # compila com a flag em 0; aqui só troca o main() (test_knock_hw_main.cpp em
@@ -155,6 +163,7 @@ help:
 	@echo "Usage: make [target] [BOARD=rgt6|vgt6] [WERROR=0|1]"
 	@echo ""
 	@echo "  host-test       Host regression (always RGT6 pin map stubs)"
+	@echo "  precision-test  Virtual-engine spark/dwell/fuel timing accuracy"
 	@echo "  host-test-vgt6  Standalone VGT6 GPIOE INJ/IGN BSRR coverage"
 	@echo "  host-test-knock-hw  Standalone knock wiring coverage (EMS_KNOCK_HW_PRESENT=1)"
 	@echo "  firmware        Build for BOARD (default rgt6)"
@@ -177,6 +186,12 @@ host-test:
 	@echo "  HOST $(HOST_TEST_BIN)"
 	@$(CXX_HOST) $(CFLAGS_HOST) $(HOST_TEST_SRC) -o $(HOST_TEST_BIN) -lm
 	@$(HOST_TEST_BIN)
+
+precision-test:
+	@mkdir -p $(HOST_DIR)
+	@echo "  HOST $(PRECISION_TEST_BIN)"
+	@$(CXX_HOST) $(CFLAGS_HOST) $(PRECISION_TEST_SRC) -o $(PRECISION_TEST_BIN) -lm
+	@$(PRECISION_TEST_BIN)
 
 # Standalone VGT6 pin-map coverage: out_pins.h tables are compile-time
 # selected, so the RGT6 host-test never runs the GPIOE path. Separate binary

@@ -13,6 +13,7 @@ uint32_t gpioa_otyper = 0u, gpiob_otyper = 0u, gpioc_otyper = 0u, gpioe_otyper =
 uint32_t gpioa_pupdr = 0u, gpiob_pupdr = 0u, gpioc_pupdr = 0u, gpioe_pupdr = 0u;
 uint32_t gpioa_afrh = 0u;
 uint32_t gpioa_bsrr = 0u, gpiob_bsrr = 0u, gpioc_bsrr = 0u, gpioe_bsrr = 0u;
+void (*write_hook)(uint8_t, uint8_t) = nullptr;
 }  // namespace ems::hal::out_pins_host
 
 #else

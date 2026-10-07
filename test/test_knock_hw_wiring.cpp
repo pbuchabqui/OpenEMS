@@ -46,21 +46,21 @@ void test_knock_window_scheduler_wiring(void) {
     // até entrar em sequencial — mesma mecânica de timing (2ª borda CMP cai
     // no centro da janela ±25% de tolerância).
     ckp_reach_full_sync();
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "pré-condição: entrou em sequencial");
 
     // Dente-a-dente daqui em diante (não ckp_feed_n_then_gap(), que é opaco
     // demais para observar transições intermédias) — reproduz exactamente a
-    // sua forma interna (55 dentes normais + 1 dente de gap 3×período) para
+    // sua forma interna (57 dentes normais + 1 dente de gap 3×período) para
     // manter tooth_index a envolver correctamente (o decoder só o reinicia
     // no gap detectado por razão de período) e cam_fire() a cada 2 "voltas"
     // (mesma cadência do setup acima) para não deixar cmp_confirms
@@ -77,7 +77,7 @@ void test_knock_window_scheduler_wiring(void) {
     int32_t first_cyl  = -1;
     int32_t second_cyl = -1;
     for (uint32_t rev = 0u; rev < 12u && second_cyl < 0; ++rev) {
-        for (uint32_t t = 0u; t < 55u; ++t) {
+        for (uint32_t t = 0u; t < kWheelNormalTeeth; ++t) {
             ckp_fire(kNormalPeriod);
             if (knock_test_window_active()) {
                 const uint8_t cyl = knock_test_window_cyl();
@@ -114,7 +114,7 @@ void test_knock_window_scheduler_wiring(void) {
     ecu_sched_set_mspark(2u, 1000u, 18u);
     int32_t ms_cyl = -1;
     for (uint32_t rev = 0u; rev < 8u && ms_cyl < 0; ++rev) {
-        for (uint32_t t = 0u; t < 55u; ++t) {
+        for (uint32_t t = 0u; t < kWheelNormalTeeth; ++t) {
             ckp_fire(kNormalPeriod);
             if (knock_test_window_active()) {
                 ms_cyl = static_cast<int32_t>(knock_test_window_cyl());
@@ -146,7 +146,7 @@ void test_knock_window_scheduler_wiring(void) {
     // Spark-cut of the open cylinder must close the window (no ADC
     // accumulation across a cut).
     for (uint32_t rev = 0u; rev < 8u && !knock_test_window_active(); ++rev) {
-        for (uint32_t t = 0u; t < 55u && !knock_test_window_active(); ++t) {
+        for (uint32_t t = 0u; t < kWheelNormalTeeth && !knock_test_window_active(); ++t) {
             ckp_fire(kNormalPeriod);
         }
         ckp_fire(kNormalPeriod * 3u);
@@ -162,7 +162,7 @@ void test_knock_window_scheduler_wiring(void) {
     // Mesmo drive, mas sem hardware: a janela nunca deve abrir.
     bool ever_active = knock_test_window_active();
     for (uint32_t rev = 0u; rev < 12u && !ever_active; ++rev) {
-        for (uint32_t t = 0u; t < 55u && !ever_active; ++t) {
+        for (uint32_t t = 0u; t < kWheelNormalTeeth && !ever_active; ++t) {
             ckp_fire(kNormalPeriod);
             ever_active = knock_test_window_active();
         }

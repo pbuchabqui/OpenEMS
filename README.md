@@ -297,7 +297,8 @@ isolado sem big-bang rewrite.
 make ci-local                   # secrets + host/fw dual WERROR + lint A + B
 # equivalentes manuais:
 make secrets-check
-make host-test WERROR=1         # referencia: 1229 PASS / 0 FAIL
+make host-test WERROR=1         # referencia: 1280 PASS / 0 FAIL
+make precision-test             # motor virtual: erro de centelha/dwell/combustivel (0 FAIL, 0 XPASS)
 make firmware-rgt6 WERROR=1
 make firmware-vgt6 WERROR=1
 make lint-includes LINT_PHASE=A LINT_ERROR=1   # ban ENGINE/DRV → app/
@@ -324,6 +325,12 @@ make format                     # clang-format so em ficheiros dirty (on-touch)
 | `test/run_all.cpp` | `main()` — **ordem fixa** das suites |
 | `test/suite_registry.h` | declaracoes das funcoes `test_*` |
 | `test/test_*.cpp` | suites (etb, torque, ckp, fuel, sched, protocol, …) |
+| `test/sim/engine_sim.{h,cpp}` | motor virtual: cinematica θ(t), roda 60-2 real + came, jitter/ruido, modelo de latencia da ISR, log de pinos com timestamp |
+| `test/sim/precision_main.cpp` | `make precision-test`: compara o que o motor recebe (angulo de centelha, dwell, combustivel, EOI) com o oraculo cinematico; defeitos conhecidos = XFAIL com a etapa que os corrige |
+
+Host: um unico TIM5 simulado (`hal/tim5_host.h`) e partilhado por captura
+CKP/CMP, comparador do scheduler e `tim5_count()`; `out_pin_write` expoe um
+hook (`out_pins_host::write_hook`) para o simulador registar cada transicao.
 
 Nao reintroduzir monolitio `mvp_bench_tests.cpp`. Novos testes: ficheiro de suite
 existente ou novo `test_*.cpp` + registo em `run_all.cpp` e `suite_registry.h`.
