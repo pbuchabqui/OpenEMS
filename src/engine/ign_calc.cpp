@@ -17,12 +17,6 @@ uint16_t normalize_7200(int32_t deg_x10) noexcept {
     return static_cast<uint16_t>(out);
 }
 
-int16_t lerp_q8_i16(int16_t a, int16_t b, uint8_t frac_q8) noexcept {
-    if (frac_q8 == 255u) { return b; }
-    const int32_t delta = static_cast<int32_t>(b) - static_cast<int32_t>(a);
-    return static_cast<int16_t>(a + ((delta * static_cast<int32_t>(frac_q8)) >> 8));
-}
-
 }  // namespace
 
 namespace ems::engine {
@@ -37,19 +31,8 @@ int16_t etb_get_idle_spark_trim() noexcept { return 0; }
 
 
 int16_t get_advance(uint32_t rpm_x10, uint16_t load_bar_x100) noexcept {
-    const uint8_t xi = table_axis_index(kRpmAxisX10, kTableAxisSize, rpm_x10);
-    const uint8_t yi = table_axis_index(kLoadAxisBarX100, kTableAxisSize, load_bar_x100);
-    const uint8_t fx = table_axis_frac_q8(kRpmAxisX10, xi, rpm_x10);
-    const uint8_t fy = table_axis_frac_q8(kLoadAxisBarX100, yi, load_bar_x100);
-
-    const int16_t v00 = static_cast<int16_t>(spark_table[yi][xi]);
-    const int16_t v10 = static_cast<int16_t>(spark_table[yi][xi + 1u]);
-    const int16_t v01 = static_cast<int16_t>(spark_table[yi + 1u][xi]);
-    const int16_t v11 = static_cast<int16_t>(spark_table[yi + 1u][xi + 1u]);
-
-    const int16_t v0 = lerp_q8_i16(v00, v10, fx);
-    const int16_t v1 = lerp_q8_i16(v01, v11, fx);
-    return lerp_q8_i16(v0, v1, fy);
+    return table3d_lookup_i8_prepared(
+        spark_table, table3d_prepare_lookup(kRpmAxisX10, kLoadAxisBarX100, rpm_x10, load_bar_x100));
 }
 
 int16_t get_advance_prepared(const Table2dLookup& lookup) noexcept {

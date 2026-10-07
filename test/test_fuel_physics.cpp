@@ -10,12 +10,16 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 
 #include "engine/engine_config.h"
 #include "engine/fuel_calc.h"
 #include "engine/transient_fuel.h"
 #include "engine/xtau_autocalib.h"
 #include "engine/fuel_trim.h"
+#include "engine/map_estimator.h"
+#include "engine/table3d.h"
+#include "engine/quick_crank.h"
 
 using namespace ems::engine;
 
@@ -207,4 +211,72 @@ void test_fuel_physics_ltft_learns_whole_error(void) {
     CHECK_TRUE(ltft >= 90 && ltft <= 110, "LTFT within 1 % of the +10 % the engine needs");
     CHECK_TRUE(stft >= -15 && stft <= 15, "STFT back near 0");
     fuel_reset_adaptives();
+}
+
+void test_fuel_physics_map_estimator_unbiased(void) {
+    section("fuel physics: MAP estimator in steady state equals the sensor");
+    for (uint16_t kpa = 20u; kpa <= 250u; kpa = static_cast<uint16_t>(kpa + 15u)) {
+        uint16_t est = 0u;
+        for (int i = 0; i < 3000; ++i) {
+            est = map_estimator_update(kpa, 150u, 2u, 30000u, 250, true);
+        }
+        if (est != kpa) { std::printf("    sensor %u kPa -> estimate %u kPa\n", kpa, est); }
+        CHECK_EQ(est, kpa, "steady MAP estimate == sensor (no truncation bias)");
+    }
+}
+
+// Bilinear table interpolation against the exact (double) bilinear value.
+void test_table_interpolation_unbiased(void) {
+    section("tables: bilinear interpolation rounds to nearest (no floor bias)");
+    static uint8_t t[kTableAxisSize][kTableAxisSize];
+    for (uint8_t y = 0u; y < kTableAxisSize; ++y) {
+        for (uint8_t x = 0u; x < kTableAxisSize; ++x) {
+            t[y][x] = static_cast<uint8_t>(30u + 7u * x + 3u * y + ((x * y) % 5u));
+        }
+    }
+    double sum = 0.0, worst = 0.0;
+    int n = 0;
+    for (uint32_t rpm = kRpmAxisX10[0]; rpm <= kRpmAxisX10[kTableAxisSize - 1u]; rpm += 371u) {
+        for (uint32_t map = kLoadAxisBarX100[0]; map <= kLoadAxisBarX100[kTableAxisSize - 1u]; map += 3u) {
+            const Table2dLookup lk = table3d_prepare_lookup(kRpmAxisX10, kLoadAxisBarX100, rpm, map);
+            const double fx = (rpm >= kRpmAxisX10[lk.xi + 1u]) ? 1.0
+                : double(rpm - kRpmAxisX10[lk.xi]) / double(kRpmAxisX10[lk.xi + 1u] - kRpmAxisX10[lk.xi]);
+            const double fy = (map >= kLoadAxisBarX100[lk.yi + 1u]) ? 1.0
+                : double(map - kLoadAxisBarX100[lk.yi]) / double(kLoadAxisBarX100[lk.yi + 1u] - kLoadAxisBarX100[lk.yi]);
+            const double exact =
+                t[lk.yi][lk.xi] * (1 - fx) * (1 - fy) + t[lk.yi][lk.xi + 1u] * fx * (1 - fy) +
+                t[lk.yi + 1u][lk.xi] * (1 - fx) * fy + t[lk.yi + 1u][lk.xi + 1u] * fx * fy;
+            const double err = table3d_lookup_u8_prepared(t, lk) - exact;
+            sum += err;
+            if (std::fabs(err) > worst) { worst = std::fabs(err); }
+            ++n;
+        }
+    }
+    std::printf("    %d points: mean error %+.3f LSB, worst %.3f LSB\n", n, sum / n, worst);
+    CHECK_TRUE(std::fabs(sum / n) < 0.05, "no systematic bias (|mean| < 0.05 LSB)");
+    CHECK_TRUE(worst <= 0.75, "worst error <= 0.5 LSB rounding + fraction quantization");
+}
+
+// Cranking fuel = REQ_FUEL x crank multiplier(CLT), whatever the sync level.
+// Before: FULL sync used the running PW (VE x MAP x warmup(CLT)) x crank(CLT),
+// HALF used REQ x crank(CLT) -> a step at HALF->FULL and CLT counted twice.
+void test_fuel_physics_crank_fuel_continuous(void) {
+    section("fuel physics: crank fuel identical in HALF and FULL sync");
+    quick_crank_reset();
+    const uint32_t req = default_req_fuel_us();
+    for (int16_t clt : {int16_t(-200), int16_t(0), int16_t(200), int16_t(800)}) {
+        QuickCrankOutput qc = quick_crank_update(0u, 2500u, true, clt, 8);
+        CHECK_TRUE(qc.cranking, "250 rpm -> cranking");
+        const uint32_t half = quick_crank_flow_us(qc, 0u);
+        // FULL-sync running estimate at crank: VE 60, MAP 95 kPa, warmup x1.4.
+        const uint32_t running = static_cast<uint32_t>(req * 0.60 * 0.95 * 1.4);
+        const uint32_t full = quick_crank_flow_us(qc, running);
+        const uint32_t expect = static_cast<uint32_t>(
+            (static_cast<uint64_t>(req) * qc.fuel_mult_x256) / 256u);
+        std::printf("    CLT %+5.1f C: HALF %u us, FULL %u us (REQ x %.2f = %u)\n",
+                    clt / 10.0, half, full, qc.fuel_mult_x256 / 256.0, expect);
+        CHECK_EQ(full, half, "no step HALF -> FULL");
+        CHECK_EQ(half, expect, "crank flow = REQ x crank mult (CLT once)");
+    }
+    quick_crank_reset();
 }

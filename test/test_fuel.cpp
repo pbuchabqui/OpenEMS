@@ -61,35 +61,6 @@ void test_fuel_calc_req_fuel_us(void) {
     CHECK_TRUE(calc_req_fuel_us(50000u, 1u, 1u, 100u) <= 50000u, "clamped at 50ms");
 }
 
-void test_fuel_calc_base_pw(void) {
-    section("fuel_calc: calc_base_pw_us");
-    CHECK_TRUE(calc_base_pw_us(5000u, 80u, 100u, 101u) > 0u, "base_pw > 0");
-    CHECK_EQ(calc_base_pw_us(5000u, 100u, 100u, 100u), 5000u, "VE=100% MAP=REF → pw=req");
-    CHECK_EQ(calc_base_pw_us(5000u,  0u, 100u, 100u),     0u, "ve=0 → 0");
-    CHECK_EQ(calc_base_pw_us(5000u, 80u, 100u,   0u),     0u, "map_ref=0 → 0");
-    CHECK_EQ(calc_base_pw_us(5000u, 80u, 400u, 100u),     0u, "MAP>3 bar → 0");
-    CHECK_EQ(calc_base_pw_us(   0u, 80u, 100u, 100u),     0u, "req=0 → 0");
-}
-
-void test_fuel_apply_lambda_target(void) {
-    section("fuel_calc: apply_lambda_target_pw_us");
-    CHECK_EQ(apply_lambda_target_pw_us(5000u, 1000u), 5000u, "lambda=1.000 → unchanged");
-    CHECK_NEAR(static_cast<float>(apply_lambda_target_pw_us(5000u, 850u)),  5882.0f, 5.0f, "lambda=0.850 → richer");
-    CHECK_NEAR(static_cast<float>(apply_lambda_target_pw_us(5000u, 1200u)), 4167.0f, 5.0f, "lambda=1.200 → leaner");
-    CHECK_EQ(apply_lambda_target_pw_us(5000u, 600u),  5000u, "lambda<0.65 → passthrough");
-    CHECK_EQ(apply_lambda_target_pw_us(5000u, 1300u), 5000u, "lambda>1.20 → passthrough");
-    CHECK_EQ(apply_lambda_target_pw_us(0u, 1000u),       0u, "base=0 → 0");
-}
-
-void test_fuel_apply_trim(void) {
-    section("fuel_calc: apply_fuel_trim_pw_us");
-    CHECK_EQ(apply_fuel_trim_pw_us(5000u,    0), 5000u, "trim=0 → unchanged");
-    CHECK_EQ(apply_fuel_trim_pw_us(5000u,  100), 5500u, "+10% → +10%");
-    CHECK_EQ(apply_fuel_trim_pw_us(5000u, -100), 4500u, "-10% → -10%");
-    CHECK_EQ(apply_fuel_trim_pw_us(5000u,  500), 7500u, "+50% → ×1.5");
-    CHECK_EQ(apply_fuel_trim_pw_us(0u,     100),    0u, "base=0 → 0");
-}
-
 void test_fuel_calc_final_pw(void) {
     section("fuel_calc: calc_final_pw_us");
     CHECK_EQ(calc_final_pw_us(5000u, 256u, 256u, 500u), 5500u, "neutral corr + 500µs dead");
@@ -223,17 +194,12 @@ void test_fuel_table_lookups(void) {
 }
 
 void test_fuel_default_req_and_base_default(void) {
-    section("fuel_calc: default_req_fuel_us / calc_base_pw_us_default");
+    section("fuel_calc: default_req_fuel_us");
 
     // default_req_fuel_us uses compile-time engine config
     const uint32_t req = default_req_fuel_us();
     CHECK_TRUE(req > 0u && req <= 50000u, "default_req_fuel_us in (0, 50ms]");
 
-    // calc_base_pw_us_default: same result as calc_base_pw_us with defaults
-    const uint32_t base = calc_base_pw_us_default(80u, 100u);
-    CHECK_TRUE(base > 0u, "calc_base_pw_us_default > 0 at VE=80% MAP=100kPa");
-    CHECK_EQ(calc_base_pw_us_default(0u, 100u), 0u, "ve=0 → 0");
-    CHECK_EQ(calc_base_pw_us_default(80u, 400u), 0u, "MAP>3bar → 0");
 }
 
 void test_fuel_default_fast(void) {
@@ -285,20 +251,6 @@ void test_fuel_default_fast(void) {
     CHECK_TRUE(r301 >= 300u && r301 <= 302u, "PW(301)/PW(256) ≈ 301/256");
 }
 
-void test_fuel_corr_warmup(void) {
-    section("fuel_calc: corr_warmup");
-    // warmup_corr_axis_x10: {-400,-100,0,200,400,700,900,1100}
-    // warmup_corr_x256:     {420, 380,350,320,290,256,256, 256}
-    const uint16_t w_cold = corr_warmup(-400);  // idx=0 → 420
-    CHECK_EQ(w_cold, 420u, "corr_warmup at -40°C = 420 (1.64×)");
-
-    const uint16_t w_warm = corr_warmup(900);   // idx=6 → 256
-    CHECK_EQ(w_warm, 256u, "corr_warmup at 90°C = 256 (1.0×, no enrichment)");
-
-    // Monotonic: colder → more enrichment
-    CHECK_TRUE(corr_warmup(-100) > corr_warmup(700), "corr_warmup monotonically decreasing");
-}
-
 void test_fuel_corr_iat_density(void) {
     section("fuel_calc: corr_iat_density_q8 (ideal gas, T_ref/T)");
 
@@ -324,60 +276,37 @@ void test_fuel_corr_iat_density(void) {
 }
 
 void test_fuel_ae(void) {
-    section("fuel_calc: fuel_ae_set_threshold / fuel_ae_set_taper / calc_ae_pw_us");
+    section("fuel_calc: calc_ae_pw_from_tpsdot (tip-in / tip-out / taper)");
 
     fuel_reset_adaptives();
+    ae_tpsdot_threshold_x10 = 10u;
+    fuel_ae_apply_taper_raw(4u);  // 4 ticks legados = 8 ms
 
-    // Set threshold=10 x10 (1.0%/ms), taper=4 cycles
-    fuel_ae_set_threshold(10u);
-    fuel_ae_set_taper(4u);
-
-    // No acceleration: TPS same → ae=0
-    const int32_t ae_idle = calc_ae_pw_us(500u, 500u, 10u, 800);
-    CHECK_EQ(ae_idle, 0, "no TPS change → ae=0");
-
-    // Large TPS step: delta=300 x10 in 10ms → tpsdot=%/s×10 = 30000 → clamp 1000
-    const int32_t ae_accel = calc_ae_pw_us(800u, 500u, 10u, 800);
-    CHECK_TRUE(ae_accel > 0, "large TPS step → ae > 0");
-    CHECK_TRUE(ae_accel <= 5000, "ae ≤ ae_max_pw_us=5000");
-    // Direct API (map-fusion path)
-    fuel_reset_adaptives();
-    fuel_ae_set_threshold(10u);
-    fuel_ae_set_taper(4u);
-    CHECK_TRUE(calc_ae_pw_from_tpsdot(100, 800) > 0, "calc_ae_pw_from_tpsdot tip-in");
+    CHECK_EQ(calc_ae_pw_from_tpsdot(0, 800), 0, "no TPS change → ae=0");
+    const int32_t ae_accel = calc_ae_pw_from_tpsdot(1000, 800);
+    CHECK_TRUE(ae_accel > 0, "large tip-in → ae > 0");
+    CHECK_TRUE(ae_accel <= static_cast<int32_t>(ae_max_pw_us), "ae ≤ ae_max_pw_us");
 
     // Tip-out (DE): negative tpsdot below −threshold → enleanment (µs < 0)
     fuel_reset_adaptives();
-    fuel_ae_set_threshold(10u);
-    fuel_ae_set_taper(4u);
     const int32_t de = calc_ae_pw_from_tpsdot(static_cast<int16_t>(-100), 800);
     CHECK_TRUE(de < 0, "tip-out tpsdot → DE < 0");
-    const int32_t ae_decel = calc_ae_pw_us(200u, 800u, 10u, 800);
-    CHECK_TRUE(ae_decel <= 0, "TPS close → DE ≤ 0 (enleanment or decay)");
 
-    // dt=0 guard
-    CHECK_EQ(calc_ae_pw_us(800u, 0u, 0u, 800), 0, "dt=0 → ae=0");
-
-    // Taper decay: with taper=4, the AE pulse decays to 0 over 4 cycles without TPS change.
-    // Reset AE internal state by resetting adaptives, then fire one large step,
-    // then call with no TPS delta 4 more times → pulse should be 0.
+    // Taper: after a tip-in the pulse decays to 0 within taper_ms.
     fuel_reset_adaptives();
-    fuel_ae_set_threshold(10u);
-    fuel_ae_set_taper(4u);
-    calc_ae_pw_us(800u, 500u, 10u, 800);  // seed the decay counter
-    int32_t ae_t1 = calc_ae_pw_us(500u, 500u, 10u, 800);  // no delta: decay tick 1
-    (void)calc_ae_pw_us(500u, 500u, 10u, 800);            // decay tick 2
-    (void)calc_ae_pw_us(500u, 500u, 10u, 800);            // decay tick 3
-    int32_t ae_t4 = calc_ae_pw_us(500u, 500u, 10u, 800);  // decay tick 4
-    CHECK_TRUE(ae_t1 >= ae_t4, "AE taper: pulse non-increasing over cycles");
-    CHECK_EQ(ae_t4, 0, "AE taper: pulse = 0 at or after taper_cycles=4");
+    (void)calc_ae_pw_from_tpsdot(1000, 800);
+    const int32_t ae_t1 = calc_ae_pw_from_tpsdot(0, 800);
+    int32_t ae_tn = ae_t1;
+    for (int i = 0; i < 8; ++i) { ae_tn = calc_ae_pw_from_tpsdot(0, 800); }
+    CHECK_TRUE(ae_t1 >= ae_tn, "AE taper: pulse non-increasing");
+    CHECK_EQ(ae_tn, 0, "AE taper: pulse = 0 after taper window");
 
     // Heurística NVM: raw≤64 = ticks legados×2; raw>64 = ms directo
     fuel_ae_apply_taper_raw(8u);
     CHECK_EQ(ems::engine::ae_taper_ms, 16u, "taper raw=8 legado → 16 ms");
     fuel_ae_apply_taper_raw(100u);
     CHECK_EQ(ems::engine::ae_taper_ms, 100u, "taper raw=100 → 100 ms");
-    fuel_ae_set_taper(4u);  // restaura para outros testes via ticks
+    fuel_ae_apply_taper_raw(4u);
 
     // STFT freeze flag: tip-in sets, pulse==0 clears immediately (not sticky).
     fuel_ae_reset();

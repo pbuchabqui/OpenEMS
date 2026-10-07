@@ -86,9 +86,6 @@ int main(void) {
     // ── Fuel Calc ─────────────────────────────────────────────────────────────
     printf("\n=== FUEL CALC ===");
     test_fuel_calc_req_fuel_us();
-    test_fuel_calc_base_pw();
-    test_fuel_apply_lambda_target();
-    test_fuel_apply_trim();
     test_fuel_calc_final_pw();
     test_fuel_corr_functions();
     test_fuel_decel_cut();
@@ -122,7 +119,6 @@ int main(void) {
     test_fuel_table_lookups();
     test_fuel_default_req_and_base_default();
     test_fuel_default_fast();
-    test_fuel_corr_warmup();
     test_fuel_corr_iat_density();
     test_fuel_ae();
     test_fuel_adaptives_reset();
@@ -264,8 +260,6 @@ int main(void) {
     // ── VERIFICAÇÃO MATEMÁTICA ─────────────────────────────────────────────
     printf("\n=== VERIFICAÇÃO MATEMÁTICA ===");
     test_math_req_fuel();
-    test_math_base_pw();
-    test_math_lambda_pw();
     test_math_table3d_bilinear();
     test_math_corrections();
     test_math_stft_gains();
@@ -321,6 +315,10 @@ int main(void) {
     test_fuel_physics_xtau_steady_state();
     test_fuel_physics_delta_p();
     test_fuel_physics_ltft_learns_whole_error();
+    test_knock_threshold_never_drifts_above_calibration();
+    test_fuel_physics_map_estimator_unbiased();
+    test_table_interpolation_unbiased();
+    test_fuel_physics_crank_fuel_continuous();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

@@ -25,6 +25,12 @@ uint32_t quick_crank_apply_pw_us(uint32_t base_pw_us,
                                  uint16_t fuel_mult_x256,
                                  uint32_t min_pw_us) noexcept;
 
+/// Fluxo do injetor (µs/ciclo, sem dead time) a partir da saída do quick-crank.
+/// Na partida o combustível é REQ_FUEL × multiplicador de partida(CLT), igual
+/// em HALF e FULL sync (sem VE/MAP/warmup — evita degrau e CLT contado duas
+/// vezes). Fora da partida: fluxo de marcha × afterstart.
+uint32_t quick_crank_flow_us(const QuickCrankOutput& qc, uint32_t running_flow_us) noexcept;
+
 /**
  * @brief Atualiza CLT e dead time usados pelo hook de dente para calcular o
  *        prime pulse. Chamar do loop de fundo (2 ms); seguro para ISR-side.

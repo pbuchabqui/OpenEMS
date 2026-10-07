@@ -260,3 +260,17 @@ void test_aux_test_getters(void) {
 // TIMER HAL (stubs em host — testa que não crasham)
 // ═══════════════════════════════════════════════════════════════════════════
 
+
+// Clean running must never make knock detection less sensitive than the
+// calibrated threshold (old: +32 per 100 clean cycles up to 4000 = off).
+void test_knock_threshold_never_drifts_above_calibration(void) {
+    section("knock: threshold returns to the calibrated value, never above");
+    using namespace ems::engine;
+    knock_init();
+    knock_set_adc_threshold(2000u);
+    for (uint32_t i = 0u; i < 20000u; ++i) {     // ~20 000 clean combustion events
+        knock_window_open(static_cast<uint8_t>(i & 3u));
+        knock_window_cycle_end();
+    }
+    CHECK_EQ(knock_get_adc_threshold(), 2000u, "20k clean cycles: threshold stays 2000");
+}

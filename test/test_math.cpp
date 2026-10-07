@@ -80,57 +80,6 @@ void test_math_req_fuel(void) {
     CHECK_EQ(calc_req_fuel_us(1998u, 0u, 440u, 1470u), 0u, "cylinders=0 → 0");
 }
 
-void test_math_base_pw(void) {
-    // calc_base_pw_us formula: pw = req_fuel × ve/100 × map/map_ref
-    // With req=7266, ve=80, map=100, map_ref=100:
-    //   num = 7266×80×100 = 58128000
-    //   den = 100×100 = 10000
-    //   result = 5812
-    section("MATH: calc_base_pw_us formula exacta");
-    CHECK_EQ(calc_base_pw_us(7266u, 80u, 100u, 100u), 5812u,
-             "base_pw(req=7266,VE=80%,MAP=REF) = 5812µs");
-
-    // VE=100%, MAP=REF → pw = req (identidade)
-    CHECK_EQ(calc_base_pw_us(7266u, 100u, 100u, 100u), 7266u,
-             "VE=100% MAP=REF → pw = req_fuel (identidade)");
-
-    // MAP = 2×REF → pw = req×ve×2 = 7266×80×200/10000 = 11625
-    //   num = 7266×80×200 = 116256000, den=10000, result=11625
-    CHECK_EQ(calc_base_pw_us(7266u, 80u, 200u, 100u), 11625u,
-             "MAP=2×REF → pw doubles proportionally (11625µs)");
-
-    // MAP = REF/2 → pw halves: 7266×80×50/10000 = 2906
-    CHECK_EQ(calc_base_pw_us(7266u, 80u, 50u, 100u), 2906u,
-             "MAP=REF/2 → pw halves (2906µs)");
-
-    // Proporcionalidade VE: VE=40 deve dar metade de VE=80
-    const uint32_t pw80 = calc_base_pw_us(7266u, 80u, 100u, 100u);  // 5812
-    const uint32_t pw40 = calc_base_pw_us(7266u, 40u, 100u, 100u);  // 2906
-    CHECK_EQ(pw80, 2u * pw40, "VE=80 = 2×VE=40 (proporcionalidade linear)");
-}
-
-void test_math_lambda_pw(void) {
-    // apply_lambda_target_pw_us: pw_out = base × 1000 / lambda_target
-    //   base=5000, lambda=850 → 5000×1000/850 = 5000000/850 = 5882
-    //   base=5000, lambda=1200 → 5000000/1200 = 4166
-    section("MATH: apply_lambda_target_pw_us formula exacta");
-    CHECK_EQ(apply_lambda_target_pw_us(5000u, 850u), 5882u,
-             "lambda=0.850 → 5000×1000/850 = 5882µs");
-    CHECK_EQ(apply_lambda_target_pw_us(5000u, 1200u), 4166u,
-             "lambda=1.200 → 5000×1000/1200 = 4166µs");
-    // lambda=1.000 → identidade
-    CHECK_EQ(apply_lambda_target_pw_us(5000u, 1000u), 5000u,
-             "lambda=1.000 → pw inalterado");
-    // Proporcionalidade inversa: pw × lambda = constante (base × 1000)
-    // lambda deve estar em [650,1200]; usamos 800 e 1000.
-    // pw(800) = 6000×1000/800 = 7500;  pw(1000) = 6000×1000/1000 = 6000
-    // pw_a×lambda_a = 6000×1000=6000000 = pw_b×lambda_b = 7500×800=6000000
-    const uint32_t pw_a = apply_lambda_target_pw_us(6000u, 1000u);  // 6000
-    const uint32_t pw_b = apply_lambda_target_pw_us(6000u,  800u);  // 7500
-    CHECK_EQ(pw_a * 1000u, pw_b * 800u,
-             "lambda proporcionalidade inversa: pw×lambda=constante (base×1000)");
-}
-
 void test_math_table3d_bilinear(void) {
     using namespace ems::engine;
     section("MATH: table3d bilinear interpolation 2D (fx>0, fy>0)");
@@ -364,15 +313,6 @@ void test_math_production_tables(void) {
     CHECK_EQ(get_advance_prepared(lk), 16,
              "get_advance_prepared == 16");
 
-    section("MATH: corr_warmup valores exactos");
-    // warmup_corr_axis_x10={-400,-100,0,...}, warmup_corr_x256={420,380,350,...}
-    // Eixo exacto -400 → 420; eixo exacto -100: idx=0,frac=255 → lerp(420,380,255)=380
-    CHECK_EQ(corr_warmup(-400), 420u, "corr_warmup(-40\u00b0C) = 420");
-    CHECK_EQ(corr_warmup(-100), 380u, "corr_warmup(-10\u00b0C) = 380 (eixo[1], frac=255)");
-    // Midpoint entre -400 e -100 (-250): frac=150\u00d7256/300=128
-    // lerp(420,380,128) = 420 + (380-420)\u00d7128/256 = 420-20 = 400
-    CHECK_EQ(corr_warmup(-250), 400u, "corr_warmup(-25\u00b0C) = 400 (interp exacta)");
-
     section("MATH: dwell_ms_x10_from_vbatt valor exacto");
     // dwell_vbatt_axis_mv={9000,...,12000,...},dwell_ms_x10={42,...,30,...}
     // 12000 = axis[3]: idx=2, frac=255 → lerp(35,30,255)=30
@@ -409,20 +349,14 @@ void test_math_production_tables(void) {
     //   base_pw = lerp(800,1500,85) = 1032
     // clt=800 → bucket 5 → ae_clt_sens[5]=6 → 1032×6/8 = 774
     fuel_reset_adaptives();
-    fuel_ae_set_threshold(10u);
-    fuel_ae_set_taper(4u);
+    ae_tpsdot_threshold_x10 = 10u;
     CHECK_EQ(calc_ae_pw_from_tpsdot(30, 800), 774,
              "calc_ae_pw_from_tpsdot(30,clt=800): 1032×6/8=774µs");
     // DE: same magnitude / 2, negative
     fuel_reset_adaptives();
-    fuel_ae_set_threshold(10u);
+    ae_tpsdot_threshold_x10 = 10u;
     CHECK_EQ(calc_ae_pw_from_tpsdot(static_cast<int16_t>(-30), 800), -387,
              "DE tip-out: −(774/2)=−387µs");
-    // calc_ae_pw_us: delta 300 in 10ms → tpsdot = 300×1000/10 = 30000 → clamp 1000
-    fuel_reset_adaptives();
-    fuel_ae_set_threshold(10u);
-    CHECK_TRUE(calc_ae_pw_us(800u, 500u, 10u, 800) > 0,
-               "calc_ae_pw_us large step → ae > 0 (tpsdot in %/s×10)");
     for (int i = 0; i < 4; ++i) {
         ae_tpsdot_axis_x10[i] = saved_axis[i];
         ae_pw_adder_us[i] = saved_add[i];

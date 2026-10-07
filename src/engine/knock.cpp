@@ -45,6 +45,7 @@ struct KnockState {
     uint8_t  window_cyl;
     bool     window_active;
     uint16_t adc_threshold; // 12-bit: amostra acima disto conta como evento de knock
+    uint16_t base_threshold; // calibrated threshold; adc_threshold returns to it
     // Sensor morto (FOME #578): pico-a-pico do raw por janela; um piezo vivo
     // tem sempre ruído de fundo — EMA do p2p abaixo do piso por muitas
     // janelas = sensor desligado/curto.
@@ -72,6 +73,7 @@ void knock_init() noexcept {
     g = {};
     g.event_threshold = kDefaultEventThreshold;
     g.adc_threshold   = kAdcThresholdDefault;
+    g.base_threshold  = kAdcThresholdDefault;
 
     // Carrega retard persistido do NVM (rpm_i=0, load_i=cyl, 4 células)
     for (uint8_t i = 0u; i < kKnockCylinders; ++i) {
@@ -80,15 +82,8 @@ void knock_init() noexcept {
             ? clamp_u16(static_cast<uint16_t>(stored), 0u, kRetardMaxX10)
             : 0u;
     }
-
-    // Carrega threshold ADC persistido (rpm_i=1, load_i=0).
-    // Armazenado em unidades de 32 (threshold = stored × 32) para caber em int8_t.
-    const int8_t saved_thresh = ems::hal::nvm_read_knock(1u, 0u);
-    if (saved_thresh > 0) {
-        const uint16_t t = static_cast<uint16_t>(
-            static_cast<uint16_t>(saved_thresh) * 32u);
-        g.adc_threshold = clamp_u16(t, kAdcThresholdMin, kAdcThresholdMax);
-    }
+    // The ADC threshold is calibration, not adaptive state: it is not
+    // persisted (older firmware stored a value that drifted to the maximum).
 }
 
 void knock_save_to_nvm() noexcept {
@@ -97,10 +92,6 @@ void knock_save_to_nvm() noexcept {
             knock_retard_x10[i] > 127u ? 127u : knock_retard_x10[i]);
         ems::hal::nvm_write_knock(0u, i, val);
     }
-    // Persiste threshold em unidades de 32 (0..127 → 0..4064)
-    const uint8_t thresh_stored = static_cast<uint8_t>(
-        (g.adc_threshold / 32u) > 127u ? 127u : (g.adc_threshold / 32u));
-    ems::hal::nvm_write_knock(1u, 0u, static_cast<int8_t>(thresh_stored));
 }
 
 void knock_set_event_threshold(uint8_t threshold) noexcept {
@@ -109,6 +100,7 @@ void knock_set_event_threshold(uint8_t threshold) noexcept {
 
 void knock_set_adc_threshold(uint16_t threshold) noexcept {
     g.adc_threshold = clamp_u16(threshold, kAdcThresholdMin, kAdcThresholdMax);
+    g.base_threshold = g.adc_threshold;
 }
 
 uint16_t knock_get_adc_threshold() noexcept {
@@ -198,10 +190,12 @@ void knock_cycle_complete(uint8_t cyl) noexcept {
 
         if (g.global_clean_cycles < 255u) { ++g.global_clean_cycles; }
         if (g.global_clean_cycles >= 100u) {
-            // Raise threshold slightly after 100 consecutive clean cycles
-            // (noise floor adaptation — avoid false positives after knock episode)
-            if (g.adc_threshold < kAdcThresholdMax - 32u) {
-                g.adc_threshold = static_cast<uint16_t>(g.adc_threshold + 32u);
+            // After a knock episode lowered it, step back toward the
+            // calibrated threshold — never above it (detection must not
+            // silently turn itself off during long clean running).
+            if (g.adc_threshold < g.base_threshold) {
+                const uint16_t up = static_cast<uint16_t>(g.adc_threshold + 32u);
+                g.adc_threshold = (up > g.base_threshold) ? g.base_threshold : up;
             }
             g.global_clean_cycles = 0u;
         }

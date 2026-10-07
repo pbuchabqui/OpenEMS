@@ -222,16 +222,19 @@ uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
     g_map_state.tpsdot_x10 = calculate_tpsdot();
     g_map_state.transient_strength = detect_transient_strength(g_map_state.tpsdot_x10);
     
-    // Seleciona ganho baseado em força do transiente
-    uint8_t gain_q8 = g_steady_gain_q8;
+    // Seleciona ganho baseado em força do transiente. Steady state: the sensor
+    // IS the answer (the uncalibrated manifold model only helps in transients;
+    // blending it in steady state pulled the estimate toward its own
+    // equilibrium, e.g. 1 kPa low under boost).
+    uint16_t gain_q8 = (g_map_state.transient_strength == 0u) ? 256u : g_steady_gain_q8;
     if (!sensor_ok) {
         gain_q8 = 0u;  // Sensor inválido: saída = modelo puro (0% sensor)
     } else if (g_map_state.transient_strength >= 3u) {
         gain_q8 = g_transient_gain_q8;  // Heavy transient: confia mais no modelo
     } else if (g_map_state.transient_strength >= 2u) {
         // Medium transient: blend entre gains
-        gain_q8 = static_cast<uint8_t>(
-            (static_cast<uint16_t>(g_steady_gain_q8) + 
+        gain_q8 = static_cast<uint16_t>(
+            (static_cast<uint16_t>(g_steady_gain_q8) +
              static_cast<uint16_t>(g_transient_gain_q8)) >> 1u);
     }
     
@@ -271,16 +274,17 @@ uint16_t map_estimator_update(uint16_t map_sensor_bar_x100,
     const uint16_t sensor_for_blend = sensor_ok
         ? map_sensor_bar_x100
         : g_map_state.map_estimated_bar_x100;
+    // One rounded division: flooring the two terms separately biased the
+    // steady estimate up to 1 kPa below the sensor (3 % fuel at idle).
     const int32_t map_filtered = (static_cast<int32_t>(sensor_for_blend) *
-                                  static_cast<int32_t>(gain_q8)) / 256 +
-                                 (static_cast<int32_t>(map_predicted_clamped) *
-                                  static_cast<int32_t>(256u - gain_q8)) / 256;
+                                  static_cast<int32_t>(gain_q8) +
+                                  static_cast<int32_t>(map_predicted_clamped) *
+                                  static_cast<int32_t>(256u - gain_q8) + 128) / 256;
     
     g_map_state.map_estimated_bar_x100 = clamp_u16(
         static_cast<uint16_t>(map_filtered), 10u, 300u);
 
-    // Mode labels (for telemetry). Note: even "sensor_only" still blends
-    // ~78% sensor / ~22% model (g_steady_gain_q8=200); pure sensor would be 256.
+    // Mode labels (for telemetry): steady = pure sensor; transient = blend.
     // Do not overwrite model_only (2) set when sensor_ok is false.
     if (sensor_ok) {
         if (g_map_state.transient_strength == 0u) {

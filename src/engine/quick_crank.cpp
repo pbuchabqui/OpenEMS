@@ -207,7 +207,8 @@ void prime_on_tooth(const CkpSnapshot& snap) noexcept {
         kCrankFuelMult,
         static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
         g_prime_clt_x10);
-    uint32_t pw = ((ems::engine::kDefaultReqFuelUs * static_cast<uint32_t>(mult)) >> 8u) +
+    // REQ_FUEL from the configured engine (NVM), not the compile-time default.
+    uint32_t pw = ((ems::engine::default_req_fuel_us() * static_cast<uint32_t>(mult)) >> 8u) +
         static_cast<uint32_t>(g_prime_dead_time_us);
     const uint16_t prime_max_pw_us = sanitized_prime_max_pw_us();
     if (pw > prime_max_pw_us) { pw = prime_max_pw_us; }
@@ -294,6 +295,11 @@ uint32_t quick_crank_apply_pw_us(uint32_t base_pw_us,
         out = 100000u;
     }
     return out;
+}
+
+uint32_t quick_crank_flow_us(const QuickCrankOutput& qc, uint32_t running_flow_us) noexcept {
+    const uint32_t base = qc.cranking ? default_req_fuel_us() : running_flow_us;
+    return quick_crank_apply_pw_us(base, qc.fuel_mult_x256, qc.min_pw_us);
 }
 
 void quick_crank_set_prime_context(int16_t clt_x10, uint16_t dead_time_us) noexcept {
