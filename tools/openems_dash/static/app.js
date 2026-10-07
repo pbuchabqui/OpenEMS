@@ -259,6 +259,7 @@ $$("#sb-nav .tab").forEach(b => b.onclick = () => {
   if (b.dataset.tab === "boost"     && !$("#boostRoot").dataset.loaded)    loadBoostMap();
   if (b.dataset.tab === "ltft-accum" && !$("#ltftAccumRoot").dataset.loaded) loadLtftAccum();
   if (b.dataset.tab === "output-test" && !$("#outputTestRoot").dataset.loaded) loadOutputTest();
+  if (b.dataset.tab === "install" && !$("#installRoot").dataset.loaded) window.loadInstall();
   if (b.dataset.tab === "telemetry")
     charts.forEach(c => c.u.setSize({ width: c.u.root.parentElement.clientWidth - 8, height: 300 }));
 });
@@ -273,7 +274,7 @@ const GAUGES = [
   ["lambda_x1000",        "λ",       v => H.formatGauge("lambda_x1000", v)],
   ["lambda_target_x1000", "λ tgt",   v => H.formatGauge("lambda_target_x1000", v)],
   ["pw_ms",               "PW ms",   v => H.formatGauge("pw_ms", v)],
-  ["advance_deg",         "Ign °",   v => H.formatGauge("advance_deg", v)],
+  ["advance_deg_fine",    "Ign °",   v => (v == null ? "—" : Number(v).toFixed(1))],
   ["clt_c",               "CLT °C",  v => H.formatGauge("clt_c", v)],
   ["iat_c",               "IAT °C",  v => H.formatGauge("iat_c", v)],
 ];
@@ -311,6 +312,12 @@ const STATUS_CHIPS = [
                              d.status.LIMP_MODE || d.status.ETB_LIMP)) },
   { id: "TC",    label: "TRACTION", goodWhenOn: false, warn: true,
     on: d => !!(d.status && d.status.TC_ACTIVE) },
+  // ECU refused an engine-config value (field kept its old value); hover lists them.
+  { id: "CFG",   label: "CONFIG",   goodWhenOn: false,
+    on: d => (d.config_reject_mask || 0) !== 0 },
+  // Timing-light mode: spark fixed, no corrections — must not be left on.
+  { id: "STROBE", label: "STROBE",  goodWhenOn: false, warn: true,
+    on: d => !!d.timing_light },
 ];
 $("#statusLeds").innerHTML =
   STATUS_CHIPS.slice(0, 1).map(c =>
@@ -358,7 +365,7 @@ const CHART_SERIES = [
   ["lambda_x1000", "#ef4444", "λ",      false],
   ["stft_pct",     "#a78bfa", "STFT %", false],
   ["pw_ms",        "#f0d030", "PW ms",  false],
-  ["advance_deg",  "#2dd4a0", "Ign °",  false],
+  ["advance_deg_fine", "#2dd4a0", "Ign °",  false],
 ];
 const charts = (() => {
   const wrap = $("#charts");
@@ -418,6 +425,10 @@ function pushTelemetry(d) {
     (d.status && d.status.IGN_SEQUENTIAL) ? "IGN:SEQ" : "IGN:WASTED";
   $("#injMode").textContent = "INJ:" + (INJ_MODES[d.inj_mode] || "?");
   lastRT = d;
+  $("#led_CFG").title = (d.config_reject_mask
+    ? "ECU rejeitou: " + H.rejectedFields(d.config_reject_mask).join(", ")
+    : "Configuração aceita");
+  if (window.installOnTelemetry) window.installOnTelemetry(d);
   const fd = faultDetails(d);
   $("#led_FAULT").title = fd.length ? fd.join(" · ") : "Sem falhas ativas";
   for (const c of STATUS_CHIPS) {

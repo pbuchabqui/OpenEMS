@@ -297,6 +297,10 @@ def api_write_cells(page: int, body: dict):
         worker.submit(lambda l: l.burn_page(8))
         return {"ok": True, "written": 1}
     elif page in proto.FIELD_PAGES:
+        for name, vals in body["fields"].items():
+            err = proto.validate_field(page, name, vals)
+            if err:
+                return JSONResponse({"error": err, "field": name}, status_code=400)
         # PRIME obrigatório: no firmware, escrever qualquer campo aplica o
         # buffer INTEIRO da página aos globals (sync_table_from_page). Sem uma
         # leitura prévia o buffer pode estar zerado → aplicaria rev_limit=0
@@ -337,6 +341,51 @@ def api_burn(page: int):
         return JSONResponse({"error": f"burn página {page} falhou: {e}"},
                             status_code=502)
     return {"ok": True}
+
+
+# ── tune: exportar / importar / padrões de fábrica ──────────────────────────
+@app.get("/api/tune/export")
+def api_tune_export():
+    try:
+        return worker.submit(proto.export_tune)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"exportar tune falhou: {e}"}, status_code=502)
+
+
+def _import(tune: dict):
+    err = proto.check_tune(tune)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    latest = worker.latest
+    if latest and latest.get("rpm", 0) > FLASH_WRITE_SAFE_RPM:
+        return JSONResponse({"error": "pare o motor para carregar um tune (grava a flash)"},
+                            status_code=409)
+    try:
+        worker.submit(lambda l: proto.import_tune(l, tune))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"carregar tune falhou: {e}"}, status_code=502)
+    return {"ok": True}
+
+
+@app.post("/api/burn_all")
+def api_burn_all():
+    latest = worker.latest
+    if latest and latest.get("rpm", 0) > FLASH_WRITE_SAFE_RPM:
+        return JSONResponse({"error": "pare o motor para gravar (flash)"}, status_code=409)
+    try:
+        return {"ok": True, "pages": worker.submit(proto.burn_all)}
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"gravar falhou: {e}"}, status_code=502)
+
+
+@app.post("/api/tune/import")
+def api_tune_import(body: dict):
+    return _import(body)
+
+
+@app.post("/api/tune/factory")
+def api_tune_factory():
+    return _import(proto.load_base_tune())
 
 
 # ── teste de saídas ──────────────────────────────────────────────────────────

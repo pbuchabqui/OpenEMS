@@ -20,10 +20,10 @@ Alternativas:
 
 ```bash
 # pacotes Debian (sem venv)
-sudo apt install python3-fastapi python3-uvicorn python3-serial
+sudo apt install python3-fastapi python3-uvicorn python3-serial python3-websockets
 
 # ou override (não recomendado)
-pip install --break-system-packages fastapi uvicorn pyserial
+pip install --break-system-packages fastapi "uvicorn[standard]" pyserial
 ```
 
 ## Uso
@@ -35,7 +35,13 @@ python server.py                   # auto-detecta /dev/ttyACM*
 python server.py --port /dev/ttyACM0 --http-port 8000 --rate 30
 ```
 
-Abrir <http://localhost:8000>.
+Abrir <http://localhost:8000>. Primeira instalação: aba **Install** (guia em
+7 passos: motor, polaridade CKP/CMP, dead time, teste de saídas, offset do
+trigger, lâmpada de ponto, gravar; mais exportar/importar tune e restaurar
+padrões de fábrica).
+
+Sem o extra `[standard]` do uvicorn não há WebSocket e a telemetria fica
+parada (404 em `/ws/telemetry`).
 
 Sem activar o venv:
 
