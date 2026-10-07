@@ -19,21 +19,11 @@ namespace si = ems::engine::sched_internal;
 #include <stdint.h>
 
 #if defined(EMS_HOST_TEST)
-// Host stubs: TIM5 dispatcher only. GPIO BSRR/MODER live in hal/out_pins.
-// TIM1 placeholders retained for legacy test API surface.
-static uint32_t ems_test_tim1_ign_cnt;
-static uint32_t ems_test_tim1_ign_ccr1;
-static uint32_t ems_test_tim1_ign_ccr2;
-static uint32_t ems_test_tim1_ign_ccr3;
-static uint32_t ems_test_tim1_ign_ccr4;
-
+// Host: the single simulated TIM5 (hal/tim5_host.h). GPIO lives in hal/out_pins.
 #define TIM_SR_CC3IF 0x8U
 #define TIM_DIER_CC3IE (1U << 3)
 
-static uint32_t ems_test_tim5_ccr3 = 0u;
-static uint32_t ems_test_tim5_sr   = 0u;
-static uint32_t ems_test_tim5_dier = 0u;
-static uint32_t ems_test_tim5_cnt  = 0u;
+#include "hal/tim5_host.h"
 #define TIM5_CCR3   ems_test_tim5_ccr3
 #define TIM5_SR     ems_test_tim5_sr
 #define TIM5_DIER   ems_test_tim5_dier
@@ -920,21 +910,8 @@ void ecu_sched_test_set_mspark(uint8_t count, uint32_t inter_dwell_ticks, uint32
     ecu_sched_set_mspark(count, inter_dwell_ticks, atdc_limit_deg);
 }
 uint8_t ecu_sched_test_get_mspark_count(void) { return si::g_mspark_count; }
-void ecu_sched_test_set_tim1_cnt(uint32_t cnt) noexcept { ems_test_tim1_ign_cnt = cnt; }
-void ecu_sched_test_set_tim2_cnt(uint32_t cnt) noexcept { ems_test_tim5_cnt = cnt; }
 void ecu_sched_test_reset_ccr(void) noexcept {
-    ems_test_tim1_ign_ccr1 = 0u; ems_test_tim1_ign_ccr2 = 0u;
-    ems_test_tim1_ign_ccr3 = 0u; ems_test_tim1_ign_ccr4 = 0u;
     ems_test_tim5_ccr3 = 0u; g_evt_count = 0U; g_evt_armed = 0U;
-}
-uint32_t ecu_sched_test_get_tim1_ccr(uint8_t ch) noexcept {
-    switch (ch) {
-        case 1u: return ems_test_tim1_ign_ccr1;
-        case 2u: return ems_test_tim1_ign_ccr2;
-        case 3u: return ems_test_tim1_ign_ccr3;
-        case 4u: return ems_test_tim1_ign_ccr4;
-        default: return 0u;
-    }
 }
 // TIM5 event-queue accessors for tests
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept { return g_evt_count; }

@@ -14,6 +14,9 @@ extern uint32_t gpioa_otyper, gpiob_otyper, gpioc_otyper, gpioe_otyper;
 extern uint32_t gpioa_pupdr, gpiob_pupdr, gpioc_pupdr, gpioe_pupdr;
 extern uint32_t gpioa_afrh;
 extern uint32_t gpioa_bsrr, gpiob_bsrr, gpioc_bsrr, gpioe_bsrr;
+// Optional observer of every INJ/IGN write (channel = ECU_CH_*, high).
+// The engine simulator uses it to timestamp real output edges.
+extern void (*write_hook)(uint8_t channel, uint8_t high);
 }  // namespace ems::hal::out_pins_host
 
 #define RCC_AHB2ENR1 ems::hal::out_pins_host::rcc_ahb2enr1

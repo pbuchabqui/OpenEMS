@@ -325,8 +325,15 @@ void timer_etb_set_duty(uint16_t duty) {
 #else  // EMS_HOST_TEST -------------------------------------------------------
 
 #include "hal/timer.h"
+#include "hal/tim5_host.h"
+volatile uint32_t ems_test_tim5_cnt     = 0u;
+volatile uint32_t ems_test_tim5_ccr1    = 0u;
+volatile uint32_t ems_test_tim5_ccr2    = 0u;
+volatile uint32_t ems_test_tim5_ccr3    = 0u;
+volatile uint32_t ems_test_tim5_sr      = 0u;
+volatile uint32_t ems_test_tim5_dier    = 0u;
+volatile uint32_t ems_test_cam_gpio_idr = 0u;
 namespace ems::hal {
-static uint32_t g_mock_tim5_cnt = 0u;
 void tim5_ic_init(void) {}
 void tim5_ic_set_capture_polarity(bool, bool) noexcept {}
 void tim3_pwm_init(uint32_t) {}
@@ -337,7 +344,7 @@ void tim2_set_duty(uint16_t) noexcept {}
 void tim4_set_duty(uint8_t, uint16_t) noexcept {}
 void etb_pwm_init(uint32_t) {}
 void etb_pwm_set_duty_x10(uint16_t) noexcept {}
-uint32_t tim5_count() noexcept { return g_mock_tim5_cnt; }
+uint32_t tim5_count() noexcept { return ems_test_tim5_cnt; }
 } // namespace ems::hal
 
 void timer_etb_pwm_init(void) {}

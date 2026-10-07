@@ -78,9 +78,6 @@ static constexpr uint16_t kCalibPageBytes = 512u;
 alignas(4) static uint8_t g_calib_page0[kCalibPageBytes];
 static bool                g_calib_dirty  = false;
 
-// g_datalog_us: no STM32 usa micros() de system.cpp em vez de SysTick
-// Mantemos a variável para quadro CAN 0x400
-volatile uint32_t g_datalog_us = 0u;
 volatile uint32_t g_flash_write_faults = 0u; // FIX: fault counter para falhas de escrita NVM
 
 
@@ -576,7 +573,6 @@ int main() {
     for (;;) {
         // ── Watchdog kick (primeiro statement) ───────────────────────────
         iwdg_kick();
-        g_datalog_us = micros();
 
         const uint32_t now = millis();
 

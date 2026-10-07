@@ -70,6 +70,9 @@ inline void out_pin_write(uint8_t channel, uint8_t high) noexcept {
     case kOutPortE: GPIOE_BSRR = mask; break;
     default:        GPIOC_BSRR = mask; break;
     }
+#if defined(EMS_HOST_TEST)
+    if (out_pins_host::write_hook != nullptr) { out_pins_host::write_hook(channel, high); }
+#endif
 }
 
 /**

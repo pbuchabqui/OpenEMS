@@ -141,7 +141,7 @@ void test_ecu_sched_wasted_to_sequential(void) {
 
     // 1) FULL_SYNC sem CMP → wasted-spark (presync).
     ckp_reach_full_sync();                       // reseta g_ckp_cap=0, dirige o hook
-    ckp_feed_n_then_gap(55u);                     // 1 rev extra em wasted
+    ckp_feed_n_then_gap(kWheelNormalTeeth);                     // 1 rev extra em wasted
     CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "cmp_confirms=0 sem CMP");
     CHECK_TRUE(ecu_sched_test_get_presync_revs() > 0u, "presync_revs>0 (wasted a correr)");
     CHECK_EQ(ecu_sched_test_get_seq_revs(), 0u, "seq_revs=0 (ainda não sequencial)");
@@ -150,22 +150,22 @@ void test_ecu_sched_wasted_to_sequential(void) {
     // 2) 1ª borda CMP: só arma s_prev (confirms=0). 2ª: 1.º confirm (ainda <2).
     cam_fire(g_ckp_cap);
     CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "1ª borda CMP só arma timestamp");
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);                     // +2 revs → g_ckp_cap += 116×período
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);                     // +2 revs → g_ckp_cap += 116×período
     cam_fire(g_ckp_cap);
     CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "2ª borda → cmp_confirms=1");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "1 confirm insuficiente: continua wasted");
 
     // 3) 3ª borda CMP: delta = 116×período → cmp_confirms=2.
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);
     CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "3ª borda coerente → cmp_confirms=2");
     CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "nenhuma borda CMP rejeitada");
 
     // 4) Próximas fronteiras de revolução → gate abre → Calculate_Sequential_Cycle.
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     CHECK_TRUE(ecu_sched_test_get_seq_revs() > 0u, "seq_revs>0 após CMP confirmado");
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "is_sequential=1: entrou em sequencial");
 
@@ -173,7 +173,7 @@ void test_ecu_sched_wasted_to_sequential(void) {
     //    bordas de came, o contador de revoluções desde a última borda ultrapassa
     //    kMaxRevsWithoutCmp (6 em produção; 60 só em bench-mode para tolerar
     //    gaps do estimulador RMT) → cmp_confirms zera → o agendador reverte a wasted.
-    for (uint32_t i = 0; i < 7u; ++i) { ckp_feed_n_then_gap(55u); }
+    for (uint32_t i = 0; i < 7u; ++i) { ckp_feed_n_then_gap(kWheelNormalTeeth); }
     CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "sem came >6 revs → cmp_confirms zerado");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "fallback: reverteu a wasted-spark");
 }
@@ -189,17 +189,17 @@ void test_ecu_sched_cmp_revalidation_after_sync_loss(void) {
 
     // 1) FULL_SYNC + arm + 2 confirms → sequencial.
     ckp_reach_full_sync();
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);                          // arma s_prev
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);                          // confirms=1
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);                          // confirms=2
     CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "3 bordas (arm+2) → cmp_confirms=2");
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "sequencial activo antes da perda");
 
     // 2) Gap prematuro → LOSS; confirms zerados (ambos os contadores).
@@ -209,8 +209,8 @@ void test_ecu_sched_cmp_revalidation_after_sync_loss(void) {
     CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "perda de sync: cmp_confirms=0");
 
     // 3) Resync SEM came fresco → wasted.
-    ckp_feed_n_then_gap(55u);                     // LOSS → HALF_SYNC
-    ckp_feed_n_then_gap(55u);                     // HALF → FULL_SYNC
+    ckp_feed_n_then_gap(kWheelNormalTeeth);                     // LOSS → HALF_SYNC
+    ckp_feed_n_then_gap(kWheelNormalTeeth);                     // HALF → FULL_SYNC
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::FULL_SYNC), "resync completo");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "pós-resync sem came fresco: fica em wasted");
@@ -218,16 +218,16 @@ void test_ecu_sched_cmp_revalidation_after_sync_loss(void) {
     // 4) LOSS limpou s_prev → 1ª borda arma, 2ª/3ª confirmam.
     cam_fire(g_ckp_cap);
     CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "1ª borda pós-LOSS só arma");
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);
     CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "2ª borda fresca → confirms=1");
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);
     CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "3ª borda fresca → confirms=2");
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "sequencial retomado após revalidação");
 }
 
@@ -249,14 +249,14 @@ void test_ecu_sched_noise_rejects_sequential(void) {
 
     // Borda 2 ~2 revs no mesmo dente 5 → 1.º confirm (ancora posição).
     for (uint32_t i = 0; i < 50u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     for (uint32_t i = 0; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
     cam_fire(g_ckp_cap);
     CHECK_EQ(ckp_snapshot().cmp_confirms, 1u, "2ª borda coerente → confirms=1");
 
     // Borda 3 noutro dente (25≠5): passa temporal, falha posição → confirms→0.
     for (uint32_t i = 0; i < 50u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     for (uint32_t i = 0; i < 25u; ++i) { ckp_fire(kNormalPeriod); }   // tooth 25
     cam_fire(g_ckp_cap);
     CHECK_TRUE(ckp_snapshot().cmp_confirms < 2u, "borda em dente inconsistente não confirma");
@@ -265,12 +265,12 @@ void test_ecu_sched_noise_rejects_sequential(void) {
     const uint8_t teeth[3] = {40u, 12u, 33u};
     for (uint8_t k = 0; k < 3u; ++k) {
         for (uint32_t i = 0; i < 30u; ++i) { ckp_fire(kNormalPeriod); } ckp_fire(kNormalPeriod * 3u);
-        ckp_feed_n_then_gap(55u);
+        ckp_feed_n_then_gap(kWheelNormalTeeth);
         for (uint32_t i = 0; i < teeth[k]; ++i) { ckp_fire(kNormalPeriod); }
         cam_fire(g_ckp_cap);
     }
     CHECK_TRUE(ckp_snapshot().cmp_confirms < 2u, "ruído nunca atinge cmp_confirms=2");
-    ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth); ckp_feed_n_then_gap(kWheelNormalTeeth);
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "permanece em wasted-spark sob ruído CMP");
 }
 
@@ -287,17 +287,17 @@ void test_ecu_sched_recovers_after_fallback(void) {
 
     // Entra em sequencial: arm + 2 confirms no tooth 0.
     cam_fire(g_ckp_cap);                                      // arm
-    ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth); ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);                                      // confirms=1
-    ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth); ckp_feed_n_then_gap(kWheelNormalTeeth);
     cam_fire(g_ckp_cap);                                      // confirms=2
-    ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth); ckp_feed_n_then_gap(kWheelNormalTeeth);
     CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "pré: sequencial (cmp_confirms=2)");
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "pré: is_sequential=1");
 
     // "Desconecta": >60 revs sem came (kMaxRevsWithoutCmp) → #2 fallback → wasted.
     // s_prev fica obsoleto.
-    for (uint32_t i = 0; i < 61u; ++i) { ckp_feed_n_then_gap(55u); }
+    for (uint32_t i = 0; i < 61u; ++i) { ckp_feed_n_then_gap(kWheelNormalTeeth); }
     CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "fallback: cmp_confirms=0");
     CHECK_EQ(ecu_sched_is_sequential(), 0u, "fallback: wasted");
 
@@ -305,7 +305,7 @@ void test_ecu_sched_recovers_after_fallback(void) {
     // por tempo contra o s_prev obsoleto (deadlock). Com o resync, recupera.
     for (uint8_t e = 0; e < 6u; ++e) {
         cam_fire(g_ckp_cap);
-        ckp_feed_n_then_gap(55u); ckp_feed_n_then_gap(55u);
+        ckp_feed_n_then_gap(kWheelNormalTeeth); ckp_feed_n_then_gap(kWheelNormalTeeth);
     }
     CHECK_EQ(ckp_snapshot().cmp_confirms, 2u, "recuperou: cmp_confirms=2 após reconexão");
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "recuperou: voltou a sequencial");
@@ -402,7 +402,7 @@ uint8_t find_angle_event(uint8_t want_ch, uint8_t want_act,
 void build_seq_table_with_pw(uint32_t pw_ticks) {
     ecu_sched_test_reset();
     for (uint8_t i = 0u; i < 4u; ++i) { ems::engine::cyl_fuel_trim_pct[i] = 0; }
-    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_test_set_tim5_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(pw_ticks);
@@ -410,7 +410,7 @@ void build_seq_table_with_pw(uint32_t pw_ticks) {
     g_ckp_cap = 0u;
     ckp_reach_full_sync();
     ckp_test_set_cmp_confirms(2u);
-    ckp_feed_n_then_gap(55u);  // gap → Calculate_Sequential_Cycle
+    ckp_feed_n_then_gap(kWheelNormalTeeth);  // gap → Calculate_Sequential_Cycle
 }
 
 void test_ecu_sched_eoi_targeting(void) {
@@ -445,7 +445,7 @@ void test_ecu_sched_eoi_targeting(void) {
     // atravessa a fronteira 720→0 do ciclo — o caso que o SOI fixo não cobria.
     ecu_sched_test_reset();
     for (uint8_t i = 0u; i < 4u; ++i) { ems::engine::cyl_fuel_trim_pct[i] = 0; }
-    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_test_set_tim5_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(833333u);
@@ -459,7 +459,7 @@ void test_ecu_sched_eoi_targeting(void) {
     // build sequencial que este teste quer isolar. Reset após confirmar CMP.
     ckp_test_set_cmp_confirms(2u);
     ecu_sched_reset_diagnostic_counters();
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_OFF, &t_off, &f_off, &p_off), 1u,
              "PW=499°/EOI=420°: INJ1 OFF presente");
     CHECK_EQ(t_off, 10u, "PW=499°: INJ_OFF em tooth 10 (EOI=420° fixo)");
@@ -493,13 +493,12 @@ void test_ecu_sched_eoi_targeting(void) {
     section("ecu_sched EOI: presync usa EOI targeting na janela de 360°");
     // presync: eoi=(360−60)%360=300 → tooth 50, frac 0, PHASE_ANY.
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(10u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_eoi_lead_deg(60u);
     ckp_test_reset(); g_ckp_cap = 0u;
-    ckp_feed_n_then_gap(55u);   // HALF_SYNC
+    ckp_feed_n_then_gap(kWheelNormalTeeth);   // HALF_SYNC
     // Gap rev boundary (no phantom wrap): FULL_SYNC without CMP → presync table
     for (uint32_t i = 0u; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
     ckp_fire(kGapPeriod);
@@ -519,12 +518,11 @@ void test_ecu_sched_eoi_targeting(void) {
     // eventos existem na tabela (o OFF da tabela nova fecha o injetor aberto
     // na rev anterior; toggle de bancos já validado acima).
     ecu_sched_test_reset();  // usa o default eoi_lead=355 — sem set explícito
-    ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(10u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
     ckp_test_reset(); g_ckp_cap = 0u;
-    ckp_feed_n_then_gap(55u);   // HALF_SYNC
+    ckp_feed_n_then_gap(kWheelNormalTeeth);   // HALF_SYNC
     for (uint32_t i = 0u; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
     ckp_fire(kGapPeriod);  // gap rev boundary → presync table (no CMP)
     CHECK_EQ(find_angle_event(ECU_CH_INJ1, ECU_ACT_INJ_OFF, &t_off, &f_off, &p_off), 1u,
@@ -898,14 +896,13 @@ void test_ecu_sched_presync_table(void) {
     // Rev boundary is tooth_index reset by an accepted gap (not a phantom wrap
     // past 57). With no CMP, FULL_SYNC still uses presync / wasted builders.
     ecu_sched_test_reset();
-    ecu_sched_test_set_tim1_cnt(0u);
     ecu_sched_set_advance_deg(10u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
     ecu_sched_set_eoi_lead_deg(60u);
     ckp_test_reset(); g_ckp_cap = 0u;
 
-    ckp_feed_n_then_gap(55u);   // → HALF_SYNC (no rev_boundary yet: prev_tooth=0)
+    ckp_feed_n_then_gap(kWheelNormalTeeth);   // → HALF_SYNC (no rev_boundary yet: prev_tooth=0)
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC");
 

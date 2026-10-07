@@ -8,6 +8,8 @@ void etb_ctrl_setup(void);
 extern uint32_t g_ckp_cap;
 extern const uint32_t kNormalPeriod;
 extern const uint32_t kGapPeriod;
+// 60-2 wheel: normal tooth edges between two gap edges (tooth 1..57).
+constexpr uint32_t kWheelNormalTeeth = 57u;
 
 void ckp_fire(uint32_t delta);
 void ckp_feed_n_then_gap(uint32_t n, uint32_t p = kNormalPeriod);

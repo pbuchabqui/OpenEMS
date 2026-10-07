@@ -289,16 +289,13 @@ void test_math_stft_gains(void) {
 }
 
 void test_math_inj_scheduler_ticks(void) {
-    section("MATH: inj_pw_us_to_scheduler_ticks (host: ×60, prod: ×10)");
+    section("MATH: inj_pw_us_to_scheduler_ticks (TIM5 62.5 MHz, 16 ns/tick)");
     using namespace ems::engine;
-    // Em host (não TARGET_STM32H562): retorna pw_us × 60
-    // Em producão (STM32H562): retorna pw_us × 10 (100 ns/tick @ 10 MHz)
-    // Nota: o branch de host usa factor 60 (legado de outro target);
-    // a formula de producao (factor 10) não é testada no host.
-    CHECK_EQ(inj_pw_us_to_scheduler_ticks(1000u), 60000u,
-             "1000µs × 60 = 60000 ticks (host branch)");
-    CHECK_EQ(inj_pw_us_to_scheduler_ticks(100u), 6000u,
-             "100µs × 60 = 6000 ticks (host branch)");
+    // Same formula on host and target: 1 µs = 62.5 ticks.
+    CHECK_EQ(inj_pw_us_to_scheduler_ticks(1000u), 62500u,
+             "1000µs = 62500 ticks");
+    CHECK_EQ(inj_pw_us_to_scheduler_ticks(101u), 6312u,
+             "101µs = 6312.5 → 6312 ticks (floor)");
     CHECK_EQ(inj_pw_us_to_scheduler_ticks(0u), 0u,
              "0µs → 0 ticks");
     // Proporcionalidade: dobrar PW dobra ticks
@@ -509,7 +506,7 @@ void test_trigger_offset(void) {
     g_eng_cfg.trigger_tooth0_engine_deg = 0u;
     ecu_sched_test_reset();
     ecu_sched_test_reset_ccr();
-    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_test_set_tim5_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);
@@ -518,7 +515,7 @@ void test_trigger_offset(void) {
     ckp_reach_full_sync();
     // Force cmp_confirms>=2 so Calculate_Sequential_Cycle() runs (not presync).
     ckp_test_set_cmp_confirms(2u);
-    ckp_feed_n_then_gap(55u);  // trigger sequential scheduling at next gap
+    ckp_feed_n_then_gap(kWheelNormalTeeth);  // trigger sequential scheduling at next gap
     ecu_sched_test_reset_ccr();
 
     // Inspect angle table: find ECU_CH_IGN2 DWELL_START entry (cyl 1, tdc=540°)
@@ -551,7 +548,7 @@ void test_trigger_offset(void) {
     g_eng_cfg.trigger_tooth0_engine_deg = 78u;
     ecu_sched_test_reset();
     ecu_sched_test_reset_ccr();
-    ecu_sched_test_set_tim2_cnt(1000u);
+    ecu_sched_test_set_tim5_cnt(1000u);
     ecu_sched_set_advance_deg(15u);
     ecu_sched_set_dwell_ticks(140625u);
     ecu_sched_set_inj_pw_ticks(125000u);

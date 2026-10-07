@@ -72,7 +72,7 @@ void test_ckp_initial_state(void) {
 void test_ckp_half_sync(void) {
     section("ckp: WAIT_GAP → HALF_SYNC on first valid gap");
     ckp_test_reset(); g_ckp_cap = 0u;
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     const CkpSnapshot s = ckp_snapshot();
     CHECK_EQ(static_cast<uint8_t>(s.state), static_cast<uint8_t>(SyncState::HALF_SYNC), "HALF_SYNC");
     CHECK_TRUE(s.rpm_x10 > 0u, "rpm > 0 in HALF_SYNC");
@@ -100,14 +100,14 @@ void test_ckp_instant_rpm_360(void) {
     CHECK_EQ(ckp_instant_rpm_x10(), 0u, "sem bordas: instant rpm = 0");
 
     ckp_reach_full_sync();
-    // Duas voltas completas do padrão da fixture (55 normais + gap 3×):
+    // Duas voltas completas de roda 60-2 (57 normais + gap 3×):
     // o mesmo slot de dente repete com espaçamento de exactamente 1 volta =
-    // 55×10000 + 30000 = 580000 ticks.
-    ckp_feed_n_then_gap(55u, kNormalPeriod);
-    ckp_feed_n_then_gap(55u, kNormalPeriod);
-    // 37.5e9 / 580000 = 64655 (rpm×10)
-    CHECK_EQ(ckp_instant_rpm_x10(), 64655u,
-             "dt de 1 volta (580000 ticks) → 6465.5 rpm");
+    // 57×10000 + 30000 = 600000 ticks = 60 posições × 10000.
+    ckp_feed_n_then_gap(kWheelNormalTeeth, kNormalPeriod);
+    ckp_feed_n_then_gap(kWheelNormalTeeth, kNormalPeriod);
+    // 37.5e9 / 600000 = 62500 (rpm×10) = 60 s × 62.5 MHz / (60 × 10000)
+    CHECK_EQ(ckp_instant_rpm_x10(), 62500u,
+             "dt de 1 volta (600000 ticks) → 6250.0 rpm");
 
     // Reset limpa timestamps e medida.
     ckp_test_reset();
@@ -155,8 +155,8 @@ void test_ckp_skip_after_silence(void) {
     CHECK_EQ(g_dbg_skip_after_silence - base1, 3u, "3 dentes descartados");
 
     // Depois do skip o bootstrap recomeça limpo e o sync recupera normalmente.
-    ckp_feed_n_then_gap(55u);
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::FULL_SYNC), "re-sync após skip");
     CHECK_EQ(g_dbg_skip_after_silence - base1, 3u,
@@ -282,7 +282,7 @@ void test_ckp_seed_confirmed(void) {
     ckp_test_reset(); g_ckp_cap = 0u;
     ckp_seed_arm(true);
 
-    for (uint32_t i = 0; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    for (uint32_t i = 0; i < kWheelNormalTeeth; ++i) { ckp_fire(kNormalPeriod); }
     ckp_fire(kNormalPeriod * 3u);  // gap: seed desativado → HALF_SYNC (não FULL_SYNC)
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC (seed desativado)");
@@ -300,7 +300,7 @@ void test_ckp_seed_rejected(void) {
     ckp_test_reset(); g_ckp_cap = 0u;
     ckp_seed_arm(true);
 
-    for (uint32_t i = 0; i < 55u; ++i) { ckp_fire(kNormalPeriod); }
+    for (uint32_t i = 0; i < kWheelNormalTeeth; ++i) { ckp_fire(kNormalPeriod); }
     ckp_fire(kNormalPeriod * 3u);  // gap: seed desativado → HALF_SYNC
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::HALF_SYNC), "pre-cond: HALF_SYNC (seed desativado)");
@@ -425,21 +425,21 @@ void test_ckp_phase_toggle(void) {
     cam_fire(cam_arm);
     cam_fire(cam_ok1);
     CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "first pair of cam edges not glitches");
-    ckp_feed_n_then_gap(55u);  // gap applies pending CMP correction
+    ckp_feed_n_then_gap(kWheelNormalTeeth);  // gap applies pending CMP correction
     CHECK_EQ(ckp_snapshot().phase_A, true, "first CMP corrects phase_A to kCmpRefHalf (true)");
 
     // Next validated cam: delta = 116× from last accepted (cam_ok1).
     const uint32_t cam_ok2 = cam_ok1 + kNormalPeriod * 116u;
     cam_fire(cam_ok2);
     CHECK_EQ(ckp_get_cmp_glitch_count(), 0u, "follow-up cam edge not a glitch");
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     CHECK_EQ(ckp_snapshot().phase_A, true, "second CMP corrects phase_A to kCmpRefHalf (true)");
 
     // Glitch: delta from prev valid CMP is too small → rejected.
     cam_fire(cam_ok2 + 10u);
     CHECK_EQ(ckp_get_cmp_glitch_count(), 1u, "glitch cam edge counted");
     const bool phase_before = ckp_snapshot().phase_A;  // true
-    ckp_feed_n_then_gap(55u);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
     CHECK_EQ(ckp_snapshot().phase_A, !phase_before, "after glitch: phase_A toggles normally (no CMP correction)");
 }
 
