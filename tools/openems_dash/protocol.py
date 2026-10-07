@@ -647,11 +647,11 @@ PAGE0_FIELDS = [
     ("mspark_inter_dwell_ms_x10", 173, 1, "H", 0.1),  # dwell entre sparks (ms)
     # byte 71 (era pad): skip de dentes CKP pós-silêncio (0=off, clamp FW 57)
     ("ckp_skip_pulses_after_gap", 71, 1, "B", 1.0),
-    # bytes 258-263: MAP janela angular por cilindro (FOME #610; era 246-251,
+    # bytes 264-269: MAP janela angular por cilindro (FOME #610; era 246-251,
     # sobreposto ao 3º sinal CAN RX 240-251)
-    ("map_window_enable",   258, 1, "B", 1.0),  # 0=off 1=medir
-    ("map_window_open_deg", 260, 1, "H", 1.0),  # ° ciclo 720 (slot0; +180°/slot)
-    ("map_window_len_deg",  262, 1, "H", 1.0),  # ° duração (10-180)
+    ("map_window_enable",   264, 1, "B", 1.0),  # 0=off 1=medir
+    ("map_window_open_deg", 266, 1, "H", 1.0),  # ° ciclo 720 (slot0; +180°/slot)
+    ("map_window_len_deg",  268, 1, "H", 1.0),  # ° duração (10-180)
     # bytes 252-257: duty INJ + gates DFCO + knock morto
     ("inj_duty_max_pct",            252, 1, "B", 1.0),   # % (0=off)
     ("inj_duty_tol_ms10",           253, 1, "B", 10.0),  # ms de tolerância
