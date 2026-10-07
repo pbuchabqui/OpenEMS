@@ -34,7 +34,6 @@
 #include "engine/engine_config.h"
 #include "hal/timer.h"
 #include "hal/flash.h"
-#include "hal/runtime_seed.h"
 #include "app/ui_protocol.h"
 #include "app/status_bits.h"
 #include "hal/crc32.h"
@@ -429,14 +428,6 @@ void test_etb_autocal_persist_and_fallback(void) {
 
     ems::hal::EtbCalRecord rec{};
     CHECK_TRUE(ems::hal::nvm_load_etb_cal(&rec), "registro NVM gravado após sucesso");
-    // Contrato: um save de runtime seed (stop-sync) não pode perder o registro
-    // ETB (no firmware são co-escritos no mesmo setor).
-    ems::hal::RuntimeSyncSeed seed{};
-    seed.flags = ems::hal::RUNTIME_SYNC_SEED_FLAG_VALID;
-    (void)ems::hal::nvm_save_runtime_seed(&seed);
-    ems::hal::EtbCalRecord rec2{};
-    CHECK_TRUE(ems::hal::nvm_load_etb_cal(&rec2), "registro sobrevive a seed save");
-    CHECK_EQ(rec2.tps1_min, rec.tps1_min, "registro intacto após seed save");
     CHECK_EQ(rec.tps1_min, 600u,  "NVM tps1_min");
     CHECK_EQ(rec.tps1_max, 3500u, "NVM tps1_max");
     CHECK_EQ(rec.tps2_min, 650u,  "NVM tps2_min");

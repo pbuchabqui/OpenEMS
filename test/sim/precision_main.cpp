@@ -22,7 +22,7 @@ using namespace sim;
 
 namespace {
 
-constexpr int kStage = 2;  // review stage this tree is at
+constexpr int kStage = 3;  // review stage this tree is at
 
 int g_pass = 0, g_fail = 0, g_xfail = 0, g_xpass = 0;
 
@@ -238,6 +238,53 @@ int main()
         const Metrics m = run_and_print("noise mid-tooth", c, 0.8, false, &r);
         check("noise", "spark error max (deg)", m.spark_err_max, 0.2, 3);
         check("noise", "sparks with dwell < 50%", m.short_dwell, 0);
+    }
+
+    // ── Noise pulse at every fraction of a tooth period ─────────────────
+    {
+        // 3000 rpm: θ(t) = 18000·t deg; tooth n edge at engine 636 + 6n deg.
+        // One pulse per revolution at fraction f = 0.1 … 0.9 of the period.
+        Config c = base(3000);
+        c.duration_s = 1.6;
+        for (int k = 1; k <= 9; ++k) {
+            // Revolution 42+2k (t ≈ 0.88…1.36 s, inside the measured window), tooth 7k.
+            const double tooth_deg = 636.0 + 360.0 * (42 + 2 * k) + 6.0 * (7 * k);
+            c.noise_s.push_back((tooth_deg + 6.0 * 0.1 * k) / 18000.0);
+        }
+        Result r;
+        const Metrics m = run_and_print("noise f=0.1..0.9", c, 0.8, false, &r);
+        // f < 0.5: edge ignored. f >= 0.5: the noise stands in for the real
+        // edge of that one tooth (indistinguishable at that instant): events
+        // armed from it are early by at most (1 - f) × 6 deg = 3 deg.
+        check("noise sweep", "spark error max (deg)", m.spark_err_max, 3.0);
+        check("noise sweep", "missing+spurious sparks", m.missing + m.spurious, 0);
+        check("noise sweep", "sparks with dwell <50%/>120%", m.short_dwell + m.long_dwell, 0);
+    }
+
+    // ── One tooth edge lost (sensor glitch) → explicit sync loss ────────
+    {
+        Config c = base(3000);
+        c.duration_s = 1.6;
+        // Lose only tooth 30 of revolution 45 (t ≈ 0.95 s, inside the window).
+        const double th = 636.0 + 360.0 * 45.0 + 6.0 * 30.0;
+        c.dropout_s = {{(th - 1.0) / 18000.0, (th + 1.0) / 18000.0}};
+        const Metrics m = run_and_print("one tooth lost", c, 0.8, false);
+        // Never fire off-angle on the miscounted teeth; sparks lost while
+        // re-syncing are acceptable (≤ 2 revolutions ≈ 8 sparks).
+        check("tooth lost", "spark error max (deg)", m.spark_err_max, 0.2);
+        check("tooth lost", "missing sparks while re-syncing", m.missing, 8);
+    }
+
+    // ── Hard cranking: ±45 % compression ripple at 200 rpm ──────────────
+    {
+        Config c = base(200);
+        c.ripple = 0.45;
+        c.duration_s = 5.0;
+        Result r;
+        const Metrics m = run_and_print("crank 200 rpm +-45%", c, 2.0, false, &r);
+        check("crank 45%", "spark error max (deg)", m.spark_err_max, 1.0);
+        check("crank 45%", "missing+spurious sparks", m.missing + m.spurious, 0);
+        check("crank 45%", "dwell watchdog trips", r.dwell_wdog, 0);
     }
 
     // ── CKP dropout during a dwell → sync loss (outputs must end on time) ─

@@ -11,15 +11,15 @@ namespace ems::hal {
 constexpr uint8_t kNvmLtftDim    = 20u;
 constexpr uint8_t kNvmLtftAddDim = (kNvmLtftDim + 1u) / 2u;
 
-// ── Layout do Setor 0 (LTFT-mult + knock + LTFT-add + magic + maps CRC + seed) ─
-// Offsets derivados das dimensões; magic e seed alinhados a 16 bytes
+// ── Layout do Setor 0 (LTFT-mult + knock + LTFT-add + magic + maps CRC + reservado) ─
+// Offsets derivados das dimensões; magic e reservado alinhados a 16 bytes
 // (quad-word de flash). Mudar kNvmLtftDim ou o magic invalida o setor no boot
 // (mapas zerados e regravados no flush).
 //
 //   [0 .. magic)     payload (LTFT + knock + LTFT-add)
 //   magic @ aligned  "LTF3"
 //   maps_crc @ +4    CRC-32 ISO-HDLC of payload [0 .. magic)
-//   seed @ magic+16  RuntimeSyncSeed
+//   reserved @ magic+16 (16 B, zero — antigo seed de sync, removido)
 constexpr uint32_t kNvmOffLtft        = 0u;
 constexpr uint32_t kNvmOffKnock       = static_cast<uint32_t>(kNvmLtftDim) * kNvmLtftDim;
 constexpr uint32_t kNvmOffLtftAdd     = kNvmOffKnock + 64u;  // knock fixo 8×8
@@ -27,9 +27,9 @@ constexpr uint32_t kNvmOffLayoutMagic =
     (kNvmOffLtftAdd + static_cast<uint32_t>(kNvmLtftAddDim) * kNvmLtftAddDim + 15u) & ~15u;
 constexpr uint32_t kNvmLayoutMagic    = 0x4C544633u;  // "LTF3" (CRC-protected maps)
 constexpr uint32_t kNvmOffMapsCrc     = kNvmOffLayoutMagic + 4u;
-constexpr uint32_t kNvmSeedOffset     = kNvmOffLayoutMagic + 16u;
-// EtbCalRecord @ seed+16 (16 B, quad-word alinhado)
-constexpr uint32_t kNvmEtbCalOffset   = kNvmSeedOffset + 16u;
+constexpr uint32_t kNvmReservedOffset     = kNvmOffLayoutMagic + 16u;
+// EtbCalRecord @ reserved+16 (16 B, quad-word alinhado)
+constexpr uint32_t kNvmEtbCalOffset   = kNvmReservedOffset + 16u;
 
 // ── Última calibração ETB bem-sucedida (auto-cal de power-on) ────────────────
 // Persistida no setor adaptativo para servir de fallback quando uma partida
