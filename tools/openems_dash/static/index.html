@@ -47,6 +47,9 @@
 
       <div class="nav-group">
         <div class="nav-group-label">Engine</div>
+        <button class="tab" data-tab="install" title="Guia de instalação e calibração">
+          <span class="tab-icon">✓</span><span class="tab-label">Install</span>
+        </button>
         <button class="tab" data-tab="params" title="Engine config &amp; corrections">
           <span class="tab-icon">≡</span><span class="tab-label">Params</span>
         </button>
@@ -115,6 +118,10 @@
         <div id="pedalMapRoot"></div>
       </section>
 
+      <section id="tab-install" class="pane">
+        <div id="installRoot"></div>
+      </section>
+
       <section id="tab-output-test" class="pane">
         <div id="outputTestRoot"></div>
       </section>
@@ -136,5 +143,6 @@
 <script src="uplot.min.js"></script>
 <script src="js/helpers.js?v=20260718aa"></script>
 <script src="app.js?v=20260718aa"></script>
+<script src="js/install.js?v=20261007"></script>
 </body>
 </html>

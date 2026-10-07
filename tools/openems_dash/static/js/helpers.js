@@ -114,7 +114,30 @@
     }
   }
 
+  /**
+   * Trigger offset (engine degrees of tooth 0 after the gap) from the number
+   * of teeth between that tooth and cylinder 1 TDC (compression), 60-2 wheel:
+   * offset = (720 − teeth × 6) mod 720.
+   */
+  function offsetFromTeeth(teeth) {
+    const n = Math.round(Number(teeth));
+    if (!Number.isFinite(n) || n < 0 || n > 119) return null;
+    return ((720 - n * 6) % 720 + 720) % 720;
+  }
+
+  /** Names of the engine-config fields the ECU rejected (cfgReject mask). */
+  const REJECT_FIELDS = ["cilindrada", "vazão do injetor", "AFR", "MAP ref",
+                         "offset do trigger", "EOI"];
+  function rejectedFields(mask) {
+    const m = Number(mask) | 0;
+    const out = REJECT_FIELDS.filter((_, i) => (m >> i) & 1);
+    if (m & 0x80) out.push("página 0 inválida (magic)");
+    return out;
+  }
+
   return {
+    offsetFromTeeth,
+    rejectedFields,
     heatColor,
     heatTextColor,
     axisLookup,

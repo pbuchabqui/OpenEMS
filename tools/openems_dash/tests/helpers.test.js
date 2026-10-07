@@ -148,3 +148,19 @@ describe("formatGauge", () => {
     assert.equal(helpers.formatGauge("rpm", null), "—");
   });
 });
+
+describe("install helpers", () => {
+  it("offsetFromTeeth: README example and wrap", () => {
+    assert.equal(helpers.offsetFromTeeth(14), 636);
+    assert.equal(helpers.offsetFromTeeth(0), 0);
+    assert.equal(helpers.offsetFromTeeth(60), 360);
+    assert.equal(helpers.offsetFromTeeth(-1), null);
+    assert.equal(helpers.offsetFromTeeth("x"), null);
+  });
+  it("rejectedFields: decodes the cfgReject mask", () => {
+    assert.deepEqual(helpers.rejectedFields(0), []);
+    assert.deepEqual(helpers.rejectedFields(0x02), ["vazão do injetor"]);
+    assert.deepEqual(helpers.rejectedFields(0x11), ["cilindrada", "offset do trigger"]);
+    assert.equal(helpers.rejectedFields(0x80).length, 1);
+  });
+});
