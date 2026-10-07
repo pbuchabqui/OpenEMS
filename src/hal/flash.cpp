@@ -637,6 +637,10 @@ void flash_test_set_busy_polls(uint32_t polls) noexcept {
     g_flash_busy = (polls > 0u);
 }
 uint32_t nvm_test_erase_count() noexcept { return g_erase_cnt; }
+uint8_t* nvm_host_calibration_image(uint32_t* len) noexcept {
+    if (len != nullptr) { *len = static_cast<uint32_t>(sizeof(g_cal)); }
+    return &g_cal[0][0];
+}
 uint32_t nvm_test_program_count() noexcept { return g_prog_cnt; }
 
 } // namespace ems::hal

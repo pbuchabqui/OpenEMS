@@ -296,6 +296,8 @@ int main(void) {
     test_install_engine_config_per_field();
     test_install_timing_light_mode();
     test_install_output_test_over_envelope();
+    test_page0_survives_reboot();
+    test_table_burn_persists_layout();
     test_adaptives_reset_cmd_z();
     test_ltft_apply_cmd_y();
     test_ltft_hit_matches_ve_dominant_cell();

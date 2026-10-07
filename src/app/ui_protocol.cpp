@@ -451,6 +451,14 @@ namespace ems::app {
 using namespace ems::app::ui_detail;
 
 
+void ui_boot_apply_page0(const uint8_t* page0, uint16_t len) noexcept {
+    if (page0 == nullptr) { return; }
+    const uint16_t n = (len < sizeof(g_page0)) ? len : static_cast<uint16_t>(sizeof(g_page0));
+    std::memcpy(g_page0, page0, n);
+    static_cast<void>(sync_table_from_page(0x00u));
+    ems::engine::apply_page0_timing(g_page0, sizeof(g_page0), true);
+}
+
 void ui_init() noexcept {
     enter_critical();
     g_rx_head = 0u;

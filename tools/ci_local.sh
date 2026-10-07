@@ -14,6 +14,7 @@ make host-test-vgt6 WERROR="$WERROR"
 make host-test-knock-hw WERROR="$WERROR"
 make precision-test
 make ini-check
+make dash-check
 make firmware-rgt6 WERROR="$WERROR"
 make firmware-vgt6 WERROR="$WERROR"
 make lint-includes LINT_PHASE=A LINT_ERROR=1

@@ -93,6 +93,8 @@ bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept;
 void nvm_test_reset() noexcept;
 void flash_test_set_busy_polls(uint32_t polls) noexcept;
 uint32_t nvm_test_erase_count() noexcept;
+// Host only: the calibration slots as one byte image (sim ECU persists it).
+uint8_t* nvm_host_calibration_image(uint32_t* len) noexcept;
 uint32_t nvm_test_program_count() noexcept;
 #endif
 

@@ -161,8 +161,10 @@ void update_realtime_page() noexcept {
     rt.ve          = g_page1_ve[0];
     rt.stft_p100   = g_rt_stft_p100;
     // VE interpolado vivo (get_ve no ponto rpm×map atual) — rt.ve só expõe VE[0][0].
+    // Live VE at the current point; a MAP sensor in fault reads 0, clamp to
+    // the table axis range like the fuel path does.
     rt.reserved[49] = ems::engine::get_ve(
-        c.rpm_x10, static_cast<uint16_t>(s.map_bar_x1000 / 10u));
+        c.rpm_x10, ems::engine::clamp_u16(static_cast<uint16_t>(s.map_bar_x1000 / 10u), 10u, 300u));
 
     uint16_t status = 0u;
     if (c.state == ems::drv::SyncState::FULL_SYNC) {
@@ -819,7 +821,8 @@ void clear_page_dirty(uint8_t page) noexcept {
     g_dirty_page_mask = static_cast<uint16_t>(g_dirty_page_mask & static_cast<uint16_t>(~editable_page_bit(page)));
 }
 
-bool burn_page_to_flash(uint8_t page) noexcept {
+namespace {
+bool burn_one_page(uint8_t page) noexcept {
     if (page == 0x00u) {
         // Serializa g_eng_cfg → g_page0[2-15] e guarda o slot NVM 0 completo.
         ems::engine::cfg::engine_config_serialize(g_page0, 16u);
@@ -886,6 +889,23 @@ bool burn_page_to_flash(uint8_t page) noexcept {
         return true;
     }
     return false;
+}
+}  // namespace
+
+// Table pages only load at boot when page 0 in flash carries the current
+// layout version. Burning a table on a board whose page 0 was never burned
+// (or holds an older layout) would be lost at the next power-up, so the first
+// table burn also burns page 0 with its live values.
+bool burn_page_to_flash(uint8_t page) noexcept {
+    if (!burn_one_page(page)) { return false; }
+    if (page == 0x00u) { return true; }
+    uint8_t stored[ems::engine::kCalLayoutVersionOffset + 1u] = {};
+    ems::hal::nvm_load_calibration(0u, stored, static_cast<uint16_t>(sizeof(stored)));
+    if (stored[ems::engine::kCalLayoutVersionOffset] == ems::engine::kCalLayoutVersion) {
+        return true;
+    }
+    sync_page_from_table(0x00u);
+    return burn_one_page(0x00u);
 }
 
 void handle_read_done() noexcept {

@@ -183,6 +183,8 @@ void test_page0_rewrite_is_identity(void);
 void test_install_engine_config_per_field(void);
 void test_install_timing_light_mode(void);
 void test_install_output_test_over_envelope(void);
+void test_page0_survives_reboot(void);
+void test_table_burn_persists_layout(void);
 void test_adaptives_reset_cmd_z(void);
 void test_ltft_apply_cmd_y(void);
 void test_ltft_hit_matches_ve_dominant_cell(void);
