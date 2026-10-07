@@ -1141,7 +1141,6 @@ const PAGE_LAYOUT = {
     curves: [
       { title: "CLT correction",        axis: "clt_corr_axis_x10",     axisLabel: "CLT (°C)",   rows: [["clt_corr_x256", "factor ×256"]] },
       { title: "IAT correction",        axis: "iat_corr_axis_x10",     axisLabel: "IAT (°C)",   rows: [["iat_corr_x256", "factor ×256"]] },
-      { title: "Warmup",              axis: "warmup_corr_axis_x10",  axisLabel: "CLT (°C)",   rows: [["warmup_corr_x256", "factor ×256"]] },
       { title: "Injector dead time vs VBat",     axis: "vbatt_corr_axis_mv",    axisLabel: "VBat (V)",     rows: [["injector_dead_time_us", "dead time (ms)"]] },
       { title: "AE vs CLT",           axis: "ae_clt_corr_axis_x10",  axisLabel: "CLT (°C)",   rows: [["ae_clt_sens", "sensitivity"]] },
       { title: "Dwell vs VBat",       axis: "dwell_vbatt_axis_mv",   axisLabel: "VBat (V)",     rows: [["dwell_ms_x10_table", "dwell (ms)"]] },

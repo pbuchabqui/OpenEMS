@@ -81,6 +81,7 @@ volatile uint32_t g_flash_write_faults = 0u; // FIX: fault counter para falhas d
 
 
 static int8_t  g_last_advance_deg = 0;
+static int16_t g_last_advance_x10 = 0;
 // Spark retard from torque manager (TC/launch), updated in 2 ms ETB slot.
 static int16_t g_torque_spark_retard_deg = 0;
 static uint8_t g_last_pw_ms_x10   = 0u;
@@ -233,11 +234,14 @@ static void commit_sched(int16_t spark_x10, uint32_t dwell_ticks, uint32_t inj_p
     // Telemetry keeps whole degrees (rounded); the scheduler gets 0.1°.
     const int16_t deg = static_cast<int16_t>((spark_x10 + (spark_x10 >= 0 ? 5 : -5)) / 10);
     g_last_advance_deg = clamp_i8(deg, -20, 60);
-    // Knock retard is per cylinder (each coil retards on its own).
+    // Knock retard is per cylinder (each coil retards on its own); none in
+    // timing-light mode, the strobe must see the fixed advance.
     uint16_t knock_x10[4];
     for (uint8_t c = 0u; c < 4u; ++c) {
-        knock_x10[c] = ems::engine::knock_get_retard_x10(c);
+        knock_x10[c] = (ems::engine::timing_light_enable != 0u)
+            ? 0u : ems::engine::knock_get_retard_x10(c);
     }
+    g_last_advance_x10 = spark_x10;
     ::ecu_sched_set_cyl_retard_x10(knock_x10);
     ::ecu_sched_commit_calibration_x10(
         spark_x10,
@@ -388,6 +392,7 @@ static void openems_init() noexcept {
 	// Polaridade CKP/CMP (page0[258]) — re-aplica TIM5 + pull (tim5_ic_init foi
 	// antes da NVM, default subida/pull-down).
 	ems::engine::apply_page0_capture_polarity(g_calib_page0, kCalibPageBytes);
+	ems::engine::apply_page0_timing(g_calib_page0, kCalibPageBytes, true);
 	// Closed-loop / LEARN (page0[80-85])
 	ems::engine::closed_loop_enable =
 	    (g_calib_page0[80] != 0u) ? 1u : 0u;
@@ -893,7 +898,8 @@ int main() {
                 }
                 const int16_t sched_spark_x10 = qc.cranking
                     ? static_cast<int16_t>(ems::engine::crank_spark_deg * 10)
-                    : ems::engine::calc_total_advance_x10(base_advance_x10, corr);
+                    : ems::engine::ign_running_advance_x10(
+                          ems::engine::calc_total_advance_x10(base_advance_x10, corr));
                 // Decel / flood: force PW=0 (do not apply min_pw floor).
                 const uint32_t quick_crank_pw_us =
                     (decel_cut_active || flood_clear) ? 0u :
@@ -936,7 +942,8 @@ int main() {
                 // qc already updated — use crank spark only while still latched cranking.
                 const int16_t sched_spark_x10 = qc.cranking
                     ? static_cast<int16_t>(ems::engine::crank_spark_deg * 10)
-                    : ems::engine::get_advance_x10(snap.rpm_x10, map_bar_x100);
+                    : ems::engine::ign_running_advance_x10(
+                          ems::engine::get_advance_x10(snap.rpm_x10, map_bar_x100));
                 commit_sched(sched_spark_x10, dwell_ticks, 0u, snap, sensors);
                 g_last_pw_ms_x10 = 0u;
                 g_last_net_pw_us = 0u;
@@ -992,7 +999,7 @@ int main() {
                 g_late_event_count,
                 g_cycle_schedule_drop_count,
                 g_calibration_clamp_count,
-                0u, 0u, 0u,  // former sync-seed counters (feature removed)
+                g_last_advance_x10,
                 static_cast<uint8_t>(snap.state));
             // Transporte (UART+USB RX/TX/parse) vive em comms_pump() a 2 ms.
             ems::engine::auxiliaries_tick_20ms();

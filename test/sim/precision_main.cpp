@@ -183,6 +183,20 @@ int main()
         std::memcpy(ems::engine::spark_table, saved, sizeof(saved));
     }
 
+    // ── Trigger offset set in 0.1° (timing-light fine trim) ─────────────
+    {
+        Config c = base(3000);
+        c.trigger_offset_deg = 100;
+        c.wheel_extra_deg = 0.4;           // real wheel is 0.4° off the whole-degree value
+        const Metrics off = analyze(run(c), 0.8, false);
+        check("trigger fine", "error with whole-degree offset only (deg)",
+              std::fabs(std::fabs(off.spark_err_mean) - 0.4), 0.05);
+        ems::engine::trigger_fine_x10 = 4;  // timing light: +0.4°
+        check_seq("trigger fine +0.4", run_and_print("trigger offset 100 + fine 0.4 deg", c, 0.8, false),
+                  Limits{});
+        ems::engine::trigger_fine_x10 = 0;
+    }
+
     // ── Knock retard is per cylinder: only the knocking coil moves ──────
     {
         Config c = base(3000);

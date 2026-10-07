@@ -71,7 +71,8 @@ static CanSignalDef unpack_def(const uint8_t* src) noexcept {
     if (d.byte_lo > 7u) { d.byte_lo = 7u; }
     if (d.byte_hi != 0xFFu && d.byte_hi > 7u) { d.byte_hi = 7u; }
     if (d.shift_right > 15u) { d.shift_right = 15u; }
-    if (d.mask == 0u) { d.mask = 0xFFFFu; }
+    // mask 0 stays 0 on the wire (= full 16 bits at extraction), so a page
+    // read back and written unchanged is the identity.
     return d;
 }
 

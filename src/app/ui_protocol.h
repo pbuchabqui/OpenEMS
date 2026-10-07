@@ -45,9 +45,7 @@ void ui_update_rt_metrics(uint8_t pw_ms_x10, int8_t advance_deg, int8_t stft_p10
 void ui_update_rt_sched_diag(uint32_t late_events,
                              uint32_t cycle_schedule_drop_count,
                              uint32_t calibration_clamp_count,
-                             uint32_t seed_loaded_count,
-                             uint32_t seed_confirmed_count,
-                             uint32_t seed_rejected_count,
+                             int16_t advance_x10,
                              uint8_t sync_state_raw) noexcept;
 
 void ui_update_loop_diag(uint32_t loop2ms_last_us,

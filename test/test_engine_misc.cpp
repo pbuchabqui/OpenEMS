@@ -721,8 +721,7 @@ void test_hal_flash_all(void) {
         std::memcpy(corr_page +  16, ems::engine::clt_corr_x256, 16u);
         std::memcpy(corr_page +  32, ems::engine::iat_corr_axis_x10, 16u);
         std::memcpy(corr_page +  48, iat_corr_x256, 16u);
-        std::memcpy(corr_page +  64, ems::engine::warmup_corr_axis_x10, 16u);
-        std::memcpy(corr_page +  80, ems::engine::warmup_corr_x256, 16u);
+        // 64-95 reserved (dead warmup curve removed)
         std::memcpy(corr_page +  96, ems::engine::vbatt_corr_axis_mv, 16u);
         std::memcpy(corr_page + 112, ems::engine::injector_dead_time_us, 16u);
         std::memcpy(corr_page + 128, ems::engine::ae_clt_corr_axis_x10, 16u);
@@ -880,6 +879,7 @@ void test_page0_capture_polarity(void) {
     capture_polarity = 0xAAu;
     apply_page0_capture_polarity(page, 100u);
     CHECK_EQ(capture_polarity, 0xAAu, "len curto = no-op");
+    capture_polarity = 0u;
 }
 
 void test_page0_trims_driveability(void) {

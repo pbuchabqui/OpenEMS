@@ -52,49 +52,67 @@ static inline void write_u16_le(uint8_t* buf, uint16_t offset, uint16_t val) noe
     std::memcpy(buf + offset, &val, sizeof(val));
 }
 
+namespace {
+
+// Valid range per field. tools/ts/openems.ini uses exactly these limits, so
+// TunerStudio cannot send a value the firmware would reject.
+struct FieldSpec {
+    uint16_t offset;
+    uint16_t lo;
+    uint16_t hi;
+    uint16_t EngineConfigRam::*field;
+};
+
+constexpr FieldSpec kFields[] = {
+    {kOffsetDisplacementCc,         200u, 10000u, &EngineConfigRam::displacement_cc},
+    {kOffsetInjectorFlowCcMin,       50u,  3000u, &EngineConfigRam::injector_flow_cc_min},
+    {kOffsetStoichAfrX100,          900u,  1800u, &EngineConfigRam::stoich_afr_x100},
+    {kOffsetMapRefKpa,               50u,   250u, &EngineConfigRam::map_ref_bar_x100},
+    {kOffsetTriggerTooth0EngineDeg,   0u,   719u, &EngineConfigRam::trigger_tooth0_engine_deg},
+    {kOffsetDefaultEoiLeadDeg,        0u,   719u, &EngineConfigRam::default_eoi_lead_deg},
+};
+constexpr uint8_t kFieldCount = static_cast<uint8_t>(sizeof(kFields) / sizeof(kFields[0]));
+
+uint8_t g_reject_mask = 0u;
+
+}  // namespace
+
 bool engine_config_valid(const EngineConfigRam& c) noexcept {
-    if (c.displacement_cc < 200u || c.displacement_cc > 10000u) {
-        return false;
-    }
-    if (c.injector_flow_cc_min < 50u || c.injector_flow_cc_min > 3000u) {
-        return false;
-    }
-    if (c.stoich_afr_x100 < 900u || c.stoich_afr_x100 > 1800u) {
-        return false;
-    }
-    if (c.map_ref_bar_x100 < 50u || c.map_ref_bar_x100 > 250u) {
-        return false;
-    }
-    if (c.trigger_tooth0_engine_deg > 719u) {
-        return false;
-    }
-    if (c.default_eoi_lead_deg > 719u) {
-        return false;
+    for (const FieldSpec& f : kFields) {
+        const uint16_t v = c.*(f.field);
+        if (v < f.lo || v > f.hi) {
+            return false;
+        }
     }
     return true;
 }
 
-void engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept {
+uint8_t engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept {
     if (page0_buf == nullptr || len < kMinPageLen) {
-        return;
+        return g_reject_mask;
     }
-
-    const uint16_t magic = read_u16_le(page0_buf, kMagicOffset);
-    if (magic != kMagicValue) {
-        return;  // Invalid magic — keep compile-time defaults
+    if (read_u16_le(page0_buf, kMagicOffset) != kMagicValue) {
+        g_reject_mask = kEngineConfigRejectMagic;  // keep current values
+        return g_reject_mask;
     }
-
-    EngineConfigRam tmp = {};
-    tmp.displacement_cc         = read_u16_le(page0_buf, kOffsetDisplacementCc);
-    tmp.injector_flow_cc_min    = read_u16_le(page0_buf, kOffsetInjectorFlowCcMin);
-    tmp.stoich_afr_x100         = read_u16_le(page0_buf, kOffsetStoichAfrX100);
-    tmp.map_ref_bar_x100             = read_u16_le(page0_buf, kOffsetMapRefKpa);
-    tmp.trigger_tooth0_engine_deg = read_u16_le(page0_buf, kOffsetTriggerTooth0EngineDeg);
-    tmp.default_eoi_lead_deg    = read_u16_le(page0_buf, kOffsetDefaultEoiLeadDeg);
-
-    if (engine_config_valid(tmp)) {
-        g_eng_cfg = tmp;
+    // Per field: a value out of range is rejected alone (keeps its current
+    // value) and flagged; the other fields still apply.
+    uint8_t mask = 0u;
+    for (uint8_t i = 0u; i < kFieldCount; ++i) {
+        const FieldSpec& f = kFields[i];
+        const uint16_t v = read_u16_le(page0_buf, f.offset);
+        if (v < f.lo || v > f.hi) {
+            mask = static_cast<uint8_t>(mask | (1u << i));
+        } else {
+            g_eng_cfg.*(f.field) = v;
+        }
     }
+    g_reject_mask = mask;
+    return mask;
+}
+
+uint8_t engine_config_reject_mask() noexcept {
+    return g_reject_mask;
 }
 
 void engine_config_serialize(uint8_t* page0_buf, uint16_t len) noexcept {

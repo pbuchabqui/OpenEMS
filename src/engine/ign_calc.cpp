@@ -72,6 +72,11 @@ int16_t calc_total_advance_x10(int16_t base_x10, AdvanceCorrectionsX10 corr) noe
         - corr.antijerk_retard - corr.torque_retard);
 }
 
+int16_t ign_running_advance_x10(int16_t computed_x10) noexcept {
+    return (timing_light_enable != 0u) ? clamp_advance_x10(timing_light_advance_x10)
+                                       : computed_x10;
+}
+
 int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,
                                        uint16_t idle_target_rpm_x10,
                                        uint16_t tps_pct_x10,

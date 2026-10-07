@@ -27,8 +27,6 @@ extern uint16_t clt_corr_x256[kCorrectionTableSize];
 extern int16_t iat_corr_axis_x10[kCorrectionTableSize];
 extern uint16_t iat_corr_x256[kCorrectionTableSize];
 
-extern int16_t warmup_corr_axis_x10[kCorrectionTableSize];
-extern uint16_t warmup_corr_x256[kCorrectionTableSize];
 
 extern uint16_t vbatt_corr_axis_mv[kCorrectionTableSize];
 extern uint16_t injector_dead_time_us[kCorrectionTableSize];
@@ -261,6 +259,20 @@ constexpr uint16_t kCapturePolarityPage0Off = 258u;
 constexpr uint16_t kDecelCutRampMsPage0Off = 259u;
 extern uint8_t capture_polarity;  // bit0 CKP, bit1 CMP; 1 = falling
 void apply_page0_capture_polarity(const uint8_t* page0, uint16_t len) noexcept;
+
+// Timing light (page0 270-275). With the mode on, the spark is fixed at
+// timing_light_advance_x10 (no corrections, no knock retard) so the trigger
+// offset can be set with a strobe: adjust triggerOffset (whole degrees) and
+// trigger_fine_x10 (0.1°) until the light reads the fixed advance.
+//   270      timing_light_enable (RAM only: forced off at boot)
+//   272-273  timing_light_advance_x10 (s16, 0..300 = 0..30.0°, default 10.0°)
+//   274-275  trigger_fine_x10 (s16, -50..50 = ±5.0°, added to the offset)
+constexpr uint16_t kTimingPage0Off = 270u;
+extern uint8_t timing_light_enable;
+extern int16_t timing_light_advance_x10;
+extern int16_t trigger_fine_x10;
+void apply_page0_timing(const uint8_t* page0, uint16_t len, bool at_boot) noexcept;
+void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept;
 
 // Rev limiter: retardo progressivo de faísca removido em b565491 (rusEFI-style:
 // corte só de combustível, faísca nunca cortada). Offsets 80-85 da page 0

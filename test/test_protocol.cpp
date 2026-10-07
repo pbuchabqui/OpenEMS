@@ -12,6 +12,7 @@
 #include "hal/etb_driver.h"
 #include "engine/torque_manager.h"
 #include "engine/calibration.h"
+#include "engine/engine_config.h"
 #include "app/can_rx_map.h"
 #include "hal/adc.h"
 #include "hal/system.h"
@@ -647,4 +648,151 @@ void test_page0_tail_fields_do_not_collide(void) {
     ems::engine::map_window_enable = s_mwe;
     ems::engine::map_window_open_deg = s_mwo;
     ems::engine::map_window_len_deg = s_mwl;
+}
+
+namespace {
+// 'r' of page 0 bytes [off, off+len) through the TS envelope.
+EnvResp page0_read(uint16_t off, uint16_t len) {
+    const uint8_t rd[6] = {'r', 0x00u, static_cast<uint8_t>(off & 0xFFu),
+                           static_cast<uint8_t>(off >> 8u),
+                           static_cast<uint8_t>(len & 0xFFu), static_cast<uint8_t>(len >> 8u)};
+    return env_txn(rd, 6u);
+}
+// 'w' of page 0 bytes through the TS envelope (RAM only, like TunerStudio).
+EnvResp page0_write(uint16_t off, const uint8_t* data, uint16_t len) {
+    uint8_t w[6 + 32] = {'w', 0x00u, static_cast<uint8_t>(off & 0xFFu),
+                         static_cast<uint8_t>(off >> 8u),
+                         static_cast<uint8_t>(len & 0xFFu), static_cast<uint8_t>(len >> 8u)};
+    std::memcpy(w + 6, data, len);
+    return env_txn(w, static_cast<uint16_t>(6u + len));
+}
+EnvResp och_read() {
+    const uint8_t och[7] = {'r', 0x00u, 0x03u, 0x00u, 0x00u, 0x56u, 0x00u};
+    return env_txn(och, 7u);
+}
+}  // namespace
+
+void test_install_engine_config_per_field(void) {
+    section("install: an invalid engine field is rejected alone and reported");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    const ems::engine::cfg::EngineConfigRam saved = ems::engine::cfg::g_eng_cfg;
+
+    // Engine block 2..13: displacement 1600, injector 5000 (invalid > 3000),
+    // AFR 14.70, MAP ref 1.00, trigger 84, EOI 355.
+    uint8_t blk[12];
+    const uint16_t v[6] = {1600u, 5000u, 1470u, 100u, 84u, 355u};
+    std::memcpy(blk, v, sizeof(v));
+    const uint16_t inj_before = ems::engine::cfg::g_eng_cfg.injector_flow_cc_min;
+    const uint8_t cl_before = ems::engine::closed_loop_enable;
+    const uint16_t kp_before = ems::engine::stft_kp_x100;
+    // Partial write right after reset, before any read (the rest of page 0
+    // must keep its live values, not become zero).
+    const EnvResp w = page0_write(2u, blk, 12u);
+    CHECK_EQ(ems::engine::closed_loop_enable, cl_before, "partial write keeps closed loop");
+    CHECK_EQ(ems::engine::stft_kp_x100, kp_before, "partial write keeps STFT gain");
+    CHECK_TRUE(w.frame_ok && w.code == 0x00u, "page0 write accepted");
+    CHECK_EQ(ems::engine::cfg::g_eng_cfg.displacement_cc, 1600u, "valid displacement applied");
+    CHECK_EQ(ems::engine::cfg::g_eng_cfg.stoich_afr_x100, 1470u, "valid AFR applied");
+    CHECK_EQ(ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg, 84u, "valid trigger offset applied");
+    CHECK_EQ(ems::engine::cfg::g_eng_cfg.injector_flow_cc_min, inj_before,
+             "invalid injector flow keeps the previous value");
+    const EnvResp o = och_read();
+    CHECK_TRUE(o.frame_ok && o.len == 86u, "och read");
+    CHECK_EQ(o.data[32], 0x02u, "OCH 32: reject mask names the injector field (bit1)");
+
+    const uint16_t fix = 440u;
+    page0_write(4u, reinterpret_cast<const uint8_t*>(&fix), 2u);
+    CHECK_EQ(ems::engine::cfg::g_eng_cfg.injector_flow_cc_min, 440u, "corrected field applies");
+    CHECK_EQ(och_read().data[32], 0u, "reject mask clears");
+
+    ems::engine::cfg::g_eng_cfg = saved;
+}
+
+void test_install_timing_light_mode(void) {
+    section("install: timing-light mode fixes the advance; fine offset in 0.1 deg");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+
+    // 270 enable, 272 advance 12.0 deg, 274 fine trim -0.3 deg
+    const int16_t adv = 120, fine = -3;
+    uint8_t blk[6] = {1u, 0u, 0u, 0u, 0u, 0u};
+    std::memcpy(blk + 2, &adv, 2u);
+    std::memcpy(blk + 4, &fine, 2u);
+    CHECK_TRUE(page0_write(270u, blk, 6u).code == 0x00u, "page0 270..275 write");
+    CHECK_EQ(ems::engine::timing_light_enable, 1u, "mode on");
+    CHECK_EQ(ems::engine::ign_running_advance_x10(345), 120, "computed 34.5 -> fixed 12.0");
+    CHECK_EQ(ems::engine::trigger_fine_x10, -3, "fine trim -0.3");
+    const EnvResp r = page0_read(270u, 6u);
+    CHECK_TRUE(r.len == 6u && r.data[0] == 1u && r.data[2] == 120u && r.data[4] == 0xFDu,
+               "read back 270..275");
+    CHECK_EQ(och_read().data[33], 1u, "OCH 33: timing light flag");
+
+    // Out of range values clamp; a power cycle always comes back in normal mode.
+    const int16_t big = 999, far = 200;
+    std::memcpy(blk + 2, &big, 2u);
+    std::memcpy(blk + 4, &far, 2u);
+    page0_write(270u, blk, 6u);
+    CHECK_EQ(ems::engine::timing_light_advance_x10, 300, "advance clamped to 30.0");
+    CHECK_EQ(ems::engine::trigger_fine_x10, 50, "fine trim clamped to +5.0");
+    uint8_t page[512] = {};
+    std::memcpy(page + 270, blk, 6u);
+    ems::engine::apply_page0_timing(page, sizeof(page), true);
+    CHECK_EQ(ems::engine::timing_light_enable, 0u, "boot: timing light always off");
+    CHECK_EQ(ems::engine::ign_running_advance_x10(345), 345, "normal mode: computed advance");
+
+    blk[0] = 0u;
+    const int16_t zero = 0;
+    std::memcpy(blk + 4, &zero, 2u);
+    std::memcpy(blk + 2, &zero, 2u);
+    page0_write(270u, blk, 6u);
+    ems::engine::timing_light_advance_x10 = 100;
+}
+
+void test_install_output_test_over_envelope(void) {
+    section("install: output test reachable from TunerStudio (envelope 'T')");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    const uint8_t enter[5] = {'T', 0x01u, 0x00u, 0x5Au, 0xA5u};
+    EnvResp r = env_txn(enter, 5u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 1u && r.data[0] == 0x00u,
+               "ENTER -> ACK in envelope");
+    CHECK_TRUE(ems::engine::output_test_active(), "output test active");
+    const uint8_t fire[5] = {'T', 0x10u, 0x00u, 0xE8u, 0x03u};  // injector 1, 1000 us
+    r = env_txn(fire, 5u);
+    CHECK_TRUE(r.frame_ok && r.len == 1u && r.data[0] == 0x00u, "FIRE_INJ 1 -> ACK");
+    const uint8_t status[5] = {'T', 0x03u, 0u, 0u, 0u};
+    r = env_txn(status, 5u);
+    CHECK_TRUE(r.frame_ok && r.len == 4u && r.data[0] == 1u, "STATUS -> 4 bytes, active");
+    const uint8_t exit_cmd[5] = {'T', 0x00u, 0u, 0u, 0u};
+    r = env_txn(exit_cmd, 5u);
+    CHECK_TRUE(r.len == 1u && r.data[0] == 0x00u && !ems::engine::output_test_active(),
+               "EXIT -> ACK, inactive");
+}
+
+void test_page0_rewrite_is_identity(void) {
+    section("page0: writing back the page unchanged changes nothing");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    uint8_t before[512];
+    for (uint16_t off = 0u; off < 512u; off += 32u) {
+        const EnvResp r = page0_read(off, 32u);
+        std::memcpy(before + off, r.data, 32u);
+    }
+    for (uint16_t off = 0u; off < 512u; off += 32u) {
+        page0_write(off, before + off, 32u);
+    }
+    int diffs = 0;
+    for (uint16_t off = 0u; off < 512u; off += 32u) {
+        const EnvResp r = page0_read(off, 32u);
+        for (uint16_t i = 0u; i < 32u; ++i) {
+            if (r.data[i] != before[off + i]) {
+                if (diffs < 12) {
+                    std::printf("    byte %u: %u -> %u\n", off + i, before[off + i], r.data[i]);
+                }
+                ++diffs;
+            }
+        }
+    }
+    CHECK_EQ(diffs, 0, "page0 round trip is the identity");
 }

@@ -152,7 +152,7 @@ Result run(const Config& cfg)
 
     g_t0 = cfg.t0_ticks;
     auto to_tick = [&](double ts) { return g_t0 + static_cast<uint64_t>(std::llround(ts * kTickHz)); };
-    const double off = cfg.trigger_offset_deg;
+    const double off = cfg.trigger_offset_deg + cfg.wheel_extra_deg;
     const double th_max = r.theta.back();
 
     std::vector<uint64_t> ckp, cam;

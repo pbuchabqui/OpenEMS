@@ -41,6 +41,7 @@ struct Config {
     double ripple = 0.0;  // compression speed ripple (fraction), slow at each TDC
 
     uint16_t trigger_offset_deg = 0;  // engine angle of tooth 0 (firmware cfg)
+    double wheel_extra_deg = 0.0;     // physical tooth 0 is this much further (not in cfg)
     bool cam = true;
     double cam_trigger_deg = 600.0;   // cam edge, trigger-cycle angle [360,720) = rev before PHASE_A
 

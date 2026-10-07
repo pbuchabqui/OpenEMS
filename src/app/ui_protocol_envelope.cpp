@@ -170,6 +170,18 @@ void env_dispatch(const uint8_t* p, uint16_t n) noexcept {
         env_send_response((rc < 0) ? kTsRcRangeErr : static_cast<uint8_t>(rc), nullptr, 0u);
         return;
     }
+    if (cmd == static_cast<uint8_t>('T')) {
+        // Output test from TunerStudio buttons: 'T' sub a1 a2(u16 LE). The
+        // reply (ACK or 4 status bytes) travels in the envelope payload.
+        if (n != 5u) {
+            env_send_response(kTsRcRangeErr, nullptr, 0u);
+            return;
+        }
+        uint8_t out[4];
+        const uint8_t len = test_cmd_exec(p + 1u, out);
+        env_send_response(kTsRcOk, out, len);
+        return;
+    }
     if (cmd == static_cast<uint8_t>('b')) {
         // 'b' [canId] page → 2 ou 3 bytes no payload
         if (n != 2u && n != 3u) {
