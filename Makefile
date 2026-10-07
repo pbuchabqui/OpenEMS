@@ -289,7 +289,7 @@ format-check:
 	echo "$$files" | xargs -r $(CLANG_FORMAT) --dry-run -Werror
 
 ci-local:
-	@bash tools/ci_local.sh $(or $(STAGE),1)
+	@bash tools/ci_local.sh
 
 $(BIN_DIR):
 	@mkdir -p $@
