@@ -15,7 +15,15 @@
 #include <cstring>
 
 #include "engine/calibration.h"
+#include "drv/ckp.h"
+#include "drv/sensors.h"
 #include "engine/ecu_sched.h"
+#include "engine/engine_calc.h"
+#include "engine/fuel_calc.h"
+#include "engine/fuel_trim.h"
+#include "engine/map_estimator.h"
+#include "engine/quick_crank.h"
+#include "engine/transient_fuel.h"
 #include "engine/ign_calc.h"
 #include "engine/table3d.h"
 #include "hal/tim5_host.h"
@@ -195,6 +203,85 @@ int main()
         check_seq("trigger fine +0.4", run_and_print("trigger offset 100 + fine 0.4 deg", c, 0.8, false),
                   Limits{});
         ems::engine::trigger_fine_x10 = 0;
+    }
+
+    // ── Whole chain: sensors + tables -> engine_calc (2 ms loop) -> pins ─
+    // The main-loop step is the firmware's engine_calc_step fed with fixed
+    // sensors; the expected spark / dwell / fuel come from the tables and
+    // physics (speed density, injector small-pulse curve, dead time).
+    {
+        namespace en = ems::engine;
+        static uint8_t sv_ve[en::kTableAxisSize][en::kTableAxisSize];
+        static int16_t sv_lam[en::kTableAxisSize][en::kTableAxisSize];
+        static int8_t sv_spk[en::kTableAxisSize][en::kTableAxisSize];
+        std::memcpy(sv_ve, en::ve_table, sizeof(sv_ve));
+        std::memcpy(sv_lam, en::lambda_target_table_x1000, sizeof(sv_lam));
+        std::memcpy(sv_spk, en::spark_table, sizeof(sv_spk));
+        for (uint8_t y = 0u; y < en::kTableAxisSize; ++y) {
+            for (uint8_t x = 0u; x < en::kTableAxisSize; ++x) {
+                en::ve_table[y][x] = 70u;
+                en::lambda_target_table_x1000[y][x] = 1000;
+                en::spark_table[y][x] = 24;
+            }
+        }
+        en::engine_calc_reset();
+        en::quick_crank_reset();
+        en::transient_fuel_reset();
+        en::fuel_reset_adaptives();
+        en::map_estimator_init();
+        const uint16_t map_kpa = 60u;
+        ems::drv::SensorData s{};
+        s.map_bar_x1000 = map_kpa * 10u;
+        s.clt_degc_x10 = 900;
+        s.iat_degc_x10 = 200;   // 20 C: IAT spark correction 0
+        s.vbatt_mv = 14000u;
+        s.oil_press_bar_x1000 = 3000u;
+        s.fuel_press_bar_x1000 = static_cast<uint16_t>(
+            en::fuel_press_nominal_bar_x1000 - (en::fuel_get_baro_bar_x100() - map_kpa) * 10);
+        s.app_pct_x10 = 250u;
+        s.tps_pct_x10 = 250u;
+
+        const double rpm = 3000.0;
+        // Expected: sequential (cam), one opening per cycle.
+        auto eff = [](double t) {
+            const uint16_t* ax = en::injector_scurve_pw_axis_us;
+            const uint16_t* q = en::injector_scurve_corr_q8;
+            if (t <= ax[0]) { return q[0] / 256.0; }
+            for (int i = 1; i < 8; ++i) {
+                if (t <= ax[i]) {
+                    return (q[i - 1] + (t - ax[i - 1]) / double(ax[i] - ax[i - 1]) * (q[i] - q[i - 1])) / 256.0;
+                }
+            }
+            return q[7] / 256.0;
+        };
+        double flow = en::default_req_fuel_us() * 0.70 * (map_kpa / 101.325) * (298.0 / 293.0);
+        flow *= en::corr_clt(900) / 256.0;
+        flow *= en::corr_iat(200) / 256.0;
+        double open = flow;
+        for (int i = 0; i < 50; ++i) { open = flow / eff(open); }
+
+        Config c = base(rpm);
+        c.cmd.advance_deg = 24.0;
+        c.cmd.dwell_ms = en::dwell_ms_x10_from_vbatt_rpm(14000u, static_cast<uint32_t>(rpm * 10)) / 10.0;
+        c.cmd.fuel_us = open;
+        c.cmd.dead_us = en::corr_vbatt(14000u);
+        c.cmd.eoi_deg = en::calc_eoi_lead_deg(static_cast<uint32_t>(rpm * 10), 900);
+        int16_t last_spark = 0;
+        c.on_main = [&](double t_s) {
+            en::EngineCalcIn in{};
+            in.now_ms = 1000u + static_cast<uint32_t>(t_s * 1000.0);
+            in.snap = ems::drv::ckp_snapshot();
+            in.sensors = s;
+            last_spark = en::engine_calc_step(in).spark_x10;
+        };
+        c.duration_s = 4.0;   // X-tau wall film loads after start: measure at steady state
+        const Metrics m = run_and_print("2 ms loop: tables -> pins", c, 3.0, false);
+        std::printf("    engine_calc advance %.1f deg, expected 24.0\n", last_spark / 10.0);
+        check_seq("engine_calc chain", m, Limits{});
+        check("engine_calc chain", "advance from table (deg)", std::fabs(last_spark / 10.0 - 24.0), 0.05);
+        std::memcpy(en::ve_table, sv_ve, sizeof(sv_ve));
+        std::memcpy(en::lambda_target_table_x1000, sv_lam, sizeof(sv_lam));
+        std::memcpy(en::spark_table, sv_spk, sizeof(sv_spk));
     }
 
     // ── Knock retard is per cylinder: only the knocking coil moves ──────

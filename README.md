@@ -126,6 +126,7 @@ A estrategia pre-sync deve degradar para modo conservador se houver duvida de fa
 
 ### 3. Calculos De Combustivel E Ignicao
 
+- Laco de 2 ms (sensores → PW/avanco/dwell → agendador): `src/engine/engine_calc.cpp` (`engine_calc_step`), testado de ponta a ponta em `test/test_engine_calc.cpp` e no motor virtual; `main_stm32.cpp` so le sensores, chama e publica telemetria.
 - Combustivel: `src/engine/fuel_calc.cpp`.
 - Ignicao: `src/engine/ign_calc.cpp`.
 - Tabelas: `src/engine/table3d.cpp`.
@@ -305,8 +306,8 @@ isolado sem big-bang rewrite.
 make ci-local                   # todos os gates abaixo
 # equivalentes manuais:
 make secrets-check
-make host-test WERROR=1         # referencia: 1314 PASS / 0 FAIL
-make precision-test             # motor virtual: 114 PASS / 0 FAIL (centelha, dwell, PW, EOI)
+make host-test WERROR=1         # referencia: 1331 PASS / 0 FAIL
+make precision-test             # motor virtual: 120 PASS / 0 FAIL (centelha, dwell, PW, EOI)
 make ini-check                  # TunerStudio ini: referencias, sobreposicao, faixas = firmware
 make firmware-rgt6 WERROR=1
 make firmware-vgt6 WERROR=1
@@ -397,7 +398,6 @@ ordem e gate de layout de antes.
 | README § Dois firmwares | Hall vs Encoder: captura privada, fisica comum (R1–R5) |
 | `docs/hw/pinout.md` | **Pinout completo** RGT6/VGT6 (detalhe movido do §5) |
 | `docs/wiring_diagram.md` | Esquemáticos eléctricos (mapa de pinos ASCII **legado**) |
-| `spec.md` | **Deprecated** — historico; pode divergir |
 | `docs/ROADMAP.md` | Backlog de produto (ADC residual, SD, …) |
 | `docs/*.md` | Subsistemas (fuel, idle, …) |
 
