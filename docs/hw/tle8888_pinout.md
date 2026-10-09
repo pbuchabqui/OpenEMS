@@ -1,5 +1,7 @@
 # TLE8888 LQFP-100 — pinout de package (fonte primária)
 
+> ⛔ **Documento histórico.** O TLE8888 não é usado nesta ECU: o driver foi removido do firmware e as saídas INJ/IGN saem direto por GPIO. Mantido só como referência.
+
 > **Fontes:** Infineon TLE8888-1QK Data Sheet **Rev. 1.2** (2017-02-10), §3 Pin Configuration  
 > (PDF local de trabalho / download Infineon). Contraprova de nomes: símbolo KiCad  
 > `rusefi/hardware/rusefi_lib/tle8888qk.lib` (microRusEFI).  

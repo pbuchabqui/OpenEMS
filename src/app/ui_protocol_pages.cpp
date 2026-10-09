@@ -7,7 +7,6 @@
 
 #include "app/can_stack.h"
 #include "app/can_rx_map.h"
-#include "hal/tle8888.h"
 #include "hal/flex_fuel.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
@@ -188,9 +187,6 @@ void update_realtime_page() noexcept {
     if (ems::app::can_stack_wbo2_fault()) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_WBO2_FAULT);
     }
-    if (!ems::hal::tle8888_ok()) {
-        status = static_cast<uint16_t>(status | ems::app::STATUS_TLE8888_FAULT);
-    }
     if (ecu_sched_is_sequential()) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_IGN_SEQUENTIAL);
     }
@@ -219,14 +215,15 @@ void update_realtime_page() noexcept {
     // Gate do sequencial: cmp_confirms (0/1/2). Torna observável no dash porquê a
     // transição wasted→sequencial ocorre ou não (0=CMP ausente/rejeitado, 2=confirmado).
     rt.reserved[7] = c.cmp_confirms;
-    rt.reserved[8] = ems::hal::tle8888_fault_bitmap();
+    rt.reserved[8] = 0u;  // spare (was the TLE8888 fault bitmap; no TLE8888)
     rt.reserved[9] = ems::hal::flex_fuel_valid()
                     ? ems::hal::flex_fuel_ethanol_pct() : 0u;
     write_u32_le(&rt.reserved[10], g_rt_sched_cycle_schedule_drop_count);
     write_u32_le(&rt.reserved[14], g_rt_sched_calibration_clamp_count);
     // reserved[18..21] (abs 32..35): install / calibration aids.
     //   [18] engine config reject mask (engine_config.h), [19] bit0 timing light,
-    //   [20..21] advance sent to the coils, 0.1° signed. [22..29] spare (0).
+    //   [20..21] advance sent to the coils, 0.1° signed.
+    //   [22..29] spare (0). [22] was the TLE8888 register-map fingerprint.
     rt.reserved[18] = ems::engine::cfg::engine_config_reject_mask();
     rt.reserved[19] = ems::engine::timing_light_enable;
     rt.reserved[20] = static_cast<uint8_t>(static_cast<uint16_t>(g_rt_advance_x10) & 0xFFu);
@@ -259,12 +256,6 @@ void update_realtime_page() noexcept {
     rt.reserved[46] = static_cast<uint8_t>((s.an2_raw >> 8u) & 0xFFu);
     rt.reserved[47] = static_cast<uint8_t>(s.an3_raw & 0xFFu);
     rt.reserved[48] = static_cast<uint8_t>((s.an3_raw >> 8u) & 0xFFu);
-    // [49] Fingerprint do mapa de registadores do TLE8888: bitmask das entradas
-    // cujo valor de reset não bateu com o datasheet. 0 = mapa confirmado contra
-    // o silício. Diferente de zero significa que o CI está presente mas o driver
-    // fala com os registadores errados — injecção e ignição ficam inibidas.
-    // É o que torna essa falha visível no bring-up em vez de misteriosa.
-    rt.reserved[49] = ems::hal::tle8888_map_mismatch();
     rt.reserved[50] = static_cast<uint8_t>(s.an4_raw & 0xFFu);
     rt.reserved[51] = static_cast<uint8_t>((s.an4_raw >> 8u) & 0xFFu);
     rt.map_fused_bar_x100 = g_rt_map_fused_bar_x100;

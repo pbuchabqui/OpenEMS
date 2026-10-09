@@ -113,19 +113,9 @@ constexpr int16_t kVvtEscTargetDegX10[kVvtPts][kVvtPts] = {
 
 // ── Bomba de combustível e ventoinha ────────────────────────────────────────
 // ⚠️ VGT6: PE12 = ventoinha, PE10 = bomba.
-// Antes eram PB12/PB13 nos dois packages — o que colide frontalmente com o
-// SPI2 do TLE8888 (PB12=CSN, PB13=SCK, PB14=MISO, PB15=MOSI). Como
-// auxiliaries_init() corre DEPOIS de tle8888_init() (main_stm32.cpp:638 vs 500),
-// reescrevia o MODER e **matava o SPI2_SCK no arranque**: o TLE8888 nunca era
-// clockado e o seu watchdog nunca era alimentado — com o CI montado, isso
-// desliga injecção e ignição. Ver docs/hw/interface_board_v1.md.
-//
-// GPIOE só existe no LQFP100, por isso o RGT6 mantém PB12/PB13 e mantém o
-// conflito — mas o RGT6 não é o alvo da placa de interface.
-//
-// Estes pinos comandam IN9/IN10 do TLE8888 (direct drive → saídas de relé
-// OUT14-20). Escrita por BSRR, que é set/reset atómico por bit e não perturba
-// os canais de INJ/IGN no mesmo porto.
+// RGT6 (sem GPIOE): PB12 = ventoinha, PB13 = bomba.
+// Escrita por BSRR, que é set/reset atómico por bit e não perturba os canais
+// de INJ/IGN no mesmo porto.
 #if EMS_BOARD_IS_VGT6
 constexpr uint8_t kFanPin  = 12u;  // PE12
 constexpr uint8_t kPumpPin = 10u;  // PE10
@@ -133,8 +123,8 @@ constexpr uint8_t kPumpPin = 10u;  // PE10
 #define EMS_AUX_RELAY_MODER GPIOE_MODER
 #define EMS_AUX_RELAY_RCC_EN() (RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN)
 #else
-constexpr uint8_t kFanPin  = 12u;  // PB12 — ⚠️ colide com SPI2 CSN do TLE8888
-constexpr uint8_t kPumpPin = 13u;  // PB13 — ⚠️ colide com SPI2 SCK do TLE8888
+constexpr uint8_t kFanPin  = 12u;  // PB12
+constexpr uint8_t kPumpPin = 13u;  // PB13
 #define EMS_AUX_RELAY_BSRR  GPIOB_BSRR
 #define EMS_AUX_RELAY_MODER GPIOB_MODER
 #define EMS_AUX_RELAY_RCC_EN() (RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOBEN)

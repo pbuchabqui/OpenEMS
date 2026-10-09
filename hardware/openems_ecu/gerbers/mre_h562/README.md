@@ -9,8 +9,8 @@ with **H562 drop-in** (6 power pads), **not** OpenEMS VGT6 PE* re-route.
 | Base | `hardware/vendor/hw_microRusEfi/micro_rusEFI.kicad_pcb` |
 | MCU | **STM32H562VGT6** LQFP100 (same land as F427) |
 | TLE / routing | **mRE original** (PD12–15 IGN, PE14–11 INJ, SPI PD5+PB3/4/5, …) |
-| Firmware | `make firmware BOARD=mre` → `openems-mre.bin` |
-| Docs | `docs/hw/pinout_mre_bringup.md` |
+| Firmware | ~~`BOARD=mre`~~ removed; no current firmware build matches this copper (see `docs/hw/README.md`) |
+| Docs | ~~`docs/hw/pinout_mre_bringup.md`~~ (removed) |
 
 ## H562 electrical deltas vs F427 on this board
 

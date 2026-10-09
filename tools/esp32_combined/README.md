@@ -19,13 +19,16 @@ de 10 canais e funcionalidades Ardu-Stim integradas.
 | GPIO 2 → | GPIO34 | Loopback interno p/ scope CKP |
 | GPIO 32 ← | PE9 | IGN1 |
 | GPIO 33 ← | PE11 | IGN2 |
-| GPIO 25 ← | PE13 | IGN3 (disabled=MAP PWM) |
-| GPIO 26 ← | PE14 | IGN4 (disabled=TPS PWM) |
-| GPIO 27 ← | PC6 | INJ1 |
-| GPIO 14 ← | PC7 | INJ2 |
-| GPIO 12 ← | PC8 | INJ3 |
-| GPIO 13 ← | PC9 | INJ4 |
+| GPIO 26 → | PA3 | MAP (DAC2) — IGN4 (PE15) sem entrada livre |
+| GPIO 25 → | PA4 | TPS (DAC1) — IGN3 (PE13) sem entrada livre |
+| GPIO 27 ← | PE0 | INJ1 |
+| GPIO 14 ← | PE2 | INJ2 |
+| GPIO 12 ← | PE4 | INJ3 |
+| GPIO 13 ← | PE6 | INJ4 |
 | GND — | GND | Obrigatório |
+
+Pinos STM32 = mapa `BOARD=vgt6` (`src/hal/out_pins.h`). Para `BOARD=rgt6`:
+INJ1-4 = PA15/PB3/PC10/PC11, IGN1-4 = PC6/PC7/PC8/PC9.
 
 ## Funcionalidades
 

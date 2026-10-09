@@ -254,7 +254,8 @@ errados. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
   UART<->protocolo roda no slot de 2 ms (`comms_pump()`), nao-bloqueante, com
   TX FIFO (FIFOEN) — throughput efetivo ~4 kB/s, suficiente para realtime TS a
   10-20 Hz. USB CDC espelha o TX e mantem RX no slot de 20 ms.
-- USB CDC: pos-MVP; o backend atual permanece stub/no-op e nao deve ser tratado como transporte validado.
+- USB CDC: driver USB DRD FS completo (`hal/stm32h562/usb_cdc.cpp`), ainda nao validado em
+  hardware; ate la a UART e o transporte de referencia.
 - CAN/FDCAN: diagnostico e integracao com sensores externos.
 
 Comunicacao nao deve bloquear decode, sync, scheduling ou atuadores.
@@ -402,7 +403,7 @@ ordem e gate de layout de antes.
 | Documento | Papel |
 |-----------|--------|
 | **README.md** (este) | Fonte unica de decisoes duraveis |
-| README § Dois firmwares | Hall vs Encoder: captura privada, fisica comum (R1–R5) |
+| `docs/bench_test_manual.md` | Teste de bancada na WeAct VGT6 (sem atuadores) |
 | `docs/hw/pinout.md` | **Pinout completo** RGT6/VGT6 (detalhe movido do §5) |
 | `docs/wiring_diagram.md` | Esquemáticos eléctricos (mapa de pinos ASCII **legado**) |
 | `docs/ROADMAP.md` | Backlog de produto (ADC residual, SD, …) |
@@ -410,7 +411,6 @@ ordem e gate de layout de antes.
 
 ### Fora de escopo do programa de higiene (opcional)
 
-- Reactivar CKP seed (`// TODO` em `ckp.cpp`) — feature de produto.
 - `hal/aux_gpio` para fan/pump (hoje `auxiliaries.cpp` ainda usa `regs.h` /
   BSRR — allowlist Phase C).
 - Split adicional de monolitios grandes (`ckp.cpp`, `fuel_trim`, etc.).
@@ -450,7 +450,7 @@ Definicao de pronto para o MVP de bancada:
   - `STATUS_SCHED_DROP` (bit 7): evento descartado no scheduler.
   - `STATUS_SCHED_CLAMP` (bit 8): ajuste limitado na calibracao — em `0x401 data[6]` bit 0.
   - `STATUS_WBO2_FAULT` (bit 9): sensor WBO2 offline — em `0x401 data[6]` bit 1.
-  - `STATUS_TLE8888_FAULT` (bit 10), `STATUS_IGN_SEQUENTIAL` (bit 11), `STATUS_REV_LIMIT` (bit 12).
+  - bit 10 reservado (era TLE8888_FAULT; sempre 0), `STATUS_IGN_SEQUENTIAL` (bit 11), `STATUS_REV_LIMIT` (bit 12).
   - `STATUS_LAUNCH_ACTIVE` (bit 13): launch control holding ETB/RPM.
   - `STATUS_TC_ACTIVE` (bit 14): traction control reducing torque.
   - OCH also exposes `tcReduction` (%×10 @ off 45) and `torqueSparkRetard` (deg @ off 47).

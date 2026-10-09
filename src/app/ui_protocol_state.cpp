@@ -7,7 +7,6 @@
 
 #include "app/can_stack.h"
 #include "app/can_rx_map.h"
-#include "hal/tle8888.h"
 #include "hal/flex_fuel.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"

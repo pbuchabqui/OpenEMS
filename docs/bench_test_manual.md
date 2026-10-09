@@ -1,1008 +1,415 @@
-# OpenEMS — Manual de Teste em Bancada
+# Manual de teste de bancada — WeAct H562 VGT6
 
-**Versão firmware:** commit `3db627c` (586 PASS / 0 FAIL host tests)  
-**Hardware alvo:** STM32H562RGT6 (LQFP64), 250 MHz, 3.3 V  
-**Data:** 2026-06-06
+Este manual testa a **lógica do firmware no silício real**: sincronismo, ângulo
+da faísca, largura do pulso de injeção, jitter e watchdog. A placa é a WeAct
+STM32H562 VGT6 (`docs/hw/weact_h562_coreboard.md`), e o motor é simulado por um
+ESP32 com `tools/esp32_combined`.
 
----
-
-## Índice
-
-1. [Ferramentas e materiais necessários](#1-ferramentas-e-materiais-necessários)
-2. [Ligações eléctricas de bancada](#2-ligações-eléctricas-de-bancada)
-3. [Compilar e programar o firmware](#3-compilar-e-programar-o-firmware)
-4. [Etapa 1 — Verificação de arranque](#4-etapa-1--verificação-de-arranque)
-5. [Protocolo de comunicação UART](#5-protocolo-de-comunicação-uart)
-6. [Configurar os parâmetros do motor](#6-configurar-os-parâmetros-do-motor)
-7. [Etapa 2 — Sinal CKP sintético e verificação de sincronismo](#7-etapa-2--sinal-ckp-sintético-e-verificação-de-sincronismo)
-8. [Etapa 3 — Medição dos pulsos de saída no osciloscópio](#8-etapa-3--medição-dos-pulsos-de-saída-no-osciloscópio)
-9. [Etapa 4 — Sinal CMP e fase](#9-etapa-4--sinal-cmp-e-fase)
-10. [Interpretar o snapshot em tempo real](#10-interpretar-o-snapshot-em-tempo-real)
-11. [Problemas comuns e diagnóstico](#11-problemas-comuns-e-diagnóstico)
-12. [O que medir antes do primeiro arranque do motor](#12-o-que-medir-antes-do-primeiro-arranque-do-motor)
-13. [Referência rápida de comandos UART](#13-referência-rápida-de-comandos-uart)
+**O que este teste NÃO prova:** que a ECU dirige bobinas e injetores, que a
+fonte e a proteção funcionam, que os sensores reais leem certo. A placa de ECU
+ainda não existe (`hardware/openems_v1` só tem o esquemático, incompleto). Por
+isso, **não ligue nada de potência** a esta placa: sem bobina, sem injetor, sem
+motor. Os pinos de saída vão direto ao ESP32 ou ao osciloscópio, em 3,3 V.
 
 ---
 
-## 1. Ferramentas e materiais necessários
+## 1. Material
 
-| Item | Especificação mínima |
-|------|---------------------|
-| Programador SWD | ST-LINK v2/v3 ou J-Link |
-| Osciloscópio | 2 canais, 50 MHz, modo cursores |
-| Gerador de funções | Frequência até 2 kHz, saída 3.3 V ou 5 V ajustável |
-| Terminal série | `picocom`, `minicom`, PuTTY, ou Python `pyserial` |
-| Multímetro | Para verificar alimentação e continuidade |
-| Fonte 12 V / 5 A | Tensão estável; não usar carregadores USB |
-| Cabo USB-C (ou UART-USB) | Para comunicação com o firmware |
-| Computador com Python 3 | Para os scripts de configuração incluídos neste manual |
+| Item | Uso |
+|---|---|
+| WeAct STM32H562 **VGT6** (LQFP100) | ECU sob teste |
+| ESP32 DevKit (ESP32-WROOM, com DAC) | gerador CKP/CMP 60-2, MAP/TPS, scope lógico |
+| Osciloscópio ou analisador lógico, ≥ 4 canais, ≥ 1 MHz | medir ângulo e largura de pulso (T3, T4) |
+| Cabo USB-C (DFU e USB CDC) | gravar e comunicar |
+| Adaptador USB-serial 3,3 V (opcional) | UART PA9/PA10, se o USB CDC não enumerar |
+| Jumpers fêmea-fêmea, GND comum | ligações |
+| PC com `arm-none-eabi-gcc`, `dfu-util`, Python ≥ 3.10 | build, gravação, dashboard |
 
-> **NUNCA ligar injectors ou bobinas de ignição** durante as etapas 1–4.  
-> Os pulsos de saída devem ser observados apenas com o osciloscópio
-> (entrada de alta impedância). Cargas reais só após etapa de validação.
+### 1.1 Revisão do chip (errata ES0565)
 
----
+Antes de tudo, anote a revisão do silício. O README (§ Errata STM32H562 ES0565)
+considera a **Rev X**. Na Rev A, PA1 (CMP) só tem histerese quando PA0 está em
+entrada, e a flash tem endurance de 1 kciclo.
 
-## 2. Ligações eléctricas de bancada
-
-### Alimentação
-
-```
-12 V DC (+) ──► VBAT do PCB (verificar pino no esquemático)
-GND          ──► GND do PCB
-3.3 V        ──► gerado internamente pelo regulador do PCB
-```
-
-Meça 3.3 V nos pinos de alimentação do STM32 antes de ligar o SWD.
-
-### Pinos de sinal (LQFP64 / RGT6 — firmware actual)
-
-> **Pinout completo e diferença VGT6:** ver `README.md` §5.0. Drive INJ/IGN = GPIO BSRR (não TIM OC).
-
-| Pino STM32 | Função | Destino na bancada |
-|-----------|--------|-------------------|
-| PA0 | TIM5_CH1 — CKP | Gerador / estimulador CKP |
-| PA1 | TIM5_CH2 — CMP | Gerador / estimulador CMP |
-| PA6 | TIM3_CH1 — ETB PWM | H-bridge enable / PWM |
-| PA8 | GPIO — ETB DIR open | H-bridge IN1 |
-| PB4 | GPIO — ETB DIR close | H-bridge IN2 |
-| PA15 | GPIO — INJ1 | Scope / TLE8888 |
-| PB3 | GPIO — INJ2 | |
-| PC10 | GPIO — INJ3 | (PB10/11 não expostos na WeAct) |
-| PC11 | GPIO — INJ4 | |
-| PC6 | GPIO — IGN1 | Scope / TLE8888 |
-| PC7 | GPIO — IGN2 | |
-| PC8 | GPIO — IGN3 | |
-| PC9 | GPIO — IGN4 | |
-| PA9 | UART1 TX | USB-UART RX |
-| PA10 | UART1 RX | USB-UART TX |
-| PA11 / PA12 | USB DM/DP | CDC |
-| PA13 / PA14 | SWDIO / SWDCK | ST-Link |
-
-> O firmware suporta tanto **UART1 @ 115200 baud** como **USB-CDC** com o
-> mesmo protocolo. Use o que for mais conveniente. USB-CDC requer que o
-> computador detecte o dispositivo e abra a porta COM/ttyACM antes de
-> enviar comandos.
+1. Leia a marcação do chip (a letra de revisão fica na última linha).
+2. Conecte em DFU (BOOT0 pressionado + reset) e abra o STM32CubeProgrammer: ele
+   mostra `Revision` (campo `REV_ID` de `DBGMCU_IDCODE`).
+3. Registre as duas leituras no relatório do teste. Se for Rev A ou Z, pare e
+   avise antes de seguir.
 
 ---
 
-## 3. Compilar e programar o firmware
+## 2. Compilar e gravar
 
 ```bash
-# Host test (sem hardware, apenas verificação)
-make host-test                 # deve imprimir: Results: 586 PASS  0 FAIL
-
-# Build STM32
-make stm32                     # produz build/openems.elf
-
-# Programar via OpenOCD + ST-LINK
-openocd -f interface/stlink.cfg \
-        -f target/stm32h5x.cfg \
-        -c "program build/openems.elf verify reset exit"
+make firmware-vgt6
+# saída: /tmp/openems-build/bin/openems-vgt6.bin
 ```
 
-Após programar, o LED de status (se existir no PCB) deve piscar ao ritmo do SysTick (1 Hz por convenção, verificar no esquemático).
+Gravação por DFU (bootloader de ROM):
 
----
+1. Segure **BOOT0**, aperte e solte **NRST**, solte BOOT0.
+2. `dfu-util -l` deve listar `0483:df11`.
+3. Grave:
 
-## 4. Etapa 1 — Verificação de arranque
-
-### 4.1 Sequência de init esperada
-
-O firmware faz as seguintes operações no startup, **antes** de entrar no loop principal:
-
-1. `system_stm32_init()` — PLL → 250 MHz, SysTick @ 1 ms, **IWDG @ 100 ms**
-2. `misfire_init()`, `tim5_ic_init()` — tabelas CKP, TIM5 input capture
-3. `ECU_Hardware_Init()` — TIM2 e TIM8 a 10 MHz, outputs em modo FORCE_INACTIVE
-4. `adc_init()` — ADC1/ADC2 com TIM6 trigger
-5. `can0_init()`, `uart0_init()`, `usb_cdc_init()` — comunicação
-6. Carregamento de NVM (Bank2) — calibrações
-7. `nvic_enable_irq(IRQ_TIM5)` — ISR CKP activada por último
-8. Loop de espera de FULL_SYNC (timeout 5 s)
-
-> **IWDG** fica activo após passo 1. O loop principal chama `iwdg_kick()`
-> pelo menos a cada 20 ms. Se o firmware travar antes de entrar no loop,
-> o IWDG reinicia a placa em 100 ms. O bit `RCC_CSR.IWDGRSTF` fica activo
-> após um reset por watchdog — verificar com OpenOCD se houver resets
-> inesperados:
-> ```
-> openocd> mdw 0x44020C94
-> # bit 26 = IWDGRSTF
-> ```
-
-### 4.2 Verificar comunicação UART
-
-Ligar o adaptador USB-UART e abrir o terminal:
-
-```bash
-picocom -b 115200 --omap crcrlf /dev/ttyUSB0
-```
-
-Enviar byte `Q` (0x51). O firmware responde com a string ASCII:
-
-```
-OpenEMS_v1.1
-```
-
-Se não há resposta em 2 segundos:
-- Verificar TX/RX não trocados (cruzamento TX→RX, RX→TX)
-- Verificar baud rate (115200, 8N1)
-- Verificar que a placa está alimentada (3.3 V nos pinos VDD do STM32)
-
-### 4.3 Verificar versão e protocolo
-
-| Comando (byte) | Resposta esperada |
-|----------------|-------------------|
-| `Q` (0x51) | `OpenEMS_v1.1` |
-| `S` (0x53) | `OpenEMS_fw_1.1` |
-| `F` (0x46) | `001` |
-| `C` (0x43) | `0x00 0xAA` (ACK + magic) |
-
----
-
-## 5. Protocolo de comunicação UART
-
-O protocolo é **binário**, stateless e funciona em cima de UART ou USB-CDC com o mesmo formato.
-
-### 5.1 Estrutura de pacotes
-
-#### Leitura de página (`r`)
-
-```
-→ [0x72] [page] [off_lo] [off_hi] [len_lo] [len_hi]
-← [len bytes de dados]
-```
-
-#### Escrita com gravação em NVM (`w`)
-
-```
-→ [0x77] [page] [off_lo] [off_hi] [len_lo] [len_hi] [len bytes de payload]
-← [0x00]  (ACK ok)
-  [0x01]  (NACK: fora de limites ou flash fail)
-```
-
-#### Escrita só em RAM, sem NVM (`x`)
-
-```
-→ [0x78] [page] [off_lo] [off_hi] [len_lo] [len_hi] [len bytes de payload]
-← [0x00]  (ACK ok — sem escrita em flash)
-```
-
-#### Gravar página em NVM (`b`)
-
-```
-→ [0x62] [page]
-← [0x00] (ok) / [0x01] (fail)
-```
-
-#### Snapshot tempo real (`A`)
-
-```
-→ [0x41]
-← [64 bytes — ver secção 10]
-```
-
-### 5.2 Notas importantes
-
-- **`page`** pode ser `0x00`–`0x06` (valor numérico) **ou** `'0'`–`'6'`
-  (valor ASCII 0x30–0x36) — o firmware normaliza automaticamente.
-- **Offset e length** são little-endian uint16. Para offsets < 256 e
-  lengths < 256, o byte alto é 0x00.
-- **Página 3** (snapshot tempo real) é **read-only** — escrita retorna 0x01.
-- O comando `w` escreve no buffer RAM **e** grava em NVM na mesma operação.
-  Use `x` para testar sem persistir; use `b` para gravar um buffer já
-  editado com vários `x`.
-
----
-
-## 6. Configurar os parâmetros do motor
-
-### 6.1 Mapa da Página 0 (engine config)
-
-| Offset | Tamanho | Campo | Unidade | Exemplo (2.0 L / E30) |
-|--------|---------|-------|---------|----------------------|
-| 0 | 1 B | `ivc_abdc_deg` | graus ABDC | 50 |
-| 1 | 1 B | reservado | — | 0x00 |
-| 2–3 | u16 LE | `displacement_cc` | cc | 2000 → `0xD0 0x07` |
-| 4–5 | u16 LE | `injector_flow_cc_min` | cc/min | 450 → `0xC2 0x01` |
-| 6–7 | u16 LE | `stoich_afr_x100` | AFR×100 | 1300 → `0x14 0x05` |
-| 8–9 | u16 LE | `map_ref_bar_x100` | bar×100 | 100 → `0x64 0x00` |
-| 10–11 | u16 LE | `trigger_tooth0_engine_deg` | graus | **MEDIR** |
-| 12–13 | u16 LE | `default_eoi_lead_deg` | graus | 355 → `0x63 0x01` (compat NVM; EOI efectivo = tabela 2D) |
-| 14–15 | u16 LE | magic | — | **0x44 0x45** (v2/EOI — obrigatório) |
-
-EOI 2D (RPM×CLT) vive em **page6 offsets 79–114** (`eoi_rpm_axis_x10` 12 B,
-`eoi_clt_axis_x10` 6 B, `eoi_table_deg` 18 B). Sem bump de magic v6.
-
-> **ATENÇÃO — magic obrigatório:** `engine_config_load()` verifica os bytes
-> 14–15 (`0x44 0x45` em little-endian = 0x4544, versão v2/EOI). Se estiverem
-> errados ou a zero, os campos 2–13 são **ignorados** e o firmware mantém
-> os defaults de compilação. O comando `w` deve sempre incluir todos os
-> 16 bytes.
-
-### 6.2 Valores de stoich_afr_x100 por combustível
-
-| Combustível | AFR estequiométrico | Valor a usar |
-|-------------|---------------------|-------------|
-| Gasolina 95/98 | 14.7 : 1 | 1470 → `0xBE 0x05` |
-| E10 | 14.1 : 1 | 1410 → `0x82 0x05` |
-| E30 | 13.0 : 1 | 1300 → `0x14 0x05` *(default)* |
-| E85 | 9.8 : 1 | 980 → `0xD4 0x03` |
-
-### 6.3 Medir o trigger offset (kTriggerTooth0EngineDeg)
-
-Este é o parâmetro mais crítico. Um valor errado desloca **todos** os ângulos de ignição e injecção.
-
-**Procedimento:**
-
-1. Colocar dial indicator no pistão do cil. 0. Identificar e marcar o PMS
-   (ponto morto superior) na polia do virabrequim.
-2. Ligar o osciloscópio ao pino PA0 (CKP).
-3. Rodar o motor **muito lentamente** à mão (ou com motor eléctrico a baixa
-   tensão, sem combustível/ignição).
-4. No osciloscópio, identificar o **dente 0**: é o primeiro pulso de subida
-   **imediatamente após o gap** (o gap é uma ausência de 3 períodos normais
-   numa roda dentada 60-2).
-5. Medir o ângulo do virabrequim desde o **dente 0** até ao **PMS do cil. 0**.
-   - Se o dente 0 ocorre **84° antes** do PMS: `trigger_tooth0_engine_deg = (720 - 84) % 720 = 636`
-   - Se o dente 0 ocorre **no PMS** (alinhamento perfeito): `trigger_tooth0_engine_deg = 0`
-   - Se o dente 0 ocorre **60° depois** do PMS: `trigger_tooth0_engine_deg = (720 - (-60)) % 720 = 60`
-
-**Fórmula geral:**
-
-```
-trigger_tooth0_engine_deg = (720 - offset_deg_antes_do_PMS) % 720
-```
-
-onde `offset_deg_antes_do_PMS` é positivo se o dente 0 estiver **antes** do PMS e negativo se estiver depois.
-
-### 6.4 Escrever os parâmetros via UART (script Python)
-
-Guardar como `set_engine_config.py` e executar após ligar o firmware:
-
-```python
-#!/usr/bin/env python3
-"""
-set_engine_config.py — Configura os parâmetros de motor via protocolo
-                       OpenEMS (UART 115200 ou USB-CDC).
-Editar as constantes na secção CONFIGURAÇÃO DO MOTOR antes de correr.
-"""
-import serial
-import struct
-import sys
-import time
-
-# ─── CONFIGURAÇÃO DO MOTOR ────────────────────────────────────────────────────
-PORT              = "/dev/ttyUSB0"   # ou "COM3" no Windows, "/dev/ttyACM0" para USB-CDC
-BAUD              = 115200
-
-IVC_ABDC_DEG              = 50       # graus ABDC (não alterar sem recalcular tabela VE)
-DISPLACEMENT_CC           = 2000     # cilindrada em cc
-INJECTOR_FLOW_CC_MIN      = 450      # caudal do injetor em cc/min
-STOICH_AFR_X100           = 1470     # AFR estequiométrico × 100 (1470 = gasolina)
-MAP_REF_BAR_X100          = 100      # pressão de referência (100 = 1.00 bar = atmosférica)
-TRIGGER_TOOTH0_ENGINE_DEG = 0        # MEDIR NO MOTOR — ver secção 6.3
-DEFAULT_EOI_LEAD_DEG      = 355      # fim de injecção (EOI, ° BTDC combustão — open-valve)
-MAGIC                     = 0x4544   # v2 — semântica EOI. NÃO ALTERAR
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_page0(ivc, displacement, inj_flow, stoich, map_ref, trigger, eoi):
-    """Constrói os 16 bytes da engine config page 0."""
-    buf = bytearray(16)
-    buf[0]  = ivc & 0xFF
-    buf[1]  = 0x00                              # reservado
-    struct.pack_into('<H', buf,  2, displacement)
-    struct.pack_into('<H', buf,  4, inj_flow)
-    struct.pack_into('<H', buf,  6, stoich)
-    struct.pack_into('<H', buf,  8, map_ref)
-    struct.pack_into('<H', buf, 10, trigger)
-    struct.pack_into('<H', buf, 12, eoi)
-    struct.pack_into('<H', buf, 14, MAGIC)
-    return buf
-
-def write_page(ser, page_id, offset, data):
-    """Envia comando 'w' (write + burn NVM). Retorna True se ACK 0x00."""
-    length = len(data)
-    cmd = bytes([
-        0x77,                           # 'w'
-        page_id,
-        offset & 0xFF, (offset >> 8) & 0xFF,
-        length & 0xFF, (length >> 8) & 0xFF,
-    ]) + bytes(data)
-    ser.write(cmd)
-    time.sleep(0.1)                     # flash write pode demorar ~50 ms
-    resp = ser.read(1)
-    return len(resp) == 1 and resp[0] == 0x00
-
-def read_page(ser, page_id, offset, length):
-    """Envia comando 'r'. Retorna os bytes lidos."""
-    cmd = bytes([
-        0x72,                           # 'r'
-        page_id,
-        offset & 0xFF, (offset >> 8) & 0xFF,
-        length & 0xFF, (length >> 8) & 0xFF,
-    ])
-    ser.write(cmd)
-    time.sleep(0.05)
-    return ser.read(length)
-
-def check_comms(ser):
-    """Testa comunicação com handshake 'C'."""
-    ser.write(bytes([0x43]))            # 'C'
-    time.sleep(0.05)
-    resp = ser.read(2)
-    return len(resp) == 2 and resp[0] == 0x00 and resp[1] == 0xAA
-
-def main():
-    print(f"Ligando a {PORT} @ {BAUD}...")
-    with serial.Serial(PORT, BAUD, timeout=1.0) as ser:
-        time.sleep(0.5)                 # aguardar USB-CDC enumerar
-        ser.reset_input_buffer()
-
-        # 1) Teste de comunicação
-        if not check_comms(ser):
-            print("ERRO: sem resposta ao handshake 'C'. Verifique ligações.")
-            sys.exit(1)
-        print("✓ Comunicação OK")
-
-        # 2) Ler configuração actual
-        current = read_page(ser, 0x00, 0, 16)
-        if len(current) != 16:
-            print("ERRO: não foi possível ler page 0.")
-            sys.exit(1)
-        print("Configuração actual (page 0):")
-        print(f"  displacement  = {struct.unpack_from('<H', current, 2)[0]} cc")
-        print(f"  injector_flow = {struct.unpack_from('<H', current, 4)[0]} cc/min")
-        print(f"  stoich_afr    = {struct.unpack_from('<H', current, 6)[0] / 100:.2f} : 1")
-        print(f"  trigger_deg   = {struct.unpack_from('<H', current, 10)[0]}°")
-        print(f"  magic         = 0x{struct.unpack_from('<H', current, 14)[0]:04X}")
-
-        # 3) Construir nova configuração
-        new_cfg = build_page0(
-            IVC_ABDC_DEG,
-            DISPLACEMENT_CC,
-            INJECTOR_FLOW_CC_MIN,
-            STOICH_AFR_X100,
-            MAP_REF_BAR_X100,
-            TRIGGER_TOOTH0_ENGINE_DEG,
-            DEFAULT_EOI_LEAD_DEG,
-        )
-        print(f"\nNova configuração a escrever (hex): {new_cfg.hex(' ').upper()}")
-
-        # 4) Escrever e gravar em NVM
-        if not write_page(ser, 0x00, 0, new_cfg):
-            print("ERRO: NACK na escrita de page 0. Ver secção 11 do manual.")
-            sys.exit(1)
-        print("✓ Escrita em NVM OK")
-
-        # 5) Verificação de leitura (read-back)
-        verify = read_page(ser, 0x00, 0, 16)
-        if verify == bytes(new_cfg):
-            print("✓ Verificação OK — configuração confirmada em NVM")
-        else:
-            print("AVISO: os bytes lidos diferem dos escritos!")
-            print(f"  Escrito: {bytes(new_cfg).hex(' ').upper()}")
-            print(f"  Lido:    {bytes(verify).hex(' ').upper()}")
-
-if __name__ == "__main__":
-    main()
-```
-
-**Executar:**
-```bash
-pip install pyserial
-python3 set_engine_config.py
-```
-
-Saída esperada:
-```
-Ligando a /dev/ttyUSB0 @ 115200...
-✓ Comunicação OK
-Configuração actual (page 0):
-  displacement  = 2000 cc
-  injector_flow = 450 cc/min
-  stoich_afr    = 14.70 : 1
-  trigger_deg   = 0°
-  magic         = 0x4544
-Nova configuração a escrever (hex): 32 00 D0 07 C2 01 BE 05 64 00 00 00 3E 00 43 45
-✓ Escrita em NVM OK
-✓ Verificação OK — configuração confirmada em NVM
-```
-
----
-
-## 7. Etapa 2 — Sinal CKP sintético e verificação de sincronismo
-
-### 7.1 Anatomia do sinal CKP (60-2)
-
-O decoder CKP do OpenEMS espera pulsos de bordo de subida em PA0:
-
-```
- Roda 60-2: 58 dentes reais + gap de 2 posições em falta
-
-  D0   D1   D2  ...  D57   GAP(2T)   D0   D1  ...
-  ┌─┐  ┌─┐  ┌─┐      ┌─┐            ┌─┐  ┌─┐
-──┘ └──┘ └──┘ └─ · · ─┘ └──────────┘ └──┘ └──
-  ←T→  ←T→  ←T→       ←T→  ← 2T →   ←T→  ←T→
-                             extra
-
-  Período dente normal  : T
-  Período do gap        : 3T (de RE(D57) a RE(D0) seguinte)
-  Detecção de gap       : período_actual > 2 × período_anterior
-```
-
-**Tabela de tempos por RPM:**
-
-| RPM | T (µs) | HIGH (µs) | LOW normal (µs) | LOW gap (µs) | Período rev. (ms) |
-|-----|--------|-----------|-----------------|--------------|-------------------|
-| 200 | 5000   | 2500      | 2500            | 12500        | 300               |
-| 500 | 2000   | 1000      | 1000            | 5000         | 120               |
-| 1000| 1000   | 500       | 500             | 2500         | 60                |
-| 3000|  333   | 166       | 166             | 832          | 20                |
-
-### 7.2 Gerar o sinal com ESP32 (recomendado)
-
-O código completo está em `tools/esp32_ckp_gen/`. Dois ficheiros:
-
-| Ficheiro | Quando usar |
-|----------|-------------|
-| `esp32_ckp_gen.ino` | Arduino C++ — jitter < 5 µs, RPM até 5000 |
-| `ckp_gen_micropython.py` | MicroPython — mais simples, adequado ≤ 1000 RPM |
-
-#### Ligações ESP32 → STM32H562
-
-```
-ESP32 GPIO 2  ──────────────►  PA0 (CKP input, TIM5_CH1)
-ESP32 GPIO 4  ──────────────►  PA1 (CMP input, TIM5_CH2)
-ESP32 GND     ──────────────►  GND do PCB   ← OBRIGATÓRIO
-```
-
-> Os dois microcontroladores têm de ter **GND comum**. Sem isso os bordos
-> de subida são referenciados em tensões diferentes e o STM32 não detecta
-> os pulsos.
-
-#### Versão Arduino C++ (`esp32_ckp_gen.ino`)
-
-```
-1. Instalar Arduino IDE + placa "ESP32 by Espressif" (core ≥ 2.0)
-2. Abrir tools/esp32_ckp_gen/esp32_ckp_gen.ino
-3. Seleccionar: Board = "ESP32 Dev Module", Upload Speed = 921600
-4. Fazer upload
-5. Abrir Serial Monitor (115200 baud)
-```
-
-Saída esperada após upload:
-```
-=== OpenEMS CKP Generator (ESP32) ===
-Comandos: '+'/'-' RPM±100 | '0'-'9' preset | 's' estado
-[CKP] RPM=500  T=2000 µs  HIGH=1000 µs  LOW_gap=5000 µs  rev=120.0 ms
-```
-
-Comandos pelo monitor série:
-
-| Tecla | Efeito |
-|-------|--------|
-| `+` | RPM + 100 |
-| `-` | RPM − 100 |
-| `3` | Preset 500 RPM |
-| `5` | Preset 1000 RPM |
-| `8` | Preset 3000 RPM |
-| `s` | Imprimir estado (RPM, revoluções, pulsos CMP) |
-
-Presets `'0'`–`'9'`: 100 / 200 / 300 / 500 / 700 / 1000 / 1500 / 2000 / 3000 / 5000 RPM.
-
-O LED integrado pisca a cada 4 revoluções (~33 Hz a 500 RPM) — confirmar
-visualmente que o sinal está a ser gerado.
-
-#### Versão MicroPython (`ckp_gen_micropython.py`)
-
-```bash
-# Instalar MicroPython no ESP32 (se ainda não estiver)
-esptool.py --chip esp32 erase_flash
-esptool.py --chip esp32 write_flash -z 0x1000 esp32-20231227-v1.22.0.bin
-
-# Copiar o ficheiro
-mpremote cp tools/esp32_ckp_gen/ckp_gen_micropython.py :/ckp_gen.py
-
-# Correr (bloqueante — Ctrl+C para parar)
-mpremote run tools/esp32_ckp_gen/ckp_gen_micropython.py
-```
-
-Ou no REPL interactivo:
-```python
-import ckp_gen
-ckp_gen.start(rpm=500)    # bloqueia até Ctrl+C
-```
-
-> **Nota de precisão:** o MicroPython no ESP32 tem jitter de ±50–200 µs
-> devido ao escalonamento FreeRTOS. A 500 RPM (T=2000 µs) isso representa
-> ±2.5–10% por dente. O detector CKP tolera esta variação para sincronismo
-> mas não use para medir avanço de ignição — use a versão Arduino C++.
-
-### 7.3 Verificar sincronismo via snapshot
-
-Com o sinal CKP activo, enviar snapshot:
-
-```python
-# get_snapshot.py
-import serial, struct, time
-
-def get_snapshot(port="/dev/ttyUSB0", baud=115200):
-    with serial.Serial(port, baud, timeout=1.0) as ser:
-        time.sleep(0.1)
-        ser.reset_input_buffer()
-        ser.write(bytes([0x41]))    # 'A'
-        data = ser.read(64)
-        if len(data) != 64:
-            print("Erro: resposta incompleta")
-            return
-        rpm        = struct.unpack_from('<H', data, 0)[0]
-        map_x100   = data[2]
-        tps_pct    = data[3]
-        clt_degc   = data[4] - 40
-        iat_degc   = data[5] - 40
-        status     = struct.unpack_from('<H', data, 11)[0]
-        sync_full  = bool(status & 0x01)
-        phase_a    = bool(status & 0x02)
-        sens_fault = bool(status & 0x04)
-        late_evt   = bool(status & 0x40)
-        late_count = struct.unpack_from('<I', data, 13)[0]
-        drop_count = struct.unpack_from('<I', data, 23)[0]
-
-        print(f"RPM          : {rpm}")
-        print(f"MAP          : {map_x100 / 100:.2f} bar")
-        print(f"TPS          : {tps_pct} %")
-        print(f"CLT          : {clt_degc} °C")
-        print(f"IAT          : {iat_degc} °C")
-        print(f"FULL_SYNC    : {sync_full}")
-        print(f"PHASE_A      : {phase_a}")
-        print(f"SENSOR_FAULT : {sens_fault}")
-        print(f"LATE_EVENTS  : {late_evt}  (count={late_count})")
-        print(f"DROP_CYCLES  : {drop_count}")
-
-get_snapshot()
-```
-
-**Valores esperados a 500 RPM com sinal CKP sintético:**
-
-| Campo | Esperado |
-|-------|----------|
-| RPM | 480–520 |
-| FULL_SYNC | True |
-| PHASE_A | True ou False (sem CMP é aleatório) |
-| SENSOR_FAULT | False (sensores ADC sem sinal → default map=1.0 bar) |
-| LATE_EVENTS | 0 a 500 RPM |
-| DROP_CYCLES | 0 |
-
-> Se FULL_SYNC = False após 3 segundos de sinal CKP:
-> - Verificar nível de tensão no PA0 (deve atingir ≥ 2.0 V no bordo de subida)
-> - Verificar que o gap tem duração correcta (≥ 2 × período de dente)
-> - Verificar no osciloscópio se chegam pulsos ao pino PA0
-
----
-
-## 8. Etapa 3 — ESP32 como osciloscópio lógico
-
-O sketch `tools/esp32_scope/esp32_scope.ino` transforma o ESP32 num
-analisador lógico de 9 canais com resolução de 1 µs, suficiente para
-verificar todos os pulsos de ignição e injeção do OpenEMS.
-
-### 8.1 Ligações ESP32 → STM32H562
-
-```
-ESP32            STM32H562        Função
-─────────────    ──────────       ─────────────────
-GPIO 32     ←─── PC6             TIM8_CH1 Ignição cil.0
-GPIO 33     ←─── PC7             TIM8_CH2 Ignição cil.1
-GPIO 25     ←─── PC8             TIM8_CH3 Ignição cil.2
-GPIO 26     ←─── PC9             TIM8_CH4 Ignição cil.3
-GPIO 27     ←─── PA15            TIM2_CH1 Injeção cil.0
-GPIO 14     ←─── PB3             TIM2_CH2 Injeção cil.1
-GPIO 12     ←─── PB10            TIM2_CH3 Injeção cil.2
-GPIO 13     ←─── PB11            TIM2_CH4 Injeção cil.3
-GPIO 36     ←─── PA0 (loopback)  CKP gerado pelo próprio ESP32
-GND         ───► GND             OBRIGATÓRIO
-```
-
-> GPIO 36 (VP) é input-only no ESP32 — não pode ser acidentalmente
-> configurado como saída. Ligar ao GPIO 2 do CKP generator com um fio
-> curto para monitorizar o próprio sinal CKP gerado.
->
-> Se usar **dois ESP32** (um para gerar CKP, outro para o scope), ligar
-> o GPIO 2 do gerador ao GPIO 36 do scope, além dos 8 canais de saída
-> do STM32.
-
-### 8.2 Instalar e arrancar o scope
-
-```
-1. Abrir tools/esp32_scope/esp32_scope.ino no Arduino IDE
-2. Verificar os GPIOs em kChan[] (ajustar ao DevKit se necessário)
-3. Upload para o ESP32
-4. Abrir Serial Monitor @ 115200 baud
-```
-
-Ao ligar, o scope imprime:
-
-```
-╔══════════════════════════════════════════╗
-║   OpenEMS ESP32 Logic Scope              ║
-║   Resolução: 1 µs  Latência: ~5 µs      ║
-╚══════════════════════════════════════════╝
-```
-
-### 8.3 Modos de operação
-
-| Tecla | Modo | Descrição |
-|-------|------|-----------|
-| `l` | **LIVE** (default) | Tabela de métricas actualizada a cada 1 s |
-| `p` | **PULSE** | Uma linha por pulso completo (falling edge) |
-| `e` | **EDGE** | Uma linha por bordo (rising e falling) |
-| `w` | **WAVE** | Barra de texto dos últimos 300 ms |
-| `s` | **STATS** | Mínimo/máximo/média desde o reset |
-| `r` | Reset | Zera contadores e estatísticas |
-
-### 8.4 Saída esperada (modo LIVE a 500 RPM)
-
-```
-+───────────────────────────────────────────────────────────────+
-| OpenEMS Scope @ 12.345 s                                             |
-+──+──────+───────+────────+────────+────────+───────+─────────+
-|CH| Name |STM32  |PW (ms) |Per(ms) |Freq(Hz)| Count | Status  |
-+──+──────+───────+────────+────────+────────+───────+─────────+
-| 0|IGN0  |PC6    |   3.021|  240.00|    4.17|    500|  OK     |
-| 1|IGN1  |PC7    |   3.019|  240.00|    4.17|    500|  OK     |
-| 2|IGN2  |PC8    |   3.022|  240.00|    4.17|    500|  OK     |
-| 3|IGN3  |PC9    |   3.020|  240.00|    4.17|    500|  OK     |
-| 4|INJ0  |PA15   |   7.250|  240.00|    4.17|    500|  OK     |
-| 5|INJ1  |PB3    |   7.248|  240.00|    4.17|    500|  OK     |
-| 6|INJ2  |PB10   |   7.252|  240.00|    4.17|    500|  OK     |
-| 7|INJ3  |PB11   |   7.249|  240.00|    4.17|    500|  OK     |
-| 8|CKP   |PA0    |   1.000|    2.00|  500.00|  29000|  OK     |
-+──+──────+───────+────────+────────+────────+───────+─────────+
-  RPM estimado (IGN0 period): 500.0
-```
-
-**O que verificar na tabela:**
-
-| Campo | IGN (TIM8) | INJ (TIM2) |
-|-------|-----------|----------|
-| PW (ms) | 1.0–5.0 (dwell) | calc. em 9.4 |
-| Per (ms) | 240 a 500 RPM | 240 a 500 RPM |
-| Freq (Hz) | 4.17 a 500 RPM | 4.17 a 500 RPM |
-| Status | OK | OK |
-
-Se algum canal mostrar **IDLE** mais de 2 s após FULL_SYNC: o pino
-correspondente não está a receber pulsos — ver secção 12.
-
-### 8.5 Verificar avanço de ignição com o scope
-
-No modo PULSE, o ESP32 imprime cada pulso com timestamp:
-
-```
-CH0 IGN0   PW=  3.021 ms  T=240.000 ms  #501
-CH0 IGN0   PW=  3.020 ms  T=240.001 ms  #502
-```
-
-Para verificar o avanço relativo ao gap CKP:
-
-1. Activar modo **EDGE** (`e`) para ver todos os bordos com timestamps
-2. Identificar o bordo RE do dente 0 do CKP (canal 8, RISE, após o gap)
-3. Identificar o bordo FALL seguinte do IGN0 (canal 0, FALL = instante de spark)
-4. Calcular:
-   ```
-   Δt = ts_IGN0_FALL - ts_CKP_RISE_dente0  (em µs)
-   ângulo = Δt / T_dente × 6°  (6° por posição de dente)
-   avanço = 360° - ângulo  (antes do TDC)
-   ```
-5. Comparar com o avanço definido na tabela spark (page 2)
-
-### 8.6 Script de leitura no computador (opcional)
-
-```bash
-# Instalar dependência
-pip install pyserial
-
-# Modo live com gravação CSV
-python3 tools/esp32_scope/scope_host.py \
-    --port /dev/ttyUSB1 --mode live --csv bench_$(date +%Y%m%d_%H%M).csv
-
-# Modo pulse (uma linha por pulso, mais legível)
-python3 tools/esp32_scope/scope_host.py --port /dev/ttyUSB1 --mode pulse
-
-# Analisar CSV gravado anteriormente
-python3 tools/esp32_scope/scope_host.py --analyse bench_20260606_1430.csv
-```
-
-Saída de `--analyse`:
-
-```
-Análise de bench_20260606_1430.csv  (3000 amostras)
-
-Canal    N     Média     Min       Max       σ         Avaliação
-────────  ──────  ─────────  ─────────  ─────────  ────────
- IGN0      500   3.021ms  3.018ms  3.025ms  0.001ms  ✓ OK  (dwell 1–5 ms)
- IGN1      500   3.019ms  3.015ms  3.023ms  0.001ms  ✓ OK
- INJ0      500   7.251ms  7.245ms  7.258ms  0.002ms  ✓ OK  (PW 1–30 ms)
-```
-
----
-
-## 9. Etapa 4 — Medição dos pulsos de saída
-
-### 9.1 O que medir
-
-Com FULL_SYNC activo e a 500 RPM, o scheduler deve gerar:
-- **TIM8 (ignição):** pulsos de dwell em PC6–PC9, um por cilindro por ciclo (720° de virabrequim)
-- **TIM2 (injecção):** pulsos de injecção em PA15, PB3, PB10, PB11
-
-O tempo de dwell padrão é lido da tabela `dwell_ms_x10_table` (page 5, offset 176). O default a 12 V é 3.0 ms.
-
-### 9.2 Verificar duração do dwell
-
-```
-A 500 RPM:
-  1 revolução = 120 ms
-  1 ciclo (720°) = 240 ms
-  Dwell esperado = 3.0 ms
-  Período entre sparks do mesmo cilindro = 240 ms
-```
-
-No osciloscópio em PC6 (TIM8_CH1, cil. 0):
-1. Trigger: bordo de subida
-2. Escala: 5 ms/div horizontal, 2 V/div vertical
-3. Medir a duração do pulso HIGH (dwell): deve ser **3.0 ± 0.1 ms**
-4. Medir o período entre pulsos consecutivos do mesmo canal: deve ser **240 ± 5 ms**
-
-### 9.3 Verificar avanço de ignição
-
-O avanço de ignição é lido da tabela `spark_table` (page 2). Para verificar o ângulo actual:
-
-1. Com o osciloscópio, medir o tempo entre:
-   - o fim do gap CKP (bordo de subida do dente 0 em PA0)
-   - o bordo de descida do pulso de ignição (fim do dwell → SPARK) em PC6
-
-2. Calcular o ângulo:
-   ```
-   tempo_medido / período_dente × 6° = ângulo desde dente 0
+   ```bash
+   dfu-util -a 0 -s 0x08000000 -D /tmp/openems-build/bin/openems-vgt6.bin
    ```
 
-3. Comparar com o valor lido da tabela spark: `r page 2 offset correspondente a (RPM, MAP)`.
+4. Desligue e ligue a placa com BOOT0 solto (BOOT0 = 0).
 
-### 9.4 Verificar largura de pulso de injecção
-
-A largura de pulso de injecção (`inj_pw_ticks`) é calculada pelo `fuel_calc`. Para verificar:
-
-```python
-# Calcular req_fuel base para o motor configurado
-# (confirmar independentemente antes de ligar injectors)
-IVC_ABDC_DEG     = 50
-DISPLACEMENT_CC  = 2000
-INJECTOR_FLOW    = 450    # cc/min
-STOICH_AFR_X100  = 1470   # gasolina
-
-# req_fuel_us = (displacement/cylinders × air_density) /
-#               (injector_flow/60 × fuel_density / stoich) × 1e6
-cylinders        = 4
-air_density      = 1.184  # mg/cc @ 1 bar
-fuel_density     = 755    # mg/cc
-inj_flow_cc_s    = INJECTOR_FLOW / 60.0
-req_fuel_us      = (DISPLACEMENT_CC / cylinders * air_density) / \
-                   (inj_flow_cc_s * fuel_density / (STOICH_AFR_X100 / 100.0)) * 1e6
-print(f"req_fuel_us = {req_fuel_us:.0f} µs")
-# Esperado: ~6500–7500 µs para este motor (gasolina, VE=100%, lambda=1.00)
-```
-
-No osciloscópio em PA15 (TIM2_CH1, cil. 0):
-- Escala: 5 ms/div, trigger bordo de subida
-- Medir duração do pulso HIGH: deve coincidir com o cálculo acima × VE%
+A calibração fica em setores próprios da flash e sobrevive à gravação do
+firmware. Depois de gravar uma versão nova, use **Restaurar padrões de fábrica**
+no dashboard (§ 5) para não testar com dados antigos.
 
 ---
 
-## 10. Etapa 5 — Sinal CMP e fase
+## 3. Ligações
 
-### 10.1 Porquê o CMP é necessário
+Pinos do mapa `BOARD=vgt6` (`src/hal/out_pins.h`, `docs/hw/pinout.md`).
+Todas as saídas são GPIO ativas em nível alto, acionadas pelo compare do
+TIM5_CH3. Repouso = LOW.
 
-Sem o sinal CMP (camshaft position), o firmware fica em **HALF_SYNC**: sabe quantos dentes passaram desde o gap, mas não sabe em que meia-volta do ciclo está (compressão ou escape do cil. 0). O scheduler usa injecção simultânea (wasted spark + bank fire) até ter FULL_SYNC.
+| STM32 (WeAct) | Sinal | ESP32 | Observação |
+|---|---|---|---|
+| PA0 | CKP (TIM5_CH1) | GPIO 2 → | roda 60-2 gerada por RMT |
+| — | — | GPIO 2 → GPIO 34 | jumper no próprio ESP32: loopback do CKP para o scope |
+| PA1 | CMP (TIM5_CH2) | GPIO 4 → | 1 pulso a cada 720°, no dente 5 |
+| PA3 | MAP (ADC) | GPIO 26 → (DAC2) | **obrigatório**: o modo bancada não simula MAP |
+| PA4 | TPS (ADC) | GPIO 25 → (DAC1) | **obrigatório**: o modo bancada não simula TPS |
+| PE9 | IGN1 | ← GPIO 32 | scope |
+| PE11 | IGN2 | ← GPIO 33 | scope |
+| PE13 | IGN3 | — | sem entrada livre no ESP32: use o osciloscópio |
+| PE15 | IGN4 | — | sem entrada livre no ESP32: use o osciloscópio |
+| PE0 | INJ1 | ← GPIO 27 | scope |
+| PE2 | INJ2 | ← GPIO 14 | scope |
+| PE4 | INJ3 | ← GPIO 12 | scope |
+| PE6 | INJ4 | ← GPIO 13 | scope |
+| PA9 / PA10 | USART1 TX / RX | — | opcional: adaptador USB-serial, 115200 8N1 |
+| USB-C | USB CDC | — | transporte principal do dashboard |
+| GND | GND | GND | **obrigatório**, comum a tudo |
 
-Para injecção sequencial correcta é obrigatório o FULL_SYNC.
+Confira a pinagem do ESP32 no cabeçalho de
+`tools/esp32_combined/esp32_combined.ino` antes de ligar.
 
-### 10.2 Simular o sinal CMP
+**O que é esperado nesta placa:**
 
-O sinal CMP é 1 pulso por 2 rotações do virabrequim (1 por ciclo de 720°), em PA1.
-
-```
-A 500 RPM:
-  Período CMP = 2 × 120 ms = 240 ms
-  Duração do pulso: ≥ 1 ms (bordo de subida detectado)
-  Fase: o pulso deve ocorrer numa janela dentro da fase A (ver documentação do sensor real)
-```
-
-Com o gerador, gerar uma onda quadrada em PA1 de **frequência = RPM / 120** Hz:
-- 500 RPM → 500/120 ≈ 4.17 Hz → período ≈ 240 ms
-
-Confirmar via snapshot que `PHASE_A` estabiliza (não alterna aleatoriamente) após o pulso CMP:
-
-```python
-import time
-for _ in range(5):
-    get_snapshot()
-    time.sleep(0.5)
-# PHASE_A deve ser consistente (sempre True ou sempre False)
-```
-
----
-
-## 11. Interpretar o snapshot em tempo real
-
-### Estrutura dos 64 bytes (page 3, read-only)
-
-| Byte(s) | Campo | Interpretação |
-|---------|-------|---------------|
-| 0–1 | `rpm` (u16 LE) | RPM = valor × 1 |
-| 2 | `map_bar_x100` (u8) | MAP = valor / 100 bar |
-| 3 | `tps_pct` (u8) | TPS = valor % |
-| 4 | `clt_p40` (i8) | CLT °C = valor − 40 |
-| 5 | `iat_p40` (i8) | IAT °C = valor − 40 |
-| 6 | `o2_mv_d4` (u8) | Lambda×1000 = valor × 4 (via CAN) |
-| 7 | `pw1_ms_x10` (u8) | PW injecção = valor / 10 ms |
-| 8 | `advance_p40` (u8) | Avanço °BTDC = valor − 40 |
-| 9 | `ve` (u8) | VE = valor % |
-| 10 | `stft_p100` (i8) | STFT = valor % (negativo = enriquece) |
-| 11–12 | `status_bits` (u16 LE) | Ver tabela abaixo |
-| 13–16 | `late_event_count` (u32 LE) | Eventos com CCR atrasado |
-| 23–26 | `cycle_drop_count` (u32 LE) | Ciclos descartados por overflow |
-| 31 | `sync_state_raw` (u8) | 0=NONE, 1=HALF, 2=FULL |
-| 35–38 | `loop2ms_last_us` (u32 LE) | Duração última iteração 2 ms (µs) |
-| 39–42 | `loop2ms_max_us` (u32 LE) | Pico de duração iteração 2 ms (µs) |
-
-### Status bits
-
-| Bit | Máscara | Significado |
-|-----|---------|-------------|
-| 0 | 0x0001 | FULL_SYNC activo |
-| 1 | 0x0002 | Fase A activa |
-| 2 | 0x0004 | Falha de sensor (ADC fora de limites) |
-| 3 | 0x0008 | Limp mode activo |
-| 4 | 0x0010 | ETB limp (borboleta electrónica) |
-| 5 | 0x0020 | X-Tau learning activo |
-| 6 | 0x0040 | Scheduler late event |
-| 7 | 0x0080 | Scheduler cycle drop |
-| 8 | 0x0100 | Injection PW clamped (IVC limit) |
-| 9 | 0x0200 | WBO2 fault (CAN lambda timeout) |
+- O LED de heartbeat do firmware é PB2. O LED da WeAct é PC13, então ele **não
+  pisca**. Use o dashboard para saber se o firmware está vivo.
+- O USB CDC tem driver completo (`src/hal/stm32h562/usb_cdc.cpp`), mas ainda
+  não foi validado neste hardware. Se não enumerar (`/dev/ttyACM*` não aparece),
+  use a UART PA9/PA10 e anote o problema.
 
 ---
 
-## 12. Problemas comuns e diagnóstico
+## 4. Gerador ESP32 (`tools/esp32_combined`)
 
-| Sintoma | Causa provável | Acção |
-|---------|---------------|-------|
-| Sem resposta a `Q` | TX/RX trocados; baud errado; placa sem 3.3 V | Verificar ligações, medir VDD |
-| FULL_SYNC = False após 5 s | Nível de sinal em PA0 insuficiente; gap errado | Medir PA0 no osciloscópio; verificar 60-2 timing |
-| RPM errado (ex: metade) | Gap detectado a cada 2 rotações (CMP confundido com CKP) | Confirmar PA0 = CKP, PA1 = CMP |
-| Sem pulsos em PC6–PC9 | TIM8 não saiu de FORCE_INACTIVE | Verificar FULL_SYNC; verificar `ECU_Hardware_Init` via SWD |
-| Dwell muito curto ou longo | Tabela dwell incorrecta; tensão de bateria diferente | Ler page 5 offset 176 (dwell_ms_x10_table), verificar vbatt_corr |
-| NACK (0x01) em escrita page 0 | Flash write falhou; `engine_config_valid` rejeitou dados | Confirmar magic 0x4544 (v2); confirmar displacement > 0 |
-| `late_event_count` > 0 | CPU sobrecarregada ou ISR a demorar muito | Verificar `loop2ms_max_us`; pode ser normal a baixo RPM |
-| `g_flash_write_faults` > 0 | NVM corrompida ou falha de leitura no arranque | Apagar Bank2 via OpenOCD; reflash |
+1. Copie `wifi_credentials.example.h` para `wifi_credentials.h` (o arquivo é
+   ignorado pelo git) e preencha a rede.
+2. Compile e grave com PlatformIO (`tools/esp32_combined/platformio.ini`) ou com
+   a Arduino IDE.
+3. Abra o monitor serial (115200). Comandos principais:
 
-**Apagar Bank2 (calibrações) e repor defaults:**
-```
-openocd> flash erase_sector 1 1 7
-# Apaga sectores 1–7 do Bank2 (calibrações)
-# No próximo arranque o firmware usa os defaults de compilação
-```
+| Comando | Efeito |
+|---|---|
+| `RPM <n>` | RPM exato (50 a 9000), com rampa ≤ 2 % a cada 50 ms |
+| `+` / `-` | RPM ± 100 |
+| `0`…`9` | presets 100/200/300/500/700/1000/1500/2000/3000/5000 RPM |
+| `IDLE` / `CRANK` / `CRUISE` / `WOT` / `COAST` | presets de RPM + sensores (IDLE = 700, CRANK = 200) |
+| `MAP <kPa>` / `TPS <%>` | tensão nos DACs de PA3 / PA4 |
+| `S` / `STATUS` | estado do gerador |
+| `l` `e` `p` `w` `t` `s` `r` | modos do scope (live, edges, pulsos, waveform, timing, estatística, reset) |
 
----
-
-## 13. O que medir antes do primeiro arranque do motor
-
-Antes de qualquer tentativa de arranque com combustível, confirmar
-**obrigatoriamente**:
-
-### Lista de verificação pré-arranque
-
-- [ ] `trigger_tooth0_engine_deg` medido e escrito via UART (secção 6.3)
-- [ ] `displacement_cc` corresponde ao motor real
-- [ ] `injector_flow_cc_min` corresponde à ficha técnica dos injectors
-- [ ] `stoich_afr_x100` corresponde ao combustível usado
-- [ ] `kFiringOrder` em `engine_config.h` corresponde à ordem de ignição do motor (recompilação necessária se diferir de {0,2,3,1} = 1-3-4-2)
-- [ ] Pulsos TIM8 verificados no osciloscópio com duração e posição correctas
-- [ ] Pulsos TIM2 verificados no osciloscópio com largura correcta para o req_fuel calculado
-- [ ] FULL_SYNC estável com CKP real (não sintético) antes de adicionar combustível
-- [ ] IWDG confirmado (provocar reset intencional desligando `iwdg_kick` num build de teste)
-- [ ] Primeiro arranque: mão no corte de combustível, avanço conservador (5–8°)
-
-### Verificação do trigger offset no motor real
-
-Rodar o motor à mão, com osciloscópio duplo em PA0 (CKP) e na marca de TDC:
-
-```
-Passo 1: Identificar dente 0 no osciloscópio (primeiro pulso após gap)
-Passo 2: Medir ângulo entre dente 0 e marca TDC cil. 0
-Passo 3: Calcular trigger_tooth0_engine_deg = (720 - offset) % 720
-Passo 4: Escrever via set_engine_config.py com o valor medido
-Passo 5: Re-verificar: a posição do pulso de ignição no osciloscópio
-         deve corresponder a advance_deg° antes do TDC
-```
+Forma de onda: cada dente é um pulso **alto** de meio período; o gap é o último
+dente com o nível baixo estendido em 2 períodos (razão 3). O CMP sobe no dente
+5 da primeira volta, 1 µs depois do CKP, para nunca coincidir com ele.
+Portanto, a borda útil dos dois é a **subida**.
 
 ---
 
-## 14. Referência rápida de comandos UART
+## 5. Dashboard e configuração
 
-### Enviar comandos manualmente com Python
-
-```python
-import serial, time
-
-def cmd(ser, data, read_n=0):
-    ser.write(bytes(data))
-    time.sleep(0.1)
-    if read_n: return ser.read(read_n)
-    return b''
-
-with serial.Serial('/dev/ttyUSB0', 115200, timeout=1) as s:
-
-    # Handshake
-    cmd(s, [0x43])                              # 'C' → espera 0x00 0xAA
-
-    # Ler page 0 completa (16 bytes)
-    r = cmd(s, [0x72, 0x00, 0x00, 0x00, 0x10, 0x00], read_n=16)
-    print(r.hex(' '))
-
-    # Snapshot
-    snap = cmd(s, [0x41], read_n=64)
-    import struct
-    print("RPM:", struct.unpack_from('<H', snap, 0)[0])
-    print("STATUS:", hex(struct.unpack_from('<H', snap, 11)[0]))
+```bash
+cd tools/openems_dash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+python server.py --port /dev/ttyACM0 --http-port 8000   # ou /dev/ttyUSB0 (UART)
 ```
 
-### Tabela de comandos
+Abra `http://localhost:8000`. Na aba **Install**:
 
-| Byte | Comando | Descrição |
-|------|---------|-----------|
-| `0x51` (`Q`) | Handshake | Responde `OpenEMS_v1.1` |
-| `0x53` (`S`) | Versão FW | Responde `OpenEMS_fw_1.1` |
-| `0x43` (`C`) | Teste comms | Responde `0x00 0xAA` |
-| `0x41` (`A`) | Snapshot RT | 64 bytes de dados em tempo real |
-| `0x72` (`r`) | Leitura de página | 5 args: page, off_lo, off_hi, len_lo, len_hi |
-| `0x77` (`w`) | Escrita + NVM | 5 args + payload; ACK `0x00`/`0x01` |
-| `0x78` (`x`) | Escrita RAM | 5 args + payload; ACK sem NVM |
-| `0x62` (`b`) | Burn para NVM | 1 arg: page; ACK `0x00`/`0x01` |
-| `0x64` (`d`) | Dirty mask | 1 byte: bits 0-5 = páginas com edições não gravadas |
+1. **Restaurar padrões de fábrica** (com o gerador parado). O tune de fábrica
+   (`tools/openems_dash/base_tune.json`) tem offset do gatilho 0, polaridade de
+   captura 0 (subida em CKP e CMP) e avanço da lâmpada 10,0°.
+2. Passo 2 (CKP/CMP): **deixe as duas caixas de "borda de descida" desmarcadas**.
+   O gerador ESP32 é push-pull com dente alto, diferente do Hall open-collector
+   do motor real (que usa descida). Polaridade em page0[258]
+   (`src/engine/calibration.h:252`).
+3. Passo 5 (offset do gatilho): mantenha **0**. Com offset 0, o dente 0 é o PMS
+   do cilindro 1, o que torna os ângulos do § 6 fáceis de conferir.
+4. Ligue **BENCH** (canto superior). O modo bancada (comando `B`, só RAM, cai no
+   reset) simula CLT/IAT/VBATT/óleo/combustível e limpa as falhas desses
+   sensores. MAP e TPS continuam reais (PA3/PA4), por isso precisam do ESP32.
+   O status bit 15 (`BENCH_MODE`) confirma.
 
-### Páginas disponíveis
+Com o dashboard fechado, o mesmo link serial serve ao script de bancada:
 
-| Page | ID | Tamanho | Conteúdo |
-|------|----|---------|---------|
-| 0 | `0x00` | 512 B | Engine config (IVC, displacement, injector, AFR, trigger, EOI) |
-| 1 | `0x01` | 256 B | Tabela VE 16×16 |
-| 2 | `0x02` | 256 B | Tabela spark (avanço) 16×16 |
-| 3 | `0x03` | 64 B | Snapshot real-time (read-only) |
-| 4 | `0x04` | 512 B | Tabela lambda target |
-| 5 | `0x05` | 256 B | Tabelas de correcção 1D (CLT, IAT, warmup, vbatt, dwell, AE...) |
-| 6 | `0x06` | 80 B | X-Tau, AE, quick crank |
+```bash
+python3 tools/diag/bench_check.py /dev/ttyACM0 --period 0.5
+```
+
+Ele imprime uma linha por leitura (RPM, sincronismo, modo de injeção, confirmações
+de CMP, avanço, PW, período do dente, pior loop de 2 ms e os contadores
+late/drop/clamp). Termina com `OK` ou `FAIL`, e sai com código 1 se o
+`FULL_SYNC` cair depois de alcançado ou se algum contador late/drop/clamp mudar.
+O dashboard e o script não podem abrir a porta ao mesmo tempo.
 
 ---
 
-*Manual gerado automaticamente a partir do código-fonte do commit `3db627c`.*  
-*Actualizar sempre que houver alterações ao protocolo ou ao mapeamento de páginas.*
+## 6. Testes
+
+Registre para cada teste: data, commit do firmware, revisão do chip, resultado
+e a captura do osciloscópio quando houver.
+
+### T0 — Boot seguro
+
+1. Osciloscópio em IGN1 e INJ1, gatilho em qualquer borda, modo single.
+2. Desligue e ligue a placa 10 vezes, com o gerador **ligado** a 3000 RPM.
+
+**Passa:** nenhuma borda nas saídas durante o boot. As saídas são forçadas a LOW
+logo depois do clock (`ecu_sched_outputs_safe_early()`). Sem loop de reset: o
+dashboard reconecta e o RPM aparece em poucos segundos.
+**Falha:** qualquer pulso no boot, ou a placa reiniciando sozinha. O IWDG tem
+~10 s no boot e ~0,8 s em funcionamento (`src/hal/stm32h562/system.cpp:211`,
+`src/main_stm32.cpp:385`). Um reset periódico nesses intervalos indica laço
+travado.
+
+### T1 — Comunicação
+
+1. Gerador parado. Rode `bench_check.py --count 20`.
+
+**Passa:** 20 linhas, `OK`, sem exceção de CRC ou tamanho. O snapshot tem
+**86 bytes** (tabela no § 7).
+
+### T2 — Sincronismo e RPM
+
+1. `RPM 200`, aguarde. Depois suba: 500, 700, 1000, 2000, 3000, 5000, 7000, 8500.
+2. Em cada degrau, deixe `bench_check.py` rodando por 30 s.
+3. Volte de 8500 até 200 com o comando `-` repetido.
+
+**Passa:**
+- O sincronismo vai a `FULL` e lá fica nas subidas e descidas.
+- O RPM reportado bate com o do gerador (±1 %), o que confirma o clock de
+  62,5 MHz do TIM5.
+- O período do dente (`tooth`) vale 1 s ÷ (RPM × 60) — por exemplo,
+  1666,7 µs a 600 RPM.
+- `late +0 drop +0 clamp +0`, e o script termina com `OK`.
+
+Critérios do decoder (`src/drv/ckp.cpp`): faixas de razão 0,5 e 1,5, e
+exatamente 57 dentes entre gaps.
+
+### T3 — Ângulo da faísca (critério principal)
+
+1. Na aba Install, passo 6: **Ligar modo lâmpada** com 10,0°. A faísca fica fixa
+   em 10,0° APMS, sem correções nem knock (`src/engine/ign_calc.cpp:76`).
+2. Gerador a 1000, 3000 e 6000 RPM, com sincronismo `FULL` e `seq`.
+3. Osciloscópio: CH1 = CKP (PA0), CH2 = CMP (PA1), CH3 = IGN1 (PE9),
+   CH4 = IGN3 (PE13). Repita com IGN2 (PE11) e IGN4 (PE15).
+
+A faísca é a **borda de descida** da saída IGN (fim do dwell). Com offset 0, a
+faísca de cada cilindro cai em `PMS − avanço` (`src/engine/ecu_sched_angle.cpp:113`).
+A ordem de ignição é 1-3-4-2, com PMS em 0°/180°/360°/540°
+(`src/engine/engine_config.h:51`). Logo:
+
+| Saída | PMS | Faísca a 10° | Onde medir |
+|---|---|---|---|
+| IGN1 | 0° | 710° | 10° **antes** da subida do dente 0 que fecha a volta com CMP |
+| IGN3 | 180° | 170° | 170° **depois** do dente 0 da volta sem CMP |
+| IGN4 | 360° | 350° | 10° **antes** da subida do dente 0 que abre a volta com CMP |
+| IGN2 | 540° | 530° | 170° **depois** do dente 0 da volta com CMP |
+
+O dente 0 é o primeiro dente depois do gap. A volta que vem depois do pulso de
+CMP é a fase A (`src/drv/ckp.cpp:348`), e a fase A começa no ângulo 0. Se
+IGN1 e IGN4 aparecerem trocados, anote: é exatamente o tipo de erro que esta
+bancada precisa pegar.
+
+Conversão: 1° = T ÷ 6, onde T é o período de um dente. A 3000 RPM, T = 333,3 µs,
+então 10° = 555,6 µs e 0,1° = 5,6 µs.
+
+**Passa:** erro ≤ **0,1°** em todos os RPMs, nas quatro saídas.
+**Também confira:** o dwell (tempo em HIGH antes da faísca) é estável de ciclo a
+ciclo.
+
+Desligue o modo lâmpada ao terminar (ele também cai no reset).
+
+### T4 — Largura do pulso de injeção
+
+**Parte A — pulso de teste (gerador parado, RPM = 0):**
+1. Aba **Outputs**: arme o teste (o dashboard manda o keepalive enquanto estiver
+   armado). Dispare INJ1 com 1000 µs, 5000 µs e 20000 µs (o máximo é
+   30000 µs, `src/engine/output_test.cpp:98`).
+2. Meça a largura do pulso em PE0. Repita em INJ2–4.
+
+**Passa:** largura = valor pedido, ±2 µs.
+
+**Parte B — em funcionamento:**
+1. Gerador a 3000 RPM, `MAP 60`, sincronismo `FULL` e `seq`.
+2. Compare a largura em PE0 com o `pw` do dashboard ou do script (resolução
+   0,1 ms).
+
+**Passa:** uma abertura por injetor a cada 720°, uma a cada cilindro, na ordem
+1-3-4-2, com largura igual ao `pw` reportado (±0,1 ms).
+
+### T5 — CMP: sequencial e faísca perdida
+
+1. Gerador a 2000 RPM, `FULL` + `seq`, `cmp 2`.
+2. Desconecte o fio do CMP (PA1).
+3. Depois de ~2 s, reconecte.
+
+**Passa:**
+- Sem CMP, o firmware volta para faísca perdida (status bit 11 = 0) e injeção
+  semissequencial após 60 voltas no modo bancada. Fora da bancada, são 6
+  (`src/drv/ckp.cpp:113`).
+- O RPM e o `FULL` continuam.
+- Com o CMP de volta, após 2 confirmações (`cmp 2`), o modo volta a `seq`.
+
+### T6 — Perda de CKP
+
+1. Gerador a 3000 RPM, `FULL`.
+2. Desconecte o fio do CKP (PA0) com o osciloscópio olhando IGN1 e INJ1.
+3. Reconecte.
+
+**Passa:**
+- Todas as saídas vão a LOW em poucos ms e ficam em LOW. Nenhuma bobina fica
+  presa em dwell.
+- O RPM cai para 0.
+- Ao reconectar, o firmware passa por `WAIT_GAP` e volta a `FULL` sem reset.
+
+### T7 — Carga e orçamento do loop
+
+1. Gerador a 8500 RPM, dashboard aberto com a aba Telemetry atualizando.
+2. Deixe rodar 10 minutos.
+
+**Passa:**
+- `loop max` (pior loop de 2 ms) fica bem abaixo de 2000 µs.
+- Nenhum contador late/drop/clamp anda.
+- Sem reset.
+
+### T8 — Teste de saídas
+
+1. Gerador parado (RPM = 0). O teste de saídas fica bloqueado com o motor
+   girando.
+2. Na aba Outputs, arme o teste e dispare cada injetor e cada bobina, um de cada vez.
+
+**Passa:**
+- Pulso apenas no pino certo (tabela do § 3).
+- Dwell da bobina limitado a 10000 µs.
+- Sem keepalive por 5 s, o teste aborta e restaura as saídas em LOW
+  (`src/engine/output_test.cpp:12`).
+
+### T9 — Reset com o motor girando
+
+1. Gerador a 3000 RPM, `FULL`.
+2. Aperte NRST 10 vezes.
+
+**Passa:**
+- Nenhum pulso fora de hora nas saídas durante e logo depois do reset.
+- O sincronismo volta a cada vez.
+- O modo bancada cai (é só RAM), e o dashboard reflete isso pelo status bit 15.
+
+---
+
+## 7. Snapshot de tempo real (86 bytes)
+
+Lido pelo comando `r` da página de tempo real (`OpenEMSLink.read_realtime()`). Os campos de 14 a
+65 são `reserved[52]`; o offset do byte é 14 + o índice. Fonte:
+`src/app/ui_protocol_pages.cpp` e `tools/openems_dash/protocol.py:116`.
+
+| Byte | Campo | Unidade |
+|---|---|---|
+| 0–1 | RPM | u16 |
+| 2 | MAP | kPa |
+| 3 | TPS | % |
+| 4 | CLT | °C + 40 |
+| 5 | IAT | °C + 40 |
+| 6 | lambda | ×1000 ÷ 5 |
+| 7 | PW | 0,1 ms |
+| 8 | avanço | ° + 40 |
+| 9 | VE[0][0] (estático) | — |
+| 10 | STFT | % s8 |
+| 12–13 | status bits | u16 |
+| 14–17 | eventos atrasados (late) | u32 |
+| 18 | alvo de lambda | ×1000 ÷ 5 |
+| 19 | LTFT | % s8 |
+| 20 | glitches de CMP | u8 |
+| 21 | confirmações de CMP (0–2) | u8 |
+| 22 | reservado | sempre 0 |
+| 23 | etanol | % |
+| 24–27 | drops do agendador | u32 |
+| 28–31 | clamps de calibração | u32 |
+| 32 | máscara de rejeição da config | u8 |
+| 33 | modo lâmpada ativo | bit 0 |
+| 34–35 | avanço enviado às bobinas | 0,1° s16 |
+| 36 | reservado | sempre 0 |
+| 44 | sync (nibble baixo) / modo de injeção (nibble alto) | 0 WAIT_GAP, 1 HALF, 2 FULL, 3 LOSS / 0 simult., 1 semi, 2 seq |
+| 45–46 | redução do controle de tração | 0,1 % |
+| 47 | retardo de torque | ° |
+| 48 | falhas de sensores | bitmask |
+| 49–52 | loop de 2 ms, último | µs u32 |
+| 53–56 | loop de 2 ms, máximo | µs u32 |
+| 57–62, 64–65 | AN1–AN4 brutos | u16 |
+| 63 | **VE ao vivo** | — |
+| 66–67 | MAP fundido | kPa ×1 (bar×100) |
+| 68–69 | PW líquido | µs |
+| 70–73 | bordas CKP | u32 |
+| 74–77 | bordas CMP | u32 |
+| 78–81 | período do dente | ns u32 |
+| 82–83 | idade da última borda CKP | ms |
+| 84–85 | idade da última borda CMP | ms |
+
+**Status bits** (`src/app/status_bits.h`):
+
+| Bit | Nome | Bit | Nome |
+|---|---|---|---|
+| 0 | FULL_SYNC | 8 | SCHED_CLAMP |
+| 1 | PHASE_A | 9 | WBO2_FAULT |
+| 2 | SENSOR_FAULT | 10 | reservado (sempre 0) |
+| 3 | LIMP_MODE | 11 | IGN_SEQUENTIAL (0 = faísca perdida) |
+| 4 | ETB_LIMP | 12 | REV_LIMIT |
+| 5 | XTAU_LEARN | 13 | LAUNCH_ACTIVE |
+| 6 | SCHED_LATE | 14 | TC_ACTIVE |
+| 7 | SCHED_DROP | 15 | BENCH_MODE |
+
+---
+
+## 8. Problemas comuns
+
+| Sintoma | Causa provável |
+|---|---|
+| `/dev/ttyACM*` não aparece | USB CDC não enumerou: use a UART PA9/PA10 (`--port /dev/ttyUSB0`) e anote |
+| `dfu-util` não acha a placa | BOOT0 não estava pressionado no reset; cabo só de carga |
+| RPM 0 com o gerador ligado | GND não comum; fio em PA0 errado; polaridade "descida" marcada |
+| Sincronismo oscila entre `WAIT_GAP` e `FULL` | gerador abaixo de 200 RPM; ruído no fio do CKP (encurte, torça com GND) |
+| Fica em faísca perdida com CMP ligado | `cmp` não chega a 2: CMP em PA1 solto, ou polaridade CMP "descida" marcada |
+| `SENSOR_FAULT` aceso | modo bancada desligado, ou MAP/TPS (PA3/PA4) sem os DACs do ESP32 |
+| Teste de saídas recusado | RPM > 0: desligue o fio do CKP |
+| Ângulo errado por um múltiplo de 6° | offset do gatilho ≠ 0; confira na aba Install |
+| Ângulo errado por 360° (IGN1 ↔ IGN4) | fase invertida: relate com a captura CKP + CMP + IGN1 |
+| `late`/`drop` sobem em RPM alto | relate com RPM e `loop max`: é bug do agendador |
+
+---
+
+## 9. Antes do primeiro motor
+
+Esta bancada é a primeira de várias etapas. Antes de girar um motor:
+
+- [ ] T0–T9 aprovados nesta placa, com as capturas arquivadas.
+- [ ] Revisão do chip registrada (§ 1.1).
+- [ ] **Placa de ECU projetada, fabricada e testada**: fonte, drivers de
+      injetor e bobina, condicionamento de CKP/CMP, proteção. **Ainda não
+      existe.**
+- [ ] Repetir T0, T3, T4 e T6 na placa de ECU, com carga resistiva no lugar
+      das bobinas e dos injetores.
+- [ ] Os 10 passos de instalação do README feitos no motor: polaridade
+      descendente para Hall open-collector, offset medido, dead time do
+      injetor e confirmação com a lâmpada de ponto.

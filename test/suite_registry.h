@@ -176,6 +176,7 @@ void test_ts_envelope_burn_gate(void);
 void test_ts_axes_page(void);
 void test_ts_envelope_canid_forms(void);
 void test_och_launch_tc_status(void);
+void test_och_live_ve_byte(void);
 void test_ts_envelope_signature_via_r(void);
 void test_ts_whole_page_800(void);
 void test_page0_tail_fields_do_not_collide(void);

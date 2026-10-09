@@ -97,11 +97,11 @@ DIR/PWM em **PE\*** (BSRR único, fiação limpa no LQFP100). No RGT6 esses pino
 
 | Funcao | Pino | Notas |
 |---|---|---|
-| INJ1 | **PA15** | low-side → TLE8888 (header WeAct) |
+| INJ1 | **PA15** | header WeAct |
 | INJ2 | **PB3** | header WeAct |
 | INJ3 | **PC10** | header WeAct (não PB10) |
 | INJ4 | **PC11** | header WeAct (não PB11) |
-| IGN1 | **PC6** | push-pull → TLE8888 |
+| IGN1 | **PC6** | push-pull |
 | IGN2 | **PC7** | |
 | IGN3 | **PC8** | ⚠️ vs SDMMC D0 |
 | IGN4 | **PC9** | ⚠️ vs SDMMC D1 |
@@ -112,7 +112,6 @@ DIR/PWM em **PE\*** (BSRR único, fiação limpa no LQFP100). No RGT6 esses pino
 |---|---|---|
 | INJ1–4 | **PE0 / PE2 / PE4 / PE6** | BSRR GPIOE |
 | IGN1–4 | **PE9 / PE11 / PE13 / PE15** | BSRR GPIOE |
-| INJEN / IGNEN | **PE14 / PE3** | enables TLE8888 (não PE1 — sem bond no LQFP100) |
 
 Ordem de canais BSRR = `ECU_CH_*`:
 `[INJ3, INJ4, INJ1, INJ2, IGN4, IGN3, IGN2, IGN1]`. Actuadores active-high;
@@ -158,14 +157,11 @@ RPM > 0 e **corta 2 s após RPM = 0** (`kPumpOffDelayMs = 2000`); `run_fan_contr
 usa histerese CLT 95 °C liga / 90 °C desliga. Ambos suspensos durante
 `output_test_active()`.
 
-**Porquê o remap no VGT6:** `PB12`/`PB13` são o **CSN** e o **SCK** do SPI2 do
-**TLE8888**. Como `auxiliaries_init()` corre *depois* de `tle8888_init()`
-(`main_stm32.cpp:638` vs `:500`), reescrevia o `GPIOB_MODER` e **matava o
-SPI2_SCK no arranque** — o CI nunca era clockado e o seu watchdog nunca
-alimentado, o que com o TLE8888 montado desliga injecção e ignição.
+**TLE8888:** não é usado nesta ECU (driver removido do firmware). As saídas
+INJ/IGN saem direto por GPIO; `PE14` e `PE3` (antigos INJEN/IGNEN) e o SPI2
+(`PB12`–`PB15`) ficam livres.
 
-No VGT6 os relés passaram para `GPIOE` (`PE10`/`PE12`). Os enables do TLE8888
-são `INJEN=PE14` e `IGNEN=PE3`. ⚠️ **`PE1` não existe no STM32H562VGTx LQFP100**
+No VGT6 os relés ficam em `GPIOE` (`PE10`/`PE12`). ⚠️ **`PE1` não existe no STM32H562VGTx LQFP100**
 (pad 98 = VCAP) — ver `stm32h562_ref.md` §3.1. Restantes PE: INJ PE0/2/4/6,
 IGN PE9/11/13/15, ETB PE5/7/8. Partilhar o porto com INJ/IGN é seguro: o
 acionamento é por **BSRR**, set/reset atómico por bit, sem read-modify-write.
@@ -210,7 +206,7 @@ real (a bateria cai a 9–10 V). A realimentação de posição do EWG ficou sem
 ## Ver também
 
 - **`docs/hw/README.md`** — **ponto de entrada** (autoridade, decisões, em aberto).
-- **`docs/hw/interface_board_v1.md`** — **plano da placa de interface v1**
+- **`docs/hw/interface_board_v1.md`** — *histórico (TLE8888 não é usado)*: plano da placa de interface v1
   (TLE8888-**2QK** como estágio de potência, INJ/IGN por direct drive, alocação de
   pinos, orçamento de erro de timing, sequência de verificação).
 - **`docs/wiring_diagram.md`** — ⚠️ **DESACTUALIZADO em vários eixos**: mapa de

@@ -14,14 +14,19 @@
  *   GPIO 2  →  PA0        CKP output (60-2, RMT hardware)
  *   GPIO 4  →  PA1        CMP output (1 pulso/720°, RMT hardware)
  *   GPIO 2  →  GPIO34     Wire loopback p/ scope CKP (mesma placa)
- *   GPIO 32 ←  PE9        IGN1 (TIM1_CH1)
- *   GPIO 33 ←  PE11       IGN2 (TIM1_CH2)
+ *   GPIO 32 ←  PE9        IGN1
+ *   GPIO 33 ←  PE11       IGN2
  *   GPIO 26 →  PA3        MAP  (DAC2 real, 8-bit, ligação DIRETA sem RC)
  *   GPIO 25 →  PA4        TPS  (DAC1 real — reteste; cmd DAC25 <0-255>)
- *   GPIO 27 ←  PC6        INJ1 (TIM3_CH1)
- *   GPIO 14 ←  PC7        INJ2 (TIM3_CH2)
- *   GPIO 12 ←  PC8        INJ3 (TIM3_CH3)
- *   GPIO 13 ←  PC9        INJ4 (TIM3_CH4)
+ *   GPIO 27 ←  PE0        INJ1
+ *   GPIO 14 ←  PE2        INJ2
+ *   GPIO 12 ←  PE4        INJ3
+ *   GPIO 13 ←  PE6        INJ4
+ *
+ *   STM32 pins are the BOARD=vgt6 map (src/hal/out_pins.h). Outputs are
+ *   GPIO driven from TIM5_CH3 compare, not timer channels. IGN3 (PE13) and
+ *   IGN4 (PE15) have no free ESP32 input here (GPIO25/26 are the DACs).
+ *   BOARD=rgt6: INJ PA15/PB3/PC10/PC11, IGN PC6/PC7/PC8/PC9.
  *   GND     —  GND        OBRIGATÓRIO
  *
  * ── Comandos série (115200 baud) ────────────────────────────────────────────
@@ -148,12 +153,12 @@ static ChanDef kChan[] = {
     { GPIO_NUM_32,  "IGN1", "PE9",  true  },   // CH0 — IGN1 (cyl 1)
     { GPIO_NUM_33,  "IGN2", "PE11", true  },   // CH1 — IGN2 (cyl 2)
     { GPIO_NUM_25,  "IGN3", "PE13", false },   // CH2 — disabled (GPIO25 = TPS DAC1)
-    { GPIO_NUM_26,  "IGN4", "PE14", false },   // CH3 — disabled (GPIO26 = MAP DAC2)
+    { GPIO_NUM_26,  "IGN4", "PE15", false },   // CH3 — disabled (GPIO26 = MAP DAC2)
     // INJ: GPIO assignments matching scope.ino corrected pin mapping
-    { GPIO_NUM_27,  "INJ1", "PC6",  true  },   // CH4 — INJ1 (cyl 1)
-    { GPIO_NUM_14,  "INJ2", "PC7",  true  },   // CH5 — INJ2 (cyl 2)
-    { GPIO_NUM_12,  "INJ3", "PC8",  true  },   // CH6 — INJ3 (cyl 3)
-    { GPIO_NUM_13,  "INJ4", "PC9",  true  },   // CH7 — INJ4 (cyl 4)
+    { GPIO_NUM_27,  "INJ1", "PE0",  true  },   // CH4 — INJ1 (cyl 1)
+    { GPIO_NUM_14,  "INJ2", "PE2",  true  },   // CH5 — INJ2 (cyl 2)
+    { GPIO_NUM_12,  "INJ3", "PE4",  true  },   // CH6 — INJ3 (cyl 3)
+    { GPIO_NUM_13,  "INJ4", "PE6",  true  },   // CH7 — INJ4 (cyl 4)
     // CKP/CMP: CKP via GPIO34 loopback, CMP virtual
     { CKP_LB_GPIO,  "CKP",  "PA0",  true  },   // CH8 — loopback real do RMT
     { kVirtual,     "CMP",  "PA1",  true  },   // CH9 — virtual (software)

@@ -1,3 +1,5 @@
+> ⛔ **Documento histórico.** O TLE8888 não é usado nesta ECU: o driver foi removido do firmware e as saídas INJ/IGN saem direto por GPIO. Mantido só como referência.
+
 <!--
   Origem: plano de design elaborado e aprovado em 2026-07-20.
   Persistido no repositório porque ~/.claude/plans/ é área efémera.

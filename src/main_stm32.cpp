@@ -65,7 +65,6 @@ int main() { return 0; }
 #include "hal/adc.h"
 #include "hal/can.h"
 #include "hal/flash.h"
-#include "hal/tle8888.h"
 #include "hal/out_pins.h"
 #include "hal/flex_fuel.h"
 #include "hal/timer.h"
@@ -278,13 +277,6 @@ static void openems_init() noexcept {
     ems::hal::can0_init();
     ems::hal::uart0_init(115200u);
     ems::hal::uart0_enable_rx();  // RX fica desligado por padrão (uart.cpp:61)
-    ems::hal::tle8888_init();
-    // Enables de hardware do estágio de potência (INJEN=PE14 / IGNEN=PE3).
-    // Nasceram LOW em out_pins_hw_init(); só sobem se o TLE8888 confirmou
-    // comunicação E configuração (direct drive, VR, enables por canal). Se o CI
-    // não respondeu, injecção e ignição ficam inibidas por hardware.
-    // No RGT6 é no-op. Ver docs/hw/interface_board_v1.md.
-    ems::hal::power_stage_enable(ems::hal::tle8888_ok());
     ems::engine::ewg_control_init();
     ems::hal::flex_fuel_init();
     iwdg_kick();
@@ -493,7 +485,6 @@ int main() {
         if (elapsed(now, g_t100ms_, 100u)) {
             g_t100ms_ = now;
             ems::drv::sensors_tick_100ms();
-            ems::hal::tle8888_poll_diag();
 
             // Knock sensor morto (FOME #578): report único na transição.
             {
