@@ -144,6 +144,7 @@ void test_ecu_sched_ccr_write(void);
 void test_ecu_sched_late_events(void);
 void test_ecu_sched_golden_min_lead_timestamp(void);
 void test_ecu_sched_golden_far_target_timestamp(void);
+void test_ecu_sched_coil_hw_compare(void);
 void test_ecu_sched_golden_dispatch_past_counts_late(void);
 void test_ecu_sched_golden_queue_sorted(void);
 void test_ecu_sched_golden_seq_angle_table_size(void);

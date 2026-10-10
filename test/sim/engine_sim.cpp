@@ -10,6 +10,7 @@
 #include "drv/ckp.h"
 #include "engine/ecu_sched.h"
 #include "engine/engine_config.h"
+#include "hal/coil_oc.h"
 #include "hal/out_pins.h"
 #include "hal/tim5_host.h"
 
@@ -33,6 +34,8 @@ void advance(uint64_t to)
     const int32_t d_old = static_cast<int32_t>(ccr3 - static_cast<uint32_t>(g_now));
     const int32_t d_new = static_cast<int32_t>(ccr3 - static_cast<uint32_t>(to));
     if (d_old > 0 && d_new <= 0) { ems_test_tim5_sr |= kCc3if; }  // compare match
+    // Coil compare channels (TIM1/TIM8): edges land on their own tick.
+    ems::hal::coil_oc_host::advance(static_cast<uint32_t>(g_now), static_cast<uint32_t>(to));
     g_now = to;
     ems_test_tim5_cnt = static_cast<uint32_t>(to);
 }
@@ -47,6 +50,17 @@ void pin_hook(uint8_t ch, uint8_t high)
     if (g_log != nullptr) {
         g_log->push_back(PinEdge{ch, high,
             static_cast<double>(g_now - g_t0) / kTickHz, 0.0});
+    }
+}
+
+void coil_edge_hook(uint8_t ch, uint8_t high, uint32_t ts)
+{
+    if (ch >= 8U || g_level[ch] == high) { return; }
+    g_level[ch] = high;
+    if (g_log != nullptr) {
+        const uint64_t t64 = g_now + static_cast<uint64_t>(
+            static_cast<int64_t>(static_cast<int32_t>(ts - static_cast<uint32_t>(g_now))));
+        g_log->push_back(PinEdge{ch, high, static_cast<double>(t64 - g_t0) / kTickHz, 0.0});
     }
 }
 
@@ -192,6 +206,12 @@ Result run(const Config& cfg)
     for (uint8_t& lv : g_level) { lv = 0U; }
     g_log = &r.edges;
     ems::hal::out_pins_host::write_hook = &pin_hook;
+    ems::hal::coil_oc_host::reset();
+    if (cfg.hw_coil_oc) {
+        ems::hal::coil_oc_host::model = 1U;
+        ems::hal::coil_oc_host::edge_hook = &coil_edge_hook;
+        (void)ems::hal::coil_oc_hw_init();
+    }
     if (cfg.presync_inj_mode >= 0) {
         ecu_sched_set_presync_inj_mode(static_cast<uint8_t>(cfg.presync_inj_mode));
     }
@@ -269,6 +289,7 @@ Result run(const Config& cfg)
     }
 
     ems::hal::out_pins_host::write_hook = nullptr;
+    ems::hal::coil_oc_host::reset();
     g_log = nullptr;
     ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg = saved_off;
     r.tim5_end = ems_test_tim5_cnt;

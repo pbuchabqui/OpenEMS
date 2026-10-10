@@ -66,6 +66,7 @@ int main() { return 0; }
 #include "hal/can.h"
 #include "hal/flash.h"
 #include "hal/out_pins.h"
+#include "hal/coil_oc.h"
 #include "hal/flex_fuel.h"
 #include "hal/timer.h"
 
@@ -263,6 +264,9 @@ static void openems_init() noexcept {
 
     // 2a) Scheduler unificado (re-asserts pin safe + clears event queue)
     ::ECU_Hardware_Init();
+    // Coils on TIM1/TIM8 output compare (pins move on the scheduled tick).
+    // After ECU_Hardware_Init: pins are already LOW in GPIO mode.
+    (void)ems::hal::coil_oc_hw_init();
     ::ecu_sched_set_presync_inj_auto(1u);  // auto-select SIMULTANEOUS/SEMI_SEQUENTIAL by cranking
     ::ecu_sched_set_inj_inhibit_mask(0x0Fu);
     ::ecu_sched_set_inj_pw_ticks(0u);

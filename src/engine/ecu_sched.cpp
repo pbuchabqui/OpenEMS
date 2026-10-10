@@ -8,6 +8,7 @@
 #include "engine/quick_crank.h"
 #include "hal/board_pinout.h"
 #include "hal/out_pins.h"
+#include "hal/coil_oc.h"
 #include "hal/critical_section.h"
 #if !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
@@ -136,7 +137,14 @@ volatile uint32_t g_dbg_ign1_arm = 0U;  // arm_channel calls for IGN1
 // Events are timestamped in the TIM5 32-bit domain (62.5 MHz = 16 ns/tick).
 // The next event's timestamp is loaded into TIM5_CCR3. When CNT matches,
 // TIM5 ISR fires, executes GPIO BSRR, and loads the next event.
-// No OC mode — pure compare + software GPIO.
+// Injectors: pure compare + software GPIO.
+//
+// Coils (hal/coil_oc.h): two phases per edge. PREARM is keyed
+// kCoilPrearmTicks before the edge and loads the coil's TIM1/TIM8 channel
+// with "set/clear on match" at the exact tick; COMMIT at the edge itself
+// forces the same level (BSRR + OC force) and does the pin bookkeeping.
+// The pin therefore moves on the hardware tick, not after ISR latency; a
+// missed or skipped hardware arm degrades to the software timing of COMMIT.
 
 // Must hold a full tooth burst under multi-spark presync (wasted: 4 coils ×
 // (1 primary + up to 3 extra) × 2 actions ≈ 32) plus concurrent inj edges.
@@ -145,13 +153,34 @@ volatile uint32_t g_dbg_ign1_arm = 0U;  // arm_channel calls for IGN1
 static_assert(EVT_QUEUE_SIZE >= ECU_ANGLE_TABLE_SIZE,
               "event queue must cover a full angle-table tooth burst");
 
+enum : uint8_t {
+    kEvtPhaseNormal = 0U,     // injector edge: GPIO at `key`
+    kEvtPhasePrearm = 1U,     // coil: load the compare channel for `timestamp`
+    kEvtPhaseCommit = 2U,     // coil: force level at `timestamp` (no HW arm)
+    kEvtPhaseCommitHw = 3U,   // coil: force level at `timestamp` (HW armed)
+};
+
+// 100 µs: ≫ TIM5 ISR latency, ≪ the 16-bit compare window (1.05 ms).
+static constexpr uint32_t kCoilPrearmTicks = ECU_SCHED_US_TO_TICKS(100U);
+// Minimum lead for the compare write to land before the match.
+static constexpr int32_t kCoilHwMinLeadTicks = 125;  // 2 µs
+static_assert(kCoilPrearmTicks < 0xFFFFU, "prearm lead must fit the 16-bit compare");
+
 struct SchedEvent {
-    uint32_t timestamp;   // TIM5 absolute tick
+    uint32_t key;         // TIM5 tick the dispatcher acts at (queue order)
+    uint32_t timestamp;   // TIM5 tick of the output edge
     uint8_t  channel;     // ECU_CH_INJ1..IGN4
     uint8_t  high;        // 1=ON/DWELL, 0=OFF/SPARK
     uint8_t  valid;
-    uint8_t  _pad;
+    uint8_t  phase;       // kEvtPhase*
 };
+
+// Coil compare channel in use: armed for g_coil_hw_ts[c] until its COMMIT or
+// a force on that coil (force mode cancels the pending match).
+static volatile uint8_t g_coil_hw_busy[4] = {0U, 0U, 0U, 0U};
+static volatile uint32_t g_coil_hw_ts[4] = {0U, 0U, 0U, 0U};
+volatile uint32_t g_coil_hw_armed_count = 0U;   // edges handed to the compare
+volatile uint32_t g_coil_hw_miss_count = 0U;    // armed edges the pin did not take
 
 static SchedEvent g_evt_queue[EVT_QUEUE_SIZE];
 static volatile uint8_t g_evt_count = 0U;
@@ -170,13 +199,36 @@ volatile uint8_t g_ts_ring_idx = 0U;
 volatile uint32_t g_last_gap_ts = 0U;
 
 // GPIO BSRR: tables + inline write in hal/out_pins.h (hot path, no LTO required).
+// Coils also get the compare channel forced to the same level: in AF mode
+// that is what moves the pin (and it cancels any pending match); in GPIO mode
+// the BSRR write does and the force is a no-op.
 static inline void gpio_set_pin(uint8_t channel, uint8_t high) {
     ems::hal::out_pin_write(channel, high);
+    const uint8_t coil = ems::hal::coil_oc_index(channel);
+    if (coil != ems::hal::kCoilNone) {
+        ems::hal::coil_oc_force(coil, high);
+        g_coil_hw_busy[coil] = 0U;
+    }
 }
 
 static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state = 0U);
 static inline uint8_t channel_pin_idx(uint8_t ch) {
     return (ch < 8U) ? k_ch_to_pin_idx[ch] : 0xFFU;
+}
+
+static uint8_t    g_pin_last_state[8];  // 0=LOW, 1=HIGH, 0xFF=unknown
+
+// An edge already handed to the compare channel is about to be discarded
+// unexecuted: return the coil to the level the scheduler believes it has, or
+// the timer would still move the pin with no COMMIT (no dwell watchdog).
+static void evt_cancel_hw(const SchedEvent& e)
+{
+    if (e.phase != kEvtPhaseCommitHw) { return; }
+    const uint8_t coil = ems::hal::coil_oc_index(e.channel);
+    if (g_coil_hw_busy[coil] == 0U || g_coil_hw_ts[coil] != e.timestamp) { return; }
+    const uint8_t last = g_pin_last_state[k_ch_to_pin_idx[e.channel]];
+    ems::hal::coil_oc_force(coil, (last == 1U) ? 1U : 0U);
+    g_coil_hw_busy[coil] = 0U;
 }
 
 // Drop one high=1 (ON/DWELL) event to make room for a de-assert (OFF/SPARK).
@@ -193,6 +245,7 @@ static uint8_t evt_drop_one_assert(uint8_t prefer_channel)
         if (drop < 0) { drop = (int8_t)i; }
     }
     if (drop < 0) { return 0U; }
+    evt_cancel_hw(g_evt_queue[drop]);
     for (uint8_t i = (uint8_t)drop; i + 1U < g_evt_count; ++i) {
         g_evt_queue[i] = g_evt_queue[i + 1U];
     }
@@ -202,23 +255,23 @@ static uint8_t evt_drop_one_assert(uint8_t prefer_channel)
 
 static void rearm_head(void);
 
-// Insert event in sorted order (by timestamp). Called from tooth ISR.
+// Sorted insert by key; returns the position, or 0xFF if dropped.
 // Overflow policy: never silently drop OFF/SPARK — drop an ON/DWELL first so
 // an open injector/coil can still be closed. Drop new ON/DWELL if still full.
-static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
+static uint8_t evt_insert_sorted(uint32_t key, uint32_t ts, uint8_t channel,
+                                 uint8_t high, uint8_t phase) {
     if (g_evt_count >= EVT_QUEUE_SIZE) {
         ++g_dbg_evt_overflow;
         if (high == 0U) {
-            if (evt_drop_one_assert(channel) == 0U) { return; }
+            if (evt_drop_one_assert(channel) == 0U) { return 0xFFU; }
         } else {
-            return;  // prefer keeping de-asserts already queued
+            return 0xFFU;  // prefer keeping de-asserts already queued
         }
     }
-    ++g_dbg_evt_inserted;
     // Find insertion point (linear search, queue is small)
     uint8_t pos = g_evt_count;
     for (uint8_t i = 0; i < g_evt_count; ++i) {
-        if ((int32_t)(ts - g_evt_queue[i].timestamp) < 0) {
+        if ((int32_t)(key - g_evt_queue[i].key) < 0) {
             pos = i;
             break;
         }
@@ -227,23 +280,85 @@ static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
     for (uint8_t i = g_evt_count; i > pos; --i) {
         g_evt_queue[i] = g_evt_queue[i - 1U];
     }
+    g_evt_queue[pos].key = key;
     g_evt_queue[pos].timestamp = ts;
     g_evt_queue[pos].channel = channel;
     g_evt_queue[pos].high = high;
     g_evt_queue[pos].valid = 1U;
+    g_evt_queue[pos].phase = phase;
     ++g_evt_count;
+    return pos;
+}
 
+// Insert an output edge at TIM5 tick `ts`. Called from tooth ISR.
+static void evt_insert(uint32_t ts, uint8_t channel, uint8_t high) {
+    const bool coil = ems::hal::coil_oc_index(channel) != ems::hal::kCoilNone;
+    const uint8_t pos = coil
+        ? evt_insert_sorted(ts - kCoilPrearmTicks, ts, channel, high, kEvtPhasePrearm)
+        : evt_insert_sorted(ts, ts, channel, high, kEvtPhaseNormal);
+    if (pos == 0xFFU) { return; }
+    ++g_dbg_evt_inserted;
     if (pos == 0U) { rearm_head(); }
+}
+
+static inline void evt_pop_head(void) {
+    --g_evt_count;
+    for (uint8_t i = 0; i < g_evt_count; ++i) {
+        g_evt_queue[i] = g_evt_queue[i + 1U];
+    }
+}
+
+// PREARM: hand the edge to the coil's compare channel when it is free and the
+// edge is far enough ahead, then queue the COMMIT at the edge itself.
+static void evt_prearm_head(void) {
+    const SchedEvent e = g_evt_queue[0];
+    evt_pop_head();
+    const uint8_t coil = ems::hal::coil_oc_index(e.channel);
+    uint8_t phase = kEvtPhaseCommit;
+    if (ems::hal::g_coil_oc_enabled != 0U && g_coil_hw_busy[coil] == 0U) {
+        ems::hal::CriticalSectionGuard guard;  // lead check + compare write back to back
+        const int32_t lead = (int32_t)(e.timestamp - TIM5_CNT);
+        if (lead >= kCoilHwMinLeadTicks && lead < (int32_t)0xFFFFU) {
+            ems::hal::coil_oc_arm(coil, e.high, e.timestamp);
+            g_coil_hw_busy[coil] = 1U;
+            g_coil_hw_ts[coil] = e.timestamp;
+            ++g_coil_hw_armed_count;
+            phase = kEvtPhaseCommitHw;
+        }
+    }
+    // Same slot just freed by the pop: cannot overflow.
+    (void)evt_insert_sorted(e.timestamp, e.timestamp, e.channel, e.high, phase);
 }
 
 // Fire queue head: BSRR + optional ts_ring + pin metrics + dequeue.
 // capture_ts: path-1 (due) only — path-2 (already late) keeps prior work set (no ts_ring).
 static inline void evt_execute_head(uint32_t now, uint8_t capture_ts) {
+    if (g_evt_queue[0].phase == kEvtPhasePrearm) {
+        evt_prearm_head();
+        return;
+    }
     const SchedEvent& e = g_evt_queue[0];
+    uint32_t edge_ts = now;
+    if (e.phase == kEvtPhaseCommitHw) {
+        const uint8_t coil = ems::hal::coil_oc_index(e.channel);
+#if !defined(EMS_HOST_TEST)
+        // rearm_head runs heads ≤16 ticks early inline: never force (or sample
+        // the pin) before the compare tick. Bounded wait ≤ ~0.3 µs.
+        while ((int32_t)(TIM5_CNT - e.timestamp) < 2) {}
+#endif
+        // Still ours (no force in between): the pin moved on the compare tick.
+        if (g_coil_hw_busy[coil] != 0U && g_coil_hw_ts[coil] == e.timestamp) {
+            if (ems::hal::coil_oc_pin_level(coil) == e.high) {
+                edge_ts = e.timestamp;
+            } else {
+                ++g_coil_hw_miss_count;
+            }
+        }
+    }
     gpio_set_pin(e.channel, e.high);
     if (capture_ts != 0U && (e.channel == ECU_CH_INJ1 || e.channel == ECU_CH_IGN1)) {
         const uint8_t ri = g_ts_ring_idx;
-        g_ts_ring[ri].ts = now;
+        g_ts_ring[ri].ts = edge_ts;
         g_ts_ring[ri].high = e.high;
         g_ts_ring[ri].channel = e.channel;
         g_ts_ring_idx = (ri + 1U) & (TS_RING_SIZE - 1U);
@@ -253,10 +368,7 @@ static inline void evt_execute_head(uint32_t now, uint8_t capture_ts) {
         pin_transition(idx, e.high);
     }
     ++g_dbg_evt_dispatched;
-    --g_evt_count;
-    for (uint8_t i = 0; i < g_evt_count; ++i) {
-        g_evt_queue[i] = g_evt_queue[i + 1U];
-    }
+    evt_pop_head();
 }
 
 // Load CCR3 with the queue head — the ONLY place CCR3/CC3IF are written.
@@ -266,7 +378,7 @@ static inline void evt_execute_head(uint32_t now, uint8_t capture_ts) {
 // counter wraps (~68.7 s) — the whole schedule would freeze.
 static void rearm_head(void) {
     while (g_evt_count > 0U) {
-        const uint32_t next_ts = g_evt_queue[0].timestamp;
+        const uint32_t next_ts = g_evt_queue[0].key;
         if ((int32_t)(next_ts - TIM5_CNT) > 16) {  // >16 ticks (~0.25µs) in future
             TIM5_CCR3 = next_ts;
             TIM5_SR  = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
@@ -274,7 +386,8 @@ static void rearm_head(void) {
             g_evt_armed = 1U;
             return;
         }
-        ++g_late_event_count;
+        // A prearm inside its lead window is on time — only the edge can be late.
+        if (g_evt_queue[0].phase != kEvtPhasePrearm) { ++g_late_event_count; }
         evt_execute_head(TIM5_CNT, 0U);
     }
     TIM5_DIER &= ~TIM_DIER_CC3IE;
@@ -287,7 +400,7 @@ void ecu_sched_evt_dispatch(void) {
     // Process all events that are due (handles simultaneous events)
     while (g_evt_count > 0U) {
         const SchedEvent& e = g_evt_queue[0];
-        if ((int32_t)(e.timestamp - now) > 0) { break; }  // still in future
+        if ((int32_t)(e.key - now) > 0) { break; }  // still in future
         evt_execute_head(now, 1U);
     }
     rearm_head();
@@ -298,8 +411,6 @@ void ecu_sched_evt_dispatch(void) {
 volatile uint32_t g_pin_high_count[8];  // [0-3]=INJ CH1-4, [4-7]=IGN CH1-4
 volatile uint32_t g_pin_low_count[8];
 volatile uint32_t g_pin_seq_error[8];   // consecutive same-direction transitions
-static uint8_t    g_pin_last_state[8];  // 0=LOW, 1=HIGH, 0xFF=unknown
-
 static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
     if (idx >= 8U) { return; }
     if (g_pin_last_state[idx] == high && high != 0xFFU) {
@@ -500,7 +611,7 @@ static void end_active_outputs_on_time(void)
     forget_armed_targets();   // the next table re-arms what was dropped here
     uint8_t w = 0U;
     for (uint8_t r = 0U; r < g_evt_count; ++r) {
-        if (g_evt_queue[r].high != 0U) { continue; }
+        if (g_evt_queue[r].high != 0U) { evt_cancel_hw(g_evt_queue[r]); continue; }
         if (w != r) { g_evt_queue[w] = g_evt_queue[r]; }
         ++w;
     }
@@ -624,6 +735,11 @@ void ecu_sched_inj_watchdog(void)
 }
 
 uint32_t ecu_sched_inj_watchdog_count(void) { return g_inj_watchdog_count; }
+void ecu_sched_coil_hw_counts(uint32_t* armed, uint32_t* missed)
+{
+    if (armed != nullptr) { *armed = g_coil_hw_armed_count; }
+    if (missed != nullptr) { *missed = g_coil_hw_miss_count; }
+}
 
 uint8_t ecu_sched_is_sequential(void) { return si::g_knock_sequential; }
 uint8_t ecu_sched_presync_inj_mode(void) { return si::g_presync_inj_mode; }
@@ -980,6 +1096,8 @@ void ecu_sched_test_reset(void)
     // Reset TIM5 event queue
     g_evt_count = 0U; g_evt_armed = 0U;
     for (uint8_t i = 0U; i < EVT_QUEUE_SIZE; ++i) { g_evt_queue[i].valid = 0U; }
+    for (uint8_t i = 0U; i < 4U; ++i) { g_coil_hw_busy[i] = 0U; g_coil_hw_ts[i] = 0U; }
+    g_coil_hw_armed_count = 0U; g_coil_hw_miss_count = 0U;
     ems_test_tim5_ccr3 = 0U; ems_test_tim5_sr = 0U; ems_test_tim5_dier = 0U; ems_test_tim5_cnt = 0U;
     // Reset mode/diag counters — testes de transição presync↔sequencial dependem
     // de arrancar em estado limpo (senão herdam contagem de testes anteriores).
@@ -1017,6 +1135,11 @@ uint8_t  ecu_sched_test_get_evt(uint8_t index,
     if (channel != nullptr) { *channel = g_evt_queue[index].channel; }
     if (high != nullptr) { *high = g_evt_queue[index].high; }
     return 1U;
+}
+void ecu_sched_test_insert_evt(uint32_t ts, uint8_t channel, uint8_t high) noexcept
+{
+    ems::hal::CriticalSectionGuard guard;
+    evt_insert(ts, channel, high);
 }
 uint32_t ecu_sched_test_get_presync_revs(void) { return g_diag_presync_revs; }
 uint32_t ecu_sched_test_get_seq_revs(void) { return g_diag_seq_revs; }

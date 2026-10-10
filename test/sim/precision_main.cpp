@@ -338,6 +338,22 @@ int main()
         check_seq("tooth err 0.2", run_and_print("tooth error +-0.2 deg", c, 0.8, false), lm);
     }
 
+    // ── Coil hardware compare vs software dispatch under ISR latency ────
+    // 3 µs IRQ entry (critical sections / CKP ISR ahead of CC3). Software
+    // dispatch moves the coil pin that late; the TIM1/TIM8 compare does not.
+    {
+        Config c = base(7000);
+        c.isr_entry_us = 3.0;
+        c.hw_coil_oc = false;
+        const Metrics sw = run_and_print("7000 rpm, 3us IRQ, GPIO coils", c, 0.5, false);
+        c.hw_coil_oc = true;
+        const Metrics hw = run_and_print("7000 rpm, 3us IRQ, OC coils", c, 0.5, false);
+        check("coil OC", "GPIO spark error >= 0.1 deg (latency seen)", 0.1 - sw.spark_err_max, 0.0);
+        check("coil OC", "OC spark error max (deg)", hw.spark_err_max, 0.02);
+        check("coil OC", "OC missing+spurious sparks", hw.missing + hw.spurious, 0);
+        check("coil OC", "OC dwell error max (%)", hw.dwell_err_max_pct, 1.0);
+    }
+
     // ── No cam: wasted spark / batch fuel ───────────────────────────────
     {
         Config c = base(3000);

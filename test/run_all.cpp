@@ -249,6 +249,7 @@ int main(void) {
     test_ecu_sched_golden_min_lead_timestamp();
     test_ecu_sched_golden_far_target_timestamp();
     test_ecu_sched_golden_dispatch_past_counts_late();
+    test_ecu_sched_coil_hw_compare();
     test_ecu_sched_golden_queue_sorted();
     test_ecu_sched_golden_seq_angle_table_size();
     test_ecu_sched_mspark_angle_table_margin();

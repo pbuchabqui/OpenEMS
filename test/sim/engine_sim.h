@@ -56,6 +56,7 @@ struct Config {
     double isr_pre_sched_jitter_us = 1.0;  // uniform ±
     double isr_ckp_total_us = 4.0;
     double dispatch_us = 0.3;
+    bool hw_coil_oc = true;           // coils on TIM1/TIM8 compare (firmware default)
 
     int presync_inj_mode = -1;        // -1 keep firmware default, else ECU_PRESYNC_INJ_*
     uint32_t t0_ticks = 0;            // TIM5 start value (wrap tests)
