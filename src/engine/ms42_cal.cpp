@@ -183,7 +183,7 @@ void fill_defaults(Ms42Cal& c) noexcept {
     std::memcpy(c.vvt_load_axis, kVvtLoad, sizeof(kVvtLoad));
     std::memcpy(c.vvt_target_deg, kVvtTgt, sizeof(kVvtTgt));
 
-    c.vbatt_filter_shift = 3u;   // MS42: média de 8 amostras
+    c.vbatt_filter_shift = 2u;   // a 100 ms: τ ≈ 0,35 s (MS42 média 8 amostras rápidas)
     c.vbatt_low_mv = 10500u;
     c.vbatt_high_mv = 16000u;
 

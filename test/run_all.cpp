@@ -336,6 +336,7 @@ int main(void) {
     test_ms42_page0_block();
     test_ms42_vvt_measured_phase();
     test_ms42_cal_crc();
+    test_ms42_vbatt_filter_dtc();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

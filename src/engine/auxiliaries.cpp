@@ -9,6 +9,7 @@
 #include "engine/calibration.h"
 #include "engine/vehicle_inputs.h"
 #include "engine/ms42_cal.h"
+#include "engine/diagnostic_manager.h"
 
 #if __has_include("drv/ckp.h")
 #include "drv/ckp.h"
@@ -134,6 +135,10 @@ struct AuxState {
     int16_t vvt_target_x10;            // alvo após slew
     bool vvt_have_meas;
     bool vvt_active;
+
+    uint16_t vbatt_low_ticks;          // ticks de 10 ms consecutivos fora da faixa
+    uint16_t vbatt_high_ticks;
+    uint16_t vbatt_ok_ticks;
 };
 
 static AuxState g = {};
@@ -376,6 +381,39 @@ void run_fan_control(int16_t clt_x10) noexcept {
     }
 }
 
+// DTC de tensão (MS42 S19): baixa só com o motor a trabalhar (na partida a
+// queda é normal), alta sempre; 2 s fora da faixa para ativar, 2 s dentro
+// para limpar.
+constexpr uint16_t kVbattDebounceTicks = 200u;
+constexpr uint32_t kVbattRunRpmX10 = 5000u;
+
+void run_vbatt_diag(uint32_t rpm_x10, uint16_t vbatt_mv) noexcept {
+    using ems::engine::DiagnosticCode;
+    using ems::engine::DiagnosticManager;
+    const uint16_t low_mv = ems::engine::ms42.vbatt_low_mv;
+    const uint16_t high_mv = ems::engine::ms42.vbatt_high_mv;
+    const bool low = (low_mv != 0u) && (rpm_x10 >= kVbattRunRpmX10) && (vbatt_mv < low_mv);
+    const bool high = (high_mv != 0u) && (vbatt_mv > high_mv);
+
+    g.vbatt_low_ticks = low ? static_cast<uint16_t>(g.vbatt_low_ticks + (g.vbatt_low_ticks < 0xFFFFu)) : 0u;
+    g.vbatt_high_ticks = high ? static_cast<uint16_t>(g.vbatt_high_ticks + (g.vbatt_high_ticks < 0xFFFFu)) : 0u;
+    g.vbatt_ok_ticks = (!low && !high)
+        ? static_cast<uint16_t>(g.vbatt_ok_ticks + (g.vbatt_ok_ticks < 0xFFFFu)) : 0u;
+
+    if (g.vbatt_low_ticks == kVbattDebounceTicks) {
+        DiagnosticManager::report_fault(DiagnosticCode::VBATT_LOW,
+                                        ems::engine::FaultSeverity::WARNING, vbatt_mv);
+    }
+    if (g.vbatt_high_ticks == kVbattDebounceTicks) {
+        DiagnosticManager::report_fault(DiagnosticCode::VBATT_HIGH,
+                                        ems::engine::FaultSeverity::WARNING, vbatt_mv);
+    }
+    if (g.vbatt_ok_ticks == kVbattDebounceTicks) {
+        DiagnosticManager::clear_fault(DiagnosticCode::VBATT_LOW);
+        DiagnosticManager::clear_fault(DiagnosticCode::VBATT_HIGH);
+    }
+}
+
 void run_pump_control(uint32_t rpm_x10) noexcept {
     if (!g.key_on) {
         set_pump(false);
@@ -461,6 +499,7 @@ void auxiliaries_tick_10ms() noexcept {
     run_vvt_control(snap, s);
     run_fan_control(s.clt_degc_x10);
     run_pump_control(snap.rpm_x10);
+    run_vbatt_diag(snap.rpm_x10, s.vbatt_mv);
 }
 
 void auxiliaries_tick_20ms() noexcept {

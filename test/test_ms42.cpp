@@ -7,6 +7,8 @@
 
 #include "app/nvm_boot.h"
 #include "drv/ckp.h"
+#include "drv/sensors.h"
+#include "hal/adc.h"
 #include "engine/calibration.h"
 #include "engine/diagnostic_manager.h"
 #include "engine/auxiliaries.h"
@@ -181,4 +183,56 @@ void test_ms42_cal_crc(void) {
     std::memcpy(boost_target_bar_x1000, backup, sizeof(backup));
     dm::DiagnosticManager::clear_all_faults();
     nvm_test_reset();
+}
+
+void test_ms42_vbatt_filter_dtc(void) {
+    section("ms42 A3: VBATT filtrada + DTC de tensao");
+    using namespace ems::hal;
+    namespace dm = ems::engine;
+    ms42_cal_defaults();
+    dm::DiagnosticManager::clear_all_faults();
+    sensor_setup();
+    ems::drv::sensors_init();
+    ems::drv::sensors_set_bench_clt_iat(false, 0, 0);
+
+    // 12 V estável, depois um pico isolado de 16,5 V: o filtro só deixa
+    // passar uma fração (α = 1/4).
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2730u);
+    ems::drv::sensors_test_tick_100ms();
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 3754u);
+    ems::drv::sensors_test_tick_100ms();
+    CHECK_NEAR(ems::drv::sensors_get().vbatt_mv, 13125, 40, "pico de 16,5 V atenuado a ~13,1 V");
+
+    // Sem filtro (shift 0) o valor passa direto.
+    ms42.vbatt_filter_shift = 0u;
+    ems::drv::sensors_test_tick_100ms();
+    CHECK_NEAR(ems::drv::sensors_get().vbatt_mv, 16500, 10, "shift 0 -> sem filtro");
+
+    // 16,5 V por 2 s → VBATT_HIGH (mesmo com o motor parado).
+    ems::drv::ckp_test_reset();
+    auxiliaries_test_reset();
+    for (int i = 0; i < 199; ++i) { auxiliaries_tick_10ms(); }
+    CHECK_FALSE(dm::DiagnosticManager::is_fault_active(dm::DiagnosticCode::VBATT_HIGH),
+                "VBATT_HIGH espera o debounce");
+    auxiliaries_tick_10ms();
+    CHECK_TRUE(dm::DiagnosticManager::is_fault_active(dm::DiagnosticCode::VBATT_HIGH),
+               "VBATT_HIGH apos 2 s acima de 16 V");
+
+    // 9,5 V com o motor parado (partida) não é falha; a trabalhar é.
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2161u);
+    ems::drv::sensors_test_tick_100ms();
+    for (int i = 0; i < 300; ++i) { auxiliaries_tick_10ms(); }
+    CHECK_FALSE(dm::DiagnosticManager::is_fault_active(dm::DiagnosticCode::VBATT_LOW),
+                "9,5 V com o motor parado -> sem DTC");
+    CHECK_FALSE(dm::DiagnosticManager::is_fault_active(dm::DiagnosticCode::VBATT_HIGH),
+                "VBATT_HIGH limpa apos 2 s na faixa");
+    ckp_reach_full_sync(kVvtPeriod);
+    run_engine(210u, false, 0u);
+    CHECK_TRUE(dm::DiagnosticManager::is_fault_active(dm::DiagnosticCode::VBATT_LOW),
+               "9,5 V a ~1500 rpm por 2 s -> VBATT_LOW");
+
+    ms42_cal_defaults();
+    dm::DiagnosticManager::clear_all_faults();
+    auxiliaries_test_reset();
+    sensor_setup();
 }

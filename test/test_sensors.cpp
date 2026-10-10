@@ -264,8 +264,12 @@ void test_sensors_vbatt_dedicated_channel(void) {
                "raw 2730 → ~12000 mV");
 
     // Cranking: a bateria cai a ~9,5 V. É o caso que o literal 12000 mascarava.
+    // Filtro IIR (MS42): o degrau aparece aos poucos, sem saltar de uma vez.
     adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2161u);
     sensors_test_tick_100ms();
+    CHECK_TRUE(sensors_get().vbatt_mv < 12000u && sensors_get().vbatt_mv > 9600u,
+               "degrau 12 -> 9,5 V filtrado na 1a amostra");
+    for (int i = 0; i < 40; ++i) { sensors_test_tick_100ms(); }
     CHECK_NEAR(static_cast<float>(sensors_get().vbatt_mv), 9500.0f, 30.0f,
                "raw 2161 → ~9500 mV (cranking)");
 
