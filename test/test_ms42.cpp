@@ -79,6 +79,26 @@ void test_ms42_page0_block(void) {
     CHECK_EQ(ms42.dfco_entry_delay_ms, 250u, "roundtrip atraso DFCO");
     CHECK_EQ(ms42.fan_on_x10, 980, "roundtrip ventoinha");
 
+    // Offsets usados em tools/ts/openems.ini (page 1 = fw page0).
+    ms42.crank_mult_x256[0] = 0x1234u;
+    ms42.idle_ff_x10[0] = 0x0456u;
+    ms42.knock_gain_x10[0] = 0x2Au;
+    ms42.stft_min_rpm_x10 = 0x0789u;
+    ms42_serialize_to_page0(page, sizeof(page));
+    CHECK_EQ(page[279], 1u, "INI: ms42VvtEnable @279");
+    CHECK_EQ(page[300 + 2 * 6 + 3], 33u, "INI: ms42VvtTarget @300");
+    CHECK_EQ(page[387] | (page[388] << 8), 0x1234, "INI: ms42CrankMult @387");
+    CHECK_EQ(page[453], 0x2Au, "INI: ms42KnockGain @453");
+    CHECK_EQ(page[459] | (page[460] << 8), 0x0456, "INI: ms42IdleFf @459");
+    CHECK_EQ(page[503] | (page[504] << 8), 0x0789, "INI: ms42StftMinRpm @503");
+    CHECK_EQ(page[505] | (page[506] << 8), 980, "INI: ms42FanOn @505");
+    CHECK_EQ(kMs42Page0Off + ms42_cal_page0_len(), 509, "INI: bloco termina em 509");
+    ms42_cal_defaults();
+    ms42.vvt_enable = 1u;
+    ms42.vvt_target_deg[2][3] = 33u;
+    ms42.dfco_entry_delay_ms = 250u;
+    ms42.fan_on_x10 = 980;
+
     // Eixo não crescente é rejeitado (volta ao default), não fica corrompido.
     ms42.vvt_rpm_axis[3] = 0u;
     ms42.fan_off_x10 = 1200;  // off >= on

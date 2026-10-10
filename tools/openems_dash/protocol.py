@@ -660,6 +660,24 @@ PAGE0_FIELDS = [
     ("timing_light_enable",         270, 1, "B", 1.0),
     ("timing_light_advance_x10",    272, 1, "h", 0.1),   # ° fixed advance
     ("trigger_fine_x10",            274, 1, "h", 0.1),   # ° added to the offset
+    # 276-508: bloco MS42 (src/engine/ms42_cal.cpp; magic 0x344D + ver @276)
+    ("ms42_vvt_enable",             279, 1, "B", 1.0),
+    ("ms42_vvt_cam_ref_x10",        283, 1, "H", 0.1),   # ° (0 = aprende)
+    ("ms42_vvt_min_clt_x10",        285, 1, "h", 0.1),   # °C
+    ("ms42_vbatt_low_mv",           337, 1, "H", 0.001), # V (0=off)
+    ("ms42_vbatt_high_mv",          339, 1, "H", 0.001), # V (0=off)
+    ("ms42_dfco_entry_rpm_x10",     349, 4, "H", 0.1),   # RPM por CLT (0=escalares)
+    ("ms42_dfco_entry_delay_ms",    359, 1, "H", 1.0),   # ms
+    ("ms42_rev_roll_enable",        361, 1, "B", 1.0),
+    ("ms42_spark_grad_inc_x10",     364, 1, "B", 0.1),   # °/volta (0=off)
+    ("ms42_spark_grad_dec_x10",     365, 1, "B", 0.1),   # °/volta (0=off)
+    ("ms42_afterstart_by_cycles",   372, 1, "B", 1.0),
+    ("ms42_knock_rel_enable",       447, 1, "B", 1.0),
+    ("ms42_idle_kp_x10",            457, 1, "B", 0.1),
+    ("ms42_idle_persist",           458, 1, "B", 1.0),
+    ("ms42_stft_min_rpm_x10",       503, 1, "H", 0.1),   # RPM (0=off)
+    ("ms42_fan_on_x10",             505, 1, "h", 0.1),   # °C
+    ("ms42_fan_off_x10",            507, 1, "h", 0.1),   # °C
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
