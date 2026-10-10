@@ -339,6 +339,26 @@ inline void clear_instant_rpm() noexcept {
     }
 }
 
+// Segment speed (MS42 FA22 = 5e6 / T_SEG): one cylinder event of a 4-cyl
+// = 180° = 30 tooth positions, timed from tooth 0 to 30 and 30 to 0 (the
+// gap edge). Averages out the compression ripple of single teeth.
+static constexpr uint16_t kSegPositions = 30u;
+static uint32_t s_seg_start_capture = 0u;  // 0 = no segment start yet
+
+inline void segment_mark(uint32_t capture) noexcept {
+    if (s_seg_start_capture != 0u) {
+        const uint32_t dt = capture - s_seg_start_capture;
+        g_state.snap.rpm_seg_x10 = (dt == 0u) ? 0u : static_cast<uint32_t>(
+            (625000000ull * kSegPositions) / dt);
+    }
+    s_seg_start_capture = capture;
+}
+
+inline void segment_reset() noexcept {
+    s_seg_start_capture = 0u;
+    g_state.snap.rpm_seg_x10 = 0u;
+}
+
 inline void drop_sync() noexcept {
     g_state.snap.state = ems::drv::SyncState::LOSS_OF_SYNC;
     g_state.tooth_count = 0u;
@@ -346,6 +366,7 @@ inline void drop_sync() noexcept {
     // gap after it, and per-tooth timestamps must not span the loss.
     g_state.cmp_phase_pending = 0u;
     clear_instant_rpm();
+    segment_reset();
     close_cmp_seq_gate();
     s_ckp_sync_losses = s_ckp_sync_losses + 1u;
 }
@@ -676,7 +697,9 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
 
     if (edge == Edge::GAP) {
         ++g_dbg_tc_gap;
-        static_cast<void>(process_gap_event(delta_ticks));
+        if (process_gap_event(delta_ticks)) {
+            segment_mark(capture_now);
+        }
         publish_periods();
         sensors_on_tooth(g_state.snap);
         schedule_on_tooth(g_state.snap);
@@ -720,6 +743,7 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     if (is_synced()) {
         if (g_state.snap.tooth_index < kTeethBetweenGaps) {
             ++g_state.snap.tooth_index;
+            if (g_state.snap.tooth_index == kSegPositions) { segment_mark(capture_now); }
         } else {
             // 58th tooth without a gap: the gap was missed.
             ++ems::drv::g_dbg_loss_wrap;
@@ -935,6 +959,7 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
         // por dente para o resync não medir contra bordas da sessão anterior.
         g_state.cmp_phase_pending = 0u;
         clear_instant_rpm();
+        segment_reset();
         transitioned = true;
     }
     exit_critical();
@@ -989,6 +1014,7 @@ void ckp_test_reset() noexcept {
     s_skip_remaining = 0u;
     s_cam_angle_x10 = 0u;
     s_cam_edge_seq = 0u;
+    s_seg_start_capture = 0u;
     s_ckp_sync_losses = 0u;
     s_cmp_timeouts = 0u;
 }

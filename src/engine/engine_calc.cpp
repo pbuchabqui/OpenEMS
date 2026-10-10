@@ -169,7 +169,12 @@ void engine_calc_reset() noexcept {
 }
 
 const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
-    const ems::drv::CkpSnapshot& snap = in.snap;
+    // Table lookups, limits and gates use the 180° segment speed (MS42):
+    // the single-tooth rpm carries the compression ripple (±5-10 % per tooth
+    // at idle/crank). Event timing is untouched — the scheduler converts
+    // angles with the tooth period inside the CKP ISR.
+    ems::drv::CkpSnapshot snap = in.snap;
+    if (snap.rpm_seg_x10 != 0u) { snap.rpm_x10 = snap.rpm_seg_x10; }
     const ems::drv::SensorData& sensors = in.sensors;
     s_out.committed = false;
 

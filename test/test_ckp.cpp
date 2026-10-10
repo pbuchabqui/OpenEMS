@@ -494,3 +494,22 @@ void test_ckp_cmp_hygiene(void) {
     CHECK_EQ(ckp_snapshot().phase_A, !phase0, "stale cam phase not applied: plain toggle");
     CHECK_EQ(ckp_instant_rpm_x10(), 0u, "instant rpm cleared by the loss");
 }
+
+void test_ckp_segment_rpm(void) {
+    section("ckp: 180-degree segment rpm averages compression ripple (MS42 FA22)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    CHECK_NEAR(static_cast<float>(ckp_snapshot().rpm_seg_x10), 62500.0f, 50.0f, "measured from the sync revolutions");
+    uint32_t min_tooth = 0xFFFFFFFFu, max_tooth = 0u;
+    for (uint32_t i = 1u; i <= 40u; ++i) {
+        ckp_fire((i & 1u) ? kNormalPeriod * 11u / 10u : kNormalPeriod * 9u / 10u);
+        const uint32_t r = ckp_snapshot().rpm_x10;
+        if (i > 2u && r < min_tooth) { min_tooth = r; }
+        if (i > 2u && r > max_tooth) { max_tooth = r; }
+    }
+    const uint32_t seg = ckp_snapshot().rpm_seg_x10;
+    CHECK_NEAR(static_cast<float>(seg), 62500.0f, 50.0f, "segment rpm = mean speed");
+    CHECK_TRUE(max_tooth - min_tooth > 10000u, "tooth rpm swings > 1000 rpm");
+    ckp_fire(2u * kNormalPeriod);                   // loss
+    CHECK_EQ(ckp_snapshot().rpm_seg_x10, 0u, "loss clears segment rpm");
+}

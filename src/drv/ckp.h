@@ -57,6 +57,7 @@ struct CkpSnapshot {
     SyncState state;             ///< Estado corrente da máquina de sincronismo
     bool phase_A;                ///< Fase do ciclo de 720°: true=PHASE_A (0-360°), false=PHASE_B (360-720°). Toggles at each gap, SET by CMP.
     uint8_t cmp_confirms;        ///< Number of validated CMP edges since last sync loss (0-2). Gate for sequential mode.
+    uint32_t rpm_seg_x10;        ///< RPM × 10 over the last 180° segment (MS42 FA22); 0 until measured. Table lookups only — the scheduler uses the tooth period.
 };
 
 /**

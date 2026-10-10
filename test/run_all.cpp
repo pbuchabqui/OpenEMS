@@ -278,6 +278,7 @@ int main(void) {
     test_ckp_noise_after_tooth_keeps_real_edge();
     test_ckp_acquisition_gap_window();
     test_ckp_cmp_hygiene();
+    test_ckp_segment_rpm();
     test_ckp_phase_toggle();
 
     // ── UI PROTOCOL / TUNERSTUDIO ENVELOPE ────────────────────────────────
