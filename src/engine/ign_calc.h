@@ -29,6 +29,14 @@ int16_t calc_ign_clt_correction_x10(int16_t clt_x10) noexcept;
 int16_t calc_antijerk_retard_x10(int16_t tpsdot_x10) noexcept;
 void    antijerk_reset() noexcept;
 
+// Limitador de gradiente do avanço (MS42 S09 id_iga_tra_inc/dec): o avanço
+// base+correções anda no máximo ms42.spark_grad_inc/dec_x10 por volta
+// (rev_edge = wrap do tooth_index). Retardos de knock/torque/anti-jerk ficam
+// fora (têm de atuar já). bypass (partida, luz de ponto) segue direto e
+// reinicia o estado. inc = dec = 0 → sem limite.
+int16_t spark_gradient_limit_x10(int16_t want_x10, bool rev_edge, bool bypass) noexcept;
+void    spark_gradient_reset() noexcept;
+
 // Tabela de avanço (graus inteiros) interpolada com resolução de 0,1°.
 int16_t get_advance_x10(uint32_t rpm_x10, uint16_t load_bar_x100) noexcept;
 int16_t get_advance_x10_prepared(const Table2dLookup& lookup) noexcept;

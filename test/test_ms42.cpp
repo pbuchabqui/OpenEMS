@@ -12,6 +12,7 @@
 #include "engine/calibration.h"
 #include "engine/diagnostic_manager.h"
 #include "engine/fuel_calc.h"
+#include "engine/ign_calc.h"
 #include "engine/limp_gating.h"
 #include "engine/auxiliaries.h"
 #include "engine/ms42_cal.h"
@@ -340,4 +341,27 @@ void test_ms42_rev_roll_cut(void) {
     limp_gating_update(in);
     limp_gating_set_protect_disable(0u);
     ms42_cal_defaults();
+}
+
+void test_ms42_spark_gradient(void) {
+    section("ms42 B6: limitador de gradiente do avanco");
+    ms42_cal_defaults();
+    spark_gradient_reset();
+    CHECK_EQ(spark_gradient_limit_x10(300, true, false), 300, "desligado: passa direto");
+    CHECK_EQ(spark_gradient_limit_x10(100, true, false), 100, "desligado: degrau inteiro");
+
+    ms42.spark_grad_inc_x10 = 10u;  // 1,0°/volta a subir
+    ms42.spark_grad_dec_x10 = 30u;  // 3,0°/volta a descer
+    spark_gradient_reset();
+    CHECK_EQ(spark_gradient_limit_x10(100, false, false), 100, "1a chamada semeia");
+    CHECK_EQ(spark_gradient_limit_x10(300, false, false), 100, "sem volta nova: segura");
+    CHECK_EQ(spark_gradient_limit_x10(300, true, false), 110, "sobe 1,0 por volta");
+    CHECK_EQ(spark_gradient_limit_x10(300, true, false), 120, "sobe 1,0 por volta (2)");
+    CHECK_EQ(spark_gradient_limit_x10(50, true, false), 90, "desce 3,0 por volta");
+    CHECK_EQ(spark_gradient_limit_x10(85, true, false), 85, "passo menor que o limite: chega");
+    CHECK_EQ(spark_gradient_limit_x10(300, true, true), 300, "partida/luz de ponto: direto");
+    CHECK_EQ(spark_gradient_limit_x10(100, true, false), 100, "apos bypass: semeia de novo");
+
+    ms42_cal_defaults();
+    spark_gradient_reset();
 }

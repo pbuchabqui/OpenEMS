@@ -224,3 +224,4 @@ void test_ms42_cal_crc(void);
 void test_ms42_vbatt_filter_dtc(void);
 void test_ms42_dfco_curve_delay(void);
 void test_ms42_rev_roll_cut(void);
+void test_ms42_spark_gradient(void);

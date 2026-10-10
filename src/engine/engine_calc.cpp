@@ -232,6 +232,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     if (snap.rpm_x10 > s_out.rpm_max_x10) {
         s_out.rpm_max_x10 = snap.rpm_x10;
     }
+    bool rev_edge = false;
     {
         const uint32_t hard = rev_limit_rpm_x10;
         const uint16_t win = spark_skip_window_rpm_x10;
@@ -245,7 +246,8 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         }
         spark_skip_set_ratio_q8(ratio);
         static uint16_t s_prev_tooth = 0u;
-        if (snap.tooth_index < s_prev_tooth) {
+        rev_edge = snap.tooth_index < s_prev_tooth;
+        if (rev_edge) {
             spark_skip_on_rev();
             limp_gating_on_rev();
         }
@@ -434,10 +436,18 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         if (!crank_or_ase) {
             corr.antijerk_retard = calc_antijerk_retard_x10(ae_tpsdot);
         }
+        // Gradiente só sobre base + IAT/CLT/idle; os retardos entram depois,
+        // sem filtro (knock é aplicado por cilindro mais adiante).
+        const int16_t shaped_x10 = spark_gradient_limit_x10(
+            static_cast<int16_t>(base_advance_x10 + corr.iat + corr.clt + corr.idle),
+            rev_edge, qc.cranking || (timing_light_enable != 0u));
+        AdvanceCorrectionsX10 retards{};
+        retards.antijerk_retard = corr.antijerk_retard;
+        retards.torque_retard = corr.torque_retard;
         const int16_t sched_spark_x10 = qc.cranking
             ? static_cast<int16_t>(crank_spark_deg * 10)
             : ign_running_advance_x10(
-                  calc_total_advance_x10(base_advance_x10, corr));
+                  calc_total_advance_x10(shaped_x10, retards));
         // Decel / flood: force PW=0 (do not apply min_pw floor).
         const uint32_t quick_crank_pw_us =
             (decel_cut_active || flood_clear) ? 0u :
