@@ -6,15 +6,15 @@
  * Mapeamento de perifericos:
  *   TIM5_CH1 PA0: CKP input capture (62.5 MHz, 16 ns/tick)
  *   TIM5_CH2 PA1: CMP input capture
- *   TIM5_CH3   --: event dispatcher (OC)
- *   TIM3_CH1-4 PC6-9: Injecao (OC, ARR=0xFFFF, ECU_Hardware_Init)
+ *   TIM5_CH3   --: event dispatcher (OC IRQ only, no pin): INJ/IGN are
+ *                  GPIO BSRR writes from the dispatcher (hal/out_pins.h)
+ *   TIM3 (RGT6) / TIM15 (VGT6): ETB H-bridge PWM (etb_driver)
  *   TIM2_CH3 PB10: EWG PWM (motor wastegate)
  *   TIM4_CH1 PB6: VVT escape PWM
  *   TIM4_CH2 PB7: VVT admissao PWM
  *
  * Clock dos timers:
  *   TIM5, TIM3, TIM4, TIM2 (APB1): timer clock = 250 MHz (timer doubler ativo)
- *   TIM3/TIM1 scheduling: configurados em engine/ecu_sched.cpp a 10 MHz
  *   TIM5 prescaler = 3 -> tick = 250 MHz / 4 = 62.5 MHz -> 16 ns/tick
  */
 

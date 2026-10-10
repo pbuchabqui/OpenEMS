@@ -329,8 +329,8 @@ static void openems_init() noexcept {
     ems::app::ui_init();
     ems::app::can_stack_init(ems::engine::wbo2_can_id);
 
-    // 9) NVIC — CKP fica com prioridade máxima. Injeção/ignição em TIM2/TIM1
-    //    usam output compare direto por hardware, sem ISR no caminho crítico.
+    // 9) NVIC — TIM5 com prioridade máxima: um só vetor para a captura
+    //    CKP (CC1), CMP (CC2) e o dispatcher de eventos INJ/IGN (CC3).
     //    SysTick configurado em system_stm32_init() com prio 11.
     nvic_set_priority(IRQ_TIM5, 1u);
     nvic_enable_irq(IRQ_TIM5);
