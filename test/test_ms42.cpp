@@ -5,9 +5,13 @@
 #include <cstdint>
 #include <cstring>
 
+#include "app/nvm_boot.h"
 #include "drv/ckp.h"
+#include "engine/calibration.h"
+#include "engine/diagnostic_manager.h"
 #include "engine/auxiliaries.h"
 #include "engine/ms42_cal.h"
+#include "hal/flash.h"
 #include "test/fixtures.h"
 
 using namespace ems::engine;
@@ -128,4 +132,53 @@ void test_ms42_vvt_measured_phase(void) {
     CHECK_NEAR(auxiliaries_vvt_advance_x10(), 270, 15, "referencia calibrada 90,0 -> avanco 27");
     ms42_cal_defaults();
     auxiliaries_test_reset();
+}
+
+void test_ms42_cal_crc(void) {
+    section("ms42 A2: CRC-32 por pagina de calibracao");
+    using namespace ems::hal;
+    namespace dm = ems::engine;
+    uint8_t backup[sizeof(boost_target_bar_x1000)];
+    std::memcpy(backup, boost_target_bar_x1000, sizeof(backup));
+
+    uint8_t page[sizeof(boost_target_bar_x1000)];
+    std::memcpy(page, backup, sizeof(page));
+    page[0] = static_cast<uint8_t>(page[0] ^ 0x5Au);  // valor distinto do default
+
+    nvm_test_reset();
+    dm::DiagnosticManager::clear_all_faults();
+    CHECK_TRUE(nvm_save_calibration(8u, page, sizeof(page)), "grava page 8 com trailer");
+    ems::app::load_boost_map_from_nvm();
+    CHECK_TRUE(nvm_calibration_status(8u) == NvmCalStatus::OK, "CRC confere -> OK");
+    CHECK_EQ(reinterpret_cast<const uint8_t*>(boost_target_bar_x1000)[0], page[0],
+             "pagina valida e aplicada");
+
+    // Um bit trocado na flash: a pagina nao e aplicada (fica o default).
+    std::memcpy(boost_target_bar_x1000, backup, sizeof(backup));
+    uint32_t img_len = 0u;
+    uint8_t* img = nvm_host_calibration_image(&img_len);
+    const uint32_t slot = img_len / 10u;
+    img[8u * slot + 5u] = static_cast<uint8_t>(img[8u * slot + 5u] ^ 0x01u);
+    uint8_t probe[sizeof(page)] = {};
+    CHECK_FALSE(nvm_load_calibration(8u, probe, sizeof(probe)), "CRC invalido -> load falha");
+    CHECK_EQ(probe[0], 0xFFu, "CRC invalido -> buffer apagado (defaults)");
+    CHECK_TRUE(nvm_calibration_status(8u) == NvmCalStatus::BAD_CRC, "status BAD_CRC");
+    CHECK_EQ(nvm_calibration_bad_crc_mask(), 1u << 8, "mascara aponta a page 8");
+    ems::app::nvm_boot_load_tables(false);
+    CHECK_EQ(std::memcmp(boost_target_bar_x1000, backup, sizeof(backup)), 0,
+             "pagina corrompida nao aplicada");
+    CHECK_TRUE(dm::DiagnosticManager::is_fault_active(dm::DiagnosticCode::CAL_CRC_FAULT),
+               "DTC CAL_CRC_FAULT registado");
+
+    // Blob gravado por firmware anterior (sem trailer): aceito como está.
+    nvm_test_reset();
+    std::memcpy(&img[8u * slot], page, sizeof(page));
+    ems::app::load_boost_map_from_nvm();
+    CHECK_TRUE(nvm_calibration_status(8u) == NvmCalStatus::LEGACY_NO_CRC, "sem trailer -> legado");
+    CHECK_EQ(reinterpret_cast<const uint8_t*>(boost_target_bar_x1000)[0], page[0],
+             "blob legado continua a carregar");
+
+    std::memcpy(boost_target_bar_x1000, backup, sizeof(backup));
+    dm::DiagnosticManager::clear_all_faults();
+    nvm_test_reset();
 }

@@ -68,6 +68,59 @@ inline void nvm_stamp_adaptive_header(uint8_t* sector) noexcept {
     __builtin_memcpy(sector + kNvmOffMapsCrc, &crc, sizeof(crc));
 }
 
+// ── Trailer de integridade das páginas de calibração (MS42 S00) ──────────────
+// Último quad-word (16 B) do slot de cada página: magic u32, len u16, 2 B de
+// pad, CRC-32 dos len bytes gravados, 4 B de pad. Gravado depois dos dados.
+// Slot sem trailer (magic ausente) = blob anterior a este formato → aceito
+// como está, para um update de firmware não perder a calibração.
+constexpr uint32_t kCalTrailerMagic = 0x434C4143u;  // "CALC"
+constexpr uint32_t kCalTrailerBytes = 16u;
+
+static void cal_trailer_build(uint8_t* out16, const uint8_t* data, uint16_t len) noexcept {
+    __builtin_memset(out16, 0xFF, kCalTrailerBytes);
+    const uint32_t magic = kCalTrailerMagic;
+    const uint32_t crc = crc32_calc(data, len);
+    __builtin_memcpy(out16 + 0, &magic, sizeof(magic));
+    __builtin_memcpy(out16 + 4, &len, sizeof(len));
+    __builtin_memcpy(out16 + 8, &crc, sizeof(crc));
+}
+
+// slot = início da página gravada; trailer = seus últimos 16 B.
+static NvmCalStatus cal_trailer_check(const uint8_t* slot, const uint8_t* trailer,
+                                      uint32_t max_len) noexcept {
+    uint32_t magic = 0u;
+    __builtin_memcpy(&magic, trailer, sizeof(magic));
+    if (magic != kCalTrailerMagic) {
+        bool erased = true;
+        for (uint32_t i = 0u; i < 16u && erased; ++i) { erased = (slot[i] == 0xFFu); }
+        return erased ? NvmCalStatus::ERASED : NvmCalStatus::LEGACY_NO_CRC;
+    }
+    uint16_t len = 0u;
+    uint32_t crc = 0u;
+    __builtin_memcpy(&len, trailer + 4, sizeof(len));
+    __builtin_memcpy(&crc, trailer + 8, sizeof(crc));
+    if (len == 0u || len > max_len) { return NvmCalStatus::BAD_CRC; }
+    return (crc32_calc(slot, len) == crc) ? NvmCalStatus::OK : NvmCalStatus::BAD_CRC;
+}
+
+static NvmCalStatus g_cal_status[10] = {};
+static uint16_t g_cal_bad_mask = 0u;
+
+static void cal_note_status(uint8_t page, NvmCalStatus st) noexcept {
+    g_cal_status[page] = st;
+    if (st == NvmCalStatus::BAD_CRC) {
+        g_cal_bad_mask = static_cast<uint16_t>(g_cal_bad_mask | (1u << page));
+    } else {
+        g_cal_bad_mask = static_cast<uint16_t>(g_cal_bad_mask & ~(1u << page));
+    }
+}
+
+NvmCalStatus nvm_calibration_status(uint8_t page) noexcept {
+    return (page > 9u) ? NvmCalStatus::ERASED : g_cal_status[page];
+}
+
+uint16_t nvm_calibration_bad_crc_mask() noexcept { return g_cal_bad_mask; }
+
 }  // namespace ems::hal
 
 #ifndef EMS_HOST_TEST
@@ -306,7 +359,7 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
     // flash_write_words exige múltiplo de 16 (quad-word de 128 bits, ver
     // comentário no seu topo) — arredondar para cima ao verificar limites.
     const uint32_t len16 = (static_cast<uint32_t>(len) + 15u) & ~15u;
-    if (len16 > kSectorSize) { return false; }
+    if (len16 > kSectorSize - kCalTrailerBytes) { return false; }
 
     const uint32_t whole_len = static_cast<uint32_t>(len) & ~15u;
     const uint32_t tail_len = static_cast<uint32_t>(len) - whole_len;  // 0..15
@@ -321,6 +374,11 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
         std::memset(tail, 0xFFu, sizeof(tail));
         std::memcpy(tail, data + whole_len, tail_len);
         ok = flash_write_words(dest + whole_len, tail, sizeof(tail));
+    }
+    if (ok) {
+        uint8_t trailer[kCalTrailerBytes];
+        cal_trailer_build(trailer, data, len);
+        ok = flash_write_words(dest + kSectorSize - kCalTrailerBytes, trailer, sizeof(trailer));
     }
     flash_lock_bank2();
     // DIAG (2026-07-09): burn reportava OK mas não sobrevivia a power-cycle.
@@ -343,8 +401,17 @@ bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept {
                             (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
     const uint32_t src    = kBank2Base + sector * kSectorSize;
 
-    // Leitura direta da Flash (mapeada em memória)
-    std::memcpy(data, reinterpret_cast<const void*>(src), len);
+    // Leitura direta da Flash (mapeada em memória). CRC inválido → o
+    // chamador vê a página como apagada (defaults de compilação).
+    const uint8_t* slot = reinterpret_cast<const uint8_t*>(src);
+    const NvmCalStatus st = cal_trailer_check(slot, slot + kSectorSize - kCalTrailerBytes,
+                                              kSectorSize - kCalTrailerBytes);
+    cal_note_status(page, st);
+    if (st == NvmCalStatus::BAD_CRC) {
+        std::memset(data, 0xFF, len);
+        return false;
+    }
+    std::memcpy(data, slot, len);
     return true;
 }
 
@@ -549,7 +616,10 @@ namespace ems::hal {
 static int8_t g_ltft[kNvmLtftDim][kNvmLtftDim] = {};
 static int8_t g_knock[8][8]      = {};
 static int8_t g_ltft_add[kNvmLtftAddDim][kNvmLtftAddDim] = {};
-static uint8_t g_cal[10][1024]   = {};  // linha ≥ maior página (lambda 2×kTableCells)
+// Linha = slot de página; os últimos 16 B guardam o trailer CRC, como o
+// fim do setor no alvo (a imagem do sim_ecu carrega-o junto).
+constexpr uint32_t kHostCalSlot = 1024u;
+static uint8_t g_cal[10][kHostCalSlot] = {};  // ≥ maior página (lambda 2×kTableCells) + trailer
 static uint32_t g_erase_cnt   = 0u, g_prog_cnt = 0u;
 static bool     g_flash_busy      = false;  // simulates flash BSY timeout when set
 static uint32_t g_flash_busy_polls = 0u;     // non-zero → simulate timeout on next op
@@ -613,11 +683,22 @@ int8_t nvm_read_ltft_add(uint8_t r, uint8_t l) noexcept {
 bool nvm_save_calibration(uint8_t pg, const uint8_t* d, uint16_t l) noexcept {
     if (pg > 9u || d == nullptr || l == 0u) return false;
     if (g_flash_busy) { return false; }
+    if (l > kHostCalSlot - kCalTrailerBytes) { return false; }
     ++g_erase_cnt; ++g_prog_cnt;
-    std::memcpy(g_cal[pg], d, l); return true;
+    std::memset(g_cal[pg], 0xFF, kHostCalSlot);
+    std::memcpy(g_cal[pg], d, l);
+    cal_trailer_build(&g_cal[pg][kHostCalSlot - kCalTrailerBytes], d, l);
+    return true;
 }
 bool nvm_load_calibration(uint8_t pg, uint8_t* d, uint16_t l) noexcept {
-    if (pg > 9u || d == nullptr || l == 0u) return false;
+    if (pg > 9u || d == nullptr || l == 0u || l > kHostCalSlot) return false;
+    const NvmCalStatus st = cal_trailer_check(g_cal[pg], &g_cal[pg][kHostCalSlot - kCalTrailerBytes],
+                                              kHostCalSlot - kCalTrailerBytes);
+    cal_note_status(pg, st);
+    if (st == NvmCalStatus::BAD_CRC) {
+        std::memset(d, 0xFF, l);
+        return false;
+    }
     std::memcpy(d, g_cal[pg], l); return true;
 }
 bool nvm_flush_adaptive_maps() noexcept { return true; }
@@ -626,6 +707,8 @@ void nvm_test_reset() noexcept {
     std::memset(g_ltft, 0, sizeof(g_ltft));
     std::memset(g_knock, 0, sizeof(g_knock));
     std::memset(g_cal, 0, sizeof(g_cal));
+    std::memset(g_cal_status, 0, sizeof(g_cal_status));
+    g_cal_bad_mask = 0u;
     g_erase_cnt = g_prog_cnt = 0u;
     g_flash_busy = false;
     g_flash_busy_polls = 0u;

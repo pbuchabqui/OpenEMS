@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "engine/calibration.h"
+#include "engine/diagnostic_manager.h"
 #include "engine/engine_config.h"
 #include "engine/fuel_calc.h"
 #include "engine/etb_control.h"
@@ -226,6 +227,14 @@ void nvm_boot_load_tables(bool cal_layout_ok) noexcept {
     load_boost_map_from_nvm();
     if (cal_layout_ok) {
         load_table_axes_from_nvm();
+    }
+    // Página com CRC inválido ficou nos defaults de compilação: DTC com a
+    // máscara das páginas (bit n = página n) no freeze frame.
+    const uint16_t bad = ems::hal::nvm_calibration_bad_crc_mask();
+    if (bad != 0u) {
+        ems::engine::DiagnosticManager::report_fault(
+            ems::engine::DiagnosticCode::CAL_CRC_FAULT,
+            ems::engine::FaultSeverity::WARNING, bad);
     }
 }
 

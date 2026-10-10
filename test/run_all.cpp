@@ -335,6 +335,7 @@ int main(void) {
     printf("\n=== MS42 (estrategias portadas) ===");
     test_ms42_page0_block();
     test_ms42_vvt_measured_phase();
+    test_ms42_cal_crc();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

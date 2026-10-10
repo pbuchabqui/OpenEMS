@@ -87,7 +87,19 @@ int8_t nvm_read_knock(uint8_t rpm_i, uint8_t load_i) noexcept;
 void nvm_reset_knock_map() noexcept;  // zera todo o mapa (e.g. ao ligar)
 
 bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexcept;
+// Falha de CRC: data preenchido com 0xFF (= apagada → defaults) e false.
 bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept;
+
+// Resultado da última leitura de cada página (trailer CRC-32 no fim do slot).
+enum class NvmCalStatus : uint8_t {
+    ERASED = 0,      // nunca gravada (ou ainda não lida)
+    OK,              // trailer presente e CRC confere
+    LEGACY_NO_CRC,   // gravada por firmware anterior ao trailer → aceita
+    BAD_CRC,         // trailer presente, CRC não confere → não aplicada
+};
+NvmCalStatus nvm_calibration_status(uint8_t page) noexcept;
+// Bit n = página n com CRC inválido na última leitura.
+uint16_t nvm_calibration_bad_crc_mask() noexcept;
 
 #if defined(EMS_HOST_TEST)
 void nvm_test_reset() noexcept;

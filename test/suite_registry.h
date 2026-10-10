@@ -220,3 +220,4 @@ void test_engine_calc_cuts(void);
 // test_ms42.cpp
 void test_ms42_page0_block(void);
 void test_ms42_vvt_measured_phase(void);
+void test_ms42_cal_crc(void);
