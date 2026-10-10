@@ -3,6 +3,7 @@
 #include "engine/constants.h"
 #include "engine/engine_config.h"
 #include "engine/math_utils.h"
+#include "engine/ms42_cal.h"
 #include "engine/table3d.h"
 
 #include <cstdint>
@@ -455,6 +456,8 @@ uint32_t g_dfco_now_ms         = 0u;
 bool     g_dfco_just_entered   = false;
 uint16_t g_dfco_ramp_elapsed_ms = 0u;
 bool     g_dfco_ramp_active    = false;
+bool     g_dfco_pending        = false;  // condições OK, a contar o atraso
+uint32_t g_dfco_pending_since_ms = 0u;
 constexpr uint16_t kDfcoMapExitHystBarX100 = 5u;
 
 void dfco_start_ramp_on_exit() noexcept {
@@ -491,6 +494,27 @@ void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept {
     }
 }
 
+void fuel_decel_cut_notify_time(uint32_t now_ms) noexcept {
+    g_dfco_now_ms = now_ms;
+}
+
+// Limiares de entrada/saída: curva por CLT (MS42 S13: corta mais alto a
+// frio) quando calibrada; senão os escalares antigos.
+static void dfco_thresholds(int16_t clt_x10, uint32_t& entry_x10, uint32_t& exit_x10) noexcept {
+    bool curve = false;
+    for (uint8_t i = 0u; i < kDfcoCltPts; ++i) {
+        curve = curve || (ms42.dfco_entry_rpm_x10[i] != 0u);
+    }
+    if (!curve) {
+        entry_x10 = decel_cut_entry_rpm_x10;
+        exit_x10 = decel_cut_exit_rpm_x10;
+        return;
+    }
+    entry_x10 = interp_u16_8pt(ms42.dfco_clt_axis_x10, ms42.dfco_entry_rpm_x10,
+                               kDfcoCltPts, clt_x10);
+    exit_x10 = (entry_x10 > ms42.dfco_hyst_rpm_x10) ? (entry_x10 - ms42.dfco_hyst_rpm_x10) : 0u;
+}
+
 bool fuel_decel_cut_update(uint32_t rpm_x10,
                            uint16_t tps_pct_x10,
                            int16_t clt_x10) noexcept {
@@ -506,9 +530,28 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
     const bool shift_inhibit = (inhibit_ms != 0u) && g_dfco_gear_changed &&
         ((g_dfco_now_ms - g_dfco_gear_change_ms) < inhibit_ms);
 
+    uint32_t entry_x10 = 0u;
+    uint32_t exit_x10 = 0u;
+    dfco_thresholds(clt_x10, entry_x10, exit_x10);
+
     if (!g_decel_cut) {
-        if (throttle_closed && engine_warm && map_ok && !shift_inhibit &&
-            rpm_x10 >= decel_cut_entry_rpm_x10) {
+        const bool cond = throttle_closed && engine_warm && map_ok && !shift_inhibit &&
+                          rpm_x10 >= entry_x10;
+        // Atraso de entrada: as condições têm de se manter (pedal a soltar
+        // devagar, rotação a cruzar o limiar) antes de cortar.
+        bool enter = false;
+        if (!cond) {
+            g_dfco_pending = false;
+        } else if (ms42.dfco_entry_delay_ms == 0u) {
+            enter = true;
+        } else if (!g_dfco_pending) {
+            g_dfco_pending = true;
+            g_dfco_pending_since_ms = g_dfco_now_ms;
+        } else {
+            enter = (g_dfco_now_ms - g_dfco_pending_since_ms) >= ms42.dfco_entry_delay_ms;
+        }
+        if (enter) {
+            g_dfco_pending = false;
             g_decel_cut = true;
             g_dfco_just_entered = true;
             g_dfco_ramp_active = false;
@@ -519,7 +562,7 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
             (g_dfco_map_bar_x100 >
              static_cast<uint16_t>(decel_cut_map_max_bar_x100 +
                                    kDfcoMapExitHystBarX100));
-        if (!throttle_closed || rpm_x10 < decel_cut_exit_rpm_x10 || map_exit) {
+        if (!throttle_closed || rpm_x10 < exit_x10 || map_exit) {
             g_decel_cut = false;
             dfco_start_ramp_on_exit();
         }
@@ -566,6 +609,8 @@ void fuel_decel_cut_reset() noexcept {
     g_dfco_just_entered = false;
     g_dfco_ramp_elapsed_ms = 0u;
     g_dfco_ramp_active = false;
+    g_dfco_pending = false;
+    g_dfco_pending_since_ms = 0u;
 }
 
 // ── Protecção de duty do injector (FOME #215) ────────────────────────────────

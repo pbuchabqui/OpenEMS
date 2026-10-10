@@ -453,3 +453,63 @@ void test_ckp_noise_after_tooth_keeps_real_edge(void) {
     ckp_fire(kNormalPeriod - kNormalPeriod / 5u); // next real tooth
     CHECK_EQ(ckp_snapshot().tooth_index, 11u, "next tooth counted once");
 }
+
+void test_ckp_acquisition_gap_window(void) {
+    section("ckp: first gap accepted only with ratio 2..4 (MS42 window)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    for (uint32_t i = 0u; i < 10u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kNormalPeriod * 6u);                  // starter pause, not a gap
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::WAIT_GAP), "6x pause → still WAIT_GAP");
+    ckp_fire(kNormalPeriod);
+    for (uint32_t i = 0u; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kNormalPeriod * 17u / 10u);           // 1.7x slow tooth
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::WAIT_GAP), "1.7x tooth → still WAIT_GAP");
+    for (uint32_t i = 0u; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kNormalPeriod * 3u);                  // real gap
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::HALF_SYNC), "3x gap → HALF_SYNC");
+}
+
+void test_ckp_cmp_hygiene(void) {
+    section("ckp: cam edges without sync never confirm; a loss drops a pending phase");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    for (uint32_t i = 0u; i < 2u; ++i) { ckp_fire(kNormalPeriod); }
+    cam_fire(g_ckp_cap);
+    cam_fire(g_ckp_cap + kNormalPeriod * 120u);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "WAIT_GAP: no cam confirmation");
+
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    const bool phase0 = ckp_snapshot().phase_A;
+    const uint32_t cam_arm = g_ckp_cap + kNormalPeriod * 58u;
+    cam_fire(cam_arm);
+    cam_fire(cam_arm + kNormalPeriod * 116u);       // validated: phase pending
+    for (uint32_t i = 0u; i < 10u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(2u * kNormalPeriod);                   // loss before the gap
+    ckp_feed_n_then_gap(kWheelNormalTeeth);         // HALF_SYNC again
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::HALF_SYNC), "re-acquired");
+    CHECK_EQ(ckp_snapshot().phase_A, !phase0, "stale cam phase not applied: plain toggle");
+    CHECK_EQ(ckp_instant_rpm_x10(), 0u, "instant rpm cleared by the loss");
+}
+
+void test_ckp_segment_rpm(void) {
+    section("ckp: 180-degree segment rpm averages compression ripple (MS42 FA22)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    CHECK_NEAR(static_cast<float>(ckp_snapshot().rpm_seg_x10), 62500.0f, 50.0f, "measured from the sync revolutions");
+    uint32_t min_tooth = 0xFFFFFFFFu, max_tooth = 0u;
+    for (uint32_t i = 1u; i <= 40u; ++i) {
+        ckp_fire((i & 1u) ? kNormalPeriod * 11u / 10u : kNormalPeriod * 9u / 10u);
+        const uint32_t r = ckp_snapshot().rpm_x10;
+        if (i > 2u && r < min_tooth) { min_tooth = r; }
+        if (i > 2u && r > max_tooth) { max_tooth = r; }
+    }
+    const uint32_t seg = ckp_snapshot().rpm_seg_x10;
+    CHECK_NEAR(static_cast<float>(seg), 62500.0f, 50.0f, "segment rpm = mean speed");
+    CHECK_TRUE(max_tooth - min_tooth > 10000u, "tooth rpm swings > 1000 rpm");
+    ckp_fire(2u * kNormalPeriod);                   // loss
+    CHECK_EQ(ckp_snapshot().rpm_seg_x10, 0u, "loss clears segment rpm");
+}

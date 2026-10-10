@@ -26,6 +26,7 @@
 #include "hal/crc32.h"
 #include "hal/flash.h"
 #include "engine/engine_config.h"
+#include "engine/ms42_cal.h"
 
 // page0 layout guards: CAN RX map 216..251 | duty/DFCO/knock 252..257 |
 // capture polarity 258 | DFCO ramp 259..260 | MAP window 264..269.
@@ -37,6 +38,8 @@ static_assert(kPage0MapWindowOff >= ems::engine::kDecelCutRampMsPage0Off + 2u,
               "MAP window overlaps DFCO ramp / capture polarity");
 static_assert(ems::engine::kTimingPage0Off >= kPage0MapWindowOff + 6u &&
               ems::engine::kTimingPage0Off + 6u <= 512u, "timing light overlaps page0");
+static_assert(ems::engine::kMs42Page0Off >= ems::engine::kTimingPage0Off + 6u,
+              "MS42 block overlaps timing light");
 static_assert(ems::app::kCanRxMapPage0Off + ems::app::kCanRxMapPage0Len <= 252u,
               "CAN RX map overlaps page0 bytes 252+");
 static_assert(kPage0MapWindowOff + 6u <= 512u, "MAP window outside page0");
@@ -459,6 +462,8 @@ void sync_page_from_table(uint8_t page) noexcept {
         ems::engine::serialize_page0_timing(g_page0, sizeof(g_page0));
         std::memcpy(g_page0 + ems::engine::kDecelCutRampMsPage0Off,
                     &ems::engine::decel_cut_ramp_ms, 2u);
+        // Estratégias MS42 (276+), bloco com magic próprio.
+        ems::engine::ms42_serialize_to_page0(g_page0, sizeof(g_page0));
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -471,7 +476,8 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(p +  16, ems::engine::clt_corr_x256,              16u);
         std::memcpy(p +  32, ems::engine::iat_corr_axis_x10,          16u);
         std::memcpy(p +  48, ems::engine::iat_corr_x256,              16u);
-        std::memset(p + 64, 0, 32u);  // 64-95 reserved (dead warmup curve removed)
+        // 64-95: extensão MS42 (a antiga curva de warmup foi removida).
+        ems::engine::ms42_ext_serialize_to_page5(p, static_cast<uint16_t>(sizeof(g_page5_corr)));
         std::memcpy(p +  96, ems::engine::vbatt_corr_axis_mv,         16u);
         std::memcpy(p + 112, ems::engine::injector_dead_time_us,      16u);
         std::memcpy(p + 128, ems::engine::ae_clt_corr_axis_x10,       16u);
@@ -715,6 +721,9 @@ bool sync_table_from_page(uint8_t page) noexcept {
             std::memcpy(&ems::engine::decel_cut_ramp_ms,
                         g_page0 + ems::engine::kDecelCutRampMsPage0Off, 2u);
         }
+        // Estratégias MS42 (276+): fora do gate de layout — o bloco tem magic
+        // próprio; sem ele (blob antigo) ficam os defaults de compilação.
+        ems::engine::ms42_apply_page0(g_page0, sizeof(g_page0));
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));
@@ -728,6 +737,7 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(ems::engine::clt_corr_x256,              p +  16, 16u);
         std::memcpy(ems::engine::iat_corr_axis_x10,          p +  32, 16u);
         std::memcpy(ems::engine::iat_corr_x256,              p +  48, 16u);
+        ems::engine::ms42_ext_apply_page5(p, static_cast<uint16_t>(sizeof(g_page5_corr)));
         std::memcpy(ems::engine::vbatt_corr_axis_mv,         p +  96, 16u);
         std::memcpy(ems::engine::injector_dead_time_us,      p + 112, 16u);
         std::memcpy(ems::engine::ae_clt_corr_axis_x10,       p + 128, 16u);

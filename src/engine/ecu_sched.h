@@ -94,6 +94,8 @@ uint32_t ecu_sched_dwell_watchdog_count(void);
 // and purge pending events for that cylinder (lost INJ_OFF backstop).
 void ecu_sched_inj_watchdog(void);
 uint32_t ecu_sched_inj_watchdog_count(void);
+/** Coil edges handed to the TIM1/TIM8 compare, and those the pin did not take. */
+void ecu_sched_coil_hw_counts(uint32_t* armed, uint32_t* missed);
 
 // Multi-spark (MS42 §2.2.3): sparks adicionais por ciclo a baixo RPM.
 // count: número de sparks adicionais (0=desabilitado, máx 3).
@@ -210,6 +212,8 @@ uint8_t  ecu_sched_test_get_evt(uint8_t index,
                                 uint32_t *ts,
                                 uint8_t *channel,
                                 uint8_t *high) noexcept;
+// Insere uma borda crua na fila (bobinas passam pelo PREARM como no ISR).
+void     ecu_sched_test_insert_evt(uint32_t ts, uint8_t channel, uint8_t high) noexcept;
 // Contadores de revoluções por modo — validam a transição presync↔sequencial.
 uint32_t ecu_sched_test_get_presync_revs(void);
 uint32_t ecu_sched_test_get_seq_revs(void);

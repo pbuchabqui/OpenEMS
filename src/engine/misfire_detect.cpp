@@ -2,6 +2,7 @@
 #include "engine/engine_config.h"
 #include "engine/constants.h"
 #include "engine/ecu_sched.h"
+#include "engine/ms42_cal.h"
 #include "drv/ckp.h"
 
 #include <cstdint>
@@ -34,17 +35,22 @@ static volatile uint8_t  g_debounce[ems::engine::cfg::kCylinderCount];
 
 // Contadores de eventos lidos pelo main loop (uint8_t = atômico em ARM Cortex-M).
 static volatile uint8_t  g_event_count[ems::engine::cfg::kCylinderCount];
+// Total retido entre partidas (MS42 S20): não zerado por misfire_reset.
+static volatile uint16_t g_total[ems::engine::cfg::kCylinderCount];
 
 // Inibe toda a detecção (ex.: durante decel cut — sem combustão é esperado).
 // Escrito pelo main loop, lido na ISR do CKP (volatile bool).
 static volatile bool g_all_inhibit = false;
 
+// Limiar Q8 resolvido no loop de fundo para o ponto de operação atual.
+static volatile uint16_t g_thresh_q8 = static_cast<uint16_t>(ems::engine::kMisfireThresholdQ8);
+
 constexpr uint8_t kN = ems::engine::cfg::kCylinderCount;
 
 static void evaluate_window(uint8_t cyl) noexcept {
-    // threshold = predicted_sum × kMisfireThresholdQ8 / 256
+    // threshold = predicted_sum × limiar(rpm, MAP) / 256
     const uint64_t thresh = (static_cast<uint64_t>(g_pred_sum_ns[cyl]) *
-                             ems::engine::kMisfireThresholdQ8) >> 8u;
+                             g_thresh_q8) >> 8u;
     const bool candidate = (g_power_sum_ns[cyl] > thresh);
 
     if (candidate) {
@@ -53,6 +59,7 @@ static void evaluate_window(uint8_t cyl) noexcept {
         }
         if (g_debounce[cyl] >= ems::engine::kMisfireDebounceCycles) {
             if (g_event_count[cyl] < 255u) { ++g_event_count[cyl]; }
+            if (g_total[cyl] < 0xFFFFu) { ++g_total[cyl]; }
             g_debounce[cyl] = 0u;
         }
     } else {
@@ -76,6 +83,7 @@ void misfire_init() noexcept {
         const uint8_t cyl = cfg::kFiringOrder[i];
         g_cyl_tdc[cyl].tdc_tooth = static_cast<uint8_t>((i % 2u) * 30u);
         g_cyl_tdc[cyl].phase_A   = (i < 2u);
+        g_total[cyl] = 0u;
     }
     // Pré-computa mapa dente→cilindro para lookup O(1) no ISR.
     std::memset(g_tooth_to_cyl, 0xFF, sizeof(g_tooth_to_cyl));  // -1 em int8_t
@@ -110,9 +118,28 @@ void misfire_clear_events(uint8_t cyl) noexcept {
     if (cyl < kN) { g_event_count[cyl] = 0u; }
 }
 
+uint16_t misfire_get_total(uint8_t cyl) noexcept {
+    if (cyl >= kN) { return 0u; }
+    return g_total[cyl];
+}
+
+void misfire_set_total(uint8_t cyl, uint16_t total) noexcept {
+    if (cyl < kN) { g_total[cyl] = total; }
+}
+
 void misfire_set_all_inhibit(bool inhibit) noexcept {
     g_all_inhibit = inhibit;
 }
+
+void misfire_set_operating_point(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
+    const Ms42Ext& x = ms42x;
+    const uint16_t excess = ms42_interp_u8_2d(
+        x.misfire_rpm_axis, x.misfire_map_axis, &x.misfire_excess_q8[0][0],
+        kMisfireCalPts, static_cast<uint16_t>(rpm_x10 / 1000u), map_kpa);
+    g_thresh_q8 = static_cast<uint16_t>(256u + excess);  // u16: escrita atômica
+}
+
+uint32_t misfire_threshold_q8() noexcept { return g_thresh_q8; }
 
 }  // namespace ems::engine
 

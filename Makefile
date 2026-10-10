@@ -66,6 +66,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/fuel_calc.cpp $(SRC_DIR)/engine/fuel_trim.cpp $(SRC_DIR)/engine/ign_calc.cpp \
              $(SRC_DIR)/engine/knock.cpp $(SRC_DIR)/engine/auxiliaries.cpp \
              $(SRC_DIR)/engine/table3d.cpp $(SRC_DIR)/engine/quick_crank.cpp \
+             $(SRC_DIR)/engine/ms42_cal.cpp \
              $(SRC_DIR)/engine/transient_fuel.cpp \
              $(SRC_DIR)/engine/spark_skip.cpp \
              $(SRC_DIR)/engine/ecu_sched.cpp \
@@ -80,6 +81,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/etb_autocal.cpp \
              $(SRC_DIR)/engine/torque_manager.cpp \
              $(SRC_DIR)/engine/misfire_detect.cpp \
+             $(SRC_DIR)/engine/adapt_retention.cpp \
              $(SRC_DIR)/engine/ewg_control.cpp \
              $(SRC_DIR)/engine/limp_gating.cpp
 
@@ -129,7 +131,8 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_engine_misc.cpp \
                    $(TEST_DIR)/test_math.cpp \
                    $(TEST_DIR)/test_protocol.cpp \
-                   $(TEST_DIR)/test_output.cpp
+                   $(TEST_DIR)/test_output.cpp \
+                   $(TEST_DIR)/test_ms42.cpp
 HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(SRC_DIR)/hal/stm32h562/timer.cpp \
                 $(SRC_DIR)/hal/stm32h562/system.cpp \

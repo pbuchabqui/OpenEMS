@@ -29,6 +29,14 @@ int16_t calc_ign_clt_correction_x10(int16_t clt_x10) noexcept;
 int16_t calc_antijerk_retard_x10(int16_t tpsdot_x10) noexcept;
 void    antijerk_reset() noexcept;
 
+// Limitador de gradiente do avanço (MS42 S09 id_iga_tra_inc/dec): o avanço
+// base+correções anda no máximo ms42.spark_grad_inc/dec_x10 por volta
+// (rev_edge = wrap do tooth_index). Retardos de knock/torque/anti-jerk ficam
+// fora (têm de atuar já). bypass (partida, luz de ponto) segue direto e
+// reinicia o estado. inc = dec = 0 → sem limite.
+int16_t spark_gradient_limit_x10(int16_t want_x10, bool rev_edge, bool bypass) noexcept;
+void    spark_gradient_reset() noexcept;
+
 // Tabela de avanço (graus inteiros) interpolada com resolução de 0,1°.
 int16_t get_advance_x10(uint32_t rpm_x10, uint16_t load_bar_x100) noexcept;
 int16_t get_advance_x10_prepared(const Table2dLookup& lookup) noexcept;
@@ -43,6 +51,12 @@ int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,
                                        uint16_t idle_target_rpm_x10,
                                        uint16_t tps_pct_x10,
                                        uint16_t map_bar_x100) noexcept;
+
+// Retardo de aquecimento do catalisador (MS42 0x4F291): ms42x.cat_heat_retard
+// × fração restante (Q8), só em marcha lenta (TPS ≤ idle_spark_tps_max) e
+// abaixo de ms42x.cat_heat_clt_max_c. Positivo = graus a subtrair.
+int16_t calc_cat_heat_retard_x10(uint16_t heat_q8, uint16_t tps_pct_x10,
+                                 int16_t clt_x10) noexcept;
 
 uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv) noexcept;
 

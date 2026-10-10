@@ -1,6 +1,7 @@
 #include "engine/ign_calc.h"
 #include "engine/calibration.h"
 #include "engine/math_utils.h"
+#include "engine/ms42_cal.h"
 
 #include <cstdint>
 
@@ -72,9 +73,48 @@ int16_t calc_total_advance_x10(int16_t base_x10, AdvanceCorrectionsX10 corr) noe
         - corr.antijerk_retard - corr.torque_retard);
 }
 
+namespace {
+int16_t g_grad_out_x10 = 0;
+bool    g_grad_valid   = false;
+}  // namespace
+
+int16_t spark_gradient_limit_x10(int16_t want_x10, bool rev_edge, bool bypass) noexcept {
+    const uint8_t inc = ms42.spark_grad_inc_x10;
+    const uint8_t dec = ms42.spark_grad_dec_x10;
+    if (bypass || (inc == 0u && dec == 0u) || !g_grad_valid) {
+        g_grad_out_x10 = want_x10;
+        g_grad_valid = !bypass;
+        return want_x10;
+    }
+    if (rev_edge) {
+        const int32_t delta = static_cast<int32_t>(want_x10) - g_grad_out_x10;
+        int32_t step = delta;
+        if (delta > 0 && inc != 0u && delta > inc) { step = inc; }
+        if (delta < 0 && dec != 0u && -delta > dec) { step = -static_cast<int32_t>(dec); }
+        g_grad_out_x10 = static_cast<int16_t>(g_grad_out_x10 + step);
+    }
+    return g_grad_out_x10;
+}
+
+void spark_gradient_reset() noexcept {
+    g_grad_out_x10 = 0;
+    g_grad_valid = false;
+}
+
 int16_t ign_running_advance_x10(int16_t computed_x10) noexcept {
     return (timing_light_enable != 0u) ? clamp_advance_x10(timing_light_advance_x10)
                                        : computed_x10;
+}
+
+int16_t calc_cat_heat_retard_x10(uint16_t heat_q8, uint16_t tps_pct_x10,
+                                 int16_t clt_x10) noexcept {
+    if (heat_q8 == 0u || ms42x.cat_heat_retard_x10 == 0u ||
+        tps_pct_x10 > idle_spark_tps_max_x10 ||
+        clt_x10 >= static_cast<int16_t>(ms42x.cat_heat_clt_max_c * 10)) {
+        return 0;
+    }
+    const uint32_t q = (heat_q8 > 256u) ? 256u : heat_q8;
+    return static_cast<int16_t>((static_cast<uint32_t>(ms42x.cat_heat_retard_x10) * q + 128u) >> 8u);
 }
 
 int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,

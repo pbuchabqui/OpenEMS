@@ -34,8 +34,8 @@ TIM6                    0x4000_1000     APB1 (ADC trigger)
 TIM7                    0x4000_1400     APB1
 IWDG                    0x4000_3000     APB1
 FDCAN1                  0x4000_A400     APB1
-TIM1                    0x4001_2C00     APB2 (ETB PWM)
-TIM8                    0x4001_3400     APB2 (ignição OC)
+TIM1                    0x4001_2C00     APB2 (VGT6: bobinas OC, PE9/11/13/15)
+TIM8                    0x4001_3400     APB2 (RGT6: bobinas OC, PC6–9)
 USART1                  0x4001_3800     APB2 (UI UART)
 GPDMA1                  0x4002_0000     AHB1
 GPDMA1_CH0              0x4002_0050     +0x80 por canal (CH0..CH7)
@@ -63,7 +63,7 @@ IRQ   Periférico              IRQ   Periférico
 ────────────────────────────────────────────────────────
   0   WWDG                     66   TIM8_UP
   1   PVD_AVD                  67   TIM8_TRG_COM / DIR / IDX
-  2   RTC                      68   TIM8_CC               ← ignição CC
+  2   RTC                      68   TIM8_CC               (sem ISR: compare só move o pino)
   3   RTC_S                    69   ADC2                  ← usado
   4   TAMP                     70   LPTIM2
   5   RAMCFG                   71   TIM15
@@ -126,7 +126,7 @@ IRQ   Periférico              IRQ   Periférico
  62   UART5                    130   LPTIM6
  63   LPUART1
  64   LPTIM1        ← NÃO COMP (H562 sem COMP)
- 65   TIM8_BRK      ← ignição break
+ 65   TIM8_BRK
 ```
 
 **Nota crítica:** STM32H562 **não possui** periférico COMP (comparador analógico).
@@ -160,20 +160,19 @@ PA4    ANALOG ADC1_IN5        TPS sensor
 PA5    ANALOG ADC1_IN6        KNOCK sensor (ADC threshold SW)
 PA6    AF2   TIM3_CH1         AUX PWM 1 (IACV/wastegate)
 PA7    AF1   TIM1_CH1N        TIM1 complementar (não usado no projeto)
-PA8    AF1   TIM1_CH1         ETB PWM (20 kHz)
+PA8    GPIO  —                RGT6: ETB IN1 (PWM do ETB = PA6 TIM3 / VGT6 PE5 TIM15)
 PA9    AF7   USART1_TX        UI UART TX — NÃO reconfigurar como TIM1
 PA10   AF7   USART1_RX        UI UART RX
-PA15   AF1   TIM2_CH1         INJ1 output compare
+PA15   GPIO  —                INJ1 (BSRR pelo despachante TIM5_CH3)
 
 PB0    ANALOG ADC1_IN7        APP1 (pedal 1)
 PB1    ANALOG ADC1_IN8        APP2 (pedal 2)
-PB3    AF1   TIM2_CH2         INJ2 output compare
+PB3    GPIO  —                INJ2 (BSRR pelo despachante TIM5_CH3)
 PB6    AF2   TIM4_CH1         AUX PWM 3 (VVT)
 PB7    AF2   TIM4_CH2         AUX PWM 4 (VVT)
 PB8    AF9   FDCAN1_RX        WBO2 CAN RX
 PB9    AF9   FDCAN1_TX        WBO2 CAN TX
-PB10   AF1   TIM2_CH3         INJ3 output compare
-PB11   AF1   TIM2_CH4         INJ4 output compare
+PB10   AF1   TIM2_CH3         EWG PWM (wastegate); INJ3/INJ4 = PC10/PC11 GPIO
 PB14   —     GPIO_Output      ETB DIR (H-bridge direction)
 PB15   —     GPIO_Output      ETB EN  (H-bridge enable)
 
@@ -183,7 +182,7 @@ PC2    ANALOG ADC2_IN1 (*)    CLT sensor
 PC3    ANALOG ADC2_IN2 (*)    IAT sensor
 PC4    ANALOG ADC2_IN13(*)    FUEL_PRESS sensor
 PC5    ANALOG ADC2_IN14(*)    OIL_PRESS sensor
-PC6    AF3   TIM8_CH1         IGN1 output compare
+PC6    AF3   TIM8_CH1         IGN1 output compare (hal/coil_oc.h)
 PC7    AF3   TIM8_CH2         IGN2 output compare
 PC8    AF3   TIM8_CH3         IGN3 output compare (⚠ conflito microSD WeAct)
 PC9    AF3   TIM8_CH4         IGN4 output compare (⚠ conflito microSD WeAct)
@@ -233,7 +232,16 @@ Offset  Reg       Notas
 **OC mode bits (CCMR OC1M[3:0] + bit16):**
 - `0110` = PWM mode 1 (alto enquanto CNT < CCR)
 - `0111` = PWM mode 2
-- `0001` = Active on match (used for INJ/IGN OC events)
+- `0001` = Active on match — bobina DWELL (hal/coil_oc.h)
+- `0010` = Inactive on match — bobina SPARK
+- `0100` / `0101` = Force inactive / active — COMMIT, estado seguro, watchdog
+
+**Bobinas (TIM1 no VGT6, TIM8 no RGT6):** PSC=3 → mesmo tick de 16 ns do TIM5
+(APB2 também a 250 MHz). O offset TIMx_CNT − TIM5_CNT é medido uma vez no
+init. O despachante TIM5_CH3 carrega o CCRx 100 µs antes da borda (PREARM) e
+força o mesmo nível no próprio tick (COMMIT). Assim o pino muda no tick exato, sem
+latência de ISR, e um match perdido ainda cai no tempo de software. Para
+voltar ao GPIO puro, compilar com `-DEMS_IGN_HW_OC=0`. Exige `BDTR.MOE`.
 
 **CCER CC1NE:** habilita saída complementar CH1N — só TIM1/TIM8. TIM1_CH1N disponível em PA7 (AF1) ou PB13 (AF1), **não em PA9**.
 

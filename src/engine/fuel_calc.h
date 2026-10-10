@@ -93,6 +93,8 @@ uint32_t fuel_decel_cut_ramp_pw(uint32_t flow_us, uint16_t dt_ms) noexcept;
 // derruba um corte activo, evitando jerk na transmissão).
 // Exit por MAP: MAP > gate + 5 bar×100 mesmo com TPS fechado.
 void fuel_decel_cut_notify_map(uint16_t map_bar_x100) noexcept;
+// Relógio (ms) do atraso de entrada do DFCO (ms42.dfco_entry_delay_ms).
+void fuel_decel_cut_notify_time(uint32_t now_ms) noexcept;
 void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept;
 
 // Protecção de duty do injector (FOME #215): chamar 1×/tick de 2 ms com o

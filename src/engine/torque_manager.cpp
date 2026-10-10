@@ -10,6 +10,7 @@
 #include "engine/quick_crank.h"
 #include "engine/calibration.h"
 #include "engine/math_utils.h"
+#include "engine/ms42_cal.h"
 #include "etb_control.h"
 #include "engine/vehicle_inputs.h"
 #include "hal/system.h"
@@ -178,6 +179,10 @@ static bool     g_idle_phase = false;
 // Dashpot: hold blade after tip-out (APP→closed) then decay toward idle.
 static int32_t  g_dashpot_x10 = 0;
 static bool     g_prev_app_idle = false;
+// MS42 S12: integrador aprendido, guardado como desvio sobre o feed-forward
+// por CLT, reaproveitado na partida seguinte (RAM, sobrevive à paragem).
+static int32_t  g_idle_learned_ofs_x10 = 0;
+static bool     g_idle_learned_valid = false;
 
 // Open-loop crank air (pct×10). Prefer max idle opening; never below min.
 static uint16_t crank_open_pct_x10() noexcept {
@@ -247,6 +252,19 @@ static bool launch_is_enabled() noexcept {
     return launch_enable != 0u;
 }
 
+// Abertura-base de marcha lenta por CLT (ms42.idle_ff_x10 sobre o eixo
+// iac_clt_axis_x10); -1 = feed-forward desligado (tabela toda a 0).
+static int32_t idle_ff_x10(int16_t clt_x10) noexcept {
+    bool any = false;
+    for (uint8_t i = 0u; i < ems::engine::kIdleFfPts; ++i) {
+        if (ems::engine::ms42.idle_ff_x10[i] != 0u) { any = true; }
+    }
+    if (!any) { return -1; }
+    return static_cast<int32_t>(ems::engine::interp_u16_8pt(
+        ems::engine::iac_clt_axis_x10, ems::engine::ms42.idle_ff_x10,
+        ems::engine::kIdleFfPts, clt_x10));
+}
+
 void torque_manager_reset() noexcept {
     g_etb_target_x10   = 0u;
     g_limp_reason      = 0u;
@@ -258,6 +276,8 @@ void torque_manager_reset() noexcept {
     g_idle_phase = false;
     g_dashpot_x10 = 0;
     g_prev_app_idle = false;
+    g_idle_learned_ofs_x10 = 0;
+    g_idle_learned_valid = false;
     g_launch_state     = LaunchState::Idle;
     g_tc_reduction_x10 = 0u;
     g_tc_prev_rpm_x10  = 0u;
@@ -581,6 +601,15 @@ TorqueOutput torque_manager_update(
         g_crank_taper_active = true;
         g_crank_taper_start_ms = now_ms;
         g_crank_taper_from_x10 = static_cast<int32_t>(crank_open);
+        // MS42: o integrador parte da abertura-base por CLT (+ o aprendido).
+        const int32_t ff = idle_ff_x10(sensors.clt_degc_x10);
+        if (ff >= 0) {
+            g_idle_air_int_x10 = ff;
+            if (ems::engine::ms42.idle_persist != 0u && g_idle_learned_valid) {
+                g_idle_air_int_x10 += g_idle_learned_ofs_x10;
+            }
+            if (g_idle_air_int_x10 > idle_max) { g_idle_air_int_x10 = idle_max; }
+        }
         if (g_idle_air_int_x10 < idle_min) {
             g_idle_air_int_x10 = idle_min;
         }
@@ -644,7 +673,20 @@ TorqueOutput torque_manager_update(
         if (g_idle_air_int_x10 < idle_min) { g_idle_air_int_x10 = idle_min; }
         if (g_idle_air_int_x10 > idle_max) { g_idle_air_int_x10 = idle_max; }
         if (!g_crank_taper_active) {
-            const uint16_t idle_floor = static_cast<uint16_t>(g_idle_air_int_x10);
+            const int32_t ff = idle_ff_x10(sensors.clt_degc_x10);
+            if (ff >= 0) {
+                g_idle_learned_ofs_x10 = g_idle_air_int_x10 - ff;
+                g_idle_learned_valid = true;
+            }
+            // Termo P (MS42 S12): ‰ de lâmina por 10 rpm de erro, ×10.
+            int32_t p_x10 = (rpm_error * static_cast<int32_t>(
+                ems::engine::ms42.idle_kp_x10)) / 1000;
+            if (p_x10 > 100) { p_x10 = 100; }
+            if (p_x10 < -100) { p_x10 = -100; }
+            int32_t floor_x10 = g_idle_air_int_x10 + p_x10;
+            if (floor_x10 < idle_min) { floor_x10 = idle_min; }
+            if (floor_x10 > idle_max) { floor_x10 = idle_max; }
+            const uint16_t idle_floor = static_cast<uint16_t>(floor_x10);
             if (target_x10 < idle_floor) {
                 target_x10 = idle_floor;
             }
@@ -744,6 +786,20 @@ TorqueOutput torque_manager_update(
     out.launch_active          = launch_active;
     out.tc_active              = (tc_red > 0u) ? 1u : 0u;
     return out;
+}
+
+bool torque_idle_learned_get(int16_t* ofs_x10) noexcept {
+    if (ofs_x10 == nullptr || !g_idle_learned_valid) { return false; }
+    int32_t v = g_idle_learned_ofs_x10;
+    if (v > 32767) { v = 32767; }
+    if (v < -32768) { v = -32768; }
+    *ofs_x10 = static_cast<int16_t>(v);
+    return true;
+}
+
+void torque_idle_learned_restore(int16_t ofs_x10) noexcept {
+    g_idle_learned_ofs_x10 = ofs_x10;
+    g_idle_learned_valid = true;
 }
 
 uint16_t torque_manager_get_target()      noexcept { return g_etb_target_x10; }

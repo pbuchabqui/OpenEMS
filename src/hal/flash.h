@@ -53,6 +53,34 @@ bool nvm_save_etb_cal(const EtbCalRecord* rec) noexcept;
 // Lê shadow (se válido) ou flash; false se ausente/CRC inválido.
 bool nvm_load_etb_cal(EtbCalRecord* out) noexcept;
 
+// ── Adaptações retidas (MS42 S20) ────────────────────────────────────────────
+// Aprendido da marcha lenta e totais de misfire por cilindro. 32 bytes com
+// CRC próprio logo após o EtbCalRecord; co-escrito com os mapas adaptativos
+// (o flush só corre com o motor parado/abaixo de kFlashWriteSafeRpmX10).
+constexpr uint32_t kNvmAdaptOffset = kNvmEtbCalOffset + 16u;
+constexpr uint8_t  kAdaptFlagIdleValid = 0x01u;
+struct AdaptRecord {
+    uint16_t magic;            // ADAPT_RECORD_MAGIC
+    uint8_t  version;          // ADAPT_RECORD_VERSION
+    uint8_t  flags;            // kAdaptFlagIdleValid
+    int16_t  idle_learned_x10; // integrador − abertura-base (‰ lâmina ×10)
+    uint16_t reserved0;
+    uint16_t misfire_total[4]; // eventos confirmados por cilindro (saturado)
+    uint8_t  reserved[12];
+    uint32_t crc32;            // CRC-32 dos 28 bytes anteriores
+};
+static_assert(sizeof(AdaptRecord) == 32u, "AdaptRecord deve ter 32 bytes");
+constexpr uint16_t ADAPT_RECORD_MAGIC   = 0x4441u;  // "AD"
+constexpr uint8_t  ADAPT_RECORD_VERSION = 1u;
+
+// Sela (magic/versão/CRC) e guarda no shadow; só marca dirty se o conteúdo
+// mudou (sem desgaste da flash a cada paragem). Não força o flush.
+bool nvm_save_adapt(const AdaptRecord* rec) noexcept;
+// Lê shadow (se válido) ou flash; false se ausente/CRC inválido.
+bool nvm_load_adapt(AdaptRecord* out) noexcept;
+// Pura: magic + versão + CRC.
+bool nvm_adapt_record_ok(const AdaptRecord& rec) noexcept;
+
 // Valida layout: magic LTF3 + CRC dos mapas. Pura (testável em host).
 bool nvm_adaptive_sector_valid(const uint8_t* sector) noexcept;
 // CRC-32 do payload adaptativo [0 .. kNvmOffLayoutMagic).
@@ -87,7 +115,19 @@ int8_t nvm_read_knock(uint8_t rpm_i, uint8_t load_i) noexcept;
 void nvm_reset_knock_map() noexcept;  // zera todo o mapa (e.g. ao ligar)
 
 bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexcept;
+// Falha de CRC: data preenchido com 0xFF (= apagada → defaults) e false.
 bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept;
+
+// Resultado da última leitura de cada página (trailer CRC-32 no fim do slot).
+enum class NvmCalStatus : uint8_t {
+    ERASED = 0,      // nunca gravada (ou ainda não lida)
+    OK,              // trailer presente e CRC confere
+    LEGACY_NO_CRC,   // gravada por firmware anterior ao trailer → aceita
+    BAD_CRC,         // trailer presente, CRC não confere → não aplicada
+};
+NvmCalStatus nvm_calibration_status(uint8_t page) noexcept;
+// Bit n = página n com CRC inválido na última leitura.
+uint16_t nvm_calibration_bad_crc_mask() noexcept;
 
 #if defined(EMS_HOST_TEST)
 void nvm_test_reset() noexcept;
@@ -96,6 +136,9 @@ uint32_t nvm_test_erase_count() noexcept;
 // Host only: the calibration slots as one byte image (sim ECU persists it).
 uint8_t* nvm_host_calibration_image(uint32_t* len) noexcept;
 uint32_t nvm_test_program_count() noexcept;
+// Host only: gravações efetivas do AdaptRecord (só conta se o conteúdo mudou).
+uint32_t nvm_test_adapt_save_count() noexcept;
+AdaptRecord* nvm_test_adapt_mock() noexcept;
 #endif
 
 }  // namespace ems::hal

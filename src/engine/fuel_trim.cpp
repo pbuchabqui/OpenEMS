@@ -4,6 +4,7 @@
 #include "engine/diagnostic_manager.h"
 #include "engine/engine_config.h"
 #include "engine/math_utils.h"
+#include "engine/ms42_cal.h"
 #include "engine/table3d.h"
 #include "hal/flash.h"
 
@@ -785,6 +786,15 @@ uint16_t fuel_ltft_accum_apply_all_ready() noexcept {
     return n;
 }
 
+// Ganho do STFT (%) por rpm × carga (MS42 S08 ip_lam_*): interpolação
+// bilinear da tabela 4×4 [carga][rpm]; 100 = ganhos escalares inalterados.
+static uint32_t stft_gain_pct(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
+    const ems::engine::Ms42Cal& c = ems::engine::ms42;
+    return ems::engine::ms42_interp_u8_2d(
+        c.stft_rpm_axis, c.stft_load_axis, &c.stft_gain_pct[0][0],
+        ems::engine::kStftGainPts, static_cast<uint16_t>(rpm_x10 / 1000u), map_kpa);
+}
+
 int16_t fuel_update_stft(uint32_t rpm_x10,
                          uint16_t map_bar_x100,
                          int16_t lambda_target_x1000,
@@ -819,6 +829,13 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
         return g_stft_pct_x10;
     }
 
+    // Rotação mínima de malha fechada (MS42 c_lam_n_min): congela abaixo.
+    if (ems::engine::ms42.stft_min_rpm_x10 != 0u &&
+        rpm_x10 < ems::engine::ms42.stft_min_rpm_x10) {
+        return g_stft_pct_x10;
+    }
+    const int32_t gain_pct = static_cast<int32_t>(stft_gain_pct(rpm_x10, map_bar_x100));
+
     g_ltft_accum_prev_rpm_x10 = rpm_x10;
     g_ltft_accum_prev_tps_x10 = tps_x10;
     g_ltft_accum_have_prev    = true;
@@ -832,9 +849,13 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     // P em ×1000 (não ÷100 ainda — kp_x100=3 truncava a zero p/ |erro|<3,4%, a
     // faixa normal de operação em malha fechada). Só divide por 100 no fim,
     // já somado ao integrador (também em ×1000).
-    const int32_t p_x1000 = static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_kp_x100);
+    const int32_t p_x1000 = static_cast<int32_t>(
+        (static_cast<int64_t>(error_x1000) *
+         static_cast<int64_t>(ems::engine::stft_kp_x100) * gain_pct) / 100);
     // incremento em ×1000: error×ki/10 (era /1000 em ×10 — truncava a zero)
-    g_stft_integrator_x1000 += (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_ki_x1000)) / 10;
+    g_stft_integrator_x1000 += static_cast<int32_t>(
+        (static_cast<int64_t>(error_x1000) *
+         static_cast<int64_t>(ems::engine::stft_ki_x1000) * gain_pct) / 1000);
 
     if (g_stft_integrator_x1000 > clamp_x1000) {
         g_stft_integrator_x1000 = clamp_x1000;

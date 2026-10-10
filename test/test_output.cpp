@@ -143,8 +143,11 @@ void test_output_test_fire_ign_watchdog(void) {
     CHECK_TRUE(n == 1u && buf[0] == 0x00u, "FIRE_IGN → ACK");
     CHECK_EQ(ecu_sched_test_get_evt_count(), 1u, "evento SPARK agendado");
     // clamp p/ 10000µs = 625000 ticks
-    const uint32_t ccr = ecu_sched_test_get_tim5_ccr3();
-    CHECK_TRUE(ccr >= 2625000u && ccr <= 2625500u, "SPARK = now + 625000 (clamp 10ms)");
+    uint32_t spark_ts = 0u;
+    (void)ecu_sched_test_get_evt(0u, &spark_ts, nullptr, nullptr);
+    CHECK_TRUE(spark_ts >= 2625000u && spark_ts <= 2625500u, "SPARK = now + 625000 (clamp 10ms)");
+    // Bobina: o despachante acorda 100 µs antes para armar o compare.
+    CHECK_EQ(ecu_sched_test_get_tim5_ccr3(), spark_ts - 6250u, "CC3 = prearm (SPARK − 100µs)");
     // watchdog armado: avança TIM5 além de 1.4×dwell e verifica que dispara
     const uint32_t wd_before = ecu_sched_dwell_watchdog_count();
     ecu_sched_test_set_tim5_cnt(2000000u + 875000u + 100u);  // 1.4×625000 + margem

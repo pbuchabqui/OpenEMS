@@ -56,6 +56,7 @@ int main() { return 0; }
 #include "engine/output_test.h"
 #include "engine/diagnostic_manager.h"
 #include "engine/misfire_detect.h"
+#include "engine/adapt_retention.h"
 #include "engine/quick_crank.h"
 #include "engine/torque_manager.h"
 #include "engine/transient_fuel.h"
@@ -66,6 +67,7 @@ int main() { return 0; }
 #include "hal/can.h"
 #include "hal/flash.h"
 #include "hal/out_pins.h"
+#include "hal/coil_oc.h"
 #include "hal/flex_fuel.h"
 #include "hal/timer.h"
 
@@ -263,6 +265,9 @@ static void openems_init() noexcept {
 
     // 2a) Scheduler unificado (re-asserts pin safe + clears event queue)
     ::ECU_Hardware_Init();
+    // Coils on TIM1/TIM8 output compare (pins move on the scheduled tick).
+    // After ECU_Hardware_Init: pins are already LOW in GPIO mode.
+    (void)ems::hal::coil_oc_hw_init();
     ::ecu_sched_set_presync_inj_auto(1u);  // auto-select SIMULTANEOUS/SEMI_SEQUENTIAL by cranking
     ::ecu_sched_set_inj_inhibit_mask(0x0Fu);
     ::ecu_sched_set_inj_pw_ticks(0u);
@@ -316,6 +321,8 @@ static void openems_init() noexcept {
         ems::engine::etb_autocal_start();
     }
     torque_manager_init();
+    // Depois de misfire_init() (zera os totais) e do load dos mapas adaptativos.
+    (void)ems::engine::adapt_retention_restore();
     iwdg_kick();
 
     // 7) Engine
@@ -329,8 +336,8 @@ static void openems_init() noexcept {
     ems::app::ui_init();
     ems::app::can_stack_init(ems::engine::wbo2_can_id);
 
-    // 9) NVIC — CKP fica com prioridade máxima. Injeção/ignição em TIM2/TIM1
-    //    usam output compare direto por hardware, sem ISR no caminho crítico.
+    // 9) NVIC — TIM5 com prioridade máxima: um só vetor para a captura
+    //    CKP (CC1), CMP (CC2) e o dispatcher de eventos INJ/IGN (CC3).
     //    SysTick configurado em system_stm32_init() com prio 11.
     nvic_set_priority(IRQ_TIM5, 1u);
     nvic_enable_irq(IRQ_TIM5);
@@ -615,6 +622,9 @@ int main() {
                 s_prev_rpm_nonzero = true;
             } else if (s_prev_rpm_nonzero) {
                 s_prev_rpm_nonzero = false;
+                // MS42 S20: retém o aprendido da marcha lenta e os totais
+                // de misfire (só dirty se mudaram) no mesmo flush.
+                ems::engine::adapt_retention_save();
                 ems::hal::nvm_request_adaptive_flush_now();
             }
         }

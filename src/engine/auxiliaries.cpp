@@ -8,6 +8,8 @@
 #include "engine/table3d.h"
 #include "engine/calibration.h"
 #include "engine/vehicle_inputs.h"
+#include "engine/ms42_cal.h"
+#include "engine/diagnostic_manager.h"
 
 #if __has_include("drv/ckp.h")
 #include "drv/ckp.h"
@@ -54,10 +56,18 @@ constexpr int16_t kDrpmEnableMaxX10PerSec = 2000;
 constexpr uint32_t kOverboostDurationMs = 500u;
 constexpr uint16_t kOverboostMarginBarX1000 = 200u;
 
-constexpr uint32_t kVvtConfirmTimeoutMs = 200u;
-
-constexpr int16_t kFanOnDegCX10 = 950;
-constexpr int16_t kFanOffDegCX10 = 900;
+// VVT: sem borda de came nova há mais do que isto → solenoide em repouso.
+// Cam edge timeout = 3 cam cycles (6 revs) at the current speed, floored:
+// a fixed 200 ms equalled one cam cycle at 600 rpm and parked VVT at idle.
+constexpr uint32_t kVvtEdgeTimeoutMinMs = 200u;
+constexpr uint32_t kVvtEdgeTimeoutRevs = 6u;
+// Aprendizagem do ângulo de repouso: só perto da marcha lenta, com o
+// solenoide sem corrente há pelo menos kVvtParkSettleMs (came encostado).
+constexpr uint32_t kVvtLearnMaxRpmX10 = 25000u;
+constexpr uint32_t kVvtParkSettleMs = 1000u;
+constexpr int32_t kVvtIntegratorMax = 300;   // ‰ duty
+// Variação máxima do alvo por tick de 10 ms (0,1° × 10 = 1°/10 ms).
+constexpr int16_t kVvtTargetSlewX10 = 10;
 
 constexpr uint32_t kPumpPrimeMs = 2000u;
 // 2 s (era 3 s): corta a bomba mais cedo num acidente sem cortar prematuramente
@@ -75,40 +85,6 @@ constexpr uint8_t kBoostRpmPts = 8u;
 constexpr uint8_t kBoostGears  = 7u;
 constexpr uint32_t kBoostRpmAxisX10[kBoostRpmPts] = {
     15000u, 20000u, 25000u, 30000u, 40000u, 50000u, 65000u, 80000u
-};
-
-constexpr uint8_t kVvtPts = 12u;
-constexpr uint32_t kVvtRpmAxisX10[kVvtPts] = {10000u, 15000u, 20000u, 25000u, 30000u, 35000u, 40000u, 45000u, 50000u, 60000u, 70000u, 80000u};
-constexpr uint32_t kVvtLoadAxisBarX1000[kVvtPts] = {300u, 400u, 500u, 600u, 700u, 800u, 900u, 1000u, 1100u, 1200u, 1400u, 1700u};
-
-constexpr int16_t kVvtAdmTargetDegX10[kVvtPts][kVvtPts] = {
-    {180, 180, 170, 160, 150, 140, 130, 120, 110, 100, 90, 80},
-    {200, 200, 190, 180, 170, 160, 150, 140, 130, 120, 100, 90},
-    {220, 220, 210, 200, 190, 180, 170, 160, 145, 130, 115, 100},
-    {240, 240, 230, 220, 210, 200, 185, 170, 155, 140, 120, 105},
-    {260, 260, 250, 240, 225, 210, 195, 180, 165, 145, 125, 110},
-    {280, 280, 270, 255, 240, 225, 210, 195, 175, 155, 130, 115},
-    {300, 300, 285, 270, 255, 240, 225, 205, 185, 165, 140, 120},
-    {315, 315, 300, 285, 270, 250, 230, 210, 190, 170, 145, 125},
-    {320, 320, 305, 290, 275, 255, 235, 215, 195, 175, 150, 130},
-    {325, 325, 310, 295, 280, 260, 240, 220, 200, 180, 155, 135},
-    {330, 330, 315, 300, 285, 265, 245, 225, 205, 185, 160, 140},
-    {330, 330, 315, 300, 285, 265, 245, 225, 205, 185, 160, 140},
-};
-
-constexpr int16_t kVvtEscTargetDegX10[kVvtPts][kVvtPts] = {
-    {60, 60, 70, 80, 90, 100, 105, 110, 115, 120, 125, 130},
-    {70, 70, 80, 90, 100, 110, 115, 120, 125, 130, 135, 140},
-    {80, 80, 90, 100, 110, 120, 125, 130, 135, 140, 145, 150},
-    {90, 90, 100, 110, 120, 130, 135, 140, 145, 150, 155, 160},
-    {100, 100, 110, 120, 130, 140, 145, 150, 155, 160, 165, 170},
-    {110, 110, 120, 130, 140, 150, 155, 160, 165, 170, 175, 180},
-    {120, 120, 130, 140, 150, 160, 165, 170, 175, 180, 185, 190},
-    {130, 130, 140, 150, 160, 170, 175, 180, 185, 190, 195, 200},
-    {140, 140, 150, 160, 170, 180, 185, 190, 195, 200, 205, 210},
-    {150, 150, 160, 170, 180, 190, 195, 200, 205, 210, 215, 220},
-    {160, 160, 170, 180, 190, 200, 205, 210, 215, 220, 225, 230},
-    {160, 160, 170, 180, 190, 200, 205, 210, 215, 220, 225, 230},
 };
 
 // ── Bomba de combustível e ventoinha ────────────────────────────────────────
@@ -135,6 +111,8 @@ constexpr uint32_t kPumpBit = (1u << kPumpPin);
 
 struct AuxState {
     bool key_on;
+    bool engine_running;
+    uint32_t running_since_ms;
     bool fan_on;
     bool pump_on;
 
@@ -153,11 +131,19 @@ struct AuxState {
 
     uint16_t vvt_esc_duty_x10;
     uint16_t vvt_adm_duty_x10;
-    int16_t vvt_esc_integrator_x10;
-    int16_t vvt_adm_integrator_x10;
+    int32_t vvt_adm_integrator_x10;
+    uint32_t vvt_last_seq;
+    uint32_t vvt_last_edge_ms;
+    uint32_t vvt_parked_since_ms;
+    uint16_t vvt_ref_learned_x10;      // 0 = ainda não aprendido
+    int16_t vvt_adv_x10;               // avanço medido filtrado (° vir. ×10)
+    int16_t vvt_target_x10;            // alvo após slew
+    bool vvt_have_meas;
+    bool vvt_active;
 
-    bool phase_prev;
-    uint32_t vvt_last_phase_toggle_ms;
+    uint16_t vbatt_low_ticks;          // ticks de 10 ms consecutivos fora da faixa
+    uint16_t vbatt_high_ticks;
+    uint16_t vbatt_ok_ticks;
 };
 
 static AuxState g = {};
@@ -181,24 +167,35 @@ uint16_t lookup_boost_target(uint32_t rpm_x10, uint8_t gear) noexcept {
     return static_cast<uint16_t>(v);
 }
 
-int16_t lookup_vvt_target(const int16_t table[kVvtPts][kVvtPts],
-                          uint32_t rpm_x10,
-                          uint16_t load_bar_x1000) noexcept {
-    const uint8_t xi = ems::engine::table_axis_index(kVvtRpmAxisX10, kVvtPts, rpm_x10);
-    const uint8_t yi = ems::engine::table_axis_index(kVvtLoadAxisBarX1000, kVvtPts, load_bar_x1000);
-    const uint8_t fx = ems::engine::table_axis_frac_q8(kVvtRpmAxisX10, xi, rpm_x10);
-    const uint8_t fy = ems::engine::table_axis_frac_q8(kVvtLoadAxisBarX1000, yi, load_bar_x1000);
-
-    const int32_t v00 = table[yi][xi];
-    const int32_t v10 = table[yi][xi + 1u];
-    const int32_t v01 = table[yi + 1u][xi];
-    const int32_t v11 = table[yi + 1u][xi + 1u];
-
-    const int32_t v0 = ems::engine::lerp_q8_s32(v00, v10, fx);
-    const int32_t v1 = ems::engine::lerp_q8_s32(v01, v11, fx);
-    const int32_t v = ems::engine::lerp_q8_s32(v0, v1, fy);
-
-    return clamp_i16(static_cast<int16_t>(v), -1000, 3600);
+// Alvo de avanço (° virabrequim ×10) da tabela 6×6 calibrável [carga][rpm].
+int16_t lookup_vvt_target_x10(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
+    const ems::engine::Ms42Cal& c = ems::engine::ms42;
+    const uint16_t rpm100 = static_cast<uint16_t>(rpm_x10 / 1000u);
+    // Interpolação em rpm em cada linha de carga, depois em carga.
+    uint8_t col[ems::engine::kVvtCalPts];
+    for (uint8_t y = 0u; y < ems::engine::kVvtCalPts; ++y) {
+        col[y] = static_cast<uint8_t>(ems::engine::ms42_interp_u8(
+            c.vvt_rpm_axis, c.vvt_target_deg[y], ems::engine::kVvtCalPts, rpm100));
+    }
+    // ×10 antes de interpolar em carga (resolução de 0,1°).
+    const uint8_t* ax = c.vvt_load_axis;
+    int32_t v;
+    if (map_kpa <= ax[0]) {
+        v = col[0] * 10;
+    } else if (map_kpa >= ax[ems::engine::kVvtCalPts - 1u]) {
+        v = col[ems::engine::kVvtCalPts - 1u] * 10;
+    } else {
+        uint8_t i = 1u;
+        while (map_kpa > ax[i]) { ++i; }
+        const int32_t x0 = ax[i - 1u];
+        const int32_t x1 = ax[i];
+        v = col[i - 1u] * 10 +
+            ((col[i] - col[i - 1u]) * 10 * (static_cast<int32_t>(map_kpa) - x0)) / (x1 - x0);
+    }
+    const int32_t vmax = static_cast<int32_t>(c.vvt_max_adv_deg) * 10;
+    if (v > vmax) { v = vmax; }
+    if (v < 0) { v = 0; }
+    return static_cast<int16_t>(v);
 }
 
 void set_fan(bool on) noexcept {
@@ -217,13 +214,6 @@ void set_pump(bool on) noexcept {
     } else {
         EMS_AUX_RELAY_BSRR = (kPumpBit << 16u);
     }
-}
-
-uint16_t calc_cam_pos_est_x10(const ems::drv::CkpSnapshot& snap) noexcept {
-    // tooth_index × 6,0° × 10 = tooth_index × 60 (roda 60-2: 360°/60 posições = 6°/dente)
-    const uint16_t crank_deg_x10 = static_cast<uint16_t>(static_cast<uint32_t>(snap.tooth_index) * 60u);
-    const uint16_t cycle_deg_x10 = snap.phase_A ? crank_deg_x10 : static_cast<uint16_t>(crank_deg_x10 + 3600u);
-    return static_cast<uint16_t>(cycle_deg_x10 / 2u);
 }
 
 uint16_t iac_target_rpm_x10(int16_t clt_x10) noexcept {
@@ -274,64 +264,165 @@ void run_wastegate_control(const ems::drv::CkpSnapshot& snap,
     g.ewg_position_demand_x10 = g.wg_duty_x10;
 }
 
-uint16_t run_vvt_pid(int16_t target_deg_x10,
-                     uint16_t pos_deg_x10,
-                     int16_t& integrator_x10) noexcept {
-    const int32_t error = static_cast<int32_t>(target_deg_x10) - static_cast<int32_t>(pos_deg_x10);
-    const int32_t p = (error * 12) / 10;
-
-    integrator_x10 = clamp_i16(
-        static_cast<int16_t>(integrator_x10 + static_cast<int16_t>(error / 20)),
-        -300,
-        300);
-
-    int32_t out = 500 + p + integrator_x10;
-    if (out < 0) {
-        out = 0;
-    }
-    if (out > 1000) {
-        out = 1000;
-    }
-    return static_cast<uint16_t>(out);
+// Avanço = referência − ângulo medido, em ±180°: borda mais cedo = came
+// avançado (MS42 S15: ângulo de referência + desvio).
+int16_t wrap_adv_x10(int32_t d) noexcept {
+    while (d > 1800) { d -= 3600; }
+    while (d < -1800) { d += 3600; }
+    return static_cast<int16_t>(d);
 }
 
+void vvt_park() noexcept {
+    if (g.vvt_active) {
+        g.vvt_parked_since_ms = g.time_ms;
+    }
+    g.vvt_active = false;
+    g.vvt_adm_duty_x10 = 0u;
+    g.vvt_adm_integrator_x10 = 0;
+    ems::hal::tim4_set_duty(1u, 0u);
+}
+
+// VVT só de admissão (uma entrada de came). A borda do CMP medida pelo driver
+// CKP dá a fase real; o PI corre sobre o avanço medido, não sobre o ângulo do
+// virabrequim. Sem borda nova, sincronismo, óleo frio ou VVT desligado → duty
+// 0 (repouso mecânico, MS42 c_cam_ini).
 void run_vvt_control(const ems::drv::CkpSnapshot& snap,
                      const ems::drv::SensorData& s) noexcept {
-    if (snap.phase_A != g.phase_prev) {
-        g.phase_prev = snap.phase_A;
-        g.vvt_last_phase_toggle_ms = g.time_ms;
+    const ems::engine::Ms42Cal& c = ems::engine::ms42;
+
+    // Escape: sem sensor de came de escape nesta placa → sempre desligado.
+    g.vvt_esc_duty_x10 = 0u;
+    ems::hal::tim4_set_duty(0u, 0u);
+
+    uint16_t meas_x10 = 0u;
+    const uint32_t seq = ems::drv::ckp_cam_edge_angle(meas_x10);
+    const bool fresh = (seq != g.vvt_last_seq);
+    if (fresh) {
+        g.vvt_last_seq = seq;
+        g.vvt_last_edge_ms = g.time_ms;
     }
-
-    const bool confirmed =
-        (snap.state == ems::drv::SyncState::FULL_SYNC) &&
-        ((g.time_ms - g.vvt_last_phase_toggle_ms) <= kVvtConfirmTimeoutMs);
-
-    if (!confirmed) {
-        g.vvt_esc_duty_x10 = 0u;
-        g.vvt_adm_duty_x10 = 0u;
-        g.vvt_esc_integrator_x10 = 0;
-        g.vvt_adm_integrator_x10 = 0;
-        ems::hal::tim4_set_duty(0u, 0u);
-        ems::hal::tim4_set_duty(1u, 0u);
+    uint32_t edge_timeout_ms = kVvtEdgeTimeoutMinMs;
+    if (snap.rpm_x10 != 0u) {
+        const uint32_t t = (kVvtEdgeTimeoutRevs * 600000u) / snap.rpm_x10;
+        if (t > edge_timeout_ms) { edge_timeout_ms = t; }
+    }
+    // Only a confirmed cam (2 coherent edges) gives a trustworthy angle.
+    const bool signal_ok =
+        (snap.state == ems::drv::SyncState::FULL_SYNC) && (seq != 0u) &&
+        (snap.cmp_confirms >= 2u) &&
+        ((g.time_ms - g.vvt_last_edge_ms) <= edge_timeout_ms);
+    if (!signal_ok) {
+        g.vvt_have_meas = false;
+        vvt_park();
         return;
     }
 
-    const uint16_t pos_deg_x10 = calc_cam_pos_est_x10(snap);
-    const int16_t target_esc = lookup_vvt_target(kVvtEscTargetDegX10, snap.rpm_x10, s.map_bar_x1000);
-    const int16_t target_adm = lookup_vvt_target(kVvtAdmTargetDegX10, snap.rpm_x10, s.map_bar_x1000);
+    // Referência: calibrada ou aprendida com o solenoide em repouso.
+    if (fresh && !g.vvt_active && snap.rpm_x10 <= kVvtLearnMaxRpmX10 &&
+        (g.time_ms - g.vvt_parked_since_ms) >= kVvtParkSettleMs) {
+        if (g.vvt_ref_learned_x10 == 0u) {
+            g.vvt_ref_learned_x10 = (meas_x10 == 0u) ? 1u : meas_x10;
+        } else {
+            // EMA 1/8 no domínio circular.
+            const int16_t d = wrap_adv_x10(static_cast<int32_t>(meas_x10) -
+                                           static_cast<int32_t>(g.vvt_ref_learned_x10));
+            int32_t r = static_cast<int32_t>(g.vvt_ref_learned_x10) + d / 8;
+            if (r <= 0) { r += 3600; }
+            if (r >= 3600) { r -= 3600; }
+            g.vvt_ref_learned_x10 = static_cast<uint16_t>(r == 0 ? 1 : r);
+        }
+    }
+    const uint16_t ref_x10 = (c.vvt_cam_ref_x10 != 0u) ? c.vvt_cam_ref_x10
+                                                       : g.vvt_ref_learned_x10;
+    if (ref_x10 == 0u) {
+        // Ainda sem referência: não há como medir o avanço.
+        g.vvt_have_meas = false;
+        vvt_park();
+        return;
+    }
+    if (fresh) {
+        const int16_t adv = wrap_adv_x10(static_cast<int32_t>(ref_x10) -
+                                         static_cast<int32_t>(meas_x10));
+        if (!g.vvt_have_meas) {
+            g.vvt_adv_x10 = adv;
+            g.vvt_have_meas = true;
+        } else {
+            g.vvt_adv_x10 = static_cast<int16_t>(
+                g.vvt_adv_x10 + (adv - g.vvt_adv_x10) / 4);
+        }
+    }
 
-    g.vvt_esc_duty_x10 = run_vvt_pid(target_esc, pos_deg_x10, g.vvt_esc_integrator_x10);
-    g.vvt_adm_duty_x10 = run_vvt_pid(target_adm, pos_deg_x10, g.vvt_adm_integrator_x10);
+    if (c.vvt_enable == 0u || s.clt_degc_x10 < c.vvt_min_clt_x10) {
+        vvt_park();
+        g.vvt_target_x10 = 0;
+        return;
+    }
 
-    ems::hal::tim4_set_duty(0u, g.vvt_esc_duty_x10);
+    // Alvo com slew (evita degrau no óleo do atuador).
+    const uint16_t map_kpa = static_cast<uint16_t>(s.map_bar_x1000 / 10u);
+    const int16_t want = lookup_vvt_target_x10(snap.rpm_x10, map_kpa);
+    if (want > g.vvt_target_x10 + kVvtTargetSlewX10) {
+        g.vvt_target_x10 = static_cast<int16_t>(g.vvt_target_x10 + kVvtTargetSlewX10);
+    } else if (want < g.vvt_target_x10 - kVvtTargetSlewX10) {
+        g.vvt_target_x10 = static_cast<int16_t>(g.vvt_target_x10 - kVvtTargetSlewX10);
+    } else {
+        g.vvt_target_x10 = want;
+    }
+
+    const int32_t err = static_cast<int32_t>(g.vvt_target_x10) - g.vvt_adv_x10;
+    const int32_t p = (err * static_cast<int32_t>(c.vvt_kp_x10)) / 10;
+    int32_t integ = g.vvt_adm_integrator_x10 +
+                    (err * static_cast<int32_t>(c.vvt_ki_x100)) / 100;
+    if (integ > kVvtIntegratorMax) { integ = kVvtIntegratorMax; }
+    if (integ < -kVvtIntegratorMax) { integ = -kVvtIntegratorMax; }
+    g.vvt_adm_integrator_x10 = integ;
+
+    int32_t out = static_cast<int32_t>(c.vvt_hold_duty_pct) * 10 + p + integ;
+    if (out < 0) { out = 0; }
+    if (out > 1000) { out = 1000; }
+    g.vvt_active = true;
+    g.vvt_adm_duty_x10 = static_cast<uint16_t>(out);
     ems::hal::tim4_set_duty(1u, g.vvt_adm_duty_x10);
 }
 
 void run_fan_control(int16_t clt_x10) noexcept {
-    if (!g.fan_on && clt_x10 >= kFanOnDegCX10) {
+    if (!g.fan_on && clt_x10 >= ems::engine::ms42.fan_on_x10) {
         set_fan(true);
-    } else if (g.fan_on && clt_x10 <= kFanOffDegCX10) {
+    } else if (g.fan_on && clt_x10 <= ems::engine::ms42.fan_off_x10) {
         set_fan(false);
+    }
+}
+
+// DTC de tensão (MS42 S19): baixa só com o motor a trabalhar (na partida a
+// queda é normal), alta sempre; 2 s fora da faixa para ativar, 2 s dentro
+// para limpar.
+constexpr uint16_t kVbattDebounceTicks = 200u;
+constexpr uint32_t kVbattRunRpmX10 = 5000u;
+
+void run_vbatt_diag(uint32_t rpm_x10, uint16_t vbatt_mv) noexcept {
+    using ems::engine::DiagnosticCode;
+    using ems::engine::DiagnosticManager;
+    const uint16_t low_mv = ems::engine::ms42.vbatt_low_mv;
+    const uint16_t high_mv = ems::engine::ms42.vbatt_high_mv;
+    const bool low = (low_mv != 0u) && (rpm_x10 >= kVbattRunRpmX10) && (vbatt_mv < low_mv);
+    const bool high = (high_mv != 0u) && (vbatt_mv > high_mv);
+
+    g.vbatt_low_ticks = low ? static_cast<uint16_t>(g.vbatt_low_ticks + (g.vbatt_low_ticks < 0xFFFFu)) : 0u;
+    g.vbatt_high_ticks = high ? static_cast<uint16_t>(g.vbatt_high_ticks + (g.vbatt_high_ticks < 0xFFFFu)) : 0u;
+    g.vbatt_ok_ticks = (!low && !high)
+        ? static_cast<uint16_t>(g.vbatt_ok_ticks + (g.vbatt_ok_ticks < 0xFFFFu)) : 0u;
+
+    if (g.vbatt_low_ticks == kVbattDebounceTicks) {
+        DiagnosticManager::report_fault(DiagnosticCode::VBATT_LOW,
+                                        ems::engine::FaultSeverity::WARNING, vbatt_mv);
+    }
+    if (g.vbatt_high_ticks == kVbattDebounceTicks) {
+        DiagnosticManager::report_fault(DiagnosticCode::VBATT_HIGH,
+                                        ems::engine::FaultSeverity::WARNING, vbatt_mv);
+    }
+    if (g.vbatt_ok_ticks == kVbattDebounceTicks) {
+        DiagnosticManager::clear_fault(DiagnosticCode::VBATT_LOW);
+        DiagnosticManager::clear_fault(DiagnosticCode::VBATT_HIGH);
     }
 }
 
@@ -368,15 +459,26 @@ void reset_state() noexcept {
 
 namespace ems::engine {
 
+// Fração restante do aquecimento do catalisador (MS42 E17E): 256 logo após a
+// partida, a decair linearmente até 0 em cat_heat_s. 0 com o motor parado.
+uint16_t auxiliaries_cat_heat_q8() noexcept {
+    const uint32_t dur_ms = static_cast<uint32_t>(ms42.cat_heat_s) * 1000u;
+    if (!g.engine_running || dur_ms == 0u) { return 0u; }
+    const uint32_t t = g.time_ms - g.running_since_ms;
+    if (t >= dur_ms) { return 0u; }
+    return static_cast<uint16_t>((static_cast<uint64_t>(dur_ms - t) * 256u) / dur_ms);
+}
+
+// Alvo de marcha lenta + acréscimo para aquecer o catalisador: cat_heat_rpm
+// escalado pela fração acima.
 uint16_t auxiliaries_idle_target_rpm_x10(int16_t clt_x10) noexcept {
-    return iac_target_rpm_x10(clt_x10);
+    uint32_t target = iac_target_rpm_x10(clt_x10);
+    target += (static_cast<uint32_t>(ms42.cat_heat_rpm_x10) * auxiliaries_cat_heat_q8()) >> 8u;
+    return static_cast<uint16_t>(target > 0xFFFFu ? 0xFFFFu : target);
 }
 
 void auxiliaries_init() noexcept {
     reset_state();
-
-    const ems::drv::CkpSnapshot snap = ems::drv::ckp_snapshot();
-    g.phase_prev = snap.phase_A;
 
     // NÃO inicializar o TIM3 aqui: ele é dedicado à injeção (OC em PC6-9).
     // O motor EWG (wastegate) usa o TIM2_CH3/PB10 via ewg_driver. Antes, este
@@ -423,6 +525,15 @@ void auxiliaries_tick_10ms() noexcept {
     run_vvt_control(snap, s);
     run_fan_control(s.clt_degc_x10);
     run_pump_control(snap.rpm_x10);
+    run_vbatt_diag(snap.rpm_x10, s.vbatt_mv);
+
+    // Motor a trabalhar (≥ 500 rpm) desde quando — para o aquecimento do cat.
+    if (snap.rpm_x10 == 0u) {
+        g.engine_running = false;
+    } else if (!g.engine_running && snap.rpm_x10 >= 5000u) {
+        g.engine_running = true;
+        g.running_since_ms = g.time_ms;
+    }
 }
 
 void auxiliaries_tick_20ms() noexcept {
@@ -441,6 +552,19 @@ void auxiliaries_force_fan(bool on) noexcept { set_fan(on); }
 
 uint16_t auxiliaries_ewg_position_demand_x10() noexcept {
     return g.ewg_position_demand_x10;
+}
+
+int16_t auxiliaries_vvt_advance_x10() noexcept {
+    return g.vvt_have_meas ? g.vvt_adv_x10 : 0;
+}
+
+int16_t auxiliaries_vvt_target_x10() noexcept {
+    return g.vvt_active ? g.vvt_target_x10 : 0;
+}
+
+uint16_t auxiliaries_vvt_ref_x10() noexcept {
+    return (ems::engine::ms42.vvt_cam_ref_x10 != 0u)
+        ? ems::engine::ms42.vvt_cam_ref_x10 : g.vvt_ref_learned_x10;
 }
 
 #if defined(EMS_HOST_TEST)

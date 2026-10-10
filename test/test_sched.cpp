@@ -31,6 +31,7 @@
 #include "engine/xtau_autocalib.h"
 #include "engine/output_test.h"
 #include "engine/engine_config.h"
+#include "hal/coil_oc.h"
 #include "hal/timer.h"
 #include "hal/flash.h"
 #include "app/ui_protocol.h"
@@ -528,6 +529,123 @@ void test_ecu_sched_golden_dispatch_past_counts_late(void) {
     CHECK_TRUE(ecu_sched_test_get_late_event_count() > late0,
                "path-2 tight re-arm increments late_event_count");
     CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "event consumed");
+}
+
+// ── Coil hardware compare (TIM1/TIM8 model, hal/coil_oc.h) ─────────────────
+static void coil_oc_test_begin(void)
+{
+    ecu_sched_test_reset();
+    coil_oc_host::reset();
+    coil_oc_host::model = 1U;
+    (void)coil_oc_hw_init();
+}
+
+void test_ecu_sched_coil_hw_compare(void) {
+    section("ecu_sched: coil edge on the hardware compare tick");
+    constexpr uint32_t kPrearm = 6250u;  // 100 µs
+    uint32_t armed = 0u, missed = 0u;
+
+    // 1. SPARK armed 100 µs ahead, pin moves on the exact tick.
+    coil_oc_test_begin();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    ecu_sched_test_pulse_ign(0u, 3000u);          // IGN1 DWELL forced high now
+    CHECK_EQ(coil_oc_host::ref[0], 1u, "DWELL force drives the OC level high");
+    uint32_t ts = 0u;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, nullptr, nullptr), 1u, "SPARK queued");
+    CHECK_EQ(ecu_sched_test_get_tim5_ccr3(), ts - kPrearm, "dispatcher wakes at prearm");
+    ecu_sched_test_set_tim5_cnt(ts - kPrearm);
+    ecu_sched_evt_dispatch();
+    CHECK_TRUE(coil_oc_host::armed[0] == 1u && coil_oc_host::arm_ts[0] == ts &&
+               coil_oc_host::arm_high[0] == 0u, "compare loaded: clear on match at SPARK tick");
+    CHECK_EQ(ecu_sched_test_get_tim5_ccr3(), ts, "COMMIT queued at the edge itself");
+    coil_oc_host::advance(ts - kPrearm, ts - 1u);
+    CHECK_EQ(coil_oc_host::ref[0], 1u, "no edge before the compare tick");
+    coil_oc_host::advance(ts - 1u, ts + 40u);     // ISR latency after the match
+    CHECK_EQ(coil_oc_host::ref[0], 0u, "pin low on the compare tick");
+    ecu_sched_test_set_tim5_cnt(ts + 40u);
+    ecu_sched_evt_dispatch();
+    ecu_sched_coil_hw_counts(&armed, &missed);
+    CHECK_TRUE(armed == 1u && missed == 0u, "one edge armed, none missed");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "COMMIT consumed");
+
+    // 2. Missed match: COMMIT forces the level in software and counts it.
+    coil_oc_test_begin();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    ecu_sched_test_pulse_ign(0u, 3000u);
+    (void)ecu_sched_test_get_evt(0u, &ts, nullptr, nullptr);
+    ecu_sched_test_set_tim5_cnt(ts - kPrearm);
+    ecu_sched_evt_dispatch();
+    ecu_sched_test_set_tim5_cnt(ts + 40u);        // no advance(): the match never landed
+    ecu_sched_evt_dispatch();
+    ecu_sched_coil_hw_counts(&armed, &missed);
+    CHECK_EQ(missed, 1u, "miss counted");
+    CHECK_EQ(coil_oc_host::ref[0], 0u, "COMMIT still ends the dwell");
+
+    // 3. Force (safe state) cancels the pending match.
+    coil_oc_test_begin();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    ecu_sched_test_insert_evt(200000u, ECU_CH_IGN2, 1u);   // DWELL coil 1
+    ecu_sched_test_set_tim5_cnt(200000u - kPrearm);
+    ecu_sched_evt_dispatch();
+    CHECK_TRUE(coil_oc_host::armed[1] == 1u && coil_oc_host::arm_high[1] == 1u,
+               "DWELL armed set on match");
+    ecu_sched_test_all_outputs_safe();
+    CHECK_EQ(coil_oc_host::armed[1], 0u, "safe state cancels the armed DWELL");
+    coil_oc_host::advance(200000u - kPrearm, 210000u);
+    CHECK_EQ(coil_oc_host::ref[1], 0u, "coil stays off past the old match");
+
+    // 4. Armed DWELL dropped on queue overflow is cancelled in hardware.
+    coil_oc_test_begin();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    ecu_sched_test_insert_evt(200000u, ECU_CH_IGN3, 1u);   // DWELL coil 2
+    ecu_sched_test_set_tim5_cnt(200000u - kPrearm);
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(coil_oc_host::armed[2], 1u, "DWELL armed");
+    while (ecu_sched_test_get_evt_count() < 48u) {
+        ecu_sched_test_insert_evt(400000u, ECU_CH_INJ1, 0u);
+    }
+    ecu_sched_test_insert_evt(400000u, ECU_CH_INJ2, 0u);   // overflow → drop the DWELL
+    uint8_t dwell_left = 0u;
+    for (uint8_t i = 0u; i < ecu_sched_test_get_evt_count(); ++i) {
+        uint8_t ch = 0u;
+        (void)ecu_sched_test_get_evt(i, nullptr, &ch, nullptr);
+        if (ch == ECU_CH_IGN3) { ++dwell_left; }
+    }
+    CHECK_EQ(dwell_left, 0u, "overflow dropped the queued DWELL");
+    CHECK_EQ(coil_oc_host::armed[2], 0u, "dropped DWELL no longer armed in the timer");
+    coil_oc_host::advance(200000u - kPrearm, 210000u);
+    CHECK_EQ(coil_oc_host::ref[2], 0u, "coil never charges without its COMMIT");
+
+    // 5. Channel busy (second edge inside 100 µs): software COMMIT fallback.
+    coil_oc_test_begin();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    ecu_sched_test_insert_evt(200000u, ECU_CH_IGN4, 1u);   // DWELL coil 3
+    ecu_sched_test_insert_evt(203000u, ECU_CH_IGN4, 0u);   // SPARK 48 µs later
+    ecu_sched_test_set_tim5_cnt(203000u - kPrearm);         // both prearms due
+    ecu_sched_evt_dispatch();
+    ecu_sched_coil_hw_counts(&armed, &missed);
+    CHECK_EQ(armed, 1u, "only the first edge takes the busy channel");
+    coil_oc_host::advance(203000u - kPrearm, 200010u);
+    ecu_sched_test_set_tim5_cnt(200010u);
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(coil_oc_host::ref[3], 1u, "DWELL on the compare tick");
+    ecu_sched_test_set_tim5_cnt(203010u);
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(coil_oc_host::ref[3], 0u, "SPARK by software force");
+    ecu_sched_coil_hw_counts(&armed, &missed);
+    CHECK_TRUE(armed == 1u && missed == 0u, "fallback is not a miss");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "queue drained");
+
+    // 6. Model off (GPIO build / unit default): no arming at all.
+    ecu_sched_test_reset();
+    coil_oc_host::reset();
+    ecu_sched_test_set_tim5_cnt(1000u);
+    ecu_sched_test_insert_evt(200000u, ECU_CH_IGN1, 1u);
+    ecu_sched_test_set_tim5_cnt(200000u - kPrearm);
+    ecu_sched_evt_dispatch();
+    ecu_sched_coil_hw_counts(&armed, &missed);
+    CHECK_EQ(armed, 0u, "GPIO mode: prearm only re-queues the COMMIT");
+    ecu_sched_test_all_outputs_safe();
 }
 
 void test_ecu_sched_golden_far_target_timestamp(void) {

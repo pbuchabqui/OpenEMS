@@ -18,6 +18,7 @@
 
 #include "engine/calibration.h"
 #include "engine/map_window.h"
+#include "engine/ms42_cal.h"
 
 namespace {
 
@@ -160,6 +161,9 @@ static uint32_t g_last_rpm_x10        = 0u;   // RPM do último dente — p/ pla
 // desses canais (sensores físicos ausentes na bancada, sem RC). MAP/TPS NÃO são mais
 // forçados — agora são ADC real (PA3/PA4). Sem efeito quando false (produção).
 static bool     g_bench_clt_iat      = false;
+// VBATT filtrada (IIR α = 1/2^ms42.vbatt_filter_shift, MS42 S19), em mV×16.
+static uint32_t g_vbatt_filt_x16     = 0u;
+static bool     g_vbatt_filt_valid   = false;
 static int16_t  g_bench_clt_x10      = 900;   // 90,0 °C — motor quente (corr CLT ≈ 1.0)
 static int16_t  g_bench_iat_x10      = 250;   // 25,0 °C — ar ambiente (corr IAT ≈ 1.0)
 static uint16_t g_bench_map_bar_x1000 = 350u; // 35,0 kPa — idle vacuum
@@ -202,6 +206,8 @@ inline void reset_state() noexcept {
     g_maf_period_pos = 0u;
     g_fast_sample_accum    = 0u;
     g_last_rpm_x10         = 0u;
+    g_vbatt_filt_x16       = 0u;
+    g_vbatt_filt_valid     = false;
     // g_bench_clt_iat NÃO é resetado aqui — é config de bancada, persiste por
     // sensors_set_bench_clt_iat() até ser desligado explicitamente.
     g_tps_pct_cache_valid  = false;
@@ -853,7 +859,26 @@ void sensors_tick_100ms() noexcept {
     } else {
         const uint16_t vbatt_mv =
             vbatt_raw_to_mv(ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::VBATT));
-        g_data_staging.vbatt_mv = (vbatt_mv >= 6000u && vbatt_mv <= 18000u) ? vbatt_mv : 12000u;
+        if (vbatt_mv >= 6000u && vbatt_mv <= 18000u) {
+            // Dead-time do injetor e dwell consomem este valor: ruído de
+            // alternador/ignição passava direto para os dois.
+            const uint32_t sample_x16 = static_cast<uint32_t>(vbatt_mv) << 4u;
+            if (!g_vbatt_filt_valid) {
+                g_vbatt_filt_x16 = sample_x16;
+                g_vbatt_filt_valid = true;
+            } else {
+                const int32_t err = static_cast<int32_t>(sample_x16) -
+                                    static_cast<int32_t>(g_vbatt_filt_x16);
+                g_vbatt_filt_x16 = static_cast<uint32_t>(
+                    static_cast<int32_t>(g_vbatt_filt_x16) +
+                    (err >> ems::engine::ms42.vbatt_filter_shift));
+            }
+            g_data_staging.vbatt_mv = static_cast<uint16_t>((g_vbatt_filt_x16 + 8u) >> 4u);
+        } else {
+            // Pino aberto/curto: fallback seguro e o filtro recomeça do zero.
+            g_data_staging.vbatt_mv = 12000u;
+            g_vbatt_filt_valid = false;
+        }
     }
 
     // Slow path also samples APP/ETB; publish full snapshot for sensors_get().

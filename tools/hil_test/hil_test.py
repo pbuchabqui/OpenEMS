@@ -215,8 +215,6 @@ class Tables:
     clt_corr_x256:         list[int]       = field(default_factory=list)
     iat_corr_axis_x10:     list[int]       = field(default_factory=list)
     iat_corr_x256:         list[int]       = field(default_factory=list)
-    warmup_corr_axis_x10:  list[int]       = field(default_factory=list)
-    warmup_corr_x256:      list[int]       = field(default_factory=list)
     vbatt_corr_axis_mv:    list[int]       = field(default_factory=list)
     injector_dead_time_us: list[int]       = field(default_factory=list)
 
@@ -248,12 +246,6 @@ class Tables:
             return 1.0
         return _interp1d(self.iat_corr_axis_x10, self.iat_corr_x256,
                          iat_degc * 10) / 256.0
-
-    def warmup_corr(self, clt_degc: int) -> float:
-        if not self.warmup_corr_axis_x10:
-            return 1.0
-        return _interp1d(self.warmup_corr_axis_x10, self.warmup_corr_x256,
-                         clt_degc * 10) / 256.0
 
     def dead_time_us(self, vbatt_mv: int = 14000) -> int:
         if not self.vbatt_corr_axis_mv or not self.injector_dead_time_us:
@@ -377,7 +369,7 @@ class STM32Client:
                 [struct.unpack_from("<h", raw, (r * N + c) * 2)[0]
                  for c in range(N)] for r in range(N)]
 
-        # page 5: CLT/IAT corr + warmup + dead-time + dwell
+        # page 5: CLT/IAT corr + dead-time + dwell (64-95 = extensão MS42)
         raw = self._read_page(5, 0, 192)
         if len(raw) >= 192:
             u16 = lambda off, n: [struct.unpack_from("<H", raw, off + i*2)[0]
@@ -388,8 +380,6 @@ class STM32Client:
             t.clt_corr_x256        = u16( 16, 8)
             t.iat_corr_axis_x10    = i16( 32, 8)
             t.iat_corr_x256        = u16( 48, 8)
-            t.warmup_corr_axis_x10 = i16( 64, 8)
-            t.warmup_corr_x256     = u16( 80, 8)
             t.vbatt_corr_axis_mv   = u16( 96, 8)
             t.injector_dead_time_us = u16(112, 8)
             t.dwell_vbatt_axis_mv  = u16(160, 8)

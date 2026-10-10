@@ -167,6 +167,7 @@
 #define GPIOC_AFRH    STM32_REG32(GPIOC_BASE + GPIO_AFRH_OFF)
 #define GPIOC_PUPDR   STM32_REG32(GPIOC_BASE + GPIO_PUPDR_OFF)
 #define GPIOC_BSRR    STM32_REG32(GPIOC_BASE + GPIO_BSRR_OFF)
+#define GPIOC_IDR     STM32_REG32(GPIOC_BASE + GPIO_IDR_OFF)
 
 #define GPIOD_MODER   STM32_REG32(GPIOD_BASE + GPIO_MODER_OFF)
 #define GPIOD_OSPEEDR STM32_REG32(GPIOD_BASE + GPIO_OSPEEDR_OFF)
@@ -182,6 +183,7 @@
 #define GPIOE_AFRH    STM32_REG32(GPIOE_BASE + GPIO_AFRH_OFF)
 #define GPIOE_BSRR    STM32_REG32(GPIOE_BASE + GPIO_BSRR_OFF)
 #define GPIOE_ODR     STM32_REG32(GPIOE_BASE + GPIO_ODR_OFF)
+#define GPIOE_IDR     STM32_REG32(GPIOE_BASE + GPIO_IDR_OFF)
 
 // GPIO MODER values (2 bits por pino)
 #define GPIO_MODER_INPUT  0x0u
@@ -407,6 +409,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define TIM8_CCR3  STM32_REG32(TIM8_BASE + TIM_CCR3_OFF)
 #define TIM8_CCR4  STM32_REG32(TIM8_BASE + TIM_CCR4_OFF)
 #define TIM8_BDTR  STM32_REG32(TIM8_BASE + TIM_BDTR_OFF)
+#define TIM8_RCR   STM32_REG32(TIM8_BASE + TIM_RCR_OFF)
 
 // TIM3 — PWM (Wastegate CH2)
 #define TIM3_CR1   STM32_REG32(TIM3_BASE + TIM_CR1_OFF)
@@ -812,14 +815,14 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 }
 
 // IRQ numbers — STM32H562 (RM0481 §Table 87 / cmsis-device-h5 stm32h562xx.h)
-// Valores confirmados contra TIM5_IRQn=48 etc.; scheduler usa TIM2/TIM8 sem ISR no caminho crítico.
+// Valores confirmados contra TIM5_IRQn=48 etc. Scheduler: TIM5 (ISR CC3) + TIM1/TIM8 OC das bobinas sem ISR.
 // NOTE: STM32H562 has NO analog comparator (COMP) peripheral — confirmed
 // in CMSIS header stm32h562xx.h (no COMP1_IRQn entry). IRQ64 = LPTIM1.
 // Knock sensor must use an external comparator routed to a GPIO/EXTI line.
 // IRQ_COMP1 is intentionally undefined; update knock.cpp when hardware is known.
 #define IRQ_TIM2         45u   // TIM2 global (master timebase — reserved)
 #define IRQ_TIM5         48u   // TIM5 global (CKP input capture)
-#define IRQ_TIM1_CC      44u   // TIM1 capture/compare (ignition OC match)
+#define IRQ_TIM1_CC      44u   // TIM1 capture/compare (unused: coil OC needs no IRQ)
 #define IRQ_TIM3         46u   // TIM3 global (injection OC match)
 #define IRQ_TIM4         47u   // TIM4 (PWM VVT — não usa IRQ)
 #define IRQ_ADC1         37u   // ADC1 (IRQ separado do ADC2)

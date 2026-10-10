@@ -249,6 +249,7 @@ int main(void) {
     test_ecu_sched_golden_min_lead_timestamp();
     test_ecu_sched_golden_far_target_timestamp();
     test_ecu_sched_golden_dispatch_past_counts_late();
+    test_ecu_sched_coil_hw_compare();
     test_ecu_sched_golden_queue_sorted();
     test_ecu_sched_golden_seq_angle_table_size();
     test_ecu_sched_mspark_angle_table_margin();
@@ -276,6 +277,9 @@ int main(void) {
     test_ckp_lost_tooth_loses_sync();
     test_ckp_noise_never_adds_or_loses_teeth();
     test_ckp_noise_after_tooth_keeps_real_edge();
+    test_ckp_acquisition_gap_window();
+    test_ckp_cmp_hygiene();
+    test_ckp_segment_rpm();
     test_ckp_phase_toggle();
 
     // ── UI PROTOCOL / TUNERSTUDIO ENVELOPE ────────────────────────────────
@@ -331,6 +335,24 @@ int main(void) {
     test_engine_calc_advance_and_timing_light();
     test_engine_calc_cranking();
     test_engine_calc_cuts();
+    test_engine_calc_signal_dtcs();
+
+    printf("\n=== MS42 (estrategias portadas) ===");
+    test_ms42_page0_block();
+    test_ms42_vvt_measured_phase();
+    test_ms42_cal_crc();
+    test_ms42_vbatt_filter_dtc();
+    test_ms42_dfco_curve_delay();
+    test_ms42_rev_roll_cut();
+    test_ms42_spark_gradient();
+    test_ms42_crank_afterstart();
+    test_ms42_knock_relative();
+    test_ms42_idle_p_ff_cat();
+    test_ms42_stft_gain_table();
+    test_ms42_ext_block_cat_retard();
+    test_ms42_afterstart_pw_fall();
+    test_ms42_misfire_threshold_table();
+    test_ms42_adapt_retention();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

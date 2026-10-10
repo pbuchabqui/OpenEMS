@@ -112,15 +112,69 @@ void commit(int16_t spark_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
     s_out.inj_pw_ticks = inj_pw_ticks;
 }
 
+// Signal DTCs (MS42 c_abc_* counters): CKP_SIGNAL_FAULT after
+// kCkpLossesForDtc running sync losses inside one kSignalDiagWindowMs window,
+// cleared by a clean window in FULL_SYNC; CMP_SIGNAL_FAULT whenever the cam
+// fallback fires, cleared once the cam re-confirms.
+constexpr uint32_t kSignalDiagWindowMs = 10000u;
+constexpr uint32_t kCkpLossesForDtc = 3u;
+struct SignalDiagState {
+    uint32_t window_start_ms;
+    uint32_t window_base_losses;
+    uint32_t last_cmp_timeouts;
+    bool     primed;
+};
+SignalDiagState s_sig{};
+
+void signal_diag_update(uint32_t now_ms, bool full_sync, uint8_t cmp_confirms) noexcept {
+    uint32_t losses = 0u;
+    uint32_t cmp_timeouts = 0u;
+    ems::drv::ckp_signal_fault_counts(losses, cmp_timeouts);
+    if (!s_sig.primed) {
+        s_sig.primed = true;
+        s_sig.window_start_ms = now_ms;
+        s_sig.window_base_losses = losses;
+        s_sig.last_cmp_timeouts = cmp_timeouts;
+        return;
+    }
+    const uint32_t in_window = losses - s_sig.window_base_losses;
+    if (in_window >= kCkpLossesForDtc) {
+        DiagnosticManager::report_fault(DiagnosticCode::CKP_SIGNAL_FAULT,
+            FaultSeverity::ERROR,
+            static_cast<uint16_t>(in_window > 0xFFFFu ? 0xFFFFu : in_window), 0u);
+    }
+    if (now_ms - s_sig.window_start_ms >= kSignalDiagWindowMs) {
+        if (in_window == 0u && full_sync) {
+            DiagnosticManager::clear_fault(DiagnosticCode::CKP_SIGNAL_FAULT);
+        }
+        s_sig.window_start_ms = now_ms;
+        s_sig.window_base_losses = losses;
+    }
+    if (cmp_timeouts != s_sig.last_cmp_timeouts) {
+        s_sig.last_cmp_timeouts = cmp_timeouts;
+        DiagnosticManager::report_fault(DiagnosticCode::CMP_SIGNAL_FAULT,
+            FaultSeverity::WARNING,
+            static_cast<uint16_t>(cmp_timeouts & 0xFFFFu), 0u);
+    } else if (full_sync && cmp_confirms >= 2u) {
+        DiagnosticManager::clear_fault(DiagnosticCode::CMP_SIGNAL_FAULT);
+    }
+}
+
 }  // namespace
 
 void engine_calc_reset() noexcept {
     s_out = {};
     g_fuel_corr_cache = {};
+    s_sig = {};
 }
 
 const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
-    const ems::drv::CkpSnapshot& snap = in.snap;
+    // Table lookups, limits and gates use the 180° segment speed (MS42):
+    // the single-tooth rpm carries the compression ripple (±5-10 % per tooth
+    // at idle/crank). Event timing is untouched — the scheduler converts
+    // angles with the tooth period inside the CKP ISR.
+    ems::drv::CkpSnapshot snap = in.snap;
+    if (snap.rpm_seg_x10 != 0u) { snap.rpm_x10 = snap.rpm_seg_x10; }
     const ems::drv::SensorData& sensors = in.sensors;
     s_out.committed = false;
 
@@ -183,6 +237,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         DiagnosticManager::clear_fault(
             DiagnosticCode::OVERTEMP_WARNING);
     }
+    signal_diag_update(in.now_ms, full_sync, snap.cmp_confirms);
     const bool diag_critical =
         !DiagnosticManager::is_system_ready();
     s_out.limp_active = map_fault || clt_fault || oil_fault || overtemp_warn;
@@ -232,6 +287,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     if (snap.rpm_x10 > s_out.rpm_max_x10) {
         s_out.rpm_max_x10 = snap.rpm_x10;
     }
+    bool rev_edge = false;
     {
         const uint32_t hard = rev_limit_rpm_x10;
         const uint16_t win = spark_skip_window_rpm_x10;
@@ -245,8 +301,10 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         }
         spark_skip_set_ratio_q8(ratio);
         static uint16_t s_prev_tooth = 0u;
-        if (snap.tooth_index < s_prev_tooth) {
+        rev_edge = snap.tooth_index < s_prev_tooth;
+        if (rev_edge) {
             spark_skip_on_rev();
+            limp_gating_on_rev();
         }
         s_prev_tooth = snap.tooth_index;
     }
@@ -276,7 +334,10 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     gate_in.cranking = qc.cranking;
     gate_in.full_sync = full_sync;
     gate_in.half_sync = half_sync;
-    gate_in.phase_valid = true;
+    // A sequential angle table is only valid with a CKP angle reference
+    // (FULL_SYNC); a cam blip alone keeps the phase (it only moves at a
+    // validated edge), so it must not cut here.
+    gate_in.phase_valid = full_sync || ::ecu_sched_is_sequential() == 0u;
     gate_in.sequential = ::ecu_sched_is_sequential() != 0u;
     gate_in.etb_fault = etb_fault;
     gate_in.inj_duty_pct = static_cast<uint8_t>(
@@ -337,6 +398,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         // Contexto DFCO: MAP p/ o gate de vácuo e marcha p/ inibição
         // pós-troca (ambos inertes com as respectivas cals a 0).
         fuel_decel_cut_notify_map(map_bar_x100);
+        fuel_decel_cut_notify_time(in.now_ms);
         {
             uint8_t gr = 0u;
             if (vehicle_gear(gr, in.now_ms)) {
@@ -351,6 +413,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
                 snap.rpm_x10, sensors.app_pct_x10, sensors.clt_degc_x10);
         misfire_set_all_inhibit(
             decel_cut_active || crank_or_ase || flood_clear);
+        misfire_set_operating_point(snap.rpm_x10, map_bar_x100);
         // X-τ desde !cranking (inclui afterstart frio — pior wall-wetting).
         // AE e X-τ são fenómenos distintos (AE = ar previsto pelo TPSdot,
         // X-τ = filme de parede); ambos entram inteiros.
@@ -432,10 +495,25 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         if (!crank_or_ase) {
             corr.antijerk_retard = calc_antijerk_retard_x10(ae_tpsdot);
         }
+        // Retardo do catalisador: decai em segundos, então entra junto com
+        // as correções lentas, sob o limitador de gradiente (sem degrau ao
+        // sair da marcha lenta).
+        const int16_t cat_retard_x10 = qc.cranking ? int16_t{0} :
+            calc_cat_heat_retard_x10(auxiliaries_cat_heat_q8(),
+                                     sensors.app_pct_x10, sensors.clt_degc_x10);
+        // Gradiente só sobre base + IAT/CLT/idle; os retardos entram depois,
+        // sem filtro (knock é aplicado por cilindro mais adiante).
+        const int16_t shaped_x10 = spark_gradient_limit_x10(
+            static_cast<int16_t>(base_advance_x10 + corr.iat + corr.clt + corr.idle
+                                 - cat_retard_x10),
+            rev_edge, qc.cranking || (timing_light_enable != 0u));
+        AdvanceCorrectionsX10 retards{};
+        retards.antijerk_retard = corr.antijerk_retard;
+        retards.torque_retard = corr.torque_retard;
         const int16_t sched_spark_x10 = qc.cranking
             ? static_cast<int16_t>(crank_spark_deg * 10)
             : ign_running_advance_x10(
-                  calc_total_advance_x10(base_advance_x10, corr));
+                  calc_total_advance_x10(shaped_x10, retards));
         // Decel / flood: force PW=0 (do not apply min_pw floor).
         const uint32_t quick_crank_pw_us =
             (decel_cut_active || flood_clear) ? 0u :

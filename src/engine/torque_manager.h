@@ -88,6 +88,11 @@ void torque_tc_set_external_slip_pct_x10(uint16_t slip_pct_x10) noexcept;
 void torque_tc_clear_external_slip() noexcept;
 void torque_launch_force_enable(uint8_t on) noexcept;  // 0=use cal, 1=force on, 2=force off
 
+// Aprendido da marcha lenta (integrador − abertura-base, ‰ lâmina ×10).
+// get: false enquanto nada foi aprendido. restore: carga da NVM no boot.
+bool torque_idle_learned_get(int16_t* ofs_x10) noexcept;
+void torque_idle_learned_restore(int16_t ofs_x10) noexcept;
+
 // Latches de telemetria (OCH / status bits / host tests)
 uint16_t torque_manager_get_target() noexcept;
 uint8_t  torque_manager_get_limp_reason() noexcept;

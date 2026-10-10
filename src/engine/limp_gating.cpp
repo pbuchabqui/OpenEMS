@@ -4,6 +4,7 @@
 #include "engine/constants.h"
 #include "engine/cut_reason.h"
 #include "engine/ecu_sched.h"
+#include "engine/ms42_cal.h"
 #include "engine/spark_skip.h"
 
 #include <cstdint>
@@ -59,6 +60,14 @@ bool g_half_lockout   = false;
 bool g_rev_active     = false;
 uint16_t g_protect_disable = 0u;
 
+// Corte rotativo de injeção (MS42 S14): na janela abaixo do limite duro,
+// uma proporção crescente de cilindros perde a injeção, em rotação.
+constexpr uint8_t kRollFiresPerRev = 2u;  // 4-cil 4T: 2 injeções por volta
+uint8_t  g_roll_ratio_q8 = 0u;
+uint16_t g_roll_acc_q8   = 0u;
+uint8_t  g_roll_rot      = 0u;
+uint8_t  g_roll_mask     = 0u;
+
 void set_fault_rev_limit_x10(uint32_t limit_x10) noexcept {
     if (limit_x10 < g_fault_rev_x10) {
         g_fault_rev_x10 = limit_x10;
@@ -106,6 +115,27 @@ void limp_gating_report_etb_problem() noexcept {
     set_fault_rev_limit_x10(kEtbFaultRevLimitRpmX10);
 }
 
+void limp_gating_on_rev() noexcept {
+    if (g_roll_ratio_q8 == 0u) {
+        g_roll_acc_q8 = 0u;
+        g_roll_mask = 0u;
+        return;
+    }
+    g_roll_acc_q8 = static_cast<uint16_t>(
+        g_roll_acc_q8 + static_cast<uint16_t>(g_roll_ratio_q8) * kRollFiresPerRev);
+    uint8_t cuts = static_cast<uint8_t>(g_roll_acc_q8 >> 8u);
+    g_roll_acc_q8 &= 0xFFu;
+    if (cuts > 3u) { cuts = 3u; }  // nunca os 4: isso é o corte duro
+    uint8_t mask = 0u;
+    for (uint8_t i = 0u; i < cuts; ++i) {
+        mask |= static_cast<uint8_t>(1u << ((g_roll_rot + i) & 3u));
+    }
+    g_roll_rot = static_cast<uint8_t>((g_roll_rot + cuts) & 3u);
+    g_roll_mask = mask;
+}
+
+uint8_t limp_gating_roll_ratio_q8() noexcept { return g_roll_ratio_q8; }
+
 LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     const uint16_t dis = g_protect_disable;
     const bool oil_off  = (dis & kProtectDisOil) != 0u;
@@ -133,6 +163,23 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     }
     g_rev_active = rev_cut;
     g_rev_limit_active = rev_cut;
+
+    // Proporção do corte rotativo: 0 na base da janela → 255/256 no limite.
+    {
+        const uint32_t win = ms42.rev_roll_window_rpm_x10;
+        uint8_t ratio = 0u;
+        if (ms42.rev_roll_enable != 0u && !rev_cut && win != 0u && hard > win &&
+            in.rpm_x10 >= (hard - win) && in.rpm_x10 < hard) {
+            const uint32_t into = in.rpm_x10 - (hard - win);
+            const uint32_t r = (into * 256u) / win;
+            ratio = static_cast<uint8_t>((r > 255u) ? 255u : r);
+        }
+        g_roll_ratio_q8 = ratio;
+        if (ratio == 0u) {
+            g_roll_acc_q8 = 0u;
+            g_roll_mask = 0u;
+        }
+    }
 
     // Dead/unplugged oil sensor: do not idle. Cranking still allowed
     // (pressure is not up yet); the cut hits as soon as cranking ends.
@@ -269,7 +316,7 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     uint16_t fr = 0u;
     uint16_t sr = 0u;
     if (g_fatal)            { fr |= kFuelCutFatal;     sr |= kSparkCutFatal; }
-    if (rev_cut)            { fr |= kFuelCutRevLimit; }
+    if (rev_cut || g_roll_mask != 0u) { fr |= kFuelCutRevLimit; }
     if (!limp_off && in.limp_rpm_cut)  { fr |= kFuelCutLimpRpm;   sr |= kSparkCutLimpRpm; }
     if (!map_off && in.map_fault)      { fr |= kFuelCutMapFault; }
     if (oil_range_cut || oil_after_start_cut) {
@@ -294,7 +341,7 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
         sr |= kSparkSkipActive;
     }
 
-    const uint8_t inj_mask = inj_cut ? 0x0Fu : 0u;
+    const uint8_t inj_mask = inj_cut ? 0x0Fu : g_roll_mask;
     const uint8_t ign_mask = static_cast<uint8_t>(
         (ign_cut ? 0x0Fu : 0u) | skip);
 

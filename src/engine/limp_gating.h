@@ -63,6 +63,10 @@ extern uint32_t lambda_protect_min_rpm_x10;
 extern uint16_t lambda_protect_min_load_bar_x100;
 
 LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept;
+// Corte rotativo (ms42.rev_roll_*): chamar uma vez por volta (wrap do
+// tooth_index), como spark_skip_on_rev(); a máscara entra no próximo update.
+void limp_gating_on_rev() noexcept;
+uint8_t limp_gating_roll_ratio_q8() noexcept;
 
 void limp_gating_fatal() noexcept;
 void limp_gating_report_etb_problem() noexcept;

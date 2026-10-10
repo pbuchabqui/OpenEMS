@@ -495,7 +495,15 @@ PAGE5_FIELDS = [
     ("clt_corr_x256",               16, 8, "H",  1.0),   # fator ×256 (adimensional)
     ("iat_corr_axis_x10",           32, 8, "h",  0.1),   # °C
     ("iat_corr_x256",               48, 8, "H",  1.0),
-    # 64-95 reserved (dead warmup curve removed; CLT correction is the live one)
+    # 64-95: extensão MS42 (magic 0x354D @64; src/engine/ms42_cal.h Ms42Ext)
+    ("ms42_cat_heat_retard_x10",    66, 1, "B",  0.1),   # ° (0=off)
+    ("ms42_cat_heat_clt_max_c",     67, 1, "b",  1.0),   # °C
+    ("ms42_as_pw_fall_cycles",      68, 1, "B",  1.0),   # ciclos (0=off)
+    ("ms42_as_pw_fall_cold_pct",    69, 1, "B",  1.0),   # %/ciclo, 1º ponto CLT
+    ("ms42_as_pw_fall_hot_pct",     70, 1, "B",  1.0),   # %/ciclo, último ponto
+    ("ms42_misfire_rpm_axis",       71, 4, "B",  100.0), # RPM
+    ("ms42_misfire_map_axis",       75, 4, "B",  1.0),   # kPa
+    ("ms42_misfire_excess_q8",      79, 16, "B", 1.0),   # limiar = 1 + x/256, [MAP][rpm]
     ("vbatt_corr_axis_mv",          96, 8, "H",  0.001), # V
     ("injector_dead_time_us",      112, 8, "H",  0.001), # ms
     ("ae_clt_corr_axis_x10",       128, 8, "h",  0.1),   # °C
@@ -660,6 +668,24 @@ PAGE0_FIELDS = [
     ("timing_light_enable",         270, 1, "B", 1.0),
     ("timing_light_advance_x10",    272, 1, "h", 0.1),   # ° fixed advance
     ("trigger_fine_x10",            274, 1, "h", 0.1),   # ° added to the offset
+    # 276-508: bloco MS42 (src/engine/ms42_cal.cpp; magic 0x344D + ver @276)
+    ("ms42_vvt_enable",             279, 1, "B", 1.0),
+    ("ms42_vvt_cam_ref_x10",        283, 1, "H", 0.1),   # ° (0 = aprende)
+    ("ms42_vvt_min_clt_x10",        285, 1, "h", 0.1),   # °C
+    ("ms42_vbatt_low_mv",           337, 1, "H", 0.001), # V (0=off)
+    ("ms42_vbatt_high_mv",          339, 1, "H", 0.001), # V (0=off)
+    ("ms42_dfco_entry_rpm_x10",     349, 4, "H", 0.1),   # RPM por CLT (0=escalares)
+    ("ms42_dfco_entry_delay_ms",    359, 1, "H", 1.0),   # ms
+    ("ms42_rev_roll_enable",        361, 1, "B", 1.0),
+    ("ms42_spark_grad_inc_x10",     364, 1, "B", 0.1),   # °/volta (0=off)
+    ("ms42_spark_grad_dec_x10",     365, 1, "B", 0.1),   # °/volta (0=off)
+    ("ms42_afterstart_by_cycles",   372, 1, "B", 1.0),
+    ("ms42_knock_rel_enable",       447, 1, "B", 1.0),
+    ("ms42_idle_kp_x10",            457, 1, "B", 0.1),
+    ("ms42_idle_persist",           458, 1, "B", 1.0),
+    ("ms42_stft_min_rpm_x10",       503, 1, "H", 0.1),   # RPM (0=off)
+    ("ms42_fan_on_x10",             505, 1, "h", 0.1),   # °C
+    ("ms42_fan_off_x10",            507, 1, "h", 0.1),   # °C
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

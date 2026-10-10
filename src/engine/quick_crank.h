@@ -11,6 +11,11 @@ struct QuickCrankOutput {
     int16_t spark_deg;
     uint32_t min_pw_us;
     uint32_t prime_pw_us;  ///< Duração do prime pulse calculado (µs); informativo
+    // Limite de queda do pulso na pós-partida (MS42 ip_ti_lgrd_ast__tco):
+    // ativo nos primeiros ms42x.as_pw_fall_cycles ciclos após a partida.
+    bool     pw_fall_limit;
+    uint8_t  pw_fall_pct;      ///< queda máx. por ciclo (% do pulso anterior), por CLT
+    uint32_t cycles_x1000;     ///< ciclos do motor (×1000) desde o update anterior
 };
 
 void quick_crank_reset() noexcept;
@@ -28,7 +33,9 @@ uint32_t quick_crank_apply_pw_us(uint32_t base_pw_us,
 /// Fluxo do injetor (µs/ciclo, sem dead time) a partir da saída do quick-crank.
 /// Na partida o combustível é REQ_FUEL × multiplicador de partida(CLT), igual
 /// em HALF e FULL sync (sem VE/MAP/warmup — evita degrau e CLT contado duas
-/// vezes). Fora da partida: fluxo de marcha × afterstart.
+/// vezes). Fora da partida: fluxo de marcha × afterstart. Logo após a partida
+/// a queda em relação ao fluxo anterior é limitada a pw_fall_pct por ciclo
+/// (subidas passam direto). Chamar uma vez por update.
 uint32_t quick_crank_flow_us(const QuickCrankOutput& qc, uint32_t running_flow_us) noexcept;
 
 /**

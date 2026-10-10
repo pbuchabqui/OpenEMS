@@ -57,6 +57,7 @@ struct CkpSnapshot {
     SyncState state;             ///< Estado corrente da máquina de sincronismo
     bool phase_A;                ///< Fase do ciclo de 720°: true=PHASE_A (0-360°), false=PHASE_B (360-720°). Toggles at each gap, SET by CMP.
     uint8_t cmp_confirms;        ///< Number of validated CMP edges since last sync loss (0-2). Gate for sequential mode.
+    uint32_t rpm_seg_x10;        ///< RPM × 10 over the last 180° segment (MS42 FA22); 0 until measured. Table lookups only — the scheduler uses the tooth period.
 };
 
 /**
@@ -87,6 +88,10 @@ void ckp_tim5_ch2_isr() noexcept;   ///< Cam sensor rising edge (TIM5 CH2 / PA1)
 
 uint32_t ckp_get_cmp_glitch_count() noexcept;
 
+// Monotonic counters for signal DTCs: running CKP sync losses (stalls not
+// counted) and cam-absent fallbacks taken in FULL_SYNC.
+void ckp_signal_fault_counts(uint32_t& ckp_sync_losses, uint32_t& cmp_timeouts) noexcept;
+
 // DIAG: valores internos de classify_tooth (expostos para snapshot)
 extern volatile uint32_t g_diag_tn1;
 extern volatile uint32_t g_diag_tn2;
@@ -114,6 +119,7 @@ extern volatile uint32_t g_diag_last_cmp_edge_tick;
 // último rejeitado (56 = dente perdido, 58 = dente extra/ruído).
 extern volatile uint32_t g_dbg_gap_accepted;
 extern volatile uint32_t g_dbg_gap_premature;
+extern volatile uint32_t g_dbg_gap_acq_reject;
 extern volatile uint32_t g_dbg_gap_last_tc;
 // Perdas de sync por caminho (ver drv/ckp.cpp): wrap = gap perdido,
 // histogram = ruído persistente, stall = sem bordas. missing_gap e
@@ -138,6 +144,11 @@ extern volatile uint8_t  g_scope_cmp_idx;
 
 // tooth_index âncora da última borda CMP aceite (0xFF = não-ancorado).
 uint8_t ckp_get_cmp_ref_tooth() noexcept;
+
+// Fase medida do came (VVT de admissão): ângulo de virabrequim ×10 (0..3599)
+// da última borda CMP validada, a partir do gap. Retorna o contador de bordas
+// medidas (0 = nenhuma ainda; muda a cada borda nova).
+uint32_t ckp_cam_edge_angle(uint16_t& angle_x10) noexcept;
 
 // Instant RPM 360° (estilo rusEFI): rpm×10 medido entre o MESMO dente de
 // voltas consecutivas — imune ao erro de geometria da roda. 0 = sem medida
