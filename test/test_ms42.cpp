@@ -11,6 +11,7 @@
 #include "hal/adc.h"
 #include "engine/calibration.h"
 #include "engine/diagnostic_manager.h"
+#include "engine/fuel_calc.h"
 #include "engine/auxiliaries.h"
 #include "engine/ms42_cal.h"
 #include "hal/flash.h"
@@ -235,4 +236,48 @@ void test_ms42_vbatt_filter_dtc(void) {
     dm::DiagnosticManager::clear_all_faults();
     auxiliaries_test_reset();
     sensor_setup();
+}
+
+void test_ms42_dfco_curve_delay(void) {
+    section("ms42 B4: DFCO por CLT + atraso de entrada");
+    ms42_cal_defaults();
+    const int16_t min_clt = decel_cut_min_clt_x10;
+    decel_cut_min_clt_x10 = -400;
+    // MS42: 1600 rpm a −30 °C … 1024 rpm a quente.
+    const uint16_t entry[kDfcoCltPts] = {16000u, 14000u, 12000u, 10240u};
+    std::memcpy(ms42.dfco_entry_rpm_x10, entry, sizeof(entry));
+    ms42.dfco_hyst_rpm_x10 = 2000u;
+
+    fuel_decel_cut_reset();
+    CHECK_FALSE(fuel_decel_cut_update(13000u, 0u, -300), "frio: 1300 < 1600 -> sem corte");
+    CHECK_TRUE(fuel_decel_cut_update(13000u, 0u, 800), "quente: 1300 >= 1024 -> corta");
+    CHECK_TRUE(fuel_decel_cut_update(8500u, 0u, 800), "saida = entrada - hist (824): 850 ainda corta");
+    CHECK_FALSE(fuel_decel_cut_update(8000u, 0u, 800), "abaixo de 824 -> sai");
+    fuel_decel_cut_reset();
+    CHECK_TRUE(fuel_decel_cut_update(17000u, 0u, -300), "frio: 1700 >= 1600 -> corta");
+    fuel_decel_cut_reset();
+    CHECK_FALSE(fuel_decel_cut_update(12900u, 0u, 200), "20 C, meio de 0..40 C: entrada 1300");
+    CHECK_TRUE(fuel_decel_cut_update(13000u, 0u, 200), "1300 >= 1300 -> corta");
+
+    // Atraso de entrada: condições estáveis por 300 ms.
+    ms42.dfco_entry_delay_ms = 300u;
+    fuel_decel_cut_reset();
+    fuel_decel_cut_notify_time(1000u);
+    CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, 800), "atraso: t=0 sem corte");
+    fuel_decel_cut_notify_time(1200u);
+    CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, 800), "atraso: t=200 sem corte");
+    fuel_decel_cut_notify_time(1250u);
+    CHECK_FALSE(fuel_decel_cut_update(20000u, 50u, 800), "pedal mexeu -> reinicia");
+    fuel_decel_cut_notify_time(1300u);
+    CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, 800), "recomeca a contar");
+    fuel_decel_cut_notify_time(1600u);
+    CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, 800), "300 ms estaveis -> corta");
+
+    // Curva toda a 0 = escalares antigos (1500/1200).
+    ms42_cal_defaults();
+    fuel_decel_cut_reset();
+    CHECK_FALSE(fuel_decel_cut_update(14000u, 0u, 800), "sem curva: 1400 < 1500");
+    CHECK_TRUE(fuel_decel_cut_update(15000u, 0u, 800), "sem curva: 1500 corta");
+    decel_cut_min_clt_x10 = min_clt;
+    fuel_decel_cut_reset();
 }

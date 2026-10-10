@@ -222,3 +222,4 @@ void test_ms42_page0_block(void);
 void test_ms42_vvt_measured_phase(void);
 void test_ms42_cal_crc(void);
 void test_ms42_vbatt_filter_dtc(void);
+void test_ms42_dfco_curve_delay(void);

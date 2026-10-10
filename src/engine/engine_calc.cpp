@@ -337,6 +337,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         // Contexto DFCO: MAP p/ o gate de vácuo e marcha p/ inibição
         // pós-troca (ambos inertes com as respectivas cals a 0).
         fuel_decel_cut_notify_map(map_bar_x100);
+        fuel_decel_cut_notify_time(in.now_ms);
         {
             uint8_t gr = 0u;
             if (vehicle_gear(gr, in.now_ms)) {
