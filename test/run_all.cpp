@@ -350,6 +350,7 @@ int main(void) {
     test_ms42_idle_p_ff_cat();
     test_ms42_stft_gain_table();
     test_ms42_ext_block_cat_retard();
+    test_ms42_afterstart_pw_fall();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

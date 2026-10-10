@@ -28,6 +28,9 @@ uint32_t g_afterstart_cyc_x1000 = 0u;
 uint32_t g_afterstart_dur_cyc_x1000 = 0u;
 uint32_t g_qc_last_ms = 0u;
 bool     g_qc_have_last = false;
+// Limite de queda do pulso: janela aberta na saída da partida e último fluxo.
+bool     g_pw_fall_window = false;
+uint32_t g_pw_fall_prev_us = 0u;
 
 // ── Estado do prime pulse (ISR-safe) ──────────────────────────────────────────
 volatile uint8_t  g_prime_tooth_count = 0u;   ///< Dentes contados desde cranking
@@ -40,6 +43,19 @@ uint16_t          g_prime_dead_time_us = 900u; ///< Dead time mais recente, corr
 uint16_t crank_curve(const uint16_t* table, int16_t clt_x10) noexcept {
     return ems::engine::interp_u16_8pt(ems::engine::ms42.crank_clt_axis_x10, table,
                                        kCrankPts, clt_x10);
+}
+
+// Queda máx. por ciclo: cold_pct no 1º ponto de crank_clt_axis, hot_pct no
+// último, linear entre eles.
+uint8_t pw_fall_pct(int16_t clt_x10) noexcept {
+    const ems::engine::Ms42Ext& x = ems::engine::ms42x;
+    const int32_t c0 = ems::engine::ms42.crank_clt_axis_x10[0];
+    const int32_t c1 = ems::engine::ms42.crank_clt_axis_x10[kCrankPts - 1u];
+    if (clt_x10 <= c0) { return x.as_pw_fall_cold_pct; }
+    if (clt_x10 >= c1) { return x.as_pw_fall_hot_pct; }
+    const int32_t p0 = x.as_pw_fall_cold_pct;
+    const int32_t p1 = x.as_pw_fall_hot_pct;
+    return static_cast<uint8_t>(p0 + ((p1 - p0) * (clt_x10 - c0)) / (c1 - c0));
 }
 
 uint16_t sanitized_crank_exit_rpm_x10() noexcept {
@@ -224,6 +240,8 @@ void quick_crank_reset() noexcept {
     g_afterstart_dur_cyc_x1000 = 0u;
     g_qc_last_ms = 0u;
     g_qc_have_last = false;
+    g_pw_fall_window = false;
+    g_pw_fall_prev_us = 0u;
     g_prime_tooth_count = 0u;
     g_prime_done        = false;
     g_prime_pending     = false;
@@ -250,8 +268,10 @@ QuickCrankOutput quick_crank_update(uint32_t now_ms,
     g_qc_last_ms = now_ms;
     g_qc_have_last = true;
     const uint32_t dcyc_x1000 = (dt_ms < 1000u) ? (rpm_x10 * dt_ms) / 1200u : 0u;
+    out.cycles_x1000 = dcyc_x1000;
 
     if (rpm_x10 == 0u) {
+        g_pw_fall_window = false;
         g_crank_cyc_x1000 = 0u;
         g_prime_tooth_count = 0u;
         g_prime_done = false;
@@ -267,8 +287,10 @@ QuickCrankOutput quick_crank_update(uint32_t now_ms,
             crank_fuel_mult_x256(clt_x10, g_crank_cyc_x1000));
         g_afterstart_duration_ms = 0u;
         g_afterstart_dur_cyc_x1000 = 0u;
+        g_pw_fall_window = false;
     } else {
         if (g_prev_cranking && rpm_x10 >= sanitized_crank_exit_rpm_x10()) {
+            g_pw_fall_window = true;
             g_afterstart_start_ms = now_ms;
             g_afterstart_duration_ms = crank_curve(ms42.afterstart_ms, clt_x10);
             g_afterstart_cyc_x1000 = 0u;
@@ -281,6 +303,12 @@ QuickCrankOutput quick_crank_update(uint32_t now_ms,
         const uint16_t as_mult = afterstart_mult_x256(now_ms, clt_x10);
         out.afterstart_active = (as_mult > 256u);
         out.fuel_mult_x256 = as_mult;
+        const uint32_t fall_cyc = static_cast<uint32_t>(ms42x.as_pw_fall_cycles) * 1000u;
+        if (g_pw_fall_window && g_afterstart_cyc_x1000 >= fall_cyc) {
+            g_pw_fall_window = false;
+        }
+        out.pw_fall_limit = g_pw_fall_window;
+        out.pw_fall_pct = pw_fall_pct(clt_x10);
     }
 
     g_prev_cranking = cranking;
@@ -304,7 +332,19 @@ uint32_t quick_crank_apply_pw_us(uint32_t base_pw_us,
 
 uint32_t quick_crank_flow_us(const QuickCrankOutput& qc, uint32_t running_flow_us) noexcept {
     const uint32_t base = qc.cranking ? default_req_fuel_us() : running_flow_us;
-    return quick_crank_apply_pw_us(base, qc.fuel_mult_x256, qc.min_pw_us);
+    uint32_t out = quick_crank_apply_pw_us(base, qc.fuel_mult_x256, qc.min_pw_us);
+    if (qc.pw_fall_limit && out < g_pw_fall_prev_us) {
+        // Queda permitida neste update: prev × pct × ciclos decorridos (≥ 1 µs
+        // para nunca travar quando o produto arredonda a zero).
+        uint64_t drop = (static_cast<uint64_t>(g_pw_fall_prev_us) * qc.pw_fall_pct *
+                         qc.cycles_x1000) / 100000u;
+        if (drop == 0u) { drop = 1u; }
+        const uint32_t floor_us = (drop >= g_pw_fall_prev_us) ? 0u
+            : static_cast<uint32_t>(g_pw_fall_prev_us - drop);
+        if (out < floor_us) { out = floor_us; }
+    }
+    g_pw_fall_prev_us = out;
+    return out;
 }
 
 void quick_crank_set_prime_context(int16_t clt_x10, uint16_t dead_time_us) noexcept {

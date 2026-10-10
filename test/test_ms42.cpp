@@ -717,3 +717,77 @@ void test_ms42_ext_block_cat_retard(void) {
     ms42_ext_defaults();
     auxiliaries_test_reset();
 }
+
+void test_ms42_afterstart_pw_fall(void) {
+    section("ms42: limite de queda do pulso na pós-partida (ip_ti_lgrd_ast__tco)");
+    ms42_cal_defaults();
+    ms42_ext_defaults();
+    uint32_t now = 1000u;
+
+    // Percentagem por CLT: 5 % no 1º ponto (−40 °C), 15 % no último (110 °C).
+    quick_crank_reset();
+    crank_run(now, 2u, 200);
+    QuickCrankOutput qc = quick_crank_update(now, 20000u, true, 200, 10);
+    CHECK_EQ(qc.pw_fall_pct, 9u, "20 °C: 5 + 10 × 600/1500 = 9 %");
+    qc = quick_crank_update(now, 20000u, true, -500, 10);
+    CHECK_EQ(qc.pw_fall_pct, 5u, "abaixo do eixo: frio");
+    qc = quick_crank_update(now, 20000u, true, 1200, 10);
+    CHECK_EQ(qc.pw_fall_pct, 15u, "acima do eixo: quente");
+
+    // Desligado (cycles = 0): a saída da partida cai de uma vez.
+    quick_crank_reset();
+    QuickCrankOutput crank{};
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        crank = quick_crank_update(now, 2000u, true, 200, 10);
+        now += 100u;
+    }
+    const uint32_t crank_pw = quick_crank_flow_us(crank, 0u);
+    CHECK_TRUE(crank_pw > 4000u, "partida: pulso grande");
+    qc = quick_crank_update(now, 20000u, true, 200, 10);
+    CHECK_TRUE(!qc.pw_fall_limit, "cycles = 0: limite inativo");
+    const uint32_t run_flow = 1000u;
+    const uint32_t target = quick_crank_flow_us(qc, run_flow);
+    CHECK_TRUE(target < crank_pw / 2u, "sem limite: degrau para o fluxo de marcha");
+
+    // Ligado: 10 %/ciclo durante 5 ciclos.
+    ms42x.as_pw_fall_cycles = 5u;
+    ms42x.as_pw_fall_cold_pct = 10u;
+    ms42x.as_pw_fall_hot_pct = 10u;
+    quick_crank_reset();
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        crank = quick_crank_update(now, 2000u, true, 200, 10);
+        now += 60u;
+    }
+    const uint32_t p0 = quick_crank_flow_us(crank, 0u);
+    qc = quick_crank_update(now, 20000u, true, 200, 10);  // dt 60 ms → 1 ciclo
+    CHECK_TRUE(qc.pw_fall_limit, "saída da partida: limite ativo");
+    CHECK_EQ(qc.cycles_x1000, 1000u, "60 ms a 2000 rpm = 1 ciclo");
+    uint32_t pw = quick_crank_flow_us(qc, run_flow);
+    CHECK_EQ(pw, p0 - p0 / 10u, "1º ciclo: cai só 10 %");
+    uint32_t prev = pw;
+    bool monotonic = true;
+    for (uint32_t i = 0u; i < 3u; ++i) {
+        now += 60u;
+        qc = quick_crank_update(now, 20000u, true, 200, 10);
+        pw = quick_crank_flow_us(qc, run_flow);
+        if (pw != prev - prev / 10u) { monotonic = false; }
+        prev = pw;
+    }
+    CHECK_TRUE(monotonic, "ciclos seguintes: 10 % do pulso anterior");
+    // Subida passa direto.
+    now += 60u;
+    qc = quick_crank_update(now, 20000u, true, 200, 10);
+    const uint32_t up = quick_crank_flow_us(qc, 20000u);
+    CHECK_TRUE(up > prev, "subida não é limitada");
+    // Fim da janela (5 ciclos): o fluxo de marcha passa direto.
+    now += 60u;
+    qc = quick_crank_update(now, 20000u, true, 200, 10);
+    CHECK_TRUE(!qc.pw_fall_limit, "após 5 ciclos: limite inativo");
+    CHECK_EQ(quick_crank_flow_us(qc, run_flow),
+             quick_crank_apply_pw_us(run_flow, qc.fuel_mult_x256, qc.min_pw_us),
+             "após a janela: sem limite");
+
+    ms42_cal_defaults();
+    ms42_ext_defaults();
+    quick_crank_reset();
+}
