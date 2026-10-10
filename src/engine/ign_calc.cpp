@@ -106,6 +106,17 @@ int16_t ign_running_advance_x10(int16_t computed_x10) noexcept {
                                        : computed_x10;
 }
 
+int16_t calc_cat_heat_retard_x10(uint16_t heat_q8, uint16_t tps_pct_x10,
+                                 int16_t clt_x10) noexcept {
+    if (heat_q8 == 0u || ms42x.cat_heat_retard_x10 == 0u ||
+        tps_pct_x10 > idle_spark_tps_max_x10 ||
+        clt_x10 >= static_cast<int16_t>(ms42x.cat_heat_clt_max_c * 10)) {
+        return 0;
+    }
+    const uint32_t q = (heat_q8 > 256u) ? 256u : heat_q8;
+    return static_cast<int16_t>((static_cast<uint32_t>(ms42x.cat_heat_retard_x10) * q + 128u) >> 8u);
+}
+
 int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,
                                        uint16_t idle_target_rpm_x10,
                                        uint16_t tps_pct_x10,

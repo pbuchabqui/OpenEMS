@@ -246,14 +246,91 @@ void fill_defaults(Ms42Cal& c) noexcept {
     c.fan_off_x10 = 900;
 }
 
+template <typename V>
+void visit_ext_fields(Ms42Ext& c, V& v) noexcept {
+    v(c.cat_heat_retard_x10); v(c.cat_heat_clt_max_c);
+    v(c.as_pw_fall_cycles); v(c.as_pw_fall_cold_pct); v(c.as_pw_fall_hot_pct);
+    v(c.misfire_rpm_axis); v(c.misfire_map_axis); v(c.misfire_excess_q8);
+}
+
+static_assert(2u + sizeof(Ms42Ext) <= kMs42ExtLen, "extensão MS42 não cabe nos 32 bytes da page5");
+
+void fill_ext_defaults(Ms42Ext& c) noexcept {
+    c = Ms42Ext{};
+    c.cat_heat_retard_x10 = 0u;
+    c.cat_heat_clt_max_c = 60;
+    c.as_pw_fall_cycles = 0u;
+    c.as_pw_fall_cold_pct = 5u;
+    c.as_pw_fall_hot_pct = 15u;
+    static constexpr uint8_t kMfRpm[kMisfireCalPts] = {10u, 25u, 45u, 65u};
+    static constexpr uint8_t kMfMap[kMisfireCalPts] = {30u, 50u, 75u, 100u};
+    std::memcpy(c.misfire_rpm_axis, kMfRpm, sizeof(kMfRpm));
+    std::memcpy(c.misfire_map_axis, kMfMap, sizeof(kMfMap));
+    // 31 = 287/256 − 1: o limiar único anterior (kMisfireThresholdQ8).
+    std::memset(c.misfire_excess_q8, 31, sizeof(c.misfire_excess_q8));
+}
+
+void sanitize_ext(Ms42Ext& c) noexcept {
+    Ms42Ext d;
+    fill_ext_defaults(d);
+    clamp_field<uint8_t>(c.cat_heat_retard_x10, 0u, 150u);
+    clamp_field<uint8_t>(c.as_pw_fall_cold_pct, 1u, 100u);
+    clamp_field<uint8_t>(c.as_pw_fall_hot_pct, 1u, 100u);
+    if (!axis_ascending(c.misfire_rpm_axis)) {
+        std::memcpy(c.misfire_rpm_axis, d.misfire_rpm_axis, sizeof(c.misfire_rpm_axis));
+    }
+    if (!axis_ascending(c.misfire_map_axis)) {
+        std::memcpy(c.misfire_map_axis, d.misfire_map_axis, sizeof(c.misfire_map_axis));
+    }
+    for (uint8_t y = 0u; y < kMisfireCalPts; ++y) {
+        for (uint8_t x = 0u; x < kMisfireCalPts; ++x) {
+            clamp_field<uint8_t>(c.misfire_excess_q8[y][x], 3u, 255u);  // ≥ 1,01×
+        }
+    }
+}
+
 // Defaults já na inicialização estática: o firmware e os testes de host que
 // nunca aplicam a page0 veem os valores de compilação, não zeros.
 struct DefaultsInit {
-    DefaultsInit() noexcept { fill_defaults(ms42); }
+    DefaultsInit() noexcept { fill_defaults(ms42); fill_ext_defaults(ms42x); }
 };
-DefaultsInit s_defaults_init;
 
 }  // namespace
+
+Ms42Ext ms42x = {};
+
+namespace {
+// Depois de ms42x: a ordem de inicialização dentro da unidade é a de definição.
+DefaultsInit s_defaults_init;
+}  // namespace
+
+void ms42_ext_defaults() noexcept { fill_ext_defaults(ms42x); }
+
+void ms42_ext_serialize_to_page5(uint8_t* page5, uint16_t len) noexcept {
+    if (page5 == nullptr || len < kMs42ExtPage5Off + kMs42ExtLen) { return; }
+    std::memset(page5 + kMs42ExtPage5Off, 0, kMs42ExtLen);
+    std::memcpy(page5 + kMs42ExtPage5Off, &kMs42ExtMagic, 2u);
+    Writer w{page5, static_cast<uint16_t>(kMs42ExtPage5Off + 2u),
+             static_cast<uint16_t>(kMs42ExtPage5Off + kMs42ExtLen)};
+    visit_ext_fields(ms42x, w);
+}
+
+void ms42_ext_apply_page5(const uint8_t* page5, uint16_t len) noexcept {
+    uint16_t magic = 0u;
+    if (page5 != nullptr && len >= kMs42ExtPage5Off + kMs42ExtLen) {
+        std::memcpy(&magic, page5 + kMs42ExtPage5Off, 2u);
+    }
+    if (magic != kMs42ExtMagic) {
+        ms42_ext_defaults();
+        return;
+    }
+    Ms42Ext c = {};
+    Reader r{page5, static_cast<uint16_t>(kMs42ExtPage5Off + 2u),
+             static_cast<uint16_t>(kMs42ExtPage5Off + kMs42ExtLen)};
+    visit_ext_fields(c, r);
+    sanitize_ext(c);
+    ms42x = c;
+}
 
 void ms42_cal_defaults() noexcept { fill_defaults(ms42); }
 

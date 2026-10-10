@@ -639,3 +639,81 @@ void test_ms42_stft_gain_table(void) {
     ms42_cal_defaults();
     fuel_reset_adaptives();
 }
+
+void test_ms42_ext_block_cat_retard(void) {
+    section("ms42: extensão page5 + retardo de aquecimento do catalisador");
+    ms42_ext_defaults();
+    uint8_t page5[256] = {};
+    // Área zerada (blob antigo) ou com a curva de warmup removida → defaults.
+    std::memset(page5 + 64, 0x55, 32u);
+    ms42x.cat_heat_retard_x10 = 77u;
+    ms42_ext_apply_page5(page5, sizeof(page5));
+    CHECK_EQ(ms42x.cat_heat_retard_x10, 0u, "sem magic -> defaults (retardo off)");
+    CHECK_EQ(ms42x.misfire_excess_q8[2][1], 31u, "sem magic -> limiar 1,12x");
+
+    ms42x.cat_heat_retard_x10 = 0x2Bu;
+    ms42x.cat_heat_clt_max_c = 55;
+    ms42x.as_pw_fall_cycles = 0x0Cu;
+    ms42x.as_pw_fall_cold_pct = 0x0Du;
+    ms42x.as_pw_fall_hot_pct = 0x0Eu;
+    ms42x.misfire_rpm_axis[0] = 0x0Fu;
+    ms42x.misfire_map_axis[0] = 0x10u;
+    ms42x.misfire_excess_q8[3][3] = 0x44u;
+    ms42_ext_serialize_to_page5(page5, sizeof(page5));
+    // Offsets usados em tools/ts/openems.ini (page 5).
+    CHECK_EQ(page5[64] | (page5[65] << 8), kMs42ExtMagic, "INI: magic @64");
+    CHECK_EQ(page5[66], 0x2Bu, "INI: ms42CatRetard @66");
+    CHECK_EQ(page5[67], 55u, "INI: ms42CatRetardCltMax @67");
+    CHECK_EQ(page5[68], 0x0Cu, "INI: ms42AsPwFallCycles @68");
+    CHECK_EQ(page5[69], 0x0Du, "INI: ms42AsPwFallCold @69");
+    CHECK_EQ(page5[70], 0x0Eu, "INI: ms42AsPwFallHot @70");
+    CHECK_EQ(page5[71], 0x0Fu, "INI: ms42MisfireRpm @71");
+    CHECK_EQ(page5[75], 0x10u, "INI: ms42MisfireMap @75");
+    CHECK_EQ(page5[79 + 15], 0x44u, "INI: ms42MisfireExcess @79");
+    CHECK_EQ(page5[95], 0u, "byte 95 livre");
+    ms42_ext_defaults();
+    ms42_ext_apply_page5(page5, sizeof(page5));
+    CHECK_EQ(ms42x.cat_heat_retard_x10, 0x2Bu, "roundtrip retardo");
+    CHECK_EQ(ms42x.cat_heat_clt_max_c, 55, "roundtrip CLT máx.");
+    CHECK_EQ(ms42x.misfire_excess_q8[3][3], 0x44u, "roundtrip limiar");
+
+    // Saneamento: eixo não crescente → default; faixas limitadas.
+    page5[66] = 250u;
+    page5[73] = 0u;
+    ms42_ext_apply_page5(page5, sizeof(page5));
+    CHECK_EQ(ms42x.cat_heat_retard_x10, 150u, "retardo limitado a 15°");
+    CHECK_EQ(ms42x.misfire_rpm_axis[2], 45u, "eixo de misfire inválido -> default");
+
+    // Retardo: proporcional à fração restante, só em marcha lenta e frio.
+    ms42_ext_defaults();
+    ms42x.cat_heat_retard_x10 = 50u;
+    ms42x.cat_heat_clt_max_c = 60;
+    const uint16_t tps_idle = idle_spark_tps_max_x10;
+    CHECK_EQ(calc_cat_heat_retard_x10(256u, tps_idle, 200), 50, "início: retardo cheio");
+    CHECK_EQ(calc_cat_heat_retard_x10(128u, tps_idle, 200), 25, "a meio: metade");
+    CHECK_EQ(calc_cat_heat_retard_x10(0u, tps_idle, 200), 0, "acabou: sem retardo");
+    CHECK_EQ(calc_cat_heat_retard_x10(256u, static_cast<uint16_t>(tps_idle + 1u), 200), 0,
+             "fora da marcha lenta: sem retardo");
+    CHECK_EQ(calc_cat_heat_retard_x10(256u, tps_idle, 600), 0, "CLT no limite: sem retardo");
+    ms42x.cat_heat_retard_x10 = 0u;
+    CHECK_EQ(calc_cat_heat_retard_x10(256u, tps_idle, 200), 0, "calibração 0: off");
+
+    // A fração decai com o mesmo cat_heat_s do acréscimo de rpm.
+    ms42_cal_defaults();
+    auxiliaries_test_reset();
+    ems::drv::ckp_test_reset();
+    ms42.cat_heat_s = 1u;
+    CHECK_EQ(auxiliaries_cat_heat_q8(), 0u, "motor parado: fração 0");
+    run_engine(3u, false, 0u);
+    const uint16_t q0 = auxiliaries_cat_heat_q8();
+    CHECK(q0 > 230u && q0 <= 256u, "logo após pegar: ~256");
+    run_engine(50u, false, 0u);
+    const uint16_t q1 = auxiliaries_cat_heat_q8();
+    CHECK(q1 > 100u && q1 < 150u, "a meio: ~128");
+    run_engine(60u, false, 0u);
+    CHECK_EQ(auxiliaries_cat_heat_q8(), 0u, "após cat_heat_s: 0");
+
+    ms42_cal_defaults();
+    ms42_ext_defaults();
+    auxiliaries_test_reset();
+}

@@ -52,6 +52,12 @@ int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,
                                        uint16_t tps_pct_x10,
                                        uint16_t map_bar_x100) noexcept;
 
+// Retardo de aquecimento do catalisador (MS42 0x4F291): ms42x.cat_heat_retard
+// × fração restante (Q8), só em marcha lenta (TPS ≤ idle_spark_tps_max) e
+// abaixo de ms42x.cat_heat_clt_max_c. Positivo = graus a subtrair.
+int16_t calc_cat_heat_retard_x10(uint16_t heat_q8, uint16_t tps_pct_x10,
+                                 int16_t clt_x10) noexcept;
+
 uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv) noexcept;
 
 // Dwell com correcção 2D tensão × RPM (MS42 §2.2.2.2.1 IP_TD__VB__N_32).

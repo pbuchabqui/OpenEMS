@@ -476,7 +476,8 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(p +  16, ems::engine::clt_corr_x256,              16u);
         std::memcpy(p +  32, ems::engine::iat_corr_axis_x10,          16u);
         std::memcpy(p +  48, ems::engine::iat_corr_x256,              16u);
-        std::memset(p + 64, 0, 32u);  // 64-95 reserved (dead warmup curve removed)
+        // 64-95: extensão MS42 (a antiga curva de warmup foi removida).
+        ems::engine::ms42_ext_serialize_to_page5(p, static_cast<uint16_t>(sizeof(g_page5_corr)));
         std::memcpy(p +  96, ems::engine::vbatt_corr_axis_mv,         16u);
         std::memcpy(p + 112, ems::engine::injector_dead_time_us,      16u);
         std::memcpy(p + 128, ems::engine::ae_clt_corr_axis_x10,       16u);
@@ -736,6 +737,7 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(ems::engine::clt_corr_x256,              p +  16, 16u);
         std::memcpy(ems::engine::iat_corr_axis_x10,          p +  32, 16u);
         std::memcpy(ems::engine::iat_corr_x256,              p +  48, 16u);
+        ems::engine::ms42_ext_apply_page5(p, static_cast<uint16_t>(sizeof(g_page5_corr)));
         std::memcpy(ems::engine::vbatt_corr_axis_mv,         p +  96, 16u);
         std::memcpy(ems::engine::injector_dead_time_us,      p + 112, 16u);
         std::memcpy(ems::engine::ae_clt_corr_axis_x10,       p + 128, 16u);

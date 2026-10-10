@@ -495,7 +495,9 @@ PAGE5_FIELDS = [
     ("clt_corr_x256",               16, 8, "H",  1.0),   # fator ×256 (adimensional)
     ("iat_corr_axis_x10",           32, 8, "h",  0.1),   # °C
     ("iat_corr_x256",               48, 8, "H",  1.0),
-    # 64-95 reserved (dead warmup curve removed; CLT correction is the live one)
+    # 64-95: extensão MS42 (magic 0x354D @64; src/engine/ms42_cal.h Ms42Ext)
+    ("ms42_cat_heat_retard_x10",    66, 1, "B",  0.1),   # ° (0=off)
+    ("ms42_cat_heat_clt_max_c",     67, 1, "b",  1.0),   # °C
     ("vbatt_corr_axis_mv",          96, 8, "H",  0.001), # V
     ("injector_dead_time_us",      112, 8, "H",  0.001), # ms
     ("ae_clt_corr_axis_x10",       128, 8, "h",  0.1),   # °C

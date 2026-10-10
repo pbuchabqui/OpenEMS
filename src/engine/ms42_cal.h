@@ -100,6 +100,37 @@ struct Ms42Cal {
 
 extern Ms42Cal ms42;
 
+// ── Extensão na page5 (bytes 64–95, antiga curva de warmup) ─────────────
+// A page0 não tem mais espaço. Bloco de 32 bytes com magic próprio: sem o
+// magic (blob antigo, área zerada ou com a curva removida) → defaults, que
+// reproduzem o comportamento anterior.
+constexpr uint16_t kMs42ExtPage5Off = 64u;
+constexpr uint16_t kMs42ExtLen      = 32u;
+constexpr uint16_t kMs42ExtMagic    = 0x354Du;  // "M5"
+constexpr uint8_t  kMisfireCalPts   = 4u;
+
+struct Ms42Ext {
+    // ── Retardo de aquecimento do catalisador (MS42 0x4F291) ─────────────
+    uint8_t  cat_heat_retard_x10;  // 0,1°; decai com cat_heat_s; 0 = off
+    int8_t   cat_heat_clt_max_c;   // só abaixo desta CLT (°C)
+
+    // ── Limite de queda do pulso na pós-partida (ip_ti_lgrd_ast__tco) ────
+    uint8_t  as_pw_fall_cycles;    // ciclos do motor após a partida; 0 = off
+    uint8_t  as_pw_fall_cold_pct;  // queda máx. por ciclo, % do pulso anterior,
+    uint8_t  as_pw_fall_hot_pct;   //   no 1º / último ponto de crank_clt_axis
+
+    // ── Limiar de misfire por rpm × MAP (Q8 − 256: 31 = 1,12×) ───────────
+    uint8_t  misfire_rpm_axis[kMisfireCalPts];  // rpm/100
+    uint8_t  misfire_map_axis[kMisfireCalPts];  // kPa
+    uint8_t  misfire_excess_q8[kMisfireCalPts][kMisfireCalPts];  // [MAP][rpm]
+};
+
+extern Ms42Ext ms42x;
+
+void ms42_ext_defaults() noexcept;
+void ms42_ext_serialize_to_page5(uint8_t* page5, uint16_t len) noexcept;
+void ms42_ext_apply_page5(const uint8_t* page5, uint16_t len) noexcept;
+
 void ms42_cal_defaults() noexcept;
 // Bytes ocupados na page0 (magic incluído) — para testes e static checks.
 uint16_t ms42_cal_page0_len() noexcept;

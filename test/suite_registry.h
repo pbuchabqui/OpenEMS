@@ -234,3 +234,4 @@ void test_ms42_crank_afterstart(void);
 void test_ms42_knock_relative(void);
 void test_ms42_idle_p_ff_cat(void);
 void test_ms42_stft_gain_table(void);
+void test_ms42_ext_block_cat_retard(void);

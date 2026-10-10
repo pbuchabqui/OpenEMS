@@ -459,17 +459,21 @@ void reset_state() noexcept {
 
 namespace ems::engine {
 
-// Alvo de marcha lenta + acréscimo para aquecer o catalisador (MS42 E17E):
-// cat_heat_rpm logo após a partida, a decair linearmente até 0 em cat_heat_s.
+// Fração restante do aquecimento do catalisador (MS42 E17E): 256 logo após a
+// partida, a decair linearmente até 0 em cat_heat_s. 0 com o motor parado.
+uint16_t auxiliaries_cat_heat_q8() noexcept {
+    const uint32_t dur_ms = static_cast<uint32_t>(ms42.cat_heat_s) * 1000u;
+    if (!g.engine_running || dur_ms == 0u) { return 0u; }
+    const uint32_t t = g.time_ms - g.running_since_ms;
+    if (t >= dur_ms) { return 0u; }
+    return static_cast<uint16_t>((static_cast<uint64_t>(dur_ms - t) * 256u) / dur_ms);
+}
+
+// Alvo de marcha lenta + acréscimo para aquecer o catalisador: cat_heat_rpm
+// escalado pela fração acima.
 uint16_t auxiliaries_idle_target_rpm_x10(int16_t clt_x10) noexcept {
     uint32_t target = iac_target_rpm_x10(clt_x10);
-    const uint32_t dur_ms = static_cast<uint32_t>(ms42.cat_heat_s) * 1000u;
-    if (g.engine_running && ms42.cat_heat_rpm_x10 != 0u && dur_ms != 0u) {
-        const uint32_t t = g.time_ms - g.running_since_ms;
-        if (t < dur_ms) {
-            target += (static_cast<uint32_t>(ms42.cat_heat_rpm_x10) * (dur_ms - t)) / dur_ms;
-        }
-    }
+    target += (static_cast<uint32_t>(ms42.cat_heat_rpm_x10) * auxiliaries_cat_heat_q8()) >> 8u;
     return static_cast<uint16_t>(target > 0xFFFFu ? 0xFFFFu : target);
 }
 

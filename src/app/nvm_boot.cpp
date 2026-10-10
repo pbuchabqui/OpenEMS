@@ -12,6 +12,7 @@
 #include "engine/fuel_calc.h"
 #include "engine/etb_control.h"
 #include "engine/table3d.h"
+#include "engine/ms42_cal.h"
 #include "hal/flash.h"
 
 namespace ems::app {
@@ -100,6 +101,7 @@ void load_corr_calibration_from_nvm() noexcept {
     if (!iat_corr_is_legacy_density_shape(iat_loaded)) {
         std::memcpy(ems::engine::iat_corr_x256, iat_loaded, 16u);
     }
+    ems::engine::ms42_ext_apply_page5(p, static_cast<uint16_t>(sizeof(page)));
     std::memcpy(ems::engine::vbatt_corr_axis_mv,         p +  96, 16u);
     std::memcpy(ems::engine::injector_dead_time_us,      p + 112, 16u);
     std::memcpy(ems::engine::ae_clt_corr_axis_x10,       p + 128, 16u);

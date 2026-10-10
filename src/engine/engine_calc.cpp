@@ -494,10 +494,17 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         if (!crank_or_ase) {
             corr.antijerk_retard = calc_antijerk_retard_x10(ae_tpsdot);
         }
+        // Retardo do catalisador: decai em segundos, então entra junto com
+        // as correções lentas, sob o limitador de gradiente (sem degrau ao
+        // sair da marcha lenta).
+        const int16_t cat_retard_x10 = qc.cranking ? int16_t{0} :
+            calc_cat_heat_retard_x10(auxiliaries_cat_heat_q8(),
+                                     sensors.app_pct_x10, sensors.clt_degc_x10);
         // Gradiente só sobre base + IAT/CLT/idle; os retardos entram depois,
         // sem filtro (knock é aplicado por cilindro mais adiante).
         const int16_t shaped_x10 = spark_gradient_limit_x10(
-            static_cast<int16_t>(base_advance_x10 + corr.iat + corr.clt + corr.idle),
+            static_cast<int16_t>(base_advance_x10 + corr.iat + corr.clt + corr.idle
+                                 - cat_retard_x10),
             rev_edge, qc.cranking || (timing_light_enable != 0u));
         AdvanceCorrectionsX10 retards{};
         retards.antijerk_retard = corr.antijerk_retard;

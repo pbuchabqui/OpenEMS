@@ -9,6 +9,8 @@ void auxiliaries_set_key_on(bool key_on) noexcept;
 void auxiliaries_tick_10ms() noexcept;
 void auxiliaries_tick_20ms() noexcept;
 uint16_t auxiliaries_idle_target_rpm_x10(int16_t clt_x10) noexcept;
+// Aquecimento do catalisador: fração restante Q8 (256 → 0 em ms42.cat_heat_s).
+uint16_t auxiliaries_cat_heat_q8() noexcept;
 uint16_t auxiliaries_ewg_position_demand_x10() noexcept;
 
 // VVT de admissão: avanço medido (° virabrequim ×10, filtrado), alvo atual e
