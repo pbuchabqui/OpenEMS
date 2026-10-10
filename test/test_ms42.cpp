@@ -146,7 +146,7 @@ void test_ms42_vvt_measured_phase(void) {
     // A referência não é reaprendida enquanto o VVT atua.
     CHECK_NEAR(auxiliaries_vvt_ref_x10(), 630, 5, "referencia congelada com o VVT ativo");
 
-    // Sem bordas de came: repouso em <= 200 ms.
+    // Sem bordas de came: repouso apos 6 voltas (3 ciclos de came).
     run_engine(25u, false, 0u);
     CHECK_EQ(auxiliaries_test_get_vvt_adm_duty(), 0u, "sem came -> duty 0 (repouso)");
 

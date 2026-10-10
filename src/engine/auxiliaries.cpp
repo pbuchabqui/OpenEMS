@@ -57,7 +57,10 @@ constexpr uint32_t kOverboostDurationMs = 500u;
 constexpr uint16_t kOverboostMarginBarX1000 = 200u;
 
 // VVT: sem borda de came nova há mais do que isto → solenoide em repouso.
-constexpr uint32_t kVvtEdgeTimeoutMs = 200u;
+// Cam edge timeout = 3 cam cycles (6 revs) at the current speed, floored:
+// a fixed 200 ms equalled one cam cycle at 600 rpm and parked VVT at idle.
+constexpr uint32_t kVvtEdgeTimeoutMinMs = 200u;
+constexpr uint32_t kVvtEdgeTimeoutRevs = 6u;
 // Aprendizagem do ângulo de repouso: só perto da marcha lenta, com o
 // solenoide sem corrente há pelo menos kVvtParkSettleMs (came encostado).
 constexpr uint32_t kVvtLearnMaxRpmX10 = 25000u;
@@ -298,9 +301,16 @@ void run_vvt_control(const ems::drv::CkpSnapshot& snap,
         g.vvt_last_seq = seq;
         g.vvt_last_edge_ms = g.time_ms;
     }
+    uint32_t edge_timeout_ms = kVvtEdgeTimeoutMinMs;
+    if (snap.rpm_x10 != 0u) {
+        const uint32_t t = (kVvtEdgeTimeoutRevs * 600000u) / snap.rpm_x10;
+        if (t > edge_timeout_ms) { edge_timeout_ms = t; }
+    }
+    // Only a confirmed cam (2 coherent edges) gives a trustworthy angle.
     const bool signal_ok =
         (snap.state == ems::drv::SyncState::FULL_SYNC) && (seq != 0u) &&
-        ((g.time_ms - g.vvt_last_edge_ms) <= kVvtEdgeTimeoutMs);
+        (snap.cmp_confirms >= 2u) &&
+        ((g.time_ms - g.vvt_last_edge_ms) <= edge_timeout_ms);
     if (!signal_ok) {
         g.vvt_have_meas = false;
         vvt_park();
