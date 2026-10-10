@@ -114,6 +114,7 @@ extern volatile uint32_t g_diag_last_cmp_edge_tick;
 // último rejeitado (56 = dente perdido, 58 = dente extra/ruído).
 extern volatile uint32_t g_dbg_gap_accepted;
 extern volatile uint32_t g_dbg_gap_premature;
+extern volatile uint32_t g_dbg_gap_acq_reject;
 extern volatile uint32_t g_dbg_gap_last_tc;
 // Perdas de sync por caminho (ver drv/ckp.cpp): wrap = gap perdido,
 // histogram = ruído persistente, stall = sem bordas. missing_gap e

@@ -276,6 +276,7 @@ int main(void) {
     test_ckp_lost_tooth_loses_sync();
     test_ckp_noise_never_adds_or_loses_teeth();
     test_ckp_noise_after_tooth_keeps_real_edge();
+    test_ckp_acquisition_gap_window();
     test_ckp_phase_toggle();
 
     // ── UI PROTOCOL / TUNERSTUDIO ENVELOPE ────────────────────────────────

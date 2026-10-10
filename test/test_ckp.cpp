@@ -453,3 +453,21 @@ void test_ckp_noise_after_tooth_keeps_real_edge(void) {
     ckp_fire(kNormalPeriod - kNormalPeriod / 5u); // next real tooth
     CHECK_EQ(ckp_snapshot().tooth_index, 11u, "next tooth counted once");
 }
+
+void test_ckp_acquisition_gap_window(void) {
+    section("ckp: first gap accepted only with ratio 2..4 (MS42 window)");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    for (uint32_t i = 0u; i < 10u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kNormalPeriod * 6u);                  // starter pause, not a gap
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::WAIT_GAP), "6x pause → still WAIT_GAP");
+    ckp_fire(kNormalPeriod);
+    for (uint32_t i = 0u; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kNormalPeriod * 17u / 10u);           // 1.7x slow tooth
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::WAIT_GAP), "1.7x tooth → still WAIT_GAP");
+    for (uint32_t i = 0u; i < 5u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(kNormalPeriod * 3u);                  // real gap
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::HALF_SYNC), "3x gap → HALF_SYNC");
+}

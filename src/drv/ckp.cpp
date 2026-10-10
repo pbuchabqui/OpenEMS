@@ -86,6 +86,7 @@
 namespace ems::drv {
     extern volatile uint32_t g_dbg_gap_accepted;
     extern volatile uint32_t g_dbg_gap_premature;
+    extern volatile uint32_t g_dbg_gap_acq_reject;
     extern volatile uint32_t g_dbg_gap_last_tc;
     extern volatile uint32_t g_dbg_loss_missing_gap;
     extern volatile uint32_t g_dbg_loss_stall;
@@ -369,13 +370,38 @@ inline void relearn_from_gap(uint32_t delta) noexcept {
     g_state.tooth_count = 0u;
 }
 
+// First-gap acquisition window (MS42 accepts 2.5..3.5). In WAIT_GAP nothing
+// counts the teeth yet, so only the ratio vouches for the gap: a starter
+// pause or a stall-and-restart is ≫ 3 and must not give HALF_SYNC at a random
+// tooth (fuel and crank spark would fire off-angle until the next gap).
+static constexpr uint32_t kAcqGapMinX2 = 4u;  // ratio ≥ 2.0
+static constexpr uint32_t kAcqGapMaxX2 = 8u;  // ratio ≤ 4.0
+
 // Returns true if the gap was accepted (tooth_index restarts at 0).
 inline bool process_gap_event(uint32_t delta) noexcept {
     const uint16_t n = g_state.tooth_count;
     switch (g_state.snap.state) {
-        case ems::drv::SyncState::WAIT_GAP:
+        case ems::drv::SyncState::WAIT_GAP: {
             if (n < kMinTeethBeforeFirstGap) { relearn_from_gap(delta); return false; }
+            const uint64_t d2 = static_cast<uint64_t>(delta) * 2u;
+            const uint64_t ref = g_state.ref_ticks;
+            if (d2 > ref * kAcqGapMaxX2) {
+                // Pause, not a gap: start learning again from the next edge.
+                ++ems::drv::g_dbg_gap_acq_reject;
+                g_state.ref_ticks = 0u;
+                g_state.prev_ref_ticks = 0u;
+                g_state.tooth_count = 0u;
+                return false;
+            }
+            if (d2 < ref * kAcqGapMinX2) {
+                // Slow tooth (cranking compression), not a gap.
+                ++ems::drv::g_dbg_gap_acq_reject;
+                set_reference(delta);
+                if (g_state.tooth_count < 0xFFFFu) { ++g_state.tooth_count; }
+                return false;
+            }
             break;
+        }
         case ems::drv::SyncState::LOSS_OF_SYNC:
             if (n != kTeethBetweenGaps) { relearn_from_gap(delta); return false; }
             break;
@@ -425,6 +451,7 @@ volatile uint32_t g_dbg_tc_spike = 0u;
 volatile uint32_t g_dbg_tc_normal = 0u;
 volatile uint32_t g_dbg_gap_accepted = 0u;
 volatile uint32_t g_dbg_gap_premature = 0u;
+volatile uint32_t g_dbg_gap_acq_reject = 0u;  // first-gap ratio outside 2..4
 volatile uint32_t g_dbg_gap_last_tc = 0u;
 // Perdas de sync por caminho (protocolo 'D'):
 //   wrap      = 58º dente sem gap (gap perdido); avg/delta = ref e Δ nesse instante

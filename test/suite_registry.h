@@ -166,6 +166,7 @@ void test_ckp_tooth_index_progression(void);
 void test_ckp_lost_tooth_loses_sync(void);
 void test_ckp_noise_never_adds_or_loses_teeth(void);
 void test_ckp_noise_after_tooth_keeps_real_edge(void);
+void test_ckp_acquisition_gap_window(void);
 void test_ckp_phase_toggle(void);
 void test_crc32_vectors(void);
 void test_legacy_protocol_regression(void);
