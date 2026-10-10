@@ -18,6 +18,8 @@
 #include "engine/knock.h"
 #include "engine/ms42_cal.h"
 #include "engine/quick_crank.h"
+#include "engine/torque_manager.h"
+#include "hal/system.h"
 #include "hal/flash.h"
 #include "test/fixtures.h"
 
@@ -502,4 +504,92 @@ void test_ms42_knock_relative(void) {
     ms42_cal_defaults();
     knock_init();
     knock_retard_x10[0] = 0u;
+}
+
+void test_ms42_idle_p_ff_cat(void) {
+    section("ms42 C10: marcha lenta FF por CLT + termo P + aprendido + aquecimento do cat");
+    ms42_cal_defaults();
+    const uint16_t s_min = etb_idle_min_opening_x10;
+    const uint16_t s_max = etb_idle_max_opening_x10;
+    const uint16_t s_open = etb_idle_open_pct_x10;
+    const uint16_t s_rate = etb_max_rate_pct_per_s;
+    const uint8_t  s_valid = etb_cal_valid;
+    etb_cal_valid = 1u;
+    etb_idle_min_opening_x10 = 30u;
+    etb_idle_max_opening_x10 = 200u;
+    etb_idle_open_pct_x10 = 80u;
+    etb_max_rate_pct_per_s = 0u;
+    for (uint8_t i = 0u; i < kIdleFfPts; ++i) { ms42.idle_ff_x10[i] = 120u; }
+
+    ems::drv::CkpSnapshot snap{};
+    ems::drv::SensorData sens{};
+    sens.clt_degc_x10 = 800;
+    sens.app_pct_x10 = 0u;
+    auto start_engine = [&]() {
+        quick_crank_reset();
+        quick_crank_update(0u, 3000u, true, 800, 8);
+        snap.rpm_x10 = 3000u;
+        (void)torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        quick_crank_update(100u, 8000u, true, 800, 8);
+        snap.rpm_x10 = 8500u;
+        (void)torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        host_advance_millis(5000u);  // passa o taper partida→marcha lenta
+    };
+
+    torque_manager_reset();
+    host_set_millis(10000u);
+    start_engine();
+    auto out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+    CHECK_EQ(out.etb_target_pct_x10, 120u, "saída da partida: integrador = FF(CLT)");
+
+    ms42.idle_kp_x10 = 50u;
+    snap.rpm_x10 = 8000u;  // 50 rpm abaixo → P = 500×50/1000 = 25
+    out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+    CHECK_EQ(out.etb_target_pct_x10, 146u, "P + I: 121 + 25");
+    for (int i = 0; i < 29; ++i) {
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+    }
+    CHECK_EQ(out.etb_target_pct_x10, 175u, "I continua a integrar (150 + 25)");
+    ms42.idle_kp_x10 = 0u;
+
+    // Sem persistência: nova partida volta ao FF.
+    start_engine();
+    out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+    CHECK_EQ(out.etb_target_pct_x10, 120u, "sem persist: recomeça no FF");
+    snap.rpm_x10 = 8000u;
+    for (int i = 0; i < 30; ++i) {
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+    }
+    ms42.idle_persist = 1u;
+    start_engine();
+    snap.rpm_x10 = 8500u;
+    out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+    CHECK_EQ(out.etb_target_pct_x10, 150u, "persist: FF + aprendido (+30)");
+
+    // Aquecimento do catalisador: +200 rpm a decair em 1 s.
+    ms42_cal_defaults();
+    auxiliaries_test_reset();
+    ems::drv::ckp_test_reset();
+    const uint16_t base = auxiliaries_idle_target_rpm_x10(800);
+    ms42.cat_heat_rpm_x10 = 2000u;
+    ms42.cat_heat_s = 1u;
+    CHECK_EQ(auxiliaries_idle_target_rpm_x10(800), base, "motor parado: sem acréscimo");
+    run_engine(3u, false, 0u);
+    const uint16_t t0 = auxiliaries_idle_target_rpm_x10(800);
+    CHECK(t0 > base + 1800u && t0 <= base + 2000u, "logo após pegar: ~+200 rpm");
+    run_engine(50u, false, 0u);
+    const uint16_t t1 = auxiliaries_idle_target_rpm_x10(800);
+    CHECK(t1 > base + 800u && t1 < base + 1200u, "a meio: ~+100 rpm");
+    run_engine(60u, false, 0u);
+    CHECK_EQ(auxiliaries_idle_target_rpm_x10(800), base, "após cat_heat_s: alvo normal");
+
+    ms42_cal_defaults();
+    torque_manager_reset();
+    quick_crank_reset();
+    auxiliaries_test_reset();
+    etb_idle_min_opening_x10 = s_min;
+    etb_idle_max_opening_x10 = s_max;
+    etb_idle_open_pct_x10 = s_open;
+    etb_max_rate_pct_per_s = s_rate;
+    etb_cal_valid = s_valid;
 }

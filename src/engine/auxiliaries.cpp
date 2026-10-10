@@ -108,6 +108,8 @@ constexpr uint32_t kPumpBit = (1u << kPumpPin);
 
 struct AuxState {
     bool key_on;
+    bool engine_running;
+    uint32_t running_since_ms;
     bool fan_on;
     bool pump_on;
 
@@ -447,8 +449,18 @@ void reset_state() noexcept {
 
 namespace ems::engine {
 
+// Alvo de marcha lenta + acréscimo para aquecer o catalisador (MS42 E17E):
+// cat_heat_rpm logo após a partida, a decair linearmente até 0 em cat_heat_s.
 uint16_t auxiliaries_idle_target_rpm_x10(int16_t clt_x10) noexcept {
-    return iac_target_rpm_x10(clt_x10);
+    uint32_t target = iac_target_rpm_x10(clt_x10);
+    const uint32_t dur_ms = static_cast<uint32_t>(ms42.cat_heat_s) * 1000u;
+    if (g.engine_running && ms42.cat_heat_rpm_x10 != 0u && dur_ms != 0u) {
+        const uint32_t t = g.time_ms - g.running_since_ms;
+        if (t < dur_ms) {
+            target += (static_cast<uint32_t>(ms42.cat_heat_rpm_x10) * (dur_ms - t)) / dur_ms;
+        }
+    }
+    return static_cast<uint16_t>(target > 0xFFFFu ? 0xFFFFu : target);
 }
 
 void auxiliaries_init() noexcept {
@@ -500,6 +512,14 @@ void auxiliaries_tick_10ms() noexcept {
     run_fan_control(s.clt_degc_x10);
     run_pump_control(snap.rpm_x10);
     run_vbatt_diag(snap.rpm_x10, s.vbatt_mv);
+
+    // Motor a trabalhar (≥ 500 rpm) desde quando — para o aquecimento do cat.
+    if (snap.rpm_x10 == 0u) {
+        g.engine_running = false;
+    } else if (!g.engine_running && snap.rpm_x10 >= 5000u) {
+        g.engine_running = true;
+        g.running_since_ms = g.time_ms;
+    }
 }
 
 void auxiliaries_tick_20ms() noexcept {
