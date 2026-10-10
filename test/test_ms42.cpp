@@ -16,6 +16,7 @@
 #include "engine/limp_gating.h"
 #include "engine/auxiliaries.h"
 #include "engine/ms42_cal.h"
+#include "engine/quick_crank.h"
 #include "hal/flash.h"
 #include "test/fixtures.h"
 
@@ -364,4 +365,85 @@ void test_ms42_spark_gradient(void) {
 
     ms42_cal_defaults();
     spark_gradient_reset();
+}
+
+namespace {
+
+// Partida a 200 rpm, 100 ms por update; devolve o multiplicador do último.
+uint16_t crank_run(uint32_t& now, uint32_t updates, int16_t clt_x10) {
+    QuickCrankOutput qc{};
+    for (uint32_t i = 0u; i < updates; ++i) {
+        qc = quick_crank_update(now, 2000u, true, clt_x10, 10);
+        now += 100u;
+    }
+    return qc.fuel_mult_x256;
+}
+
+}  // namespace
+
+void test_ms42_crank_afterstart(void) {
+    section("ms42 B7/B8: partida (taper, repartida quente, baro) e pos-partida por ciclos");
+    ms42_cal_defaults();
+    const uint16_t baro_saved = fuel_get_baro_bar_x100();
+    uint32_t now = 1000u;
+
+    quick_crank_reset();
+    const uint16_t base = crank_run(now, 30u, 200);
+    CHECK_EQ(base, 512u, "defaults: 2,0x a 20 C (tabela antiga)");
+
+    // Taper: 4 ciclos até 70 % (200 rpm → 600 ms/ciclo → 2,4 s).
+    ms42.crank_taper_cycles = 4u;
+    quick_crank_reset();
+    const uint16_t first = crank_run(now, 1u, 200);
+    CHECK_EQ(first, 512u, "taper: 1o update ainda 100 %");
+    const uint16_t mid = crank_run(now, 12u, 200);
+    CHECK(mid < 512u && mid > 358u, "taper: a meio fica entre 100 % e 70 %");
+    const uint16_t tapered = crank_run(now, 30u, 200);
+    CHECK_EQ(tapered, static_cast<uint16_t>(512u * 70u / 100u), "taper: satura em 70 %");
+    ms42.crank_taper_cycles = 0u;
+
+    // Repartida a quente: CLT ≥ 90 °C → ×120 %.
+    quick_crank_reset();
+    const uint16_t hot0 = crank_run(now, 2u, 1000);
+    ms42.hot_restart_pct = 120u;
+    quick_crank_reset();
+    const uint16_t hot1 = crank_run(now, 2u, 1000);
+    CHECK_EQ(hot1, static_cast<uint16_t>(hot0 * 120u / 100u), "repartida quente x1,2");
+    quick_crank_reset();
+    const uint16_t warm1 = crank_run(now, 2u, 800);
+    ms42.hot_restart_pct = 100u;
+    quick_crank_reset();
+    CHECK_EQ(crank_run(now, 2u, 800), warm1, "abaixo do limiar de CLT: sem fator");
+
+    // Baro: 0,80 bar → ×80/101.
+    fuel_set_baro_bar_x100(80u);
+    quick_crank_reset();
+    CHECK_EQ(crank_run(now, 2u, 200), 512u, "baro desligado: sem correção");
+    ms42.crank_baro_enable = 1u;
+    quick_crank_reset();
+    CHECK_EQ(crank_run(now, 2u, 200), static_cast<uint16_t>(512u * 80u / 101u), "baro 0,80 bar");
+    ms42.crank_baro_enable = 0u;
+    fuel_set_baro_bar_x100(baro_saved);
+
+    // Pós-partida por ciclos: 20 °C → 14 ciclos, início 1,25× (320).
+    // A 2000 rpm (60 ms/ciclo), 7 updates de 60 ms = 7 ciclos → metade.
+    ms42.afterstart_by_cycles = 1u;
+    quick_crank_reset();
+    crank_run(now, 3u, 200);
+    QuickCrankOutput qc = quick_crank_update(now, 20000u, true, 200, 10);
+    CHECK(qc.afterstart_active, "saiu da partida: pós-partida ativa");
+    CHECK_EQ(qc.fuel_mult_x256, 320u, "pós-partida começa no início da curva");
+    for (uint32_t i = 0u; i < 7u; ++i) {
+        now += 60u;
+        qc = quick_crank_update(now, 20000u, true, 200, 10);
+    }
+    CHECK_EQ(qc.fuel_mult_x256, 288u, "7 de 14 ciclos: metade do enriquecimento");
+    for (uint32_t i = 0u; i < 8u; ++i) {
+        now += 60u;
+        qc = quick_crank_update(now, 20000u, true, 200, 10);
+    }
+    CHECK_EQ(qc.fuel_mult_x256, 256u, "14 ciclos: fim da pós-partida");
+
+    ms42_cal_defaults();
+    quick_crank_reset();
 }

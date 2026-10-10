@@ -1,6 +1,7 @@
 #include "engine/quick_crank.h"
 #include "engine/calibration.h"
 #include "engine/math_utils.h"
+#include "engine/ms42_cal.h"
 #include "drv/ckp.h"
 #include "engine/fuel_calc.h"
 
@@ -8,49 +9,25 @@
 
 namespace {
 
-struct P2 {
-    int16_t x;
-    uint16_t y;
-};
-
 constexpr uint16_t kCrankExitRpmMinX10 = 5000u;
 constexpr uint16_t kCrankExitRpmMaxX10 = 12000u;
 constexpr uint16_t kPrimePwMaxClampUs = 30000u;
 
-constexpr P2 kCrankFuelMult[] = {
-    {-400, 768},  // 3.00x
-    {0, 614},     // 2.40x
-    {200, 512},   // 2.00x
-    {400, 435},   // 1.70x
-    {700, 358},   // 1.40x
-    {900, 320},   // 1.25x
-    {1100, 294},  // 1.15x
-};
-
-constexpr P2 kAfterstartMultStart[] = {
-    {-400, 346},  // 1.35x
-    {0, 333},     // 1.30x
-    {200, 320},   // 1.25x
-    {400, 307},   // 1.20x
-    {700, 294},   // 1.15x
-    {900, 281},   // 1.10x
-    {1100, 269},  // 1.05x
-};
-
-constexpr P2 kAfterstartDurationMs[] = {
-    {-400, 2400},
-    {0, 2000},
-    {200, 1700},
-    {400, 1400},
-    {700, 1000},
-    {900, 700},
-    {1100, 500},
-};
+// Tabelas de partida/pós-partida por CLT: calibráveis no bloco MS42 da
+// page0 (defaults = os antigos constexpr 3,00×…1,15× etc.).
+constexpr uint8_t kCrankPts = ems::engine::kCrankCalPts;
+constexpr uint32_t kBaroRefBarX100 = 101u;
 
 volatile bool g_prev_cranking = false;
 volatile bool g_afterstart_active = false;
 uint32_t g_afterstart_start_ms = 0u;
 uint32_t g_afterstart_duration_ms = 0u;
+// Ciclos do motor (×1000) desde o início da partida / da pós-partida.
+uint32_t g_crank_cyc_x1000 = 0u;
+uint32_t g_afterstart_cyc_x1000 = 0u;
+uint32_t g_afterstart_dur_cyc_x1000 = 0u;
+uint32_t g_qc_last_ms = 0u;
+bool     g_qc_have_last = false;
 
 // ── Estado do prime pulse (ISR-safe) ──────────────────────────────────────────
 volatile uint8_t  g_prime_tooth_count = 0u;   ///< Dentes contados desde cranking
@@ -60,25 +37,9 @@ volatile uint32_t g_prime_pw_us       = 0u;   ///< PW calculada para disparo
 int16_t           g_prime_clt_x10    = 900;   ///< CLT mais recente (do loop de fundo)
 uint16_t          g_prime_dead_time_us = 900u; ///< Dead time mais recente, corr. por Vbatt
 
-uint16_t interp_u16(const P2* table, uint8_t n, int16_t x) noexcept {
-    if (x <= table[0].x) {
-        return table[0].y;
-    }
-    if (x >= table[n - 1u].x) {
-        return table[n - 1u].y;
-    }
-    for (uint8_t i = 0u; i < (n - 1u); ++i) {
-        if (x <= table[i + 1u].x) {
-            const int32_t x0 = table[i].x;
-            const int32_t x1 = table[i + 1u].x;
-            const int32_t y0 = table[i].y;
-            const int32_t y1 = table[i + 1u].y;
-            const int32_t dx = static_cast<int32_t>(x) - x0;
-            const int32_t span = x1 - x0;
-            return static_cast<uint16_t>(y0 + ((y1 - y0) * dx) / span);
-        }
-    }
-    return table[n - 1u].y;
+uint16_t crank_curve(const uint16_t* table, int16_t clt_x10) noexcept {
+    return ems::engine::interp_u16_8pt(ems::engine::ms42.crank_clt_axis_x10, table,
+                                       kCrankPts, clt_x10);
 }
 
 uint16_t sanitized_crank_exit_rpm_x10() noexcept {
@@ -136,21 +97,52 @@ uint16_t sanitized_prime_max_pw_us() noexcept {
     return max_pw;
 }
 
+// Decai em ms ou, com afterstart_by_cycles (MS42), em ciclos do motor —
+// coerente com qualquer rotação de marcha lenta.
 uint16_t afterstart_mult_x256(uint32_t now_ms, int16_t clt_x10) noexcept {
-    if (g_afterstart_duration_ms == 0u) {
+    uint32_t elapsed = 0u;
+    uint32_t duration = 0u;
+    if (ems::engine::ms42.afterstart_by_cycles != 0u) {
+        elapsed = g_afterstart_cyc_x1000;
+        duration = g_afterstart_dur_cyc_x1000;
+    } else {
+        elapsed = now_ms - g_afterstart_start_ms;
+        duration = g_afterstart_duration_ms;
+    }
+    if (duration == 0u || elapsed >= duration) {
         return 256u;
     }
-    const uint32_t elapsed = now_ms - g_afterstart_start_ms;
-    if (elapsed >= g_afterstart_duration_ms) {
+    const uint16_t start = crank_curve(ems::engine::ms42.afterstart_start_x256, clt_x10);
+    if (start <= 256u) {
         return 256u;
     }
-    const uint16_t start = interp_u16(
-        kAfterstartMultStart,
-        static_cast<uint8_t>(sizeof(kAfterstartMultStart) / sizeof(kAfterstartMultStart[0])),
-        clt_x10);
-    const uint32_t decay = static_cast<uint32_t>(start - 256u) * elapsed;
-    const uint32_t mult = static_cast<uint32_t>(start) - (decay / g_afterstart_duration_ms);
+    const uint64_t decay = static_cast<uint64_t>(start - 256u) * elapsed;
+    const uint32_t mult = static_cast<uint32_t>(start) - static_cast<uint32_t>(decay / duration);
     return static_cast<uint16_t>(ems::engine::clamp_u32(mult, 256u, 512u));
+}
+
+// Multiplicador de partida (MS42 S04): base por CLT × redução pelos ciclos
+// já dados × repartida a quente × baro. Também usado pelo prime pulse.
+uint32_t crank_fuel_mult_x256(int16_t clt_x10, uint32_t crank_cyc_x1000) noexcept {
+    const ems::engine::Ms42Cal& c = ems::engine::ms42;
+    uint32_t mult = crank_curve(c.crank_mult_x256, clt_x10);
+    if (c.crank_taper_cycles != 0u) {
+        const uint32_t span = static_cast<uint32_t>(c.crank_taper_cycles) * 1000u;
+        const uint32_t done = (crank_cyc_x1000 > span) ? span : crank_cyc_x1000;
+        const uint32_t pct_x1000 = 100000u -
+            ((100u - c.crank_taper_end_pct) * done * 1000u) / span;  // 100 %→end
+        mult = (mult * pct_x1000) / 100000u;
+    }
+    if (clt_x10 >= c.hot_restart_clt_x10) {
+        mult = (mult * c.hot_restart_pct) / 100u;
+    }
+    if (c.crank_baro_enable != 0u) {
+        const uint32_t baro = ems::engine::fuel_get_baro_bar_x100();
+        if (baro >= 50u && baro <= 110u) {
+            mult = (mult * baro) / kBaroRefBarX100;
+        }
+    }
+    return ems::engine::clamp_u32(mult, 64u, 2048u);
 }
 
 static inline void enter_critical() noexcept {
@@ -203,10 +195,7 @@ void prime_on_tooth(const CkpSnapshot& snap) noexcept {
 
     // Dente-alvo: calcula PW usando a tabela de enriquecimento de cranking,
     // CLT e dead time mais recentes atualizados pelo loop de fundo.
-    const uint32_t mult = interp_u16(
-        kCrankFuelMult,
-        static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
-        g_prime_clt_x10);
+    const uint32_t mult = crank_fuel_mult_x256(g_prime_clt_x10, 0u);
     // REQ_FUEL from the configured engine (NVM), not the compile-time default.
     uint32_t pw = ((ems::engine::default_req_fuel_us() * static_cast<uint32_t>(mult)) >> 8u) +
         static_cast<uint32_t>(g_prime_dead_time_us);
@@ -230,6 +219,11 @@ void quick_crank_reset() noexcept {
     g_afterstart_active = false;
     g_afterstart_start_ms = 0u;
     g_afterstart_duration_ms = 0u;
+    g_crank_cyc_x1000 = 0u;
+    g_afterstart_cyc_x1000 = 0u;
+    g_afterstart_dur_cyc_x1000 = 0u;
+    g_qc_last_ms = 0u;
+    g_qc_have_last = false;
     g_prime_tooth_count = 0u;
     g_prime_done        = false;
     g_prime_pending     = false;
@@ -250,7 +244,15 @@ QuickCrankOutput quick_crank_update(uint32_t now_ms,
     const bool cranking = detect_cranking(rpm_x10, sync_available);
     out.cranking = cranking;
 
+    // Ciclos (2 voltas) desde o último update: rpm×10 · dt_ms / 1 200 000,
+    // contados ×1000.
+    const uint32_t dt_ms = g_qc_have_last ? (now_ms - g_qc_last_ms) : 0u;
+    g_qc_last_ms = now_ms;
+    g_qc_have_last = true;
+    const uint32_t dcyc_x1000 = (dt_ms < 1000u) ? (rpm_x10 * dt_ms) / 1200u : 0u;
+
     if (rpm_x10 == 0u) {
+        g_crank_cyc_x1000 = 0u;
         g_prime_tooth_count = 0u;
         g_prime_done = false;
         g_prime_pending = false;
@@ -260,19 +262,22 @@ QuickCrankOutput quick_crank_update(uint32_t now_ms,
     if (cranking) {
         out.spark_deg = crank_spark_deg;
         out.min_pw_us = crank_min_pw_us;
-        out.fuel_mult_x256 = interp_u16(
-            kCrankFuelMult,
-            static_cast<uint8_t>(sizeof(kCrankFuelMult) / sizeof(kCrankFuelMult[0])),
-            clt_x10);
+        g_crank_cyc_x1000 += dcyc_x1000;
+        out.fuel_mult_x256 = static_cast<uint16_t>(
+            crank_fuel_mult_x256(clt_x10, g_crank_cyc_x1000));
         g_afterstart_duration_ms = 0u;
+        g_afterstart_dur_cyc_x1000 = 0u;
     } else {
         if (g_prev_cranking && rpm_x10 >= sanitized_crank_exit_rpm_x10()) {
             g_afterstart_start_ms = now_ms;
-            g_afterstart_duration_ms = interp_u16(
-                kAfterstartDurationMs,
-                static_cast<uint8_t>(sizeof(kAfterstartDurationMs) / sizeof(kAfterstartDurationMs[0])),
-                clt_x10);
+            g_afterstart_duration_ms = crank_curve(ms42.afterstart_ms, clt_x10);
+            g_afterstart_cyc_x1000 = 0u;
+            g_afterstart_dur_cyc_x1000 =
+                static_cast<uint32_t>(crank_curve(ms42.afterstart_cycles, clt_x10)) * 1000u;
+        } else {
+            g_afterstart_cyc_x1000 += dcyc_x1000;
         }
+        g_crank_cyc_x1000 = 0u;
         const uint16_t as_mult = afterstart_mult_x256(now_ms, clt_x10);
         out.afterstart_active = (as_mult > 256u);
         out.fuel_mult_x256 = as_mult;

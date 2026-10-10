@@ -340,6 +340,7 @@ int main(void) {
     test_ms42_dfco_curve_delay();
     test_ms42_rev_roll_cut();
     test_ms42_spark_gradient();
+    test_ms42_crank_afterstart();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");
