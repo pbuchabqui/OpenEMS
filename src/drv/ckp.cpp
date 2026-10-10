@@ -92,6 +92,11 @@ namespace ems::drv {
     extern volatile uint32_t g_dbg_loss_stall;
     extern volatile uint32_t g_dbg_loss_avg;
     extern volatile uint32_t g_dbg_loss_delta;
+
+    // Instant RPM 360°: timestamp TIM5 do mesmo slot de dente na volta anterior +
+    // último dt de volta completa (escrito só na ISR; leitura atómica de u32).
+    static uint32_t g_tooth_rev_ts[58];  // kRealTeethPerRev (definido abaixo)
+    static volatile uint32_t g_instant_rev_dt_ticks = 0u;
 }
 
 namespace {
@@ -321,10 +326,28 @@ inline Edge classify_edge(uint32_t delta) noexcept {
     return Edge::TOOTH;
 }
 
+// Running sync losses (wrong tooth count, missed gap, noise burst) — not
+// stalls. Read by the main loop for CKP_SIGNAL_FAULT (MS42 c_abc_*).
+static volatile uint32_t s_ckp_sync_losses = 0u;
+// Cam-absent fallbacks taken in FULL_SYNC — read for CMP_SIGNAL_FAULT.
+static volatile uint32_t s_cmp_timeouts = 0u;
+
+inline void clear_instant_rpm() noexcept {
+    ems::drv::g_instant_rev_dt_ticks = 0u;
+    for (uint16_t i = 0u; i < kRealTeethPerRev; ++i) {
+        ems::drv::g_tooth_rev_ts[i] = 0u;
+    }
+}
+
 inline void drop_sync() noexcept {
     g_state.snap.state = ems::drv::SyncState::LOSS_OF_SYNC;
     g_state.tooth_count = 0u;
+    // A cam edge seen before the loss must not set the phase at the first
+    // gap after it, and per-tooth timestamps must not span the loss.
+    g_state.cmp_phase_pending = 0u;
+    clear_instant_rpm();
     close_cmp_seq_gate();
+    s_ckp_sync_losses = s_ckp_sync_losses + 1u;
 }
 
 // ── Seção crítica ARM Cortex-M4 ──────────────────────────────────────────────
@@ -425,6 +448,7 @@ inline bool process_gap_event(uint32_t delta) noexcept {
             if (s_revs_since_cmp < 0xFFFFu) { ++s_revs_since_cmp; }
             if (s_revs_since_cmp >= max_revs_without_cmp() && g_state.cmp_confirms != 0u) {
                 close_cmp_seq_gate();
+                s_cmp_timeouts = s_cmp_timeouts + 1u;
             }
             break;
     }
@@ -468,11 +492,6 @@ volatile uint32_t g_dbg_loss_hist_mn = 0u;
 volatile uint32_t g_dbg_loss_hist_mx = 0u;
 // Dentes descartados pelo skip pós-silêncio (ckp_skip_pulses_after_gap).
 volatile uint32_t g_dbg_skip_after_silence = 0u;
-
-// Instant RPM 360°: timestamp TIM5 do mesmo slot de dente na volta anterior +
-// último dt de volta completa (escrito só na ISR; leitura atómica de u32).
-static uint32_t g_tooth_rev_ts[58];  // kRealTeethPerRev (definido abaixo)
-static volatile uint32_t g_instant_rev_dt_ticks = 0u;
 
 // Osciloscópio CKP/CMP: rings de timestamps TIM5 das bordas cruas (pré-filtro).
 // 64 bordas CKP ≈ 1.1 revolução — cobre um gap inteiro; 8 CMP ≈ 4 ciclos de came.
@@ -751,7 +770,10 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     const uint32_t prev_period_ticks = g_state.ref_ticks;
     // First edge after boot/stall: arm timestamp only — no phase/confirm until
     // a second edge passes the temporal window (floating CMP one-shot).
-    if (s_prev_cmp_capture == 0u) {
+    // Without an angular reference (WAIT_GAP / LOSS_OF_SYNC) tooth_index is
+    // meaningless: arm the timestamp only, so the first edge in sync still
+    // passes the temporal gate, but never confirm or set the phase from it.
+    if (s_prev_cmp_capture == 0u || !is_synced()) {
         s_prev_cmp_capture = cmp_capture_now;
         return;
     }
@@ -911,10 +933,8 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
         s_revs_since_cmp = 0u;
         // Instant RPM: motor parado → dt inválido; limpa também os timestamps
         // por dente para o resync não medir contra bordas da sessão anterior.
-        g_instant_rev_dt_ticks = 0u;
-        for (uint16_t i = 0u; i < kRealTeethPerRev; ++i) {
-            g_tooth_rev_ts[i] = 0u;
-        }
+        g_state.cmp_phase_pending = 0u;
+        clear_instant_rpm();
         transitioned = true;
     }
     exit_critical();
@@ -923,6 +943,11 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
 
 uint32_t ckp_get_cmp_glitch_count() noexcept {
     return g_state.cmp_glitch_count;
+}
+
+void ckp_signal_fault_counts(uint32_t& ckp_sync_losses, uint32_t& cmp_timeouts) noexcept {
+    ckp_sync_losses = s_ckp_sync_losses;
+    cmp_timeouts = s_cmp_timeouts;
 }
 
 uint8_t ckp_get_cmp_ref_tooth() noexcept {
@@ -964,6 +989,8 @@ void ckp_test_reset() noexcept {
     s_skip_remaining = 0u;
     s_cam_angle_x10 = 0u;
     s_cam_edge_seq = 0u;
+    s_ckp_sync_losses = 0u;
+    s_cmp_timeouts = 0u;
 }
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {

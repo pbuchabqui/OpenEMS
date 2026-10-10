@@ -167,6 +167,7 @@ void test_ckp_lost_tooth_loses_sync(void);
 void test_ckp_noise_never_adds_or_loses_teeth(void);
 void test_ckp_noise_after_tooth_keeps_real_edge(void);
 void test_ckp_acquisition_gap_window(void);
+void test_ckp_cmp_hygiene(void);
 void test_ckp_phase_toggle(void);
 void test_crc32_vectors(void);
 void test_legacy_protocol_regression(void);
@@ -217,6 +218,7 @@ void test_engine_calc_pw_matches_physics(void);
 void test_engine_calc_advance_and_timing_light(void);
 void test_engine_calc_cranking(void);
 void test_engine_calc_cuts(void);
+void test_engine_calc_signal_dtcs(void);
 
 // test_ms42.cpp
 void test_ms42_page0_block(void);

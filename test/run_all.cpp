@@ -277,6 +277,7 @@ int main(void) {
     test_ckp_noise_never_adds_or_loses_teeth();
     test_ckp_noise_after_tooth_keeps_real_edge();
     test_ckp_acquisition_gap_window();
+    test_ckp_cmp_hygiene();
     test_ckp_phase_toggle();
 
     // ── UI PROTOCOL / TUNERSTUDIO ENVELOPE ────────────────────────────────
@@ -332,6 +333,7 @@ int main(void) {
     test_engine_calc_advance_and_timing_light();
     test_engine_calc_cranking();
     test_engine_calc_cuts();
+    test_engine_calc_signal_dtcs();
 
     printf("\n=== MS42 (estrategias portadas) ===");
     test_ms42_page0_block();

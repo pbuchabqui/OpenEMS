@@ -2,6 +2,7 @@
 // sensors and calibration tables to what reaches the scheduler. The expected
 // values come from physics written out here, not from the code under test.
 #include "test/harness.h"
+#include "test/fixtures.h"
 
 #include <cmath>
 #include <cstdint>
@@ -13,6 +14,7 @@
 #include "engine/calibration.h"
 #include "engine/ecu_sched.h"
 #include "engine/engine_calc.h"
+#include "engine/diagnostic_manager.h"
 #include "engine/engine_config.h"
 #include "engine/fuel_calc.h"
 #include "engine/fuel_trim.h"
@@ -212,4 +214,44 @@ void test_engine_calc_cuts(void) {
     CHECK_EQ(out.pw_ms_x10, 0u, "fuel shown as cut");
     CHECK_TRUE(out.committed && out.spark_x10 > 0, "spark still committed");
     tables_restore();
+}
+
+void test_engine_calc_signal_dtcs(void) {
+    section("engine_calc: CKP/CMP signal DTCs from decoder counters (MS42 c_abc_*)");
+    reset_all();
+    DiagnosticManager::init();
+    ckp_reach_full_sync();
+    uint32_t t = 0u;
+    run(t, 0.01, 2000u, 40u, 0u);                    // primes the window
+    for (int i = 0; i < 2; ++i) {
+        ckp_fire(2u * kNormalPeriod);                // misplaced gap -> loss
+        ckp_feed_n_then_gap(kWheelNormalTeeth);      // re-acquire (HALF_SYNC)
+    }
+    run(t, 0.01, 2000u, 40u, 0u);
+    CHECK_TRUE(!DiagnosticManager::is_fault_active(DiagnosticCode::CKP_SIGNAL_FAULT),
+               "2 losses: no CKP DTC");
+    ckp_fire(2u * kNormalPeriod);
+    run(t, 0.01, 2000u, 40u, 0u);
+    CHECK_TRUE(DiagnosticManager::is_fault_active(DiagnosticCode::CKP_SIGNAL_FAULT),
+               "3 losses in 10 s: CKP_SIGNAL_FAULT");
+    run(t, 21.0, 2000u, 40u, 0u);                    // two clean windows in FULL_SYNC
+    CHECK_TRUE(!DiagnosticManager::is_fault_active(DiagnosticCode::CKP_SIGNAL_FAULT),
+               "clean window: CKP DTC cleared");
+
+    ckp_reach_full_sync();                           // host reset zeroes the counters
+    engine_calc_reset();
+    run(t, 0.01, 2000u, 40u, 0u);                    // re-prime
+    const uint32_t cam0 = g_ckp_cap + kNormalPeriod * 58u;
+    cam_fire(cam0);
+    cam_fire(cam0 + kNormalPeriod * 116u);           // confirm 1
+    for (int i = 0; i < 7; ++i) { ckp_feed_n_then_gap(kWheelNormalTeeth); }
+    t += 2u;                                         // one step, cam still unconfirmed
+    EngineCalcIn in = input_at(t, 2000u, 40u, 0u);
+    in.snap.cmp_confirms = 0u;
+    engine_calc_step(in);
+    CHECK_TRUE(DiagnosticManager::is_fault_active(DiagnosticCode::CMP_SIGNAL_FAULT),
+               "cam lost for 6 revs: CMP_SIGNAL_FAULT");
+    run(t, 0.01, 2000u, 40u, 0u);                    // input snap has cmp_confirms=2
+    CHECK_TRUE(!DiagnosticManager::is_fault_active(DiagnosticCode::CMP_SIGNAL_FAULT),
+               "cam re-confirmed: CMP DTC cleared");
 }

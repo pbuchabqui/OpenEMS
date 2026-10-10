@@ -112,11 +112,60 @@ void commit(int16_t spark_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
     s_out.inj_pw_ticks = inj_pw_ticks;
 }
 
+// Signal DTCs (MS42 c_abc_* counters): CKP_SIGNAL_FAULT after
+// kCkpLossesForDtc running sync losses inside one kSignalDiagWindowMs window,
+// cleared by a clean window in FULL_SYNC; CMP_SIGNAL_FAULT whenever the cam
+// fallback fires, cleared once the cam re-confirms.
+constexpr uint32_t kSignalDiagWindowMs = 10000u;
+constexpr uint32_t kCkpLossesForDtc = 3u;
+struct SignalDiagState {
+    uint32_t window_start_ms;
+    uint32_t window_base_losses;
+    uint32_t last_cmp_timeouts;
+    bool     primed;
+};
+SignalDiagState s_sig{};
+
+void signal_diag_update(uint32_t now_ms, bool full_sync, uint8_t cmp_confirms) noexcept {
+    uint32_t losses = 0u;
+    uint32_t cmp_timeouts = 0u;
+    ems::drv::ckp_signal_fault_counts(losses, cmp_timeouts);
+    if (!s_sig.primed) {
+        s_sig.primed = true;
+        s_sig.window_start_ms = now_ms;
+        s_sig.window_base_losses = losses;
+        s_sig.last_cmp_timeouts = cmp_timeouts;
+        return;
+    }
+    const uint32_t in_window = losses - s_sig.window_base_losses;
+    if (in_window >= kCkpLossesForDtc) {
+        DiagnosticManager::report_fault(DiagnosticCode::CKP_SIGNAL_FAULT,
+            FaultSeverity::ERROR,
+            static_cast<uint16_t>(in_window > 0xFFFFu ? 0xFFFFu : in_window), 0u);
+    }
+    if (now_ms - s_sig.window_start_ms >= kSignalDiagWindowMs) {
+        if (in_window == 0u && full_sync) {
+            DiagnosticManager::clear_fault(DiagnosticCode::CKP_SIGNAL_FAULT);
+        }
+        s_sig.window_start_ms = now_ms;
+        s_sig.window_base_losses = losses;
+    }
+    if (cmp_timeouts != s_sig.last_cmp_timeouts) {
+        s_sig.last_cmp_timeouts = cmp_timeouts;
+        DiagnosticManager::report_fault(DiagnosticCode::CMP_SIGNAL_FAULT,
+            FaultSeverity::WARNING,
+            static_cast<uint16_t>(cmp_timeouts & 0xFFFFu), 0u);
+    } else if (full_sync && cmp_confirms >= 2u) {
+        DiagnosticManager::clear_fault(DiagnosticCode::CMP_SIGNAL_FAULT);
+    }
+}
+
 }  // namespace
 
 void engine_calc_reset() noexcept {
     s_out = {};
     g_fuel_corr_cache = {};
+    s_sig = {};
 }
 
 const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
@@ -183,6 +232,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         DiagnosticManager::clear_fault(
             DiagnosticCode::OVERTEMP_WARNING);
     }
+    signal_diag_update(in.now_ms, full_sync, snap.cmp_confirms);
     const bool diag_critical =
         !DiagnosticManager::is_system_ready();
     s_out.limp_active = map_fault || clt_fault || oil_fault || overtemp_warn;
@@ -279,7 +329,10 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     gate_in.cranking = qc.cranking;
     gate_in.full_sync = full_sync;
     gate_in.half_sync = half_sync;
-    gate_in.phase_valid = true;
+    // A sequential angle table is only valid with a CKP angle reference
+    // (FULL_SYNC); a cam blip alone keeps the phase (it only moves at a
+    // validated edge), so it must not cut here.
+    gate_in.phase_valid = full_sync || ::ecu_sched_is_sequential() == 0u;
     gate_in.sequential = ::ecu_sched_is_sequential() != 0u;
     gate_in.etb_fault = etb_fault;
     gate_in.inj_duty_pct = static_cast<uint8_t>(

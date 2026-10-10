@@ -87,6 +87,10 @@ void ckp_tim5_ch2_isr() noexcept;   ///< Cam sensor rising edge (TIM5 CH2 / PA1)
 
 uint32_t ckp_get_cmp_glitch_count() noexcept;
 
+// Monotonic counters for signal DTCs: running CKP sync losses (stalls not
+// counted) and cam-absent fallbacks taken in FULL_SYNC.
+void ckp_signal_fault_counts(uint32_t& ckp_sync_losses, uint32_t& cmp_timeouts) noexcept;
+
 // DIAG: valores internos de classify_tooth (expostos para snapshot)
 extern volatile uint32_t g_diag_tn1;
 extern volatile uint32_t g_diag_tn2;

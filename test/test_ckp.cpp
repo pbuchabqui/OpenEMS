@@ -471,3 +471,26 @@ void test_ckp_acquisition_gap_window(void) {
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::HALF_SYNC), "3x gap → HALF_SYNC");
 }
+
+void test_ckp_cmp_hygiene(void) {
+    section("ckp: cam edges without sync never confirm; a loss drops a pending phase");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    for (uint32_t i = 0u; i < 2u; ++i) { ckp_fire(kNormalPeriod); }
+    cam_fire(g_ckp_cap);
+    cam_fire(g_ckp_cap + kNormalPeriod * 120u);
+    CHECK_EQ(ckp_snapshot().cmp_confirms, 0u, "WAIT_GAP: no cam confirmation");
+
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_reach_full_sync();
+    const bool phase0 = ckp_snapshot().phase_A;
+    const uint32_t cam_arm = g_ckp_cap + kNormalPeriod * 58u;
+    cam_fire(cam_arm);
+    cam_fire(cam_arm + kNormalPeriod * 116u);       // validated: phase pending
+    for (uint32_t i = 0u; i < 10u; ++i) { ckp_fire(kNormalPeriod); }
+    ckp_fire(2u * kNormalPeriod);                   // loss before the gap
+    ckp_feed_n_then_gap(kWheelNormalTeeth);         // HALF_SYNC again
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::HALF_SYNC), "re-acquired");
+    CHECK_EQ(ckp_snapshot().phase_A, !phase0, "stale cam phase not applied: plain toggle");
+    CHECK_EQ(ckp_instant_rpm_x10(), 0u, "instant rpm cleared by the loss");
+}
