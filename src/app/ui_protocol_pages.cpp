@@ -26,6 +26,7 @@
 #include "hal/crc32.h"
 #include "hal/flash.h"
 #include "engine/engine_config.h"
+#include "engine/ms42_cal.h"
 
 // page0 layout guards: CAN RX map 216..251 | duty/DFCO/knock 252..257 |
 // capture polarity 258 | DFCO ramp 259..260 | MAP window 264..269.
@@ -37,6 +38,8 @@ static_assert(kPage0MapWindowOff >= ems::engine::kDecelCutRampMsPage0Off + 2u,
               "MAP window overlaps DFCO ramp / capture polarity");
 static_assert(ems::engine::kTimingPage0Off >= kPage0MapWindowOff + 6u &&
               ems::engine::kTimingPage0Off + 6u <= 512u, "timing light overlaps page0");
+static_assert(ems::engine::kMs42Page0Off >= ems::engine::kTimingPage0Off + 6u,
+              "MS42 block overlaps timing light");
 static_assert(ems::app::kCanRxMapPage0Off + ems::app::kCanRxMapPage0Len <= 252u,
               "CAN RX map overlaps page0 bytes 252+");
 static_assert(kPage0MapWindowOff + 6u <= 512u, "MAP window outside page0");
@@ -459,6 +462,8 @@ void sync_page_from_table(uint8_t page) noexcept {
         ems::engine::serialize_page0_timing(g_page0, sizeof(g_page0));
         std::memcpy(g_page0 + ems::engine::kDecelCutRampMsPage0Off,
                     &ems::engine::decel_cut_ramp_ms, 2u);
+        // Estratégias MS42 (276+), bloco com magic próprio.
+        ems::engine::ms42_serialize_to_page0(g_page0, sizeof(g_page0));
     } else if (page == 0x01u) {
         std::memcpy(g_page1_ve, ems::engine::ve_table, sizeof(g_page1_ve));
     } else if (page == 0x02u) {
@@ -715,6 +720,9 @@ bool sync_table_from_page(uint8_t page) noexcept {
             std::memcpy(&ems::engine::decel_cut_ramp_ms,
                         g_page0 + ems::engine::kDecelCutRampMsPage0Off, 2u);
         }
+        // Estratégias MS42 (276+): fora do gate de layout — o bloco tem magic
+        // próprio; sem ele (blob antigo) ficam os defaults de compilação.
+        ems::engine::ms42_apply_page0(g_page0, sizeof(g_page0));
         etb_apply_idle_calibration();
     } else if (page == 0x01u) {
         std::memcpy(ems::engine::ve_table, g_page1_ve, sizeof(g_page1_ve));

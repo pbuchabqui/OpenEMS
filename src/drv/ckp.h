@@ -139,6 +139,11 @@ extern volatile uint8_t  g_scope_cmp_idx;
 // tooth_index âncora da última borda CMP aceite (0xFF = não-ancorado).
 uint8_t ckp_get_cmp_ref_tooth() noexcept;
 
+// Fase medida do came (VVT de admissão): ângulo de virabrequim ×10 (0..3599)
+// da última borda CMP validada, a partir do gap. Retorna o contador de bordas
+// medidas (0 = nenhuma ainda; muda a cada borda nova).
+uint32_t ckp_cam_edge_angle(uint16_t& angle_x10) noexcept;
+
 // Instant RPM 360° (estilo rusEFI): rpm×10 medido entre o MESMO dente de
 // voltas consecutivas — imune ao erro de geometria da roda. 0 = sem medida
 // (pré-sync, stall, ou 1ª volta). Consumir só com FULL_SYNC estável.

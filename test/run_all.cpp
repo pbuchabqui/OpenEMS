@@ -332,6 +332,10 @@ int main(void) {
     test_engine_calc_cranking();
     test_engine_calc_cuts();
 
+    printf("\n=== MS42 (estrategias portadas) ===");
+    test_ms42_page0_block();
+    test_ms42_vvt_measured_phase();
+
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");
     printf("Results: %d PASS  %d FAIL\n", g_pass, g_fail);

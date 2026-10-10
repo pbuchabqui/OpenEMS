@@ -1,0 +1,114 @@
+#pragma once
+
+// Calibração das estratégias portadas da Siemens MS42 (VVT de admissão com
+// fase medida, VBATT filtrada, DFCO por CLT, corte rotativo, gradiente de
+// avanço, partida/pós-partida, knock relativo ao ruído, marcha lenta P+FF,
+// ganhos do STFT por rpm×carga, ventoinha).
+//
+// Vive na page0 a partir de kMs42Page0Off, em ordem fixa (ver ms42_cal.cpp),
+// guardada por um magic: blob antigo sem o magic → defaults de compilação.
+// Os defaults preservam o comportamento anterior sempre que já existia uma
+// estratégia equivalente (as novas ficam desligadas até serem calibradas).
+
+#include <cstdint>
+
+namespace ems::engine {
+
+constexpr uint16_t kMs42Page0Off   = 276u;
+constexpr uint16_t kMs42Magic      = 0x344Du;  // "M4"
+constexpr uint8_t  kMs42BlockVer   = 1u;
+
+constexpr uint8_t kVvtCalPts       = 6u;
+constexpr uint8_t kDfcoCltPts      = 4u;
+constexpr uint8_t kCrankCalPts     = 7u;
+constexpr uint8_t kKnockGainPts    = 4u;
+constexpr uint8_t kIdleFfPts       = 8u;   // eixo = iac_clt_axis_x10
+constexpr uint8_t kStftGainPts     = 4u;
+
+struct Ms42Cal {
+    // ── A1: VVT de admissão (fase medida pelo CMP) ──────────────────────
+    uint8_t  vvt_enable;           // 0 = solenoide em repouso (duty 0)
+    uint8_t  vvt_kp_x10;           // ‰ duty por 0,1° de erro, ×10
+    uint8_t  vvt_ki_x100;          // ‰ duty por 0,1° de erro por 10 ms, ×100
+    uint8_t  vvt_hold_duty_pct;    // duty de retenção (base do PI)
+    uint16_t vvt_cam_ref_x10;      // ângulo de repouso da borda; 0 = aprende
+    int16_t  vvt_min_clt_x10;      // abaixo disto: repouso (óleo frio)
+    uint8_t  vvt_max_adv_deg;      // limite de avanço pedido (° virabrequim)
+    uint8_t  vvt_rpm_axis[kVvtCalPts];    // rpm/100
+    uint8_t  vvt_load_axis[kVvtCalPts];   // kPa
+    uint8_t  vvt_target_deg[kVvtCalPts][kVvtCalPts];  // [carga][rpm], ° avanço
+
+    // ── A3: VBATT ────────────────────────────────────────────────────────
+    uint8_t  vbatt_filter_shift;   // IIR α = 1/2^n (0 = sem filtro)
+    uint16_t vbatt_low_mv;         // DTC baixa (motor a trabalhar); 0 = off
+    uint16_t vbatt_high_mv;        // DTC alta; 0 = off
+
+    // ── B4: DFCO por CLT ─────────────────────────────────────────────────
+    int16_t  dfco_clt_axis_x10[kDfcoCltPts];
+    uint16_t dfco_entry_rpm_x10[kDfcoCltPts];  // todos 0 = escalares antigos
+    uint16_t dfco_hyst_rpm_x10;    // saída = entrada − histerese (só c/ curva)
+    uint16_t dfco_entry_delay_ms;  // condições estáveis antes de cortar
+
+    // ── B5: corte rotativo de injeção ────────────────────────────────────
+    uint8_t  rev_roll_enable;
+    uint16_t rev_roll_window_rpm_x10;  // janela abaixo do limite duro
+
+    // ── B6: gradiente do avanço (°×10 por volta; 0 = sem limite) ─────────
+    uint8_t  spark_grad_inc_x10;
+    uint8_t  spark_grad_dec_x10;
+
+    // ── B7/B8: partida e pós-partida ─────────────────────────────────────
+    uint8_t  crank_taper_cycles;   // 0 = off; ciclos até taper_end_pct
+    uint8_t  crank_taper_end_pct;
+    int16_t  hot_restart_clt_x10;
+    uint8_t  hot_restart_pct;      // 100 = sem correção
+    uint8_t  crank_baro_enable;    // escala o pulso de partida por baro
+    uint8_t  afterstart_by_cycles; // 0 = decai em ms; 1 = em ciclos do motor
+    int16_t  crank_clt_axis_x10[kCrankCalPts];
+    uint16_t crank_mult_x256[kCrankCalPts];
+    uint16_t afterstart_start_x256[kCrankCalPts];
+    uint16_t afterstart_ms[kCrankCalPts];
+    uint16_t afterstart_cycles[kCrankCalPts];
+
+    // ── C9: knock ────────────────────────────────────────────────────────
+    uint8_t  knock_step_x10;
+    uint8_t  knock_max_x10;
+    uint8_t  knock_recovery_x10;
+    uint8_t  knock_clean_cycles;
+    uint8_t  knock_rel_enable;     // limiar = ganho(rpm) × ruído do cilindro
+    uint8_t  knock_noise_shift;    // EMA do ruído α = 1/2^n
+    uint8_t  knock_gain_rpm_axis[kKnockGainPts];  // rpm/100
+    uint8_t  knock_gain_x10[kKnockGainPts];
+
+    // ── C10: marcha lenta ────────────────────────────────────────────────
+    uint8_t  idle_kp_x10;          // ‰ lâmina por 10 rpm de erro, ×10; 0 = off
+    uint8_t  idle_persist;         // guarda o aprendido entre partidas (RAM)
+    uint16_t idle_ff_x10[kIdleFfPts];  // abertura-base por CLT; 0 = off
+    uint16_t cat_heat_rpm_x10;     // acréscimo ao alvo após a partida
+    uint16_t cat_heat_s;           // duração do acréscimo
+
+    // ── C11: STFT ────────────────────────────────────────────────────────
+    uint8_t  stft_rpm_axis[kStftGainPts];   // rpm/100
+    uint8_t  stft_load_axis[kStftGainPts];  // kPa
+    uint8_t  stft_gain_pct[kStftGainPts][kStftGainPts];  // 100 = 1,0
+    uint16_t stft_min_rpm_x10;     // 0 = sem mínimo
+
+    // ── Ventoinha ────────────────────────────────────────────────────────
+    int16_t  fan_on_x10;
+    int16_t  fan_off_x10;
+};
+
+extern Ms42Cal ms42;
+
+void ms42_cal_defaults() noexcept;
+// Bytes ocupados na page0 (magic incluído) — para testes e static checks.
+uint16_t ms42_cal_page0_len() noexcept;
+void ms42_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept;
+// Sem o magic/versão → defaults. Valores fora de faixa são saneados.
+void ms42_apply_page0(const uint8_t* page0, uint16_t len) noexcept;
+
+// Interpolação linear 1-D em eixo u8 (rpm/100 ou kPa) com valores u8.
+uint16_t ms42_interp_u8(const uint8_t* axis, const uint8_t* vals, uint8_t n,
+                        uint16_t x) noexcept;
+
+}  // namespace ems::engine

@@ -284,6 +284,11 @@ static constexpr uint8_t kCmpRejectResync = 3u;
 // Dentes ainda por descartar pelo skip pós-silêncio (recarregado quando
 // delta ≥ timeout de stall e ckp_skip_pulses_after_gap > 0).
 static uint8_t s_skip_remaining = 0u;
+// Fase medida do came (VVT, MS42 S15): ângulo de virabrequim ×10 (0..3599) da
+// última borda CMP validada, contado a partir do gap — dente + fração do
+// período de referência. seq incrementa a cada borda (0 = nunca medido).
+static volatile uint16_t s_cam_angle_x10 = 0u;
+static volatile uint32_t s_cam_edge_seq = 0u;
 
 // After any CKP LOSS: require 2 fresh CMP edges before sequential (cmp_confirms>=2).
 // Also drop inter-edge CMP timestamp so a stale s_prev (many revs old) cannot
@@ -804,6 +809,18 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     }
 
     s_prev_cmp_capture = cmp_capture_now;
+    // Ângulo da borda: dente atual × 6° + fração desde a última borda CKP.
+    // Perto do gap o intervalo pode valer até 3 posições → limita a 18°.
+    if (g_state.snap.state == SyncState::FULL_SYNC && prev_period_ticks > 0u) {
+        const uint32_t since = cmp_capture_now - g_state.snap.last_tim5_capture;
+        uint64_t frac_x10 = (static_cast<uint64_t>(since) * 60u) / prev_period_ticks;
+        if (frac_x10 > 180u) { frac_x10 = 180u; }
+        uint32_t ang = static_cast<uint32_t>(g_state.snap.tooth_index) * 60u +
+                       static_cast<uint32_t>(frac_x10);
+        ang %= 3600u;
+        s_cam_angle_x10 = static_cast<uint16_t>(ang);
+        s_cam_edge_seq = s_cam_edge_seq + 1u;
+    }
     // CMP validated: defer phase correction to next gap to avoid mid-revolution split.
     // Store pre-toggle value: after XOR in advance_phase_half, result = kCmpRefHalf.
     g_state.cmp_phase_pending = 1u;
@@ -885,6 +902,14 @@ uint8_t ckp_get_cmp_ref_tooth() noexcept {
     return s_cmp_ref_tooth;
 }
 
+uint32_t ckp_cam_edge_angle(uint16_t& angle_x10) noexcept {
+    enter_critical();
+    angle_x10 = s_cam_angle_x10;
+    const uint32_t seq = s_cam_edge_seq;
+    exit_critical();
+    return seq;
+}
+
 uint32_t ckp_instant_rpm_x10() noexcept {
     const uint32_t dt = g_instant_rev_dt_ticks;
     if (dt == 0u) {
@@ -910,6 +935,8 @@ void ckp_test_reset() noexcept {
     s_cmp_ref_tooth = 0xFFu;
     s_cmp_reject_streak = 0u;
     s_skip_remaining = 0u;
+    s_cam_angle_x10 = 0u;
+    s_cam_edge_seq = 0u;
 }
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {

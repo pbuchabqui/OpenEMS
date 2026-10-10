@@ -216,3 +216,7 @@ void test_engine_calc_pw_matches_physics(void);
 void test_engine_calc_advance_and_timing_light(void);
 void test_engine_calc_cranking(void);
 void test_engine_calc_cuts(void);
+
+// test_ms42.cpp
+void test_ms42_page0_block(void);
+void test_ms42_vvt_measured_phase(void);

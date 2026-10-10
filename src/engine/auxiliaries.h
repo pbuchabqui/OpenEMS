@@ -11,6 +11,12 @@ void auxiliaries_tick_20ms() noexcept;
 uint16_t auxiliaries_idle_target_rpm_x10(int16_t clt_x10) noexcept;
 uint16_t auxiliaries_ewg_position_demand_x10() noexcept;
 
+// VVT de admissão: avanço medido (° virabrequim ×10, filtrado), alvo atual e
+// referência de repouso em uso (calibrada ou aprendida; 0 = sem referência).
+int16_t auxiliaries_vvt_advance_x10() noexcept;
+int16_t auxiliaries_vvt_target_x10() noexcept;
+uint16_t auxiliaries_vvt_ref_x10() noexcept;
+
 // Teste de saídas em bancada: forçamento directo dos relés (só faz sentido
 // com output_test activo — os ticks automáticos ficam suspensos nesse modo).
 void auxiliaries_force_pump(bool on) noexcept;
