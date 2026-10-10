@@ -82,7 +82,7 @@ struct Ms42Cal {
 
     // ── C10: marcha lenta ────────────────────────────────────────────────
     uint8_t  idle_kp_x10;          // ‰ lâmina por 10 rpm de erro, ×10; 0 = off
-    uint8_t  idle_persist;         // guarda o aprendido entre partidas (RAM)
+    uint8_t  idle_persist;         // aplica o aprendido retido (NVM, S20)
     uint16_t idle_ff_x10[kIdleFfPts];  // abertura-base por CLT; 0 = off
     uint16_t cat_heat_rpm_x10;     // acréscimo ao alvo após a partida
     uint16_t cat_heat_s;           // duração do acréscimo

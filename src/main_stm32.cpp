@@ -56,6 +56,7 @@ int main() { return 0; }
 #include "engine/output_test.h"
 #include "engine/diagnostic_manager.h"
 #include "engine/misfire_detect.h"
+#include "engine/adapt_retention.h"
 #include "engine/quick_crank.h"
 #include "engine/torque_manager.h"
 #include "engine/transient_fuel.h"
@@ -320,6 +321,8 @@ static void openems_init() noexcept {
         ems::engine::etb_autocal_start();
     }
     torque_manager_init();
+    // Depois de misfire_init() (zera os totais) e do load dos mapas adaptativos.
+    (void)ems::engine::adapt_retention_restore();
     iwdg_kick();
 
     // 7) Engine
@@ -619,6 +622,9 @@ int main() {
                 s_prev_rpm_nonzero = true;
             } else if (s_prev_rpm_nonzero) {
                 s_prev_rpm_nonzero = false;
+                // MS42 S20: retém o aprendido da marcha lenta e os totais
+                // de misfire (só dirty se mudaram) no mesmo flush.
+                ems::engine::adapt_retention_save();
                 ems::hal::nvm_request_adaptive_flush_now();
             }
         }

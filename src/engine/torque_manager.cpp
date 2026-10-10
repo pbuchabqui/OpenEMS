@@ -788,6 +788,20 @@ TorqueOutput torque_manager_update(
     return out;
 }
 
+bool torque_idle_learned_get(int16_t* ofs_x10) noexcept {
+    if (ofs_x10 == nullptr || !g_idle_learned_valid) { return false; }
+    int32_t v = g_idle_learned_ofs_x10;
+    if (v > 32767) { v = 32767; }
+    if (v < -32768) { v = -32768; }
+    *ofs_x10 = static_cast<int16_t>(v);
+    return true;
+}
+
+void torque_idle_learned_restore(int16_t ofs_x10) noexcept {
+    g_idle_learned_ofs_x10 = ofs_x10;
+    g_idle_learned_valid = true;
+}
+
 uint16_t torque_manager_get_target()      noexcept { return g_etb_target_x10; }
 uint8_t  torque_manager_get_limp_reason() noexcept { return g_limp_reason; }
 uint8_t  torque_manager_get_launch_active() noexcept { return g_launch_active_latched; }

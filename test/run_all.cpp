@@ -352,6 +352,7 @@ int main(void) {
     test_ms42_ext_block_cat_retard();
     test_ms42_afterstart_pw_fall();
     test_ms42_misfire_threshold_table();
+    test_ms42_adapt_retention();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

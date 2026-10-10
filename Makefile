@@ -81,6 +81,7 @@ ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/etb_autocal.cpp \
              $(SRC_DIR)/engine/torque_manager.cpp \
              $(SRC_DIR)/engine/misfire_detect.cpp \
+             $(SRC_DIR)/engine/adapt_retention.cpp \
              $(SRC_DIR)/engine/ewg_control.cpp \
              $(SRC_DIR)/engine/limp_gating.cpp
 

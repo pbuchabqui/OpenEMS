@@ -53,6 +53,34 @@ bool nvm_save_etb_cal(const EtbCalRecord* rec) noexcept;
 // Lê shadow (se válido) ou flash; false se ausente/CRC inválido.
 bool nvm_load_etb_cal(EtbCalRecord* out) noexcept;
 
+// ── Adaptações retidas (MS42 S20) ────────────────────────────────────────────
+// Aprendido da marcha lenta e totais de misfire por cilindro. 32 bytes com
+// CRC próprio logo após o EtbCalRecord; co-escrito com os mapas adaptativos
+// (o flush só corre com o motor parado/abaixo de kFlashWriteSafeRpmX10).
+constexpr uint32_t kNvmAdaptOffset = kNvmEtbCalOffset + 16u;
+constexpr uint8_t  kAdaptFlagIdleValid = 0x01u;
+struct AdaptRecord {
+    uint16_t magic;            // ADAPT_RECORD_MAGIC
+    uint8_t  version;          // ADAPT_RECORD_VERSION
+    uint8_t  flags;            // kAdaptFlagIdleValid
+    int16_t  idle_learned_x10; // integrador − abertura-base (‰ lâmina ×10)
+    uint16_t reserved0;
+    uint16_t misfire_total[4]; // eventos confirmados por cilindro (saturado)
+    uint8_t  reserved[12];
+    uint32_t crc32;            // CRC-32 dos 28 bytes anteriores
+};
+static_assert(sizeof(AdaptRecord) == 32u, "AdaptRecord deve ter 32 bytes");
+constexpr uint16_t ADAPT_RECORD_MAGIC   = 0x4441u;  // "AD"
+constexpr uint8_t  ADAPT_RECORD_VERSION = 1u;
+
+// Sela (magic/versão/CRC) e guarda no shadow; só marca dirty se o conteúdo
+// mudou (sem desgaste da flash a cada paragem). Não força o flush.
+bool nvm_save_adapt(const AdaptRecord* rec) noexcept;
+// Lê shadow (se válido) ou flash; false se ausente/CRC inválido.
+bool nvm_load_adapt(AdaptRecord* out) noexcept;
+// Pura: magic + versão + CRC.
+bool nvm_adapt_record_ok(const AdaptRecord& rec) noexcept;
+
 // Valida layout: magic LTF3 + CRC dos mapas. Pura (testável em host).
 bool nvm_adaptive_sector_valid(const uint8_t* sector) noexcept;
 // CRC-32 do payload adaptativo [0 .. kNvmOffLayoutMagic).
@@ -108,6 +136,9 @@ uint32_t nvm_test_erase_count() noexcept;
 // Host only: the calibration slots as one byte image (sim ECU persists it).
 uint8_t* nvm_host_calibration_image(uint32_t* len) noexcept;
 uint32_t nvm_test_program_count() noexcept;
+// Host only: gravações efetivas do AdaptRecord (só conta se o conteúdo mudou).
+uint32_t nvm_test_adapt_save_count() noexcept;
+AdaptRecord* nvm_test_adapt_mock() noexcept;
 #endif
 
 }  // namespace ems::hal

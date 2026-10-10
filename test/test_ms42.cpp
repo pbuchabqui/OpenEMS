@@ -19,6 +19,7 @@
 #include "engine/knock.h"
 #include "engine/ms42_cal.h"
 #include "engine/misfire_detect.h"
+#include "engine/adapt_retention.h"
 #include "engine/quick_crank.h"
 #include "engine/torque_manager.h"
 #include "hal/system.h"
@@ -845,4 +846,59 @@ void test_ms42_misfire_threshold_table(void) {
     ms42_ext_defaults();
     misfire_set_operating_point(0u, 0u);
     misfire_reset();
+}
+
+void test_ms42_adapt_retention(void) {
+    section("ms42 S20: aprendido da marcha lenta + totais de misfire retidos na NVM (CRC)");
+    using namespace ems::hal;
+    ms42_ext_defaults();
+    nvm_test_reset();
+    misfire_init();
+    misfire_set_all_inhibit(false);
+    torque_manager_reset();
+
+    int16_t ofs = 0;
+    CHECK_TRUE(!adapt_retention_restore(), "NVM vazia: nada a restaurar");
+    CHECK_TRUE(!torque_idle_learned_get(&ofs), "sem aprendido");
+    CHECK_EQ(misfire_get_total(0u), 0u, "totais a 0");
+
+    // Uma corrida: misfires no cilindro 0 e marcha lenta aprendida (+30).
+    CHECK_TRUE(misfire_windows(140u) >= 1u, "misfire confirmado");
+    const uint16_t total = misfire_get_total(0u);
+    CHECK_TRUE(total >= 1u, "total acompanha os eventos");
+    misfire_clear_events(0u);  // o DTC de 100 ms zera o contador curto...
+    CHECK_EQ(misfire_get_total(0u), total, "...mas não o total");
+    torque_idle_learned_restore(30);
+
+    adapt_retention_save();
+    CHECK_EQ(nvm_test_adapt_save_count(), 1u, "paragem: grava o registro");
+    adapt_retention_save();
+    CHECK_EQ(nvm_test_adapt_save_count(), 1u, "sem mudanças: não regrava");
+    CHECK_TRUE(nvm_adapt_record_ok(*nvm_test_adapt_mock()), "magic + versão + CRC");
+
+    // Novo boot: RAM limpa, NVM preservada.
+    misfire_init();
+    torque_manager_reset();
+    CHECK_EQ(misfire_get_total(0u), 0u, "boot: totais zerados antes do restore");
+    CHECK_TRUE(adapt_retention_restore(), "restore com CRC válido");
+    CHECK_TRUE(torque_idle_learned_get(&ofs) && ofs == 30, "aprendido da marcha lenta restaurado");
+    CHECK_EQ(misfire_get_total(0u), total, "total de misfire restaurado");
+    CHECK_EQ(misfire_get_total(1u), 0u, "outros cilindros intactos");
+
+    // Corrupção: CRC falha → nada aplicado.
+    nvm_test_adapt_mock()->misfire_total[1] ^= 0x55u;
+    misfire_init();
+    torque_manager_reset();
+    CHECK_TRUE(!adapt_retention_restore(), "CRC inválido: rejeitado");
+    CHECK_TRUE(!torque_idle_learned_get(&ofs), "CRC inválido: marcha lenta só pelo FF");
+    CHECK_EQ(misfire_get_total(0u), 0u, "CRC inválido: totais a 0");
+
+    // Saturação em 0xFFFF.
+    misfire_set_total(0u, 0xFFFFu);
+    (void)misfire_windows(140u);
+    CHECK_EQ(misfire_get_total(0u), 0xFFFFu, "total satura");
+
+    nvm_test_reset();
+    misfire_init();
+    torque_manager_reset();
 }

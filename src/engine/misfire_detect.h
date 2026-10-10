@@ -28,6 +28,11 @@ uint32_t misfire_threshold_q8() noexcept;
 uint8_t misfire_get_event_count(uint8_t cyl) noexcept;
 void    misfire_clear_events(uint8_t cyl) noexcept;
 
+// Total de eventos confirmados por cilindro, saturado em 0xFFFF. Retido na
+// NVM entre partidas (adapt_retention); só misfire_init/set_total o mudam.
+uint16_t misfire_get_total(uint8_t cyl) noexcept;
+void     misfire_set_total(uint8_t cyl, uint16_t total) noexcept;
+
 }  // namespace ems::engine
 
 // Hook chamado no ISR do CKP (ems::drv namespace, igual aos outros hooks).

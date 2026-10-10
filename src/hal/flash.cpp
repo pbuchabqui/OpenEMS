@@ -48,6 +48,28 @@ uint32_t nvm_adaptive_maps_crc(const uint8_t* sector) noexcept {
     return crc32_calc(sector, kNvmOffLayoutMagic);
 }
 
+static uint32_t adapt_crc32(const AdaptRecord& rec) noexcept {
+    return crc32_calc(reinterpret_cast<const uint8_t*>(&rec),
+                      static_cast<uint16_t>(sizeof(rec) - sizeof(rec.crc32)));
+}
+
+bool nvm_adapt_record_ok(const AdaptRecord& rec) noexcept {
+    return rec.magic == ADAPT_RECORD_MAGIC &&
+           rec.version == ADAPT_RECORD_VERSION &&
+           rec.crc32 == adapt_crc32(rec);
+}
+
+static AdaptRecord adapt_seal(const AdaptRecord& rec) noexcept {
+    AdaptRecord w = rec;
+    w.magic   = ADAPT_RECORD_MAGIC;
+    w.version = ADAPT_RECORD_VERSION;
+    w.reserved0 = 0u;
+    __builtin_memset(w.reserved, 0, sizeof(w.reserved));
+    w.crc32   = 0u;
+    w.crc32   = adapt_crc32(w);
+    return w;
+}
+
 bool nvm_adaptive_sector_valid(const uint8_t* sector) noexcept {
     if (sector == nullptr) { return false; }
     uint32_t magic = 0u;
@@ -146,6 +168,9 @@ static bool     g_sector0_flush_active    = false;
 // cópia da flash é preservada.
 static ems::hal::EtbCalRecord g_etbcal_ram{};
 static bool g_etbcal_dirty = false;
+// AdaptRecord (aprendido da marcha lenta + totais de misfire): mesmo esquema.
+static ems::hal::AdaptRecord g_adapt_ram{};
+static bool g_adapt_dirty = false;
 
 // ── Endereços dos setores Bank2 ───────────────────────────────────────────────
 static constexpr uint32_t kSectorLtft  = 0u;   // Setor 0: LTFT + knock
@@ -283,10 +308,12 @@ bool nvm_load_adaptive_maps() noexcept {
         std::memset(g_knock_ram, 0, sizeof(g_knock_ram));
         std::memset(g_ltft_add_ram, 0, sizeof(g_ltft_add_ram));
         std::memset(&g_etbcal_ram, 0, sizeof(g_etbcal_ram));
+        std::memset(&g_adapt_ram, 0, sizeof(g_adapt_ram));
         g_ltft_dirty     = true;
         g_knock_dirty    = true;
         g_ltft_add_dirty = true;
         g_etbcal_dirty   = false;
+        g_adapt_dirty    = false;
         return true;
     }
 
@@ -302,11 +329,15 @@ bool nvm_load_adaptive_maps() noexcept {
     std::memcpy(&g_etbcal_ram,
                 reinterpret_cast<const void*>(kBank2Base + kNvmEtbCalOffset),
                 sizeof(g_etbcal_ram));
+    std::memcpy(&g_adapt_ram,
+                reinterpret_cast<const void*>(kBank2Base + kNvmAdaptOffset),
+                sizeof(g_adapt_ram));
 
     g_ltft_dirty     = false;
     g_knock_dirty    = false;
     g_ltft_add_dirty = false;
     g_etbcal_dirty   = false;
+    g_adapt_dirty    = false;
     return true;
 }
 
@@ -428,7 +459,8 @@ void nvm_request_adaptive_flush_now() noexcept {
 }
 
 bool nvm_adaptive_maps_dirty() noexcept {
-    return g_ltft_dirty || g_knock_dirty || g_ltft_add_dirty || g_etbcal_dirty;
+    return g_ltft_dirty || g_knock_dirty || g_ltft_add_dirty || g_etbcal_dirty ||
+           g_adapt_dirty;
 }
 
 // Pack RAM maps + LTF3 header into sector_buf (full FLASH_SECTOR_SIZE).
@@ -443,6 +475,9 @@ static void pack_adaptive_sector(uint8_t* sector_buf) noexcept {
     std::memset(sector_buf + kNvmReservedOffset, 0, kNvmEtbCalOffset - kNvmReservedOffset);  // reserved
     if (etb_cal_record_ok(g_etbcal_ram)) {
         std::memcpy(sector_buf + kNvmEtbCalOffset, &g_etbcal_ram, sizeof(g_etbcal_ram));
+    }
+    if (nvm_adapt_record_ok(g_adapt_ram)) {
+        std::memcpy(sector_buf + kNvmAdaptOffset, &g_adapt_ram, sizeof(g_adapt_ram));
     }
 }
 
@@ -465,12 +500,14 @@ bool nvm_flush_adaptive_maps() noexcept {
         g_knock_dirty    = true;
         g_ltft_add_dirty = true;
         g_etbcal_dirty   = etb_cal_record_ok(g_etbcal_ram);  // re-attempt se shadow válido
+        g_adapt_dirty    = nvm_adapt_record_ok(g_adapt_ram);
         g_sector0_flush_active = false;
         return false;
     };
 
     if (state == FlushState::Idle) {
-        if (!g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_etbcal_dirty) {
+        if (!g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_etbcal_dirty &&
+            !g_adapt_dirty) {
             return true;
         }
 
@@ -488,6 +525,7 @@ bool nvm_flush_adaptive_maps() noexcept {
         g_knock_dirty    = false;
         g_ltft_add_dirty = false;
         g_etbcal_dirty   = false;
+        g_adapt_dirty    = false;
 
         flash_unlock_bank2();
         FLASH_NSCCR = 0xFFFFFFFFu;
@@ -570,7 +608,8 @@ bool nvm_flush_adaptive_maps() noexcept {
         state = FlushState::Idle;
         g_sector0_flush_active = false;
         g_last_adaptive_flush_ms = g_nvm_now_ms;
-        return !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_etbcal_dirty;
+        return !g_ltft_dirty && !g_knock_dirty && !g_ltft_add_dirty && !g_etbcal_dirty &&
+            !g_adapt_dirty;
     }
 
     return false;
@@ -607,6 +646,28 @@ bool nvm_load_etb_cal(EtbCalRecord* out) noexcept {
     return true;
 }
 
+bool nvm_save_adapt(const AdaptRecord* rec) noexcept {
+    if (rec == nullptr) { return false; }
+    const AdaptRecord w = adapt_seal(*rec);
+    if (std::memcmp(&w, &g_adapt_ram, sizeof(w)) == 0) { return true; }
+    g_adapt_ram = w;
+    g_adapt_dirty = true;
+    return true;
+}
+
+bool nvm_load_adapt(AdaptRecord* out) noexcept {
+    if (out == nullptr) { return false; }
+    if (nvm_adapt_record_ok(g_adapt_ram)) {
+        *out = g_adapt_ram;
+        return true;
+    }
+    std::memcpy(out, reinterpret_cast<const void*>(kBank2Base + kNvmAdaptOffset),
+                sizeof(AdaptRecord));
+    if (!nvm_adapt_record_ok(*out)) { return false; }
+    g_adapt_ram = *out;
+    return true;
+}
+
 } // namespace ems::hal
 
 #else  // EMS_HOST_TEST ─────────────────────────────────────────────────────
@@ -640,6 +701,27 @@ bool nvm_save_etb_cal(const EtbCalRecord* rec) noexcept {
     g_etbcal_mock_valid = true;
     return true;
 }
+
+static AdaptRecord g_adapt_mock{};
+static uint32_t g_adapt_mock_saves = 0u;
+
+bool nvm_save_adapt(const AdaptRecord* rec) noexcept {
+    if (rec == nullptr) { return false; }
+    const AdaptRecord w = adapt_seal(*rec);
+    if (std::memcmp(&w, &g_adapt_mock, sizeof(w)) == 0) { return true; }
+    g_adapt_mock = w;
+    ++g_adapt_mock_saves;
+    return true;
+}
+
+bool nvm_load_adapt(AdaptRecord* out) noexcept {
+    if (out == nullptr || !nvm_adapt_record_ok(g_adapt_mock)) { return false; }
+    *out = g_adapt_mock;
+    return true;
+}
+
+uint32_t nvm_test_adapt_save_count() noexcept { return g_adapt_mock_saves; }
+AdaptRecord* nvm_test_adapt_mock() noexcept { return &g_adapt_mock; }
 
 bool nvm_load_etb_cal(EtbCalRecord* out) noexcept {
     if (out == nullptr || !g_etbcal_mock_valid) { return false; }
@@ -714,6 +796,8 @@ void nvm_test_reset() noexcept {
     g_flash_busy_polls = 0u;
     std::memset(&g_etbcal_mock, 0, sizeof(g_etbcal_mock));
     g_etbcal_mock_valid = false;
+    std::memset(&g_adapt_mock, 0, sizeof(g_adapt_mock));
+    g_adapt_mock_saves = 0u;
 }
 void flash_test_set_busy_polls(uint32_t polls) noexcept {
     g_flash_busy_polls = polls;

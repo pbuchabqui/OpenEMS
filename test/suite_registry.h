@@ -237,3 +237,4 @@ void test_ms42_stft_gain_table(void);
 void test_ms42_ext_block_cat_retard(void);
 void test_ms42_afterstart_pw_fall(void);
 void test_ms42_misfire_threshold_table(void);
+void test_ms42_adapt_retention(void);
