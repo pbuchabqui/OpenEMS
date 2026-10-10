@@ -18,6 +18,7 @@
 #include "engine/auxiliaries.h"
 #include "engine/knock.h"
 #include "engine/ms42_cal.h"
+#include "engine/misfire_detect.h"
 #include "engine/quick_crank.h"
 #include "engine/torque_manager.h"
 #include "hal/system.h"
@@ -790,4 +791,58 @@ void test_ms42_afterstart_pw_fall(void) {
     ms42_cal_defaults();
     ms42_ext_defaults();
     quick_crank_reset();
+}
+
+namespace {
+
+// kMisfireDebounceCycles janelas do cilindro 0 com período = ratio_pct % do previsto.
+uint8_t misfire_windows(uint32_t ratio_pct) {
+    misfire_reset();
+    ems::drv::CkpSnapshot s{};
+    s.state = ems::drv::SyncState::FULL_SYNC;
+    s.tooth_index = 0u;
+    s.phase_A = true;
+    s.predicted_tooth_period_ns = 1000000u;
+    s.tooth_period_ns = 10000u * ratio_pct;
+    for (uint32_t w = 0u; w < kMisfireDebounceCycles; ++w) {
+        for (uint32_t t = 0u; t < kMisfireWindowTeeth; ++t) {
+            ems::drv::misfire_on_tooth(s);
+        }
+    }
+    return misfire_get_event_count(0u);
+}
+
+}  // namespace
+
+void test_ms42_misfire_threshold_table(void) {
+    section("ms42: limiar de misfire por rpm x MAP");
+    ms42_ext_defaults();
+    misfire_init();
+    misfire_set_all_inhibit(false);
+
+    // Defaults = limiar único antigo em todo o mapa.
+    misfire_set_operating_point(8000u, 30u);
+    CHECK_EQ(misfire_threshold_q8(), kMisfireThresholdQ8, "default: 1,12x em marcha lenta");
+    misfire_set_operating_point(70000u, 100u);
+    CHECK_EQ(misfire_threshold_q8(), kMisfireThresholdQ8, "default: 1,12x em plena carga");
+    CHECK_TRUE(misfire_windows(120u) >= 1u, "1,20x > 1,12x: misfire");
+    CHECK_EQ(misfire_windows(110u), 0u, "1,10x < 1,12x: sem misfire");
+
+    // Alta rotação, baixa carga: a desaceleração natural é maior → limiar 1,30x.
+    ms42x.misfire_excess_q8[0][3] = 77u;   // MAP 30 kPa, 6500 rpm
+    misfire_set_operating_point(65000u, 30u);
+    CHECK_EQ(misfire_threshold_q8(), 333u, "6500 rpm / 30 kPa: 256 + 77");
+    CHECK_EQ(misfire_windows(120u), 0u, "1,20x < 1,30x: sem falso positivo");
+    CHECK_TRUE(misfire_windows(140u) >= 1u, "1,40x: misfire real ainda detectado");
+
+    // Bilinear: a meio entre 4500 e 6500 rpm a 30 kPa → (31 + 77)/2.
+    misfire_set_operating_point(55000u, 30u);
+    CHECK_EQ(misfire_threshold_q8(), 256u + 54u, "interpola em rpm");
+    // A meio entre 30 e 50 kPa a 6500 rpm → (77 + 31)/2.
+    misfire_set_operating_point(65000u, 40u);
+    CHECK_EQ(misfire_threshold_q8(), 256u + 54u, "interpola em MAP");
+
+    ms42_ext_defaults();
+    misfire_set_operating_point(0u, 0u);
+    misfire_reset();
 }

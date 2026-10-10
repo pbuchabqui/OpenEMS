@@ -6,7 +6,7 @@
 namespace ems::engine {
 
 constexpr uint8_t  kMisfireWindowTeeth    = 10u;   // dentes da janela de potência (~60°)
-constexpr uint32_t kMisfireThresholdQ8    = 287u;  // 1.12 em Q8 (256 × 1.12)
+constexpr uint32_t kMisfireThresholdQ8    = 287u;  // 1.12 em Q8 (256 × 1.12): default da tabela
 constexpr uint8_t  kMisfireDebounceCycles = 3u;    // ciclos consecutivos para confirmar
 constexpr uint8_t  kMisfireFaultThreshold = 5u;    // eventos em período de 100ms → DTC
 
@@ -16,6 +16,12 @@ void misfire_reset() noexcept;
 // Inibe toda a detecção (ex.: decel cut, arranque) — sem combustão é esperado.
 // Chame com true quando corte intencional estiver ativo; false para retomar.
 void misfire_set_all_inhibit(bool inhibit) noexcept;
+
+// Limiar por rpm × MAP (MS42: 12 mapas; aqui ms42x.misfire_excess_q8 4×4).
+// Chamar do loop de fundo; a ISR do CKP só lê o valor resolvido.
+void misfire_set_operating_point(uint32_t rpm_x10, uint16_t map_kpa) noexcept;
+// Limiar em uso (Q8, 256 = 1,0× o período previsto).
+uint32_t misfire_threshold_q8() noexcept;
 
 // Retorna número de eventos de misfire acumulados desde o último clear.
 // Seguro para leitura fora do ISR (uint8_t = atômico em ARM).

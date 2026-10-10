@@ -2,6 +2,7 @@
 #include "engine/engine_config.h"
 #include "engine/constants.h"
 #include "engine/ecu_sched.h"
+#include "engine/ms42_cal.h"
 #include "drv/ckp.h"
 
 #include <cstdint>
@@ -39,12 +40,15 @@ static volatile uint8_t  g_event_count[ems::engine::cfg::kCylinderCount];
 // Escrito pelo main loop, lido na ISR do CKP (volatile bool).
 static volatile bool g_all_inhibit = false;
 
+// Limiar Q8 resolvido no loop de fundo para o ponto de operação atual.
+static volatile uint16_t g_thresh_q8 = static_cast<uint16_t>(ems::engine::kMisfireThresholdQ8);
+
 constexpr uint8_t kN = ems::engine::cfg::kCylinderCount;
 
 static void evaluate_window(uint8_t cyl) noexcept {
-    // threshold = predicted_sum × kMisfireThresholdQ8 / 256
+    // threshold = predicted_sum × limiar(rpm, MAP) / 256
     const uint64_t thresh = (static_cast<uint64_t>(g_pred_sum_ns[cyl]) *
-                             ems::engine::kMisfireThresholdQ8) >> 8u;
+                             g_thresh_q8) >> 8u;
     const bool candidate = (g_power_sum_ns[cyl] > thresh);
 
     if (candidate) {
@@ -113,6 +117,16 @@ void misfire_clear_events(uint8_t cyl) noexcept {
 void misfire_set_all_inhibit(bool inhibit) noexcept {
     g_all_inhibit = inhibit;
 }
+
+void misfire_set_operating_point(uint32_t rpm_x10, uint16_t map_kpa) noexcept {
+    const Ms42Ext& x = ms42x;
+    const uint16_t excess = ms42_interp_u8_2d(
+        x.misfire_rpm_axis, x.misfire_map_axis, &x.misfire_excess_q8[0][0],
+        kMisfireCalPts, static_cast<uint16_t>(rpm_x10 / 1000u), map_kpa);
+    g_thresh_q8 = static_cast<uint16_t>(256u + excess);  // u16: escrita atômica
+}
+
+uint32_t misfire_threshold_q8() noexcept { return g_thresh_q8; }
 
 }  // namespace ems::engine
 

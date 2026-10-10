@@ -142,4 +142,9 @@ void ms42_apply_page0(const uint8_t* page0, uint16_t len) noexcept;
 uint16_t ms42_interp_u8(const uint8_t* axis, const uint8_t* vals, uint8_t n,
                         uint16_t x) noexcept;
 
+// Bilinear numa tabela n×n de u8 [y][x] (linhas = y_axis), eixos u8.
+uint16_t ms42_interp_u8_2d(const uint8_t* x_axis, const uint8_t* y_axis,
+                           const uint8_t* table, uint8_t n,
+                           uint16_t x, uint16_t y) noexcept;
+
 }  // namespace ems::engine

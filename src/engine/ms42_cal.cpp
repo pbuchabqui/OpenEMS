@@ -383,4 +383,17 @@ uint16_t ms42_interp_u8(const uint8_t* axis, const uint8_t* vals, uint8_t n,
     return vals[n - 1u];
 }
 
+uint16_t ms42_interp_u8_2d(const uint8_t* x_axis, const uint8_t* y_axis,
+                           const uint8_t* table, uint8_t n,
+                           uint16_t x, uint16_t y) noexcept {
+    constexpr uint8_t kMaxN = 8u;
+    if (n == 0u || n > kMaxN) { return 0u; }
+    // Resolve x em cada linha, depois interpola em y sobre a coluna obtida.
+    uint8_t col[kMaxN];
+    for (uint8_t r = 0u; r < n; ++r) {
+        col[r] = static_cast<uint8_t>(ms42_interp_u8(x_axis, table + r * n, n, x));
+    }
+    return ms42_interp_u8(y_axis, col, n, y);
+}
+
 }  // namespace ems::engine

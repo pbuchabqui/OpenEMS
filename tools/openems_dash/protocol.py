@@ -501,6 +501,9 @@ PAGE5_FIELDS = [
     ("ms42_as_pw_fall_cycles",      68, 1, "B",  1.0),   # ciclos (0=off)
     ("ms42_as_pw_fall_cold_pct",    69, 1, "B",  1.0),   # %/ciclo, 1º ponto CLT
     ("ms42_as_pw_fall_hot_pct",     70, 1, "B",  1.0),   # %/ciclo, último ponto
+    ("ms42_misfire_rpm_axis",       71, 4, "B",  100.0), # RPM
+    ("ms42_misfire_map_axis",       75, 4, "B",  1.0),   # kPa
+    ("ms42_misfire_excess_q8",      79, 16, "B", 1.0),   # limiar = 1 + x/256, [MAP][rpm]
     ("vbatt_corr_axis_mv",          96, 8, "H",  0.001), # V
     ("injector_dead_time_us",      112, 8, "H",  0.001), # ms
     ("ae_clt_corr_axis_x10",       128, 8, "h",  0.1),   # °C

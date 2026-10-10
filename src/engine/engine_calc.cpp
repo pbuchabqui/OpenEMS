@@ -413,6 +413,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
                 snap.rpm_x10, sensors.app_pct_x10, sensors.clt_degc_x10);
         misfire_set_all_inhibit(
             decel_cut_active || crank_or_ase || flood_clear);
+        misfire_set_operating_point(snap.rpm_x10, map_bar_x100);
         // X-τ desde !cranking (inclui afterstart frio — pior wall-wetting).
         // AE e X-τ são fenómenos distintos (AE = ar previsto pelo TPSdot,
         // X-τ = filme de parede); ambos entram inteiros.
