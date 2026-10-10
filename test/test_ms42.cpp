@@ -15,6 +15,7 @@
 #include "engine/ign_calc.h"
 #include "engine/limp_gating.h"
 #include "engine/auxiliaries.h"
+#include "engine/knock.h"
 #include "engine/ms42_cal.h"
 #include "engine/quick_crank.h"
 #include "hal/flash.h"
@@ -446,4 +447,59 @@ void test_ms42_crank_afterstart(void) {
 
     ms42_cal_defaults();
     quick_crank_reset();
+}
+
+namespace {
+
+// Janela de knock do cilindro 0 com amostras base e base+p2p.
+void knock_window(uint16_t p2p) {
+    knock_window_open(0u);
+    knock_test_set_adc_raw(1000u);
+    knock_test_set_adc_raw(static_cast<uint16_t>(1000u + p2p));
+    knock_test_set_adc_raw(1000u);
+    knock_window_cycle_end();
+}
+
+}  // namespace
+
+void test_ms42_knock_relative(void) {
+    section("ms42 C9: knock relativo ao ruido por cilindro + passo/max/recuperacao");
+    ems::drv::ckp_test_reset();  // rpm 0 → ganho do 1o ponto (2,5×)
+    ms42_cal_defaults();
+    knock_init();
+    knock_retard_x10[0] = 0u;
+    knock_window(300u);
+    CHECK_EQ(knock_get_retard_x10(0u), 0u, "absoluto: abaixo do limiar ADC, sem knock");
+
+    ms42.knock_rel_enable = 1u;
+    knock_init();
+    knock_retard_x10[0] = 0u;
+    knock_window(1000u);
+    CHECK_EQ(knock_get_retard_x10(0u), 0u, "fase de aprendizagem: não deteta");
+    knock_init();
+    knock_retard_x10[0] = 0u;
+    for (uint32_t i = 0u; i < 16u; ++i) { knock_window(100u); }
+    CHECK_EQ(knock_test_get_cyl_noise_x16(0u), 1600u, "ruído aprendido = p2p 100 (×16)");
+    knock_window(200u);
+    CHECK_EQ(knock_get_retard_x10(0u), 0u, "2,0× o ruído < ganho 2,5: limpo");
+    CHECK_EQ(knock_test_get_cyl_noise_x16(0u), 1800u, "janela limpa entra na média");
+    knock_window(300u);
+    CHECK_EQ(knock_get_retard_x10(0u), 20u, "acima de 2,5× o ruído: +2,0°");
+    CHECK_EQ(knock_test_get_cyl_noise_x16(0u), 1800u, "janela com knock não entra na média");
+
+    ms42.knock_step_x10 = 30u;
+    ms42.knock_max_x10 = 40u;
+    knock_window(400u);
+    CHECK_EQ(knock_get_retard_x10(0u), 40u, "passo calibrável, saturado no máximo");
+
+    ms42.knock_clean_cycles = 2u;
+    ms42.knock_recovery_x10 = 5u;
+    knock_window(100u);
+    CHECK_EQ(knock_get_retard_x10(0u), 40u, "1 ciclo limpo: ainda não recupera");
+    knock_window(100u);
+    CHECK_EQ(knock_get_retard_x10(0u), 35u, "2 ciclos limpos: −0,5°");
+
+    ms42_cal_defaults();
+    knock_init();
+    knock_retard_x10[0] = 0u;
 }

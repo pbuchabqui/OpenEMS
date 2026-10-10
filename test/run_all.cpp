@@ -341,6 +341,7 @@ int main(void) {
     test_ms42_rev_roll_cut();
     test_ms42_spark_gradient();
     test_ms42_crank_afterstart();
+    test_ms42_knock_relative();
 
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");

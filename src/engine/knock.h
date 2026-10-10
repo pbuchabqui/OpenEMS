@@ -53,6 +53,7 @@ bool knock_sensor_dead() noexcept;
 #if defined(EMS_HOST_TEST)
 uint8_t knock_test_get_knock_count(uint8_t cyl) noexcept;
 uint16_t knock_test_get_noise_p2p_ema() noexcept;
+uint32_t knock_test_get_cyl_noise_x16(uint8_t cyl) noexcept;
 bool knock_test_window_active() noexcept;
 uint8_t knock_test_window_cyl() noexcept;
 void knock_test_set_adc_raw(uint16_t raw) noexcept;

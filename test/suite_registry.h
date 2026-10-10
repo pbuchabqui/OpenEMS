@@ -226,3 +226,4 @@ void test_ms42_dfco_curve_delay(void);
 void test_ms42_rev_roll_cut(void);
 void test_ms42_spark_gradient(void);
 void test_ms42_crank_afterstart(void);
+void test_ms42_knock_relative(void);
