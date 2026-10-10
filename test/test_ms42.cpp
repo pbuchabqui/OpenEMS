@@ -12,6 +12,7 @@
 #include "engine/calibration.h"
 #include "engine/diagnostic_manager.h"
 #include "engine/fuel_calc.h"
+#include "engine/limp_gating.h"
 #include "engine/auxiliaries.h"
 #include "engine/ms42_cal.h"
 #include "hal/flash.h"
@@ -280,4 +281,63 @@ void test_ms42_dfco_curve_delay(void) {
     CHECK_TRUE(fuel_decel_cut_update(15000u, 0u, 800), "sem curva: 1500 corta");
     decel_cut_min_clt_x10 = min_clt;
     fuel_decel_cut_reset();
+}
+
+void test_ms42_rev_roll_cut(void) {
+    section("ms42 B5: corte rotativo de injecao abaixo do limite");
+    ms42_cal_defaults();
+    const uint32_t hard = rev_limit_rpm_x10;
+    LimpGatingInputs in{};
+    in.full_sync = true;
+    in.phase_valid = true;
+    in.sequential = true;
+    in.lambda_valid = false;
+    in.oil_press_bar_x1000 = 3000u;
+    in.clt_degc_x10 = 850;
+    in.now_ms = 10000u;
+    in.rpm_x10 = 30000u;
+    const uint16_t dis = 0x03FFu;  // só o limitador interessa aqui
+    limp_gating_set_protect_disable(dis);
+    LimpGatingResult r = limp_gating_update(in);
+    const uint8_t base_mask = r.inj_inhibit_mask;
+
+    // Desligado: nada na janela.
+    in.rpm_x10 = hard - 500u;
+    r = limp_gating_update(in);
+    limp_gating_on_rev();
+    r = limp_gating_update(in);
+    CHECK_EQ(r.inj_inhibit_mask, base_mask, "rev_roll off -> sem corte na janela");
+
+    // Ligado, 3/4 da janela (200 rpm): ~75 % de 2 injeções por volta.
+    ms42.rev_roll_enable = 1u;
+    in.rpm_x10 = hard - 500u;
+    uint32_t cut = 0u;
+    uint8_t seen = 0u;
+    for (int rev = 0; rev < 40; ++rev) {
+        limp_gating_update(in);
+        limp_gating_on_rev();
+        r = limp_gating_update(in);
+        const uint8_t m = static_cast<uint8_t>(r.inj_inhibit_mask & ~base_mask);
+        seen |= m;
+        for (uint8_t b = 0u; b < 4u; ++b) { cut += (m >> b) & 1u; }
+        CHECK_TRUE(m != 0x0Fu, "nunca corta os 4 de uma vez");
+        if (m == 0x0Fu) { break; }
+    }
+    CHECK_NEAR(static_cast<int>(cut), 60, 2, "~75 % de 80 injecoes cortadas");
+    CHECK_EQ(seen, 0x0Fu, "o corte roda pelos 4 cilindros");
+    CHECK_TRUE(r.allow_injection, "corte parcial: injecao continua permitida");
+
+    // Abaixo da janela: limpa na hora.
+    in.rpm_x10 = hard - 3000u;
+    r = limp_gating_update(in);
+    CHECK_EQ(r.inj_inhibit_mask, base_mask, "abaixo da janela -> mascara limpa");
+
+    // No limite duro: corte total, como antes.
+    in.rpm_x10 = hard + 100u;
+    r = limp_gating_update(in);
+    CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "limite duro -> corte total");
+    in.rpm_x10 = 10000u;
+    limp_gating_update(in);
+    limp_gating_set_protect_disable(0u);
+    ms42_cal_defaults();
 }

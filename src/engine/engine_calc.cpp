@@ -247,6 +247,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         static uint16_t s_prev_tooth = 0u;
         if (snap.tooth_index < s_prev_tooth) {
             spark_skip_on_rev();
+            limp_gating_on_rev();
         }
         s_prev_tooth = snap.tooth_index;
     }
