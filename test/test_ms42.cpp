@@ -12,6 +12,7 @@
 #include "engine/calibration.h"
 #include "engine/diagnostic_manager.h"
 #include "engine/fuel_calc.h"
+#include "engine/fuel_trim.h"
 #include "engine/ign_calc.h"
 #include "engine/limp_gating.h"
 #include "engine/auxiliaries.h"
@@ -592,4 +593,29 @@ void test_ms42_idle_p_ff_cat(void) {
     etb_idle_open_pct_x10 = s_open;
     etb_max_rate_pct_per_s = s_rate;
     etb_cal_valid = s_valid;
+}
+
+void test_ms42_stft_gain_table(void) {
+    section("ms42 C11: ganho do STFT por rpm x carga + rpm minima");
+    ms42_cal_defaults();
+    fuel_reset_adaptives();
+    // 3000 rpm, 100 kPa, lambda 1,20 vs 1,00.
+    const int16_t s1 = fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 5000u, 500u);
+    CHECK(s1 > 0, "ganho 100 %: STFT positivo");
+
+    std::memset(ms42.stft_gain_pct[3], 200, sizeof(ms42.stft_gain_pct[3]));  // 100 kPa
+    fuel_reset_adaptives();
+    const int16_t s2 = fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 5000u, 500u);
+    CHECK_EQ(s2, static_cast<int16_t>(2 * s1), "linha de 100 kPa a 200 %: dobra P e I");
+    fuel_reset_adaptives();
+    const int16_t s3 = fuel_update_stft(30000u, 30u, 1000, 1200, 900, true, false, false, 5000u, 500u);
+    CHECK_EQ(s3, s1, "30 kPa: linha a 100 %, ganho inalterado");
+
+    ms42.stft_min_rpm_x10 = 40000u;
+    fuel_reset_adaptives();
+    CHECK_EQ(fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 5000u, 500u), 0,
+             "abaixo de stft_min_rpm: congelado");
+
+    ms42_cal_defaults();
+    fuel_reset_adaptives();
 }
