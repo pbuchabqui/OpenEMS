@@ -400,15 +400,27 @@ int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
         const uint8_t b = clt_bucket(clt_x10);
         const uint16_t tpsdot_u16 = static_cast<uint16_t>(
             abs_dot > 1000 ? 1000 : abs_dot);
+        // Tip-out uses its own table when one is calibrated (any non-zero entry); with the
+        // table left at zero it keeps the old behaviour: half of the tip-in adder.
+        bool de_table = false;
+        if (tip_out) {
+            for (uint8_t i = 0u; i < kAeRateTableSize; ++i) {
+                if (ae_de_pw_us[i] != 0u) {
+                    de_table = true;
+                    break;
+                }
+            }
+        }
+        const uint16_t* const pw_table = de_table ? ae_de_pw_us : ae_pw_adder_us;
         const uint16_t base_pw_us =
-            interp_u16_4pt_u16x(ae_tpsdot_axis_x10, ae_pw_adder_us, tpsdot_u16);
+            interp_u16_4pt_u16x(ae_tpsdot_axis_x10, pw_table, tpsdot_u16);
         int32_t pulse =
             (static_cast<int32_t>(base_pw_us) * static_cast<int32_t>(ae_clt_sens[b])) / 8;
         if (pulse > static_cast<int32_t>(ae_max_pw_us)) {
             pulse = static_cast<int32_t>(ae_max_pw_us);
         }
         if (tip_out) {
-            pulse = -(pulse / 2);
+            pulse = de_table ? -pulse : -(pulse / 2);
         }
         g_ae_pulse_us = pulse;
         g_ae_decay_ms = taper_ms;

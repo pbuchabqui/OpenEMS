@@ -276,10 +276,13 @@ void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept;
 
 // Driveability block (page0 276-347, 72 bytes). Offsets inside the block follow the order
 // the features were added to the firmware; a byte with no feature behind it stays 0.
+//   47-54  ae_de_pw_us[4] (u16 each): tip-out PW by |TPSdot| (same axis as ae_pw_adder_us);
+//          all zero = tip-out is half of the tip-in adder
 //   55-56  fuel_pw_drop_max_us (u16): largest PW fall per 2 ms step, 0 = off
 //   57     overrun_spark_retard_deg (u8, 0-30): retard on a trailing closed throttle, 0 = off
 constexpr uint16_t kDriveabilityPage0Off = 276u;
 constexpr uint16_t kDriveabilityPage0End = 348u;
+extern uint16_t ae_de_pw_us[kAeRateTableSize];
 extern uint16_t fuel_pw_drop_max_us;
 extern uint8_t  overrun_spark_retard_deg;
 void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept;

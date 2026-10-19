@@ -162,6 +162,7 @@ void test_dfco_ramp_fraction(void);
 void test_fuel_pw_limit_drop(void);
 void test_overrun_spark_retard(void);
 void test_driveability_page0(void);
+void test_ae_de_table(void);
 void test_engine_calc_overrun_retard(void);
 void test_engine_calc_pw_drop_limit(void);
 void test_math_xtau_steady_and_step(void);

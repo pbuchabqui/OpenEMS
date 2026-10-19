@@ -661,6 +661,7 @@ PAGE0_FIELDS = [
     ("timing_light_advance_x10",    272, 1, "h", 0.1),   # ° fixed advance
     ("trigger_fine_x10",            274, 1, "h", 0.1),   # ° added to the offset
     # 276-347: driveability block (offset inside the block = byte - 276)
+    ("ae_de_pw_us",                 323, 4, "H", 0.001), # ms; all zero = half of the tip-in adder
     ("fuel_pw_drop_max_us",         331, 1, "H", 1.0),   # µs per 2 ms step (0=off)
     ("overrun_spark_retard_deg",    333, 1, "B", 1.0),   # ° (0=off)
 ]

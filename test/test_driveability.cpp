@@ -124,3 +124,53 @@ void test_driveability_page0(void) {
     fuel_pw_drop_max_us = saved_drop;
     overrun_spark_retard_deg = saved_ov;
 }
+
+void test_ae_de_table(void) {
+    section("fuel_calc: tip-out (DE) PW table");
+    fuel_reset_adaptives();
+    const uint16_t saved_thr = ae_tpsdot_threshold_x10;
+    const uint16_t saved_taper = ae_taper_ms;
+    ae_tpsdot_threshold_x10 = 10u;
+    ae_taper_ms = 8u;
+    uint16_t saved[kAeRateTableSize];
+    std::memcpy(saved, ae_de_pw_us, sizeof(saved));
+    for (uint8_t i = 0u; i < kAeRateTableSize; ++i) { ae_de_pw_us[i] = 0u; }
+    fuel_reset_adaptives();
+    const int32_t tip = calc_ae_pw_from_tpsdot(100, 800);
+    CHECK_TRUE(tip > 0, "pre-condition: tip-in adds fuel");
+    fuel_reset_adaptives();
+    CHECK_EQ(calc_ae_pw_from_tpsdot(static_cast<int16_t>(-100), 800), -(tip / 2),
+             "all-zero DE table keeps half the tip-in adder");
+    for (uint8_t i = 0u; i < kAeRateTableSize; ++i) { ae_de_pw_us[i] = ae_pw_adder_us[i]; }
+    fuel_reset_adaptives();
+    CHECK_EQ(calc_ae_pw_from_tpsdot(static_cast<int16_t>(-100), 800), -tip,
+             "a DE table equal to the AE table uses the full adder, negative");
+    for (uint8_t i = 0u; i < kAeRateTableSize; ++i) { ae_de_pw_us[i] = ae_pw_adder_us[i] / 4u; }
+    fuel_reset_adaptives();
+    const int32_t quarter = calc_ae_pw_from_tpsdot(static_cast<int16_t>(-100), 800);
+    CHECK_TRUE(quarter < 0 && -quarter < tip / 2, "a smaller DE table removes less fuel than the default");
+    fuel_reset_adaptives();
+    CHECK_EQ(calc_ae_pw_from_tpsdot(100, 800), tip, "tip-in is unaffected by the DE table");
+
+    section("calibration: DE table in the page-0 block (323-330)");
+    static uint8_t page[512];
+    ae_de_pw_us[0] = 100u; ae_de_pw_us[1] = 200u; ae_de_pw_us[2] = 300u; ae_de_pw_us[3] = 400u;
+    std::memset(page, 0, sizeof(page));
+    driveability_serialize_to_page0(page, sizeof(page));
+    CHECK_EQ(page[kDriveabilityPage0Off + 47], 100u, "entry 0 low byte");
+    CHECK_EQ(page[kDriveabilityPage0Off + 54], 400u >> 8, "entry 3 high byte");
+    for (uint8_t i = 0u; i < kAeRateTableSize; ++i) { ae_de_pw_us[i] = 9u; }
+    driveability_apply_page0(page, sizeof(page));
+    CHECK_EQ(ae_de_pw_us[2], 300u, "round trip: entry 2");
+    page[kDriveabilityPage0Off + 47] = 0xFFu;
+    page[kDriveabilityPage0Off + 48] = 0xFFu;
+    driveability_apply_page0(page, sizeof(page));
+    CHECK_EQ(ae_de_pw_us[0], 20000u, "entry clamped to 20 ms");
+    std::memset(page + kDriveabilityPage0Off, 0, 72u);   // written block of zeros
+    driveability_apply_page0(page, sizeof(page));
+    CHECK_EQ(ae_de_pw_us[0], 0u, "a block of zeros clears the DE table (zero is not a sentinel)");
+    std::memcpy(ae_de_pw_us, saved, sizeof(saved));
+    ae_tpsdot_threshold_x10 = saved_thr;
+    ae_taper_ms = saved_taper;
+    fuel_reset_adaptives();
+}

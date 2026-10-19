@@ -485,6 +485,7 @@ void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept {
     std::memcpy(page0 + kTimingPage0Off + 4u, &trigger_fine_x10, 2u);
 }
 
+uint16_t ae_de_pw_us[kAeRateTableSize] = {};
 uint16_t fuel_pw_drop_max_us = 0u;
 uint8_t  overrun_spark_retard_deg = 0u;
 
@@ -515,6 +516,11 @@ void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept {
     if (blank) {
         return;
     }
+    // Zero is a valid DE table ("use half the adder"), so it is not a sentinel here.
+    for (uint8_t i = 0u; i < kAeRateTableSize; ++i) {
+        const uint16_t v = rd_u16(p + 47 + static_cast<uint16_t>(i) * 2u);
+        ae_de_pw_us[i] = (v > kDriveabilityPwMaxUs) ? kDriveabilityPwMaxUs : v;
+    }
     const uint16_t drop = rd_u16(p + 55);
     fuel_pw_drop_max_us = (drop > kDriveabilityPwMaxUs) ? kDriveabilityPwMaxUs : drop;
     overrun_spark_retard_deg = (p[57] > 30u) ? 30u : p[57];
@@ -525,6 +531,9 @@ void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
         return;
     }
     uint8_t* const p = page0 + kDriveabilityPage0Off;
+    for (uint8_t i = 0u; i < kAeRateTableSize; ++i) {
+        wr_u16(p + 47 + static_cast<uint16_t>(i) * 2u, ae_de_pw_us[i]);
+    }
     wr_u16(p + 55, fuel_pw_drop_max_us);
     p[57] = overrun_spark_retard_deg;
 }
