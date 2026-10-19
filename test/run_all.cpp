@@ -279,6 +279,14 @@ int main(void) {
     test_idle_spark_error_curve();
     test_engine_calc_overrun_retard();
     test_engine_calc_pw_drop_limit();
+    test_engine_calc_dwell_floor();
+    test_engine_calc_limp_rpm_hysteresis();
+    test_output_test_enter_shuts_etb();
+    test_aux_fan_clt_fault();
+    test_aux_pins_safe_early();
+    test_aux_pump_boot_prime_then_rpm();
+    test_engine_calc_map_fault_runs_on_model();
+    test_engine_calc_vbatt_fault_safe_values();
     test_math_xtau_steady_and_step();
     test_math_production_tables();
     test_math_misfire_threshold();

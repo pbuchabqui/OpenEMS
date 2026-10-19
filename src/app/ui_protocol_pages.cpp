@@ -174,7 +174,7 @@ void update_realtime_page() noexcept {
     if (c.phase_A) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_PHASE_A);
     }
-    if (s.fault_bits != 0u) {
+    if (s.fault_bits != 0u || s.vbatt_fault) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_SENSOR_FAULT);
     }
     if (g_rt_sched_late_events != 0u) {

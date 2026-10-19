@@ -26,6 +26,13 @@ namespace ems::engine {
 namespace {
 
 constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
+constexpr uint32_t kLimpRpmHyst_x10  = 200u;    // 20 rpm: evita chatter no corte
+// Bateria fora de 6..18 V (leitura 0, divisor aberto): usa 12 V nominal para
+// dead time e dwell, em vez de saturar no eixo da tabela (9 V).
+inline uint16_t safe_vbatt_mv(const ems::drv::SensorData& s) noexcept {
+    return (s.vbatt_mv >= 6000u && s.vbatt_mv <= 18000u) ? s.vbatt_mv : 12000u;
+}
+constexpr uint32_t kMinDwellTicks     = 31250u;  // 0,5 ms @ 62,5 MHz
 constexpr uint8_t  kFaultBitMap  = (1u << 0u);  // SensorId::MAP
 constexpr uint8_t  kFaultBitClt  = (1u << 3u);  // SensorId::CLT
 constexpr uint8_t  kFaultBitFuel = (1u << 6u);  // SensorId::FUEL_PRESS
@@ -57,15 +64,15 @@ const CachedFuelCorrections& fuel_corrections_for(const ems::drv::SensorData& se
     if (!g_fuel_corr_cache.valid ||
         g_fuel_corr_cache.clt_x10 != sensors.clt_degc_x10 ||
         g_fuel_corr_cache.iat_x10 != sensors.iat_degc_x10 ||
-        g_fuel_corr_cache.vbatt_mv != sensors.vbatt_mv) {
+        g_fuel_corr_cache.vbatt_mv != safe_vbatt_mv(sensors)) {
         g_fuel_corr_cache.valid = true;
         g_fuel_corr_cache.clt_x10 = sensors.clt_degc_x10;
         g_fuel_corr_cache.iat_x10 = sensors.iat_degc_x10;
-        g_fuel_corr_cache.vbatt_mv = sensors.vbatt_mv;
+        g_fuel_corr_cache.vbatt_mv = safe_vbatt_mv(sensors);
         g_fuel_corr_cache.corr_clt_x256 = corr_clt(sensors.clt_degc_x10);
         g_fuel_corr_cache.corr_iat_x256 = corr_iat(sensors.iat_degc_x10);
         g_fuel_corr_cache.iat_density_q8 = corr_iat_density_q8(sensors.iat_degc_x10);
-        g_fuel_corr_cache.dead_time_us = corr_vbatt(sensors.vbatt_mv);
+        g_fuel_corr_cache.dead_time_us = corr_vbatt(safe_vbatt_mv(sensors));
     }
     return g_fuel_corr_cache;
 }
@@ -190,15 +197,23 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     //   (1) FULL_SYNC → running fuel
     //   (2) HALF_SYNC + cranking → batch; Hall does NOT allow HALF running fuel
     //   (3) flood / protect / LOSS_OF_SYNC → inj cut
-    const bool limp_rpm_cut = s_out.limp_active &&
-        (snap.rpm_x10 > kLimpRpmLimit_x10);
+    static bool s_limp_rpm_latched = false;
+    if (!s_out.limp_active || snap.rpm_x10 <= kLimpRpmLimit_x10 - kLimpRpmHyst_x10) {
+        s_limp_rpm_latched = false;
+    } else if (snap.rpm_x10 > kLimpRpmLimit_x10) {
+        s_limp_rpm_latched = true;
+    }
+    const bool limp_rpm_cut = s_out.limp_active && s_limp_rpm_latched;
     const CachedFuelCorrections& fuel_corr = fuel_corrections_for(sensors);
     // Dwell 2D: tensão × RPM (MS42 §2.2.2.2.1).
     // Calculado fora do cache porque depende de RPM que varia a cada dente.
     const uint16_t dwell_ms_x10 = dwell_ms_x10_from_vbatt_rpm(
-        sensors.vbatt_mv, snap.rpm_x10);
-    const uint32_t dwell_ticks =
+        safe_vbatt_mv(sensors), snap.rpm_x10);
+    // Piso de 0,5 ms: tabela zerada/corrompida não pode deixar a bobina sem carga.
+    const uint32_t dwell_ticks_raw =
         (static_cast<uint32_t>(dwell_ms_x10) * kSchedulerTicksPerMs) / 10u;
+    const uint32_t dwell_ticks =
+        dwell_ticks_raw < kMinDwellTicks ? kMinDwellTicks : dwell_ticks_raw;
 
     // Multi-spark (MS42 §2.2.3): habilita/desabilita conforme RPM gate.
     // Hard ceiling 1500 RPM (kMsparkRpmCeilingX10) — window too short above.
@@ -276,14 +291,12 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     gate_in.cranking = qc.cranking;
     gate_in.full_sync = full_sync;
     gate_in.half_sync = half_sync;
-    gate_in.phase_valid = true;
-    gate_in.sequential = ::ecu_sched_is_sequential() != 0u;
     gate_in.etb_fault = etb_fault;
     gate_in.inj_duty_pct = static_cast<uint8_t>(
         fuel_inj_duty_pct_x10() / 10u);
     gate_in.inj_duty_cut = fuel_inj_duty_cut_active();
     gate_in.now_ms = in.now_ms;
-    gate_in.map_fault = map_fault;
+    // Falha de MAP não corta: segue com o MAP do modelo; o limp (limp_rpm_cut) limita a 3000 rpm.
     gate_in.overtemp_crit = overtemp_crit;
     gate_in.diag_critical = diag_critical;
     gate_in.flood_clear = flood_clear;

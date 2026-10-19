@@ -76,6 +76,20 @@ float etb_driver_adc_to_percent(uint16_t adc_raw) {
          / static_cast<float>(ETB_TPS_NORMAL_MAX - ETB_TPS_NORMAL_MIN) * 100.0f;
 }
 
+void etb_driver_pins_safe_early(void) {
+    // IN1/IN2 e PWM em LOW como saídas GPIO; etb_pwm_init() troca o PWM para AF depois.
+    etb_dir_gpio_init();      // liga o clock; ODR vale 0 após o reset, sem pulso
+    etb_dir_set(false, false);
+#if EMS_BOARD_IS_VGT6
+    GPIOE_BSRR = (1u << (5u + 16u));
+    GPIOE_MODER = (GPIOE_MODER & ~(3u << (5u * 2u))) | (1u << (5u * 2u));   // PE5 (TIM15_CH1)
+#else
+    GPIOA_BSRR = (1u << (6u + 16u));
+    GPIOA_MODER = (GPIOA_MODER & ~(3u << (6u * 2u))) | (1u << (6u * 2u));   // PA6 (TIM3_CH1)
+#endif
+    g_etb_data.motor_pwm = 0;
+}
+
 bool etb_driver_init(void) {
     std::memset(&g_etb_data, 0, sizeof(g_etb_data));
     g_state  = ETB_DRV_STATE_INIT;
@@ -162,6 +176,8 @@ void etb_driver_clear_fault(void) {
 etb_driver_state_t etb_driver_get_state(void) {
     return g_state;
 }
+
+int16_t etb_driver_test_motor_pwm(void) { return g_etb_data.motor_pwm; }
 
 void etb_driver_test_reset(void) {
     std::memset(&g_etb_data, 0, sizeof(g_etb_data));

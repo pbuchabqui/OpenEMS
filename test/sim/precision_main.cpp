@@ -10,9 +10,11 @@
  * An XFAIL that starts passing (XPASS) fails the run so the table is kept
  * honest; bump kStage / the tag when a stage lands.
  */
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 
 #include "engine/calibration.h"
 #include "drv/ckp.h"
@@ -25,6 +27,7 @@
 #include "engine/quick_crank.h"
 #include "engine/transient_fuel.h"
 #include "engine/ign_calc.h"
+#include "engine/limp_gating.h"
 #include "engine/table3d.h"
 #include "hal/tim5_host.h"
 #include "test/sim/engine_sim.h"
@@ -153,9 +156,41 @@ double mean_dwell_us(const Result& r, double t_from)
     return (n > 0) ? sum / n : 0.0;
 }
 
+// Spark events (coil ON -> OFF) on any ignition channel with the ON edge in [t_from, t_to).
+int coil_sparks(const Result& r, double t_from, double t_to)
+{
+    double t_on[8] = {};
+    bool open[8] = {};
+    int n = 0;
+    for (const PinEdge& e : r.edges) {
+        if (is_inj_ch(e.ch)) { continue; }
+        if (e.high != 0u) { open[e.ch] = true; t_on[e.ch] = e.t_s; continue; }
+        if (!open[e.ch]) { continue; }
+        open[e.ch] = false;
+        if (t_on[e.ch] >= t_from && t_on[e.ch] < t_to) { ++n; }
+    }
+    return n;
+}
+
+// Number of rising edges (any of the 8 outputs) at t >= t_from, plus 1 if any output
+// is still HIGH at the end of the log. 0 = the engine receives nothing from t_from on.
+int activity_after(const Result& r, double t_from)
+{
+    bool level[8] = {};
+    int rising = 0;
+    for (const PinEdge& e : r.edges) {
+        level[e.ch] = (e.high != 0u);
+        if (e.high != 0u && e.t_s >= t_from) { ++rising; }
+    }
+    for (bool l : level) { if (l) { ++rising; } }
+    return rising;
+}
+
 // Warm engine, flat tables, 2 ms loop = engine_calc_step with fixed sensors; `mod` edits the
 // sensors per scenario. The firmware commits what it computes; nothing is injected by the sim.
-Result run_engine_calc(const char* name, Config c, uint16_t map_kpa, void (*mod)(ems::drv::SensorData&))
+Result run_engine_calc(const char* name, Config c, uint16_t map_kpa,
+                       std::function<void(ems::drv::SensorData&)> mod,
+                       std::function<void(ems::engine::EngineCalcIn&)> in_mod = nullptr)
 {
     namespace en = ems::engine;
     static uint8_t sv_ve[en::kTableAxisSize][en::kTableAxisSize];
@@ -172,6 +207,8 @@ Result run_engine_calc(const char* name, Config c, uint16_t map_kpa, void (*mod)
         }
     }
     en::engine_calc_reset();
+    en::limp_gating_test_reset();
+    en::fuel_inj_duty_reset();
     en::quick_crank_reset();
     en::transient_fuel_reset();
     en::fuel_reset_adaptives();
@@ -192,6 +229,7 @@ Result run_engine_calc(const char* name, Config c, uint16_t map_kpa, void (*mod)
         in.now_ms = 1000u + static_cast<uint32_t>(t_s * 1000.0);
         in.snap = ems::drv::ckp_snapshot();
         in.sensors = s;
+        if (in_mod) { in_mod(in); }
         en::engine_calc_step(in);
     };
     Result r = run(c);
@@ -558,9 +596,11 @@ int main()
 
         const Result mf = run_engine_calc("4000 rpm MAP fault", c, kMapKpa, map_fault);
         check("MAP fault >limp rpm", "injector pulses at the pins", inj_pulses(mf, 0.8, 1e9).n, 0);
+        check("MAP fault >limp rpm", "sparks at the pins", coil_sparks(mf, 0.8, 1e9), 0);
 
         const Result ot = run_engine_calc("4000 rpm CLT 120 C", c, kMapKpa, overtemp);
         check("critical overtemp", "injector pulses at the pins", inj_pulses(ot, 0.8, 1e9).n, 0);
+        check("critical overtemp", "sparks at the pins", coil_sparks(ot, 0.8, 1e9), 0);
 
         // Rev limit: over the limit the injectors stay shut; back below it they resume.
         Config cr = base(3000);
@@ -569,6 +609,7 @@ int main()
         cr.duration_s = 4.0;
         const Result rl = run_engine_calc("rev limit then 3000 rpm", cr, kMapKpa, healthy);
         check("rev limit", "injector pulses while over", inj_pulses(rl, 0.8, 1.5).n, 0);
+        check("rev limit", "sparks kept while over (0=ok)", coil_sparks(rl, 0.8, 1.5) > 0 ? 0.0 : 1.0, 0);
         check("rev limit", "injector pulses missing after release (0=ok)",
               inj_pulses(rl, 3.0, 1e9).n > 0 ? 0.0 : 1.0, 0);
 
@@ -581,6 +622,136 @@ int main()
               mean_dwell_us(b9, 1.0) > mean_dwell_us(b14, 1.0) ? 0.0 : 1.0, 0);
         check("battery 9 V vs 14 V", "injector pulse not longer at 9 V (0=ok)",
               inj_pulses(b9, 1.0, 1e9).mean_us > inj_pulses(b14, 1.0, 1e9).mean_us ? 0.0 : 1.0, 0);
+    }
+
+    // ── Every cut seen at the injector AND coil pins ────────────────────
+    // limp_gating has no unit test: here each cut is judged only by what leaves the pins.
+    // 2500 rpm keeps the sensor-limp rpm cut (3000) out of the way, so each case isolates one cut.
+    {
+        namespace en = ems::engine;
+        constexpr uint16_t kMapKpa = 60u;
+        constexpr double kFrom = 1.5;   // window start: cut timers (<= 500 ms) have run
+        auto none = [](ems::drv::SensorData&) {};
+        auto inj_n = [&](const Result& r) { return inj_pulses(r, kFrom, 1e9).n; };
+        auto sp_n = [&](const Result& r) { return coil_sparks(r, kFrom, 1e9); };
+        auto flag = [](bool bad) { return bad ? 1.0 : 0.0; };
+
+        Config c = base(2500);
+        c.duration_s = 3.5;
+        const Result hl = run_engine_calc("cuts: healthy 2500", c, kMapKpa, none);
+        const int base_inj = inj_n(hl);
+        const int base_sp = sp_n(hl);
+        check("cuts healthy", "injector pulses present (0=ok)", flag(base_inj < 50), 0);
+        check("cuts healthy", "sparks present (0=ok)", flag(base_sp < 50), 0);
+        auto fuel_only = [&](const char* name, const Result& r) {
+            check(name, "injector pulses at the pins", inj_n(r), 0);
+            check(name, "sparks kept (>= 90% of healthy, 0=ok)", flag(sp_n(r) < base_sp * 9 / 10), 0);
+        };
+        auto fuel_and_spark = [&](const char* name, const Result& r) {
+            check(name, "injector pulses at the pins", inj_n(r), 0);
+            check(name, "sparks at the pins", sp_n(r), 0);
+        };
+
+        fuel_and_spark("oil sensor fault", run_engine_calc("cuts: oil sensor fault", c, kMapKpa,
+            [](ems::drv::SensorData& s) { s.fault_bits |= 0x80u; }));         // SensorId::OIL_PRESS
+        fuel_only("fuel rail fault", run_engine_calc("cuts: fuel rail fault", c, kMapKpa,
+            [](ems::drv::SensorData& s) { s.fault_bits |= 0x40u; }));         // SensorId::FUEL_PRESS
+        fuel_and_spark("critical overtemp 2500", run_engine_calc("cuts: CLT 120 C", c, kMapKpa,
+            [](ems::drv::SensorData& s) { s.clt_degc_x10 = 1200; }));
+
+        const uint16_t sv_boost = en::boost_cut_map_bar_x100;
+        en::boost_cut_map_bar_x100 = 40u;                                      // MAP 60 kPa > 0.40 bar
+        fuel_only("boost cut", run_engine_calc("cuts: boost", c, kMapKpa, none));
+        en::boost_cut_map_bar_x100 = sv_boost;
+
+        const uint16_t sv_oil = en::oil_min_after_start_bar_x1000;
+        en::oil_min_after_start_bar_x1000 = 1500u;
+        fuel_only("oil pressure low", run_engine_calc("cuts: oil pressure low", c, kMapKpa,
+            [](ems::drv::SensorData& s) { s.oil_press_bar_x1000 = 500u; }));
+        en::oil_min_after_start_bar_x1000 = sv_oil;
+
+        const uint16_t sv_lt = en::lambda_protect_timeout_ms, sv_ld = en::lambda_protect_dev_x1000,
+                       sv_ll = en::lambda_protect_min_load_bar_x100;
+        const uint32_t sv_lr = en::lambda_protect_min_rpm_x10;
+        en::lambda_protect_timeout_ms = 200u;
+        en::lambda_protect_dev_x1000 = 100u;
+        en::lambda_protect_min_rpm_x10 = 10000u;
+        en::lambda_protect_min_load_bar_x100 = 20u;
+        fuel_only("lambda lean protect", run_engine_calc("cuts: lambda lean", c, kMapKpa, none,
+            [](en::EngineCalcIn& in) { in.lambda_x1000 = 1600u; in.lambda_valid = true; }));
+        en::lambda_protect_timeout_ms = sv_lt;
+        en::lambda_protect_dev_x1000 = sv_ld;
+        en::lambda_protect_min_rpm_x10 = sv_lr;
+        en::lambda_protect_min_load_bar_x100 = sv_ll;
+
+        const uint8_t sv_harness = en::etb_harness_present;
+        en::etb_harness_present = 1u;
+        fuel_only("ETB fault > 1500 rpm", run_engine_calc("cuts: ETB fault", c, kMapKpa,
+            [](ems::drv::SensorData& s) { s.throttle_fault_bits |= ems::drv::THROTTLE_FAULT_ETB_TPS1; }));
+        en::etb_harness_present = sv_harness;
+        // Harness absent (project default): the same TPS fault must not cut anything.
+        {
+            const Result nh = run_engine_calc("cuts: ETB fault, no harness", c, kMapKpa,
+                [](ems::drv::SensorData& s) { s.throttle_fault_bits |= ems::drv::THROTTLE_FAULT_ETB_TPS1; });
+            check("ETB fault, harness 0", "injector pulses kept (0=ok)", flag(inj_n(nh) < base_inj * 9 / 10), 0);
+        }
+
+        // Flood clear: cranking with the pedal floored → no fuel, crank spark continues.
+        {
+            Config cf = base(250);
+            cf.duration_s = 3.0;
+            const Result fl = run_engine_calc("cuts: flood clear", cf, kMapKpa,
+                [](ems::drv::SensorData& s) { s.app_pct_x10 = 900u; });
+            check("flood clear", "injector pulses at the pins", inj_pulses(fl, 1.0, 1e9).n, 0);
+            check("flood clear", "sparks kept (0=ok)", flag(coil_sparks(fl, 1.0, 1e9) < 10), 0);
+        }
+
+        // Soft limiter: spark skip near the hard limit removes about half of the sparks.
+        {
+            const uint16_t sv_w = en::spark_skip_window_rpm_x10;
+            const uint8_t sv_m = en::spark_skip_max_q8;
+            Config cs = base(en::rev_limit_rpm_x10 / 10 - 5);
+            cs.duration_s = 3.0;
+            const Result ref = run_engine_calc("cuts: soft limit off", cs, kMapKpa, none);
+            en::spark_skip_window_rpm_x10 = 500u;
+            en::spark_skip_max_q8 = 128u;
+            const Result sk = run_engine_calc("cuts: soft limit skip", cs, kMapKpa, none);
+            en::spark_skip_window_rpm_x10 = sv_w;
+            en::spark_skip_max_q8 = sv_m;
+            const double ratio = static_cast<double>(coil_sparks(sk, 1.0, 1e9)) /
+                                 std::max(1, coil_sparks(ref, 1.0, 1e9));
+            // Ratio at 6995 rpm: 128*450/500 = 115/256 -> 4*115/256 = 1.8 of 4 sparks skipped -> 55 % kept.
+            check("spark skip", "sparks kept vs window off: |ratio-0.55|", std::fabs(ratio - 0.55), 0.03);
+            check("spark skip", "injector pulses kept (0=ok)",
+                  flag(inj_pulses(sk, 1.0, 1e9).n < inj_pulses(ref, 1.0, 1e9).n * 9 / 10), 0);
+        }
+
+        // Injector duty protection: > 15 % duty for 10 ms cuts fuel; it only resumes below 20 %.
+        // Sequential duty = one opening (~4.1 ms) per 720 deg cycle: 22 % at 6500 rpm.
+        {
+            const uint8_t sv_d = en::inj_duty_max_pct, sv_t = en::inj_duty_tol_ms10;
+            Config cd2 = base(6500);
+            cd2.duration_s = 3.5;
+            const Result d0 = run_engine_calc("cuts: 6500 rpm duty off", cd2, kMapKpa, none);
+            en::inj_duty_max_pct = 15u;
+            en::inj_duty_tol_ms10 = 1u;
+            const Result d1 = run_engine_calc("cuts: injector duty", cd2, kMapKpa, none);
+            en::inj_duty_max_pct = sv_d;
+            en::inj_duty_tol_ms10 = sv_t;
+            check("injector duty cut", "reference run injects (0=ok)", flag(inj_pulses(d0, kFrom, 1e9).n < 50), 0);
+            check("injector duty cut", "injector pulses at the pins", inj_pulses(d1, kFrom, 1e9).n, 0);
+            check("injector duty cut", "sparks kept (>= 90% of duty off, 0=ok)",
+                  flag(coil_sparks(d1, kFrom, 1e9) < coil_sparks(d0, kFrom, 1e9) * 9 / 10), 0);
+        }
+
+        // CKP lost for good while running: nothing may fire and no coil may stay charged.
+        {
+            Config cd = base(2500);
+            cd.duration_s = 3.5;
+            cd.dropout_s.push_back({1.5, 10.0});
+            const Result lost = run_engine_calc("cuts: CKP lost", cd, kMapKpa, none);
+            check("CKP lost", "pin activity after 0.3 s (0=all LOW)", activity_after(lost, 1.8), 0);
+        }
     }
 
     test_purge_does_not_freeze_queue();

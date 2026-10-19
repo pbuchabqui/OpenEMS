@@ -45,6 +45,7 @@ struct SensorData {
     uint16_t an2_raw;
     uint16_t an3_raw;
     uint16_t an4_raw;
+    bool     vbatt_fault;         // leitura fora de 6..18 V: vbatt_mv vale 12000 (nominal)
 };
 
 enum class SensorId : uint8_t {

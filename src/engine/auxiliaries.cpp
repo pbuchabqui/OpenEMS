@@ -327,7 +327,14 @@ void run_vvt_control(const ems::drv::CkpSnapshot& snap,
     ems::hal::tim4_set_duty(1u, g.vvt_adm_duty_x10);
 }
 
-void run_fan_control(int16_t clt_x10) noexcept {
+constexpr uint8_t kFanCltFaultBit = (1u << 3u);  // SensorId::CLT
+
+void run_fan_control(int16_t clt_x10, bool clt_fault) noexcept {
+    // CLT em falha é substituído por 90 °C (< liga): ventoinha ligada por segurança.
+    if (clt_fault) {
+        if (!g.fan_on) { set_fan(true); }
+        return;
+    }
     if (!g.fan_on && clt_x10 >= kFanOnDegCX10) {
         set_fan(true);
     } else if (g.fan_on && clt_x10 <= kFanOffDegCX10) {
@@ -370,6 +377,16 @@ namespace ems::engine {
 
 uint16_t auxiliaries_idle_target_rpm_x10(int16_t clt_x10) noexcept {
     return iac_target_rpm_x10(clt_x10);
+}
+
+void auxiliaries_pins_safe_early() noexcept {
+    // Nível baixo no registrador de saída ANTES de virar saída: sem pulso no relé.
+    EMS_AUX_RELAY_RCC_EN();
+    EMS_AUX_RELAY_BSRR = (kFanBit << 16u) | (kPumpBit << 16u);
+    EMS_AUX_RELAY_MODER =
+        (EMS_AUX_RELAY_MODER & ~(3u << (kFanPin * 2u))) | (1u << (kFanPin * 2u));
+    EMS_AUX_RELAY_MODER =
+        (EMS_AUX_RELAY_MODER & ~(3u << (kPumpPin * 2u))) | (1u << (kPumpPin * 2u));
 }
 
 void auxiliaries_init() noexcept {
@@ -421,7 +438,7 @@ void auxiliaries_tick_10ms() noexcept {
     const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
     run_vvt_control(snap, s);
-    run_fan_control(s.clt_degc_x10);
+    run_fan_control(s.clt_degc_x10, (s.fault_bits & kFanCltFaultBit) != 0u);
     run_pump_control(snap.rpm_x10);
 }
 
@@ -432,7 +449,7 @@ void auxiliaries_tick_20ms() noexcept {
     const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
     run_wastegate_control(snap, s);
-    run_fan_control(s.clt_degc_x10);
+    run_fan_control(s.clt_degc_x10, (s.fault_bits & kFanCltFaultBit) != 0u);
     run_pump_control(snap.rpm_x10);
 }
 
@@ -462,6 +479,9 @@ uint16_t auxiliaries_test_get_vvt_adm_duty() noexcept {
     return g.vvt_adm_duty_x10;
 }
 
+void auxiliaries_test_run_fan(int16_t clt_x10, bool clt_fault) noexcept {
+    run_fan_control(clt_x10, clt_fault);
+}
 bool auxiliaries_test_get_fan_state() noexcept {
     return g.fan_on;
 }

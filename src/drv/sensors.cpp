@@ -577,6 +577,7 @@ void commit_sensor_snapshot() noexcept {
     g_data_committed.fuel_press_bar_x1000   = g_data_staging.fuel_press_bar_x1000;
     g_data_committed.oil_press_bar_x1000    = g_data_staging.oil_press_bar_x1000;
     g_data_committed.vbatt_mv               = g_data_staging.vbatt_mv;
+    g_data_committed.vbatt_fault            = g_data_staging.vbatt_fault;
     g_data_committed.fault_bits             = g_data_staging.fault_bits;
     g_data_committed.app1_pct_x10           = g_data_staging.app1_pct_x10;
     g_data_committed.app2_pct_x10           = g_data_staging.app2_pct_x10;
@@ -850,10 +851,14 @@ void sensors_tick_100ms() noexcept {
     // modo de bancada continua a fixar 12000 mV.
     if (g_bench_clt_iat) {
         g_data_staging.vbatt_mv = 12000u;
+        g_data_staging.vbatt_fault = false;
     } else {
         const uint16_t vbatt_mv =
             vbatt_raw_to_mv(ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::VBATT));
-        g_data_staging.vbatt_mv = (vbatt_mv >= 6000u && vbatt_mv <= 18000u) ? vbatt_mv : 12000u;
+        const bool vbatt_ok = (vbatt_mv >= 6000u && vbatt_mv <= 18000u);
+        // Fora da faixa: dwell e dead time usam o nominal (12 V) e o bit de falha sobe.
+        g_data_staging.vbatt_mv = vbatt_ok ? vbatt_mv : 12000u;
+        g_data_staging.vbatt_fault = !vbatt_ok;
     }
 
     // Slow path also samples APP/ETB; publish full snapshot for sensors_get().
@@ -929,6 +934,7 @@ SensorData sensors_get() noexcept {
     out.fuel_press_bar_x1000  = g_data_committed.fuel_press_bar_x1000;
     out.oil_press_bar_x1000   = g_data_committed.oil_press_bar_x1000;
     out.vbatt_mv            = g_data_committed.vbatt_mv;
+    out.vbatt_fault         = g_data_committed.vbatt_fault;
     out.fault_bits          = g_data_committed.fault_bits;
     out.app1_pct_x10        = g_data_committed.app1_pct_x10;
     out.app2_pct_x10        = g_data_committed.app2_pct_x10;

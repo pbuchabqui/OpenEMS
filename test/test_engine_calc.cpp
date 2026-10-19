@@ -18,6 +18,7 @@
 #include "engine/fuel_trim.h"
 #include "engine/ign_calc.h"
 #include "engine/limp_gating.h"
+#include "engine/cut_reason.h"
 #include "engine/map_estimator.h"
 #include "engine/quick_crank.h"
 #include "engine/table3d.h"
@@ -241,6 +242,89 @@ void test_engine_calc_overrun_retard(void) {
     CHECK_TRUE(back.spark_x10 >= ref.spark_x10 - 2 && back.spark_x10 <= ref.spark_x10 + 2,
                "retard gone once the pedal is back and the ramp has finished");
     overrun_spark_retard_deg = saved_ov;
+    tables_restore();
+}
+
+void test_engine_calc_dwell_floor(void) {
+    section("engine_calc: dwell has a 0.5 ms floor even with a zeroed table");
+    uint16_t saved[kIgnitionDwellTableSize];
+    std::memcpy(saved, dwell_ms_x10_table, sizeof(saved));
+    for (uint16_t& d : dwell_ms_x10_table) { d = 0u; }
+    reset_all();
+    tables_flat(60, 1000, 22);
+    uint32_t t = 1000u;
+    const EngineCalcOut out = run(t, 1.0, 3000u, 60u, 250u);
+    CHECK_TRUE(out.committed, "committed");
+    CHECK_TRUE(ecu_sched_test_get_dwell_ticks() >= 31250u, "dwell >= 0.5 ms (31250 ticks)");
+    std::memcpy(dwell_ms_x10_table, saved, sizeof(saved));
+    tables_restore();
+}
+
+void test_engine_calc_limp_rpm_hysteresis(void) {
+    section("engine_calc: limp rpm cut (3000 rpm) has 20 rpm hysteresis");
+    reset_all();
+    tables_flat(60, 1000, 22);
+    uint32_t t = 1000u;
+    auto step = [&](uint32_t rpm) {
+        EngineCalcIn in = input_at(t += 2u, rpm, 60u, 250u);
+        in.sensors.fault_bits = (1u << 3u);  // CLT fault -> limp_active
+        engine_calc_step(in);
+        return (g_fuel_cut_reasons & kFuelCutLimpRpm) != 0u;
+    };
+    for (int i = 0; i < 50; ++i) { step(2000u); }
+    CHECK_FALSE(step(2990u), "below the limit: no cut");
+    CHECK_TRUE(step(3010u), "above 3000 rpm: cut");
+    CHECK_TRUE(step(2990u), "2990 rpm: still cut (inside hysteresis)");
+    CHECK_FALSE(step(2970u), "2970 rpm: cut released");
+    CHECK_FALSE(step(2990u), "2990 rpm: stays released");
+    tables_restore();
+}
+
+void test_engine_calc_map_fault_runs_on_model(void) {
+    section("engine_calc: falha de MAP nao corta (partida e abaixo de 3000 rpm); corta acima");
+    tables_flat(60, 1000, 22);   // uma vez: tables_restore() devolve os originais
+    auto with_fault = [&](uint32_t rpm, ems::drv::SyncState st, uint32_t secs) {
+        reset_all();
+        uint32_t t = 1000u;
+        EngineCalcOut out{};
+        for (uint32_t i = 0; i < secs * 500u; ++i) {
+            EngineCalcIn in = input_at(t += 2u, rpm, 60u, 250u, st);
+            in.sensors.fault_bits = 0x01u;  // SensorId::MAP
+            out = engine_calc_step(in);
+        }
+        return out;
+    };
+    EngineCalcOut c = with_fault(250u, ems::drv::SyncState::HALF_SYNC, 1u);
+    CHECK_TRUE(c.committed && c.inj_pw_ticks > 0u, "partida com MAP em falha: injeta");
+    EngineCalcOut r = with_fault(2000u, ems::drv::SyncState::FULL_SYNC, 2u);
+    CHECK_TRUE(r.inj_pw_ticks > 0u && r.net_pw_us > 0u, "2000 rpm com MAP em falha: injeta (limp)");
+    CHECK_TRUE(r.limp_active, "limp ativo");
+    EngineCalcOut h = with_fault(4000u, ems::drv::SyncState::FULL_SYNC, 2u);
+    CHECK_EQ(h.pw_ms_x10, 0u, "4000 rpm com MAP em falha: corte (limp acima de 3000 rpm)");
+    tables_restore();
+}
+
+void test_engine_calc_vbatt_fault_safe_values(void) {
+    section("engine_calc: Vbatt fora de 6..18 V usa 12 V para dwell e dead time");
+    tables_flat(60, 1000, 22);
+    auto run_v = [&](uint16_t vbatt) {
+        reset_all();
+        uint32_t t = 1000u;
+        EngineCalcOut out{};
+        for (int i = 0; i < 1000; ++i) {
+            EngineCalcIn in = input_at(t += 2u, 3000u, 60u, 250u);
+            in.sensors.vbatt_mv = vbatt;
+            out = engine_calc_step(in);
+        }
+        return out;
+    };
+    const EngineCalcOut nominal = run_v(12000u);
+    const EngineCalcOut zero = run_v(0u);
+    const EngineCalcOut high = run_v(25000u);
+    CHECK_EQ(zero.dwell_ticks, nominal.dwell_ticks, "Vbatt 0: dwell de 12 V");
+    CHECK_EQ(zero.inj_pw_ticks, nominal.inj_pw_ticks, "Vbatt 0: dead time de 12 V");
+    CHECK_EQ(high.dwell_ticks, nominal.dwell_ticks, "Vbatt 25 V: dwell de 12 V");
+    CHECK_EQ(high.inj_pw_ticks, nominal.inj_pw_ticks, "Vbatt 25 V: dead time de 12 V");
     tables_restore();
 }
 

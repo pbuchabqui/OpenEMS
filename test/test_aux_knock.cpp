@@ -76,6 +76,52 @@ void test_aux_pump_prime(void) {
     CHECK_FALSE(auxiliaries_test_get_pump_state(), "pump off after key_off + delay");
 }
 
+void test_aux_fan_clt_fault(void) {
+    section("auxiliaries: fan histerese 95/90 e ligada com CLT em falha");
+    auxiliaries_test_reset();
+    auxiliaries_test_run_fan(900, false);
+    CHECK_FALSE(auxiliaries_test_get_fan_state(), "90.0 C: off");
+    auxiliaries_test_run_fan(950, false);
+    CHECK_TRUE(auxiliaries_test_get_fan_state(), "95.0 C: on");
+    auxiliaries_test_run_fan(920, false);
+    CHECK_TRUE(auxiliaries_test_get_fan_state(), "92.0 C: segura ligada (histerese)");
+    auxiliaries_test_run_fan(900, false);
+    CHECK_FALSE(auxiliaries_test_get_fan_state(), "90.0 C: desliga");
+    // CLT em falha vira 90 C (< 95 C): a ventoinha deve ligar mesmo assim.
+    auxiliaries_test_run_fan(900, true);
+    CHECK_TRUE(auxiliaries_test_get_fan_state(), "CLT em falha: ligada");
+    auxiliaries_test_run_fan(900, true);
+    CHECK_TRUE(auxiliaries_test_get_fan_state(), "CLT em falha: continua ligada");
+    auxiliaries_test_run_fan(900, false);
+    CHECK_FALSE(auxiliaries_test_get_fan_state(), "falha some: volta a histerese normal");
+}
+
+void test_aux_pins_safe_early(void) {
+    section("safe early: ventoinha/bomba em LOW como saidas, ETB sem excecao");
+    extern volatile uint32_t ems_test_aux_gpiob_moder;
+    extern volatile uint32_t ems_test_aux_gpiob_bsrr;
+    ems_test_aux_gpiob_moder = 0u;
+    auxiliaries_pins_safe_early();
+    CHECK_TRUE(ems_test_aux_gpiob_moder != 0u, "MODER configurado como saida");
+    CHECK_TRUE((ems_test_aux_gpiob_bsrr >> 16u) != 0u, "BSRR derruba fan e pump");
+    ::etb_driver_pins_safe_early();
+    CHECK_EQ(::etb_driver_test_motor_pwm(), 0, "ETB sem PWM apos safe early");
+    auxiliaries_test_reset();
+}
+
+void test_aux_pump_boot_prime_then_rpm(void) {
+    section("auxiliaries: prime no boot (2 s), depois segue o rpm");
+    auxiliaries_test_reset();
+    auxiliaries_set_key_on(true);  // main_stm32 faz isto apos auxiliaries_init
+    auxiliaries_tick_10ms();
+    CHECK_TRUE(auxiliaries_test_get_pump_state(), "prime: bomba on no boot");
+    for (int i = 0; i < 150; ++i) { auxiliaries_tick_10ms(); }
+    CHECK_TRUE(auxiliaries_test_get_pump_state(), "1,5 s: ainda no prime");
+    for (int i = 0; i < 300; ++i) { auxiliaries_tick_10ms(); }
+    CHECK_FALSE(auxiliaries_test_get_pump_state(), "sem rpm apos o prime: desliga");
+    auxiliaries_test_reset();
+}
+
 void test_aux_ticks_no_crash(void) {
     section("auxiliaries: tick_10ms / tick_20ms no crash");
     auxiliaries_test_reset();

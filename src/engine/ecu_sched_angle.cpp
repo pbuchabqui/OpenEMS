@@ -108,8 +108,11 @@ void table_add(int32_t arm, int32_t target, int32_t cycle, int32_t now,
 void add_cylinder(uint8_t cyl, int32_t tdc, int32_t cycle, int32_t now, int32_t inj_ref,
                   int32_t dwell_span, int32_t pw_x10, int32_t trig_off)
 {
-    const int32_t adv = g_advance_x10 + static_cast<int32_t>(cyl_ign_trim_deg[cyl]) * 10 -
-                        g_cyl_retard_x10[cyl];
+    int32_t adv = g_advance_x10 + static_cast<int32_t>(cyl_ign_trim_deg[cyl]) * 10 -
+                  g_cyl_retard_x10[cyl];
+    // Mesma faixa do avanço total (-20°..+60°) depois de trim por cilindro e knock.
+    if (adv > 600) { adv = 600; }
+    if (adv < -200) { adv = -200; }
     const int32_t spark = wrap(tdc - adv - trig_off, cycle);
     table_add(spark - dwell_span, spark, cycle, now, kIgnCh[cyl], ECU_ACT_DWELL_START);
     table_add(spark - kArmLeadX10, spark, cycle, now, kIgnCh[cyl], ECU_ACT_SPARK);

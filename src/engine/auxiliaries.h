@@ -5,6 +5,8 @@
 namespace ems::engine {
 
 void auxiliaries_init() noexcept;
+// Ventoinha e bomba em LOW logo após o reset (antes de auxiliaries_init).
+void auxiliaries_pins_safe_early() noexcept;
 void auxiliaries_set_key_on(bool key_on) noexcept;
 void auxiliaries_tick_10ms() noexcept;
 void auxiliaries_tick_20ms() noexcept;
@@ -23,6 +25,7 @@ uint16_t auxiliaries_test_get_wg_duty() noexcept;
 uint16_t auxiliaries_test_get_vvt_esc_duty() noexcept;
 uint16_t auxiliaries_test_get_vvt_adm_duty() noexcept;
 bool auxiliaries_test_get_fan_state() noexcept;
+void auxiliaries_test_run_fan(int16_t clt_x10, bool clt_fault) noexcept;
 bool auxiliaries_test_get_pump_state() noexcept;
 bool auxiliaries_test_get_wg_failsafe() noexcept;
 #endif

@@ -13,7 +13,7 @@ static uint8_t popcount4(uint8_t m) {
 }
 
 void test_spark_skip(void) {
-    section("spark_skip: Bresenham por revolução + rotação + clamp");
+    section("spark_skip: Bresenham por ciclo (720°) + rotação + clamp");
 
     spark_skip_reset();
     CHECK_EQ(spark_skip_mask(), 0u, "reset: máscara vazia");
@@ -27,7 +27,7 @@ void test_spark_skip(void) {
     spark_skip_set_ratio_q8(255u);
     CHECK_EQ(spark_skip_get_ratio_q8(), 128u, "ratio clampa a 128 (50%)");
 
-    // 50%: 2 fires/rev × 0.5 = 1 salto por volta, exacto.
+    // 50%: 4 faíscas/ciclo × 0.5 = 2 cilindros mascarados por ciclo (2 voltas cada).
     spark_skip_reset();
     spark_skip_set_ratio_q8(128u);
     uint32_t total = 0u;
@@ -37,10 +37,10 @@ void test_spark_skip(void) {
         total += popcount4(spark_skip_mask());
         seen_union |= spark_skip_mask();
     }
-    CHECK_EQ(total, 8u, "50%: 1 salto/volta × 8 voltas = 8");
+    CHECK_EQ(total, 16u, "50%: 2 cilindros mascarados × 8 voltas = 16");
     CHECK_EQ(seen_union, 0x0Fu, "rotação cobre os 4 cilindros");
 
-    // 25% (64 Q8): 0.5 salto/volta → 4 saltos em 8 voltas (Bresenham conserva).
+    // 25% (64 Q8): 1 cilindro mascarado por ciclo → 8 voltas = 8.
     spark_skip_reset();
     spark_skip_set_ratio_q8(64u);
     total = 0u;
@@ -48,7 +48,7 @@ void test_spark_skip(void) {
         spark_skip_on_rev();
         total += popcount4(spark_skip_mask());
     }
-    CHECK_EQ(total, 4u, "25%: 4 saltos em 8 voltas");
+    CHECK_EQ(total, 8u, "25%: 1 cilindro mascarado × 8 voltas = 8");
 
     // set_ratio(0) limpa máscara imediatamente (saída do soft zone).
     spark_skip_set_ratio_q8(0u);

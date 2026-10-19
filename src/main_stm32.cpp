@@ -138,7 +138,7 @@ static inline uint16_t build_status_bits(const ems::drv::CkpSnapshot& snap,
     if (snap.phase_A) {
         status |= ems::app::STATUS_PHASE_A;
     }
-    if (sensors.fault_bits != 0u) {
+    if (sensors.fault_bits != 0u || sensors.vbatt_fault) {
         status |= ems::app::STATUS_SENSOR_FAULT;
     }
     if (g_rev_limit_active) {
@@ -223,6 +223,9 @@ static void openems_init() noexcept {
     // PC10/11 float; external pull-ups can also pull INJ high.
     // Must run before the USB 300 ms wait (was: ECU_Hardware_Init after that).
     ::ecu_sched_outputs_safe_early();
+    // ETB (ponte H), ventoinha e bomba: LOW antes de qualquer espera (flutuam após o reset).
+    ::etb_driver_pins_safe_early();
+    ems::engine::auxiliaries_pins_safe_early();
     ::ecu_sched_set_inj_inhibit_mask(0x0Fu);
     ::ecu_sched_set_inj_pw_ticks(0u);
 
@@ -323,6 +326,8 @@ static void openems_init() noexcept {
     // 7) Engine
     ems::engine::fuel_reset_adaptives();
     ems::engine::auxiliaries_init();
+    // Sem entrada de ignição: o prime da bomba (2 s) parte do boot e depois ela segue o rpm.
+    ems::engine::auxiliaries_set_key_on(true);
     ems::engine::knock_init();
     ems::engine::quick_crank_reset();
     iwdg_kick();
@@ -677,7 +682,8 @@ int main() {
             if (ems::engine::etb_autocal_active()) {
                 ems::engine::etb_autocal_tick(2u, snap_etb.rpm_x10);
             } else {
-                const bool etb_rev_cut = g_limp_active && (snap_etb.rpm_x10 > kLimpRpmLimit_x10);
+                const bool etb_rev_cut = g_rev_limit_active ||
+                    (g_limp_active && (snap_etb.rpm_x10 > kLimpRpmLimit_x10));
                 ems::engine::torque_idle_set_ac_load(ems::hal::ac_request_poll(now) ? 1u : 0u);
                 const auto torque_out = ems::engine::torque_manager_update(
                     snap_etb, sensors_etb, true, g_limp_active, etb_rev_cut,
