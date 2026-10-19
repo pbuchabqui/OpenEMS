@@ -309,15 +309,17 @@ class OpenEMSLink:
     DEBUG_SIZE = 52 * 4  # must match FW diag[52]
 
     # Bits de src/engine/cut_reason.h (ordem = bit 0..N)
-    FUEL_CUT_BITS = ["rev_limit", "limp_rpm", "map_fault", "oil_press",
+    # None = bit sem uso (a falha de MAP deixou de cortar; bit 13 nunca existiu).
+    FUEL_CUT_BITS = ["rev_limit", "limp_rpm", None, "oil_press",
                      "fuel_rail", "overtemp", "diag_crit", "no_sync",
-                     "dfco", "flood_clear", "inj_duty"]
+                     "dfco", "flood_clear", "inj_duty", "boost",
+                     "lambda", None, "etb_fault"]
     SPARK_CUT_BITS = ["limp_rpm", "oil_press", "overtemp", "diag_crit",
                       "spark_skip"]
 
     @staticmethod
     def _decode_bits(mask: int, names: list) -> list:
-        return [n for i, n in enumerate(names) if mask & (1 << i)]
+        return [n for i, n in enumerate(names) if n and mask & (1 << i)]
 
     def read_debug(self) -> dict:
         assert len(self.DEBUG_FIELDS) * 4 == self.DEBUG_SIZE

@@ -89,10 +89,10 @@ Abertas:
   simulador (`tools/ci_local.sh` verde, inclusive os dois firmwares com `-Werror`).
 - Falha de MAP não corta mais abaixo de 3000 rpm. Se o modelo de MAP estiver errado (antes de convergir, em
   boost), a mistura fica errada e não há bit `kProtectDis` nem corte que reponha a proteção.
-- A bomba parte do boot (inclusive após reset do watchdog) e não há caminho de key-off: `set_key_on(false)` não
-  tem chamadores.
-- Dashboard (`tools/openems_dash/protocol.py`) ainda nomeia os bits de corte removidos (map_fault, fatal, no_sync
-  de fase); eles simplesmente nunca acendem.
+- Bomba: a ECU não tem entrada de chave (`set_key_on(false)` só existe para teste). Key-off é perda de
+  alimentação, que derruba o relé. Reset do watchdog repete o prime de 2 s, o que mantém a bomba ligada com o
+  motor rodando até o rpm voltar a ser medido; sem rpm a bomba desliga sozinha ao fim do prime.
+  Não é defeito. Uma chave sentida pela ECU exigiria um pino novo.
 
 Achado dos testes de pino: o soft-limit por skip de faísca entregava só metade do ratio pedido (máx. ~25% em vez
 de 50%), porque a máscara por volta atingia um cilindro que não disparava naquela volta. Corrigido em
