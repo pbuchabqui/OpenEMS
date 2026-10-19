@@ -77,8 +77,8 @@ mantém o último PWM do ETB até o reset.
 Corrigidas e testadas: dwell sem piso; avanço por cilindro sem clamp final; `limp_rpm_cut` sem histerese;
 limitador de giro sem fechar o ETB; PWM do ETB herdado ao entrar em teste; ventoinha parada com CLT em falha;
 bomba (prime de 2 s no boot e depois segue o rpm, `main_stm32.cpp`); falha de MAP não corta mais (segue com o
-MAP do modelo, limp limita a 3000 rpm); Vbatt fora de 6..18 V sobe `vbatt_fault` (STATUS_SENSOR_FAULT) e usa
-12 V em dwell e dead time; ETB, ventoinha e bomba em LOW logo após o reset (`etb_driver_pins_safe_early`,
+MAP do modelo, limp limita a 3000 rpm); Vbatt fora de 6..18 V sobe `vbatt_fault` (STATUS_SENSOR_FAULT); queda
+real (0 < V < 6) prende em 6 V em dwell e dead time (`vbatt_safe_mv`), leitura 0 ou > 18 V usa 12 V; ETB, ventoinha e bomba em LOW logo após o reset (`etb_driver_pins_safe_early`,
 `auxiliaries_pins_safe_early`); código morto removido (`limp_gating_fatal`, `phase_valid`/`sequential`, `etb_allow`).
 
 Abertas:
@@ -87,8 +87,6 @@ Abertas:
   derruba, mas há uma janela entre o reset e essa chamada.
 - Nunca medido em hardware: nada desta rodada foi gravado nem medido na bancada. Os testes são de host e de
   simulador (`tools/ci_local.sh` verde, inclusive os dois firmwares com `-Werror`).
-- Vbatt abaixo de 6 V (queda real na partida) usa 12 V nominal em dwell e dead time, como já fazia o driver.
-  Um valor entre 0 e 6 V real ficaria melhor preso em 6 V; só a leitura 0 (divisor aberto) pede o nominal.
 - Falha de MAP não corta mais abaixo de 3000 rpm. Se o modelo de MAP estiver errado (antes de convergir, em
   boost), a mistura fica errada e não há bit `kProtectDis` nem corte que reponha a proteção.
 - A bomba parte do boot (inclusive após reset do watchdog) e não há caminho de key-off: `set_key_on(false)` não

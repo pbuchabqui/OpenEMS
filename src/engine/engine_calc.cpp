@@ -30,7 +30,7 @@ constexpr uint32_t kLimpRpmHyst_x10  = 200u;    // 20 rpm: evita chatter no cort
 // Bateria fora de 6..18 V (leitura 0, divisor aberto): usa 12 V nominal para
 // dead time e dwell, em vez de saturar no eixo da tabela (9 V).
 inline uint16_t safe_vbatt_mv(const ems::drv::SensorData& s) noexcept {
-    return ems::drv::vbatt_in_range(s.vbatt_mv) ? s.vbatt_mv : ems::drv::kVbattNominalMv;
+    return ems::drv::vbatt_safe_mv(s.vbatt_mv);
 }
 constexpr uint32_t kMinDwellTicks     = 31250u;  // 0,5 ms @ 62,5 MHz
 constexpr uint8_t  kFaultBitMap  = (1u << 0u);  // SensorId::MAP

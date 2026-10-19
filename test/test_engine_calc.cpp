@@ -308,7 +308,7 @@ void test_engine_calc_map_fault_runs_on_model(void) {
 }
 
 void test_engine_calc_vbatt_fault_safe_values(void) {
-    section("engine_calc: Vbatt fora de 6..18 V usa 12 V para dwell e dead time");
+    section("engine_calc: Vbatt 0 / >18 V usa 12 V; queda <6 V prende em 6 V");
     tables_flat(60, 1000, 22);
     auto run_v = [&](uint16_t vbatt) {
         reset_all();
@@ -326,6 +326,11 @@ void test_engine_calc_vbatt_fault_safe_values(void) {
     const EngineCalcOut high = run_v(25000u);
     CHECK_EQ(zero.dwell_ticks, nominal.dwell_ticks, "Vbatt 0: dwell de 12 V");
     CHECK_EQ(zero.inj_pw_ticks, nominal.inj_pw_ticks, "Vbatt 0: dead time de 12 V");
+    const EngineCalcOut sag = run_v(3500u);
+    const EngineCalcOut six = run_v(6000u);
+    CHECK_EQ(sag.dwell_ticks, six.dwell_ticks, "Vbatt 3,5 V: dwell da linha de 6 V");
+    CHECK_EQ(sag.inj_pw_ticks, six.inj_pw_ticks, "Vbatt 3,5 V: dead time da linha de 6 V");
+    CHECK_TRUE(sag.inj_pw_ticks > nominal.inj_pw_ticks, "queda de Vbatt: dead time maior que o de 12 V");
     CHECK_EQ(high.dwell_ticks, nominal.dwell_ticks, "Vbatt 25 V: dwell de 12 V");
     CHECK_EQ(high.inj_pw_ticks, nominal.inj_pw_ticks, "Vbatt 25 V: dead time de 12 V");
     tables_restore();

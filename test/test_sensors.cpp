@@ -286,6 +286,7 @@ void test_sensors_vbatt_dedicated_channel(void) {
     adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 800u);    // ~3,5 V: abaixo de 6 V
     sensors_test_tick_100ms();
     CHECK_TRUE(sensors_get().vbatt_fault, "raw 800 (<6 V) → vbatt_fault");
+    CHECK_EQ(sensors_get().vbatt_mv, 6000u, "raw 800 (queda real) → preso em 6 V, não 12 V");
     adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2730u);
     sensors_test_tick_100ms();
     CHECK_FALSE(sensors_get().vbatt_fault, "leitura válida limpa vbatt_fault");
