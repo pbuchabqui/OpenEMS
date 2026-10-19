@@ -15,6 +15,7 @@ uint16_t auxiliaries_ewg_position_demand_x10() noexcept;
 // com output_test activo — os ticks automáticos ficam suspensos nesse modo).
 void auxiliaries_force_pump(bool on) noexcept;
 void auxiliaries_force_fan(bool on) noexcept;
+bool auxiliaries_fan_on() noexcept;
 
 #if defined(EMS_HOST_TEST)
 void auxiliaries_test_reset() noexcept;

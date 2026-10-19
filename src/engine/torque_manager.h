@@ -86,6 +86,8 @@ TorqueOutput torque_manager_update(
 // Runtime hooks (tests / future CAN)
 void torque_tc_set_external_slip_pct_x10(uint16_t slip_pct_x10) noexcept;
 void torque_tc_clear_external_slip() noexcept;
+// Carga de ar-condicionado pedida por fora (não há sensor do compressor).
+void torque_idle_set_ac_load(uint8_t on) noexcept;
 void torque_launch_force_enable(uint8_t on) noexcept;  // 0=use cal, 1=force on, 2=force off
 
 // Latches de telemetria (OCH / status bits / host tests)

@@ -67,6 +67,7 @@ int main() { return 0; }
 #include "hal/flash.h"
 #include "hal/out_pins.h"
 #include "hal/flex_fuel.h"
+#include "hal/ac_request.h"
 #include "hal/timer.h"
 
 // =============================================================================
@@ -279,6 +280,7 @@ static void openems_init() noexcept {
     ems::hal::uart0_enable_rx();  // RX fica desligado por padrão (uart.cpp:61)
     ems::engine::ewg_control_init();
     ems::hal::flex_fuel_init();
+    ems::hal::ac_request_init();
     iwdg_kick();
 
 	// 5) Flash Bank2 → carrega calibrações persistidas
@@ -676,6 +678,7 @@ int main() {
                 ems::engine::etb_autocal_tick(2u, snap_etb.rpm_x10);
             } else {
                 const bool etb_rev_cut = g_limp_active && (snap_etb.rpm_x10 > kLimpRpmLimit_x10);
+                ems::engine::torque_idle_set_ac_load(ems::hal::ac_request_poll(now) ? 1u : 0u);
                 const auto torque_out = ems::engine::torque_manager_update(
                     snap_etb, sensors_etb, true, g_limp_active, etb_rev_cut,
                     ems::engine::auxiliaries_idle_target_rpm_x10(sensors_etb.clt_degc_x10), 2u);

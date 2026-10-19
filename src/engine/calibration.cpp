@@ -485,6 +485,19 @@ void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept {
     std::memcpy(page0 + kTimingPage0Off + 4u, &trigger_fine_x10, 2u);
 }
 
+// Defaults keep today's behaviour, except the dashpot (tau halves above 2500 rpm) and the
+// idle integrator (opens 2, closes 1 per 2 ms tick).
+int16_t  decel_entry_delta_rpm_x10[kDashpotCurvePts] = {};
+uint8_t  idle_i_step_recover = 2u;
+uint8_t  idle_i_step_close   = 1u;
+uint16_t idle_fan_air_x10    = 0u;
+uint16_t idle_gear_air_x10   = 0u;
+uint16_t idle_ac_air_x10     = 0u;
+uint16_t dashpot_tau_ms[kDashpotCurvePts]  = {400u, 400u, 400u, 400u};
+uint16_t dashpot_cap_x10[kDashpotCurvePts] = {350u, 350u, 350u, 350u};
+uint16_t dashpot_fast_rpm_x10    = 25000u;
+uint16_t dashpot_fast_factor_q8  = 128u;  // above fast_rpm tau halves (256 = no shortening)
+int16_t  idle_spark_err_corr_x10[kIdleSparkCurvePts] = {};
 uint16_t ae_de_pw_us[kAeRateTableSize] = {};
 uint16_t fuel_pw_drop_max_us = 0u;
 uint8_t  overrun_spark_retard_deg = 0u;
@@ -500,6 +513,7 @@ uint8_t  driveline_speed_max_kmh = 0u;
 
 namespace {
 constexpr uint16_t kDriveabilityPwMaxUs = 20000u;  // 20 ms
+constexpr uint16_t kIdleAirMaxX10 = 1000u;          // 100.0 %
 uint16_t rd_u16(const uint8_t* p) noexcept {
     return static_cast<uint16_t>(p[0] | (static_cast<uint16_t>(p[1]) << 8u));
 }
@@ -531,6 +545,39 @@ void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept {
     }
     if (blank) {
         return;
+    }
+    std::memcpy(decel_entry_delta_rpm_x10, p + 0, 8u);
+    if (p[8] != 0u) {
+        idle_i_step_recover = p[8];
+    }
+    if (p[9] != 0u) {
+        idle_i_step_close = p[9];
+    }
+    idle_fan_air_x10  = (rd_u16(p + 10) > kIdleAirMaxX10) ? kIdleAirMaxX10 : rd_u16(p + 10);
+    idle_gear_air_x10 = (rd_u16(p + 12) > kIdleAirMaxX10) ? kIdleAirMaxX10 : rd_u16(p + 12);
+    idle_ac_air_x10   = (rd_u16(p + 14) > kIdleAirMaxX10) ? kIdleAirMaxX10 : rd_u16(p + 14);
+    for (uint8_t i = 0u; i < kDashpotCurvePts; ++i) {
+        const uint16_t tau = rd_u16(p + 16 + static_cast<uint16_t>(i) * 2u);
+        const uint16_t cap = rd_u16(p + 24 + static_cast<uint16_t>(i) * 2u);
+        if (tau != 0u) {
+            dashpot_tau_ms[i] = tau;
+        }
+        if (cap != 0u) {
+            dashpot_cap_x10[i] = (cap > 1000u) ? 1000u : cap;
+        }
+    }
+    const uint16_t fast_rpm = rd_u16(p + 32);
+    if (fast_rpm != 0u) {
+        dashpot_fast_rpm_x10 = fast_rpm;
+    }
+    // A byte cannot hold the Q8 256; 255 stands for "does not shorten".
+    if (p[34] != 0u) {
+        dashpot_fast_factor_q8 = (p[34] == 255u) ? 256u : p[34];
+    }
+    std::memcpy(idle_spark_err_corr_x10, p + 35, 12u);
+    for (uint8_t i = 0u; i < kIdleSparkCurvePts; ++i) {
+        const int16_t c = idle_spark_err_corr_x10[i];
+        idle_spark_err_corr_x10[i] = (c > 300) ? 300 : (c < -300) ? -300 : c;
     }
     // Zero is a valid DE table ("use half the adder"), so it is not a sentinel here.
     for (uint8_t i = 0u; i < kAeRateTableSize; ++i) {
@@ -572,6 +619,19 @@ void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
         return;
     }
     uint8_t* const p = page0 + kDriveabilityPage0Off;
+    std::memcpy(p + 0, decel_entry_delta_rpm_x10, 8u);
+    p[8] = idle_i_step_recover;
+    p[9] = idle_i_step_close;
+    wr_u16(p + 10, idle_fan_air_x10);
+    wr_u16(p + 12, idle_gear_air_x10);
+    wr_u16(p + 14, idle_ac_air_x10);
+    for (uint8_t i = 0u; i < kDashpotCurvePts; ++i) {
+        wr_u16(p + 16 + static_cast<uint16_t>(i) * 2u, dashpot_tau_ms[i]);
+        wr_u16(p + 24 + static_cast<uint16_t>(i) * 2u, dashpot_cap_x10[i]);
+    }
+    wr_u16(p + 32, dashpot_fast_rpm_x10);
+    p[34] = (dashpot_fast_factor_q8 >= 256u) ? 255u : static_cast<uint8_t>(dashpot_fast_factor_q8);
+    std::memcpy(p + 35, idle_spark_err_corr_x10, 12u);
     for (uint8_t i = 0u; i < kAeRateTableSize; ++i) {
         wr_u16(p + 47 + static_cast<uint16_t>(i) * 2u, ae_de_pw_us[i]);
     }

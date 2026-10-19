@@ -6,11 +6,18 @@
 #include <cstring>
 
 #include "app/can_rx_map.h"
+#include "drv/ckp.h"
+#include "drv/sensors.h"
+#include "engine/auxiliaries.h"
+#include "engine/etb_control.h"
+#include "engine/quick_crank.h"
+#include "engine/torque_manager.h"
 #include "engine/calibration.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 
 using namespace ems::engine;
+using namespace ems::app;
 
 void test_dfco_ramp_fraction(void) {
     section("fuel_calc: DFCO exit ramp fraction (q8)");
@@ -273,4 +280,246 @@ void test_driveline_page0(void) {
     driveline_enable = s_en; driveline_max_retard_deg = s_deg; driveline_dd_thresh_rpm_x10 = s_dd;
     driveline_rpm_min_x10 = s_rmin; driveline_rpm_max_x10 = s_rmax; driveline_clt_min_x10 = s_clt;
     driveline_map_min_bar_x100 = s_map; driveline_speed_min_kmh = s_smin; driveline_speed_max_kmh = s_smax;
+}
+
+void test_idle_air_and_dashpot(void) {
+    section("torque_manager: idle I steps, load air feed-forward, dashpot (fan / gear / A-C)");
+    ems::drv::CkpSnapshot snap{};
+    snap.rpm_x10 = 30000u;
+    ems::drv::SensorData sens{};
+    sens.app_pct_x10 = 800u;
+    TorqueOutput out{};
+    torque_manager_init();   // clears a limp left behind by other suites
+    tc_enable = 0u;
+    const etb_drive_mode_t saved_mode = etb_get_drive_mode();
+    etb_set_drive_mode(static_cast<etb_drive_mode_t>(0));   // pedal map of the default mode
+    const uint16_t saved_rate = etb_max_rate_pct_per_s;
+    etb_max_rate_pct_per_s = 0u;                            // no slew limit: assert the raw target
+    torque_manager_reset();
+    {
+        const uint16_t saved_min = etb_idle_min_opening_x10;
+        const uint16_t saved_max = etb_idle_max_opening_x10;
+        const uint16_t saved_open = etb_idle_open_pct_x10;
+        const uint16_t saved_caps[4] = {
+            dashpot_cap_x10[0], dashpot_cap_x10[1],
+            dashpot_cap_x10[2], dashpot_cap_x10[3]};
+        const uint16_t saved_taus[4] = {
+            dashpot_tau_ms[0], dashpot_tau_ms[1],
+            dashpot_tau_ms[2], dashpot_tau_ms[3]};
+        const uint16_t saved_fan = idle_fan_air_x10;
+        const uint16_t saved_gear = idle_gear_air_x10;
+        const uint16_t saved_ac = idle_ac_air_x10;
+        const CanSignalDef saved_gear_def = can_rx_map_get(CanRxSignal::GEAR);
+
+        etb_cal_valid = 1u;
+        etb_idle_open_pct_x10 = 80u;
+        etb_idle_min_opening_x10 = 0u;
+        etb_idle_max_opening_x10 = 200u;
+        for (uint8_t i = 0u; i < 4u; ++i) {
+            dashpot_cap_x10[i] = 1u;
+        }
+        idle_fan_air_x10 = 0u;
+        idle_gear_air_x10 = 0u;
+        idle_ac_air_x10 = 0u;
+        torque_idle_set_ac_load(0u);
+        auxiliaries_force_fan(false);
+        quick_crank_reset();
+        torque_manager_reset();
+
+        snap.rpm_x10 = 7000u;
+        sens.app_pct_x10 = 0u;
+        for (int i = 0; i < 5; ++i) {
+            out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        }
+        CHECK_EQ(out.etb_target_pct_x10, 10u, "five under-target ticks open by 2");
+        snap.rpm_x10 = 10000u;
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 9u, "one over-target tick closes by 1");
+
+        torque_manager_reset();
+        snap.rpm_x10 = 7000u;
+        idle_fan_air_x10 = 50u;
+        auxiliaries_force_fan(true);
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 52u, "fan air adds to the idle floor");
+        auxiliaries_force_fan(false);
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 4u, "fan air is not stored in the integrator");
+
+        idle_ac_air_x10 = 10u;
+        torque_idle_set_ac_load(1u);
+        idle_gear_air_x10 = 15u;
+        CanSignalDef gear_def{};
+        gear_def.id = 0x111u;
+        gear_def.byte_lo = 0u;
+        gear_def.byte_hi = 0xFFu;
+        gear_def.mask = 0xFFu;
+        gear_def.timeout_ms = 0u;
+        can_rx_map_set(CanRxSignal::GEAR, gear_def);
+        const uint8_t gear_byte = 3u;
+        can_rx_map_process(0x111u, &gear_byte, 1u, 1u);
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 31u, "AC and engaged gear add air");
+        can_rx_map_set(CanRxSignal::GEAR, saved_gear_def);
+        torque_idle_set_ac_load(0u);
+        idle_fan_air_x10 = 0u;
+        idle_gear_air_x10 = 0u;
+        idle_ac_air_x10 = 0u;
+
+        for (uint8_t i = 0u; i < 4u; ++i) {
+            dashpot_cap_x10[i] = 350u;
+            dashpot_tau_ms[i] = 400u;
+        }
+        torque_manager_reset();
+        snap.rpm_x10 = 15000u;
+        sens.app_pct_x10 = 1000u;
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 1000u, "wide open pedal is not idle");
+        sens.app_pct_x10 = 0u;
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 350u, "tip-out seeds the 35% dashpot cap");
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 349u, "tau 400 ms decays one count per 2 ms");
+
+        for (uint8_t i = 0u; i < 4u; ++i) {
+            dashpot_tau_ms[i] = 50u;
+        }
+        torque_manager_reset();
+        sens.app_pct_x10 = 1000u;
+        (void)torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        sens.app_pct_x10 = 0u;
+        (void)torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 336u, "tau 50 ms decays 14 counts");
+
+        for (uint8_t i = 0u; i < 4u; ++i) {
+            dashpot_tau_ms[i] = 400u;
+        }
+        torque_manager_reset();
+        snap.rpm_x10 = 26000u;
+        sens.app_pct_x10 = 1000u;
+        (void)torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        sens.app_pct_x10 = 0u;
+        (void)torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        CHECK_EQ(out.etb_target_pct_x10, 347u, "rpm above 2500 halves tau to 200 ms");
+
+        etb_idle_min_opening_x10 = saved_min;
+        etb_idle_max_opening_x10 = saved_max;
+        etb_idle_open_pct_x10 = saved_open;
+        for (uint8_t i = 0u; i < 4u; ++i) {
+            dashpot_cap_x10[i] = saved_caps[i];
+            dashpot_tau_ms[i] = saved_taus[i];
+        }
+        idle_fan_air_x10 = saved_fan;
+        idle_gear_air_x10 = saved_gear;
+        idle_ac_air_x10 = saved_ac;
+        torque_idle_set_ac_load(0u);
+        auxiliaries_force_fan(false);
+        torque_manager_reset();
+    }
+    etb_set_drive_mode(saved_mode);
+    etb_max_rate_pct_per_s = saved_rate;
+}
+
+void test_driveability_wire_rules(void) {
+    section("calibration: wire rules (zero keeps the default, 255 = Q8 256, a zero block clears the DE table)");
+    {
+        const uint8_t saved_rec = idle_i_step_recover;
+        const uint8_t saved_cls = idle_i_step_close;
+        const uint16_t saved_tau0 = dashpot_tau_ms[0];
+        const uint16_t saved_tau1 = dashpot_tau_ms[1];
+        const uint16_t saved_fac = dashpot_fast_factor_q8;
+        const uint16_t saved_de = ae_de_pw_us[0];
+        const int16_t saved_spk = idle_spark_err_corr_x10[0];
+        uint8_t blank[512] = {};
+        driveability_apply_page0(blank, sizeof(blank));
+        CHECK_EQ(idle_i_step_recover, 2u, "zero wire keeps recover step 2");
+        CHECK_EQ(idle_i_step_close, 1u, "zero wire keeps close step 1");
+        CHECK_EQ(dashpot_tau_ms[0], 400u, "zero wire keeps dashpot tau 400");
+        CHECK_EQ(dashpot_cap_x10[0], 350u, "zero wire keeps dashpot cap 35%");
+        CHECK_EQ(dashpot_fast_rpm_x10, 25000u, "zero wire keeps fast-rpm gate");
+        CHECK_EQ(dashpot_fast_factor_q8, 128u, "zero wire keeps Q8 128");
+        CHECK_EQ(ae_de_pw_us[0], 0u, "zero DE table stays the half-adder fallback");
+        CHECK_EQ(idle_spark_err_corr_x10[0], static_cast<int16_t>(0),
+                 "zero idle-spark curve stays linear");
+        CHECK_EQ(idle_fan_air_x10, 0u, "zero fan air is a real zero");
+        CHECK_EQ(driveline_dd_thresh_rpm_x10, 50u, "zero threshold keeps 5.0 rpm×10");
+
+        uint8_t page[512] = {};
+        page[kDriveabilityPage0Off + 8] = 5u;
+        const uint16_t tau1 = 200u;
+        std::memcpy(page + kDriveabilityPage0Off + 18, &tau1, 2u);
+        page[kDriveabilityPage0Off + 34] = 255u;
+        const uint16_t de0 = 100u;
+        std::memcpy(page + kDriveabilityPage0Off + 47, &de0, 2u);
+        driveability_apply_page0(page, sizeof(page));
+        CHECK_EQ(idle_i_step_recover, 5u, "non-zero recover step is copied");
+        CHECK_EQ(dashpot_tau_ms[0], 400u, "a zero tau point stays 400");
+        CHECK_EQ(dashpot_tau_ms[1], 200u, "a non-zero tau point is copied");
+        CHECK_EQ(dashpot_fast_factor_q8, 256u, "wire 255 means Q8 256");
+        CHECK_EQ(ae_de_pw_us[0], 100u, "DE table zero is not a sentinel");
+        uint8_t again[512] = {};
+        driveability_apply_page0(again, sizeof(again));
+        CHECK_EQ(idle_i_step_recover, 5u, "a later zero block does not wipe recover");
+        CHECK_EQ(dashpot_tau_ms[1], 200u, "a later zero block does not wipe tau");
+        CHECK_EQ(ae_de_pw_us[0], 0u, "a later zero block clears the DE table");
+        uint8_t outp[512] = {};
+        driveability_serialize_to_page0(outp, sizeof(outp));
+        CHECK_EQ(outp[kDriveabilityPage0Off + 8], 5u, "serialize writes the resolved recover step");
+        CHECK_EQ(outp[kDriveabilityPage0Off + 16], static_cast<uint8_t>(400u & 0xFFu), "serialize writes tau 400");
+        CHECK_EQ(outp[kDriveabilityPage0Off + 34], 255u, "serialize writes Q8 256 as 255");
+        CHECK_EQ(outp[kDriveabilityPage0Off + 47], 0u, "serialize keeps a zero DE table");
+        CHECK_EQ(outp[kDriveabilityPage0Off + 35], 0u, "serialize does not invent the linear idle curve");
+        driveability_apply_page0(again, 100u);
+        CHECK_EQ(idle_i_step_recover, 5u, "short page is a no-op");
+
+        idle_i_step_recover = saved_rec;
+        idle_i_step_close = saved_cls;
+        dashpot_tau_ms[0] = saved_tau0;
+        dashpot_tau_ms[1] = saved_tau1;
+        dashpot_fast_factor_q8 = saved_fac;
+        ae_de_pw_us[0] = saved_de;
+        idle_spark_err_corr_x10[0] = saved_spk;
+    }}
+
+void test_dfco_entry_shaped_by_clt(void) {
+    section("fuel_calc: DFCO entry rpm shaped by CLT");
+    const uint32_t s_entry = decel_cut_entry_rpm_x10;
+    const uint32_t s_exit = decel_cut_exit_rpm_x10;
+    int16_t s_d[kDashpotCurvePts];
+    std::memcpy(s_d, decel_entry_delta_rpm_x10, sizeof(s_d));
+    for (uint8_t i = 0u; i < kDashpotCurvePts; ++i) { decel_entry_delta_rpm_x10[i] = 0; }
+    decel_cut_entry_rpm_x10 = 15000u;
+    decel_cut_exit_rpm_x10 = 12000u;
+    decel_entry_delta_rpm_x10[3] = 3000;
+    fuel_decel_cut_reset();
+    CHECK_FALSE(fuel_decel_cut_update(16000u, 0u, 1000), "CLT curve raises entry above 1600 rpm");
+    CHECK_TRUE(fuel_decel_cut_update(19000u, 0u, 1000), "1900 rpm still enters the raised gate");
+    decel_entry_delta_rpm_x10[3] = -20000;
+    fuel_decel_cut_reset();
+    CHECK_FALSE(fuel_decel_cut_update(11000u, 0u, 1000), "entry clamped up to the exit rpm");
+    CHECK_TRUE(fuel_decel_cut_update(12000u, 0u, 1000), "clamped entry equals the exit rpm");
+    decel_entry_delta_rpm_x10[3] = 0;
+    fuel_decel_cut_reset();
+    CHECK_TRUE(fuel_decel_cut_update(16000u, 0u, 1000), "flat deltas use the scalar entry rpm");
+    decel_cut_entry_rpm_x10 = s_entry;
+    decel_cut_exit_rpm_x10 = s_exit;
+    std::memcpy(decel_entry_delta_rpm_x10, s_d, sizeof(s_d));
+    fuel_decel_cut_reset();
+}
+
+void test_idle_spark_error_curve(void) {
+    section("ign_calc: idle spark error curve replaces the linear law");
+    int16_t s_c[kIdleSparkCurvePts];
+    std::memcpy(s_c, idle_spark_err_corr_x10, sizeof(s_c));
+    for (uint8_t i = 0u; i < kIdleSparkCurvePts; ++i) { idle_spark_err_corr_x10[i] = 0; }
+    CHECK_EQ(calc_idle_spark_correction_x10(7000u, 8500u, 0u, 60u), 20,
+             "all-zero curve: linear law, 150 rpm below -> +2.0 deg");
+    idle_spark_err_corr_x10[3] = 40;
+    idle_spark_err_corr_x10[4] = 100;
+    CHECK_EQ(calc_idle_spark_correction_x10(7000u, 8500u, 0u, 60u), 80, "curve at error 1500 -> 8.0 deg");
+    CHECK_EQ(calc_idle_spark_correction_x10(8500u, 8500u, 0u, 60u), 0, "curve still honors the deadband");
+    CHECK_EQ(calc_idle_spark_correction_x10(7000u, 8500u, 30u, 60u), 0, "curve still honors the TPS window");
+    std::memcpy(idle_spark_err_corr_x10, s_c, sizeof(s_c));
 }

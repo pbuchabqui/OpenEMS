@@ -203,8 +203,7 @@ int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,
         tps_pct_x10 > idle_spark_tps_max_x10 ||
         map_bar_x100 > idle_spark_map_max_bar_x100 ||
         rpm_x10 < idle_spark_rpm_min_x10 ||
-        rpm_x10 > static_cast<uint32_t>(idle_target_rpm_x10) + idle_spark_window_above_target_x10 ||
-        idle_spark_rpm_per_deg_x10 == 0u) {
+        rpm_x10 > static_cast<uint32_t>(idle_target_rpm_x10) + idle_spark_window_above_target_x10) {
         return 0;
     }
 
@@ -215,17 +214,42 @@ int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,
         return 0;
     }
 
-    if (error_x10 > 0) {
-        error_x10 -= deadband;
-    } else {
-        error_x10 += deadband;
-    }
-
-    // Proportional gain in 0.1°: error (rpm×10) × 10 / (rpm×10 per degree).
-    const int32_t corr_x10 = (error_x10 * 10) / static_cast<int32_t>(idle_spark_rpm_per_deg_x10);
     const int32_t lo = static_cast<int32_t>(idle_spark_retard_limit_deg) * 10;
     const int32_t hi = static_cast<int32_t>(idle_spark_advance_limit_deg) * 10;
-    return static_cast<int16_t>(corr_x10 < lo ? lo : (corr_x10 > hi ? hi : corr_x10));
+
+    bool curve = false;
+    for (uint8_t i = 0u; i < kIdleSparkCurvePts; ++i) {
+        if (idle_spark_err_corr_x10[i] != 0) {
+            curve = true;
+            break;
+        }
+    }
+    if (!curve) {
+        if (idle_spark_rpm_per_deg_x10 == 0u) {
+            return 0;
+        }
+        if (error_x10 > 0) {
+            error_x10 -= deadband;
+        } else {
+            error_x10 += deadband;
+        }
+        // Proportional gain in 0.1 deg: error (rpm x10) x 10 / (rpm x10 per degree).
+        const int32_t corr_x10 =
+            (error_x10 * 10) / static_cast<int32_t>(idle_spark_rpm_per_deg_x10);
+        return static_cast<int16_t>(corr_x10 < lo ? lo : (corr_x10 > hi ? hi : corr_x10));
+    }
+
+    // The curve reads the raw error (target - rpm); outside the axis it holds the end value.
+    constexpr int16_t kErrAxis[kIdleSparkCurvePts] = {-4000, -2000, -500, 500, 2000, 4000};
+    int32_t raw = error_x10;
+    if (raw < kErrAxis[0]) {
+        raw = kErrAxis[0];
+    } else if (raw > kErrAxis[kIdleSparkCurvePts - 1u]) {
+        raw = kErrAxis[kIdleSparkCurvePts - 1u];
+    }
+    const int32_t corr = interp_i16_8pt(kErrAxis, idle_spark_err_corr_x10, kIdleSparkCurvePts,
+                                        static_cast<int16_t>(raw));
+    return static_cast<int16_t>(corr < lo ? lo : (corr > hi ? hi : corr));
 }
 
 uint16_t dwell_ms_x10_from_vbatt(uint16_t vbatt_mv) noexcept {

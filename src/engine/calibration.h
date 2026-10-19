@@ -274,8 +274,17 @@ extern int16_t trigger_fine_x10;
 void apply_page0_timing(const uint8_t* page0, uint16_t len, bool at_boot) noexcept;
 void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept;
 
+constexpr uint8_t kDashpotCurvePts   = 4u;
+constexpr uint8_t kIdleSparkCurvePts = 6u;
+
 // Driveability block (page0 276-347, 72 bytes). Offsets inside the block follow the order
 // the features were added to the firmware; a byte with no feature behind it stays 0.
+//   0-7    decel_entry_delta_rpm_x10[4] (s16): DFCO entry RPM shift at CLT -20/20/60/100 C
+//   8-9    idle_i_step_recover / idle_i_step_close (u8 each, 0 = keep): idle integrator steps
+//   10-15  idle_fan_air / idle_gear_air / idle_ac_air _x10 (u16, 0-1000): idle air added by load
+//   16-31  dashpot_tau_ms[4], dashpot_cap_x10[4] (u16, 0 = keep) by opening 0/10/20/35 %
+//   32-34  dashpot_fast_rpm_x10 (u16), dashpot_fast_factor_q8 (u8; 255 = 256 = no shortening)
+//   35-46  idle_spark_err_corr_x10[6] (s16, +-30.0 deg) by rpm error; all zero = linear law
 //   47-54  ae_de_pw_us[4] (u16 each): tip-out PW by |TPSdot| (same axis as ae_pw_adder_us);
 //          all zero = tip-out is half of the tip-in adder
 //   58     driveline_enable (0/1); 59-60 driveline_dd_thresh_rpm_x10 (u16, 0 = keep);
@@ -286,6 +295,17 @@ void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept;
 //   57     overrun_spark_retard_deg (u8, 0-30): retard on a trailing closed throttle, 0 = off
 constexpr uint16_t kDriveabilityPage0Off = 276u;
 constexpr uint16_t kDriveabilityPage0End = 348u;
+extern int16_t  decel_entry_delta_rpm_x10[kDashpotCurvePts];
+extern uint8_t  idle_i_step_recover;
+extern uint8_t  idle_i_step_close;
+extern uint16_t idle_fan_air_x10;
+extern uint16_t idle_gear_air_x10;
+extern uint16_t idle_ac_air_x10;
+extern uint16_t dashpot_tau_ms[kDashpotCurvePts];
+extern uint16_t dashpot_cap_x10[kDashpotCurvePts];
+extern uint16_t dashpot_fast_rpm_x10;
+extern uint16_t dashpot_fast_factor_q8;
+extern int16_t  idle_spark_err_corr_x10[kIdleSparkCurvePts];
 extern uint16_t ae_de_pw_us[kAeRateTableSize];
 extern uint16_t fuel_pw_drop_max_us;
 extern uint8_t  overrun_spark_retard_deg;

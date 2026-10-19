@@ -465,6 +465,32 @@ bool     g_dfco_gear_changed   = false;  // já houve ≥1 troca (valida timesta
 uint32_t g_dfco_gear_change_ms = 0u;
 uint32_t g_dfco_now_ms         = 0u;
 bool     g_dfco_just_entered   = false;
+constexpr int16_t kDfcoEntryCltAxisX10[kDashpotCurvePts] = {-200, 200, 600, 1000};
+
+// DFCO entry rpm: the base calibration plus, when any delta is set, the CLT-shaped shift.
+// Never below the exit rpm.
+uint32_t dfco_entry_rpm_x10(int16_t clt_x10) noexcept {
+    bool shaped = false;
+    for (uint8_t i = 0u; i < kDashpotCurvePts; ++i) {
+        if (decel_entry_delta_rpm_x10[i] != 0) {
+            shaped = true;
+            break;
+        }
+    }
+    int32_t entry = static_cast<int32_t>(decel_cut_entry_rpm_x10);
+    if (shaped) {
+        entry += interp_i16_8pt(kDfcoEntryCltAxisX10, decel_entry_delta_rpm_x10,
+                                kDashpotCurvePts, clt_x10);
+    }
+    if (entry < 0) {
+        entry = 0;
+    }
+    if (entry < static_cast<int32_t>(decel_cut_exit_rpm_x10)) {
+        entry = static_cast<int32_t>(decel_cut_exit_rpm_x10);
+    }
+    return static_cast<uint32_t>(entry);
+}
+
 uint16_t g_dfco_ramp_elapsed_ms = 0u;
 bool     g_dfco_ramp_active    = false;
 constexpr uint16_t kDfcoMapExitHystBarX100 = 5u;
@@ -520,7 +546,7 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
 
     if (!g_decel_cut) {
         if (throttle_closed && engine_warm && map_ok && !shift_inhibit &&
-            rpm_x10 >= decel_cut_entry_rpm_x10) {
+            rpm_x10 >= dfco_entry_rpm_x10(clt_x10)) {
             g_decel_cut = true;
             g_dfco_just_entered = true;
             g_dfco_ramp_active = false;

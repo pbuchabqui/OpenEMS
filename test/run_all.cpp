@@ -273,6 +273,10 @@ int main(void) {
     test_driveline_retard();
     test_driveline_page0();
     test_engine_calc_driveline_retard();
+    test_idle_air_and_dashpot();
+    test_driveability_wire_rules();
+    test_dfco_entry_shaped_by_clt();
+    test_idle_spark_error_curve();
     test_engine_calc_overrun_retard();
     test_engine_calc_pw_drop_limit();
     test_math_xtau_steady_and_step();
