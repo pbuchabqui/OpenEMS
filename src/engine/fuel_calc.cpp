@@ -527,6 +527,40 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
     return g_decel_cut;
 }
 
+uint8_t fuel_decel_cut_ramp_frac_q8() noexcept {
+    if (!g_dfco_ramp_active || decel_cut_ramp_ms == 0u) {
+        return 255u;
+    }
+    const uint32_t q = (static_cast<uint32_t>(g_dfco_ramp_elapsed_ms) * 255u) / decel_cut_ramp_ms;
+    return static_cast<uint8_t>(q > 255u ? 255u : q);
+}
+
+namespace {
+uint32_t g_pw_drop_prev = 0u;
+bool     g_pw_drop_valid = false;
+}  // namespace
+
+uint32_t fuel_pw_limit_drop(uint32_t pw_us) noexcept {
+    if (fuel_pw_drop_max_us == 0u || !g_pw_drop_valid) {
+        g_pw_drop_prev = pw_us;
+        g_pw_drop_valid = true;
+        return pw_us;
+    }
+    if (pw_us < g_pw_drop_prev) {
+        const uint32_t drop = g_pw_drop_prev - pw_us;
+        if (drop > fuel_pw_drop_max_us) {
+            pw_us = g_pw_drop_prev - fuel_pw_drop_max_us;
+        }
+    }
+    g_pw_drop_prev = pw_us;
+    return pw_us;
+}
+
+void fuel_pw_limit_drop_reset() noexcept {
+    g_pw_drop_prev = 0u;
+    g_pw_drop_valid = false;
+}
+
 bool fuel_decel_cut_just_entered() noexcept {
     return g_dfco_just_entered;
 }

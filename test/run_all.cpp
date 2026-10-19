@@ -265,6 +265,12 @@ int main(void) {
     test_math_stft_gains();
     test_math_inj_scheduler_ticks();
     test_math_xtau_convergence();
+    test_dfco_ramp_fraction();
+    test_fuel_pw_limit_drop();
+    test_overrun_spark_retard();
+    test_driveability_page0();
+    test_engine_calc_overrun_retard();
+    test_engine_calc_pw_drop_limit();
     test_math_xtau_steady_and_step();
     test_math_production_tables();
     test_math_misfire_threshold();

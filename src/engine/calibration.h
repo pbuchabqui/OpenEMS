@@ -274,6 +274,17 @@ extern int16_t trigger_fine_x10;
 void apply_page0_timing(const uint8_t* page0, uint16_t len, bool at_boot) noexcept;
 void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept;
 
+// Driveability block (page0 276-347, 72 bytes). Offsets inside the block follow the order
+// the features were added to the firmware; a byte with no feature behind it stays 0.
+//   55-56  fuel_pw_drop_max_us (u16): largest PW fall per 2 ms step, 0 = off
+//   57     overrun_spark_retard_deg (u8, 0-30): retard on a trailing closed throttle, 0 = off
+constexpr uint16_t kDriveabilityPage0Off = 276u;
+constexpr uint16_t kDriveabilityPage0End = 348u;
+extern uint16_t fuel_pw_drop_max_us;
+extern uint8_t  overrun_spark_retard_deg;
+void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept;
+void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept;
+
 // Rev limiter: retardo progressivo de faísca removido em b565491 (rusEFI-style:
 // corte só de combustível, faísca nunca cortada). Offsets 80-85 da page 0
 // ficam reservados para não partir o layout do protocolo.

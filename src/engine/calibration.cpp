@@ -485,6 +485,50 @@ void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept {
     std::memcpy(page0 + kTimingPage0Off + 4u, &trigger_fine_x10, 2u);
 }
 
+uint16_t fuel_pw_drop_max_us = 0u;
+uint8_t  overrun_spark_retard_deg = 0u;
+
+namespace {
+constexpr uint16_t kDriveabilityPwMaxUs = 20000u;  // 20 ms
+uint16_t rd_u16(const uint8_t* p) noexcept {
+    return static_cast<uint16_t>(p[0] | (static_cast<uint16_t>(p[1]) << 8u));
+}
+void wr_u16(uint8_t* p, uint16_t v) noexcept {
+    p[0] = static_cast<uint8_t>(v & 0xFFu);
+    p[1] = static_cast<uint8_t>(v >> 8u);
+}
+}  // namespace
+
+void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept {
+    if (page0 == nullptr || len < kDriveabilityPage0End) {
+        return;
+    }
+    const uint8_t* const p = page0 + kDriveabilityPage0Off;
+    // A block that was never written (erased flash, all 0xFF) keeps the defaults.
+    bool blank = true;
+    for (uint16_t i = 0u; i < (kDriveabilityPage0End - kDriveabilityPage0Off); ++i) {
+        if (p[i] != 0xFFu) {
+            blank = false;
+            break;
+        }
+    }
+    if (blank) {
+        return;
+    }
+    const uint16_t drop = rd_u16(p + 55);
+    fuel_pw_drop_max_us = (drop > kDriveabilityPwMaxUs) ? kDriveabilityPwMaxUs : drop;
+    overrun_spark_retard_deg = (p[57] > 30u) ? 30u : p[57];
+}
+
+void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
+    if (page0 == nullptr || len < kDriveabilityPage0End) {
+        return;
+    }
+    uint8_t* const p = page0 + kDriveabilityPage0Off;
+    wr_u16(p + 55, fuel_pw_drop_max_us);
+    p[57] = overrun_spark_retard_deg;
+}
+
 void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept {
     if (page0 == nullptr || len < kTrimsDrivePage0End) {
         return;

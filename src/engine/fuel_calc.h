@@ -86,6 +86,14 @@ void fuel_decel_cut_reset() noexcept;
 // Rising edge do DFCO (válido até ao próximo update) — reset de filme só na entrada.
 bool fuel_decel_cut_just_entered() noexcept;
 // Soft ramp-in linear 0→1 após exit (decel_cut_ramp_ms; 0 = passthrough).
+// DFCO exit ramp progress, 0 (just left the cut) .. 255 (finished or no ramp configured).
+uint8_t fuel_decel_cut_ramp_frac_q8() noexcept;
+
+// Limits how far the injected PW may fall between two 2 ms steps (fuel_pw_drop_max_us,
+// 0 = off), so a sudden fall in demand does not leave the engine lean. Reset on any cut.
+uint32_t fuel_pw_limit_drop(uint32_t pw_us) noexcept;
+void fuel_pw_limit_drop_reset() noexcept;
+
 uint32_t fuel_decel_cut_ramp_pw(uint32_t flow_us, uint16_t dt_ms) noexcept;
 // Contexto extra do DFCO (estilo FOME #485/#487), fornecido antes do update:
 // MAP corrente p/ o gate de vácuo (decel_cut_map_max_bar_x100 > 0) e marcha

@@ -362,6 +362,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
             // Filme: reset só na entrada (não a cada tick do cut).
             if (fuel_decel_cut_just_entered()) {
                 transient_fuel_reset();
+                fuel_pw_limit_drop_reset();
             }
         } else if (final_pw_us_base > fuel_corr.dead_time_us) {
             uint32_t fuel_pw_us =
@@ -393,7 +394,12 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
             final_pw_us_base = xtau_fuel_pw_us;
         } else {
             transient_fuel_reset();
+            fuel_pw_limit_drop_reset();
             final_pw_us_base = 0u;  // fluxo ≈ 0 (base ≤ dead-time)
+        }
+        // A fall in demand may not shorten the pulse faster than fuel_pw_drop_max_us per step.
+        if (!decel_cut_active) {
+            final_pw_us_base = fuel_pw_limit_drop(final_pw_us_base);
         }
         // AE tip-in (add) ou DE tip-out (subtract), clamp a [0, 100ms].
         if (!decel_cut_active && ae_pw_us != 0) {
@@ -428,6 +434,9 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
             corr.iat = calc_ign_iat_correction_x10(sensors.iat_degc_x10);
             corr.clt = calc_ign_clt_correction_x10(sensors.clt_degc_x10);
             corr.torque_retard = static_cast<int16_t>(in.torque_spark_retard_deg * 10);
+            // Pedal (APP), like the DFCO gate: it is the driver intent with or without ETB.
+            corr.overrun_retard = calc_overrun_spark_retard_x10(
+                snap.rpm_x10, sensors.app_pct_x10, map_bar_x100, idle_target_rpm_x10);
         }
         if (!crank_or_ase) {
             corr.antijerk_retard = calc_antijerk_retard_x10(ae_tpsdot);
@@ -462,6 +471,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         misfire_set_all_inhibit(true);
         fuel_ae_notify_pulse(0);
         transient_fuel_reset();
+        fuel_pw_limit_drop_reset();
 
         const uint32_t crank_flow_us = quick_crank_flow_us(qc, 0u);
         s_out.net_pw_us = crank_flow_us;
@@ -484,6 +494,10 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         s_out.pw_ms_x10 = 0u;
         s_out.net_pw_us = 0u;
         fuel_ae_notify_pulse(0);
+        fuel_pw_limit_drop_reset();
+    } else {
+        // No sync / engine stopped: the next PW is not a fall from the previous one.
+        fuel_pw_limit_drop_reset();
     }
     s_out.map_fused_x100 = map_bar_x100;
 

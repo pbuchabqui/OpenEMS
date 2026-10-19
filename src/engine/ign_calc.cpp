@@ -1,5 +1,6 @@
 #include "engine/ign_calc.h"
 #include "engine/calibration.h"
+#include "engine/fuel_calc.h"
 #include "engine/math_utils.h"
 
 #include <cstdint>
@@ -69,12 +70,41 @@ void antijerk_reset() noexcept {
 int16_t calc_total_advance_x10(int16_t base_x10, AdvanceCorrectionsX10 corr) noexcept {
     return clamp_advance_x10(static_cast<int32_t>(base_x10)
         + corr.iat + corr.clt + corr.idle
-        - corr.antijerk_retard - corr.torque_retard);
+        - corr.antijerk_retard - corr.torque_retard - corr.overrun_retard);
 }
 
 int16_t ign_running_advance_x10(int16_t computed_x10) noexcept {
     return (timing_light_enable != 0u) ? clamp_advance_x10(timing_light_advance_x10)
                                        : computed_x10;
+}
+
+int16_t calc_overrun_spark_retard_x10(uint32_t rpm_x10,
+                                      uint16_t tps_pct_x10,
+                                      uint16_t map_bar_x100,
+                                      uint16_t idle_target_rpm_x10) noexcept {
+    uint8_t deg = overrun_spark_retard_deg;
+    if (deg == 0u) {
+        return 0;
+    }
+    if (deg > 30u) {
+        deg = 30u;
+    }
+    const int16_t full = static_cast<int16_t>(static_cast<int16_t>(deg) * 10);
+    const bool tps_closed = tps_pct_x10 <= decel_cut_tps_threshold_x10;
+    const bool map_low = (decel_cut_map_max_bar_x100 == 0u) ||
+                         (map_bar_x100 <= decel_cut_map_max_bar_x100);
+    const uint32_t above_idle = static_cast<uint32_t>(idle_target_rpm_x10)
+                              + idle_spark_window_above_target_x10;
+    const bool trailing = tps_closed && map_low && (rpm_x10 > above_idle);
+    if (fuel_decel_cut_active() || trailing) {
+        return full;
+    }
+    const uint8_t frac = fuel_decel_cut_ramp_frac_q8();
+    if (frac >= 255u) {
+        return 0;
+    }
+    return static_cast<int16_t>(
+        (static_cast<int32_t>(full) * static_cast<int32_t>(255u - frac)) / 255);
 }
 
 int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,

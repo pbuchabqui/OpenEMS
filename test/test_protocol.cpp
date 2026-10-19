@@ -840,6 +840,8 @@ void test_page0_survives_reboot(void) {
     const uint16_t s_tps = ems::engine::decel_cut_tps_threshold_x10;
     const int16_t s_fine = ems::engine::trigger_fine_x10;
     const uint16_t s_ramp = ems::engine::decel_cut_ramp_ms;
+    const uint16_t s_drop = ems::engine::fuel_pw_drop_max_us;
+    const uint8_t s_ovr = ems::engine::overrun_spark_retard_deg;
     ems::engine::map_window_enable = 1u;
     ems::engine::map_window_open_deg = 123u;
     ems::engine::stft_kp_x100 = 77u;
@@ -847,6 +849,8 @@ void test_page0_survives_reboot(void) {
     ems::engine::trigger_fine_x10 = -7;
     ems::engine::timing_light_enable = 1u;
     ems::engine::decel_cut_ramp_ms = 345u;
+    ems::engine::fuel_pw_drop_max_us = 321u;
+    ems::engine::overrun_spark_retard_deg = 9u;
 
     uint8_t flash[512];
     for (uint16_t off = 0u; off < 512u; off += 32u) {
@@ -860,6 +864,8 @@ void test_page0_survives_reboot(void) {
     ems::engine::decel_cut_tps_threshold_x10 = 1u;
     ems::engine::trigger_fine_x10 = 0;
     ems::engine::decel_cut_ramp_ms = 0u;
+    ems::engine::fuel_pw_drop_max_us = 0u;
+    ems::engine::overrun_spark_retard_deg = 0u;
     ems::app::ui_boot_apply_page0(flash, sizeof(flash));
     CHECK_EQ(ems::engine::map_window_enable, 1u, "MAP window enable (264) restored");
     CHECK_EQ(ems::engine::map_window_open_deg, 123u, "MAP window open (266) restored");
@@ -867,6 +873,8 @@ void test_page0_survives_reboot(void) {
     CHECK_EQ(ems::engine::decel_cut_tps_threshold_x10, 15u, "DFCO TPS (88) restored");
     CHECK_EQ(ems::engine::trigger_fine_x10, -7, "trigger fine (274) restored");
     CHECK_EQ(ems::engine::decel_cut_ramp_ms, 345u, "DFCO ramp (259) restored");
+    CHECK_EQ(ems::engine::fuel_pw_drop_max_us, 321u, "PW fall limit (331) restored");
+    CHECK_EQ(ems::engine::overrun_spark_retard_deg, 9u, "overrun retard (333) restored");
     CHECK_EQ(ems::engine::timing_light_enable, 0u, "timing light always off after boot");
 
     ems::engine::map_window_enable = s_mwe;
@@ -875,6 +883,8 @@ void test_page0_survives_reboot(void) {
     ems::engine::decel_cut_tps_threshold_x10 = s_tps;
     ems::engine::trigger_fine_x10 = s_fine;
     ems::engine::decel_cut_ramp_ms = s_ramp;
+    ems::engine::fuel_pw_drop_max_us = s_drop;
+    ems::engine::overrun_spark_retard_deg = s_ovr;
     ems::app::ui_test_reset();
 }
 
