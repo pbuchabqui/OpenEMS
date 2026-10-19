@@ -86,6 +86,13 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
                                    uint16_t measured_pct_x10,
                                    bool     enable_request,
                                    uint16_t period_ms) noexcept;
+/** Pedido de corte de borboleta: limitador de giro ativo, ou limp acima de 3000 rpm. */
+bool            etb_rev_cut_request(bool rev_limit_active, bool limp_active,
+                                    uint32_t rpm_x10) noexcept;
+/** PID -> ponte H. Sem enable/active/init: shutdown (mola devolve a lâmina).
+ *  Senão PWM = saída*1023/1000 limitado a ±1023; driver recusou: shutdown. */
+void            etb_apply_output(bool enable_request, bool active, bool initialized,
+                                 int16_t output_pct_x10) noexcept;
 /** Integrador PID (pct×10) — host tests / diag. */
 int32_t         etb_control_get_integrator() noexcept;
 /** @deprecated use etb_control_get_integrator */

@@ -96,6 +96,30 @@ void test_aux_fan_clt_fault(void) {
     CHECK_FALSE(auxiliaries_test_get_fan_state(), "falha some: volta a histerese normal");
 }
 
+void test_aux_fan_clt_fault_via_ticks(void) {
+    section("auxiliaries: ventoinha liga pelos ticks quando o sensor de CLT falha");
+    sensor_setup(); sensors_init();
+    auxiliaries_test_reset();
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT, 2000u);   // ~51 C: abaixo de 95 C
+    for (int i = 0; i < 8; ++i) { sensors_test_tick_100ms(); }
+    CHECK_EQ(sensors_get().fault_bits & (1u << 3), 0u, "pré-condição: CLT sem falha");
+    auxiliaries_tick_10ms();
+    CHECK_FALSE(auxiliaries_test_get_fan_state(), "CLT 51 C: ventoinha off");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT, 0u);      // sensor aberto
+    for (int i = 0; i < 8; ++i) { sensors_test_tick_100ms(); }
+    CHECK_TRUE((sensors_get().fault_bits & (1u << 3)) != 0u, "CLT aberto: bit de falha");
+    auxiliaries_tick_10ms();
+    CHECK_TRUE(auxiliaries_test_get_fan_state(), "tick 10 ms: ventoinha on com CLT em falha");
+    auxiliaries_test_reset();
+    auxiliaries_tick_20ms();
+    CHECK_TRUE(auxiliaries_test_get_fan_state(), "tick 20 ms: ventoinha on com CLT em falha");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT, 2000u);
+    for (int i = 0; i < 8; ++i) { sensors_test_tick_100ms(); }
+    auxiliaries_tick_10ms();
+    CHECK_FALSE(auxiliaries_test_get_fan_state(), "sensor volta: ventoinha desliga pela histerese");
+    auxiliaries_test_reset();
+}
+
 void test_aux_pins_safe_early(void) {
     section("safe early: ventoinha/bomba em LOW como saidas, ETB sem excecao");
     extern volatile uint32_t ems_test_aux_gpiob_moder;

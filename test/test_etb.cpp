@@ -171,6 +171,54 @@ void test_etb_driver_set_motor_pwm(void) {
     CHECK_TRUE(etb_driver_set_motor_pwm(-2000),"pwm=-2000 clamped+accepted");
 }
 
+void test_etb_apply_output(void) {
+    section("etb_apply_output: PID -> ponte H (escala, sinal, shutdown)");
+    using ems::engine::etb_apply_output;
+
+    drv_setup();
+    etb_driver_init();
+    etb_apply_output(true, true, true, 500);
+    CHECK_EQ(etb_driver_test_motor_pwm(), 511, "+50,0 % -> PWM +511 (abre)");
+    etb_apply_output(true, true, true, -500);
+    CHECK_EQ(etb_driver_test_motor_pwm(), -511, "-50,0 % -> PWM -511 (fecha)");
+    etb_apply_output(true, true, true, 1000);
+    CHECK_EQ(etb_driver_test_motor_pwm(), 1023, "+100 % -> PWM +1023");
+    etb_apply_output(true, true, true, -1000);
+    CHECK_EQ(etb_driver_test_motor_pwm(), -1023, "-100 % -> PWM -1023");
+    etb_apply_output(true, true, true, 3000);
+    CHECK_EQ(etb_driver_test_motor_pwm(), 1023, "acima de +100 % limita em +1023");
+    etb_apply_output(true, true, true, -3000);
+    CHECK_EQ(etb_driver_test_motor_pwm(), -1023, "abaixo de -100 % limita em -1023");
+    etb_apply_output(true, true, true, 0);
+    CHECK_EQ(etb_driver_test_motor_pwm(), 0, "0 % -> PWM 0");
+
+    // Qualquer condição de segurança derruba o PWM (mola devolve a lâmina).
+    etb_apply_output(true, true, true, 800);
+    etb_apply_output(false, true, true, 800);
+    CHECK_EQ(etb_driver_test_motor_pwm(), 0, "enable_request=0 -> shutdown");
+    etb_apply_output(true, true, true, 800);
+    etb_apply_output(true, false, true, 800);
+    CHECK_EQ(etb_driver_test_motor_pwm(), 0, "PID inativo -> shutdown");
+    etb_apply_output(true, true, true, 800);
+    etb_apply_output(true, true, false, 800);
+    CHECK_EQ(etb_driver_test_motor_pwm(), 0, "driver não inicializado -> shutdown");
+
+    // Driver fora de READY recusa o PWM: a função não deixa lixo no registrador.
+    etb_driver_test_reset();
+    etb_apply_output(true, true, true, 800);
+    CHECK_EQ(etb_driver_test_motor_pwm(), 0, "driver recusou -> PWM 0");
+}
+
+void test_etb_rev_cut_request(void) {
+    section("etb_rev_cut_request: limitador de giro ou limp acima de 3000 rpm");
+    using ems::engine::etb_rev_cut_request;
+    CHECK_TRUE(etb_rev_cut_request(true, false, 1000u), "limitador ativo corta, mesmo em baixa rotação");
+    CHECK_FALSE(etb_rev_cut_request(false, false, 40000u), "sem limitador nem limp: não corta");
+    CHECK_FALSE(etb_rev_cut_request(false, true, 30000u), "limp a 3000 rpm exatos: não corta");
+    CHECK_TRUE(etb_rev_cut_request(false, true, 30010u), "limp acima de 3000 rpm: corta");
+    CHECK_FALSE(etb_rev_cut_request(false, true, 20000u), "limp abaixo de 3000 rpm: não corta");
+}
+
 void test_etb_driver_shutdown(void) {
     section("etb_driver_shutdown");
 

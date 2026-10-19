@@ -682,8 +682,8 @@ int main() {
             if (ems::engine::etb_autocal_active()) {
                 ems::engine::etb_autocal_tick(2u, snap_etb.rpm_x10);
             } else {
-                const bool etb_rev_cut = g_rev_limit_active ||
-                    (g_limp_active && (snap_etb.rpm_x10 > kLimpRpmLimit_x10));
+                const bool etb_rev_cut = ems::engine::etb_rev_cut_request(
+                    g_rev_limit_active, g_limp_active, snap_etb.rpm_x10);
                 ems::engine::torque_idle_set_ac_load(ems::hal::ac_request_poll(now) ? 1u : 0u);
                 const auto torque_out = ems::engine::torque_manager_update(
                     snap_etb, sensors_etb, true, g_limp_active, etb_rev_cut,
@@ -693,17 +693,8 @@ int main() {
                     torque_out.etb_target_pct_x10, sensors_etb.etb_tps_pct_x10,
                     torque_out.etb_enable_request, 2u);
                 // Apply PID → H-bridge. On disable/fault/no-cal, spring-return safe.
-                if (!torque_out.etb_enable_request || !etb.active || !g_etb_initialized) {
-                    ::etb_driver_shutdown();
-                } else {
-                    // output_pct_x10 ∈ [-1000, 1000] → driver PWM ∈ [-1023, 1023]
-                    int32_t pwm = (static_cast<int32_t>(etb.output_pct_x10) * 1023) / 1000;
-                    if (pwm > 1023) { pwm = 1023; }
-                    if (pwm < -1023) { pwm = -1023; }
-                    if (!::etb_driver_set_motor_pwm(static_cast<int16_t>(pwm))) {
-                        ::etb_driver_shutdown();
-                    }
-                }
+                ems::engine::etb_apply_output(torque_out.etb_enable_request, etb.active,
+                                              g_etb_initialized, etb.output_pct_x10);
             }
         }
     }

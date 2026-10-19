@@ -515,6 +515,33 @@ void test_ts_envelope_canid_forms(void) {
                "och via 'r' canId+page3+off0+count66 → 66 bytes");
 }
 
+// OCH page3: STATUS_SENSOR_FAULT acende com Vbatt fora de 6..18 V
+void test_och_vbatt_fault_status(void) {
+    section("OCH: STATUS_SENSOR_FAULT acende só com vbatt_fault");
+    using namespace ems::hal;
+    ems::app::ui_test_reset();
+    sensor_setup();
+    sensors_init();
+    sensors_set_bench_clt_iat(false, 0, 0);
+    const uint8_t och[7] = {'r', 0x00u, 0x03u, 0x00u, 0x00u, 0x56u, 0x00u};
+    auto status_now = [&]() {
+        EnvResp r = env_txn(och, 7u);
+        uint16_t st = 0u;
+        std::memcpy(&st, r.data + 12, 2u);
+        return st;
+    };
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2730u);   // ~12 V
+    sensors_test_tick_100ms();
+    CHECK_EQ(sensors_get().fault_bits, 0u, "pré-condição: nenhum sensor em falha");
+    CHECK_TRUE((status_now() & ems::app::STATUS_SENSOR_FAULT) == 0u, "Vbatt ok: bit apagado");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 0u);      // divisor aberto
+    sensors_test_tick_100ms();
+    CHECK_TRUE((status_now() & ems::app::STATUS_SENSOR_FAULT) != 0u, "Vbatt fora da faixa: bit aceso");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2730u);
+    sensors_test_tick_100ms();
+    CHECK_TRUE((status_now() & ems::app::STATUS_SENSOR_FAULT) == 0u, "Vbatt volta: bit apagado");
+}
+
 // OCH page3: status bits 13/14 + tcReduction/spark @ reserved[31..]
 void test_och_launch_tc_status(void) {
     section("OCH: launch/TC status bits + reduction scalars");

@@ -426,6 +426,27 @@ int main()
         check_seq("knock per cylinder", m, Limits{});
     }
 
+    // ── Per-cylinder advance stays inside -20..+60 deg after trim and knock ──
+    {
+        namespace en = ems::engine;
+        // Trim +15 on cyl 0 on top of +60: the oracle (no trim) expects 60 deg, so a clamped
+        // scheduler matches it; unclamped it would fire 15 deg early.
+        const int8_t sv_trim = en::cyl_ign_trim_deg[0];
+        en::cyl_ign_trim_deg[0] = 15;
+        Config c = base(3000);
+        c.cmd.advance_deg = 60.0;
+        const Metrics m = run_and_print("advance 60 + trim 15 (clamp)", c, 0.8, false);
+        en::cyl_ign_trim_deg[0] = sv_trim;
+        check("advance clamp +60", "spark error max (deg)", m.spark_err_max, 0.1);
+
+        // Knock 30 deg on top of +5: the oracle expects -25 deg, the scheduler stops at -20.
+        Config ck = base(3000);
+        ck.cmd.advance_deg = 5.0;
+        ck.cmd.cyl_retard_deg[0] = 30.0;
+        const Metrics mk = run_and_print("advance 5 + knock 30 (clamp)", ck, 0.8, false);
+        check("advance clamp -20", "spark 5 deg earlier than unclamped: |err-5|", std::fabs(mk.spark_err_max - 5.0), 0.2);
+    }
+
     // ── Transients ───────────────────────────────────────────────────────
     {
         Config c = base(1500);
@@ -724,6 +745,31 @@ int main()
             check("spark skip", "sparks kept vs window off: |ratio-0.55|", std::fabs(ratio - 0.55), 0.03);
             check("spark skip", "injector pulses kept (0=ok)",
                   flag(inj_pulses(sk, 1.0, 1e9).n < inj_pulses(ref, 1.0, 1e9).n * 9 / 10), 0);
+        }
+
+        // diag_critical alone: the overtemp cut is disabled, so only the diagnostic manager is left.
+        fuel_and_spark("diag critical only", run_engine_calc("cuts: diag critical only", c, kMapKpa,
+            [](ems::drv::SensorData& s) { s.clt_degc_x10 = 1200; }, 
+            [](en::EngineCalcIn&) { en::limp_gating_set_protect_disable(en::kProtectDisOvertemp); }));
+
+        // Control for the line above: with overtemp AND diag both disabled nothing is cut, so the
+        // cut really came from the diagnostic manager and not from the overtemp rule.
+        {
+            const Result ctl = run_engine_calc("cuts: overtemp+diag disabled", c, kMapKpa,
+                [](ems::drv::SensorData& s) { s.clt_degc_x10 = 1200; },
+                [](en::EngineCalcIn&) {
+                    en::limp_gating_set_protect_disable(en::kProtectDisOvertemp | en::kProtectDisDiag);
+                });
+            check("diag control", "injector pulses kept (0=ok)", flag(inj_n(ctl) < base_inj * 9 / 10), 0);
+        }
+
+        // Engine_calc sees HALF_SYNC while running (Hall wheel: the cycle phase is unknown):
+        // running fuel is locked out, the spark keeps going on the table advance.
+        {
+            const Result hs = run_engine_calc("cuts: HALF_SYNC running", c, kMapKpa, none,
+                [](en::EngineCalcIn& in) { in.snap.state = ems::drv::SyncState::HALF_SYNC; });
+            check("HALF_SYNC running", "injector pulses at the pins", inj_n(hs), 0);
+            check("HALF_SYNC running", "sparks kept (0=ok)", flag(sp_n(hs) < base_sp * 9 / 10), 0);
         }
 
         // Injector duty protection: > 15 % duty for 10 ms cuts fuel; it only resumes below 20 %.

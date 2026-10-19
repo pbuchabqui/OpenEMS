@@ -21,6 +21,8 @@ int main(void) {
     test_etb_driver_read_sensors_null();
     test_etb_driver_set_motor_pwm();
     test_etb_driver_shutdown();
+    test_etb_apply_output();
+    test_etb_rev_cut_request();
     test_etb_driver_clear_fault();
 
     // ── ETB Control ───────────────────────────────────────────────────────────
@@ -284,6 +286,7 @@ int main(void) {
     test_output_test_enter_shuts_etb();
     test_aux_fan_clt_fault();
     test_aux_pins_safe_early();
+    test_aux_fan_clt_fault_via_ticks();
     test_aux_pump_boot_prime_then_rpm();
     test_engine_calc_map_fault_runs_on_model();
     test_engine_calc_vbatt_fault_safe_values();
@@ -312,6 +315,7 @@ int main(void) {
     test_ts_axes_page();
     test_ts_envelope_canid_forms();
     test_och_launch_tc_status();
+    test_och_vbatt_fault_status();
     test_och_live_ve_byte();
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();

@@ -262,12 +262,14 @@ void test_sensors_vbatt_dedicated_channel(void) {
     sensors_test_tick_100ms();
     CHECK_NEAR(static_cast<float>(sensors_get().vbatt_mv), 12000.0f, 30.0f,
                "raw 2730 → ~12000 mV");
+    CHECK_FALSE(sensors_get().vbatt_fault, "12 V: sem vbatt_fault");
 
     // Cranking: a bateria cai a ~9,5 V. É o caso que o literal 12000 mascarava.
     adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2161u);
     sensors_test_tick_100ms();
     CHECK_NEAR(static_cast<float>(sensors_get().vbatt_mv), 9500.0f, 30.0f,
                "raw 2161 → ~9500 mV (cranking)");
+    CHECK_FALSE(sensors_get().vbatt_fault, "9,5 V (cranking) não é falha");
 
     // O chicote do ETB já não interfere: VBATT tem pino próprio.
     sensors_set_etb_harness_present(true);
@@ -280,12 +282,22 @@ void test_sensors_vbatt_dedicated_channel(void) {
     adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 0u);
     sensors_test_tick_100ms();
     CHECK_EQ(sensors_get().vbatt_mv, 12000u, "raw 0 (implausível) → fallback 12000 mV");
+    CHECK_TRUE(sensors_get().vbatt_fault, "raw 0 → vbatt_fault");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 800u);    // ~3,5 V: abaixo de 6 V
+    sensors_test_tick_100ms();
+    CHECK_TRUE(sensors_get().vbatt_fault, "raw 800 (<6 V) → vbatt_fault");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2730u);
+    sensors_test_tick_100ms();
+    CHECK_FALSE(sensors_get().vbatt_fault, "leitura válida limpa vbatt_fault");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 0u);
+    sensors_test_tick_100ms();
 
     // Bancada não tem divisor em PC3 — o modo de bancada tem de ignorar o ADC.
     sensors_set_bench_clt_iat(true, 800, 250);
     adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 4095u);
     sensors_test_tick_100ms();
     CHECK_EQ(sensors_get().vbatt_mv, 12000u, "bench mode fixa 12000 mV apesar do ADC");
+    CHECK_FALSE(sensors_get().vbatt_fault, "bench mode não acusa vbatt_fault");
     sensors_set_bench_clt_iat(false, 0, 0);
 }
 

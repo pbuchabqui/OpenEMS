@@ -330,4 +330,24 @@ int32_t etb_control_get_integrator() noexcept {
     return g_integrator_x10;
 }
 
+bool etb_rev_cut_request(bool rev_limit_active, bool limp_active, uint32_t rpm_x10) noexcept {
+    constexpr uint32_t kLimpRpmLimit_x10 = 30000u;  // igual a engine_calc.cpp
+    return rev_limit_active || (limp_active && rpm_x10 > kLimpRpmLimit_x10);
+}
+
+void etb_apply_output(bool enable_request, bool active, bool initialized,
+                      int16_t output_pct_x10) noexcept {
+    if (!enable_request || !active || !initialized) {
+        ::etb_driver_shutdown();
+        return;
+    }
+    // output_pct_x10 ∈ [-1000, 1000] → driver PWM ∈ [-1023, 1023]
+    int32_t pwm = (static_cast<int32_t>(output_pct_x10) * 1023) / 1000;
+    if (pwm > 1023) { pwm = 1023; }
+    if (pwm < -1023) { pwm = -1023; }
+    if (!::etb_driver_set_motor_pwm(static_cast<int16_t>(pwm))) {
+        ::etb_driver_shutdown();
+    }
+}
+
 }  // namespace ems::engine
