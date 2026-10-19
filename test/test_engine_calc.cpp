@@ -16,6 +16,7 @@
 #include "engine/engine_config.h"
 #include "engine/fuel_calc.h"
 #include "engine/fuel_trim.h"
+#include "engine/ign_calc.h"
 #include "engine/limp_gating.h"
 #include "engine/map_estimator.h"
 #include "engine/quick_crank.h"
@@ -269,4 +270,45 @@ void test_engine_calc_pw_drop_limit(void) {
     CHECK_TRUE(free_fall > 400.0, "pre-condition: without the limit the pulse falls fast");
     CHECK_TRUE(limited <= 200.0, "with the limit no step falls more than the limit");
     fuel_pw_drop_max_us = saved;
+}
+
+void test_engine_calc_driveline_retard(void) {
+    section("engine_calc: driveline surge retard moves the committed spark");
+    const uint8_t s_en = driveline_enable, s_deg = driveline_max_retard_deg;
+    const uint16_t s_dd = driveline_dd_thresh_rpm_x10;
+    tables_flat(60, 1000, 22);
+    reset_all();
+    driveline_enable = 0u;
+    uint32_t t = 1000u;
+    const EngineCalcOut base = run(t, 1.0, 3000u, 60u, 250u);
+
+    reset_all();
+    driveline_enable = 1u;
+    driveline_max_retard_deg = 8u;
+    driveline_dd_thresh_rpm_x10 = 50u;
+    driveline_reset();
+    t = 1000u;
+    const EngineCalcOut steady = run(t, 1.0, 3000u, 60u, 250u);
+    CHECK_EQ(steady.spark_x10, base.spark_x10, "steady rpm: no second difference, no retard");
+
+    EngineCalcOut surge{};
+    for (int i = 0; i < 400; ++i) {                     // rpm oscillating +-10 rpm every step
+        const uint32_t rpm = (i & 1) ? 3010u : 3000u;
+        surge = engine_calc_step(input_at(t += 2u, rpm, 60u, 250u));
+    }
+    CHECK_EQ(static_cast<int>(base.spark_x10) - static_cast<int>(surge.spark_x10), 80,
+             "surging rpm: spark 8.0 deg later (the configured maximum)");
+
+    driveline_enable = 0u;
+    reset_all();
+    t = 1000u;
+    EngineCalcOut off = run(t, 1.0, 3000u, 60u, 250u);
+    for (int i = 0; i < 400; ++i) {
+        const uint32_t rpm = (i & 1) ? 3010u : 3000u;
+        off = engine_calc_step(input_at(t += 2u, rpm, 60u, 250u));
+    }
+    CHECK_EQ(off.spark_x10, base.spark_x10, "driveline disabled: surging rpm leaves the spark alone");
+    driveline_enable = s_en; driveline_max_retard_deg = s_deg; driveline_dd_thresh_rpm_x10 = s_dd;
+    driveline_reset();
+    tables_restore();
 }

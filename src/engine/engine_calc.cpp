@@ -437,9 +437,19 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
             // Pedal (APP), like the DFCO gate: it is the driver intent with or without ETB.
             corr.overrun_retard = calc_overrun_spark_retard_x10(
                 snap.rpm_x10, sensors.app_pct_x10, map_bar_x100, idle_target_rpm_x10);
+        } else {
+            driveline_reset();
         }
         if (!crank_or_ase) {
             corr.antijerk_retard = calc_antijerk_retard_x10(ae_tpsdot);
+        }
+        if (!qc.cranking) {
+            // Driveline surge shares the anti-jerk slot: the larger of the two applies.
+            const int16_t driveline = calc_driveline_retard_x10(
+                snap.rpm_x10, sensors.clt_degc_x10, map_bar_x100);
+            if (driveline > corr.antijerk_retard) {
+                corr.antijerk_retard = driveline;
+            }
         }
         const int16_t sched_spark_x10 = qc.cranking
             ? static_cast<int16_t>(crank_spark_deg * 10)

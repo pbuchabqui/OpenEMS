@@ -278,6 +278,10 @@ void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept;
 // the features were added to the firmware; a byte with no feature behind it stays 0.
 //   47-54  ae_de_pw_us[4] (u16 each): tip-out PW by |TPSdot| (same axis as ae_pw_adder_us);
 //          all zero = tip-out is half of the tip-in adder
+//   58     driveline_enable (0/1); 59-60 driveline_dd_thresh_rpm_x10 (u16, 0 = keep);
+//   61     driveline_max_retard_deg (0-30); 62-63 rpm_min (u16, 0 = keep);
+//   64-65  rpm_max (u16, 0 = keep); 66-67 clt_min_x10 (s16, 0 = keep);
+//   68-69  map_min_bar_x100 (u16, 0 = keep); 70-71 speed min/max km/h (0 = no gate)
 //   55-56  fuel_pw_drop_max_us (u16): largest PW fall per 2 ms step, 0 = off
 //   57     overrun_spark_retard_deg (u8, 0-30): retard on a trailing closed throttle, 0 = off
 constexpr uint16_t kDriveabilityPage0Off = 276u;
@@ -285,6 +289,15 @@ constexpr uint16_t kDriveabilityPage0End = 348u;
 extern uint16_t ae_de_pw_us[kAeRateTableSize];
 extern uint16_t fuel_pw_drop_max_us;
 extern uint8_t  overrun_spark_retard_deg;
+extern uint8_t  driveline_enable;
+extern uint16_t driveline_dd_thresh_rpm_x10;
+extern uint8_t  driveline_max_retard_deg;
+extern uint16_t driveline_rpm_min_x10;
+extern uint16_t driveline_rpm_max_x10;
+extern int16_t  driveline_clt_min_x10;
+extern uint16_t driveline_map_min_bar_x100;
+extern uint8_t  driveline_speed_min_kmh;
+extern uint8_t  driveline_speed_max_kmh;
 void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept;
 void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept;
 

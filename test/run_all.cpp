@@ -270,6 +270,9 @@ int main(void) {
     test_overrun_spark_retard();
     test_driveability_page0();
     test_ae_de_table();
+    test_driveline_retard();
+    test_driveline_page0();
+    test_engine_calc_driveline_retard();
     test_engine_calc_overrun_retard();
     test_engine_calc_pw_drop_limit();
     test_math_xtau_steady_and_step();

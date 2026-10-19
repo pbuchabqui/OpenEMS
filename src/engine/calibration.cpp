@@ -488,11 +488,27 @@ void serialize_page0_timing(uint8_t* page0, uint16_t len) noexcept {
 uint16_t ae_de_pw_us[kAeRateTableSize] = {};
 uint16_t fuel_pw_drop_max_us = 0u;
 uint8_t  overrun_spark_retard_deg = 0u;
+uint8_t  driveline_enable = 0u;
+uint16_t driveline_dd_thresh_rpm_x10 = 50u;
+uint8_t  driveline_max_retard_deg = 0u;
+uint16_t driveline_rpm_min_x10 = 8000u;
+uint16_t driveline_rpm_max_x10 = 48000u;
+int16_t  driveline_clt_min_x10 = 60;
+uint16_t driveline_map_min_bar_x100 = 40u;
+uint8_t  driveline_speed_min_kmh = 0u;
+uint8_t  driveline_speed_max_kmh = 0u;
 
 namespace {
 constexpr uint16_t kDriveabilityPwMaxUs = 20000u;  // 20 ms
 uint16_t rd_u16(const uint8_t* p) noexcept {
     return static_cast<uint16_t>(p[0] | (static_cast<uint16_t>(p[1]) << 8u));
+}
+int16_t rd_i16(const uint8_t* p) noexcept {
+    return static_cast<int16_t>(rd_u16(p));
+}
+void wr_i16(uint8_t* p, int16_t v) noexcept {
+    p[0] = static_cast<uint8_t>(static_cast<uint16_t>(v) & 0xFFu);
+    p[1] = static_cast<uint8_t>(static_cast<uint16_t>(v) >> 8u);
 }
 void wr_u16(uint8_t* p, uint16_t v) noexcept {
     p[0] = static_cast<uint8_t>(v & 0xFFu);
@@ -524,6 +540,31 @@ void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept {
     const uint16_t drop = rd_u16(p + 55);
     fuel_pw_drop_max_us = (drop > kDriveabilityPwMaxUs) ? kDriveabilityPwMaxUs : drop;
     overrun_spark_retard_deg = (p[57] > 30u) ? 30u : p[57];
+    driveline_enable = (p[58] == 1u) ? 1u : 0u;
+    // A zero in these fields means "not set": keep the default.
+    const uint16_t dd = rd_u16(p + 59);
+    if (dd != 0u) {
+        driveline_dd_thresh_rpm_x10 = dd;
+    }
+    driveline_max_retard_deg = (p[61] > 30u) ? 30u : p[61];
+    const uint16_t rpm_min = rd_u16(p + 62);
+    const uint16_t rpm_max = rd_u16(p + 64);
+    const int16_t clt_min = rd_i16(p + 66);
+    const uint16_t map_min = rd_u16(p + 68);
+    if (rpm_min != 0u) {
+        driveline_rpm_min_x10 = rpm_min;
+    }
+    if (rpm_max != 0u) {
+        driveline_rpm_max_x10 = rpm_max;
+    }
+    if (clt_min != 0) {
+        driveline_clt_min_x10 = clt_min;
+    }
+    if (map_min != 0u) {
+        driveline_map_min_bar_x100 = map_min;
+    }
+    driveline_speed_min_kmh = p[70];
+    driveline_speed_max_kmh = p[71];
 }
 
 void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
@@ -536,6 +577,15 @@ void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
     }
     wr_u16(p + 55, fuel_pw_drop_max_us);
     p[57] = overrun_spark_retard_deg;
+    p[58] = driveline_enable;
+    wr_u16(p + 59, driveline_dd_thresh_rpm_x10);
+    p[61] = driveline_max_retard_deg;
+    wr_u16(p + 62, driveline_rpm_min_x10);
+    wr_u16(p + 64, driveline_rpm_max_x10);
+    wr_i16(p + 66, driveline_clt_min_x10);
+    wr_u16(p + 68, driveline_map_min_bar_x100);
+    p[70] = driveline_speed_min_kmh;
+    p[71] = driveline_speed_max_kmh;
 }
 
 void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept {

@@ -1,6 +1,8 @@
 #include "engine/ign_calc.h"
 #include "engine/calibration.h"
 #include "engine/fuel_calc.h"
+#include "engine/vehicle_inputs.h"
+#include "hal/system.h"
 #include "engine/math_utils.h"
 
 #include <cstdint>
@@ -105,6 +107,92 @@ int16_t calc_overrun_spark_retard_x10(uint32_t rpm_x10,
     }
     return static_cast<int16_t>(
         (static_cast<int32_t>(full) * static_cast<int32_t>(255u - frac)) / 255);
+}
+
+namespace {
+uint32_t g_dl_rpm_prev = 0u;
+uint32_t g_dl_rpm_prev2 = 0u;
+uint8_t  g_dl_hist = 0u;
+int16_t  g_dl_retard_x10 = 0;
+}  // namespace
+
+void driveline_reset() noexcept {
+    g_dl_rpm_prev = 0u;
+    g_dl_rpm_prev2 = 0u;
+    g_dl_hist = 0u;
+    g_dl_retard_x10 = 0;
+}
+
+int16_t calc_driveline_retard_x10(uint32_t rpm_x10,
+                                  int16_t clt_x10,
+                                  uint16_t map_bar_x100) noexcept {
+    if (driveline_enable == 0u || driveline_max_retard_deg == 0u) {
+        driveline_reset();
+        return 0;
+    }
+    uint8_t deg = driveline_max_retard_deg;
+    if (deg > 30u) {
+        deg = 30u;
+    }
+    const int16_t full = static_cast<int16_t>(static_cast<int16_t>(deg) * 10);
+
+    bool window = (clt_x10 >= driveline_clt_min_x10) &&
+                  (rpm_x10 >= driveline_rpm_min_x10) &&
+                  (rpm_x10 <= driveline_rpm_max_x10) &&
+                  (map_bar_x100 >= driveline_map_min_bar_x100);
+    if (driveline_speed_min_kmh != 0u || driveline_speed_max_kmh != 0u) {
+        uint16_t kmh = 0u;
+        if (vehicle_speed_kmh(kmh, ::millis())) {
+            if (driveline_speed_min_kmh != 0u &&
+                kmh < driveline_speed_min_kmh) {
+                window = false;
+            }
+            if (driveline_speed_max_kmh != 0u &&
+                kmh > driveline_speed_max_kmh) {
+                window = false;
+            }
+        } else {
+            // Velocidade inválida: com gate configurado, não retarda.
+            window = false;
+        }
+    }
+
+    bool have_dd = false;
+    int32_t dd = 0;
+    if (g_dl_hist >= 2u) {
+        dd = static_cast<int32_t>(rpm_x10)
+           - (static_cast<int32_t>(g_dl_rpm_prev) * 2)
+           + static_cast<int32_t>(g_dl_rpm_prev2);
+        have_dd = true;
+    }
+    g_dl_rpm_prev2 = g_dl_rpm_prev;
+    g_dl_rpm_prev = rpm_x10;
+    if (g_dl_hist < 2u) {
+        ++g_dl_hist;
+    }
+
+    const int32_t thresh = (driveline_dd_thresh_rpm_x10 == 0u)
+        ? 50
+        : static_cast<int32_t>(driveline_dd_thresh_rpm_x10);
+    int16_t target = 0;
+    if (window && have_dd && (dd >= thresh || dd <= -thresh)) {
+        target = full;
+    }
+    int16_t step = static_cast<int16_t>(full / 4);
+    if (step < 1) {
+        step = 1;
+    }
+    if (g_dl_retard_x10 < target) {
+        const int32_t next = static_cast<int32_t>(g_dl_retard_x10) + step;
+        g_dl_retard_x10 = static_cast<int16_t>(next > target ? target : next);
+    } else if (g_dl_retard_x10 > target) {
+        const int32_t next = static_cast<int32_t>(g_dl_retard_x10) - step;
+        g_dl_retard_x10 = static_cast<int16_t>(next < target ? target : next);
+    }
+    if (g_dl_retard_x10 < 0) {
+        g_dl_retard_x10 = 0;
+    }
+    return g_dl_retard_x10;
 }
 
 int16_t calc_idle_spark_correction_x10(uint32_t rpm_x10,

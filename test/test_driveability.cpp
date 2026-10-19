@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "app/can_rx_map.h"
 #include "engine/calibration.h"
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
@@ -173,4 +174,103 @@ void test_ae_de_table(void) {
     ae_tpsdot_threshold_x10 = saved_thr;
     ae_taper_ms = saved_taper;
     fuel_reset_adaptives();
+}
+
+void test_driveline_retard(void) {
+    section("ign_calc: driveline surge retard");
+    const uint8_t saved_dl_en = driveline_enable;
+    const uint8_t saved_dl_deg = driveline_max_retard_deg;
+    const uint16_t saved_dd = driveline_dd_thresh_rpm_x10;
+    const uint8_t saved_sp_min = driveline_speed_min_kmh;
+    const uint8_t saved_sp_max = driveline_speed_max_kmh;
+    const ems::app::CanSignalDef saved_spd =
+        ems::app::can_rx_map_get(ems::app::CanRxSignal::SPEED_KMH);
+    driveline_enable = 0u;
+    driveline_max_retard_deg = 8u;
+    driveline_reset();
+    CHECK_EQ(calc_driveline_retard_x10(10000u, 200, 80u), 0, "driveline off → 0");
+    driveline_enable = 1u;
+    driveline_max_retard_deg = 0u;
+    CHECK_EQ(calc_driveline_retard_x10(10100u, 200, 80u), 0, "max retard 0 → 0");
+    driveline_max_retard_deg = 8u;
+    driveline_dd_thresh_rpm_x10 = 50u;
+    driveline_reset();
+    CHECK_EQ(calc_driveline_retard_x10(10000u, 200, 80u), 0, "first sample has no second difference");
+    CHECK_EQ(calc_driveline_retard_x10(10000u, 200, 80u), 0, "second sample has no second difference");
+    CHECK_EQ(calc_driveline_retard_x10(10050u, 200, 80u), 20, "second difference arms, slew 2.0°");
+    CHECK_EQ(calc_driveline_retard_x10(10150u, 200, 80u), 40, "slew continues to 4.0°");
+    CHECK_EQ(calc_driveline_retard_x10(10300u, 200, 80u), 60, "slew continues to 6.0°");
+    CHECK_EQ(calc_driveline_retard_x10(10500u, 200, 80u), 80, "slew reaches the 8.0° cap");
+    CHECK_EQ(calc_driveline_retard_x10(10750u, 0, 80u), 60, "cold CLT slews back toward 0");
+    driveline_dd_thresh_rpm_x10 = 0u;
+    driveline_reset();
+    (void)calc_driveline_retard_x10(10000u, 200, 80u);
+    (void)calc_driveline_retard_x10(10000u, 200, 80u);
+    CHECK_EQ(calc_driveline_retard_x10(10050u, 200, 80u), 20,
+             "threshold 0 uses the 5.0 rpm×10 default");
+    driveline_speed_min_kmh = 30u;
+    driveline_speed_max_kmh = 0u;
+    ems::app::CanSignalDef spd{};
+    spd.id = 0x123u;
+    spd.byte_lo = 0u;
+    spd.byte_hi = 0xFFu;
+    spd.mask = 0xFFu;
+    spd.timeout_ms = 0u;
+    ems::app::can_rx_map_set(ems::app::CanRxSignal::SPEED_KMH, spd);
+    const uint8_t slow = 10u;
+    ems::app::can_rx_map_process(0x123u, &slow, 1u, 1u);
+    driveline_reset();
+    (void)calc_driveline_retard_x10(10000u, 200, 80u);
+    (void)calc_driveline_retard_x10(10000u, 200, 80u);
+    CHECK_EQ(calc_driveline_retard_x10(10050u, 200, 80u), 0, "speed below minimum blocks retard");
+    const uint8_t fast = 80u;
+    ems::app::can_rx_map_process(0x123u, &fast, 1u, 2u);
+    CHECK_EQ(calc_driveline_retard_x10(10150u, 200, 80u), 20, "speed inside the window arms");
+    ems::app::can_rx_map_set(ems::app::CanRxSignal::SPEED_KMH, saved_spd);
+    driveline_enable = saved_dl_en;
+    driveline_max_retard_deg = saved_dl_deg;
+    driveline_dd_thresh_rpm_x10 = saved_dd;
+    driveline_speed_min_kmh = saved_sp_min;
+    driveline_speed_max_kmh = saved_sp_max;
+    driveline_reset();
+}
+
+void test_driveline_page0(void) {
+    section("calibration: driveline fields in the page-0 block (334-347)");
+    const uint8_t s_en = driveline_enable, s_deg = driveline_max_retard_deg;
+    const uint16_t s_dd = driveline_dd_thresh_rpm_x10, s_rmin = driveline_rpm_min_x10;
+    const uint16_t s_rmax = driveline_rpm_max_x10, s_map = driveline_map_min_bar_x100;
+    const int16_t s_clt = driveline_clt_min_x10;
+    const uint8_t s_smin = driveline_speed_min_kmh, s_smax = driveline_speed_max_kmh;
+    static uint8_t page[512];
+    driveline_enable = 1u; driveline_dd_thresh_rpm_x10 = 77u; driveline_max_retard_deg = 6u;
+    driveline_rpm_min_x10 = 9000u; driveline_rpm_max_x10 = 40000u; driveline_clt_min_x10 = -50;
+    driveline_map_min_bar_x100 = 55u; driveline_speed_min_kmh = 20u; driveline_speed_max_kmh = 120u;
+    std::memset(page, 0, sizeof(page));
+    driveability_serialize_to_page0(page, sizeof(page));
+    CHECK_EQ(page[kDriveabilityPage0Off + 58], 1u, "enable byte");
+    CHECK_EQ(page[kDriveabilityPage0Off + 61], 6u, "max retard byte");
+    driveline_enable = 0u; driveline_dd_thresh_rpm_x10 = 1u; driveline_max_retard_deg = 0u;
+    driveline_rpm_min_x10 = 1u; driveline_rpm_max_x10 = 1u; driveline_clt_min_x10 = 1;
+    driveline_map_min_bar_x100 = 1u; driveline_speed_min_kmh = 0u; driveline_speed_max_kmh = 0u;
+    driveability_apply_page0(page, sizeof(page));
+    CHECK_EQ(driveline_enable, 1u, "round trip: enable");
+    CHECK_EQ(driveline_dd_thresh_rpm_x10, 77u, "round trip: threshold");
+    CHECK_EQ(driveline_max_retard_deg, 6u, "round trip: max retard");
+    CHECK_EQ(driveline_rpm_min_x10, 9000u, "round trip: rpm min");
+    CHECK_EQ(driveline_rpm_max_x10, 40000u, "round trip: rpm max");
+    CHECK_EQ(driveline_clt_min_x10, -50, "round trip: CLT min (signed)");
+    CHECK_EQ(driveline_map_min_bar_x100, 55u, "round trip: MAP min");
+    CHECK_EQ(driveline_speed_min_kmh, 20u, "round trip: speed min");
+    CHECK_EQ(driveline_speed_max_kmh, 120u, "round trip: speed max");
+    // Zero in a "keep the default" field leaves the value alone; the retard is clamped.
+    driveline_dd_thresh_rpm_x10 = 321u;
+    page[kDriveabilityPage0Off + 59] = 0u; page[kDriveabilityPage0Off + 60] = 0u;
+    page[kDriveabilityPage0Off + 61] = 99u;
+    driveability_apply_page0(page, sizeof(page));
+    CHECK_EQ(driveline_dd_thresh_rpm_x10, 321u, "zero threshold keeps the current value");
+    CHECK_EQ(driveline_max_retard_deg, 30u, "max retard clamped to 30 deg");
+    driveline_enable = s_en; driveline_max_retard_deg = s_deg; driveline_dd_thresh_rpm_x10 = s_dd;
+    driveline_rpm_min_x10 = s_rmin; driveline_rpm_max_x10 = s_rmax; driveline_clt_min_x10 = s_clt;
+    driveline_map_min_bar_x100 = s_map; driveline_speed_min_kmh = s_smin; driveline_speed_max_kmh = s_smax;
 }
