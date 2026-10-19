@@ -30,7 +30,7 @@ constexpr uint32_t kLimpRpmHyst_x10  = 200u;    // 20 rpm: evita chatter no cort
 // Bateria fora de 6..18 V (leitura 0, divisor aberto): usa 12 V nominal para
 // dead time e dwell, em vez de saturar no eixo da tabela (9 V).
 inline uint16_t safe_vbatt_mv(const ems::drv::SensorData& s) noexcept {
-    return (s.vbatt_mv >= 6000u && s.vbatt_mv <= 18000u) ? s.vbatt_mv : 12000u;
+    return ems::drv::vbatt_in_range(s.vbatt_mv) ? s.vbatt_mv : ems::drv::kVbattNominalMv;
 }
 constexpr uint32_t kMinDwellTicks     = 31250u;  // 0,5 ms @ 62,5 MHz
 constexpr uint8_t  kFaultBitMap  = (1u << 0u);  // SensorId::MAP
@@ -46,6 +46,7 @@ constexpr uint16_t kMapMaxBarX100 = 300u;
 constexpr uint16_t kAePeriodMs = 2u;
 
 EngineCalcOut s_out = {};
+bool s_limp_rpm_latched = false;   // corte de limp a 3000 rpm, com histerese
 
 struct CachedFuelCorrections {
     bool valid;
@@ -124,6 +125,7 @@ void commit(int16_t spark_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
 void engine_calc_reset() noexcept {
     s_out = {};
     g_fuel_corr_cache = {};
+    s_limp_rpm_latched = false;
 }
 
 const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
@@ -197,7 +199,6 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     //   (1) FULL_SYNC → running fuel
     //   (2) HALF_SYNC + cranking → batch; Hall does NOT allow HALF running fuel
     //   (3) flood / protect / LOSS_OF_SYNC → inj cut
-    static bool s_limp_rpm_latched = false;
     if (!s_out.limp_active || snap.rpm_x10 <= kLimpRpmLimit_x10 - kLimpRpmHyst_x10) {
         s_limp_rpm_latched = false;
     } else if (snap.rpm_x10 > kLimpRpmLimit_x10) {

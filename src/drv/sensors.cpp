@@ -855,9 +855,9 @@ void sensors_tick_100ms() noexcept {
     } else {
         const uint16_t vbatt_mv =
             vbatt_raw_to_mv(ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::VBATT));
-        const bool vbatt_ok = (vbatt_mv >= 6000u && vbatt_mv <= 18000u);
+        const bool vbatt_ok = vbatt_in_range(vbatt_mv);
         // Fora da faixa: dwell e dead time usam o nominal (12 V) e o bit de falha sobe.
-        g_data_staging.vbatt_mv = vbatt_ok ? vbatt_mv : 12000u;
+        g_data_staging.vbatt_mv = vbatt_ok ? vbatt_mv : kVbattNominalMv;
         g_data_staging.vbatt_fault = !vbatt_ok;
     }
 

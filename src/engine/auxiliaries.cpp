@@ -327,7 +327,8 @@ void run_vvt_control(const ems::drv::CkpSnapshot& snap,
     ems::hal::tim4_set_duty(1u, g.vvt_adm_duty_x10);
 }
 
-constexpr uint8_t kFanCltFaultBit = (1u << 3u);  // SensorId::CLT
+constexpr uint8_t kFanCltFaultBit =
+    static_cast<uint8_t>(1u << static_cast<uint8_t>(ems::drv::SensorId::CLT));
 
 void run_fan_control(int16_t clt_x10, bool clt_fault) noexcept {
     // CLT em falha é substituído por 90 °C (< liga): ventoinha ligada por segurança.

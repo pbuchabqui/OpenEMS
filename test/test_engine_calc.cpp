@@ -277,6 +277,9 @@ void test_engine_calc_limp_rpm_hysteresis(void) {
     CHECK_TRUE(step(2990u), "2990 rpm: still cut (inside hysteresis)");
     CHECK_FALSE(step(2970u), "2970 rpm: cut released");
     CHECK_FALSE(step(2990u), "2990 rpm: stays released");
+    step(3010u);
+    engine_calc_reset();
+    CHECK_FALSE(step(2990u), "engine_calc_reset limpa o latch do corte");
     tables_restore();
 }
 

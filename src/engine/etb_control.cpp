@@ -330,9 +330,8 @@ int32_t etb_control_get_integrator() noexcept {
     return g_integrator_x10;
 }
 
-bool etb_rev_cut_request(bool rev_limit_active, bool limp_active, uint32_t rpm_x10) noexcept {
-    constexpr uint32_t kLimpRpmLimit_x10 = 30000u;  // igual a engine_calc.cpp
-    return rev_limit_active || (limp_active && rpm_x10 > kLimpRpmLimit_x10);
+bool etb_rev_cut_request(bool rev_limit_active, bool limp_rpm_cut_active) noexcept {
+    return rev_limit_active || limp_rpm_cut_active;
 }
 
 void etb_apply_output(bool enable_request, bool active, bool initialized,

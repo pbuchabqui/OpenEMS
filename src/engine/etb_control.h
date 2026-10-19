@@ -86,9 +86,10 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
                                    uint16_t measured_pct_x10,
                                    bool     enable_request,
                                    uint16_t period_ms) noexcept;
-/** Pedido de corte de borboleta: limitador de giro ativo, ou limp acima de 3000 rpm. */
-bool            etb_rev_cut_request(bool rev_limit_active, bool limp_active,
-                                    uint32_t rpm_x10) noexcept;
+/** Pedido de corte de borboleta: limitador de giro ativo ou corte de limp ativo.
+ *  `limp_rpm_cut_active` vem do corte de combustível (já com histerese), para a
+ *  borboleta e o combustível nunca discordarem. */
+bool            etb_rev_cut_request(bool rev_limit_active, bool limp_rpm_cut_active) noexcept;
 /** PID -> ponte H. Sem enable/active/init: shutdown (mola devolve a lâmina).
  *  Senão PWM = saída*1023/1000 limitado a ±1023; driver recusou: shutdown. */
 void            etb_apply_output(bool enable_request, bool active, bool initialized,

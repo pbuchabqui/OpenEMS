@@ -64,6 +64,12 @@ struct SensorRange {
     uint16_t max_raw;
 };
 
+// Faixa plausível da bateria: fora dela vale o nominal e sobe SensorData::vbatt_fault.
+inline constexpr uint16_t kVbattMinMv = 6000u;
+inline constexpr uint16_t kVbattMaxMv = 18000u;
+inline constexpr uint16_t kVbattNominalMv = 12000u;
+inline constexpr bool vbatt_in_range(uint16_t mv) noexcept { return mv >= kVbattMinMv && mv <= kVbattMaxMv; }
+
 void sensors_init() noexcept;
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept;
 void sensors_tick_50ms() noexcept;

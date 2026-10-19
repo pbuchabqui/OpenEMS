@@ -212,11 +212,10 @@ void test_etb_apply_output(void) {
 void test_etb_rev_cut_request(void) {
     section("etb_rev_cut_request: limitador de giro ou limp acima de 3000 rpm");
     using ems::engine::etb_rev_cut_request;
-    CHECK_TRUE(etb_rev_cut_request(true, false, 1000u), "limitador ativo corta, mesmo em baixa rotação");
-    CHECK_FALSE(etb_rev_cut_request(false, false, 40000u), "sem limitador nem limp: não corta");
-    CHECK_FALSE(etb_rev_cut_request(false, true, 30000u), "limp a 3000 rpm exatos: não corta");
-    CHECK_TRUE(etb_rev_cut_request(false, true, 30010u), "limp acima de 3000 rpm: corta");
-    CHECK_FALSE(etb_rev_cut_request(false, true, 20000u), "limp abaixo de 3000 rpm: não corta");
+    CHECK_TRUE(etb_rev_cut_request(true, false), "limitador ativo corta");
+    CHECK_TRUE(etb_rev_cut_request(false, true), "corte de limp ativo corta");
+    CHECK_TRUE(etb_rev_cut_request(true, true), "os dois ativos cortam");
+    CHECK_FALSE(etb_rev_cut_request(false, false), "nenhum ativo: não corta");
 }
 
 void test_etb_driver_shutdown(void) {

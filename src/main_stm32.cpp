@@ -683,7 +683,8 @@ int main() {
                 ems::engine::etb_autocal_tick(2u, snap_etb.rpm_x10);
             } else {
                 const bool etb_rev_cut = ems::engine::etb_rev_cut_request(
-                    g_rev_limit_active, g_limp_active, snap_etb.rpm_x10);
+                    g_rev_limit_active,
+                    (ems::engine::g_fuel_cut_reasons & ems::engine::kFuelCutLimpRpm) != 0u);
                 ems::engine::torque_idle_set_ac_load(ems::hal::ac_request_poll(now) ? 1u : 0u);
                 const auto torque_out = ems::engine::torque_manager_update(
                     snap_etb, sensors_etb, true, g_limp_active, etb_rev_cut,

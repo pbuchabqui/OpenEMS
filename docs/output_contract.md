@@ -85,8 +85,16 @@ Abertas:
 - `etb_harness_present` fica em 0 por decisão do projeto: falha de TPS do ETB não corta combustível e o autocal na partida é pulado.
 - Verificar no hardware o PB4 (IN2 do ETB, RGT6): reseta como NJTRST com pull-up. `etb_driver_pins_safe_early` o
   derruba, mas há uma janela entre o reset e essa chamada.
-- Sem teste no pino: corte por `diag_critical` isolado (só pelo superaquecimento crítico), `no_sync_running`
-  com HALF_SYNC, e o corte do ETB com harness=1 depois de limpo (a trava dura até reiniciar).
+- Nunca medido em hardware: nada desta rodada foi gravado nem medido na bancada. Os testes são de host e de
+  simulador (`tools/ci_local.sh` verde, inclusive os dois firmwares com `-Werror`).
+- Vbatt abaixo de 6 V (queda real na partida) usa 12 V nominal em dwell e dead time, como já fazia o driver.
+  Um valor entre 0 e 6 V real ficaria melhor preso em 6 V; só a leitura 0 (divisor aberto) pede o nominal.
+- Falha de MAP não corta mais abaixo de 3000 rpm. Se o modelo de MAP estiver errado (antes de convergir, em
+  boost), a mistura fica errada e não há bit `kProtectDis` nem corte que reponha a proteção.
+- A bomba parte do boot (inclusive após reset do watchdog) e não há caminho de key-off: `set_key_on(false)` não
+  tem chamadores.
+- Dashboard (`tools/openems_dash/protocol.py`) ainda nomeia os bits de corte removidos (map_fault, fatal, no_sync
+  de fase); eles simplesmente nunca acendem.
 
 Achado dos testes de pino: o soft-limit por skip de faísca entregava só metade do ratio pedido (máx. ~25% em vez
 de 50%), porque a máscara por volta atingia um cilindro que não disparava naquela volta. Corrigido em
