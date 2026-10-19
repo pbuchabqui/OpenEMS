@@ -158,6 +158,7 @@ void test_math_corrections(void);
 void test_math_stft_gains(void);
 void test_math_inj_scheduler_ticks(void);
 void test_math_xtau_convergence(void);
+void test_math_xtau_steady_and_step(void);
 void test_math_production_tables(void);
 void test_math_misfire_threshold(void);
 void test_ckp_prime_on_tooth(void);

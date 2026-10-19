@@ -257,38 +257,44 @@ void test_quick_crank_all(void) {
 
 void test_transient_fuel_all(void) {
     using namespace ems::engine;
+    // 3000 rpm, 0,5 bar, CLT 80 °C — o caminho de produção (chamado a cada 2 ms).
+    constexpr uint32_t kRpm = 30000u;
+    constexpr uint16_t kMap = 50u;
+    constexpr int16_t kClt = 800;
 
     section("transient_fuel: reset");
+    xtau_autocalib_reset();
     transient_fuel_reset();
-    CHECK_TRUE(true, "transient_fuel_reset: no crash");
+    CHECK_EQ(xtau_get_state().wall_fuel_us_q8, 0, "transient_fuel_reset: filme zerado");
 
     section("transient_fuel: disabled → returns base pw");
     transient_fuel_reset();
     const uint32_t pw_base = 5000u;
-    const uint32_t out_disabled = transient_fuel_xtau_update(pw_base, 800, false);
+    const uint32_t out_disabled =
+        transient_fuel_xtau_with_autocalib(pw_base, kRpm, kMap, kClt, false, 2u);
     CHECK_EQ(out_disabled, pw_base, "disabled → output = input pw");
 
     section("transient_fuel: enabled with valid CLT");
     transient_fuel_reset();
-    // Enabled: X-Tau model applies wall wetting correction.
-    // Result may differ from input but must be > 0 and <= 100000.
-    const uint32_t out_enabled = transient_fuel_xtau_update(pw_base, 800, true);
+    const uint32_t out_enabled =
+        transient_fuel_xtau_with_autocalib(pw_base, kRpm, kMap, kClt, true, 2u);
     CHECK_TRUE(out_enabled > 0u && out_enabled <= 100000u,
                "enabled: output in (0, 100ms]");
 
     section("transient_fuel: enabled with zero pw → reset + return 0");
     transient_fuel_reset();
-    const uint32_t out_zero = transient_fuel_xtau_update(0u, 800, true);
+    const uint32_t out_zero =
+        transient_fuel_xtau_with_autocalib(0u, kRpm, kMap, kClt, true, 2u);
     CHECK_EQ(out_zero, 0u, "pw=0, enabled → reset + return 0");
 
     section("transient_fuel: warm-up steady state converges");
     transient_fuel_reset();
-    uint32_t prev = 0u;
-    for (int i = 0; i < 20; ++i) {
-        prev = transient_fuel_xtau_update(5000u, 800, true);
+    uint32_t last = 0u;
+    for (int i = 0; i < 4000; ++i) {  // 8 s a 2 ms
+        last = transient_fuel_xtau_with_autocalib(pw_base, kRpm, kMap, kClt, true, 2u);
     }
-    // After many iterations wall fuel reaches steady state; output near input
-    CHECK_TRUE(prev > 0u, "xtau: converges to positive value");
+    CHECK_TRUE(last >= pw_base - pw_base / 100u && last <= pw_base + pw_base / 100u,
+               "xtau: regime converge para o pedido (±1%)");
 }
 
 // ============================================================================

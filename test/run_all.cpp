@@ -265,6 +265,7 @@ int main(void) {
     test_math_stft_gains();
     test_math_inj_scheduler_ticks();
     test_math_xtau_convergence();
+    test_math_xtau_steady_and_step();
     test_math_production_tables();
     test_math_misfire_threshold();
 
