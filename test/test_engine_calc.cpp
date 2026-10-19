@@ -16,6 +16,7 @@
 #include "engine/engine_config.h"
 #include "engine/fuel_calc.h"
 #include "engine/fuel_trim.h"
+#include "engine/ign_calc.h"
 #include "engine/limp_gating.h"
 #include "engine/map_estimator.h"
 #include "engine/quick_crank.h"
@@ -211,5 +212,103 @@ void test_engine_calc_cuts(void) {
     CHECK_TRUE(g_rev_limit_active, "above the rev limit -> limiter active");
     CHECK_EQ(out.pw_ms_x10, 0u, "fuel shown as cut");
     CHECK_TRUE(out.committed && out.spark_x10 > 0, "spark still committed");
+    tables_restore();
+}
+
+void test_engine_calc_overrun_retard(void) {
+    section("engine_calc: overrun spark retard on DFCO (pedal closed, 3000 rpm)");
+    const uint8_t saved_ov = overrun_spark_retard_deg;
+    tables_flat(60, 1000, 22);   // once per test: tables_restore() puts the originals back
+    reset_all();
+    overrun_spark_retard_deg = 0u;
+    uint32_t t = 1000u;
+    EngineCalcOut base = run(t, 3.0, 3000u, 25u, 0u);
+    CHECK_EQ(base.net_pw_us, 0u, "pre-condition: DFCO active");
+
+    reset_all();
+    overrun_spark_retard_deg = 6u;
+    t = 1000u;
+    EngineCalcOut with = run(t, 3.0, 3000u, 25u, 0u);
+    CHECK_EQ(with.net_pw_us, 0u, "pre-condition: DFCO active with retard on");
+    CHECK_EQ(static_cast<int>(base.spark_x10) - static_cast<int>(with.spark_x10), 60,
+             "committed spark is 6.0 deg later during overrun");
+    // Pedal back: the retard follows the fuel ramp and then disappears.
+    EngineCalcOut back = run(t, 2.0, 3000u, 60u, 200u);
+    reset_all();
+    overrun_spark_retard_deg = 0u;
+    t = 1000u;
+    EngineCalcOut ref = run(t, 3.0, 3000u, 60u, 200u);
+    CHECK_TRUE(back.spark_x10 >= ref.spark_x10 - 2 && back.spark_x10 <= ref.spark_x10 + 2,
+               "retard gone once the pedal is back and the ramp has finished");
+    overrun_spark_retard_deg = saved_ov;
+    tables_restore();
+}
+
+void test_engine_calc_pw_drop_limit(void) {
+    section("engine_calc: PW fall limiter bounds the pulse drop per 2 ms step");
+    const uint16_t saved = fuel_pw_drop_max_us;
+    auto worst_fall_us = [](uint16_t limit) {
+        reset_all();
+        tables_flat(60, 1000, 22);
+        fuel_pw_drop_max_us = limit;
+        uint32_t t = 1000u;
+        run(t, 3.0, 3000u, 100u, 300u);                 // heavy load, steady
+        double prev = engine_calc_step(input_at(t += 2u, 3000u, 100u, 300u)).inj_pw_ticks / 62.5;
+        double worst = 0.0;
+        for (int i = 0; i < 60; ++i) {                  // load removed, pedal kept open (no DFCO)
+            const double cur =
+                engine_calc_step(input_at(t += 2u, 3000u, 30u, 300u)).inj_pw_ticks / 62.5;
+            if (prev - cur > worst) { worst = prev - cur; }
+            prev = cur;
+        }
+        tables_restore();
+        return worst;
+    };
+    const double free_fall = worst_fall_us(0u);
+    const double limited = worst_fall_us(200u);
+    std::printf("    worst fall per step: free %.0f us, limited(200) %.0f us\n", free_fall, limited);
+    CHECK_TRUE(free_fall > 400.0, "pre-condition: without the limit the pulse falls fast");
+    CHECK_TRUE(limited <= 200.0, "with the limit no step falls more than the limit");
+    fuel_pw_drop_max_us = saved;
+}
+
+void test_engine_calc_driveline_retard(void) {
+    section("engine_calc: driveline surge retard moves the committed spark");
+    const uint8_t s_en = driveline_enable, s_deg = driveline_max_retard_deg;
+    const uint16_t s_dd = driveline_dd_thresh_rpm_x10;
+    tables_flat(60, 1000, 22);
+    reset_all();
+    driveline_enable = 0u;
+    uint32_t t = 1000u;
+    const EngineCalcOut base = run(t, 1.0, 3000u, 60u, 250u);
+
+    reset_all();
+    driveline_enable = 1u;
+    driveline_max_retard_deg = 8u;
+    driveline_dd_thresh_rpm_x10 = 50u;
+    driveline_reset();
+    t = 1000u;
+    const EngineCalcOut steady = run(t, 1.0, 3000u, 60u, 250u);
+    CHECK_EQ(steady.spark_x10, base.spark_x10, "steady rpm: no second difference, no retard");
+
+    EngineCalcOut surge{};
+    for (int i = 0; i < 400; ++i) {                     // rpm oscillating +-10 rpm every step
+        const uint32_t rpm = (i & 1) ? 3010u : 3000u;
+        surge = engine_calc_step(input_at(t += 2u, rpm, 60u, 250u));
+    }
+    CHECK_EQ(static_cast<int>(base.spark_x10) - static_cast<int>(surge.spark_x10), 80,
+             "surging rpm: spark 8.0 deg later (the configured maximum)");
+
+    driveline_enable = 0u;
+    reset_all();
+    t = 1000u;
+    EngineCalcOut off = run(t, 1.0, 3000u, 60u, 250u);
+    for (int i = 0; i < 400; ++i) {
+        const uint32_t rpm = (i & 1) ? 3010u : 3000u;
+        off = engine_calc_step(input_at(t += 2u, rpm, 60u, 250u));
+    }
+    CHECK_EQ(off.spark_x10, base.spark_x10, "driveline disabled: surging rpm leaves the spark alone");
+    driveline_enable = s_en; driveline_max_retard_deg = s_deg; driveline_dd_thresh_rpm_x10 = s_dd;
+    driveline_reset();
     tables_restore();
 }

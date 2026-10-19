@@ -53,6 +53,7 @@ DIR/PWM em **PE\*** (BSRR único, fiação limpa no LQFP100). No RGT6 esses pino
 | EWG PWM | PB10 TIM2_CH3 | PB10 TIM2_CH3 | PB10 livre de INJ no mapa actual (WeAct: pino pode não sair no header) |
 | EWG DIR | PA7 (+ PD3 no driver, **sem GPIOD no RGT6**) | PA7 / pino dedicado VGT6 | PD3 inválido no RGT6 |
 | Flex / VVT | PB5 / PB6–7 | PB5 / PB6–7 | Igual |
+| Pedido A/C | PB11 (entrada, pull-down, ativo alto, debounce 50 ms) | PB11 | `hal/ac_request.cpp`; WeAct RGT6 não expõe PB11 no header |
 | ADC sensores (MAP…OIL) | ver tabela ADC | mesma atribuição ADC actual | Igual no tree actual |
 
 ### Drive eléctrico

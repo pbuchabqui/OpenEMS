@@ -37,6 +37,8 @@ static_assert(kPage0MapWindowOff >= ems::engine::kDecelCutRampMsPage0Off + 2u,
               "MAP window overlaps DFCO ramp / capture polarity");
 static_assert(ems::engine::kTimingPage0Off >= kPage0MapWindowOff + 6u &&
               ems::engine::kTimingPage0Off + 6u <= 512u, "timing light overlaps page0");
+static_assert(ems::engine::kDriveabilityPage0Off >= ems::engine::kTimingPage0Off + 6u &&
+              ems::engine::kDriveabilityPage0End <= 512u, "driveability overlaps timing light / page0");
 static_assert(ems::app::kCanRxMapPage0Off + ems::app::kCanRxMapPage0Len <= 252u,
               "CAN RX map overlaps page0 bytes 252+");
 static_assert(kPage0MapWindowOff + 6u <= 512u, "MAP window outside page0");
@@ -457,6 +459,7 @@ void sync_page_from_table(uint8_t page) noexcept {
         // 258: polaridade captura CKP/CMP (bit0/bit1 = falling)
         g_page0[ems::engine::kCapturePolarityPage0Off] = ems::engine::capture_polarity;
         ems::engine::serialize_page0_timing(g_page0, sizeof(g_page0));
+        ems::engine::driveability_serialize_to_page0(g_page0, sizeof(g_page0));
         std::memcpy(g_page0 + ems::engine::kDecelCutRampMsPage0Off,
                     &ems::engine::decel_cut_ramp_ms, 2u);
     } else if (page == 0x01u) {
@@ -710,6 +713,7 @@ bool sync_table_from_page(uint8_t page) noexcept {
         // = subida (default).
         ems::engine::apply_page0_capture_polarity(g_page0, sizeof(g_page0));
         ems::engine::apply_page0_timing(g_page0, sizeof(g_page0), false);
+        ems::engine::driveability_apply_page0(g_page0, sizeof(g_page0));
         // DFCO ramp-in ms (259-260); blob antigo = 0 = off.
         if (sizeof(g_page0) > (ems::engine::kDecelCutRampMsPage0Off + 1u)) {
             std::memcpy(&ems::engine::decel_cut_ramp_ms,

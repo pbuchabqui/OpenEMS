@@ -439,6 +439,8 @@ void auxiliaries_tick_20ms() noexcept {
 void auxiliaries_force_pump(bool on) noexcept { set_pump(on); }
 void auxiliaries_force_fan(bool on) noexcept { set_fan(on); }
 
+bool auxiliaries_fan_on() noexcept { return g.fan_on; }
+
 uint16_t auxiliaries_ewg_position_demand_x10() noexcept {
     return g.ewg_position_demand_x10;
 }

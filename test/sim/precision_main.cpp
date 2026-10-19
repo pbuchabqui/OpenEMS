@@ -109,6 +109,101 @@ void test_purge_does_not_freeze_queue()
     ecu_sched_test_reset();
 }
 
+
+// ── Pin-level helpers for the protection / supply scenarios ─────────────
+bool is_inj_ch(uint8_t ch) { return ch <= 3u; }
+
+// Opening pulses (high -> low) of injector channels with the opening at t >= t_from.
+struct PulseStats { int n = 0; double mean_us = 0.0; };
+
+PulseStats inj_pulses(const Result& r, double t_from, double t_to)
+{
+    PulseStats st;
+    double t_on[8] = {};
+    bool open[8] = {};
+    double sum = 0.0;
+    for (const PinEdge& e : r.edges) {
+        if (!is_inj_ch(e.ch)) { continue; }
+        if (e.high != 0u) { open[e.ch] = true; t_on[e.ch] = e.t_s; continue; }
+        if (!open[e.ch]) { continue; }
+        open[e.ch] = false;
+        if (t_on[e.ch] >= t_from && t_on[e.ch] < t_to) {
+            ++st.n;
+            sum += (e.t_s - t_on[e.ch]) * 1e6;
+        }
+    }
+    st.mean_us = (st.n > 0) ? sum / st.n : 0.0;
+    return st;
+}
+
+// Mean coil dwell (ON -> spark) in microseconds for coils whose ON is at t >= t_from.
+double mean_dwell_us(const Result& r, double t_from)
+{
+    double t_on[8] = {};
+    bool open[8] = {};
+    double sum = 0.0;
+    int n = 0;
+    for (const PinEdge& e : r.edges) {
+        if (is_inj_ch(e.ch)) { continue; }
+        if (e.high != 0u) { open[e.ch] = true; t_on[e.ch] = e.t_s; continue; }
+        if (!open[e.ch]) { continue; }
+        open[e.ch] = false;
+        if (t_on[e.ch] >= t_from) { sum += (e.t_s - t_on[e.ch]) * 1e6; ++n; }
+    }
+    return (n > 0) ? sum / n : 0.0;
+}
+
+// Warm engine, flat tables, 2 ms loop = engine_calc_step with fixed sensors; `mod` edits the
+// sensors per scenario. The firmware commits what it computes; nothing is injected by the sim.
+Result run_engine_calc(const char* name, Config c, uint16_t map_kpa, void (*mod)(ems::drv::SensorData&))
+{
+    namespace en = ems::engine;
+    static uint8_t sv_ve[en::kTableAxisSize][en::kTableAxisSize];
+    static int16_t sv_lam[en::kTableAxisSize][en::kTableAxisSize];
+    static int8_t sv_spk[en::kTableAxisSize][en::kTableAxisSize];
+    std::memcpy(sv_ve, en::ve_table, sizeof(sv_ve));
+    std::memcpy(sv_lam, en::lambda_target_table_x1000, sizeof(sv_lam));
+    std::memcpy(sv_spk, en::spark_table, sizeof(sv_spk));
+    for (uint8_t y = 0u; y < en::kTableAxisSize; ++y) {
+        for (uint8_t x = 0u; x < en::kTableAxisSize; ++x) {
+            en::ve_table[y][x] = 70u;
+            en::lambda_target_table_x1000[y][x] = 1000;
+            en::spark_table[y][x] = 24;
+        }
+    }
+    en::engine_calc_reset();
+    en::quick_crank_reset();
+    en::transient_fuel_reset();
+    en::fuel_reset_adaptives();
+    en::map_estimator_init();
+    ems::drv::SensorData s{};
+    s.map_bar_x1000 = static_cast<uint16_t>(map_kpa * 10u);
+    s.clt_degc_x10 = 900;
+    s.iat_degc_x10 = 200;
+    s.vbatt_mv = 14000u;
+    s.oil_press_bar_x1000 = 3000u;
+    s.fuel_press_bar_x1000 = static_cast<uint16_t>(
+        en::fuel_press_nominal_bar_x1000 - (en::fuel_get_baro_bar_x100() - map_kpa) * 10);
+    s.app_pct_x10 = 250u;
+    s.tps_pct_x10 = 250u;
+    if (mod != nullptr) { mod(s); }
+    c.on_main = [&](double t_s) {
+        en::EngineCalcIn in{};
+        in.now_ms = 1000u + static_cast<uint32_t>(t_s * 1000.0);
+        in.snap = ems::drv::ckp_snapshot();
+        in.sensors = s;
+        en::engine_calc_step(in);
+    };
+    Result r = run(c);
+    std::memcpy(en::ve_table, sv_ve, sizeof(sv_ve));
+    std::memcpy(en::lambda_target_table_x1000, sv_lam, sizeof(sv_lam));
+    std::memcpy(en::spark_table, sv_spk, sizeof(sv_spk));
+    const PulseStats p = inj_pulses(r, 0.8, 1e9);
+    std::printf("%-24s inj pulses after 0.8 s: %4d (mean %.0f us) | dwell mean %.0f us\n", name, p.n,
+                p.mean_us, mean_dwell_us(r, 0.8));
+    return r;
+}
+
 }  // namespace
 
 int main()
@@ -444,6 +539,48 @@ int main()
         c.t0_ticks = 0xFFFFFFFFu - static_cast<uint32_t>(0.9 * kTickHz);
         Limits l;
         check_seq("tim5 wrap", run_and_print("TIM5 wrap at 0.9 s", c, 0.8, false), l);
+    }
+
+    // ── Protections and supply seen at the injector / coil pins ─────────
+    // What the engine physically receives when the firmware cuts or compensates.
+    {
+        namespace en = ems::engine;
+        constexpr uint16_t kMapKpa = 60u;
+        auto healthy = [](ems::drv::SensorData&) {};
+        auto map_fault = [](ems::drv::SensorData& s) { s.fault_bits |= 0x01u; };   // SensorId::MAP
+        auto overtemp = [](ems::drv::SensorData& s) { s.clt_degc_x10 = 1200; };    // >= 115 C
+        auto batt_9v = [](ems::drv::SensorData& s) { s.vbatt_mv = 9000u; };
+
+        Config c = base(4000);
+        c.duration_s = 3.0;
+        const Result ok = run_engine_calc("4000 rpm healthy", c, kMapKpa, healthy);
+        check("healthy 4000 rpm", "injector pulses missing (0=ok)", inj_pulses(ok, 0.8, 1e9).n > 0 ? 0.0 : 1.0, 0);
+
+        const Result mf = run_engine_calc("4000 rpm MAP fault", c, kMapKpa, map_fault);
+        check("MAP fault >limp rpm", "injector pulses at the pins", inj_pulses(mf, 0.8, 1e9).n, 0);
+
+        const Result ot = run_engine_calc("4000 rpm CLT 120 C", c, kMapKpa, overtemp);
+        check("critical overtemp", "injector pulses at the pins", inj_pulses(ot, 0.8, 1e9).n, 0);
+
+        // Rev limit: over the limit the injectors stay shut; back below it they resume.
+        Config cr = base(3000);
+        const double over = en::rev_limit_rpm_x10 / 10.0 + 1000.0;
+        cr.rpm = {{0.0, over}, {1.5, over}, {1.7, 3000.0}};
+        cr.duration_s = 4.0;
+        const Result rl = run_engine_calc("rev limit then 3000 rpm", cr, kMapKpa, healthy);
+        check("rev limit", "injector pulses while over", inj_pulses(rl, 0.8, 1.5).n, 0);
+        check("rev limit", "injector pulses missing after release (0=ok)",
+              inj_pulses(rl, 3.0, 1e9).n > 0 ? 0.0 : 1.0, 0);
+
+        // Battery: low voltage lengthens both the coil charge and the injector dead time.
+        Config cb = base(3000);
+        cb.duration_s = 3.0;
+        const Result b14 = run_engine_calc("3000 rpm 14 V", cb, kMapKpa, healthy);
+        const Result b9 = run_engine_calc("3000 rpm 9 V", cb, kMapKpa, batt_9v);
+        check("battery 9 V vs 14 V", "dwell not longer at 9 V (0=ok)",
+              mean_dwell_us(b9, 1.0) > mean_dwell_us(b14, 1.0) ? 0.0 : 1.0, 0);
+        check("battery 9 V vs 14 V", "injector pulse not longer at 9 V (0=ok)",
+              inj_pulses(b9, 1.0, 1e9).mean_us > inj_pulses(b14, 1.0, 1e9).mean_us ? 0.0 : 1.0, 0);
     }
 
     test_purge_does_not_freeze_queue();

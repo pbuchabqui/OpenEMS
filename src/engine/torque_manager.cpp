@@ -12,6 +12,7 @@
 #include "engine/math_utils.h"
 #include "etb_control.h"
 #include "engine/vehicle_inputs.h"
+#include "engine/auxiliaries.h"
 #include "hal/system.h"
 
 #include <string.h>
@@ -177,7 +178,9 @@ static int32_t  g_crank_taper_from_x10 = 0;
 static bool     g_idle_phase = false;
 // Dashpot: hold blade after tip-out (APP→closed) then decay toward idle.
 static int32_t  g_dashpot_x10 = 0;
+static uint16_t g_dashpot_tau_ms = 400u;
 static bool     g_prev_app_idle = false;
+static bool     g_idle_ac_load = false;
 
 // Open-loop crank air (pct×10). Prefer max idle opening; never below min.
 static uint16_t crank_open_pct_x10() noexcept {
@@ -257,7 +260,9 @@ void torque_manager_reset() noexcept {
     g_crank_taper_from_x10 = 0;
     g_idle_phase = false;
     g_dashpot_x10 = 0;
+    g_dashpot_tau_ms = 400u;
     g_prev_app_idle = false;
+    g_idle_ac_load = false;
     g_launch_state     = LaunchState::Idle;
     g_tc_reduction_x10 = 0u;
     g_tc_prev_rpm_x10  = 0u;
@@ -273,6 +278,10 @@ void torque_manager_reset() noexcept {
 void torque_tc_set_external_slip_pct_x10(uint16_t slip_pct_x10) noexcept {
     g_tc_ext_slip_x10 = (slip_pct_x10 > 1000u) ? 1000u : slip_pct_x10;
     g_tc_ext_slip_valid = 1u;
+}
+
+void torque_idle_set_ac_load(uint8_t on) noexcept {
+    g_idle_ac_load = (on != 0u);
 }
 
 void torque_tc_clear_external_slip() noexcept {
@@ -379,8 +388,12 @@ TorqueOutput torque_manager_update(
     }
 
     const uint16_t dt = (period_ms == 0u) ? 2u : period_ms;
-    int32_t i_step = static_cast<int32_t>(dt) / 2;  // 2ms → 1
-    if (i_step < 1) { i_step = 1; }
+    int32_t up_step =
+        (static_cast<int32_t>(idle_i_step_recover) * static_cast<int32_t>(dt)) / 2;
+    int32_t down_step =
+        (static_cast<int32_t>(idle_i_step_close) * static_cast<int32_t>(dt)) / 2;
+    if (up_step < 1) { up_step = 1; }
+    if (down_step < 1) { down_step = 1; }
 
     // ── Launch control ────────────────────────────────────────────────────
     // Street-lite (no clutch): arm when enable && APP ≥ arm; active while APP
@@ -637,14 +650,27 @@ TorqueOutput torque_manager_update(
         const int32_t rpm_error = static_cast<int32_t>(idle_target_rpm_x10)
                                   - static_cast<int32_t>(snap.rpm_x10);
         if (rpm_error > 50) {          // deadband ±5 RPM (×10)
-            g_idle_air_int_x10 += i_step;
+            g_idle_air_int_x10 += up_step;
         } else if (rpm_error < -50) {
-            g_idle_air_int_x10 -= i_step;
+            g_idle_air_int_x10 -= down_step;
         }
         if (g_idle_air_int_x10 < idle_min) { g_idle_air_int_x10 = idle_min; }
         if (g_idle_air_int_x10 > idle_max) { g_idle_air_int_x10 = idle_max; }
         if (!g_crank_taper_active) {
-            const uint16_t idle_floor = static_cast<uint16_t>(g_idle_air_int_x10);
+            int32_t floor_i = g_idle_air_int_x10;
+            if (auxiliaries_fan_on()) {
+                floor_i += static_cast<int32_t>(idle_fan_air_x10);
+            }
+            uint8_t gear = 0u;
+            if (vehicle_gear(gear, now_ms) && gear >= 1u) {
+                floor_i += static_cast<int32_t>(idle_gear_air_x10);
+            }
+            if (g_idle_ac_load) {
+                floor_i += static_cast<int32_t>(idle_ac_air_x10);
+            }
+            if (floor_i > idle_max) { floor_i = idle_max; }
+            if (floor_i < 0) { floor_i = 0; }
+            const uint16_t idle_floor = static_cast<uint16_t>(floor_i);
             if (target_x10 < idle_floor) {
                 target_x10 = idle_floor;
             }
@@ -653,7 +679,7 @@ TorqueOutput torque_manager_update(
                (sensors.app_pct_x10 >= etb_idle_open_pct_x10 || rev_limiting ||
                 launch_active != 0u || !g_idle_phase)) {
         if (g_idle_air_int_x10 > 0) {
-            g_idle_air_int_x10 -= i_step;
+            g_idle_air_int_x10 -= down_step;
             if (g_idle_air_int_x10 < 0) { g_idle_air_int_x10 = 0; }
         }
     }
@@ -665,23 +691,44 @@ TorqueOutput torque_manager_update(
         if (!app_idle || rev_limiting || launch_active != 0u || cranking_now) {
             g_dashpot_x10 = 0;
         } else if (!g_prev_app_idle) {
-            // Entrada em idle: seed com o target actual (ainda o do drive).
-            int32_t seed = static_cast<int32_t>(target_x10);
-            if (seed < static_cast<int32_t>(g_etb_target_x10)) {
-                seed = static_cast<int32_t>(g_etb_target_x10);
+            // Entrada em idle: τ e teto da abertura em que o pedal saiu.
+            // Ficam guardados neste evento; o decay não volta a consultar.
+            int32_t opening = static_cast<int32_t>(target_x10);
+            if (opening < static_cast<int32_t>(g_etb_target_x10)) {
+                opening = static_cast<int32_t>(g_etb_target_x10);
             }
+            if (opening < 0) {
+                opening = 0;
+            }
+            if (opening > 1000) {
+                opening = 1000;
+            }
+            constexpr uint16_t kOpenAxisX10[kDashpotCurvePts] = {0u, 100u, 200u, 350u};
+            const uint16_t open_u = static_cast<uint16_t>(opening);
+            const uint16_t cap = interp_u16_8pt_u16x(
+                kOpenAxisX10, dashpot_cap_x10, kDashpotCurvePts, open_u);
+            uint32_t tau = interp_u16_8pt_u16x(
+                kOpenAxisX10, dashpot_tau_ms, kDashpotCurvePts, open_u);
+            if (snap.rpm_x10 > dashpot_fast_rpm_x10) {
+                tau = (tau * dashpot_fast_factor_q8) / 256u;
+            }
+            if (tau == 0u) {
+                tau = 1u;
+            }
+            g_dashpot_tau_ms = static_cast<uint16_t>(tau > 65535u ? 65535u : tau);
+            int32_t seed = opening;
             if (seed < idle_min) {
                 seed = idle_min;
             }
-            // Cap dashpot — não segurar WOT no tip-out.
-            constexpr int32_t kDashpotMaxX10 = 350;  // 35%
-            if (seed > kDashpotMaxX10) {
-                seed = kDashpotMaxX10;
+            if (seed > static_cast<int32_t>(cap)) {
+                seed = static_cast<int32_t>(cap);
             }
             g_dashpot_x10 = seed;
         } else if (g_dashpot_x10 > 0) {
-            // Decay: ~400 ms time constant → step = dashpot * dt / 400
-            int32_t step = (g_dashpot_x10 * static_cast<int32_t>(dt)) / 400;
+            const int32_t tau = (g_dashpot_tau_ms == 0u)
+                ? 1
+                : static_cast<int32_t>(g_dashpot_tau_ms);
+            int32_t step = (g_dashpot_x10 * static_cast<int32_t>(dt)) / tau;
             if (step < 1) {
                 step = 1;
             }

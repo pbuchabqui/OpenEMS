@@ -253,35 +253,92 @@ void test_math_inj_scheduler_ticks(void) {
 }
 
 void test_math_xtau_convergence(void) {
+    using namespace ems::engine;
+    constexpr uint32_t kRpm = 30000u;   // 3000 rpm
+    constexpr uint16_t kMap = 145u;
+
     section("MATH: transient_fuel_xtau steady-state injected = desired");
     // Prova analítica: em regime permanente
     //   injected = (desired - wall/tau) × 256/(256-x)
-    //   wall/tau = desired × x/256 (regime permanente)
-    //   => injected = desired × (256-x)/256 × 256/(256-x) = desired
-    // Após 200 ciclos com entrada constante de 5000µs @ clt=800:
-    //   x_q8=32 (interp entre [5]=35 e [6]=28 com frac=128)
-    //   tau=11  (interp entre [5]=12 e [6]=10 com frac=128)
-    //   Convergencia em ~5×tau=55 ciclos; a 200 ciclos é estado permanente.
+    //   wall/tau = injected × x/256 (depósito == evaporação por ciclo)
+    //   => injected = desired
+    // Produção chama o modelo a cada 2 ms; o filme avança dt/ciclo por chamada.
+    // @ clt=800, 3000 rpm: x_q8≈32, τ≈11 ciclos (440 ms) → 12000 chamadas (24 s) >> 5τ.
+    xtau_autocalib_reset();
     transient_fuel_reset();
     uint32_t out = 0u;
-    for (int i = 0u; i < 200; ++i) {
-        out = transient_fuel_xtau_update(5000u, 800, true);
+    for (int i = 0; i < 12000; ++i) {
+        out = transient_fuel_xtau_with_autocalib(5000u, kRpm, kMap, 800, true, 2u);
     }
-    // Tolera ±20µs por truncamento Q8 (wall_q8 em aritmética inteira)
-    CHECK_TRUE(out >= 4980u && out <= 5020u,
-               "xtau steady-state: injected ≈ desired=5000 (±20µs)");
+    // Tolera ±25µs (0,5%) por truncamento Q8 (wall_q8 em aritmética inteira)
+    CHECK_TRUE(out >= 4975u && out <= 5025u,
+               "xtau steady-state: injected ≈ desired=5000 (±0,5%)");
 
     section("MATH: transient_fuel_xtau transitorio — overshot no arranque (wall=0)");
     // Com wall=0 na chamada inicial: evap=0, numerator=desired,
-    // injected = desired × 256/(256-x_q8) = 5000×256/224 ≈ 5714µs.
-    // (x_q8=32 → dry_fraction=256-32=224)
+    // injected = desired × 256/(256-x_q8). Com x_q8≈32: 5000×256/224 ≈ 5714µs.
+    xtau_autocalib_reset();
     transient_fuel_reset();
-    const uint32_t first_out = transient_fuel_xtau_update(5000u, 800, true);
+    const uint32_t first_out =
+        transient_fuel_xtau_with_autocalib(5000u, kRpm, kMap, 800, true, 2u);
     // first_out deve ser > desired (wall vazia → injetor compensa parede)
     CHECK_TRUE(first_out > 5000u,
                "xtau arranque: 1ª injecao > desired (parede vazia → overshot)");
     // E inferior ao limite de clamp (100ms)
     CHECK_TRUE(first_out <= 100000u, "xtau 1ª injeção ≤ 100ms clamp");
+}
+
+// Regime e degrau no ritmo de produção (2 ms), em três temperaturas e em outra cadência.
+void test_math_xtau_steady_and_step(void) {
+    using namespace ems::engine;
+    constexpr uint32_t kDesired = 11801u;
+    constexpr uint32_t kRpm = 30000u;
+    constexpr uint16_t kMap = 145u;
+    const uint32_t tol = kDesired / 200u;  // ±0,5%
+
+    section("MATH: xtau — regime permanente devolve o pedido (dt = 2 ms)");
+    const int16_t clts[] = {-100, 200, 886};
+    const char* names[] = {"CLT −10 °C: injetado == pedido", "CLT 20 °C: injetado == pedido",
+                           "CLT 88,6 °C: injetado == pedido"};
+    for (int k = 0; k < 3; ++k) {
+        xtau_autocalib_reset();
+        transient_fuel_reset();
+        uint32_t o = 0u;
+        for (int i = 0; i < 12000; ++i) {  // 24 s
+            o = transient_fuel_xtau_with_autocalib(kDesired, kRpm, kMap, clts[k], true, 2u);
+        }
+        CHECK_TRUE(o + tol >= kDesired && o <= kDesired + tol, names[k]);
+    }
+
+    section("MATH: xtau — regime não depende da cadência de chamada");
+    xtau_autocalib_reset();
+    transient_fuel_reset();
+    uint32_t o20 = 0u;
+    for (int i = 0; i < 1500; ++i) {
+        o20 = transient_fuel_xtau_with_autocalib(kDesired, kRpm, kMap, 886, true, 20u);
+    }
+    CHECK_TRUE(o20 + tol >= kDesired && o20 <= kDesired + tol, "dt = 20 ms: injetado == pedido");
+
+    section("MATH: xtau — degrau de pedido: sobrecarga inicial e decaimento ao pedido");
+    xtau_autocalib_reset();
+    transient_fuel_reset();
+    for (int i = 0; i < 12000; ++i) {
+        transient_fuel_xtau_with_autocalib(kDesired, kRpm, kMap, 886, true, 2u);
+    }
+    const uint32_t first = transient_fuel_xtau_with_autocalib(20000u, kRpm, kMap, 886, true, 2u);
+    CHECK_TRUE(first > 20000u, "tip-in: 1ª saída > pedido (parede absorve parte)");
+    CHECK_TRUE(first < 24000u, "tip-in: sobrecarga limitada (não é um ganho estático alto)");
+    uint32_t prev = first, at_100ms = 0u, last = first;
+    bool monotone = true;
+    for (int i = 1; i <= 1500; ++i) {  // 3 s
+        last = transient_fuel_xtau_with_autocalib(20000u, kRpm, kMap, 886, true, 2u);
+        if (last > prev + 1u) { monotone = false; }
+        prev = last;
+        if (i == 50) { at_100ms = last; }
+    }
+    CHECK_TRUE(monotone, "decaimento monotônico ao pedido");
+    CHECK_TRUE(at_100ms < first, "a sobrecarga já cai em 100 ms (há dinâmica)");
+    CHECK_TRUE(last >= 19900u && last <= 20100u, "após 3 s a saída == pedido (±0,5%)");
 }
 
 void test_math_production_tables(void) {

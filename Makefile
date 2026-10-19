@@ -97,6 +97,7 @@ HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp \
                   $(SRC_DIR)/hal/etb_driver.cpp \
                   $(SRC_DIR)/hal/ewg_driver.cpp \
                   $(SRC_DIR)/hal/flex_fuel.cpp \
+                  $(SRC_DIR)/hal/ac_request.cpp \
                   $(SRC_DIR)/hal/out_pins.cpp
 HAL_STM32H562_SRC = $(SRC_DIR)/hal/stm32h562/system.cpp \
                     $(SRC_DIR)/hal/stm32h562/timer.cpp \
@@ -121,6 +122,7 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_fuel.cpp \
                    $(TEST_DIR)/test_fuel_physics.cpp \
                    $(TEST_DIR)/test_engine_calc.cpp \
+                   $(TEST_DIR)/test_driveability.cpp \
                    $(TEST_DIR)/test_ign.cpp \
                    $(TEST_DIR)/test_aux_knock.cpp \
                    $(TEST_DIR)/test_knock_hw_wiring.cpp \

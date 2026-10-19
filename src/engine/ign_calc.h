@@ -20,6 +20,7 @@ struct AdvanceCorrectionsX10 {
     int16_t idle;            // correção de marcha lenta (+ avança)
     int16_t antijerk_retard; // subtraído: retardo anti-jerk no tip-in
     int16_t torque_retard;   // subtraído: TC / launch
+    int16_t overrun_retard;  // subtraído: pé levantado (calc_overrun_spark_retard_x10)
 };
 
 int16_t calc_ign_iat_correction_x10(int16_t iat_x10) noexcept;
@@ -27,6 +28,20 @@ int16_t calc_ign_clt_correction_x10(int16_t clt_x10) noexcept;
 // Retardo anti-jerk no tip-in. Dispara quando tpsdot > antijerk_tpsdot_threshold_x10;
 // magnitude proporcional a tpsdot até antijerk_retard_deg (full scale @ 100 %/s).
 int16_t calc_antijerk_retard_x10(int16_t tpsdot_x10) noexcept;
+
+// Retardo de transmissão (driveline): a segunda diferença do rpm (oscilação da transmissão
+// em tração/alívio) arma um retardo que sobe em degraus até driveline_max_retard_deg e
+// desce quando a oscilação cessa. Janela por CLT/rpm/MAP e, se configurado, velocidade.
+void driveline_reset() noexcept;
+int16_t calc_driveline_retard_x10(uint32_t rpm_x10, int16_t clt_x10, uint16_t map_bar_x100) noexcept;
+
+// Retardo de pé levantado, em décimos. 0 se overrun_spark_retard_deg == 0.
+// Corte activo ou TPS fechado + MAP baixo + RPM acima da janela de lenta: valor cheio.
+// Na saída do corte acompanha a fração da rampa de combustível.
+int16_t calc_overrun_spark_retard_x10(uint32_t rpm_x10,
+                                      uint16_t tps_pct_x10,
+                                      uint16_t map_bar_x100,
+                                      uint16_t idle_target_rpm_x10) noexcept;
 void    antijerk_reset() noexcept;
 
 // Tabela de avanço (graus inteiros) interpolada com resolução de 0,1°.

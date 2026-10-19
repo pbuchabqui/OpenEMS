@@ -400,15 +400,27 @@ int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
         const uint8_t b = clt_bucket(clt_x10);
         const uint16_t tpsdot_u16 = static_cast<uint16_t>(
             abs_dot > 1000 ? 1000 : abs_dot);
+        // Tip-out uses its own table when one is calibrated (any non-zero entry); with the
+        // table left at zero it keeps the old behaviour: half of the tip-in adder.
+        bool de_table = false;
+        if (tip_out) {
+            for (uint8_t i = 0u; i < kAeRateTableSize; ++i) {
+                if (ae_de_pw_us[i] != 0u) {
+                    de_table = true;
+                    break;
+                }
+            }
+        }
+        const uint16_t* const pw_table = de_table ? ae_de_pw_us : ae_pw_adder_us;
         const uint16_t base_pw_us =
-            interp_u16_4pt_u16x(ae_tpsdot_axis_x10, ae_pw_adder_us, tpsdot_u16);
+            interp_u16_4pt_u16x(ae_tpsdot_axis_x10, pw_table, tpsdot_u16);
         int32_t pulse =
             (static_cast<int32_t>(base_pw_us) * static_cast<int32_t>(ae_clt_sens[b])) / 8;
         if (pulse > static_cast<int32_t>(ae_max_pw_us)) {
             pulse = static_cast<int32_t>(ae_max_pw_us);
         }
         if (tip_out) {
-            pulse = -(pulse / 2);
+            pulse = de_table ? -pulse : -(pulse / 2);
         }
         g_ae_pulse_us = pulse;
         g_ae_decay_ms = taper_ms;
@@ -453,6 +465,32 @@ bool     g_dfco_gear_changed   = false;  // já houve ≥1 troca (valida timesta
 uint32_t g_dfco_gear_change_ms = 0u;
 uint32_t g_dfco_now_ms         = 0u;
 bool     g_dfco_just_entered   = false;
+constexpr int16_t kDfcoEntryCltAxisX10[kDashpotCurvePts] = {-200, 200, 600, 1000};
+
+// DFCO entry rpm: the base calibration plus, when any delta is set, the CLT-shaped shift.
+// Never below the exit rpm.
+uint32_t dfco_entry_rpm_x10(int16_t clt_x10) noexcept {
+    bool shaped = false;
+    for (uint8_t i = 0u; i < kDashpotCurvePts; ++i) {
+        if (decel_entry_delta_rpm_x10[i] != 0) {
+            shaped = true;
+            break;
+        }
+    }
+    int32_t entry = static_cast<int32_t>(decel_cut_entry_rpm_x10);
+    if (shaped) {
+        entry += interp_i16_8pt(kDfcoEntryCltAxisX10, decel_entry_delta_rpm_x10,
+                                kDashpotCurvePts, clt_x10);
+    }
+    if (entry < 0) {
+        entry = 0;
+    }
+    if (entry < static_cast<int32_t>(decel_cut_exit_rpm_x10)) {
+        entry = static_cast<int32_t>(decel_cut_exit_rpm_x10);
+    }
+    return static_cast<uint32_t>(entry);
+}
+
 uint16_t g_dfco_ramp_elapsed_ms = 0u;
 bool     g_dfco_ramp_active    = false;
 constexpr uint16_t kDfcoMapExitHystBarX100 = 5u;
@@ -508,7 +546,7 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
 
     if (!g_decel_cut) {
         if (throttle_closed && engine_warm && map_ok && !shift_inhibit &&
-            rpm_x10 >= decel_cut_entry_rpm_x10) {
+            rpm_x10 >= dfco_entry_rpm_x10(clt_x10)) {
             g_decel_cut = true;
             g_dfco_just_entered = true;
             g_dfco_ramp_active = false;
@@ -525,6 +563,40 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
         }
     }
     return g_decel_cut;
+}
+
+uint8_t fuel_decel_cut_ramp_frac_q8() noexcept {
+    if (!g_dfco_ramp_active || decel_cut_ramp_ms == 0u) {
+        return 255u;
+    }
+    const uint32_t q = (static_cast<uint32_t>(g_dfco_ramp_elapsed_ms) * 255u) / decel_cut_ramp_ms;
+    return static_cast<uint8_t>(q > 255u ? 255u : q);
+}
+
+namespace {
+uint32_t g_pw_drop_prev = 0u;
+bool     g_pw_drop_valid = false;
+}  // namespace
+
+uint32_t fuel_pw_limit_drop(uint32_t pw_us) noexcept {
+    if (fuel_pw_drop_max_us == 0u || !g_pw_drop_valid) {
+        g_pw_drop_prev = pw_us;
+        g_pw_drop_valid = true;
+        return pw_us;
+    }
+    if (pw_us < g_pw_drop_prev) {
+        const uint32_t drop = g_pw_drop_prev - pw_us;
+        if (drop > fuel_pw_drop_max_us) {
+            pw_us = g_pw_drop_prev - fuel_pw_drop_max_us;
+        }
+    }
+    g_pw_drop_prev = pw_us;
+    return pw_us;
+}
+
+void fuel_pw_limit_drop_reset() noexcept {
+    g_pw_drop_prev = 0u;
+    g_pw_drop_valid = false;
 }
 
 bool fuel_decel_cut_just_entered() noexcept {

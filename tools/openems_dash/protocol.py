@@ -660,6 +660,30 @@ PAGE0_FIELDS = [
     ("timing_light_enable",         270, 1, "B", 1.0),
     ("timing_light_advance_x10",    272, 1, "h", 0.1),   # ° fixed advance
     ("trigger_fine_x10",            274, 1, "h", 0.1),   # ° added to the offset
+    # 276-347: driveability block (offset inside the block = byte - 276)
+    ("decel_entry_delta_rpm_x10",   276, 4, "h", 0.1),   # RPM shift at CLT -20/20/60/100 C
+    ("idle_i_step_recover",         284, 1, "B", 1.0),   # 0 = keep default
+    ("idle_i_step_close",           285, 1, "B", 1.0),   # 0 = keep default
+    ("idle_fan_air_x10",            286, 1, "H", 0.1),   # %
+    ("idle_gear_air_x10",           288, 1, "H", 0.1),   # %
+    ("idle_ac_air_x10",             290, 1, "H", 0.1),   # %
+    ("dashpot_tau_ms",              292, 4, "H", 1.0),   # ms by opening 0/10/20/35 %
+    ("dashpot_cap_x10",             300, 4, "H", 0.1),   # %
+    ("dashpot_fast_rpm_x10",        308, 1, "H", 0.1),   # RPM
+    ("dashpot_fast_factor_q8",      310, 1, "B", 1.0),   # 255 = no shortening
+    ("idle_spark_err_corr_x10",     311, 6, "h", 0.1),   # deg by rpm error; all 0 = linear law
+    ("ae_de_pw_us",                 323, 4, "H", 0.001), # ms; all zero = half of the tip-in adder
+    ("fuel_pw_drop_max_us",         331, 1, "H", 1.0),   # µs per 2 ms step (0=off)
+    ("overrun_spark_retard_deg",    333, 1, "B", 1.0),   # ° (0=off)
+    ("driveline_enable",            334, 1, "B", 1.0),
+    ("driveline_dd_thresh_rpm_x10", 335, 1, "H", 0.1),   # rpm 2nd difference (0=keep)
+    ("driveline_max_retard_deg",    337, 1, "B", 1.0),   # ° (0=off)
+    ("driveline_rpm_min_x10",       338, 1, "H", 0.1),   # RPM
+    ("driveline_rpm_max_x10",       340, 1, "H", 0.1),   # RPM
+    ("driveline_clt_min_x10",       342, 1, "h", 0.1),   # °C
+    ("driveline_map_min_bar_x100",  344, 1, "H", 1.0),   # kPa
+    ("driveline_speed_min_kmh",     346, 1, "B", 1.0),   # 0 = no gate
+    ("driveline_speed_max_kmh",     347, 1, "B", 1.0),   # 0 = no gate
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}
@@ -679,6 +703,13 @@ FIELD_LIMITS = {
     (0, "timing_light_enable"): (0, 1),
     (0, "timing_light_advance_x10"): (0.0, 30.0),
     (0, "trigger_fine_x10"): (-5.0, 5.0),
+    (0, "fuel_pw_drop_max_us"): (0, 20000),
+    (0, "overrun_spark_retard_deg"): (0, 30),
+    (0, "driveline_enable"): (0, 1),
+    (0, "idle_fan_air_x10"): (0.0, 100.0),
+    (0, "idle_gear_air_x10"): (0.0, 100.0),
+    (0, "idle_ac_air_x10"): (0.0, 100.0),
+    (0, "driveline_max_retard_deg"): (0, 30),
 }
 
 
