@@ -963,6 +963,14 @@ bool usb_cdc_dtr() noexcept {
     return g_dtr;
 }
 
+bool usb_cdc_configured() noexcept {
+#ifndef EMS_HOST_TEST
+    return g_configured;
+#else
+    return false;
+#endif
+}
+
 bool usb_cdc_rts() noexcept {
     return g_rts;
 }

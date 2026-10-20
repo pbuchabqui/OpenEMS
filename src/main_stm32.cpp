@@ -192,22 +192,22 @@ static inline void comms_pump() noexcept {
     }
     ems::app::ui_process();
 
-    // Drena ui_tx → UART + USB (espelhado), limitado pelo MENOR espaço livre
-    // entre os dois rings de destino — usb_cdc_send_bytes() descarta bytes
-    // em silêncio se o seu próprio ring encher, então o orçamento tem de
-    // respeitar ambos, não só o do UART, para nunca perder bytes de um frame.
-    uint16_t budget = ems::hal::uart0_tx_free();
-    const uint16_t usb_free = ems::hal::usb_cdc_tx_free();
-    if (usb_free < budget) { budget = usb_free; }
-    if (budget > 32u) { budget = 32u; }
+    // Drena ui_tx → UART. Sem USB enumerado o orçamento é só o do UART:
+    // o ring USB ainda reporta espaço, e espelhar nele enche o ring e trava
+    // o UART para sempre. Enumerado, vale o menor dos dois e aí sim espelha.
+    const ems::hal::UsbTxBudget tx = ems::hal::usb_cdc_tx_budget(
+        ems::hal::uart0_tx_free(), ems::hal::usb_cdc_tx_free(),
+        ems::hal::usb_cdc_configured());
     uint8_t tx_buf[32] = {};
     uint16_t tx_n = 0u;
-    while (tx_n < budget && ems::app::ui_tx_pop(tx_buf[tx_n])) { ++tx_n; }
+    while (tx_n < tx.n && ems::app::ui_tx_pop(tx_buf[tx_n])) { ++tx_n; }
     if (tx_n != 0u) {
         for (uint16_t i = 0u; i < tx_n; ++i) {
             ems::hal::uart0_tx_push(tx_buf[i]);
         }
-        ems::hal::usb_cdc_send_bytes(tx_buf, tx_n);
+        if (tx.mirror_usb) {
+            ems::hal::usb_cdc_send_bytes(tx_buf, tx_n);
+        }
     }
     ems::hal::uart0_tx_poll_nb(16u);
 }

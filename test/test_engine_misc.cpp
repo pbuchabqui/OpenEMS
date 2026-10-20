@@ -14,6 +14,7 @@
 #include "engine/calibration.h"
 #include "app/can_rx_map.h"
 #include "hal/adc.h"
+#include "hal/stm32h562/usb_cdc.h"
 #include "hal/system.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
@@ -472,6 +473,21 @@ void test_misfire_all(void) {
 // ============================================================================
 // DIAGNOSTIC MANAGER
 // ============================================================================
+
+void test_usb_tx_budget_without_config(void) {
+    section("usb: sem enumeração o orçamento é só o UART");
+    using ems::hal::usb_cdc_tx_budget;
+    const auto down = usb_cdc_tx_budget(100u, 0u, false);
+    CHECK_EQ(down.n, 32u, "UART com folga, USB vazio: teto 32 e não espelha");
+    CHECK_FALSE(down.mirror_usb, "sem configuração não entra byte no ring USB");
+    const auto short_uart = usb_cdc_tx_budget(10u, 0u, false);
+    CHECK_EQ(short_uart.n, 10u, "sem USB o limite é o espaço do UART");
+    const auto up = usb_cdc_tx_budget(100u, 4u, true);
+    CHECK_EQ(up.n, 4u, "enumerado: o menor dos dois rings");
+    CHECK_TRUE(up.mirror_usb, "enumerado espelha no USB");
+    const auto uart_tighter = usb_cdc_tx_budget(3u, 20u, true);
+    CHECK_EQ(uart_tighter.n, 3u, "enumerado com UART mais cheio: vale o UART");
+}
 
 void test_diagnostic_manager_all(void) {
     using namespace ems::engine;
