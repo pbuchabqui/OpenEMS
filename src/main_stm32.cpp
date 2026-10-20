@@ -517,6 +517,7 @@ int main() {
         // ── 100ms: sensores + STFT + misfire report + baro ──────────────
         if (elapsed(now, g_t100ms_, 100u)) {
             g_t100ms_ = now;
+            ems::engine::diagnostic_tick(100u);
             ems::drv::sensors_tick_100ms();
 
             // Knock sensor morto (FOME #578): report único na transição.

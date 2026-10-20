@@ -238,4 +238,6 @@ private:
     static constexpr uint32_t kRecoveryTimeoutMs = 5000;
 };
 
+void diagnostic_tick(uint32_t elapsed_ms) noexcept;
+
 }  // namespace ems::engine

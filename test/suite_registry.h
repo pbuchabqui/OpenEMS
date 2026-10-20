@@ -144,6 +144,7 @@ void test_misfire_all(void);
 void test_usb_tx_budget_without_config(void);
 void test_flex_freq_window(void);
 void test_adc_init_skips_when_ok(void);
+void test_diagnostic_tick_stamps_events(void);
 void test_diagnostic_manager_all(void);
 void test_hal_adc_all(void);
 void test_hal_flash_all(void);

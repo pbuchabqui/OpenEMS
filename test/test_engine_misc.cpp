@@ -14,8 +14,8 @@
 #include "engine/calibration.h"
 #include "app/can_rx_map.h"
 #include "hal/adc.h"
-#include "hal/stm32h562/usb_cdc.h"
 #include "hal/flex_fuel.h"
+#include "hal/stm32h562/usb_cdc.h"
 #include "hal/system.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
@@ -512,6 +512,24 @@ void test_adc_init_skips_when_ok(void) {
     CHECK_TRUE(adc_init_skip_repeat(true, false, false), "sucesso anterior volta já");
     CHECK_FALSE(adc_init_skip_repeat(true, true, false), "a recuperar: a segunda pode tentar");
     CHECK_FALSE(adc_init_skip_repeat(true, false, true), "falha permanente: a segunda pode tentar");
+}
+
+void test_diagnostic_tick_stamps_events(void) {
+    section("diag: diagnostic_tick avança o instante da falha");
+    using namespace ems::engine;
+    DiagnosticManager::init();
+    DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE, FaultSeverity::WARNING);
+    const DiagnosticEvent* ev = DiagnosticManager::get_event(DiagnosticCode::MAP_SENSOR_RANGE);
+    CHECK_TRUE(ev != nullptr && ev->timestamp_ms == 0u, "sem tick o instante fica 0");
+    diagnostic_tick(100u);
+    DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE, FaultSeverity::WARNING);
+    ev = DiagnosticManager::get_event(DiagnosticCode::MAP_SENSOR_RANGE);
+    CHECK_TRUE(ev != nullptr && ev->timestamp_ms == 100u, "100 ms de tick carimba 100");
+    diagnostic_tick(100u);
+    DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE, FaultSeverity::WARNING);
+    ev = DiagnosticManager::get_event(DiagnosticCode::MAP_SENSOR_RANGE);
+    CHECK_TRUE(ev != nullptr && ev->timestamp_ms == 200u, "outro 100 ms carimba 200");
+    DiagnosticManager::clear_fault(DiagnosticCode::MAP_SENSOR_RANGE);
 }
 
 void test_diagnostic_manager_all(void) {

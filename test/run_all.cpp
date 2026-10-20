@@ -233,6 +233,7 @@ int main(void) {
     test_usb_tx_budget_without_config();
     test_flex_freq_window();
     test_adc_init_skips_when_ok();
+    test_diagnostic_tick_stamps_events();
     test_diagnostic_manager_all();
 
     // ── HAL ADC ───────────────────────────────────────────────────────────
