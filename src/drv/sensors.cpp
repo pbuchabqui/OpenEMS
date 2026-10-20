@@ -843,6 +843,21 @@ void sensors_tick_pedal(uint32_t dt_ms) noexcept {
     commit_sensor_snapshot();
 }
 
+bool sensors_map_baro_bar_x100(uint16_t* out) noexcept {
+    if (out == nullptr) { return false; }
+    if (ems::hal::adc_is_recovering() || ems::hal::adc_recovery_failed()) {
+        return false;
+    }
+    const uint16_t raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAP);
+    const FaultTracker& map = g_fault[static_cast<uint8_t>(SensorId::MAP)];
+    // O bit de falha só anda no dente. Parado, o raw desta leitura é a faixa.
+    if (raw < map.range.min_raw || raw > map.range.max_raw) { return false; }
+    const uint16_t bar_x100 = static_cast<uint16_t>(map_raw_to_bar_x1000(raw) / 10u);
+    if (bar_x100 < 70u || bar_x100 > 110u) { return false; }
+    *out = bar_x100;
+    return true;
+}
+
 // CLT/IAT e VBATT. APP/ETB saíram daqui: sensors_tick_pedal().
 void sensors_tick_100ms() noexcept {
     const uint16_t clt_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::CLT);

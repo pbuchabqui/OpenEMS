@@ -61,6 +61,7 @@ void test_sensors_tick_100ms_clt_iat(void);
 void test_sensors_tick_pedal_publishes(void);
 void test_sensors_pedal_range_ceiling(void);
 void test_sensors_pedal_plausibility_time(void);
+void test_sensors_map_baro_refuses_vacuum(void);
 void test_sensors_maf_freq_capture(void);
 void test_fuel_calc_req_fuel_us(void);
 void test_fuel_calc_final_pw(void);

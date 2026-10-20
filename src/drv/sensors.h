@@ -84,6 +84,9 @@ void sensors_tick_50ms() noexcept;
 void sensors_tick_100ms() noexcept;
 // APP/ETB a cada volta do laço de 2 ms. dt_ms é limitado a 50 ms dentro da função.
 void sensors_tick_pedal(uint32_t dt_ms) noexcept;
+// MAP fresco para baro, em kPa. false: ADC a recuperar, raw fora da faixa do MAP,
+// ou resultado fora de 70–110. Não puxa o valor para dentro da faixa.
+bool sensors_map_baro_bar_x100(uint16_t* out) noexcept;
 void sensors_maf_freq_capture_isr(uint16_t period_ticks) noexcept;
 void sensors_set_tps_cal(uint16_t raw_min, uint16_t raw_max) noexcept;
 void sensors_set_app_cal(uint16_t app1_min, uint16_t app1_max,

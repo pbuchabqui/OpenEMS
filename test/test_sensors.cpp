@@ -196,6 +196,42 @@ void test_sensors_pedal_plausibility_time(void) {
     CHECK_TRUE(sensors_get().app_pct_x10 > 0u, "pedal volta a publicar");
 }
 
+void test_sensors_map_baro_refuses_vacuum(void) {
+    section("sensors: baro não promove vácuo para 70 kPa");
+    using namespace ems::hal;
+    sensor_setup(); sensors_init();
+    fuel_set_baro_bar_x100(101u);
+
+    uint16_t out = 0u;
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 1365u);
+    CHECK_TRUE(sensors_map_baro_bar_x100(&out), "raw ~1,00 bar é aceite");
+    CHECK_EQ(out, 100u, "1365 → 100 kPa");
+
+    out = 0u;
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 956u);
+    CHECK_TRUE(sensors_map_baro_bar_x100(&out), "70 kPa no limite entra");
+    CHECK_EQ(out, 70u, "956 → 70 kPa");
+
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 955u);
+    CHECK_FALSE(sensors_map_baro_bar_x100(&out), "69 kPa não é puxado para 70");
+    CHECK_EQ(fuel_get_baro_bar_x100(), 101u, "rejeição não escreve o baro");
+
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 477u);
+    CHECK_FALSE(sensors_map_baro_bar_x100(&out), "vácuo ~35 kPa não entra");
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 0u);
+    CHECK_FALSE(sensors_map_baro_bar_x100(&out), "raw 0 está fora da faixa do MAP");
+    CHECK_EQ(fuel_get_baro_bar_x100(), 101u, "vácuo deixa o baro anterior");
+
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 1365u);
+    adc_test_set_recovering(true);
+    CHECK_FALSE(sensors_map_baro_bar_x100(&out), "ADC a recuperar não publica baro");
+    adc_test_set_recovering(false);
+    adc_test_set_recovery_failed(true);
+    CHECK_FALSE(sensors_map_baro_bar_x100(&out), "ADC em falha não publica baro");
+    adc_test_set_recovery_failed(false);
+    CHECK_EQ(fuel_get_baro_bar_x100(), 101u, "falha de ADC deixa o baro anterior");
+}
+
 void test_sensors_maf_freq_capture(void) {
     section("sensors: sensors_maf_freq_capture_isr");
     sensor_setup(); sensors_init();

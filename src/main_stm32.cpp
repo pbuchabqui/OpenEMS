@@ -543,19 +543,19 @@ int main() {
             const auto snap    = ems::drv::ckp_snapshot();
             const auto sensors = ems::drv::sensors_get();
 
-            // Compensação barométrica: amostrar MAP enquanto motor parado.
-            // Aguarda 300ms estabilizado antes de aceitar a leitura (ADC settle).
+            // Baro depois de 2 s parado. Vácuo, MAP fora de faixa ou ADC a
+            // recuperar não entram: o valor anterior fica e a tentativa repete.
             if (snap.rpm_x10 == 0u) {
                 if (g_baro_stopped_since_ms == 0u) {
                     g_baro_stopped_since_ms = now;
                     g_baro_sampled = false;
                 } else if (!g_baro_sampled &&
-                           (now - g_baro_stopped_since_ms) >= 2000u) {  // coletor equalizado (300 ms ainda lia vácuo)
-                    const uint16_t map_baro = clamp_u16(
-                        static_cast<uint16_t>(sensors.map_bar_x1000 / 10u),
-                        70u, 110u);
-                    ems::engine::fuel_set_baro_bar_x100(map_baro);
-                    g_baro_sampled = true;
+                           (now - g_baro_stopped_since_ms) >= 2000u) {
+                    uint16_t map_baro = 0u;
+                    if (ems::drv::sensors_map_baro_bar_x100(&map_baro)) {
+                        ems::engine::fuel_set_baro_bar_x100(map_baro);
+                        g_baro_sampled = true;
+                    }
                 }
             } else {
                 g_baro_stopped_since_ms = 0u;
