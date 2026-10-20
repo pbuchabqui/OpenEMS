@@ -415,7 +415,10 @@ int main() {
 
         // ── 2ms: fuel + ign recalc + commit calibration ───────────────────
         if (elapsed(now, g_t2ms_, 2u)) {
+            const uint32_t pedal_dt_ms = now - g_t2ms_;
             g_t2ms_ = now;
+            // Antes de sensors_get: o PID do ETB, no mesmo now, lê este snapshot.
+            ems::drv::sensors_tick_pedal(pedal_dt_ms);
             const uint32_t loop2ms_start_us = micros();
 
             // Stall watchdog: detecta virabrequim parado entre dentes.

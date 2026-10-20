@@ -40,7 +40,7 @@ struct SensorData {
     uint16_t etb_tps2_pct_x10;    // ETB blade TPS2 (AN4/PC1) % × 10
     uint16_t etb_tps_pct_x10;     // posição borboleta validada % × 10
     uint8_t  throttle_fault_bits;
-    // Expansão AN1-4 — passthrough bruto, atualizados em sensors_tick_100ms()
+    // Expansão AN1-4 — passthrough bruto, atualizados em sensors_tick_pedal()
     uint16_t an1_raw;
     uint16_t an2_raw;
     uint16_t an3_raw;
@@ -82,6 +82,8 @@ void sensors_init() noexcept;
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept;
 void sensors_tick_50ms() noexcept;
 void sensors_tick_100ms() noexcept;
+// APP/ETB a cada volta do laço de 2 ms. dt_ms é limitado a 50 ms dentro da função.
+void sensors_tick_pedal(uint32_t dt_ms) noexcept;
 void sensors_maf_freq_capture_isr(uint16_t period_ticks) noexcept;
 void sensors_set_tps_cal(uint16_t raw_min, uint16_t raw_max) noexcept;
 void sensors_set_app_cal(uint16_t app1_min, uint16_t app1_max,

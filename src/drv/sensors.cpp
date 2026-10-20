@@ -30,6 +30,14 @@ using ems::drv::kFallbackCltDegcX10;
 using ems::drv::kFallbackIatDegcX10;
 
 constexpr uint8_t  kFaultLimit         = 3u;
+// APP/ETB: teto 4000 (mesma margem do knock). Comparação é raw > max:
+// 4000 não arma, 4095 (curto a VCC num ADC de 12 bits) arma.
+constexpr uint16_t kPedalAdcMin        = 50u;
+constexpr uint16_t kPedalAdcMax        = 4000u;
+// 3 strikes no tick de 100 ms. No tick de 2 ms o tempo tem de continuar ~300 ms.
+constexpr uint16_t kPedalFaultMs       = 300u;
+// Um laço atrasado não pode cumprir os 300 ms numa amostra só.
+constexpr uint32_t kPedalDtCapMs       = 50u;
 constexpr uint16_t kRealTeethPerRev    = 58u;
 constexpr uint16_t kFastSamplesPerRev  = 12u;
 
@@ -112,19 +120,19 @@ static uint16_t g_app_max_delta_pct_x10 = 120u;
 static uint16_t g_etb_max_delta_pct_x10 = 120u;
 static bool g_etb_harness_present = false;
 
-static uint16_t g_app1_buf[4] = {};
-static uint16_t g_app2_buf[4] = {};
-static uint16_t g_etb1_buf[4] = {};
-static uint16_t g_etb2_buf[4] = {};
-static uint8_t g_app1_pos = 0u;
-static uint8_t g_app2_pos = 0u;
-static uint8_t g_etb1_pos = 0u;
-static uint8_t g_etb2_pos = 0u;
+static uint16_t g_app1_filt = 0u;
+static uint16_t g_app2_filt = 0u;
+static uint16_t g_etb1_filt = 0u;
+static uint16_t g_etb2_filt = 0u;
+static bool g_app1_filt_seeded = false;
+static bool g_app2_filt_seeded = false;
+static bool g_etb1_filt_seeded = false;
+static bool g_etb2_filt_seeded = false;
 
-static uint8_t g_app1_fault_strikes = 0u;
-static uint8_t g_app2_fault_strikes = 0u;
-static uint8_t g_etb1_fault_strikes = 0u;
-static uint8_t g_etb2_fault_strikes = 0u;
+static uint16_t g_app1_bad_ms = 0u;
+static uint16_t g_app2_bad_ms = 0u;
+static uint16_t g_etb1_bad_ms = 0u;
+static uint16_t g_etb2_bad_ms = 0u;
 static bool g_app1_fault = false;
 static bool g_app2_fault = false;
 static bool g_etb1_fault = false;
@@ -134,8 +142,8 @@ static bool g_etb_plaus_fault = false;
 
 static uint16_t g_map_filt  = 0u;
 static bool     g_map_filt_seeded = false;
-static uint8_t  app_strikes = 0u;   // debounce de plausibilidade APP/ETB (limpos em reset_state)
-static uint8_t  etb_strikes = 0u;
+static uint16_t g_app_plaus_bad_ms = 0u;
+static uint16_t g_etb_plaus_bad_ms = 0u;
 // g_o2_filt removed — O2 is CAN-only; PA5/ADC1_IN6 is now knock sensor input.
 
 static uint16_t g_tps_buf[4]  = {};
@@ -186,8 +194,8 @@ inline void reset_state() noexcept {
 
     g_map_filt  = 0u;
     g_map_filt_seeded = false;
-    app_strikes = 0u;
-    etb_strikes = 0u;
+    g_app_plaus_bad_ms = 0u;
+    g_etb_plaus_bad_ms = 0u;
 
 
     for (uint8_t i = 0u; i < 4u; ++i) {
@@ -228,20 +236,18 @@ inline void reset_state() noexcept {
     g_app_max_delta_pct_x10 = 120u;
     g_etb_max_delta_pct_x10 = 120u;
     g_etb_harness_present = false;
-    for (uint8_t i = 0u; i < 4u; ++i) {
-        g_app1_buf[i] = 0u;
-        g_app2_buf[i] = 0u;
-        g_etb1_buf[i] = 0u;
-        g_etb2_buf[i] = 0u;
-    }
-    g_app1_pos = 0u;
-    g_app2_pos = 0u;
-    g_etb1_pos = 0u;
-    g_etb2_pos = 0u;
-    g_app1_fault_strikes = 0u;
-    g_app2_fault_strikes = 0u;
-    g_etb1_fault_strikes = 0u;
-    g_etb2_fault_strikes = 0u;
+    g_app1_filt = 0u;
+    g_app2_filt = 0u;
+    g_etb1_filt = 0u;
+    g_etb2_filt = 0u;
+    g_app1_filt_seeded = false;
+    g_app2_filt_seeded = false;
+    g_etb1_filt_seeded = false;
+    g_etb2_filt_seeded = false;
+    g_app1_bad_ms = 0u;
+    g_app2_bad_ms = 0u;
+    g_etb1_bad_ms = 0u;
+    g_etb2_bad_ms = 0u;
     g_app1_fault = false;
     g_app2_fault = false;
     g_etb1_fault = false;
@@ -270,6 +276,30 @@ inline uint16_t iir(uint16_t y, uint16_t x, int32_t num, int32_t den) noexcept {
     if (out <= 0)    { return 0u; }
     if (out >= 4095) { return 4095u; }
     return static_cast<uint16_t>(out);
+}
+
+// Igual ao MAP: a primeira amostra semeia. α = 3/10 nas seguintes.
+inline uint16_t pedal_iir(uint16_t& y, bool& seeded, uint16_t x) noexcept {
+    if (!seeded) {
+        y = (x > 4095u) ? 4095u : x;
+        seeded = true;
+        return y;
+    }
+    y = iir(y, x, 3, 10);
+    return y;
+}
+
+// Uma amostra boa zera o acumulador e a falha, como update_strike_fault fazia.
+inline void update_time_fault(bool bad, uint32_t dt_ms,
+                              uint16_t& bad_ms, bool& active) noexcept {
+    if (!bad) {
+        bad_ms = 0u;
+        active = false;
+        return;
+    }
+    const uint32_t sum = static_cast<uint32_t>(bad_ms) + dt_ms;
+    bad_ms = static_cast<uint16_t>(sum > 60000u ? 60000u : sum);
+    if (bad_ms >= kPedalFaultMs) { active = true; }
 }
 
 inline uint8_t sensor_bit(SensorId id) noexcept {
@@ -371,18 +401,6 @@ inline uint16_t pct_from_cal(uint16_t raw, uint16_t raw_min, uint16_t raw_max) n
     const uint32_t num = static_cast<uint32_t>(raw - raw_min) * 1000u;
     const uint32_t den = static_cast<uint32_t>(raw_max - raw_min);
     return static_cast<uint16_t>(num / den);
-}
-
-inline void update_strike_fault(uint16_t raw, uint16_t min_raw, uint16_t max_raw,
-                              uint8_t& strikes, bool& active) noexcept {
-    const bool bad = (raw < min_raw) || (raw > max_raw);
-    if (bad) {
-        if (strikes < 255u) { ++strikes; }
-        if (strikes >= kFaultLimit) { active = true; }
-    } else {
-        strikes = 0u;
-        active = false;
-    }
 }
 
 inline void refresh_throttle_fault_bits() noexcept {
@@ -744,7 +762,88 @@ void sensors_tick_50ms() noexcept {
     commit_sensor_snapshot();
 }
 
-// [FIX-3] AN1-4: APP/ETB + passthrough bruto
+// APP1/2 e TPS da borboleta. O laço de 2 ms chama isto antes de sensors_get().
+// dt_ms é o tempo desde a chamada anterior; o cap fica aqui para o teste
+// alcançar a política sem o laço do firmware.
+void sensors_tick_pedal(uint32_t dt_ms) noexcept {
+    if (dt_ms > kPedalDtCapMs) { dt_ms = kPedalDtCapMs; }
+
+    const uint16_t app1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::APP1);
+    const uint16_t app2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::APP2);
+    const uint16_t etb1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::ETB_TPS1);
+    const uint16_t etb2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::ETB_TPS2);
+
+    g_data_staging.an1_raw = app1_raw;
+    g_data_staging.an2_raw = app2_raw;
+    g_data_staging.an3_raw = etb1_raw;
+    g_data_staging.an4_raw = etb2_raw;
+
+    const uint16_t app1 = pedal_iir(g_app1_filt, g_app1_filt_seeded, app1_raw);
+    const uint16_t app2 = pedal_iir(g_app2_filt, g_app2_filt_seeded, app2_raw);
+    const uint16_t etb1 = pedal_iir(g_etb1_filt, g_etb1_filt_seeded, etb1_raw);
+    const uint16_t etb2 = pedal_iir(g_etb2_filt, g_etb2_filt_seeded, etb2_raw);
+
+    update_time_fault(app1_raw < kPedalAdcMin || app1_raw > kPedalAdcMax,
+                      dt_ms, g_app1_bad_ms, g_app1_fault);
+    update_time_fault(app2_raw < kPedalAdcMin || app2_raw > kPedalAdcMax,
+                      dt_ms, g_app2_bad_ms, g_app2_fault);
+    update_time_fault(etb1_raw < kPedalAdcMin || etb1_raw > kPedalAdcMax,
+                      dt_ms, g_etb1_bad_ms, g_etb1_fault);
+    update_time_fault(etb2_raw < kPedalAdcMin || etb2_raw > kPedalAdcMax,
+                      dt_ms, g_etb2_bad_ms, g_etb2_fault);
+
+    g_data_staging.app1_pct_x10 = g_app1_fault ? 0u :
+        pct_from_cal(app1, g_app1_raw_min, g_app1_raw_max);
+    g_data_staging.app2_pct_x10 = g_app2_fault ? 0u :
+        pct_from_cal(app2, g_app2_raw_min, g_app2_raw_max);
+    g_data_staging.etb_tps1_pct_x10 = g_etb1_fault ? 0u :
+        pct_from_cal(etb1, g_etb_tps1_raw_min, g_etb_tps1_raw_max);
+    g_data_staging.etb_tps2_pct_x10 = g_etb2_fault ? 0u :
+        pct_from_cal(etb2, g_etb_tps2_raw_min, g_etb_tps2_raw_max);
+
+    bool app_plaus_now = false;
+    bool etb_plaus_now = false;
+    if (!g_app1_fault && !g_app2_fault) {
+        const uint16_t a1 = g_data_staging.app1_pct_x10;
+        const uint16_t a2 = g_data_staging.app2_pct_x10;
+        const uint16_t delta = (a1 > a2) ? static_cast<uint16_t>(a1 - a2)
+                                         : static_cast<uint16_t>(a2 - a1);
+        if (delta > g_app_max_delta_pct_x10) {
+            app_plaus_now = true;
+        }
+    }
+    if (!g_etb1_fault && !g_etb2_fault) {
+        const uint16_t t1 = g_data_staging.etb_tps1_pct_x10;
+        const uint16_t t2 = g_data_staging.etb_tps2_pct_x10;
+        const uint16_t delta = (t1 > t2) ? static_cast<uint16_t>(t1 - t2)
+                                         : static_cast<uint16_t>(t2 - t1);
+        if (delta > g_etb_max_delta_pct_x10) {
+            etb_plaus_now = true;
+        }
+    }
+    update_time_fault(app_plaus_now, dt_ms, g_app_plaus_bad_ms, g_app_plaus_fault);
+    update_time_fault(etb_plaus_now, dt_ms, g_etb_plaus_bad_ms, g_etb_plaus_fault);
+
+    if (g_app1_fault || g_app2_fault || g_app_plaus_fault) {
+        g_data_staging.app_pct_x10 = 0u;
+    } else {
+        g_data_staging.app_pct_x10 = (g_data_staging.app1_pct_x10 < g_data_staging.app2_pct_x10)
+            ? g_data_staging.app1_pct_x10 : g_data_staging.app2_pct_x10;
+    }
+
+    if (g_etb1_fault || g_etb2_fault || g_etb_plaus_fault) {
+        g_data_staging.etb_tps_pct_x10 = 0u;
+    } else {
+        g_data_staging.etb_tps_pct_x10 = static_cast<uint16_t>(
+            (static_cast<uint32_t>(g_data_staging.etb_tps1_pct_x10) +
+             static_cast<uint32_t>(g_data_staging.etb_tps2_pct_x10)) / 2u);
+    }
+
+    refresh_throttle_fault_bits();
+    commit_sensor_snapshot();
+}
+
+// CLT/IAT e VBATT. APP/ETB saíram daqui: sensors_tick_pedal().
 void sensors_tick_100ms() noexcept {
     const uint16_t clt_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::CLT);
     const uint16_t iat_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::IAT);
@@ -777,92 +876,6 @@ void sensors_tick_100ms() noexcept {
                               : lut128(g_iat_table, iat_avg);
     }
 
-    const uint16_t app1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::APP1);
-    const uint16_t app2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::APP2);
-    const uint16_t etb1_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::ETB_TPS1);
-    const uint16_t etb2_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::ETB_TPS2);
-
-    g_data_staging.an1_raw = app1_raw;
-    g_data_staging.an2_raw = app2_raw;
-    g_data_staging.an3_raw = etb1_raw;
-    g_data_staging.an4_raw = etb2_raw;
-
-    g_app1_buf[g_app1_pos] = app1_raw;
-    g_app1_pos = static_cast<uint8_t>((g_app1_pos + 1u) & 0x3u);
-    g_app2_buf[g_app2_pos] = app2_raw;
-    g_app2_pos = static_cast<uint8_t>((g_app2_pos + 1u) & 0x3u);
-    g_etb1_buf[g_etb1_pos] = etb1_raw;
-    g_etb1_pos = static_cast<uint8_t>((g_etb1_pos + 1u) & 0x3u);
-    g_etb2_buf[g_etb2_pos] = etb2_raw;
-    g_etb2_pos = static_cast<uint8_t>((g_etb2_pos + 1u) & 0x3u);
-
-    const uint16_t app1_avg = avg_n(g_app1_buf, 4);
-    const uint16_t app2_avg = avg_n(g_app2_buf, 4);
-    const uint16_t etb1_avg = avg_n(g_etb1_buf, 4);
-    const uint16_t etb2_avg = avg_n(g_etb2_buf, 4);
-
-    update_strike_fault(app1_avg, 50u, 4095u, g_app1_fault_strikes, g_app1_fault);
-    update_strike_fault(app2_avg, 50u, 4095u, g_app2_fault_strikes, g_app2_fault);
-    update_strike_fault(etb1_avg, 50u, 4095u, g_etb1_fault_strikes, g_etb1_fault);
-    update_strike_fault(etb2_avg, 50u, 4095u, g_etb2_fault_strikes, g_etb2_fault);
-
-    g_data_staging.app1_pct_x10 = g_app1_fault ? 0u :
-        pct_from_cal(app1_avg, g_app1_raw_min, g_app1_raw_max);
-    g_data_staging.app2_pct_x10 = g_app2_fault ? 0u :
-        pct_from_cal(app2_avg, g_app2_raw_min, g_app2_raw_max);
-    g_data_staging.etb_tps1_pct_x10 = g_etb1_fault ? 0u :
-        pct_from_cal(etb1_avg, g_etb_tps1_raw_min, g_etb_tps1_raw_max);
-    g_data_staging.etb_tps2_pct_x10 = g_etb2_fault ? 0u :
-        pct_from_cal(etb2_avg, g_etb_tps2_raw_min, g_etb_tps2_raw_max);
-
-    // Plausibilidade com debounce: uma amostra isolada com TPS/APP divergentes durante
-    // movimento rápido não pode travar falha (a ETB trava o corte a 1500 rpm até reset).
-    bool app_plaus_now = false;
-    bool etb_plaus_now = false;
-    if (!g_app1_fault && !g_app2_fault) {
-        const uint16_t a1 = g_data_staging.app1_pct_x10;
-        const uint16_t a2 = g_data_staging.app2_pct_x10;
-        const uint16_t delta = (a1 > a2) ? static_cast<uint16_t>(a1 - a2)
-                                         : static_cast<uint16_t>(a2 - a1);
-        if (delta > g_app_max_delta_pct_x10) {
-            app_plaus_now = true;
-        }
-    }
-    if (!g_etb1_fault && !g_etb2_fault) {
-        const uint16_t t1 = g_data_staging.etb_tps1_pct_x10;
-        const uint16_t t2 = g_data_staging.etb_tps2_pct_x10;
-        const uint16_t delta = (t1 > t2) ? static_cast<uint16_t>(t1 - t2)
-                                         : static_cast<uint16_t>(t2 - t1);
-        if (delta > g_etb_max_delta_pct_x10) {
-            etb_plaus_now = true;
-        }
-    }
-    {
-        // 3 ticks seguidos (~300 ms) para travar; uma amostra boa limpa.
-        constexpr uint8_t kPlausStrikes = 3u;
-        app_strikes = app_plaus_now ? static_cast<uint8_t>(app_strikes < 255u ? app_strikes + 1u : 255u) : 0u;
-        etb_strikes = etb_plaus_now ? static_cast<uint8_t>(etb_strikes < 255u ? etb_strikes + 1u : 255u) : 0u;
-        g_app_plaus_fault = app_strikes >= kPlausStrikes;
-        g_etb_plaus_fault = etb_strikes >= kPlausStrikes;
-    }
-
-    if (g_app1_fault || g_app2_fault || g_app_plaus_fault) {
-        g_data_staging.app_pct_x10 = 0u;
-    } else {
-        g_data_staging.app_pct_x10 = (g_data_staging.app1_pct_x10 < g_data_staging.app2_pct_x10)
-            ? g_data_staging.app1_pct_x10 : g_data_staging.app2_pct_x10;
-    }
-
-    if (g_etb1_fault || g_etb2_fault || g_etb_plaus_fault) {
-        g_data_staging.etb_tps_pct_x10 = 0u;
-    } else {
-        g_data_staging.etb_tps_pct_x10 = static_cast<uint16_t>(
-            (static_cast<uint32_t>(g_data_staging.etb_tps1_pct_x10) +
-             static_cast<uint32_t>(g_data_staging.etb_tps2_pct_x10)) / 2u);
-    }
-
-    refresh_throttle_fault_bits();
-
     // VBATT tem canal próprio (PC3/INP13, bloco 7 do plano da placa v1) e já não
     // divide o pino com o ETB_TPS2 — deixa de depender de `g_etb_harness_present`,
     // que antes fixava 12000 mV com o chicote do ETB ligado. Isso importa porque
@@ -885,7 +898,6 @@ void sensors_tick_100ms() noexcept {
         g_data_staging.vbatt_fault = vbatt_unreliable;
     }
 
-    // Slow path also samples APP/ETB; publish full snapshot for sensors_get().
     commit_sensor_snapshot();
 }
 

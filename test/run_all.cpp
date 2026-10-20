@@ -84,6 +84,9 @@ int main(void) {
     test_sensors_health_status();
     test_sensors_calibration();
     test_sensors_tick_100ms_clt_iat();
+    test_sensors_tick_pedal_publishes();
+    test_sensors_pedal_range_ceiling();
+    test_sensors_pedal_plausibility_time();
     test_sensors_maf_freq_capture();
 
     // ── Fuel Calc ─────────────────────────────────────────────────────────────
