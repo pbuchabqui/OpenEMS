@@ -213,16 +213,16 @@ void test_math_stft_gains(void) {
     }
     CHECK_EQ(fuel_get_stft_pct_x10(), 250, "STFT saturado no clamp kStftClampX10=250");
 
-    section("MATH: fuel_update_stft congela (freeze) quando loop fechado desabilitado");
-    // Com CLT fria (clt=600 < 700=70°C): closed_loop_allowed=false.
-    // Anti-windup: stft congela no último valor (250, saturado no clamp acima),
-    // não decai — evita degrau de combustível ao voltar a closed-loop.
-    const int16_t s_cold1 = fuel_update_stft(
-        30000u, 100u, 1000, 1200, 600, true, false, false, 30000u, 500u);
-    CHECK_EQ(s_cold1, 250, "STFT congelado após 1 chamada fria: mantém 250");
-    const int16_t s_cold2 = fuel_update_stft(
-        30000u, 100u, 1000, 1200, 600, true, false, false, 30000u, 500u);
-    CHECK_EQ(s_cold2, 250, "STFT congelado após 2 chamadas frias: mantém 250");
+    section("MATH: STFT congela abaixo de 40°C e corrige a 60°C");
+    // kClosedLoopMinCltX10 = 400. 390 (39.0°C) está fechado. 600 (60.0°C) está
+    // aberto. O erro é rico (λ 0.800 vs alvo 1.000): se o loop estiver aberto
+    // o trim saturado em 250 desce. No frio tem de ficar.
+    const int16_t s_cold = fuel_update_stft(
+        30000u, 100u, 1000, 800, 390, true, false, false, 30000u, 500u);
+    CHECK_EQ(s_cold, 250, "CLT 39°C: STFT congelado em 250");
+    const int16_t s_warm = fuel_update_stft(
+        30000u, 100u, 1000, 800, 600, true, false, false, 30000u, 500u);
+    CHECK_TRUE(s_warm < 250, "CLT 60°C: closed loop aberto, erro rico desce o STFT");
 
     section("MATH: fuel_update_stft termo P não trunca a zero em erro pequeno");
     // error=33 x1000 (3,3% lean) está na faixa normal de operação — antes do
