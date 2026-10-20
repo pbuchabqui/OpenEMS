@@ -997,24 +997,24 @@ void test_xtau_autocalib_all(void) {
     CHECK_EQ(xtau_get_state().wall_fuel_us_q8, 0, "transient_fuel_reset clears production wall");
 
     section("xtau_autocalib: células RPM×MAP diferentes aprendem parâmetros diferentes");
-    // Duas células bem afastadas nos eixos (baixo RPM/baixa carga vs. alto
-    // RPM/alta carga) recebem erros de lambda opostos — se a Fase 3 deixou de
-    // ser um escalar global, os parâmetros aprendidos devem divergir.
+    // Eixo de MAP hoje: 25/50/80/150 (bar×100). 8000×25 e 70000×150 são os
+    // cantos. Erros de lambda opostos têm de divergir. O PW de produção usa
+    // a tabela 1D de CLT; isto trava o aprendizado 2D, não o pulso.
     xtau_autocalib_reset();
     host_set_millis(5000u);
     for (int i = 0; i < 20; ++i) {
         host_advance_millis(50u);
-        xtau_autocalib_update(8000u, 2500u, 1000, 1100, 800, true);   // baixo RPM/carga, rico
+        xtau_autocalib_update(8000u, 25u, 1000, 1100, 800, true);   // baixo RPM/carga, rico
     }
-    const XTauParams p_low = xtau_get_current_params_2d(8000u, 2500u);
+    const XTauParams p_low = xtau_get_current_params_2d(8000u, 25u);
 
     xtau_autocalib_reset();
     host_set_millis(10000u);
     for (int i = 0; i < 20; ++i) {
         host_advance_millis(50u);
-        xtau_autocalib_update(70000u, 15000u, 1000, 900, 800, true);  // alto RPM/carga, pobre
+        xtau_autocalib_update(70000u, 150u, 1000, 900, 800, true);  // alto RPM/carga, pobre
     }
-    const XTauParams p_high = xtau_get_current_params_2d(70000u, 15000u);
+    const XTauParams p_high = xtau_get_current_params_2d(70000u, 150u);
 
     CHECK_TRUE(p_low.x_fraction_q8 != p_high.x_fraction_q8 || p_low.tau_cycles != p_high.tau_cycles,
                "células RPM×MAP distantes aprendem parâmetros distintos");
