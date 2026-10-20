@@ -76,7 +76,7 @@ int main() { return 0; }
 
 static constexpr uint16_t kCalibPageBytes = 512u;
 alignas(4) static uint8_t g_calib_page0[kCalibPageBytes];
-static bool                g_calib_dirty  = false;
+
 
 volatile uint32_t g_flash_write_faults = 0u; // FIX: fault counter para falhas de escrita NVM
 
@@ -111,7 +111,7 @@ static bool     g_baro_sampled          = false;
 static uint32_t g_loop2ms_last_us = 0u;
 static uint32_t g_loop2ms_max_us = 0u;
 
-static constexpr uint32_t kCalibSaveMinIntervalMs = 300000u;
+
 static constexpr uint16_t kMapMinBarX100 = 10u;
 static constexpr uint16_t kMapMaxBarX100 = 300u;
 static constexpr uint16_t kLambdaMinMilli = 700u;
@@ -657,7 +657,6 @@ int main() {
         // PB2 = LED blue on-board da WeAct STM32H562 LQFP100.
         // FIX P0: Only allow flash writes when engine is stopped or below safe RPM
         static bool adaptive_flush_pending = false;
-        static uint32_t last_calib_save_ms = 0u;
         ems::hal::nvm_set_now_ms(now);
         if (elapsed(now, g_t500ms_, 500u)) {
             g_t500ms_ = now;
@@ -669,17 +668,8 @@ int main() {
             // writes had no RPM check, creating a latent bug (see Blocker #3).
             const bool engine_running_fast = (snap.rpm_x10 > ems::engine::kFlashWriteSafeRpmX10);
             if (!engine_running_fast) {
-                if (g_calib_dirty &&
-                    (last_calib_save_ms == 0u ||
-                     elapsed(now, last_calib_save_ms, kCalibSaveMinIntervalMs))) {
-                    ems::engine::cfg::engine_config_serialize(g_calib_page0, kCalibPageBytes);
-                    if (ems::hal::nvm_save_calibration(0u, g_calib_page0,
-                                                       kCalibPageBytes)) {
-                        g_calib_dirty = false;
-                        last_calib_save_ms = now;
-                    }
-                }
                 // Adaptive LTFT/knock: só agenda se dirty (rate-limit dentro do flush).
+                // Page 0 queima pelo comando 'b', não por este timer.
                 if (ems::hal::nvm_adaptive_maps_dirty()) {
                     adaptive_flush_pending = true;
                 }
