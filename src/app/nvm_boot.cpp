@@ -3,6 +3,7 @@
  * Boot-time NVM → RAM calibration loaders (relocated from main_stm32.cpp).
  */
 #include "app/nvm_boot.h"
+#include "app/ui_protocol_internal.h"
 
 #include <cstring>
 
@@ -138,6 +139,12 @@ void load_dwell2d_calibration_from_nvm() noexcept {
     }
     std::memcpy(ems::engine::dwell_rpm_axis_rpm,  page + 0,  8u);
     std::memcpy(ems::engine::dwell_rpm_factor_q8, page + 8,  8u);
+    // Spark-skip (16-18): era gravado no burn mas nunca carregado — voltava a 0 (desligado) a
+    // cada partida. Blob antigo (sem esses bytes) vem apagado: mantém o default.
+    if (!page_range_is_erased(page, 16u, 3u)) {
+        std::memcpy(&ems::engine::spark_skip_window_rpm_x10, page + 16, 2u);
+        ems::engine::spark_skip_max_q8 = page[18];
+    }
 }
 
 void load_boost_map_from_nvm() noexcept {
@@ -199,6 +206,11 @@ void load_xtau_calibration_from_nvm() noexcept {
         std::memcpy(&ems::engine::crank_prime_tooth,     p + 72, 2u);
         std::memcpy(&ems::engine::crank_prime_max_pw_us, p + 74, 2u);
     }
+    // Pulso pequeno do injetor (76-78): idem, gravado mas nunca carregado.
+    if (!page_range_is_erased(page, 76u, 3u)) {
+        std::memcpy(&ems::engine::inj_small_pulse_break_us, p + 76, 2u);
+        ems::engine::inj_small_pulse_rate_q8 = p[78];
+    }
     // Tabela EOI 2D (79-114, RPM×CLT). Blob antigo (page6 tinha só 80
     // bytes) deixa o byte 79 como pad gravado 0x00, enquanto 80-114 fica
     // apagado (0xFF). Guard só sobre 80-114: se a cauda está toda
@@ -227,6 +239,9 @@ void nvm_boot_load_tables(bool cal_layout_ok) noexcept {
     if (cal_layout_ok) {
         load_table_axes_from_nvm();
     }
+    // Páginas legadas (sem rodapé de CRC) ou corrompidas passam pelo carregador sem validação:
+    // limita os escalares de risco antes de o motor usá-los.
+    (void)ui_detail::sanitize_applied_calibration();
 }
 
 }  // namespace ems::app

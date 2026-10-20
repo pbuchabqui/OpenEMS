@@ -34,6 +34,8 @@
 #include "hal/timer.h"
 #include "hal/flash.h"
 #include "app/nvm_boot.h"
+#include "app/ui_protocol_internal.h"
+#include "hal/cal_trailer.h"
 #include "app/ui_protocol.h"
 #include "app/status_bits.h"
 #include "hal/crc32.h"
@@ -499,6 +501,16 @@ void test_diagnostic_manager_all(void) {
                 "fault inactive after clear");
     CHECK_EQ(DiagnosticManager::get_active_fault_count(), 0u, "count=0 after clear");
 
+    section("DiagnosticManager: falha repetida escala a severidade (WARNING -> CRITICAL)");
+    DiagnosticManager::init();
+    DiagnosticManager::report_fault(DiagnosticCode::ADC_RECOVERY_FAILED, FaultSeverity::WARNING);
+    CHECK_TRUE(DiagnosticManager::is_system_ready(), "WARNING: sistema pronto");
+    DiagnosticManager::report_fault(DiagnosticCode::ADC_RECOVERY_FAILED, FaultSeverity::CRITICAL);
+    CHECK_FALSE(DiagnosticManager::is_system_ready(), "mesma falha reportada CRITICAL: sobe");
+    DiagnosticManager::report_fault(DiagnosticCode::ADC_RECOVERY_FAILED, FaultSeverity::WARNING);
+    CHECK_FALSE(DiagnosticManager::is_system_ready(), "reporte menor não rebaixa");
+    DiagnosticManager::init();
+
     section("DiagnosticManager: get_highest_severity");
     DiagnosticManager::init();
     DiagnosticManager::report_fault(DiagnosticCode::VBATT_LOW, FaultSeverity::WARNING);
@@ -758,7 +770,88 @@ void test_hal_flash_all(void) {
         ems::app::load_corr_calibration_from_nvm();
         CHECK_EQ(iat_corr_x256[7], 300u, "tabela custom (não-legado) carrega");
 
+        // Página legada/corrompida (sem rodapé de CRC) com dwell fora do domínio físico:
+        // o carregamento de boot limita a 10 ms antes de o motor usar o valor.
+        uint16_t dwell_backup[ems::engine::kIgnitionDwellTableSize];
+        std::memcpy(dwell_backup, ems::engine::dwell_ms_x10_table, sizeof(dwell_backup));
+        const uint16_t huge[8] = {900u, 900u, 900u, 900u, 900u, 900u, 900u, 900u};
+        std::memcpy(corr_page + 176, huge, 16u);
+        CHECK_TRUE(nvm_save_calibration(4u, corr_page, sizeof(corr_page)), "grava page 4 com dwell absurdo");
+        ems::app::load_corr_calibration_from_nvm();            // o que nvm_boot_load_tables faz...
+        (void)ems::app::ui_detail::sanitize_applied_calibration();   // ...e a limpeza que ele chama no fim
+        CHECK_TRUE(ems::engine::dwell_ms_x10_table[0] <= 100u, "carga legada + saneamento: dwell > 10 ms limitado a 10 ms");
+        std::memcpy(ems::engine::dwell_ms_x10_table, dwell_backup, sizeof(dwell_backup));
+
         std::memcpy(iat_corr_x256, iat_backup, sizeof(iat_backup));
+    }
+
+    section("nvm_boot: spark-skip e pulso pequeno sobrevivem ao ciclo de energia");
+    {
+        const uint16_t keep_w = ems::engine::spark_skip_window_rpm_x10;
+        const uint8_t  keep_m = ems::engine::spark_skip_max_q8;
+        alignas(4) uint8_t pg7[32] = {};
+        std::memcpy(pg7 + 0, ems::engine::dwell_rpm_axis_rpm, 8u);   // valores atuais: o load os repõe
+        std::memcpy(pg7 + 8, ems::engine::dwell_rpm_factor_q8, 8u);
+        const uint16_t w = 600u;
+        std::memcpy(pg7 + 16, &w, 2u);
+        pg7[18] = 77u;
+        nvm_test_reset();
+        CHECK_TRUE(nvm_save_calibration(6u, pg7, sizeof(pg7)), "grava page 7 com spark-skip");
+        ems::engine::spark_skip_window_rpm_x10 = 0u;
+        ems::engine::spark_skip_max_q8 = 0u;
+        ems::app::load_dwell2d_calibration_from_nvm();
+        CHECK_EQ(ems::engine::spark_skip_window_rpm_x10, 600u, "spark_skip_window volta do NVM");
+        CHECK_EQ(ems::engine::spark_skip_max_q8, 77u, "spark_skip_max volta do NVM");
+
+        const uint16_t keep_b = ems::engine::inj_small_pulse_break_us;
+        const uint8_t  keep_r = ems::engine::inj_small_pulse_rate_q8;
+        alignas(4) uint8_t pg6[116];
+        std::memset(pg6, 0xFF, sizeof(pg6));
+        std::memcpy(pg6 + 0,  ems::engine::xtau_clt_axis_x10,  16u);   // valores atuais: o load os repõe
+        std::memcpy(pg6 + 16, ems::engine::xtau_x_fraction_q8, 16u);
+        std::memcpy(pg6 + 32, ems::engine::xtau_tau_cycles,    16u);
+        std::memset(pg6 + 48, 0, 16u);   // AE: bloco zerado = não aplicado
+        const uint16_t b = 1500u;
+        std::memcpy(pg6 + 76, &b, 2u);
+        pg6[78] = 33u;
+        CHECK_TRUE(nvm_save_calibration(5u, pg6, sizeof(pg6)), "grava page 6 com pulso pequeno");
+        ems::engine::inj_small_pulse_break_us = 0u;
+        ems::engine::inj_small_pulse_rate_q8 = 0u;
+        ems::app::load_xtau_calibration_from_nvm();
+        CHECK_EQ(ems::engine::inj_small_pulse_break_us, 1500u, "inj_small_pulse_break volta do NVM");
+        CHECK_EQ(ems::engine::inj_small_pulse_rate_q8, 33u, "inj_small_pulse_rate volta do NVM");
+
+        ems::engine::spark_skip_window_rpm_x10 = keep_w;
+        ems::engine::spark_skip_max_q8 = keep_m;
+        ems::engine::inj_small_pulse_break_us = keep_b;
+        ems::engine::inj_small_pulse_rate_q8 = keep_r;
+        nvm_test_reset();
+    }
+
+    section("hal/cal_trailer: página interrompida ou corrompida é recusada");
+    {
+        using namespace ems::hal;
+        static uint8_t sec[8192];
+        std::memset(sec, 0xFF, sizeof(sec));
+        CHECK_TRUE(cal_trailer_check(sec) == CalTrailerState::LEGACY, "setor apagado/antigo: legado (aceito)");
+
+        uint8_t data[40];
+        for (uint8_t i = 0u; i < sizeof(data); ++i) { data[i] = static_cast<uint8_t>(i * 7u + 1u); }
+        const CalTrailerWords b = cal_trailer_begin(sizeof(data));
+        std::memcpy(sec + kCalTrailerOffset, b.w, 16u);
+        std::memcpy(sec, data, sizeof(data));
+        CHECK_TRUE(cal_trailer_check(sec) == CalTrailerState::INCOMPLETE, "BEGIN sem END: gravação interrompida");
+
+        const CalTrailerWords e = cal_trailer_end(data, sizeof(data));
+        std::memcpy(sec + kCalTrailerOffset + 16u, e.w, 16u);
+        CHECK_TRUE(cal_trailer_check(sec) == CalTrailerState::VALID, "BEGIN + dados + END: válido");
+
+        sec[5] ^= 0x10u;
+        CHECK_TRUE(cal_trailer_check(sec) == CalTrailerState::CORRUPT, "dado alterado: CRC não bate");
+        sec[5] ^= 0x10u;
+
+        sec[kCalTrailerOffset] ^= 0x01u;
+        CHECK_TRUE(cal_trailer_check(sec) == CalTrailerState::CORRUPT, "magic BEGIN ruim: corrompido");
     }
 
     section("hal/flash: flash_test_set_busy_polls blocks writes");

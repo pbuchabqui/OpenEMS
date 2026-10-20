@@ -24,6 +24,7 @@
 #include "engine/constants.h"
 #include "engine/table3d.h"
 #include "hal/crc32.h"
+#include "hal/system.h"
 #include "hal/flash.h"
 #include "engine/engine_config.h"
 #include "engine/map_window.h"
@@ -45,7 +46,20 @@ static inline uint32_t map_window_diag_word(uint8_t slot) noexcept {
            bal;
 }
 
+// Timeout entre bytes de um comando em andamento: sem ele um byte solto que abre um envelope
+// (ou um comando com argumentos) engolia os comandos seguintes até chegar byte suficiente, e
+// nunca ressincronizava. Passado o prazo o parser volta a IDLE.
+static constexpr uint32_t kParseByteTimeoutMs = 250u;
+static uint32_t g_parse_last_byte_ms = 0u;
+
 void parse_byte(uint8_t b) noexcept {
+    {
+        const uint32_t now = millis();
+        if (g_state != ParseState::IDLE && (now - g_parse_last_byte_ms) > kParseByteTimeoutMs) {
+            reset_parser();
+        }
+        g_parse_last_byte_ms = now;
+    }
     if (g_state == ParseState::IDLE) {
         // Ignore line-state reset probe bytes used by some host stacks.
         if (b == 0xF0u) {
@@ -53,7 +67,9 @@ void parse_byte(uint8_t b) noexcept {
         }
         // Auto-detect envelope TS: comandos legacy são ASCII ≥ 0x20; um frame
         // envelope começa pelo byte alto do size BE (0x00-0x01 para ≤ 263 B).
-        if (b < 0x20u) {
+        // O size BE de um payload ≤ kEnvMaxPayload (807) tem byte alto 0x00-0x03; CR/LF e outros
+        // controles soltos (terminais) não iniciam envelope.
+        if (b <= 0x03u) {
             g_env_size = static_cast<uint16_t>(static_cast<uint16_t>(b) << 8u);
             g_state = ParseState::ENV_SIZE_LO;
             return;
@@ -183,7 +199,7 @@ void parse_byte(uint8_t b) noexcept {
         }
         if (b == static_cast<uint8_t>('G')) {
             // Angle measurement via sched API (no raw symbol peeks).
-            // Format: [gap_ts:4] [idx:1] [8×{ts:4, high:1, ch:1}] = 45 bytes
+            // Format: [gap_ts:4] [idx:1] [8×{ts:4, high:1, ch:1}] = 53 bytes
             uint32_t gap = 0U;
             uint8_t ridx = 0U;
             EcuSchedTsSample samples[8];
@@ -339,6 +355,13 @@ void parse_byte(uint8_t b) noexcept {
     if (g_state == ParseState::BENCH_ARG) {
         // Bench-mode CLT/IAT p/ HIL: 0=off (ADC normal), !=0=on (90°C/25°C fixos,
         // sem SENSOR_FAULT pelos canais CLT/IAT). Ver sensors_set_bench_clt_iat.
+        // Ligar o bench (CLT/IAT/λ fixos que liberam o closed-loop) com o motor girando
+        // mascararia sensores reais: só liga com o virabrequim parado; desligar é sempre livre.
+        if (b != 0u && !burn_rpm_safe()) {
+            tx_push(kAckErr);
+            reset_parser();
+            return;
+        }
         ems::drv::sensors_set_bench_clt_iat(b != 0u, 900, 250);
         // Lambda simulado λ=1.000: liberta o closed-loop (STFT/LTFT) sem WBO2
         // físico — com λ medido fixo, o trim caminha até o alvo da tabela
@@ -403,6 +426,9 @@ void parse_byte(uint8_t b) noexcept {
             return;
         }
 
+        // Buffer velho (estado vivo mudou por trás dele) seria aplicado inteiro: ressincroniza
+        // com as tabelas antes de receber os bytes (ver env_try_write).
+        sync_page_from_table(g_cmd_page);
         g_state = ParseState::WRITE_DATA;
         g_write_pos = 0u;
         return;

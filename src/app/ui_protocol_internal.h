@@ -111,6 +111,8 @@ extern uint16_t g_dirty_page_mask;
 // ── Helpers / commands ──────────────────────────────────────────────────────
 void enter_critical() noexcept;
 void exit_critical() noexcept;
+// Limita escalares de calibração aos domínios físicos; true se algo foi alterado.
+bool sanitize_applied_calibration() noexcept;
 uint16_t page_size(uint8_t page) noexcept;
 uint8_t* page_ptr(uint8_t page) noexcept;
 uint8_t normalize_page_id(uint8_t page) noexcept;

@@ -117,7 +117,7 @@ def parse_realtime(buf: bytes) -> RealtimeData:
         raise ValueError(f"realtime page: esperado 86B, recebido {len(buf)}B")
     # 'x' = byte de padding: status_bits (uint16) é alinhado p/ offset 12.
     (rpm, map_x100, tps, clt_p40, iat_p40, o2_d4, pw_x10,
-     adv_p40, ve, stft, status) = struct.unpack_from("<HBBbbBBBBbxH", buf, 0)
+     adv_p40, ve, stft, status) = struct.unpack_from("<HBBBBBBBBbxH", buf, 0)
     r = buf[14:66]  # reserved[52] começa no offset 14
     map_fused_bar_x100, net_pw_us = struct.unpack_from("<HH", buf, 66)
     (ckp_edges, cmp_edges, tooth_ns,
