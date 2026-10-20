@@ -505,6 +505,15 @@ void test_flex_freq_window(void) {
     CHECK_EQ(flex_ethanol_pct_from_hz(155u), 100u, "150–155 Hz → 100 %");
 }
 
+void test_adc_init_skips_when_ok(void) {
+    section("adc: segunda entrada só segue se a primeira não ficou pronta");
+    using ems::hal::adc_init_skip_repeat;
+    CHECK_FALSE(adc_init_skip_repeat(false, false, false), "primeira entrada corre");
+    CHECK_TRUE(adc_init_skip_repeat(true, false, false), "sucesso anterior volta já");
+    CHECK_FALSE(adc_init_skip_repeat(true, true, false), "a recuperar: a segunda pode tentar");
+    CHECK_FALSE(adc_init_skip_repeat(true, false, true), "falha permanente: a segunda pode tentar");
+}
+
 void test_diagnostic_manager_all(void) {
     using namespace ems::engine;
 

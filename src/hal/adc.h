@@ -51,6 +51,10 @@ enum class AdcSecondaryChannel : uint8_t {
 };
 
 void     adc_init() noexcept;
+// Segunda entrada só segue se a primeira não ficou pronta. Sucesso não reabre o enable.
+inline bool adc_init_skip_repeat(bool inited, bool recovering, bool failed) noexcept {
+    return inited && !recovering && !failed;
+}
 void     adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept;
 // Chamar do laço principal. Sem dentes do CKP dispara uma conversão a cada 10 ms (o TIM6 só
 // era disparado por dente) e rearma o DMA após erro.

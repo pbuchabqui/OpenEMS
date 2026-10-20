@@ -54,6 +54,7 @@ static volatile uint32_t g_adc_init_faults = 0u;  // FIX: Fault counter para adc
 // ── ADC Recovery System (P0 #3 - IMPROVEMENTS.md) ───────────────────────────
 // Flags de status para recuperação do ADC em tempo de execução
 static volatile bool g_adc_recovering = false;       // true durante sequência de recovery
+static bool g_adc_init_ok = false;
 static volatile bool g_adc_recovery_failed = false;  // true se recovery falhou após retries
 static volatile uint32_t g_adc_timeout_count = 0u;   // Contador de timeouts em runtime
 static constexpr uint32_t kAdcRecoveryMaxRetries = 3u;  // Máximo de tentativas de recovery
@@ -254,6 +255,9 @@ static void gpdma_adc2_arm() noexcept {
 // ── API pública ───────────────────────────────────────────────────────────────
 
 void adc_init() noexcept {
+    if (adc_init_skip_repeat(g_adc_init_ok, g_adc_recovering, g_adc_recovery_failed)) {
+        return;
+    }
     // ── 1. Habilitar clocks ADC e GPIOs ─────────────────────────────────
     RCC_AHB1ENR |= RCC_AHB1ENR_GPDMA1EN;
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_ADCEN;   // ADC fica no AHB2 no H562 (bit 10)
@@ -365,6 +369,7 @@ ADC2_CFGR1 = ADC_CFGR1_RES_12BIT
     adc_enable(ADC2_CR, ADC2_ISR);
     ADC1_CR |= ADC_CR_ADSTART;
     ADC2_CR |= ADC_CR_ADSTART;
+    g_adc_init_ok = !g_adc_recovering && !g_adc_recovery_failed;
 }
 
 void adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept {
