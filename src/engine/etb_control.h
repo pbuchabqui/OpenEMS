@@ -82,6 +82,10 @@ struct EtbControlState {
 };
 
 void            etb_control_reset() noexcept;
+/** true se a borboleta não seguiu o alvo (erro >= 20% com saída >= 90% por 1,5 s). Trava até
+ *  etb_control_follow_fault_clear() (o main o chama com o motor parado há 2 s). */
+bool            etb_control_follow_fault() noexcept;
+void            etb_control_follow_fault_clear() noexcept;
 EtbControlState etb_control_update(uint16_t target_pct_x10,
                                    uint16_t measured_pct_x10,
                                    bool     enable_request,

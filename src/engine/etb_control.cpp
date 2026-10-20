@@ -10,6 +10,7 @@
 #include "hal/etb_driver.h"
 
 #include <string.h>
+#include <algorithm>
 #if defined(EMS_HOST_TEST)
 #include <math.h>
 #endif
@@ -268,11 +269,25 @@ namespace ems::engine {
 
 static int32_t g_integrator_x10 = 0;
 static int16_t g_prev_error_x10 = 0;
+// Watchdog de seguimento: borboleta que não segue o alvo (travada, ponte com polaridade
+// invertida, realimentação trocada) deixava o PID saturado em ±100% para sempre.
+constexpr int16_t  kFollowErrX10 = 200;    // erro >= 20%
+constexpr int16_t  kFollowSatX10 = 900;    // com saída >= 90%
+constexpr uint16_t kFollowTripMs = 1500u;  // por 1,5 s seguido (partida com tensão caída não deve disparar)
+static uint16_t g_follow_ms = 0u;
+static bool     g_prev_error_valid = false;   // 1ª amostra após reset não gera "chute" de derivativo
+static bool     g_follow_fault = false;    // trava até reset do MCU: mola devolve a borboleta
 
 void etb_control_reset() noexcept {
     g_integrator_x10 = 0;
     g_prev_error_x10 = 0;
+    g_prev_error_valid = false;
+    g_follow_ms = 0u;
 }
+
+bool etb_control_follow_fault() noexcept { return g_follow_fault; }
+
+void etb_control_follow_fault_clear() noexcept { g_follow_fault = false; g_follow_ms = 0u; }
 
 EtbControlState etb_control_update(uint16_t target_pct_x10,
                                    uint16_t measured_pct_x10,
@@ -281,7 +296,7 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
 {
     EtbControlState out{};
 
-    if (!enable_request || etb_cal_valid == 0u) {
+    if (!enable_request || etb_cal_valid == 0u || g_follow_fault) {
         etb_control_reset();
         return out;
     }
@@ -314,15 +329,36 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
     g_integrator_x10 = clamp_i16(static_cast<int32_t>(g_integrator_x10), -2000, 2000);
     output_x10 += g_integrator_x10;
 
+    if (!g_prev_error_valid) {
+        g_prev_error_x10 = error_x10;
+        g_prev_error_valid = true;
+    }
     if (period_ms > 0u) {
         const int32_t deriv = ((static_cast<int32_t>(error_x10) - g_prev_error_x10)
                                * 1000) / static_cast<int32_t>(period_ms);
-        output_x10 += (kd_x10 * deriv) / 10;
+        // int64: kd × deriv passava de int32 com ganho alto e erro em degrau.
+        const int64_t d_term = (static_cast<int64_t>(kd_x10) * deriv) / 10;
+        output_x10 = static_cast<int32_t>(
+            std::max<int64_t>(-100000, std::min<int64_t>(100000, static_cast<int64_t>(output_x10) + d_term)));
     }
     g_prev_error_x10 = error_x10;
 
     out.output_pct_x10     = clamp_i16(output_x10, -1000, 1000);
     out.position_error_x10 = error_x10;
+
+    const int16_t abs_err = static_cast<int16_t>(error_x10 < 0 ? -error_x10 : error_x10);
+    const int16_t abs_out = static_cast<int16_t>(out.output_pct_x10 < 0 ? -out.output_pct_x10
+                                                                          : out.output_pct_x10);
+    if (abs_err >= kFollowErrX10 && abs_out >= kFollowSatX10) {
+        g_follow_ms = static_cast<uint16_t>(g_follow_ms + period_ms);
+        if (g_follow_ms >= kFollowTripMs) {
+            g_follow_fault = true;
+            out.active = false;
+            out.output_pct_x10 = 0;
+        }
+    } else {
+        g_follow_ms = 0u;
+    }
     return out;
 }
 

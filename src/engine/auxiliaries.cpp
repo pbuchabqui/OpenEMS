@@ -22,6 +22,7 @@
 #endif
 
 #include "hal/timer.h"
+#include "hal/system.h"  // millis(): relógio real, o mesmo que carimba o CAN
 #include "hal/regs.h"
 #include "hal/board_pinout.h"  // EMS_BOARD_IS_VGT6 — selecciona os pinos de relé
 
@@ -46,6 +47,7 @@ using ems::engine::clamp_i16;
 
 constexpr uint32_t kTick10ms = 10u;
 constexpr uint32_t kTick20ms = 20u;
+constexpr bool kVvtFeedbackMeasured = false;  // sem medição de fase de came: VVT parado
 constexpr uint32_t kAuxTim3PwmHz = 15u;
 constexpr uint32_t kAuxTim4PwmHz = 15u;
 
@@ -233,7 +235,10 @@ uint16_t iac_target_rpm_x10(int16_t clt_x10) noexcept {
 void run_wastegate_control(const ems::drv::CkpSnapshot& snap,
                            const ems::drv::SensorData& s) noexcept {
     uint8_t gear = 0u;
-    (void)ems::engine::vehicle_gear(gear, g.time_ms);  // fallback 0 se CAN off
+    // Relógio real (millis), o mesmo que carimba o último RX do CAN. g.time_ms é um contador
+    // de software (soma 10 por tick, perde ticks e começa em 0): comparado com last_rx_ms em
+    // millis(), a idade dava a volta, o sinal sempre expirava e a marcha ficava em 0.
+    (void)ems::engine::vehicle_gear(gear, millis());  // fallback 0 se CAN off
     const uint16_t target_bar_x1000 = lookup_boost_target(snap.rpm_x10, gear);
 
     if (s.map_bar_x1000 > static_cast<uint16_t>(target_bar_x1000 + kOverboostMarginBarX1000)) {
@@ -302,7 +307,11 @@ void run_vvt_control(const ems::drv::CkpSnapshot& snap,
         g.vvt_last_phase_toggle_ms = g.time_ms;
     }
 
-    const bool confirmed =
+    // `calc_cam_pos_est_x10` é só o ângulo do virabrequim dentro do ciclo (dente de serra de
+    // 0..354° a cada volta), não uma posição de came medida. Usá-lo como realimentação dava
+    // erro dominado pelo dente do instante do tick e duty pseudoaleatório no solenoide. Sem
+    // sensor de fase de came medido (kVvtFeedbackMeasured), o VVT fica em repouso (duty 0).
+    const bool confirmed = kVvtFeedbackMeasured &&
         (snap.state == ems::drv::SyncState::FULL_SYNC) &&
         ((g.time_ms - g.vvt_last_phase_toggle_ms) <= kVvtConfirmTimeoutMs);
 

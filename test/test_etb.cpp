@@ -218,6 +218,39 @@ void test_etb_rev_cut_request(void) {
     CHECK_FALSE(etb_rev_cut_request(false, false), "nenhum ativo: não corta");
 }
 
+void test_etb_follow_fault(void) {
+    section("etb_control: watchdog de seguimento (borboleta que não segue o alvo)");
+    etb_cal_valid = 1u;
+    etb_kp_x10 = 120u; etb_ki_x10 = 8u; etb_kd_x10 = 0u;
+    ems::engine::etb_control_follow_fault_clear();
+    ems::engine::etb_control_reset();
+
+    // Alvo 80%, medido 0%: PID satura em +100%. Antes de 1 s ainda ativo.
+    ems::engine::EtbControlState s{};
+    for (int i = 0; i < 74; ++i) { s = ems::engine::etb_control_update(800u, 0u, true, 20u); }
+    CHECK_TRUE(s.active, "1480 ms saturado sem seguir: ainda ativo");
+    CHECK_FALSE(ems::engine::etb_control_follow_fault(), "sem falha antes de 1,5 s");
+    s = ems::engine::etb_control_update(800u, 0u, true, 20u);
+    CHECK_TRUE(ems::engine::etb_control_follow_fault(), "1,5 s saturado sem seguir: falha");
+    CHECK_FALSE(s.active, "falha: ETB desativado (mola)");
+    CHECK_EQ(s.output_pct_x10, 0, "falha: saída 0");
+    s = ems::engine::etb_control_update(100u, 100u, true, 20u);
+    CHECK_FALSE(s.active, "falha trava mesmo com erro zero");
+    // Recuperação (o main a aciona com o motor parado há 2 s): destrava e volta a controlar.
+    ems::engine::etb_control_follow_fault_clear();
+    s = ems::engine::etb_control_update(100u, 100u, true, 20u);
+    CHECK_TRUE(s.active, "depois do clear o ETB volta a controlar");
+    CHECK_FALSE(ems::engine::etb_control_follow_fault(), "falha limpa");
+
+    // Seguindo normalmente (erro pequeno) nunca dispara.
+    ems::engine::etb_control_follow_fault_clear();
+    ems::engine::etb_control_reset();
+    for (int i = 0; i < 200; ++i) { s = ems::engine::etb_control_update(500u, 480u, true, 20u); }
+    CHECK_FALSE(ems::engine::etb_control_follow_fault(), "erro pequeno: sem falha");
+    ems::engine::etb_control_follow_fault_clear();
+    ems::engine::etb_control_reset();
+}
+
 void test_etb_driver_shutdown(void) {
     section("etb_driver_shutdown");
 

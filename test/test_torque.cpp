@@ -289,6 +289,24 @@ void test_torque_manager_cpp_update(void) {
     CHECK_EQ(out.etb_target_pct_x10, 1000u, "app 95% → last map point (1000)");
     sens.app_pct_x10 = 500u;
 
+    // Mapa fora de ordem (segmento decrescente) não pode dar a volta em uint32.
+    {
+        const uint16_t keep5 = etb_pedal_map[ETB_MODE_NORMAL][5];
+        const uint16_t keep6 = etb_pedal_map[ETB_MODE_NORMAL][6];
+        etb_pedal_map[ETB_MODE_NORMAL][5] = 500u;
+        etb_pedal_map[ETB_MODE_NORMAL][6] = 300u;   // dip
+        sens.app_pct_x10 = 550u;
+        out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 10u);
+        CHECK_EQ(out.etb_target_pct_x10, 400u, "segmento decrescente interpola para baixo (sem wrap)");
+        etb_pedal_map[ETB_MODE_NORMAL][5] = 5000u;  // entrada acima de 1000
+        etb_pedal_map[ETB_MODE_NORMAL][6] = 5000u;
+        out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 10u);
+        CHECK_TRUE(out.etb_target_pct_x10 <= 1000u, "entrada > 1000 presa a 100%");
+        etb_pedal_map[ETB_MODE_NORMAL][5] = keep5;
+        etb_pedal_map[ETB_MODE_NORMAL][6] = keep6;
+        sens.app_pct_x10 = 500u;
+    }
+
     // Invalid calibration → TORQUE_LIMP_NO_CALIB, target=0
     etb_cal_valid = 0u;
     out = ems::engine::torque_manager_update(snap, sens, true, false, false, 8500u, 10u);

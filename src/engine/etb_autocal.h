@@ -4,8 +4,10 @@
  *
  * Varre a borboleta até os batentes mecânicos (fechado → aberto) com PWM
  * moderado, captura os raw ADC de TPS1/TPS2 em cada batente e aplica a
- * calibração em RAM (globals de calibration + drv::sensors). Não grava em
- * flash: cada power-on recalibra. O pedal (APP) continua manual/persistente.
+ * calibração em RAM (globals de calibration + drv::sensors). Cada power-on
+ * recalibra; o resultado também é persistido (nvm_save_etb_cal) como fallback
+ * do próximo power-on, só se mudou além do ruído (o erase roda no fim da
+ * varredura, com o motor parado). O pedal (APP) continua manual/persistente.
  *
  * Roda como máquina de estados no tick de 2 ms do ETB, ANTES do torque
  * manager assumir. Aborta (mantendo a calibração de flash) se o motor girar,
