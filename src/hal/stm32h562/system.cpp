@@ -1,12 +1,11 @@
 /**
  * @file hal/stm32h562/system.cpp
- * @brief Clock (PLL → 250 MHz), SysTick (1 ms), IWDG (100 ms)
+ * @brief Clock (PLL → 250 MHz), SysTick (1 ms), IWDG (10 s no boot, ~0,8 s em runtime)
  *        para STM32H562RGT6 — substitui runtime STM32 runtime.
  *
  * Configuração de clock:
  *   HSE  =  8 MHz (cristal externo)
- *   PLL1: M=1, N=62, P=2  →  (8 / 1) × 62 / 2 = 248 MHz  ≈ 250 MHz *
- *         M=1, N=125, P=4 →  (8 / 1) × 125/ 4 = 250 MHz  (exato)
+ *   PLL1: M=2, N=125, P=2  →  (8 / 2) × 125 / 2 = 250 MHz  (exato)
  *   SYSCLK = 250 MHz
  *   HCLK   = 250 MHz  (AHB prescaler = 1)
  *   APB1   = 125 MHz  (APB1 prescaler = 2)
@@ -14,8 +13,7 @@
  *   Timers APB2 (TIM1): 250 MHz  (timer doubler ativo quando PPRE2 ≠ 1)
  *   Timers APB1 (TIM3/4/5/6): 250 MHz
  *
- * IWDG a 32 kHz LSI:
- *   Prescaler /32 → 1000 Hz; Reload = 99 → timeout ≈ 100 ms
+ * IWDG a 32 kHz LSI, prescaler /256 (125 Hz): boot RLR=1249 → 10 s; runtime RLR=99 → ~0,8 s.
  */
 
 #ifndef EMS_HOST_TEST
@@ -47,9 +45,18 @@ uint32_t micros(void) noexcept {
     // SysTick CVR: valor atual do contador (decresce de kSysTickReload a 0).
     // µs = ms × 1000 + (kSysTickReload - CVR) / 250
     //   onde 250 = kSysTickReload / 1000 = ciclos por µs @ 250 MHz.
-    const uint32_t ms = g_systick_ms;
-    // ARM SysTick CVR em 0xE000E018
-    const uint32_t cvr = *reinterpret_cast<volatile uint32_t*>(0xE000E018u);
+    // ms e CVR são lidos em instantes diferentes: se o SysTick recarrega entre os dois, ms fica
+    // velho e CVR já é pequeno → micros() voltava ~1 ms. Re-lê até ms estável e, se a exceção do
+    // SysTick ainda está pendente (PENDSTSET, ICSR bit 26; ISR atrasada/mascarada), soma 1 ms.
+    uint32_t ms, ms2, cvr;
+    bool pend;
+    do {
+        ms = g_systick_ms;
+        cvr = *reinterpret_cast<volatile uint32_t*>(0xE000E018u);                // SysTick CVR
+        pend = ((*reinterpret_cast<volatile uint32_t*>(0xE000ED04u) >> 26u) & 1u) != 0u;  // ICSR
+        ms2 = g_systick_ms;
+    } while (ms != ms2);
+    if (pend) { ++ms; }
     const uint32_t elapsed_us = (kSysTickReload - cvr) / 250u;
     return ms * 1000u + elapsed_us;
 }
@@ -204,7 +211,7 @@ void system_stm32_init(void) noexcept {
              | CRS_CFGR_SYNCSRC_USB;
     CRS_CR |= CRS_CR_CEN | CRS_CR_AUTOTRIMEN;
 
-    // ── 10. IWDG ≈ 10 s durante boot (estreitado p/ 100ms no main loop) ──
+    // ── 10. IWDG ≈ 10 s durante boot (estreitado p/ ~0,8 s no main loop) ──
     IWDG_KR  = IWDG_KR_START;
     IWDG_KR  = IWDG_KR_ACCESS;
     IWDG_PR  = IWDG_PR_DIV256;

@@ -22,7 +22,7 @@ extern "C" void TIM2_IRQHandler()            noexcept __attribute__((weak, alias
 extern "C" void TIM3_IRQHandler()            noexcept __attribute__((weak, alias("Default_Handler")));
 extern "C" void TIM5_IRQHandler()            noexcept __attribute__((weak, alias("Default_Handler")));
 extern "C" void USB_IRQHandler()             noexcept __attribute__((weak, alias("Default_Handler")));
-extern "C" void EXTI5_9_IRQHandler()        noexcept __attribute__((weak, alias("Default_Handler")));
+extern "C" void EXTI5_IRQHandler()          noexcept __attribute__((weak, alias("Default_Handler")));
 
 extern "C" void _init() {}
 extern "C" void _fini() {}
@@ -116,8 +116,8 @@ Handler const g_vector_table[] = {
     Default_Handler, Default_Handler, Default_Handler, Default_Handler,
     Default_Handler, Default_Handler, Default_Handler, Default_Handler,
     // IRQ16..IRQ31
-    Default_Handler, Default_Handler, Default_Handler, Default_Handler,
-    Default_Handler, Default_Handler, Default_Handler, EXTI5_9_IRQHandler, // IRQ23=EXTI[9:5]
+    EXTI5_IRQHandler, Default_Handler, Default_Handler, Default_Handler,   // IRQ16=EXTI5 (H5: uma IRQ por linha)
+    Default_Handler, Default_Handler, Default_Handler, Default_Handler,   // IRQ23=EXTI12
     Default_Handler, Default_Handler, Default_Handler, GPDMA1_Channel0_IRQHandler,
     GPDMA1_Channel1_IRQHandler, Default_Handler, Default_Handler, Default_Handler,
     // IRQ32..IRQ47

@@ -259,7 +259,7 @@ Offset  Reg       Notas
 **EXTSEL para TIM6_TRGO:** `0b01101` = 13 (campo CFGR1[9:5]).
 **EXTEN rising edge:** `0b01` (campo CFGR1[11:10]).
 **CKMODE HCLK/4:** `0b11` (campo ADC12_CCR[17:16]).
-**SMP 47.5 ciclos:** `0b011` (3 bits por canal).
+**SMP 47.5 ciclos:** `0b100` (3 bits por canal). `0b011` = 24.5 ciclos (conferido em `stm32h5xx_ll_adc.h`: 000=2.5, 001=6.5, 010=12.5, 011=24.5, 100=47.5, 101=92.5, 110=247.5, 111=640.5).
 
 ### 4.3 GPDMA1 — Canal (base_canal = 0x4002_0050 + 0x80 × ch)
 

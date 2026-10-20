@@ -22,7 +22,8 @@
  *     OIL_PRESS  → INP11 (PC1) — SQ4  (PC5 exclusive to ETB_TPS2)
  *     VBATT      → INP13 (PC3) — SQ5
  *
- * Trigger: TIM6 TRGO (Update Event) disparado pela ckp adc_trigger_on_tooth().
+ * Trigger: TIM6 TRGO (Update Event) disparado por adc_trigger_on_tooth() (a cada dente do CKP)
+ *   e, sem dentes (motor parado), por adc_idle_poll() a cada 10 ms.
  *   TIM6 → prescaler configura período → TRGO → ADC1 + ADC2 disparo simultâneo
  *
  * Resolução: 12 bits (RES=00)
@@ -34,6 +35,8 @@
 
 #include "hal/adc.h"
 #include "hal/regs.h"
+#include "hal/system.h"
+#include "hal/critical_section.h"
 
 // ── Cache das últimas leituras ADC ───────────────────────────────────────────
 static volatile uint16_t g_adc_secondary_raw[8] = {};  // canais ADC1 IN3-IN10
@@ -73,8 +76,15 @@ static constexpr uint8_t kAdc2ChMap[5] = {
 };
 
 // ── Tempo de amostragem para todos os canais: 47.5 ciclos = 011b ─────────────
-static constexpr uint32_t kSmpr = 0x03u;  // SMP[2:0] = 011 → 47.5 ciclos
-static constexpr uint32_t kTimClockHz = 62500000u;  // TIM6 @ 62.5 MHz após clock tree atual
+static constexpr uint32_t kSmpr = 0x04u;  // SMP[2:0] = 100 → 47.5 ciclos (011 = 24.5; ver stm32h5xx_ll_adc.h)
+// TIM6 conta a 250 MHz / (PSC+1). PSC=15 → 15,625 MHz (64 ns): ARR de 16 bits cobre dentes de
+// até ~4 ms (o antigo PSC=0 estourava o ARR abaixo de ~480 rpm e contava 4x rápido).
+static constexpr uint32_t kTim6Psc = 15u;
+static constexpr uint32_t kTim6ClockHz = 250000000u / (kTim6Psc + 1u);
+static constexpr uint32_t kTim5ToTim6Div = 4u;       // ticks de 62,5 MHz (TIM5) → ticks do TIM6
+static constexpr uint32_t kIdleSamplePeriodMs = 10u; // sem dentes (motor parado): 1 conversão a cada 10 ms
+static volatile uint32_t g_adc_last_trigger_ms = 0u;
+static volatile bool     g_adc_dma_rearm_pending = false;
 
 // ── Sequência de conversão ADC1 (8 canais em sequência) ─────────────────────
 // SQR1: L[3:0] = 7 (8 conversões - 1), SQ1-SQ4 nos bits [10:6],[16:12],[22:18],[28:24]
@@ -187,8 +197,9 @@ static void adc_enable(volatile uint32_t& cr, volatile uint32_t& isr) noexcept {
         }
     } else {
         // ADC ready com sucesso - reset flags
+        // A falha permanente é trava até o reset: os flags são compartilhados por ADC1/ADC2 e
+        // o sucesso do ADC2 não pode apagar a falha do ADC1.
         g_adc_recovery_retries = 0u;
-        g_adc_recovery_failed = false;
         g_adc_recovering = false;
     }
 }
@@ -274,16 +285,16 @@ void adc_init() noexcept {
     // ── 4. Calibrar e configurar ADC1 ainda desabilitado ────────────────
     adc_prepare_for_config(ADC1_CR);
 
-// Tempo de amostragem: 47.5 ciclos para canais IN1-IN9 (SMPR1 cobre IN0-IN9)
-ADC1_SMPR1 = (kSmpr) // IN1
-	| (kSmpr << 3) // IN2
-	| (kSmpr << 6) // IN3 (MAP)
-	| (kSmpr << 9) // IN4 (MAF)
-	| (kSmpr << 12) // IN5 (TPS)
-	| (kSmpr << 15) // IN6 (O2)
-	| (kSmpr << 18) // IN7 (AN1)
-	| (kSmpr << 21) // IN8 (AN2)
-	| (kSmpr << 24); // IN9 (AN3)
+// Tempo de amostragem: 47.5 ciclos (SMPR1 cobre IN0-IN9, campo de 3 bits em 3*n)
+ADC1_SMPR1 = (kSmpr) // IN0
+	| (kSmpr << 3) // IN1
+	| (kSmpr << 6) // IN2
+	| (kSmpr << 9) // IN3
+	| (kSmpr << 12) // IN4
+	| (kSmpr << 15) // IN5
+	| (kSmpr << 18) // IN6
+	| (kSmpr << 21) // IN7
+	| (kSmpr << 24); // IN8 (ETB_TPS2, PC5)
 // SMPR2 cobre IN10-IN18: INP10(APP1), INP12(APP2), INP15(MAP), INP18(TPS), INP19(KNOCK)
 ADC1_SMPR2 = (kSmpr << ((10-10)*3))   // IN10 (APP1, PC0)
            | (kSmpr << ((12-10)*3))   // IN12 (APP2, PC2)
@@ -333,8 +344,8 @@ ADC2_CFGR1 = ADC_CFGR1_RES_12BIT
     TIM6_CR1 = 0u;
     TIM6_CR2 = TIM_CR2_MMS_UPDATE;  // MMS = 010 → TRGO on Update Event
     // Período padrão: 1 ms (atualizado por adc_trigger_on_tooth)
-    TIM6_PSC = 0u;
-    TIM6_ARR = static_cast<uint32_t>(kTimClockHz / 1000u) - 1u;  // ~1 ms
+    TIM6_PSC = kTim6Psc;
+    TIM6_ARR = static_cast<uint32_t>(kTim6ClockHz / 1000u) - 1u;  // ~1 ms
     TIM6_EGR = 1u;
     TIM6_SR = 0u;
     TIM6_CR1 = TIM_CR1_OPM | TIM_CR1_URS;
@@ -362,8 +373,11 @@ void adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept {
     // tooth_period_ticks está em ticks de 62.5 MHz (TIM5).
     // TIM6 opera a kTimClockHz; converte diretamente.
     if (tooth_period_ticks == 0u) { return; }
-    // Amostrar na metade do período do dente (delay do TIM6 trigger)
-    const uint32_t arr = (tooth_period_ticks / 2u);
+    // Amostrar na metade do período do dente (delay do TIM6 trigger), convertido para
+    // ticks do TIM6 e preso a 16 bits (dente muito longo amostra mais cedo, não aleatório).
+    uint32_t arr = (tooth_period_ticks / 2u) / kTim5ToTim6Div;
+    if (arr > 0xFFFFu) { arr = 0xFFFFu; }
+    g_adc_last_trigger_ms = millis();
     if (arr > 0u) {
         // GPDMA roda contínuo via LLI auto-referente (armado em adc_init) — NÃO
         // re-armar por dente (corromperia CDAR no meio de um reload do hardware).
@@ -373,6 +387,29 @@ void adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept {
         TIM6_CNT = 0u;
         TIM6_CR1 = TIM_CR1_OPM | TIM_CR1_URS | TIM_CR1_CEN;
     }
+}
+
+void adc_idle_poll(uint32_t now_ms) noexcept {
+    // Erro de DMA: o hardware desabilita o canal e os valores congelariam parecendo válidos.
+    // Rearma aqui (contexto main), não na ISR, para não corromper um reload em andamento.
+    if (g_adc_dma_rearm_pending) {
+        g_adc_dma_rearm_pending = false;
+        gpdma_adc1_arm();
+        gpdma_adc2_arm();
+    }
+    // Sem dentes do CKP (chave ligada com motor parado, stall) o TIM6 nunca dispara e o
+    // ADC não converte: TPS/APP/CLT/VBATT ficariam zerados ou velhos. Dispara uma conversão
+    // de 1 ms a cada 10 ms enquanto não houver trigger por dente.
+    if ((now_ms - g_adc_last_trigger_ms) < kIdleSamplePeriodMs) { return; }
+    // Mesma sequência de registradores de adc_trigger_on_tooth (ISR do dente): numa partida lenta
+    // o poll cai entre os dentes e uma ISR no meio da sequência era sobrescrita. Seção crítica.
+    ems::hal::CriticalSectionGuard guard;
+    g_adc_last_trigger_ms = now_ms;
+    TIM6_CR1 = TIM_CR1_OPM | TIM_CR1_URS;
+    TIM6_SR = 0u;
+    TIM6_ARR = (kTim6ClockHz / 1000u) - 1u;
+    TIM6_CNT = 0u;
+    TIM6_CR1 = TIM_CR1_OPM | TIM_CR1_URS | TIM_CR1_CEN;
 }
 
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept {
@@ -411,14 +448,9 @@ extern "C" void GPDMA1_Channel0_IRQHandler(void) {
     GPDMA1_CH0_CFCR = GPDMA_CFCR_ALL;
     if ((sr & (GPDMA_CSR_DTEF | GPDMA_CSR_USEF)) != 0u) { 
         ++g_adc_dma_faults;
-        // P0 #3: DMA fault pode indicar problema no ADC - verifica se precisa de recovery
-        if (!g_adc_recovering && !g_adc_recovery_failed) {
-            // Sinaliza para main loop verificar ADC status
-            // Recovery será tentado na próxima chamada de adc_enable() ou via ISR dedicada
-        }
+        g_adc_dma_rearm_pending = true;  // adc_idle_poll() rearma os dois canais (main)
     }
-    // Re-arm agora é por dente em adc_trigger_on_tooth (determinístico); aqui só
-    // limpamos as flags. O re-arm na ISV não reciclava → ADCs congelavam.
+    // Sem erro o GPDMA roda contínuo (LLI auto-referente); aqui só limpamos as flags.
 }
 
 extern "C" void GPDMA1_Channel1_IRQHandler(void) {
@@ -426,12 +458,8 @@ extern "C" void GPDMA1_Channel1_IRQHandler(void) {
     GPDMA1_CH1_CFCR = GPDMA_CFCR_ALL;
     if ((sr & (GPDMA_CSR_DTEF | GPDMA_CSR_USEF)) != 0u) { 
         ++g_adc_dma_faults;
-        // P0 #3: DMA fault pode indicar problema no ADC
-        if (!g_adc_recovering && !g_adc_recovery_failed) {
-            // Sinaliza para main loop verificar ADC status
-        }
+        g_adc_dma_rearm_pending = true;
     }
-    // Re-arm por dente em adc_trigger_on_tooth; aqui só limpamos flags.
 }
 
 // P0 #3: Handler de timeout do ADC para recuperação em tempo de execução
@@ -489,6 +517,7 @@ static uint32_t g_adc_recovery_retries_mock = 0u;
 
 void     adc_init() noexcept {}
 void     adc_trigger_on_tooth(uint32_t t) noexcept { g_last_trigger_mod = t; }
+void     adc_idle_poll(uint32_t) noexcept {}
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept { return g_adc_primary[static_cast<uint8_t>(ch)]; }
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept { return g_adc_secondary[static_cast<uint8_t>(ch)]; }
 void adc_test_set_raw_primary(AdcPrimaryChannel ch, uint16_t v) noexcept { g_adc_primary[static_cast<uint8_t>(ch)] = v; }

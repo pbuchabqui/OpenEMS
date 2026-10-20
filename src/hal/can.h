@@ -27,5 +27,15 @@ bool can0_tx(const CanFrame& frame) noexcept;
 bool can0_rx_pop(CanFrame& out) noexcept;
 uint32_t can0_get_init_faults() noexcept;
 
+#if defined(EMS_HOST_TEST)
+// Ganchos do stub de host (src/hal/can.cpp).
+void can0_test_reset() noexcept;
+void can0_test_model_single_tx_buffer(bool on) noexcept;  // recusa TX até can0_test_tx_complete()
+void can0_test_tx_complete() noexcept;
+uint16_t can0_test_tx_count() noexcept;
+const CanFrame& can0_test_tx_at(uint16_t i) noexcept;
+void can0_test_push_rx(const CanFrame& f) noexcept;
+#endif
+
 }  // namespace ems::hal
 

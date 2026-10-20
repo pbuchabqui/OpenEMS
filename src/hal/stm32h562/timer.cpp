@@ -27,7 +27,19 @@
 
 // -- Constantes de clock --------------------------------------------------------
 static constexpr uint32_t kTimPrescaler = 3u;
-static constexpr uint32_t kTimClockHz   = 62500000u;
+// Clock do kernel dos timers (APB1/APB2 com doubler = 250 MHz, ver system.cpp). TIM5 usa
+// PSC=3 para chegar nos 62,5 MHz do agendador; os PWMs com PSC=0 contam a 250 MHz. Antes
+// o cálculo de ARR assumia 62,5 MHz sem prescaler e todos os PWMs saíam 4x mais rápidos
+// (ETB a ~40 kHz, acima dos 25 kHz da BTS7960).
+static constexpr uint32_t kTimClockHz   = 250000000u;
+
+// PSC/ARR de um PWM de freq_hz: menor prescaler que cabe ARR em 16 bits.
+static void pwm_psc_arr(uint32_t freq_hz, uint32_t& psc, uint32_t& arr) {
+    psc = 0u;
+    arr = kTimClockHz / freq_hz;
+    while (arr > 0xFFFFu) { ++psc; arr = kTimClockHz / (freq_hz * (psc + 1u)); }
+    if (arr > 0u) { arr -= 1u; }
+}
 
 namespace ems::hal {
 
@@ -112,10 +124,8 @@ void tim3_pwm_init(uint32_t freq_hz) {
 
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 6u, GPIO_AF2);
 
-    uint32_t psc = 0u;
-    uint32_t arr = kTimClockHz / freq_hz;
-    while (arr > 0xFFFFu) { ++psc; arr = kTimClockHz / (freq_hz * (psc + 1u)); }
-    if (arr > 0u) { arr -= 1u; }
+    uint32_t psc, arr;
+    pwm_psc_arr(freq_hz, psc, arr);
 
     TIM3_CR1 = 0u;
     TIM3_PSC = psc;
@@ -149,12 +159,15 @@ void tim4_pwm_init(uint32_t freq_hz) {
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 6u, GPIO_AF2);
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 7u, GPIO_AF2);
 
+    // PSC=0 e ARR preso a 16 bits (frequência pedida muito baixa vira ~3,8 kHz): comportamento
+    // anterior preservado, só a base de clock foi corrigida.
+    const uint32_t psc = 0u;
     uint32_t arr = kTimClockHz / freq_hz;
     if (arr > 0xFFFFu) { arr = 0xFFFFu; }
     if (arr > 0u) { arr -= 1u; }
 
     TIM4_CR1 = 0u;
-    TIM4_PSC = 0u;
+    TIM4_PSC = psc;
     TIM4_ARR = arr;
     TIM4_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE
                | TIM_CCMR1_OC2M_PWM1 | TIM_CCMR1_OC2PE;
@@ -187,10 +200,8 @@ void tim2_pwm_init(uint32_t freq_hz) {
 
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 10u, GPIO_AF1);
 
-    uint32_t psc = 0u;
-    uint32_t arr = kTimClockHz / freq_hz;
-    while (arr > 0xFFFFu) { ++psc; arr = kTimClockHz / (freq_hz * (psc + 1u)); }
-    if (arr > 0u) { arr -= 1u; }
+    uint32_t psc, arr;
+    pwm_psc_arr(freq_hz, psc, arr);
 
     TIM2_CR1   = 0u;
     TIM2_PSC   = psc;
@@ -225,12 +236,15 @@ void etb_pwm_init(uint32_t freq_hz) {
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOEEN;
     gpio_set_af(&GPIOE_MODER, &GPIOE_AFRL, &GPIOE_AFRH, &GPIOE_OSPEEDR, 5u, GPIO_AF4);
 
+    // PSC=0 e ARR preso a 16 bits (frequência pedida muito baixa vira ~3,8 kHz): comportamento
+    // anterior preservado, só a base de clock foi corrigida.
+    const uint32_t psc = 0u;
     uint32_t arr = kTimClockHz / freq_hz;
     if (arr > 0xFFFFu) { arr = 0xFFFFu; }
     if (arr > 0u) { arr -= 1u; }
 
     TIM15_CR1 = 0u;
-    TIM15_PSC = 0u;
+    TIM15_PSC = psc;
     TIM15_ARR = arr;
     TIM15_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
     TIM15_CCER = TIM_CCER_CC1E;
@@ -243,13 +257,8 @@ void etb_pwm_init(uint32_t freq_hz) {
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN;
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 6u, GPIO_AF2);
 
-    uint32_t psc = 0u;
-    uint32_t arr = kTimClockHz / freq_hz;
-    while (arr > 0xFFFFu) {
-        ++psc;
-        arr = kTimClockHz / (freq_hz * (psc + 1u));
-    }
-    if (arr > 0u) { arr -= 1u; }
+    uint32_t psc, arr;
+    pwm_psc_arr(freq_hz, psc, arr);
 
     TIM3_CR1 = 0u;
     TIM3_PSC = psc;
@@ -309,7 +318,7 @@ extern "C" void TIM5_IRQHandler(void) {
 // altas — e os FETs são internos ao módulo, portanto não há como aliviar. A 10 kHz
 // a ponte trabalha folgada; o custo é chiado audível (10 kHz está dentro da banda
 // audível), que é incómodo e não risco.
-// Resolução do duty melhora: ARR = 62,5 MHz / 10 kHz = 6250 passos (era 3125),
+// Resolução do duty melhora: ARR = 250 MHz / 10 kHz = 25000 passos,
 // bem acima dos 1000 passos que etb_pwm_set_duty_x10() precisa.
 void timer_etb_pwm_init(void) {
     ems::hal::etb_pwm_init(10000u);
