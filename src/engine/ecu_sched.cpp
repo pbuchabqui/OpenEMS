@@ -1095,4 +1095,20 @@ uint8_t  ecu_sched_test_get_evt(uint8_t index,
 }
 uint32_t ecu_sched_test_get_presync_revs(void) { return g_diag_presync_revs; }
 uint32_t ecu_sched_test_get_seq_revs(void) { return g_diag_seq_revs; }
+
+uint8_t ecu_sched_test_ign_pin_level(uint8_t cyl) noexcept
+{
+    if (cyl > 3U) { return 0xFFu; }
+    const uint8_t idx = channel_pin_idx(si::kIgnCh[cyl]);
+    if (idx >= 8U) { return 0xFFu; }
+    return g_pin_last_state[idx];
+}
+
+bool ecu_sched_test_queue_dwell(uint8_t cyl, uint32_t delay_us) noexcept
+{
+    if (cyl > 3U) { return false; }
+    if (delay_us == 0U) { delay_us = 3000U; }
+    const uint32_t t = scheduler_counter() + ECU_SCHED_US_TO_TICKS(delay_us);
+    return arm_channel(si::kIgnCh[cyl], t, ECU_ACT_DWELL_START);
+}
 #endif

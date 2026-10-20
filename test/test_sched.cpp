@@ -338,18 +338,67 @@ void test_ecu_sched_inhibit_midcharge(void) {
     ecu_sched_test_reset();
     ecu_sched_test_set_tim5_cnt(2000000u);
     ecu_sched_test_pulse_ign(1u, 3000u);
-    ecu_sched_test_drop_queued_events();           // SPARK ainda não armado
-    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "pré-condição: bobina HIGH sem SPARK na fila");
-    const uint32_t lows_nosp = lows();
+    uint32_t ts = 0u;
+    uint8_t ch = 0xFFu;
+    uint8_t high = 1u;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u, "pré: SPARK está na fila");
+    CHECK_EQ(high, 0u, "pré: o evento é a borda de faísca");
+    ecu_sched_test_drop_queued_events();
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 0u, "SPARK saiu da fila");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(1u), 1u, "bobina 1 continua HIGH");
     ecu_sched_set_ign_inhibit_mask(0x02u);
-    CHECK_EQ(lows(), lows_nosp, "sem SPARK na fila: bobina carregando continua HIGH (sem faísca fora de hora)");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "sem SPARK na fila: inibir não cria evento");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(1u), 1u, "sem SPARK na fila: bobina carregando continua HIGH");
 
-    // Bobina ainda em LOW com DWELL pendente: tudo descartado como antes.
+    // Bobina em LOW com DWELL pendente: o evento é descartado e o pino fica LOW.
     ecu_sched_set_ign_inhibit_mask(0u);
     ecu_sched_test_reset();
+    ecu_sched_test_all_outputs_safe();
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "pré: bobina 0 em LOW");
+    CHECK_TRUE(ecu_sched_test_queue_dwell(0u, 4000u), "DWELL futuro enfileirado");
+    high = 0u;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u, "fila tem o DWELL");
+    CHECK_EQ(high, 1u, "evento pendente é a subida do dwell");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "enfileirar não tira a bobina de LOW");
     ecu_sched_set_ign_inhibit_mask(0x01u);
-    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "sem bobina carregando: nada pendente");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "bobina em LOW: DWELL pendente é descartado");
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 0u, "fila vazia, não só a contagem");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "bobina continua em LOW");
     ecu_sched_set_ign_inhibit_mask(0u);
+}
+
+void test_ecu_sched_on_stall(void) {
+    section("ecu_sched: stall esvazia a fila e não agenda o fim no tempo");
+    ecu_sched_test_reset();
+    ecu_sched_test_all_outputs_safe();
+    ecu_sched_test_set_tim5_cnt(1000000u);
+    ecu_sched_test_pulse_ign(0u, 3000u);
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 1u, "evento armado antes do stall");
+    EcuSchedDiagSnapshot before{};
+    ecu_sched_get_diag_snapshot(&before);
+    ecu_sched_on_stall();
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "stall esvazia a fila");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "stall põe a bobina em safe");
+    EcuSchedDiagSnapshot after{};
+    ecu_sched_get_diag_snapshot(&after);
+    CHECK_EQ(after.clear_all_count, before.clear_all_count + 1u, "contador de clear sobe");
+    CHECK_EQ(after.evt_inserted, before.evt_inserted, "stall com SPARK na fila não enfileira outro");
+
+    // Bobina HIGH e SPARK fora da fila: end_active_outputs_on_time() armaria um SPARK.
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(2000000u);
+    ecu_sched_test_pulse_ign(0u, 3000u);
+    ecu_sched_test_drop_queued_events();
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "SPARK removido, dwell ainda armado");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 1u, "bobina continua HIGH");
+    ecu_sched_get_diag_snapshot(&before);
+    ecu_sched_on_stall();
+    ecu_sched_get_diag_snapshot(&after);
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "fila continua vazia");
+    CHECK_EQ(after.evt_inserted, before.evt_inserted,
+             "stall não chama end_active_outputs_on_time");
+    CHECK_EQ(after.clear_all_count, before.clear_all_count + 1u, "clear também sem SPARK na fila");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "saída forçada a safe");
 }
 
 void test_ecu_sched_inhibit_masks(void) {

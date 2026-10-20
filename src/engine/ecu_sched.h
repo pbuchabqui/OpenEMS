@@ -119,8 +119,8 @@ uint8_t ecu_sched_get_inj_inhibit_mask(void);
 
 // Per-cylinder ignition inhibit (limp spark-cut; production rev-limit is fuel-only).
 // mask: bit 0 = cyl 0 … bit 3 = cyl 3.
-// Suprime ECU_ACT_DWELL_START, purga eventos IGN pendentes do canal e força pin LOW
-// (não deixar bobina carregada a meio do dwell).
+// Bobina em LOW: descarta o DWELL pendente. Bobina já em HIGH: o dwell acaba
+// e a faísca sai no instante programado, mesmo sem SPARK na fila ainda.
 void ecu_sched_set_ign_inhibit_mask(uint8_t mask);
 uint8_t ecu_sched_get_ign_inhibit_mask(void);
 void ecu_sched_fire_prime_pulse(uint32_t pw_us);
@@ -220,6 +220,10 @@ uint8_t  ecu_sched_test_get_evt(uint8_t index,
 // Contadores de revoluções por modo — validam a transição presync↔sequencial.
 uint32_t ecu_sched_test_get_presync_revs(void);
 uint32_t ecu_sched_test_get_seq_revs(void);
+// Nível do pino de ignição do cilindro: 0 = LOW, 1 = HIGH, 0xFF = inválido.
+uint8_t ecu_sched_test_ign_pin_level(uint8_t cyl) noexcept;
+// Enfileira a subida do dwell no futuro, sem mexer no pino.
+bool    ecu_sched_test_queue_dwell(uint8_t cyl, uint32_t delay_us) noexcept;
 #endif
 
 #ifdef __cplusplus
