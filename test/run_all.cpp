@@ -23,6 +23,7 @@ int main(void) {
     test_etb_driver_shutdown();
     test_etb_apply_output();
     test_etb_rev_cut_request();
+    test_etb_follow_fault();
     test_etb_driver_clear_fault();
 
     // ── ETB Control ───────────────────────────────────────────────────────────
@@ -275,6 +276,7 @@ int main(void) {
     test_driveline_retard();
     test_driveline_page0();
     test_engine_calc_driveline_retard();
+    test_engine_calc_spark_skip_follows_cam_phase();
     test_idle_air_and_dashpot();
     test_driveability_wire_rules();
     test_dfco_entry_shaped_by_clt();
@@ -316,6 +318,15 @@ int main(void) {
     test_ts_envelope_canid_forms();
     test_och_launch_tc_status();
     test_och_vbatt_fault_status();
+    test_ui_parser_stray_control_bytes();
+    test_och_clt_above_87c();
+    test_ui_parser_interbyte_timeout();
+    test_ecu_sched_inhibit_midcharge();
+    test_can_stack_tx_single_buffer();
+    test_can_stack_refused_tx_is_retried();
+    test_can_stack_fco_uses_real_dt();
+    test_can_stack_wbo2_plausibility();
+    test_can_rx_ignores_extended_and_remote();
     test_och_live_ve_byte();
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();

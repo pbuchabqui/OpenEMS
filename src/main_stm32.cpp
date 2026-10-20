@@ -95,6 +95,8 @@ static int8_t  g_last_ltft_pct    = 0;
 
 static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
 static bool g_limp_active = false;
+static bool g_limp_rpm_cut = false;
+static uint32_t g_etb_follow_stopped_ms = 0u;   // motor parado desde (0 = não parado) com falha de seguimento do ETB
 // DIAG rev-limit: conta bordas de subida (false→true) do rev-limiter e latcha o
 // rpm_x10 que o disparou. Suspeita: glitch fantasma de rpm_x10 (corrida ISR↔main)
 // dispara o limiter ao ralenti → spikes de PW=0 de 1 loop. Expostos no dump 'D'.
@@ -215,7 +217,7 @@ static inline void comms_pump() noexcept {
 // =============================================================================
 
 static void openems_init() noexcept {
-    // 1) PLL → 250 MHz + SysTick 1ms + IWDG 100ms
+    // 1) PLL → 250 MHz + SysTick 1ms + IWDG 10s (boot)
     system_stm32_init();
 
     // 1a) CRITICAL: INJ/IGN LOW before any delay.
@@ -245,7 +247,7 @@ static void openems_init() noexcept {
 
     // 1e) Janela p/ a enumeração USB (ISR-driven) completar antes dos inits da ECU, que
     // podem entrar em seção crítica (cpsid i) e mascarar a ISR do USB por um tempo.
-    // ~300 ms kicando o IWDG (timeout 100 ms) a cada ~1 ms @ 250 MHz.
+    // ~300 ms kicando o IWDG (timeout 10 s no boot) a cada ~1 ms @ 250 MHz.
     // Re-assert INJ/IGN LOW each 100 ms in case USB/other init touches GPIOA.
     for (uint32_t ms = 0u; ms < 300u; ++ms) {
         for (volatile uint32_t d = 0u; d < 60000u; ++d) { /* ~1ms */ }
@@ -289,10 +291,16 @@ static void openems_init() noexcept {
 	// 5) Flash Bank2 → carrega calibrações persistidas
 	if (!ems::hal::nvm_load_calibration(0u, g_calib_page0, kCalibPageBytes)) {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
+		// Página recusada (gravação interrompida / CRC): trata como apagada.
+		std::memset(g_calib_page0, 0xFF, kCalibPageBytes);
 	}
 	// Page 0 → globals through the protocol's own apply (one path for boot
 	// and for a TunerStudio/dashboard write; timing light forced off).
-	ems::app::ui_boot_apply_page0(g_calib_page0, kCalibPageBytes);
+	// Página apagada (placa em branco) ou recusada: NÃO aplica — os 0xFF viravam parâmetros
+	// (closed_loop_enable=1, RPMs de decel 0xFFFFFFFF...). Ficam os defaults de compilação.
+	if (!ems::app::page_is_erased(g_calib_page0, kCalibPageBytes)) {
+		ems::app::ui_boot_apply_page0(g_calib_page0, kCalibPageBytes);
+	}
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no
 	// page0 (byte 175) bater com o firmware — um blob de dimensão antiga
 	// lido com o tamanho novo ganharia cauda 0xFF (VE=255!). Sem versão →
@@ -379,19 +387,31 @@ int main() {
     uint32_t g_t_etb_ms = g_t2ms_;
     uint32_t g_t_comms_ms = g_t2ms_;
 
-    // Estreitar IWDG de 10s (boot) para 100ms (runtime): o main loop kica a cada
-    // ciclo; 100ms detecta travamento de runtime sem tolerar os inits longos do boot.
-    // Nota: IWDG_PR segue /256 (boot) → RLR=99 dá ~0.8s efetivo; suficiente p/ runtime
-    // e evita esperar PVU/RVU de novo no caminho crítico.
+    // Estreitar IWDG de 10 s (boot) para ~0,8 s (runtime): IWDG_PR segue /256 (125 Hz) e
+    // RLR=99 dá 100/125 = 0,8 s (não 100 ms); suficiente p/ runtime e evita esperar PVU/RVU de
+    // novo no caminho crítico. Um timeout de 100 ms de verdade apertaria demais com burn de
+    // flash (erase de setor) e USB. A vigilância do ETB é separada: ver g_etb_alive_ms.
     IWDG_KR  = IWDG_KR_ACCESS;
     IWDG_RLR = IWDG_RLR_100MS;
     IWDG_KR  = IWDG_KR_REFRESH;
 
+    uint32_t g_etb_alive_ms = g_t2ms_;   // último instante em que o slot do ETB rodou (ou estava em teste)
+
     for (;;) {
         // ── Watchdog kick (primeiro statement) ───────────────────────────
-        iwdg_kick();
+        // Só alimenta se o slot de 2 ms do ETB continua rodando: se ele parar com o resto do
+        // laço girando, a ponte H seguraria o último PWM indefinidamente — sem kick o MCU
+        // reseta em até ~0,8 s e a ponte volta ao estado seguro.
+        if (!g_etb_initialized || (millis() - g_etb_alive_ms) <= 200u) {
+            iwdg_kick();
+        }
 
         const uint32_t now = millis();
+        ems::hal::adc_idle_poll(now);
+        // O FIFO de RX do USART tem 8 entradas (~0,7 ms a 115200): drenar só no slot de 2 ms
+        // estourava (ORE) com qualquer rajada de mais de ~9 bytes (ex.: envelope de escrita do
+        // TunerStudio). Drena em toda passada do laço para o ring de software (barato: só lê RDR).
+        ems::hal::uart0_poll_rx(16u);
 
         // ── 2ms: fuel + ign recalc + commit calibration ───────────────────
         if (elapsed(now, g_t2ms_, 2u)) {
@@ -404,7 +424,9 @@ int main() {
             // Reactivado: os falsos stalls vinham do wrap 16-bit do TIM3;
             // desde a migração para TIM5 (32-bit) o elapsed é correcto.
             // Também decai rpm_x10 fantasma de ruído em CKP sem sync.
-            ems::drv::ckp_stall_poll(ems::hal::tim5_count());
+            if (ems::drv::ckp_stall_poll(ems::hal::tim5_count())) {
+                ecu_sched_on_stall();
+            }
 
             // Dwell / injector open watchdogs (lost SPARK / lost INJ_OFF).
             ecu_sched_dwell_watchdog();
@@ -430,6 +452,7 @@ int main() {
             g_last_net_pw_us = calc.net_pw_us;
             g_last_pw_ms_x10 = calc.pw_ms_x10;
             g_limp_active = calc.limp_active;
+            g_limp_rpm_cut = calc.limp_rpm_cut;
             g_dbg_rev_limit_rpm_max = calc.rpm_max_x10;
             if (calc.committed) {
                 // Telemetry keeps whole degrees (rounded); the scheduler got 0.1°.
@@ -524,7 +547,7 @@ int main() {
                     g_baro_stopped_since_ms = now;
                     g_baro_sampled = false;
                 } else if (!g_baro_sampled &&
-                           (now - g_baro_stopped_since_ms) >= 300u) {
+                           (now - g_baro_stopped_since_ms) >= 2000u) {  // coletor equalizado (300 ms ainda lia vácuo)
                     const uint16_t map_baro = clamp_u16(
                         static_cast<uint16_t>(sensors.map_bar_x1000 / 10u),
                         70u, 110u);
@@ -662,7 +685,9 @@ int main() {
             // Double-check RPM before actually writing (engine may have started)
             const auto snap = ems::drv::ckp_snapshot();
             const bool engine_running_fast = (snap.rpm_x10 > ems::engine::kFlashWriteSafeRpmX10);
-            if (!engine_running_fast) {
+            // Flush já iniciado (setor 0 apagado/em programação): termina mesmo com o motor
+            // girando, senão a flash ficava destravada e o setor adaptativo apagado.
+            if (!engine_running_fast || ems::hal::nvm_adaptive_flush_active()) {
                 adaptive_flush_pending = !ems::hal::nvm_flush_adaptive_maps();
             }
         }
@@ -674,25 +699,53 @@ int main() {
         }
 
         // ── ETB control (2ms cadence) ─────────────────────────────────────
+        if (ems::engine::output_test_active()) { g_etb_alive_ms = now; }   // teste de saídas é dono do ETB
         if (elapsed(now, g_t_etb_ms, 2u) && !ems::engine::output_test_active()) {
+            // Período real desde o tick anterior (o laço estica com flash/USB): PID, slews,
+            // dashpot e TC escalam com ele; constante 2 distorcia tudo durante os atrasos.
+            const uint32_t etb_dt_raw = now - g_t_etb_ms;
+            const uint16_t etb_dt_ms = static_cast<uint16_t>(
+                etb_dt_raw < 1u ? 1u : (etb_dt_raw > 50u ? 50u : etb_dt_raw));
             g_t_etb_ms = now;
+            g_etb_alive_ms = now;
             const auto sensors_etb = ems::drv::sensors_get();
             const auto snap_etb = ems::drv::ckp_snapshot();
             // Auto-cal power-on em curso: varre batentes e pula torque/PID.
             if (ems::engine::etb_autocal_active()) {
-                ems::engine::etb_autocal_tick(2u, snap_etb.rpm_x10);
+                ems::engine::etb_autocal_tick(etb_dt_ms, snap_etb.rpm_x10);
             } else {
                 const bool etb_rev_cut = ems::engine::etb_rev_cut_request(
-                    g_rev_limit_active,
-                    (ems::engine::g_fuel_cut_reasons & ems::engine::kFuelCutLimpRpm) != 0u);
+                    g_rev_limit_active, g_limp_rpm_cut);
                 ems::engine::torque_idle_set_ac_load(ems::hal::ac_request_poll(now) ? 1u : 0u);
                 const auto torque_out = ems::engine::torque_manager_update(
                     snap_etb, sensors_etb, true, g_limp_active, etb_rev_cut,
-                    ems::engine::auxiliaries_idle_target_rpm_x10(sensors_etb.clt_degc_x10), 2u);
+                    ems::engine::auxiliaries_idle_target_rpm_x10(sensors_etb.clt_degc_x10), etb_dt_ms);
                 g_torque_spark_retard_deg = torque_out.spark_retard_deg;
                 const auto etb = ems::engine::etb_control_update(
                     torque_out.etb_target_pct_x10, sensors_etb.etb_tps_pct_x10,
-                    torque_out.etb_enable_request, 2u);
+                    torque_out.etb_enable_request, etb_dt_ms);
+                if (ems::engine::etb_control_follow_fault()) {
+                    ems::engine::limp_gating_report_etb_problem();
+                    ems::engine::DiagnosticManager::report_fault(
+                        ems::engine::DiagnosticCode::ETB_FOLLOW_FAULT,
+                        ems::engine::FaultSeverity::ERROR,
+                        static_cast<uint16_t>(torque_out.etb_target_pct_x10),
+                        static_cast<uint16_t>(sensors_etb.etb_tps_pct_x10));
+                    // Recuperação sem power cycle: motor parado há 2 s (falha de partida ou
+                    // desligamento) destrava; se a causa persistir, trava de novo em 1,5 s.
+                    if (snap_etb.rpm_x10 == 0u) {
+                        if (g_etb_follow_stopped_ms == 0u) { g_etb_follow_stopped_ms = now; }
+                        if ((now - g_etb_follow_stopped_ms) >= 2000u) {
+                            ems::engine::etb_control_follow_fault_clear();
+                            ems::engine::limp_gating_clear_etb_problem();
+                            ems::engine::DiagnosticManager::clear_fault(
+                                ems::engine::DiagnosticCode::ETB_FOLLOW_FAULT);
+                            g_etb_follow_stopped_ms = 0u;
+                        }
+                    } else {
+                        g_etb_follow_stopped_ms = 0u;
+                    }
+                }
                 // Apply PID → H-bridge. On disable/fault/no-cal, spring-return safe.
                 ems::engine::etb_apply_output(torque_out.etb_enable_request, etb.active,
                                               g_etb_initialized, etb.output_pct_x10);
