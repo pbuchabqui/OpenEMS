@@ -231,6 +231,7 @@ int main(void) {
     // ── DIAGNOSTIC MANAGER ──────────────────────────────────────────────
     printf("\n=== DIAGNOSTIC MANAGER ===");
     test_usb_tx_budget_without_config();
+    test_flex_freq_window();
     test_diagnostic_manager_all();
 
     // ── HAL ADC ───────────────────────────────────────────────────────────

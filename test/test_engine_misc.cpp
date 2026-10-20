@@ -15,6 +15,7 @@
 #include "app/can_rx_map.h"
 #include "hal/adc.h"
 #include "hal/stm32h562/usb_cdc.h"
+#include "hal/flex_fuel.h"
 #include "hal/system.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
@@ -487,6 +488,21 @@ void test_usb_tx_budget_without_config(void) {
     CHECK_TRUE(up.mirror_usb, "enumerado espelha no USB");
     const auto uart_tighter = usb_cdc_tx_budget(3u, 20u, true);
     CHECK_EQ(uart_tighter.n, 3u, "enumerado com UART mais cheio: vale o UART");
+}
+
+void test_flex_freq_window(void) {
+    section("flex: válido 45–155 Hz; 50–150 continua linear");
+    using ems::hal::flex_ethanol_pct_from_hz;
+    using ems::hal::flex_fuel_freq_plausible;
+    CHECK_FALSE(flex_fuel_freq_plausible(44u), "44 Hz inválido");
+    CHECK_TRUE(flex_fuel_freq_plausible(45u), "45 Hz válido");
+    CHECK_TRUE(flex_fuel_freq_plausible(155u), "155 Hz válido");
+    CHECK_FALSE(flex_fuel_freq_plausible(156u), "156 Hz inválido");
+    CHECK_EQ(flex_ethanol_pct_from_hz(45u), 0u, "45–50 Hz → 0 %");
+    CHECK_EQ(flex_ethanol_pct_from_hz(50u), 0u, "50 Hz → 0 %");
+    CHECK_EQ(flex_ethanol_pct_from_hz(100u), 50u, "100 Hz → 50 %");
+    CHECK_EQ(flex_ethanol_pct_from_hz(150u), 100u, "150 Hz → 100 %");
+    CHECK_EQ(flex_ethanol_pct_from_hz(155u), 100u, "150–155 Hz → 100 %");
 }
 
 void test_diagnostic_manager_all(void) {

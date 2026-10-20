@@ -7,11 +7,8 @@
 namespace {
 
 // Flex fuel sensor (GM/Continental): PB5, EXTI5
-// Frequency 50-150 Hz → ethanol 0-100%
+// 50 Hz = 0% ethanol, 150 Hz = 100% (linear). Válido de 45 a 155 Hz.
 // Duty cycle → fuel temperature (-40 to 125°C)
-// Signal: 50Hz = 0% ethanol, 150Hz = 100% ethanol (linear)
-constexpr uint32_t kFreqMin = 50u;    // 0% ethanol
-constexpr uint32_t kFreqMax = 150u;   // 100% ethanol
 constexpr uint32_t kTimeoutMs = 500u; // no signal = invalid
 
 volatile uint32_t g_last_rising_us = 0u;
@@ -87,10 +84,7 @@ void flex_fuel_edge_isr() noexcept {
 
 uint8_t flex_fuel_ethanol_pct() noexcept {
     if (g_period_us == 0u) { return 0u; }
-    const uint32_t freq = 1000000u / g_period_us;
-    if (freq <= kFreqMin) { return 0u; }
-    if (freq >= kFreqMax) { return 100u; }
-    return static_cast<uint8_t>(((freq - kFreqMin) * 100u) / (kFreqMax - kFreqMin));
+    return flex_ethanol_pct_from_hz(1000000u / g_period_us);
 }
 
 int16_t flex_fuel_temp_x10() noexcept {
@@ -103,7 +97,8 @@ int16_t flex_fuel_temp_x10() noexcept {
 }
 
 bool flex_fuel_valid() noexcept {
-    return (millis() - g_last_edge_ms) < kTimeoutMs && g_period_us > 0u;
+    if ((millis() - g_last_edge_ms) >= kTimeoutMs || g_period_us == 0u) { return false; }
+    return flex_fuel_freq_plausible(1000000u / g_period_us);
 }
 
 }  // namespace ems::hal
