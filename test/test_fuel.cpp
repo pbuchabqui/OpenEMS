@@ -1041,8 +1041,15 @@ void test_fuel_ltft_accum_commit_ve(void) {
     for (uint16_t n = 0u; n < static_cast<uint16_t>(kLtftAccumReadyHits); ++n) {
         fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
     }
-    fuel_ltft_accum_try_commit(mi, ri);
-    CHECK_TRUE(ve_table[mi][ri] >= 254u, "bake positivo em VE 254 não rebaixa a célula");
+    // 254 está acima de kLtftAccumVeMax (200). O teto não rebaixa a célula e o
+    // commit recusa: um true aqui desenrolaria o STFT sem mudar a VE.
+    const int16_t stft_at_ceiling = fuel_get_stft_pct_x10();
+    const uint32_t commits_at_ceiling = g_dbg_ltft_accum_commits;
+    CHECK_FALSE(fuel_ltft_accum_try_commit(mi, ri),
+                "VE acima do teto: commit recusa em vez de rebaixar");
+    CHECK_EQ(ve_table[mi][ri], 254u, "célula de boost permanece em 254");
+    CHECK_EQ(g_dbg_ltft_accum_commits, commits_at_ceiling, "recusa não conta commit");
+    CHECK_EQ(fuel_get_stft_pct_x10(), stft_at_ceiling, "recusa não desenrola o STFT");
 
     // apply_all: bulk VE+LTFT em células ready; STFT global NÃO desenrola N vezes
     fuel_ltft_accum_reset();
