@@ -1,3 +1,4 @@
+#include "hal/critical_section.h"
 #include "drv/sensors.h"
 
 #include <cstdint>
@@ -132,6 +133,9 @@ static bool g_app_plaus_fault = false;
 static bool g_etb_plaus_fault = false;
 
 static uint16_t g_map_filt  = 0u;
+static bool     g_map_filt_seeded = false;
+static uint8_t  app_strikes = 0u;   // debounce de plausibilidade APP/ETB (limpos em reset_state)
+static uint8_t  etb_strikes = 0u;
 // g_o2_filt removed — O2 is CAN-only; PA5/ADC1_IN6 is now knock sensor input.
 
 static uint16_t g_tps_buf[4]  = {};
@@ -181,6 +185,9 @@ inline void reset_state() noexcept {
     g_data_swap_flag = 0u;  // staging é o buffer válido inicial
 
     g_map_filt  = 0u;
+    g_map_filt_seeded = false;
+    app_strikes = 0u;
+    etb_strikes = 0u;
 
 
     for (uint8_t i = 0u; i < 4u; ++i) {
@@ -447,7 +454,10 @@ inline void sample_fast_channels() noexcept {
                                            ems::hal::adc_get_recovery_retries());
         }
         #endif
-        
+
+        // Publica o fallback e as falhas já: sem commit o consumidor só os via no próximo
+        // produtor (até 50 ms depois) e seguia com o snapshot velho/válido.
+        commit_sensor_snapshot();
         return;  // Sai sem atualizar outros sensores
     }
     
@@ -458,7 +468,14 @@ inline void sample_fast_channels() noexcept {
     // This channel is repurposed for the knock sensor (piezo + external BP filter).
     const uint16_t knock_raw = ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::KNOCK);
 
-    g_map_filt = iir(g_map_filt, map_raw, 3, 10);
+    // 1ª amostra semeia o filtro com a leitura real: partindo de 0 o MAP lia baixo (clampado a
+    // 0,10 bar) durante a primeira volta após o reset, mesmo com o motor parado em 1 bar.
+    if (!g_map_filt_seeded) {
+        g_map_filt = map_raw;
+        g_map_filt_seeded = true;
+    } else {
+        g_map_filt = iir(g_map_filt, map_raw, 3, 10);
+    }
 
     g_tps_buf[g_tps_pos] = tps_raw;
     g_tps_pos = static_cast<uint8_t>((g_tps_pos + 1u) & 0x3u);
@@ -566,9 +583,7 @@ inline void sample_fast_channels() noexcept {
 // Double buffering: staging → committed under short critical section.
 // Called after every producer that mutates staging (fast, 50 ms, 100 ms).
 void commit_sensor_snapshot() noexcept {
-#if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("cpsid i" ::: "memory");
-#endif
+    ems::hal::critical_enter();
     g_data_committed.map_bar_x1000          = g_data_staging.map_bar_x1000;
     g_data_committed.maf_gps_x100           = g_data_staging.maf_gps_x100;
     g_data_committed.tps_pct_x10            = g_data_staging.tps_pct_x10;
@@ -590,9 +605,7 @@ void commit_sensor_snapshot() noexcept {
     g_data_committed.an2_raw                = g_data_staging.an2_raw;
     g_data_committed.an3_raw                = g_data_staging.an3_raw;
     g_data_committed.an4_raw                = g_data_staging.an4_raw;
-#if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("cpsie i" ::: "memory");
-#endif
+    ems::hal::critical_exit();
 }
 
 }  // namespace
@@ -802,26 +815,35 @@ void sensors_tick_100ms() noexcept {
     g_data_staging.etb_tps2_pct_x10 = g_etb2_fault ? 0u :
         pct_from_cal(etb2_avg, g_etb_tps2_raw_min, g_etb_tps2_raw_max);
 
-    g_app_plaus_fault = false;
+    // Plausibilidade com debounce: uma amostra isolada com TPS/APP divergentes durante
+    // movimento rápido não pode travar falha (a ETB trava o corte a 1500 rpm até reset).
+    bool app_plaus_now = false;
+    bool etb_plaus_now = false;
     if (!g_app1_fault && !g_app2_fault) {
         const uint16_t a1 = g_data_staging.app1_pct_x10;
         const uint16_t a2 = g_data_staging.app2_pct_x10;
         const uint16_t delta = (a1 > a2) ? static_cast<uint16_t>(a1 - a2)
                                          : static_cast<uint16_t>(a2 - a1);
         if (delta > g_app_max_delta_pct_x10) {
-            g_app_plaus_fault = true;
+            app_plaus_now = true;
         }
     }
-
-    g_etb_plaus_fault = false;
     if (!g_etb1_fault && !g_etb2_fault) {
         const uint16_t t1 = g_data_staging.etb_tps1_pct_x10;
         const uint16_t t2 = g_data_staging.etb_tps2_pct_x10;
         const uint16_t delta = (t1 > t2) ? static_cast<uint16_t>(t1 - t2)
                                          : static_cast<uint16_t>(t2 - t1);
         if (delta > g_etb_max_delta_pct_x10) {
-            g_etb_plaus_fault = true;
+            etb_plaus_now = true;
         }
+    }
+    {
+        // 3 ticks seguidos (~300 ms) para travar; uma amostra boa limpa.
+        constexpr uint8_t kPlausStrikes = 3u;
+        app_strikes = app_plaus_now ? static_cast<uint8_t>(app_strikes < 255u ? app_strikes + 1u : 255u) : 0u;
+        etb_strikes = etb_plaus_now ? static_cast<uint8_t>(etb_strikes < 255u ? etb_strikes + 1u : 255u) : 0u;
+        g_app_plaus_fault = app_strikes >= kPlausStrikes;
+        g_etb_plaus_fault = etb_strikes >= kPlausStrikes;
     }
 
     if (g_app1_fault || g_app2_fault || g_app_plaus_fault) {
@@ -855,11 +877,12 @@ void sensors_tick_100ms() noexcept {
     } else {
         const uint16_t vbatt_mv =
             vbatt_raw_to_mv(ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::VBATT));
-        const bool vbatt_ok = vbatt_in_range(vbatt_mv);
-        // Fora da faixa o bit de falha sobe; dwell e dead time recebem o valor de `vbatt_safe_mv()`
-        // (queda < 6 V presa em 6 V, leitura 0 = nominal).
-        g_data_staging.vbatt_mv = vbatt_safe_mv(vbatt_mv);
-        g_data_staging.vbatt_fault = !vbatt_ok;
+        // 0 (divisor aberto) ou > 18 V não dizem a tensão real: vale o nominal e sobe a falha.
+        // Queda real (0 < mv < 6 V, cranking) é leitura válida: fica crua na telemetria e
+        // não é falha; dwell e dead time prendem em 6 V via `vbatt_safe_mv()` em engine_calc.
+        const bool vbatt_unreliable = (vbatt_mv == 0u) || (vbatt_mv > kVbattMaxMv);
+        g_data_staging.vbatt_mv = vbatt_unreliable ? kVbattNominalMv : vbatt_mv;
+        g_data_staging.vbatt_fault = vbatt_unreliable;
     }
 
     // Slow path also samples APP/ETB; publish full snapshot for sensors_get().
@@ -923,9 +946,9 @@ void sensors_set_range(SensorId id, SensorRange range) noexcept {
 }
 
 SensorData sensors_get() noexcept {
-    // FIX-6 (BUG-10): Double buffering — lê do buffer committed (congelado)
-    // Não precisa de CPSID pois g_data_committed é apenas lido no main loop
-    // e escrito atomicamente pela ISR após swap completo.
+    // Double buffering: lê do buffer committed. A ISR do dente pode commitar no meio da cópia
+    // campo a campo (MAP de uma amostra com CLT de outra): cópia sob seção crítica curta.
+    ems::hal::CriticalSectionGuard guard;
     SensorData out;
     out.map_bar_x1000         = g_data_committed.map_bar_x1000;
     out.maf_gps_x100        = g_data_committed.maf_gps_x100;

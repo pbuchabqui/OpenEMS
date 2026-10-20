@@ -23,14 +23,14 @@ static constexpr uint8_t THROTTLE_FAULT_ETB_TPS2  = (1u << 4u);
 static constexpr uint8_t THROTTLE_FAULT_ETB_PLAUS = (1u << 5u);
 
 struct SensorData {
-    uint16_t map_bar_x1000;         // MAP bar × 10
+    uint16_t map_bar_x1000;         // MAP bar × 1000
     uint32_t maf_gps_x100;        // MAF g/s × 100
     uint16_t tps_pct_x10;         // TPS % × 10 (cabo legado PA4)
     int16_t  clt_degc_x10;        // CLT °C × 10
     int16_t  iat_degc_x10;        // IAT °C × 10
     // o2_mv REMOVIDO — sistema usa exclusivamente WBO2 via CAN (ID 0x180)
-    uint16_t fuel_press_bar_x1000;  // pressão combustível bar × 10
-    uint16_t oil_press_bar_x1000;   // pressão óleo bar × 10
+    uint16_t fuel_press_bar_x1000;  // pressão combustível bar × 1000
+    uint16_t oil_press_bar_x1000;   // pressão óleo bar × 1000
     uint16_t vbatt_mv;            // tensão bateria mV
     uint8_t  fault_bits;          // bitmask de falhas ativas
     uint16_t app1_pct_x10;        // APP1 (AN1/PB0) % × 10
@@ -45,7 +45,7 @@ struct SensorData {
     uint16_t an2_raw;
     uint16_t an3_raw;
     uint16_t an4_raw;
-    bool     vbatt_fault;         // leitura fora de 6..18 V: vbatt_mv vale 12000 (nominal)
+    bool     vbatt_fault;         // leitura 0 ou > 18 V (não confiável): vbatt_mv vale 12000 (nominal). Queda real < 6 V é crua, sem falha
 };
 
 enum class SensorId : uint8_t {
@@ -64,7 +64,8 @@ struct SensorRange {
     uint16_t max_raw;
 };
 
-// Faixa plausível da bateria: fora dela vale o nominal e sobe SensorData::vbatt_fault.
+// Faixa plausível da bateria. Leitura 0 ou > 18 V vale o nominal e sobe SensorData::vbatt_fault;
+// queda real < 6 V segue crua e os consumidores prendem em 6 V com vbatt_safe_mv().
 inline constexpr uint16_t kVbattMinMv = 6000u;
 inline constexpr uint16_t kVbattMaxMv = 18000u;
 inline constexpr uint16_t kVbattNominalMv = 12000u;

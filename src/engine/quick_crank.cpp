@@ -1,3 +1,4 @@
+#include "hal/critical_section.h"
 #include "engine/quick_crank.h"
 #include "engine/calibration.h"
 #include "engine/math_utils.h"
@@ -57,6 +58,9 @@ volatile uint8_t  g_prime_tooth_count = 0u;   ///< Dentes contados desde crankin
 volatile bool     g_prime_done        = false; ///< Já disparado neste ciclo de partida
 volatile bool     g_prime_pending     = false; ///< Sinaliza loop de fundo
 volatile uint32_t g_prime_pw_us       = 0u;   ///< PW calculada para disparo
+volatile bool     g_prime_tooth_flag  = false; ///< Dente visto desde o último quick_crank_update
+uint32_t          g_prime_activity_ms = 0u;    ///< Último instante com dentes chegando
+constexpr uint32_t kPrimeIdleResetMs  = 200u;  ///< Parado há tanto tempo: rearma o prime
 int16_t           g_prime_clt_x10    = 900;   ///< CLT mais recente (do loop de fundo)
 uint16_t          g_prime_dead_time_us = 900u; ///< Dead time mais recente, corr. por Vbatt
 
@@ -154,15 +158,11 @@ uint16_t afterstart_mult_x256(uint32_t now_ms, int16_t clt_x10) noexcept {
 }
 
 static inline void enter_critical() noexcept {
-#if defined(__arm__) || defined(__thumb__)
-    asm volatile("cpsid i" ::: "memory");
-#endif
+    ems::hal::critical_enter();
 }
 
 static inline void exit_critical() noexcept {
-#if defined(__arm__) || defined(__thumb__)
-    asm volatile("cpsie i" ::: "memory");
-#endif
+    ems::hal::critical_exit();
 }
 
 }  // namespace
@@ -176,6 +176,7 @@ namespace ems::drv {
 void prime_on_tooth(const CkpSnapshot& snap) noexcept {
     using namespace ems::engine;  // acessa g_prime_* e constantes
 
+    g_prime_tooth_flag = true;  // há dentes chegando: quick_crank_update não reseta o prime
     if (g_prime_done) { return; }
 
     // Só conta enquanto RPM indica cranking. Deriva do período de dente cru:
@@ -250,7 +251,14 @@ QuickCrankOutput quick_crank_update(uint32_t now_ms,
     const bool cranking = detect_cranking(rpm_x10, sync_available);
     out.cranking = cranking;
 
-    if (rpm_x10 == 0u) {
+    // rpm_x10 vale 0 até o primeiro gap (e em qualquer perda de sync): resetar o prime a cada
+    // tick de 2 ms impedia a contagem de chegar ao 5º dente e, em um flap de sync durante a
+    // partida, rearmava o prime. Só reseta com o virabrequim realmente parado.
+    if (g_prime_tooth_flag) {
+        g_prime_tooth_flag = false;
+        g_prime_activity_ms = now_ms;
+    }
+    if (rpm_x10 == 0u && (now_ms - g_prime_activity_ms) >= kPrimeIdleResetMs) {
         g_prime_tooth_count = 0u;
         g_prime_done = false;
         g_prime_pending = false;
