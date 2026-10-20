@@ -332,6 +332,7 @@ int main(void) {
     test_ui_parser_interbyte_timeout();
     test_ecu_sched_inhibit_midcharge();
     test_ecu_sched_on_stall();
+    test_limp_gating_cut_families();
     test_can_stack_tx_single_buffer();
     test_can_stack_refused_tx_is_retried();
     test_can_stack_fco_uses_real_dt();

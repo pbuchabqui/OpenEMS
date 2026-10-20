@@ -219,6 +219,7 @@ void test_och_clt_above_87c(void);
 void test_ui_parser_interbyte_timeout(void);
 void test_ecu_sched_inhibit_midcharge(void);
 void test_ecu_sched_on_stall(void);
+void test_limp_gating_cut_families(void);
 void test_can_stack_tx_single_buffer(void);
 void test_can_stack_refused_tx_is_retried(void);
 void test_can_stack_fco_uses_real_dt(void);
