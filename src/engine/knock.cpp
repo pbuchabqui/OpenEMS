@@ -14,6 +14,7 @@
  * software a partir das amostras ADC.
  */
 
+#include "hal/critical_section.h"
 #include "engine/knock.h"
 
 #include <cstdint>
@@ -123,7 +124,7 @@ void knock_window_close(uint8_t cyl) noexcept {
 }
 
 void knock_adc_update(uint16_t raw) noexcept {
-    // Called from sample_fast_channels() (CKP tooth ISR) on every tooth while
+    // Called from sample_fast_channels() (CKP tooth ISR), 12×/rev (not every tooth), while
     // window is active. Counts samples that exceed the detection threshold.
     if (!g.window_active) { return; }
     if (raw < g.win_min) { g.win_min = raw; }
@@ -141,23 +142,20 @@ void knock_cycle_complete(uint8_t cyl) noexcept {
 
     // Read and zero atomically — knock_adc_update() can run from CKP ISR
     // concurrently; CPSID prevents a torn read/zero on non-atomic uint8_t.
-#if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("cpsid i" ::: "memory");
-#endif
+    ems::hal::critical_enter();
     const uint8_t count = g.knock_count[c];
     g.knock_count[c] = 0u;
-#if defined(__arm__) || defined(__thumb__)
-    __asm__ volatile("cpsie i" ::: "memory");
-#endif
+    ems::hal::critical_exit();
 
     // Sensor morto: avalia o p2p da janela que fechou (só se houve amostras;
     // sentinela reposta para não reavaliar a mesma janela).
     if (ems::engine::knock_dead_min_p2p != 0u && g.win_min <= g.win_max) {
         const uint16_t p2p = static_cast<uint16_t>(g.win_max - g.win_min);
+        // Divisão arredondada (não truncada): truncando para zero a EMA parava até 7 contagens
+        // abaixo do p2p real e um sensor vivo perto do limite acabava declarado morto.
+        const int32_t diff = static_cast<int32_t>(p2p) - static_cast<int32_t>(g.noise_p2p_ema);
         g.noise_p2p_ema = static_cast<uint16_t>(
-            static_cast<int32_t>(g.noise_p2p_ema) +
-            (static_cast<int32_t>(p2p) -
-             static_cast<int32_t>(g.noise_p2p_ema)) / 8);
+            static_cast<int32_t>(g.noise_p2p_ema) + (diff + (diff >= 0 ? 4 : -4)) / 8);
         if (g.noise_p2p_ema < ems::engine::knock_dead_min_p2p) {
             if (g.dead_windows < 0xFFFFu) { ++g.dead_windows; }
         } else {

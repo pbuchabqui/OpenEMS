@@ -29,9 +29,12 @@ extern "C" {
 #define ECU_CH_IGN3   5U
 #define ECU_CH_IGN4   4U
 
-// 4 cyl × (DWELL ×2 + SPARK + INJ_ON) = 16; INJ_OFF and multi-spark extras
-// are queued in time when their parent event is armed.
-#define ECU_ANGLE_TABLE_SIZE  16U
+// 4 cyl × (DWELL ×2 + SPARK + INJ_ON) = 16 no caso nominal. `table_add` ainda duplica um
+// evento cuja janela de armamento cruza o ponto de rebuild (DWELL, SPARK e INJ_ON podem
+// ganhar uma cópia), então há folga até 24: com 16 uma partida pré-sync com dwell longo
+// estourava a tabela e perdia os eventos do último cilindro (faísca/injeção).
+// INJ_OFF e os extras do multi-spark entram na fila quando o evento-pai é armado.
+#define ECU_ANGLE_TABLE_SIZE  24U
 
 typedef struct {
     uint16_t offset_x256;  // angle from the arming tooth edge, 1/256 tooth (may span teeth)
@@ -61,10 +64,13 @@ void ECU_Hardware_Init(void);
  * Chamar logo após clocks GPIO (antes de delays USB / DFU).
  */
 void ecu_sched_outputs_safe_early(void);
+// Chamar quando ckp_stall_poll() reporta a transição para LOSS_OF_SYNC (sem dentes, o hook por
+// dente não roda): limpa fila, dwell pendente e janela de knock.
+void ecu_sched_on_stall(void);
 
 // eoi_lead_deg: EOI targeting — ângulo (° BTDC de combustão) em que a
 // injecção TERMINA. O início é calculado para trás (SOI = EOI − PW°),
-// recuando automaticamente com PW grande. Clampado a [0, 359] em runtime.
+// recuando automaticamente com PW grande. Clampado a [0, 719] em runtime.
 // advance in 0.1° BTDC, signed (negative = after TDC), [-20.0, 60.0].
 void ecu_sched_commit_calibration_x10(int32_t advance_x10,
                                       uint32_t dwell_ticks,
@@ -203,6 +209,7 @@ void     ecu_sched_test_reset_ccr(void) noexcept;   // drop queue + zero TIM5 CC
 uint8_t  ecu_sched_test_get_mspark_count(void);
 // TIM5 event-queue accessors
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept;
+void     ecu_sched_test_drop_queued_events(void) noexcept;   // esvazia a fila sem tocar nos pinos
 uint32_t ecu_sched_test_get_tim5_ccr3(void)  noexcept;
 void     ecu_sched_test_set_tim5_cnt(uint32_t v) noexcept;
 // Queue peeks for golden timestamp / channel identity tests (index 0 = earliest).

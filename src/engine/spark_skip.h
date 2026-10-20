@@ -24,9 +24,15 @@ void spark_skip_set_ratio_q8(uint8_t ratio_q8) noexcept;
 uint8_t spark_skip_get_ratio_q8() noexcept;
 
 // Chamar UMA vez por revolução (edge de wrap do tooth_index, contexto main).
-// A máscara só muda a cada 2 chamadas (ciclo de 720°).
+// `cycle_start` = a revolução que abre o ciclo de 720° (fase do came, ckp phase_A):
+// só na borda de subida dele a máscara é recalculada (fase congelada não recalcula
+// a cada volta; após 4 chamadas sem borda a máscara é zerada); na outra é mantida. Preso à fase, não a uma
+// contagem de chamadas, para não derivar após perda de sync ou dentes espúrios.
 // Actualiza a máscara devolvida por spark_skip_mask().
-void spark_skip_on_rev() noexcept;
+void spark_skip_on_rev(bool cycle_start) noexcept;
+
+// Sem sync pleno: zera a máscara (não há fase confiável) até o próximo cycle_start.
+void spark_skip_clear_mask() noexcept;
 
 // Máscara de cilindros a inibir nesta revolução (bit0=cyl0..bit3=cyl3).
 // OR-ar com as outras fontes antes de ecu_sched_set_ign_inhibit_mask().

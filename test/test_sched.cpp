@@ -308,6 +308,50 @@ void test_ecu_sched_recovers_after_fallback(void) {
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "recuperou: voltou a sequencial");
 }
 
+void test_ecu_sched_inhibit_midcharge(void) {
+    section("ecu_sched: inibir uma bobina já carregando deixa o dwell terminar (sem faísca antecipada)");
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(1000000u);
+    ecu_sched_test_pulse_ign(0u, 3000u);     // bobina 0 vai a HIGH agora; SPARK em +3 ms
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 1u, "SPARK agendado");
+
+    auto lows = [] {
+        uint32_t v[24] = {};
+        ecu_sched_get_pin_counts_u32x24(v);
+        uint32_t n = 0u;
+        for (uint8_t i = 0u; i < 8u; ++i) { n += v[i * 3u + 1u]; }
+        return n;
+    };
+    const uint32_t lows_before = lows();
+    ecu_sched_set_ign_inhibit_mask(0x01u);   // inibe a bobina que está carregando
+    CHECK_EQ(lows(), lows_before, "pino NÃO foi forçado a LOW (sem faísca fora de hora)");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 1u, "SPARK pendente preservado");
+
+    ecu_sched_test_set_tim5_cnt(1000000u + 200000u);   // além de +3 ms (187500 ticks)
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(lows(), lows_before + 1u, "dwell termina no SPARK programado (LOW 1x)");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "fila vazia depois do SPARK");
+
+    // Caso comum: o SPARK só é armado ~1 dente antes de disparar, então durante quase todo o
+    // dwell ele AINDA NÃO está na fila. A bobina carregando também não pode ser forçada a LOW.
+    ecu_sched_set_ign_inhibit_mask(0u);
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(2000000u);
+    ecu_sched_test_pulse_ign(1u, 3000u);
+    ecu_sched_test_drop_queued_events();           // SPARK ainda não armado
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "pré-condição: bobina HIGH sem SPARK na fila");
+    const uint32_t lows_nosp = lows();
+    ecu_sched_set_ign_inhibit_mask(0x02u);
+    CHECK_EQ(lows(), lows_nosp, "sem SPARK na fila: bobina carregando continua HIGH (sem faísca fora de hora)");
+
+    // Bobina ainda em LOW com DWELL pendente: tudo descartado como antes.
+    ecu_sched_set_ign_inhibit_mask(0u);
+    ecu_sched_test_reset();
+    ecu_sched_set_ign_inhibit_mask(0x01u);
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "sem bobina carregando: nada pendente");
+    ecu_sched_set_ign_inhibit_mask(0u);
+}
+
 void test_ecu_sched_inhibit_masks(void) {
     section("ecu_sched: injection / ignition inhibit masks");
     ecu_sched_test_reset();
