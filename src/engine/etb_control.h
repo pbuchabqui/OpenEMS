@@ -82,10 +82,15 @@ struct EtbControlState {
 };
 
 void            etb_control_reset() noexcept;
-/** true se a borboleta não seguiu o alvo (erro >= 20% com saída >= 90% por 1,5 s). Trava até
- *  etb_control_follow_fault_clear() (o main o chama com o motor parado há 2 s). */
+/** true se a borboleta não seguiu o alvo (erro >= 20% com saída >= 90% por 1,5 s). */
 bool            etb_control_follow_fault() noexcept;
 void            etb_control_follow_fault_clear() noexcept;
+// Rearm: solta o PID e o limp de ETB, sem apagar o DTC. ClearDtc: 1,5 s a seguir
+// bem depois desse rearme. O segundo disparo não rearma até um ClearDtc ou reset.
+enum class EtbFollowAction : uint8_t { Hold = 0, Rearm, ClearDtc };
+EtbFollowAction etb_follow_recovery_tick(uint32_t now_ms, uint16_t rpm_x10,
+                                         uint16_t app_pct_x10,
+                                         uint16_t measured_pct_x10) noexcept;
 EtbControlState etb_control_update(uint16_t target_pct_x10,
                                    uint16_t measured_pct_x10,
                                    bool     enable_request,

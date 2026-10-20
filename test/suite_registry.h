@@ -13,6 +13,7 @@ void test_etb_driver_shutdown(void);
 void test_etb_apply_output(void);
 void test_etb_rev_cut_request(void);
 void test_etb_follow_fault(void);
+void test_etb_follow_rearm_once(void);
 void test_etb_driver_clear_fault(void);
 void test_etb_set_get_drive_mode(void);
 void test_etb_is_ready(void);

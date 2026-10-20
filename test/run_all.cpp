@@ -24,6 +24,7 @@ int main(void) {
     test_etb_apply_output();
     test_etb_rev_cut_request();
     test_etb_follow_fault();
+    test_etb_follow_rearm_once();
     test_etb_driver_clear_fault();
 
     // ── ETB Control ───────────────────────────────────────────────────────────

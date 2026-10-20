@@ -29,6 +29,8 @@
 #include "engine/map_estimator.h"
 #include "engine/misfire_detect.h"
 #include "engine/diagnostic_manager.h"
+#include "engine/limp_gating.h"
+#include "engine/cut_reason.h"
 #include "engine/xtau_autocalib.h"
 #include "engine/output_test.h"
 #include "engine/engine_config.h"
@@ -249,6 +251,110 @@ void test_etb_follow_fault(void) {
     CHECK_FALSE(ems::engine::etb_control_follow_fault(), "erro pequeno: sem falha");
     ems::engine::etb_control_follow_fault_clear();
     ems::engine::etb_control_reset();
+}
+
+void test_etb_follow_rearm_once(void) {
+    section("etb follow: um rearme com motor parado, pedal baixo e TPS que mexeu");
+    using ems::engine::DiagnosticCode;
+    using ems::engine::DiagnosticManager;
+    using ems::engine::EtbFollowAction;
+    using ems::engine::etb_control_follow_fault;
+    using ems::engine::etb_control_follow_fault_clear;
+    using ems::engine::etb_control_reset;
+    using ems::engine::etb_control_update;
+    using ems::engine::etb_follow_recovery_tick;
+    using ems::engine::etb_idle_open_pct_x10;
+
+    etb_cal_valid = 1u;
+    etb_kp_x10 = 120u;
+    etb_ki_x10 = 8u;
+    etb_kd_x10 = 0u;
+    etb_idle_open_pct_x10 = 80u;
+    etb_control_follow_fault_clear();
+    etb_control_reset();
+    ems::engine::limp_gating_test_reset();
+    DiagnosticManager::clear_fault(DiagnosticCode::ETB_FOLLOW_FAULT);
+
+    auto trip = [](uint16_t measured) {
+        etb_control_reset();
+        for (int i = 0; i < 75; ++i) {
+            (void)etb_control_update(800u, measured, true, 20u);
+        }
+    };
+    auto etb_cut = []() {
+        ems::engine::LimpGatingInputs in{};
+        in.rpm_x10 = 20000u;
+        in.map_bar_x100 = 100u;
+        in.oil_press_bar_x1000 = 4000u;
+        in.full_sync = true;
+        in.clt_degc_x10 = 900;
+        (void)ems::engine::limp_gating_update(in);
+        return (ems::engine::g_fuel_cut_reasons & ems::engine::kFuelCutEtbFault) != 0u;
+    };
+
+    trip(0u);
+    CHECK_TRUE(etb_control_follow_fault(), "1,5 s sem seguir trava");
+    DiagnosticManager::report_fault(DiagnosticCode::ETB_FOLLOW_FAULT,
+                                    ems::engine::FaultSeverity::ERROR);
+    ems::engine::limp_gating_report_etb_problem();
+    CHECK_TRUE(etb_cut(), "limp de ETB ativo com a falha");
+
+    EtbFollowAction act = etb_follow_recovery_tick(1000u, 0u, 0u, 0u);
+    act = etb_follow_recovery_tick(3000u, 0u, 0u, 0u);
+    CHECK_TRUE(act == EtbFollowAction::Hold, "TPS congelado no valor da falha não rearma");
+    CHECK_TRUE(etb_control_follow_fault(), "falha continua com a lâmina parada");
+
+    act = etb_follow_recovery_tick(3000u, 0u, etb_idle_open_pct_x10, 40u);
+    CHECK_TRUE(act == EtbFollowAction::Hold, "pedal no limiar de idle não conta como abaixo");
+    CHECK_TRUE(etb_control_follow_fault(), "falha continua com o pedal em cima");
+
+    act = etb_follow_recovery_tick(3000u, 800u, 0u, 40u);
+    CHECK_TRUE(act == EtbFollowAction::Hold, "rpm diferente de zero não rearma");
+    act = etb_follow_recovery_tick(3000u, 0u, 0u, 40u);
+    act = etb_follow_recovery_tick(4999u, 0u, 0u, 40u);
+    CHECK_TRUE(act == EtbFollowAction::Hold, "menos de 2 s parado não rearma");
+    act = etb_follow_recovery_tick(5000u, 0u, 0u, 40u);
+    CHECK_TRUE(act == EtbFollowAction::Rearm, "parado 2 s, pedal baixo e TPS mexeu: um rearme");
+    CHECK_FALSE(etb_control_follow_fault(), "rearme solta o PID");
+    CHECK_TRUE(DiagnosticManager::is_fault_active(DiagnosticCode::ETB_FOLLOW_FAULT),
+               "rearme não apaga o DTC");
+    CHECK_FALSE(etb_cut(), "rearme solta o limp de ETB");
+
+    trip(40u);
+    CHECK_TRUE(etb_control_follow_fault(), "segunda falha trava de novo");
+    act = etb_follow_recovery_tick(5000u, 0u, 0u, 40u);
+    act = etb_follow_recovery_tick(8000u, 0u, 0u, 90u);
+    CHECK_TRUE(act == EtbFollowAction::Hold, "segunda falha não tem outro rearme");
+    CHECK_TRUE(etb_control_follow_fault(), "segunda falha fica travada");
+    CHECK_TRUE(DiagnosticManager::is_fault_active(DiagnosticCode::ETB_FOLLOW_FAULT),
+               "DTC continua na segunda falha");
+
+    etb_control_follow_fault_clear();
+    DiagnosticManager::clear_fault(DiagnosticCode::ETB_FOLLOW_FAULT);
+    trip(0u);
+    DiagnosticManager::report_fault(DiagnosticCode::ETB_FOLLOW_FAULT,
+                                    ems::engine::FaultSeverity::ERROR);
+    (void)etb_follow_recovery_tick(10000u, 0u, 0u, 0u);
+    act = etb_follow_recovery_tick(12000u, 0u, 0u, 20u);
+    CHECK_TRUE(act == EtbFollowAction::Rearm, "depois de um clear o orçamento volta");
+    (void)etb_control_update(20u, 20u, true, 1500u);
+    act = etb_follow_recovery_tick(12000u, 0u, 0u, 20u);
+    CHECK_TRUE(act == EtbFollowAction::ClearDtc, "1,5 s dentro da faixa pede para limpar o DTC");
+    CHECK_TRUE(DiagnosticManager::is_fault_active(DiagnosticCode::ETB_FOLLOW_FAULT),
+               "o pedido não limpa o DTC sozinho");
+    DiagnosticManager::clear_fault(DiagnosticCode::ETB_FOLLOW_FAULT);
+    CHECK_FALSE(DiagnosticManager::is_fault_active(DiagnosticCode::ETB_FOLLOW_FAULT),
+                "o main limpa o DTC no ClearDtc");
+
+    trip(20u);
+    (void)etb_follow_recovery_tick(13000u, 0u, 0u, 20u);
+    act = etb_follow_recovery_tick(15000u, 0u, 0u, 70u);
+    CHECK_TRUE(act == EtbFollowAction::Rearm, "falha nova, depois do sucesso, rearma outra vez");
+    CHECK_FALSE(etb_control_follow_fault(), "o novo rearme solta o PID");
+
+    etb_control_follow_fault_clear();
+    etb_control_reset();
+    ems::engine::limp_gating_test_reset();
 }
 
 void test_etb_driver_shutdown(void) {

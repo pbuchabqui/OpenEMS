@@ -96,7 +96,7 @@ static int8_t  g_last_ltft_pct    = 0;
 static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
 static bool g_limp_active = false;
 static bool g_limp_rpm_cut = false;
-static uint32_t g_etb_follow_stopped_ms = 0u;   // motor parado desde (0 = não parado) com falha de seguimento do ETB
+
 // DIAG rev-limit: conta bordas de subida (false→true) do rev-limiter e latcha o
 // rpm_x10 que o disparou. Suspeita: glitch fantasma de rpm_x10 (corrida ISR↔main)
 // dispara o limiter ao ralenti → spikes de PW=0 de 1 loop. Expostos no dump 'D'.
@@ -734,20 +734,13 @@ int main() {
                         ems::engine::FaultSeverity::ERROR,
                         static_cast<uint16_t>(torque_out.etb_target_pct_x10),
                         static_cast<uint16_t>(sensors_etb.etb_tps_pct_x10));
-                    // Recuperação sem power cycle: motor parado há 2 s (falha de partida ou
-                    // desligamento) destrava; se a causa persistir, trava de novo em 1,5 s.
-                    if (snap_etb.rpm_x10 == 0u) {
-                        if (g_etb_follow_stopped_ms == 0u) { g_etb_follow_stopped_ms = now; }
-                        if ((now - g_etb_follow_stopped_ms) >= 2000u) {
-                            ems::engine::etb_control_follow_fault_clear();
-                            ems::engine::limp_gating_clear_etb_problem();
-                            ems::engine::DiagnosticManager::clear_fault(
-                                ems::engine::DiagnosticCode::ETB_FOLLOW_FAULT);
-                            g_etb_follow_stopped_ms = 0u;
-                        }
-                    } else {
-                        g_etb_follow_stopped_ms = 0u;
-                    }
+                }
+                const auto follow = ems::engine::etb_follow_recovery_tick(
+                    now, snap_etb.rpm_x10, sensors_etb.app_pct_x10,
+                    sensors_etb.etb_tps_pct_x10);
+                if (follow == ems::engine::EtbFollowAction::ClearDtc) {
+                    ems::engine::DiagnosticManager::clear_fault(
+                        ems::engine::DiagnosticCode::ETB_FOLLOW_FAULT);
                 }
                 // Apply PID → H-bridge. On disable/fault/no-cal, spring-return safe.
                 ems::engine::etb_apply_output(torque_out.etb_enable_request, etb.active,

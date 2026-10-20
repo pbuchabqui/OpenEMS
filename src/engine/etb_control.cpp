@@ -276,7 +276,16 @@ constexpr int16_t  kFollowSatX10 = 900;    // com saída >= 90%
 constexpr uint16_t kFollowTripMs = 1500u;  // por 1,5 s seguido (partida com tensão caída não deve disparar)
 static uint16_t g_follow_ms = 0u;
 static bool     g_prev_error_valid = false;   // 1ª amostra após reset não gera "chute" de derivativo
-static bool     g_follow_fault = false;    // trava até reset do MCU: mola devolve a borboleta
+static bool     g_follow_fault = false;
+static uint16_t g_follow_tps_at_trip = 0u;
+static bool     g_follow_tps_valid = false;
+static bool     g_follow_rearm_used = false;
+static bool     g_follow_stop_timing = false;
+static uint32_t g_follow_stopped_since_ms = 0u;
+static bool     g_follow_awaiting_good = false;
+static uint16_t g_follow_good_ms = 0u;
+static bool     g_follow_dtc_clear_ready = false;
+constexpr uint32_t kFollowRearmStopMs = 2000u;
 
 void etb_control_reset() noexcept {
     g_integrator_x10 = 0;
@@ -287,7 +296,54 @@ void etb_control_reset() noexcept {
 
 bool etb_control_follow_fault() noexcept { return g_follow_fault; }
 
-void etb_control_follow_fault_clear() noexcept { g_follow_fault = false; g_follow_ms = 0u; }
+void etb_control_follow_fault_clear() noexcept {
+    g_follow_fault = false;
+    g_follow_ms = 0u;
+    g_follow_tps_valid = false;
+    g_follow_rearm_used = false;
+    g_follow_stop_timing = false;
+    g_follow_stopped_since_ms = 0u;
+    g_follow_awaiting_good = false;
+    g_follow_good_ms = 0u;
+    g_follow_dtc_clear_ready = false;
+}
+
+EtbFollowAction etb_follow_recovery_tick(uint32_t now_ms, uint16_t rpm_x10,
+                                         uint16_t app_pct_x10,
+                                         uint16_t measured_pct_x10) noexcept {
+    if (g_follow_dtc_clear_ready) {
+        g_follow_dtc_clear_ready = false;
+        return EtbFollowAction::ClearDtc;
+    }
+    if (!g_follow_fault || g_follow_rearm_used) {
+        g_follow_stop_timing = false;
+        return EtbFollowAction::Hold;
+    }
+    if (rpm_x10 != 0u) {
+        g_follow_stop_timing = false;
+        return EtbFollowAction::Hold;
+    }
+    if (!g_follow_stop_timing) {
+        g_follow_stop_timing = true;
+        g_follow_stopped_since_ms = now_ms;
+        return EtbFollowAction::Hold;
+    }
+    if ((now_ms - g_follow_stopped_since_ms) < kFollowRearmStopMs) {
+        return EtbFollowAction::Hold;
+    }
+    if (app_pct_x10 >= etb_idle_open_pct_x10) { return EtbFollowAction::Hold; }
+    if (!g_follow_tps_valid || measured_pct_x10 == g_follow_tps_at_trip) {
+        return EtbFollowAction::Hold;
+    }
+    g_follow_fault = false;
+    g_follow_ms = 0u;
+    g_follow_rearm_used = true;
+    g_follow_awaiting_good = true;
+    g_follow_good_ms = 0u;
+    g_follow_stop_timing = false;
+    limp_gating_clear_etb_problem();
+    return EtbFollowAction::Rearm;
+}
 
 EtbControlState etb_control_update(uint16_t target_pct_x10,
                                    uint16_t measured_pct_x10,
@@ -352,12 +408,32 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
     if (abs_err >= kFollowErrX10 && abs_out >= kFollowSatX10) {
         g_follow_ms = static_cast<uint16_t>(g_follow_ms + period_ms);
         if (g_follow_ms >= kFollowTripMs) {
+            if (!g_follow_fault) {
+                g_follow_tps_at_trip = measured_pct_x10;
+                g_follow_tps_valid = true;
+                g_follow_awaiting_good = false;
+                g_follow_good_ms = 0u;
+                g_follow_dtc_clear_ready = false;
+            }
             g_follow_fault = true;
             out.active = false;
             out.output_pct_x10 = 0;
         }
     } else {
         g_follow_ms = 0u;
+    }
+    if (g_follow_awaiting_good && !g_follow_fault) {
+        if (abs_err < kFollowErrX10) {
+            const uint32_t sum = static_cast<uint32_t>(g_follow_good_ms) + period_ms;
+            g_follow_good_ms = static_cast<uint16_t>(sum > 60000u ? 60000u : sum);
+            if (g_follow_good_ms >= kFollowTripMs) {
+                g_follow_dtc_clear_ready = true;
+                g_follow_awaiting_good = false;
+                g_follow_rearm_used = false;
+            }
+        } else {
+            g_follow_good_ms = 0u;
+        }
     }
     return out;
 }
