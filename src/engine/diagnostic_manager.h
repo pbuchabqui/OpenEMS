@@ -75,6 +75,9 @@ enum class DiagnosticCode : uint16_t {
     ADC_TIMEOUT = 0x0510,
     ADC_RECOVERY_FAILED = 0x0511,
     FLASH_WRITE_FAULT = 0x0520,
+
+    // Electronic throttle (P06xx)
+    ETB_FOLLOW_FAULT = 0x0600,   // borboleta não segue o alvo (etb_control_follow_fault)
     
     // Engine protection (P02xx)
     OVERTEMP_CRITICAL = 0x0200,

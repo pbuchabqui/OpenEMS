@@ -30,6 +30,7 @@ struct EngineCalcOut {
     uint32_t net_pw_us;      // telemetry: net flow time before dP/dead time
     uint16_t map_fused_x100; // MAP used for fuel this step
     bool limp_active;        // sensor limp (MAP/CLT/oil/overtemp)
+    bool limp_rpm_cut;       // limp acima de 3000 rpm (com histerese), independente do PROTECT
     uint32_t rpm_max_x10;    // highest rpm seen (diagnostics)
 };
 

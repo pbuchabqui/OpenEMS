@@ -21,6 +21,7 @@
 #include "engine/cut_reason.h"
 #include "engine/map_estimator.h"
 #include "engine/quick_crank.h"
+#include "engine/spark_skip.h"
 #include "engine/table3d.h"
 #include "engine/transient_fuel.h"
 
@@ -268,8 +269,10 @@ void test_engine_calc_limp_rpm_hysteresis(void) {
     auto step = [&](uint32_t rpm) {
         EngineCalcIn in = input_at(t += 2u, rpm, 60u, 250u);
         in.sensors.fault_bits = (1u << 3u);  // CLT fault -> limp_active
-        engine_calc_step(in);
-        return (g_fuel_cut_reasons & kFuelCutLimpRpm) != 0u;
+        const bool exposed = engine_calc_step(in).limp_rpm_cut;
+        const bool reason = (g_fuel_cut_reasons & kFuelCutLimpRpm) != 0u;
+        CHECK_EQ(exposed, reason, "limp_rpm_cut exposto = bit de corte de combustível");
+        return reason;
     };
     for (int i = 0; i < 50; ++i) { step(2000u); }
     CHECK_FALSE(step(2990u), "below the limit: no cut");
@@ -280,6 +283,14 @@ void test_engine_calc_limp_rpm_hysteresis(void) {
     step(3010u);
     engine_calc_reset();
     CHECK_FALSE(step(2990u), "engine_calc_reset limpa o latch do corte");
+    // PROTECT desliga o corte: o ETB também deixa de recebê-lo.
+    limp_gating_set_protect_disable(kProtectDisLimpRpm);
+    {
+        EngineCalcIn in = input_at(t += 2u, 3010u, 60u, 250u);
+        in.sensors.fault_bits = (1u << 3u);
+        CHECK_FALSE(engine_calc_step(in).limp_rpm_cut, "PROTECT limp-rpm: limp_rpm_cut falso");
+    }
+    limp_gating_set_protect_disable(0u);
     tables_restore();
 }
 
@@ -404,3 +415,56 @@ void test_engine_calc_driveline_retard(void) {
     driveline_reset();
     tables_restore();
 }
+
+// O spark-skip recalcula a máscara só na borda de subida do `phase_A` entre voltas (fase do came),
+// e a perde ao sair de FULL_SYNC — exercitado através do engine_calc_step, não chamando o módulo
+// com `cycle_start` à mão.
+void test_engine_calc_spark_skip_follows_cam_phase(void) {
+    section("engine_calc: spark-skip segue a fase do came (borda de subida) e zera sem sync");
+    reset_all();
+    spark_skip_reset();
+    const uint16_t sv_w = spark_skip_window_rpm_x10;
+    const uint8_t  sv_m = spark_skip_max_q8;
+    const uint32_t sv_hard = rev_limit_rpm_x10;
+    rev_limit_rpm_x10 = 70000u;           // limitador em 7000 rpm
+    spark_skip_window_rpm_x10 = 1000u;    // janela de 100 rpm abaixo do limitador
+    spark_skip_max_q8 = 128u;
+    uint32_t t = 1000u;
+    const uint32_t rpm = 6950u;           // dentro da janela (limitador em 7000)
+
+    auto step = [&](uint16_t tooth, bool phase_a,
+                    ems::drv::SyncState st = ems::drv::SyncState::FULL_SYNC) {
+        EngineCalcIn in = input_at(t += 2u, rpm, 60u, 250u, st);
+        in.snap.tooth_index = tooth;
+        in.snap.phase_A = phase_a;
+        engine_calc_step(in);
+    };
+    auto rev = [&](bool phase_a) { step(57u, phase_a); step(0u, phase_a); };   // wrap do tooth_index
+
+    for (int i = 0; i < 5; ++i) { step(static_cast<uint16_t>(10 + i), false); }
+    CHECK_EQ(spark_skip_mask(), 0u, "sem wrap de dente: máscara vazia");
+
+    rev(true);                             // borda de subida: abre o ciclo de 720°
+    const uint8_t m1 = spark_skip_mask();
+    CHECK_TRUE(m1 != 0u, "borda de subida do phase_A calcula a máscara");
+
+    rev(false);                            // 2ª volta do ciclo: mantém
+    CHECK_EQ(spark_skip_mask(), m1, "phase_A em false: máscara mantida");
+
+    rev(true);                             // novo ciclo: recalcula e rotaciona
+    CHECK_TRUE(spark_skip_mask() != m1, "novo ciclo: máscara rotaciona para outro cilindro");
+
+    rev(true);                             // phase_A congelado em true: não recalcula a cada volta
+    const uint8_t m3 = spark_skip_mask();
+    rev(true);
+    CHECK_EQ(spark_skip_mask(), m3, "phase_A congelado em true não recalcula a cada volta");
+
+    step(10u, true, ems::drv::SyncState::HALF_SYNC);
+    CHECK_EQ(spark_skip_mask(), 0u, "fora de FULL_SYNC: máscara zerada");
+
+    spark_skip_window_rpm_x10 = sv_w;
+    spark_skip_max_q8 = sv_m;
+    rev_limit_rpm_x10 = sv_hard;
+    spark_skip_reset();
+}
+

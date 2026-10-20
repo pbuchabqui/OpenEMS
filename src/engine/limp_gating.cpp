@@ -113,6 +113,15 @@ void limp_gating_or_fuel_reason(uint16_t bit) noexcept {
     g_fuel_cut_reasons = static_cast<uint16_t>(g_fuel_cut_reasons | bit);
 }
 
+bool limp_gating_limp_rpm_disabled() noexcept {
+    return (g_protect_disable & kProtectDisLimpRpm) != 0u;
+}
+
+void limp_gating_clear_etb_problem() noexcept {
+    g_etb_problem = false;
+    g_fault_rev_x10 = 0xFFFFFFFFu;   // só o problema de ETB baixa este limite
+}
+
 void limp_gating_report_etb_problem() noexcept {
     g_etb_problem = true;
     set_fault_rev_limit_x10(kEtbFaultRevLimitRpmX10);

@@ -685,6 +685,11 @@ void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept
     std::memcpy(&antijerk_tpsdot_threshold_x10, page0 + 66, 2u);
     std::memcpy(&antijerk_retard_deg,          page0 + 68, 2u);
     antijerk_decay_cycles = page0[70];
+    // Sem esses limites um blob corrompido dava retardo negativo (avanço) ou gigante no tip-in.
+    if (antijerk_tpsdot_threshold_x10 > 1000u) { antijerk_tpsdot_threshold_x10 = 1000u; }
+    if (antijerk_retard_deg < 0) { antijerk_retard_deg = 0; }
+    if (antijerk_retard_deg > 20) { antijerk_retard_deg = 20; }
+    if (antijerk_decay_cycles > 50u) { antijerk_decay_cycles = 50u; }
 
     // 71 CKP skip pós-silêncio
     ckp_skip_pulses_after_gap = (page0[71] > 57u) ? 57u : page0[71];
@@ -724,10 +729,14 @@ void launch_tc_apply_from_page0(const uint8_t* page0, uint16_t len) noexcept {
         }
         launch_rpm_x10 = rpm;
     }
-    if (etb > 1000u) {
-        etb = 1000u;
+    // 0 no blob = flash em branco/legado: mantém o valor anterior (como o rpm acima); gravar 0
+    // fecharia a borboleta por completo durante o launch.
+    if (etb != 0u) {
+        if (etb > 1000u) {
+            etb = 1000u;
+        }
+        launch_etb_pct_x10 = etb;
     }
-    launch_etb_pct_x10 = etb;
     if (arm > 1000u) {
         arm = 1000u;
     }

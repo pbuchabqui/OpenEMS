@@ -21,7 +21,9 @@ ems::engine::WallFuelState g_wall_state = {};
 // ponto de operação — a velocidade do ar no coletor depende de RPM e carga.
 constexpr uint8_t kXTauTableSize = 4u;
 uint32_t g_xtau_rpm_axis_x10[kXTauTableSize] = {8000u, 25000u, 45000u, 70000u};
-uint32_t g_xtau_map_axis_bar_x100[kXTauTableSize] = {2500u, 5000u, 8000u, 15000u};
+// bar × 100 (0,25 / 0,50 / 0,80 / 1,50 bar). Antes {2500..15000}: o MAP real fica em 10..300
+// e tudo caía na coluna 0, misturando todas as cargas num único ponto aprendido.
+uint32_t g_xtau_map_axis_bar_x100[kXTauTableSize] = {25u, 50u, 80u, 150u};
 ems::engine::XTauParams g_learned_table[kXTauTableSize][kXTauTableSize] = {};
 bool g_xtau_table_seeded = false;
 
@@ -89,7 +91,7 @@ void xtau_seed_table_if_needed() noexcept {
         return;
     }
     ems::engine::XTauParams seed = {};
-    seed.x_fraction_q8 = ems::engine::xtau_x_fraction_q8[0];  // baseline a 0°C
+    seed.x_fraction_q8 = ems::engine::xtau_x_fraction_q8[0];  // baseline: 1º nó do eixo CLT (não 0 °C)
     seed.tau_cycles = ems::engine::xtau_tau_cycles[0];
     seed.learned_x_min_q8 = 64u;   // 25%
     seed.learned_x_max_q8 = 192u;  // 75%
@@ -326,13 +328,17 @@ bool xtau_autocalib_update(uint32_t rpm_x10,
     const int32_t tau_delta = static_cast<int32_t>(ideal_tau) -
                               static_cast<int32_t>(cell.tau_cycles);
 
+    // Passo arredondado simetricamente: `>> 8` direto arredonda para -∞, então deltas negativos
+    // davam sempre -1 e positivos pequenos (< 8) davam 0 — viés de queda no aprendizado.
+    const auto learn_step = [](int32_t delta) noexcept -> int32_t {
+        const int32_t scaled = delta * static_cast<int32_t>(kLearningRateQ8);
+        return (scaled >= 0) ? ((scaled + 128) >> 8) : -((-scaled + 128) >> 8);
+    };
     cell.x_fraction_q8 = static_cast<uint16_t>(
-        static_cast<int32_t>(cell.x_fraction_q8) +
-        ((x_delta * kLearningRateQ8) >> 8));
+        static_cast<int32_t>(cell.x_fraction_q8) + learn_step(x_delta));
 
     cell.tau_cycles = static_cast<uint16_t>(
-        static_cast<int32_t>(cell.tau_cycles) +
-        ((tau_delta * kLearningRateQ8) >> 8));
+        static_cast<int32_t>(cell.tau_cycles) + learn_step(tau_delta));
 
     // Atualiza limites aprendidos (desta célula)
     if (cell.x_fraction_q8 < cell.learned_x_min_q8) {
