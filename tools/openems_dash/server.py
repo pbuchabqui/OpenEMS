@@ -904,7 +904,7 @@ O relatorio acima contem:
    - Delta VE maximo: +/-15% do valor atual por iteracao
    - Delta Spark maximo: +/-3 graus por iteracao
    - Nunca sugira lambda alvo < 0.750 (risco de detonacao)
-   - Resolucao do WBO2: +/-0.004 lambda (o2_d4 x 4) — nao persiga erros menores que isso
+   - Resolucao do WBO2: +/-0.005 lambda (o2_d4 x 5) — nao persiga erros menores que isso
 
 5. **Correcao VE**: se lambda_medido > lambda_alvo, a mistura esta pobre.
    VE_novo = VE_atual * (lambda_medido / lambda_alvo).
