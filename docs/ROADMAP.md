@@ -1,6 +1,6 @@
 # Roadmap e progresso OpenEMS
 
-Atualizado em 2026-10-21, `main` em `fa8ec20`. Reúne o antigo `progresso.md` (revisão e correção de `src/`, branch `fix/output-contract-cuts`, já mesclada em `main`) e o roadmap de produto. Nada aqui foi validado em hardware. `main` está igual a `origin/main`. `tools/ts/OpenEMS_model.msq` foi versionado em 2026-10-21.
+Atualizado em 2026-10-21, `main` em `6aeb3ea`. Reúne o antigo `progresso.md` (revisão e correção de `src/`, branch `fix/output-contract-cuts`, já mesclada em `main`) e o roadmap de produto. Nada aqui foi validado em hardware. `main` está igual a `origin/main`. `tools/ts/OpenEMS_model.msq` foi versionado em 2026-10-21.
 
 ## Verificação em `main` (2026-10-21)
 
