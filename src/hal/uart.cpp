@@ -7,8 +7,8 @@
  * (PA2/PA3 reservados para ADC1_IN3/IN4 — sensores MAP e MAF)
  * (PB10/PB11 ficam livres para TIM2_CH3/CH4 — INJ3/INJ4)
  *
- * Clock USART1: APB2 = 125 MHz (HCLK/2)
- * BRR = APB2_CLK / baud = 125,000,000 / 115,200 = 1085
+ * Clock USART1: PCLK2 = 125 MHz (HCLK/2) com o PLL; HSI16 se o PLL não subiu.
+ * BRR = clock / baud = 125,000,000 / 115,200 = 1085
  *   Erro: 125,000,000 / 1085 = 115,207 bps → erro < 0.01%
  *
  * RX Buffer circular (software) para recepção sem bloqueio.
@@ -21,7 +21,10 @@
 #include "hal/regs.h"
 
 // ── Clock USART para cálculo BRR ─────────────────────────────────────────────
-static constexpr uint32_t kUartClockHz = 125000000u;  // APB2 = 125 MHz
+// system_init() põe USART1 em PCLK2 quando o PLL assume o SYSCLK (APB2 = 125 MHz).
+// Sem PLL o SYSCLK fica em HSI16, USART1 continua em HSI16 (CCIPR1 do startup).
+static constexpr uint32_t kUartClockPllHz = 125000000u;
+static constexpr uint32_t kUartClockHsiHz = 16000000u;
 
 // ── Buffer RX circular ───────────────────────────────────────────────────────
 static constexpr uint8_t  kRxBufSize = 128u;
@@ -53,7 +56,9 @@ void uart0_init(uint32_t baud) noexcept {
     USART1_CR1 = 0u;   // desabilita durante config
 
     // BRR: divisão direta (OVER8=0 → 16× oversampling, padrão)
-    USART1_BRR = kUartClockHz / baud;
+    const uint32_t uart_clk = ((RCC_CFGR1 & (7u << 3)) == RCC_CFGR1_SWS_PLL1)
+                                  ? kUartClockPllHz : kUartClockHsiHz;
+    USART1_BRR = uart_clk / baud;
 
     USART1_CR2 = 0u;   // 1 stop bit, sem LIN, sem clock síncrono
     USART1_CR3 = 0u;   // sem hardware flow control

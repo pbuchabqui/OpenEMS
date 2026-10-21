@@ -30,7 +30,7 @@ Sem hardware. Reflete a divisão do README e a remoção dos projetos KiCad em 2
 
 Itens de "Registrado e deixado de propósito", resolvidos com host-tests.
 
-1. USART1: `startup_stm32h562.cpp` seleciona HSI16 (`USART1SEL = 0b011`) e `uart.cpp` calcula o BRR com 125 MHz. Selecionar PCLK2 depois do PLL, ou trocar o BRR para HSI.
+1. ~~USART1~~ feito em 2026-10-21: `system.cpp` seleciona PCLK2 (`RCC_CCIPR1` USART1SEL = 000) depois que o PLL assume o SYSCLK, e `uart.cpp` calcula o BRR a partir do SYSCLK real (125 MHz com PLL, 16 MHz se ficou em HSI16). Compila nas duas placas; o baud real só se confirma na bancada (Fase 2).
 2. FDCAN: `can.cpp` assume 62,5 MHz no NBTP e `system.cpp` só liga `PLL1PEN`. Ler o reset de `FDCANSEL` no SVD, ligar `PLL1QEN`, fixar o seletor e testar o cálculo de bit timing.
 3. `can0_tx`: consultar `FDCAN_CCCR_INIT` e tratar falha de TX.
 4. Gauge de lambda: o `openems.ini` escala o byte com 0,004, o firmware publica mili-lambda ÷ 5 e o dash multiplica por 5. Alinhar os três.
@@ -94,7 +94,7 @@ Não viraram código na revisão de `src/`.
 - CKP (`src/drv/ckp.cpp`, `classify_edge` por volta da linha 308 e o substituto por volta de 598). Pulso com 0,5 ≤ f < 1,5 é dente e chega a `schedule_on_tooth`. O pulso seguinte, classificado como ruído, pode reescrever `prev_capture` e voltar sem um segundo agendamento quando o último intervalo é estritamente menor que 0,9 da referência e o vão fecha um período. f < 0,5 cai na hora. f ≥ 0,9 não entra nesse substituto.
 - Lambda (`limp_gating.cpp`, por volta de 247). A restauração exige λ válido, λ ≤ alvo+desvio, e a banda de saída (RPM, carga ou TPS). Injetor fechado mantém λ pobre, então a condição pobre bloqueia a saída. `engine_calc_reset` não zera `g_lambda_cut`. O latch sobrevive a um stall. Zeram o corte o reset de teste, timeout 0, lambda desligado e o próprio caminho de restauração.
 - Falha de CLT publica 90,0 °C (`kFallbackCltDegcX10 = 900`) e falha de IAT publica 25,0 °C (`kFallbackIatDegcX10 = 250`), em `sensors.h` e no tick de 100 ms. O fallback de MAP é 101,0 kPa. A curva NTC não foi inventada. O fallback de CLT continua alimentando partida e DFCO.
-- USART: `startup_stm32h562.cpp` seleciona USART1 em HSI16 (`USART1SEL = 0b011`). `uart.cpp` programa o BRR com 125 MHz. Os dois relógios não são o mesmo. A correção adiada é selecionar PCLK2 depois do PLL. O BRR não foi trocado para HSI.
+- USART: resolvido em 2026-10-21 (Fase 1, item 1). Falta medir o baud na bancada.
 - FDCAN: `can.cpp` escreve NBTP para 500 kbps assumindo 62,5 MHz. `system.cpp` liga só `PLL1PEN`. Não há escrita de `PLL1QEN` nem de `FDCANSEL` nesta árvore. O valor de reset do seletor de clock do FDCAN não foi lido do SVD, então o clock real do periférico ficou em aberto.
 - `can0_tx` recusa o envio quando o bit 0 de `TXBRP` está pendente. Não consulta `FDCAN_CCCR_INIT`. A init conta falha se INIT não entra ou não sai. O TX ignora essa falha.
 - Gauge de lambda: o firmware publica mili-lambda ÷ 5 (`ui_protocol_pages.cpp` no byte de O2 e o alvo no `main`). O `openems.ini` escala esse byte com 0,004, então λ = 1,000 aparece como 0,800 no TunerStudio. O dash em `protocol.py` multiplica o byte por 5.

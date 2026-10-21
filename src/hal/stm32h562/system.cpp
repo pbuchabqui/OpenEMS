@@ -157,6 +157,11 @@ void system_stm32_init(void) noexcept {
             for (uint32_t n = 100000u; (RCC_CFGR1 & (7u << 3)) != RCC_CFGR1_SWS_PLL1; --n) {
                 if (n == 0u) { break; }  // não-fatal
             }
+            // USART1 em PCLK2 (125 MHz): o startup o deixa em HSI16 (000 = PCLK2).
+            // uart0_init() calcula o BRR a partir do SYSCLK real.
+            if ((RCC_CFGR1 & (7u << 3)) == RCC_CFGR1_SWS_PLL1) {
+                RCC_CCIPR1 &= ~0x7u;
+            }
         }
     }
 
