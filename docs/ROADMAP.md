@@ -32,7 +32,7 @@ Itens de "Registrado e deixado de propósito", resolvidos com host-tests.
 
 1. ~~USART1~~ feito em 2026-10-21: `system.cpp` seleciona PCLK2 (`RCC_CCIPR1` USART1SEL = 000) depois que o PLL assume o SYSCLK, e `uart.cpp` calcula o BRR a partir do SYSCLK real (125 MHz com PLL, 16 MHz se ficou em HSI16). Compila nas duas placas; o baud real só se confirma na bancada (Fase 2).
 2. FDCAN: `can.cpp` assume 62,5 MHz no NBTP e `system.cpp` só liga `PLL1PEN`. Ler o reset de `FDCANSEL` no SVD, ligar `PLL1QEN`, fixar o seletor e testar o cálculo de bit timing.
-3. `can0_tx`: consultar `FDCAN_CCCR_INIT` e tratar falha de TX.
+3. ~~`can0_tx`~~ feito em 2026-10-21: recusa o envio (retorna `false`) enquanto `FDCAN_CCCR_INIT` estiver ativo. Os chamadores em `can_stack.cpp` já tratam o retorno.
 4. Gauge de lambda: o `openems.ini` escala o byte com 0,004, o firmware publica mili-lambda ÷ 5 e o dash multiplica por 5. Alinhar os três.
 5. Páginas 0x0A e 0x0C: definir se a escrita é aplicada ou recusada (hoje o envelope responde OK e o burn responde erro).
 6. CAN 0x402 usa `kFcoFlowCcMin = 450` fixo em vez de `injector_flow_cc_min`. Revisar também os status bits de 0x400 e 0x401.

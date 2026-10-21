@@ -135,6 +135,11 @@ uint32_t can0_get_init_faults() noexcept {
 // ── Transmissão ───────────────────────────────────────────────────────────────
 
 bool can0_tx(const CanFrame& frame) noexcept {
+    // Controlador em INIT (init falhou ou bus-off): o TXBAR seria ignorado, então recusa em vez
+    // de devolver true para um frame que nunca sai.
+    if (FDCAN1_CCCR & FDCAN_CCCR_INIT) {
+        return false;
+    }
     // Buffer dedicado 0: não sobrescrever enquanto a requisição estiver pendente.
     if (FDCAN1_TXBRP & (1u << 0)) {
         return false;
