@@ -22,6 +22,7 @@ Pelo dashboard proprio (`tools/openems_dash`, aba **Install**), com guia passo a
 | Documento | Conteudo |
 |---|---|
 | `docs/bench_test_manual.md` | Teste de bancada na WeAct VGT6, sem atuadores |
+| `docs/bench_report_template.md` | Modelo do relatório de bancada (preencher durante o ensaio) |
 | `docs/hw/README.md` | Hardware e pinout |
 | `docs/wiring_diagram.md` | Esquematicos eletricos |
 | `docs/ROADMAP.md` | Backlog, progresso e histórico do que foi concluído |

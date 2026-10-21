@@ -51,6 +51,7 @@ Bloqueia as fases seguintes. Roteiro em `docs/bench_test_manual.md`.
 - Registrar `loop2_last`, `loop2_max`, `late_event_count`, `cycle_schedule_drop_count` e `calibration_clamp_count`.
 - IWDG com o gate do ETB, e Flash sem escrita com o motor girando.
 - Ferramentas: `tools/diag/` (`sync_loss.py`, `bench_check.py`, `angle.py`) e `tools/hil_test/hil_test.py`.
+- Modelo do relatório: `docs/bench_report_template.md` (inclui as verificações das correções de baud da UART, bit rate do CAN, gauge de lambda, bit de falha do WBO2 e páginas 0x0A/0x0C).
 - Pronto quando: há um relatório de bancada com T3 e T4 medidos e sem falhas.
 
 ### Fase 3 — Medidas e calibração
