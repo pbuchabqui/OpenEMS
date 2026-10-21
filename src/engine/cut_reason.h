@@ -13,7 +13,6 @@ namespace ems::engine {
 // fuel (injecção)
 inline constexpr uint16_t kFuelCutRevLimit = 1u << 0;  // limitador hard de RPM
 inline constexpr uint16_t kFuelCutLimpRpm  = 1u << 1;  // limp acima do tecto de RPM
-inline constexpr uint16_t kFuelCutMapFault = 1u << 2;  // MAP em fault (carga não fiável)
 inline constexpr uint16_t kFuelCutOilPress = 1u << 3;  // protecção pressão de óleo
 inline constexpr uint16_t kFuelCutFuelRail = 1u << 4;  // fault pressão de combustível
 inline constexpr uint16_t kFuelCutOvertemp = 1u << 5;  // sobreaquecimento crítico
@@ -24,7 +23,6 @@ inline constexpr uint16_t kFuelCutFlood    = 1u << 9;  // flood clear no crankin
 inline constexpr uint16_t kFuelCutInjDuty  = 1u << 10; // duty do injector acima do limite
 inline constexpr uint16_t kFuelCutBoost    = 1u << 11; // MAP above boost cut (fuel only)
 inline constexpr uint16_t kFuelCutLambda   = 1u << 12; // lambda protection timeout
-inline constexpr uint16_t kFuelCutFatal    = 1u << 13; // limp_gating_fatal()
 inline constexpr uint16_t kFuelCutEtbFault = 1u << 14; // ETB problem fault rev limit
 
 // spark (ignição)
@@ -33,8 +31,6 @@ inline constexpr uint16_t kSparkCutOilPress = 1u << 1;  // protecção pressão 
 inline constexpr uint16_t kSparkCutOvertemp = 1u << 2;  // sobreaquecimento crítico
 inline constexpr uint16_t kSparkCutDiagCrit = 1u << 3;  // diagnóstico crítico
 inline constexpr uint16_t kSparkSkipActive  = 1u << 4;  // soft limiter (corte parcial)
-inline constexpr uint16_t kSparkCutFatal    = 1u << 5;  // limp_gating_fatal()
-inline constexpr uint16_t kSparkCutNoSync   = 1u << 6;  // sequential without phase_valid
 
 inline volatile uint16_t g_fuel_cut_reasons  = 0u;
 inline volatile uint16_t g_spark_cut_reasons = 0u;

@@ -23,14 +23,14 @@ static constexpr uint8_t THROTTLE_FAULT_ETB_TPS2  = (1u << 4u);
 static constexpr uint8_t THROTTLE_FAULT_ETB_PLAUS = (1u << 5u);
 
 struct SensorData {
-    uint16_t map_bar_x1000;         // MAP bar × 10
+    uint16_t map_bar_x1000;         // MAP bar × 1000
     uint32_t maf_gps_x100;        // MAF g/s × 100
     uint16_t tps_pct_x10;         // TPS % × 10 (cabo legado PA4)
     int16_t  clt_degc_x10;        // CLT °C × 10
     int16_t  iat_degc_x10;        // IAT °C × 10
     // o2_mv REMOVIDO — sistema usa exclusivamente WBO2 via CAN (ID 0x180)
-    uint16_t fuel_press_bar_x1000;  // pressão combustível bar × 10
-    uint16_t oil_press_bar_x1000;   // pressão óleo bar × 10
+    uint16_t fuel_press_bar_x1000;  // pressão combustível bar × 1000
+    uint16_t oil_press_bar_x1000;   // pressão óleo bar × 1000
     uint16_t vbatt_mv;            // tensão bateria mV
     uint8_t  fault_bits;          // bitmask de falhas ativas
     uint16_t app1_pct_x10;        // APP1 (AN1/PB0) % × 10
@@ -40,11 +40,12 @@ struct SensorData {
     uint16_t etb_tps2_pct_x10;    // ETB blade TPS2 (AN4/PC1) % × 10
     uint16_t etb_tps_pct_x10;     // posição borboleta validada % × 10
     uint8_t  throttle_fault_bits;
-    // Expansão AN1-4 — passthrough bruto, atualizados em sensors_tick_100ms()
+    // Expansão AN1-4 — passthrough bruto, atualizados em sensors_tick_pedal()
     uint16_t an1_raw;
     uint16_t an2_raw;
     uint16_t an3_raw;
     uint16_t an4_raw;
+    bool     vbatt_fault;         // leitura 0 ou > 18 V (não confiável): vbatt_mv vale 12000 (nominal). Queda real < 6 V é crua, sem falha
 };
 
 enum class SensorId : uint8_t {
@@ -63,10 +64,28 @@ struct SensorRange {
     uint16_t max_raw;
 };
 
+// Faixa plausível da bateria. Leitura 0 ou > 18 V vale o nominal e sobe SensorData::vbatt_fault;
+// queda real < 6 V segue crua e os consumidores prendem em 6 V com vbatt_safe_mv().
+inline constexpr uint16_t kVbattMinMv = 6000u;
+inline constexpr uint16_t kVbattMaxMv = 18000u;
+inline constexpr uint16_t kVbattNominalMv = 12000u;
+// Valor que dwell e dead time consomem. Queda real (0 < mv < 6 V) prende em 6 V: a primeira linha
+// das tabelas (injetor lento, bobina com pouca energia). 0 (divisor aberto) ou > 18 V não dizem a
+// tensão real, então valem o nominal.
+inline constexpr uint16_t vbatt_safe_mv(uint16_t mv) noexcept {
+    if (mv == 0u || mv > kVbattMaxMv) { return kVbattNominalMv; }
+    return mv < kVbattMinMv ? kVbattMinMv : mv;
+}
+
 void sensors_init() noexcept;
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept;
 void sensors_tick_50ms() noexcept;
 void sensors_tick_100ms() noexcept;
+// APP/ETB a cada volta do laço de 2 ms. dt_ms é limitado a 50 ms dentro da função.
+void sensors_tick_pedal(uint32_t dt_ms) noexcept;
+// MAP fresco para baro, em kPa. false: ADC a recuperar, raw fora da faixa do MAP,
+// ou resultado fora de 70–110. Não puxa o valor para dentro da faixa.
+bool sensors_map_baro_bar_x100(uint16_t* out) noexcept;
 void sensors_maf_freq_capture_isr(uint16_t period_ticks) noexcept;
 void sensors_set_tps_cal(uint16_t raw_min, uint16_t raw_max) noexcept;
 void sensors_set_app_cal(uint16_t app1_min, uint16_t app1_max,

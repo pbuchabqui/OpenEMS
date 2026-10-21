@@ -10,6 +10,7 @@
 #include "hal/etb_driver.h"
 
 #include <string.h>
+#include <algorithm>
 #if defined(EMS_HOST_TEST)
 #include <math.h>
 #endif
@@ -268,10 +269,80 @@ namespace ems::engine {
 
 static int32_t g_integrator_x10 = 0;
 static int16_t g_prev_error_x10 = 0;
+// Watchdog de seguimento: borboleta que não segue o alvo (travada, ponte com polaridade
+// invertida, realimentação trocada) deixava o PID saturado em ±100% para sempre.
+constexpr int16_t  kFollowErrX10 = 200;    // erro >= 20%
+constexpr int16_t  kFollowSatX10 = 900;    // com saída >= 90%
+constexpr uint16_t kFollowTripMs = 1500u;  // por 1,5 s seguido (partida com tensão caída não deve disparar)
+static uint16_t g_follow_ms = 0u;
+static bool     g_prev_error_valid = false;   // 1ª amostra após reset não gera "chute" de derivativo
+static bool     g_follow_fault = false;
+static uint16_t g_follow_tps_at_trip = 0u;
+static bool     g_follow_tps_valid = false;
+static bool     g_follow_rearm_used = false;
+static bool     g_follow_stop_timing = false;
+static uint32_t g_follow_stopped_since_ms = 0u;
+static bool     g_follow_awaiting_good = false;
+static uint16_t g_follow_good_ms = 0u;
+static bool     g_follow_dtc_clear_ready = false;
+constexpr uint32_t kFollowRearmStopMs = 2000u;
 
 void etb_control_reset() noexcept {
     g_integrator_x10 = 0;
     g_prev_error_x10 = 0;
+    g_prev_error_valid = false;
+    g_follow_ms = 0u;
+}
+
+bool etb_control_follow_fault() noexcept { return g_follow_fault; }
+
+void etb_control_follow_fault_clear() noexcept {
+    g_follow_fault = false;
+    g_follow_ms = 0u;
+    g_follow_tps_valid = false;
+    g_follow_rearm_used = false;
+    g_follow_stop_timing = false;
+    g_follow_stopped_since_ms = 0u;
+    g_follow_awaiting_good = false;
+    g_follow_good_ms = 0u;
+    g_follow_dtc_clear_ready = false;
+}
+
+EtbFollowAction etb_follow_recovery_tick(uint32_t now_ms, uint16_t rpm_x10,
+                                         uint16_t app_pct_x10,
+                                         uint16_t measured_pct_x10) noexcept {
+    if (g_follow_dtc_clear_ready) {
+        g_follow_dtc_clear_ready = false;
+        return EtbFollowAction::ClearDtc;
+    }
+    if (!g_follow_fault || g_follow_rearm_used) {
+        g_follow_stop_timing = false;
+        return EtbFollowAction::Hold;
+    }
+    if (rpm_x10 != 0u) {
+        g_follow_stop_timing = false;
+        return EtbFollowAction::Hold;
+    }
+    if (!g_follow_stop_timing) {
+        g_follow_stop_timing = true;
+        g_follow_stopped_since_ms = now_ms;
+        return EtbFollowAction::Hold;
+    }
+    if ((now_ms - g_follow_stopped_since_ms) < kFollowRearmStopMs) {
+        return EtbFollowAction::Hold;
+    }
+    if (app_pct_x10 >= etb_idle_open_pct_x10) { return EtbFollowAction::Hold; }
+    if (!g_follow_tps_valid || measured_pct_x10 == g_follow_tps_at_trip) {
+        return EtbFollowAction::Hold;
+    }
+    g_follow_fault = false;
+    g_follow_ms = 0u;
+    g_follow_rearm_used = true;
+    g_follow_awaiting_good = true;
+    g_follow_good_ms = 0u;
+    g_follow_stop_timing = false;
+    limp_gating_clear_etb_problem();
+    return EtbFollowAction::Rearm;
 }
 
 EtbControlState etb_control_update(uint16_t target_pct_x10,
@@ -281,7 +352,7 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
 {
     EtbControlState out{};
 
-    if (!enable_request || etb_cal_valid == 0u) {
+    if (!enable_request || etb_cal_valid == 0u || g_follow_fault) {
         etb_control_reset();
         return out;
     }
@@ -314,20 +385,80 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
     g_integrator_x10 = clamp_i16(static_cast<int32_t>(g_integrator_x10), -2000, 2000);
     output_x10 += g_integrator_x10;
 
+    if (!g_prev_error_valid) {
+        g_prev_error_x10 = error_x10;
+        g_prev_error_valid = true;
+    }
     if (period_ms > 0u) {
         const int32_t deriv = ((static_cast<int32_t>(error_x10) - g_prev_error_x10)
                                * 1000) / static_cast<int32_t>(period_ms);
-        output_x10 += (kd_x10 * deriv) / 10;
+        // int64: kd × deriv passava de int32 com ganho alto e erro em degrau.
+        const int64_t d_term = (static_cast<int64_t>(kd_x10) * deriv) / 10;
+        output_x10 = static_cast<int32_t>(
+            std::max<int64_t>(-100000, std::min<int64_t>(100000, static_cast<int64_t>(output_x10) + d_term)));
     }
     g_prev_error_x10 = error_x10;
 
     out.output_pct_x10     = clamp_i16(output_x10, -1000, 1000);
     out.position_error_x10 = error_x10;
+
+    const int16_t abs_err = static_cast<int16_t>(error_x10 < 0 ? -error_x10 : error_x10);
+    const int16_t abs_out = static_cast<int16_t>(out.output_pct_x10 < 0 ? -out.output_pct_x10
+                                                                          : out.output_pct_x10);
+    if (abs_err >= kFollowErrX10 && abs_out >= kFollowSatX10) {
+        g_follow_ms = static_cast<uint16_t>(g_follow_ms + period_ms);
+        if (g_follow_ms >= kFollowTripMs) {
+            if (!g_follow_fault) {
+                g_follow_tps_at_trip = measured_pct_x10;
+                g_follow_tps_valid = true;
+                g_follow_awaiting_good = false;
+                g_follow_good_ms = 0u;
+                g_follow_dtc_clear_ready = false;
+            }
+            g_follow_fault = true;
+            out.active = false;
+            out.output_pct_x10 = 0;
+        }
+    } else {
+        g_follow_ms = 0u;
+    }
+    if (g_follow_awaiting_good && !g_follow_fault) {
+        if (abs_err < kFollowErrX10) {
+            const uint32_t sum = static_cast<uint32_t>(g_follow_good_ms) + period_ms;
+            g_follow_good_ms = static_cast<uint16_t>(sum > 60000u ? 60000u : sum);
+            if (g_follow_good_ms >= kFollowTripMs) {
+                g_follow_dtc_clear_ready = true;
+                g_follow_awaiting_good = false;
+                g_follow_rearm_used = false;
+            }
+        } else {
+            g_follow_good_ms = 0u;
+        }
+    }
     return out;
 }
 
 int32_t etb_control_get_integrator() noexcept {
     return g_integrator_x10;
+}
+
+bool etb_rev_cut_request(bool rev_limit_active, bool limp_rpm_cut_active) noexcept {
+    return rev_limit_active || limp_rpm_cut_active;
+}
+
+void etb_apply_output(bool enable_request, bool active, bool initialized,
+                      int16_t output_pct_x10) noexcept {
+    if (!enable_request || !active || !initialized) {
+        ::etb_driver_shutdown();
+        return;
+    }
+    // output_pct_x10 ∈ [-1000, 1000] → driver PWM ∈ [-1023, 1023]
+    int32_t pwm = (static_cast<int32_t>(output_pct_x10) * 1023) / 1000;
+    if (pwm > 1023) { pwm = 1023; }
+    if (pwm < -1023) { pwm = -1023; }
+    if (!::etb_driver_set_motor_pwm(static_cast<int16_t>(pwm))) {
+        ::etb_driver_shutdown();
+    }
 }
 
 }  // namespace ems::engine

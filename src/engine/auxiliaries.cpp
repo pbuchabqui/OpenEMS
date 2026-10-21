@@ -22,6 +22,7 @@
 #endif
 
 #include "hal/timer.h"
+#include "hal/system.h"  // millis(): relógio real, o mesmo que carimba o CAN
 #include "hal/regs.h"
 #include "hal/board_pinout.h"  // EMS_BOARD_IS_VGT6 — selecciona os pinos de relé
 
@@ -46,6 +47,7 @@ using ems::engine::clamp_i16;
 
 constexpr uint32_t kTick10ms = 10u;
 constexpr uint32_t kTick20ms = 20u;
+constexpr bool kVvtFeedbackMeasured = false;  // sem medição de fase de came: VVT parado
 constexpr uint32_t kAuxTim3PwmHz = 15u;
 constexpr uint32_t kAuxTim4PwmHz = 15u;
 
@@ -233,7 +235,10 @@ uint16_t iac_target_rpm_x10(int16_t clt_x10) noexcept {
 void run_wastegate_control(const ems::drv::CkpSnapshot& snap,
                            const ems::drv::SensorData& s) noexcept {
     uint8_t gear = 0u;
-    (void)ems::engine::vehicle_gear(gear, g.time_ms);  // fallback 0 se CAN off
+    // Relógio real (millis), o mesmo que carimba o último RX do CAN. g.time_ms é um contador
+    // de software (soma 10 por tick, perde ticks e começa em 0): comparado com last_rx_ms em
+    // millis(), a idade dava a volta, o sinal sempre expirava e a marcha ficava em 0.
+    (void)ems::engine::vehicle_gear(gear, millis());  // fallback 0 se CAN off
     const uint16_t target_bar_x1000 = lookup_boost_target(snap.rpm_x10, gear);
 
     if (s.map_bar_x1000 > static_cast<uint16_t>(target_bar_x1000 + kOverboostMarginBarX1000)) {
@@ -302,7 +307,11 @@ void run_vvt_control(const ems::drv::CkpSnapshot& snap,
         g.vvt_last_phase_toggle_ms = g.time_ms;
     }
 
-    const bool confirmed =
+    // `calc_cam_pos_est_x10` é só o ângulo do virabrequim dentro do ciclo (dente de serra de
+    // 0..354° a cada volta), não uma posição de came medida. Usá-lo como realimentação dava
+    // erro dominado pelo dente do instante do tick e duty pseudoaleatório no solenoide. Sem
+    // sensor de fase de came medido (kVvtFeedbackMeasured), o VVT fica em repouso (duty 0).
+    const bool confirmed = kVvtFeedbackMeasured &&
         (snap.state == ems::drv::SyncState::FULL_SYNC) &&
         ((g.time_ms - g.vvt_last_phase_toggle_ms) <= kVvtConfirmTimeoutMs);
 
@@ -327,7 +336,15 @@ void run_vvt_control(const ems::drv::CkpSnapshot& snap,
     ems::hal::tim4_set_duty(1u, g.vvt_adm_duty_x10);
 }
 
-void run_fan_control(int16_t clt_x10) noexcept {
+constexpr uint8_t kFanCltFaultBit =
+    static_cast<uint8_t>(1u << static_cast<uint8_t>(ems::drv::SensorId::CLT));
+
+void run_fan_control(int16_t clt_x10, bool clt_fault) noexcept {
+    // CLT em falha é substituído por 90 °C (< liga): ventoinha ligada por segurança.
+    if (clt_fault) {
+        if (!g.fan_on) { set_fan(true); }
+        return;
+    }
     if (!g.fan_on && clt_x10 >= kFanOnDegCX10) {
         set_fan(true);
     } else if (g.fan_on && clt_x10 <= kFanOffDegCX10) {
@@ -370,6 +387,16 @@ namespace ems::engine {
 
 uint16_t auxiliaries_idle_target_rpm_x10(int16_t clt_x10) noexcept {
     return iac_target_rpm_x10(clt_x10);
+}
+
+void auxiliaries_pins_safe_early() noexcept {
+    // Nível baixo no registrador de saída ANTES de virar saída: sem pulso no relé.
+    EMS_AUX_RELAY_RCC_EN();
+    EMS_AUX_RELAY_BSRR = (kFanBit << 16u) | (kPumpBit << 16u);
+    EMS_AUX_RELAY_MODER =
+        (EMS_AUX_RELAY_MODER & ~(3u << (kFanPin * 2u))) | (1u << (kFanPin * 2u));
+    EMS_AUX_RELAY_MODER =
+        (EMS_AUX_RELAY_MODER & ~(3u << (kPumpPin * 2u))) | (1u << (kPumpPin * 2u));
 }
 
 void auxiliaries_init() noexcept {
@@ -421,7 +448,7 @@ void auxiliaries_tick_10ms() noexcept {
     const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
     run_vvt_control(snap, s);
-    run_fan_control(s.clt_degc_x10);
+    run_fan_control(s.clt_degc_x10, (s.fault_bits & kFanCltFaultBit) != 0u);
     run_pump_control(snap.rpm_x10);
 }
 
@@ -432,7 +459,7 @@ void auxiliaries_tick_20ms() noexcept {
     const ems::drv::SensorData s = ems::drv::sensors_get();  // cópia atômica
 
     run_wastegate_control(snap, s);
-    run_fan_control(s.clt_degc_x10);
+    run_fan_control(s.clt_degc_x10, (s.fault_bits & kFanCltFaultBit) != 0u);
     run_pump_control(snap.rpm_x10);
 }
 
@@ -462,6 +489,9 @@ uint16_t auxiliaries_test_get_vvt_adm_duty() noexcept {
     return g.vvt_adm_duty_x10;
 }
 
+void auxiliaries_test_run_fan(int16_t clt_x10, bool clt_fault) noexcept {
+    run_fan_control(clt_x10, clt_fault);
+}
 bool auxiliaries_test_get_fan_state() noexcept {
     return g.fan_on;
 }

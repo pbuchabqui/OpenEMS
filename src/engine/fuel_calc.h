@@ -102,6 +102,8 @@ uint32_t fuel_decel_cut_ramp_pw(uint32_t flow_us, uint16_t dt_ms) noexcept;
 // Exit por MAP: MAP > gate + 5 bar×100 mesmo com TPS fechado.
 void fuel_decel_cut_notify_map(uint16_t map_bar_x100) noexcept;
 void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept;
+// Atualiza só o relógio do DFCO (a inibição pós-troca de marcha não pode congelar sem CAN).
+void fuel_decel_cut_notify_time(uint32_t now_ms) noexcept;
 
 // Protecção de duty do injector (FOME #215): chamar 1×/tick de 2 ms com o
 // PW final comandado. duty% (ciclo 720°) acima de inj_duty_max_pct por mais

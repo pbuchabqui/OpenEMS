@@ -78,6 +78,11 @@ int env_try_write(const uint8_t* a, uint16_t data_n) noexcept {
         return kTsRcRangeErr;
     }
     if (len != 0u) {
+        // Escrita parcial aplica a página inteira: o buffer pode estar velho se o firmware
+        // mudou o estado vivo por trás dele (bake 'Y', LTFT auto-apply, autocal do ETB) e uma
+        // escrita de 1 célula reverteria tudo isso. Ressincroniza o buffer com as tabelas vivas
+        // antes de sobrepor o trecho recebido.
+        sync_page_from_table(page);
         std::memcpy(ptr + off, a + 5u, len);
         if (!sync_table_from_page(page)) {
             sync_page_from_table(page);

@@ -7,11 +7,8 @@
 namespace {
 
 // Flex fuel sensor (GM/Continental): PB5, EXTI5
-// Frequency 50-150 Hz → ethanol 0-100%
+// 50 Hz = 0% ethanol, 150 Hz = 100% (linear). Válido de 45 a 155 Hz.
 // Duty cycle → fuel temperature (-40 to 125°C)
-// Signal: 50Hz = 0% ethanol, 150Hz = 100% ethanol (linear)
-constexpr uint32_t kFreqMin = 50u;    // 0% ethanol
-constexpr uint32_t kFreqMax = 150u;   // 100% ethanol
 constexpr uint32_t kTimeoutMs = 500u; // no signal = invalid
 
 volatile uint32_t g_last_rising_us = 0u;
@@ -33,10 +30,11 @@ void flex_fuel_init() noexcept {
     pupdr = (pupdr & ~(3u << (5u * 2u))) | (2u << (5u * 2u));
 
     // EXTI5: PB5 → EXTI line 5, both edges
-    // EXTI_EXTICR2: EXTI5 source = PB (0x01) in bits [7:0]
+    // EXTI_EXTICR2 cobre as linhas 4-7, 8 bits cada: EXTI5 é o byte 1 (bits [15:8]); o byte 0
+    // (bits [7:0]) é a EXTI4 — escrever lá roteava a linha errada.
     constexpr uint32_t EXTI_BASE = 0x44022000UL;
     volatile uint32_t& exticr2 = STM32_REG32(EXTI_BASE + 0x064UL);  // EXTICR2
-    exticr2 = (exticr2 & ~0xFFu) | 0x01u;  // PB for EXTI5
+    exticr2 = (exticr2 & ~(0xFFu << 8u)) | (0x01u << 8u);  // PB para EXTI5
 
     // Rising + falling edge trigger
     volatile uint32_t& rtsr1 = STM32_REG32(EXTI_BASE + 0x000UL);
@@ -48,9 +46,10 @@ void flex_fuel_init() noexcept {
     volatile uint32_t& imr1 = STM32_REG32(EXTI_BASE + 0x080UL);
     imr1 |= (1u << 5u);
 
-    // NVIC: EXTI5 = IRQ 23 (EXTI[9:5] on STM32H5)
-    nvic_set_priority(23u, 8u);
-    nvic_enable_irq(23u);
+    // NVIC: no STM32H5 cada linha EXTI tem a sua IRQ — EXTI5 = IRQ 16 (a IRQ 23 é a EXTI12).
+    // Ver docs/hw/stm32h562_ref.md.
+    nvic_set_priority(16u, 8u);
+    nvic_enable_irq(16u);
 }
 
 void flex_fuel_edge_isr() noexcept {
@@ -77,16 +76,15 @@ void flex_fuel_edge_isr() noexcept {
 
     // Clear EXTI5 pending
     constexpr uint32_t EXTI_BASE = 0x44022000UL;
-    STM32_REG32(EXTI_BASE + 0x088UL) = (1u << 5u);  // RPR1 (rising pending)
-    STM32_REG32(EXTI_BASE + 0x08CUL) = (1u << 5u);  // FPR1 (falling pending)
+    // EXTI_RPR1 = 0x00C, EXTI_FPR1 = 0x010 (escrever 1 limpa). Os offsets antigos (0x088/0x08C)
+    // eram registradores reservados: o pending nunca limpava e a ISR reentrava sem parar.
+    STM32_REG32(EXTI_BASE + 0x00CUL) = (1u << 5u);  // RPR1 (rising pending)
+    STM32_REG32(EXTI_BASE + 0x010UL) = (1u << 5u);  // FPR1 (falling pending)
 }
 
 uint8_t flex_fuel_ethanol_pct() noexcept {
     if (g_period_us == 0u) { return 0u; }
-    const uint32_t freq = 1000000u / g_period_us;
-    if (freq <= kFreqMin) { return 0u; }
-    if (freq >= kFreqMax) { return 100u; }
-    return static_cast<uint8_t>(((freq - kFreqMin) * 100u) / (kFreqMax - kFreqMin));
+    return flex_ethanol_pct_from_hz(1000000u / g_period_us);
 }
 
 int16_t flex_fuel_temp_x10() noexcept {
@@ -99,12 +97,13 @@ int16_t flex_fuel_temp_x10() noexcept {
 }
 
 bool flex_fuel_valid() noexcept {
-    return (millis() - g_last_edge_ms) < kTimeoutMs && g_period_us > 0u;
+    if ((millis() - g_last_edge_ms) >= kTimeoutMs || g_period_us == 0u) { return false; }
+    return flex_fuel_freq_plausible(1000000u / g_period_us);
 }
 
 }  // namespace ems::hal
 
-extern "C" void EXTI5_9_IRQHandler() noexcept {
+extern "C" void EXTI5_IRQHandler() noexcept {
     ems::hal::flex_fuel_edge_isr();
 }
 

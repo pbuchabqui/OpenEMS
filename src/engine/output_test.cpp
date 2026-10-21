@@ -56,6 +56,7 @@ namespace ems::engine {
 bool output_test_enter() noexcept
 {
     if (ems::drv::ckp_snapshot().rpm_x10 != 0u) { return false; }
+    ::etb_driver_shutdown();  // não herdar o último PWM do laço/autocal
     g_active = true;
     g_abort_reason = kOutputTestAbortNone;
     g_busy_until_ms = g_now_ms;

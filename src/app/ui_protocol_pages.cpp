@@ -1,9 +1,11 @@
+#include "hal/critical_section.h"
 #include "app/ui_protocol.h"
 #include "app/ui_protocol_internal.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 
 #include "app/can_stack.h"
 #include "app/can_rx_map.h"
@@ -16,6 +18,7 @@
 #include "engine/fuel_calc.h"
 #include "engine/torque_manager.h"
 #include "engine/map_estimator.h"
+#include "engine/misfire_detect.h"
 #include "app/status_bits.h"
 #include "engine/ign_calc.h"
 #include "engine/math_utils.h"
@@ -46,15 +49,11 @@ static_assert(kPage0MapWindowOff + 6u <= 512u, "MAP window outside page0");
 namespace ems::app::ui_detail {
 
 void enter_critical() noexcept {
-#if defined(__arm__) || defined(__thumb__)
-    asm volatile("cpsid i" ::: "memory");
-#endif
+    ems::hal::critical_enter();
 }
 
 void exit_critical() noexcept {
-#if defined(__arm__) || defined(__thumb__)
-    asm volatile("cpsie i" ::: "memory");
-#endif
+    ems::hal::critical_exit();
 }
 
 uint16_t page_size(uint8_t page) noexcept {
@@ -151,14 +150,14 @@ void update_realtime_page() noexcept {
     rt.map_bar_x100 = ems::engine::clamp_u8(s.map_bar_x1000 / 10u);
     rt.tps_pct = ems::engine::clamp_u8(s.etb_tps_pct_x10 / 10u);
 
-    rt.clt_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.clt_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
-    rt.iat_p40 = static_cast<int8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.iat_degc_x10) / 10) + 40, static_cast<int16_t>(-128), static_cast<int16_t>(127)));
+    rt.clt_p40 = static_cast<uint8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.clt_degc_x10) / 10) + 40, static_cast<int16_t>(0), static_cast<int16_t>(255)));
+    rt.iat_p40 = static_cast<uint8_t>(ems::engine::clamp_i16((static_cast<int32_t>(s.iat_degc_x10) / 10) + 40, static_cast<int16_t>(0), static_cast<int16_t>(255)));
 
     // WBO2 via CAN (lambda × 1000); ÷5 para caber em uint8_t até λ=1.275
     // (÷4 saturava em 1.020 — o default 1050 exibia 1.02 no dashboard)
     rt.o2_mv_d4 = ems::engine::clamp_u8(ems::app::can_stack_lambda_milli() / 5u);
     rt.pw1_ms_x10  = g_rt_pw_ms_x10;
-    rt.advance_p40 = static_cast<uint8_t>(static_cast<int16_t>(g_rt_advance_deg) + 40);
+    rt.advance_p40 = static_cast<uint8_t>(ems::engine::clamp_i16(static_cast<int32_t>(g_rt_advance_deg) + 40, static_cast<int16_t>(0), static_cast<int16_t>(255)));
     rt.ve          = g_page1_ve[0];
     rt.stft_p100   = g_rt_stft_p100;
     // VE interpolado vivo (get_ve no ponto rpm×map atual) — rt.ve só expõe VE[0][0].
@@ -174,7 +173,7 @@ void update_realtime_page() noexcept {
     if (c.phase_A) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_PHASE_A);
     }
-    if (s.fault_bits != 0u) {
+    if (s.fault_bits != 0u || s.vbatt_fault) {
         status = static_cast<uint16_t>(status | ems::app::STATUS_SENSOR_FAULT);
     }
     if (g_rt_sched_late_events != 0u) {
@@ -565,6 +564,31 @@ void sync_page_from_table(uint8_t page) noexcept {
     }
 }
 
+// Escalares aplicados direto de uma escrita de página (TunerStudio) ou carregados da flash não
+// têm outra validação: limita aos domínios físicos para que um valor ruim não vá a um motor
+// rodando. Idempotente. Devolve true se alterou algo (o buffer de UI precisa ser refeito).
+// Chamada ao fim de sync_table_from_page e no fim de nvm_boot_load_tables.
+bool sanitize_applied_calibration() noexcept {
+    namespace en = ems::engine;
+    bool changed = false;
+    auto cap = [&changed](auto& v, auto limit) {
+        if (v > static_cast<std::remove_reference_t<decltype(v)>>(limit)) {
+            v = static_cast<std::remove_reference_t<decltype(v)>>(limit);
+            changed = true;
+        }
+    };
+    cap(en::inj_duty_max_pct, 100u);                 // 0 = desligado
+    cap(en::etb_idle_max_opening_x10, 1000u);
+    if (en::etb_idle_min_opening_x10 > en::etb_idle_max_opening_x10) {
+        en::etb_idle_min_opening_x10 = en::etb_idle_max_opening_x10;
+        changed = true;
+    }
+    cap(en::decel_cut_ramp_ms, 5000u);
+    for (auto& d : en::dwell_ms_x10_table) { cap(d, 100u); }      // ≤ 10 ms
+    for (auto& f : en::dwell_rpm_factor_q8) { cap(f, 1024u); }    // ≤ 4,0×
+    return changed;
+}
+
 // Aplica o buffer da página aos globals do engine. Retorna false se a página
 // tiver validação própria e o conteúdo for rejeitado (buffer fica incoerente —
 // caller deve restaurar com sync_page_from_table()).
@@ -713,6 +737,7 @@ bool sync_table_from_page(uint8_t page) noexcept {
         // = subida (default).
         ems::engine::apply_page0_capture_polarity(g_page0, sizeof(g_page0));
         ems::engine::apply_page0_timing(g_page0, sizeof(g_page0), false);
+        ems::engine::misfire_rebuild_map();   // janela de potência segue o offset do gatilho
         ems::engine::driveability_apply_page0(g_page0, sizeof(g_page0));
         // DFCO ramp-in ms (259-260); blob antigo = 0 = off.
         if (sizeof(g_page0) > (ems::engine::kDecelCutRampMsPage0Off + 1u)) {
@@ -792,6 +817,9 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(load, g_page11_axes + kAxisBytes, kAxisBytes);
         return ems::engine::table_axes_set(rpm, load);
     }
+    if (sanitize_applied_calibration()) {
+        sync_page_from_table(page);   // o buffer de UI não pode ficar com o valor fora do limite
+    }
     return true;
 }
 
@@ -818,6 +846,11 @@ void clear_page_dirty(uint8_t page) noexcept {
 
 namespace {
 bool burn_one_page(uint8_t page) noexcept {
+    // O buffer de UI pode estar velho (VE com bake 'Y', autocal do ETB...): grava o estado vivo
+    // das tabelas, não uma cópia antiga. Páginas 0 e 0x0B já se ressincronizam abaixo.
+    if (page == 0x01u || page == 0x02u || (page >= 0x04u && page <= 0x09u)) {
+        sync_page_from_table(page);
+    }
     if (page == 0x00u) {
         // Serializa g_eng_cfg → g_page0[2-15] e guarda o slot NVM 0 completo.
         ems::engine::cfg::engine_config_serialize(g_page0, 16u);

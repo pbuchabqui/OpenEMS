@@ -27,13 +27,10 @@ struct LimpGatingInputs {
     bool     cranking;
     bool     full_sync;
     bool     half_sync;
-    bool     phase_valid;
-    bool     sequential;
     bool     etb_fault;
     uint8_t  inj_duty_pct;
     bool     inj_duty_cut;
     uint32_t now_ms;
-    bool     map_fault;
     bool     overtemp_crit;
     bool     diag_critical;
     bool     flood_clear;
@@ -46,7 +43,6 @@ struct LimpGatingInputs {
 struct LimpGatingResult {
     uint8_t  inj_inhibit_mask;
     uint8_t  ign_inhibit_mask;
-    bool     etb_allow;
     bool     allow_injection;
     bool     allow_ignition;
     bool     rev_limit_active;
@@ -64,15 +60,16 @@ extern uint16_t lambda_protect_min_load_bar_x100;
 
 LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept;
 
-void limp_gating_fatal() noexcept;
 void limp_gating_report_etb_problem() noexcept;
+// Libera o latch do problema de ETB (o limite de giro de falha de ETB). Se a causa persistir, o
+// próximo limp_gating_update / limp_gating_report_etb_problem o trava de novo.
+void limp_gating_clear_etb_problem() noexcept;
 // DFCO is decided later in the fuel path; still a single writer of the bit.
 void limp_gating_or_fuel_reason(uint16_t bit) noexcept;
 
 // Per-cut disable mask (RAM, lost on reset). Bit=1 → that cut is ignored.
 // Never covers rev-limit, flood, fatal, stall, watchdogs, or no-sync/phase.
 inline constexpr uint16_t kProtectDisOil      = 1u << 0;
-inline constexpr uint16_t kProtectDisMap      = 1u << 1;
 inline constexpr uint16_t kProtectDisRail     = 1u << 2;
 inline constexpr uint16_t kProtectDisOvertemp = 1u << 3;
 inline constexpr uint16_t kProtectDisDiag     = 1u << 4;
@@ -81,8 +78,15 @@ inline constexpr uint16_t kProtectDisEtbLimp  = 1u << 6;
 inline constexpr uint16_t kProtectDisLimpRpm  = 1u << 7;
 inline constexpr uint16_t kProtectDisBoost    = 1u << 8;
 inline constexpr uint16_t kProtectDisInjDuty  = 1u << 9;
-inline constexpr uint16_t kProtectDisSensorGroup = 0x00FFu;  // bits 0–7
-inline constexpr uint16_t kProtectDisWritable    = 0x03FFu;  // bits 0–9
+inline constexpr uint16_t kProtectDisSensorGroup = 0x00FDu;  // bits 0–7, sem o bit 1 (MAP, removido)
+inline constexpr uint16_t kProtectDisWritable    = 0x03FDu;  // bits 0–9, sem o bit 1 (MAP, removido)
 
 void limp_gating_set_protect_disable(uint16_t mask) noexcept;
+// true se o corte de limp a 3000 rpm está desligado pelo PROTECT (kProtectDisLimpRpm).
+bool limp_gating_limp_rpm_disabled() noexcept;
+
+#if defined(EMS_HOST_TEST)
+// Zera a memória dos cortes (histerese, latches, tempos) entre cenários de teste.
+void limp_gating_test_reset() noexcept;
+#endif
 }  // namespace ems::engine

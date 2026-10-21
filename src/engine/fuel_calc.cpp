@@ -414,8 +414,11 @@ int32_t calc_ae_pw_from_tpsdot(int16_t tpsdot_x10, int16_t clt_x10) noexcept {
         const uint16_t* const pw_table = de_table ? ae_de_pw_us : ae_pw_adder_us;
         const uint16_t base_pw_us =
             interp_u16_4pt_u16x(ae_tpsdot_axis_x10, pw_table, tpsdot_u16);
-        int32_t pulse =
-            (static_cast<int32_t>(base_pw_us) * static_cast<int32_t>(ae_clt_sens[b])) / 8;
+        // int64: base_pw (u16) × sens (u16) estoura int32 com uma calibração corrompida.
+        int64_t pulse64 =
+            (static_cast<int64_t>(base_pw_us) * static_cast<int64_t>(ae_clt_sens[b])) / 8;
+        if (pulse64 > 1000000) { pulse64 = 1000000; }
+        int32_t pulse = static_cast<int32_t>(pulse64);
         if (pulse > static_cast<int32_t>(ae_max_pw_us)) {
             pulse = static_cast<int32_t>(ae_max_pw_us);
         }
@@ -510,6 +513,12 @@ void fuel_decel_cut_notify_map(uint16_t map_bar_x100) noexcept {
     g_dfco_map_bar_x100 = map_bar_x100;
 }
 
+namespace { constexpr int16_t kDfcoCltExitHystX10 = 50; }   // 5,0 °C
+
+void fuel_decel_cut_notify_time(uint32_t now_ms) noexcept {
+    g_dfco_now_ms = now_ms;
+}
+
 void fuel_decel_cut_notify_gear(uint8_t gear, uint32_t now_ms) noexcept {
     g_dfco_now_ms = now_ms;
     if (!g_dfco_gear_seen) {
@@ -557,7 +566,11 @@ bool fuel_decel_cut_update(uint32_t rpm_x10,
             (g_dfco_map_bar_x100 >
              static_cast<uint16_t>(decel_cut_map_max_bar_x100 +
                                    kDfcoMapExitHystBarX100));
-        if (!throttle_closed || rpm_x10 < decel_cut_exit_rpm_x10 || map_exit) {
+        // Saída por motor frio com histerese de 5 °C: com o mesmo limiar da entrada, CLT oscilando na
+        // fronteira fazia o DFCO entrar e sair a cada passo e reiniciar a rampa de retorno.
+        const bool engine_cold_exit =
+            clt_x10 < static_cast<int16_t>(decel_cut_min_clt_x10 - kDfcoCltExitHystX10);
+        if (!throttle_closed || engine_cold_exit || rpm_x10 < decel_cut_exit_rpm_x10 || map_exit) {
             g_decel_cut = false;
             dfco_start_ramp_on_exit();
         }

@@ -77,6 +77,9 @@ void nvm_set_now_ms(uint32_t now_ms) noexcept;
 void nvm_request_adaptive_flush_now() noexcept;
 // true se LTFT/knock/add shadows têm alterações por gravar.
 bool nvm_adaptive_maps_dirty() noexcept;
+// true enquanto o flush do setor adaptativo está no meio (erase/program): terminar antes de
+// qualquer outro acesso de escrita à flash, mesmo que o motor tenha começado a girar.
+bool nvm_adaptive_flush_active() noexcept;
 // Intervalo mínimo entre flushes completos em run (ms).
 constexpr uint32_t kMinAdaptiveFlushIntervalMs = 60000u;
 

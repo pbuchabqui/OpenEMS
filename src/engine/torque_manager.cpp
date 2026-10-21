@@ -223,6 +223,7 @@ static uint16_t g_tc_ext_slip_x10  = 0u;     // external slip; 0 = none
 static uint8_t  g_tc_ext_slip_valid = 0u;
 static uint8_t  g_launch_active_latched = 0u;
 static uint16_t g_tc_reduction_latched = 0u;
+static uint32_t g_tc_slew_acc = 0u;   // resto fracionário do slew de redução do TC
 static int16_t  g_spark_retard_latched = 0;
 // Last CAN speeds seen by TC (0 if invalid/timeout)
 static uint16_t g_can_vehicle_kmh = 0u;
@@ -235,13 +236,16 @@ static uint16_t g_can_wheel_kmh   = 0u;
 static uint16_t pedal_map_lookup(uint16_t app_x10) noexcept {
     const uint8_t mode = static_cast<uint8_t>(etb_get_drive_mode());
     if (mode >= 4u) { return 0u; }
-    if (app_x10 >= 900u) { return etb_pedal_map[mode][9]; }
+    if (app_x10 >= 900u) { return etb_pedal_map[mode][9] > 1000u ? 1000u : etb_pedal_map[mode][9]; }
     const uint16_t idx  = app_x10 / 100u;           // 0..8
     const uint16_t frac = app_x10 - idx * 100u;     // 0..99
     const uint16_t lo   = etb_pedal_map[mode][idx];
     const uint16_t hi   = etb_pedal_map[mode][idx + 1u];
-    return static_cast<uint16_t>(
-        lo + (static_cast<uint32_t>(hi - lo) * frac) / 100u);
+    // Com sinal: um segmento decrescente (mapa editado fora de ordem) não pode dar a volta
+    // em uint32 e virar alvo aleatório. Saída presa a 0..1000 (100% de abertura).
+    const int32_t v = static_cast<int32_t>(lo) +
+        ((static_cast<int32_t>(hi) - static_cast<int32_t>(lo)) * static_cast<int32_t>(frac)) / 100;
+    return static_cast<uint16_t>(v < 0 ? 0 : (v > 1000 ? 1000 : v));
 }
 
 static bool launch_is_enabled() noexcept {
@@ -265,6 +269,7 @@ void torque_manager_reset() noexcept {
     g_idle_ac_load = false;
     g_launch_state     = LaunchState::Idle;
     g_tc_reduction_x10 = 0u;
+    g_tc_slew_acc = 0u;
     g_tc_prev_rpm_x10  = 0u;
     g_tc_ext_slip_x10  = 0u;
     g_tc_ext_slip_valid = 0u;
@@ -412,7 +417,13 @@ TorqueOutput torque_manager_update(
         const uint16_t l_etb = (launch_etb_pct_x10 > 1000u) ? 600u : launch_etb_pct_x10;
         const uint32_t hyst = (launch_rpm_hyst_x10 == 0u) ? 100u : launch_rpm_hyst_x10;
 
-        if (!en || (out.limp_reason & (TORQUE_LIMP_NO_CALIB | TORQUE_LIMP_REV_CUT)) != 0u) {
+        // Sem embreagem, o launch só vale parado: com a velocidade do veículo conhecida (CAN) e
+        // acima de 20 km/h ele não arma, senão capava a borboleta (60%) e cortava o giro em
+        // marcha normal. Sem sinal de velocidade mantém o comportamento "street-lite".
+        uint16_t launch_veh_kmh = 0u;
+        const bool launch_moving = vehicle_speed_kmh(launch_veh_kmh, ::millis()) && launch_veh_kmh > 20u;
+        if (!en || launch_moving ||
+            (out.limp_reason & (TORQUE_LIMP_NO_CALIB | TORQUE_LIMP_REV_CUT)) != 0u) {
             g_launch_state = LaunchState::Idle;
         } else {
             switch (g_launch_state) {
@@ -439,8 +450,10 @@ TorqueOutput torque_manager_update(
             if (target_x10 > l_etb) { target_x10 = l_etb; }
             // Over target RPM: progressive extra cut
             if (rpm > l_rpm + hyst) {
-                const uint32_t over = rpm - l_rpm;
-                // 500 rpm_x10 over → full cut of remaining
+                // Medido a partir do limiar (l_rpm + hyst): medido de l_rpm o corte já nascia
+                // em hyst/5000 = 20% de degrau na passagem do limiar.
+                const uint32_t over = rpm - (l_rpm + hyst);
+                // 5000 rpm_x10 (500 rpm) acima do limiar → corte total do restante
                 uint32_t cut = (over * 1000u) / 5000u;
                 if (cut > 1000u) { cut = 1000u; }
                 target_x10 = static_cast<uint16_t>(
@@ -541,8 +554,11 @@ TorqueOutput torque_manager_update(
 
         // Slew reduction toward desired (rate in %×10 per second)
         const uint16_t rate = (tc_reduction_rate_x10 == 0u) ? 500u : tc_reduction_rate_x10;
-        const uint32_t step = (static_cast<uint32_t>(rate) * dt) / 1000u;
-        const uint32_t step_i = (step < 1u) ? 1u : step;
+        // Acumula o resto fracionário: o piso de 1 por tick fixava a taxa mínima em 500 (50%/s)
+        // com dt=2 ms e ignorava qualquer tc_reduction_rate_x10 menor.
+        g_tc_slew_acc += static_cast<uint32_t>(rate) * dt;
+        const uint32_t step_i = g_tc_slew_acc / 1000u;
+        g_tc_slew_acc %= 1000u;
         if (desired > g_tc_reduction_x10) {
             const uint32_t next = static_cast<uint32_t>(g_tc_reduction_x10) + step_i;
             g_tc_reduction_x10 = static_cast<uint16_t>(

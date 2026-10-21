@@ -31,6 +31,22 @@ void usb_cdc_send_bytes(const uint8_t* data, uint16_t len) noexcept;
 // Espaço livre no ring de TX interno — usar para orçamentar envios e nunca
 // perder bytes silenciosamente (usb_cdc_send_bytes descarta o que não couber).
 uint16_t usb_cdc_tx_free() noexcept;
+bool usb_cdc_configured() noexcept;
+// Sem enumeração o orçamento é só o do UART e o caller não espelha no ring USB.
+// Enumerado: o menor dos dois, para um frame não partir. Teto 32 bytes por volta.
+struct UsbTxBudget {
+    uint16_t n;
+    bool mirror_usb;
+};
+inline UsbTxBudget usb_cdc_tx_budget(uint16_t uart_free, uint16_t usb_free,
+                                    bool configured) noexcept {
+    UsbTxBudget b{};
+    b.n = uart_free;
+    b.mirror_usb = configured;
+    if (configured && usb_free < b.n) { b.n = usb_free; }
+    if (b.n > 32u) { b.n = 32u; }
+    return b;
+}
 
 // Data reception
 bool usb_cdc_available() noexcept;

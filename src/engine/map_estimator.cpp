@@ -139,7 +139,9 @@ int16_t calculate_tpsdot() noexcept {
     // TPSdot em %/s × 10 = (delta_tps_x10 * 1000) / dt_ms
     const int32_t tpsdot_x10 = (delta_tps_x10 * 1000) / static_cast<int32_t>(dt_ms);
     
-    return clamp_i16(static_cast<int16_t>(tpsdot_x10), -1000, 1000);
+    // Clamp em int32 ANTES de estreitar: um degrau grande de TPS em dt curto passa de 32767 e o
+    // cast prévio para int16 dava a volta (tip-in lido como tip-out).
+    return clamp_i16(tpsdot_x10, -1000, 1000);
 }
 
 void update_tps_history(uint16_t tps_pct_x10, uint32_t time_ms) noexcept {

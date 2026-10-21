@@ -82,10 +82,27 @@ struct EtbControlState {
 };
 
 void            etb_control_reset() noexcept;
+/** true se a borboleta não seguiu o alvo (erro >= 20% com saída >= 90% por 1,5 s). */
+bool            etb_control_follow_fault() noexcept;
+void            etb_control_follow_fault_clear() noexcept;
+// Rearm: solta o PID e o limp de ETB, sem apagar o DTC. ClearDtc: 1,5 s a seguir
+// bem depois desse rearme. O segundo disparo não rearma até um ClearDtc ou reset.
+enum class EtbFollowAction : uint8_t { Hold = 0, Rearm, ClearDtc };
+EtbFollowAction etb_follow_recovery_tick(uint32_t now_ms, uint16_t rpm_x10,
+                                         uint16_t app_pct_x10,
+                                         uint16_t measured_pct_x10) noexcept;
 EtbControlState etb_control_update(uint16_t target_pct_x10,
                                    uint16_t measured_pct_x10,
                                    bool     enable_request,
                                    uint16_t period_ms) noexcept;
+/** Pedido de corte de borboleta: limitador de giro ativo ou corte de limp ativo.
+ *  `limp_rpm_cut_active` vem do corte de combustível (já com histerese), para a
+ *  borboleta e o combustível nunca discordarem. */
+bool            etb_rev_cut_request(bool rev_limit_active, bool limp_rpm_cut_active) noexcept;
+/** PID -> ponte H. Sem enable/active/init: shutdown (mola devolve a lâmina).
+ *  Senão PWM = saída*1023/1000 limitado a ±1023; driver recusou: shutdown. */
+void            etb_apply_output(bool enable_request, bool active, bool initialized,
+                                 int16_t output_pct_x10) noexcept;
 /** Integrador PID (pct×10) — host tests / diag. */
 int32_t         etb_control_get_integrator() noexcept;
 /** @deprecated use etb_control_get_integrator */

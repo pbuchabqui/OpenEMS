@@ -10,12 +10,6 @@ namespace ems::engine {
 /** TIM5 timer tick period in nanoseconds (62.5 MHz = 16 ns/tick) */
 inline constexpr uint32_t kTim5TickPeriodNs = 16u;
 
-/** Scheduler timer tick period in nanoseconds (10 MHz = 100 ns/tick) */
-inline constexpr uint32_t kSchedulerTickPeriodNs = 100u;
-
-/** Minimum scheduler advance warning in ticks (typically 5 µs @ 10 MHz = 50 ticks) */
-inline constexpr uint32_t kMinCompareLeadTicks = 50u;
-
 /** Maximum safe ignition timer delta for 16-bit mode */
 inline constexpr uint32_t kTimIgnMaxDelta16 = 0xFFFFu;
 

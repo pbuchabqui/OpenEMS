@@ -39,7 +39,6 @@ Hysteresis g_rev_hyst;
 Hysteresis g_boost_hyst;
 Hysteresis g_inj_duty_hyst;
 
-bool     g_fatal                 = false;
 bool     g_etb_problem           = false;
 uint32_t g_fault_rev_x10         = 0xFFFFFFFFu;
 bool     g_had_oil_after_start   = false;
@@ -51,7 +50,6 @@ uint32_t g_lambda_good_ms        = 0u;
 uint32_t g_oil_low_ms            = 0u;
 bool     g_oil_low_seen          = false;
 
-bool g_allow_etb      = true;
 bool g_allow_inj      = true;
 bool g_allow_ign      = true;
 bool g_fuel_protect   = false;
@@ -72,6 +70,33 @@ void commit_masks(uint8_t inj, uint8_t ign) noexcept {
 
 }  // namespace
 
+#if defined(EMS_HOST_TEST)
+void limp_gating_test_reset() noexcept {
+    g_rev_hyst = Hysteresis{};
+    g_boost_hyst = Hysteresis{};
+    g_inj_duty_hyst = Hysteresis{};
+    g_etb_problem = false;
+    g_fault_rev_x10 = 0xFFFFFFFFu;
+    g_had_oil_after_start = false;
+    g_seen_running = false;
+    g_run_start_ms = 0u;
+    g_lambda_cut = false;
+    g_lambda_seen = false;
+    g_lambda_good_ms = 0u;
+    g_oil_low_ms = 0u;
+    g_oil_low_seen = false;
+    g_allow_inj = true;
+    g_allow_ign = true;
+    g_fuel_protect = false;
+    g_half_lockout = false;
+    g_rev_active = false;
+    g_protect_disable = 0u;
+    g_rev_limit_active = false;
+    g_fuel_cut_reasons = 0u;
+    g_spark_cut_reasons = 0u;
+}
+#endif
+
 void limp_gating_set_protect_disable(uint16_t mask) noexcept {
     g_protect_disable = static_cast<uint16_t>(mask & kProtectDisWritable);
     if ((g_protect_disable & kProtectDisOil) != 0u) {
@@ -88,28 +113,23 @@ void limp_gating_or_fuel_reason(uint16_t bit) noexcept {
     g_fuel_cut_reasons = static_cast<uint16_t>(g_fuel_cut_reasons | bit);
 }
 
-void limp_gating_fatal() noexcept {
-    g_fatal = true;
-    g_allow_etb = false;
-    g_allow_inj = false;
-    g_allow_ign = false;
-    g_fuel_protect = true;
-    set_fault_rev_limit_x10(0u);
-    g_fuel_cut_reasons = kFuelCutFatal;
-    g_spark_cut_reasons = kSparkCutFatal;
-    commit_masks(0x0Fu, 0x0Fu);
+bool limp_gating_limp_rpm_disabled() noexcept {
+    return (g_protect_disable & kProtectDisLimpRpm) != 0u;
+}
+
+void limp_gating_clear_etb_problem() noexcept {
+    g_etb_problem = false;
+    g_fault_rev_x10 = 0xFFFFFFFFu;   // só o problema de ETB baixa este limite
 }
 
 void limp_gating_report_etb_problem() noexcept {
     g_etb_problem = true;
-    g_allow_etb = false;
     set_fault_rev_limit_x10(kEtbFaultRevLimitRpmX10);
 }
 
 LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     const uint16_t dis = g_protect_disable;
     const bool oil_off  = (dis & kProtectDisOil) != 0u;
-    const bool map_off  = (dis & kProtectDisMap) != 0u;
     const bool rail_off = (dis & kProtectDisRail) != 0u;
     const bool ot_off   = (dis & kProtectDisOvertemp) != 0u;
     const bool diag_off = (dis & kProtectDisDiag) != 0u;
@@ -201,7 +221,6 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     const bool inj_duty_hold = g_inj_duty_hyst.test(
         in.inj_duty_cut, in.inj_duty_pct < kInjDutyResumePct);
 
-    const bool engine_phase_cut = in.sequential && !in.phase_valid;
     const bool no_sync_running =
         !in.full_sync && !in.half_sync && !in.cranking && (in.rpm_x10 > 0u);
 
@@ -240,12 +259,9 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
 
     const bool etb_rev_cut =
         !etb_off && g_etb_problem && (in.rpm_x10 > g_fault_rev_x10);
-    const bool fatal_rev_cut = g_fatal && (in.rpm_x10 > g_fault_rev_x10);
 
     const bool fuel_protect =
-        g_fatal || fatal_rev_cut || engine_phase_cut ||
         (!limp_off && in.limp_rpm_cut) ||
-        (!map_off && in.map_fault) ||
         oil_range_cut || oil_after_start_cut || fuel_rail_cut || overtemp_cut ||
         (!diag_off && in.diag_critical);
     // Encoder (half_sync_allows_fuel): TIM2 360° — lock only on flood/protect
@@ -262,16 +278,13 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
         (!boost_off && boost_cut) ||
         (!lam_off && g_lambda_cut);
     const bool ign_cut =
-        g_fatal || engine_phase_cut ||
         (!limp_off && in.limp_rpm_cut) || oil_range_cut || overtemp_cut ||
         (!diag_off && in.diag_critical);
 
     uint16_t fr = 0u;
     uint16_t sr = 0u;
-    if (g_fatal)            { fr |= kFuelCutFatal;     sr |= kSparkCutFatal; }
     if (rev_cut)            { fr |= kFuelCutRevLimit; }
     if (!limp_off && in.limp_rpm_cut)  { fr |= kFuelCutLimpRpm;   sr |= kSparkCutLimpRpm; }
-    if (!map_off && in.map_fault)      { fr |= kFuelCutMapFault; }
     if (oil_range_cut || oil_after_start_cut) {
         fr |= kFuelCutOilPress;
         if (oil_range_cut) { sr |= kSparkCutOilPress; }
@@ -279,10 +292,7 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     if (fuel_rail_cut)      { fr |= kFuelCutFuelRail; }
     if (overtemp_cut)       { fr |= kFuelCutOvertemp;  sr |= kSparkCutOvertemp; }
     if (!diag_off && in.diag_critical) { fr |= kFuelCutDiagCrit;  sr |= kSparkCutDiagCrit; }
-    if (half_lockout || engine_phase_cut) {
-        fr |= kFuelCutNoSync;
-        if (engine_phase_cut) { sr |= kSparkCutNoSync; }
-    }
+    if (half_lockout) { fr |= kFuelCutNoSync; }
     if (in.flood_clear)     { fr |= kFuelCutFlood; }
     if (!duty_off && inj_duty_hold)    { fr |= kFuelCutInjDuty; }
     if (!boost_off && boost_cut)       { fr |= kFuelCutBoost; }
@@ -298,7 +308,6 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     const uint8_t ign_mask = static_cast<uint8_t>(
         (ign_cut ? 0x0Fu : 0u) | skip);
 
-    g_allow_etb = !g_fatal && (etb_off || !g_etb_problem);
     g_allow_inj = !inj_cut;
     g_allow_ign = !ign_cut;
     g_fuel_protect = fuel_protect;
@@ -311,7 +320,6 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     LimpGatingResult out{};
     out.inj_inhibit_mask  = inj_mask;
     out.ign_inhibit_mask  = ign_mask;
-    out.etb_allow         = g_allow_etb;
     out.allow_injection   = g_allow_inj;
     out.allow_ignition    = g_allow_ign;
     out.rev_limit_active  = rev_cut;

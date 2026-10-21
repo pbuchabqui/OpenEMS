@@ -19,11 +19,11 @@ namespace si = ems::engine::sched_internal;
 #include <stdint.h>
 
 #if defined(EMS_HOST_TEST)
-// Host: the single simulated TIM5 (hal/tim5_host.h). GPIO lives in hal/out_pins.
+// Host: the single simulated TIM5 (hal/host/tim5_host.h). GPIO lives in hal/out_pins.
 #define TIM_SR_CC3IF 0x8U
 #define TIM_DIER_CC3IE (1U << 3)
 
-#include "hal/tim5_host.h"
+#include "hal/host/tim5_host.h"
 #define TIM5_CCR3   ems_test_tim5_ccr3
 #define TIM5_SR     ems_test_tim5_sr
 #define TIM5_DIER   ems_test_tim5_dier
@@ -369,6 +369,52 @@ static void purge_events_for_cyl_mask(uint8_t mask, uint8_t is_ign)
     rearm_head();
 }
 
+// Inibição de ignição para as bobinas em `mask`: nenhum DWELL novo, mas a bobina que JÁ está
+// carregando termina o dwell e dispara no instante programado. Forçar LOW no meio do dwell
+// libera a energia na hora (faísca em ângulo arbitrário, possível pré-ignição/knock); aqui a
+// faísca "pulada" sai no ângulo certo e o corte vale a partir do próximo ciclo.
+// Bobina carregando (pino HIGH): NÃO é forçada a LOW. Mantém o 1º SPARK já na fila (fila
+// ordenada → o mais cedo) e descarta o resto do canal. O SPARK só entra na fila ~1 dente antes
+// de disparar (kArmLeadX10), então durante a maior parte do dwell ele ainda não existe: nesse
+// caso a bobina é mantida do mesmo jeito e o SPARK da tabela angular, que arm_channel NÃO
+// bloqueia pela máscara, o arma depois; o watchdog de dwell (1,4×) é a retaguarda se ele nunca
+// vier. Bobina em LOW: descarta tudo e força LOW como antes. Devolve as bobinas mantidas.
+static uint8_t purge_ign_keep_active_spark(uint8_t mask)
+{
+    if (mask == 0U) { return 0U; }
+    uint8_t keep_cyl = 0U;   // bobinas carregando
+    for (uint8_t cyl = 0U; cyl < 4U; ++cyl) {
+        if ((mask & (1U << cyl)) != 0U && g_dwell_arm_tick[cyl] != 0U) {
+            keep_cyl = static_cast<uint8_t>(keep_cyl | (1U << cyl));
+        }
+    }
+    uint8_t kept = 0U;
+    uint8_t w = 0U;
+    for (uint8_t r = 0U; r < g_evt_count; ++r) {
+        const uint8_t ch = g_evt_queue[r].channel;
+        const uint8_t bit = (ch < 8U) ? k_ign_ch_to_bit[ch] : 0U;
+        if (bit != 0U && (mask & bit) != 0U) {
+            const bool keep_this = ((keep_cyl & bit) != 0U) && ((kept & bit) == 0U) &&
+                                   (g_evt_queue[r].high == 0U);
+            if (keep_this) {
+                kept = static_cast<uint8_t>(kept | bit);
+            } else {
+                continue;  // drop
+            }
+        }
+        if (w != r) { g_evt_queue[w] = g_evt_queue[r]; }
+        ++w;
+    }
+    g_evt_count = w;
+    for (uint8_t cyl = 0U; cyl < 4U; ++cyl) {
+        if ((mask & (1U << cyl)) == 0U || (keep_cyl & (1U << cyl)) != 0U) { continue; }
+        force_output(si::kIgnCh[cyl], ECU_ACT_SPARK, 1U);
+        g_dwell_arm_tick[cyl] = 0U;
+    }
+    rearm_head();
+    return keep_cyl;
+}
+
 static inline uint32_t scheduler_counter(void)
 {
     return TIM5_CNT;  // 32-bit, 62.5 MHz — sem wrap de 16-bit
@@ -587,12 +633,16 @@ void ecu_sched_set_presync_ign_mode(uint8_t mode) { ems::hal::CriticalSectionGua
 void ecu_sched_dwell_watchdog(void)
 {
     if (g_inj_pw_override != 0U) { return; }  // test mode — disable watchdog
-    const uint32_t now = TIM5_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
         ems::hal::CriticalSectionGuard guard;
+        // `now` dentro da guarda: lido antes, a ISR podia armar depois (arm > now) e a
+        // subtração sem sinal virava ~2^32, disparando o watchdog à toa. Signed: arm no
+        // futuro dá negativo (não expira).
+        const uint32_t now  = TIM5_CNT;
         const uint32_t arm  = g_dwell_arm_tick[i];  // TIM5_CNT at pin HIGH
         const uint32_t tout = g_dwell_wdog_ticks[i];
-        if (arm != 0U && tout != 0U && (now - arm) >= tout) {  // 32-bit wrap-safe
+        if (arm != 0U && tout != 0U &&
+            static_cast<int32_t>(now - arm) >= static_cast<int32_t>(tout)) {  // 32-bit wrap-safe
             // Force LOW *and* purge queued re-assert (DWELL still in queue after
             // a premature trip would re-charge the coil with no arm).
             purge_events_for_cyl_mask(static_cast<uint8_t>(1U << i), 1U);
@@ -608,12 +658,13 @@ uint32_t ecu_sched_dwell_watchdog_count(void) { return g_dwell_watchdog_count; }
 void ecu_sched_inj_watchdog(void)
 {
     if (g_inj_pw_override != 0U) { return; }  // test/bench PW lock — disable
-    const uint32_t now = TIM5_CNT;
     for (uint8_t i = 0U; i < 4U; ++i) {
         ems::hal::CriticalSectionGuard guard;
+        const uint32_t now  = TIM5_CNT;  // dentro da guarda: ver ecu_sched_dwell_watchdog
         const uint32_t open = g_inj_open_tick[i];
         const uint32_t tout = g_inj_wdog_ticks[i];
-        if (open != 0U && tout != 0U && (now - open) >= tout) {
+        if (open != 0U && tout != 0U &&
+            static_cast<int32_t>(now - open) >= static_cast<int32_t>(tout)) {
             // Force OFF + purge any pending re-assert for this cylinder.
             purge_events_for_cyl_mask(static_cast<uint8_t>(1U << i), 0U);
             g_inj_open_tick[i] = 0U;
@@ -712,12 +763,14 @@ void ecu_sched_set_ign_inhibit_mask(uint8_t mask)
     const uint8_t new_mask = mask & 0x0FU;
     const uint8_t newly = static_cast<uint8_t>(new_mask & ~g_ign_inhibit_mask);
     g_ign_inhibit_mask = new_mask;
-    // Spark-cut (limp rev_cut): drop any pending dwell/spark for inhibited
-    // coils and force the pin LOW immediately so a mid-dwell cut cannot leave
-    // the coil charged. Rev-limit production is fuel-only and leaves mask=0.
+    // Spark-cut (limp rev_cut / spark-skip): no pending dwell survives for inhibited coils, but a
+    // coil already charging finishes its dwell and fires on time (see purge_ign_keep_active_spark).
+    // Rev-limit production is fuel-only and leaves mask=0.
     if (newly != 0U) {
-        purge_events_for_cyl_mask(newly, 1U);
-        ems::engine::knock_window_cycle_end_if_cyl_mask(newly);
+        const uint8_t charging = purge_ign_keep_active_spark(newly);
+        // A bobina que ainda vai disparar é uma combustão válida: mantém a janela de knock dela.
+        ems::engine::knock_window_cycle_end_if_cyl_mask(
+            static_cast<uint8_t>(newly & ~charging));
     }
 }
 uint8_t ecu_sched_get_ign_inhibit_mask(void) { return g_ign_inhibit_mask; }
@@ -869,6 +922,20 @@ static void arm_angle_event(uint8_t ch, uint8_t action, uint32_t t, uint32_t too
     }
 }
 
+void ecu_sched_on_stall(void)
+{
+    // ckp_stall_poll() põe o decoder em LOSS_OF_SYNC mas, sem dentes, o hook por dente nunca
+    // roda: fila de eventos, dwell pendente e janela de knock ficariam abertos até o watchdog.
+    ems::hal::CriticalSectionGuard guard;
+    // Só limpa tudo: end_active_outputs_on_time() enfileira os SPARK/INJ_OFF "no tempo" e a
+    // limpeza logo depois os descartava (a 1ª chamada não tinha efeito). Motor parado, forçar
+    // LOW imediato é o certo.
+    clear_all_events_and_drive_safe_outputs();
+    g_hook_prev_valid = 0U; g_hook_prev_tooth = 0U; g_cmp_phase_seen = 0U;
+    ++g_dbg_clear_all_count;
+    ++g_diag_clear_all_count;
+}
+
 namespace ems::engine {
 void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
 {
@@ -886,6 +953,13 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         return;
     }
     s_unsync_teeth = 0U;
+
+    // Com o motor sincronizado e girando o travamento de PW de bancada acaba: deixado ligado,
+    // ele desligava os watchdogs de dwell/injetor e congelava avanço e dwell no último commit.
+    if (g_inj_pw_override != 0U) {
+        ems::hal::CriticalSectionGuard guard;
+        g_inj_pw_override = 0U;
+    }
 
     // Cam-present gate: decoupled from phase_A (which now toggles at every gap).
     // Requires 2 validated CMP edges since last sync loss.
@@ -1005,6 +1079,7 @@ void ecu_sched_test_reset_ccr(void) noexcept {
 }
 // TIM5 event-queue accessors for tests
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept { return g_evt_count; }
+void     ecu_sched_test_drop_queued_events(void) noexcept { ems::hal::CriticalSectionGuard g; g_evt_count = 0U; rearm_head(); }
 uint32_t ecu_sched_test_get_tim5_ccr3(void)  noexcept { return ems_test_tim5_ccr3; }
 void     ecu_sched_test_set_tim5_cnt(uint32_t v) noexcept { ems_test_tim5_cnt = v; }
 uint8_t  ecu_sched_test_get_evt(uint8_t index,
@@ -1020,4 +1095,20 @@ uint8_t  ecu_sched_test_get_evt(uint8_t index,
 }
 uint32_t ecu_sched_test_get_presync_revs(void) { return g_diag_presync_revs; }
 uint32_t ecu_sched_test_get_seq_revs(void) { return g_diag_seq_revs; }
+
+uint8_t ecu_sched_test_ign_pin_level(uint8_t cyl) noexcept
+{
+    if (cyl > 3U) { return 0xFFu; }
+    const uint8_t idx = channel_pin_idx(si::kIgnCh[cyl]);
+    if (idx >= 8U) { return 0xFFu; }
+    return g_pin_last_state[idx];
+}
+
+bool ecu_sched_test_queue_dwell(uint8_t cyl, uint32_t delay_us) noexcept
+{
+    if (cyl > 3U) { return false; }
+    if (delay_us == 0U) { delay_us = 3000U; }
+    const uint32_t t = scheduler_counter() + ECU_SCHED_US_TO_TICKS(delay_us);
+    return arm_channel(si::kIgnCh[cyl], t, ECU_ACT_DWELL_START);
+}
 #endif

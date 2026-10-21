@@ -23,6 +23,9 @@
 #include "engine/knock.h"
 #include "engine/table3d.h"
 #include "engine/ecu_sched.h"
+#include "engine/limp_gating.h"
+#include "engine/cut_reason.h"
+#include "engine/spark_skip.h"
 #include "engine/quick_crank.h"
 #include "engine/transient_fuel.h"
 #include "engine/map_estimator.h"
@@ -308,6 +311,272 @@ void test_ecu_sched_recovers_after_fallback(void) {
     CHECK_EQ(ecu_sched_is_sequential(), 1u, "recuperou: voltou a sequencial");
 }
 
+void test_ecu_sched_inhibit_midcharge(void) {
+    section("ecu_sched: inibir uma bobina já carregando deixa o dwell terminar (sem faísca antecipada)");
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(1000000u);
+    ecu_sched_test_pulse_ign(0u, 3000u);     // bobina 0 vai a HIGH agora; SPARK em +3 ms
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 1u, "SPARK agendado");
+
+    auto lows = [] {
+        uint32_t v[24] = {};
+        ecu_sched_get_pin_counts_u32x24(v);
+        uint32_t n = 0u;
+        for (uint8_t i = 0u; i < 8u; ++i) { n += v[i * 3u + 1u]; }
+        return n;
+    };
+    const uint32_t lows_before = lows();
+    ecu_sched_set_ign_inhibit_mask(0x01u);   // inibe a bobina que está carregando
+    CHECK_EQ(lows(), lows_before, "pino NÃO foi forçado a LOW (sem faísca fora de hora)");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 1u, "SPARK pendente preservado");
+
+    ecu_sched_test_set_tim5_cnt(1000000u + 200000u);   // além de +3 ms (187500 ticks)
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(lows(), lows_before + 1u, "dwell termina no SPARK programado (LOW 1x)");
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "fila vazia depois do SPARK");
+
+    // Caso comum: o SPARK só é armado ~1 dente antes de disparar, então durante quase todo o
+    // dwell ele AINDA NÃO está na fila. A bobina carregando também não pode ser forçada a LOW.
+    ecu_sched_set_ign_inhibit_mask(0u);
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(2000000u);
+    ecu_sched_test_pulse_ign(1u, 3000u);
+    uint32_t ts = 0u;
+    uint8_t ch = 0xFFu;
+    uint8_t high = 1u;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u, "pré: SPARK está na fila");
+    CHECK_EQ(high, 0u, "pré: o evento é a borda de faísca");
+    ecu_sched_test_drop_queued_events();
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 0u, "SPARK saiu da fila");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(1u), 1u, "bobina 1 continua HIGH");
+    ecu_sched_set_ign_inhibit_mask(0x02u);
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "sem SPARK na fila: inibir não cria evento");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(1u), 1u, "sem SPARK na fila: bobina carregando continua HIGH");
+
+    // Bobina em LOW com DWELL pendente: o evento é descartado e o pino fica LOW.
+    ecu_sched_set_ign_inhibit_mask(0u);
+    ecu_sched_test_reset();
+    ecu_sched_test_all_outputs_safe();
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "pré: bobina 0 em LOW");
+    CHECK_TRUE(ecu_sched_test_queue_dwell(0u, 4000u), "DWELL futuro enfileirado");
+    high = 0u;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 1u, "fila tem o DWELL");
+    CHECK_EQ(high, 1u, "evento pendente é a subida do dwell");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "enfileirar não tira a bobina de LOW");
+    ecu_sched_set_ign_inhibit_mask(0x01u);
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "bobina em LOW: DWELL pendente é descartado");
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts, &ch, &high), 0u, "fila vazia, não só a contagem");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "bobina continua em LOW");
+    ecu_sched_set_ign_inhibit_mask(0u);
+}
+
+void test_ecu_sched_on_stall(void) {
+    section("ecu_sched: stall esvazia a fila e não agenda o fim no tempo");
+    ecu_sched_test_reset();
+    ecu_sched_test_all_outputs_safe();
+    ecu_sched_test_set_tim5_cnt(1000000u);
+    ecu_sched_test_pulse_ign(0u, 3000u);
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 1u, "evento armado antes do stall");
+    EcuSchedDiagSnapshot before{};
+    ecu_sched_get_diag_snapshot(&before);
+    ecu_sched_on_stall();
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "stall esvazia a fila");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "stall põe a bobina em safe");
+    EcuSchedDiagSnapshot after{};
+    ecu_sched_get_diag_snapshot(&after);
+    CHECK_EQ(after.clear_all_count, before.clear_all_count + 1u, "contador de clear sobe");
+    CHECK_EQ(after.evt_inserted, before.evt_inserted, "stall com SPARK na fila não enfileira outro");
+
+    // Bobina HIGH e SPARK fora da fila: end_active_outputs_on_time() armaria um SPARK.
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(2000000u);
+    ecu_sched_test_pulse_ign(0u, 3000u);
+    ecu_sched_test_drop_queued_events();
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "SPARK removido, dwell ainda armado");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 1u, "bobina continua HIGH");
+    ecu_sched_get_diag_snapshot(&before);
+    ecu_sched_on_stall();
+    ecu_sched_get_diag_snapshot(&after);
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "fila continua vazia");
+    CHECK_EQ(after.evt_inserted, before.evt_inserted,
+             "stall não chama end_active_outputs_on_time");
+    CHECK_EQ(after.clear_all_count, before.clear_all_count + 1u, "clear também sem SPARK na fila");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "saída forçada a safe");
+}
+
+void test_limp_gating_cut_families(void) {
+    section("limp_gating: uma família de corte por vez, máscara incluída");
+    using namespace ems::engine;
+    const uint16_t prev_boost = boost_cut_map_bar_x100;
+    const uint16_t prev_lam_to = lambda_protect_timeout_ms;
+    lambda_protect_timeout_ms = 2000u;
+    boost_cut_map_bar_x100 = 0u;
+
+    auto healthy = []() {
+        LimpGatingInputs in{};
+        in.rpm_x10 = 8000u;
+        in.map_bar_x100 = 40u;
+        in.clt_degc_x10 = 900;
+        in.oil_press_bar_x1000 = 4000u;
+        in.lambda_x1000 = 1000u;
+        in.lambda_valid = true;
+        in.lambda_target_x1000 = 1000u;
+        in.tps_pct_x10 = 100u;
+        in.full_sync = true;
+        in.now_ms = 5000u;
+        in.inj_duty_pct = 10u;
+        return in;
+    };
+    auto begin = []() {
+        limp_gating_test_reset();
+        spark_skip_reset();
+        ecu_sched_test_reset();
+    };
+
+    begin();
+    {
+        const auto r = limp_gating_update(healthy());
+        CHECK_EQ(r.inj_inhibit_mask, 0u, "base: injeção livre");
+        CHECK_EQ(r.ign_inhibit_mask, 0u, "base: ignição livre");
+        CHECK_EQ(g_fuel_cut_reasons, 0u, "base: sem razão de corte");
+    }
+
+    begin();
+    {
+        auto in = healthy();
+        in.rpm_x10 = rev_limit_rpm_x10;
+        const auto r = limp_gating_update(in);
+        CHECK_TRUE(r.rev_limit_active, "rev limit arma no hard");
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "rev limit corta os injetores");
+        CHECK_EQ(r.ign_inhibit_mask, 0u, "rev limit de produção não corta faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutRevLimit) != 0u, "razão rev limit");
+        CHECK_TRUE(r.allow_ignition, "faísca continua no rev limit");
+    }
+
+    begin();
+    {
+        auto in = healthy();
+        in.flood_clear = true;
+        const auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "flood corta injeção");
+        CHECK_EQ(r.ign_inhibit_mask, 0u, "flood não corta faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutFlood) != 0u, "razão flood");
+    }
+
+    begin();
+    {
+        auto in = healthy();
+        in.oil_fault = true;
+        const auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "óleo em falha corta injeção");
+        CHECK_EQ(r.ign_inhibit_mask, 0x0Fu, "óleo em falha corta faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutOilPress) != 0u, "razão óleo");
+        CHECK_TRUE((g_spark_cut_reasons & kSparkCutOilPress) != 0u, "faísca pelo óleo");
+    }
+
+    begin();
+    {
+        auto in = healthy();
+        in.fuel_press_fault = true;
+        const auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "rail corta injeção acima de 500 rpm");
+        CHECK_EQ(r.ign_inhibit_mask, 0u, "rail não corta faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutFuelRail) != 0u, "razão rail");
+    }
+
+    begin();
+    {
+        auto in = healthy();
+        in.rpm_x10 = 25000u;
+        in.map_bar_x100 = 80u;
+        in.lambda_x1000 = 1300u;
+        in.now_ms = 10000u;
+        auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0u, "lambda: o primeiro tick só arma o timer");
+        in.now_ms = 12000u;
+        r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "lambda lean no tempo corta injeção");
+        CHECK_EQ(r.ign_inhibit_mask, 0u, "lambda não corta faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutLambda) != 0u, "razão lambda");
+        CHECK_TRUE(r.allow_ignition, "faísca continua no corte de lambda");
+    }
+
+    begin();
+    {
+        auto in = healthy();
+        in.rpm_x10 = 20000u;
+        limp_gating_report_etb_problem();
+        auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "ETB acima do limite de falha corta injeção");
+        CHECK_EQ(r.ign_inhibit_mask, 0u, "ETB não corta faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutEtbFault) != 0u, "razão ETB");
+        limp_gating_clear_etb_problem();
+        r = limp_gating_update(in);
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutEtbFault) == 0u, "clear solta o corte de ETB");
+        CHECK_EQ(r.inj_inhibit_mask, 0u, "clear tira a máscara");
+        limp_gating_report_etb_problem();
+        r = limp_gating_update(in);
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutEtbFault) != 0u,
+                   "clear não segura se report vier em seguida");
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "novo report volta a cortar");
+    }
+
+    begin();
+    {
+        boost_cut_map_bar_x100 = 150u;
+        auto in = healthy();
+        in.map_bar_x100 = 160u;
+        const auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "boost corta injeção");
+        CHECK_EQ(r.ign_inhibit_mask, 0u, "boost não corta faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutBoost) != 0u, "razão boost");
+        boost_cut_map_bar_x100 = 0u;
+    }
+
+    begin();
+    {
+        auto in = healthy();
+        in.inj_duty_cut = true;
+        in.inj_duty_pct = 90u;
+        const auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "duty corta injeção");
+        CHECK_EQ(r.ign_inhibit_mask, 0u, "duty não corta faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutInjDuty) != 0u, "razão duty");
+    }
+
+    begin();
+    {
+        auto in = healthy();
+        in.full_sync = false;
+        in.half_sync = false;
+        in.half_sync_allows_fuel = false;
+        auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "Hall sem sync corta injeção");
+        CHECK_EQ(r.ign_inhibit_mask, 0u, "sem sync não corta faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutNoSync) != 0u, "razão sem sync");
+
+        begin();
+        in = healthy();
+        in.full_sync = false;
+        in.half_sync = true;
+        in.half_sync_allows_fuel = false;
+        r = limp_gating_update(in);
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutNoSync) != 0u,
+                   "Hall em HALF_SYNC não libera combustível");
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "Hall HALF_SYNC corta injeção");
+
+        begin();
+        in.half_sync_allows_fuel = true;
+        r = limp_gating_update(in);
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutNoSync) == 0u,
+                   "encoder em HALF_SYNC com a flag pode injetar");
+        CHECK_EQ(r.inj_inhibit_mask, 0u, "encoder HALF_SYNC sem outro corte");
+    }
+
+    boost_cut_map_bar_x100 = prev_boost;
+    lambda_protect_timeout_ms = prev_lam_to;
+    begin();
+}
 void test_ecu_sched_inhibit_masks(void) {
     section("ecu_sched: injection / ignition inhibit masks");
     ecu_sched_test_reset();

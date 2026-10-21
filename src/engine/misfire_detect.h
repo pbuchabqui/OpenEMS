@@ -11,6 +11,8 @@ constexpr uint8_t  kMisfireDebounceCycles = 3u;    // ciclos consecutivos para c
 constexpr uint8_t  kMisfireFaultThreshold = 5u;    // eventos em período de 100ms → DTC
 
 void misfire_init() noexcept;
+// Refaz só o mapa dente→cilindro (após mudar trigger_tooth0_engine_deg); preserva contadores.
+void misfire_rebuild_map() noexcept;
 void misfire_reset() noexcept;
 
 // Inibe toda a detecção (ex.: decel cut, arranque) — sem combustão é esperado.

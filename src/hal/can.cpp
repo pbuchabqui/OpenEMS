@@ -55,26 +55,6 @@ namespace ems::hal {
 
 // ── RX FIFO circular (software) ──────────────────────────────────────────────
 // Poll-based: can0_rx_pop() é chamado do loop principal (não IRQ-driven)
-static CanFrame g_rx_fifo[4] = {};
-static volatile uint8_t g_rx_head = 0u;
-static volatile uint8_t g_rx_tail = 0u;
-static constexpr uint8_t kRxFifoSize = 4u;
-
-static inline bool rx_fifo_push(const CanFrame& f) noexcept {
-    const uint8_t next = static_cast<uint8_t>((g_rx_tail + 1u) % kRxFifoSize);
-    if (next == g_rx_head) { return false; }  // full
-    g_rx_fifo[g_rx_tail] = f;
-    g_rx_tail = next;
-    return true;
-}
-
-static inline bool rx_fifo_pop(CanFrame& out) noexcept {
-    if (g_rx_head == g_rx_tail) { return false; }  // empty
-    out = g_rx_fifo[g_rx_head];
-    g_rx_head = static_cast<uint8_t>((g_rx_head + 1u) % kRxFifoSize);
-    return true;
-}
-
 static uint32_t g_can_init_faults = 0u;
 
 // ── Inicialização ─────────────────────────────────────────────────────────────
@@ -196,8 +176,7 @@ bool can0_rx_pop(CanFrame& out) noexcept {
     // 1. Verificar se há mensagem no RX FIFO0
     const uint32_t fqs = FDCAN1_RXF0S;
     if ((fqs & 0x7Fu) == 0u) {
-        // Nenhum elemento disponível; drena o FIFO de software se houver
-        return rx_fifo_pop(out);
+        return false;  // nenhum elemento disponível
     }
 
     // 2. Índice do próximo elemento a ler (hardware garante 0-2, mas valida defensivamente)
@@ -212,10 +191,17 @@ bool can0_rx_pop(CanFrame& out) noexcept {
     const uint32_t d1 = sram_word(elem_addr + 12u);
 
     // 4. Decodificar
-    out.id = (w0 >> 18) & 0x7FFu;  // ID 11-bit
-    out.extended = false;
-    out.dlc = static_cast<uint8_t>((w1 >> 16) & 0xFu);
-    const uint8_t dlc = (out.dlc > 8u) ? 8u : out.dlc;
+    // w0: bit 30 = XTD (ID de 29 bits), bit 29 = RTR (frame remoto, sem dados). Antes os dois
+    // eram ignorados: um frame estendido cujos bits [28:18] valiam 0x180 passava pelo ID do
+    // WBO2, e um frame remoto era aceito com dados indefinidos. Frames remotos saem marcados
+    // como `extended` para serem descartados pelos consumidores (que só tratam 11 bits).
+    const bool xtd = ((w0 >> 30) & 1u) != 0u;
+    const bool rtr = ((w0 >> 29) & 1u) != 0u;
+    out.extended = xtd || rtr;
+    out.id = xtd ? (w0 & 0x1FFFFFFFu) : ((w0 >> 18) & 0x7FFu);
+    const uint8_t dlc_raw = static_cast<uint8_t>((w1 >> 16) & 0xFu);
+    out.dlc = (dlc_raw > 8u) ? 8u : dlc_raw;
+    const uint8_t dlc = out.dlc;
 
     out.data[0] = static_cast<uint8_t>(d0 >> 0);
     out.data[1] = static_cast<uint8_t>(d0 >> 8);
@@ -239,11 +225,42 @@ bool can0_rx_pop(CanFrame& out) noexcept {
 
 #include "hal/can.h"
 namespace ems::hal {
-// Host stub: no bus. TX accepted and dropped, RX always empty.
+// Host stub: sem barramento. Modela o único buffer de TX do hardware (can0_tx recusa enquanto o
+// anterior não "completou": can0_test_tx_complete()) e uma fila de RX injetável pelos testes.
+namespace {
+constexpr uint16_t kTxLogMax = 512u;
+CanFrame g_tx_log[kTxLogMax];
+uint16_t g_tx_log_n = 0u;
+bool     g_tx_busy = false;
+bool     g_tx_model_busy = false;     // false: aceita sempre (comportamento antigo dos testes)
+CanFrame g_rx_q[16];
+uint8_t  g_rx_head = 0u, g_rx_n = 0u;
+}  // namespace
 void can0_init() noexcept {}
 uint32_t can0_get_init_faults() noexcept { return 0u; }
-bool can0_tx(const CanFrame&) noexcept { return true; }
-bool can0_rx_pop(CanFrame&) noexcept { return false; }
+bool can0_tx(const CanFrame& f) noexcept {
+    if (g_tx_model_busy && g_tx_busy) { return false; }
+    g_tx_busy = true;
+    if (g_tx_log_n < kTxLogMax) { g_tx_log[g_tx_log_n++] = f; }
+    return true;
+}
+bool can0_rx_pop(CanFrame& out) noexcept {
+    if (g_rx_n == 0u) { return false; }
+    out = g_rx_q[g_rx_head];
+    g_rx_head = static_cast<uint8_t>((g_rx_head + 1u) & 15u);
+    --g_rx_n;
+    return true;
+}
+void can0_test_reset() noexcept { g_tx_log_n = 0u; g_tx_busy = false; g_tx_model_busy = false; g_rx_head = g_rx_n = 0u; }
+void can0_test_model_single_tx_buffer(bool on) noexcept { g_tx_model_busy = on; }
+void can0_test_tx_complete() noexcept { g_tx_busy = false; }
+uint16_t can0_test_tx_count() noexcept { return g_tx_log_n; }
+const CanFrame& can0_test_tx_at(uint16_t i) noexcept { return g_tx_log[i]; }
+void can0_test_push_rx(const CanFrame& f) noexcept {
+    if (g_rx_n >= 16u) { return; }
+    g_rx_q[(g_rx_head + g_rx_n) & 15u] = f;
+    ++g_rx_n;
+}
 } // namespace ems::hal
 
 #endif  // EMS_HOST_TEST

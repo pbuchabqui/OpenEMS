@@ -14,6 +14,8 @@
 #include "engine/calibration.h"
 #include "app/can_rx_map.h"
 #include "hal/adc.h"
+#include "hal/flex_fuel.h"
+#include "hal/stm32h562/usb_cdc.h"
 #include "hal/system.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
@@ -34,6 +36,8 @@
 #include "hal/timer.h"
 #include "hal/flash.h"
 #include "app/nvm_boot.h"
+#include "app/ui_protocol_internal.h"
+#include "hal/cal_trailer.h"
 #include "app/ui_protocol.h"
 #include "app/status_bits.h"
 #include "hal/crc32.h"
@@ -471,6 +475,63 @@ void test_misfire_all(void) {
 // DIAGNOSTIC MANAGER
 // ============================================================================
 
+void test_usb_tx_budget_without_config(void) {
+    section("usb: sem enumeração o orçamento é só o UART");
+    using ems::hal::usb_cdc_tx_budget;
+    const auto down = usb_cdc_tx_budget(100u, 0u, false);
+    CHECK_EQ(down.n, 32u, "UART com folga, USB vazio: teto 32 e não espelha");
+    CHECK_FALSE(down.mirror_usb, "sem configuração não entra byte no ring USB");
+    const auto short_uart = usb_cdc_tx_budget(10u, 0u, false);
+    CHECK_EQ(short_uart.n, 10u, "sem USB o limite é o espaço do UART");
+    const auto up = usb_cdc_tx_budget(100u, 4u, true);
+    CHECK_EQ(up.n, 4u, "enumerado: o menor dos dois rings");
+    CHECK_TRUE(up.mirror_usb, "enumerado espelha no USB");
+    const auto uart_tighter = usb_cdc_tx_budget(3u, 20u, true);
+    CHECK_EQ(uart_tighter.n, 3u, "enumerado com UART mais cheio: vale o UART");
+}
+
+void test_flex_freq_window(void) {
+    section("flex: válido 45–155 Hz; 50–150 continua linear");
+    using ems::hal::flex_ethanol_pct_from_hz;
+    using ems::hal::flex_fuel_freq_plausible;
+    CHECK_FALSE(flex_fuel_freq_plausible(44u), "44 Hz inválido");
+    CHECK_TRUE(flex_fuel_freq_plausible(45u), "45 Hz válido");
+    CHECK_TRUE(flex_fuel_freq_plausible(155u), "155 Hz válido");
+    CHECK_FALSE(flex_fuel_freq_plausible(156u), "156 Hz inválido");
+    CHECK_EQ(flex_ethanol_pct_from_hz(45u), 0u, "45–50 Hz → 0 %");
+    CHECK_EQ(flex_ethanol_pct_from_hz(50u), 0u, "50 Hz → 0 %");
+    CHECK_EQ(flex_ethanol_pct_from_hz(100u), 50u, "100 Hz → 50 %");
+    CHECK_EQ(flex_ethanol_pct_from_hz(150u), 100u, "150 Hz → 100 %");
+    CHECK_EQ(flex_ethanol_pct_from_hz(155u), 100u, "150–155 Hz → 100 %");
+}
+
+void test_adc_init_skips_when_ok(void) {
+    section("adc: segunda entrada só segue se a primeira não ficou pronta");
+    using ems::hal::adc_init_skip_repeat;
+    CHECK_FALSE(adc_init_skip_repeat(false, false, false), "primeira entrada corre");
+    CHECK_TRUE(adc_init_skip_repeat(true, false, false), "sucesso anterior volta já");
+    CHECK_FALSE(adc_init_skip_repeat(true, true, false), "a recuperar: a segunda pode tentar");
+    CHECK_FALSE(adc_init_skip_repeat(true, false, true), "falha permanente: a segunda pode tentar");
+}
+
+void test_diagnostic_tick_stamps_events(void) {
+    section("diag: diagnostic_tick avança o instante da falha");
+    using namespace ems::engine;
+    DiagnosticManager::init();
+    DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE, FaultSeverity::WARNING);
+    const DiagnosticEvent* ev = DiagnosticManager::get_event(DiagnosticCode::MAP_SENSOR_RANGE);
+    CHECK_TRUE(ev != nullptr && ev->timestamp_ms == 0u, "sem tick o instante fica 0");
+    diagnostic_tick(100u);
+    DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE, FaultSeverity::WARNING);
+    ev = DiagnosticManager::get_event(DiagnosticCode::MAP_SENSOR_RANGE);
+    CHECK_TRUE(ev != nullptr && ev->timestamp_ms == 100u, "100 ms de tick carimba 100");
+    diagnostic_tick(100u);
+    DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE, FaultSeverity::WARNING);
+    ev = DiagnosticManager::get_event(DiagnosticCode::MAP_SENSOR_RANGE);
+    CHECK_TRUE(ev != nullptr && ev->timestamp_ms == 200u, "outro 100 ms carimba 200");
+    DiagnosticManager::clear_fault(DiagnosticCode::MAP_SENSOR_RANGE);
+}
+
 void test_diagnostic_manager_all(void) {
     using namespace ems::engine;
 
@@ -498,6 +559,16 @@ void test_diagnostic_manager_all(void) {
     CHECK_FALSE(DiagnosticManager::is_fault_active(DiagnosticCode::MAP_SENSOR_RANGE),
                 "fault inactive after clear");
     CHECK_EQ(DiagnosticManager::get_active_fault_count(), 0u, "count=0 after clear");
+
+    section("DiagnosticManager: falha repetida escala a severidade (WARNING -> CRITICAL)");
+    DiagnosticManager::init();
+    DiagnosticManager::report_fault(DiagnosticCode::ADC_RECOVERY_FAILED, FaultSeverity::WARNING);
+    CHECK_TRUE(DiagnosticManager::is_system_ready(), "WARNING: sistema pronto");
+    DiagnosticManager::report_fault(DiagnosticCode::ADC_RECOVERY_FAILED, FaultSeverity::CRITICAL);
+    CHECK_FALSE(DiagnosticManager::is_system_ready(), "mesma falha reportada CRITICAL: sobe");
+    DiagnosticManager::report_fault(DiagnosticCode::ADC_RECOVERY_FAILED, FaultSeverity::WARNING);
+    CHECK_FALSE(DiagnosticManager::is_system_ready(), "reporte menor não rebaixa");
+    DiagnosticManager::init();
 
     section("DiagnosticManager: get_highest_severity");
     DiagnosticManager::init();
@@ -758,7 +829,88 @@ void test_hal_flash_all(void) {
         ems::app::load_corr_calibration_from_nvm();
         CHECK_EQ(iat_corr_x256[7], 300u, "tabela custom (não-legado) carrega");
 
+        // Página legada/corrompida (sem rodapé de CRC) com dwell fora do domínio físico:
+        // o carregamento de boot limita a 10 ms antes de o motor usar o valor.
+        uint16_t dwell_backup[ems::engine::kIgnitionDwellTableSize];
+        std::memcpy(dwell_backup, ems::engine::dwell_ms_x10_table, sizeof(dwell_backup));
+        const uint16_t huge[8] = {900u, 900u, 900u, 900u, 900u, 900u, 900u, 900u};
+        std::memcpy(corr_page + 176, huge, 16u);
+        CHECK_TRUE(nvm_save_calibration(4u, corr_page, sizeof(corr_page)), "grava page 4 com dwell absurdo");
+        ems::app::load_corr_calibration_from_nvm();            // o que nvm_boot_load_tables faz...
+        (void)ems::app::ui_detail::sanitize_applied_calibration();   // ...e a limpeza que ele chama no fim
+        CHECK_TRUE(ems::engine::dwell_ms_x10_table[0] <= 100u, "carga legada + saneamento: dwell > 10 ms limitado a 10 ms");
+        std::memcpy(ems::engine::dwell_ms_x10_table, dwell_backup, sizeof(dwell_backup));
+
         std::memcpy(iat_corr_x256, iat_backup, sizeof(iat_backup));
+    }
+
+    section("nvm_boot: spark-skip e pulso pequeno sobrevivem ao ciclo de energia");
+    {
+        const uint16_t keep_w = ems::engine::spark_skip_window_rpm_x10;
+        const uint8_t  keep_m = ems::engine::spark_skip_max_q8;
+        alignas(4) uint8_t pg7[32] = {};
+        std::memcpy(pg7 + 0, ems::engine::dwell_rpm_axis_rpm, 8u);   // valores atuais: o load os repõe
+        std::memcpy(pg7 + 8, ems::engine::dwell_rpm_factor_q8, 8u);
+        const uint16_t w = 600u;
+        std::memcpy(pg7 + 16, &w, 2u);
+        pg7[18] = 77u;
+        nvm_test_reset();
+        CHECK_TRUE(nvm_save_calibration(6u, pg7, sizeof(pg7)), "grava page 7 com spark-skip");
+        ems::engine::spark_skip_window_rpm_x10 = 0u;
+        ems::engine::spark_skip_max_q8 = 0u;
+        ems::app::load_dwell2d_calibration_from_nvm();
+        CHECK_EQ(ems::engine::spark_skip_window_rpm_x10, 600u, "spark_skip_window volta do NVM");
+        CHECK_EQ(ems::engine::spark_skip_max_q8, 77u, "spark_skip_max volta do NVM");
+
+        const uint16_t keep_b = ems::engine::inj_small_pulse_break_us;
+        const uint8_t  keep_r = ems::engine::inj_small_pulse_rate_q8;
+        alignas(4) uint8_t pg6[116];
+        std::memset(pg6, 0xFF, sizeof(pg6));
+        std::memcpy(pg6 + 0,  ems::engine::xtau_clt_axis_x10,  16u);   // valores atuais: o load os repõe
+        std::memcpy(pg6 + 16, ems::engine::xtau_x_fraction_q8, 16u);
+        std::memcpy(pg6 + 32, ems::engine::xtau_tau_cycles,    16u);
+        std::memset(pg6 + 48, 0, 16u);   // AE: bloco zerado = não aplicado
+        const uint16_t b = 1500u;
+        std::memcpy(pg6 + 76, &b, 2u);
+        pg6[78] = 33u;
+        CHECK_TRUE(nvm_save_calibration(5u, pg6, sizeof(pg6)), "grava page 6 com pulso pequeno");
+        ems::engine::inj_small_pulse_break_us = 0u;
+        ems::engine::inj_small_pulse_rate_q8 = 0u;
+        ems::app::load_xtau_calibration_from_nvm();
+        CHECK_EQ(ems::engine::inj_small_pulse_break_us, 1500u, "inj_small_pulse_break volta do NVM");
+        CHECK_EQ(ems::engine::inj_small_pulse_rate_q8, 33u, "inj_small_pulse_rate volta do NVM");
+
+        ems::engine::spark_skip_window_rpm_x10 = keep_w;
+        ems::engine::spark_skip_max_q8 = keep_m;
+        ems::engine::inj_small_pulse_break_us = keep_b;
+        ems::engine::inj_small_pulse_rate_q8 = keep_r;
+        nvm_test_reset();
+    }
+
+    section("hal/cal_trailer: página interrompida ou corrompida é recusada");
+    {
+        using namespace ems::hal;
+        static uint8_t sec[8192];
+        std::memset(sec, 0xFF, sizeof(sec));
+        CHECK_TRUE(cal_trailer_check(sec) == CalTrailerState::LEGACY, "setor apagado/antigo: legado (aceito)");
+
+        uint8_t data[40];
+        for (uint8_t i = 0u; i < sizeof(data); ++i) { data[i] = static_cast<uint8_t>(i * 7u + 1u); }
+        const CalTrailerWords b = cal_trailer_begin(sizeof(data));
+        std::memcpy(sec + kCalTrailerOffset, b.w, 16u);
+        std::memcpy(sec, data, sizeof(data));
+        CHECK_TRUE(cal_trailer_check(sec) == CalTrailerState::INCOMPLETE, "BEGIN sem END: gravação interrompida");
+
+        const CalTrailerWords e = cal_trailer_end(data, sizeof(data));
+        std::memcpy(sec + kCalTrailerOffset + 16u, e.w, 16u);
+        CHECK_TRUE(cal_trailer_check(sec) == CalTrailerState::VALID, "BEGIN + dados + END: válido");
+
+        sec[5] ^= 0x10u;
+        CHECK_TRUE(cal_trailer_check(sec) == CalTrailerState::CORRUPT, "dado alterado: CRC não bate");
+        sec[5] ^= 0x10u;
+
+        sec[kCalTrailerOffset] ^= 0x01u;
+        CHECK_TRUE(cal_trailer_check(sec) == CalTrailerState::CORRUPT, "magic BEGIN ruim: corrompido");
     }
 
     section("hal/flash: flash_test_set_busy_polls blocks writes");
@@ -845,24 +997,24 @@ void test_xtau_autocalib_all(void) {
     CHECK_EQ(xtau_get_state().wall_fuel_us_q8, 0, "transient_fuel_reset clears production wall");
 
     section("xtau_autocalib: células RPM×MAP diferentes aprendem parâmetros diferentes");
-    // Duas células bem afastadas nos eixos (baixo RPM/baixa carga vs. alto
-    // RPM/alta carga) recebem erros de lambda opostos — se a Fase 3 deixou de
-    // ser um escalar global, os parâmetros aprendidos devem divergir.
+    // Eixo de MAP hoje: 25/50/80/150 (bar×100). 8000×25 e 70000×150 são os
+    // cantos. Erros de lambda opostos têm de divergir. O PW de produção usa
+    // a tabela 1D de CLT; isto trava o aprendizado 2D, não o pulso.
     xtau_autocalib_reset();
     host_set_millis(5000u);
     for (int i = 0; i < 20; ++i) {
         host_advance_millis(50u);
-        xtau_autocalib_update(8000u, 2500u, 1000, 1100, 800, true);   // baixo RPM/carga, rico
+        xtau_autocalib_update(8000u, 25u, 1000, 1100, 800, true);   // baixo RPM/carga, rico
     }
-    const XTauParams p_low = xtau_get_current_params_2d(8000u, 2500u);
+    const XTauParams p_low = xtau_get_current_params_2d(8000u, 25u);
 
     xtau_autocalib_reset();
     host_set_millis(10000u);
     for (int i = 0; i < 20; ++i) {
         host_advance_millis(50u);
-        xtau_autocalib_update(70000u, 15000u, 1000, 900, 800, true);  // alto RPM/carga, pobre
+        xtau_autocalib_update(70000u, 150u, 1000, 900, 800, true);  // alto RPM/carga, pobre
     }
-    const XTauParams p_high = xtau_get_current_params_2d(70000u, 15000u);
+    const XTauParams p_high = xtau_get_current_params_2d(70000u, 150u);
 
     CHECK_TRUE(p_low.x_fraction_q8 != p_high.x_fraction_q8 || p_low.tau_cycles != p_high.tau_cycles,
                "células RPM×MAP distantes aprendem parâmetros distintos");

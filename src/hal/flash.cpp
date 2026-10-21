@@ -8,7 +8,10 @@
  *   Setor 2 (0x08084000, 8 KB): Calibração página 1 (256 bytes)
  *   Setor 3 (0x08086000, 8 KB): Calibração página 2 (256 bytes)
  *   Setores 4-6: Calibração páginas 3-5
- *   Setor 7: reservado
+ *   Setor 7 (page 6, ETB/xtau), 8 (page 7, dwell 2D/pedal), 9 (page 8, boost),
+ *   10 (page 9, eixos): ver kSectorCal* abaixo
+ *   Cada página termina com um rodapé BEGIN/END+CRC nos últimos 32 B do setor
+ *   (hal/cal_trailer.h).
  *
  * Emulação de SRAM:
  *   LTFT e knock maps usam buffer em SRAM (g_ltft_ram / g_knock_ram)
@@ -18,11 +21,12 @@
  *   1. Aguardar BSY
  *   2. Desbloquear Flash Bank2 (KEYR2 com sequência)
  *   3. Apagar setor (SER + SNB + STRT)
- *   4. Programar em palavras de 32 bits (PG mode)
+ *   4. Programar em quad-words de 128 bits (PG mode)
  *   5. Re-travar
  */
 
 #include "hal/flash.h"
+#include "hal/cal_trailer.h"
 #include "hal/crc32.h"
 #include "hal/critical_section.h"
 #include <cstring>
@@ -128,15 +132,17 @@ static void flash_lock_bank2() noexcept {
     FLASH_NSCR |= FLASH_CR_LOCK;
 }
 
-static void flash_wait_ready() noexcept {
+static bool flash_wait_ready() noexcept {
     // Timeout defensivo: evita busy-wait infinito se hardware de flash falhar.
     // ~300k iterações ≈ vários ms de margem para operações de erase/program.
     constexpr uint32_t kFlashWaitTimeout = 300000u;
     for (uint32_t i = 0u; i < kFlashWaitTimeout; ++i) {
-        if ((FLASH_NSSR & kFlashBusyMask) == 0u) { return; }
+        if ((FLASH_NSSR & kFlashBusyMask) == 0u) { return true; }
     }
-    // Timeout: contabiliza e prossegue — caller verifica FLASH_NSSR por erros.
+    // Timeout: contabiliza e avisa o caller (false) — antes seguia como se estivesse pronto e
+    // um erase ainda em curso era reportado como sucesso.
     ++g_flash_wait_timeouts;
+    return false;
 }
 
 static bool flash_erase_sector(uint32_t sector_num) noexcept {
@@ -151,10 +157,10 @@ static bool flash_erase_sector(uint32_t sector_num) noexcept {
               | ((sector_num << FLASH_CR_SNB_SHIFT) & FLASH_CR_SNB_MASK)
               | FLASH_CR_STRT;
 
-    flash_wait_ready();
+    const bool idle = flash_wait_ready();
     FLASH_NSCR &= ~(FLASH_CR_SER | FLASH_CR_BKSEL | FLASH_CR_SNB_MASK);
 
-    return (FLASH_NSSR & kFlashErrorMask) == 0u;
+    return idle && (FLASH_NSSR & kFlashErrorMask) == 0u;
 }
 
 // STM32H5 (RM0481): a Flash programa-se em "flash words" de 128 bits
@@ -174,10 +180,9 @@ static bool flash_erase_sector(uint32_t sector_num) noexcept {
 static bool flash_write_words(uint32_t dest_addr,
                               const uint8_t* src,
                               uint32_t len_bytes) noexcept {
-    flash_wait_ready();
+    if (!flash_wait_ready()) { return false; }
     FLASH_NSCR |= FLASH_CR_PG;
 
-    const uint32_t* src32 = reinterpret_cast<const uint32_t*>(src);
     volatile uint32_t* dst32 = reinterpret_cast<volatile uint32_t*>(dest_addr);
     const uint32_t nwords = len_bytes / 4u;
 
@@ -189,11 +194,14 @@ static bool flash_write_words(uint32_t dest_addr,
             // o quad-word (ver comentário acima).
             ems::hal::CriticalSectionGuard guard;
             for (uint32_t i = 0u; i < n; ++i) {
-                dst32[qw + i] = src32[qw + i];
+                // memcpy: `src` pode não estar alinhado a 4 (cast para uint32_t* era UB).
+                uint32_t w;
+                std::memcpy(&w, src + (qw + i) * 4u, sizeof(w));
+                dst32[qw + i] = w;
             }
         }
-        flash_wait_ready();
-        if (FLASH_NSSR & kFlashErrorMask) {
+        const bool ready = flash_wait_ready();
+        if (!ready || (FLASH_NSSR & kFlashErrorMask)) {
             FLASH_NSCR &= ~FLASH_CR_PG;
             return false;
         }
@@ -296,6 +304,10 @@ void nvm_reset_knock_map() noexcept {
 
 bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexcept {
     if (page > 9u || data == nullptr || len == 0u) { return false; }
+    // Um flush adaptativo (máquina de estados não bloqueante) em andamento usa PG/SER e o
+    // lock do banco 2: um burn no meio dele rearmava/limpava esses bits e deixava o setor 0
+    // apagado pela metade. O chamador (UI) recebe falha e tenta de novo.
+    if (g_sector0_flush_active) { return false; }
 
     const uint32_t sector = (page == 9u) ? kSectorCal9 :
                             (page == 8u) ? kSectorCal8 :
@@ -306,21 +318,32 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
     // flash_write_words exige múltiplo de 16 (quad-word de 128 bits, ver
     // comentário no seu topo) — arredondar para cima ao verificar limites.
     const uint32_t len16 = (static_cast<uint32_t>(len) + 15u) & ~15u;
-    if (len16 > kSectorSize) { return false; }
+    if (len16 > kCalTrailerOffset) { return false; }   // últimos 32 B do setor = rodapé
 
     const uint32_t whole_len = static_cast<uint32_t>(len) & ~15u;
     const uint32_t tail_len = static_cast<uint32_t>(len) - whole_len;  // 0..15
 
     flash_unlock_bank2();
     bool ok = flash_erase_sector(sector);
+    // BEGIN antes dos dados, END (CRC) depois: ver hal/cal_trailer.h.
+    if (ok) {
+        const CalTrailerWords begin = cal_trailer_begin(len);
+        ok = flash_write_words(dest + kCalTrailerOffset,
+                               reinterpret_cast<const uint8_t*>(begin.w), 16u);
+    }
     if (ok && whole_len != 0u) {
         ok = flash_write_words(dest, data, whole_len);
     }
     if (ok && tail_len != 0u) {
-        uint8_t tail[16];
+        alignas(4) uint8_t tail[16];
         std::memset(tail, 0xFFu, sizeof(tail));
         std::memcpy(tail, data + whole_len, tail_len);
         ok = flash_write_words(dest + whole_len, tail, sizeof(tail));
+    }
+    if (ok) {
+        const CalTrailerWords end = cal_trailer_end(data, len);
+        ok = flash_write_words(dest + kCalTrailerOffset + 16u,
+                               reinterpret_cast<const uint8_t*>(end.w), 16u);
     }
     flash_lock_bank2();
     // DIAG (2026-07-09): burn reportava OK mas não sobrevivia a power-cycle.
@@ -343,6 +366,13 @@ bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept {
                             (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
     const uint32_t src    = kBank2Base + sector * kSectorSize;
 
+    // Página gravada pela metade (queda de energia entre erase e fim) ou corrompida: recusa,
+    // e o carregador mantém os defaults. Páginas antigas, sem rodapé, continuam aceitas.
+    const CalTrailerState st = cal_trailer_check(reinterpret_cast<const uint8_t*>(src));
+    if (st == CalTrailerState::INCOMPLETE || st == CalTrailerState::CORRUPT) {
+        return false;
+    }
+
     // Leitura direta da Flash (mapeada em memória)
     std::memcpy(data, reinterpret_cast<const void*>(src), len);
     return true;
@@ -358,6 +388,10 @@ void nvm_set_now_ms(uint32_t now_ms) noexcept {
 
 void nvm_request_adaptive_flush_now() noexcept {
     g_adaptive_flush_asap = true;
+}
+
+bool nvm_adaptive_flush_active() noexcept {
+    return g_sector0_flush_active;
 }
 
 bool nvm_adaptive_maps_dirty() noexcept {
@@ -591,6 +625,7 @@ bool nvm_load_adaptive_maps() noexcept { return true; }
 void nvm_set_now_ms(uint32_t) noexcept {}
 void nvm_request_adaptive_flush_now() noexcept {}
 bool nvm_adaptive_maps_dirty() noexcept { return false; }
+bool nvm_adaptive_flush_active() noexcept { return false; }
 bool nvm_write_knock(uint8_t r, uint8_t l, int8_t v) noexcept {
     if (r >= 8u || l >= 8u) { return false; }
     if (g_flash_busy) { return false; }

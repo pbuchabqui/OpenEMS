@@ -164,6 +164,15 @@ void test_ts_envelope_read_write_burn(void) {
     CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before,
              "'w' envelope NÃO grava flash (RAM-only)");
 
+    // Estado vivo mudado por trás do buffer (ex.: bake 'Y' da VE aprendida): uma escrita de
+    // 1 byte em OUTRA célula não pode reverter a célula alterada.
+    ve_table[0][3] = 99u;
+    const uint8_t wr1[7] = {'w', 0x01u, 0x00u, 0x00u, 0x01u, 0x00u, 12u};
+    r = env_txn(wr1, 7u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'w' de 1 byte → OK");
+    CHECK_EQ(ve_table[0][0], 12u, "célula escrita aplicada");
+    CHECK_EQ(ve_table[0][3], 99u, "célula alterada por trás do buffer NÃO é revertida");
+
     // dirty mask (16 bits LE no envelope)
     const uint8_t d = 'd';
     r = env_txn(&d, 1u);
@@ -513,6 +522,81 @@ void test_ts_envelope_canid_forms(void) {
     r = env_txn(och, 7u);
     CHECK_TRUE(r.frame_ok && r.crc_ok && r.code == 0x00u && r.len == 66u,
                "och via 'r' canId+page3+off0+count66 → 66 bytes");
+}
+
+// Byte que abre um envelope e nunca é completado: depois do timeout entre bytes o parser volta
+// a IDLE e o próximo comando é respondido (antes engolia comandos até chegar byte suficiente).
+void test_ui_parser_interbyte_timeout(void) {
+    section("ui parser: timeout entre bytes ressincroniza após envelope incompleto");
+    ems::app::ui_test_reset();
+    const uint8_t open_env[1] = {0x01u};          // byte alto do size → ENV_SIZE_LO
+    ui_feed(open_env, 1u);
+    host_advance_millis(400u);                    // > kParseByteTimeoutMs (250)
+    const uint8_t q[1] = {static_cast<uint8_t>('Q')};
+    ui_feed(q, 1u);
+    uint8_t out[64] = {};
+    const uint16_t n = ui_drain(out, sizeof(out));
+    CHECK_TRUE(n >= 4u, "'Q' depois do timeout devolve a assinatura");
+
+    // Sem esperar o timeout o comando seguinte é consumido como parte do envelope.
+    ems::app::ui_test_reset();
+    ui_feed(open_env, 1u);
+    host_advance_millis(10u);
+    ui_feed(q, 1u);
+    CHECK_EQ(ui_drain(out, sizeof(out)), 0u, "dentro do prazo: 'Q' é byte do envelope (sem resposta)");
+}
+
+// CLT/IAT acima de 87 °C não podem ser cortados (campo sem sinal, °C + 40).
+void test_och_clt_above_87c(void) {
+    section("OCH: CLT 105 °C chega como 145 (°C+40) e IAT 20 °C como 60");
+    ems::app::ui_test_reset();
+    sensor_setup();
+    sensors_init();
+    sensors_set_bench_clt_iat(true, 1050, 200);
+    sensors_test_tick_100ms();
+    const uint8_t och[7] = {'r', 0x00u, 0x03u, 0x00u, 0x00u, 0x56u, 0x00u};
+    EnvResp r = env_txn(och, 7u);
+    CHECK_EQ(r.data[4], 145u, "clt_p40 = 105 + 40");
+    CHECK_EQ(r.data[5], 60u, "iat_p40 = 20 + 40");
+    sensors_set_bench_clt_iat(false, 0, 0);
+}
+
+// CR/LF soltos não iniciam envelope: o 'Q' seguinte ainda responde.
+void test_ui_parser_stray_control_bytes(void) {
+    section("ui parser: byte de controle solto (CR/LF) não engole o próximo comando");
+    ems::app::ui_test_reset();
+    const uint8_t in[2] = {0x0Au, static_cast<uint8_t>('Q')};
+    ui_feed(in, 2u);
+    uint8_t out[64] = {};
+    const uint16_t n = ui_drain(out, sizeof(out));
+    CHECK_TRUE(n >= 4u, "'Q' após 0x0A devolve a assinatura");
+}
+
+// OCH page3: STATUS_SENSOR_FAULT acende com Vbatt fora de 6..18 V
+void test_och_vbatt_fault_status(void) {
+    section("OCH: STATUS_SENSOR_FAULT acende só com vbatt_fault");
+    using namespace ems::hal;
+    ems::app::ui_test_reset();
+    sensor_setup();
+    sensors_init();
+    sensors_set_bench_clt_iat(false, 0, 0);
+    const uint8_t och[7] = {'r', 0x00u, 0x03u, 0x00u, 0x00u, 0x56u, 0x00u};
+    auto status_now = [&]() {
+        EnvResp r = env_txn(och, 7u);
+        uint16_t st = 0u;
+        std::memcpy(&st, r.data + 12, 2u);
+        return st;
+    };
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2730u);   // ~12 V
+    sensors_test_tick_100ms();
+    CHECK_EQ(sensors_get().fault_bits, 0u, "pré-condição: nenhum sensor em falha");
+    CHECK_TRUE((status_now() & ems::app::STATUS_SENSOR_FAULT) == 0u, "Vbatt ok: bit apagado");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 0u);      // divisor aberto
+    sensors_test_tick_100ms();
+    CHECK_TRUE((status_now() & ems::app::STATUS_SENSOR_FAULT) != 0u, "Vbatt fora da faixa: bit aceso");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2730u);
+    sensors_test_tick_100ms();
+    CHECK_TRUE((status_now() & ems::app::STATUS_SENSOR_FAULT) == 0u, "Vbatt volta: bit apagado");
 }
 
 // OCH page3: status bits 13/14 + tcReduction/spark @ reserved[31..]

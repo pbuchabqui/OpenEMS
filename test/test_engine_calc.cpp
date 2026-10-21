@@ -18,8 +18,10 @@
 #include "engine/fuel_trim.h"
 #include "engine/ign_calc.h"
 #include "engine/limp_gating.h"
+#include "engine/cut_reason.h"
 #include "engine/map_estimator.h"
 #include "engine/quick_crank.h"
+#include "engine/spark_skip.h"
 #include "engine/table3d.h"
 #include "engine/transient_fuel.h"
 
@@ -244,6 +246,107 @@ void test_engine_calc_overrun_retard(void) {
     tables_restore();
 }
 
+void test_engine_calc_dwell_floor(void) {
+    section("engine_calc: dwell has a 0.5 ms floor even with a zeroed table");
+    uint16_t saved[kIgnitionDwellTableSize];
+    std::memcpy(saved, dwell_ms_x10_table, sizeof(saved));
+    for (uint16_t& d : dwell_ms_x10_table) { d = 0u; }
+    reset_all();
+    tables_flat(60, 1000, 22);
+    uint32_t t = 1000u;
+    const EngineCalcOut out = run(t, 1.0, 3000u, 60u, 250u);
+    CHECK_TRUE(out.committed, "committed");
+    CHECK_TRUE(ecu_sched_test_get_dwell_ticks() >= 31250u, "dwell >= 0.5 ms (31250 ticks)");
+    std::memcpy(dwell_ms_x10_table, saved, sizeof(saved));
+    tables_restore();
+}
+
+void test_engine_calc_limp_rpm_hysteresis(void) {
+    section("engine_calc: limp rpm cut (3000 rpm) has 20 rpm hysteresis");
+    reset_all();
+    tables_flat(60, 1000, 22);
+    uint32_t t = 1000u;
+    auto step = [&](uint32_t rpm) {
+        EngineCalcIn in = input_at(t += 2u, rpm, 60u, 250u);
+        in.sensors.fault_bits = (1u << 3u);  // CLT fault -> limp_active
+        const bool exposed = engine_calc_step(in).limp_rpm_cut;
+        const bool reason = (g_fuel_cut_reasons & kFuelCutLimpRpm) != 0u;
+        CHECK_EQ(exposed, reason, "limp_rpm_cut exposto = bit de corte de combustível");
+        return reason;
+    };
+    for (int i = 0; i < 50; ++i) { step(2000u); }
+    CHECK_FALSE(step(2990u), "below the limit: no cut");
+    CHECK_TRUE(step(3010u), "above 3000 rpm: cut");
+    CHECK_TRUE(step(2990u), "2990 rpm: still cut (inside hysteresis)");
+    CHECK_FALSE(step(2970u), "2970 rpm: cut released");
+    CHECK_FALSE(step(2990u), "2990 rpm: stays released");
+    step(3010u);
+    engine_calc_reset();
+    CHECK_FALSE(step(2990u), "engine_calc_reset limpa o latch do corte");
+    // PROTECT desliga o corte: o ETB também deixa de recebê-lo.
+    limp_gating_set_protect_disable(kProtectDisLimpRpm);
+    {
+        EngineCalcIn in = input_at(t += 2u, 3010u, 60u, 250u);
+        in.sensors.fault_bits = (1u << 3u);
+        CHECK_FALSE(engine_calc_step(in).limp_rpm_cut, "PROTECT limp-rpm: limp_rpm_cut falso");
+    }
+    limp_gating_set_protect_disable(0u);
+    tables_restore();
+}
+
+void test_engine_calc_map_fault_runs_on_model(void) {
+    section("engine_calc: falha de MAP nao corta (partida e abaixo de 3000 rpm); corta acima");
+    tables_flat(60, 1000, 22);   // uma vez: tables_restore() devolve os originais
+    auto with_fault = [&](uint32_t rpm, ems::drv::SyncState st, uint32_t secs) {
+        reset_all();
+        uint32_t t = 1000u;
+        EngineCalcOut out{};
+        for (uint32_t i = 0; i < secs * 500u; ++i) {
+            EngineCalcIn in = input_at(t += 2u, rpm, 60u, 250u, st);
+            in.sensors.fault_bits = 0x01u;  // SensorId::MAP
+            out = engine_calc_step(in);
+        }
+        return out;
+    };
+    EngineCalcOut c = with_fault(250u, ems::drv::SyncState::HALF_SYNC, 1u);
+    CHECK_TRUE(c.committed && c.inj_pw_ticks > 0u, "partida com MAP em falha: injeta");
+    EngineCalcOut r = with_fault(2000u, ems::drv::SyncState::FULL_SYNC, 2u);
+    CHECK_TRUE(r.inj_pw_ticks > 0u && r.net_pw_us > 0u, "2000 rpm com MAP em falha: injeta (limp)");
+    CHECK_TRUE(r.limp_active, "limp ativo");
+    EngineCalcOut h = with_fault(4000u, ems::drv::SyncState::FULL_SYNC, 2u);
+    CHECK_EQ(h.pw_ms_x10, 0u, "4000 rpm com MAP em falha: corte (limp acima de 3000 rpm)");
+    tables_restore();
+}
+
+void test_engine_calc_vbatt_fault_safe_values(void) {
+    section("engine_calc: Vbatt 0 / >18 V usa 12 V; queda <6 V prende em 6 V");
+    tables_flat(60, 1000, 22);
+    auto run_v = [&](uint16_t vbatt) {
+        reset_all();
+        uint32_t t = 1000u;
+        EngineCalcOut out{};
+        for (int i = 0; i < 1000; ++i) {
+            EngineCalcIn in = input_at(t += 2u, 3000u, 60u, 250u);
+            in.sensors.vbatt_mv = vbatt;
+            out = engine_calc_step(in);
+        }
+        return out;
+    };
+    const EngineCalcOut nominal = run_v(12000u);
+    const EngineCalcOut zero = run_v(0u);
+    const EngineCalcOut high = run_v(25000u);
+    CHECK_EQ(zero.dwell_ticks, nominal.dwell_ticks, "Vbatt 0: dwell de 12 V");
+    CHECK_EQ(zero.inj_pw_ticks, nominal.inj_pw_ticks, "Vbatt 0: dead time de 12 V");
+    const EngineCalcOut sag = run_v(3500u);
+    const EngineCalcOut six = run_v(6000u);
+    CHECK_EQ(sag.dwell_ticks, six.dwell_ticks, "Vbatt 3,5 V: dwell da linha de 6 V");
+    CHECK_EQ(sag.inj_pw_ticks, six.inj_pw_ticks, "Vbatt 3,5 V: dead time da linha de 6 V");
+    CHECK_TRUE(sag.inj_pw_ticks > nominal.inj_pw_ticks, "queda de Vbatt: dead time maior que o de 12 V");
+    CHECK_EQ(high.dwell_ticks, nominal.dwell_ticks, "Vbatt 25 V: dwell de 12 V");
+    CHECK_EQ(high.inj_pw_ticks, nominal.inj_pw_ticks, "Vbatt 25 V: dead time de 12 V");
+    tables_restore();
+}
+
 void test_engine_calc_pw_drop_limit(void) {
     section("engine_calc: PW fall limiter bounds the pulse drop per 2 ms step");
     const uint16_t saved = fuel_pw_drop_max_us;
@@ -312,3 +415,56 @@ void test_engine_calc_driveline_retard(void) {
     driveline_reset();
     tables_restore();
 }
+
+// O spark-skip recalcula a máscara só na borda de subida do `phase_A` entre voltas (fase do came),
+// e a perde ao sair de FULL_SYNC — exercitado através do engine_calc_step, não chamando o módulo
+// com `cycle_start` à mão.
+void test_engine_calc_spark_skip_follows_cam_phase(void) {
+    section("engine_calc: spark-skip segue a fase do came (borda de subida) e zera sem sync");
+    reset_all();
+    spark_skip_reset();
+    const uint16_t sv_w = spark_skip_window_rpm_x10;
+    const uint8_t  sv_m = spark_skip_max_q8;
+    const uint32_t sv_hard = rev_limit_rpm_x10;
+    rev_limit_rpm_x10 = 70000u;           // limitador em 7000 rpm
+    spark_skip_window_rpm_x10 = 1000u;    // janela de 100 rpm abaixo do limitador
+    spark_skip_max_q8 = 128u;
+    uint32_t t = 1000u;
+    const uint32_t rpm = 6950u;           // dentro da janela (limitador em 7000)
+
+    auto step = [&](uint16_t tooth, bool phase_a,
+                    ems::drv::SyncState st = ems::drv::SyncState::FULL_SYNC) {
+        EngineCalcIn in = input_at(t += 2u, rpm, 60u, 250u, st);
+        in.snap.tooth_index = tooth;
+        in.snap.phase_A = phase_a;
+        engine_calc_step(in);
+    };
+    auto rev = [&](bool phase_a) { step(57u, phase_a); step(0u, phase_a); };   // wrap do tooth_index
+
+    for (int i = 0; i < 5; ++i) { step(static_cast<uint16_t>(10 + i), false); }
+    CHECK_EQ(spark_skip_mask(), 0u, "sem wrap de dente: máscara vazia");
+
+    rev(true);                             // borda de subida: abre o ciclo de 720°
+    const uint8_t m1 = spark_skip_mask();
+    CHECK_TRUE(m1 != 0u, "borda de subida do phase_A calcula a máscara");
+
+    rev(false);                            // 2ª volta do ciclo: mantém
+    CHECK_EQ(spark_skip_mask(), m1, "phase_A em false: máscara mantida");
+
+    rev(true);                             // novo ciclo: recalcula e rotaciona
+    CHECK_TRUE(spark_skip_mask() != m1, "novo ciclo: máscara rotaciona para outro cilindro");
+
+    rev(true);                             // phase_A congelado em true: não recalcula a cada volta
+    const uint8_t m3 = spark_skip_mask();
+    rev(true);
+    CHECK_EQ(spark_skip_mask(), m3, "phase_A congelado em true não recalcula a cada volta");
+
+    step(10u, true, ems::drv::SyncState::HALF_SYNC);
+    CHECK_EQ(spark_skip_mask(), 0u, "fora de FULL_SYNC: máscara zerada");
+
+    spark_skip_window_rpm_x10 = sv_w;
+    spark_skip_max_q8 = sv_m;
+    rev_limit_rpm_x10 = sv_hard;
+    spark_skip_reset();
+}
+

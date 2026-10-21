@@ -72,7 +72,7 @@
 
 // ── Mock de registradores para testes host ───────────────────────────────────
 #if defined(EMS_HOST_TEST)
-#include "hal/tim5_host.h"
+#include "hal/host/tim5_host.h"
 #define TIM5_CNT ems_test_tim5_cnt
 #endif
 
@@ -294,6 +294,7 @@ inline void close_cmp_seq_gate() noexcept {
     s_prev_cmp_capture = 0u;
     s_cmp_ref_tooth = 0xFFu;
     s_cmp_reject_streak = 0u;
+    g_state.cmp_phase_pending = 0u;   // CMP validado antes da perda não vale para o próximo gap
 }
 
 // Edge classification against the reference period r = Δ / ref:
@@ -315,10 +316,20 @@ inline Edge classify_edge(uint32_t delta) noexcept {
     return Edge::TOOTH;
 }
 
+static uint32_t g_tooth_rev_ts[58];  // kRealTeethPerRev (58)
+static volatile uint32_t g_instant_rev_dt_ticks = 0u;
+static void clear_instant_rpm() noexcept {
+    g_instant_rev_dt_ticks = 0u;
+    for (uint16_t i = 0u; i < 58u; ++i) { g_tooth_rev_ts[i] = 0u; }
+}
+
 inline void drop_sync() noexcept {
     g_state.snap.state = ems::drv::SyncState::LOSS_OF_SYNC;
     g_state.tooth_count = 0u;
     close_cmp_seq_gate();
+    // Os timestamps por dente ficam velhos: no re-sync o RPM instantâneo mediria contra bordas
+    // de N voltas atrás (~1/N do real) e, sem sync, não é uma medida (header: 0 = sem medida).
+    clear_instant_rpm();
 }
 
 // ── Seção crítica ARM Cortex-M4 ──────────────────────────────────────────────
@@ -326,15 +337,11 @@ inline void drop_sync() noexcept {
 // Uso: proteger leitura coerente de g_state.snap pelo main loop (ckp_snapshot).
 // A própria ISR CKP (prioridade 1) NÃO usa seção crítica interna.
 inline void enter_critical() noexcept {
-#if defined(__arm__) || defined(__thumb__)
-    asm volatile("cpsid i" ::: "memory");
-#endif
+    ems::hal::critical_enter();
 }
 
 inline void exit_critical() noexcept {
-#if defined(__arm__) || defined(__thumb__)
-    asm volatile("cpsie i" ::: "memory");
-#endif
+    ems::hal::critical_exit();
 }
 
 // ── Processamento de gap na máquina de estados ───────────────────────────────
@@ -439,8 +446,6 @@ volatile uint32_t g_dbg_skip_after_silence = 0u;
 
 // Instant RPM 360°: timestamp TIM5 do mesmo slot de dente na volta anterior +
 // último dt de volta completa (escrito só na ISR; leitura atómica de u32).
-static uint32_t g_tooth_rev_ts[58];  // kRealTeethPerRev (definido abaixo)
-static volatile uint32_t g_instant_rev_dt_ticks = 0u;
 
 // Osciloscópio CKP/CMP: rings de timestamps TIM5 das bordas cruas (pré-filtro).
 // 64 bordas CKP ≈ 1.1 revolução — cobre um gap inteiro; 8 CMP ≈ 4 ciclos de came.
@@ -863,6 +868,13 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
         g_state.snap.state   = SyncState::LOSS_OF_SYNC;
         g_state.snap.rpm_x10 = 0u;
         g_state.tooth_count  = 0u;
+        // Recomeça do zero como no boot: a referência e o último timestamp são do motor em
+        // marcha; a 1ª borda após segundos de silêncio virava GAP e ensinava a referência com
+        // o tempo parado, e os dentes reais seguintes eram "ruído" por mais 4 bordas.
+        g_state.have_edge      = 0u;
+        g_state.ref_ticks      = 0u;
+        g_state.prev_ref_ticks = 0u;
+        g_state.noise_streak   = 0u;
         close_cmp_seq_gate();
         s_revs_since_cmp = 0u;
         // Instant RPM: motor parado → dt inválido; limpa também os timestamps

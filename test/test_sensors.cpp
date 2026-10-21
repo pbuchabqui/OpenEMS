@@ -107,6 +107,131 @@ void test_sensors_tick_100ms_clt_iat(void) {
     CHECK_EQ(sd.iat_degc_x10, expected, "IAT lut128(2000) matches formula");
 }
 
+// raw 2000, cal 0..4095 → 2000*1000/4095 = 488. A primeira amostra semeia o IIR.
+void test_sensors_tick_pedal_publishes(void) {
+    section("sensors: sensors_tick_pedal publica ETB sem o tick de 100 ms");
+    using namespace ems::hal;
+    sensor_setup(); sensors_init();
+    CHECK_EQ(sensors_get().etb_tps_pct_x10, 0u, "antes do tick o ETB committed é 0");
+    sensors_tick_pedal(2u);
+    CHECK_EQ(sensors_get().etb_tps_pct_x10, 488u, "uma chamada com raw 2000 publica 48,8%");
+    CHECK_EQ(sensors_get().app_pct_x10, 488u, "APP no mesmo tick");
+
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 1000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 1000u);
+    sensors_test_tick_100ms();
+    CHECK_EQ(sensors_get().etb_tps_pct_x10, 488u, "tick de 100 ms não mexe no pedal");
+
+    sensors_tick_pedal(2u);
+    // iir(2000, 1000, 3/10) = 1700 nos dois canais → 1700*1000/4095 = 415
+    CHECK_EQ(sensors_get().etb_tps_pct_x10, 415u, "segunda amostra entra pelo IIR");
+}
+
+void test_sensors_pedal_range_ceiling(void) {
+    section("sensors: teto APP/ETB 4000; 4095 falha em 300 ms");
+    using namespace ems::hal;
+    sensor_setup(); sensors_init();
+
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP1, 4000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP2, 4000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 4000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 4000u);
+    for (int i = 0; i < 8; ++i) { sensors_tick_pedal(50u); }
+    CHECK_EQ(sensors_get().throttle_fault_bits, 0u, "raw 4000 não arma em 400 ms");
+    CHECK_EQ(sensors_get().etb_tps_pct_x10, 976u, "4000 permanece posição válida");
+    CHECK_EQ(sensors_get().app_pct_x10, 976u, "APP 4000 permanece válido");
+
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP1, 4095u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP2, 4095u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 4095u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 4095u);
+    sensors_tick_pedal(10000u);
+    CHECK_EQ(sensors_get().throttle_fault_bits, 0u, "dt enorme conta no máximo 50 ms");
+    CHECK_TRUE(sensors_get().etb_tps_pct_x10 > 0u, "ainda não zerou aos 50 ms");
+    for (int i = 0; i < 4; ++i) { sensors_tick_pedal(50u); }
+    CHECK_EQ(sensors_get().throttle_fault_bits, 0u, "250 ms de 4095 ainda não é falha");
+    CHECK_TRUE(sensors_get().etb_tps_pct_x10 > 0u, "percentual segue até fechar o debounce");
+    sensors_tick_pedal(50u);
+    const uint8_t bits = sensors_get().throttle_fault_bits;
+    CHECK_EQ(sensors_get().etb_tps_pct_x10, 0u, "4095 aos 300 ms zera o ETB");
+    CHECK_EQ(sensors_get().app_pct_x10, 0u, "4095 aos 300 ms zera o APP");
+    CHECK_TRUE((bits & THROTTLE_FAULT_APP1) != 0u, "APP1 em falha");
+    CHECK_TRUE((bits & THROTTLE_FAULT_APP2) != 0u, "APP2 em falha");
+    CHECK_TRUE((bits & THROTTLE_FAULT_ETB_TPS1) != 0u, "TPS1 em falha");
+    CHECK_TRUE((bits & THROTTLE_FAULT_ETB_TPS2) != 0u, "TPS2 em falha");
+
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP1, 2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP2, 2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 2000u);
+    sensors_tick_pedal(2u);
+    CHECK_EQ(sensors_get().throttle_fault_bits, 0u, "uma amostra dentro da faixa limpa a falha");
+    CHECK_TRUE(sensors_get().etb_tps_pct_x10 > 0u, "ETB volta a publicar");
+}
+
+void test_sensors_pedal_plausibility_time(void) {
+    section("sensors: plausibilidade APP continua ~300 ms");
+    using namespace ems::hal;
+    sensor_setup(); sensors_init();
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP1, 400u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP2, 3000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS1, 2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::ETB_TPS2, 2000u);
+    for (int i = 0; i < 5; ++i) { sensors_tick_pedal(50u); }
+    CHECK_TRUE((sensors_get().throttle_fault_bits & THROTTLE_FAULT_APP_PLAUS) == 0u,
+               "divergência aos 250 ms ainda não trava");
+    CHECK_EQ(sensors_get().app_pct_x10, 97u, "antes do debounce vale o menor APP");
+    sensors_tick_pedal(50u);
+    CHECK_TRUE((sensors_get().throttle_fault_bits & THROTTLE_FAULT_APP_PLAUS) != 0u,
+               "divergência aos 300 ms trava plausibilidade");
+    CHECK_EQ(sensors_get().app_pct_x10, 0u, "plausibilidade zera o pedal");
+    CHECK_EQ(sensors_get().etb_tps_pct_x10, 488u, "TPS concordante não entra na falha");
+
+    // A faixa olha o raw; a plausibilidade olha o percentual já filtrado.
+    // Abrir o limite faz a amostra atual contar como boa e limpa no mesmo tick.
+    sensors_set_plausibility(1000u, 1000u);
+    sensors_tick_pedal(2u);
+    CHECK_TRUE((sensors_get().throttle_fault_bits & THROTTLE_FAULT_APP_PLAUS) == 0u,
+               "uma amostra dentro do limite limpa a plausibilidade");
+    CHECK_TRUE(sensors_get().app_pct_x10 > 0u, "pedal volta a publicar");
+}
+
+void test_sensors_map_baro_refuses_vacuum(void) {
+    section("sensors: baro não promove vácuo para 70 kPa");
+    using namespace ems::hal;
+    sensor_setup(); sensors_init();
+    fuel_set_baro_bar_x100(101u);
+
+    uint16_t out = 0u;
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 1365u);
+    CHECK_TRUE(sensors_map_baro_bar_x100(&out), "raw ~1,00 bar é aceite");
+    CHECK_EQ(out, 100u, "1365 → 100 kPa");
+
+    out = 0u;
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 956u);
+    CHECK_TRUE(sensors_map_baro_bar_x100(&out), "70 kPa no limite entra");
+    CHECK_EQ(out, 70u, "956 → 70 kPa");
+
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 955u);
+    CHECK_FALSE(sensors_map_baro_bar_x100(&out), "69 kPa não é puxado para 70");
+    CHECK_EQ(fuel_get_baro_bar_x100(), 101u, "rejeição não escreve o baro");
+
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 477u);
+    CHECK_FALSE(sensors_map_baro_bar_x100(&out), "vácuo ~35 kPa não entra");
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 0u);
+    CHECK_FALSE(sensors_map_baro_bar_x100(&out), "raw 0 está fora da faixa do MAP");
+    CHECK_EQ(fuel_get_baro_bar_x100(), 101u, "vácuo deixa o baro anterior");
+
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 1365u);
+    adc_test_set_recovering(true);
+    CHECK_FALSE(sensors_map_baro_bar_x100(&out), "ADC a recuperar não publica baro");
+    adc_test_set_recovering(false);
+    adc_test_set_recovery_failed(true);
+    CHECK_FALSE(sensors_map_baro_bar_x100(&out), "ADC em falha não publica baro");
+    adc_test_set_recovery_failed(false);
+    CHECK_EQ(fuel_get_baro_bar_x100(), 101u, "falha de ADC deixa o baro anterior");
+}
+
 void test_sensors_maf_freq_capture(void) {
     section("sensors: sensors_maf_freq_capture_isr");
     sensor_setup(); sensors_init();
@@ -262,12 +387,14 @@ void test_sensors_vbatt_dedicated_channel(void) {
     sensors_test_tick_100ms();
     CHECK_NEAR(static_cast<float>(sensors_get().vbatt_mv), 12000.0f, 30.0f,
                "raw 2730 → ~12000 mV");
+    CHECK_FALSE(sensors_get().vbatt_fault, "12 V: sem vbatt_fault");
 
     // Cranking: a bateria cai a ~9,5 V. É o caso que o literal 12000 mascarava.
     adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2161u);
     sensors_test_tick_100ms();
     CHECK_NEAR(static_cast<float>(sensors_get().vbatt_mv), 9500.0f, 30.0f,
                "raw 2161 → ~9500 mV (cranking)");
+    CHECK_FALSE(sensors_get().vbatt_fault, "9,5 V (cranking) não é falha");
 
     // O chicote do ETB já não interfere: VBATT tem pino próprio.
     sensors_set_etb_harness_present(true);
@@ -280,12 +407,24 @@ void test_sensors_vbatt_dedicated_channel(void) {
     adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 0u);
     sensors_test_tick_100ms();
     CHECK_EQ(sensors_get().vbatt_mv, 12000u, "raw 0 (implausível) → fallback 12000 mV");
+    CHECK_TRUE(sensors_get().vbatt_fault, "raw 0 → vbatt_fault");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 800u);    // ~3,5 V: abaixo de 6 V
+    sensors_test_tick_100ms();
+    CHECK_FALSE(sensors_get().vbatt_fault, "raw 800 (<6 V): queda real não é falha");
+    CHECK_TRUE(sensors_get().vbatt_mv < 6000u && sensors_get().vbatt_mv > 0u,
+               "raw 800 (queda real) → telemetria crua, nem 12 V nem 6 V");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 2730u);
+    sensors_test_tick_100ms();
+    CHECK_FALSE(sensors_get().vbatt_fault, "leitura válida limpa vbatt_fault");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 0u);
+    sensors_test_tick_100ms();
 
     // Bancada não tem divisor em PC3 — o modo de bancada tem de ignorar o ADC.
     sensors_set_bench_clt_iat(true, 800, 250);
     adc_test_set_raw_secondary(AdcSecondaryChannel::VBATT, 4095u);
     sensors_test_tick_100ms();
     CHECK_EQ(sensors_get().vbatt_mv, 12000u, "bench mode fixa 12000 mV apesar do ADC");
+    CHECK_FALSE(sensors_get().vbatt_fault, "bench mode não acusa vbatt_fault");
     sensors_set_bench_clt_iat(false, 0, 0);
 }
 

@@ -57,13 +57,15 @@ int16_t fuel_ltft_add_load_cell(uint8_t map_idx, uint8_t rpm_idx) noexcept {
 }
 
 int16_t ltft_add_clamp() noexcept {
+    // Teto 6350 µs (127 × 50 µs): o NVM guarda a célula em int8 de 50 µs; acima disso o valor
+    // gravado dava a volta de sinal. Também evita o cast de uint16 > 32767 para negativo.
     const uint16_t c = ems::engine::ltft_add_clamp_us;
-    return static_cast<int16_t>((c == 0u) ? 6350u : c);
+    return static_cast<int16_t>((c == 0u || c > 6350u) ? 6350u : c);
 }
 
 int16_t ltft_mult_clamp() noexcept {
     const uint16_t c = ems::engine::ltft_mult_clamp_pct_x10;
-    return static_cast<int16_t>((c == 0u) ? 250u : c);
+    return static_cast<int16_t>((c == 0u) ? 250u : (c > 1000u ? 1000u : c));  // ±100% no máximo
 }
 
 uint8_t ltft_iir_div() noexcept {
@@ -715,8 +717,13 @@ static bool ltft_accum_commit_cell(uint8_t map_idx,
     if (ve_new < static_cast<int32_t>(kLtftAccumVeMin)) {
         ve_new = static_cast<int32_t>(kLtftAccumVeMin);
     }
-    if (ve_new > static_cast<int32_t>(kLtftAccumVeMax)) {
-        ve_new = static_cast<int32_t>(kLtftAccumVeMax);
+    // Teto do bake: kLtftAccumVeMax, mas nunca abaixo do valor atual da célula. A tabela
+    // padrão tem células de boost em 207..254; prender a 200 transformava um bake de
+    // enriquecimento numa redução de ~21% de VE.
+    const int32_t ve_ceiling = (ve_old > static_cast<int32_t>(kLtftAccumVeMax))
+                                   ? ve_old : static_cast<int32_t>(kLtftAccumVeMax);
+    if (ve_new > ve_ceiling) {
+        ve_new = ve_ceiling;
     }
     // Se o clamp matou a mudança (VE já no limite), não desenrola trims —
     // evita drift de trim sem mudança de base. Limpa stats e tenta de novo depois.

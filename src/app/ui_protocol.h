@@ -8,8 +8,8 @@ struct UiRealtimeData {
     uint16_t rpm;
     uint8_t map_bar_x100;
     uint8_t tps_pct;
-    int8_t clt_p40;
-    int8_t iat_p40;
+    uint8_t clt_p40;   // °C + 40, 0..255 (sem sinal: com int8 tudo acima de 87 °C era cortado)
+    uint8_t iat_p40;
     uint8_t o2_mv_d4;
     uint8_t pw1_ms_x10;
     uint8_t advance_p40;

@@ -9,6 +9,7 @@
  *   TARGET_STM32H562 — full USB DRD FS driver, direct register access
  */
 
+#include "hal/critical_section.h"
 #include "hal/stm32h562/usb_cdc.h"
 
 #include <cstdint>
@@ -132,10 +133,6 @@ static inline void bdtable_set(uint32_t ep, uint16_t addr_tx, uint16_t cnt_tx,
                                 uint16_t addr_rx, uint16_t cnt_rx) noexcept {
     pba_w32(ep * 8u + 0u) = (static_cast<uint32_t>(cnt_tx) << 16) | addr_tx;  // TXBD
     pba_w32(ep * 8u + 4u) = (static_cast<uint32_t>(cnt_rx) << 16) | addr_rx;  // RXBD
-}
-
-static inline uint16_t bdtable_count_tx(uint32_t ep) noexcept {
-    return static_cast<uint16_t>((pba_w32(ep * 8u) >> 16) & 0x3FFu);  // COUNT_TX bits[25:16]
 }
 
 static inline void bdtable_set_count_tx(uint32_t ep, uint16_t cnt) noexcept {
@@ -266,12 +263,12 @@ static inline uint16_t rx_free() noexcept {
 // Re-arm EP2 RX if it was paused for back-pressure and the FIFO now has room for a
 // full max-size packet. Safe to call from the main loop and from read paths.
 static void ep2_rx_resume() noexcept {
-    __asm__ volatile("cpsid i" ::: "memory");
+    ems::hal::critical_enter();
     const bool resume = g_rx_paused && (rx_free() >= 64u);
     if (resume) {
         g_rx_paused = false;
     }
-    __asm__ volatile("cpsie i" ::: "memory");
+    ems::hal::critical_exit();
     if (resume) {
         bdtable_set_count_rx_cfg(2u, kCOUNT_RX_64);
         ep_set_stat_rx(2u, 3u);  // VALID
@@ -402,12 +399,12 @@ static void ep1_tx_kick() noexcept {
     // Atomically claim g_ep1_tx_busy before loading data.
     // CPSID/CPSIE prevent a race between main-loop callers and the USB ISR;
     // they are effectively no-ops when already executing inside the ISR.
-    __asm__ volatile("cpsid i" ::: "memory");
+    ems::hal::critical_enter();
     const bool busy_or_empty = g_ep1_tx_busy || (g_tx_head == g_tx_tail);
     if (!busy_or_empty) {
         g_ep1_tx_busy = true;
     }
-    __asm__ volatile("cpsie i" ::: "memory");
+    ems::hal::critical_exit();
     if (busy_or_empty) {
         return;
     }
@@ -561,8 +558,16 @@ static void handle_setup(const SetupPacket& s) noexcept {
                     }
                     // Arm EP1 IN (TX) with NAK until data is queued
                     ep_write(1u, USB_EP_TYPE_BULK, 1u, 2u, 0u);  // STAT_TX=NAK, STAT_RX=DISABLED
-                    // Arm EP2 OUT (RX) VALID
-                    ep_write(2u, USB_EP_TYPE_BULK, 2u, 0u, 3u);  // STAT_TX=DISABLED, STAT_RX=VALID
+                    // Arm EP2 OUT (RX) VALID só se o ring tem folga para um pacote cheio; senão
+                    // fica pausado e ep2_rx_resume() rearma quando houver espaço (antes o ring
+                    // quase cheio após re-enumeração descartava bytes em rx_push).
+                    if (rx_free() >= 64u) {
+                        ep_write(2u, USB_EP_TYPE_BULK, 2u, 0u, 3u);  // STAT_TX=DISABLED, STAT_RX=VALID
+                        g_rx_paused = false;
+                    } else {
+                        ep_write(2u, USB_EP_TYPE_BULK, 2u, 0u, 2u);  // STAT_RX=NAK
+                        g_rx_paused = true;
+                    }
                     // Arm EP3 IN (interrupt) with NAK
                     ep_write(3u, USB_EP_TYPE_INT, 3u, 2u, 0u);   // STAT_TX=NAK, STAT_RX=DISABLED
                 }
@@ -612,6 +617,7 @@ static void usb_hw_reset() noexcept {
     g_usb_addr_pending = 0u;
     g_configured       = false;
     g_ep1_tx_busy      = false;
+    g_rx_paused        = false;   // EP2 volta VALID no SET_CONFIGURATION; não herdar a pausa antiga
     g_ep0_tx_ptr       = nullptr;
     g_ep0_tx_rem       = 0u;
     g_ep0_tx_zlp       = false;
@@ -775,7 +781,9 @@ extern "C" void USB_IRQHandler() noexcept {
     }
 
     // Handle all pending CTR events (may be multiple)
-    while (USB_ISTR & USB_ISTR_CTR) {
+    // Limitado: um CTR que o handler não limpa (endpoint/direção não tratados) travava a ISR até
+    // o IWDG resetar. Sobrando CTR, a ISR reentra (flag ainda pendente) em vez de ficar presa.
+    for (uint8_t guard = 0u; guard < 16u && (USB_ISTR & USB_ISTR_CTR); ++guard) {
         handle_ctr();
     }
 }
@@ -949,6 +957,14 @@ uint16_t usb_cdc_read_bytes(uint8_t* buffer, uint16_t max_len) noexcept {
 
 bool usb_cdc_dtr() noexcept {
     return g_dtr;
+}
+
+bool usb_cdc_configured() noexcept {
+#ifndef EMS_HOST_TEST
+    return g_configured;
+#else
+    return false;
+#endif
 }
 
 bool usb_cdc_rts() noexcept {

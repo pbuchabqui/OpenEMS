@@ -46,6 +46,7 @@ typedef struct {
 
 // Public API
 bool              etb_driver_init(void);
+void              etb_driver_pins_safe_early(void);  // IN1/IN2/PWM em LOW logo após o reset
 etb_driver_fault_t etb_driver_read_sensors(etb_driver_data_t* data);
 bool              etb_driver_set_motor_pwm(int16_t pwm);
 void              etb_driver_shutdown(void);
@@ -55,6 +56,7 @@ float             etb_driver_adc_to_percent(uint16_t adc_raw);
 
 // Test hook
 void etb_driver_test_reset(void);
+int16_t etb_driver_test_motor_pwm(void);  // ultimo PWM comandado (0 apos shutdown)
 
 #ifdef __cplusplus
 }

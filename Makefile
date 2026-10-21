@@ -131,7 +131,8 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_engine_misc.cpp \
                    $(TEST_DIR)/test_math.cpp \
                    $(TEST_DIR)/test_protocol.cpp \
-                   $(TEST_DIR)/test_output.cpp
+                   $(TEST_DIR)/test_output.cpp \
+                   $(TEST_DIR)/test_can_stack.cpp
 HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(SRC_DIR)/hal/stm32h562/timer.cpp \
                 $(SRC_DIR)/hal/stm32h562/system.cpp \

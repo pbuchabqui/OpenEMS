@@ -37,7 +37,7 @@ int16_t ewg_control_update(uint16_t target_pct_x10, uint16_t measured_pct_x10) n
     const bool saturating = (candidate_out > 1000 && error_x10 > 0)
                          || (candidate_out < -1000 && error_x10 < 0);
     if (!saturating) {
-        g_integrator_x10 = clamp_i16(static_cast<int16_t>(candidate_i),
+        g_integrator_x10 = clamp_i16(candidate_i,
                                      static_cast<int16_t>(-1000), static_cast<int16_t>(1000));
     }
 
@@ -47,7 +47,8 @@ int16_t ewg_control_update(uint16_t target_pct_x10, uint16_t measured_pct_x10) n
     int32_t output = p + g_integrator_x10
         + (static_cast<int32_t>(ewg_kd_x10) * deriv_x10) / 10;
 
-    g_output_x10 = clamp_i16(static_cast<int16_t>(output),
+    // Clamp em int32: estreitar antes invertia o sinal da saída em ganhos altos.
+    g_output_x10 = clamp_i16(output,
                              static_cast<int16_t>(-1000), static_cast<int16_t>(1000));
 
     ems::hal::ewg_driver_set_motor_pwm(g_output_x10);

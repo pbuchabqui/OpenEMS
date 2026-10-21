@@ -10,6 +10,8 @@ static constexpr uint8_t kMaxEvents = 16;
 static DiagnosticEvent g_events[kMaxEvents];
 static uint8_t g_event_count = 0;
 static uint32_t g_system_tick_ms = 0;
+// Estado de recuperação, paralelo a g_events (mesmo índice): é deslocado junto com ele.
+static RecoveryState g_recovery_states[kMaxEvents];
 
 void DiagnosticManager::init() noexcept {
     // Clear all events
@@ -24,6 +26,7 @@ void DiagnosticManager::init() noexcept {
     }
     g_event_count = 0;
     g_system_tick_ms = 0;
+    for (uint8_t i = 0; i < kMaxEvents; ++i) { g_recovery_states[i] = RecoveryState::IDLE; }
 }
 
 bool DiagnosticManager::report_fault(DiagnosticCode code,
@@ -44,23 +47,35 @@ bool DiagnosticManager::report_fault(DiagnosticCode code,
             g_events[i].freeze_frame[0] = param1;
             g_events[i].freeze_frame[1] = param2;
             g_events[i].timestamp_ms = g_system_tick_ms;
+            // Escalada: a mesma falha reportada com severidade maior sobe (ex.: ADC em
+            // recuperação WARNING → recuperação falhou CRITICAL). Nunca rebaixa por reporte.
+            if (static_cast<uint8_t>(severity) > static_cast<uint8_t>(g_events[i].severity)) {
+                g_events[i].severity = severity;
+            }
             return false;  // Not new
         }
     }
     
     // New fault - add to event list if space available
     if (g_event_count >= kMaxEvents) {
-        // Overwrite oldest non-critical event
-        for (uint8_t i = 0; i < kMaxEvents - 1; ++i) {
-            if (g_events[i].severity != FaultSeverity::CRITICAL) {
-                // Shift events
-                g_events[i] = g_events[i + 1];
-            }
+        // Descarta o evento não crítico mais antigo (com o estado de recuperação junto).
+        // Tudo crítico: o novo evento não tem lugar.
+        uint8_t victim = kMaxEvents;
+        for (uint8_t i = 0; i < kMaxEvents; ++i) {
+            if (g_events[i].severity != FaultSeverity::CRITICAL) { victim = i; break; }
+        }
+        if (victim == kMaxEvents) {
+            return false;
+        }
+        for (uint8_t j = victim; j < kMaxEvents - 1; ++j) {
+            g_events[j] = g_events[j + 1];
+            g_recovery_states[j] = g_recovery_states[j + 1];
         }
         g_event_count = kMaxEvents - 1;
     }
     
     // Add new event
+    g_recovery_states[g_event_count] = RecoveryState::IDLE;
     DiagnosticEvent& event = g_events[g_event_count++];
     event.code = code;
     event.severity = severity;
@@ -85,10 +100,12 @@ bool DiagnosticManager::clear_fault(DiagnosticCode code) noexcept {
             // Shift remaining events
             for (uint8_t j = i; j < g_event_count - 1; ++j) {
                 g_events[j] = g_events[j + 1];
+                g_recovery_states[j] = g_recovery_states[j + 1];
             }
             --g_event_count;
             // Clear the last slot
             g_events[g_event_count].code = DiagnosticCode::NONE;
+            g_recovery_states[g_event_count] = RecoveryState::IDLE;
             return true;
         }
     }
@@ -125,9 +142,6 @@ FaultSeverity DiagnosticManager::get_highest_severity() noexcept {
     }
     return highest;
 }
-
-// Recovery state machine storage
-static RecoveryState g_recovery_states[16];
 
 RecoveryState DiagnosticManager::update_recovery(DiagnosticCode code,
                                                  bool success) noexcept {

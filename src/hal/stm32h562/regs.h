@@ -208,21 +208,14 @@
 #define GPIO_AF9   9u
 #define GPIO_AF12  12u
 
-static inline void gpio_set_output(volatile uint32_t* moder,
-                                   volatile uint32_t* ospeedr,
-                                   uint8_t pin) noexcept {
-    *moder = (*moder & ~(3u << (pin * 2u))) | (GPIO_MODER_OUTPUT << (pin * 2u));
-    *ospeedr = (*ospeedr & ~(3u << (pin * 2u))) | (GPIO_OSPEED_VHIGH << (pin * 2u));
-}
-
 // Inline: configura pino como AF
 static inline void gpio_set_af(volatile uint32_t* moder,
                                 volatile uint32_t* afr_l,
                                 volatile uint32_t* afr_h,
                                 volatile uint32_t* ospeedr,
                                 uint8_t pin, uint8_t af) noexcept {
-    // MODER = AF (10b)
-    *moder = (*moder & ~(3u << (pin * 2u))) | (GPIO_MODER_AF << (pin * 2u));
+    // Ordem segura: AFR e OSPEEDR ANTES do MODER. Com MODER=AF primeiro, o pino ficava um
+    // instante no AF0 (o reset do AFR) e podia gerar um pulso espúrio nos PWMs.
     // OSPEEDR = very high
     *ospeedr = (*ospeedr & ~(3u << (pin * 2u))) | (GPIO_OSPEED_VHIGH << (pin * 2u));
     // AFR
@@ -232,6 +225,8 @@ static inline void gpio_set_af(volatile uint32_t* moder,
         uint8_t p = pin - 8u;
         *afr_h = (*afr_h & ~(0xFu << (p * 4u))) | (static_cast<uint32_t>(af) << (p * 4u));
     }
+    // MODER = AF (10b)
+    *moder = (*moder & ~(3u << (pin * 2u))) | (GPIO_MODER_AF << (pin * 2u));
 }
 
 // Inline: configura pino como ANALOG (ADC)

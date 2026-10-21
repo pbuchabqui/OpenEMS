@@ -1,3 +1,4 @@
+#include "hal/critical_section.h"
 #include "engine/misfire_detect.h"
 #include "engine/engine_config.h"
 #include "engine/constants.h"
@@ -64,18 +65,21 @@ static void evaluate_window(uint8_t cyl) noexcept {
 
 namespace ems::engine {
 
-void misfire_init() noexcept {
-    // Mapeia cada cilindro para sua posição TDC a partir de kFiringOrder.
-    // O i-ésimo evento de ignição ocorre a i × 180° no ciclo de 720°.
-    // Para roda 60-2: 180° = 30 dentes; os dois semiciclos distinguem-se por phase_A.
-    //   i=0 → tooth  0, phA=true   (  0°)
-    //   i=1 → tooth 30, phA=true   (180°)
-    //   i=2 → tooth  0, phA=false  (360°)
-    //   i=3 → tooth 30, phA=false  (540°)
-    for (uint8_t i = 0u; i < kN; ++i) {
-        const uint8_t cyl = cfg::kFiringOrder[i];
-        g_cyl_tdc[cyl].tdc_tooth = static_cast<uint8_t>((i % 2u) * 30u);
-        g_cyl_tdc[cyl].phase_A   = (i < 2u);
+void misfire_rebuild_map() noexcept {
+    // Posição TDC de cada cilindro na roda 60-2, a partir do TDC do cilindro no ciclo de 720°
+    // (cyl_tdc_deg, via kFiringOrder) e do ângulo do dente 0 (trigger_tooth0_engine_deg) — o
+    // mesmo que o agendador usa. Antes assumia dente 0/30 fixo e atribuía a janela ao cilindro
+    // errado com qualquer offset de gatilho. Com offset 0: i=0 → dente 0 fase A, i=1 → 30 A,
+    // i=2 → 0 B, i=3 → 30 B (como antes).
+    const uint16_t trig = ems::engine::cfg::g_eng_cfg.trigger_tooth0_engine_deg % 720u;
+    ems::hal::CriticalSectionGuard guard;   // o ISR do CKP lê g_tooth_to_cyl
+    for (uint8_t cyl = 0u; cyl < kN; ++cyl) {
+        const uint16_t tdc = ems::engine::cfg::cyl_tdc_deg(cyl);
+        const uint16_t rel = static_cast<uint16_t>((tdc + 720u - trig) % 720u);
+        uint8_t tooth = static_cast<uint8_t>((rel % 360u) / 6u);
+        if (tooth >= ems::engine::kRealTeeth60_2) { tooth = ems::engine::kRealTeeth60_2 - 1u; }
+        g_cyl_tdc[cyl].tdc_tooth = tooth;
+        g_cyl_tdc[cyl].phase_A   = (rel < 360u);
     }
     // Pré-computa mapa dente→cilindro para lookup O(1) no ISR.
     std::memset(g_tooth_to_cyl, 0xFF, sizeof(g_tooth_to_cyl));  // -1 em int8_t
@@ -88,6 +92,10 @@ void misfire_init() noexcept {
             }
         }
     }
+}
+
+void misfire_init() noexcept {
+    misfire_rebuild_map();
     misfire_reset();
 }
 

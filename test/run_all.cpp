@@ -21,6 +21,10 @@ int main(void) {
     test_etb_driver_read_sensors_null();
     test_etb_driver_set_motor_pwm();
     test_etb_driver_shutdown();
+    test_etb_apply_output();
+    test_etb_rev_cut_request();
+    test_etb_follow_fault();
+    test_etb_follow_rearm_once();
     test_etb_driver_clear_fault();
 
     // ── ETB Control ───────────────────────────────────────────────────────────
@@ -81,6 +85,10 @@ int main(void) {
     test_sensors_health_status();
     test_sensors_calibration();
     test_sensors_tick_100ms_clt_iat();
+    test_sensors_tick_pedal_publishes();
+    test_sensors_pedal_range_ceiling();
+    test_sensors_pedal_plausibility_time();
+    test_sensors_map_baro_refuses_vacuum();
     test_sensors_maf_freq_capture();
 
     // ── Fuel Calc ─────────────────────────────────────────────────────────────
@@ -222,6 +230,10 @@ int main(void) {
 
     // ── DIAGNOSTIC MANAGER ──────────────────────────────────────────────
     printf("\n=== DIAGNOSTIC MANAGER ===");
+    test_usb_tx_budget_without_config();
+    test_flex_freq_window();
+    test_adc_init_skips_when_ok();
+    test_diagnostic_tick_stamps_events();
     test_diagnostic_manager_all();
 
     // ── HAL ADC ───────────────────────────────────────────────────────────
@@ -273,12 +285,22 @@ int main(void) {
     test_driveline_retard();
     test_driveline_page0();
     test_engine_calc_driveline_retard();
+    test_engine_calc_spark_skip_follows_cam_phase();
     test_idle_air_and_dashpot();
     test_driveability_wire_rules();
     test_dfco_entry_shaped_by_clt();
     test_idle_spark_error_curve();
     test_engine_calc_overrun_retard();
     test_engine_calc_pw_drop_limit();
+    test_engine_calc_dwell_floor();
+    test_engine_calc_limp_rpm_hysteresis();
+    test_output_test_enter_shuts_etb();
+    test_aux_fan_clt_fault();
+    test_aux_pins_safe_early();
+    test_aux_fan_clt_fault_via_ticks();
+    test_aux_pump_boot_prime_then_rpm();
+    test_engine_calc_map_fault_runs_on_model();
+    test_engine_calc_vbatt_fault_safe_values();
     test_math_xtau_steady_and_step();
     test_math_production_tables();
     test_math_misfire_threshold();
@@ -304,6 +326,18 @@ int main(void) {
     test_ts_axes_page();
     test_ts_envelope_canid_forms();
     test_och_launch_tc_status();
+    test_och_vbatt_fault_status();
+    test_ui_parser_stray_control_bytes();
+    test_och_clt_above_87c();
+    test_ui_parser_interbyte_timeout();
+    test_ecu_sched_inhibit_midcharge();
+    test_ecu_sched_on_stall();
+    test_limp_gating_cut_families();
+    test_can_stack_tx_single_buffer();
+    test_can_stack_refused_tx_is_retried();
+    test_can_stack_fco_uses_real_dt();
+    test_can_stack_wbo2_plausibility();
+    test_can_rx_ignores_extended_and_remote();
     test_och_live_ve_byte();
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();

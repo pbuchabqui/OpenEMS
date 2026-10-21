@@ -77,16 +77,6 @@ uint8_t g_reject_mask = 0u;
 
 }  // namespace
 
-bool engine_config_valid(const EngineConfigRam& c) noexcept {
-    for (const FieldSpec& f : kFields) {
-        const uint16_t v = c.*(f.field);
-        if (v < f.lo || v > f.hi) {
-            return false;
-        }
-    }
-    return true;
-}
-
 uint8_t engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept {
     if (page0_buf == nullptr || len < kMinPageLen) {
         return g_reject_mask;

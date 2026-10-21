@@ -301,6 +301,19 @@ void test_ckp_prime_on_tooth(void) {
     // After reset: no prime pending
     quick_crank_reset();
     CHECK_EQ(quick_crank_consume_prime(), 0u, "no prime after quick_crank_reset");
+
+    // Antes do 1º gap o snapshot tem rpm_x10 = 0: o tick de 2 ms do quick_crank_update não
+    // pode zerar a contagem do prime enquanto os dentes estão chegando.
+    quick_crank_reset();
+    ckp_test_reset(); g_ckp_cap = 0u;
+    quick_crank_set_prime_context(-400, 500);
+    uint32_t t_ms = 1000u;
+    for (uint32_t i = 0u; i < 7u; ++i) {
+        ckp_fire(kCrankPeriod);
+        for (int k = 0; k < 3; ++k) { quick_crank_update(t_ms += 2u, 0u, false, -400, 0); }
+    }
+    CHECK_TRUE(quick_crank_consume_prime() > 0u,
+               "prime dispara mesmo com rpm_x10=0 e ticks de 2 ms entre os dentes");
 }
 
 void test_ckp_snap_fields(void) {

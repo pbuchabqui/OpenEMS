@@ -81,8 +81,8 @@ def parse_realtime(raw):
     rt['rpm'] = struct.unpack_from('<H', raw, 0)[0]
     rt['map_bar_x100'] = raw[2] if len(raw) > 2 else 0
     rt['tps_pct'] = raw[3] if len(raw) > 3 else 0
-    rt['clt_p40'] = struct.unpack_from('<b', raw, 4)[0] if len(raw) > 4 else 0
-    rt['iat_p40'] = struct.unpack_from('<b', raw, 5)[0] if len(raw) > 5 else 0
+    rt['clt_p40'] = struct.unpack_from('<B', raw, 4)[0] if len(raw) > 4 else 0
+    rt['iat_p40'] = struct.unpack_from('<B', raw, 5)[0] if len(raw) > 5 else 0
     return rt
 
 def parse_diag(raw):

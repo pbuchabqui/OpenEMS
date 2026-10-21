@@ -94,6 +94,16 @@ void test_fuel_decel_cut(void) {
     CHECK_FALSE(fuel_decel_cut_active(), "deactivates: throttle open");
     fuel_decel_cut_reset();
     CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, 600), "no cut: cold engine");
+
+    // Histerese de 5 °C na saída por motor frio: CLT na fronteira não faz o corte oscilar.
+    fuel_decel_cut_reset();
+    const int16_t min_clt = ems::engine::decel_cut_min_clt_x10;
+    CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, min_clt), "entra com CLT no limiar");
+    CHECK_TRUE(fuel_decel_cut_update(20000u, 0u, static_cast<int16_t>(min_clt - 30)),
+               "CLT 3 °C abaixo do limiar: mantém (histerese)");
+    CHECK_FALSE(fuel_decel_cut_update(20000u, 0u, static_cast<int16_t>(min_clt - 60)),
+                "CLT 6 °C abaixo do limiar: sai");
+    fuel_decel_cut_reset();
 }
 
 void test_fuel_decel_cut_gates(void) {
@@ -1022,6 +1032,24 @@ void test_fuel_ltft_accum_commit_ve(void) {
     CHECK_EQ(fuel_ltft_accum_hits(mi, ri), 0u, "stats limpos pós-commit");
     CHECK_TRUE(ve_table[mi][ri] > 100u, "VE > 100 após bake-in STFT+");
     CHECK_TRUE(ve_table[mi][ri] <= kLtftAccumVeMax, "VE ≤ max");
+
+    // Célula de boost acima do teto do bake (tabela padrão tem 207..254): bake positivo
+    // não pode rebaixá-la para o teto.
+    fuel_ltft_accum_reset();
+    ve_table[mi][ri] = 254u;
+    fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    for (uint16_t n = 0u; n < static_cast<uint16_t>(kLtftAccumReadyHits); ++n) {
+        fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 5000u, 500u);
+    }
+    // 254 está acima de kLtftAccumVeMax (200). O teto não rebaixa a célula e o
+    // commit recusa: um true aqui desenrolaria o STFT sem mudar a VE.
+    const int16_t stft_at_ceiling = fuel_get_stft_pct_x10();
+    const uint32_t commits_at_ceiling = g_dbg_ltft_accum_commits;
+    CHECK_FALSE(fuel_ltft_accum_try_commit(mi, ri),
+                "VE acima do teto: commit recusa em vez de rebaixar");
+    CHECK_EQ(ve_table[mi][ri], 254u, "célula de boost permanece em 254");
+    CHECK_EQ(g_dbg_ltft_accum_commits, commits_at_ceiling, "recusa não conta commit");
+    CHECK_EQ(fuel_get_stft_pct_x10(), stft_at_ceiling, "recusa não desenrola o STFT");
 
     // apply_all: bulk VE+LTFT em células ready; STFT global NÃO desenrola N vezes
     fuel_ltft_accum_reset();

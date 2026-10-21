@@ -26,6 +26,13 @@ namespace ems::engine {
 namespace {
 
 constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
+constexpr uint32_t kLimpRpmHyst_x10  = 200u;    // 20 rpm: evita chatter no corte
+// engine_calc_step é a fronteira: recebe SensorData que pode não ter passado por
+// sensors_tick_100ms (testes, simulador). Idempotente sobre o valor já saneado, e
+// protege o domínio 6..18 V que corr_vbatt/dwell assumem.
+inline uint16_t safe_vbatt_mv(const ems::drv::SensorData& s) noexcept {
+    return ems::drv::vbatt_safe_mv(s.vbatt_mv);
+}
 constexpr uint8_t  kFaultBitMap  = (1u << 0u);  // SensorId::MAP
 constexpr uint8_t  kFaultBitClt  = (1u << 3u);  // SensorId::CLT
 constexpr uint8_t  kFaultBitFuel = (1u << 6u);  // SensorId::FUEL_PRESS
@@ -33,12 +40,15 @@ constexpr uint8_t  kFaultBitOil  = (1u << 7u);  // SensorId::OIL_PRESS
 // Coolant protection (value-based, not just open/short fault_bits).
 constexpr int16_t  kOvertempWarnX10 = 1050;    // 105 °C
 constexpr int16_t  kOvertempCritX10 = 1150;    // 115 °C
-constexpr uint32_t kSchedulerTicksPerMs = 62500u;  // TIM5_CNT @ 62.5 MHz
+constexpr uint32_t kSchedulerTicksPerMs = ECU_SCHED_CLOCK_HZ / 1000u;  // TIM5_CNT
+constexpr uint32_t kMinDwellTicks = kSchedulerTicksPerMs / 2u;  // 0,5 ms
 constexpr uint16_t kMapMinBarX100 = 10u;
 constexpr uint16_t kMapMaxBarX100 = 300u;
 constexpr uint16_t kAePeriodMs = 2u;
 
 EngineCalcOut s_out = {};
+uint16_t s_prev_tooth = 0u;       // detecta o wrap do tooth_index (1 por volta)
+bool s_limp_rpm_latched = false;   // corte de limp a 3000 rpm, com histerese
 
 struct CachedFuelCorrections {
     bool valid;
@@ -54,18 +64,19 @@ struct CachedFuelCorrections {
 CachedFuelCorrections g_fuel_corr_cache = {};
 
 const CachedFuelCorrections& fuel_corrections_for(const ems::drv::SensorData& sensors) noexcept {
+    const uint16_t vbatt_mv = safe_vbatt_mv(sensors);
     if (!g_fuel_corr_cache.valid ||
         g_fuel_corr_cache.clt_x10 != sensors.clt_degc_x10 ||
         g_fuel_corr_cache.iat_x10 != sensors.iat_degc_x10 ||
-        g_fuel_corr_cache.vbatt_mv != sensors.vbatt_mv) {
+        g_fuel_corr_cache.vbatt_mv != vbatt_mv) {
         g_fuel_corr_cache.valid = true;
         g_fuel_corr_cache.clt_x10 = sensors.clt_degc_x10;
         g_fuel_corr_cache.iat_x10 = sensors.iat_degc_x10;
-        g_fuel_corr_cache.vbatt_mv = sensors.vbatt_mv;
+        g_fuel_corr_cache.vbatt_mv = vbatt_mv;
         g_fuel_corr_cache.corr_clt_x256 = corr_clt(sensors.clt_degc_x10);
         g_fuel_corr_cache.corr_iat_x256 = corr_iat(sensors.iat_degc_x10);
         g_fuel_corr_cache.iat_density_q8 = corr_iat_density_q8(sensors.iat_degc_x10);
-        g_fuel_corr_cache.dead_time_us = corr_vbatt(sensors.vbatt_mv);
+        g_fuel_corr_cache.dead_time_us = corr_vbatt(vbatt_mv);
     }
     return g_fuel_corr_cache;
 }
@@ -117,6 +128,9 @@ void commit(int16_t spark_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
 void engine_calc_reset() noexcept {
     s_out = {};
     g_fuel_corr_cache = {};
+    s_limp_rpm_latched = false;
+    s_prev_tooth = 0u;
+    spark_skip_reset();
 }
 
 const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
@@ -126,6 +140,9 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
 
     const bool full_sync = (snap.state == ems::drv::SyncState::FULL_SYNC);
     const bool sched_sync = (snap.state == ems::drv::SyncState::HALF_SYNC || full_sync);
+    // DFCO só vive em FULL_SYNC: um corte travado de antes de um stall/perda de sync não pode
+    // sobreviver à partida seguinte (reiniciava com combustível cortado).
+    if (!full_sync) { fuel_decel_cut_reset(); }
 
     const bool map_fault = (sensors.fault_bits & kFaultBitMap) != 0u;
     // MAP "sensor": por padrão o IIR ao vivo de sensors.cpp (suaviza
@@ -167,6 +184,10 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     // Overtemp from CLT value (open/short already covered by clt_fault).
     const bool overtemp_warn = sensors.clt_degc_x10 >= kOvertempWarnX10;
     const bool overtemp_crit = sensors.clt_degc_x10 >= kOvertempCritX10;
+    // O CRITICAL do diagnóstico é um corte independente do corte por valor do limp_gating: o bit
+    // PROTECT de sobretemperatura desliga só o corte por valor; este é desligado pelo bit DIAG
+    // (coberto por teste: "diag critical only"). Histerese: o CRITICAL só limpa abaixo de
+    // overtemp_warn (105 °C), 10 °C de folga de propósito.
     if (overtemp_crit) {
         DiagnosticManager::report_fault(
             DiagnosticCode::OVERTEMP_CRITICAL,
@@ -190,15 +211,24 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     //   (1) FULL_SYNC → running fuel
     //   (2) HALF_SYNC + cranking → batch; Hall does NOT allow HALF running fuel
     //   (3) flood / protect / LOSS_OF_SYNC → inj cut
-    const bool limp_rpm_cut = s_out.limp_active &&
-        (snap.rpm_x10 > kLimpRpmLimit_x10);
+    if (!s_out.limp_active || snap.rpm_x10 <= kLimpRpmLimit_x10 - kLimpRpmHyst_x10) {
+        s_limp_rpm_latched = false;
+    } else if (snap.rpm_x10 > kLimpRpmLimit_x10) {
+        s_limp_rpm_latched = true;
+    }
+    const bool limp_rpm_cut = s_out.limp_active && s_limp_rpm_latched;
+    // Mesmo gate do limp_gating: com o PROTECT desligando o corte, o ETB também o ignora.
+    s_out.limp_rpm_cut = limp_rpm_cut && !limp_gating_limp_rpm_disabled();
     const CachedFuelCorrections& fuel_corr = fuel_corrections_for(sensors);
     // Dwell 2D: tensão × RPM (MS42 §2.2.2.2.1).
     // Calculado fora do cache porque depende de RPM que varia a cada dente.
     const uint16_t dwell_ms_x10 = dwell_ms_x10_from_vbatt_rpm(
-        sensors.vbatt_mv, snap.rpm_x10);
-    const uint32_t dwell_ticks =
+        safe_vbatt_mv(sensors), snap.rpm_x10);
+    // Piso de 0,5 ms: tabela zerada/corrompida não pode deixar a bobina sem carga.
+    const uint32_t dwell_ticks_raw =
         (static_cast<uint32_t>(dwell_ms_x10) * kSchedulerTicksPerMs) / 10u;
+    const uint32_t dwell_ticks =
+        dwell_ticks_raw < kMinDwellTicks ? kMinDwellTicks : dwell_ticks_raw;
 
     // Multi-spark (MS42 §2.2.3): habilita/desabilita conforme RPM gate.
     // Hard ceiling 1500 RPM (kMsparkRpmCeilingX10) — window too short above.
@@ -244,9 +274,10 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
                 (static_cast<uint32_t>(mx) * into) / win);
         }
         spark_skip_set_ratio_q8(ratio);
-        static uint16_t s_prev_tooth = 0u;
-        if (snap.tooth_index < s_prev_tooth) {
-            spark_skip_on_rev();
+        if (snap.state != ems::drv::SyncState::FULL_SYNC) {
+            spark_skip_clear_mask();
+        } else if (snap.tooth_index < s_prev_tooth) {
+            spark_skip_on_rev(snap.phase_A);
         }
         s_prev_tooth = snap.tooth_index;
     }
@@ -276,14 +307,12 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     gate_in.cranking = qc.cranking;
     gate_in.full_sync = full_sync;
     gate_in.half_sync = half_sync;
-    gate_in.phase_valid = true;
-    gate_in.sequential = ::ecu_sched_is_sequential() != 0u;
     gate_in.etb_fault = etb_fault;
     gate_in.inj_duty_pct = static_cast<uint8_t>(
         fuel_inj_duty_pct_x10() / 10u);
     gate_in.inj_duty_cut = fuel_inj_duty_cut_active();
     gate_in.now_ms = in.now_ms;
-    gate_in.map_fault = map_fault;
+    // Falha de MAP não corta: segue com o MAP do modelo; o limp (limp_rpm_cut) limita a 3000 rpm.
     gate_in.overtemp_crit = overtemp_crit;
     gate_in.diag_critical = diag_critical;
     gate_in.flood_clear = flood_clear;
@@ -337,6 +366,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         // Contexto DFCO: MAP p/ o gate de vácuo e marcha p/ inibição
         // pós-troca (ambos inertes com as respectivas cals a 0).
         fuel_decel_cut_notify_map(map_bar_x100);
+        fuel_decel_cut_notify_time(in.now_ms);  // relógio do DFCO corre mesmo sem o sinal de marcha
         {
             uint8_t gr = 0u;
             if (vehicle_gear(gr, in.now_ms)) {
@@ -346,9 +376,15 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         // Pedal (APP) = driver intent, valid with or without ETB (the
         // ETB blade opens by itself for idle air; without ETB the
         // ETB TPS input reads 0 and would allow a cut under load).
+        // APP em falha lê 0% (pedal "solto"): isso armaria o corte de desaceleração com o
+        // pedal possivelmente pressionado. Em falha assume pedal pressionado (sem DFCO).
+        const bool app_fault = (sensors.throttle_fault_bits &
+            (ems::drv::THROTTLE_FAULT_APP1 | ems::drv::THROTTLE_FAULT_APP2 |
+             ems::drv::THROTTLE_FAULT_APP_PLAUS)) != 0u;
+        const uint16_t app_for_dfco = app_fault ? 1000u : sensors.app_pct_x10;
         const bool decel_cut_active = !crank_or_ase &&
             fuel_decel_cut_update(
-                snap.rpm_x10, sensors.app_pct_x10, sensors.clt_degc_x10);
+                snap.rpm_x10, app_for_dfco, sensors.clt_degc_x10);
         misfire_set_all_inhibit(
             decel_cut_active || crank_or_ase || flood_clear);
         // X-τ desde !cranking (inclui afterstart frio — pior wall-wetting).
@@ -395,6 +431,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         } else {
             transient_fuel_reset();
             fuel_pw_limit_drop_reset();
+            s_out.net_pw_us = 0u;   // sem fluxo líquido: não deixar o valor do passo anterior
             final_pw_us_base = 0u;  // fluxo ≈ 0 (base ≤ dead-time)
         }
         // A fall in demand may not shorten the pulse faster than fuel_pw_drop_max_us per step.
@@ -508,6 +545,8 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     } else {
         // No sync / engine stopped: the next PW is not a fall from the previous one.
         fuel_pw_limit_drop_reset();
+        s_out.pw_ms_x10 = 0u;   // telemetria "0 sob corte": sem sync não há injeção
+        s_out.net_pw_us = 0u;
     }
     s_out.map_fused_x100 = map_bar_x100;
 

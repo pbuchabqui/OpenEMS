@@ -89,6 +89,16 @@ void test_output_test_enter_gate(void) {
     CHECK_TRUE(!ems::engine::output_test_active(), "inactivo com motor girando");
 }
 
+void test_output_test_enter_shuts_etb(void) {
+    section("output_test: entrar desliga o ETB (nao herda o ultimo PWM)");
+    ot_reset_all();
+    CHECK_TRUE(::etb_driver_set_motor_pwm(500), "driver READY aceita PWM");
+    CHECK_EQ(::etb_driver_test_motor_pwm(), 500, "PWM 500 antes de entrar");
+    CHECK_TRUE(ems::engine::output_test_enter(), "enter com RPM=0");
+    CHECK_EQ(::etb_driver_test_motor_pwm(), 0, "PWM 0 apos entrar no teste");
+    ems::engine::output_test_exit();
+}
+
 void test_output_test_fire_inj(void) {
     section("output_test: FIRE_INJ agenda pulso e clampa");
     ot_reset_all();
