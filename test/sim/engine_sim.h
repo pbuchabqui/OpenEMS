@@ -3,7 +3,7 @@
  * Virtual engine for closed-loop timing tests (host only).
  *
  * Drives the REAL firmware capture + scheduler code through the single
- * simulated TIM5 (hal/tim5_host.h):
+ * simulated TIM5 (hal/host/tim5_host.h):
  *   crank kinematics θ(t)  →  60-2 / cam edges (with jitter, machining error,
  *   noise)  →  ckp_tim5_ch1/ch2_isr  →  ecu_sched hook  →  TIM5_CH3 compare
  *   →  ecu_sched_evt_dispatch  →  out_pin_write  →  timestamped pin log.

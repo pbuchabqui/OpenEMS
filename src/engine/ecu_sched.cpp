@@ -19,11 +19,11 @@ namespace si = ems::engine::sched_internal;
 #include <stdint.h>
 
 #if defined(EMS_HOST_TEST)
-// Host: the single simulated TIM5 (hal/tim5_host.h). GPIO lives in hal/out_pins.
+// Host: the single simulated TIM5 (hal/host/tim5_host.h). GPIO lives in hal/out_pins.
 #define TIM_SR_CC3IF 0x8U
 #define TIM_DIER_CC3IE (1U << 3)
 
-#include "hal/tim5_host.h"
+#include "hal/host/tim5_host.h"
 #define TIM5_CCR3   ems_test_tim5_ccr3
 #define TIM5_SR     ems_test_tim5_sr
 #define TIM5_DIER   ems_test_tim5_dier

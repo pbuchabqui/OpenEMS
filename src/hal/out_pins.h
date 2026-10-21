@@ -14,7 +14,7 @@
 #include "hal/board_pinout.h"
 
 #if defined(EMS_HOST_TEST)
-#include "hal/out_pins_host.h"
+#include "hal/host/out_pins_host.h"
 #else
 #include "hal/regs.h"
 #endif

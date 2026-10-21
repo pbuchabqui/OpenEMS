@@ -11,7 +11,7 @@
 #include "engine/ecu_sched.h"
 #include "engine/engine_config.h"
 #include "hal/out_pins.h"
-#include "hal/tim5_host.h"
+#include "hal/host/tim5_host.h"
 
 namespace sim {
 namespace {

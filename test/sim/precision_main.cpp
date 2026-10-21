@@ -29,7 +29,7 @@
 #include "engine/ign_calc.h"
 #include "engine/limp_gating.h"
 #include "engine/table3d.h"
-#include "hal/tim5_host.h"
+#include "hal/host/tim5_host.h"
 #include "test/sim/engine_sim.h"
 
 using namespace sim;

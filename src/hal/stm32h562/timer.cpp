@@ -312,7 +312,7 @@ extern "C" void TIM5_IRQHandler(void) {
 #else  // EMS_HOST_TEST -------------------------------------------------------
 
 #include "hal/timer.h"
-#include "hal/tim5_host.h"
+#include "hal/host/tim5_host.h"
 volatile uint32_t ems_test_tim5_cnt     = 0u;
 volatile uint32_t ems_test_tim5_ccr1    = 0u;
 volatile uint32_t ems_test_tim5_ccr2    = 0u;
