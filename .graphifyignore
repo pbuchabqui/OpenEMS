@@ -6,3 +6,4 @@ tools/esp32_stimulator/
 tools/hil_test/
 tools/openems_dash/static/uplot.min.js
 test/
+tools/esp32_combined/ardustim_gui/assets/

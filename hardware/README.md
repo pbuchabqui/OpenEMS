@@ -6,23 +6,15 @@ ver [`docs/hw/microruseefi_as_base.md`](../docs/hw/microruseefi_as_base.md)).
 
 ## Estrutura
 
+> 📦 Os projetos KiCad `openems_v1` e `openems_ecu` foram removidos em 2026-10-21 (`a1e26fc`).
+> Recuperáveis com `git checkout a1e26fc~1 -- hardware/`. Os ficheiros ignorados pelo git
+> (gerbers `.zip`, modelos 3D `.7z`, `.kicad_prl`) foram apagados sem cópia.
+
 ```
 hardware/
 ├── README.md                 ← este ficheiro
-├── openems_v1/               ← ✅ projecto KiCad de produção (editar AQUI)
-├── openems_ecu/              ← ⛔ fork mRE, CONGELADO (recuo + libs verificadas)
-│   ├── rusefi_lib/           ← símbolos reutilizados pela board nova
-│   ├── rusefi_lib_external/  ← footprints/libs mRE
-│   └── hellen-one → vendor   ← só USB footprint (symlink)
 └── vendor/
     └── hw_microRusEfi/       ← submodule git (referência imutável)
-```
-
-## Abrir no KiCad 7+
-
-```bash
-kicad hardware/openems_v1/openems_v1.kicad_pro     # produção
-kicad hardware/openems_ecu/openems_ecu.kicad_pro   # congelado, só consulta
 ```
 
 ## Vendor (submodule)
@@ -89,6 +81,8 @@ npm install && npm run build
 ```
 
 ### Uso com OpenEMS
+
+> Histórico: o projeto `openems_ecu` abaixo foi removido (`a1e26fc`); restaure-o do git antes de seguir estes passos.
 
 ```bash
 # 1) Abrir o projecto no KiCad GUI (opcional para IPC; útil para ver o resultado)

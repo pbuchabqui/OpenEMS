@@ -7,7 +7,7 @@ ESP32 com `tools/esp32_combined`.
 
 **O que este teste NÃO prova:** que a ECU dirige bobinas e injetores, que a
 fonte e a proteção funcionam, que os sensores reais leem certo. A placa de ECU
-ainda não existe (`hardware/openems_v1` só tem o esquemático, incompleto). Por
+ainda não existe (o projeto KiCad `openems_v1` foi removido do repositório em 2026-10-21, `a1e26fc`). Por
 isso, **não ligue nada de potência** a esta placa: sem bobina, sem injetor, sem
 motor. Os pinos de saída vão direto ao ESP32 ou ao osciloscópio, em 3,3 V.
 
@@ -27,7 +27,7 @@ motor. Os pinos de saída vão direto ao ESP32 ou ao osciloscópio, em 3,3 V.
 
 ### 1.1 Revisão do chip (errata ES0565)
 
-Antes de tudo, anote a revisão do silício. O README (§ Errata STM32H562 ES0565)
+Antes de tudo, anote a revisão do silício. O `docs/errata_stm32h562.md` (errata ES0565)
 considera a **Rev X**. Na Rev A, PA1 (CMP) só tem histerese quando PA0 está em
 entrada, e a flash tem endurance de 1 kciclo.
 

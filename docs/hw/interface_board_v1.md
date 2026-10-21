@@ -830,7 +830,7 @@ Nunca ligar injetores ou bobinas nas etapas 1–3.
        latched até reset**. Confirmar que a alimentação/ready do CI precede a init.
    - **Não prosseguir** com máscara diferente de zero; injeção e ignição estarão inibidas de propósito.
 1. **Host** — `make host-test` e `make host-test-vgt6` verdes, incluindo o novo teste de VBATT.
-2. **Lacunas pendentes do README §P2** (ambas abertas, ambas pré-requisito de partida):
+2. **Lacunas pendentes de `docs/estado_e_hardening.md` §P2** (ambas abertas, ambas pré-requisito de partida):
    - Scope de INJ/IGN — latência e jitter contra o esperado (~0,4 µs / ~0,019° @8000), nos pinos
      `PE0/2/4/6` e `PE9/11/13/15` **com driver montado** e carga dummy resistiva.
    - Sync CKP/CMP de 200 a 8500 rpm com o estimulador (`tools/esp32_combined/`) **por TP-DIG** — a saída

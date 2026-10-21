@@ -143,7 +143,7 @@ safe = LOW. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
 
 > Os limites TPS1/TPS2 do ETB são recalibrados a cada power-on por varredura dos
 > batentes (`etb_autocal`); a última calibração boa é persistida (EtbCalRecord,
-> setor adaptativo) como fallback. Ver README §"ETB".
+> setor adaptativo) como fallback. Ver `docs/estado_e_hardening.md` (ETB).
 
 ## Relés — bomba e ventoinha (**difere por package**)
 

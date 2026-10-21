@@ -69,7 +69,7 @@ derivada: 69,10 − 2×2,80). A largura 30,48 mm está cotada no desenho.
 
 ## Estado face ao plano
 
-| Item README §5 | Estado |
+| Item `docs/hw/README.md` §5 | Estado |
 |----------------|--------|
 | Comprimento × largura | ✅ **69,10 × 38,62 mm** |
 | Furos montagem | ✅ Φ **3,2**, offset **2,80**, pitch X **30,48** |

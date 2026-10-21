@@ -19,13 +19,12 @@ Escopo: firmware e bancada (WeAct H562 VGT6 + ESP32). A placa v2 (MC33810, L9960
 
 Sem hardware. Reflete a divisão do README e a remoção dos projetos KiCad em 2026-10-21 (`a1e26fc`, recuperáveis no git).
 
-- `docs/bench_test_manual.md`: a linha 10 diz que `hardware/openems_v1` tem o esquemático e a linha 30 cita "README (§ Errata)", que agora é `docs/errata_stm32h562.md`.
-- `docs/hw/*` cita `hardware/openems_v1` e `hardware/openems_ecu` (`README.md`, `mcu_f407_to_h562_pin_map.md`, `microruseefi_as_base.md`): marcar como removido em vez de apagar o histórico.
+- Feito em 2026-10-21: `docs/bench_test_manual.md` (esquemático e errata), `hardware/README.md` (estrutura sem os projetos KiCad removidos) e as referências a "README §" em `docs/hw/pinout.md`, `weact_h562_coreboard.md` e `interface_board_v1.md` agora apontam para `docs/estado_e_hardening.md`, `docs/errata_stm32h562.md` e `docs/hw/README.md`.
 - O suporte a TLE8888 foi removido do firmware em 2026-10-07 (`9e7b309`: `src/hal/tle8888.{cpp,h}` e `tle8888_regs.h`). Feito em 2026-10-21: `docs/hw/README.md` marca como histórico o TLE8888 (§4) e os caminhos para os projetos KiCad removidos; `microruseefi_as_base.md` e `mcu_f407_to_h562_pin_map.md` ganharam a nota de links quebrados. `tle8888_crosscheck.md` e `tle8888_pinout.md` já estavam marcados como históricos e `vr_input_conditioning.md` como supersedido. Revisadas as menções restantes: `architecture_v2.md` (linha do driver atualizada para "removido"), `bom_v1_candidates.md`, `kicad_vendor_review.md` e `netlist_v1.md` ganharam aviso de histórico, `weact_h562_schematic.md` ganhou uma ressalva, e `interface_board_v1.md` e `pinout.md` já estavam corretos. Os itens "TLE8888" de Concluído são histórico e ficam.
-- `docs/wiring_diagram.md` ainda tem o mapa TIM2/PC legado: atualizar ao pinout de `docs/hw/pinout.md`.
-- `tools/ts/OpenEMS_model.msq` está fora do git: versionar ou ignorar.
-- `.graphifyignore`: excluir `tools/esp32_combined/ardustim_gui/assets/`, porque a `moment.js` embutida polui os nós centrais do grafo.
-- Pronto quando: `grep` por `hardware/openems_` e `README.md §` só acha menções históricas e `make ci-local` passa.
+- `docs/wiring_diagram.md` já está marcado como histórico (TLE8888 fora do projeto); o pinout vigente é `docs/hw/pinout.md`. Nada a atualizar.
+- `.graphifyignore` agora exclui `tools/esp32_combined/ardustim_gui/assets/`.
+- Em aberto: `tools/ts/OpenEMS_model.msq` (8,7 KB, um tune do TunerStudio gerado em 18/10, sem referência em Makefile, tools ou docs) continua fora do git: versionar ou ignorar.
+- Pronto quando: `grep` por `hardware/openems_` e `README.md §` só acha menções históricas e `make ci-local` passa. Verificado em 2026-10-21 (`ci-local` OK), falta só o `.msq`.
 
 ### Fase 1 — Firmware sem silício novo
 
