@@ -1,5 +1,7 @@
 # Revisão KiCad: Speeduino + rusEFI (vs OpenEMS)
 
+> ⛔ **Parcialmente histórico.** A secção **TLE8888** descreve símbolos e pinos de um CI que **saiu** do projeto (`9e7b309`), e os projetos KiCad `hardware/openems_*` foram removidos do repositório em 2026-10-21 (`a1e26fc`). A revisão de Speeduino/rusEFI continua válida como referência.
+
 > **Data:** 2026-07-20  
 > **Regra de projecto:** consultar Speeduino/rusEFI **antes** de inventar HW.  
 > Clones de referência: usar o submodule `hardware/vendor/hw_microRusEfi` (e submodules internos).

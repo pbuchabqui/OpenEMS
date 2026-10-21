@@ -57,7 +57,7 @@ Nada disto foi escrito. É um projecto próprio, a dimensionar deliberadamente.
 
 | Item | Estado |
 |---|---|
-| `src/hal/tle8888.cpp` + `tle8888_regs.h` | **reformam-se** — ~20 KB de driver, reescrito contra o DS Rev 1.2 há dias |
+| `src/hal/tle8888.cpp` + `tle8888_regs.h` | ✅ **removidos** do firmware em 2026-10-07 (`9e7b309`), em vez de reescritos. Os drivers dos CIs novos abaixo continuam por escrever e estão fora do roadmap atual (`docs/ROADMAP.md`) |
 | Driver TPS65381A-Q1 | novo — **e o window watchdog tem de ser servido**, ao contrário da `-2QK` |
 | Driver MC33810 | novo — SPI de configuração; o caminho de timing continua a ser GPIO directo |
 | Driver L9960T | novo |

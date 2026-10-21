@@ -20,7 +20,7 @@ Não substitui o PDF. Extrai o que a **placa de interface** precisa: rails, head
 | **VREF+** | pino MCU VREF+ exposto no header P1 |
 
 A carrier OpenEMS **não deve alimentar sensores ratiométricos pelo 5 V ruidoso do USB**;
-usa trackers T5V1/T5V2 do TLE8888. O coreboard pode ser alimentado por **+3V3** da carrier
+usa trackers T5V1/T5V2 do TLE8888 *(histórico: TLE8888 removido do projeto, `9e7b309`)*. O coreboard pode ser alimentado por **+3V3** da carrier
 ou por VB/5V conforme escolha de montagem — documentar no esquemático da interface.
 
 ---
