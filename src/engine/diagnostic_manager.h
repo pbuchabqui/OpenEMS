@@ -232,10 +232,6 @@ public:
     
     // Constants must be public for static array sizing
     static constexpr uint8_t kMaxEvents = 16;
-
-private:
-    static constexpr uint16_t kFaultDebounceCount = 3;
-    static constexpr uint32_t kRecoveryTimeoutMs = 5000;
 };
 
 void diagnostic_tick(uint32_t elapsed_ms) noexcept;

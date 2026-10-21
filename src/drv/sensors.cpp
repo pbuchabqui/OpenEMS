@@ -559,16 +559,22 @@ inline void sample_fast_channels() noexcept {
         DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE,
                                        FaultSeverity::WARNING,
                                        map_raw, 0);
+    } else {
+        DiagnosticManager::clear_fault(DiagnosticCode::MAP_SENSOR_RANGE);
     }
     if (g_fault[static_cast<uint8_t>(SensorId::TPS)].active) {
         DiagnosticManager::report_fault(DiagnosticCode::TPS_SENSOR_RANGE,
                                        FaultSeverity::WARNING,
                                        tps_raw, 0);
+    } else {
+        DiagnosticManager::clear_fault(DiagnosticCode::TPS_SENSOR_RANGE);
     }
     if (g_fault[static_cast<uint8_t>(SensorId::MAF)].active) {
         DiagnosticManager::report_fault(DiagnosticCode::MAF_SENSOR_RANGE,
                                        FaultSeverity::WARNING,
                                        mafv_raw, 0);
+    } else {
+        DiagnosticManager::clear_fault(DiagnosticCode::MAF_SENSOR_RANGE);
     }
     // O2 ADC fault removed — O2 now CAN-only; knock_raw uses that channel.
     
@@ -585,6 +591,8 @@ inline void sample_fast_channels() noexcept {
                                        FaultSeverity::WARNING,
                                        g_data_staging.map_bar_x1000,
                                        g_data_staging.tps_pct_x10);
+    } else {
+        DiagnosticManager::clear_fault(DiagnosticCode::MAP_TPS_CORRELATION);
     }
     #endif
 

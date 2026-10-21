@@ -37,7 +37,7 @@ Itens de "Registrado e deixado de propósito", resolvidos com host-tests.
 5. ~~Páginas 0x0A e 0x0C~~ feito em 2026-10-21: escrita recusada (`page_is_fw_owned`, mesmo caminho da página 0x03) nos protocolos legado e envelope, com teste `test_ltft_pages_reject_writes`. O LTFT canónico vive em `g_ltft_*`/NVM adaptativo, não na página 10.
 6. ~~CAN 0x402 e status bits~~ feito em 2026-10-21: o 0x402 agora usa `g_eng_cfg.injector_flow_cc_min` e `kCylinderCount` em vez de 450 cc/min e 4 cilindros fixos. O layout dos status bits (bits 0-7 em 0x400, 8-15 em 0x401 data[6]) estava certo, mas o override de `WBO2_FAULT` ficava só no 0x400, que não leva o bit 9, e o 0x401 enviava o status cru: a falha do WBO2 nunca chegava ao barramento. O override agora vale para a palavra inteira. Testes `test_can_stack_fco_uses_configured_flow` e `test_can_stack_wbo2_fault_reaches_0x401`.
 7. ~~CKP, pulso substituto~~ decidido em 2026-10-21: mantém o limiar de 0,9, sem mudança de código. Ruído em f ≥ 0,9 é tomado como o próprio dente (adiantado em até 0,1 dente = 0,6°) e a borda real que vem depois cai como ruído, então o `tooth_index` fica exato. Evidência nova: `test_ckp_noise_above_substitute_threshold` (f = 0,95 e 0,99) e o cenário `noise f=0.95,0.99` do `precision-test` (erro de ignição máximo 0,006°, 0 faíscas perdidas ou espúrias; precision-test em 165 PASS).
-8. `DiagnosticManager`: debounce, tick e persistência em NVM ainda são aspiracionais (`docs/protection_system.md`).
+8. ~~`DiagnosticManager`~~ revisado em 2026-10-21: o `diagnostic_tick` já estava ligado e testado (bloco de 100 ms do `main_stm32.cpp`); o debounce e o timeout de recuperação eram constantes mortas (removidas); o único efeito sobre o motor é o corte por CRITICAL (`is_system_ready` → `diag_critical`), que não deve ter debounce. Corrigido: as falhas de faixa de MAP/TPS/MAF e `MAP_TPS_CORRELATION` agora são limpas quando a condição some (antes ficavam presas). `docs/protection_system.md` descrevia o `LimpManager` do rusEFI, não este código, e foi reescrito. Debounce de WARNING/ERROR e persistência em NVM foram para o Backlog.
 - Pronto quando: `make ci-local` verde, `host-test WERROR=1` com 0 FAIL, `precision-test` com 0 FAIL, `ini-check` e `dash-check` sem findings e as duas placas compilando.
 
 ### Fase 2 — Bancada WeAct VGT6 + ESP32
@@ -84,6 +84,7 @@ Depende de hardware fora do escopo atual. Só critérios.
 ### Backlog
 
 - Datalog em SD (SDMMC, só no RGT6): driver bare-metal, FatFs ou ring de blocos, escrita fora do caminho crítico, 100 Hz a 1 kHz. Estimativa de alguns dias de bancada.
+- `DiagnosticManager`: debounce de WARNING/ERROR (o CRITICAL continua imediato), timeout de recuperação e persistência dos DTCs em NVM. Só vale quando houver um consumidor dos códigos (dashboard ou serviço); a gravação em Flash exige motor parado (errata ES0565). `ADC_RECOVERY_FAILED` em CRITICAL não é limpo até o reset: decidir se isso é desejado.
 - Desenho em aberto: proxy de TC por `rpm_dot`, cascata STFT/LTFT, taper de partida do ETB, interlock de `'Y'` e `'Z'`.
 - Fora do escopo por decisão: placa v2 e seus drivers (`etb_driver.cpp` de 3 pinos para 2 pinos + SPI do L9960T, passo 0 de diagnóstico dos CIs novos).
 
