@@ -135,10 +135,6 @@ static inline void bdtable_set(uint32_t ep, uint16_t addr_tx, uint16_t cnt_tx,
     pba_w32(ep * 8u + 4u) = (static_cast<uint32_t>(cnt_rx) << 16) | addr_rx;  // RXBD
 }
 
-static inline uint16_t bdtable_count_tx(uint32_t ep) noexcept {
-    return static_cast<uint16_t>((pba_w32(ep * 8u) >> 16) & 0x3FFu);  // COUNT_TX bits[25:16]
-}
-
 static inline void bdtable_set_count_tx(uint32_t ep, uint16_t cnt) noexcept {
     volatile uint32_t& txbd = pba_w32(ep * 8u);
     txbd = (txbd & 0x0000FFFFu) | (static_cast<uint32_t>(cnt) << 16);  // keep ADDR, set COUNT

@@ -55,26 +55,6 @@ namespace ems::hal {
 
 // ── RX FIFO circular (software) ──────────────────────────────────────────────
 // Poll-based: can0_rx_pop() é chamado do loop principal (não IRQ-driven)
-static CanFrame g_rx_fifo[4] = {};
-static volatile uint8_t g_rx_head = 0u;
-static volatile uint8_t g_rx_tail = 0u;
-static constexpr uint8_t kRxFifoSize = 4u;
-
-static inline bool rx_fifo_push(const CanFrame& f) noexcept {
-    const uint8_t next = static_cast<uint8_t>((g_rx_tail + 1u) % kRxFifoSize);
-    if (next == g_rx_head) { return false; }  // full
-    g_rx_fifo[g_rx_tail] = f;
-    g_rx_tail = next;
-    return true;
-}
-
-static inline bool rx_fifo_pop(CanFrame& out) noexcept {
-    if (g_rx_head == g_rx_tail) { return false; }  // empty
-    out = g_rx_fifo[g_rx_head];
-    g_rx_head = static_cast<uint8_t>((g_rx_head + 1u) % kRxFifoSize);
-    return true;
-}
-
 static uint32_t g_can_init_faults = 0u;
 
 // ── Inicialização ─────────────────────────────────────────────────────────────
@@ -196,8 +176,7 @@ bool can0_rx_pop(CanFrame& out) noexcept {
     // 1. Verificar se há mensagem no RX FIFO0
     const uint32_t fqs = FDCAN1_RXF0S;
     if ((fqs & 0x7Fu) == 0u) {
-        // Nenhum elemento disponível; drena o FIFO de software se houver
-        return rx_fifo_pop(out);
+        return false;  // nenhum elemento disponível
     }
 
     // 2. Índice do próximo elemento a ler (hardware garante 0-2, mas valida defensivamente)

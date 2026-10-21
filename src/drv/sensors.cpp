@@ -360,11 +360,6 @@ inline uint16_t map_raw_to_bar_x1000(uint16_t raw) noexcept {
     return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 3000u) / 4095u);
 }
 
-// Spare linear scale: 0–3.3 V → 0..1000 (not the CAN WBO2 path).
-inline uint16_t raw_to_mv(uint16_t raw) noexcept {
-    return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 1000u) / 4095u);
-}
-
 // VBATT via AN4: divisor externo dimensionado para 0..18V em 0..3.3V ADC.
 inline uint16_t vbatt_raw_to_mv(uint16_t raw) noexcept {
     return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 18000u) / 4095u);

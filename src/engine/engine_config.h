@@ -94,9 +94,6 @@ inline constexpr uint8_t kEngineConfigRejectMagic = 0x80u;
 uint8_t engine_config_load(const uint8_t* page0_buf, uint16_t len) noexcept;
 uint8_t engine_config_reject_mask() noexcept;
 
-// Validates runtime config: returns false if any value is out of safe range.
-bool engine_config_valid(const EngineConfigRam& cfg) noexcept;
-
 // Write current g_eng_cfg into page0_buf at the correct offsets.
 // (for reading back via UI protocol)
 void engine_config_serialize(uint8_t* page0_buf, uint16_t len) noexcept;

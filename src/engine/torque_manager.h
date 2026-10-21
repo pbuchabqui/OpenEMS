@@ -112,9 +112,6 @@ inline uint8_t torque_manager_test_get_launch_active() noexcept {
 inline uint16_t torque_manager_test_get_tc_reduction() noexcept {
     return torque_manager_get_tc_reduction();
 }
-inline int16_t torque_manager_test_get_spark_retard() noexcept {
-    return torque_manager_get_spark_retard();
-}
 inline uint16_t torque_manager_test_get_vehicle_kmh() noexcept {
     return torque_manager_get_vehicle_kmh();
 }

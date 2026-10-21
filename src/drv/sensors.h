@@ -69,7 +69,6 @@ struct SensorRange {
 inline constexpr uint16_t kVbattMinMv = 6000u;
 inline constexpr uint16_t kVbattMaxMv = 18000u;
 inline constexpr uint16_t kVbattNominalMv = 12000u;
-inline constexpr bool vbatt_in_range(uint16_t mv) noexcept { return mv >= kVbattMinMv && mv <= kVbattMaxMv; }
 // Valor que dwell e dead time consomem. Queda real (0 < mv < 6 V) prende em 6 V: a primeira linha
 // das tabelas (injetor lento, bobina com pouca energia). 0 (divisor aberto) ou > 18 V não dizem a
 // tensão real, então valem o nominal.

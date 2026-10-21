@@ -208,13 +208,6 @@
 #define GPIO_AF9   9u
 #define GPIO_AF12  12u
 
-static inline void gpio_set_output(volatile uint32_t* moder,
-                                   volatile uint32_t* ospeedr,
-                                   uint8_t pin) noexcept {
-    *moder = (*moder & ~(3u << (pin * 2u))) | (GPIO_MODER_OUTPUT << (pin * 2u));
-    *ospeedr = (*ospeedr & ~(3u << (pin * 2u))) | (GPIO_OSPEED_VHIGH << (pin * 2u));
-}
-
 // Inline: configura pino como AF
 static inline void gpio_set_af(volatile uint32_t* moder,
                                 volatile uint32_t* afr_l,
