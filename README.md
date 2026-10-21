@@ -24,5 +24,12 @@ Pelo dashboard proprio (`tools/openems_dash`, aba **Install**), com guia passo a
 | `docs/bench_test_manual.md` | Teste de bancada na WeAct VGT6, sem atuadores |
 | `docs/hw/README.md` | Hardware e pinout |
 | `docs/wiring_diagram.md` | Esquematicos eletricos |
-| `docs/ROADMAP.md` | Backlog de produto |
+| `docs/ROADMAP.md` | Backlog, progresso e histórico do que foi concluído |
+| `docs/guia_instalacao.md` | Guia de instalação no motor (10 passos) |
+| `docs/arquitetura.md` | Camadas, regras e contratos entre elas |
+| `docs/pipeline_motor.md` | Captura CKP/CMP, combustível, ignição, scheduling, ADC, comunicação |
+| `docs/errata_stm32h562.md` | Errata ES0565 e impactos no projeto |
+| `docs/qualidade_e_testes.md` | Gates locais, layout dos testes host, segredos |
+| `docs/mvp_bancada.md` | Definição de pronto da bancada, frames CAN, ETB, X-τ |
+| `docs/estado_e_hardening.md` | Estado atual, hardening feito e pinout por placa |
 | `docs/fueling_system.md`, `closed_loop_fuel.md`, `idle_system.md`, `ignition_system.md`, `protection_system.md`, `output_contract.md` | Subsistemas |

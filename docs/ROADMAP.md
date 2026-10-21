@@ -1,11 +1,29 @@
-# Roadmap OpenEMS
+# Roadmap e progresso OpenEMS
+
+Atualizado em 2026-10-21, `main` em `c488778`. Reúne o antigo `progresso.md` (revisão e correção de `src/`, branch `fix/output-contract-cuts`, já mesclada em `main`) e o roadmap de produto. Nada aqui foi validado em hardware. `main` está 32 commits à frente de `origin/main` e nada foi enviado ao remoto. `tools/ts/OpenEMS_model.msq` continua fora do git.
+
+## Verificação em `main` (2026-10-21)
+
+- `make host-test WERROR=1`: 1830 PASS / 0 FAIL.
+- `make precision-test`: 162 PASS / 0 FAIL / 0 XFAIL / 0 XPASS.
+- `make firmware-rgt6 WERROR=1` e `make firmware-vgt6 WERROR=1`: os dois terminaram com `Firmware build successful`.
+- `make ini-check`: 188 constants, 45 channels, 0 findings.
+- `make dash-check`: não rodado nesta data. Em 2026-10-20: 11 testes, OK, com `ResourceWarning` de arquivo não fechado em `tools/openems_dash/tests/test_tune.py`.
+- A saída longa de `make host-test` pode vir truncada no terminal. O resultado completo está no log do binário, em `/tmp/openems-build/host/mvp_bench_tests`.
 
 ## Pendente
 
-### 1. ADC pin map H562 — auditoria (2026-07-16) + residual HW
+### 1. Medida, bancada e desenho (da revisão de `src/`)
+
+- Curva de CLT/IAT com pull-up de 2,49 kΩ. Escala dos sensores de pressão de combustível e de óleo. Fase de VVT.
+- Na placa: PWM real do ETB, ADC com o motor parado, rodapé de calibração na flash, offsets EXTI do flex (RPR1 0x00C / FPR1 0x010), registradores do CAN, IWDG com o gate do ETB, ângulo na luz de ponto durante o rev limit.
+- Desenho em aberto: proxy de TC por `rpm_dot`, cascata STFT/LTFT, taper de partida do ETB, interlock de `'Y'`/`'Z'`, o que fazer com escrita nas páginas 0x0A e 0x0C.
+- Não há próximo commit de correção previsto. Os itens acima esperam medida, bancada ou uma decisão. O IWDG, o burn explícito da page 0 e a separação entre o corte crítico de diagnóstico e o bit PROTECT ficam como estão.
+
+### 2. ADC pin map H562 — auditoria (2026-07-16) + residual HW
 
 **Auditoria higiene (docs only):** o firmware actual em `src/hal/adc.cpp` **já**
-mapeia canais H562 (DS14258) de forma coerente com `README.md` §5.4:
+mapeia canais H562 (DS14258) de forma coerente com `docs/pipeline_motor.md` (§ ADC e sensores):
 
 | Sensor | Pino | INP (adc.cpp) |
 |--------|------|----------------|
@@ -29,7 +47,7 @@ e está **stale**. DMA/GPDMA/ADSTART já foram tratados (ver Concluído / change
 - CMP em LOW (FULL_SYNC só crank) e 2º canal RMT para phase_A: backlog de
   sincronismo, não de canal ADC.
 
-### 2. Datalog em SD card (registrado 2026-06-12)
+### 3. Datalog em SD card (registrado 2026-06-12)
 Logging interno no slot TF da placa (STM32H562 tem SDMMC com DMA), em vez de
 depender do polling USB a ~30 Hz.
 
@@ -43,20 +61,72 @@ depender do polling USB a ~30 Hz.
   autonomia sem notebook, log sobrevive a desconexão de USB.
 - **Estimativa**: alguns dias de bancada (driver é o grosso do trabalho).
 
-### 3. Migração para STM32H562VGT6 (LQFP100)
+### 4. Migração para STM32H562VGT6 (LQFP100)
 Mais pinos disponíveis. Permite:
 - Pino dedicado para EWG H-bridge IN2 (atualmente PB4, compartilhado com LED)
 - Restaurar LED heartbeat em pino próprio
 - ADC adicionais para sensores (EGT, fuel pressure, oil pressure)
 - Marcado no código com `// TODO(VGT6)`
 
+### 5. Documentação
+- Os projetos KiCad (`hardware/openems_v1`, `hardware/openems_ecu`) foram removidos em 2026-10-21 (`a1e26fc`). `docs/hw/` ainda cita esses arquivos; revisar os links.
+- Atualizar `docs/wiring_diagram.md` ao pinout de `docs/hw/` (ainda tem mapa TIM2/PC legado no ASCII).
+- Detalhes de hardening e pinout por placa: `docs/estado_e_hardening.md`.
+
+## Registrado e deixado de propósito
+
+Não viraram código na revisão de `src/`.
+
+- CKP (`src/drv/ckp.cpp`, `classify_edge` por volta da linha 308 e o substituto por volta de 598). Pulso com 0,5 ≤ f < 1,5 é dente e chega a `schedule_on_tooth`. O pulso seguinte, classificado como ruído, pode reescrever `prev_capture` e voltar sem um segundo agendamento quando o último intervalo é estritamente menor que 0,9 da referência e o vão fecha um período. f < 0,5 cai na hora. f ≥ 0,9 não entra nesse substituto.
+- Lambda (`limp_gating.cpp`, por volta de 247). A restauração exige λ válido, λ ≤ alvo+desvio, e a banda de saída (RPM, carga ou TPS). Injetor fechado mantém λ pobre, então a condição pobre bloqueia a saída. `engine_calc_reset` não zera `g_lambda_cut`. O latch sobrevive a um stall. Zeram o corte o reset de teste, timeout 0, lambda desligado e o próprio caminho de restauração.
+- Falha de CLT publica 90,0 °C (`kFallbackCltDegcX10 = 900`) e falha de IAT publica 25,0 °C (`kFallbackIatDegcX10 = 250`), em `sensors.h` e no tick de 100 ms. O fallback de MAP é 101,0 kPa. A curva NTC não foi inventada. O fallback de CLT continua alimentando partida e DFCO.
+- USART: `startup_stm32h562.cpp` seleciona USART1 em HSI16 (`USART1SEL = 0b011`). `uart.cpp` programa o BRR com 125 MHz. Os dois relógios não são o mesmo. A correção adiada é selecionar PCLK2 depois do PLL. O BRR não foi trocado para HSI.
+- FDCAN: `can.cpp` escreve NBTP para 500 kbps assumindo 62,5 MHz. `system.cpp` liga só `PLL1PEN`. Não há escrita de `PLL1QEN` nem de `FDCANSEL` nesta árvore. O valor de reset do seletor de clock do FDCAN não foi lido do SVD, então o clock real do periférico ficou em aberto.
+- `can0_tx` recusa o envio quando o bit 0 de `TXBRP` está pendente. Não consulta `FDCAN_CCCR_INIT`. A init conta falha se INIT não entra ou não sai. O TX ignora essa falha.
+- Gauge de lambda: o firmware publica mili-lambda ÷ 5 (`ui_protocol_pages.cpp` no byte de O2 e o alvo no `main`). O `openems.ini` escala esse byte com 0,004, então λ = 1,000 aparece como 0,800 no TunerStudio. O dash em `protocol.py` multiplica o byte por 5.
+- `map_window_enable` nasce 0. A janela angular de MAP fica desligada até a calibração ligar.
+- Páginas 0x0A e 0x0C: `sync_table_from_page` não copia o buffer para as tabelas vivas e devolve true. O envelope `w` responde OK. `burn_one_page` não tem ramo para essas páginas, então a escrita clássica que tenta queimar responde erro. A leitura seguinte reconstrói o buffer a partir do estado vivo.
+- CAN 0x401: bytes 0–3 são `fuel_press_bar_x1000` e `oil_press_bar_x1000`. CAN 0x402 acumula combustível com `kFcoFlowCcMin = 450`, constante, e não lê `injector_flow_cc_min`. O bit de falha WBO2 é forçado dentro de `tx_0x400` e só os bits 0–7 desse word saem no 0x400. O 0x401[6] leva `status_bits >> 8` do argumento da chamada.
+- Não reabertos, e por isso sem confirmação nova: `g_t_etb_ms` depois de `output_test`, perda de tick em `g.time_ms` das auxiliares, `micros()` sob ISR de prioridade maior.
+
 ## Concluído (referência)
+
+### Revisão e correção de `src/` (2026-10, mesclada em `main`)
+
+- 20 commits em cima de `c4a83df`. Os 7 do primeiro passe podem não compilar sozinhos. Os 13 seguintes foram feitos um por tema, e cada um compilou e passou `make host-test` na árvore que o contém.
+- Primeiro passe, do mais antigo ao mais novo: `9b6e91f` HAL · `4f94a28` drivers · `50b99ee` agendador · `e104299` núcleo do motor · `440a5ee` borboleta · `d8adc43` aplicação · `d8f2461` main e registro de testes.
+- Continuação, do mais antigo ao mais novo:
+  - `b0939b3` `fix(drv):` APP e TPS do ETB a cada 2 ms, falha de faixa acima do raw 4000.
+  - `118b1d9` `fix(drv):` baro em repouso recusa vácuo e não empurra a leitura para 70 kPa.
+  - `a9e62f6` `fix(throttle):` uma rearme automática do ETB, só com RPM zero, pedal abaixo do idle e a lâmina fora da contagem da falha. O DTC sai depois de seguimento bom. A segunda falha fica latente até o reset.
+  - `7e787ab` `fix(hal):` sem USB enumerado o orçamento de TX é só o da UART. Com USB enumerado vale o mínimo dos dois e o espelho.
+  - `c7fa5de` `fix(hal):` flex válido só entre 45 e 155 Hz. Etanol 0% até 50 Hz e 100% a partir de 150 Hz.
+  - `c8b0084` `fix(hal):` a segunda `adc_init` volta na hora quando a primeira já completou sem recuperação.
+  - `76bb214` `fix(engine):` o slot de 100 ms chama `diagnostic_tick(100)`.
+  - `7bb0621` `fix(main):` removido o ramo morto de auto-burn da page 0. `g_calib_dirty` saiu. A page 0 queima pelo comando `b`. O flush adaptativo de LTFT/knock no slot de 500 ms permanece, ainda limitado pelo RPM seguro.
+  - `8e32871` `test:` bake de VE 254.
+  - `e57f17e` `test:` STFT parado a 39,0 °C e em movimento a 60,0 °C.
+  - `d611fb8` `test:` X-tau no eixo de MAP atual (25 e 150 bar×100).
+  - `2b2943d` `test:` inibição de ignição e stall a partir da fila.
+  - `58e9500` `test:` uma família de corte do `limp_gating_update` por caso, e o re-latch do ETB.
+- O que o primeiro passe já tinha corrigido:
+  - Críticos: corrida dos watchdogs de dwell e injetor, mapa de pedal que dava a volta, watchdog de seguimento do ETB, PWM com base de clock 250 MHz, LTFT que rebaixava VE de boost.
+  - Altos: ADC sem dentes, TIM6, rearme de DMA, SMPR 47,5 ciclos, teardown no stall do CKP, prime de partida, debounce de plausibilidade, APP em falha contra DFCO, CAN TX/RX, loaders do NVM, rodapé BEGIN/END+CRC, parser com timeout, flex no EXTI, relógio da marcha, VVT parado.
+  - O corte por sobretemperatura crítica do diagnóstico continua independente do bit PROTECT. O teste de precisão "diag critical only" trata isso como contrato.
+- Segundo passe, fechado: os itens 1, 3, 4, 5, 7, 8 e os dois menores que o plano aceitou (UART, flex, `adc_init`, `diagnostic_tick`, ramo morto da page 0) estão nos commits acima. O IWDG ficou como está escrito no `main`: o kick só ocorre se o slot do ETB rodou nos últimos 200 ms, e o timeout de runtime continua ~0,8 s.
+- Decisões dos testes da fase 3:
+  - VE 254: o teto do bake é a própria célula quando ela já passa de `kLtftAccumVeMax` (200). `fuel_trim.cpp` devolve false de propósito, limpa as estatísticas da célula e não desenrola o STFT. O plano pedia `CHECK` true. O teste ficou `CHECK_FALSE`: VE permanece 254, o contador de commit não anda e o STFT não muda. A produção não foi alterada para devolver true.
+  - STFT: uma amostra rica (λ 800 contra alvo 1000) a 39,0 °C permanece no grampo 250. A 60,0 °C desce de 250. O limiar da malha é `clt > 400` (×10).
+  - Inibição: bobina em LOW descarta o DWELL pendente. Bobina já em carga termina o dwell e a centelha sai na hora programada. O stall com a bobina em HIGH e a fila já esvaziada não chama o fim do evento, põe o pino em LOW e incrementa o contador de clear.
+  - `limp_gating_update`: rev limit, flood, óleo, rail, lambda, ETB, boost, duty e sem sync no Hall. O clear do ETB não segura se o report vier em seguida. Óleo fora de faixa corta combustível e centelha. Rev limit, rail, flood, lambda, boost, duty, ETB e falta de sync cortam só combustível, fora o `spark_skip`.
+
+### Produto e firmware
 
 - **Higiene de código monorepo** (2026-07): secrets untracked + gitignore;
   untrack graphify/ardustim vendor; `WERROR` host+dual firmware; `ci-local` +
   lint-includes phase A/B; split host tests (1113 PASS); `vehicle_inputs`
   (ban ENGINE→APP); `hal/out_pins` BSRR inline; `nvm_boot`; ui_protocol TUs;
-  `etb_pwm_*`. Documentado em **README.md § Higiene De Codigo**.
+  `etb_pwm_*`. Documentado em `docs/qualidade_e_testes.md`.
 - **Diagrama elétrico completo** (2026-06-19): power supply (buck 5V wide-Vin +
   LDO 3.3V + TVS SMBJ24CA), condicionamento de sinais (divisores, filtros RC,
   proteção TVS por canal), atuadores externos (ETB/EWG H-bridge, WBO2, flex fuel),
