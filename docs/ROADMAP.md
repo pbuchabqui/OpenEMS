@@ -1,6 +1,6 @@
 # Roadmap e progresso OpenEMS
 
-Atualizado em 2026-10-21, `main` em `fa8ec20`. Reúne o antigo `progresso.md` (revisão e correção de `src/`, branch `fix/output-contract-cuts`, já mesclada em `main`) e o roadmap de produto. Nada aqui foi validado em hardware. `main` está igual a `origin/main`. `tools/ts/OpenEMS_model.msq` continua fora do git.
+Atualizado em 2026-10-21, `main` em `fa8ec20`. Reúne o antigo `progresso.md` (revisão e correção de `src/`, branch `fix/output-contract-cuts`, já mesclada em `main`) e o roadmap de produto. Nada aqui foi validado em hardware. `main` está igual a `origin/main`. `tools/ts/OpenEMS_model.msq` foi versionado em 2026-10-21.
 
 ## Verificação em `main` (2026-10-21)
 
@@ -23,8 +23,8 @@ Sem hardware. Reflete a divisão do README e a remoção dos projetos KiCad em 2
 - O suporte a TLE8888 foi removido do firmware em 2026-10-07 (`9e7b309`: `src/hal/tle8888.{cpp,h}` e `tle8888_regs.h`). Feito em 2026-10-21: `docs/hw/README.md` marca como histórico o TLE8888 (§4) e os caminhos para os projetos KiCad removidos; `microruseefi_as_base.md` e `mcu_f407_to_h562_pin_map.md` ganharam a nota de links quebrados. `tle8888_crosscheck.md` e `tle8888_pinout.md` já estavam marcados como históricos e `vr_input_conditioning.md` como supersedido. Revisadas as menções restantes: `architecture_v2.md` (linha do driver atualizada para "removido"), `bom_v1_candidates.md`, `kicad_vendor_review.md` e `netlist_v1.md` ganharam aviso de histórico, `weact_h562_schematic.md` ganhou uma ressalva, e `interface_board_v1.md` e `pinout.md` já estavam corretos. Os itens "TLE8888" de Concluído são histórico e ficam.
 - `docs/wiring_diagram.md` já está marcado como histórico (TLE8888 fora do projeto); o pinout vigente é `docs/hw/pinout.md`. Nada a atualizar.
 - `.graphifyignore` agora exclui `tools/esp32_combined/ardustim_gui/assets/`.
-- Em aberto: `tools/ts/OpenEMS_model.msq` (8,7 KB, um tune do TunerStudio gerado em 18/10, sem referência em Makefile, tools ou docs) continua fora do git: versionar ou ignorar.
-- Pronto quando: `grep` por `hardware/openems_` e `README.md §` só acha menções históricas e `make ci-local` passa. Verificado em 2026-10-21 (`ci-local` OK), falta só o `.msq`.
+- `tools/ts/OpenEMS_model.msq` (tune de exemplo do TunerStudio, gerado em 18/10) foi versionado em 2026-10-21.
+- Pronto quando: `grep` por `hardware/openems_` e `README.md §` só acha menções históricas e `make ci-local` passa. Verificado em 2026-10-21 (`ci-local` OK). Fase 0 concluída.
 
 ### Fase 1 — Firmware sem silício novo
 
