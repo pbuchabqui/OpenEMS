@@ -1,7 +1,7 @@
 """Scope Link — ESP32 logic scope serial reader.
 
-Extracted from tools/esp32_scope/scope_host.py. Works with both
-esp32_scope.ino and esp32_combined.ino.
+Extracted from the old scope host script (now tools/scope/scope_host.py). Works with both
+tools/legacy/esp32_scope and tools/esp32_combined.
 
 Usage:
     from tools.lib.scope_link import ScopeLink
