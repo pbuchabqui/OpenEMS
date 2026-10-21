@@ -122,3 +122,5 @@ hardware/**/fp-info-cache
 
 output.pdf
 *.rpt
+compile_commands.json
+.cache/
