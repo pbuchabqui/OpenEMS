@@ -336,6 +336,8 @@ int main(void) {
     test_can_stack_tx_single_buffer();
     test_can_stack_refused_tx_is_retried();
     test_can_stack_fco_uses_real_dt();
+    test_can_stack_fco_uses_configured_flow();
+    test_can_stack_wbo2_fault_reaches_0x401();
     test_can_stack_wbo2_plausibility();
     test_can_rx_ignores_extended_and_remote();
     test_och_live_ve_byte();

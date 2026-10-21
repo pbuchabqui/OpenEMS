@@ -241,6 +241,8 @@ void test_ltft_hit_matches_ve_dominant_cell(void);
 void test_ltft_accum_page12(void);
 void test_ltft_page_offsets_20(void);
 void test_ltft_pages_reject_writes(void);
+void test_can_stack_fco_uses_configured_flow(void);
+void test_can_stack_wbo2_fault_reaches_0x401(void);
 void test_output_test_enter_gate(void);
 void test_output_test_fire_inj(void);
 void test_output_test_busy_window(void);

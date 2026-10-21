@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "app/can_stack.h"
+#include "engine/engine_config.h"
 #include "hal/can.h"
 
 using namespace ems::app;
@@ -92,6 +93,50 @@ void test_can_stack_fco_uses_real_dt(void) {
     }
     CHECK_TRUE(found, "0x402 transmitido");
     CHECK_TRUE(accum >= 3000u && accum <= 4000u, "≈3750 µl em 1 s (antes: ~10x menos)");
+}
+
+void test_can_stack_fco_uses_configured_flow(void) {
+    section("can_stack: 0x402 usa injector_flow_cc_min da calibração");
+    const uint16_t saved = ems::engine::cfg::g_eng_cfg.injector_flow_cc_min;
+    uint32_t accum[2] = {};
+    const uint16_t flows[2] = {450u, 900u};
+    for (int k = 0; k < 2; ++k) {
+        ems::engine::cfg::g_eng_cfg.injector_flow_cc_min = flows[k];
+        can0_test_reset();
+        can_stack_init(0x180u);
+        const ems::drv::SensorData s{};
+        for (uint32_t tm = 20u; tm <= 1020u; tm += 20u) {
+            can_stack_process(tm, ckp_at(3000u), s, 0, 50u, 0, 0u, 0u, 0u);
+        }
+        for (uint16_t i = 0u; i < can0_test_tx_count(); ++i) {
+            const CanFrame& f = can0_test_tx_at(i);
+            if (f.id == 0x402u) {
+                accum[k] = static_cast<uint32_t>(f.data[0]) | (static_cast<uint32_t>(f.data[1]) << 8u) |
+                           (static_cast<uint32_t>(f.data[2]) << 16u) | (static_cast<uint32_t>(f.data[3]) << 24u);
+            }
+        }
+    }
+    ems::engine::cfg::g_eng_cfg.injector_flow_cc_min = saved;
+    CHECK_TRUE(accum[0] > 0u, "450 cc/min acumula");
+    CHECK_TRUE(accum[1] >= 2u * accum[0] - 2u && accum[1] <= 2u * accum[0] + 2u, "900 cc/min ≈ 2× o consumo");
+}
+
+void test_can_stack_wbo2_fault_reaches_0x401(void) {
+    section("can_stack: WBO2_FAULT (bit 9) chega ao 0x401 data[6] bit 1");
+    can0_test_reset();
+    can_stack_init(0x180u);   // sem frame do WBO2: expira e levanta a falha
+    const ems::drv::SensorData s{};
+    for (uint32_t tm = 1000u; tm <= 2000u; tm += 20u) {
+        can_stack_process(tm, ckp_at(3000u), s, 0, 0u, 0, 0u, 0u, 0u);
+    }
+    bool found = false;
+    uint8_t hi = 0u;
+    for (uint16_t i = 0u; i < can0_test_tx_count(); ++i) {
+        const CanFrame& f = can0_test_tx_at(i);
+        if (f.id == 0x401u) { hi = f.data[6]; found = true; }
+    }
+    CHECK_TRUE(found, "0x401 transmitido");
+    CHECK_TRUE((hi & 0x02u) != 0u, "0x401 data[6] bit 1 = WBO2_FAULT");
 }
 
 void test_can_stack_wbo2_plausibility(void) {

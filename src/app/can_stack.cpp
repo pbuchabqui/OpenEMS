@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "hal/can.h"
+#include "engine/engine_config.h"
 #include "engine/math_utils.h"
 #include "app/can_rx_map.h"
 
@@ -27,9 +28,7 @@ static uint32_t g_last_tx_402_ms  = 0u;
 // Acumulador em nanolitros (fracção) + contador inteiro em microlitros.
 // Fórmula (derivação em can_stack.cpp): delta_nl = pw_ms_x10 × flow × n_cyl × rpm × dt_ms / 72000
 // com flow = kInjectorFlowCcMin (cc/min), n_cyl = kCylinderCount, rpm em RPM.
-// Constantes inline para manter can_stack.cpp independente de engine_config.h.
-static constexpr uint32_t kFcoFlowCcMin  = 450u;  // injector flow cc/min
-static constexpr uint32_t kFcoCylCount   = 4u;    // number of cylinders
+// flow vem de g_eng_cfg.injector_flow_cc_min (page 0, editável pelo TunerStudio), n_cyl de kCylinderCount.
 static constexpr uint64_t kFcoDivisor    = 72000u; // vazão [nl/s] = pw_ms_x10 × flow × n_cyl × rpm / 72; × dt_ms / 1000
 
 static uint32_t g_fco_accum_ul   = 0u;  // accumulated fuel [µl], wraps at ~4295 L
@@ -89,7 +88,7 @@ inline void process_rx(uint32_t now_ms) noexcept {
 // TX 0x400 — 10 ms
 // byte[6] = pw_ms_x10
 // byte[7] = status_bits[7:0]  (bits 8-15 go in 0x401 byte[6])
-// WBO2_FAULT (bit 9) is forced here on the full 16-bit word before splitting.
+// WBO2_FAULT (bit 9) é forçado em can_stack_process() na palavra de 16 bits, antes da divisão.
 inline bool tx_0x400(const ems::drv::CkpSnapshot& ckp,
                      const ems::drv::SensorData&  sensors,
                      int8_t   advance_deg,
@@ -103,11 +102,6 @@ inline bool tx_0x400(const ems::drv::CkpSnapshot& ckp,
     const uint16_t rpm = static_cast<uint16_t>(
         (ckp.rpm_x10 > 655350u) ? 65535u : (ckp.rpm_x10 / 10u));
 
-    // Force WBO2_FAULT on the full 16-bit word so bit 9 is preserved before split
-    const uint16_t effective_status = g_wbo2_fault
-        ? (status_bits | ems::app::STATUS_WBO2_FAULT)
-        : (status_bits & ~static_cast<uint16_t>(ems::app::STATUS_WBO2_FAULT));
-
     out.data[0] = static_cast<uint8_t>(rpm & 0xFFu);
     out.data[1] = static_cast<uint8_t>((rpm >> 8u) & 0xFFu);
     out.data[2] = clamp_u8(sensors.map_bar_x1000 / 10u);
@@ -115,7 +109,7 @@ inline bool tx_0x400(const ems::drv::CkpSnapshot& ckp,
     out.data[4] = clamp_u8_i32((static_cast<int32_t>(sensors.clt_degc_x10) / 10) + 40);
     out.data[5] = clamp_u8_i32(static_cast<int32_t>(advance_deg) + 40);
     out.data[6] = pw_ms_x10;
-    out.data[7] = static_cast<uint8_t>(effective_status & 0xFFu);  // bits 0-7
+    out.data[7] = static_cast<uint8_t>(status_bits & 0xFFu);  // bits 0-7
 
     return ems::hal::can0_tx(out);
 }
@@ -152,7 +146,8 @@ inline void fco_accumulate(uint8_t pw_ms_x10, uint32_t rpm, uint32_t dt_ms) noex
     // delta_nl = vazão × dt_ms / 1000 → pw × flow × n_cyl × rpm × dt_ms / 72000
     // uint64 para evitar overflow
     const uint64_t delta_nl = static_cast<uint64_t>(pw_ms_x10)
-                              * kFcoFlowCcMin * kFcoCylCount * rpm * dt_ms / kFcoDivisor;
+                              * ems::engine::cfg::g_eng_cfg.injector_flow_cc_min
+                              * ems::engine::cfg::kCylinderCount * rpm * dt_ms / kFcoDivisor;
     g_fco_nl_frac  += static_cast<uint32_t>(delta_nl);
     g_fco_accum_ul += g_fco_nl_frac / 1000u;
     g_fco_nl_frac  %= 1000u;
@@ -224,6 +219,13 @@ void can_stack_process(uint32_t now_ms,
 
     // Atualiza flag de falha após processar RX
     g_wbo2_fault = wbo2_timed_out(now_ms);
+
+    // WBO2_FAULT (bit 9) forçado na palavra inteira antes de dividir em 0x400 (bits 0-7) e
+    // 0x401 (bits 8-15). Antes o override ficava só no 0x400, que não leva o bit 9, e o 0x401
+    // enviava o status cru: a falha do WBO2 nunca chegava ao barramento.
+    status_bits = g_wbo2_fault
+        ? static_cast<uint16_t>(status_bits | ems::app::STATUS_WBO2_FAULT)
+        : static_cast<uint16_t>(status_bits & ~static_cast<uint16_t>(ems::app::STATUS_WBO2_FAULT));
 
     // Acumula combustível injectado, com o dt real desde a chamada anterior.
     {
