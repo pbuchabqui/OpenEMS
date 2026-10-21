@@ -36,7 +36,7 @@ Itens de "Registrado e deixado de propósito", resolvidos com host-tests.
 4. ~~Gauge de lambda~~ feito em 2026-10-21: firmware (÷5) e dash (×5) já concordavam; o `openems.ini` escalava `lambda` e `lambdaTarget` com 0,004 e agora usa 0,005 (λ=1,000 aparece 1,000 no TunerStudio). A resolução citada em `server.py` passou de ±0,004 para ±0,005.
 5. ~~Páginas 0x0A e 0x0C~~ feito em 2026-10-21: escrita recusada (`page_is_fw_owned`, mesmo caminho da página 0x03) nos protocolos legado e envelope, com teste `test_ltft_pages_reject_writes`. O LTFT canónico vive em `g_ltft_*`/NVM adaptativo, não na página 10.
 6. ~~CAN 0x402 e status bits~~ feito em 2026-10-21: o 0x402 agora usa `g_eng_cfg.injector_flow_cc_min` e `kCylinderCount` em vez de 450 cc/min e 4 cilindros fixos. O layout dos status bits (bits 0-7 em 0x400, 8-15 em 0x401 data[6]) estava certo, mas o override de `WBO2_FAULT` ficava só no 0x400, que não leva o bit 9, e o 0x401 enviava o status cru: a falha do WBO2 nunca chegava ao barramento. O override agora vale para a palavra inteira. Testes `test_can_stack_fco_uses_configured_flow` e `test_can_stack_wbo2_fault_reaches_0x401`.
-7. CKP: decidir o caminho do pulso "substituto" (limiar 0,9) com o simulador de precisão.
+7. ~~CKP, pulso substituto~~ decidido em 2026-10-21: mantém o limiar de 0,9, sem mudança de código. Ruído em f ≥ 0,9 é tomado como o próprio dente (adiantado em até 0,1 dente = 0,6°) e a borda real que vem depois cai como ruído, então o `tooth_index` fica exato. Evidência nova: `test_ckp_noise_above_substitute_threshold` (f = 0,95 e 0,99) e o cenário `noise f=0.95,0.99` do `precision-test` (erro de ignição máximo 0,006°, 0 faíscas perdidas ou espúrias; precision-test em 165 PASS).
 8. `DiagnosticManager`: debounce, tick e persistência em NVM ainda são aspiracionais (`docs/protection_system.md`).
 - Pronto quando: `make ci-local` verde, `host-test WERROR=1` com 0 FAIL, `precision-test` com 0 FAIL, `ini-check` e `dash-check` sem findings e as duas placas compilando.
 
@@ -91,7 +91,7 @@ Depende de hardware fora do escopo atual. Só critérios.
 
 Não viraram código na revisão de `src/`.
 
-- CKP (`src/drv/ckp.cpp`, `classify_edge` por volta da linha 308 e o substituto por volta de 598). Pulso com 0,5 ≤ f < 1,5 é dente e chega a `schedule_on_tooth`. O pulso seguinte, classificado como ruído, pode reescrever `prev_capture` e voltar sem um segundo agendamento quando o último intervalo é estritamente menor que 0,9 da referência e o vão fecha um período. f < 0,5 cai na hora. f ≥ 0,9 não entra nesse substituto.
+- CKP (`src/drv/ckp.cpp`, `classify_edge` por volta da linha 308 e o substituto por volta de 598): decidido em 2026-10-21 (Fase 1, item 7). O limiar de 0,9 fica; f ≥ 0,9 tem teste e cenário no simulador.
 - Lambda (`limp_gating.cpp`, por volta de 247). A restauração exige λ válido, λ ≤ alvo+desvio, e a banda de saída (RPM, carga ou TPS). Injetor fechado mantém λ pobre, então a condição pobre bloqueia a saída. `engine_calc_reset` não zera `g_lambda_cut`. O latch sobrevive a um stall. Zeram o corte o reset de teste, timeout 0, lambda desligado e o próprio caminho de restauração.
 - Falha de CLT publica 90,0 °C (`kFallbackCltDegcX10 = 900`) e falha de IAT publica 25,0 °C (`kFallbackIatDegcX10 = 250`), em `sensors.h` e no tick de 100 ms. O fallback de MAP é 101,0 kPa. A curva NTC não foi inventada. O fallback de CLT continua alimentando partida e DFCO.
 - USART: resolvido em 2026-10-21 (Fase 1, item 1). Falta medir o baud na bancada.

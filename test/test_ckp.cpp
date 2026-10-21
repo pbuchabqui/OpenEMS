@@ -453,6 +453,30 @@ void test_ckp_noise_never_adds_or_loses_teeth(void) {
     }
 }
 
+// Noise at f >= 0.9 is out of the "substitute" path: it is taken as the tooth itself (early) and
+// the real edge that follows is dropped as noise. The index stays exact; the only cost is the
+// capture timestamp being early by (1 - f) of a period (<= 0.1 tooth = 0.6 deg of crank).
+void test_ckp_noise_above_substitute_threshold(void) {
+    section("ckp: noise at f = 0.95 / 0.99 stands in for the tooth, index exact, error <= 0.1 tooth");
+    const uint32_t fr[2] = {95u, 99u};
+    for (uint32_t k = 0u; k < 2u; ++k) {
+        ckp_test_reset(); g_ckp_cap = 0u;
+        ckp_reach_full_sync();
+        for (uint32_t i = 0u; i < 10u; ++i) { ckp_fire(kNormalPeriod); }
+        const uint32_t early = kNormalPeriod * fr[k] / 100u;
+        ckp_fire(early);                          // noise taken as tooth 11
+        const uint32_t cap_noise = ckp_snapshot().last_tim5_capture;
+        ckp_fire(kNormalPeriod - early);          // real tooth 11, dropped as noise
+        CHECK_EQ(ckp_snapshot().tooth_index, 11u, "tooth_index exact");
+        CHECK_TRUE(ckp_snapshot().last_tim5_capture == cap_noise, "capture stays on the early edge");
+        CHECK_TRUE((kNormalPeriod - early) * 10u <= kNormalPeriod, "timestamp error <= 0.1 tooth");
+        for (uint32_t i = 0u; i < 46u; ++i) { ckp_fire(kNormalPeriod); }
+        ckp_fire(kGapPeriod);
+        CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+                 static_cast<uint8_t>(SyncState::FULL_SYNC), "gap still accepted (57 teeth)");
+    }
+}
+
 // Noise right AFTER a real tooth must not replace that tooth's timestamp.
 void test_ckp_noise_after_tooth_keeps_real_edge(void) {
     section("ckp: noise 0.2 period after a real tooth leaves its capture untouched");

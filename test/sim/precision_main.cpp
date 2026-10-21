@@ -548,6 +548,23 @@ int main()
         check("noise sweep", "sparks with dwell <50%/>120%", m.short_dwell + m.long_dwell, 0);
     }
 
+    // ── Noise above the 0.9 "substitute" threshold ──────────────────────
+    {
+        // f = 0.95 / 0.99: the pulse is taken as the tooth itself and the real edge that
+        // follows is dropped, so events armed from it are early by (1 - f) × 6 deg <= 0.3 deg.
+        Config c = base(3000);
+        c.duration_s = 1.6;
+        const double fr[2] = {0.95, 0.99};
+        for (int k = 1; k <= 2; ++k) {
+            const double tooth_deg = 636.0 + 360.0 * (42 + 4 * k) + 6.0 * (7 * k);
+            c.noise_s.push_back((tooth_deg + 6.0 * fr[k - 1]) / 18000.0);
+        }
+        const Metrics m = run_and_print("noise f=0.95,0.99", c, 0.8, false);
+        check("noise f>=0.9", "spark error max (deg)", m.spark_err_max, 0.6);
+        check("noise f>=0.9", "missing+spurious sparks", m.missing + m.spurious, 0);
+        check("noise f>=0.9", "sparks with dwell <50%/>120%", m.short_dwell + m.long_dwell, 0);
+    }
+
     // ── One tooth edge lost (sensor glitch) → explicit sync loss ────────
     {
         Config c = base(3000);
