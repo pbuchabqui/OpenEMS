@@ -118,14 +118,17 @@ void system_stm32_init(void) noexcept {
                  | (2u << 2)    // PLL1RGE = 10b (4-8 MHz input)
                  | (0u << 5)    // PLL1VCOSEL = 0 (wide, 192-960 MHz)
                  | (2u << 8)    // PLL1M = 2
-                 | (1u << 16);  // PLL1PEN = 1
+                 | (1u << 16)   // PLL1PEN = 1
+                 | (1u << 17);  // PLL1QEN = 1 (saída Q → kernel clock do FDCAN)
     // PLL1DIVR (campos guardam divisor−1, cf. __HAL_RCC_PLL1_CONFIG):
     //   [8:0]  PLL1N=124 → ×125 (VCO = 500 MHz)
     //   [15:9] PLL1P=1   → ÷2   (SYSCLK = 250 MHz)
+    //   [22:16] PLL1Q=7  → ÷8   (FDCAN kernel = 62,5 MHz, o que can.cpp assume no NBTP)
     // BUG ANTERIOR: P=0 → ÷1 → SYSCLK = 500 MHz (2× o máximo!) → lockup
     // instantâneo no switch; os guards passavam porque o PLL trava normalmente.
     RCC_PLL1DIVR = (124u << 0)   // N = 125
-                 | (1u << 9);    // P = 2
+                 | (1u << 9)     // P = 2
+                 | (7u << 16);   // Q = 8
 
     // ── 4. Ligar PLL1 e aguardar lock ────────────────────────────────────
     RCC_CR |= RCC_CR_PLL1ON;
@@ -162,6 +165,9 @@ void system_stm32_init(void) noexcept {
             if ((RCC_CFGR1 & (7u << 3)) == RCC_CFGR1_SWS_PLL1) {
                 RCC_CCIPR1 &= ~0x7u;
             }
+            // FDCAN em PLL1Q (62,5 MHz). O reset de FDCANSEL é 00 = HSE (8 MHz), o que deixaria
+            // o NBTP de can.cpp errado por um fator de 7,8. Sem PLL fica em HSE (can inoperante).
+            RCC_CCIPR5 = (RCC_CCIPR5 & ~RCC_CCIPR5_FDCANSEL_MSK) | RCC_CCIPR5_FDCANSEL_PLL1Q;
         }
     }
 

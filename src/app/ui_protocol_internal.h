@@ -43,6 +43,12 @@ enum class ParseState : uint8_t {
 constexpr uint16_t kEnvMaxChunk   = 800u;
 constexpr uint16_t kEnvMaxPayload = 807u;
 
+// Páginas só de leitura para o host: 0x03 (och), 0x0A (LTFT) e 0x0C (acumulador LTFT). O LTFT
+// canónico vive em g_ltft_*/NVM adaptativo, então uma escrita não seria aplicada.
+constexpr bool page_is_fw_owned(uint8_t page) noexcept {
+    return page == 0x03u || page == 0x0Au || page == 0x0Cu;
+}
+
 constexpr uint8_t kTsRcOk       = 0x00u;
 constexpr uint8_t kTsRcCrcErr   = 0x82u;
 constexpr uint8_t kTsRcUnknown  = 0x83u;

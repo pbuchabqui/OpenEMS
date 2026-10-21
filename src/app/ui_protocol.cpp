@@ -414,7 +414,7 @@ void parse_byte(uint8_t b) noexcept {
             return;
         }
 
-        if (!command_bounds_ok() || g_cmd_page == 0x03u) {
+        if (!command_bounds_ok() || page_is_fw_owned(g_cmd_page)) {
             tx_push(kAckErr);
             reset_parser();
             return;

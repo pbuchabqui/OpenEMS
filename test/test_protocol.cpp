@@ -478,6 +478,26 @@ void test_ltft_page_offsets_20(void) {
     CHECK_EQ(static_cast<int8_t>(r.data[499]), (int8_t)-7, "add[9][9] no byte 499");
 }
 
+void test_ltft_pages_reject_writes(void) {
+    section("páginas 0x0A e 0x0C: escrita recusada, leitura intacta");
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ems::app::ui_test_reset();
+    ems::hal::nvm_test_reset();
+
+    CHECK_TRUE(ems::hal::nvm_write_ltft(0u, 0u, 9), "ltft[0][0]=9");
+    const uint8_t w10[8] = {'w', 0x0Au, 0x00u, 0x00u, 0x02u, 0x00u, 0x77u, 0x77u};
+    EnvResp w = env_txn(w10, 8u);
+    CHECK_TRUE(w.frame_ok && w.code != 0x00u, "'w' page10 → erro");
+    const uint8_t w12[8] = {'w', 0x0Cu, 0x00u, 0x00u, 0x02u, 0x00u, 0x55u, 0x55u};
+    w = env_txn(w12, 8u);
+    CHECK_TRUE(w.frame_ok && w.code != 0x00u, "'w' page12 → erro");
+
+    const uint8_t rd[6] = {'r', 0x0Au, 0x00u, 0x00u, 0xF4u, 0x01u};
+    EnvResp r = env_txn(rd, 6u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'r' page10 → OK");
+    CHECK_EQ(static_cast<int8_t>(r.data[0]), (int8_t)9, "page10 byte 0 segue o NVM (9)");
+}
+
 // Formas de wire que o TunerStudio REAL emite quando pageIdentifier usa o
 // prefixo \$tsCanId (obrigatório em msEnvelope_1.0, confirmado contra os
 // projetos Speeduino 202501.6 e rusEFI): toda página fica com identificador

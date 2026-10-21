@@ -956,7 +956,7 @@ void handle_read_done() noexcept {
 }
 
 void handle_write_done() noexcept {
-    if (!command_bounds_ok() || g_cmd_page == 0x03u) {
+    if (!command_bounds_ok() || page_is_fw_owned(g_cmd_page)) {
         tx_push(kAckErr);
         reset_parser();
         return;

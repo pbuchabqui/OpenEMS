@@ -31,10 +31,10 @@ Sem hardware. Reflete a divisão do README e a remoção dos projetos KiCad em 2
 Itens de "Registrado e deixado de propósito", resolvidos com host-tests.
 
 1. ~~USART1~~ feito em 2026-10-21: `system.cpp` seleciona PCLK2 (`RCC_CCIPR1` USART1SEL = 000) depois que o PLL assume o SYSCLK, e `uart.cpp` calcula o BRR a partir do SYSCLK real (125 MHz com PLL, 16 MHz se ficou em HSI16). Compila nas duas placas; o baud real só se confirma na bancada (Fase 2).
-2. FDCAN: `can.cpp` assume 62,5 MHz no NBTP e `system.cpp` só liga `PLL1PEN`. Ler o reset de `FDCANSEL` no SVD, ligar `PLL1QEN`, fixar o seletor e testar o cálculo de bit timing.
+2. ~~FDCAN~~ feito em 2026-10-21, com as fontes da ST (`stm32h562xx.h` e `stm32h5xx_hal_rcc_ex.h`): `FDCANSEL` está em `RCC_CCIPR5` (0xE8) bits [9:8], com 00 = HSE (reset, 8 MHz aqui), 01 = PLL1Q, 10 = PLL2Q. `system.cpp` agora liga `PLL1QEN`, programa `PLL1Q` = ÷8 (VCO 500 MHz, 62,5 MHz) e seleciona PLL1Q depois do lock. `can.cpp` ganhou um `static_assert` do bit timing (500 kbps). Compila nas duas placas; o bit rate real só se confirma na bancada.
 3. ~~`can0_tx`~~ feito em 2026-10-21: recusa o envio (retorna `false`) enquanto `FDCAN_CCCR_INIT` estiver ativo. Os chamadores em `can_stack.cpp` já tratam o retorno.
 4. ~~Gauge de lambda~~ feito em 2026-10-21: firmware (÷5) e dash (×5) já concordavam; o `openems.ini` escalava `lambda` e `lambdaTarget` com 0,004 e agora usa 0,005 (λ=1,000 aparece 1,000 no TunerStudio). A resolução citada em `server.py` passou de ±0,004 para ±0,005.
-5. Páginas 0x0A e 0x0C: definir se a escrita é aplicada ou recusada (hoje o envelope responde OK e o burn responde erro).
+5. ~~Páginas 0x0A e 0x0C~~ feito em 2026-10-21: escrita recusada (`page_is_fw_owned`, mesmo caminho da página 0x03) nos protocolos legado e envelope, com teste `test_ltft_pages_reject_writes`. O LTFT canónico vive em `g_ltft_*`/NVM adaptativo, não na página 10.
 6. CAN 0x402 usa `kFcoFlowCcMin = 450` fixo em vez de `injector_flow_cc_min`. Revisar também os status bits de 0x400 e 0x401.
 7. CKP: decidir o caminho do pulso "substituto" (limiar 0,9) com o simulador de precisão.
 8. `DiagnosticManager`: debounce, tick e persistência em NVM ainda são aspiracionais (`docs/protection_system.md`).
@@ -95,11 +95,11 @@ Não viraram código na revisão de `src/`.
 - Lambda (`limp_gating.cpp`, por volta de 247). A restauração exige λ válido, λ ≤ alvo+desvio, e a banda de saída (RPM, carga ou TPS). Injetor fechado mantém λ pobre, então a condição pobre bloqueia a saída. `engine_calc_reset` não zera `g_lambda_cut`. O latch sobrevive a um stall. Zeram o corte o reset de teste, timeout 0, lambda desligado e o próprio caminho de restauração.
 - Falha de CLT publica 90,0 °C (`kFallbackCltDegcX10 = 900`) e falha de IAT publica 25,0 °C (`kFallbackIatDegcX10 = 250`), em `sensors.h` e no tick de 100 ms. O fallback de MAP é 101,0 kPa. A curva NTC não foi inventada. O fallback de CLT continua alimentando partida e DFCO.
 - USART: resolvido em 2026-10-21 (Fase 1, item 1). Falta medir o baud na bancada.
-- FDCAN: `can.cpp` escreve NBTP para 500 kbps assumindo 62,5 MHz. `system.cpp` liga só `PLL1PEN`. Não há escrita de `PLL1QEN` nem de `FDCANSEL` nesta árvore. O valor de reset do seletor de clock do FDCAN não foi lido do SVD, então o clock real do periférico ficou em aberto.
+- FDCAN: resolvido em 2026-10-21 (Fase 1, item 2). Falta medir o bit rate na bancada.
 - `can0_tx` recusa o envio quando o bit 0 de `TXBRP` está pendente. Não consulta `FDCAN_CCCR_INIT`. A init conta falha se INIT não entra ou não sai. O TX ignora essa falha.
 - Gauge de lambda: resolvido em 2026-10-21 (Fase 1, item 4).
 - `map_window_enable` nasce 0. A janela angular de MAP fica desligada até a calibração ligar.
-- Páginas 0x0A e 0x0C: `sync_table_from_page` não copia o buffer para as tabelas vivas e devolve true. O envelope `w` responde OK. `burn_one_page` não tem ramo para essas páginas, então a escrita clássica que tenta queimar responde erro. A leitura seguinte reconstrói o buffer a partir do estado vivo.
+- Páginas 0x0A e 0x0C: resolvido em 2026-10-21 (Fase 1, item 5): a escrita é recusada.
 - CAN 0x401: bytes 0–3 são `fuel_press_bar_x1000` e `oil_press_bar_x1000`. CAN 0x402 acumula combustível com `kFcoFlowCcMin = 450`, constante, e não lê `injector_flow_cc_min`. O bit de falha WBO2 é forçado dentro de `tx_0x400` e só os bits 0–7 desse word saem no 0x400. O 0x401[6] leva `status_bits >> 8` do argumento da chamada.
 - Não reabertos, e por isso sem confirmação nova: `g_t_etb_ms` depois de `output_test`, perda de tick em `g.time_ms` das auxiliares, `micros()` sob ISR de prioridade maior.
 

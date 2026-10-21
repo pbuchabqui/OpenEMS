@@ -79,6 +79,9 @@ void can0_init() noexcept {
     }
     FDCAN1_CCCR |= FDCAN_CCCR_CCE;   // habilita configuração
 
+    // Kernel clock = PLL1Q = 500 MHz / 8 (system.cpp); NBRP+1=5, 1+18+6 = 25 Tq por bit.
+    static_assert(62500000u / 5u / 25u == 500000u, "NBTP: 500 kbps a 62,5 MHz");
+
     // ── 4. Bit timing 500 kbps a 62.5 MHz ────────────────────────────────
     // NBRP+1=5, Tq=80ns, NTSEG1=17 (18 Tq), NTSEG2=5 (6 Tq) → 25 Tq → 500 kbps
     // Bit time = 1(sync) + 18(TSEG1) + 6(TSEG2) = 25 Tq × 80 ns = 2000 ns → 500 kbps ✓

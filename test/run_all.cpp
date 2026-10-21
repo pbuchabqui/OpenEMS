@@ -353,6 +353,7 @@ int main(void) {
     test_ltft_hit_matches_ve_dominant_cell();
     test_ltft_accum_page12();
     test_ltft_page_offsets_20();
+    test_ltft_pages_reject_writes();
 
     printf("\n=== OUTPUT TEST (teste de saídas) ===");
     test_output_test_enter_gate();

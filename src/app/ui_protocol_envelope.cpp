@@ -70,7 +70,7 @@ int env_try_write(const uint8_t* a, uint16_t data_n) noexcept {
     if (len != data_n) {
         return -1;
     }
-    if (!bounds_ok(page, off, len) || page == 0x03u || len > kEnvMaxChunk) {
+    if (!bounds_ok(page, off, len) || page_is_fw_owned(page) || len > kEnvMaxChunk) {
         return kTsRcRangeErr;
     }
     uint8_t* ptr = page_ptr(page);
