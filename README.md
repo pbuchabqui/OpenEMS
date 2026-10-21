@@ -346,7 +346,7 @@ make format                     # clang-format so em ficheiros dirty (on-touch)
 | `test/sim/engine_sim.{h,cpp}` | motor virtual: cinematica θ(t), roda 60-2 real + came, jitter/ruido, modelo de latencia da ISR, log de pinos com timestamp |
 | `test/sim/precision_main.cpp` | `make precision-test`: compara o que o motor recebe (angulo de centelha, dwell, combustivel, EOI) com o oraculo cinematico; defeitos conhecidos = XFAIL com a etapa que os corrige |
 
-Host: um unico TIM5 simulado (`hal/tim5_host.h`) e partilhado por captura
+Host: um unico TIM5 simulado (`hal/host/tim5_host.h`) e partilhado por captura
 CKP/CMP, comparador do scheduler e `tim5_count()`; `out_pin_write` expoe um
 hook (`out_pins_host::write_hook`) para o simulador registar cada transicao.
 
