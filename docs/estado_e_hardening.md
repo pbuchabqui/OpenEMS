@@ -65,7 +65,7 @@
 
 ### P2 — bancada / HIL / docs
 
-- Validar imagem `.bin` com ST-Link, sem bobinas/injetores no primeiro boot.
+- Validar imagem `.bin` (gravada por DFU), sem bobinas/injetores no primeiro boot.
 - Scope das saídas INJ/IGN (BSRR/TIM5_CH3, latência/jitter) e TIM5 CKP/CMP 200–8500 rpm.
 - USB CDC real: IRQ/endpoints, sem bloqueio do caminho crítico; RX ≥ envelope.
 - Host/HIL expandido: decode, sync, quick crank, scheduler, fuel/ign, sensores (já há host-test 1000+; HIL físico pendente).

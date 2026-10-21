@@ -45,7 +45,7 @@ Itens de "Registrado e deixado de propósito", resolvidos com host-tests.
 Bloqueia as fases seguintes. Roteiro em `docs/bench_test_manual.md`.
 
 - Confirmar a Rev X do chip (marcação e `REV_ID` em `DBGMCU_IDCODE`) antes de qualquer ensaio.
-- Gravar o `.bin` com ST-Link, sem bobinas nem injetores, sem reset loop nem hard fault.
+- Gravar o `.bin` por DFU (`dfu-util`, § 2 do manual), sem bobinas nem injetores, sem reset loop nem hard fault.
 - Scope das saídas INJ/IGN (BSRR, TIM5_CH3): latência e jitter. CKP/CMP sintético de 200 a 8500 rpm, com perda e retomada de sync.
 - USB CDC real: IRQ e endpoints, sem bloquear o caminho crítico, RX ≥ envelope.
 - Registrar `loop2_last`, `loop2_max`, `late_event_count`, `cycle_schedule_drop_count` e `calibration_clamp_count`.

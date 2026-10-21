@@ -6,7 +6,7 @@ Definicao de pronto para o MVP de bancada:
 
 - `make firmware` gera `.elf`, `.hex` e `.bin`.
 - `make host-test` cobre regressao minima (suites em `test/test_*.cpp` + `run_all.cpp`): CKP 60-2, quick crank, scheduler, tabelas, protocolo UI, ETB, torque, fuel/ign, X-τ, etc.
-- Firmware sobe na STM32H562 com ST-Link, sem bobinas/injetores energizados, sem reset loop ou hard fault.
+- Firmware sobe na STM32H562 (gravado por DFU), sem bobinas/injetores energizados, sem reset loop ou hard fault.
 - TIM5 recebe CKP/CMP sintetico de 200 a 8500 rpm e telemetria mostra transicoes `WAIT_GAP`, `HALF_SYNC`, `FULL_SYNC`, perda e retomada de sync.
 - As saídas INJ/IGN (GPIO BSRR, despachadas por TIM5_CH3) geram sinais verificaveis em osciloscopio para cranking, half-sync, full-sync, loss-of-sync e zero RPM.
 - ETB (PWM PA6/TIM3 no rgt6, PE5/TIM15 no vgt6) permanece desligado até `etb_cal_valid==1 && !throttle_fault_bits`.
