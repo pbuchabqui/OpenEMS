@@ -1,6 +1,6 @@
 # Roadmap e progresso OpenEMS
 
-Atualizado em 2026-10-21, `main` em `c488778`. Reúne o antigo `progresso.md` (revisão e correção de `src/`, branch `fix/output-contract-cuts`, já mesclada em `main`) e o roadmap de produto. Nada aqui foi validado em hardware. `main` está 32 commits à frente de `origin/main` e nada foi enviado ao remoto. `tools/ts/OpenEMS_model.msq` continua fora do git.
+Atualizado em 2026-10-21, `main` em `fa8ec20`. Reúne o antigo `progresso.md` (revisão e correção de `src/`, branch `fix/output-contract-cuts`, já mesclada em `main`) e o roadmap de produto. Nada aqui foi validado em hardware. `main` está igual a `origin/main`. `tools/ts/OpenEMS_model.msq` continua fora do git.
 
 ## Verificação em `main` (2026-10-21)
 
@@ -11,22 +11,62 @@ Atualizado em 2026-10-21, `main` em `c488778`. Reúne o antigo `progresso.md` (r
 - `make dash-check`: não rodado nesta data. Em 2026-10-20: 11 testes, OK, com `ResourceWarning` de arquivo não fechado em `tools/openems_dash/tests/test_tune.py`.
 - A saída longa de `make host-test` pode vir truncada no terminal. O resultado completo está no log do binário, em `/tmp/openems-build/host/mvp_bench_tests`.
 
-## Pendente
+## Roadmap
 
-### 1. Medida, bancada e desenho (da revisão de `src/`)
+Escopo: firmware e bancada (WeAct H562 VGT6 + ESP32). A placa v2 (MC33810, L9960T, CJ125, TPS65381A) e os drivers dos CIs novos estão fora deste roadmap. Ordem vinda de `docs/hw/README.md` §6: bancada, depois ETB, depois motor. Cada fase só começa quando a anterior cumpre o seu critério de pronto.
 
-- Curva de CLT/IAT com pull-up de 2,49 kΩ. Escala dos sensores de pressão de combustível e de óleo. Fase de VVT.
-- Na placa: PWM real do ETB, ADC com o motor parado, rodapé de calibração na flash, offsets EXTI do flex (RPR1 0x00C / FPR1 0x010), registradores do CAN, IWDG com o gate do ETB, ângulo na luz de ponto durante o rev limit.
-- Desenho em aberto: proxy de TC por `rpm_dot`, cascata STFT/LTFT, taper de partida do ETB, interlock de `'Y'`/`'Z'`, o que fazer com escrita nas páginas 0x0A e 0x0C.
-- Não há próximo commit de correção previsto. Os itens acima esperam medida, bancada ou uma decisão. O IWDG, o burn explícito da page 0 e a separação entre o corte crítico de diagnóstico e o bit PROTECT ficam como estão.
+### Fase 0 — Consistência da documentação
 
-### 2. ADC pin map H562 — auditoria (2026-07-16) + residual HW
+Sem hardware. Reflete a divisão do README e a remoção dos projetos KiCad em 2026-10-21 (`a1e26fc`, recuperáveis no git).
 
-**Auditoria higiene (docs only):** o firmware actual em `src/hal/adc.cpp` **já**
-mapeia canais H562 (DS14258) de forma coerente com `docs/pipeline_motor.md` (§ ADC e sensores):
+- `docs/bench_test_manual.md`: a linha 10 diz que `hardware/openems_v1` tem o esquemático e a linha 30 cita "README (§ Errata)", que agora é `docs/errata_stm32h562.md`.
+- `docs/hw/*` cita `hardware/openems_v1` e `hardware/openems_ecu` (`README.md`, `mcu_f407_to_h562_pin_map.md`, `microruseefi_as_base.md`): marcar como removido em vez de apagar o histórico.
+- `docs/hw/README.md` §4 diz que o driver TLE8888 "nunca clockou silício", mas `src/` não tem mais `tle8888.cpp`. Confirmar e atualizar.
+- `docs/wiring_diagram.md` ainda tem o mapa TIM2/PC legado: atualizar ao pinout de `docs/hw/pinout.md`.
+- `tools/ts/OpenEMS_model.msq` está fora do git: versionar ou ignorar.
+- `.graphifyignore`: excluir `tools/esp32_combined/ardustim_gui/assets/`, porque a `moment.js` embutida polui os nós centrais do grafo.
+- Pronto quando: `grep` por `hardware/openems_` e `README.md §` só acha menções históricas e `make ci-local` passa.
 
-| Sensor | Pino | INP (adc.cpp) |
-|--------|------|----------------|
+### Fase 1 — Firmware sem silício novo
+
+Itens de "Registrado e deixado de propósito", resolvidos com host-tests.
+
+1. USART1: `startup_stm32h562.cpp` seleciona HSI16 (`USART1SEL = 0b011`) e `uart.cpp` calcula o BRR com 125 MHz. Selecionar PCLK2 depois do PLL, ou trocar o BRR para HSI.
+2. FDCAN: `can.cpp` assume 62,5 MHz no NBTP e `system.cpp` só liga `PLL1PEN`. Ler o reset de `FDCANSEL` no SVD, ligar `PLL1QEN`, fixar o seletor e testar o cálculo de bit timing.
+3. `can0_tx`: consultar `FDCAN_CCCR_INIT` e tratar falha de TX.
+4. Gauge de lambda: o `openems.ini` escala o byte com 0,004, o firmware publica mili-lambda ÷ 5 e o dash multiplica por 5. Alinhar os três.
+5. Páginas 0x0A e 0x0C: definir se a escrita é aplicada ou recusada (hoje o envelope responde OK e o burn responde erro).
+6. CAN 0x402 usa `kFcoFlowCcMin = 450` fixo em vez de `injector_flow_cc_min`. Revisar também os status bits de 0x400 e 0x401.
+7. CKP: decidir o caminho do pulso "substituto" (limiar 0,9) com o simulador de precisão.
+8. `DiagnosticManager`: debounce, tick e persistência em NVM ainda são aspiracionais (`docs/protection_system.md`).
+- Pronto quando: `make ci-local` verde, `host-test WERROR=1` com 0 FAIL, `precision-test` com 0 FAIL, `ini-check` e `dash-check` sem findings e as duas placas compilando.
+
+### Fase 2 — Bancada WeAct VGT6 + ESP32
+
+Bloqueia as fases seguintes. Roteiro em `docs/bench_test_manual.md`.
+
+- Confirmar a Rev X do chip (marcação e `REV_ID` em `DBGMCU_IDCODE`) antes de qualquer ensaio.
+- Gravar o `.bin` com ST-Link, sem bobinas nem injetores, sem reset loop nem hard fault.
+- Scope das saídas INJ/IGN (BSRR, TIM5_CH3): latência e jitter. CKP/CMP sintético de 200 a 8500 rpm, com perda e retomada de sync.
+- USB CDC real: IRQ e endpoints, sem bloquear o caminho crítico, RX ≥ envelope.
+- Registrar `loop2_last`, `loop2_max`, `late_event_count`, `cycle_schedule_drop_count` e `calibration_clamp_count`.
+- IWDG com o gate do ETB, e Flash sem escrita com o motor girando.
+- Ferramentas: `tools/diag/` (`sync_loss.py`, `bench_check.py`, `angle.py`) e `tools/hil_test/hil_test.py`.
+- Pronto quando: há um relatório de bancada com T3 e T4 medidos e sem falhas.
+
+### Fase 3 — Medidas e calibração
+
+Depende da Fase 2.
+
+- Curva de CLT/IAT com pull-up de 2,49 kΩ. Escala dos sensores de pressão de combustível e de óleo. Fase do VVT.
+- PWM real do ETB, ADC com o motor parado, rodapé de calibração na Flash.
+- Offsets EXTI do flex (RPR1 0x00C, FPR1 0x010) e registradores do CAN.
+- Ângulo na luz de ponto durante o rev limit.
+- Confirmar `PA2 = ETB_TPS1 / INP14` no package real (auditoria ADC de 2026-07-16, tabela abaixo).
+- CMP em LOW (FULL_SYNC só no crank) e 2º canal RMT para a phase_A: backlog de sincronismo, não de canal ADC.
+
+| Sensor | Pino | INP (`adc.cpp`) |
+|--------|------|-----------------|
 | MAP | PA3 | INP15 |
 | TPS | PA4 | INP18 |
 | KNOCK | PA5 | INP19 |
@@ -35,43 +75,18 @@ mapeia canais H562 (DS14258) de forma coerente com `docs/pipeline_motor.md` (§ 
 | CLT / IAT | PB0 / PB1 | INP9 / INP5 |
 | FUEL / OIL / EWG | PC4 / PC1 / PC3 | INP4 / INP11 / INP13 |
 
-O texto antigo deste item (MAP em PA2, CLT em PC2, …) descrevia o bug **pré-fix**
-e está **stale**. DMA/GPDMA/ADSTART já foram tratados (ver Concluído / changelog).
+### Fase 4 — Gate pré-motor
 
-**Residual (produto/HW, não higiene de estilo):**
-- Confirmar no silício/bancada que a fiação ESP32 DAC e o package (RGT6/VGT6)
-  batem com a tabela acima (especialmente **PA2 = ETB_TPS1 / INP14** no teu
-  package — validar no DS14258 da revisão de silício).
-- Se a bancada ainda não lê sensores reais, preferir checklist de fiação +
-  `adc_init_faults` / recovery em vez de reescrever o mapa “do zero”.
-- CMP em LOW (FULL_SYNC só crank) e 2º canal RMT para phase_A: backlog de
-  sincronismo, não de canal ADC.
+Depende de hardware fora do escopo atual. Só critérios.
 
-### 3. Datalog em SD card (registrado 2026-06-12)
-Logging interno no slot TF da placa (STM32H562 tem SDMMC com DMA), em vez de
-depender do polling USB a ~30 Hz.
+- Polaridade CKP/CMP contra o datasheet do sensor Hall. Ruído sob carga. Gate do ETB, com autocal e PID desacoplados do motor.
+- Depois: cranking sem faísca, faísca sem combustível, partida.
 
-- **Driver SDMMC bare-metal** (sem ST HAL, padrão do projeto): init do cartão,
-  blocos 512B via DMA. Conferir pinos do slot (tip. PC8–PC12+PD2) vs pinos em uso.
-- **Sistema de arquivos**: FatFs (cartão legível no PC) ou ring bruto de blocos
-  com extração via USB (mais robusto a queda de energia).
-- **Escrita fora do caminho crítico**: buffer em RAM, flush por blocos no loop
-  de fundo — picos de latência do SD (dezenas de ms) absorvidos pelo buffer.
-- **Ganhos**: taxa de 100 Hz–1 kHz (captura transientes que 30 Hz perde),
-  autonomia sem notebook, log sobrevive a desconexão de USB.
-- **Estimativa**: alguns dias de bancada (driver é o grosso do trabalho).
+### Backlog
 
-### 4. Migração para STM32H562VGT6 (LQFP100)
-Mais pinos disponíveis. Permite:
-- Pino dedicado para EWG H-bridge IN2 (atualmente PB4, compartilhado com LED)
-- Restaurar LED heartbeat em pino próprio
-- ADC adicionais para sensores (EGT, fuel pressure, oil pressure)
-- Marcado no código com `// TODO(VGT6)`
-
-### 5. Documentação
-- Os projetos KiCad (`hardware/openems_v1`, `hardware/openems_ecu`) foram removidos em 2026-10-21 (`a1e26fc`). `docs/hw/` ainda cita esses arquivos; revisar os links.
-- Atualizar `docs/wiring_diagram.md` ao pinout de `docs/hw/` (ainda tem mapa TIM2/PC legado no ASCII).
-- Detalhes de hardening e pinout por placa: `docs/estado_e_hardening.md`.
+- Datalog em SD (SDMMC, só no RGT6): driver bare-metal, FatFs ou ring de blocos, escrita fora do caminho crítico, 100 Hz a 1 kHz. Estimativa de alguns dias de bancada.
+- Desenho em aberto: proxy de TC por `rpm_dot`, cascata STFT/LTFT, taper de partida do ETB, interlock de `'Y'` e `'Z'`.
+- Fora do escopo por decisão: placa v2 e seus drivers (`etb_driver.cpp` de 3 pinos para 2 pinos + SPI do L9960T, passo 0 de diagnóstico dos CIs novos).
 
 ## Registrado e deixado de propósito
 
