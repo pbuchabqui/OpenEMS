@@ -1,5 +1,7 @@
 # Hardware — placa de interface OpenEMS v1
 
+> 📦 **Nota (2026-10-21):** os projetos KiCad `hardware/openems_v1` e `hardware/openems_ecu` foram removidos do repositório (`a1e26fc`; recuperáveis com `git checkout a1e26fc~1 -- hardware/`). O suporte a TLE8888 saiu do firmware em 2026-10-07 (`9e7b309`). Caminhos para esses projetos e tudo sobre o TLE8888 abaixo são **históricos**.
+
 Ponto de entrada da documentação de hardware. **Ler esta página antes de qualquer outra.**
 
 **Objetivo do projeto:** sair da bancada para a **primeira partida em motor real** (4 cilindros, roda
@@ -157,12 +159,12 @@ confirmado contra fonte primária. Não construir em cima sem confirmar.
 
 | Afirmação | Estado real |
 |---|---|
-| **Mapa de registadores do TLE8888** | ✅ **Endereços confirmados** por implementação independente (rusEFI) — ver `tle8888_crosscheck.md`. ⚠️ Mas **nenhum valor de reset** foi confirmado, e 5 dos 7 do fingerprint usam endereços que o rusEFI não toca. |
+| ⛔ ~~Mapa de registadores do TLE8888~~ (histórico — TLE8888 removido) | ✅ **Endereços confirmados** por implementação independente (rusEFI) — ver `tle8888_crosscheck.md`. ⚠️ Mas **nenhum valor de reset** foi confirmado, e 5 dos 7 do fingerprint usam endereços que o rusEFI não toca. |
 | **Atraso de propagação do VR** | 🚨 **O datasheet NÃO especifica.** Os 50 ns que os docs citavam eram do **MAX9924**, peça que saiu da BOM. Medição obrigatória no passo 3. |
 | **VREF+ é pino separado no LQFP100** | ✅ **Sim** no H562 LQFP100 (`stm32h562vg.pdf` pinout — VREF+ ≠ double-bond VDDA). Opção (a): VREF+→VDDA filtrado. |
 | **Números de pino do TLE8888** | ✅ **Verificados** DS Rev 1.2 §3 + rusEFI lib — `tle8888_pinout.md`. |
 | **Dimensões do coreboard** | ✅ **WeAct V1.0 Board Shape:** 38,62 × 69,10 mm, furos Φ3,2 @ 2,80 mm — `weact_h562_coreboard.md`. Altura USB ainda a medir. |
-| **Todo o driver TLE8888** | 🚨 **Nunca clockou silício.** Os 1234 host-tests mockam o SPI. Só o bring-up decide. |
+| ⛔ ~~Todo o driver TLE8888~~ (histórico — driver removido em `9e7b309`) | 🚨 **Nunca clockou silício.** Os 1234 host-tests mockam o SPI. Só o bring-up decide. |
 
 ---
 

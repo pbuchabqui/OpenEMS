@@ -21,7 +21,7 @@ Sem hardware. Reflete a divisão do README e a remoção dos projetos KiCad em 2
 
 - `docs/bench_test_manual.md`: a linha 10 diz que `hardware/openems_v1` tem o esquemático e a linha 30 cita "README (§ Errata)", que agora é `docs/errata_stm32h562.md`.
 - `docs/hw/*` cita `hardware/openems_v1` e `hardware/openems_ecu` (`README.md`, `mcu_f407_to_h562_pin_map.md`, `microruseefi_as_base.md`): marcar como removido em vez de apagar o histórico.
-- `docs/hw/README.md` §4 diz que o driver TLE8888 "nunca clockou silício", mas `src/` não tem mais `tle8888.cpp`. Confirmar e atualizar.
+- O suporte a TLE8888 foi removido do firmware em 2026-10-07 (`9e7b309`: `src/hal/tle8888.{cpp,h}` e `tle8888_regs.h`). Feito em 2026-10-21: `docs/hw/README.md` marca como histórico o TLE8888 (§4) e os caminhos para os projetos KiCad removidos; `microruseefi_as_base.md` e `mcu_f407_to_h562_pin_map.md` ganharam a nota de links quebrados. `tle8888_crosscheck.md` e `tle8888_pinout.md` já estavam marcados como históricos e `vr_input_conditioning.md` como supersedido. Falta revisar menções ao TLE8888 em `architecture_v2.md`, `bom_v1_candidates.md`, `interface_board_v1.md`, `kicad_vendor_review.md`, `netlist_v1.md`, `pinout.md` e `weact_h562_schematic.md`. Os itens "TLE8888" de Concluído são histórico e ficam.
 - `docs/wiring_diagram.md` ainda tem o mapa TIM2/PC legado: atualizar ao pinout de `docs/hw/pinout.md`.
 - `tools/ts/OpenEMS_model.msq` está fora do git: versionar ou ignorar.
 - `.graphifyignore`: excluir `tools/esp32_combined/ardustim_gui/assets/`, porque a `moment.js` embutida polui os nós centrais do grafo.

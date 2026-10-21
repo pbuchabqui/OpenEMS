@@ -1,5 +1,7 @@
 # microRusEFI como base de hardware OpenEMS — ⛔ SUPERSEDIDO
 
+> 📦 **Nota (2026-10-21):** os projetos KiCad `hardware/openems_v1` e `hardware/openems_ecu` foram removidos do repositório (`a1e26fc`; recuperáveis com `git checkout a1e26fc~1 -- hardware/`). Os caminhos e links para eles abaixo são históricos e estão quebrados.
+
 > **Estado (2026-08-07):** o fork do microRusEFI **deixou de ser a base de desenho**
 > da ECU OpenEMS. O desenho de produção passa a ser um projecto KiCad **em branco**:
 > [`hardware/openems_v1/`](../../hardware/openems_v1/).

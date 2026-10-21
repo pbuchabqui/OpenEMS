@@ -1,5 +1,7 @@
 # STM32F407VGTx → STM32H562VGTx — mapa de migração (LQFP100)
 
+> 📦 **Nota (2026-10-21):** os projetos KiCad `hardware/openems_v1` e `hardware/openems_ecu` foram removidos do repositório (`a1e26fc`; recuperáveis com `git checkout a1e26fc~1 -- hardware/`). Os caminhos e links para eles abaixo são históricos e estão quebrados.
+
 > ⛔ **SUPERSEDIDO (2026-08-07) para efeitos de desenho.** Este documento existia para
 > pousar o H562 no cobre F407 do microRusEFI. Esse fork foi abandonado —
 > ver [`microruseefi_as_base.md`](microruseefi_as_base.md). A board nova parte de um
