@@ -22,6 +22,7 @@ Estimativa, não medida: um MLP int8 de 3 camadas com cerca de 1 000 MACs leva 5
 | # | Uso | Onde rodaria | Avaliação |
 |---|-----|--------------|-----------|
 | 0 | Parâmetros X-τ da parede de combustível (ver seção abaixo) | bloco de 100 ms | Melhor encaixe; testar antes tabela com mais eixos. |
+| 0b | STFT: feedforward aprendido e saúde da sonda (ver seção abaixo) | bloco de 100 ms | Antes, ganhos escalonados pelo atraso, sem rede. |
 | 1 | Detecção de anomalia de sensor ou misfire (`misfire_detect`, `DiagnosticManager`) | bloco de 100 ms | Risco baixo: só alerta, não corta. |
 | 2 | Classificação de knock (hoje: contagem acima de limiar em `knock.cpp`) | fora da ISR | Pede amostragem mais rápida e dados reais rotulados de motor. |
 | 3 | Correção de VE/ignição aprendida | bloco de 100 ms ou offline | Ganho incerto frente a `table3d` + LTFT, que são auditáveis. |
@@ -35,6 +36,29 @@ Estimativa, não medida: um MLP int8 de 3 camadas com cerca de 1 000 MACs leva 5
 - A saída passa pelos limites que já existem (`learned_x_min/max`, `learned_tau_min/max`). STFT, LTFT e os cortes de lambda do `limp_gating` seguem valendo, então o pior caso é uma mistura levemente errada num transiente.
 - Antes da rede, testar a tabela com mais eixos (CLT, etanol) ou grade mais fina: pode dar quase o mesmo ganho sem caixa-preta. A rede só compensa com 4 ou mais entradas relevantes.
 - Treino offline, com datalog de motor real e degraus de TPS (o rótulo é o erro de lambda, com atraso de transporte da sonda). O aprendizado online atual ficaria como ajuste fino por cima.
+
+## STFT (malha curta de lambda)
+
+Hoje (`fuel_trim.cpp`): `fuel_update_stft` é um PI com **ganhos globais** (`stft_kp_x100` = 3, `stft_ki_x1000` = 5), clamp ±15% (`stft_clamp_pct_x10` = 150), tick de ~100 ms. O atraso de transporte vem de uma tabela 3×3 bilinear (rpm × MAP, `lambda_delay_ms_table`, 0 a 2000 ms) sobre um anel de 16 amostras de lambda (`fuel_update_stft_delayed`). O integrador congela, sem decair, quando `closed_loop_allowed` ou `post_start_elapsed` bloqueiam. O STFT alimenta o LTFT por célula e o acumulador de LEARN (bake na VE só por comando manual 'Y').
+
+A planta é quase linear (lambda ∝ 1/combustível), com atraso e filtro de sensor que variam com rpm, carga e temperatura do escape. Os ganhos fixos precisam ser conservadores para o pior atraso (baixa rotação e carga) e ficam lentos no resto.
+
+| Opção | O que é | Veredito |
+|-------|---------|----------|
+| A | Rede no lugar do PI | Não. Perde estabilidade analisável, e o PI com atraso já serve a esta planta. |
+| B | Ganhos (kp, ki) escalonados pelo atraso | **Primeiro, sem rede. Implementado** (desligado por padrão): ganho ∝ ref / atraso, com o atraso da tabela 3×3, limitado a 25%–200%. Falta afinar a referência com motor e WBO2. |
+| C | Preditor de Smith (modelo de atraso + filtro) | Sem rede, físico e verificável. Segunda etapa, se B não bastar. |
+| D | Feedforward aprendido: a rede prevê o erro de combustível a partir de MAP, rpm, TPS', CLT, IAT e etanol; o PI corrige só o resíduo | Único uso em que a rede traz algo novo, em transientes, quando o feedback chega tarde. Sobrepõe-se ao X-τ (mesma classe de erro): tratar os dois juntos. |
+| E | Atraso estimado por rede, no lugar da tabela 3×3 | Ganho marginal sobre B. |
+| F | Classificador de saúde da sonda (aquecimento, envelhecimento, leitura implausível) que decide `o2_valid` | Risco baixo: só abre ou fecha a malha. Liga com o `DiagnosticManager`. |
+
+Riscos específicos:
+1. **Aprendizado duplo.** O LTFT/LEARN já absorve o erro de regime. Um feedforward somaria outra correção sobre a mesma grandeza. O STFT que alimenta o LTFT tem que ser o resíduo líquido (depois do feedforward), e o feedforward deve ter média ~0 em regime e cobrir só a dinâmica. Pesos congelados (treino offline), sem aprendizado online na ECU.
+2. **Degradação segura.** Saída da rede limitada por clamp, com volta imediata aos ganhos fixos atuais e feedforward 0 se a saída for implausível, se `o2_valid` cair ou se a rede não estiver carregada.
+3. **Dados.** O rótulo é a resposta da sonda a degraus conhecidos de PW: exige WBO2 real, datalog rápido (SD, no Backlog) e motor. O simulador de precisão não modela a planta de lambda de forma validável.
+4. **Tempo.** Sem problema: tick de ~100 ms contra inferência de ~10 µs (estimativa).
+
+Ordem para o STFT: B, depois C se preciso, depois D junto com o X-τ, e F quando houver datalog. A e E não valem.
 
 ## Substituir PID (ETB, EWG)
 

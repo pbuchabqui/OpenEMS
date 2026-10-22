@@ -86,7 +86,8 @@ Depende de hardware fora do escopo atual. Só critérios.
 
 - Datalog em SD (SDMMC, só no RGT6): driver bare-metal, FatFs ou ring de blocos, escrita fora do caminho crítico, 100 Hz a 1 kHz. Estimativa de alguns dias de bancada.
 - `DiagnosticManager`: debounce de WARNING/ERROR (o CRITICAL continua imediato), timeout de recuperação e persistência dos DTCs em NVM. Só vale quando houver um consumidor dos códigos (dashboard ou serviço); a gravação em Flash exige motor parado (errata ES0565). `ADC_RECOVERY_FAILED` em CRITICAL não é limpo até o reset: decidir se isso é desejado.
-- Pesquisa: redes neurais int8, só nos blocos lentos e depois do datalog em SD e da medida de `loop2_max`. Ordem: parâmetros X-τ (antes, testar a tabela com mais eixos), diagnóstico/anomalia, feedforward aprendido no ETB/EWG (o PID continua mandando). Estudo em [`nn_viabilidade.md`](nn_viabilidade.md).
+- STFT com ganhos escalonados pelo atraso: implementado (`fuel_stft_gain_scale_q8`, calibração `stft_gain_ref_delay_ms`, página 0 offset 348, `stftGainRefDelay` no TunerStudio). Vem desligado (0 = ganhos fixos). Falta afinar a referência com motor e WBO2: kp/ki valem para o atraso de referência e são multiplicados por ref / atraso (25% a 200%).
+- Pesquisa: redes neurais int8, só nos blocos lentos e depois do datalog em SD e da medida de `loop2_max`. Ordem: parâmetros X-τ (antes, testar a tabela com mais eixos), feedforward do STFT junto com o X-τ e saúde da sonda, diagnóstico/anomalia, feedforward aprendido no ETB/EWG (o PID continua mandando). Estudo em [`nn_viabilidade.md`](nn_viabilidade.md).
 - Desenho em aberto: proxy de TC por `rpm_dot`, cascata STFT/LTFT, taper de partida do ETB, interlock de `'Y'` e `'Z'`.
 - Fora do escopo por decisão: placa v2 e seus drivers (`etb_driver.cpp` de 3 pinos para 2 pinos + SPI do L9960T, passo 0 de diagnóstico dos CIs novos).
 

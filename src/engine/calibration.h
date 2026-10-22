@@ -294,7 +294,7 @@ constexpr uint8_t kIdleSparkCurvePts = 6u;
 //   55-56  fuel_pw_drop_max_us (u16): largest PW fall per 2 ms step, 0 = off
 //   57     overrun_spark_retard_deg (u8, 0-30): retard on a trailing closed throttle, 0 = off
 constexpr uint16_t kDriveabilityPage0Off = 276u;
-constexpr uint16_t kDriveabilityPage0End = 348u;
+constexpr uint16_t kDriveabilityPage0End = 350u;
 extern int16_t  decel_entry_delta_rpm_x10[kDashpotCurvePts];
 extern uint8_t  idle_i_step_recover;
 extern uint8_t  idle_i_step_close;
@@ -318,6 +318,10 @@ extern int16_t  driveline_clt_min_x10;
 extern uint16_t driveline_map_min_bar_x100;
 extern uint8_t  driveline_speed_min_kmh;
 extern uint8_t  driveline_speed_max_kmh;
+// Ganho do STFT escalonado pelo atraso de transporte (página 0, offset 348).
+// kp/ki valem para este atraso; no ponto de operação são multiplicados por
+// ref / atraso (clamp 25%..200%). 0 = desligado (ganhos fixos).
+extern uint16_t stft_gain_ref_delay_ms;
 void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept;
 void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept;
 

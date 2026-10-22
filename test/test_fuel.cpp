@@ -466,6 +466,53 @@ void test_fuel_stft(void) {
     CHECK_EQ(after, before, "closed loop disabled → STFT congela (freeze)");
 }
 
+void test_fuel_stft_gain_schedule(void) {
+    section("fuel_calc: STFT com ganhos escalonados pelo atraso");
+
+    const uint16_t saved_ref = stft_gain_ref_delay_ms;
+    // Pontos da tabela de atraso padrão: 1100 ms (marcha lenta/baixa carga) e 80 ms (alta rpm/carga).
+    constexpr uint32_t kRpmSlow = 10000u;  constexpr uint16_t kMapSlow = 10u;
+    constexpr uint32_t kRpmFast = 80000u;  constexpr uint16_t kMapFast = 300u;
+
+    stft_gain_ref_delay_ms = 0u;
+    CHECK_EQ(fuel_stft_gain_scale_q8(kRpmSlow, kMapSlow), 256u, "ref=0: ganho 1,0 no atraso longo");
+    CHECK_EQ(fuel_stft_gain_scale_q8(kRpmFast, kMapFast), 256u, "ref=0: ganho 1,0 no atraso curto");
+    fuel_reset_adaptives();
+    const int16_t off_slow = fuel_update_stft(kRpmSlow, kMapSlow, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    fuel_reset_adaptives();
+    const int16_t off_fast = fuel_update_stft(kRpmFast, kMapFast, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    CHECK_EQ(off_slow, off_fast, "ref=0: mesmo passo nos dois pontos (ganhos fixos)");
+
+    stft_gain_ref_delay_ms = 400u;
+    CHECK_EQ(fuel_stft_gain_scale_q8(kRpmSlow, kMapSlow), 93u, "atraso 1100 ms: 400/1100 (Q8 = 93)");
+    CHECK_EQ(fuel_stft_gain_scale_q8(kRpmFast, kMapFast), 512u, "atraso 80 ms: limitado a 200%");
+    fuel_reset_adaptives();
+    const int16_t on_slow = fuel_update_stft(kRpmSlow, kMapSlow, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    // A saída tem resolução de 0,1% e trunca a 0 num passo só; o integrador (×1000) guarda o sinal.
+    const int32_t on_slow_integrator = g_stft_integrator_x1000;
+    fuel_reset_adaptives();
+    const int16_t on_fast = fuel_update_stft(kRpmFast, kMapFast, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    CHECK_TRUE(on_slow < off_slow, "atraso longo: passo menor que com ganhos fixos");
+    CHECK_TRUE(on_slow >= 0 && on_slow_integrator > 0, "atraso longo: ainda corrige no sentido certo");
+    CHECK_TRUE(on_fast > off_fast, "atraso curto: passo maior que com ganhos fixos");
+
+    stft_gain_ref_delay_ms = 20u;
+    CHECK_EQ(fuel_stft_gain_scale_q8(kRpmSlow, kMapSlow), 64u, "atraso muito longo: piso de 25%");
+
+    // Sinal do erro preservado (rico → STFT negativo) com ganho escalonado.
+    stft_gain_ref_delay_ms = 400u;
+    fuel_reset_adaptives();
+    int16_t rich = 0;
+    for (int i = 0; i < 30; ++i) {
+        rich = fuel_update_stft(kRpmFast, kMapFast, 1000, 950, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_TRUE(rich < 0, "rico com ganho escalonado → STFT negativo");
+    CHECK_TRUE(rich >= -static_cast<int16_t>(stft_clamp_pct_x10), "STFT dentro do clamp");
+
+    stft_gain_ref_delay_ms = saved_ref;
+    fuel_reset_adaptives();
+}
+
 void test_fuel_stft_delayed(void) {
     section("fuel_calc: fuel_update_stft_delayed");
 

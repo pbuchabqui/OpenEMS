@@ -270,6 +270,21 @@ void test_driveline_page0(void) {
     CHECK_EQ(driveline_map_min_bar_x100, 55u, "round trip: MAP min");
     CHECK_EQ(driveline_speed_min_kmh, 20u, "round trip: speed min");
     CHECK_EQ(driveline_speed_max_kmh, 120u, "round trip: speed max");
+    {
+        const uint16_t s_ref = stft_gain_ref_delay_ms;
+        stft_gain_ref_delay_ms = 640u;
+        std::memset(page, 0, sizeof(page));
+        driveability_serialize_to_page0(page, sizeof(page));
+        CHECK_EQ(page[348], 640u & 0xFFu, "STFT gain ref delay low byte (348)");
+        CHECK_EQ(page[349], 640u >> 8, "STFT gain ref delay high byte (349)");
+        stft_gain_ref_delay_ms = 0u;
+        driveability_apply_page0(page, sizeof(page));
+        CHECK_EQ(stft_gain_ref_delay_ms, 640u, "round trip: STFT gain ref delay");
+        page[348] = 0xFFu; page[349] = 0xFFu;
+        driveability_apply_page0(page, sizeof(page));
+        CHECK_EQ(stft_gain_ref_delay_ms, 2000u, "STFT gain ref delay limitado a 2000 ms");
+        stft_gain_ref_delay_ms = s_ref;
+    }
     // Zero in a "keep the default" field leaves the value alone; the retard is clamped.
     driveline_dd_thresh_rpm_x10 = 321u;
     page[kDriveabilityPage0Off + 59] = 0u; page[kDriveabilityPage0Off + 60] = 0u;

@@ -461,6 +461,25 @@ uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
     return interp_lambda_delay_3x3(rpm_x10, map_bar_x100);
 }
 
+uint16_t fuel_stft_gain_scale_q8(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
+    constexpr uint16_t kUnity = 256u;
+    constexpr uint16_t kMin   = 64u;    // 25%: o atraso mais longo não afrouxa abaixo disto
+    constexpr uint16_t kMax   = 512u;   // 200%: atraso curto não dobra mais que isto
+    const uint16_t ref = ems::engine::stft_gain_ref_delay_ms;
+    if (ref == 0u) {
+        return kUnity;
+    }
+    // Ganho de malha × atraso constante: escala ∝ ref / atraso.
+    uint32_t delay = interp_lambda_delay_3x3(rpm_x10, map_bar_x100);
+    if (delay < 1u) {
+        delay = 1u;
+    }
+    const uint32_t scale = (static_cast<uint32_t>(ref) * kUnity) / delay;
+    if (scale < kMin) { return kMin; }
+    if (scale > kMax) { return kMax; }
+    return static_cast<uint16_t>(scale);
+}
+
 bool ltft_accum_sample_valid(uint32_t rpm_x10,
                              uint32_t prev_rpm_x10,
                              uint16_t tps_x10,
@@ -839,9 +858,13 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
     // P em ×1000 (não ÷100 ainda — kp_x100=3 truncava a zero p/ |erro|<3,4%, a
     // faixa normal de operação em malha fechada). Só divide por 100 no fim,
     // já somado ao integrador (também em ×1000).
-    const int32_t p_x1000 = static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_kp_x100);
+    // Ganhos escalonados pelo atraso (Q8; 256 = ganhos fixos, desligado).
+    const int32_t gain_q8 = static_cast<int32_t>(fuel_stft_gain_scale_q8(rpm_x10, map_bar_x100));
+    const int32_t p_x1000 = (static_cast<int32_t>(error_x1000) *
+                             static_cast<int32_t>(ems::engine::stft_kp_x100) * gain_q8) / 256;
     // incremento em ×1000: error×ki/10 (era /1000 em ×10 — truncava a zero)
-    g_stft_integrator_x1000 += (static_cast<int32_t>(error_x1000) * static_cast<int32_t>(ems::engine::stft_ki_x1000)) / 10;
+    g_stft_integrator_x1000 += (static_cast<int32_t>(error_x1000) *
+                                static_cast<int32_t>(ems::engine::stft_ki_x1000) * gain_q8) / 2560;
 
     if (g_stft_integrator_x1000 > clamp_x1000) {
         g_stft_integrator_x1000 = clamp_x1000;

@@ -510,6 +510,7 @@ int16_t  driveline_clt_min_x10 = 60;
 uint16_t driveline_map_min_bar_x100 = 40u;
 uint8_t  driveline_speed_min_kmh = 0u;
 uint8_t  driveline_speed_max_kmh = 0u;
+uint16_t stft_gain_ref_delay_ms = 0u;
 
 namespace {
 constexpr uint16_t kDriveabilityPwMaxUs = 20000u;  // 20 ms
@@ -612,6 +613,8 @@ void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept {
     }
     driveline_speed_min_kmh = p[70];
     driveline_speed_max_kmh = p[71];
+    const uint16_t gain_ref = rd_u16(p + 72);
+    stft_gain_ref_delay_ms = (gain_ref > 2000u) ? 2000u : gain_ref;
 }
 
 void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
@@ -646,6 +649,7 @@ void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
     wr_u16(p + 68, driveline_map_min_bar_x100);
     p[70] = driveline_speed_min_kmh;
     p[71] = driveline_speed_max_kmh;
+    wr_u16(p + 72, stft_gain_ref_delay_ms);
 }
 
 void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept {

@@ -14,6 +14,10 @@ void fuel_lambda_delay_reset() noexcept;
 uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
                                        uint16_t map_bar_x100) noexcept;
 
+// Fator Q8 (256 = 1,0) aplicado a kp/ki do STFT no ponto rpm × MAP: ref / atraso,
+// com ref = stft_gain_ref_delay_ms, limitado a 64..512. ref = 0 devolve 256.
+uint16_t fuel_stft_gain_scale_q8(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
+
 // Acumulação LTFT por célula + commit na VE (Fase 1 stats + Fase 2 bake-in).
 //
 // Semântica bake-in (não "filtrar ruído com erro residual"):
