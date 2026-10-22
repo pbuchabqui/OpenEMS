@@ -1,6 +1,7 @@
 #include "hal/critical_section.h"
 #include "app/ui_protocol.h"
 #include "app/ui_protocol_internal.h"
+#include "app/datalog.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -224,12 +225,23 @@ void update_realtime_page() noexcept {
     // reserved[18..21] (abs 32..35): install / calibration aids.
     //   [18] engine config reject mask (engine_config.h), [19] bit0 timing light,
     //   [20..21] advance sent to the coils, 0.1° signed.
-    //   [22..29] spare (0). [22] was the TLE8888 register-map fingerprint.
+    //   [22..29] datalog SD (abaixo); era o fingerprint do TLE8888 e bytes livres.
     rt.reserved[18] = ems::engine::cfg::engine_config_reject_mask();
     rt.reserved[19] = ems::engine::timing_light_enable;
     rt.reserved[20] = static_cast<uint8_t>(static_cast<uint16_t>(g_rt_advance_x10) & 0xFFu);
     rt.reserved[21] = static_cast<uint8_t>(static_cast<uint16_t>(g_rt_advance_x10) >> 8u);
-    for (uint8_t i = 22u; i < 30u; ++i) { rt.reserved[i] = 0u; }
+    // [22..29] (abs 36..43): datalog SD. sd_state<<4 | datalog_state; flags (ligado, taxa, erros);
+    // blocos gravados (u32); amostras descartadas (u16, satura).
+    {
+        const ems::app::DatalogStats dl = ems::app::datalog_stats();
+        const uint32_t errs = (dl.write_errors > 31u) ? 31u : dl.write_errors;
+        rt.reserved[22] = static_cast<uint8_t>((dl.sd_state << 4u) | (static_cast<uint8_t>(dl.state) & 0x0Fu));
+        rt.reserved[23] = static_cast<uint8_t>((dl.enabled ? 1u : 0u) | (dl.rate_code << 1u) | (errs << 3u));
+        write_u32_le(&rt.reserved[24], dl.blocks_written);
+        const uint32_t dropped = (dl.records_dropped > 0xFFFFu) ? 0xFFFFu : dl.records_dropped;
+        rt.reserved[28] = static_cast<uint8_t>(dropped & 0xFFu);
+        rt.reserved[29] = static_cast<uint8_t>(dropped >> 8u);
+    }
     const uint8_t inj_mode = ::ecu_sched_is_sequential() ? 2u
                             : ::ecu_sched_presync_inj_mode();
     rt.reserved[30] = static_cast<uint8_t>((inj_mode << 4u) | (g_rt_sync_state_raw & 0x0Fu));

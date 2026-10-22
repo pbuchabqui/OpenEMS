@@ -598,6 +598,26 @@ def api_ltft_apply_ready():
     return {"ok": True, "committed": n}
 
 
+@app.get("/api/datalog")
+def api_datalog_status():
+    """Estado do datalog SD (consulta, não altera nada)."""
+    try:
+        return worker.submit(lambda l: l.datalog_control())
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"datalog: {e}"}, status_code=502)
+
+
+@app.post("/api/datalog")
+def api_datalog_set(enable: bool = True, rate: int = 0):
+    """Liga/desliga o datalog SD (comando 'L'). rate: 0..3 = 100/200/500/1000 Hz."""
+    if not 0 <= rate <= 3:
+        return JSONResponse({"error": "rate deve estar entre 0 e 3"}, status_code=422)
+    try:
+        return worker.submit(lambda l: l.datalog_control(enable, rate))
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"datalog: {e}"}, status_code=502)
+
+
 @app.get("/api/dirty")
 def api_dirty():
     return {"mask": worker.submit(lambda l: l.dirty_mask())}

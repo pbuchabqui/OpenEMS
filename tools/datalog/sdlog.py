@@ -3,7 +3,9 @@
 
 Formato (docs/datalog.md): blocos brutos de 512 B a partir do setor 2048.
 Cada bloco = cabeçalho de 16 B (magic "OLG1", sessão, sequência, CRC-32 do
-bloco com o campo CRC zerado) + 15 registros de 32 B + 16 B reservados.
+bloco com o campo CRC zerado) + 15 registros de 32 B + rodapé de 16 B cujo
+primeiro byte (offset 496) é o número de registros válidos (15; menos no bloco
+parcial gravado ao desligar o log).
 
     sdlog.py format <dispositivo|imagem> [--blocks N]
     sdlog.py decode <dispositivo|imagem> [-o saida.csv]
@@ -23,6 +25,7 @@ MAGIC = 0x31474C4F  # "OLG1"
 HEADER = 16
 RECORD = 32
 RECORDS_PER_BLOCK = 15
+OFF_COUNT = 496
 
 # t_ms u32, rpm u16, map u16, tps u16, clt s16, iat s16, lambda u16, alvo u16,
 # pw u16, avanço s16, stft s16, ltft s16, status u16, cortes u16, sync u8, flags u8
@@ -41,10 +44,11 @@ def block_crc(block: bytes) -> int:
 
 
 def make_block(session: int, seq: int, records) -> bytes:
-    assert len(records) == RECORDS_PER_BLOCK
+    assert 0 < len(records) <= RECORDS_PER_BLOCK
     body = b"".join(struct.pack(RECORD_FMT, *r) for r in records)
     block = struct.pack("<IIII", MAGIC, session, seq, 0) + body
     block += b"\0" * (BLOCK - len(block))
+    block = block[:OFF_COUNT] + bytes([len(records)]) + block[OFF_COUNT + 1:]
     return block[:12] + struct.pack("<I", block_crc(block)) + block[16:]
 
 
@@ -55,9 +59,10 @@ def parse_block(block: bytes):
     magic, session, seq, crc = struct.unpack_from("<IIII", block)
     if magic != MAGIC or crc != block_crc(block):
         return None
+    count = min(block[OFF_COUNT], RECORDS_PER_BLOCK)
     recs = [
         struct.unpack_from(RECORD_FMT, block, HEADER + i * RECORD)
-        for i in range(RECORDS_PER_BLOCK)
+        for i in range(count)
     ]
     return session, seq, recs
 
@@ -124,10 +129,9 @@ def cmd_selftest(_args):
     assert struct.pack(RECORD_FMT, *GOLDEN_SAMPLE) == GOLDEN_BYTES, "registro dourado difere do firmware"
 
     image = bytearray(b"\0" * (START_LBA * BLOCK))
-    seqs = [(1, 0), (1, 1), (1, 3), (2, 0)]          # lacuna de 1 bloco na sessão 1
-    for session, seq in seqs:
-        recs = [GOLDEN_SAMPLE] * RECORDS_PER_BLOCK
-        image += make_block(session, seq, recs)
+    seqs = [(1, 0, 15), (1, 1, 15), (1, 3, 15), (2, 0, 6)]   # lacuna na sessão 1; sessão 2 parcial
+    for session, seq, count in seqs:
+        image += make_block(session, seq, [GOLDEN_SAMPLE] * count)
     image += b"\0" * BLOCK                             # fim do log
 
     out = io.StringIO()
@@ -136,7 +140,7 @@ def cmd_selftest(_args):
     assert gaps == 1, gaps
     rows = list(csv.reader(io.StringIO(out.getvalue())))
     assert rows[0] == COLUMNS
-    assert len(rows) == 1 + 4 * RECORDS_PER_BLOCK
+    assert len(rows) == 1 + 3 * RECORDS_PER_BLOCK + 6, len(rows)
     first = rows[1]
     assert first[2] == "1000" and first[3] == "800.0" and first[6] == "-5.0", first
     assert first[10] == "3.456" and first[11] == "-2.5", first

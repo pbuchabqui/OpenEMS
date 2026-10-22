@@ -275,4 +275,6 @@ void test_datalog_sequence_and_latency(void);
 void test_datalog_ring_overflow(void);
 void test_datalog_resume_after_reboot(void);
 void test_datalog_region_full(void);
+void test_datalog_enable_and_rate(void);
+void test_datalog_protocol_cmd_l(void);
 void test_datalog_failures(void);

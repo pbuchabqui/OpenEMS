@@ -23,7 +23,8 @@ Bloco de 512 B:
 | 8–11 | sequência dentro da sessão |
 | 12–15 | CRC-32 (zlib) do bloco inteiro, com este campo em zero |
 | 16–495 | 15 registros de 32 B |
-| 496–511 | reservado, zero |
+| 496 | registros válidos no bloco (15; menos no bloco parcial gravado ao desligar o log) |
+| 497–511 | reservado, zero |
 
 Registro de 32 B, little-endian:
 
@@ -46,7 +47,7 @@ Registro de 32 B, little-endian:
 | 30 | `sync_state` | u8 |
 | 31 | `flags` (bit 0: lambda válido) | u8 |
 
-A taxa é de 100 amostras/s, ou 3,2 KB/s: 128 MiB duram cerca de 11 h.
+Taxas (comando `L`, abaixo): 100 Hz (3,2 KB/s, padrão), 200, 500 ou 1 kHz (32 KB/s). A 100 Hz, 128 MiB duram cerca de 11 h; a 1 kHz, pouco mais de 1 h. O anel de 32 blocos dá ~480 ms de folga a 1 kHz para o cartão atrasar sem descartar.
 
 ## Como funciona
 
@@ -56,6 +57,24 @@ A taxa é de 100 amostras/s, ou 3,2 KB/s: 128 MiB duram cerca de 11 h.
 - No boot, uma busca binária assíncrona acha o fim do log anterior (os blocos válidos formam um prefixo) e a sessão nova é a última mais um. Um bloco cortado por perda de energia tem CRC inválido e é sobrescrito.
 - Três falhas de gravação seguidas param o log (estado FAULT) e levantam `DATALOG_FAULT` (0x0530) como WARNING. O log nunca corta o motor.
 - Região cheia: estado FULL, o log para.
+
+## Comando e contadores
+
+Comando `L` do protocolo (1 byte de argumento): bit 0 = ligado, bits 1–2 = taxa (0 a 3 = 100/200/500/1000 Hz), bit 7 = só consultar. Resposta: `[ACK][estado do log][estado do SD]`. O log liga com 100 Hz no boot e a escolha não é gravada em NVM. Ao desligar, o bloco parcial é gravado (o byte 496 diz quantos registros ele tem), então nada se perde.
+
+No dash: `GET /api/datalog` consulta e `POST /api/datalog?enable=true&rate=3` liga e escolhe a taxa (`OpenEMSLink.datalog_control()`).
+
+Contadores no realtime (OCH, offsets absolutos, canais no `openems.ini`):
+
+| Offset | Canal | Conteúdo |
+|---|---|---|
+| 36 bits 0–3 | `datalogState` | 0 OFF, 1 SEARCH, 2 ACTIVE, 3 FULL, 4 FAULT |
+| 36 bits 4–7 | `sdState` | 0 ausente, 1 inicializando, 2 pronto, 3 falha |
+| 37 bit 0 | `datalogOn` | ligado |
+| 37 bits 1–2 | `datalogRate` | código da taxa |
+| 37 bits 3–7 | `datalogErrs` | erros de gravação (satura em 31) |
+| 38–41 | `datalogBlocks` | blocos gravados (u32) |
+| 42–43 | `datalogDrops` | amostras descartadas (u16, satura) |
 
 ## Ferramentas
 
@@ -77,5 +96,6 @@ O registro dourado (`GOLDEN_BYTES` no `sdlog.py`) é o mesmo vetor conferido em 
 | `src/hal/sd.h` | interface de bloco assíncrona |
 | `src/hal/sd.cpp` | driver SDMMC1 (só VGT6, só ARM) |
 | `src/hal/sd_sim.cpp` | cartão simulado em RAM para o host-test |
-| `src/main_stm32.cpp` | init, amostra a 100 Hz, poll |
+| `src/main_stm32.cpp` | init, amostra no período escolhido, poll a cada volta do laço |
+| `src/app/ui_protocol*.cpp` | comando `L` e contadores no realtime |
 | `tools/datalog/sdlog.py` | preparar e decodificar |

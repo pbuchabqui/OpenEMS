@@ -53,6 +53,16 @@ class TestSimEcu(unittest.TestCase):
         rt = self.ecu.link.read_realtime()
         self.assertEqual(rt.rpm, 0)
 
+    def test_datalog_command(self):
+        link = self.ecu.link
+        st = link.datalog_control()
+        self.assertIn(st["log"], ("off", "search", "active"))
+        self.assertIn(st["sd"], ("absent", "ready"))
+        link.datalog_control(enable=False, rate_code=3)
+        self.assertEqual(link.datalog_control()["log"], st["log"])   # consulta não muda nada
+        with self.assertRaises(ValueError):
+            link.datalog_control(enable=True, rate_code=7)
+
     def test_field_write_burn_survives_restart(self):
         link = self.ecu.link
         page0 = link.read_page(0)

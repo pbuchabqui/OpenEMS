@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "app/can_stack.h"
+#include "app/datalog.h"
 #include "app/can_rx_map.h"
 #include "hal/flex_fuel.h"
 #include "drv/ckp.h"
@@ -147,6 +148,12 @@ void parse_byte(uint8_t b) noexcept {
         }
         if (b == static_cast<uint8_t>('B')) {
             g_state = ParseState::BENCH_ARG;
+            return;
+        }
+        if (b == static_cast<uint8_t>('L')) {
+            // Datalog SD: 1 byte de argumento (bit0 = ligado, bits1-2 = taxa 0..3 =
+            // 100/200/500/1000 Hz, bit7 = só consultar). Resposta: [ACK][estado do log][estado do SD].
+            g_state = ParseState::LOG_ARG;
             return;
         }
         if (b == static_cast<uint8_t>('Z')) {
@@ -368,6 +375,19 @@ void parse_byte(uint8_t b) noexcept {
         // (exercita integrador e aprendizagem; não converge, por design).
         ems::app::can_stack_set_bench_lambda(b != 0u, 1000u);
         tx_push(kAckOk);
+        reset_parser();
+        return;
+    }
+
+    if (g_state == ParseState::LOG_ARG) {
+        if ((b & 0x80u) == 0u) {
+            ems::app::datalog_set_rate_code(static_cast<uint8_t>((b >> 1u) & 0x03u));
+            ems::app::datalog_set_enabled((b & 0x01u) != 0u);
+        }
+        const ems::app::DatalogStats dl = ems::app::datalog_stats();
+        tx_push(kAckOk);
+        tx_push(static_cast<uint8_t>(dl.state));
+        tx_push(dl.sd_state);
         reset_parser();
         return;
     }

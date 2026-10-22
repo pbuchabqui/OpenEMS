@@ -442,6 +442,9 @@ int main() {
     uint32_t g_t500ms_ = g_t2ms_;
     uint32_t g_t_etb_ms = g_t2ms_;
     uint32_t g_t_comms_ms = g_t2ms_;
+#if EMS_BOARD_IS_VGT6
+uint32_t g_t_log_ms = g_t2ms_;
+#endif
 
     // Estreitar IWDG de 10 s (boot) para ~0,8 s (runtime): IWDG_PR segue /256 (125 Hz) e
     // RLR=99 dá 100/125 = 0,8 s (não 100 ms); suficiente p/ runtime e evita esperar PVU/RVU de
@@ -539,9 +542,6 @@ int main() {
         if (elapsed(now, g_t10ms_, 10u)) {
             g_t10ms_ = now;
             ems::engine::auxiliaries_tick_10ms();
-#if EMS_BOARD_IS_VGT6
-            datalog_sample(now);
-#endif
         }
 
         // ── 20ms: UI proprietaria + aux tasks ───────────────────────────
@@ -749,12 +749,19 @@ int main() {
         if (elapsed(now, g_t_comms_ms, 2u)) {
             g_t_comms_ms = now;
             comms_pump();
-#if EMS_BOARD_IS_VGT6
-            ems::hal::sd_poll();
-            ems::app::datalog_poll();
-            datalog_report_fault();
-#endif
         }
+
+#if EMS_BOARD_IS_VGT6
+        // ── Datalog SD: amostra no período escolhido (10/5/2/1 ms) e avança o cartão uma
+        // operação por volta do laço (fora da medição de loop2; nada bloqueia).
+        if (elapsed(now, g_t_log_ms, ems::app::datalog_period_ms())) {
+            g_t_log_ms = now;
+            datalog_sample(now);
+        }
+        ems::hal::sd_poll();
+        ems::app::datalog_poll();
+        datalog_report_fault();
+#endif
 
         // ── ETB control (2ms cadence) ─────────────────────────────────────
         if (ems::engine::output_test_active()) { g_etb_alive_ms = now; }   // teste de saídas é dono do ETB

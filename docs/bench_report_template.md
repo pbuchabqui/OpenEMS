@@ -148,6 +148,7 @@ Pulso fora de hora nas saídas? ☐ não ☐ sim. Sincronismo volta toda vez? �
 | Flash: nenhuma gravação com o motor girando (observar `late`/`drop` ao salvar) | |
 | Datalog SD (VGT6): cartão SDHC identificado, `sdlog.py format` feito antes | |
 | Datalog SD: 10 min a 100 Hz, `sdlog.py decode` sem lacunas (0 blocos perdidos) e `records_dropped` = 0 | |
+| Datalog SD a 1 kHz (`L` com taxa 3): `datalogDrops` = 0 em 10 min e `loop2_max` sem aumento | |
 | Datalog SD: `loop2_max` com o log ativo igual ao sem cartão (sem aumento mensurável) | |
 | Datalog SD: tirar a energia durante a gravação e religar; o log continua em nova sessão | |
 

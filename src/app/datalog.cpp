@@ -7,6 +7,7 @@
 #include <cstring>
 
 // Só a VGT6 tem o SDMMC1 livre (docs/datalog.md); o host testa com o cartão simulado.
+// Nas outras placas a API existe (o protocolo a chama) mas fica inerte: estado OFF.
 #if EMS_BOARD_IS_VGT6 || defined(EMS_HOST_TEST)
 
 namespace ems::app {
@@ -44,6 +45,9 @@ uint32_t g_records_dropped = 0u;
 uint32_t g_write_errors = 0u;
 uint8_t g_retries = 0u;
 bool g_op_pending = false;
+bool g_enabled = true;
+uint8_t g_rate_code = 0u;
+constexpr uint8_t kPeriodMs[kDatalogRateCodes] = {10u, 5u, 2u, 1u};
 
 // Busca binária do primeiro bloco inválido na região (os válidos formam um prefixo).
 uint32_t g_lo = 0u;
@@ -105,6 +109,7 @@ void finalize_fill() noexcept {
     put32(g_fill + kOffMagic, kDatalogMagic);
     put32(g_fill + kOffSession, g_session);
     put32(g_fill + kOffSeq, g_seq);
+    g_fill[kDatalogOffCount] = g_fill_n;
     put32(g_fill + kOffCrc, 0u);
     put32(g_fill + kOffCrc, block_crc(g_fill));
     ++g_seq;
@@ -236,13 +241,35 @@ void datalog_init() noexcept {
     g_records_dropped = 0u;
     g_write_errors = 0u;
     g_retries = 0u;
+    g_enabled = true;
+    g_rate_code = 0u;
     g_fill_n = 0u;
     std::memset(g_fill, 0, sizeof(g_fill));
     ring_clear();
 }
 
+void datalog_set_enabled(bool enabled) noexcept {
+    if (!enabled && g_enabled && g_fill_n > 0u && g_state == DatalogState::ACTIVE) {
+        finalize_fill();   // grava o bloco parcial: o que foi amostrado até aqui não se perde
+    }
+    g_enabled = enabled;
+}
+
+void datalog_set_rate_code(uint8_t code) noexcept {
+    if (code < kDatalogRateCodes) {
+        g_rate_code = code;
+    }
+}
+
+uint8_t datalog_period_ms() noexcept { return kPeriodMs[g_rate_code]; }
+
+uint8_t datalog_block_count(const uint8_t* block) noexcept {
+    const uint8_t n = block[kDatalogOffCount];
+    return (n > kDatalogRecordsPerBlock) ? kDatalogRecordsPerBlock : n;
+}
+
 void datalog_push(const DatalogSample& s) noexcept {
-    if (g_state != DatalogState::ACTIVE) {
+    if (g_state != DatalogState::ACTIVE || !g_enabled) {
         return;
     }
     serialize(g_fill + kDatalogHeaderBytes + static_cast<uint16_t>(g_fill_n) * kDatalogRecordBytes, s);
@@ -271,12 +298,31 @@ void datalog_poll() noexcept {
 }
 
 DatalogStats datalog_stats() noexcept {
-    return DatalogStats{g_state, g_session, g_blocks_written, g_records_dropped, g_write_errors};
+    return DatalogStats{g_state, static_cast<uint8_t>(ems::hal::sd_state()), g_rate_code, g_enabled,
+                        g_session, g_blocks_written, g_records_dropped, g_write_errors};
 }
 
 #if defined(EMS_HOST_TEST)
 void datalog_test_set_region_blocks(uint32_t blocks) noexcept { g_region_blocks = blocks; }
 #endif
+
+}  // namespace ems::app
+
+#else  // EMS_BOARD_IS_VGT6 || EMS_HOST_TEST
+
+namespace ems::app {
+
+void datalog_init() noexcept {}
+void datalog_set_enabled(bool) noexcept {}
+void datalog_set_rate_code(uint8_t) noexcept {}
+uint8_t datalog_period_ms() noexcept { return 10u; }
+void datalog_push(const DatalogSample&) noexcept {}
+void datalog_poll() noexcept {}
+DatalogStats datalog_stats() noexcept {
+    return DatalogStats{DatalogState::OFF, 0u, 0u, false, 0u, 0u, 0u, 0u};
+}
+bool datalog_block_valid(const uint8_t*, uint32_t&, uint32_t&) noexcept { return false; }
+uint8_t datalog_block_count(const uint8_t*) noexcept { return 0u; }
 
 }  // namespace ems::app
 

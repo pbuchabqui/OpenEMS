@@ -392,6 +392,8 @@ int main(void) {
     test_datalog_ring_overflow();
     test_datalog_resume_after_reboot();
     test_datalog_region_full();
+    test_datalog_enable_and_rate();
+    test_datalog_protocol_cmd_l();
     test_datalog_failures();
 
     // ── Summary ───────────────────────────────────────────────────────────────

@@ -4,7 +4,12 @@
 #include <cstring>
 
 #include "app/datalog.h"
+#include "app/ui_protocol.h"
+#include "drv/ckp.h"
+#include "drv/sensors.h"
 #include "hal/sd.h"
+#include "test/fixtures.h"
+#include "test/ui_helpers.h"
 
 using namespace ems::app;
 using namespace ems::hal;
@@ -82,6 +87,8 @@ void test_datalog_block_format(void) {
     CHECK_TRUE(datalog_block_valid(b, session, seq), "bloco gravado é válido (magic + CRC-32)");
     CHECK_EQ(session, 1u, "cabeçalho: sessão");
     CHECK_EQ(seq, 0u, "cabeçalho: sequência");
+    CHECK_EQ(datalog_block_count(b), 15u, "bloco cheio: 15 registros");
+    CHECK_EQ(datalog_stats().sd_state, static_cast<uint8_t>(SdState::READY), "estado do SD no stats");
 
     // Vetor dourado: o mesmo está em tools/datalog/sdlog.py (selftest).
     static const uint8_t kGolden[32] = {
@@ -200,6 +207,107 @@ void test_datalog_region_full(void) {
     run_until_active();
     for (int i = 0; i < 200; ++i) { pump(1u); }
     CHECK_TRUE(datalog_stats().state == DatalogState::FULL, "reboot com região cheia: FULL");
+}
+
+void test_datalog_enable_and_rate(void) {
+    section("datalog: liga/desliga com bloco parcial e taxa");
+
+    fresh_boot(64u);
+    run_until_active();
+    CHECK_TRUE(datalog_stats().enabled, "ligado por padrão");
+    CHECK_EQ(datalog_period_ms(), 10u, "100 Hz por padrão");
+
+    push_n(7u);
+    datalog_set_enabled(false);
+    pump(10u);
+    CHECK_FALSE(datalog_stats().enabled, "desligado");
+    CHECK_EQ(sd_sim_write_count(), 1u, "desligar grava o bloco parcial");
+    uint32_t session = 0u, seq = 99u;
+    const uint8_t* b = sd_sim_block(kStart);
+    CHECK_TRUE(datalog_block_valid(b, session, seq), "bloco parcial é válido");
+    CHECK_EQ(datalog_block_count(b), 7u, "bloco parcial: 7 registros");
+    CHECK_EQ(b[kDatalogHeaderBytes + 7u * kDatalogRecordBytes], 0u, "registro 7 vazio");
+    CHECK_EQ(b[kDatalogHeaderBytes + 6u * kDatalogRecordBytes], 0x24u,
+             "registro 6 presente (t_ms = 1060, byte baixo 0x24)");
+
+    push_n(kDatalogRecordsPerBlock);
+    pump(10u);
+    CHECK_EQ(sd_sim_write_count(), 1u, "desligado: amostras ignoradas");
+
+    datalog_set_enabled(true);
+    push_n(kDatalogRecordsPerBlock);
+    pump(10u);
+    CHECK_EQ(sd_sim_write_count(), 2u, "religado: volta a gravar");
+    CHECK_TRUE(datalog_block_valid(sd_sim_block(kStart + 1u), session, seq) && seq == 1u,
+               "sequência continua sem lacuna depois do parcial");
+
+    datalog_set_rate_code(3u);
+    CHECK_EQ(datalog_period_ms(), 1u, "código 3 = 1 kHz");
+    datalog_set_rate_code(1u);
+    CHECK_EQ(datalog_period_ms(), 5u, "código 1 = 200 Hz");
+    datalog_set_rate_code(9u);
+    CHECK_EQ(datalog_period_ms(), 5u, "código inválido é ignorado");
+    CHECK_EQ(datalog_stats().rate_code, 1u, "stats mostra o código");
+    datalog_set_rate_code(0u);
+    datalog_set_enabled(false);
+    datalog_init();
+    CHECK_TRUE(datalog_stats().enabled && datalog_period_ms() == 10u, "init restaura ligado e 100 Hz");
+}
+
+void test_datalog_protocol_cmd_l(void) {
+    section("datalog: comando 'L' e contadores no realtime (OCH 36..43)");
+
+    fresh_boot(64u);
+    run_until_active();
+    ems::app::ui_test_reset();
+    sensor_setup(); ems::drv::sensors_init();
+    {
+        ems::drv::CkpSnapshot snap{};
+        snap.tooth_period_ns = 160000u;
+        snap.rpm_x10 = 62500u;
+        for (int i = 0; i < 5; ++i) { ems::drv::sensors_on_tooth(snap); }
+        ems::drv::sensors_test_tick_100ms();
+    }
+
+    uint8_t resp[8] = {};
+    const uint8_t on_1khz[2] = {'L', 0x07u};      // ligado, taxa 3
+    ui_feed(on_1khz, 2u);
+    uint16_t n = ui_drain(resp, sizeof(resp));
+    CHECK_TRUE(n == 3u && resp[0] == 0x00u, "'L' responde ACK + 2 bytes");
+    CHECK_EQ(resp[1], static_cast<uint8_t>(DatalogState::ACTIVE), "'L': estado do log = ACTIVE");
+    CHECK_EQ(resp[2], static_cast<uint8_t>(SdState::READY), "'L': estado do SD = READY");
+    CHECK_EQ(datalog_period_ms(), 1u, "'L' 0x07: 1 kHz");
+
+    const uint8_t off[2] = {'L', 0x00u};
+    ui_feed(off, 2u);
+    ui_drain(resp, sizeof(resp));
+    CHECK_FALSE(datalog_stats().enabled, "'L' 0x00: desligado");
+    CHECK_EQ(datalog_period_ms(), 10u, "'L' 0x00: taxa 0 (100 Hz)");
+
+    const uint8_t query[2] = {'L', 0x87u};        // só consulta: nada muda
+    ui_feed(query, 2u);
+    n = ui_drain(resp, sizeof(resp));
+    CHECK_TRUE(n == 3u, "'L' consulta responde igual");
+    CHECK_FALSE(datalog_stats().enabled, "consulta não liga");
+    CHECK_EQ(datalog_period_ms(), 10u, "consulta não muda a taxa");
+
+    const uint8_t on_200[2] = {'L', 0x03u};       // ligado, taxa 1
+    ui_feed(on_200, 2u);
+    ui_drain(resp, sizeof(resp));
+    push_n(kDatalogRecordsPerBlock);
+    pump(10u);
+
+    const uint8_t och[7] = {'r', 0x00u, 0x03u, 0x00u, 0x00u, 0x56u, 0x00u};
+    EnvResp r = env_txn(och, 7u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u && r.len == 86u, "OCH lido");
+    CHECK_EQ(r.data[36], static_cast<uint8_t>((static_cast<uint8_t>(SdState::READY) << 4) |
+                                              static_cast<uint8_t>(DatalogState::ACTIVE)),
+             "OCH 36: sd_state<<4 | estado do log");
+    CHECK_EQ(r.data[37], 0x03u, "OCH 37: ligado + taxa 1, sem erros");
+    const uint32_t blocks = static_cast<uint32_t>(r.data[38]) | (static_cast<uint32_t>(r.data[39]) << 8) |
+                            (static_cast<uint32_t>(r.data[40]) << 16) | (static_cast<uint32_t>(r.data[41]) << 24);
+    CHECK_EQ(blocks, 1u, "OCH 38..41: 1 bloco gravado");
+    CHECK_EQ(r.data[42], 0u, "OCH 42: nenhuma amostra descartada");
 }
 
 void test_datalog_failures(void) {

@@ -35,6 +35,7 @@ enum class ParseState : uint8_t {
     BURN_ARGS = 4u,
     BENCH_ARG = 5u,
     TEST_ARGS = 9u,
+    LOG_ARG = 10u,
     ENV_SIZE_LO = 6u,
     ENV_PAYLOAD = 7u,
     ENV_CRC = 8u,

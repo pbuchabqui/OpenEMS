@@ -282,6 +282,29 @@ class OpenEMSLink:
             raise IOError(f"apply_ltft_ready: resp {resp.hex() if resp else 'empty'}")
         return int(resp[1])
 
+    # ── datalog SD ('L': arg = ligado | taxa<<1 | 0x80 só consulta) ─────
+    DATALOG_STATES = ["off", "search", "active", "full", "fault"]
+    DATALOG_SD = ["absent", "init", "ready", "fault"]
+    DATALOG_RATES_HZ = [100, 200, 500, 1000]
+
+    def datalog_control(self, enable=None, rate_code=None) -> dict:
+        """Liga/desliga o log e escolhe a taxa (0..3 = 100/200/500/1000 Hz).
+        Sem argumentos só consulta. Retorna o estado do log e do cartão."""
+        if enable is None and rate_code is None:
+            arg = 0x80
+        else:
+            if rate_code is not None and not 0 <= rate_code <= 3:
+                raise ValueError("rate_code deve estar entre 0 e 3")
+            arg = (1 if enable is None or enable else 0) | ((rate_code or 0) << 1)
+        resp = self._txn(b"L" + bytes([arg]), 3)
+        if len(resp) < 3 or resp[0] != 0x00:
+            raise IOError(f"datalog_control: resp {resp.hex() if resp else 'empty'}")
+        log_state, sd_state = resp[1], resp[2]
+        return {
+            "log": self.DATALOG_STATES[log_state] if log_state < len(self.DATALOG_STATES) else log_state,
+            "sd": self.DATALOG_SD[sd_state] if sd_state < len(self.DATALOG_SD) else sd_state,
+        }
+
     # ── contadores de debug ('D': 41 × u32 LE = 164 B) ──────────────────
     # Índices 31-32 (stft_last_err, stft_integ_x1000) são i32 no wire.
     # 37-40: discriminação dos gatilhos de perda de FULL_SYNC (blip PW=0).
