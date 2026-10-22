@@ -26,6 +26,8 @@ Pelo dashboard proprio (`tools/openems_dash`, aba **Install**), com guia passo a
 | `docs/hw/README.md` | Hardware e pinout |
 | `docs/wiring_diagram.md` | Esquematicos eletricos |
 | `docs/ROADMAP.md` | Backlog, progresso e histórico do que foi concluído |
+| `docs/datalog.md` | Datalog em cartão SD (VGT6): formato, anel e ferramentas |
+| `docs/nn_viabilidade.md` | Estudo: redes neurais no STM32H562 (X-τ, STFT, PID) |
 | `docs/guia_instalacao.md` | Guia de instalação no motor (10 passos) |
 | `docs/arquitetura.md` | Camadas, regras e contratos entre elas |
 | `docs/pipeline_motor.md` | Captura CKP/CMP, combustível, ignição, scheduling, ADC, comunicação |

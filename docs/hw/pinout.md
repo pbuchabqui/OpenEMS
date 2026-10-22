@@ -69,8 +69,8 @@ DIR/PWM em **PE\*** (BSRR único, fiação limpa no LQFP100). No RGT6 esses pino
 | Pino | Nota |
 |------|------|
 | **PB10 / PB11** | No coreboard WeAct **não saem nos headers** — **não usar para INJ** (por isso INJ3/4 = PC10/11) |
-| **PC8 / PC9** | IGN3/4; se microSD (SDMMC) activo, colide com D0/D1 |
-| **PC10 / PC11** | INJ3/4; colidem com SDMMC D2/D3 se cartão |
+| **PC8 / PC9** | IGN3/4; colidem com SDMMC D0/D1. O datalog em SD só existe na VGT6 (`docs/datalog.md`) |
+| **PC10 / PC11** | INJ3/4; colidem com SDMMC D2/D3. PC12 (CK) e PD2 (CMD) completam o SDMMC1 |
 | **PD3** | EWG DIR IN2 no driver — **inexistente no RGT6** |
 
 ### Fiação ao mudar de placa

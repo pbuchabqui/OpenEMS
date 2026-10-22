@@ -177,6 +177,7 @@
 #define GPIOD_OSPEEDR STM32_REG32(GPIOD_BASE + GPIO_OSPEEDR_OFF)
 #define GPIOD_AFRL    STM32_REG32(GPIOD_BASE + GPIO_AFRL_OFF)
 #define GPIOD_AFRH    STM32_REG32(GPIOD_BASE + GPIO_AFRH_OFF)
+#define GPIOD_PUPDR   STM32_REG32(GPIOD_BASE + GPIO_PUPDR_OFF)
 #define GPIOD_BSRR    STM32_REG32(GPIOD_BASE + GPIO_BSRR_OFF)
 
 #define GPIOE_MODER   STM32_REG32(GPIOE_BASE + GPIO_MODER_OFF)
@@ -954,8 +955,13 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 #define CRS_CFGR_SYNCSRC_USB  (2u << 28u)
 
 // ─── SDMMC1 (RM0481 §54) ────────────────────────────────────────────────────
-#define SDMMC1_BASE      0x420C8000UL
-#define RCC_AHB2ENR1_SDMMC1EN (1u << 12)
+// Base, offsets e posições de bit conferidos em stm32h562xx.h (ST): SDMMC1_BASE_NS =
+// AHB4PERIPH_BASE_NS + 0x8000; clock enable em RCC_AHB4ENR bit 11; kernel clock em
+// RCC_CCIPR4.SDMMC1SEL (bit 6: 0 = PLL1Q, reset; 1 = PLL2R).
+#define SDMMC1_BASE      0x46008000UL
+#define RCC_AHB4ENR      STM32_REG32(RCC_BASE + 0x094UL)
+#define RCC_AHB4ENR_SDMMC1EN  (1u << 11)
+#define RCC_CCIPR4_SDMMC1SEL  (1u << 6)
 #define SDMMC1_POWER     STM32_REG32(SDMMC1_BASE + 0x00UL)
 #define SDMMC1_CLKCR     STM32_REG32(SDMMC1_BASE + 0x04UL)
 #define SDMMC1_ARG       STM32_REG32(SDMMC1_BASE + 0x08UL)
@@ -978,9 +984,23 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 #define SDMMC1_IDMABASER STM32_REG32(SDMMC1_BASE + 0x58UL)
 #define SDMMC1_FIFO      STM32_REG32(SDMMC1_BASE + 0x80UL)
 
-// SDMMC_POWER bits
+// SDMMC_POWER
 #define SDMMC_POWER_PWRCTRL_ON  (3u << 0)
-// SDMMC_STA bits
+// SDMMC_CLKCR: SDMMC_CK = kernel / (2 * CLKDIV); CLKDIV = 0 passa o kernel direto.
+#define SDMMC_CLKCR_CLKDIV_MSK  (0x3FFu << 0)
+#define SDMMC_CLKCR_WIDBUS_4    (1u << 14)
+#define SDMMC_CLKCR_HWFC_EN     (1u << 17)
+// SDMMC_CMD
+#define SDMMC_CMD_CMDTRANS      (1u << 6)
+#define SDMMC_CMD_WAITRESP_NONE  (0u << 8)
+#define SDMMC_CMD_WAITRESP_SHORT (1u << 8)
+#define SDMMC_CMD_WAITRESP_LONG  (3u << 8)
+#define SDMMC_CMD_CPSMEN        (1u << 12)
+// SDMMC_DCTRL
+#define SDMMC_DCTRL_DTEN        (1u << 0)
+#define SDMMC_DCTRL_DTDIR       (1u << 1)
+#define SDMMC_DCTRL_DBLOCKSIZE_512 (9u << 4)
+// SDMMC_STA
 #define SDMMC_STA_CCRCFAIL  (1u << 0)
 #define SDMMC_STA_DCRCFAIL  (1u << 1)
 #define SDMMC_STA_CTIMEOUT  (1u << 2)
@@ -992,15 +1012,14 @@ static inline void nvic_set_priority(uint8_t irq, uint8_t prio) noexcept {
 #define SDMMC_STA_DATAEND   (1u << 8)
 #define SDMMC_STA_DBCKEND   (1u << 10)
 #define SDMMC_STA_DPSMACT   (1u << 12)
-#define SDMMC_STA_TXFIFOE   (1u << 18)
-#define SDMMC_STA_RXFIFONE  (1u << 21)
-// SDMMC_CMD bits
-#define SDMMC_CMD_CPSMEN    (1u << 12)
-#define SDMMC_CMD_WAITRESP_SHORT (1u << 6)
-#define SDMMC_CMD_WAITRESP_LONG  (3u << 6)
-// SDMMC_DCTRL bits
-#define SDMMC_DCTRL_DTEN    (1u << 0)
-#define SDMMC_DCTRL_DTDIR   (1u << 1)
-#define SDMMC_DCTRL_DBLOCKSIZE_512 (9u << 4)
-// SDMMC_CLKCR bits
-#define SDMMC_CLKCR_HWFC_EN    (1u << 17)
+#define SDMMC_STA_CPSMACT   (1u << 13)
+#define SDMMC_STA_BUSYD0    (1u << 20)
+#define SDMMC_STA_IDMATE    (1u << 27)
+#define SDMMC_STA_IDMABTC   (1u << 28)
+// Só os flags de comando (CCRCFAIL, CTIMEOUT, CMDREND, CMDSENT): limpar o DATAEND junto
+// faria uma transferência rápida terminar sem ninguém ver.
+#define SDMMC_ICR_CMD       ((1u << 0) | (1u << 2) | (1u << 6) | (1u << 7))
+// Todos os flags de status limpáveis: bits 0..11, 21..28 (ICR em SDMMC_ICR_*)
+#define SDMMC_ICR_ALL       (0x1FE00FFFu)
+// SDMMC_IDMACTRL
+#define SDMMC_IDMACTRL_IDMAEN  (1u << 0)

@@ -2,7 +2,7 @@
 # BOARD=rgt6 (default LQFP64) | BOARD=vgt6 (LQFP100 GPIOE pinout)
 # Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
-.PHONY: all clean host-test precision-test ini-check sim-ecu sim-ecu-build dash-check host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
+.PHONY: all clean host-test precision-test ini-check datalog-check sim-ecu sim-ecu-build dash-check host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
         secrets-check lint-includes format format-all format-check ci-local
 
 COMPILER_ARM = arm-none-eabi-g++
@@ -91,14 +91,17 @@ APP_SRC = $(SRC_DIR)/app/ui_protocol.cpp \
           $(SRC_DIR)/app/can_stack.cpp \
           $(SRC_DIR)/app/can_rx_map.cpp \
           $(SRC_DIR)/app/nvm_boot.cpp \
-          $(SRC_DIR)/app/vehicle_inputs_bridge.cpp
+          $(SRC_DIR)/app/vehicle_inputs_bridge.cpp \
+          $(SRC_DIR)/app/datalog.cpp
 HAL_COMMON_SRC = $(SRC_DIR)/hal/adc.cpp $(SRC_DIR)/hal/can.cpp \
                   $(SRC_DIR)/hal/uart.cpp $(SRC_DIR)/hal/flash.cpp \
                   $(SRC_DIR)/hal/etb_driver.cpp \
                   $(SRC_DIR)/hal/ewg_driver.cpp \
                   $(SRC_DIR)/hal/flex_fuel.cpp \
                   $(SRC_DIR)/hal/ac_request.cpp \
-                  $(SRC_DIR)/hal/out_pins.cpp
+                  $(SRC_DIR)/hal/out_pins.cpp \
+                  $(SRC_DIR)/hal/sd.cpp \
+                  $(SRC_DIR)/hal/sd_sim.cpp
 HAL_STM32H562_SRC = $(SRC_DIR)/hal/stm32h562/system.cpp \
                     $(SRC_DIR)/hal/stm32h562/timer.cpp \
                     $(SRC_DIR)/hal/stm32h562/usb_cdc.cpp \
@@ -132,7 +135,8 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_math.cpp \
                    $(TEST_DIR)/test_protocol.cpp \
                    $(TEST_DIR)/test_output.cpp \
-                   $(TEST_DIR)/test_can_stack.cpp
+                   $(TEST_DIR)/test_can_stack.cpp \
+                   $(TEST_DIR)/test_datalog.cpp
 HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(SRC_DIR)/hal/stm32h562/timer.cpp \
                 $(SRC_DIR)/hal/stm32h562/system.cpp \
@@ -288,6 +292,10 @@ dash-check: sim-ecu-build
 # TunerStudio ini: references, byte overlaps, ranges = firmware limits.
 ini-check:
 	@python3 tools/ts/check_ini.py tools/ts/openems.ini
+
+# Datalog SD: decodificador e vetor dourado do registro (o firmware testa o mesmo no host-test).
+datalog-check:
+	@python3 -I tools/datalog/sdlog.py selftest
 
 lint-includes:
 	@LINT_ERROR=$(LINT_ERROR) $(PYTHON) tools/lint_includes.py --phase $(LINT_PHASE) \

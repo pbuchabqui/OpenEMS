@@ -25,12 +25,16 @@ int main() { return 0; }
 
 #include "engine/math_utils.h"
 
+#include "hal/board_pinout.h"
+#include "hal/sd.h"
+#include "engine/fuel_trim.h"
 #include "hal/stm32h562/system.h"
 #include "hal/stm32h562/regs.h"
 #include "hal/stm32h562/usb_cdc.h"
 #include "hal/uart.h"
 
 #include "app/can_stack.h"
+#include "app/datalog.h"
 #include "app/can_rx_map.h"
 #include "app/nvm_boot.h"
 #include "app/ui_protocol.h"
@@ -131,6 +135,11 @@ static inline bool elapsed(uint32_t now, uint32_t last, uint32_t period) noexcep
     return static_cast<uint32_t>(now - last) >= period;
 }
 
+#if EMS_BOARD_IS_VGT6
+static void datalog_sample(uint32_t now) noexcept;
+static void datalog_report_fault() noexcept;
+#endif
+
 static inline uint16_t build_status_bits(const ems::drv::CkpSnapshot& snap,
                                            const ems::drv::SensorData& sensors) noexcept {
     uint16_t status = 0u;
@@ -164,6 +173,47 @@ static inline int8_t clamp_i8(int16_t v, int8_t lo, int8_t hi) noexcept {
 }
 
 // NVM map/corr loaders: app/nvm_boot.cpp (relocate-only hygiene PR-09).
+
+#if EMS_BOARD_IS_VGT6
+// Datalog no SD a 100 Hz: só copia o que o laço já calculou, sem conta nova.
+static inline uint16_t sat_u16(uint32_t v) noexcept {
+    return (v > 0xFFFFu) ? 0xFFFFu : static_cast<uint16_t>(v);
+}
+
+static void datalog_sample(uint32_t now) noexcept {
+    const auto snap    = ems::drv::ckp_snapshot();
+    const auto sensors = ems::drv::sensors_get();
+    ems::app::DatalogSample s{};
+    s.t_ms                = now;
+    s.rpm_x10             = sat_u16(snap.rpm_x10);
+    s.map_bar_x100        = g_last_map_fused_x100;
+    s.tps_x10             = sensors.tps_pct_x10;
+    s.clt_x10             = sensors.clt_degc_x10;
+    s.iat_x10             = sensors.iat_degc_x10;
+    s.lambda_x1000        = ems::app::can_stack_lambda_milli();
+    s.lambda_target_x1000 = ems::engine::get_lambda_target_x1000(snap.rpm_x10, g_last_map_fused_x100);
+    s.pw_us               = sat_u16(g_last_net_pw_us);
+    s.advance_x10         = g_last_advance_x10;
+    s.stft_x10            = ems::engine::fuel_get_stft_pct_x10();
+    s.ltft_x10            = ems::engine::fuel_get_ltft_at(snap.rpm_x10, g_last_map_fused_x100);
+    s.status_bits         = build_status_bits(snap, sensors);
+    s.cut_reasons         = ems::engine::g_fuel_cut_reasons;
+    s.sync_state          = static_cast<uint8_t>(snap.state);
+    s.flags               = ems::app::can_stack_wbo2_fresh(now) ? 1u : 0u;   // bit 0: lambda válido
+    ems::app::datalog_push(s);
+}
+
+// Falha de gravação do cartão: WARNING único. O log nunca corta o motor.
+static void datalog_report_fault() noexcept {
+    static bool s_reported = false;
+    if (!s_reported && ems::app::datalog_stats().state == ems::app::DatalogState::FAULT) {
+        ems::engine::DiagnosticManager::report_fault(
+            ems::engine::DiagnosticCode::DATALOG_FAULT,
+            ems::engine::FaultSeverity::WARNING);
+        s_reported = true;
+    }
+}
+#endif
 
 static inline void comms_pump() noexcept {
     // Shuttle UART+USB↔protocolo a 2 ms. Ambos os transportes são servidos no
@@ -286,6 +336,12 @@ static void openems_init() noexcept {
     ems::engine::ewg_control_init();
     ems::hal::flex_fuel_init();
     ems::hal::ac_request_init();
+#if EMS_BOARD_IS_VGT6
+    // Datalog no SD (SDMMC1 em PC8..PC12/PD2: só livre na VGT6). Não bloqueia: o cartão é
+    // identificado aos poucos por sd_poll(); sem cartão o log fica OFF e nada mais muda.
+    ems::hal::sd_init();
+    ems::app::datalog_init();
+#endif
     iwdg_kick();
 
 	// 5) Flash Bank2 → carrega calibrações persistidas
@@ -483,6 +539,9 @@ int main() {
         if (elapsed(now, g_t10ms_, 10u)) {
             g_t10ms_ = now;
             ems::engine::auxiliaries_tick_10ms();
+#if EMS_BOARD_IS_VGT6
+            datalog_sample(now);
+#endif
         }
 
         // ── 20ms: UI proprietaria + aux tasks ───────────────────────────
@@ -690,6 +749,11 @@ int main() {
         if (elapsed(now, g_t_comms_ms, 2u)) {
             g_t_comms_ms = now;
             comms_pump();
+#if EMS_BOARD_IS_VGT6
+            ems::hal::sd_poll();
+            ems::app::datalog_poll();
+            datalog_report_fault();
+#endif
         }
 
         // ── ETB control (2ms cadence) ─────────────────────────────────────

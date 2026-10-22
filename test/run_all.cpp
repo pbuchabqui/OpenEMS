@@ -386,6 +386,14 @@ int main(void) {
     test_engine_calc_cranking();
     test_engine_calc_cuts();
 
+    printf("\n=== DATALOG (cartão SD, blocos brutos) ===");
+    test_datalog_block_format();
+    test_datalog_sequence_and_latency();
+    test_datalog_ring_overflow();
+    test_datalog_resume_after_reboot();
+    test_datalog_region_full();
+    test_datalog_failures();
+
     // ── Summary ───────────────────────────────────────────────────────────────
     printf("\n============================================================\n");
     printf("Results: %d PASS  %d FAIL\n", g_pass, g_fail);

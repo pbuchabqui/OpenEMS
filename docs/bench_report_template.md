@@ -146,6 +146,10 @@ Pulso fora de hora nas saídas? ☐ não ☐ sim. Sincronismo volta toda vez? �
 | USB CDC: enumera, não bloqueia o caminho crítico, RX ≥ envelope (`tools/hil_test/usb_stress.py`) | |
 | IWDG: reset em ~0,8 s com laço travado e sem reset com o laço normal | |
 | Flash: nenhuma gravação com o motor girando (observar `late`/`drop` ao salvar) | |
+| Datalog SD (VGT6): cartão SDHC identificado, `sdlog.py format` feito antes | |
+| Datalog SD: 10 min a 100 Hz, `sdlog.py decode` sem lacunas (0 blocos perdidos) e `records_dropped` = 0 | |
+| Datalog SD: `loop2_max` com o log ativo igual ao sem cartão (sem aumento mensurável) | |
+| Datalog SD: tirar a energia durante a gravação e religar; o log continua em nova sessão | |
 
 ## Falhas e anotações
 
