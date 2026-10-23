@@ -1,144 +1,82 @@
-# OpenEMS ESP32 Combined — CKP Generator + Scope + Ardu-Stim Features
+# OpenEMS ESP32 Combined — gerador CKP/CMP + sensores + scope
 
-Gerador de sinais CKP/CMP (60-2) para bancada HIL do OpenEMS, com scope lógico
-de 10 canais e funcionalidades Ardu-Stim integradas.
+Gerador de sinais para a bancada HIL do OpenEMS (WeAct H562 VGT6): CKP/CMP 60-2
+por RMT, MAP/TPS por DAC, sensores lentos por PWM e scope lógico de INJ/IGN.
+Roteiro de bancada: `docs/bench_test_manual.md`.
 
-## Hardware
+## Ligações
 
-- **ESP32** (qualquer variante: ESP32, ESP32-S3, ESP32-C3, etc.)
-- **RMT hardware** para CKP (GPIO2) e CMP (GPIO4) — jitter ~zero, CPU load ~zero
-- **LEDC PWM** para sensores analógicos (MAP, TPS, CLT, IAT, etc.)
-- **Wire loopback** GPIO2→GPIO34 para captura CKP no scope
-
-## Ligações ao STM32H562
-
-| ESP32 GPIO | STM32 | Função |
+| ESP32 | STM32 (VGT6) | Função |
 |---|---|---|
-| GPIO 2 → | PA0 | CKP output (60-2, RMT) |
-| GPIO 4 → | PA1 | CMP output (1 pulso/720°, RMT) |
-| GPIO 2 → | GPIO34 | Loopback interno p/ scope CKP |
+| GPIO 2 → | PA0 | CKP (60-2, RMT) |
+| GPIO 4 → | PA1 | CMP (1 pulso/720°, dente 5, RMT) |
+| GPIO 2 → GPIO 34 | — | loopback do CKP para o scope |
+| GPIO 26 → | PA3 | MAP (DAC2, direto) |
+| GPIO 25 → | PA4 | TPS (DAC1, direto) |
+| GPIO 21 → | PB0 | CLT (PWM + RC) |
+| GPIO 22 → | PB1 | IAT (PWM + RC) |
+| GPIO 23 → | PC0 | APP1 (PWM + RC) |
+| GPIO 17 → | PC1 | OIL (PWM + RC) |
+| GPIO 18 → | PC4 | FUEL (PWM + RC) |
+| GPIO 16 → | PA2 | ETB TPS1 (PWM + RC) |
+| GPIO 19 → | PC5 | ETB TPS2, invertido (PWM + RC) |
 | GPIO 32 ← | PE9 | IGN1 |
 | GPIO 33 ← | PE11 | IGN2 |
-| GPIO 26 → | PA3 | MAP (DAC2) — IGN4 (PE15) sem entrada livre |
-| GPIO 25 → | PA4 | TPS (DAC1) — IGN3 (PE13) sem entrada livre |
 | GPIO 27 ← | PE0 | INJ1 |
 | GPIO 14 ← | PE2 | INJ2 |
 | GPIO 12 ← | PE4 | INJ3 |
 | GPIO 13 ← | PE6 | INJ4 |
-| GND — | GND | Obrigatório |
+| GND | GND | obrigatório |
 
-Pinos STM32 = mapa `BOARD=vgt6` (`src/hal/out_pins.h`). Para `BOARD=rgt6`:
-INJ1-4 = PA15/PB3/PC10/PC11, IGN1-4 = PC6/PC7/PC8/PC9.
+PWM+RC: série 10 kΩ + 100 nF para GND por canal. IGN3/IGN4 não têm entrada livre
+(GPIO25/26 são os DACs): use o osciloscópio. APP2 (PC2) não tem saída própria;
+só ligue o mesmo fio se a calibração do APP2 aceitar a mesma tensão. Pinos STM32
+= `src/hal/out_pins.h` (`BOARD=vgt6`). Nenhum GPIO está ao mesmo tempo no scope e
+no PWM (GPIO 12/13/14 eram os dois até o conflito ser corrigido).
 
-## Funcionalidades
+## Comandos (115200 baud, ou TCP 3333 por WiFi; mesmo parser)
 
-### CKP Generator (Ardu-Stim Features)
-- **Geração RMT 60-2**: CKP (58 dentes + gap) + CMP (1 pulso por 720°)
-- **Modos RPM**: FIXED, SWEEP (varrimento linear entre RPMs), POT (potenciómetro no ADC)
-- **Compressão**: modulação senoidal de RPM em baixas rotações (simula tranco de arranque)
-- **Inversão de polaridade**: CKP e/ou CMP invertidos via comando
-- **Persistência NVS**: config guardada entre power cycles
-- **Presets**: IDLE, CRANK, CRUISE, WOT, COAST (RPM + sensores)
-- **Protocolo binário Ardu-Stim**: compatível com GUI Electron original
-
-### Scope Lógico (10 canais)
-- IGN1-4, INJ1-4, CKP (loopback), CMP (virtual)
-- Modos: LIVE table, EDGE log, PULSE log, WAVE bar
-- Timing analysis 720°: sequência de ignição, ângulo de avanço, spacing
-
-## Protocolo Serial
-
-### Texto (115200 baud, compatível hil_test.py)
 ```
-RPM <n>            Define RPM
-+ / -              RPM ± 100
-0-9                Presets
-MODE FIXED         RPM fixo
-MODE SWEEP <l> <h> <u>  Varrimento linear
-MODE POT           Potenciómetro
-COMPRESS ON/OFF    Compressão
-INVERT CRANK/CAM   Inverter polaridade
-STATUS             Estado completo
-SAVE               Guardar em NVS
-IDLE/CRANK/...     Presets
-MAP/TPS/CLT/IAT    Sensores
-l/e/p/w/t/s/r/?    Scope commands
+RPM <n>                    RPM exato (50-9000), com rampa
+SLEW <n>                   passo máximo da rampa, % por 50 ms (1-30, padrão 2)
+MAP <kPa> / TPS <%> / CLT <C> / IAT <C> / APP <%> / FUEL <bar*10> / OIL <bar*10> / ETB <%>
+IDLE | CRANK | CRUISE | WOT | COAST    presets de RPM + sensores
+PROFILE TAPER | PROFILE STOP           partida -> 1700 rpm -> 850 rpm (taper do ETB)
+DAC25 <0-255> / DAC26 <0-255>          tensão crua nos DACs
+STATUS                                 estado
+l e p w t d s r ?                      scope (live, edges, pulsos, waveform, timing, 720, stats, reset, ajuda)
 ```
 
-### Binário (Ardu-Stim compatível, usado pela GUI Electron)
-Comandos: `c` `C` `L` `n` `N` `p` `P` `R` `r` `s` `S` `X`
+`PROFILE TAPER`: CRANK 200 rpm por 3 s, depois 1700 rpm por 1 s, depois 850 rpm. Cada
+fase imprime `[PROFILE] <fase> t=<millis>` para correlacionar com a telemetria do dash.
+A rampa padrão (2 %/50 ms) leva ~5,4 s de 200 a 1700 rpm, bem mais devagar que uma partida
+real: aumente com `SLEW` e confira se o STM mantém o sync (passo maior que 2 % pode perder
+sync; valor útil se mede na bancada).
 
-## Controlo via WiFi
+## O que este gerador NÃO cobre
 
-O ESP32 liga-se à tua rede WiFi (modo Station) e expõe uma página web com
-sliders para RPM, MAP e TPS — acessível de qualquer browser (telemóvel, PC)
-na mesma rede.
+Sem emulação de WBO2 (CAN 0x180) nem de velocidade de roda/marcha por CAN: a malha de
+lambda (STFT/LTFT) e o TC não são testáveis só com este ESP32.
 
-1. Cria credenciais locais (nunca commitadas):
-   ```bash
-   cp wifi_credentials.example.h wifi_credentials.h
-   # edita WIFI_SSID / WIFI_PASS
-   ln -sf ../wifi_credentials.h src/wifi_credentials.h   # se usares PlatformIO src/
-   ```
-2. Após o boot, a porta série (115200 baud) imprime o IP atribuído, ex:
-   `[WIFI] Ligado! IP: 192.168.1.42`
-3. Abre `http://<IP>/` no browser — sliders para RPM (50–9000), MAP (0–300 kPa)
-   e TPS (0–100%), com leitura em tempo real.
+## WiFi
 
-Endpoints HTTP (também usáveis via curl/script):
-```
-GET /              Página com sliders
-GET /set?rpm=2500  Define RPM (também aceita map=, tps=, combináveis)
-GET /status         {"rpm":...,"map":...,"tps":...} em JSON
-```
-
-O WiFi corre em paralelo ao protocolo série — ambos podem ser usados ao
-mesmo tempo. Se a ligação WiFi falhar (timeout de 15s), o firmware continua
-normalmente apenas por série.
+Copie `wifi_credentials.example.h` para `wifi_credentials.h` (ignorado pelo git) e
+ligue a `src/` se usar PlatformIO. O IP aparece na serial. Página com slider de RPM em
+`http://<IP>/` (`/s?r=<rpm>` define, `/s` lê); comandos de texto em TCP 3333.
 
 ## Build
 
-### PlatformIO
 ```bash
 cd tools/esp32_combined
-pio run -e esp32dev          # Build
-pio run -e esp32dev -t upload  # Upload
-pio device monitor -b 115200   # Monitor
+pio run -e esp32dev            # compila
+pio run -e esp32dev -t upload  # grava
+pio device monitor -b 115200
 ```
 
-### Arduino IDE
-Abrir `esp32_combined.ino` como sketch normal. As dependências (Preferences.h, rmt_tx.h, ledc.h) fazem parte do core ESP32 Arduino.
-
-## GUI Electron
-
-A app-source em `ardustim_gui/` (main.js, package.json, …) pode estar no tree.
-**Binários avrdude, FontAwesome e `package-lock.json` não são versionados**
-(regenera com `npm install`; avrdude/esptool vêm do teu PATH ou de um clone local).
-
-```bash
-cd tools/esp32_combined/ardustim_gui
-npm install
-pip install esptool    # necessário para firmware upload
-npm start
-```
-
-A GUI comunica via protocolo binário Ardu-Stim. Necessita `esptool.py` no PATH para
-upload de firmware para o ESP32.
-
-## Ficheiros
-
-| Ficheiro | Descrição |
-|---|---|
-| `esp32_combined.ino` | Firmware principal (sketch único) |
-| `web_page.h` | Página HTML/JS de controlo WiFi (RPM/MAP/TPS) |
-| `wifi_credentials.example.h` | Template WiFi — copiar para `wifi_credentials.h` |
-| `platformio.ini` | Build config PlatformIO |
-| `ardustim_gui/` | GUI Electron (sources; vendor bins/fonts ignorados) |
-
-## Test HIL
+## Teste HIL
 
 ```bash
 cd tools/hil_test
-python hil_test.py --mode regression   # Regressão (texto serial)
-python hil_test.py --mode timing       # Timing analysis 720°
+python hil_test.py --mode regression
+python hil_test.py --mode timing
 ```

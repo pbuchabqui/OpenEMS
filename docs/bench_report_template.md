@@ -13,7 +13,7 @@ Copie este arquivo para `docs/bench_reports/AAAA-MM-DD.md` e preencha durante o 
 | Chip: `REV_ID` em `DBGMCU_IDCODE` (CubeProgrammer) | |
 | Rev X confirmada? (se Rev A ou Z: parar e avisar) | ☐ sim ☐ não |
 | Instrumento (osciloscópio / analisador), banda e taxa | |
-| Gerador (ESP32, commit de `tools/esp32_combined`) | |
+| Gerador (ESP32, commit de `tools/esp32_combined` e saída de `STATUS`) | |
 | Porta usada | ☐ USB CDC ☐ UART PA9/PA10 |
 
 ## Resumo
@@ -151,6 +151,7 @@ Pulso fora de hora nas saídas? ☐ não ☐ sim. Sincronismo volta toda vez? �
 | Datalog SD a 1 kHz (`L` com taxa 3): `datalogDrops` = 0 em 10 min e `loop2_max` sem aumento | |
 | Datalog SD: `loop2_max` com o log ativo igual ao sem cartão (sem aumento mensurável) | |
 | Datalog SD: tirar a energia durante a gravação e religar; o log continua em nova sessão | |
+| Taper do ETB (`PROFILE TAPER` no ESP32, APP em 0): a lâmina (`etb_target`) não cai abaixo de `etb_idle_min` até o fim do taper e não há salto na reentrada em marcha lenta; `SLEW` usado e se o sync se manteve | |
 | Malha de lambda (WBO2): degrau de combustível de ±10%; o total (STFT + LTFT) segue sem ultrapassagem nem oscilação, o STFT volta perto de 0 e o LTFT guarda a correção (`stft_ki_x1000` = 10) | |
 | Malha de lambda: PW abaixo de `ltft_add_pw_threshold_us`: mesma convergência, correção em µs no LTFT aditivo | |
 

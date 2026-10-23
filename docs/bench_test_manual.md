@@ -77,6 +77,9 @@ TIM5_CH3. Repouso = LOW.
 | PA1 | CMP (TIM5_CH2) | GPIO 4 → | 1 pulso a cada 720°, no dente 5 |
 | PA3 | MAP (ADC) | GPIO 26 → (DAC2) | **obrigatório**: o modo bancada não simula MAP |
 | PA4 | TPS (ADC) | GPIO 25 → (DAC1) | **obrigatório**: o modo bancada não simula TPS |
+| PC0 | APP1 (ADC) | GPIO 23 → (PWM + RC) | só para os testes de ETB/taper; APP2 (PC2) sem saída própria |
+| PA2 / PC5 | ETB TPS1 / TPS2 | GPIO 16 / 19 → (PWM + RC) | só para os testes de ETB/taper; TPS2 é o complemento do TPS1 |
+| PB0 / PB1 | CLT / IAT | GPIO 21 / 22 → (PWM + RC) | o modo bancada já simula CLT/IAT; só ligue sem ele |
 | PE9 | IGN1 | ← GPIO 32 | scope |
 | PE11 | IGN2 | ← GPIO 33 | scope |
 | PE13 | IGN3 | — | sem entrada livre no ESP32: use o osciloscópio |
@@ -117,8 +120,13 @@ Confira a pinagem do ESP32 no cabeçalho de
 | `0`…`9` | presets 100/200/300/500/700/1000/1500/2000/3000/5000 RPM |
 | `IDLE` / `CRANK` / `CRUISE` / `WOT` / `COAST` | presets de RPM + sensores (IDLE = 700, CRANK = 200) |
 | `MAP <kPa>` / `TPS <%>` | tensão nos DACs de PA3 / PA4 |
+| `SLEW <n>` | passo máximo da rampa de RPM, % por 50 ms (1 a 30; padrão 2) |
+| `PROFILE TAPER` / `PROFILE STOP` | CRANK 200 rpm 3 s, 1700 rpm 1 s, 850 rpm: teste do taper do ETB |
 | `S` / `STATUS` | estado do gerador |
 | `l` `e` `p` `w` `t` `s` `r` | modos do scope (live, edges, pulsos, waveform, timing, estatística, reset) |
+
+O gerador **não** emula WBO2 (CAN) nem velocidade de roda: a malha de lambda e o TC não
+são testáveis só com ele.
 
 Forma de onda: cada dente é um pulso **alto** de meio período; o gap é o último
 dente com o nível baixo estendido em 2 períodos (razão 3). O CMP sobe no dente

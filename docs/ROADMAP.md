@@ -51,6 +51,7 @@ Bloqueia as fases seguintes. Roteiro em `docs/bench_test_manual.md`.
 - Registrar `loop2_last`, `loop2_max`, `late_event_count`, `cycle_schedule_drop_count` e `calibration_clamp_count`.
 - IWDG com o gate do ETB, e Flash sem escrita com o motor girando.
 - Ferramentas: `tools/diag/` (`sync_loss.py`, `bench_check.py`, `angle.py`) e `tools/hil_test/hil_test.py`.
+- ESP32 (`tools/esp32_combined`): conflito de GPIO 12/13/14 (scope INJ2-4 contra PWM de IAT/CLT/APP) corrigido em 2026-10-23, com APP/CLT/IAT em 23/21/22; `SLEW` e `PROFILE TAPER` para o taper do ETB. Compila (`pio run`), nunca testado em campo. Malha de lambda (WBO2 por CAN) e TC (velocidade de roda) não são cobertos pelo gerador atual: pedem hardware novo.
 - Modelo do relatório: `docs/bench_report_template.md` (inclui as verificações das correções de baud da UART, bit rate do CAN, gauge de lambda, bit de falha do WBO2 e páginas 0x0A/0x0C).
 - Pronto quando: há um relatório de bancada com T3 e T4 medidos e sem falhas.
 

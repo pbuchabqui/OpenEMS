@@ -23,6 +23,11 @@
  *   GPIO 12 ←  PE4        INJ3
  *   GPIO 13 ←  PE6        INJ4
  *
+ *   Sensores lentos por PWM+RC (saída, para o ADC do STM32; GPIO 12/13/14 são
+ *   entradas do scope, não usar aqui):
+ *   GPIO 21 →  CLT        GPIO 22 →  IAT        GPIO 23 →  APP
+ *   GPIO 17 →  OIL        GPIO 18 →  FUEL       GPIO 16/19 →  ETB1/ETB2
+ *
  *   STM32 pins are the BOARD=vgt6 map (src/hal/out_pins.h). Outputs are
  *   GPIO driven from TIM5_CH3 compare, not timer channels. IGN3 (PE13) and
  *   IGN4 (PE15) have no free ESP32 input here (GPIO25/26 are the DACs).
@@ -37,6 +42,8 @@
  *     MAP <kpa> / CLT <c> / TPS <pct> / IAT <c>  (sensores)
  *     IDLE / CRANK / CRUISE / WOT / COAST  (presets)
  *     STATUS   estado completo
+ *     SLEW <n>        passo máx. do slew de RPM, % por 50 ms (1-30, padrão 2)
+ *     PROFILE TAPER   partida → 1700 rpm → 850 rpm (taper do ETB); PROFILE STOP
  *
  *   Scope:
  *     l        Live table (actualiza a cada 1 s)  [default]
@@ -104,6 +111,7 @@ static volatile uint32_t    g_ckp_rpm_active = 0u;
 // reiniciar o loop a cada comando derrubava o decoder (102 perdas/ciclo).
 static volatile uint32_t g_rpm_target = kRpmInit;
 static uint32_t g_slew_last_ms = 0;
+static uint32_t g_slew_pct = 2u;   // passo máximo por tick de 50 ms (comando SLEW)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ── SECÇÃO 2 — Ring Buffer e Canais (Scope)
@@ -271,7 +279,7 @@ static void ckp_set_rpm(uint32_t rpm) {
     g_rev_count++;
 }
 
-// Rampa o RPM ativo em direção ao alvo (≤2%/tick) reescrevendo as durações
+// Rampa o RPM ativo em direção ao alvo (≤g_slew_pct %/tick, padrão 2) reescrevendo as durações
 // na RAM do RMT SEM parar o loop. O leitor de hardware pode cruzar a escrita
 // e produzir 1 dente com mistura old/new — com passo ≤2% isso cai dentro da
 // banda NORMAL do decoder (0.8-1.2×), invisível para o sync.
@@ -282,7 +290,7 @@ static void ckp_slew_tick() {
     const uint32_t tgt = g_rpm_target;
     uint32_t cur = g_ckp_rpm_active;
     if (cur == tgt) return;
-    const uint32_t step = (cur > 50u) ? (cur * 2u) / 100u : 1u;  // 2%
+    const uint32_t step = (cur > 50u) ? (cur * g_slew_pct) / 100u : 1u;  // g_slew_pct %
     if (tgt > cur) { cur = (cur + step >= tgt) ? tgt : cur + step; }
     else           { cur = (cur <= tgt + step) ? tgt : cur - step; }
     build_ckp_pattern(cur);
@@ -325,7 +333,11 @@ static void rmt_ckp_init() {
 static void IRAM_ATTR edge_isr(void* arg) {
     const uint8_t ch  = (uint8_t)(uint32_t)arg;
     const int64_t ts  = esp_timer_get_time();
-    const int     lvl = gpio_get_level(kChan[ch].gpio);
+    // gpio_get_level() fica em flash neste core; ISR IRAM com cache desligado
+    // causa "Cache disabled but cached memory region accessed". Ler o registo.
+    const uint32_t pin = (uint32_t)kChan[ch].gpio;
+    const int     lvl = (pin < 32u) ? (int)((GPIO.in >> pin) & 1u)
+                                    : (int)((GPIO.in1.val >> (pin - 32u)) & 1u);
     buf_push(ts, ch, (uint8_t)lvl);
 }
 
@@ -392,16 +404,17 @@ static void dac_init_map_tps() {
     dac_output_enable(kTpsDac);
 }
 
-// LEDC PWM: 12-bit, 19 kHz. Timer 0 (ch0-6): CLT,IAT,APP,OIL,FUEL,ETB.
-//             Timer 1 (ch0-1): MAP(GPIO25), TPS(GPIO26) — ex-DAC avariado.
+// LEDC PWM: 12-bit, 19 kHz, timer 0 (ch0-6): CLT,IAT,APP,OIL,FUEL,ETB1,ETB2.
+// MAP e TPS não passam por aqui: usam o DAC real (dac_init_map_tps).
+// Nenhum GPIO daqui pode estar em kChan (scope): GPIO12/13/14 são INJ3/INJ4/INJ2.
 static constexpr int      kPwmBits = 12;
 static constexpr uint32_t kPwmFreq = 19000;
 
 struct PwmChan { gpio_num_t gpio; ledc_channel_t ch; ledc_timer_t timer; const char* name; };
 static PwmChan kPwm[] = {
-    { GPIO_NUM_13, LEDC_CHANNEL_0, LEDC_TIMER_0, "CLT" },
-    { GPIO_NUM_12, LEDC_CHANNEL_1, LEDC_TIMER_0, "IAT" },
-    { GPIO_NUM_14, LEDC_CHANNEL_2, LEDC_TIMER_0, "APP" },
+    { GPIO_NUM_21, LEDC_CHANNEL_0, LEDC_TIMER_0, "CLT" },
+    { GPIO_NUM_22, LEDC_CHANNEL_1, LEDC_TIMER_0, "IAT" },
+    { GPIO_NUM_23, LEDC_CHANNEL_2, LEDC_TIMER_0, "APP" },
     { GPIO_NUM_17, LEDC_CHANNEL_3, LEDC_TIMER_0, "OIL" },
     { GPIO_NUM_18, LEDC_CHANNEL_4, LEDC_TIMER_0, "FUEL" },
     { GPIO_NUM_16, LEDC_CHANNEL_5, LEDC_TIMER_0, "ETB1" },
@@ -410,7 +423,7 @@ static PwmChan kPwm[] = {
 static constexpr int kNPwm = (int)(sizeof(kPwm) / sizeof(kPwm[0]));
 
 static void pwm_init() {
-    // Timer 0: CLT, IAT, APP, OIL, FUEL, ETB
+    // Timer 0: CLT, IAT, APP, OIL, FUEL, ETB1, ETB2
     ledc_timer_config_t tcfg0 = {};
     tcfg0.speed_mode = LEDC_LOW_SPEED_MODE;
     tcfg0.timer_num  = LEDC_TIMER_0;
@@ -418,14 +431,6 @@ static void pwm_init() {
     tcfg0.freq_hz    = kPwmFreq;
     tcfg0.clk_cfg    = LEDC_AUTO_CLK;
     ledc_timer_config(&tcfg0);
-    // Timer 1: MAP (GPIO25), TPS (GPIO26)
-    ledc_timer_config_t tcfg1 = {};
-    tcfg1.speed_mode = LEDC_LOW_SPEED_MODE;
-    tcfg1.timer_num  = LEDC_TIMER_1;
-    tcfg1.duty_resolution = (ledc_timer_bit_t)kPwmBits;
-    tcfg1.freq_hz    = kPwmFreq;
-    tcfg1.clk_cfg    = LEDC_AUTO_CLK;
-    ledc_timer_config(&tcfg1);
     for (int i = 0; i < kNPwm; ++i) {
         ledc_channel_config_t ccfg = {};
         ccfg.speed_mode = LEDC_LOW_SPEED_MODE;
@@ -487,6 +492,7 @@ static void preset_coast()  { preset("COAST", 2000,  25,  0,  90, 35,  0, 350, 2
 
 static void print_status() {
     SimState& s = g_sim;
+    Serial.printf("  SLEW=%lu%%/50ms\n", (unsigned long)g_slew_pct);
     Serial.printf("  RPM=%lu MAP=%u TPS=%u CLT=%d IAT=%d APP=%u FUEL=%.1f OIL=%.1f ETB=%u\n",
                   (unsigned long)s.rpm, s.map_kpa, s.tps_pct,
                   s.clt_degc, s.iat_degc, s.app_pct,
@@ -968,6 +974,40 @@ static void tcp_service() {
     }
 }
 
+// ── Perfil de partida para o teste do taper do ETB ─────────────────────────
+// CRANK (3 s) → 1700 rpm (1 s) → 850 rpm (fica). O slew limita a subida; use
+// SLEW <n> (1-30 %/50 ms) para aproximar a partida real e confira o sync.
+// uint8_t em vez de enum class: o pré-processador do Arduino gera protótipos antes da definição.
+static constexpr uint8_t kProfOff = 0, kProfCrank = 1, kProfRise = 2, kProfSettle = 3;
+static uint8_t g_profile = kProfOff;
+static uint32_t g_profile_t0 = 0u;
+
+static void profile_enter(uint8_t step, const char* name) {
+    g_profile = step;
+    g_profile_t0 = millis();
+    Serial.printf("  [PROFILE] %s t=%lu\n", name, (unsigned long)g_profile_t0);
+}
+
+static void profile_start() {
+    preset_crank();
+    profile_enter(kProfCrank, "CRANK 200 rpm");
+}
+
+static void profile_tick() {
+    if (g_profile == kProfOff) return;
+    const uint32_t el = millis() - g_profile_t0;
+    if (g_profile == kProfCrank && el >= 3000u) {
+        ckp_set_rpm(1700u); g_sim.rpm = g_rpm;
+        profile_enter(kProfRise, "POS-PARTIDA 1700 rpm");
+    } else if (g_profile == kProfRise && el >= 1000u) {
+        ckp_set_rpm(850u); g_sim.rpm = g_rpm;
+        profile_enter(kProfSettle, "ALVO 850 rpm");
+    } else if (g_profile == kProfSettle && el >= 5000u) {
+        g_profile = kProfOff;
+        Serial.printf("  [PROFILE] fim t=%lu\n", (unsigned long)millis());
+    }
+}
+
 static void parse_text_cmd(const char* raw) {
     char buf[64];
     int  len = 0;
@@ -979,6 +1019,13 @@ static void parse_text_cmd(const char* raw) {
     char cmd[16] = {};
     int  val = 0;
     const bool has_val = (sscanf(buf, "%15s %d", cmd, &val) >= 2);
+
+    if (strncmp(buf, "PROFILE", 7) == 0) {
+        if (strstr(buf, "STOP") != nullptr) { g_profile = kProfOff; Serial.println("  [PROFILE] parado"); }
+        else if (strstr(buf, "TAPER") != nullptr) { profile_start(); }
+        else { Serial.println("  PROFILE TAPER | PROFILE STOP"); }
+        return;
+    }
 
     if (strcmp(cmd, "RPM") == 0 && has_val) {
         ckp_set_rpm((uint32_t)constrain(val, (int)kRpmMin, (int)kRpmMax));
@@ -993,6 +1040,10 @@ static void parse_text_cmd(const char* raw) {
     else if (strcmp(cmd, "FUEL")== 0 && has_val) { g_sim.fuel_bar_x10 = constrain(val, 0, 500); update_all_sensors(); }
     else if (strcmp(cmd, "OIL") == 0 && has_val)  { g_sim.oil_bar_x10  = constrain(val, 0, 500); update_all_sensors(); }
     else if (strcmp(cmd, "ETB") == 0 && has_val)  { g_sim.etb_pct = constrain(val, 0, 100); update_all_sensors(); }
+    else if (strcmp(cmd, "SLEW") == 0 && has_val) {
+        g_slew_pct = (uint32_t)constrain(val, 1, 30);
+        Serial.printf("  [GEN] SLEW=%lu %%/50ms\n", (unsigned long)g_slew_pct);
+    }
     else if (strcmp(cmd, "IDLE")   == 0)   preset_idle();
     else if (strcmp(cmd, "CRANK")  == 0)   preset_crank();
     else if (strcmp(cmd, "CRUISE") == 0)   preset_cruise();
@@ -1014,6 +1065,7 @@ void loop() {
     process_events();
     tcp_service();
     ckp_slew_tick();
+    profile_tick();
 
     while (Serial.available()) {
         const char c = (char)Serial.read();

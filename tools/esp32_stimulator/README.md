@@ -1,5 +1,8 @@
 # ESP32 Sensor Stimulator — OpenEMS
 
+> **Legado.** A bancada atual usa `tools/esp32_combined` (MAP em PA3, TPS em PA4, scope
+> de INJ/IGN, `SLEW`/`PROFILE`). As ligações abaixo divergem (MAP em PA2).
+
 Gera todos os sinais de **entrada** do STM32H562: roda fônica CKP 60-2, cam CMP,
 e 10 canais analógicos de sensor. Permite testar o ECU em bancada sem motor.
 
