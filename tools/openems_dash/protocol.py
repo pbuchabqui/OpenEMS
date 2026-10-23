@@ -642,6 +642,14 @@ PAGE0_FIELDS = [
     # bytes 106-121: idle RPM target vs CLT
     ("iac_clt_axis_x10",         106, 8, "h", 0.1),  # °C
     ("iac_idle_target_rpm_x10",  122, 8, "H", 0.1),  # RPM
+    # bytes 202-215: traction control (U16 each; 203 = pad)
+    ("tc_enable",                202, 1, "B", 1.0),
+    ("tc_app_min_x10",           204, 1, "H", 0.1),  # %
+    ("tc_rpm_min_x10",           206, 1, "H", 0.1),  # RPM
+    ("tc_rpm_dot_thresh",        208, 1, "H", 0.1),  # rpm/s above the average (flare)
+    ("tc_max_reduction_pct_x10", 210, 1, "H", 0.1),  # %
+    ("tc_spark_retard_max_deg",  212, 1, "H", 1.0),  # °
+    ("tc_reduction_rate_x10",    214, 1, "H", 0.1),  # %/s
     # byte 138: WBO2 CAN ID
     ("wbo2_can_id",              138, 1, "H", 1.0),  # CAN ID 11-bit
     # bytes 140-145: STFT closed-loop tuning
@@ -717,10 +725,10 @@ PAGE0_FIELDS = [
     ("driveline_map_min_bar_x100",  344, 1, "H", 1.0),   # kPa
     ("driveline_speed_min_kmh",     346, 1, "B", 1.0),   # 0 = no gate
     ("driveline_speed_max_kmh",     347, 1, "B", 1.0),   # 0 = no gate
-    ("stft_gain_ref_delay_ms",      348, 2, "H", 1.0),   # ms; 0 = fixed STFT gains
-    ("tc_flare_app_rise_x10",       350, 2, "H", 0.1),   # %; APP rise that blocks the TC flare proxy
-    ("tc_flare_hold_ms",            352, 2, "H", 1.0),   # ms
-    ("etb_taper_ms",                354, 2, "H", 1.0),   # ms; 0 = afterstart duration
+    ("stft_gain_ref_delay_ms",      348, 1, "H", 1.0),   # ms; 0 = fixed STFT gains
+    ("tc_flare_app_rise_x10",       350, 1, "H", 0.1),   # %; APP rise that blocks the TC flare proxy
+    ("tc_flare_hold_ms",            352, 1, "H", 1.0),   # ms
+    ("etb_taper_ms",                354, 1, "H", 1.0),   # ms; 0 = afterstart duration
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

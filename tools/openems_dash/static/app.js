@@ -917,6 +917,12 @@ const PAGE_0_SECTIONS = [
              "etb_harness_present","etb_kp_x10","etb_ki_x10","etb_kd_x10"],
   },
   {
+    label: "TRACTION CONTROL",
+    fields: ["tc_enable","tc_app_min_x10","tc_rpm_min_x10","tc_rpm_dot_thresh",
+             "tc_flare_app_rise_x10","tc_flare_hold_ms","tc_max_reduction_pct_x10",
+             "tc_spark_retard_max_deg","tc_reduction_rate_x10"],
+  },
+  {
     label: "CYLINDER TRIM",
     fields: ["cyl_fuel_trim_pct_0","cyl_fuel_trim_pct_1","cyl_fuel_trim_pct_2","cyl_fuel_trim_pct_3",
              "cyl_ign_trim_deg_0","cyl_ign_trim_deg_1","cyl_ign_trim_deg_2","cyl_ign_trim_deg_3"],
@@ -1065,6 +1071,15 @@ const FIELD_LABELS = {
   etb_idle_min_opening_x10: "ETB idle min opening (%)",
   etb_idle_max_opening_x10: "ETB idle max opening (%)",
   etb_taper_ms:             "Crank→idle taper (ms, 0 = afterstart)",
+  tc_enable:                "TC enable (0/1)",
+  tc_app_min_x10:           "TC min APP (%)",
+  tc_rpm_min_x10:           "TC min RPM",
+  tc_rpm_dot_thresh:        "TC flare: rpm/s above average",
+  tc_flare_app_rise_x10:    "TC flare: APP rise that blocks it (%)",
+  tc_flare_hold_ms:         "TC flare: hold after flare (ms)",
+  tc_max_reduction_pct_x10: "TC max reduction (%)",
+  tc_spark_retard_max_deg:  "TC max spark retard (°)",
+  tc_reduction_rate_x10:    "TC reduction rate (%/s)",
   iac_clt_axis_x10:         "Eixo CLT — Idle target RPM (°C, 8pts)",
   iac_idle_target_rpm_x10:  "Idle target RPM vs CLT (8pts)",
   // Closed-loop STFT/LTFT
