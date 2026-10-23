@@ -151,6 +151,8 @@ Pulso fora de hora nas saídas? ☐ não ☐ sim. Sincronismo volta toda vez? �
 | Datalog SD a 1 kHz (`L` com taxa 3): `datalogDrops` = 0 em 10 min e `loop2_max` sem aumento | |
 | Datalog SD: `loop2_max` com o log ativo igual ao sem cartão (sem aumento mensurável) | |
 | Datalog SD: tirar a energia durante a gravação e religar; o log continua em nova sessão | |
+| Malha de lambda (WBO2): degrau de combustível de ±10%; o total (STFT + LTFT) segue sem ultrapassagem nem oscilação, o STFT volta perto de 0 e o LTFT guarda a correção (`stft_ki_x1000` = 10) | |
+| Malha de lambda: PW abaixo de `ltft_add_pw_threshold_us`: mesma convergência, correção em µs no LTFT aditivo | |
 
 ## Falhas e anotações
 

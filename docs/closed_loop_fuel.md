@@ -32,8 +32,26 @@ Por isso, no caminho multiplicativo, o que a célula absorve (variação real, d
 - **LEARN** acumula a correção total (STFT + LTFT da célula), que é a correção realmente necessária. O STFT sozinho perto de 0 daria bake nulo.
 - **Commit**: o bake sobe a VE e o LTFT da célula desce o mesmo valor, então a total não muda. O STFT global não é desenrolado.
 - **Saturação**: com o LTFT saturado no clamp a célula não drena, e o STFT volta a acumular até o seu clamp (`STFT_LIMIT_REACHED`).
-- **Caminho aditivo (PW pequeno, em µs)**: ainda sem transferência, o mesmo problema continua lá. Fica para uma etapa seguinte (exige converter µs em %).
-- A velocidade de convergência continua limitada pelos ganhos do STFT (`stft_kp_x100` = 3, `stft_ki_x1000` = 5): afinar com motor e WBO2.
+- **Caminho aditivo (PW pequeno, em µs)**: a mesma transferência, convertendo os µs absorvidos em %x10 do PW atual (`Δµs × 1000 / PW`), com o resto da divisão acumulado para que 1 µs sobre um PW grande não trunque a 0.
+- **Gate "ready" do LEARN**: como a média acumulada é a correção total, o limite de |média| sobe de 15% para 25% (`kLtftAccumReadyMaxMeanStftX10` = 250, igual ao clamp padrão do LTFT). A página 12 continua em int8 e satura a exibição em ±12,7%; é só exibição, os gates usam o valor completo.
+
+### Estabilidade e ganhos do STFT
+
+Varredura em simulação do STFT isolado (planta com combustível 10% curto, atraso de transporte e filtro de sensor de ~300 ms, `stft_kp_x100` = 3). Primeira entrada em ±1%, em segundos, e "instável" quando o erro nos últimos 30 s passa de 1%:
+
+| `stft_ki_x1000` | atraso 0,2 s | 0,6 s | 1,0 s | 2,0 s |
+|---|---|---|---|---|
+| 5 (antigo) | 46 s | 46 s | 45 s | 44 s |
+| **10 (padrão)** | 22 s | 22 s | 21 s | 20 s |
+| 20 | 11 s | 10 s | 9 s | 8 s |
+| 40 | 5 s | 4 s | 4 s | 4 s |
+| 80 | 2 s | 2 s | 2 s | instável |
+| 160 | 1 s | 1 s | instável | instável |
+| 320 | 0 s | instável | instável | instável |
+
+O limite de estabilidade no pior atraso (2 s) fica entre 40 e 80, então `ki` = 10 deixa cerca de 6× de margem e dobra a velocidade (assenta em ~21 s em vez de ~45 s). Com ruído de sensor de ±1%, a variação pico a pico do STFT fica em 0,2% com ki = 5 e 10 e em 0,4% com ki = 20. O termo P (`stft_kp_x100`) quase não muda o resultado. O escalonamento por atraso (`stft_gain_ref_delay_ms`) permite subir o ganho nos pontos de atraso curto.
+
+Limite do que isto prova: a planta é um modelo (atraso mais filtro de primeira ordem). A afinação final exige motor e WBO2.
 
 ## Célula nearest
 

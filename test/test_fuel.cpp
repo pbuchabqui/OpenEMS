@@ -544,6 +544,125 @@ void test_fuel_stft_ltft_cascade(void) {
     fuel_ltft_accum_reset();
 }
 
+namespace {
+struct CascadeRun {
+    int16_t max_total;
+    int16_t tail_err;   // maior |erro| de lambda nos últimos 30 s (x0.1%)
+    int16_t stft;
+    int16_t ltft;
+    int16_t add_us;
+    int16_t total;
+};
+
+// Planta de lambda: combustível com perturbação `dist` (x0.1%) corrigido pela correção total
+// aplicada (STFT + LTFT mult + LTFT aditivo em % do PW), vista com atraso de `delay_ticks`
+// (100 ms) e, se `lag`, filtro de primeira ordem do sensor (~300 ms). A perturbação muda de
+// `dist_a` para `dist_b` em `switch_tick`.
+CascadeRun cascade_run(int delay_ticks, bool lag, uint32_t pw_us, int dist_a, int dist_b,
+                       int switch_tick, int ticks) {
+    using namespace ems::engine;
+    fuel_reset_adaptives();
+    fuel_reset_ltft();
+    fuel_ltft_accum_reset();
+    int16_t hist[40] = {0};
+    int32_t lagged = 0;
+    uint32_t now = 100000u;
+    CascadeRun r{};
+    for (int t = 0; t < ticks; ++t) {
+        now += 100u;
+        const int16_t total = static_cast<int16_t>(
+            fuel_get_stft_pct_x10() + fuel_get_ltft_at(30000u, 100u) +
+            fuel_get_ltft_add_at(30000u, 100u) * 1000 / static_cast<int32_t>(pw_us));
+        for (int k = 39; k > 0; --k) { hist[k] = hist[k - 1]; }
+        hist[0] = total;
+        const int dist = (t < switch_tick) ? dist_a : dist_b;
+        const int err_raw = dist - hist[delay_ticks];
+        lagged += lag ? (err_raw * 1000 - lagged) / 4 : (err_raw * 1000 - lagged);
+        (void)fuel_update_stft(30000u, 100u, 1000, static_cast<int16_t>(1000 + lagged / 1000), 900,
+                               true, false, false, pw_us, 500u, now);
+        if (total > r.max_total) { r.max_total = total; }
+        if (t >= ticks - 300) {
+            const int16_t e = static_cast<int16_t>(std::abs(err_raw));
+            if (e > r.tail_err) { r.tail_err = e; }
+        }
+    }
+    r.stft = fuel_get_stft_pct_x10();
+    r.ltft = fuel_get_ltft_at(30000u, 100u);
+    r.add_us = fuel_get_ltft_add_at(30000u, 100u);
+    r.total = static_cast<int16_t>(r.stft + r.ltft + r.add_us * 1000 / static_cast<int32_t>(pw_us));
+    return r;
+}
+}  // namespace
+
+void test_fuel_cascade_plants(void) {
+    section("fuel_trim: cascata em outras plantas (aditivo, atrasos, degrau)");
+    using namespace ems::engine;
+    const uint8_t s_adapt = ltft_adapt_enable;
+    const uint8_t s_div = ltft_learn_div;
+    closed_loop_enable = 1u;
+    closed_loop_post_start_s = 0u;
+    ltft_adapt_enable = 1u;
+    ltft_learn_div = 64u;
+
+    // Transferência decisiva: com erro zero a correção total fica constante enquanto o STFT
+    // decai e o LTFT sobe. No código antigo (sem drenagem) a total dobrava.
+    {
+        fuel_reset_adaptives();
+        fuel_reset_ltft();
+        ltft_adapt_enable = 0u;
+        uint32_t now = 100000u;
+        for (int t = 0; t < 150; ++t) {
+            now += 100u;
+            (void)fuel_update_stft(30000u, 100u, 1000, 1100, 900, true, false, false, 4000u, 500u, now);
+        }
+        ltft_adapt_enable = 1u;
+        // Um tick de erro zero tira o termo P; daí em diante a total só pode mudar pela drenagem.
+        now += 100u;
+        (void)fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 4000u, 500u, now);
+        const int16_t stft0 = fuel_get_stft_pct_x10();
+        const int16_t total0 = static_cast<int16_t>(stft0 + fuel_get_ltft_at(30000u, 100u));
+        CHECK_TRUE(stft0 >= 20, "pré-condição: STFT carregado");
+        for (int t = 0; t < 200; ++t) {
+            now += 100u;
+            (void)fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 4000u, 500u, now);
+        }
+        const int16_t total1 = static_cast<int16_t>(fuel_get_stft_pct_x10() +
+                                                    fuel_get_ltft_at(30000u, 100u));
+        CHECK_TRUE(std::abs(total1 - total0) <= 2, "total constante enquanto o STFT passa ao LTFT");
+        CHECK_TRUE(fuel_get_stft_pct_x10() < stft0 / 2, "STFT decai");
+        CHECK_TRUE(fuel_get_ltft_at(30000u, 100u) > stft0 / 2, "LTFT assume a correção");
+    }
+
+    // Caminho aditivo (PW 1500 us < 2500 us): mesma convergência, correção guardada em us.
+    {
+        const CascadeRun r = cascade_run(3, false, 1500u, 100, 100, 0, 1500);
+        CHECK_TRUE(r.max_total <= 105, "aditivo: sem ultrapassagem");
+        CHECK_TRUE(r.tail_err <= 5, "aditivo: erro residual até 0,5%");
+        CHECK_TRUE(std::abs(r.stft) <= 3, "aditivo: STFT volta perto de 0");
+        CHECK_TRUE(r.add_us >= 135, "aditivo: a célula em us guarda a correção (10% de 1500 us)");
+    }
+    // Atrasos de 1,0 s e 2,0 s com filtro de sensor: sem oscilação sustentada.
+    {
+        const CascadeRun r1 = cascade_run(10, true, 4000u, 100, 100, 0, 2000);
+        CHECK_TRUE(r1.max_total <= 110 && r1.tail_err <= 5, "atraso 1,0 s + filtro: converge sem oscilar");
+        const CascadeRun r2 = cascade_run(20, true, 4000u, 100, 100, 0, 3000);
+        CHECK_TRUE(r2.max_total <= 110 && r2.tail_err <= 5, "atraso 2,0 s + filtro: converge sem oscilar");
+    }
+    // Degrau de perturbação: +10% e, aos 150 s, -5%.
+    {
+        const CascadeRun r = cascade_run(6, true, 4000u, 100, -50, 1500, 3500);
+        CHECK_TRUE(r.tail_err <= 5, "degrau +10% para -5%: segue a nova perturbação");
+        CHECK_TRUE(std::abs(r.total - (-50)) <= 6, "degrau: correção total chega a -5%");
+    }
+
+    ltft_adapt_enable = s_adapt;
+    ltft_learn_div = s_div;
+    closed_loop_post_start_s = 15u;
+    fuel_reset_adaptives();
+    fuel_reset_ltft();
+    fuel_ltft_accum_reset();
+}
+
 void test_fuel_stft_gain_schedule(void) {
     section("fuel_calc: STFT com ganhos escalonados pelo atraso");
 

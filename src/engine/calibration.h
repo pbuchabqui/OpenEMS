@@ -416,7 +416,7 @@ extern uint32_t eoi_rpm_axis_x10[kEoiTableSize];  // RPM×10, default 500/2000/5
 extern int16_t  eoi_clt_axis_x10[kEoiTableSize];  // °C×10, default -20/20/90 (assinado — CLT pode ser negativo)
 extern uint16_t eoi_table_deg[kEoiTableSize][kEoiTableSize];  // [clt][rpm], ° BTDC combustão
 
-extern uint16_t stft_ki_x1000;       // Ki × 1000, default 5 (produção) / 10 (encoder, EMS_MT6835_ENCODER)
+extern uint16_t stft_ki_x1000;       // Ki × 1000, default 10
 extern uint16_t stft_clamp_pct_x10;  // clamp ±%, default 150 (= 15.0%)
 
 // X-τ auto-calibration limits (página 0, offsets 146-153)

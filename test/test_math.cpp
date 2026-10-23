@@ -192,22 +192,22 @@ void test_math_stft_gains(void) {
     const uint8_t s_adapt = ems::engine::ltft_adapt_enable;
     ems::engine::ltft_adapt_enable = 0u;
     // Kp = kStftKpNum/100 = 3/100. Por error=200 x1000: p = 200×3/100 = 6 x10
-    // Ki = kStftKiNum/kStftKiDen = 1/200. Por error=200 x1000: i += 200/200 = 1 x10
+    // Ki = 10/1000 (padrão). Por error=200 x1000: i += 200×10/1000 = 2 x10
     // Após N chamadas com erro constante de 200 x1000 (20% lean):
-    //   integrator = N (sem clamp), stft = 6 + N
-    // Verificar após 1 chamada: stft=7; após 10: stft=16; após 300: stft=250 (clampado)
+    //   integrator = 2N (sem clamp), stft = 6 + 2N
+    // Verificar após 1 chamada: stft=8; após 10: stft=26; após 300: stft=250 (clampado)
 
     fuel_reset_adaptives();
-    // 1 chamada: p=6, integrator=1, stft=7
+    // 1 chamada: p=6, integrator=2, stft=8
     const int16_t s1 = fuel_update_stft(
         30000u, 100u, 1000, 1200, 900, true, false, false, 30000u, 500u);
-    CHECK_EQ(s1, 7, "STFT após 1 call (lean 20%): p=6 + I=1 = 7");
+    CHECK_EQ(s1, 8, "STFT após 1 call (lean 20%): p=6 + I=2 = 8");
 
-    // Após 9 calls adicionais (total 10): integrator=10, stft=16
+    // Após 9 calls adicionais (total 10): integrator=20, stft=26
     for (int i = 0; i < 9; ++i) {
         fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false, 30000u, 500u);
     }
-    CHECK_EQ(fuel_get_stft_pct_x10(), 16, "STFT após 10 calls: p=6 + I=10 = 16");
+    CHECK_EQ(fuel_get_stft_pct_x10(), 26, "STFT após 10 calls: p=6 + I=20 = 26");
 
     section("MATH: fuel_update_stft clamp kStftClampX10=250");
     // Após 300 chamadas: integrator clamped=250, stft=clamp(6+250,-250,250)=250

@@ -1,6 +1,6 @@
 #include "engine/calibration.h"
 
-#include "hal/board_pinout.h"  // EMS_MT6835_ENCODER — default de stft_ki_x1000
+#include "hal/board_pinout.h"
 
 #include <cstring>
 
@@ -312,15 +312,11 @@ uint16_t eoi_table_deg[kEoiTableSize][kEoiTableSize] = {
     { 60u, 150u, 355u},  //  90°C
 };
 
-// Ki dobrado (5→10) só no caminho encoder (decisão do utilizador,
-// 2026-08-14): ~10s p/ cancelar erro de 1%λ em vez de ~20s — mudança de
-// afinação ainda não validada contra ruído de sensor λ real (só bancada com
-// λ simulado limpo). Produção/Hall mantém o Ki=5 original até essa
-// validação. `if`, não `#if`, sobre a macro sempre definida
-// (board_pinout.h) — mesmo raciocínio já usado em main_stm32.cpp: custo
-// zero em produção via constant-folding, sem esconder o ramo de compilar em
-// host-test.
-uint16_t stft_ki_x1000      = EMS_MT6835_ENCODER ? 10u : 5u;  // 0.010 encoder / 0.005 produção
+// Ki 10 (era 5): a varredura em simulação (planta com atraso de 0,2 a 2 s e filtro de
+// sensor de 300 ms) dá o limite de estabilidade em ki ~ 60 no pior atraso (2 s), então 10 deixa
+// margem de 6x e assenta em ~21 s em vez de ~45 s. Ruído de sensor de ±1% fica em 0,2% de
+// variação no STFT. Não validado contra lambda real: afinar com motor e WBO2.
+uint16_t stft_ki_x1000      = 10u;  // 0.010
 uint16_t stft_clamp_pct_x10 = 150u;  // 15.0% (era 25.0%, decisão do utilizador 2026-08-14)
 
 uint16_t xtau_x_min_q8  = 64u;   // 0.25

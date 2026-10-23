@@ -891,9 +891,20 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
             // steady correction; STFT then returns to ~0).
             static int32_t s_add_rem = 0;
             static uint16_t s_add_rem_cell = 0xFFFFu;
+            const int16_t add_before = cell_add;
             cell_add = ltft_integrate(cell_add, error_us, s_add_rem, s_add_rem_cell,
                                       static_cast<uint16_t>(mi * 32u + ri), add_lim,
                                       /*pct_step_cap=*/false);   // µs: % cap n/a
+            // Transferência sem salto, como no caminho multiplicativo: o que a célula absorve
+            // (µs) sai do integrador do STFT em %x10 do PW atual. O resto da divisão fica
+            // acumulado, senão 1 µs sobre um PW grande truncaria a 0 e nunca drenaria.
+            static int32_t s_add_drain_rem = 0;
+            const int32_t drain_num = static_cast<int32_t>(cell_add - add_before) * 1000 +
+                                      s_add_drain_rem;
+            const int32_t pw = static_cast<int32_t>(net_pw_us);
+            const int32_t drain_x10 = drain_num / pw;
+            s_add_drain_rem = drain_num - drain_x10 * pw;
+            g_stft_integrator_x1000 -= drain_x10 * 100;
             fuel_ltft_add_store_cell(map_idx, rpm_idx, cell_add);
         } else {
             // PW normal: LTFT multiplicativo (clamp/rate calibráveis).
