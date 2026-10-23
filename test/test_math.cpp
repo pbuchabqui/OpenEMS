@@ -188,6 +188,9 @@ void test_math_corrections(void) {
 
 void test_math_stft_gains(void) {
     section("MATH: fuel_update_stft ganhos Kp e Ki exactos");
+    // STFT isolado: com o LTFT ligado ele drena o integrador (transferência sem salto).
+    const uint8_t s_adapt = ems::engine::ltft_adapt_enable;
+    ems::engine::ltft_adapt_enable = 0u;
     // Kp = kStftKpNum/100 = 3/100. Por error=200 x1000: p = 200×3/100 = 6 x10
     // Ki = kStftKiNum/kStftKiDen = 1/200. Por error=200 x1000: i += 200/200 = 1 x10
     // Após N chamadas com erro constante de 200 x1000 (20% lean):
@@ -235,6 +238,7 @@ void test_math_stft_gains(void) {
         30000u, 100u, 1000, 1033, 900, true, false, false, 30000u, 500u);
     CHECK_EQ(s_small_err, 1,
              "erro pequeno (3,3%) já corrige após 1 chamada — P não é perdido no truncamento");
+    ems::engine::ltft_adapt_enable = s_adapt;
 }
 
 void test_math_inj_scheduler_ticks(void) {

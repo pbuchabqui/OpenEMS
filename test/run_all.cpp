@@ -135,6 +135,7 @@ int main(void) {
     test_fuel_stft();
     test_fuel_stft_delayed();
     test_fuel_stft_gain_schedule();
+    test_fuel_stft_ltft_cascade();
     test_injector_scurve();
     test_fuel_delta_p_compensation();
     test_fuel_ltft();

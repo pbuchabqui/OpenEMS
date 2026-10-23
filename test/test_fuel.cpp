@@ -466,6 +466,84 @@ void test_fuel_stft(void) {
     CHECK_EQ(after, before, "closed loop disabled → STFT congela (freeze)");
 }
 
+void test_fuel_stft_ltft_cascade(void) {
+    section("fuel_trim: cascata STFT/LTFT com transferência sem salto");
+    using namespace ems::engine;
+    const uint8_t s_adapt = ltft_adapt_enable;
+    const uint8_t s_div = ltft_learn_div;
+    fuel_reset_adaptives();
+    fuel_reset_ltft();
+    fuel_ltft_accum_reset();
+    closed_loop_enable = 1u;
+    closed_loop_post_start_s = 0u;
+    ltft_adapt_enable = 1u;
+    ltft_learn_div = 64u;
+
+    // Planta: combustível 10% curto (lambda +0,100) corrigido pela correção total aplicada,
+    // medida com 300 ms de atraso (3 ticks de 100 ms).
+    constexpr int kDist = 100;
+    int16_t hist[8] = {0};
+    uint32_t now = 100000u;
+    int16_t max_total = 0;
+    int16_t prev_total = 0;
+    int16_t worst_drop = 0;
+    int16_t lam_err = kDist;
+    for (int t = 0; t < 1500; ++t) {
+        now += 100u;
+        const int16_t total = static_cast<int16_t>(fuel_get_stft_pct_x10() +
+                                                   fuel_get_ltft_at(30000u, 100u));
+        for (int k = 7; k > 0; --k) { hist[k] = hist[k - 1]; }
+        hist[0] = total;
+        lam_err = static_cast<int16_t>(kDist - hist[3]);
+        (void)fuel_update_stft(30000u, 100u, 1000, static_cast<int16_t>(1000 + lam_err), 900,
+                               true, false, false, 4000u, 500u, now);
+        if (total > max_total) { max_total = total; }
+        if (t % 50 == 0) {
+            if (prev_total - total > worst_drop) { worst_drop = static_cast<int16_t>(prev_total - total); }
+            prev_total = total;
+        }
+        if (t == 600) {
+            // Transferência: com erro zero o P some e a total só muda pelo arredondamento.
+            const int16_t before = static_cast<int16_t>(fuel_get_stft_pct_x10() +
+                                                        fuel_get_ltft_at(30000u, 100u));
+            (void)fuel_update_stft(30000u, 100u, 1000, 1000, 900, true, false, false, 4000u, 500u,
+                                   now + 100u);
+            const int16_t after = static_cast<int16_t>(fuel_get_stft_pct_x10() +
+                                                       fuel_get_ltft_at(30000u, 100u));
+            CHECK_TRUE(std::abs(after - before) <= 2,
+                       "transferência: STFT + LTFT não muda ao drenar para a célula");
+        }
+    }
+    CHECK_TRUE(max_total <= kDist + 5, "sem ultrapassagem acima de 0,5% (antes: 46%)");
+    CHECK_TRUE(worst_drop <= 2, "correção total não recua (sem oscilação)");
+    CHECK_TRUE(std::abs(fuel_get_stft_pct_x10()) <= 3, "STFT volta perto de 0");
+    CHECK_TRUE(fuel_get_ltft_at(30000u, 100u) >= 90, "LTFT guarda a correção em regime");
+    CHECK_TRUE(std::abs(lam_err) <= 5, "erro de lambda residual até 0,5%");
+
+    // LEARN acumula a correção total (STFT + LTFT), não só o STFT que já foi drenado.
+    const int16_t ltft_cell = fuel_get_ltft_at(30000u, 100u);
+    uint16_t hits = 0u;
+    int16_t mean = 0;
+    for (uint8_t m = 0u; m < kTableAxisSize; ++m) {
+        for (uint8_t r = 0u; r < kTableAxisSize; ++r) {
+            if (fuel_ltft_accum_hits(m, r) > hits) {
+                hits = fuel_ltft_accum_hits(m, r);
+                mean = fuel_ltft_accum_mean_stft_x10(m, r);
+            }
+        }
+    }
+    CHECK_TRUE(hits > 0u, "LEARN acumulou amostras em regime");
+    CHECK_TRUE(mean >= ltft_cell - 25 && mean <= ltft_cell + 10,
+               "LEARN: média é a correção total, não o STFT perto de 0");
+
+    ltft_adapt_enable = s_adapt;
+    ltft_learn_div = s_div;
+    closed_loop_post_start_s = 15u;
+    fuel_reset_adaptives();
+    fuel_reset_ltft();
+    fuel_ltft_accum_reset();
+}
+
 void test_fuel_stft_gain_schedule(void) {
     section("fuel_calc: STFT com ganhos escalonados pelo atraso");
 
@@ -659,8 +737,9 @@ void test_fuel_trim_dtcs(void) {
     CHECK_FALSE(DiagnosticManager::is_fault_active(DC::STFT_LIMIT_REACHED),
                 "sem DTC STFT no início");
 
-    // Mantém erro grande até saturar STFT e confirmar 50 ticks
-    for (int i = 0; i < 80; ++i) {
+    // Mantém erro grande até saturar: o LTFT (clamp ±5%) absorve primeiro, e só depois que
+    // ele satura o integrador do STFT sobe até o clamp.
+    for (int i = 0; i < 400; ++i) {
         (void)fuel_update_stft(30000u, 100u, 1000, 1300, 900, true, false, false,
                                5000u, 500u);
     }

@@ -13,6 +13,7 @@ fuel_update_stft_delayed
     ├─ gates: CL enable, CLT>70°C, O2, !AE, !cut, post-start
     ├─ PI → STFT global (freeze anti-windup se bloqueado)
     ├─ LTFT IIR (mult ou add por PW) se adapt_enable + RPM + MAP estável
+    │     (mult: o que a célula absorve sai do integrador do STFT)
     └─ LEARN accum (só mult) se sample_valid
 
 2 ms PW path:
@@ -21,6 +22,18 @@ fuel_update_stft_delayed
 ```
 
 **Módulos:** `fuel_trim.cpp` (STFT/LTFT/LEARN/delay), `fuel_calc.cpp` (PW/AE/decel).
+
+## Cascata STFT → LTFT (transferência sem salto)
+
+O LTFT integra a saída do STFT (`cell += STFT/div`). Se o integrador do STFT não fosse descarregado, os dois integrariam o mesmo erro em série e o laço oscilaria (simulação com 10% de combustível curto e 300 ms de atraso: 46% de ultrapassagem, período de cerca de 70 s, mais de 130 s para assentar).
+
+Por isso, no caminho multiplicativo, o que a célula absorve (variação real, depois do clamp) é subtraído do integrador do STFT. A correção total (STFT + LTFT) não muda na transferência; só a divisão entre os dois. Na mesma simulação: sem ultrapassagem, monótona, 90% em cerca de 60 s, STFT tendendo a 0. Teste: `test_fuel_stft_ltft_cascade`.
+
+- **LEARN** acumula a correção total (STFT + LTFT da célula), que é a correção realmente necessária. O STFT sozinho perto de 0 daria bake nulo.
+- **Commit**: o bake sobe a VE e o LTFT da célula desce o mesmo valor, então a total não muda. O STFT global não é desenrolado.
+- **Saturação**: com o LTFT saturado no clamp a célula não drena, e o STFT volta a acumular até o seu clamp (`STFT_LIMIT_REACHED`).
+- **Caminho aditivo (PW pequeno, em µs)**: ainda sem transferência, o mesmo problema continua lá. Fica para uma etapa seguinte (exige converter µs em %).
+- A velocidade de convergência continua limitada pelos ganhos do STFT (`stft_kp_x100` = 3, `stft_ki_x1000` = 5): afinar com motor e WBO2.
 
 ## Célula nearest
 

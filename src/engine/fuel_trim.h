@@ -29,10 +29,12 @@ uint16_t fuel_stft_gain_scale_q8(uint32_t rpm_x10, uint16_t map_bar_x100) noexce
 //  - Só caminho multiplicativo (PW ≥ threshold) alimenta o acumulador —
 //    PW baixo é offset de bico (LTFT add), não VE.
 //  - Commit (Fase 2, MANUAL):
-//      try_commit: só se ready; bake + desenrola LTFT cell + STFT global.
+//      A média acumulada é a correção total da célula (STFT + LTFT); o STFT tende
+//      a 0 porque o LTFT absorve a correção (transferência sem salto).
+//      try_commit: só se ready; bake na VE + desenrola o LTFT da célula.
 //      apply_all_ready ('Y'): TODAS as células com hits>0 (correcções
-//      acumuladas da sessão), não só ready; bake + LTFT cell; NÃO desenrola
-//      STFT N× (re-converge no loop). Nunca automático no closed-loop.
+//      acumuladas da sessão), não só ready; bake + LTFT cell. O STFT global
+//      não é tocado. Nunca automático no closed-loop.
 //      VE em flash só com Burn do dashboard.
 //  - Sinal de estabilidade: APP (pedido do condutor); MAP+RPM definem a célula.
 //
@@ -113,7 +115,7 @@ void fuel_ltft_accum_tick_for_test(uint8_t map_idx, uint8_t rpm_idx,
 #endif
 
 // Fase 2 (manual): try_commit exige ready; apply_all bakeia todas as células
-// com hits>0 (mean STFT × gain → VE RAM + desenrola LTFT da célula).
+// com hits>0 (média da correção total × gain → VE RAM + desenrola LTFT da célula).
 bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 uint16_t fuel_ltft_accum_apply_all_ready() noexcept;
 

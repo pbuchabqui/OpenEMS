@@ -691,12 +691,9 @@ void fuel_ltft_accum_tick_for_test(uint8_t map_idx, uint8_t rpm_idx,
 
 // require_ready: try_commit (1 célula) exige gates ready; apply_all aplica
 // qualquer célula com hits>0 (todas as correcções acumuladas na sessão).
-// unroll_global_stft: true em commit de célula única (desenrola o trim global).
-// false em apply_all — N células não devem subtrair N×bake do mesmo STFT.
 static bool ltft_accum_commit_cell(uint8_t map_idx,
                                    uint8_t rpm_idx,
-                                   bool require_ready,
-                                   bool unroll_global_stft) noexcept {
+                                   bool require_ready) noexcept {
     if (map_idx >= kTableAxisSize || rpm_idx >= kTableAxisSize) {
         return false;
     }
@@ -759,21 +756,8 @@ static bool ltft_accum_commit_cell(uint8_t map_idx,
     ltft = clamp_i16(ltft, static_cast<int16_t>(-ltft_clamp), ltft_clamp);
     fuel_ltft_store_cell(map_idx, rpm_idx, ltft);
 
-    if (unroll_global_stft) {
-        // Desenrola STFT global (integrador em ×1000: stft ≈ I/100).
-        const int16_t stft_clamp = static_cast<int16_t>(ems::engine::stft_clamp_pct_x10);
-        g_stft_pct_x10 = clamp_i16(
-            static_cast<int16_t>(g_stft_pct_x10 - bake_x10),
-            static_cast<int16_t>(-stft_clamp),
-            stft_clamp);
-        g_stft_integrator_x1000 -= static_cast<int32_t>(bake_x10) * 100;
-        const int32_t clamp_x1000 = static_cast<int32_t>(stft_clamp) * 100;
-        if (g_stft_integrator_x1000 > clamp_x1000) {
-            g_stft_integrator_x1000 = clamp_x1000;
-        } else if (g_stft_integrator_x1000 < -clamp_x1000) {
-            g_stft_integrator_x1000 = -clamp_x1000;
-        }
-    }
+    // A média acumulada é a correção total (STFT + LTFT): o bake sobe a VE e o LTFT desce o
+    // mesmo valor, então a total não muda. O STFT global não é desenrolado (seria descontar duas vezes).
 
     fuel_ltft_accum_reset_cell(map_idx, rpm_idx);
     ++g_dbg_ltft_accum_commits;
@@ -788,22 +772,19 @@ bool fuel_ltft_accum_try_commit(uint8_t map_idx, uint8_t rpm_idx) noexcept {
     // Manual-only: closed-loop não chama isto. Unroll STFT nesta célula.
     // Mantém gate ready (diagnóstico de 1 célula / testes).
     return ltft_accum_commit_cell(map_idx, rpm_idx,
-                                  /*require_ready=*/true,
-                                  /*unroll_global_stft=*/true);
+                                  /*require_ready=*/true);
 }
 
 uint16_t fuel_ltft_accum_apply_all_ready() noexcept {
     // Bulk APPLY ('Y'): bake em TODAS as células com acumulação (hits>0),
     // não só as ready. O bit ready na page12 continua a ser indicador de
     // qualidade; o apply de sessão não deixa correcções parciais para trás.
-    // VE + LTFT por célula; STFT global fica — re-converge no loop.
-    // (N commits × unroll STFT derrubava o trim global de forma incorrecta.)
+    // VE + LTFT por célula; o STFT global não é tocado.
     uint16_t n = 0u;
     for (uint8_t m = 0u; m < kTableAxisSize; ++m) {
         for (uint8_t r = 0u; r < kTableAxisSize; ++r) {
             if (ltft_accum_commit_cell(m, r,
-                                       /*require_ready=*/false,
-                                       /*unroll_global_stft=*/false)) {
+                                       /*require_ready=*/false)) {
                 ++n;
             }
         }
@@ -921,9 +902,15 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
             // "move toward STFT" settled at LTFT = STFT = half the error.
             static int32_t s_mult_rem = 0;
             static uint16_t s_mult_rem_cell = 0xFFFFu;
+            const int16_t cell_before = cell;
             cell = ltft_integrate(cell, g_stft_pct_x10, s_mult_rem, s_mult_rem_cell,
                                   static_cast<uint16_t>(map_idx * 32u + rpm_idx),
                                   ltft_mult_clamp(), /*pct_step_cap=*/true);
+            // Transferência sem salto: o que a célula absorve sai do integrador do STFT, e
+            // a correção total (STFT + LTFT) não muda. Sem isto os dois integram o mesmo
+            // erro em série: oscila, com 46% de ultrapassagem e mais de 130 s para assentar.
+            // Usa a variação real da célula (depois do clamp): célula saturada não drena.
+            g_stft_integrator_x1000 -= static_cast<int32_t>(cell - cell_before) * 100;
             fuel_ltft_store_cell(map_idx, rpm_idx, cell);
         }
 
@@ -931,10 +918,12 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
         if (multiplicative_path) {
             const int16_t err_x1000 =
                 static_cast<int16_t>(lambda_measured_x1000 - lambda_target_x1000);
+            // Acumula a correção total aplicada na célula (STFT + LTFT): com a transferência
+            // o STFT tende a 0 e a correção aprendida fica no LTFT.
             fuel_ltft_accum_tick(
                 map_idx,
                 rpm_idx,
-                g_stft_pct_x10,
+                static_cast<int16_t>(g_stft_pct_x10 + g_ltft_pct_x10[map_idx][rpm_idx]),
                 err_x1000,
                 fuel_ltft_learn_point_centered(rpm_x10, map_bar_x100) &&
                 ltft_accum_sample_valid(rpm_x10,
