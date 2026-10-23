@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
+#include <initializer_list>
 
 #include "engine/etb_control.h"
 #include "hal/etb_driver.h"
@@ -1444,3 +1445,153 @@ void test_fuel_inj_two_slope(void) {
 // IGN CALC — SEGUNDA FASE
 // ═══════════════════════════════════════════════════════════════════════════
 
+
+// ── Contaminação entre células do LTFT (medição + guarda) ────────────────
+// Planta: erro de combustível verdadeiro por nó (campo suave ou rugoso) com o ponto de operação
+// andando entre células, atraso de transporte aplicado como no firmware. Métrica: erro do LTFT de
+// cada célula contra a média real do erro dentro dela (o melhor que uma tabela por vizinho mais
+// próximo consegue). Resultados em docs/closed_loop_fuel.md.
+namespace {
+struct ContamResult { double oracle_rms; double rms; double cell_mae; double cell_max; int visited; };
+ContamResult contam_run(bool rough, double speed_cells_per_s, uint32_t delay_ms, uint32_t sim_s,
+                        double dwell_s) {
+    using namespace ems::engine;
+    constexpr int kLo = 6, kHi = 13;  // índices do nó: 6..13 nos dois eixos
+    static int16_t node[20][20];
+    for (int m = 0; m < 20; ++m) for (int r = 0; r < 20; ++r) {
+        node[m][r] = rough ? static_cast<int16_t>(((m * 7 + r * 13) % 21 - 10) * 10)
+                           : static_cast<int16_t>((m - 9) * 20 + (r - 9) * 10);
+    }
+    auto field = [&](double fm, double fr) {
+        int m0 = static_cast<int>(fm), r0 = static_cast<int>(fr);
+        const double am = fm - m0, ar = fr - r0;
+        return (1 - am) * ((1 - ar) * node[m0][r0] + ar * node[m0][r0 + 1]) +
+               am * ((1 - ar) * node[m0 + 1][r0] + ar * node[m0 + 1][r0 + 1]);
+    };
+    auto interp_axis = [](const uint32_t* ax, double f) {
+        int i = static_cast<int>(f);
+        const double a = f - i;
+        return ax[i] + a * (static_cast<double>(ax[i + 1]) - ax[i]);
+    };
+    for (uint8_t i = 0; i < 3; ++i) for (uint8_t j = 0; j < 3; ++j) {
+        lambda_delay_ms_table[i][j] = static_cast<uint16_t>(delay_ms);
+    }
+    fuel_reset_adaptives(); fuel_reset_ltft(); fuel_ltft_accum_reset(); fuel_lambda_delay_reset();
+    const int dticks = static_cast<int>(delay_ms / 100u);
+    static double e_hist[64]; static int16_t a_hist[64];
+    for (int i = 0; i < 64; ++i) { e_hist[i] = 0; a_hist[i] = 0; }
+    uint32_t seed = 12345u;
+    auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0; };
+    double fm = 9.5, fr = 9.5, tm = 9.5, tr = 9.5, dwell = 0;
+    uint32_t now = 100000u;
+    const int ticks = static_cast<int>(sim_s * 10u);
+    double acc = 0; int n_tail = 0;
+    static double c_sum[20][20], c_sq[20][20]; static int c_n[20][20];
+    for (int m = 0; m < 20; ++m) for (int r = 0; r < 20; ++r) { c_sum[m][r] = 0; c_sq[m][r] = 0; c_n[m][r] = 0; }
+    for (int t = 0; t < ticks; ++t) {
+        now += 100u;
+        // movimento
+        const double step = speed_cells_per_s * 0.1;
+        const double dm = tm - fm, dr = tr - fr;
+        const double dist = std::sqrt(dm * dm + dr * dr);
+        if (dist > step) { fm += dm / dist * step; fr += dr / dist * step; }
+        else {
+            fm = tm; fr = tr; dwell += 0.1;
+            if (dwell >= dwell_s) {
+                dwell = 0;
+                tm = kLo + rnd() * (kHi - kLo); tr = kLo + rnd() * (kHi - kLo);
+            }
+        }
+        const uint32_t rpm = static_cast<uint32_t>(interp_axis(kRpmAxisX10, fr));
+        const uint16_t map = static_cast<uint16_t>(interp_axis(kLoadAxisBarX100, fm));
+        const double e_now = field(fm, fr);
+        const int16_t total = static_cast<int16_t>(
+            fuel_get_stft_pct_x10() + fuel_get_ltft_at(rpm, map));
+        for (int k = 63; k > 0; --k) { e_hist[k] = e_hist[k - 1]; a_hist[k] = a_hist[k - 1]; }
+        e_hist[0] = e_now; a_hist[0] = total;
+        const double err = e_hist[dticks] - a_hist[dticks];
+        (void)fuel_update_stft_delayed(now, rpm, map, 1000, static_cast<int16_t>(1000 + err),
+                                       900, true, false, false, 6000u, 500u);
+        const uint8_t ri = table_axis_nearest_index(kRpmAxisX10, kTableAxisSize, rpm);
+        const uint8_t mi = table_axis_nearest_index(kLoadAxisBarX100, kTableAxisSize, map);
+        if (t >= ticks - 3000) {  // últimos 5 min: erro aplicado vs ideal (LTFT = nó)
+            const double e_app = e_now - total;
+            acc += e_app * e_app; ++n_tail;
+            c_sum[mi][ri] += e_now; c_sq[mi][ri] += e_now * e_now; ++c_n[mi][ri];
+        }
+    }
+    ContamResult res{};
+    res.rms = std::sqrt(acc / n_tail) / 10.0;
+    double var = 0, sum = 0, mx = 0; int nv = 0;
+    for (int m = 0; m < 20; ++m) for (int r = 0; r < 20; ++r) {
+        if (c_n[m][r] < 50) continue;   // ≥ 5 s na janela final
+        const double mean = c_sum[m][r] / c_n[m][r];
+        var += c_sq[m][r] - c_sum[m][r] * mean;
+        const double d = std::abs(fuel_get_ltft_pct_x10(m, r) - mean) / 10.0;
+        sum += d; if (d > mx) mx = d; ++nv;
+    }
+    res.oracle_rms = std::sqrt(var / n_tail) / 10.0;
+    res.cell_mae = nv ? sum / nv : 0; res.cell_max = mx; res.visited = nv;
+    return res;
+}
+}  // namespace
+
+void test_fuel_ltft_cell_crossing(void) {
+    section("fuel_trim: contaminação entre células do LTFT");
+    using namespace ems::engine;
+    const uint8_t s_adapt = ltft_adapt_enable;
+    const uint8_t s_div = ltft_learn_div;
+    uint16_t s_delay[3][3];
+    for (uint8_t i = 0; i < 3; ++i) for (uint8_t j = 0; j < 3; ++j) s_delay[i][j] = lambda_delay_ms_table[i][j];
+    closed_loop_enable = 1u; closed_loop_post_start_s = 0u; ltft_adapt_enable = 1u;
+    ltft_learn_div = 64u;
+
+    // Salto limpo A (+10%) -> B (-5%), vizinhos em rpm: nenhum vazamento (atraso 0,2 / 0,6 / 1,5 s).
+    for (uint32_t d : {200u, 600u, 1500u}) {
+        for (uint8_t i = 0; i < 3; ++i) for (uint8_t j = 0; j < 3; ++j) lambda_delay_ms_table[i][j] = static_cast<uint16_t>(d);
+        fuel_reset_adaptives(); fuel_reset_ltft(); fuel_ltft_accum_reset(); fuel_lambda_delay_reset();
+        const int dt = static_cast<int>(d / 100u);
+        double eh[64] = {0}; int16_t ah[64] = {0};
+        uint32_t now = 100000u;
+        const uint8_t mi = 10, ra = 10, rb = 11;
+        auto run = [&](uint8_t r, double e, int ticks) {
+            for (int t = 0; t < ticks; ++t) {
+                now += 100u;
+                const uint32_t rpm = kRpmAxisX10[r];
+                const uint16_t map = static_cast<uint16_t>(kLoadAxisBarX100[mi]);
+                const int16_t total = static_cast<int16_t>(fuel_get_stft_pct_x10() + fuel_get_ltft_at(rpm, map));
+                for (int k = 63; k > 0; --k) { eh[k] = eh[k - 1]; ah[k] = ah[k - 1]; }
+                eh[0] = e; ah[0] = total;
+                (void)fuel_update_stft_delayed(now, rpm, map, 1000, static_cast<int16_t>(1000 + (eh[dt] - ah[dt])),
+                                               900, true, false, false, 6000u, 500u);
+            }
+        };
+        run(ra, 100, 3000);
+        run(rb, -50, 3000);
+        CHECK_TRUE(std::abs(fuel_get_ltft_pct_x10(mi, ra) - 100) <= 2, "salto A->B: célula A fica em +10%");
+        CHECK_TRUE(std::abs(fuel_get_ltft_pct_x10(mi, rb) + 50) <= 2, "salto A->B: célula B aprende -5%");
+        CHECK_TRUE(std::abs(fuel_get_ltft_pct_x10(mi, 9)) <= 1 && std::abs(fuel_get_ltft_pct_x10(mi, 12)) <= 1,
+                   "salto A->B: vizinhas intocadas");
+    }
+
+    // Ponto de operação andando entre células, campo suave: contaminação cresce com a velocidade.
+    for (uint8_t i = 0; i < 3; ++i) for (uint8_t j = 0; j < 3; ++j) lambda_delay_ms_table[i][j] = 600u;
+    const ContamResult slow = contam_run(false, 0.1, 600u, 1800u, 6.0);
+    const ContamResult mid = contam_run(false, 0.5, 600u, 1800u, 6.0);
+    const ContamResult fast = contam_run(false, 2.0, 600u, 1800u, 6.0);
+    const ContamResult rough = contam_run(true, 0.5, 600u, 1800u, 6.0);
+    std::printf("    células vs média real (erro médio / máx): 0,1 cél/s %.2f/%.2f %%, 0,5 cél/s %.2f/%.2f %%, "
+                "2 cél/s %.2f/%.2f %%, rugoso 0,5 cél/s %.2f/%.2f %%\n",
+                slow.cell_mae, slow.cell_max, mid.cell_mae, mid.cell_max, fast.cell_mae, fast.cell_max,
+                rough.cell_mae, rough.cell_max);
+    CHECK_TRUE(slow.cell_mae <= 0.7, "0,1 célula/s: erro médio da célula <= 0,7%");
+    CHECK_TRUE(mid.cell_mae <= 1.3 && mid.cell_max <= 5.5, "0,5 célula/s: erro médio <= 1,3%, máx <= 5,5%");
+    CHECK_TRUE(fast.cell_mae <= 2.2 && fast.cell_max <= 7.5, "2 células/s: erro médio <= 2,2%, máx <= 7,5%");
+    CHECK_TRUE(rough.cell_mae <= 2.0 && rough.cell_max <= 5.5, "campo rugoso a 0,5 célula/s: erro médio <= 2%, máx <= 5,5%");
+    CHECK_TRUE(slow.cell_mae < fast.cell_mae, "mais velocidade, mais contaminação");
+
+    for (uint8_t i = 0; i < 3; ++i) for (uint8_t j = 0; j < 3; ++j) lambda_delay_ms_table[i][j] = s_delay[i][j];
+    ltft_adapt_enable = s_adapt;
+    ltft_learn_div = s_div;
+    fuel_reset_adaptives(); fuel_reset_ltft(); fuel_ltft_accum_reset();
+}

@@ -58,6 +58,23 @@ Limite do que isto prova: a planta é um modelo (atraso mais filtro de primeira 
 Crédito, store e **apply** usam `table_axis_nearest_index` (igual ao highlight do dash VE).  
 Não usar floor da bilineal para trims — mid-bin errava a autoridade (WP0).
 
+### Contaminação entre células (medida em simulação)
+
+`test_fuel_ltft_cell_crossing` (`test/test_fuel.cpp`). A planta tem erro de combustível verdadeiro por nó, o ponto de operação anda entre células por 30 min (tick 100 ms, atraso de transporte aplicado como no firmware, `ltft_learn_div` = 64). A métrica compara cada célula com a média real do erro dentro dela, que é o melhor que uma tabela por vizinho mais próximo consegue.
+
+| Cenário | Erro médio da célula | Pior célula |
+|---------|----------------------|-------------|
+| Salto limpo A (+10%) → B (−5%), atraso 0,2 / 0,6 / 1,5 s | A e B exatas, vizinhas em 0 | — |
+| Campo suave, 0,1 célula/s | 0,45% | 1,6% |
+| Campo suave, 0,5 célula/s | 0,90% | 4,2% |
+| Campo suave, 2 células/s | 1,59% | 5,6% |
+| Campo rugoso (±10% entre nós), 0,5 célula/s | 1,39% | 3,8% |
+
+- Troca de célula por salto não contamina nada: o atraso não importa, porque o crédito vai para a célula do instante atrasado (`fuel_update_stft_delayed`) e o STFT já foi drenado para ela.
+- A contaminação aparece com o ponto andando: cresce com a velocidade (o loop de ~20 s não acompanha o gradiente) e independe do atraso (0,2 a 1,5 s mudam menos de 0,15 pt).
+- Exigir ponto centrado na célula também no IIR do LTFT (como no LEARN) piorou: o STFT guarda a correção da célula anterior e a leva para a próxima. Não adotado.
+- Limite: o campo e o sensor são ideais. Com WBO2 real o ruído soma. Aceitável para o uso previsto (rodar em regime e aprender); em transiente forte (> 1 célula/s) o LTFT aprendido é indicativo, não confiável, e o bake `'Y'` deve ser feito depois de regime.
+
 ## Gates (OEM-lite)
 
 | Gate | Efeito | page0 / default |

@@ -96,6 +96,7 @@ void test_fuel_stft_delayed(void);
 void test_fuel_stft_gain_schedule(void);
 void test_fuel_stft_ltft_cascade(void);
 void test_fuel_cascade_plants(void);
+void test_fuel_ltft_cell_crossing(void);
 void test_injector_scurve(void);
 void test_fuel_delta_p_compensation(void);
 void test_fuel_ltft(void);
