@@ -53,6 +53,24 @@ static inline uint32_t map_window_diag_word(uint8_t slot) noexcept {
 static constexpr uint32_t kParseByteTimeoutMs = 250u;
 static uint32_t g_parse_last_byte_ms = 0u;
 
+// Interlock de 'Y' (grava a VE) e 'Z' (zera o aprendizado): o primeiro byte só arma e
+// responde kAckArmed; o mesmo comando em até kDestructiveArmMs executa. Um byte solto ou
+// ruído no fio não consegue disparar nenhum dos dois.
+static constexpr uint32_t kDestructiveArmMs = 5000u;
+static uint8_t  g_armed_cmd = 0u;
+static uint32_t g_armed_ms = 0u;
+
+static bool destructive_cmd_confirmed(uint8_t cmd) noexcept {
+    const uint32_t now = millis();
+    if (g_armed_cmd == cmd && (now - g_armed_ms) <= kDestructiveArmMs) {
+        g_armed_cmd = 0u;
+        return true;
+    }
+    g_armed_cmd = cmd;
+    g_armed_ms = now;
+    return false;
+}
+
 void parse_byte(uint8_t b) noexcept {
     {
         const uint32_t now = millis();
@@ -160,6 +178,10 @@ void parse_byte(uint8_t b) noexcept {
         if (b == static_cast<uint8_t>('Z')) {
             // LEARN session reset: STFT + accum + LTFT NVM-shadow (dirty) + dbg.
             // Não burn de page0/VE. Sector adaptativo pode flushar LTFT zeros.
+            if (!destructive_cmd_confirmed(b)) {
+                tx_push(kAckArmed);
+                return;
+            }
             ems::engine::fuel_reset_learn_session();
             tx_push(kAckOk);
             return;
@@ -167,6 +189,11 @@ void parse_byte(uint8_t b) noexcept {
         if (b == static_cast<uint8_t>('Y')) {
             // Apply manual: bake-in de todas as células LEARN ready na VE (RAM).
             // Resposta: [ACK][n_commits u8] — n satura em 255.
+            if (!destructive_cmd_confirmed(b)) {
+                tx_push(kAckArmed);   // mantém os 2 bytes da resposta: [kAckArmed][0]
+                tx_push(0u);
+                return;
+            }
             const uint16_t n = ems::engine::fuel_ltft_accum_apply_all_ready();
             tx_push(kAckOk);
             tx_push(static_cast<uint8_t>((n > 255u) ? 255u : n));
@@ -517,6 +544,7 @@ void ui_init() noexcept {
 
     reset_pages();
     reset_parser();
+    g_armed_cmd = 0u;
     ui_update_rt_metrics(0u, 0, 0);
     ui_update_rt_sched_diag(0u, 0u, 0u, 0, 0u);
 }

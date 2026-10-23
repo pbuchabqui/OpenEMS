@@ -243,6 +243,7 @@ void test_page0_survives_reboot(void);
 void test_table_burn_persists_layout(void);
 void test_adaptives_reset_cmd_z(void);
 void test_ltft_apply_cmd_y(void);
+void test_destructive_cmd_interlock(void);
 void test_ltft_hit_matches_ve_dominant_cell(void);
 void test_ltft_accum_page12(void);
 void test_ltft_page_offsets_20(void);

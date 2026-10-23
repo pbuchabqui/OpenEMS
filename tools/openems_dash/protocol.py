@@ -271,6 +271,8 @@ class OpenEMSLink:
         """Zera STFT, acumulador LEARN e shadows LTFT (marca dirty p/ flush
         adaptativo). Não é burn de página de calibração (VE/page0)."""
         ack = self._txn(b"Z", 1)
+        if ack == b"\x02":  # armado: o firmware só executa na repetição (interlock)
+            ack = self._txn(b"Z", 1)
         if ack != b"\x00":
             raise IOError(f"reset_adaptives: ACK {ack.hex()}")
 
@@ -278,6 +280,8 @@ class OpenEMSLink:
     def apply_ltft_ready(self) -> int:
         """Aplica bake-in em todas as células com hits>0. Retorna n_commits (0..255)."""
         resp = self._txn(b"Y", 2)
+        if resp[:1] == b"\x02":  # armado: o firmware só executa na repetição (interlock)
+            resp = self._txn(b"Y", 2)
         if len(resp) < 2 or resp[0] != 0x00:
             raise IOError(f"apply_ltft_ready: resp {resp.hex() if resp else 'empty'}")
         return int(resp[1])

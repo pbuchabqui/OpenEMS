@@ -119,6 +119,8 @@ Clear ~2 s fora do sat. Severidade WARNING.
 |------|-----|--------|
 | `'Z'` | `/api/ltft/reset` e `/api/adaptives/reset` | STFT+LEARN+LTFT shadow zero + flush ASAP |
 | `'Y'` | `/api/ltft/apply-ready` | APPLY all accumulated (hits>0) → VE |
+
+**Interlock.** `'Y'` e `'Z'` só executam na repetição: o 1º byte arma e responde `0x02` (`'Y'` responde `[0x02][0x00]`), o mesmo comando em até 5 s executa e consome o arme; outro comando ou o prazo vencido rearmam. Um byte solto no fio não grava a VE nem zera o aprendizado. O cliente do dash (`protocol.py`) repete sozinho depois do `confirm()`. Não há gate de estado do motor (decisão: só proteção contra byte espúrio).
 | page 10 | — | visualização LTFT mult+add |
 | page 12 | LEARN tab | hits + mean STFT + ready bit |
 

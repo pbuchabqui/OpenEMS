@@ -21,6 +21,7 @@ constexpr uint16_t kTxMask = kTxSize - 1u;
 
 constexpr uint8_t kAckOk = 0x00u;
 constexpr uint8_t kAckErr = 0x01u;
+constexpr uint8_t kAckArmed = 0x02u;  // 'Y'/'Z' armado: repetir o comando para executar
 constexpr uint8_t kCommsTestMagic = 0xAAu;
 
 constexpr char kSignature[] = "OpenEMS_v1.3";

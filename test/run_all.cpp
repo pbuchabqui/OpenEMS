@@ -358,6 +358,7 @@ int main(void) {
     test_table_burn_persists_layout();
     test_adaptives_reset_cmd_z();
     test_ltft_apply_cmd_y();
+    test_destructive_cmd_interlock();
     test_ltft_hit_matches_ve_dominant_cell();
     test_ltft_accum_page12();
     test_ltft_page_offsets_20();

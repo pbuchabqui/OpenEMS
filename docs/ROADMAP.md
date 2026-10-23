@@ -91,7 +91,7 @@ Depende de hardware fora do escopo atual. Só critérios.
 - Proxy de TC por `rpm_dot`: reescrito (`tc_flare_slip_x10` em `torque_manager.cpp`) e testado no host; limiar `tcRpmDotThresh`, bloqueio por subida de APP e hold ainda sem afinação, pedem carro e datalog. Ver `docs/torque_tc.md`.
 - Cascata STFT/LTFT: transferência sem salto nos caminhos multiplicativo e aditivo, e `stft_ki_x1000` = 10 com ~6× de margem de estabilidade em simulação (`closed_loop_fuel.md`). Falta validar com motor e WBO2 (planta real, ruído do sensor, contaminação entre células).
 - Taper de partida do ETB: piso mínimo mantido na pós-partida, duração `etbTaperMs` ou afterstart (`idle_system.md`); testado no host, pede motor para afinar.
-- Desenho em aberto: interlock de `'Y'` e `'Z'`.
+- Interlock de `'Y'`/`'Z'`: arme + execute em 5 s (`closed_loop_fuel.md`), testado no host.
 - Fora do escopo por decisão: placa v2 e seus drivers (`etb_driver.cpp` de 3 pinos para 2 pinos + SPI do L9960T, passo 0 de diagnóstico dos CIs novos).
 
 ## Registrado e deixado de propósito

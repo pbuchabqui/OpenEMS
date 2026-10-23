@@ -317,7 +317,14 @@ void test_adaptives_reset_cmd_z(void) {
     CHECK_TRUE(fuel_get_stft_pct_x10() != 0 || g_stft_integrator_x1000 != 0,
                "STFT/integrador activo antes do Z");
 
-    // Comando legacy 'Z' → ACK 0x00
+    // Comando legacy 'Z': o 1º byte só arma (0x02) e não zera nada
+    ems::app::ui_rx_byte(static_cast<uint8_t>('Z'));
+    ems::app::ui_process();
+    uint8_t arm = 0xFFu;
+    CHECK_TRUE(ems::app::ui_tx_pop(arm), "Z armado produz byte TX");
+    CHECK_EQ(arm, 0x02u, "Z (1ª vez) → ACK armado");
+    CHECK_TRUE(fuel_ltft_accum_hits(mi, ri) > 0u, "Z armado não zera o acumulador");
+    // 2ª vez dentro da janela → executa, ACK 0x00
     ems::app::ui_rx_byte(static_cast<uint8_t>('Z'));
     ems::app::ui_process();
     uint8_t ack = 0xFFu;
@@ -366,6 +373,12 @@ void test_ltft_apply_cmd_y(void) {
     }
     ems::app::ui_rx_byte(static_cast<uint8_t>('Y'));
     ems::app::ui_process();
+    uint8_t a0 = 0xFFu, a1 = 0xFFu;
+    CHECK_TRUE(ems::app::ui_tx_pop(a0) && ems::app::ui_tx_pop(a1), "Y armado produz 2 bytes TX");
+    CHECK_EQ(a0, 0x02u, "Y (1ª vez) → ACK armado");
+    CHECK_EQ(ve_table[mi][ri], 100u, "Y armado não grava a VE");
+    ems::app::ui_rx_byte(static_cast<uint8_t>('Y'));
+    ems::app::ui_process();
     uint8_t b0 = 0xFFu, b1 = 0xFFu;
     bool g0 = ems::app::ui_tx_pop(b0);
     bool g1 = ems::app::ui_tx_pop(b1);
@@ -379,6 +392,29 @@ void test_ltft_apply_cmd_y(void) {
     ve_table[mi][ri] = 88u;
     fuel_reset_adaptives();
     fuel_ltft_accum_reset();
+}
+
+// Interlock de 'Y'/'Z': arma no 1º byte, executa no 2º dentro da janela de 5 s.
+void test_destructive_cmd_interlock(void) {
+    section("protocolo: interlock de 'Y'/'Z' (arme + execute)");
+    ems::app::ui_test_reset();
+    auto send = [](char c) {
+        while (true) { uint8_t d = 0; if (!ems::app::ui_tx_pop(d)) break; }
+        ems::app::ui_rx_byte(static_cast<uint8_t>(c));
+        ems::app::ui_process();
+        uint8_t r = 0xFFu;
+        ems::app::ui_tx_pop(r);
+        while (true) { uint8_t d = 0; if (!ems::app::ui_tx_pop(d)) break; }
+        return r;
+    };
+    CHECK_EQ(send('Z'), 0x02u, "Z solto só arma");
+    host_advance_millis(5100u);                   // janela vencida
+    CHECK_EQ(send('Z'), 0x02u, "Z depois de 5 s arma de novo, não executa");
+    CHECK_EQ(send('Y'), 0x02u, "outro comando não herda o arme do Z");
+    CHECK_EQ(send('Z'), 0x02u, "Z depois de Y volta a armar");
+    host_advance_millis(1000u);
+    CHECK_EQ(send('Z'), 0x00u, "Z repetido em 1 s executa");
+    CHECK_EQ(send('Z'), 0x02u, "execução consome o arme");
 }
 
 // Regressão: hit LEARN na célula dominante do trace VE (não no canto floor).
