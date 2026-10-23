@@ -927,7 +927,7 @@ const PAGE_0_SECTIONS = [
   },
   {
     label: "IDLE",
-    fields: ["etb_idle_rpm_target","etb_idle_min_opening_x10","etb_idle_max_opening_x10"],
+    fields: ["etb_idle_rpm_target","etb_idle_min_opening_x10","etb_idle_max_opening_x10","etb_taper_ms"],
     curves: [
       { title: "Idle target RPM vs CLT", axis: "iac_clt_axis_x10", axisLabel: "CLT (°C)",
         rows: [["iac_idle_target_rpm_x10", "RPM alvo"]] },
@@ -1064,6 +1064,7 @@ const FIELD_LABELS = {
   etb_idle_rpm_target:      "Idle target RPM",
   etb_idle_min_opening_x10: "ETB idle min opening (%)",
   etb_idle_max_opening_x10: "ETB idle max opening (%)",
+  etb_taper_ms:             "Crank→idle taper (ms, 0 = afterstart)",
   iac_clt_axis_x10:         "Eixo CLT — Idle target RPM (°C, 8pts)",
   iac_idle_target_rpm_x10:  "Idle target RPM vs CLT (8pts)",
   // Closed-loop STFT/LTFT
