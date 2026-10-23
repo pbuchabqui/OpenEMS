@@ -291,10 +291,11 @@ constexpr uint8_t kIdleSparkCurvePts = 6u;
 //   61     driveline_max_retard_deg (0-30); 62-63 rpm_min (u16, 0 = keep);
 //   64-65  rpm_max (u16, 0 = keep); 66-67 clt_min_x10 (s16, 0 = keep);
 //   68-69  map_min_bar_x100 (u16, 0 = keep); 70-71 speed min/max km/h (0 = no gate)
+//   72-73  stft_gain_ref_delay_ms (u16); 74-75 tc_flare_app_rise_x10; 76-77 tc_flare_hold_ms (0 = keep)
 //   55-56  fuel_pw_drop_max_us (u16): largest PW fall per 2 ms step, 0 = off
 //   57     overrun_spark_retard_deg (u8, 0-30): retard on a trailing closed throttle, 0 = off
 constexpr uint16_t kDriveabilityPage0Off = 276u;
-constexpr uint16_t kDriveabilityPage0End = 350u;
+constexpr uint16_t kDriveabilityPage0End = 354u;
 extern int16_t  decel_entry_delta_rpm_x10[kDashpotCurvePts];
 extern uint8_t  idle_i_step_recover;
 extern uint8_t  idle_i_step_close;
@@ -322,6 +323,10 @@ extern uint8_t  driveline_speed_max_kmh;
 // kp/ki valem para este atraso; no ponto de operação são multiplicados por
 // ref / atraso (clamp 25%..200%). 0 = desligado (ganhos fixos).
 extern uint16_t stft_gain_ref_delay_ms;
+// TC proxy de rpm_dot (page0 350-353, 0 = mantém o valor): subida de APP que bloqueia o proxy
+// (x10 %, 1-1000) e tempo que o corte segura depois do flare (ms, 1-1000).
+extern uint16_t tc_flare_app_rise_x10;
+extern uint16_t tc_flare_hold_ms;
 void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept;
 void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept;
 

@@ -219,6 +219,15 @@ static uint8_t     g_launch_force = 0u;  // 0=cal, 1=force on, 2=force off
 // TC state
 static uint16_t g_tc_reduction_x10 = 0u;     // current applied cut 0–1000
 static uint32_t g_tc_prev_rpm_x10  = 0u;
+// Proxy de flare (rpm_dot): média rápida e lenta da derivada do rpm, APP filtrado, estado armado.
+static int32_t  g_tc_dot_fast = 0;           // rpm_x10/s, tau 20 ms
+static int32_t  g_tc_dot_slow = 0;           // rpm_x10/s, tau 150 ms (congela com o flare armado)
+static int32_t  g_tc_app_lp_x10 = 0;         // APP x10, tau 100 ms
+static uint16_t g_tc_app_block_ms = 0u;      // tempo restante do bloqueio por subida de APP
+static uint16_t g_tc_flare_hold_left_ms = 0u;
+static uint16_t g_tc_flare_slip_x10 = 0u;    // último slip enquanto armado
+static uint8_t  g_tc_flare_armed = 0u;
+static uint8_t  g_tc_dot_seeded = 0u;
 static uint16_t g_tc_ext_slip_x10  = 0u;     // external slip; 0 = none
 static uint8_t  g_tc_ext_slip_valid = 0u;
 static uint8_t  g_launch_active_latched = 0u;
@@ -271,6 +280,14 @@ void torque_manager_reset() noexcept {
     g_tc_reduction_x10 = 0u;
     g_tc_slew_acc = 0u;
     g_tc_prev_rpm_x10  = 0u;
+    g_tc_dot_fast = 0;
+    g_tc_dot_slow = 0;
+    g_tc_app_lp_x10 = 0;
+    g_tc_app_block_ms = 0u;
+    g_tc_flare_hold_left_ms = 0u;
+    g_tc_flare_slip_x10 = 0u;
+    g_tc_flare_armed = 0u;
+    g_tc_dot_seeded = 0u;
     g_tc_ext_slip_x10  = 0u;
     g_tc_ext_slip_valid = 0u;
     g_launch_active_latched = 0u;
@@ -296,6 +313,94 @@ void torque_tc_clear_external_slip() noexcept {
 
 void torque_launch_force_enable(uint8_t on) noexcept {
     g_launch_force = (on > 2u) ? 0u : on;
+}
+
+// Filtro de primeira ordem em inteiro: y += (x - y) * dt / (tau + dt).
+static int32_t tc_lp(int32_t y, int32_t x, int32_t dt_ms, int32_t tau_ms) noexcept {
+    return y + ((x - y) * dt_ms) / (tau_ms + dt_ms);
+}
+
+// Proxy de patinagem por flare de rpm. Detecta o salto do rpm_dot (média de 20 ms contra
+// média de 150 ms), não o valor absoluto: a aceleração normal sobe devagar e a média lenta a
+// acompanha; a perda de carga da roda é um degrau. Subida rápida de APP bloqueia o proxy, e o
+// flare arma em `thresh` e só solta abaixo de thresh/2, segurando o último slip por hold_ms.
+// Devolve slip em %x10 (0 = sem flare). Os filtros rodam sempre; `gate` só decide a saída.
+static uint16_t tc_flare_slip_x10(uint32_t rpm_x10, uint16_t app_x10, uint16_t dt_ms,
+                                  bool gate) noexcept {
+    const int32_t dt = static_cast<int32_t>(dt_ms);
+    if (rpm_x10 == 0u || g_tc_prev_rpm_x10 == 0u) {
+        // Sem referência anterior (parado ou primeiro tick): zera os filtros.
+        g_tc_dot_fast = 0;
+        g_tc_dot_slow = 0;
+        g_tc_dot_seeded = 0u;
+        g_tc_flare_armed = 0u;
+        g_tc_flare_hold_left_ms = 0u;
+        g_tc_flare_slip_x10 = 0u;
+        g_tc_app_lp_x10 = static_cast<int32_t>(app_x10);
+        return 0u;
+    }
+    const int32_t raw = (static_cast<int32_t>(rpm_x10) - static_cast<int32_t>(g_tc_prev_rpm_x10))
+                        * 1000 / dt;
+    if (g_tc_dot_seeded == 0u) {
+        // Primeira derivada válida: semeia as duas médias, senão a lenta (em 0) vira flare falso.
+        g_tc_dot_fast = raw;
+        g_tc_dot_slow = raw;
+        g_tc_dot_seeded = 1u;
+    }
+    g_tc_dot_fast = tc_lp(g_tc_dot_fast, raw, dt, 20);
+
+    // Subida de APP: o pedal acima da média de 100 ms por mais que o limite bloqueia o proxy.
+    const int32_t rise_lim = static_cast<int32_t>(
+        (tc_flare_app_rise_x10 == 0u || tc_flare_app_rise_x10 > 1000u) ? 200u : tc_flare_app_rise_x10);
+    if (static_cast<int32_t>(app_x10) - g_tc_app_lp_x10 > rise_lim) {
+        g_tc_app_block_ms = 150u;
+    } else if (g_tc_app_block_ms > dt_ms) {
+        g_tc_app_block_ms = static_cast<uint16_t>(g_tc_app_block_ms - dt_ms);
+    } else {
+        g_tc_app_block_ms = 0u;
+    }
+    g_tc_app_lp_x10 = tc_lp(g_tc_app_lp_x10, static_cast<int32_t>(app_x10), dt, 100);
+
+    const int32_t thresh = static_cast<int32_t>(
+        (tc_rpm_dot_thresh < 500u) ? 8000u : tc_rpm_dot_thresh);
+    const int32_t excess = g_tc_dot_fast - g_tc_dot_slow;
+
+    // A média lenta congela com o flare armado ou em espera, senão absorveria o próprio flare.
+    if (g_tc_flare_armed == 0u && g_tc_flare_hold_left_ms == 0u) {
+        g_tc_dot_slow = tc_lp(g_tc_dot_slow, raw, dt, 150);
+    }
+
+    if (!gate || g_tc_app_block_ms > 0u) {
+        g_tc_flare_armed = 0u;
+        g_tc_flare_hold_left_ms = 0u;
+        g_tc_flare_slip_x10 = 0u;
+        return 0u;
+    }
+
+    if (g_tc_flare_armed == 0u) {
+        if (excess > thresh) { g_tc_flare_armed = 1u; }
+    } else if (excess < thresh / 2) {
+        g_tc_flare_armed = 0u;
+        g_tc_flare_hold_left_ms =
+            (tc_flare_hold_ms == 0u || tc_flare_hold_ms > 1000u) ? 100u : tc_flare_hold_ms;
+    }
+
+    if (g_tc_flare_armed != 0u) {
+        // Rampa de thresh/2 (0%) a 1,5 thresh (100%); 1 como mínimo para o corte não soltar armado.
+        int32_t slip = ((excess - thresh / 2) * 1000) / thresh;
+        if (slip < 1) { slip = 1; }
+        if (slip > 1000) { slip = 1000; }
+        g_tc_flare_slip_x10 = static_cast<uint16_t>(slip);
+        g_tc_flare_hold_left_ms = 0u;
+        return g_tc_flare_slip_x10;
+    }
+    if (g_tc_flare_hold_left_ms > 0u) {
+        g_tc_flare_hold_left_ms = (g_tc_flare_hold_left_ms > dt_ms)
+            ? static_cast<uint16_t>(g_tc_flare_hold_left_ms - dt_ms) : 0u;
+        return g_tc_flare_slip_x10;
+    }
+    g_tc_flare_slip_x10 = 0u;
+    return 0u;
 }
 
 TorqueOutput torque_manager_update(
@@ -482,12 +587,9 @@ TorqueOutput torque_manager_update(
         const uint32_t rpm_min = (tc_rpm_min_x10 < 1000u) ? 20000u : tc_rpm_min_x10;
         const uint32_t now_ms = ::millis();
 
-        // rpm_dot (rpm_x10 per second)
-        int32_t rpm_dot = 0;
-        if (g_tc_prev_rpm_x10 != 0u && dt > 0u) {
-            rpm_dot = (static_cast<int32_t>(rpm) - static_cast<int32_t>(g_tc_prev_rpm_x10))
-                      * 1000 / static_cast<int32_t>(dt);
-        }
+        // Proxy de flare: filtros sempre ativos; a saída só vale com o gate abaixo.
+        const bool flare_gate = en && app >= app_min && rpm >= rpm_min;
+        const uint16_t flare_slip_x10 = tc_flare_slip_x10(rpm, app, dt, flare_gate);
         g_tc_prev_rpm_x10 = rpm;
 
         // Latch CAN speeds for diagnostics / speed limiter
@@ -524,18 +626,11 @@ TorqueOutput torque_manager_update(
             // fall through to rpm_dot below when slip still 0.
         }
 
-        if (slip_x10 == 0u && en && app >= app_min && rpm >= rpm_min && rpm_dot > 0
+        if (slip_x10 == 0u && flare_slip_x10 > 0u
             && g_tc_ext_slip_valid == 0u
             && !(have_whl && have_veh)) {
-            // RPM-flare proxy only when CAN dual-speed slip path is not active
-            const int32_t thresh = static_cast<int32_t>(
-                (tc_rpm_dot_thresh < 500u) ? 8000u : tc_rpm_dot_thresh);
-            if (rpm_dot > thresh) {
-                const int32_t excess = rpm_dot - thresh;
-                int32_t slip = (excess * 1000) / thresh;
-                if (slip > 1000) { slip = 1000; }
-                slip_x10 = static_cast<uint16_t>(slip);
-            }
+            // Proxy de flare só quando o slip CAN de duas velocidades não está ativo
+            slip_x10 = flare_slip_x10;
         }
 
         // Vehicle speed limiter (CAN body speed)

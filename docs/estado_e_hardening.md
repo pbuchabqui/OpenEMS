@@ -39,7 +39,7 @@
 - TS `openems.ini`: page0 80–85 closed-loop/LTFT; 175 layout ver; 176–190 LTFT authority/LEARN;
   191–215 Launch/TC; 216–251 CAN RX map (gear/vehicle/driven wheel); `ochBlockSize` = 86.
 - TC slip: CAN wheel vs vehicle via `vehicle_inputs` (bridge → can_rx_map) →
-  torque cut; else RPM-dot proxy.
+  torque cut; else flare proxy (`docs/torque_tc.md`).
 
 ### Pinout — estado
 

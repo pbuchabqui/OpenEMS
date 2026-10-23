@@ -285,6 +285,28 @@ void test_driveline_page0(void) {
         CHECK_EQ(stft_gain_ref_delay_ms, 2000u, "STFT gain ref delay limitado a 2000 ms");
         stft_gain_ref_delay_ms = s_ref;
     }
+    {
+        const uint16_t s_rise = tc_flare_app_rise_x10;
+        const uint16_t s_hold = tc_flare_hold_ms;
+        tc_flare_app_rise_x10 = 300u;
+        tc_flare_hold_ms = 250u;
+        std::memset(page, 0, sizeof(page));
+        driveability_serialize_to_page0(page, sizeof(page));
+        CHECK_EQ(page[350], 300u & 0xFFu, "TC flare APP rise low byte (350)");
+        CHECK_EQ(page[351], 300u >> 8, "TC flare APP rise high byte (351)");
+        CHECK_EQ(page[352], 250u, "TC flare hold low byte (352)");
+        tc_flare_app_rise_x10 = 0u;
+        tc_flare_hold_ms = 0u;
+        driveability_apply_page0(page, sizeof(page));
+        CHECK_EQ(tc_flare_app_rise_x10, 300u, "round trip: TC flare APP rise");
+        CHECK_EQ(tc_flare_hold_ms, 250u, "round trip: TC flare hold");
+        page[350] = 0u; page[351] = 0u; page[352] = 0xFFu; page[353] = 0xFFu;
+        driveability_apply_page0(page, sizeof(page));
+        CHECK_EQ(tc_flare_app_rise_x10, 300u, "TC flare APP rise 0 = mantém");
+        CHECK_EQ(tc_flare_hold_ms, 1000u, "TC flare hold limitado a 1000 ms");
+        tc_flare_app_rise_x10 = s_rise;
+        tc_flare_hold_ms = s_hold;
+    }
     // Zero in a "keep the default" field leaves the value alone; the retard is clamped.
     driveline_dd_thresh_rpm_x10 = 321u;
     page[kDriveabilityPage0Off + 59] = 0u; page[kDriveabilityPage0Off + 60] = 0u;

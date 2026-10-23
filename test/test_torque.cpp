@@ -728,3 +728,104 @@ void test_launch_tc_page0_roundtrip(void) {
 
 
 
+
+// Proxy de TC por flare de rpm (rpm_dot): ver torque_manager.cpp, tc_flare_slip_x10.
+void test_torque_tc_flare_proxy(void) {
+    section("torque_manager: TC flare proxy (rpm_dot)");
+    using ems::engine::torque_manager_update;
+    etb_cal_valid = 1u;
+    ems::engine::tc_enable = 1u;
+    ems::engine::tc_max_reduction_pct_x10 = 800u;
+    ems::engine::tc_spark_retard_max_deg = 12u;
+    ems::engine::tc_reduction_rate_x10 = 10000u;
+    ems::engine::tc_app_min_x10 = 100u;
+    ems::engine::tc_rpm_min_x10 = 10000u;
+    ems::engine::tc_rpm_dot_thresh = 8000u;
+    ems::engine::tc_flare_app_rise_x10 = 200u;
+    ems::engine::tc_flare_hold_ms = 100u;
+
+    ems::drv::CkpSnapshot snap{};
+    ems::drv::SensorData sens{};
+    uint16_t max_red = 0u;
+
+    // rpm_dot em rpm_x10/s para o tick de 2 ms: delta = dot * 2 / 1000
+    auto run = [&](int ticks, int32_t dot, int32_t& rpm) {
+        for (int i = 0; i < ticks; ++i) {
+            rpm += dot * 2 / 1000;
+            snap.rpm_x10 = static_cast<uint32_t>(rpm);
+            const auto o = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+            if (o.tc_reduction_pct_x10 > max_red) { max_red = o.tc_reduction_pct_x10; }
+        }
+    };
+    auto last = [&]() {
+        return torque_manager_update(snap, sens, true, false, false, 8500u, 2u)
+            .tc_reduction_pct_x10;
+    };
+
+    // Subida normal de 1500 rpm/s (15000 rpm_x10/s, acima do limiar absoluto antigo): sem corte.
+    {
+        ems::engine::torque_manager_reset();
+        sens.app_pct_x10 = 800u;
+        int32_t rpm = 30000;
+        max_red = 0u;
+        for (int step = 1; step <= 10; ++step) { run(20, 1500 * step, rpm); }  // rampa em 400 ms
+        run(750, 15000, rpm);
+        CHECK_EQ(max_red, 0u, "aceleração normal não corta");
+    }
+    // Flare: a roda perde carga e o rpm_dot salta 30000 rpm_x10/s.
+    {
+        ems::engine::torque_manager_reset();
+        sens.app_pct_x10 = 800u;
+        int32_t rpm = 30000;
+        max_red = 0u;
+        run(300, 15000, rpm);
+        CHECK_EQ(max_red, 0u, "sem corte antes do flare");
+        run(100, 45000, rpm);
+        CHECK_TRUE(max_red > 0u, "flare corta");
+        const uint16_t peak = max_red;
+        run(20, 15000, rpm);   // flare acabou: o corte segura por hold_ms
+        CHECK_TRUE(last() > 0u, "corte segura depois do flare");
+        run(300, 15000, rpm);
+        CHECK_EQ(last(), 0u, "corte solta depois do hold");
+        CHECK_TRUE(peak <= 800u, "corte limitado por tc_max_reduction");
+    }
+    // Pisão no pedal com salto de rpm_dot junto: bloqueado.
+    {
+        ems::engine::torque_manager_reset();
+        sens.app_pct_x10 = 100u;
+        int32_t rpm = 30000;
+        max_red = 0u;
+        run(300, 0, rpm);
+        sens.app_pct_x10 = 900u;
+        run(50, 45000, rpm);
+        run(100, 0, rpm);
+        CHECK_EQ(max_red, 0u, "degrau de APP bloqueia o proxy");
+    }
+    // Ruído de ±0,8 rpm de um tick para o outro: sem corte.
+    {
+        ems::engine::torque_manager_reset();
+        sens.app_pct_x10 = 800u;
+        int32_t rpm = 30000;
+        max_red = 0u;
+        for (int i = 0; i < 500; ++i) {
+            rpm += (i & 1) ? 8 : -8;
+            snap.rpm_x10 = static_cast<uint32_t>(rpm);
+            const auto o = torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+            if (o.tc_reduction_pct_x10 > max_red) { max_red = o.tc_reduction_pct_x10; }
+        }
+        CHECK_EQ(max_red, 0u, "ruído de rpm não dispara");
+    }
+    // TC desligado: o flare não corta.
+    {
+        ems::engine::torque_manager_reset();
+        ems::engine::tc_enable = 0u;
+        sens.app_pct_x10 = 800u;
+        int32_t rpm = 30000;
+        max_red = 0u;
+        run(300, 15000, rpm);
+        run(100, 45000, rpm);
+        CHECK_EQ(max_red, 0u, "tc_enable=0 não corta");
+    }
+    ems::engine::torque_manager_reset();
+    ems::engine::tc_enable = 0u;
+}
