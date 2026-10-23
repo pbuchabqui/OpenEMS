@@ -71,6 +71,13 @@
         <button id="benchBtn" type="button" title="Bench-mode: CLT/IAT/λ simulated + relaxed CKP (HIL)">BENCH</button>
         <button id="logBtn" type="button" title="Record datalog CSV">● LOG</button>
         <button id="logExportBtn" type="button" title="Export log for analysis">⇩ EXPORT</button>
+        <button id="sdLogBtn" type="button" title="Datalog no cartão SD da ECU (comando L)" hidden>SD LOG</button>
+        <select id="sdLogRate" title="Taxa do datalog SD" hidden>
+          <option value="0">100 Hz</option>
+          <option value="1">200 Hz</option>
+          <option value="2">500 Hz</option>
+          <option value="3">1 kHz</option>
+        </select>
         <button id="logMlgBtn" type="button" title="Download último log em MLG (MegaLogViewer)">⇩ MLG</button>
       </div>
     </div>

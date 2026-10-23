@@ -10,6 +10,28 @@ const path = require("node:path");
 
 const helpers = require(path.join(__dirname, "..", "static", "js", "helpers.js"));
 
+describe("sdLogView", () => {
+  const v = helpers.sdLogView;
+  it("esconde o botão sem resposta do firmware", () => {
+    assert.equal(v(null).hidden, true);
+  });
+  it("sem cartão, com falha e cheio não oferecem gravar", () => {
+    assert.match(v({ sd: "absent", log: "off", enabled: true }).text, /sem cartão/);
+    assert.equal(v({ sd: "ready", log: "fault", enabled: true }).cls, "err");
+    assert.equal(v({ sd: "fault", log: "off", enabled: true }).cls, "err");
+    assert.equal(v({ sd: "ready", log: "full", enabled: true }).cls, "err");
+  });
+  it("mostra a taxa quando grava e o convite quando parado", () => {
+    const on = v({ sd: "ready", log: "active", enabled: true, rate_hz: 1000 });
+    assert.equal(on.cls, "rec");
+    assert.equal(on.text, "■ SD 1 kHz");
+    assert.equal(v({ sd: "ready", log: "active", enabled: true, rate_hz: 200 }).text, "■ SD 200 Hz");
+    const off = v({ sd: "ready", log: "active", enabled: false, rate_hz: 100 });
+    assert.equal(off.cls, "");
+    assert.equal(off.text, "● SD LOG");
+  });
+});
+
 describe("heatColor / heatTextColor", () => {
   it("returns hsl strings spanning blue→red", () => {
     const lo = helpers.heatColor(0, 0, 100);

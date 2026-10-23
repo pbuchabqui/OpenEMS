@@ -2029,6 +2029,37 @@ $("#logBtn").onclick = async () => {
   } catch (e) { toast(e.message, true); }
 };
 
+/* ── datalog no cartão SD da ECU (comando 'L') ──────────────────────────── */
+let sdLogState = null;
+function renderSdLog(s) {
+  sdLogState = s;
+  const v = H.sdLogView(s);
+  const btn = $("#sdLogBtn"), sel = $("#sdLogRate");
+  btn.hidden = v.hidden;
+  sel.hidden = v.hidden || v.cls === "off" || v.cls === "err";
+  btn.textContent = v.text;
+  btn.title = v.title;
+  btn.classList.remove("rec", "err", "off");
+  if (v.cls) btn.classList.add(v.cls);
+  btn.disabled = v.cls === "off";
+  if (s && s.enabled && !sel.matches(":focus")) sel.value = String(s.rate_code | 0);
+}
+async function refreshSdLog() {
+  if (!INFO || !INFO.connected) { renderSdLog(null); return; }
+  try { renderSdLog(await api("/api/datalog")); }
+  catch (e) { renderSdLog(null); }
+}
+async function setSdLog(enable) {
+  try {
+    renderSdLog(await api(`/api/datalog?enable=${enable}&rate=${$("#sdLogRate").value}`, "POST"));
+    toast(enable ? "datalog SD ligado" : "datalog SD desligado (bloco parcial gravado)");
+  } catch (e) { toast(e.message, true); }
+}
+$("#sdLogBtn").onclick = () => setSdLog(!(sdLogState && sdLogState.enabled));
+$("#sdLogRate").onchange = () => { if (sdLogState && sdLogState.enabled) setSdLog(true); };
+setInterval(refreshSdLog, 3000);
+setTimeout(refreshSdLog, 800);
+
 $("#logExportBtn").onclick = () => window.open("/api/log/export");
 const mlgBtn = $("#logMlgBtn");
 if (mlgBtn) mlgBtn.onclick = () => window.open("/api/log/download.mlg");

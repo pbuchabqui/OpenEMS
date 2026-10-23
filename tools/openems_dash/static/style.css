@@ -222,6 +222,26 @@ button.primary:hover { background: rgba(240,160,48,0.1); }
   background: rgba(240,67,67,0.1);
   font-weight: 700;
 }
+#sdLogBtn.rec {
+  color: var(--err);
+  border-color: var(--err);
+  background: rgba(240,67,67,0.1);
+  font-weight: 700;
+}
+#sdLogBtn.err {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+#sdLogBtn.off { opacity: 0.6; }
+#sdLogRate {
+  width: 100%;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 8px;
+  font: 11px var(--font);
+}
 #benchBtn.on {
   color: var(--warn);
   border-color: var(--warn);

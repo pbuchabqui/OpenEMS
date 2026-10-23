@@ -60,7 +60,7 @@ Taxas (comando `L`, abaixo): 100 Hz (3,2 KB/s, padrão), 200, 500 ou 1 kHz (32 K
 
 ## Comando e contadores
 
-Comando `L` do protocolo (1 byte de argumento): bit 0 = ligado, bits 1–2 = taxa (0 a 3 = 100/200/500/1000 Hz), bit 7 = só consultar. Resposta: `[ACK][estado do log][estado do SD]`. O log liga com 100 Hz no boot e a escolha não é gravada em NVM. Ao desligar, o bloco parcial é gravado (o byte 496 diz quantos registros ele tem), então nada se perde.
+Comando `L` do protocolo (1 byte de argumento): bit 0 = ligado, bits 1–2 = taxa (0 a 3 = 100/200/500/1000 Hz), bit 7 = só consultar. Resposta: `[ACK][estado do log][estado do SD][ligado | taxa<<1]`. O log liga com 100 Hz no boot e a escolha não é gravada em NVM. Ao desligar, o bloco parcial é gravado (o byte 496 diz quantos registros ele tem), então nada se perde.
 
 No dash: `GET /api/datalog` consulta e `POST /api/datalog?enable=true&rate=3` liga e escolhe a taxa (`OpenEMSLink.datalog_control()`).
 

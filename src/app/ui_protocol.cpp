@@ -152,7 +152,8 @@ void parse_byte(uint8_t b) noexcept {
         }
         if (b == static_cast<uint8_t>('L')) {
             // Datalog SD: 1 byte de argumento (bit0 = ligado, bits1-2 = taxa 0..3 =
-            // 100/200/500/1000 Hz, bit7 = só consultar). Resposta: [ACK][estado do log][estado do SD].
+            // 100/200/500/1000 Hz, bit7 = só consultar). Resposta: [ACK][estado do log][estado do SD]
+            // [ligado | taxa<<1].
             g_state = ParseState::LOG_ARG;
             return;
         }
@@ -388,6 +389,7 @@ void parse_byte(uint8_t b) noexcept {
         tx_push(kAckOk);
         tx_push(static_cast<uint8_t>(dl.state));
         tx_push(dl.sd_state);
+        tx_push(static_cast<uint8_t>((dl.enabled ? 1u : 0u) | (dl.rate_code << 1u)));
         reset_parser();
         return;
     }

@@ -273,7 +273,8 @@ void test_datalog_protocol_cmd_l(void) {
     const uint8_t on_1khz[2] = {'L', 0x07u};      // ligado, taxa 3
     ui_feed(on_1khz, 2u);
     uint16_t n = ui_drain(resp, sizeof(resp));
-    CHECK_TRUE(n == 3u && resp[0] == 0x00u, "'L' responde ACK + 2 bytes");
+    CHECK_TRUE(n == 4u && resp[0] == 0x00u, "'L' responde ACK + 3 bytes");
+    CHECK_EQ(resp[3], 0x07u, "'L': 4º byte = ligado | taxa<<1");
     CHECK_EQ(resp[1], static_cast<uint8_t>(DatalogState::ACTIVE), "'L': estado do log = ACTIVE");
     CHECK_EQ(resp[2], static_cast<uint8_t>(SdState::READY), "'L': estado do SD = READY");
     CHECK_EQ(datalog_period_ms(), 1u, "'L' 0x07: 1 kHz");
@@ -287,7 +288,8 @@ void test_datalog_protocol_cmd_l(void) {
     const uint8_t query[2] = {'L', 0x87u};        // só consulta: nada muda
     ui_feed(query, 2u);
     n = ui_drain(resp, sizeof(resp));
-    CHECK_TRUE(n == 3u, "'L' consulta responde igual");
+    CHECK_TRUE(n == 4u, "'L' consulta responde igual");
+    CHECK_EQ(resp[3], 0x00u, "consulta: 4º byte reflete desligado e taxa 0");
     CHECK_FALSE(datalog_stats().enabled, "consulta não liga");
     CHECK_EQ(datalog_period_ms(), 10u, "consulta não muda a taxa");
 

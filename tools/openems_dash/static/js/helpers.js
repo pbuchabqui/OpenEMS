@@ -135,7 +135,34 @@
     return out;
   }
 
+  /**
+   * Label/classe do botão SD LOG a partir do GET /api/datalog.
+   * s = {log, sd, enabled, rate_hz} ou null (ECU sem resposta / firmware antigo).
+   */
+  function sdLogView(s) {
+    if (!s) return { text: "SD LOG", cls: "off", hidden: true, title: "Datalog SD indisponível" };
+    if (s.sd === "absent" || s.sd === "init") {
+      return { text: "SD: sem cartão", cls: "off", hidden: false, title: "Nenhum cartão SDHC pronto" };
+    }
+    if (s.sd === "fault" || s.log === "fault") {
+      return { text: "SD: falha", cls: "err", hidden: false, title: "Cartão ou gravação com falha" };
+    }
+    if (s.log === "full") {
+      return { text: "SD: cheio", cls: "err", hidden: false, title: "Região do cartão esgotada" };
+    }
+    if (s.log === "search") {
+      return { text: "SD: lendo…", cls: "off", hidden: false, title: "Procurando o fim do log anterior" };
+    }
+    if (s.enabled) {
+      const hz = Number(s.rate_hz) || 0;
+      return { text: "■ SD " + (hz >= 1000 ? hz / 1000 + " kHz" : hz + " Hz"), cls: "rec",
+               hidden: false, title: "Gravando no cartão SD. Clique para parar" };
+    }
+    return { text: "● SD LOG", cls: "", hidden: false, title: "Iniciar datalog no cartão SD" };
+  }
+
   return {
+    sdLogView,
     offsetFromTeeth,
     rejectedFields,
     heatColor,

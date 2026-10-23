@@ -58,8 +58,12 @@ class TestSimEcu(unittest.TestCase):
         st = link.datalog_control()
         self.assertIn(st["log"], ("off", "search", "active"))
         self.assertIn(st["sd"], ("absent", "ready"))
-        link.datalog_control(enable=False, rate_code=3)
-        self.assertEqual(link.datalog_control()["log"], st["log"])   # consulta não muda nada
+        self.assertTrue(st["enabled"])
+        self.assertEqual(st["rate_hz"], 100)
+        off = link.datalog_control(enable=False, rate_code=3)
+        self.assertFalse(off["enabled"])
+        self.assertEqual(off["rate_hz"], 1000)
+        self.assertEqual(link.datalog_control(), off)   # consulta não muda nada
         with self.assertRaises(ValueError):
             link.datalog_control(enable=True, rate_code=7)
 

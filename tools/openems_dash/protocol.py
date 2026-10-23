@@ -296,13 +296,17 @@ class OpenEMSLink:
             if rate_code is not None and not 0 <= rate_code <= 3:
                 raise ValueError("rate_code deve estar entre 0 e 3")
             arg = (1 if enable is None or enable else 0) | ((rate_code or 0) << 1)
-        resp = self._txn(b"L" + bytes([arg]), 3)
-        if len(resp) < 3 or resp[0] != 0x00:
+        resp = self._txn(b"L" + bytes([arg]), 4)
+        if len(resp) < 4 or resp[0] != 0x00:
             raise IOError(f"datalog_control: resp {resp.hex() if resp else 'empty'}")
-        log_state, sd_state = resp[1], resp[2]
+        log_state, sd_state, flags = resp[1], resp[2], resp[3]
+        rate_code = (flags >> 1) & 0x03
         return {
             "log": self.DATALOG_STATES[log_state] if log_state < len(self.DATALOG_STATES) else log_state,
             "sd": self.DATALOG_SD[sd_state] if sd_state < len(self.DATALOG_SD) else sd_state,
+            "enabled": bool(flags & 1),
+            "rate_code": rate_code,
+            "rate_hz": self.DATALOG_RATES_HZ[rate_code],
         }
 
     # ── contadores de debug ('D': 41 × u32 LE = 164 B) ──────────────────
