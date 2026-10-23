@@ -209,7 +209,11 @@ static uint32_t idle_rpm_upper_x10() noexcept {
     return u;
 }
 
+// Blend crank_open → idle I over this time; the floor then holds at the idle I
+// (never below etb_idle_min) until the taper ends: etb_taper_ms, or the
+// afterstart enrichment when that is 0 (capped at kCrankTaperMaxMs).
 constexpr uint32_t kCrankToIdleTaperMs = 1000u;
+constexpr uint32_t kCrankTaperMaxMs = 10000u;
 
 // Launch state machine
 enum class LaunchState : uint8_t { Idle = 0, Armed = 1, Active = 2 };
@@ -737,7 +741,10 @@ TorqueOutput torque_manager_update(
         }
     } else if (allow_idle_air && g_crank_taper_active) {
         const uint32_t elapsed = now_ms - g_crank_taper_start_ms;
-        if (elapsed >= kCrankToIdleTaperMs) {
+        const bool done = (elapsed >= kCrankTaperMaxMs) ||
+            (elapsed >= kCrankToIdleTaperMs &&
+             (etb_taper_ms != 0u ? elapsed >= etb_taper_ms : !is_afterstart()));
+        if (done) {
             g_crank_taper_active = false;
         } else {
             // Linear blend crank_open → current idle I floor.
@@ -745,8 +752,9 @@ TorqueOutput torque_manager_update(
                 ? idle_min
                 : (g_idle_air_int_x10 > idle_max ? idle_max : g_idle_air_int_x10);
             const int32_t from = g_crank_taper_from_x10;
+            const uint32_t blend_ms = (elapsed < kCrankToIdleTaperMs) ? elapsed : kCrankToIdleTaperMs;
             const int32_t blended = from
-                + ((to - from) * static_cast<int32_t>(elapsed))
+                + ((to - from) * static_cast<int32_t>(blend_ms))
                   / static_cast<int32_t>(kCrankToIdleTaperMs);
             const uint16_t floor = static_cast<uint16_t>(
                 blended < 0 ? 0 : (blended > 1000 ? 1000 : blended));
@@ -789,9 +797,12 @@ TorqueOutput torque_manager_update(
     } else if (!cranking_now &&
                (sensors.app_pct_x10 >= etb_idle_open_pct_x10 || rev_limiting ||
                 launch_active != 0u || !g_idle_phase)) {
-        if (g_idle_air_int_x10 > 0) {
+        // The idle I keeps its minimum while the crank taper is running, so the
+        // floor does not close to 0 and step back when the idle band is re-entered.
+        const int32_t int_floor = (g_crank_taper_active && allow_idle_air) ? idle_min : 0;
+        if (g_idle_air_int_x10 > int_floor) {
             g_idle_air_int_x10 -= down_step;
-            if (g_idle_air_int_x10 < 0) { g_idle_air_int_x10 = 0; }
+            if (g_idle_air_int_x10 < int_floor) { g_idle_air_int_x10 = int_floor; }
         }
     }
 

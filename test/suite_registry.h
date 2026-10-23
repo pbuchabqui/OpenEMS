@@ -115,6 +115,7 @@ void test_ign_idle_spark_correction(void);
 void test_etb_cpp_update(void);
 void test_torque_manager_cpp_update(void);
 void test_torque_tc_flare_proxy(void);
+void test_torque_crank_taper(void);
 void test_launch_tc_page0_roundtrip(void);
 void test_ckp_cmp_glitch_count(void);
 void test_sensors_on_tooth(void);

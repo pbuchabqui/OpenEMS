@@ -716,6 +716,7 @@ PAGE0_FIELDS = [
     ("stft_gain_ref_delay_ms",      348, 2, "H", 1.0),   # ms; 0 = fixed STFT gains
     ("tc_flare_app_rise_x10",       350, 2, "H", 0.1),   # %; APP rise that blocks the TC flare proxy
     ("tc_flare_hold_ms",            352, 2, "H", 1.0),   # ms
+    ("etb_taper_ms",                354, 2, "H", 1.0),   # ms; 0 = afterstart duration
 ]
 
 FIELD_PAGES = {0: PAGE0_FIELDS, 5: PAGE5_FIELDS, 6: PAGE6_FIELDS, 7: PAGE7_FIELDS}

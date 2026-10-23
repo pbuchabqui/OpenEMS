@@ -14,7 +14,7 @@
 
 - Cranking/idle harden: `quick_crank_update` 1×/tick (HALF+FULL); `is_cranking`/`is_afterstart`
   gates AE/STFT/X-τ (não só RPM&lt;exit); flood-clear APP≥70% corta fuel+prime; ETB open-loop
-  em crank (`etb_idle_max`) + taper 1 s + histerese RPM de idle phase.
+  em crank (`etb_idle_max`) + taper (blend 1 s, piso mínimo até `etbTaperMs`/afterstart, `idle_system.md`) + histerese RPM de idle phase.
 - Fuel angular: FULL = VE/running; **HALF+cranking** = batch SIMULTANEOUS (REQ×mult+min_pw,
   sem VE/STFT/AE); corte imediato em exit-crank / flood / protect / !sync.
 - Prime + protect: prime bloqueado se flood/protect/half-lockout/rev-limit; `force_output`

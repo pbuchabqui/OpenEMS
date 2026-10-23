@@ -42,8 +42,14 @@ nudge ignition timing for fast-response trim.
 
 - **Hysteresis**: Re-enter idle when RPM drops below `target + idlePidRpmUpperLimit`, but
   declare coasting only above `target + 1.5 * idlePidRpmUpperLimit` to avoid flapping.
-- **Cranking Taper**: Open-loop position is linearly blended from cranking value to running
-  value across a CLT-dependent revolution count.
+- **Cranking Taper**: After the crank exit the ETB floor is blended over 1 s from the
+  cranking opening (`etb_idle_max`) to the idle I, then held there (never below
+  `etb_idle_min`, even above the idle RPM band) until the taper ends. The end is
+  `etbTaperMs` (page 0, 354) or, when 0, the end of the afterstart enrichment (CLT
+  dependent, capped at 10 s). The idle I does not decay below `etb_idle_min` while the
+  taper runs, so the floor no longer closes to 0 % and steps back at idle re-entry. After
+  the taper the blade follows the pedal and the idle RPM band as usual. Host-tested only;
+  the real RPM response needs the engine or the ETB on the bench.
 - **A/C Pre-Bump**: We respond to the A/C *button* rather than the relay, because the relay
   is intentionally delayed so airflow bump arrives before the compressor load.
 - **Dashpot**: After a throttle release, TPS used for the taper is held and then decayed

@@ -307,6 +307,23 @@ void test_driveline_page0(void) {
         tc_flare_app_rise_x10 = s_rise;
         tc_flare_hold_ms = s_hold;
     }
+    {
+        const uint16_t s_taper = etb_taper_ms;
+        etb_taper_ms = 2500u;
+        std::memset(page, 0, sizeof(page));
+        driveability_serialize_to_page0(page, sizeof(page));
+        CHECK_EQ(page[354], 2500u & 0xFFu, "ETB taper low byte (354)");
+        etb_taper_ms = 0u;
+        driveability_apply_page0(page, sizeof(page));
+        CHECK_EQ(etb_taper_ms, 2500u, "round trip: ETB taper");
+        page[354] = 0xFFu; page[355] = 0xFFu;
+        driveability_apply_page0(page, sizeof(page));
+        CHECK_EQ(etb_taper_ms, 10000u, "ETB taper limitado a 10000 ms");
+        page[354] = 0u; page[355] = 0u;
+        driveability_apply_page0(page, sizeof(page));
+        CHECK_EQ(etb_taper_ms, 0u, "ETB taper 0 = segue o afterstart");
+        etb_taper_ms = s_taper;
+    }
     // Zero in a "keep the default" field leaves the value alone; the retard is clamped.
     driveline_dd_thresh_rpm_x10 = 321u;
     page[kDriveabilityPage0Off + 59] = 0u; page[kDriveabilityPage0Off + 60] = 0u;

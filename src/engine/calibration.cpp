@@ -509,6 +509,7 @@ uint8_t  driveline_speed_max_kmh = 0u;
 uint16_t stft_gain_ref_delay_ms = 0u;
 uint16_t tc_flare_app_rise_x10 = 200u;  // 20% de APP em ~100 ms bloqueia o proxy
 uint16_t tc_flare_hold_ms = 100u;
+uint16_t etb_taper_ms = 0u;
 
 namespace {
 constexpr uint16_t kDriveabilityPwMaxUs = 20000u;  // 20 ms
@@ -617,6 +618,8 @@ void driveability_apply_page0(const uint8_t* page0, uint16_t len) noexcept {
     const uint16_t flare_hold = rd_u16(p + 76);
     if (flare_rise != 0u) { tc_flare_app_rise_x10 = (flare_rise > 1000u) ? 1000u : flare_rise; }
     if (flare_hold != 0u) { tc_flare_hold_ms = (flare_hold > 1000u) ? 1000u : flare_hold; }
+    const uint16_t taper = rd_u16(p + 78);
+    etb_taper_ms = (taper == 0u) ? 0u : (taper < 100u ? 100u : (taper > 10000u ? 10000u : taper));
 }
 
 void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
@@ -654,6 +657,7 @@ void driveability_serialize_to_page0(uint8_t* page0, uint16_t len) noexcept {
     wr_u16(p + 72, stft_gain_ref_delay_ms);
     wr_u16(p + 74, tc_flare_app_rise_x10);
     wr_u16(p + 76, tc_flare_hold_ms);
+    wr_u16(p + 78, etb_taper_ms);
 }
 
 void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept {

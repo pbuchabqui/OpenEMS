@@ -829,3 +829,63 @@ void test_torque_tc_flare_proxy(void) {
     ems::engine::torque_manager_reset();
     ems::engine::tc_enable = 0u;
 }
+
+// Taper cranking → marcha lenta do ETB: piso mínimo na pós-partida, sem fechar a lâmina.
+void test_torque_crank_taper(void) {
+    section("torque_manager: crank→idle taper holds the idle minimum");
+    using ems::engine::torque_manager_update;
+    etb_cal_valid = 1u;
+    ems::engine::etb_idle_min_opening_x10 = 30u;
+    ems::engine::etb_idle_max_opening_x10 = 80u;
+    ems::engine::etb_idle_open_pct_x10 = 80u;
+    ems::engine::idle_spark_window_above_target_x10 = 4000u;
+    ems::drv::CkpSnapshot snap{};
+    ems::drv::SensorData sens{};
+    sens.app_pct_x10 = 0u;
+
+    // Pós-partida: rpm a 1700 (acima da banda de marcha lenta) caindo até o alvo em 3 s.
+    // Devolve o menor alvo da lâmina entre 0 e window_ms, e o alvo final em 'final_out'.
+    auto run = [&](uint16_t taper_ms, uint32_t window_ms, uint32_t hold_rpm_x10,
+                   uint16_t& final_out) -> uint16_t {
+        ems::engine::etb_taper_ms = taper_ms;
+        ems::engine::torque_manager_reset();
+        ems::engine::quick_crank_reset();
+        uint32_t t = 1000u;
+        host_set_millis(t);
+        ems::engine::quick_crank_update(t, 3000u, true, 800, 8);
+        snap.rpm_x10 = 3000u;
+        torque_manager_update(snap, sens, true, false, false, 8500u, 2u);
+        t += 100u;
+        host_set_millis(t);
+        ems::engine::quick_crank_update(t, 17000u, true, 800, 8);
+        const uint32_t t0 = t;
+        uint16_t lowest = 1000u;
+        uint16_t out = 0u;
+        for (uint32_t el = 0u; el < 8000u; el += 2u) {
+            t = t0 + el;
+            host_set_millis(t);
+            ems::engine::quick_crank_update(t, snap.rpm_x10, true, 800, 8);
+            const uint32_t ramp = (el < 3000u) ? (17000u - (17000u - 8500u) * el / 3000u) : 8500u;
+            snap.rpm_x10 = (hold_rpm_x10 != 0u) ? hold_rpm_x10 : ramp;
+            out = torque_manager_update(snap, sens, true, false, false, 8500u, 2u)
+                      .etb_target_pct_x10;
+            if (el >= 20u && el < window_ms && out < lowest) { lowest = out; }
+        }
+        final_out = out;
+        return lowest;
+    };
+
+    uint16_t fin = 0u;
+    CHECK_TRUE(run(3000u, 2900u, 0u, fin) >= 30u,
+               "taper 3 s: lâmina nunca abaixo do mínimo com o rpm acima da banda");
+    CHECK_TRUE(fin >= 30u, "taper 3 s: entra na marcha lenta sem fechar");
+
+    // Com rpm preso alto o taper acaba e a lâmina fecha (desaceleração é livre).
+    run(1500u, 8000u, 20000u, fin);
+    CHECK_EQ(fin, 0u, "rpm alto após o taper: lâmina fecha");
+
+    // etb_taper_ms = 0: acompanha o afterstart (termina em até 10 s).
+    run(0u, 8000u, 20000u, fin);
+    CHECK_EQ(fin, 0u, "taper = afterstart: termina e fecha em rpm alto");
+    ems::engine::etb_taper_ms = 0u;
+}

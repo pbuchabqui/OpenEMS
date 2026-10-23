@@ -165,6 +165,7 @@ int main(void) {
     printf("\n=== TORQUE MANAGER (C++ ns) ===");
     test_torque_manager_cpp_update();
     test_torque_tc_flare_proxy();
+    test_torque_crank_taper();
     test_launch_tc_page0_roundtrip();
 
     // ── CKP — Segunda Fase ───────────────────────────────────────────────────
