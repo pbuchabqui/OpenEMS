@@ -19,7 +19,7 @@ Tabela de 16 eventos em RAM, com código, severidade, contador de ocorrências, 
 - `clear_fault` remove o evento. Os chamadores limpam quando a condição some (sobretemperatura com histerese em `engine_calc.cpp`; faixa de MAP/TPS/MAF e plausibilidade MAP×TPS em `sensors.cpp`).
 - `diagnostic_tick(100)` roda no bloco de 100 ms do `main_stm32.cpp` e carimba o tempo dos eventos.
 - Único efeito sobre o motor: `is_system_ready()` é falso se houver um evento CRITICAL, e `engine_calc.cpp` o passa ao `limp_gating` como `diag_critical` (bit `kProtectDisDiag` desliga esse corte). WARNING e ERROR só aparecem na tabela.
-- `ADC_RECOVERY_FAILED` em CRITICAL não é limpo por ninguém: o corte fica até o reset.
+- `ADC_RECOVERY_FAILED` em CRITICAL não é limpo por ninguém: o corte fica até o reset. Decidido em 2026-10-22 que é intencional: o ADC esgotou as tentativas de recuperação e sem leitura confiável de MAP/TPS o motor não deve voltar sozinho; só reiniciar a ECU reabilita.
 
 Sem debounce na tabela: cada chamador já filtra a falha antes de reportar (timers de falha de sensor, histerese de sobretemperatura), e um debounce no CRITICAL atrasaria o corte. Não há persistência em NVM: nada lê os códigos depois do reset, e gravar Flash exige motor parado (errata ES0565). As duas coisas estão no Backlog de `docs/ROADMAP.md`.
 
