@@ -707,6 +707,9 @@ static void timing_report() {
 enum class Mode : uint8_t { LIVE, EDGE, PULSE, WAVE, TIMING };
 static volatile Mode g_mode = Mode::LIVE;
 
+// Período de dente do CKP (µs) medido, sem o intervalo do gap (3 T). Só alimenta o RPM_CKP.
+static uint32_t g_ckp_tooth_us = 0;
+
 // Inteiro de 64 bits em decimal: o printf do newlib-nano não garante %lld.
 static const char* i64_str(int64_t v, char* out) {
     char t[24];
@@ -740,6 +743,9 @@ static void process_events() {
             if (m.last_rise_us > 0) {
                 const int64_t p = ev.ts_us - m.last_rise_us;
                 if (p > 0 && p < 10000000LL) m.period_us = (uint32_t)p;
+                // gap = 3 T: só entra se não for maior que 1,5x o dente anterior
+                if (ev.ch == kCkpChan && p > 0 && (g_ckp_tooth_us == 0u || p < (int64_t)g_ckp_tooth_us * 3 / 2))
+                    g_ckp_tooth_us = (uint32_t)p;
             }
             m.last_rise_us = ev.ts_us;
             if (g_mode == Mode::EDGE)
@@ -771,10 +777,11 @@ static void process_events() {
 static void print_live_table() {
     const int64_t now = ts_now();
 
-    // RPM a partir do período CKP (CH8): 60 dentes × 2 revoluções / período
-    const uint32_t ckp_per = g_m[kCkpChan].period_us;
+    // RPM a partir do período de dente do CKP (CH8): 60 posições por volta,
+    // T = 60 s / (rpm × 60) ⇒ rpm = 1e6 / T[µs]. O gap (3 T) é descartado em g_ckp_tooth_us.
+    const uint32_t ckp_per = g_ckp_tooth_us;
     const float    rpm_ckp = (ckp_per > 0)
-                             ? (60000000.0f / (float)ckp_per)   // 1 dente = 1/60 rev
+                             ? (1000000.0f / (float)ckp_per)
                              : 0.0f;
 
     Serial.println();
