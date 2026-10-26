@@ -47,9 +47,24 @@ PA4 e PA5) substituem `DAC25`/`DAC26`.
 ```bash
 cd tools/stm32_bench
 pio run -e weact_h562rg
-pio run -e weact_h562rg -t upload
 pio device monitor -b 115200
 ```
+
+## Gravar (DFU, como a OpenEMS)
+
+1. BOOT0 pressionado, aperte e solte NRST, solte BOOT0. `dfu-util -l` deve listar `0483:df11`.
+2. Grave **sem `:leave`**:
+
+   ```bash
+   dfu-util -a 0 -s 0x08000000 -D .pio/build/weact_h562rg/firmware.bin
+   ```
+
+3. Power-cycle com BOOT0 solto (desconecte e reconecte o USB).
+
+Não use `pio run -t upload`: ele grava com `:leave`, que é um jump do bootloader sem
+reset (o mesmo problema do `tools/hil_test/README.md`). Medido nesta placa: com `:leave`
+o `dfu-util` termina com `Error during download get_status` e o CDC só enumera cerca de
+40 s depois; sem `:leave` e com power-cycle, enumera em cerca de 1 s.
 
 O board `weact_stm32h5` do PlatformIO aponta para um variant que o framework instalado não
 tem; o `platformio.ini` redireciona para `H562R(G-I)T/variant_WEACT_H562RG.h` e define
