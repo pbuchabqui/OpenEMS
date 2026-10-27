@@ -127,6 +127,26 @@ void test_sensors_tick_pedal_publishes(void) {
     CHECK_EQ(sensors_get().etb_tps_pct_x10, 415u, "segunda amostra entra pelo IIR");
 }
 
+void test_sensors_bench_app_fixed(void) {
+    section("sensors: bench mode fixa APP em 5 % e limpa as falhas de APP");
+    using namespace ems::hal;
+    constexpr uint16_t kAppFaults = ems::drv::THROTTLE_FAULT_APP1 |
+        ems::drv::THROTTLE_FAULT_APP2 | ems::drv::THROTTLE_FAULT_APP_PLAUS;
+    sensor_setup(); sensors_init();
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP1, 4095u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::APP2, 100u);
+    for (int i = 0; i < 12; ++i) { sensors_tick_pedal(50u); }
+    CHECK_TRUE((sensors_get().throttle_fault_bits & kAppFaults) != 0u,
+               "sem bench, pedal fora da faixa arma falha de APP");
+
+    sensors_set_bench_clt_iat(true, 900, 250);
+    for (int i = 0; i < 12; ++i) { sensors_tick_pedal(50u); }
+    CHECK_EQ(sensors_get().throttle_fault_bits & kAppFaults, 0u, "bench limpa as falhas de APP");
+    CHECK_EQ(sensors_get().app_pct_x10, 50u, "bench fixa APP em 5,0 % (sem DFCO nem marcha lenta)");
+    CHECK_EQ(sensors_get().app1_pct_x10, 50u, "APP1 também em 5,0 %");
+    sensors_set_bench_clt_iat(false, 0, 0);
+}
+
 void test_sensors_pedal_range_ceiling(void) {
     section("sensors: teto APP/ETB 4000; 4095 falha em 300 ms");
     using namespace ems::hal;

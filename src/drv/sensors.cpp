@@ -176,7 +176,7 @@ static int16_t  g_bench_clt_x10      = 900;   // 90,0 °C — motor quente (corr
 static int16_t  g_bench_iat_x10      = 250;   // 25,0 °C — ar ambiente (corr IAT ≈ 1.0)
 static uint16_t g_bench_map_bar_x1000 = 350u; // 35,0 kPa — idle vacuum
 static uint16_t g_bench_tps_pct_x10   = 30u;  // 3,0% — idle TPS
-static uint16_t g_bench_app_pct_x10   = 0u;   // 0,0% — pedal solto (marcha lenta)
+static uint16_t g_bench_app_pct_x10   = 50u;  // 5,0% — acima dos limites de DFCO (0,5%) e de ponto de marcha lenta (2,5%)
 static uint16_t g_bench_fuel_press_bar_x1000 = 3000u; // 3.0 bar — pressão nominal
 static uint16_t g_bench_oil_press_bar_x1000  = 3000u; // 3.0 bar — acima do threshold dinâmico
 static bool     g_tps_pct_cache_valid = false;
@@ -830,7 +830,8 @@ void sensors_tick_pedal(uint32_t dt_ms) noexcept {
 
     if (g_bench_clt_iat) {
         // Banco HIL: pedal ausente — o PC0/PC2 flutuam e o ruído liga/desliga a correção
-        // de ponto de marcha lenta. Força pedal fixo e limpa os faults de APP.
+        // de ponto de marcha lenta. Força pedal fixo (sem DFCO nem correção de marcha lenta)
+        // e limpa os faults de APP.
         g_app1_fault = false;
         g_app2_fault = false;
         g_app_plaus_fault = false;

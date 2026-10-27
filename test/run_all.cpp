@@ -86,6 +86,7 @@ int main(void) {
     test_sensors_calibration();
     test_sensors_tick_100ms_clt_iat();
     test_sensors_tick_pedal_publishes();
+test_sensors_bench_app_fixed();
     test_sensors_pedal_range_ceiling();
     test_sensors_pedal_plausibility_time();
     test_sensors_map_baro_refuses_vacuum();

@@ -60,6 +60,7 @@ void test_sensors_health_status(void);
 void test_sensors_calibration(void);
 void test_sensors_tick_100ms_clt_iat(void);
 void test_sensors_tick_pedal_publishes(void);
+void test_sensors_bench_app_fixed(void);
 void test_sensors_pedal_range_ceiling(void);
 void test_sensors_pedal_plausibility_time(void);
 void test_sensors_map_baro_refuses_vacuum(void);
