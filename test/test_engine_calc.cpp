@@ -262,21 +262,38 @@ void test_engine_calc_dwell_floor(void) {
 }
 
 void test_engine_calc_mspark_dwell_follows_normal(void) {
-    section("engine_calc: multi-spark inter-dwell is a % of the normal dwell");
+    section("engine_calc: multi-spark inter-dwell = % of normal dwell, floor 2.8 ms at 12 V");
     const uint16_t saved_pct = mspark_dwell_pct;
+    constexpr uint32_t kTicksPerMs = 62500u;  // TIM5 at 62.5 MHz
     reset_all();
     tables_flat(60, 1000, 22);
     uint32_t t = 1000u;
-    mspark_dwell_pct = 50u;
-    run(t, 1.0, 1000u, 60u, 250u);
-    const uint32_t dwell = ecu_sched_test_get_dwell_ticks();
-    CHECK_EQ(ecu_sched_test_get_mspark_inter_dwell_ticks(), dwell / 2u, "50 % of the normal dwell");
+    auto at_vbatt = [&](uint16_t vbatt_mv) {
+        for (uint32_t i = 0u; i < 500u; ++i) {
+            t += 2u;
+            EngineCalcIn in = input_at(t, 1000u, 60u, 250u);
+            in.sensors.vbatt_mv = vbatt_mv;
+            engine_calc_step(in);
+        }
+    };
+    // 12 V, 1000 rpm: normal dwell 3.0 ms x 1.23 = 3.7 ms.
     mspark_dwell_pct = 100u;
-    run(t, 0.1, 1000u, 60u, 250u);
+    at_vbatt(12000u);
+    const uint32_t dwell = ecu_sched_test_get_dwell_ticks();
     CHECK_EQ(ecu_sched_test_get_mspark_inter_dwell_ticks(), dwell, "100 % equals the normal dwell");
+    mspark_dwell_pct = 50u;
+    at_vbatt(12000u);
+    CHECK_EQ(ecu_sched_test_get_mspark_inter_dwell_ticks(), 28u * kTicksPerMs / 10u,
+             "50 % of 3.7 ms is below the floor: 2.8 ms at 12 V");
     mspark_dwell_pct = 5u;
-    run(t, 0.1, 1000u, 60u, 250u);
-    CHECK_EQ(ecu_sched_test_get_mspark_inter_dwell_ticks(), dwell / 4u, "below the minimum clamps to 25 %");
+    at_vbatt(12000u);
+    CHECK_EQ(ecu_sched_test_get_mspark_inter_dwell_ticks(), 28u * kTicksPerMs / 10u,
+             "below the minimum % still holds the 2.8 ms floor");
+    // 14 V: the dwell table row falls from 3.0 to 2.5 ms, the floor follows (2.8 x 25/30).
+    at_vbatt(14000u);
+    const uint32_t floor14 = ecu_sched_test_get_mspark_inter_dwell_ticks();
+    CHECK_TRUE(floor14 >= 23u * kTicksPerMs / 10u && floor14 < 28u * kTicksPerMs / 10u,
+               "floor scales down with battery voltage");
     mspark_dwell_pct = saved_pct;
     tables_restore();
 }

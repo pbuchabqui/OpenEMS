@@ -94,6 +94,8 @@ extern uint16_t dwell_rpm_factor_q8[kDwellRpmCorrSize];  // factor multiplicativ
 constexpr uint16_t kMsparkRpmCeilingX10 = 15000u;  // 1500 RPM absolute max gate
 constexpr uint16_t kMsparkDwellPctMin = 25u;
 constexpr uint16_t kMsparkDwellPctMax = 100u;
+// Piso do dwell das faíscas extras a 12 V (ms ×10); acompanha a bateria pela tabela de dwell.
+constexpr uint16_t kMsparkMinDwellMsX10At12V = 28u;
 extern uint16_t mspark_max_rpm_x10;
 extern uint8_t  mspark_count;
 extern uint16_t mspark_dwell_pct;

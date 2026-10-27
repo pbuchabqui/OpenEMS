@@ -46,11 +46,21 @@ constexpr uint16_t kMapMinBarX100 = 10u;
 constexpr uint16_t kMapMaxBarX100 = 300u;
 constexpr uint16_t kAePeriodMs = 2u;
 
-uint32_t mspark_inter_dwell_ticks(uint32_t dwell_ticks) noexcept {
+// Dwell das faíscas extras: fração do dwell normal, nunca abaixo de 2,8 ms a 12 V. O piso
+// escala com a tabela de dwell por tensão (kMsparkMinDwellMsX10At12V × base(V) / base(12 V)).
+uint32_t mspark_inter_dwell_ticks(uint32_t dwell_ticks, uint16_t vbatt_mv) noexcept {
     uint32_t pct = mspark_dwell_pct;
     if (pct < kMsparkDwellPctMin) { pct = kMsparkDwellPctMin; }
     if (pct > kMsparkDwellPctMax) { pct = kMsparkDwellPctMax; }
-    const uint32_t ticks = (dwell_ticks * pct) / 100u;
+    uint32_t ticks = (dwell_ticks * pct) / 100u;
+    const uint32_t base_12v = dwell_ms_x10_from_vbatt(12000u);
+    if (base_12v != 0u) {
+        const uint32_t floor_ms_x10 =
+            (static_cast<uint32_t>(kMsparkMinDwellMsX10At12V) * dwell_ms_x10_from_vbatt(vbatt_mv)
+             + base_12v / 2u) / base_12v;
+        const uint32_t floor_ticks = (floor_ms_x10 * kSchedulerTicksPerMs) / 10u;
+        if (ticks < floor_ticks) { ticks = floor_ticks; }
+    }
     return ticks < kMinDwellTicks ? kMinDwellTicks : ticks;
 }
 
@@ -251,7 +261,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         const bool ms_on = snap.rpm_x10 < ms_gate && mspark_count > 0u;
         ::ecu_sched_set_mspark(
             ms_on ? mspark_count : 0u,
-            ms_on ? mspark_inter_dwell_ticks(dwell_ticks) : 0u,
+            ms_on ? mspark_inter_dwell_ticks(dwell_ticks, safe_vbatt_mv(sensors)) : 0u,
             18u);
     }
     // Quick-crank state once per 2 ms tick (HALF + FULL + stopped).
