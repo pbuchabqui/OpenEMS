@@ -804,7 +804,10 @@ function highlightLiveCell() {
   if (st.mode !== "trace") return;
 
   const lx = H.axisLookup(INFO.axes.rpm, RT.rpm);
-  const ly = H.axisLookup(INFO.axes.map_kpa, RT.map_kpa);
+  // map_kpa é u8 na telemetria (satura em 255 kPa) e o eixo VE vai a 300: o cursor segue o MAP
+  // fundido (u16) que o cálculo de combustível usa. 0 = ainda sem passo de cálculo: cai no u8.
+  const mapForCursor = RT.map_fused_kpa > 0 ? RT.map_fused_kpa : RT.map_kpa;
+  const ly = H.axisLookup(INFO.axes.map_kpa, mapForCursor);
 
   // posição real interpolada em pixels: centro do nó idx + frac até o nó idx+1
   const center = (sel) => {
