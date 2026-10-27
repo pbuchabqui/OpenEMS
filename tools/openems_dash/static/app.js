@@ -1114,7 +1114,7 @@ const FIELD_LABELS = {
   ewg_pos_max_raw:          "EWG pos open (raw)",
   mspark_max_rpm_x10:       "Multi-spark max RPM",
   mspark_count:             "Multi-spark extra sparks (0-3)",
-  mspark_inter_dwell_ms_x10: "Multi-spark inter-dwell (ms)",
+  mspark_dwell_pct:         "Multi-spark inter-dwell (% of normal dwell)",
   // Dirigibilidade
   antijerk_tpsdot_threshold_x10: "Anti-jerk TPSdot threshold (%/s)",
   antijerk_retard_deg:           "Anti-jerk ignition retard (°)",

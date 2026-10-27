@@ -146,10 +146,10 @@ uint16_t dwell_rpm_axis_rpm[kDwellRpmCorrSize] = {500u, 1200u, 4000u, 7000u};
 // 7000 high:    0.78× — reduz dwell para evitar sobreposição de ciclos
 uint16_t dwell_rpm_factor_q8[kDwellRpmCorrSize] = {384u, 288u, 256u, 200u};
 
-// Multi-spark: activo abaixo de 1200 RPM, 2 sparks adicionais, dwell inter-spark 1.8ms
+// Multi-spark: activo abaixo de 1500 RPM, 2 sparks adicionais, dwell inter-spark 50% do normal
 uint16_t mspark_max_rpm_x10        = kMsparkRpmCeilingX10;  // 1500 RPM — gate (hard max)
 uint8_t  mspark_count              = 2u;      // sparks adicionais por ciclo
-uint16_t mspark_inter_dwell_ms_x10 = 18u;     // 1.8ms entre sparks
+uint16_t mspark_dwell_pct          = 50u;     // % do dwell normal entre sparks
 
 uint32_t lambda_delay_rpm_axis_x10[kLambdaDelayTableSize] = {10000u, 25500u, 80000u};
 uint32_t lambda_delay_load_axis_bar_x100[kLambdaDelayTableSize] = {10u, 91u, 300u};

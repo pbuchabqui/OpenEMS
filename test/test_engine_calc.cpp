@@ -261,6 +261,26 @@ void test_engine_calc_dwell_floor(void) {
     tables_restore();
 }
 
+void test_engine_calc_mspark_dwell_follows_normal(void) {
+    section("engine_calc: multi-spark inter-dwell is a % of the normal dwell");
+    const uint16_t saved_pct = mspark_dwell_pct;
+    reset_all();
+    tables_flat(60, 1000, 22);
+    uint32_t t = 1000u;
+    mspark_dwell_pct = 50u;
+    run(t, 1.0, 1000u, 60u, 250u);
+    const uint32_t dwell = ecu_sched_test_get_dwell_ticks();
+    CHECK_EQ(ecu_sched_test_get_mspark_inter_dwell_ticks(), dwell / 2u, "50 % of the normal dwell");
+    mspark_dwell_pct = 100u;
+    run(t, 0.1, 1000u, 60u, 250u);
+    CHECK_EQ(ecu_sched_test_get_mspark_inter_dwell_ticks(), dwell, "100 % equals the normal dwell");
+    mspark_dwell_pct = 5u;
+    run(t, 0.1, 1000u, 60u, 250u);
+    CHECK_EQ(ecu_sched_test_get_mspark_inter_dwell_ticks(), dwell / 4u, "below the minimum clamps to 25 %");
+    mspark_dwell_pct = saved_pct;
+    tables_restore();
+}
+
 void test_engine_calc_limp_rpm_hysteresis(void) {
     section("engine_calc: limp rpm cut (3000 rpm) has 20 rpm hysteresis");
     reset_all();

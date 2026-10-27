@@ -90,11 +90,13 @@ extern uint16_t dwell_rpm_factor_q8[kDwellRpmCorrSize];  // factor multiplicativ
 // mspark_max_rpm_x10: RPM (×10) acima do qual multi-spark é desabilitado.
 // Hard ceiling 1500 RPM — above this the dwell window is too short for extra sparks.
 // mspark_count: número de sparks adicionais por ciclo (0=desabilitado, máx 3).
-// mspark_inter_dwell_ms_x10: dwell entre sparks consecutivos (ms ×10, ex: 18 = 1.8ms).
+// mspark_dwell_pct: dwell entre sparks consecutivos, em % do dwell normal (tensão × RPM).
 constexpr uint16_t kMsparkRpmCeilingX10 = 15000u;  // 1500 RPM absolute max gate
+constexpr uint16_t kMsparkDwellPctMin = 25u;
+constexpr uint16_t kMsparkDwellPctMax = 100u;
 extern uint16_t mspark_max_rpm_x10;
 extern uint8_t  mspark_count;
-extern uint16_t mspark_inter_dwell_ms_x10;
+extern uint16_t mspark_dwell_pct;
 
 extern uint32_t lambda_delay_rpm_axis_x10[kLambdaDelayTableSize];
 extern uint32_t lambda_delay_load_axis_bar_x100[kLambdaDelayTableSize];

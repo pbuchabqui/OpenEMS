@@ -681,7 +681,7 @@ PAGE0_FIELDS = [
     ("ewg_pos_max_raw",        162, 1, "H", 1.0),
     ("mspark_max_rpm_x10",       170, 1, "H", 0.1),  # RPM max p/ multi-spark
     ("mspark_count",              172, 1, "B", 1.0),  # sparks adicionais (0-3)
-    ("mspark_inter_dwell_ms_x10", 173, 1, "H", 0.1),  # dwell entre sparks (ms)
+    ("mspark_dwell_pct",          173, 1, "H", 1.0),  # dwell entre sparks (% do dwell normal, 25-100)
     # byte 71 (era pad): skip de dentes CKP pós-silêncio (0=off, clamp FW 57)
     ("ckp_skip_pulses_after_gap", 71, 1, "B", 1.0),
     # bytes 264-269: MAP janela angular por cilindro (FOME #610; era 246-251,

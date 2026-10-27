@@ -435,7 +435,7 @@ void sync_page_from_table(uint8_t page) noexcept {
         std::memcpy(g_page0 + 162, &ems::engine::ewg_pos_max_raw,  2u);
         std::memcpy(g_page0 + 170, &ems::engine::mspark_max_rpm_x10, 2u);
         g_page0[172] = ems::engine::mspark_count;
-        std::memcpy(g_page0 + 173, &ems::engine::mspark_inter_dwell_ms_x10, 2u);
+        std::memcpy(g_page0 + 173, &ems::engine::mspark_dwell_pct, 2u);
         // Versão do layout de calibração — gate do boot contra blobs de
         // tabela com dimensão antiga (ver kCalLayoutVersion em table3d.h).
         g_page0[ems::engine::kCalLayoutVersionOffset] = ems::engine::kCalLayoutVersion;
@@ -678,7 +678,14 @@ bool sync_table_from_page(uint8_t page) noexcept {
             }
             ems::engine::mspark_max_rpm_x10 = ms_rpm;
             ems::engine::mspark_count = g_page0[172];
-            std::memcpy(&ems::engine::mspark_inter_dwell_ms_x10, g_page0 + 173, 2u);
+            // % do dwell normal. Página antiga guarda ms×10 (ex.: 18): fora da faixa,
+            // mantém o padrão em vez de ler como 18 %.
+            uint16_t ms_pct = 0u;
+            std::memcpy(&ms_pct, g_page0 + 173, 2u);
+            if (ms_pct >= ems::engine::kMsparkDwellPctMin &&
+                ms_pct <= ems::engine::kMsparkDwellPctMax) {
+                ems::engine::mspark_dwell_pct = ms_pct;
+            }
         }
         // LTFT authority (176-184): só layout v3+
         if (g_page0[ems::engine::kCalLayoutVersionOffset] ==

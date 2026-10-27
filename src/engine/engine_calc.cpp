@@ -46,6 +46,14 @@ constexpr uint16_t kMapMinBarX100 = 10u;
 constexpr uint16_t kMapMaxBarX100 = 300u;
 constexpr uint16_t kAePeriodMs = 2u;
 
+uint32_t mspark_inter_dwell_ticks(uint32_t dwell_ticks) noexcept {
+    uint32_t pct = mspark_dwell_pct;
+    if (pct < kMsparkDwellPctMin) { pct = kMsparkDwellPctMin; }
+    if (pct > kMsparkDwellPctMax) { pct = kMsparkDwellPctMax; }
+    const uint32_t ticks = (dwell_ticks * pct) / 100u;
+    return ticks < kMinDwellTicks ? kMinDwellTicks : ticks;
+}
+
 EngineCalcOut s_out = {};
 uint16_t s_prev_tooth = 0u;       // detecta o wrap do tooth_index (1 por volta)
 bool s_limp_rpm_latched = false;   // corte de limp a 3000 rpm, com histerese
@@ -232,7 +240,8 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
 
     // Multi-spark (MS42 §2.2.3): habilita/desabilita conforme RPM gate.
     // Hard ceiling 1500 RPM (kMsparkRpmCeilingX10) — window too short above.
-    // O dwell inter-spark é mais curto (tabela dedicada mspark_inter_dwell_ms_x10).
+    // O dwell inter-spark é uma fração (mspark_dwell_pct) do dwell normal, então acompanha
+    // tensão e RPM; mesmo piso de 0,5 ms.
     // Limite 18°ATDC garante que o último spark contribui para a combustão.
     {
         uint16_t ms_gate = mspark_max_rpm_x10;
@@ -242,8 +251,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         const bool ms_on = snap.rpm_x10 < ms_gate && mspark_count > 0u;
         ::ecu_sched_set_mspark(
             ms_on ? mspark_count : 0u,
-            ms_on ? (static_cast<uint32_t>(mspark_inter_dwell_ms_x10)
-                     * kSchedulerTicksPerMs) / 10u : 0u,
+            ms_on ? mspark_inter_dwell_ticks(dwell_ticks) : 0u,
             18u);
     }
     // Quick-crank state once per 2 ms tick (HALF + FULL + stopped).

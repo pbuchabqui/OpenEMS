@@ -1074,6 +1074,7 @@ uint32_t ecu_sched_test_get_calibration_clamp_count(void) { return g_calibration
 uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void) { return g_cycle_schedule_drop_count; }
 uint32_t ecu_sched_test_get_late_event_count(void) { return g_late_event_count; }
 uint8_t ecu_sched_test_get_mspark_count(void) { return si::g_mspark_count; }
+uint32_t ecu_sched_test_get_mspark_inter_dwell_ticks(void) { return si::g_mspark_inter_dwell_ticks; }
 void ecu_sched_test_reset_ccr(void) noexcept {
     ems_test_tim5_ccr3 = 0u; g_evt_count = 0U; g_evt_armed = 0U;
 }

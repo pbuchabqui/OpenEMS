@@ -207,6 +207,7 @@ uint32_t ecu_sched_test_get_cycle_schedule_drop_count(void);
 uint32_t ecu_sched_test_get_late_event_count(void);
 void     ecu_sched_test_reset_ccr(void) noexcept;   // drop queue + zero TIM5 CCR3
 uint8_t  ecu_sched_test_get_mspark_count(void);
+uint32_t ecu_sched_test_get_mspark_inter_dwell_ticks(void);
 // TIM5 event-queue accessors
 uint8_t  ecu_sched_test_get_evt_count(void) noexcept;
 void     ecu_sched_test_drop_queued_events(void) noexcept;   // esvazia a fila sem tocar nos pinos
