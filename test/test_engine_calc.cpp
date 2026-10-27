@@ -298,6 +298,16 @@ void test_engine_calc_mspark_dwell_follows_normal(void) {
     tables_restore();
 }
 
+void test_engine_calc_bench_lambda_closes_loop(void) {
+    section("fuel_trim: bench lambda responds to the applied trim (no WBO2)");
+    CHECK_EQ(fuel_bench_lambda_x1000(1000u, 0), 1050u, "no trim: engine reads 5 % lean");
+    CHECK_EQ(fuel_bench_lambda_x1000(1000u, 50), 1000u, "trim +5 % brings lambda back to target");
+    CHECK_EQ(fuel_bench_lambda_x1000(1000u, 100), 954u, "trim +10 % overshoots rich (1050/1.10)");
+    CHECK_EQ(fuel_bench_lambda_x1000(900u, 0), 945u, "scales with the target");
+    CHECK_EQ(fuel_bench_lambda_x1000(1000u, -2000), 3000u, "extreme negative trim clamps to 3.000");
+    CHECK_EQ(fuel_bench_lambda_x1000(400u, 500), 400u, "never below the WBO2 floor (400 x 1.05 / 1.5 = 280)");
+}
+
 void test_engine_calc_limp_rpm_hysteresis(void) {
     section("engine_calc: limp rpm cut (3000 rpm) has 20 rpm hysteresis");
     reset_all();

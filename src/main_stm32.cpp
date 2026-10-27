@@ -512,6 +512,15 @@ uint32_t g_t_log_ms = g_t2ms_;
             ems::app::ui_update_rt_map_fuel(calc.map_fused_x100, calc.net_pw_us);
             g_last_map_fused_x100 = calc.map_fused_x100;
             g_last_net_pw_us = calc.net_pw_us;
+            if (ems::drv::sensors_is_bench_mode()) {
+                // Sem WBO2: o λ simulado responde ao trim aplicado, senão o STFT só satura.
+                const uint16_t bench_map = clamp_u16(calc.map_fused_x100, kMapMinBarX100, kMapMaxBarX100);
+                const int16_t bench_trim = static_cast<int16_t>(
+                    ems::engine::fuel_get_stft_pct_x10() +
+                    ems::engine::fuel_get_ltft_at(snap.rpm_x10, bench_map));
+                ems::app::can_stack_set_bench_lambda(true, ems::engine::fuel_bench_lambda_x1000(
+                    ems::engine::get_lambda_target_x1000(snap.rpm_x10, bench_map), bench_trim));
+            }
             g_last_pw_ms_x10 = calc.pw_ms_x10;
             g_limp_active = calc.limp_active;
             g_limp_rpm_cut = calc.limp_rpm_cut;

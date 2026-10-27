@@ -192,6 +192,7 @@ void test_idle_spark_error_curve(void);
 void test_engine_calc_overrun_retard(void);
 void test_engine_calc_pw_drop_limit(void);
 void test_engine_calc_dwell_floor(void);
+void test_engine_calc_bench_lambda_closes_loop(void);
 void test_engine_calc_mspark_dwell_follows_normal(void);
 void test_engine_calc_limp_rpm_hysteresis(void);
 void test_engine_calc_spark_skip_follows_cam_phase(void);

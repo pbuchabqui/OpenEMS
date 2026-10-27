@@ -1033,5 +1033,12 @@ int16_t fuel_get_ltft_add_at(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept {
     return fuel_get_ltft_add_us(mi, ri);
 }
 
+uint16_t fuel_bench_lambda_x1000(uint16_t target_x1000, int16_t trim_pct_x10) noexcept {
+    const int32_t trim = (trim_pct_x10 < -900) ? -900 : trim_pct_x10;
+    const int32_t lambda = (static_cast<int32_t>(target_x1000) * (1000 + kBenchLambdaBiasX10)) /
+                           (1000 + trim);
+    // Faixa que o WBO2 do can_stack aceita (0,400 a 3,000).
+    return static_cast<uint16_t>(lambda < 400 ? 400 : (lambda > 3000 ? 3000 : lambda));
+}
 
 }  // namespace ems::engine

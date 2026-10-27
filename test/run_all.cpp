@@ -300,6 +300,7 @@ test_sensors_bench_app_fixed();
     test_engine_calc_overrun_retard();
     test_engine_calc_pw_drop_limit();
     test_engine_calc_dwell_floor();
+test_engine_calc_bench_lambda_closes_loop();
 test_engine_calc_mspark_dwell_follows_normal();
     test_engine_calc_limp_rpm_hysteresis();
     test_output_test_enter_shuts_etb();

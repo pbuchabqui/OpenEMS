@@ -151,4 +151,10 @@ int16_t fuel_get_ltft_pct_x10(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_get_ltft_add_us(uint8_t map_idx, uint8_t rpm_idx) noexcept;
 int16_t fuel_get_ltft_add_at(uint32_t rpm_x10, uint16_t map_bar_x100) noexcept;
 
+// Bancada sem WBO2: λ que um motor mediria dado o trim aplicado (STFT + LTFT, 0,1 %).
+// O motor simulado pede kBenchLambdaBiasX10 mais combustível do que a VE entrega: sem trim
+// mede λ = alvo × (1 + bias); o trim de mesmo valor leva o λ de volta ao alvo e fecha a malha.
+constexpr int16_t kBenchLambdaBiasX10 = 50;   // +5,0 % (mistura 5 % mais pobre sem trim)
+uint16_t fuel_bench_lambda_x1000(uint16_t target_x1000, int16_t trim_pct_x10) noexcept;
+
 }  // namespace ems::engine
