@@ -535,6 +535,13 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     g_scope_ckp_idx = static_cast<uint8_t>((g_scope_ckp_idx + 1u) & 63u);
 
     if (g_state.have_edge == 0u) {           // first edge since reset
+        // Primeira borda depois do boot ou de um stall (ckp_stall_poll zera have_edge): é a
+        // primeira das N a descartar. Sem isto o skip só atuava na corrida em que a borda
+        // chegava antes do stall poll; depois de um stall normal o delta já vinha curto.
+        if (ems::engine::ckp_skip_pulses_after_gap != 0u) {
+            s_skip_remaining = static_cast<uint8_t>(ems::engine::ckp_skip_pulses_after_gap - 1u);
+            ++g_dbg_skip_after_silence;
+        }
         g_state.have_edge = 1u;
         g_state.prev_capture = capture_now;
         g_state.snap.last_tim5_capture = capture_now;

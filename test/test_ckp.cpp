@@ -162,6 +162,26 @@ void test_ckp_skip_after_silence(void) {
     CHECK_EQ(g_dbg_skip_after_silence - base1, 3u,
              "dentes normais não são descartados");
 
+    // Caminho normal: o stall poll do main loop derruba o sync ANTES da 1ª borda da nova
+    // partida. As N primeiras bordas também têm de ser descartadas.
+    ckp_skip_pulses_after_gap = 0u;
+    ckp_reach_full_sync();
+    ckp_skip_pulses_after_gap = 3u;
+    CHECK_TRUE(ckp_stall_poll(ckp_snapshot().last_tim5_capture + 13000000u), "stall detectado pelo poll");
+    const uint32_t base2 = g_dbg_skip_after_silence;
+    g_ckp_cap += 60000000u;          // ~1 s parado
+    ckp_fire(kNormalPeriod);
+    ckp_fire(kNormalPeriod);
+    ckp_fire(kNormalPeriod);
+    CHECK_EQ(g_dbg_skip_after_silence - base2, 3u, "após stall: 3 bordas descartadas");
+    ckp_fire(kNormalPeriod);
+    CHECK_EQ(g_dbg_skip_after_silence - base2, 3u, "após stall: a 4ª borda já conta");
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    ckp_feed_n_then_gap(kWheelNormalTeeth);
+    CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
+             static_cast<uint8_t>(SyncState::FULL_SYNC), "re-sync após stall + skip");
+
     ckp_skip_pulses_after_gap = 0u;  // isolamento entre testes
 }
 
