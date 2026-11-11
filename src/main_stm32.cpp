@@ -390,6 +390,12 @@ static void openems_init() noexcept {
     ems::engine::xtau_autocalib_init();
 
     // 6b) Inicializa ETB e Torque Manager (borboleta eletrônica)
+    // O ADC só converte com trigger do TIM6 (dente do CKP ou adc_idle_poll no laço principal).
+    // Até aqui nenhuma conversão aconteceu e os buffers do DMA valem 0: etb_driver_init lia
+    // TPS1 = 0, concluía "TPS1 aberto" e o ETB ficava desligado até o próximo reset (não há
+    // nova tentativa). Dispara uma conversão (1 ms de TIM6 + sequência) e espera por ela.
+    ems::hal::adc_idle_poll(millis());
+    for (const uint32_t t0 = millis(); (millis() - t0) < 3u; ) { }
     g_etb_initialized = etb_control_init();
     // Auto-cal dos limites TPS a cada power-on (varre batentes no tick 2ms;
     // pulada se harness ausente; falha mantém a calibração de flash).
