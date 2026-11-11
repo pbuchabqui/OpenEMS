@@ -570,6 +570,19 @@ void test_etb_autocal_abort_engine_turning(void) {
              "razão = EngineTurning");
     CHECK_EQ(etb_cal_valid, 0u, "cal de flash preservada (valid inalterado)");
     CHECK_EQ(etb_tps1_raw_min, 200u, "raw_min inalterado após abort");
+
+    // Partida antes do sync: rpm_x10 ainda é 0, mas já chegam bordas do CKP.
+    autocal_setup();
+    ems::engine::etb_autocal_start();
+    autocal_tick_n(10);
+    ems::drv::g_diag_isr_count = ems::drv::g_diag_isr_count + 2u;   // 2 bordas: pode ser ruído
+    autocal_tick_n(1);
+    CHECK_TRUE(ems::engine::etb_autocal_active(), "2 bordas de CKP: varredura continua");
+    ems::drv::g_diag_isr_count = ems::drv::g_diag_isr_count + 1u;   // 3ª borda: girando
+    autocal_tick_n(1);
+    CHECK_EQ(static_cast<int>(ems::engine::etb_autocal_fail_reason()),
+             static_cast<int>(ems::engine::EtbAutocalFail::EngineTurning),
+             "3 bordas de CKP com rpm=0 → EngineTurning");
 }
 
 void test_etb_autocal_span_too_small(void) {

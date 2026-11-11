@@ -5,6 +5,7 @@
 
 #include "etb_autocal.h"
 #include "engine/calibration.h"
+#include "drv/ckp.h"
 #include "drv/sensors.h"
 #include "hal/etb_driver.h"
 #include "hal/flash.h"
@@ -32,6 +33,12 @@ constexpr uint16_t kPersistDeltaCounts = 12u;
 
 EtbAutocalState g_state = EtbAutocalState::Idle;
 EtbAutocalFail  g_fail  = EtbAutocalFail::None;
+
+// Bordas cruas do CKP no início da varredura. O rpm_x10 fica em 0 até o primeiro sync (cerca
+// de uma volta de partida), então sozinho ele deixava a varredura seguir com o motor já
+// girando. 3 bordas novas = virabrequim em movimento (1 ou 2 podem ser ruído).
+constexpr uint32_t kCkpEdgesTurning = 3u;
+uint32_t g_ckp_edges_at_start = 0u;
 
 uint16_t g_phase_ms     = 0u;
 uint16_t g_settle_count = 0u;
@@ -130,6 +137,7 @@ void etb_autocal_start() noexcept {
     if (ems::hal::nvm_load_etb_cal(&last)) {
         apply_limits(last.tps1_min, last.tps1_max, last.tps2_min, last.tps2_max);
     }
+    g_ckp_edges_at_start = ems::drv::g_diag_isr_count;
     enter_phase(EtbAutocalState::Closing);
 }
 
@@ -144,7 +152,8 @@ void etb_autocal_tick(uint16_t period_ms, uint32_t rpm_x10) noexcept {
         return;
     }
     // Segurança: nunca varrer com o motor girando.
-    if (rpm_x10 != 0u) {
+    if (rpm_x10 != 0u ||
+        (ems::drv::g_diag_isr_count - g_ckp_edges_at_start) >= kCkpEdgesTurning) {
         finish_fail(EtbAutocalFail::EngineTurning);
         return;
     }

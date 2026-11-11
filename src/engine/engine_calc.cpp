@@ -115,7 +115,8 @@ uint32_t inj_finish_pw(uint32_t flow_us, uint8_t squirts, uint16_t dead_us,
         flow_us,
         ((sensors.fault_bits & kFaultBitFuel) != 0u) ? 0u : sensors.fuel_press_bar_x1000,
         map_bar_x100);
-    const uint32_t scurve_pw_us = apply_injector_scurve(dp_flow_us / n) * n;
+    const uint32_t scurve_pw_us =
+        apply_injector_scurve(apply_injector_two_slope(dp_flow_us / n)) * n;
     cycle_on_us = inj_cycle_pw_us(scurve_pw_us, dead_us, squirts);
     const uint32_t pw_100 = cycle_on_us / 100u;
     s_out.pw_ms_x10 = fuel_cut_active ? 0u
@@ -411,7 +412,10 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         // X-τ desde !cranking (inclui afterstart frio — pior wall-wetting).
         // AE e X-τ são fenómenos distintos (AE = ar previsto pelo TPSdot,
         // X-τ = filme de parede); ambos entram inteiros.
-        const bool xtau_enabled = !qc.cranking;
+        // Com os injetores inibidos (rev limit, lambda, boost, duty, ETB) nada chega à parede:
+        // o modelo de filme é zerado, como no DFCO. Deixá-lo integrando o PW que não saiu
+        // superestimava o filme e a retomada saía pobre por alguns ciclos.
+        const bool xtau_enabled = !qc.cranking && (::ecu_sched_get_inj_inhibit_mask() == 0u);
         if (decel_cut_active) {
             limp_gating_or_fuel_reason(kFuelCutDfco);
             s_out.net_pw_us = 0u;

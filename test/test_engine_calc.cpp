@@ -13,6 +13,7 @@
 #include "engine/calibration.h"
 #include "engine/ecu_sched.h"
 #include "engine/engine_calc.h"
+#include "engine/xtau_autocalib.h"
 #include "engine/engine_config.h"
 #include "engine/fuel_calc.h"
 #include "engine/fuel_trim.h"
@@ -214,6 +215,15 @@ void test_engine_calc_cuts(void) {
     CHECK_TRUE(g_rev_limit_active, "above the rev limit -> limiter active");
     CHECK_EQ(out.pw_ms_x10, 0u, "fuel shown as cut");
     CHECK_TRUE(out.committed && out.spark_x10 > 0, "spark still committed");
+    // Injetores inibidos: o filme de parede não pode acumular o PW que não saiu.
+    CHECK_EQ(ems::engine::xtau_get_state().wall_fuel_us_q8, 0,
+             "rev limit: filme do X-tau zerado durante o corte");
+    // Pré-condição do teste: fora do corte, com o mesmo pedal, o filme acumula.
+    reset_all();
+    t = 1000u;
+    out = run(t, 0.5, 3000u, 90u, 900u);
+    CHECK_TRUE(ems::engine::xtau_get_state().wall_fuel_us_q8 > 0,
+               "sem corte: o filme do X-tau acumula");
     tables_restore();
 }
 

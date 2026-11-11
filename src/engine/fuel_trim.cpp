@@ -65,7 +65,9 @@ int16_t ltft_add_clamp() noexcept {
 
 int16_t ltft_mult_clamp() noexcept {
     const uint16_t c = ems::engine::ltft_mult_clamp_pct_x10;
-    return static_cast<int16_t>((c == 0u) ? 250u : (c > 1000u ? 1000u : c));  // ±100% no máximo
+    // Teto ±25 %: a NVM guarda a célula em int8 de 1 % limitado a ±25. Com o clamp da RAM
+    // acima disso, uma célula em +40 % voltava como +25 % depois do reset.
+    return static_cast<int16_t>((c == 0u || c > 250u) ? 250u : c);
 }
 
 uint8_t ltft_iir_div() noexcept {

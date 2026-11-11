@@ -35,6 +35,9 @@ uint16_t corr_vbatt(uint16_t vbatt_mv) noexcept;
 uint16_t corr_iat_density_q8(int16_t iat_x10) noexcept;
 
 uint32_t apply_injector_scurve(uint32_t pw_us) noexcept;
+// Correção de 2 inclinações (pulso pequeno) para o fluxo de UMA abertura. 0 em
+// inj_small_pulse_rate_q8 ou inj_small_pulse_break_us desliga.
+uint32_t apply_injector_two_slope(uint32_t net_us) noexcept;
 
 uint32_t apply_delta_p_compensation(uint32_t pw_us,
                                     uint16_t fuel_press_bar_x1000,
