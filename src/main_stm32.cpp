@@ -314,7 +314,13 @@ static void openems_init() noexcept {
     // BSS (zero), mas 0 é um índice de cilindro válido — o ISR do CKP leria cyl=0
     // para todos os dentes antes da tabela ser preenchida, gerando DTCs falsos.
     ems::engine::misfire_init();
-    ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
+    // Sem o PLL (HSE/cristal falhou, core no HSI) o TIM5 conta ~7,8x mais devagar: dwell e PW
+    // sairiam 7,8x mais longos e o watchdog de dwell, que conta nos mesmos ticks, não protege.
+    // Sem captura CKP/CMP não há sync, logo nenhum evento de INJ/IGN nem prime; as saídas
+    // ficam em LOW. O DTC CRITICAL é reportado depois do DiagnosticManager::init().
+    if (system_clock_ok()) {
+        ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
+    }
     iwdg_kick();
 
     // 2a) Scheduler unificado (re-asserts pin safe + clears event queue)
@@ -374,6 +380,12 @@ static void openems_init() noexcept {
 
     // 6a) Inicializa sistemas "invisíveis" ao motorista
     ems::engine::DiagnosticManager::init();
+    if (!system_clock_ok()) {
+        // Nunca é limpo: só o reset (com o clock de volta) reabilita o motor.
+        ems::engine::DiagnosticManager::report_fault(
+            ems::engine::DiagnosticCode::CLOCK_FAULT,
+            ems::engine::FaultSeverity::CRITICAL);
+    }
     ems::engine::map_estimator_init();
     ems::engine::xtau_autocalib_init();
 

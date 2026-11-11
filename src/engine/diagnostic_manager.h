@@ -75,6 +75,7 @@ enum class DiagnosticCode : uint16_t {
     ADC_TIMEOUT = 0x0510,
     ADC_RECOVERY_FAILED = 0x0511,
     FLASH_WRITE_FAULT = 0x0520,
+    CLOCK_FAULT = 0x0540,        // SYSCLK fora do PLL: base de tempo errada, saídas bloqueadas até o reset
     DATALOG_FAULT = 0x0530,      // cartão SD: gravação falhou 3 vezes (só WARNING; o log nunca corta o motor)
 
     // Electronic throttle (P06xx)

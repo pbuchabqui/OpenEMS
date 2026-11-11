@@ -263,7 +263,7 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     const bool fuel_protect =
         (!limp_off && in.limp_rpm_cut) ||
         oil_range_cut || oil_after_start_cut || fuel_rail_cut || overtemp_cut ||
-        (!diag_off && in.diag_critical);
+        (!diag_off && in.diag_critical) || in.fatal_cut;
     // Encoder (half_sync_allows_fuel): TIM2 360° — lock only on flood/protect
     // or no-sync. Hall: HALF after crank is unknown 720° — lock running fuel.
     const bool half_lockout =
@@ -279,7 +279,7 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
         (!lam_off && g_lambda_cut);
     const bool ign_cut =
         (!limp_off && in.limp_rpm_cut) || oil_range_cut || overtemp_cut ||
-        (!diag_off && in.diag_critical);
+        (!diag_off && in.diag_critical) || in.fatal_cut;
 
     uint16_t fr = 0u;
     uint16_t sr = 0u;
@@ -291,7 +291,9 @@ LimpGatingResult limp_gating_update(const LimpGatingInputs& in) noexcept {
     }
     if (fuel_rail_cut)      { fr |= kFuelCutFuelRail; }
     if (overtemp_cut)       { fr |= kFuelCutOvertemp;  sr |= kSparkCutOvertemp; }
-    if (!diag_off && in.diag_critical) { fr |= kFuelCutDiagCrit;  sr |= kSparkCutDiagCrit; }
+    if ((!diag_off && in.diag_critical) || in.fatal_cut) {
+        fr |= kFuelCutDiagCrit;  sr |= kSparkCutDiagCrit;
+    }
     if (half_lockout) { fr |= kFuelCutNoSync; }
     if (in.flood_clear)     { fr |= kFuelCutFlood; }
     if (!duty_off && inj_duty_hold)    { fr |= kFuelCutInjDuty; }

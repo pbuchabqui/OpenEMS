@@ -35,6 +35,9 @@ struct LimpGatingInputs {
     bool     diag_critical;
     bool     flood_clear;
     bool     limp_rpm_cut;
+    // Falha fatal (ex.: SYSCLK fora do PLL): corta combustível e centelha, e nenhum bit do
+    // PROTECT desliga.
+    bool     fatal_cut;
     // Encoder TIM2: HALF_SYNC already has 360° — running fuel allowed.
     // Hall 60-2: HALF_SYNC after crank is unknown cycle — lock fuel.
     bool     half_sync_allows_fuel;

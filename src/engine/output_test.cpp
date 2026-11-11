@@ -4,6 +4,7 @@
 #include "engine/auxiliaries.h"
 #include "engine/ecu_sched.h"
 #include "hal/etb_driver.h"
+#include "hal/system.h"
 #include "hal/ewg_driver.h"
 #include "hal/timer.h"
 
@@ -56,6 +57,8 @@ namespace ems::engine {
 bool output_test_enter() noexcept
 {
     if (ems::drv::ckp_snapshot().rpm_x10 != 0u) { return false; }
+    // Sem o PLL os pulsos de teste sairiam ~7,8x mais longos (TIM5 no HSI).
+    if (!system_clock_ok()) { return false; }
     ::etb_driver_shutdown();  // não herdar o último PWM do laço/autocal
     g_active = true;
     g_abort_reason = kOutputTestAbortNone;

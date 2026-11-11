@@ -9,6 +9,7 @@ Duas peças: o `limp_gating` decide os cortes de injeção, ignição e ETB; o `
 - Cada corte tem um bit de motivo; o `ui_protocol.cpp` os publica ao dashboard e ao host.
 - Os cortes por valor (óleo, pressão de trilho, sobretemperatura, lambda, ETB, limp a 3000 rpm, boost, duty do injetor) podem ser desligados em RAM por `limp_gating_set_protect_disable` (bits `kProtectDis*`, perdidos no reset). Rev limit, flood, fatal, stall, watchdogs e perda de sincronismo nunca entram nessa máscara.
 - Os limites de bancada (`boost_cut_map_bar_x100`, `oil_min_after_start_bar_x1000`, `lambda_protect_*`) valem 0 = desligado, para a bancada não disparar corte.
+- Corte fatal (`fatal_cut`): hoje só o clock. Se o SYSCLK não está no PLL1 (`system_clock_ok()` falso: HSE/PLL não travou, core no HSI), o TIM5 conta ~7,8× mais devagar e dwell/PW sairiam 7,8× mais longos, com o watchdog de dwell contando nos mesmos ticks. O boot não habilita a captura CKP/CMP, reporta `CLOCK_FAULT` em CRITICAL, o `limp_gating` corta injeção e ignição sem passar pelo PROTECT, e o teste de saídas é recusado. Só o reset com o clock de volta reabilita.
 - O problema de ETB trava num latch (`limp_gating_report_etb_problem`) até `limp_gating_clear_etb_problem`. Se a causa persiste, o latch trava de novo.
 
 ## DiagnosticManager (`src/engine/diagnostic_manager.{h,cpp}`)

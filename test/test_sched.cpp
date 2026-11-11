@@ -455,6 +455,21 @@ void test_limp_gating_cut_families(void) {
 
     begin();
     {
+        // Falha fatal (SYSCLK fora do PLL): corta os dois, e o PROTECT inteiro não desliga.
+        auto in = healthy();
+        in.fatal_cut = true;
+        limp_gating_set_protect_disable(kProtectDisWritable);
+        const auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "fatal corta injeção mesmo com PROTECT todo desligado");
+        CHECK_EQ(r.ign_inhibit_mask, 0x0Fu, "fatal corta faísca mesmo com PROTECT todo desligado");
+        CHECK_TRUE(r.fuel_protect_cut, "fatal conta como fuel_protect (bloqueia o prime)");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutDiagCrit) != 0u, "razão publicada (combustível)");
+        CHECK_TRUE((g_spark_cut_reasons & kSparkCutDiagCrit) != 0u, "razão publicada (faísca)");
+        limp_gating_set_protect_disable(0u);
+    }
+
+    begin();
+    {
         auto in = healthy();
         in.flood_clear = true;
         const auto r = limp_gating_update(in);

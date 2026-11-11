@@ -21,6 +21,7 @@
 #include "engine/transient_fuel.h"
 #include "engine/vehicle_inputs.h"
 #include "engine/xtau_autocalib.h"
+#include "hal/system.h"
 
 namespace ems::engine {
 namespace {
@@ -333,6 +334,8 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
     // Falha de MAP não corta: segue com o MAP do modelo; o limp (limp_rpm_cut) limita a 3000 rpm.
     gate_in.overtemp_crit = overtemp_crit;
     gate_in.diag_critical = diag_critical;
+    // Base de tempo errada: dwell e PW sairiam ~7,8x mais longos. Não passa pelo PROTECT.
+    gate_in.fatal_cut = !system_clock_ok();
     gate_in.flood_clear = flood_clear;
     gate_in.limp_rpm_cut = limp_rpm_cut;
     gate_in.half_sync_allows_fuel = false;

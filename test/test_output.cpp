@@ -87,6 +87,18 @@ void test_output_test_enter_gate(void) {
     n = ot_txn(0x01u, 0u, 0xA55Au, buf, sizeof(buf));
     CHECK_TRUE(n == 1u && buf[0] == 0x01u, "ENTER com RPM>0 → NAK");
     CHECK_TRUE(!ems::engine::output_test_active(), "inactivo com motor girando");
+
+    // SYSCLK fora do PLL (TIM5 ~7,8x lento): os pulsos sairiam 7,8x mais longos → NAK.
+    ot_reset_all();
+    CHECK_TRUE(system_clock_ok(), "host: clock ok por padrão");
+    host_set_clock_ok(false);
+    n = ot_txn(0x01u, 0u, 0xA55Au, buf, sizeof(buf));
+    CHECK_TRUE(n == 1u && buf[0] == 0x01u, "ENTER sem PLL → NAK");
+    CHECK_TRUE(!ems::engine::output_test_active(), "inactivo sem PLL");
+    host_set_clock_ok(true);
+    n = ot_txn(0x01u, 0u, 0xA55Au, buf, sizeof(buf));
+    CHECK_TRUE(n == 1u && buf[0] == 0x00u, "ENTER com PLL de volta → ACK");
+    ems::engine::output_test_exit();
 }
 
 void test_output_test_enter_shuts_etb(void) {

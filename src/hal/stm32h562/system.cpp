@@ -65,6 +65,10 @@ void iwdg_kick(void) noexcept {
     IWDG_KR = IWDG_KR_REFRESH;
 }
 
+bool system_clock_ok(void) noexcept {
+    return (RCC_CFGR1 & (7u << 3)) == RCC_CFGR1_SWS_PLL1;
+}
+
 // ── Inicialização do sistema ──────────────────────────────────────────────────
 
 void system_stm32_init(void) noexcept {
@@ -244,5 +248,8 @@ uint32_t millis(void) noexcept { return g_mock_ms; }
 uint32_t micros(void) noexcept { return g_mock_ms * 1000u; }
 void host_set_millis(uint32_t ms) noexcept { g_mock_ms = ms; }
 void host_advance_millis(uint32_t dt) noexcept { g_mock_ms += dt; }
+static bool g_mock_clock_ok = true;
+bool system_clock_ok(void) noexcept { return g_mock_clock_ok; }
+void host_set_clock_ok(bool ok) noexcept { g_mock_clock_ok = ok; }
 
 #endif  // EMS_HOST_TEST
