@@ -99,10 +99,19 @@ void ewg_driver_shutdown() noexcept {
 #else  // host test stub
 
 namespace ems::hal {
+namespace {
+uint16_t g_host_raw = 2048u;
+int16_t  g_host_pwm = 0;
+uint32_t g_host_shutdowns = 0u;
+}  // namespace
 bool ewg_driver_init() noexcept { return true; }
-void ewg_driver_set_motor_pwm(int16_t) noexcept {}
-uint16_t ewg_driver_read_position_raw() noexcept { return 2048u; }
-void ewg_driver_shutdown() noexcept {}
+void ewg_driver_set_motor_pwm(int16_t pwm) noexcept { g_host_pwm = pwm; }
+uint16_t ewg_driver_read_position_raw() noexcept { return g_host_raw; }
+void ewg_driver_shutdown() noexcept { g_host_pwm = 0; ++g_host_shutdowns; }
+// Ganchos de teste (host).
+void ewg_driver_test_set_raw(uint16_t raw) noexcept { g_host_raw = raw; }
+int16_t ewg_driver_test_last_pwm() noexcept { return g_host_pwm; }
+uint32_t ewg_driver_test_shutdown_count() noexcept { return g_host_shutdowns; }
 }
 
 #endif

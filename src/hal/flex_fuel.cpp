@@ -82,23 +82,12 @@ void flex_fuel_edge_isr() noexcept {
     STM32_REG32(EXTI_BASE + 0x010UL) = (1u << 5u);  // FPR1 (falling pending)
 }
 
-uint8_t flex_fuel_ethanol_pct() noexcept {
-    if (g_period_us == 0u) { return 0u; }
-    return flex_ethanol_pct_from_hz(1000000u / g_period_us);
-}
+uint8_t flex_fuel_ethanol_pct() noexcept { return flex_ethanol_pct_from_period_us(g_period_us); }
 
-int16_t flex_fuel_temp_x10() noexcept {
-    if (g_period_us == 0u || g_high_us == 0u) { return -400; }
-    // Duty cycle 10-90% maps to -40°C to 125°C
-    const uint32_t duty_pct = (g_high_us * 100u) / g_period_us;
-    if (duty_pct <= 10u) { return -400; }
-    if (duty_pct >= 90u) { return 1250; }
-    return static_cast<int16_t>(-400 + static_cast<int32_t>((duty_pct - 10u) * 16500u) / 800);
-}
+int16_t flex_fuel_temp_x10() noexcept { return flex_temp_x10_from_us(g_period_us, g_high_us); }
 
 bool flex_fuel_valid() noexcept {
-    if ((millis() - g_last_edge_ms) >= kTimeoutMs || g_period_us == 0u) { return false; }
-    return flex_fuel_freq_plausible(1000000u / g_period_us);
+    return flex_signal_valid(millis() - g_last_edge_ms, g_period_us, kTimeoutMs);
 }
 
 }  // namespace ems::hal

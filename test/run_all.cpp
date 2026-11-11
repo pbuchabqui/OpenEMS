@@ -152,6 +152,17 @@ test_sensors_bench_app_fixed();
     test_fuel_ltft_center_gate();
     test_fuel_inj_two_slope();
     test_spark_skip();
+    test_ewg_control();
+    test_ewg_position();
+    test_flex_fuel_conversions();
+    test_ac_request_debounce();
+    test_nvm_boot_page_helpers();
+    test_nvm_boot_table_loaders();
+    test_sched_angle_tables();
+    test_uart_host_contract();
+    test_sd_state_machine();
+    test_usb_cdc_host_ring();
+    test_vehicle_inputs_bridge();
 
     // ── Ign Calc — Segunda Fase ───────────────────────────────────────────────
     printf("\n=== IGN CALC (fase 2) ===");
@@ -350,6 +361,7 @@ test_engine_calc_mspark_dwell_follows_normal();
     test_can_stack_wbo2_fault_reaches_0x401();
     test_can_stack_wbo2_plausibility();
     test_can_rx_ignores_extended_and_remote();
+test_can_stack_wbo2_api();
     test_och_live_ve_byte();
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();

@@ -6,11 +6,8 @@
 namespace {
 
 constexpr uint32_t kPin = 11u;           // PB11
-constexpr uint32_t kDebounceMs = 50u;
 
-bool     g_state = false;                // estado filtrado
-bool     g_raw = false;                  // última amostra crua
-uint32_t g_raw_since_ms = 0u;
+ems::hal::AcDebounce g_deb;
 
 }  // namespace
 
@@ -23,13 +20,7 @@ void ac_request_init() noexcept {
 
 bool ac_request_poll(uint32_t now_ms) noexcept {
     const bool raw = (STM32_REG32(GPIOB_BASE + GPIO_IDR_OFF) & (1u << kPin)) != 0u;
-    if (raw != g_raw) {
-        g_raw = raw;
-        g_raw_since_ms = now_ms;
-    } else if (raw != g_state && (now_ms - g_raw_since_ms) >= kDebounceMs) {
-        g_state = raw;
-    }
-    return g_state;
+    return g_deb.step(raw, now_ms);
 }
 
 }  // namespace ems::hal

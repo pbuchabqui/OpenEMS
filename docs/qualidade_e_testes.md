@@ -13,7 +13,7 @@ isolado sem big-bang rewrite.
 make ci-local                   # todos os gates abaixo
 # equivalentes manuais:
 make secrets-check
-make host-test WERROR=1         # referencia: 1341 PASS / 0 FAIL
+make host-test WERROR=1         # referencia: 2222 PASS / 0 FAIL
 make precision-test             # motor virtual: 120 PASS / 0 FAIL (centelha, dwell, PW, EOI)
 make ini-check                  # TunerStudio ini: referencias, sobreposicao, faixas = firmware
 make dash-check DASH_PY=<venv>/bin/python  # dashboard: helpers JS + protocolo vs ECU simulada
@@ -44,6 +44,10 @@ make format                     # clang-format so em ficheiros dirty (on-touch)
 | `test/run_all.cpp` | `main()` — **ordem fixa** das suites |
 | `test/suite_registry.h` | declaracoes das funcoes `test_*` |
 | `test/test_*.cpp` | suites (etb, torque, ckp, fuel, sched, protocol, …) |
+| `test/test_hal_misc.cpp` | `ewg_control`/posição do EWG (driver de host com ganchos), conversões do `flex_fuel`, debounce do `ac_request` |
+| `test/test_hal_io.cpp` | contrato dos stubs de UART e USB CDC, máquina de estados do SD simulado, ponte `vehicle_inputs` |
+| `test/test_nvm_boot.cpp` | helpers de página e loaders de tabelas/eixos do boot (flash de host zera as páginas: apagar com 0xFF antes de testar "apagada") |
+| `test/test_sched_angle.cpp` | tabelas de ângulo de `ecu_sched_angle.cpp` (sequencial e presync) contra o oráculo de ângulo |
 | `test/sim/engine_sim.{h,cpp}` | motor virtual: cinematica θ(t), roda 60-2 real + came, jitter/ruido, modelo de latencia da ISR, log de pinos com timestamp |
 | `test/sim/precision_main.cpp` | `make precision-test`: compara o que o motor recebe (angulo de centelha, dwell, combustivel, EOI) com o oraculo cinematico; defeitos conhecidos = XFAIL com a etapa que os corrige |
 

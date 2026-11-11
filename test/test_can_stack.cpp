@@ -175,3 +175,51 @@ void test_can_rx_ignores_extended_and_remote(void) {
     can_stack_process(100u, ckp_at(1000u), s, 0, 0u, 0, 0u, 0u, 0u);
     CHECK_FALSE(can_stack_wbo2_fresh(100u), "estendido: ignorado");
 }
+
+void test_can_stack_wbo2_api(void) {
+    section("can_stack: lambda seguro, fault, id configurável e lambda de bancada");
+    const ems::drv::SensorData s{};
+
+    can0_test_reset();
+    can_stack_init(0x180u);
+    CHECK_EQ(can_stack_lambda_milli_safe(100u), WBO2_SAFE_LAMBDA_MILLI, "sem WBO2: λ seguro");
+    can_stack_process(100u, ckp_at(1000u), s, 0, 0u, 0, 0u, 0u, 0u);
+    CHECK_TRUE(can_stack_wbo2_fault(), "sem frame: falha de WBO2");
+
+    wbo2_frame(950u);
+    can_stack_process(200u, ckp_at(1000u), s, 0, 0u, 0, 0u, 0u, 0u);
+    CHECK_FALSE(can_stack_wbo2_fault(), "frame válido: sem falha");
+    CHECK_EQ(can_stack_lambda_milli_safe(250u), 950u, "WBO2 fresco: devolve o λ medido");
+    CHECK_EQ(can_stack_lambda_milli_safe(701u), WBO2_SAFE_LAMBDA_MILLI, "WBO2 expirado (>500 ms): λ seguro");
+    can_stack_process(701u, ckp_at(1000u), s, 0, 0u, 0, 0u, 0u, 0u);
+    CHECK_TRUE(can_stack_wbo2_fault(), "expirou: falha volta");
+
+    // Troca do ID de RX: o antigo deixa de valer, o novo passa a valer (11 bits).
+    can_stack_set_wbo2_rx_id(0x2A5u);
+    wbo2_frame(1000u);                       // id 0x180 — não é mais o WBO2
+    can_stack_process(800u, ckp_at(1000u), s, 0, 0u, 0, 0u, 0u, 0u);
+    CHECK_FALSE(can_stack_wbo2_fresh(800u), "ID antigo ignorado");
+    CanFrame f{};
+    f.id = 0x2A5u; f.dlc = 3u; f.data[0] = 0xE8u; f.data[1] = 0x03u;
+    can0_test_push_rx(f);
+    can_stack_process(900u, ckp_at(1000u), s, 0, 0u, 0, 0u, 0u, 0u);
+    CHECK_TRUE(can_stack_wbo2_fresh(900u), "ID novo aceito");
+    can_stack_set_wbo2_rx_id(0xFFFFu);       // máscara de 11 bits
+    f.id = 0x7FFu;
+    can0_test_push_rx(f);
+    can_stack_process(1000u, ckp_at(1000u), s, 0, 0u, 0, 0u, 0u, 0u);
+    CHECK_TRUE(can_stack_wbo2_fresh(1000u), "ID mascarado a 11 bits (0x7FF)");
+
+    // Bancada: sempre fresco com λ fixo, sem frame algum.
+    can_stack_init(0x180u);
+    can_stack_set_bench_lambda(true, 990u);
+    can_stack_process(5000u, ckp_at(1000u), s, 0, 0u, 0, 0u, 0u, 0u);
+    CHECK_TRUE(can_stack_wbo2_fresh(5000u), "bancada: WBO2 sempre fresco");
+    CHECK_FALSE(can_stack_wbo2_fault(), "bancada: sem falha de WBO2");
+    CHECK_EQ(can_stack_lambda_milli_safe(5000u), 990u, "bancada: λ simulado");
+    can_stack_set_bench_lambda(false, 990u);
+    can_stack_process(6000u, ckp_at(1000u), s, 0, 0u, 0, 0u, 0u, 0u);
+    CHECK_TRUE(can_stack_wbo2_fault(), "bancada off: volta a falhar sem frame");
+
+    can_stack_init(0x180u);
+}

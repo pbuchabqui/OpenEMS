@@ -50,7 +50,7 @@
 - **Boot safe:** `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()` logo apos
   clock (RGT6: PA15 JTDI; VGT6: PE* LOW). Actuadores active-high.
 - **DFU:** `dfu-util -a 0 -s 0x08000000 -D openems-<board>.bin` + power-cycle BOOT0=0.
-- **docs/wiring_diagram.md** stale (mapa de pinos ASCII legado) — pinout válido em `docs/hw/pinout.md`.
+- **docs/wiring_diagram.md** já aponta para o pinout atual; a fonte de verdade continua sendo `docs/hw/pinout.md`.
 
 ### P1 — restante (decode / cam / proteccao)
 
@@ -61,7 +61,7 @@
 - ~~Fuel só em FULL_SYNC (HALF: spark wasted, inj inhibit); `close_cmp_seq_gate` em todos os drops de sync (incl. anomaly→WAIT_GAP, stall)~~ → feito.
 - ~~Overtemp CLT 105/115 °C (WARN/CRIT) + DiagnosticManager CRITICAL → inj/ign inhibit~~ → feito.
 - ~~Multi-spark: gate ≤1500 RPM; angle table 48 + event queue 48 (3 extras × 4 cyl); host margin test~~ → feito.
-- DiagnosticManager: debounce/tick/persistência NVM ainda aspiracional (`protection_system.md`).
+- DiagnosticManager: tick ligado e testado. Debounce de WARNING/ERROR e persistência em NVM ficam no Backlog por decisão, até haver consumidor dos códigos (`protection_system.md`, `ROADMAP.md`).
 
 ### P2 — bancada / HIL / docs
 
@@ -69,5 +69,4 @@
 - Scope das saídas INJ/IGN (BSRR/TIM5_CH3, latência/jitter) e TIM5 CKP/CMP 200–8500 rpm.
 - USB CDC real: IRQ/endpoints, sem bloqueio do caminho crítico; RX ≥ envelope.
 - Host/HIL expandido: decode, sync, quick crank, scheduler, fuel/ign, sensores (já há host-test 1000+; HIL físico pendente).
-- Actualizar `docs/wiring_diagram.md` (esquemáticos eléctricos) ao pinout de `docs/hw/pinout.md` (ainda tem mapa TIM2/PC legado no ASCII).
 

@@ -130,6 +130,10 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
                    $(TEST_DIR)/test_aux_knock.cpp \
                    $(TEST_DIR)/test_knock_hw_wiring.cpp \
                    $(TEST_DIR)/test_timer.cpp \
+                   $(TEST_DIR)/test_hal_misc.cpp \
+                   $(TEST_DIR)/test_nvm_boot.cpp \
+                   $(TEST_DIR)/test_hal_io.cpp \
+                   $(TEST_DIR)/test_sched_angle.cpp \
                    $(TEST_DIR)/test_sched.cpp \
                    $(TEST_DIR)/test_engine_misc.cpp \
                    $(TEST_DIR)/test_math.cpp \
@@ -140,6 +144,7 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
 HOST_TEST_SRC = $(ENGINE_SRC) $(DRV_SRC) $(APP_SRC) $(HAL_COMMON_SRC) \
                 $(SRC_DIR)/hal/stm32h562/timer.cpp \
                 $(SRC_DIR)/hal/stm32h562/system.cpp \
+                $(SRC_DIR)/hal/stm32h562/usb_cdc.cpp \
                 $(HOST_TEST_HARNESS) $(HOST_TEST_SUITES)
 HOST_TEST_BIN = $(HOST_DIR)/mvp_bench_tests
 
