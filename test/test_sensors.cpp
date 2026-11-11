@@ -273,6 +273,21 @@ void test_sensors_on_tooth(void) {
     snap.rpm_x10 = 62500u;
     sensors_on_tooth(snap);  // triggers ADC sample accumulation (fast channels)
     CHECK_TRUE(true, "sensors_on_tooth completes without crash");
+
+    // O slot de MAF_V é reservado (no hardware converte o pino do knock). Um valor baixo ali
+    // não pode virar falha nem DTC de MAF.
+    sensor_setup(); sensors_init();
+    ems::engine::DiagnosticManager::init();
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::MAP, 1365u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::TPS, 500u);
+    ems::hal::adc_test_set_raw_primary(ems::hal::AdcPrimaryChannel::MAF_V, 0u);
+    for (int i = 0; i < 60; ++i) { sensors_on_tooth(snap); }
+    CHECK_EQ(static_cast<uint8_t>(sensors_get().fault_bits & (1u << 1u)), 0u,
+             "MAF_V baixo: bit de falha de MAF fica limpo");
+    CHECK_FALSE(ems::engine::DiagnosticManager::is_fault_active(
+                    ems::engine::DiagnosticCode::MAF_SENSOR_RANGE),
+                "MAF_V baixo: sem DTC de MAF");
+    ems::engine::DiagnosticManager::init();
 }
 
 void test_map_window_angular(void) {

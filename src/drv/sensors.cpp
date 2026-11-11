@@ -495,8 +495,13 @@ inline void sample_fast_channels() noexcept {
     g_tps_pos = static_cast<uint8_t>((g_tps_pos + 1u) & 0x3u);
 
     apply_fault(SensorId::MAP, map_raw);
-    apply_fault(SensorId::MAF, mafv_raw);
     apply_fault(SensorId::TPS, tps_raw);
+    // MAF_V é canal reservado: na sequência do ADC1 o slot dele converte o INP19 (pino do
+    // knock). Checar faixa ali acusava "MAF fora de faixa" sempre que o knock lia < 10 counts.
+    // Sem sensor de MAF não há falha de MAF: o bit fica limpo.
+    static_cast<void>(mafv_raw);
+    g_data_staging.fault_bits = static_cast<uint8_t>(
+        g_data_staging.fault_bits & ~(1u << static_cast<uint8_t>(SensorId::MAF)));
     // O2 fault no longer sourced from ADC — lambda comes via CAN.
     // Clear any stale O2 fault bit so it does not trigger limp mode.
     g_data_staging.fault_bits = static_cast<uint8_t>(
@@ -569,13 +574,6 @@ inline void sample_fast_channels() noexcept {
                                        tps_raw, 0);
     } else {
         DiagnosticManager::clear_fault(DiagnosticCode::TPS_SENSOR_RANGE);
-    }
-    if (g_fault[static_cast<uint8_t>(SensorId::MAF)].active) {
-        DiagnosticManager::report_fault(DiagnosticCode::MAF_SENSOR_RANGE,
-                                       FaultSeverity::WARNING,
-                                       mafv_raw, 0);
-    } else {
-        DiagnosticManager::clear_fault(DiagnosticCode::MAF_SENSOR_RANGE);
     }
     // O2 ADC fault removed — O2 now CAN-only; knock_raw uses that channel.
     

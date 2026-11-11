@@ -1,5 +1,7 @@
 #include "engine/diagnostic_manager.h"
 
+#include "hal/critical_section.h"
+
 #include <cstdint>
 #include <cstring>
 
@@ -14,6 +16,7 @@ static uint32_t g_system_tick_ms = 0;
 static RecoveryState g_recovery_states[kMaxEvents];
 
 void DiagnosticManager::init() noexcept {
+    ems::hal::CriticalSectionGuard guard;   // ver report_fault
     // Clear all events
     for (uint8_t i = 0; i < kMaxEvents; ++i) {
         g_events[i].code = DiagnosticCode::NONE;
@@ -33,6 +36,10 @@ bool DiagnosticManager::report_fault(DiagnosticCode code,
                                      FaultSeverity severity,
                                      uint16_t param1,
                                      uint16_t param2) noexcept {
+    // A tabela é alterada pela ISR do dente (sensors.cpp: falhas de MAP/TPS/ADC) e pelo laço
+    // principal (sobretemperatura, trims, ETB). Sem a guarda, uma ISR no meio de um shift
+    // duplicava ou perdia eventos, inclusive um CRITICAL (corte preso ou corte perdido).
+    ems::hal::CriticalSectionGuard guard;
     if (code == DiagnosticCode::NONE) {
         return false;
     }
@@ -90,6 +97,7 @@ bool DiagnosticManager::report_fault(DiagnosticCode code,
 }
 
 bool DiagnosticManager::clear_fault(DiagnosticCode code) noexcept {
+    ems::hal::CriticalSectionGuard guard;   // ver report_fault
     if (code == DiagnosticCode::NONE) {
         return false;
     }
@@ -113,6 +121,7 @@ bool DiagnosticManager::clear_fault(DiagnosticCode code) noexcept {
 }
 
 bool DiagnosticManager::is_fault_active(DiagnosticCode code) noexcept {
+    ems::hal::CriticalSectionGuard guard;   // ver report_fault
     if (code == DiagnosticCode::NONE) {
         return false;
     }
@@ -130,6 +139,7 @@ uint8_t DiagnosticManager::get_active_fault_count() noexcept {
 }
 
 FaultSeverity DiagnosticManager::get_highest_severity() noexcept {
+    ems::hal::CriticalSectionGuard guard;   // ver report_fault
     if (g_event_count == 0) {
         return FaultSeverity::INFO;
     }
@@ -145,6 +155,7 @@ FaultSeverity DiagnosticManager::get_highest_severity() noexcept {
 
 RecoveryState DiagnosticManager::update_recovery(DiagnosticCode code,
                                                  bool success) noexcept {
+    ems::hal::CriticalSectionGuard guard;   // ver report_fault
     // Find associated event
     uint8_t event_idx = 0;
     bool found = false;
@@ -202,6 +213,7 @@ RecoveryState DiagnosticManager::update_recovery(DiagnosticCode code,
 }
 
 RecoveryState DiagnosticManager::get_recovery_state(DiagnosticCode code) noexcept {
+    ems::hal::CriticalSectionGuard guard;   // ver report_fault
     for (uint8_t i = 0; i < g_event_count; ++i) {
         if (g_events[i].code == code) {
             return g_recovery_states[i];
@@ -212,6 +224,7 @@ RecoveryState DiagnosticManager::get_recovery_state(DiagnosticCode code) noexcep
 
 void DiagnosticManager::record_freeze_frame(DiagnosticCode code,
                                            const uint16_t frame[4]) noexcept {
+    ems::hal::CriticalSectionGuard guard;   // ver report_fault
     for (uint8_t i = 0; i < g_event_count; ++i) {
         if (g_events[i].code == code) {
             for (uint8_t j = 0; j < 4; ++j) {
@@ -270,6 +283,7 @@ bool DiagnosticManager::check_sensor_plausibility(uint16_t map_bar_x1000,
 }
 
 void DiagnosticManager::clear_all_faults() noexcept {
+    ems::hal::CriticalSectionGuard guard;   // ver report_fault
     // Clear only non-permanent faults
     uint8_t write_idx = 0;
     for (uint8_t i = 0; i < g_event_count; ++i) {
