@@ -913,6 +913,20 @@ void test_fuel_ltft_authority(void) {
     CHECK_TRUE(ltft <= 50 && ltft >= -50, "LTFT mult respeita clamp 50 (±5%)");
     CHECK_TRUE(stft > ltft || ltft == 50, "STFT authority > LTFT cell clamp");
 
+    // Clamp calibrado acima de ±25 %: a RAM não passa do que a NVM guarda (int8 de 1 %, ±25).
+    fuel_reset_ltft();
+    fuel_reset_adaptives();
+    ltft_mult_clamp_pct_x10 = 500u;   // pede ±50 %
+    stft_clamp_pct_x10 = 500u;
+    for (int i = 0; i < 400; ++i) {
+        (void)fuel_update_stft(30000u, 100u, 1000, 1200, 900, true, false, false,
+                               5000u, 500u);
+    }
+    CHECK_EQ(fuel_get_ltft_at(30000u, 100u), 250, "clamp pedido de 50 %: célula para em +25 %");
+    fuel_reset_adaptives();   // recarrega as células da NVM, como num reset
+    CHECK_EQ(fuel_get_ltft_at(30000u, 100u), 250, "depois do reset a célula volta com o mesmo valor");
+    stft_clamp_pct_x10 = 250u;
+
     // max_step limita avanço por tick
     fuel_reset_ltft();
     fuel_reset_adaptives();

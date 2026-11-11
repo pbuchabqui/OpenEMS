@@ -158,51 +158,39 @@ static void adc_prepare_for_config(volatile uint32_t& cr) noexcept {
 
 }
 
-static void adc_enable(volatile uint32_t& cr, volatile uint32_t& isr) noexcept {
+// Habilita um conversor. Devolve true se ele ficou pronto (direto ou depois de um ciclo de
+// deep-power-down). Não mexe em g_adc_recovering quando dá certo: os flags são compartilhados
+// por ADC1/ADC2 e o sucesso de um não pode apagar a falha do outro (adc_init fecha a conta).
+static bool adc_enable(volatile uint32_t& cr, volatile uint32_t& isr) noexcept {
     isr = ADC_ISR_ADRDY;     // limpa ADRDY antes de habilitar
     cr |= ADC_CR_ADEN;
-    if (!adc_wait_ready(isr)) {
-        // FIX BUG-11 / P0 #3: se ADC não ficou ready, tenta recovery via deep-power-down
-        // Sequência RM0481 §25.4.2: ADEN=0 PRIMEIRO, depois DEEPPWD=1
-        // O fault counter já foi incrementado por adc_wait_ready.
-        
-        // Incrementa contador de retries
-        if (g_adc_recovery_retries < kAdcRecoveryMaxRetries) {
-            ++g_adc_recovery_retries;
-            g_adc_recovering = true;
-            
-            // Sequência de recovery
-            cr &= ~ADC_CR_ADEN;       // 1. Desabilitar ADC
-            for (volatile uint32_t i = 0u; i < 100u; ++i) { (void)i; } // aguarda
-            cr |= ADC_CR_DEEPPWD;     // 2. Deep power-down
-            for (volatile uint32_t i = 0u; i < 1000u; ++i) { (void)i; } // aguarda T_pwrup
-            cr &= ~ADC_CR_DEEPPWD;    // 3. Sair de deep-power-down
-            cr |= ADC_CR_ADVREGEN;    // 4. Re-ativar regulador interno
-            for (volatile uint32_t i = 0u; i < 5000u; ++i) { (void)i; } // aguarda estabilização
-            cr |= ADC_CR_ADEN;        // 5. Re-habilitar ADC
-            
-            if (adc_wait_ready(isr)) {
-                // Recovery成功了
-                g_adc_recovering = false;
-                g_adc_recovery_retries = 0u;  // Reset após sucesso
-            } else {
-                // Falhou novamente, tenta próximo retry no próximo timeout
-                // g_adc_recovering permanece true para indicar estado de recovery
-            }
-        } else {
-            // Excedeu máximo de retries - recovery falhou permanentemente
-            g_adc_recovery_failed = true;
-            g_adc_recovering = false;
-            // Mantém ADC desabilitado para segurança
-            cr &= ~ADC_CR_ADEN;
-        }
-    } else {
-        // ADC ready com sucesso - reset flags
-        // A falha permanente é trava até o reset: os flags são compartilhados por ADC1/ADC2 e
-        // o sucesso do ADC2 não pode apagar a falha do ADC1.
-        g_adc_recovery_retries = 0u;
-        g_adc_recovering = false;
+    if (adc_wait_ready(isr)) {
+        return true;
     }
+    // Não ficou pronto: tenta recovery via deep-power-down.
+    // Sequência RM0481 §25.4.2: ADEN=0 PRIMEIRO, depois DEEPPWD=1.
+    // O fault counter já foi incrementado por adc_wait_ready.
+    if (g_adc_recovery_retries >= kAdcRecoveryMaxRetries) {
+        // Excedeu o máximo de tentativas: falha permanente (trava até o reset).
+        g_adc_recovery_failed = true;
+        g_adc_recovering = false;
+        cr &= ~ADC_CR_ADEN;   // mantém o ADC desabilitado
+        return false;
+    }
+    ++g_adc_recovery_retries;
+    cr &= ~ADC_CR_ADEN;       // 1. Desabilitar ADC
+    for (volatile uint32_t i = 0u; i < 100u; ++i) { (void)i; }
+    cr |= ADC_CR_DEEPPWD;     // 2. Deep power-down
+    for (volatile uint32_t i = 0u; i < 1000u; ++i) { (void)i; }
+    cr &= ~ADC_CR_DEEPPWD;    // 3. Sair de deep-power-down
+    cr |= ADC_CR_ADVREGEN;    // 4. Re-ativar regulador interno
+    for (volatile uint32_t i = 0u; i < 5000u; ++i) { (void)i; }
+    cr |= ADC_CR_ADEN;        // 5. Re-habilitar ADC
+    if (adc_wait_ready(isr)) {
+        return true;
+    }
+    g_adc_recovering = true;  // segue em recuperação; a próxima chamada de adc_init tenta de novo
+    return false;
 }
 
 static void gpdma_arm(uint32_t ch_base, uint32_t reqsel, uint32_t buf_bytes,
@@ -365,11 +353,15 @@ ADC2_CFGR1 = ADC_CFGR1_RES_12BIT
     nvic_enable_irq(IRQ_GPDMA1_CH1);
 
     // ── 8. Habilitar ADCs e armar hardware trigger ──────────────────────
-    adc_enable(ADC1_CR, ADC1_ISR);
-    adc_enable(ADC2_CR, ADC2_ISR);
-    ADC1_CR |= ADC_CR_ADSTART;
-    ADC2_CR |= ADC_CR_ADSTART;
-    g_adc_init_ok = !g_adc_recovering && !g_adc_recovery_failed;
+    g_adc_recovering = false;   // nova tentativa: cada conversor que falhar volta a levantar
+    const bool adc1_ok = adc_enable(ADC1_CR, ADC1_ISR);
+    const bool adc2_ok = adc_enable(ADC2_CR, ADC2_ISR);
+    if (adc1_ok) { ADC1_CR |= ADC_CR_ADSTART; }
+    if (adc2_ok) { ADC2_CR |= ADC_CR_ADSTART; }
+    if (adc1_ok && adc2_ok) {
+        g_adc_recovery_retries = 0u;
+    }
+    g_adc_init_ok = adc1_ok && adc2_ok && !g_adc_recovery_failed;
 }
 
 void adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept {
@@ -465,46 +457,6 @@ extern "C" void GPDMA1_Channel1_IRQHandler(void) {
         ++g_adc_dma_faults;
         g_adc_dma_rearm_pending = true;
     }
-}
-
-// P0 #3: Handler de timeout do ADC para recuperação em tempo de execução
-// Chamado quando ADC não responde dentro do período esperado
-extern "C" void adc_timeout_isr() noexcept {
-    ++g_adc_timeout_count;
-    
-    // Se já está em recovery ou falhou permanentemente, ignora
-    if (g_adc_recovering || g_adc_recovery_failed) {
-        return;
-    }
-    
-    // Inicia sequência de recovery
-    g_adc_recovering = true;
-    
-    // Verifica se excedeu máximo de retries
-    if (g_adc_recovery_retries >= kAdcRecoveryMaxRetries) {
-        g_adc_recovery_failed = true;
-        g_adc_recovering = false;
-        return;
-    }
-    
-    ++g_adc_recovery_retries;
-    
-    // Sequência de recovery por hardware conforme IMPROVEMENTS.md P0 #3
-    // Nota: Esta ISR é chamada pelo watchdog do ADC ou timer de supervisão
-    // O recovery completo dos registradores deve ser feito no contexto apropriado
-    
-    // Passos de recovery (RM0481 §25.4.2):
-    // 1. Stop conversion (ADSTP)
-    // 2. Disable ADC (ADDIS)  
-    // 3. Wait for end of shutdown
-    // 4. Re-enable ADC (ADEN)
-    // 5. Verify ADRDY flag
-    
-    // Esta versão simplificada sinaliza o estado para o main loop
-    // onde o recovery completo será executado com acesso seguro aos registradores
-    
-    // Reporta fault ao sistema de diagnóstico
-    // (implementado no DiagnosticManager via sample_fast_channels)
 }
 
 #else  // EMS_HOST_TEST ─────────────────────────────────────────────────────
