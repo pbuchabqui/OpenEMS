@@ -13,7 +13,7 @@ isolado sem big-bang rewrite.
 make ci-local                   # todos os gates abaixo
 # equivalentes manuais:
 make secrets-check
-make host-test WERROR=1         # referencia: 2231 PASS / 0 FAIL
+make host-test WERROR=1         # referencia: 2249 PASS / 0 FAIL
 make precision-test             # motor virtual: 120 PASS / 0 FAIL (centelha, dwell, PW, EOI)
 make ini-check                  # TunerStudio ini: referencias, sobreposicao, faixas = firmware
 make dash-check DASH_PY=<venv>/bin/python  # dashboard: helpers JS + protocolo vs ECU simulada

@@ -33,13 +33,6 @@ static constexpr uint32_t kTimPrescaler = 3u;
 // (ETB a ~40 kHz, acima dos 25 kHz da BTS7960).
 static constexpr uint32_t kTimClockHz   = 250000000u;
 
-// PSC/ARR de um PWM de freq_hz: menor prescaler que cabe ARR em 16 bits.
-static void pwm_psc_arr(uint32_t freq_hz, uint32_t& psc, uint32_t& arr) {
-    psc = 0u;
-    arr = kTimClockHz / freq_hz;
-    while (arr > 0xFFFFu) { ++psc; arr = kTimClockHz / (freq_hz * (psc + 1u)); }
-    if (arr > 0u) { arr -= 1u; }
-}
 
 namespace ems::hal {
 
@@ -125,7 +118,7 @@ void tim3_pwm_init(uint32_t freq_hz) {
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 6u, GPIO_AF2);
 
     uint32_t psc, arr;
-    pwm_psc_arr(freq_hz, psc, arr);
+    pwm_psc_arr(kTimClockHz, freq_hz, psc, arr);
 
     TIM3_CR1 = 0u;
     TIM3_PSC = psc;
@@ -159,12 +152,10 @@ void tim4_pwm_init(uint32_t freq_hz) {
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 6u, GPIO_AF2);
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 7u, GPIO_AF2);
 
-    // PSC=0 e ARR preso a 16 bits (frequência pedida muito baixa vira ~3,8 kHz): comportamento
-    // anterior preservado, só a base de clock foi corrigida.
-    const uint32_t psc = 0u;
-    uint32_t arr = kTimClockHz / freq_hz;
-    if (arr > 0xFFFFu) { arr = 0xFFFFu; }
-    if (arr > 0u) { arr -= 1u; }
+    // Prescaler calculado: com PSC=0 e ARR preso a 16 bits os 15 Hz pedidos para o VVT saíam
+    // a ~3,8 kHz.
+    uint32_t psc, arr;
+    pwm_psc_arr(kTimClockHz, freq_hz, psc, arr);
 
     TIM4_CR1 = 0u;
     TIM4_PSC = psc;
@@ -201,7 +192,7 @@ void tim2_pwm_init(uint32_t freq_hz) {
     gpio_set_af(&GPIOB_MODER, &GPIOB_AFRL, &GPIOB_AFRH, &GPIOB_OSPEEDR, 10u, GPIO_AF1);
 
     uint32_t psc, arr;
-    pwm_psc_arr(freq_hz, psc, arr);
+    pwm_psc_arr(kTimClockHz, freq_hz, psc, arr);
 
     TIM2_CR1   = 0u;
     TIM2_PSC   = psc;
@@ -258,7 +249,7 @@ void etb_pwm_init(uint32_t freq_hz) {
     gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 6u, GPIO_AF2);
 
     uint32_t psc, arr;
-    pwm_psc_arr(freq_hz, psc, arr);
+    pwm_psc_arr(kTimClockHz, freq_hz, psc, arr);
 
     TIM3_CR1 = 0u;
     TIM3_PSC = psc;

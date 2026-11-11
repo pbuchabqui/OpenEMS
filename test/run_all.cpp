@@ -209,6 +209,7 @@ test_sensors_bench_app_fixed();
     // ── Timer HAL ────────────────────────────────────────────────────────────
     printf("\n=== TIMER HAL ===");
     test_timer_stubs();
+    test_timer_pwm_psc_arr();
     test_out_pins_bsrr_rgt6();
 
     // ── TABLE3D ──────────────────────────────────────────────────────────

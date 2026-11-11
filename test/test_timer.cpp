@@ -51,6 +51,26 @@ using namespace ems::engine;
 using namespace ems::app;
 using namespace ems::hal;
 
+void test_timer_pwm_psc_arr(void) {
+    section("timer: PSC/ARR do PWM cabem em 16 bits e dão a frequência pedida");
+    const uint32_t clk = 250000000u;
+    const uint32_t freqs[] = {15u, 100u, 300u, 1000u, 10000u, 20000u};
+    for (uint32_t f : freqs) {
+        uint32_t psc = 0u, arr = 0u;
+        ems::hal::pwm_psc_arr(clk, f, psc, arr);
+        const uint32_t out = clk / ((psc + 1u) * (arr + 1u));
+        CHECK_TRUE(arr <= 0xFFFFu && psc <= 0xFFFFu, "PSC e ARR em 16 bits");
+        // erro <= 1 %
+        const uint32_t err = (out > f) ? (out - f) : (f - out);
+        CHECK_TRUE(err * 100u <= f, "frequência dentro de 1 % da pedida");
+    }
+    uint32_t psc = 9u, arr = 9u;
+    ems::hal::pwm_psc_arr(clk, 15u, psc, arr);
+    CHECK_TRUE(psc > 0u, "15 Hz (VVT) exige prescaler: PSC=0 dava ~3,8 kHz");
+    ems::hal::pwm_psc_arr(clk, 0u, psc, arr);
+    CHECK_TRUE(psc == 0u && arr == 0u, "freq 0: sem divisão por zero");
+}
+
 void test_timer_stubs(void) {
     section("timer HAL: all stubs execute without crash");
     using namespace ems::hal;

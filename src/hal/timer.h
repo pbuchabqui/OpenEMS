@@ -4,6 +4,21 @@
 
 namespace ems::hal {
 
+// PSC/ARR de um PWM de freq_hz num timer de 16 bits com clock clk_hz: menor prescaler em que
+// o ARR cabe em 16 bits. Função pura (testada no host).
+inline void pwm_psc_arr(uint32_t clk_hz, uint32_t freq_hz, uint32_t& psc, uint32_t& arr) noexcept {
+    psc = 0u;
+    arr = 0u;
+    if (freq_hz == 0u) { return; }
+    arr = clk_hz / freq_hz;
+    while (arr > 0x10000u && psc < 0xFFFFu) {
+        ++psc;
+        arr = clk_hz / (freq_hz * (psc + 1u));
+    }
+    if (arr > 0x10000u) { arr = 0x10000u; }
+    if (arr > 0u) { arr -= 1u; }
+}
+
 void tim5_ic_init(void);
 uint32_t tim5_count() noexcept;
 

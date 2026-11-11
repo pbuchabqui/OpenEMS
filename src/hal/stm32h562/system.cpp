@@ -56,7 +56,13 @@ uint32_t micros(void) noexcept {
         pend = ((*reinterpret_cast<volatile uint32_t*>(0xE000ED04u) >> 26u) & 1u) != 0u;  // ICSR
         ms2 = g_systick_ms;
     } while (ms != ms2);
-    if (pend) { ++ms; }
+    // Pendente com ms estável = o handler ainda não rodou (mascarado). O CVR lido acima pode
+    // ser de ANTES do reload (quase 1 ms decorrido): somado ao ms+1 adiantava ~1 ms. Relido
+    // aqui ele é com certeza de depois do reload.
+    if (pend) {
+        ++ms;
+        cvr = *reinterpret_cast<volatile uint32_t*>(0xE000E018u);
+    }
     const uint32_t elapsed_us = (kSysTickReload - cvr) / 250u;
     return ms * 1000u + elapsed_us;
 }
