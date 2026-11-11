@@ -154,6 +154,11 @@ static uint8_t  g_clt_pos     = 0u;
 static uint16_t g_iat_buf[8]  = {};
 static uint8_t  g_iat_pos     = 0u;
 
+// Anéis de média ainda sem amostra: a primeira leitura preenche o anel inteiro. Partindo de
+// zero, a média subia aos poucos (CLT/IAT levavam 800 ms para chegar ao valor real) e a
+// partida logo após o boot calculava prime e enriquecimento com uma temperatura falsa.
+static bool g_slow100_seeded = false;
+static bool g_slow50_seeded  = false;
 static uint16_t g_fuel_buf[4] = {};
 static uint8_t  g_fuel_pos    = 0u;
 static uint16_t g_oil_buf[4]  = {};
@@ -217,6 +222,8 @@ inline void reset_state() noexcept {
     g_oil_pos        = 0u;
     g_maf_period_pos = 0u;
     g_fast_sample_accum    = 0u;
+    g_slow100_seeded       = false;
+    g_slow50_seeded        = false;
     g_last_rpm_x10         = 0u;
     // g_bench_clt_iat NÃO é resetado aqui — é config de bancada, persiste por
     // sensors_set_bench_clt_iat() até ser desligado explicitamente.
@@ -748,6 +755,10 @@ void sensors_tick_50ms() noexcept {
     const uint16_t fuel_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::FUEL_PRESS);
     const uint16_t oil_raw  = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::OIL_PRESS);
 
+    if (!g_slow50_seeded) {
+        g_slow50_seeded = true;
+        for (uint8_t i = 0u; i < 4u; ++i) { g_fuel_buf[i] = fuel_raw; g_oil_buf[i] = oil_raw; }
+    }
     g_fuel_buf[g_fuel_pos] = fuel_raw;
     g_fuel_pos = static_cast<uint8_t>((g_fuel_pos + 1u) & 0x3u);
 
@@ -875,6 +886,10 @@ void sensors_tick_100ms() noexcept {
     const uint16_t clt_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::CLT);
     const uint16_t iat_raw = ems::hal::adc_secondary_read(ems::hal::AdcSecondaryChannel::IAT);
 
+    if (!g_slow100_seeded) {
+        g_slow100_seeded = true;
+        for (uint8_t i = 0u; i < 8u; ++i) { g_clt_buf[i] = clt_raw; g_iat_buf[i] = iat_raw; }
+    }
     g_clt_buf[g_clt_pos] = clt_raw;
     g_clt_pos = static_cast<uint8_t>((g_clt_pos + 1u) & 0x7u);
 

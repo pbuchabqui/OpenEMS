@@ -105,6 +105,23 @@ void test_sensors_tick_100ms_clt_iat(void) {
     const int16_t expected = static_cast<int16_t>(-400 + (1900 * 62) / 127);
     CHECK_EQ(sd.clt_degc_x10, expected, "CLT lut128(2000) matches formula");
     CHECK_EQ(sd.iat_degc_x10, expected, "IAT lut128(2000) matches formula");
+
+    // A 1ª leitura após o boot já vale: o anel de média é preenchido com ela (partindo de
+    // zero a média levava 800 ms para chegar e a partida usava uma temperatura falsa).
+    sensor_setup(); sensors_init();
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::OIL_PRESS, 2000u);
+    sensors_test_tick_100ms();
+    sensors_tick_50ms();
+    const SensorData first = sensors_get();
+    CHECK_EQ(first.clt_degc_x10, expected, "CLT correto já na 1ª leitura");
+    CHECK_EQ(first.iat_degc_x10, expected, "IAT correto já na 1ª leitura");
+    CHECK_EQ(first.fuel_press_bar_x1000, static_cast<uint16_t>((2000u * 2500u) / 4095u),
+             "pressão de combustível correta já na 1ª leitura");
+    CHECK_EQ(first.oil_press_bar_x1000, static_cast<uint16_t>((2000u * 2500u) / 4095u),
+             "pressão de óleo correta já na 1ª leitura");
 }
 
 // raw 2000, cal 0..4095 → 2000*1000/4095 = 488. A primeira amostra semeia o IIR.

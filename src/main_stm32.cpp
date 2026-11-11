@@ -424,20 +424,9 @@ static void openems_init() noexcept {
     nvic_set_priority(IRQ_TIM5, 1u);
     nvic_enable_irq(IRQ_TIM5);
 
-    // 10) Aguardar CKP sync (timeout 5 s), heartbeat 5 Hz
-    {
-        const uint32_t sync_deadline = millis() + 5000u;
-        uint32_t next_toggle = millis() + 100u;
-        while (millis() < sync_deadline) {
-            iwdg_kick();
-            if (millis() >= next_toggle) {
-                GPIOB_ODR ^= (1u << 2u);
-                next_toggle = millis() + 100u;
-            }
-            const auto snap = ems::drv::ckp_snapshot();
-            if (snap.state == ems::drv::SyncState::FULL_SYNC) { break; }
-        }
-    }
+    // 10) Sem espera por sync: o laço principal trata a ausência de sync. A espera de até 5 s
+    // que havia aqui segurava o laço inteiro: sem prime da bomba, sem conversão de ADC, sem
+    // comunicação, sem auto-cal do ETB, e uma partida nessa janela saía sem pulso de prime.
 
     // Kick final antes de entrar no main loop — garante que openems_init()
     // não ultrapassa o timeout de 100 ms do IWDG.
