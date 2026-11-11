@@ -22,8 +22,10 @@ ems::engine::ManifoldModelParams g_model_params = {5000u, 256u, 256u};  // 500.0
 // Cilindrada usada no bombeamento (espelha g_eng_cfg; sync via map_estimator_sync_engine_config).
 uint16_t g_displacement_cc = ems::engine::cfg::kDisplacementCc;
 
-// Histórico de TPS para cálculo de derivada
-constexpr uint8_t kTpsHistorySize = 4u;
+// Histórico de TPS para cálculo de derivada. 32 amostras a 2 ms = janela de 62 ms: 1 passo de
+// 0,1 % vale 1,6 %/s. Com 4 amostras (6 ms) 1 passo valia 16,7 %/s, acima do limiar de AE
+// (3 %/s) e do transiente médio (15 %/s): ruído de 1 LSB no pedal disparava enriquecimento.
+constexpr uint8_t kTpsHistorySize = 32u;
 uint16_t g_tps_history[kTpsHistorySize] = {};
 uint32_t g_tps_time_history[kTpsHistorySize] = {};
 uint8_t g_tps_history_pos = 0u;

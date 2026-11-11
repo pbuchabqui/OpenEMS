@@ -73,3 +73,9 @@ See `docs/calibration-compatibility.md` and `TuneMigrator.java`.
 
 Use injectorState1 injectorState2 etc in logs (see unit_tests/test_results/readme.md for unit tests output) to
 assert actual logic state.
+
+## OpenEMS: derivada do TPS (TPSdot) para AE e detecção de transiente
+
+`map_estimator.cpp` mede o TPSdot entre a amostra mais nova e a mais antiga de um anel de 32 amostras a 2 ms (janela de 62 ms). Um passo de 0,1 % vale 1,6 %/s, abaixo do limiar de AE (3 %/s). A janela anterior de 4 amostras (6 ms) dava 16,7 %/s por passo, então ruído de 1 LSB no pedal disparava enriquecimento e era classificado como transiente médio.
+
+Consequência para a calibração: depois de um degrau rápido o TPSdot fica não nulo por até 62 ms (antes 6 ms), então o adder de AE atua por mais tempo. As tabelas `ae_pw_adder_us` e `ae_de_pw_us` precisam ser reafinadas com motor.

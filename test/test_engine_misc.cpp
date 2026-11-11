@@ -390,15 +390,40 @@ void test_map_estimator_all(void) {
     section("map_estimator: tpsdot deteta transiente após volta completa do ring buffer");
     // g_tps_history_pos aponta sempre para o slot mais antigo ainda residente
     // (prestes a ser sobrescrito); o mais recente é pos-1. tpsdot só fica
-    // não-nulo depois do buffer (kTpsHistorySize=4 amostras) ter dado a volta
+    // não-nulo depois do buffer (kTpsHistorySize=32 amostras) ter dado a volta
     // completa com um degrau de TPS dentro dela.
     map_estimator_init();
-    for (uint8_t i = 0u; i < 4u; ++i) {
+    for (uint8_t i = 0u; i < 32u; ++i) {
         map_estimator_update(30u, 100u, 2u, 8000u, 220);
     }
     map_estimator_update(30u, 900u, 2u, 8000u, 220);
     CHECK_TRUE(map_get_tpsdot_x10() > 0, "step de TPS após volta do buffer → tpsdot > 0");
     CHECK_TRUE(map_is_transient(), "tpsdot alto → is_transient()=true");
+
+    section("map_estimator: 1 passo (0,1 %) de ruído no TPS não vira transiente nem AE");
+    // Com a janela antiga de 6 ms, 1 passo dava 16,7 %/s: acima do limiar de AE (3 %/s) e do
+    // transiente "médio" (15 %/s). A janela de 62 ms dá 1,6 %/s por passo.
+    map_estimator_init();
+    for (uint8_t i = 0u; i < 40u; ++i) { map_estimator_update(30u, 500u, 2u, 8000u, 220); }
+    int16_t worst = 0;
+    for (uint8_t i = 0u; i < 80u; ++i) {
+        map_estimator_update(30u, (i & 1u) ? 501u : 500u, 2u, 8000u, 220);   // flicker de 1 LSB
+        const int16_t d = map_get_tpsdot_x10();
+        const int16_t a = (d < 0) ? static_cast<int16_t>(-d) : d;
+        if (a > worst) { worst = a; }
+    }
+    // 30 = limiar de AE de fábrica (3 %/s); outro teste desta suite deixa o global alterado.
+    CHECK_TRUE(worst < 30,
+               "flicker de 1 LSB fica abaixo do limiar de AE");
+    CHECK_FALSE(map_is_transient(), "flicker de 1 LSB não é transiente");
+    // Rampa lenta real (10 %/s = 1 passo a cada 10 ms) é medida perto do valor verdadeiro.
+    map_estimator_init();
+    for (uint8_t i = 0u; i < 40u; ++i) { map_estimator_update(30u, 200u, 2u, 8000u, 220); }
+    for (uint16_t i = 0u; i < 100u; ++i) {
+        map_estimator_update(30u, static_cast<uint16_t>(200u + i / 5u), 2u, 8000u, 220);
+    }
+    const int16_t ramp = map_get_tpsdot_x10();
+    CHECK_TRUE(ramp >= 80 && ramp <= 120, "rampa de 10 %/s lida entre 8 e 12 %/s");
 
     section("map_estimator: modelo termodinâmico responde a IAT (fluxo de admissão)");
     // Ar mais frio é mais denso → mais massa de ar admitida para a mesma
