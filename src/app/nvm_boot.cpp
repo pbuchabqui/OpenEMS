@@ -158,15 +158,19 @@ void load_boost_map_from_nvm() noexcept {
 }
 
 void load_table_axes_from_nvm() noexcept {
-    alignas(4) uint8_t page[64] = {};
+    // Mesmo layout que o burn grava (g_page11_axes): RPM[N] seguido de carga[N], u16 cada.
+    // Antes o loader lia 64 B / 2×32 B (resquício dos eixos 16): com N=20 os 4 últimos nós
+    // vinham zerados, table_axes_set rejeitava e os eixos gravados nunca voltavam no boot.
+    constexpr uint16_t kAxisBytes = static_cast<uint16_t>(2u * ems::engine::kTableAxisSize);
+    alignas(4) uint8_t page[2u * kAxisBytes] = {};
     if (!ems::hal::nvm_load_calibration(9u, page, sizeof(page)) ||
         page_is_erased(page, sizeof(page))) {
         return;  // flash apagada → eixos default de compilação
     }
     uint16_t rpm[ems::engine::kTableAxisSize] = {};
     uint16_t load[ems::engine::kTableAxisSize] = {};
-    std::memcpy(rpm,  page +  0, 32u);
-    std::memcpy(load, page + 32, 32u);
+    std::memcpy(rpm,  page,             kAxisBytes);
+    std::memcpy(load, page + kAxisBytes, kAxisBytes);
     // table_axes_set valida monotonicidade — conteúdo corrompido é rejeitado
     // e os defaults de compilação permanecem.
     (void)ems::engine::table_axes_set(rpm, load);
