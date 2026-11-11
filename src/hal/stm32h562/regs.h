@@ -612,15 +612,17 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define FDCAN_RXGFC_OFF  0x080UL   // Global Filter Config
 #define FDCAN_TXBC_OFF   0x0C0UL   // TX Buffer Config
 #define FDCAN_TXFQS_OFF  0x0C4UL   // TX FIFO/Queue Status
-#define FDCAN_TXBRP_OFF  0x0CCUL   // TX Buffer Request Pending
-#define FDCAN_TXBAR_OFF  0x0D0UL   // TX Buffer Add Request
-#define FDCAN_RXF0C_OFF  0x0A0UL   // RX FIFO0 Config
-#define FDCAN_RXF0S_OFF  0x0A4UL   // RX FIFO0 Status
-#define FDCAN_RXF0A_OFF  0x0A8UL   // RX FIFO0 Acknowledge
+// Offsets conferidos com o CMSIS da ST (stm32h563xx.h, FDCAN_GlobalTypeDef). O FDCAN do H5 é
+// o mesmo do G4: Message RAM de layout FIXO, sem RXF0C (0x0A0..0x0BC são reservados). Os
+// valores antigos (RXF0S 0x0A4, RXF0A 0x0A8, TXBRP 0x0CC, TXBAR 0x0D0) eram os do H7: o RX
+// lia um registrador reservado (sempre 0) e o "TXBAR" era na verdade o TXBCR (cancelamento).
+#define FDCAN_TXBRP_OFF  0x0C8UL   // TX Buffer Request Pending
+#define FDCAN_TXBAR_OFF  0x0CCUL   // TX Buffer Add Request
+#define FDCAN_RXF0S_OFF  0x090UL   // RX FIFO0 Status
+#define FDCAN_RXF0A_OFF  0x094UL   // RX FIFO0 Acknowledge
 #define FDCAN_IR_OFF     0x050UL   // Interrupt Register
 #define FDCAN_IE_OFF     0x054UL   // Interrupt Enable
 #define FDCAN_ILE_OFF    0x05CUL   // Interrupt Line Enable
-#define FDCAN_SHPAM_OFF  0x094UL   // Standard ID filter area
 
 #define FDCAN1_CCCR  STM32_REG32(FDCAN1_BASE + FDCAN_CCCR_OFF)
 #define FDCAN1_NBTP  STM32_REG32(FDCAN1_BASE + FDCAN_NBTP_OFF)
@@ -629,7 +631,6 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define FDCAN1_TXFQS STM32_REG32(FDCAN1_BASE + FDCAN_TXFQS_OFF)
 #define FDCAN1_TXBRP STM32_REG32(FDCAN1_BASE + FDCAN_TXBRP_OFF)
 #define FDCAN1_TXBAR STM32_REG32(FDCAN1_BASE + FDCAN_TXBAR_OFF)
-#define FDCAN1_RXF0C STM32_REG32(FDCAN1_BASE + FDCAN_RXF0C_OFF)
 #define FDCAN1_RXF0S STM32_REG32(FDCAN1_BASE + FDCAN_RXF0S_OFF)
 #define FDCAN1_RXF0A STM32_REG32(FDCAN1_BASE + FDCAN_RXF0A_OFF)
 #define FDCAN1_IR    STM32_REG32(FDCAN1_BASE + FDCAN_IR_OFF)

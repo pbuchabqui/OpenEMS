@@ -26,10 +26,14 @@
  * Pinos: PB8 (FDCAN1_RX), PB9 (FDCAN1_TX) — AF9
  * (PA11/PA12 reservados para USB CDC; ignição usa TIM8 em PC6-PC9)
  *
- * Message RAM layout (FDCAN_SRAM @ 0x4000AC00):
- *   Offset 0x000: Std ID filters  (2 × 4 bytes)
- *   Offset 0x008: RX FIFO0        (3 elementos × 16 bytes)
- *   Offset 0x038: TX Buffer       (2 elementos × 16 bytes)
+ * Message RAM (FDCAN_SRAM @ 0x4000AC00): layout FIXO no H5 (igual ao G4; conferido com
+ * stm32h5xx_hal_fdcan.c, SRAMCAN_*). Elementos de RX/TX têm 18 palavras (72 bytes).
+ *   0x000: 28 filtros standard × 4 B
+ *   0x070:  8 filtros estendidos × 8 B
+ *   0x0B0: RX FIFO0, 3 elementos × 72 B
+ *   0x188: RX FIFO1, 3 elementos × 72 B
+ *   0x260: TX event FIFO, 3 × 8 B
+ *   0x278: TX FIFO/queue, 3 elementos × 72 B   (fim em 0x350)
  */
 
 #ifndef EMS_HOST_TEST
@@ -39,12 +43,13 @@
 
 // ── Message RAM layout ────────────────────────────────────────────────────────
 // Endereços offset dentro do FDCAN_SRAM (0x4000AC00)
-static constexpr uint32_t kSramStdFilters = 0x000u;  // 2 filtros × 4 bytes
-static constexpr uint32_t kSramRxFifo0    = 0x008u;  // 3 elem × 16 bytes
-static constexpr uint32_t kSramTxBuf      = 0x038u;  // 2 elem × 16 bytes
+static constexpr uint32_t kSramStdFilters = 0x000u;  // 28 filtros × 4 bytes
+static constexpr uint32_t kSramRxFifo0    = 0x0B0u;  // 3 elem × 72 bytes
+static constexpr uint32_t kSramTxBuf      = 0x278u;  // 3 elem × 72 bytes
+static constexpr uint32_t kSramSizeBytes  = 0x350u;
 
-// Para 8-byte CAN classic: 2 words header + 2 words data = 4 words = 16 bytes
-static constexpr uint32_t kElemSizeWords = 4u;  // 4 × 32-bit words por elemento
+// Elemento de RX/TX: 2 palavras de cabeçalho + 16 de dados (CAN FD) = 18 palavras, fixo.
+static constexpr uint32_t kElemSizeWords = 18u;
 
 // Inline: acesso a palavra na Message RAM
 static inline volatile uint32_t& sram_word(uint32_t offset_bytes) noexcept {
@@ -94,7 +99,7 @@ void can0_init() noexcept {
 
     // ── 5. Configurar Message RAM ─────────────────────────────────────────
     // Limpar área de Message RAM
-    for (uint32_t i = 0u; i < 128u; ++i) {
+    for (uint32_t i = 0u; i < (kSramSizeBytes / 4u); ++i) {
         sram_word(i * 4u) = 0u;
     }
 
@@ -107,16 +112,12 @@ void can0_init() noexcept {
       | (0x180u << 16)     // SFID1 = 0x180
       | (0x180u << 0);     // SFID2 = 0x180
 
-    // Global filter: 2 filtros standard; frames não casados continuam aceitos em FIFO0.
-    FDCAN1_RXGFC = (2u << 16);  // LSS = 2, LSE = 0, ANFS/ANFE = accept FIFO0
+    // Global filter: 1 filtro standard; frames não casados continuam aceitos em FIFO0
+    // (ANFS = 00), o que os sinais configuráveis do can_rx_map exigem.
+    FDCAN1_RXGFC = (1u << 16);  // LSS = 1, LSE = 0, ANFS/ANFE = accept FIFO0
 
-    // RX FIFO0: 3 elementos de 16 bytes cada
-    FDCAN1_RXF0C = (kSramRxFifo0 / 4u)   // F0SA: start address em words
-                 | (3u << 16);             // F0S: 3 elementos
-
-    // TX Buffer: 2 elementos de 16 bytes cada
-    FDCAN1_TXBC = (kSramTxBuf / 4u)      // TBSA: start address em words
-               | (2u << 16);              // NDTB: 2 Dedicated TX Buffers
+    // RX FIFO0 e TX: endereço e tamanho são fixos no H5 (não há RXF0C; TXBC só tem TFQM).
+    FDCAN1_TXBC = 0u;           // TFQM = 0: TX em modo FIFO
 
     // ── 6. Sair do modo de inicialização ─────────────────────────────────
     FDCAN1_CCCR &= ~FDCAN_CCCR_CCE;
@@ -143,13 +144,18 @@ bool can0_tx(const CanFrame& frame) noexcept {
     if (FDCAN1_CCCR & FDCAN_CCCR_INIT) {
         return false;
     }
-    // Buffer dedicado 0: não sobrescrever enquanto a requisição estiver pendente.
-    if (FDCAN1_TXBRP & (1u << 0)) {
+    // Um frame por vez: recusa enquanto houver qualquer requisição pendente.
+    if ((FDCAN1_TXBRP & 0x7u) != 0u) {
         return false;
     }
 
-    // Endereço do elemento TX Buffer 0 na Message RAM
-    const uint32_t tx_addr = kSramTxBuf;
+    // TX em modo FIFO: o elemento a preencher é o do put index (TXFQS.TFQPI, bits 17:16), que
+    // avança a cada envio. Escrever sempre no elemento 0 quebrava a ordem do FIFO.
+    const uint32_t put_idx = (FDCAN1_TXFQS >> 16) & 0x3u;
+    if (put_idx > 2u) {
+        return false;
+    }
+    const uint32_t tx_addr = kSramTxBuf + put_idx * (kElemSizeWords * 4u);
 
     // Word 0: ID + flags
     // Bit 30 = XTD (0=std 11-bit), Bit 29 = RTR, Bits [28:18] = ID[10:0]
@@ -173,8 +179,8 @@ bool can0_tx(const CanFrame& frame) noexcept {
     sram_word(tx_addr + 8u)  = d0;
     sram_word(tx_addr + 12u) = d1;
 
-    // Solicitar transmissão do Buffer 0
-    FDCAN1_TXBAR = (1u << 0);
+    // Solicitar transmissão do elemento preenchido
+    FDCAN1_TXBAR = (1u << put_idx);
     return true;
 }
 
@@ -183,12 +189,12 @@ bool can0_tx(const CanFrame& frame) noexcept {
 bool can0_rx_pop(CanFrame& out) noexcept {
     // 1. Verificar se há mensagem no RX FIFO0
     const uint32_t fqs = FDCAN1_RXF0S;
-    if ((fqs & 0x7Fu) == 0u) {
+    if ((fqs & 0xFu) == 0u) {   // F0FL, bits 3:0
         return false;  // nenhum elemento disponível
     }
 
     // 2. Índice do próximo elemento a ler (hardware garante 0-2, mas valida defensivamente)
-    const uint32_t get_idx_raw = (fqs >> 8) & 0x3Fu;
+    const uint32_t get_idx_raw = (fqs >> 8) & 0x3u;   // F0GI, bits 9:8
     const uint32_t get_idx = (get_idx_raw < 3u) ? get_idx_raw : 0u;
     const uint32_t elem_addr = kSramRxFifo0 + get_idx * (kElemSizeWords * 4u);
 

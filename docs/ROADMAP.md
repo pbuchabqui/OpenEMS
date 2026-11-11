@@ -103,7 +103,7 @@ Não viraram código na revisão de `src/`.
 - Lambda (`limp_gating.cpp`, por volta de 247). A restauração exige λ válido, λ ≤ alvo+desvio, e a banda de saída (RPM, carga ou TPS). Injetor fechado mantém λ pobre, então a condição pobre bloqueia a saída. `engine_calc_reset` não zera `g_lambda_cut`. O latch sobrevive a um stall. Zeram o corte o reset de teste, timeout 0, lambda desligado e o próprio caminho de restauração.
 - Falha de CLT publica 90,0 °C (`kFallbackCltDegcX10 = 900`) e falha de IAT publica 25,0 °C (`kFallbackIatDegcX10 = 250`), em `sensors.h` e no tick de 100 ms. O fallback de MAP é 101,0 kPa. A curva NTC não foi inventada. O fallback de CLT continua alimentando partida e DFCO.
 - USART: resolvido em 2026-10-21 (Fase 1, item 1). Falta medir o baud na bancada.
-- FDCAN: resolvido em 2026-10-21 (Fase 1, item 2). Falta medir o bit rate na bancada.
+- FDCAN: resolvido em 2026-10-21 (Fase 1, item 2). Falta medir o bit rate na bancada. Em 2026-11-11 os offsets do FDCAN em `regs.h` e o layout da Message RAM em `can.cpp` foram corrigidos contra o CMSIS da ST (`stm32h563xx.h`, `stm32h5xx_hal_fdcan.c`): eram os do H7 (RXF0S 0x0A4, TXBAR 0x0D0, RAM configurável) e no H5 o RX lia um registrador reservado e o TX escrevia no registrador de cancelamento, então nenhum frame entrava nem saía. Só compilado: validar RX do WBO2 e TX 0x400/0x401/0x402 na bancada.
 - `can0_tx` recusa o envio quando o bit 0 de `TXBRP` está pendente. Não consulta `FDCAN_CCCR_INIT`. A init conta falha se INIT não entra ou não sai. O TX ignora essa falha.
 - Gauge de lambda: resolvido em 2026-10-21 (Fase 1, item 4).
 - `map_window_enable` nasce 0. A janela angular de MAP fica desligada até a calibração ligar.
