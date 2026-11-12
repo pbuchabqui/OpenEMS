@@ -307,6 +307,27 @@ void test_output_test_bench_pw_lock(void) {
     CHECK_TRUE(n == 1u && buf[0] == 0x00u, "'P' em output-test + RPM=0 → ACK");
     CHECK_TRUE(ecu_sched_bench_pw_override_state() != 0u, "lock aplicado");
 
+    // Com a trava ligada os watchdogs continuam valendo: um pulso de teste cujo SPARK/INJ_OFF
+    // se perde não pode deixar a bobina ou o injetor energizado.
+    {
+        const uint32_t dw0 = ecu_sched_dwell_watchdog_count();
+        ecu_sched_test_set_tim5_cnt(1000u);
+        ecu_sched_test_pulse_ign(0u, 3000u);
+        CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 1u, "bobina carregando no pulso de teste");
+        ecu_sched_test_drop_queued_events();              // o SPARK se perde
+        ecu_sched_test_set_tim5_cnt(1000u + 62500u * 5u); // 5 ms depois (> 1,4 x 3 ms)
+        ecu_sched_dwell_watchdog();
+        CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "trava de PW ligada: watchdog de dwell desliga a bobina");
+        CHECK_EQ(ecu_sched_dwell_watchdog_count(), dw0 + 1u, "trip do watchdog de dwell contado");
+
+        const uint32_t iw0 = ecu_sched_inj_watchdog_count();
+        ecu_sched_test_pulse_inj(0u, 5000u);
+        ecu_sched_test_drop_queued_events();              // o INJ_OFF se perde
+        ecu_sched_test_set_tim5_cnt(1000u + 62500u * 50u);// 45 ms depois (> 36 ms)
+        ecu_sched_inj_watchdog();
+        CHECK_EQ(ecu_sched_inj_watchdog_count(), iw0 + 1u, "trava de PW ligada: watchdog do injetor fecha o bico");
+    }
+
     ems::engine::output_test_exit();
     CHECK_EQ(ecu_sched_bench_pw_override_state(), 0u,
              "destrava automaticamente ao sair de output-test (restore_safe)");

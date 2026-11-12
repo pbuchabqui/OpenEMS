@@ -632,7 +632,9 @@ void ecu_sched_set_presync_inj_mode(uint8_t mode) { ems::hal::CriticalSectionGua
 void ecu_sched_set_presync_ign_mode(uint8_t mode) { ems::hal::CriticalSectionGuard guard; g_presync_ign_mode = mode; sanitize_runtime_calibration(); }
 void ecu_sched_dwell_watchdog(void)
 {
-    if (g_inj_pw_override != 0U) { return; }  // test mode — disable watchdog
+    // A trava de PW de bancada NÃO desliga este watchdog: com ela ligada e sem sync, o SPARK
+    // de um pulso de teste perdido deixava a bobina energizada sem retaguarda (o ecu_sched.h
+    // promete o watchdog como backstop do teste de bobina).
     for (uint8_t i = 0U; i < 4U; ++i) {
         ems::hal::CriticalSectionGuard guard;
         // `now` dentro da guarda: lido antes, a ISR podia armar depois (arm > now) e a
@@ -657,7 +659,7 @@ uint32_t ecu_sched_dwell_watchdog_count(void) { return g_dwell_watchdog_count; }
 
 void ecu_sched_inj_watchdog(void)
 {
-    if (g_inj_pw_override != 0U) { return; }  // test/bench PW lock — disable
+    // Idem ao watchdog de dwell: ativo também com a trava de PW de bancada.
     for (uint8_t i = 0U; i < 4U; ++i) {
         ems::hal::CriticalSectionGuard guard;
         const uint32_t now  = TIM5_CNT;  // dentro da guarda: ver ecu_sched_dwell_watchdog
