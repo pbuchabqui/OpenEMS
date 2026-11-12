@@ -42,6 +42,30 @@ Copie este arquivo para `docs/bench_reports/AAAA-MM-DD.md` e preencha durante o 
 | Falha do WBO2 no barramento | Sem frame 0x180 por 1 s; ler 0x401 byte 6 | bit 1 = 1 | |
 | Escrita nas páginas 0x0A e 0x0C | `w` pelo envelope | erro (0x84) | |
 
+As três linhas de CAN acima não podiam passar antes do commit `1c21b6f`: os offsets do FDCAN eram os do H7 e nenhum frame entrava nem saía. Se foram marcadas como falha numa rodada anterior, repita-as.
+
+## Verificações novas desta rodada (revisão de 2026-11-10 a 12, só compiladas)
+
+Correções que não rodam no host e nunca foram medidas em silício. O ESP32 não gera CAN: as linhas de CAN pedem um adaptador USB-CAN (`candump`/`cansend`) com transceptor em PB8 (RX) / PB9 (TX). Os índices `D[n]` são do dump `D` (52 × u32, `src/app/ui_protocol.cpp`); os bytes do snapshot estão no § 7 do manual.
+
+| Item (commit) | Como medir | Esperado | Medido |
+|---|---|---|---|
+| CAN TX: cadência (`1c21b6f`) | `candump` por 10 s, gerador a 3000 RPM | 0x402 ≈ 2/s, 0x401 ≈ 10/s, 0x400 ≈ 38/s. O stack envia no máximo um frame por chamada de 20 ms; 0x400 **não** sai a cada 10 ms | |
+| CAN TX: não para (`1c21b6f`) | `candump` por 60 s ou mais | Os três IDs continuam chegando até o fim; nenhum trava depois dos primeiros frames | |
+| CAN RX: WBO2 (`1c21b6f`) | `cansend` de 0x180, DLC 3, λ = 1000 (`E8 03 00`) a cada 100 ms | `lambda` 1,000 no dash e status bit 9 (`WBO2_FAULT`) = 0 | |
+| CAN RX: ID estendido ignorado (`1c21b6f`) | Mesmo payload com ID estendido `0x06000000` (bits 28:18 = 0x180) e sem o 0x180 padrão | bit 9 volta a 1 em até 1 s | |
+| ETB: driver inicializa (`383ec80`) | Com o chicote/ESP32 em PA2/PC5, ligar a placa; teste de saídas `T 0x01` (ENTER) e `T 0x40` com PWM 100 | ACK no `T 0x40` (só sai com o driver READY). O driver compara TPS1 e TPS2 direto (diferença ≤ 12 %): com o ESP32, que gera TPS2 como complemento do TPS1, deixe TPS1 em 50 % no boot. Sem ESP32 nem corpo de borboleta: requer corpo de borboleta | |
+| ETB: auto-cal aborta com o motor girando (`77b29fe`) | Só com chicote de ETB: ligar o gerador durante a varredura dos primeiros ~2 s | A lâmina para de varrer e volta à mola; a calibração de flash continua valendo | |
+| Boot sem espera por sync (`7fc70b4`) | Gerador parado; desligar e ligar a placa com `bench_check.py` reconectando | Responde em ≈ 1 s (antes: até 5 s) | |
+| Bomba no boot (`7fc70b4`) | Scope em PE10 (relé da bomba na VGT6) desde o power-on, gerador parado | HIGH por ≈ 2 s e depois LOW | |
+| CLT/IAT na 1ª leitura (`7fc70b4`) | Modo bancada desligado (bit 15 = 0), CLT/IAT do ESP32 em PB0/PB1 fixos; reset e ler o 1º snapshot | Bytes 4 e 5 já no valor estável na 1ª leitura (antes subiam por ~800 ms a partir de −40 °C) | |
+| PWM do VVT (`7645dec`) | Sem solenoide ligado: teste de saídas `T 0x30` canal 0 e 1 com 50 %; scope em PB6 e PB7 | Período ≈ 66,7 ms (15 Hz), duty 50 % (antes ~3,8 kHz) | |
+| Polaridade do TIM5 só quando muda (`a231ba1`) | 3000 RPM em `FULL`; pelo dash, alterar e restaurar um campo da página 0 (ex.: limite de rotação) 20 vezes com `bench_check.py` rodando | `bench_check` termina `OK`; `D[20]`, `D[23]`, `D[37]` e `D[38]` não mudam | |
+| Skip de dentes após parada (`21fe5a5`) | `ckp_skip_pulses_after_gap` = 3 (page0[71]); parar o gerador por **mais de 2 s** (timeout de stall no modo bancada) e religar; repetir 3 vezes | `D[45]` sobe 3 a cada religada; o sync volta a `FULL` | |
+| Pulso na troca presync ↔ sequencial (`77dd954`) | Durante o T5 (desligar e religar o CMP a 2000 RPM), scope em INJ1 (PE0) cobrindo a troca de modo | Nenhum pulso com ≈ ½ ou ≈ 2× a largura dos vizinhos (em semissequencial cada abertura tem metade do fluxo, mais um dead time) | |
+| Errata do USB OUT (`a231ba1`) | `tools/hil_test/usb_stress.py` com escritas pelo envelope | Nenhuma resposta 0x82 (CRC) nem byte perdido | |
+| Falha de clock — **opcional** (`fd890f1`) | Só se der para desligar o HSE sem retrabalho na placa. Gerador a 3000 RPM | Bytes 70–73 (bordas CKP) ficam em 0; `T 0x01` (ENTER) responde NAK; `D[51] & 0x00080040` ≠ 0 (DiagCrit em combustível e faísca); INJ/IGN em LOW. UART e USB continuam respondendo (USART cai para HSI, USB usa HSI48): comunicação viva **não** indica que o teste falhou | |
+
 ## T0 — Boot seguro (10 ciclos, gerador a 3000 RPM)
 
 | Ciclo | Borda em IGN1/INJ1 no boot? | Reset espontâneo? | RPM volta em poucos s? |
