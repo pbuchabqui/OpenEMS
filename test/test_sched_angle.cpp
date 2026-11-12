@@ -232,3 +232,48 @@ void test_sched_angle_tables(void) {
     for (uint8_t i = 0u; i < 4u; ++i) { g_cyl_retard_x10[i] = retard0[i]; }
     clear_angle_table();
 }
+
+void test_sched_inj_pw_pair(void) {
+    section("ecu_sched: pulso por abertura segue o modo em vigor (presync <-> sequencial)");
+
+    const uint32_t pw0 = g_inj_pw_ticks, alt0 = g_inj_pw_alt_ticks;
+    const uint8_t  ms0 = g_inj_pw_main_seq, ks0 = g_knock_sequential;
+
+    // Sem par (boot, testes antigos): vale sempre o pulso principal.
+    g_inj_pw_main_seq = 0xFFu;
+    g_inj_pw_ticks = 1000u;
+    g_inj_pw_alt_ticks = 600u;
+    g_knock_sequential = 0u;
+    CHECK_EQ(inj_pw_ticks_now(), 1000u, "sem par, presync: pulso principal");
+    g_knock_sequential = 1u;
+    CHECK_EQ(inj_pw_ticks_now(), 1000u, "sem par, sequencial: pulso principal");
+
+    // Laço calculou para sequencial (principal) e mandou o de presync como alternativo.
+    ecu_sched_set_inj_pw_pair(600u, 1u);
+    g_knock_sequential = 1u;
+    CHECK_EQ(inj_pw_ticks_now(), 1000u, "sequencial em vigor: pulso sequencial");
+    g_knock_sequential = 0u;   // a ISR trocou para presync antes do tick seguinte
+    CHECK_EQ(inj_pw_ticks_now(), 600u, "trocou para presync: pulso de presync, não o antigo");
+
+    // Laço calculou para presync (principal) e mandou o sequencial como alternativo.
+    g_inj_pw_ticks = 600u;
+    ecu_sched_set_inj_pw_pair(1000u, 0u);
+    g_knock_sequential = 0u;
+    CHECK_EQ(inj_pw_ticks_now(), 600u, "presync em vigor: pulso de presync");
+    g_knock_sequential = 1u;   // a ISR trocou para sequencial antes do tick seguinte
+    CHECK_EQ(inj_pw_ticks_now(), 1000u, "trocou para sequencial: pulso sequencial");
+
+    // A tabela de ângulos usa o mesmo pulso para recuar o SOI.
+    g_knock_sequential = 0u;
+    CHECK_EQ(inj_pw_ticks_now(), 600u, "builder de presync enxerga o pulso de presync");
+
+    // Trava de bancada: só o pulso travado vale, o par é ignorado.
+    ecu_sched_bench_pw_lock_next_commit();
+    ecu_sched_set_inj_pw_pair(123u, 1u);
+    g_knock_sequential = 0u;
+    CHECK_EQ(inj_pw_ticks_now(), 600u, "trava de bancada: par ignorado");
+    ecu_sched_bench_pw_lock_clear();
+
+    g_inj_pw_ticks = pw0; g_inj_pw_alt_ticks = alt0;
+    g_inj_pw_main_seq = ms0; g_knock_sequential = ks0;
+}

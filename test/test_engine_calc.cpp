@@ -13,6 +13,7 @@
 #include "engine/calibration.h"
 #include "engine/ecu_sched.h"
 #include "engine/engine_calc.h"
+#include "engine/ecu_sched_internal.h"
 #include "engine/xtau_autocalib.h"
 #include "engine/engine_config.h"
 #include "engine/fuel_calc.h"
@@ -224,6 +225,16 @@ void test_engine_calc_cuts(void) {
     out = run(t, 0.5, 3000u, 90u, 900u);
     CHECK_TRUE(ems::engine::xtau_get_state().wall_fuel_us_q8 > 0,
                "sem corte: o filme do X-tau acumula");
+    // O laço entrega ao scheduler o pulso do modo atual e o do outro modo. No host o modo é
+    // presync (2 aberturas): o pulso sequencial (1 abertura) tem de ser maior.
+    {
+        namespace si = ems::engine::sched_internal;
+        CHECK_EQ(si::g_inj_pw_main_seq, 0u, "par de PW: principal calculado para presync");
+        CHECK_TRUE(si::g_inj_pw_alt_ticks > si::g_inj_pw_ticks,
+                   "par de PW: pulso sequencial maior que o de presync");
+        CHECK_TRUE(si::g_inj_pw_alt_ticks < 2u * si::g_inj_pw_ticks,
+                   "par de PW: menor que o dobro (o dead time não dobra)");
+    }
     tables_restore();
 }
 

@@ -104,10 +104,11 @@ const CachedFuelCorrections& fuel_corrections_for(const ems::drv::SensorData& se
 // (flow + dead x squirts) and never scaled. Telemetry shows 0 under fuel cut
 // (mask inhibits the injectors; PW keeps being committed for smooth resume).
 // Returns the per-opening pulse in scheduler ticks.
-uint32_t inj_finish_pw(uint32_t flow_us, uint8_t squirts, uint16_t dead_us,
-                       const ems::drv::SensorData& sensors,
-                       uint16_t map_bar_x100, bool fuel_cut_active,
-                       uint32_t& cycle_on_us) noexcept {
+// Flow of the whole cycle after dP and the per-opening injector non-linearity, for a cycle
+// split in `squirts` openings.
+uint32_t inj_cycle_flow_us(uint32_t flow_us, uint8_t squirts,
+                           const ems::drv::SensorData& sensors,
+                           uint16_t map_bar_x100) noexcept {
     // dP is linear in time (whole cycle); the injector non-linearity acts on
     // each opening, which is what the injector actually sees.
     const uint8_t n = (squirts < 1u) ? 1u : squirts;
@@ -115,8 +116,24 @@ uint32_t inj_finish_pw(uint32_t flow_us, uint8_t squirts, uint16_t dead_us,
         flow_us,
         ((sensors.fault_bits & kFaultBitFuel) != 0u) ? 0u : sensors.fuel_press_bar_x1000,
         map_bar_x100);
-    const uint32_t scurve_pw_us =
-        apply_injector_scurve(apply_injector_two_slope(dp_flow_us / n)) * n;
+    return apply_injector_scurve(apply_injector_two_slope(dp_flow_us / n)) * n;
+}
+
+// Per-opening pulse (scheduler ticks) for the OTHER injection mode: the tooth ISR may switch
+// presync <-> sequential before the next 2 ms tick.
+uint32_t inj_alt_pw_ticks(uint32_t flow_us, uint8_t squirts_now, uint16_t dead_us,
+                          const ems::drv::SensorData& sensors,
+                          uint16_t map_bar_x100) noexcept {
+    const uint8_t alt = (squirts_now <= 1u) ? 2u : 1u;
+    return inj_pw_us_to_scheduler_ticks(
+        inj_pulse_pw_us(inj_cycle_flow_us(flow_us, alt, sensors, map_bar_x100), dead_us, alt));
+}
+
+uint32_t inj_finish_pw(uint32_t flow_us, uint8_t squirts, uint16_t dead_us,
+                       const ems::drv::SensorData& sensors,
+                       uint16_t map_bar_x100, bool fuel_cut_active,
+                       uint32_t& cycle_on_us) noexcept {
+    const uint32_t scurve_pw_us = inj_cycle_flow_us(flow_us, squirts, sensors, map_bar_x100);
     cycle_on_us = inj_cycle_pw_us(scurve_pw_us, dead_us, squirts);
     const uint32_t pw_100 = cycle_on_us / 100u;
     s_out.pw_ms_x10 = fuel_cut_active ? 0u
@@ -534,6 +551,9 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         // comandado; o corte em si entra na mask do próximo tick.
         fuel_inj_duty_update(cycle_on_us, snap.rpm_x10, 2u);
 
+        ::ecu_sched_set_inj_pw_pair(
+            inj_alt_pw_ticks(quick_crank_pw_us, squirts, fuel_corr.dead_time_us, sensors, map_bar_x100),
+            (squirts == 1u) ? 1u : 0u);
         commit(sched_spark_x10, dwell_ticks, inj_pw_ticks, snap, sensors);
     } else if (allow_half_crank_batch) {
         // (2) HALF_SYNC + cranking: simultaneous batch, crank PW only (no VE/STFT/AE).
@@ -552,6 +572,8 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         const uint32_t inj_pw_ticks = inj_finish_pw(
             crank_flow_us, 2u, fuel_corr.dead_time_us, sensors,
             map_bar_x100, fuel_cut_active, cycle_on_us);
+        ::ecu_sched_set_inj_pw_pair(
+            inj_alt_pw_ticks(crank_flow_us, 2u, fuel_corr.dead_time_us, sensors, map_bar_x100), 0u);
         commit(static_cast<int16_t>(crank_spark_deg * 10),
                      dwell_ticks, inj_pw_ticks, snap, sensors);
     } else if (sched_sync &&
@@ -562,6 +584,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
             ? static_cast<int16_t>(crank_spark_deg * 10)
             : ign_running_advance_x10(
                   get_advance_x10(snap.rpm_x10, map_bar_x100));
+        ::ecu_sched_set_inj_pw_pair(0u, ::ecu_sched_is_sequential());
         commit(sched_spark_x10, dwell_ticks, 0u, snap, sensors);
         s_out.pw_ms_x10 = 0u;
         s_out.net_pw_us = 0u;

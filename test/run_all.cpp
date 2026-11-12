@@ -159,6 +159,7 @@ test_sensors_bench_app_fixed();
     test_nvm_boot_page_helpers();
     test_nvm_boot_table_loaders();
     test_sched_angle_tables();
+    test_sched_inj_pw_pair();
     test_uart_host_contract();
     test_sd_state_machine();
     test_usb_cdc_host_ring();

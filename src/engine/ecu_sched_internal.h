@@ -43,6 +43,10 @@ extern volatile int32_t  g_advance_x10;   // 0.1° BTDC, signed
 extern volatile int16_t  g_cyl_retard_x10[4];  // knock, 0.1°, per cylinder
 extern volatile uint32_t g_dwell_ticks;
 extern volatile uint32_t g_inj_pw_ticks;
+// Pulso do OUTRO modo (presync ↔ sequencial) e para qual modo g_inj_pw_ticks foi calculado
+// (1 = sequencial, 0 = presync, 0xFF = sem par: vale sempre g_inj_pw_ticks).
+extern volatile uint32_t g_inj_pw_alt_ticks;
+extern volatile uint8_t  g_inj_pw_main_seq;
 extern volatile uint32_t g_eoi_lead_deg;
 extern volatile uint8_t  g_presync_inj_mode;
 extern volatile uint8_t  g_knock_sequential;
@@ -50,6 +54,16 @@ extern volatile uint8_t  g_mspark_count;
 extern volatile uint32_t g_mspark_inter_dwell_ticks;
 extern volatile uint32_t g_mspark_atdc_limit_deg;
 extern volatile uint32_t g_pw_duty_clamp_count;
+
+// Pulso por abertura para o modo em vigor AGORA. O laço principal calcula o pulso para o modo
+// que ele viu no tick de 2 ms; a ISR troca de modo no gap. Sem o par, um injetor armado entre a
+// troca e o tick seguinte saía com o pulso do modo anterior (metade ou dobro do combustível).
+inline uint32_t inj_pw_ticks_now() noexcept {
+    const uint8_t main_seq = g_inj_pw_main_seq;
+    if (main_seq == 0xFFU) { return g_inj_pw_ticks; }
+    const bool seq_now = (g_knock_sequential != 0U);
+    return (seq_now == (main_seq != 0U)) ? g_inj_pw_ticks : g_inj_pw_alt_ticks;
+}
 
 // ── Cold builders (ecu_sched_angle.cpp) — called only at rev gap ─────────────
 // Sequential rebuilds every revolution (events carry their 720° phase).

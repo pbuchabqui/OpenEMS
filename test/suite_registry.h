@@ -117,6 +117,7 @@ void test_flex_fuel_conversions(void);
 void test_ac_request_debounce(void);
 void test_nvm_boot_page_helpers(void);
 void test_sched_angle_tables(void);
+void test_sched_inj_pw_pair(void);
 void test_uart_host_contract(void);
 void test_sd_state_machine(void);
 void test_usb_cdc_host_ring(void);

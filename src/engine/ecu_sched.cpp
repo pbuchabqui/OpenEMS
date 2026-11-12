@@ -109,6 +109,8 @@ volatile uint32_t g_dwell_ticks = 187500U;  // 3 ms @ 62.5 MHz
 // Default 0 until first main commit — avoids angular fuel with default PW
 // between first CKP edges and the first 2 ms policy tick (inhibit may still be 0).
 volatile uint32_t g_inj_pw_ticks = 0U;
+volatile uint32_t g_inj_pw_alt_ticks = 0U;
+volatile uint8_t  g_inj_pw_main_seq = 0xFFU;
 volatile uint32_t g_eoi_lead_deg = 355U;
 volatile uint8_t  g_presync_inj_mode = ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
 volatile uint8_t  g_knock_sequential = 0U;
@@ -429,6 +431,7 @@ static void sanitize_runtime_calibration(void)
     if (si::g_dwell_ticks > 625000U) { si::g_dwell_ticks = 625000U; clamped = 1U; }
     // 100 ms absolute (same as fuel_calc); per-cycle duty is clamped at arm time.
     if (si::g_inj_pw_ticks > 6250000U) { si::g_inj_pw_ticks = 6250000U; clamped = 1U; }
+    if (si::g_inj_pw_alt_ticks > 6250000U) { si::g_inj_pw_alt_ticks = 6250000U; clamped = 1U; }
     // EOI lead ∈ [0, 719]: 0–129 = fim na compressão (closed-valve, soak longo);
     // 130–359 = válvula aberta / admissão (estilo Speeduino, default 355);
     // 360–719 = fim no escape/pré-IVO (closed-valve OEM, soak curto na válvula
@@ -494,7 +497,7 @@ static bool arm_channel(uint8_t ch, uint32_t target_cnv, uint8_t action)
     // Program watchdog timeouts at queue time; pin_transition starts the clock
     // only when the pin actually goes HIGH.
     if (is_inj != 0U && action == ECU_ACT_INJ_ON) {
-        uint32_t t = (si::g_inj_pw_ticks * 6U) / 5U;  // 1.2 × PW
+        uint32_t t = (si::inj_pw_ticks_now() * 6U) / 5U;  // 1.2 × PW
         if (t < ECU_SCHED_US_TO_TICKS(2000U)) { t = ECU_SCHED_US_TO_TICKS(2000U); }
         g_inj_wdog_ticks[pin_idx] = t;
     }
@@ -564,7 +567,7 @@ static void end_active_outputs_on_time(void)
         }
         const uint32_t inj_on = g_inj_open_tick[cyl];
         if (inj_on != 0U && !deassert_queued(si::kInjCh[cyl])) {
-            arm_channel(si::kInjCh[cyl], inj_on + si::g_inj_pw_ticks, ECU_ACT_INJ_OFF);
+            arm_channel(si::kInjCh[cyl], inj_on + si::inj_pw_ticks_now(), ECU_ACT_INJ_OFF);
         }
     }
     rearm_head();
@@ -624,6 +627,17 @@ void ecu_sched_set_cyl_retard_x10(const uint16_t retard_x10[4])
 }
 void ecu_sched_set_dwell_ticks(uint32_t dwell) { ems::hal::CriticalSectionGuard guard; si::g_dwell_ticks = dwell; sanitize_runtime_calibration(); }
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { ems::hal::CriticalSectionGuard guard; if (g_inj_pw_override == 0U) { si::g_inj_pw_ticks = pw_ticks; } sanitize_runtime_calibration(); }
+void ecu_sched_set_inj_pw_pair(uint32_t alt_pw_ticks, uint8_t main_is_sequential)
+{
+    ems::hal::CriticalSectionGuard guard;
+    if (g_inj_pw_override != 0U) {
+        si::g_inj_pw_main_seq = 0xFFU;   // trava de bancada: só o pulso travado vale
+        return;
+    }
+    si::g_inj_pw_alt_ticks = alt_pw_ticks;
+    si::g_inj_pw_main_seq = (main_is_sequential != 0U) ? 1U : 0U;
+    sanitize_runtime_calibration();
+}
 void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ems::hal::CriticalSectionGuard guard; si::g_eoi_lead_deg = eoi_lead_deg; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_enable(uint8_t enable) { ems::hal::CriticalSectionGuard guard; g_presync_enable = (enable != 0U) ? 1U : 0U; }
 void ecu_sched_set_presync_inj_auto(uint8_t on) { ems::hal::CriticalSectionGuard guard; g_presync_inj_auto = on ? 1U : 0U; }
@@ -782,6 +796,7 @@ void ecu_sched_bench_pw_lock_next_commit(void)
 {
     ems::hal::CriticalSectionGuard guard;
     g_inj_pw_override = 2U;  // write-once then lock
+    si::g_inj_pw_main_seq = 0xFFU;
 }
 
 uint8_t ecu_sched_bench_pw_override_state(void)
@@ -902,7 +917,7 @@ static void arm_angle_event(uint8_t ch, uint8_t action, uint32_t t, uint32_t too
     }
     case ECU_ACT_INJ_ON: {
         const int32_t trim = (int32_t)ems::engine::cyl_fuel_trim_pct[inj_ch_cyl(ch)];
-        uint32_t pw = (uint32_t)(((uint64_t)si::g_inj_pw_ticks * (uint32_t)(100 + trim)) / 100U);
+        uint32_t pw = (uint32_t)(((uint64_t)si::inj_pw_ticks_now() * (uint32_t)(100 + trim)) / 100U);
         // ≤ 90 % of the time between two openings (one per 720° sequential,
         // one per 360° presync) so a pulse can never merge into the next.
         const uint32_t teeth = (si::g_knock_sequential != 0U) ? 120U : 60U;
@@ -1042,6 +1057,7 @@ void ecu_sched_test_reset(void)
     si::g_advance_x10 = 100; si::g_dwell_ticks = 140625U; si::g_inj_pw_ticks = 140625U; si::g_eoi_lead_deg = 355U;
     si::g_angle_table_count = 0U; si::g_angle_tooth_mask_lo = 0U; si::g_angle_tooth_mask_hi = 0U;
     si::g_pw_duty_clamp_count = 0U;
+    si::g_inj_pw_alt_ticks = 0U; si::g_inj_pw_main_seq = 0xFFU;
     g_inj_inhibit_mask = 0U;
     g_ign_inhibit_mask = 0U;
     si::g_mspark_count = 0U; si::g_mspark_inter_dwell_ticks = 0U; si::g_mspark_atdc_limit_deg = 18U;

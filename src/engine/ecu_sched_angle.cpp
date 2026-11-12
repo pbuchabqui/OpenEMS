@@ -131,7 +131,7 @@ void build(const ems::drv::CkpSnapshot& snap, int32_t cycle, bool presync)
     // Arm one tooth + 25 % early: the exact start is computed in time.
     int32_t dwell_span = dwell_x10 + kToothX10 + dwell_x10 / 4;
     if (dwell_span > kMaxDwellSpanX10) { dwell_span = kMaxDwellSpanX10; }
-    int32_t pw_x10 = ticks_to_x10(g_inj_pw_ticks, tooth_ticks);
+    int32_t pw_x10 = ticks_to_x10(inj_pw_ticks_now(), tooth_ticks);
     if (pw_x10 > cycle * 9 / 10) { pw_x10 = cycle * 9 / 10; }
     const int32_t trig_off =
         static_cast<int32_t>(cfg::g_eng_cfg.trigger_tooth0_engine_deg) * 10 + trigger_fine_x10;

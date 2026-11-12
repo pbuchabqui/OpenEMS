@@ -82,6 +82,10 @@ void ecu_sched_set_advance_x10(int32_t advance_x10);
 void ecu_sched_set_cyl_retard_x10(const uint16_t retard_x10[4]);
 void ecu_sched_set_dwell_ticks(uint32_t dwell);
 void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
+// Pulso por abertura do OUTRO modo de injeção (presync tem 2 aberturas por ciclo, sequencial 1)
+// e para qual modo o inj_pw_ticks do commit foi calculado. O scheduler escolhe entre os dois
+// no instante de armar, pelo modo em vigor. Chamar antes do commit, a cada tick.
+void ecu_sched_set_inj_pw_pair(uint32_t alt_pw_ticks, uint8_t main_is_sequential);
 void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg);
 void ecu_sched_set_presync_enable(uint8_t enable);
 void ecu_sched_set_presync_inj_mode(uint8_t mode);

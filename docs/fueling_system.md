@@ -28,6 +28,8 @@ Speed-density em inteiros, calculado a cada 2 ms em `engine_calc_step()` (`src/e
 5. **Limite de queda** (`fuel_pw_drop_max_us`), **AE/DE** pelo TPSdot e **rampa de retorno do DFCO**.
 6. **Por abertura** (sequencial = 1, presync = 2 por ciclo): ΔP sobre o fluxo do ciclo, depois a correção de 2 inclinações e a curva S sobre o fluxo de cada abertura, e por fim o dead time, que nunca é escalado.
 
+O laço entrega ao scheduler dois pulsos por abertura: o do modo de injeção em vigor e o do outro modo (`ecu_sched_set_inj_pw_pair`). A ISR do dente troca presync ↔ sequencial no gap, antes do próximo tick de 2 ms, e escolhe o pulso pelo modo em vigor ao armar o injetor (`inj_pw_ticks_now`). Sem isso, um injetor armado nessa janela saía com metade ou o dobro do combustível.
+
 O pulso final é limitado a 100 ms. No scheduler, cada abertura ainda é limitada a 90 % do intervalo entre aberturas.
 
 ## Não linearidade do bico
