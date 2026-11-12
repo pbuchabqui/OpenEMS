@@ -445,7 +445,16 @@ void apply_page0_capture_polarity(const uint8_t* page0, uint16_t len) noexcept {
     if (page0 == nullptr || len <= kCapturePolarityPage0Off) {
         return;
     }
-    capture_polarity = static_cast<uint8_t>(page0[kCapturePolarityPage0Off] & 0x03u);
+    const uint8_t wanted = static_cast<uint8_t>(page0[kCapturePolarityPage0Off] & 0x03u);
+    // Só reprograma o TIM5 quando a polaridade muda (ou na primeira aplicação). Esta função
+    // roda a cada escrita da página 0, e reprogramar desliga CC1E/CC2E por um instante: uma
+    // borda do CKP nessa janela se perdia e derrubava o sync com o motor girando.
+    static bool s_applied = false;
+    if (s_applied && wanted == capture_polarity) {
+        return;
+    }
+    s_applied = true;
+    capture_polarity = wanted;
     ems::hal::tim5_ic_set_capture_polarity(
         (capture_polarity & 0x01u) != 0u,
         (capture_polarity & 0x02u) != 0u);

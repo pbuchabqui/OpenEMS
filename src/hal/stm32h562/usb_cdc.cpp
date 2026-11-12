@@ -655,6 +655,16 @@ static void usb_hw_reset() noexcept {
     USB_DADDR = USB_DADDR_EF | 0u;
 }
 
+// Errata ES0565 (USB): depois do CTR de uma transação OUT/SETUP a contagem de RX na tabela de
+// buffers ainda pode estar sendo atualizada. É preciso esperar pelo menos 800 ns (Full Speed)
+// antes de ler COUNT_RX e o buffer. A 250 MHz o caminho da ISR até a leitura leva bem menos
+// que isso, então a contagem lida podia ser a do pacote anterior. 64 voltas de um laço com
+// contador volátil dão mais de 1 µs; a IRQ do USB tem prioridade 2 e a do TIM5 (prioridade 1)
+// continua preemptando.
+static inline void usb_out_settle() noexcept {
+    for (volatile uint32_t i = 0u; i < 64u; ++i) { }
+}
+
 // ── CTR (Correct Transfer) handler ───────────────────────────────────────────
 static void handle_ctr() noexcept {
     const uint32_t istr = USB_ISTR;
@@ -664,6 +674,7 @@ static void handle_ctr() noexcept {
     if (ep == 0u) {
         if (dir) {
             // EP0 OUT or SETUP
+            usb_out_settle();
             const uint32_t ep0r = USB_CHEP0R;
             const bool is_setup = (ep0r & USB_EP_SETUP) != 0u;
             ep_clear_ctr_rx(0u);
@@ -728,6 +739,7 @@ static void handle_ctr() noexcept {
         }
     } else if (ep == 2u) {
         // EP2 OUT: RX data received
+        usb_out_settle();
         ep_clear_ctr_rx(2u);
         const uint16_t cnt = bdtable_count_rx(2u);
         if (cnt > 0u) {
