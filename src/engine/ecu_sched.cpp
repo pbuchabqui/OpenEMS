@@ -300,7 +300,8 @@ void ecu_sched_evt_dispatch(void) {
 volatile uint32_t g_pin_high_count[8];  // [0-3]=INJ CH1-4, [4-7]=IGN CH1-4
 volatile uint32_t g_pin_low_count[8];
 volatile uint32_t g_pin_seq_error[8];   // consecutive same-direction transitions
-static uint8_t    g_pin_last_state[8];  // 0=LOW, 1=HIGH, 0xFF=unknown
+// volatile: lido/escrito pela ISR do TIM5 (despacho) e pelo main (prime, pulsos de teste).
+static volatile uint8_t g_pin_last_state[8];  // 0=LOW, 1=HIGH, 0xFF=unknown
 
 static inline void pin_transition(uint8_t idx, uint8_t high, uint8_t is_safe_state) {
     if (idx >= 8U) { return; }
@@ -710,7 +711,12 @@ void ecu_sched_fire_prime_pulse(uint32_t pw_us)
     if (pw_us == 0U) { return; }
     if (pw_us > 30000U) { pw_us = 30000U; }
     const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
-    for (uint8_t i = 0U; i < 4U; ++i) { force_output(si::kInjCh[i], ECU_ACT_INJ_ON); }
+    {
+        // Contexto main: GPIO + pin_transition (estado/watchdogs compartilhados com a ISR do
+        // TIM5) têm de ser atômicos em relação ao despacho INJ_OFF/SPARK.
+        ems::hal::CriticalSectionGuard guard;
+        for (uint8_t i = 0U; i < 4U; ++i) { force_output(si::kInjCh[i], ECU_ACT_INJ_ON); }
+    }
     for (uint8_t i = 0U; i < 4U; ++i) { arm_channel(si::kInjCh[i], off_cnv, ECU_ACT_INJ_OFF); }
     ++g_diag_prime_fired;
 }
@@ -721,7 +727,10 @@ void ecu_sched_test_pulse_inj(uint8_t cyl, uint32_t pw_us)
     if (pw_us > 30000U) { pw_us = 30000U; }
     const uint8_t ch = si::kInjCh[cyl];
     const uint32_t off_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(pw_us);
-    force_output(ch, ECU_ACT_INJ_ON, 0U, 1U);
+    {
+        ems::hal::CriticalSectionGuard guard;  // atômico vs. ISR do TIM5 (ver prime)
+        force_output(ch, ECU_ACT_INJ_ON, 0U, 1U);
+    }
     arm_channel(ch, off_cnv, ECU_ACT_INJ_OFF);
 }
 
@@ -732,7 +741,10 @@ void ecu_sched_test_pulse_ign(uint8_t cyl, uint32_t dwell_us)
     if (dwell_us > 10000U) { dwell_us = 10000U; }
     const uint8_t ch = si::kIgnCh[cyl];
     const uint32_t spark_cnv = scheduler_counter() + ECU_SCHED_US_TO_TICKS(dwell_us);
-    force_output(ch, ECU_ACT_DWELL_START, 0U, 1U);
+    {
+        ems::hal::CriticalSectionGuard guard;  // atômico vs. ISR do TIM5 (ver prime)
+        force_output(ch, ECU_ACT_DWELL_START, 0U, 1U);
+    }
     // Arm watchdog for this manual dwell (DWELL already forced HIGH; SPARK is
     // only queued). pin_transition(LOW) / watchdog release the arm tick.
     {
