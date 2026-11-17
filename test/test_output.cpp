@@ -17,6 +17,8 @@
 #include "hal/system.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
+
+extern volatile uint32_t ems_test_tim5_cnt;
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/auxiliaries.h"
@@ -333,3 +335,46 @@ void test_output_test_bench_pw_lock(void) {
              "destrava automaticamente ao sair de output-test (restore_safe)");
 }
 
+
+void test_output_test_crank_activity(void) {
+    section("output_test: gate por atividade do virabrequim (sem depender de sync)");
+    uint8_t buf[8] = {};
+
+    // Cranking sem sync (~150 RPM): rpm_x10 == 0, mas o virabrequim gira → ENTER recusado.
+    ot_reset_all();
+    for (uint32_t i = 0u; i < 10u; ++i) { ckp_fire(416667u); }
+    ems_test_tim5_cnt = g_ckp_cap;
+    CHECK_EQ(ckp_snapshot().rpm_x10, 0u, "cranking sem sync: rpm_x10 == 0");
+    uint16_t n = ot_txn(0x01u, 0u, 0xA55Au, buf, sizeof(buf));
+    CHECK_TRUE(n == 1u && buf[0] == 0x01u, "ENTER com cranking sem sync → NAK");
+    CHECK_TRUE(!ems::engine::output_test_active(), "inactivo com cranking sem sync");
+
+    // Ruído de rede 60 Hz num CKP solto (sem gap): não é motor → ENTER aceito.
+    ot_reset_all();
+    for (uint32_t i = 0u; i < 40u; ++i) { ckp_fire(1041667u); }
+    ems_test_tim5_cnt = g_ckp_cap;
+    n = ot_txn(0x01u, 0u, 0xA55Au, buf, sizeof(buf));
+    CHECK_TRUE(n == 1u && buf[0] == 0x00u, "ENTER com ruído 60 Hz sem gap → ACK");
+    ems::engine::output_test_exit();
+
+    // Teste ativo com o motor parado; alguém dá partida (bordas sem sync, rpm_x10 == 0) → aborta.
+    ot_reset_all();
+    ems_test_tim5_cnt = 0u;
+    ems::engine::output_test_poll(50000u, 0u);
+    n = ot_txn(0x01u, 0u, 0xA55Au, buf, sizeof(buf));
+    CHECK_TRUE(n == 1u && buf[0] == 0x00u, "ENTER com motor parado → ACK");
+    ot_txn(0x20u, 1u, 0u, buf, sizeof(buf));  // bomba ON
+    CHECK_TRUE(ems::engine::auxiliaries_test_get_pump_state(), "bomba ligada");
+    ems::engine::output_test_poll(50002u, 0u);
+    CHECK_TRUE(ems::engine::output_test_active(), "sem atividade de CKP: segue ativo");
+    for (uint32_t i = 0u; i < 10u; ++i) { ckp_fire(416667u); }
+    ems_test_tim5_cnt = g_ckp_cap;
+    ems::engine::output_test_poll(50004u, 0u);  // rpm_x10 == 0 continua
+    CHECK_TRUE(!ems::engine::output_test_active(), "bordas de cranking sem sync abortam o teste");
+    CHECK_TRUE(!ems::engine::auxiliaries_test_get_pump_state(), "bomba desligada no aborto");
+    uint8_t st[4] = {};
+    n = ot_txn(0x03u, 0u, 0u, st, sizeof(st));
+    CHECK_TRUE(n == 4u && st[0] == 0u && st[1] == 1u, "STATUS: inactivo, abort_reason=RPM");
+
+    ems_test_tim5_cnt = 0u;  // isolamento entre testes
+}

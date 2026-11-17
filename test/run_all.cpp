@@ -389,6 +389,7 @@ test_can_stack_wbo2_api();
     test_output_test_busy_window();
     test_output_test_fire_ign_watchdog();
     test_output_test_rpm_abort();
+    test_output_test_crank_activity();
     test_output_test_keepalive_timeout();
     test_output_test_suspends_aux();
     test_output_test_bypasses_inhibit_mask();

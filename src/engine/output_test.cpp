@@ -56,7 +56,9 @@ namespace ems::engine {
 
 bool output_test_enter() noexcept
 {
-    if (ems::drv::ckp_snapshot().rpm_x10 != 0u) { return false; }
+    // Motor comprovadamente parado: rpm_x10 vale 0 sem sync, então só ele não basta
+    // (virabrequim girando em WAIT_GAP/LOSS_OF_SYNC passaria no gate).
+    if (!ems::drv::ckp_engine_still(ems::hal::tim5_count())) { return false; }
     // Sem o PLL os pulsos de teste sairiam ~7,8x mais longos (TIM5 no HSI).
     if (!system_clock_ok()) { return false; }
     ::etb_driver_shutdown();  // não herdar o último PWM do laço/autocal
@@ -85,7 +87,8 @@ void output_test_poll(uint32_t now_ms, uint32_t rpm_x10) noexcept
 {
     g_now_ms = now_ms;
     if (!g_active) { return; }
-    if (rpm_x10 > 0u) {
+    // Qualquer atividade do virabrequim aborta, mesmo sem sync (rpm_x10 == 0).
+    if (rpm_x10 > 0u || ems::drv::ckp_crank_active(ems::hal::tim5_count())) {
         g_abort_reason = kOutputTestAbortRpm;
         restore_safe();
         return;
