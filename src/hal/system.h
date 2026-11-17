@@ -10,6 +10,7 @@ extern "C" {
 #endif
 void system_stm32_init(void) noexcept;
 bool system_clock_ok(void) noexcept;
+uint32_t chip_idcode(void) noexcept;
 void iwdg_kick(void) noexcept;
 uint32_t millis(void) noexcept;
 uint32_t micros(void) noexcept;

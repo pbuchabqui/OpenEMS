@@ -347,6 +347,7 @@ test_engine_calc_mspark_dwell_follows_normal();
     test_ts_envelope_crc_reject();
     test_ts_envelope_read_write_burn();
     test_ts_envelope_burn_gate();
+    test_ui_chip_idcode();
     test_ts_axes_page();
     test_ts_envelope_canid_forms();
     test_och_launch_tc_status();

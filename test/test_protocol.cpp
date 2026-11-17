@@ -1060,3 +1060,18 @@ void test_table_burn_persists_layout(void) {
     CHECK_EQ(p0[ems::engine::kCalLayoutVersionOffset], ems::engine::kCalLayoutVersion,
              "page 0 layout version written too (boot will load the VE table)");
 }
+
+void test_ui_chip_idcode(void) {
+    section("protocolo legado: 'i' devolve DBGMCU_IDCODE (4 bytes LE)");
+    ems::app::ui_test_reset();
+    uint8_t buf[8] = {};
+    const uint8_t cmd = 'i';
+    ui_feed(&cmd, 1u);
+    const uint16_t n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 4u, "'i' → 4 bytes");
+    const uint32_t id = static_cast<uint32_t>(buf[0]) | (static_cast<uint32_t>(buf[1]) << 8u) |
+                        (static_cast<uint32_t>(buf[2]) << 16u) | (static_cast<uint32_t>(buf[3]) << 24u);
+    CHECK_EQ(id, chip_idcode(), "bytes = chip_idcode() em little-endian");
+    CHECK_EQ(id & 0xFFFu, 0x484u, "DEV_ID (host mock) = 0x484 (H562/563/573)");
+    CHECK_EQ(id >> 16u, 0x1007u, "REV_ID (host mock) = 0x1007 (Rev X, RM0481)");
+}

@@ -9,6 +9,7 @@
 #include "app/datalog.h"
 #include "app/can_rx_map.h"
 #include "hal/flex_fuel.h"
+#include "hal/system.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
 #include "engine/calibration.h"
@@ -103,6 +104,12 @@ void parse_byte(uint8_t b) noexcept {
         }
         if (b == static_cast<uint8_t>('S')) {
             tx_push_bytes(reinterpret_cast<const uint8_t*>(kFwVersion), static_cast<uint16_t>(sizeof(kFwVersion) - 1u));
+            return;
+        }
+        if (b == static_cast<uint8_t>('i')) {
+            // DBGMCU_IDCODE (4 bytes LE): confirma a revisão do silício (REV_ID = bits 31:16) sem sonda.
+            const uint32_t id = chip_idcode();
+            for (uint8_t i = 0u; i < 4u; ++i) { tx_push(static_cast<uint8_t>(id >> (8u * i))); }
             return;
         }
         if (b == static_cast<uint8_t>('F')) {

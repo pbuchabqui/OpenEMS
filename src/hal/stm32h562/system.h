@@ -26,6 +26,12 @@ void system_stm32_init(void) noexcept;
  */
 bool system_clock_ok(void) noexcept;
 
+/**
+ * DBGMCU_IDCODE (leitura): DEV_ID = bits [11:0] (0x484 = H562/563/573), REV_ID = bits [31:16]
+ * (Rev A 0x1000, Z 0x1001, X 0x1007 — RM0481, DBGMCU_IDCODE). Somente leitura.
+ */
+uint32_t chip_idcode(void) noexcept;
+
 /** Kick (reload) do IWDG — deve ser chamado a cada iteração do loop principal. */
 void iwdg_kick(void) noexcept;
 

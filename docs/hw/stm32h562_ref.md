@@ -322,7 +322,8 @@ FLASH_OPTKEYR   0x4002_210C     unlock opções: 0x08192A3B depois 0x4C5D6E7F
 | SDMMC2 | NÃO | — |
 
 **Confirmar no chip físico:** ler `DBGMCU_IDCODE` (0xE004_4000) campo `REV_ID[31:16]`.
-- Rev A = 0x1000, Rev Z = 0x1001, Rev X = 0x2001, Rev W = 0x2003.
+- Rev A = 0x1000, Rev Z = 0x1001, Rev X = 0x1007 (RM0481, DBGMCU_IDCODE); DEV_ID = 0x484 (H562/563/573).
+- Medido na placa VGT6 em 2026-11-17 pelo comando legado `'i'` (`chip_idcode()`): `0x10076484` → REV_ID 0x1007 = **Rev X**, DEV_ID 0x484. Os bits 15:12 (reservados) vieram 0x6.
 - Rev X recomendada para produção (errata ES0565 Rev 8).
 
 ---
