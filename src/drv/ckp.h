@@ -153,6 +153,17 @@ uint32_t ckp_instant_rpm_x10() noexcept;
 // Retorna true se stall foi detectado nesta chamada (transição → LOSS_OF_SYNC).
 bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept;
 
+// ── Atividade do virabrequim INDEPENDENTE de sync ─────────────────────────────
+// rpm_x10 vale 0 sem HALF/FULL_SYNC (WAIT_GAP, LOSS_OF_SYNC), então não prova
+// "motor parado". ckp_crank_active() é verdadeiro quando há bordas recentes
+// (< timeout de stall) E (um GAP recente OU período de dente <= piso de cranking
+// ≈ 130 RPM). Ruído periódico de 60/120 Hz num CKP solto não ativa (taxa abaixo do
+// piso e sem gap); cranking real sem sync (>= 150 RPM) ativa.
+// ckp_engine_still() = rpm_x10 == 0 && !ckp_crank_active(): gate de gravação em
+// Flash e de teste de saídas. tim5_cnt_now = hal::tim5_count().
+bool ckp_crank_active(uint32_t tim5_cnt_now) noexcept;
+bool ckp_engine_still(uint32_t tim5_cnt_now) noexcept;
+
 // ── API de teste (somente em build host) ──────────────────────────────────────
 #if defined(EMS_HOST_TEST)
 void     ckp_test_reset() noexcept;

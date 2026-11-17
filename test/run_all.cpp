@@ -76,6 +76,7 @@ int main(void) {
     test_ckp_phantom_rpm_unsync();
     test_ckp_rpm_jump_recovery();
     test_ckp_stall_poll_no_false_positive();
+    test_ckp_crank_activity_gate();
     
 
     // ── Sensors ───────────────────────────────────────────────────────────────

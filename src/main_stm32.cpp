@@ -738,11 +738,10 @@ uint32_t g_t_log_ms = g_t2ms_;
             // LED heartbeat: toggle PB2 a cada 500ms (1 Hz)
             GPIOB_MODER = (GPIOB_MODER & ~(3u << 4u)) | (1u << 4u);
             GPIOB_ODR ^= (1u << 2u);  // toggle PB2
-            const auto snap = ems::drv::ckp_snapshot();
-            // FIX: gate ALL flash writes behind the same RPM threshold — calibration
-            // writes had no RPM check, creating a latent bug (see Blocker #3).
-            const bool engine_running_fast = (snap.rpm_x10 > ems::engine::kFlashWriteSafeRpmX10);
-            if (!engine_running_fast) {
+            // Gate de Flash: motor comprovadamente parado (sem rpm E sem bordas de CKP),
+            // não "rpm baixo": rpm_x10 vale 0 sem sync (ver ckp_engine_still).
+            const bool engine_still = ems::drv::ckp_engine_still(ems::hal::tim5_count());
+            if (engine_still) {
                 // Adaptive LTFT/knock: só agenda se dirty (rate-limit dentro do flush).
                 // Page 0 queima pelo comando 'b', não por este timer.
                 if (ems::hal::nvm_adaptive_maps_dirty()) {
@@ -751,12 +750,11 @@ uint32_t g_t_log_ms = g_t2ms_;
             }
         }
         if (adaptive_flush_pending) {
-            // Double-check RPM before actually writing (engine may have started)
-            const auto snap = ems::drv::ckp_snapshot();
-            const bool engine_running_fast = (snap.rpm_x10 > ems::engine::kFlashWriteSafeRpmX10);
+            // Double-check antes de gravar (o motor pode ter começado a girar)
+            const bool engine_still = ems::drv::ckp_engine_still(ems::hal::tim5_count());
             // Flush já iniciado (setor 0 apagado/em programação): termina mesmo com o motor
             // girando, senão a flash ficava destravada e o setor adaptativo apagado.
-            if (!engine_running_fast || ems::hal::nvm_adaptive_flush_active()) {
+            if (engine_still || ems::hal::nvm_adaptive_flush_active()) {
                 adaptive_flush_pending = !ems::hal::nvm_flush_adaptive_maps();
             }
         }

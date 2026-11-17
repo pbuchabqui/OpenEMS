@@ -43,6 +43,7 @@ namespace ems::engine {
 
 extern volatile uint32_t ems_test_tim5_ccr1;
 extern volatile uint32_t ems_test_tim5_ccr2;
+extern volatile uint32_t ems_test_tim5_cnt;
 extern volatile uint32_t ems_test_cam_gpio_idr;
 
 using namespace ems::drv;
@@ -509,4 +510,68 @@ void test_ckp_noise_after_tooth_keeps_real_edge(void) {
     CHECK_EQ(ckp_snapshot().tooth_index, 10u, "index unchanged");
     ckp_fire(kNormalPeriod - kNormalPeriod / 5u); // next real tooth
     CHECK_EQ(ckp_snapshot().tooth_index, 11u, "next tooth counted once");
+}
+
+// ── Atividade do virabrequim independente de sync (gate de Flash / teste de saídas) ──
+// Alimenta `n` bordas periódicas de período `period` ticks, sem gap, e posiciona
+// TIM5_CNT na última captura (leitura "agora" do gate).
+static void ckp_feed_periodic(uint32_t n, uint32_t period) {
+    for (uint32_t i = 0u; i < n; ++i) { ckp_fire(period); }
+    ems_test_tim5_cnt = g_ckp_cap;
+}
+
+void test_ckp_crank_activity_gate(void) {
+    section("ckp: ckp_engine_still — ruído 60/120 Hz libera, cranking sem sync bloqueia");
+
+    // Sem nenhuma borda: parado.
+    ckp_test_reset(); g_ckp_cap = 0u; ems_test_tim5_cnt = 0u;
+    CHECK_TRUE(ckp_engine_still(ems_test_tim5_cnt), "sem bordas → parado");
+    CHECK_FALSE(ckp_crank_active(ems_test_tim5_cnt), "sem bordas → sem atividade");
+
+    // Ruído de rede 60 Hz (62,5 MHz / 60 = 1 041 667 ticks), sem gap: NÃO é cranking.
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_feed_periodic(40u, 1041667u);
+    CHECK_EQ(ckp_snapshot().rpm_x10, 0u, "60 Hz: rpm gated a 0");
+    CHECK_FALSE(ckp_crank_active(ems_test_tim5_cnt), "60 Hz sem gap: não é atividade de motor");
+    CHECK_TRUE(ckp_engine_still(ems_test_tim5_cnt), "60 Hz sem gap: gate de burn libera");
+
+    // Ripple de retificador 120 Hz (520 833 ticks): ainda abaixo do piso de cranking.
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_feed_periodic(40u, 520833u);
+    CHECK_EQ(ckp_snapshot().rpm_x10, 0u, "120 Hz: rpm gated a 0");
+    CHECK_FALSE(ckp_crank_active(ems_test_tim5_cnt), "120 Hz sem gap: não é atividade de motor");
+    CHECK_TRUE(ckp_engine_still(ems_test_tim5_cnt), "120 Hz sem gap: gate de burn libera");
+
+    // Cranking real a 150 RPM (416 667 ticks/dente) ainda sem sync: bloqueia.
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_feed_periodic(10u, 416667u);
+    CHECK_EQ(ckp_snapshot().rpm_x10, 0u, "150 RPM sem sync: rpm_x10 == 0 (o bug do gate antigo)");
+    CHECK_TRUE(ckp_crank_active(ems_test_tim5_cnt), "150 RPM sem sync: atividade detectada");
+    CHECK_FALSE(ckp_engine_still(ems_test_tim5_cnt), "150 RPM sem sync: burn bloqueado");
+
+    // Passado o timeout de stall sem bordas (200 ms = 12,5 M ticks) volta a ser "parado".
+    ems_test_tim5_cnt = g_ckp_cap + 13000000u;
+    CHECK_FALSE(ckp_crank_active(ems_test_tim5_cnt), "silêncio > timeout de stall → sem atividade");
+    CHECK_TRUE(ckp_engine_still(ems_test_tim5_cnt), "silêncio > timeout de stall → parado");
+
+    // Wrap de 32 bits do TIM5: capturas perto de 0xFFFFFFFF, leitura já após o wrap.
+    ckp_test_reset(); g_ckp_cap = 0xFFFFF000u;
+    ckp_feed_periodic(10u, 416667u);           // g_ckp_cap dá a volta
+    CHECK_TRUE(g_ckp_cap < 0xFFFFF000u, "capturas atravessaram o wrap de 32 bits");
+    CHECK_TRUE(ckp_crank_active(ems_test_tim5_cnt), "wrap: atividade detectada");
+    ems_test_tim5_cnt = g_ckp_cap + 13000000u;  // também atravessa o wrap
+    CHECK_FALSE(ckp_crank_active(ems_test_tim5_cnt), "wrap: silêncio após o wrap → sem atividade");
+
+    // Leitura de TIM5_CNT ANTES da última captura (ISR entrou depois da leitura): conta como recente.
+    ckp_test_reset(); g_ckp_cap = 0u;
+    ckp_feed_periodic(10u, 416667u);
+    ems_test_tim5_cnt = g_ckp_cap - 1000u;
+    CHECK_TRUE(ckp_crank_active(ems_test_tim5_cnt), "captura mais nova que a leitura → recente");
+
+    // Motor girando com sync completo: nunca "parado".
+    ckp_reach_full_sync();
+    ems_test_tim5_cnt = g_ckp_cap;
+    CHECK_FALSE(ckp_engine_still(ems_test_tim5_cnt), "FULL_SYNC girando → não parado");
+
+    ckp_test_reset(); g_ckp_cap = 0u; ems_test_tim5_cnt = 0u;  // isolamento entre testes
 }

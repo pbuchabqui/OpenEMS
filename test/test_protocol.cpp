@@ -18,6 +18,8 @@
 #include "hal/system.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
+
+extern volatile uint32_t ems_test_tim5_cnt;
 #include "engine/fuel_calc.h"
 #include "engine/ign_calc.h"
 #include "engine/auxiliaries.h"
@@ -197,7 +199,7 @@ void test_ts_envelope_read_write_burn(void) {
 void test_ts_envelope_burn_gate(void) {
     section("envelope TS: burn bloqueado com motor girando");
     ems::app::ui_test_reset();
-    ckp_reach_full_sync();  // ~6250 RPM > kFlashWriteSafeRpmX10 (300 RPM)
+    ckp_reach_full_sync();  // ~625 RPM com sync completo
 
     const uint32_t prog_before = ems::hal::nvm_test_program_count();
     const uint8_t burn[2] = {'b', 0x01u};
@@ -212,7 +214,24 @@ void test_ts_envelope_burn_gate(void) {
     const uint16_t n = ui_drain(buf, sizeof(buf));
     CHECK_TRUE(n == 1u && buf[0] == 0x01u, "legacy 'b' com RPM alto → NACK");
 
+    // Cranking sem sync: rpm_x10 == 0, mas o virabrequim gira → burn recusado (gate antigo liberava).
+    ckp_test_reset(); g_ckp_cap = 0u;
+    for (uint32_t i = 0u; i < 10u; ++i) { ckp_fire(416667u); }  // ~150 RPM, sem gap
+    ems_test_tim5_cnt = g_ckp_cap;
+    CHECK_EQ(ckp_snapshot().rpm_x10, 0u, "cranking sem sync: rpm_x10 == 0");
+    r = env_txn(burn, 2u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x85u, "'b' com cranking sem sync → 0x85 busy");
+    CHECK_EQ(ems::hal::nvm_test_program_count(), prog_before, "flash intocada (cranking sem sync)");
+
+    // Ruído de rede 60 Hz num CKP solto (sem gap): NÃO é motor → burn permitido.
+    ckp_test_reset(); g_ckp_cap = 0u;
+    for (uint32_t i = 0u; i < 40u; ++i) { ckp_fire(1041667u); }
+    ems_test_tim5_cnt = g_ckp_cap;
+    r = env_txn(burn, 2u);
+    CHECK_TRUE(r.frame_ok && r.code == 0x00u, "'b' com ruído 60 Hz sem gap → OK");
+
     ckp_test_reset(); g_ckp_cap = 0u;  // restaura RPM=0 p/ testes seguintes
+    ems_test_tim5_cnt = 0u;
 }
 
 void test_ts_axes_page(void) {

@@ -54,6 +54,7 @@ void test_ckp_stall_poll(void);
 void test_ckp_phantom_rpm_unsync(void);
 void test_ckp_rpm_jump_recovery(void);
 void test_ckp_stall_poll_no_false_positive(void);
+void test_ckp_crank_activity_gate(void);
 void test_sensors_validate_range(void);
 void test_sensors_validate_values(void);
 void test_sensors_health_status(void);

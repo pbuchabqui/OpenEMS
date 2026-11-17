@@ -142,6 +142,12 @@ static constexpr uint32_t kMinToothTicks = 50u;
 // afoga o motor e manda combustível cru para o escape.
 static constexpr uint32_t kMinStallTimeoutTicks      = 12500000u;   // 200 ms @ 62.5 MHz
 static constexpr uint32_t kMinStallTimeoutTicksBench = 125000000u;  // 2 s @ 62.5 MHz
+// Piso de "virabrequim em cranking" para o gate de Flash/teste de saídas: período
+// de dente <= 480000 ticks ≙ >= ~130 Hz de bordas ≙ ~130 RPM numa roda 60-2
+// (1 Hz de borda por RPM). Fica ACIMA de 60/120 Hz (rede e ripple de retificador
+// num CKP solto, ver rpm_if_synced) e abaixo do cranking real (>= 150 RPM).
+static constexpr uint32_t kCrankFloorToothTicks = 480000u;
+
 static inline uint32_t min_stall_timeout_ticks() noexcept {
     return ems::drv::sensors_is_bench_mode() ? kMinStallTimeoutTicksBench : kMinStallTimeoutTicks;
 }
@@ -284,6 +290,11 @@ static constexpr uint8_t kCmpRejectResync = 3u;
 // Dentes ainda por descartar pelo skip pós-silêncio (recarregado quando
 // delta ≥ timeout de stall e ckp_skip_pulses_after_gap > 0).
 static uint8_t s_skip_remaining = 0u;
+// Atividade do virabrequim independente de sync (ver ckp_crank_active): período do
+// último dente NORMAL aceito (pós-filtro de glitch/ruído) e captura da última GAP.
+// Escritos só na ISR do CKP; lidos sob seção crítica.
+static uint32_t s_last_tooth_delta_ticks = 0u;
+static uint32_t s_last_gap_capture = 0u;
 
 // After any CKP LOSS: require 2 fresh CMP edges before sequential (cmp_confirms>=2).
 // Also drop inter-edge CMP timestamp so a stale s_prev (many revs old) cannot
@@ -636,6 +647,12 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     g_state.snap.last_tim5_capture = capture_now;
 
     if (edge == Edge::GAP) {
+        s_last_gap_capture = capture_now;
+    } else {
+        s_last_tooth_delta_ticks = delta_ticks;
+    }
+
+    if (edge == Edge::GAP) {
         ++g_dbg_tc_gap;
         static_cast<void>(process_gap_event(delta_ticks));
         publish_periods();
@@ -829,6 +846,37 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     s_revs_since_cmp = 0u;
 }
 
+bool ckp_crank_active(uint32_t tim5_cnt_now) noexcept {
+    uint32_t last_capture;
+    uint32_t tooth_delta;
+    uint32_t gap_capture;
+    bool     have_edge;
+    {
+        ems::hal::CriticalSectionGuard guard;
+        last_capture = g_state.prev_capture;
+        tooth_delta  = s_last_tooth_delta_ticks;
+        gap_capture  = s_last_gap_capture;
+        have_edge    = (g_state.have_edge != 0u);
+    }
+    if (!have_edge) { return false; }
+    // Elapsed assinado (wrap-safe): captura mais nova que a leitura de TIM5_CNT = recente.
+    const int32_t age_signed = static_cast<int32_t>(tim5_cnt_now - last_capture);
+    const uint32_t age = (age_signed < 0) ? 0u : static_cast<uint32_t>(age_signed);
+    const uint32_t window = min_stall_timeout_ticks();
+    if (age >= window) { return false; }  // sem bordas: parado
+    // GAP recente: ruído periódico (rede/ripple) nunca gera gap.
+    if (gap_capture != 0u) {
+        const int32_t gap_age_signed = static_cast<int32_t>(tim5_cnt_now - gap_capture);
+        if (gap_age_signed < 0 || static_cast<uint32_t>(gap_age_signed) < window) { return true; }
+    }
+    // Taxa de dentes aceitos acima do piso de cranking.
+    return tooth_delta != 0u && tooth_delta <= kCrankFloorToothTicks;
+}
+
+bool ckp_engine_still(uint32_t tim5_cnt_now) noexcept {
+    return ckp_snapshot().rpm_x10 == 0u && !ckp_crank_active(tim5_cnt_now);
+}
+
 bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept {
     const SyncState state = g_state.snap.state;
     // Subtracção circular em SIGNED: se a ISR capturar um dente entre a leitura
@@ -929,6 +977,8 @@ void ckp_test_reset() noexcept {
     s_cmp_ref_tooth = 0xFFu;
     s_cmp_reject_streak = 0u;
     s_skip_remaining = 0u;
+    s_last_tooth_delta_ticks = 0u;
+    s_last_gap_capture = 0u;
 }
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {

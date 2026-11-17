@@ -372,10 +372,12 @@ bool command_bounds_ok() noexcept {
     return bounds_ok(g_cmd_page, g_cmd_off, g_cmd_len);
 }
 
-// Burn de Flash só com motor parado/lento (errata ES0565: erase/program pode
-// congelar fetch por ~120 µs — inaceitável durante janela de CKP/scheduler).
+// Burn de Flash só com o motor comprovadamente parado (CLAUDE.md: não gravar Flash
+// com motor girando; errata ES0565: a 1ª erase/program pode congelar o fetch).
+// rpm_x10 vale 0 sem sync (WAIT_GAP/LOSS_OF_SYNC), então o gate também exige ausência
+// de atividade do virabrequim (ckp_engine_still), sem limiar de RPM.
 bool burn_rpm_safe() noexcept {
-    return ems::drv::ckp_snapshot().rpm_x10 <= ems::engine::kFlashWriteSafeRpmX10;
+    return ems::drv::ckp_engine_still(ems::hal::tim5_count());
 }
 
 void sync_page_from_table(uint8_t page) noexcept {
@@ -865,6 +867,8 @@ void clear_page_dirty(uint8_t page) noexcept {
 
 namespace {
 bool burn_one_page(uint8_t page) noexcept {
+    // Reavalia o gate antes de CADA página: um burn pode gravar a página pedida + page 0.
+    if (!burn_rpm_safe()) { return false; }
     // O buffer de UI pode estar velho (VE com bake 'Y', autocal do ETB...): grava o estado vivo
     // das tabelas, não uma cópia antiga. Páginas 0 e 0x0B já se ressincronizam abaixo.
     if (page == 0x01u || page == 0x02u || (page >= 0x04u && page <= 0x09u)) {
