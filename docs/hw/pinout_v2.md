@@ -1,9 +1,11 @@
 # Pinout v2 — STM32H562VGT6 LQFP100 (arquitectura MC33810 / L9960T / TPS65381A / CJ125)
 
+> **Status:** fora-de-escopo — placa v2 (MC33810, L9960T, CJ125, TPS65381A) e seus esquemáticos/conectores não fazem parte do projeto (decisão do usuário, 2026-11-17). Escopo atual: bancada WeAct H562 VGT6 + ESP32 (`docs/ROADMAP.md`).
+
 > **AUTORIDADE de números de pino e funções de periférico.** Toda a tabela abaixo foi
 > gerada e **validada programaticamente** contra `MCU_ST_STM32H5:STM32H562VGTx`
 > (`/usr/share/kicad/symbols/`), 100 pinos, 1..100 completos. 53 atribuições, **0 falhas**.
-> Ver `../../docs/hw/README.md` §1 — código ganha a documento; este ficheiro ganha a
+> Ver `docs/hw/decisoes_placa_historico.md` §1 — código ganha a documento; este ficheiro ganha a
 > qualquer prosa sobre pinos.
 
 ⚠️ **Não é a matriz da spec Gemini.** Aquela tinha 25 de 45 números errados (deslocamentos

@@ -1,5 +1,7 @@
 # Idle Air Control (Idle) System Architecture
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 The idle subsystem keeps the engine running smoothly when the driver is off the throttle.
 It manipulates an Idle Air Control (IAC) actuator - typically a stepper motor, DC motor, or
 PWM solenoid - to admit just enough air past the closed throttle plate, and may also

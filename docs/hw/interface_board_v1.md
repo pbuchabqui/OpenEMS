@@ -1,5 +1,7 @@
 > ⛔ **Documento histórico.** O TLE8888 não é usado nesta ECU: o driver foi removido do firmware e as saídas INJ/IGN saem direto por GPIO. Mantido só como referência.
 
+> **Status:** histórico — descreve o plano com TLE8888, removido do firmware em 2026-10-07 (`9e7b309`); não é o hardware atual. Escopo atual: `docs/ROADMAP.md`; pinos: `docs/hw/pinout.md` e `src/hal/out_pins.h`.
+
 <!--
   Origem: plano de design elaborado e aprovado em 2026-07-20.
   Persistido no repositório porque ~/.claude/plans/ é área efémera.
@@ -9,10 +11,10 @@
     - STM32H562 (VREF+ só existe em LQFP100/UFBGA100)
     - Código do próprio repo (ver referências file:line ao longo do texto)
   ⚠️ CANON v1: TLE8888-2QK (watchdog off de fábrica). O -1QK só em produção
-     com WWD+FWD implementados. Ver docs/hw/README.md.
+     com WWD+FWD implementados. Ver docs/hw/decisoes_placa_historico.md.
   ⚠️ Onde este documento contradiz docs/wiring_diagram.md, ESTE prevalece
      no racional de blocos; pinout/regs → pinout.md / tle8888_regs.h.
-  ⚠️ Ponto de entrada: docs/hw/README.md (autoridade + decisões + em aberto).
+  ⚠️ Ponto de entrada: docs/hw/decisoes_placa_historico.md (autoridade + decisões + em aberto).
 -->
 
 # Plano de Hardware — Placa de Interface OpenEMS v1 (VGT6) rumo ao motor
@@ -623,7 +625,7 @@ Levantadas na revisão crítica. Nenhuma é de precisão, mas todas podem matar 
   fechado**: AMPSEAL `776164-1` (35, sinais) + `770680-1` (23, potência) — ver a secção de montagem.
 
 ### 17. Logística do projeto
-- **⭐ Antes de cada bloco no KiCad:** consultar Speeduino + rusEFI (regra em `docs/hw/README.md` §1b).
+- **⭐ Antes de cada bloco no KiCad:** consultar Speeduino + rusEFI (regra em `docs/hw/decisoes_placa_historico.md` §1b).
   Não inventar esquemático de módulo do zero se já existe board/driver de referência.
 - **KiCad, 4 camadas (decidido).** 4 camadas é o mínimo honesto para os pours PGND/SGND/AGND separados em
   que todo o bloco 18 se apoia — 2 camadas anularia boa parte do critério de imunidade a ruído.

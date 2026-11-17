@@ -1,5 +1,7 @@
 # Manual de teste de bancada — WeAct H562 VGT6
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 Este manual testa a **lógica do firmware no silício real**: sincronismo, ângulo
 da faísca, largura do pulso de injeção, jitter e watchdog. A placa é a WeAct
 STM32H562 VGT6 (`docs/hw/weact_h562_coreboard.md`), e o motor é simulado por um

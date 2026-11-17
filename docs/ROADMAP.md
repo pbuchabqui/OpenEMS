@@ -1,26 +1,24 @@
 # Roadmap e progresso OpenEMS
 
-Atualizado em 2026-10-21, `main` em `6aeb3ea`. Reúne o antigo `progresso.md` (revisão e correção de `src/`, branch `fix/output-contract-cuts`, já mesclada em `main`) e o roadmap de produto. Nada aqui foi validado em hardware. `main` está igual a `origin/main`. `tools/ts/OpenEMS_model.msq` foi versionado em 2026-10-21.
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
 
-## Verificação em `main` (2026-10-21)
+Reúne o antigo `progresso.md` (revisão e correção de `src/`, branch `fix/output-contract-cuts`, já mesclada em `main`) e o roadmap de produto. Nada aqui foi validado em hardware. `tools/ts/OpenEMS_model.msq` está versionado.
 
-- `make host-test WERROR=1`: 1830 PASS / 0 FAIL.
-- `make precision-test`: 162 PASS / 0 FAIL / 0 XFAIL / 0 XPASS.
-- `make firmware-rgt6 WERROR=1` e `make firmware-vgt6 WERROR=1`: os dois terminaram com `Firmware build successful`.
-- `make ini-check`: 188 constants, 45 channels, 0 findings.
-- `make dash-check`: não rodado nesta data. Em 2026-10-20: 11 testes, OK, com `ResourceWarning` de arquivo não fechado em `tools/openems_dash/tests/test_tune.py`.
-- A saída longa de `make host-test` pode vir truncada no terminal. O resultado completo está no log do binário, em `/tmp/openems-build/host/mvp_bench_tests`.
+## Verificação
+
+O estado dos gates não é guardado aqui (envelhece a cada commit). Rode `make ci-local` (host-test, precision-test, ini-check, datalog-check, dash-check, firmwares RGT6/VGT6 com `WERROR=1` e lint de includes): precisa fechar sem falha. O resultado completo de `make host-test` fica no log do binário, em `/tmp/openems-build/host/mvp_bench_tests`; o terminal pode truncar a saída.
 
 ## Roadmap
 
-Escopo: firmware e bancada (WeAct H562 VGT6 + ESP32). A placa v2 (MC33810, L9960T, CJ125, TPS65381A) e os drivers dos CIs novos estão fora deste roadmap. Ordem vinda de `docs/hw/README.md` §6: bancada, depois ETB, depois motor. Cada fase só começa quando a anterior cumpre o seu critério de pronto.
+Escopo: firmware e bancada (WeAct H562 VGT6 + ESP32). A placa v2 (MC33810, L9960T, CJ125, TPS65381A) e os drivers dos CIs novos estão fora deste roadmap. Ordem (ver `docs/hw/README.md`): bancada, depois ETB, depois motor. Cada fase só começa quando a anterior cumpre o seu critério de pronto.
 
 ### Fase 0 — Consistência da documentação
 
 Sem hardware. Reflete a divisão do README e a remoção dos projetos KiCad em 2026-10-21 (`a1e26fc`, recuperáveis no git).
 
-- Feito em 2026-10-21: `docs/bench_test_manual.md` (esquemático e errata), `hardware/README.md` (estrutura sem os projetos KiCad removidos) e as referências a "README §" em `docs/hw/pinout.md`, `weact_h562_coreboard.md` e `interface_board_v1.md` agora apontam para `docs/estado_e_hardening.md`, `docs/errata_stm32h562.md` e `docs/hw/README.md`.
-- O suporte a TLE8888 foi removido do firmware em 2026-10-07 (`9e7b309`: `src/hal/tle8888.{cpp,h}` e `tle8888_regs.h`). Feito em 2026-10-21: `docs/hw/README.md` marca como histórico o TLE8888 (§4) e os caminhos para os projetos KiCad removidos; `microruseefi_as_base.md` e `mcu_f407_to_h562_pin_map.md` ganharam a nota de links quebrados. `tle8888_crosscheck.md` e `tle8888_pinout.md` já estavam marcados como históricos e `vr_input_conditioning.md` como supersedido. Revisadas as menções restantes: `architecture_v2.md` (linha do driver atualizada para "removido"), `bom_v1_candidates.md`, `kicad_vendor_review.md` e `netlist_v1.md` ganharam aviso de histórico, `weact_h562_schematic.md` ganhou uma ressalva, e `interface_board_v1.md` e `pinout.md` já estavam corretos. Os itens "TLE8888" de Concluído são histórico e ficam.
+- Feito em 2026-10-21: `docs/bench_test_manual.md` (esquemático e errata), `hardware/README.md` (estrutura sem os projetos KiCad removidos) e as referências a "README §" em `docs/hw/pinout.md`, `weact_h562_coreboard.md` e `interface_board_v1.md` agora apontam para `docs/estado_e_hardening.md`, `docs/errata_stm32h562.md` e `docs/hw/decisoes_placa_historico.md` (antigo `docs/hw/README.md`).
+- O suporte a TLE8888 foi removido do firmware em 2026-10-07 (`9e7b309`: `src/hal/tle8888.{cpp,h}` e `tle8888_regs.h`). Feito em 2026-10-21: `docs/hw/decisoes_placa_historico.md` (antigo `docs/hw/README.md`) marca como histórico o TLE8888 (§4) e os caminhos para os projetos KiCad removidos; `microruseefi_as_base.md` e `mcu_f407_to_h562_pin_map.md` ganharam a nota de links quebrados. `tle8888_crosscheck.md` e `tle8888_pinout.md` já estavam marcados como históricos e `vr_input_conditioning.md` como supersedido. Revisadas as menções restantes: `architecture_v2.md` (linha do driver atualizada para "removido"), `bom_v1_candidates.md`, `kicad_vendor_review.md` e `netlist_v1.md` ganharam aviso de histórico, `weact_h562_schematic.md` ganhou uma ressalva, e `interface_board_v1.md` e `pinout.md` já estavam corretos. Os itens "TLE8888" de Concluído são histórico e ficam.
+- Feito em 2026-11-17: higiene total da documentação. Todo documento em `docs/` ganhou `> **Status:**` (vigente, histórico ou fora-de-escopo) e `make doc-check` (`tools/doc_lint.py`, dentro do `make ci-local`) impede regressões; `docs/hw/README.md` virou um índice curto e o registro de decisões da placa passou a `docs/hw/decisoes_placa_historico.md`; erros factuais corrigidos (mapa de SRAM, Bank2, REV_ID da Rev X) e registrados em `tools/doc_facts.txt`.
 - `docs/wiring_diagram.md` já está marcado como histórico (TLE8888 fora do projeto); o pinout vigente é `docs/hw/pinout.md`. Nada a atualizar.
 - `.graphifyignore` agora exclui `tools/esp32_combined/ardustim_gui/assets/`.
 - `tools/ts/OpenEMS_model.msq` (tune de exemplo do TunerStudio, gerado em 18/10) foi versionado em 2026-10-21.
@@ -146,25 +144,25 @@ Não viraram código na revisão de `src/`.
 
 - **Higiene de código monorepo** (2026-07): secrets untracked + gitignore;
   untrack graphify/ardustim vendor; `WERROR` host+dual firmware; `ci-local` +
-  lint-includes phase A/B; split host tests (1113 PASS); `vehicle_inputs`
+  lint-includes phase A/B; split host tests; `vehicle_inputs`
   (ban ENGINE→APP); `hal/out_pins` BSRR inline; `nvm_boot`; ui_protocol TUs;
   `etb_pwm_*`. Documentado em `docs/qualidade_e_testes.md`.
 - **Diagrama elétrico completo** (2026-06-19): power supply (buck 5V wide-Vin +
   LDO 3.3V + TVS SMBJ24CA), condicionamento de sinais (divisores, filtros RC,
   proteção TVS por canal), atuadores externos (ETB/EWG H-bridge, WBO2, flex fuel),
   conector ECU genérico (~47 pinos com VVT), star grounding (PGND/SGND/Shield).
-  CAN transceiver integrado no TLE8888 (sem PHY externo). Correções ultrareview:
+  CAN transceiver integrado no TLE8888 (sem PHY externo) [histórico: TLE8888 removido em 2026-10-07]. Correções ultrareview:
   divider flex fuel (3.3kΩ), ADC range NTC (0–3V), reguladores automotivos.
 - **Flex fuel sensor** (2026-06-18): PB5/EXTI5, 50–150Hz → 0–100% etanol, duty
   → temperatura combustível. Stoich AFR auto-ajustado (14.7→9.8 conforme E%).
-- **TLE8888 VRS conditioner** (2026-06-18): CKP reluctor entra direto no TLE8888
+- **[histórico: TLE8888 removido em 2026-10-07] TLE8888 VRS conditioner** (2026-06-18): CKP reluctor entra direto no TLE8888
   VRS_IN → saída digital VRS_OUT → PA0/TIM5. Sem comparador externo.
 - **Electronic Wastegate (EWG)** (2026-06-18): motor DC + H-bridge externo (PA6 PWM
   10kHz + PA7/PB4 DIR), PID de posição (2ms), cascata boost PI (20ms) → position PID.
   Calibração EWG gains + pos min/max em NVM page 0.
 - **Remoção IACV** (2026-06-18): idle controlado exclusivamente pela ETB. PA6 liberado
   para EWG PWM.
-- **TLE8888 integração completa** (2026-06-18): SPI2 driver (config/diag, 3.9MHz,
+- **[histórico: TLE8888 removido em 2026-10-07] TLE8888 integração completa** (2026-06-18): SPI2 driver (config/diag, 3.9MHz,
   timeout 500µs), INJ low-side (OC 10A), IGN push-pull (OC 6A), VRS conditioner,
   per-channel fault bitmap na telemetria + dashboard, watchdog 100ms.
 - **Closed-loop fuel OEM-lite** (2026-07): STFT PI + delay, LTFT mult/add NVM,

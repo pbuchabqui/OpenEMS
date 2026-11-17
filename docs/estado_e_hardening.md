@@ -1,5 +1,7 @@
 # Estado atual e hardening
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 ## Estado Atual
 
 - Codigo ativo direcionado ao STM32H562.

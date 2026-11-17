@@ -1,5 +1,7 @@
 # STM32H562 — Referência de Hardware (OpenEMS)
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 Extrato curado do RM0481 (Rev 4) e CMSIS stm32h562xx.h.
 Contém apenas o que é relevante para o projeto OpenEMS.
 Fonte autoritativa: RM0481 + stm32h562xx.h (WeAct STM32H5 SDK).
@@ -11,12 +13,18 @@ Fonte autoritativa: RM0481 + stm32h562xx.h (WeAct STM32H5 SDK).
 ```
 Região                  Base          Notas
 ─────────────────────────────────────────────────────────────
-FLASH Bank1 (code)      0x0800_0000   até 1 MB (512 KB usado)
-FLASH Bank2 (NVM)       0x0810_0000   8 KB setores, NVM adaptativa
+FLASH Bank1 (code)      0x0800_0000   H562RG = 1 MB no total (512 KB por banco)
+FLASH Bank2 (NVM)       0x0808_0000   8 KB setores, NVM adaptativa (base + FLASH_SIZE/2)
 FLASH controller        0x4002_2000   registradores FLASH_ACR, SR, CR
-SRAM1 (128 KB)          0x2000_0000
-SRAM2 (80 KB)           0x2002_0000   .fastrun, vector table RAM
-SRAM3 (64 KB)           0x2003_4000
+SRAM1 (256 KB)          0x2000_0000
+SRAM2 (64 KB)           0x2004_0000
+SRAM3 (320 KB)          0x2005_0000   total contíguo: 640 KB (0x2000_0000–0x200A_0000)
+
+Fonte: `stm32h562xx.h` oficial da ST (`SRAM*_SIZE`, `SRAM*_BASE_NS`, `FLASH_BANK_SIZE`) e RM0481.
+O mapa 128/80/64 KB que aparecia aqui era o do H523/H533.
+Linker do projeto (`linker/stm32h562.ld`): `RAM` 512K em 0x2000_0000 (dentro da SRAM real);
+`.fastrun` fica em FLASH (não há código em SRAM); a região `SRAM3` ali declarada (0x2006_0000)
+não coincide com a SRAM3 real (0x2005_0000) e sobrepõe a RAM — nenhuma seção a usa hoje.
 
 APB1 base               0x4000_0000
 APB2 base               0x4001_0000
@@ -136,8 +144,14 @@ Não existe COMP1_IRQn neste device. O knock usa ADC1_IN6 (PA5) com threshold so
 
 ## 3. Alternate Function — Pinos do Projeto
 
-Fonte: STM32CubeMX .ioc examples + GPIO_AF defines em stm32h5xx_hal_gpio_ex.h.
-Registradores: `GPIOx_AFRL` (pinos 0-7, 4 bits/pino) e `GPIOx_AFRH` (pinos 8-15).
+**Não há tabela de pinos neste documento.** A tabela de AF/pino que existia aqui estava desatualizada
+(descrevia INJ/IGN como saídas de timer e o ETB com pino e frequência antigos) e duplicava a autoridade
+de pinos. Hoje: INJ/IGN são GPIO por BSRR (`src/hal/out_pins.h`), o ETB roda a 10 kHz (`src/hal/etb_driver.cpp`)
+e os pinos por placa estão em `pinout.md`. Canais de ADC: `src/hal/adc.h`.
+
+Registradores de AF: `GPIOx_AFRL` (pinos 0-7, 4 bits/pino) e `GPIOx_AFRH` (pinos 8-15); defines em
+`stm32h5xx_hal_gpio_ex.h`. Famílias usadas pelo projeto: AF1 = TIM1/TIM2, AF2 = TIM3/TIM4/TIM5/TIM8, AF3 = TIM8,
+AF7 = USART1, AF9 = FDCAN1; ANALOG = sem AF, `MODER = 11`.
 
 ### 3.1 Package LQFP100 — `PE1` não bondado
 
@@ -148,57 +162,6 @@ de `GPIOE` livre — decidido **`PE14`** (`docs/hw/pinout.md`, `docs/hw/interfac
 
 **VCAP (pads 48 e 98):** cada um com **2,2 µF** X7R a GND (confirmado WeAct H562VGT6 V1.0 sch).
 **VDDUSB (pad 73):** amarrar a VDD 3V3 local. Ver `mcu_f407_to_h562_pin_map.md`.
-
-```
-Pino   AF#   Função           Uso no OpenEMS
-──────────────────────────────────────────────────────────────
-PA0    AF2   TIM5_CH1         CKP input capture
-PA1    AF2   TIM5_CH2         CMP (cam) input capture
-PA2    ANALOG ADC1_IN3        MAP sensor
-PA3    ANALOG ADC1_IN4        MAF sensor
-PA4    ANALOG ADC1_IN5        TPS sensor
-PA5    ANALOG ADC1_IN6        KNOCK sensor (ADC threshold SW)
-PA6    AF2   TIM3_CH1         AUX PWM 1 (IACV/wastegate)
-PA7    AF1   TIM1_CH1N        TIM1 complementar (não usado no projeto)
-PA8    AF1   TIM1_CH1         ETB PWM (20 kHz)
-PA9    AF7   USART1_TX        UI UART TX — NÃO reconfigurar como TIM1
-PA10   AF7   USART1_RX        UI UART RX
-PA15   AF1   TIM2_CH1         INJ1 output compare
-
-PB0    ANALOG ADC1_IN7        APP1 (pedal 1)
-PB1    ANALOG ADC1_IN8        APP2 (pedal 2)
-PB3    AF1   TIM2_CH2         INJ2 output compare
-PB6    AF2   TIM4_CH1         AUX PWM 3 (VVT)
-PB7    AF2   TIM4_CH2         AUX PWM 4 (VVT)
-PB8    AF9   FDCAN1_RX        WBO2 CAN RX
-PB9    AF9   FDCAN1_TX        WBO2 CAN TX
-PB10   AF1   TIM2_CH3         INJ3 output compare
-PB11   AF1   TIM2_CH4         INJ4 output compare
-PB14   —     GPIO_Output      ETB DIR (H-bridge direction)
-PB15   —     GPIO_Output      ETB EN  (H-bridge enable)
-
-PC0    ANALOG ADC1_IN9        ETB_TPS1
-PC1    ANALOG ADC1_IN10       ETB_TPS2
-PC2    ANALOG ADC2_IN1 (*)    CLT sensor
-PC3    ANALOG ADC2_IN2 (*)    IAT sensor
-PC4    ANALOG ADC2_IN13(*)    FUEL_PRESS sensor
-PC5    ANALOG ADC2_IN14(*)    OIL_PRESS sensor
-PC6    AF3   TIM8_CH1         IGN1 output compare
-PC7    AF3   TIM8_CH2         IGN2 output compare
-PC8    AF3   TIM8_CH3         IGN3 output compare (⚠ conflito microSD WeAct)
-PC9    AF3   TIM8_CH4         IGN4 output compare (⚠ conflito microSD WeAct)
-
-(*) ADC2 IN numbers per RM0481 §25 — PC2=IN3, PC3=IN4,
-    PC4=IN13, PC5=IN14 (ver adc.cpp comentários)
-```
-
-**AF summary:**
-- AF1 = TIM1, TIM2
-- AF2 = TIM3, TIM4, TIM5, TIM8
-- AF3 = TIM8 (PC6-PC9)
-- AF7 = USART1 (PA9/PA10)
-- AF9 = FDCAN1 (PB8/PB9)
-- ANALOG = sem AF, MODER=11
 
 ---
 

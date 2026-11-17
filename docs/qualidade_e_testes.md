@@ -1,5 +1,7 @@
 # Qualidade, gates e testes
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 ## Higiene De Codigo
 
 Programa de qualidade do monorepo (concluido 2026-07; HEAD tipico inclui
@@ -13,8 +15,8 @@ isolado sem big-bang rewrite.
 make ci-local                   # todos os gates abaixo
 # equivalentes manuais:
 make secrets-check
-make host-test WERROR=1         # referencia: 2282 PASS / 0 FAIL
-make precision-test             # motor virtual: 120 PASS / 0 FAIL (centelha, dwell, PW, EOI)
+make host-test WERROR=1         # deve fechar com 0 FAIL (a contagem de PASS cresce a cada suíte)
+make precision-test             # motor virtual: 0 FAIL (centelha, dwell, PW, EOI)
 make ini-check                  # TunerStudio ini: referencias, sobreposicao, faixas = firmware
 make dash-check DASH_PY=<venv>/bin/python  # dashboard: helpers JS + protocolo vs ECU simulada
 make sim-ecu NVM=/tmp/nvm.bin   # ECU simulada num pty para o dashboard (sem placa)

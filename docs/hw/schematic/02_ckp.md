@@ -1,5 +1,7 @@
 # Sheet 02 — CKP (Hall)
 
+> **Status:** fora-de-escopo — placa v2 (MC33810, L9960T, CJ125, TPS65381A) e seus esquemáticos/conectores não fazem parte do projeto (decisão do usuário, 2026-11-17). Escopo atual: bancada WeAct H562 VGT6 + ESP32 (`docs/ROADMAP.md`).
+
 ## Função
 Sensor Hall de roda dentada (60-2) → pull-up 5 V → divisor 3,3 V → **`PA0`**
 (`TIM5_CH1`). Mesmo timebase do scheduler que o CMP (`PA1`/`TIM5_CH2`).

@@ -1,5 +1,7 @@
 # STM32F407VGTx → STM32H562VGTx — mapa de migração (LQFP100)
 
+> **Status:** histórico — mapa da migração F407→H562. Pinout atual: `docs/hw/pinout.md` e `src/hal/out_pins.h`.
+
 > 📦 **Nota (2026-10-21):** os projetos KiCad `hardware/openems_v1` e `hardware/openems_ecu` foram removidos do repositório (`a1e26fc`; recuperáveis com `git checkout a1e26fc~1 -- hardware/`). Os caminhos e links para eles abaixo são históricos e estão quebrados.
 
 > ⛔ **SUPERSEDIDO (2026-08-07) para efeitos de desenho.** Este documento existia para

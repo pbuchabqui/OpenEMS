@@ -1,5 +1,7 @@
 # Sheet 03 — CMP (Hall)
 
+> **Status:** fora-de-escopo — placa v2 (MC33810, L9960T, CJ125, TPS65381A) e seus esquemáticos/conectores não fazem parte do projeto (decisão do usuário, 2026-11-17). Escopo atual: bancada WeAct H562 VGT6 + ESP32 (`docs/ROADMAP.md`).
+
 ## Função
 Sensor Hall open-collector de came → pull-up 5 V → divisor 3,3 V → **`PA1`**
 (`TIM5_CH2`). Irmão do CKP (`02_ckp.md` → `PA0`/`TIM5_CH1`); mesmo timebase TIM5.

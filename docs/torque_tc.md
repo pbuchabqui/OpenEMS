@@ -1,5 +1,7 @@
 # Controle de tração: proxy de flare
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 O corte de torque do TC (`torque_manager.cpp`) usa o slip nesta ordem: API externa, slip CAN (roda contra carro, `vehicle_inputs`) e, na falta dos dois, o proxy de flare de rpm descrito aqui. Tudo só vale com `tc_enable` = 1, APP ≥ `tc_app_min_x10` e rpm ≥ `tc_rpm_min_x10`.
 
 ## Por que não um limiar de rpm/s

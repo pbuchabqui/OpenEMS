@@ -1,5 +1,7 @@
 # BOM v1 — candidatos (não fecha compra)
 
+> **Status:** histórico — descreve o plano com TLE8888, removido do firmware em 2026-10-07 (`9e7b309`); não é o hardware atual. Escopo atual: `docs/ROADMAP.md`; pinos: `docs/hw/pinout.md` e `src/hal/out_pins.h`.
+
 > ⛔ **Pré-v2 / histórico.** Esta lista é anterior à arquitectura de CIs dedicados (`architecture_v2.md`, 2026-08-07): o **TLE8888-2QK** que aparece como power stage **saiu** do projeto e do firmware (`9e7b309`). Não usar como lista de compra.
 
 Critério do plano: desempenho / imunidade a ruído, não preço mínimo.  

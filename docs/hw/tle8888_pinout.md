@@ -1,5 +1,7 @@
 # TLE8888 LQFP-100 — pinout de package (fonte primária)
 
+> **Status:** histórico — descreve o plano com TLE8888, removido do firmware em 2026-10-07 (`9e7b309`); não é o hardware atual. Escopo atual: `docs/ROADMAP.md`; pinos: `docs/hw/pinout.md` e `src/hal/out_pins.h`.
+
 > ⛔ **Documento histórico.** O TLE8888 não é usado nesta ECU: o driver foi removido do firmware e as saídas INJ/IGN saem direto por GPIO. Mantido só como referência.
 
 > **Fontes:** Infineon TLE8888-1QK Data Sheet **Rev. 1.2** (2017-02-10), §3 Pin Configuration  

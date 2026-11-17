@@ -1,5 +1,7 @@
 # Sheet 07 — Flex fuel
 
+> **Status:** fora-de-escopo — placa v2 (MC33810, L9960T, CJ125, TPS65381A) e seus esquemáticos/conectores não fazem parte do projeto (decisão do usuário, 2026-11-17). Escopo atual: bancada WeAct H562 VGT6 + ESP32 (`docs/ROADMAP.md`).
+
 ## Função
 Sensor GM/Continental 50–150 Hz → **`PB4`** (`TIM3_CH1` / captura) — autoridade:
 [`../pinout_v2.md`](../pinout_v2.md) (`FLEX_IN`). Duty = temperatura combustível.

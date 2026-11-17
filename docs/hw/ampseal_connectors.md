@@ -1,5 +1,7 @@
 # AMPSEAL — plugues e headers PCB (TE)
 
+> **Status:** fora-de-escopo — placa v2 (MC33810, L9960T, CJ125, TPS65381A) e seus esquemáticos/conectores não fazem parte do projeto (decisão do usuário, 2026-11-17). Escopo atual: bancada WeAct H562 VGT6 + ESP32 (`docs/ROADMAP.md`).
+
 ## Fontes
 
 | Documento | Conteúdo | Arquivo no repo |

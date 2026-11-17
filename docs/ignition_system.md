@@ -1,5 +1,7 @@
 # Ignition System Architecture
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 The ignition (spark) system determines when to charge (dwell) and fire (discharge) ignition coils based on engine position, RPM, and load.
 
 ## The Spark Pipeline

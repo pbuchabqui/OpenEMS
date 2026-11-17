@@ -1,5 +1,7 @@
 # Relatório de bancada — WeAct H562 VGT6
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 Copie este arquivo para `docs/bench_reports/AAAA-MM-DD.md` e preencha durante o ensaio. Roteiro e critérios: `docs/bench_test_manual.md`. Não ligue potência (sem bobina, injetor ou motor). Deixe em branco o que não foi medido, em vez de estimar.
 
 ## Identificação

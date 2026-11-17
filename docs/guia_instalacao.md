@@ -1,5 +1,7 @@
 # Guia de instalação
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 Tudo pelo dashboard proprio (`tools/openems_dash`, aba **Install**: um guia
 passo a passo com faixas validadas, lampada de ponto, teste de saidas, gravar,
 exportar/importar tune e restaurar padroes de fabrica). O TunerStudio

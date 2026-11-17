@@ -1,5 +1,7 @@
 # Arquitectura v2 — CIs dedicados no lugar do hub TLE8888
 
+> **Status:** fora-de-escopo — placa v2 (MC33810, L9960T, CJ125, TPS65381A) e seus esquemáticos/conectores não fazem parte do projeto (decisão do usuário, 2026-11-17). Escopo atual: bancada WeAct H562 VGT6 + ESP32 (`docs/ROADMAP.md`).
+
 > **Decisão (2026-08-07).** A ECU passa de um hub único (TLE8888-2QK) para CIs dedicados
 > por função. Origem: especificação externa, verificada bloco a bloco antes de adoptada.
 

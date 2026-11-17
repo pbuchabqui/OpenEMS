@@ -1,5 +1,7 @@
 # Sistema de proteção
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 Duas peças: o `limp_gating` decide os cortes de injeção, ignição e ETB; o `DiagnosticManager` guarda as falhas e alimenta o corte por CRITICAL.
 
 ## limp_gating (`src/engine/limp_gating.{h,cpp}`)

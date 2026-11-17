@@ -1,5 +1,7 @@
 # Arquitetura
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 ## Regras De Arquitetura
 
 O fluxo de dependencias e descendente:

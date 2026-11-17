@@ -1,5 +1,7 @@
 # Esquemático modular — OpenEMS ECU v2
 
+> **Status:** fora-de-escopo — placa v2 (MC33810, L9960T, CJ125, TPS65381A) e seus esquemáticos/conectores não fazem parte do projeto (decisão do usuário, 2026-11-17). Escopo atual: bancada WeAct H562 VGT6 + ESP32 (`docs/ROADMAP.md`).
+
 ⚠️ **Arquitectura activa é a v2** (2026-08-07) — TLE8888 saiu; entraram
 TPS65381A-Q1 / MC33810 / L9960T / CJ125. Ver [`../architecture_v2.md`](../architecture_v2.md).
 
@@ -94,7 +96,7 @@ chegar à Fase 3–4 do plano de execução — sem perda de trabalho de copper.
 ## Processo por módulo
 
 1. Ler (ou reescrever) o `.md` do módulo  
-2. Consultar Speeduino/rusEFI + datasheet (§1b em `docs/hw/README.md`)  
+2. Consultar Speeduino/rusEFI + datasheet (§1b em `docs/hw/decisoes_placa_historico.md`)  
 3. Confirmar **cada pino MCU** em `pinout_v2.md`  
 4. Desenhar **só** esse sheet no KiCad  
 5. ERC local (`kicad-cli sch erc`)  

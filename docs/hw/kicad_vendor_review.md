@@ -1,5 +1,7 @@
 # Revisão KiCad: Speeduino + rusEFI (vs OpenEMS)
 
+> **Status:** histórico — revisão dos vendors KiCad; os projetos KiCad foram removidos do repositório em 2026-10-21. Escopo atual: `docs/ROADMAP.md`.
+
 > ⛔ **Parcialmente histórico.** A secção **TLE8888** descreve símbolos e pinos de um CI que **saiu** do projeto (`9e7b309`), e os projetos KiCad `hardware/openems_*` foram removidos do repositório em 2026-10-21 (`a1e26fc`). A revisão de Speeduino/rusEFI continua válida como referência.
 
 > **Data:** 2026-07-20  

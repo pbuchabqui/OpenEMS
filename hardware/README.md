@@ -1,5 +1,7 @@
 # OpenEMS — hardware
 
+> **Status:** histórico — os projetos KiCad deste diretório foram removidos em 2026-10-21 (recuperáveis no git). Escopo atual: `docs/ROADMAP.md`.
+
 Caminho de fabrico da ECU OpenEMS: projecto KiCad **próprio, desenhado de raiz**.
 O microRusEFI é **referência**, não cobre (mudou em 2026-08-07 —
 ver [`docs/hw/microruseefi_as_base.md`](../docs/hw/microruseefi_as_base.md)).

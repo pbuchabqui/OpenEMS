@@ -1,5 +1,7 @@
 # Condicionamento de entrada VR (CKP/CMP) — MAX9926
 
+> **Status:** histórico — descreve o plano com TLE8888, removido do firmware em 2026-10-07 (`9e7b309`); não é o hardware atual. Escopo atual: `docs/ROADMAP.md`; pinos: `docs/hw/pinout.md` e `src/hal/out_pins.h`.
+
 > **⚠️ SUPERSEDIDO para o plano v1 — ver `docs/hw/interface_board_v1.md`.**
 > O CKP passou a usar a **interface VR integrada do TLE8888-2QK**, que tem a
 > mesma arquitectura do MAX9924 modo A2 (comutação no **zero-crossing**, armada

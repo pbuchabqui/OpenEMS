@@ -1,5 +1,7 @@
 # Pipeline de controle do motor
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 ## Pipeline De Controle Do Motor
 
 ### 1. Captura CKP/CMP
@@ -139,7 +141,7 @@ errados. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
 
 ## ADC E Sensores
 
-- Modulos: `src/hal/adc.cpp`, `src/hal/stm32h562/adc.cpp`, `src/drv/sensors.cpp`.
+- Modulos: `src/hal/adc.cpp`, `src/drv/sensors.cpp`.
 - ADC primario/secundario representam ADC1/ADC2 no STM32.
 - ADC 12-bit 0–3.3 V (raw 4095), tensão aceite pelo STM32H5. MAP 0–3.3 V → 0–3.00 bar (`raw × 3000 / 4095`). TPS/APP/ETB default 0–4095.
 - TIM6 deve ser o gatilho periodico de amostragem.

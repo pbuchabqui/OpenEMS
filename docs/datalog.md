@@ -1,5 +1,7 @@
 # Datalog em cartão SD
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 Registro do estado do motor a 100 Hz num cartão SD, em blocos brutos de 512 B, sem sistema de arquivos. É a fonte de dados para afinar os ganhos do STFT, o X-τ e qualquer modelo aprendido (ver [`nn_viabilidade.md`](nn_viabilidade.md)).
 
 **Estado:** o formato, o anel e a busca do fim do log estão testados no host (`make host-test`). O driver SDMMC (`src/hal/sd.cpp`) compila na VGT6, mas **nunca rodou em hardware**; a validação está em `docs/bench_report_template.md`.

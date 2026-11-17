@@ -1,5 +1,7 @@
 # Redes neurais no STM32H562: viabilidade
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 Estudo de 2026-10-22. Nada disto está implementado, e nada foi medido em hardware.
 
 ## Resumo

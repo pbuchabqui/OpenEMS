@@ -1,5 +1,7 @@
 # WeAct STM32H5xx VxTx CoreBoard V1.0 — forma e headers
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 > **Fonte:** `WeAct-STM32H5xxVxTxCoreBoard_V10 Board Shape 外形.pdf`  
 > (Altium mechanical / Board Shape, 3 páginas; local: `~/Downloads/…`).  
 > Placa **V1.0 WeAct Studio** com **LQFP100 / GPIOE** (pinos E0–E15 nos headers) — alvo
@@ -69,7 +71,7 @@ derivada: 69,10 − 2×2,80). A largura 30,48 mm está cotada no desenho.
 
 ## Estado face ao plano
 
-| Item `docs/hw/README.md` §5 | Estado |
+| Item `docs/hw/decisoes_placa_historico.md` §5 | Estado |
 |----------------|--------|
 | Comprimento × largura | ✅ **69,10 × 38,62 mm** |
 | Furos montagem | ✅ Φ **3,2**, offset **2,80**, pitch X **30,48** |

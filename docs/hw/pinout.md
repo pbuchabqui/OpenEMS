@@ -1,5 +1,7 @@
 # OpenEMS — Pinout (RGT6 / VGT6)
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 **Fonte de verdade do pinout.** Detalhe completo por pino dos dois packages
 suportados. O `README.md` mantém apenas o resumo das diferenças e aponta para
 aqui. Código de referência: `ecu_sched.cpp` (INJ/IGN BSRR), `hal/out_pins.h`
@@ -206,15 +208,7 @@ real (a bateria cai a 9–10 V). A realimentação de posição do EWG ficou sem
 
 ## Ver também
 
-- **`docs/hw/README.md`** — **ponto de entrada** (autoridade, decisões, em aberto).
-- **`docs/hw/interface_board_v1.md`** — *histórico (TLE8888 não é usado)*: plano da placa de interface v1
-  (TLE8888-**2QK** como estágio de potência, INJ/IGN por direct drive, alocação de
-  pinos, orçamento de erro de timing, sequência de verificação).
-- **`docs/wiring_diagram.md`** — ⚠️ **DESACTUALIZADO em vários eixos**: mapa de
-  pinos ASCII legado (TIM2/TIM8 OC), e os números do TLE8888 ali ("INJ OC 10 A,
-  IGN push-pull 6 A") **estão errados** — o datasheet Rev 1.2 dá injectores
-  2,2 A e ignição como driver de gate de 20 mA. Usar apenas como referência de
-  topologia eléctrica (terra, conector), e mesmo assim com desconfiança.
-- **`docs/hw/vr_input_conditioning.md`** — condicionamento VR. ⚠️ Recomenda o
-  MAX9926; no plano v1 o CKP passou a usar a **interface VR integrada do
-  TLE8888** (zero-crossing + armamento por pico, clamp e diagnóstico internos).
+- **`docs/hw/README.md`** — índice de hardware: escopo, autoridade e status de cada documento.
+- **`docs/hw/stm32h562_ref.md`** — memória, registradores e periféricos do MCU.
+- **`docs/errata_stm32h562.md`** — errata ES0565.
+- Documentos **históricos** de placa (TLE8888, placa v1/v2, esquemático ASCII em `docs/wiring_diagram.md`) não descrevem o hardware atual e estão marcados no cabeçalho; não use esses arquivos para pinos.

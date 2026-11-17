@@ -1,5 +1,7 @@
 # OpenEMS — Esquemático Elétrico
 
+> **Status:** histórico — descreve o plano com TLE8888, removido do firmware em 2026-10-07 (`9e7b309`); não é o hardware atual. Escopo atual: `docs/ROADMAP.md`; pinos: `docs/hw/pinout.md` e `src/hal/out_pins.h`.
+
 > ⛔ **Documento histórico.** O TLE8888 não é usado nesta ECU: o driver foi removido do firmware e as saídas INJ/IGN saem direto por GPIO. Mantido só como referência.
 
 > **Âmbito deste ficheiro:** alimentação, condicionamento de sinal, atuadores externos,

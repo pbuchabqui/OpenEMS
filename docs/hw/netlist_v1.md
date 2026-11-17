@@ -1,5 +1,7 @@
 # OpenEMS — Netlist da placa de interface v1 (VGT6)
 
+> **Status:** histórico — descreve o plano com TLE8888, removido do firmware em 2026-10-07 (`9e7b309`); não é o hardware atual. Escopo atual: `docs/ROADMAP.md`; pinos: `docs/hw/pinout.md` e `src/hal/out_pins.h`.
+
 > ⛔ **Pré-v2 / histórico.** Os blocos que ligam o **TLE8888** (rails de sensor, CKP por VR, CAN, SPI2) descrevem uma arquitectura abandonada (`architecture_v2.md`, 2026-08-07; TLE8888 removido do firmware em `9e7b309`). O projeto KiCad correspondente foi removido do repositório (`a1e26fc`). Pinout actual: `pinout_v2.md`.
 
 > **O que este ficheiro é:** a camada de **ligação** — cada net nomeada, cada ligação pino-a-pino

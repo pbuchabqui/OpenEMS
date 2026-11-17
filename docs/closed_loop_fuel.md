@@ -1,5 +1,7 @@
 # Closed-loop fuel — OpenEMS (STFT / LTFT / LEARN)
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 Documento do firmware OpenEMS (não o modelo genérico rusEFI de `fueling_system.md`).
 
 ## Visão geral

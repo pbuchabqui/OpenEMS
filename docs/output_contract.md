@@ -1,5 +1,7 @@
 # Contrato de saída: o que o motor recebe, atuador por atuador
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 Gerado da leitura do código (não da execução). Referências são `arquivo:linha` de `src/` e podem
 derivar; confirme antes de citar. Cobertura de teste: **H** host (`make host-test`),
 **P** `make precision-test` (bordas reais nos pinos), **V** `make host-test-vgt6`, **B** bancada.

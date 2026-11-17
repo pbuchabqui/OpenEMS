@@ -1,5 +1,7 @@
 # WeAct STM32H5xx VxTx CoreBoard V1.0 — esquemático (resumo OpenEMS)
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 > **Fonte:** `WeAct-STM32H5xxVxTxCoreBoard_V10 SchDoc.pdf` (Altium, 1 página).  
 > Arquivo: `docs/hw/weact_h562_v10_schdoc.pdf`.  
 > Forma mecânica: `weact_h562_coreboard.md`.

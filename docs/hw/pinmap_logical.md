@@ -1,5 +1,7 @@
 # Pinmap lógico KiCad — OpenEMS interface v1
 
+> **Status:** histórico — descreve o plano com TLE8888, removido do firmware em 2026-10-07 (`9e7b309`); não é o hardware atual. Escopo atual: `docs/ROADMAP.md`; pinos: `docs/hw/pinout.md` e `src/hal/out_pins.h`.
+
 Fonte: `docs/hw/netlist_v1.md` (secção Conector) + `weact_h562_schematic.md`.  
 ⚠️ Numeração de **cavidade física** AMPSEAL (3 filas) valida-se no PDF TE; este mapa é a
 **alocação lógica** materializada no sheet 09.

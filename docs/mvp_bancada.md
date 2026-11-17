@@ -1,5 +1,7 @@
 # MVP de bancada
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 ## MVP Bancada Segura
 
 Definicao de pronto para o MVP de bancada:
@@ -42,7 +44,7 @@ Definicao de pronto para o MVP de bancada:
 
 ### ETB (Electronic Throttle Body)
 
-- PWM: **PA6 TIM3_CH1** (rgt6) ou **PE5 TIM15_CH1** (vgt6), 20 kHz (`etb_pwm_init`).
+- PWM: **PA6 TIM3_CH1** (rgt6) ou **PE5 TIM15_CH1** (vgt6), 10 kHz (`etb_pwm_init(10000u)` em `src/hal/etb_driver.cpp`).
 - H-bridge dual-DIR (BTS7960/VNH5019-style): IN1 open / IN2 close — rgt6 **PA8/PB4**,
   vgt6 **PE7/PE8** (ver `docs/hw/pinout.md`).
 - Boot policy: ETB desativado (`EN=0`, PWM=0) até calibracao valida e sensores OK.

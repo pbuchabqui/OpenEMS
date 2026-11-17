@@ -1,5 +1,7 @@
 # Sistema de combustível
 
+> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+
 Speed-density em inteiros, calculado a cada 2 ms em `engine_calc_step()` (`src/engine/engine_calc.cpp`). O resultado é um pulso por abertura, em ticks do TIM5, entregue ao scheduler por `ecu_sched_commit_calibration_x10()`. A malha fechada (STFT/LTFT) está em [`closed_loop_fuel.md`](closed_loop_fuel.md); os cortes, em [`protection_system.md`](protection_system.md).
 
 ## Arquivos
