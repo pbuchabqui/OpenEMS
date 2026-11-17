@@ -266,6 +266,17 @@ static inline void comms_pump() noexcept {
 // Inicialização — sequência idêntica ao main.cpp
 // =============================================================================
 
+// Ponto de serviço do burn de calibração (hal/flash.cpp, nvm_save_calibration): o burn é
+// síncrono e o laço principal não roda durante erase+program. Mantém os watchdogs de saída
+// (dwell/injetor) e o IWDG vivos. O kick incondicional é seguro porque o burn força o PWM do
+// ETB a 0 no início (a ponte H não fica segurando o último duty, que é o que a condição
+// `g_etb_alive_ms` do laço principal protege). O burn só roda com o motor parado (A3).
+extern "C" void nvm_burn_service_hook() noexcept {
+    ::ecu_sched_dwell_watchdog();
+    ::ecu_sched_inj_watchdog();
+    iwdg_kick();
+}
+
 static void openems_init() noexcept {
     // 1) PLL → 250 MHz + SysTick 1ms + IWDG 10s (boot)
     system_stm32_init();

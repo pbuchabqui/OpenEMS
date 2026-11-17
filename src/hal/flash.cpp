@@ -29,6 +29,7 @@
 #include "hal/cal_trailer.h"
 #include "hal/crc32.h"
 #include "hal/critical_section.h"
+#include "hal/etb_driver.h"
 #include <cstring>
 
 static uint32_t etb_cal_crc32(const ems::hal::EtbCalRecord& rec) noexcept {
@@ -132,10 +133,17 @@ static void flash_lock_bank2() noexcept {
     FLASH_NSCR |= FLASH_CR_LOCK;
 }
 
+// Timeout defensivo: evita busy-wait infinito se hardware de flash falhar.
+// ~300k iterações ≈ vários ms de margem para operações de erase/program.
+static constexpr uint32_t kFlashWaitTimeout = 300000u;
+
+// Ponto de serviço do burn BLOQUEANTE (nvm_save_calibration): o laço principal fica parado
+// durante erase+program, então o firmware implementa este hook (main_stm32.cpp) para rodar
+// os watchdogs de dwell/injetor e alimentar o IWDG. Fraco = no-op em host e em testes.
+// Chamado após o erase e após cada quad-word. Só o burn bloqueante usa flash_write_words.
+extern "C" __attribute__((weak)) void nvm_burn_service_hook() noexcept {}
+
 static bool flash_wait_ready() noexcept {
-    // Timeout defensivo: evita busy-wait infinito se hardware de flash falhar.
-    // ~300k iterações ≈ vários ms de margem para operações de erase/program.
-    constexpr uint32_t kFlashWaitTimeout = 300000u;
     for (uint32_t i = 0u; i < kFlashWaitTimeout; ++i) {
         if ((FLASH_NSSR & kFlashBusyMask) == 0u) { return true; }
     }
@@ -146,7 +154,8 @@ static bool flash_wait_ready() noexcept {
 }
 
 static bool flash_erase_sector(uint32_t sector_num) noexcept {
-    flash_wait_ready();
+    // Flash ainda ocupada (timeout): não dispara o erase por cima de uma operação em curso.
+    if (!flash_wait_ready()) { return false; }
     FLASH_NSCCR = 0xFFFFFFFFu;  // limpa todos os flags de erro
 
     // BKSEL=1: toda a calibração vive no Bank2 (0x08080000+); sector_num é
@@ -159,6 +168,7 @@ static bool flash_erase_sector(uint32_t sector_num) noexcept {
 
     const bool idle = flash_wait_ready();
     FLASH_NSCR &= ~(FLASH_CR_SER | FLASH_CR_BKSEL | FLASH_CR_SNB_MASK);
+    nvm_burn_service_hook();  // erase terminou: serve watchdogs/IWDG antes de programar
 
     return idle && (FLASH_NSSR & kFlashErrorMask) == 0u;
 }
@@ -205,6 +215,7 @@ static bool flash_write_words(uint32_t dest_addr,
             FLASH_NSCR &= ~FLASH_CR_PG;
             return false;
         }
+        nvm_burn_service_hook();  // fora da seção crítica do quad-word, com PG ainda ativo
     }
 
     FLASH_NSCR &= ~FLASH_CR_PG;
@@ -322,6 +333,12 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
 
     const uint32_t whole_len = static_cast<uint32_t>(len) & ~15u;
     const uint32_t tail_len = static_cast<uint32_t>(len) - whole_len;  // 0..15
+
+    // O burn é síncrono: o slot do ETB não roda até ele terminar. Força a ponte H a PWM 0
+    // (mola de limp-home) em vez de deixá-la segurando o último duty; é essa condição que
+    // permite ao hook alimentar o IWDG durante o burn (o kick do laço principal só ocorre
+    // com o slot do ETB vivo). O laço do ETB reaplica o PWM no próximo slot de 2 ms.
+    etb_driver_shutdown();
 
     flash_unlock_bank2();
     bool ok = flash_erase_sector(sector);
