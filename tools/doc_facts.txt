@@ -1,0 +1,11 @@
+# Fatos já provados errados — `tools/doc_lint.py` (check FACT) falha se reaparecerem em documento `vigente`.
+# Formato:  <regex>  ->  <correção e fonte>.  Uma linha por fato. Acrescente aqui todo erro factual achado em doc.
+Rev X\s*=\s*0x2001|Rev W\s*=\s*0x2003  ->  REV_ID da Rev X é 0x1007 (RM0481, DBGMCU_IDCODE); medido na placa VGT6 em 2026-11-17
+DEV_ID[^\n]{0,20}0x474  ->  DEV_ID do STM32H562/563/573 é 0x484 (RM0481)
+0x0810_?0000  ->  Bank2 do H562RG (1 MB) começa em 0x08080000 (stm32h562xx.h: FLASH_BANK_SIZE = FLASH_SIZE/2); 0x08100000 só vale para 2 MB
+SRAM1 \(128 ?KB\)|SRAM2 \(80 ?KB\)|SRAM3 \(64 ?KB\)  ->  esse é o mapa do H523/H533; H562: SRAM1 256K @0x20000000, SRAM2 64K @0x20040000, SRAM3 320K @0x20050000 (stm32h562xx.h)
+\.fastrun[^\n]{0,40}SRAM2|SRAM2[^\n]{0,40}\.fastrun  ->  hoje .fastrun fica em FLASH no linker (linker/stm32h562.ld); não há rotina em SRAM
+(pull-down|safe=LOW)[^\n]{0,60}TLE8888|TLE8888[^\n]{0,60}(pull-down|safe=LOW)  ->  TLE8888 não faz parte do projeto; não existe pull-down de driver a jusante dos GPIOs de INJ/IGN
+ETB[^\n]{0,80}20 ?kHz|20 ?kHz[^\n]{0,30}etb_pwm_init  ->  o PWM do ETB roda a 10 kHz (src/hal/etb_driver.cpp: etb_pwm_init(10000u))
+vetor/handlers cr[ií]ticos[^\n]{0,60}SRAM  ->  ES0565 §2.2.33: o workaround é rodar a PRIMEIRA erase/program da SRAM; vetor/ISRs em SRAM não são exigidos
+INJ[1-4][^\n]{0,30}output compare|IGN[1-4][^\n]{0,30}output compare  ->  INJ/IGN são GPIO por BSRR agendado pelo TIM5 (src/hal/out_pins.h), não output compare

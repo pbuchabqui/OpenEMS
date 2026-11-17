@@ -2,6 +2,8 @@
 
 ECU para motores a combustao interna (STM32H562, C++17 embarcado). Prioridade: baixa latencia, baixo jitter e previsibilidade temporal. Escopo: so o firmware Hall (roda 60-2 + sensor de fase, captura em TIM5); o tree encoder MT6835 foi abandonado.
 
+Hardware: bancada WeAct H562 VGT6 + ESP32, sem atuadores; INJ/IGN/ETB saem direto por GPIO. **Fora do projeto** (nao assumir, nao citar como em uso): placa de producao v1/v2 e os CIs TLE8888, MC33810, L9960T, CJ125 e TPS65381A. Docs de hardware marcados `historico` ou `fora-de-escopo` nao descrevem o hardware atual; a fonte e o codigo (`src/hal/out_pins.h`) e `docs/hw/README.md`.
+
 ## Seguranca
 
 - Nunca assumir atuadores energizados. Ensaio real exige confirmar a revisao fisica do chip (Rev X, `REV_ID` em `DBGMCU_IDCODE`); bancada e sem bobinas/injetores.
@@ -31,4 +33,6 @@ ECU para motores a combustao interna (STM32H562, C++17 embarcado). Prioridade: b
 ## Docs e segredos
 
 - O `README.md` e so visao geral. Decisao tecnica duravel vai no `docs/*.md` do subsistema (fuel, idle, ignition, protection, output_contract); nao criar Markdown paralelo fora de `docs/`.
+- Todo `docs/**/*.md` tem `> **Status:** vigente · validado AAAA-MM-DD` (ou `historico` / `fora-de-escopo` com o porque). Mudou comportamento, pino, constante ou comando: atualize o doc e a data no mesmo commit. `make doc-check` (dentro do `make ci-local`) barra status ausente, caminho/alvo/simbolo inexistente, tecnologia removida citada como em uso, contagem de testes ou hash de `main` no texto, e fato ja provado errado. Erro factual achado em doc: corrija e acrescente o padrao em `tools/doc_facts.txt`.
+- Codigo ganha de documento. Valor de registrador, mapa de memoria e revisao de silicio: confirmar no `stm32h562xx.h` oficial da ST / RM0481, nao em doc do repo.
 - `wifi_credentials.h` nunca e commitado (copiar de `wifi_credentials.example.h`). `graphify-out/` nao e versionado.

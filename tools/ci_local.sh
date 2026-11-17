@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # OpenEMS local CI: secrets, host tests, virtual-engine precision, TunerStudio
-# ini, firmware for both boards (WERROR), include layering lint.
+# ini, firmware for both boards (WERROR), include layering lint, doc hygiene.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -20,5 +20,6 @@ make firmware-rgt6 WERROR="$WERROR"
 make firmware-vgt6 WERROR="$WERROR"
 make lint-includes LINT_PHASE=A LINT_ERROR=1
 make lint-includes LINT_PHASE=B LINT_ERROR=1
+make doc-check
 
 echo "=== ci-local: OK ==="

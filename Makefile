@@ -3,7 +3,7 @@
 # Quality: WERROR=1, LINT_ERROR=0|1, make ci-local / secrets-check / format
 
 .PHONY: all clean host-test precision-test ini-check datalog-check sim-ecu sim-ecu-build dash-check host-test-vgt6 host-test-knock-hw firmware firmware-rgt6 firmware-vgt6 help \
-        secrets-check lint-includes format format-all format-check ci-local
+        secrets-check lint-includes doc-check format format-all format-check ci-local
 
 COMPILER_ARM = arm-none-eabi-g++
 OBJCOPY_ARM = arm-none-eabi-objcopy
@@ -196,6 +196,7 @@ help:
 	@echo "Quality gates:"
 	@echo "  secrets-check   Fail if wifi_credentials.h (etc.) is tracked"
 	@echo "  lint-includes   Phase A/B include policy (LINT_PHASE=A|B LINT_ERROR=0|1)"
+	@echo "  doc-check       Higiene da documentacao: status, refs, simbolos, fatos (tools/doc_lint.py)"
 	@echo "  format          clang-format dirty git files only (on-touch)"
 	@echo "  format-all      clang-format entire src/test (explicit; large diff)"
 	@echo "  format-check    Dry-run format on dirty files"
@@ -305,6 +306,9 @@ datalog-check:
 lint-includes:
 	@LINT_ERROR=$(LINT_ERROR) $(PYTHON) tools/lint_includes.py --phase $(LINT_PHASE) \
 		$(if $(filter 1,$(LINT_ERROR)),--error,)
+
+doc-check:
+	@$(PYTHON) tools/doc_lint.py --error
 
 # On-touch only: format files changed vs HEAD (or staged). Requires clang-format.
 FORMAT_SRC = $(shell git diff --name-only --diff-filter=ACMR HEAD -- 'src/**/*.cpp' 'src/**/*.h' 'test/**/*.cpp' 'test/**/*.h' 2>/dev/null; \
