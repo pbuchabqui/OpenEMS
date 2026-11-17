@@ -269,7 +269,7 @@ FLASH_KEYR2     0x4002_2118     unlock: escrever 0x45670123 depois 0xCDEF89AB
 FLASH_OPTKEYR   0x4002_210C     unlock opções: 0x08192A3B depois 0x4C5D6E7F
 ```
 
-**Errata ES0565:** Primeira operação erase/program após reset pode congelar CPU por ~120 µs. Executar a primeira escrita antes de habilitar CKP ISR, ou usar código em SRAM. Endurance: Bank2 ~10k ciclos em Rev X.
+**Errata ES0565 §2.2.33:** a primeira erase/program após power-on/Standby congela fetch/read da Flash por ~120 µs (todas as revisões). Workaround da ST: vetor + handlers críticos e o código dessa primeira operação na SRAM. Alternativa de engenharia (não é da ST): fazer a primeira escrita antes de habilitar a ISR do CKP. Endurance: Bank2 ~10k ciclos em Rev X.
 
 ---
 
@@ -285,9 +285,9 @@ FLASH_OPTKEYR   0x4002_210C     unlock opções: 0x08192A3B depois 0x4C5D6E7F
 | SDMMC2 | NÃO | — |
 
 **Confirmar no chip físico:** ler `DBGMCU_IDCODE` (0xE004_4000) campo `REV_ID[31:16]`.
-- Rev A = 0x1000, Rev Z = 0x1001, Rev X = 0x1007 (RM0481, DBGMCU_IDCODE); DEV_ID = 0x484 (H562/563/573).
+- Rev A = 0x1000, Rev Z = 0x1001, Rev X = 0x1007, Rev W (marcacao `W` ou `4`) = 0x100F (ES0565 Rev 9, Tabela 2; RM0481, DBGMCU_IDCODE); DEV_ID = 0x484 (H562/563/573).
 - Medido na placa VGT6 em 2026-11-17 pelo comando legado `'i'` (`chip_idcode()`): `0x10076484` → REV_ID 0x1007 = **Rev X**, DEV_ID 0x484. Os bits 15:12 (reservados) vieram 0x6.
-- Rev X recomendada para produção (errata ES0565 Rev 8).
+- Rev X recomendada para produção (errata ES0565 Rev 9).
 
 ---
 

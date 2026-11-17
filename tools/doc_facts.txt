@@ -7,5 +7,7 @@ SRAM1 \(128 ?KB\)|SRAM2 \(80 ?KB\)|SRAM3 \(64 ?KB\)  ->  esse é o mapa do H523/
 \.fastrun[^\n]{0,40}SRAM2|SRAM2[^\n]{0,40}\.fastrun  ->  hoje .fastrun fica em FLASH no linker (linker/stm32h562.ld); não há rotina em SRAM
 (pull-down|safe=LOW)[^\n]{0,60}TLE8888|TLE8888[^\n]{0,60}(pull-down|safe=LOW)  ->  TLE8888 não faz parte do projeto; não existe pull-down de driver a jusante dos GPIOs de INJ/IGN
 ETB[^\n]{0,80}20 ?kHz|20 ?kHz[^\n]{0,30}etb_pwm_init  ->  o PWM do ETB roda a 10 kHz (src/hal/etb_driver.cpp: etb_pwm_init(10000u))
-vetor/handlers cr[ií]ticos[^\n]{0,60}SRAM  ->  ES0565 §2.2.33: o workaround é rodar a PRIMEIRA erase/program da SRAM; vetor/ISRs em SRAM não são exigidos
 INJ[1-4][^\n]{0,30}output compare|IGN[1-4][^\n]{0,30}output compare  ->  INJ/IGN são GPIO por BSRR agendado pelo TIM5 (src/hal/out_pins.h), não output compare
+
+[Mm]over vetor/ISRs para SRAM n[ãa]o [ée] exigido|vetor/ISRs em SRAM n[ãa]o s[ãa]o exigidos  ->  ES0565 §2.2.33 (Rev 9) EXIGE, para app sensivel: vetor + handlers criticos na SRAM e a 1a erase/program na SRAM; vale para todas as revisoes, inclusive X
+Rev W\s*[=(][^\n]{0,20}0x2003  ->  Rev W (marcacao W ou 4) tem REV_ID 0x100F (ES0565 Tabela 2)
