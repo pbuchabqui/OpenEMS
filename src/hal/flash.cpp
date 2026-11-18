@@ -30,6 +30,8 @@
 #include "hal/crc32.h"
 #include "hal/critical_section.h"
 #include "hal/etb_driver.h"
+#include "hal/nvm_scratch.h"
+#include "hal/system.h"
 #include <cstring>
 
 static uint32_t etb_cal_crc32(const ems::hal::EtbCalRecord& rec) noexcept {
@@ -108,6 +110,7 @@ static constexpr uint32_t kSectorCal6  = 7u;   // Setor 7: Cal page 6 (ETB)
 static constexpr uint32_t kSectorCal7  = 8u;   // Setor 8: Cal page 7 (Pedal map)
 static constexpr uint32_t kSectorCal8  = 9u;   // Setor 9: Cal page 8 (Boost map)
 static constexpr uint32_t kSectorCal9  = 10u;  // Setor 10: Cal page 9 (eixos tabela)
+static constexpr uint32_t kSectorScratch = 11u;  // Setor 11: scratch da operação sacrificial do boot (nada mais usa)
 
 static constexpr uint32_t kBank2Base   = FLASH_BANK2_BASE;
 static constexpr uint32_t kSectorSize  = FLASH_SECTOR_SIZE;
@@ -142,6 +145,10 @@ static constexpr uint32_t kFlashWaitTimeout = 300000u;
 // os watchdogs de dwell/injetor e alimentar o IWDG. Fraco = no-op em host e em testes.
 // Chamado após o erase e após cada quad-word. Só o burn bloqueante usa flash_write_words.
 extern "C" __attribute__((weak)) void nvm_burn_service_hook() noexcept {}
+// Ligado só dentro de nvm_save_calibration: no boot (operação sacrificial) o ecu_sched ainda não foi
+// inicializado e o hook não deve rodar.
+static bool g_burn_service_on = false;
+static inline void burn_service() noexcept { if (g_burn_service_on) { nvm_burn_service_hook(); } }
 
 static bool flash_wait_ready() noexcept {
     for (uint32_t i = 0u; i < kFlashWaitTimeout; ++i) {
@@ -168,7 +175,7 @@ static bool flash_erase_sector(uint32_t sector_num) noexcept {
 
     const bool idle = flash_wait_ready();
     FLASH_NSCR &= ~(FLASH_CR_SER | FLASH_CR_BKSEL | FLASH_CR_SNB_MASK);
-    nvm_burn_service_hook();  // erase terminou: serve watchdogs/IWDG antes de programar
+    burn_service();  // erase terminou: serve watchdogs/IWDG antes de programar
 
     return idle && (FLASH_NSSR & kFlashErrorMask) == 0u;
 }
@@ -215,7 +222,7 @@ static bool flash_write_words(uint32_t dest_addr,
             FLASH_NSCR &= ~FLASH_CR_PG;
             return false;
         }
-        nvm_burn_service_hook();  // fora da seção crítica do quad-word, com PG ainda ativo
+        burn_service();  // fora da seção crítica do quad-word, com PG ainda ativo
     }
 
     FLASH_NSCR &= ~FLASH_CR_PG;
@@ -339,6 +346,7 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
     // permite ao hook alimentar o IWDG durante o burn (o kick do laço principal só ocorre
     // com o slot do ETB vivo). O laço do ETB reaplica o PWM no próximo slot de 2 ms.
     etb_driver_shutdown();
+    g_burn_service_on = true;
 
     flash_unlock_bank2();
     bool ok = flash_erase_sector(sector);
@@ -363,6 +371,7 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
                                reinterpret_cast<const uint8_t*>(end.w), 16u);
     }
     flash_lock_bank2();
+    g_burn_service_on = false;
     // DIAG (2026-07-09): burn reportava OK mas não sobrevivia a power-cycle.
     // Suspeita: write buffer de 128 bits (WBNE/DBNE) do STM32H5 não é
     // forçado a comitar para NV storage nas mesmas condições em que
@@ -373,6 +382,63 @@ bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexc
     }
     return ok;
 }
+
+// ── Operação sacrificial do boot (errata ES0565 §2.2.33) ──────────────────────
+static NvmBootOpDiag g_boot_op = {};
+
+static bool boot_scratch_program(uint32_t base, uint32_t slot) noexcept {
+    alignas(4) uint8_t word[kNvmScratchSlotBytes];
+    std::memset(word, 0, sizeof(word));
+    word[0] = 'S'; word[1] = 'C'; word[2] = 'R'; word[3] = 'T';
+    word[4] = static_cast<uint8_t>(slot);
+    word[5] = static_cast<uint8_t>(slot >> 8u);
+    return flash_write_words(base + slot * kNvmScratchSlotBytes, word, sizeof(word));
+}
+
+void nvm_boot_first_op(bool power_on) noexcept {
+    g_boot_op = NvmBootOpDiag{};
+    if (!power_on) { return; }
+    constexpr uint32_t kSlots = kSectorSize / kNvmScratchSlotBytes;
+    const uint32_t base = kBank2Base + kSectorScratch * kSectorSize;
+
+    // O 1º acesso de LEITURA a este setor num boot em que um power-cut interrompeu um program pode dar
+    // erro de ECC (NMI -> reset). Por isso boot_reset_was_power_on() já limpou as flags: o reset seguinte
+    // aparece como software e esta função sai logo acima, sem repetir a leitura.
+    const int32_t next = nvm_scratch_next_slot(reinterpret_cast<const uint8_t*>(base), kSectorSize);
+
+    g_boot_op.ran = 1u;
+    flash_unlock_bank2();
+    bool ok;
+    uint32_t second_slot;
+    const uint32_t t0 = ::micros();
+    if (next < 0) {
+        // Setor cheio: o próprio erase é a 1ª operação; depois recomeça no slot 0.
+        g_boot_op.first_kind = 1u;
+        ok = flash_erase_sector(kSectorScratch);
+        g_boot_op.slot = 0u;
+        second_slot = 0u;
+    } else {
+        ok = boot_scratch_program(base, static_cast<uint32_t>(next));
+        g_boot_op.slot = static_cast<uint16_t>(next);
+        second_slot = static_cast<uint32_t>(next) + 1u;
+    }
+    g_boot_op.first_us = ::micros() - t0;
+    if (!ok) {
+        g_boot_op.status = 1u;
+        flash_lock_bank2();
+        return;
+    }
+    // 2ª operação (controle da medição): se só a 1ª congela a Flash, second_us << first_us.
+    if (second_slot < kSlots) {
+        const uint32_t t1 = ::micros();
+        ok = boot_scratch_program(base, second_slot);
+        g_boot_op.second_us = ::micros() - t1;
+        if (!ok) { g_boot_op.status = 2u; }
+    }
+    flash_lock_bank2();
+}
+
+NvmBootOpDiag nvm_boot_first_op_diag() noexcept { return g_boot_op; }
 
 bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept {
     if (page > 9u || data == nullptr || len == 0u) { return false; }
@@ -604,6 +670,17 @@ static uint8_t g_cal[10][1024]   = {};  // linha ≥ maior página (lambda 2×kT
 static uint32_t g_erase_cnt   = 0u, g_prog_cnt = 0u;
 static bool     g_flash_busy      = false;  // simulates flash BSY timeout when set
 static uint32_t g_flash_busy_polls = 0u;     // non-zero → simulate timeout on next op
+
+static NvmBootOpDiag g_boot_op_mock = {};
+void nvm_boot_first_op(bool power_on) noexcept {
+    g_boot_op_mock = NvmBootOpDiag{};
+    if (!power_on) { return; }
+    g_boot_op_mock.ran = 1u;
+    g_boot_op_mock.first_us = 130u;   // valores fixos do mock: ~120 us de congelamento na 1ª, poucos us na 2ª
+    g_boot_op_mock.second_us = 12u;
+    g_boot_op_mock.slot = 7u;
+}
+NvmBootOpDiag nvm_boot_first_op_diag() noexcept { return g_boot_op_mock; }
 
 // EtbCalRecord (última auto-cal ETB)
 static EtbCalRecord g_etbcal_mock{};

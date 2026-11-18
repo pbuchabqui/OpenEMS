@@ -9,6 +9,7 @@
 #include "app/datalog.h"
 #include "app/can_rx_map.h"
 #include "hal/flex_fuel.h"
+#include "hal/flash.h"
 #include "hal/system.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
@@ -110,6 +111,16 @@ void parse_byte(uint8_t b) noexcept {
             // DBGMCU_IDCODE (4 bytes LE): confirma a revisão do silício (REV_ID = bits 31:16) sem sonda.
             const uint32_t id = chip_idcode();
             for (uint8_t i = 0u; i < 4u; ++i) { tx_push(static_cast<uint8_t>(id >> (8u * i))); }
+            return;
+        }
+        if (b == static_cast<uint8_t>('j')) {
+            // Resultado da operação sacrificial do boot (errata ES0565 §2.2.33), 14 bytes:
+            // ran, first_kind, status, reserved, first_us(u32 LE), second_us(u32 LE), slot(u16 LE).
+            const ems::hal::NvmBootOpDiag d = ems::hal::nvm_boot_first_op_diag();
+            tx_push(d.ran); tx_push(d.first_kind); tx_push(d.status); tx_push(d.reserved);
+            for (uint8_t i = 0u; i < 4u; ++i) { tx_push(static_cast<uint8_t>(d.first_us >> (8u * i))); }
+            for (uint8_t i = 0u; i < 4u; ++i) { tx_push(static_cast<uint8_t>(d.second_us >> (8u * i))); }
+            tx_push(static_cast<uint8_t>(d.slot)); tx_push(static_cast<uint8_t>(d.slot >> 8u));
             return;
         }
         if (b == static_cast<uint8_t>('F')) {

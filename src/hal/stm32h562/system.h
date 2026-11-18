@@ -32,6 +32,13 @@ bool system_clock_ok(void) noexcept;
  */
 uint32_t chip_idcode(void) noexcept;
 
+/**
+ * true se este boot veio de power-on/brown-out (RCC_RSR.BORRSTF). LÊ E LIMPA as flags de reset (RMVF):
+ * um reset posterior (p.ex. NMI por ECC -> SYSRESETREQ) aparece como software e não repete a operação de boot.
+ * Chamar uma vez, no início do boot.
+ */
+bool boot_reset_was_power_on(void) noexcept;
+
 /** Kick (reload) do IWDG — deve ser chamado a cada iteração do loop principal. */
 void iwdg_kick(void) noexcept;
 

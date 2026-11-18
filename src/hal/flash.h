@@ -89,6 +89,23 @@ bool nvm_write_knock(uint8_t rpm_i, uint8_t load_i, int8_t retard_deci_deg) noex
 int8_t nvm_read_knock(uint8_t rpm_i, uint8_t load_i) noexcept;
 void nvm_reset_knock_map() noexcept;  // zera todo o mapa (e.g. ao ligar)
 
+// ── Operação sacrificial do boot (errata ES0565 §2.2.33) ──────────────────────
+// A 1ª erase/program após power-on deixa a Flash inacessível ~120 us (congela fetch). Fazê-la no
+// boot, antes de TIM5/CKP, tira esse congelamento do caminho crítico: as gravações seguintes não
+// têm o problema. Mitigação de ENGENHARIA (a ST descreve outro workaround: vetor + handlers
+// críticos + 1ª operação na SRAM). Só roda em power-on; mede a 1ª e uma 2ª gravação (controle).
+struct NvmBootOpDiag {
+    uint8_t  ran;         // 0 = não rodou (reset não foi power-on), 1 = rodou
+    uint8_t  first_kind;  // 0 = program, 1 = erase (setor de scratch cheio)
+    uint8_t  status;      // 0 = ok, 1 = falha na 1ª operação, 2 = falha na 2ª
+    uint8_t  reserved;
+    uint32_t first_us;    // duração da 1ª operação (µs)
+    uint32_t second_us;   // duração da 2ª operação (µs); 0 se não houve
+    uint16_t slot;        // slot do scratch usado na 1ª operação
+};
+void nvm_boot_first_op(bool power_on) noexcept;
+NvmBootOpDiag nvm_boot_first_op_diag() noexcept;
+
 bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexcept;
 bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept;
 

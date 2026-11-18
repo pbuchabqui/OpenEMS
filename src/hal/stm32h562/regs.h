@@ -90,6 +90,9 @@
 #define RCC_PLL1DIVR    STM32_REG32(RCC_BASE + 0x034)
 #define RCC_AHB1ENR     STM32_REG32(RCC_BASE + 0x088)  // AHB1ENR offset 0x88 (CMSIS verified; 0xE8 é o CCIPR5!)
 #define RCC_AHB2ENR1    STM32_REG32(RCC_BASE + 0x08C)  // AHB2ENR offset 0x8C (CMSIS verified)
+#define RCC_RSR         STM32_REG32(RCC_BASE + 0x0F4)  // Reset status (stm32h562xx.h: RSR offset 0xF4)
+#define RCC_RSR_RMVF    (1u << 23)                      // escrever 1 limpa as flags de reset
+#define RCC_RSR_BORRSTF (1u << 27)                      // set em power-on e em brown-out
 #define RCC_APB1LENR    STM32_REG32(RCC_BASE + 0x09C)  // APB1LENR offset 0x9C (CMSIS verified; 0xF4 é o RSR!)
 #define RCC_APB2ENR     STM32_REG32(RCC_BASE + 0x0A4)  // APB2ENR offset 0xA4 (CMSIS verified)
 

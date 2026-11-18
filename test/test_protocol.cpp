@@ -18,6 +18,8 @@
 #include "hal/system.h"
 #include "drv/ckp.h"
 #include "drv/sensors.h"
+#include "hal/flash.h"
+#include "hal/nvm_scratch.h"
 
 extern volatile uint32_t ems_test_tim5_cnt;
 #include "engine/fuel_calc.h"
@@ -1074,4 +1076,65 @@ void test_ui_chip_idcode(void) {
     CHECK_EQ(id, chip_idcode(), "bytes = chip_idcode() em little-endian");
     CHECK_EQ(id & 0xFFFu, 0x484u, "DEV_ID (host mock) = 0x484 (H562/563/573)");
     CHECK_EQ(id >> 16u, 0x1007u, "REV_ID (host mock) = 0x1007 (Rev X, RM0481)");
+}
+
+void test_nvm_scratch_slot(void) {
+    section("nvm scratch: próximo slot livre (operação sacrificial do boot)");
+    using ems::hal::nvm_scratch_next_slot;
+    using ems::hal::kNvmScratchSlotBytes;
+    constexpr uint32_t kBytes = 8192u;
+    static uint8_t sec[kBytes];
+
+    std::memset(sec, 0xFF, sizeof(sec));
+    CHECK_EQ(nvm_scratch_next_slot(sec, kBytes), 0, "setor apagado → slot 0");
+
+    sec[0] = 'S';
+    CHECK_EQ(nvm_scratch_next_slot(sec, kBytes), 1, "slot 0 usado → slot 1");
+
+    std::memset(sec, 0xFF, sizeof(sec));
+    for (uint32_t s = 0u; s < 5u; ++s) { sec[s * kNvmScratchSlotBytes] = 'S'; }
+    CHECK_EQ(nvm_scratch_next_slot(sec, kBytes), 5, "5 slots usados → slot 5");
+
+    // slot interrompido no meio (só o último byte gravado): é pulado, nunca reusado
+    std::memset(sec, 0xFF, sizeof(sec));
+    sec[2u * kNvmScratchSlotBytes + 15u] = 0x00u;
+    CHECK_EQ(nvm_scratch_next_slot(sec, kBytes), 3, "slot 2 parcial → próximo é o 3");
+
+    // buraco: um slot livre antes de um usado não é reaproveitado (sempre depois do último)
+    std::memset(sec, 0xFF, sizeof(sec));
+    sec[0] = 'S';
+    sec[4u * kNvmScratchSlotBytes] = 'S';
+    CHECK_EQ(nvm_scratch_next_slot(sec, kBytes), 5, "buraco ignorado → depois do último usado");
+
+    // setor cheio → -1 (o chamador apaga pelo caminho normal)
+    std::memset(sec, 0x00, sizeof(sec));
+    CHECK_EQ(nvm_scratch_next_slot(sec, kBytes), -1, "setor cheio → -1");
+    std::memset(sec, 0xFF, sizeof(sec));
+    sec[(kBytes / kNvmScratchSlotBytes - 1u) * kNvmScratchSlotBytes] = 'S';
+    CHECK_EQ(nvm_scratch_next_slot(sec, kBytes), -1, "último slot usado → -1");
+}
+
+void test_ui_boot_op_diag(void) {
+    section("protocolo legado: 'j' devolve o diagnóstico da operação sacrificial do boot");
+    ems::app::ui_test_reset();
+    uint8_t buf[32] = {};
+    const uint8_t cmd = 'j';
+
+    ems::hal::nvm_boot_first_op(false);  // reset não foi power-on: não roda
+    ui_feed(&cmd, 1u);
+    uint16_t n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 14u, "'j' → 14 bytes");
+    CHECK_EQ(buf[0], 0u, "power_on=false → ran = 0");
+
+    ems::hal::nvm_boot_first_op(true);   // mock: 1ª = 130 us, 2ª = 12 us, slot 7
+    ui_feed(&cmd, 1u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 14u, "'j' (power-on) → 14 bytes");
+    CHECK_EQ(buf[0], 1u, "ran = 1");
+    CHECK_EQ(buf[2], 0u, "status = ok");
+    const uint32_t first  = static_cast<uint32_t>(buf[4]) | (static_cast<uint32_t>(buf[5]) << 8u);
+    const uint32_t second = static_cast<uint32_t>(buf[8]) | (static_cast<uint32_t>(buf[9]) << 8u);
+    CHECK_EQ(first, 130u, "first_us (LE)");
+    CHECK_EQ(second, 12u, "second_us (LE)");
+    CHECK_EQ(static_cast<uint32_t>(buf[12]) | (static_cast<uint32_t>(buf[13]) << 8u), 7u, "slot (LE)");
 }

@@ -329,6 +329,12 @@ static void openems_init() noexcept {
     // sairiam 7,8x mais longos e o watchdog de dwell, que conta nos mesmos ticks, não protege.
     // Sem captura CKP/CMP não há sync, logo nenhum evento de INJ/IGN nem prime; as saídas
     // ficam em LOW. O DTC CRITICAL é reportado depois do DiagnosticManager::init().
+    // Errata ES0565 §2.2.33: a 1ª erase/program após power-on congela a Flash ~120 us. Fazê-la AQUI,
+    // antes de habilitar TIM5/CKP (nada crítico em execução), libera as gravações seguintes.
+    // Só em power-on; lê e limpa RCC_RSR primeiro (um reset posterior não repete a operação).
+    ems::hal::nvm_boot_first_op(boot_reset_was_power_on());
+    iwdg_kick();
+
     if (system_clock_ok()) {
         ems::hal::tim5_ic_init();   // → TIM5 input capture (CKP + CMP)
     }

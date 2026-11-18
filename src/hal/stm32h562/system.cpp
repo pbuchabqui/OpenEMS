@@ -71,6 +71,12 @@ void iwdg_kick(void) noexcept {
     IWDG_KR = IWDG_KR_REFRESH;
 }
 
+bool boot_reset_was_power_on(void) noexcept {
+    const bool por = (RCC_RSR & RCC_RSR_BORRSTF) != 0u;
+    RCC_RSR = RCC_RSR_RMVF;
+    return por;
+}
+
 uint32_t chip_idcode(void) noexcept {
     // DBGMCU_BASE = 0x44024000 (stm32h562xx.h); IDCODE no offset 0, legível pela CPU.
     return *reinterpret_cast<volatile const uint32_t*>(0x44024000u);
@@ -261,6 +267,7 @@ void host_set_millis(uint32_t ms) noexcept { g_mock_ms = ms; }
 void host_advance_millis(uint32_t dt) noexcept { g_mock_ms += dt; }
 static bool g_mock_clock_ok = true;
 bool system_clock_ok(void) noexcept { return g_mock_clock_ok; }
+bool boot_reset_was_power_on(void) noexcept { return false; }
 uint32_t chip_idcode(void) noexcept { return 0x10076484u; }  // mock: leitura real da placa (Rev X, DEV_ID 0x484)
 void host_set_clock_ok(bool ok) noexcept { g_mock_clock_ok = ok; }
 

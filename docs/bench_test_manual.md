@@ -27,6 +27,15 @@ motor. Os pinos de saída vão direto ao ESP32 ou ao osciloscópio, em 3,3 V.
 | Jumpers fêmea-fêmea, GND comum | ligações |
 | PC com `arm-none-eabi-gcc`, `dfu-util`, Python ≥ 3.10 | build, gravação, dashboard |
 
+### 1.0 Errata ES0565 §2.2.33 — medir a primeira gravação (opcional, 2 min)
+
+O firmware faz uma gravação sacrificial no boot e mede a 1ª e a 2ª. Para ler o resultado:
+
+1. Desligue e ligue a alimentação da placa (power-on de verdade; um reset pelo botão não conta).
+2. Pela serial USB (`/dev/ttyACM0`), envie o byte `j` e leia 14 bytes: `ran, first_kind, status, reserved`, `first_us` (u32 LE), `second_us` (u32 LE), `slot` (u16 LE).
+3. Esperado: `ran = 1`, `status = 0`. Se a errata se manifesta neste chip, `first_us` fica cerca de 120 µs acima de `second_us`. Registre os dois valores no relatório.
+4. Depois de um reset que não é power-on, `ran = 0` é o comportamento correto.
+
 ### 1.1 Revisão do chip (errata ES0565)
 
 Antes de tudo, anote a revisão do silício. O `docs/errata_stm32h562.md` (errata ES0565)
