@@ -728,11 +728,10 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define IWDG_KR_ACCESS   0x5555u
 #define IWDG_KR_START    0xCCCCu
 
-// IWDG_PR: prescaler para ~100ms a 32 kHz LSI
-// Prescaler /32 → 32000/32 = 1000 Hz → RLR = 100 → 100 ms
+// IWDG_PR: prescaler do IWDG (LSI ~32 kHz). /32 → 1000 Hz, /256 → 125 Hz.
 #define IWDG_PR_DIV32    0x3u
 #define IWDG_PR_DIV256   0x6u    // /256 → 125 Hz @ 32 kHz LSI
-#define IWDG_RLR_100MS   99u
+#define IWDG_RLR_800MS   99u     // com /256 → 100 ticks a 125 Hz = 0,8 s (runtime do main_stm32.cpp)
 #define IWDG_RLR_1S      999u    // com /32 → 1s
 #define IWDG_RLR_10S     1249u   // com /256 → 10s (boot completo + margem)
 

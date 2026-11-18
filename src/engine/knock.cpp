@@ -33,6 +33,9 @@ constexpr uint8_t  kDefaultEventThreshold  = 3u;    // amostras acima do thresho
 constexpr uint16_t kRetardStepX10          = 20u;   // +2.0 deg por knock detectado
 constexpr uint16_t kRetardMaxX10           = 100u;  // 10.0 deg máximo
 constexpr uint16_t kRecoveryStepX10        = 1u;    // -0.1 deg por ciclo limpo
+constexpr uint16_t kAdcThresholdStepDown   = 64u;   // counts: afina o limiar após detectar knock
+constexpr uint16_t kAdcThresholdStepUp     = 32u;   // counts: volta ao limiar calibrado após ciclos limpos
+constexpr uint8_t  kGlobalCleanRecoveryCycles = 100u;  // ciclos limpos seguidos antes de subir o limiar
 constexpr uint8_t  kRecoveryDelayCycles    = 10u;   // ciclos limpos antes do recovery
 constexpr uint16_t kAdcThresholdDefault    = 2048u; // 12-bit mid-range; ajustar em bancada
 constexpr uint16_t kAdcThresholdMin        = 256u;  // evita falsos positivos por ruído de offset
@@ -174,8 +177,8 @@ void knock_cycle_complete(uint8_t cyl) noexcept {
         g.global_clean_cycles = 0u;
 
         // Slightly lower threshold to stay sensitive during knock conditions
-        if (g.adc_threshold > kAdcThresholdMin + 64u) {
-            g.adc_threshold = static_cast<uint16_t>(g.adc_threshold - 64u);
+        if (g.adc_threshold > kAdcThresholdMin + kAdcThresholdStepDown) {
+            g.adc_threshold = static_cast<uint16_t>(g.adc_threshold - kAdcThresholdStepDown);
         }
     } else {
         // Clean cycle: accumulate toward recovery
@@ -188,12 +191,12 @@ void knock_cycle_complete(uint8_t cyl) noexcept {
         }
 
         if (g.global_clean_cycles < 255u) { ++g.global_clean_cycles; }
-        if (g.global_clean_cycles >= 100u) {
+        if (g.global_clean_cycles >= kGlobalCleanRecoveryCycles) {
             // After a knock episode lowered it, step back toward the
             // calibrated threshold — never above it (detection must not
             // silently turn itself off during long clean running).
             if (g.adc_threshold < g.base_threshold) {
-                const uint16_t up = static_cast<uint16_t>(g.adc_threshold + 32u);
+                const uint16_t up = static_cast<uint16_t>(g.adc_threshold + kAdcThresholdStepUp);
                 g.adc_threshold = (up > g.base_threshold) ? g.base_threshold : up;
             }
             g.global_clean_cycles = 0u;

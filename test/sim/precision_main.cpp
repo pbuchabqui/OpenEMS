@@ -663,7 +663,7 @@ int main()
     }
 
     // ── Every cut seen at the injector AND coil pins ────────────────────
-    // limp_gating has no unit test: here each cut is judged only by what leaves the pins.
+    // limp_gating also has unit tests (test_sched.cpp); here each cut is judged by what leaves the pins.
     // 2500 rpm keeps the sensor-limp rpm cut (3000) out of the way, so each case isolates one cut.
     {
         namespace en = ems::engine;

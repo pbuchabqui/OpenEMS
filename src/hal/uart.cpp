@@ -5,7 +5,7 @@
  *
  * Pinos: PA9 (USART1_TX), PA10 (USART1_RX) — AF7
  * (PA2/PA3 reservados para ADC1_IN3/IN4 — sensores MAP e MAF)
- * (PB10/PB11 ficam livres para TIM2_CH3/CH4 — INJ3/INJ4)
+ * (PB10 é o PWM do EWG, TIM2_CH3; INJ3/INJ4 ficam em PC10/PC11, ver out_pins.h)
  *
  * Clock USART1: PCLK2 = 125 MHz (HCLK/2) com o PLL; HSI16 se o PLL não subiu.
  * BRR = clock / baud = 125,000,000 / 115,200 = 1085

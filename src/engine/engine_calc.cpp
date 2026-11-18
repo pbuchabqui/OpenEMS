@@ -26,7 +26,6 @@
 namespace ems::engine {
 namespace {
 
-constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
 constexpr uint32_t kLimpRpmHyst_x10  = 200u;    // 20 rpm: evita chatter no corte
 // engine_calc_step é a fronteira: recebe SensorData que pode não ter passado por
 // sensors_tick_100ms (testes, simulador). Idempotente sobre o valor já saneado, e

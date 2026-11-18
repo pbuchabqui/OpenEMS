@@ -246,13 +246,15 @@ void DiagnosticManager::record_freeze_frame(DiagnosticCode code,
     }
 }
 
-const DiagnosticEvent* DiagnosticManager::get_event(DiagnosticCode code) noexcept {
+bool DiagnosticManager::get_event_copy(DiagnosticCode code, DiagnosticEvent& out) noexcept {
+    ems::hal::CriticalSectionGuard guard;   // ver report_fault
     for (uint8_t i = 0; i < g_event_count; ++i) {
         if (g_events[i].code == code) {
-            return &g_events[i];
+            out = g_events[i];
+            return true;
         }
     }
-    return nullptr;
+    return false;
 }
 
 // Limiares da plausibilidade MAP×TPS×RPM (fonte única; antes eram números soltos).

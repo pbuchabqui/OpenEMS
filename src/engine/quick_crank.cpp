@@ -61,8 +61,10 @@ volatile uint32_t g_prime_pw_us       = 0u;   ///< PW calculada para disparo
 volatile bool     g_prime_tooth_flag  = false; ///< Dente visto desde o último quick_crank_update
 uint32_t          g_prime_activity_ms = 0u;    ///< Último instante com dentes chegando
 constexpr uint32_t kPrimeIdleResetMs  = 200u;  ///< Parado há tanto tempo: rearma o prime
-int16_t           g_prime_clt_x10    = 900;   ///< CLT mais recente (do loop de fundo)
-uint16_t          g_prime_dead_time_us = 900u; ///< Dead time mais recente, corr. por Vbatt
+// Par escrito pelo laço de fundo e lido na ISR do prime: volatile + publicação sob seção crítica
+// (a ISR não pode ler CLT novo com dead time velho).
+volatile int16_t  g_prime_clt_x10    = 900;   ///< CLT mais recente (do loop de fundo)
+volatile uint16_t g_prime_dead_time_us = 900u; ///< Dead time mais recente, corr. por Vbatt
 
 uint16_t interp_u16(const P2* table, uint8_t n, int16_t x) noexcept {
     if (x <= table[0].x) {
@@ -185,7 +187,8 @@ void prime_on_tooth(const CkpSnapshot& snap) noexcept {
     // rpm_x10 = 600e9 / (60 dentes × period_ns) × 10 = 1e10 / period_ns.
     const uint32_t period_ns = snap.tooth_period_ns;
     if (period_ns == 0u) { return; }
-    const uint32_t raw_rpm_x10 = static_cast<uint32_t>(10000000000ull / period_ns);
+    constexpr uint64_t kRpmX10TimesPeriodNs = 10000000000ull;   // rpm_x10 = 1e10 / period_ns (60 dentes/volta)
+    const uint32_t raw_rpm_x10 = static_cast<uint32_t>(kRpmX10TimesPeriodNs / period_ns);
     if (raw_rpm_x10 == 0u || raw_rpm_x10 >= sanitized_crank_exit_rpm_x10()) { return; }
 
     ++g_prime_tooth_count;
@@ -311,13 +314,15 @@ uint32_t quick_crank_flow_us(const QuickCrankOutput& qc, uint32_t running_flow_u
 }
 
 void quick_crank_set_prime_context(int16_t clt_x10, uint16_t dead_time_us) noexcept {
-    // Escrita atômica de int16_t em Cortex-M4 (single instrução STRH).
+    // O par é lido junto na ISR do prime: publica os dois campos sob seção crítica (Cortex-M33).
+    ems::hal::CriticalSectionGuard guard;
     g_prime_clt_x10 = clt_x10;
     g_prime_dead_time_us = dead_time_us;
 }
 
 void quick_crank_set_clt(int16_t clt_x10) noexcept {
     // Mantém compatibilidade com chamadas antigas.
+    ems::hal::CriticalSectionGuard guard;
     g_prime_clt_x10 = clt_x10;
 }
 

@@ -726,15 +726,15 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
 }
 
 // ── ISR do cam sensor: TIM5 CH2 (PA1/CMP, rising edge) ──────────────────────
-// Cada borda de subida do cam sensor indica meio ciclo de motor (180° de virabrequim).
+// Cada borda de subida do cam sensor marca um ciclo de came completo (720° de virabrequim = 2 voltas).
 // phase_A alterna para permitir ao agendador identificar qual par de cilindros está
 // no tempo de injeção (cilindros 1/4 vs 2/3 para motor 4 cilindros em linha).
 //
 // FIX P0 (BUG-11): Validação temporal CMP × CKP — detecta glitches que invertem fase
 // Um glitch no CMP pode inverter phase_A silenciosamente, causando ignição/injeção
 // no cilindro errado. Esta ISR valida coerência temporal usando o período CKP como
-// referência: o período entre bordas CMP deve ser ~2× o período do CKP (CMP = 1 rev,
-// CKP gap = 2 rev). Se delta for muito pequeno ou muito grande, é glitch.
+// referência: o período entre bordas CMP deve ser ~120× o período de dente do CKP (um ciclo de came
+// = 720° = 2 voltas × 60 posições de dente). Se delta for muito pequeno ou muito grande, é glitch.
 FASTRUN void ckp_tim5_ch2_isr() noexcept {
     // Read capture register now — clears CHF flag; value is the TIM5 timestamp
     // of this CMP edge. Must be read before any other logic that might be slow.
@@ -746,7 +746,7 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
 
     // ── Validação temporal CMP inter-edge (FIX Major #5) ─────────────────
     // Valida o período entre bordas CMP consecutivas contra o período esperado
-    // de 58 dentes CKP (= 1 revolução de virabrequim). A verificação anterior
+    // de 120 posições de dente CKP (= 2 voltas de virabrequim = 1 ciclo de came). A verificação anterior
     // (estabilidade do período CKP) não detecta glitches que chegam durante
     // operação steady-state — o período CKP não muda, mas a borda CMP chega cedo.
     // Esta verificação usa a captura TIM5 real para medir o delta entre bordas.

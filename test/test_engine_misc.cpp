@@ -544,16 +544,17 @@ void test_diagnostic_tick_stamps_events(void) {
     using namespace ems::engine;
     DiagnosticManager::init();
     DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE, FaultSeverity::WARNING);
-    const DiagnosticEvent* ev = DiagnosticManager::get_event(DiagnosticCode::MAP_SENSOR_RANGE);
-    CHECK_TRUE(ev != nullptr && ev->timestamp_ms == 0u, "sem tick o instante fica 0");
+    DiagnosticEvent ev{};
+    bool found = DiagnosticManager::get_event_copy(DiagnosticCode::MAP_SENSOR_RANGE, ev);
+    CHECK_TRUE(found && ev.timestamp_ms == 0u, "sem tick o instante fica 0");
     diagnostic_tick(100u);
     DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE, FaultSeverity::WARNING);
-    ev = DiagnosticManager::get_event(DiagnosticCode::MAP_SENSOR_RANGE);
-    CHECK_TRUE(ev != nullptr && ev->timestamp_ms == 100u, "100 ms de tick carimba 100");
+    found = DiagnosticManager::get_event_copy(DiagnosticCode::MAP_SENSOR_RANGE, ev);
+    CHECK_TRUE(found && ev.timestamp_ms == 100u, "100 ms de tick carimba 100");
     diagnostic_tick(100u);
     DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE, FaultSeverity::WARNING);
-    ev = DiagnosticManager::get_event(DiagnosticCode::MAP_SENSOR_RANGE);
-    CHECK_TRUE(ev != nullptr && ev->timestamp_ms == 200u, "outro 100 ms carimba 200");
+    found = DiagnosticManager::get_event_copy(DiagnosticCode::MAP_SENSOR_RANGE, ev);
+    CHECK_TRUE(found && ev.timestamp_ms == 200u, "outro 100 ms carimba 200");
     DiagnosticManager::clear_fault(DiagnosticCode::MAP_SENSOR_RANGE);
 }
 
@@ -631,16 +632,16 @@ void test_diagnostic_manager_all(void) {
                                     1000u, 3000u);
     const uint16_t ff[4] = {900u, 100u, 30000u, 12000u};
     DiagnosticManager::record_freeze_frame(DiagnosticCode::CLT_SENSOR_RANGE, ff);
-    const DiagnosticEvent* ev = DiagnosticManager::get_event(
-        DiagnosticCode::CLT_SENSOR_RANGE);
-    CHECK_TRUE(ev != nullptr, "get_event returns non-null for active fault");
-    if (ev != nullptr) {
-        CHECK_EQ(ev->freeze_frame[0], 900u, "freeze_frame[0]=900");
-    }
-    // get_event for unknown fault → nullptr
-    const DiagnosticEvent* ev_none = DiagnosticManager::get_event(
-        DiagnosticCode::FLASH_WRITE_FAULT);
-    CHECK_TRUE(ev_none == nullptr, "get_event for inactive fault → nullptr");
+    DiagnosticEvent ev{};
+    CHECK_TRUE(DiagnosticManager::get_event_copy(DiagnosticCode::CLT_SENSOR_RANGE, ev),
+               "get_event_copy: true para falha ativa");
+    CHECK_EQ(ev.freeze_frame[0], 900u, "freeze_frame[0]=900");
+    // falha inexistente → false e a saída não é tocada
+    DiagnosticEvent ev_none{};
+    ev_none.occurrence_count = 77u;
+    CHECK_FALSE(DiagnosticManager::get_event_copy(DiagnosticCode::FLASH_WRITE_FAULT, ev_none),
+                "get_event_copy: false para falha inativa");
+    CHECK_EQ(ev_none.occurrence_count, 77u, "get_event_copy: saída intacta quando não acha");
 
     section("DiagnosticManager: check_sensor_plausibility");
     DiagnosticManager::init();

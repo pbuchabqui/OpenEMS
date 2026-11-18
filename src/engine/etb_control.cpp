@@ -10,7 +10,6 @@
 #include "hal/etb_driver.h"
 
 #include <string.h>
-#include <algorithm>
 #if defined(EMS_HOST_TEST)
 #include <math.h>
 #endif
@@ -395,7 +394,7 @@ EtbControlState etb_control_update(uint16_t target_pct_x10,
         // int64: kd × deriv passava de int32 com ganho alto e erro em degrau.
         const int64_t d_term = (static_cast<int64_t>(kd_x10) * deriv) / 10;
         output_x10 = static_cast<int32_t>(
-            std::max<int64_t>(-100000, std::min<int64_t>(100000, static_cast<int64_t>(output_x10) + d_term)));
+            clamp_i64(static_cast<int64_t>(output_x10) + d_term, -100000, 100000));
     }
     g_prev_error_x10 = error_x10;
 

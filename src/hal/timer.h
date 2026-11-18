@@ -28,11 +28,7 @@ uint32_t tim5_count() noexcept;
 // Chamar após carregar page0 (tim5_ic_init corre antes da NVM).
 void tim5_ic_set_capture_polarity(bool ckp_falling, bool cmp_falling) noexcept;
 
-// TIM3_CH1 PA6 AF2 — general PWM (RGT6). Injeção/ignição usam GPIO BSRR.
-void tim3_pwm_init(uint32_t freq_hz);
-void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept;
-
-// TIM2_CH3 (PB10) — PWM EWG; ⚠️ conflito com INJ3 no RGT6.
+// TIM2_CH3 (PB10) — PWM EWG. INJ3 fica em PC10 (não em PB10); ver out_pins.h.
 void tim2_pwm_init(uint32_t freq_hz);
 void tim2_set_duty(uint16_t duty_pct_x10) noexcept;
 

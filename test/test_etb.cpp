@@ -723,3 +723,28 @@ void test_etb_cpp_update(void) {
 // TORQUE MANAGER — C++ namespace (ems::engine)
 // ═══════════════════════════════════════════════════════════════════════════
 
+
+void test_etb_d_term_saturates(void) {
+    section("etb_control: termo D satura em +/-100000 sem estourar (clamp_i64, sem STL)");
+    etb_cal_valid = 1u;
+    const auto kp = etb_kp_x10; const auto ki = etb_ki_x10; const auto kd = etb_kd_x10;
+    etb_kp_x10 = 0u; etb_ki_x10 = 0u; etb_kd_x10 = 60000u;   // D isolado, ganho enorme
+
+    ems::engine::etb_control_reset();
+    ems::engine::etb_control_update(0u, 0u, true, 1u);        // 1ª chamada só arma o erro anterior
+    auto s = ems::engine::etb_control_update(1000u, 0u, true, 1u);   // degrau de +100% em 1 ms
+    CHECK_EQ(s.output_pct_x10, 1000, "degrau positivo: D saturado → saída no limite +100%");
+
+    ems::engine::etb_control_reset();
+    ems::engine::etb_control_update(0u, 1000u, true, 1u);
+    s = ems::engine::etb_control_update(0u, 0u, true, 1u);   // erro sobe de -1000 a 0: derivada positiva grande
+    CHECK_TRUE(s.output_pct_x10 >= -1000 && s.output_pct_x10 <= 1000, "saída sempre dentro de +/-100%");
+
+    ems::engine::etb_control_reset();
+    ems::engine::etb_control_update(1000u, 0u, true, 1u);
+    s = ems::engine::etb_control_update(0u, 1000u, true, 1u);   // degrau de -200% de erro em 1 ms
+    CHECK_EQ(s.output_pct_x10, -1000, "degrau negativo: D saturado → saída no limite -100%");
+
+    etb_kp_x10 = kp; etb_ki_x10 = ki; etb_kd_x10 = kd;
+    ems::engine::etb_control_reset();
+}

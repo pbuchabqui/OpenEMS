@@ -1,7 +1,9 @@
 #include "hal/critical_section.h"
 #include "drv/sensors.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 #if __has_include("hal/adc.h")
 #include "hal/adc.h"
@@ -181,9 +183,19 @@ static uint16_t g_tps_pct_cache_x10 = 0u;
 // -----------------------------------------------------------------------------
 // reset_state — estado canônico usando kDefaultFault [FIX-1]
 // -----------------------------------------------------------------------------
+// Zera um SensorData VOLATILE byte a byte. `const_cast<SensorData&>(obj) = SensorData{}` acessa um objeto
+// volatile por um lvalue não-volatile (UB formal). SensorData não tem inicializadores de membro, então
+// SensorData{} é todo-zero e zerar os bytes é equivalente.
+static_assert(std::is_standard_layout<SensorData>::value && std::is_trivial<SensorData>::value,
+              "zero_sensor_data assume SensorData trivial (SensorData{} == bytes zerados)");
+inline void zero_sensor_data(volatile SensorData& d) noexcept {
+    volatile uint8_t* p = reinterpret_cast<volatile uint8_t*>(&d);
+    for (size_t i = 0u; i < sizeof(SensorData); ++i) { p[i] = 0u; }
+}
+
 inline void reset_state() noexcept {
-    const_cast<SensorData&>(g_data_staging) = SensorData{};  // safe: reset antes de ISRs ativas
-    const_cast<SensorData&>(g_data_committed) = SensorData{};  // Double buffer também zerado
+    zero_sensor_data(g_data_staging);  // reset antes de ISRs ativas
+    zero_sensor_data(g_data_committed);  // Double buffer também zerado
     g_data_swap_flag = 0u;  // staging é o buffer válido inicial
 
     g_map_filt  = 0u;

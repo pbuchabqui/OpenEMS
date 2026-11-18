@@ -407,7 +407,7 @@ void auxiliaries_init() noexcept {
 
     // NÃO inicializar o TIM3 aqui: ele é dedicado à injeção (OC em PC6-9).
     // O motor EWG (wastegate) usa o TIM2_CH3/PB10 via ewg_driver. Antes, este
-    // tim3_pwm_init reescrevia o ARR do TIM3 e quebrava o timing dos injetores.
+    // um init de PWM no TIM3 (já removido) reescrevia o ARR dele e quebrava o timing dos injetores.
     ems::hal::tim4_pwm_init(kAuxTim4PwmHz);   // TIM4: VVT (CH1 exhaust, CH2 intake)
     ems::hal::tim4_set_duty(0u, 0u);
     ems::hal::tim4_set_duty(1u, 0u);

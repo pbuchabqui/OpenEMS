@@ -77,9 +77,6 @@ void test_timer_stubs(void) {
     tim5_ic_init();
     const uint32_t cnt = tim5_count();
     CHECK_EQ(cnt, 0u, "tim5_count() returns mock value (0)");
-    tim3_pwm_init(15u);
-    tim3_set_duty(0u, 500u);
-    tim3_set_duty(1u, 250u);
     tim4_pwm_init(15u);
     tim4_set_duty(0u, 750u);
     tim4_set_duty(1u, 1000u);

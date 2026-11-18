@@ -9,7 +9,7 @@
 //   - millis() provido por SysTick_Handler em system.cpp
 //   - iwdg_kick() alimenta o watchdog IWDG
 //   - SysTick fornece millis()/micros()
-//   - NVIC setup usa IRQs do STM32H562 (TIM5 para CKP; TIM2/TIM1 são OC por hardware)
+//   - NVIC setup usa IRQs do STM32H562 (TIM5 para CKP/CMP e despacho de INJ/IGN, que saem por GPIO/BSRR)
 //   - SysTick e IWDG já inicializados em system_stm32_init()
 //   - nvm_flush_adaptive_maps() no slot 500ms (Flash Bank2)
 // =============================================================================
@@ -98,7 +98,6 @@ static uint8_t g_last_lambda_target_d4 = 0u;
 static uint16_t g_last_map_fused_x100 = 0u;
 static int8_t  g_last_ltft_pct    = 0;
 
-static constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
 static bool g_limp_active = false;
 static bool g_limp_rpm_cut = false;
 
@@ -110,7 +109,7 @@ uint32_t g_dbg_rev_limit_rpm_x10 = 0u;   // último rpm_x10 que armou o trip
 uint32_t g_dbg_rev_limit_rpm_max = 0u;   // maior rpm_x10 alguma vez visto (glitch?)
 
 static uint32_t g_last_net_pw_us   = 0u;
-// Barometric correction: amostrar MAP quando motor parado por >300ms após key-on
+// Barometric correction: amostrar MAP quando o motor está parado há >= 2 s (ver o bloco de baro no laço de 100 ms)
 static uint32_t g_baro_stopped_since_ms = 0u;
 static bool     g_baro_sampled          = false;
 static uint32_t g_loop2ms_last_us = 0u;
@@ -436,8 +435,8 @@ static void openems_init() noexcept {
     ems::app::ui_init();
     ems::app::can_stack_init(ems::engine::wbo2_can_id);
 
-    // 9) NVIC — CKP fica com prioridade máxima. Injeção/ignição em TIM2/TIM1
-    //    usam output compare direto por hardware, sem ISR no caminho crítico.
+    // 9) NVIC — CKP fica com prioridade máxima. INJ/IGN são GPIO por BSRR
+    //    agendado pelo despacho do TIM5 (CC3), na mesma ISR do TIM5.
     //    SysTick configurado em system_stm32_init() com prio 11.
     nvic_set_priority(IRQ_TIM5, 1u);
     nvic_enable_irq(IRQ_TIM5);
@@ -476,7 +475,7 @@ uint32_t g_t_log_ms = g_t2ms_;
     // novo no caminho crítico. Um timeout de 100 ms de verdade apertaria demais com burn de
     // flash (erase de setor) e USB. A vigilância do ETB é separada: ver g_etb_alive_ms.
     IWDG_KR  = IWDG_KR_ACCESS;
-    IWDG_RLR = IWDG_RLR_100MS;
+    IWDG_RLR = IWDG_RLR_800MS;
     IWDG_KR  = IWDG_KR_REFRESH;
 
     uint32_t g_etb_alive_ms = g_t2ms_;   // último instante em que o slot do ETB rodou (ou estava em teste)
@@ -687,7 +686,7 @@ uint32_t g_t_log_ms = g_t2ms_;
                 const uint16_t lambda_target_x1000 =
                     ems::engine::get_lambda_target_x1000(snap.rpm_x10, map_bar_x100);
                 const bool rev_cut = g_limp_active &&
-                    (snap.rpm_x10 > kLimpRpmLimit_x10);
+                    (snap.rpm_x10 > ems::engine::kLimpRpmLimit_x10);
                 const bool ae_active = ems::engine::fuel_ae_stft_freeze_active();
                 // STFT congelado em qualquer condição de corte intencional de combustível:
                 // - rev_cut: limp mode

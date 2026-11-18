@@ -7,14 +7,13 @@
  *   TIM5_CH1 PA0: CKP input capture (62.5 MHz, 16 ns/tick)
  *   TIM5_CH2 PA1: CMP input capture
  *   TIM5_CH3   --: event dispatcher (OC)
- *   TIM3_CH1-4 PC6-9: Injecao (OC, ARR=0xFFFF, ECU_Hardware_Init)
+ *   INJ/IGN: GPIO por BSRR, agendados pelo despacho do TIM5 CH3 (engine/ecu_sched.cpp); sem timer de saida
  *   TIM2_CH3 PB10: EWG PWM (motor wastegate)
  *   TIM4_CH1 PB6: VVT escape PWM
  *   TIM4_CH2 PB7: VVT admissao PWM
  *
  * Clock dos timers:
  *   TIM5, TIM3, TIM4, TIM2 (APB1): timer clock = 250 MHz (timer doubler ativo)
- *   TIM3/TIM1 scheduling: configurados em engine/ecu_sched.cpp a 10 MHz
  *   TIM5 prescaler = 3 -> tick = 250 MHz / 4 = 62.5 MHz -> 16 ns/tick
  */
 
@@ -103,40 +102,6 @@ void tim5_ic_set_capture_polarity(bool ckp_falling, bool cmp_falling) noexcept {
 
 uint32_t tim5_count() noexcept {
     return TIM5_CNT;
-}
-
-// ----------------------------------------------------------------------------
-// TIM3 - PWM legacy (CH1: EWG motor) - NAO USAR
-// ----------------------------------------------------------------------------
-
-void tim3_pwm_init(uint32_t freq_hz) {
-    if (freq_hz == 0u) { return; }
-    RCC_APB1LENR |= RCC_APB1LENR_TIM3EN;
-
-    gpio_set_af(&GPIOA_MODER, &GPIOA_AFRL, &GPIOA_AFRH, &GPIOA_OSPEEDR, 6u, GPIO_AF2);
-
-    uint32_t psc, arr;
-    pwm_psc_arr(kTimClockHz, freq_hz, psc, arr);
-
-    TIM3_CR1 = 0u;
-    TIM3_PSC = psc;
-    TIM3_ARR = arr;
-    TIM3_CCMR1 = TIM_CCMR1_OC1M_PWM1 | TIM_CCMR1_OC1PE;
-    TIM3_CCER = TIM_CCER_CC1E;
-    TIM3_CCR1 = 0u;
-    TIM3_EGR  = 1u;
-    TIM3_CR1  = TIM_CR1_CEN | TIM_CR1_ARPE;
-}
-
-void tim3_set_duty(uint8_t ch, uint16_t duty_pct_x10) noexcept {
-    if (duty_pct_x10 > 1000u) { duty_pct_x10 = 1000u; }
-    const uint32_t arr = TIM3_ARR;
-    const uint32_t ccr = ((arr + 1u) * duty_pct_x10) / 1000u;
-    if (ch == 0u) {
-        TIM3_CCR1 = ccr;
-    } else {
-        TIM3_CCR2 = ccr;
-    }
 }
 
 // ----------------------------------------------------------------------------
@@ -293,10 +258,8 @@ volatile uint32_t ems_test_cam_gpio_idr = 0u;
 namespace ems::hal {
 void tim5_ic_init(void) {}
 void tim5_ic_set_capture_polarity(bool, bool) noexcept {}
-void tim3_pwm_init(uint32_t) {}
 void tim4_pwm_init(uint32_t) {}
 void tim2_pwm_init(uint32_t) {}
-void tim3_set_duty(uint8_t, uint16_t) noexcept {}
 void tim2_set_duty(uint16_t) noexcept {}
 void tim4_set_duty(uint8_t, uint16_t) noexcept {}
 void etb_pwm_init(uint32_t) {}

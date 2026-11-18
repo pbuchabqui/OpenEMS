@@ -142,8 +142,9 @@ void test_sensors_diag_adc_recovery(void) {
     // Em recuperação: WARNING.
     adc_test_set_recovering(true);
     sensors_diag_poll();
-    const DiagnosticEvent* ev = DiagnosticManager::get_event(DiagnosticCode::ADC_RECOVERY_FAILED);
-    CHECK_TRUE(ev != nullptr && ev->severity == FaultSeverity::WARNING, "recuperando → WARNING");
+    DiagnosticEvent ev{};
+    bool found = DiagnosticManager::get_event_copy(DiagnosticCode::ADC_RECOVERY_FAILED, ev);
+    CHECK_TRUE(found && ev.severity == FaultSeverity::WARNING, "recuperando → WARNING");
     // Sem leitura confiável o poll não avalia faixa/plausibilidade.
     CHECK_FALSE(DiagnosticManager::is_fault_active(DiagnosticCode::MAP_TPS_CORRELATION),
                 "recuperando: sem plausibilidade sobre dados de fallback");
@@ -157,8 +158,8 @@ void test_sensors_diag_adc_recovery(void) {
     // Esgotou as tentativas: CRITICAL.
     adc_test_set_recovery_failed(true);
     sensors_diag_poll();
-    ev = DiagnosticManager::get_event(DiagnosticCode::ADC_RECOVERY_FAILED);
-    CHECK_TRUE(ev != nullptr && ev->severity == FaultSeverity::CRITICAL, "falhou → CRITICAL");
+    found = DiagnosticManager::get_event_copy(DiagnosticCode::ADC_RECOVERY_FAILED, ev);
+    CHECK_TRUE(found && ev.severity == FaultSeverity::CRITICAL, "falhou → CRITICAL");
 
     // Decisão do projeto (docs/protection_system.md): CRITICAL só sai com reset.
     adc_test_set_recovery_failed(false);
@@ -168,5 +169,25 @@ void test_sensors_diag_adc_recovery(void) {
 
     adc_test_set_recovering(false);
     adc_test_set_recovery_failed(false);
+    DiagnosticManager::init();
+}
+
+void test_sensors_reset_zeroes_volatile_buffers(void) {
+    section("sensors: reset zera os buffers volatile campo a campo (sem const_cast)");
+    diag_setup();
+    adc_test_set_raw_primary(AdcPrimaryChannel::MAP, 2000u);
+    adc_test_set_raw_primary(AdcPrimaryChannel::TPS, 2000u);
+    feed_teeth(8000u, 200u);
+    CHECK_TRUE(sensors_get().map_bar_x1000 != 0u, "pré-condição: o snapshot tem dados");
+
+    sensors_test_reset();
+    const SensorData d = sensors_get();
+    CHECK_EQ(d.map_bar_x1000, 0u, "map zerado");
+    CHECK_EQ(d.tps_pct_x10, 0u, "tps zerado");
+    CHECK_EQ(d.fault_bits, 0u, "fault_bits zerado");
+    CHECK_EQ(d.throttle_fault_bits, 0u, "throttle_fault_bits zerado");
+    CHECK_EQ(d.maf_gps_x100, 0u, "maf zerado");
+    CHECK_EQ(d.an1_raw, 0u, "an1 zerado");
+    CHECK_FALSE(d.vbatt_fault, "vbatt_fault zerado");
     DiagnosticManager::init();
 }

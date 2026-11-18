@@ -197,6 +197,8 @@ test_sensors_bench_app_fixed();
     test_sensors_diag_range_out_of_isr();
     test_sensors_diag_plausibility_poll();
     test_sensors_diag_adc_recovery();
+    test_sensors_reset_zeroes_volatile_buffers();
+    test_etb_d_term_saturates();
     test_map_window_angular();
     test_sensors_tick_50ms();
     test_sensors_set_range();

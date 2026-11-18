@@ -158,8 +158,8 @@ errados. Boot safe: `ecu_sched_outputs_safe_early()` → `out_pins_hw_init()`
     Projeto TunerStudio: `tools/ts/openems.ini` (assinatura `OpenEMS_v1.2`).
     No envelope, `w` e chunk-write **RAM-only**; burn e explicito via `b`.
 - Burn de Flash via protocolo (`w` legacy sem RAM-only, `b` em ambos os modos) e
-  bloqueado quando `rpm_x10 > kFlashWriteSafeRpmX10` (errata ES0565: primeira
-  escrita/erase pode congelar fetch ~120 us). Legacy devolve NACK; envelope 0x85.
+  bloqueado a menos que o motor esteja comprovadamente parado (`ckp_engine_still`: rpm == 0 e sem
+  atividade de bordas do CKP; errata ES0565: a primeira escrita/erase congela fetch ~120 us). Legacy devolve NACK; envelope 0x85.
 - Pagina 11 (64 B): eixos das tabelas 16x16 (16xu16 RPM + 16xu16 load bar x100),
   editaveis com validacao de monotonicidade estrita; NVM setor 10 (slot 9).
 - MVP de bancada: UART 115200 8N1 em `USART1` (`PA9=TX`, `PA10=RX`). O shuttle

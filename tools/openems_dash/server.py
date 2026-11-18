@@ -320,10 +320,10 @@ def api_write_cells(page: int, body: dict):
     return {"ok": True, "written": len(writes)}
 
 
-# kFlashWriteSafeRpmX10 (engine/constants.h) — erase/program de flash pode
-# congelar o fetch por ~120µs (errata ES0565); firmware recusa o burn (ACK
-# de erro, sem detalhe) acima deste RPM. Checamos aqui antes de tentar para
-# dar uma mensagem clara em vez de relayar só o ACK genérico.
+# Pré-checagem amigável. O gate REAL é do firmware (ckp_engine_still): recusa o burn (ACK de erro, sem
+# detalhe) sempre que há RPM OU atividade de bordas do CKP, mesmo sem sync; erase/program de flash pode
+# congelar o fetch por ~120µs (errata ES0565). Aqui só antecipamos o caso comum (RPM > 300) com uma
+# mensagem clara em vez de relayar o ACK genérico; o firmware pode recusar também abaixo disso.
 FLASH_WRITE_SAFE_RPM = 300
 
 @app.post("/api/pages/{page}/burn")

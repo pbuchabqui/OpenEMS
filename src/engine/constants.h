@@ -72,9 +72,6 @@ inline constexpr uint32_t kFlashProgramMaxTimeUs = 200u;
 /** First flash operation after power-on CPU freeze time in microseconds */
 inline constexpr uint32_t kFlashFirstOpFreezeTimeUs = 120u;
 
-/** Safe RPM threshold below which flash writes are allowed (300 RPM × 10) */
-inline constexpr uint32_t kFlashWriteSafeRpmX10 = 3000u;
-
 /** Minimum interval between calibration saves in milliseconds */
 inline constexpr uint32_t kCalibSaveMinIntervalMs = 10000u;
 

@@ -212,11 +212,14 @@ public:
                                    const uint16_t frame[4]) noexcept;
     
     /**
-     * @brief Get diagnostic event details
+     * @brief Copia os detalhes do evento, sob seção crítica
+     * A tabela é alterada pela ISR (report/clear deslocam o array); um ponteiro para o slot podia
+     * apontar para outro evento no meio da leitura. Devolve uma CÓPIA.
      * @param code Diagnostic trouble code
-     * @return Pointer to event structure, nullptr if not found
+     * @param out Recebe o evento (só escrito se achou)
+     * @return true se a falha está ativa
      */
-    static const DiagnosticEvent* get_event(DiagnosticCode code) noexcept;
+    static bool get_event_copy(DiagnosticCode code, DiagnosticEvent& out) noexcept;
     
     /**
      * @brief Perform sensor plausibility check

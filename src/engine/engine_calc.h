@@ -7,6 +7,9 @@
 
 namespace ems::engine {
 
+/** Corte de rotação do limp-home por sensor (3000 RPM × 10). Fonte única: engine_calc.cpp e o gauge do main. */
+inline constexpr uint32_t kLimpRpmLimit_x10 = 30000u;
+
 // One 2 ms engine-control step: MAP fusion, protections (limp gating),
 // quick-crank, fuel (VE / trims / AE / X-tau / dP / dead time), advance and
 // dwell, then the commit to the scheduler (ecu_sched) and the prime pulse.
