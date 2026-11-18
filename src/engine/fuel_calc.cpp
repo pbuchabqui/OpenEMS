@@ -754,9 +754,7 @@ static uint16_t interp_eoi_3x3(uint32_t rpm_x10, int16_t clt_x10) noexcept
     const int32_t v01 = eoi_table_deg[yi + 1u][xi];
     const int32_t v11 = eoi_table_deg[yi + 1u][xi + 1u];
 
-    const int32_t v0 = v00 + (((v10 - v00) * static_cast<int32_t>(fx)) >> 8u);
-    const int32_t v1 = v01 + (((v11 - v01) * static_cast<int32_t>(fx)) >> 8u);
-    const int32_t v  = v0 + (((v1 - v0) * static_cast<int32_t>(fy)) >> 8u);
+    const int32_t v = bilerp_q8_trunc(v00, v10, v01, v11, fx, fy);
 
     if (v < 0)   { return 0u; }
     if (v > 719) { return 719u; }

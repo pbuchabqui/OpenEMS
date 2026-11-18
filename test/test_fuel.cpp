@@ -391,6 +391,29 @@ void test_fuel_lambda_delay(void) {
 // aritmética "ingénua" sugere — tolerância ±2° (CHECK_NEAR), e
 // invariantes de monotonicidade em vez de valores exatos à mão no meio da
 // tabela (menos frágil a este arredondamento do que recalcular à mão).
+// Caracterização das duas interpolações bilineares 3×3 (EOI RPM×CLT e atraso de lambda RPM×MAP):
+// fixa o resultado bit a bit numa varredura densa, incluindo fora do domínio. Serve de rede de
+// segurança para qualquer refatoração que unifique a aritmética Q8 (truncamento incluído).
+void test_fuel_interp_3x3_characterization(void) {
+    section("fuel: caracterização das interpolações 3x3 (hash da varredura)");
+    uint32_t h_eoi = 2166136261u;
+    for (uint32_t rpm = 0u; rpm <= 90000u; rpm += 250u) {
+        for (int32_t clt = -700; clt <= 1700; clt += 10) {
+            const uint32_t v = ems::engine::calc_eoi_lead_deg(rpm, static_cast<int16_t>(clt));
+            h_eoi = (h_eoi ^ v) * 16777619u;
+        }
+    }
+    uint32_t h_lam = 2166136261u;
+    for (uint32_t rpm = 0u; rpm <= 90000u; rpm += 250u) {
+        for (uint32_t map = 0u; map <= 400u; map += 5u) {
+            const uint32_t v = ems::engine::lambda_delay_ms_from_rpm_load(rpm, static_cast<uint16_t>(map));
+            h_lam = (h_lam ^ v) * 16777619u;
+        }
+    }
+    CHECK_EQ(h_eoi, 0x4BE9FDD2u, "EOI 2D: varredura bit a bit inalterada");
+    CHECK_EQ(h_lam, 0x2FB38FB0u, "atraso de lambda 2D: varredura bit a bit inalterada");
+}
+
 void test_fuel_eoi_2d(void) {
     section("fuel_calc: calc_eoi_lead_deg (tabela 2D RPM×CLT)");
 

@@ -83,6 +83,7 @@ void test_fuel_ae(void);
 void test_fuel_adaptives_reset(void);
 void test_fuel_lambda_delay(void);
 void test_fuel_eoi_2d(void);
+void test_fuel_interp_3x3_characterization(void);
 void test_fuel_stft(void);
 void test_fuel_stft_delayed(void);
 void test_fuel_stft_gain_schedule(void);

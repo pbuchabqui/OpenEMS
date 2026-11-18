@@ -124,6 +124,7 @@ test_sensors_bench_app_fixed();
     test_fuel_adaptives_reset();
     test_fuel_lambda_delay();
     test_fuel_eoi_2d();
+    test_fuel_interp_3x3_characterization();
     test_fuel_stft();
     test_fuel_stft_delayed();
     test_fuel_stft_gain_schedule();

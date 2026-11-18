@@ -140,9 +140,7 @@ uint16_t interp_lambda_delay_3x3(uint32_t rpm_x10, uint16_t map_bar_x100) noexce
     const int32_t v01 = ems::engine::lambda_delay_ms_table[yi + 1u][xi];
     const int32_t v11 = ems::engine::lambda_delay_ms_table[yi + 1u][xi + 1u];
 
-    const int32_t v0 = v00 + (((v10 - v00) * static_cast<int32_t>(fx)) >> 8u);
-    const int32_t v1 = v01 + (((v11 - v01) * static_cast<int32_t>(fx)) >> 8u);
-    const int32_t v = v0 + (((v1 - v0) * static_cast<int32_t>(fy)) >> 8u);
+    const int32_t v = ems::engine::bilerp_q8_trunc(v00, v10, v01, v11, fx, fy);
     return static_cast<uint16_t>(clamp_i16(static_cast<int16_t>(v), 0, 2000));
 }
 

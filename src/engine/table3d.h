@@ -49,6 +49,16 @@ uint8_t table_axis_index(const uint32_t* axis, uint8_t size, uint32_t value) noe
 uint8_t table_axis_frac_q8(const uint32_t* axis, uint8_t idx, uint32_t value) noexcept;
 int32_t lerp_q8_s32(int32_t a, int32_t b, uint8_t frac_q8) noexcept;
 
+// Bilinear 2x2 com TRUNCAMENTO por passo (>>8 aritmético, três floors encadeados): é a aritmética
+// das tabelas 3x3 (EOI RPM×CLT, atraso de lambda RPM×MAP). Diferente de lerp_q8_s32, que arredonda;
+// os dois não são intercambiáveis sem mudar o resultado (a varredura em test_fuel.cpp trava isso).
+inline int32_t bilerp_q8_trunc(int32_t v00, int32_t v10, int32_t v01, int32_t v11,
+                               uint8_t fx, uint8_t fy) noexcept {
+    const int32_t v0 = v00 + (((v10 - v00) * static_cast<int32_t>(fx)) >> 8u);
+    const int32_t v1 = v01 + (((v11 - v01) * static_cast<int32_t>(fx)) >> 8u);
+    return v0 + (((v1 - v0) * static_cast<int32_t>(fy)) >> 8u);
+}
+
 // Nó de eixo mais próximo do valor (para crédito de célula única: LTFT/LEARN).
 // Diferente de table_axis_index, que devolve o canto baixo da interpolação
 // bilinear (em v exactamente igual a axis[k], k>0, devolve k-1 com frac=1).
