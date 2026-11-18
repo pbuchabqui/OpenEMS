@@ -3,8 +3,10 @@ ENTRY(Reset_Handler)
 MEMORY
 {
     FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
+    /* O H562 tem 640 KB de SRAM contígua: SRAM1 256K @0x20000000 + SRAM2 64K @0x20040000 + SRAM3 320K @0x20050000
+       (stm32h562xx.h). O projeto usa os primeiros 512K. Havia uma região SRAM3 em 0x20060000 que sobrepunha a RAM
+       e não coincidia com a SRAM3 real; nenhuma seção a usava e foi removida. */
     RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 512K
-    SRAM3 (rwx) : ORIGIN = 0x20060000, LENGTH = 128K
 }
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
@@ -66,15 +68,6 @@ SECTIONS
         . = ALIGN(8);
         _estack_guard = .;
     } > RAM
-
-    .sram3 (NOLOAD) :
-    {
-        . = ALIGN(4);
-        _ssram3 = .;
-        *(.sram3*)
-        . = ALIGN(4);
-        _esram3 = .;
-    } > SRAM3
 
     /DISCARD/ :
     {

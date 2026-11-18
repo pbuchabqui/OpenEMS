@@ -35,6 +35,10 @@ Tabela de 16 eventos em RAM, com código, severidade, contador de ocorrências, 
 
 Sem debounce na tabela: cada chamador já filtra a falha antes de reportar (timers de falha de sensor, histerese de sobretemperatura), e um debounce no CRITICAL atrasaria o corte. Não há persistência em NVM: nada lê os códigos depois do reset, e gravar Flash exige motor parado (errata ES0565). As duas coisas estão no Backlog de `docs/ROADMAP.md`.
 
+## Misfire: só reporta, não protege
+
+`misfire_detect` conta eventos por cilindro e, ao atingir `kMisfireFaultThreshold`, o laço de 100 ms reporta `MISFIRE_CYLINDER_x` em WARNING e zera o contador. **Não há corte de combustível por cilindro** (proteção de catalisador) nem histerese: WARNING só aparece na tabela. É deliberado para o escopo atual (bancada, sem catalisador nem motor); quando houver motor real com catalisador, o corte por cilindro com histerese é o próximo passo e entra pelo `limp_gating` (máscara de inibição de INJ por cilindro).
+
 ## Como adicionar uma proteção
 
 1. Escolha o motivo: um bit novo em `g_fuel_cut_reasons` ou `g_spark_cut_reasons`, e um bit `kProtectDis*` se o corte puder ser desligado pelo PROTECT.

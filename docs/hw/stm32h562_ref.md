@@ -22,9 +22,9 @@ SRAM3 (320 KB)          0x2005_0000   total contíguo: 640 KB (0x2000_0000–0x2
 
 Fonte: `stm32h562xx.h` oficial da ST (`SRAM*_SIZE`, `SRAM*_BASE_NS`, `FLASH_BANK_SIZE`) e RM0481.
 O mapa 128/80/64 KB que aparecia aqui era o do H523/H533.
-Linker do projeto (`linker/stm32h562.ld`): `RAM` 512K em 0x2000_0000 (dentro da SRAM real);
-`.fastrun` fica em FLASH (não há código em SRAM); a região `SRAM3` ali declarada (0x2006_0000)
-não coincide com a SRAM3 real (0x2005_0000) e sobrepõe a RAM — nenhuma seção a usa hoje.
+Linker do projeto (`linker/stm32h562.ld`): `RAM` 512K em 0x2000_0000 (dentro da SRAM real de 640K);
+`.fastrun` fica em FLASH (não há código em SRAM). A região `SRAM3` que existia ali (0x2006_0000, sobreposta à RAM e
+diferente da SRAM3 real em 0x2005_0000) foi removida: nenhuma seção a usava.
 
 APB1 base               0x4000_0000
 APB2 base               0x4001_0000
