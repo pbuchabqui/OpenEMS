@@ -64,7 +64,6 @@
 #include <cstring>
 #include "hal/timer.h"
 #include "hal/critical_section.h"
-#include "engine/calibration.h"
 #include "drv/sensors.h"
 #if defined(TARGET_STM32H562) && !defined(EMS_HOST_TEST)
 #include "hal/regs.h"
@@ -295,6 +294,12 @@ static uint8_t s_skip_remaining = 0u;
 // Escritos só na ISR do CKP; lidos sob seção crítica.
 static uint32_t s_last_tooth_delta_ticks = 0u;
 static uint32_t s_last_gap_capture = 0u;
+// Configuração do decoder, recebida do ENGINE por ckp_set_decoder_config()/ckp_set_cmp_ref_half()
+// (o DRV não inclui engine/). Escrita pelo main/calibração, lida na ISR.
+static volatile uint8_t s_cfg_skip_pulses = 0u;      // 0 = skip pós-silêncio desligado
+static volatile uint8_t s_cfg_cmp_open_tooth = 0u;   // 0/0 = janela de validação do CMP desligada
+static volatile uint8_t s_cfg_cmp_close_tooth = 0u;
+static volatile uint8_t s_cfg_cmp_ref_half = 0u;     // metade de referência no CMP (0 = PHASE_A)
 
 // After any CKP LOSS: require 2 fresh CMP edges before sequential (cmp_confirms>=2).
 // Also drop inter-edge CMP timestamp so a stale s_prev (many revs old) cannot
@@ -519,7 +524,7 @@ CkpSnapshot ckp_snapshot() noexcept {
 
 // ── ISR do CKP: TIM5 CH1 (PA0/CKP, rising edge) ─────────────────────────────
 //
-// CONTEXTO: chamada por TIM5_IRQHandler() em hal/stm32h562/timer.cpp, NVIC prioridade 1.
+// CONTEXTO: chamada por TIM5_IRQHandler() em engine/ecu_sched.cpp, NVIC prioridade 1.
 // Não há chamada direta por código de usuário.
 //
 // SETUP do TIM5 CH1 no STM32H562:
@@ -549,8 +554,8 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
         // Primeira borda depois do boot ou de um stall (ckp_stall_poll zera have_edge): é a
         // primeira das N a descartar. Sem isto o skip só atuava na corrida em que a borda
         // chegava antes do stall poll; depois de um stall normal o delta já vinha curto.
-        if (ems::engine::ckp_skip_pulses_after_gap != 0u) {
-            s_skip_remaining = static_cast<uint8_t>(ems::engine::ckp_skip_pulses_after_gap - 1u);
+        if (s_cfg_skip_pulses != 0u) {
+            s_skip_remaining = static_cast<uint8_t>(s_cfg_skip_pulses - 1u);
             ++g_dbg_skip_after_silence;
         }
         g_state.have_edge = 1u;
@@ -567,9 +572,9 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
     // ── 2. Skip de dentes pós-silêncio (estilo FOME triggerSkipPulses) ────
     // Após ≥ timeout de stall sem bordas, os primeiros N pulsos podem ser
     // transiente do sensor; descarta-os e re-aprende o período.
-    if (ems::engine::ckp_skip_pulses_after_gap != 0u) {
+    if (s_cfg_skip_pulses != 0u) {
         if (delta_ticks >= min_stall_timeout_ticks()) {
-            s_skip_remaining = ems::engine::ckp_skip_pulses_after_gap;
+            s_skip_remaining = s_cfg_skip_pulses;
         }
         if (s_skip_remaining != 0u) {
             --s_skip_remaining;
@@ -789,8 +794,8 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     // ── Validação de janela de dente CMP (configurável) ──────────────────
     // Se open != 0 || close != 0 verifica se tooth_index cai dentro da janela.
     // open=0 close=0 → desabilitado (comportamento padrão).
-    const uint8_t cmp_open  = ems::engine::cmp_window_open_tooth;
-    const uint8_t cmp_close = ems::engine::cmp_window_close_tooth;
+    const uint8_t cmp_open  = s_cfg_cmp_open_tooth;
+    const uint8_t cmp_close = s_cfg_cmp_close_tooth;
     if ((cmp_open != 0u || cmp_close != 0u) &&
         g_state.snap.state == SyncState::FULL_SYNC) {
         const uint16_t ti = g_state.snap.tooth_index;
@@ -836,7 +841,7 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     // CMP validated: defer phase correction to next gap to avoid mid-revolution split.
     // Store pre-toggle value: after XOR in advance_phase_half, result = kCmpRefHalf.
     g_state.cmp_phase_pending = 1u;
-    g_state.cmp_ref_value = ems::engine::cfg::kCmpRefHalf ^ 1u;
+    g_state.cmp_ref_value = s_cfg_cmp_ref_half ^ 1u;
     if (g_state.cmp_confirms < 2u) {
         ++g_state.cmp_confirms;
     }
@@ -845,6 +850,15 @@ FASTRUN void ckp_tim5_ch2_isr() noexcept {
     // (glitches saem antes deste ponto → não zeram o contador.)
     s_revs_since_cmp = 0u;
 }
+
+void ckp_set_decoder_config(uint8_t skip_pulses_after_gap, uint8_t cmp_window_open_tooth,
+                            uint8_t cmp_window_close_tooth) noexcept {
+    s_cfg_skip_pulses = skip_pulses_after_gap;
+    s_cfg_cmp_open_tooth = cmp_window_open_tooth;
+    s_cfg_cmp_close_tooth = cmp_window_close_tooth;
+}
+
+void ckp_set_cmp_ref_half(uint8_t ref_half) noexcept { s_cfg_cmp_ref_half = ref_half; }
 
 bool ckp_crank_active(uint32_t tim5_cnt_now) noexcept {
     uint32_t last_capture;
@@ -979,6 +993,10 @@ void ckp_test_reset() noexcept {
     s_skip_remaining = 0u;
     s_last_tooth_delta_ticks = 0u;
     s_last_gap_capture = 0u;
+    s_cfg_skip_pulses = 0u;
+    s_cfg_cmp_open_tooth = 0u;
+    s_cfg_cmp_close_tooth = 0u;
+    s_cfg_cmp_ref_half = 0u;
 }
 
 uint32_t ckp_test_rpm_x10_from_period_ns(uint32_t period_ns) noexcept {

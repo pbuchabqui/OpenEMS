@@ -135,7 +135,7 @@ void test_ckp_loss_of_sync_early_gap(void) {
 void test_ckp_skip_after_silence(void) {
     section("ckp: skip de dentes pós-silêncio (ckp_skip_pulses_after_gap)");
     // Desligado (default 0): sync normal, nada descartado.
-    ckp_skip_pulses_after_gap = 0u;
+    ckp_set_decoder_config(0u, 0u, 0u);
     const uint32_t base0 = g_dbg_skip_after_silence;
     ckp_reach_full_sync();
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
@@ -145,7 +145,7 @@ void test_ckp_skip_after_silence(void) {
     // Silêncio ≥ timeout de stall com FULL_SYNC ainda de pé (race com o
     // stall poll do main loop): a própria borda derruba o sync e é descartada,
     // tal como as N-1 seguintes.
-    ckp_skip_pulses_after_gap = 3u;
+    ckp_set_decoder_config(3u, 0u, 0u);
     const uint32_t base1 = g_dbg_skip_after_silence;
     ckp_fire(13000000u);  // > 12.5M ticks (200 ms) → silêncio
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
@@ -165,9 +165,9 @@ void test_ckp_skip_after_silence(void) {
 
     // Caminho normal: o stall poll do main loop derruba o sync ANTES da 1ª borda da nova
     // partida. As N primeiras bordas também têm de ser descartadas.
-    ckp_skip_pulses_after_gap = 0u;
+    ckp_set_decoder_config(0u, 0u, 0u);
     ckp_reach_full_sync();
-    ckp_skip_pulses_after_gap = 3u;
+    ckp_set_decoder_config(3u, 0u, 0u);
     CHECK_TRUE(ckp_stall_poll(ckp_snapshot().last_tim5_capture + 13000000u), "stall detectado pelo poll");
     const uint32_t base2 = g_dbg_skip_after_silence;
     g_ckp_cap += 60000000u;          // ~1 s parado
@@ -183,7 +183,7 @@ void test_ckp_skip_after_silence(void) {
     CHECK_EQ(static_cast<uint8_t>(ckp_snapshot().state),
              static_cast<uint8_t>(SyncState::FULL_SYNC), "re-sync após stall + skip");
 
-    ckp_skip_pulses_after_gap = 0u;  // isolamento entre testes
+    ckp_set_decoder_config(0u, 0u, 0u);  // isolamento entre testes
 }
 
 void test_ckp_noise_rejection(void) {

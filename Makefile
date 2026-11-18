@@ -195,7 +195,7 @@ help:
 	@echo ""
 	@echo "Quality gates:"
 	@echo "  secrets-check   Fail if wifi_credentials.h (etc.) is tracked"
-	@echo "  lint-includes   Phase A/B include policy (LINT_PHASE=A|B LINT_ERROR=0|1)"
+	@echo "  lint-includes   Phase A/B/C/D include policy (LINT_PHASE=A|B|C|D LINT_ERROR=0|1)"
 	@echo "  doc-check       Higiene da documentacao: status, refs, simbolos, fatos (tools/doc_lint.py)"
 	@echo "  format          clang-format dirty git files only (on-touch)"
 	@echo "  format-all      clang-format entire src/test (explicit; large diff)"

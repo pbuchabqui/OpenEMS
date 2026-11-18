@@ -118,6 +118,13 @@ inline constexpr uint16_t kFallbackMapBarX1000  = 1010u;
 inline constexpr int16_t  kFallbackCltDegcX10 = 900;
 inline constexpr int16_t  kFallbackIatDegcX10 = 250;
 
+// ── Ganchos implementados pelo ENGINE (o DRV não inclui engine/) ──────────────
+// Chamados no contexto da ISR do dente. Definições FRACAS (no-op) em sensors.cpp; as FORTES ficam em
+// engine/knock.cpp e engine/map_window.cpp. Mesmo padrão de sensors_on_tooth()/misfire_on_tooth().
+void sensors_hook_knock_sample(uint16_t raw) noexcept;                 // amostra do ADC de knock
+bool sensors_hook_map_window_enabled() noexcept;                       // gate barato antes de tocar no ADC
+void sensors_hook_map_window_sample(const CkpSnapshot& snap, uint16_t map_bar_x1000) noexcept;
+
 #if defined(EMS_HOST_TEST)
 void sensors_test_reset() noexcept;
 void sensors_test_set_clt_table_entry(uint8_t idx, int16_t degc_x10) noexcept;

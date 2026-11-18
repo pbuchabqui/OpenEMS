@@ -13,13 +13,6 @@
 #include "engine/diagnostic_manager.h"
 #endif
 
-#if __has_include("engine/knock.h")
-#include "engine/knock.h"
-#endif
-
-#include "engine/calibration.h"
-#include "engine/map_window.h"
-
 namespace {
 
 using ems::drv::SensorData;
@@ -516,9 +509,7 @@ inline void sample_fast_channels() noexcept {
 
     // Feed knock ADC sample — knock_adc_update() counts samples above threshold
     // only while a window is active (no-op otherwise).
-#if __has_include("engine/knock.h")
-    ems::engine::knock_adc_update(knock_raw);
-#endif
+    ems::drv::sensors_hook_knock_sample(knock_raw);
 
     g_data_staging.map_bar_x1000 = g_fault[static_cast<uint8_t>(SensorId::MAP)].active
                          ? kFallbackMapBarX1000
@@ -642,6 +633,13 @@ void commit_sensor_snapshot() noexcept {
 // =============================================================================
 namespace ems::drv {
 
+// Definições fracas dos ganchos do ENGINE (ver sensors.h). Sem ENGINE linkado: knock e janela de MAP inertes.
+__attribute__((weak)) void sensors_hook_knock_sample(uint16_t raw) noexcept { static_cast<void>(raw); }
+__attribute__((weak)) bool sensors_hook_map_window_enabled() noexcept { return false; }
+__attribute__((weak)) void sensors_hook_map_window_sample(const CkpSnapshot& snap, uint16_t map_bar_x1000) noexcept {
+    static_cast<void>(snap); static_cast<void>(map_bar_x1000);
+}
+
 bool validate_sensor_range(SensorId id, uint16_t raw_value) noexcept {
     const FaultTracker& f = g_fault[static_cast<uint8_t>(id)];
     return (raw_value >= f.range.min_raw) && (raw_value <= f.range.max_raw);
@@ -720,14 +718,14 @@ void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
     const uint32_t ticks = snap.tooth_period_ns >> 4u;
     ems::hal::adc_trigger_on_tooth(ticks);
 
-    // MAP em janela angular por cilindro (engine/map_window) — gate barato
+    // MAP em janela angular por cilindro (engine/map_window, via gancho) — gate barato
     // pelo enable antes de tocar no ADC; mesmo critério de recovery dos
     // canais rápidos (amostra de ADC em recuperação não entra na média).
-    if (ems::engine::map_window_enable != 0u &&
+    if (ems::drv::sensors_hook_map_window_enabled() &&
         !ems::hal::adc_is_recovering() && !ems::hal::adc_recovery_failed()) {
         const uint16_t raw =
             ems::hal::adc_primary_read(ems::hal::AdcPrimaryChannel::MAP);
-        ems::engine::map_window_on_tooth(snap, map_raw_to_bar_x1000(raw));
+        ems::drv::sensors_hook_map_window_sample(snap, map_raw_to_bar_x1000(raw));
     }
 
     g_fast_sample_accum = static_cast<uint16_t>(

@@ -20,6 +20,8 @@ make firmware-rgt6 WERROR="$WERROR"
 make firmware-vgt6 WERROR="$WERROR"
 make lint-includes LINT_PHASE=A LINT_ERROR=1
 make lint-includes LINT_PHASE=B LINT_ERROR=1
+make lint-includes LINT_PHASE=C LINT_ERROR=1
+make lint-includes LINT_PHASE=D LINT_ERROR=1
 make doc-check
 
 echo "=== ci-local: OK ==="

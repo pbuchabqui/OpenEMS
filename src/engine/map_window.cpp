@@ -1,4 +1,5 @@
 #include "engine/map_window.h"
+#include "drv/sensors.h"
 #include "engine/calibration.h"
 
 namespace ems::engine {
@@ -125,3 +126,11 @@ void map_window_reset() noexcept {
 }
 
 }  // namespace ems::engine
+
+// Ganchos do DRV (drv/sensors.h): janela angular de MAP.
+namespace ems::drv {
+bool sensors_hook_map_window_enabled() noexcept { return ems::engine::map_window_enable != 0u; }
+void sensors_hook_map_window_sample(const CkpSnapshot& snap, uint16_t map_bar_x1000) noexcept {
+    ems::engine::map_window_on_tooth(snap, map_bar_x1000);
+}
+}  // namespace ems::drv

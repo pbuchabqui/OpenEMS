@@ -22,8 +22,6 @@
 
 #include "hal/timer.h"
 #include "hal/regs.h"
-#include "drv/ckp.h"    // ckp_tim5_ch1_isr / ckp_tim5_ch2_isr
-#include "engine/ecu_sched.h"  // ecu_sched_evt_dispatch
 
 // -- Constantes de clock --------------------------------------------------------
 static constexpr uint32_t kTimPrescaler = 3u;
@@ -277,26 +275,7 @@ void etb_pwm_set_duty_x10(uint16_t duty_pct_x10) noexcept {
 // ISR Handlers
 // ----------------------------------------------------------------------------
 
-/**
- * @brief TIM5_IRQHandler — CKP (CH1) + CMP (CH2) + event dispatcher (CH3)
- */
-extern "C" void TIM5_IRQHandler(void) {
-    uint32_t sr = TIM5_SR;
-    if (sr & TIM_SR_CC1IF) {
-        TIM5_SR = ~TIM_SR_CC1IF;
-        ems::drv::ckp_tim5_ch1_isr();
-    }
-    sr = TIM5_SR;
-    if (sr & TIM_SR_CC2IF) {
-        TIM5_SR = ~TIM_SR_CC2IF;
-        ems::drv::ckp_tim5_ch2_isr();
-    }
-    sr = TIM5_SR;
-    if (sr & TIM_SR_CC3IF) {
-        TIM5_SR = ~TIM_SR_CC3IF;
-        ecu_sched_evt_dispatch();
-    }
-}
+// TIM5_IRQHandler (CKP + CMP + despacho de eventos) vive em engine/ecu_sched.cpp: o HAL não inclui DRV/ENGINE.
 
 } // namespace ems::hal
 

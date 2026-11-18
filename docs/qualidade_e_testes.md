@@ -24,6 +24,8 @@ make firmware-rgt6 WERROR=1
 make firmware-vgt6 WERROR=1
 make lint-includes LINT_PHASE=A LINT_ERROR=1   # ban ENGINE/DRV → app/
 make lint-includes LINT_PHASE=B LINT_ERROR=1   # ban ENGINE → hal/regs.h (allowlist)
+make lint-includes LINT_PHASE=C LINT_ERROR=1   # ban HAL → drv/ engine/ app/
+make lint-includes LINT_PHASE=D LINT_ERROR=1   # ban DRV → engine/ app/ (allowlist: tools/include_allowlist_drv.txt)
 make format                     # clang-format so em ficheiros dirty (on-touch)
 ```
 

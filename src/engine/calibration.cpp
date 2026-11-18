@@ -4,6 +4,7 @@
 
 #include <cstring>
 
+#include "drv/ckp.h"
 #include "drv/sensors.h"
 #include "hal/timer.h"
 
@@ -714,6 +715,8 @@ void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept
 
     // 71 CKP skip pós-silêncio
     ckp_skip_pulses_after_gap = (page0[71] > 57u) ? 57u : page0[71];
+    // O decoder (DRV) não lê engine/calibration: recebe a configuração por setter.
+    ems::drv::ckp_set_decoder_config(ckp_skip_pulses_after_gap, cmp_window_open_tooth, cmp_window_close_tooth);
 
     // 72-79 rev limiter (safety clamps: never disable via corrupt 0)
     std::memcpy(&rev_limit_rpm_x10,         page0 + 72, 4u);

@@ -19,7 +19,7 @@
  *   (detalhe e regras de ruído: drv/ckp.cpp)
  *
  * HARDWARE: TIM5 CH1 (PA0/CKP) em modo Input Capture, rising edge.
- *   ISR: ckp_tim5_ch1_isr() — chamada por TIM5_IRQHandler() em hal/stm32h562/timer.cpp
+ *   ISR: ckp_tim5_ch1_isr() — chamada por TIM5_IRQHandler() em engine/ecu_sched.cpp
  *   Prioridade NVIC: 1 (mais alta do sistema) — §CLAUDE.md tabela IRQ
  */
 
@@ -162,6 +162,14 @@ bool ckp_stall_poll(uint32_t tim5_cnt_now) noexcept;
 // ckp_engine_still() = rpm_x10 == 0 && !ckp_crank_active(): gate de gravação em
 // Flash e de teste de saídas. tim5_cnt_now = hal::tim5_count().
 bool ckp_crank_active(uint32_t tim5_cnt_now) noexcept;
+
+// ── Configuração do decoder (chamada pelo ENGINE; o DRV não inclui engine/) ───
+// skip_pulses_after_gap: dentes descartados após silêncio (0 = off); janela de validação do CMP em
+// dentes (0/0 = off). Os valores já chegam saneados (calibration.cpp limita a 57).
+void ckp_set_decoder_config(uint8_t skip_pulses_after_gap, uint8_t cmp_window_open_tooth,
+                            uint8_t cmp_window_close_tooth) noexcept;
+// Metade de referência no CMP (cfg::kCmpRefHalf do ENGINE; 0 = PHASE_A). Default 0.
+void ckp_set_cmp_ref_half(uint8_t ref_half) noexcept;
 bool ckp_engine_still(uint32_t tim5_cnt_now) noexcept;
 
 // ── API de teste (somente em build host) ──────────────────────────────────────

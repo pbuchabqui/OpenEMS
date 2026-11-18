@@ -1,0 +1,4 @@
+# Arquivos de src/drv/ que ainda podem incluir engine/ (Phase D do lint-includes).
+# Entradas só saem (nunca entram). sensors.cpp: diagnostic_manager.h, até o diagnóstico de sensores
+# sair da ISR do dente (plano M3: sensors_diag_poll no engine).
+src/drv/sensors.cpp

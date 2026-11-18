@@ -601,6 +601,7 @@ void ecu_sched_outputs_safe_early(void)
 
 void ECU_Hardware_Init(void)
 {
+    ems::drv::ckp_set_cmp_ref_half(ems::engine::cfg::kCmpRefHalf);
     // Idempotent re-assert after late boot steps (USB delay, etc.).
     ecu_sched_outputs_safe_early();
     clear_all_events_and_drive_safe_outputs();
@@ -1141,5 +1142,32 @@ bool ecu_sched_test_queue_dwell(uint8_t cyl, uint32_t delay_us) noexcept
     if (delay_us == 0U) { delay_us = 3000U; }
     const uint32_t t = scheduler_counter() + ECU_SCHED_US_TO_TICKS(delay_us);
     return arm_channel(si::kIgnCh[cyl], t, ECU_ACT_DWELL_START);
+}
+#endif
+
+#if !defined(EMS_HOST_TEST)
+/**
+ * TIM5_IRQHandler — CKP (CH1) + CMP (CH2) + despacho de eventos INJ/IGN (CH3).
+ * Fica aqui (e não em hal/stm32h562/timer.cpp) para o HAL não depender de DRV/ENGINE, e junto do
+ * despacho (ecu_sched_evt_dispatch) por causa da regra de hot-path do CLAUDE.md.
+ * Sobrescreve o alias fraco de startup_stm32h562.cpp.
+ */
+extern "C" void TIM5_IRQHandler(void)
+{
+    uint32_t sr = TIM5_SR;
+    if (sr & TIM_SR_CC1IF) {
+        TIM5_SR = ~TIM_SR_CC1IF;
+        ems::drv::ckp_tim5_ch1_isr();
+    }
+    sr = TIM5_SR;
+    if (sr & TIM_SR_CC2IF) {
+        TIM5_SR = ~TIM_SR_CC2IF;
+        ems::drv::ckp_tim5_ch2_isr();
+    }
+    sr = TIM5_SR;
+    if (sr & TIM_SR_CC3IF) {
+        TIM5_SR = ~TIM_SR_CC3IF;
+        ecu_sched_evt_dispatch();
+    }
 }
 #endif

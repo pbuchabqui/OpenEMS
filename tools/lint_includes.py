@@ -3,6 +3,8 @@
 
 Phase A: ban #include \"app/ in src/engine and src/drv
 Phase B: ban #include \"hal/regs.h in src/engine (allowlist file optional)
+Phase C: ban #include \"drv/ | engine/ | app/ in src/hal (camada mais baixa: HAL não depende de ninguém acima)
+Phase D: ban #include \"engine/ | app/ in src/drv (DRV não depende de ENGINE/APP); exceções em tools/include_allowlist_drv.txt
 
 Exit 0 always if LINT_ERROR is 0 (warn-only); non-zero if errors and LINT_ERROR=1.
 """
@@ -17,6 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP_INC = re.compile(r'#\s*include\s+"app/')
 REGS_INC = re.compile(r'#\s*include\s+"hal/regs\.h"')
+UP_FROM_HAL_INC = re.compile(r'#\s*include\s+"(?:drv|engine|app)/')
+UP_FROM_DRV_INC = re.compile(r'#\s*include\s+"(?:engine|app)/')
 
 
 def scan(paths: list[Path], pattern: re.Pattern[str]) -> list[tuple[Path, int, str]]:
@@ -46,7 +50,7 @@ def load_allowlist(path: Path | None) -> set[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", choices=("A", "B"), default="A")
+    ap.add_argument("--phase", choices=("A", "B", "C", "D"), default="A")
     ap.add_argument(
         "--error",
         action="store_true",
@@ -69,6 +73,16 @@ def main() -> int:
         )
         hits = scan(files, APP_INC)
         label = 'ENGINE/DRV → #include "app/'
+    elif args.phase == "C":
+        files = list((ROOT / "src" / "hal").rglob("*.[ch]pp")) + list((ROOT / "src" / "hal").rglob("*.h"))
+        hits = scan(files, UP_FROM_HAL_INC)
+        label = 'HAL → #include "drv/ | engine/ | app/'
+    elif args.phase == "D":
+        files = list((ROOT / "src" / "drv").rglob("*.[ch]pp")) + list((ROOT / "src" / "drv").rglob("*.h"))
+        allow = load_allowlist(ROOT / "tools" / "include_allowlist_drv.txt")
+        raw = scan(files, UP_FROM_DRV_INC)
+        hits = [(p, i, l) for p, i, l in raw if str(p.relative_to(ROOT)) not in allow]
+        label = 'DRV → #include "engine/ | app/ (allowlist-filtered)'
     else:
         # Phase B: engine only for regs.h
         files = list((ROOT / "src" / "engine").rglob("*.[ch]pp")) + list(

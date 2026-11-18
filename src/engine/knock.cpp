@@ -16,6 +16,7 @@
 
 #include "hal/critical_section.h"
 #include "engine/knock.h"
+#include "drv/sensors.h"
 
 #include <cstdint>
 
@@ -238,3 +239,8 @@ uint16_t knock_test_get_noise_p2p_ema() noexcept { return g.noise_p2p_ema; }
 #endif
 
 }  // namespace ems::engine
+
+// Gancho do DRV (drv/sensors.h): encaminha a amostra do ADC de knock ao ENGINE.
+namespace ems::drv {
+void sensors_hook_knock_sample(uint16_t raw) noexcept { ems::engine::knock_adc_update(raw); }
+}  // namespace ems::drv
