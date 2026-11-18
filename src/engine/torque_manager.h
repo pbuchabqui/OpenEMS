@@ -6,8 +6,8 @@
  *   ems::engine::torque_manager_update — pedal map, limp, rev soft, launch,
  *   TC, idle air, dashpot, rate-limit ETB → TorqueOutput.
  *
- * Path HOST_TEST only:
- *   torque_manager_loop (float C API) — regressões legadas no mvp_bench_tests.
+ * (O modelo float de host, torque_manager_loop, foi removido: era um protótipo divergente da produção.)
+ *
  */
 
 #pragma once
@@ -22,32 +22,6 @@ extern "C" {
 bool torque_manager_init(void);
 void torque_manager_enter_limp(void);
 bool torque_manager_is_ready(void);
-
-#if defined(EMS_HOST_TEST)
-typedef struct {
-    float pedal_percent, engine_rpm, vehicle_speed, coolant_temp, intake_air_temp;
-    bool  idle_mode, traction_active, launch_control, limp_mode;
-    float cruise_target, tc_reduction;
-} torque_manager_inputs_t;
-
-typedef struct {
-    float    throttle_target, torque_limit, spark_trim;
-    uint32_t intervention_count, rpm_cutoff_count, tc_intervention;
-    float    last_update_ms;
-} torque_manager_outputs_t;
-
-typedef struct {
-    float max_rpm, max_rpm_hot, max_speed, min_coolant_temp;
-    float launch_rpm, launch_throttle;
-    float tc_max_slip, tc_reduction_rate;
-    float pedal_filter_alpha;
-} torque_manager_config_t;
-
-void torque_manager_loop(const torque_manager_inputs_t* inputs,
-                         torque_manager_outputs_t* outputs);
-void torque_manager_set_config(const torque_manager_config_t* config);
-const torque_manager_config_t* torque_manager_get_config(void);
-#endif  // EMS_HOST_TEST
 
 #ifdef __cplusplus
 }

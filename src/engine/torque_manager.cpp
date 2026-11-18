@@ -3,7 +3,6 @@
  * @brief Gerenciador de Torque
  *
  * Produção: ems::engine::torque_manager_update (inteiro) — main 2 ms.
- * Host:     torque_manager_loop (float) — só EMS_HOST_TEST.
  */
 
 #include "torque_manager.h"
@@ -16,36 +15,13 @@
 #include "hal/system.h"
 
 #include <string.h>
-#if defined(EMS_HOST_TEST)
-#include <math.h>
-#endif
 
 static bool g_initialized = false;
 static bool g_limp_active = false;
 
-#if defined(EMS_HOST_TEST)
-static torque_manager_config_t g_config = {};
-static torque_manager_outputs_t g_outputs = {};
-static float g_filtered_pedal = 0.0f;
-#endif
-
 bool torque_manager_init(void) {
     g_initialized = true;
     g_limp_active = false;
-#if defined(EMS_HOST_TEST)
-    memset(&g_config, 0, sizeof(g_config));
-    memset(&g_outputs, 0, sizeof(g_outputs));
-    g_config.max_rpm = 7000.0f;
-    g_config.max_rpm_hot = 7200.0f;
-    g_config.max_speed = 220.0f;
-    g_config.min_coolant_temp = 0.0f;
-    g_config.launch_rpm = 4500.0f;
-    g_config.launch_throttle = 60.0f;
-    g_config.tc_max_slip = 15.0f;
-    g_config.tc_reduction_rate = 50.0f;
-    g_config.pedal_filter_alpha = 0.3f;
-    g_filtered_pedal = 0.0f;
-#endif
     return true;
 }
 
@@ -56,109 +32,6 @@ void torque_manager_enter_limp(void) {
 bool torque_manager_is_ready(void) {
     return g_initialized && !g_limp_active;
 }
-
-#if defined(EMS_HOST_TEST)
-
-void torque_manager_loop(const torque_manager_inputs_t* inputs,
-                         torque_manager_outputs_t* outputs) {
-    if (!g_initialized || inputs == NULL || outputs == NULL) {
-        return;
-    }
-
-    g_outputs.last_update_ms += 1.0f;
-
-    g_filtered_pedal = g_config.pedal_filter_alpha * inputs->pedal_percent +
-                       (1.0f - g_config.pedal_filter_alpha) * g_filtered_pedal;
-
-    float requested_throttle = g_filtered_pedal;
-
-    if (g_limp_active || inputs->limp_mode) {
-        outputs->throttle_target = 5.0f;
-        outputs->torque_limit = 30.0f;
-        outputs->spark_trim = 0.0f;
-        g_outputs.intervention_count++;
-        return;
-    }
-
-    if (inputs->idle_mode) {
-        requested_throttle = 0.0f;
-    }
-
-    if (inputs->launch_control) {
-        if (inputs->engine_rpm > g_config.launch_rpm) {
-            requested_throttle = g_config.launch_throttle;
-            g_outputs.intervention_count++;
-        }
-    }
-
-    if (inputs->engine_rpm >= g_config.max_rpm) {
-        if (inputs->engine_rpm >= g_config.max_rpm + 200.0f) {
-            requested_throttle = 0.0f;
-        } else {
-            float cutoff_factor = 1.0f - ((inputs->engine_rpm - g_config.max_rpm) / 200.0f);
-            requested_throttle *= cutoff_factor;
-        }
-        g_outputs.rpm_cutoff_count++;
-    }
-
-    if (inputs->coolant_temp > 105.0f && inputs->engine_rpm >= g_config.max_rpm_hot) {
-        requested_throttle = 0.0f;
-        g_outputs.rpm_cutoff_count++;
-    }
-
-    if (inputs->vehicle_speed > 0.1f && inputs->vehicle_speed >= g_config.max_speed) {
-        if (requested_throttle > 10.0f) {
-            requested_throttle = 10.0f;
-        }
-        g_outputs.intervention_count++;
-    }
-
-    if (inputs->traction_active) {
-        float reduction = inputs->tc_reduction;
-        if (reduction > 80.0f) reduction = 80.0f;
-        requested_throttle *= (1.0f - (reduction / 100.0f));
-        g_outputs.tc_intervention++;
-    }
-
-    if (inputs->cruise_target > 0.1f && inputs->pedal_percent < 5.0f) {
-        requested_throttle = inputs->cruise_target;
-    }
-
-    if (inputs->coolant_temp < g_config.min_coolant_temp) {
-        if (requested_throttle > 30.0f) {
-            requested_throttle = 30.0f;
-        }
-    }
-
-    if (requested_throttle < 0.0f) requested_throttle = 0.0f;
-    if (requested_throttle > 100.0f) requested_throttle = 100.0f;
-
-    outputs->torque_limit = requested_throttle;
-
-    if (inputs->traction_active) {
-        outputs->spark_trim = -(inputs->tc_reduction * 0.3f);
-        if (outputs->spark_trim < -150.0f) outputs->spark_trim = -150.0f;
-        if (outputs->spark_trim > 50.0f) outputs->spark_trim = 50.0f;
-    } else {
-        outputs->spark_trim = 0.0f;
-    }
-
-    outputs->throttle_target = requested_throttle;
-    outputs->intervention_count = g_outputs.intervention_count;
-    outputs->rpm_cutoff_count = g_outputs.rpm_cutoff_count;
-    outputs->tc_intervention = g_outputs.tc_intervention;
-}
-
-void torque_manager_set_config(const torque_manager_config_t* config) {
-    if (config == NULL) return;
-    memcpy(&g_config, config, sizeof(torque_manager_config_t));
-}
-
-const torque_manager_config_t* torque_manager_get_config(void) {
-    return &g_config;
-}
-
-#endif  // EMS_HOST_TEST
 
 // ── API inteira de produção ────────────────────────────────────────────────
 

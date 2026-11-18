@@ -29,3 +29,12 @@ Um limiar fixo de rpm_dot dispara em aceleração normal (1ª e 2ª marcha passa
 ## Limites
 
 É uma heurística: nunca será tão confiável quanto o slip CAN. Os valores padrão não foram medidos em carro. O ajuste do limiar pede datalog (SD) de uma saída em piso baixo aderência. Na bancada não há como validar.
+
+## Modelo float de host removido (2026-11-18)
+
+Existia um `torque_manager_loop` em ponto flutuante, só em `EMS_HOST_TEST`, paralelo à implementação inteira de produção (`torque_manager_update`). Os testes dele davam confiança sobre um comportamento que **não ia para o firmware**, e os dois podiam divergir sem aviso, então foi removido junto dos 10 testes que o usavam. O corte progressivo de rotação já tinha sido portado para a produção (pullback progressivo da ETB em `torque_manager.cpp`); a produção tem o seu launch e o seu TC. O que o modelo tinha e a produção **não** tem:
+
+- limitador de velocidade do veículo (220 km/h): a produção só usa a velocidade do veículo (CAN) para launch e TC;
+- corte "duro" de rotação dentro do torque manager: o rev limit vive no `limp_gating`.
+
+Se algum desses comportamentos for necessário, ele deve ser implementado e testado na API de produção, não ressuscitando o modelo float.

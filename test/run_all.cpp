@@ -49,16 +49,6 @@ int main(void) {
     printf("\n=== TORQUE MANAGER ===");
     test_torque_manager_init();
     test_torque_manager_enter_limp();
-    test_torque_manager_set_get_config();
-    test_torque_manager_set_config_null();
-    test_torque_manager_loop_normal_pedal();
-    test_torque_manager_loop_rpm_hard_cut();
-    test_torque_manager_loop_rpm_progressive_cut();
-    test_torque_manager_loop_limp_via_input();
-    test_torque_manager_loop_idle_mode();
-    test_torque_manager_loop_traction_control();
-    test_torque_manager_loop_null_guards();
-    test_torque_manager_loop_speed_limiter();
 
     // ── CKP Decoder ───────────────────────────────────────────────────────────
     printf("\n=== CKP DECODER / SYNC ===");
@@ -367,6 +357,8 @@ test_engine_calc_mspark_dwell_follows_normal();
     test_ecu_sched_inhibit_midcharge();
     test_ecu_sched_on_stall();
     test_limp_gating_cut_families();
+    test_limp_gating_hysteresis_and_protect();
+    test_ecu_sched_queue_across_tim5_wrap();
     test_can_stack_tx_single_buffer();
     test_can_stack_refused_tx_is_retried();
     test_can_stack_fco_uses_real_dt();

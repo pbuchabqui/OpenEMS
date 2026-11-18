@@ -24,6 +24,7 @@
 #include "engine/table3d.h"
 #include "engine/ecu_sched.h"
 #include "engine/limp_gating.h"
+#include "engine/constants.h"
 #include "engine/cut_reason.h"
 #include "engine/spark_skip.h"
 #include "engine/quick_crank.h"
@@ -1061,3 +1062,309 @@ void test_ecu_sched_presync_table(void) {
 
 static constexpr uint32_t kCrankPeriod = 100000u;  // rpm_x10 = 6250 < 7000 (cranking)
 
+
+// ============================================================================
+// limp_gating — histereses, timers, PROTECT por família, sobretemperatura, diag
+// ============================================================================
+
+void test_limp_gating_hysteresis_and_protect(void) {
+    section("limp_gating: histereses, timers de óleo, overtemp, diag e PROTECT por família");
+    using namespace ems::engine;
+
+    const uint16_t prev_boost = boost_cut_map_bar_x100;
+    const uint16_t prev_oil_min = oil_min_after_start_bar_x1000;
+    const uint16_t prev_lam_to = lambda_protect_timeout_ms;
+    const uint32_t prev_rev = rev_limit_rpm_x10;
+    const uint32_t prev_rev_win = rev_limit_soft_window_x10;
+    boost_cut_map_bar_x100 = 0u;
+    oil_min_after_start_bar_x1000 = 0u;
+    lambda_protect_timeout_ms = 0u;
+    rev_limit_rpm_x10 = 70000u;          // 7000 RPM
+    rev_limit_soft_window_x10 = 2000u;   // janela de 200 RPM: volta a injetar em <= 6800 RPM
+
+    auto healthy = []() {
+        LimpGatingInputs in{};
+        in.rpm_x10 = 8000u;
+        in.map_bar_x100 = 40u;
+        in.clt_degc_x10 = 900;
+        in.oil_press_bar_x1000 = 4000u;
+        in.lambda_x1000 = 1000u;
+        in.lambda_valid = true;
+        in.lambda_target_x1000 = 1000u;
+        in.tps_pct_x10 = 100u;
+        in.full_sync = true;
+        in.now_ms = 5000u;
+        in.inj_duty_pct = 10u;
+        return in;
+    };
+    auto begin = []() {
+        limp_gating_test_reset();
+        spark_skip_reset();
+        ecu_sched_test_reset();
+    };
+
+    // ── Rev limit: corta no hard, segura dentro da janela, solta abaixo do resume ──
+    begin();
+    {
+        auto in = healthy();
+        in.rpm_x10 = 70000u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "rev: corta ao atingir o hard");
+        in.rpm_x10 = 69000u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "rev: dentro da janela (acima do resume) segue cortado");
+        in.rpm_x10 = 68001u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "rev: 1 acima do resume segue cortado");
+        in.rpm_x10 = 68000u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "rev: no resume (hard - janela) libera");
+        in.rpm_x10 = 69000u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "rev: depois de liberar, dentro da janela NÃO recorta (só rearma no hard)");
+        in.rpm_x10 = 70000u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "rev: rearma ao atingir o hard de novo");
+    }
+
+    // ── Boost cut: histerese de kBoostCutHystBarX100 e corte desligado em 0 ──
+    begin();
+    {
+        boost_cut_map_bar_x100 = 150u;
+        auto in = healthy();
+        in.map_bar_x100 = 151u;
+        auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "boost: acima do limite corta");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutBoost) != 0u, "boost: razão publicada");
+        in.map_bar_x100 = static_cast<uint16_t>(150u - kBoostCutHystBarX100 + 5u);   // dentro da histerese
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "boost: dentro da histerese segue cortado");
+        in.map_bar_x100 = static_cast<uint16_t>(150u - kBoostCutHystBarX100 - 1u);   // abaixo da histerese
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "boost: abaixo da histerese libera");
+
+        in.map_bar_x100 = 151u;
+        limp_gating_update(in);
+        boost_cut_map_bar_x100 = 0u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "boost: limite 0 desliga o corte (e solta o latch)");
+    }
+
+    // ── Duty do injetor: arma por inj_duty_cut, segura enquanto duty >= kInjDutyResumePct ──
+    begin();
+    {
+        auto in = healthy();
+        in.inj_duty_cut = true;
+        in.inj_duty_pct = 95u;
+        auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "duty: corte armado");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutInjDuty) != 0u, "duty: razão publicada");
+        in.inj_duty_cut = false;
+        in.inj_duty_pct = static_cast<uint8_t>(kInjDutyResumePct + 5u);
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "duty: sem o gatilho mas ainda alto segue segurando");
+        in.inj_duty_pct = static_cast<uint8_t>(kInjDutyResumePct - 1u);
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "duty: abaixo do resume libera");
+    }
+
+    // ── Óleo: janela após a partida e timeout em funcionamento ──
+    begin();
+    {
+        oil_min_after_start_bar_x1000 = 1000u;
+        auto in = healthy();
+        in.rpm_x10 = kOilProtectRpmX10 + 1000u;
+        in.oil_press_bar_x1000 = 200u;        // baixa
+        in.now_ms = 1000u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "óleo: 1º tick só marca o início");
+        in.now_ms = 1000u + kOilRunningTimeoutMs - 1u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "óleo baixo: ainda antes do timeout de funcionamento");
+        in.now_ms = 1000u + kOilRunningTimeoutMs;
+        auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "óleo baixo por kOilRunningTimeoutMs corta injeção");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutOilPress) != 0u, "óleo: razão publicada");
+        in.oil_press_bar_x1000 = 3000u;       // pressão voltou
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "óleo: pressão normal libera");
+
+        // Sem pressão desde a partida: corta depois de kOilAfterStartTimeoutMs.
+        begin();
+        in = healthy();
+        in.rpm_x10 = 8000u;                   // abaixo de kOilProtectRpmX10: só vale a janela após a partida
+        in.oil_press_bar_x1000 = 100u;
+        in.now_ms = 2000u;
+        limp_gating_update(in);
+        in.now_ms = 2000u + kOilAfterStartTimeoutMs + 1u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "óleo sem subir após a partida corta");
+
+        // Com a pressão chegando dentro da janela, não corta.
+        begin();
+        in = healthy();
+        in.rpm_x10 = 8000u;
+        in.oil_press_bar_x1000 = 100u;
+        in.now_ms = 2000u;
+        limp_gating_update(in);
+        in.now_ms = 3000u;
+        in.oil_press_bar_x1000 = 1500u;       // subiu dentro da janela
+        limp_gating_update(in);
+        in.now_ms = 2000u + kOilAfterStartTimeoutMs + 1u;
+        in.oil_press_bar_x1000 = 100u;        // caiu depois, mas abaixo de kOilProtectRpmX10 (sem timer de funcionamento)
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "óleo que subiu na janela não corta após a partida");
+        oil_min_after_start_bar_x1000 = 0u;
+    }
+
+    // ── Sobretemperatura: só acima de kOilProtectRpmX10; corta injeção e faísca ──
+    begin();
+    {
+        auto in = healthy();
+        in.overtemp_crit = true;
+        in.rpm_x10 = kOilProtectRpmX10;       // não maior que o limite: ainda não corta
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "overtemp: no limite de rpm não corta");
+        in.rpm_x10 = kOilProtectRpmX10 + 1u;
+        auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "overtemp: acima do limite de rpm corta injeção");
+        CHECK_EQ(r.ign_inhibit_mask, 0x0Fu, "overtemp: corta também a faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutOvertemp) != 0u, "overtemp: razão de combustível");
+        CHECK_TRUE((g_spark_cut_reasons & kSparkCutOvertemp) != 0u, "overtemp: razão de faísca");
+        in.overtemp_crit = false;
+        r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0u, "overtemp: cessou → injeção liberada (máscara volta a 0)");
+        CHECK_EQ(r.ign_inhibit_mask, 0u, "overtemp: cessou → faísca liberada (máscara volta a 0)");
+        CHECK_EQ(g_fuel_cut_reasons, 0u, "overtemp: razões limpas ao sair do corte");
+    }
+
+    // ── Diag crítico e limp por RPM ──
+    begin();
+    {
+        auto in = healthy();
+        in.diag_critical = true;
+        auto r = limp_gating_update(in);
+        CHECK_EQ(r.inj_inhibit_mask, 0x0Fu, "diag crítico corta injeção");
+        CHECK_EQ(r.ign_inhibit_mask, 0x0Fu, "diag crítico corta faísca");
+        CHECK_TRUE(r.fuel_protect_cut, "diag crítico conta como fuel_protect");
+
+        begin();
+        in = healthy();
+        in.limp_rpm_cut = true;
+        r = limp_gating_update(in);
+        CHECK_EQ(r.ign_inhibit_mask, 0x0Fu, "limp por rpm corta faísca");
+        CHECK_TRUE((g_fuel_cut_reasons & kFuelCutLimpRpm) != 0u, "limp por rpm: razão de combustível");
+        CHECK_TRUE((g_spark_cut_reasons & kSparkCutLimpRpm) != 0u, "limp por rpm: razão de faísca");
+    }
+
+    // ── PROTECT: cada bit desliga só a sua família ──
+    {
+        struct Case { uint16_t bit; const char* name; };
+        const Case cases[] = {
+            {kProtectDisDiag,    "diag"},
+            {kProtectDisLimpRpm, "limp rpm"},
+            {kProtectDisOvertemp, "overtemp"},
+            {kProtectDisRail,    "rail"},
+            {kProtectDisOil,     "óleo (falha de sensor)"},
+        };
+        for (const Case& c : cases) {
+            begin();
+            auto in = healthy();
+            in.diag_critical = (c.bit == kProtectDisDiag);
+            in.limp_rpm_cut = (c.bit == kProtectDisLimpRpm);
+            in.overtemp_crit = (c.bit == kProtectDisOvertemp);
+            if (in.overtemp_crit) { in.rpm_x10 = kOilProtectRpmX10 + 1000u; }   // overtemp só corta acima desse rpm
+            in.fuel_press_fault = (c.bit == kProtectDisRail);
+            in.oil_fault = (c.bit == kProtectDisOil);
+            CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, c.name);
+            limp_gating_set_protect_disable(c.bit);
+            auto r = limp_gating_update(in);
+            CHECK_EQ(r.inj_inhibit_mask, 0u, "PROTECT desliga o corte da família");
+            CHECK_EQ(r.ign_inhibit_mask, 0u, "PROTECT: faísca também liberada");
+            limp_gating_set_protect_disable(0u);
+        }
+
+        // Boost e duty têm o seu próprio bit.
+        begin();
+        boost_cut_map_bar_x100 = 150u;
+        auto in = healthy();
+        in.map_bar_x100 = 200u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "boost sem PROTECT corta");
+        limp_gating_set_protect_disable(kProtectDisBoost);
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "PROTECT boost desliga o corte de boost");
+        limp_gating_set_protect_disable(0u);
+
+        begin();
+        in = healthy();
+        in.inj_duty_cut = true;
+        in.inj_duty_pct = 95u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "duty sem PROTECT corta");
+        limp_gating_set_protect_disable(kProtectDisInjDuty);
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "PROTECT duty desliga o corte de duty");
+        limp_gating_set_protect_disable(0u);
+
+        // Falha fatal, flood e rev limit NUNCA entram no PROTECT.
+        begin();
+        in = healthy();
+        in.flood_clear = true;
+        limp_gating_set_protect_disable(kProtectDisWritable);
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "flood não é desligável pelo PROTECT");
+        begin();
+        in = healthy();
+        in.rpm_x10 = 70000u;
+        limp_gating_set_protect_disable(kProtectDisWritable);
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0x0Fu, "rev limit não é desligável pelo PROTECT");
+        limp_gating_set_protect_disable(0u);
+    }
+
+    // ── Exceções da partida: em cranking, falha de óleo não corta ──
+    begin();
+    {
+        auto in = healthy();
+        in.oil_fault = true;
+        in.cranking = true;
+        in.rpm_x10 = 3000u;
+        CHECK_EQ(limp_gating_update(in).inj_inhibit_mask, 0u, "cranking: falha de óleo ainda não corta");
+    }
+
+    boost_cut_map_bar_x100 = prev_boost;
+    oil_min_after_start_bar_x1000 = prev_oil_min;
+    lambda_protect_timeout_ms = prev_lam_to;
+    rev_limit_rpm_x10 = prev_rev;
+    rev_limit_soft_window_x10 = prev_rev_win;
+    limp_gating_set_protect_disable(0u);
+    begin();
+}
+
+void test_ecu_sched_queue_across_tim5_wrap(void) {
+    section("ecu_sched: a fila de eventos atravessa o wrap de 32 bits do TIM5 (~68,7 s)");
+    ecu_sched_test_reset();
+    ecu_sched_set_ign_inhibit_mask(0u);
+
+    auto lows = [] {
+        uint32_t v[24] = {};
+        ecu_sched_get_pin_counts_u32x24(v);
+        uint32_t n = 0u;
+        for (uint8_t i = 0u; i < 8u; ++i) { n += v[i * 3u + 1u]; }
+        return n;
+    };
+
+    constexpr uint32_t kStart = 0xFFFFF000u;           // 4096 ticks antes do wrap
+    ecu_sched_test_set_tim5_cnt(kStart);
+    ecu_sched_test_pulse_inj(0u, 1000u);               // INJ_OFF em +1 ms = +62500 ticks (cruza o wrap)
+    ecu_sched_test_pulse_ign(1u, 3000u);               // SPARK em +3 ms = +187500 ticks (cruza o wrap)
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 2u, "dois eventos enfileirados");
+
+    uint32_t ts0 = 0u, ts1 = 0u;
+    uint8_t ch = 0xFFu, high = 1u;
+    CHECK_EQ(ecu_sched_test_get_evt(0u, &ts0, &ch, &high), 1u, "evento 0 presente");
+    CHECK_EQ(ecu_sched_test_get_evt(1u, &ts1, &ch, &high), 1u, "evento 1 presente");
+    // Os dois alvos já passaram do wrap (valem pouco numericamente), mas a ordem é a do tempo real.
+    CHECK_TRUE(ts0 < kStart && ts1 < kStart, "ambos os alvos cruzaram o wrap (valores pequenos)");
+    CHECK_TRUE(static_cast<int32_t>(ts1 - ts0) > 0, "ordem preservada pela comparação assinada: o mais cedo vem primeiro");
+
+    const uint32_t lows0 = lows();
+
+    // Antes de qualquer alvo e ainda antes do wrap: nada dispara. Uma comparação sem sinal dispararia
+    // agora, porque os alvos (pequenos) seriam "menores" que o contador (perto de 0xFFFFFFFF).
+    ecu_sched_test_set_tim5_cnt(kStart + 100u);
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 2u, "antes do wrap e dos alvos: nada dispara");
+    CHECK_EQ(lows(), lows0, "nenhum pino mudou");
+
+    // Depois do wrap, entre os dois alvos (+1,1 ms): só o INJ_OFF vence.
+    ecu_sched_test_set_tim5_cnt(70000u);
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 1u, "após o wrap, só o 1º evento disparou");
+    CHECK_EQ(lows(), lows0 + 1u, "INJ_OFF levou o pino a LOW");
+
+    // Depois do segundo alvo: o SPARK dispara.
+    ecu_sched_test_set_tim5_cnt(200000u);
+    ecu_sched_evt_dispatch();
+    CHECK_EQ(ecu_sched_test_get_evt_count(), 0u, "fila vazia depois do 2º evento");
+    CHECK_EQ(lows(), lows0 + 2u, "SPARK levou a bobina a LOW");
+    ecu_sched_test_reset();
+}
