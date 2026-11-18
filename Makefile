@@ -64,7 +64,7 @@ LDFLAGS_ARM = -mcpu=cortex-m33 -mthumb -nostartfiles \
 ENGINE_SRC = $(SRC_DIR)/engine/calibration.cpp \
              $(SRC_DIR)/engine/engine_config.cpp \
              $(SRC_DIR)/engine/fuel_calc.cpp $(SRC_DIR)/engine/fuel_trim.cpp $(SRC_DIR)/engine/ign_calc.cpp \
-             $(SRC_DIR)/engine/knock.cpp $(SRC_DIR)/engine/auxiliaries.cpp \
+             $(SRC_DIR)/engine/knock.cpp $(SRC_DIR)/engine/auxiliaries.cpp $(SRC_DIR)/engine/sensors_diag.cpp \
              $(SRC_DIR)/engine/table3d.cpp $(SRC_DIR)/engine/quick_crank.cpp \
              $(SRC_DIR)/engine/transient_fuel.cpp \
              $(SRC_DIR)/engine/spark_skip.cpp \
@@ -122,6 +122,7 @@ HOST_TEST_SUITES = $(TEST_DIR)/test_etb.cpp \
            $(TEST_DIR)/test_spark_skip.cpp \
                    $(TEST_DIR)/test_ckp.cpp \
                    $(TEST_DIR)/test_sensors.cpp \
+                   $(TEST_DIR)/test_sensors_diag.cpp \
                    $(TEST_DIR)/test_fuel.cpp \
                    $(TEST_DIR)/test_fuel_physics.cpp \
                    $(TEST_DIR)/test_engine_calc.cpp \

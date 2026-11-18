@@ -1,6 +1,6 @@
 # Sistema de proteção
 
-> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-18 (doc-check + conferência pontual contra o código)
 
 Duas peças: o `limp_gating` decide os cortes de injeção, ignição e ETB; o `DiagnosticManager` guarda as falhas e alimenta o corte por CRITICAL.
 
@@ -19,10 +19,19 @@ Duas peças: o `limp_gating` decide os cortes de injeção, ignição e ETB; o `
 Tabela de 16 eventos em RAM, com código, severidade, contador de ocorrências, `freeze_frame[4]` e estado de recuperação.
 
 - `report_fault` cria o evento ou incrementa o existente. A severidade só sobe por reporte, nunca desce. Com a tabela cheia, descarta o evento não crítico mais antigo; se todos são críticos, o novo não entra.
-- `clear_fault` remove o evento. Os chamadores limpam quando a condição some (sobretemperatura com histerese em `engine_calc.cpp`; faixa de MAP/TPS/MAF e plausibilidade MAP×TPS em `sensors.cpp`).
+- `clear_fault` remove o evento. Os chamadores limpam quando a condição some (sobretemperatura com histerese em `engine_calc.cpp`; faixa de MAP/TPS e plausibilidade MAP×TPS em `sensors_diag.cpp`).
 - `diagnostic_tick(100)` roda no bloco de 100 ms do `main_stm32.cpp` e carimba o tempo dos eventos.
 - Único efeito sobre o motor: `is_system_ready()` é falso se houver um evento CRITICAL, e `engine_calc.cpp` o passa ao `limp_gating` como `diag_critical` (bit `kProtectDisDiag` desliga esse corte). WARNING e ERROR só aparecem na tabela.
-- `ADC_RECOVERY_FAILED` em CRITICAL não é limpo por ninguém: o corte fica até o reset. Decidido em 2026-10-22 que é intencional: o ADC esgotou as tentativas de recuperação e sem leitura confiável de MAP/TPS o motor não deve voltar sozinho; só reiniciar a ECU reabilita.
+- `clear_fault_if_not_critical` remove a falha só se ela não estiver em CRITICAL; é o que limpa estados transitórios sem soltar um CRITICAL.
+- `ADC_RECOVERY_FAILED` em CRITICAL não é limpo por ninguém: o corte fica até o reset. O estado transitório "em recuperação" é reportado como WARNING e é limpo quando a recuperação dá certo. Decidido em 2026-10-22 que é intencional: o ADC esgotou as tentativas de recuperação e sem leitura confiável de MAP/TPS o motor não deve voltar sozinho; só reiniciar a ECU reabilita.
+
+## Diagnóstico de sensores (`src/engine/sensors_diag.{h,cpp}`)
+
+`sensors_diag_poll()` roda no bloco de 50 ms do `main_stm32.cpp`, depois de `sensors_tick_50ms()`, e traduz o snapshot **commitado** dos sensores em DTCs: `MAP_SENSOR_RANGE` e `TPS_SENSOR_RANGE` (a partir dos `fault_bits`), `MAP_TPS_CORRELATION` (plausibilidade) e `ADC_RECOVERY_FAILED`. Isso não roda na ISR do dente: cada report/clear varre a tabela de eventos sob seção crítica, e dentro da ISR isso atrasava o agendamento de INJ/IGN.
+
+- O corte e o limp continuam imediatos: são guiados pelos `fault_bits` e pelo fallback que a ISR ainda aplica. O DTC chega à tabela com até um período do poll (50 ms) de atraso; para o CRITICAL de ADC, que alimenta `diag_critical`, o corte por DTC também pode atrasar esse tanto.
+- Com o ADC em recuperação ou falhado, o poll não avalia faixa nem plausibilidade (os dados são fallback, não medição).
+- A plausibilidade (`check_sensor_plausibility`) só aplica as regras que assumem motor funcionando (vácuo em marcha lenta; MAP não atmosférico com a borboleta fechada) com RPM ≥ 400. Com a chave ligada e o motor parado, ou em cranking, o MAP é atmosférico e isso é normal.
 
 Sem debounce na tabela: cada chamador já filtra a falha antes de reportar (timers de falha de sensor, histerese de sobretemperatura), e um debounce no CRITICAL atrasaria o corte. Não há persistência em NVM: nada lê os códigos depois do reset, e gravar Flash exige motor parado (errata ES0565). As duas coisas estão no Backlog de `docs/ROADMAP.md`.
 

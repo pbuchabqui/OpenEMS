@@ -159,6 +159,14 @@ public:
      * @return true if fault was cleared
      */
     static bool clear_fault(DiagnosticCode code) noexcept;
+
+    /**
+     * @brief Limpa a falha SE ela não estiver em CRITICAL (CRITICAL fica preso até o reset).
+     * Usado para estados transitórios (ex.: ADC em recuperação, reportado como WARNING) sem violar a
+     * decisão de que ADC_RECOVERY_FAILED CRITICAL só sai com reset (docs/protection_system.md).
+     * @return true se removeu
+     */
+    static bool clear_fault_if_not_critical(DiagnosticCode code) noexcept;
     
     /**
      * @brief Check if a fault is currently active

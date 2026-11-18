@@ -59,6 +59,7 @@ int main() { return 0; }
 #include "engine/map_estimator.h"
 #include "engine/output_test.h"
 #include "engine/diagnostic_manager.h"
+#include "engine/sensors_diag.h"
 #include "engine/misfire_detect.h"
 #include "engine/quick_crank.h"
 #include "engine/torque_manager.h"
@@ -604,6 +605,7 @@ uint32_t g_t_log_ms = g_t2ms_;
         if (elapsed(now, g_t50ms_, 50u)) {
             g_t50ms_ = now;
             ems::drv::sensors_tick_50ms();
+            ems::engine::sensors_diag_poll();  // DTCs de sensores fora da ISR (M3)
         }
 
         // ── 100ms: sensores + STFT + misfire report + baro ──────────────

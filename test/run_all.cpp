@@ -192,6 +192,11 @@ test_sensors_bench_app_fixed();
     // ── Sensors — Segunda Fase ───────────────────────────────────────────────
     printf("\n=== SENSORS (fase 2) ===");
     test_sensors_on_tooth();
+    test_diag_clear_if_not_critical();
+    test_sensors_diag_plausibility_rule();
+    test_sensors_diag_range_out_of_isr();
+    test_sensors_diag_plausibility_poll();
+    test_sensors_diag_adc_recovery();
     test_map_window_angular();
     test_sensors_tick_50ms();
     test_sensors_set_range();

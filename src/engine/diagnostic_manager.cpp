@@ -96,6 +96,17 @@ bool DiagnosticManager::report_fault(DiagnosticCode code,
     return true;  // New fault
 }
 
+bool DiagnosticManager::clear_fault_if_not_critical(DiagnosticCode code) noexcept {
+    ems::hal::CriticalSectionGuard guard;   // ver report_fault
+    for (uint8_t i = 0; i < g_event_count; ++i) {
+        if (g_events[i].code == code) {
+            if (g_events[i].severity == FaultSeverity::CRITICAL) { return false; }
+            break;
+        }
+    }
+    return clear_fault(code);  // guarda aninhada: CriticalSectionGuard é nest-safe
+}
+
 bool DiagnosticManager::clear_fault(DiagnosticCode code) noexcept {
     ems::hal::CriticalSectionGuard guard;   // ver report_fault
     if (code == DiagnosticCode::NONE) {
@@ -244,41 +255,58 @@ const DiagnosticEvent* DiagnosticManager::get_event(DiagnosticCode code) noexcep
     return nullptr;
 }
 
+// Limiares da plausibilidade MAP×TPS×RPM (fonte única; antes eram números soltos).
+namespace {
+constexpr uint32_t kPlausMinRunningRpmX10 = 4000u;    // 400 RPM: abaixo disso é partida/cranking ou motor parado
+constexpr uint32_t kPlausIdleMaxRpmX10    = 12000u;   // 1200 RPM: faixa de marcha lenta
+constexpr uint16_t kPlausIdleMapMaxBarX1000 = 600u;   // 0,60 bar: MAP acima disso em marcha lenta é suspeito
+constexpr uint16_t kPlausWotTpsMinPctX10  = 900u;     // 90 %
+constexpr uint16_t kPlausWotMapMinBarX1000 = 700u;    // 0,70 bar
+constexpr uint16_t kPlausClosedTpsMaxPctX10 = 50u;    // 5 %
+constexpr uint16_t kPlausClosedMapMaxBarX1000 = 950u; // 0,95 bar
+constexpr uint32_t kPlausHighRpmX10       = 60000u;   // 6000 RPM
+constexpr uint16_t kPlausHighRpmMapMinBarX1000 = 300u; // 0,30 bar
+}  // namespace
+
 bool DiagnosticManager::check_sensor_plausibility(uint16_t map_bar_x1000,
                                                   uint16_t tps_pct_x10,
                                                   uint32_t rpm_x10) noexcept {
-    // Plausibility checks based on physical constraints
-    
+    // As regras que assumem motor FUNCIONANDO (vácuo em marcha lenta, MAP não atmosférico com a
+    // borboleta fechada) só valem com o motor rodando. Com a chave ligada e motor parado (rpm == 0,
+    // inclusive sem sync) ou em cranking, o MAP é atmosférico (~1 bar) e isso é normal — antes gerava
+    // MAP_TPS_CORRELATION espúrio a cada amostra.
+    const bool engine_running = rpm_x10 >= kPlausMinRunningRpmX10;
+
     // At idle (low RPM), MAP should be low (high vacuum)
-    if (rpm_x10 < 12000) {  // Below 1200 RPM
-        if (map_bar_x1000 > 600) {  // MAP > 0.60 bar at idle is suspicious
+    if (engine_running && rpm_x10 < kPlausIdleMaxRpmX10) {
+        if (map_bar_x1000 > kPlausIdleMapMaxBarX1000) {
             // Could indicate vacuum leak or sensor fault
             return false;
         }
     }
-    
+
     // At wide open throttle (TPS > 90%), MAP should be high
-    if (tps_pct_x10 > 900) {  // TPS > 90%
-        if (map_bar_x1000 < 700) {  // MAP < 0.70 bar at WOT is suspicious
+    if (tps_pct_x10 > kPlausWotTpsMinPctX10) {
+        if (map_bar_x1000 < kPlausWotMapMinBarX1000) {
             // Could indicate boost leak or sensor fault
             return false;
         }
     }
-    
-    // At closed throttle (TPS < 5%), MAP should not be atmospheric
-    if (tps_pct_x10 < 50) {  // TPS < 5%
-        if (map_bar_x1000 > 950) {  // MAP > 0.95 bar at closed throttle
+
+    // At closed throttle (TPS < 5%), MAP should not be atmospheric (motor rodando)
+    if (engine_running && tps_pct_x10 < kPlausClosedTpsMaxPctX10) {
+        if (map_bar_x1000 > kPlausClosedMapMaxBarX1000) {
             // Could indicate stuck throttle or sensor fault
             return false;
         }
     }
-    
+
     // High RPM with very low MAP is implausible (unless decelerating)
-    if (rpm_x10 > 60000 && map_bar_x1000 < 300) {  // RPM > 6000, MAP < 0.30 bar
+    if (rpm_x10 > kPlausHighRpmX10 && map_bar_x1000 < kPlausHighRpmMapMinBarX1000) {
         // Very unlikely under normal operation
         return false;
     }
-    
+
     return true;
 }
 

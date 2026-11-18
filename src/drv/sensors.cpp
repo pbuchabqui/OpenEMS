@@ -9,10 +9,6 @@
 #include "adc.h"
 #endif
 
-#if __has_include("engine/diagnostic_manager.h")
-#include "engine/diagnostic_manager.h"
-#endif
-
 namespace {
 
 using ems::drv::SensorData;
@@ -164,7 +160,6 @@ static int16_t g_clt_table[128] = {};
 static int16_t g_iat_table[128] = {};
 
 static uint16_t g_fast_sample_accum = 0u;
-static uint32_t g_last_rpm_x10        = 0u;   // RPM do último dente — p/ plausibilidade MAP×TPS
 
 // Bench-mode: quando ativo, força CLT/IAT (ADC2) a valores fixos e limpa o fault
 // desses canais (sensores físicos ausentes na bancada, sem RC). MAP/TPS NÃO são mais
@@ -217,7 +212,6 @@ inline void reset_state() noexcept {
     g_fast_sample_accum    = 0u;
     g_slow100_seeded       = false;
     g_slow50_seeded        = false;
-    g_last_rpm_x10         = 0u;
     // g_bench_clt_iat NÃO é resetado aqui — é config de bancada, persiste por
     // sensors_set_bench_clt_iat() até ser desligado explicitamente.
     g_tps_pct_cache_valid  = false;
@@ -448,26 +442,7 @@ inline void sample_fast_channels() noexcept {
             (1u << static_cast<uint8_t>(SensorId::TPS)) |
             (1u << static_cast<uint8_t>(SensorId::O2)));
         
-        // Reporta fault de ADC recovery ao sistema de diagnóstico
-        #if __has_include("engine/diagnostic_manager.h")
-        using ems::engine::DiagnosticCode;
-        using ems::engine::FaultSeverity;
-        using ems::engine::DiagnosticManager;
-        
-        if (ems::hal::adc_recovery_failed()) {
-            DiagnosticManager::report_fault(DiagnosticCode::ADC_RECOVERY_FAILED,
-                                           FaultSeverity::CRITICAL,
-                                           ems::hal::adc_get_timeout_count(),
-                                           ems::hal::adc_get_recovery_retries());
-        } else if (ems::hal::adc_is_recovering()) {
-            // ADC_RECOVERY_IN_PROGRESS não existe - usa ADC_RECOVERY_FAILED como placeholder
-            // ou simplesmente reporta como WARNING genérico
-            DiagnosticManager::report_fault(DiagnosticCode::ADC_RECOVERY_FAILED,
-                                           FaultSeverity::WARNING,
-                                           ems::hal::adc_get_timeout_count(),
-                                           ems::hal::adc_get_recovery_retries());
-        }
-        #endif
+        // DTC de ADC em recuperação/falha: reportado fora da ISR (engine/sensors_diag.cpp).
 
         // Publica o fallback e as falhas já: sem commit o consumidor só os via no próximo
         // produtor (até 50 ms depois) e seguia com o snapshot velho/válido.
@@ -552,46 +527,14 @@ inline void sample_fast_channels() noexcept {
                          ? kMafTim5ClockHz / static_cast<uint32_t>(maf_avg_period)
                          : 0u;
     
-    // Sensor plausibility check with diagnostic reporting
-    #if __has_include("engine/diagnostic_manager.h")
-    using ems::engine::DiagnosticCode;
-    using ems::engine::FaultSeverity;
-    using ems::engine::DiagnosticManager;
-    
-    // Report sensor range faults to diagnostic system
-    if (g_fault[static_cast<uint8_t>(SensorId::MAP)].active) {
-        DiagnosticManager::report_fault(DiagnosticCode::MAP_SENSOR_RANGE,
-                                       FaultSeverity::WARNING,
-                                       map_raw, 0);
-    } else {
-        DiagnosticManager::clear_fault(DiagnosticCode::MAP_SENSOR_RANGE);
-    }
-    if (g_fault[static_cast<uint8_t>(SensorId::TPS)].active) {
-        DiagnosticManager::report_fault(DiagnosticCode::TPS_SENSOR_RANGE,
-                                       FaultSeverity::WARNING,
-                                       tps_raw, 0);
-    } else {
-        DiagnosticManager::clear_fault(DiagnosticCode::TPS_SENSOR_RANGE);
-    }
-    // O2 ADC fault removed — O2 now CAN-only; knock_raw uses that channel.
-    
+    // DTCs de faixa (MAP/TPS) e de plausibilidade MAP×TPS NÃO são reportados aqui: varrer a tabela de
+    // eventos sob CPSID dentro da ISR do dente atrasa o agendamento de INJ/IGN. engine/sensors_diag.cpp
+    // faz isso no laço principal, a partir do snapshot commitado (os fault_bits abaixo seguem imediatos).
+
     // Bench mode força SÓ CLT/IAT (sensors_tick_100ms): MAP/TPS são ADC real
     // (PA3/PA4 vêm dos DACs do estimulador) — o override que vivia aqui
     // congelava MAP=35kPa/TPS=3% e invalidava sweeps com o 'B' ligado
     // (TPS 3% fixo ainda disparava o decel fuel cut em alta rotação).
-
-    // Perform plausibility check between MAP and TPS
-    if (!DiagnosticManager::check_sensor_plausibility(g_data_staging.map_bar_x1000,
-                                                      g_data_staging.tps_pct_x10,
-                                                      g_last_rpm_x10)) {
-        DiagnosticManager::report_fault(DiagnosticCode::MAP_TPS_CORRELATION,
-                                       FaultSeverity::WARNING,
-                                       g_data_staging.map_bar_x1000,
-                                       g_data_staging.tps_pct_x10);
-    } else {
-        DiagnosticManager::clear_fault(DiagnosticCode::MAP_TPS_CORRELATION);
-    }
-    #endif
 
     // Publish immediately so the 2 ms fuel loop sees live MAP/TPS/faults.
     // (Previously only sensors_tick_100ms committed → up to ~100 ms of stale load.)
@@ -714,7 +657,6 @@ void sensors_init() noexcept {
 // TIM6 trigger opera no mesmo clock efetivo → razão 1:1,
 // adc_trigger_on_tooth usa o valor diretamente sem nova conversão.
 void sensors_on_tooth(const CkpSnapshot& snap) noexcept {
-    g_last_rpm_x10 = snap.rpm_x10;            // cache p/ check de plausibilidade MAP×TPS
     const uint32_t ticks = snap.tooth_period_ns >> 4u;
     ems::hal::adc_trigger_on_tooth(ticks);
 
