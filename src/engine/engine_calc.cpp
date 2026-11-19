@@ -140,7 +140,10 @@ uint32_t inj_finish_pw(uint32_t flow_us, uint8_t squirts, uint16_t dead_us,
     return inj_pw_us_to_scheduler_ticks(inj_pulse_pw_us(scurve_pw_us, dead_us, squirts));
 }
 
+// alt_pw_ticks/main_is_seq: pulso do OUTRO modo de injeção e para qual modo inj_pw_ticks foi
+// calculado. Vão ao scheduler junto com o commit, numa única seção crítica.
 void commit(int16_t spark_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
+            uint32_t alt_pw_ticks, uint8_t main_is_seq,
             const ems::drv::CkpSnapshot& snap,
             const ems::drv::SensorData& sensors) noexcept {
     // Knock retard is per cylinder (each coil retards on its own); none in
@@ -150,9 +153,10 @@ void commit(int16_t spark_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
         knock_x10[c] = (timing_light_enable != 0u) ? 0u : knock_get_retard_x10(c);
     }
     ::ecu_sched_set_cyl_retard_x10(knock_x10);
-    ::ecu_sched_commit_calibration_x10(
+    ::ecu_sched_commit_calibration_pair_x10(
         spark_x10, dwell_ticks, inj_pw_ticks,
-        static_cast<uint32_t>(calc_eoi_lead_deg(snap.rpm_x10, sensors.clt_degc_x10)));
+        static_cast<uint32_t>(calc_eoi_lead_deg(snap.rpm_x10, sensors.clt_degc_x10)),
+        alt_pw_ticks, main_is_seq);
     s_out.committed = true;
     s_out.spark_x10 = spark_x10;
     s_out.dwell_ticks = dwell_ticks;
@@ -552,10 +556,9 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         // comandado; o corte em si entra na mask do próximo tick.
         fuel_inj_duty_update(cycle_on_us, snap.rpm_x10, 2u);
 
-        ::ecu_sched_set_inj_pw_pair(
-            inj_alt_pw_ticks(quick_crank_pw_us, squirts, fuel_corr.dead_time_us, sensors, map_bar_x100),
-            (squirts == 1u) ? 1u : 0u);
-        commit(sched_spark_x10, dwell_ticks, inj_pw_ticks, snap, sensors);
+        commit(sched_spark_x10, dwell_ticks, inj_pw_ticks,
+               inj_alt_pw_ticks(quick_crank_pw_us, squirts, fuel_corr.dead_time_us, sensors, map_bar_x100),
+               (squirts == 1u) ? 1u : 0u, snap, sensors);
     } else if (allow_half_crank_batch) {
         // (2) HALF_SYNC + cranking: simultaneous batch, crank PW only (no VE/STFT/AE).
         // Presync auto already selects SIMULTANEOUS while is_cranking().
@@ -573,10 +576,10 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
         const uint32_t inj_pw_ticks = inj_finish_pw(
             crank_flow_us, 2u, fuel_corr.dead_time_us, sensors,
             map_bar_x100, fuel_cut_active, cycle_on_us);
-        ::ecu_sched_set_inj_pw_pair(
-            inj_alt_pw_ticks(crank_flow_us, 2u, fuel_corr.dead_time_us, sensors, map_bar_x100), 0u);
         commit(static_cast<int16_t>(crank_spark_deg * 10),
-                     dwell_ticks, inj_pw_ticks, snap, sensors);
+               dwell_ticks, inj_pw_ticks,
+               inj_alt_pw_ticks(crank_flow_us, 2u, fuel_corr.dead_time_us, sensors, map_bar_x100), 0u,
+               snap, sensors);
     } else if (sched_sync &&
                (fuel_protect_cut || half_fuel_lockout || g_rev_limit_active)) {
         // (3) Spark-only: exit-crank HALF, flood, protect, rev-limit, anomaly path.
@@ -585,8 +588,7 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
             ? static_cast<int16_t>(crank_spark_deg * 10)
             : ign_running_advance_x10(
                   get_advance_x10(snap.rpm_x10, map_bar_x100));
-        ::ecu_sched_set_inj_pw_pair(0u, ::ecu_sched_is_sequential());
-        commit(sched_spark_x10, dwell_ticks, 0u, snap, sensors);
+        commit(sched_spark_x10, dwell_ticks, 0u, 0u, ::ecu_sched_is_sequential(), snap, sensors);
         s_out.pw_ms_x10 = 0u;
         s_out.net_pw_us = 0u;
         fuel_ae_notify_pulse(0);

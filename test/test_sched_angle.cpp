@@ -274,6 +274,28 @@ void test_sched_inj_pw_pair(void) {
     CHECK_EQ(inj_pw_ticks_now(), 600u, "trava de bancada: par ignorado");
     ecu_sched_bench_pw_lock_clear();
 
+    // Commit + par numa só chamada (caminho do engine_calc): principal e alternativo chegam juntos,
+    // para o modo em que foram calculados; nenhum estado intermediário (modo novo, pulso velho).
+    const int32_t  adv1 = g_advance_x10;
+    const uint32_t dw1 = g_dwell_ticks, eoi1 = g_eoi_lead_deg;
+    g_inj_pw_main_seq = 0u; g_inj_pw_ticks = 600u; g_inj_pw_alt_ticks = 1000u;   // estado antigo: presync
+    ecu_sched_commit_calibration_pair_x10(100, 22500u, 18000u, 30u, 9000u, 1u);   // novo: sequencial
+    CHECK_EQ(g_inj_pw_ticks, 18000u, "commit+par: pulso principal gravado");
+    CHECK_EQ(g_inj_pw_alt_ticks, 9000u, "commit+par: pulso alternativo gravado");
+    CHECK_EQ(g_inj_pw_main_seq, 1u, "commit+par: principal calculado para sequencial");
+    g_knock_sequential = 1u;
+    CHECK_EQ(inj_pw_ticks_now(), 18000u, "commit+par: sequencial em vigor usa o pulso novo");
+    g_knock_sequential = 0u;
+    CHECK_EQ(inj_pw_ticks_now(), 9000u, "commit+par: presync em vigor usa o alternativo novo");
+
+    // Trava de bancada: o commit+par respeita a trava como o par isolado (só o pulso travado vale).
+    ecu_sched_bench_pw_lock_next_commit();
+    ecu_sched_commit_calibration_pair_x10(100, 22500u, 7777u, 30u, 3333u, 1u);
+    g_knock_sequential = 0u;
+    CHECK_EQ(g_inj_pw_main_seq, 0xFFu, "commit+par com trava: par ignorado");
+    ecu_sched_bench_pw_lock_clear();
+    g_advance_x10 = adv1; g_dwell_ticks = dw1; g_eoi_lead_deg = eoi1;
+
     g_inj_pw_ticks = pw0; g_inj_pw_alt_ticks = alt0;
     g_inj_pw_main_seq = ms0; g_knock_sequential = ks0;
 }

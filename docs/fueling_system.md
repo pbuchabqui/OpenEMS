@@ -1,6 +1,6 @@
 # Sistema de combustível
 
-> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-19 (doc-check + conferência pontual contra o código)
 
 Speed-density em inteiros, calculado a cada 2 ms em `engine_calc_step()` (`src/engine/engine_calc.cpp`). O resultado é um pulso por abertura, em ticks do TIM5, entregue ao scheduler por `ecu_sched_commit_calibration_x10()`. A malha fechada (STFT/LTFT) está em [`closed_loop_fuel.md`](closed_loop_fuel.md); os cortes, em [`protection_system.md`](protection_system.md).
 
@@ -30,7 +30,7 @@ Speed-density em inteiros, calculado a cada 2 ms em `engine_calc_step()` (`src/e
 5. **Limite de queda** (`fuel_pw_drop_max_us`), **AE/DE** pelo TPSdot e **rampa de retorno do DFCO**.
 6. **Por abertura** (sequencial = 1, presync = 2 por ciclo): ΔP sobre o fluxo do ciclo, depois a correção de 2 inclinações e a curva S sobre o fluxo de cada abertura, e por fim o dead time, que nunca é escalado.
 
-O laço entrega ao scheduler dois pulsos por abertura: o do modo de injeção em vigor e o do outro modo (`ecu_sched_set_inj_pw_pair`). A ISR do dente troca presync ↔ sequencial no gap, antes do próximo tick de 2 ms, e escolhe o pulso pelo modo em vigor ao armar o injetor (`inj_pw_ticks_now`). Sem isso, um injetor armado nessa janela saía com metade ou o dobro do combustível.
+O laço entrega ao scheduler dois pulsos por abertura: o do modo de injeção em vigor e o do outro modo. O par e o commit vão juntos, numa única seção crítica (`ecu_sched_commit_calibration_pair_x10`, usada pelo `engine_calc`); com duas chamadas separadas (`ecu_sched_set_inj_pw_pair` + commit) a ISR podia ver o modo novo com o pulso velho entre elas. A ISR do dente troca presync ↔ sequencial no gap, antes do próximo tick de 2 ms, e escolhe o pulso pelo modo em vigor ao armar o injetor (`inj_pw_ticks_now`). Sem isso, um injetor armado nessa janela saía com metade ou o dobro do combustível.
 
 O pulso final é limitado a 100 ms. No scheduler, cada abertura ainda é limitada a 90 % do intervalo entre aberturas.
 

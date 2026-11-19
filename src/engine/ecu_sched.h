@@ -86,6 +86,10 @@ void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks);
 // e para qual modo o inj_pw_ticks do commit foi calculado. O scheduler escolhe entre os dois
 // no instante de armar, pelo modo em vigor. Chamar antes do commit, a cada tick.
 void ecu_sched_set_inj_pw_pair(uint32_t alt_pw_ticks, uint8_t main_is_sequential);
+// Par de PW + commit na MESMA seção crítica (o caminho do engine_calc usa este): evita que a ISR veja
+// o modo novo com o pulso velho entre as duas chamadas separadas.
+void ecu_sched_commit_calibration_pair_x10(int32_t advance_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
+                                           uint32_t eoi_lead_deg, uint32_t alt_pw_ticks, uint8_t main_is_sequential);
 void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg);
 void ecu_sched_set_presync_enable(uint8_t enable);
 void ecu_sched_set_presync_inj_mode(uint8_t mode);

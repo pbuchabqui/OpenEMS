@@ -274,7 +274,15 @@ static void rearm_head(void) {
             TIM5_SR  = ~TIM_SR_CC3IF;  // rc_w0: só CC3IF é limpo
             TIM5_DIER |= TIM_DIER_CC3IE;
             g_evt_armed = 1U;
-            return;
+            // Releitura DEPOIS de escrever CCR3 e limpar CC3IF. A margem de 16 ticks vale ~64 ciclos de CPU,
+            // e com fetch frio da Flash a escrita pode demorar mais que isso: se o CNT já alcançou o CCR3, o
+            // match foi perdido (CNT passou antes da escrita) ou o flag foi apagado pela limpeza acima (match
+            // entre a escrita e a limpeza), e o evento ficaria parado até o wrap de ~68,7 s. Nesse caso o
+            // evento é executado aqui. Um CC3IF eventualmente pendente só gera um despacho vazio (inofensivo).
+            if ((int32_t)(next_ts - TIM5_CNT) > 0) { return; }
+            ++g_late_event_count;
+            evt_execute_head(TIM5_CNT, 0U);
+            continue;
         }
         ++g_late_event_count;
         evt_execute_head(TIM5_CNT, 0U);
@@ -607,9 +615,9 @@ void ECU_Hardware_Init(void)
     clear_all_events_and_drive_safe_outputs();
 }
 
-void ecu_sched_commit_calibration_x10(int32_t advance_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks, uint32_t eoi_lead_deg)
+// Corpos sem guarda: o chamador já está dentro da seção crítica.
+static void commit_calibration_locked(int32_t advance_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks, uint32_t eoi_lead_deg)
 {
-    ems::hal::CriticalSectionGuard guard;
     if (g_inj_pw_override != 1U) {   // 0 = normal, 2 = apply once then lock
         si::g_advance_x10 = advance_x10;
         si::g_dwell_ticks = dwell_ticks;
@@ -618,6 +626,34 @@ void ecu_sched_commit_calibration_x10(int32_t advance_x10, uint32_t dwell_ticks,
     }
     si::g_eoi_lead_deg = eoi_lead_deg;
     sanitize_runtime_calibration();
+}
+
+static void set_inj_pw_pair_locked(uint32_t alt_pw_ticks, uint8_t main_is_sequential)
+{
+    if (g_inj_pw_override != 0U) {
+        si::g_inj_pw_main_seq = 0xFFU;   // trava de bancada: só o pulso travado vale
+        return;
+    }
+    si::g_inj_pw_alt_ticks = alt_pw_ticks;
+    si::g_inj_pw_main_seq = (main_is_sequential != 0U) ? 1U : 0U;
+    sanitize_runtime_calibration();
+}
+
+void ecu_sched_commit_calibration_x10(int32_t advance_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks, uint32_t eoi_lead_deg)
+{
+    ems::hal::CriticalSectionGuard guard;
+    commit_calibration_locked(advance_x10, dwell_ticks, inj_pw_ticks, eoi_lead_deg);
+}
+
+// Par de PW + commit numa só seção crítica: a ISR do TIM5 nunca vê o modo novo
+// (main_seq) com o pulso velho (g_inj_pw_ticks), o que daria ½× ou 2× o combustível
+// numa troca presync↔sequencial. Ordem igual à das duas chamadas separadas (par, depois commit).
+void ecu_sched_commit_calibration_pair_x10(int32_t advance_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
+                                           uint32_t eoi_lead_deg, uint32_t alt_pw_ticks, uint8_t main_is_sequential)
+{
+    ems::hal::CriticalSectionGuard guard;
+    set_inj_pw_pair_locked(alt_pw_ticks, main_is_sequential);
+    commit_calibration_locked(advance_x10, dwell_ticks, inj_pw_ticks, eoi_lead_deg);
 }
 void ecu_sched_set_advance_x10(int32_t advance_x10) { ems::hal::CriticalSectionGuard guard; si::g_advance_x10 = advance_x10; sanitize_runtime_calibration(); }
 void ecu_sched_set_cyl_retard_x10(const uint16_t retard_x10[4])
@@ -632,13 +668,7 @@ void ecu_sched_set_inj_pw_ticks(uint32_t pw_ticks) { ems::hal::CriticalSectionGu
 void ecu_sched_set_inj_pw_pair(uint32_t alt_pw_ticks, uint8_t main_is_sequential)
 {
     ems::hal::CriticalSectionGuard guard;
-    if (g_inj_pw_override != 0U) {
-        si::g_inj_pw_main_seq = 0xFFU;   // trava de bancada: só o pulso travado vale
-        return;
-    }
-    si::g_inj_pw_alt_ticks = alt_pw_ticks;
-    si::g_inj_pw_main_seq = (main_is_sequential != 0U) ? 1U : 0U;
-    sanitize_runtime_calibration();
+    set_inj_pw_pair_locked(alt_pw_ticks, main_is_sequential);
 }
 void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ems::hal::CriticalSectionGuard guard; si::g_eoi_lead_deg = eoi_lead_deg; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_enable(uint8_t enable) { ems::hal::CriticalSectionGuard guard; g_presync_enable = (enable != 0U) ? 1U : 0U; }
@@ -1166,7 +1196,16 @@ bool ecu_sched_test_queue_dwell(uint8_t cyl, uint32_t delay_us) noexcept
  */
 extern "C" void TIM5_IRQHandler(void)
 {
+    // Despacho de INJ/IGN PRIMEIRO: um evento que venceu enquanto esta ISR estava pendente (ou durante
+    // o trabalho do dente anterior) não espera o tratamento completo do dente (sensors/schedule/prime/
+    // misfire, e o rebuild da tabela na volta). O CKP lê o registrador de captura (TIM5_CCR1), não o
+    // CNT, então atrasar o tratamento do dente não desloca o ângulo.
     uint32_t sr = TIM5_SR;
+    if (sr & TIM_SR_CC3IF) {
+        TIM5_SR = ~TIM_SR_CC3IF;
+        ecu_sched_evt_dispatch();
+    }
+    sr = TIM5_SR;
     if (sr & TIM_SR_CC1IF) {
         TIM5_SR = ~TIM_SR_CC1IF;
         ems::drv::ckp_tim5_ch1_isr();
@@ -1176,6 +1215,7 @@ extern "C" void TIM5_IRQHandler(void)
         TIM5_SR = ~TIM_SR_CC2IF;
         ems::drv::ckp_tim5_ch2_isr();
     }
+    // Segunda checagem: o tratamento do dente pode ter inserido/rearmado eventos já vencidos.
     sr = TIM5_SR;
     if (sr & TIM_SR_CC3IF) {
         TIM5_SR = ~TIM_SR_CC3IF;
