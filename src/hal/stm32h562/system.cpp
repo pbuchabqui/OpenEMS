@@ -91,6 +91,61 @@ bool system_clock_ok(void) noexcept {
     return (RCC_CFGR1 & (7u << 3)) == RCC_CFGR1_SWS_PLL1;
 }
 
+// ── ICACHE ───────────────────────────────────────────────────────────────────
+#ifndef EMS_ICACHE
+#define EMS_ICACHE 1
+#endif
+
+// Espera o fim de uma invalidação (BUSYF). Habilitar durante ela faz os acessos serem tratados como
+// não-cacheáveis (RM0481 §8.4.5) e tira o determinismo. Limitado: nunca trava o boot.
+// Só existe com o ICACHE compilado (com EMS_ICACHE=0 ficaria sem uso, e -Werror a recusaria).
+#if EMS_ICACHE
+static void icache_wait_idle(void) noexcept {
+    for (uint32_t n = 100000u; (ICACHE_SR & ICACHE_SR_BUSYF) != 0u; --n) {
+        if (n == 0u) { break; }
+    }
+}
+#endif
+
+void icache_enable(void) noexcept {
+#if EMS_ICACHE
+    icache_wait_idle();   // o reset dispara uma invalidação
+    ICACHE_CR |= ICACHE_CR_HITMEN | ICACHE_CR_MISSMEN;   // monitores (RST em 0 = contando)
+    ICACHE_CR |= ICACHE_CR_EN;
+#endif
+}
+
+bool icache_suspend(void) noexcept {
+#if EMS_ICACHE
+    if ((ICACHE_CR & ICACHE_CR_EN) == 0u) { return false; }
+    ICACHE_CR &= ~ICACHE_CR_EN;   // desligar invalida o cache inteiro (RM0481 §8.4.5)
+    return true;
+#else
+    return false;
+#endif
+}
+
+void icache_resume(bool was_enabled) noexcept {
+#if EMS_ICACHE
+    if (!was_enabled) { return; }
+    icache_wait_idle();
+    ICACHE_CR |= ICACHE_CR_EN;
+#else
+    static_cast<void>(was_enabled);
+#endif
+}
+
+uint32_t icache_hits(void) noexcept { return ICACHE_HMONR; }
+uint32_t icache_misses(void) noexcept { return ICACHE_MMONR; }
+bool icache_is_enabled(void) noexcept { return (ICACHE_CR & ICACHE_CR_EN) != 0u; }
+
+// Os monitores SATURAM (hit em 2^32-1, miss em 65535) e não dão a volta (RM0481 §8.4.12): a 250 MHz o de
+// hit enche em ~17 s. Zerar antes de cada janela de medida.
+void icache_monitors_reset(void) noexcept {
+    ICACHE_CR |= ICACHE_CR_HITMRST | ICACHE_CR_MISSMRST;
+    ICACHE_CR &= ~(ICACHE_CR_HITMRST | ICACHE_CR_MISSMRST);   // soltar o reset libera a contagem
+}
+
 // ── Inicialização do sistema ──────────────────────────────────────────────────
 
 void system_stm32_init(void) noexcept {
@@ -197,6 +252,10 @@ void system_stm32_init(void) noexcept {
         }
     }
 
+    // ── 6b. ICACHE: depois do clock final e com a Flash em 5 WS. Cada gravação de Flash o suspende ──
+    // (flash_unlock_bank2/flash_lock_bank2); fora delas o código roda cacheado, sem variar com o prefetch.
+    icache_enable();
+
     // ── 7. Habilitar clocks dos GPIOs ────────────────────────────────────
     // STM32H562VGT6 (LQFP100): GPIOA-E disponíveis
     RCC_AHB2ENR1 |= RCC_AHB2ENR1_GPIOAEN
@@ -268,6 +327,12 @@ void system_stm32_init(void) noexcept { }
 void iwdg_kick(void) noexcept { }
 uint32_t millis(void) noexcept { return g_mock_ms; }
 uint32_t micros(void) noexcept { return g_mock_ms * 1000u; }
+uint32_t icache_hits(void) noexcept { return 1000u; }
+uint32_t icache_misses(void) noexcept { return 7u; }
+bool icache_is_enabled(void) noexcept { return true; }
+static uint32_t g_mock_icache_resets = 0u;
+void icache_monitors_reset(void) noexcept { ++g_mock_icache_resets; }
+uint32_t host_icache_monitor_resets(void) noexcept { return g_mock_icache_resets; }
 void host_set_millis(uint32_t ms) noexcept { g_mock_ms = ms; }
 void host_advance_millis(uint32_t dt) noexcept { g_mock_ms += dt; }
 static bool g_mock_clock_ok = true;

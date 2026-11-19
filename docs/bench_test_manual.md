@@ -1,6 +1,6 @@
 # Manual de teste de bancada — WeAct H562 VGT6
 
-> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-19 (doc-check + conferência pontual contra o código)
 
 Este manual testa a **lógica do firmware no silício real**: sincronismo, ângulo
 da faísca, largura do pulso de injeção, jitter e watchdog. A placa é a WeAct
@@ -313,6 +313,43 @@ Desligue o modo lâmpada ao terminar (ele também cai no reset).
 - `loop max` (pior loop de 2 ms) fica bem abaixo de 2000 µs.
 - Nenhum contador late/drop/clamp anda.
 - Sem reset.
+
+### T7b — Latência da ISR do CKP e ICACHE (`tools/isr_diag.py`)
+
+Mede quanto a ISR do TIM5 leva da captura do dente até o fim do tratamento (inclui o despacho de INJ/IGN que
+roda antes dele na mesma IRQ) e se o ICACHE está acertando. Comandos seriais de 1 byte: `'k'` lê (25 bytes),
+`'l'` zera só os máximos; nenhum mexe em saída ou calibração.
+
+1. Gerador no RPM desejado (800, 3000, 6000, 8500), sync cheio (`syncFull`), motor "em regime" há alguns segundos.
+2. `python3 -I tools/isr_diag.py --reset`, espere ≥ 30 s, depois `python3 -I tools/isr_diag.py`. Os máximos de
+   latência não saturam, mas os monitores do ICACHE **sim** (hit em 2³²−1, miss em 65535, sem dar a volta, RM0481
+   §8.4.12; o de hit enche em ~17 s a 250 MHz). Para a taxa de acerto, rode `--reset` e leia em poucos segundos;
+   se o script escrever "n/d (monitor saturou)", ignore a taxa dessa leitura.
+3. Anote `dente normal max`, `dente do gap max` e a taxa de acerto do ICACHE. Compare com o período do dente
+   (`1e6 / (rpm/60 × 60)` µs ≈ 117 µs a 8500 RPM, 1000 µs a 1000 RPM).
+4. Repita com um firmware compilado com `-DEMS_ICACHE=0` (o `isr_diag.py` mostra "DESLIGADO"): a diferença do máximo
+   é o ganho do ICACHE. O pior caso é o gap (rebuild da tabela angular dentro da ISR): se ele for uma fração
+   relevante do período do dente a RPM alto, é o argumento para tirar o rebuild da ISR.
+
+**Medido em 2026-11-19** (ECU VGT6 Rev X, estimulador `tools/stm32_bench`, sync cheio, injeção sequencial, `late`/`drops`/`clamps` = 0;
+**uma** janela de 20 s por ponto e uma configuração por vez: o máximo depende de eventos raros, então os percentuais têm margem):
+
+| rpm | Dente normal máx, ICACHE ligado → desligado | Gap máx, ligado → desligado | Gap em % do período do dente |
+|---|---|---|---|
+| 800 | 9,8 → 12,7 µs | 18,6 → 31,5 µs | 1,5 → 2,5 |
+| 3000 | 9,4 → 13,0 µs | 19,7 → 30,6 µs | 5,9 → 9,2 |
+| 6000 | 8,8 → 11,0 µs | 21,5 → 33,6 µs | 12,9 → 20,2 |
+| 8500 | 9,8 → 14,5 µs | 21,4 → 34,9 µs | 18,2 → 29,6 |
+
+O ICACHE reduziu o pior caso em ~20 a 41 % nos quatro pontos. Mesmo com ele o gap chega a 18 % do período do dente a 8500 rpm
+(~1,1° de virabrequim), porque o rebuild da tabela angular roda dentro da ISR: é o argumento para tirá-lo de lá.
+Isto é o tempo da ISR (captura → fim do tratamento); **não** mede o jitter dos pinos INJ/IGN, que exige analisador lógico.
+Os monitores de hit/miss do ICACHE saturam em segundos (miss em 65535), então a taxa de acerto não foi usada; o ganho vem do A/B acima.
+
+Unidade: ticks do TIM5 a 62,5 MHz (16 ns). O comando `'l'` zera os máximos e os dois monitores. Não há limite de aprovação
+fixado ainda: o objetivo é registrar os números por RPM. Um burn de calibração desliga o ICACHE durante a gravação
+e o religa no fim (`docs/errata_stm32h562.md`); o último byte do `k` (`icache_on`) deve voltar a 1 depois do burn.
+Se ficar em 0, o religar falhou: pare e investigue antes de seguir.
 
 ### T8 — Teste de saídas
 

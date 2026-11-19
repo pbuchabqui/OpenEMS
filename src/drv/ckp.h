@@ -67,6 +67,22 @@ struct CkpSnapshot {
  */
 CkpSnapshot ckp_snapshot() noexcept;
 
+/**
+ * @brief Duração da ISR do CKP em ticks do TIM5 (62,5 MHz → 16 ns/tick), medida da captura do dente até o
+ * fim do tratamento (inclui a latência de entrada e o despacho de INJ/IGN que roda antes dele na mesma IRQ).
+ * `gap_*` é o dente do gap, onde roda o rebuild da tabela angular: o pior caso. Só diagnóstico de bancada
+ * (comando serial 'k'); os campos são lidos sem atomicidade entre si.
+ */
+struct CkpIsrDiag {
+    uint32_t tooth_max;
+    uint32_t tooth_last;
+    uint32_t gap_max;
+    uint32_t gap_last;
+};
+CkpIsrDiag ckp_isr_diag() noexcept;
+/** Zera só os máximos (para medir em regime depois da partida). Comando serial 'l'. */
+void ckp_isr_diag_reset() noexcept;
+
 // ── Hooks ─────────────────────────────────────────────────────────────────────
 // Chamados pela ISR de CKP a cada dente (símbolos fracos — sobrescreva para
 // adicionar comportamento sem modificar este módulo).

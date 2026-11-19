@@ -439,6 +439,21 @@ namespace ems::drv {
 
 volatile uint32_t g_dbg_isr_max_ticks = 0u;
 volatile uint32_t g_dbg_isr_last_ticks = 0u;
+// Mesma medição (captura → fim do tratamento) para o dente do GAP, que roda o rebuild da tabela angular
+// dentro de schedule_on_tooth (rev_boundary) e é o pior caso da ISR. O máx do dente normal não o cobre.
+volatile uint32_t g_dbg_isr_gap_max_ticks = 0u;
+volatile uint32_t g_dbg_isr_gap_last_ticks = 0u;
+
+CkpIsrDiag ckp_isr_diag() noexcept {
+    return CkpIsrDiag{g_dbg_isr_max_ticks, g_dbg_isr_last_ticks,
+                      g_dbg_isr_gap_max_ticks, g_dbg_isr_gap_last_ticks};
+}
+
+void ckp_isr_diag_reset() noexcept {
+    g_dbg_isr_max_ticks = 0u;
+    g_dbg_isr_gap_max_ticks = 0u;
+}
+
 volatile uint32_t g_dbg_tc_gap = 0u;
 volatile uint32_t g_dbg_tc_spike = 0u;
 volatile uint32_t g_dbg_tc_normal = 0u;
@@ -664,6 +679,11 @@ FASTRUN void ckp_tim5_ch1_isr() noexcept {
         publish_periods();
         sensors_on_tooth(g_state.snap);
         schedule_on_tooth(g_state.snap);
+        {
+            const uint32_t elapsed = TIM5_CNT - capture_now;  // ISR duration at the gap (diag)
+            g_dbg_isr_gap_last_ticks = elapsed;
+            if (elapsed > g_dbg_isr_gap_max_ticks) { g_dbg_isr_gap_max_ticks = elapsed; }
+        }
         return;
     }
 

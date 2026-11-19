@@ -125,7 +125,18 @@ static volatile uint32_t g_flash_wait_timeouts = 0u;
 
 // ── Funções auxiliares ───────────────────────────────────────────────────────
 
+// ICACHE ligado + escrita na região de Flash = erro de barramento (RM0481 §8.4.5), e um cache ligado
+// poderia servir dado obsoleto depois do erase/program. Todo caminho de escrita (bloqueante, boot e o
+// flush não bloqueante, que atravessa várias voltas do laço) passa por unlock ... lock, então o cache fica
+// desligado exatamente nesse intervalo. Desligar invalida; religar espera o fim da invalidação.
+static bool g_icache_suspended = false;
+static bool g_icache_was_on = false;
+
 static void flash_unlock_bank2() noexcept {
+    if (!g_icache_suspended) {
+        g_icache_was_on = icache_suspend();
+        g_icache_suspended = true;
+    }
     if (FLASH_NSCR & FLASH_CR_LOCK) {
         FLASH_NSKEYR = kFlashKey1;
         FLASH_NSKEYR = kFlashKey2;
@@ -134,6 +145,10 @@ static void flash_unlock_bank2() noexcept {
 
 static void flash_lock_bank2() noexcept {
     FLASH_NSCR |= FLASH_CR_LOCK;
+    if (g_icache_suspended) {
+        icache_resume(g_icache_was_on);
+        g_icache_suspended = false;
+    }
 }
 
 // Timeout defensivo: evita busy-wait infinito se hardware de flash falhar.

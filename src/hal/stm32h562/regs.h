@@ -791,6 +791,21 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define FLASH_ACR_WRHIGHFREQ_250 (2u << 4)   // 0b10: 150-250 MHz
 #define FLASH_ACR_PRFTEN         (1u << 8)
 
+// ICACHE (RM0481 §8). Base NS = AHB1PERIPH_BASE_NS (0x40020000) + 0x10400 (stm32h562xx.h ICACHE_BASE_NS),
+// o mesmo domínio NS do FLASH_BASE acima. Desabilitado no reset (EN=0); o reset dispara uma invalidação.
+#define ICACHE_BASE      0x40030400UL
+#define ICACHE_CR        STM32_REG32(ICACHE_BASE + 0x00UL)
+#define ICACHE_SR        STM32_REG32(ICACHE_BASE + 0x04UL)
+#define ICACHE_HMONR     STM32_REG32(ICACHE_BASE + 0x10UL)   // hit monitor (32 bit)
+#define ICACHE_MMONR     STM32_REG32(ICACHE_BASE + 0x14UL)   // miss monitor (16 bit)
+#define ICACHE_CR_EN       (1u << 0)
+#define ICACHE_CR_CACHEINV (1u << 1)
+#define ICACHE_CR_HITMEN   (1u << 16)
+#define ICACHE_CR_MISSMEN  (1u << 17)
+#define ICACHE_CR_HITMRST  (1u << 18)  // zera o monitor; precisa voltar a 0 para contar de novo
+#define ICACHE_CR_MISSMRST (1u << 19)
+#define ICACHE_SR_BUSYF    (1u << 0)   // invalidação em curso (reset, CACHEINV ou EN: 1→0)
+
 // Flash Bank2 base address
 // STM32H562RG = 1 MB flash (DFU: 128 setores × 8KB). Bank1 0x08000000-0x0807FFFF,
 // Bank2 0x08080000-0x080FFFFF. O valor antigo 0x08100000 (chip de 2MB) está FORA

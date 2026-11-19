@@ -1138,3 +1138,56 @@ void test_ui_boot_op_diag(void) {
     CHECK_EQ(second, 12u, "second_us (LE)");
     CHECK_EQ(static_cast<uint32_t>(buf[12]) | (static_cast<uint32_t>(buf[13]) << 8u), 7u, "slot (LE)");
 }
+
+// Contadores da ISR do CKP (definidos em drv/ckp.cpp; o teste os preenche para checar o layout de 'k').
+namespace ems::drv {
+extern volatile uint32_t g_dbg_isr_max_ticks;
+extern volatile uint32_t g_dbg_isr_last_ticks;
+extern volatile uint32_t g_dbg_isr_gap_max_ticks;
+extern volatile uint32_t g_dbg_isr_gap_last_ticks;
+}  // namespace ems::drv
+
+void test_ui_isr_diag(void) {
+    section("protocolo legado: 'k' devolve latência da ISR do CKP + ICACHE, 'l' zera os máximos");
+    ems::app::ui_test_reset();
+    uint8_t buf[64] = {};
+    auto u32 = [&](uint8_t i) {
+        return static_cast<uint32_t>(buf[i * 4u]) | (static_cast<uint32_t>(buf[i * 4u + 1u]) << 8u) |
+               (static_cast<uint32_t>(buf[i * 4u + 2u]) << 16u) | (static_cast<uint32_t>(buf[i * 4u + 3u]) << 24u);
+    };
+
+    ems::drv::g_dbg_isr_max_ticks = 1234u;
+    ems::drv::g_dbg_isr_last_ticks = 100u;
+    ems::drv::g_dbg_isr_gap_max_ticks = 0x0001'5678u;   // > 16 bit: confere os 4 bytes
+    ems::drv::g_dbg_isr_gap_last_ticks = 200u;
+
+    const uint8_t k = 'k';
+    ui_feed(&k, 1u);
+    uint16_t n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 25u, "'k' → 25 bytes (6 x u32 + 1)");
+    CHECK_EQ(u32(0), 1234u, "tooth_max");
+    CHECK_EQ(u32(1), 100u, "tooth_last");
+    CHECK_EQ(u32(2), 0x0001'5678u, "gap_max (u32 LE)");
+    CHECK_EQ(u32(3), 200u, "gap_last");
+    CHECK_EQ(u32(4), 1000u, "icache_hits (mock do host)");
+    CHECK_EQ(u32(5), 7u, "icache_misses (mock do host)");
+    CHECK_EQ(buf[24], 1u, "icache ligado");
+
+    // 'l' zera só os máximos; os 'last' seguem como estavam.
+    const uint8_t l = 'l';
+    const uint32_t resets0 = host_icache_monitor_resets();
+    ui_feed(&l, 1u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 1u, "'l' → 1 byte de ACK");
+    CHECK_EQ(host_icache_monitor_resets(), resets0 + 1u, "'l' também zera os monitores do ICACHE");
+    ui_feed(&k, 1u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 25u, "'k' depois do reset → 25 bytes");
+    CHECK_EQ(u32(0), 0u, "tooth_max zerado");
+    CHECK_EQ(u32(2), 0u, "gap_max zerado");
+    CHECK_EQ(u32(1), 100u, "tooth_last preservado");
+    CHECK_EQ(u32(3), 200u, "gap_last preservado");
+
+    ems::drv::g_dbg_isr_last_ticks = 0u;
+    ems::drv::g_dbg_isr_gap_last_ticks = 0u;
+}
