@@ -12,6 +12,7 @@ extern "C" uint32_t _ebss;
 
 extern "C" void Default_Handler();
 extern "C" [[noreturn]] void Reset_Handler();
+namespace ems::hal { void out_pins_hw_init() noexcept; }
 extern "C" void SysTick_Handler()            noexcept __attribute__((weak, alias("Default_Handler")));
 extern "C" void ADC1_IRQHandler()            noexcept __attribute__((weak, alias("Default_Handler")));
 extern "C" void ADC2_IRQHandler()            noexcept __attribute__((weak, alias("Default_Handler")));
@@ -27,7 +28,9 @@ extern "C" void EXTI5_IRQHandler()          noexcept __attribute__((weak, alias(
 extern "C" void _init() {}
 extern "C" void _fini() {}
 
-/* FIX ERRATA FLASH: Handlers críticos marcados com .fastrun para execução em SRAM */
+/* Handlers marcados .fastrun: no linker atual a seção .fastrun fica em FLASH (linker/stm32h562.ld),
+ * não em SRAM. A errata ES0565 §2.2.33 é contornada fazendo a 1ª operação de Flash no boot, antes
+ * de habilitar o TIM5 (main_stm32.cpp: nvm_boot_first_op). */
 extern "C" void Default_Handler() __attribute__((section(".fastrun")));
 extern "C" [[noreturn]] void Reset_Handler() __attribute__((section(".fastrun")));
 
@@ -44,6 +47,10 @@ extern "C" [[noreturn]] void Reset_Handler() {
 
     /* 2. Kick WWDG imediatamente (hardware WWDG activo desde reset) */
     *reinterpret_cast<volatile uint32_t*>(0x40002C00u) = 0x7Fu;  // WWDG_CR refresh
+
+    /* 2b. INJ/IGN em LOW o mais cedo possível (antes das esperas de clock). Só RCC_AHB2ENR1 + GPIO
+     * MODER/BSRR; funciona em HSI16. Na RGT6, PA15 (JTDI com pull-up) ficaria HIGH até aqui. */
+    ems::hal::out_pins_hw_init();
 
     /* 3. Forcar SYSCLK = HSI16
      * OBRIGATORIO: activar HSI16 primeiro (DFU pode ter desligado para usar PLL/HSE)

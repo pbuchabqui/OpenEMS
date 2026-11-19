@@ -1078,7 +1078,7 @@ void test_page0_trims_driveability(void) {
     cmp_window_close_tooth = 0u;
     antijerk_tpsdot_threshold_x10 = 0u;
     antijerk_retard_deg           = 0;
-    antijerk_decay_cycles         = 0u;
+    antijerk_decay_x10ms         = 0u;
     ckp_skip_pulses_after_gap     = 0u;
     rev_limit_rpm_x10             = 10000u;
     rev_limit_soft_window_x10     = 1000u;
@@ -1110,7 +1110,7 @@ void test_page0_trims_driveability(void) {
     CHECK_EQ(cmp_window_close_tooth, 18u, "cmp close");
     CHECK_EQ(antijerk_tpsdot_threshold_x10, 40u, "antijerk thr");
     CHECK_EQ(static_cast<int>(antijerk_retard_deg), 7, "antijerk retard");
-    CHECK_EQ(antijerk_decay_cycles, 5u, "antijerk decay");
+    CHECK_EQ(antijerk_decay_x10ms, 5u, "antijerk decay");
     CHECK_EQ(ckp_skip_pulses_after_gap, 3u, "ckp skip");
     CHECK_EQ(rev_limit_rpm_x10, 65000u, "rev limit");
     CHECK_EQ(rev_limit_soft_window_x10, 2000u, "rev soft window");

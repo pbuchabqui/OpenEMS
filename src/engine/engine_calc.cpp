@@ -519,7 +519,9 @@ const EngineCalcOut& engine_calc_step(const EngineCalcIn& in) noexcept {
             driveline_reset();
         }
         if (!crank_or_ase) {
-            corr.antijerk_retard = calc_antijerk_retard_x10(ae_tpsdot);
+            corr.antijerk_retard = calc_antijerk_retard_x10(ae_tpsdot, in.now_ms, snap.rpm_x10);
+        } else {
+            antijerk_reset();   // partida/pós-partida: nenhum retardo velho sobrevive
         }
         if (!qc.cranking) {
             // Driveline surge shares the anti-jerk slot: the larger of the two applies.

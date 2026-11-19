@@ -45,3 +45,11 @@ Sem debounce na tabela: cada chamador já filtra a falha antes de reportar (time
 2. Calcule a condição em `limp_gating_update` (limiar e tempo como variável de bancada com 0 = desligado, no mesmo padrão dos `lambda_protect_*`).
 3. Exponha o motivo no protocolo do host e, se for novo canal, no `openems.ini` (`make ini-check`).
 4. Teste em `test/` (cortes: `test_sched.cpp` e `test_etb.cpp`; faltas: `test_engine_misc.cpp`).
+
+## Watchdogs de saída (`src/engine/ecu_sched.cpp`)
+
+Dwell (1,4× o dwell armado) e injetor aberto (1,2× o pulso, 36 ms nos pulsos forçados) são verificados por `ecu_sched_watchdog_poll()` no hook do SysTick (`ecu_sched_systick_hook`, 1 ms, prioridade 11), além do slot de 2 ms do laço principal. A retaguarda não depende do laço nem de bordas de CKP (cobre estol no meio do dwell). No boot, `Reset_Handler` já leva INJ/IGN a LOW (`out_pins_hw_init`) antes das esperas de clock. Nada disso foi medido em hardware (jitter do SysTick e custo por ms ficam para a Fase 2).
+
+## Knock com sensor morto
+
+Com `knock_sensor_dead()` verdadeiro (100 janelas abaixo do piso de p2p, só se `knock_dead_min_p2p` ≠ 0), `knock_get_retard_x10` devolve no mínimo 3,0° de retardo por cilindro (`kDeadSensorRetardX10`), em vez de deixar o retardo aprendido decair a 0. O retardo aprendido maior que 3,0° é mantido. Volta ao normal quando o sensor recupera. Não medido com sensor real.

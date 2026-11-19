@@ -694,6 +694,18 @@ void ecu_sched_inj_watchdog(void)
 
 uint32_t ecu_sched_inj_watchdog_count(void) { return g_inj_watchdog_count; }
 
+void ecu_sched_watchdog_poll(void)
+{
+    ecu_sched_dwell_watchdog();
+    ecu_sched_inj_watchdog();
+}
+
+#if !defined(EMS_HOST_TEST)
+// Sobrescreve o hook fraco do SysTick (hal/stm32h562/system.cpp): 8 comparações por ms, cada
+// canal sob CriticalSectionGuard (atômico contra o TIM5). SysTick tem prioridade 11, abaixo do TIM5.
+extern "C" void ecu_sched_systick_hook(void) noexcept { ecu_sched_watchdog_poll(); }
+#endif
+
 uint8_t ecu_sched_is_sequential(void) { return si::g_knock_sequential; }
 uint8_t ecu_sched_presync_inj_mode(void) { return si::g_presync_inj_mode; }
 void ecu_sched_reset_diagnostic_counters(void)

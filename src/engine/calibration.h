@@ -208,7 +208,7 @@ extern int16_t clt_spark_corr_deg[kCorrectionTableSize];
 // Anti-jerk ignition retard (MS42 §2.2.4 conforto na transmissão)
 extern uint16_t antijerk_tpsdot_threshold_x10;
 extern int16_t  antijerk_retard_deg;
-extern uint8_t  antijerk_decay_cycles;
+extern uint8_t  antijerk_decay_x10ms;
 
 // Limitador de RPM progressivo (MS42 §2.2.5 / PAT_INH_IV)
 extern uint32_t rev_limit_rpm_x10;

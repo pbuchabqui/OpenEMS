@@ -29,8 +29,13 @@ static constexpr uint32_t kSysTickReload = 250000u - 1u;  // 1 ms
 
 // ── SysTick_Handler ──────────────────────────────────────────────────────────
 // Chamado a cada 1 ms pelo SysTick timer (ARM core, prioridade configurável).
+// Hook fraco: o scheduler (engine/ecu_sched.cpp) o sobrescreve para rodar os watchdogs de
+// dwell/injetor a cada 1 ms, independente do laço principal. O HAL não inclui ENGINE.
+extern "C" __attribute__((weak)) void ecu_sched_systick_hook(void) noexcept {}
+
 extern "C" void SysTick_Handler(void) noexcept {
     ++g_systick_ms;
+    ecu_sched_systick_hook();
 }
 
 // ── API pública ───────────────────────────────────────────────────────────────

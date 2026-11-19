@@ -397,7 +397,7 @@ void sync_page_from_table(uint8_t page) noexcept {
         // Bytes 66-99: dirigibilidade (anti-jerk, rev limit, decel cut, LTFT)
         std::memcpy(g_page0 + 66, &ems::engine::antijerk_tpsdot_threshold_x10, 2u);
         std::memcpy(g_page0 + 68, &ems::engine::antijerk_retard_deg,            2u);
-        g_page0[70] = ems::engine::antijerk_decay_cycles;
+        g_page0[70] = ems::engine::antijerk_decay_x10ms;
         g_page0[71] = ems::engine::ckp_skip_pulses_after_gap;  // era pad (0 = off)
         std::memcpy(g_page0 + 72, &ems::engine::rev_limit_rpm_x10,         4u);
         std::memcpy(g_page0 + 76, &ems::engine::rev_limit_soft_window_x10, 4u);

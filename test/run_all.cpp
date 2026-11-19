@@ -285,6 +285,7 @@ test_sensors_bench_app_fixed();
     test_ecu_sched_mspark_angle_table_margin();
     test_ecu_sched_golden_dispatch_identity();
     test_ecu_sched_dwell_watchdog_fires();
+    test_ecu_sched_watchdog_poll_independent_of_main_loop();
     test_ecu_sched_inj_watchdog_fires();
     test_ecu_sched_presync_table();
 
@@ -310,6 +311,7 @@ test_sensors_bench_app_fixed();
     test_dfco_entry_shaped_by_clt();
     test_idle_spark_error_curve();
     test_engine_calc_overrun_retard();
+    test_engine_calc_antijerk_tip_in();
     test_engine_calc_pw_drop_limit();
     test_engine_calc_dwell_floor();
 test_engine_calc_bench_lambda_closes_loop();

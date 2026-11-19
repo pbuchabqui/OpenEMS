@@ -267,6 +267,43 @@ void test_engine_calc_overrun_retard(void) {
     tables_restore();
 }
 
+void test_engine_calc_antijerk_tip_in(void) {
+    section("engine_calc: anti-jerk retarda o avanço no tip-in, em rampa, e volta a 0");
+    const uint16_t sv_thr = antijerk_tpsdot_threshold_x10;
+    const int16_t sv_ret = antijerk_retard_deg;
+    const uint8_t sv_dec = antijerk_decay_x10ms;
+    const uint8_t sv_dl = driveline_enable;
+    tables_flat(60, 1000, 22);
+    reset_all();
+    antijerk_reset();
+    antijerk_tpsdot_threshold_x10 = 30u;
+    antijerk_retard_deg = 5;
+    antijerk_decay_x10ms = 20u;   // 200 ms
+    driveline_enable = 0u;
+
+    uint32_t t = 1000u;
+    EngineCalcOut steady = run(t, 1.0, 3000u, 60u, 100u);
+    // Tip-in: pedal 10 % → 60 % em um passo de 2 ms (tpsdot saturado).
+    t += 2u;
+    EngineCalcOut first = engine_calc_step(input_at(t, 3000u, 60u, 600u));
+    CHECK_TRUE(first.spark_x10 < steady.spark_x10 - 20,
+               "tip-in: avanço cai pelo menos 2,0° no 1º passo");
+    EngineCalcOut mid{};
+    for (int i = 0; i < 50; ++i) { t += 2u; mid = engine_calc_step(input_at(t, 3000u, 60u, 600u)); }
+    CHECK_TRUE(mid.spark_x10 > first.spark_x10 && mid.spark_x10 < steady.spark_x10,
+               "~100 ms depois: retardo menor (rampa), ainda não zerado");
+    EngineCalcOut done = run(t, 1.0, 3000u, 60u, 600u);
+    CHECK_TRUE(done.spark_x10 >= steady.spark_x10 - 5,
+               "janela vencida: avanço volta ao da tabela");
+
+    antijerk_tpsdot_threshold_x10 = sv_thr;
+    antijerk_retard_deg = sv_ret;
+    antijerk_decay_x10ms = sv_dec;
+    driveline_enable = sv_dl;
+    antijerk_reset();
+    tables_restore();
+}
+
 void test_engine_calc_dwell_floor(void) {
     section("engine_calc: dwell has a 0.5 ms floor even with a zeroed table");
     uint16_t saved[kIgnitionDwellTableSize];

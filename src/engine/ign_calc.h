@@ -26,8 +26,11 @@ struct AdvanceCorrectionsX10 {
 int16_t calc_ign_iat_correction_x10(int16_t iat_x10) noexcept;
 int16_t calc_ign_clt_correction_x10(int16_t clt_x10) noexcept;
 // Retardo anti-jerk no tip-in. Dispara quando tpsdot > antijerk_tpsdot_threshold_x10;
-// magnitude proporcional a tpsdot até antijerk_retard_deg (full scale @ 100 %/s).
-int16_t calc_antijerk_retard_x10(int16_t tpsdot_x10) noexcept;
+// magnitude proporcional a tpsdot até antijerk_retard_deg (full scale @ 100 %/s), pico mantido
+// durante a janela e rampa linear até 0. Janela = antijerk_decay_x10ms × 10 ms, com piso de
+// 2 voltas (o avanço é amostrado uma vez por volta), teto 500 ms. Rearma só depois que tpsdot
+// cai abaixo do limiar. `now_ms` e `rpm_x10` vêm do passo de 2 ms do engine_calc.
+int16_t calc_antijerk_retard_x10(int16_t tpsdot_x10, uint32_t now_ms, uint32_t rpm_x10) noexcept;
 
 // Retardo de transmissão (driveline): a segunda diferença do rpm (oscilação da transmissão
 // em tração/alívio) arma um retardo que sobe em degraus até driveline_max_retard_deg e

@@ -75,7 +75,8 @@
 #define TIM5_CNT ems_test_tim5_cnt
 #endif
 
-// FASTRUN coloca ISRs críticas em SRAM (zero cache miss).
+// FASTRUN: macro vazia neste build. A seção .fastrun existe no linker, mas fica em FLASH,
+// então as ISRs críticas rodam da Flash (nem o TIM5_IRQHandler a usa).
 // Em host/embedded: __attribute__((section(".fastrun"))) via WProgram.h / core_pins.h.
 // Em host tests: indefinida — defini-la vazia garante compilação sem modificações.
 #if !defined(FASTRUN)

@@ -260,6 +260,9 @@ void test_knock_dead_sensor(void) {
     knock_window_close(0u);
     knock_cycle_complete(0u);
     CHECK_TRUE(knock_sensor_dead(), "100 janelas planas: sensor morto");
+    for (uint8_t c = 0; c < 4u; ++c) {
+        CHECK_EQ(knock_get_retard_x10(c), 30u, "sensor morto: retardo fixo de 3,0°");
+    }
 
     // Ruído de fundo real (p2p=80) recupera: EMA sobe, contador zera.
     for (int w = 0; w < 10; ++w) {
@@ -269,6 +272,7 @@ void test_knock_dead_sensor(void) {
         knock_cycle_complete(0u);
     }
     CHECK_FALSE(knock_sensor_dead(), "ruído vivo: recupera");
+    CHECK_EQ(knock_get_retard_x10(0u), 0u, "sensor vivo: sem retardo fixo");
     CHECK_TRUE(knock_test_get_noise_p2p_ema() > 8u, "EMA do p2p subiu");
     ems::engine::knock_dead_min_p2p = 0u;  // isolamento entre testes
     knock_init();

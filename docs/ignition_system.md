@@ -31,3 +31,12 @@ The ignition (spark) system determines when to charge (dwell) and fire (discharg
 
 Use coilState1 coilState2 etc in logs (see unit_tests/test_results/readme.md for unit tests output) to
 assert actual logic state.
+
+## Anti-jerk (OpenEMS, `src/engine/ign_calc.cpp`)
+
+Retardo de avanço no tip-in, somado em `engine_calc.cpp` à correção de driveline (vale o maior dos dois). Dispara quando `tpsdot` passa de `antijerk_tpsdot_threshold_x10` (%/s ×10; padrão 3 %/s) e usa magnitude proporcional a `tpsdot` até `antijerk_retard_deg` (retardo cheio a 100 %/s). O pico do tip-in é mantido durante a janela e o retardo cai em rampa linear até 0.
+
+- **Janela:** byte 70 da página 0 (`antijerk_decay_x10ms`) em unidades de 10 ms (0 a 500 ms; padrão 20 = 200 ms). Antes do 2026-11-19 o byte era "ciclos" de passo de 2 ms, o que dava ~8 ms. A janela tem piso de 2 voltas do virabrequim, porque o avanço só chega ao scheduler uma vez por volta (tabela angular refeita na fronteira da volta). Páginas gravadas com o valor antigo (4) passam a valer 40 ms.
+- **Rearme:** só depois que `tpsdot` cai abaixo do limiar (sem re-disparo contínuo com o pedal ainda subindo).
+- **Reset:** em partida e pós-partida o estado é zerado.
+- Sem efeito na bancada atual (sem combustão); limiar, retardo e janela pedem carro e datalog.

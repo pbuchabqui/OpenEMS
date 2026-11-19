@@ -69,30 +69,64 @@ void test_ign_clt_correction(void) {
 }
 
 void test_ign_antijerk(void) {
-    section("ign_calc: calc_antijerk_retard_x10");
+    section("ign_calc: calc_antijerk_retard_x10 (janela em ms, pico mantido, rampa, histerese)");
     antijerk_reset();
     const uint16_t saved_thr = antijerk_tpsdot_threshold_x10;
     const int16_t saved_ret = antijerk_retard_deg;
-    const uint8_t saved_dec = antijerk_decay_cycles;
+    const uint8_t saved_dec = antijerk_decay_x10ms;
     antijerk_tpsdot_threshold_x10 = 30u;
     antijerk_retard_deg = 5;
-    antijerk_decay_cycles = 4u;
+    antijerk_decay_x10ms = 20u;   // 200 ms
 
-    CHECK_EQ(calc_antijerk_retard_x10(static_cast<int16_t>(0)), 0, "tpsdot=0 → 0");
-    CHECK_EQ(calc_antijerk_retard_x10(static_cast<int16_t>(20)), 0, "below threshold → 0");
-    CHECK_EQ(calc_antijerk_retard_x10(static_cast<int16_t>(1000)), 50, "full tip-in → max 5.0°");
+    uint32_t t = 1000u;
+    const uint32_t kRpm = 30000u;  // 3000 rpm: 2 voltas = 40 ms < 200 ms
+    CHECK_EQ(calc_antijerk_retard_x10(0, t, kRpm), 0, "tpsdot=0 → 0");
+    t += 2u;
+    CHECK_EQ(calc_antijerk_retard_x10(20, t, kRpm), 0, "abaixo do limiar → 0");
+    t += 2u;
+    CHECK_EQ(calc_antijerk_retard_x10(1000, t, kRpm), 50, "tip-in pleno: pico 5,0° no 1º passo");
+
+    // Rampa linear: a meio da janela (100 ms) metade do pico.
+    int16_t mid = 0;
+    for (int i = 0; i < 50; ++i) { t += 2u; mid = calc_antijerk_retard_x10(1000, t, kRpm); }
+    CHECK_NEAR(static_cast<float>(mid), 25.0f, 3.0f, "100 ms depois: ~metade do pico (rampa)");
+    // Termina em 0 depois de 200 ms.
+    int16_t endv = 99;
+    for (int i = 0; i < 60; ++i) { t += 2u; endv = calc_antijerk_retard_x10(1000, t, kRpm); }
+    CHECK_EQ(endv, 0, "janela vencida → 0");
+    // Pedal ainda acima do limiar: sem re-disparo (histerese).
+    t += 2u;
+    CHECK_EQ(calc_antijerk_retard_x10(1000, t, kRpm), 0, "sem re-disparo enquanto tpsdot > limiar");
+    t += 2u;
+    CHECK_EQ(calc_antijerk_retard_x10(0, t, kRpm), 0, "tpsdot cai: rearma");
+    t += 2u;
+    CHECK_TRUE(calc_antijerk_retard_x10(1000, t, kRpm) > 0, "novo tip-in dispara de novo");
+
+    // Pico mantido: tip-in fraco primeiro, forte depois, dentro da mesma janela.
     antijerk_reset();
-    // 300 %/s×10 of 1000 → 30 % of 5° = 1.5° (whole degrees gave 1°)
-    CHECK_EQ(calc_antijerk_retard_x10(static_cast<int16_t>(300)), 15, "mild tip-in → 1.5°");
-    // Decay: armed for 4 cycles (including arm tick), then zeros
-    calc_antijerk_retard_x10(static_cast<int16_t>(0));
-    calc_antijerk_retard_x10(static_cast<int16_t>(0));
-    calc_antijerk_retard_x10(static_cast<int16_t>(0));
-    CHECK_EQ(calc_antijerk_retard_x10(static_cast<int16_t>(0)), 0, "decays to 0 after decay_cycles");
+    t = 5000u;
+    const int16_t weak = calc_antijerk_retard_x10(300, t, kRpm);  // 30 % de 5° = 1,5°
+    CHECK_EQ(weak, 15, "tip-in fraco: 1,5°");
+    t += 2u;
+    const int16_t strong = calc_antijerk_retard_x10(1000, t, kRpm);
+    CHECK_TRUE(strong > weak, "pico do tip-in sobe durante a janela");
+
+    // Duração mínima de 2 voltas: 300 rpm de marcha lenta lenta, decay curto.
+    antijerk_reset();
+    antijerk_decay_x10ms = 1u;     // 10 ms
+    t = 9000u;
+    calc_antijerk_retard_x10(1000, t, 8000u);   // 800 rpm → 2 voltas = 150 ms
+    t += 100u;
+    CHECK_TRUE(calc_antijerk_retard_x10(1000, t, 8000u) > 0, "decay curto: piso de 2 voltas mantém 100 ms");
+
+    // Reset zera o estado.
+    antijerk_reset();
+    t += 2u;
+    CHECK_EQ(calc_antijerk_retard_x10(0, t, kRpm), 0, "após reset → 0");
 
     antijerk_tpsdot_threshold_x10 = saved_thr;
     antijerk_retard_deg = saved_ret;
-    antijerk_decay_cycles = saved_dec;
+    antijerk_decay_x10ms = saved_dec;
     antijerk_reset();
 }
 

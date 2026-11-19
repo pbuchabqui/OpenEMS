@@ -969,6 +969,40 @@ void test_ecu_sched_dwell_watchdog_fires(void) {
     CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u, "watchdog fires only once per arm");
 }
 
+void test_ecu_sched_watchdog_poll_independent_of_main_loop(void) {
+    section("ecu_sched: watchdog_poll (hook do SysTick) solta bobina e injetor sem o laço principal");
+
+    const uint32_t kNow = 1000u;
+    const uint32_t kDwellUs = 3000u;
+    const uint32_t kDwellTicks = (kDwellUs * 125u) / 2u;
+    const uint32_t kWdogTicks = (kDwellTicks * 7u) / 5u;
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(kNow);
+    ecu_sched_test_pulse_ign(0u, kDwellUs);   // bobina 0 em HIGH, SPARK só enfileirado
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 1u, "pré-cond: bobina 0 HIGH");
+
+    ecu_sched_test_set_tim5_cnt(kNow + kWdogTicks - 1u);
+    ecu_sched_watchdog_poll();
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 0u, "poll silencioso dentro de 1,4x dwell");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 1u, "bobina ainda HIGH dentro da janela");
+
+    // Sem nenhuma chamada a ecu_sched_dwell_watchdog()/inj_watchdog() do laço principal.
+    ecu_sched_test_set_tim5_cnt(kNow + kWdogTicks + 1u);
+    ecu_sched_watchdog_poll();
+    CHECK_EQ(ecu_sched_dwell_watchdog_count(), 1u, "poll dispara o watchdog de dwell");
+    CHECK_EQ(ecu_sched_test_ign_pin_level(0u), 0u, "bobina 0 forçada a LOW pelo poll");
+
+    // Injetor aberto sem INJ_OFF: backstop de 36 ms (pulso forçado).
+    ecu_sched_test_reset();
+    ecu_sched_test_set_tim5_cnt(kNow);
+    ecu_sched_test_pulse_inj(0u, 30000u);
+    ecu_sched_test_drop_queued_events();     // perde o INJ_OFF enfileirado
+    const uint32_t inj0 = ecu_sched_inj_watchdog_count();
+    ecu_sched_test_set_tim5_cnt(kNow + (40000u * 125u) / 2u);
+    ecu_sched_watchdog_poll();
+    CHECK_EQ(ecu_sched_inj_watchdog_count(), inj0 + 1u, "poll dispara o watchdog do injetor");
+}
+
 void test_ecu_sched_inj_watchdog_fires(void) {
     section("ecu_sched: injector open watchdog fires after timeout (lost INJ_OFF)");
 

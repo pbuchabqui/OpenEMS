@@ -242,7 +242,7 @@ int16_t clt_spark_corr_deg[kCorrectionTableSize]  = {0, -4, -8, -4, 0, 0, 0, 0};
 // Anti-jerk: limiar alinhado ao AE (3 %/s); retardo escala com tpsdot até max.
 uint16_t antijerk_tpsdot_threshold_x10 = 30u;
 int16_t  antijerk_retard_deg           = 5;   // máximo ° a 100 %/s tip-in
-uint8_t  antijerk_decay_cycles         = 4u;
+uint8_t  antijerk_decay_x10ms         = 20u;  // unidades de 10 ms (200 ms)
 
 // Rev limiter: limite duro 7000 RPM
 uint8_t  launch_enable           = 0u;
@@ -706,12 +706,12 @@ void apply_page0_trims_driveability(const uint8_t* page0, uint16_t len) noexcept
     // 66-70 anti-jerk
     std::memcpy(&antijerk_tpsdot_threshold_x10, page0 + 66, 2u);
     std::memcpy(&antijerk_retard_deg,          page0 + 68, 2u);
-    antijerk_decay_cycles = page0[70];
+    antijerk_decay_x10ms = page0[70];
     // Sem esses limites um blob corrompido dava retardo negativo (avanço) ou gigante no tip-in.
     if (antijerk_tpsdot_threshold_x10 > 1000u) { antijerk_tpsdot_threshold_x10 = 1000u; }
     if (antijerk_retard_deg < 0) { antijerk_retard_deg = 0; }
     if (antijerk_retard_deg > 20) { antijerk_retard_deg = 20; }
-    if (antijerk_decay_cycles > 50u) { antijerk_decay_cycles = 50u; }
+    if (antijerk_decay_x10ms > 50u) { antijerk_decay_x10ms = 50u; }
 
     // 71 CKP skip pós-silêncio
     ckp_skip_pulses_after_gap = (page0[71] > 57u) ? 57u : page0[71];

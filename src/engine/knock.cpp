@@ -32,6 +32,7 @@ using ems::engine::clamp_u16;
 constexpr uint8_t  kDefaultEventThreshold  = 3u;    // amostras acima do threshold por janela
 constexpr uint16_t kRetardStepX10          = 20u;   // +2.0 deg por knock detectado
 constexpr uint16_t kRetardMaxX10           = 100u;  // 10.0 deg máximo
+constexpr uint16_t kDeadSensorRetardX10    = 30u;   // 3.0 deg fixos com o sensor morto (piso)
 constexpr uint16_t kRecoveryStepX10        = 1u;    // -0.1 deg por ciclo limpo
 constexpr uint16_t kAdcThresholdStepDown   = 64u;   // counts: afina o limiar após detectar knock
 constexpr uint16_t kAdcThresholdStepUp     = 32u;   // counts: volta ao limiar calibrado após ciclos limpos
@@ -228,7 +229,10 @@ bool knock_sensor_dead() noexcept {
 }
 
 uint16_t knock_get_retard_x10(uint8_t cyl) noexcept {
-    return knock_retard_x10[static_cast<uint8_t>(cyl & 0x3u)];
+    const uint16_t learned = knock_retard_x10[static_cast<uint8_t>(cyl & 0x3u)];
+    // Sensor morto: sem detecção real, o retardo aprendido decairia a 0. Piso fixo de 3,0°.
+    if (knock_sensor_dead() && learned < kDeadSensorRetardX10) { return kDeadSensorRetardX10; }
+    return learned;
 }
 
 #if defined(EMS_HOST_TEST)

@@ -105,6 +105,11 @@ uint32_t ecu_sched_dwell_watchdog_count(void);
 void ecu_sched_inj_watchdog(void);
 uint32_t ecu_sched_inj_watchdog_count(void);
 
+// Retaguarda independente do laço principal: dwell + injetor numa chamada. No firmware é
+// chamada a cada 1 ms pelo SysTick (ecu_sched_systick_hook), então uma bobina/injetor preso
+// é solto mesmo com o laço travado ou sem bordas de CKP (estol no meio do dwell).
+void ecu_sched_watchdog_poll(void);
+
 // Multi-spark (MS42 §2.2.3): sparks adicionais por ciclo a baixo RPM.
 // count: número de sparks adicionais (0=desabilitado, máx 3).
 // inter_dwell_ticks: tempo de dwell entre sparks consecutivos (ticks TIM5).

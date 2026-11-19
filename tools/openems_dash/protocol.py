@@ -623,7 +623,7 @@ PAGE0_FIELDS = [
     # bytes 66-99: dirigibilidade
     ("antijerk_tpsdot_threshold_x10", 66, 1, "H", 0.1),  # %/s
     ("antijerk_retard_deg",           68, 1, "h", 1.0),  # °
-    ("antijerk_decay_cycles",         70, 1, "B", 1.0),
+    ("antijerk_decay_x10ms",         70, 1, "B", 10.0),  # ms
     ("rev_limit_rpm_x10",             72, 1, "L", 0.1),  # RPM
     ("rev_limit_soft_window_x10",     76, 1, "L", 0.1),  # RPM
     ("closed_loop_enable",            80, 1, "B", 1.0),  # 0=open-loop freeze 1=on
