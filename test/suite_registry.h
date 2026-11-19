@@ -86,6 +86,7 @@ void test_fuel_eoi_2d(void);
 void test_fuel_interp_3x3_characterization(void);
 void test_fuel_stft(void);
 void test_fuel_stft_delayed(void);
+void test_fuel_trim_holdoff(void);
 void test_fuel_stft_gain_schedule(void);
 void test_fuel_stft_ltft_cascade(void);
 void test_fuel_cascade_plants(void);

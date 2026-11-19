@@ -69,6 +69,10 @@ int16_t fuel_update_stft(uint32_t rpm_x10,
                          uint16_t tps_x10,
                          uint32_t now_ms = 0u) noexcept;
 
+// Avisa que há transiente de MAP neste ciclo de 100 ms (o laço principal chama antes de fuel_update_stft_delayed).
+// Junto com AE e corte de combustível, dispara o hold-off do STFT/LTFT: atraso(rpm, carga) + margem sem integrar.
+void fuel_trim_note_transient() noexcept;
+
 int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                  uint32_t rpm_x10,
                                  uint16_t map_bar_x100,

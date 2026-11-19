@@ -21,7 +21,12 @@ namespace {
 using ems::engine::clamp_i16;
 using ems::engine::clamp_u16;
 
-constexpr uint8_t kLambdaHistorySize = 16u;
+// Uma amostra por chamada do STFT (~100 ms). 24 amostras = 2,4 s: cobre o teto de 2000 ms da tabela de atraso
+// do lambda (lambda_delay_ms_from_rpm_load limita a 2000). Com 16 (1,6 s) um atraso calibrado acima de ~1,5 s
+// não achava amostra e congelava o STFT.
+constexpr uint8_t kLambdaHistorySize = 24u;
+static_assert(static_cast<uint32_t>(kLambdaHistorySize) * 100u >= 2000u + 100u,
+              "o histórico tem de cobrir o atraso máximo da tabela (2000 ms) mais uma amostra");
 
 struct LambdaHistorySample {
     uint32_t time_ms;
@@ -46,6 +51,16 @@ static_assert(ems::hal::kNvmLtftAddDim == ems::engine::kLtftAddAxisSize,
 LambdaHistorySample g_lambda_history[kLambdaHistorySize] = {};
 uint8_t g_lambda_history_pos = 0u;
 
+// Hold-off pós-transiente. O λ que o sensor lê agora vem do combustível injetado `delay_ms` atrás (transporte +
+// resposta do sensor), mas os gates de AE/corte olham o estado de AGORA: um tip-in ou o fim do DFCO em t0 chega
+// ao sensor em t0+atraso, quando os gates já liberaram, e o erro entraria no integrador (e, via LTFT, na
+// calibração persistente). Depois de qualquer tick com AE, corte ou transiente de MAP, o STFT e o LTFT ficam
+// congelados por atraso(rpm, carga) + margem. A margem cobre a resposta do sensor, que o doc de malha fechada
+// modela em ~300 ms (simulação, NÃO medido em motor): é calibração a validar com WBO2 real.
+constexpr uint16_t kTrimHoldoffMarginMs = 300u;
+bool     g_trim_transient_note = false;   // transiente de MAP avisado pelo laço principal (fuel_trim_note_transient)
+bool     g_trim_holdoff_set = false;
+uint32_t g_trim_holdoff_until_ms = 0u;
 int16_t fuel_ltft_load_cell(uint8_t map_idx, uint8_t rpm_idx) noexcept {
     const int8_t stored_pct = ems::hal::nvm_read_ltft(rpm_idx, map_idx);
     return static_cast<int16_t>(stored_pct) * 10;
@@ -454,6 +469,13 @@ void fuel_lambda_delay_reset() noexcept {
         g_lambda_history[i] = {};
     }
     g_lambda_history_pos = 0u;
+    g_trim_transient_note = false;
+    g_trim_holdoff_set = false;
+    g_trim_holdoff_until_ms = 0u;
+}
+
+void fuel_trim_note_transient() noexcept {
+    g_trim_transient_note = true;
 }
 
 uint16_t lambda_delay_ms_from_rpm_load(uint32_t rpm_x10,
@@ -975,6 +997,20 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
     lambda_history_push(now_ms, rpm_x10, map_bar_x100, lambda_target_x1000);
 
     const uint16_t delay_ms = lambda_delay_ms_from_rpm_load(rpm_x10, map_bar_x100);
+
+    // Hold-off: este tick tem AE, corte de combustível ou transiente de MAP → o λ medido só volta a ser confiável
+    // depois de atraso + margem. Reaproveita o bloqueio que já existe (o mesmo de `ae_active`: congela STFT e LTFT,
+    // com anti-windup), em vez de criar um segundo caminho.
+    const bool transient_now = ae_active || rev_cut || g_trim_transient_note;
+    g_trim_transient_note = false;
+    if (transient_now) {
+        g_trim_holdoff_until_ms = now_ms + delay_ms + kTrimHoldoffMarginMs;
+        g_trim_holdoff_set = true;
+    }
+    const bool holding = g_trim_holdoff_set &&
+                         static_cast<int32_t>(now_ms - g_trim_holdoff_until_ms) < 0;
+    const bool blocked_ae = ae_active || holding;
+
     LambdaHistorySample delayed{};
     if (!lambda_history_get_delayed(now_ms, delay_ms, delayed)) {
         return fuel_update_stft(rpm_x10,
@@ -983,7 +1019,7 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                                 lambda_measured_x1000,
                                 clt_x10,
                                 false,
-                                ae_active,
+                                blocked_ae,
                                 rev_cut,
                                 net_pw_us,
                                 tps_x10,
@@ -996,7 +1032,7 @@ int16_t fuel_update_stft_delayed(uint32_t now_ms,
                             lambda_measured_x1000,
                             clt_x10,
                             o2_valid,
-                            ae_active,
+                            blocked_ae,
                             rev_cut,
                             net_pw_us,
                             tps_x10,

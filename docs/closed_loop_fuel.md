@@ -1,6 +1,6 @@
 # Closed-loop fuel — OpenEMS (STFT / LTFT / LEARN)
 
-> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-19 (doc-check + conferência pontual contra o código)
 
 Documento do firmware OpenEMS (não o modelo genérico rusEFI de `fueling_system.md`).
 
@@ -12,7 +12,7 @@ WBO2 CAN (fresh)
     ▼ 100 ms  (FULL_SYNC)
 fuel_update_stft_delayed
     ├─ history + delay 3×3 (rpm/MAP/λtgt atrasados)
-    ├─ gates: CL enable, CLT>70°C, O2, !AE, !cut, post-start
+    ├─ gates: CL enable, CLT>70°C, O2, !AE, !cut, post-start, !hold-off (atraso + 300 ms depois de AE/corte/MAP)
     ├─ PI → STFT global (freeze anti-windup se bloqueado)
     ├─ LTFT IIR (mult ou add por PW) se adapt_enable + RPM + MAP estável
     │     (mult: o que a célula absorve sai do integrador do STFT)
@@ -77,6 +77,10 @@ Não usar floor da bilineal para trims — mid-bin errava a autoridade (WP0).
 - Exigir ponto centrado na célula também no IIR do LTFT (como no LEARN) piorou: o STFT guarda a correção da célula anterior e a leva para a próxima. Não adotado.
 - Limite: o campo e o sensor são ideais. Com WBO2 real o ruído soma. Aceitável para o uso previsto (rodar em regime e aprender); em transiente forte (> 1 célula/s) o LTFT aprendido é indicativo, não confiável, e o bake `'Y'` deve ser feito depois de regime.
 
+## Histórico do atraso
+
+O STFT guarda 24 amostras (uma por chamada, ~100 ms = 2,4 s), o bastante para o teto de 2000 ms da tabela de atraso. Com 16 amostras (1,6 s) um atraso calibrado acima de ~1,5 s não achava a amostra e a malha ficava parada.
+
 ## Gates (OEM-lite)
 
 | Gate | Efeito | page0 / default |
@@ -84,6 +88,8 @@ Não usar floor da bilineal para trims — mid-bin errava a autoridade (WP0).
 | `closed_loop_enable` | off → freeze STFT+LTFT+LEARN | [80] = 1 |
 | Post-start `closed_loop_post_start_s` | atrasa CL após CLT+O2 | [82] = 15 s |
 | AE / cut / O2 stale / cold | freeze STFT (+ LTFT) | — |
+| Latch do AE | o AE roda a cada 2 ms e o STFT a cada 100 ms: qualquer pulso positivo trava a flag até o STFT consumi-la (`fuel_ae_stft_freeze_clear`); `pulse <= 0` não limpa. Antes valia só o último tick e um AE no início da janela se perdia. Tip-out sozinho não congela | constexpr |
+| Hold-off pós-transiente | depois de um tick com AE, corte de combustível (DFCO, limitador, inibição) ou transiente de MAP (`fuel_trim_note_transient`), STFT e LTFT ficam congelados por `atraso(rpm, carga) + 300 ms`. O λ do sensor reflete o combustível de `atraso` ms atrás, mas os gates olham o estado de agora: sem o hold-off o erro do transiente entrava no integrador (e, via LTFT, na calibração persistente). **A margem de 300 ms vem da simulação do sensor deste doc, não de medição em motor: validar com WBO2 real** | constexpr `kTrimHoldoffMarginMs` |
 | `ltft_adapt_enable` | off → só STFT | [184] = 1 |
 | `ltft_adapt_min_rpm_x10` | abaixo: STFT ok, LTFT/LEARN freeze | [84] = 1200 RPM |
 | MAP-dot > 8 kPa/tick | freeze LTFT/LEARN | constexpr |

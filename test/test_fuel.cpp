@@ -319,15 +319,25 @@ void test_fuel_ae(void) {
     CHECK_EQ(ems::engine::ae_taper_ms, 100u, "taper raw=100 → 100 ms");
     fuel_ae_apply_taper_raw(4u);
 
-    // STFT freeze flag: tip-in sets, pulse==0 clears immediately (not sticky).
+    // STFT freeze flag: LATCH. O AE roda a cada 2 ms e o STFT a cada 100 ms: um pulso nos primeiros ms da
+    // janela não pode se perder só porque o último tick antes do STFT já está em 0. Só o STFT (clear) ou o
+    // reset limpam a flag. (Antes, pulse==0 limpava no mesmo tick de 2 ms: o enriquecimento se perdia.)
     fuel_ae_reset();
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(), "sem AE: freeze desligado");
     fuel_ae_notify_pulse(2000);
     CHECK_TRUE(fuel_ae_stft_freeze_active(), "tip-in pulse → STFT freeze on");
     fuel_ae_notify_pulse(0);
-    CHECK_TRUE(!fuel_ae_stft_freeze_active(),
-               "pulse=0 clears freeze on same 2 ms tick (not sticky to 100 ms)");
-    fuel_ae_notify_pulse(-500);  // tip-out
-    CHECK_TRUE(!fuel_ae_stft_freeze_active(), "tip-out does not freeze STFT");
+    CHECK_TRUE(fuel_ae_stft_freeze_active(),
+               "pulse=0 NÃO limpa: o AE da janela ainda vale para o STFT (latch até 100 ms)");
+    fuel_ae_notify_pulse(-500);
+    CHECK_TRUE(fuel_ae_stft_freeze_active(), "tip-out também não limpa o latch");
+    fuel_ae_stft_freeze_clear();
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(), "clear (depois de o STFT consumir) limpa o latch");
+    fuel_ae_notify_pulse(-500);  // tip-out sozinho
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(), "tip-out sozinho não congela o STFT");
+    fuel_ae_notify_pulse(2000);
+    fuel_ae_reset();
+    CHECK_TRUE(!fuel_ae_stft_freeze_active(), "fuel_ae_reset limpa o latch");
 }
 
 void test_fuel_adaptives_reset(void) {
@@ -1638,4 +1648,76 @@ void test_fuel_ltft_cell_crossing(void) {
     ltft_adapt_enable = s_adapt;
     ltft_learn_div = s_div;
     fuel_reset_adaptives(); fuel_reset_ltft(); fuel_ltft_accum_reset();
+}
+
+// ── Hold-off pós-transiente do STFT/LTFT (fuel_update_stft_delayed) ──────────────────────────────────────────
+// O λ que o sensor lê agora vem do combustível de `atraso` ms atrás; depois de um tick com AE, corte ou transiente
+// de MAP, o STFT não pode voltar a integrar antes de atraso + margem (300 ms), ou o erro do transiente entra no
+// integrador (e, via LTFT, na calibração persistente). Todas as etapas usam as MESMAS entradas válidas (λ pobre,
+// O2 ok, motor em regime) e só variam AE/corte/nota de transiente: o que congela é o hold-off.
+namespace {
+
+// Roda o cenário a partir de `t0`: aquece (STFT sobe), um tick de transiente em T, e confere que os ticks
+// seguintes ficam congelados até T + atraso + 300 ms e voltam a integrar depois.
+void holdoff_scenario(uint32_t t0, uint32_t delay_ms, bool ae, bool cut, bool map_note, const char* what) {
+    using namespace ems::engine;
+    for (uint8_t i = 0; i < 3; ++i) for (uint8_t j = 0; j < 3; ++j) lambda_delay_ms_table[i][j] = static_cast<uint16_t>(delay_ms);
+    fuel_reset_adaptives(); fuel_reset_ltft(); fuel_ltft_accum_reset(); fuel_lambda_delay_reset();
+    auto tick = [&](uint32_t now, bool a, bool c) {
+        return fuel_update_stft_delayed(now, 30000u, 100u, 1000, 1050, 900, true, a, c, 5000u, 500u);
+    };
+    uint32_t now = t0;
+    for (int i = 0; i < 40; ++i) { now += 100u; (void)tick(now, false, false); }   // aquece além do atraso
+    const int16_t pre = fuel_get_stft_pct_x10();
+    CHECK_TRUE(pre > 0, what);                                      // controle: com estas entradas o STFT integra
+
+    now += 100u;
+    const uint32_t T = now;
+    if (map_note) { fuel_trim_note_transient(); }
+    const int16_t at_T = tick(T, ae, cut);
+    CHECK_EQ(at_T, pre, what);                                      // o próprio tick de transiente congela
+
+    const uint32_t hold = delay_ms + 300u;
+    bool frozen_all = true;
+    for (uint32_t dt = 100u; dt < hold; dt += 100u) {               // sem AE/corte/nota: só o hold-off segura
+        if (tick(T + dt, false, false) != pre) { frozen_all = false; }
+    }
+    CHECK_TRUE(frozen_all, what);                                   // congelado durante atraso + margem
+
+    int16_t after = pre;
+    for (uint32_t dt = hold; dt <= hold + 300u; dt += 100u) { after = tick(T + dt, false, false); }
+    CHECK_TRUE(after > pre, what);                                  // depois do hold-off volta a integrar
+}
+
+}  // namespace
+
+void test_fuel_trim_holdoff(void) {
+    section("fuel_trim: hold-off do STFT/LTFT depois de AE, corte e transiente de MAP");
+    using namespace ems::engine;
+    const uint8_t s_cl = closed_loop_enable, s_ps = closed_loop_post_start_s, s_ad = ltft_adapt_enable;
+    uint16_t s_delay[3][3];
+    for (uint8_t i = 0; i < 3; ++i) for (uint8_t j = 0; j < 3; ++j) s_delay[i][j] = lambda_delay_ms_table[i][j];
+    closed_loop_enable = 1u; closed_loop_post_start_s = 0u; ltft_adapt_enable = 0u;
+
+    holdoff_scenario(100000u, 200u, true, false, false, "AE: congela por atraso 200 ms + 300 ms de margem");
+    holdoff_scenario(100000u, 200u, false, true, false, "corte (DFCO/rev/inibição): mesmo hold-off");
+    holdoff_scenario(100000u, 200u, false, false, true, "transiente de MAP avisado pelo laço principal: mesmo hold-off");
+    holdoff_scenario(100000u, 1000u, true, false, false, "atraso 1000 ms: hold-off de 1300 ms (proporcional ao atraso)");
+    // Perto da volta do relógio de 32 bits (ms): a comparação com sinal não pode liberar nem prender antes da hora.
+    holdoff_scenario(0xFFFFF000u, 200u, true, false, false, "hold-off atravessando a volta do relógio de 32 bits");
+
+    // Histórico de 24 amostras: com atraso de 2000 ms (teto da tabela) o STFT precisa achar a amostra atrasada.
+    // Com 16 amostras (1,6 s) o histórico não alcançava e a malha ficava parada em 0.
+    for (uint8_t i = 0; i < 3; ++i) for (uint8_t j = 0; j < 3; ++j) lambda_delay_ms_table[i][j] = 2000u;
+    fuel_reset_adaptives(); fuel_reset_ltft(); fuel_ltft_accum_reset(); fuel_lambda_delay_reset();
+    uint32_t now = 100000u;
+    for (int i = 0; i < 40; ++i) {
+        now += 100u;
+        (void)fuel_update_stft_delayed(now, 30000u, 100u, 1000, 1050, 900, true, false, false, 5000u, 500u);
+    }
+    CHECK_TRUE(fuel_get_stft_pct_x10() > 0, "atraso de 2000 ms (teto da tabela): o histórico alcança e o STFT integra");
+
+    closed_loop_enable = s_cl; closed_loop_post_start_s = s_ps; ltft_adapt_enable = s_ad;
+    for (uint8_t i = 0; i < 3; ++i) for (uint8_t j = 0; j < 3; ++j) lambda_delay_ms_table[i][j] = s_delay[i][j];
+    fuel_reset_adaptives(); fuel_reset_ltft(); fuel_ltft_accum_reset(); fuel_lambda_delay_reset();
 }

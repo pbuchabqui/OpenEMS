@@ -100,8 +100,12 @@ void fuel_ae_apply_taper_raw(uint16_t raw) noexcept {
     }
 }
 
+// Latch: o AE roda a cada 2 ms e o STFT a cada 100 ms. Antes a flag era `ae_pw_us > 0` do ÚLTIMO tick, então
+// um enriquecimento nos primeiros ~98 ms da janela se perdia (o pico rico entrava no integrador como erro de
+// mistura). Agora qualquer pulso positivo trava a flag até o STFT consumi-la (fuel_ae_stft_freeze_clear, chamado
+// logo depois de cada atualização do STFT) ou até fuel_ae_reset. `ae_pw_us <= 0` não limpa.
 void fuel_ae_notify_pulse(int32_t ae_pw_us) noexcept {
-    g_ae_stft_freeze = (ae_pw_us > 0);
+    if (ae_pw_us > 0) { g_ae_stft_freeze = true; }
 }
 
 bool fuel_ae_stft_freeze_active() noexcept {

@@ -699,6 +699,9 @@ uint32_t g_t_log_ms = g_t2ms_;
                 // APP (pedido do condutor) para estabilidade do acumulador LTFT:
                 // ETB mexe sozinho em idle e rejeitaria hits sem o condutor mexer.
                 // Célula continua a ser (MAP, RPM); APP só filtra regime.
+                // Transiente de MAP também abre o hold-off do STFT/LTFT (o λ do sensor reflete o combustível de
+                // `atraso` ms atrás; ver fuel_trim.cpp).
+                if (ems::engine::map_is_transient()) { ems::engine::fuel_trim_note_transient(); }
                 const int16_t stft = ems::engine::fuel_update_stft_delayed(
                     now, snap.rpm_x10, map_bar_x100,
                     static_cast<int16_t>(lambda_target_x1000),

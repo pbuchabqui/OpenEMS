@@ -127,6 +127,7 @@ test_sensors_bench_app_fixed();
     test_fuel_interp_3x3_characterization();
     test_fuel_stft();
     test_fuel_stft_delayed();
+    test_fuel_trim_holdoff();
     test_fuel_stft_gain_schedule();
     test_fuel_stft_ltft_cascade();
     test_fuel_cascade_plants();
