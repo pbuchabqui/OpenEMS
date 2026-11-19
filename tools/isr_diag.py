@@ -60,17 +60,26 @@ def fmt_ticks(t):
 
 
 def read_k(fd):
-    b = command(fd, b"k", 25)
+    b = command(fd, b"k", 41)
     if len(b) < 25:
         raise SystemExit("resposta curta do 'k': %d bytes (firmware sem o comando?)" % len(b))
     tooth_max, tooth_last, gap_max, gap_last, hits, misses = struct.unpack("<6I", b[:24])
-    return tooth_max, tooth_last, gap_max, gap_last, hits, misses, b[24]
+    # Firmware com 41 bytes traz o custo das partes do gap; o de 25 bytes não (None).
+    parts = struct.unpack("<4I", b[25:41]) if len(b) >= 41 else None
+    return tooth_max, tooth_last, gap_max, gap_last, hits, misses, b[24], parts
 
 
 def show(vals):
-    tooth_max, tooth_last, gap_max, gap_last, hits, misses, on = vals
+    tooth_max, tooth_last, gap_max, gap_last, hits, misses, on, parts = vals
     print("dente normal  max %s   ultimo %s" % (fmt_ticks(tooth_max), fmt_ticks(tooth_last)))
     print("dente do gap  max %s   ultimo %s" % (fmt_ticks(gap_max), fmt_ticks(gap_last)))
+    if parts is not None:
+        reb_max, reb_last, arm_max, arm_last = parts
+        print("  gap: rebuild  max %s   ultimo %s" % (fmt_ticks(reb_max), fmt_ticks(reb_last)))
+        print("  gap: arma d0  max %s   ultimo %s" % (fmt_ticks(arm_max), fmt_ticks(arm_last)))
+        # "ultimo" é do mesmo gap nas três linhas: o que sobra é o restante do tratamento (process_gap,
+        # sensores, ...) mais o fetch frio e a latência de entrada, que o rebuild/arm0 não incluem.
+        print("  gap: resto    ultimo %s   (gap - rebuild - arma d0)" % fmt_ticks(gap_last - reb_last - arm_last))
     # Os monitores SATURAM (hit em 2^32-1, miss em 65535) e não dão a volta (RM0481 §8.4.12): a 250 MHz o de
     # hit enche em ~17 s. Depois de saturar, a taxa de acerto não vale; use --reset e leia logo em seguida.
     saturated = hits == 0xFFFFFFFF or misses == 0xFFFF

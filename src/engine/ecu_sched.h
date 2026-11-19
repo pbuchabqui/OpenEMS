@@ -90,6 +90,11 @@ void ecu_sched_set_inj_pw_pair(uint32_t alt_pw_ticks, uint8_t main_is_sequential
 // o modo novo com o pulso velho entre as duas chamadas separadas.
 void ecu_sched_commit_calibration_pair_x10(int32_t advance_x10, uint32_t dwell_ticks, uint32_t inj_pw_ticks,
                                            uint32_t eoi_lead_deg, uint32_t alt_pw_ticks, uint8_t main_is_sequential);
+// Diagnóstico de bancada (comando serial 'k'): custo, em ticks do TIM5 (16 ns), das duas partes do dente do gap
+// que rodam dentro da ISR. out = {rebuild_max, rebuild_last, arm0_max, arm0_last}; arm0 = laço que arma os
+// eventos do dente 0. O reset zera só os máximos.
+void ecu_sched_gap_diag(uint32_t out[4]);
+void ecu_sched_gap_diag_reset(void);
 void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg);
 void ecu_sched_set_presync_enable(uint8_t enable);
 void ecu_sched_set_presync_inj_mode(uint8_t mode);

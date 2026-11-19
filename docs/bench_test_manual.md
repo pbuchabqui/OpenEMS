@@ -317,7 +317,8 @@ Desligue o modo lâmpada ao terminar (ele também cai no reset).
 ### T7b — Latência da ISR do CKP e ICACHE (`tools/isr_diag.py`)
 
 Mede quanto a ISR do TIM5 leva da captura do dente até o fim do tratamento (inclui o despacho de INJ/IGN que
-roda antes dele na mesma IRQ) e se o ICACHE está acertando. Comandos seriais de 1 byte: `'k'` lê (25 bytes),
+roda antes dele na mesma IRQ) e se o ICACHE está acertando. Também separa o custo do gap em rebuild da tabela
+angular, laço que arma os eventos do dente 0 e o resto. Comandos seriais de 1 byte: `'k'` lê (41 bytes),
 `'l'` zera só os máximos; nenhum mexe em saída ou calibração.
 
 1. Gerador no RPM desejado (800, 3000, 6000, 8500), sync cheio (`syncFull`), motor "em regime" há alguns segundos.
@@ -343,6 +344,14 @@ roda antes dele na mesma IRQ) e se o ICACHE está acertando. Comandos seriais de
 
 O ICACHE reduziu o pior caso em ~20 a 41 % nos quatro pontos. Mesmo com ele o gap chega a 18 % do período do dente a 8500 rpm
 (~1,1° de virabrequim), porque o rebuild da tabela angular roda dentro da ISR: é o argumento para tirá-lo de lá.
+**Onde o tempo do gap é gasto** (mesma bancada, ICACHE ligado, `'k'` de 41 bytes): o rebuild da tabela angular custava
+**12,1 µs, constante em todas as rpm** (58 a 66 % do gap; máximo igual ao último valor, ou seja, limitado por código e não por dados);
+o laço que arma os eventos do dente 0 vale 0 µs até 3000 rpm e 1,9 µs a partir de 6000 (entradas "now"); o resto
+(`process_gap_event`, sensores, entrada na ISR) fica em 4,5 a 6,2 µs. Com o `cycle` do builder como parâmetro de template e a
+divisão de `ticks_to_x10` em 32 bits, o rebuild caiu para **9,0 µs** e o gap a 8500 rpm de 20,9 para 17,5 µs (17,8 → 14,9 % do
+dente), com tabelas byte a byte iguais (`test_sched_angle_equivalence`). Adiar o rebuild para fora da ISR foi descartado: as
+entradas "now" do gap se perderiam em aceleração, e o flag de modo (`g_knock_sequential`) se separaria da tabela em uso.
+
 Isto é o tempo da ISR (captura → fim do tratamento); **não** mede o jitter dos pinos INJ/IGN, que exige analisador lógico.
 Os monitores de hit/miss do ICACHE saturam em segundos (miss em 65535), então a taxa de acerto não foi usada; o ganho vem do A/B acima.
 

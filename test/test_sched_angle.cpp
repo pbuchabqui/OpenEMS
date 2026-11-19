@@ -1,6 +1,7 @@
 #include "test/harness.h"
 
 #include <cstdint>
+#include <cstdio>
 
 #include "drv/ckp.h"
 #include "engine/calibration.h"
@@ -298,4 +299,185 @@ void test_sched_inj_pw_pair(void) {
 
     g_inj_pw_ticks = pw0; g_inj_pw_alt_ticks = alt0;
     g_inj_pw_main_seq = ms0; g_knock_sequential = ks0;
+}
+
+// ── Caracterização do builder da tabela angular ──────────────────────────────────────────────────────
+// `ref_angle` é uma CÓPIA CONGELADA do builder de ecu_sched_angle.cpp como estava antes da otimização do
+// custo do rebuild (12 µs dentro da ISR do gap). O builder real tem de gerar tabelas BYTE A BYTE iguais a ela
+// numa grade de calibrações. NÃO "atualize" esta cópia para acompanhar o código: se o builder mudar de
+// comportamento, este teste tem de falhar.
+namespace {
+namespace ref_angle {
+
+constexpr int32_t kToothX10 = 60;
+constexpr int32_t kRevX10 = 3600;
+constexpr int32_t kMaxDwellSpanX10 = 3000;
+constexpr int32_t kArmLeadX10 = 10;
+
+AngleEvent_t table[ECU_ANGLE_TABLE_SIZE];
+uint8_t count = 0U;
+uint32_t mask_lo = 0U, mask_hi = 0U;
+uint32_t drops = 0U;
+
+int32_t wrap(int32_t a, int32_t cycle) { return ((a % cycle) + cycle) % cycle; }
+
+int32_t ticks_to_x10(uint32_t ticks, uint32_t tooth_ticks)
+{
+    if (tooth_ticks == 0U) { return 0; }
+    return static_cast<int32_t>((static_cast<uint64_t>(ticks) * kToothX10) / tooth_ticks);
+}
+
+void add_entry(int32_t arm, int32_t target, int32_t cycle, uint8_t ch, uint8_t action)
+{
+    if (count >= ECU_ANGLE_TABLE_SIZE) { ++drops; return; }
+    arm = wrap(arm, cycle);
+    const int32_t in_rev = arm % kRevX10;
+    int32_t tooth = in_rev / kToothX10;
+    if (tooth > 57) { tooth = 57; }
+    const int32_t tooth_ang = arm - in_rev + tooth * kToothX10;
+    const int32_t delta = wrap(target - tooth_ang, cycle);
+
+    AngleEvent_t* e = &table[count++];
+    e->tooth_index = static_cast<uint8_t>(tooth);
+    e->offset_x256 = static_cast<uint16_t>((delta * 256 + kToothX10 / 2) / kToothX10);
+    e->phase_A = (cycle == static_cast<int32_t>(kCycleDeg * 10U))
+        ? ((arm < kRevX10) ? ECU_PHASE_A : ECU_PHASE_B)
+        : ECU_PHASE_ANY;
+    e->channel = ch;
+    e->action = action;
+    if (tooth < 32) { mask_lo |= (1UL << tooth); } else { mask_hi |= (1UL << (tooth - 32)); }
+}
+
+void table_add(int32_t arm, int32_t target, int32_t cycle, int32_t now, uint8_t ch, uint8_t action)
+{
+    add_entry(arm, target, cycle, ch, action);
+    if (wrap(target - now, cycle) < wrap(target - arm, cycle)) {
+        add_entry(now, target, cycle, ch, action);
+    }
+}
+
+void add_cylinder(uint8_t cyl, int32_t tdc, int32_t cycle, int32_t now, int32_t inj_ref,
+                  int32_t dwell_span, int32_t pw_x10, int32_t trig_off)
+{
+    int32_t adv = g_advance_x10 + static_cast<int32_t>(cyl_ign_trim_deg[cyl]) * 10 - g_cyl_retard_x10[cyl];
+    if (adv > 600) { adv = 600; }
+    if (adv < -200) { adv = -200; }
+    const int32_t spark = wrap(tdc - adv - trig_off, cycle);
+    table_add(spark - dwell_span, spark, cycle, now, kIgnCh[cyl], ECU_ACT_DWELL_START);
+    table_add(spark - kArmLeadX10, spark, cycle, now, kIgnCh[cyl], ECU_ACT_SPARK);
+
+    const int32_t eoi = inj_ref - static_cast<int32_t>(g_eoi_lead_deg) * 10 - trig_off;
+    const int32_t soi = wrap(eoi - pw_x10, cycle);
+    table_add(soi - kArmLeadX10, soi, cycle, now, kInjCh[cyl], ECU_ACT_INJ_ON);
+}
+
+void build(const ems::drv::CkpSnapshot& snap, int32_t cycle, bool presync)
+{
+    const int32_t now = (!presync && !snap.phase_A) ? kRevX10 : 0;
+    count = 0U; mask_lo = 0U; mask_hi = 0U;
+    const uint32_t tooth_ticks = TOOTH_NS_TO_SCHED_INTERNAL(snap.tooth_period_ns);
+    const int32_t dwell_x10 = ticks_to_x10(g_dwell_ticks, tooth_ticks);
+    int32_t dwell_span = dwell_x10 + kToothX10 + dwell_x10 / 4;
+    if (dwell_span > kMaxDwellSpanX10) { dwell_span = kMaxDwellSpanX10; }
+    int32_t pw_x10 = ticks_to_x10(inj_pw_ticks_now(), tooth_ticks);
+    if (pw_x10 > cycle * 9 / 10) { pw_x10 = cycle * 9 / 10; }
+    const int32_t trig_off =
+        static_cast<int32_t>(cfg::g_eng_cfg.trigger_tooth0_engine_deg) * 10 + trigger_fine_x10;
+    const bool simultaneous = (g_presync_inj_mode == ECU_PRESYNC_INJ_SIMULTANEOUS);
+
+    for (uint8_t cyl = 0U; cyl < cfg::kCylinderCount; ++cyl) {
+        int32_t tdc = static_cast<int32_t>(cfg::cyl_tdc_deg(cyl)) * 10;
+        if (presync) { tdc %= kRevX10; }
+        const int32_t inj_ref = (presync && simultaneous) ? 0 : tdc;
+        add_cylinder(cyl, tdc, cycle, now, inj_ref, dwell_span, pw_x10, trig_off);
+    }
+}
+
+}  // namespace ref_angle
+}  // namespace
+
+void test_sched_angle_equivalence(void) {
+    section("ecu_sched_angle: o builder gera tabelas byte a byte iguais à referência congelada");
+
+    // Entradas que o builder lê (salvas e restauradas).
+    const int32_t  adv0 = g_advance_x10;
+    const uint32_t dw0 = g_dwell_ticks, pw0 = g_inj_pw_ticks, alt0 = g_inj_pw_alt_ticks, eoi0 = g_eoi_lead_deg;
+    const uint8_t  pm0 = g_presync_inj_mode, ms0 = g_inj_pw_main_seq, ks0 = g_knock_sequential;
+    const int16_t  fine0 = trigger_fine_x10;
+    const uint16_t trig0 = cfg::g_eng_cfg.trigger_tooth0_engine_deg;
+    int16_t retard0[4]; int8_t trim0[4];
+    for (uint8_t i = 0u; i < 4u; ++i) { retard0[i] = g_cyl_retard_x10[i]; trim0[i] = cyl_ign_trim_deg[i]; }
+    g_inj_pw_main_seq = 0xFFu;   // sem par: vale sempre g_inj_pw_ticks
+
+    const int32_t  advs[]    = {-200, 100, 253, 600};
+    const int16_t  retards[2][4] = {{0, 0, 0, 0}, {0, 50, 100, 300}};
+    const int8_t   trims[2][4]   = {{0, 0, 0, 0}, {-5, 3, 0, 8}};
+    const uint32_t dwells[]  = {25000u, 140625u, 2000000u};
+    const uint32_t pws[]     = {5000u, 140625u, 625000u, 6250000u};
+    const uint32_t eois[]    = {0u, 355u, 719u};
+    const uint16_t trigs[]   = {0u, 636u, 719u};
+    const int16_t  fines[]   = {0, -50};
+    const uint32_t periods_ns[] = {1250000u, 333333u, 20000u, 0u};
+    // 0: sequencial fase A, 1: sequencial fase B, 2: presync simultâneo, 3: presync semi-sequencial
+    // 4 x 4 x 2 x 3 x 4 x 3 x 3 x 2 x 4 = 27 648 combinações.
+    uint32_t cases = 0u, mismatches = 0u;
+    uint8_t max_count = 0u;
+    char first[160] = {};
+
+    for (uint8_t mode = 0u; mode < 4u; ++mode)
+    for (const int32_t adv : advs)
+    for (uint8_t rt = 0u; rt < 2u; ++rt)
+    for (const uint32_t dwell : dwells)
+    for (const uint32_t pw : pws)
+    for (const uint32_t eoi : eois)
+    for (const uint16_t trig : trigs)
+    for (const int16_t fine : fines)
+    for (const uint32_t period : periods_ns) {
+        g_advance_x10 = adv; g_dwell_ticks = dwell; g_inj_pw_ticks = pw; g_eoi_lead_deg = eoi;
+        trigger_fine_x10 = fine; cfg::g_eng_cfg.trigger_tooth0_engine_deg = trig;
+        g_presync_inj_mode = (mode == 2u) ? ECU_PRESYNC_INJ_SIMULTANEOUS : ECU_PRESYNC_INJ_SEMI_SEQUENTIAL;
+        for (uint8_t i = 0u; i < 4u; ++i) { g_cyl_retard_x10[i] = retards[rt][i]; cyl_ign_trim_deg[i] = trims[rt][i]; }
+        ems::drv::CkpSnapshot snap{};
+        snap.tooth_period_ns = period;
+        snap.phase_A = (mode != 1u);
+
+        const uint32_t drops0 = ecu_sched_test_get_cycle_schedule_drop_count();
+        if (mode <= 1u) { rebuild_sequential_cycle(snap); } else { rebuild_presync_revolution(snap); }
+        const uint32_t real_drops = ecu_sched_test_get_cycle_schedule_drop_count() - drops0;
+
+        ref_angle::drops = 0u;
+        ref_angle::build(snap, mode <= 1u ? 7200 : 3600, mode > 1u);   // g_knock_sequential já foi posto pelo rebuild
+
+        bool same = (g_angle_table_count == ref_angle::count) &&
+                    (g_angle_tooth_mask_lo == ref_angle::mask_lo) &&
+                    (g_angle_tooth_mask_hi == ref_angle::mask_hi) &&
+                    (real_drops == ref_angle::drops);
+        for (uint8_t i = 0u; same && i < ref_angle::count; ++i) {
+            const AngleEvent_t& a = g_angle_table[i];
+            const AngleEvent_t& b = ref_angle::table[i];
+            same = a.tooth_index == b.tooth_index && a.offset_x256 == b.offset_x256 && a.phase_A == b.phase_A &&
+                   a.channel == b.channel && a.action == b.action;
+        }
+        ++cases;
+        if (ref_angle::count > max_count) { max_count = ref_angle::count; }
+        if (!same) {
+            if (mismatches == 0u) {
+                std::snprintf(first, sizeof(first), "mode=%u adv=%d dwell=%u pw=%u eoi=%u trig=%u fine=%d per=%u cnt %u/%u",
+                              mode, adv, dwell, pw, eoi, trig, fine, period, g_angle_table_count, ref_angle::count);
+            }
+            ++mismatches;
+        }
+    }
+
+    if (mismatches != 0u) { std::printf("  primeira divergência: %s\n", first); }
+    CHECK_TRUE(cases > 3000u, "a grade exercita milhares de combinações");
+    CHECK_EQ(mismatches, 0u, "tabelas idênticas à referência em todas as combinações");
+    // Folga da tabela: com 24 posições o overflow não é alcançável (máximo = 12 entradas + até 12 cópias "now").
+    CHECK_TRUE(max_count >= 12u && max_count <= ECU_ANGLE_TABLE_SIZE, "o máximo de entradas observado cabe na tabela");
+
+    g_advance_x10 = adv0; g_dwell_ticks = dw0; g_inj_pw_ticks = pw0; g_inj_pw_alt_ticks = alt0; g_eoi_lead_deg = eoi0;
+    g_presync_inj_mode = pm0; g_inj_pw_main_seq = ms0; g_knock_sequential = ks0;
+    trigger_fine_x10 = fine0; cfg::g_eng_cfg.trigger_tooth0_engine_deg = trig0;
+    for (uint8_t i = 0u; i < 4u; ++i) { g_cyl_retard_x10[i] = retard0[i]; cyl_ign_trim_deg[i] = trim0[i]; }
+    clear_angle_table();
 }

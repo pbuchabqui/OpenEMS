@@ -1164,7 +1164,7 @@ void test_ui_isr_diag(void) {
     const uint8_t k = 'k';
     ui_feed(&k, 1u);
     uint16_t n = ui_drain(buf, sizeof(buf));
-    CHECK_EQ(n, 25u, "'k' → 25 bytes (6 x u32 + 1)");
+    CHECK_EQ(n, 41u, "'k' → 41 bytes (6 x u32 + 1 + 4 x u32)");
     CHECK_EQ(u32(0), 1234u, "tooth_max");
     CHECK_EQ(u32(1), 100u, "tooth_last");
     CHECK_EQ(u32(2), 0x0001'5678u, "gap_max (u32 LE)");
@@ -1172,6 +1172,15 @@ void test_ui_isr_diag(void) {
     CHECK_EQ(u32(4), 1000u, "icache_hits (mock do host)");
     CHECK_EQ(u32(5), 7u, "icache_misses (mock do host)");
     CHECK_EQ(buf[24], 1u, "icache ligado");
+    // A partir do byte 25: rebuild_max, rebuild_last, arm0_max, arm0_last (os mesmos do acessor do scheduler).
+    uint32_t gap[4] = {};
+    ecu_sched_gap_diag(gap);
+    CHECK_EQ(static_cast<uint32_t>(buf[25]) | (static_cast<uint32_t>(buf[26]) << 8u) |
+             (static_cast<uint32_t>(buf[27]) << 16u) | (static_cast<uint32_t>(buf[28]) << 24u),
+             gap[0], "rebuild_max (u32 LE, byte 25)");
+    CHECK_EQ(static_cast<uint32_t>(buf[37]) | (static_cast<uint32_t>(buf[38]) << 8u) |
+             (static_cast<uint32_t>(buf[39]) << 16u) | (static_cast<uint32_t>(buf[40]) << 24u),
+             gap[3], "arm0_last (u32 LE, byte 37)");
 
     // 'l' zera só os máximos; os 'last' seguem como estavam.
     const uint8_t l = 'l';
@@ -1182,7 +1191,10 @@ void test_ui_isr_diag(void) {
     CHECK_EQ(host_icache_monitor_resets(), resets0 + 1u, "'l' também zera os monitores do ICACHE");
     ui_feed(&k, 1u);
     n = ui_drain(buf, sizeof(buf));
-    CHECK_EQ(n, 25u, "'k' depois do reset → 25 bytes");
+    CHECK_EQ(n, 41u, "'k' depois do reset → 41 bytes");
+    ecu_sched_gap_diag(gap);
+    CHECK_EQ(gap[0], 0u, "rebuild_max zerado");
+    CHECK_EQ(gap[2], 0u, "arm0_max zerado");
     CHECK_EQ(u32(0), 0u, "tooth_max zerado");
     CHECK_EQ(u32(2), 0u, "gap_max zerado");
     CHECK_EQ(u32(1), 100u, "tooth_last preservado");

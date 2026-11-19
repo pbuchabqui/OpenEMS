@@ -131,6 +131,10 @@ volatile uint32_t g_dbg_presync_count = 0U;
 volatile uint32_t g_dbg_phase_skip = 0U;
 volatile uint32_t g_dbg_phase_fire = 0U;
 volatile uint32_t g_dbg_seq_calls = 0U;
+// Custo (ticks do TIM5, 16 ns) das duas partes do dente do gap que rodam dentro da ISR: o rebuild da tabela
+// angular e o laço que arma os eventos do dente 0. Só diagnóstico de bancada (comando serial 'k').
+volatile uint32_t g_gap_rebuild_max = 0U, g_gap_rebuild_last = 0U;
+volatile uint32_t g_gap_arm0_max = 0U, g_gap_arm0_last = 0U;
 volatile uint32_t g_dbg_inj1_arm = 0U;  // arm_channel calls for INJ1
 volatile uint32_t g_dbg_ign1_arm = 0U;  // arm_channel calls for IGN1
 
@@ -670,6 +674,18 @@ void ecu_sched_set_inj_pw_pair(uint32_t alt_pw_ticks, uint8_t main_is_sequential
     ems::hal::CriticalSectionGuard guard;
     set_inj_pw_pair_locked(alt_pw_ticks, main_is_sequential);
 }
+
+void ecu_sched_gap_diag(uint32_t out[4])
+{
+    out[0] = g_gap_rebuild_max; out[1] = g_gap_rebuild_last;
+    out[2] = g_gap_arm0_max;    out[3] = g_gap_arm0_last;
+}
+
+void ecu_sched_gap_diag_reset(void)
+{
+    g_gap_rebuild_max = 0U;
+    g_gap_arm0_max = 0U;
+}
 void ecu_sched_set_eoi_lead_deg(uint32_t eoi_lead_deg) { ems::hal::CriticalSectionGuard guard; si::g_eoi_lead_deg = eoi_lead_deg; sanitize_runtime_calibration(); }
 void ecu_sched_set_presync_enable(uint8_t enable) { ems::hal::CriticalSectionGuard guard; g_presync_enable = (enable != 0U) ? 1U : 0U; }
 void ecu_sched_set_presync_inj_auto(uint8_t on) { ems::hal::CriticalSectionGuard guard; g_presync_inj_auto = on ? 1U : 0U; }
@@ -1058,6 +1074,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
             end_active_outputs_on_time();
         }
         s_prev_sched_mode = mode;
+        const uint32_t rebuild_t0 = TIM5_CNT;
         if (use_presync) {
             ++g_dbg_presync_count;
             ++g_diag_presync_revs;
@@ -1067,6 +1084,11 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
             ++g_dbg_seq_calls;
             ++g_diag_seq_revs;
             si::rebuild_sequential_cycle(snap);
+        }
+        {
+            const uint32_t d = TIM5_CNT - rebuild_t0;
+            g_gap_rebuild_last = d;
+            if (d > g_gap_rebuild_max) { g_gap_rebuild_max = d; }
         }
     }
 
@@ -1083,6 +1105,7 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
         // here: ISR latency and hook work must not shift the angle.
         const uint32_t edge = snap.last_tim5_capture;
         const uint8_t current_phase = snap.phase_A ? ECU_PHASE_A : ECU_PHASE_B;
+        const uint32_t arm_t0 = TIM5_CNT;
         for (uint8_t i = 0U; i < si::g_angle_table_count; ++i) {
             const AngleEvent_t *e = &si::g_angle_table[i];
             if (e->tooth_index != tooth_index) { continue; }
@@ -1090,6 +1113,11 @@ void ecu_sched_on_tooth_hook(const ems::drv::CkpSnapshot& snap) noexcept
             ++g_dbg_phase_fire;
             const uint32_t t = edge + (uint32_t)(((uint64_t)e->offset_x256 * tooth_ticks) >> 8U);
             arm_angle_event(e->channel, e->action, t, tooth_ticks);
+        }
+        if (tooth_index == 0U) {   // só o dente do gap: é onde se acumulam as entradas "now" do rebuild
+            const uint32_t d = TIM5_CNT - arm_t0;
+            g_gap_arm0_last = d;
+            if (d > g_gap_arm0_max) { g_gap_arm0_max = d; }
         }
     }
 

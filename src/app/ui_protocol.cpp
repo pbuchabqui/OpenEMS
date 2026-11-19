@@ -124,22 +124,29 @@ void parse_byte(uint8_t b) noexcept {
             return;
         }
         if (b == static_cast<uint8_t>('k')) {
-            // Latência da ISR do CKP + ICACHE (diagnóstico de bancada, só leitura), 25 bytes, tudo u32 LE
-            // exceto o último: tooth_max, tooth_last, gap_max, gap_last (ticks do TIM5, 62,5 MHz = 16 ns),
-            // icache_hits, icache_misses (monitores do ICACHE; miss é de 16 bit), icache_on (u8).
+            // Latência da ISR do CKP + ICACHE (diagnóstico de bancada, só leitura), 41 bytes, tudo u32 LE
+            // exceto o byte 24: tooth_max, tooth_last, gap_max, gap_last (ticks do TIM5, 62,5 MHz = 16 ns),
+            // icache_hits, icache_misses (monitores do ICACHE; miss é de 16 bit), icache_on (u8, byte 24),
+            // e a partir do byte 25 o custo das partes do gap: rebuild_max, rebuild_last, arm0_max, arm0_last.
             const ems::drv::CkpIsrDiag d = ems::drv::ckp_isr_diag();
+            uint32_t gap[4];
+            ::ecu_sched_gap_diag(gap);
             const uint32_t words[6] = {d.tooth_max, d.tooth_last, d.gap_max, d.gap_last,
                                        icache_hits(), icache_misses()};
             for (uint8_t w = 0u; w < 6u; ++w) {
                 for (uint8_t i = 0u; i < 4u; ++i) { tx_push(static_cast<uint8_t>(words[w] >> (8u * i))); }
             }
             tx_push(icache_is_enabled() ? 1u : 0u);
+            for (uint8_t w = 0u; w < 4u; ++w) {
+                for (uint8_t i = 0u; i < 4u; ++i) { tx_push(static_cast<uint8_t>(gap[w] >> (8u * i))); }
+            }
             return;
         }
         if (b == static_cast<uint8_t>('l')) {
             // Zera os máximos de 'k' e os monitores do ICACHE (que saturam, não dão a volta): medir em regime
             // depois da partida. Não toca em saída nem em calibração.
             ems::drv::ckp_isr_diag_reset();
+            ::ecu_sched_gap_diag_reset();
             icache_monitors_reset();
             tx_push(kAckOk);
             return;
