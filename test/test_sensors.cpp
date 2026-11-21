@@ -407,6 +407,30 @@ void test_sensors_tick_50ms(void) {
     CHECK_TRUE(sd.fuel_press_bar_x1000 > 0u, "fuel_press > 0 after tick_50ms with raw=2000");
 }
 
+void test_sensors_fuel_press_absent(void) {
+    section("sensors: pressão de combustível abaixo de 5 % do fundo de escala = sem leitura (0), sem falha");
+    using namespace ems::hal;
+    auto fill = [&](uint16_t raw) {
+        sensor_setup(); sensors_init();
+        adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS, raw);
+        adc_test_set_raw_secondary(AdcSecondaryChannel::OIL_PRESS,  2000u);
+        for (int i = 0; i < 8; ++i) { sensors_tick_50ms(); }
+        sensors_test_tick_100ms();
+        return sensors_get();
+    };
+    ems::drv::SensorData sd = fill(150u);   // flutuando/aberto: abaixo de 205
+    CHECK_EQ(sd.fuel_press_bar_x1000, 0u, "raw 150 (< 5 %): sem leitura válida, pressão 0");
+    CHECK_EQ(static_cast<uint32_t>(sd.fault_bits & (1u << 6u)), 0u, "raw 150: não vira falha FUEL_PRESS (não corta combustível)");
+    sd = fill(204u);
+    CHECK_EQ(sd.fuel_press_bar_x1000, 0u, "raw 204: ainda sem leitura");
+    sd = fill(205u);
+    CHECK_TRUE(sd.fuel_press_bar_x1000 > 0u, "raw 205 (5 %): leitura válida");
+    sd = fill(2000u);
+    CHECK_EQ(sd.fuel_press_bar_x1000, 2000u * 2500u / 4095u, "raw 2000: conversão inalterada");
+    // O ΔP não corrige sem leitura válida (fator 1,0).
+    CHECK_EQ(ems::engine::apply_delta_p_compensation(2000u, 0u, 34u), 2000u, "pressão 0: ΔP não altera o PW");
+}
+
 void test_sensors_set_range(void) {
     section("sensors: sensors_set_range");
     sensor_setup(); sensors_init();

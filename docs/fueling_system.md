@@ -1,6 +1,6 @@
 # Sistema de combustível
 
-> **Status:** vigente · validado 2026-11-19 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-21 (doc-check + conferência pontual contra o código)
 
 Speed-density em inteiros, calculado a cada 2 ms em `engine_calc_step()` (`src/engine/engine_calc.cpp`). O resultado é um pulso por abertura, em ticks do TIM5, entregue ao scheduler por `ecu_sched_commit_calibration_x10()`. A malha fechada (STFT/LTFT) está em [`closed_loop_fuel.md`](closed_loop_fuel.md); os cortes, em [`protection_system.md`](protection_system.md).
 
@@ -55,4 +55,8 @@ O LTFT multiplicativo é limitado a ±25 % em RAM, mesmo que `ltft_mult_clamp_pc
 
 - Tabelas de AE/DE, X-τ, EOI e curva S são valores de partida, não medições.
 - Escala do sensor de pressão de combustível (hoje 0–2,5 bar) e `fuel_press_nominal_bar_x1000`.
+- Pressão de combustível lida abaixo de 5 % do fundo de escala (raw < 205, 0,25 V de um transdutor 0,5–4,5 V) vira
+  "sem leitura válida" (pressão 0) e o ΔP não corrige (fator 1,0). Não é falha de sensor: a falha (janela 50–4050) corta
+  combustível acima de 500 RPM (`fuel_rail_cut`). Sem esse piso, um sensor ausente com o pino flutuando enriquecia até
+  2,45× e o PW oscilava. Em bancada o modo bancada (`B`) fixa 3,0 bar.
 - Dead time por tensão abaixo de 9 V (a tabela fica plana).

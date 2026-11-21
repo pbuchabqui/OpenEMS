@@ -196,6 +196,7 @@ test_sensors_bench_app_fixed();
     test_etb_d_term_saturates();
     test_map_window_angular();
     test_sensors_tick_50ms();
+    test_sensors_fuel_press_absent();
     test_sensors_set_range();
     test_sensors_etb_harness_present();
     test_sensors_vbatt_dedicated_channel();

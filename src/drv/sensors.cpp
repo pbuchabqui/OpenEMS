@@ -40,6 +40,9 @@ constexpr uint16_t kFallbackTpsPctX10  = 0u;
 // Confirmado por TIM5 input-capture clock
 constexpr uint32_t kMafTim5ClockHz = 62500000u;
 
+// 5 % de 4095: abaixo disso a pressão de combustível é tratada como "sem leitura válida" (ver sensors_tick_50ms).
+constexpr uint16_t kFuelPressMinValidRaw = 205u;
+
 struct FaultTracker {
     SensorRange range;
     uint8_t     consecutive_bad;
@@ -720,8 +723,14 @@ void sensors_tick_50ms() noexcept {
     apply_fault(SensorId::FUEL_PRESS, fuel_raw);
     apply_fault(SensorId::OIL_PRESS,  oil_raw);
 
-    g_data_staging.fuel_press_bar_x1000 = static_cast<uint16_t>(
-        (static_cast<uint32_t>(avg_n(g_fuel_buf, 4)) * 2500u) / 4095u);
+    // Sem sensor (pino flutuando ou puxado a ~0 V) a leitura vem baixa e variável; tratada como pressão
+    // real, a compensação de ΔP enriquecia até 2,45× e fazia o PW oscilar. Abaixo de 5 % do fundo de
+    // escala (0,25 V de um transdutor 0,5-4,5 V) vira "sem leitura válida": pressão 0 → o ΔP não corrige
+    // (fator 1,0). NÃO é falha de sensor: a falha (janela 50..4050) corta combustível acima de 500 RPM.
+    const uint16_t fuel_avg_raw = avg_n(g_fuel_buf, 4);
+    g_data_staging.fuel_press_bar_x1000 = (fuel_avg_raw < kFuelPressMinValidRaw)
+        ? 0u
+        : static_cast<uint16_t>((static_cast<uint32_t>(fuel_avg_raw) * 2500u) / 4095u);
     g_data_staging.oil_press_bar_x1000 = static_cast<uint16_t>(
         (static_cast<uint32_t>(avg_n(g_oil_buf, 4)) * 2500u) / 4095u);
     commit_sensor_snapshot();

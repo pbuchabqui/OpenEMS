@@ -138,6 +138,7 @@ void test_sensors_diag_adc_recovery(void);
 void test_sensors_reset_zeroes_volatile_buffers(void);
 void test_etb_d_term_saturates(void);
 void test_sensors_tick_50ms(void);
+void test_sensors_fuel_press_absent(void);
 void test_sensors_set_range(void);
 void test_sensors_etb_harness_present(void);
 void test_sensors_vbatt_dedicated_channel(void);
