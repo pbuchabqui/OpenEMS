@@ -42,6 +42,7 @@
  *   IDLE / CRANK / CRUISE / WOT / COAST          STATUS
  *   PROFILE TAPER | PROFILE STOP
  *   DAC1 <0-4095> / DAC2 <0-4095>   código cru nos canais do DAC (calibração)
+ *   DACS                            CR/MCR/SR/DHR/DOR do DAC1 (depuração)
  *   Scope: l e p w t s r ?
  *
  * ═══════════════════════════════════════════════════════════════════════════
@@ -375,11 +376,14 @@ static void dac_init_map_tps() {
     __HAL_RCC_DAC1_CLK_ENABLE();
     pinMode(PA4, INPUT_ANALOG);
     pinMode(PA5, INPUT_ANALOG);
-    DAC1->CR |= DAC_CR_EN1 | DAC_CR_EN2;
+    // CR explícito (sem `|=`): nenhum bit de trigger/onda/DMA herdado do core Arduino. Com TENx=1 a saída só
+    // atualiza num disparo, e os comandos MAP/TPS/DAC1/DAC2 apareciam um comando atrasados (ou eram perdidos).
+    DAC1->CR = DAC_CR_EN1 | DAC_CR_EN2;
     delay(1);   // tWAKEUP
 }
-static void dac_write_map(uint16_t code) { DAC1->DHR12R1 = code; }
-static void dac_write_tps(uint16_t code) { DAC1->DHR12R2 = code; }
+// Escreve o registrador e força a transferência DHR→DOR com disparo por software (inofensivo com TEN=0).
+static void dac_write_map(uint16_t code) { DAC1->DHR12R1 = code; DAC1->SWTRIGR = DAC_SWTRIGR_SWTRIG1; }
+static void dac_write_tps(uint16_t code) { DAC1->DHR12R2 = code; DAC1->SWTRIGR = DAC_SWTRIGR_SWTRIG2; }
 
 // PWM 19 kHz: CLT, IAT, APP, OIL (TIM3) e FUEL, ETB1, ETB2 (TIM4); duty de 12 bits.
 // Nenhum destes pinos está em kChan (scope).
@@ -954,6 +958,13 @@ static void parse_text_cmd(const char* raw) {
         const int code = constrain(val, 0, 4095);
         dac_write_tps((uint16_t)code);
         Serial.printf("  [DAC] PA5=%d (%.3fV esperado)\n", code, code * 3.3f / 4095.0f);
+    }
+    else if (strcmp(cmd, "DACS") == 0) {
+        // Estado do DAC1 para depuração: CR (EN/TEN/TSEL), MCR (modo/buffer), SR, DHR e DOR (valor na saída).
+        Serial.printf("  [DACS] CR=0x%08lX MCR=0x%08lX SR=0x%08lX DHR1=%lu DHR2=%lu DOR1=%lu DOR2=%lu\n",
+                      (unsigned long)DAC1->CR, (unsigned long)DAC1->MCR, (unsigned long)DAC1->SR,
+                      (unsigned long)DAC1->DHR12R1, (unsigned long)DAC1->DHR12R2,
+                      (unsigned long)DAC1->DOR1, (unsigned long)DAC1->DOR2);
     }
     else if (strcmp(cmd, "STATUS") == 0)   print_status();
 }
