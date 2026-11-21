@@ -151,6 +151,8 @@ test_sensors_bench_app_fixed();
     test_ac_request_debounce();
     test_nvm_boot_page_helpers();
     test_nvm_boot_table_loaders();
+    test_nvm_boot_rejects_zeroed_corrections();
+    test_nvm_boot_rejects_zeroed_pedal_and_boost();
     test_sched_angle_tables();
     test_sched_inj_pw_pair();
     test_sched_angle_equivalence();

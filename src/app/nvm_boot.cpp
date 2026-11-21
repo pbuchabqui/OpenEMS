@@ -84,6 +84,51 @@ static bool iat_corr_is_legacy_density_shape(const uint16_t* tbl) noexcept {
     return true;
 }
 
+// Um slot gravado com zeros tem CRC válido e não é "apagado" (0xFF): sem estas checagens ele
+// sobrescrevia os padrões de compilação. Eixo zerado/não crescente ou fator/dead-time/dwell = 0 é
+// inválido (kCorrMinQ8 limitava o PW a 1/16 e o dead time ficava 0), então o bloco é ignorado.
+static bool axis_i16_is_increasing(const uint8_t* data, uint8_t n) noexcept {
+    int16_t prev = 0;
+    for (uint8_t i = 0u; i < n; ++i) {
+        int16_t v = 0;
+        std::memcpy(&v, data + 2u * i, 2u);
+        if (i != 0u && v <= prev) { return false; }
+        prev = v;
+    }
+    return true;
+}
+
+static bool axis_u16_is_increasing(const uint8_t* data, uint8_t n) noexcept {
+    uint16_t prev = 0u;
+    for (uint8_t i = 0u; i < n; ++i) {
+        uint16_t v = 0u;
+        std::memcpy(&v, data + 2u * i, 2u);
+        if (i != 0u && v <= prev) { return false; }
+        prev = v;
+    }
+    return true;
+}
+
+static bool axis_u32_is_increasing(const uint8_t* data, uint8_t n) noexcept {
+    uint32_t prev = 0u;
+    for (uint8_t i = 0u; i < n; ++i) {
+        uint32_t v = 0u;
+        std::memcpy(&v, data + 4u * i, 4u);
+        if (i != 0u && v <= prev) { return false; }
+        prev = v;
+    }
+    return true;
+}
+
+static bool u16_values_are_nonzero(const uint8_t* data, uint8_t n) noexcept {
+    for (uint8_t i = 0u; i < n; ++i) {
+        uint16_t v = 0u;
+        std::memcpy(&v, data + 2u * i, 2u);
+        if (v == 0u) { return false; }
+    }
+    return true;
+}
+
 void load_corr_calibration_from_nvm() noexcept {
     alignas(4) uint8_t page[256] = {};
     if (!ems::hal::nvm_load_calibration(4u, page, sizeof(page)) ||
@@ -92,23 +137,39 @@ void load_corr_calibration_from_nvm() noexcept {
     }
 
     const uint8_t* p = page;
-    std::memcpy(ems::engine::clt_corr_axis_x10,          p +   0, 16u);
-    std::memcpy(ems::engine::clt_corr_x256,              p +  16, 16u);
-    std::memcpy(ems::engine::iat_corr_axis_x10,          p +  32, 16u);
-    uint16_t iat_loaded[ems::engine::kCorrectionTableSize] = {};
-    std::memcpy(iat_loaded, p + 48, 16u);
-    if (!iat_corr_is_legacy_density_shape(iat_loaded)) {
-        std::memcpy(ems::engine::iat_corr_x256, iat_loaded, 16u);
+    const uint8_t kN = static_cast<uint8_t>(ems::engine::kCorrectionTableSize);
+    // Cada bloco é validado sozinho: um bloco inválido mantém o padrão e não derruba os outros.
+    if (axis_i16_is_increasing(p + 0, kN) && u16_values_are_nonzero(p + 16, kN)) {
+        std::memcpy(ems::engine::clt_corr_axis_x10,          p +   0, 16u);
+        std::memcpy(ems::engine::clt_corr_x256,              p +  16, 16u);
     }
-    std::memcpy(ems::engine::vbatt_corr_axis_mv,         p +  96, 16u);
-    std::memcpy(ems::engine::injector_dead_time_us,      p + 112, 16u);
-    std::memcpy(ems::engine::ae_clt_corr_axis_x10,       p + 128, 16u);
-    std::memcpy(ems::engine::ae_clt_sens,                p + 144, 16u);
-    std::memcpy(ems::engine::dwell_vbatt_axis_mv,        p + 160, 16u);
-    std::memcpy(ems::engine::dwell_ms_x10_table,         p + 176, 16u);
-    std::memcpy(ems::engine::lambda_delay_rpm_axis_x10,  p + 192, 12u);
-    std::memcpy(ems::engine::lambda_delay_load_axis_bar_x100, p + 204, 12u);
-    std::memcpy(ems::engine::lambda_delay_ms_table,      p + 216, 18u);
+    if (axis_i16_is_increasing(p + 32, kN)) {
+        std::memcpy(ems::engine::iat_corr_axis_x10,          p +  32, 16u);
+        uint16_t iat_loaded[ems::engine::kCorrectionTableSize] = {};
+        std::memcpy(iat_loaded, p + 48, 16u);
+        if (u16_values_are_nonzero(p + 48, kN) && !iat_corr_is_legacy_density_shape(iat_loaded)) {
+            std::memcpy(ems::engine::iat_corr_x256, iat_loaded, 16u);
+        }
+    }
+    if (axis_u16_is_increasing(p + 96, kN) && u16_values_are_nonzero(p + 112, kN)) {
+        std::memcpy(ems::engine::vbatt_corr_axis_mv,         p +  96, 16u);
+        std::memcpy(ems::engine::injector_dead_time_us,      p + 112, 16u);
+    }
+    if (axis_i16_is_increasing(p + 128, kN) && u16_values_are_nonzero(p + 144, kN)) {
+        std::memcpy(ems::engine::ae_clt_corr_axis_x10,       p + 128, 16u);
+        std::memcpy(ems::engine::ae_clt_sens,                p + 144, 16u);
+    }
+    if (axis_u16_is_increasing(p + 160, kN) && u16_values_are_nonzero(p + 176, kN)) {
+        std::memcpy(ems::engine::dwell_vbatt_axis_mv,        p + 160, 16u);
+        std::memcpy(ems::engine::dwell_ms_x10_table,         p + 176, 16u);
+    }
+    if (axis_u32_is_increasing(p + 192, ems::engine::kLambdaDelayTableSize) &&
+        axis_u32_is_increasing(p + 204, ems::engine::kLambdaDelayTableSize) &&
+        u16_values_are_nonzero(p + 216, 9u)) {
+        std::memcpy(ems::engine::lambda_delay_rpm_axis_x10,  p + 192, 12u);
+        std::memcpy(ems::engine::lambda_delay_load_axis_bar_x100, p + 204, 12u);
+        std::memcpy(ems::engine::lambda_delay_ms_table,      p + 216, 18u);
+    }
     if (!page_range_is_zero(page, 234u, 6u)) {
         std::memcpy(&ems::engine::ae_tpsdot_threshold_x10, p + 234, 2u);
         {
@@ -137,8 +198,11 @@ void load_dwell2d_calibration_from_nvm() noexcept {
         page_is_erased(page, 16u)) {
         return;  // sem page 6 → mantém valores default (factor 1.0× a 4000 RPM)
     }
-    std::memcpy(ems::engine::dwell_rpm_axis_rpm,  page + 0,  8u);
-    std::memcpy(ems::engine::dwell_rpm_factor_q8, page + 8,  8u);
+    // Eixo crescente e fator ≠ 0: um slot de zeros (CRC válido) deixava o dwell em 0.
+    if (axis_u16_is_increasing(page + 0, 4u) && u16_values_are_nonzero(page + 8, 4u)) {
+        std::memcpy(ems::engine::dwell_rpm_axis_rpm,  page + 0,  8u);
+        std::memcpy(ems::engine::dwell_rpm_factor_q8, page + 8,  8u);
+    }
     // Spark-skip (16-18): era gravado no burn mas nunca carregado — voltava a 0 (desligado) a
     // cada partida. Blob antigo (sem esses bytes) vem apagado: mantém o default.
     if (!page_range_is_erased(page, 16u, 3u)) {
@@ -150,7 +214,8 @@ void load_dwell2d_calibration_from_nvm() noexcept {
 void load_boost_map_from_nvm() noexcept {
     alignas(4) uint8_t page[112] = {};
     if (!ems::hal::nvm_load_calibration(8u, page, sizeof(page)) ||
-        page_is_erased(page, sizeof(page))) {
+        page_is_erased(page, sizeof(page)) ||
+        page_range_is_zero(page, 0u, sizeof(page))) {   // slot de zeros (CRC válido) ≠ calibração
         return;
     }
     std::memcpy(ems::engine::boost_target_bar_x1000, page,
@@ -179,8 +244,10 @@ void load_table_axes_from_nvm() noexcept {
 void load_pedal_map_from_nvm() noexcept {
     alignas(4) uint8_t page[80] = {};
     if (!ems::hal::nvm_load_calibration(7u, page, sizeof(page)) ||
-        page_is_erased(page, sizeof(page))) {
-        return;  // flash apagada → usa defaults de compilação
+        page_is_erased(page, sizeof(page)) ||
+        page_range_is_zero(page, 0u, sizeof(page))) {
+        // Apagada ou toda zero (CRC válido, mas pedal 0 % → borboleta nunca abre): defaults de compilação.
+        return;
     }
     std::memcpy(ems::engine::etb_pedal_map, page, sizeof(ems::engine::etb_pedal_map));
 }

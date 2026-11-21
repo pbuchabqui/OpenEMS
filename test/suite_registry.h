@@ -117,6 +117,8 @@ void test_sd_state_machine(void);
 void test_usb_cdc_host_ring(void);
 void test_vehicle_inputs_bridge(void);
 void test_nvm_boot_table_loaders(void);
+void test_nvm_boot_rejects_zeroed_corrections(void);
+void test_nvm_boot_rejects_zeroed_pedal_and_boost(void);
 void test_can_stack_wbo2_api(void);
 void test_ign_get_advance(void);
 void test_ign_dwell_vbatt_rpm(void);
