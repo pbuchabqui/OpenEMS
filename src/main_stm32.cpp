@@ -375,9 +375,10 @@ static void openems_init() noexcept {
 	}
 	// Page 0 → globals through the protocol's own apply (one path for boot
 	// and for a TunerStudio/dashboard write; timing light forced off).
-	// Página apagada (placa em branco) ou recusada: NÃO aplica — os 0xFF viravam parâmetros
-	// (closed_loop_enable=1, RPMs de decel 0xFFFFFFFF...). Ficam os defaults de compilação.
-	if (!ems::app::page_is_erased(g_calib_page0, kCalibPageBytes)) {
+	// Página apagada (placa em branco), recusada ou toda zero: NÃO aplica — os 0xFF viravam parâmetros
+	// (closed_loop_enable=1, RPMs de decel 0xFFFFFFFF...) e os zeros derrubavam o limitador de rotação
+	// ao mínimo de 1000 RPM. Ficam os defaults de compilação.
+	if (!ems::app::page_is_blank(g_calib_page0, kCalibPageBytes)) {
 		ems::app::ui_boot_apply_page0(g_calib_page0, kCalibPageBytes);
 	}
 	// Gate de layout: páginas de tabela só carregam se a versão gravada no

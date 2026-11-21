@@ -40,6 +40,17 @@ void test_nvm_boot_page_helpers(void) {
     CHECK_FALSE(page_range_is_zero(a, 0u, sizeof(a)), "byte != 0: não zero");
     CHECK_TRUE(page_range_is_zero(a, 4u, 12u), "faixa sem o byte: zero");
     CHECK_FALSE(page_is_erased(a, sizeof(a)), "página zerada não é apagada");
+
+    // Em branco = apagada OU toda zero (o boot não aplica a página 0 em nenhum dos dois casos).
+    std::memset(a, 0xFF, sizeof(a));
+    CHECK_TRUE(page_is_blank(a, sizeof(a)), "tudo 0xFF: em branco");
+    std::memset(a, 0x00, sizeof(a));
+    CHECK_TRUE(page_is_blank(a, sizeof(a)), "tudo 0x00: em branco");
+    a[7] = 0x45u;
+    CHECK_FALSE(page_is_blank(a, sizeof(a)), "um byte gravado: não está em branco");
+    std::memset(a, 0xFF, sizeof(a));
+    a[7] = 0x00u;
+    CHECK_FALSE(page_is_blank(a, sizeof(a)), "mistura de 0xFF e 0x00 não é em branco");
 }
 
 void test_nvm_boot_table_loaders(void) {

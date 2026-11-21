@@ -50,3 +50,8 @@ valores de fabrica utilizaveis.
     O boot ignora blocos com eixo nao crescente ou valor 0 e mantem os padroes de compilacao;
     para regravar o slot, importe a sintonia de fabrica e grave as paginas 5 e 7.
 
+    A pagina 0 tem o mesmo cuidado: o boot nao a aplica se ela estiver apagada (0xFF) ou
+    toda zero. Uma pagina 0 de zeros fazia o limitador de rotacao cair no minimo de 1000 RPM
+    (a calibracao de fabrica agora traz 7000 RPM) e deixava a malha fechada, o corte de
+    desaceleracao e os ganhos do STFT desligados.
+

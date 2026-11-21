@@ -84,6 +84,22 @@ class TestTune(unittest.TestCase):
         self.assertTrue(all(v > 0 for v in p7[4:]), "fator de dwell com zero")
         self.assertTrue(any(pages[8]), "mapa do pedal do ETB zerado: a borboleta nunca abriria")
 
+    def test_base_tune_page0_has_sane_defaults(self):
+        # Página 0 de fábrica gerada com o NVM de host zerado: rev_limit caía no mínimo de 1000 RPM e a
+        # malha fechada, o corte de desaceleração, o STFT e o alvo de marcha lenta saíam zerados.
+        import base64
+        f = P.decode_fields(0, base64.b64decode(P.load_base_tune()["pages"]["0"]))
+        self.assertGreaterEqual(f["rev_limit_rpm_x10"], 5000.0, "limitador de rotação abaixo de 5000 RPM")
+        self.assertGreater(f["rev_limit_soft_window_x10"], 0, "janela suave do limitador zerada")
+        self.assertEqual(f["closed_loop_enable"], 1, "malha fechada desligada de fábrica")
+        self.assertGreater(f["stft_kp_x100"], 0, "ganho do STFT zerado")
+        self.assertGreater(f["stft_ki_x1000"], 0, "ganho integral do STFT zerado")
+        self.assertGreater(f["decel_cut_entry_rpm_x10"], f["decel_cut_exit_rpm_x10"], "histerese do DFCO invertida/zerada")
+        self.assertGreater(f["etb_idle_rpm_target"], 0, "alvo de marcha lenta do ETB zerado")
+        axis = f["iac_clt_axis_x10"]
+        self.assertTrue(all(a < b for a, b in zip(axis, axis[1:])), "eixo CLT da marcha lenta não crescente")
+        self.assertGreater(f["wbo2_can_id"], 0, "ID CAN do WBO2 zerado")
+
     def test_export_import_survives_restart(self):
         link = self.ecu.link
         off, data = P.encode_field(0, "displacement_cc", 1798)

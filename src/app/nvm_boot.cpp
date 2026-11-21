@@ -36,6 +36,10 @@ bool page_is_erased(const uint8_t* data, uint16_t len) noexcept {
     return page_range_is_erased(data, 0u, len);
 }
 
+bool page_is_blank(const uint8_t* data, uint16_t len) noexcept {
+    return page_range_is_erased(data, 0u, len) || page_range_is_zero(data, 0u, len);
+}
+
 // BUG (encontrado 2026-07-10): burn_page_to_flash grava VE/Spark/Lambda
 // (páginas 1/2/4, índices internos 1/2/3) correctamente, mas nunca havia
 // loader correspondente aqui — reset_pages() (ui_protocol.cpp) copia

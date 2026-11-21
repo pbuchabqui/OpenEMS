@@ -45,7 +45,11 @@ void host_boot() {
     // version that gates the table pages), then the tables.
     uint8_t page0[kPage0Bytes] = {};
     ems::hal::nvm_load_calibration(0u, page0, kPage0Bytes);
-    ems::app::ui_boot_apply_page0(page0, kPage0Bytes);
+    // Mesma guarda do main_stm32.cpp: o NVM de host nunca gravado lê como zeros, e aplicá-los como página 0
+    // gerava um "padrão de fábrica" com rev_limit 1000 RPM e parâmetros zerados.
+    if (!ems::app::page_is_blank(page0, kPage0Bytes)) {
+        ems::app::ui_boot_apply_page0(page0, kPage0Bytes);
+    }
     ems::app::nvm_boot_load_tables(
         page0[ems::engine::kCalLayoutVersionOffset] == ems::engine::kCalLayoutVersion);
     ems::app::ui_init();
