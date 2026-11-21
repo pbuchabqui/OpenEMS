@@ -1147,6 +1147,43 @@ extern volatile uint32_t g_dbg_isr_gap_max_ticks;
 extern volatile uint32_t g_dbg_isr_gap_last_ticks;
 }  // namespace ems::drv
 
+void test_ui_adc_raw(void) {
+    section("protocolo legado: 'm' devolve o ADC bruto dos 8 canais primários (u16 LE)");
+    ems::app::ui_test_reset();
+    for (uint8_t ch = 0u; ch < 8u; ++ch) {
+        ems::hal::adc_test_set_raw_primary(static_cast<ems::hal::AdcPrimaryChannel>(ch),
+                                 static_cast<uint16_t>(0x0123u + ch * 0x0101u));
+    }
+    uint8_t buf[32] = {};
+    const uint8_t m = 'm';
+    ui_feed(&m, 1u);
+    const uint16_t n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 16u, "'m' → 16 bytes (8 x u16)");
+    for (uint8_t ch = 0u; ch < 8u; ++ch) {
+        const uint16_t v = static_cast<uint16_t>(buf[ch * 2u] | (buf[ch * 2u + 1u] << 8u));
+        CHECK_EQ(v, static_cast<uint16_t>(0x0123u + ch * 0x0101u), "canal na ordem de AdcPrimaryChannel");
+    }
+}
+
+void test_ui_adc_regs(void) {
+    section("protocolo legado: 'n' devolve os registradores do ADC1/GPIOA (8 x u32 LE)");
+    ems::app::ui_test_reset();
+    uint8_t buf[64] = {};
+    const uint8_t n = 'n';
+    ui_feed(&n, 1u);
+    const uint16_t len = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(len, 32u, "'n' → 32 bytes (8 x u32)");
+    const ems::hal::AdcRegDiag r = ems::hal::adc_reg_diag();
+    auto u32 = [&](uint8_t i) {
+        return static_cast<uint32_t>(buf[i * 4u]) | (static_cast<uint32_t>(buf[i * 4u + 1u]) << 8u) |
+               (static_cast<uint32_t>(buf[i * 4u + 2u]) << 16u) | (static_cast<uint32_t>(buf[i * 4u + 3u]) << 24u);
+    };
+    CHECK_EQ(u32(0), r.gpioa_moder, "GPIOA_MODER na palavra 0");
+    CHECK_EQ(u32(1), r.adc1_difsel, "ADC1_DIFSEL na palavra 1");
+    CHECK_EQ(u32(2), r.adc1_sqr1, "ADC1_SQR1 na palavra 2");
+    CHECK_EQ(u32(7), r.adc1_isr, "ADC1_ISR na palavra 7");
+}
+
 void test_ui_isr_diag(void) {
     section("protocolo legado: 'k' devolve latência da ISR do CKP + ICACHE, 'l' zera os máximos");
     ems::app::ui_test_reset();

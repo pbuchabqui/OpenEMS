@@ -472,6 +472,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define ADC_SMPR1_OFF  0x14UL
 #define ADC_SMPR2_OFF  0x18UL
 #define ADC_SQR1_OFF   0x30UL
+#define ADC_DIFSEL_OFF 0xB0UL  // stm32h562xx.h: ADC_TypeDef.DIFSEL
 #define ADC_SQR2_OFF   0x34UL
 #define ADC_SQR3_OFF   0x38UL
 #define ADC_SQR4_OFF   0x3CUL
@@ -490,6 +491,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define ADC1_SQR1  STM32_REG32(ADC1_BASE + ADC_SQR1_OFF)
 #define ADC1_SQR2  STM32_REG32(ADC1_BASE + ADC_SQR2_OFF)
 #define ADC1_DR    STM32_REG32(ADC1_BASE + ADC_DR_OFF)
+#define ADC1_DIFSEL STM32_REG32(ADC1_BASE + ADC_DIFSEL_OFF)
 
 #define ADC2_ISR   STM32_REG32(ADC2_BASE + ADC_ISR_OFF)
 #define ADC2_CR    STM32_REG32(ADC2_BASE + ADC_CR_OFF)

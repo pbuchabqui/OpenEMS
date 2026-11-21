@@ -1,6 +1,6 @@
 # Manual de teste de bancada — WeAct H562 VGT6
 
-> **Status:** vigente · validado 2026-11-19 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-21 (doc-check + conferência pontual contra o código)
 
 Este manual testa a **lógica do firmware no silício real**: sincronismo, ângulo
 da faísca, largura do pulso de injeção, jitter e watchdog. A placa é a WeAct
@@ -102,6 +102,12 @@ TIM5_CH3. Repouso = LOW.
 | PA9 / PA10 | USART1 TX / RX | — | opcional: adaptador USB-serial, 115200 8N1 |
 | USB-C | USB CDC | — | transporte principal do dashboard |
 | GND | GND | GND | **obrigatório**, comum a tudo |
+
+> **Diagnóstico do ADC:** o comando serial `'m'` devolve o ADC cru dos 8 canais primários (8 x u16) e o `'n'`
+> os registradores `GPIOA_MODER`, `ADC1_DIFSEL`, `ADC1_SQR1/2`, `ADC1_SMPR1/2`, `ADC1_CFGR1` e `ADC1_ISR` (8 x u32).
+> O `tps_pct` do dashboard é o **ETB** (média de ETB_TPS1/PA2 e ETB_TPS2/PC5), não o TPS legado do PA4: com PA2
+> e PC5 flutuando ele fica em ~50% e oscila. Para vê-lo mudar, ligue o ETB do estimulador (PB7→PA2, PB8→PC5, cada um com RC).
+
 
 Confira a pinagem do ESP32 no cabeçalho de
 `tools/esp32_combined/esp32_combined.ino` antes de ligar.

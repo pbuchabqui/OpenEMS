@@ -421,6 +421,11 @@ uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept {
     return g_adc2_raw[idx];
 }
 
+AdcRegDiag adc_reg_diag() noexcept {
+    return AdcRegDiag{GPIOA_MODER, ADC1_DIFSEL, ADC1_SQR1, ADC1_SQR2,
+                      ADC1_SMPR1, ADC1_SMPR2, ADC1_CFGR1, ADC1_ISR};
+}
+
 // P0 #3: ADC Recovery System - API pública para verificação de status
 bool adc_is_recovering() noexcept {
     return g_adc_recovering;
@@ -475,6 +480,10 @@ static uint32_t g_adc_recovery_retries_mock = 0u;
 void     adc_init() noexcept {}
 void     adc_trigger_on_tooth(uint32_t t) noexcept { g_last_trigger_mod = t; }
 void     adc_idle_poll(uint32_t) noexcept {}
+AdcRegDiag adc_reg_diag() noexcept {
+    // Valores fixos do host: PA3/PA4/PA5 analógicos (11b), sem modo diferencial.
+    return AdcRegDiag{0xABFFFFFFu, 0u, 0x0001'4C0Fu, 0x0000'0C0Au, 0x0u, 0x0u, 0x0u, 0x0u};
+}
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept { return g_adc_primary[static_cast<uint8_t>(ch)]; }
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept { return g_adc_secondary[static_cast<uint8_t>(ch)]; }
 void adc_test_set_raw_primary(AdcPrimaryChannel ch, uint16_t v) noexcept { g_adc_primary[static_cast<uint8_t>(ch)] = v; }

@@ -60,6 +60,19 @@ void     adc_trigger_on_tooth(uint32_t tooth_period_ticks) noexcept;
 // era disparado por dente) e rearma o DMA após erro.
 void     adc_idle_poll(uint32_t now_ms) noexcept;
 
+// Estado dos registradores que decidem se um pino chega ao ADC1 (diagnóstico de bancada, só leitura).
+struct AdcRegDiag {
+    uint32_t gpioa_moder;   // 2 bits por pino; PA3/PA4/PA5 devem estar em 11b (analógico)
+    uint32_t adc1_difsel;   // bit n=1 → canal n em modo diferencial (deve ser 0)
+    uint32_t adc1_sqr1;
+    uint32_t adc1_sqr2;
+    uint32_t adc1_smpr1;
+    uint32_t adc1_smpr2;
+    uint32_t adc1_cfgr1;
+    uint32_t adc1_isr;
+};
+AdcRegDiag adc_reg_diag() noexcept;
+
 uint16_t adc_primary_read(AdcPrimaryChannel ch) noexcept;
 uint16_t adc_secondary_read(AdcSecondaryChannel ch) noexcept;
 

@@ -8,6 +8,7 @@
 #include "app/can_stack.h"
 #include "app/datalog.h"
 #include "app/can_rx_map.h"
+#include "hal/adc.h"
 #include "hal/flex_fuel.h"
 #include "hal/flash.h"
 #include "hal/system.h"
@@ -139,6 +140,28 @@ void parse_byte(uint8_t b) noexcept {
             tx_push(icache_is_enabled() ? 1u : 0u);
             for (uint8_t w = 0u; w < 4u; ++w) {
                 for (uint8_t i = 0u; i < 4u; ++i) { tx_push(static_cast<uint8_t>(gap[w] >> (8u * i))); }
+            }
+            return;
+        }
+        if (b == static_cast<uint8_t>('m')) {
+            // ADC bruto dos 8 canais primários (diagnóstico de bancada, só leitura), 16 bytes, 8 x u16 LE na ordem de
+            // AdcPrimaryChannel: MAP(PA3), MAF_V, TPS(PA4), KNOCK(PA5), APP1, APP2, ETB_TPS1, ETB_TPS2. Sem filtro,
+            // sem calibração e sem limitador: serve para separar "o pino chega" de "a conversão em % erra".
+            for (uint8_t ch = 0u; ch < 8u; ++ch) {
+                const uint16_t raw = ems::hal::adc_primary_read(static_cast<ems::hal::AdcPrimaryChannel>(ch));
+                tx_push(static_cast<uint8_t>(raw));
+                tx_push(static_cast<uint8_t>(raw >> 8u));
+            }
+            return;
+        }
+        if (b == static_cast<uint8_t>('n')) {
+            // Registradores que decidem se o pino chega ao ADC1 (só leitura), 32 bytes, 8 x u32 LE:
+            // GPIOA_MODER, ADC1_DIFSEL, ADC1_SQR1, ADC1_SQR2, ADC1_SMPR1, ADC1_SMPR2, ADC1_CFGR1, ADC1_ISR.
+            const ems::hal::AdcRegDiag r = ems::hal::adc_reg_diag();
+            const uint32_t words[8] = {r.gpioa_moder, r.adc1_difsel, r.adc1_sqr1, r.adc1_sqr2,
+                                       r.adc1_smpr1, r.adc1_smpr2, r.adc1_cfgr1, r.adc1_isr};
+            for (uint8_t w = 0u; w < 8u; ++w) {
+                for (uint8_t i = 0u; i < 4u; ++i) { tx_push(static_cast<uint8_t>(words[w] >> (8u * i))); }
             }
             return;
         }

@@ -241,6 +241,8 @@ void test_ui_chip_idcode(void);
 void test_nvm_scratch_slot(void);
 void test_ui_boot_op_diag(void);
 void test_ui_isr_diag(void);
+void test_ui_adc_raw(void);
+void test_ui_adc_regs(void);
 void test_ts_axes_page(void);
 void test_ts_envelope_canid_forms(void);
 void test_och_launch_tc_status(void);
