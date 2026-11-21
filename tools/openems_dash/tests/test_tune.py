@@ -60,6 +60,30 @@ class TestTune(unittest.TestCase):
         self.assertEqual(json.load(open(out)), P.load_base_tune(),
                          "base_tune.json is stale: regenerate with sim_ecu --dump-pages")
 
+    def test_base_tune_has_usable_correction_tables(self):
+        # O dump do simulador e o JSON podiam concordar num estado ruim (NVM de host zerado lido como
+        # calibração): corr CLT/IAT = 0 (PW ÷16 pelo piso 0,25x), dead time = 0, dwell = 0, pedal = 0.
+        import base64, struct
+        pages = {int(k): base64.b64decode(v) for k, v in P.load_base_tune()["pages"].items()}
+        p5 = pages[5]
+
+        def u16(off, n=8):
+            return struct.unpack_from("<%dH" % n, p5, off)
+
+        def i16(off, n=8):
+            return struct.unpack_from("<%dh" % n, p5, off)
+
+        for name, axis in (("CLT", i16(0)), ("IAT", i16(32)), ("AE CLT", i16(128)),
+                           ("VBATT dead time", u16(96)), ("VBATT dwell", u16(160))):
+            self.assertTrue(all(a < b for a, b in zip(axis, axis[1:])), "eixo %s não crescente: %s" % (name, axis))
+        for name, vals in (("correção CLT", u16(16)), ("correção IAT", u16(48)), ("dead time", u16(112)),
+                           ("dwell", u16(176))):
+            self.assertTrue(all(v > 0 for v in vals), "%s com zero: %s" % (name, vals))
+        p7 = struct.unpack_from("<4H4H", pages[7], 0)
+        self.assertTrue(all(a < b for a, b in zip(p7[:4], p7[1:4])), "eixo RPM do dwell não crescente")
+        self.assertTrue(all(v > 0 for v in p7[4:]), "fator de dwell com zero")
+        self.assertTrue(any(pages[8]), "mapa do pedal do ETB zerado: a borboleta nunca abriria")
+
     def test_export_import_survives_restart(self):
         link = self.ecu.link
         off, data = P.encode_field(0, "displacement_cc", 1798)

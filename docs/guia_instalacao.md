@@ -1,6 +1,6 @@
 # Guia de instalação
 
-> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-21 (doc-check + conferência pontual contra o código)
 
 Tudo pelo dashboard proprio (`tools/openems_dash`, aba **Install**: um guia
 passo a passo com faixas validadas, lampada de ponto, teste de saidas, gravar,
@@ -43,4 +43,10 @@ valores de fabrica utilizaveis.
 10. **Gravar tudo** (Install → 7) antes de desligar. Exporte o tune para
     guardar uma copia; "Restaurar padroes de fabrica" volta aos valores do
     firmware (`tools/openems_dash/base_tune.json`, gerado do proprio firmware).
+
+    Se o PW sair muito baixo ou as curvas de correcao de CLT/IAT, dead time e dwell
+    aparecerem zeradas na interface, a pagina 5 (e a 7) gravada na ECU esta zerada: sem
+    correcao de CLT/IAT o PW cai ao piso de 0,25x por correcao (1/16) e o dead time vira 0.
+    O boot ignora blocos com eixo nao crescente ou valor 0 e mantem os padroes de compilacao;
+    para regravar o slot, importe a sintonia de fabrica e grave as paginas 5 e 7.
 
