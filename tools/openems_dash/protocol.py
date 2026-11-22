@@ -39,7 +39,8 @@ MAP_AXIS_KPA = [v for v in MAP_AXIS_BAR_X100]  # bar×100 == kPa
 
 PAGE_SIZES = {0: 512, 1: N*N, 2: N*N, 3: 86, 4: 2*N*N, 5: 256, 6: 116, 7: 32, 8: 80,
               9: 112, 10: N*N + ((N+1)//2)**2, 11: 4*N,
-              12: 2 * N * N}  # LTFT accum: hits_wire u8 + mean_stft i8
+              12: 2 * N * N,  # LTFT accum: hits_wire u8 + mean_stft i8
+              13: 512}        # curvas NTC: CLT[128] + IAT[128], int16 °C×10 (tools/ntc_gen.py)
 
 STATUS_BITS = {
     "FULL_SYNC":        0x0001,  # bit 0

@@ -299,6 +299,21 @@ void load_xtau_calibration_from_nvm() noexcept {
 }
 
 
+// Curvas NTC de CLT/IAT (slot 10). Página ausente, apagada/zerada ou curva inválida (a validação
+// é do sensors_set_ntc_curves) mantém a reta padrão. Independe do gate de layout: é uma página nova.
+void load_ntc_curves_from_nvm() noexcept {
+    alignas(4) uint8_t page[4u * ems::drv::kNtcCurvePoints] = {};
+    if (!ems::hal::nvm_load_calibration(10u, page, sizeof(page)) ||
+        page_is_blank(page, sizeof(page))) {
+        return;
+    }
+    int16_t clt[ems::drv::kNtcCurvePoints];
+    int16_t iat[ems::drv::kNtcCurvePoints];
+    std::memcpy(clt, page, sizeof(clt));
+    std::memcpy(iat, page + sizeof(clt), sizeof(iat));
+    (void)ems::drv::sensors_set_ntc_curves(clt, iat);
+}
+
 void nvm_boot_load_tables(bool cal_layout_ok) noexcept {
     // Preserve exact former main_stm32 call order and layout gating.
     if (cal_layout_ok) {
@@ -311,6 +326,7 @@ void nvm_boot_load_tables(bool cal_layout_ok) noexcept {
     load_dwell2d_calibration_from_nvm();
     load_pedal_map_from_nvm();
     load_boost_map_from_nvm();
+    load_ntc_curves_from_nvm();
     if (cal_layout_ok) {
         load_table_axes_from_nvm();
     }

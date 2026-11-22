@@ -584,6 +584,7 @@ void reset_pages() noexcept {
     sync_page_from_table(0x06u);
     sync_page_from_table(0x07u);
     sync_page_from_table(0x0Bu);
+    sync_page_from_table(0x0Du);
     g_dirty_page_mask = 0u;
 }
 

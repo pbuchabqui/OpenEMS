@@ -9,7 +9,7 @@
  *   Setor 3 (0x08086000, 8 KB): Calibração página 2 (256 bytes)
  *   Setores 4-6: Calibração páginas 3-5
  *   Setor 7 (page 6, ETB/xtau), 8 (page 7, dwell 2D/pedal), 9 (page 8, boost),
- *   10 (page 9, eixos): ver kSectorCal* abaixo
+ *   10 (page 9, eixos), 12 (page 10, curvas NTC; 11 = scratch): ver kSectorCal* abaixo
  *   Cada página termina com um rodapé BEGIN/END+CRC nos últimos 32 B do setor
  *   (hal/cal_trailer.h).
  *
@@ -110,6 +110,7 @@ static constexpr uint32_t kSectorCal6  = 7u;   // Setor 7: Cal page 6 (ETB)
 static constexpr uint32_t kSectorCal7  = 8u;   // Setor 8: Cal page 7 (Pedal map)
 static constexpr uint32_t kSectorCal8  = 9u;   // Setor 9: Cal page 8 (Boost map)
 static constexpr uint32_t kSectorCal9  = 10u;  // Setor 10: Cal page 9 (eixos tabela)
+static constexpr uint32_t kSectorCal10 = 12u;  // Setor 12: Cal page 10 (curvas NTC CLT/IAT)
 static constexpr uint32_t kSectorScratch = 11u;  // Setor 11: scratch da operação sacrificial do boot (nada mais usa)
 
 static constexpr uint32_t kBank2Base   = FLASH_BANK2_BASE;
@@ -336,13 +337,14 @@ void nvm_reset_knock_map() noexcept {
 // ── Calibração (páginas) ──────────────────────────────────────────────────────
 
 bool nvm_save_calibration(uint8_t page, const uint8_t* data, uint16_t len) noexcept {
-    if (page > 9u || data == nullptr || len == 0u) { return false; }
+    if (page > 10u || data == nullptr || len == 0u) { return false; }
     // Um flush adaptativo (máquina de estados não bloqueante) em andamento usa PG/SER e o
     // lock do banco 2: um burn no meio dele rearmava/limpava esses bits e deixava o setor 0
     // apagado pela metade. O chamador (UI) recebe falha e tenta de novo.
     if (g_sector0_flush_active) { return false; }
 
-    const uint32_t sector = (page == 9u) ? kSectorCal9 :
+    const uint32_t sector = (page == 10u) ? kSectorCal10 :
+                            (page == 9u) ? kSectorCal9 :
                             (page == 8u) ? kSectorCal8 :
                             (page == 7u) ? kSectorCal7 :
                             (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
@@ -456,9 +458,10 @@ void nvm_boot_first_op(bool power_on) noexcept {
 NvmBootOpDiag nvm_boot_first_op_diag() noexcept { return g_boot_op; }
 
 bool nvm_load_calibration(uint8_t page, uint8_t* data, uint16_t len) noexcept {
-    if (page > 9u || data == nullptr || len == 0u) { return false; }
+    if (page > 10u || data == nullptr || len == 0u) { return false; }
 
-    const uint32_t sector = (page == 9u) ? kSectorCal9 :
+    const uint32_t sector = (page == 10u) ? kSectorCal10 :
+                            (page == 9u) ? kSectorCal9 :
                             (page == 8u) ? kSectorCal8 :
                             (page == 7u) ? kSectorCal7 :
                             (page == 6u) ? kSectorCal6 : (kSectorCal0 + page);
@@ -681,7 +684,7 @@ namespace ems::hal {
 static int8_t g_ltft[kNvmLtftDim][kNvmLtftDim] = {};
 static int8_t g_knock[8][8]      = {};
 static int8_t g_ltft_add[kNvmLtftAddDim][kNvmLtftAddDim] = {};
-static uint8_t g_cal[10][1024]   = {};  // linha ≥ maior página (lambda 2×kTableCells)
+static uint8_t g_cal[11][1024]   = {};  // linha ≥ maior página (lambda 2×kTableCells)
 static uint32_t g_erase_cnt   = 0u, g_prog_cnt = 0u;
 static bool     g_flash_busy      = false;  // simulates flash BSY timeout when set
 static uint32_t g_flash_busy_polls = 0u;     // non-zero → simulate timeout on next op
@@ -755,13 +758,13 @@ int8_t nvm_read_ltft_add(uint8_t r, uint8_t l) noexcept {
 }
 
 bool nvm_save_calibration(uint8_t pg, const uint8_t* d, uint16_t l) noexcept {
-    if (pg > 9u || d == nullptr || l == 0u) return false;
+    if (pg > 10u || d == nullptr || l == 0u) return false;
     if (g_flash_busy) { return false; }
     ++g_erase_cnt; ++g_prog_cnt;
     std::memcpy(g_cal[pg], d, l); return true;
 }
 bool nvm_load_calibration(uint8_t pg, uint8_t* d, uint16_t l) noexcept {
-    if (pg > 9u || d == nullptr || l == 0u) return false;
+    if (pg > 10u || d == nullptr || l == 0u) return false;
     std::memcpy(d, g_cal[pg], l); return true;
 }
 bool nvm_flush_adaptive_maps() noexcept { return true; }

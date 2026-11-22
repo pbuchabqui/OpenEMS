@@ -517,6 +517,19 @@ void test_sensors_table_entry_setters(void) {
     const ems::drv::SensorData sd = sensors_get();
     CHECK_EQ(sd.clt_degc_x10, 200, "CLT table entry 62 = 200 (20.0°C)");
     CHECK_EQ(sd.iat_degc_x10, 150, "IAT table entry 62 = 150 (15.0°C)");
+
+    // Curva carregada (NTC): interpola entre baldes nos 5 bits baixos (raw 2000 = balde 62 + 16/32).
+    int16_t curve[128];
+    for (int i = 0; i < 128; ++i) { curve[i] = static_cast<int16_t>(1500 - (1900 * i) / 127); }
+    CHECK_TRUE(ems::drv::sensors_set_ntc_curves(curve, curve), "curva NTC válida aceita");
+    sensors_init();   // o init do boot não pode apagar a curva carregada
+    adc_test_set_raw_secondary(AdcSecondaryChannel::CLT, 2000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::IAT, 2000u);
+    for (int i = 0; i < 8; ++i) { sensors_test_tick_100ms(); }
+    const int expect = curve[62] + ((curve[63] - curve[62]) * 16) / 32;
+    CHECK_EQ(sensors_get().clt_degc_x10, expect, "CLT interpolada entre baldes");
+    CHECK_TRUE(expect != curve[62], "interpolação difere do degrau");
+    ems::drv::sensors_reset_ntc_curves();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

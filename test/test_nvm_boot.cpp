@@ -6,6 +6,7 @@
 #include "app/nvm_boot.h"
 #include "engine/calibration.h"
 #include "engine/etb_control.h"
+#include "drv/sensors.h"
 #include "engine/table3d.h"
 #include "hal/flash.h"
 
@@ -281,4 +282,72 @@ void test_nvm_boot_rejects_zeroed_pedal_and_boost(void) {
     nvm_test_reset();
     std::memcpy(etb_pedal_map, pedal_bk, sizeof(pedal_bk));
     std::memcpy(boost_target_bar_x1000, boost_bk, sizeof(boost_bk));
+}
+
+void test_nvm_boot_ntc_curves(void) {
+    section("nvm_boot: curvas NTC CLT/IAT (slot 10)");
+    constexpr uint8_t N = ems::drv::kNtcCurvePoints;
+
+    ems::drv::sensors_reset_ntc_curves();
+    int16_t def_clt[N], def_iat[N];
+    ems::drv::sensors_get_ntc_curves(def_clt, def_iat);
+    CHECK_EQ(static_cast<int>(def_clt[0]), -400, "default: reta começa em -40 °C");
+    CHECK_EQ(static_cast<int>(def_clt[N - 1u]), 1500, "default: reta termina em 150 °C");
+
+    // Curva NTC sintética decrescente com o raw (pull-up): 150 °C → -40 °C.
+    alignas(4) uint8_t pg[4u * N];
+    int16_t clt[N], iat[N];
+    for (uint8_t i = 0u; i < N; ++i) {
+        clt[i] = static_cast<int16_t>(1500 - (1900 * i) / (N - 1u));
+        iat[i] = static_cast<int16_t>(1200 - (1500 * i) / (N - 1u));
+    }
+    std::memcpy(pg, clt, sizeof(clt));
+    std::memcpy(pg + sizeof(clt), iat, sizeof(iat));
+
+    // Flash apagada → mantém a reta.
+    nvm_erase_all_pages();
+    load_ntc_curves_from_nvm();
+    int16_t g_clt[N], g_iat[N];
+    ems::drv::sensors_get_ntc_curves(g_clt, g_iat);
+    CHECK_EQ(std::memcmp(g_clt, def_clt, sizeof(g_clt)), 0, "NTC: flash apagada mantém a reta (CLT)");
+
+    // Curva válida → carrega; e o sensors_init do boot (roda depois) não a sobrescreve.
+    CHECK_TRUE(nvm_save_calibration(10u, pg, sizeof(pg)), "grava page NTC");
+    load_ntc_curves_from_nvm();
+    ems::drv::sensors_get_ntc_curves(g_clt, g_iat);
+    CHECK_EQ(std::memcmp(g_clt, clt, sizeof(clt)), 0, "NTC: CLT carregada da NVM");
+    CHECK_EQ(std::memcmp(g_iat, iat, sizeof(iat)), 0, "NTC: IAT carregada da NVM");
+    ems::drv::sensors_init();
+    ems::drv::sensors_get_ntc_curves(g_clt, g_iat);
+    CHECK_EQ(std::memcmp(g_clt, clt, sizeof(clt)), 0, "NTC: sensors_init não sobrescreve a curva");
+
+    // Reset volta à reta.
+    ems::drv::sensors_reset_ntc_curves();
+    ems::drv::sensors_get_ntc_curves(g_clt, g_iat);
+    CHECK_EQ(std::memcmp(g_clt, def_clt, sizeof(g_clt)), 0, "NTC: reset volta à reta");
+
+    // Página zerada, não monotônica, achatada ou fora de faixa → rejeitada (mantém a reta).
+    std::memset(pg, 0, sizeof(pg));
+    CHECK_TRUE(nvm_save_calibration(10u, pg, sizeof(pg)), "grava page NTC zerada");
+    load_ntc_curves_from_nvm();
+    ems::drv::sensors_get_ntc_curves(g_clt, g_iat);
+    CHECK_EQ(std::memcmp(g_clt, def_clt, sizeof(g_clt)), 0, "NTC: página zerada rejeitada");
+
+    CHECK_FALSE(ems::drv::sensors_set_ntc_curves(clt, nullptr), "NTC: ponteiro nulo rejeitado");
+    int16_t bad[N];
+    std::memcpy(bad, clt, sizeof(bad));
+    bad[40] = static_cast<int16_t>(bad[39] + 100);   // sobe no meio de uma curva que desce
+    CHECK_FALSE(ems::drv::sensors_set_ntc_curves(bad, iat), "NTC: não monotônica rejeitada");
+    for (uint8_t i = 0u; i < N; ++i) { bad[i] = 250; }
+    CHECK_FALSE(ems::drv::sensors_set_ntc_curves(bad, iat), "NTC: curva plana rejeitada");
+    std::memcpy(bad, clt, sizeof(bad));
+    bad[0] = 3000;
+    CHECK_FALSE(ems::drv::sensors_set_ntc_curves(bad, iat), "NTC: fora de faixa rejeitada");
+    // CLT válida + IAT inválida: nada muda (atômico).
+    CHECK_FALSE(ems::drv::sensors_set_ntc_curves(clt, bad), "NTC: IAT inválida rejeita o par");
+    ems::drv::sensors_get_ntc_curves(g_clt, g_iat);
+    CHECK_EQ(std::memcmp(g_clt, def_clt, sizeof(g_clt)), 0, "NTC: rejeição não altera a CLT");
+
+    nvm_erase_all_pages();
+    ems::drv::sensors_reset_ntc_curves();
 }

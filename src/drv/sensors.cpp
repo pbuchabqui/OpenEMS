@@ -350,14 +350,25 @@ inline void apply_fault(SensorId id, uint16_t raw) noexcept {
     }
 }
 
-// LUT 128 entradas; raw [0..4095] → índice [0..127] via shift de 5 bits
+// Curva carregada pelo usuário/NVM: o init_tables() do sensors_init (que roda DEPOIS do load do
+// NVM no boot) não pode sobrescrevê-la com a reta.
+static bool g_ntc_curves_loaded = false;
+
+// LUT 128 entradas; raw [0..4095] → índice [0..127] via shift de 5 bits.
+// Com curva carregada (NTC real) interpola linearmente entre baldes nos 5 bits baixos: o degrau
+// de 32 contagens dava ±3 °C perto de 115 °C. A reta padrão segue em degraus (comportamento
+// e hashes de regressão inalterados). As amostras da curva são as do raw = idx*32 (borda esquerda).
 inline int16_t lut128(const int16_t* table, uint16_t raw) noexcept {
     const uint8_t idx = static_cast<uint8_t>(raw >> 5u);
-    return table[idx];
+    if (!g_ntc_curves_loaded || idx >= 127u) { return table[idx]; }
+    const int32_t a = table[idx];
+    const int32_t b = table[idx + 1u];
+    return static_cast<int16_t>(a + ((b - a) * static_cast<int32_t>(raw & 31u)) / 32);
 }
 
 // Tabela padrão linear: -40.0°C a +150.0°C (×10), 128 pontos
 inline void init_tables() noexcept {
+    if (g_ntc_curves_loaded) { return; }
     for (uint16_t i = 0u; i < 128u; ++i) {
         const int32_t t = -400 + static_cast<int32_t>((1900u * i) / 127u);
         g_clt_table[i] = static_cast<int16_t>(t);
@@ -987,6 +998,49 @@ SensorData sensors_get() noexcept {
     out.an3_raw             = g_data_committed.an3_raw;
     out.an4_raw             = g_data_committed.an4_raw;
     return out;
+}
+
+namespace {
+// NTC: monótona (não estrita: os extremos podem saturar), amplitude mínima e faixa física.
+bool ntc_curve_valid(const int16_t* c) noexcept {
+    constexpr int16_t kMin = -600;   // -60 °C
+    constexpr int16_t kMax = 2500;   // 250 °C
+    constexpr int32_t kMinSpan = 500; // 50 °C
+    bool up = true;
+    bool down = true;
+    for (uint8_t i = 0u; i < kNtcCurvePoints; ++i) {
+        if (c[i] < kMin || c[i] > kMax) { return false; }
+        if (i != 0u) {
+            if (c[i] < c[i - 1u]) { up = false; }
+            if (c[i] > c[i - 1u]) { down = false; }
+        }
+    }
+    const int32_t span = static_cast<int32_t>(c[kNtcCurvePoints - 1u]) - c[0];
+    return (up || down) && (span >= kMinSpan || -span >= kMinSpan);
+}
+}  // namespace
+
+bool sensors_set_ntc_curves(const int16_t* clt_x10, const int16_t* iat_x10) noexcept {
+    if (clt_x10 == nullptr || iat_x10 == nullptr) { return false; }
+    if (!ntc_curve_valid(clt_x10) || !ntc_curve_valid(iat_x10)) { return false; }
+    for (uint8_t i = 0u; i < kNtcCurvePoints; ++i) {
+        g_clt_table[i] = clt_x10[i];
+        g_iat_table[i] = iat_x10[i];
+    }
+    g_ntc_curves_loaded = true;
+    return true;
+}
+
+void sensors_get_ntc_curves(int16_t* clt_x10, int16_t* iat_x10) noexcept {
+    for (uint8_t i = 0u; i < kNtcCurvePoints; ++i) {
+        if (clt_x10 != nullptr) { clt_x10[i] = g_clt_table[i]; }
+        if (iat_x10 != nullptr) { iat_x10[i] = g_iat_table[i]; }
+    }
+}
+
+void sensors_reset_ntc_curves() noexcept {
+    g_ntc_curves_loaded = false;
+    init_tables();
 }
 
 #if defined(EMS_HOST_TEST)

@@ -73,6 +73,7 @@ uint16_t page_size(uint8_t page) noexcept {
     if (page == 0x0Au) { return static_cast<uint16_t>(sizeof(g_page10_ltft)); }
     if (page == 0x0Bu) { return static_cast<uint16_t>(sizeof(g_page11_axes)); }
     if (page == 0x0Cu) { return static_cast<uint16_t>(sizeof(g_page12_ltft_accum)); }
+    if (page == 0x0Du) { return static_cast<uint16_t>(sizeof(g_page13_ntc)); }
     return 0u;
 }
 
@@ -90,6 +91,7 @@ uint8_t* page_ptr(uint8_t page) noexcept {
     if (page == 0x0Au) { return g_page10_ltft; }
     if (page == 0x0Bu) { return g_page11_axes; }
     if (page == 0x0Cu) { return g_page12_ltft_accum; }
+    if (page == 0x0Du) { return g_page13_ntc; }
     return nullptr;
 }
 
@@ -571,6 +573,13 @@ void sync_page_from_table(uint8_t page) noexcept {
         constexpr uint16_t kAxisBytes = 2u * ems::engine::kTableAxisSize;
         std::memcpy(g_page11_axes + 0,          rpm,  kAxisBytes);
         std::memcpy(g_page11_axes + kAxisBytes, load, kAxisBytes);
+    } else if (page == 0x0Du) {
+        // Curvas NTC: CLT[128] seguido de IAT[128], int16 LE, °C×10.
+        int16_t clt[ems::drv::kNtcCurvePoints];
+        int16_t iat[ems::drv::kNtcCurvePoints];
+        ems::drv::sensors_get_ntc_curves(clt, iat);
+        std::memcpy(g_page13_ntc, clt, sizeof(clt));
+        std::memcpy(g_page13_ntc + sizeof(clt), iat, sizeof(iat));
     } else if (page == 0x0Cu) {
         // Read-only: snapshot do acumulador LTFT (hits + mean STFT).
         ems::engine::fuel_ltft_accum_export(
@@ -840,6 +849,12 @@ bool sync_table_from_page(uint8_t page) noexcept {
         std::memcpy(ems::engine::etb_pedal_map, g_page8_pedalmap, sizeof(g_page8_pedalmap));
     } else if (page == 0x09u) {
         std::memcpy(ems::engine::boost_target_bar_x1000, g_page9_boost, sizeof(g_page9_boost));
+    } else if (page == 0x0Du) {
+        int16_t clt[ems::drv::kNtcCurvePoints];
+        int16_t iat[ems::drv::kNtcCurvePoints];
+        std::memcpy(clt, g_page13_ntc, sizeof(clt));
+        std::memcpy(iat, g_page13_ntc + sizeof(clt), sizeof(iat));
+        return ems::drv::sensors_set_ntc_curves(clt, iat);   // inválida: false, nada muda
     } else if (page == 0x0Bu) {
         uint16_t rpm[ems::engine::kTableAxisSize];
         uint16_t load[ems::engine::kTableAxisSize];
@@ -938,6 +953,14 @@ bool burn_one_page(uint8_t page) noexcept {
     }
     if (page == 0x09u) {
         const bool ok = ems::hal::nvm_save_calibration(8u, g_page9_boost, static_cast<uint16_t>(sizeof(g_page9_boost)));
+        if (!ok) { return false; }
+        clear_page_dirty(page);
+        return true;
+    }
+    if (page == 0x0Du) {
+        // Grava o que o firmware usa agora (o buffer pode estar velho ou nunca ter sido escrito).
+        sync_page_from_table(0x0Du);
+        const bool ok = ems::hal::nvm_save_calibration(10u, g_page13_ntc, static_cast<uint16_t>(sizeof(g_page13_ntc)));
         if (!ok) { return false; }
         clear_page_dirty(page);
         return true;

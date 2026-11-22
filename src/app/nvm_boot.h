@@ -22,6 +22,7 @@ void load_lambda_target_table_from_nvm() noexcept;
 void load_corr_calibration_from_nvm() noexcept;
 void load_dwell2d_calibration_from_nvm() noexcept;
 void load_boost_map_from_nvm() noexcept;
+void load_ntc_curves_from_nvm() noexcept;
 void load_table_axes_from_nvm() noexcept;
 void load_pedal_map_from_nvm() noexcept;
 void load_xtau_calibration_from_nvm() noexcept;

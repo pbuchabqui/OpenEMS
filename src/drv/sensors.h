@@ -125,6 +125,16 @@ void sensors_hook_knock_sample(uint16_t raw) noexcept;                 // amostr
 bool sensors_hook_map_window_enabled() noexcept;                       // gate barato antes de tocar no ADC
 void sensors_hook_map_window_sample(const CkpSnapshot& snap, uint16_t map_bar_x1000) noexcept;
 
+// Curvas NTC de CLT/IAT: LUT de 128 baldes (raw>>5) em °C×10. O default é a reta -40..150 °C
+// (placeholder; a curva real depende do sensor e do divisor da bancada). set valida as DUAS
+// curvas antes de aplicar (monótonas, mesma direção, faixa -60..250 °C, amplitude >= 50 °C):
+// inválidas => false e nada muda. O boot carrega da página 0x0D (NVM); sem página válida
+// mantém a reta.
+inline constexpr uint8_t kNtcCurvePoints = 128u;
+bool sensors_set_ntc_curves(const int16_t* clt_x10, const int16_t* iat_x10) noexcept;
+void sensors_get_ntc_curves(int16_t* clt_x10, int16_t* iat_x10) noexcept;
+void sensors_reset_ntc_curves() noexcept;
+
 #if defined(EMS_HOST_TEST)
 void sensors_test_reset() noexcept;
 void sensors_test_set_clt_table_entry(uint8_t idx, int16_t degc_x10) noexcept;

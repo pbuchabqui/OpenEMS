@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "app/ui_protocol.h"
+#include "drv/sensors.h"
 #include "engine/calibration.h"
 #include "engine/constants.h"
 #include "engine/fuel_trim.h"
@@ -73,6 +74,7 @@ extern uint8_t g_page9_boost[112];
 extern uint8_t g_page10_ltft[ems::engine::kTableCells +
     static_cast<uint16_t>(ems::engine::kLtftAddAxisSize) * ems::engine::kLtftAddAxisSize];
 extern uint8_t g_page11_axes[4u * ems::engine::kTableAxisSize];
+extern uint8_t g_page13_ntc[4u * ems::drv::kNtcCurvePoints];
 extern uint8_t g_page12_ltft_accum[ems::engine::kLtftAccumPageSize];
 
 extern uint8_t g_env_buf[kEnvMaxPayload];

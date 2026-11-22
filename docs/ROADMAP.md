@@ -1,6 +1,6 @@
 # Roadmap e progresso OpenEMS
 
-> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-22 (doc-check + conferência pontual contra o código)
 
 Reúne o antigo `progresso.md` (revisão e correção de `src/`, branch `fix/output-contract-cuts`, já mesclada em `main`) e o roadmap de produto. Nada aqui foi validado em hardware. `tools/ts/OpenEMS_model.msq` está versionado.
 
@@ -57,7 +57,7 @@ Bloqueia as fases seguintes. Roteiro em `docs/bench_test_manual.md`.
 
 Depende da Fase 2.
 
-- Curva de CLT/IAT com pull-up de 2,49 kΩ. Escala dos sensores de pressão de combustível e de óleo. Fase do VVT.
+- Curva de CLT/IAT com pull-up de 2,49 kΩ. O mecanismo existe: página `0x0D` (NVM slot 10, setor 12), gerada no host por `tools/ntc_gen.py` e interpolada entre baldes; sem página válida o firmware usa a reta -40..150 °C. Falta medir o divisor real e gravar a curva do sensor. Escala dos sensores de pressão de combustível e de óleo. Fase do VVT.
 - PWM real do ETB, ADC com o motor parado, rodapé de calibração na Flash.
 - Offsets EXTI do flex (RPR1 0x00C, FPR1 0x010) e registradores do CAN.
 - Ângulo na luz de ponto durante o rev limit.
