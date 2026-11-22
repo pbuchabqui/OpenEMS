@@ -600,6 +600,16 @@ bool sanitize_applied_calibration() noexcept {
     cap(en::decel_cut_ramp_ms, 5000u);
     for (auto& d : en::dwell_ms_x10_table) { cap(d, 100u); }      // ≤ 10 ms
     for (auto& f : en::dwell_rpm_factor_q8) { cap(f, 1024u); }    // ≤ 4,0×
+    // Avanço base por célula (int8, graus): mesmo domínio do clamp final de ign_calc. Sem isto,
+    // uma célula corrompida em +127° engole as correções de retardo (TC/launch/overrun).
+    constexpr int8_t kSparkMinDeg = en::kAdvanceMinX10 / 10;
+    constexpr int8_t kSparkMaxDeg = en::kAdvanceMaxX10 / 10;
+    for (auto& row : en::spark_table) {
+        for (auto& c : row) {
+            if (c < kSparkMinDeg)      { c = kSparkMinDeg; changed = true; }
+            else if (c > kSparkMaxDeg) { c = kSparkMaxDeg; changed = true; }
+        }
+    }
     return changed;
 }
 

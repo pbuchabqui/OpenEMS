@@ -93,6 +93,14 @@ void test_nvm_boot_table_loaders(void) {
     load_spark_table_from_nvm();
     CHECK_EQ(std::memcmp(spark_table, sp_pg, sizeof(sp_pg)), 0, "spark: carregada da NVM");
 
+    // Célula corrompida (+127/−128) é clampada a [+60,−20] pelo saneamento do boot.
+    sp_pg[0] = 127u;
+    sp_pg[1] = static_cast<uint8_t>(-128);
+    CHECK_TRUE(nvm_save_calibration(2u, sp_pg, sizeof(sp_pg)), "grava page spark corrompida");
+    nvm_boot_load_tables(true);
+    CHECK_EQ(static_cast<int>(spark_table[0][0]), 60, "spark: +127 clampado a +60");
+    CHECK_EQ(static_cast<int>(spark_table[0][1]), -20, "spark: −128 clampado a −20");
+
     // Lambda alvo.
     alignas(4) uint8_t lm_pg[sizeof(lambda_target_table_x1000)];
     int16_t lv[kTableAxisSize * kTableAxisSize];
