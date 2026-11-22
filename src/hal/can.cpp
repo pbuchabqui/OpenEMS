@@ -136,6 +136,28 @@ uint32_t can0_get_init_faults() noexcept {
     return g_can_init_faults;
 }
 
+static uint32_t g_can_recoveries = 0u;
+
+bool can0_bus_off() noexcept {
+    return (FDCAN1_PSR & FDCAN_PSR_BO) != 0u;
+}
+
+bool can0_recover() noexcept {
+    if (!can0_bus_off()) { return false; }
+    // Em bus-off o hardware já pôs INIT (CCE fica 0); basta limpar INIT para iniciar a recuperação.
+    FDCAN1_CCCR &= ~FDCAN_CCCR_INIT;
+    constexpr uint32_t kTimeout = 30000u;
+    for (uint32_t n = kTimeout; n > 0u; --n) {
+        if ((FDCAN1_CCCR & FDCAN_CCCR_INIT) == 0u) { break; }
+    }
+    ++g_can_recoveries;
+    return (FDCAN1_CCCR & FDCAN_CCCR_INIT) == 0u;
+}
+
+uint32_t can0_get_recoveries() noexcept {
+    return g_can_recoveries;
+}
+
 // ── Transmissão ───────────────────────────────────────────────────────────────
 
 bool can0_tx(const CanFrame& frame) noexcept {
@@ -247,12 +269,24 @@ CanFrame g_tx_log[kTxLogMax];
 uint16_t g_tx_log_n = 0u;
 bool     g_tx_busy = false;
 bool     g_tx_model_busy = false;     // false: aceita sempre (comportamento antigo dos testes)
+bool     g_bus_off = false;
+uint32_t g_recoveries = 0u;
 CanFrame g_rx_q[16];
 uint8_t  g_rx_head = 0u, g_rx_n = 0u;
 }  // namespace
 void can0_init() noexcept {}
 uint32_t can0_get_init_faults() noexcept { return 0u; }
+bool can0_bus_off() noexcept { return g_bus_off; }
+bool can0_recover() noexcept {
+    if (!g_bus_off) { return false; }
+    g_bus_off = false;      // o stub volta na hora; o hardware espera 129 x 11 bits recessivos
+    ++g_recoveries;
+    return true;
+}
+uint32_t can0_get_recoveries() noexcept { return g_recoveries; }
+void can0_test_set_bus_off(bool on) noexcept { g_bus_off = on; }
 bool can0_tx(const CanFrame& f) noexcept {
+    if (g_bus_off) { return false; }
     if (g_tx_model_busy && g_tx_busy) { return false; }
     g_tx_busy = true;
     if (g_tx_log_n < kTxLogMax) { g_tx_log[g_tx_log_n++] = f; }
@@ -265,7 +299,7 @@ bool can0_rx_pop(CanFrame& out) noexcept {
     --g_rx_n;
     return true;
 }
-void can0_test_reset() noexcept { g_tx_log_n = 0u; g_tx_busy = false; g_tx_model_busy = false; g_rx_head = g_rx_n = 0u; }
+void can0_test_reset() noexcept { g_bus_off = false; g_recoveries = 0u; g_tx_log_n = 0u; g_tx_busy = false; g_tx_model_busy = false; g_rx_head = g_rx_n = 0u; }
 void can0_test_model_single_tx_buffer(bool on) noexcept { g_tx_model_busy = on; }
 void can0_test_tx_complete() noexcept { g_tx_busy = false; }
 uint16_t can0_test_tx_count() noexcept { return g_tx_log_n; }

@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "app/can_stack.h"
+#include "engine/diagnostic_manager.h"
 #include "engine/engine_config.h"
 #include "hal/can.h"
 
@@ -222,4 +223,44 @@ void test_can_stack_wbo2_api(void) {
     CHECK_TRUE(can_stack_wbo2_fault(), "bancada off: volta a falhar sem frame");
 
     can_stack_init(0x180u);
+}
+
+void test_can_stack_bus_off_recovery(void) {
+    section("can_stack: bus-off é recuperado (INIT limpo) com espaçamento de 1 s e DTC CAN_BUS_OFF");
+    using ems::engine::DiagnosticManager;
+    using DC = ems::engine::DiagnosticCode;
+    ems::engine::DiagnosticManager::init();
+    can0_test_reset();
+    can_stack_init(0x180u);
+    const ems::drv::SensorData s{};
+    auto tick = [&](uint32_t t) { can_stack_process(t, ckp_at(800u), s, 10, 50u, 0, 0u, 0u, 0u); };
+
+    tick(2000u);
+    CHECK_FALSE(DiagnosticManager::is_fault_active(DC::CAN_BUS_OFF), "sem bus-off: sem DTC");
+    CHECK_EQ(can0_get_recoveries(), 0u, "sem bus-off: nenhuma recuperação");
+
+    can0_test_set_bus_off(true);
+    const uint16_t tx_before = can0_test_tx_count();
+    tick(2020u);                                   // 1ª tentativa é imediata
+    CHECK_TRUE(DiagnosticManager::is_fault_active(DC::CAN_BUS_OFF), "bus-off levanta CAN_BUS_OFF");
+    CHECK_EQ(can0_get_recoveries(), 1u, "1ª recuperação imediata");
+
+    tick(2040u);                                   // barramento voltou: DTC some, TX volta
+    CHECK_FALSE(DiagnosticManager::is_fault_active(DC::CAN_BUS_OFF), "recuperado: DTC limpo");
+    tick(2060u);
+    CHECK_TRUE(can0_test_tx_count() > tx_before, "TX volta depois da recuperação");
+
+    // Novo bus-off logo depois: respeita 1 s desde a última tentativa.
+    can0_test_set_bus_off(true);
+    const uint16_t tx_in_busoff = can0_test_tx_count();
+    tick(2400u);
+    tick(2800u);
+    CHECK_EQ(can0_test_tx_count(), tx_in_busoff, "em bus-off nenhum frame sai");
+    CHECK_TRUE(DiagnosticManager::is_fault_active(DC::CAN_BUS_OFF), "novo bus-off: DTC ativo");
+    CHECK_EQ(can0_get_recoveries(), 1u, "novo bus-off antes de 1 s: sem nova tentativa");
+    tick(3020u);
+    CHECK_EQ(can0_get_recoveries(), 2u, "passado 1 s: tenta de novo");
+    tick(3040u);
+    CHECK_FALSE(DiagnosticManager::is_fault_active(DC::CAN_BUS_OFF), "recuperado de novo: DTC limpo");
+    can0_test_reset();
 }

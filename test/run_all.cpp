@@ -381,6 +381,7 @@ test_engine_calc_mspark_dwell_follows_normal();
     test_can_stack_wbo2_plausibility();
     test_can_rx_ignores_extended_and_remote();
 test_can_stack_wbo2_api();
+test_can_stack_bus_off_recovery();
     test_och_live_ve_byte();
     test_ts_envelope_signature_via_r();
     test_ts_whole_page_800();

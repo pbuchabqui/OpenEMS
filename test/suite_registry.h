@@ -122,6 +122,7 @@ void test_nvm_boot_rejects_zeroed_pedal_and_boost(void);
 void test_nvm_boot_rejects_zeroed_ve_spark_lambda(void);
 void test_nvm_boot_ntc_curves(void);
 void test_can_stack_wbo2_api(void);
+void test_can_stack_bus_off_recovery(void);
 void test_ign_get_advance(void);
 void test_ign_dwell_vbatt_rpm(void);
 void test_ign_idle_spark_correction(void);

@@ -27,6 +27,14 @@ bool can0_tx(const CanFrame& frame) noexcept;
 bool can0_rx_pop(CanFrame& out) noexcept;
 uint32_t can0_get_init_faults() noexcept;
 
+// Bus-off: em bus-off o hardware põe CCCR.INIT e o controlador fica mudo (TX recusa, RX morre) até o
+// software sair de INIT. bus_off() lê PSR.BO; recover() inicia a sequência (limpa INIT; o próprio
+// controlador espera 129 x 11 bits recessivos antes de voltar). Timing e filtros ficam como estão.
+// recover() só age em bus-off real e devolve true se saiu de INIT.
+bool can0_bus_off() noexcept;
+bool can0_recover() noexcept;
+uint32_t can0_get_recoveries() noexcept;
+
 #if defined(EMS_HOST_TEST)
 // Ganchos do stub de host (src/hal/can.cpp).
 void can0_test_reset() noexcept;
@@ -35,6 +43,7 @@ void can0_test_tx_complete() noexcept;
 uint16_t can0_test_tx_count() noexcept;
 const CanFrame& can0_test_tx_at(uint16_t i) noexcept;
 void can0_test_push_rx(const CanFrame& f) noexcept;
+void can0_test_set_bus_off(bool on) noexcept;   // modela PSR.BO + INIT; TX recusa enquanto em bus-off
 #endif
 
 }  // namespace ems::hal

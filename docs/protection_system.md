@@ -1,6 +1,6 @@
 # Sistema de proteção
 
-> **Status:** vigente · validado 2026-11-18 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-22 (doc-check + conferência pontual contra o código)
 
 Duas peças: o `limp_gating` decide os cortes de injeção, ignição e ETB; o `DiagnosticManager` guarda as falhas e alimenta o corte por CRITICAL.
 
@@ -24,6 +24,7 @@ Tabela de 16 eventos em RAM, com código, severidade, contador de ocorrências, 
 - Único efeito sobre o motor: `is_system_ready()` é falso se houver um evento CRITICAL, e `engine_calc.cpp` o passa ao `limp_gating` como `diag_critical` (bit `kProtectDisDiag` desliga esse corte). WARNING e ERROR só aparecem na tabela.
 - `clear_fault_if_not_critical` remove a falha só se ela não estiver em CRITICAL; é o que limpa estados transitórios sem soltar um CRITICAL.
 - `ADC_RECOVERY_FAILED` em CRITICAL não é limpo por ninguém: o corte fica até o reset. O estado transitório "em recuperação" é reportado como WARNING e é limpo quando a recuperação dá certo. Decidido em 2026-10-22 que é intencional: o ADC esgotou as tentativas de recuperação e sem leitura confiável de MAP/TPS o motor não deve voltar sozinho; só reiniciar a ECU reabilita.
+- `CAN_BUS_OFF` (0x0550, WARNING): `can_stack_process` lê `PSR.BO` do FDCAN; em bus-off o controlador fica em INIT (TX recusa, RX morre) e `can0_recover()` sai de INIT, no máximo uma tentativa por segundo (a primeira após o boot é imediata). O DTC some quando `PSR.BO` cai. Sem o WBO2 o closed-loop congela por conta própria (`o2_valid`); isto só devolve o barramento e nunca corta o motor.
 
 ## Diagnóstico de sensores (`src/engine/sensors_diag.{h,cpp}`)
 

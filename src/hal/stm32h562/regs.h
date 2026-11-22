@@ -625,6 +625,7 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define FDCAN_TXBAR_OFF  0x0CCUL   // TX Buffer Add Request
 #define FDCAN_RXF0S_OFF  0x090UL   // RX FIFO0 Status
 #define FDCAN_RXF0A_OFF  0x094UL   // RX FIFO0 Acknowledge
+#define FDCAN_PSR_OFF    0x044UL   // Protocol Status Register (bit 7 = BO, bus-off)
 #define FDCAN_IR_OFF     0x050UL   // Interrupt Register
 #define FDCAN_IE_OFF     0x054UL   // Interrupt Enable
 #define FDCAN_ILE_OFF    0x05CUL   // Interrupt Line Enable
@@ -638,8 +639,12 @@ static inline void gpio_set_analog(volatile uint32_t* moder, uint8_t pin) noexce
 #define FDCAN1_TXBAR STM32_REG32(FDCAN1_BASE + FDCAN_TXBAR_OFF)
 #define FDCAN1_RXF0S STM32_REG32(FDCAN1_BASE + FDCAN_RXF0S_OFF)
 #define FDCAN1_RXF0A STM32_REG32(FDCAN1_BASE + FDCAN_RXF0A_OFF)
+#define FDCAN1_PSR   STM32_REG32(FDCAN1_BASE + FDCAN_PSR_OFF)
 #define FDCAN1_IR    STM32_REG32(FDCAN1_BASE + FDCAN_IR_OFF)
 #define FDCAN1_IE    STM32_REG32(FDCAN1_BASE + FDCAN_IE_OFF)
+
+// FDCAN_PSR bits
+#define FDCAN_PSR_BO     (1u << 7)    // Bus_Off Status
 
 // FDCAN_CCCR bits
 #define FDCAN_CCCR_INIT  (1u << 0)

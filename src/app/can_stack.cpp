@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "hal/can.h"
+#include "engine/diagnostic_manager.h"
 #include "engine/engine_config.h"
 #include "engine/math_utils.h"
 #include "app/can_rx_map.h"
@@ -46,6 +47,31 @@ inline uint8_t clamp_u8_i32(int32_t v) noexcept {
 
 inline bool elapsed(uint32_t now_ms, uint32_t last_ms, uint32_t period_ms) noexcept {
     return static_cast<uint32_t>(now_ms - last_ms) >= period_ms;
+}
+
+// Bus-off: o controlador fica mudo até sair de INIT. Tenta recuperar a cada kBusOffRetryMs (a
+// primeira após o boot é imediata; o espaçamento vale entre bus-offs repetidos) e sinaliza CAN_BUS_OFF como WARNING enquanto o PSR.BO estiver
+// ligado. Sem o WBO2 o closed-loop congela sozinho (o2_valid cai); isto só devolve o barramento.
+constexpr uint32_t kBusOffRetryMs = 1000u;
+static bool     g_busoff_active  = false;
+static uint32_t g_busoff_last_try_ms = static_cast<uint32_t>(0u - kBusOffRetryMs);
+
+void supervise_bus_off(uint32_t now_ms) noexcept {
+    namespace en = ems::engine;
+    if (ems::hal::can0_bus_off()) {
+        if (!g_busoff_active) {
+            g_busoff_active = true;
+            en::DiagnosticManager::report_fault(en::DiagnosticCode::CAN_BUS_OFF, en::FaultSeverity::WARNING,
+                                                static_cast<uint16_t>(ems::hal::can0_get_recoveries()));
+        }
+        if (elapsed(now_ms, g_busoff_last_try_ms, kBusOffRetryMs)) {
+            g_busoff_last_try_ms = now_ms;
+            (void)ems::hal::can0_recover();
+        }
+    } else if (g_busoff_active) {
+        g_busoff_active = false;
+        en::DiagnosticManager::clear_fault(en::DiagnosticCode::CAN_BUS_OFF);
+    }
 }
 
 // Retorna true se WBO2 nunca recebeu frame ou se o último frame foi há > 500 ms
@@ -199,6 +225,8 @@ void can_stack_init(uint16_t wbo2_rx_id) noexcept {
     g_fco_nl_frac     = 0u;
     g_fco_snap_ul     = 0u;
     g_fco_last_ms     = 0u;
+    g_busoff_active   = false;
+    g_busoff_last_try_ms = static_cast<uint32_t>(0u - kBusOffRetryMs);   // 1ª tentativa imediata
     ems::hal::can0_init();
 }
 
@@ -215,6 +243,7 @@ void can_stack_process(uint32_t now_ms,
                        uint8_t  /*vvt_intake_pct*/,  // reserved — replaced by status_hi in 0x401[6]
                        uint8_t  vvt_exhaust_pct,
                        uint16_t status_bits) noexcept {
+    supervise_bus_off(now_ms);
     process_rx(now_ms);
 
     // Atualiza flag de falha após processar RX
