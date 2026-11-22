@@ -299,10 +299,10 @@ void load_xtau_calibration_from_nvm() noexcept {
 }
 
 
-// Curvas NTC de CLT/IAT (slot 10). Página ausente, apagada/zerada ou curva inválida (a validação
+// Calibração dos sensores (slot 10): curvas NTC de CLT/IAT e escala de pressão. Página ausente, apagada/zerada ou curva inválida (a validação
 // é do sensors_set_ntc_curves) mantém a reta padrão. Independe do gate de layout: é uma página nova.
 void load_ntc_curves_from_nvm() noexcept {
-    alignas(4) uint8_t page[4u * ems::drv::kNtcCurvePoints] = {};
+    alignas(4) uint8_t page[ui_detail::kSensorCalPageBytes] = {};
     if (!ems::hal::nvm_load_calibration(10u, page, sizeof(page)) ||
         page_is_blank(page, sizeof(page))) {
         return;
@@ -311,7 +311,9 @@ void load_ntc_curves_from_nvm() noexcept {
     int16_t iat[ems::drv::kNtcCurvePoints];
     std::memcpy(clt, page, sizeof(clt));
     std::memcpy(iat, page + sizeof(clt), sizeof(iat));
+    // Curvas e pressão são independentes: um bloco inválido não impede o outro.
     (void)ems::drv::sensors_set_ntc_curves(clt, iat);
+    (void)ui_detail::sensor_cal_apply_pressure(page);
 }
 
 void nvm_boot_load_tables(bool cal_layout_ok) noexcept {

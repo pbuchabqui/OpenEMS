@@ -135,6 +135,19 @@ bool sensors_set_ntc_curves(const int16_t* clt_x10, const int16_t* iat_x10) noex
 void sensors_get_ntc_curves(int16_t* clt_x10, int16_t* iat_x10) noexcept;
 void sensors_reset_ntc_curves() noexcept;
 
+// Escala dos sensores de pressão (combustível e óleo): reta por dois pontos raw→bar×1000.
+// Default {0,0,4095,2500} = 0..2,5 bar em todo o fundo de escala (comportamento original).
+// set valida os dois (raw_b > raw_a <= 4095, bar_b > bar_a <= 20 bar) e aplica atômico.
+struct PressureCal {
+    uint16_t raw_a;
+    uint16_t bar_a_x1000;
+    uint16_t raw_b;
+    uint16_t bar_b_x1000;
+};
+bool sensors_set_pressure_cal(const PressureCal& fuel, const PressureCal& oil) noexcept;
+void sensors_get_pressure_cal(PressureCal& fuel, PressureCal& oil) noexcept;
+void sensors_reset_pressure_cal() noexcept;
+
 #if defined(EMS_HOST_TEST)
 void sensors_test_reset() noexcept;
 void sensors_test_set_clt_table_entry(uint8_t idx, int16_t degc_x10) noexcept;

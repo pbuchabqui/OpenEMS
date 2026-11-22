@@ -44,7 +44,7 @@ alignas(4) uint8_t g_page9_boost[112]   = {};  // Boost map: 7 marchas × 8 RPM 
 alignas(4) uint8_t g_page10_ltft[ems::engine::kTableCells +
     static_cast<uint16_t>(ems::engine::kLtftAddAxisSize) * ems::engine::kLtftAddAxisSize] = {};
 alignas(4) uint8_t g_page11_axes[4u * ems::engine::kTableAxisSize] = {};
-alignas(4) uint8_t g_page13_ntc[4u * ems::drv::kNtcCurvePoints] = {};  // CLT[128] + IAT[128], int16 °C×10
+alignas(4) uint8_t g_page13_sensorcal[kSensorCalPageBytes] = {};  // curvas NTC + escala de pressão (ver ui_protocol_internal.h)
 alignas(4) uint8_t g_page12_ltft_accum[ems::engine::kLtftAccumPageSize] = {};
 alignas(4) uint8_t g_env_buf[kEnvMaxPayload] = {};
 uint16_t g_env_size = 0u;

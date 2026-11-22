@@ -73,7 +73,7 @@ uint16_t page_size(uint8_t page) noexcept {
     if (page == 0x0Au) { return static_cast<uint16_t>(sizeof(g_page10_ltft)); }
     if (page == 0x0Bu) { return static_cast<uint16_t>(sizeof(g_page11_axes)); }
     if (page == 0x0Cu) { return static_cast<uint16_t>(sizeof(g_page12_ltft_accum)); }
-    if (page == 0x0Du) { return static_cast<uint16_t>(sizeof(g_page13_ntc)); }
+    if (page == 0x0Du) { return static_cast<uint16_t>(sizeof(g_page13_sensorcal)); }
     return 0u;
 }
 
@@ -91,7 +91,7 @@ uint8_t* page_ptr(uint8_t page) noexcept {
     if (page == 0x0Au) { return g_page10_ltft; }
     if (page == 0x0Bu) { return g_page11_axes; }
     if (page == 0x0Cu) { return g_page12_ltft_accum; }
-    if (page == 0x0Du) { return g_page13_ntc; }
+    if (page == 0x0Du) { return g_page13_sensorcal; }
     return nullptr;
 }
 
@@ -578,8 +578,15 @@ void sync_page_from_table(uint8_t page) noexcept {
         int16_t clt[ems::drv::kNtcCurvePoints];
         int16_t iat[ems::drv::kNtcCurvePoints];
         ems::drv::sensors_get_ntc_curves(clt, iat);
-        std::memcpy(g_page13_ntc, clt, sizeof(clt));
-        std::memcpy(g_page13_ntc + sizeof(clt), iat, sizeof(iat));
+        std::memcpy(g_page13_sensorcal, clt, sizeof(clt));
+        std::memcpy(g_page13_sensorcal + sizeof(clt), iat, sizeof(iat));
+        ems::drv::PressureCal fuel{}, oil{};
+        ems::drv::sensors_get_pressure_cal(fuel, oil);
+        std::memset(g_page13_sensorcal + kSensorCalPressOff, 0, kSensorCalPageBytes - kSensorCalPressOff);
+        std::memcpy(g_page13_sensorcal + kSensorCalPressOff, &fuel, sizeof(fuel));
+        std::memcpy(g_page13_sensorcal + kSensorCalPressOff + sizeof(fuel), &oil, sizeof(oil));
+        std::memcpy(g_page13_sensorcal + kSensorCalNominalOff,
+                    &ems::engine::fuel_press_nominal_bar_x1000, 2u);
     } else if (page == 0x0Cu) {
         // Read-only: snapshot do acumulador LTFT (hits + mean STFT).
         ems::engine::fuel_ltft_accum_export(
@@ -591,6 +598,18 @@ void sync_page_from_table(uint8_t page) noexcept {
 // têm outra validação: limita aos domínios físicos para que um valor ruim não vá a um motor
 // rodando. Idempotente. Devolve true se alterou algo (o buffer de UI precisa ser refeito).
 // Chamada ao fim de sync_table_from_page e no fim de nvm_boot_load_tables.
+bool sensor_cal_apply_pressure(const uint8_t* page) noexcept {
+    ems::drv::PressureCal fuel{}, oil{};
+    uint16_t nominal = 0u;
+    std::memcpy(&fuel, page + kSensorCalPressOff, sizeof(fuel));
+    std::memcpy(&oil, page + kSensorCalPressOff + sizeof(fuel), sizeof(oil));
+    std::memcpy(&nominal, page + kSensorCalNominalOff, 2u);
+    if (nominal != 0u && (nominal < 500u || nominal > 20000u)) { return false; }
+    if (!ems::drv::sensors_set_pressure_cal(fuel, oil)) { return false; }
+    ems::engine::fuel_press_nominal_bar_x1000 = nominal;
+    return true;
+}
+
 bool sanitize_applied_calibration() noexcept {
     namespace en = ems::engine;
     bool changed = false;
@@ -852,9 +871,19 @@ bool sync_table_from_page(uint8_t page) noexcept {
     } else if (page == 0x0Du) {
         int16_t clt[ems::drv::kNtcCurvePoints];
         int16_t iat[ems::drv::kNtcCurvePoints];
-        std::memcpy(clt, g_page13_ntc, sizeof(clt));
-        std::memcpy(iat, g_page13_ntc + sizeof(clt), sizeof(iat));
-        return ems::drv::sensors_set_ntc_curves(clt, iat);   // inválida: false, nada muda
+        std::memcpy(clt, g_page13_sensorcal, sizeof(clt));
+        std::memcpy(iat, g_page13_sensorcal + sizeof(clt), sizeof(iat));
+        // Tudo ou nada: valida e aplica a pressão primeiro; se as curvas forem rejeitadas, desfaz.
+        ems::drv::PressureCal old_fuel{}, old_oil{};
+        ems::drv::sensors_get_pressure_cal(old_fuel, old_oil);
+        const uint16_t old_nominal = ems::engine::fuel_press_nominal_bar_x1000;
+        if (!sensor_cal_apply_pressure(g_page13_sensorcal)) { return false; }
+        if (!ems::drv::sensors_set_ntc_curves(clt, iat)) {
+            (void)ems::drv::sensors_set_pressure_cal(old_fuel, old_oil);
+            ems::engine::fuel_press_nominal_bar_x1000 = old_nominal;
+            return false;
+        }
+        return true;
     } else if (page == 0x0Bu) {
         uint16_t rpm[ems::engine::kTableAxisSize];
         uint16_t load[ems::engine::kTableAxisSize];
@@ -960,7 +989,7 @@ bool burn_one_page(uint8_t page) noexcept {
     if (page == 0x0Du) {
         // Grava o que o firmware usa agora (o buffer pode estar velho ou nunca ter sido escrito).
         sync_page_from_table(0x0Du);
-        const bool ok = ems::hal::nvm_save_calibration(10u, g_page13_ntc, static_cast<uint16_t>(sizeof(g_page13_ntc)));
+        const bool ok = ems::hal::nvm_save_calibration(10u, g_page13_sensorcal, static_cast<uint16_t>(sizeof(g_page13_sensorcal)));
         if (!ok) { return false; }
         clear_page_dirty(page);
         return true;

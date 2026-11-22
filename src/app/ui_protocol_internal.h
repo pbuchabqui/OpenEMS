@@ -20,6 +20,15 @@ constexpr uint16_t kTxSize = 2048u;
 constexpr uint16_t kRxMask = kRxSize - 1u;
 constexpr uint16_t kTxMask = kTxSize - 1u;
 
+// Página 0x0D (NVM slot 10): calibração dos sensores.
+//   [0,512)   curvas NTC: CLT[128] + IAT[128], int16 LE °C×10
+//   [512,528) escala de pressão: combustível {raw_a, bar_a, raw_b, bar_b} e óleo (u16 LE, bar×1000)
+//   [528,530) pressão nominal do combustível (u16, bar×1000; 0 = sem compensação de ΔP)
+//   [530,544) reservado (0)
+constexpr uint16_t kSensorCalPressOff   = 4u * ems::drv::kNtcCurvePoints;
+constexpr uint16_t kSensorCalNominalOff = kSensorCalPressOff + 16u;
+constexpr uint16_t kSensorCalPageBytes  = kSensorCalPressOff + 32u;
+
 constexpr uint8_t kAckOk = 0x00u;
 constexpr uint8_t kAckErr = 0x01u;
 constexpr uint8_t kAckArmed = 0x02u;  // 'Y'/'Z' armado: repetir o comando para executar
@@ -74,7 +83,7 @@ extern uint8_t g_page9_boost[112];
 extern uint8_t g_page10_ltft[ems::engine::kTableCells +
     static_cast<uint16_t>(ems::engine::kLtftAddAxisSize) * ems::engine::kLtftAddAxisSize];
 extern uint8_t g_page11_axes[4u * ems::engine::kTableAxisSize];
-extern uint8_t g_page13_ntc[4u * ems::drv::kNtcCurvePoints];
+extern uint8_t g_page13_sensorcal[kSensorCalPageBytes];
 extern uint8_t g_page12_ltft_accum[ems::engine::kLtftAccumPageSize];
 
 extern uint8_t g_env_buf[kEnvMaxPayload];
@@ -123,6 +132,8 @@ void enter_critical() noexcept;
 void exit_critical() noexcept;
 // Limita escalares de calibração aos domínios físicos; true se algo foi alterado.
 bool sanitize_applied_calibration() noexcept;
+// Valida (fuel/óleo/nominal) e aplica o bloco de pressão da página 0x0D; inválido: false, nada muda.
+bool sensor_cal_apply_pressure(const uint8_t* page) noexcept;
 uint16_t page_size(uint8_t page) noexcept;
 uint8_t* page_ptr(uint8_t page) noexcept;
 uint8_t normalize_page_id(uint8_t page) noexcept;

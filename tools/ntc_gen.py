@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ntc_gen.py — gera a página 0x0D (curvas NTC de CLT e IAT) do OpenEMS.
+"""ntc_gen.py — gera a página 0x0D (curvas NTC de CLT/IAT + escala de pressão) do OpenEMS.
 
 O firmware não tem float/libm: a LUT de 128 baldes (raw>>5, °C×10) é calculada aqui, no host,
 a partir do modelo Beta do NTC e da topologia do divisor, e gravada na página 0x0D (NVM slot 10).
@@ -17,7 +17,12 @@ Uso:
   python3 tools/ntc_gen.py --rpull 2490 --vsup 3.3 --r25 2500 --beta 3500 -o ntc_page.bin
   python3 tools/ntc_gen.py ... --send /dev/ttyACM0      # grava na RAM da ECU e queima (motor parado)
 
-A escrita da página é uma única 'x' de 512 B (a página é validada inteira; fatias parciais
+Escala de pressão (combustível/óleo): reta por dois pontos raw->bar, p.ex. transdutor 0,5-4,5 V
+(0-10 bar) atrás de um divisor: --fuel-cal RAW_A BAR_A RAW_B BAR_B (bar com decimais) e --fuel-nominal BAR
+(pressão nominal do ΔP; 0 desliga a compensação). Sem esses argumentos, --send preserva o que já
+está na ECU e -o grava o default (0..2,5 bar em 0..4095, nominal 3,0 bar).
+
+A escrita da página é uma única 'x' de 544 B (a página é validada inteira; fatias parciais
 seriam rejeitadas por não-monotonicidade), seguida de 'b' se --send.
 Os baldes têm 32 contagens e o firmware interpola entre eles; o relatório mostra o erro da
 interpolação no meio do balde perto dos limiares de DFCO (70 °C) e overtemp (105/115 °C).
@@ -84,7 +89,10 @@ def main():
     p.add_argument("--beta", type=float, required=True, help="B do CLT (K)")
     p.add_argument("--iat-r25", type=float, help="R do IAT a 25 °C (padrão = CLT)")
     p.add_argument("--iat-beta", type=float, help="B do IAT (padrão = CLT)")
-    p.add_argument("-o", "--out", help="grava o binário de 512 B (CLT[128] + IAT[128], int16 LE)")
+    p.add_argument("--fuel-cal", nargs=4, type=float, metavar=("RAW_A", "BAR_A", "RAW_B", "BAR_B"))
+    p.add_argument("--oil-cal", nargs=4, type=float, metavar=("RAW_A", "BAR_A", "RAW_B", "BAR_B"))
+    p.add_argument("--fuel-nominal", type=float, metavar="BAR", help="pressão nominal do ΔP, bar")
+    p.add_argument("-o", "--out", help="grava o binário de 544 B (CLT, IAT, escala de pressão)")
     p.add_argument("--send", metavar="PORTA", help="escreve na ECU (x) e queima (b); motor parado")
     a = p.parse_args()
     if a.ra > 0 and a.rb <= 0:
@@ -105,21 +113,49 @@ def main():
               file=sys.stderr)
         return 1
 
-    page = struct.pack(f"<{N}h", *clt) + struct.pack(f"<{N}h", *iat)
-    if a.out:
-        with open(a.out, "wb") as f:
-            f.write(page)
-        print(f"gravado {a.out} ({len(page)} B)")
+    def cal_bytes(v):
+        ra, ba, rb, bb = int(round(v[0])), int(round(v[1] * 1000)), int(round(v[2])), int(round(v[3] * 1000))
+        if not (0 <= ra < rb <= 4095 and 0 <= ba < bb <= 20000):
+            print("escala de pressão inválida (precisa raw_a < raw_b <= 4095 e bar_a < bar_b <= 20)",
+                  file=sys.stderr)
+            sys.exit(1)
+        return struct.pack("<4H", ra, ba, rb, bb)
+
+    curves = struct.pack(f"<{N}h", *clt) + struct.pack(f"<{N}h", *iat)
+    have_press = a.fuel_cal or a.oil_cal or a.fuel_nominal is not None
+    default_press = (struct.pack("<4H", 0, 0, 4095, 2500) * 2 + struct.pack("<H", 3000)).ljust(32, b"\0")
+    link = None
     if a.send:
         sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent / "openems_dash"))
         from protocol import OpenEMSLink  # noqa: E402
         link = OpenEMSLink(a.send)
-        try:
+    try:
+        if have_press or link is None:
+            press = bytearray(default_press)
+        else:
+            press = bytearray(link.read_page(0x0D, 512, 32))   # preserva o que a ECU já tem
+        if a.fuel_cal:
+            press[0:8] = cal_bytes(a.fuel_cal)
+        if a.oil_cal:
+            press[8:16] = cal_bytes(a.oil_cal)
+        if a.fuel_nominal is not None:
+            nominal = int(round(a.fuel_nominal * 1000))
+            if nominal != 0 and not 500 <= nominal <= 20000:
+                print("--fuel-nominal fora de 0,5..20 bar (ou 0)", file=sys.stderr)
+                return 1
+            press[16:18] = struct.pack("<H", nominal)
+        page = curves + bytes(press)
+        if a.out:
+            with open(a.out, "wb") as f:
+                f.write(page)
+            print(f"gravado {a.out} ({len(page)} B)")
+        if link is not None:
             link.write_page_ram(0x0D, 0, page)
             link.burn_page(0x0D)
-        finally:
+            print("página 0x0D enviada e queimada")
+    finally:
+        if link is not None:
             link.close()
-        print("curvas enviadas e queimadas (página 0x0D)")
     return 0
 
 

@@ -203,6 +203,7 @@ test_sensors_bench_app_fixed();
     test_sensors_etb_harness_present();
     test_sensors_vbatt_dedicated_channel();
     test_sensors_table_entry_setters();
+    test_sensors_pressure_cal();
 
     // ── Knock — Segunda Fase ──────────────────────────────────────────────────
     printf("\n=== KNOCK (fase 2) ===");

@@ -532,6 +532,49 @@ void test_sensors_table_entry_setters(void) {
     ems::drv::sensors_reset_ntc_curves();
 }
 
+void test_sensors_pressure_cal(void) {
+    section("sensors: escala de pressão (reta por dois pontos)");
+    sensor_setup(); sensors_init();
+    using namespace ems::hal;
+    ems::drv::sensors_reset_pressure_cal();
+
+    // Default: igual ao antigo raw*2500/4095.
+    adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS, 3000u);
+    adc_test_set_raw_secondary(AdcSecondaryChannel::OIL_PRESS, 3000u);
+    for (int i = 0; i < 8; ++i) { sensors_tick_50ms(); }
+    CHECK_EQ(sensors_get().fuel_press_bar_x1000, static_cast<uint16_t>((3000u * 2500u) / 4095u),
+             "default: combustível = raw*2500/4095");
+
+    // Transdutor 0..10 bar com 0 bar em raw 500 e 10 bar em raw 3500.
+    const ems::drv::PressureCal cal{500u, 0u, 3500u, 10000u};
+    const ems::drv::PressureCal oil{0u, 0u, 4095u, 2500u};
+    CHECK_TRUE(ems::drv::sensors_set_pressure_cal(cal, oil), "escala válida aceita");
+    adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS, 2000u);
+    for (int i = 0; i < 8; ++i) { sensors_tick_50ms(); }
+    CHECK_EQ(sensors_get().fuel_press_bar_x1000, 5000u, "meio da escala = 5,0 bar");
+    CHECK_EQ(sensors_get().oil_press_bar_x1000, static_cast<uint16_t>((3000u * 2500u) / 4095u),
+             "óleo mantém a escala dele");
+
+    // Abaixo do ponto A: pressão negativa vira 0 (não dá wrap).
+    adc_test_set_raw_secondary(AdcSecondaryChannel::FUEL_PRESS, 300u);
+    for (int i = 0; i < 8; ++i) { sensors_tick_50ms(); }
+    CHECK_EQ(sensors_get().fuel_press_bar_x1000, 0u, "abaixo do ponto A satura em 0");
+
+    // Inválidas: nada muda.
+    CHECK_FALSE(ems::drv::sensors_set_pressure_cal(ems::drv::PressureCal{3000u, 0u, 1000u, 5000u}, oil),
+                "raw_b <= raw_a rejeitada");
+    CHECK_FALSE(ems::drv::sensors_set_pressure_cal(cal, ems::drv::PressureCal{0u, 5000u, 4095u, 5000u}),
+                "bar_b <= bar_a rejeitada");
+    CHECK_FALSE(ems::drv::sensors_set_pressure_cal(cal, ems::drv::PressureCal{0u, 0u, 4096u, 2500u}),
+                "raw acima de 4095 rejeitada");
+    CHECK_FALSE(ems::drv::sensors_set_pressure_cal(ems::drv::PressureCal{0u, 0u, 4095u, 20001u}, oil),
+                "acima de 20 bar rejeitada");
+    ems::drv::PressureCal g_f{}, g_o{};
+    ems::drv::sensors_get_pressure_cal(g_f, g_o);
+    CHECK_EQ(static_cast<int>(g_f.raw_b), 3500, "rejeição não altera a escala");
+    ems::drv::sensors_reset_pressure_cal();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // KNOCK — SEGUNDA FASE
 // ═══════════════════════════════════════════════════════════════════════════

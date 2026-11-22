@@ -376,6 +376,18 @@ inline void init_tables() noexcept {
     }
 }
 
+// Escala de pressão (reta por dois pontos); default = 0..2,5 bar em 0..4095 (o antigo raw*2500/4095).
+static ems::drv::PressureCal g_fuel_cal = {0u, 0u, 4095u, 2500u};
+static ems::drv::PressureCal g_oil_cal  = {0u, 0u, 4095u, 2500u};
+
+inline uint16_t pressure_raw_to_bar_x1000(uint16_t raw, const ems::drv::PressureCal& c) noexcept {
+    const int32_t num = (static_cast<int32_t>(raw) - static_cast<int32_t>(c.raw_a)) *
+                        (static_cast<int32_t>(c.bar_b_x1000) - static_cast<int32_t>(c.bar_a_x1000));
+    const int32_t bar = static_cast<int32_t>(c.bar_a_x1000) +
+                        num / (static_cast<int32_t>(c.raw_b) - static_cast<int32_t>(c.raw_a));
+    return static_cast<uint16_t>(bar < 0 ? 0 : bar);
+}
+
 // MAP: ADC 12-bit 0–3.3 V (raw 4095) → 0..3.00 bar (×1000).
 inline uint16_t map_raw_to_bar_x1000(uint16_t raw) noexcept {
     return static_cast<uint16_t>((static_cast<uint32_t>(raw) * 3000u) / 4095u);
@@ -741,9 +753,8 @@ void sensors_tick_50ms() noexcept {
     const uint16_t fuel_avg_raw = avg_n(g_fuel_buf, 4);
     g_data_staging.fuel_press_bar_x1000 = (fuel_avg_raw < kFuelPressMinValidRaw)
         ? 0u
-        : static_cast<uint16_t>((static_cast<uint32_t>(fuel_avg_raw) * 2500u) / 4095u);
-    g_data_staging.oil_press_bar_x1000 = static_cast<uint16_t>(
-        (static_cast<uint32_t>(avg_n(g_oil_buf, 4)) * 2500u) / 4095u);
+        : pressure_raw_to_bar_x1000(fuel_avg_raw, g_fuel_cal);
+    g_data_staging.oil_press_bar_x1000 = pressure_raw_to_bar_x1000(avg_n(g_oil_buf, 4), g_oil_cal);
     commit_sensor_snapshot();
 }
 
@@ -1019,6 +1030,30 @@ bool ntc_curve_valid(const int16_t* c) noexcept {
     return (up || down) && (span >= kMinSpan || -span >= kMinSpan);
 }
 }  // namespace
+
+namespace {
+bool pressure_cal_valid(const PressureCal& c) noexcept {
+    return c.raw_a < c.raw_b && c.raw_b <= 4095u &&
+           c.bar_a_x1000 < c.bar_b_x1000 && c.bar_b_x1000 <= 20000u;
+}
+}  // namespace
+
+bool sensors_set_pressure_cal(const PressureCal& fuel, const PressureCal& oil) noexcept {
+    if (!pressure_cal_valid(fuel) || !pressure_cal_valid(oil)) { return false; }
+    g_fuel_cal = fuel;
+    g_oil_cal = oil;
+    return true;
+}
+
+void sensors_get_pressure_cal(PressureCal& fuel, PressureCal& oil) noexcept {
+    fuel = g_fuel_cal;
+    oil = g_oil_cal;
+}
+
+void sensors_reset_pressure_cal() noexcept {
+    g_fuel_cal = PressureCal{0u, 0u, 4095u, 2500u};
+    g_oil_cal = PressureCal{0u, 0u, 4095u, 2500u};
+}
 
 bool sensors_set_ntc_curves(const int16_t* clt_x10, const int16_t* iat_x10) noexcept {
     if (clt_x10 == nullptr || iat_x10 == nullptr) { return false; }

@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "app/nvm_boot.h"
+#include "app/ui_protocol_internal.h"
 #include "engine/calibration.h"
 #include "engine/etb_control.h"
 #include "drv/sensors.h"
@@ -348,6 +349,41 @@ void test_nvm_boot_ntc_curves(void) {
     ems::drv::sensors_get_ntc_curves(g_clt, g_iat);
     CHECK_EQ(std::memcmp(g_clt, def_clt, sizeof(g_clt)), 0, "NTC: rejeição não altera a CLT");
 
+    // Escala de pressão (bloco no fim da página): aplicada independente das curvas.
+    constexpr uint16_t kPress = ems::app::ui_detail::kSensorCalPressOff;
+    alignas(4) uint8_t pg2[ems::app::ui_detail::kSensorCalPageBytes] = {};
+    std::memcpy(pg2, clt, sizeof(clt));
+    std::memcpy(pg2 + sizeof(clt), iat, sizeof(iat));
+    const ems::drv::PressureCal fcal{500u, 0u, 3500u, 10000u};   // transdutor 0..10 bar em 500..3500
+    const ems::drv::PressureCal ocal{0u, 0u, 4095u, 2500u};
+    const uint16_t nominal = 4000u;
+    std::memcpy(pg2 + kPress, &fcal, sizeof(fcal));
+    std::memcpy(pg2 + kPress + sizeof(fcal), &ocal, sizeof(ocal));
+    std::memcpy(pg2 + ems::app::ui_detail::kSensorCalNominalOff, &nominal, 2u);
+    CHECK_TRUE(nvm_save_calibration(10u, pg2, sizeof(pg2)), "grava page com pressão");
+    load_ntc_curves_from_nvm();
+    ems::drv::PressureCal gf{}, go{};
+    ems::drv::sensors_get_pressure_cal(gf, go);
+    CHECK_EQ(static_cast<int>(gf.raw_b), 3500, "pressão: fuel raw_b carregada");
+    CHECK_EQ(static_cast<int>(gf.bar_b_x1000), 10000, "pressão: fuel bar_b carregada");
+    CHECK_EQ(static_cast<int>(fuel_press_nominal_bar_x1000), 4000, "pressão: nominal carregado");
+
+    // Bloco de pressão inválido (raw_b <= raw_a): ignorado, curvas continuam aplicadas.
+    ems::drv::sensors_reset_ntc_curves();
+    ems::drv::sensors_reset_pressure_cal();
+    fuel_press_nominal_bar_x1000 = 3000u;
+    const ems::drv::PressureCal bad_cal{3000u, 0u, 1000u, 5000u};
+    std::memcpy(pg2 + kPress, &bad_cal, sizeof(bad_cal));
+    CHECK_TRUE(nvm_save_calibration(10u, pg2, sizeof(pg2)), "grava page com pressão inválida");
+    load_ntc_curves_from_nvm();
+    ems::drv::sensors_get_ntc_curves(g_clt, g_iat);
+    ems::drv::sensors_get_pressure_cal(gf, go);
+    CHECK_EQ(std::memcmp(g_clt, clt, sizeof(clt)), 0, "pressão inválida não bloqueia as curvas");
+    CHECK_EQ(static_cast<int>(gf.raw_b), 4095, "pressão inválida mantém o default");
+    CHECK_EQ(static_cast<int>(fuel_press_nominal_bar_x1000), 3000, "pressão inválida mantém o nominal");
+
     nvm_erase_all_pages();
     ems::drv::sensors_reset_ntc_curves();
+    ems::drv::sensors_reset_pressure_cal();
+    fuel_press_nominal_bar_x1000 = 3000u;
 }
