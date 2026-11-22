@@ -1,4 +1,5 @@
 #include "test/harness.h"
+#include "hal/critical_section.h"
 #include "test/fixtures.h"
 #include "test/ui_helpers.h"
 
@@ -1182,6 +1183,45 @@ void test_ui_adc_regs(void) {
     CHECK_EQ(u32(1), r.adc1_difsel, "ADC1_DIFSEL na palavra 1");
     CHECK_EQ(u32(2), r.adc1_sqr1, "ADC1_SQR1 na palavra 2");
     CHECK_EQ(u32(7), r.adc1_isr, "ADC1_ISR na palavra 7");
+}
+
+void test_ui_cs_prof(void) {
+    section("protocolo legado: 'p' devolve o perfil das seções críticas, 'l' zera");
+    ems::app::ui_test_reset();
+    uint8_t buf[64] = {};
+    auto u32 = [&](uint8_t off) {
+        return static_cast<uint32_t>(buf[off]) | (static_cast<uint32_t>(buf[off + 1u]) << 8u) |
+               (static_cast<uint32_t>(buf[off + 2u]) << 16u) | (static_cast<uint32_t>(buf[off + 3u]) << 24u);
+    };
+    ems::hal::g_cs_prof_max_cycles[0] = 0x0001'2345u;   // > 16 bit: confere os 4 bytes
+    ems::hal::g_cs_prof_max_pc[0] = 0x0800'1234u;
+    ems::hal::g_cs_prof_count[0] = 77u;
+    ems::hal::g_cs_prof_max_cycles[1] = 9u;
+    ems::hal::g_cs_prof_max_pc[1] = 0x0800'5678u;
+    ems::hal::g_cs_prof_count[1] = 3u;
+
+    const uint8_t p = 'p';
+    ui_feed(&p, 1u);
+    uint16_t n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 25u, "'p' → 25 bytes (1 + 2 x 3 x u32)");
+    CHECK_EQ(buf[0], 0u, "host: perfil desligado (EMS_CS_PROF=0)");
+    CHECK_EQ(u32(1), 0x0001'2345u, "balde 0 max_cycles");
+    CHECK_EQ(u32(5), 0x0800'1234u, "balde 0 max_pc");
+    CHECK_EQ(u32(9), 77u, "balde 0 count");
+    CHECK_EQ(u32(13), 9u, "balde 1 max_cycles");
+    CHECK_EQ(u32(17), 0x0800'5678u, "balde 1 max_pc");
+    CHECK_EQ(u32(21), 3u, "balde 1 count");
+
+    const uint8_t l = 'l';
+    ui_feed(&l, 1u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 1u, "'l' → 1 byte de ACK");
+    ui_feed(&p, 1u);
+    n = ui_drain(buf, sizeof(buf));
+    CHECK_EQ(n, 25u, "'p' depois do reset → 25 bytes");
+    CHECK_EQ(u32(1), 0u, "'l' zera max_cycles do balde 0");
+    CHECK_EQ(u32(9), 0u, "'l' zera count do balde 0");
+    CHECK_EQ(u32(21), 0u, "'l' zera count do balde 1");
 }
 
 void test_ui_isr_diag(void) {

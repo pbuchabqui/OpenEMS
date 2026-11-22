@@ -34,10 +34,12 @@ else
   BIN_SUFFIX   = -rgt6
 endif
 
+# Flags extras só para o firmware ARM, ex.: make firmware-vgt6 EXTRA_CFLAGS=-DEMS_CS_PROF=1
+EXTRA_CFLAGS ?=
 CFLAGS_COMMON = -std=c++17 -Wall -Wextra $(WERROR_FLAG)
 CFLAGS_ARM = $(CFLAGS_COMMON) -DTARGET_STM32H562 -DNDEBUG -mcpu=cortex-m33 -mthumb \
              -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections \
-             -g0 -O2 -I./src $(BOARD_CFLAGS)
+             -g0 -O2 -I./src $(BOARD_CFLAGS) $(EXTRA_CFLAGS)
 # -I. so test/*.cpp can #include "test/harness.h"
 # ASan+UBSan: host-only (never CFLAGS_ARM) — catches real UB (e.g. shift of a
 # negative signed value) that a plain build silently tolerates.

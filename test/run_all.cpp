@@ -359,6 +359,7 @@ test_engine_calc_mspark_dwell_follows_normal();
     test_nvm_scratch_slot();
     test_ui_boot_op_diag();
     test_ui_isr_diag();
+    test_ui_cs_prof();
     test_ui_adc_raw();
     test_ui_adc_regs();
     test_ts_axes_page();

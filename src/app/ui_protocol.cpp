@@ -9,6 +9,7 @@
 #include "app/datalog.h"
 #include "app/can_rx_map.h"
 #include "hal/adc.h"
+#include "hal/critical_section.h"
 #include "hal/flex_fuel.h"
 #include "hal/flash.h"
 #include "hal/system.h"
@@ -143,6 +144,20 @@ void parse_byte(uint8_t b) noexcept {
             }
             return;
         }
+        if (b == static_cast<uint8_t>('p')) {
+            // Perfil das seções críticas (diagnóstico de bancada, só leitura), 25 bytes: enabled (u8, 1 = firmware
+            // compilado com -DEMS_CS_PROF=1; senão tudo zero) e, para o balde 0 (laço principal) e o 1 (SysTick e
+            // demais exceções, sem a ISR do TIM5): max_cycles, max_pc, count (u32 LE; ciclos do DWT a 250 MHz).
+            tx_push(ems::hal::cs_prof_enabled() ? 1u : 0u);
+            for (uint8_t bk = 0u; bk < 2u; ++bk) {
+                const uint32_t words[3] = {ems::hal::g_cs_prof_max_cycles[bk], ems::hal::g_cs_prof_max_pc[bk],
+                                           ems::hal::g_cs_prof_count[bk]};
+                for (uint8_t w = 0u; w < 3u; ++w) {
+                    for (uint8_t i = 0u; i < 4u; ++i) { tx_push(static_cast<uint8_t>(words[w] >> (8u * i))); }
+                }
+            }
+            return;
+        }
         if (b == static_cast<uint8_t>('m')) {
             // ADC bruto dos 8 canais primários (diagnóstico de bancada, só leitura), 16 bytes, 8 x u16 LE na ordem de
             // AdcPrimaryChannel: MAP(PA3), MAF_V, TPS(PA4), KNOCK(PA5), APP1, APP2, ETB_TPS1, ETB_TPS2. Sem filtro,
@@ -170,6 +185,7 @@ void parse_byte(uint8_t b) noexcept {
             // depois da partida. Não toca em saída nem em calibração.
             ems::drv::ckp_isr_diag_reset();
             ::ecu_sched_gap_diag_reset();
+            ems::hal::cs_prof_reset();
             icache_monitors_reset();
             tx_push(kAckOk);
             return;

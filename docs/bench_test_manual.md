@@ -1,6 +1,6 @@
 # Manual de teste de bancada — WeAct H562 VGT6
 
-> **Status:** vigente · validado 2026-11-21 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-22 (doc-check + conferência pontual contra o código)
 
 Este manual testa a **lógica do firmware no silício real**: sincronismo, ângulo
 da faísca, largura do pulso de injeção, jitter e watchdog. A placa é a WeAct
@@ -365,6 +365,27 @@ Unidade: ticks do TIM5 a 62,5 MHz (16 ns). O comando `'l'` zera os máximos e os
 fixado ainda: o objetivo é registrar os números por RPM. Um burn de calibração desliga o ICACHE durante a gravação
 e o religa no fim (`docs/errata_stm32h562.md`); o último byte do `k` (`icache_on`) deve voltar a 1 depois do burn.
 Se ficar em 0, o religar falhou: pare e investigue antes de seguir.
+
+### T7c — Tempo mascarado pelas seções críticas (`tools/isr_diag.py --cs`)
+
+Mede quanto tempo cada `CriticalSectionGuard` mantém as interrupções mascaradas (PRIMASK). Enquanto ele roda, um
+evento INJ/IGN que vence no TIM5 espera: é atraso de despacho que o T7b não enxerga, porque o T7b parte da captura do dente.
+O firmware normal não carrega a instrumentação; compile uma imagem só para a medida:
+
+1. `make firmware-vgt6 EXTRA_CFLAGS=-DEMS_CS_PROF=1`, grave, e guarde o ELF (`/tmp/openems-build/elf/openems-vgt6.elf`).
+2. Gerador no RPM desejado (800, 3000, 6000, 8500), sync cheio, com o dashboard conectado (o tráfego do dashboard
+   é o que exercita as seções do laço principal), alguns segundos em regime.
+3. `python3 -I tools/isr_diag.py --reset`, espere ≥ 30 s, depois `python3 -I tools/isr_diag.py --cs --elf <ELF>`.
+4. Anote, por balde, o máximo em µs, o `n` e a função do `pc`. Balde 0 = laço principal; balde 1 = SysTick e demais
+   exceções. As seções dentro da ISR do TIM5 e as aninhadas não entram (o guard mais externo já as cobre).
+   `critical_enter()`/`critical_exit()` (não RAII) não são medidos.
+5. Compare com o dente normal do T7b (~10 µs) e com o gap (~15–21 µs): um máximo na mesma ordem compete com o rebuild do
+   gap como causa de atraso de despacho.
+
+O `pc` é o endereço da construção do guard (instrução `mov r, pc` dentro do inline), então o addr2line aponta a linha. Não
+há limite de aprovação fixado: o objetivo é registrar os números. Com `EMS_CS_PROF=0` (padrão) o guard é idêntico ao
+anterior. Com ele ligado, cada guard custa uns poucos ciclos a mais (duas leituras do DWT e um `mrs ipsr`), então os
+máximos do T7b com essa imagem não valem para o firmware normal. Medida em bancada: ainda não feita.
 
 ### T8 — Teste de saídas
 

@@ -7,6 +7,10 @@ Uso (placa em /dev/ttyACM0, só leitura; nenhum comando mexe em saída ou calibr
     python3 -I tools/isr_diag.py --reset            # zera máximos e monitores do ICACHE antes de ler
     python3 -I tools/isr_diag.py --watch 2          # lê a cada 2 s até Ctrl+C
     python3 -I tools/isr_diag.py --port /dev/ttyACM1
+    python3 -I tools/isr_diag.py --cs [--elf openems-vgt6.elf]   # tempo mascarado pelas seções críticas ('p')
+
+--cs exige firmware compilado com `make firmware-vgt6 EXTRA_CFLAGS=-DEMS_CS_PROF=1`; --elf resolve o endereço do
+pior guard com arm-none-eabi-addr2line. Unidade do --cs: ciclos do DWT a 250 MHz (4 ns).
 
 Unidade: ticks do TIM5 a 62,5 MHz (16 ns). `gap` é o dente do gap, onde roda o rebuild da tabela
 angular (pior caso). Procedimento de medição: docs/bench_test_manual.md.
@@ -69,6 +73,39 @@ def read_k(fd):
     return tooth_max, tooth_last, gap_max, gap_last, hits, misses, b[24], parts
 
 
+CS_NS = 4.0  # DWT a 250 MHz
+CS_NAMES = ("laco principal (thread)", "SysTick e outras exceções")
+
+
+def read_p(fd):
+    b = command(fd, b"p", 25)
+    if len(b) < 25:
+        raise SystemExit("resposta curta do 'p': %d bytes (firmware sem o comando?)" % len(b))
+    return b[0], [struct.unpack("<3I", b[1 + 12 * i:13 + 12 * i]) for i in range(2)]
+
+
+def resolve_pc(elf, pc):
+    if not elf or pc == 0:
+        return ""
+    import subprocess
+    # PC do `mov r, pc` em Thumb vem sem o bit 0; o addr2line aceita o endereço de instrução.
+    try:
+        out = subprocess.run(["arm-none-eabi-addr2line", "-f", "-C", "-e", elf, "0x%x" % pc],
+                             capture_output=True, text=True, timeout=10, check=False).stdout.split("\n")
+    except OSError:
+        return "  (addr2line indisponível)"
+    return "  " + " ".join(x.strip() for x in out[:2] if x.strip())
+
+
+def show_cs(enabled, buckets, elf):
+    if not enabled:
+        print("perfil das secoes criticas DESLIGADO (compile com EXTRA_CFLAGS=-DEMS_CS_PROF=1)")
+        return
+    for name, (mx, pc, n) in zip(CS_NAMES, buckets):
+        print("secao critica %-26s max %5d ciclos = %7.2f us   n=%d   pc=0x%08x%s" %
+              (name, mx, mx * CS_NS / 1000.0, n, pc, resolve_pc(elf, pc)))
+
+
 def show(vals):
     tooth_max, tooth_last, gap_max, gap_last, hits, misses, on, parts = vals
     print("dente normal  max %s   ultimo %s" % (fmt_ticks(tooth_max), fmt_ticks(tooth_last)))
@@ -94,6 +131,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", default="/dev/ttyACM0")
     ap.add_argument("--reset", action="store_true", help="zera os máximos ('l') antes de ler")
+    ap.add_argument("--cs", action="store_true", help="lê o perfil das seções críticas ('p') em vez da ISR do CKP")
+    ap.add_argument("--elf", help="ELF do firmware gravado, para resolver o endereço do pior guard do --cs")
     ap.add_argument("--watch", type=float, metavar="S", help="repete a leitura a cada S segundos")
     args = ap.parse_args()
 
@@ -105,7 +144,10 @@ def main():
                 raise SystemExit("sem ACK do 'l'")
             print("maximos e monitores do ICACHE zerados")
         while True:
-            show(read_k(fd))
+            if args.cs:
+                show_cs(*read_p(fd), args.elf)
+            else:
+                show(read_k(fd))
             if args.watch is None:
                 break
             print("-" * 60)

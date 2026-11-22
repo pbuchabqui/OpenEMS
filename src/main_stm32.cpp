@@ -27,6 +27,7 @@ int main() { return 0; }
 
 #include "hal/board_pinout.h"
 #include "hal/sd.h"
+#include "hal/critical_section.h"
 #include "engine/fuel_trim.h"
 #include "hal/stm32h562/system.h"
 #include "hal/stm32h562/regs.h"
@@ -393,6 +394,7 @@ static void openems_init() noexcept {
 		++g_flash_write_faults; // FIX: rastrear falha de leitura NVM
 	}
     // 6) Drivers
+    ems::hal::cs_prof_init();   // no-op sem -DEMS_CS_PROF=1; liga o DWT antes de qualquer seção crítica medida
     ems::drv::sensors_init();
     iwdg_kick();
 
