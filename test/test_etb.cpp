@@ -313,6 +313,8 @@ void test_etb_follow_rearm_once(void) {
     act = etb_follow_recovery_tick(3000u, 0u, 0u, 40u);
     act = etb_follow_recovery_tick(4999u, 0u, 0u, 40u);
     CHECK_TRUE(act == EtbFollowAction::Hold, "menos de 2 s parado não rearma");
+    act = etb_follow_recovery_tick(5000u, 0u, 0u, 10u);
+    CHECK_TRUE(act == EtbFollowAction::Hold, "TPS mexeu só 1,0% (ruído): não rearma");
     act = etb_follow_recovery_tick(5000u, 0u, 0u, 40u);
     CHECK_TRUE(act == EtbFollowAction::Rearm, "parado 2 s, pedal baixo e TPS mexeu: um rearme");
     CHECK_FALSE(etb_control_follow_fault(), "rearme solta o PID");

@@ -1,49 +1,27 @@
-# Idle Air Control (Idle) System Architecture
+# Sistema de marcha lenta
 
-> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-21 (reescrito contra o código; o texto anterior descrevia o IAC stepper do rusEFI, removido do OpenEMS em 2026-06)
 
-The idle subsystem keeps the engine running smoothly when the driver is off the throttle.
-It manipulates an Idle Air Control (IAC) actuator - typically a stepper motor, DC motor, or
-PWM solenoid - to admit just enough air past the closed throttle plate, and may also
-nudge ignition timing for fast-response trim.
+A marcha lenta é controlada pela **borboleta eletrônica (ETB)**, sem válvula IAC, mais um ajuste rápido de avanço. O ar vem do `torque_manager` (`src/engine/torque_manager.cpp`) e o avanço de `ign_calc.cpp`.
 
-## The Idle Control Pipeline
+## Pipeline
 
-1.  **Target RPM**: A target idle RPM is interpolated from a coolant-temperature curve
-    (cold engines idle higher), with an optional bump while the A/C button is pressed.
-    Hysteresis thresholds (`IdleEntryRpm` / `IdleExitRpm`) are computed to prevent
-    oscillation between idle and coasting states.
-2.  **Phase Classification**: Engine state is classified as `Cranking`, `CrankToIdleTaper`,
-    `Idling`, `Coasting`, or `Running` based on RPM, TPS, VSS, and the cranking taper.
-3.  **Open-Loop Position**: A base IAC position is computed from a CLT/RPM correction
-    table, with additive bumps for A/C, cooling fans, antilag, Lua scripts, and TPS/RPM
-    tapers. While cranking, a dedicated CLT-only curve is used.
-4.  **Closed-Loop PID**: When in `Idling` phase with valid TPS in automatic mode, an RPM
-    PID adds a correction on top of the open-loop value, with anti-windup, dead-zone, and
-    soft-entry handling.
-5.  **Timing Trim**: An optional separate PID applies small ignition-advance corrections
-    at idle to react faster than airflow changes can.
-6.  **Modeled-Flow Idle**: An alternate path converts the desired IAC % into a target
-    airmass, splits the high-frequency component into the timing PID, and maps the
-    remaining airflow back to a valve position via an idle-flow estimate table.
-7.  **Actuation**: The final percentage is sent to the IAC hardware (`applyIACposition`).
+1. **RPM alvo**: `auxiliaries_idle_target_rpm_x10(clt)` (`src/engine/auxiliaries.cpp`) interpola o alvo pela temperatura do líquido (motor frio gira mais alto). `engine_calc` repassa o alvo ao `torque_manager` e à correção de avanço.
+2. **Fase de marcha lenta**: com o pedal fechado (`APP < etb_idle_open_pct_x10`) e sem rev limiter, launch ou TC pesado, a fase "idle" é travada com histerese de RPM: entra abaixo de `alvo + banda` e só sai acima de `alvo + 1,5 × banda`, para não alternar entre lenta e "coasting". A banda reusa `idle_spark_window_above_target_x10`.
+3. **Ar em malha aberta (cranking)**: durante a partida a abertura é fixa (`crank_open_pct_x10`, preferindo `etb_idle_max_opening_x10`, nunca abaixo do mínimo).
+4. **Ar em malha fechada**: integrador de ar (`g_idle_air_int_x10`, em pct×10) acumula a abertura necessária para manter o alvo, limitado entre `etb_idle_min_opening_x10` e `etb_idle_max_opening_x10`, com passos de fechar/recuperar configuráveis. O A/C (`torque_idle_set_ac_load`) soma `idle_ac_air_x10` ao piso de abertura, e a marcha engatada soma `idle_gear_air_x10`.
+5. **Avanço rápido**: `calc_idle_spark_correction_x10` (`ign_calc.cpp`) corrige o avanço pelo erro de RPM (curva `idle_spark_err_corr_x10` ou ganho `idle_spark_rpm_per_deg_x10`, com zona morta e limites de retardo/avanço). Resposta rápida pelo avanço, ar lento pela ETB. Só vale com TPS e MAP baixos e RPM dentro da janela do alvo.
+6. **Dashpot**: depois de soltar o pedal, a lâmina é mantida e decai exponencialmente até a abertura de lenta, suavizando o retorno e reduzindo o risco de morrer.
 
-## Key Files
+## Arquivos
 
-- `firmware/controllers/actuators/idle_thread.cpp`: Main idle controller logic - phase
-  detection, target RPM, open-loop, closed-loop PID, modeled-flow, and the fast-callback
-  entry point.
-- `firmware/controllers/actuators/idle_thread.h`: `IdleController` / `IIdleController`
-  interface and `Phase` enum.
-- `firmware/controllers/actuators/idle_hardware.cpp`: Hardware abstraction that drives
-  the actual IAC actuator from the controller's output percentage.
-- `firmware/controllers/actuators/dc_motors.cpp` and `stepper.cpp`: Concrete IAC actuator
-  drivers.
+- `src/engine/torque_manager.cpp`: integrador de ar, fase de lenta, taper de cranking, dashpot, A/C.
+- `src/engine/auxiliaries.cpp`: alvo de RPM por CLT.
+- `src/engine/ign_calc.cpp`: correção de avanço de marcha lenta.
+- `src/engine/engine_calc.cpp`: passo de 2 ms que liga tudo.
 
-## Implementation Notes
+## Notas de implementação
 
-- **Hysteresis**: Re-enter idle when RPM drops below `target + idlePidRpmUpperLimit`, but
-  declare coasting only above `target + 1.5 * idlePidRpmUpperLimit` to avoid flapping.
 - **Cranking Taper**: After the crank exit the ETB floor is blended over 1 s from the
   cranking opening (`etb_idle_max`) to the idle I, then held there (never below
   `etb_idle_min`, even above the idle RPM band) until the taper ends. The end is
@@ -52,9 +30,3 @@ nudge ignition timing for fast-response trim.
   taper runs, so the floor no longer closes to 0 % and steps back at idle re-entry. After
   the taper the blade follows the pedal and the idle RPM band as usual. Host-tested only;
   the real RPM response needs the engine or the ETB on the bench.
-- **A/C Pre-Bump**: We respond to the A/C *button* rather than the relay, because the relay
-  is intentionally delayed so airflow bump arrives before the compressor load.
-- **Dashpot**: After a throttle release, TPS used for the taper is held and then decayed
-  exponentially toward zero, smoothing the return-to-idle and reducing stall risk.
-- **Timing PID**: Only active in `Phase::Idling`; resets otherwise to avoid carrying stale
-  integration into transients.

@@ -1,5 +1,6 @@
 #include "engine/ign_calc.h"
 #include "engine/calibration.h"
+#include "engine/constants.h"
 #include "engine/fuel_calc.h"
 #include "engine/vehicle_inputs.h"
 #include "hal/system.h"
@@ -307,8 +308,11 @@ uint16_t dwell_ms_x10_from_vbatt_rpm(uint16_t vbatt_mv, uint32_t rpm_x10) noexce
                                                   kDwellRpmCorrSize, rpm_u16);
 
     // base × factor / 256, arredondado
+    // Teto final: a tabela por tensão (≤10 ms) vezes o fator (≤4×) chegava a 40 ms e o
+    // watchdog de dwell (1,4× do comando) não pegaria. kMaxDwellTimeMs = 8 ms.
+    constexpr uint32_t kMaxDwellMsX10 = kMaxDwellTimeMs * 10u;
     const uint32_t result = (static_cast<uint32_t>(base) * factor + 128u) / 256u;
-    return static_cast<uint16_t>(result > 65535u ? 65535u : result);
+    return static_cast<uint16_t>(result > kMaxDwellMsX10 ? kMaxDwellMsX10 : result);
 }
 
 uint32_t inj_pw_us_to_scheduler_ticks(uint32_t pw_us) noexcept {

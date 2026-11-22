@@ -285,6 +285,9 @@ static bool     g_follow_awaiting_good = false;
 static uint16_t g_follow_good_ms = 0u;
 static bool     g_follow_dtc_clear_ready = false;
 constexpr uint32_t kFollowRearmStopMs = 2000u;
+// O TPS precisa se mover ao menos 2,0% (x10) do valor do trip para liberar o rearme: 1 count (0,1%)
+// de ruído de ADC não prova que a lâmina saiu do lugar.
+constexpr uint16_t kFollowRearmMinMoveX10 = 20u;
 
 void etb_control_reset() noexcept {
     g_integrator_x10 = 0;
@@ -331,7 +334,10 @@ EtbFollowAction etb_follow_recovery_tick(uint32_t now_ms, uint16_t rpm_x10,
         return EtbFollowAction::Hold;
     }
     if (app_pct_x10 >= etb_idle_open_pct_x10) { return EtbFollowAction::Hold; }
-    if (!g_follow_tps_valid || measured_pct_x10 == g_follow_tps_at_trip) {
+    const uint16_t moved = (measured_pct_x10 >= g_follow_tps_at_trip)
+        ? static_cast<uint16_t>(measured_pct_x10 - g_follow_tps_at_trip)
+        : static_cast<uint16_t>(g_follow_tps_at_trip - measured_pct_x10);
+    if (!g_follow_tps_valid || moved < kFollowRearmMinMoveX10) {
         return EtbFollowAction::Hold;
     }
     g_follow_fault = false;

@@ -23,9 +23,6 @@ inline constexpr uint16_t kTeethPerRev60_2 = 60u;
 /** Actual physical teeth (60 - 2 missing) */
 inline constexpr uint16_t kRealTeeth60_2 = 58u;
 
-/** Angle per tooth in millidegrees (720° / 58 teeth ≈ 12.4138° = 12413.8 mdeg) */
-inline constexpr uint32_t kToothAngleMillideg = (720000u / kRealTeeth60_2);
-
 /** Number of cylinders in engine */
 inline constexpr uint8_t kCylinderCount = 4u;
 

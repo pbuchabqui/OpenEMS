@@ -49,8 +49,8 @@ bool page_is_blank(const uint8_t* data, uint16_t len) noexcept {
 void load_ve_table_from_nvm() noexcept {
     alignas(4) uint8_t page[sizeof(ems::engine::ve_table)] = {};
     if (!ems::hal::nvm_load_calibration(1u, page, sizeof(page)) ||
-        page_is_erased(page, sizeof(page))) {
-        return;  // flash apagada → tabela default de compilação
+        page_is_blank(page, sizeof(page))) {
+        return;  // apagada (0xFF) ou toda zero → tabela default de compilação
     }
     std::memcpy(ems::engine::ve_table, page, sizeof(ems::engine::ve_table));
 }
@@ -58,7 +58,7 @@ void load_ve_table_from_nvm() noexcept {
 void load_spark_table_from_nvm() noexcept {
     alignas(4) uint8_t page[sizeof(ems::engine::spark_table)] = {};
     if (!ems::hal::nvm_load_calibration(2u, page, sizeof(page)) ||
-        page_is_erased(page, sizeof(page))) {
+        page_is_blank(page, sizeof(page))) {
         return;
     }
     std::memcpy(ems::engine::spark_table, page, sizeof(ems::engine::spark_table));
@@ -67,7 +67,7 @@ void load_spark_table_from_nvm() noexcept {
 void load_lambda_target_table_from_nvm() noexcept {
     alignas(4) uint8_t page[sizeof(ems::engine::lambda_target_table_x1000)] = {};
     if (!ems::hal::nvm_load_calibration(3u, page, sizeof(page)) ||
-        page_is_erased(page, sizeof(page))) {
+        page_is_blank(page, sizeof(page))) {
         return;
     }
     std::memcpy(ems::engine::lambda_target_table_x1000, page,

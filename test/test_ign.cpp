@@ -196,6 +196,16 @@ void test_ign_dwell_vbatt_rpm(void) {
     // At reference RPM (4000 RPM, factor_q8=256=1.0): result == base
     const uint16_t base = dwell_ms_x10_from_vbatt(12000u);
     CHECK_EQ(d_mid, base, "dwell unchanged at 4000 RPM (factor=1.0x)");
+
+    // Teto final de 8 ms: tabela no máximo do sanitize (10 ms) × fator 4,0× daria 40 ms.
+    uint16_t saved_dwell[kIgnitionDwellTableSize];
+    uint16_t saved_factor[kDwellRpmCorrSize];
+    for (uint8_t i = 0u; i < kIgnitionDwellTableSize; ++i) { saved_dwell[i] = dwell_ms_x10_table[i]; dwell_ms_x10_table[i] = 100u; }
+    for (uint8_t i = 0u; i < kDwellRpmCorrSize; ++i) { saved_factor[i] = dwell_rpm_factor_q8[i]; dwell_rpm_factor_q8[i] = 1024u; }
+    CHECK_EQ(dwell_ms_x10_from_vbatt_rpm(12000u, 40000u), 80, "tabela 10 ms × fator 4,0× → teto 8,0 ms");
+    for (uint8_t i = 0u; i < kIgnitionDwellTableSize; ++i) { dwell_ms_x10_table[i] = saved_dwell[i]; }
+    for (uint8_t i = 0u; i < kDwellRpmCorrSize; ++i) { dwell_rpm_factor_q8[i] = saved_factor[i]; }
+    CHECK_EQ(dwell_ms_x10_from_vbatt_rpm(12000u, 40000u), base, "calibração restaurada: sem efeito nos defaults");
 }
 
 void test_ign_idle_spark_correction(void) {

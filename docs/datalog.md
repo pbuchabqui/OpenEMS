@@ -1,6 +1,6 @@
 # Datalog em cartão SD
 
-> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-21 (doc-check + conferência pontual contra o código)
 
 Registro do estado do motor a 100 Hz num cartão SD, em blocos brutos de 512 B, sem sistema de arquivos. É a fonte de dados para afinar os ganhos do STFT, o X-τ e qualquer modelo aprendido (ver [`nn_viabilidade.md`](nn_viabilidade.md)).
 
@@ -53,7 +53,7 @@ Taxas (comando `L`, abaixo): 100 Hz (3,2 KB/s, padrão), 200, 500 ou 1 kHz (32 K
 
 ## Como funciona
 
-- `datalog_push()` (bloco de 10 ms) só copia 32 B. Quando 15 amostras fecham um bloco, ele entra num anel de 16 blocos em RAM.
+- `datalog_push()` (bloco de 10 ms) só copia 32 B. Quando 15 amostras fecham um bloco, ele entra num anel de 32 blocos em RAM.
 - `sd_poll()` e `datalog_poll()` rodam no laço principal, fora da medição de `loop2`, e avançam uma operação por chamada. Nada bloqueia e nada roda em ISR.
 - Cartão lento: o anel enche, o bloco novo é descartado e a perda aparece como lacuna de sequência (e em `records_dropped`).
 - No boot, uma busca binária assíncrona acha o fim do log anterior (os blocos válidos formam um prefixo) e a sessão nova é a última mais um. Um bloco cortado por perda de energia tem CRC inválido e é sobrescrito.

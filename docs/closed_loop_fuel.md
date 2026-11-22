@@ -1,6 +1,6 @@
 # Closed-loop fuel — OpenEMS (STFT / LTFT / LEARN)
 
-> **Status:** vigente · validado 2026-11-19 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-21 (doc-check + conferência pontual contra o código)
 
 Documento do firmware OpenEMS (não o modelo genérico rusEFI de `fueling_system.md`).
 
@@ -12,7 +12,7 @@ WBO2 CAN (fresh)
     ▼ 100 ms  (FULL_SYNC)
 fuel_update_stft_delayed
     ├─ history + delay 3×3 (rpm/MAP/λtgt atrasados)
-    ├─ gates: CL enable, CLT>70°C, O2, !AE, !cut, post-start, !hold-off (atraso + 300 ms depois de AE/corte/MAP)
+    ├─ gates: CL enable, CLT>40°C, O2, !AE, !cut, post-start, !hold-off (atraso + 300 ms depois de AE/corte/MAP)
     ├─ PI → STFT global (freeze anti-windup se bloqueado)
     ├─ LTFT IIR (mult ou add por PW) se adapt_enable + RPM + MAP estável
     │     (mult: o que a célula absorve sai do integrador do STFT)
@@ -100,7 +100,7 @@ O STFT guarda 24 amostras (uma por chamada, ~100 ms = 2,4 s), o bastante para o 
 |-------|---------|--------|
 | `ltft_mult_clamp_pct_x10` | 250 (±25%) | Separado de STFT clamp |
 | `ltft_add_clamp_us` | 6350 | Offset µs |
-| `ltft_learn_div` | 64 | IIR `cell+=(stft−cell)/div` |
+| `ltft_learn_div` | 64 | `cell += STFT/div`, com resto acumulado (carry) |
 | `ltft_commit_gain_pct` | 50 | Bake VE = mean×gain% |
 | `ltft_max_step_x10` | 0 | 0 = sem cap de passo |
 
@@ -167,7 +167,7 @@ Clear ~2 s fora do sat. Severidade WARNING.
 | 81 | ltft_apply_burn_ve |
 | 82–83 | closed_loop_post_start_s |
 | 84–85 | ltft_adapt_min_rpm_x10 |
-| 175 | cal layout version (actual: 4) |
+| 175 | cal layout version (actual: 5) |
 | 176–183 | LTFT authority/rates |
 | 184 | ltft_adapt_enable |
 | 185–190 | LEARN ready/sample thresholds |

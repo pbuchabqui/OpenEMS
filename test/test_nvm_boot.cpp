@@ -212,6 +212,40 @@ void test_nvm_boot_rejects_zeroed_corrections(void) {
     std::memcpy(clt_corr_x256, clt_val, sizeof(clt_val));
 }
 
+void test_nvm_boot_rejects_zeroed_ve_spark_lambda(void) {
+    section("nvm_boot: VE, avanço e lambda alvo gravados com zeros mantêm os padrões");
+    static uint8_t ve_bk[sizeof(ve_table)];
+    static uint8_t sp_bk[sizeof(spark_table)];
+    static uint8_t lm_bk[sizeof(lambda_target_table_x1000)];
+    std::memcpy(ve_bk, ve_table, sizeof(ve_bk));
+    std::memcpy(sp_bk, spark_table, sizeof(sp_bk));
+    std::memcpy(lm_bk, lambda_target_table_x1000, sizeof(lm_bk));
+
+    nvm_erase_all_pages();
+    static uint8_t zeros[sizeof(lambda_target_table_x1000)] = {};
+    CHECK_TRUE(nvm_save_calibration(1u, zeros, sizeof(ve_table)), "grava VE toda zero");
+    CHECK_TRUE(nvm_save_calibration(2u, zeros, sizeof(spark_table)), "grava avanço todo zero");
+    CHECK_TRUE(nvm_save_calibration(3u, zeros, sizeof(lambda_target_table_x1000)), "grava lambda toda zero");
+    load_ve_table_from_nvm();
+    load_spark_table_from_nvm();
+    load_lambda_target_table_from_nvm();
+    CHECK_TRUE(std::memcmp(ve_table, ve_bk, sizeof(ve_bk)) == 0, "VE padrão mantida (zero daria PW 0)");
+    CHECK_TRUE(std::memcmp(spark_table, sp_bk, sizeof(sp_bk)) == 0, "avanço padrão mantido");
+    CHECK_TRUE(std::memcmp(lambda_target_table_x1000, lm_bk, sizeof(lm_bk)) == 0, "lambda padrão mantida");
+
+    // Uma VE válida do usuário continua carregando.
+    static uint8_t custom[sizeof(ve_table)];
+    std::memset(custom, 77, sizeof(custom));
+    CHECK_TRUE(nvm_save_calibration(1u, custom, sizeof(custom)), "grava VE válida");
+    load_ve_table_from_nvm();
+    CHECK_TRUE(std::memcmp(ve_table, custom, sizeof(custom)) == 0, "VE válida é carregada");
+
+    nvm_test_reset();
+    std::memcpy(ve_table, ve_bk, sizeof(ve_bk));
+    std::memcpy(spark_table, sp_bk, sizeof(sp_bk));
+    std::memcpy(lambda_target_table_x1000, lm_bk, sizeof(lm_bk));
+}
+
 void test_nvm_boot_rejects_zeroed_pedal_and_boost(void) {
     section("nvm_boot: mapa do pedal e alvo de boost gravados com zeros mantêm os padrões");
     uint16_t pedal_bk[4][10];

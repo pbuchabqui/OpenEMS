@@ -1,6 +1,6 @@
 # Controle de tração: proxy de flare
 
-> **Status:** vigente · validado 2026-11-17 (doc-check + conferência pontual contra o código)
+> **Status:** vigente · validado 2026-11-21 (doc-check + conferência pontual contra o código)
 
 O corte de torque do TC (`torque_manager.cpp`) usa o slip nesta ordem: API externa, slip CAN (roda contra carro, `vehicle_inputs`) e, na falta dos dois, o proxy de flare de rpm descrito aqui. Tudo só vale com `tc_enable` = 1, APP ≥ `tc_app_min_x10` e rpm ≥ `tc_rpm_min_x10`.
 
@@ -34,7 +34,8 @@ Um limiar fixo de rpm_dot dispara em aceleração normal (1ª e 2ª marcha passa
 
 Existia um `torque_manager_loop` em ponto flutuante, só em `EMS_HOST_TEST`, paralelo à implementação inteira de produção (`torque_manager_update`). Os testes dele davam confiança sobre um comportamento que **não ia para o firmware**, e os dois podiam divergir sem aviso, então foi removido junto dos 10 testes que o usavam. O corte progressivo de rotação já tinha sido portado para a produção (pullback progressivo da ETB em `torque_manager.cpp`); a produção tem o seu launch e o seu TC. O que o modelo tinha e a produção **não** tem:
 
-- limitador de velocidade do veículo (220 km/h): a produção só usa a velocidade do veículo (CAN) para launch e TC;
 - corte "duro" de rotação dentro do torque manager: o rev limit vive no `limp_gating`.
+
+O limitador de velocidade de 220 km/h existe na produção, mas só limita o alvo da ETB a ~10 %, usando a velocidade CAN (`torque_manager.cpp`, "Vehicle speed limiter"); não corta combustível.
 
 Se algum desses comportamentos for necessário, ele deve ser implementado e testado na API de produção, não ressuscitando o modelo float.
