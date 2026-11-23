@@ -8,9 +8,13 @@ Disponibilidade dos candidatos de `interface_vgt6.md`. Os números vêm de pági
 
 | Risco | Peça | Observação |
 |---|---|---|
-| **Alto** | MAX9924UAUB (VR do CKP) | fornecedor único (Analog Devices); ~250 no LCSC (C143633 tem 18 a 251 em páginas diferentes; C5145181, em fita, de 0 a 1.374), de 150 a 2.900 no DigiKey conforme a região; compre reserva cedo |
+| **Alto** | MAX9924UAUB (VR do CKP) | fornecedor único (Analog Devices); Mouser ~277 (+) e ~2.100 (+T); ~250 no LCSC (C143633 tem 18 a 251 em páginas diferentes; C5145181, em fita, de 0 a 1.374), de 150 a 2.900 no DigiKey conforme a região; compre reserva cedo |
 | **Alto** | MAX9926UAEE (dual, alternativa) | LCSC C1523548 aparece esgotado numa página; DigiKey com ~234 |
+| **Alto** | ACT45B-510-2P (choke de CAN, TDK) | Futura: produção sai da Alemanha para a China, com descontinuação lá até o fim de 2026-11; LCSC (C76584, ~141 mil) marca "não recomendado para novos projetos"; DigiKey ~37.900 com prazo de 20 semanas. Trate como obsoleto e escolha outro choke |
+| **Alto** | PESD2CANFD24V/24L (TVS de CAN, Nexperia) | esgotados com backorder no DigiKey; o 27V aparece com 2.753 numa página e 3 em outra; usar equivalente de outro fabricante |
 | **Alto** | IRLR3110Z (FET de injetor, 100 V) | prazo de 27 semanas no DigiKey; preferir outro FET de 60–100 V ou o IRLR2905 |
+| **Médio** | IRLR2905TRPBF (FET de injetor, 55 V) | DigiKey ~44 mil, mas uma página dá prazo de 26 semanas e a do Canadá mostra esgotado; Mouser de 6 mil a 11 mil (agregadores); LCSC C3010 só ~290 |
+| **Médio** | Porta-fusível Keystone 3544-2 / 3549-2 (mini ATM) | 3549-2: DigiKey 9.400 de fábrica, prazo de 14 semanas; 3544-2: ~228 mil globais na Future, 0 de fábrica; a família 3522-2 é ATO padrão, não mini; confirmar o encaixe do fusível |
 | **Médio** | AOD4189 (inversão de polaridade) | AOS original sem estoque visível e prazo de 16–20 semanas no DigiKey; a cópia UMW (LCSC C5346824) tem ~3.700 |
 | **Médio** | TPS2553DBVR (limitador de 5 V) | DigiKey México ~21 mil, Canadá 0, Europa esgotado; prever substituto |
 | **Médio** | DRV8873HPWPR (se o ETB exigir 10 A) | LCSC C2150604 de 226 a 742 por página; DigiKey Canadá ~1.700 (prazo 6 semanas); não confundir com a variante Q1 |
@@ -23,17 +27,20 @@ Disponibilidade dos candidatos de `interface_vgt6.md`. Os números vêm de pági
 | **Baixo** | SN74LVC1G17DBVR | LCSC C7836, ~91 mil; DigiKey US sem estoque (backorder), outras regiões com 55 a 72 mil |
 | **Baixo** | SN74LVC1G86DBVR | DigiKey de 58 a 66 mil nas regiões consultadas; a TI mostra sem estoque na compra direta; **não usar a variante DBVRG4** (descontinuada); sem consulta no LCSC |
 | **Baixo** | SMBJ24A (TVS, SMB) | LCSC com várias marcas: MDD C123819 5 mil a 28 mil, Littelfuse C224017 ~19.900, TWGMC C726830 ~64 mil |
+| **Baixo** | 2N7002 (SOT-23) | LCSC com centenas de listagens (Nexperia C65189 ~633 mil); as marcas diferem em corrente (115–380 mA): confirme a ficha do C escolhido |
+| **Baixo** | AO3400A | LCSC C20917 de 148 mil a 319 mil; JLCPCB ~1,98 milhão; DigiKey ~135 mil (prazo de 20 semanas); outras marcas com o mesmo nome têm especificação diferente |
 | **Baixo** | BAT54S | muitas marcas no LCSC, MDD C408389 ~1,4 milhão |
 
 SMBJ24A (SMB) e SMDJ24A (SMC) têm encapsulamentos diferentes. A especificação usa SMBJ/SMDJ como alternativas; fixe o footprint antes de escolher.
 
 ## Não consultado
 
-2N7002 e AO3400A (a busca não achou página de estoque), IRLR2905 com distribuidor e contagem confirmados (só um agregador, ~30 mil), porta-fusível lâmina ATO/ATM, bornes plugáveis (a consulta só listou páginas da RS, sem estoque; Phoenix MSTB 2,5 de 5,08 mm tem numerosas variantes, e algumas são de 5 mm), choke de modo comum e TVS de CAN, ferrites, capacitores de reservatório, MAX9924 em Mouser.
+Bornes plugáveis (a consulta só listou páginas da RS, sem estoque; a família Phoenix MSTB 2,5 de 5,08 mm tem numerosas variantes e algumas são de 5 mm), DLW5BTM (sem resultado), ferrites e capacitores de reservatório.
 
 ## Ações sugeridas
 
-1. Definir o FET de injetor sem depender do IRLR3110Z (60–100 V, lógico, DPAK) e conferir estoque.
-2. Comprar MAX9924 de reserva antes da fabricação, e manter pegada que aceite o MAX9926 como alternativa.
-3. Escolher um substituto para o TPS2553 e um para o AOD4189 (a cópia UMW funciona como alternativa só se a ficha técnica dela bater com a da AOS).
-4. Refazer esta consulta na hora de fechar a BOM, com a pesquisa direta nas páginas do LCSC, Mouser e DigiKey.
+1. Trocar o choke ACT45B-510 e o TVS PESD2CANFD por equivalentes disponíveis.
+2. Definir o FET de injetor sem depender do IRLR3110Z (60–100 V, lógico, DPAK) e conferir estoque.
+3. Comprar MAX9924 de reserva antes da fabricação, e manter pegada que aceite o MAX9926 como alternativa.
+4. Escolher um substituto para o TPS2553 e um para o AOD4189 (a cópia UMW funciona como alternativa só se a ficha técnica dela bater com a da AOS).
+5. Refazer esta consulta na hora de fechar a BOM, com a pesquisa direta nas páginas do LCSC, Mouser e DigiKey.
