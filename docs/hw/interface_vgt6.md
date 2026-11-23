@@ -20,7 +20,7 @@ e condicionamento atrás dos GPIOs. Substitui, para o escopo atual, os planos hi
 | Alimentação | 12 V nominal, 6–18 V de operação | `kVbattMinMv`/`kVbattMaxMv` em `src/drv/sensors.h` |
 | Injetores | alta impedância (~12 Ω), saturados, sem peak-and-hold | firmware só liga/desliga INJ |
 | Bobinas | com ignitor integrado, entrada lógica de 5 V | firmware só gera o pulso de dwell |
-| CKP / CMP | CKP VR ou Hall (jumper); CMP Hall; o `CLAUDE.md` só descreve Hall | decisão do usuário, 2026-11-22 |
+| CKP / CMP | CKP VR ou Hall (jumper); CMP Hall | decisão do usuário, 2026-11-22 |
 | ETB | motor DC, PWM 10 kHz + IN1/IN2 (`etb_pwm_init(10000u)`) | `src/hal/etb_driver.cpp` |
 | ADC | 3,3 V, 12 bits, só amostragem regular | `CLAUDE.md` (errata) |
 | WBO2 | só por CAN, 500 kbps | `docs/hw/pinout.md`, `docs/ROADMAP.md` |

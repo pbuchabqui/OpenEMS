@@ -1,6 +1,6 @@
 # OpenEMS
 
-ECU para motores a combustao interna (STM32H562, C++17 embarcado). Prioridade: baixa latencia, baixo jitter e previsibilidade temporal. Escopo: so o firmware Hall (roda 60-2 + sensor de fase, captura em TIM5); o tree encoder MT6835 foi abandonado.
+ECU para motores a combustao interna (STM32H562, C++17 embarcado). Prioridade: baixa latencia, baixo jitter e previsibilidade temporal. Escopo: so o firmware da roda 60-2 + sensor de fase, captura em TIM5 (CKP Hall ou VR, escolhido por jumper na placa de interface; CMP Hall); o tree encoder MT6835 foi abandonado.
 
 Hardware: bancada WeAct H562 VGT6 + ESP32, sem atuadores; INJ/IGN/ETB saem direto por GPIO. **Fora do projeto** (nao assumir, nao citar como em uso): placa de producao v1/v2 e os CIs TLE8888, MC33810, L9960T, CJ125 e TPS65381A. Docs de hardware marcados `historico` ou `fora-de-escopo` nao descrevem o hardware atual; a fonte e o codigo (`src/hal/out_pins.h`) e `docs/hw/README.md`.
 
