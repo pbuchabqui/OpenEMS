@@ -9,6 +9,7 @@ Verifica:
   - pinos do SD da WeAct (PC8..PC12, PD2), PA8, PB11, PA13, PA14, VB e PC13 ficam sem conexao;
   - nenhuma net se chama literalmente GND; PGND e SGND sao nets distintas;
   - unidades de CI multi-unit completamente colocadas (checado pelas referencias na netlist);
+  - ordem de vias de J1A..J9 contra a tabela 3 do doc de nets;
   - nenhuma net de um unico no, fora os pinos explicitamente NC.
 """
 import os, re, subprocess, sys, tempfile
@@ -66,6 +67,33 @@ def doc_nets():
     return res
 
 
+def doc_connectors():
+    """J1A..J9: lista ordenada de nets por via, da tabela 3 do doc de nets"""
+    res = {}
+    for line in open(NETS, encoding="utf-8"):
+        cells = [c.strip() for c in line.strip().strip("|").split("|")] if line.startswith("|") else []
+        if len(cells) != 4 or not re.match(r"^J\d+[AB]?$", cells[0]) or not cells[2].isdigit():
+            continue
+        out = []
+        for tok in re.sub(r"\([^)]*\)", "", cells[3]).split(","):
+            tok = tok.strip()
+            m = re.match(r"^`([^`]+)`\s*\.\.\s*`([^`]+)`$", tok)
+            if m:
+                a, b = m.groups()
+                pa, pb = re.match(r"^(.*?)(\d+)(.*)$", a), re.match(r"^(.*?)(\d+)(.*)$", b)
+                for n in range(int(pa.group(2)), int(pb.group(2)) + 1):
+                    out.append("%s%d%s" % (pa.group(1), n, pa.group(3)))
+                continue
+            m = re.match(r"^`([^`]+)`(?:\s*×(\d+))?$", tok)
+            if m:
+                out += [m.group(1)] * int(m.group(2) or 1)
+        if len(out) != int(cells[2]):
+            res[cells[0]] = None
+        else:
+            res[cells[0]] = out
+    return res
+
+
 def export_netlist():
     tmp = tempfile.mkdtemp()
     xml = os.path.join(tmp, "n.xml")
@@ -106,6 +134,18 @@ def main():
                     errs.append("%s pino %d (%s) deveria ficar sem conexao, tem net %s" % (tag, pin, sig, got))
             elif got != want:
                 errs.append("%s pino %d (%s): esperado %s, netlist %s" % (tag, pin, sig, want, got))
+
+    for ref, want in doc_connectors().items():
+        if want is None:
+            errs.append("%s: tabela 3 do doc nao fecha com o numero de vias" % ref)
+            continue
+        for i, net in enumerate(want, 1):
+            got = pin2net.get((ref, str(i)), "<ausente>")
+            if got != net:
+                errs.append("%s via %d: esperado %s, netlist %s" % (ref, i, net, got))
+        extra = [pin for (r, pin) in pin2net if r == ref and int(pin) > len(want)]
+        if extra:
+            errs.append("%s tem vias alem das %d do doc: %s" % (ref, len(want), sorted(extra)))
 
     names = set(nets)
     if "GND" in names:

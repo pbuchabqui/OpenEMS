@@ -2,7 +2,7 @@
 	(version 20251024)
 	(generator "eeschema")
 	(generator_version "10.0")
-	(uuid "dc3d8fe6-d2e6-4eba-b1f6-cde691ecb67a")
+	(uuid "a2418b20-df23-4756-a657-5d9d3356eafe")
 	(paper "A3")
 	(title_block
 		(title "OpenEMS interface VGT6")
@@ -18,7 +18,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "c4c198f8-4b82-4f89-b990-8d988afad108")
+		(uuid "c341bd9e-9464-4259-b381-0cac48487be3")
 	)
 	(text "PCB de 4 camadas: L1 sinal+potência, L2 plano PGND/SGND (junção única), L3 potência, L4 sinal. Veja docs/hw/interface_vgt6.md"
 		(exclude_from_sim no)
@@ -29,7 +29,7 @@
 			)
 			(justify left bottom)
 		)
-		(uuid "b331f9e0-9679-4855-820e-7b6126c35476")
+		(uuid "59a75330-8802-4e5e-a78a-0eb8f81f1e84")
 	)
 	(sheet
 		(at 25.4 76.2)
@@ -46,7 +46,7 @@
 		(fill
 			(color 0 0 0 0.0)
 		)
-		(uuid "d0cff59d-864f-4233-a4fd-d71f43a43fc4")
+		(uuid "1a526ab0-a7ad-446f-8d0f-60945fa7ba37")
 		(property "Sheetname" "Alimentação"
 			(at 25.4 75.2 0)
 			(effects
@@ -67,7 +67,7 @@
 		)
 		(instances
 			(project "interface_vgt6"
-				(path "/dc3d8fe6-d2e6-4eba-b1f6-cde691ecb67a"
+				(path "/a2418b20-df23-4756-a657-5d9d3356eafe"
 					(page "2")
 				)
 			)
@@ -88,7 +88,7 @@
 		(fill
 			(color 0 0 0 0.0)
 		)
-		(uuid "55aad377-7389-4988-8c7e-448a2e7997be")
+		(uuid "59ea76ba-ac45-402d-a06e-498b3945a6af")
 		(property "Sheetname" "Saídas INJ/IGN"
 			(at 127.0 75.2 0)
 			(effects
@@ -109,7 +109,7 @@
 		)
 		(instances
 			(project "interface_vgt6"
-				(path "/dc3d8fe6-d2e6-4eba-b1f6-cde691ecb67a"
+				(path "/a2418b20-df23-4756-a657-5d9d3356eafe"
 					(page "3")
 				)
 			)
@@ -130,7 +130,7 @@
 		(fill
 			(color 0 0 0 0.0)
 		)
-		(uuid "29cb1648-97f8-4a1d-8d92-8dbef0e2f25b")
+		(uuid "947f445b-8fbf-467a-8879-3a0fe8bc4eda")
 		(property "Sheetname" "ETB e auxiliares"
 			(at 228.6 75.2 0)
 			(effects
@@ -151,7 +151,7 @@
 		)
 		(instances
 			(project "interface_vgt6"
-				(path "/dc3d8fe6-d2e6-4eba-b1f6-cde691ecb67a"
+				(path "/a2418b20-df23-4756-a657-5d9d3356eafe"
 					(page "4")
 				)
 			)
@@ -172,7 +172,7 @@
 		(fill
 			(color 0 0 0 0.0)
 		)
-		(uuid "ae0113ea-f231-4c17-a9c1-493e298eba8f")
+		(uuid "35598393-a57d-40fe-a820-bc82b7f7721b")
 		(property "Sheetname" "Entradas"
 			(at 25.4 126.0 0)
 			(effects
@@ -193,7 +193,7 @@
 		)
 		(instances
 			(project "interface_vgt6"
-				(path "/dc3d8fe6-d2e6-4eba-b1f6-cde691ecb67a"
+				(path "/a2418b20-df23-4756-a657-5d9d3356eafe"
 					(page "5")
 				)
 			)
@@ -214,7 +214,7 @@
 		(fill
 			(color 0 0 0 0.0)
 		)
-		(uuid "d1e90d9e-ab4a-4485-a1f7-44f6e792f27c")
+		(uuid "f517f69c-cde2-42b2-a8ad-d70010cf91a8")
 		(property "Sheetname" "CAN e headers"
 			(at 127.0 126.0 0)
 			(effects
@@ -235,7 +235,7 @@
 		)
 		(instances
 			(project "interface_vgt6"
-				(path "/dc3d8fe6-d2e6-4eba-b1f6-cde691ecb67a"
+				(path "/a2418b20-df23-4756-a657-5d9d3356eafe"
 					(page "6")
 				)
 			)

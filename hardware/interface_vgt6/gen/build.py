@@ -215,11 +215,13 @@ def sheet_outputs(s):
         buf(s, u1, n, 70, y, "INJ%d_MCU" % n, "INJ%d_G" % n)
         R(s, 105, y, "220", "INJ%d_G" % n, "INJ%d_GG" % n)
         PD(s, 125, y, "INJ%d_GG" % n, "PGND")
+        s.part("Diode", "1N4148W", "D", "1N4148W", FP_SOD123, 95, y + 16, {"1": "INJ%d_GD" % n, "2": "INJ%d_G" % n})
+        R(s, 125, y + 16, "47", "INJ%d_GD" % n, "INJ%d_GG" % n)
         s.part("Transistor_FET", "Q_NMOS_GDS", "Q", "IRLR3110Z", FP_DPAK, 160, y, {"1": "INJ%d_GG" % n, "2": "INJ%d_CON" % n, "3": "PGND"})
         tvs_uni(s, 205, y - 8, "SMAJ58A", FP_SMA, "INJ%d_CON" % n, "INJ%d_TV" % n)
         s.part("Diode", "1N4148W", "D", "1N4148W", FP_SOD123, 245, y - 8, {"1": "INJ%d_GG" % n, "2": "INJ%d_TV" % n})
     buf_pwr(s, u1, 290, 100)
-    note(s, 190, 85, "Clamp ativo dreno→gate: TVS 58 V + 1N4148W em série. Gate 220 Ω limita a corrente que o 74AHCT125 absorve durante o clamp (conferir máx. absoluto de saída na ficha). IRLR3110Z (100 V) escolhida; IRLR2905 (55 V) é o mínimo.")
+    note(s, 190, 85, "Clamp ativo dreno→gate: TVS 58 V + 1N4148W em série. Gate 220 Ω no desligamento; diodo + 47 Ω em paralelo aceleram só o turn-on. Gate 220 Ω limita a corrente que o 74AHCT125 absorve durante o clamp (ficha SN74AHCT125: IO contínuo máx. ±25 mA). IRLR3110Z (100 V) escolhida; IRLR2905 (55 V) é o mínimo.")
     # IGN
     conn(s, 395, 290, "J3", "Ignição", FP_MSTB % (8, 8),
          ["VBAT_IGN", "VBAT_IGN", "PGND", "PGND", "IGN1_CON", "IGN2_CON", "IGN3_CON", "IGN4_CON"])

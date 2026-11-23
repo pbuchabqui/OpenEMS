@@ -31,7 +31,7 @@ Não existe net chamada `GND`.
 
 | Net MCU | Pino | Buffer (entrada → saída) | Net no conector | Observação |
 |---|---|---|---|---|
-| `INJ1_MCU` | PE0 | 74AHCT125 #1 → `INJ1_G` → 220 Ω → `INJ1_GG` | `INJ1_CON` (dreno do MOSFET) | pull-down 10 kΩ em entrada e gate |
+| `INJ1_MCU` | PE0 | 74AHCT125 #1 → `INJ1_G` → 220 Ω (e diodo + 47 Ω via `INJ1_GD`, só ligar) → `INJ1_GG` | `INJ1_CON` (dreno do MOSFET) | pull-down 10 kΩ em entrada e gate |
 | `INJ2_MCU` | PE2 | #1 | `INJ2_CON` | |
 | `INJ3_MCU` | PE4 | #1 | `INJ3_CON` | |
 | `INJ4_MCU` | PE6 | #1 | `INJ4_CON` | |
