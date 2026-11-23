@@ -35,7 +35,7 @@ documento só; nenhum outro o repete.
 
 | Documento | Status |
 |---|---|
-| `pinout.md`, `stm32h562_ref.md`, `weact_h562_coreboard.md`, `weact_h562_schematic.md` | vigente |
+| `pinout.md`, `stm32h562_ref.md`, `weact_h562_coreboard.md`, `weact_h562_schematic.md`, `interface_vgt6.md` | vigente |
 | `interface_board_v1.md`, `netlist_v1.md`, `bom_v1_candidates.md`, `pinmap_logical.md`, `vr_input_conditioning.md`, `tle8888_pinout.md`, `tle8888_crosscheck.md`, `microruseefi_as_base.md`, `kicad_vendor_review.md`, `mcu_f407_to_h562_pin_map.md`, `decisoes_placa_historico.md` | histórico |
 | `architecture_v2.md`, `pinout_v2.md`, `ampseal_connectors.md`, `schematic/` | fora-de-escopo |
 
