@@ -387,6 +387,98 @@ há limite de aprovação fixado: o objetivo é registrar os números. Com `EMS_
 anterior. Com ele ligado, cada guard custa uns poucos ciclos a mais (duas leituras do DWT e um `mrs ipsr`), então os
 máximos do T7b com essa imagem não valem para o firmware normal. Medida em bancada: ainda não feita.
 
+### T7d — Jitter e erro angular nos pinos IGN (analisador lógico)
+
+Mede o que T7b e T7c não medem: o atraso e a dispersão **nos pinos**, entre a borda do CKP que chega ao PA0 e a
+borda de descida (faísca) da saída IGN. É a medida que separa as três causas candidatas de erro: colisão com a ISR do
+dente (principalmente o rebuild do gap), seção crítica do laço principal (T7c) e o próprio gerador. Bancada sem bobinas
+nem injetores (`CLAUDE.md`): as saídas são só GPIO, nada energizado.
+
+**Material.** Duas opções, a mesma análise:
+
+- **Estimulador `tools/stm32_bench` (já na bancada).** O scope dele carimba CKP/CMP com o instante exato do compare do TIM5
+  e IGN/INJ por EXTI, tudo na mesma base de 1 MHz (1 µs de resolução: ±0,5 µs = 0,025° a 8500 rpm). Mede IGN1–4 e INJ1–4.
+  Ligações da seção 3 (PE9/11/13/15 → PC0..PC3 do gerador). O jitter do EXTI não está medido: faça a calibração abaixo antes.
+- **Analisador lógico externo** de 8 canais, ≥ 50 MS/s, captura contínua em disco, limiar 1,65 V, GND curto comum. Canais:
+  CH0 = CKP (PA0), CH1–CH4 = IGN1–IGN4 (PE9, PE11, PE13, PE15). Exporte as bordas no mesmo formato de linha do scope
+  (`<t µs> µs  CH<n> <NOME> RISE|FALL`) para usar o mesmo script. Use esta opção se a calibração abaixo der jitter > 3 µs.
+
+Pinos do `BOARD=vgt6` (`src/hal/out_pins.h`, seção 3).
+
+**Calibração do scope do estimulador (antes da corrida A).** Desligue o fio da INJ4 da ECU e ligue um jumper de PA0 do gerador
+à entrada INJ4 do scope (PB13). A mesma borda chega com o instante exato do compare (CKP) e com o instante do EXTI (INJ4):
+a diferença é a latência e o jitter do EXTI. Com USB ativo, a cada rpm da corrida A (800, 3000, 6000, 8500):
+
+    python3 -I tools/ign_jitter.py --port /dev/ttyACM1 --seconds 60 --save /tmp/calib_3000.log --calib INJ4
+
+Critério: (max − min) ≤ 1 µs, o scope resolve 0,1° até 8500 rpm; ≤ 3 µs,
+use mas some ≤ 0,15° de incerteza a 8500 rpm; > 3 µs, use o analisador externo. A latência média sai como `--bias-us` para
+subtrair nas corridas. Desfaça o jumper depois.
+
+**Firmware.** Imagem normal (sem `EMS_CS_PROF`): o perfil acrescenta ciclos a cada guard e deslocaria a medida. Modo lâmpada
+como no T3 (faísca fixa, sem correção nem knock). Dashboard conectado em metade das corridas e desconectado na outra
+metade: a diferença mostra o efeito do tráfego do laço principal.
+
+**Captura e análise.** `tools/ign_jitter.py` envia `e` (modo EDGE do scope) e `l` ao fim, lê as bordas, descarta as voltas
+com ≠ 58 dentes de CKP (evento perdido pelo buffer de 2048 do scope) e calcula, por saída, média, desvio, p50, p99, p99,9 e
+máximo de |erro| em graus e µs, mais o piso do gerador. Exemplo da corrida A a 3000 rpm:
+
+    python3 -I tools/ign_jitter.py --port /dev/ttyACM1 --seconds 300 --save /tmp/ign_3000.log --advance 10 --bias-us <calibração>
+
+O modo EDGE imprime todas as bordas, CKP incluído: a 8500 rpm são ~16 mil por segundo e podem estourar o buffer do scope
+(o script avisa e descarta as voltas afetadas). Se o descarte passar de uns 5%, use rpm menor para essa corrida ou o
+analisador externo. `--csv arq --label X` acrescenta uma linha por saída, para a varredura da corrida B.
+
+**Grandezas.** `t_ref` = borda de subida do dente 0 mais próxima da faísca (o primeiro dente depois do gap). `T_rev` =
+tempo entre dois dentes 0 seguidos; 1° = `T_rev` ÷ 360. Para cada faísca (borda de descida da IGN):
+
+    erro (°) = ((t_faísca − t_ref) − (−avanço × T_rev / 360)) ÷ (T_rev / 360)
+
+Com avanço 0°, a faísca do IGN1 deve coincidir com `t_ref` (PMS do cilindro 1 no dente 0; tabela do T3). Avanço positivo
+= antes do PMS, negativo = depois. O desvio constante de ~0,3 µs (filtro de entrada de 256 ns do CKP + quantização,
+`regs.h`) é viés conhecido: subtraia-o, ele vale 0,013° a 8500 rpm.
+
+**Piso de ruído do gerador.** Antes de culpar o firmware, meça o próprio CKP: desvio-padrão e máximo de `T_rev` entre dentes 0
+vizinhos. Essa dispersão é do gerador e entra em todo erro acima; o erro do firmware é o excesso sobre ela.
+
+**Corrida A — regime, por rpm.** 800, 3000, 6000, 8500 rpm, sync cheio, injeção sequencial, avanço 10° (IGN1 e IGN4
+caem dentro do gap angular; IGN2 e IGN3 fora). ≥ 5 min por ponto e por saída (a 3000 rpm cada IGN dispara 25 vezes por segundo, um ciclo de 720° a cada 40 ms:
+5 min dão ~7500 amostras, suficientes para p99; p99,9 pede ≥ 30 min). Registre por saída: média, desvio, p50, p99, máximo
+de |erro| em graus e em µs.
+
+**Corrida B — varredura do avanço em torno do dente 0 (acha a colisão com o gap).** O rebuild da tabela angular roda na ISR
+do dente 0 e dura cerca de 9 µs (15–21 µs o gap inteiro, T7b). Uma faísca que vence nessa janela espera. Para colocá-la
+lá de propósito, use IGN1, 6000 e 8500 rpm, e varie o avanço do modo lâmpada de +2,0° a −2,0° em passos de 0,1°
+(a 8500 rpm, 1° = 19,6 µs: 0 a −1° põe a faísca de 0 a ~20 µs depois do dente 0). Em cada passo, ≥ 2 min, com `--advance <valor> --csv /tmp/varredura.csv --label B_8500`. Trace o erro
+(média e máximo, colunas do CSV) contra o avanço. **Esperado se a causa for o rebuild:** um degrau ou pico localizado entre 0° e ~−1°, com
+largura de ~0,9° a 8500 rpm e menor a 6000. **Se for outra causa:** erro espalhado, sem relação com o avanço.
+
+**Corrida C — aceleração.** Rampa de 3000 para 6000 rpm e de volta com o `SLEW` do gerador no valor mais alto que mantém
+o sync cheio (confira a taxa real pelo período do CKP, não pelo comando). Avanço 10°. O simulador dá ≤ 0,5° a ±2700 rpm/s
+(`docs/pipeline_motor.md`): registre o erro contra o rpm instantâneo.
+
+**Correlação com o T7c.** Repita o ponto de 8500 rpm da corrida A com a imagem de perfil e leia `--cs` no fim. Se o
+máximo mascarado do balde 0 ou 1 ficar na ordem do erro de pior caso em µs, a seção crítica explica a cauda.
+
+**Como ler o resultado**
+
+| Observação | Causa provável |
+|---|---|
+| Pico de erro na corrida B logo depois do dente 0, tamanho ≈ gap de T7b | rebuild do gap na ISR do TIM5 |
+| Cauda de erro sem relação com o avanço, pior com o dashboard conectado | seção crítica do laço principal (confira T7c) |
+| Erro cresce com a rampa da corrida C, nulo em regime | extrapolação do período do dente |
+| Erro igual ao piso do gerador | limite da bancada, não do firmware |
+| Faísca fora do lugar por ≈ um dente (6°) ou troca de IGN1/IGN4 | erro de fase/CMP, não de tempo |
+
+**Limites do roteiro.** O script supõe rpm quase constante dentro de uma volta (a corrida C usa T_rev local e a rampa de 2700
+rpm/s muda ~2% por volta), PMS por saída da tabela do T3 (`--pms` muda) e CKP idêntico à subida de cada dente. Testado só com
+log sintético; o formato real do scope (`main.cpp`, `process_events`) foi lido, não capturado na bancada.
+
+**Registro.** Anote rpm, avanço, dashboard ligado ou não, tamanho da amostra, e os números por saída no
+`docs/bench_report_template.md` (linha de latência e jitter das saídas). Não há limite de aprovação fixado: o objetivo é
+registrar os números e decidir com eles se o rebuild do gap, a seção crítica ou a arquitetura (TIM2) merecem mudança.
+Medida em bancada: ainda não feita.
+
 ### T8 — Teste de saídas
 
 1. Gerador parado (RPM = 0). O teste de saídas fica bloqueado com o motor
