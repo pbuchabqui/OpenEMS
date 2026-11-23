@@ -3,7 +3,7 @@
 > **Status:** vigente · validado 2026-11-23 (contra `src/hal/out_pins.h`, `src/hal/etb_driver.cpp`, `src/hal/etb_driver.h`, `src/hal/sd.cpp`, `src/drv/sensors.h`, `docs/hw/pinout.md` e as fichas do MAX9924, TPS2553, AP63205 e DRV8871)
 
 Especificação de uma carrier que recebe a WeAct H562 VGT6 e coloca estágio de potência
-e condicionamento atrás dos GPIOs. O esquemático KiCad (5 folhas) está em `hardware/interface_vgt6/`; `tools/interface_netcheck.py` confere os pinos de P1/P2 contra `interface_vgt6_nets.md`. PCB de 4 camadas: L1 sinal e potência, L2 plano `PGND`/`SGND` com junção única, L3 potência, L4 sinal (ainda sem layout). Substitui, para o escopo atual, os planos históricos de placa
+e condicionamento atrás dos GPIOs. O esquemático KiCad (5 folhas) está em `hardware/interface_vgt6/`; `tools/interface_netcheck.py` confere os pinos de P1/P2 contra `interface_vgt6_nets.md`. PCB de 4 camadas: L1 sinal e potência, L2 plano `PGND`/`SGND` com junção única, L3 potência, L4 sinal; `hardware/interface_vgt6/interface_vgt6.kicad_pcb` tem só o posicionamento inicial (sem roteamento). Substitui, para o escopo atual, os planos históricos de placa
 (`interface_board_v1.md`, `decisoes_placa_historico.md`), que dependiam de CIs fora do projeto.
 
 ## Regras que não mudam
@@ -138,6 +138,8 @@ USB-C da WeAct fica como está. Quando houver potência na mesma bancada, isole 
 ## Esquemático e conferência
 
 O esquemático KiCad 10 (5 folhas) está em `hardware/interface_vgt6/`, gerado por `python3 hardware/interface_vgt6/gen/build.py`. **O gerador é de uma passada:** depois de editar no KiCad, não rode de novo sobre os mesmos arquivos. Os símbolos do MAX9924 e do TPS2553 (ausentes da biblioteca oficial) estão em `hardware/interface_vgt6/OpenEMS.kicad_sym`. Conferência: `kicad-cli sch erc hardware/interface_vgt6/interface_vgt6.kicad_sch` e `python3 tools/interface_netcheck.py` (pinos de P1/P2 contra `interface_vgt6_nets.md`, `PGND`/`SGND` separadas, unidades dos 74AHCT125). Nenhum dos dois confere valores, polaridade de peça nem pinagem de footprint.
+
+**PCB (primeira passada):** `python3 hardware/interface_vgt6/gen/pcbgen.py` cria `interface_vgt6.kicad_pcb` com 170 × 138 mm, 4 camadas, 247 footprints com nets, os 4 furos M3 na grade de fixação da WeAct e os soquetes P1/P2 nas posições lidas do PDF de contorno (colunas ímpares à direita, vista de cima; **confirmar na peça**). Conectores de potência na borda inferior e de sinal na borda superior; o resto agrupado por folha. Planos internos: L2 `PGND` a oeste e `SGND` no resto. Sem trilhas: o roteamento é no KiCad. O gerador é de uma passada e reescreve o arquivo. A orientação de entrada de fio dos bornes e a altura sob a WeAct não foram conferidas.
 
 ## Ordem de validação do hardware
 

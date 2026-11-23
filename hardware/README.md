@@ -15,7 +15,7 @@ ver [`docs/hw/microruseefi_as_base.md`](../docs/hw/microruseefi_as_base.md)).
 ```
 hardware/
 ├── README.md                 ← este ficheiro
-├── interface_vgt6/           ← carrier da WeAct VGT6 (KiCad 10, 5 folhas, sem PCB ainda)
+├── interface_vgt6/           ← carrier da WeAct VGT6 (KiCad 10, 5 folhas; PCB só posicionado, sem roteamento)
 │   ├── gen/build.py          ← gerador dos .kicad_sch (uma passada)
 │   └── interface_vgt6.kicad_sch
 └── vendor/

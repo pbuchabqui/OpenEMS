@@ -1,6 +1,6 @@
 # Placa de interface VGT6 — consulta de estoque
 
-> **Status:** vigente · validado 2026-11-22 (consulta por busca na web em 2026-11-22; **instantâneo perecível**, não é estoque ao vivo)
+> **Status:** vigente · validado 2026-11-23 (consultas por busca na web em 2026-11-22 e 2026-11-23; **instantâneo perecível**, não é estoque ao vivo)
 
 Disponibilidade dos candidatos de `interface_vgt6.md`. Os números vêm de páginas em cache de distribuidores e agregadores, sem horário, e **divergem entre fontes e regiões** (a mesma peça aparece com 0 e com milhares de unidades). Serve para achar risco de BOM, não para comprar: confirme na página do distribuidor antes do pedido e refaça a consulta quando a BOM for fechada.
 
@@ -33,6 +33,20 @@ Disponibilidade dos candidatos de `interface_vgt6.md`. Os números vêm de pági
 
 SMBJ24A (SMB) e SMDJ24A (SMC) têm encapsulamentos diferentes. A especificação usa SMBJ/SMDJ como alternativas; fixe o footprint antes de escolher.
 
+## Revisão de 2026-11-23 (linhas de maior custo da BOM)
+
+Páginas em cache, sem data, divergentes entre fontes; confirmar ao vivo. Preços para 1 unidade.
+
+| Peça | Estoque e preço | Observação |
+|---|---|---|
+| MAX9924UAUB+ | DigiKey US$ 10,91; Mouser ≈ 1,2 mil; LCSC C5145181 (variante em fita "+T") US$ 1,89, 482 em estoque | confirmar o part number: "+", "+T" e "/V+" (automotiva, ≈ US$ 18,68 no Mouser) são itens diferentes; fornecedor único |
+| DRV8871DDAR | LCSC C75864 US$ 1,04–1,77 (≈ 4,4 mil); Mouser US$ 2,16–2,38 (≈ 7–9 mil); DigiKey ≈ US$ 3 (≈ 5,4 mil) | estoque bom |
+| AOD4189 | DigiKey ≈ US$ 0,85, 52–57 mil em estoque (prazo de fábrica de 20 semanas); LCSC C485685 | a linha "sem estoque visível" acima está superada. Ficha AOS (rev. 2008): 40 V, −40 A, RDS(on) ≤ 22 mΩ a −10 V e ≤ 29 mΩ a −4,5 V, limiar máx. 3 V a 250 µA. O VGS máximo da peça não foi conferido (o zener de 15 V assume ±20 V) |
+| TPS2553DBVR | LCSC C55266 US$ 0,23 (≈ 25 mil); Mouser e DigiKey ≈ US$ 0,80 (≈ 8–9 mil) | **não usar o TPS2553-1 (LCSC C111738):** trava em sobrecorrente em vez de tentar de novo, e é "não recomendado para novos projetos" |
+| IRLR3110ZTRPBF | DigiKey ≈ 9,3 mil; Arrow ≈ 152 mil; Newark ≈ 25 mil; RS ≈ 5 mil | prazo de fábrica de 12 a 52 semanas; sem Mouser e LCSC consultados |
+
+Ordem de grandeza de uma unidade de cada (MAX9924, DRV8871, 2 × AOD4189, TPS2553, sem os FETs de injetor): ≈ US$ 12–17. Não é cotação.
+
 ## Não consultado
 
 Bornes plugáveis (a consulta só listou páginas da RS, sem estoque; a família Phoenix MSTB 2,5 de 5,08 mm tem numerosas variantes e algumas são de 5 mm), DLW5BTM (sem resultado), ferrites e capacitores de reservatório.
@@ -42,5 +56,5 @@ Bornes plugáveis (a consulta só listou páginas da RS, sem estoque; a família
 1. Trocar o choke ACT45B-510 e o TVS PESD2CANFD por equivalentes disponíveis.
 2. Definir o FET de injetor sem depender do IRLR3110Z (60–100 V, lógico, DPAK) e conferir estoque.
 3. Comprar MAX9924 de reserva antes da fabricação, e manter pegada que aceite o MAX9926 como alternativa.
-4. Escolher um substituto para o TPS2553 e um para o AOD4189 (a cópia UMW funciona como alternativa só se a ficha técnica dela bater com a da AOS).
+4. TPS2553 e AOD4189 têm estoque na revisão de 2026-11-23; a cópia UMW do AOD4189 só vale se a ficha dela bater com a da AOS.
 5. Refazer esta consulta na hora de fechar a BOM, com a pesquisa direta nas páginas do LCSC, Mouser e DigiKey.

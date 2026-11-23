@@ -1,4 +1,57 @@
 {
-  "meta": {"filename": "interface_vgt6.kicad_pro", "version": 3},
-  "sheets": []
+  "meta": {
+    "filename": "interface_vgt6.kicad_pro",
+    "version": 3
+  },
+  "sheets": [],
+  "net_settings": {
+    "classes": [
+      {
+        "name": "Default",
+        "clearance": 0.15,
+        "track_width": 0.25,
+        "via_diameter": 0.6,
+        "via_drill": 0.3
+      },
+      {
+        "name": "Potencia",
+        "clearance": 0.3,
+        "track_width": 3.0,
+        "via_diameter": 1.0,
+        "via_drill": 0.5
+      },
+      {
+        "name": "Potencia_media",
+        "clearance": 0.25,
+        "track_width": 1.0,
+        "via_diameter": 0.8,
+        "via_drill": 0.4
+      }
+    ],
+    "meta": {
+      "version": 4
+    },
+    "netclass_patterns": [
+      {
+        "netclass": "Potencia",
+        "pattern": "VBAT_*"
+      },
+      {
+        "netclass": "Potencia_media",
+        "pattern": "INJ*_CON"
+      },
+      {
+        "netclass": "Potencia_media",
+        "pattern": "ETB_M*"
+      },
+      {
+        "netclass": "Potencia_media",
+        "pattern": "+5V"
+      },
+      {
+        "netclass": "Potencia_media",
+        "pattern": "PGND"
+      }
+    ]
+  }
 }
