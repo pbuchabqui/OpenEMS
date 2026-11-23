@@ -31,7 +31,7 @@ e condicionamento atrás dos GPIOs. Substitui, para o escopo atual, os planos hi
 
 | Função | Candidato | Notas |
 |---|---|---|
-| Fusível geral + porta-fusível lâmina | ATO/ATM 20 A | fusíveis por banco: INJ 5 A, IGN 15 A, ETB 7,5 A, aux 15 A |
+| Fusíveis + porta-fusível lâmina | ATO/ATM 15 A em cada uma das duas entradas (J1A, J1B) | fusíveis por banco: INJ 7,5 A, IGN 10 A, ETB 5 A, aux 10 A (`interface_vgt6_corrente.md`) |
 | TVS de entrada | SMBJ24A ou SMDJ24A | grampo de surto; o fusível protege na inversão |
 | Proteção de inversão | P-MOSFET 40 V ≥ 30 A (ex.: AOD4189) + Zener de gate 15 V | Schottky só se a queda for aceitável |
 | Buck 12 V → 5 V | AP63205 (3,8–32 V, 2 A, 5 V fixo) | **não cobre load dump completo.** Em veículo, trocar por buck de 60 V (família LMR36015/TPS54360) |
@@ -48,7 +48,7 @@ Cadeia por canal: GPIO → buffer 5 V → R série → gate → carga.
 - **Buffer:** 2× 74AHCT125 (quad, VIH ≤ 2 V a 5 V de VCC lê 3,3 V). Saída 5 V alimenta direto o gate do FET e a entrada do ignitor.
 - **Seguro no reset:** entrada de cada buffer com 10 kΩ para GND, saída com 10 kΩ para GND, `OE#` com pull-up de 10 kΩ para 5 V. Buffer desabilitado = saída em alta impedância = LOW pelos pull-downs.
 - **ARM:** chave/jumper puxa `OE#` para GND. LED vermelho acende com `OE#` baixo. Sem ARM, nada sai, mesmo com firmware em falha. `PE3` e `PE14` ficam livres para uma leitura futura de `OE#`; este documento não exige isso.
-- **Injetor (INJ1–4):** MOSFET N 60–100 V, logic-level, DPAK (candidatos: IRLR2905 55 V como mínimo; IRLR3110Z 100 V com mais folga). R série de gate 22–33 Ω, pull-down de gate 10 kΩ, TVS de grampo dreno–gate (ativo) ou dreno–GND com tensão de grampo ≤ 80% de VDSS. Retorno do injetor ao fusível de 5 A.
+- **Injetor (INJ1–4):** MOSFET N 60–100 V, logic-level, DPAK (candidatos: IRLR2905 55 V como mínimo; IRLR3110Z 100 V com mais folga). R série de gate 22–33 Ω, pull-down de gate 10 kΩ, TVS de grampo dreno–gate (ativo) ou dreno–GND com tensão de grampo ≤ 80% de VDSS. Retorno do injetor ao fusível de 7,5 A (`interface_vgt6_corrente.md`).
 - **Ignição (IGN1–4):** só o buffer, 33 Ω série, 10 kΩ para GND na saída, TVS/diodo contra surto no conector. A potência fica no ignitor da bobina, alimentada pelo fusível de 15 A.
 - **Latência:** 74AHCT125 ~5–8 ns + FET ~100–300 ns, atraso fixo. Medir na bancada com `tools/ign_jitter.py` (T7d) nos pinos do conector, não só nos pinos do MCU.
 
@@ -107,9 +107,9 @@ Regra geral: sensor de 5 V ratiométrico → divisor 10 kΩ/20 kΩ (0,5–4,5 V 
 
 TJA1051T/3 (alimentado em 5 V, VIO em 3,3 V; candidato de alta disponibilidade), choke de modo comum, TVS de CAN (PESD2CAN ou similar), terminação de 120 Ω com jumper, pino S (standby) com 10 kΩ para GND. Conector para o WBO2 (CAN-H/CAN-L, 12 V, GND). Bit rate de 500 kbps; o RX do WBO2 e o TX 0x400/0x401/0x402 ainda não foram validados em hardware (`docs/ROADMAP.md`).
 
-### 8. SD (SDMMC1 na VGT6)
+### 8. SD
 
-Slot microSD push-push com detecção de cartão. Pinos: D0..D3 = PC8..PC11, CK = PC12, CMD = PD2 (`src/hal/sd.cpp`). Pull-up de 47 kΩ em D0..D3 e CMD, 100 nF + 10 µF perto do slot, 22–33 Ω série no CK. O clock de dados vai até 25 MHz no modo padrão; comprimento de trilha curto. Só existe na VGT6 (na RGT6 esses pinos são INJ/IGN).
+O slot microSD fica na própria WeAct VGT6 (SDMMC1: D0..D3 = PC8..PC11, CK = PC12, CMD = PD2, `src/hal/sd.cpp`); a carrier não leva slot, pull-ups nem alimentação de SD. Só garantir que **PC8..PC12 e PD2 não sejam usados nem carregados** pela carrier: esses pinos não vão a nenhum conector. A existência do slot na placa não consta nos documentos da WeAct deste repositório (`weact_h562_schematic.md`); confirmar no PDF e na placa física.
 
 ### 9. USB e SWD
 
@@ -130,7 +130,7 @@ USB-C da WeAct fica como está. Quando houver potência na mesma bancada, isole 
 | ETB | PE5 (PWM), PE7, PE8 |
 | Relés | PE10 (bomba), PE12 (ventoinha) |
 | Entradas | PA0 CKP, PA1 CMP, PB5 flex, PB11 A/C, ADC (bloco 5) |
-| Comunicação | PB8/PB9 CAN, PA9/PA10 UART, PA11/PA12 USB, SD (bloco 8) |
+| Comunicação | PB8/PB9 CAN, PA9/PA10 UART, PA11/PA12 USB |
 | VVT | PB6, PB7 |
 | Livres | PE3, PE14 (reserva para leitura do ARM), PB12–PB15 (SPI2), PD8–PD15, PB10 (EWG diferido) |
 
