@@ -9,7 +9,7 @@ Dimensiona fusíveis, vias de conector e cobre da carrier descritos em `interfac
 | Carga | Premissa | Como saiu |
 |---|---|---|
 | Injetor (×4) | 12 Ω, 1,2 A a 14,4 V; 1,5 A a 18 V | alta impedância, saturado |
-| Bobina (×4) | 8 A de pico no primário, dwell 3–4 ms | smart coil típica; sem sobreposição relevante entre bobinas até 8500 rpm |
+| Bobina (×4) | 8 A de pico no primário, dwell 3–4 ms | smart coil típica; o intervalo entre faíscas em 4 cilindros é 30000/rpm ms (3,5 ms a 8500 rpm): com dwell de 3 ms não há sobreposição até 10000 rpm, com 4 ms ela começa em ≈ 7500 rpm. O teto do firmware é `kMaxDwellTimeMs` = 8 ms (`src/engine/constants.h`), então confira a tabela de dwell real contra a bobina |
 | Motor do ETB | 3,6 A de pico (limite da ponte), 1–2 A típico | limite de corrente do DRV8871; `RILIM` 20 kΩ no esquemático dá 2,95–3,45 A pela ficha |
 | Relés bomba/ventoinha | 150 mA de bobina cada (contatos fora da carrier) | contatos ligam direto ao fusível do veículo, nunca pela carrier |
 | VVT (×2) | 1,5 A de pico cada, PWM | solenoide típico |
@@ -54,7 +54,7 @@ O slot SD é da WeAct e sai do orçamento da carrier; o consumo dele vem do LDO 
 | Banco | Médio | Pico | Fusível proposto | Observação |
 |---|---|---|---|---|
 | INJ (`VBAT_INJ`) | 2 A | 4,8 A a 14,4 V; 6 A a 18 V (4 abertos juntos, pior caso) | **7,5 A** | antes eu havia escrito 5 A: não cobria 4 injetores simultâneos |
-| IGN (`VBAT_IGN`) | ≈ 3,6 A a 6000 rpm (8 A × 3 ms / 20 ms × 4) | 8 A (uma bobina) | **10 A** | capacitor de reservatório junto aos conectores |
+| IGN (`VBAT_IGN`) | ≈ 3,6 A a 6000 rpm (8 A × 3 ms / 20 ms × 4) | 8 A (uma bobina); 16 A com duas bobinas sobrepostas | **10 A** (cobre 16 A só por segundos; manter dwell sem sobreposição) | capacitor de reservatório junto aos conectores |
 | ETB (`VBAT_ETB`) | 1–2 A | 3,6 A | **5 A** | limite de corrente da ponte em 3,6 A |
 | AUX (`VBAT_AUX`) | 1 A | 6,3 A (0,3 relés + 3 VVT + 3 WBO2) | **10 A** | contatos de bomba/ventoinha ficam fora |
 | Lógica (via buck) | 0,3 A | 0,7 A | no fusível geral | |

@@ -35,7 +35,7 @@ Não existe net chamada `GND`.
 | `INJ2_MCU` | PE2 | #1 | `INJ2_CON` | |
 | `INJ3_MCU` | PE4 | #1 | `INJ3_CON` | |
 | `INJ4_MCU` | PE6 | #1 | `INJ4_CON` | |
-| `IGN1_MCU` | PE9 | 74AHCT125 #2 → `IGN1_G` → 33 Ω | `IGN1_CON` (5 V) | 10 kΩ para PGND, ESD no conector |
+| `IGN1_MCU` | PE9 | 74AHCT125 #2 → `IGN1_G` → 33 Ω | `IGN1_CON` (5 V) | 10 kΩ para PGND, TVS SMF6.0A no conector |
 | `IGN2_MCU` | PE11 | #2 | `IGN2_CON` | |
 | `IGN3_MCU` | PE13 | #2 | `IGN3_CON` | |
 | `IGN4_MCU` | PE15 | #2 | `IGN4_CON` | |
@@ -72,11 +72,11 @@ O 74AHCT125 #3 usa o mesmo `OE_N`: sem ARM, a ponte vai a *coast*. A quarta unid
 |---|---|---|
 | `CKP_VR+`, `CKP_VR-` | — | J5 → 10 kΩ → MAX9924 (modo A2) |
 | `CKP_VR_OUT` | — | `COUT` do MAX9924, dreno aberto, pull-up 10 kΩ em `+3V3` |
-| `CKP_HALL` | — | J5 → ESD → pull-up 4,7 kΩ (`JP_CKP_PU`) → 1 kΩ + 100 pF → 74LVC1G17 → `CKP_H_S` |
+| `CKP_HALL` | — | J5 → TVS 6 V → pull-up 4,7 kΩ (`JP_CKP_PU`) → 1 kΩ + 100 pF → 74LVC1G17 → `CKP_H_S` |
 | `CKP_SEL` | — | `JP_CKP`: 1-2 = `CKP_VR_OUT`, 2-3 = `CKP_H_S` |
 | `CKP_X` | — | XOR 74LVC1G86 de `CKP_SEL` com `CKP_POL` (`JP_POL` fechado inverte) |
 | `CKP_MCU` | PA0 | `CKP_X` → 1 kΩ |
-| `CMP_HALL` | — | J5 → ESD → pull-up 4,7 kΩ → 1 kΩ + 100 pF → 74LVC1G17 → `CMP_H_S` |
+| `CMP_HALL` | — | J5 → TVS 6 V → pull-up 4,7 kΩ → 1 kΩ + 100 pF → 74LVC1G17 → `CMP_H_S` |
 | `CMP_MCU` | PA1 | `CMP_H_S` → 1 kΩ |
 
 ### 2.5 Analógicas (todas no ADC, 0–3,3 V)

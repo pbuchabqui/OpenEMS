@@ -75,7 +75,8 @@ def tvs_uni(s, x, y, val, fp, net, gnd):
 
 
 def esd(s, x, y, net, gnd="SGND"):
-    return s.part("Diode", "PESD5V0S1UL", "D", "PESD5V0S1UL", FP_SOD323, x, y, {"1": net, "2": gnd})
+    # SMF6.0A: tensao de trabalho 6 V (acima do sinal de 5 V; o PESD5V0 trabalharia no limite). Valor de memoria, conferir a ficha.
+    return s.part("Device", "D_Zener", "D", "SMF6.0A", "Diode_SMD:D_SOD-123F", x, y, {"1": net, "2": gnd})
 
 
 def clamp(s, x, y, node, hi="+3V3", lo="SGND"):
