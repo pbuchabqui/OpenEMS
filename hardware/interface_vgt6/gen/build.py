@@ -115,14 +115,14 @@ def buf_pwr(s, ref, x, y):
 # ================================================================================================
 def sheet_power(s):
     title(s, 20, 15, "1. Alimentação: duas entradas (J1A INJ+IGN, J1B ETB+AUX+lógica), buck 5 V, 5 V de sensores")
-    note(s, 20, 20, "Fusível geral 15 A por entrada; TVS na entrada; PFET de proteção de inversão; fusíveis por banco (INJ 7,5 A, IGN 10 A, ETB 5 A, AUX 10 A).")
+    note(s, 20, 20, "Fusível geral 15 A por entrada; PFET de proteção de inversão e, depois dele, TVS SMBJ20A; fusíveis por banco (INJ 7,5 A, IGN 10 A, ETB 5 A, AUX 10 A).")
 
     def entrada(y, tag, raw, fused, prot, J, ref_j, banks):
         conn(s, 30, y, ref_j, "Entrada " + tag, FP_MSTB % (4, 4), [raw, raw, "PGND", "PGND"])
-        tvs_uni(s, 70, y, "SMBJ24A", FP_SMB, raw, "PGND")
         s.part("Device", "Fuse", "F", "15A", "Fuse:Fuseholder_Blade_ATO_Littelfuse_Pudenz_2_Pin", 110, y, {"1": raw, "2": fused})
         s.part("Transistor_FET", "Q_PMOS_GDS", "Q", "AOD4189", FP_DPAK, 150, y, {"1": tag + "_PG", "2": fused, "3": prot})
         R(s, 180, y, "10k", tag + "_PG", "PGND")
+        tvs_uni(s, 70, y + 18, "SMBJ20A", FP_SMB, prot, "PGND")
         s.part("Device", "D_Zener", "D", "BZT52C15", FP_SOD123, 205, y, {"1": prot, "2": tag + "_PG"})
         x = 250
         for (val, net, cap, capfp, capv) in banks:
@@ -169,9 +169,11 @@ def sheet_power(s):
 
     # headers da WeAct P3 / P4, nettie, furos, VREF+
     title(s, 20, 255, "Headers de alimentação da WeAct, ponto único PGND–SGND, VREF+", 2.0)
-    conn(s, 40, 280, "P3", "WeAct P3 (VDD33 / GND)", FP_HDR % 2, ["+3V3", "SGND"])
-    conn(s, 90, 280, "P4", "WeAct P4 (VCC 5V / GND)", FP_HDR % 2, ["+5V", "SGND"])
-    note(s, 25, 292, "P3/P4 são 2×2 na WeAct: conferir pinagem na peça. 5 V entra no VCC; o D4 da WeAct bloqueia o USB; S1 aberto; nunca ligar VB.")
+    s.part("Connector_Generic", "Conn_02x02_Odd_Even", "J", "WeAct P3 (VDD33 x2, GND x2)", "Connector_PinHeader_2.54mm:PinHeader_2x02_P2.54mm_Vertical", 40, 280,
+           {"1": "+3V3", "2": "+3V3", "3": "SGND", "4": "SGND"}, ref="P3")
+    s.part("Connector_Generic", "Conn_02x02_Odd_Even", "J", "WeAct P4 (VCC x2, GND x2)", "Connector_PinHeader_2.54mm:PinHeader_2x02_P2.54mm_Vertical", 90, 280,
+           {"1": "+5V", "2": "+5V", "3": "SGND", "4": "SGND"}, ref="P4")
+    note(s, 25, 292, "P3/P4 2×2 da WeAct: pinos 1 e 2 = trilho, 3 e 4 = GND (SchDoc). 5 V entra no VCC; o D4 da WeAct bloqueia o USB; S1 aberto; nunca ligar VB.")
     s.part("Device", "NetTie_2", "NT", "NetTie PGND-SGND", "NetTie:NetTie-2_SMD_Pad0.5mm", 150, 280, {"1": "PGND", "2": "SGND"})
     note(s, 135, 292, "Único ponto de junção PGND–SGND: junto à entrada (layout).")
     C(s, 200, 280, "100n", "VREF+", "SGND")
@@ -199,9 +201,9 @@ def sheet_outputs(s):
     s.part("Switch", "SW_SPST", "SW", "ARM (jumper/chave)", FP_HDR % 2, 70, 50, {"1": "SGND", "2": "OE_N"})
     R(s, 100, 50, "1k", "+5V", "ARM_LEDA")
     s.part("Device", "LED_Small", "D", "LED vermelho ARM", FP_LED, 125, 50, {"1": "OE_N", "2": "ARM_LEDA"})
-    R(s, 160, 50, "10k", "OE_N", "ARM_SENSE")
-    R(s, 180, 50, "15k", "ARM_SENSE", "SGND")
-    note(s, 150, 65, "ARM_SENSE (PE14, opcional): divisor 10k/15k leva 5 V a 3,0 V. Firmware não usa hoje.")
+    R(s, 160, 50, "100k", "OE_N", "ARM_SENSE")
+    R(s, 180, 50, "150k", "ARM_SENSE", "SGND")
+    note(s, 150, 65, "ARM_SENSE (PE14, opcional): divisor 100k/150k: PE14 ≈ 2,9 V com OE_N ≈ 4,8 V (não carrega o pull-up de 10 kΩ). Firmware não usa hoje.")
 
     u1, u2 = k.refs.next("U"), k.refs.next("U")
     # INJ
@@ -211,13 +213,13 @@ def sheet_outputs(s):
         y = 100 + i * 45
         PD(s, 30, y, "INJ%d_MCU" % n)
         buf(s, u1, n, 70, y, "INJ%d_MCU" % n, "INJ%d_G" % n)
-        R(s, 105, y, "33", "INJ%d_G" % n, "INJ%d_GG" % n)
+        R(s, 105, y, "220", "INJ%d_G" % n, "INJ%d_GG" % n)
         PD(s, 125, y, "INJ%d_GG" % n, "PGND")
         s.part("Transistor_FET", "Q_NMOS_GDS", "Q", "IRLR3110Z", FP_DPAK, 160, y, {"1": "INJ%d_GG" % n, "2": "INJ%d_CON" % n, "3": "PGND"})
         tvs_uni(s, 205, y - 8, "SMAJ58A", FP_SMA, "INJ%d_CON" % n, "INJ%d_TV" % n)
         s.part("Diode", "1N4148W", "D", "1N4148W", FP_SOD123, 245, y - 8, {"1": "INJ%d_GG" % n, "2": "INJ%d_TV" % n})
     buf_pwr(s, u1, 290, 100)
-    note(s, 190, 85, "Clamp ativo dreno→gate: TVS 58 V + 1N4148W em série. IRLR3110Z (100 V) escolhida; IRLR2905 (55 V) é o mínimo.")
+    note(s, 190, 85, "Clamp ativo dreno→gate: TVS 58 V + 1N4148W em série. Gate 220 Ω limita a corrente que o 74AHCT125 absorve durante o clamp (conferir máx. absoluto de saída na ficha). IRLR3110Z (100 V) escolhida; IRLR2905 (55 V) é o mínimo.")
     # IGN
     conn(s, 395, 290, "J3", "Ignição", FP_MSTB % (8, 8),
          ["VBAT_IGN", "VBAT_IGN", "PGND", "PGND", "IGN1_CON", "IGN2_CON", "IGN3_CON", "IGN4_CON"])
@@ -275,10 +277,10 @@ def sheet_etb_aux(s):
         note(s, 150, y + 3, "bobina do relé " + nm + " entre VBAT_AUX e " + drv)
     for i, (mcu, drv, nm) in enumerate([("VVT_INT_MCU", "VVT_INT", "admissão"), ("VVT_EXH_MCU", "VVT_EXH", "escape")]):
         y = 295 + i * 45
-        R(s, 40, y, "33", mcu, mcu + "_G")
+        R(s, 40, y, "100", mcu, mcu + "_G")
         PD(s, 60, y, mcu + "_G", "PGND")
         PD(s, 20, y, mcu, "SGND")
-        s.part("Transistor_FET", "Q_NMOS_GDS", "Q", "IRLR3110Z", FP_DPAK, 100, y, {"1": mcu + "_G", "2": drv, "3": "PGND"})
+        s.part("Transistor_FET", "Q_NMOS_GSD", "Q", "AO3400A", FP_SOT23, 100, y, {"1": mcu + "_G", "2": "PGND", "3": drv})
         s.part("Device", "D_Schottky", "D", "SS34", FP_SMA, 140, y - 8, {"1": "VBAT_AUX", "2": drv})
         note(s, 160, y + 3, "solenoide VVT " + nm + " entre VBAT_AUX e " + drv)
     note(s, 20, 275, "Entradas PE10/PE12 e PB6/PB7 com pull-down de gate (10 kΩ) e de entrada (10 kΩ): reset = tudo LOW.")

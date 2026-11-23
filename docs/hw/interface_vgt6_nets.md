@@ -10,9 +10,9 @@ Convenções: `_N` = ativo em baixo. `*_MCU` = lado 3,3 V do MCU (pino do header
 
 | Net | Origem | Destino | Notas |
 |---|---|---|---|
-| `VBAT_RAW_A`, `VBAT_RAW_B` | J1A, J1B | TVS e fusível de 15 A de cada entrada | 6–18 V |
+| `VBAT_RAW_A`, `VBAT_RAW_B` | J1A, J1B | fusível de 15 A de cada entrada | 6–18 V |
 | `VBAT_A_F`, `VBAT_B_F` | fusível de 15 A | PFET de proteção de inversão | |
-| `VBAT_A_P` | PFET da entrada A | fusíveis de INJ e IGN | |
+| `VBAT_A_P` | PFET da entrada A | fusíveis de INJ e IGN, TVS SMBJ20A | |
 | `VBAT_PROT` | PFET da entrada B | fusíveis de ETB e AUX, buck, `VBATT` | |
 | `VBAT_INJ`, `VBAT_IGN`, `VBAT_ETB`, `VBAT_AUX` | fusíveis por banco | J2, J3, ponte do ETB, J7/J8 | 7,5 A / 10 A / 5 A / 10 A |
 | `+5V` | buck AP63205 | 74AHCT125/1G08, TJA1051T/3, LEDs, `VCC` do P4 da WeAct | o D4 da WeAct bloqueia o USB |
@@ -31,7 +31,7 @@ Não existe net chamada `GND`.
 
 | Net MCU | Pino | Buffer (entrada → saída) | Net no conector | Observação |
 |---|---|---|---|---|
-| `INJ1_MCU` | PE0 | 74AHCT125 #1 → `INJ1_G` → 33 Ω → `INJ1_GG` | `INJ1_CON` (dreno do MOSFET) | pull-down 10 kΩ em entrada e gate |
+| `INJ1_MCU` | PE0 | 74AHCT125 #1 → `INJ1_G` → 220 Ω → `INJ1_GG` | `INJ1_CON` (dreno do MOSFET) | pull-down 10 kΩ em entrada e gate |
 | `INJ2_MCU` | PE2 | #1 | `INJ2_CON` | |
 | `INJ3_MCU` | PE4 | #1 | `INJ3_CON` | |
 | `INJ4_MCU` | PE6 | #1 | `INJ4_CON` | |
@@ -40,7 +40,7 @@ Não existe net chamada `GND`.
 | `IGN3_MCU` | PE13 | #2 | `IGN3_CON` | |
 | `IGN4_MCU` | PE15 | #2 | `IGN4_CON` | |
 | `OE_N` | — | `OE#` dos três 74AHCT125 | — | pull-up 10 kΩ para `+5V`; chave ARM para `SGND`; LED |
-| `ARM_SENSE` | PE14 | divisor 10 k / 15 k de `OE_N` | — | firmware não usa hoje; `PE3` fica reserva |
+| `ARM_SENSE` | PE14 | divisor 100 k / 150 k de `OE_N` | — | firmware não usa hoje; `PE3` fica reserva |
 
 ### 2.2 ETB
 
@@ -62,7 +62,7 @@ O 74AHCT125 #3 usa o mesmo `OE_N`: sem ARM, a ponte vai a *coast*. A quarta unid
 |---|---|---|---|
 | `PUMP_MCU` | PE10 | 100 Ω → gate do AO3400A, pull-down 10 kΩ; diodo de roda livre | `PUMP_DRV` (J7) |
 | `FAN_MCU` | PE12 | idem | `FAN_DRV` (J7) |
-| `VVT_INT_MCU` | PB6 | 33 Ω → gate do MOSFET DPAK + Schottky | `VVT_INT` (J7) |
+| `VVT_INT_MCU` | PB6 | 100 Ω → gate do AO3400A + Schottky | `VVT_INT` (J7) |
 | `VVT_EXH_MCU` | PB7 | idem | `VVT_EXH` (J7) |
 | `FLEX_MCU` | PB5 | 74LVC1G17 ← 100 pF ← 1 kΩ ← `FLEX_IN` (pull-up 3,3 kΩ em `+5V_SENS`) | `FLEX_IN` (J6) |
 
@@ -124,13 +124,13 @@ Pinagem inicial; quantidade de vias pode crescer com a escolha de sensores. Plug
 | JP_CKP (`JP1`), `JP_CKP_PU` (`JP2`), `JP_POL` (`JP3`), `JP_TERM` (`JP4`) | Jumpers | 3 / 2 / 2 / 2 | ver 2.4 e bloco CAN |
 | SW_ARM | Chave ARM | 2 | `SGND`, `OE_N` |
 | P1, P2 | Headers da WeAct | 2×20 | pino a pino conforme `weact_h562_schematic.md` |
-| P3, P4 | Alimentação da WeAct | 2 | `+3V3` / `SGND` (P3); `+5V` / `SGND` (P4) |
+| P3, P4 | Alimentação da WeAct (2×2) | 4 | pinos 1 e 2 = `+3V3` (P3) ou `+5V` (P4); pinos 3 e 4 = `SGND` |
 
-Observações: o `ETB_TPS*_SIG` e o `+5V_SENS` do J4 evitam um conector extra só para os potenciômetros. J3 leva `PGND` porque o retorno de bobina nunca passa pelo plano de sensores. A blindagem de J5 aterra só no lado da ECU. O `JP_CKP_PU` fechado liga o pull-up de 4,7 kΩ ao `CKP_HALL`; abra se o sensor Hall for push-pull. Com sensor VR o `CKP_HALL` fica sem fio e o pull-up não interfere (os pinos do J5 são separados). P3 e P4 são 2×2 na WeAct: conferir qual dos pinos usar na peça.
+Observações: o `ETB_TPS*_SIG` e o `+5V_SENS` do J4 evitam um conector extra só para os potenciômetros. J3 leva `PGND` porque o retorno de bobina nunca passa pelo plano de sensores. A blindagem de J5 aterra só no lado da ECU. O `JP_CKP_PU` fechado liga o pull-up de 4,7 kΩ ao `CKP_HALL`; abra se o sensor Hall for push-pull. Com sensor VR o `CKP_HALL` fica sem fio e o pull-up não interfere (os pinos do J5 são separados). P3 e P4: pinos 1 e 2 são o trilho e 3 e 4 o GND, pelo SchDoc (conferir na peça).
 
 ## 4. O que ainda não está fechado
 
-- Numeração de P1/P2 contra a peça física; P3/P4 (2×2).
+- Numeração de P1/P2 e de P3/P4 contra a peça física.
 - `VREF+` na WeAct: se já está ligado a `VDDA`, a carrier só desacopla; se estiver flutuante, o ADC precisa dele.
 - Quantidade e passo definitivos dos conectores (dependem de sensores, bobinas e do ambiente bancada/veículo).
 - Valores dos componentes passivos do esquemático ainda são de projeto e não foram validados em bancada.

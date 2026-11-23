@@ -32,7 +32,7 @@ e condicionamento atrás dos GPIOs. O esquemático KiCad (5 folhas) está em `ha
 | Função | Candidato | Notas |
 |---|---|---|
 | Fusíveis + porta-fusível lâmina | ATO/ATM 15 A em cada uma das duas entradas (J1A, J1B) | fusíveis por banco: INJ 7,5 A, IGN 10 A, ETB 5 A, aux 10 A (`interface_vgt6_corrente.md`) |
-| TVS de entrada | SMBJ24A ou SMDJ24A | grampo de surto; o fusível protege na inversão |
+| TVS | SMBJ20A (clamp ≈ 32 V, abaixo dos 40 V do PFET), **depois** do PFET de cada entrada | com a bateria invertida o PFET bloqueia e a TVS não conduz; antes do fusível ela conduziria em direto e queimaria o fusível. Surto acima de ≈ 24 V (jump start) a faz conduzir |
 | Proteção de inversão | P-MOSFET 40 V ≥ 30 A (AOD4189) com 10 kΩ de gate para `PGND` e Zener de 15 V gate–fonte, uma por entrada | Schottky só se a queda for aceitável |
 | Buck 12 V → 5 V | AP63205 (3,8–32 V, 2 A, 5 V fixo) | **não cobre load dump completo.** Em veículo, trocar por buck de 60 V (família LMR36015/TPS54360) |
 | 5 V de sensores | 5 V do buck → ferrite → chave limitadora TPS2553 (SOT-23-6: IN 1, GND 2, EN 3, FAULT 4, ILIM 5, OUT 6) | `RILIM` 75 kΩ → 314–397 mA (`IOSmin`/`IOSmax` da ficha); curto no chicote não derruba o 5 V lógico; LED vermelho no `FAULT` |
@@ -47,8 +47,8 @@ Cadeia por canal: GPIO → buffer 5 V → R série → gate → carga.
 
 - **Buffer:** 2× 74AHCT125 (quad, VIH ≤ 2 V a 5 V de VCC lê 3,3 V). Saída 5 V alimenta direto o gate do FET e a entrada do ignitor.
 - **Seguro no reset:** entrada de cada buffer com 10 kΩ para GND, saída com 10 kΩ para GND, `OE#` com pull-up de 10 kΩ para 5 V. Buffer desabilitado = saída em alta impedância = LOW pelos pull-downs.
-- **ARM:** chave/jumper puxa `OE#` para GND. LED vermelho acende com `OE#` baixo. Sem ARM, nada sai, mesmo com firmware em falha. `PE3` e `PE14` ficam livres para uma leitura futura de `OE#`; este documento não exige isso.
-- **Injetor (INJ1–4):** MOSFET N 60–100 V, logic-level, DPAK (candidatos: IRLR2905 55 V como mínimo; IRLR3110Z 100 V com mais folga). R série de gate 22–33 Ω, pull-down de gate 10 kΩ, TVS de grampo dreno–gate (ativo) ou dreno–GND com tensão de grampo ≤ 80% de VDSS. Retorno do injetor ao fusível de 7,5 A (`interface_vgt6_corrente.md`).
+- **ARM:** chave/jumper puxa `OE#` para GND. LED vermelho acende com `OE#` baixo. Sem ARM, nada sai, mesmo com firmware em falha. O `PE14` lê `OE#` por um divisor 100 kΩ / 150 kΩ (≈ 2,9 V com `OE#` ≈ 4,8 V; um divisor de 10 kΩ carregaria o pull-up e leria abaixo de VIH); o firmware não usa isso hoje.
+- **Injetor (INJ1–4):** MOSFET N 60–100 V, logic-level, DPAK (candidatos: IRLR2905 55 V como mínimo; IRLR3110Z 100 V com mais folga). R série de gate 220 Ω (durante o clamp ativo o 74AHCT125 segura o gate em LOW por esse resistor: 33 Ω faria o buffer absorver dezenas de mA; conferir o máximo absoluto de saída e o tempo de subida do gate na bancada), pull-down de gate 10 kΩ, TVS de grampo dreno–gate (ativo) ou dreno–GND com tensão de grampo ≤ 80% de VDSS. Retorno do injetor ao fusível de 7,5 A (`interface_vgt6_corrente.md`).
 - **Ignição (IGN1–4):** só o buffer, 33 Ω série, 10 kΩ para GND na saída, TVS/diodo contra surto no conector. A potência fica no ignitor da bobina, alimentada pelo fusível de 15 A.
 - **Latência:** 74AHCT125 ~5–8 ns + FET ~100–300 ns, atraso fixo. Medir na bancada com `tools/ign_jitter.py` (T7d) nos pinos do conector, não só nos pinos do MCU.
 
@@ -68,7 +68,7 @@ O firmware entrega PWM + dois sinais de direção (`etb_dir_set`, `etb_pwm_set_d
 |---|---|---|
 | Bomba de combustível | PE10 | MOSFET N logic-level (AO3400A ou 2N7002 se a bobina < 150 mA) + diodo de roda livre (1N4148W ou SS14) + relé 12 V; 10 kΩ de gate para GND |
 | Ventoinha | PE12 | idem, relé de 30 A |
-| VVT admissão/escape | PB6 / PB7 (TIM4) | MOSFET como o do injetor + diodo Schottky de roda livre (PWM, não só TVS) |
+| VVT admissão/escape | PB6 / PB7 (TIM4) | AO3400A (especificado para gate de 2,5 V, acionado direto pelos 3,3 V do GPIO) + 100 Ω + 10 kΩ de gate + diodo Schottky SS34 de roda livre (PWM, não só TVS) |
 | Pedido de A/C | PB11 | **inacessível:** o `PB11` não sai em nenhum header da WeAct (P1/P2); a entrada de A/C não pode ser ligada pela carrier sem fio direto ao MCU. Fica fora desta revisão |
 | Sensor flex fuel | PB5 | pull-up de 3,3 kΩ para 5 V de sensores → Schmitt 74LVC1G17 (entrada tolerante a 5 V) → PB5 |
 
@@ -85,6 +85,8 @@ Regra geral: sensor de 5 V ratiométrico → divisor 10 kΩ/20 kΩ (0,5–4,5 V 
 | CLT / IAT | PB0 / PB1 | pull-up de 2,49 kΩ para 3V3 (valor que o ROADMAP usa) + 100 nF | ≈ 100 Hz |
 | FUEL / OIL | PC4 / PC1 | divisor + RC, transdutor 0,5–4,5 V | ≈ 100 Hz |
 | VBATT | PC3 | 100 kΩ / 22 kΩ (18 V → 3,25 V) + 100 nF | ≈ 100 Hz |
+
+O firmware converte `vbatt_raw_to_mv` com 18 V = fundo de escala (3,3 V); o divisor 100 k / 22 k lê ≈ 1,6 % abaixo (17,7 V em 18 V). Aceitável; calibrar se precisar.
 | KNOCK | PA5 | **DNP.** Piezo → capacitor de acoplamento → polarização em VDDA/2 → amplificador rail-to-rail (MCP6002 ou LMV358) → passa-baixa. `EMS_KNOCK_HW_PRESENT` fica 0 até o estágio ser montado e testado | — |
 
 ⚠️ Divisor de 2/3 e a curva do sensor real mudam a escala que o firmware assume para FUEL/OIL e para as curvas de CLT/IAT. Caracterize o sensor e grave a escala pela página `0x0D` (`tools/ntc_gen.py`); o `docs/ROADMAP.md` (Fase 3) já descreve o caminho.
@@ -132,6 +134,10 @@ USB-C da WeAct fica como está. Quando houver potência na mesma bancada, isole 
 | Comunicação | PB8/PB9 CAN, PA9/PA10 UART, PA11/PA12 USB |
 | VVT | PB6, PB7 |
 | Livres | PE3, PE14 (reserva para leitura do ARM), PB12–PB15 (SPI2), PD8–PD15, PB10 (EWG diferido) |
+
+## Esquemático e conferência
+
+O esquemático KiCad 10 (5 folhas) está em `hardware/interface_vgt6/`, gerado por `python3 hardware/interface_vgt6/gen/build.py`. **O gerador é de uma passada:** depois de editar no KiCad, não rode de novo sobre os mesmos arquivos. Os símbolos do MAX9924 e do TPS2553 (ausentes da biblioteca oficial) estão em `hardware/interface_vgt6/OpenEMS.kicad_sym`. Conferência: `kicad-cli sch erc hardware/interface_vgt6/interface_vgt6.kicad_sch` e `python3 tools/interface_netcheck.py` (pinos de P1/P2 contra `interface_vgt6_nets.md`, `PGND`/`SGND` separadas, unidades dos 74AHCT125). Nenhum dos dois confere valores, polaridade de peça nem pinagem de footprint.
 
 ## Ordem de validação do hardware
 

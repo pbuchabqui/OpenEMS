@@ -1,6 +1,6 @@
 # OpenEMS — hardware
 
-> **Status:** histórico — os projetos KiCad `openems_v1` e `openems_ecu` foram removidos em 2026-10-21 (recuperáveis no git). O único projeto KiCad vivo é `interface_vgt6/` (ver o README dele). Escopo atual: `docs/ROADMAP.md`.
+> **Status:** histórico — os projetos KiCad `openems_v1` e `openems_ecu` foram removidos em 2026-10-21 (recuperáveis no git). O único projeto KiCad vivo é `interface_vgt6/` (ver `docs/hw/interface_vgt6.md`). Escopo atual: `docs/ROADMAP.md`.
 
 Caminho de fabrico da ECU OpenEMS: projecto KiCad **próprio, desenhado de raiz**.
 O microRusEFI é **referência**, não cobre (mudou em 2026-08-07 —
