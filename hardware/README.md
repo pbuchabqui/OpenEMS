@@ -1,6 +1,6 @@
 # OpenEMS — hardware
 
-> **Status:** histórico — os projetos KiCad deste diretório foram removidos em 2026-10-21 (recuperáveis no git). Escopo atual: `docs/ROADMAP.md`.
+> **Status:** histórico — os projetos KiCad `openems_v1` e `openems_ecu` foram removidos em 2026-10-21 (recuperáveis no git). O único projeto KiCad vivo é `interface_vgt6/` (ver o README dele). Escopo atual: `docs/ROADMAP.md`.
 
 Caminho de fabrico da ECU OpenEMS: projecto KiCad **próprio, desenhado de raiz**.
 O microRusEFI é **referência**, não cobre (mudou em 2026-08-07 —
@@ -15,6 +15,9 @@ ver [`docs/hw/microruseefi_as_base.md`](../docs/hw/microruseefi_as_base.md)).
 ```
 hardware/
 ├── README.md                 ← este ficheiro
+├── interface_vgt6/           ← carrier da WeAct VGT6 (KiCad 10, 5 folhas, sem PCB ainda)
+│   ├── gen/build.py          ← gerador dos .kicad_sch (uma passada)
+│   └── interface_vgt6.kicad_sch
 └── vendor/
     └── hw_microRusEfi/       ← submodule git (referência imutável)
 ```

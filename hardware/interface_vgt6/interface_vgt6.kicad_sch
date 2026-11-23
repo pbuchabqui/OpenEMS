@@ -1,0 +1,250 @@
+(kicad_sch
+	(version 20251024)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid "78483791-51b8-4452-912e-e3c31226f30f")
+	(paper "A3")
+	(title_block
+		(title "OpenEMS interface VGT6")
+		(company "OpenEMS")
+	)
+	(lib_symbols)
+	(text "OpenEMS: placa de interface para a WeAct H562 VGT6 (carrier de potência)"
+		(exclude_from_sim no)
+		(at 25.4 20.0 0)
+		(effects
+			(font
+				(size 3.0 3.0)
+			)
+			(justify left bottom)
+		)
+		(uuid "d6b8845d-8ca4-4fab-8a0d-e54ef4e3d907")
+	)
+	(text "PCB de 4 camadas: L1 sinal+potência, L2 plano PGND/SGND (junção única), L3 potência, L4 sinal. Veja docs/hw/interface_vgt6.md"
+		(exclude_from_sim no)
+		(at 25.4 30.0 0)
+		(effects
+			(font
+				(size 1.6 1.6)
+			)
+			(justify left bottom)
+		)
+		(uuid "80397c9e-d36f-4a75-8f44-5393d3bad8bb")
+	)
+	(sheet
+		(at 25.4 76.2)
+		(size 76.2 12.7)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0)
+		)
+		(uuid "417dfc8e-0adc-49c5-9bfc-166b9f080229")
+		(property "Sheetname" "Alimentação"
+			(at 25.4 75.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "power.kicad_sch"
+			(at 25.4 89.9 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "interface_vgt6"
+				(path "/78483791-51b8-4452-912e-e3c31226f30f"
+					(page "2")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 127.0 76.2)
+		(size 76.2 12.7)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0)
+		)
+		(uuid "b765b037-b23f-4801-ab0a-ffb8b745e073")
+		(property "Sheetname" "Saídas INJ/IGN"
+			(at 127.0 75.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "outputs.kicad_sch"
+			(at 127.0 89.9 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "interface_vgt6"
+				(path "/78483791-51b8-4452-912e-e3c31226f30f"
+					(page "3")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 228.6 76.2)
+		(size 76.2 12.7)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0)
+		)
+		(uuid "a679b43c-3990-4ba6-b946-7ba934e1952e")
+		(property "Sheetname" "ETB e auxiliares"
+			(at 228.6 75.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "etb_aux.kicad_sch"
+			(at 228.6 89.9 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "interface_vgt6"
+				(path "/78483791-51b8-4452-912e-e3c31226f30f"
+					(page "4")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 25.4 127.0)
+		(size 76.2 12.7)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0)
+		)
+		(uuid "3b5fd435-d24b-40ff-9f53-77882f4aca08")
+		(property "Sheetname" "Entradas"
+			(at 25.4 126.0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "inputs.kicad_sch"
+			(at 25.4 140.7 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "interface_vgt6"
+				(path "/78483791-51b8-4452-912e-e3c31226f30f"
+					(page "5")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 127.0 127.0)
+		(size 76.2 12.7)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0)
+		)
+		(uuid "e014fb92-7139-4d7d-8f0c-bdfb03b91e62")
+		(property "Sheetname" "CAN e headers"
+			(at 127.0 126.0 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "comms.kicad_sch"
+			(at 127.0 140.7 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "interface_vgt6"
+				(path "/78483791-51b8-4452-912e-e3c31226f30f"
+					(page "6")
+				)
+			)
+		)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+	(embedded_fonts no)
+)

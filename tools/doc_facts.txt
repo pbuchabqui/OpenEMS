@@ -12,3 +12,7 @@ INJ[1-4][^\n]{0,30}output compare|IGN[1-4][^\n]{0,30}output compare  ->  INJ/IGN
 [Mm]over vetor/ISRs para SRAM n[ãa]o [ée] exigido|vetor/ISRs em SRAM n[ãa]o s[ãa]o exigidos  ->  ES0565 §2.2.33 (Rev 9) EXIGE, para app sensivel: vetor + handlers criticos na SRAM e a 1a erase/program na SRAM; vale para todas as revisoes, inclusive X
 Rev W\s*[=(][^\n]{0,20}0x2003  ->  Rev W (marcacao W ou 4) tem REV_ID 0x100F (ES0565 Tabela 2)
 firmware/controllers/|\bLimpManager\b|\bapplyIACposition\b|\bIdleController\b  ->  são caminhos/símbolos do rusEFI, não do OpenEMS; ignição e marcha lenta estão em src/engine/ign_calc.cpp, ecu_sched.cpp, torque_manager.cpp (doc reescrito em 2026-11-21 após descrever o rusEFI como vigente)
+VB[^\n]{0,30}(Vin wide|entrada do regulador)|Vin wide[^\n]{0,60}P2  ->  VB (P2 pino 1) alimenta o VBAT do RTC por um BAT54C; não é entrada de tensão larga (WeAct SchDoc, lido em 2026-11-22)
+PB12 ?/ ?PB13[^\n]{0,30}\| ?29|29[–-]30 \| \*\*PB12  ->  no P1 da WeAct, 29/30 = PB10/GND e 31/32 = PB12/PB13 (SchDoc renderizado em 2026-11-22)
+MAX9924[^\n]{0,80}(push-pull|push pull)[^\n]{0,40}(5 ?V)|saída do MAX9924[^\n]{0,60}(conferir|memória)  ->  o COUT do MAX9924 é dreno aberto (ficha Maxim, pino 7, pull-up de 10 kΩ); a carrier puxa para 3,3 V
+`CKP_VR-`/`CKP_HALL`  ->  J5 tem pinos separados para CKP_VR- e CKP_HALL (esquemático de 2026-11-23); compartilhar o pino colocava o pull-up do Hall na entrada do MAX9924

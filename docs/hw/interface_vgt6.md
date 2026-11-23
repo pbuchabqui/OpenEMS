@@ -1,9 +1,9 @@
 # Placa de interface VGT6 — especificação do hardware adicional
 
-> **Status:** vigente · validado 2026-11-22 (contra `src/hal/out_pins.h`, `src/hal/etb_driver.cpp`, `src/hal/etb_driver.h`, `src/hal/sd.cpp`, `src/drv/sensors.h` e `docs/hw/pinout.md`)
+> **Status:** vigente · validado 2026-11-23 (contra `src/hal/out_pins.h`, `src/hal/etb_driver.cpp`, `src/hal/etb_driver.h`, `src/hal/sd.cpp`, `src/drv/sensors.h`, `docs/hw/pinout.md` e as fichas do MAX9924, TPS2553, AP63205 e DRV8871)
 
-Especificação (sem arquivo de EDA) de uma carrier que recebe a WeAct H562 VGT6 e coloca estágio de potência
-e condicionamento atrás dos GPIOs. Substitui, para o escopo atual, os planos históricos de placa
+Especificação de uma carrier que recebe a WeAct H562 VGT6 e coloca estágio de potência
+e condicionamento atrás dos GPIOs. O esquemático KiCad (5 folhas) está em `hardware/interface_vgt6/`; `tools/interface_netcheck.py` confere os pinos de P1/P2 contra `interface_vgt6_nets.md`. PCB de 4 camadas: L1 sinal e potência, L2 plano `PGND`/`SGND` com junção única, L3 potência, L4 sinal (ainda sem layout). Substitui, para o escopo atual, os planos históricos de placa
 (`interface_board_v1.md`, `decisoes_placa_historico.md`), que dependiam de CIs fora do projeto.
 
 ## Regras que não mudam
@@ -11,7 +11,7 @@ e condicionamento atrás dos GPIOs. Substitui, para o escopo atual, os planos hi
 - **Fonte dos pinos:** `docs/hw/pinout.md` e `src/hal/out_pins.h`. Este documento não cria pino novo e não exige mudança de firmware.
 - **INJ/IGN são active-high; estado seguro = LOW.** No reset a porta E fica em analógico (flutuante), então cada entrada de driver precisa de pull-down externo (`docs/hw/README.md`).
 - **Bancada primeiro.** Nenhum injetor ou bobina real até: Rev X do chip confirmada (`REV_ID` em `DBGMCU_IDCODE`, já lido em 2026-11-17), estágio medido com carga resistiva/LED e relatório de bancada fechado (`docs/ROADMAP.md`, Fase 2).
-- **Disponibilidade:** nenhum estoque foi consultado ao escrever isto. Os códigos abaixo são candidatos de famílias comuns; confirme estoque (LCSC, Mouser, DigiKey) e a ficha técnica antes de fixar a BOM. Valores de tensão, corrente e encapsulamento dos candidatos vêm da memória do autor e precisam de conferência.
+- **Disponibilidade:** o estoque dos candidatos foi consultado em 2026-11-22 (`interface_vgt6_estoque.md`, perecível). Valores de tensão, corrente e encapsulamento dos candidatos de passivos e MOSFETs ainda vêm da memória do autor e precisam de conferência na ficha; MAX9924, TPS2553, AP63205 e DRV8871 foram conferidos nas fichas.
 
 ## Premissas elétricas (confirmar com o hardware real)
 
@@ -33,11 +33,11 @@ e condicionamento atrás dos GPIOs. Substitui, para o escopo atual, os planos hi
 |---|---|---|
 | Fusíveis + porta-fusível lâmina | ATO/ATM 15 A em cada uma das duas entradas (J1A, J1B) | fusíveis por banco: INJ 7,5 A, IGN 10 A, ETB 5 A, aux 10 A (`interface_vgt6_corrente.md`) |
 | TVS de entrada | SMBJ24A ou SMDJ24A | grampo de surto; o fusível protege na inversão |
-| Proteção de inversão | P-MOSFET 40 V ≥ 30 A (ex.: AOD4189) + Zener de gate 15 V | Schottky só se a queda for aceitável |
+| Proteção de inversão | P-MOSFET 40 V ≥ 30 A (AOD4189) com 10 kΩ de gate para `PGND` e Zener de 15 V gate–fonte, uma por entrada | Schottky só se a queda for aceitável |
 | Buck 12 V → 5 V | AP63205 (3,8–32 V, 2 A, 5 V fixo) | **não cobre load dump completo.** Em veículo, trocar por buck de 60 V (família LMR36015/TPS54360) |
-| 5 V de sensores | 5 V do buck → ferrite → chave limitadora TPS2553 | curto no chicote não derruba o 5 V lógico; LED de status |
-| 3,3 V | LDO da própria WeAct | conferir no PDF/placa física se o pino 5 V da WeAct tem diodo contra backfeed do USB; se não tiver, Schottky em série (MBR0520) |
-| VREF+ | ligado a VDDA (opção (a) de `weact_h562_schematic.md`) | ferrite + 100 nF + 1 µF |
+| 5 V de sensores | 5 V do buck → ferrite → chave limitadora TPS2553 (SOT-23-6: IN 1, GND 2, EN 3, FAULT 4, ILIM 5, OUT 6) | `RILIM` 75 kΩ → 314–397 mA (`IOSmin`/`IOSmax` da ficha); curto no chicote não derruba o 5 V lógico; LED vermelho no `FAULT` |
+| 5 V para a WeAct / 3,3 V | 5 V do buck entra no `VCC` do P4; o LDO da WeAct gera o 3,3 V | o D4 (Schottky) da WeAct bloqueia o retorno para o USB; não fechar o interruptor S1 (`VBUS`–`VCC`) com a carrier alimentando; **não ligar nada em `VB` (P2 pino 1), que é o backup do RTC** |
+| VREF+ | só desacoplado na carrier (100 nF + 1 µF); a carrier **não** o alimenta | `VDDA` não sai nos headers; falta conferir na WeAct se `VREF+` já está ligado a `VDDA` (`weact_h562_schematic.md`) |
 
 Aterramento: PGND (injetores, bobinas, ETB, relés) separado de SGND (sensores, MCU), unidos em um ponto junto à entrada. Retorno de bobina e de ETB nunca passa pelo plano de sensores.
 
@@ -56,9 +56,9 @@ Cadeia por canal: GPIO → buffer 5 V → R série → gate → carga.
 
 O firmware entrega PWM + dois sinais de direção (`etb_dir_set`, `etb_pwm_set_duty_x10`). Pontes de 2 pinos (IN1/IN2) pedem combinar os três:
 
-- **Ponte H:** DRV8871 (45 V, 3,6 A de pico, SO-8, limite de corrente por resistor, IN1/IN2). Se o corpo de borboleta travado passar de 3,6 A, subir para DRV8873 (10 A, mais pinos, com IPROPI e nFAULT).
-- **Combinação:** 74AHCT08 (quad AND): `IN1_ponte = PWM & DIR_abrir`, `IN2_ponte = PWM & DIR_fechar`. Com PWM em LOW as duas entradas ficam em 0 e a ponte vai a *coast*; é o estado seguro, e a mola do corpo de borboleta leva a lâmina à posição de emergência.
-- **Seguro no reset:** 10 kΩ para GND em PE5, PE7 e PE8 e em cada entrada da ponte; `OE#` do ARM também desabilita o AND (use buffer 74AHCT125 antes do 74AHCT08).
+- **Ponte H:** DRV8871 (45 V, 3,6 A de pico, HSOP-8, limite de corrente por resistor, IN1/IN2). `RILIM` = 20 kΩ: `ITRIP = 64 / RILIM(kΩ)` dá 3,2 A nominal e 2,95–3,45 A com a tolerância de `VILIM` (59–69) da ficha, sempre abaixo dos 3,6 A de pico. Se o corpo de borboleta travado passar de 3,6 A, subir para DRV8873 (10 A, mais pinos, com IPROPI e nFAULT).
+- **Combinação:** duas portas AND (2 × 74AHCT1G08; a biblioteca do KiCad não tem o quad): `IN1_ponte = PWM & DIR_abrir`, `IN2_ponte = PWM & DIR_fechar`. Com PWM em LOW as duas entradas ficam em 0 e a ponte vai a *coast*; é o estado seguro, e a mola do corpo de borboleta leva a lâmina à posição de emergência.
+- **Seguro no reset:** 10 kΩ para GND em PE5, PE7 e PE8 e em cada entrada da ponte; `OE#` do ARM também desabilita o AND (buffer 74AHCT125 antes das portas AND).
 - **Realimentação:** TPS1/TPS2 (PA2/PC5) pelo condicionamento do bloco 5. Os limites do firmware são `ETB_TPS_ADC_MIN/MAX` = 200/3900 e `ETB_TPS_NORMAL_MIN/MAX` = 400/3700 (`src/hal/etb_driver.h`).
 - ⚠️ O comentário em `etb_driver.cpp` cita BTS7960 (limite 25 kHz). A escolha acima não depende dele; se a ponte for outra, o limite de PWM é o dela. O firmware fica em 10 kHz.
 
@@ -69,7 +69,7 @@ O firmware entrega PWM + dois sinais de direção (`etb_dir_set`, `etb_pwm_set_d
 | Bomba de combustível | PE10 | MOSFET N logic-level (AO3400A ou 2N7002 se a bobina < 150 mA) + diodo de roda livre (1N4148W ou SS14) + relé 12 V; 10 kΩ de gate para GND |
 | Ventoinha | PE12 | idem, relé de 30 A |
 | VVT admissão/escape | PB6 / PB7 (TIM4) | MOSFET como o do injetor + diodo Schottky de roda livre (PWM, não só TVS) |
-| Pedido de A/C | PB11 | entrada 12 V → divisor 47 k / 22 k → 10 nF → clamp; o firmware já liga pull-down interno e debounce de 50 ms |
+| Pedido de A/C | PB11 | **inacessível:** o `PB11` não sai em nenhum header da WeAct (P1/P2); a entrada de A/C não pode ser ligada pela carrier sem fio direto ao MCU. Fica fora desta revisão |
 | Sensor flex fuel | PB5 | pull-up de 3,3 kΩ para 5 V de sensores → Schmitt 74LVC1G17 (entrada tolerante a 5 V) → PB5 |
 
 ### 5. Entradas analógicas (ADC 0–3,3 V)
@@ -91,21 +91,20 @@ Regra geral: sensor de 5 V ratiométrico → divisor 10 kΩ/20 kΩ (0,5–4,5 V 
 
 ### 6. CKP (VR ou Hall) e CMP (Hall) — PA0, PA1
 
-**CKP aceita os dois tipos de sensor**, escolhidos por jumper de 3 vias (`JP_CKP`: 1-2 = VR, 2-3 = Hall). Só um caminho alimenta o PA0 por vez.
+**CKP aceita os dois tipos de sensor**, escolhidos por jumper de 3 vias (`JP_CKP`: 1-2 = VR, 2-3 = Hall). Só um caminho alimenta o PA0 por vez. O J5 tem pinos separados para `CKP_VR+`, `CKP_VR-` e `CKP_HALL`.
 
-- **Caminho VR:** **MAX9924** (single, limiar adaptativo por pico + zero-crossing) com o par trançado do sensor, resistores série e clamp conforme a ficha, e 100 nF + 1 µF junto ao CI em 5 V de sensores. Um CKP VR não pode ligar direto ao MCU: a amplitude vai de centenas de mV a dezenas de volts.
-- **Caminho Hall:** pull-up de 4,7 kΩ para 5 V de sensores (jumper `JP_CKP_PU` para retirar se a saída for push-pull), R série de 1 kΩ, ~100 pF, Schmitt 74LVC1G17 alimentado em 3,3 V (entrada tolerante a 5 V).
-- **Saída do jumper → PA0:** 1 kΩ série. O caminho não selecionado fica desligado: o MAX9924 sem sinal e o Schmitt com o pull-up retirado não devem forçar o pino; conferir na ficha o nível de saída em repouso do MAX9924. Mantém o pull-down interno do PA0.
-- **CMP (PA1): Hall**, mesmo estágio do caminho Hall do CKP (pull-up, R série, Schmitt 74LVC1G17), sem condicionador VR. Entrada com TVS/ESD no conector.
-- **Saída do MAX9924:** conferir na ficha se é push-pull ou dreno aberto. Em dreno aberto, pull-up de 4,7 kΩ para 3V3; em push-pull a 5 V, passar pelo Schmitt (3,3 V) para o PA0 não ver 5 V.
+- **Caminho VR:** **MAX9924** (µMAX-10), **modo A2** (Fig. 3 da ficha): `ZERO_EN`, `INT_THRS` e `BIAS` em GND, referência interna de 2,5 V, `EXT` e `N.C.` abertos. Limiar adaptativo de 1/3 do pico anterior e comparação no zero-crossing. Entradas: 10 kΩ em série em cada uma (limita a corrente nos diodos ESD internos; máximo absoluto ±20 mA nos demais pinos) e 1 nF entre `IN+` e `IN-`. `VCC` em `+5V_SENS` (faixa 4,5–5,5 V) com 10 nF, 100 nF e 1 µF. **Saída `COUT` em dreno aberto**: pull-up de 10 kΩ para `+3V3`, então o PA0 nunca vê 5 V. Um CKP VR não pode ligar direto ao MCU: a amplitude vai de centenas de mV a dezenas de volts.
+- **Caminho Hall:** pull-up de 4,7 kΩ para 5 V de sensores (jumper `JP_CKP_PU` para retirar se a saída for push-pull), R série de 1 kΩ, 100 pF, Schmitt 74LVC1G17 alimentado em 3,3 V (entrada tolerante a 5 V), ESD no conector.
+- **Saída do jumper → PA0:** XOR 74LVC1G86 com `JP_POL` (fechado inverte a borda), depois 1 kΩ série. O caminho não selecionado fica desligado pelo jumper: o `COUT` em repouso sobe a 3,3 V pelo pull-up e o Schmitt não força nada. Mantém o pull-down interno do PA0.
+- **CMP (PA1): Hall**, mesmo estágio do caminho Hall do CKP (pull-up fixo de 4,7 kΩ, R série, Schmitt), sem condicionador VR e sem jumper de polaridade.
 - **Filtro do timer:** o filtro de entrada (≈256 ns) continua valendo como segunda camada.
-- ⚠️ **Polaridade e ângulo:** o MAX9924 comuta no zero-crossing e a borda que o TIM5 captura depende do tipo de sensor e da ligação; o Hall tem a polaridade do próprio sensor. Meça no scope qual borda cai no centro do dente em cada modo e confira `src/drv/ckp.cpp` e o offset angular. O mesmo firmware vale para os dois, mas a borda pode precisar de inversão por jumper (XOR com `JP_POL`, 74LVC1G86) se a polaridade diferir.
-- **Disponibilidade:** o MAX9924 é de um fornecedor só (Analog Devices); estoque melhor em Mouser/DigiKey que em LCSC. Não consultei estoque; os detalhes de modo e saída vêm da memória e precisam de conferência na ficha.
-- **Atraso:** o estágio adiciona atraso fixo; entra no erro angular medido (T7d).
+- ⚠️ **Polaridade e ângulo:** o MAX9924 comuta no zero-crossing e a borda que o TIM5 captura depende do tipo de sensor e da ligação; o Hall tem a polaridade do próprio sensor. Meça no scope qual borda cai no centro do dente em cada modo e confira `src/drv/ckp.cpp` e o offset angular. O XOR com `JP_POL` existe para o caso de a polaridade diferir.
+- **Disponibilidade:** o MAX9924 é de um fornecedor só (Analog Devices); estoque melhor em Mouser/DigiKey que em LCSC (`interface_vgt6_estoque.md`). A ficha está em `docs/hw/maxim_max9924_max9927.pdf`.
+- **Atraso:** o estágio adiciona atraso fixo (comparador, XOR e RC); entra no erro angular medido (T7d).
 
 ### 7. CAN (PB8 RX, PB9 TX)
 
-TJA1051T/3 (alimentado em 5 V, VIO em 3,3 V; candidato de alta disponibilidade), choke de modo comum, TVS de CAN (PESD2CAN ou similar), terminação de 120 Ω com jumper, pino S (standby) com 10 kΩ para GND. Conector para o WBO2 (CAN-H/CAN-L, 12 V, GND). Bit rate de 500 kbps; o RX do WBO2 e o TX 0x400/0x401/0x402 ainda não foram validados em hardware (`docs/ROADMAP.md`).
+TJA1051T/3 (alimentado em 5 V, VIO em 3,3 V; candidato de alta disponibilidade), choke de modo comum (ACM2012, pares 1–4 e 2–3), TVS de CAN (SM712 no esquemático; PESD2CAN ou similar), terminação de 120 Ω com jumper `JP_TERM`, pino S (standby) com 10 kΩ para GND. Conector para o WBO2 (CAN-H/CAN-L, 12 V, GND). Bit rate de 500 kbps; o RX do WBO2 e o TX 0x400/0x401/0x402 ainda não foram validados em hardware (`docs/ROADMAP.md`).
 
 ### 8. SD
 
@@ -113,7 +112,7 @@ O slot microSD fica na própria WeAct VGT6 (SDMMC1: D0..D3 = PC8..PC11, CK = PC1
 
 ### 9. USB e SWD
 
-USB-C da WeAct fica como está. Quando houver potência na mesma bancada, isole o laço do PC com **módulo** isolador USB de baixo custo (ex.: base ADuM3160) em vez de integrar isolação na carrier. SWD em header de 6 vias (3V3, SWDIO PA13, SWCLK PA14, GND, NRST).
+USB-C da WeAct fica como está. Quando houver potência na mesma bancada, isole o laço do PC com **módulo** isolador USB de baixo custo (ex.: base ADuM3160) em vez de integrar isolação na carrier. SWD e reset: `PA13`, `PA14` e `NRST` não saem em P1/P2; só existem no header P5 da WeAct (2×4) e nos botões. A carrier não leva SWD próprio: use o P5 da WeAct por cabo.
 
 ### 10. Conectores e mecânica
 
@@ -129,7 +128,7 @@ USB-C da WeAct fica como está. Quando houver potência na mesma bancada, isole 
 | IGN1–4 | PE9, PE11, PE13, PE15 |
 | ETB | PE5 (PWM), PE7, PE8 |
 | Relés | PE10 (bomba), PE12 (ventoinha) |
-| Entradas | PA0 CKP, PA1 CMP, PB5 flex, PB11 A/C, ADC (bloco 5) |
+| Entradas | PA0 CKP, PA1 CMP, PB5 flex, ADC (bloco 5) |
 | Comunicação | PB8/PB9 CAN, PA9/PA10 UART, PA11/PA12 USB |
 | VVT | PB6, PB7 |
 | Livres | PE3, PE14 (reserva para leitura do ARM), PB12–PB15 (SPI2), PD8–PD15, PB10 (EWG diferido) |
@@ -148,4 +147,4 @@ USB-C da WeAct fica como está. Quando houver potência na mesma bancada, isole 
 - Carga de cada saída auxiliar (relés, VVT) para dimensionar fusível e MOSFET.
 - Necessidade de load dump completo (decide o buck de 60 V).
 - Se o ARM deve passar a ser lido ou comandado pelo firmware (mudança de código e de documento).
-- Estoque e preço reais da BOM; nada foi consultado.
+- Preço real da BOM e estoque dos itens de menor risco (o estoque consultado está em `interface_vgt6_estoque.md`).

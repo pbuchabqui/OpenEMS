@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "OpenEMS")(type "KiCad")(uri "${KIPRJMOD}/OpenEMS.kicad_sym")(options "")(descr "simbolos da carrier"))
+)

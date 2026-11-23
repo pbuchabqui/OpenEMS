@@ -124,3 +124,13 @@ output.pdf
 *.rpt
 compile_commands.json
 .cache/
+
+# --- KiCad ---
+*.kicad_prl
+fp-info-cache
+*-backups/
+_autosave-*
+*.kicad_sch-bak
+*.kicad_pcb-bak
+*.lck
+~*
